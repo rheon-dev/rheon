@@ -1812,3 +1812,94 @@ class TestADelayShorterThanEveryStep:
         )
         assert same(plain["weight_sum"], oracle["weight_sum"])
         assert not same(plain["pred_y"], oracle["pred_y"])
+
+
+# Review 2026-11-23, STRM-1, and the user's decision (2026-11-23: "Score as
+# predict"): a row of weight 0 under `embargo` or `label_clock` is scored as
+# `predict` scores it, from the state as it stands, and releases no held row
+# into the live models. It released the rows its clock had seen out, so a
+# later row of positive weight at an earlier clock was scored by a model
+# that had learned a label the embargo still held there (hard rule 2), and a
+# stream that ended on such a row saved what the stream without it held back
+# (hard rule 9). The cost, stated in the docs: such a row does not see the
+# labels matured at its own clock.
+
+
+def test_a_zero_weight_row_releases_no_label_a_later_row_before_it_would_not_see():
+    zero = pl.DataFrame(
+        {
+            "t": [0.0, 100.0, 5.0],
+            "x": [1.0, 1.0, 1.0],
+            "y": [100.0, 0.0, 50.0],
+            "w": [1.0, 0.0, 1.0],
+        }
+    )
+    s = spec(embargo=10.0, weight="w", min_weight=0.0, half_life=1e9)
+    with_it = rp.ModelBank([s]).fit_predict(zero)["m"].struct.unnest()
+    without = rp.ModelBank([s]).fit_predict(zero.filter(pl.col("w") > 0))["m"].struct.unnest()
+    # Row 2 at t = 5 is before row 0's label is known (t = 10): neither bank
+    # has learned anything by then.
+    assert with_it["weight_sum"][2] == without["weight_sum"][1] == 0.0
+    assert with_it.row(2) == without.row(1)
+
+
+def test_a_stream_ending_on_a_zero_weight_row_saves_what_it_would_without_it():
+    df = pl.DataFrame(
+        {"t": [0.0, 15.0, 16.0], "x": [1.0, 1.0, 2.0], "y": [10.0, 0.0, 0.0], "w": [1.0, 0.0, 0.0]}
+    )
+    s = spec(embargo=10.0, weight="w", min_weight=0.0, half_life=1e9)
+    a, b = rp.ModelBank([s]), rp.ModelBank([s])
+    a.fit(df)
+    b.fit(df.head(1))
+    assert a.coef().equals(b.coef())
+    # And the two go on alike, to the bit.
+    more = pl.DataFrame({"t": [20.0, 21.0], "x": [1.5, 3.0], "y": [1.0, 2.0], "w": [1.0, 1.0]})
+    assert a.fit_predict(more).equals(b.fit_predict(more))
+
+
+def test_a_number_clock_and_a_temporal_one_agree_at_a_zero_weight_row_that_starts_a_session():
+    """A row of weight 0 that starts a session under ``session_gap="reset"``
+    and an ``embargo`` read its place on a fresh stream's elapsed clock, which
+    a number clock and a temporal one gave differently, so one released the
+    rows held before the reset and the other did not. It releases none on
+    either, and the two clocks agree."""
+    t = [0.0, 1.0, 2.0, 3.0, 20.0, 21.0, 22.0]
+    df = pl.DataFrame(
+        {
+            "t": t,
+            "s": ["a", "a", "a", "a", "b", "b", "b"],
+            "x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            "y": [2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0],
+            "w": [1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0],
+        }
+    )
+    ts = df.with_columns(
+        (pl.datetime(2024, 1, 1) + pl.duration(seconds=pl.col("t")))
+        .cast(pl.Datetime("ns"))
+        .alias("t")
+    )
+    kw = dict(weight="w", min_weight=0.0, session="s", session_gap="reset")
+    num = rp.ModelBank([spec(embargo=2.0, **kw)]).fit_predict(df)["m"].struct.unnest()
+    tem = (
+        rp.ModelBank([spec(embargo="2s", **{**kw, "half_life": "50s", "gap_cap": "1000000000s"})])
+        .fit_predict(ts)["m"]
+        .struct.unnest()
+    )
+    for field in ("pred_y", "weight_sum"):
+        assert num[field].equals(tem[field]), field
+
+
+def test_the_doubled_stream_takes_an_input_holding_its_helper_columns_names():
+    """Review 2026-11-23, PY-7: ``rp.stream.embargo`` named its two helper
+    columns ``__embargo_key`` and ``__embargo_order``, and an input holding
+    either died in a polars error. The helpers take names the input does
+    not hold, and the input's columns come back as they were. (A weight of
+    ``inf`` gives its predict copy a NaN weight, as ``inf * 0`` is: the
+    bank skips both copies, as it skips the row under ``embargo``, so that
+    half of the claim is the rule kept.)"""
+    df = pl.DataFrame(
+        {"t": [0.0, 1.0], "x": [1.0, 2.0], "__embargo_key": [7, 8], "__embargo_order": ["a", "b"]}
+    )
+    out = stream.embargo(df, clock="t", delay=1.0)
+    assert out.columns == [*df.columns, stream.ROLE + "_weight", stream.ROLE]
+    assert out.filter(pl.col(stream.ROLE) == "predict").select(df.columns).equals(df)

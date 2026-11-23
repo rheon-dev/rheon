@@ -304,6 +304,65 @@ fn a_clock_step_past_the_largest_double_is_refused_by_row() {
     bank.fit_predict(&frame(&[-1e307, 1e307, 1e307])).unwrap();
 }
 
+/// Review 2026-11-23, CLOCK-1: two finite steps whose capped-off parts
+/// sum past the largest double -- `-1e308` to 0 to `1e308` under a
+/// `gap_cap` of 10 -- left the decayed clock's removed time at infinity
+/// for good, as PB7's one step did: every later stamp less an older one was
+/// `inf - inf`, NaN, and compared equal to any span, so `coef_every` fired
+/// on every row. Such a clock spans more than a float holds, and the row
+/// whose step would take the removed time there is refused by row, as
+/// PB7's step is, in one chunk or across two.
+#[test]
+fn a_clock_whose_removed_time_passes_the_largest_double_is_refused_by_row() {
+    let spec: Spec = serde_json::from_str(
+        r#"{"name": "m", "model": {"type": "ewridge"}, "targets": ["y"],
+            "features": ["x0"], "clock": "t", "half_life": 10.0, "gap_cap": 10.0,
+            "coef_every": 100.0}"#,
+    )
+    .unwrap();
+    let frame = |t: &[f64]| {
+        let n = t.len();
+        df!(
+            "t" => t,
+            "x0" => (0..n).map(|i| i as f64).collect::<Vec<_>>(),
+            "y" => (0..n).map(|i| 2.0 * i as f64).collect::<Vec<_>>(),
+        )
+        .unwrap()
+    };
+    let t = [-1e308, 0.0, 1e308, 1.000_000_1e308, 1.000_000_2e308];
+    let mut bank = Bank::new(vec![spec.clone()]).unwrap();
+    let e = bank.fit_predict(&frame(&t)).unwrap_err().to_string();
+    assert!(
+        e.contains("spec \"m\": clock column \"t\" steps from 0 to 1e308 at row 2")
+            && e.contains("so the bank refused the chunk"),
+        "{e}"
+    );
+    assert_eq!(bank.rows_fed(), 0, "the refused chunk taught nothing");
+    let mut bank = Bank::new(vec![spec.clone()]).unwrap();
+    bank.fit_predict(&frame(&t[..2])).unwrap();
+    let e = bank.fit_predict(&frame(&t[2..])).unwrap_err().to_string();
+    assert!(e.contains("steps from 0 to 1e308 at row 0"), "{e}");
+    assert_eq!(bank.rows_fed(), 2);
+    // Under a cap past every step nothing is removed, and the same clock
+    // runs; under the cap of 10, a clock whose span stays inside the
+    // largest double runs too.
+    let uncapped: Spec = serde_json::from_str(
+        r#"{"name": "m", "model": {"type": "ewridge"}, "targets": ["y"],
+            "features": ["x0"], "clock": "t", "half_life": 10.0, "gap_cap": 1.5e308,
+            "coef_every": 100.0}"#,
+    )
+    .unwrap();
+    Bank::new(vec![uncapped])
+        .unwrap()
+        .fit_predict(&frame(&t))
+        .unwrap();
+    let t = [-5e307, 0.0, 5e307, 1e308];
+    Bank::new(vec![spec])
+        .unwrap()
+        .fit_predict(&frame(&t))
+        .unwrap();
+}
+
 #[test]
 fn groups_are_independent() {
     // Feeding only g0's rows must give the same outputs for g0 as feeding both.
@@ -2245,4 +2304,41 @@ fn keys_whose_hashes_collide_are_two_groups_in_any_chunking() {
     );
     assert_eq!(weights(&[1; 6]), (whole.clone(), 2));
     assert_eq!(weights(&[2, 4]), (whole, 2));
+}
+
+/// Review 2026-11-23, BANK-1 and BANK-2, the command line's side of
+/// `--skip-learned` (`Learned`, which `ModelBank.skip_learned` mirrors in
+/// Python): a clock that is not a finite number is kept for the bank to
+/// refuse by row, `-inf` among them, which read as before the last clock and
+/// was dropped; and under `group_close = "monotone"` a group below the
+/// largest key the bank has read, closed and gone from its last clocks, is
+/// dropped, in key order -- as numbers for an integer column -- where it
+/// was read as a group the bank had not seen and kept.
+#[test]
+fn skip_learned_keeps_an_infinite_clock_and_drops_a_closed_group() {
+    let spec: Spec = serde_json::from_str(
+        r#"{"name": "m", "model": {"type": "ewridge"}, "targets": ["y"],
+            "features": ["x0"], "clock": "t", "half_life": 10.0, "gap_cap": 10.0,
+            "group": "g", "group_close": "monotone"}"#,
+    )
+    .unwrap();
+    let mut bank = Bank::new(vec![spec]).unwrap();
+    let first = df!(
+        "g" => [1i64, 1, 2, 2, 10, 10],
+        "t" => [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+        "x0" => [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "y" => [2.0, 4.0, 6.0, 8.0, 10.0, 12.0],
+    )
+    .unwrap();
+    bank.fit_predict(&first).unwrap();
+    let rerun = df!(
+        "g" => [1i64, 2, 10, 10, 10, 10, 10],
+        "t" => [0.0, 2.0, 5.0, f64::NEG_INFINITY, f64::INFINITY, f64::NAN, 6.0],
+        "x0" => [1.0; 7],
+        "y" => [1.0; 7],
+    )
+    .unwrap();
+    let keep = bank.learned(false).unwrap().unlearned(&rerun).unwrap();
+    let keep: Vec<bool> = (0..keep.len()).map(|i| keep.get(i).unwrap()).collect();
+    assert_eq!(keep, [false, false, false, true, true, true, true]);
 }

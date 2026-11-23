@@ -1251,3 +1251,139 @@ fn a_constant_target_has_no_r2() {
     assert_eq!((fit.se[0], fit.se[1]), (0.0, 0.0));
     assert!(fit.t[0].is_nan() && fit.t[1].is_nan(), "{:?}", fit.t);
 }
+
+/// `g` with target 1 unobserved, as `rheon.gram.from_row` writes a row
+/// whose target is null: no weight and NaN moments.
+fn unobserved_target(g: &OwnedGram) -> OwnedGram {
+    let mut u = g.clone();
+    let k = u.k;
+    u.target_weights[1] = 0.0;
+    u.target_n_kish[1] = f64::NAN;
+    u.target_means[1] = f64::NAN;
+    u.target_vars[1] = f64::NAN;
+    for v in [
+        &mut u.cross_moments,
+        &mut u.cross_centred,
+        &mut u.means_by_target,
+    ] {
+        v[k..2 * k].fill(f64::NAN);
+    }
+    u
+}
+
+/// Review 2026-11-23, MATH-7: a part with no weight for a target -- whose
+/// moments for it are NaN, as `rheon.gram.from_row` writes a null target --
+/// was multiplied in at weight 0, and `0 · NaN` is NaN: every merged moment
+/// of that target, and every fit on it, was NaN. A part with no weight adds
+/// nothing, whichever side of the fold it is on, pooled across or within.
+#[test]
+fn a_part_with_no_weight_for_a_target_adds_nothing_even_where_its_moments_are_nan() {
+    let a = gram_of(&rows(30, 60, 3, 1.0));
+    let b = gram_of(&rows(31, 40, 3, 1.0));
+    let ub = unobserved_target(&b);
+    let ua = unobserved_target(&a);
+    let cols = [0, 1, 2, 3];
+    for (got, want, what) in [
+        (
+            merge(&[a.arrays(), ub.arrays()], &cols, Some(0)),
+            &a,
+            "after",
+        ),
+        (
+            merge(&[ua.arrays(), b.arrays()], &cols, Some(0)),
+            &b,
+            "before",
+        ),
+    ] {
+        let k = got.k;
+        close(
+            &got.cross_centred[k..],
+            &want.cross_centred[k..],
+            1e-12,
+            what,
+        );
+        close(
+            &got.cross_moments[k..],
+            &want.cross_moments[k..],
+            1e-12,
+            what,
+        );
+        close(
+            &got.means_by_target[k..],
+            &want.means_by_target[k..],
+            1e-12,
+            what,
+        );
+        close(&got.target_means[1..], &want.target_means[1..], 1e-12, what);
+        close(&got.target_vars[1..], &want.target_vars[1..], 1e-12, what);
+        assert_eq!(got.target_n_kish[1], want.target_n_kish[1], "{what}");
+        let fit = ridge_fits(&got.arrays(), &[1], &[1, 2, 3], Some(0), 1e-6, false).remove(0);
+        assert!(fit.coef.iter().all(|c| c.is_finite()), "{what}: {fit:?}");
+        let within = merge_within(&[a.arrays(), ub.arrays()], &cols, Some(0));
+        assert!(
+            within.cross_centred.iter().all(|c| c.is_finite())
+                && within.target_vars.iter().all(|c| c.is_finite()),
+            "{within:?}"
+        );
+        let cross = within_cross(&[ua.arrays(), b.arrays()], &cols, &[]);
+        assert!(cross.iter().all(|c| c.is_finite()), "{cross:?}");
+    }
+}
+
+/// `g` with every weight times `s`: the same rows at another scale of
+/// weight, whose moments are the same numbers.
+fn scaled(g: &OwnedGram, s: f64) -> OwnedGram {
+    let mut u = g.clone();
+    u.weight_sum *= s;
+    for w in &mut u.target_weights {
+        *w *= s;
+    }
+    u
+}
+
+/// Review 2026-11-23, REG-14 (1): the spread of the merged co-moments was
+/// `W_a W_b / W²`, whose product and square overflow past `1.3e154` and
+/// underflow below `1.5e-154`, so two parts weighing `1e-160` merged to
+/// NaN co-moments and fits. A merge is the same at every scale of weight.
+#[test]
+fn a_merge_is_the_same_at_every_scale_of_weight() {
+    let a = gram_of(&rows(32, 60, 3, 1.0));
+    let b = gram_of(&rows(33, 40, 3, 1.0));
+    let cols = [0, 1, 2, 3];
+    let want = merge(&[a.arrays(), b.arrays()], &cols, Some(0));
+    for s in [1e-160, 1e160] {
+        let (sa, sb) = (scaled(&a, s), scaled(&b, s));
+        let got = merge(&[sa.arrays(), sb.arrays()], &cols, Some(0));
+        close(&got.comoments, &want.comoments, 1e-12, "comoments");
+        close(&got.means, &want.means, 1e-12, "means");
+        close(
+            &got.cross_centred,
+            &want.cross_centred,
+            1e-12,
+            "cross_centred",
+        );
+        close(&got.target_vars, &want.target_vars, 1e-12, "target_vars");
+        close(
+            &got.target_n_kish,
+            &want.target_n_kish,
+            1e-12,
+            "target_n_kish",
+        );
+    }
+}
+
+/// Review 2026-11-23, REG-14 (2): a part with weight for a target but no
+/// Kish size for it added nothing to `Σ w²`, so merged beside a part of 10
+/// rows a part of weight 1000 made a Kish size of `1010² / 10 = 102,010`.
+/// Without every weighted part's size the merged one is unknown: NaN.
+#[test]
+fn a_weighted_part_without_a_kish_size_leaves_the_merged_one_unknown() {
+    let a = one_slot(1.0, 10.0);
+    let mut b = one_slot(1.0, 1000.0);
+    b.target_n_kish = vec![f64::NAN];
+    let got = merge(&[a.arrays(), b.arrays()], &[0, 1], Some(0));
+    assert_eq!(got.target_weights, vec![1010.0]);
+    assert!(got.target_n_kish[0].is_nan(), "{:?}", got.target_n_kish);
+    let got = merge_within(&[a.arrays(), b.arrays()], &[0, 1], Some(0));
+    assert!(got.target_n_kish[0].is_nan(), "{:?}", got.target_n_kish);
+}

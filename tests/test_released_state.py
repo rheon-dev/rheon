@@ -836,6 +836,43 @@ UPPER_READ = (("calibration_", "ramsey_reset_", "break_wald_", "breusch_pagan_",
 RESETS = {"ridge_reset": "drift_y"}
 
 
+def _learned_clock_kept(
+    mine: pl.DataFrame,
+    want: pl.DataFrame,
+    name: str,
+    spec: dict,
+    second: pl.DataFrame,
+    wrong: dict[str, list[str]],
+    used: dict[str, int],
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """``learned_clock`` moves only on a row with a target to learn (review
+    2026-11-23, STRM-4): where the release's names the clock of a row whose
+    every target is null, this build's names an earlier row's; everywhere
+    else the two are equal. Checked here, and the column left out of the
+    general comparison."""
+    field = f"{name}.learned_clock"
+    if field not in mine.columns:
+        return mine, want
+    clock = spec.get("clock")
+    targets = [t for t in spec.get("targets", []) if isinstance(t, str)]
+    if clock is None or not targets or len(targets) != len(spec.get("targets", [])):
+        return mine, want
+    only_predicted = set(
+        second.filter(pl.all_horizontal(pl.col(t).is_null() for t in targets))[clock].to_list()
+    )
+    bad = []
+    for i, (g, w) in enumerate(zip(mine[field].to_list(), want[field].to_list(), strict=True)):
+        if g == w:
+            continue
+        if w in only_predicted and (g is None or g < w):
+            used["learned_clock"] = used.get("learned_clock", 0) + 1
+            continue
+        bad.append(f"{field} at row {i}: {g!r} against the release's {w!r}")
+    if bad:
+        wrong[f"{name}.learned_clock"] = bad[:3]
+    return mine.drop(field), want.drop(field)
+
+
 def _plain(frame: pl.DataFrame) -> pl.DataFrame:
     """A frame's struct columns opened, an Enum as its values: a release's
     `withheld_reason` has fewer categories, and its rows compare by value."""
@@ -1089,6 +1126,10 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
                 # count; the coefficients themselves are the `coef` table's.
                 mine = _plain(mine).drop(f"{name}.coef", strict=False)
                 want = _plain(want).drop(f"{name}.coef", strict=False)
+            if table == "rows":
+                mine, want = _learned_clock_kept(
+                    _plain(mine), _plain(want), name, built[name], second, wrong, used
+                )
             held = rule if table == "rows" else {k: v for k, v in rule.items() if k != "converted"}
             wrong[f"{name}.{table}"] = _differences(mine, want, counted=used, **held)
         # The rows were compared: the release wrote them, all of them.
@@ -1112,6 +1153,10 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
     assert bool(used["young"]) == young_moved, used
     under = [n for n in names if _version(version) <= _version(UNDER_THE_PRIOR.get(n, "0.0.0"))]
     assert bool(used["prior"]) == bool(under), used
+    # `learned_clock`'s exception excused a row: the temporal spec's held
+    # rows include ones with no target, released under its `embargo`.
+    if "ridge_datetime" in names:
+        assert used.get("learned_clock", 0) > 0, used
     restarted = [n for n in names if _version(version) <= _version(RESTARTED_LEVEL.get(n, "0.0.0"))]
     assert bool(used["restart"]) == bool(restarted), used
     wrong = {k: v for k, v in wrong.items() if v}

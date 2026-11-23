@@ -322,3 +322,32 @@ fn a_warned_flag_survives_a_save() {
     let back = Robust::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
     assert!(back.warned);
 }
+
+/// Review 2026-11-23, REG-2: a row whose target is null ages the open
+/// buffer, a run of 32 bytes wherever its decay is not the last run's, and
+/// that was checked against no cap: on an irregular clock a target that
+/// went quiet grew its buffer by a run a row, without a warning or a
+/// refusal, up to a bound of 512 GiB. An ageing row is held to the cap as
+/// a learned row is.
+#[test]
+fn an_ageing_row_is_held_to_the_spans_cap() {
+    for loss in [HUBER, QUANTILE] {
+        let c = RobustCfg {
+            refit_clock: Some(1e12),
+            ..base(loss, HuberScale::Mad)
+        };
+        let mut m = Robust::new(c).unwrap();
+        let cap = 4096;
+        m.set_cap_for_test(cap);
+        let data = rows(2000, 9);
+        for (i, (x, y)) in data.iter().enumerate() {
+            m.stamp_next(Stamp::Ns(i as i128 * S));
+            // Both targets quiet after the first rows, on a clock whose every
+            // step differs.
+            let y = if i < 4 { *y } else { [None, None] };
+            m.step(x, &y, 1.0 + i as f64 * 1e-6, 1.0);
+            assert!(held_of(&m) <= cap, "{loss:?} row {i}: {}", held_of(&m));
+        }
+        assert!(m.state_over_cap().is_some(), "{loss:?}");
+    }
+}

@@ -435,3 +435,73 @@ def test_the_command_line_refuses_clock_runs_on_without_skip_learned(rheon_cli, 
     )
     assert res.returncode != 0
     assert "clock_runs_on" in res.stderr and "skip_learned" in res.stderr, res.stderr
+
+
+@pytest.mark.parametrize("keys", [["A", "B", "C"], [1, 2, 10]])
+def test_a_monotone_close_drops_the_groups_it_closed(keys, rheon_cli, tmp_path):
+    """Review 2026-11-23, BANK-1: under ``group_close = "monotone"`` a group
+    a greater key closed is gone from the bank, and its last clock with it,
+    so ``skip_learned`` read it as a group the bank had not seen and kept
+    every row of it, which ``fit_predict`` then refused as a group below
+    the largest the bank has read. A group below that mark is one the bank
+    learned and closed: its rows are dropped, in key order (as numbers for
+    an integer column), on the command line too."""
+    from conftest import run_online
+
+    n = 4
+    df = pl.DataFrame(
+        {
+            "g": [k for k in keys for _ in range(n)],
+            "t": np.arange(3.0 * n),
+            "x0": np.arange(3.0 * n),
+            "y": 2.0 * np.arange(3.0 * n),
+        }
+    )
+    s = spec(group="g", group_close="monotone")
+    bank = rp.ModelBank([s])
+    bank.fit(df.head(2 * n + 2))
+    kept = bank.skip_learned(df)
+    assert kept["g"].to_list() == [keys[2]] * (n - 2)
+    out = bank.fit_predict(kept)
+    assert out.height == n - 2
+    # The command line's --skip-learned keeps the same rows.
+    df.head(2 * n + 2).write_parquet(tmp_path / "first.parquet")
+    df.write_parquet(tmp_path / "rerun.parquet")
+    state = tmp_path / "bank.state"
+    run_online(
+        rheon_cli,
+        tmp_path,
+        [s],
+        input=tmp_path / "first.parquet",
+        output=tmp_path / "first-out.parquet",
+        save_state=state,
+    )
+    run_online(
+        rheon_cli,
+        tmp_path,
+        [s],
+        input=tmp_path / "rerun.parquet",
+        output=tmp_path / "rerun-out.parquet",
+        args=["--load-state", str(state), "--skip-learned"],
+    )
+    assert pl.read_parquet(tmp_path / "rerun-out.parquet")["g"].to_list() == [keys[2]] * (n - 2)
+
+
+def test_a_clock_that_is_not_a_finite_number_is_kept_for_the_bank_to_refuse():
+    """Review 2026-11-23, BANK-2: ``-inf`` read as before the last clock and
+    its row was dropped in silence, where a NaN or a null is kept for
+    :meth:`fit_predict` to refuse by row."""
+    df = frame(groups=("a",))
+    bank = rp.ModelBank([spec(group="g")])
+    bank.fit_predict(df.head(50))
+    probe = pl.DataFrame(
+        {
+            "g": ["a"] * 4,
+            "t": [float("-inf"), float("inf"), float("nan"), 1.0],
+            "x0": [1.0] * 4,
+            "y": [1.0] * 4,
+        }
+    )
+    kept = bank.skip_learned(probe)["t"].to_list()
+    assert kept[0] == float("-inf") and kept[1] == float("inf") and np.isnan(kept[2])
+    assert len(kept) == 3

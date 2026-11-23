@@ -2853,15 +2853,28 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
 /// Measured 2026-11-21 on macOS arm64. The moves are those of the
 /// continued rows' own zero-weight rows as much as the saved clock's: the
 /// old build counted both. The current fixtures were regenerated.
+///
+/// Widened 2026-11-23 (rule 5's twenty-fifth exception, the user: "Widen
+/// exception 25"): a row of weight 0 under `embargo` or `label_clock` is now
+/// scored as `predict` scores it and releases no held row (review
+/// 2026-11-23, STRM-1), so a kept state whose saved rows wait on such a row
+/// continues further from its frozen frame. Each bound is the figure
+/// measured on macOS arm64 that day, rounded up, and `bank_gated` parts in
+/// two other cells of its `gated` frame. The schema-71 set, written by the build
+/// that counted such rows in no clock but released at them, still converts
+/// to the current bytes; its frozen frames were rewritten to what its
+/// unchanged state now continues to.
 const ZERO_WEIGHT_CLOCK: &[(&str, f64, usize)] = &[
     // 3.77e-2, `int_clock`'s `pred_y`; `dated` 2.28e-3.
     ("bank", 0.04, 0),
-    // 1.67e-1.
-    ("bank_gated", 0.17, 0),
-    // 2.86e-3 for `v67/` and `v68/`, 1.64e-1 for `v69/` and `v70/`.
+    // 1.67e-1, and 2 other cells (was 1.67e-1 and none).
+    ("bank_gated", 0.17, 2),
+    // 4.11e-2 for `v67/` and `v68/` (was 2.86e-3), 1.64e-1 for `v69/` and
+    // `v70/`.
     ("bank_label_clock", 0.17, 0),
-    // 2.86e-3 for `v67/` and `v68/`, 4.53e-2 for `v69/` and `v70/`.
-    ("bank_conformal_auto", 0.05, 0),
+    // 1.79e-2 for `v67/` and `v68/` (was 2.86e-3), 1.17e-1 for `v69/` and
+    // `v70/` (was 4.53e-2).
+    ("bank_conformal_auto", 0.12, 0),
 ];
 
 /// [`ZERO_WEIGHT_CLOCK`]'s hold on the kept fixture `f` of `kind`.

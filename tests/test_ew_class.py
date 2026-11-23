@@ -150,7 +150,10 @@ class Oracle:
         self.n[cls] = w_new
 
     def score(self, x):
-        if self.weight_sum < self.min_weight:
+        # `min_weight` is checked against the label's own weight, the
+        # labelled rows' (review 2026-11-23, STRM-4); `weight_sum` is the
+        # shared weight, every row with its features.
+        if sum(self.n) < self.min_weight:
             return None
         total = sum(self.n)
         if total <= 0.0:

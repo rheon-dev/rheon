@@ -247,7 +247,15 @@ fn clock_frame(audits: &[(Option<&str>, Audit)], dtype: Option<&ClockDtype>) -> 
             Some((ns, unit)) => {
                 let v: Vec<Option<i64>> = reps
                     .iter()
-                    .map(|r| opt(f(r)).map(|s| (s * 1e9 / ns).round() as i64))
+                    // A span past the duration's 64-bit range is null, not
+                    // the range's end, which a cast saturated to (review
+                    // 2026-11-23, BANK-9).
+                    .map(|r| {
+                        opt(f(r)).and_then(|s| {
+                            let v = (s * 1e9 / ns).round();
+                            (v >= i64::MIN as f64 && v < i64::MAX as f64).then_some(v as i64)
+                        })
+                    })
                     .collect();
                 Column::new(name.into(), v)
                     .cast(&DataType::Duration(unit))

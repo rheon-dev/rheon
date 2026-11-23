@@ -186,3 +186,39 @@ now by construction. Two stand out:
 - `bocpd`'s `hazard`, above.
 
 Which of the counts should also take a duration is task 538's audit.
+
+## After the 2026-11-23 review: a row of weight 0 releases nothing (STRM-1)
+
+The change above had a row of weight 0 under `embargo` or `label_clock`
+release the held rows whose wait or label time it had seen out, into the
+live models, before it was scored "as the next row would". The 106 cases
+passed because each such row was followed by a later row of positive
+weight that would release the same rows. The review of 2026-11-23 (STRM-1)
+found the two cases where no such row follows, each now a test that failed
+on that build:
+
+- **A later row of positive weight at an earlier clock.** A row of weight 0
+  counts in no step-back rule (hard rule 9), so a row at `t = 5` after one
+  of weight 0 at `t = 100` is accepted. It was scored by a model that had
+  learned row 0's label (`t = 0`, embargo 10), which the embargo still held
+  at `t = 5`: hard rule 2 broken
+  (`tests/test_label_delay.py::test_a_zero_weight_row_releases_no_label_a_later_row_before_it_would_not_see`).
+- **A stream that ends on rows of weight 0.** It saved a state that had
+  learned what the stream without them still held: hard rule 9 broken
+  (`zero_weight.rs`'s `a_stream_ending_on_zero_weight_rows_saves_what_it_would_without_them`,
+  ending on the runs at 63-66 and 100-103, under `embargo` and
+  `label_clock`, on every clock each takes).
+
+The user's decision, 2026-11-23: "Score as predict". A row of weight 0 is
+scored as `predict` scores a row, from the state as it stands, over the
+held rows' clock and its own step, and releases no held row
+(`crates/rheon-polars/src/stream/label_delay.rs`); it has no place on the
+elapsed clock, so a session reset's place, which a number clock and a
+temporal one read differently, is read nowhere. The cost: such a row does
+not see the labels matured at its own clock, where the doubled stream's
+scored copy does. `label_clock.rs`'s doubled-stream oracle now holds the
+rows of positive weight, and `zero_weight.rs`'s
+`a_zero_weight_row_is_scored_as_predict_scores_it` holds the rows of
+weight 0 to `predict` under `embargo` and `label_clock` too. Outputs move on
+rows of weight 0 alone, and on the rows of positive weight after a row of
+weight 0 that stepped past them; the CHANGELOG declares them.

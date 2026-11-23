@@ -252,6 +252,7 @@ out-of-date one, its row here says what became of it.
 | [REVIEW-2026-09-15.md](records/REVIEW-2026-09-15.md) | the eleven commits that answered the 2026-09-12 review, re-derived from first principles: three findings survived, and were fixed in batch 7 |
 | [REVIEW-2026-09-17.md](REVIEW-2026-09-17.md) | the changes since 0.6.0 (the removal of the expression plugin, the Arrow output and the 0.7.0 release), every finding reproduced by running the code; all were applied except A2, which is recorded |
 | [REVIEW-2026-09-18.md](REVIEW-2026-09-18.md) | a review of every code file, kept as its working state. Its opening still reads as in progress, but its four batches of fixes are on `main` and were released in 0.8.0 |
+| [REVIEW-2026-11-23-OUTCOMES.md](records/REVIEW-2026-11-23-OUTCOMES.md) | what was done about each finding of the 2026-11-23 whole-project review, batch by batch: each one tested first and found confirmed and fixed, not reproduced, or a decision for the user, with its test and commit |
 
 ## At the top of the repository
 

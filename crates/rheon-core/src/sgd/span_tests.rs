@@ -343,3 +343,25 @@ fn a_warned_flag_survives_a_save() {
     let back = Sgd::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
     assert!(back.warned);
 }
+
+/// Review 2026-11-23, REG-2: an ageing row -- a target null -- adds a run
+/// to the open buffer wherever its decay differs from the last run's, and
+/// was checked against no cap ([`crate::robust`]'s test of the same).
+#[test]
+fn an_ageing_row_is_held_to_the_spans_cap() {
+    let c = SgdCfg {
+        refit_clock: Some(1e12),
+        ..cfg(false)
+    };
+    let mut m = Sgd::new(c).unwrap();
+    let cap = 4096;
+    m.set_cap_for_test(cap);
+    for (i, (x, y)) in rows(2000, 9).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        let y = if i < 4 { *y } else { [None, None] };
+        m.step(x, &y, 1.0 + i as f64 * 1e-6, 1.0);
+        let held: u64 = m.refit.iter().map(RefitBuf::held_bytes).sum();
+        assert!(held <= cap, "row {i}: {held}");
+    }
+    assert!(m.state_over_cap().is_some());
+}

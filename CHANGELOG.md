@@ -1330,6 +1330,111 @@ model that only the new build has is listed as an addition and passes.
   chunks, `2.5` failed only when the plan ran, and `"a"` raised Python's own
   comparison error. Each is now a `WrongTypeError` naming `chunk_size`.
 
+- **A `glm`'s `hit_rate` is its family's** (review 2026-11-23, GLM-METRICS).
+  `emit_metrics` and `rp.eval` read every `glm` by the sign test about
+  zero. A binomial `glm`'s mean is a probability against a 0/1 label, so
+  every row with label 0 was a miss: its `hit_rate` is now the 0.5
+  threshold's, as a logistic `sgd`'s, and `rp.eval` scores it as a
+  classifier (`log_loss`, `brier_skill`, `accuracy`). A Poisson, Gamma or
+  Tweedie mean is positive against a target never negative, so the sign
+  test agreed on every row and read 1.0 whatever the fit: its `hit_rate` is
+  null, as a Poisson `sgd`'s is. Moves: `glm.hit_rate_*`.
+- **`rp.stream.merge(...).head(n)` reads no row past the slice** (review
+  2026-11-23, MERGE-1). When the slice's last row ended a stream's chunk,
+  the merge read that stream's next chunk before it stopped, so a clock
+  past the slice that is not a number, or a step back there, refused a
+  slice that never reaches it.
+- **A number clock whose capped-off time passes the largest double is
+  refused by row** (review 2026-11-23, CLOCK-1). Two finite steps,
+  `-1e308` to 0 to `1e308` under a `gap_cap` of 10, took about `2e308` out
+  of the decayed clock, and its removed time, infinite, made every later
+  stamp less an older one `inf - inf`: every span, clock window and
+  `coef_every` compared equal to any length from then on. The bank
+  refuses the row whose step could take the removed time there, as it
+  refuses a single step past the largest double; only a clock whose
+  values span more than a double holds reaches it.
+- **A row of weight 0 under `embargo` or `label_clock` releases nothing**
+  (review 2026-11-23, STRM-1; the user, 2026-11-23: "Score as predict").
+  Such a row released the held rows whose wait or label time its clock had
+  seen out into the live models before it was scored. A row of weight 0
+  counts in no step-back rule, so a later row of positive weight at an
+  earlier clock was then scored by a model that had learned a label the
+  embargo still held there, and a stream that ended on such a row saved a
+  state that had learned what the stream without it still held. It is now
+  scored as `predict` scores it, from the rows learned before it, over the
+  held rows' clock and its own step, and moves no live state: the cost is
+  that it does not see a label that matured at its own clock. The rows of
+  positive weight move only after a row of weight 0 that stepped past
+  them. Moves: `*.pred_*`, `*.resid_*`, `*.sigma_*`, `*.zscore_*`,
+  `*.lo_*`, `*.hi_*`, `*.coverage_*`, `*.ic_*`, `*.r2_*`, `*.hit_rate_*`,
+  `*.weight_sum`, `*.settled_frac`, `*.withheld_reason`, `*.coef`,
+  `*.support_coef`, `*.learned_clock`.
+- **A row of weight 0 that starts a fresh session reads a fresh stream's
+  diagnostics** (review 2026-11-23, STRM-2). Under `session_gap = "reset"`
+  (or a session that closes its group) such a row was scored by a fresh
+  model beside the closed session's `settled_frac`, `sigma`, metrics,
+  conformal band, checks and `learned_clock`, so its `min_settled_frac`
+  gate opened on a model that had seen nothing. It now reads what `predict`
+  reads for it, a fresh stream's, and `predict`'s `learned_clock` on such a
+  row is null too. No row of positive weight moves.
+- **`summary()["weight_sum_settled"]` leaves out the rows of weight 0**
+  (review 2026-11-23, STRM-3). The ceiling's first-row term took the
+  rows' mean weight over every row processed, the rows of weight 0
+  among them: with one after each row it read half the weight, 2% off
+  after 20 rows at a half-life of 30. The mean is over the rows that
+  carry weight.
+- **`ew_class` holds `min_weight` to its labelled rows** (review
+  2026-11-23, STRM-4). Its weight counted every row with its features, a
+  row whose label is null among them, so four unlabelled rows opened the
+  gate and the first labelled row's class was predicted with certainty.
+  `min_weight` is checked against the label's own weight, the classes'
+  weights summed (inside the window under one), as a regression checks
+  each target's own; `weight_sum` stays the shared weight. And
+  `learned_clock` moves only on a row with a target to learn: a row whose
+  every target is null is only predicted, as the summary counts it.
+  Moves: `ew_class.p_*`, `ew_class.class`, `ew_class.withheld_reason`,
+  `*.learned_clock`.
+- **`rheon.gram.solve_subsets` and the LARS paths pool a part with no
+  weight for a target as nothing** (review 2026-11-23, MATH-7 and REG-14).
+  A part whose target is null (`rheon.gram.from_row` writes its moments
+  NaN at weight 0) was multiplied in at 0, and `0 · NaN` made every merged
+  moment of the target, and every fit on it, NaN. The co-moments' spread
+  weight `W_a W_b / W²` overflowed past `1.3e154` and underflowed below
+  `1.5e-154`, so parts that light or heavy merged to NaN: it, the blends
+  and each target's `Σ w²` are read in shares or over a power of two
+  where the plain form leaves the doubles, and keep their bits where it
+  does not. A weighted part with no Kish size added nothing to `Σ w²`, so
+  beside 10 rows a part of weight 1000 made a size of 102,010: the merged
+  size is now unknown (NaN), as it is where no part has one.
+- **A refit over a span of the clock holds its ageing rows to
+  `max_state_bytes`** (review 2026-11-23, REG-2). Under
+  `huber_refit_span` or `quantile_refit_span` (`huber`, `quantile`,
+  `sgd(loss="huber")`) a row whose target is null adds a run of 32 bytes
+  to the open buffer wherever its decay is not the last run's, and no cap
+  saw it: on an irregular clock a target that went quiet grew its buffer
+  a run a row, with no warning or refusal. It is held to the cap as a
+  learned row is.
+- **`ModelBank.skip_learned` and `--skip-learned` drop a group a monotone
+  close closed, and keep an infinite clock** (review 2026-11-23, BANK-1
+  and BANK-2). Under `group_close = "monotone"` a closed group is gone from
+  the bank's last clocks, so its rows were kept as a group the bank had not
+  seen, and `fit_predict` refused them as below the largest group read; a
+  group below that key is now dropped, in key order. A clock of `-inf`
+  read as before the last clock and its row was dropped, where a NaN or a
+  null is kept for the bank to refuse by row; so is `-inf`.
+- The refit budget's notice names the setting each model sizes its refit
+  by (review 2026-11-23, BANK-5): `refit_rows` for `glm` and `expectile`,
+  which were told of `huber_refit_rows`, and `max_state_bytes` under a
+  refit over a span of the clock. A notice or refusal for the null group of
+  a grouped spec names `group null`, where it named no group (BANK-8).
+  `rp.stream.embargo` takes an input that holds a column named
+  `__embargo_key` or `__embargo_order` (PY-7), and `ModelBank.check()`'s
+  `ridge_shrinks` tells an `expectile`, which takes no `standardize`, to
+  lower its ridge (PY-11). A temporal step or span past 292 years is said
+  at its length, where a cast to 64 bits said 292 years, and `audit`'s
+  duration columns give such a span as null rather than the range's end
+  (BANK-9).
+
 ### Tests and documents
 
 - Every output is compared with the newest release's, bit for bit, on every

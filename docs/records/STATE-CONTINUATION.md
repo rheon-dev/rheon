@@ -611,6 +611,24 @@ weight 0 before the save, at least as many as the current one's. No bank's
 of weight 0 continues to the bit: every output of `scripts/compare_outputs.py`'s
 unweighted cases moved 0 ulps against a3554b27, and a bank state saved
 without one is the same bytes but for `hawkes`'.
+Widened, the user's (2026-11-23: "Widen exception 25"; no new number): the
+same change continued. After the review of 2026-11-23 (STRM-1), a row of
+weight 0 under `embargo` or `label_clock` is scored as `predict` scores it
+and releases no held row, where it released the rows its clock had seen
+out into the live models. A kept state whose continued rows include such a
+row goes on further from its frozen frame, and `ZERO_WEIGHT_CLOCK` is held
+to the figures measured on macOS arm64 that day, each bound rounded up:
+`bank` 3.77e-2 (0.04, unchanged); `bank_gated` 1.67e-1 and two other cells
+of its frame (0.17, 2 cells, where no cell moved before);
+`bank_label_clock` 4.11e-2 for `v67/` and `v68/` and 1.64e-1 for `v69/` and
+`v70/` (0.17, unchanged); `bank_conformal_auto` 1.79e-2 for `v67/` and
+`v68/` and 1.17e-1 for `v69/` and `v70/` (0.12, was 0.05). The schema-71
+set, written by the build that counted such rows in no clock but released at
+them, still loads and converts to the current schema's bytes exactly; its
+frozen frames of those four kinds were rewritten to what its unchanged
+state now continues to, and its state bytes are untouched. The current
+fixtures of the four kinds were regenerated. The count in CLAUDE.md's rule 5
+does not move.
 
 A twenty-sixth, the user's (2026-11-22: "Switch, restarting the level",
 asked whether a saved `deco` state of an earlier schema keeps the old form
@@ -719,3 +737,14 @@ sets `v71/` of `garch_egarch`, `garch_figarch`, `garch_skewt`,
 `garch_started` and `garch_targeted` are held by `KEPT_START`
 (`crates/rheon-core/tests/state_fixtures.rs`); `garch` and `garch_span`,
 saved before a first try, convert to the current bytes exactly.
+
+A moved readout, not an exception (the user, 2026-11-23: "Accept"; review
+2026-11-23, STRM-3): `summary()["weight_sum_settled"]` now takes the rows'
+mean weight over the rows that carry weight, the rows of weight 0 left out,
+so a bank state with rows of weight 0 reports another value from the same
+bytes. The kept schema-71 fixture `v71/bank_label_clock` loads, re-saves and
+goes on to the bit as before; only its frozen frame of that one summary field
+was updated, to what its state, loaded and continued, now reports
+(16.398890461263203 where it froze 16.411711841536942), beside the current
+set's regenerated `bank_label_clock`. Its state bytes are untouched, so the
+count of exceptions in CLAUDE.md's rule 5 does not move.

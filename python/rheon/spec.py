@@ -210,8 +210,12 @@ shows them at work.
     values on a number clock, in integers on an integer clock. A break
     releases nothing early: its events
     wait with the row after it, and run when that row is learned. A reset
-    drops the held rows. Units: clock units, or without a ``clock`` the
-    group's rows, a skipped row included.
+    drops the held rows. A row of weight 0 is held for nothing and releases
+    nothing: it is scored as ``predict`` scores it, from the rows learned
+    before it, so it does not see a label that matured at its own clock,
+    and a later row at an earlier clock is never scored by a model that
+    learned a label still held there. Units: clock units, or without a
+    ``clock`` the group's rows, a skipped row included.
 ``label_clock``, ``max_held_rows``, ``held_overflow``
     Why: when each label arrives at a time of its own, a flight's delay at
     its landing, one delay for every row learns some labels before they are
@@ -224,9 +228,10 @@ shows them at work.
     learned before an earlier long one. ``resid`` on the row is its label
     less that served prediction. ``embargo=d`` is the case
     ``label_clock = clock + d``, and gives the same numbers wherever the
-    clock adds up exactly. A row with weight 0 is held like any row and
-    learned at its label time, where it moves the clock and teaches nothing,
-    as ``embargo`` learns it; it counts against ``max_held_rows``. A row
+    clock adds up exactly. A row with weight 0 is held for nothing and
+    releases nothing, as under ``embargo``: it is scored as ``predict``
+    scores it, from the labels learned before it, not from those its own
+    clock has reached, and it takes no room under ``max_held_rows``. A row
     whose label time is null is scored and not held: its label never
     arrives, and :meth:`~rheon.polars.ModelBank.summary` counts it in
     ``labels_missing``. A null label time is how to keep a row that is only

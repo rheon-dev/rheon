@@ -416,3 +416,16 @@ def test_the_state_is_a_stage_of_a_pipeline_checkpoint(tmp_path):
     assert list(stages) == ["merge"]
     out2 = rp.stream.merge(rest, clock="t", load_state=stages["merge"])
     assert_frame_equal(pl.concat([out1, out2]), whole)
+
+
+@pytest.mark.parametrize("dirty", [float("nan"), 1.5])
+def test_a_slice_reads_no_chunk_past_its_last_row(dirty):
+    """Review 2026-11-23, MERGE-1: a slice whose last row ended a stream's
+    chunk pulled that stream's next chunk and pushed it before it stopped,
+    so a row past the slice -- a clock that is not a number, or a step back
+    -- refused a slice that never reaches it. The slice reads each stream
+    up to its last row returned, so it returns the rows."""
+    a = pl.DataFrame({"t": [1.0, 2.0, dirty]})
+    b = pl.DataFrame({"t": [10.0, 20.0]})
+    got = rp.stream.merge(a.lazy(), b.lazy(), clock="t", chunk_size=2).head(2).collect()
+    assert got["t"].to_list() == [1.0, 2.0]

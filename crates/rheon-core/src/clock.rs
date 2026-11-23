@@ -885,6 +885,18 @@ impl ClockState {
         self.prev_clock
     }
 
+    /// A number clock's removed times through the last row: the decayed
+    /// clock's and the elapsed clock's, each the raw time the caps and
+    /// session steps took out; 0 before a stamped row, or on a clock of
+    /// another form. A caller that refuses a row whose step would take
+    /// either past the largest double reads them (review 2026-11-23,
+    /// CLOCK-1): past it a stamp less an older one is `inf - inf`.
+    pub fn removed_times(&self) -> (f64, f64) {
+        self.exact
+            .as_ref()
+            .map_or((0.0, 0.0), |e| (e.removed, e.elapsed_removed))
+    }
+
     /// Whether any row has been seen: what a row-count clock, which has no
     /// last clock value to show it, steps forward by 1 from
     /// ([`Self::plain_forward`]).

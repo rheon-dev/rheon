@@ -81,6 +81,10 @@ pub struct StepRefusal {
     /// The clock value of the row before it in the stream, and its own.
     pub prev: f64,
     pub now: f64,
+    /// Whether the step itself is finite and it is the time the caps and
+    /// session steps remove that would pass the largest double (review
+    /// 2026-11-23, CLOCK-1).
+    pub removed: bool,
 }
 
 /// Enum dispatch over the models the bank can run (serde-friendly).
@@ -1802,11 +1806,15 @@ impl Stream {
             .model
             .window_parts()
             .is_some_and(|(window, _)| window.is_some());
+        // The mean over the rows that carry weight: a row of weight 0 adds
+        // none, and counted in the mean it took a share of the first row's
+        // weight out of the ceiling (review 2026-11-23, STRM-3).
+        let weighted = self.summary().map_or(self.persisted.rows_seen, |d| {
+            self.persisted.rows_seen.saturating_sub(d.rows_zero_weight)
+        });
         let row_weight = match (&spec.weight, self.summary()) {
             (None, _) => 1.0,
-            (Some(_), Some(d)) if self.persisted.rows_seen > 0 => {
-                d.weight_sum / self.persisted.rows_seen as f64
-            }
+            (Some(_), Some(d)) if weighted > 0 => d.weight_sum / weighted as f64,
             _ => f64::NAN,
         };
         let weight_sum_settled = match model {
@@ -2494,8 +2502,19 @@ impl Stream {
     /// between rows at -1e308 and 1e308 let both steps through in one chunk,
     /// and `check_clock` then named the step of infinity a step back; cut
     /// after it, the step was refused here (PLAN 539).
+    ///
+    /// Two finite steps can still sum past it in the time the caps remove:
+    /// `-1e308` to 0 to `1e308` under a `gap_cap` of 10 removes about
+    /// `2e308`, and the removed time, infinite, made every later stamp less
+    /// an older one `inf - inf` (review 2026-11-23, CLOCK-1). So the row
+    /// whose step could take the removed time past the largest double is
+    /// refused too, on a bound: a forward step removes at most its part
+    /// past `gap_cap`, a step back or one across a session at most its size
+    /// and the session's gap. Only a clock whose values span more than a
+    /// double holds reaches it.
     pub fn check_steps(
         &self,
+        cfg: &rheon_core::ClockCfg,
         clock: Option<&ClockCol>,
         weight: Option<&[f64]>,
         rows: &[usize],
@@ -2508,15 +2527,47 @@ impl Stream {
             Some(ClockValue::F64(p)) => Some(p),
             _ => None,
         };
+        let (removed, elapsed_removed) = self.persisted.clock.removed_times();
+        let mut bound = removed.abs().max(elapsed_removed.abs());
+        let session = match cfg.session_gap {
+            Some(rheon_core::SessionGap::Gap(g)) => Some(g.abs()),
+            Some(rheon_core::SessionGap::Reset) => Some(0.0),
+            None => None,
+        };
         for (ri, &row) in rows.iter().enumerate() {
             let at = base + ri;
             let now = values[at];
-            if let Some(p) = prev
-                && !(now - p).is_finite()
-            {
-                return Err(StepRefusal { row, prev: p, now });
+            let zero = weight.is_some_and(|w| w[at] == 0.0);
+            if let Some(p) = prev {
+                let step = now - p;
+                if !step.is_finite() {
+                    return Err(StepRefusal {
+                        row,
+                        prev: p,
+                        now,
+                        removed: false,
+                    });
+                }
+                // A row of weight 0 removes nothing: the stream's clock
+                // never takes its step.
+                if zero {
+                    continue;
+                }
+                bound += match session {
+                    Some(g) => step.abs() + g,
+                    None if step < 0.0 => -step,
+                    None => (step - cfg.gap_cap).max(0.0),
+                };
+                if !bound.is_finite() {
+                    return Err(StepRefusal {
+                        row,
+                        prev: p,
+                        now,
+                        removed: true,
+                    });
+                }
             }
-            if !weight.is_some_and(|w| w[at] == 0.0) {
+            if !zero {
                 prev = Some(now);
             }
         }
@@ -2635,20 +2686,21 @@ impl Stream {
             // planned on copies of the clock and left out of everything the
             // schedule counts ([`Self::weightless_plan`]).
             if w == Some(0.0) {
-                let (plan, place) = self.weightless_plan(
+                let plan = self.weightless_plan(
                     spec,
                     cfg,
                     (&clock_state, restart_fold.as_ref().filter(|_| fresh_steps)),
                     (c, session.map(|s| s[i])),
                     (ri, i, fed, accept),
-                    keep_elapsed,
                 );
                 if accept {
                     rows_seen = rows_seen.saturating_add(1);
                 }
                 plans.push(plan);
+                // It releases nothing, so it has no place on the elapsed
+                // clock (review 2026-11-23, STRM-1).
                 if keep_elapsed {
-                    elapsed.push(place);
+                    elapsed.push(None);
                 }
                 continue;
             }
@@ -3218,10 +3270,26 @@ impl Stream {
             }
             if spec.emit_clocks && plan.emit && plan.accept {
                 out.scored_clock[plan.ri] = plan.clock;
-                out.learned_clock[plan.ri] = self.persisted.last_learned;
+                // A row a fresh stream scores reads a fresh stream's clock
+                // of rows learned: none (review 2026-11-23, STRM-2).
+                out.learned_clock[plan.ri] = if plan.zero == Weightless::Fresh {
+                    None
+                } else {
+                    self.persisted.last_learned
+                };
             }
             let restarted_here = fired.next_if_eq(&pi).is_some();
-            if plan.accept && plan.learn && plan.w > 0.0 {
+            // A row learned from has a target to learn: one whose every
+            // target is null is only predicted, as the summary counts it,
+            // and moved the clock of rows learned (review 2026-11-23,
+            // STRM-4). A model without targets learns every row.
+            let has_target = targets.is_empty()
+                || if plan.direct() {
+                    targets.iter().any(|t| usable(t[plan.i]))
+                } else {
+                    released[plan.pending].ys.iter().any(Option::is_some)
+                };
+            if plan.accept && plan.learn && plan.w > 0.0 && (has_target || restarted_here) {
                 self.persisted.last_learned = if restarted_here {
                     None
                 } else if plan.direct() {
@@ -3360,12 +3428,6 @@ impl Stream {
                 w: 1.0,
                 zero: Weightless::No,
             };
-            // Scored against the state as it stands, so the learned clock is
-            // the fit's last learned row on every row (task 152).
-            if spec.emit_clocks && accept {
-                out.scored_clock[ri] = plan.clock;
-                out.learned_clock[ri] = self.persisted.last_learned;
-            }
             // A new session's row under `group_close = "session"` is a fresh
             // stream's first row, as `fit_predict` restarts the stream at the
             // change; it was scored by the closed session's fit (review
@@ -3377,6 +3439,17 @@ impl Stream {
             } else {
                 as_is
             };
+            // Scored against the state as it stands, so the learned clock is
+            // the fit's last learned row (task 152); a row a fresh stream
+            // scores reads that stream's, none (review 2026-11-23, STRM-2).
+            if spec.emit_clocks && accept {
+                out.scored_clock[ri] = plan.clock;
+                out.learned_clock[ri] = if class == fresh {
+                    None
+                } else {
+                    self.persisted.last_learned
+                };
+            }
             classes[class].push(plan);
             if accept {
                 last_accepted = Some((class, classes[class].len() - 1));
@@ -3898,7 +3971,96 @@ fn rounding_steps(steps: u64, notified: &Notified) -> f64 {
     notified.learned_since_restart.unwrap_or(steps) as f64
 }
 
+/// What a row of weight 0 that starts a fresh stream sets aside while a
+/// fresh instance scores it: everything [`Instance::reset`] rebuilds, and
+/// the held rows' clock, put back after the row (review 2026-11-23,
+/// STRM-2). Only the model was set aside before, so such a row read the
+/// closed session's `settled_frac`, `sigma`, metrics and the rest beside a
+/// fresh model's prediction, where `predict` reads a fresh stream's.
+struct KeptFresh {
+    model: AnyModel,
+    resid_var: Vec<f64>,
+    resid_w: Vec<f64>,
+    decay_time: f64,
+    restarted: bool,
+    notified: Notified,
+    resid_win: Option<ResidWindow>,
+    drift: Option<Vec<DriftDetector>>,
+    resid_q: Option<Vec<EwQuantile>>,
+    autocorr: Option<Vec<EwAutoCorr>>,
+    metrics: Option<Vec<SlotMetrics>>,
+    conformal: Option<Vec<Conformal>>,
+    checks: Option<Checks>,
+    pending_clock: Option<f64>,
+}
+
+/// What a row of weight 0 is scored by, set aside and put back after it.
+enum Kept {
+    Model(AnyModel),
+    Fresh(Box<KeptFresh>),
+}
+
 impl Instance<'_> {
+    /// Set this instance aside and leave a fresh one in its place, as a
+    /// fresh stream's ([`KeptFresh`]).
+    fn swap_fresh(&mut self) -> KeptFresh {
+        let kept = KeptFresh {
+            model: self.model.get().clone(),
+            resid_var: self.resid_var.clone(),
+            resid_w: self.resid_w.clone(),
+            decay_time: *self.decay_time,
+            restarted: *self.restarted,
+            notified: self.notified.clone(),
+            resid_win: self.resid_win.as_ref().map(|r| r.get().clone()),
+            drift: self.drift.as_deref().cloned(),
+            resid_q: self.resid_q.as_deref().cloned(),
+            autocorr: self.autocorr.as_deref().cloned(),
+            metrics: self.metrics.as_deref().cloned(),
+            conformal: self.conformal.as_deref().cloned(),
+            checks: self.checks.as_deref().cloned(),
+            pending_clock: self.pending_clock.as_deref().copied(),
+        };
+        self.reset();
+        if let Some(c) = self.pending_clock.as_deref_mut() {
+            *c = 0.0;
+        }
+        kept
+    }
+
+    /// Put back what [`Self::swap_fresh`] set aside.
+    fn restore_fresh(&mut self, kept: KeptFresh) {
+        *self.model.get_mut() = kept.model;
+        *self.resid_var = kept.resid_var;
+        *self.resid_w = kept.resid_w;
+        *self.decay_time = kept.decay_time;
+        *self.restarted = kept.restarted;
+        *self.notified = kept.notified;
+        if let (Some(ring), Some(r)) = (self.resid_win.as_mut(), kept.resid_win) {
+            *ring.get_mut() = r;
+        }
+        if let (Some(d), Some(k)) = (self.drift.as_deref_mut(), kept.drift) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.resid_q.as_deref_mut(), kept.resid_q) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.autocorr.as_deref_mut(), kept.autocorr) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.metrics.as_deref_mut(), kept.metrics) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.conformal.as_deref_mut(), kept.conformal) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.checks.as_deref_mut(), kept.checks) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.pending_clock.as_deref_mut(), kept.pending_clock) {
+            *d = k;
+        }
+    }
+
     /// Restart this instance: the same thing a clock reset or a drift break
     /// does, applied to one instance rather than the whole stream.
     fn reset(&mut self) {
@@ -4037,6 +4199,9 @@ fn run_instance(
     let binary_loss = match &inst.spec.model {
         ModelKind::Sgd { loss, .. } => loss.as_deref() == Some("logistic"),
         ModelKind::Ftrl { loss, .. } => loss.as_deref().unwrap_or("logistic") == "logistic",
+        // A binomial `glm`'s mean is a probability against a 0/1 label
+        // (review 2026-11-23, GLM-METRICS).
+        ModelKind::Glm { family, .. } => family.as_deref() == Some("binomial"),
         _ => false,
     };
     // A Poisson fit has no sign to hit: a rate is positive and a count is
@@ -4045,8 +4210,14 @@ fn run_instance(
     // metric that is not defined (review round 4, CC5; docs/PLAN.md task
     // 195, S5). Every other target's test is about zero: task 201 removed
     // the ratio target, whose test was about 1.
-    let poisson = matches!(&inst.spec.model, ModelKind::Sgd { loss, .. }
-        if loss.as_deref() == Some("poisson"));
+    // A `glm` of every other family -- Poisson (its default), Gamma,
+    // Tweedie -- is the same: a positive mean against a target never
+    // negative (review 2026-11-23, GLM-METRICS).
+    let poisson = match &inst.spec.model {
+        ModelKind::Sgd { loss, .. } => loss.as_deref() == Some("poisson"),
+        ModelKind::Glm { family, .. } => family.as_deref() != Some("binomial"),
+        _ => false,
+    };
     // What a model's kind adds to a row, decided once an instance: a row of
     // every other kind pays a branch on each, where reading the kind from the
     // model each row cost it a dispatch apiece (about 30 instructions a row,
@@ -4120,14 +4291,14 @@ fn run_instance(
         // back after the row (hard rule 9). Boxed, so that every row that
         // keeps none pays a null check and not a model's drop.
         let kept_model = match plan.zero {
-            Weightless::Fresh => Some(Box::new(std::mem::replace(
-                inst.model.get_mut(),
-                build_one(inst.spec, inst.decay).expect("spec was already validated"),
-            ))),
+            Weightless::Fresh => Some(Box::new(Kept::Fresh(Box::new(inst.swap_fresh())))),
             Weightless::Blended => {
                 let mut copy = inst.model.get().clone();
                 copy.blend_toward_long_run();
-                Some(Box::new(std::mem::replace(inst.model.get_mut(), copy)))
+                Some(Box::new(Kept::Model(std::mem::replace(
+                    inst.model.get_mut(),
+                    copy,
+                ))))
             }
             Weightless::No | Weightless::AsIs => None,
         };
@@ -5133,8 +5304,10 @@ fn run_instance(
                 });
             }
         }
-        if let Some(model) = kept_model {
-            *inst.model.get_mut() = *model;
+        match kept_model.map(|k| *k) {
+            Some(Kept::Model(model)) => *inst.model.get_mut() = model,
+            Some(Kept::Fresh(kept)) => inst.restore_fresh(*kept),
+            None => {}
         }
         if reset_on_drift && row_drift {
             inst.reset();

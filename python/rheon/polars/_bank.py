@@ -596,9 +596,11 @@ class ModelBank:
         ``frame``'s rows that the bank has not learned, of the same type, in
         the same order: a ``LazyFrame`` stays lazy. A row that some spec that
         reads a clock has strictly before its group's last clock is dropped:
-        the bank is past it. Any other row is kept when at least one spec has
-        its clock after its group's last clock, its group is one that spec has
-        not seen, or its clock is null. A null clock is left for
+        the bank is past it. So is a row of a group a spec with
+        ``group_close="monotone"`` closed, below the largest group key it has
+        read: that group was learned in full. Any other row is kept when at
+        least one spec has its clock after its group's last clock, its group
+        is one that spec has not seen, or its clock is null. A null clock is left for
         :meth:`fit_predict` to judge. A row at its group's last clock counts as
         learned by that spec, but only a spec that has learned the row can
         say so: one spec's tie does not drop a row another spec has not
@@ -682,13 +684,21 @@ class ModelBank:
         schema = frame.lazy().collect_schema()
         # Each spec's verdict on a row, gathered over the specs that read a clock.
         verdicts: list[_Verdict] = []
-        for spec, groups in zip(self.specs, self._native.last_clocks(), strict=True):
+        for spec, groups, mark in zip(
+            self.specs, self._native.last_clocks(), self._native.group_marks(), strict=True
+        ):
             clock = spec.get("clock")
             if clock is None:
                 continue
             verdicts.append(
                 _unlearned(
-                    spec["name"], clock, spec.get("group"), spec.get("weight"), groups, schema
+                    spec["name"],
+                    clock,
+                    spec.get("group"),
+                    spec.get("weight"),
+                    groups,
+                    schema,
+                    mark,
                 )
             )
         keep: pl.Expr | None = None
@@ -4158,8 +4168,11 @@ def _unlearned(
     weight: str | None,
     groups: list[tuple[str | None, float | None, int | None, int | None]],
     schema: pl.Schema,
+    mark: tuple[str | None, bool] | None = None,
 ) -> _Verdict:
-    """One spec's :class:`_Verdict` of each row of its input."""
+    """One spec's :class:`_Verdict` of each row of its input. ``mark`` is a
+    monotone close's largest group key read, and whether the keys order as
+    numbers: a group below it was learned and closed."""
     for column, role in ((clock, "clock"), (group, "group")):
         if column is not None and column not in schema:
             msg = (
@@ -4247,8 +4260,24 @@ def _unlearned(
                 .then(pl.lit(lasts[None], dtype=kind))
                 .otherwise(last)
             )
-    new = value.is_null() | last.is_null() | (value > last)
-    before = ~new & (value < last)
+    closed = pl.lit(False)
+    top, integer = mark if mark is not None else (None, False)
+    if group is not None and top is not None:
+        # A group below the largest key a monotone close has read was
+        # learned and closed, and the bank holds no last clock for it
+        # (review 2026-11-23, BANK-1): in key order, as numbers for an
+        # integer column and as the key's text otherwise.
+        if integer:
+            below = pl.col(group).cast(pl.Int128, strict=False) < int(top)
+        else:
+            below = keys.cast(pl.String) < top
+        closed = last.is_null() & below.fill_null(False)
+    # A clock that is not a finite number is no place on the clock, and is
+    # kept for the bank to refuse by row: read as before the last clock,
+    # `-inf` was dropped in silence (review 2026-11-23, BANK-2).
+    unplaced = value.is_null() | (~value.is_finite() if kind is pl.Float64 else pl.lit(False))
+    new = ~closed & (unplaced | last.is_null() | (value > last))
+    before = closed | (~new & (value < last))
     at_last = ~new & ~before
     zero = pl.lit(False)
     if weight is not None and weight in schema:

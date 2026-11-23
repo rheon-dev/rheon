@@ -515,7 +515,13 @@ def _spec_findings(
                         f"the ridge {_fmt(ridge)} is {_fmt(ridge / var)} times the "
                         f"variance of feature {r['column']!r} in {_who(g)}, so it "
                         f"takes {ridge / (ridge + var):.0%} of that coefficient: "
-                        "set standardize=True, or rescale the feature upstream",
+                        # `expectile` takes no `standardize` (review
+                        # 2026-11-23, PY-11): its way out is the ridge.
+                        + (
+                            "lower ridge, or rescale the feature upstream"
+                            if kind == "expectile"
+                            else "set standardize=True, or rescale the feature upstream"
+                        ),
                     )
 
     # (10), (11) from the Gram, and (11) from a marginal. Without numpy the

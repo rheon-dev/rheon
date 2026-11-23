@@ -2829,9 +2829,18 @@ impl OnlineModel for Sgd {
                 // Under a span of the clock the buffers grow with the data:
                 // a row that would take them past the cap is buffered by no
                 // target, nor any row after it (task 538).
-                if span.is_some() && t.is_some() && self.refit[j].open() {
+                // An ageing row adds a run where its decay is not the last
+                // run's, and is held to the cap as a learned row is (review
+                // 2026-11-23, REG-2).
+                let row = match (span, t) {
+                    (None, _) => 0,
+                    (Some(_), Some(_)) => {
+                        8 * (x.len() + 4) as u64 + 48 * u64::from(!self.mad.is_empty())
+                    }
+                    (Some(_), None) => self.refit[j].age_bytes(lam, lam_scale),
+                };
+                if row > 0 && self.refit[j].open() {
                     let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
-                    let row = 8 * (x.len() + 4) as u64 + 48 * u64::from(!self.mad.is_empty());
                     let limit = self.span_cap();
                     let mut guard = crate::clock_span::HeldCap {
                         over: &mut self.over,
