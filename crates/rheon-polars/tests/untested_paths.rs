@@ -659,6 +659,70 @@ fn what_a_bank_has_learned_is_read_off_each_clock_type() {
     );
 }
 
+/// PLAN 566, a known bug, held by `should_panic` so the fix flips it: an
+/// ignored test is the extended tier's here, which the full gate runs.
+/// Expected: `--skip-learned` keeps a row that one spec has provably not
+/// learned -- its clock is after that spec's group's last clock -- where the
+/// other spec only ties on its own group's last clock, which is no step back,
+/// so the bank takes the row. A row the bank learned was learned by every
+/// spec, so any spec's "after" proves the row new (`ModelBank.skip_learned`'s
+/// first line: "The rows ... that the bank has not learned"). Today
+/// `Learned::unlearned` counts a tie as learned (`learned.rs`, the `<=` and
+/// `Less | Equal` comparisons) and lets any one spec's "learned" drop the row
+/// (`keep[i] = false`), so `by_comp`'s tie vetoes `by_seg`'s proof. Python's
+/// `tests/test_report_565_569.py` holds the same through `skip_learned`.
+#[test]
+#[should_panic(expected = "known bug: PLAN 566")]
+fn a_row_one_spec_ties_on_and_another_has_not_learned_is_kept() {
+    let frame = |t: &[f64], comp: &[&str], seg: &[&str]| {
+        let n = t.len();
+        let mut df = rows(n, 9);
+        df.put(Series::new("t".into(), t.to_vec())).unwrap();
+        df.put(Series::new("comp".into(), comp.to_vec())).unwrap();
+        df.put(Series::new("seg".into(), seg.to_vec())).unwrap();
+        df
+    };
+    let by = |name: &str, group: &str| {
+        spec(&format!(
+            r#"{{"name": "{name}", "model": {{"type": "ewridge"}}, "targets": ["y"],
+                "features": ["x0"], "clock": "t", "group": "{group}", "gap_cap": 50.0,
+                "half_life": 10.0}}"#
+        ))
+    };
+    let specs = vec![by("by_comp", "comp"), by("by_seg", "seg")];
+    let mut bank = Bank::new(specs.clone()).unwrap();
+    bank.fit_predict(&frame(
+        &[0.0, 0.0, 5.0],
+        &["IRT", "IRT", "IRT"],
+        &["1_N", "2_N", "1_N"],
+    ))
+    .unwrap();
+    // by_seg's group 2_N last learned at 0, so 5 is new to it.
+    let row = frame(&[5.0], &["IRT"], &["2_N"]);
+    let kept: Vec<bool> = bank
+        .learned(false)
+        .unwrap()
+        .unlearned(&row)
+        .unwrap()
+        .iter()
+        .map(|b| b.unwrap())
+        .collect();
+    let mut resumed = Bank::new(specs).unwrap();
+    resumed
+        .fit_predict(&frame(
+            &[0.0, 0.0, 5.0],
+            &["IRT", "IRT", "IRT"],
+            &["1_N", "2_N", "1_N"],
+        ))
+        .unwrap();
+    assert!(resumed.fit_predict(&row).is_ok(), "the bank takes the row");
+    assert_eq!(
+        kept,
+        [true],
+        "known bug: PLAN 566: a tie in by_comp drops a row by_seg has not learned"
+    );
+}
+
 /// A temporal clock column is a clock and nothing else: another spec that
 /// reads it as a weight, or as a column of a target's formula, is refused
 /// naming the role; and `kalman`'s `q`, a number of the clock's own units,
