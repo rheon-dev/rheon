@@ -3133,7 +3133,10 @@ impl OnlineModel for Robust {
                                 m.cfg.huber_scale == HuberScale::Mad,
                             )
                         })
-                };
+                    // A place on the clock exactly under a span, as `sgd`'s:
+                    // a span without one never closed (review 2026-11-23,
+                    // REG-16).
+                } && m.place.is_some() == m.cfg.refit_clock.is_some();
                 if !refit_fits {
                     return Err(StateError::Invalid(format!(
                         "{kind}: it is damaged, since the rows it saved for its refit do not match {kind}_refit_rows. Load an undamaged copy of the state file, or rebuild it from its input."

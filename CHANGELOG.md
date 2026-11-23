@@ -718,6 +718,14 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`huber` and `quantile` refuse a state whose refit span has no place on
+  the clock** (review 2026-11-23, REG-16). A refit over a span of the
+  clock keeps where the span began, and `sgd`'s load checked that a state
+  has that place exactly when its configuration has a span, but
+  `huber`'s and `quantile`'s did not. A damaged state without its place
+  loaded and never closed its span, holding rows until `max_state_bytes`
+  stopped them. It is now refused as damaged, as `sgd`'s is.
+
 - **`lasso` reads the size a decayed stream grows to with its first row at
   no clock** (review 2026-11-23, LASSO-2). A descent that runs out of
   sweeps is not counted in `solve_failures` while the Gram's rows are too
