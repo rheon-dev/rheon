@@ -4,7 +4,7 @@ pub const FIXTURE: crate::cases::Fixture = crate::cases::Fixture {
     name: "garch_targeted_realistic",
     variant: "Garch",
     schema: 72,
-    writer: "linux-x86_64",
+    writer: "macos-aarch64",
     state: "\
         82ae736368656d615f76657273696f6e48a56d6f64656c81a5476172636888a36366678ba96e5f7461726765747302a3\
         766f6ca56761726368a464697374a66e6f726d616caa7472756e636174696f6ec0b276617269616e63655f7461726765\
