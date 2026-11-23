@@ -2100,6 +2100,12 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             1.5.into(),
             "alpha must be at least",
         ),
+        refused(
+            EwmMoments::new(ewm_moments_cfg()).unwrap(),
+            "decay",
+            zero(),
+            h,
+        ),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -2582,6 +2588,7 @@ const PROBED: &[(&str, &str)] = &[
     ("PowerVariation", "power_variation"),
     ("TDigest", "tdigest"),
     ("DdSketch", "ddsketch"),
+    ("EwmMoments", "ewm_moments"),
 ];
 
 #[test]
@@ -5306,6 +5313,44 @@ fn dcc_predict_is_the_step() {
     // With margins the start is the margins' and the stage's, too long for
     // the parity's 300 ready rows: `dcc/tests.rs` holds that form.
     predict_is_the_step_without_the_step(|| Dcc::new(dcc_cfg()).unwrap(), 2, false);
+}
+
+/// `ewm_moments` of the first feature: a slot a term, every kind and the
+/// unbiased forms among them, and a floor on the weight.
+fn ewm_moments_cfg() -> EwmMomentsCfg {
+    let term = MomentTerm::of_column;
+    EwmMomentsCfg {
+        min_weight: 3.0,
+        ..EwmMomentsCfg::new(
+            decay(),
+            vec![
+                term("var", 2, MomentKind::Central, false),
+                term("skew", 3, MomentKind::Standardized, true),
+                term("kurt_u", 4, MomentKind::Standardized, false),
+                term("k5", 5, MomentKind::Cumulant, true),
+                term("raw2", 2, MomentKind::Raw, true),
+            ],
+        )
+    }
+}
+
+#[test]
+fn ewm_moments() {
+    // One column, the first feature; no targets; a slot a term; `n_eff`
+    // rule 8's decayed recursion.
+    let m = EwmMoments::new(ewm_moments_cfg()).unwrap();
+    assert_eq!(m.n_features(), 1, "ewm_moments reads one column");
+    assert_eq!(m.n_targets(), 0);
+    let r = probe_with(m, 0, Some(&EwmMoments::n_eff));
+    assert_eq!(r.kind, "ewm_moments");
+    assert_eq!(r.n_outputs, 5);
+    assert_eq!(r.pred_len, 5);
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn ewm_moments_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| EwmMoments::new(ewm_moments_cfg()).unwrap(), 0, false);
 }
 
 #[test]

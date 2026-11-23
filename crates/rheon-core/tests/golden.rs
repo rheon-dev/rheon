@@ -2399,6 +2399,93 @@ fn pca_oja_golden() {
     check("pca_oja", &pca_signature(PcaMethod::Oja), GOLDEN_PCA_OJA);
 }
 
+/// A realistic stream for `ewm_moments`: a skewed column at a level of
+/// about 6 (a shifted exponential of mean 3), an AR(1) column at 0.6, a
+/// clock of uneven steps with a gap of 25, uneven weights with two rows of
+/// weight 0 (the first among them). 400 rows.
+fn moments_stream() -> Vec<([f64; 2], f64, f64)> {
+    let mut s = 554_u64;
+    let mut ar = 0.0;
+    (0..400)
+        .map(|i| {
+            let u = 0.5 * (lcg(&mut s) + 1.0);
+            let g = 3.0 - 3.0 * (1.0 - u).max(1e-12).ln();
+            ar = 0.6 * ar + lcg(&mut s);
+            let d = match i {
+                0 => 0.0,
+                200 => 25.0,
+                _ => 0.6 + 0.4 * lcg(&mut s),
+            };
+            let w = if i == 0 || i == 57 {
+                0.0
+            } else {
+                0.75 + 0.5 * lcg(&mut s)
+            };
+            ([g, ar], d, w)
+        })
+        .collect()
+}
+
+/// `ewm_moments`: a skew, an unbiased kurtosis, a fourth cumulant, a
+/// co-moment of order (1, 2), a raw second moment and an autocorrelation at
+/// a clock lag of 1.5, each with its standard error, read before rows 150,
+/// 260 and 399; then the same terms over a window of 40 clock units. The
+/// structure is held (two outputs a term, every one defined by row 150, a
+/// positive skew of the skewed column, a positive autocorrelation of the
+/// AR(1) one) and the numbers pinned.
+#[test]
+fn ewm_moments_golden() {
+    let col = |c, p| (MomentLeg::of(c), p);
+    let term = |name: &str, powers, kind, bias| MomentTerm {
+        name: name.into(),
+        powers,
+        kind,
+        bias,
+    };
+    let terms = vec![
+        term("skew", vec![col(0, 3)], MomentKind::Standardized, true),
+        term("kurt", vec![col(0, 4)], MomentKind::Standardized, false),
+        term("k4", vec![col(0, 4)], MomentKind::Cumulant, true),
+        term("co", vec![col(0, 1), col(1, 2)], MomentKind::Central, true),
+        term("raw2", vec![col(1, 2)], MomentKind::Raw, true),
+        term(
+            "ac",
+            vec![col(1, 1), (MomentLeg::lagged(1, 1.5), 1)],
+            MomentKind::Standardized,
+            true,
+        ),
+    ];
+    let mut cfg = EwmMomentsCfg::new(Decay::Halflife(80.0), terms);
+    cfg.clocked = true;
+    cfg.se = true;
+    for (name, window, want) in [
+        ("ewm_moments", None, GOLDEN_EWM_MOMENTS),
+        ("ewm_moments_window", Some(40.0), GOLDEN_EWM_MOMENTS_WINDOW),
+    ] {
+        let mut m = EwmMoments::new(EwmMomentsCfg {
+            window_clock: window,
+            ..cfg.clone()
+        })
+        .unwrap();
+        assert_eq!(
+            m.n_outputs(),
+            12,
+            "{name}: a term and its standard error each"
+        );
+        let mut got = Vec::new();
+        for (i, (x, d, w)) in moments_stream().into_iter().enumerate() {
+            let step = m.step(&x, &[], d, w);
+            if [150, 260, 399].contains(&i) {
+                assert!(step.pred.iter().all(|v| v.is_finite()), "{name}: row {i}");
+                assert!(step.pred[0] > 0.0 && step.pred[5] > 0.0, "{name}: row {i}");
+                got.extend(&step.pred);
+                got.push(step.n_eff);
+            }
+        }
+        check(name, &got, want);
+    }
+}
+
 // --- generated; see the module docs ---
 const GOLDEN_REALIZED: &[f64] = &[
     20.301763088150093,
@@ -2479,6 +2566,88 @@ const GOLDEN_PCA_OJA: &[f64] = &[
     3.954591836341751,
     0.9755719093513584,
     -0.6711043772119846,
+];
+const GOLDEN_EWM_MOMENTS: &[f64] = &[
+    2.8329964637774814,
+    16.02475808583336,
+    1342.4260623665018,
+    0.19749780915523601,
+    0.45361175689062017,
+    0.08653074498767489,
+    0.6227033929036353,
+    4.424843520682192,
+    1088.4487593316915,
+    0.15013223770551765,
+    0.0528104410605394,
+    0.1039648761186183,
+    75.16866030031775,
+    2.3011944298525524,
+    11.644114135119917,
+    941.9942065251553,
+    0.08280406423595192,
+    0.5782095311811001,
+    0.20838520778454261,
+    0.46604866892042085,
+    2.9573294573236737,
+    643.2681080958494,
+    0.13376235812053172,
+    0.054581904025623545,
+    0.07441600775973262,
+    86.00883395894138,
+    1.839216837975061,
+    8.407160392465022,
+    397.6953053029218,
+    0.33907848144993424,
+    0.7133314202793511,
+    0.393455614799461,
+    0.5006575162868554,
+    3.7577927563274716,
+    378.69849162898095,
+    0.18538010107369973,
+    0.05306375077557374,
+    0.05573958304140239,
+    120.41184145309974,
+];
+const GOLDEN_EWM_MOMENTS_WINDOW: &[f64] = &[
+    0.9302446287947042,
+    3.4345051986135253,
+    9.71287769945026,
+    0.16988343024479924,
+    0.5582423507347112,
+    0.13058435201476315,
+    0.19183122137139663,
+    0.6066857489249887,
+    16.83390768274169,
+    0.17041953387867434,
+    0.08487785071546758,
+    0.14374730188285947,
+    42.84779336144839,
+    1.9567292633956257,
+    9.476294398981619,
+    865.7713801823895,
+    -0.12223676107434481,
+    0.8094345047851008,
+    0.23519325716714704,
+    0.5372767949758197,
+    2.0912773835351843,
+    786.3941580315961,
+    0.3167673565461328,
+    0.1270772046877625,
+    0.12535619396484723,
+    35.608016459273706,
+    1.4778260868020379,
+    4.575808230696152,
+    98.92582037975185,
+    0.3087690477889771,
+    0.8932579053788221,
+    0.4522764808837566,
+    0.27975225011452476,
+    1.1735985002288558,
+    51.75962935810329,
+    0.39093203611902083,
+    0.12480108077550034,
+    0.10613107986933701,
+    46.13394192468252,
 ];
 const GOLDEN_GLM: &[f64] = &[0.8190287945803094, 1.5909174696403168, 1.3226756022889994];
 const GOLDEN_GLM_CAP: &[f64] = &[0.8059966005129862, 2.2639186345702202, 1.0964813502655293];

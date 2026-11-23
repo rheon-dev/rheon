@@ -97,6 +97,12 @@ impl Place {
         self.next = Some(stamp);
     }
 
+    /// The place of a row `d_clock` after the last, read and not taken:
+    /// the stamp handed, or the summed clock.
+    pub fn peek(&self, d_clock: f64) -> Stamp {
+        self.next.unwrap_or(Stamp::from(self.own + d_clock))
+    }
+
     /// One row stepped `d_clock` after the last: its place, the stamp handed
     /// or the summed clock.
     pub fn step(&mut self, d_clock: f64) -> Stamp {

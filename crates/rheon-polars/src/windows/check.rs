@@ -46,6 +46,7 @@ impl Windows {
         if self.n_outputs != nout {
             return Err(format!("{} outputs for {nout} operators", self.n_outputs));
         }
+        check_moments(&self.ops, &self.moments)?;
         let is_forward = |k: &KernelDef| k.direction == Direction::Forward;
         let forward = self.kernels.iter().filter(|k| is_forward(k)).count();
         if self.n_forward as usize != forward {
@@ -99,6 +100,11 @@ impl Windows {
                 && g.closed.iter().all(|&c| c <= g.waiting.len())
                 && g.last_valued.len() == no
                 && g.held.len() == no
+                && g.moments.len() == self.moments.len()
+                && g.moments
+                    .iter()
+                    .zip(self.moments.iter())
+                    .all(|(r, d)| *r.model.cfg() == d.cfg)
                 && (forward > 0 || g.waiting.is_empty())
                 && (n_wait > 0 || g.pending.is_empty())
                 && g.waiting.iter().all(|w| is_held(w.seq))

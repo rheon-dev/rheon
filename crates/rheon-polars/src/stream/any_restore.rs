@@ -70,6 +70,9 @@ impl AnyModel {
             ModelState::DdSketch(_) => Ok(AnyModel::DdSketch(Box::new(
                 rheon_core::DdSketchModel::restore(s)?,
             ))),
+            ModelState::EwmMoments(_) => Ok(AnyModel::EwmMoments(Box::new(
+                rheon_core::EwmMoments::restore(s)?,
+            ))),
             // A kind only rheon-core builds, such as `ew_cov`'s bare running
             // sums: its name is the code's, so the message does not print it.
             _ => Err(StateError::Invalid(format!(

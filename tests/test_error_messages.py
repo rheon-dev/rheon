@@ -612,6 +612,7 @@ BUILDERS = {
     rp.spec.power_variation: dict(features=None, terms={"rv": {"powers": [2]}}),
     rp.spec.tdigest: dict(features=None, half_life=None, quantiles=[0.25]),
     rp.spec.ddsketch: dict(features=None, half_life=None, quantiles=[0.25]),
+    rp.spec.ewm_moments: dict(features=["x0", "y"], targets=None, terms={"var": {"x0": 2}}),
 }
 
 

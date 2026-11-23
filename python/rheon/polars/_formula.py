@@ -57,6 +57,7 @@ OPERATORS = (
     "ewm_std",
     "ewm_quantile",
     "rewm_quantile",
+    "ewm_moments",
     "increment",
     "cross_mean",
     "cross_std",
@@ -74,6 +75,12 @@ VARIANCES = ("ewm_var", "ewm_std")
 
 #: The operators that take ``quantile``, the level (task 272 (d)).
 QUANTILES = ("ewm_quantile", "rewm_quantile")
+
+#: The words a moments operator's ``kind`` takes (task 554).
+MOMENT_KINDS = ("central", "raw", "standardized", "cumulant")
+
+#: The highest order with an unbiased form.
+MAX_UNBIASED_ORDER = 4
 
 _BINARY = {
     "Plus": "+",
@@ -843,3 +850,162 @@ def _cross(
             raise WrongTypeError(msg) if wrong else ValueError(msg)
         params["max_state_bytes"] = int(max_state_bytes)
     return operator_column([name, tree, params])
+
+
+def _lag(who: str, key: str, text: str) -> float | str | None:
+    """The lag ``text`` after a leg's last ``@`` names: a number of clock
+    units at least 0, or a duration; ``None`` where it is neither, so the
+    whole key is a column's name."""
+    word = text.strip()
+    try:
+        x = float(word)
+    except ValueError:
+        try:
+            ns = parse_duration(word)
+        except ValueError:
+            return None
+        if ns <= 0:
+            raise ValueError(
+                f"{who}: the leg {key!r} lags by {word}, which is not above 0. Give a lag "
+                f"above 0, or name the column alone for the row itself."
+            ) from None
+        return word
+    if not math.isfinite(x) or x < 0:
+        raise ValueError(
+            f"{who}: the leg {key!r} lags by {word}, but a lag is a finite number of clock "
+            f"units of at least 0. Give such a number, or a duration on a temporal clock."
+        )
+    return x
+
+
+def moments_operator(
+    legs: Any,
+    *,
+    half_life: Any,
+    kind: Any,
+    bias: Any,
+    window_size: Any,
+    lag_tolerance: Any,
+    partial: Any,
+) -> pl.Expr:
+    """The expression of :func:`~rheon.polars.ops.ewm_moments`: its legs
+    and their lags read from the keys of ``legs``, each checked here so a
+    wrong value names its leg or its parameter."""
+    who = "rp.ewm_moments"
+    if not isinstance(legs, dict) or not legs:
+        raise TypeError(
+            f"{who}: legs must be a dict from each leg (a column, or a column and its lag "
+            f'written "x@1") to its power, such as {{"x": 3}}, but it is {legs!r}. Give the '
+            f"legs as such a dict."
+        )
+    trees: list[list[Any]] = []
+    powers: list[int] = []
+    lags: list[float | str] = []
+    for key, power in legs.items():
+        if not isinstance(key, str) or not key:
+            raise TypeError(
+                f"{who}: a leg must be a column's name as text, or a column and its lag written "
+                f'"x@1", but it is {key!r}. Name the leg as text.'
+            )
+        if isinstance(power, bool) or not isinstance(power, numbers.Integral):
+            raise WrongTypeError(
+                f"{who}: the leg {key!r} has the power {power!r}, but a power is a whole number "
+                f"from 1. Give the leg a whole number."
+            )
+        if power < 1:
+            raise ValueError(
+                f"{who}: the leg {key!r} has the power {power}, but a power is a whole number "
+                f"from 1. Give the leg a power of at least 1, or leave the leg out."
+            )
+        column: str = key
+        lag: float | str = 0.0
+        if "@" in key:
+            head, _, tail = key.rpartition("@")
+            parsed = _lag(who, key, tail)
+            if parsed is not None and head:
+                column, lag = head, parsed
+        if column.startswith(PREFIX):
+            raise _reserved(who, column)
+        tree = ["col", column]
+        if any(t == tree and lg == lag for t, lg in zip(trees, lags, strict=True)):
+            raise ValueError(
+                f"{who}: the leg {key!r} names a column and a lag that another leg names too. "
+                f"Give each leg once, with its power."
+            )
+        trees.append(tree)
+        powers.append(int(power))
+        lags.append(lag)
+    order = sum(powers)
+    if kind not in MOMENT_KINDS:
+        raise ValueError(
+            f'{who}: kind must be "central", "raw", "standardized" or "cumulant", but it is '
+            f"{kind!r}. Set kind to one of those words."
+        )
+    if kind == "cumulant" and len(trees) > 1:
+        raise ValueError(
+            f"{who}: a cumulant is of one leg, but legs has {len(trees)}. Ask for a central "
+            f'cross-moment (kind="central") of several legs instead.'
+        )
+    if kind == "standardized" and order == 1:
+        raise ValueError(
+            f"{who}: a standardized moment of order 1 is 0 by definition. Give the legs an "
+            f"order of at least 2."
+        )
+    if bias is None:
+        bias = not (kind in ("central", "cumulant") and order == 2)
+    elif not isinstance(bias, bool):
+        raise TypeError(
+            f"{who}: bias must be True, False or None, but it is of type "
+            f"{type(bias).__name__}. Set bias to True or False, or leave it out."
+        )
+    if not bias and kind != "raw" and order > MAX_UNBIASED_ORDER:
+        raise ValueError(
+            f"{who}: bias=False asks for the unbiased form, which stops at order "
+            f"{MAX_UNBIASED_ORDER}, but the legs' order is {order}. Set bias=True for this term."
+        )
+    if half_life is None:
+        raise TypeError(
+            f"{who}: half_life is required, but it is not given. Give half_life in clock units, "
+            f"or inf for no decay."
+        )
+    params: dict[str, Any] = {"half_life": _span(who, "half_life", half_life, inf_ok=True)}
+    if window_size is not None:
+        params["window_size"] = _span(who, "window_size", window_size, inf_ok=False)
+    elif params["half_life"] == "inf" or (
+        isinstance(params["half_life"], str) and params["half_life"].lower() in _INFINITY
+    ):
+        raise RefusedValueError(
+            f"{who}: half_life is inf and window_size is not given, so a value held from before "
+            f"the first row would have no finite weight. Give window_size, or a finite half_life."
+        )
+    params["closed"] = "right"
+    if partial is not None:
+        if partial not in ("keep", "null", "drop"):
+            raise ValueError(
+                f'{who}: partial must be "keep", "null" or "drop", but it is {partial!r}. '
+                f"Set partial to one of those words."
+            )
+        if window_size is None:
+            raise ValueError(
+                f"{who}: partial needs window_size, but window_size is not given. partial says "
+                f"what a window cut short by a clock break (a step past gap_cap, or a session "
+                f"change) gives, and without window_size no window is cut short. Give "
+                f"window_size, or leave out partial."
+            )
+        params["partial"] = partial
+    params["powers"] = powers
+    params["lags"] = lags
+    params["kind"] = kind
+    params["bias"] = bias
+    if lag_tolerance is not None:
+        if isinstance(lag_tolerance, numbers.Real) and not isinstance(lag_tolerance, bool):
+            if not (math.isfinite(float(lag_tolerance)) and float(lag_tolerance) >= 0):
+                raise ValueError(
+                    f"{who}: lag_tolerance must be a finite span of at least 0, but it is "
+                    f"{lag_tolerance!r}. Give how far before t - lag the row a lag pairs with "
+                    f"may sit."
+                )
+            params["lag_tolerance"] = float(lag_tolerance)
+        else:
+            params["lag_tolerance"] = _span(who, "lag_tolerance", lag_tolerance, inf_ok=False)
+    return operator_column(["ewm_moments", ["legs", *trees], params])

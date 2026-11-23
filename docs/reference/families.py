@@ -99,6 +99,7 @@ FAMILIES: tuple[Family, ...] = (
             f"{_SPEC}.{m}"
             for m in (
                 "ew_cov",
+                "ewm_moments",
                 "pca",
                 "marginal",
                 "deco",
@@ -151,6 +152,7 @@ FAMILIES: tuple[Family, ...] = (
                 "ewm_sum",
                 "ewm_var",
                 "ewm_std",
+                "ewm_moments",
                 "ewm_quantile",
                 "ewm_rate",
                 "increment",

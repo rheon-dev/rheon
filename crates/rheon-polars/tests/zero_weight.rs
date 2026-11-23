@@ -227,6 +227,36 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": @20, "gap_cap": @50"#,
         ALL,
     ),
+    // A lag is written on its leg, `x0@1`, whose `@` the span rule above
+    // would read: `\u0040` is the same key to JSON.
+    (
+        "ewm_moments",
+        r#"{"type": "ewm_moments", "se": true, "kind": {"kurt": "standardized"},
+            "terms": {"m3": {"x0": 3}, "kurt": {"x0": 4}, "ac": {"x0": 1, "x1\u00401": 1}}}"#,
+        r#""targets": [], "features": ["x0", "x1"], "half_life": @50"#,
+        UNTIMED,
+    ),
+    (
+        "ewm_moments_timed",
+        r#"{"type": "ewm_moments", "kind": "standardized",
+            "terms": {"rho": {"x0": 1, "x1\u00401500ms": 1}}}"#,
+        r#""targets": [], "features": ["x0", "x1"], "half_life": @50"#,
+        &[Clock::Temporal],
+    ),
+    (
+        "ewm_moments_rows",
+        r#"{"type": "ewm_moments", "window_rows": 40,
+            "terms": {"m2": {"x0": 2}, "ac2": {"x0": 1, "x0\u00402": 1}}}"#,
+        r#""targets": [], "features": ["x0", "x1"], "half_life": "inf""#,
+        UNTIMED,
+    ),
+    (
+        "ewm_moments_clock",
+        r#"{"type": "ewm_moments", "window_size": @20, "bias": false,
+            "terms": {"m2": {"x0": 2}, "m4": {"x1": 4}}}"#,
+        r#""targets": [], "features": ["x0", "x1"], "half_life": @50"#,
+        CLOCKED,
+    ),
     (
         "ewridge",
         r#"{"type": "ewridge", "standardize": false, "ridge_scale": "mean", "target_gaps": "own_rows"}"#,

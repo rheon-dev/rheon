@@ -82,6 +82,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
         | ModelKind::Sgd {
             max_state_bytes: Some(_),
             ..
+        }
+        | ModelKind::EwmMoments {
+            max_state_bytes: Some(_),
+            ..
         } => format!("max_state_bytes of {cap}"),
         _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
     };
@@ -104,6 +108,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
                 ..
             }
             | ModelKind::PowerVariation {
+                window_size: Some(w),
+                ..
+            }
+            | ModelKind::EwmMoments {
                 window_size: Some(w),
                 ..
             } => (
@@ -174,6 +182,11 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             ModelKind::DdSketch { .. } => (
                 "the buckets the range of its values spans".to_string(),
                 "Raise alpha",
+            ),
+            // No window on the clock: the lag buffers are what the data sizes.
+            ModelKind::EwmMoments { .. } => (
+                "the rows its lags on the clock hold".to_string(),
+                "Shorten the lags or lag_tolerance",
             ),
             _ => ("its window".to_string(), "Shorten the window"),
         },

@@ -30,6 +30,9 @@ pub use drift::*;
 mod label_clock;
 pub(crate) use clock::{ClockPolicy, clock_cfg_of};
 pub use label_clock::*;
+mod moments;
+pub(crate) use moments::moment_leg_column;
+pub use moments::{MOMENT_KINDS, MomentKinds, MomentLegs, MomentTerms, ewm_moments_cfg};
 
 #[cfg(test)]
 mod kinds_tests;
@@ -1721,6 +1724,57 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// Exponentially weighted, or windowed, moments and cross-moments of the
+    /// feature columns, each leg lagged or not, to any order: central, raw,
+    /// standardized (skew, kurtosis, a correlation) or a cumulant, plug-in
+    /// or unbiased, and each term's standard error on request
+    /// (`rheon_core::EwmMoments`, whose docs state the update). One output a
+    /// term, named after it, read before the row is learned. No targets.
+    #[serde(rename = "ewm_moments")]
+    EwmMoments {
+        /// The terms, by name, each a table from a leg to its power: a
+        /// feature, or one lagged `k` back written `x@k` (learned rows
+        /// without a clock, the clock's units with one, a duration on a
+        /// temporal clock). Required; the outputs keep its order.
+        terms: MomentTerms,
+        /// `"central"` (the default), `"raw"`, `"standardized"` or
+        /// `"cumulant"` for every term, or a table from a term's name to
+        /// its kind. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<MomentKinds>,
+        /// Polars' `bias` for every term: `true` the plug-in moment,
+        /// `false` the unbiased form (orders 2 to 4). Absent, each term
+        /// takes its statistic's default in Polars: a variance unbiased,
+        /// as `ewm_var`'s; every other order the plug-in, as `skew`'s and
+        /// `kurtosis`'s. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bias: Option<bool>,
+        /// Emit each term's standard error, `se_<term>`, after the terms.
+        /// Absent is false. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        se: Option<bool>,
+        /// How far before `t - k` the as-of row of a lag `k` on a clock may
+        /// sit and still pair: clock units, or a duration on a temporal
+        /// clock. Absent is each lag's own length; refused without a
+        /// clock. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lag_tolerance: Option<Span>,
+        /// The moments of the latest this many learned rows. Skipped when
+        /// absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_rows: Option<usize>,
+        /// The moments of the rows whose clock is in `(t - window_size,
+        /// t]`: clock units, or a duration on a temporal clock; needs a
+        /// clock. Beside `window_rows` it is refused. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// The bytes a group's state may hold, its lag buffers and window
+        /// included: checked at the call where the settings fix them, and
+        /// as the rows go in where the data does. Default 256 KB. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
 }
 
 /// One term of a `power_variation` spec: its name, which names its fields
@@ -1845,6 +1899,7 @@ impl ModelKind {
         "power_variation",
         "tdigest",
         "ddsketch",
+        "ewm_moments",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1881,6 +1936,7 @@ impl ModelKind {
             ModelKind::PowerVariation { .. } => "power_variation",
             ModelKind::TDigest { .. } => "tdigest",
             ModelKind::DdSketch { .. } => "ddsketch",
+            ModelKind::EwmMoments { .. } => "ewm_moments",
         }
     }
 
@@ -1906,7 +1962,7 @@ impl ModelKind {
 
     /// False for the models that report no coefficients -- no `coef` field
     /// in their output: `ew_cov`, `seqtest`, `marginal`, `rcov`, `corrchange`,
-    /// `bocpd`, `audit`, `realized` and `tdigest`. `tests/test_model_registry.py` holds
+    /// `bocpd`, `audit`, `realized`, `tdigest` and `ewm_moments`. `tests/test_model_registry.py` holds
     /// this to the field names, which are rendered elsewhere.
     pub fn has_coef(&self) -> bool {
         !matches!(
@@ -1923,6 +1979,7 @@ impl ModelKind {
                 | ModelKind::PowerVariation { .. }
                 | ModelKind::TDigest { .. }
                 | ModelKind::DdSketch { .. }
+                | ModelKind::EwmMoments { .. }
         )
     }
 
@@ -2165,9 +2222,23 @@ impl ModelKind {
         }
     }
 
+    /// Whether a read of the model, and not only a step, decides a window's
+    /// edge on the clock, so that a row only scored is read at its own
+    /// stamp ([`crate::AnyModel::predict_at_into`]): `ewm_moments` under
+    /// `window_size`.
+    pub fn reads_at_stamp(&self) -> bool {
+        matches!(
+            self,
+            ModelKind::EwmMoments {
+                window_size: Some(_),
+                ..
+            }
+        )
+    }
+
     /// True for the models that learn from no target column: `ew_cov`,
-    /// `kmeans`, `micro`, `deco`, `rcov`, `hmm`, `corrchange`, `bocpd` and
-    /// `audit`,
+    /// `kmeans`, `micro`, `deco`, `rcov`, `hmm`, `corrchange`, `bocpd`,
+    /// `audit` and `ewm_moments`,
     /// the list `_spec.py`'s `UNSUPERVISED` keeps too. Their `targets` mirror
     /// `features[0]` for plumbing, so a target that is also a feature is not
     /// a leak for them -- except the column [`Self::targets_slot_column`]
@@ -2185,6 +2256,7 @@ impl ModelKind {
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. }
                 | ModelKind::Pca { .. }
+                | ModelKind::EwmMoments { .. }
         )
     }
 
@@ -2856,6 +2928,11 @@ impl Spec {
     ///
     /// Idempotent, and a no-op for a spec that already says both.
     pub fn fill_defaults(&mut self) {
+        // `ewm_moments` with no features reads the columns its terms name,
+        // in the order they first name them.
+        if self.features.is_empty() && matches!(self.model, ModelKind::EwmMoments { .. }) {
+            self.features = self.moment_columns();
+        }
         if self.targets.is_empty() && self.model.is_unsupervised() {
             // A column the model reads from the slot fills it, as the
             // builders write it. `features[0]` went there, and was then read
@@ -3145,6 +3222,10 @@ impl Spec {
             // Each level is withheld until its rows identify it, the
             // model's own rule: no count of rows is the gate.
             ModelKind::TDigest { .. } | ModelKind::DdSketch { .. } => 0.0,
+            // Each term is withheld by its own condition -- no weight, no
+            // lagged pair, no spread to standardize by, an unbiased form's
+            // denominator that keeps no digit -- not by a count of rows.
+            ModelKind::EwmMoments { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the

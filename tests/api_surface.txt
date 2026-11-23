@@ -33,6 +33,7 @@
   cross_std(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', bias: 'bool' = False, neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   eval
   ewm_mean(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
+  ewm_moments(legs: 'dict[str, int]', *, half_life: 'float | Duration', kind: "Literal['central', 'raw', 'standardized', 'cumulant']" = 'central', bias: 'bool | None' = None, window_size: 'float | Duration | None' = None, lag_tolerance: 'float | Duration | None' = None, partial: "Literal['keep', 'null', 'drop'] | None" = None) -> 'pl.Expr'
   ewm_quantile(input: 'str | pl.Expr', *, quantile: 'float', half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
   ewm_rate(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
   ewm_std(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, bias: 'bool' = False) -> 'pl.Expr'
@@ -224,6 +225,18 @@
     snapshot_every = None
     max_rows_between_snapshots = None
     window_budget = None
+    common
+  ewm_moments:
+    name
+    terms
+    features = None
+    kind = None
+    bias = None
+    se = False
+    lag_tolerance = None
+    window_rows = None
+    window_size = None
+    max_state_bytes = None
     common
   ewridge:
     name
@@ -747,6 +760,20 @@
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
     stream.min_weight = [3.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
+  ewm_moments(features=['x0'], half_life=50.0, terms={'var': {'x0': 2}}):
+    model.decay.Halflife = 50.0
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.terms = [{"bias": false, "kind": "central", "name": "var", "powers": [[{"col": 0, "lag": 0.0}, 2]]}]
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
@@ -1414,6 +1441,9 @@
     stream.robust_se_half_life = "inf"
     stream.specification_half_life = "inf"
     stream.tails_half_life = "inf"
+  ewm_moments(features=['x0'], half_life=50.0, se=True, terms={'var': {'x0': 2}}, window_rows=50), the lines that differ from ewm_moments's:
+    model.se = true
+    model.window_rows = 50
 
 [ModelBank]  # name and signature: a parameter added or a default moved is a diff here
   __init__(self, specs: 'Iterable[dict[str, Any]]', *, threads: 'int | None' = None) -> 'None'
@@ -1793,6 +1823,7 @@
     cross_ref(input: 'str | pl.Expr', where: 'pl.Expr', *, closed: "Literal['right', 'left']" = 'right', max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     cross_std(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', bias: 'bool' = False, neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     ewm_mean(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
+    ewm_moments(legs: 'dict[str, int]', *, half_life: 'float | Duration', kind: "Literal['central', 'raw', 'standardized', 'cumulant']" = 'central', bias: 'bool | None' = None, window_size: 'float | Duration | None' = None, lag_tolerance: 'float | Duration | None' = None, partial: "Literal['keep', 'null', 'drop'] | None" = None) -> 'pl.Expr'
     ewm_quantile(input: 'str | pl.Expr', *, quantile: 'float', half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
     ewm_rate(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
     ewm_std(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, bias: 'bool' = False) -> 'pl.Expr'
@@ -2679,6 +2710,16 @@
     weight_sum: f64
     settled_frac: f64
     withheld_reason: enum
+  ewm_moments minimal:
+    skew: f64
+    co: f64
+    ac1: f64
+    se_skew: f64
+    se_co: f64
+    se_ac1: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2738,6 +2779,7 @@
     means_by_target: List[Float64]
     cross_centered: List[Float64]
     coef: List[Float64]
+  ewm_moments: the shared columns only
   ewridge:
     spec: String
     group: String
@@ -2981,6 +3023,7 @@
   realized.closed: both, right
   pca.method: ccipca, oja, svd
   power_variation.closed: both, right
+  ewm_moments.kind: central, cumulant, raw, standardized
   marginal.closed: both, right
   ew_class.covariance_type: diag, full, tied
   ew_class.window_budget: refuse, thin
@@ -3129,6 +3172,7 @@
     deco: alpha, beta, blocks, dynamics
     ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size
+    ewm_moments: bias, kind, lag_tolerance, max_state_bytes, se, terms, window_rows, window_size
     ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
     expectile: closed, expectile, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, window_rows, window_size
     ftrl: alpha, beta, l1, l2, loss, strict_binary

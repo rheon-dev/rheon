@@ -3446,6 +3446,70 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             60
         ),
+        // Every kind of term to order 6, and the unbiased forms to order 4:
+        // the central moments of orders 2 to 6 and all three of `r_2`, `r_3`
+        // and `r_4`.
+        case!(
+            "ewm_moments",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_cfg(true)).unwrap(),
+            1,
+            Targets::None,
+            40
+        ),
+        // The plug-in terms alone: Kish's `r_2` and no other.
+        case!(
+            "ewm_moments_plugin",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_cfg(false)).unwrap(),
+            1,
+            Targets::None,
+            40
+        ),
+        // Row lags of two columns, an autocorrelation and lagged cross
+        // terms: a summary a set of legs, and one buffer a lagged column.
+        case!(
+            "ewm_moments_lags",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(false, None, None)).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
+        // The same lags on the clock, as-of within a tolerance: each
+        // buffer's stamps, and the clock's place.
+        case!(
+            "ewm_moments_clock_lags",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(true, None, None)).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
+        // A window of 12 rows: the ring of rows, no summary.
+        case!(
+            "ewm_moments_window",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(false, Some(12), None)).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
+        // A window of 7 clock units: the ring's stamps.
+        case!(
+            "ewm_moments_clock_window",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(true, None, Some(7.0))).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
     ]
 }
 
@@ -3491,6 +3555,82 @@ fn tdigest_cfg() -> TDigestModelCfg {
         compression: 10.0,
         levels: vec![0.1, 0.4, 0.9],
         max_state_bytes: None,
+    }
+}
+
+/// `ewm_moments` of the first two features with lags: the first's
+/// autocorrelation at 2, a cross term of the first with the second a step
+/// back, the second's lagged skew and the first's unbiased fourth
+/// cumulant, each standard error; on the clock with `clocked`, under a
+/// window of `rows` or of `clock`.
+fn ewm_moments_lag_cfg(clocked: bool, rows: Option<usize>, clock: Option<f64>) -> EwmMomentsCfg {
+    let term = |name: &str, powers: Vec<(MomentLeg, u32)>, kind, bias| MomentTerm {
+        name: name.to_owned(),
+        powers,
+        kind,
+        bias,
+    };
+    let terms = vec![
+        term(
+            "acor2",
+            vec![(MomentLeg::of(0), 1), (MomentLeg::lagged(0, 2.0), 1)],
+            MomentKind::Standardized,
+            true,
+        ),
+        term(
+            "x2y1",
+            vec![(MomentLeg::of(0), 2), (MomentLeg::lagged(1, 1.0), 1)],
+            MomentKind::Central,
+            true,
+        ),
+        term(
+            "sk_y1",
+            vec![(MomentLeg::lagged(1, 1.0), 3)],
+            MomentKind::Standardized,
+            true,
+        ),
+        term(
+            "k4_u",
+            vec![(MomentLeg::of(0), 4)],
+            MomentKind::Cumulant,
+            false,
+        ),
+    ];
+    EwmMomentsCfg {
+        min_weight: 2.0,
+        clocked,
+        lag_tolerance: clocked.then_some(1.0),
+        se: true,
+        window_rows: rows,
+        window_clock: clock,
+        ..EwmMomentsCfg::new(decay(), terms)
+    }
+}
+
+/// `ewm_moments` of the first feature: plug-in central, standardized,
+/// cumulant and raw terms to order 6, and with `unbiased` the unbiased
+/// central moments, cumulants and skew and kurtosis to order 4.
+fn ewm_moments_cfg(unbiased: bool) -> EwmMomentsCfg {
+    let term = MomentTerm::of_column;
+    let mut terms = vec![
+        term("var", 2, MomentKind::Central, true),
+        term("skew", 3, MomentKind::Standardized, true),
+        term("kurt", 4, MomentKind::Standardized, true),
+        term("m6", 6, MomentKind::Central, true),
+        term("k5", 5, MomentKind::Cumulant, true),
+        term("raw3", 3, MomentKind::Raw, true),
+    ];
+    if unbiased {
+        terms.extend([
+            term("var_u", 2, MomentKind::Central, false),
+            term("skew_u", 3, MomentKind::Standardized, false),
+            term("kurt_u", 4, MomentKind::Standardized, false),
+            term("k4_u", 4, MomentKind::Cumulant, false),
+        ]);
+    }
+    EwmMomentsCfg {
+        min_weight: 2.0,
+        ..EwmMomentsCfg::new(decay(), terms)
     }
 }
 

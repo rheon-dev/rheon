@@ -190,6 +190,11 @@ pub const CELLS: &[Cell] = &[
     cell("pca.k", 4, 8, Pow(1), Pow(1)),
     cell("pca.components", 1, 8, Pow(2), Pow(1)),
     cell("pca.history", 1000, 8, Const, Const),
+    // A row merges into each summary once and, under a window, a read is
+    // one merge of two stacks whatever the window's length, which keeps its
+    // rows.
+    cell("ewm_moments.window", 100, 8, Const, Pow(1)),
+    cell("ewm_moments.history", 1000, 8, Const, Const),
     cell("marginal.k", 4, 8, Pow(1), Pow(1)),
     cell("marginal.targets", 1, 8, Pow(1), Pow(1)),
     cell("marginal.lags", 1, 8, Pow(1), Pow(1)),
@@ -910,6 +915,21 @@ fn model_case(id: &str, n: usize) -> ModelCase {
             lin,
         )
         .warm(n),
+        ("ewm_moments", "window" | "history") => {
+            let mut model = json!({
+                "type": "ewm_moments",
+                "terms": {"skew": {"x0": 3}, "kurt": {"x0": 4}, "ac": {"x1": 1, "x1@1": 1}},
+                "kind": "standardized",
+            });
+            if dim == "window" {
+                model["window_rows"] = json!(n);
+            }
+            let c = ModelCase::new(untargeted(model, 2, true), lin);
+            match dim {
+                "history" => c.warm(n),
+                _ => c.warm(4 * n + 2_000).block(200),
+            }
+        }
         ("marginal", "k") => ModelCase::new(fit(json!({"type": "marginal"}), n, 1), lin),
         ("marginal", "targets") => ModelCase::new(fit(json!({"type": "marginal"}), 8, n), lin),
         ("marginal", "lags") => {

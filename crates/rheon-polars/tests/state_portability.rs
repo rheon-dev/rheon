@@ -69,6 +69,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": 50.0"#,
     ),
     (
+        "ewm_moments",
+        r#"{"type": "ewm_moments", "terms": {"skew": {"x0": 3}, "ac": {"x0": 1, "x0@2": 1}, "co": {"x0": 1, "x1": 2}}, "kind": {"skew": "standardized", "ac": "standardized"}, "se": true, "window_size": 40.0}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "half_life": 50.0, "gap_cap": 50.0"#,
+    ),
+    (
         "ewridge",
         r#"{"type": "ewridge", "standardize": false, "ridge_scale": "mean", "target_gaps": "own_rows"}"#,
         r#""targets": ["y"], "features": ["x0"], "half_life": 50.0"#,

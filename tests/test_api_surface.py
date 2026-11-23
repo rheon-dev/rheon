@@ -332,6 +332,15 @@ def describe_api(cli: Path | None = None) -> str:
         ("ddsketch", dict(targets=["y", "z"], quantiles=[0.05, 0.25, 0.95])),
         ("ddsketch windowed", dict(targets=["y"], quantiles=[0.25, 0.75], window_rows=50)),
         (
+            "ewm_moments",
+            dict(
+                terms={"skew": {"x0": 3}, "co": {"x0": 1, "x1": 1}, "ac1": {"x0": 1, "x0@1": 1}},
+                kind={"skew": "standardized"},
+                se=True,
+                half_life=100.0,
+            ),
+        ),
+        (
             "deco blocked",
             dict(
                 features=["x0", "x1", "x2", "x3"],
@@ -450,6 +459,7 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ),
     ("realized", {"half_life": float("inf"), "window_rows": 50}),
     ("realized", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
+    ("ewm_moments", {"window_rows": 50, "se": True}),
 ]
 
 
@@ -778,6 +788,7 @@ ENUM_PROBES: list[
         "model.closed",
         "word",
     ),
+    ("ewm_moments.kind", "ewm_moments", {}, "model.kind", "word"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),

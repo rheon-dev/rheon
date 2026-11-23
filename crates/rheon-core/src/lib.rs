@@ -84,6 +84,7 @@ mod ewclass;
 mod ewcov;
 mod ewdiag;
 mod ewlagcov;
+mod ewm_moments;
 mod ewridge;
 mod expectile;
 mod family;
@@ -181,6 +182,10 @@ pub use ewcov::{
 };
 pub use ewdiag::{EwDiag, Including};
 pub use ewlagcov::{EwLagCov, MAX_LAG, check_lag_ceiling};
+pub use ewm_moments::{
+    EWM_MOMENTS_CLOCK_BLOCK_ROWS, EWM_MOMENTS_MAX_STATE_BYTES, EwmMoments, EwmMomentsCfg,
+    Leg as MomentLeg, MAX_UNBIASED_MOMENT_ORDER, MomentKind, MomentTerm, Withheld,
+};
 pub use ewridge::{EwRidge, EwRidgeCfg};
 pub use expectile::{
     DEFAULT_EXPECTILE_REFIT_ROWS, EXPECTILE_MAX_STATE_BYTES, EXPECTILE_REFIT_PASSES,
@@ -958,7 +963,13 @@ pub use window::{
 ///   and named it `schema_version`. No model's own state moved. A bank file
 ///   of 71 or earlier loads as it did, to the bit, and re-saves the current
 ///   fixture's bytes. Schema 71's fixtures are kept
-///   (`tests/state_fixtures/v71/`).
+///   (`tests/state_fixtures/v71/`). A new model's state rides on the same
+///   schema: `ewm_moments`' [`ModelState::EwmMoments`], appended, which
+///   moves no other layout (the cases `ewm_moments` and
+///   `ewm_moments_plugin`; its lag buffers and window ring, row and clock,
+///   with the boundary of the window's two stacks, in `ewm_moments_lags`,
+///   `ewm_moments_clock_lags`, `ewm_moments_window` and
+///   `ewm_moments_clock_window`).
 ///
 ///   Also at 72, before any release carried it (2026-11-22, PLAN 551, the
 ///   user's "Replace rho with the ratio"): `deco`'s level is the ratio of

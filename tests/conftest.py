@@ -1,5 +1,6 @@
 import contextlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -196,8 +197,14 @@ def _toml_value(v: object) -> str:
     if isinstance(v, (list, tuple)):
         return "[" + ", ".join(_toml_value(x) for x in v) + "]"
     if isinstance(v, dict):
-        return "{" + ", ".join(f"{k} = {_toml_value(x)}" for k, x in v.items()) + "}"
+        return "{" + ", ".join(f"{_toml_key(k)} = {_toml_value(x)}" for k, x in v.items()) + "}"
     raise TypeError(f"no TOML form for {type(v).__name__}")
+
+
+def _toml_key(k: str) -> str:
+    """A key bare where TOML takes it bare, quoted otherwise: an
+    ``ewm_moments`` leg lagged on its column (``"x@1"``) holds an ``@``."""
+    return k if re.fullmatch(r"[A-Za-z0-9_-]+", k) else json.dumps(k)
 
 
 def spec_toml(spec: dict) -> str:

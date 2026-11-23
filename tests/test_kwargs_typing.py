@@ -29,6 +29,7 @@ BUILDERS = [
     "power_variation",
     "tdigest",
     "ddsketch",
+    "ewm_moments",
     "bocpd",
     "corrchange",
     "deco",

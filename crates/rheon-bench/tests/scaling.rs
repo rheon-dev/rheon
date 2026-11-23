@@ -408,6 +408,7 @@ const SURFACES: &[&[&str]] = &[
     &[
         "ew_cov.",
         "pca.",
+        "ewm_moments.",
         "marginal.",
         "deco.",
         "rcov.",

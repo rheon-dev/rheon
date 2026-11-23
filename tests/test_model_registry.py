@@ -103,6 +103,7 @@ MINIMAL: dict[str, dict[str, object]] = {
     "tdigest": {"features": None, "half_life": None, "quantiles": [0.05, 0.25, 0.95]},
     # Its decayed form, under the half-life every sweep gives.
     "ddsketch": {"features": None, "quantiles": [0.05, 0.25, 0.95]},
+    "ewm_moments": {"targets": None, "terms": {"var": {"x0": 2}}},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -116,7 +117,8 @@ MINIMAL: dict[str, dict[str, object]] = {
 #: variance, not its value), ``dcc`` (the targets' correlations), ``realized``
 #: and ``power_variation`` (measures of a target's variation, not its value),
 #: ``pca`` (components, no target), ``tdigest`` and ``ddsketch`` (a target's
-#: quantiles, read from the rows before it) -- sit them out.
+#: quantiles, read from the rows before it) and ``ewm_moments`` (moments of
+#: the columns) -- sit them out.
 REGRESSIONS = frozenset(MINIMAL) - {
     "ew_cov",
     "kmeans",
@@ -138,6 +140,7 @@ REGRESSIONS = frozenset(MINIMAL) - {
     "power_variation",
     "tdigest",
     "ddsketch",
+    "ewm_moments",
 }
 
 
@@ -318,6 +321,7 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "power_variation",
             "tdigest",
             "ddsketch",
+            "ewm_moments",
         )
     },
 }

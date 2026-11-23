@@ -84,6 +84,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("realized", &["window_size"]),
     ("power_variation", &["window_size"]),
     ("ddsketch", &["window_size"]),
+    ("ewm_moments", &["lag_tolerance", "window_size"]),
 ];
 
 /// The parameters that are a rate *per* clock unit: a decay factor per unit
@@ -509,6 +510,19 @@ impl Spec {
             }
             ModelKind::DdSketch { window_size, .. } => {
                 put(&mut out, "window_size", window_size.as_ref());
+            }
+            // A lag written on a term's leg (`x@5m`) is a span of the clock
+            // too, named by the table it is written in.
+            ModelKind::EwmMoments {
+                lag_tolerance,
+                window_size,
+                ..
+            } => {
+                put(&mut out, "lag_tolerance", lag_tolerance.as_ref());
+                put(&mut out, "window_size", window_size.as_ref());
+                for lag in self.model.moment_lags(&self.features) {
+                    put(&mut out, "terms", Some(&lag));
+                }
             }
             // A number is clock units, rows without a clock, as every other
             // span's (task 547); the count of rows is `hazard_rows`.

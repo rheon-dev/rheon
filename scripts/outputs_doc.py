@@ -50,6 +50,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
     ),
     "Moments and correlation": (
         "ew_cov",
+        "ewm_moments",
         "pca",
         "marginal",
         "deco",
@@ -83,6 +84,15 @@ MEANING: dict[str, str] = {
         f"how far the model had come toward its steady state under decay before this row {SHARED}"
     ),
     "withheld_reason": f"why the row's predictions are null {SHARED}",
+    "<term>": (
+        "a term of `terms`, under the name it is given there, in the order `terms` gives them: "
+        "the central, raw or standardized moment or the cumulant `kind` names, of the rows "
+        "before this one"
+    ),
+    "se_<term>": (
+        "the term's delta-method standard error at Kish's effective number of rows, after every "
+        "term and in the same order"
+    ),
     "support_coef": (
         "on `coef`'s rows, each coefficient's data share `1 - ridge * (S^-1)_jj`, with `S` "
         "the system the solve inverts, laid out like `coef`"
@@ -230,6 +240,12 @@ ALSO_NULL: dict[str, str] = {
         "to report"
     ),
     "settled_frac": "where nothing decays",
+    "<term>": (
+        "while withheld; where the term is not defined: no weight or no lagged pair yet, a "
+        "standardized term of a leg with no spread, an unbiased form whose denominator keeps no "
+        "digit (one row carrying all the weight), or a value past a double's range"
+    ),
+    "se_<term>": "where its term is null, and where the error keeps no digit",
     "withheld_reason": "where nothing was withheld",
     "support_coef": "where `coef` is, and in the intercept's place, which is not a share",
     "penalty_selected_<t>": "never: it is written while the predictions are withheld too",
@@ -373,6 +389,7 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
 SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
     "huber": ("emit_huber_scale=True", {"emit_huber_scale": True}),
     "dcc": ('margins="garch"', {"margins": "garch"}),
+    "ewm_moments": ("se=True", {"se": True}),
 }
 
 #: What a model writes when it writes nothing per row.
@@ -738,9 +755,16 @@ the docs set it:
 """
 
 
-def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str:
-    """The `MEANING` key a realized field name belongs to."""
+def stem(
+    field: str, targets: tuple[str, ...], features: tuple[str, ...], terms: Sequence[str] = ()
+) -> str:
+    """The `MEANING` key a realized field name belongs to; ``terms``, an
+    ``ewm_moments`` spec's, are named by the user."""
     base, _, _grid = field.partition("__")
+    if base in terms:
+        return "<term>"
+    if base.startswith("se_") and base[3:] in terms:
+        return "se_<term>"
     # Features first: the unsupervised models name a *feature* as their
     # nominal target, so `pred_x0` there is a feature's predictive mean and
     # not a regression's prediction.
@@ -836,13 +860,14 @@ def main() -> None:
             declared = dtypes(spec)
             targets = tuple(spec.get("targets") or ())
             features = tuple(spec.get("features") or ())
+            terms = tuple(spec["model"].get("terms", {}))
             print(f"\n## `{name}`\n")
             if name in STATE_ONLY:
                 print(f"{STATE_ONLY[name]}\n")
             print(f"The fields of `{call(name)}`:\n")
             rows = []
             for f, dtype in declared.items():
-                s = stem(f, targets, features)
+                s = stem(f, targets, features, terms)
                 null = ALSO_NULL_BY_MODEL.get((name, s), ALSO_NULL.get(s, "**undocumented**"))
                 meaning = MEANING_BY_MODEL.get((name, s), MEANING.get(s, "**undocumented**"))
                 rows.append((f"`{f}`", f"`{dtype}`", meaning, null))
@@ -857,7 +882,7 @@ def main() -> None:
                 for f, dtype in more.items():
                     if f in declared:
                         continue
-                    s = stem(f, targets, features)
+                    s = stem(f, targets, features, terms)
                     null = ALSO_NULL.get(s, "**undocumented**")
                     rows.append((f"`{f}`", f"`{dtype}`", MEANING.get(s, "**undocumented**"), null))
                 print(f"\nUnder `{switch}`, it also writes:\n")

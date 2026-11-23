@@ -422,7 +422,7 @@ defines every word the documents use for the library.
 
 ## Models
 
-rheon has thirty-two models in four families, and each family
+rheon has thirty-three models in four families, and each family
 answers one kind of question about a stream. A spec's clock, grouping and
 warm-up mean the same whichever model it names ([What every spec
 takes](docs/MODELS.md#what-every-spec-takes)), and [Choose a
@@ -431,7 +431,7 @@ model](docs/how-to/choose-a-model.md) says which to start with:
 | family | the question it answers | its models |
 |---|---|---|
 | [Linear models](docs/MODELS.md#linear-models) | what will the target be? | `ewridge`, `rls`, `lasso`, `kalman`, `huber`, `quantile`, `sgd`, `pa`, `ftrl`, `glm`, `expectile`, `holt` |
-| [Moments and correlation](docs/MODELS.md#moments-and-correlation) | how do these columns vary and move together? | `ew_cov`, `marginal`, `deco`, `rcov`, `audit`, `garch`, `dcc`, `realized`, `power_variation`, `tdigest`, `ddsketch` |
+| [Moments and correlation](docs/MODELS.md#moments-and-correlation) | how do these columns vary and move together? | `ew_cov`, `marginal`, `deco`, `rcov`, `audit`, `garch`, `dcc`, `realized`, `power_variation`, `tdigest`, `ddsketch`, `ewm_moments` |
 | [Clustering and classification](docs/MODELS.md#clustering-and-classification) | which group does this row belong to? | `kmeans`, `micro`, `ew_class` |
 | [Sequential tests and regimes](docs/MODELS.md#sequential-tests-and-regimes) | has something held, or changed, and which regime is the stream in? | `seqtest`, `corrchange`, `bocpd`, `hmm`, `hawkes` |
 

@@ -572,6 +572,7 @@ class TestEveryClockParameterTakesADuration:
         "tails_half_life": ("20m", {"emit_tails": True}),
         "influence_half_life": ("20m", {"emit_influence": True}),
         "feature_health_half_life": ("20m", {"emit_feature_health": True}),
+        "lag_tolerance": ("1m", {"terms": {"ac": {"x0": 1, "x0@5m": 1}}}),
     }
 
     def _cases(self):

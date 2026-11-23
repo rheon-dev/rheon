@@ -1421,7 +1421,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 32] = [
+    const FROZEN: [&str; 33] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1454,6 +1454,7 @@ fn the_variant_names_are_frozen() {
         "PowerVariation",
         "TDigest",
         "DdSketch",
+        "EwmMoments",
     ];
     assert_eq!(
         variants(),
@@ -1574,7 +1575,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 175] = [
+    const FORMS: [(&str, &[&str]); 184] = [
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.
@@ -1650,6 +1651,37 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("deco_linear", &["model", "Deco", "ratio", "lin_den"]),
         ("deco_linear", &["model", "Deco", "ratio", "lin_den_b"]),
         ("deco_warming", &["model", "Deco", "ratio", "w2_share"]),
+        // Schema 72 (task 554, parts 4 and 5): `ewm_moments`' summaries over
+        // legs, its lag buffers (and their stamps on a clock), the clock's
+        // place and a window's ring (and its stamps on a clock), and the
+        // boundary of the window's two stacks, `flip`.
+        ("ewm_moments_lags", &["model", "EwmMoments", "sums"]),
+        ("ewm_moments_lags", &["model", "EwmMoments", "bufs"]),
+        (
+            "ewm_moments_clock_lags",
+            &["model", "EwmMoments", "bufs", "0", "stamps"],
+        ),
+        ("ewm_moments_clock_lags", &["model", "EwmMoments", "place"]),
+        (
+            "ewm_moments_window",
+            &["model", "EwmMoments", "ring", "vals"],
+        ),
+        (
+            "ewm_moments_clock_window",
+            &["model", "EwmMoments", "ring", "vals"],
+        ),
+        (
+            "ewm_moments_clock_window",
+            &["model", "EwmMoments", "ring", "stamps"],
+        ),
+        (
+            "ewm_moments_window",
+            &["model", "EwmMoments", "ring", "flip"],
+        ),
+        (
+            "ewm_moments_clock_window",
+            &["model", "EwmMoments", "ring", "flip"],
+        ),
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.

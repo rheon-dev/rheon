@@ -96,6 +96,7 @@ pub enum ModelState {
     PowerVariation(Box<crate::PowerVariation>),
     TDigest(Box<crate::TDigestModel>),
     DdSketch(Box<crate::DdSketchModel>),
+    EwmMoments(Box<crate::EwmMoments>),
 }
 
 #[derive(Debug, Error)]
@@ -224,6 +225,7 @@ impl ModelState {
             ModelState::PowerVariation(_) => "power_variation",
             ModelState::TDigest(_) => "tdigest",
             ModelState::DdSketch(_) => "ddsketch",
+            ModelState::EwmMoments(_) => "ewm_moments",
         }
     }
 }

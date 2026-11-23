@@ -1169,6 +1169,15 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             "[]",
             false,
         ),
+        // A lag's buffer and the standard errors' moments in the file.
+        (
+            "ewm_moments",
+            r#"{"type": "ewm_moments", "se": true, "kind": {"rho1": "standardized"},
+                "terms": {"m3": {"x0": 3}, "rho1": {"x0": 1, "x1@1": 1}}}"#,
+            "[]",
+            r#"["x0", "x1"]"#,
+            true,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

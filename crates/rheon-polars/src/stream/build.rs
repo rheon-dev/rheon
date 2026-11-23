@@ -796,5 +796,8 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::DdSketch { .. } => Ok(AnyModel::DdSketch(Box::new(
             rheon_core::DdSketchModel::new(ddsketch_cfg(spec, decay)?)?,
         ))),
+        ModelKind::EwmMoments { .. } => Ok(AnyModel::EwmMoments(Box::new(
+            rheon_core::EwmMoments::new(crate::spec::ewm_moments_cfg(spec, decay)?)?,
+        ))),
     }
 }

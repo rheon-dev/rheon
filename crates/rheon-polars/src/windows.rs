@@ -190,6 +190,8 @@ pub enum Stat {
     /// The quantile at an operator's level of the values in the window, each
     /// weighed as a sum weighs it (task 272 (d), `window_quantile.rs`).
     Quantile,
+    /// A term of moments (task 554, `moments.rs`).
+    Moments,
 }
 
 impl Stat {
@@ -220,6 +222,7 @@ pub enum OpKind {
     EwmStd,
     EwmQuantile,
     RewmQuantile,
+    EwmMoments,
     Increment,
     /// A cross-group operator ([`CrossStat::Mean`]): no kernel, the
     /// stream's stamps.
@@ -243,6 +246,7 @@ impl OpKind {
             OpKind::EwmStd => "ewm_std",
             OpKind::EwmQuantile => "ewm_quantile",
             OpKind::RewmQuantile => "rewm_quantile",
+            OpKind::EwmMoments => "ewm_moments",
             OpKind::Increment => "increment",
             OpKind::CrossMean => "cross_mean",
             OpKind::CrossStd => "cross_std",
@@ -264,6 +268,7 @@ impl OpKind {
             "ewm_std" => Some(OpKind::EwmStd),
             "ewm_quantile" => Some(OpKind::EwmQuantile),
             "rewm_quantile" => Some(OpKind::RewmQuantile),
+            "ewm_moments" => Some(OpKind::EwmMoments),
             "increment" => Some(OpKind::Increment),
             "cross_mean" => Some(OpKind::CrossMean),
             "cross_std" => Some(OpKind::CrossStd),
@@ -292,6 +297,7 @@ impl OpKind {
             OpKind::EwmVar => Some(Stat::Var),
             OpKind::EwmStd => Some(Stat::Std),
             OpKind::EwmQuantile | OpKind::RewmQuantile => Some(Stat::Quantile),
+            OpKind::EwmMoments => Some(Stat::Moments),
             OpKind::Increment
             | OpKind::CrossMean
             | OpKind::CrossStd
@@ -1610,6 +1616,9 @@ struct Group {
     prev_link: Option<usize>,
     next_link: Option<usize>,
     linked: bool,
+    /// Per moments operator, its model (`moments.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    moments: Vec<MomentsRun>,
 }
 
 #[cfg(test)]
@@ -1713,64 +1722,17 @@ pub struct Windows {
     /// the call has none, so a state without them keeps its bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cross: Option<Box<Cross>>,
+    /// The moments operators' terms, in operator order (`moments.rs`).
+    #[serde(default, skip_serializing_if = "moments::none")]
+    moments: Arc<Vec<MomentsDef>>,
 }
 
 /// A map as a sorted list, so the state's bytes do not depend on the
 /// hasher.
 mod sorted_map;
 
-/// `ClockCfg` with its session gap tagged. The core type's own derive
-/// writes `Some(SessionGap::Reset)` as a bare unit, which msgpack reads back
-/// as `None`: a saved `session_gap = "reset"` would resume as no session
-/// gap at all. The bank never saves a `ClockCfg` -- it rebuilds one from
-/// its specs -- so this state is the first to need the form.
-mod clock_form {
-    use rheon_core::{ClockCfg, OnClockReset, SessionGap};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    #[derive(Serialize, Deserialize)]
-    struct Form {
-        gap_cap: f64,
-        on_clock_reset: OnClockReset,
-        session_gap: GapForm,
-        min_backwards_jump: f64,
-    }
-
-    #[derive(Serialize, Deserialize)]
-    enum GapForm {
-        Off,
-        Gap(f64),
-        Reset,
-    }
-
-    pub fn serialize<S: Serializer>(c: &ClockCfg, s: S) -> Result<S::Ok, S::Error> {
-        Form {
-            gap_cap: c.gap_cap,
-            on_clock_reset: c.on_clock_reset,
-            session_gap: match c.session_gap {
-                None => GapForm::Off,
-                Some(SessionGap::Gap(g)) => GapForm::Gap(g),
-                Some(SessionGap::Reset) => GapForm::Reset,
-            },
-            min_backwards_jump: c.min_backwards_jump,
-        }
-        .serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<ClockCfg, D::Error> {
-        let f = Form::deserialize(d)?;
-        Ok(ClockCfg {
-            gap_cap: f.gap_cap,
-            on_clock_reset: f.on_clock_reset,
-            session_gap: match f.session_gap {
-                GapForm::Off => None,
-                GapForm::Gap(g) => Some(SessionGap::Gap(g)),
-                GapForm::Reset => Some(SessionGap::Reset),
-            },
-            min_backwards_jump: f.min_backwards_jump,
-        })
-    }
-}
+/// `ClockCfg` with its session gap tagged (`clock_form.rs`).
+mod clock_form;
 
 /// `now` minus `last` in clock units: between two temporal values, taken in
 /// integer nanoseconds and rounded once, as the clock takes its steps.
@@ -2046,6 +2008,7 @@ fn check_op(o: usize, op: &OpDef, k: &KernelDef) -> Result<(), String> {
              the rows after it"
         ));
     }
+    moments::check_op(o, op, k)?;
     match (op.stat, op.quantile) {
         (Stat::Quantile, Some(p)) if p > 0.0 && p < 1.0 => {}
         (Stat::Quantile, p) => {
@@ -2083,6 +2046,7 @@ mod int_clock_tests;
 mod keys;
 #[cfg(test)]
 mod memo_tests;
+mod moments;
 mod plain;
 
 pub use cross::{
@@ -2091,6 +2055,8 @@ pub use cross::{
 };
 use keys::IntGroups;
 pub(crate) use keys::{ChunkKeys, session_hashes};
+pub use moments::MomentsDef;
+use moments::{MomentsRun, check_moments, learn_moments, read_moments};
 pub(crate) use plain::PlainRows;
 use plain::{Derived, Parts};
 
@@ -2126,7 +2092,7 @@ impl Windows {
         ops: Vec<OpDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
-        Self::build(kernels, ops, Vec::new(), clock_cfg).map_err(|e| defect(&e))
+        Self::with_moments(kernels, ops, Vec::new(), clock_cfg)
     }
 
     /// [`Self::new`] with cross-group operators beside the window
@@ -2141,7 +2107,7 @@ impl Windows {
         cross: Vec<CrossDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
-        Self::build(kernels, ops, cross, clock_cfg).map_err(|e| defect(&e))
+        Self::with_cross_moments(kernels, ops, cross, Vec::new(), clock_cfg)
     }
 
     fn build(
@@ -2206,6 +2172,7 @@ impl Windows {
             scratch_row: vec![0.0; ROW_VAR * widest],
             scratch_sum: vec![0.0; SUM_VAR * widest],
             derived: Derived::default(),
+            moments: Arc::new(Vec::new()),
         })
     }
 
@@ -2239,7 +2206,9 @@ impl Windows {
     #[inline]
     fn scratch(&mut self) {
         if !self.derived.ready {
-            self.derived = Derived::of(&self.kernels, self.derived.off);
+            // The plain loop has no moments (`moments.rs`).
+            let off = self.derived.off || !self.moments.is_empty();
+            self.derived = Derived::of(&self.kernels, off);
         }
         if self.scratch_sum.is_empty() {
             let widest = self.members.iter().map(Vec::len).max().unwrap_or(0);
@@ -2267,6 +2236,9 @@ impl Windows {
             self.kernels = Arc::clone(&other.kernels);
             self.ops = Arc::clone(&other.ops);
             self.members = Arc::clone(&other.members);
+        }
+        if self.moments == other.moments {
+            self.moments = Arc::clone(&other.moments);
         }
     }
 
@@ -2380,6 +2352,7 @@ impl Windows {
             prev_link: None,
             next_link: None,
             linked: false,
+            moments: self.moments.iter().map(MomentsRun::new).collect(),
         });
         match key {
             Some(k) => {
@@ -2682,7 +2655,11 @@ impl Windows {
             let (rw, wide) = (g.queues[ki].row_w(), g.queues[ki].wide());
             for (j, &o) in m.iter().enumerate() {
                 let v = row.values[self.ops[o].input];
-                let v = if usable(v) { v } else { f64::NAN };
+                let v = if usable(v) && self.ops[o].stat != Stat::Moments {
+                    v
+                } else {
+                    f64::NAN
+                };
                 let start = if g.last_valued[o].is_nan() {
                     k.window_size.map_or(f64::NEG_INFINITY, |w| tau - w)
                 } else {
@@ -2721,6 +2698,8 @@ impl Windows {
                 &self.scratch_row[..rw * m.len()],
                 &mut self.scratch_sum,
             );
+            let now = row.clock.unwrap_or(ClockValue::F64(tau));
+            learn_moments(k, ki, &self.ops, &self.moments, g, row.values, now);
             if !k.closed.near(Direction::Backward) {
                 let complete = k.window_size.is_none_or(|w| tau >= w);
                 let held = Held {
@@ -2801,6 +2780,7 @@ impl Windows {
             scratch_sum,
             n_forward,
             derived,
+            moments,
             ..
         } = self;
         (
@@ -2816,6 +2796,7 @@ impl Windows {
                 scratch_sum,
                 n_wait: derived.n_wait,
                 n_forward: *n_forward,
+                moments: moments.as_slice(),
             },
             groups,
         )
@@ -3067,8 +3048,8 @@ fn fill_forward<const W: bool>(
                     ..Acc::default()
                 }
             }
-            // A variance has no forward kernel (`check_op`).
-            Stat::Mean | Stat::Var | Stat::Std => Acc::default(),
+            // A variance and moments have no forward kernel (`check_op`).
+            Stat::Mean | Stat::Var | Stat::Std | Stat::Moments => Acc::default(),
             Stat::Sum | Stat::Rate | Stat::Quantile => Acc {
                 s: if v.is_nan() { 0.0 } else { v },
                 w: 0.0,
@@ -3201,8 +3182,9 @@ fn value_of(k: &KernelDef, op: &OpDef, a: Acc, t: f64) -> f64 {
         // `min_samples` 0 only: no value sums to 0.0, whatever the dust.
         Stat::Sum if a.n == 0.0 => 0.0,
         Stat::Sum => a.s,
-        // Read from the queue's sketches (`read_backward`, `close`).
-        Stat::Quantile => f64::NAN,
+        // Read from the queue's sketches (`read_backward`, `close`), and
+        // from the group's moments (`flush_in`).
+        Stat::Quantile | Stat::Moments => f64::NAN,
         Stat::Rate => rate_of(a, k.mass(t)),
         Stat::Var | Stat::Std => {
             if a.w <= 0.0 {
@@ -3365,7 +3347,7 @@ fn close<const W: bool>(
                     a = scaled(&mut q.decay, s);
                 }
             }
-            Stat::Var | Stat::Std => {}
+            Stat::Var | Stat::Std | Stat::Moments => {}
         }
         let mut open_value = None;
         if let Some((_, otau, _)) = open {
@@ -3575,6 +3557,7 @@ fn flush_in(p: &mut Parts<'_>, g: &mut Group) {
                 &mut g.stamp_values[ki],
             )
         );
+        read_moments(ki, p.ops, m, p.moments, g, tau);
         let complete = k.window_size.is_none_or(|w| tau >= w);
         for &seq in &g.pending {
             let held = Held {
@@ -3674,6 +3657,7 @@ fn restart_in(g: &mut Group, origin: Option<ClockValue>) {
     g.open.iter_mut().for_each(|o| *o = None);
     g.last_valued.iter_mut().for_each(|v| *v = f64::NAN);
     g.held.iter_mut().for_each(|v| *v = f64::NAN);
+    g.moments.iter_mut().for_each(MomentsRun::restart);
     g.tau = 0.0;
     g.origin = origin;
     g.restart = false;
@@ -4447,6 +4431,7 @@ mod tests {
                                 mass += m;
                                 held.push((m, x));
                             }
+                            Stat::Moments => unreachable!(),
                             Stat::Sum | Stat::Rate | Stat::Quantile => {
                                 let d = (tb - ta).abs();
                                 let f = if k.half_life.is_infinite() {
@@ -4473,6 +4458,7 @@ mod tests {
                         Stat::Sum => sum,
                         Stat::Var | Stat::Std => var_bf(&held, op.bias, op.stat == Stat::Std),
                         Stat::Quantile => quantile_bf(&weighed, op.quantile.unwrap()),
+                        Stat::Moments => unreachable!(),
                         Stat::Rate => {
                             let m = mass_bf(k, 0.0, 0.0, span).abs();
                             let m = if k.direction == Direction::Backward {

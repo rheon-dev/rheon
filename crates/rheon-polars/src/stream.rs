@@ -117,6 +117,7 @@ pub enum AnyModel {
     PowerVariation(Box<rheon_core::PowerVariation>),
     TDigest(Box<rheon_core::TDigestModel>),
     DdSketch(Box<rheon_core::DdSketchModel>),
+    EwmMoments(Box<rheon_core::EwmMoments>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -173,6 +174,7 @@ macro_rules! dispatch {
             AnyModel::PowerVariation($m) => $body,
             AnyModel::TDigest($m) => $body,
             AnyModel::DdSketch($m) => $body,
+            AnyModel::EwmMoments($m) => $body,
         }
     };
 }
@@ -302,6 +304,25 @@ impl AnyModel {
     /// (docs/REVIEW-E54-E64.md C1).
     pub fn predict(&self, x: &[f64], y: &[Option<f64>], d_clock: f64) -> rheon_core::Step {
         dispatch!(self, m => m.predict_with(x, y, d_clock))
+    }
+
+    /// [`Self::predict_into`] for a row whose stamp the stream knows: a
+    /// model whose read decides a window's edge on the clock
+    /// ([`ModelKind::reads_at_stamp`]) reads it at `stamp`, as a step would
+    /// be handed it; every other model, and a row with no stamp, as
+    /// `predict_into`.
+    pub fn predict_at_into(
+        &self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        stamp: Option<Stamp>,
+        out: &mut rheon_core::Step,
+    ) {
+        match (self, stamp) {
+            (AnyModel::EwmMoments(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
+            _ => self.predict_into(x, y, d_clock, out),
+        }
     }
 
     /// [`Self::predict`] into the caller's step, which it overwrites in
@@ -616,7 +637,9 @@ impl AnyModel {
             | AnyModel::Realized(_)
             | AnyModel::PowerVariation(_)
             | AnyModel::TDigest(_)
-            | AnyModel::DdSketch(_) => 0,
+            | AnyModel::DdSketch(_)
+            // A term it withholds is withheld by its condition, no failure.
+            | AnyModel::EwmMoments(_) => 0,
             // The components are withheld, never failed: the rotation has no
             // factorization to fail.
             | AnyModel::Pca(_) => 0,
@@ -704,6 +727,8 @@ impl AnyModel {
             AnyModel::PowerVariation(_) => None,
             // tdigest has none: its value is the levels it reads.
             AnyModel::TDigest(_) | AnyModel::DdSketch(_) => None,
+            // ewm_moments has none: its outputs are the terms.
+            AnyModel::EwmMoments(_) => None,
         }
     }
 
@@ -840,7 +865,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Realized { .. }
         | ModelKind::PowerVariation { .. }
         | ModelKind::TDigest { .. }
-        | ModelKind::DdSketch { .. } => vec![Combo::default()],
+        | ModelKind::DdSketch { .. }
+        | ModelKind::EwmMoments { .. } => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
@@ -3290,8 +3316,22 @@ impl Stream {
                         .d_clock
                 }),
                 elapsed_step: adv.d_clock,
-                // Scored, never learned: no window moves, no row is held.
-                stamp: None,
+                // Scored, never learned: no window moves, no row is held. A
+                // model whose read decides a window's edge reads it at the
+                // row's stamp, on a copy of the clock.
+                stamp: spec
+                    .model
+                    .reads_at_stamp()
+                    .then(|| {
+                        weightless::read_stamp(
+                            &self.persisted.clock,
+                            cfg,
+                            &self.exact_caps,
+                            clock.map(|c| c.at(i)),
+                            session.map(|s| s[i]),
+                        )
+                    })
+                    .flatten(),
                 // Without a clock column, the row's index in its group: the
                 // rows learned, then this call's rows in order, as
                 // `fit_predict` counts them (task 159, B2: every scored row
@@ -4319,7 +4359,11 @@ fn run_instance(
                     .raise(heavy_tail::heavy_tail_notice(inst.spec, j, nu));
             }
         } else {
-            inst.model.get().predict_into(xs, &sc.ys, score_d, step);
+            // A row only scored, of weight 0 or held for its label, read at
+            // its stamp where the model's read decides a window's edge.
+            inst.model
+                .get()
+                .predict_at_into(xs, &sc.ys, score_d, plan.stamp, step);
         }
         let n_slots = step.pred.len();
         // Read from the step's own report, before a gate below nulls it.

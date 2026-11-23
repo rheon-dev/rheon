@@ -450,6 +450,22 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # A moment, a standardized one and a lagged cross-moment, each with its
+    # standard error: every field it has.
+    (
+        "ewm_moments",
+        "ewm_moments",
+        dict(
+            terms={"m3": {"x0": 3}, "kurt": {"x0": 4}, "ac1": {"x0": 1, "x1@1": 1}},
+            kind={"kurt": "standardized"},
+            se=True,
+            group="g",
+            half_life=25.0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
 ]
 
 
