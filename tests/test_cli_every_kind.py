@@ -753,6 +753,21 @@ CASES: list[Case] = [
             "start_rows": 60,
         },
     ),
+    # GARCH-X: features as inputs of EGARCH's variance equation, which
+    # reads them at any sign.
+    Case(
+        "garch_x",
+        "garch",
+        {
+            **{k: v for k, v in STREAM.items() if k not in ("half_life", "min_settled_frac")},
+            "targets": ["y"],
+            "features": ["x1", "x2"],
+            "vol": "egarch",
+            "start_rows": 50,
+            "horizons": [2],
+            "max_state_bytes": 1 << 20,
+        },
+    ),
     # FIGARCH, its start a span of the clock, checked as the rows go in, its
     # groups run to a close.
     Case(

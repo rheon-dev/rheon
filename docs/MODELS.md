@@ -2964,8 +2964,8 @@ known before the row's target. So lag a column that measures the day
 before, such as a realized variance, to make it known before the return
 it explains; `rugarch`'s `external.regressors` read the same row. Under
 GARCH and GJR each `π` is at least 0 and an input must be at least 0, so
-the variance stays positive: a row whose input is below 0 reports nothing
-and is learned as a row of weight 0, `withheld_reason` `negative_input`,
+the variance stays positive. A row whose input is below 0 reports nothing,
+`withheld_reason` `negative_input`, and is learned as a row of weight 0,
 as a row with a null feature is. Under EGARCH the input enters the
 log-variance, and `π` and the input take any sign. Each `π`'s sensitivity
 is the filter's own recursion driven by the input, `∂s_t/∂π = x_t + β
