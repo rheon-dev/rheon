@@ -49,7 +49,11 @@ const MASKS: u64 = 0x8ab94abb9163ebc2;
 /// again, so no output bit and no other state byte moved.
 ///
 /// 0x9c369b3e00245758 until PLAN 565 (the 17 cases of [`MASKS`]).
-const BITS: u64 = 0x1f2f972d03cf8ccc;
+/// 0x1f2f972d03cf8ccc until windows state 13 (PLAN 561) moved each state's
+/// version byte and its checksum; the same run with the version written as
+/// 12 gave 0x1f2f972d03cf8ccc again (measured on the fold of 561 onto 565,
+/// W13), so no output bit and no other state byte moved.
+const BITS: u64 = 0x1faf5a77965e578a;
 /// Rows a case runs over.
 const ROWS: usize = 2000;
 
