@@ -230,6 +230,7 @@ def specs() -> list[dict]:
         # One number for the whole correlation matrix. The stream has two
         # feature columns, so this is the unblocked form; the block path is
         # pinned by the core golden and by the numpy oracle in test_deco.py.
+        # `rho` and `loglik` re-pinned for PLAN 551's ratio level.
         rp.spec.deco(
             "deco",
             features=["x0", "x1"],
@@ -1133,12 +1134,12 @@ GOLDEN: dict[str, float | str | None] = {
     "deco.u@25": 0.4167923065360934,
     "deco.u@60": 0.9917268375727508,
     "deco.u@119": 0.8126243515712438,
-    "deco.rho@25": 0.576990565121172,
-    "deco.rho@60": -0.1046746141189773,
-    "deco.rho@119": 0.1288237626639817,
-    "deco.loglik@25": -3.9973745744499514,
-    "deco.loglik@60": -6.086831238680252,
-    "deco.loglik@119": -2.2061901908973724,
+    "deco.rho@25": -0.08568395031476563,
+    "deco.rho@60": 0.23541108428143503,
+    "deco.rho@119": 0.16316105267641887,
+    "deco.loglik@25": -3.9986413526629514,
+    "deco.loglik@60": -4.90293781097886,
+    "deco.loglik@119": -2.1930858011358536,
     "deco.weight_sum@25": 7.999488060097996,
     "deco.weight_sum@60": 12.473100285951407,
     "deco.weight_sum@119": 15.110060335371337,

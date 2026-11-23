@@ -31,6 +31,36 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **`deco`'s `rho` reads the equicorrelation: the ratio of the weighted
+  means** (PLAN 551; the user, 2026-11-22: "Replace rho with the ratio").
+  The row's estimate `u`, Engle and Kelly's eq. 20, is a ratio over one row
+  and reads toward 0 whatever the half-life or the number of series (1/3 at
+  a true 0.6 for two series, 0.41 for many). `rho` was its EW mean, or the
+  linear recursion on it targeted at that mean with `alpha + beta < 1`, so
+  it settled at `E[u]`: two-thirds of the truth, a bias of this library's
+  two departures from the paper, whose maximum-likelihood fit of the
+  intercept and of `alpha + beta` rescales `u`. `rho` is now `EW(A)/EW(V)`,
+  `A` the row's mean off-diagonal product and `V` its mean square (between
+  blocks `EW(C)/sqrt(EW(V_A) EW(V_B))`): the weighted Gaussian
+  maximum-likelihood estimate over the window, held to scipy's to 6.6e-9.
+  Under `"linear"` it is the DCC recursion of `Q` averaged to two scalars,
+  `N` and `D`, held to the full `n x n` recursion to 1e-11 and within
+  2.7e-3 on average of the paper's eq. 7 on it. On five series alternating
+  0.2 / 0.6 it settles at 0.198 and 0.607 where it read 0.130 and 0.381; on
+  ten series alternating every 1,200 rows its error falls from 0.171 to
+  0.098 (`"ew"`) and from 0.162 to 0.074 (`"linear"`), and to 0.105 and
+  0.089 under t-tails of 4 degrees of freedom. The level learns from a row
+  only once the standardizer's weights hold a Kish size above 5, where a
+  standardized row's fourth moment exists, and while no level has a value
+  `withheld_reason` reads `below_warm_rows`; a half-life under 1.71 rows
+  never learns. `u` does not move. A state saved by 2.0.0 or earlier
+  switches to the ratio on load with its level restarted, since the sums
+  the ratio needs are not in it: its standardizer, `u` and `weight_sum` go
+  on as saved, and the level starts empty and relearns from the next rows
+  under the same warm-up, `rho` null and `withheld_reason` `below_warm_rows`
+  until it has a value. Moves: `deco.rho*`, `deco.loglik`,
+  `deco.coef`, `deco.withheld_reason`.
+
 - **`bocpd` takes its hazard in rows or on the clock** (PLAN 547).
   `hazard_rows` is the expected rows between changepoints, `H =
   1/hazard_rows` the chance of a break after each row of positive weight on
@@ -961,6 +991,18 @@ model that only the new build has is listed as an addition and passes.
   416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.
 
 ### Performance
+
+- **`deco`'s ratio level costs 3-4% a row unblocked and 18-22% over four
+  blocks** (PLAN 551), for a level that reads the equicorrelation where the
+  EW mean of `u` read two-thirds of it. Each value keeps the EW means of the
+  row's numerator and denominator, a pair keeps its second block's too, and
+  `"linear"` its `N` and `D`, where it kept the mean of `u`. Measured on
+  macOS arm64 (best of 7, 20,000 rows of 20 features, load 4-8): unblocked
+  112.2 -> 116.7 ns a row (`"ew"`), 112.7 -> 116.3 (`"linear"`); four blocks
+  of five, ten values, 240.5 -> 283.0 and 244.2 -> 297.7. The state grows
+  by 127 and 145 bytes unblocked, 397 and 631 over four blocks (807 -> 934,
+  827 -> 972, 1,156 -> 1,553, 1,176 -> 1,807), bounded by the blocks. Not
+  measured on x86-64.
 
 - **A state loads faster in the envelope, and its size moves by a few
   bytes** (PLAN 542). A load reads the file's kind and version from its

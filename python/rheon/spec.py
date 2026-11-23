@@ -441,8 +441,10 @@ releases none. A regression writes, with ``<t>`` a target:
     ``below_warm_rows`` is the model's own warm-up: the rows ``kmeans``,
     ``hmm`` and ``bocpd`` hold to seed their centres, states or prior from
     (``warm_rows``), a count of rows, where ``min_weight`` is a weight, the
-    rows ``kalman`` takes a target's prior from before it is sized, and the
-    rows ``garch`` buffers for a target's start.
+    rows ``kalman`` takes a target's prior from before it is sized, the
+    rows ``garch`` buffers for a target's start, and the rows before
+    ``deco``'s standardizer holds more than five effective rows, while it
+    has no level.
     ``ill_conditioned`` is an ``ewridge`` fit withheld because its normal
     equations are past the condition at which a solve keeps a digit: its
     ``coef`` and ``support_coef`` are null too, and the solve is counted in

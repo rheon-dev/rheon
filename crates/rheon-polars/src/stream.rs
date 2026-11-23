@@ -464,8 +464,9 @@ impl AnyModel {
     /// The model's own wait, if it is in one, and so reports nothing:
     /// [`OwnWait::Seeding`] while it holds its first rows to seed itself
     /// from, its `warm_rows` -- `kmeans`' centres, `hmm`'s states, `bocpd`'s
-    /// prior, `kalman`'s unsized priors, and the rows `garch`'s start
-    /// buffers for a target; [`OwnWait::NotIdentified`] while a fit is
+    /// prior, `kalman`'s unsized priors, the rows `garch`'s start
+    /// buffers for a target, and the rows before `deco`'s standardiser is
+    /// warm enough for its level to learn; [`OwnWait::NotIdentified`] while a fit is
     /// withheld because its rows do not identify the model -- `garch`'s
     /// start, whose likelihood did not tell the variance process from a
     /// constant variance, and `dcc`'s, whose did not tell the correlation's
@@ -482,6 +483,7 @@ impl AnyModel {
             // `dcc`'s starts, its margins' and its own, the same two ways.
             AnyModel::Dcc(m) if m.starting() => true,
             AnyModel::Dcc(m) if m.no_effect() => return OwnWait::NotIdentified,
+            AnyModel::Deco(m) => m.warming(),
             _ => false,
         };
         if seeding {

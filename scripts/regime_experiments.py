@@ -683,13 +683,14 @@ def _lag_inversion(truth: float, seeds: int = 5) -> None:
 
 def deco_track(seeds: int = 8) -> None:
     """`deco` on five series whose equicorrelation alternates between 0.2 and
-    0.6 every 1200 rows, at three half-lives. `rho` is an EW mean of the row's
-    estimate `u`, and `u` is biased low (the docstring's warning, after Engle
-    & Kelly), so two things are read apart: the level `rho` settles at in
-    each state (over each segment's last 200 rows), against the truth; and
-    how fast it moves, as the rows after a switch until `rho` passes the
-    midpoint of the two settled levels. An EW mean's step response reaches
-    the midpoint in one half-life, which checks the reading."""
+    0.6 every 1200 rows, at three half-lives. `rho` is the ratio of the EW
+    means of the row's numerator and denominator (PLAN 551); the row's own
+    estimate `u` is biased low (Engle & Kelly), and is printed beside it. Two
+    things are read: the level `rho` settles at in each state (over each
+    segment's last 200 rows), against the truth; and how fast it moves, as
+    the rows after a switch until `rho` passes the midpoint of the two
+    settled levels. An EW mean's step response reaches the midpoint in one
+    half-life, which checks the reading."""
     _rule("Deco: the equicorrelation, followed")
     m = 5
     lo, hi = 0.2, 0.6

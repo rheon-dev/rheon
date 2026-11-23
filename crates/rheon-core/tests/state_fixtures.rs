@@ -284,6 +284,14 @@ use rheon_core::{MIN_SCHEMA_VERSION, ModelState, SCHEMA_VERSION, State};
 /// current bytes exactly and continues to the bit, as every other kept case
 /// does.
 ///
+/// 71 kept since 72 (PLAN 542's envelope, then PLAN 551 before any release
+/// carried 72): `deco`'s level is the ratio of the means, in `ratio`, where
+/// `rho_bar` kept the EW mean of `u`. A `deco` state of 71 or earlier loads
+/// with its level restarted (rule 5's twenty-sixth exception,
+/// [`RESTARTED_LEVEL`]): every kept `deco` file is held to that, not to the
+/// current bytes. The ratio's forms are the cases `deco`, `deco_linear` and
+/// `deco_warming`.
+///
 /// The kept schemas, each a `v<N>/` directory found beside the current set.
 fn previous() -> Vec<u32> {
     frozen::PREVIOUS_SETS.iter().map(|(s, _)| *s).collect()
@@ -453,6 +461,21 @@ const RENUMBERED: &[(&str, f64, std::ops::Range<usize>)] = &[("corrchange_window
 /// continuation has one. The `tied` case `hmm` takes no prior, and goes on
 /// to the bit.
 const UNDER_THE_PRIOR: &[&str] = &["hmm_diag", "hmm_full", "hmm_full_narrow"];
+
+/// The `deco` cases a kept set holds, whose level restarts on load (PLAN
+/// 551; rule 5's twenty-sixth exception, the user's "Switch, restarting the
+/// level", 2026-11-22). A state of 71 or earlier keeps the EW mean of `u`
+/// (`rho_bar`), from which the ratio's sums cannot be had: it loads with its
+/// standardiser as saved and its level's sums empty ([`restarted_level_rule`]),
+/// so its continuation is neither the old build's nor this build's from the
+/// same rows. It is held to saving bytes that load back the same; to the
+/// frozen continuation's `weight_sum` and `u` (slot 0), which the
+/// standardiser alone gives, to the bit; and to `rho` and `loglik` null on
+/// the rows before the level relearns, a number on the rows after, the
+/// relearning reached within the continuation. `deco.rs`'s
+/// `a_state_from_before_the_ratio_restarts_its_level` holds the restarted
+/// level to a model emptied by hand, to the bit.
+const RESTARTED_LEVEL: &[&str] = &["deco"];
 
 /// The weighted `sgd` and `pa` cases under `standardize` (rule 5's
 /// twenty-third exception, the user's, 2026-11-20; review C1), each with
@@ -878,6 +901,8 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             // A `full` or `diag` `hmm` of 69 or earlier goes on under the
             // prior ([`UNDER_THE_PRIOR`]).
             let under_prior = schema < 70 && UNDER_THE_PRIOR.contains(&f.name);
+            // A `deco` of 71 or earlier restarts its level ([`RESTARTED_LEVEL`]).
+            let restarted = schema < 72 && RESTARTED_LEVEL.contains(&f.name);
             // A weighted `sgd` or `pa` under `standardize` of 68 or earlier
             // reads its rows in the stream's own unit of weight since review
             // C1 ([`READ_ANEW`]); a set of 69 was written by C1's read.
@@ -887,7 +912,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 .map(|&(_, b)| b);
             let kept = rmpv::decode::read_value(&mut &f.bytes()[..]).unwrap();
             // A `holt` of 61-63 keeps no line fit (the doc above `previous`).
-            if under_prior {
+            if under_prior || restarted {
                 let saved = named(&m.state());
                 let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
                 assert!(
@@ -895,7 +920,11 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     "{what}: saved, loaded, saved"
                 );
                 let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
-                under_the_prior_rule(&kept, &decode(&saved), &what);
+                if restarted {
+                    restarted_level_rule(&kept, &decode(&saved), &decode(&current.bytes()), &what);
+                } else {
+                    under_the_prior_rule(&kept, &decode(&saved), &what);
+                }
             } else if f.name == "kmeans" || f.name == "holt" {
                 let saved = named(&m.state());
                 let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -964,6 +993,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             }
             let tol = if f.writer == writer() { 0.0 } else { TOL };
             let mut relabel: Vec<(u64, u64)> = Vec::new();
+            let mut relearned = false;
             for (i, (row, want)) in f.rows().iter().zip(f.outs()).enumerate() {
                 if reseeded {
                     let got = m.step(row);
@@ -994,6 +1024,25 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 let base = read_anew.map_or(tol, |b| tol.max(b));
                 let tol = moved.map_or(base, |b| base.max(b));
                 let got = m.step(row);
+                if restarted {
+                    // `weight_sum` and `u` to the bit; `rho` and `loglik` null
+                    // until the level relearns, then numbers.
+                    let what = format!("{what}, row {i} after the save");
+                    assert!(agree(got.n_eff, want.n_eff, tol), "{what}: weight_sum");
+                    assert_eq!(got.pred.len(), 3, "{what}: an unblocked case");
+                    assert!(agree(got.pred[0], want.pred[0], tol), "{what}: u");
+                    relearned |= got.pred[1].is_finite();
+                    assert_eq!(
+                        got.pred[1].is_finite(),
+                        relearned,
+                        "{what}: rho {}",
+                        got.pred[1]
+                    );
+                    if got.pred[1].is_nan() {
+                        assert!(got.pred[2].is_nan(), "{what}: loglik without a level");
+                    }
+                    continue;
+                }
                 if under_prior {
                     // `weight_sum` to the bit, and a number wherever the
                     // frozen continuation has one.
@@ -1026,6 +1075,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     },
                 );
             }
+            assert!(!restarted || relearned, "{what}: the level never relearned");
         }
     }
 }
@@ -1467,7 +1517,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 137] = [
+    const FORMS: [(&str, &[&str]); 145] = [
         // `realized` (task 499): the sums and the last returns, Lee and
         // Mykland's ring of products, a window's terms and rows, a clock
         // window's stamps and clock, and a cap's warning and overrun.
@@ -1493,6 +1543,17 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             "realized_clock_window",
             &["model", "Realized", "window", "place"],
         ),
+        // PLAN 551, at schema 72: the ratio level's sums, the form a spec
+        // builds, under each dynamics, with a pair's second denominator, and
+        // the standardiser's share inside its warm-up.
+        ("deco", &["model", "Deco", "ratio", "num"]),
+        ("deco", &["model", "Deco", "ratio", "den"]),
+        ("deco", &["model", "Deco", "ratio", "w2_share"]),
+        ("deco_linear", &["model", "Deco", "ratio", "den_b"]),
+        ("deco_linear", &["model", "Deco", "ratio", "lin_num"]),
+        ("deco_linear", &["model", "Deco", "ratio", "lin_den"]),
+        ("deco_linear", &["model", "Deco", "ratio", "lin_den_b"]),
+        ("deco_warming", &["model", "Deco", "ratio", "w2_share"]),
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1824,6 +1885,24 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     assert!(over.as_u64().is_some_and(|b| b > 1_500), "{over}");
     let warned = at(&v, &["model", "Realized", "warned"]).and_then(rmpv::Value::as_bool);
     assert_eq!(warned, Some(true));
+    // `deco_warming` is saved inside the standardiser's warm-up (PLAN 551):
+    // its share at a fifth or more, so Kish's size at 5 or less, and no level;
+    // `deco` past it.
+    for (name, warm) in [("deco_warming", false), ("deco", true)] {
+        let f = frozen::ALL
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name}: no fixture"));
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let share = at(&v, &["model", "Deco", "ratio", "w2_share"])
+            .and_then(rmpv::Value::as_f64)
+            .expect("a share");
+        let rho = at(&v, &["model", "Deco", "rho", "0"])
+            .and_then(rmpv::Value::as_f64)
+            .expect("a level");
+        assert_eq!(share < 0.2, warm, "{name}: share {share}");
+        assert_eq!(rho.is_finite(), warm, "{name}: level {rho}");
+    }
     for (name, path) in FORMS {
         let f = frozen::ALL
             .iter()
@@ -3494,4 +3573,68 @@ fn under_the_prior_rule(kept: &rmpv::Value, saved: &rmpv::Value, what: &str) {
             "{what}: taken up again"
         );
     }
+}
+
+/// A `deco` state of 71 or earlier, loaded and saved ([`RESTARTED_LEVEL`]):
+/// the kept state held the older level (`rho_bar`, `rho_bar_lo`) and no
+/// sums; the saved one holds the kept standardiser, cfg and blocks as they
+/// were, every `rho` NaN, every weight 0, the sums empty with the share at 1,
+/// and the current fixture's layout, key for key.
+fn restarted_level_rule(
+    kept: &rmpv::Value,
+    saved: &rmpv::Value,
+    current: &rmpv::Value,
+    what: &str,
+) {
+    let path = |k: &str| ["model", "Deco", k].map(String::from);
+    let get = |v: &rmpv::Value, k: &str| at(v, &path(k).each_ref().map(String::as_str)).cloned();
+    assert!(
+        get(kept, "rho_bar").is_some() && get(kept, "ratio").is_none(),
+        "{what}: the kept layout"
+    );
+    assert!(
+        get(saved, "rho_bar").is_none() && get(saved, "rho_bar_lo").is_none(),
+        "{what}: rho_bar kept"
+    );
+    for key in ["cfg", "diag", "blocks"] {
+        assert_eq!(get(saved, key), get(kept, key), "{what}: {key} moved");
+    }
+    let floats = |v: Option<rmpv::Value>| -> Vec<f64> {
+        v.and_then(|v| v.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .map(|x| x.as_f64().unwrap())
+            .collect()
+    };
+    let rho = floats(get(saved, "rho"));
+    assert!(
+        !rho.is_empty() && rho.iter().all(|v| v.is_nan()),
+        "{what}: rho {rho:?}"
+    );
+    assert!(
+        floats(get(saved, "rho_w")).iter().all(|&w| w == 0.0),
+        "{what}: the weights"
+    );
+    let ratio = get(saved, "ratio").unwrap_or_else(|| panic!("{what}: no sums"));
+    assert_eq!(
+        at(&ratio, &["w2_share"]).and_then(rmpv::Value::as_f64),
+        Some(1.0),
+        "{what}"
+    );
+    for key in ["num", "den"] {
+        let v = floats(at(&ratio, &[key]).cloned());
+        assert!(
+            v.len() == rho.len() && v.iter().all(|x| x.is_nan()),
+            "{what}: {key} {v:?}"
+        );
+    }
+    let keys = |v: &rmpv::Value| -> Vec<String> {
+        at(v, &["model", "Deco"])
+            .and_then(rmpv::Value::as_map)
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(keys(saved), keys(current), "{what}: the current layout");
 }

@@ -151,6 +151,18 @@ runs both tiers, but a plain `cargo test` skips the extended Rust tests
   alone is compared within the smallest tolerance that passes, stated in ulps beside the
   test, and a tolerance that is not tiny goes to the user before it lands. Every other
   field stays bit-exact across OSes (`docs/TESTING.md`, "The math library's last bits").
+- **No row counts as solutions to early-data problems** (the user, 2026-11-22: "Each time
+  we need to have an answer that checks for lack of convergence or similar problem rather
+  than fixing row counts"). A fixed row count ("start at row N", "a minimum of N rows",
+  "first tested row N", a trimming fraction that is a row count in disguise) is tuned on
+  the test data, so the model comes to depend on it. When a fit, test or estimate
+  misbehaves on early, short or degenerate data, guard by the condition itself and
+  withhold with a reason while it fails: convergence (the Newton decrement, the gradient,
+  a step at the rounding floor), identifiability (the information matrix's conditioning,
+  a likelihood-ratio test against the null model), the estimate's own finite-sample
+  uncertainty at the rows in hand, a statistic valid at every sample size
+  (self-normalised, exact finite-sample), or calibration. `garch`'s start is the pattern:
+  it waits on a likelihood-ratio test and judges convergence by the decrement.
 - **Output-moving speed changes**: under 5 ulps and faster, take it; above 5 ulps, or a
   change not measured in ulps, is the user's call (`scripts/compare_outputs.py` reports ulps).
 

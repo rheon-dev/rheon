@@ -721,8 +721,10 @@ def equicorr_row(row: Any) -> float:
     """Estimate the common correlation from one standardized row, by Engle and Kelly's closed form.
 
     Use it to compute, offline, the per-row estimate a ``deco`` model reads:
-    Engle and Kelly's Lemma 2.3. For the mean correlation of a whole matrix,
-    use :func:`equicorr`.
+    Engle and Kelly's eq. 20, which their Lemma 2.3 bounds. It is a ratio
+    over one row, so its mean over many rows reads toward 0; ``deco``'s
+    ``rho`` averages its numerator and denominator before it divides. For
+    the mean correlation of a whole matrix, use :func:`equicorr`.
 
     .. rubric:: Parameters
 

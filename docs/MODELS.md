@@ -299,7 +299,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges) or `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges) or `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -2522,7 +2522,7 @@ statsmodels' `acf`.
 Engle and Kelly's dynamic equicorrelation, one number for the whole
 correlation matrix of the features.
 
-Use `deco` (Engle & Kelly 2012) for one number that moves with the
+Use `deco` (Engle & Kelly) for one number that moves with the
 correlation of many series. It replaces the `m(m−1)/2` free entries of the
 correlation matrix of `m` series with their average, the
 *equicorrelation*, and estimates that in O(m) a row, where keeping every
@@ -2539,30 +2539,45 @@ every spec takes are in [What every spec takes](#what-every-spec-takes).
 #### The update
 
 The row is standardized against the means and variances as they stood
-before it, `ζ_i = (x_i − m_i)/√v_i`. With `S₁ = Σ ζ_i` and `S₂ = Σ ζ_i²`
-over the `n` features that have a standardized value, the row's estimate
-`u` is Engle and Kelly's Lemma 2.3, which lies in `[−1/(n − 1), 1]`.
-Between two blocks `A` and `B` the estimate is `u_AB`. The reported level,
-`rho`, then follows `u` under one of two dynamics, with `α` and `β` the
-`"linear"` dynamic's two weights and `ρ̄` the `"ew"` level run beside it:
+before it, `ζ_i = (x_i − m_i)/√v_i`. The sums `S₁ = Σ ζ_i` and
+`S₂ = Σ ζ_i²` run over the `n` features that have a standardized value.
+The row's estimate `u` is Engle and Kelly's eq. 20, the mean product of two
+standardized values over the mean square, which lies in `[−1/(n − 1), 1]`
+(their Lemma 2.3). Between two blocks `A` and `B` the estimate is `u_AB`:
 
 ```
-u    = (S₁² − S₂) / ((n − 1)·S₂)        = (mean of ζ_i·ζ_j over i ≠ j) / (mean of ζ_i²)
-u_AB = S₁_A·S₁_B / √(n_A·n_B·S₂_A·S₂_B)
-
-"ew":      W' = λW + w,  b = w/W'      ρ' = ρ + b·(u − ρ)                       ρ = u at W = 0
-"linear":  ρ' = (1 − α − β)·ρ̄' + α·u + β·ρ                                      ρ' = u on the first row, ρ' = ρ at w = 0
+u    = A / V,       A = (S₁² − S₂) / (n(n − 1)),   V = S₂ / n
+u_AB = C / √(V_A·V_B),   C = S₁_A·S₁_B / (n_A·n_B)
 ```
 
-The `"ew"` level is the exponentially weighted mean of `u`, decayed on the
-model's clock. The docstring's Notes, under *The clock* and *Departures
-from the paper*, give how the `"linear"` level treats a capped gap and a
-row's weight, and why its intercept is written as
-`(1 - alpha - beta) * rho_bar`.
+`u` is a ratio over one row, and the mean of a ratio is not the ratio of
+the means. It reads toward 0, at 1/3 for a true 0.6 with two series and
+about 0.41 with many. Neither more series nor a longer half-life shrinks
+that, since every row sees one draw of the common factor. So the
+reported level, `rho`, averages the numerator and the denominator and
+divides once, with `α` and `β` the `"linear"` dynamic's two weights:
+
+```
+W' = λW + w,  b = w/W',  Ā' = Ā + b·(A − Ā),  V̄' = V̄ + b·(V − V̄)
+"ew":      ρ = Ā / V̄
+"linear":  N' = (1 − α − β)·Ā' + α·A + β·N,   D' = (1 − α − β)·V̄' + α·V + β·D,   ρ = N / D
+```
+
+The `"ew"` level is the weighted Gaussian maximum-likelihood estimate of
+the equicorrelation over the exponentially weighted window: their Lemma
+2.4, which reads `u` as the one-row estimate, with the sums taken over the
+window. The `"linear"` level is a DCC model's correlation recursion,
+targeted at the window's means and averaged over its off-diagonal and its
+diagonal. The level learns from a row only once the standardizer's weights
+hold more than five effective rows, where a standardized row's fourth
+moment exists. The docstring's Notes give the rest. *The clock* says how
+the `"linear"` level treats a capped gap and a row's weight, *The
+standardizer's warm-up* what the warm-up reads, and *Departures from the
+paper* why the intercept is `(1 - alpha - beta)` times the means.
 
 #### Example
 
-**`rho` moves with the average correlation, and reads below it.** This code
+**`rho` moves with the average correlation, and reads it.** This code
 makes ten series whose every pair correlates at 0.2 and then, from row
 2,000, at 0.6. It runs `deco` beside an `ew_cov` over the same columns, and
 prints `rho` beside the mean of the 45 pairwise correlations:
@@ -2592,12 +2607,12 @@ for row in (1999, 3999):
 ```
 
 ```text
-row 1999: truth 0.2, deco's rho 0.14, the mean of ew_cov's corr 0.19
-row 3999: truth 0.6, deco's rho 0.40, the mean of ew_cov's corr 0.60
+row 1999: truth 0.2, deco's rho 0.19, the mean of ew_cov's corr 0.19
+row 3999: truth 0.6, deco's rho 0.59, the mean of ew_cov's corr 0.60
 ```
 
-`deco` takes O(m) a row where the `ew_cov` takes O(m²), and its `rho`
-reads low, at about two-thirds of the truth here.
+`deco` takes O(m) a row where the `ew_cov` takes O(m²), and reads the same
+average.
 
 #### See also
 
@@ -2616,18 +2631,19 @@ For each pair's correlation, or a test of a change in it:
 
 #### Notes
 
-**`u` is biased downward, as Engle and Kelly note:** `E[u]` is about 0.20
-for a true 0.30 at six series. `rho`, an average of `u`, carries the same
-bias, and
+**`u` is biased toward 0, as Engle and Kelly note, and `rho` is not.**
+`u` reads 0.130 for a true 0.2 and 0.379 for a true 0.6 on five series,
+where `rho` reads 0.198 and 0.607 at a half-life of 100:
 [`deco`: an equicorrelation that moves](REGIMES.md#7-deco-an-equicorrelation-that-moves)
-measures it reading near two-thirds of the truth.
+measures both.
 
-**Under `"ew"`, `rho` is exactly what an `ew_cov(stats=["mean"])` on the
-`u` column, over the rows that have one, would report, to the bit, wherever both report.** The `"linear"` level at
-`alpha` and `beta` of 0 is the `"ew"` level, to the bit, and `loglik` is
-held to the dense Gaussian density of the correlation matrix the levels
-describe. The docstring's Notes, under *The estimate's downward bias*, give
-the paper's alternative estimate, which this model does not compute.
+**The `"ew"` level is held to scipy's weighted Gaussian likelihood,
+maximized over the window, and the `"linear"` level to the full `n × n`
+DCC recursion averaged.** The `"linear"` level at `alpha` and `beta` of 0 is
+the `"ew"` level, to the bit, and `loglik` is held to the dense Gaussian
+density of the correlation matrix the levels describe. The docstring's
+Notes, under *Departures from the paper*, give the paper's alternative row
+estimate, which this model does not compute.
 
 ### `rcov` — a block's realized covariance, robust to noise
 

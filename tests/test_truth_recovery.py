@@ -919,17 +919,20 @@ ledger.guard("deco_level", lambda: [deco_rho(s) for s in range(10)])
         ),
     ],
 )
-def test_deco_level_settles_low_and_moves_at_its_half_life(seeds):
+def test_deco_level_settles_at_the_truth_and_moves_at_its_half_life(seeds):
     """`docs/REGIMES.md` section 7's design at 50 seeds, half-life 100: five
     series whose equicorrelation alternates 0.2 / 0.6 every 1,200 rows.
-    ``rho`` is an EW mean of a row estimate biased low (Engle and Kelly), so
-    the truth is the band it settles in and the speed it moves at, an EW
-    mean's step response reaching the midpoint in one half-life. Measured:
-    settled at a true 0.2 between 0.086 and 0.167 (mean 0.129), at 0.6
-    between 0.321 and 0.430 (0.376), every segment of every seed; rows to
-    the midpoint median 95, 95th percentile 147, worst 206, none missed.
-    Bounds: the bands 0.05-0.2 and 0.28-0.48, the median within 70-130 rows
-    and the worst 300. The essentials run three of the seeds."""
+    ``rho`` is the ratio of the EW means of the row's numerator and
+    denominator, the weighted Gaussian estimate of the equicorrelation, so
+    it settles at the truth and moves as an EW mean does, reaching the
+    midpoint in about one half-life. Measured (PLAN 551): settled at a true
+    0.2 between 0.148 and 0.252 (mean 0.199), at 0.6 between 0.539 and
+    0.643 (0.597), every segment of every seed; rows to the midpoint median
+    100, 95th percentile 139, worst 176, none missed. Until PLAN 551 the
+    level was the EW mean of the row estimate ``u``, which reads low (Engle
+    and Kelly): 0.129 and 0.376. Bounds: each segment within 0.1 of its
+    truth, each truth's mean within 0.02, the median within 70-130 rows and
+    the worst 300. The essentials run three of the seeds."""
     low, high, delays = [], [], []
     for s in seeds:
         rho, want = deco_rho(s)
@@ -954,8 +957,8 @@ def test_deco_level_settles_low_and_moves_at_its_half_life(seeds):
         ledger.record("deco_level", "settled_at_0_6", high, ideal=0.6)
         ledger.record("deco_level", "rows_to_midpoint", delays, exact=True)
         ledger.record("deco_level", "rows_to_midpoint_median", np.median(delays))
-    assert min(low) > 0.05 and max(low) < 0.2
-    assert min(high) > 0.28 and max(high) < 0.48
+    assert max(abs(v - 0.2) for v in low) < 0.1 and max(abs(v - 0.6) for v in high) < 0.1
+    assert abs(np.mean(low) - 0.2) < 0.02 and abs(np.mean(high) - 0.6) < 0.02
     assert 70 <= np.median(delays) <= 130 and max(delays) <= 300
 
 

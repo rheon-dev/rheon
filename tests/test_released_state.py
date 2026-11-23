@@ -379,6 +379,12 @@ DECLARED: dict[tuple[str, str], str] = {
     # (`UNDER_THE_PRIOR`).
     ("hmm", "2.0.0"): 'the next release, Changed: `hmm` under `"full"` and `"diag"` '
     "forgets each state's covariance toward a prior",
+    # PLAN 551 (the next release's Changed, and rule 5's twenty-sixth
+    # exception, the user's "Switch, restarting the level", 2026-11-22):
+    # `deco`'s level is the ratio of the means, which a release's file does
+    # not hold, so it loads with its level restarted (`RESTARTED_LEVEL`).
+    ("deco", "2.0.0"): "the next release, Changed: `deco`'s `rho` is the ratio of the "
+    "weighted means",
 }
 
 #: The moved specs a release's file goes on in under a rule of this build's
@@ -389,6 +395,16 @@ DECLARED: dict[tuple[str, str], str] = {
 #: where each float is a number; the posteriors, `state`, `loglik` and
 #: `coef` go on under the prior.
 UNDER_THE_PRIOR: dict[str, str] = {"hmm": "2.0.0"}
+
+#: The moved specs whose level restarts on load, by the newest release whose
+#: files it covers: `deco` (rule 5's twenty-sixth exception). Its standardizer
+#: goes on as the release's, so `u`, `weight_sum` and `settled_frac` are held
+#: to the release's own continuation to the bit; `rho` and `loglik` are null
+#: on the rows before the level relearns and numbers after, the relearning
+#: reached in the second half, and `withheld_reason` reads `below_warm_rows`
+#: on the null rows and the release's value on the rest; the last `coef` is
+#: a number where the release's is.
+RESTARTED_LEVEL: dict[str, str] = {"deco": "2.0.0"}
 
 #: The fields of the conformal interval, which a release's file goes on in
 #: under this build's multiplier (`DECLARED`'s task 368 entry): each group's
@@ -969,7 +985,14 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
     work = {name: reads for name, _, _, reads in probe.WORKLOAD}
     second = probe.stream().slice(probe.HALF)
     wrong: dict[str, list[str]] = {}
-    used: dict[str, int] = {"young": 0, "reset": 0, "conformal": 0, "converted": 0, "prior": 0}
+    used: dict[str, int] = {
+        "young": 0,
+        "reset": 0,
+        "conformal": 0,
+        "converted": 0,
+        "prior": 0,
+        "restart": 0,
+    }
     for name in names:
         specs = [built[r] for r in work[name]] + [built[name]]
         bank = rp.ModelBank.load(states / f"{name}.state", specs=specs)
@@ -998,6 +1021,7 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
             rule["converted"] = first
             used["conformal"] += 1
         prior = _version(version) <= _version(UNDER_THE_PRIOR.get(name, "0.0.0"))
+        restart = _version(version) <= _version(RESTARTED_LEVEL.get(name, "0.0.0"))
         for table in sorted(p.name.split(".")[-2] for p in out.glob(f"{name}.*.parquet")):
             want = pl.read_parquet(out / f"{name}.{table}.parquet")
             if table not in got:
@@ -1007,6 +1031,10 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
             if prior:
                 used["prior"] += 1
                 wrong[f"{name}.{table}"] = _under_the_prior(mine, want)
+                continue
+            if restart:
+                used["restart"] += 1
+                wrong[f"{name}.{table}"] = _restarted_level(mine, want, name, table)
                 continue
             left = np.ones(second.height, dtype=bool)
             if table == "rows" and name in RESETS:
@@ -1050,6 +1078,8 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
     assert bool(used["young"]) == young_moved, used
     under = [n for n in names if _version(version) <= _version(UNDER_THE_PRIOR.get(n, "0.0.0"))]
     assert bool(used["prior"]) == bool(under), used
+    restarted = [n for n in names if _version(version) <= _version(RESTARTED_LEVEL.get(n, "0.0.0"))]
+    assert bool(used["restart"]) == bool(restarted), used
     wrong = {k: v for k, v in wrong.items() if v}
     assert not wrong, "\n".join(f"{k}: {line}" for k, v in sorted(wrong.items()) for line in v)
 
@@ -1082,6 +1112,48 @@ def _under_the_prior(got: pl.DataFrame, want: pl.DataFrame) -> list[str]:
         if bad.any():
             row = int(np.flatnonzero(bad)[0])
             out.append(f"{c} at row {row}: {u[row]!r} against the release's {v[row]!r}")
+    return out
+
+
+def _restarted_level(got: pl.DataFrame, want: pl.DataFrame, name: str, table: str) -> list[str]:
+    """Where a file whose level restarts on load (`RESTARTED_LEVEL`) parts
+    from the release's continuation in what the restart leaves alone: `u`,
+    `weight_sum` and `settled_frac` to the bit; `rho` and `loglik` null on a
+    run of first rows and numbers after it, which ends inside the frame;
+    `withheld_reason` `below_warm_rows` on that run and the release's value
+    after; and in any other table, a number wherever the release has one."""
+    got, want = _plain(got), _plain(want)
+    if got.height != want.height:
+        return [f"{got.height} rows against the release's {want.height}"]
+    out = []
+    if table != "rows":
+        for c in want.columns:
+            u, v = got[c], want[c]
+            floats = u.dtype.is_float() or isinstance(u.dtype, pl.List)
+            if floats and not (u.is_null() == v.is_null()).all():
+                out.append(f"{c}: a null where the release has a number, or the reverse")
+        return out
+    rho = got[f"{name}.rho"].to_numpy().astype(float)
+    learned = np.isfinite(rho)
+    if not learned.any():
+        return [f"{name}.rho: the level never relearned"]
+    first = int(np.flatnonzero(learned)[0])
+    if not learned[first:].all():
+        out.append(f"{name}.rho: null after the level relearned at row {first}")
+    for field in ("u", "weight_sum", "settled_frac"):
+        c = f"{name}.{field}"
+        _, exact = _gaps(got[c], want[c])
+        if not exact.all():
+            row = int(np.flatnonzero(~exact)[0])
+            out.append(f"{c} at row {row}: {got[c][row]!r} against the release's {want[c][row]!r}")
+    loglik = got[f"{name}.loglik"].to_numpy().astype(float)
+    if np.isfinite(loglik[:first]).any():
+        out.append(f"{name}.loglik: a number before the level relearned")
+    reason = got[f"{name}.withheld_reason"]
+    if not (reason[:first] == "below_warm_rows").all():
+        out.append(f"{name}.withheld_reason: not below_warm_rows before the level relearned")
+    if not reason[first:].eq_missing(want[f"{name}.withheld_reason"][first:]).all():
+        out.append(f"{name}.withheld_reason: the release's differs after the level relearned")
     return out
 
 

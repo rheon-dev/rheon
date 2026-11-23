@@ -938,6 +938,21 @@ pub use window::{
 ///   of 71 or earlier loads as it did, to the bit, and re-saves the current
 ///   fixture's bytes. Schema 71's fixtures are kept
 ///   (`tests/state_fixtures/v71/`).
+///
+///   Also at 72, before any release carried it (2026-11-22, PLAN 551, the
+///   user's "Replace rho with the ratio"): `deco`'s level is the ratio of
+///   the EW means of the row's numerator and denominator (or their averaged
+///   DCC recursion under `"linear"`), kept in `ratio` -- the means, a pair's
+///   second denominator, `"linear"`'s `N` and `D`, and the standardiser's
+///   `Σw²/(Σw)²` its warm-up reads -- where `rho_bar` and `rho_bar_lo` kept
+///   the EW mean of `u`. A state of 71 or earlier has no `ratio`: it loads
+///   with its level restarted (CLAUDE.md rule 5's twenty-sixth exception,
+///   the user's "Switch, restarting the level", 2026-11-22): its
+///   standardiser and `u` go on to the bit, its level's sums start empty
+///   and relearn, and its share is taken as 1. The kept `deco` files are
+///   held to that ([`Deco`]'s module docs; `tests/state_fixtures.rs`,
+///   `RESTARTED_LEVEL`); the ratio's forms are the cases `deco`,
+///   `deco_linear` and `deco_warming`.
 pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`
