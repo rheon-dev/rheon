@@ -71,18 +71,27 @@
 //! and `g = 0`), at Kish's count of the weights, reaches χ² at 0.999 for
 //! those restrictions -- 13.8 for DCC's two, 16.3 for ADCC's three -- and
 //! the information there is positive definite; a buffer whose `Q̄` is not
-//! positive definite (a series constant over it, or two the same) is
-//! withheld too. A fit that passes but is not at its optimum, the gain its
-//! projected Newton step predicts over `10⁻⁶` nats, is not stepped from
-//! either. Either waits for twice the rows (or the span) and fits again,
-//! at most [`DCC_MAX_REFITS`] times while the cap holds the doubled
-//! buffer; then a withheld start buffers afresh, and one short of its
-//! optimum is stepped from. How the iteration stopped decides nothing.
-//! While a fit is withheld the bank names the wait `not_identified`
-//! ([`Dcc::no_effect`]). The GARCH margins buffer their own start first
-//! (2,000 rows by default, held to their own test of a variance process),
-//! so with margins the correlation reports from the margins' start plus
-//! the stage's.
+//! positive definite past its rounding (fewer rows than series, a series
+//! constant over them, or two the same: `dcc::mat::definite`) is withheld
+//! too. A fit that passes but is not at its optimum, the gain its projected
+//! Newton step predicts over `10⁻⁶` nats (the Newton decrement inside the
+//! set), is not stepped from either. A try that does not start keeps its
+//! buffer: the next waits for as many new rows as it held, so twice the
+//! rows while the cap holds them, and from then on the latest rows the
+//! cap holds, the oldest leaving as each new one comes ([`Dcc::dropped`]
+//! counts them), each try on rows the last did not see. Nothing is cleared,
+//! which could not cure a shortage of rows, and no count of tries ends the
+//! wait. While a fit is withheld the bank names the wait `not_identified`
+//! ([`Dcc::no_effect`]); a fit short of its optimum alone is the start's
+//! own warm-up still. How the iteration stopped decides nothing. Under a
+//! decay the evidence a buffer holds stops growing: its rows' weights are
+//! decayed to the last, so Kish's count of them is near `(1 + λ)/(1 − λ)`
+//! at most, 289 at a half-life of 100 rows, however many are buffered; a
+//! half-life must be several times the rows that tell the recursion from a
+//! constant correlation, or each try is a draw at the same odds. The GARCH
+//! margins buffer their own start first (2,000 rows by default, held to
+//! their own test of a variance process), so with margins the correlation
+//! reports from the margins' start plus the stage's.
 //!
 //! **What a row reports**, before it is learned: with margins, each
 //! series' variance; the correlation `R_t` of each pair `i < j`; and the
@@ -103,7 +112,8 @@
 //! 48`, `s` 1 for the asymmetric model, `p` its parameters (2 or 3), `e`
 //! 1 when they are estimated: `32 k² + 96` for DCC and `48 k² + 144` for
 //! ADCC, estimated, `16 k² + 64` and `24 k² + 72` given; the start's buffer,
-//! `8 (k + 2)` a row until it is fitted; 32 of the model's; and the
+//! `8 (k + 2)` a row until it is fitted, at most what `max_state_bytes`
+//! holds beside the rest; 32 of the model's; and the
 //! margins' (`garch`'s state, 168 a series for `garch` with normal
 //! innovations, with its own start's buffer of 16 bytes a row a series
 //! until it is fitted). The margins' start comes before the stage's, so the
@@ -130,10 +140,6 @@ use rows::{WORK, advance, quad, read, score_info};
 /// The correlation stage's start in rows, where a spec gives neither rows
 /// nor a span.
 pub const DCC_START_ROWS: usize = 500;
-/// How many times a start that did not identify its recursion, or stopped
-/// short of its optimum, waits for twice its rows (or its span) and fits
-/// again before it buffers afresh, or steps from the fit it has.
-pub const DCC_MAX_REFITS: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DccCfg {
@@ -362,19 +368,30 @@ struct Stage {
     /// The decay since the stage last learned a row, carried to the next.
     pending: f64,
     /// The start's rows: each `z`, its weight and its decay factor from the
-    /// row before.
+    /// row before. At its bound, a ring whose oldest row is at `head`.
     buffer: Vec<f64>,
+    /// The ring's oldest row once the buffer is at its bound; 0 before.
+    #[serde(default)]
+    head: usize,
     first: Option<Stamp>,
     /// The start's fit was at its optimum by the projected step's gain.
     sound: bool,
-    /// Starts dropped for a `Q̄` that was not positive definite, or a fit
-    /// its rows did not identify, after every refit.
-    restarts: u32,
-    /// The waits for twice the rows the current start has made.
+    /// The tries of the start that did not start: a `Q̄` not positive
+    /// definite, a fit its rows did not identify, or one short of its
+    /// optimum.
     #[serde(default)]
     refits: u32,
-    /// The last start fitted did not tell its recursion from constant
-    /// correlation: the fit is withheld, and the start waits.
+    /// The rows the buffer held at the last try; 0 before one.
+    #[serde(default)]
+    tried: u64,
+    /// The rows buffered since the last try.
+    #[serde(default)]
+    since: u64,
+    /// The rows the buffer let go at its bound, oldest first.
+    #[serde(default)]
+    dropped: u64,
+    /// The last try did not tell its recursion from constant correlation,
+    /// or its `Q̄` lacked rank: the fit is withheld, and the start waits.
     #[serde(default)]
     withheld: bool,
     /// The last start's likelihood-ratio statistic against constant
@@ -406,10 +423,13 @@ impl Stage {
             w: 0.0,
             pending: 1.0,
             buffer: Vec::new(),
+            head: 0,
             first: None,
             sound: false,
-            restarts: 0,
             refits: 0,
+            tried: 0,
+            since: 0,
+            dropped: 0,
             withheld: false,
             lr: f64::NAN,
             repairs: 0,
@@ -427,6 +447,8 @@ impl Stage {
             && self.dq.len() == if est { p * kk } else { 0 }
             && self.h.len() == if est { p * p } else { 0 }
             && self.buffer.len().is_multiple_of(k + 2)
+            && (self.head == 0 || self.head < self.buffer.len() / (k + 2))
+            && (!self.started || (self.buffer.is_empty() && self.tried == 0))
     }
 
     fn rows(&self, cfg: &DccCfg) -> usize {
@@ -510,10 +532,17 @@ impl Dcc {
         self.stage.sound
     }
 
-    /// The starts dropped, after every refit, for a target that was not
-    /// positive definite or a fit its rows did not identify.
-    pub fn restarts(&self) -> u32 {
-        self.stage.restarts
+    /// The tries of the start that did not start: a target that was not
+    /// positive definite, a fit its rows did not identify, or one short of
+    /// its optimum.
+    pub fn refits(&self) -> u32 {
+        self.stage.refits
+    }
+
+    /// The rows the start's buffer let go, oldest first, once it held all
+    /// the cap holds (0 while it grows).
+    pub fn dropped(&self) -> u64 {
+        self.stage.dropped
     }
 
     /// The last start's likelihood-ratio statistic against constant
@@ -709,7 +738,10 @@ impl Dcc {
             self.step_stage(z, w, fr);
             return;
         }
-        if self.cfg.start_span.is_some() {
+        // A first span whose rows the cap cannot hold is refused, as every
+        // span the data sizes is; after a try the buffer is held at its
+        // bound instead, below.
+        if self.cfg.start_span.is_some() && self.stage.tried == 0 {
             let with = self.bytes() + self.cfg.row_bytes();
             let cap = self.cfg.cap();
             let mut held = self.held_cap();
@@ -717,22 +749,47 @@ impl Dcc {
                 return;
             }
         }
-        self.stage.buffer.extend_from_slice(z);
-        self.stage.buffer.push(w);
-        self.stage.buffer.push(fr);
+        let stride = self.cfg.n_targets + 2;
         let rows = self.stage.rows(&self.cfg);
-        // A refit waits for twice the rows, or twice the span, of the try
-        // before.
-        let times = 1usize << self.stage.refits;
-        let due = match (self.cfg.start_span, now) {
-            (Some(span), Some(now)) => {
-                start_due(&mut self.stage.first, now, span * times as f64, rows, 1)
+        let bound = self.bound();
+        let s = &mut self.stage;
+        if s.tried > 0 && rows as u64 >= bound {
+            // At its bound the buffer keeps the latest rows the cap holds:
+            // the oldest leaves, and the wait goes on by name.
+            let at = s.head * stride;
+            s.buffer[at..at + stride - 2].copy_from_slice(z);
+            s.buffer[at + stride - 2] = w;
+            s.buffer[at + stride - 1] = fr;
+            s.head = (s.head + 1) % rows;
+            s.dropped += 1;
+        } else {
+            s.buffer.extend_from_slice(z);
+            s.buffer.push(w);
+            s.buffer.push(fr);
+        }
+        s.since += 1;
+        let rows = s.rows(&self.cfg);
+        // The first try at the start's rows or span; each later one once
+        // as many rows have come as the try before held: twice its rows
+        // while the cap holds them, then the latest rows it holds, renewed.
+        let due = if s.tried > 0 {
+            s.since >= s.tried
+        } else {
+            match (self.cfg.start_span, now) {
+                (Some(span), Some(now)) => start_due(&mut s.first, now, span, rows, 1),
+                _ => rows >= self.cfg.start_rows,
             }
-            _ => rows >= self.cfg.start_rows * times,
         };
         if due {
             self.start();
         }
+    }
+
+    /// The rows the start's buffer may hold: those the cap holds beside the
+    /// rest of the state.
+    fn bound(&self) -> u64 {
+        let rest = self.bytes() - 8 * self.stage.buffer.len() as u64;
+        (self.cfg.cap().saturating_sub(rest) / self.cfg.row_bytes()).max(1)
     }
 
     /// The start: the targets, the fit and the replay (the module docs).
@@ -740,7 +797,8 @@ impl Dcc {
         let (k, p) = (self.cfg.n_targets, self.cfg.n_params());
         let kk = k * k;
         let stride = k + 2;
-        let buf = self.stage.buffer.clone();
+        let mut buf = self.stage.buffer.clone();
+        buf.rotate_left(self.stage.head * stride);
         let n = buf.len() / stride;
         let z: Vec<f64> = (0..n)
             .flat_map(|t| buf[t * stride..t * stride + k].iter().copied())
@@ -766,9 +824,11 @@ impl Dcc {
             update_targets(&mut qbar, &mut nbar, zt, r, k);
         }
         let mut chol = vec![0.0; kk];
-        if !(big_w > 0.0 && mat::cholesky(&qbar, k, &mut chol)) {
-            // a series constant over the rows, or two the same: no
-            // correlation to identify yet
+        if !(big_w > 0.0 && mat::definite(&qbar, k, &mut chol)) {
+            // fewer rows than series, a series constant over the rows, or
+            // two the same: no correlation to identify yet, and a shortage
+            // of rows that clearing the buffer cannot cure, so it is kept
+            // while the cap holds it doubled
             return self.wait(true);
         }
         let mut work = Vec::new();
@@ -799,10 +859,10 @@ impl Dcc {
                 if !got.identified() {
                     return self.wait(true);
                 }
-                if !got.sound() && self.may_double() {
+                if !got.sound() {
                     return self.wait(false);
                 }
-                self.stage.sound = got.sound();
+                self.stage.sound = true;
                 got.theta
             }
         };
@@ -830,8 +890,10 @@ impl Dcc {
         }
         let s = &mut self.stage;
         s.buffer = Vec::new();
+        s.head = 0;
         s.first = None;
-        s.refits = 0;
+        s.tried = 0;
+        s.since = 0;
         s.withheld = false;
         s.theta = theta;
         s.qbar = qbar;
@@ -845,28 +907,17 @@ impl Dcc {
         s.started = true;
     }
 
-    /// Whether a start may wait for twice its rows: refits left, and the
-    /// cap holding the doubled buffer.
-    fn may_double(&self) -> bool {
-        self.stage.refits < DCC_MAX_REFITS
-            && self.bytes() + 8 * self.stage.buffer.len() as u64 <= self.cfg.cap()
-    }
-
-    /// A start that is not stepped from: it waits for twice its rows while
-    /// it may, and otherwise buffers afresh. `withheld` where its rows did
-    /// not identify the recursion.
+    /// A try that did not start: the buffer is kept, and the next try
+    /// waits for as many new rows as this one held. `withheld` where its
+    /// rows did not identify the recursion (or its `Q̄` lacked rank), set
+    /// from this try alone: one short of its optimum only is not withheld.
     fn wait(&mut self, withheld: bool) {
+        let rows = self.stage.rows(&self.cfg) as u64;
         let s = &mut self.stage;
-        s.withheld |= withheld;
-        if self.may_double() {
-            self.stage.refits += 1;
-        } else {
-            let s = &mut self.stage;
-            s.restarts += 1;
-            s.refits = 0;
-            s.buffer.clear();
-            s.first = None;
-        }
+        s.withheld = withheld;
+        s.refits = s.refits.saturating_add(1);
+        s.tried = rows;
+        s.since = 0;
     }
 
     /// One learned row after the start (the module docs' step).

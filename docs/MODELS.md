@@ -2334,6 +2334,21 @@ two degrees of freedom. No count of rows enters: the
 first rows are withheld because `n` is small, and a tie is withheld for as
 long as it lasts, its rows' `withheld_reason` reading `"not_separated"`.
 
+The test reads two eigenvalue estimates, which `"svd"`'s and `"ccipca"`'s
+variances are. `"oja"`'s are running means along directions that still
+move. Its rate is `c/t`, with `c = learning_rate / tr` per unit of
+variance. That rate turns a direction toward an eigenvector faster than
+the direction's sampling error shrinks only where `c` times the gap to a
+neighbor passes 1/2. Below that the variances differ by the directions'
+convergence error, which the test would read as a gap. Take 20 features
+with variances 4, 4 and then 1, one component and the default gain (`4 ·
+3/26 = 0.46`): the tied component was written on every late row of 3 seeds
+in 8. So `"oja"`
+writes component `j` only where `learning_rate · gap / tr > 1/2` against
+each neighbor as well, and withholds it as `"not_separated"` otherwise. A
+wide stream, whose gaps are small against its trace, needs a larger
+`learning_rate`.
+
 #### Checked against
 
 Each method is held to a third-party library where one computes it, and to
@@ -3245,22 +3260,32 @@ likelihood-ratio statistic against constant correlation (`a = b = 0`, and
 `g = 0`), with the weights at Kish's count, reaches χ² at 0.999 for those
 restrictions: 13.8 for DCC's two and 16.3 for the asymmetric model's three.
 The information there must be positive definite too, and a buffer whose
-`Q̄` is not positive definite (a series constant over it, or two the same)
-is withheld the same way. A fit that passes is stepped from only at its
+`Q̄` is not positive definite is withheld the same way: fewer rows than
+series, a series constant over them, or two the same. `Q̄` is judged by its
+conditioning, a condition number past `1 / (k ε)` refused, because a `Q̄`
+short of rank has an exact 0 eigenvalue that the factor computes with
+rounding of either sign. A fit that passes is stepped from only at its
 optimum: the gain its projected Newton step predicts is at most `10⁻⁶`
 nats, which an optimum on a bound of the set meets as well. A start that
-fails either waits for twice its rows (or its span) and fits again, at most
-twice while `max_state_bytes` holds the doubled buffer. Then a withheld
-start buffers afresh, and one short of its optimum is stepped from. While a
-fit is withheld, `withheld_reason` reads `not_identified`. With `a` and `b`
-given there is nothing to identify, and the start waits only for a `Q̄`
-that is positive definite.
+fails either keeps its rows and fits again once as many new rows have come
+as it held: twice its rows while `max_state_bytes` holds them, then the
+latest rows the cap holds, the oldest leaving as each new one comes. No
+count of tries ends the wait, and nothing is cleared, which could not cure
+a shortage of rows. While a fit is withheld, `withheld_reason` reads
+`not_identified`; while it is short of its optimum alone, the start's own
+warm-up, `below_warm_rows`. With `a` and `b` given there is nothing to
+identify, and the start waits only for a `Q̄` that is positive definite.
+Under a decay the evidence a buffer holds stops growing: its rows' weights
+are decayed to the last, so Kish's count of them is at most about `(1 +
+λ)/(1 − λ)`, 289 at a half-life of 100 rows. Give a half-life several times
+the rows that tell the recursion from a constant correlation.
 
 The state is `32 k² + 96` bytes for DCC and `48 k² + 144` for the
 asymmetric model, learned (`16 k² + 64` and `24 k² + 72` given), for `k`
 series, and the margins' 168 bytes a series. Each start's buffer adds its
 own until it is fitted: 16 bytes a row a series for the margins', `8 (k +
-2)` a row for the correlation's. The margins' start comes first, so with
+2)` a row for the correlation's, which a start that waits grows up to what
+`max_state_bytes` holds. The margins' start comes first, so with
 the default starts `max_state_bytes`' 256 KB holds eight series. A row
 costs `O(p k³)` for `p` parameters: the factor and inverse of `R`, and `R⁻¹
 ∂R` for each parameter.
@@ -3417,11 +3442,17 @@ the papers' sums over `W` returns do. A product is in the window only while
 both of its returns are, so a window's measures are the papers' on its
 returns.
 
-**The count `n`.** `TQ`, `bns` and the flag read the count of returns the
-measures are of. Under a window it is the returns the window holds. Under a
-decay it is Kish's effective count `(Σ w)² / Σ w²` of the returns' decayed
-weights, which is the count itself at equal weights without a decay. The
-sums themselves are weighted, so they scale with the weights; `n` does not.
+**The count `n`.** `bns` and the flag read the count of returns the
+measures are of: Kish's effective count `(Σ w)² / Σ w²` of the returns'
+weights, decayed or in a window, which is the count itself at equal weights
+without a decay. `TQ`'s factor is the weight `Σ w` instead, the length of
+the period its sum is of, so `TQ/BV²` is 1 at a constant volatility whatever
+the weights. With unequal weights `1 - BV/RV` has the variance `ϑ Σ w² / (Σ
+w)² = ϑ / n`, so with these two factors `bns` is a standard normal without
+jumps under a decay as well. A simulated null of 20,000 streams under a
+half-life of 100 rows gives a standard deviation within 0.035 of 1, and a
+size at the 1% cut between 0.008 and 0.016. The sums themselves are
+weighted, so they scale with the weights; `n`, `bns` and the flag do not.
 
 **Lee and Mykland's flag.** It is the paper's test of the largest `|lm|`
 among `n` returns, at confidence `lm_beta` (0.99, a test at 1%):

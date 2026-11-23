@@ -44,8 +44,8 @@ def realized(
     ``inf`` for not at all; set it to ``inf`` beside a window. A row's
     ``weight`` counts its return that many times: the measures are sums, so
     they scale with the weights, on the sum scale. The count of returns
-    ``n`` the quarticity and both tests read is not scaled: it is the count
-    the weights are worth (below). A row of weight 0
+    ``n`` both tests read is not scaled: it is the count the weights are
+    worth (below). A row of weight 0
     counts in no clock: the next row steps as if it were not there, it is
     in no window, its return is in no product, and its weight is in no
     ``weight_sum``; it is still read. A null target is that target's absent
@@ -166,11 +166,14 @@ def realized(
 
     Online, each sum decays by ``0.5 ** (Δclock / half_life)`` a row and
     then takes the row's terms at the weight of the latest row in each. ``n``
-    is the target's count of returns: under a window, the returns it holds;
-    otherwise Kish's effective count of the returns' decayed weights
-    ``w_j``, ``(Σ w_j)² / Σ w_j²``, which is the count itself at equal
-    weights without a decay. ``TQ``, ``bns`` and the flag read the same
-    ``n``. No factor such as ``n/(n-1)`` is
+    is Kish's effective count of the target's returns' weights ``w_j``,
+    decayed or in a window, ``(Σ w_j)² / Σ w_j²``, which is the count itself
+    at equal weights without a decay; ``bns`` and the flag read it.
+    ``TQ``'s factor is the weight ``Σ w_j`` in its place, the length of the
+    period the sums are of, so ``TQ/BV²`` is 1 at a constant volatility
+    whatever the weights: with unequal weights ``1 - BV/RV`` has the
+    variance ``ϑ Σ w_j² / (Σ w_j)² = ϑ / n``, so ``bns`` is a standard
+    normal without jumps under a decay too. No factor such as ``n/(n-1)`` is
     applied: the papers have none. The flag is Lee and Mykland's test of
     the largest ``|lm|`` among ``n`` returns, with ``c = sqrt(2/π)``:
 

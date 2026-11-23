@@ -88,6 +88,29 @@
 //! Under `svd` truncated below the data's rank the kept neighbor's
 //! variance is an underestimate, so the gap reads wider than it is.
 //!
+//! **`oja` is emitted only where its rate finds the direction.** The test
+//! is of two eigenvalue estimates. `svd`'s and `ccipca`'s variances are
+//! such estimates; `oja`'s are running means of `(e_j . d)^2` along
+//! directions that move, and a rate `c/t` -- here `c = learning_rate / tr`
+//! per unit of variance, the row's share `b` being `1/t` at unit weights --
+//! turns a direction toward the eigenvector only as `t^(-c · gap)`, slower
+//! than its sampling error's `t^(-1/2)` where `c · gap ≤ 1/2` (the
+//! condition of the stochastic approximation's `1/√t` rate). There the
+//! variances differ by the directions' convergence error as well as by
+//! sampling error, and the test read that difference as a gap: at k = 20,
+//! variances (4, 4, 1, ...), one component and the default gain (`c · gap =
+//! 4 · 3/26 = 0.46`), the second direction never reached the tied plane on
+//! 3 of 8 seeds, and the first, which the tie leaves unidentified, was
+//! written on every row of the second half of 20,000. So `oja`'s component
+//! `j` also needs `learning_rate · (l_i − l_j) / tr > 1/2` against each
+//! neighbor `i`, on the variances as they stand. A condition, not a count:
+//! a gap the rate finds passes on its first rows, and a wide stream whose
+//! gaps are small against its trace is withheld at the default gain for as
+//! long as they are (raise `learning_rate`). Under a decay the share `b`
+//! floors at `1 − λ` and the rate is constant; the direction then turns at
+//! `c · gap · (1 − λ)` a row over a memory of `1/(1 − λ)` rows, the same
+//! product.
+//!
 //! **Order and sign.** `svd` emits its components by variance, largest
 //! first; `ccipca` and `oja` in their deflation order, which is that order
 //! once they have converged. A component's sign is arbitrary, so each is
@@ -339,13 +362,18 @@ impl StreamPca {
     /// Whether component `j` is told apart from its neighbors (the module
     /// docs' rule), from the state as it stands.
     pub fn separated(&self, j: usize) -> bool {
-        separated(
-            &self.vals,
-            j,
-            self.n_kish(),
-            self.trace(),
-            self.cfg.n_features,
-        )
+        let tr = self.trace();
+        separated(&self.vals, j, self.n_kish(), tr, self.cfg.n_features) && self.rate_finds(j, tr)
+    }
+
+    /// Whether the method's own rate has found component `j` against its
+    /// neighbors: always for `svd` and `ccipca`, and for `oja` where
+    /// [`rate_finds`] holds at its gain.
+    fn rate_finds(&self, j: usize, tr: f64) -> bool {
+        match self.cfg.method {
+            PcaMethod::Oja => rate_finds(&self.vals, j, tr, self.cfg.learning_rate()),
+            PcaMethod::Svd | PcaMethod::Ccipca => true,
+        }
     }
 
     /// The row's slots into `out` (the module docs), from the state before
@@ -366,7 +394,7 @@ impl StreamPca {
         let w2 = w * w;
         let unbias = w2 / (w2 - self.q_sum);
         for j in 0..r {
-            if !separated(&self.vals, j, n, tr, k) {
+            if !(separated(&self.vals, j, n, tr, k) && self.rate_finds(j, tr)) {
                 continue;
             }
             let e = &self.rows[j * k..(j + 1) * k];
@@ -613,6 +641,20 @@ fn separated(vals: &[f64], j: usize, n: f64, tr: f64, k: usize) -> bool {
     };
     let above = j == 0 || apart(vals[j - 1], lj, j - 1);
     let below = j + 1 >= vals.len() || apart(lj, vals[j + 1], j + 1);
+    above && below
+}
+
+/// Whether Oja's rate `c/t`, `c = learning_rate / tr` per unit of variance,
+/// finds direction `j` against each neighbor: `c · gap > 1/2` for the gap
+/// to the component above it and to the one below (the module docs). Below
+/// that the direction's error shrinks as `t^(−c · gap)`, slower than its
+/// sampling error's `t^(−1/2)`, so the variances along it are not
+/// eigenvalue estimates and the eigengap test would read the convergence
+/// error as a gap.
+fn rate_finds(vals: &[f64], j: usize, tr: f64, rate: f64) -> bool {
+    let finds = |hi: f64, lo: f64| rate * (hi - lo).abs() / tr > 0.5;
+    let above = j == 0 || finds(vals[j - 1], vals[j]);
+    let below = j + 1 >= vals.len() || finds(vals[j], vals[j + 1]);
     above && below
 }
 

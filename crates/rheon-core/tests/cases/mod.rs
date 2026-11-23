@@ -3211,6 +3211,23 @@ pub fn all() -> Vec<Case> {
             Targets::Correlated(2, false, false),
             120
         ),
+        // A start withheld at its bound: a cap that holds 80 of its rows,
+        // so after its tries at 50 and 80 rows the buffer is a ring of the
+        // latest 80, its oldest row at `head`, the rows it let go counted.
+        case!(
+            "dcc_bound",
+            "Dcc",
+            Dcc,
+            Dcc::new({
+                let mut c = dcc_cfg(2, false, None);
+                c.max_state_bytes = Some(c.stage_bytes() + 32 + 80 * c.row_bytes());
+                c
+            })
+            .unwrap(),
+            0,
+            Targets::Correlated(2, false, false),
+            333
+        ),
         // Given parameters, the symmetric model: no sensitivities.
         case!(
             "dcc_given",

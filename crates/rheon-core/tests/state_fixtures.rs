@@ -1571,7 +1571,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 154] = [
+    const FORMS: [(&str, &[&str]); 155] = [
         // `realized` (task 499): the sums and the last returns, Lee and
         // Mykland's ring of products, a window's terms and rows, a clock
         // window's stamps and clock, and a cap's warning and overrun.
@@ -1794,6 +1794,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("dcc_started", &["model", "Dcc", "stage", "theta"]),
         ("dcc_started", &["model", "Dcc", "stage", "lr"]),
         ("dcc_withheld", &["model", "Dcc", "stage", "buffer"]),
+        ("dcc_bound", &["model", "Dcc", "stage", "buffer"]),
         ("dcc_given", &["model", "Dcc", "cfg", "params"]),
         ("dcc_margins", &["model", "Dcc", "margins", "series"]),
         ("dcc_margins", &["model", "Dcc", "stage", "buffer"]),
@@ -1962,6 +1963,22 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             .is_some_and(|r| r >= 1)
     );
     assert!(stage("lr").is_some_and(|l| l.as_f64().is_some_and(f64::is_finite)));
+    // dcc's start at its bound: a ring whose oldest row is not the first
+    // slot, rows let go, and the rows of its last try and since it, each
+    // an integer `held` does not count.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "dcc_bound")
+        .expect("dcc_bound");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let stage = |key: &str| {
+        at(&v, &["model", "Dcc", "stage", key])
+            .and_then(rmpv::Value::as_u64)
+            .unwrap_or(0)
+    };
+    for key in ["head", "tried", "since", "dropped"] {
+        assert!(stage(key) > 0, "dcc_bound: {key} is 0");
+    }
     // A clock window's cap (task 499): the bytes of the row that would have
     // passed it, an integer, and the warning raised.
     let f = frozen::ALL

@@ -643,11 +643,11 @@ fn n_is_the_count_of_returns_and_kish_under_a_decay() {
     let r = sv_day(3_000, 16, false);
     let mut m = Realized::new(cfg(1, f64::INFINITY)).unwrap();
     run(&mut m, &unit_rows(&r));
-    assert_eq!(m.series[0].count(false), 3_000.0);
+    assert_eq!(m.series[0].count(), 3_000.0);
     let h = 100.0;
     let mut m = Realized::new(cfg(1, h)).unwrap();
     run(&mut m, &unit_rows(&r));
-    let (w, n) = (m.series[0].weight(), m.series[0].count(false));
+    let (w, n) = (m.series[0].weight(), m.series[0].count());
     let lam = (-1.0 / h).exp2();
     // The geometric sums of 3,000 unit weights, by their closed forms.
     let big_n = lam.powi(3_000);
@@ -663,6 +663,93 @@ fn n_is_the_count_of_returns_and_kish_under_a_decay() {
     let heavy: Vec<Row> = r.iter().map(|&x| (1.0, vec![Some(x)], 7.0)).collect();
     let mut m7 = Realized::new(cfg(1, h)).unwrap();
     run(&mut m7, &heavy);
-    let n7 = m7.series[0].count(false);
+    let n7 = m7.series[0].count();
     assert!((n7 - n).abs() < 1e-12 * n, "{n7} {n}");
+}
+
+/// The sd and the share past 2.326 (a one-sided 1% test) of `bns` at the
+/// last of `n` rows of iid normal returns, over `reps` streams: `weight`
+/// gives row `t`'s weight.
+fn bns_null(c: &RealizedCfg, n: usize, reps: u64, weight: impl Fn(usize) -> f64) -> (f64, f64) {
+    let mut zs = Vec::with_capacity(reps as usize);
+    for rep in 0..reps {
+        let mut s = 0x5EED_0000 + rep;
+        let mut m = Realized::new(c.clone()).unwrap();
+        let mut z = f64::NAN;
+        for t in 0..n {
+            let r = 0.001 * normal(&mut s);
+            z = m.step(&[], &[Some(r)], 1.0, weight(t)).pred[4];
+        }
+        zs.push(z);
+    }
+    let k = zs.len() as f64;
+    let mean = zs.iter().sum::<f64>() / k;
+    let sd = (zs.iter().map(|z| (z - mean).powi(2)).sum::<f64>() / (k - 1.0)).sqrt();
+    let size = zs.iter().filter(|z| **z > 2.326).count() as f64 / k;
+    (sd, size)
+}
+
+/// `bns` is N(0, 1) without jumps under a decay, at a constant weight
+/// below 1 and at unequal weights in a window, not only at the papers'
+/// unit weights (review W13, B1 and B2). Its statistic's law is the
+/// oracle: the simulated null over enough streams to resolve a 1% test's
+/// size. `√n` is Kish's count, the variance of `1 − BV/RV` being `ϑ Σw² /
+/// (Σw)²` at a constant volatility; `TQ/BV²` is then 1 there only with `TQ`
+/// scaled by the weight `W`, the period its sum is of. With Kish's count in
+/// `TQ` as well the sd was 1/√(1 + λ), 0.707 under any decay, and the size
+/// 0.0009; at a weight of 0.25 the sd was 0.5; and under a window of
+/// weights from 0.1 to 1.9 the count of returns in front put it near
+/// √(1000/712) = 1.19, 712 being Kish's count of those weights.
+/// The weights vary slowly from row to row, as a decay's do: `ϑ` is the
+/// variance of the products and of their covariance with the next one,
+/// which share a return, so weights that jump between neighbours (0.5 and
+/// 1.5 in turn, measured: sd 1.23) are outside the paper's asymptotics.
+/// The statistic is also unmoved by the weights' scale.
+#[test]
+fn bns_is_standard_normal_under_a_decay_and_weights() {
+    check_bns_null(2_000, 0.06, (0.005, 0.02));
+}
+
+/// [`bns_is_standard_normal_under_a_decay_and_weights`] at 20,000 streams,
+/// where the size is resolved to 0.0008 and the sd to 0.005.
+#[test]
+#[ignore = "extended: 20,000 simulated streams"]
+fn bns_is_standard_normal_under_a_decay_and_weights_finely() {
+    check_bns_null(20_000, 0.035, (0.008, 0.016));
+}
+
+/// A null stream's form: its name, settings, rows and each row's weight.
+type NullCase<'a> = (&'a str, &'a RealizedCfg, usize, fn(usize) -> f64);
+
+fn check_bns_null(reps: u64, sd_tol: f64, size: (f64, f64)) {
+    let decayed = cfg(1, 100.0);
+    let plain = cfg(1, f64::INFINITY);
+    let mut windowed = cfg(1, f64::INFINITY);
+    windowed.window_rows = Some(1_000);
+    let cases: [NullCase; 3] = [
+        ("half-life 100", &decayed, 1_500, |_| 1.0),
+        ("weight 0.25", &plain, 1_000, |_| 0.25),
+        ("window, weights 0.1 to 1.9", &windowed, 1_500, |t| {
+            1.0 + 0.9 * (std::f64::consts::TAU * t as f64 / 400.0).sin()
+        }),
+    ];
+    for (name, c, n, w) in cases {
+        let (sd, share) = bns_null(c, n, reps, w);
+        assert!((sd - 1.0).abs() < sd_tol, "{name}: sd {sd}");
+        assert!(share > size.0 && share < size.1, "{name}: size {share}");
+    }
+    // the weights' scale moves no statistic
+    let r = sv_day(2_000, 21, true);
+    for h in [f64::INFINITY, 100.0] {
+        let mut z = Vec::new();
+        for w in [1.0, 0.25, 4.0] {
+            let rows: Vec<Row> = r.iter().map(|&x| (1.0, vec![Some(x)], w)).collect();
+            let mut m = Realized::new(cfg(1, h)).unwrap();
+            z.push(run(&mut m, &rows).last().unwrap().pred[4]);
+        }
+        assert!(
+            (z[1] - z[0]).abs() < 1e-12 && (z[2] - z[0]).abs() < 1e-12,
+            "{h}: {z:?}"
+        );
+    }
 }

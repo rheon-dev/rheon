@@ -590,9 +590,9 @@ model that only the new build has is listed as an addition and passes.
   volatility of the returns before it, `lm_window = K` returns of its own or
   the measures') and its flag `lm_jump` at confidence `lm_beta` (0.99). No
   small-sample factor, as the papers: a window of `W` returns holds `W - 1`
-  products and `W - 2` triples. The count of returns `n` the quarticity and
-  both tests read is a window's returns, or Kish's effective count of the
-  decayed weights. One pass, a decay (the default form), a window of rows
+  products and `W - 2` triples. The count of returns `n` both tests read is
+  Kish's effective count of the returns' weights, decayed or in a window;
+  the quarticity's factor is their weight. One pass, a decay (the default form), a window of rows
   (checked against `max_state_bytes` when the spec is built, refused naming
   the largest that fits) or of the clock (`window_size`, `closed`; checked
   as the rows go in, a warning past half of the cap and a refusal at it).
@@ -726,6 +726,60 @@ model that only the new build has is listed as an addition and passes.
   whole. Nothing later can join it, so it now gives its value. A window
   reaching past the last row stays null. A formula target of a spec learns
   those rows' targets, which it did not. Only those windows' values move.
+
+- **`pca` under `"oja"` writes a component only where its rate has found
+  it** (Fable's W13 review, C1). The eigengap test is of two eigenvalue
+  estimates; `oja`'s variances are running means along directions that
+  still move, and its rate `c/t`, `c = learning_rate / tr` per unit of
+  variance, turns a direction toward an eigenvector faster than its
+  sampling error shrinks only where `c · gap > 1/2`. Below that the test read
+  the directions' convergence error as a gap: at 20 features with
+  variances 4, 4 and then 1, one component and the default gain (0.46),
+  the component the tie leaves unidentified was written on every row of
+  the second half of 20,000 on 3 of 8 seeds (58% on one, reproduced in
+  Rust). `oja` now also needs `learning_rate · gap / tr > 1/2` against each
+  neighbor and is withheld otherwise, as a component its rows have not
+  told apart; a tie is now
+  tested under all three methods, and an isotropic stream too. `svd` and
+  `ccipca` do not move. Moves: `pca.pc*`, `pca.withheld_reason`.
+
+- **`dcc`'s start judges `Q̄` by its conditioning and waits on its evidence
+  with no count of tries** (Fable's W13 review, A1 to A3). The "`Q̄`
+  positive definite" gate was a Cholesky pivot `> 0`, so a `Q̄` short of
+  rank (fewer rows than series, two series the same) was passed or refused
+  by the rounding of an exact 0: at `start_rows = 1` four series once
+  started on two rows, and eight never on the 1, 2 and 4 rows they were
+  tried at. It now refuses a condition number past `1 / (k ε)` (measured:
+  at least 4.2 times that short of rank, at most `5·10⁻⁴` of it at `k`
+  rows). A try that does not start keeps its buffer, which grows to what
+  `max_state_bytes` holds and then keeps the latest rows, each try on rows
+  the last did not see; it was dropped after two doublings, so at
+  `start_rows = 100` a stream identified at 1,000 rows was never looked at
+  past 400. A fit short of its optimum is withheld rather than stepped from
+  once the doublings ran out, and the wait after it is `below_warm_rows`
+  rather than the earlier try's `not_identified`. Where a start fires
+  earlier, later or not at all moves every output of the rows around it.
+  Moves: `dcc.corr_*`, `dcc.loglik`, `dcc.coef`, `dcc.withheld_reason`.
+
+- **`realized`'s `bns` is a standard normal without jumps under a decay
+  and under weights** (Fable's W13 review, B1 and B2). It read one count
+  `n`, Kish's `(Σw)²/Σw²`, both in front (`√n`) and inside the tripower
+  quarticity (`TQ = n μ⁻³ Σ`). The two stand for different things once the
+  weights are unequal: `1 - BV/RV` has the variance `ϑ Σw²/(Σw)² = ϑ/n`, so
+  `√n` is Kish's, but `TQ/BV²` is 1 at a constant volatility only with
+  `TQ`'s factor the weight `W = Σw`. With Kish's count there `max(1,
+  TQ/BV²)` read `W/V`, about `1 + λ` under any decay, and `bns` was
+  N(0, 1/(1 + λ)): a simulated null under a half-life of 100 rows gave an
+  sd of 0.70 and a size of 0.0009 at a nominal 0.01; at a constant weight
+  of 0.25 the sd was 0.5. `TQ` is now `W μ⁻³ Σ`, and under a window `n` is
+  Kish's count of its weights too (it was the count of returns whatever
+  their weights): the simulated null gives an sd within 0.035 of 1 and a
+  size between 0.008 and 0.016 over 20,000 streams under the decay, a
+  weight of 0.25 and a window of weights from 0.1 to 1.9, and `bns` no
+  longer moves with the weights' scale. Without a decay at unit weights `W`
+  and `n` are both the count of returns, so the papers' forms, and the
+  R `highfrequency` and `yuima` oracles, are unmoved. Moves: `realized.tq_*`,
+  `realized.bns_*`, `realized.lm_jump_*`.
 
 - **`ModelBank.write_json` of a `bocpd` with its hazard on the clock**
   (PLAN 547). Under a clock hazard the empty run's log joint is `-inf`

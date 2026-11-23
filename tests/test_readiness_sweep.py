@@ -100,9 +100,10 @@ KINDS = sorted(set(MINIMAL) - {"audit"})
 EXTRA: dict[str, dict[str, Any]] = {
     "hmm": {"warm_rows": 20},
     "kmeans": {"warm_rows": 20},
-    # `dcc` reports from its start, 50 rows of its own (no margins), and at a
-    # half-life of 25 rows its weight there is about 27, so a floor of 30
-    # withholds rows past the start, until the weight passes it.
+    # `dcc` reports from its start, the registry's `start_rows=50` with the
+    # parameters given (no margins), and at a half-life of 25 rows its
+    # weight there is about 27, so a floor of 30 withholds rows past the
+    # start, until the weight passes it.
     "dcc": {"margins": "none", "margin_start_rows": None, "half_life": 25.0},
 }
 #: The kinds that write no row of their own: they report through the state
@@ -199,8 +200,9 @@ def _weight_column(kind: str) -> str | None:
 
 
 #: Per kind and gate, keywords beyond ``EXTRA`` so that gate shows past the
-#: model's own warm-up: ``dcc``'s start of 50 rows is past half of a
-#: half-life of 25 rows, so its settling gate needs one of 100.
+#: model's own warm-up: ``dcc``'s start (the registry's ``start_rows=50``)
+#: is past half of a half-life of 25 rows, so its settling gate needs one of
+#: 100.
 GATE_EXTRA: dict[tuple[str, str], dict[str, Any]] = {
     ("dcc", "min_settled_frac"): {"half_life": 100.0},
 }

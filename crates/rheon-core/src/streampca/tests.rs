@@ -621,7 +621,13 @@ fn the_rotation_orthogonalizes_and_keeps_the_length() {
 #[test]
 fn predict_is_the_step_on_a_separated_stream() {
     for method in [PcaMethod::Svd, PcaMethod::Ccipca, PcaMethod::Oja] {
-        let mut m = StreamPca::new(cfg(3, 2, method, Decay::Halflife(20.0))).unwrap();
+        // `oja` at a gain its rate finds the second gap with (8 · 3.75 /
+        // 29.25 = 1.03; the default's 0.51 sits on the condition's edge)
+        let mut c = cfg(3, 2, method, Decay::Halflife(20.0));
+        if method == PcaMethod::Oja {
+            c.learning_rate = Some(8.0);
+        }
+        let mut m = StreamPca::new(c).unwrap();
         let mut stream = Stream::new(&[25.0, 4.0, 0.25], 43);
         let mut s = 7u64;
         let mut ready = 0;
@@ -643,8 +649,98 @@ fn predict_is_the_step_on_a_separated_stream() {
             assert_eq!(p.n_eff.to_bits(), step.n_eff.to_bits());
             ready += usize::from(step.pred.iter().all(|v| v.is_finite()));
         }
-        // Measured: 272 for `oja`, whose rate reaches the second component
-        // last; 380 and more for the other two.
-        assert!(ready > 250, "{}: {ready} rows ready", method.name());
+        // Measured: 341 for `svd`, 349 for `ccipca`, 205 for `oja`, whose
+        // directions are the noisiest at a half-life of 20 rows (79 at the
+        // default gain, where its rate's condition on the second gap
+        // fails on most rows; 272 before that condition was read).
+        let least = if method == PcaMethod::Oja { 180 } else { 300 };
+        assert!(ready > least, "{}: {ready} rows ready", method.name());
     }
+}
+
+/// The share of the second half of `n` rows that writes component 0, on
+/// a stream of `spectrum` (k = its length, one component), and `oja`'s
+/// gain `rate` where given.
+fn written_late(
+    method: PcaMethod,
+    spectrum: &[f64],
+    seed: u64,
+    n: usize,
+    rate: Option<f64>,
+) -> f64 {
+    let mut c = cfg(spectrum.len(), 1, method, Decay::Halflife(f64::INFINITY));
+    c.learning_rate = rate;
+    let mut m = StreamPca::new(c).unwrap();
+    let mut stream = Stream::new(spectrum, seed);
+    let mut shown = 0;
+    for i in 0..n {
+        let step = m.step(&stream.row(), &[], 1.0, 1.0);
+        if i >= n / 2 {
+            shown += usize::from(step.pred[0].is_finite());
+        }
+    }
+    shown as f64 / (n - n / 2) as f64
+}
+
+/// A tie at the top of a wide spectrum is withheld by every method, not
+/// only `svd` (review W13, C1): k = 20, variances (4, 4, 1, ..., 1), one
+/// component, which any direction of the tied plane is. `oja`'s variances
+/// are running means along directions still moving, and at the default gain
+/// its second direction does not converge -- a rate `c/t` finds the
+/// direction below a gap only where `c · gap > 1/2`, and here `c = 4/26`
+/// per unit of variance against a gap of 3, 0.46 -- so they are not
+/// eigenvalue estimates, and the eigengap test read their convergence
+/// error as a gap: on 3 of 8 seeds it wrote the unidentified component on
+/// every row of the second half of 20,000. Gated on that condition, it
+/// writes none; `svd` and `ccipca`, whose variances are eigenvalue
+/// estimates, write none late either. An isotropic stream is withheld by
+/// all three. At twice the gain the rate finds the tied plane, and the
+/// test reads the tie. The gate withholds only what has not converged: a
+/// gap the rate finds (16 against 1, `c · gap = 4 · 15/35`) is written on
+/// every row of the second half.
+#[test]
+fn a_tie_is_withheld_by_every_method() {
+    let mut tie = vec![1.0; 20];
+    tie[0] = 4.0;
+    tie[1] = 4.0;
+    let flat = vec![1.0; 20];
+    let mut gap = vec![1.0; 20];
+    gap[0] = 16.0;
+    for seed in 0..8u64 {
+        for method in [PcaMethod::Svd, PcaMethod::Ccipca, PcaMethod::Oja] {
+            let late = written_late(method, &tie, 100 + seed, 20_000, None);
+            assert!(late < 0.02, "{} tie, seed {seed}: {late}", method.name());
+            let late = written_late(method, &flat, 200 + seed, 10_000, None);
+            assert!(late < 0.02, "{} flat, seed {seed}: {late}", method.name());
+        }
+        let late = written_late(PcaMethod::Oja, &tie, 100 + seed, 20_000, Some(8.0));
+        assert!(late < 0.02, "oja at a gain of 8, seed {seed}: {late}");
+        let late = written_late(PcaMethod::Oja, &gap, 300 + seed, 10_000, None);
+        assert_eq!(late, 1.0, "oja on a gap, seed {seed}");
+    }
+}
+
+/// `oja`'s rate condition on both sides of 1/2: `learning_rate · gap / tr`
+/// against each neighbor, the one above and the one below.
+#[test]
+fn the_rate_condition_holds_on_both_sides_of_one_half() {
+    // gap 3, trace 26: the default gain of 4 gives 0.4615, a gain of 4.4
+    // gives 0.5077
+    let vals = [4.0, 1.0];
+    assert!(!rate_finds(&vals, 0, 26.0, 4.0));
+    assert!(!rate_finds(&vals, 1, 26.0, 4.0));
+    assert!(rate_finds(&vals, 0, 26.0, 4.4));
+    assert!(rate_finds(&vals, 1, 26.0, 4.4));
+    // exactly 1/2 is not past it
+    assert!(!rate_finds(&vals, 0, 24.0, 4.0));
+    // a middle component needs both: found against the one above, not the
+    // one below
+    assert!(!rate_finds(&[16.0, 4.0, 3.5], 1, 20.0, 4.0));
+    assert!(rate_finds(&[16.0, 4.0, 1.0], 1, 20.0, 4.0));
+    // the gate reads it for oja alone
+    let mut m = StreamPca::new(cfg(2, 1, PcaMethod::Svd, Decay::Halflife(f64::INFINITY))).unwrap();
+    m.vals = vec![4.0, 1.0];
+    assert!(m.rate_finds(0, 26.0));
+    m.cfg.method = PcaMethod::Oja;
+    assert!(!m.rate_finds(0, 26.0));
 }

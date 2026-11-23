@@ -121,9 +121,11 @@ pub struct MicroCfg {
     /// Clock units between checkpoints, as `solve_every` is the
     /// regressions' (docs/PLAN.md task 163): `0` checkpoints on every row,
     /// `inf` never by the clock. DenStream checks every `Tp` clock units
-    /// (the module docs). A row of weight zero advances the clock, so a quiet
-    /// spell still checkpoints, and a gap capped at `gap_cap` counts as the
-    /// cap; it is measured from the last checkpoint on the rows' stamps, the
+    /// (the module docs). A quiet spell of the clock still checkpoints: the
+    /// next row's step reaches across it, and a gap capped at `gap_cap`
+    /// counts as the cap. The stream hands the model no row of weight zero,
+    /// which is in no clock (hard rule 9); handed one directly, the model
+    /// ages its state over the row's step, as every model does; it is measured from the last checkpoint on the rows' stamps, the
     /// decayed clock held exactly, where the caller hands them (task 180).
     /// Infinite under the row cap alone, the default, which a JSON export
     /// writes as a tag (`crate::humanfloat`).
@@ -1078,8 +1080,9 @@ mod tests {
     /// The checkpoint's schedule (task 163): every `prune_every` clock units
     /// or every `max_rows_between_prunes` learned rows, whichever comes
     /// first. Held to that rule written out over irregular clock steps with
-    /// rows of weight zero among them, which advance the clock and not the
-    /// row count. A checkpoint shows as both counters reset on a row that
+    /// rows of weight zero handed to the model directly among them, which
+    /// age it over their steps and add nothing to the row count (the stream
+    /// hands none: hard rule 9). A checkpoint shows as both counters reset on a row that
     /// moved one of them.
     #[test]
     fn checkpoints_follow_the_clock_or_the_learned_rows_whichever_comes_first() {
@@ -1129,8 +1132,10 @@ mod tests {
     }
 
     /// The reason for the clock (task 163): a summary that has faded is
-    /// pruned on time through a quiet spell of rows of weight zero, where a
-    /// cadence of learned rows alone waited for the next learned row.
+    /// pruned on time through a quiet spell of the clock, here rows of
+    /// weight zero handed to the model directly (the stream hands none, and
+    /// the next row's step reaches across the spell), where a cadence of
+    /// learned rows alone waited for the next learned row.
     #[test]
     fn a_quiet_spell_still_prunes_on_the_clock() {
         let run = |every: f64| {
@@ -1687,7 +1692,7 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_weight_row_advances_the_clock_and_learns_nothing_even_first() {
+    fn a_zero_weight_row_handed_directly_ages_the_state_and_learns_nothing_even_first() {
         let mut m = Micro::new(cfg()).unwrap();
         let s = m.step(&[1.0, 2.0], &[], 1.0, 0.0);
         assert_eq!(s.n_eff, 0.0);
