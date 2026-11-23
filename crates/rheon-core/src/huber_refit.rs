@@ -597,6 +597,25 @@ impl RefitBuf {
     /// up: the buffer freed, marked [`Self::abandoned`], and what it held
     /// handed back, for the target's sketch to be built from
     /// ([`one_pass_sketch`]).
+    /// The bytes [`Self::age`] would add at `lam` and `lam_s`: a run of 32
+    /// where the row does not join the last run, nothing where it does or
+    /// the buffer takes nothing. What a refit over a span of the clock
+    /// checks against its cap before the row ages it (review 2026-11-23,
+    /// REG-2).
+    pub(crate) fn age_bytes(&self, lam: f64, lam_s: f64) -> u64 {
+        if self.done || self.learned == 0 {
+            return 0;
+        }
+        let n = self.ages.len();
+        let joins = n >= 4 && {
+            let last = &self.ages[n - 4..];
+            last[3] == f64::from(self.learned)
+                && last[0].to_bits() == lam.to_bits()
+                && last[1].to_bits() == lam_s.to_bits()
+        };
+        if joins { 0 } else { 32 }
+    }
+
     pub(crate) fn age(&mut self, lam: f64, lam_s: f64, cap: u32) -> Option<Taken> {
         if self.done || self.learned == 0 {
             return None;
@@ -621,7 +640,7 @@ impl RefitBuf {
             self.median.begin_run();
             self.median.run(lam_s, 1);
         }
-        if self.ages.len() / 4 > REFIT_RUNS_PER_ROW as usize * cap as usize {
+        if self.ages.len() / 4 > (REFIT_RUNS_PER_ROW as usize).saturating_mul(cap as usize) {
             self.abandoned = true;
             return Some(self.take());
         }

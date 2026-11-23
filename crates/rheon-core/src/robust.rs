@@ -1718,6 +1718,27 @@ impl Robust {
         if self.over.is_some() {
             return;
         }
+        // Under a span the run the row adds is held to the cap as a
+        // learned row is (review 2026-11-23, REG-2).
+        if self.cfg.refit_clock.is_some() {
+            let Some(b) = self.refit.get(j) else {
+                return;
+            };
+            let row = b.age_bytes(lam, lam_scale);
+            if row > 0 {
+                let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
+                let limit = self.span_cap();
+                let mut guard = crate::clock_span::HeldCap {
+                    over: &mut self.over,
+                    warned: &mut self.warned,
+                    warning: &mut self.warning,
+                };
+                if !guard.admit(held + row, limit) {
+                    return;
+                }
+                guard.note(held + row, limit);
+            }
+        }
         let cap = self.refit_cap();
         if let Some(t) = self
             .refit
