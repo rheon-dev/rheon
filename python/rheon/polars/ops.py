@@ -62,6 +62,14 @@ half_life)``:
      - Polars' ``ewm_var`` and ``ewm_std`` under ``adjust=False`` on a
        clock that steps by 1 a row and an input with no nulls, with Polars'
        own correction for unequal weights
+   * - :func:`ewm_moments`
+     - one term of the decayed weighted moments of one or more columns, each
+       perhaps lagged: a central, raw or standardized moment, or a
+       cumulant, each value weighing ``m_i`` as in :func:`ewm_var`. Looking
+       back only
+     - the weighted definitions (numpy's ``average`` of the powers), scipy's
+       ``moment``, ``skew``, ``kurtosis`` and ``kstat`` at equal weights,
+       and :func:`rheon.spec.ewm_moments` fed the same weights
    * - :func:`ewm_quantile`
      - the smallest ``x`` with ``W(<= x) >= q W``, each row of the window
        weighing ``lam**|t_j - tau_t|``, as in :func:`ewm_sum`, ``W`` their
@@ -224,13 +232,14 @@ import polars as pl
 
 from rheon._errors import RefusedValueError
 from rheon._renamed import renamed_function
-from rheon.polars._formula import operator
+from rheon.polars._formula import moments_operator, operator
 
 if TYPE_CHECKING:
     from rheon._duration import Duration
 
 __all__ = [
     "ewm_mean",
+    "ewm_moments",
     "ewm_quantile",
     "ewm_rate",
     "ewm_std",
@@ -1207,6 +1216,211 @@ def ewm_std(
         min_samples=min_samples,
         partial=partial,
         bias=bias,
+    )
+
+
+def ewm_moments(
+    legs: dict[str, int],
+    *,
+    half_life: float | Duration,
+    kind: Literal["central", "raw", "standardized", "cumulant"] = "central",
+    bias: bool | None = None,
+    window_size: float | Duration | None = None,
+    lag_tolerance: float | Duration | None = None,
+    partial: Literal["keep", "null", "drop"] | None = None,
+) -> pl.Expr:
+    """One term of the EW moments of one or more columns, each perhaps lagged,
+    over each row's window.
+
+    Use it for the running shape of a value as it stands on each row: a skew
+    or a kurtosis (``{"x": 3}``, ``{"x": 4}`` under ``kind="standardized"``),
+    a cumulant, a co-skewness of two columns (``{"x": 2, "y": 1}``), or an
+    autocovariance or autocorrelation (``{"x": 1, "x@1": 1}``). Each call is
+    one term. For the variance alone, :func:`ewm_var` is the same number by
+    a shorter path. For the moments as a model's output, read before each row
+    and saved with the bank's state, use :func:`rheon.spec.ewm_moments`.
+
+    .. rubric:: Parameters
+
+    ``legs``
+        The term: a dict from each leg to its power, a whole number from 1,
+        the term's order the sum of the powers. A leg is a column's name, or
+        a column lagged ``k`` back, written ``"x@k"``: ``k`` in clock units on
+        a numeric clock, a duration such as ``"x@5m"`` on a temporal one, and
+        rows without a clock column. A key whose text after its last ``@`` is
+        neither a number nor a duration is a column's name, read whole.
+        Required.
+    ``half_life``
+        How fast a row's weight fades with its distance in clock time from the
+        row the window is read at, as in :func:`ewm_var`: a number of clock
+        units, or a duration on a temporal clock. Required. ``float("inf")``
+        weighs every row of the window evenly and needs ``window_size``.
+    ``kind``
+        What the term is: ``"central"`` (the default), the moment about the
+        weighted means; ``"raw"``, about zero; ``"standardized"``, the central
+        moment over each leg's standard deviation to its power (a skew, a
+        kurtosis, a correlation); ``"cumulant"``, of one leg.
+    ``bias``
+        ``True`` reads the plug-in moment of the weighted rows; ``False`` the
+        form unbiased for rows drawn independently under these weights, of
+        orders 2 to 4. The default, ``None``, is the statistic's default in
+        Polars: a variance (a central moment or a cumulant of order 2)
+        unbiased, as ``ewm_var``'s, and every other term the plug-in, as
+        ``skew``'s and ``kurtosis``'s.
+    ``window_size``
+        The span of clock time a window covers, in the units of
+        ``half_life``: the rows whose clock is in ``(tau_t - window_size,
+        tau_t]``, the edge decided as Polars' ``rolling_*_by`` decides it.
+        The default, ``None``, covers every row since the last clock break (a
+        gap past ``gap_cap`` or a session change), decayed.
+    ``lag_tolerance``
+        How far before ``t - k`` the row a lag ``k`` pairs with may sit, in
+        the units of ``half_life``. The default, ``None``, is the lag itself.
+    ``partial``
+        What a window cut short gives, as in :func:`ewm_var`: ``"keep"`` (the
+        default under ``None``), ``"null"`` or ``"drop"``. It needs
+        ``window_size``.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as a
+    column. Its value at a row is read once every row at the row's stamp is
+    in, as :func:`ewm_var`'s is (``closed="right"``). It is null where the
+    term is not defined: no row yet, no lagged pair yet, a standardized term
+    of a leg with no spread, an unbiased form whose denominator keeps no
+    digit (one row carrying all the weight), or a value past a double's
+    range. It is null too where ``partial="null"`` meets a cut window, and
+    after a reset.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        When ``legs`` is not a dict of text keys, a power is not a whole
+        number (a :class:`~rheon.WrongTypeError`), ``half_life`` is not
+        given, ``bias`` is not ``True``, ``False`` or ``None``, or a span is
+        neither a number nor a duration.
+    ``ValueError``
+        When a power is below 1; a lag is below 0, or a duration lag is not
+        above 0; two legs name the same column and lag; ``kind`` is not one
+        of its words; a cumulant has more than one leg; a standardized term
+        has order 1; ``bias=False`` meets an order above 4 outside ``raw``;
+        ``half_life`` is inf without ``window_size``; ``partial`` is given
+        without ``window_size``; or a span is NaN or not above 0.
+
+    :func:`rheon.polars.stream.with_windows` refuses the rest when it builds
+    its query, such as a duration lag on a numeric clock.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 4.0, 3.0, 7.0]})
+        out = rp.stream.with_windows(
+            rows,
+            m2=rp.ewm_moments({"x": 2}, half_life=1.0, bias=True),
+            v=rp.ewm_var("x", half_life=1.0, bias=True),
+            ac1=rp.ewm_moments({"x": 1, "x@1": 1}, half_life=2.0, kind="standardized"),
+            clock="t",
+            gap_cap=10.0,
+        )
+        for row in out.select(pl.all().exclude("t", "x").round(4)).rows():
+            print(row)   # m2 is ewm_var's; ac1 a correlation of the lagged pairs
+
+    .. code-block:: text
+
+        (0.0, 0.0, None)
+        (0.25, 0.25, None)
+        (1.6875, 1.6875, 1.0)
+        (0.8594, 0.8594, 0.1767)
+        (4.6836, 4.6836, 0.201)
+
+    .. rubric:: See also
+
+    - :func:`ewm_var`, the variance by the same weights.
+    - :func:`rheon.spec.ewm_moments`, the moments as a model, many terms at
+      once, read before each row.
+    - :func:`rheon.polars.stream.with_windows`, which computes the operators
+      over a stream.
+
+    .. rubric:: Notes
+
+    **The weights.** Each row's value is held over the interval since the
+    last row with a value in every column the term reads, as in
+    :func:`ewm_mean`, and weighs ``m_i``, the decayed mass of that interval:
+    ``m_i = integral lam**(tau_t - s) ds`` over ``(t_{i-1}, t_i]``, with
+    ``lam = 2 ** (-1 / half_life)``. A stretch's first value is held from
+    before the stretch begins (``half_life / ln 2``), or over one window
+    under ``window_size``, and no value's interval is longer than the
+    window. Under a window a row is in it by its stamp and weighs its whole
+    interval, where :func:`ewm_var` counts only the part of the oldest
+    row's interval inside the window. A row at a repeated stamp holds no
+    interval: it weighs 0, and a row of weight 0 is no row, in no sum, no
+    lag and no window. A row missing a value in a column the term reads is
+    skipped the same way.
+
+    **The moments.** Over the rows of the window, ``z_i`` the legs' values
+    at row ``i`` (a lagged leg's from its partner row), ``W = sum m_i`` and
+    the weighted means ``m = sum m_i z_i / W``:
+
+    .. code-block:: text
+
+        central       mu_a  = sum m_i (z_i - m)^a / W         (a, the powers over the legs)
+        raw           mu'_a = sum m_i z_i^a / W
+        standardized  s_a   = mu_a / prod_j mu_{2 e_j}^(a_j / 2)
+        cumulant      k_p   = mu_p - sum_{j=2..p-2} C(p-1, j-1) k_j mu_{p-j}    (one leg)
+
+    These are computed in one pass by Pébay's update (Pébay, Terriberry,
+    Kolla and Bennett 2016): a row of weight ``w`` after a decay ``lam``
+    merges into ``W``, the means, the normalised central moments ``c_a`` and
+    the ratios ``r_k = sum m_i**k / W**k`` as
+
+    .. code-block:: text
+
+        W'   = lam W + w        a = lam W / W'        b = w / W'        d = z - m
+        c'_a = sum_{beta <= a} C(a, beta) a c_{a-beta} (-b d)^beta  +  b (a d)^a
+        r'_k = a**k r_k + b**k
+        m'   = m + b d
+
+    Every product is at the scale of the spread, so a column at ``1e6``
+    with a spread of 1 keeps its fourth moment. Decay multiplies ``W``
+    alone, so a long gap moves no moment. A window's rows are kept, and its
+    moments read by merging summaries of its parts by the same rule, so a
+    row leaving the window is never subtracted.
+
+    **Bias.** With ``r_k`` as above, the plug-in moments' expectations for
+    rows drawn independently are ``E[c_2] = (1 - r_2) mu_2`` and ``E[c_3] =
+    (1 - 3 r_2 + 2 r_3) mu_3``, and for order 4 a combination of ``mu_4``
+    and ``mu_2**2``. Inverting them gives the unbiased weighted moments of
+    Rimoldini (2014) for reliability weights: at order 2 this is
+    ``V1**2 / (V1**2 - V2)`` times the plug-in, :func:`ewm_var`'s
+    correction, and with every weight 1 they are scipy's ``kstat``,
+    ``skew(bias=False)`` and ``kurtosis(bias=False, fisher=False)``. A term
+    whose denominator keeps no digit is null: one row carrying all the
+    weight, read from the weights and not from a count of rows.
+
+    **Lags.** A lag ``k`` pairs the row at ``t`` with the latest row at or
+    before ``t - k`` that the term learned, as Polars' ``join_asof`` with
+    ``strategy="backward"`` pairs them, and with no row where that one is
+    more than ``lag_tolerance`` before ``t - k``: after a gap longer than the
+    lag a row closes no pair. A pair weighs its closing row's ``m_i``. A
+    clock break starts the window and the lags over. The pairs are centred
+    on their own weighted means, so ``{"x": 1, "x@1": 1}`` under
+    ``kind="standardized"`` is the pairs' Pearson correlation, which differs
+    from statsmodels' ``acf`` (the whole stream's mean over its variance)
+    by a few thousandths on an autoregressive series.
+
+    On a clock that steps by 1 a row and an input with no nulls, the order-2
+    central term is :func:`ewm_var`, and so Polars' ``ewm_var(adjust=False)``,
+    to rounding.
+    """
+    return moments_operator(
+        legs,
+        half_life=half_life,
+        kind=kind,
+        bias=bias,
+        window_size=window_size,
+        lag_tolerance=lag_tolerance,
+        partial=partial,
     )
 
 

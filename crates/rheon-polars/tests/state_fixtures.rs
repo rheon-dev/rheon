@@ -498,6 +498,20 @@ fn windows_quantile_config() -> WindowsConfig {
     .unwrap()
 }
 
+/// The moments operator (task 554): a skew under a window, whose model keeps
+/// its ring of rows, and an autocorrelation at a lag of the clock, whose
+/// model keeps its lag buffer, each a group's model in the state.
+fn windows_moments_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "skew", "tree": ["ewm_moments", ["legs", ["col", "mid"]], {"half_life": 5.0, "window_size": 10.0, "powers": [3], "lags": [0.0], "kind": "standardized", "bias": true}]},
+               {"name": "ac", "tree": ["ewm_moments", ["legs", ["col", "mid"], ["col", "mid"]], {"half_life": 5.0, "powers": [1, 1], "lags": [0.0, 2.0], "kind": "standardized", "bias": true}]}
+             ],
+             "clock": "t", "gap_cap": 50.0}"#,
+    )
+    .unwrap()
+}
+
 /// The same two means on the `Int64` clock, under a fractional `gap_cap`,
 /// and an `increment` of an integer input (task 200; review round 5, B1):
 /// the rows' `off` in the integer form, and the increment's previous value
@@ -1386,6 +1400,14 @@ fn windows_quantile_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_quantile_config(), bytes, input)
 }
 
+fn windows_moments_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_moments_config(), window_input(&frame()))
+}
+
+fn windows_moments_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_moments_config(), bytes, input)
+}
+
 fn windows_int_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_int_config(), window_int_input(&frame()))
 }
@@ -1719,6 +1741,11 @@ fn kinds() -> Vec<Kind> {
             name: "with_windows_quantile",
             first: windows_quantile_first,
             run: windows_quantile_run,
+        },
+        Kind {
+            name: "with_windows_moments",
+            first: windows_moments_first,
+            run: windows_moments_run,
         },
         Kind {
             name: "refresh_time",
@@ -2174,7 +2201,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             ("bank", 15),
             ("checkpoint", 1),
             ("refresh_time", 3),
-            ("windows", 3)
+            ("windows", 4)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
@@ -3067,6 +3094,26 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
                 p.contains(".quant.") && p.contains(".prev.") && v.as_f64().is_some_and(|f| f > 0.0)
             },
         ),
+        // Task 554: a moments operator's term among the core's definitions,
+        // and each group's model of it, a window's ring and a lag's buffer.
+        (
+            "with_windows_moments",
+            "a moments operator's term",
+            |p, v| {
+                p.contains(".moments.")
+                    && p.ends_with(".kind")
+                    && v.as_str() == Some("standardized")
+            },
+        ),
+        ("with_windows_moments", "a group's moments model", |p, v| {
+            p.contains(".model.") && p.ends_with(".w_sum") && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        ("with_windows_moments", "a moments window's ring", |p, v| {
+            p.contains(".model.ring.vals.") && v.as_f64().is_some()
+        }),
+        ("with_windows_moments", "a moments lag's buffer", |p, v| {
+            p.contains(".model.bufs.") && p.contains(".vals.") && v.as_f64().is_some()
+        }),
         ("refresh_time_int", "Instant::Int", |p, _| {
             p.contains(".last_time.") && p.ends_with(".Int")
         }),

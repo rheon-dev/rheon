@@ -567,7 +567,7 @@ other kind emits a standard error per term; the nearest patterns agree:
 and the bank emits `se_coef` after `coef` as a block. Part 4's order, so no
 reference, test or fixture moved.
 
-**Measurements kept as tests.** `window_timing` (ignored; `cargo test
+**Measurements kept as tests.** `window_timing` (the extended tier; `cargo test
 --release -p rheon-core window_timing -- --ignored --nocapture`) times the
 shipped form at these four windows (on the final code: 4.25, 4.32, 4.22
 and 4.70 µs a row, the last while a debug build ran beside it); `the_two_stacks_read_the_windows_rows`
@@ -585,10 +585,49 @@ The state is complete in `rheon-core`. Not built yet:
   and `window_size`, `max_state_bytes`), its output fields (`<term>`,
   `se_<term>`, `weight_sum`) and the CLI's TOML;
 - the Python builder and the window operator `rp.ewm_moments` beside
-  `ewm_mean` and `ewm_var` (Q1), with docstrings stating the update;
+  `ewm_mean` and `ewm_var` (Q1), with docstrings stating the update (built:
+  section 13);
 - the tests through the bank: the oracles of section 2 (scipy, statsmodels,
   Polars' `rolling_skew` and `rolling_kurtosis`), chunk invariance, and
   zero-weight rows through the stream's shared clock (`model_contract.rs`
   runs the kind already);
 - the reader-facing docs (the outputs and models guides, CHANGELOG,
   `llms.txt`), `docs/EXTENDING.md`'s list, bench cells and budgets.
+
+## 13. The window operator (part 7)
+
+`rp.ewm_moments(legs, *, half_life, kind, bias, window_size, lag_tolerance,
+partial)`, one term a call (the coordinator, 2026-11-23: "one call, one
+term"), `legs` the spec's leg map (`{"x": 1, "x@1": 1}`). The formula node
+is `["ewm_moments", ["legs", leg, ...], {powers, lags, kind, bias, ...}]`, a
+leg any element-wise formula of the row, so the tree walkers on both sides
+read the legs' columns with no change.
+
+**The weight** (the coordinator, 2026-11-23: "weights each row by its held
+interval, as ewm_var does"): a row learned with every column the term reads
+weighs `m_i`, the decayed mass of the interval since the last such row
+(`KernelDef::mass_held_in`, `ewm_var`'s function), the stretch's first held
+from before it (`h / ln 2`) or over one window, and no interval longer than
+the window. Each group keeps an `EwmMoments` a moments operator
+(`windows/moments.rs`), fed `learn_at(x, d, m_i, stamp)` with `d` and the
+stamp from the raw clocks, and read with `read_at(stamp)` once the stamp's
+rows are in (`closed = "right"` only; the other three are refused). A row at
+a repeated stamp holds no interval and is no row; a clock break starts the
+model over, as every window. Under a window a row is in it by its stamp and
+weighs its whole interval, where `ewm_var` counts only the oldest row's part
+inside the window: the model's window is the spec kind's, so the two give
+the same bits.
+
+**Held to.** `tests/test_ewm_moments_operator.py`: the spec kind fed the same
+weights, a row of weight 0 at each row's stamp reading it after the row,
+equal to the bit over 15 cases (orders to 6, every kind, unbiased orders 3
+and 4, a cross term, clock lags with and without a tolerance, windows, an
+even window); numpy's weighted averages over the window's rows within 1e-10;
+the as-of pairs written out within 1e-11; `ewm_var` within 1e-12 (bias on
+and off); chunks of 1, 7 and 64 rows and a state saved at five rows to the
+bit, with groups, repeated stamps, nulls and gaps past `gap_cap`.
+`windows/moments.rs`'s tests hold the core to the model fed by hand, to the
+bit. The plain row loop takes no core with a moments operator. Windows state
+fixture `with_windows_moments` freezes a window's ring and a clock lag's
+buffer; the state's version is unchanged, the field absent from a core
+without the operator.

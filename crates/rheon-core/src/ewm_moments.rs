@@ -1643,6 +1643,46 @@ impl EwmMoments {
         out
     }
 
+    /// One row learned at `stamp`, `d_clock` after the last row learned, of
+    /// weight `w`, with nothing read: the learning half of
+    /// [`crate::OnlineModel::step`], for a caller that reads the moments
+    /// after the row (a window operator, closed on the right) and not before
+    /// it. The row goes in as `step` takes it, the window slid to `stamp`
+    /// first, so the state is the one `step` leaves, to the bit.
+    pub fn learn_at(&mut self, x: &[f64], d_clock: f64, w: f64, stamp: Stamp) {
+        if let Some(p) = &mut self.place {
+            p.hand(stamp);
+        }
+        let now = self.place.as_mut().map(|p| p.step(d_clock));
+        if self.ring.is_some() {
+            self.slide(now);
+        }
+        let lam = self.cfg.decay.factor(d_clock);
+        self.learn(x, now, lam, w);
+    }
+
+    /// Every output read at `stamp`, a window of the clock with its edge
+    /// there: [`Self::predict_at`]'s values, with no row to score.
+    pub fn read_at(&self, stamp: Stamp) -> Vec<Result<f64, Withheld>> {
+        if self.cfg.windowed() {
+            let now = self.place.as_ref().map(|_| stamp);
+            let (sums, _) = self.window_at(now);
+            self.read_sums(&sums)
+        } else {
+            self.read_sums(&self.sums)
+        }
+    }
+
+    /// A state read back from its serialized form, as a state file's is:
+    /// the settings checked and what they give the state formed again.
+    ///
+    /// # Errors
+    ///
+    /// Settings `new` refuses, or vectors at the wrong widths.
+    pub fn reloaded(self) -> Result<Self, String> {
+        self.checked().map_err(|e| e.to_string())
+    }
+
     /// Term `i`'s value, or why it is withheld.
     pub fn value(&self, i: usize) -> Result<f64, Withheld> {
         if self.cfg.windowed() {

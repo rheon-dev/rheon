@@ -30,8 +30,8 @@ use crate::spec::{ClockPolicy, SessionGapSpec, clock_cfg_of};
 use crate::stream::usable;
 use crate::windows::{ChunkKeys, session_hashes};
 use crate::windows::{
-    Closed, Direction, KernelDef, OpDef, OpKind, Partial, Peek, PlainRows, Refusal, RowIn, Stat,
-    Windows,
+    Closed, Direction, KernelDef, MomentsDef, OpDef, OpKind, Partial, Peek, PlainRows, Refusal,
+    RowIn, Stat, Windows,
 };
 use crate::wrong_type::{Refused, wrong_type};
 
@@ -489,6 +489,43 @@ struct Plan {
     /// Every span a kernel reads, with its parameter's name, for the scale
     /// check.
     spans: Vec<(&'static str, Span)>,
+    /// The moments operators' terms, in operator order.
+    moments: Vec<MomentsDef>,
+}
+
+/// A moments operator's term on `kernel`: each leg's formula an input of
+/// the core's (`input_of`), the legs' columns the distinct inputs among
+/// them, and the model's settings, which the model checks here.
+fn moments_def(
+    name: &str,
+    kernel: &KernelDef,
+    t: &crate::formula::MomentsNode,
+    legs: &[Node],
+    input_of: &mut dyn FnMut(&Node) -> Result<usize, Refused>,
+) -> Result<MomentsDef, Refused> {
+    let mut inputs: Vec<usize> = Vec::new();
+    let mut powers = Vec::with_capacity(legs.len());
+    for ((leg, lag), &power) in legs.iter().zip(&t.lags).zip(&t.powers) {
+        let i = input_of(leg)?;
+        let col = match inputs.iter().position(|&x| x == i) {
+            Some(c) => c,
+            None => {
+                inputs.push(i);
+                inputs.len() - 1
+            }
+        };
+        powers.push((rheon_core::MomentLeg::lagged(col, lag.value()), power));
+    }
+    let term = rheon_core::MomentTerm {
+        name: "ewm_moments".into(),
+        powers,
+        kind: t.kind,
+        bias: t.bias(),
+    };
+    let cfg = MomentsDef::cfg_of(kernel, term, t.lag_tolerance.as_ref().map(Span::value));
+    cfg.validate()
+        .map_err(|e| format!("{WHO}: {name}: {}", e.trim_start_matches("ewm_moments: ")))?;
+    Ok(MomentsDef { op: 0, inputs, cfg })
 }
 
 fn dtype_of<'a>(input: &'a Schema, column: &str) -> &'a DataType {
@@ -597,6 +634,7 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         bare: None,
         increments: Vec::new(),
         spans: Vec::new(),
+        moments: Vec::new(),
     };
     // Increments first: an operator's input may read them.
     for f in &config.formulas {
@@ -687,38 +725,53 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             let ki = match p.kernels.iter().position(|k| *k == kernel) {
                 Some(i) => i,
                 None => {
-                    p.kernels.push(kernel);
+                    p.kernels.push(kernel.clone());
                     p.kernels.len() - 1
                 }
             };
-            let input_i = match p.inputs.iter().position(|n| *n == *op.input) {
-                Some(i) => i,
-                None => {
-                    let dtype = dtypes_of(
-                        &incr_schema,
-                        vec![op.input.to_expr(&resolve_incr).alias("@t")],
-                    )
+            let mut input_of = |node: &Node| -> Result<usize, Refused> {
+                if let Some(i) = p.inputs.iter().position(|n| n == node) {
+                    return Ok(i);
+                }
+                let dtype = dtypes_of(&incr_schema, vec![node.to_expr(&resolve_incr).alias("@t")])
                     .map_err(|e| {
                         format!(
                             "{WHO}: {}: Polars cannot compute {}'s input ({e}). Check that the \
-                             input reads columns of the right type.",
+                         input reads columns of the right type.",
                             f.name,
                             op.kind.name()
                         )
                     })?;
-                    let dtype = dtype.get("@t").expect("aliased").clone();
-                    if !numeric(&dtype) {
-                        return Err(Refused::wrong_type(format!(
-                            "{WHO}: {}: {}'s input must be a number, but it is {}. Cast \
-                             the input to a number, such as with .cast(pl.Float64).",
-                            f.name,
-                            op.kind.name(),
-                            crate::arrow::dtype_name(&dtype)
-                        )));
-                    }
-                    p.inputs.push((*op.input).clone());
-                    p.inputs.len() - 1
+                let dtype = dtype.get("@t").expect("aliased").clone();
+                if !numeric(&dtype) {
+                    return Err(Refused::wrong_type(format!(
+                        "{WHO}: {}: {}'s input must be a number, but it is {}. Cast \
+                         the input to a number, such as with .cast(pl.Float64).",
+                        f.name,
+                        op.kind.name(),
+                        crate::arrow::dtype_name(&dtype)
+                    )));
                 }
+                p.inputs.push(node.clone());
+                Ok(p.inputs.len() - 1)
+            };
+            let input_i = match (&op.moments, &*op.input) {
+                (Some(t), Node::Call(_, legs)) => {
+                    let def = moments_def(f.name.as_str(), &kernel, t, legs, &mut input_of)?;
+                    for lag in t.lags.iter().filter(|l| l.value() != 0.0) {
+                        p.spans.push(("lag", lag.clone()));
+                    }
+                    if let Some(tol) = &t.lag_tolerance {
+                        p.spans.push(("lag_tolerance", tol.clone()));
+                    }
+                    let first = def.inputs[0];
+                    p.moments.push(MomentsDef {
+                        op: p.ops.len(),
+                        ..def
+                    });
+                    first
+                }
+                _ => input_of(&op.input)?,
             };
             p.ops.push(OpDef {
                 kernel: ki,
@@ -1309,7 +1362,8 @@ impl WindowsRun {
             )
             .map_err(|e| format!("{WHO}: {e}"))?
         } else {
-            Windows::new(p.kernels, p.ops, cfg).map_err(|e| format!("{WHO}: {e}"))?
+            Windows::with_moments(p.kernels, p.ops, p.moments, cfg)
+                .map_err(|e| format!("{WHO}: {e}"))?
         };
         core.set_grouped(config.group.is_some());
         let inputs = if p.inputs.is_empty() {
@@ -2873,6 +2927,7 @@ impl WindowsRun {
         }
         if file.core.kernels() != run.core.kernels()
             || file.core.ops() != run.core.ops()
+            || file.core.moments() != run.core.moments()
             || same_clock(file.core.clock_cfg()) != same_clock(run.core.clock_cfg())
         {
             return Err(format!(

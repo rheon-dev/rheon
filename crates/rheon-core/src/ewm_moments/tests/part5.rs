@@ -109,7 +109,7 @@ fn the_two_stacks_read_the_windows_rows() {
 /// after a warm-up of three windows, and the gap to a fresh fold at the
 /// end.
 #[test]
-#[ignore = "a measurement: cargo test --release -p rheon-core window_timing -- --ignored --nocapture"]
+#[ignore = "extended: a measurement; cargo test --release -p rheon-core window_timing -- --ignored --nocapture prints it"]
 fn window_timing() {
     for w in [1_000usize, 10_000] {
         for clocked in [false, true] {

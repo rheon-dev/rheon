@@ -151,6 +151,7 @@ from rheon.polars._frame import (
 from rheon.polars._warnings import UnstableWarning
 from rheon.polars.ops import (
     ewm_mean,
+    ewm_moments,
     ewm_quantile,
     ewm_rate,
     ewm_std,
@@ -166,6 +167,7 @@ from rheon.polars.ops import (
 
 __all__ = [
     "ewm_mean",
+    "ewm_moments",
     "ewm_quantile",
     "ewm_rate",
     "ewm_std",

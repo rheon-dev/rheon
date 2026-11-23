@@ -18,8 +18,9 @@
 //! `["alias", x, name]`. An operator is `[name, input, {params}]` for
 //! `ewm_mean`, `rewm_mean`, `ewm_sum`, `rewm_sum`, `ewm_rate`,
 //! `rewm_rate`, `ewm_var` and `ewm_std` (these two with a `bias` too),
-//! `ewm_quantile` and `rewm_quantile` (with a `quantile`, the level), and
-//! `["increment", input]`. Nothing else is read, so a
+//! `ewm_quantile` and `rewm_quantile` (with a `quantile`, the level),
+//! `["ewm_moments", ["legs", leg, ...], {params}]` (a leg's power and lag
+//! among its parameters), and `["increment", input]`. Nothing else is read, so a
 //! `shift`, a `cum_sum`, a rolling window or an aggregation -- which would
 //! depend on the chunking (hard rule 3) -- is refused by name, at build time.
 
@@ -108,6 +109,56 @@ pub struct OpNode {
     /// A quantile's level (`ewm_quantile`, `rewm_quantile`), in (0, 1);
     /// `None` for every other operator.
     pub quantile: Option<f64>,
+    /// The term of `ewm_moments`, whose input is `["legs", ...]`, a formula
+    /// a leg; `None` for every other operator.
+    pub moments: Option<Box<MomentsNode>>,
+}
+
+/// The term an `ewm_moments` operator reads (task 554): each leg's power
+/// and lag, in the order of its input's legs, the statistic and its form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MomentsNode {
+    /// Each leg's power, a whole number from 1.
+    pub powers: Vec<u32>,
+    /// Each leg's lag: 0 for the row itself, else clock units, or a
+    /// duration on a temporal clock (rows on a row-count clock).
+    pub lags: Vec<Span>,
+    pub kind: rheon_core::MomentKind,
+    /// The plug-in form (`true`) or the unbiased one; `None` for the
+    /// statistic's default.
+    pub bias: Option<bool>,
+    /// How far before `t - lag` a lag's as-of row may sit; `None` for the
+    /// lag itself.
+    pub lag_tolerance: Option<Span>,
+}
+
+/// The words `kind` takes, the default first.
+const MOMENT_KINDS: [(&str, rheon_core::MomentKind); 4] = [
+    ("central", rheon_core::MomentKind::Central),
+    ("raw", rheon_core::MomentKind::Raw),
+    ("standardized", rheon_core::MomentKind::Standardized),
+    ("cumulant", rheon_core::MomentKind::Cumulant),
+];
+
+impl MomentsNode {
+    /// The term's order: the sum of its powers.
+    pub fn order(&self) -> u32 {
+        self.powers.iter().sum()
+    }
+
+    /// The form the term is read in: `bias` as given, else the statistic's
+    /// default (a variance unbiased, every other order the plug-in).
+    pub fn bias(&self) -> bool {
+        self.bias
+            .unwrap_or_else(|| rheon_core::MomentTerm::default_bias(self.kind, self.order()))
+    }
+
+    fn kind_name(&self) -> &'static str {
+        MOMENT_KINDS
+            .iter()
+            .find(|(_, k)| *k == self.kind)
+            .map_or("central", |(n, _)| n)
+    }
 }
 
 impl OpNode {
@@ -146,6 +197,27 @@ impl OpNode {
         }
         if let Some(q) = self.quantile {
             m.insert("quantile".into(), json!(q));
+        }
+        if let Some(t) = &self.moments {
+            m.remove("min_samples");
+            m.insert("powers".into(), json!(t.powers));
+            m.insert(
+                "lags".into(),
+                Value::Array(
+                    t.lags
+                        .iter()
+                        .map(|l| serde_json::to_value(l).expect("a span is JSON"))
+                        .collect(),
+                ),
+            );
+            m.insert("kind".into(), json!(t.kind_name()));
+            m.insert("bias".into(), json!(t.bias()));
+            if let Some(tol) = &t.lag_tolerance {
+                m.insert(
+                    "lag_tolerance".into(),
+                    serde_json::to_value(tol).expect("a span is JSON"),
+                );
+            }
         }
         Value::Object(m)
     }
@@ -201,6 +273,7 @@ const WINDOW_HEADS: &[&str] = &[
     "ewm_var",
     "ewm_std",
     "ewm_quantile",
+    "ewm_moments",
     "rewm_mean",
     "rewm_sum",
     "rewm_rate",
@@ -419,8 +492,10 @@ impl Node {
                     partial: None,
                     bias: false,
                     quantile: None,
+                    moments: None,
                 }))
             }
+            "ewm_moments" => moments_from_json(args),
             name if OpKind::parse(name).is_some() => {
                 let kind = OpKind::parse(name).expect("checked");
                 arity(2)?;
@@ -446,6 +521,7 @@ impl Node {
                     partial: None,
                     bias: false,
                     quantile: None,
+                    moments: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);
@@ -586,7 +662,7 @@ impl Node {
                  and these operators within one row: {}. If the operator is misspelled, correct it; \
                  otherwise, write the formula with the operators listed.",
                 {
-                    let (last, rest) = WINDOW_HEADS.split_last().expect("ten heads");
+                    let (last, rest) = WINDOW_HEADS.split_last().expect("eleven heads");
                     format!("{} and {last}", rest.join(", "))
                 },
                 accepted_heads()
@@ -858,6 +934,229 @@ pub struct Formula {
     pub tree: Node,
 }
 
+/// `["ewm_moments", ["legs", leg, ...], {params}]`: a term of moments of
+/// the legs, each an element-wise formula of the row, with each leg's power
+/// and lag among the parameters.
+fn moments_from_json(args: &[Value]) -> Result<Node, String> {
+    const NAME: &str = "ewm_moments";
+    if args.len() != 2 {
+        return Err(format!(
+            "formula: \"ewm_moments\" takes 2 arguments, its legs and its parameters, but it \
+             has {}. Give it [\"legs\", ...] and an object of parameters.",
+            args.len()
+        ));
+    }
+    let legs = match &args[0] {
+        Value::Array(items)
+            if items.len() > 1 && items.first() == Some(&Value::String("legs".into())) =>
+        {
+            items[1..]
+                .iter()
+                .map(|v| {
+                    let n = Node::from_json(v)?;
+                    n.no_window_operator(NAME)?;
+                    Ok(n)
+                })
+                .collect::<Result<Vec<_>, String>>()?
+        }
+        other => {
+            return Err(format!(
+                "{NAME}: its first argument is its legs, a list headed by \"legs\" with a \
+                 formula a leg, such as [\"legs\", [\"col\", \"x\"]], but it is {}. \
+                 Give the legs in that form.",
+                short(other)
+            ));
+        }
+    };
+    let Value::Object(params) = &args[1] else {
+        return Err(format!(
+            "{NAME}: it takes its parameters as an object, but it has {}. Give them as an \
+             object, such as {{\"half_life\": 10, \"powers\": [3]}}.",
+            short(&args[1])
+        ));
+    };
+    let mut op = OpNode {
+        kind: OpKind::EwmMoments,
+        input: Box::new(Node::Call("legs".into(), legs)),
+        half_life: None,
+        window_size: None,
+        closed: Closed::Right,
+        min_samples: 1,
+        partial: None,
+        bias: false,
+        quantile: None,
+        moments: None,
+    };
+    let mut powers: Option<Vec<u32>> = None;
+    let mut lags: Option<Vec<Span>> = None;
+    let mut kind = rheon_core::MomentKind::Central;
+    let mut bias = None;
+    let mut lag_tolerance = None;
+    for (k, v) in params {
+        match k.as_str() {
+            "half_life" => op.half_life = Some(span_of(NAME, k, v)?),
+            "window_size" => op.window_size = Some(span_of(NAME, k, v)?),
+            "closed" => {
+                if v.as_str() != Some("right") {
+                    return Err(format!(
+                        "{NAME}: closed must be \"right\", but it is {}. The moments of a \
+                         window are read once its stamp's rows are all in. Set closed to \
+                         \"right\", or leave it out.",
+                        short(v)
+                    ));
+                }
+            }
+            "partial" => {
+                op.partial = Some(Partial::parse(v.as_str().unwrap_or("")).ok_or_else(|| {
+                    format!(
+                        "{NAME}: partial must be \"keep\", \"null\" or \"drop\", but it is \
+                         {}. Set partial to one of those words.",
+                        short(v)
+                    )
+                })?);
+            }
+            "powers" => {
+                let bad = || {
+                    format!(
+                        "{NAME}: powers must be a list of whole numbers from 1, one a leg, but \
+                         it is {}. Give each leg's power, such as [3].",
+                        short(v)
+                    )
+                };
+                let Value::Array(items) = v else {
+                    return Err(bad());
+                };
+                powers = Some(
+                    items
+                        .iter()
+                        .map(|p| {
+                            p.as_u64()
+                                .and_then(|p| u32::try_from(p).ok())
+                                .filter(|&p| p >= 1)
+                        })
+                        .collect::<Option<Vec<u32>>>()
+                        .ok_or_else(bad)?,
+                );
+            }
+            "lags" => {
+                let Value::Array(items) = v else {
+                    return Err(format!(
+                        "{NAME}: lags must be a list of spans of the clock, one a leg, 0 for \
+                         the row itself, but it is {}. Give each leg's lag, such as [0, 1].",
+                        short(v)
+                    ));
+                };
+                let mut out = Vec::with_capacity(items.len());
+                for l in items {
+                    let span = span_of(NAME, "a lag", l)?;
+                    if !(span.value() >= 0.0 && span.value().is_finite()) {
+                        return Err(format!(
+                            "{NAME}: a lag must be finite and at least 0, but it is {span}. \
+                             Give 0 for the row itself, or a span of the clock back."
+                        ));
+                    }
+                    out.push(span);
+                }
+                lags = Some(out);
+            }
+            "kind" => {
+                kind = MOMENT_KINDS
+                    .iter()
+                    .find(|(n, _)| v.as_str() == Some(n))
+                    .map(|(_, k)| *k)
+                    .ok_or_else(|| {
+                        format!(
+                            "{NAME}: kind must be \"central\", \"raw\", \"standardized\" or \
+                             \"cumulant\", but it is {}. Set kind to one of those words.",
+                            short(v)
+                        )
+                    })?;
+            }
+            "bias" => {
+                bias = Some(v.as_bool().ok_or_else(|| {
+                    format!(
+                        "{NAME}: bias must be true or false, but it is {}. Set bias to true or \
+                         false, or leave it out for the statistic's own default.",
+                        short(v)
+                    )
+                })?);
+            }
+            "lag_tolerance" => {
+                let span = span_of(NAME, k, v)?;
+                if !(span.value() >= 0.0 && span.value().is_finite()) {
+                    return Err(format!(
+                        "{NAME}: lag_tolerance must be finite and at least 0, but it is \
+                         {span}. Give how far before t - lag the row a lag pairs with may sit."
+                    ));
+                }
+                lag_tolerance = Some(span);
+            }
+            other => {
+                return Err(format!(
+                    "{NAME}: {other:?} is not one of its parameters, which are half_life, \
+                     window_size, closed, partial, powers, lags, kind, bias and lag_tolerance. \
+                     Remove {other:?}, or correct its name."
+                ));
+            }
+        }
+    }
+    let n = match &*op.input {
+        Node::Call(_, legs) => legs.len(),
+        _ => 0,
+    };
+    let powers = powers.ok_or_else(|| {
+        format!(
+            "{NAME}: powers is not set, but each leg needs its power. Give powers, a whole \
+             number from 1 a leg, such as [3]."
+        )
+    })?;
+    let lags = lags.unwrap_or_else(|| vec![Span::Units(0.0); n]);
+    if powers.len() != n || lags.len() != n {
+        return Err(format!(
+            "{NAME}: it has {n} legs, but {} powers and {} lags. Give one power and one lag a \
+             leg.",
+            powers.len(),
+            lags.len()
+        ));
+    }
+    let Some(h) = &op.half_life else {
+        return Err(format!(
+            "{NAME}: half_life is not set, but every window operator needs it. Set half_life to \
+             a positive number of clock units or a duration, or to inf for no decay."
+        ));
+    };
+    if h.value().is_nan() || h.value() <= 0.0 {
+        return Err(format!(
+            "{NAME}: half_life must be above 0, but it is {h}. Set half_life to a positive \
+             number of clock units or a duration, or to inf for no decay."
+        ));
+    }
+    match &op.window_size {
+        Some(w) if !(w.value().is_finite() && w.value() > 0.0) => {
+            return Err(format!(
+                "{NAME}: window_size must be finite and above 0, but it is {w}. Set window_size \
+                 to a finite positive number of clock units or a duration."
+            ));
+        }
+        None if h.value().is_infinite() => {
+            return Err(format!(
+                "{NAME}: half_life is inf and window_size is not set, so a value held from \
+                 before the first row would have no finite weight. Set window_size, or give \
+                 half_life a finite value."
+            ));
+        }
+        _ => {}
+    }
+    op.moments = Some(Box::new(MomentsNode {
+        powers,
+        lags,
+        kind,
+        bias,
+        lag_tolerance,
+    }));
+    Ok(Node::Op(op))
+}
+
 fn span_of(name: &str, key: &str, v: &Value) -> Result<Span, String> {
     serde_json::from_value::<Span>(v.clone()).map_err(|_| {
         format!(
@@ -1084,7 +1383,7 @@ mod tests {
         }
         assert_eq!(
             WINDOW_HEADS.len(),
-            10,
+            11,
             "every window operator but increment"
         );
         let err = Node::from_json(&json!(["shift", ["col", "a"]])).unwrap_err();

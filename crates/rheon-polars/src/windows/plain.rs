@@ -407,6 +407,9 @@ pub(super) struct Parts<'a> {
     pub(super) n_wait: u32,
     /// Forward kernels: each row of a run waits on them too.
     pub(super) n_forward: u32,
+    /// The moments operators' terms: none in the plain loop, which a core
+    /// with one never takes.
+    pub(super) moments: &'a [MomentsDef],
 }
 
 /// A group a pass over several has met.
@@ -485,7 +488,7 @@ impl Windows {
     #[doc(hidden)]
     pub fn set_plain_run(&mut self, on: bool) {
         self.scratch();
-        self.derived.off = !on;
+        self.derived.off = !on || !self.moments.is_empty();
     }
 
     /// Rows the plain loop has taken: for a test to see that it ran.
@@ -717,6 +720,7 @@ impl Windows {
             scratch_sum,
             n_wait,
             n_forward: *n_forward,
+            moments: &[],
         };
         let cols = Cols {
             whole: Whole::Slices(rows.values),
@@ -1004,6 +1008,7 @@ impl Windows {
             scratch_sum,
             n_wait,
             n_forward: *n_forward,
+            moments: &[],
         };
         let n_inputs = rows.values.len();
         let mut xg = std::mem::take(&mut m.xg);
