@@ -341,5 +341,9 @@ impl OnlineModel for DistFit {
     }
 }
 
+// Student's t, compiled for its tests until the estimator that steps it
+// lands (PLAN 558, part 5).
+#[cfg(test)]
+mod student_t;
 #[cfg(test)]
 mod tests;

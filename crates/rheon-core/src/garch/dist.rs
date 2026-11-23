@@ -27,6 +27,10 @@
 //! both branches, so `log f` is continuous in it and no term comes from the
 //! moving kink. At `λ = 0` the `ν` score is the t's, term for term.
 //!
+//! The fit steps `ν` on `ln(ν − 2)` (the variance exists, `ν > 2`). The
+//! online distribution fit's t is the same family in scipy's `loc`/`scale`
+//! form, any `ν > 0`, stepped on `η = 1/ν`, where `η = 0` is the normal.
+//!
 //! `ln Γ` and `ψ` are `crate::special`'s (std has neither), on the `libm`
 //! crate as the rest of this model's math is.
 
