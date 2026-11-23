@@ -419,7 +419,7 @@ row count (PLAN 552).
 |---|---|---|---|
 | the row's own value is withheld (not started, `not_identified`, under `min_weight`, `ar`'s ring empty, `kalman`'s readiness) | every kind | every horizon | the row's own reason |
 | a start's likelihood ratio against the static model below `χ²` at 0.999 (`garch`: 2, 3; GARCH-X: `2 + q`; GAS: 2, 3 with leverage) | `garch`, GARCH-X, `gas` | the start's fit, as now | `not_identified` |
-| the start's information singular in `π` (an input constant or collinear over the start's rows: its smallest eigenvalue, scaled to unit diagonal, at the rounding) | GARCH-X | the start | `not_identified`, naming the inputs |
+| the start's information singular in `π` (an input constant or collinear over the start's rows: scaled to unit diagonal, a Cholesky pivot at or under 10⁻¹⁰ of its largest diagonal entry, section 18) | GARCH-X | the start | `not_identified`, naming the inputs |
 | the start's Newton decrement over 10⁻⁶ nats | `garch`, `gas` | as now | as now |
 | the filter not contracting: `E ln abs(φ − 2(κ + κ* sgn(−y))(ν + 1) b(1 − b)) ≥ 0` (t; `∂u/∂λ = −2(ν + 1) b(1 − b)`, the normal's `−2z²`) read from 64 bins of `b` (of `z²`) and the sign at the current parameters (Blasques et al. 2018), held below 0 by cutting the step, as EGARCH's guard | `gas` log-scale | the step | (no withholding) |
 | a variance forecast that does not exist: `E e^{a(z² − 1)}` needs `a < ½`, so `κ + abs(κ*) < ¼` | `gas` normal log-scale | held in the admissible set (question 7) | (no withholding) |
@@ -673,7 +673,7 @@ Gauss-Newton matrix carry it with no other change.
   unit diagonal, has its smallest eigenvalue (cyclic Jacobi, checked
   against faer's) compared with `COLLINEAR = 1e-10`; at or under it the
   start waits as `not_identified`, keeping the fit, as a start under the LR
-  cut does. An input constant over the start is exactly collinear with `ω`
+  cut does. (Replaced in part 5 by the relative pivot rule, section 18.) An input constant over the start is exactly collinear with `ω`
   (its sensitivity is the same recursion), measured at 1e-16 to 1e-15. The
   bank does not yet name the inputs in a notice (section 11's "naming the
   inputs"): the wait is reported only by `withheld_reason`.
@@ -724,3 +724,50 @@ should rewrite the two with the set. The bank fixtures' frozen frames carry
 `darwin-arm64`'s: both are for the Mac to regenerate (`PRINT_STATE_FIXTURES=1
 cargo test -p rheon-polars --test state_fixtures`, `scripts/oracles.py
 rerun`).
+
+## 18. Part 5: the collinearity rule and the shaped second opinion (2026-11-23)
+
+**The collinearity cut is the library's relative pivot rule.** Section 17's
+fixed `COLLINEAR = 1e-10` on the smallest eigenvalue (a Jacobi solve of its
+own, `linalg::min_eigenvalue`, now gone) is replaced by the rule the
+library's other definite solves read: a Cholesky pivot `L_ii²` at or under
+a floor times the matrix's largest diagonal entry is no fit (`expectile`'s
+`chol_solve` at 1e-12 of its largest diagonal; `hawkes`'s `G` through
+`solve::solve_definite_in` at 1e-10 of the pivot's own diagonal, the same
+comparison on a unit diagonal). `garch` reads it as `linalg::pivots_clear`
+on the information scaled to a unit diagonal, floor `fit::PIVOT_FLOOR =
+1e-10` (a condition number over 1e10), in plain scalar arithmetic in a
+fixed order, so the decision is the same on every platform. The scaling
+stays: unscaled, `ω`'s diagonal (`~ n/ω²`, 1e16 a row at returns of 1e-4)
+would put every dimensionless parameter's pivot under the floor.
+
+Every pivot of a positive definite matrix is at least its least
+eigenvalue, so a start the old cut fitted is fitted under the new rule;
+only a start whose least eigenvalue is under 1e-10 but whose pivots all
+clear it could move, and no test, golden or fixture has one (every
+`garch` and GARCH-X unit test, golden and fixture unchanged). Measured on
+the unit tests' starts: every well-conditioned start clears a floor of
+1e-6; the constant input, and two inputs one twice the other exactly or to
+1e-7 of its level, clear no floor down to 1e-16. Tests:
+`linalg::tests::a_pivot_is_read_against_the_largest_diagonal_entry` (the
+2×2 at `1 − r²` either side of the floor at three scales, the floor a share
+of the largest diagonal and not the pivot's own, the last pivot against
+faer's LU), `tests_x::a_collinear_pair_of_inputs_waits_and_a_well_conditioned_pair_starts`.
+
+**The t and skewed t with inputs, against `scipy`.**
+`tests/test_second_opinion_garch_x.py` writes the standardized skewed t
+(Hansen's, `λ = 0` the t) from the definition `garch::dist` states, its
+`ln Γ` from `scipy.special.gammaln`, and holds it to `scipy.stats.t` at
+`λ = 0` (1e-13) and to unit mass, mean 0 and variance 1 by `quad` with a
+skew (1e-8). `scipy.optimize`'s SLSQP maximizes the likelihood with the
+input term (`ν ∈ [2.05, 300]`, `|λ| ≤ 0.99`, GARCH's or GJR's set) on the
+start's 2,000 rows, for GARCH and GJR with the t and GARCH with the skewed
+t (the forms that take inputs and a t). Measured, seeds 111 to 151 of each:
+the bank 2.3e-12 to 5.0e-11 nats above scipy's stop and every parameter
+within 9.7e-6 of a standard error (test bound 1e-4, seed 111); two of the
+fifteen starts waited (the t at seed 131, under GARCH and GJR) and are not
+in the test. The test lives beside the normal case's in the GARCH-X second
+opinion file, not in `tests/test_second_opinion.py`, where no `garch`
+check is. `rugarch`'s `std` and `sstd` were not run: R is in no CI job of
+`main`, and `sstd` is Fernández and Steel's skew, not Hansen's, so it would
+be a different density, not a second opinion of this one.
