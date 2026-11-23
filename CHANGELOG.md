@@ -744,6 +744,14 @@ model that only the new build has is listed as an addition and passes.
   `restart` are river's as before, since a row's first cut flags it and
   empties the window; under `restart=False`, or once `max_width` drops a
   bucket, a flag can come where it did not.
+- **A `kswin` ring or a `hawkes` window too large for its bytes to be
+  counted is refused** (review 2026-11-23, HAWKES-1). Their bytes were
+  multiplied out in a `u64` that wrapped: `window_size = 2^61` read 48
+  bytes and passed `max_state_bytes`, then asked for the ring at the first
+  row; `stat_size = 2^63` doubled to 0 and passed the check that the ring
+  holds two samples; and `hawkes`' `window_events = 2^59` read 72 bytes. A
+  debug build panicked on each. The bytes now stop at the largest `u64`,
+  which no cap takes.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with

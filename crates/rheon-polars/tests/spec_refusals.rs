@@ -1205,6 +1205,18 @@ fn a_hawkes_window_past_its_state_cap_is_refused() {
         &["max_state_bytes must be above 0"],
     );
     refused(&spec(r#"{"type": "hawkes"}"#), &["needs its kernels"]);
+    // A window whose bytes pass what a `u64` holds is refused, not wrapped
+    // into a few bytes that pass the cap (review 2026-11-23, HAWKES-1:
+    // `window_events = 2^59` read 72 bytes).
+    for w in [1u64 << 59, 1 << 60, u64::MAX >> 1] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "hawkes", "kernel_decays": [1.0, 5.0], "window_events": {w}}}"#
+            )),
+            &["max_state_bytes of 262144"],
+        );
+    }
+    assert_eq!(rheon_core::Hawkes::state_bytes(1, 1, Some(usize::MAX)), u64::MAX);
     refused(
         r#"{"name": "m", "model": {"type": "hawkes", "kernel_decays": [1.0]},
             "targets": ["a"], "features": ["x"], "half_life": 10.0}"#,

@@ -179,9 +179,10 @@ impl Kswin {
     }
 
     /// The bytes a KSWIN's state holds: its ring, `8 W`, its generator and
-    /// its settings.
+    /// its settings. Past what a `u64` counts it reads `u64::MAX`, which no
+    /// cap takes.
     pub fn state_bytes(window_size: usize) -> u64 {
-        8 * window_size as u64 + 48
+        (window_size as u64).saturating_mul(8).saturating_add(48)
     }
 
     /// The values in the ring, oldest first.
@@ -195,7 +196,10 @@ impl Kswin {
     /// and stops the scan short), and a level in range.
     pub fn sound(&self) -> bool {
         self.stat_size >= 1
-            && self.window_size >= 2 * self.stat_size
+            && self
+                .stat_size
+                .checked_mul(2)
+                .is_some_and(|two_r| self.window_size >= two_r)
             && self.window.len() <= self.window_size
             && self.window.iter().all(|v| v.is_finite())
             && self.alpha > 0.0

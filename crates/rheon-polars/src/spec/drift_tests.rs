@@ -315,3 +315,22 @@ fn a_spec_without_a_kind_writes_neither_key() {
     let text = serde_json::to_string(&s).unwrap();
     assert!(text.contains(r#""drift_options":{"clock":3}"#), "{text}");
 }
+
+/// A ring or a sample so large that its bytes, or twice the sample, pass
+/// what a `u64` holds is refused, not wrapped into a small number that
+/// passes the cap (review 2026-11-23, HAWKES-1: `window_size = 2^61` read
+/// 48 bytes, and `stat_size = 2^63` doubled to 0).
+#[test]
+fn a_ring_past_what_its_bytes_can_count_is_refused() {
+    for w in [1u64 << 61, 1 << 62, u64::MAX / 8 + 1, u64::MAX] {
+        let err = refused(&format!(
+            r#", "drift_kind": "kswin", "drift_options": {{"window_size": {w}}}"#
+        ));
+        assert!(err.contains("past max_state_bytes"), "{w}: {err}");
+    }
+    let err = refused(
+        r#", "drift_kind": "kswin", "drift_options": {"window_size": 100, "stat_size": 9223372036854775808}"#,
+    );
+    assert!(err.contains("at least twice"), "{err}");
+    assert_eq!(rheon_core::Kswin::state_bytes(usize::MAX), u64::MAX);
+}

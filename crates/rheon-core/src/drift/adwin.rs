@@ -164,8 +164,13 @@ impl Adwin {
     /// file's terms: each level `M + 1` buckets of two numbers and a count,
     /// and thirteen numbers of settings and totals.
     pub fn state_bytes(max_width: u64, max_buckets: usize) -> u64 {
-        let per_level = 16 * (max_buckets as u64 + 1) + 8;
-        Self::levels_bound(max_width, max_buckets) * per_level + 104
+        let per_level = (max_buckets as u64)
+            .saturating_add(1)
+            .saturating_mul(16)
+            .saturating_add(8);
+        Self::levels_bound(max_width, max_buckets)
+            .saturating_mul(per_level)
+            .saturating_add(104)
     }
 
     /// The rows in the window.

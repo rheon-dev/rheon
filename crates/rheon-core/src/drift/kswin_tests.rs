@@ -237,6 +237,9 @@ fn a_restored_levels_shape_is_checked_at_both_ends() {
     assert!(with(&|k| k.stat_size = 50) && !with(&|k| k.stat_size = 51));
     assert!(with(&|k| k.window = (0..100).map(f64::from).collect()));
     assert!(!with(&|k| k.window = (0..101).map(f64::from).collect()));
+    // Twice a sample past what a `usize` holds is no ring's size (review
+    // 2026-11-23, HAWKES-1).
+    assert!(!with(&|k| k.stat_size = usize::MAX / 2 + 1));
 }
 
 /// The largest gap can fall at the far end of the walk: the samples alternate
