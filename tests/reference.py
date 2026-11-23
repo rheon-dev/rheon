@@ -1602,7 +1602,6 @@ def _band_movement(mean, C, z, ridge, fit_intercept, standardize, over=None):
     the kept features), `u'A^-1 u` through the origin (u the scaled raw
     values), A the solve's own system, ridge included. A kept column with no
     spread on which the row deviates moves it without bound."""
-    kt = len(mean)
     if fit_intercept:
         Cf = C[1:, 1:]
         dev = (z - mean)[1:]
