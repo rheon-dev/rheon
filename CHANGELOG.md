@@ -891,6 +891,25 @@ model that only the new build has is listed as an addition and passes.
   decay too.
   Terms whose powers sum to 2 (`[2]`, `[1, 1]`) do not move. Moves:
   `power_variation.*`.
+- **`huber` and `quantile` under `standardize=True` take their scales
+  from every row** (review 2026-11-23, REG-18; the user's decision,
+  "Scales from every row"). The scales came from the moments of the rows
+  the fit's own Gram holds. Under `quantile` that Gram holds only the rows
+  inside the smoothing band, near the fit, so a 0/1 feature that is
+  constant on them had no variance there. It was dropped, and its
+  coefficient held at 0: `y = 2x₀ + 20x₁` with two outliers fit
+  `[16.67, 0.29, 0.0]`. Each target now keeps its features' moments over
+  every row it is learned on with a positive weight, decayed as the
+  model's own, and its scales are read from them, refreshed at each row
+  that moves its band. The case above fits as the unstandardized fit and
+  statsmodels' `QuantReg` do, within the band's half-width. A feature is
+  dropped only where it has no spread over those rows (and none in the
+  band). Under `huber` the scales move from the Huber-weighted rows' to
+  every row's, which moves its fit by the ridge's share. A state of schema
+  71 or earlier loads and starts the moments at its first row after the
+  load, reading the band's scales until they give one (rule 5's
+  twenty-ninth exception). Moves: `huber.*`, `quantile.*`.
+
 - **Weights too small to square in a double count as rows** (review
   2026-11-23, REG-12). Kish's count `(Σw)² / Σw²` is the same at every
   scale of the weights, but below about `1.5·10^-154` each `w²` was 0.
@@ -1879,6 +1898,18 @@ model that only the new build has is listed as an addition and passes.
   416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.
 
 ### Performance
+
+- **`huber`'s and `quantile`'s scales from every row cost 0.3% to 2.7%
+  a row and `8(3k + 2)` bytes a target under `standardize=True`** (review
+  2026-11-23, REG-18), for a feature that varies anywhere in the stream
+  never dropped from the fit. Each target keeps its features' moments over
+  every row it learns, an `O(k)` update a row, and the `k` scales its band
+  last moved at. Measured on macOS arm64 (release, load 5, best of 3 over
+  200,000 rows, the moments' update beside `quantile`'s step): 6.7 ns a row
+  at 4 features against the step's 251 ns, 12.9 at 20 against 1,394, and
+  18.8 at 50 against 6,783. The state grows by 112, 496 and 1,216 bytes a
+  target for the moments, and by `8k` for the scales. Unstandardized,
+  neither is kept.
 
 - **A model bank row reads each model's kind once an instance, not once a
   row** (PLAN 548 to 553). The checks a few kinds add to a row (the start a

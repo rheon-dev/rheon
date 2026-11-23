@@ -241,3 +241,50 @@ def test_the_refit_budget_gives_up_the_later_groups_and_counts_them():
         mine = out.filter(pl.col("g") == str(g))["m"]
         like = (out_free if g < 3 else out_off).filter(pl.col("g") == str(g))["m"]
         assert mine.equals(like, null_equal=True), g
+
+
+def test_a_binary_feature_keeps_its_coefficient_under_standardize():
+    """Review 2026-11-23, REG-18 (the user's decision: "Scales from every
+    row"). ``y = 2 x0 + 20 x1``, ``x1`` in {0, 1}, two outliers, refit on
+    the last of 80 rows. The smoothing band held ``x1`` constant, so under
+    ``standardize`` its variance there was 0, it was dropped and its
+    coefficient read 0 (the fit ``[16.67, 0.29, 0.0]``). Standardized by its
+    spread over every row, the fit is statsmodels' ``QuantReg`` and the
+    unstandardized fit at the data, within the band's half-width ``h``.
+
+    The bound is the band's half-width ``h``, the resolution the smoothed
+    loss works at: it is the check loss outside ``|r| < h`` and within
+    ``h/4`` of it inside, so its fitted line may sit up to about ``h`` from
+    the exact one at the rows the exact fit interpolates. It is checked at
+    every row of the data. ``h = max(eps, (k/n)**0.4)`` times the residual
+    scale, here ``(3/80)**0.4`` times 1.4826 times the median absolute
+    residual of ``QuantReg``'s fit, 0.0023."""
+    rng = np.random.default_rng(41)
+    n = 80
+    x0 = rng.uniform(-1, 1, n)
+    x1 = (rng.uniform(-1, 1, n) > 0).astype(float)
+    y = 2 * x0 + 20 * x1 + 0.01 * rng.laplace(size=n)
+    y[[5, 11]] += 500.0
+    df = pl.DataFrame({"x0": x0, "x1": x1, "y": y})
+    design = sm.add_constant(np.column_stack([x0, x1]))
+    qr = sm.QuantReg(y, design).fit(q=0.5)
+    h = (3 / n) ** 0.4 * 1.4826 * np.median(np.abs(y - design @ qr.params))
+    fits = {}
+    for standardize in (False, True):
+        spec = rp.spec.quantile(
+            "m",
+            targets=["y"],
+            features=["x0", "x1"],
+            quantile=0.5,
+            standardize=standardize,
+            half_life=float("inf"),
+            quantile_refit_rows=n,
+            coef_every=1,
+        )
+        out = rp.ModelBank([spec]).fit_predict(df)["m"].struct.field("coef").to_list()
+        fits[standardize] = np.array(out[-1], dtype=float)
+    for standardize, b in fits.items():
+        gap = np.abs(design @ (b - qr.params)).max()
+        assert gap <= h, (standardize, b, qr.params, gap, h)
+    assert np.abs(design @ (fits[True] - fits[False])).max() <= h
+    assert fits[True][2] == pytest.approx(20.0, abs=0.01)

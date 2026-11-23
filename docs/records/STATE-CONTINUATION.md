@@ -748,3 +748,42 @@ was updated, to what its state, loaded and continued, now reports
 (16.398890461263203 where it froze 16.411711841536942), beside the current
 set's regenerated `bank_label_clock`. Its state bytes are untouched, so the
 count of exceptions in CLAUDE.md's rule 5 does not move.
+
+A twenty-ninth, the user's (2026-11-23, review 2026-11-23's REG-18:
+"Exception 29: start fresh", after the decision "Scales from every row"):
+under `standardize=True`, `huber` and `quantile` read each feature's scale
+from its moments over every row the target is learned on with a positive
+weight, decayed as the model's own (`Robust::spread`), refreshed at each
+row that moves the target's band (`Robust::spread_scale`), where they read
+them from the band's Gram. The band holds only the rows near the fit under
+the quantile loss, and a 0/1 feature constant on them had no variance
+there, was dropped and held at 0 (the review's case read `[16.67, 0.29,
+0.0]` where the unstandardized fit and statsmodels' `QuantReg` read `[0.0,
+2.0, 20.0]`). A state of schema 71 or earlier holds no such moments, and
+the rows before its save are not in it, so no loader can build them. It
+loads with them empty and starts them at its first row after the load;
+until they give a feature a scale (a usable variance over the rows since
+the load, at least two rows apart), the feature's scale is the band's, as
+it was, and a feature with neither is dropped, as it was. So its
+continuation is neither the old build's nor this build's from the same
+rows. No layout of any other model moved, and there is no schema bump of
+its own (schema 72 was unreleased). The kept `huber*` and `quantile*`
+files of `v61/` to `v71/` (`rheon-core`) are held by `started_fresh`
+(`started_fresh_rule`, `crates/rheon-core/tests/state_fixtures.rs`): each
+loads; re-saves bytes that load back the same, with every key the kept
+state held, in the current fixture's layout key for key, each target's
+moments empty under `standardize` (no weight, every moment 0) and its
+scales none, and neither without it; and continues with `weight_sum` to the
+bit of its frozen continuation, each prediction a number where the frozen
+one is, and within `STARTED_FRESH_BOUND`, 2e-5 relative to the larger of
+the frozen value and 1, of it (measured: at most 1.56e-5, `huber`'s fourth
+row after the load in every kept set; 3,540 of 4,554 predictions moved,
+every null kept). The kept bank files of `rheon-polars` that hold such a
+model, `bank_diagnosed`, `bank_refit` and `bank_refit_64` of `v61/` to
+`v71/`, are held by `STARTED_FRESH` there: each loads, saves bytes that load
+back the same, and its frames go on to the bit of its frozen ones (the
+fresh start moves no cell of them over their rows). The current fixtures
+of every `huber*` and `quantile*` case and of those three banks were
+regenerated, and `the_scales_from_every_row_are_written` holds the new form:
+each standardized case's moments holding weight and its scales written,
+neither in a case without `standardize`.
