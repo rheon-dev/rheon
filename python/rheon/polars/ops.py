@@ -1291,7 +1291,9 @@ def ewm_profile(
     period: float | Duration,
     buckets: int,
     half_life: float | Duration,
-    stat: Literal["mean", "var", "std"] = "mean",
+    stat: Literal["mean", "var", "std", "quantile"] = "mean",
+    quantile: float | None = None,
+    window_size: float | Duration | None = None,
     closed: Literal["right", "left", "both", "none"] = "right",
     offset: float | Duration | None = None,
     weight: str | pl.Expr | None = None,
@@ -1299,7 +1301,7 @@ def ewm_profile(
     bias: bool | None = None,
     max_state_bytes: int | None = None,
 ) -> pl.Expr:
-    """The EW mean or spread of a column at each row's phase of a period.
+    """The EW mean, spread or quantile of a column at each row's phase of a period.
 
     Use it for a seasonal profile, such as the typical volatility of each
     hour of the trading day, or the delay of each hour of a transit day, read
@@ -1330,16 +1332,30 @@ def ewm_profile(
         little. A number of clock units, a duration on a temporal clock, or
         ``float("inf")`` for no decay.
     ``stat``
-        ``"mean"`` (the default), ``"var"`` or ``"std"``: the weighted mean
-        of each phase's rows, or their weighted variance about it, or its
-        root.
+        ``"mean"`` (the default), ``"var"``, ``"std"`` or ``"quantile"``:
+        the weighted mean of each phase's rows, their weighted variance about
+        it, its root, or their weighted quantile at ``quantile``, read from
+        :func:`ewm_quantile`'s sketch of each phase's values, within 0.78%
+        of the exact one.
+    ``quantile``
+        For ``stat="quantile"`` only: the level, above 0 and below 1, such as
+        0.5 for the median.
+    ``window_size``
+        The most a row may be behind the row read and still count, in the
+        same units as ``half_life``: rows further back leave their phase, as
+        they leave :func:`ewm_mean`'s window. ``None`` (the default) keeps
+        every row, decayed. Under a window each phase keeps its rows in the
+        window, so the state grows with them.
     ``closed``
         ``"right"`` (the default), as :func:`ewm_mean` and Polars'
         ``rolling_*_by`` take it: a row reads the profile with every row of
         its own stamp in it, its own included, known once the stamp closes.
         ``"left"`` leaves the stamp's rows out, so the value is known as the
-        stamp arrives, from earlier rows alone. ``"both"`` reads as ``"right"``
-        and ``"none"`` as ``"left"``.
+        stamp arrives, from earlier rows alone. Under a ``window_size``,
+        ``"left"`` and ``"both"`` keep a row exactly ``window_size`` back,
+        ``"right"`` and ``"none"`` do not; ``"both"`` holds the stamp's rows
+        as ``"right"`` does and ``"none"`` leaves them out as ``"left"``
+        does.
     ``offset``
         Where the period starts after its default start: a duration such as
         ``"9h30m"`` for a session that opens at 09:30, or ``"6d"`` for a
@@ -1362,15 +1378,21 @@ def ewm_profile(
     ``max_state_bytes``
         The most bytes one group's profile may hold, a whole number from 1
         to 64 MiB. Default ``None``, 262,144 (256 KB). A profile holds 56
-        bytes a bucket, so the default holds 4,681 buckets; a call past its
-        cap is refused before it reads a row, naming its bytes.
+        bytes a bucket, so the default holds 4,681 buckets, and a call whose
+        buckets pass its cap is refused before it reads a row, naming their
+        bytes. Under a ``window_size`` each row in a phase's window adds 80
+        bytes (104 for a quantile), and a quantile's sketches 8 bytes a
+        sketch bucket: the run warns once, as a :class:`~rheon.RheonWarning`,
+        when a row takes a group past half of the cap, and refuses the row
+        that would take it past the cap, naming the row.
 
     .. rubric:: Returns
 
     A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as a
     column, one profile per group. It is null where the row's phase holds
-    fewer rows than ``min_samples``, so a phase no row has reached is null;
-    for a variance, also where one row's weight fills the phase.
+    fewer rows than ``min_samples``, inside the window where there is one,
+    so a phase no row has reached is null; for a variance, also where one
+    row's weight fills the phase.
 
     .. rubric:: Raises
 
@@ -1382,9 +1404,12 @@ def ewm_profile(
         :class:`~rheon.WrongTypeError`), or ``bias`` is not ``True`` or
         ``False``.
     ``ValueError``
-        When ``period`` or ``half_life`` is not above 0, ``buckets`` is below
-        1, ``stat`` or ``closed`` is not one of its words, ``min_samples`` is
-        below 1, or ``max_state_bytes`` is below 1 or above 64 MiB.
+        When ``period``, ``half_life`` or ``window_size`` is not above 0,
+        ``buckets`` is below 1, ``stat`` or ``closed`` is not one of its
+        words, ``quantile`` is not above 0 and below 1, ``min_samples`` is
+        below 1, or ``max_state_bytes`` is below 1 or above 64 MiB. The run
+        raises an error naming the row that would take a group's state past
+        ``max_state_bytes``.
 
     .. rubric:: Examples
 
@@ -1444,9 +1469,16 @@ def ewm_profile(
     The variance is ``M2 / V1`` times ``V1² / (V1² − V2)`` unless ``bias``.
     A bucket decays by the clock whether or not a row falls in it.
 
-    **The state** is a group's buckets, ``56 · buckets`` bytes, whatever the
-    stream's length. The oracle is Polars' ``group_by`` over the phase on
-    one chunk, with the decayed weights written out.
+    **A window** keeps each phase's rows in two stacks, the oldest with the
+    moments of the rows newer than it, so a row leaves by dropping its own,
+    never by a subtraction that would leave a rounding behind; a quantile's
+    sketches leave the same way, as :func:`ewm_quantile`'s do.
+
+    **The state** is a group's buckets, ``56 · buckets`` bytes, and under a
+    window the rows inside it, whatever the stream's length. The oracle is
+    Polars' ``group_by`` over the phase on one chunk, with the decayed
+    weights written out, and for a quantile NumPy's weighted
+    ``inverted_cdf`` of each phase's values.
     """
     return profile(
         input,
@@ -1454,6 +1486,8 @@ def ewm_profile(
         buckets=buckets,
         half_life=half_life,
         stat=stat,
+        quantile=quantile,
+        window_size=window_size,
         closed=closed,
         offset=offset,
         weight=weight,

@@ -558,6 +558,9 @@ fn profile_def(
     let half_life = op.half_life.clone().expect("checked when read");
     p.spans.push(("half_life", half_life.clone()));
     p.spans.push(("period", params.period.clone()));
+    if let Some(w) = &op.window_size {
+        p.spans.push(("window_size", w.clone()));
+    }
     if let Some(o) = &params.offset {
         p.spans.push(("offset", o.clone()));
     }
@@ -601,6 +604,8 @@ fn profile_def(
         cap: params
             .max_state_bytes
             .unwrap_or(crate::windows::PROFILE_STATE_BYTES),
+        window: op.window_size.as_ref().map(phase),
+        quantile: op.quantile,
     };
     if def.bytes() > def.cap {
         return Err(format!(
@@ -2582,10 +2587,57 @@ impl WindowsRun {
         Ok(Some(values))
     }
 
+    /// A profile operator by the formulas it is in, as an error names it.
+    fn profile_name(&self, op: usize) -> String {
+        let out = self.core.ops().len() + op;
+        let key = self
+            .k
+            .columns
+            .iter()
+            .find(|(_, i)| *i == out)
+            .map(|(k, _)| k);
+        let names: Vec<&str> = self
+            .k
+            .config
+            .formulas
+            .iter()
+            .filter(|f| key.is_some_and(|k| f.tree.operators().iter().any(|o| hidden(o) == *k)))
+            .map(|f| f.name.as_str())
+            .collect();
+        format!("ewm_profile (in {})", names.join(", "))
+    }
+
+    /// The first row to take a profile past half of its `max_state_bytes`,
+    /// once a run, as the warning a caller raises.
+    pub fn take_warning(&mut self) -> Option<String> {
+        let (op, bytes, cap) = self.core.take_state_warning()?;
+        Some(format!(
+            "{WHO}: {} holds {bytes} bytes for one group, past half of its max_state_bytes of \
+             {cap}; a group whose state grows to twice that will be refused. Raise \
+             max_state_bytes, or shorten window_size.",
+            self.profile_name(op)
+        ))
+    }
+
     /// A row the core refused, as the error naming it.
     fn refusal(&self, r: Refusal, _chunk_base: u64) -> PolarsError {
         let row = |seq: u64| seq - self.run_base + self.skipped;
         match r {
+            Refusal::StateCap {
+                seq,
+                op,
+                bytes,
+                cap,
+            } => {
+                let name = self.profile_name(op);
+                polars_err!(ComputeError:
+                    "{WHO}: {name} would hold {bytes} bytes for one group at row {} (counting \
+                     from 0), past its max_state_bytes of {cap}: its buckets, and under a \
+                     window_size the rows each keeps, or a quantile's sketches. Raise \
+                     max_state_bytes, or shorten window_size, or take fewer buckets.",
+                    row(seq)
+                )
+            }
             Refusal::Backwards {
                 seq,
                 back,

@@ -97,6 +97,7 @@ def oracle(
     min_samples: int = 1,
     bias: bool = False,
     weight: str | None = "w",
+    window: float | None = None,
 ) -> pl.DataFrame:
     """Per row: the decayed weighted mean, variance and standard deviation
     of its group's earlier rows in its bucket -- a join on the group and
@@ -109,10 +110,17 @@ def oracle(
         "g", "b", "t", "x", "w"
     )
     j = d.select("i", "g", "b", "t").join(members, on=["g", "b"], how="inner")
-    later = (
-        pl.col("t_right") <= pl.col("t") if closed == "right" else pl.col("t_right") < pl.col("t")
-    )
-    j = j.filter(later).with_columns(
+    near = closed in ("right", "both")
+    later = pl.col("t_right") <= pl.col("t") if near else pl.col("t_right") < pl.col("t")
+    j = j.filter(later)
+    if window is not None:
+        # In integer nanoseconds, as the operator decides the edge: a float
+        # age can land a last bit past a whole window.
+        far = closed in ("left", "both")
+        ns = (pl.col("t") - pl.col("t_right")).dt.total_nanoseconds()
+        edge = round(window * 1e9)
+        j = j.filter(ns <= edge if far else ns < edge)
+    j = j.with_columns(
         wd=pl.col("w") * pl.lit(2.0).pow(-age / half_life)
         if np.isfinite(half_life)
         else pl.col("w")
@@ -406,3 +414,191 @@ def test_the_refusals():
             half_life=10.0,
             embargo=5.0,
         )
+
+
+# ---- a window, and a quantile ------------------------------------------------
+
+
+@pytest.mark.parametrize("closed", ["right", "left", "both", "none"])
+def test_a_window_drops_the_rows_further_back(closed: str):
+    """Under ``window_size`` each phase reads its rows inside the window
+    alone, the far end kept under ``"left"`` and ``"both"``: Polars'
+    ``group_by`` over the phase of the rows inside it, and ``min_samples``
+    counted inside it."""
+    df = stream(16, seed=21)
+    kw = {
+        "period": "1d",
+        "buckets": 24,
+        "half_life": "2d",
+        "window_size": "3d",
+        "weight": "w",
+        "closed": closed,
+    }
+    out = run(
+        df,
+        m=rp.ewm_profile("x", **kw),
+        v=rp.ewm_profile("x", stat="var", **kw),
+        m3=rp.ewm_profile("x", min_samples=3, **kw),
+    )
+    bucket = phase_ns(pl.col("t"), "1d") * 24 // DAY
+    args: dict[str, Any] = {
+        "bucket": bucket,
+        "age": TIME_AGE,
+        "half_life": 2 * 86_400.0,
+        "closed": closed,
+        "window": 3 * 86_400.0,
+    }
+    want = oracle(df, **args)
+    close(out["m"], want["mean"])
+    close(out["v"], want["var"])
+    close(out["m3"], oracle(df, min_samples=3, **args)["mean"])
+
+
+def test_a_window_on_a_row_exactly_its_span_back():
+    """A row exactly ``window_size`` back is in the window under ``"left"``
+    and ``"both"`` and out under ``"right"`` and ``"none"``, decided in
+    integers on an integer clock."""
+    df = pl.DataFrame({"t": [0, 24, 48, 72], "g": ["a"] * 4, "x": [1.0, 2.0, 4.0, 8.0]})
+    kw = {"period": 24, "buckets": 1, "half_life": float("inf"), "window_size": 48}
+    out = run(
+        df,
+        r=rp.ewm_profile("x", closed="right", **kw),
+        b=rp.ewm_profile("x", closed="both", **kw),
+        _kw={"gap_cap": 1000},
+    )
+    assert out["r"].to_list() == [1.0, 1.5, 3.0, 6.0]
+    assert np.allclose(out["b"].to_list(), [1.0, 1.5, 7.0 / 3.0, 14.0 / 3.0], rtol=1e-15)
+
+
+def weighted_quantile(
+    df: pl.DataFrame, q: float, bucket: pl.Expr, h: float, closed: str, window: float | None
+) -> list[float | None]:
+    """NumPy's weighted ``inverted_cdf`` of each row's phase's earlier
+    rows, the decayed weights written out."""
+    d = df.with_row_index("i").with_columns(b=bucket)
+    m = d.filter(pl.col("x").is_not_null() & (pl.col("w") > 0)).select("g", "b", "t", "x", "w")
+    j = d.select("i", "g", "b", "t").join(m, on=["g", "b"], how="inner")
+    near = closed in ("right", "both")
+    j = j.filter(pl.col("t_right") <= pl.col("t") if near else pl.col("t_right") < pl.col("t"))
+    if window is not None:
+        far = closed in ("left", "both")
+        ns = (pl.col("t") - pl.col("t_right")).dt.total_nanoseconds()
+        edge = round(window * 1e9)
+        j = j.filter(ns <= edge if far else ns < edge)
+    j = j.with_columns(wd=pl.col("w") * pl.lit(2.0).pow(-TIME_AGE / h))
+    out: list[float | None] = [None] * df.height
+    for (i,), part in j.group_by("i"):
+        x, w = part["x"].to_numpy(), part["wd"].to_numpy()
+        out[int(i)] = float(np.quantile(x, q, method="inverted_cdf", weights=w))
+    return out
+
+
+#: ``ewm_quantile``'s sketch: within ``tanh(1/128)`` of the exact quantile,
+#: relatively.
+ALPHA = float(np.tanh(1 / 128))
+
+
+@pytest.mark.parametrize(
+    ("closed", "window"), [("right", None), ("left", None), ("right", 3.0), ("both", 3.0)]
+)
+def test_the_quantile_is_numpys_weighted_inverted_cdf_within_the_sketch(
+    closed: str, window: float | None
+):
+    df = stream(14, seed=22).with_columns(x=pl.col("x") + 20.0)
+    kw: dict[str, Any] = {
+        "period": "1d",
+        "buckets": 12,
+        "half_life": "2d",
+        "weight": "w",
+        "closed": closed,
+    }
+    if window is not None:
+        kw["window_size"] = f"{int(window)}d"
+    for q in (0.1, 0.5, 0.9):
+        out = run(df, q=rp.ewm_profile("x", stat="quantile", quantile=q, **kw))
+        want = weighted_quantile(
+            df,
+            q,
+            phase_ns(pl.col("t"), "1d") * 12 // DAY,
+            2 * 86_400.0,
+            closed,
+            None if window is None else window * 86_400.0,
+        )
+        got = out["q"].to_list()
+        for i, (a, b) in enumerate(zip(got, want, strict=True)):
+            assert (a is None) == (b is None), (q, i, a, b)
+            if a is not None and b is not None:
+                assert abs(a - b) <= ALPHA * abs(b) * (1 + 1e-9), (q, i, a, b)
+
+
+def windowed() -> dict[str, pl.Expr]:
+    kw = {"period": "1d", "buckets": 6, "half_life": "2d", "weight": "w", "window_size": "2d"}
+    return {
+        "m": rp.ewm_profile("x", **kw),
+        "q": rp.ewm_profile("x", stat="quantile", quantile=0.7, closed="left", **kw),
+        "s": rp.ewm_profile(
+            "x", stat="quantile", quantile=0.3, period="1d", buckets=6, half_life="1d"
+        ),
+    }
+
+
+@pytest.mark.parametrize("rows", [1, 3, 50, 10_000])
+def test_a_window_and_a_quantile_change_nothing_by_chunking(rows: int):
+    df = stream(9, seed=23, zone="Europe/Amsterdam")
+    kw = {"clock": "t", "gap_cap": "30d", "group": "g"}
+    one = rp.stream.with_windows(df.lazy(), **windowed(), **kw, chunk_size=100_000).collect()
+    out = rp.stream.with_windows(df.lazy(), **windowed(), **kw, chunk_size=rows).collect()
+    assert out.equals(one)
+
+
+def test_a_window_and_a_quantile_save_and_load_at_every_stamp(tmp_path: Path):
+    df = stream(4, seed=24)
+    kw = {"clock": "t", "gap_cap": "30d", "group": "g"}
+    one = rp.stream.with_windows(df, **windowed(), **kw)
+    starts = [i for i in range(1, df.height) if df["t"][i] != df["t"][i - 1]]
+    for at in starts[::4]:
+        state = tmp_path / f"w{at}.state"
+        first = rp.stream.with_windows(df[:at], **windowed(), **kw, save_state=state)
+        second = rp.stream.with_windows(df[at:], **windowed(), **kw, load_state=state)
+        assert pl.concat([first, second]).equals(one), at
+
+
+def test_a_window_bounds_the_state(tmp_path: Path):
+    """Under a window the state holds the rows inside it: a run of 6 days and
+    one of 120 save states of about one size."""
+    sizes = []
+    for days in (6, 120):
+        df = stream(days, seed=25)
+        state = tmp_path / f"w{days}.state"
+        rp.stream.with_windows(
+            df, **windowed(), clock="t", gap_cap="30d", group="g", save_state=state
+        )
+        sizes.append(state.stat().st_size)
+    assert sizes[1] < 2 * sizes[0], sizes
+
+
+def test_a_window_past_half_its_cap_warns_once_and_past_it_is_refused():
+    """One bucket of 56 bytes, and 80 bytes a row in the window: a cap of
+    400 holds four rows; the second takes it past half, which warns once a
+    run, and a fifth row inside the window is refused by row. Rows that
+    leave the window free their bytes."""
+    from rheon import RheonWarning
+
+    def rows(n: int, step: float = 1.0) -> pl.DataFrame:
+        return pl.DataFrame({"t": [step * i for i in range(n)], "g": ["a"] * n, "x": [1.0] * n})
+
+    kw: dict[str, Any] = {
+        "period": 100.0,
+        "buckets": 1,
+        "half_life": 50.0,
+        "window_size": 10.0,
+        "max_state_bytes": 400,
+    }
+    with pytest.warns(RheonWarning, match="past half of its max_state_bytes of 400") as caught:
+        run(rows(4), m=rp.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})
+    assert len([w for w in caught if issubclass(w.category, RheonWarning)]) == 1
+    with pytest.raises(
+        Exception, match=r"would hold 456 bytes for one group at row 4 .*max_state_bytes of 400"
+    ):
+        run(rows(5), m=rp.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})
+    run(rows(20, step=20.0), m=rp.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})

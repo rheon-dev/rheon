@@ -183,7 +183,7 @@ impl OpNode {
             }
             m.insert("buckets".into(), json!(p.buckets));
             m.insert("stat".into(), json!(p.stat.name()));
-            if p.stat != ProfileStat::Mean {
+            if matches!(p.stat, ProfileStat::Var | ProfileStat::Std) {
                 m.insert("bias".into(), json!(self.bias));
             }
             if let Some(w) = &p.weight {
@@ -956,11 +956,16 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
     for (k, v) in params {
         match k.as_str() {
             "half_life" => op.half_life = Some(span_of(name, k, v)?),
-            "window_size" => {
-                return Err(format!(
-                    "{name}: window_size is not yet taken: a profile decays by its half_life \
-                     alone. Remove window_size."
-                ));
+            "window_size" => op.window_size = Some(span_of(name, k, v)?),
+            "quantile" => {
+                op.quantile =
+                    Some(v.as_f64().filter(|q| *q > 0.0 && *q < 1.0).ok_or_else(|| {
+                        format!(
+                            "{name}: quantile must be a number above 0 and below 1, but it is {}. \
+                         Set quantile within that range, such as 0.5 for the median.",
+                            short(v)
+                        )
+                    })?);
             }
             "closed" => {
                 op.closed = Closed::parse(v.as_str().unwrap_or("")).ok_or_else(|| {
@@ -992,8 +997,8 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
             "stat" => {
                 stat = v.as_str().and_then(ProfileStat::parse).ok_or_else(|| {
                     format!(
-                        "{name}: stat must be \"mean\", \"var\" or \"std\", but it is {}. \
-                         Set stat to one of those words.",
+                        "{name}: stat must be \"mean\", \"var\", \"std\" or \"quantile\", but \
+                         it is {}. Set stat to one of those words.",
                         short(v)
                     )
                 })?;
@@ -1042,8 +1047,8 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
             other => {
                 return Err(format!(
                     "{name}: {other:?} is not one of its parameters, which are period, buckets, \
-                     half_life, stat, closed, offset, weight, min_samples, bias and \
-                     max_state_bytes. Remove {other:?}, or correct its name."
+                     half_life, window_size, stat, quantile, closed, offset, weight, \
+                     min_samples, bias and max_state_bytes. Remove {other:?}, or correct its name."
                 ));
             }
         }
@@ -1086,7 +1091,30 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
              period is cut into. Set buckets, such as 24 for the hours of a day."
         ));
     };
-    if bias.is_some() && stat == ProfileStat::Mean {
+    if let Some(w) = &op.window_size
+        && !(w.value().is_finite() && w.value() > 0.0)
+    {
+        return Err(format!(
+            "{name}: window_size must be finite and above 0, but it is {w}. Set window_size to \
+             a finite positive number of clock units or a duration."
+        ));
+    }
+    match (stat, op.quantile) {
+        (ProfileStat::Quantile, None) => {
+            return Err(format!(
+                "{name}: quantile is not set, but stat=\"quantile\" needs it. Set quantile to a \
+                 number above 0 and below 1, such as 0.5 for the median."
+            ));
+        }
+        (s, Some(_)) if s != ProfileStat::Quantile => {
+            return Err(format!(
+                "{name}: quantile is given, but only stat=\"quantile\" takes it. Remove \
+                 quantile, or set stat to \"quantile\"."
+            ));
+        }
+        _ => {}
+    }
+    if bias.is_some() && matches!(stat, ProfileStat::Mean | ProfileStat::Quantile) {
         return Err(format!(
             "{name}: bias is given, but only a variance or a standard deviation takes it. \
              Remove bias, or set stat to \"var\" or \"std\"."

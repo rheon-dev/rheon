@@ -697,7 +697,7 @@ def operator(
 PROFILE_STATE_BYTES_CEILING = 64 << 20
 
 #: What a profile reads of each phase.
-PROFILE_STATS = ("mean", "var", "std")
+PROFILE_STATS = ("mean", "var", "std", "quantile")
 
 
 def profile(
@@ -707,6 +707,8 @@ def profile(
     buckets: Any,
     half_life: Any,
     stat: Any = "mean",
+    quantile: Any = None,
+    window_size: Any = None,
     closed: Any = "right",
     offset: Any = None,
     weight: Any = None,
@@ -735,6 +737,8 @@ def profile(
     }
     if offset is not None:
         params["offset"] = _offset(who, offset)
+    if window_size is not None:
+        params["window_size"] = _span(who, "window_size", window_size, inf_ok=False)
     if closed not in ("right", "left", "both", "none"):
         raise ValueError(
             f'{who}: closed must be "right", "left", "both" or "none", but it is {closed!r}. '
@@ -752,11 +756,27 @@ def profile(
     params["buckets"] = int(buckets)
     if stat not in PROFILE_STATS:
         raise ValueError(
-            f'{who}: stat must be "mean", "var" or "std", but it is {stat!r}. Set stat to one '
-            f"of those words."
+            f'{who}: stat must be "mean", "var", "std" or "quantile", but it is {stat!r}. Set '
+            f"stat to one of those words."
         )
     params["stat"] = stat
-    if stat != "mean":
+    if stat == "quantile":
+        if isinstance(quantile, bool) or not isinstance(quantile, numbers.Real):
+            raise TypeError(
+                f'{who}: quantile must be a number, as stat="quantile" needs one, but it is of '
+                f"type {type(quantile).__name__}. Set quantile to a number above 0 and below 1."
+            )
+        if not 0.0 < float(quantile) < 1.0:
+            raise ValueError(
+                f"{who}: quantile must be above 0 and below 1, but it is {quantile!r}. Set "
+                f"quantile within that range, such as 0.5 for the median."
+            )
+        params["quantile"] = float(quantile)
+    elif quantile is not None:
+        raise TypeError(
+            f'{who}: quantile is given, but only stat="quantile" takes it. Leave out quantile.'
+        )
+    if stat in ("var", "std"):
         if bias is None:
             bias = False
         if not isinstance(bias, bool):

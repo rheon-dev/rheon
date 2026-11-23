@@ -1351,6 +1351,15 @@ impl PyWindows {
 
     /// The end of the input: every row still held, its open forward windows
     /// null. The GIL is released for it, as for `feed`.
+    /// The warning a profile raised, once a run, when a row took its state
+    /// past half of its `max_state_bytes`; taken by the call.
+    fn take_warning(slf: &Bound<'_, Self>) -> PyResult<Option<String>> {
+        let mut this = slf
+            .try_borrow_mut()
+            .map_err(|_| windows_busy("take_warning"))?;
+        Ok(this.inner.take_warning())
+    }
+
     fn finish(slf: &Bound<'_, Self>) -> PyResult<PyDataFrame> {
         let mut this = slf.try_borrow_mut().map_err(|_| windows_busy("finish"))?;
         let run = &mut this.inner;

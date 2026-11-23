@@ -324,7 +324,7 @@ impl Sketch {
     /// newest: the decay since the anchor kept in `scale` and folded into
     /// the buckets every 64 halvings, the end octaves of negligible weight
     /// dropped then where `prune`.
-    fn add_newest(&mut self, k: &KernelDef, key: Key, tau: f64, prune: bool) {
+    fn add_newest(&mut self, k: &KernelDef, key: Key, tau: f64, prune: bool, w: f64) {
         if self.anchor.is_nan() {
             self.scale = 1.0;
         } else {
@@ -334,16 +334,16 @@ impl Sketch {
             }
         }
         self.anchor = tau;
-        self.add(key, 1.0 / self.scale);
+        self.add(key, w / self.scale);
     }
 
     /// A value at `tau`, at or after the anchor, seen from the anchor: a
     /// forward window's rows, weighed from the oldest.
-    fn add_from_anchor(&mut self, k: &KernelDef, key: Key, tau: f64) {
+    fn add_from_anchor(&mut self, k: &KernelDef, key: Key, tau: f64, w: f64) {
         if self.anchor.is_nan() {
             self.anchor = tau;
         }
-        self.add(key, k.discount(tau - self.anchor));
+        self.add(key, w * k.discount(tau - self.anchor));
     }
 
     /// Fold `scale` into the buckets.
@@ -403,12 +403,44 @@ pub(crate) struct QSide {
 impl QSide {
     /// A row's value `x` (not NaN) at `tau` joins the queue.
     pub(crate) fn push(&mut self, k: &KernelDef, tau: f64, x: f64) {
+        self.push_weighted(k, tau, x, 1.0);
+    }
+
+    /// [`QSide::push`] for a row of weight `w`, above 0 (`ewm_profile`).
+    pub(crate) fn push_weighted(&mut self, k: &KernelDef, tau: f64, x: f64, w: f64) {
         let key = Key::of(x);
         match (k.window_size, k.direction) {
-            (None, _) => self.back.add_newest(k, key, tau, true),
-            (Some(_), Direction::Backward) => self.back.add_newest(k, key, tau, false),
-            (Some(_), Direction::Forward) => self.back.add_from_anchor(k, key, tau),
+            (None, _) => self.back.add_newest(k, key, tau, true, w),
+            (Some(_), Direction::Backward) => self.back.add_newest(k, key, tau, false, w),
+            (Some(_), Direction::Forward) => self.back.add_from_anchor(k, key, tau, w),
         }
+    }
+
+    /// The buckets a row of value `x` would add to `back` were it pushed
+    /// now: what it would cost before it is taken.
+    pub(crate) fn growth(&self, x: f64) -> usize {
+        let grow = |arm: &Arm, k: i32| match arm.octaves() {
+            None => BINS as usize,
+            Some((first, last)) => {
+                let o = octave(k);
+                (first - o).max(o - last).max(0) as usize * BINS as usize
+            }
+        };
+        match Key::of(x) {
+            Key::Zero => 0,
+            Key::Neg(k) => grow(&self.back.neg, k),
+            Key::Pos(k) => grow(&self.back.pos, k),
+        }
+    }
+
+    /// The weight the sketches hold, seen from `tau`, at or after every
+    /// row of a backward queue.
+    pub(crate) fn weight(&self, k: &KernelDef, tau: f64) -> f64 {
+        [&self.front, &self.back]
+            .iter()
+            .filter(|s| s.has_weight())
+            .map(|s| s.total * s.scale * k.discount(tau - s.anchor))
+            .sum()
     }
 
     /// `back`'s rows, their times `tau` and values `x(i)` (NaN for none),
@@ -416,6 +448,17 @@ impl QSide {
     /// newest first, as the queue pushes them, each row keeping what its
     /// bucket, octave and the total held before it.
     pub(crate) fn turn_over(&mut self, k: &KernelDef, tau: &[f64], x: impl Fn(usize) -> f64) {
+        self.turn_over_weighted(k, tau, x, |_| 1.0);
+    }
+
+    /// [`QSide::turn_over`] for rows of weights `w(i)` (`ewm_profile`).
+    pub(crate) fn turn_over_weighted(
+        &mut self,
+        k: &KernelDef,
+        tau: &[f64],
+        x: impl Fn(usize) -> f64,
+        weight: impl Fn(usize) -> f64,
+    ) {
         self.front.clear();
         self.prev.clear();
         if let (Some(&first), Some(&last)) = (tau.first(), tau.last()) {
@@ -430,10 +473,11 @@ impl QSide {
                     self.prev.extend([f64::NAN; 3]);
                     continue;
                 }
-                let w = match k.direction {
-                    Direction::Backward => k.discount(anchor - tau[i]),
-                    Direction::Forward => k.discount(tau[i] - anchor),
-                };
+                let w = weight(i)
+                    * match k.direction {
+                        Direction::Backward => k.discount(anchor - tau[i]),
+                        Direction::Forward => k.discount(tau[i] - anchor),
+                    };
                 let prev = self.front.add(Key::of(v), w);
                 self.prev.extend(prev);
             }
@@ -962,7 +1006,7 @@ mod tests {
                     } else {
                         x
                     };
-                    s.add_newest(&k, Key::of(x), tau, false);
+                    s.add_newest(&k, Key::of(x), tau, false, 1.0);
                 }
                 s
             };

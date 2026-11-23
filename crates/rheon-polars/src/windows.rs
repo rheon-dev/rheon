@@ -615,6 +615,15 @@ pub enum Refusal {
         now: Option<ClockValue>,
         min_backwards_jump: Option<f64>,
     },
+    /// The profile operator `op` (its index among them) would hold `bytes`
+    /// for the row's group with this row, past its `cap`; the row is not
+    /// taken.
+    StateCap {
+        seq: u64,
+        op: usize,
+        bytes: u64,
+        cap: u64,
+    },
 }
 
 /// Per operator, a segment's sums: the mass-weighted value, the mass and
@@ -1666,6 +1675,13 @@ pub struct Windows {
     /// output order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     profiles: Arc<Vec<ProfileDef>>,
+    /// Whether a row has taken a profile's state past half of its cap:
+    /// said once a run, and kept with the state so a resumed run does not
+    /// say it again; and that warning, `(op, bytes, cap)`, not yet taken.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    state_warned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state_warning: Option<(usize, u64, u64)>,
 }
 
 /// A map as a sorted list, so the state's bytes do not depend on the
@@ -1834,6 +1850,8 @@ impl Windows {
         Ok(Self {
             n_outputs: ops.len() + profiles.len(),
             profiles: Arc::new(profiles),
+            state_warned: false,
+            state_warning: None,
             n_forward: u32::try_from(n_forward).map_err(|_| "too many kernels")?,
             kernels: Arc::new(kernels),
             ops: Arc::new(ops),
@@ -1862,6 +1880,12 @@ impl Windows {
     /// The profile operators, after [`Self::ops`] in output order.
     pub fn profiles(&self) -> &[ProfileDef] {
         &self.profiles
+    }
+
+    /// The first row to take a profile's state past half of its
+    /// `max_state_bytes`, once a run, as `(op, bytes, cap)`.
+    pub fn take_state_warning(&mut self) -> Option<(usize, u64, u64)> {
+        self.state_warning.take()
     }
 
     /// Per kernel, which of its operators are variances: what its queue is
@@ -2298,6 +2322,13 @@ impl Windows {
         self.scratch();
         let seq = self.next_seq;
         let gi = row.group;
+        // A profile's state with this row, before anything moves: a row
+        // that would take one past its cap is refused.
+        let said = if self.profiles.is_empty() {
+            None
+        } else {
+            profile::check_row(&self.profiles, &self.groups[gi], row.clock, row.values, seq)?
+        };
         // A plain step forward on both clocks is never refused: each steps
         // where it stands, with no copy of the state to keep or put back.
         // Any other row steps both on copies, kept only once neither
@@ -2541,6 +2572,10 @@ impl Windows {
             g.pending.push(seq);
         }
         g.stamp = row.clock;
+        if let Some(w) = said.filter(|_| !self.state_warned) {
+            self.state_warned = true;
+            self.state_warning = Some(w);
+        }
 
         if self.n_forward > 0 {
             g.waiting.push_back(Wait { seq, tau, off });
@@ -3369,7 +3404,9 @@ fn flush_in(p: &mut Parts<'_>, g: &mut Group) {
             values: &mut *p.held_values,
             meta: &mut *p.held_meta,
         };
-        profile::flush(&out, g, &g.pending, &mut held);
+        let pending = std::mem::take(&mut g.pending);
+        profile::flush(&out, g, &pending, &mut held);
+        g.pending = pending;
     }
     for &seq in &g.pending {
         let r = usize::try_from(seq - p.held_first).expect("a pending row is held");

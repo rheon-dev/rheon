@@ -50,8 +50,11 @@
 use rheon_core::{ClockValue, seconds_of_ns};
 use serde::{Deserialize, Serialize};
 
-use super::{Closed, Direction, Group, Held};
+use std::collections::VecDeque;
+
+use super::{Closed, Direction, Group, Held, KernelDef, Refusal};
 use crate::stream::usable;
+use crate::window_quantile::QSide;
 
 /// A nanosecond day and week.
 const DAY_NS: i64 = 86_400_000_000_000;
@@ -78,6 +81,9 @@ pub enum ProfileStat {
     Mean,
     Var,
     Std,
+    /// The quantile at [`ProfileDef::quantile`], from `ewm_quantile`'s
+    /// sketch of each bucket's values.
+    Quantile,
 }
 
 impl ProfileStat {
@@ -86,6 +92,7 @@ impl ProfileStat {
             "mean" => Some(Self::Mean),
             "var" => Some(Self::Var),
             "std" => Some(Self::Std),
+            "quantile" => Some(Self::Quantile),
             _ => None,
         }
     }
@@ -95,6 +102,7 @@ impl ProfileStat {
             Self::Mean => "mean",
             Self::Var => "var",
             Self::Std => "std",
+            Self::Quantile => "quantile",
         }
     }
 }
@@ -129,12 +137,55 @@ pub struct ProfileDef {
     pub bias: bool,
     /// The most bytes one group's state of this operator may hold.
     pub cap: u64,
+    /// The window: rows further than this from the row read leave its
+    /// bucket. `None` keeps every row, decayed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<PhaseSpan>,
+    /// A quantile's level, in `(0, 1)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quantile: Option<f64>,
 }
 
 impl ProfileDef {
     /// The bytes one group's state of this operator holds.
     pub fn bytes(&self) -> u64 {
         u64::from(self.buckets) * BUCKET_BYTES
+    }
+
+    /// Whether the buckets keep their rows or a sketch: under a window, or
+    /// for a quantile.
+    fn keeps_rows(&self) -> bool {
+        self.window.is_some() || self.stat == ProfileStat::Quantile
+    }
+
+    /// The bytes a row in a bucket's window is counted at: its clock, time,
+    /// value and weight, its share of the moments a front row keeps, and a
+    /// quantile's three weights a front row keeps.
+    fn row_bytes(&self) -> u64 {
+        let q = if self.stat == ProfileStat::Quantile {
+            24
+        } else {
+            0
+        };
+        if self.window.is_some() {
+            ROW_BYTES + q
+        } else {
+            0
+        }
+    }
+
+    /// The kernel a quantile's sketches are read with.
+    fn kernel(&self) -> KernelDef {
+        KernelDef {
+            direction: Direction::Backward,
+            half_life: self.half_life,
+            window_size: self.window.map(span_value),
+            window_ns: match self.window {
+                Some(PhaseSpan::Ns(n)) => Some(n),
+                _ => None,
+            },
+            closed: self.closed,
+        }
     }
 
     /// Whether a row reads the rows of its own stamp: then it waits for
@@ -169,6 +220,9 @@ impl ProfileDef {
             || self.half_life <= 0.0
             || self.min_samples == 0
             || self.bytes() > self.cap
+            || self.window.is_some_and(|w| !positive(w))
+            || (self.stat == ProfileStat::Quantile)
+                != self.quantile.is_some_and(|q| q > 0.0 && q < 1.0)
         {
             return Err(format!("profile operator {self:?} cannot run"));
         }
@@ -235,16 +289,310 @@ pub(super) struct ProfState {
     /// its value, read before the stamp's rows joined.
     at: Option<(u32, ClockValue)>,
     left: f64,
+    /// Under a window or for a quantile, the buckets that keep their rows
+    /// or a sketch, in place of `buckets`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    win: Vec<WinBucket>,
+    /// The clock of the first row since the restart: the time a window's
+    /// rows and a sketch are measured from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<ClockValue>,
+    /// The bytes the state is counted at ([`ProfileDef::bytes`] and each
+    /// kept row and sketch bucket).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    bytes: u64,
+}
+
+fn is_zero(b: &u64) -> bool {
+    *b == 0
 }
 
 impl ProfState {
     fn new(def: &ProfileDef) -> Self {
-        Self {
-            buckets: vec![Bucket::default(); def.buckets as usize],
+        let keeps = def.keeps_rows();
+        let mut st = Self {
+            buckets: if keeps {
+                Vec::new()
+            } else {
+                vec![Bucket::default(); def.buckets as usize]
+            },
             rows: 0,
             at: None,
             left: f64::NAN,
+            win: if keeps {
+                (0..def.buckets).map(|_| WinBucket::new(def)).collect()
+            } else {
+                Vec::new()
+            },
+            origin: None,
+            bytes: 0,
+        };
+        st.bytes = def.bytes() + st.win.iter().map(|b| b.bytes(def)).sum::<u64>();
+        st
+    }
+}
+
+/// The bytes a kept row is counted at, a quantile's three weights aside:
+/// its clock, time, value and weight (32), and the moments a front row
+/// keeps of the rows newer than it (48).
+const ROW_BYTES: u64 = 80;
+
+/// A window's row: its clock, its time from the origin, its value and its
+/// weight.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+struct WRow {
+    at: ClockValue,
+    tau: f64,
+    x: f64,
+    w: f64,
+}
+
+/// Weighted moments seen from `tau`: `n` rows of weight `V1`, `V2`, the
+/// mean `m` and `M2`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+struct Mom {
+    n: f64,
+    v1: f64,
+    v2: f64,
+    m: f64,
+    m2: f64,
+    tau: f64,
+}
+
+impl Mom {
+    const EMPTY: Mom = Mom {
+        n: 0.0,
+        v1: 0.0,
+        v2: 0.0,
+        m: 0.0,
+        m2: 0.0,
+        tau: f64::NAN,
+    };
+
+    /// Seen from `tau`, at or after its own.
+    fn at(self, k: &KernelDef, tau: f64) -> Mom {
+        if self.n == 0.0 {
+            return Mom { tau, ..Mom::EMPTY };
         }
+        let d = k.discount(tau - self.tau);
+        Mom {
+            v1: self.v1 * d,
+            v2: self.v2 * d * d,
+            m2: self.m2 * d,
+            tau,
+            ..self
+        }
+    }
+
+    /// Add a row of value `x` and weight `w`, as seen from `self.tau`.
+    fn add(&mut self, x: f64, w: f64) {
+        self.n += 1.0;
+        self.v1 += w;
+        self.v2 += w * w;
+        let dx = x - self.m;
+        self.m += (w / self.v1) * dx;
+        self.m2 += w * dx * (x - self.m);
+    }
+
+    /// Chan, Golub and LeVeque's pairwise merge of two seen from one time.
+    fn merge(self, o: Mom) -> Mom {
+        if o.n == 0.0 {
+            return self;
+        }
+        if self.n == 0.0 {
+            return o;
+        }
+        let v1 = self.v1 + o.v1;
+        let d = o.m - self.m;
+        Mom {
+            n: self.n + o.n,
+            v1,
+            v2: self.v2 + o.v2,
+            m: self.m + d * (o.v1 / v1),
+            m2: self.m2 + o.m2 + d * d * self.v1 * o.v1 / v1,
+            tau: self.tau,
+        }
+    }
+}
+
+/// A bucket that keeps its window's rows, in two stacks so a row leaves
+/// without a subtraction, or a quantile's sketch.
+///
+/// The rows are oldest first. The first `front` of them are the front
+/// stack: each keeps the moments of itself and every front row newer than
+/// it, seen from the newest front row, so the oldest leaves by dropping
+/// its own. The rest are the back stack, whose moments are kept as they
+/// join. When the front empties and a row must leave, the back turns over
+/// into it. A quantile's sketches are `ewm_quantile`'s, over the same two
+/// stacks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct WinBucket {
+    rows: VecDeque<WRow>,
+    front: usize,
+    suffix: VecDeque<Mom>,
+    back: Mom,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    q: Option<QSide>,
+    /// With no window, the rows a quantile's sketch has taken: what
+    /// `min_samples` counts, where under a window it counts `rows`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    n: u64,
+}
+
+impl WinBucket {
+    fn new(def: &ProfileDef) -> Self {
+        Self {
+            rows: VecDeque::new(),
+            front: 0,
+            suffix: VecDeque::new(),
+            back: Mom::EMPTY,
+            q: (def.stat == ProfileStat::Quantile).then(QSide::default),
+            n: 0,
+        }
+    }
+
+    /// The rows with a value and a weight it holds: inside the window, or
+    /// every one taken where there is none.
+    fn count(&self, def: &ProfileDef) -> u64 {
+        if def.window.is_some() {
+            self.rows.len() as u64
+        } else {
+            self.n
+        }
+    }
+
+    /// The bytes it is counted at, beyond [`BUCKET_BYTES`].
+    fn bytes(&self, def: &ProfileDef) -> u64 {
+        self.rows.len() as u64 * def.row_bytes()
+            + self.q.as_ref().map_or(0, |q| 8 * q.buckets() as u64)
+    }
+
+    /// Whether its stacks are the rows it holds.
+    fn fits(&self, def: &ProfileDef) -> bool {
+        let front_x = self.rows.iter().take(self.front).rev().map(|r| r.x);
+        self.front <= self.rows.len()
+            && (def.window.is_some() || self.rows.is_empty())
+            && self.suffix.len()
+                == if def.stat == ProfileStat::Quantile {
+                    0
+                } else {
+                    self.front
+                }
+            && self.q.is_some() == (def.stat == ProfileStat::Quantile)
+            && self.q.as_ref().is_none_or(|q| {
+                q.has_shape(
+                    if def.window.is_some() {
+                        front_x.collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    }
+                    .into_iter(),
+                )
+            })
+            && self.rows.iter().all(|r| r.w > 0.0 && r.x.is_finite())
+    }
+
+    /// Drop the rows outside the window at `now`.
+    fn evict(&mut self, def: &ProfileDef, k: &KernelDef, now: ClockValue) {
+        let Some(w) = def.window else {
+            return;
+        };
+        while self
+            .rows
+            .front()
+            .is_some_and(|r| outside(w, def.closed, r.at, now))
+        {
+            if self.front == 0 {
+                self.turn_over(def, k);
+            }
+            let r = self.rows.pop_front().expect("a row to leave");
+            self.suffix.pop_front();
+            if let Some(q) = &mut self.q {
+                q.pop(self.front - 1, r.x);
+            }
+            self.front -= 1;
+        }
+    }
+
+    /// The back stack's rows become the front stack.
+    fn turn_over(&mut self, def: &ProfileDef, k: &KernelDef) {
+        let n = self.rows.len();
+        self.front = n;
+        if def.stat == ProfileStat::Quantile {
+            let tau: Vec<f64> = self.rows.iter().map(|r| r.tau).collect();
+            let q = self.q.as_mut().expect("a quantile's sketch");
+            q.turn_over_weighted(k, &tau, |i| self.rows[i].x, |i| self.rows[i].w);
+        } else {
+            self.suffix.clear();
+            if let Some(newest) = self.rows.back() {
+                let mut acc = Mom {
+                    tau: newest.tau,
+                    ..Mom::EMPTY
+                };
+                let mut out = vec![Mom::EMPTY; n];
+                for i in (0..n).rev() {
+                    let r = self.rows[i];
+                    acc.add(r.x, r.w * k.discount(newest.tau - r.tau));
+                    out[i] = acc;
+                }
+                self.suffix = out.into();
+            }
+        }
+        self.back = Mom::EMPTY;
+    }
+
+    /// A row joins the back stack.
+    fn push(&mut self, def: &ProfileDef, k: &KernelDef, r: WRow) {
+        if let Some(q) = &mut self.q {
+            q.push_weighted(k, r.tau, r.x, r.w);
+        } else {
+            let mut b = self.back.at(k, r.tau);
+            b.add(r.x, r.w);
+            self.back = b;
+        }
+        if def.window.is_some() {
+            self.rows.push_back(r);
+        } else {
+            self.n += 1;
+        }
+    }
+
+    /// The moments of the rows it holds, seen from `tau`.
+    fn moments(&self, k: &KernelDef, tau: f64) -> Mom {
+        let front = self.suffix.front().map_or(Mom::EMPTY, |m| m.at(k, tau));
+        front.merge(self.back.at(k, tau))
+    }
+}
+
+/// Whether a row at `at` is outside a window `w` read at `now`: further
+/// than `w` back, or exactly `w` under a `closed` that leaves the far end
+/// out.
+fn outside(w: PhaseSpan, closed: Closed, at: ClockValue, now: ClockValue) -> bool {
+    let far = closed.far(Direction::Backward);
+    let cmp = match (w, at, now) {
+        (PhaseSpan::Ns(w), ClockValue::Ns(a), ClockValue::Ns(b)) => {
+            (i128::from(b) - i128::from(a)).cmp(&i128::from(w))
+        }
+        (PhaseSpan::Units(w), ClockValue::I64(a), ClockValue::I64(b)) if w.fract() == 0.0 => {
+            (i128::from(b) - i128::from(a)).cmp(&(w as i128))
+        }
+        (PhaseSpan::Units(w), a, b) => (b.seconds() - a.seconds())
+            .partial_cmp(&w)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        _ => std::cmp::Ordering::Less,
+    };
+    match cmp {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Equal => !far,
+        std::cmp::Ordering::Less => false,
+    }
+}
+
+/// A span's value in the clock's units: seconds for nanoseconds.
+fn span_value(s: PhaseSpan) -> f64 {
+    match s {
+        PhaseSpan::Ns(n) => seconds_of_ns(i128::from(n)),
+        PhaseSpan::Units(u) => u,
     }
 }
 
@@ -254,10 +602,18 @@ impl ProfState {
 pub(super) fn fits(defs: &[ProfileDef], states: &[ProfState]) -> bool {
     states.is_empty()
         || (states.len() == defs.len()
-            && states
-                .iter()
-                .zip(defs)
-                .all(|(s, d)| s.buckets.len() == d.buckets as usize && s.rows >= 0))
+            && states.iter().zip(defs).all(|(s, d)| {
+                let n = d.buckets as usize;
+                let shaped = if d.keeps_rows() {
+                    s.buckets.is_empty()
+                        && s.win.len() == n
+                        && s.win.iter().all(|b| b.fits(d))
+                        && s.bytes == d.bytes() + s.win.iter().map(|b| b.bytes(d)).sum::<u64>()
+                } else {
+                    s.buckets.len() == n && s.win.is_empty()
+                };
+                shaped && s.rows >= 0
+            }))
 }
 
 /// The clock between `from` and `to`, in the clock's units: seconds on a
@@ -329,6 +685,54 @@ pub(super) fn bucket(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> 
     }
 }
 
+/// The profile of a windowed or sketched bucket read at `now`, `tau` from
+/// the origin, its rows outside the window gone.
+fn read_win(def: &ProfileDef, k: &KernelDef, b: &WinBucket, tau: f64) -> f64 {
+    let enough = |n: u64| n > 0 && n >= u64::from(def.min_samples);
+    if let Some(q) = &b.q {
+        if !enough(b.count(def)) || q.weight(k, tau) <= 0.0 {
+            return f64::NAN;
+        }
+        return q
+            .read(k, def.quantile.expect("a quantile's level"), None)
+            .unwrap_or(f64::NAN);
+    }
+    let m = b.moments(k, tau);
+    if !enough(m.n as u64) {
+        return f64::NAN;
+    }
+    stat_of(def, m.n, m.v1, m.v2, m.m, m.m2)
+}
+
+/// The statistic of `n` rows' weighted moments.
+fn stat_of(def: &ProfileDef, n: f64, v1: f64, v2: f64, m: f64, m2: f64) -> f64 {
+    match def.stat {
+        ProfileStat::Mean => m,
+        ProfileStat::Var | ProfileStat::Std => {
+            let var = if n < 2.0 {
+                // One row fills its own weight: no spread.
+                if def.bias { 0.0 } else { f64::NAN }
+            } else if def.bias {
+                m2 / v1
+            } else {
+                let (a, den) = (v1 * v1, v1 * v1 - v2);
+                if den > 0.0 {
+                    m2 / v1 * (a / den)
+                } else {
+                    f64::NAN
+                }
+            };
+            let var = if var < 0.0 { 0.0 } else { var };
+            if def.stat == ProfileStat::Std {
+                var.sqrt()
+            } else {
+                var
+            }
+        }
+        ProfileStat::Quantile => unreachable!("read from the sketch"),
+    }
+}
+
 /// The profile of a bucket. A decay scales every moment of it alike, so
 /// its time drops out of every ratio read.
 fn read(def: &ProfileDef, b: &Bucket, _now: ClockValue) -> f64 {
@@ -337,6 +741,7 @@ fn read(def: &ProfileDef, b: &Bucket, _now: ClockValue) -> f64 {
     }
     match def.stat {
         ProfileStat::Mean => b.m,
+        ProfileStat::Quantile => unreachable!("a quantile keeps a sketch"),
         ProfileStat::Var | ProfileStat::Std => {
             // The decay scales `V1` and `M2` by `d` and `V2` by `d²`, which
             // cancel in each ratio: read undecayed, so a bucket one row
@@ -385,6 +790,82 @@ pub(super) struct Out<'a> {
     pub first: usize,
 }
 
+/// What a row would take one operator's state of group `g` to, in bytes:
+/// its window's rows that leave at the row, the row itself and a sketch's
+/// new buckets counted, nothing moved. `g` holds no state yet, or since a
+/// restart, at the definitions' own bytes.
+fn bytes_with(
+    def: &ProfileDef,
+    st: Option<&ProfState>,
+    clock: Option<ClockValue>,
+    values: &[f64],
+) -> u64 {
+    let Some(st) = st.filter(|_| def.keeps_rows()) else {
+        // A fresh state: its buckets, and a quantile's two empty sketches
+        // a bucket, of one sketch bucket each.
+        let sketches = if def.stat == ProfileStat::Quantile {
+            16
+        } else {
+            0
+        };
+        return def.bytes() + u64::from(def.buckets) * sketches;
+    };
+    let x = values[def.input];
+    let w = def.weight.map_or(1.0, |i| values[i]);
+    let weighed = usable(w) && w > 0.0;
+    let rows = if weighed {
+        st.rows
+    } else {
+        (st.rows - 1).max(0)
+    };
+    let now = clock.unwrap_or(ClockValue::I64(rows));
+    let b = &st.win[bucket(def, clock, rows) as usize];
+    let leaving = def.window.map_or(0, |win| {
+        b.rows
+            .iter()
+            .take_while(|r| outside(win, def.closed, r.at, now))
+            .count() as u64
+    });
+    let joins = weighed && usable(x);
+    let grows = if joins {
+        b.q.as_ref().map_or(0, |q| 8 * q.growth(x) as u64)
+    } else {
+        0
+    };
+    let row = if joins { def.row_bytes() } else { 0 };
+    st.bytes + row + grows - leaving * def.row_bytes()
+}
+
+/// Before the row `seq` of group `g` is taken: a row that would take an
+/// operator's state past its cap is refused; one past half of it is said,
+/// once a run, as `(op, bytes, cap)`.
+pub(super) fn check_row(
+    defs: &[ProfileDef],
+    g: &Group,
+    clock: Option<ClockValue>,
+    values: &[f64],
+    seq: u64,
+) -> Result<Option<(usize, u64, u64)>, Refusal> {
+    let mut said = None;
+    for (op, def) in defs.iter().enumerate() {
+        let st = if g.restart { None } else { g.profile.get(op) };
+        let bytes = bytes_with(def, st, clock, values);
+        if bytes > def.cap {
+            return Err(Refusal::StateCap {
+                seq,
+                op,
+                bytes,
+                cap: def.cap,
+            });
+        }
+        // A state the data sizes: a window's rows, a quantile's sketches.
+        if said.is_none() && def.keeps_rows() && bytes > def.cap / 2 {
+            said = Some((op, bytes, def.cap));
+        }
+    }
+    Ok(said)
+}
+
 /// The row `seq` of group `g`: each operator under `"left"` reads its
 /// stamp's value (once a stamp), and the row joins its bucket.
 pub(super) fn row(
@@ -411,11 +892,24 @@ pub(super) fn row(
             (st.rows - 1).max(0)
         };
         let now = clock.unwrap_or(ClockValue::I64(rows));
+        let origin = *st.origin.get_or_insert(now);
+        let tau = age(origin, now);
+        let k = def.kernel();
         if new_stamp || st.at.is_none() || clock.is_none() {
             let b = bucket(def, clock, rows);
             st.at = Some((b, now));
+            if def.keeps_rows() {
+                let wb = &mut st.win[b as usize];
+                let before = wb.bytes(def);
+                wb.evict(def, &k, now);
+                st.bytes = st.bytes - before + wb.bytes(def);
+            }
             if !def.waits() {
-                st.left = read(def, &st.buckets[b as usize], now);
+                st.left = if def.keeps_rows() {
+                    read_win(def, &k, &st.win[b as usize], tau)
+                } else {
+                    read(def, &st.buckets[b as usize], now)
+                };
             }
         }
         if !def.waits() {
@@ -426,21 +920,38 @@ pub(super) fn row(
             st.rows += 1;
             if usable(x) {
                 let (b, _) = st.at.expect("set above");
-                add(def, &mut st.buckets[b as usize], x, w, now);
+                if def.keeps_rows() {
+                    let wb = &mut st.win[b as usize];
+                    let before = wb.bytes(def);
+                    wb.push(def, &k, WRow { at: now, tau, x, w });
+                    st.bytes = st.bytes - before + wb.bytes(def);
+                } else {
+                    add(def, &mut st.buckets[b as usize], x, w, now);
+                }
             }
         }
     }
 }
 
 /// The rows of group `g`'s stamp read their profile under `"right"`.
-pub(super) fn flush(out: &Out<'_>, g: &Group, pending: &[u64], held: &mut Held<'_>) {
-    for (j, (def, st)) in out.defs.iter().zip(&g.profile).enumerate() {
+pub(super) fn flush(out: &Out<'_>, g: &mut Group, pending: &[u64], held: &mut Held<'_>) {
+    for (j, (def, st)) in out.defs.iter().zip(g.profile.iter_mut()).enumerate() {
         if !def.waits() {
             continue;
         }
-        let v = st
-            .at
-            .map_or(f64::NAN, |(b, now)| read(def, &st.buckets[b as usize], now));
+        let v = match st.at {
+            None => f64::NAN,
+            Some((b, now)) if def.keeps_rows() => {
+                let k = def.kernel();
+                let wb = &mut st.win[b as usize];
+                let before = wb.bytes(def);
+                wb.evict(def, &k, now);
+                st.bytes = st.bytes - before + wb.bytes(def);
+                let tau = st.origin.map_or(0.0, |o| age(o, now));
+                read_win(def, &k, &st.win[b as usize], tau)
+            }
+            Some((b, now)) => read(def, &st.buckets[b as usize], now),
+        };
         for &seq in pending {
             let r = (seq - held.first) as usize;
             held.values[r * held.n_outputs + out.first + j] = v;
@@ -469,6 +980,8 @@ mod tests {
             min_samples: 1,
             bias: false,
             cap: PROFILE_STATE_BYTES,
+            window: None,
+            quantile: None,
         }
     }
 
@@ -576,6 +1089,18 @@ mod tests {
             ProfileDef {
                 closed: Closed::Left,
                 stat: ProfileStat::Var,
+                ..base.clone()
+            },
+            ProfileDef {
+                closed: Closed::Both,
+                stat: ProfileStat::Var,
+                window: Some(PhaseSpan::Units(9.0)),
+                ..base.clone()
+            },
+            ProfileDef {
+                stat: ProfileStat::Quantile,
+                quantile: Some(0.5),
+                window: Some(PhaseSpan::Units(9.0)),
                 ..base
             },
         ];
@@ -593,7 +1118,7 @@ mod tests {
             (s >> 11) as f64 / (1u64 << 53) as f64
         };
         let mut rows: Vec<(f64, usize, f64, f64)> = Vec::new();
-        let mut out: Vec<Vec<f64>> = vec![Vec::new(); 2];
+        let mut out: Vec<Vec<f64>> = vec![Vec::new(); 4];
         for k in 0..120 {
             let t = f64::from(k / 2);
             let g = usize::from(next() < 0.5);
@@ -628,15 +1153,16 @@ mod tests {
         for (i, &(t, g, _, _)) in rows.iter().enumerate() {
             let b = (t.rem_euclid(6.0) / 6.0 * 3.0).floor();
             for (o, d) in defs.iter().enumerate() {
+                if d.stat == ProfileStat::Quantile {
+                    // Held to NumPy in the Python tests; here, read at all.
+                    continue;
+                }
                 let take = |r: &&(f64, usize, f64, f64)| {
                     r.1 == g
                         && r.3 > 0.0
                         && (r.0.rem_euclid(6.0) / 6.0 * 3.0).floor() == b
-                        && if d.closed == Closed::Right {
-                            r.0 <= t
-                        } else {
-                            r.0 < t
-                        }
+                        && if d.waits() { r.0 <= t } else { r.0 < t }
+                        && d.window.is_none_or(|_| t - r.0 <= 9.0)
                 };
                 let ws: Vec<(f64, f64)> = rows
                     .iter()

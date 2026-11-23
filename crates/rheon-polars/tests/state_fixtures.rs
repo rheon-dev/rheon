@@ -525,7 +525,9 @@ fn windows_profile_config() -> WindowsConfig {
     serde_json::from_str(
         r#"{"formulas": [
                {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "weight": ["col", "w"]}]},
-               {"name": "spread", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "stat": "var", "bias": true, "closed": "left", "offset": "3s"}]}
+               {"name": "spread", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "stat": "var", "bias": true, "closed": "left", "offset": "3s"}]},
+               {"name": "median", "tree": ["ewm_profile", ["col", "mid"], {"period": "4s", "buckets": 2, "half_life": "20s", "stat": "quantile", "quantile": 0.5, "window_size": "5s", "weight": ["col", "w"]}]},
+               {"name": "high", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "stat": "quantile", "quantile": 0.9}]}
              ],
              "clock": "ts", "gap_cap": "50s", "group": "g"}"#,
     )
@@ -559,7 +561,8 @@ fn window_profile_input(df: &DataFrame) -> DataFrame {
 fn windows_profile_units_config() -> WindowsConfig {
     serde_json::from_str(
         r#"{"formulas": [
-               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "weight": ["col", "w"], "stat": "std"}]}
+               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "weight": ["col", "w"], "stat": "std"}]},
+               {"name": "recent", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "window_size": 20.0, "closed": "both", "min_samples": 2}]}
              ],
              "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
     )
@@ -3484,6 +3487,35 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
                     && p.ends_with(".left")
                     && v.as_f64().is_some_and(f64::is_finite)
             },
+        ),
+        (
+            "with_windows_profile",
+            "a windowed quantile's kept rows",
+            |p, _| p.contains(".win.") && p.ends_with(".rows.0.tau"),
+        ),
+        (
+            "with_windows_profile",
+            "a front row's kept sketch weights",
+            |p, v| {
+                p.contains(".win.")
+                    && p.contains(".q.prev.")
+                    && v.as_f64().is_some_and(f64::is_finite)
+            },
+        ),
+        (
+            "with_windows_profile",
+            "an unbounded sketch's row count",
+            |p, v| p.contains(".win.") && p.ends_with(".n") && v.as_u64().is_some_and(|n| n > 0),
+        ),
+        (
+            "with_windows_profile_units",
+            "a window's front moments",
+            |p, _| p.contains(".win.") && p.ends_with(".suffix.0.m2"),
+        ),
+        (
+            "with_windows_profile_units",
+            "a profile's min_samples",
+            |p, v| p.ends_with(".min_samples") && v.as_u64() == Some(2),
         ),
         (
             "with_windows_profile_units",
