@@ -421,8 +421,14 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         "ewm_moments",
         "ewm_moments",
         dict(
-            terms={"skew": {"x1": 3}, "co": {"x1": 1, "x2": 2}, "ac1": {"x1": 1, "x1@1": 1}},
-            kind={"skew": "standardized", "ac1": "standardized"},
+            terms={
+                "skew": {"x1": 3},
+                "co": {"x1": 1, "x2": 2},
+                "ac1": {"x1": 1, "x1@1": 1},
+                "m3": {"x2": 3},
+                "kurt": {"x2": 4},
+            },
+            kind={"skew": "standardized", "ac1": "standardized", "kurt": "standardized"},
             se=True,
             group="g",
             half_life=25.0,
