@@ -520,7 +520,7 @@ fn windows_int_config() -> WindowsConfig {
     .unwrap()
 }
 
-/// Task 562: two tick signs and an increment. The first signs `mid` in
+/// Two tick signs and an increment. The first signs `mid` in
 /// tenths, an integer input whose step is often 0, so the sign carried over
 /// a step of 0 is read across the save; the second signs `mid` itself inside
 /// a decayed sum, the signed flow. Each tick sign's carried sign rides in
@@ -3672,7 +3672,7 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
                 p.contains(".quant.") && p.contains(".prev.") && v.as_f64().is_some_and(|f| f > 0.0)
             },
         ),
-        // Task 562: a tick sign's carried sign, past the three slots of the
+        // A tick sign's carried sign, past the three slots of the
         // previous values (two tick signs and an increment), each +1 or -1.
         ("with_windows_tick", "a tick sign's carried sign", |p, v| {
             p.starts_with(".increments.")

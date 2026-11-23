@@ -219,7 +219,7 @@ struct IncrState {
     /// nanoseconds; an integer input in integers (docs/PLAN.md task 200),
     /// whose step is taken in integers before it becomes a double. Then,
     /// per tick sign in the order of the increments, the sign it carries
-    /// over a step of 0: +1, -1, or NaN while none is known (task 562). A
+    /// over a step of 0: +1, -1, or NaN while none is known. A
     /// run with no tick sign has none of these, so its state is the one an
     /// older build wrote; one with a tick sign names `tick_sign` in its
     /// formulas, which an older build refuses by name.
@@ -3565,7 +3565,7 @@ mod tests {
                 r#", "clock": "t", "gap_cap": 100, "session": "s", "session_gap": "reset""#,
             ),
             (
-                // Task 562: a tick sign beside an increment, each with its
+                // A tick sign beside an increment, each with its
                 // own slot, and the sign carried past them.
                 "a tick sign",
                 true,
@@ -4092,7 +4092,7 @@ mod tests {
         assert_eq!(dt, vec![None, Some(1.0), None, Some(1.0), Some(1.0)]);
     }
 
-    /// Task 562: a tick sign is the sign of the increment, the last nonzero
+    /// A tick sign is the sign of the increment, the last nonzero
     /// one carried over a step of 0, in a slot of its own beside the
     /// increments: two tick signs and an increment, interleaved, each read
     /// its own input, and the carried signs resume across a save, a step of

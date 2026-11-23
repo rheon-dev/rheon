@@ -1,5 +1,5 @@
 <!-- kind: record -->
-# Threshold-triggered bars: the design (task 562)
+# Threshold-triggered bars: the design
 
 Status, 2026-11-23: built as `rp.stream.bars`. The questions in the last
 section are answered: each as recommended but the tenth, where the number of
