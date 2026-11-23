@@ -586,7 +586,13 @@ dependency: it requires `polars>=2.0`, which the floor of this library's
 Polars range cannot install beside it, so it was checked once, outside the
 suite, at the version above. `mlfinpy` and `finmlkit` require NumPy and
 pandas versions older than the ones the tests run on, so they too were
-checked outside the suite, each in an environment of its own.
+checked outside the suite, each in an environment of its own. Once the
+operator was built, its closing rows on the same six streams were compared
+with each of the three there: equal for every rule the table marks as
+matching (`ml4t-engineer`'s tick, volume, dollar and both fixed imbalance
+bars; `mlfinpy`'s tick, volume and dollar bars; `finmlkit`'s tick and volume
+bars), `finmlkit`'s dollar bars equal to `"sum"` on the three streams with no
+row past the threshold and different on the three with one.
 
 **No library carries the remainder as multiples of the threshold**, which
 is the `"sum"` rule. Its oracles of record are Polars' `cum_sum` and

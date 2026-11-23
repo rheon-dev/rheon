@@ -942,14 +942,14 @@ impl Bars {
                     return Ok(true);
                 }
                 polars_bail!(ComputeError:
-                    "{WHO}: clock column {:?} is {} at row {at} (counting from 0), below the \
-                     previous row's {} in the same group. Sort the input by the clock{}.",
-                    cfg.clock, t.show(&self.clock_dtype), prev.show(&self.clock_dtype),
-                    if cfg.restart_after_step_back.is_some() {
-                        ", or raise restart_after_step_back if the clock starts over here"
-                    } else {
-                        ", or give restart_after_step_back if the clock starts over on purpose"
-                    });
+                "{WHO}: clock column {:?} is {} at row {at} (counting from 0), below the \
+                 previous row's {} in the same group. Sort the input by the clock{}.",
+                cfg.clock, t.show(&self.clock_dtype), prev.show(&self.clock_dtype),
+                if cfg.restart_after_step_back.is_some() {
+                    ", or raise restart_after_step_back if the clock starts over here"
+                } else {
+                    ", or give restart_after_step_back if the clock starts over on purpose"
+                });
             };
             if let Some(prev) = g.last_clock {
                 refuse(prev)?;

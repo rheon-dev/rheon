@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! magic    "rheon-state"
-//! kind     "bank" | "windows" | "refresh_time" | "merge" | "checkpoint"
+//! kind     "bank" | "windows" | "refresh_time" | "merge" | "checkpoint" | "bars"
 //! version  the kind's own layout version
 //! ```
 //!
