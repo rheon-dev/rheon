@@ -1,6 +1,7 @@
-# EWM moments: oracle scan and design (PLAN 554, part 1)
+# EWM moments: oracle scan and design (PLAN 554)
 
-A record, written 2026-11-22 before any implementation: which third-party
+A record, begun 2026-11-22 before any implementation (part 1) and
+completed with the Rust state (parts 3 to 5, section 11): which third-party
 library computes each quantity the block names, how far each sits from the
 definition written longhand, the online update and its state, the window
 forms, the numerical-stability argument, and the choices the request leaves
@@ -463,14 +464,131 @@ ring hold the rows inside a span of the clock, so their size is the data's
 rate times the span; the reference checks them against `max_state_bytes`
 as they fill and refuses the run by name when they pass it.
 
-## 11. The next part
+## 11. The Rust state (parts 3 to 5)
 
-Part 3: the state in `rheon-core` behind `OnlineModel`, checked against this
-reference within a stated tolerance: the summary and Pebay's merge (order 2
-by `EwDiag`'s expressions, so a variance is `ew_cov`'s to the bit), the
-compensated mean, the per-column lag buffer (row and as-of clock), the
-row and clock windows on `window_moments`' block aggregation, the unbiased
-forms and the withholding reasons, the se, the state size checked against
-`max_state_bytes` before the first row and as a clock span fills, and
-fixtures for the new state per the state rules. Then the spec and the
-window operator.
+`crates/rheon-core/src/ewm_moments.rs` (with `layout.rs` beside it) keeps
+the state behind `OnlineModel`, as the module docs state it. It is held to
+the reference of section 10 within 5e-14 relative to each number's size
+(or to 1 below it), withholding exactly where the reference withholds:
+
+| Held to the reference | Gap (2026-11-23) |
+|---|---|
+| every kind, plug-in and unbiased; stream A (`lam = 0.9`, a zero-weight first row) / B (half-life 7, uneven clock) | 2.6e-15 / 3.5e-15 |
+| row lags and cross terms, plug-in and unbiased, `lam = 0.9`, zero-weight rows | 1.8e-15 |
+| clock lags as-of, a gap of 9.5 past both lags; the default tolerance / 0.5 | 4.4e-16 / 4.4e-16 |
+| a window of 12 rows / a clock window of 9 (two stacks; the block merge was 2.3e-15 / 4.3e-16) | 4.7e-15 / 4.3e-16 |
+| each kind's standard error, central to lagged | 6.4e-15 |
+| the definition longhand, orders 2 to 6 and raw, stream B | under 1e-13 |
+| order 2 against `EwDiag` (`ew_cov`'s variance) | to the bit |
+
+They part by rounding alone: the Rust keeps each mean as a pair (`m +
+m_lo`, `crate::comp`) where the reference keeps it whole, forms order 2 by
+`EwDiag`'s expression, `r_3` and `r_4` by products where the reference
+calls `pow`, decays a zero-weight row's clock step on its own where the
+reference folds it into the next row's (the same weights: a decay over two
+steps is the product of the two), and reads a window through two stacks
+where the reference folds blocks left to right. To the bit, in Rust: one
+chunk against chunks of any size, a state saved at any row (each form:
+row lags, clock lags, a row window, a clock window, the standard errors),
+`predict` against the step's read, a zero-weight first row against none.
+
+**The state, final.** In doubles, `d` a summary's legs, `L` the distinct
+legs, `K_c` column `c`'s deepest row lag, `b` a window's block rows:
+
+```text
+the weight           1
+a summary            1 + 2d + |kept| + |r_k|    (W, each mean's pair, the moments, r_2 [, r_3, r_4])
+the summaries        their sum                  (none under a window)
+a lag buffer         1 + K_c                    (rows)
+                     1 + 3 per row held         (clock: a stamp is two)
+the clock's place    1                          (on a clock)
+a window's ring      3 + (2 + L) a row          (+ 2 a row for its stamp on a clock)
+its two stacks       (rows / b + b + 2)(Σ summaries + 2), not saved: a cache
+```
+
+One column to order `P` is `P + 4` doubles (order 4: 64 bytes): section
+10's `P + 2`, the mean's low part (8 bytes, the compensated mean that keeps
+the deviation at the spread's scale under a large level) and the model's
+own weight. Under `se` the summary keeps the moments to `2P`. The ring's
+three counters are its first row's number, the decay rows of weight 0 have
+passed since the last learned row, and the stacks' boundary `F` (below).
+`b` is `⌊√w⌋` for a row window and 16 on a clock. The settings' part is
+checked against `max_state_bytes` before the first row; a clock lag's
+buffer and a clock window's ring as each row goes in (a warning past half,
+the run refused at the cap).
+
+**The window: two stacks against the block merge.** Part 4 read a window
+by merging the summaries of its full blocks of `b` rows and folding the
+partial blocks at either end from the rows, `w / b` merges and up to `2b`
+row folds a read. Part 5 tried two stacks over the same blocks (the
+module docs give the scheme): the back is the running fold of the rows
+from a block boundary `F`; the front holds the merge from each block's
+start to `F`, formed right to left once needed; the head the same from
+each row of the block the window starts in; a read is one merge, the
+head's summary then the back. `F` moves to the last block boundary when the
+window's first row reaches it and a block has filled since. Each row is
+folded once into the back, once into its block and once into the head, so
+a read's cost does not grow with the window.
+
+Measured 2026-11-23 (both forms in one release test binary, a test
+removed with the block merge; `window_timing` below times the shipped one;
+the minimum of three rounds of 20,000 steps after three windows of warm-up;
+skew and kurtosis of `x` and its correlation with `y`, `x` at a level of
+`1e3` with a spread of about 1, weights in `[1/4, 5/4)`, a half-life equal
+to the window, the clock stepping `[1/2, 3/2)`; the gap is to a fresh left
+fold of the window's rows at the end):
+
+| Window | Two stacks | Block merge | Ratio | Gap, two stacks | Gap, block merge |
+|---|---|---|---|---|---|
+| 1,000 rows | 4.25 µs a row | 53.7 µs | 12.7 | 1.2e-15 | 1.9e-15 |
+| 1,000 clock units | 4.35 µs | 85.8 µs | 19.7 | 3.3e-16 | 2.1e-15 |
+| 10,000 rows | 4.23 µs | 178 µs | 42.1 | 5.7e-15 | 1.9e-15 |
+| 10,000 clock units | 4.23 µs | 907 µs | 214 | 4.5e-15 | 4.6e-15 |
+
+The two stacks are kept. Both forms are within the same tolerance of the
+reference and of a fresh fold (rounding, at a few times `1e-15`), and the
+two stacks are 12.7 to 214 times faster, flat in the window's length. They
+round differently (55,539 of 60,000 outputs at the 1,000-row window part
+in their last bits), so the window fixtures' outputs moved with them.
+
+Their cost: the stacks' working memory is `(rows / b + b + 2)` parts where
+the block merge's was `(rows / b + 2)`, the head's `b` row summaries.
+For one column to order 4 and a 10,000-row window that is 1,818 doubles
+(14.5 KB) against 918 (7.3 KB), beside the ring's 30,000 (240 KB): 3% more
+state. A summary is a function of the rows and of `F`, so `F` is saved: one
+more number in the ring (8 bytes), an addition to schema 72's layout, which
+is unreleased, so no bump; the fixtures `ewm_moments_window` and
+`ewm_moments_clock_window` are regenerated and `F` held non-empty in each.
+
+**The standard errors' order.** Every term in the order the spec names
+them, then `se_<term>` for each, in the same order, after every term. No
+other kind emits a standard error per term; the nearest patterns agree:
+`power_variation` emits each target's terms and then that target's `n`,
+and the bank emits `se_coef` after `coef` as a block. Part 4's order, so no
+reference, test or fixture moved.
+
+**Measurements kept as tests.** `window_timing` (ignored; `cargo test
+--release -p rheon-core window_timing -- --ignored --nocapture`) times the
+shipped form at these four windows (on the final code: 4.25, 4.32, 4.22
+and 4.70 µs a row, the last while a debug build ran beside it); `the_two_stacks_read_the_windows_rows`
+holds every read of windows of 1 to 50 rows and clock windows of 0.75 to
+40 units (a gap of 30 every 101 rows, emptying the window or taking several
+blocks at once, zero-weight rows) to a fresh fold within 1e-12 (measured
+2.9e-15), and a state saved every 13th row to the bit.
+
+## 12. What the entry still lacks
+
+The state is complete in `rheon-core`. Not built yet:
+
+- the spec kind `ewm_moments` in `rheon-polars` (parsing the terms map with
+  `@` lags, a kind per term, `bias`, `se`, `lag_tolerance`, `window_rows`
+  and `window_size`, `max_state_bytes`), its output fields (`<term>`,
+  `se_<term>`, `weight_sum`) and the CLI's TOML;
+- the Python builder and the window operator `rp.ewm_moments` beside
+  `ewm_mean` and `ewm_var` (Q1), with docstrings stating the update;
+- the tests through the bank: the oracles of section 2 (scipy, statsmodels,
+  Polars' `rolling_skew` and `rolling_kurtosis`), chunk invariance, and
+  zero-weight rows through the stream's shared clock (`model_contract.rs`
+  runs the kind already);
+- the reader-facing docs (the outputs and models guides, CHANGELOG,
+  `llms.txt`), `docs/EXTENDING.md`'s list, bench cells and budgets.

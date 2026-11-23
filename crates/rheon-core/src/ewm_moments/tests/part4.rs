@@ -15,7 +15,7 @@ type Row2 = (f64, f64, f64, f64);
 /// reference: four draws a row, `x` as `stream`'s, `y = 1/2 + x/2 + q'`,
 /// the weight 0 on `zero_rows`, the clock stepping 1, 1.5, 2, ... and 9.5
 /// on `gap_row`. Every clock is a sum of halves, so summed it is exact.
-fn stream2(seed: u64, zero_rows: &[usize], gap_row: Option<usize>) -> Vec<Row2> {
+pub(super) fn stream2(seed: u64, zero_rows: &[usize], gap_row: Option<usize>) -> Vec<Row2> {
     let mut s = seed;
     (0..60)
         .map(|i| {
@@ -57,7 +57,7 @@ fn kind(s: &str) -> MomentKind {
 
 /// The script's terms at one `bias`, suffixed; under `bias = false` only
 /// those the reference keeps (no raw term, order 4 at most).
-fn terms_of(spec: &Spec, bias: bool, suffix: &str) -> Vec<MomentTerm> {
+pub(super) fn terms_of(spec: &Spec, bias: bool, suffix: &str) -> Vec<MomentTerm> {
     spec.iter()
         .filter(|(_, legs, k)| bias || (*k != "raw" && legs.iter().map(|l| l.1).sum::<u32>() <= 4))
         .map(|&(name, legs, k)| MomentTerm {
@@ -69,7 +69,7 @@ fn terms_of(spec: &Spec, bias: bool, suffix: &str) -> Vec<MomentTerm> {
         .collect()
 }
 
-const ROWS4: [usize; 5] = [2, 13, 31, 44, 59];
+pub(super) const ROWS4: [usize; 5] = [2, 13, 31, 44, 59];
 
 /// Feeds `rows` as the stream does: a row of weight 0 is never stepped,
 /// and on a clock its step is folded into the next row's; on rows each
@@ -144,8 +144,9 @@ fn clock_lags_match_the_python_reference() {
 /// A window of 12 rows under `lam = 0.95`, and a clock window of 9 under a
 /// half-life of 20 (a gap at row 30 empties it but for the row): within
 /// 5e-14 of the reference, which folds a window's blocks left to right
-/// where the Rust merges blocks of `⌊√12⌋ = 3` rows (16 on a clock).
-/// Measured 2026-11-23: 2.3e-15 and 4.3e-16.
+/// where the Rust reads two stacks over blocks of `⌊√12⌋ = 3` rows (16 on
+/// a clock). Measured 2026-11-23: 4.7e-15 and 4.3e-16 (the block merge the
+/// stacks replaced: 2.3e-15 and 4.3e-16).
 #[test]
 fn windows_match_the_python_reference() {
     let rows = stream2(5542, &[0, 17, 40], None);
@@ -373,7 +374,7 @@ fn steps(m: &mut EwmMoments, rows: &[Row2]) -> Vec<u64> {
 }
 
 /// Each form, saved and loaded at every row (as a state file, the window's
-/// block summaries rebuilt from the ring) and read between rows, goes on to
+/// stacks rebuilt from the ring) and read between rows, goes on to
 /// the same bits as the run never saved: the outputs, `n_eff` and the
 /// final state.
 #[test]
@@ -416,8 +417,8 @@ fn predict_reads_what_the_step_reads() {
 
 /// The state's bytes against its encoding, every form, as rows go in: the
 /// numbers the encoding holds outside the settings are
-/// [`EwmMoments::saved_bytes`] (the state less a window's block summaries,
-/// a cache), and before the first row the state is what the settings fix.
+/// [`EwmMoments::saved_bytes`] (the state less a window's two stacks, a
+/// cache), and before the first row the state is what the settings fix.
 #[test]
 fn each_forms_state_is_its_formula() {
     let rows = stream2(79, &[3], Some(30));
@@ -444,12 +445,13 @@ fn each_forms_state_is_its_formula() {
     // x, 1 + 2; y, 1 + 1. The weight: 1. 27 + 5 + 1 = 33 doubles.
     let (_, ew) = &forms()[0];
     assert_eq!(ew.state_bytes(), 8 * 33);
-    // The row window of 20 rows: the weight, the ring's two counters, 20
-    // rows of a decay, a weight and three legs (x, x@2, y@1), and the two
-    // buffers' 5: 1 + 2 + 100 + 5 = 108 saved; and blocks of ⌊√20⌋ = 4
-    // rows, (20 / 4 + 2) (27 + 2) = 203 working.
+    // The row window of 20 rows: the weight, the ring's three counters
+    // (its first row, the pending decay and the stacks' flip), 20 rows of a
+    // decay, a weight and three legs (x, x@2, y@1), and the two buffers' 5:
+    // 1 + 3 + 100 + 5 = 109 saved; and two stacks over blocks of ⌊√20⌋ = 4
+    // rows, (20 / 4 + 4 + 2) (27 + 2) = 319 working.
     let (_, win) = &forms()[2];
-    assert_eq!(win.state_bytes(), 8 * (108 + 203));
+    assert_eq!(win.state_bytes(), 8 * (109 + 319));
 }
 
 /// A clock span's state is checked as each row goes in: the first row past

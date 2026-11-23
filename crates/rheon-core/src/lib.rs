@@ -939,8 +939,9 @@ pub use window::{
 ///   schema: `ewm_moments`' [`ModelState::EwmMoments`], appended, which
 ///   moves no other layout (the cases `ewm_moments` and
 ///   `ewm_moments_plugin`; its lag buffers and window ring, row and clock,
-///   in `ewm_moments_lags`, `ewm_moments_clock_lags`, `ewm_moments_window`
-///   and `ewm_moments_clock_window`).
+///   with the boundary of the window's two stacks, in `ewm_moments_lags`,
+///   `ewm_moments_clock_lags`, `ewm_moments_window` and
+///   `ewm_moments_clock_window`).
 pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`

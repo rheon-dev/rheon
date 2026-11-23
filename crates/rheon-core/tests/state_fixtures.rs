@@ -1466,10 +1466,11 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 122] = [
-        // Schema 72 (task 554, part 4): `ewm_moments`' summaries over legs,
-        // its lag buffers (and their stamps on a clock), the clock's place
-        // and a window's ring (and its stamps on a clock).
+    const FORMS: [(&str, &[&str]); 124] = [
+        // Schema 72 (task 554, parts 4 and 5): `ewm_moments`' summaries over
+        // legs, its lag buffers (and their stamps on a clock), the clock's
+        // place and a window's ring (and its stamps on a clock), and the
+        // boundary of the window's two stacks, `flip`.
         ("ewm_moments_lags", &["model", "EwmMoments", "sums"]),
         ("ewm_moments_lags", &["model", "EwmMoments", "bufs"]),
         (
@@ -1488,6 +1489,14 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         (
             "ewm_moments_clock_window",
             &["model", "EwmMoments", "ring", "stamps"],
+        ),
+        (
+            "ewm_moments_window",
+            &["model", "EwmMoments", "ring", "flip"],
+        ),
+        (
+            "ewm_moments_clock_window",
+            &["model", "EwmMoments", "ring", "flip"],
         ),
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,

@@ -15,6 +15,7 @@ type Spec = [(&'static str, &'static [(&'static str, u32)], &'static str)];
 include!("reference_values.rs");
 
 mod part4;
+mod part5;
 
 fn lcg(state: &mut u64) -> f64 {
     *state = state

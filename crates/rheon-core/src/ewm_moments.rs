@@ -105,15 +105,30 @@
 //! `window_clock` of the rows whose clock is in `(t − window, t]`, the edge
 //! decided on the raw clocks as Polars' `rolling_*_by` decides it (one
 //! subtraction, [`crate::Stamp::cmp_span`]). Rows are kept in a ring and
-//! the window's summary is merged from summaries of fixed blocks of rows
-//! (Chan, Golub and LeVeque's rule at every order, as `window_moments`
-//! merges second moments), the partial blocks at either end folded from
-//! the rows themselves; a row leaving the window is never subtracted, so
-//! nothing drifts. Each part is decayed to the next part's end, so decay
-//! still weighs the window's rows. The block summaries are a cache, rebuilt
-//! from the ring on loading, and every merge is a function of the rows'
-//! numbers alone, so the same rows give the same bits however they were
-//! fed.
+//! the window's summary is read through two stacks of merged summaries,
+//! Chan, Golub and LeVeque's rule at every order (Pébay's merge above); a
+//! row leaving the window is never subtracted, so nothing drifts. The ring
+//! is cut into blocks of `b` rows, and a boundary `F` splits it: the back
+//! is the running fold of the rows from `F` on, one row merged as each
+//! arrives; the front holds, for each block before `F`, the merge of the
+//! rows from its start to `F`, formed right to left once the front is
+//! needed; and the head holds the same from each row of the block the
+//! window starts in. A read is one merge, the head's summary from the
+//! window's first row then the back. When the window's first row reaches
+//! `F` and a block has filled since, `F` moves to the last block boundary
+//! and the stacks begin again: each row is folded into the back once, into
+//! its block once and into the head once, so a read costs a few merges
+//! whatever the window's length (`b` sets only the memory, `w / b + b`
+//! parts, least at `b = √w`). Measured at windows of 1,000 and 10,000
+//! rows, on rows and on a clock, 4.2 to 4.3 µs a row (skew, kurtosis and
+//! a correlation, release build), where merging the window's blocks on
+//! each read took 54 and 178 µs on rows and 86 and 907 µs on a clock.
+//!
+//! Each part is decayed to the next part's end, so decay still weighs the
+//! window's rows. Every summary the stacks hold is a function of the rows'
+//! numbers and of `F`, which the state saves: the stacks are a cache,
+//! rebuilt from the ring on loading, and the same rows give the same bits
+//! however they were fed and wherever the state was saved.
 //!
 //! # The unbiased forms
 //!
@@ -169,8 +184,8 @@
 //! a lag buffer         1 + K_c              (rows)
 //!                      1 + 3 per row held   (clock: a stamp is two)
 //! the clock's place    1                    (on a clock)
-//! a window's ring      2 + (2 + L) a row    (+ 2 a row for its stamp on a clock)
-//! its block summaries  (rows / b + 2)(Σ summaries + 2), not saved: a cache
+//! a window's ring      3 + (2 + L) a row    (+ 2 a row for its stamp on a clock)
+//! its two stacks       (rows / b + b + 2)(Σ summaries + 2), not saved: a cache
 //! ```
 //!
 //! Nothing grows with the stream: the summaries with the terms, a row
@@ -200,8 +215,8 @@ pub const EWM_MOMENTS_MAX_STATE_BYTES: u64 = 256 * 1024;
 /// (Rimoldini). A term asking for one above it is refused by name.
 pub const MAX_UNBIASED_MOMENT_ORDER: u32 = 4;
 
-/// Rows a block of a clock window's ring covers: the window's summary is
-/// merged from at most `rows / 16 + 2` parts.
+/// Rows a block of a clock window's ring covers: its two stacks hold at
+/// most `rows / 16 + 18` parts.
 pub const EWM_MOMENTS_CLOCK_BLOCK_ROWS: u64 = 16;
 
 /// A denominator of an unbiased form within this many epsilons of the sum
@@ -392,9 +407,10 @@ impl EwmMomentsCfg {
         self.window_rows.is_some() || self.window_clock.is_some()
     }
 
-    /// Rows a block of the window's ring covers: `⌊√w⌋` on rows, so a read
-    /// merges about `2√w` parts, and [`EWM_MOMENTS_CLOCK_BLOCK_ROWS`] on a
-    /// clock.
+    /// Rows a block of the window's ring covers: `⌊√w⌋` on rows, which
+    /// keeps the stacks' `w / b + b` parts least, and
+    /// [`EWM_MOMENTS_CLOCK_BLOCK_ROWS`] on a clock. A read costs the same
+    /// at any `b`.
     fn block_rows(&self) -> u64 {
         match self.window_rows {
             Some(w) => (w.isqrt() as u64).max(1),
@@ -499,7 +515,7 @@ impl EwmMomentsCfg {
     }
 
     /// The doubles of the state the settings fix, and the working doubles
-    /// of a row window's blocks.
+    /// of a window's two stacks.
     fn fixed_numbers(&self, d: &Derived) -> (u64, u64) {
         let sums: u64 = d.groups.iter().map(Group::numbers).sum();
         let mut n = 1;
@@ -517,17 +533,26 @@ impl EwmMomentsCfg {
         }
         let mut working = 0;
         if self.windowed() {
-            n += 2;
+            n += 3;
         }
         if let Some(w) = self.window_rows {
             let w = w as u64;
             n += w * (2 + d.legs.len() as u64);
-            working = (w / self.block_rows() + 2) * (sums + 2);
+            working = self.working(sums, w);
         } else if self.window_clock.is_some() {
             // An empty ring's: its rows are the data's, counted as they go in.
-            working = 2 * (sums + 2);
+            working = self.working(sums, 0);
         }
         (n, working)
+    }
+
+    /// The doubles of a window's two stacks over `rows` rows, each part
+    /// `sums` doubles and the weight's two: at most `rows / b` block
+    /// suffixes in the front, `b` row suffixes in the head, the back and
+    /// the part a read forms.
+    fn working(&self, sums: u64, rows: u64) -> u64 {
+        let b = self.block_rows();
+        (rows / b + b + 2) * (sums + 2)
     }
 
     /// The state's bytes before the first row: what the settings fix.
@@ -871,18 +896,66 @@ struct LagBuf {
 struct Ring {
     first: u64,
     pending: f64,
+    /// `F`, where the window's back stack starts: a block boundary, the
+    /// rows before it read through the front stack's suffixes and the rows
+    /// from it through the back's running fold. Saved, since the window's
+    /// summary is a function of the rows and of `F`.
+    flip: u64,
     vals: VecDeque<f64>,
     #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
     stamps: VecDeque<Stamp>,
 }
 
-/// A window's block summaries: each block's summary of every group (the
-/// weight's last) and the product of its rows' decays. A cache, rebuilt
-/// from the ring, so neither saved nor compared.
-#[derive(Debug, Clone, Default)]
-struct Blocks(Vec<(u64, Vec<Summary>, f64)>);
+/// A run of a window's rows: every group's summary (the weight's last) and
+/// the product of the rows' decays.
+#[derive(Debug, Clone)]
+struct Part {
+    sums: Vec<Summary>,
+    lp: f64,
+}
 
-impl PartialEq for Blocks {
+impl Part {
+    fn empty(d: &Derived) -> Self {
+        let mut sums: Vec<Summary> = d.groups.iter().map(Summary::empty).collect();
+        sums.push(Summary::empty(&d.weight));
+        Self { sums, lp: 1.0 }
+    }
+
+    /// The rows of `self` followed by those of `later`: each summary
+    /// decayed by the later rows' decays, then Pébay's merge.
+    fn then(&mut self, d: &Derived, later: &Part) {
+        for (i, (s, p)) in self.sums.iter_mut().zip(&later.sums).enumerate() {
+            let g = d.groups.get(i).unwrap_or(&d.weight);
+            s.decay(later.lp);
+            s.merge(g, p);
+        }
+        self.lp *= later.lp;
+    }
+}
+
+/// A window's two stacks (the cache the window is read through, rebuilt
+/// from the ring and [`Ring::flip`], so neither saved nor compared). With
+/// `F` the flip and `b` the block's rows: the front holds, for each full
+/// block `j` before `F`, the summary of the rows from `j b` to `F`; the
+/// head holds, for the block the window starts in, the summary of the rows
+/// from each of its rows to `F`; the back is the running fold of the rows
+/// from `F` on. A read is one merge, the head's row then the back.
+#[derive(Debug, Clone, Default)]
+struct Stacks {
+    /// `front[k]`: the rows from block `front_lo + k` to `F`.
+    front: VecDeque<Part>,
+    front_lo: u64,
+    /// The block the head is of, and `head[k]`: the rows from `head_lo + k`
+    /// to `F`.
+    head_block: Option<u64>,
+    head: VecDeque<Part>,
+    head_lo: u64,
+    /// The rows from `F` to the ring's end; `None` once rows before `F`
+    /// have left the ring (it is not read again before the next flip).
+    back: Option<Part>,
+}
+
+impl PartialEq for Stacks {
     fn eq(&self, _: &Self) -> bool {
         true
     }
@@ -918,7 +991,7 @@ pub struct EwmMoments {
     #[serde(skip)]
     derived: Derived,
     #[serde(skip)]
-    blocks: Blocks,
+    stacks: Stacks,
 }
 
 impl EwmMoments {
@@ -942,6 +1015,7 @@ impl EwmMoments {
         let ring = cfg.windowed().then(|| Ring {
             first: 0,
             pending: 1.0,
+            flip: 0,
             vals: VecDeque::new(),
             stamps: VecDeque::new(),
         });
@@ -957,7 +1031,7 @@ impl EwmMoments {
             warned: false,
             warning: None,
             derived,
-            blocks: Blocks::default(),
+            stacks: Stacks::default(),
         })
     }
 
@@ -1003,7 +1077,7 @@ impl EwmMoments {
     }
 
     /// The state's bytes as it stands: what the settings fix, the rows a
-    /// clock span holds, and a window's block summaries.
+    /// clock span holds, and a window's two stacks.
     pub fn state_bytes(&self) -> u64 {
         let (lags, ring) = self.held_rows();
         self.bytes_for(&lags, ring)
@@ -1026,19 +1100,19 @@ impl EwmMoments {
         if self.cfg.window_clock.is_some() {
             let sums: u64 = self.derived.groups.iter().map(Group::numbers).sum();
             n += ring as u64 * (4 + self.derived.legs.len() as u64);
-            working = (ring as u64 / self.cfg.block_rows() + 2) * (sums + 2);
+            working = self.cfg.working(sums, ring as u64);
         }
         8 * (n + working)
     }
 
     /// The bytes the state's encoding holds as numbers: [`Self::state_bytes`]
-    /// less the window's working block summaries.
+    /// less the window's two stacks.
     #[cfg(test)]
     fn saved_bytes(&self) -> u64 {
         let sums: u64 = self.derived.groups.iter().map(Group::numbers).sum();
         let working = match (self.cfg.window_rows, &self.ring) {
-            (Some(w), _) => (w as u64 / self.cfg.block_rows() + 2) * (sums + 2),
-            (None, Some(r)) => (r.stamps.len() as u64 / self.cfg.block_rows() + 2) * (sums + 2),
+            (Some(w), _) => self.cfg.working(sums, w as u64),
+            (None, Some(r)) => self.cfg.working(sums, r.stamps.len() as u64),
             _ => 0,
         };
         self.state_bytes() - 8 * working
@@ -1074,6 +1148,8 @@ impl EwmMoments {
                 let stride = 2 + d.legs.len();
                 let rows = r.vals.len() / stride;
                 r.vals.len() % stride == 0
+                    && r.flip <= r.first + rows as u64
+                    && r.flip % self.cfg.block_rows() == 0
                     && if self.cfg.window_clock.is_some() {
                         r.stamps.len() == rows
                     } else {
@@ -1304,59 +1380,181 @@ impl EwmMoments {
                 r.first += 1;
             }
         }
-        let first = r.first;
-        let b = self.cfg.block_rows();
-        self.blocks.0.retain(|(j, _, _)| j * b >= first);
+        let (first, end) = (r.first, r.first + (r.vals.len() / stride) as u64);
+        let flip = r.flip;
+        if flip < first {
+            self.stacks.back = None;
+        }
+        if let Some(mut back) = self.stacks.back.take() {
+            self.learn_row(&mut back, end - 1);
+            self.stacks.back = Some(back);
+        }
+    }
+
+    /// Row `n` (numbered among every learned row) into `part`: each group's
+    /// summary after the row's decay, the product of the decays.
+    fn learn_row(&self, part: &mut Part, n: u64) {
+        let d = &self.derived;
+        let r = self.ring.as_ref().expect("a window keeps a ring");
+        let stride = self.stride();
+        let at = (n - r.first) as usize * stride;
+        let (lam, w) = (r.vals[at], r.vals[at + 1]);
+        part.lp *= lam;
+        let mut zg = Vec::new();
+        for ((s, g), pos) in part.sums.iter_mut().zip(&d.groups).zip(&d.pos) {
+            zg.clear();
+            zg.extend(pos.iter().map(|&p| r.vals[at + 2 + p]));
+            let w_g = if zg.iter().all(|v| v.is_finite()) {
+                w
+            } else {
+                0.0
+            };
+            s.learn(g, lam, w_g, &zg);
+        }
+        if let Some(s) = part.sums.last_mut() {
+            s.learn(&d.weight, lam, w, &[]);
+        }
     }
 
     /// Every group's summary (the weight's last) of the rows `lo..hi`
     /// (numbered among every learned row) folded in order, and the product
     /// of their decays.
-    fn fold(&self, lo: u64, hi: u64) -> (Vec<Summary>, f64) {
-        let d = &self.derived;
-        let r = self.ring.as_ref().expect("a window keeps a ring");
-        let stride = self.stride();
-        let mut out: Vec<Summary> = d.groups.iter().map(Summary::empty).collect();
-        out.push(Summary::empty(&d.weight));
-        let mut lp = 1.0;
-        let mut zg = Vec::new();
+    fn fold(&self, lo: u64, hi: u64) -> Part {
+        let mut part = Part::empty(&self.derived);
         for n in lo..hi {
-            let at = (n - r.first) as usize * stride;
-            let (lam, w) = (r.vals[at], r.vals[at + 1]);
-            let z = r.vals.range(at + 2..at + stride);
-            let z: Vec<f64> = z.copied().collect();
-            lp *= lam;
-            for ((s, g), pos) in out.iter_mut().zip(&d.groups).zip(&d.pos) {
-                zg.clear();
-                zg.extend(pos.iter().map(|&p| z[p]));
-                let w_g = if zg.iter().all(|v| v.is_finite()) {
-                    w
-                } else {
-                    0.0
-                };
-                s.learn(g, lam, w_g, &zg);
-            }
-            if let Some(s) = out.last_mut() {
-                s.learn(&d.weight, lam, w, &[]);
-            }
+            self.learn_row(&mut part, n);
         }
-        (out, lp)
+        part
     }
 
-    /// Summarise every full block of the ring not summarised yet.
-    fn fill_blocks(&mut self) {
-        let Some(r) = &self.ring else { return };
-        let stride = self.stride();
+    /// Brings the stacks to a read of the rows `lo..hi`: where the front is
+    /// spent (`lo` at or past `F`) and a block has filled since, `F` moves
+    /// to the last block boundary and the stacks are begun again; then the
+    /// head is filled down to `lo`. Every summary the stacks hold is a
+    /// function of the rows and `F` alone.
+    fn prepare(&self, st: &mut Stacks, flip: &mut u64, lo: u64, hi: u64) {
+        let d = &self.derived;
         let b = self.cfg.block_rows();
-        let (first, end) = (r.first, r.first + (r.vals.len() / stride) as u64);
-        let mut j = first.div_ceil(b);
-        while (j + 1) * b <= end {
-            if !self.blocks.0.iter().any(|(k, _, _)| *k == j) {
-                let (s, lp) = self.fold(j * b, (j + 1) * b);
-                self.blocks.0.push((j, s, lp));
+        if lo >= *flip {
+            // A boundary after `lo`; none is a window inside one block,
+            // read from its rows.
+            let f = hi / b * b;
+            if f > lo {
+                *flip = f;
+                st.front.clear();
+                st.front_lo = f / b;
+                st.head.clear();
+                st.head_block = None;
+                st.back = Some(self.fold(f, hi));
             }
-            j += 1;
         }
+        if lo >= *flip {
+            return;
+        }
+        let jh = lo / b;
+        if st.head_block != Some(jh) {
+            st.head.clear();
+            st.head_block = Some(jh);
+            st.head_lo = (jh + 1) * b;
+        }
+        if st.head_lo > lo {
+            if st.head.is_empty() {
+                // The front from the block after the head's to `F` (none
+                // where that block is `F`'s).
+                if st.front.is_empty() {
+                    st.front_lo = *flip / b;
+                }
+                while st.front_lo < jh + 1 && !st.front.is_empty() {
+                    st.front.pop_front();
+                    st.front_lo += 1;
+                }
+                while st.front_lo > jh + 1 {
+                    let k = st.front_lo - 1;
+                    let mut p = self.fold(k * b, (k + 1) * b);
+                    if let Some(next) = st.front.front() {
+                        p.then(d, next);
+                    }
+                    st.front.push_front(p);
+                    st.front_lo = k;
+                }
+            }
+            while st.head_lo > lo {
+                let n = st.head_lo - 1;
+                let mut p = self.fold(n, n + 1);
+                if let Some(next) = st.head.front().or(st.front.front()) {
+                    p.then(d, next);
+                }
+                st.head.push_front(p);
+                st.head_lo = n;
+            }
+            // The head holds the block after it: the front's next is the
+            // one after that.
+            while st.front_lo < jh + 2 && !st.front.is_empty() {
+                st.front.pop_front();
+                st.front_lo += 1;
+            }
+        }
+        while st.head_lo < lo && st.head.len() > 1 {
+            st.head.pop_front();
+            st.head_lo += 1;
+        }
+    }
+
+    /// The window's rows `lo..hi` read through prepared stacks.
+    fn read_stacks(&self, st: &Stacks, flip: u64, lo: u64, hi: u64) -> Part {
+        if lo >= flip {
+            return self.fold(lo, hi);
+        }
+        let mut p = st.head[(lo - st.head_lo) as usize].clone();
+        match &st.back {
+            Some(back) => p.then(&self.derived, back),
+            None => p.then(&self.derived, &self.fold(flip, hi)),
+        }
+        p
+    }
+
+    /// Whether the stacks are ready for a read from `lo` as they stand.
+    fn stacks_ready(&self, flip: u64, lo: u64) -> bool {
+        let st = &self.stacks;
+        let b = self.cfg.block_rows();
+        lo < flip && st.head_block == Some(lo / b) && st.head_lo <= lo
+    }
+
+    /// The window's rows `lo..hi` through the stacks, as `prepare` then a
+    /// read give them, without moving the stacks.
+    fn window_stacks(&self, lo: u64, hi: u64) -> Part {
+        let flip = self.ring.as_ref().map_or(0, |r| r.flip);
+        if self.stacks_ready(flip, lo) {
+            return self.read_stacks(&self.stacks, flip, lo, hi);
+        }
+        let (mut st, mut f) = (self.stacks.clone(), flip);
+        self.prepare(&mut st, &mut f, lo, hi);
+        self.read_stacks(&st, f, lo, hi)
+    }
+
+    /// `prepare` on the model's own stacks, before a step's read.
+    fn slide(&mut self, now: Option<Stamp>) {
+        let (lo, hi) = self.window_span(now);
+        let Some(mut flip) = self.ring.as_ref().map(|r| r.flip) else {
+            return;
+        };
+        let mut st = std::mem::take(&mut self.stacks);
+        self.prepare(&mut st, &mut flip, lo, hi);
+        self.stacks = st;
+        if let Some(r) = self.ring.as_mut() {
+            r.flip = flip;
+        }
+    }
+
+    /// The back stack from the ring, as a state is loaded.
+    fn rebuild_back(&mut self) {
+        let Some(r) = &self.ring else { return };
+        let end = r.first + (r.vals.len() / self.stride()) as u64;
+        let back = (r.flip >= r.first && r.flip <= end).then(|| self.fold(r.flip, end));
+        self.stacks = Stacks {
+            back,
+            ..Stacks::default()
+        };
     }
 
     /// The window's rows at `now`: the rows numbered `lo..hi`.
@@ -1377,39 +1575,8 @@ impl EwmMoments {
     /// Every group's window summary at `now` (`None`: the ring as it
     /// stands), and the weight's.
     fn window_at(&self, now: Option<Stamp>) -> (Vec<Summary>, Summary) {
-        let d = &self.derived;
         let (lo, hi) = self.window_span(now);
-        let b = self.cfg.block_rows();
-        let mut acc: Option<Vec<Summary>> = None;
-        let mut n = lo;
-        while n < hi {
-            let j = n / b;
-            let bhi = ((j + 1) * b).min(hi);
-            let whole = n == j * b && bhi == (j + 1) * b;
-            let cached = whole
-                .then(|| self.blocks.0.iter().find(|(k, _, _)| *k == j))
-                .flatten();
-            let (parts, lp) = match cached {
-                Some((_, s, lp)) => (s.clone(), *lp),
-                None => self.fold(n, bhi),
-            };
-            match &mut acc {
-                None => acc = Some(parts),
-                Some(a) => {
-                    for (i, (s, p)) in a.iter_mut().zip(&parts).enumerate() {
-                        let g = d.groups.get(i).unwrap_or(&d.weight);
-                        s.decay(lp);
-                        s.merge(g, p);
-                    }
-                }
-            }
-            n = bhi;
-        }
-        let mut all = acc.unwrap_or_else(|| {
-            let mut e: Vec<Summary> = d.groups.iter().map(Summary::empty).collect();
-            e.push(Summary::empty(&d.weight));
-            e
-        });
+        let mut all = self.window_stacks(lo, hi).sums;
         let weight = all.pop().expect("the weight's summary");
         (all, weight)
     }
@@ -1635,6 +1802,7 @@ impl EwmMoments {
                 "its running sums have the wrong shape",
             ));
         }
+        self.rebuild_back();
         Ok(self)
     }
 }
@@ -1782,7 +1950,7 @@ impl crate::OnlineModel for EwmMoments {
         }
         let now = self.place.as_mut().map(|p| p.step(d_clock));
         if self.ring.is_some() {
-            self.fill_blocks();
+            self.slide(now);
         }
         out.n_eff = self.read_into(now, &mut out.pred);
         out.extra = None;
