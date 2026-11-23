@@ -833,7 +833,6 @@ CASES: list[Case] = [
             "gap_cap": 6.0,
         },
     ),
-
     # Streaming components, each method and every key.
     Case(
         "pca",

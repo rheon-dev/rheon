@@ -350,7 +350,6 @@ def specs() -> list[dict]:
             weight="w",
             group="g",
         ),
-
         # Two components of the two features and the target, by the
         # incremental SVD: the target is the features' mix, so the
         # components differ and are written.

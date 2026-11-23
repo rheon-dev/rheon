@@ -439,7 +439,6 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(targets=["y", "z"], lm_window=30, group="g", half_life=25.0, **CLOCK),
         [],
     ),
-
     # Two components of three columns by the incremental SVD.
     (
         "pca",
