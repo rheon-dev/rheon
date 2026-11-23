@@ -849,6 +849,13 @@ model that only the new build has is listed as an addition and passes.
   is read from the lower tail where that rounding happens, and every other
   level keeps its bits. A weight that is not a finite number above 0 only
   ages the band, as a weight of 0 does, for a caller of the Rust type.
+- **`emit_metrics` and `emit_influence` keep a saved state loadable after a
+  prediction far past its target** (review 2026-11-23, DIAG-12). No bound
+  holds a prediction, and one near `1e160` squared past the largest double
+  in the metrics' moments and the influence's spread, after which `r2` read
+  null and the saved state no longer loaded. Such a row is aged and not
+  scored. And an error inflation past `1.34e154`, whose square overflowed,
+  read the influence infinite; it is read as `e·sqrt(1 − 1/infl²)` there.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
   `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
