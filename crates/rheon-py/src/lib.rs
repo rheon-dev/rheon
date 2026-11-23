@@ -1415,6 +1415,43 @@ fn write_frame(py: Python<'_>, df: PyDataFrame, path: &str, who: &str) -> PyResu
         .map_err(|e| run_err(&e, Some(name)))
 }
 
+/// One of `rheon_core::special`'s functions, elementwise over equal-length
+/// lists (`a`, `b` ignored where the function does not take them), for the
+/// tests that check each against `scipy.special`. A name it does not know
+/// is a `ValueError`.
+#[pyfunction]
+fn special_function(name: &str, a: Vec<f64>, b: Vec<f64>, x: Vec<f64>) -> PyResult<Vec<f64>> {
+    use rheon_polars::rheon_core::special as sp;
+    let f: fn(f64, f64, f64) -> f64 = match name {
+        "ln_gamma" => |_, _, x| sp::ln_gamma(x),
+        "digamma" => |_, _, x| sp::digamma(x),
+        "trigamma" => |_, _, x| sp::trigamma(x),
+        "ln_beta" => |a, b, _| sp::ln_beta(a, b),
+        "gamma_p" => |a, _, x| sp::gamma_p(a, x),
+        "gamma_q" => |a, _, x| sp::gamma_q(a, x),
+        "gamma_p_inv" => |a, _, x| sp::gamma_p_inv(a, x),
+        "gamma_q_inv" => |a, _, x| sp::gamma_q_inv(a, x),
+        "beta_inc" => sp::beta_inc,
+        "beta_inc_c" => sp::beta_inc_c,
+        "beta_inc_inv" => sp::beta_inc_inv,
+        "norm_cdf" => |_, _, x| sp::norm_cdf(x),
+        "ndtri" => |_, _, x| sp::ndtri(x),
+        "norm_ppf" => |_, _, x| sp::norm_ppf(x),
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "no special function {name:?}"
+            )));
+        }
+    };
+    let n = x.len();
+    if a.len() != n || b.len() != n {
+        return Err(PyValueError::new_err(
+            "a, b and x must have the same length",
+        ));
+    }
+    Ok((0..n).map(|i| f(a[i], b[i], x[i])).collect())
+}
+
 /// The bank's `chunk_size` when a caller does not say.
 #[pyfunction]
 fn default_chunk_size() -> usize {
@@ -1708,6 +1745,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(csv_flat, m)?)?;
     m.add_function(wrap_pyfunction!(write_frame, m)?)?;
     m.add_function(wrap_pyfunction!(default_chunk_size, m)?)?;
+    m.add_function(wrap_pyfunction!(special_function, m)?)?;
     m.add_function(wrap_pyfunction!(spec_output_fields, m)?)?;
     m.add_function(wrap_pyfunction!(spec_output_index, m)?)?;
     m.add_function(wrap_pyfunction!(spec_coef_fields, m)?)?;

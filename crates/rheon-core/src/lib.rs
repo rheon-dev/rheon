@@ -122,6 +122,8 @@ mod seqtest;
 mod sgd;
 mod since;
 mod solve;
+pub mod special;
+pub use special::{ln_basic, norm_ppf};
 mod specification;
 mod spread;
 mod stats;
@@ -149,7 +151,7 @@ pub use cluster::{
     ClusterSummary, FeatureMoments, KMeans, KMeansCfg, LINK_FACTOR, LINK_FLOOR, LINK_QUANTILE,
     Micro, MicroCfg, MicroCluster, SeedRule, SplitMix64, dist2, merged_radius2,
 };
-pub use conformal::{Conformal, gauss_gain, ln_basic, norm_ppf};
+pub use conformal::{Conformal, gauss_gain};
 pub use constraint::Constraint;
 pub use corrchange::{
     ChangeNorm, CorrChange, CorrChangeCfg, CorrChangeKind, MAX_PERM, kolmogorov_cdf,

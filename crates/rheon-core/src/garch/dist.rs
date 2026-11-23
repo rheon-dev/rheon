@@ -27,50 +27,17 @@
 //! both branches, so `log f` is continuous in it and no term comes from the
 //! moving kink. At `λ = 0` the `ν` score is the t's, term for term.
 //!
-//! `ln Γ` and `ψ` are written here (std has neither): each is shifted by its
-//! recurrence to an argument of at least 20 and read from its asymptotic
-//! series there, whose first term left out is below `1e-17` there.
+//! `ln Γ` and `ψ` are `crate::special`'s (std has neither), on the `libm`
+//! crate as the rest of this model's math is.
 
 use super::math;
+use crate::special::{digamma, ln_gamma};
 
 /// `ν`'s bounds, `arch`'s: 2.05 to 300.
 pub(super) const NU_LO: f64 = 2.05;
 pub(super) const NU_HI: f64 = 300.0;
 /// `|λ| ≤ 0.99`.
 pub(super) const LAM_LIM: f64 = 0.99;
-
-const LN_SQRT_2PI: f64 = 0.918_938_533_204_672_7;
-
-/// `ln Γ(x)` for `x > 0`.
-pub(super) fn ln_gamma(mut x: f64) -> f64 {
-    let mut shift = 0.0;
-    while x < 20.0 {
-        shift += math::ln(x);
-        x += 1.0;
-    }
-    let r = 1.0 / x;
-    let r2 = r * r;
-    let series = r
-        * (1.0 / 12.0
-            + r2 * (-1.0 / 360.0
-                + r2 * (1.0 / 1260.0 + r2 * (-1.0 / 1680.0 + r2 * (1.0 / 1188.0)))));
-    (x - 0.5) * math::ln(x) - x + LN_SQRT_2PI + series - shift
-}
-
-/// The digamma function `ψ(x) = d ln Γ(x)/dx` for `x > 0`.
-pub(super) fn digamma(mut x: f64) -> f64 {
-    let mut shift = 0.0;
-    while x < 20.0 {
-        shift += 1.0 / x;
-        x += 1.0;
-    }
-    let r = 1.0 / x;
-    let r2 = r * r;
-    let series = r2
-        * (1.0 / 12.0
-            - r2 * (1.0 / 120.0 - r2 * (1.0 / 252.0 - r2 * (1.0 / 240.0 - r2 * (1.0 / 132.0)))));
-    math::ln(x) - 0.5 * r - series - shift
-}
 
 /// `(a, b, c)` of the density at `(ν, λ)`.
 fn consts(nu: f64, lam: f64) -> (f64, f64, f64) {
