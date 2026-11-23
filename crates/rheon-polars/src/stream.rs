@@ -3135,10 +3135,15 @@ impl Stream {
     ) {
         let n_rows = rows.len();
         out.rows.extend_from_slice(rows);
-        // Three classes of row, by what the clock says the row would do to
-        // the state it is scored against: nothing, reset it, or blend it.
-        let mut classes: [Vec<RowPlan>; 3] = Default::default();
-        let [as_is, fresh, blended] = [0, 1, 2];
+        // Four classes of row, by what the clock says the row would do to
+        // the state it is scored against: nothing, reset it, blend it, or
+        // break the rows behind it from it. A session change blends and
+        // breaks; a gap past `gap_cap` breaks alone. A break clears what is
+        // lagged by rows (`OnlineModel::clear_lags`), as a learning stream
+        // clears it before it reads the row: `ar`'s lags, `spectral`'s
+        // transform. The copy is scored and dropped.
+        let mut classes: [Vec<RowPlan>; 4] = Default::default();
+        let [as_is, fresh, blended, unlagged] = [0, 1, 2, 3];
         // (class, position in it) of the last accepted row, which carries
         // the coefficients for the chunk.
         let mut last_accepted: Option<(usize, usize)> = None;
@@ -3189,9 +3194,9 @@ impl Stream {
                 backwards: false,
                 // Scoring moves nothing, the lag ring included: the classes
                 // below give the row a *copy* of the model in the state a
-                // learning stream would have reached, and a copy that
-                // cleared its lags would answer for a stream that had
-                // learned the row. `predict` never mutates.
+                // learning stream would have reached before reading it, its
+                // lags cleared where the row breaks them (`unlagged`,
+                // `blended`). `predict` never mutates.
                 capped: false,
                 accept,
                 want_coef: false,
@@ -3217,6 +3222,8 @@ impl Stream {
                 fresh
             } else if adv.session_changed {
                 blended
+            } else if adv.capped {
+                unlagged
             } else {
                 as_is
             };
@@ -3252,12 +3259,26 @@ impl Stream {
         }
         if !classes[blended].is_empty() {
             let mut models = self.models.clone();
-            models
-                .iter_mut()
-                .for_each(|(_, m)| m.blend_toward_long_run());
+            models.iter_mut().for_each(|(_, m)| {
+                m.blend_toward_long_run();
+                m.clear_lags();
+            });
             self.score(
                 spec,
                 &classes[blended],
+                &models,
+                features,
+                targets,
+                out,
+                n_rows,
+            );
+        }
+        if !classes[unlagged].is_empty() {
+            let mut models = self.models.clone();
+            models.iter_mut().for_each(|(_, m)| m.clear_lags());
+            self.score(
+                spec,
+                &classes[unlagged],
                 &models,
                 features,
                 targets,

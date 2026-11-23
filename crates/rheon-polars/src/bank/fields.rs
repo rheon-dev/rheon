@@ -38,8 +38,9 @@ pub struct FieldMeta {
     /// Lag, in learned rows, of an `ew_cov` `lag_corr_*` field
     /// (docs/ENHANCEMENTS.md E56); `None` for every other field.
     pub lag: Option<usize>,
-    /// The principal component an `ew_cov` `pc<j>_*` field is about; `None`
-    /// for every other field.
+    /// The principal component an `ew_cov` `pc<j>_*` field is about, or a
+    /// `spectral` field's period, by its place in `periods`; `None` for
+    /// every other field.
     pub component: Option<usize>,
     /// The hidden state an `hmm` posterior is about, `filtered_state<s>`
     /// and `predicted_state<s>`; `None` for every other field. With `lag`,
@@ -1225,12 +1226,13 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
             let base = mi * spec.targets.len() * n_slots;
             for (t_i, t) in spec.targets.iter().enumerate() {
                 for k in 0..n_slots {
-                    fields.push(
-                        FieldMeta::new(format!("power_{t}_p{k}{suffix}"), "power")
-                            .decay(suffix, d)
-                            .target(t)
-                            .src(Source::Stat(base + t_i * n_slots + k)),
-                    );
+                    let mut m = FieldMeta::new(format!("power_{t}_p{k}{suffix}"), "power")
+                        .decay(suffix, d)
+                        .target(t)
+                        .src(Source::Stat(base + t_i * n_slots + k));
+                    // The period's place in `periods` tells the fields apart.
+                    m.component = Some(k);
+                    fields.push(m);
                 }
             }
             fields.push(

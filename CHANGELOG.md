@@ -438,6 +438,18 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`predict` scores a row after a break as `fit_predict` reads it**
+  (PLAN 491). A row after a gap past `gap_cap`, or in a new session, breaks
+  the rows behind it: a learning stream clears what is lagged by rows
+  before it reads the row. `predict` scored such a row with the lags it
+  had, so `ar` predicted from lags `fit_predict` had dropped, and
+  `spectral`'s power read across the break. Such a row is now scored with a copy whose lags are
+  cleared, as a row in a new session is scored with a blended copy.
+
+- **`output_index` tells `spectral`'s periods apart** (PLAN 491). Each
+  `power_<t>_p<k>` field's `component` is its period's place in
+  `periods`; the fields of one target matched apart from their names.
+
 - **`garch` gives the same numbers on every platform** (W10's CI on
   f1aa0fe0, run 44991677911: the `garch_egarch` and `garch_skewt` goldens
   failed on Linux x86-64 and Windows, `garch_gjr_t` on Windows, and the
