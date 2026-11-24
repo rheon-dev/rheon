@@ -31,7 +31,30 @@ pub(crate) fn ldexp(mut x: f64, mut n: i64) -> f64 {
 
 /// The sum after a row: `λ² Q + w²`, `lam2` the decay's square (1 for an
 /// undecayed sum), `w` the row's weight at its own scale.
+///
+/// Every row of a model that keeps such a sum runs this, so the path of a
+/// sum at its own scale 0 and a weight inside `[2^-256, 2^256]` (or 0,
+/// which moves no scale either) is the plain operation, inlined
+/// where it is called; [`add_scaled`] takes the rest, the same arithmetic
+/// it ran before the split, to the bit.
+#[inline]
 pub(crate) fn add(q: &mut f64, s: &mut i32, lam2: f64, w: f64) {
+    // A positive double's bits order as its value does, so one unsigned
+    // comparison of the bits tells `[LO, HI]`; 0 and a weight that is not
+    // finite move no scale either, and `add_scaled` gives them the same sum.
+    let in_range = w.to_bits().wrapping_sub(LO.to_bits()) <= HI.to_bits() - LO.to_bits();
+    if *s == 0 && (in_range || w == 0.0) {
+        *q = lam2 * *q + w * w;
+    } else {
+        add_scaled(q, s, lam2, w);
+    }
+}
+
+/// [`add`] where the sum's scale is not 0 or the weight leaves the range
+/// at it: rare, so out of line.
+#[cold]
+#[inline(never)]
+fn add_scaled(q: &mut f64, s: &mut i32, lam2: f64, w: f64) {
     let mut held = lam2 * *q;
     let mut ws = ldexp(w, -i64::from(*s));
     // `ws` is infinite where a finite weight is past the doubles at this
@@ -62,8 +85,11 @@ pub(crate) fn value(q: f64, s: i32) -> f64 {
 
 /// Kish's count `W² / Q` from `W` and the sum in parts; `None` where the
 /// sum is not above 0.
+#[inline]
 pub(crate) fn count(w: f64, q: f64, s: i32) -> Option<f64> {
-    if q > 0.0 {
+    if q > 0.0 && s == 0 {
+        Some(w * w / q)
+    } else if q > 0.0 {
         let ws = ldexp(w, -i64::from(s));
         Some(ws * ws / q)
     } else {
@@ -73,8 +99,15 @@ pub(crate) fn count(w: f64, q: f64, s: i32) -> Option<f64> {
 
 /// `Q / W`, the weight of a row in Kish's sense; `None` where either is not
 /// above 0.
+#[inline]
 pub(crate) fn per_weight(w: f64, q: f64, s: i32) -> Option<f64> {
-    (w > 0.0 && q > 0.0).then(|| ldexp(q / ldexp(w, -i64::from(s)), i64::from(s)))
+    if !(w > 0.0 && q > 0.0) {
+        None
+    } else if s == 0 {
+        Some(q / w)
+    } else {
+        Some(ldexp(q / ldexp(w, -i64::from(s)), i64::from(s)))
+    }
 }
 
 /// Whether a loaded exponent is one a weight in the doubles makes: within

@@ -130,6 +130,7 @@ impl Warmup {
     /// of two of their own ([`crate::sqsum`]), so weights too small to
     /// square in a double count as rows (review 2026-11-23, REG-12): at
     /// `1e-200` the count was 0 for good and the fit never switched.
+    #[inline]
     pub fn count(&self) -> f64 {
         crate::sqsum::count(self.w, self.w2, self.w2_scale).unwrap_or(0.0)
     }
@@ -149,6 +150,7 @@ impl Warmup {
     /// read at and every floor the scaler's history keeps is in this unit,
     /// so that a stream whose weights are all scaled by `c` is read as the
     /// unscaled one (`sgd.rs`, `scaler_decay`; review fable2, C1's rule A).
+    #[inline]
     pub(crate) fn row_weight(&self) -> f64 {
         crate::sqsum::per_weight(self.w, self.w2, self.w2_scale).unwrap_or(1.0)
     }
@@ -176,6 +178,7 @@ impl Warmup {
     /// or more, and still holds a share of the moments after a long gap early
     /// in the stream (`pa`'s error after a gap at row 20 or 21 within 3.7
     /// times the same rows' with no gap, where it was up to 1e19 times).
+    #[inline]
     pub(crate) fn read(&self, weight: f64) -> (f64, f64) {
         let one = self.row_weight();
         if self.switched {
