@@ -224,10 +224,18 @@ pub struct SarimaEstimate {
     /// this, each in units free of the target's: an ARMA coefficient's as
     /// it is (the coefficients are unit-free), a regressor's coefficient's
     /// times the regressor's standard deviation over the innovations',
-    /// and `sigma2`'s relative to `sigma2`. Default
-    /// [`SarimaEstimate::SE_BOUND`], 0.1; finite and above 0. Smaller waits
-    /// longer for a better start. Written to a state only where it is not
-    /// the default.
+    /// and `sigma2`'s relative to `sigma2`. The regressors' check is a
+    /// rule of its own: identical or near-collinear regressors leave the
+    /// polynomials identified, so they pass the ARMA check, while the split
+    /// of their effect between them is not, and a start read from such a
+    /// split steps from an arbitrary point on a flat ridge. Measured with
+    /// two regressors correlated 0.99995, the polynomial's standard error
+    /// was 0.044 and `sigma2`'s relative one 0.083 at 365 rows, the
+    /// regressors' standardized ones 3.7 there and 2.1 at 1,233, so the
+    /// start was withheld; a pair correlated 0.5 was accepted at 366 rows.
+    /// Default [`SarimaEstimate::SE_BOUND`], 0.1; finite and above 0.
+    /// Smaller waits longer for a better start. Written to a state only
+    /// where it is not the default.
     #[serde(
         default = "SarimaEstimate::default_se_bound",
         skip_serializing_if = "SarimaEstimate::is_default_se_bound"

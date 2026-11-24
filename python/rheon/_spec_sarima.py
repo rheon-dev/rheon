@@ -68,7 +68,16 @@ def sarima(
         ARMA coefficient's as it is (they are unit-free), each regressor's
         coefficient's times the regressor's standard deviation over the
         innovations', and ``sigma2``'s relative to ``sigma2``, so the gate
-        does not depend on the target's units. Finite and above 0. Default
+        does not depend on the target's units. The regressors' standardized
+        standard errors are held as well as the ARMA coefficients': two
+        identical or near-collinear features leave the polynomials
+        identified, so they pass the ARMA check, but the split of their
+        effect between them is not, and a start read from it is an
+        arbitrary point on a flat ridge. Measured with two features
+        correlated 0.99995, the polynomial's standard error was 0.044 while
+        each feature's standardized one was 3.7, and still 2.1 at 1,233
+        rows, so the start was withheld; a pair correlated 0.5 was accepted
+        at 366 rows. Drop or combine such features. Finite and above 0. Default
         0.1: measured over five specs and eight seeds each at 10,000 rows,
         every start at 0.1 ended within 0.4 of ``SARIMAX.fit``'s standard
         errors of its parameters, where a bound of 0.15 or 0.2 left a spec

@@ -529,7 +529,17 @@ and why:
   the stated rule). A regressor's coefficient keeps its standardized
   standard error (times its regressor's standard deviation over the
   innovations'), also unit-free: without it two equal regressors would
-  pass the gate with an unidentified split. Written to a state only where
+  pass the gate with an unidentified split. The coordinator's ruling on
+  part 4 (B17) keeps it, documented and tested on both sides
+  (`est_tests.rs`): on an ARIMA(1,1,0) with two regressors, both
+  coefficients 1, 1,500 rows, a pair correlated 0.99995 is withheld
+  through the stream, `NotIdentified` (from Kish's count 365 `phi`'s
+  standard error 0.044 and `sigma2`'s relative 0.083 pass, the
+  regressors' standardized ones 3.7, and 2.1 at the last fit, 1,233,
+  near `1 / sqrt(n (1 - rho^2))`); the first regressor alone on the same
+  series opens at row 211; a pair correlated 0.5 opens at row 366, its
+  regressors' 0.044 there, `sigma2`'s relative standard error the last
+  to pass. Written to a state only where
   it is not the default, so the fixtures' bytes do not move; a fixture
   with a bound not the default is for the macOS regeneration at the
   merge.

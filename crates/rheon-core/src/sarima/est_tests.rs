@@ -420,6 +420,71 @@ fn a_flat_likelihood_is_not_identified() {
     assert!(m.params(0).is_none());
 }
 
+/// Two regressors, `x_1` standard normal and `x_2 = rho x_1 + sqrt(1 -
+/// rho^2) u` with `u` independent, so `rho` is their correlation, both
+/// coefficients 1 under an ARIMA(1,1,0) of `phi = 0.5` (differenced, so
+/// the simulation's level is no constant `trend="n"` lacks).
+fn pair(rho: f64, n: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut truth = params(&[0.5], &[], &[], &[], 1.0);
+    truth.exog = vec![1.0, 1.0];
+    let mut rng = 47;
+    let mut x = Vec::with_capacity(2 * n);
+    for _ in 0..n {
+        let (a, u) = (normal(&mut rng), normal(&mut rng));
+        x.extend([a, rho * a + (1.0 - rho * rho).sqrt() * u]);
+    }
+    (simulate([1, 1, 0], [0, 0, 0, 0], &truth, &x, n, 12), x)
+}
+
+/// The regressors' standardized standard errors are a gate of their own.
+/// Two near-identical regressors (correlation 0.99995, `1 - rho^2` about
+/// `1e-4`) leave the polynomial and `sigma2` identified, so the ARMA part
+/// alone would pass, but not the split between the two coefficients: when
+/// measured, from Kish's count 365 on `phi`'s standard error (0.044) and
+/// `sigma2`'s relative one (0.083) were under the default 0.1, while each
+/// regressor's standardized one was 3.7 there and still 2.1 at the last
+/// fit, 1,233, so the start is withheld through the whole stream. The same
+/// series with the first regressor alone, which carries the two
+/// coefficients' sum, is accepted (at row 211 when measured): what withholds
+/// the pair is its split.
+#[test]
+fn near_identical_regressors_are_not_identified() {
+    let (order, seasonal, n) = ([1, 1, 0], [0, 0, 0, 0], 1500);
+    let (ys, x) = pair(0.99995, n);
+    let mut m = Sarima::new(estimated(order, seasonal, 2)).unwrap();
+    let preds = run(&mut m, &some(&ys), &x, &vec![1.0; n]);
+    assert_eq!(opened(&preds), None);
+    assert_eq!(m.wait(0), Some(SarimaWait::NotIdentified));
+    assert!(m.params(0).is_none());
+    let x1: Vec<f64> = x.iter().step_by(2).copied().collect();
+    let mut one = Sarima::new(estimated(order, seasonal, 1)).unwrap();
+    let preds = run(&mut one, &some(&ys), &x1, &vec![1.0; n]);
+    let open = opened(&preds).expect("one of the pair is identified");
+    assert!(open < 300, "opened at row {open}");
+    let fit = one.params(0).unwrap();
+    assert!((fit.exog[0] - 2.0).abs() < 0.1, "{fit:?}");
+    assert!((fit.ar[0] - 0.5).abs() < 0.1, "{fit:?}");
+}
+
+/// The other side: a pair correlated 0.5, well separated, is accepted at
+/// the default bound, each coefficient near its own truth (when measured,
+/// at row 366, the regressors' standardized standard errors 0.044 there
+/// and `sigma2`'s relative one, 0.083, the last to come under 0.1).
+#[test]
+fn a_well_separated_regressor_pair_is_accepted() {
+    let (order, seasonal, n) = ([1, 1, 0], [0, 0, 0, 0], 1500);
+    let (ys, x) = pair(0.5, n);
+    let mut m = Sarima::new(estimated(order, seasonal, 2)).unwrap();
+    let preds = run(&mut m, &some(&ys), &x, &vec![1.0; n]);
+    let open = opened(&preds).expect("a well-separated pair is identified");
+    assert!(open < 600, "opened at row {open}");
+    assert_eq!(m.wait(0), None);
+    let fit = m.params(0).unwrap();
+    for (got, want) in [(fit.exog[0], 1.0), (fit.exog[1], 1.0), (fit.ar[0], 0.5)] {
+        assert!((got - want).abs() < 0.1, "{fit:?}");
+    }
+}
+
 /// A series that alternates in sign, with a little noise, is an AR(1)
 /// with `phi` a hair above -1: the fit runs to the stationarity bound.
 #[test]
