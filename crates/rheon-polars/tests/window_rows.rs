@@ -291,8 +291,8 @@ fn steps_brute(
         .collect();
     let starts = restarts(df, group, session, true);
     // Per group: the steps so far, with their clock, and the last time.
-    let mut groups: std::collections::HashMap<String, (Vec<(i64, f64)>, Option<f64>)> =
-        Default::default();
+    type Chain = (Vec<(i64, f64)>, Option<f64>);
+    let mut groups: std::collections::HashMap<String, Chain> = Default::default();
     let mut out = Vec::new();
     for i in 0..df.height() {
         let (key, new) = &starts[i];
