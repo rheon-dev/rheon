@@ -549,7 +549,7 @@ fn a_run_of_integers_is_compared_whole() {
     assert_eq!(floats(&out, "t"), [1.0, 2.0, 3.0, 4.0, 5.0].map(Some));
 }
 
-/// A temporal value's `tol` is in seconds, compared in nanoseconds: both
+/// A temporal value's `abs_tol` is in seconds, compared in nanoseconds: both
 /// sides of it.
 #[test]
 fn a_temporal_runs_tol_is_in_seconds() {
@@ -613,7 +613,7 @@ fn the_plan_refuses_what_it_cannot_read() {
     assert!(e.contains("event is not set"), "{e}");
     let e = refused(json!(["clock_lag", ["col", "ts"], {"event": ["col", "ev"]}]));
     assert!(e.contains("half_life is not set"), "{e}");
-    let e = refused(json!(["run_length", ["col", "num"], {"tol": -1.0}]));
+    let e = refused(json!(["run_length", ["col", "num"], {"abs_tol": -1.0}]));
     assert!(
         e.contains("tol must be a finite number of at least 0"),
         "{e}"
