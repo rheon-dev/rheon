@@ -155,6 +155,8 @@ fn bank(mut run: BankRun) -> BankRun {
 #[bench::window_ewm_quantile_w10k(args = ("window_ewm_quantile_w10k"), setup = windows_setup)]
 #[bench::window_ewm_quantile_running(args = ("window_ewm_quantile_running"), setup = windows_setup)]
 #[bench::window_ewm_sum_groups10k(args = ("window_ewm_sum_groups10k"), setup = windows_setup)]
+#[bench::window_ewm_mean_running(args = ("window_ewm_mean_running"), setup = windows_setup)]
+#[bench::window_clock_step_running(args = ("window_clock_step_running"), setup = windows_setup)]
 fn windows(mut run: WindowsCase) -> WindowsCase {
     black_box(rheon_budget_windows_rows(black_box(&mut run)));
     run

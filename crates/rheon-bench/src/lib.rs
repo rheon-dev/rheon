@@ -187,12 +187,20 @@ fn grouped(id: &str) -> bool {
 /// on a group's silence, so every group stays on the window core's list of
 /// groups by last row: a row's cost must not grow with the groups behind it
 /// (task 325: the walk from the list's head made it 80 µs a row at 10,000).
+/// And the clock step (task 564): the decayed mean of the steps of the
+/// stream's own clock, ungrouped (one group), half-life 1000, beside a
+/// running `ewm_mean` of the feature at the same half-life, its baseline:
+/// the two run the same rows through the same core, so their difference
+/// over [`ROWS`] is what a row of the clock step costs above a running
+/// mean.
 pub const WINDOW_CASES: &[&str] = &[
     "window_ewm_mean_w10k",
     "window_ewm_sum_w10k",
     "window_ewm_quantile_w10k",
     "window_ewm_quantile_running",
     "window_ewm_sum_groups10k",
+    "window_ewm_mean_running",
+    "window_clock_step_running",
 ];
 
 /// Groups in the grouped window case: its warm-up is two rows of each.
@@ -1109,6 +1117,12 @@ fn window_tree(id: &str) -> Value {
         }
         "window_ewm_sum_groups10k" => {
             return json!(["ewm_sum", ["col", "x0"], {"half_life": 1000.0}]);
+        }
+        "window_ewm_mean_running" => {
+            return json!(["ewm_mean", ["col", "x0"], {"half_life": 1000.0}]);
+        }
+        "window_clock_step_running" => {
+            return json!(["clock_step", ["col", "t"], {"half_life": 1000.0, "stat": "mean"}]);
         }
         other => panic!("no case {other:?}"),
     };

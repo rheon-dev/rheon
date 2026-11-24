@@ -673,6 +673,10 @@ fn rcov_copies_a_return_into_the_one_its_rings_let_go() {
 /// 1.4 allocations a row, on the thread that feeds. What is left is the feed's
 /// lazy queries' and output's, per block. Counted over each bench case's own
 /// measured block, on this thread: a query's pool threads count on their own.
+/// The clock step (task 564) is among the cases: its moments built the row's
+/// values, a group's share of them, its deviations and two lists of their
+/// powers for each row, about 7.3 allocations a row, and keep them between
+/// rows now, outside the saved state (0.35 a row, the block's own).
 #[test]
 fn the_window_operators_keep_their_pending_list() {
     for id in rheon_bench::WINDOW_CASES {

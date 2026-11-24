@@ -180,13 +180,37 @@ pub(crate) struct Summary {
 /// `x^0 .. x^top` by repeated multiplication.
 fn powers(x: f64, top: u32) -> Vec<f64> {
     let mut out = Vec::with_capacity(top as usize + 1);
+    push_powers(&mut out, x, top);
+    out
+}
+
+/// `x^0 .. x^top` by repeated multiplication, onto the end of `out`.
+fn push_powers(out: &mut Vec<f64>, x: f64, top: u32) {
     let mut p = 1.0;
     out.push(p);
     for _ in 0..top {
         p *= x;
         out.push(p);
     }
-    out
+}
+
+/// A row's working space in [`Summary::learn`]: the row's deviations, and
+/// each leg's powers of its two scaled deviations laid end to end (leg `j`
+/// from `at[j]`). Kept by the caller between rows so that a row allocates
+/// nothing once the vectors have their widths; never saved, and equal to
+/// any other (it holds nothing a later row reads).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Work {
+    d: Vec<f64>,
+    pa: Vec<f64>,
+    pb: Vec<f64>,
+    at: Vec<usize>,
+}
+
+impl PartialEq for Work {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 impl Summary {
@@ -234,8 +258,9 @@ impl Summary {
 
     /// One row of weight `w` at `z` after a decay of `lam`: Pébay's merge
     /// with the one-row summary, order 2 by `EwDiag`'s expression. Where
-    /// the weight is left at 0 the update stops at that condition.
-    pub fn learn(&mut self, g: &Group, lam: f64, w: f64, z: &[f64]) {
+    /// the weight is left at 0 the update stops at that condition. `work`
+    /// is the caller's working space, kept between rows.
+    pub fn learn(&mut self, g: &Group, lam: f64, w: f64, z: &[f64], work: &mut Work) {
         let w_new = lam * self.w + w;
         if w_new <= 0.0 {
             // `a` and `b` are 0/0: nothing carried and nothing added.
@@ -245,22 +270,23 @@ impl Summary {
         let a = lam * self.w / w_new;
         let b = w / w_new;
         if b > 0.0 {
-            let d: Vec<f64> = z
-                .iter()
-                .zip(&self.m)
-                .zip(&self.m_lo)
-                .map(|((&x, &m), &lo)| crate::comp::dev(x, m, lo))
-                .collect();
-            let pa: Vec<Vec<f64>> = d
-                .iter()
-                .zip(&g.top)
-                .map(|(&x, &t)| powers(-b * x, t))
-                .collect();
-            let pb: Vec<Vec<f64>> = d
-                .iter()
-                .zip(&g.top)
-                .map(|(&x, &t)| powers(a * x, t))
-                .collect();
+            let Work { d, pa, pb, at } = work;
+            d.clear();
+            d.extend(
+                z.iter()
+                    .zip(&self.m)
+                    .zip(&self.m_lo)
+                    .map(|((&x, &m), &lo)| crate::comp::dev(x, m, lo)),
+            );
+            pa.clear();
+            pb.clear();
+            at.clear();
+            for (&x, &t) in d.iter().zip(&g.top) {
+                at.push(pa.len());
+                push_powers(pa, -b * x, t);
+                push_powers(pb, a * x, t);
+            }
+            let (d, pa, pb, at) = (&*d, &*pa, &*pb, &*at);
             for i in (0..g.keep.len()).rev() {
                 if g.two[i].is_some() {
                     continue;
@@ -270,8 +296,8 @@ impl Summary {
                 g.each_shift(&g.keep[i], |beta, coef, gi| {
                     let (mut qa, mut qb) = (1.0, 1.0);
                     for (j, &k) in beta.iter().enumerate() {
-                        qa *= pa[j][k as usize];
-                        qb *= pb[j][k as usize];
+                        qa *= pa[at[j] + k as usize];
+                        qb *= pb[at[j] + k as usize];
                     }
                     let term = match gi {
                         None => a * qa + b * qb,
@@ -294,7 +320,7 @@ impl Summary {
                     _ => a2 * a2 * *r + b2 * b2,
                 };
             }
-            for ((m, lo), &x) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(&d) {
+            for ((m, lo), &x) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(d) {
                 crate::comp::add(m, lo, b * x);
             }
         }

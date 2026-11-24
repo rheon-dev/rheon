@@ -205,7 +205,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::clock_span::{HeldCap, Place};
 use crate::{Decay, Stamp};
-use layout::{Group, Idx, Summary, add as idx_add, below, binom, order, sub as idx_sub, unit};
+use layout::{
+    Group, Idx, Summary, Work, add as idx_add, below, binom, order, sub as idx_sub, unit,
+};
 
 /// The default limit on the state, as the other models' `max_state_bytes`:
 /// 256 KB.
@@ -1000,6 +1002,27 @@ pub struct EwmMoments {
     derived: Derived,
     #[serde(skip)]
     stacks: Stacks,
+    /// A row's working space, kept between rows so that a row allocates
+    /// nothing: never saved and never compared (each row overwrites it).
+    #[serde(skip)]
+    scratch: Scratch,
+}
+
+/// [`EwmMoments`]' working space for a row: its legs' values, a group's
+/// share of them and [`Summary::learn`]'s own. It holds nothing a later
+/// row reads, so it is no part of the state: skipped by the encoding (the
+/// state's bytes and layout are as before) and equal to any other.
+#[derive(Debug, Clone, Default)]
+struct Scratch {
+    z: Vec<f64>,
+    zg: Vec<f64>,
+    work: Work,
+}
+
+impl PartialEq for Scratch {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 impl EwmMoments {
@@ -1040,6 +1063,7 @@ impl EwmMoments {
             warning: None,
             derived,
             stacks: Stacks::default(),
+            scratch: Scratch::default(),
         })
     }
 
@@ -1206,16 +1230,13 @@ impl EwmMoments {
                 return;
             }
         }
+        let mut z = std::mem::take(&mut self.scratch.z);
+        z.clear();
         let d = &self.derived;
-        let z: Vec<f64> = d
-            .legs
-            .iter()
-            .zip(&d.leg_buf)
-            .map(|(l, b)| match b {
-                None => x.get(l.col).copied().unwrap_or(f64::NAN),
-                Some(i) => self.partner(*i, l.lag, now),
-            })
-            .collect();
+        z.extend(d.legs.iter().zip(&d.leg_buf).map(|(l, b)| match b {
+            None => x.get(l.col).copied().unwrap_or(f64::NAN),
+            Some(i) => self.partner(*i, l.lag, now),
+        }));
         for i in 0..self.bufs.len() {
             let col = self.bufs[i].col;
             let v = x.get(col).copied().unwrap_or(f64::NAN);
@@ -1225,7 +1246,7 @@ impl EwmMoments {
             self.push_ring(lam, w, &z, now);
         } else {
             let d = &self.derived;
-            let mut zg = Vec::new();
+            let Scratch { zg, work, .. } = &mut self.scratch;
             for ((s, g), pos) in self.sums.iter_mut().zip(&d.groups).zip(&d.pos) {
                 zg.clear();
                 zg.extend(pos.iter().map(|&p| z[p]));
@@ -1234,9 +1255,10 @@ impl EwmMoments {
                 } else {
                     0.0
                 };
-                s.learn(g, lam, w_g, &zg);
+                s.learn(g, lam, w_g, zg, work);
             }
         }
+        self.scratch.z = z;
         self.w_sum = lam * self.w_sum + w;
         if self.data_sized() {
             let (bytes, cap) = (self.state_bytes(), self.cfg.cap());
@@ -1250,7 +1272,7 @@ impl EwmMoments {
             Some(r) => r.pending *= lam,
             None => {
                 for (s, g) in self.sums.iter_mut().zip(&self.derived.groups) {
-                    s.learn(g, lam, 0.0, &[]);
+                    s.learn(g, lam, 0.0, &[], &mut self.scratch.work);
                 }
             }
         }
@@ -1409,6 +1431,7 @@ impl EwmMoments {
         let (lam, w) = (r.vals[at], r.vals[at + 1]);
         part.lp *= lam;
         let mut zg = Vec::new();
+        let mut work = Work::default();
         for ((s, g), pos) in part.sums.iter_mut().zip(&d.groups).zip(&d.pos) {
             zg.clear();
             zg.extend(pos.iter().map(|&p| r.vals[at + 2 + p]));
@@ -1417,10 +1440,10 @@ impl EwmMoments {
             } else {
                 0.0
             };
-            s.learn(g, lam, w_g, &zg);
+            s.learn(g, lam, w_g, &zg, &mut work);
         }
         if let Some(s) = part.sums.last_mut() {
-            s.learn(&d.weight, lam, w, &[]);
+            s.learn(&d.weight, lam, w, &[], &mut work);
         }
     }
 
