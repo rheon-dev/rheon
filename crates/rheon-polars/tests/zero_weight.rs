@@ -133,8 +133,36 @@ fn frame() -> DataFrame {
     df!("t" => t.clone(), "ts" => ts, "tb" => tb.clone(), "tbs" => tbs, "x0" => x0,
         "x1" => x1, "y" => y.clone(), "yb" => yb.clone(), "lab" => lab, "w" => w.clone(),
         "wb" => wb.clone(), "lt" => lt.clone(), "lts" => lts, "g" => g, "s" => s,
-        "tn" => tn.clone(), "tbn" => tbn.clone(), "ltn" => ltn.clone())
+        "tn" => tn.clone(), "tbn" => tbn.clone(), "ltn" => ltn.clone(),
+        "yg" => gjr_returns(N))
     .unwrap()
+}
+
+/// `n` returns of a GJR-GARCH(1,1) with Student-t(8) innovations scaled to
+/// unit variance, from a generator of their own (the other columns keep
+/// their draws): `σ²ₜ = ω + (α + γ·1[rₜ₋₁ < 0]) r²ₜ₋₁ + β σ²ₜ₋₁`,
+/// persistence `α + γ/2 + β = 0.995`. `garch`'s start waits until a
+/// likelihood-ratio test tells the process from a constant variance, which
+/// on a linear target such as `y` it never does: there every output was
+/// null, on the stream with zero-weight rows and without.
+fn gjr_returns(n: usize) -> Vec<f64> {
+    let mut r = lcg(31);
+    let mut normal = move || {
+        // Box-Muller from two uniforms in (0, 1].
+        let (u, v) = ((r() + 1.0) / 2.0, (r() + 1.0) / 2.0);
+        (-2.0 * (1.0 - u).ln()).sqrt() * (std::f64::consts::TAU * v).cos()
+    };
+    let (omega, alpha, gamma, beta, nu) = (0.01, 0.10, 0.15, 0.82, 8.0);
+    let (mut var, mut prev) = (omega / (1.0 - alpha - gamma / 2.0 - beta), 0.0f64);
+    (0..n)
+        .map(|_| {
+            var = omega + (alpha + if prev < 0.0 { gamma } else { 0.0 }) * prev * prev + beta * var;
+            let chi2: f64 = (0..nu as usize).map(|_| normal().powi(2)).sum();
+            let z = normal() / (chi2 / nu).sqrt() * ((nu - 2.0) / nu).sqrt();
+            prev = var.sqrt() * z;
+            prev
+        })
+        .collect()
 }
 
 /// A clock the specs run on.
@@ -428,13 +456,13 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
     (
         "garch",
         r#"{"type": "garch", "start_rows": 50, "horizon": 2}"#,
-        r#""targets": ["y"], "features": []"#,
+        r#""targets": ["yg"], "features": []"#,
         ALL,
     ),
     (
         "garch_span",
         r#"{"type": "garch", "start_span": @20}"#,
-        r#""targets": ["y"], "features": []"#,
+        r#""targets": ["yg"], "features": []"#,
         ALL,
     ),
     (
@@ -1025,6 +1053,36 @@ fn a_zero_weight_row_counts_in_no_clock_on_every_kind() {
     }
     assert!(failures.is_empty() || audit);
     assert!(cases > 130, "{cases} cases");
+}
+
+/// Both `garch` specs start on `yg` on every clock they run on, so the
+/// sweep above compares a fitted variance process with and without the
+/// rows of weight 0, not two runs that never start (PLAN 578j, TEST-2).
+#[test]
+fn the_garch_specs_start_on_every_clock() {
+    let (with_df, _, _) = streams();
+    for (name, model, rest, clocks) in SPECS.iter().filter(|(n, ..)| n.starts_with("garch")) {
+        for &clock in *clocks {
+            let spec = spec_of(&spec_text(name, model, rest, clock));
+            let (out, _) = run(&spec, &with_df);
+            let v = out
+                .column("variance_yg")
+                .unwrap()
+                .as_materialized_series()
+                .clone();
+            let started = v
+                .f64()
+                .unwrap()
+                .iter()
+                .flatten()
+                .filter(|x| *x > 0.0)
+                .count();
+            assert!(
+                started > 100,
+                "{name} on {clock:?}: {started} rows with a variance"
+            );
+        }
+    }
 }
 
 /// Every clock works the same way (the user, 2026-11-21: "All clocks should
