@@ -36,7 +36,11 @@
 //! `∂P_j/∂d = −P_j Σ_{i=2..j} 1/(i − 1 − d)`, and `(−1, λ_1, …)`. They are
 //! no state: one pass of `O(M)` along the ring makes them and the dot
 //! products together. The ring itself, the last `M` squared residuals, is
-//! FIGARCH's state.
+//! FIGARCH's state. The set the parameters are held to keeps every `λ_j ≥
+//! 0`; a weight the recursion's rounding leaves a hair below 0 is read as 0
+//! in the variance and its forecast, so a squared residual as large as the
+//! inputs allow never takes the variance below 0 (review 2026-11-23,
+//! GARCH-12).
 
 use serde::{Deserialize, Serialize};
 
@@ -200,13 +204,28 @@ impl Filter {
                 }
                 // `arch`'s variance bounds: within a factor 10⁶ of the
                 // 0.94-weighted mean of `e²` over the rows before, above it
-                // only logarithmically. Where one binds, the variance does
-                // not move with the parameters.
+                // only logarithmically, `hi + ln s − ln hi` in `arch`'s
+                // order, which forms no `s/hi` to overflow. Below, the
+                // variance does not move with the parameters; above, it
+                // moves as `ln s` does, so `∂ ln s/∂θ` is `∂ ln s_raw/∂θ`
+                // over the bounded `s` (0 past the exponent's cap; review
+                // 2026-11-23, GARCH-5).
                 let s = math::exp(lt.min(LN_S_MAX));
                 let (lo, hi) = (self.lag[2] / 1e6, self.lag[2] * 1e6);
-                if s < lo || s > hi {
+                if s < lo {
                     dl.fill(0.0);
-                    return if s < lo { lo } else { hi + math::ln(s / hi) };
+                    return lo;
+                }
+                if s > hi {
+                    let bounded = hi + math::ln(s) - math::ln(hi);
+                    if lt < LN_S_MAX {
+                        for d in dl.iter_mut() {
+                            *d /= bounded;
+                        }
+                    } else {
+                        dl.fill(0.0);
+                    }
+                    return bounded;
                 }
                 s
             }
@@ -216,7 +235,7 @@ impl Filter {
                 let (mut h, mut dp, mut dd, mut db) = (w, 0.0, 0.0, 0.0);
                 figarch_weights(theta, self.ring.len(), true, |j, lam, lp, ld, lb| {
                     let x = self.back(j);
-                    h += lam * x;
+                    h += lam.max(0.0) * x;
                     dp += lp * x;
                     dd += ld * x;
                     db += lb * x;
@@ -236,7 +255,7 @@ impl Filter {
         if vol == GarchVol::Figarch {
             let mut h = theta[0] / (1.0 - theta[3]);
             figarch_weights(theta, self.ring.len(), false, |j, lam, _, _, _| {
-                h += lam * self.back(j);
+                h += lam.max(0.0) * self.back(j);
             });
             return h;
         }

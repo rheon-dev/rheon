@@ -111,18 +111,21 @@
 //! withheld unless its likelihood-ratio statistic against constant
 //! variance, `2 (f − f₀) Σw/Σw²` (`f₀` the normal's at the mean square, or
 //! the t's with its shape fitted; the weights at Kish's count, so scaling
-//! them changes nothing), reaches χ² at 0.999 for the restrictions
-//! constant variance puts on the process: 2 for GARCH(1,1), free or
+//! them changes nothing), reaches χ² at 0.999 for the degrees of freedom
+//! the process adds to one constant variance: 2 for GARCH(1,1), free or
 //! targeted (`α = β = 0`), 13.8; 3 for GJR and EGARCH (`α = γ = β = 0`)
-//! and FIGARCH (`d = 0`, `φ = β`), 16.3; and one more for each input (`π =
-//! 0`). With inputs the fit is withheld too while the start's information
+//! and FIGARCH, 16.3 (`d = 0` and `φ = β` are two equations, but leave
+//! its four parameters one variance, `ω/(1 − β)`, so three of them are the
+//! process's); and one more for each input (`π = 0`). With inputs the fit
+//! is withheld too while the start's information
 //! in the variance equation's parameters, scaled to a unit diagonal, fails
 //! the relative pivot rule: a pivot of its Cholesky factorization at or
 //! under `10⁻¹⁰` of its largest diagonal entry (`fit::PIVOT_FLOOR`), as the
 //! library's other definite solves read a system. An input constant over
 //! the start is `ω` again, and two inputs that move together are one. `π =
 //! 0`, where an input that explains nothing sits, is no bound that makes a
-//! start wait (`withheld_reason` names the wait, `not_identified`). A fit
+//! start wait (`withheld_reason` names the wait, `not_identified`, as it
+//! does a start whose rows are all 0). A fit
 //! that passes is stepped from only at its
 //! optimum: the gain its Newton step predicts inside the process's set,
 //! `gᵀd − ½ dᵀ M d` for the step `d` projected onto the set in `M`'s
@@ -594,12 +597,15 @@ pub struct Garch {
     /// The clock summed from the rows' steps, the stamp of a row no stamp
     /// was handed for (a start of a clock span).
     own: f64,
-    /// The stamp handed for the next row.
-    #[serde(default)]
+    /// The stamp handed for the next row, and the warning raised and not
+    /// yet taken. Never state: neither is held between two calls (review
+    /// 2026-11-23, BANK-10).
+    #[serde(skip)]
     next: Option<Stamp>,
     /// The bytes a buffered row would have taken the state to, past the cap.
     over: Option<u64>,
     warned: bool,
+    #[serde(skip)]
     warning: Option<u64>,
 }
 
@@ -740,7 +746,9 @@ impl Garch {
     /// variance `s` given; `e` the row's residual where there is one.
     fn report(&self, j: usize, s: f64, e: Option<f64>, out: &mut [f64]) {
         let series = &self.series[j];
-        let open = series.w_sum >= self.cfg.min_weight && s.is_finite();
+        // a variance that is not a positive number is withheld (review
+        // 2026-11-23, GARCH-12)
+        let open = series.w_sum >= self.cfg.min_weight && s > 0.0 && s.is_finite();
         let base = j * self.cfg.slots();
         out[base] = if open { s } else { f64::NAN };
         out[base + 1] = match e {
@@ -841,7 +849,13 @@ impl OnlineModel for Garch {
             };
             let series = &mut self.series[j];
             if series.started {
-                series.learn(&self.cfg, e, x, weight, s, &dl[..k], false);
+                // A variance that is not a positive number has no score: the
+                // row is not learned, as an absent residual is not (the
+                // bounds on the parameters keep every variance above 0, so
+                // only a state from outside this build reaches it).
+                if s > 0.0 && s.is_finite() {
+                    series.learn(&self.cfg, e, x, weight, s, &dl[..k], false);
+                }
                 continue;
             }
             // The start's buffer. A first span's rows are checked against
@@ -929,6 +943,28 @@ impl OnlineModel for Garch {
                         "its running sums have the wrong shape",
                     ));
                 }
+                // The values (review 2026-11-23, GARCH-6): a shape out of its
+                // range sent `ln Γ` into a loop that never ended, and a
+                // parameter outside its set, a weight below 0 or a buffer
+                // past the cap went on as if sound.
+                if !(m.w_sum >= 0.0 && m.w_sum.is_finite() && m.own.is_finite())
+                    || !m.series.iter().all(|s| s.has_values(&m.cfg))
+                {
+                    return Err(crate::model::damaged(
+                        "garch",
+                        "a weight, a parameter or a running mean is out of its range",
+                    ));
+                }
+                if m.bytes() > m.cfg.cap() {
+                    return Err(crate::model::damaged(
+                        "garch",
+                        format!(
+                            "it holds {} bytes, past max_state_bytes of {}",
+                            m.bytes(),
+                            m.cfg.cap()
+                        ),
+                    ));
+                }
                 Ok(m)
             }
             other => Err(StateError::WrongModel {
@@ -955,6 +991,8 @@ impl OnlineModel for Garch {
 
 #[cfg(test)]
 mod mutant_tests;
+#[cfg(test)]
+mod review_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

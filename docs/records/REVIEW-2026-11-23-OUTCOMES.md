@@ -497,3 +497,93 @@ operands' own doubles, so it has no rounding to share with the code.
   to 0 over 1,074 half-lives of null rows. (c) and (d) move outputs past 5
   ulps at their tails and (c) changes what two of the state's doubles
   mean, so both are the user's; (b) needs no decision.
+
+## Batch a: the GARCH family (PLAN 578a)
+
+On `review-578a`, cut from 51671e2e. "Confirmed" means the named test
+failed on 51671e2e for the review's reason. Test paths are under
+`crates/rheon-core/src/garch/` unless they start with `tests/` or
+`crates/`; `review_tests.rs` holds one test or more a finding, named by
+its ID. A test marked `should_panic` holds a confirmed defect whose fix is
+the user's to allow. Every fix below leaves the goldens and every state
+fixture's continuation as they were; the layout change (BANK-10 (2))
+regenerated the fifteen current `garch*` and `dcc_margins` fixtures, whose
+continuations did not move, and two degenerate cases' withheld fits
+(`garch_started`, `garch_egarch`, `garch_skewt`, `garch_figarch`: the fit
+of rows with no process, kept in the state and never reported) moved with
+GARCH-1's line search. The kept `v71/` sets convert and continue as before.
+
+| ID | verdict | test | commit |
+|---|---|---|---|
+| GARCH-1 | confirmed (a concave quadratic bent up past `x = ½` over `{x ≤ 1, y ≥ 0}`: the projected Newton step to the corner, its model predicting a loss of 8.5, was taken on the slopes' trapezoid while `f` fell from −41.5 to −45, and the fit ended there), fixed: the slopes decide only a step whose two model terms are each at most twice the rounding floor (an unprojected Newton step under the floor always is); any other step is read from `f`, and taken only with `gᵀΔ > 0` and Armijo's rise. The review's fix as given | `optim.rs`'s tests: `a_step_along_which_f_falls_is_never_taken`; `review_tests.rs::garch_1_a_step_the_quadratic_model_says_loses_is_read_from_f` | 7d41ce7c |
+| GARCH-2 | not reproduced: of twelve 2,000-row Gaussian GARCH(1,1) series fitted with a t, nine fit `ν = 300` and every one started at its first try. Soundness is read from the decrement inside the set (`decrement_in`, the step projected onto the set with the shape's box in the curvature's metric), which at an optimum on the `ν` face is the rounding's; the review read the unconstrained decrement alone | `review_tests.rs::garch_2_a_t_fit_at_its_shape_bound_starts_at_its_first_try` | 7d41ce7c |
+| GARCH-3 | confirmed (both of the review's cases: from and to breaking the guard at `\|z\| ≈ 5` and `3.375`, the cut took `β = 0`, mean `ln \|μ\|` 0.72 against the step's end's 0.12), fixed: `(α, γ, β)` shrunk together by the largest factor that keeps the guard, `ω` held. `μ` is linear in them, so the mean is `ln t` plus its value at the step's end: monotone, and at `t = 0` far below the bound. The review's Pass-2 objection (no homogeneity) is to another `μ`; the guard's is homogeneous of degree 1 | `review_tests.rs::garch_3_a_cut_from_a_broken_point_keeps_the_filter_contracting`; `guard.rs`'s test updated to the new rule | 7d41ce7c |
+| GARCH-4 | (2) confirmed (the t and skewed t at `z ≈ 10¹⁵⁵`: density `−∞`, scores NaN; a t series at `10⁻⁵⁵` met by a return of `10¹⁰⁰` never started on the old build), fixed: `ln(1 + m²/n₂)` and the scores' ratios read in `1/m` where `m²` overflows; continuous with the plain form, and the variance score's factor tends to `ν`. (1) not reproduced as stated: a series at `10⁻⁸⁰` never starts (`½ (∂ ln s/∂ω)²` overflows in the start's information and curvature), so no started `H` is reached; that series reporting nothing is a decision for the user (below) | `review_tests.rs::garch_4_the_t_density_and_scores_past_the_largest_square_are_numbers`, `::garch_4_a_t_score_past_the_largest_square_leaves_the_state_finite`, `::garch_4_a_series_at_a_scale_of_1e_minus_80_starts` (`should_panic`) | 7d41ce7c |
+| GARCH-5 | (1) confirmed (`hi = 10⁻⁶`, `ln s = 700`: an infinite variance), fixed: `hi + ln s − ln hi`, `arch`'s `egarch_recursion` in its own order. (2) the slope confirmed (0 where a central difference of the two-row run reads `9.6·10⁻⁷`), fixed: `∂ ln s_raw/∂θ` over the bounded `s`, 0 past the exponent's cap; the "dimensional mismatch" is `arch`'s own formula and kept. (3) the backcast confirmed (75 zeros, then an EGARCH series: 3 tries, no start), fixed: EGARCH's backcast of 0 read as the rows' mean square. The online claim not reproduced: the 0.94-weighted mean of `e²` never reaches 0 (0.94 times 8 subnormal ulps rounds back to 8), and through 13,000 zeros the variance follows the lower bound down to `1.5·10⁻³²³`, positive, and reports on every row | `review_tests.rs::garch_5_the_egarch_upper_bound_does_not_overflow`, `::garch_5_the_egarch_sensitivity_past_the_upper_bound_is_its_slope`, `::garch_5_an_egarch_whose_first_rows_are_zero_starts`, `::garch_5_a_long_run_of_zeros_leaves_egarch_reporting`; `mutant_tests.rs`'s bound test updated to the slope | 7d41ce7c |
+| GARCH-6 | confirmed (`ν = −10¹⁷`, `ν = 2`, NaN, `ν = 10⁹`, `λ = 1.5`, FIGARCH `β = 1`, a weight below 0, a buffer past the cap: each loaded; `ln Γ(−10¹⁷)` ran past 5 s), fixed: `Garch::restore` refuses a state whose values are out of range (`Series::has_values`: weights and running means finite, weights at 0 or above, buffered weights above 0, and once started the parameters in the process's set to `10⁻⁹` of each bound, the shape in its box) or whose bytes pass `max_state_bytes`; `ln_gamma` and `digamma` return NaN off `(0, ∞)` at once. Every kept fixture loads | `review_tests.rs::garch_6_a_damaged_state_is_refused`, `::garch_6_ln_gamma_outside_its_domain_returns` | 7d41ce7c |
+| GARCH-7 | the mechanism confirmed, not a defect: a target's own weight, which `min_weight` gates, is the weight its fit rests on, and a start's ring lets its oldest rows go unlearned, as a window's rows that left teach a windowed fit nothing (hard rule 8's window clause). The review's case gates on the 500 rows of its fit while `weight_sum` counts 1,000; pinned. A choice for the user (below) | `review_tests.rs::garch_7_a_targets_weight_is_the_weight_its_fit_rests_on` | 7d41ce7c |
+| GARCH-8 | (1) not reproduced at 51671e2e: the row's bytes are `series_bytes(rows + 1)`, the larger of the buffer and the ring, so a FIGARCH span start at a cap of 8,232 bytes buffers its rows. (2) confirmed (a FIGARCH span start tried on 61 rows, where a start of rows is refused under 2,000), a decision for the user (below) | `review_tests.rs::garch_8_a_figarch_span_start_at_its_exact_cap_buffers`, `::garch_8_a_figarch_span_start_tries_on_no_fewer_rows_than_a_start_of_rows` (`should_panic`) | 7d41ce7c |
+| GARCH-9 | not reproduced: every form, the targeted GARCH and FIGARCH among them, reports the same bits at weights `2⁻³⁴`, `2⁻⁶⁰` and `2⁴⁰` as at 1 (two seeds each). The floor `1 + \|f\|` does reach more steps' gains at tiny weights, but the slopes and Armijo's rule accept the same steps there | `review_tests.rs::garch_9_a_power_of_two_on_every_weight_moves_no_report` | 7d41ce7c |
+| GARCH-10 | confirmed (300 random metrics of condition `10⁸` to `5·10¹⁴` on GARCH's set at `ω ≈ 10⁸`, GJR's and FIGARCH's: the metric projection up to 1 off the minimizer `crate::oracle::project_qp` finds, an active-set enumeration on faer's LU, and outside the set by as much), fixed: where Dykstra's sweeps do not reach their stop, the projection is solved from its optimality conditions (`HalfSpaces::project_exact`); against the minimizer in exact rational arithmetic (Python's `fractions`) on every such call in the state fixtures' runs, the old path was up to 1.5 off in the metric and the exact solve within `5·10⁻¹²`. A point whose sweeps stopped is kept: there the old path was within `10⁻¹⁰` and the exact solve no closer, so the goldens and continuations do not move. The Euclidean sweeps' stop is now `10⁻¹⁴` of the point's largest coordinate (at least 1), so a variance level of `10⁸` stops, bit for bit the old stop for coordinates within 1. The cleanup's single pass is left: the bounds that matter are made exact after it (GARCH-12) | `review_tests.rs::garch_10_the_projection_in_a_metric_is_the_minimizer` | 7d41ce7c |
+| GARCH-11 | (1) the wording confirmed and corrected: the statistic's degrees of freedom are the parameters the process adds to one variance, FIGARCH's `d = 0`, `φ = β` two equations leaving its four parameters one variance, so 3 (`fit.rs`, the module docs, the docstring, docs/MODELS.md). (2) confirmed, corrected: docs/MODELS.md says FIGARCH holds the larger of the buffer and the ring. (3) confirmed, fixed: a start of zeros waits as `not_identified` | `review_tests.rs::garch_11_a_start_of_zeros_waits_as_not_identified` | 7d41ce7c |
+| GARCH-12 | confirmed (GJR at `α + γ = −4.1·10⁻¹⁵` and `e = −10⁸`: a variance of −38.7 reported; FIGARCH at `λ₁ = −9·10⁻¹³` and `e = 10⁹`: negative; the GJR t's `H` NaN; `project_metric` left GJR's `α` at `−1.6·10⁻¹⁴`), fixed: after each step's projection and at the start's fit, the bounds that keep each shock's weight at 0 or above are made exact (`series::exact`; GJR's as `γ ≥ −α`, whose sum rounds to an exact 0, EGARCH's box beside them), FIGARCH's weights are read at 0 or above, and a variance that is not a positive number is neither reported nor learned. Over three GJR series with `α = 0` the old build's steps kept the bounds (a pin, not evidence) | `review_tests.rs::garch_12_no_variance_at_or_below_zero_is_reported`, `::garch_12_the_shock_weights_bounds_are_made_exact`, `::garch_12_a_step_keeps_every_shock_weight_at_zero_or_above` | 7d41ce7c |
+| BANK-10 | (1) confirmed (a broken bank given a clock of another type: `fit_predict_arrow` and `predict_arrow` named the clock, `fit_predict` and `predict` the break), fixed: both ask first, and the Python binding asks before it converts the frame. (2) confirmed, fixed: `Garch::next` and `warning` are `#[serde(skip)]`, as every other model's are; the layout loses two keys at schema 72 (unreleased), the current fixtures regenerated, the `v71/` sets converting to them | `tests/test_exception_types.py::test_a_broken_bank_refuses_every_entry_point_before_it_reads_the_chunk`, `crates/rheon-polars/tests/arrow_chunk.rs::a_broken_bank_says_so_first_at_the_arrow_entry_points` | 7d41ce7c |
+
+Per-row cost (arm64, release build of the library's tests, one series
+after its 2,000-row start, 50,000 rows, best of seven, 51671e2e then this
+branch, load 4.6 to 8): `garch` 316.5 / 315.0 ns, `gjr` 346.8 / 350.5,
+`egarch` 562.8 / 568.4, `figarch` (1,000 lags) 2,766.6 / 2,803.4, `garch`
+t 397.8 / 399.4, skewed t 511.8 / 506.2: within 1.3% either way, the
+spread of such runs. The row adds the exact bounds' few comparisons after
+each step, a test of the variance's sign, and for FIGARCH a `max` a lag;
+the exact projection and the guard's new cut run only on the rare rows
+that need them. Not timed on x86-64. State: two keys fewer a `garch`
+(15 bytes).
+
+W12's mutants (the coordinator, 2026-11-24): five survivors of CI's
+changed-lines pass in `optim.rs`'s `maximize` (`/` → `*` in the step's
+scale, `+` → `*` in the rounding floor, `>` → `>=` at the floor, `+` → `-`
+in Armijo's line, `+` → `*` in the stall bound), each killed by a test on
+an objective the line search's decision alone settles:
+`the_rounding_floor_is_read_in_each_parameters_unit`,
+`a_gain_at_the_rounding_floor_is_read_from_the_slopes` (an exact tie, the
+gain `10⁻¹⁰` to the bit), `a_step_short_of_armijos_gain_is_halved`,
+`a_step_that_no_longer_contracts_at_the_rounding_ends_the_fit`; and
+GARCH-1's new lines by `a_step_along_which_f_falls_is_never_taken`. A
+local `cargo mutants --in-diff` of `maximize` (its changed lines and the
+five survivors' lines, the library's tests alone) caught 39 of 43, the
+five among them; the three it missed, the gain read as `slope + curve` and
+the stall bound read as `10⁻¹¹/(1 + size)` or `10⁻¹¹ (1 − size)`, each
+have a case of their own in the last two tests (a gain of half the floor,
+a stall about 1,000).
+
+### Left for the user (batch a)
+
+- **GARCH-8 (2), FIGARCH's start under `start_span`.** A start of rows is
+  refused under 2,000 rows for FIGARCH (its ring of 1,000 lags is mostly
+  the backcast on fewer, and `d` fits low); a start of a span fits on as
+  few as 50 rows, any form's floor. Options: (a) hold a FIGARCH span start
+  to the same 2,000 rows, the review's fix: consistent, but a fixed row
+  count; (b) keep 50 and say so; (c) replace both floors by a condition,
+  such as `d`'s standard error from the start's information at the rows in
+  hand, which no row count stands in for. Recommended: (c) as its own task,
+  and (a) meanwhile only if the user accepts the row count it already has
+  for starts of rows. Held by
+  `garch_8_a_figarch_span_start_tries_on_no_fewer_rows_than_a_start_of_rows`
+  (`should_panic`).
+- **GARCH-4 (1), a series far from unit scale.** `∂ ln s/∂ω = 1/s` sits in
+  the start's information squared, so below about `10⁻⁷⁷` in the returns
+  it overflows and the start is never at its optimum (every row withheld,
+  `below_warm_rows`), and near `10⁸⁰` the entry falls below the normal
+  doubles (it starts, its `ω` steps on lost digits). Options: (a) rescale
+  each series by a power of two at its start (exact, so every result in
+  range keeps its bits), a field per target and a layout change with a
+  fixture for the new form; (b) document the range, `10⁻⁷⁵` to `10⁷⁵`, and
+  let a caller rescale. Recommended: (b) now, (a) if a use appears.
+  Held by `garch_4_a_series_at_a_scale_of_1e_minus_80_starts`
+  (`should_panic`).
+- **GARCH-7, what a target's `min_weight` counts.** Today the weight its fit
+  rests on: after a ring let rows go unlearned, fewer than `weight_sum`.
+  The review's alternative counts every row the target was given, a new
+  field a target and a layout change. Recommended: keep, as hard rule 8
+  reads a window's weight.

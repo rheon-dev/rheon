@@ -151,6 +151,50 @@ impl Series {
             }
     }
 
+    /// Whether the state's values are in their ranges, beside the shape
+    /// [`Series::has_shape`] reads: every weight and running mean a number,
+    /// the weights at 0 or above and each buffered row's above 0; and once
+    /// started, the parameters in the process's set (to `10⁻⁹` of each
+    /// bound's size: a projection meets them to `10⁻¹²`), a t's `ν` in
+    /// `[2.05, 300]` and a skewed t's `|λ| ≤ 0.99`; a GARCH-X's inputs'
+    /// running mean and its buffered rows' inputs are numbers too.
+    pub fn has_values(&self, cfg: &GarchCfg) -> bool {
+        let finite = |v: &[f64]| v.iter().all(|x| x.is_finite());
+        let k = cfg.k();
+        let means = self.w_sum >= 0.0
+            && self.w_sum.is_finite()
+            && self.mean_e2 >= 0.0
+            && self.mean_e2.is_finite()
+            && self.kappa.is_finite()
+            && self.slope.is_finite()
+            && finite(&self.h)
+            && finite(&self.xbar)
+            && finite(&self.xbuf)
+            && self.zbins.iter().all(|c| *c >= 0.0 && c.is_finite())
+            && self
+                .buffer
+                .iter()
+                .all(|r| r[0].is_finite() && r[1] > 0.0 && r[1].is_finite())
+            && finite(&self.filter.lag)
+            && finite(&self.filter.sens)
+            && self.filter.ring.iter().all(|x| *x >= 0.0 && x.is_finite());
+        if !means {
+            return false;
+        }
+        if !self.started {
+            return true;
+        }
+        let th = &self.theta;
+        let shape = match cfg.dist {
+            GarchDist::Normal => true,
+            _ => {
+                (dist::NU_LO..=dist::NU_HI).contains(&th[k])
+                    && th.get(k + 1).is_none_or(|l| l.abs() <= dist::LAM_LIM)
+            }
+        };
+        finite(th) && shape && set_of(cfg.vol, cfg.q(), 0.0).holds(&th[..k], 1e-9)
+    }
+
     /// The variance of the row about to be read, whose inputs are `x`, and
     /// its sensitivity into `dl`; not a number before the start.
     pub fn read(&self, cfg: &GarchCfg, x: &[f64], dl: &mut [f64]) -> f64 {
@@ -195,6 +239,14 @@ impl Series {
         let bc = backcast(&self.buffer);
         let wsum: f64 = self.buffer.iter().map(|r| r[1]).sum();
         let v = self.buffer.iter().map(|r| r[1] * r[0] * r[0]).sum::<f64>() / wsum;
+        // EGARCH's first `ln s` lag is the backcast's logarithm, so a
+        // backcast of 0 (the first 75 rows all 0) is read as the rows' mean
+        // square, which no `ln` takes to `−∞` (review 2026-11-23, GARCH-5).
+        let bc = if cfg.vol == GarchVol::Egarch && (bc.is_nan() || bc <= 0.0) {
+            v
+        } else {
+            bc
+        };
         let got = fit(
             cfg.vol,
             cfg.dist,
@@ -215,7 +267,11 @@ impl Series {
             series.since = 0;
         };
         let got = match got {
-            // No fit with a finite likelihood (a buffer of zeros).
+            // Rows all 0: a constant variance of 0 says all they tell, and
+            // no process, so the wait is `not_identified`, the withheld
+            // "fit" that constant (review 2026-11-23, GARCH-11).
+            None if v == 0.0 => return wait(self, Some(vec![0.0; cfg.n_params()])),
+            // No fit with a finite likelihood.
             None => return wait(self, None),
             // No evidence of a variance process, or inputs the fit cannot tell
             // apart: withheld.
@@ -230,6 +286,9 @@ impl Series {
         let xs = std::mem::take(&mut self.xbuf);
         let (k, q) = (cfg.k(), cfg.q());
         self.theta = got.theta;
+        if !cfg.variance_targeting {
+            exact(cfg.vol, &mut self.theta[..k], OMEGA_FLOOR_FRAC * v);
+        }
         self.sound = true;
         self.started = true;
         self.tried = 0;
@@ -278,7 +337,8 @@ impl Series {
             self.xbuf[self.head * q..(self.head + 1) * q].copy_from_slice(x);
             self.head = (self.head + 1) % self.buffer.len();
             self.dropped += 1;
-            self.w_sum += w - old[1];
+            // a sum of what the buffer holds, never below 0 by rounding
+            self.w_sum = (self.w_sum + w - old[1]).max(0.0);
         } else {
             self.buffer.push([e, w]);
             self.xbuf.extend_from_slice(x);
@@ -399,12 +459,15 @@ impl Series {
         let th = &self.theta;
         let new = if cfg.variance_targeting {
             let prop = [th[1] + mv[0], th[2] + mv[1]];
-            let (y, _) = project(&ab_set(), &prop, &hm, 2);
+            let (mut y, _) = project(&ab_set(), &prop, &hm, 2);
+            y[0] = y[0].max(0.0);
+            y[1] = y[1].max(0.0);
             vec![self.mean_e2 * (1.0 - y[0] - y[1]), y[0], y[1]]
         } else {
             let floor = OMEGA_FLOOR_FRAC * self.mean_e2;
             let mut prop: Vec<f64> = th.iter().zip(&mv).map(|(t, m)| t + m).collect();
-            let (y, shift) = project(&set_of(vol, cfg.q(), floor), &prop, &hm, k);
+            let (mut y, shift) = project(&set_of(vol, cfg.q(), floor), &prop, &hm, k);
+            exact(vol, &mut y, floor);
             if nf > k {
                 // a t: the shape's step, ν − 2 ← (ν − 2) e^{Δs} (and λ), with
                 // the move the projection gave it on top
@@ -489,6 +552,53 @@ fn project(set: &HalfSpaces, prop: &[f64], hm: &[f64], kc: usize) -> (Vec<f64>, 
         })
         .collect();
     (y, shift)
+}
+
+/// The bounds that keep every shock's weight in the variance at 0 or above,
+/// made exact on a projected `θ`: the projection meets them only to its
+/// tolerance (`10⁻¹²` of each constraint's size), and a weight a hair below
+/// 0 times a squared return as large as the inputs allow (`10²⁰⁰`) takes
+/// the variance below 0 (review 2026-11-23, GARCH-12). `ω` at least its
+/// floor, and GARCH's `α, β ≥ 0`; GJR's `α ≥ 0`, `α + γ ≥ 0` (as `γ ≥ −α`,
+/// which rounds to an exact 0 sum) and `β ≥ 0`; FIGARCH's `φ ≥ 0`, `0 ≤ d ≤
+/// 1 − 10⁻⁴`, `2φ + d ≤ 1` and `0 ≤ β ≤ φ + d`, whose weights' own
+/// rounding the filter takes care of ([`super::filter`]). EGARCH's
+/// variance is an exponential; its box, `|γ| ≤ α ≤ 1` and `0 ≤ β ≤ 1 −
+/// 10⁻⁴`, is made exact too, as the guard reads it.
+pub(super) fn exact(vol: GarchVol, y: &mut [f64], floor: f64) {
+    if !y.iter().all(|v| v.is_finite()) {
+        return;
+    }
+    match vol {
+        // inputs, after the process's parameters, are held at 0 or above
+        // under GARCH and GJR (`π ≥ 0`), and free under EGARCH
+        GarchVol::Garch => {
+            y[0] = y[0].max(floor);
+            y[1] = y[1].max(0.0);
+            y[2] = y[2].max(0.0);
+            y[3..].iter_mut().for_each(|p| *p = p.max(0.0));
+        }
+        GarchVol::Gjr => {
+            y[0] = y[0].max(floor);
+            y[1] = y[1].max(0.0);
+            y[2] = y[2].max(-y[1]);
+            y[3] = y[3].max(0.0);
+            y[4..].iter_mut().for_each(|p| *p = p.max(0.0));
+        }
+        GarchVol::Figarch => {
+            y[0] = y[0].max(floor);
+            y[2] = y[2].clamp(0.0, super::fit::D_MAX);
+            y[1] = y[1].clamp(0.0, 0.5 * (1.0 - y[2]));
+            y[3] = y[3].clamp(0.0, y[1] + y[2]);
+        }
+        GarchVol::Egarch => {
+            // the box alone, which the guard reads: `|γ| ≤ α ≤ 1`, `0 ≤ β ≤
+            // 1 − 10⁻⁴`
+            y[1] = y[1].clamp(0.0, 1.0);
+            y[2] = y[2].clamp(-y[1], y[1]);
+            y[3] = y[3].clamp(0.0, 1.0 - super::fit::MARGIN);
+        }
+    }
 }
 
 /// The rows a target's start may buffer: its share of what

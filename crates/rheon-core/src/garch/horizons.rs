@@ -261,7 +261,9 @@ pub fn forecasts(
         GarchVol::Figarch => {
             let m = filter.ring.len();
             scratch.clear();
-            figarch_weights(theta, m, false, |_, lam, _, _, _| scratch.push(lam));
+            figarch_weights(theta, m, false, |_, lam, _, _, _| {
+                scratch.push(lam.max(0.0))
+            });
             let w = theta[0] / (1.0 - theta[3]);
             // scratch[m + i] is the variance of the row i after this one's
             scratch.push(s);

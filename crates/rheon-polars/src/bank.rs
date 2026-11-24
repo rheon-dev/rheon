@@ -3148,8 +3148,11 @@ impl Bank {
     }
 
     /// Refuse to go on from a chunk refused after some of it was learned
-    /// (the `broken` field).
-    fn refuse_if_broken(&self) -> PolarsResult<()> {
+    /// (the `broken` field). Every entry point asks first, before it reads
+    /// the chunk, so a broken bank says so whatever else is wrong with the
+    /// next chunk (review 2026-11-23, BANK-10); a binding that converts a
+    /// frame before it calls in asks before the conversion.
+    pub fn refuse_if_broken(&self) -> PolarsResult<()> {
         match &self.broken {
             None => Ok(()),
             Some(why) => {
@@ -3287,6 +3290,7 @@ impl Bank {
         chunk: &ArrowChunk,
         learn_only: bool,
     ) -> PolarsResult<Vec<StructArray>> {
+        self.refuse_if_broken()?;
         if !learn_only && let Some(why) = self.fit_predict_refusal() {
             polars_bail!(ComputeError: "{}", why);
         }
@@ -4122,6 +4126,7 @@ impl Bank {
     /// [`Self::predict`] over Arrow, as [`Self::fit_predict_arrow`] is to
     /// [`Self::fit_predict`].
     pub fn predict_arrow(&self, chunk: &ArrowChunk) -> PolarsResult<Vec<StructArray>> {
+        self.refuse_if_broken()?;
         self.threads.pool()?;
         if self.runs_inline(chunk.height()) {
             let _inline = crate::pool::Inline::enter();

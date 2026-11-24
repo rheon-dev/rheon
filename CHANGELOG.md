@@ -1277,6 +1277,57 @@ model that only the new build has is listed as an addition and passes.
   underflowed (NaN). Where the product is not a normal double the two
   roots are taken apart; elsewhere the bits are as before. Moves:
   `corrchange.stat`, `corrchange.crit`.
+- **`garch` at its edges: the start's line search, EGARCH's guard and
+  bounds, the t's score far out, the bounds that keep a variance positive,
+  the projection in an ill-conditioned metric, and a damaged state**
+  (review 2026-11-23, GARCH-1, 3, 4, 5, 6, 10, 11, 12; PLAN 578a). The
+  start's line search read a step from the slopes at its two ends whenever
+  the quadratic model's gain was under `f`'s rounding, so a projected step
+  that overshot, its model predicting a loss, was taken while `f` fell (3.5
+  nats on a test objective; the review's 22 on a GARCH-t start): such a
+  step is now read from `f` and taken only uphill, the slopes deciding only
+  a step whose two terms are both under the rounding. Where a step left
+  EGARCH's filter explosive from a point that already was, the guard
+  lowered `β` alone, which raises `|β − (α|z| + γz)/2|` where it is
+  negative, down to `β = 0`, more explosive than the step (0.72 against
+  0.12): it now shrinks `(α, γ, β)` together, along which the guard's mean
+  falls as `ln t`, to the guard's edge. The t's and skewed t's density and
+  scores at `|z|` past `1.34·10¹⁵⁴` (a return of `10¹⁰⁰` on a series at
+  `10⁻⁵⁵`) read `∞/∞` and poisoned the information matrix with NaN for
+  good; their ratios are read in `1/z` there. EGARCH's upper bound formed
+  `s/hi`, which overflowed to an infinite variance at `hi = 10⁻⁶`; it is now
+  `hi + ln s − ln hi`, `arch`'s own order, and its sensitivity there is the
+  bounded variance's slope, not 0 (a central difference of the two-row
+  run; it was 0 where the difference reads `9.6·10⁻⁷`). An EGARCH whose
+  first 75 rows were 0 had a backcast of 0 and never started; its
+  backcast is then the rows' mean square. A projection leaves a bound
+  `10⁻¹²` of its size short, and a shock's weight a hair below 0 times a
+  return of `10⁸` reported a variance of −38.7 (GJR) and −9·10⁵ (FIGARCH),
+  and a GJR with a t learned NaN from it: every bound that keeps a weight
+  at 0 or above is now made exact after each projection and at the
+  start's fit, FIGARCH's weights read at 0 or above, and a variance that is
+  not a positive number is neither reported nor learned. Where Dykstra's
+  sweeps in a metric of condition `10⁸` or more did not reach their stop,
+  their point was up to 1.5 (in the metric) off the minimizer, and the
+  caller took its Euclidean projection; the projection is then solved
+  exactly from its optimality conditions (within `5·10⁻¹²` of the
+  minimizer found in exact rational arithmetic, on every such call in the
+  tests' runs; a few in 20,000 rows, and at a t's start's decrement). A
+  state with `ν = −10¹⁷` sent `ln Γ` into a loop that never ended; `ln Γ`
+  and `ψ` return NaN off their domain, and a state whose parameters are out
+  of their set, whose shape is out of its range, whose weights are below 0
+  or not numbers, or whose buffer is past `max_state_bytes`, is refused as
+  damaged. A start whose rows are all 0 waits as `not_identified`, not
+  `below_warm_rows`: its rows tell no process from a constant variance. The
+  goldens and every state fixture's continuation are unchanged; two
+  degenerate fixtures' withheld fits (never reported) moved with the line
+  search. Each case's test fails on the build before. Moves: `garch.*`.
+
+- **A broken bank says so first at the Arrow entry points**, as the frame
+  pair does (review 2026-11-23, BANK-10): `fit_predict_arrow` and
+  `predict_arrow` named a clock column of another type before the refusal
+  that the bank cannot go on. `garch`'s next row's stamp and its pending
+  warning are no longer written to its state, as no other model's are.
 
 - **`power_variation`'s normalized terms scale by the returns' weight, and
   `n` is Kish's count under a window too** (Fable's W13 review, B1 and B2,

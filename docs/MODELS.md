@@ -3637,7 +3637,8 @@ stepped from only when its likelihood-ratio statistic against a constant
 variance, `2 (l_fit − l_const)` with the weights at Kish's count, reaches
 χ² at 0.999 for the restrictions a constant variance puts on the process.
 That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
-`figarch` (three each); each input adds one, `π = 0`, so `garch` with one
+`figarch` (three each: `figarch`'s `d = 0` and `φ = β` leave its four
+parameters one variance, `ω/(1 − β)`); each input adds one, `π = 0`, so `garch` with one
 input waits for 16.3. `π = 0` is where an input that explains nothing
 sits, so a fit with a `π` at 0 is no bound that makes a start wait. A
 start with inputs also waits while its rows do not tell the inputs apart:
@@ -3646,8 +3647,8 @@ one. It waits where the start's information in the variance equation's
 parameters, scaled to a unit diagonal, fails the relative pivot rule the
 library's other definite solves read a system by. A pivot of its Cholesky
 factorization at or under `10⁻¹⁰` of the largest diagonal entry fails it.
-Until one does, its rows are withheld as
-`not_identified`. A fit that passes but is not at its optimum is never
+Until one does, its rows are withheld as `not_identified`, as are the
+rows of a start that holds only zeros. A fit that passes but is not at its optimum is never
 stepped from either; its wait is the start's own, `below_warm_rows`. A try
 that does not start keeps its rows and fits again once as many new rows
 have come as it held. That is twice its rows while `max_state_bytes` holds
@@ -3672,8 +3673,11 @@ coordinates. EGARCH keeps
 216 for `gjr`, 728 for `egarch`, 208 for `garch` with a t, and `216 + 8 M`
 for `figarch` (8,216 at 1,000 lags). The start's buffer adds 16 bytes a
 row until it is fitted (8 more for each input), 32,000 at the default, and after a try that does
-not start up to the target's share of `max_state_bytes`. `garch` with two
-inputs holds 288 bytes a target.
+not start up to the target's share of `max_state_bytes`. For `figarch` the
+buffer and the ring are never held together, so the target takes the
+larger of the two, `216 + max(16 rows, 8 M)`: a buffer of up to 500 rows
+at 1,000 lags adds nothing. `garch` with two inputs holds 288 bytes a
+target.
 
 #### Forecasts at horizons
 

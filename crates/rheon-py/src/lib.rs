@@ -595,6 +595,7 @@ impl PyModelBank {
         let arrays = slf
             .py()
             .detach(|| {
+                bank.refuse_if_broken()?;
                 let chunk = chunk_from_frame(&df, bank.specs())?;
                 bank.fit_predict_arrow(&chunk)
             })
@@ -611,6 +612,7 @@ impl PyModelBank {
         let arrays = slf
             .py()
             .detach(|| {
+                bank.refuse_if_broken()?;
                 let chunk = chunk_from_frame(&df, bank.specs())?;
                 bank.predict_arrow(&chunk)
             })

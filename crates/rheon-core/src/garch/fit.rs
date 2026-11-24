@@ -20,7 +20,7 @@ pub(super) const MARGIN: f64 = 1e-4;
 /// `ω`'s floor, as a fraction of the series' mean square.
 pub(super) const OMEGA_FLOOR_FRAC: f64 = 1e-6;
 /// FIGARCH's `d` is held at most `1 − 10⁻⁴`.
-const D_MAX: f64 = 1.0 - 1e-4;
+pub(super) const D_MAX: f64 = 1.0 - 1e-4;
 /// The rows `arch`'s backcast reads, and its decay.
 const BACKCAST_ROWS: usize = 75;
 const BACKCAST_DECAY: f64 = 0.94;
@@ -426,12 +426,14 @@ const LR_CUTS: [f64; 10] = [
     31.264_133_620_239_985,
 ];
 
-/// How many restrictions constant variance puts on a form's process: `α =
-/// β = 0` for GARCH(1,1), free or variance-targeted; `α = γ = β = 0` for
-/// GJR and EGARCH; `d = 0` and `φ = β` for FIGARCH, whose four parameters
-/// then give one variance, `ω/(1 − β)`, as GJR's do; and with `q` inputs
-/// each `π = 0` besides. A t's shape is in both models and restricts
-/// nothing.
+/// The likelihood-ratio statistic's degrees of freedom: the parameters a
+/// form's process adds to one constant variance. `α = β = 0` for
+/// GARCH(1,1), free or variance-targeted, 2; `α = γ = β = 0` for GJR and
+/// EGARCH, 3; for FIGARCH `d = 0` and `φ = β` are two equations, but they
+/// leave its four parameters one variance, `ω/(1 − β)`, the rest a
+/// direction along which nothing changes, so 4 − 1 = 3, as GJR's; and with
+/// `q` inputs each `π = 0` adds one more. A t's shape is in both models and
+/// adds none.
 pub(super) fn restrictions(vol: GarchVol, q: usize) -> usize {
     q + match vol {
         GarchVol::Garch => 2,

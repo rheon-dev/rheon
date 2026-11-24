@@ -76,8 +76,15 @@ pub(super) fn admits(theta: &[f64], counts: &[f64]) -> bool {
 /// The step from `from` to `to` (both in the box) cut back, where `to`
 /// breaks the guard, to the furthest point along it that keeps it: by
 /// bisection, to `10⁻¹²` of the step. Where `from` breaks it too (the
-/// residuals moved under it), `β` alone is lowered from `to`'s to the
-/// largest that keeps it, `β = 0` the floor.
+/// residuals moved under it), `(α, γ, β)` of `to` are shrunk together by
+/// the largest factor `t ≤ 1` that keeps it, `ω` held. `μ` is linear in
+/// them, so the mean of `ln |μ|` at `t` is `ln t` plus its value at `to`
+/// (bins where `μ` is 0 aside): it rises with `t`, and at `t = 0` every
+/// `μ` is 0 and the mean is `ln` of the smallest normal number, far below
+/// the bound. The box holds along the way. (Lowering `β` alone, as the
+/// guard did, is no remedy where `μ < 0`: there it makes `|μ|` larger, and
+/// `β = 0` could leave the filter more explosive than `to`; review
+/// 2026-11-23, GARCH-3.)
 pub(super) fn cut(from: &[f64], to: &[f64], counts: &[f64]) -> Vec<f64> {
     if admits(to, counts) {
         return to.to_vec();
@@ -95,24 +102,17 @@ pub(super) fn cut(from: &[f64], to: &[f64], counts: &[f64]) -> Vec<f64> {
         }
         return at(lo);
     }
-    let with_beta = |b: f64| -> Vec<f64> {
-        let mut t = to.to_vec();
-        t[3] = b;
-        t
-    };
-    let (mut lo, mut hi) = (0.0, to[3]);
-    if !admits(&with_beta(lo), counts) {
-        return with_beta(0.0);
-    }
+    let shrunk = |t: f64| -> Vec<f64> { vec![to[0], t * to[1], t * to[2], t * to[3]] };
+    let (mut lo, mut hi) = (0.0, 1.0);
     while hi - lo > 1e-12 {
         let mid = 0.5 * (lo + hi);
-        if admits(&with_beta(mid), counts) {
+        if admits(&shrunk(mid), counts) {
             lo = mid
         } else {
             hi = mid
         }
     }
-    with_beta(lo)
+    shrunk(lo)
 }
 
 #[cfg(test)]
@@ -165,10 +165,16 @@ mod tests {
         assert!(admits(&got, &tail));
         assert!(got[1] > from[1] && got[1] < to[1], "{got:?}");
         assert!((mean_log_mu(&got, &tail) - BOUND).abs() < 1e-6);
-        // from a point that breaks it too, β alone is lowered: here no β
-        // keeps it, and the floor, 0, is taken
+        // from a point that breaks it too, (α, γ, β) shrink together to the
+        // guard's edge: here no β alone keeps it (|μ| = 6.125 − β at the
+        // bin's centre, 6.125), and the factor is e^{BOUND} / |μ(to)|
         let got = cut(&to, &to, &tail);
-        assert!(got[3] == 0.0 && got[1] == to[1], "{got:?}");
+        assert!(admits(&got, &tail), "{got:?}");
+        assert!((mean_log_mu(&got, &tail) - BOUND).abs() < 1e-9, "{got:?}");
+        let t = got[1] / to[1];
+        let want = libm::exp(BOUND - mean_log_mu(&to, &tail));
+        assert!((t - want).abs() < 1e-11, "{t} against {want}");
+        assert!(got[2] == t * to[2] && got[3] == t * to[3] && got[0] == to[0]);
         let near = [0.0, 0.1, 0.1, 0.9];
         let got = cut(&near, &[0.0, 0.3, 0.3, 0.9], &tail);
         assert!(admits(&got, &tail), "{got:?}");

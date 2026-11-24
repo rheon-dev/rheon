@@ -483,3 +483,58 @@ fn a_feature_in_its_own_type_learns_what_its_cast_does() {
         assert_eq!(a.save_bytes().unwrap(), b.save_bytes().unwrap());
     }
 }
+
+/// A bank a refused chunk broke says so first at the Arrow entry points,
+/// as the frame pair does, whatever else is wrong with the next chunk: here
+/// a clock of another number type, which a sound bank refuses by name
+/// (review 2026-11-23, BANK-10 (1)). The bank breaks as `window_budget`
+/// refuses part-way through a chunk it has begun to learn: a drift reset
+/// leaves the window's prepass short of the ring it fills.
+#[test]
+fn a_broken_bank_says_so_first_at_the_arrow_entry_points() {
+    let spec: Spec = serde_json::from_str(
+        r#"{
+            "name": "m",
+            "model": {"type": "ewridge", "window_size": 50.0, "snapshot_every": 1,
+                      "window_budget": {"refuse": 0.001}},
+            "targets": ["y"], "features": ["x0"], "clock": "t", "gap_cap": 10.0,
+            "half_life": 1e9, "min_weight": 0.0,
+            "emit_drift": true, "drift_threshold": 5.0, "drift_action": "reset"
+        }"#,
+    )
+    .unwrap();
+    let n = 300;
+    let x: Vec<f64> = (0..n)
+        .map(|i| ((i * 37) % 101) as f64 / 50.0 - 1.0)
+        .collect();
+    let y: Vec<f64> = x
+        .iter()
+        .enumerate()
+        .map(|(i, x)| 2.0 * x + 0.1 * (((i * 13) % 7) as f64 - 3.0))
+        .collect();
+    let t: Vec<f64> = (0..n).map(|i| i as f64).collect();
+    let df = df!("t" => &t, "x0" => &x, "y" => &y).unwrap();
+    let mut bank = Bank::new(vec![spec]).unwrap();
+    bank.fit_predict(&df.head(Some(1))).unwrap();
+    let e = bank
+        .fit_predict(&df.slice(1, n - 1))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("window_budget"), "{e}");
+    // the next chunk's clock an integer, where the bank kept a float
+    let ints: Vec<i64> = (0..4).map(|i| 1000 + i).collect();
+    let next = df!("t" => &ints, "x0" => &x[..4], "y" => &y[..4]).unwrap();
+    let chunk = chunk_from_frame(&next, bank.specs()).unwrap();
+    for (what, got) in [
+        (
+            "fit_predict_arrow",
+            bank.fit_predict_arrow(&chunk).map(|_| ()),
+        ),
+        ("predict_arrow", bank.predict_arrow(&chunk).map(|_| ())),
+        ("fit_predict", bank.fit_predict(&next).map(|_| ())),
+        ("predict", bank.predict(&next).map(|_| ())),
+    ] {
+        let e = got.unwrap_err().to_string();
+        assert!(e.contains("cannot go on"), "{what}: {e}");
+    }
+}
