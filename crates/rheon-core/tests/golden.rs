@@ -388,6 +388,7 @@ fn ftrl_golden() {
         min_weight: 3.0,
         strict_binary: false,
         loss: FtrlLoss::Logistic,
+        standardize: false,
     })
     .unwrap();
     check("ftrl", &signature(&mut m, 0), GOLDEN_FTRL);
@@ -407,6 +408,7 @@ fn ftrl_squared_golden() {
         min_weight: 3.0,
         strict_binary: false,
         loss: FtrlLoss::Squared,
+        standardize: false,
     })
     .unwrap();
     check("ftrl_squared", &signature(&mut m, 0), GOLDEN_FTRL_SQUARED);

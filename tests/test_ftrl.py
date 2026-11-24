@@ -419,3 +419,81 @@ def test_a_larger_l2_shrinks_every_coefficient(seed):
         ]
     )
     assert (np.diff(magnitude, axis=0) < 0).all(), magnitude
+
+
+# --------------------------------------------------------------------------
+# PLAN 569: standardize
+
+
+def _scaled_stream(n: int = 3000, seed: int = 31) -> pl.DataFrame:
+    """A signal measured in thousandths around 5 and noise measured in
+    thousands around -2,000; the target is the signal in units of its
+    spread."""
+    rng = np.random.default_rng(seed)
+    u0, u1, e = rng.standard_normal((3, n))
+    return pl.DataFrame({"x0": 5.0 + 1e-3 * u0, "x1": -2000.0 + 1e3 * u1, "y0": u0 + 0.1 * e})
+
+
+def _last_coef(df: pl.DataFrame, features: list[str], **kw) -> np.ndarray:
+    spec = rp.spec.ftrl(
+        "m",
+        targets=["y0"],
+        features=features,
+        loss="squared",
+        half_life=float("inf"),
+        min_weight=0.0,
+        **kw,
+    )
+    bank = rp.ModelBank([spec])
+    bank.fit(df)
+    return bank.coef()["coef"].to_numpy()
+
+
+def test_standardize_is_ftrl_on_the_rows_standardized_longhand():
+    """Under ``standardize`` the fit is plain FTRL on each row standardized
+    against the moments of every row up to and including it (no decay, so
+    the cumulative mean and the biased variance; the first row, with no
+    spread, standardizes to 0), and ``coef`` is that fit's mapped back
+    through the last moments: ``b_i = beta_i / s_i``, ``b_0 = beta_0 - sum
+    m_i b_i``. Both fits zero coordinates under the same ``l1``."""
+    df = _scaled_stream()
+    x = df.select("x0", "x1").to_numpy()
+    t = np.arange(1, len(x) + 1)[:, None]
+    mean = np.cumsum(x, axis=0) / t
+    # In two passes: a cumulative sum of squares loses digits at a level of
+    # 2,000.
+    var = np.array([((x[: i + 1] - mean[i]) ** 2).mean(axis=0) for i in range(len(x))])
+    z = np.where(var > 0, (x - mean) / np.sqrt(np.where(var > 0, var, 1.0)), 0.0)
+    pre = pl.DataFrame({"z0": z[:, 0], "z1": z[:, 1], "y0": df["y0"]})
+    beta = _last_coef(pre, ["z0", "z1"], l1=0.5)
+    got = _last_coef(df, ["x0", "x1"], l1=0.5, standardize=True)
+    s = np.sqrt(var[-1])
+    want = np.empty(3)
+    want[1:] = beta[1:] / s
+    want[0] = beta[0] - (want[1:] * mean[-1]).sum()
+    np.testing.assert_allclose(got, want, rtol=1e-8, atol=1e-12)
+    assert (got[1:] == 0.0).tolist() == (beta[1:] == 0.0).tolist()
+
+
+def test_standardize_selects_by_each_features_spread():
+    """``l1`` zeroes in the units the fit is learned in. As they stand, the
+    signal in thousandths never clears it and the noise in thousands does;
+    standardized, the signal survives and the noise is zeroed."""
+    df = _scaled_stream().with_columns(pl.col("x0") - 5.0, pl.col("x1") + 2000.0)
+    raw = _last_coef(df, ["x0", "x1"], l1=50.0)
+    std = _last_coef(df, ["x0", "x1"], l1=50.0, standardize=True)
+    assert raw[1] == 0.0 and raw[2] != 0.0, raw
+    assert std[1] > 500.0 and std[2] == 0.0, std
+
+
+def test_standardize_off_is_the_spec_without_it():
+    """The default is off, and ``standardize=False`` is the spec that never
+    names it, to the bit, state bytes included."""
+    df = _scaled_stream(n=500)
+    kw = dict(targets=["y0"], features=["x0", "x1"], half_life=50.0, l1=0.1)
+    a, b = (
+        rp.ModelBank([rp.spec.ftrl("m", **kw)]),
+        rp.ModelBank([rp.spec.ftrl("m", standardize=False, **kw)]),
+    )
+    assert a.fit_predict(df).equals(b.fit_predict(df), null_equal=True)
+    assert a.save_bytes() == b.save_bytes()

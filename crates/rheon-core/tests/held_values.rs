@@ -1809,6 +1809,7 @@ fn ftrl_cfg(loss: FtrlLoss) -> FtrlCfg {
         min_weight: 10.0,
         strict_binary: false,
         loss,
+        standardize: false,
     }
 }
 

@@ -476,7 +476,7 @@ values, and on features where they are given. Several of them take the same para
 | `solve_every`, `max_rows_between_solves` | `ewridge`, `lasso`, `huber`, `quantile` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) |
 | `target_gaps` | `ewridge`, `lasso` | [`ewridge`'s docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge) |
 | `window_size` | `ewridge`, `lasso`, `ar` | [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
-| `standardize` | `ewridge`, `huber` and `quantile`, off by default; `kalman`, `sgd` and `pa`, on by default. `lasso` always standardizes. `ftrl`, `rls`, `expectile` and `glm` take no `standardize` and refuse it by name: `ftrl`'s `l1` zeroes a coefficient in the feature's own units, so a scale inside the model would move which it zeroes; `rls`'s prior (`delta`, `coef_prior`) is in the features' own units; and `expectile`'s and `glm`'s `ridge` is a penalty in the features' squared units. Scale such a feature before the bank | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), [`kalman`](#kalman--random-walk-β-dynamic-linear-model) and [`ftrl`](#ftrl--online-logistic-regression) |
+| `standardize` | `ewridge`, `huber`, `quantile` and `ftrl`, off by default; `kalman`, `sgd` and `pa`, on by default. `lasso` always standardizes. `rls`, `expectile` and `glm` take no `standardize` and refuse it by name: `rls`'s prior (`delta`, `coef_prior`) is in the features' own units; and `expectile`'s and `glm`'s `ridge` is a penalty in the features' squared units. Scale such a feature before the bank | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), [`kalman`](#kalman--random-walk-β-dynamic-linear-model) and [`ftrl`](#ftrl--online-logistic-regression) |
 | `coef_min`, `coef_max`, `coef_sum` | `sgd`, `pa` | [`sgd`](#sgd--stochastic-gradient-descent) |
 | `weight` | every model, though `rls`, `kalman`, `sgd`, `pa` and `ftrl` read it differently from a weighted mean | [Weights](how-to/weight-rows.md) |
 
@@ -1818,6 +1818,13 @@ zz_i += g_i − s_i·β_i      n_i += g_i²      d_i += s_i
 
 Without a half-life, `d_i` is `√n_i/alpha`, so the denominator is
 `(beta + √n_i)/alpha + l2`, the closed form of river's `FTRLProximal`.
+
+Under `standardize=True` the same update runs on `z` standardized against
+the features' running moments with the row admitted, as `sgd`'s is, so
+`l1` zeroes a coefficient by its evidence in units of its feature's spread
+rather than in the feature's own units. The fit stays in those
+coordinates, and `coef` is read out in the features' own units with the
+moments as they stand.
 
 #### Example
 

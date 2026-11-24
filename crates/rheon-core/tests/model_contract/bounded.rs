@@ -324,6 +324,13 @@ fn ftrl_recovers_from_bounded_extremes() {
         2,
         Recovery::Twin(1e-9),
     );
+    let mut cfg = ftrl_cfg();
+    cfg.standardize = true;
+    recovers_from_bounded_extremes(
+        move || Ftrl::new(cfg.clone()).unwrap(),
+        2,
+        Recovery::Twin(1e-9),
+    );
 }
 
 #[test]

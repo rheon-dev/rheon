@@ -315,6 +315,7 @@ fn ftrl_cfg(l1: f64) -> FtrlCfg {
         min_weight: 3.0,
         strict_binary: true,
         loss: FtrlLoss::Logistic,
+        standardize: false,
     }
 }
 

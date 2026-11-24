@@ -301,6 +301,7 @@
     l2 = None
     strict_binary = False
     loss = 'logistic'
+    standardize = False
     common
   garch:
     name
@@ -3276,7 +3277,7 @@
     ewm_moments: bias, kind, lag_tolerance, max_state_bytes, se, terms, window_rows, window_size
     ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
     expectile: closed, expectile, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, window_rows, window_size
-    ftrl: alpha, beta, l1, l2, loss, strict_binary
+    ftrl: alpha, beta, l1, l2, loss, standardize, strict_binary
     garch: dist, horizon, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     glm: family, link, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, step_cap, var_power
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size

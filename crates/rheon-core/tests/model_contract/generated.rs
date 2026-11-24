@@ -1121,6 +1121,11 @@ mod generated {
         }
 
         #[test]
+        fn ftrl_standardized(rows in stream(2, false), split in 0usize..60) {
+            contract(|| Ftrl::new(FtrlCfg { standardize: true, ..ftrl_cfg() }).unwrap(), &rows, split)?;
+        }
+
+        #[test]
         fn sgd(rows in stream(2, false), split in 0usize..60) {
             contract(|| Sgd::new(sgd_cfg()).unwrap(), &rows, split)?;
         }

@@ -495,6 +495,12 @@ fn ftrl_predict_is_the_step() {
     let mut cfg = ftrl_cfg();
     cfg.loss = FtrlLoss::Logistic;
     predict_is_the_step_without_the_step(move || Ftrl::new(cfg.clone()).unwrap(), 2, true);
+    // Under `standardize` (PLAN 569) the prediction reads the moments with
+    // the row admitted, as the step does.
+    let mut cfg = ftrl_cfg();
+    cfg.l1 = 0.05;
+    cfg.standardize = true;
+    predict_is_the_step_without_the_step(move || Ftrl::new(cfg.clone()).unwrap(), 2, false);
 }
 
 #[test]
