@@ -1,8 +1,9 @@
 //! The row operators of task 564 through a window run: `run_length`,
-//! `clock_lag` and `clock_drift`, each computed a row at a time from its
-//! group's previous rows. Each is held to its definition, computed here a
-//! second way (the Python suite holds them to Polars' `rle` and statsmodels'
-//! `WLS`), at every chunking, and across a save at every row.
+//! `clock_lag`, `clock_drift` and `clock_step`, each computed a row at a
+//! time from its group's previous rows. Each is held to its definition,
+//! computed here a second way (the Python suite holds them to Polars' `rle`
+//! and `ewm_*`, and statsmodels' `WLS` and `DescrStatsW`), at every
+//! chunking, and across a save at every row.
 use polars::prelude::*;
 use rheon_polars::{WindowsConfig, WindowsRun};
 use serde_json::json;
@@ -19,6 +20,7 @@ fn stream() -> DataFrame {
     let mut s = Vec::new();
     let mut x: Vec<Option<f64>> = Vec::new();
     let mut ev: Vec<Option<i64>> = Vec::new();
+    let mut tt: Vec<Option<f64>> = Vec::new();
     let mut t = 1_700_000_000 * NS;
     for i in 0..n {
         // A gap of 400 s past the cap of 300 at row 100; uneven steps.
@@ -39,6 +41,13 @@ fn stream() -> DataFrame {
         // event time.
         let lag = 50_000_000 + (i as i64) * 1_000_000 + ((i * 7) % 5) as i64 * 3_000_000;
         ev.push((i != 33).then_some(t - lag));
+        // A time of its own in seconds that repeats (a step of 0), steps
+        // back now and then, and is missing twice, as a null and a NaN.
+        tt.push(match i {
+            _ if i % 29 == 3 => None,
+            _ if i % 31 == 8 => Some(f64::NAN),
+            _ => Some(f64::from((i / 3) as u32) - if i % 13 == 5 { 5.0 } else { 0.0 }),
+        });
     }
     df!(
         "ts" => ts,
@@ -46,6 +55,7 @@ fn stream() -> DataFrame {
         "s" => s,
         "x" => x,
         "ev" => ev,
+        "tt" => tt,
     )
     .unwrap()
     .lazy()
@@ -66,6 +76,11 @@ fn config(group: bool, session: bool) -> WindowsConfig {
             {"name": "drift", "tree": ["clock_drift", ["col", "ts"], {"event": ["col", "ev"], "half_life": "20s"}]},
             {"name": "flat", "tree": ["clock_drift", ["col", "ts"], {"event": ["col", "ev"], "half_life": "inf"}]},
             {"name": "m", "tree": ["ewm_mean", ["col", "x"], {"half_life": "5s"}]},
+            {"name": "dt", "tree": ["clock_step", ["col", "ts"], {"half_life": "20s", "stat": "mean"}]},
+            {"name": "dt_sd", "tree": ["clock_step", ["col", "ts"], {"half_life": "20s", "stat": "std", "bias": false}]},
+            {"name": "tt_var", "tree": ["clock_step", ["col", "tt"], {"half_life": "inf", "stat": "var", "bias": true}]},
+            {"name": "zeros", "tree": ["clock_step", ["col", "tt"], {"half_life": "20s", "stat": "zeros"}]},
+            {"name": "backs", "tree": ["clock_step", ["col", "tt"], {"half_life": "20s", "stat": "backs"}]},
         ],
         "clock": "ts",
         "gap_cap": "300s",
@@ -251,6 +266,98 @@ fn drift_brute(
     (lags, slopes)
 }
 
+/// A clock step's statistic from its definition: per group, the steps of
+/// `times` (seconds) between each time and the one before it since the
+/// chain last started (a session, a gap past the cap, or a missing time),
+/// each weighing `2^(-(t_now - t_i)/h)` on the clock `ts`; a row with a
+/// missing time reports none.
+#[allow(clippy::too_many_arguments)]
+fn steps_brute(
+    df: &DataFrame,
+    times: &[Option<f64>],
+    h: f64,
+    stat: &str,
+    bias: bool,
+    group: bool,
+    session: bool,
+) -> Vec<Option<f64>> {
+    let ts: Vec<i64> = df
+        .column("ts")
+        .unwrap()
+        .datetime()
+        .unwrap()
+        .physical()
+        .into_no_null_iter()
+        .collect();
+    let starts = restarts(df, group, session, true);
+    // Per group: the steps so far, with their clock, and the last time.
+    let mut groups: std::collections::HashMap<String, (Vec<(i64, f64)>, Option<f64>)> =
+        Default::default();
+    let mut out = Vec::new();
+    for i in 0..df.height() {
+        let (key, new) = &starts[i];
+        let (steps, prev) = groups.entry(key.clone()).or_default();
+        if *new {
+            steps.clear();
+            *prev = None;
+        }
+        let Some(t) = times[i].filter(|t| t.is_finite()) else {
+            *prev = None;
+            out.push(None);
+            continue;
+        };
+        if let Some(p) = *prev {
+            steps.push((ts[i], t - p));
+        }
+        *prev = Some(t);
+        let now = ts[i];
+        let w: Vec<f64> = steps
+            .iter()
+            .map(|&(c, _)| {
+                if h.is_infinite() {
+                    1.0
+                } else {
+                    (-((now - c) as f64 / 1e9) / h).exp2()
+                }
+            })
+            .collect();
+        let v: Vec<f64> = steps.iter().map(|s| s.1).collect();
+        let count = |keep: &dyn Fn(f64) -> bool| -> f64 {
+            v.iter()
+                .zip(&w)
+                .filter(|(s, _)| keep(**s))
+                .map(|p| p.1)
+                .sum()
+        };
+        let sw: f64 = w.iter().sum();
+        let m = v.iter().zip(&w).map(|(s, w)| s * w).sum::<f64>() / sw;
+        let var = || {
+            let b = v
+                .iter()
+                .zip(&w)
+                .map(|(s, w)| w * (s - m).powi(2))
+                .sum::<f64>()
+                / sw;
+            let r2 = w.iter().map(|w| w * w).sum::<f64>() / (sw * sw);
+            if bias {
+                Some(b)
+            } else {
+                (1.0 - r2 > 64.0 * f64::EPSILON).then(|| b / (1.0 - r2))
+            }
+        };
+        out.push(match stat {
+            "zeros" => Some(count(&|s| s == 0.0)),
+            "backs" => Some(count(&|s| s < 0.0)),
+            _ if sw == 0.0 => None,
+            "mean" => Some(m),
+            "var" => var(),
+            "std" => var().map(f64::sqrt),
+            _ => unreachable!("{stat}"),
+        });
+    }
+    out
+}
+
 fn close(got: &[Option<f64>], want: &[Option<f64>], tol: f64, what: &str) {
     assert_eq!(got.len(), want.len(), "{what}");
     for (i, (g, w)) in got.iter().zip(want).enumerate() {
@@ -293,6 +400,50 @@ fn each_row_operator_is_its_definition() {
         close(&floats(&out, "drift"), &slope, 1e-6, &what);
         let (_, flat) = drift_brute(&df, f64::INFINITY, group, session);
         close(&floats(&out, "flat"), &flat, 1e-6, &what);
+        let ts: Vec<Option<f64>> = df
+            .column("ts")
+            .unwrap()
+            .datetime()
+            .unwrap()
+            .physical()
+            .iter()
+            .map(|t| t.map(|t| t as f64 / 1e9))
+            .collect();
+        let tt = floats(&df, "tt");
+        let steps = |times: &[Option<f64>], h: f64, stat: &str, bias: bool| {
+            steps_brute(&df, times, h, stat, bias, group, session)
+        };
+        close(
+            &floats(&out, "dt"),
+            &steps(&ts, 20.0, "mean", false),
+            1e-9,
+            &what,
+        );
+        close(
+            &floats(&out, "dt_sd"),
+            &steps(&ts, 20.0, "std", false),
+            1e-6,
+            &what,
+        );
+        let inf = f64::INFINITY;
+        close(
+            &floats(&out, "tt_var"),
+            &steps(&tt, inf, "var", true),
+            1e-9,
+            &what,
+        );
+        close(
+            &floats(&out, "zeros"),
+            &steps(&tt, 20.0, "zeros", false),
+            1e-12,
+            &what,
+        );
+        close(
+            &floats(&out, "backs"),
+            &steps(&tt, 20.0, "backs", false),
+            1e-12,
+            &what,
+        );
     }
     // The lag grows 1 ms a row, about a ms each 0.83 s, so the slope over
     // the long stretch reads near 1.2e-3.
@@ -311,7 +462,10 @@ fn chunking_changes_no_bit() {
         let whole = run(&cfg, &df, df.height());
         for chunk in [1, 2, 3, 7, 50, 1000] {
             let part = run(&cfg, &df, chunk);
-            for c in ["n", "n_tol", "lag", "drift", "flat", "m"] {
+            for c in [
+                "n", "n_tol", "lag", "drift", "flat", "m", "dt", "dt_sd", "tt_var", "zeros",
+                "backs",
+            ] {
                 assert_eq!(
                     bits(&floats(&part, c)),
                     bits(&floats(&whole, c)),
@@ -340,7 +494,9 @@ fn a_save_at_every_row_is_one_run() {
         )
         .unwrap();
         out.vstack_mut(&b.finish().unwrap()).unwrap();
-        for c in ["n", "n_tol", "lag", "drift", "flat"] {
+        for c in [
+            "n", "n_tol", "lag", "drift", "flat", "dt", "dt_sd", "tt_var", "zeros", "backs",
+        ] {
             assert_eq!(
                 bits(&floats(&out, c)),
                 bits(&floats(&whole, c)),
@@ -467,4 +623,76 @@ fn the_plan_refuses_what_it_cannot_read() {
         e.contains("\"window_size\" is not one of its parameters"),
         "{e}"
     );
+    let e = refused(json!(["clock_step", ["col", "txt"], {"half_life": "5s"}]));
+    assert!(
+        e.contains("the clock step's time must be a number or a temporal column"),
+        "{e}"
+    );
+    let e = refused(json!(["clock_step", ["col", "ts"], {"stat": "mean"}]));
+    assert!(e.contains("half_life is not set"), "{e}");
+    let e = refused(json!(["clock_step", ["col", "ts"], {"half_life": "5s", "stat": "median"}]));
+    assert!(e.contains("stat must be \"mean\""), "{e}");
+    let e = refused(json!(["clock_step", ["col", "ts"], {"half_life": "5s", "bias": true}]));
+    assert!(e.contains("only stat \"var\" or \"std\" takes it"), "{e}");
+    let e = refused(json!(["clock_step", ["col", "ts"], {"half_life": 0.0}]));
+    assert!(e.contains("half_life must be above 0"), "{e}");
+    let e = refused(json!(["clock_step", ["increment", ["col", "num"]], {"half_life": "5s"}]));
+    assert!(e.contains("its input holds the operator increment"), "{e}");
+}
+
+/// A clock step on both sides of each threshold: a step of exactly 0 and
+/// the smallest step either side of it on an integer time, so a zero and a
+/// back are counted by sign alone; a null time reports none and starts the
+/// chain again; and on the row-count clock every row decays the steps by
+/// one unit.
+#[test]
+fn a_clock_step_counts_by_sign_and_restarts_its_chain_at_a_missing_time() {
+    let df = df!("t" => [Some(5i64), Some(5), Some(6), Some(5), None, Some(1), Some(1)]).unwrap();
+    let cfg: WindowsConfig = serde_json::from_value(json!({
+        "formulas": [
+            {"name": "z", "tree": ["clock_step", ["col", "t"], {"half_life": "inf", "stat": "zeros"}]},
+            {"name": "b", "tree": ["clock_step", ["col", "t"], {"half_life": "inf", "stat": "backs"}]},
+            {"name": "m", "tree": ["clock_step", ["col", "t"], {"half_life": 1.0, "stat": "mean"}]},
+        ],
+    }))
+    .unwrap();
+    let out = run(&cfg, &df, 3);
+    // Steps 0, +1, -1, then none across the null, and 0.
+    assert_eq!(
+        floats(&out, "z"),
+        [
+            Some(0.0),
+            Some(1.0),
+            Some(1.0),
+            Some(1.0),
+            None,
+            Some(1.0),
+            Some(2.0)
+        ]
+    );
+    assert_eq!(
+        floats(&out, "b"),
+        [
+            Some(0.0),
+            Some(0.0),
+            Some(0.0),
+            Some(1.0),
+            None,
+            Some(1.0),
+            Some(1.0)
+        ]
+    );
+    // Each row halves the weights before it: 0; (0/2 + 1)/1.5; ...; the
+    // row after the null takes no step and reports the decayed mean.
+    let m = floats(&out, "m");
+    assert_eq!(m[0], None);
+    assert_eq!(m[1], Some(0.0));
+    close(
+        &m[2..4],
+        &[Some(1.0 / 1.5), Some((0.5 - 1.0) / 1.75)],
+        1e-15,
+        "means",
+    );
+    assert_eq!(m[4], None);
+    assert_eq!(m[5], m[3]);
 }

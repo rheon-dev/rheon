@@ -73,6 +73,7 @@ OPERATORS = (
     "run_length",
     "clock_lag",
     "clock_drift",
+    "clock_step",
 )
 
 #: The cross-group operators: a statistic over every group's row at one
@@ -80,7 +81,10 @@ OPERATORS = (
 CROSS = ("cross_mean", "cross_std", "cross_rank", "cross_quantile", "cross_ref")
 
 #: The row operators: no window, each read off its group's previous rows.
-ROW_OPERATORS = ("increment", "run_length", "clock_lag", "clock_drift")
+ROW_OPERATORS = ("increment", "run_length", "clock_lag", "clock_drift", "clock_step")
+
+#: What a clock step reads of its time's steps (task 564).
+STEP_STATS = ("mean", "var", "std", "zeros", "backs")
 
 #: The row operators that read two times, an arrival (their input) and an
 #: event (a parameter).
@@ -1283,12 +1287,17 @@ def row_operator(
     tol: Any = 0.0,
     event: Any = None,
     half_life: Any = None,
+    stat: Any = "mean",
+    bias: Any = None,
 ) -> pl.Expr:
     """The expression of the row operator ``name`` (task 564): a run length
-    over ``input`` with ``tol``, or a clock lag or drift of ``input``, the
-    arrival time, against ``event``, decayed across ``half_life``. Checked
-    here, so a wrong value names its parameter."""
+    over ``input`` with ``tol``, a clock lag or drift of ``input``, the
+    arrival time, against ``event``, or a clock step's ``stat`` of the
+    steps of ``input``, decayed across ``half_life``. Checked here, so a
+    wrong value names its parameter."""
     who = f"rp.{name}"
+    if name == "clock_step":
+        return _clock_step(who, input, half_life=half_life, stat=stat, bias=bias)
     if name == "run_length":
         tree = _row_input(who, "input", input)
         if isinstance(tol, bool) or not isinstance(tol, numbers.Real):
@@ -1324,3 +1333,38 @@ def row_operator(
         )
     params = {"event": happened, "half_life": _span(who, "half_life", half_life, inf_ok=True)}
     return operator_column([name, arrival, params])
+
+
+def _clock_step(who: str, input: Any, *, half_life: Any, stat: Any, bias: Any) -> pl.Expr:
+    """A clock step's node (task 564): its time, half-life and statistic,
+    and a spread's ``bias``, resolved to ``False`` where not given, as the
+    native reader writes it back."""
+    tree = _row_input(who, "time", input)
+    if half_life is None:
+        raise TypeError(
+            f"{who}: half_life is required, but it is not given. Give half_life in clock units, "
+            f"or inf for no decay."
+        )
+    if stat not in STEP_STATS:
+        raise ValueError(
+            f'{who}: stat must be "mean", "var", "std", "zeros" or "backs", but it is {stat!r}. '
+            f"Set stat to one of those words."
+        )
+    params: dict[str, Any] = {
+        "half_life": _span(who, "half_life", half_life, inf_ok=True),
+        "stat": stat,
+    }
+    if stat in ("var", "std"):
+        if bias is None:
+            bias = False
+        if not isinstance(bias, bool):
+            raise TypeError(
+                f"{who}: bias must be True or False, but it is of type {type(bias).__name__}. "
+                f"Set bias to True or False."
+            )
+        params["bias"] = bias
+    elif bias is not None:
+        raise TypeError(
+            f'{who}: bias is given, but only stat="var" or "std" takes it. Leave out bias.'
+        )
+    return operator_column(["clock_step", tree, params])

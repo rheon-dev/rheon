@@ -539,8 +539,9 @@ fn windows_extrema_config() -> WindowsConfig {
 
 /// The row operators of task 564 (windows state 14): a run length exact
 /// and under a `tol`, a clock lag and drift whose sums are open across the
-/// save, beside an increment and a window looking ahead, so rows are held.
-/// The arrival is the clock, and the event a lag behind it that moves.
+/// save, a clock step's mean, corrected spread and count of repeats, beside
+/// an increment and a window looking ahead, so rows are held. The arrival
+/// is the clock, and the event a lag behind it that moves.
 fn windows_rows_config() -> WindowsConfig {
     serde_json::from_str(
         r#"{"formulas": [
@@ -549,6 +550,9 @@ fn windows_rows_config() -> WindowsConfig {
                {"name": "lag", "tree": ["clock_lag", ["col", "t"], {"event": ["-", ["col", "t"], ["*", ["abs", ["col", "mid"]], ["lit", 0.001]]], "half_life": 5.0}]},
                {"name": "drift", "tree": ["clock_drift", ["col", "t"], {"event": ["-", ["col", "t"], ["*", ["abs", ["col", "mid"]], ["lit", 0.001]]], "half_life": 5.0}]},
                {"name": "step", "tree": ["increment", ["col", "mid"]]},
+               {"name": "cadence", "tree": ["clock_step", ["col", "t"], {"half_life": 5.0, "stat": "mean"}]},
+               {"name": "jitter", "tree": ["clock_step", ["col", "t"], {"half_life": 5.0, "stat": "std", "bias": false}]},
+               {"name": "repeats", "tree": ["clock_step", ["col", "mid"], {"half_life": 5.0, "stat": "zeros"}]},
                {"name": "ahead", "tree": ["rewm_mean", ["col", "mid"], {"half_life": 5.0, "window_size": 10.0}]}
              ],
              "clock": "t", "gap_cap": 50.0}"#,
@@ -4053,6 +4057,17 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         }),
         ("with_windows_rows", "a drift's origin", |p, _| {
             p.contains(".Drift.origin.Float")
+        }),
+        ("with_windows_rows", "a clock step's moments", |p, v| {
+            p.contains(".Steps.stats.moments.")
+                && p.ends_with(".w_sum")
+                && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        ("with_windows_rows", "a clock step's last time", |p, _| {
+            p.contains(".Steps.prev.Float")
+        }),
+        ("with_windows_rows", "a clock step's statistic", |p, v| {
+            p.ends_with(".Steps.stats.stat") && v.as_str() == Some("std")
         }),
         ("with_windows_rows", "an increment's place", |p, v| {
             p.contains(".rows.") && v.as_str() == Some("Step")

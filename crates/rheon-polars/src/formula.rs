@@ -23,7 +23,9 @@
 //! among its parameters), and `["increment", input]`. The row operators of task 564 are
 //! `["run_length", input]` (with `{"tol": x}` after it where `tol` is above
 //! 0) and `["clock_lag", arrival, {"event": e, "half_life": h}]` and
-//! `["clock_drift", ...]` of the same form. Nothing else is read, so a
+//! `["clock_drift", ...]` of the same form, and
+//! `["clock_step", time, {"half_life": h, "stat": s}]` (with a `bias`
+//! where `s` is `"var"` or `"std"`). Nothing else is read, so a
 //! `shift`, a `cum_sum`, a rolling window or an aggregation -- which would
 //! depend on the chunking (hard rule 3) -- is refused by name, at build time.
 
@@ -146,6 +148,9 @@ pub struct OpNode {
     /// A clock drift's event time (`clock_lag`, `clock_drift`), whose
     /// arrival time is `input`; `None` for every other operator.
     pub event: Option<Box<Node>>,
+    /// What a clock step (`clock_step`) reads of its time's steps; `None`
+    /// for every other operator. A spread's `bias` is [`OpNode::bias`].
+    pub step: Option<rheon_core::StepStat>,
 }
 
 /// What an `ewm_profile` takes beside the window operators' parameters.
@@ -250,6 +255,7 @@ impl OpNode {
             since: None,
             tol: 0.0,
             event: None,
+            step: None,
         }
     }
 
@@ -285,6 +291,12 @@ impl OpNode {
                 "window_size".into(),
                 serde_json::to_value(w).expect("a span is JSON"),
             );
+        }
+        if let Some(st) = self.step {
+            m.insert("stat".into(), json!(st.name()));
+            if st.is_spread() {
+                m.insert("bias".into(), json!(self.bias));
+            }
         }
         if self.kind.is_row() {
             return Value::Object(m);
@@ -749,6 +761,85 @@ impl Node {
                 }
                 Ok(Node::Op(op))
             }
+            "clock_step" => {
+                // `["clock_step", time, {"half_life": h, "stat": s}]`, and a
+                // spread's `bias` (task 564).
+                let name = "clock_step";
+                arity(2)?;
+                let input = Node::from_json(&args[0])?;
+                input.no_operator(name)?;
+                let Value::Object(params) = &args[1] else {
+                    return Err(format!(
+                        "formula: \"clock_step\" takes its parameters as an object, but it has \
+                         {}. Give them as an object, such as {{\"half_life\": 10, \"stat\": \
+                         \"mean\"}}.",
+                        short(&args[1])
+                    ));
+                };
+                let mut op = OpNode::row(OpKind::ClockStep, input);
+                let mut bias = None;
+                for (k, v) in params {
+                    match k.as_str() {
+                        "half_life" => op.half_life = Some(span_of(name, k, v)?),
+                        "stat" => {
+                            let st = v.as_str().and_then(rheon_core::StepStat::parse);
+                            op.step = Some(st.ok_or_else(|| {
+                                format!(
+                                    "{name}: stat must be \"mean\", \"var\", \"std\", \
+                                     \"zeros\" or \"backs\", but it is {}. Set stat to one \
+                                     of those words.",
+                                    short(v)
+                                )
+                            })?);
+                        }
+                        "bias" => {
+                            bias = Some(v.as_bool().ok_or_else(|| {
+                                format!(
+                                    "{name}: bias must be true or false, but it is {}. Set \
+                                     bias to true or false.",
+                                    short(v)
+                                )
+                            })?);
+                        }
+                        other => {
+                            return Err(format!(
+                                "{name}: {other:?} is not one of its parameters, which are \
+                                 half_life, stat and bias. Remove {other:?}, or correct its \
+                                 name."
+                            ));
+                        }
+                    }
+                }
+                let st = op.step.get_or_insert(rheon_core::StepStat::Mean);
+                match bias {
+                    Some(b) if st.is_spread() => op.bias = b,
+                    Some(_) => {
+                        return Err(format!(
+                            "{name}: bias is set, but only stat \"var\" or \"std\" takes it. \
+                             Remove bias, or set stat to \"var\" or \"std\"."
+                        ));
+                    }
+                    None => {}
+                }
+                match &op.half_life {
+                    None => {
+                        return Err(format!(
+                            "{name}: half_life is not set, but the steps' decayed statistics \
+                             need it. Set half_life to a positive number of clock units or a \
+                             duration, or to inf for no decay."
+                        ));
+                    }
+                    Some(h) if h.value().is_nan() || h.value() <= 0.0 => {
+                        return Err(format!(
+                            "{name}: half_life must be above 0, but it is {h}. Set half_life to \
+                             a positive number of clock units or a duration, or to inf for no \
+                             decay."
+                        ));
+                    }
+                    Some(_) => {}
+                }
+                Ok(Node::Op(op))
+            }
             name if OpKind::parse(name).is_some_and(|k| k.cross().is_some()) => {
                 let kind = OpKind::parse(name).expect("checked");
                 arity(2)?;
@@ -781,6 +872,7 @@ impl Node {
                     since: None,
                     tol: 0.0,
                     event: None,
+                    step: None,
                 };
                 let std = kind == OpKind::CrossStd;
                 let stat = kind.cross().expect("checked");
@@ -1008,6 +1100,7 @@ impl Node {
                     since: None,
                     tol: 0.0,
                     event: None,
+                    step: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);
@@ -1189,7 +1282,8 @@ impl Node {
                 "formula: {other:?} is not one of the operators a formula can hold. It can hold \
                  increment (the step from a column's previous value), run_length (the rows a \
                  value has held), clock_lag and clock_drift (the lag between two clocks and its \
-                 slope), the window operators {}, \
+                 slope), clock_step (a decayed statistic of a time's steps), the window \
+                 operators {}, \
                  and these operators within one row: {}. If the operator is misspelled, correct it; \
                  otherwise, write the formula with the operators listed.",
                 {
@@ -1591,6 +1685,7 @@ fn moments_from_json(args: &[Value]) -> Result<Node, String> {
         since: None,
         tol: 0.0,
         event: None,
+        step: None,
     };
     let mut powers: Option<Vec<u32>> = None;
     let mut lags: Option<Vec<Span>> = None;
@@ -1789,6 +1884,7 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
         since: None,
         tol: 0.0,
         event: None,
+        step: None,
     };
     let (mut period, mut offset, mut buckets, mut stat) = (None, None, None, ProfileStat::Mean);
     let mut harmonics: Option<u32> = None;

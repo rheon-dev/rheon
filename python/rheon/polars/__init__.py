@@ -152,6 +152,7 @@ from rheon.polars._warnings import UnstableWarning
 from rheon.polars.ops import (
     clock_drift,
     clock_lag,
+    clock_step,
     cross_mean,
     cross_quantile,
     cross_rank,
@@ -196,6 +197,7 @@ __all__ = [
     "run_length",
     "clock_lag",
     "clock_drift",
+    "clock_step",
     "ops",
     "ArrowStruct",
     "ColumnNotFoundError",

@@ -20,7 +20,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Cursor;
 
 use polars::prelude::*;
-use rheon_core::{ClockCfg, ClockDrift, ClockValue, RunLength, RunValue, SessionGap};
+use rheon_core::{
+    ClockCfg, ClockDrift, ClockSteps, ClockValue, RunLength, RunValue, SessionGap, StepStat,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::arrow::{NanosRole, fits_64, key_text, nanos_array, wide_integer_clock};
@@ -106,8 +108,9 @@ const WINDOWS_KIND: &str = crate::envelope::Kind::Windows.tag();
 /// earlier.
 const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
 /// 14 since task 564: a group's increments' state may keep a run length's
-/// run or a clock drift's sums (`rows`), written only where there is a
-/// `run_length`, `clock_lag` or `clock_drift`, so a version-13 state is a
+/// run, a clock drift's sums or a clock step's moments (`rows`), written
+/// only where there is a `run_length`, `clock_lag`, `clock_drift` or
+/// `clock_step`, so a version-13 state is a
 /// version-14 state without one and loads as one; an older build refuses a
 /// 14 by its number rather than at the operator's name;
 /// 13 since task 561: a kernel may keep a `since` event (`since`), a queue
@@ -260,6 +263,12 @@ enum RowState {
         sums: ClockDrift,
         origin: Option<RunValue>,
     },
+    /// A clock step's statistics, and the time its next step is taken
+    /// from: the last time read since the chain of steps last started.
+    Steps {
+        stats: ClockSteps,
+        prev: Option<RunValue>,
+    },
 }
 
 impl RowState {
@@ -271,6 +280,15 @@ impl RowState {
             OpKind::ClockLag | OpKind::ClockDrift => RowState::Drift {
                 sums: ClockDrift::new(op.half_life).expect("checked by the plan"),
                 origin: None,
+            },
+            OpKind::ClockStep => RowState::Steps {
+                stats: ClockSteps::new(
+                    op.half_life,
+                    op.step.expect("a clock step's statistic"),
+                    op.bias,
+                )
+                .expect("checked by the plan"),
+                prev: None,
             },
             _ => RowState::Step,
         }
@@ -285,6 +303,10 @@ impl RowState {
             RowState::Drift { sums, origin } => {
                 sums.restart();
                 *origin = None;
+            }
+            RowState::Steps { stats, prev } => {
+                stats.restart();
+                *prev = None;
             }
             _ => {}
         }
@@ -305,8 +327,11 @@ struct RowOp {
     /// A run length's tolerance in the units the input is read in, a
     /// temporal input's in nanoseconds.
     tol: f64,
-    /// A drift's half-life, in policy-clock units.
+    /// A drift's or a clock step's half-life, in policy-clock units.
     half_life: f64,
+    /// A clock step's statistic, and a spread's `bias`.
+    step: Option<StepStat>,
+    bias: bool,
 }
 
 /// A row value as a run reads it, from slot `i` of `inputs` at row `r`: an
@@ -546,6 +571,22 @@ fn step_increments(
                             sums.lag()
                         } else {
                             sums.slope()
+                        }
+                    }
+                    RowState::Steps { stats, prev } => {
+                        let t = row_value(inputs, i, r);
+                        if t == RunValue::Missing {
+                            // A missing time has no step and reports none,
+                            // and the next time starts the chain again;
+                            // the clock still decays the statistics.
+                            stats.step(d_clock, None, 0.0);
+                            *prev = None;
+                            None
+                        } else {
+                            let s = prev.and_then(|p| value_step(t, p, slots[i].1));
+                            stats.step(d_clock, s, 1.0);
+                            *prev = Some(t);
+                            stats.value()
                         }
                     }
                     RowState::Step => unreachable!("a row operator keeps its own state"),
@@ -863,6 +904,7 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             let what = match op.kind {
                 OpKind::Increment => "the increment's input",
                 OpKind::RunLength => "the run length's input",
+                OpKind::ClockStep => "the clock step's time",
                 _ => "the arrival time",
             };
             let input_slot = slot_of(&mut p.slots, input, &f.name, what, &op.input)?;
@@ -904,6 +946,8 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                 event,
                 tol,
                 half_life,
+                step: op.step,
+                bias: op.bias,
             });
         }
     }
@@ -3652,7 +3696,7 @@ impl WindowsRun {
         }) {
             return Err(format!(
                 "{WHO}: the state's row operators (increment, run_length, clock_lag, \
-                 clock_drift) do not match its own call's, so it is damaged. Load an undamaged \
+                 clock_drift, clock_step) do not match its own call's, so it is damaged. Load an undamaged \
                  copy of the state file, or leave out load_state to start over."
             )
             .into());

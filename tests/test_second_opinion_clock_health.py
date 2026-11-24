@@ -1,4 +1,5 @@
-"""``rp.clock_drift`` against statsmodels' ``WLS`` (task 564).
+"""``rp.clock_drift`` against statsmodels' ``WLS``, and ``rp.clock_step``
+against statsmodels' ``DescrStatsW`` (task 564).
 
 The slope of the lag ``d = arrival - event`` on the arrival time, each row
 weighing ``2 ** (-(t_now - t_i) / half_life)`` on the stream's clock, is the
@@ -12,6 +13,14 @@ The tolerance: ``WLS`` solves by a pseudo-inverse of the weighted design, and
 the operator updates two sums about running means, so the two share no
 arithmetic. On arrivals measured from the first one, the slope agrees to
 1e-9 relatively here, on every row, at each half-life.
+
+A clock step's mean and variance on a temporal clock are the weighted mean
+and variance of the steps so far, each weighing ``2 ** (-(t_now - t_i) /
+half_life)``: the weights are written here, and ``DescrStatsW`` computes the
+statistics (``ddof=0``, the plug-in form; the corrected form divides it by
+``1 - sum w**2 / W**2``, Kish's correction, written here from its
+definition). ``DescrStatsW`` sums in two passes and the operator updates
+about a running mean, sharing no arithmetic: they agree to 1e-9 relatively.
 """
 
 from __future__ import annotations
@@ -22,6 +31,7 @@ import numpy as np
 import polars as pl
 import pytest
 import statsmodels.api as sm
+from statsmodels.stats.weightstats import DescrStatsW
 
 from rheon import polars as rp
 
@@ -81,3 +91,38 @@ def test_the_drift_is_statsmodels_wls(half_life: str | None) -> None:
     # The lag grows 4 ms a second; the slope over the stream reads it.
     if half_life is None:
         assert out["drift"][-1] == pytest.approx(0.004, rel=0.05)
+
+
+@pytest.mark.parametrize("half_life", ["2s", "30s", None])
+def test_a_clock_step_is_statsmodels_descrstatsw(half_life: str | None) -> None:
+    rng = np.random.default_rng(23)
+    n = 200
+    start = datetime(2026, 3, 2, 14, 0)
+    # Repeats (a step of 0) and uneven steps, on a clock of nanoseconds.
+    steps_ms = np.cumsum(rng.choice([0, 1, 250, 1000, 4000], size=n))
+    df = pl.DataFrame(
+        {"t": [start + timedelta(milliseconds=int(s)) for s in steps_ms]}
+    ).with_columns(pl.col("t").dt.cast_time_unit("ns"))
+    h = float("inf") if half_life is None else {"2s": 2.0, "30s": 30.0}[half_life]
+    span = float("inf") if half_life is None else half_life
+    out = rp.stream.with_windows(
+        df,
+        m=rp.clock_step("t", half_life=span),
+        b=rp.clock_step("t", half_life=span, stat="var", bias=True),
+        u=rp.clock_step("t", half_life=span, stat="std"),
+        clock="t",
+        gap_cap="1h",
+    )
+    t_ns = df["t"].dt.epoch("ns").to_numpy().astype(np.int64)
+    s = np.diff(t_ns) / 1e9
+    assert out["m"][0] is None and out["b"][0] is None
+    for i in range(1, n):
+        w = np.exp2(-((t_ns[i] - t_ns[1 : i + 1]) / 1e9) / h)
+        d = DescrStatsW(s[:i], weights=w, ddof=0)
+        assert out["m"][i] == pytest.approx(d.mean, rel=1e-9, abs=1e-15), i
+        assert out["b"][i] == pytest.approx(d.var, rel=1e-9, abs=1e-15), i
+        r2 = float(np.sum(w**2) / np.sum(w) ** 2)
+        if i == 1:
+            assert out["u"][i] is None
+        else:
+            assert out["u"][i] == pytest.approx(np.sqrt(d.var / (1 - r2)), rel=1e-9), i

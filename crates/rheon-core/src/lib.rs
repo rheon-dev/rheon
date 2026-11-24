@@ -69,6 +69,7 @@ mod calibration;
 mod clock;
 mod clock_drift;
 mod clock_span;
+mod clock_steps;
 mod cluster;
 /// Compensated running means, `hi + lo` (docs/PLAN.md task 101): public so
 /// `rheon-polars`' window core keeps a variance's mean by the same rule
@@ -162,6 +163,7 @@ pub use clock::{
     PlainStep, SessionGap, Stamp, cmp_int_f64, ns_of_seconds, seconds_of_ns,
 };
 pub use clock_drift::ClockDrift;
+pub use clock_steps::{ClockSteps, StepStat};
 pub use cluster::{
     ClusterSummary, FeatureMoments, KMeans, KMeansCfg, LINK_FACTOR, LINK_FLOOR, LINK_QUANTILE,
     Micro, MicroCfg, MicroCluster, SeedRule, SplitMix64, dist2, merged_radius2,

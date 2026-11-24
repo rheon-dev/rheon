@@ -168,6 +168,7 @@ FAMILIES: tuple[Family, ...] = (
                 "run_length",
                 "clock_lag",
                 "clock_drift",
+                "clock_step",
             )
         ),
     ),

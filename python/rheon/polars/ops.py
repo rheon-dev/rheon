@@ -3,9 +3,9 @@ quantiles over a stream's clock, looking back or ahead, a variance and a
 standard deviation looking back, and the largest and smallest value of a
 window, or since an event. ``increment``, the step of a running total,
 gives a window operator an input. ``run_length`` counts the rows a value has
-held, and ``clock_lag`` and ``clock_drift`` read the lag between an event's
-time and its arrival, and how fast it grows: a stream's health, read as
-columns.
+held, ``clock_lag`` and ``clock_drift`` read the lag between an event's
+time and its arrival, and how fast it grows, and ``clock_step`` the steps
+between a time and the one before it: a stream's health, read as columns.
 
 Each operator returns a ``pl.Expr`` that composes with Polars' own
 expressions, in which ``pl.col`` reads the current row.
@@ -104,6 +104,14 @@ half_life)``:
        time and ``w_i = lam**(tau_t - tau_i)``, the weighted mean of ``d``,
        and the weighted least-squares slope of ``d`` on ``a``
      - numpy's weighted mean, and statsmodels' ``WLS`` under the same weights
+   * - :func:`clock_step`
+     - with ``s_i = t_i - t_{i-1}`` each step of a time and ``w_i =
+       lam**(tau_t - tau_i)``, the weighted mean of the steps, their
+       variance (unless ``bias``, multiplied by ``W ** 2 / (W ** 2 - sum
+       w_i ** 2)``) or its root, or the weight of the steps of 0 or below 0
+     - Polars' ``ewm_mean``, ``ewm_var`` and ``ewm_std`` of ``diff()`` on
+       a clock of one unit a row, and statsmodels' ``DescrStatsW`` under the
+       same weights on a clock
 
 **Which rows a window holds follows Polars' rolling windows**
 (``rolling_*_by``). A window is a set of timestamps, and ``closed`` says
@@ -280,6 +288,7 @@ __all__ = [
     "run_length",
     "clock_lag",
     "clock_drift",
+    "clock_step",
 ]
 
 
@@ -2919,3 +2928,104 @@ def clock_drift(
     ``restart_after_step_back``.
     """
     return row_operator("clock_drift", arrival, event=event, half_life=half_life)
+
+
+def clock_step(
+    time: str | pl.Expr,
+    *,
+    half_life: float | Duration,
+    stat: Literal["mean", "var", "std", "zeros", "backs"] = "mean",
+    bias: bool | None = None,
+) -> pl.Expr:
+    """A decayed statistic of the steps between each time and the one
+    before it: how evenly a stream's rows arrive.
+
+    Use it to watch a feed's cadence as a column: the mean step says how
+    often rows come, the spread how regularly, and the counts how often a
+    stamp repeats or goes back, such as an exchange's event times arriving
+    out of order on a stream clocked by their arrival.
+
+    .. rubric:: Parameters
+
+    ``time``
+        The time whose steps are read: a column name, or an element-wise
+        expression of the row, temporal or a number. It may hold no
+        operator. The stream's own clock column reads its cadence.
+    ``half_life``
+        How fast a step's weight halves on the stream's clock, in clock
+        units: a number, or a duration such as ``"5m"`` on a temporal
+        clock. ``float("inf")`` weighs every step the same.
+    ``stat``
+        What is read of the steps: ``"mean"`` (the default), ``"var"``,
+        ``"std"``, ``"zeros"`` (the weight of the steps of exactly 0) or
+        ``"backs"`` (the weight of the steps below 0).
+    ``bias``
+        For ``"var"`` and ``"std"`` only: ``False`` (the default) corrects
+        the variance for the weights' count, as Polars' ``ewm_var`` does by
+        default; ``True`` leaves it uncorrected.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as
+    a column of floats, in seconds where the time is temporal. A row whose
+    time is missing gives null. A mean or a spread is null until a step has
+    weight, and a corrected spread while one step carries all the weight; a
+    count is 0 before any step.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        ``time`` is neither a column name nor a ``pl.Expr``, ``half_life``
+        is not given, or ``bias`` is not a bool or is given for a ``stat``
+        other than ``"var"`` and ``"std"``.
+    ``ValueError``
+        ``half_life`` is not above 0, ``stat`` is not one of its words, or
+        ``time`` holds an operator, a part that is not element-wise, or a
+        column whose name starts with ``@po:``.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 2.0, 5.0]})
+        out = rp.stream.with_windows(
+            rows,
+            mean=rp.clock_step("t", half_life=float("inf")),
+            zeros=rp.clock_step("t", half_life=float("inf"), stat="zeros"),
+            clock="t",
+            gap_cap=10.0,
+        )
+        print(out["mean"].round(3).to_list(), out["zeros"].to_list())   # steps 1, 1, 0, 3
+
+    .. code-block:: text
+
+        [None, 1.0, 1.0, 0.667, 1.25] [0.0, 0.0, 0.0, 1.0, 1.0]
+
+    .. rubric:: See also
+
+    - :func:`increment`, each step itself.
+    - :func:`clock_lag` and :func:`clock_drift`, the lag between two times.
+
+    .. rubric:: Notes
+
+    Step ``s_i = t_i - t_{i-1}`` is taken between each time and the group's
+    time before it, and weighs ``w_i = 2 ** (-(tau_t - tau_i) / half_life)``
+    on the stream's clock ``tau``, one unit a row without one. With ``W =
+    sum w_i`` the mean is ``sum w_i s_i / W``, the variance ``sum w_i (s_i -
+    mean) ** 2 / W``, multiplied unless ``bias`` by ``W ** 2 / (W ** 2 - sum
+    w_i ** 2)``, and a count ``sum w_i`` over the steps of 0, or below 0.
+    Each is the decayed moments the other operators keep, updated a row at
+    a time about the running mean, so a time far from 0 next to its steps
+    loses no digit of their spread, and no count of rows decides when a
+    value is given: one step gives a mean, and two of weight a corrected
+    spread.
+
+    A row whose time is missing (null, NaN, infinite or beyond 1e100) has no
+    step and gives null, and the next time starts the steps again from
+    itself: no step is taken across the missing one. The clock still decays
+    the steps there. The steps are a group's own and start again at a clock
+    break (a gap past ``gap_cap`` or a session change) and where the clock
+    steps back past ``restart_after_step_back``. Two temporal times are
+    subtracted in nanoseconds, exactly, before they become seconds.
+    """
+    return row_operator("clock_step", time, half_life=half_life, stat=stat, bias=bias)

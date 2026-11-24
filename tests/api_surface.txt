@@ -28,6 +28,7 @@
   OrderNotGuaranteedWarning
   clock_drift(arrival: 'str | pl.Expr', event: 'str | pl.Expr', *, half_life: 'float | Duration') -> 'pl.Expr'
   clock_lag(arrival: 'str | pl.Expr', event: 'str | pl.Expr', *, half_life: 'float | Duration') -> 'pl.Expr'
+  clock_step(time: 'str | pl.Expr', *, half_life: 'float | Duration', stat: "Literal['mean', 'var', 'std', 'zeros', 'backs']" = 'mean', bias: 'bool | None' = None) -> 'pl.Expr'
   cross_mean(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   cross_quantile(input: 'str | pl.Expr', quantile: 'float', *, interpolation: "Literal['nearest', 'higher', 'lower', 'midpoint', 'linear', 'equiprobable'] | None" = None, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   cross_rank(input: 'str | pl.Expr', *, method: "Literal['average', 'min', 'max', 'dense', 'ordinal']" = 'average', descending: 'bool' = False, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
@@ -1893,6 +1894,7 @@
   ops:
     clock_drift(arrival: 'str | pl.Expr', event: 'str | pl.Expr', *, half_life: 'float | Duration') -> 'pl.Expr'
     clock_lag(arrival: 'str | pl.Expr', event: 'str | pl.Expr', *, half_life: 'float | Duration') -> 'pl.Expr'
+    clock_step(time: 'str | pl.Expr', *, half_life: 'float | Duration', stat: "Literal['mean', 'var', 'std', 'zeros', 'backs']" = 'mean', bias: 'bool | None' = None) -> 'pl.Expr'
     cross_mean(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     cross_quantile(input: 'str | pl.Expr', quantile: 'float', *, interpolation: "Literal['nearest', 'higher', 'lower', 'midpoint', 'linear', 'equiprobable'] | None" = None, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     cross_rank(input: 'str | pl.Expr', *, method: "Literal['average', 'min', 'max', 'dense', 'ordinal']" = 'average', descending: 'bool' = False, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'

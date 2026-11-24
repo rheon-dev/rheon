@@ -264,6 +264,8 @@ pub enum OpKind {
     /// The decayed slope of that lag on the arrival time (task 564): a row
     /// operator.
     ClockDrift,
+    /// A decayed statistic of a time's steps (task 564): a row operator.
+    ClockStep,
 }
 
 impl OpKind {
@@ -294,6 +296,7 @@ impl OpKind {
             OpKind::RunLength => "run_length",
             OpKind::ClockLag => "clock_lag",
             OpKind::ClockDrift => "clock_drift",
+            OpKind::ClockStep => "clock_step",
         }
     }
 
@@ -324,6 +327,7 @@ impl OpKind {
             "run_length" => Some(OpKind::RunLength),
             "clock_lag" => Some(OpKind::ClockLag),
             "clock_drift" => Some(OpKind::ClockDrift),
+            "clock_step" => Some(OpKind::ClockStep),
             _ => None,
         }
     }
@@ -342,11 +346,16 @@ impl OpKind {
 
     /// Whether it is a row operator: computed one row at a time from the
     /// group's own previous rows, before the window core, which never sees
-    /// it -- `increment`, `run_length`, `clock_lag` and `clock_drift`.
+    /// it -- `increment`, `run_length`, `clock_lag`, `clock_drift` and
+    /// `clock_step`.
     pub fn is_row(self) -> bool {
         matches!(
             self,
-            OpKind::Increment | OpKind::RunLength | OpKind::ClockLag | OpKind::ClockDrift
+            OpKind::Increment
+                | OpKind::RunLength
+                | OpKind::ClockLag
+                | OpKind::ClockDrift
+                | OpKind::ClockStep
         )
     }
 
@@ -366,6 +375,7 @@ impl OpKind {
             | OpKind::RunLength
             | OpKind::ClockLag
             | OpKind::ClockDrift
+            | OpKind::ClockStep
             | OpKind::CrossMean
             | OpKind::CrossStd
             | OpKind::CrossRank
@@ -6008,6 +6018,7 @@ mod tests {
             OpKind::RunLength,
             OpKind::ClockLag,
             OpKind::ClockDrift,
+            OpKind::ClockStep,
         ] {
             assert!(k.is_row() && k.stat().is_none(), "{k:?}");
             assert_eq!(k.direction(), Direction::Backward);

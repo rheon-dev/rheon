@@ -364,6 +364,22 @@ model that only the new build has is listed as an addition and passes.
   to Polars' `rle`, numpy's weighted mean and statsmodels' `WLS`. A window
   run's state moves to version 14; a version-13 state loads as one without
   these.
+- **`rp.clock_step`: a decayed statistic of a time's steps** (PLAN 564,
+  part 3). Each row's step is its time less the time before it in its
+  group, and `rp.clock_step(time, half_life=, stat=)` gives the steps'
+  decayed mean (`"mean"`), variance (`"var"`) or standard deviation
+  (`"std"`), corrected for the weights' count as Polars' `ewm_var` is unless
+  `bias=True`, or the decayed weight of the steps of exactly 0 (`"zeros"`)
+  or below 0 (`"backs"`). The statistics are `rp.ewm_moments`' decayed
+  moments (one term, order 1 or 2), a count the weight of a moments state
+  that learns only the steps it counts, so no second running sum is kept.
+  A row whose time is missing gives null and the next time takes no step
+  across it; the steps start again at a clock break and a reset, as a
+  drift's sums do. Held to Polars' `ewm_mean`, `ewm_var` and `ewm_std` of
+  `diff()` on a clock of one unit a row, to statsmodels' `DescrStatsW` on a
+  temporal clock, chunk invariance and a save at every row. A group's state
+  holds the moments' settings and one summary beside the increment's
+  previous value, written in the windows state's version 14.
 - **`rp.stream.merge`: streams that each run in clock order, merged into one
   stream in clock order** (PLAN 541). It takes any number of frames or
   queries, by position or in a dict of name to frame, and gives every row

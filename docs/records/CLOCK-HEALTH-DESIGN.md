@@ -186,15 +186,16 @@ bytes; a drift's half-life and five doubles, 56 bytes, and its origin, 32.
 Each sits beside the increment's previous value every row operator keeps (56
 bytes). None grows with the stream: no window, so `max_state_bytes` has
 nothing to bound and is not taken (a fixed cost, as an increment's is). The
-windows state moves to version 13: a group's state may carry `rows`, written
-only where there is a run length or a drift, so a version-12 state loads as a
-13 without one; an older build refuses a 13 by number.
+windows state moves to version 14 (561's extrema took 13 on the integration
+branch first): a group's state may carry `rows`, written only where there is
+a run length, a drift or a clock step, so a version-13 state loads as a 14
+without one; an older build refuses a 14 by number.
 
 ### Deferred
 
-- **Clock-step statistics.** They are to reuse 554's moments, which are not
-  on `main` (`vm/task-554-moments`). They wait until 554 merges; then this
-  branch is rebased, or they are added on top. Note for that part: `audit`
+- **Clock-step statistics.** Built in part 3, below, once the branch was
+  rebased onto the integration branch holding 554's moments. Note for that
+  part: `audit`
   already keeps, on a `clock` column, each step's class (a duplicate stamp,
   a gap at or past `gap_cap`, a regular step) and the regular steps' mean,
   population spread, coefficient of variation and largest step. It does not
@@ -217,6 +218,58 @@ the bit, state size); `windows_frame.rs` (the row operators through a run,
 chunking, a save at every row, a refused state of another shape); the
 windows fixture `with_windows_rows`. Python: `tests/test_run_length.py`,
 against Polars' `rle` and statsmodels' `WLS` (see its docstrings).
+
+## Part 3: clock-step statistics
+
+**Built:** `rp.clock_step(time, half_life=, stat="mean", bias=None)`, a
+fifth row operator beside the other three and `increment`, computed in the
+same pass. Each row's step is `s_i = t_i − t_{i−1}`, its time less the
+group's time before it (in seconds on a temporal time, subtracted in
+integer nanoseconds), and `stat` reads the steps so far, each weighing
+`2^(−(τ_t − τ_i)/h)` on the policy clock (answer 5: the half-life rules of
+every window operator): `mean`, `var`, `std` (Kish-corrected as Polars'
+`ewm_var` is by default, `bias=True` for the plug-in), `zeros` (the
+decayed weight of the steps of exactly 0) and `backs` (of the steps below
+0). The input is any time, not only the stream's clock: on the clock
+`zeros` counts repeated stamps and `backs` is 0 (a step back is refused or
+resets), while on an event time of a stream clocked by arrival `backs`
+counts the events out of order, which is the "steps refused or reset" the
+first draft asked for, read where they can occur.
+
+**On 554's moments (answer 7).** `rheon-core`'s `clock_steps.rs` holds one
+`EwmMoments` of one term: the first cumulant for the mean, the central
+moment of order 2 (plug-in or unbiased) for a spread. A count is the
+weight `W` of an `EwmMoments` that learns only the steps it counts, every
+other row one of weight 0, so its recursion is the moments' own
+`W' = λ W + w` and no second Welford or running sum is written. The
+withholding is the moments': no step of weight for a mean or a spread, and
+an unbiased spread whose correction keeps no digit (one step carrying all
+the weight); a count is 0 before any step.
+
+**Missing times and restarts.** A null or non-finite time gives null and
+restarts the chain: the next time takes no step across the missing one
+(answer 3's rule, and the engine's non-finite rule). The statistics keep
+their history and decay through the row, since a missing time says
+nothing about the steps before it; the chain, not the statistics, is what
+restarts. A clock break (a gap past `gap_cap`, a session change) and a
+reset start the statistics again, as a drift's sums. A row of weight 0
+(the core's; `with_windows` has none) decays and learns nothing, and the
+caller does not move the chain's last time on it (rule 9).
+
+**State.** Per group and operator: the statistic and one `EwmMoments` (its
+settings with the term, `W`, one summary of one leg), plus the chain's last
+time (32 bytes); the msgpack form is measured in the report of the change.
+Nothing grows with the stream.
+
+**Tests.** `clock_steps.rs` (each statistic against its definition at
+every row, both sides of 0 for a count, rule 9 on the first row, rule 8,
+a save at every row to the bit); `window_rows.rs` (the operator through a
+run against its definition, grouped and in sessions, chunkings, a save at
+every row, the refusals, a missing time); `tests/test_clock_step.py`
+(Polars' `ewm_mean`, `ewm_var`, `ewm_std` of `diff()` on the row clock,
+counts, thresholds, restarts, chunking, a save at every row) and
+`tests/test_second_opinion_clock_health.py` (statsmodels' `DescrStatsW` on
+a temporal clock).
 
 ## Index row (for the Mac to add at merge)
 

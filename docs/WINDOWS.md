@@ -663,6 +663,51 @@ The run of 2.0 reaches 4 rows before 3.0 ends it. The slope is null on the
 first row, where one arrival has no spread, and then reads the lag's growth,
 each row weighed the same under `half_life=float("inf")`.
 
+**`rp.clock_step` reads a time's cadence.** Each row's step is its time
+less the time before it in its group. `rp.clock_step` gives a decayed
+statistic of the steps so far, each step weighing
+`2 ** (-(t − t_i) / half_life)` on the stream's clock, as a lag does. The
+statistic is `stat="mean"` (the default), `"var"` or `"std"`, each
+corrected for the weights' count as Polars' `ewm_var` is unless
+`bias=True`. Or it is the weight of the steps of exactly 0 (`"zeros"`, a
+stamp repeated) or below 0 (`"backs"`, a time out of order). Read on the stream's own clock it says how
+often and how evenly rows arrive; read on an event time of a stream clocked
+by arrival, `"backs"` counts the events that came out of order. The mean
+and the spread are the decayed moments `rp.ewm_moments` keeps, updated
+about the running mean, so a timestamp's sixteen digits do not cost the
+steps' spread any, and a count is the decayed weight of its steps. A row
+whose time is missing gives null, and the next time takes no step across
+it. The steps start again at a clock break and a reset, as a lag's do, and
+the state is a few numbers a group, whatever the stream's length:
+
+```python
+feed = pl.DataFrame({"t": [0.0, 1.0, 1.0, 2.0, 2.0, 2.0, 5.0]})
+out = rp.stream.with_windows(
+    feed,
+    step=rp.clock_step("t", half_life=float("inf")),
+    repeats=rp.clock_step("t", half_life=float("inf"), stat="zeros"),
+    clock="t", gap_cap=10.0,
+)
+print(out.select(pl.col("step").round(3), "repeats"))
+```
+
+```text
+shape: (7, 2)
+┌───────┬─────────┐
+│ step  ┆ repeats │
+│ ---   ┆ ---     │
+│ f64   ┆ f64     │
+╞═══════╪═════════╡
+│ null  ┆ 0.0     │
+│ 1.0   ┆ 0.0     │
+│ 0.5   ┆ 1.0     │
+│ 0.667 ┆ 1.0     │
+│ 0.5   ┆ 2.0     │
+│ 0.4   ┆ 3.0     │
+│ 0.833 ┆ 3.0     │
+└───────┴─────────┘
+```
+
 ## Saving and resuming a window run
 
 **A window run's state holds the rows still waiting for their windows to
