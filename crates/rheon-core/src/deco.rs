@@ -841,6 +841,13 @@ impl Deco {
         if row.s2.iter().any(|v| !v.is_finite()) {
             let (mut s1, mut s2) = (row.s1.clone(), row.s2.clone());
             for (bi, b) in self.blocks.iter().enumerate() {
+                // A block whose sums are doubles keeps them, to the bit; one
+                // with a variance below the normal doubles is not taken
+                // again: a history the decay all but forgot leaves one
+                // there, its digits gone, and its estimate stays NaN.
+                if s2[bi].is_finite() || b.iter().any(|&i| self.diag.var(i) < f64::MIN_POSITIVE) {
+                    continue;
+                }
                 let top = b
                     .iter()
                     .map(|&i| row.r[i].abs())

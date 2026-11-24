@@ -1915,6 +1915,12 @@ impl CorrChange {
         // estimate, a ratio of the squares' degree, does not read. It was
         // NaN, and the row left out of the CUSUM (review 2026-11-23, COV-5).
         if !s2.is_finite() {
+            // Not where a variance is below the normal doubles: a history
+            // the decay all but forgot leaves one there, with its digits
+            // gone, and the row is read as it was, with no estimate.
+            if (0..x.len()).any(|i| self.diag.var(i) < f64::MIN_POSITIVE) {
+                return f64::NAN;
+            }
             let r = |i: usize| self.diag.deviation(i, x[i]) / self.diag.var(i).sqrt();
             let top = (0..x.len()).map(|i| r(i).abs()).fold(0.0, f64::max);
             if !(top.is_finite() && top > 0.0) {
