@@ -747,6 +747,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [docstrings."python/rheon/polars/_errors.py"]
 
+[docstrings."python/rheon/polars/_fourier.py"]
+
 [docstrings."python/rheon/polars/_warnings.py"]
 
 [vocabulary."crates/rheon-core/src/ar.rs#messages"]
@@ -863,6 +865,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/polars/_clock.py#messages"]
 
 [vocabulary."python/rheon/polars/_errors.py#docstrings"]
+
+[vocabulary."python/rheon/polars/_fourier.py#docstrings"]
 
 [vocabulary."python/rheon/polars/_fourier.py#messages"]
 

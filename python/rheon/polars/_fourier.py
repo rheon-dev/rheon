@@ -131,15 +131,87 @@ def fourier(
     order: int,
     origin: int | date | datetime | None = None,
 ) -> list[pl.Expr]:
-    """Fourier terms of a fixed period, reduced in integers (module docstring).
+    """Fourier terms of a fixed period: the sine and cosine of each row's phase.
 
-    ``period`` is a whole number of the clock's units on an integer clock,
-    and a fixed duration (``"1d"``, ``"1w"``, ``"90m"``, a ``timedelta``) on a
-    ``Datetime`` or ``Date`` clock. ``origin`` is where every term's phase is
-    0: ``0`` on an integer clock; on a temporal one the epoch, or Monday
-    1970-01-05 when the period is a whole number of weeks. The terms are
-    named ``{clock}_sin{i}_{period}`` and ``{clock}_cos{i}_{period}``, in the
-    order ``sin1, cos1, sin2, ...``; a null clock gives null terms.
+    Use them as features of a regression on a seasonal series, such as the
+    hour of the day of an hourly load, so the model weighs a smooth season
+    in a few terms with its other features. A term reads the row's own clock
+    alone, so it needs no state and no window, and it is the same however
+    the stream is cut into chunks.
+
+    The phase is reduced in whole numbers before it is turned into an angle,
+    so its rounding does not grow with the clock: for a clock ``t`` in its
+    integer units, an origin ``t0`` and a period ``P``,
+
+    .. code-block:: text
+
+        r_i = (i * (t - t0)) mod P,   u_i = r_i / P,   i = 1 .. order
+        sin(2 pi u_i), cos(2 pi u_i)
+
+    A phase held as epoch seconds in a float, the usual way, loses 1e-6
+    radians at a one-second period. These terms are statsmodels'
+    ``Fourier(n, 1).in_sample`` at the same phase, to the last bit.
+
+    .. rubric:: Parameters
+
+    ``clock``
+        The clock column's name: a ``Datetime`` or ``Date`` column, read in
+        nanoseconds, or an integer column, read in its own units. A zoned
+        ``Datetime`` is read on its wall clock in its own zone, so a daily
+        term peaks at the same local hour in summer and winter.
+    ``period``
+        On a temporal clock, a fixed duration: ``"1d"``, ``"1w"``, ``"90m"``
+        or a ``timedelta``. On an integer clock, a whole number of its units.
+        A calendar unit (``"1mo"``, ``"1q"``, ``"1y"``) has no fixed length;
+        :func:`calendar_fourier` takes it.
+    ``order``
+        The harmonics, from 1: ``2 * order`` terms.
+    ``origin``
+        Where every term's phase is 0. ``None`` (the default) is 0 on an
+        integer clock, and on a temporal one the epoch, or Monday 1970-01-05
+        when the period is a whole number of weeks, as Polars'
+        ``dt.truncate`` starts one. A naive ``date`` or ``datetime`` on a
+        temporal clock, an ``int`` on an integer one.
+
+    .. rubric:: Returns
+
+    A list of ``pl.Expr``, one a term, named ``{clock}_sin{i}_{period}`` and
+    ``{clock}_cos{i}_{period}`` in the order ``sin1, cos1, sin2, ...``, for
+    ``with_columns`` or ``select``. A null clock gives null terms.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        ``clock`` is not a column name, ``order`` is not an int, or
+        ``period`` or ``origin`` is of the wrong type for the clock.
+    ``ValueError``
+        ``order`` is below 1; ``period`` is a calendar unit or not above 0;
+        ``period * order`` reaches ``2**63``; ``origin`` carries a time
+        zone. When the query runs: the clock is a float column, or of
+        another type than the period's (an integer clock with a duration).
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        from datetime import datetime
+
+        import polars as pl
+        from rheon import polars as rp
+
+        rows = pl.DataFrame({"t": [datetime(2026, 1, 1, h) for h in (0, 6, 12, 18)]})
+        out = rows.with_columns(rp.ops.fourier("t", period="1d", order=1))
+        print(out["t_sin1_1d"].round(3).to_list())
+
+    .. code-block:: text
+
+        [0.0, 1.0, 0.0, -1.0]
+
+    .. rubric:: See also
+
+    - :func:`calendar_fourier`, the terms of a calendar hour, day, week,
+      month, quarter or year.
+    - :func:`ewm_profile`, a seasonal profile learned online.
     """
     who = "fourier"
     if not isinstance(clock, str):
@@ -215,12 +287,72 @@ def fourier(
 
 
 def calendar_fourier(clock: str, *, freq: str, order: int) -> list[pl.Expr]:
-    """Fourier terms of a calendar period (module docstring), statsmodels'
-    ``CalendarFourier``: ``freq`` is one of ``"1h"``, ``"1d"``, ``"1w"``
-    (Monday to Sunday), ``"1mo"``, ``"1q"`` or ``"1y"``. The terms are named
-    ``{clock}_cal_sin{i}_{freq}`` and ``{clock}_cal_cos{i}_{freq}``, apart from
-    ``fourier``'s, whose ``"1d"`` is a fixed span where this one's is the
-    calendar day."""
+    """Fourier terms of a calendar period: the share of its hour, day, week, month, quarter or year.
+
+    Use them where a season follows the calendar, such as the day of the
+    month of a payroll series or the day of the year of a temperature,
+    whose periods have no fixed length. Each term reads the row's own clock
+    alone, so it needs no state and no window.
+
+    For the calendar period that holds ``t``, from its start ``s`` to the
+    next start ``e``, in the column's own unit:
+
+    .. code-block:: text
+
+        x = 2 pi (t - s) / (e - s)
+        sin(i x), cos(i x),   i = 1 .. order
+
+    These are statsmodels' ``CalendarFourier(freq, order).in_sample``, to
+    the last bit.
+
+    .. rubric:: Parameters
+
+    ``clock``
+        The clock column's name: a ``Datetime`` or ``Date`` column. A zoned
+        ``Datetime`` is read on its wall clock in its own zone.
+    ``freq``
+        ``"1h"``, ``"1d"``, ``"1w"`` (Monday to Sunday), ``"1mo"``, ``"1q"``
+        or ``"1y"``. A fixed span of several units, such as ``"2d"``, is
+        :func:`fourier`'s period.
+    ``order``
+        The harmonics, from 1: ``2 * order`` terms.
+
+    .. rubric:: Returns
+
+    A list of ``pl.Expr``, one a term, named ``{clock}_cal_sin{i}_{freq}``
+    and ``{clock}_cal_cos{i}_{freq}`` in the order ``sin1, cos1, sin2,
+    ...``. The names differ from :func:`fourier`'s, whose ``"1d"`` is a
+    fixed span where this one's is the calendar day.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        ``clock`` is not a column name, or ``order`` is not an int.
+    ``ValueError``
+        ``order`` is below 1, or ``freq`` is not one of the six units. When
+        the query runs: the clock is not a ``Date`` or ``Datetime`` column.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        from datetime import date
+
+        import polars as pl
+        from rheon import polars as rp
+
+        days = pl.DataFrame({"t": [date(2026, 1, 1), date(2026, 1, 16), date(2026, 2, 1)]})
+        out = days.select(rp.ops.calendar_fourier("t", freq="1mo", order=1))
+        print(out["t_cal_cos1_1mo"].round(3).to_list())
+
+    .. code-block:: text
+
+        [1.0, -0.995, 1.0]
+
+    .. rubric:: See also
+
+    - :func:`fourier`, the terms of a fixed period.
+    """
     who = "calendar_fourier"
     if not isinstance(clock, str):
         raise WrongTypeError(

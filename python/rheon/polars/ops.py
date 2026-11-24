@@ -244,11 +244,13 @@ import polars as pl
 from rheon._errors import RefusedValueError
 from rheon._renamed import renamed_function
 from rheon.polars._formula import moments_operator, operator, profile
+from rheon.polars._fourier import calendar_fourier, fourier
 
 if TYPE_CHECKING:
     from rheon._duration import Duration
 
 __all__ = [
+    "calendar_fourier",
     "cross_mean",
     "cross_std",
     "cross_rank",
@@ -262,6 +264,7 @@ __all__ = [
     "ewm_std",
     "ewm_sum",
     "ewm_var",
+    "fourier",
     "increment",
     "rolling_max",
     "rolling_min",

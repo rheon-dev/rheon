@@ -169,6 +169,11 @@ FAMILIES: tuple[Family, ...] = (
         ),
     ),
     Family(
+        "ops-seasonal",
+        "ops",
+        tuple(f"{_RP}.ops.{m}" for m in ("fourier", "calendar_fourier")),
+    ),
+    Family(
         "eval-scores",
         "eval",
         tuple(

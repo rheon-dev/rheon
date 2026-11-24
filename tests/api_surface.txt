@@ -1888,6 +1888,7 @@
     subset(g: 'Gram', columns: 'Sequence[str | int]') -> 'Gram'
     vif(g: 'Gram', *, features: 'Sequence[str | int] | None' = None) -> 'Any'
   ops:
+    calendar_fourier(clock: 'str', *, freq: 'str', order: 'int') -> 'list[pl.Expr]'
     cross_mean(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     cross_quantile(input: 'str | pl.Expr', quantile: 'float', *, interpolation: "Literal['nearest', 'higher', 'lower', 'midpoint', 'linear', 'equiprobable'] | None" = None, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     cross_rank(input: 'str | pl.Expr', *, method: "Literal['average', 'min', 'max', 'dense', 'ordinal']" = 'average', descending: 'bool' = False, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
@@ -1901,6 +1902,7 @@
     ewm_std(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, bias: 'bool' = False) -> 'pl.Expr'
     ewm_sum(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 0, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
     ewm_var(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, bias: 'bool' = False) -> 'pl.Expr'
+    fourier(clock: 'str', *, period: 'int | timedelta | str | pl.Expr', order: 'int', origin: 'int | date | datetime | None' = None) -> 'list[pl.Expr]'
     increment(input: 'str | pl.Expr') -> 'pl.Expr'
     rolling_max(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     rolling_min(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'

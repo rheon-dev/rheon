@@ -21,7 +21,8 @@ import polars as pl
 import pytest
 from statsmodels.tsa.deterministic import CalendarFourier, Fourier
 
-from rheon.polars._fourier import calendar_fourier, fourier
+from rheon import polars as rp
+from rheon.polars.ops import calendar_fourier, fourier
 
 TIER = "essential"
 
@@ -208,3 +209,10 @@ def test_refusals():
         fourier("t", period="1d", order=1, origin=dt.datetime(2026, 1, 1, tzinfo=dt.UTC))
     with pytest.raises(ValueError, match="fixed span"):
         calendar_fourier("t", freq="2d", order=1)
+
+
+def test_the_terms_are_in_ops_and_not_at_the_root():
+    """A feature's builder lives in ``rheon.polars.ops`` alone."""
+    assert rp.ops.fourier is fourier and rp.ops.calendar_fourier is calendar_fourier
+    assert "fourier" in rp.ops.__all__ and "calendar_fourier" in rp.ops.__all__
+    assert not hasattr(rp, "fourier") and not hasattr(rp, "calendar_fourier")
