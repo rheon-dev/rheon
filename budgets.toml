@@ -147,12 +147,10 @@ what = "kalman, 20 features, coef half-life 2000: AnyModel::step_into, into one 
 budget = 11552994
 
 [instructions.kalman_smooth_k5]
-what = "kalman, 5 features, coef half-life 2000, smooth_lag 10 with emit_smoothed_se: AnyModel::step_into, into one kept Step"
-budget = 61295698
+what = "kalman, 5 features, coef half-life 2000, smooth_lag 10 with emit_smoothed_se: AnyModel::step_into, into one kept Step; its budget is CI's first count"
 
 [instructions.kalman_smooth_k20]
-what = "kalman, 20 features, coef half-life 2000, smooth_lag 10 with emit_smoothed_se: AnyModel::step_into, into one kept Step"
-budget = 1098321360
+what = "kalman, 20 features, coef half-life 2000, smooth_lag 10 with emit_smoothed_se: AnyModel::step_into, into one kept Step; its budget is CI's first count"
 
 [instructions.ew_cov]
 what = "ew_cov, 20 features, mean, std and corr: AnyModel::step_into, into one kept Step"
