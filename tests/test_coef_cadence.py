@@ -153,6 +153,8 @@ def kind(name: str, h: float | str, **common) -> dict:
             targets=["y"],
             features=two,
             order=(1, 0, 0),
+            # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests
+            # hold at the default se_bound.
             se_bound=1e3,
             spacing="1m" if isinstance(h, str) else 60.0,
         ),

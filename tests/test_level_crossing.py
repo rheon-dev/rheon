@@ -43,6 +43,8 @@ MODELS = [
     ("holt", {"features": None}),  # no features keyword
     ("ar", {"lags": 1, "ridge": 1e-6}),
     # The features as regressors of an AR(1); no decay, the bound loose.
+    # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests hold at
+    # the default se_bound.
     ("sarima", {"order": (1, 0, 0), "half_life": None, "se_bound": 1e3}),
 ]
 IDS = [m for m, _ in MODELS]

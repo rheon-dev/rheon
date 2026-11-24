@@ -903,6 +903,8 @@ fn model_case(id: &str, n: usize) -> ModelCase {
         ("sarima", "season" | "targets" | "history") => {
             let season = if dim == "season" { n } else { 4 };
             let t = if dim == "targets" { n } else { 1 };
+            // The bound loose: this checks the plumbing, not the accuracy, which the oracle tests
+            // hold at the default se_bound.
             let model = if dim == "targets" {
                 json!({"type": "sarima", "order": [1, 0, 0], "se_bound": 1000.0})
             } else {

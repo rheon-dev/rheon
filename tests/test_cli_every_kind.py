@@ -938,6 +938,8 @@ CASES: list[Case] = [
             **XY,
             "order": (1, 0, 1),
             "seasonal_order": (1, 0, 0, 4),
+            # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests
+            # hold at the default se_bound.
             "se_bound": 1e3,
             "spacing": 0.5,
             "max_state_bytes": 1 << 20,
@@ -956,6 +958,8 @@ CASES: list[Case] = [
             "seasonal_order": (0, 1, 1, 4),
             "enforce_stationarity": False,
             "enforce_invertibility": False,
+            # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests
+            # hold at the default se_bound.
             "se_bound": 1e3,
             "spacing": 2.0,
             # Drift resetting the fit, as the regressions' second sets do.

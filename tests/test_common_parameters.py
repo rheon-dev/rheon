@@ -87,6 +87,8 @@ VARIANTS["sgd_huber"] = ("sgd", {"loss": "huber"})
 # Its start opens where every standard error is under the bound; on this
 # stream's 400 rows (100 a group) the default 0.1 is not reached, so a loose
 # bound opens it and the steps after it run.
+# The bound loose: this checks the plumbing, not the accuracy, which the oracle tests hold at the
+# default se_bound.
 VARIANTS["sarima"] = ("sarima", {"se_bound": 1e3})
 
 KINDS = tuple(VARIANTS)

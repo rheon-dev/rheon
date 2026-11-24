@@ -1142,6 +1142,8 @@ fn sarima_golden() {
     let mut m = Sarima::new(cfg([1, 1, 1], [1, 0, 0, 4], vec![given], None)).unwrap();
     let mut got = signature(&mut m, 0);
     let estimate = SarimaEstimate {
+        // The bound loose: this checks the plumbing, not the accuracy, which the oracle tests hold
+        // at the default se_bound.
         se_bound: 1e3,
         ..SarimaEstimate::default()
     };

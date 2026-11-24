@@ -798,6 +798,8 @@ fn case_spec(id: &str) -> (Value, Shape) {
             (s, Shape::Linear)
         }
         "sarima" => {
+            // The bound loose: this checks the plumbing, not the accuracy, which the oracle tests
+            // hold at the default se_bound.
             let mut s = fit(
                 json!({"type": "sarima", "order": [1, 0, 1],
                     "seasonal_order": [1, 0, 1, 24], "se_bound": 1000.0}),

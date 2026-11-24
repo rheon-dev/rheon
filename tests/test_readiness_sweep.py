@@ -107,6 +107,8 @@ EXTRA: dict[str, dict[str, Any]] = {
     "dcc": {"margins": "none", "margin_start_rows": None, "half_life": 25.0},
     # `sarima`'s start opens where every standard error is under its bound,
     # past this stream's rows at the default: a loose one opens it early.
+    # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests hold at
+    # the default se_bound.
     "sarima": {"se_bound": 1e3},
 }
 #: The kinds that write no row of their own: they report through the state

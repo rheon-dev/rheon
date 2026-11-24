@@ -61,6 +61,8 @@ MODELS = [
     ("expectile", {"expectile": 0.8}),
     ("holt", {"features": None}),  # no features keyword
     ("ar", {"lags": 1, "ridge": 1e-3}),
+    # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests hold at
+    # the default se_bound.
     ("sarima", {"order": (1, 0, 0), "half_life": None, "se_bound": 1e3}),
 ]
 IDS = [m[0] for m in MODELS]

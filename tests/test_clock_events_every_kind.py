@@ -188,6 +188,8 @@ def spec(kind: str, **kw: Any) -> dict:
     if kind == "sarima":
         # Its start opened inside the stream, so a restart has a start to
         # fit again: the default bound is not reached in 400 rows.
+        # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests hold
+        # at the default se_bound.
         a["se_bound"] = 1e3
     a.update(kw)
     a = {k: v for k, v in a.items() if v is not None}

@@ -543,6 +543,8 @@ CASES: dict[str, tuple[str, dict[str, object]]] = {name: (name, {}) for name in 
     "sgd_huber": ("sgd", {"loss": "huber"}),
     # Its start opened in each group's rows on the irregular clock: the
     # default bound is not reached there.
+    # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests hold at
+    # the default se_bound.
     "sarima": ("sarima", {"se_bound": 1e3}),
 }
 #: Every case, ``huber`` and ``sgd``'s Huber loss with the refit of their

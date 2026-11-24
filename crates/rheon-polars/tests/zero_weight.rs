@@ -193,7 +193,9 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
     ),
     // Its slots are the clock's: a row of weight 0 counts in no clock, so
     // it takes no slot. A slot is a row, or a quarter step of a clock, the
-    // stream's own; the bound loose, so the start opens in the stream.
+    // stream's own; the bound loose, so the start opens in the stream: this
+    // checks the plumbing, not the accuracy, which the oracle tests hold at
+    // the default se_bound.
     (
         "sarima",
         r#"{"type": "sarima", "order": [1, 0, 1], "seasonal_order": [1, 0, 0, 4], "se_bound": 1000.0}"#,

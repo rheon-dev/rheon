@@ -40,6 +40,8 @@ MODELS = [
     # The features as exogenous regressors beside two lags of the target.
     ("ar", {"lags": 1, "ridge": 1e-3}),
     # The features as exogenous regressors of an AR(1); no decay.
+    # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests hold at
+    # the default se_bound.
     ("sarima", {"order": (1, 0, 0), "half_life": None, "se_bound": 1e3}),
 ]
 

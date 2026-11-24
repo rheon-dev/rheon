@@ -214,6 +214,8 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
             **{k: v for k, v in FIT.items() if k != "half_life"},
             order=(1, 0, 0),
             spacing=0.5,
+            # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests
+            # hold at the default se_bound.
             se_bound=1e3,
             feature_health_half_life=100.0,
         ),

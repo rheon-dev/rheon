@@ -179,6 +179,8 @@ COEF_SPECS = [
         features=["x1", "x2"],
         order=(1, 0, 0),
         seasonal_order=(0, 0, 1, 4),
+        # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests hold
+        # at the default se_bound.
         se_bound=1e3,
     ),
 ]

@@ -153,6 +153,8 @@ def specs() -> list[dict]:
             targets=["y0"],
             features=["x0", "x1"],
             order=(1, 0, 0),
+            # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests
+            # hold at the default se_bound.
             se_bound=1e3,
             spacing=2.0,
             clock="t",

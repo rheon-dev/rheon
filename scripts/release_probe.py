@@ -473,6 +473,8 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
             features=["x0", "x1"],
             order=(1, 0, 1),
             seasonal_order=(1, 0, 0, 4),
+            # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests
+            # hold at the default se_bound.
             se_bound=1e3,
             group="g",
             **CLOCK,

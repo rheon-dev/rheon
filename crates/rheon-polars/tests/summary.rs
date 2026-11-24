@@ -1197,6 +1197,8 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
         // Its starts accepted under a loose bound, its runs stepping.
         (
             "sarima",
+            // The bound loose: this checks the plumbing, not the accuracy, which the oracle tests
+            // hold at the default se_bound.
             r#"{"type": "sarima", "order": [1, 0, 1], "seasonal_order": [1, 0, 0, 4],
                 "se_bound": 1000.0}"#,
             r#"["y"]"#,

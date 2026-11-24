@@ -639,6 +639,8 @@ def clock_specs(draw, model: str, step: int, cap: int):
         # A slot a step of the column, its zero-weight rows in no clock and
         # its skipped slots predicted through; no half-life and no embargo,
         # both refused; the bound loose, so its start opens in a short stream.
+        # The bound loose: this checks the plumbing, not the accuracy, which the oracle tests hold
+        # at the default se_bound.
         kw |= dict(targets=["y"], features=["x0", "x1"], order=(1, 0, 0), se_bound=1e3)
         kw["spacing"] = steps(1, 1)
     else:
