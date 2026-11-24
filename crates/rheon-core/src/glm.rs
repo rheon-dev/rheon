@@ -69,8 +69,10 @@
 //!   While the buffer fills, the recursion runs held to a step cap of 1
 //!   ([`WAITING_CAP`]), so the predictions before the refit are the capped
 //!   recursion's rather than a runaway's; the refit then replaces all it
-//!   left. A refit given up past a spec's budget replaces nothing, so its
-//!   target keeps that cap for good. `refit_clock = D` is the same refit over a span of the clock
+//!   left. A refit given up past a spec's budget replaces nothing, so under
+//!   the log and logit links its target keeps that cap for good (under the
+//!   inverse and power links the exact row step below takes the rows
+//!   instead, with no such cap). `refit_clock = D` is the same refit over a span of the clock
 //!   (docs/PLAN.md task 538): a target's rows from its first learned row
 //!   through the first at least `D` clock units after it, once they hold a
 //!   row per coefficient, `D` read off the rows' exact stamps
@@ -86,13 +88,63 @@
 //!   the capped rows' weights stay in `G`, and with decay the same as the
 //!   refit's.
 //!
+//! **The exact row step under the inverse and power links** (docs/PLAN.md
+//! task 581). These links give a mean only where `η > 0`, and the Fisher
+//! step scores a row at the fit before it: a target far above its mean (a
+//! Gamma target 1000 times it) pushes `β` past the domain's edge for the
+//! rows around it, which then have no mean, teach nothing and so never
+//! bring it back -- hundreds of null predictions after a refit that had
+//! run, and a refit given up left every coefficient 0, no mean, null for
+//! good. So once a target's refit has run or been given up, each of its
+//! learned rows minimises its own penalized deviance exactly, in place of
+//! one Newton step:
+//!
+//! ```text
+//! β_t = argmin_b  w d(y, μ(x̃'b))/2 + (b − β_{t−1})'(G + R I)(b − β_{t−1})/2      G after the row's decay
+//! ```
+//!
+//! The minimum lies along `P x̃`, `P = (G + R I)⁻¹`: with `q = x̃'P x̃`
+//! and `η = x̃'β_{t−1}`, the row's `η` moves to the one root `u > 0` of
+//!
+//! ```text
+//! u − η + (w q/(p − 1)) (y − u^(−1/(p−1))) = 0       (p = 2 for the Gamma: u = (a + √(a² + 4wq))/2, a = η − w q y)
+//! β_t = β_{t−1} + ((u − η)/q) P x̃
+//! G_t = λ G_{t−1} + w min(W(η), W(u)) x̃x̃'              W(u) alone where η ≤ 0
+//! ```
+//!
+//! ([`prox_root`]). The deviance is convex in `η` under a canonical link,
+//! so `u` lies between `η` and `g(y)`: the step never overshoots the
+//! target, and `u > 0` from any `η`, the start's `η = 0` of a given-up
+//! refit included. The row's curvature enters `G` at the smaller of its
+//! Fisher weights before and after its step, `W` falling as `η` rises:
+//! beside `W(u)` alone, the smaller weight left the worst of 20 seeds up to
+//! 3.5 times nearer statsmodels' fit, and never farther, over the 16
+//! adversarial streams below (a simulation of the step, 2026-11-24). `step_cap` still
+//! holds the move `|u − η|`; the start's cap of 1 ([`WAITING_CAP`]) does
+//! not, the exact step having no runaway to stop. While the refit waits,
+//! these links' rows are learned as before (every coefficient 0 gives no
+//! mean, so nothing is), and the log and logit links never take this step.
+//! It costs a solve, as the Fisher step does, and a root: the Gamma's in
+//! closed form, the Tweedie's by Newton's passes, two or three in a steady
+//! stream. Its answer against statsmodels' `GLM` on adversarial streams is
+//! `tests/test_second_opinion_glm_canonical.py`'s.
+//!
+//! **Under the inverse and power links the ridge is not free of the
+//! target's units.** `R/2 |β|²` penalizes `β` on the link's scale, `1/μ`
+//! (or `μ^(1−p)`): a target in units a hundredth as large has coefficients
+//! a hundred times as large (`100^(p−1)` under the power link), which the
+//! same `R` pulls toward 0 far harder, while the deviance does not change.
+//! Under the log link a change of units moves the intercept by its log
+//! alone. Scale such a target so that `η` is of order 1, or lower `ridge`.
+//!
 //! **Rows that teach nothing.** A row of weight 0 decays `G` and learns
 //! nothing; a target
 //! that is absent or outside the family's support ([`crate::Family::takes`])
 //! does the same for that target, and the bank refuses the chunk naming
 //! such a value rather than hand it in. A row whose `η` gives no mean under
-//! the inverse or power link (`η ≤ 0`) is not predicted and teaches the
-//! recursion nothing; it still joins the refit's buffer.
+//! the inverse or power link (`η ≤ 0`) is not predicted; while the refit
+//! waits it teaches the recursion nothing and still joins the refit's
+//! buffer, and after the refit the exact step learns it like any other.
 //!
 //! **The state** is `k(k+1)/2 + k + 1` numbers a target (`G` packed, `β`,
 //! the target's weight) and the shared weight, and until each target's
@@ -113,6 +165,8 @@ use crate::{Decay, RefitStatus, Stamp};
 
 #[cfg(test)]
 mod mutant_tests;
+#[cfg(test)]
+mod prox_tests;
 #[cfg(test)]
 mod refit_clock_tests;
 #[cfg(test)]
@@ -402,7 +456,8 @@ pub struct Glm {
     /// Per target with the refit on; empty with it off.
     refit: Vec<GlmRefit>,
     /// Solves that failed (`G + R I` not positive definite in floating
-    /// point), and refits that failed or ran to their pass cap.
+    /// point), refits that failed or ran to their pass cap, and exact row
+    /// steps whose root ran to its pass cap.
     pub(crate) solve_failures: u64,
     /// Under a refit over a span of the clock: the clock summed from the
     /// rows' steps, a row's place where no stamp is handed.
@@ -597,10 +652,12 @@ impl Glm {
     }
 
     /// Give every target's refit up before it begins, past a spec's refit
-    /// budget: its rows are freed and it keeps the one-pass fit, held to
-    /// the start's cap ([`WAITING_CAP`]) for good, since no refit will
-    /// replace what the start leaves. Under a link with no mean at 0 the
-    /// one-pass fit never starts, every coefficient 0 giving no mean.
+    /// budget: its rows are freed and it keeps the one-pass fit. Under the
+    /// log and logit links that fit is held to the start's cap
+    /// ([`WAITING_CAP`]) for good, since no refit will replace what the
+    /// start leaves; under the inverse and power links, where every
+    /// coefficient 0 gives no mean, the exact row step starts it from `η =
+    /// 0` with no such cap (the module docs).
     pub fn refit_give_up(&mut self) {
         for r in self.refit.iter_mut().filter(|r| !r.done) {
             r.rows = Vec::new();
@@ -688,6 +745,85 @@ impl Glm {
         true
     }
 
+    /// Target `j`'s learned row under the inverse or power link once its
+    /// refit has run or been given up: the row's own penalized deviance
+    /// minimised exactly (the module docs, *The exact row step*). With `P
+    /// = (G + R I)⁻¹` after the row's decay and `q = x̃'P x̃`, the row's
+    /// `η` moves to the root `u > 0` of [`prox_root`], `β += ((u − η)/q)
+    /// P x̃` (the move held to `step_cap`), and `G += w W x̃x̃'`, `W` the
+    /// smaller of the row's Fisher weights at `η` and at `u`. `false` where
+    /// the row teaches nothing: a solve that fails (counted), or a root,
+    /// weight or update that is not finite. `pred` is the mean at `η` the
+    /// row was predicted with, NaN where it was withheld.
+    fn prox_learn(&mut self, j: usize, weight: f64, y: f64, eta: f64, pred: f64) -> bool {
+        let k = self.cfg.k_total();
+        let fam = self.cfg.family();
+        // `p − 1`, and `m = 1/(p − 1)`: `μ = u^(−m)`.
+        let p1 = match fam.family {
+            GlmFamily::Tweedie => fam.power - 1.0,
+            _ => 1.0,
+        };
+        let Self {
+            gram,
+            beta,
+            work,
+            cfg,
+            solve_failures,
+            ..
+        } = self;
+        if !solve_ridged(&gram[j], cfg.ridge, &work.x, k, &mut work.l, &mut work.d) {
+            *solve_failures += 1;
+            return false;
+        }
+        let q: f64 = work.x.iter().zip(&work.d).map(|(t, d)| t * d).sum();
+        if !(q > 0.0 && q.is_finite()) {
+            return false;
+        }
+        let Some(r) = prox_root(eta, weight * q / p1, y, 1.0 / p1) else {
+            return false;
+        };
+        // A root that ran to its pass cap stands, below the root as each
+        // pass is, and is counted, as a refit that does is.
+        if r.passes >= PROX_PASSES {
+            *solve_failures += 1;
+        }
+        let u = r.u;
+        // `W = μᵖ/(p − 1)² = μ/(η (p − 1)²)` (`μ^(p−1) = 1/η`; the Gamma's
+        // `μ²`), which falls as `η` rises: the smaller of the two weights
+        // is the one at the larger `η`, and `u`'s alone where `η ≤ 0`
+        // gives none.
+        let (eta_w, mu) = if eta <= u {
+            (u, r.mu)
+        } else if pred.is_finite() {
+            (eta, pred)
+        } else {
+            match fam.mean(eta) {
+                Some((_, mu)) => (eta, mu),
+                None => return false,
+            }
+        };
+        let cw = weight * (mu / (eta_w * p1 * p1));
+        work.g.clear();
+        work.g.extend_from_slice(&gram[j]);
+        let x = &work.x;
+        for i in 0..k {
+            let cx = cw * x[i];
+            for (m, xm) in x.iter().enumerate().take(i + 1) {
+                work.g[at(i, m)] += cx * xm;
+            }
+        }
+        let moved = (u - eta).clamp(-cfg.step_cap, cfg.step_cap);
+        let scale = moved / q;
+        if !(work.g.iter().all(|v| v.is_finite()) && scale.is_finite()) {
+            return false;
+        }
+        std::mem::swap(&mut gram[j], &mut work.g);
+        for (b, d) in beta[j].iter_mut().zip(&work.d) {
+            *b += scale * d;
+        }
+        true
+    }
+
     /// Target `j`'s refit, on the row that filled its buffer (the module
     /// docs).
     fn run_refit(&mut self, j: usize) {
@@ -729,6 +865,124 @@ impl Glm {
             }
         }
     }
+}
+
+/// The most Newton passes [`prox_root`] takes: a count rather than a test
+/// of the step, so that a loop that stopped closing in would end, wrongly,
+/// rather than never. Each pass at least doubles the distance from its
+/// start while far from the root and is quadratic near it; the most taken
+/// is the test's (`the_proximal_root_solves_its_equation`).
+const PROX_PASSES: u32 = 64;
+
+/// [`prox_root`]'s answer: the row's new `η`, its mean `μ = u^(−m)`, and
+/// the Newton passes it took (0 for the Gamma).
+#[derive(Debug, Clone, Copy)]
+struct Root {
+    u: f64,
+    mu: f64,
+    passes: u32,
+}
+
+/// The row's `η` after the exact proximal step: the one `u > 0` with
+///
+/// ```text
+/// f(u) = u − η + c (y − u^(−m)) = 0,    c = w q/(p − 1),  m = 1/(p − 1)
+/// ```
+///
+/// (`p = 2`, `m = 1` for the Gamma), the stationary point of the row's
+/// half deviance `w d(y, μ(u))/2` plus the step's penalty `(u − η)²/(2q)`
+/// along `P x̃`. Under the canonical link the deviance is convex in `η`, so
+/// the root is the minimum, and it lies between `η` and the link at `y`:
+/// the step never overshoots. `f` rises from `−∞` at 0 and is concave, so
+/// the root exists from any `η`. `None` where `c`, `y` or `η` is not
+/// finite, or the root or its mean is not a positive, finite number.
+///
+/// The Gamma's root is the quadratic's, `u = (a + √(a² + 4c))/2`, `a = η
+/// − c y`, written `2c/(√(a² + 4c) − a)` where `a < 0` so that it cancels
+/// nothing. Otherwise Newton's passes run from a start `s` at or below the
+/// root, `v = (c/2)^(1/(m+1))`:
+///
+/// ```text
+/// a > 0, v ≤ a (c a^(−m) ≤ 2a):   s = a         f(s) = −c a^(−m) < 0
+/// a ≥ 0, v > a; or a < 0, −a ≤ v: s = v         f(s) = a − v ≤ 0, or −a − v ≤ 0
+/// a < 0, −a > v:                  s = (c/(−2a))^(1/m)   f(s) = s + a ≤ 0
+/// ```
+///
+/// and `u ≥ s` bounds the root above by `a + c s^(−m)` (`a ≥ 0`) or
+/// `(c/(s − a))^(1/m)` (`a < 0`). For `m < 1` (`p > 2`), and for `m > 1`
+/// where `f` is nearly straight from `s` (its slope there, `1 + c m
+/// s^(−m−1)`, at most 2), the passes run in `u`, from `s` upward: `f` is
+/// concave and rising, so each stays below the root. Otherwise (`1 < p <
+/// 2`) they run in the mean `μ = u^(−m)`, from the upper bound's mean
+/// upward: `h(μ) = μ^(1−p) − c μ − a` is convex and falling, so each stays
+/// below the root's mean. Far below the root a pass multiplies its variable
+/// by about `1 + 1/m` in `u` and more than `1 + m` in `μ`, at least 2 either
+/// way, where the other variable's could be as little as 1.01 (at `p =
+/// 1.01` in `u`). In a steady stream, where `c` is small beside `a`, the
+/// start `a` is within `c a^(−m)` of the root and two or three passes reach
+/// its rounding.
+fn prox_root(eta: f64, c: f64, y: f64, m: f64) -> Option<Root> {
+    if !(c > 0.0 && c.is_finite() && y.is_finite() && eta.is_finite()) {
+        return None;
+    }
+    let a = eta - c * y;
+    let root = |u: f64, mu: f64, passes: u32| {
+        (u > 0.0 && u.is_finite() && mu > 0.0 && mu.is_finite()).then_some(Root { u, mu, passes })
+    };
+    if m == 1.0 {
+        let r = (a * a + 4.0 * c).sqrt();
+        let u = if a >= 0.0 {
+            0.5 * (a + r)
+        } else {
+            2.0 * c / (r - a)
+        };
+        return root(u, 1.0 / u, 0);
+    }
+    // The start `s` and its mean, `a^(−m)` read once where `s = a`.
+    let am = if a > 0.0 { a.powf(-m) } else { f64::NAN };
+    let (s, ms) = if c * am <= 2.0 * a {
+        (a, am)
+    } else {
+        let v = (0.5 * c).powf(1.0 / (m + 1.0));
+        let s = if -a <= v {
+            v
+        } else {
+            (c / (-2.0 * a)).powf(1.0 / m)
+        };
+        (s, s.powf(-m))
+    };
+    let mut passes = 0;
+    if m < 1.0 || c * m * ms <= s {
+        let (mut u, mut mu) = (s, ms);
+        while passes < PROX_PASSES {
+            let next = u - (u - a - c * mu) / (1.0 + c * m * mu / u);
+            if !(next > u && next.is_finite()) {
+                break;
+            }
+            u = next;
+            mu = u.powf(-m);
+            passes += 1;
+        }
+        return root(u, mu, passes);
+    }
+    let hi = if a >= 0.0 {
+        a + c * ms
+    } else {
+        (c / (s - a)).powf(1.0 / m)
+    };
+    // `u = μ^(1−p) = μ^(−1/m)`, at the start the bound itself.
+    let e = -1.0 / m;
+    let (mut u, mut mu) = (hi, hi.powf(-m));
+    while passes < PROX_PASSES {
+        let next = mu - (u - c * mu - a) / (e * u / mu - c);
+        if !(next > mu && next.is_finite()) {
+            break;
+        }
+        mu = next;
+        u = mu.powf(e);
+        passes += 1;
+    }
+    root(u, mu, passes)
 }
 
 /// The penalized objective `Σ v d(y, μ)/2 + R/2 |b|²` over a buffer's rows,
@@ -990,7 +1244,16 @@ impl OnlineModel for Glm {
                 self.gram[j].iter_mut().for_each(|v| *v *= lam);
             }
             let teaching = yj.filter(|&t| weight > 0.0 && fam.takes(t));
-            if let Some(wk) = teaching.and_then(|t| fam.working(eta, t)) {
+            // Under the inverse and power links, once the refit has run or
+            // been given up, the row's own deviance is minimised exactly
+            // (the module docs); every other link, and these while the
+            // refit waits, take the Fisher step.
+            let exact = !fam.link.defined_at_zero() && self.refit.get(j).is_none_or(|r| r.done);
+            if exact {
+                if let Some(t) = teaching {
+                    self.prox_learn(j, weight, t, eta, out.pred[j]);
+                }
+            } else if let Some(wk) = teaching.and_then(|t| fam.working(eta, t)) {
                 let c = weight * wk.w;
                 self.learn(j, c, c * (wk.z - wk.eta));
             }

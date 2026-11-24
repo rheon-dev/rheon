@@ -69,8 +69,10 @@ def glm(
         inverse, the binomial the logit and the Tweedie the log or the power.
         Default the log, and the logit for the binomial. The inverse and
         power links give a mean only where ``η > 0``: elsewhere the row is
-        not predicted and teaches the recursion nothing. They need the refit
-        and ``fit_intercept``, since every coefficient at 0 gives no mean.
+        not predicted. They need the refit and ``fit_intercept``, since
+        every coefficient at 0 gives no mean. After the refit each row is
+        learned by an exact step that lands its own ``η`` above 0 (*The
+        update*).
     ``var_power``
         The Tweedie family's power ``p``, the exponent of its variance
         ``μ^p``: above 1 and not 2. Default 1.5. Refused for another family.
@@ -79,7 +81,14 @@ def glm(
         deviances, above 0. Default 1: next to a few hundred rows it moves
         the fit by a small share of a standard error, and it keeps every
         solve defined before the coefficients are determined. The intercept
-        is penalized too.
+        is penalized too. Under the inverse and power links the penalty is
+        not free of the target's units: ``β`` is on the scale of ``1/μ`` (or
+        ``μ^(1 - p)``), so a target in units a hundredth as large has
+        coefficients a hundred times as large (``100^(p - 1)`` times under
+        the power link), which the same ``R`` pulls toward 0 far harder: at
+        3,000 rows of a Gamma, 0.06 standard errors from the unpenalized
+        fit with ``η`` near 0.5, 1.1 near 5 and 36 near 50. Scale such a
+        target so that ``η`` is of order 1, or lower ``ridge``.
     ``refit_rows``
         The learned rows (each of positive weight, with its target in the
         family's range) after which each target's first rows are fitted to
@@ -123,9 +132,11 @@ def glm(
         reserves the most its targets' buffers can hold when it first
         appears. The group that would cross the bound, and every new group
         after it, gives its refit up and keeps its one-pass fit, which
-        ``bank.summary()``'s ``refit_given_up`` counts. Such a group's rows
-        are held to the start's step cap of 1 (or ``step_cap``, where
-        smaller) for good.
+        ``bank.summary()``'s ``refit_given_up`` counts. Under the log and
+        logit links such a group's rows are held to the start's step cap of
+        1 (or ``step_cap``, where smaller) for good; under the inverse and
+        power links the exact step learns them from every coefficient at 0,
+        held to ``step_cap`` alone.
 
     .. rubric:: Output
 
@@ -191,6 +202,26 @@ def glm(
 
     ``G`` is per target, since ``W`` depends on the target. Under the log
     and logit links ``η`` is clipped to ``±30`` before ``μ`` is formed.
+
+    Under the inverse and power links, once the refit has run or been given
+    up, each row instead minimises its own penalized deviance exactly, ``β =
+    argmin w d(y, μ(x̃'b))/2 + (b - β)'(G + R I)(b - β)/2`` (``G`` decayed,
+    ``d`` the family's unit deviance). With ``P = (G + R I)⁻¹``, ``q =
+    x̃'P x̃`` and ``m = 1/(p - 1)`` (``p = 2`` for the Gamma), the row's
+    ``η`` moves to the one root ``u > 0`` of ``u - η + (w q/(p - 1)) (y -
+    u^(-m)) = 0``:
+
+    .. code-block:: text
+
+        β = β + ((u - η)/q) P x̃
+        G = λ G + w min(W(η), W(u)) x̃x̃'      W(u) alone where η ≤ 0
+
+    The root lies between ``η`` and the link at ``y``, so the step never
+    passes the target, and it is above 0 from any ``η``: a target far from
+    its mean cannot push the fit out of the link's domain, where the rows
+    after it would have no mean and teach nothing. For the Gamma ``u = (a +
+    √(a² + 4wq))/2``, ``a = η - w q y``; for the Tweedie it is found by
+    Newton's method. ``step_cap`` holds ``|u - η|``.
 
     .. rubric:: Example
 
@@ -264,6 +295,16 @@ def glm(
     capped rows' weights stay in ``G``: its largest gap at 100,000 rows was
     2.9 times the refit's for the Poisson family and 1.8 times for the
     Gamma. Under decay the two are the same.
+
+    **The inverse and power links after the refit.** Each row's exact step
+    keeps its own ``η`` above 0, so a target far from its mean no longer
+    leaves the rows after it without a mean. Against statsmodels' ``GLM``
+    on 16 adversarial streams of 3,000 rows, 20 seeds each, the median seed
+    was 0.03 to 0.21 standard errors off on the streams without a far
+    target (0.58 at 20 features), and the worst 0.11 to 0.86. With one
+    target 1000 times its mean the median seed was 0.8 to 1.6 off and the
+    worst 6.2, with at most 16 null predictions after the refit, where the
+    Fisher step left 58 standard errors and up to 933 null predictions.
 
     **The state** is ``k(k+1)/2 + k + 1`` numbers a target and, until its
     refit runs, ``refit_rows (features + 2)`` more: 35 KB a target at 20

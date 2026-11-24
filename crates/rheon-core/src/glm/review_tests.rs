@@ -236,19 +236,17 @@ fn glm_2_the_recursions_identity_under_decay_is_the_proximal_one() {
     assert!(worst_doc > 1e-3, "{worst_doc}");
 }
 
-/// GLM-3 (1), a confirmed defect whose fix is the user's to choose: a
-/// group past `refit_budget` gives its refit up before its first row, and
-/// under the Gamma's inverse link (and the Tweedie's power one) every
-/// coefficient 0 gives no mean, so the group never learns and reads NaN
-/// forever. Starting it at the link of its first target, as the refit
-/// would, fits within 0.6 standard errors of statsmodels' on five of six
-/// streams and 35 to 40 off on the sixth (3,000 rows), so the fix is a
-/// choice among the outcomes' options. This test fails once one lands, and
-/// is then turned into a plain test. The other side: a group whose refit
-/// runs fits (`the_canonical_links_fit_through_the_refit`).
+/// GLM-3 (1): a group past `refit_budget` gives its refit up before its
+/// first row, and under the Gamma's inverse link (and the Tweedie's power
+/// one) every coefficient 0 gave no mean, so the group never learned and
+/// read NaN forever (51671e2e; held here as a `should_panic` until the
+/// fix). Fixed by the exact row step (PLAN 581), which starts from `η = 0`
+/// and lands each row at a positive `η`: the group predicts from its
+/// second row (`prox_tests::a_given_up_refit_learns_from_its_first_row`
+/// holds its fit). The other side: a group whose refit runs fits
+/// (`the_canonical_links_fit_through_the_refit`).
 #[test]
-#[should_panic(expected = "never learns")]
-fn glm_3_a_given_up_refit_under_a_link_undefined_at_zero_never_learns() {
+fn glm_3_a_given_up_refit_under_a_link_undefined_at_zero_learns() {
     for (family, link, power) in [
         (GlmFamily::Gamma, GlmLink::Inverse, 0.0),
         (GlmFamily::Tweedie, GlmLink::Power, 1.5),
@@ -264,9 +262,10 @@ fn glm_3_a_given_up_refit_under_a_link_undefined_at_zero_never_learns() {
         for (x, y) in stream_of(GlmFamily::Gamma, 3, 400, 21) {
             finite += usize::from(m.step(&x, &[Some(y)], 1.0, 1.0).pred[0].is_finite());
         }
-        assert!(
-            finite > 0,
-            "{family:?} {link:?}: a given-up refit never learns, {:?}",
+        assert_eq!(
+            finite,
+            399,
+            "{family:?} {link:?}: a given-up refit learns from its first row, {:?}",
             m.coefficients()
         );
     }

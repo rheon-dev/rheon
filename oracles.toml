@@ -6194,6 +6194,172 @@ p95 = 0.0
 n = 50
 floor = 5.0
 
+[group."second_opinion_glm_canonical.canonical_links"]
+tests = [
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[base]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[covariate_order]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[eta_to_the_edge]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[first_y_huge]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[first_y_tiny]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[half_life_300]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[heavy_noise]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[log_linear_truth]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[outlier_at_row_1500]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[outlier_at_row_30]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[rare_category_near_0]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[target_in_other_units]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[tweedie_1_5_zeros]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[tweedie_3]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[twenty_features]",
+    "tests/test_second_opinion_glm_canonical.py::test_each_stream_over_twenty_seeds[weights_with_zeros]",
+]
+oracles = { "statsmodels" = "0.15.0" }
+dataset = ""
+
+[case."second_opinion_glm_canonical.canonical_links.base"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.base_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.covariate_order"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.covariate_order_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.eta_to_the_edge"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.eta_to_the_edge_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.first_y_huge"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.first_y_huge_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.first_y_tiny"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.first_y_tiny_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.half_life_300"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.half_life_300_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.heavy_noise"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.heavy_noise_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.log_linear_truth"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.log_linear_truth_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.outlier_at_row_1500"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.outlier_at_row_1500_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.outlier_at_row_30"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.outlier_at_row_30_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.rare_category_near_0"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.rare_category_near_0_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.target_in_other_units"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.target_in_other_units_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.tweedie_1_5_zeros"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.tweedie_1_5_zeros_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.tweedie_3"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.tweedie_3_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.twenty_features"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.twenty_features_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
+[case."second_opinion_glm_canonical.canonical_links.weights_with_zeros"]
+ideal = 0.0
+n = 20
+
+[case."second_opinion_glm_canonical.canonical_links.weights_with_zeros_nulls"]
+ideal = 0.0
+n = 20
+tolerance = 0.0
+
 # --- raises
 
 [[raised]]

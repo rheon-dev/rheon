@@ -1139,6 +1139,41 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`glm` under the inverse and power links fits each row exactly after
+  its refit** (PLAN 581; review 2026-11-23, GLM-3 (1)). These links give a
+  mean only where `η > 0`, and the Fisher step scored a row at the fit
+  before it: one Gamma target 1000 times its mean pushed `β` past the
+  domain's edge, the rows after it had no mean and taught nothing, so none
+  brought it back -- 197 to 998 null predictions after a refit that had
+  run in 11 of the 18 seeded streams of `glm/prox_tests.rs`, and on the
+  statsmodels grid's stream below, 58 standard errors off with 454 null
+  in its first seed (measured on 8f43d614); a group whose refit was given up past
+  `refit_budget` kept every coefficient at 0, no mean, null for good. Once
+  a target's refit has run or been given up, each learned row now
+  minimises its own penalized deviance, `w d(y, μ)/2 + (b − β)'(G + R I)(b
+  − β)/2`: its `η` moves along `P x̃` to the one root `u > 0` of `u − η +
+  (w q/(p − 1))(y − u^(−1/(p−1))) = 0` (`q = x̃'P x̃`, `P = (G + R I)⁻¹`;
+  the Gamma's in closed form, the Tweedie's by Newton's passes), which lies
+  between `η` and the link at `y`, and `G` takes the row at the smaller of
+  its Fisher weights before and after. The start's cap of 1 no longer
+  holds a given-up group's rows under these links; `step_cap` still holds
+  `|u − η|`. Against statsmodels' `GLM` (held to the link's domain:
+  restarted from the in-domain minimum where its IRLS settles on negative
+  means) on 16 adversarial streams of 3,000 rows, 20 seeds each
+  (`tests/test_second_opinion_glm_canonical.py`, in the oracle ledger):
+  the median seed 0.03 to 0.21 standard errors off without a far target
+  (0.58 at 20 features), the worst 0.11 to 0.86; with a target 1000 times
+  its mean, or a first target of 1e6, the median 0.8 to 1.6 and the worst
+  6.2 (58 before), at most 16 null predictions after the refit (933
+  before). The log and logit links keep every bit: the digests of 1,440
+  runs over the Poisson, Gamma, binomial and Tweedie under them, with the
+  refit waiting, run and given up, capped and not, decayed and weighted,
+  were equal before and after, and `glm/prox_tests.rs` replays their rows
+  through the Fisher step to the bit. The ridge under these links is not
+  free of the target's units (`β` is on the scale of `1/μ`), now said in
+  the docstring and MODELS.md. Moves: `glm.*` (the Gamma's inverse link
+  and the Tweedie's power link only).
+
 - **`glm`'s refit at the log link's clip, a refit given up, and rows at
   the doubles' edges** (review 2026-11-23, GLM-1, GLM-3 (2), GLM-4, GLM-5).
   The refit of the first rows started at `ln ȳ` and read a row's score at
@@ -2515,6 +2550,23 @@ model that only the new build has is listed as an addition and passes.
   416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.
 
 ### Performance
+
+- **`glm`'s exact row step under the inverse and power links costs 1% to
+  4% a row at 20 features, and 8% (Gamma) to 34% (Tweedie) at 2** (PLAN
+  581), for a fit that a target far from its mean no longer pushes out of
+  the link's domain (*Fixed*). The step takes the one solve the Fisher step
+  took, and a root: the Gamma's a square root, the Tweedie's two or three
+  Newton passes of one `powf` each in a steady stream. Measured on macOS
+  arm64 (release, load 9 to 14, the 19,790 rows after a refit of 210 on a
+  20,000-row stream, best of 20 passes in each of 6 runs alternated with
+  the build before, ABBA): the Gamma's inverse link 78.7 to 85.3 ns a row at
+  2 features (+8.4%) and 1,748 to 1,765 at 20 (+1.0%; +1.7% at the
+  median); the Tweedie's power link at `p = 1.5` 119.7 to 160.7 (+34%) and
+  1,793 to 1,844 (+2.9%; +4.0%), at `p = 3` 117.7 to 156.5 (+33%). The log
+  and logit links take the same path as before, a test of the link aside:
+  the Poisson 91.3 to 92.1 at 2 features and 1,776 to 1,777 at 20, within
+  the runs' spread. No budget case runs these links (`glm_k20` is a
+  Poisson). No state grows. Not timed on x86-64.
 
 - **A windowed mean costs one more `exp2` a row on an irregular clock**
   (review 2026-11-23, WIN-1), for a window that keeps its values'

@@ -1963,6 +1963,50 @@ the standard error's `1/√n`. A family's links are its canonical one and the
 log: the Poisson's log, the Gamma's log and inverse, the binomial's logit,
 and the Tweedie's log and power `μ^(1 − p)`.
 
+**Under the inverse and power links each row is fitted exactly.** These
+links give a mean only where `η > 0`. A Fisher step scores a row at the fit
+before it, so a target far above its mean, such as a Gamma amount 1000
+times it, pushes `β` past the domain's edge for the rows around it. Those
+rows then have no mean and teach nothing, so none brings the fit back.
+Once a target's refit has run, each row instead minimises its own
+penalized deviance exactly, `w·d(y, μ) / 2` plus the penalty
+`(b − β)ᵀ(G + R·I)(b − β) / 2`. With `P = (G + R·I)⁻¹` and `q = zᵀP z`,
+the row's `η` moves to the one root `u > 0` of
+`u − η + (w·q / (p − 1))·(y − u^(−1/(p − 1)))`, with `p = 2` for the Gamma:
+
+```
+β += ((u − η) / q) · P·z
+G  = λ·G + w·min(W(η), W(u))·z zᵀ
+```
+
+The root lies between `η` and the link at `y`, so the step never passes the
+target, and it is above 0 from any `η`. A refit given up past
+`refit_budget` starts from every coefficient at 0 in the same way.
+`step_cap` holds `|u − η|`. The Gamma's root has a closed form; the
+Tweedie's takes two or three Newton passes a row.
+
+Measured against statsmodels' `GLM` on 16 adversarial streams of 3,000
+rows, 20 seeds each, the gap is in statsmodels' standard errors, after the
+default refit. The streams without a far target include `η` near the
+domain's edge, a rare category near 0, rows sorted by a feature, heavy
+noise, a misspecified mean and zero weights. On them the median seed was
+0.03 to 0.21 off (0.58 at 20 features and 10,000 rows) and the worst 0.11
+to 0.86. On the streams with one target 1000 times its mean, or a first
+target of 1e6, the median seed was 0.8 to 1.6 off and the worst 6.2, with
+at most 16 null predictions after the refit. The Fisher step on the same
+streams left the worst seed 58 standard errors off, with up to 933 null
+predictions.
+
+**Under the inverse and power links the ridge depends on the target's
+units.** The coefficients are on the scale of `1/μ` (or `μ^(1 − p)`), so a
+target measured in units a hundredth as large has coefficients a hundred
+times as large, which the same `ridge` pulls toward 0 far harder. On the
+base stream above, at the default `ridge` of 1 and 3,000 rows, the fit sat
+0.06 standard errors from statsmodels' unpenalized fit with an intercept
+`η` near 0.5, 1.1 with it near 5, and 36 with it near 50. Under the log
+link a change of units moves the intercept by its log alone. Scale such a
+target so that `η` is of order 1, or lower `ridge`.
+
 **The first rows are refit.** Before `k` rows the fit is underdetermined,
 and one row can throw it off for good: a Gamma row scored at a very
 negative `η` steps by `y·e^|η|`, and a Poisson row scored at too large a
