@@ -1178,8 +1178,10 @@ model that only the new build has is listed as an addition and passes.
   arm64: a calm stream and one with a target 1000 times its draw every
   100th row, at 3 and 21 coefficients, after a refit of 210, ran 0.98 to
   1.02 times the time before at the median of 6 ABBA rounds, an identical
-  binary 0.98 to 1.02 (release, load 6 to 13); not timed on x86-64. Moves: `glm.*` on rows
-  where the guard fires.
+  binary 0.98 to 1.02 (release, load 6 to 13); not timed on x86-64.
+  Moves: `glm.*` on rows where the guard fires (the golden pipeline's
+  `glm` at row 119, 41.87 to 3.87 against a target of 0.10; the current
+  `glm_cap` and `glm_refit_done` state fixtures).
 
 - **`glm` under the inverse and power links fits each row exactly after
   its refit** (PLAN 581; review 2026-11-23, GLM-3 (1)). These links give a
