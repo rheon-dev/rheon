@@ -26,9 +26,6 @@
   ConsumedSourceWarning
   ModelBank
   OrderNotGuaranteedWarning
-  clock_drift(arrival: 'str | pl.Expr', event: 'str | pl.Expr', *, half_life: 'float | Duration') -> 'pl.Expr'
-  clock_lag(arrival: 'str | pl.Expr', event: 'str | pl.Expr', *, half_life: 'float | Duration') -> 'pl.Expr'
-  clock_step(time: 'str | pl.Expr', *, half_life: 'float | Duration', stat: "Literal['mean', 'var', 'std', 'zeros', 'backs']" = 'mean', bias: 'bool | None' = None) -> 'pl.Expr'
   cross_mean(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   cross_quantile(input: 'str | pl.Expr', quantile: 'float', *, interpolation: "Literal['nearest', 'higher', 'lower', 'midpoint', 'linear', 'equiprobable'] | None" = None, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   cross_rank(input: 'str | pl.Expr', *, method: "Literal['average', 'min', 'max', 'dense', 'ordinal']" = 'average', descending: 'bool' = False, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
@@ -49,10 +46,8 @@
   predict(frame: 'pl.LazyFrame | pl.DataFrame', bank: 'ModelBank | State', *, chunk_size: 'int | None' = None, threads: 'int | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
   rolling_max(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   rolling_min(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
-  run_length(input: 'str | pl.Expr', *, tol: 'float' = 0.0) -> 'pl.Expr'
   sim  # unstable
   stream
-  tick_sign(input: 'str | pl.Expr') -> 'pl.Expr'
   unnest(frame: 'pl.LazyFrame | pl.DataFrame', specs: 'Specs | ModelBank | State', *, separator: 'str | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
 
 [common parameters]  # every constructor accepts these via **common
@@ -374,7 +369,7 @@
     horizons = None
     seasonal = None
     seasonal_periods = None
-    season_length = None
+    period = None
     seasonal_half_life = None
     damping_half_life = None
     start = None
@@ -1034,10 +1029,10 @@
     model.max_state_bytes = null
     model.min_weight = 1.0
     model.n_targets = 1
-    model.season = "none"
-    model.season_length = 0.0
-    model.season_periods = 0
+    model.period = 0.0
+    model.seasonal = "none"
     model.seasonal_half_life = "inf"
+    model.seasonal_periods = 0
     model.start = "warm"
     model.trend = true
     model.trend_half_life = 200.0
@@ -1987,14 +1982,14 @@
     invert(f: 'pl.Expr | Callable[[pl.Expr], pl.Expr]', equals: 'str | float | pl.Expr', lo: 'str | float | pl.Expr', hi: 'str | float | pl.Expr', *, increasing: 'bool', xtol: 'float' = 2e-12, rtol: 'float' = 8.881784197001252e-16, detail: 'bool' = False) -> 'pl.Expr'
     rolling_max(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     rolling_min(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
-    run_length(input: 'str | pl.Expr', *, tol: 'float' = 0.0) -> 'pl.Expr'
+    run_length(input: 'str | pl.Expr', *, abs_tol: 'float' = 0.0) -> 'pl.Expr'
     tick_sign(input: 'str | pl.Expr') -> 'pl.Expr'
     unknown() -> 'pl.Expr'
   sim:  # unstable
     regimes(m: 'int', *, states: 'Sequence[Any]', transition: 'Any', n_blocks: 'int', rows_per_block: 'int', durations: 'Sequence[int] | None' = None, design: 'str' = 'step', smooth_rows: 'int' = 0, phi: 'float | Sequence[float]' = 0.0, scale_state: 'float | Sequence[float]' = 0.0, async_rates: 'Sequence[float] | None' = None, noise: 'float' = 0.0, cycle_profile: 'Sequence[float] | None' = None, cycle_rows: 'int | None' = None, activity: 'tuple[float, float] | None' = None, seed: 'int' = 0) -> 'dict[str, pl.DataFrame]'
   stream:
     ROLE
-    bars(lf: 'pl.LazyFrame | pl.DataFrame', *, clock: 'str', kind: 'str', threshold: 'float | str | pl.Expr', quantity: 'str | pl.Expr | None' = None, group: 'str | None' = None, weight: 'str | None' = None, session: 'str | None' = None, gap_cap: 'float | Duration | None' = None, max_span: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, partial: 'str' = 'keep', group_close: 'str | None' = None, final: 'bool' = False, max_state_bytes: 'int' = 262144, max_total_bytes: 'int' = 1073741824, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **aggregates: 'pl.Expr') -> 'pl.LazyFrame | pl.DataFrame'
+    bars(lf: 'pl.LazyFrame | pl.DataFrame', *, clock: 'str', kind: "Literal['count', 'sum', 'imbalance']", threshold: 'float | str | pl.Expr', quantity: 'str | pl.Expr | None' = None, group: 'str | None' = None, weight: 'str | None' = None, session: 'str | None' = None, gap_cap: 'float | Duration | None' = None, max_span: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, partial: "Literal['keep', 'drop']" = 'keep', group_close: "Literal['monotone'] | None" = None, final: 'bool' = False, max_state_bytes: 'int' = 262144, max_total_bytes: 'int' = 1073741824, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **aggregates: 'pl.Expr') -> 'pl.LazyFrame | pl.DataFrame'
     embargo(lf: 'pl.LazyFrame | pl.DataFrame', *, clock: 'str', delay: 'float | Duration', weight: 'str | None' = None, role: 'str' = '_online_role') -> 'pl.LazyFrame | pl.DataFrame'
     load_checkpoint(source: 'str | os.PathLike[str] | bytes') -> 'dict[str, bytes]'
     merge(*frames: 'pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame]', clock: 'str', source: 'str' = 'source', by: 'str | None' = None, carry: 'str | Sequence[str]' = (), restart_after_step_back: 'float | Duration | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
@@ -3289,7 +3284,7 @@
   rp.ewm_sum(reverse=True).closed: both, left, none, right
   rp.ewm_sum(reverse=True).partial: drop, keep, null
   withheld_reason, in precedence order: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample, input_negative
-  withheld_reason of a multiplicative holt season: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample, input_negative, not_positive
+  withheld_reason of a multiplicative holt season: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample, input_negative, target_not_positive
   toml.input_format: csv, ipc, ndjson, parquet
   toml.output_format: csv, ipc, ndjson, parquet
   toml.output_layout: flat, struct
@@ -3395,7 +3390,7 @@
     glm: family, link, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, step_cap, var_power
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows, warm_span
-    holt: damping_half_life, horizons, initial_level, initial_seasonal, initial_trend, max_state_bytes, season_length, seasonal, seasonal_half_life, seasonal_periods, start, trend, trend_half_life
+    holt: damping_half_life, horizons, initial_level, initial_seasonal, initial_trend, max_state_bytes, period, seasonal, seasonal_half_life, seasonal_periods, start, trend, trend_half_life
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, max_rows_between_solves, max_state_bytes, refit_budget, ridge, ridge_scale, solve_every, standardize
     isotonic: closed, increasing, max_state_bytes, out_of_bounds, window_rows, window_size, y_max, y_min
     kalman: coef_half_life, covariance_form, horizons, obs_var, p0, q, revert_half_life, share_p, standardize
