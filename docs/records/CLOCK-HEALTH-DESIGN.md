@@ -270,9 +270,3 @@ every row, the refusals, a missing time); `tests/test_clock_step.py`
 counts, thresholds, restarts, chunking, a save at every row) and
 `tests/test_second_opinion_clock_health.py` (statsmodels' `DescrStatsW` on
 a temporal clock).
-
-## Index row (for the Mac to add at merge)
-
-```text
-| [records/CLOCK-HEALTH-DESIGN.md](records/CLOCK-HEALTH-DESIGN.md) | record | Run length and clock health: the design of run length of unchanged values, clock-step statistics and two-clock drift (closes the design part of PLAN 564) |
-```
