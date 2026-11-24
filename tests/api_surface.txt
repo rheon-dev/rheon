@@ -3289,6 +3289,7 @@
   rp.ewm_sum(reverse=True).closed: both, left, none, right
   rp.ewm_sum(reverse=True).partial: drop, keep, null
   withheld_reason, in precedence order: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample, negative_input
+  withheld_reason of a multiplicative holt season: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample, negative_input, not_positive
   toml.input_format: csv, ipc, ndjson, parquet
   toml.output_format: csv, ipc, ndjson, parquet
   toml.output_layout: flat, struct
@@ -3394,7 +3395,7 @@
     glm: family, link, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, step_cap, var_power
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows, warm_span
-    holt: horizons, trend, trend_half_life
+    holt: damping_half_life, horizons, initial_level, initial_seasonal, initial_trend, max_state_bytes, season_length, seasonal, seasonal_half_life, seasonal_periods, start, trend, trend_half_life
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, max_rows_between_solves, max_state_bytes, refit_budget, ridge, ridge_scale, solve_every, standardize
     isotonic: closed, increasing, max_state_bytes, out_of_bounds, window_rows, window_size, y_max, y_min
     kalman: coef_half_life, covariance_form, horizons, obs_var, p0, q, revert_half_life, share_p, standardize
