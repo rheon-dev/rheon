@@ -238,3 +238,19 @@ fn a_compact_state_with_a_skipped_middle_field_round_trips() {
         compact.err()
     );
 }
+
+/// BOCPD-2's floor, both sides: from a least value of `2⁻¹²⁷` up a block's
+/// partial products are not read, and below it they are; where each of
+/// them is a normal number the two reads are the same, to the bit.
+#[test]
+fn the_partial_products_floor_reads_alike_on_both_sides() {
+    let below = f64::from_bits(PARTIAL_FLOOR.to_bits() - 1);
+    for low in [PARTIAL_FLOOR, below, 1e-30, 1e-45] {
+        let v = [low, 3.0, 0.5, 7.25, 1e10, 2.0];
+        assert_eq!(
+            ln_sum_prod(&v).to_bits(),
+            ln_sum_prod_from_floor(&v).to_bits(),
+            "{low:e}"
+        );
+    }
+}

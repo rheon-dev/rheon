@@ -2017,8 +2017,9 @@ model that only the new build has is listed as an addition and passes.
   of the edge on a clock in tenths (HAWKES-5). `MODELS.md`'s figures are
   64 and 200 bytes, and 6,551 and 3,273 rows (HAWKES-6). Moves:
   `hawkes.intensity_*`.
-- **`hmm` refuses a `tvtp_coef` that is not finite** (review 2026-11-23,
-  SPEC-2), which made every transition row NaN; and, in Rust, a
+- **`hmm` refuses a `tvtp_coef` that is not finite in a Rust or TOML
+  spec** (review 2026-11-23, SPEC-2), as Python's builder did; it made
+  every transition row NaN. It refuses, in Rust, a
   `warm_span` beside given states (HMM-5), as the spec does. Under given
   states, a row whose squared deviation in units of a state's given
   variance passes the largest double (`1e80` from a state given `1e-150`)
