@@ -94,9 +94,10 @@ def stream(n: int = ROWS, seed: int = 7) -> pl.DataFrame:
         for grp in range(3):
             rows = np.arange(grp, n, 3)
             s, e = 1.0, 0.0
-            for i, z in zip(rows, rng.standard_normal(len(rows)), strict=True):
+            # `u`, not `z`: the target `z` above is the frame's column.
+            for i, u in zip(rows, rng.standard_normal(len(rows)), strict=True):
                 s = 0.05 + 0.15 * e * e + 0.8 * s
-                e = np.sqrt(s) * z
+                e = np.sqrt(s) * u
                 rets[i, col] = e
     return pl.DataFrame(
         {
