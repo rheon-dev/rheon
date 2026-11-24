@@ -30,7 +30,7 @@ fn buffer(rows: &[(Vec<f64>, f64, f64)]) -> Vec<f64> {
 /// The batch target, `argmin Σ v d(y, μ)/2 + R/2 |b|²`, by Newton with step
 /// halving on full square systems solved by the oracle's LU (no arithmetic
 /// of the model's Cholesky), from `start`, for 200 passes.
-fn batch(c: &GlmCfg, buf: &[f64], start: &[f64]) -> Vec<f64> {
+pub(super) fn batch(c: &GlmCfg, buf: &[f64], start: &[f64]) -> Vec<f64> {
     let fam = c.family();
     let (k, nf) = (c.k_total(), c.n_features);
     let obj = |b: &[f64]| objective(c, &fam, buf, nf, b);
@@ -184,7 +184,9 @@ fn glm_1_the_trapezoid_rule_holds_on_non_quadratic_deviances() {
 /// recursion's identity is `h_t = λ h_{t−1} + (1 − λ) R β_{t−1} + w W z
 /// x̃`, `h_t = (G_t + R I) β_t`: a proximal term pulling to the past fits,
 /// which vanishes as the fit stops moving. The identity, row by row, to 1e-10 of
-/// its terms' size; the documented one misses by far more.
+/// its terms' size; the documented one misses by far more. It is the
+/// Fisher recursion's, so the target guard is off (a row it scales leaves
+/// the sums as a capped row does; `guard_tests.rs` holds it).
 #[test]
 fn glm_2_the_recursions_identity_under_decay_is_the_proximal_one() {
     let lam: f64 = 0.9;
@@ -196,6 +198,7 @@ fn glm_2_the_recursions_identity_under_decay_is_the_proximal_one() {
     let fam = c.family();
     let (k, r) = (3, c.ridge);
     let mut m = Glm::new(c).unwrap();
+    m.work.unguarded = true;
     let full = |g: &[f64]| -> Vec<f64> {
         let mut a = vec![0.0; k * k];
         for i in 0..k {
@@ -236,19 +239,17 @@ fn glm_2_the_recursions_identity_under_decay_is_the_proximal_one() {
     assert!(worst_doc > 1e-3, "{worst_doc}");
 }
 
-/// GLM-3 (1), a confirmed defect whose fix is the user's to choose: a
-/// group past `refit_budget` gives its refit up before its first row, and
-/// under the Gamma's inverse link (and the Tweedie's power one) every
-/// coefficient 0 gives no mean, so the group never learns and reads NaN
-/// forever. Starting it at the link of its first target, as the refit
-/// would, fits within 0.6 standard errors of statsmodels' on five of six
-/// streams and 35 to 40 off on the sixth (3,000 rows), so the fix is a
-/// choice among the outcomes' options. This test fails once one lands, and
-/// is then turned into a plain test. The other side: a group whose refit
-/// runs fits (`the_canonical_links_fit_through_the_refit`).
+/// GLM-3 (1): a group past `refit_budget` gives its refit up before its
+/// first row, and under the Gamma's inverse link (and the Tweedie's power
+/// one) every coefficient 0 gave no mean, so the group never learned and
+/// read NaN forever (51671e2e; held here as a `should_panic` until the
+/// fix). Fixed by the exact row step (PLAN 581), which starts from `η = 0`
+/// and lands each row at a positive `η`: the group predicts from its
+/// second row (`prox_tests::a_given_up_refit_learns_from_its_first_row`
+/// holds its fit). The other side: a group whose refit runs fits
+/// (`the_canonical_links_fit_through_the_refit`).
 #[test]
-#[should_panic(expected = "never learns")]
-fn glm_3_a_given_up_refit_under_a_link_undefined_at_zero_never_learns() {
+fn glm_3_a_given_up_refit_under_a_link_undefined_at_zero_learns() {
     for (family, link, power) in [
         (GlmFamily::Gamma, GlmLink::Inverse, 0.0),
         (GlmFamily::Tweedie, GlmLink::Power, 1.5),
@@ -264,9 +265,10 @@ fn glm_3_a_given_up_refit_under_a_link_undefined_at_zero_never_learns() {
         for (x, y) in stream_of(GlmFamily::Gamma, 3, 400, 21) {
             finite += usize::from(m.step(&x, &[Some(y)], 1.0, 1.0).pred[0].is_finite());
         }
-        assert!(
-            finite > 0,
-            "{family:?} {link:?}: a given-up refit never learns, {:?}",
+        assert_eq!(
+            finite,
+            399,
+            "{family:?} {link:?}: a given-up refit learns from its first row, {:?}",
             m.coefficients()
         );
     }

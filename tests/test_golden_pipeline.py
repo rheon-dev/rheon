@@ -811,6 +811,13 @@ def switched_signature() -> dict[str, float | str | None]:
 #: ``tests/test_second_opinion_regimes.py`` the shrunk covariance to
 #: scikit-learn's QDA; ``weight_sum``, ``settled_frac``, ``state`` and every
 #: other spec kept their numbers within the tolerance.
+#: The log link's target guard (PLAN 581, GLM-4) moved 2, ``glm``'s ``pred``
+#: and ``resid`` at row 119, from 41.87 to 3.87 against a target of 0.10:
+#: after the refit an upward step that would have carried a row's ``η`` past
+#: its own ``ln y`` lands on the row's proximal root instead.
+#: ``tests/test_second_opinion_glm.py`` holds the guarded step row by row to
+#: statsmodels' family objects and scipy's ``brentq``; every other number
+#: kept its value within the tolerance.
 GOLDEN: dict[str, float | str | None] = {
     "ridge.pred_y0__r0.000001@25": -4.684371132566456,
     "ridge.pred_y0__r0.000001@60": -0.25563207972202284,
@@ -964,10 +971,10 @@ GOLDEN: dict[str, float | str | None] = {
     "sgd.withheld_reason@119": None,
     "glm.pred_y0_sq@25": 16.58841226191769,
     "glm.pred_y0_sq@60": 1.0436918411103409,
-    "glm.pred_y0_sq@119": 41.87477892954526,
+    "glm.pred_y0_sq@119": 3.8748016660556064,
     "glm.resid_y0_sq@25": 7.049666811830534,
     "glm.resid_y0_sq@60": -0.7208690138154397,
-    "glm.resid_y0_sq@119": -41.77220856416858,
+    "glm.resid_y0_sq@119": -3.7722313006789316,
     "glm.weight_sum@25": 7.999488060097996,
     "glm.weight_sum@60": 12.473100285951407,
     "glm.weight_sum@119": 15.110060335371337,

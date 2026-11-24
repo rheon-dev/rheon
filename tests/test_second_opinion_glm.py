@@ -33,6 +33,7 @@ import numpy as np
 import polars as pl
 import pytest
 import statsmodels.api as sm
+from scipy.optimize import brentq
 
 import ledger
 from rheon import polars as rp
@@ -165,9 +166,10 @@ def test_the_recursion_is_the_familys_irls_step_row_by_row(family):
     """With no refit and no cap the recursion is closed-form: ``G += W x x'``,
     ``b += (G + R I)^-1 W (z - eta) x``, its ``W = family.weights(mu)`` and
     ``z = eta + (y - mu) link.deriv(mu)`` from statsmodels' family objects.
-    The longhand and the bank share no line of arithmetic; they agree to
-    rounding along the whole path (measured 1e-14 relative over 300 rows),
-    held at 1e-10."""
+    Under the log link the longhand takes the target guard too, its root
+    from scipy's ``brentq`` (``longhand`` below). The longhand and the bank
+    share no line of arithmetic; they agree to rounding along the whole
+    path (measured 1e-14 relative over 300 rows), held at 1e-10."""
     k, n = 3, 300
     if family == "binomial":
         X, mu = design("poisson", k, n, 4)[0], None
@@ -176,18 +178,23 @@ def test_the_recursion_is_the_familys_irls_step_row_by_row(family):
     else:
         X, y = design(family, k, n, 4)
     fam = sm_family(family)
-    G = np.zeros((k, k))
-    b = np.zeros(k)
-    path = []
-    for i in range(n):
-        x = X[i]
-        eta = float(np.clip(x @ b, -30.0, 30.0))
-        mu = np.atleast_1d(fam.link.inverse(eta))
-        W = float(fam.weights(mu)[0])
-        dz = float((y[i] - mu[0]) * fam.link.deriv(mu)[0])
-        G += W * np.outer(x, x)
-        b = b + np.linalg.solve(G + np.eye(k), W * dz * x)
-        path.append(b.copy())
+    if family == "binomial":
+        G = np.zeros((k, k))
+        b = np.zeros(k)
+        path = []
+        for i in range(n):
+            x = X[i]
+            eta = float(np.clip(x @ b, -30.0, 30.0))
+            mu = np.atleast_1d(fam.link.inverse(eta))
+            W = float(fam.weights(mu)[0])
+            dz = float((y[i] - mu[0]) * fam.link.deriv(mu)[0])
+            G += W * np.outer(x, x)
+            b = b + np.linalg.solve(G + np.eye(k), W * dz * x)
+            path.append(b.copy())
+    else:
+        # The log link's target guard (below) scales a row's step that
+        # would pass its own ``ln y``.
+        path = list(longhand(fam, X, y, guard=True)["path"])
     s = rp.spec.glm(
         "m",
         targets=["y"],
@@ -428,3 +435,372 @@ def test_a_tweedie_refit_at_the_power_link_solves_statsmodels_score_equation(pow
     gap = float(np.abs(score - ridge * b).max())
     assert gap <= bound, (gap, bound)
     assert float(np.abs(ridge * b).max()) > 1e3 * bound
+
+
+# --- the log link's target guard ----------------------------------------------
+#
+# Under the log link an upward Fisher step moves the row's own η by
+# δ = q' w μ^(1−p) (y − μ), which grows without bound as μ falls, and with
+# no refit and no cap the coefficients run away. So an upward step that
+# would carry η past ln y, the minimum of the row's own deviance, is
+# scaled to land η on the root u in (η, ln y] of the row's proximal problem,
+# h(u) = u − η + w q f'(u), f the row's half unit deviance at μ = e^u and
+# q = x̃'(G + R I)⁻¹x̃ before the row (glm.rs, *The target guard*). A row it
+# does not fire on is the Fisher step's.
+
+#: The root's absolute and relative tolerance in ``brentq``: the least
+#: relative one it takes, four times the doubles' epsilon, and an absolute
+#: one far below the doubles' spacing at the roots here.
+XTOL, RTOL = 1e-300, 8 * U
+
+
+def log_family(family: str, power: float) -> sm.families.Family:
+    log = sm.families.links.Log()
+    if family == "poisson":
+        return sm.families.Poisson(log)
+    if family == "gamma":
+        return sm.families.Gamma(log)
+    return sm.families.Tweedie(log, var_power=power)
+
+
+def log_design(family: str, power: float, n: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """C's stream under the log link, each family from its own generator:
+    the Tweedie's ``tweedie_design``; for the Poisson and the Gamma the
+    same features and mean, Poisson counts or Gamma amounts of dispersion
+    ``PHI`` (shape ``1/PHI``)."""
+    if family == "tweedie":
+        return tweedie_design(power, "log", n, seed)
+    rng = np.random.default_rng([500, seed, {"poisson": 10, "gamma": 20}[family], False])
+    X = np.column_stack([np.ones(n), rng.standard_normal((n, 2))])
+    mu = np.exp(X @ np.array([0.5, 0.3, -0.2]))
+    if family == "poisson":
+        return X, rng.poisson(mu).astype(float)
+    return X, rng.gamma(1.0 / PHI, PHI * mu)
+
+
+def score(fam: sm.families.Family, u: float, y: float) -> float:
+    """The row's score at ``η = u`` from statsmodels' family objects, ``W
+    (z − η) = W (y − μ) g'(μ)``: ``−f'(u)``, ``f`` the half unit deviance."""
+    mu = np.atleast_1d(fam.link.inverse(u))
+    return float(fam.weights(mu)[0] * (y - mu[0]) * fam.link.deriv(mu)[0])
+
+
+def longhand(
+    fam: sm.families.Family,
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    guard: bool,
+    start: tuple[np.ndarray, np.ndarray] | None = None,
+) -> dict:
+    """The recursion with no cap, row by row: ``G += W x x'``, ``b += (G +
+    I)⁻¹ W (z − η) x``, ``W`` and ``z`` from statsmodels' family objects,
+    from every coefficient 0 or from ``start`` (``b``, ``G``). With
+    ``guard``, a step whose ``η`` would pass ``ln y`` is scaled to land on
+    the root of ``h(u) = u − η − q score(u)`` in ``[η, ln y]`` by scipy's
+    ``brentq``, ``q = x'(G + I)⁻¹x`` before the row by ``np.linalg.solve``.
+    Returns the path, the largest condition of ``G + I``, the rows fired on,
+    the rows above the guard (``η + δ > ln y``), and the root's tolerance
+    carried to the coefficients, ``Σ (XTOL + RTOL |u|) |d| / δ``."""
+    k = X.shape[1]
+    b, G = (np.zeros(k), np.zeros((k, k))) if start is None else (start[0].copy(), start[1].copy())
+    eye = np.eye(k)
+    path, kappa, fired, above, slack = [], 1.0, 0, 0, 0.0
+    for i in range(len(y)):
+        x = X[i]
+        eta = float(np.clip(x @ b, -30.0, 30.0))
+        mu = np.atleast_1d(fam.link.inverse(eta))
+        W = float(fam.weights(mu)[0])
+        dz = float((y[i] - mu[0]) * fam.link.deriv(mu)[0])
+        before = G + eye
+        G = G + W * np.outer(x, x)
+        kappa = max(kappa, float(np.linalg.cond(G + eye)))
+        d = np.linalg.solve(G + eye, W * dz * x)
+        delta = float(x @ d)
+        if y[i] > 0 and delta > 0 and eta + delta > np.log(y[i]):
+            above += 1
+            if guard:
+                q = float(x @ np.linalg.solve(before, x))
+                u = brentq(
+                    lambda t, eta=eta, q=q, yi=y[i]: t - eta - q * score(fam, t, yi),
+                    eta,
+                    float(np.log(y[i])),
+                    xtol=XTOL,
+                    rtol=RTOL,
+                )
+                slack += (XTOL + RTOL * abs(u)) * float(np.abs(d).max()) / delta
+                d = d * ((u - eta) / delta)
+                fired += 1
+        b = b + d
+        path.append(b.copy())
+    return {"path": np.array(path), "kappa": kappa, "fired": fired, "above": above, "slack": slack}
+
+
+def rheon_path(family: str, power: float, X: np.ndarray, y: np.ndarray, **kw: object) -> np.ndarray:
+    """The bank's coefficients after every row, under the log link."""
+    s = rp.spec.glm(
+        "m", targets=["y"], features=["x1", "x2"], family=family, half_life=float("inf"),
+        coef_every=0, **({"var_power": power} if family == "tweedie" else {}), **kw,
+    )  # fmt: skip
+    out = rp.ModelBank([s]).fit_predict(frame(X, y))
+    return np.array(out["m"].struct.field("coef").to_list(), dtype=float)
+
+
+#: Per power, seeds on which the longhand's step never passes ``ln y``
+#: (asserted, not assumed), and seeds on which it does on at least one row.
+BELOW_GUARD = {1.2: [0, 7, 10], 1.8: [3, 4, 7], 2.5: [2, 6, 15], 3.0: [4, 44, 50]}
+ABOVE_GUARD = {1.2: [1, 2, 3], 1.8: [0, 1, 2], 2.5: [0, 1, 7], 3.0: [0, 1, 7]}
+
+
+@pytest.mark.parametrize("power", sorted(BELOW_GUARD))
+def test_below_the_guard_the_tweedie_recursion_is_statsmodels_irls_step(power):
+    """The row-by-row recursion of
+    ``test_the_recursion_is_the_familys_irls_step_row_by_row``, at Tweedie
+    powers either side of 2 (zeros among the amounts below it, none above),
+    its Fisher weight and working response from statsmodels' ``Tweedie``
+    family at that power, with no refit and no cap, on streams where no
+    row's step passes its own ``ln y``, so the target guard never fires
+    (the longhand checks this on every row).
+
+    Bound: each side takes ``μ^p`` and ``e^η`` from its own library, three
+    ulps a call, and each row's solve amplifies a relative error by at most
+    the largest condition of ``G + I`` along the path, ``κ``, read from the
+    longhand: over ``n`` rows, ``64 n κ u`` relative. Measured 2026-11-24
+    (x86-64, Linux): ``κ`` at most 21, the gap at most 1.4e-4 of the bound.
+    """
+    n = 300
+    fam = tweedie_family(power, "log")
+    for seed in BELOW_GUARD[power]:
+        X, y = tweedie_design(power, "log", n, seed)
+        assert (power < 2) == bool(np.any(y == 0))
+        lh = longhand(fam, X, y, guard=True)
+        assert lh["above"] == 0, (seed, lh["above"])
+        want = lh["path"]
+        assert np.abs(want).max() < 10.0
+        got = rheon_path("tweedie", power, X, y, refit_rows=0, step_cap=float("inf"))
+        gap = np.max(np.abs(got - want) / (1.0 + np.abs(want)))
+        assert gap <= 64 * n * lh["kappa"] * U, (seed, gap, lh["kappa"])
+
+
+@pytest.mark.parametrize("power", sorted(ABOVE_GUARD))
+def test_above_the_guard_the_tweedie_recursion_lands_on_the_rows_root(power):
+    """The same recursion on streams where the guard fires (at least one
+    row's step passes its own ``ln y``): on each such row the longhand
+    scales its step to land ``η`` on the root of the row's proximal
+    problem, ``h(u) = u − η + q f'(u)`` on ``[η, ln y]``, found by scipy's
+    ``brentq``, ``f'`` from statsmodels' family (``−W (y − μ) g'(μ)``) and
+    ``q`` by numpy's solve: a third-party root and solve, the definition
+    alone written here.
+
+    Bound: the bound below the guard, plus the root's tolerance carried to
+    the coefficients, ``(xtol + rtol |u|) |d|/δ`` a firing row, times
+    ``κ`` for the rows after it. The model's ``q`` comes by
+    Sherman-Morrison from its step rather than a second solve, a relative
+    error of ``κ u`` a row, inside the first term. Measured 2026-11-24
+    (macOS arm64): 1 to 6 rows fired a stream, ``κ`` at most 44, the gap
+    at most 3.9e-5 of the bound."""
+    n = 300
+    fam = tweedie_family(power, "log")
+    for seed in ABOVE_GUARD[power]:
+        X, y = tweedie_design(power, "log", n, seed)
+        lh = longhand(fam, X, y, guard=True)
+        assert lh["fired"] >= 1, seed
+        want = lh["path"]
+        assert np.abs(want).max() < 10.0
+        got = rheon_path("tweedie", power, X, y, refit_rows=0, step_cap=float("inf"))
+        gap = np.max(np.abs(got - want) / (1.0 + np.abs(want)))
+        bound = 64 * n * lh["kappa"] * U + lh["kappa"] * lh["slack"]
+        assert gap <= bound, (seed, gap, bound, lh["kappa"])
+
+
+# --- the share over 100 seeds, and the default spec's outlier -----------------
+
+#: The log-link families of the share, ``(family, power)``, each a case of
+#: the ledger.
+SHARE_FAMILIES = [
+    ("poisson", 1.0),
+    ("gamma", 2.0),
+    ("tweedie", 1.2),
+    ("tweedie", 1.5),
+    ("tweedie", 1.8),
+    ("tweedie", 2.5),
+    ("tweedie", 3.0),
+]
+
+
+def case_name(family: str, power: float) -> str:
+    return family if family != "tweedie" else f"tweedie_{power:.1f}".replace(".", "_")
+
+
+def sm_fit(
+    family: str, power: float, X: np.ndarray, y: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """statsmodels' ``GLM(...).fit()`` of the rows and its standard errors.
+    Above ``p = 2`` its IRLS from its own start, and from the ridge-1 fit,
+    fails on some of these streams (a weight overflows on its way), so it
+    starts at a converged fit: the bank's refit of every row at a ridge of
+    1e-12, from which it converges on all 100 seeds a power to its own
+    tolerance, 1e-12."""
+    fam = log_family(family, power)
+    start = None
+    if family == "tweedie" and power > 2:
+        start = rheon_path(family, power, X, y, refit_rows=len(y), ridge=1e-12)[-1]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        f = sm.GLM(y, X, family=fam).fit(start_params=start, tol=1e-12, maxiter=200)
+    return np.asarray(f.params), np.asarray(f.bse)
+
+
+def share_seed(family: str, power: float, seed: int) -> tuple[bool, bool, float]:
+    """C's stream (300 rows) with no refit and no cap: whether the unguarded
+    longhand's path passes ``|coef|`` 10, whether the bank's does, and the
+    bank's final fit's gap to statsmodels', in its standard errors."""
+    X, y = log_design(family, power, 300, seed)
+    lh = longhand(log_family(family, power), X, y, guard=False)
+    off = bool(not np.all(np.abs(lh["path"]) < 10.0))
+    got = rheon_path(family, power, X, y, refit_rows=0, step_cap=float("inf"))
+    on = bool(not np.all(np.abs(got) < 10.0))
+    want, se = sm_fit(family, power, X, y)
+    return off, on, float(np.max(np.abs(got[-1] - want) / se))
+
+
+#: Of 100 seeds a family, those on which the unguarded longhand's path
+#: passes ``|coef|`` 10, measured 2026-11-24: the counts the bank's guard
+#: takes to 0, asserted so that the test cannot pass on streams with
+#: nothing to stop.
+SHARE_RUNAWAYS = {
+    "poisson": 0,
+    "gamma": 17,
+    "tweedie_1_2": 0,
+    "tweedie_1_5": 1,
+    "tweedie_1_8": 7,
+    "tweedie_2_5": 35,
+    "tweedie_3_0": 64,
+}
+
+#: The bank's final fit against statsmodels', in statsmodels' standard
+#: errors: the worst of 100 seeds at half as much again as measured,
+#: rounded up to 0.05 (2026-11-24, macOS arm64, ``share_seed`` over seeds
+#: 0 to 99; the measured worst and median in the comment), the ledger
+#: holding the measured values. With no refit and no cap the first rows'
+#: curvature stays in ``G``, so these are a floor's distances, far from the
+#: refit's (0.2 to 0.3 at 100,000 rows); at ``p = 3`` the worst seeds are
+#: those whose first rows the guard scaled most.
+SHARE_SE = {
+    "poisson": 8.3,  # 5.53 (median 0.25)
+    "gamma": 5.05,  # 3.35 (0.55)
+    "tweedie_1_2": 2.05,  # 1.36 (0.38)
+    "tweedie_1_5": 2.45,  # 1.61 (0.45)
+    "tweedie_1_8": 2.35,  # 1.54 (0.47)
+    "tweedie_2_5": 7.35,  # 4.88 (0.81)
+    "tweedie_3_0": 21.55,  # 14.34 (1.10)
+}
+
+ledger.guard(
+    "log_link_guard",
+    lambda: [
+        rheon_path(f, p, *log_design(f, p, 300, s), refit_rows=0, step_cap=float("inf"))[-1]
+        for f, p in SHARE_FAMILIES
+        for s in (0, 1)
+    ],
+    oracles=["statsmodels"],
+)
+
+
+def test_one_seed_of_the_share():
+    """The share's cheap representative: seed 0 of each family, the bank's
+    path under 10 and its fit within the grid's bound."""
+    for family, power in SHARE_FAMILIES:
+        _, on, gap = share_seed(family, power, 0)
+        name = case_name(family, power)
+        assert not on, name
+        assert gap <= SHARE_SE[name], (name, gap)
+
+
+@pytest.mark.oracle_grid(reason="100 seeds a family, seven families, a statsmodels fit each")
+@pytest.mark.parametrize(("family", "power"), SHARE_FAMILIES)
+def test_with_no_refit_and_no_cap_no_seed_runs_away(family, power):
+    """**With no refit and no cap no seed runs away**, of 100 a family,
+    where the unguarded recursion does on ``SHARE_RUNAWAYS`` of them; and
+    the bank's final fit is within ``SHARE_SE`` standard errors of
+    statsmodels' ``GLM(...).fit()``."""
+    name = case_name(family, power)
+    off, on, gaps = zip(*(share_seed(family, power, s) for s in range(100)), strict=True)
+    ledger.record("log_link_guard", name, gaps)
+    ledger.record("log_link_guard", f"{name}_runaways", [int(v) for v in on], exact=True)
+    assert sum(off) == SHARE_RUNAWAYS[name], (name, sum(off))
+    assert sum(on) == 0, (name, sum(on))
+    assert max(gaps) <= SHARE_SE[name], (name, np.median(gaps), max(gaps))
+
+
+#: The default spec's outlier stream: its families, and of 100 seeds those
+#: on which the recursion after the default refit, unguarded, passes
+#: ``|coef|`` 10, measured 2026-11-24 (rheon before the guard gave the same
+#: counts on the same streams).
+DEFAULT_FAMILIES = [
+    ("poisson", 1.0),
+    ("gamma", 2.0),
+    ("tweedie", 1.5),
+    ("tweedie", 2.5),
+    ("tweedie", 3.0),
+]
+DEFAULT_RUNAWAYS = {
+    "poisson": 14,
+    "gamma": 41,
+    "tweedie_1_5": 17,
+    "tweedie_2_5": 38,
+    "tweedie_3_0": 48,
+}
+
+
+def default_seed(family: str, power: float, seed: int) -> tuple[bool, bool, int]:
+    """C's stream with one target 1000 times its draw (at least 1) at row
+    250, under the default spec (a refit of 200 rows, no cap after it):
+    whether the bank's path passes ``|coef|`` 10 after the refit, whether
+    the unguarded longhand does from the bank's refit (its coefficients at
+    row 199, ``G`` rebuilt at them from statsmodels' weights), and the rows
+    above the guard there."""
+    X, y = log_design(family, power, 300, seed)
+    y[250] = max(y[250], 1.0) * 1000.0
+    got = rheon_path(family, power, X, y)
+    refit = 200
+    b = got[refit - 1]
+    fam = log_family(family, power)
+    mu = fam.link.inverse(X[:refit] @ b)
+    G = (X[:refit] * fam.weights(mu)[:, None]).T @ X[:refit]
+    lh = longhand(fam, X[refit:], y[refit:], guard=False, start=(b, G))
+    return (
+        bool(not np.all(np.abs(got[refit:]) < 10.0)),
+        bool(not np.all(np.abs(lh["path"]) < 10.0)),
+        lh["above"],
+    )
+
+
+#: Per family, the first seed on which the unguarded recursion runs away.
+DEFAULT_ESSENTIAL_SEED = {
+    "poisson": 3,
+    "gamma": 0,
+    "tweedie_1_5": 11,
+    "tweedie_2_5": 0,
+    "tweedie_3_0": 0,
+}
+
+
+@pytest.mark.parametrize(("family", "power"), DEFAULT_FAMILIES)
+def test_the_default_spec_takes_a_far_target_after_its_refit(family, power):
+    """The default spec's hazard: after its refit the cap is off, and one
+    target 1000 times its draw sends the unguarded recursion past
+    ``|coef|`` 10, on the seed here; the bank's path stays under 10. One
+    seed a family here; 100 in the extended run."""
+    on, off, above = default_seed(family, power, DEFAULT_ESSENTIAL_SEED[case_name(family, power)])
+    assert off and above >= 1 and not on, (off, above, on)
+
+
+@pytest.mark.extended(reason="100 seeds a family, five families, a bank run and a longhand each")
+@pytest.mark.parametrize(("family", "power"), DEFAULT_FAMILIES)
+def test_the_default_spec_takes_a_far_target_over_100_seeds(family, power):
+    """Over 100 seeds no bank path passes ``|coef|`` 10, where the unguarded
+    recursion from the same refit does on ``DEFAULT_RUNAWAYS`` of them."""
+    on, off, _ = zip(*(default_seed(family, power, s) for s in range(100)), strict=True)
+    assert sum(off) == DEFAULT_RUNAWAYS[case_name(family, power)], sum(off)
+    assert sum(on) == 0, sum(on)

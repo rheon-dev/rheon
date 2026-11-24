@@ -3856,7 +3856,7 @@ on every path a family is built or restored by"""
 file = "crates/rheon-core/src/glm.rs"
 function = "Glm::learn"
 mutation = "replace > with >="
-line_has = "let scale = if moved.abs() > cap {"
+line_has = "let mut scale = if moved.abs() > cap {"
 why = """at `|moved| = cap` the scale is `cap/|moved| = 1`, the other arm's 1, to \
 the bit; an infinite cap ties only at an infinite `moved`, which cannot be: \
 `moved = s x̃'(G + R I)⁻¹x̃`, and `x̃'(G + R I)⁻¹x̃` is at most the \
@@ -4033,3 +4033,65 @@ function = "Adwin::detect"
 mutation = "replace + with *"
 line_has = "let passes = self.levels.iter().map(VecDeque::len).sum::<usize>() + 1;"
 why = """as above: `B` passes are one more than the `B - 1` that cut"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/glm.rs"
+function = "prox_root"
+mutation = "replace >= with >"
+line_has = "let u = if a >= 0.0 {"
+why = """the two forms of the Gamma's root part only at `a = 0`, where both are \
+`√c`: `(0 + √(4c))/2` and `2c/(√(4c) − 0)`, each `√(4c)` halved or divided \
+into `2c`, which agree to the last bit or one ulp apart, inside every \
+test's rounding; the form that cancels nothing matters only where `a` is \
+far from 0"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/glm.rs"
+function = "prox_root"
+mutation = "replace > with >="
+line_has = "let am = if a > 0.0 { a.powf(-m) } else { f64::NAN };"
+why = """at `a = 0` the power is `0^(−m) = ∞` and `c · ∞ <= 0` is false, the \
+NaN's answer, so the start is `v` either way"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/glm.rs"
+function = "prox_root"
+mutation = "replace <= with <"
+line_has = "let (s, ms) = if c * am <= 2.0 * a {"
+why = """the start's two forms tie at `c a^(−m) = 2a`, which is `v = a`: the \
+start is `a` or `v`, the same number to its rounding, and either is at or \
+below the root, so Newton's passes from it reach the same root"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/glm.rs"
+function = "prox_root"
+mutation = "replace <= with <"
+line_has = "let s = if -a <= v {"
+why = """the start's two forms tie at `−a = v`, where `(c/(−2a))^(1/m) = \
+(c/(2v))^(1/m) = v` (`v^(m+1) = c/2`): the same start to its rounding, at \
+or below the root either way"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/glm.rs"
+function = "prox_root"
+mutation = "replace >= with >"
+line_has = "let hi = if a >= 0.0 {"
+why = """at `a = 0` both forms are upper bounds on the root (`u ≥ s` gives \
+`u = c u^(−m) ≤ c s^(−m)` and `u^m = c/u ≤ c/s`), so the passes start at or \
+below the root's mean either way and reach the same root"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/glm.rs"
+function = "prox_root"
+mutation = "replace < with <="
+line_has = "if m < 1.0 || c * m * ms <= s {"
+why = """`m = 1` (the Gamma) returns its closed form above, so the line never \
+runs at `m = 1`"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/glm.rs"
+function = "prox_root"
+mutation = "replace <= with <"
+line_has = "if m < 1.0 || c * m * ms <= s {"
+why = """at the tie both variables' passes run from at or below the root and \
+reach it: the choice is of speed, not of the root"""
