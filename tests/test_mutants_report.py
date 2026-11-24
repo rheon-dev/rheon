@@ -279,8 +279,9 @@ def test_a_tolerated_survivor_is_shown_apart_and_fails_nothing(tmp_path):
 def test_a_loop_entry_sets_its_timeout_apart_and_excuses_no_survivor(tmp_path):
     """A `loop` entry names a mutant that makes a loop endless, which times
     out rather than survives: the report lists that timeout under the kind
-    with its reason, and a timeout no entry names under the timeouts. The
-    same entry does not excuse a survivor on its line (task 250)."""
+    with its reason, and a timeout no entry names under the timeouts, where
+    it fails the report as a survivor does. The same entry does not excuse a
+    survivor on its line (task 250)."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src/m.rs").write_text(
         "a\nb\nc\n    if w > 0.0 {\nlet x = y < z;\n", encoding="utf-8"
@@ -296,13 +297,37 @@ def test_a_loop_entry_sets_its_timeout_apart_and_excuses_no_survivor(tmp_path):
     (run / "outcomes.json").write_text(json.dumps(data), encoding="utf-8")
     loop = {**TOLERATED, "kind": "loop", "why": "the loop never ends"}
     text, missed = report_mod.report([run], root=tmp_path, equivalents=[], tolerated=[loop])
-    assert missed == 1, text
-    assert "4 mutants: 1 caught, 1 survived, 0 equivalent, 0 tolerated, 2 timed out" in text
+    # The survivor and the timeout no entry names (PLAN 578j, CI-3: the
+    # timeout once passed the report green).
+    assert missed == 2, text
+    assert (
+        "4 mutants: 1 caught, 1 survived, 0 equivalent, 1 tolerated, 2 timed out (1 untolerated)"
+        in text
+    )
     survivors, rest = text.split("### Timed out")
     timeouts, kept = rest.split("### Tolerated")
     assert "src/m.rs:5:9" in survivors
     assert "src/m.rs:4:9" in timeouts and "src/m.rs:5:9" not in timeouts
     assert "**loop** (1)" in kept and "src/m.rs:5:9" in kept and "the loop never ends" in kept
+
+
+def test_a_timeout_alone_fails_the_report(tmp_path):
+    """The workflow maps cargo-mutants' exit 3 (timeouts) to 0 and leaves the
+    verdict to the report, so a mutant that hangs every test and that no
+    `loop` entry names must fail it: it is a mutant no test caught. Before,
+    a run whose only uncaught mutant timed out passed (PLAN 578j, CI-3)."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/m.rs").write_text("a\nb\nc\nd\nlet x = y < z;\n", encoding="utf-8")
+    run = _run(tmp_path, [("", 5, "replace < with <=")])
+    data = json.loads((run / "outcomes.json").read_text(encoding="utf-8"))
+    data["outcomes"][-1]["summary"] = "Timeout"
+    (run / "outcomes.json").write_text(json.dumps(data), encoding="utf-8")
+    text, missed = report_mod.report([run], root=tmp_path, equivalents=[], tolerated=[])
+    assert missed == 1, text
+    assert "0 survived" in text and "(1 untolerated)" in text, text
+    loop = {**TOLERATED, "kind": "loop", "why": "the loop never ends"}
+    _, missed = report_mod.report([run], root=tmp_path, equivalents=[], tolerated=[loop])
+    assert missed == 0
 
 
 def test_a_tolerated_entry_with_columns_holds_only_there(tmp_path):
