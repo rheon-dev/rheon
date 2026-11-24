@@ -214,3 +214,17 @@ def test_a_state_surface_no_longer_says_it_is_unstable(obj):
     doc = inspect.getdoc(obj) or ""
     assert "**unstable**" not in doc
     assert "every later" in doc
+
+
+def test_the_warnings_own_list_is_the_unstable_surfaces():
+    """Review 2026-11-23, PY-13 (4): ``UnstableWarning``'s docstring still
+    listed a ``with_windows`` state and a formula tree in a saved state, both
+    promised since every state file took one envelope, and named the private
+    module ``rheon.polars._gbdt`` in a public page."""
+    from rheon import UnstableWarning
+
+    doc = inspect.getdoc(UnstableWarning) or ""
+    assert "with_windows" not in doc, doc
+    assert "saved state" not in doc, doc
+    assert "._" not in doc, doc
+    assert "TOML file" in doc and "rheon.corr" in doc, doc

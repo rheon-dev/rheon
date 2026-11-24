@@ -326,8 +326,9 @@ impl<'de> Deserialize<'de> for Targets {
                             };
                             return Err(serde::de::Error::custom(format!(
                                 "target {name:?}: a formula target holds at least one operator \
-                                 looking ahead (rewm_mean, rewm_sum or rewm_rate); a formula \
-                                 known at its own row is a column: make it with {make}"
+                                 looking ahead ({}); a formula known at its own row is a \
+                                 column: make it with {make}",
+                                crate::formula::forward_heads()
                             )));
                         }
                         if tree

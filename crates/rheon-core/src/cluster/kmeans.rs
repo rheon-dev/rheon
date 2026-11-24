@@ -174,11 +174,23 @@ pub struct KMeansCfg {
     /// A checkpoint every this many clock units as well as every
     /// `update_every_rows` learned rows, whichever comes first; `0` is
     /// every row.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // `inf` is a setting, so its JSON is a tag (review 2026-11-23, SPEC-4:
+    // written as `null`, the spec's defaults and the state's JSON refused).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::humanfloat::opt_f64_or_tag"
+    )]
     pub update_every: Option<f64>,
     /// A split-merge check every this many clock units as well as every
     /// `split_merge_every_rows` learned rows, at a checkpoint.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // `inf` is a setting, so its JSON is a tag (review 2026-11-23, SPEC-4:
+    // written as `null`, the spec's defaults and the state's JSON refused).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::humanfloat::opt_f64_or_tag"
+    )]
     pub split_merge_every: Option<f64>,
 }
 

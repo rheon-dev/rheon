@@ -1371,7 +1371,14 @@ impl crate::OnlineModel for Rcov {
                     .chain(&m.fin)
                     .chain(&m.pre_ring)
                     .all(|r| r.len() == k);
+                // And each ring within its depth, which `emit` and `push`
+                // test with `==` (review 2026-11-23, STATE-3).
+                let kn = m.cfg.window_for().unwrap_or(0);
+                let rings = m.fin.len() <= bandwidth
+                    && m.head.len() <= m.cfg.jitter
+                    && m.pre_ring.len() < kn.max(2) - 1;
                 if m.raw.len() != kk
+                    || !rings
                     || m.pre_sum.len() != kk
                     || m.gamma.len() != (bandwidth + 1) * kk
                     || !rows_k
@@ -1487,6 +1494,31 @@ mod tests {
         match Rcov::restore(&s) {
             Err(StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{e}"),
             other => panic!("{other:?}"),
+        }
+        // Review 2026-11-23, STATE-3: a ring past its depth loaded, and the
+        // emission's and the pre-average's `==` tests then never met it
+        // again, so it grew a row a return for good.
+        for kind in [RcovKind::Kernel, RcovKind::Preavg] {
+            let m = Rcov::new(cfg(2, kind)).unwrap();
+            assert!(Rcov::restore(&m.state()).is_ok());
+            let mut s = m.state();
+            let ModelState::Rcov(inner) = &mut s.model else {
+                unreachable!()
+            };
+            match kind {
+                RcovKind::Kernel => {
+                    let depth = inner.cfg.ring_for().unwrap();
+                    inner.fin = vec![vec![0.0; 2]; depth + 1].into();
+                }
+                _ => {
+                    let kn = inner.cfg.window_for().unwrap();
+                    inner.pre_ring = vec![vec![0.0; 2]; kn - 1].into();
+                }
+            }
+            match Rcov::restore(&s) {
+                Err(StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{e}"),
+                other => panic!("{kind:?}: {other:?}"),
+            }
         }
     }
     use crate::{EwCov, OnlineModel};

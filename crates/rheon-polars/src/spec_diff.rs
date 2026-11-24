@@ -45,6 +45,16 @@ pub(crate) fn spec_difference(
         );
     }
     let place = format!("spec {:?} ({} of {n})", f.name, i + 1);
+    // Specs of two models differ first in what they are: their other keys,
+    // walked in key order, named one the other model has not (`coef_prior`
+    // on `lasso` against `ewridge`; review 2026-11-23, SPEC-9).
+    if f.model.kind_name() != b.model.kind_name() {
+        return format!(
+            "{place} differs at model.type: {:?} in the file, {:?} in the bank",
+            f.model.kind_name(),
+            b.model.kind_name()
+        );
+    }
     let (Ok(fj), Ok(bj)) = (serde_json::to_value(f), serde_json::to_value(b)) else {
         return format!("{place} differs");
     };

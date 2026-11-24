@@ -805,11 +805,17 @@ impl SgdCfg {
                 no.take(crate::model::check_scale_decay("sgd", d));
             }
             if (self.refit_rows > 0 || self.refit_clock.is_some()) && delta == f64::INFINITY {
-                no.refuse(
-                    "sgd: huber_refit_rows refits a target's first rows to a Huber fit, but \
-                     huber_delta is inf, which makes that fit least squares. Set huber_delta \
-                     to a finite cut, or leave the refit out.",
-                );
+                // The key the refit was asked for by (review 2026-11-23, SPEC-7).
+                let key = if self.refit_clock.is_some() {
+                    "huber_refit_span"
+                } else {
+                    "huber_refit_rows"
+                };
+                no.refuse(format!(
+                    "sgd: {key} refits a target's first rows to a Huber fit, but huber_delta is \
+                     inf, which makes that fit least squares. Set huber_delta to a finite cut, \
+                     or leave the refit out."
+                ));
             }
             no.take(crate::clock_span::check_max_state_bytes(
                 "sgd",

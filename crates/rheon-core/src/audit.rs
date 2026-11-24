@@ -1108,7 +1108,10 @@ impl ColumnAudit {
         let m = &self.moments;
         m.finite()
             && self.lag.finite()
-            && (m.n == 0 || (self.min.abs() <= INPUT_BOUND && self.max.abs() <= INPUT_BOUND))
+            && (m.n == 0
+                || (self.min.abs() <= INPUT_BOUND
+                    && self.max.abs() <= INPUT_BOUND
+                    && self.min <= self.max))
             && self.counts.has_shape(cap)
             && self.digest.has_shape()
             && self.prev.is_none_or(|p| p.abs() <= INPUT_BOUND)

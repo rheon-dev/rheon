@@ -14,6 +14,13 @@
 //!
 //! Nothing observable may depend on a table's iteration order: every map keyed
 //! through this hasher is sorted before it is written or reported.
+//!
+//! It is a table's hasher and no fingerprint: a short tail of `r` bytes is
+//! packed with `r` in its top byte, so it reads as the full word whose top
+//! byte is `r` (`b"group-1"` and `b"group-1\x07"` hash alike). A table
+//! compares the keys whose hashes meet, so this costs it a probe at most;
+//! nothing may compare two keys by this hash alone (review 2026-11-23,
+//! UTIL-1, whose fix would move every hash and add a word to each key's).
 
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -122,5 +129,16 @@ mod tests {
         assert_eq!(hashes.len(), keys.len());
         assert_ne!(of(&Some("x")), of(&None::<&str>));
         assert_ne!(of(&1u64), of(&2u64));
+    }
+
+    /// Review 2026-11-23, UTIL-1: the collision the module doc states, held
+    /// here so that a use of the hash as a fingerprint meets it in a test.
+    #[test]
+    fn a_short_tail_hashes_as_the_word_its_length_completes() {
+        let mut a = FixedHasher::default();
+        a.write(b"group-1");
+        let mut b = FixedHasher::default();
+        b.write(b"group-1\x07");
+        assert_eq!(a.finish(), b.finish());
     }
 }

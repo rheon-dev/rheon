@@ -385,6 +385,23 @@ def test_features_and_a_temporal_clock_are_refused():
         rp.ModelBank([spec]).fit_predict(df)
 
 
+def test_the_window_warning_follows_the_specs_own_checks():
+    """Review 2026-11-23, PY-4: the warning of a window past half its cap was
+    raised before the spec's own checks, so a spec refused for another
+    reason warned first; and it named the spec in Python's quotes,
+    ``'m'``, where every other message of a spec writes ``"m"``."""
+    import warnings
+
+    import rheon
+
+    with pytest.warns(rheon.RheonWarning, match='^spec "h": hawkes will hold'):
+        _spec(half_life=INF, window_events=4_000)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(ValueError, match="gap_cap"):
+            _spec(half_life=INF, window_events=4_000, gap_cap=-1.0)
+
+
 def test_the_window_is_held_to_the_groups_state_cap():
     """The window's rows are the one part of the state the data could size,
     and ``window_events`` bounds them, so the cap is checked at the call: a

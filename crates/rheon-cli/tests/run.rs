@@ -1524,3 +1524,61 @@ solve_every = inf
         cfg.validate().unwrap_or_else(|e| panic!("{extra:?}: {e}"));
     }
 }
+
+/// Review 2026-11-23, CLI-4: a model's missing required key (`lasso`'s
+/// `penalties`) is said as missing, and no key the spec does give is named
+/// as the one at fault: each given key, read alone beside the `type`, met
+/// the same "missing field", and the first was blamed.
+#[test]
+fn a_missing_model_key_blames_no_key_given() {
+    let dir = fresh_dir("cli4-toml");
+    let cfg = dir.join("bank.toml");
+    std::fs::write(
+        &cfg,
+        "input = \"x.parquet\"\noutput = \"y.parquet\"\n\n[[specs]]\nname = \"m\"\n\
+         targets = [\"y\"]\nfeatures = [\"x0\"]\nhalf_life = 10.0\n\n[specs.model]\n\
+         type = \"lasso\"\nl1_ratio = 0.5\n",
+    )
+    .unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rheon"))
+        .arg("--config")
+        .arg(&cfg)
+        .arg("--dry-run")
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(err.contains("missing field `penalties`"), "{err}");
+    assert!(!err.contains("model.l1_ratio"), "{err}");
+}
+
+/// Review 2026-11-23, CLI-5: an output or a `--save-state` ending in a
+/// separator, with no directory there yet, passed the dry run and every check
+/// before the first row; the rename at the end failed (`ENOTDIR`), after the
+/// whole input had been read. Each is refused first, the dry run too.
+#[test]
+fn a_path_ending_in_a_separator_is_refused_before_the_run() {
+    let dir = fresh_dir("cli5");
+    let (input, output) = (dir.join("in.parquet"), dir.join("out.parquet"));
+    write_input(&input, 300).unwrap();
+    let slashed = format!(
+        "{}{}",
+        dir.join("not-yet.parquet").display(),
+        std::path::MAIN_SEPARATOR
+    );
+    for (flags, out) in [
+        (vec!["-q", "--save-state", slashed.as_str()], output.clone()),
+        (
+            vec!["-q", "--dry-run", "--save-state", slashed.as_str()],
+            output.clone(),
+        ),
+        (vec!["-q"], PathBuf::from(&slashed)),
+        (vec!["-q", "--dry-run"], PathBuf::from(&slashed)),
+    ] {
+        let (ok, _, err) = online(&dir, &input, &out, &flags);
+        assert!(!ok, "{flags:?}: the run succeeded");
+        assert!(err.contains("ends in a separator"), "{flags:?}: {err}");
+        assert!(!output.exists(), "{flags:?}: the output was written");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}

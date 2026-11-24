@@ -316,7 +316,13 @@ pub struct CorrChangeCfg {
     /// clock units as well as every `permute_every_rows` reports, whichever
     /// comes first (docs/PLAN.md task 538); `0` is every report. Last, and
     /// written only when set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // `inf` is a setting, so its JSON is a tag (review 2026-11-23, SPEC-4:
+    // written as `null`, the spec's defaults and the state's JSON refused).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::humanfloat::opt_f64_or_tag"
+    )]
     pub permute_every: Option<f64>,
     /// `window_size`: the span (`monitor`), the history (`sequential`) or
     /// each of the two windows (`window`) as a span of the clock, in place

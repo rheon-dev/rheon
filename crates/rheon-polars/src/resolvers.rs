@@ -352,12 +352,45 @@ pub(crate) fn resolve_targets(
         resolver.runs.insert(key.clone(), run);
     }
     let by_group = settle(spec, resolver, groups, results, &names)?;
+    outside_support_of_formulas(spec, groups, &by_group, &names)?;
     let seqs = gathered((0..n).map(|i| first_row + i as u64).collect(), layout);
     Ok(FormulaBundle {
         slots: spec.targets.formula_slots(),
         seqs,
         groups: by_group,
     })
+}
+
+/// A `glm`'s formula target resolved outside its family's support, refused
+/// naming the row, as a column target is (`outside_support`), before any
+/// stream learns it: the model skipped such a row while still counting its
+/// weight (review 2026-11-23, GLM-6). The groups in their order, each in
+/// row order, so the first refusal is the one a serial pass meets.
+fn outside_support_of_formulas(
+    spec: &Spec,
+    groups: &[(GroupKey, Vec<usize>)],
+    by_group: &HashMap<GroupKey, Resolutions, FixedState>,
+    names: &[&str],
+) -> PolarsResult<()> {
+    if !matches!(spec.model, crate::spec::ModelKind::Glm { .. }) {
+        return Ok(());
+    }
+    for (key, _) in groups {
+        let Some(r) = by_group.get(key) else {
+            continue;
+        };
+        for (i, row) in r.values.chunks(r.width.max(1)).enumerate() {
+            if let Some((j, why, other)) = crate::bank::outside_support(spec, row) {
+                polars_bail!(ComputeError:
+                    "spec {:?}: formula target {:?} resolved to {} for row {} of the stream \
+                     (counting from 0), but {why}. Write the formula so that it stays in the \
+                     family's support, or choose another {other}.",
+                    spec.name, names[j], row[j], r.seqs[i]
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// What one group's step gives: its key and rows, `None` where nothing

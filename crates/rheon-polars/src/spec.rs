@@ -2302,6 +2302,31 @@ impl ModelKind {
         }
     }
 
+    /// True for the models whose fit has a constant term of its own, named
+    /// `intercept` in `coef`'s terms (and in the Gram's columns, where the
+    /// model keeps one) when `fit_intercept` is on. An allowlist: a list of
+    /// the models without one refused a feature named `intercept` on six
+    /// kinds that have no such term (review 2026-11-23, SPEC-6), and
+    /// `tests/test_model_registry.py` holds it to the terms `coef_index`
+    /// gives.
+    pub fn names_its_intercept(&self) -> bool {
+        matches!(
+            self,
+            ModelKind::EwRidge { .. }
+                | ModelKind::Rls { .. }
+                | ModelKind::Lasso { .. }
+                | ModelKind::Kalman { .. }
+                | ModelKind::Huber { .. }
+                | ModelKind::Quantile { .. }
+                | ModelKind::Ftrl { .. }
+                | ModelKind::Sgd { .. }
+                | ModelKind::Pa { .. }
+                | ModelKind::Glm { .. }
+                | ModelKind::Expectile { .. }
+                | ModelKind::Ar { .. }
+        )
+    }
+
     /// False for the models that report no coefficients -- no `coef` field
     /// in their output: `ew_cov`, `seqtest`, `marginal`, `rcov`, `corrchange`,
     /// `bocpd`, `audit`, `realized`, `tdigest`, `ewm_moments`, `spectral` and
@@ -3797,10 +3822,47 @@ impl Spec {
         crate::stream::build_models(self)?;
         // Two outputs rendered to one field name, named by their inputs
         // (task 144); the bank's tripwire for a spec built some other way.
-        match crate::bank::duplicate_field(self) {
+        if let Some(err) = crate::bank::duplicate_field(self) {
+            return Err(err);
+        }
+        // A name the spec makes of its own settings (a feature set, a
+        // `deco` block, an `ew_class` class) is in an output field's name,
+        // and the Arrow export carries each as a C string: a NUL in one
+        // panicked there after the bank had learned the chunk (review
+        // 2026-11-23, SPEC-1).
+        match crate::bank::nul_field(self) {
             Some(err) => Err(err),
             None => Ok(()),
         }
+    }
+
+    /// Every column the spec reads by name, with the key that names it.
+    fn named_columns(&self) -> Vec<(&'static str, &str)> {
+        let mut out: Vec<(&'static str, &str)> = self
+            .features
+            .iter()
+            .map(|f| ("features", f.as_str()))
+            .collect();
+        for (key, col) in [
+            ("clock", self.clock.as_deref()),
+            ("session", self.session.as_deref()),
+            ("weight", self.weight.as_deref()),
+            ("group", self.group.as_deref()),
+            (
+                "label_clock",
+                self.label_clock.as_ref().map(LabelClock::column),
+            ),
+            (
+                match &self.model {
+                    ModelKind::Bocpd { .. } => "hazard_col",
+                    _ => "exog_tvtp",
+                },
+                self.model.targets_slot_column(),
+            ),
+        ] {
+            out.extend(col.map(|c| (key, c)));
+        }
+        out
     }
 
     /// Every problem the spec's own checks find, in one refusal
@@ -4098,6 +4160,37 @@ impl Spec {
                                 )
                             }
                         ));
+                    } else {
+                        // Each half-life is a kernel, `β = ln 2 / h`: two
+                        // spellings of one ("5m" and "300s") are one kernel
+                        // twice, which the model refused naming
+                        // `kernel_decays`, a key not given (review
+                        // 2026-11-23, SPEC-10).
+                        let hs: Vec<f64> = h.spans().iter().map(Span::value).collect();
+                        if let Some(dup) = first_duplicate(&hs) {
+                            let labels: Vec<String> = h
+                                .spans()
+                                .iter()
+                                .filter(|s| s.value() == dup)
+                                .map(Span::label)
+                                .collect();
+                            no.refuse(format!(
+                                "spec {name:?}: kernel_half_lives lists {}, which are one \
+                                 half-life, and each half-life is one kernel. List each \
+                                 half-life once.",
+                                labels.join(" and ")
+                            ));
+                        }
+                        if let Some(s) = h.spans().iter().find(|s| {
+                            let b = std::f64::consts::LN_2 / s.value();
+                            !(b.is_finite() && b > 0.0 && b.is_normal())
+                        }) {
+                            no.refuse(format!(
+                                "spec {name:?}: kernel_half_lives lists {s}, whose decay, \
+                                 ln 2 / half-life, is past what a double holds. Give each \
+                                 kernel a half-life from 4e-309 to 3e307 clock units."
+                            ));
+                        }
                     }
                 }
                 (Some(_), None) => {}
@@ -4239,21 +4332,25 @@ impl Spec {
                 ));
             }
         }
+        // A feature's name is in `coef`'s terms and the feature health's
+        // fields, and a column the spec reads by name is no column of an
+        // Arrow export with a NUL in it either; the names a model makes of
+        // its own settings (a feature set, a block, a class) are checked
+        // against the output's fields in `check` (review 2026-11-23, SPEC-1).
+        for (key, n) in self.named_columns() {
+            if n.contains('\0') {
+                no.refuse(format!(
+                    "spec {name:?}: {key} names a column {n:?} holding a NUL character (\\0), \
+                     which no column name of an Arrow export can hold. Rename the column."
+                ));
+            }
+        }
         // The fit's own constant term is named "intercept" in `coef`, the
         // Gram and the bank's tables: a feature of that name beside it gave
         // two coefficients one name, which `unnest` then refused with advice
         // that could not work (review P14).
-        let has_intercept_term = !matches!(
-            self.model,
-            ModelKind::EwCov { .. }
-                | ModelKind::KMeans { .. }
-                | ModelKind::Micro { .. }
-                | ModelKind::EwClass { .. }
-                | ModelKind::Holt { .. }
-                | ModelKind::Hmm { .. }
-        );
         if self.fit_intercept
-            && has_intercept_term
+            && self.model.names_its_intercept()
             && self.features.iter().any(|f| f == "intercept")
         {
             no.refuse(format!(
@@ -4767,6 +4864,17 @@ impl Spec {
                     "spec {name:?}: resid_quantiles must list at least one level, but it is \
                      empty. List levels above 0 and below 1, such as [0.05, 0.95], or leave out \
                      resid_quantiles."
+                ));
+            }
+            // Each level names its own fields: a repeat reached the output's
+            // duplicate field, whose advice could not help (review
+            // 2026-11-23, SPEC-10).
+            if let Some(d) = first_duplicate(qs) {
+                no.refuse(format!(
+                    "spec {name:?}: resid_quantiles must list each level once, since each names \
+                     its own fields, but it lists {} more than once. Remove the repeats from \
+                     resid_quantiles.",
+                    num_label(d)
                 ));
             }
             let bad: Vec<String> = qs

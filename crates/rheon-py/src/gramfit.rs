@@ -175,8 +175,15 @@ enum Matrix {
 
 impl Matrix {
     fn read(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        // A buffer that is float64 but not readable as one (another byte
+        // order, a stride) is said as the Gram's, not as a bare
+        // `BufferError` (review 2026-11-23, PYO3-3).
         if let Ok(b) = PyBuffer::<f64>::get(obj) {
-            return Ok(Self::F64(b.to_vec(py)?));
+            return b.to_vec(py).map(Self::F64).map_err(|e| {
+                internal(format!(
+                    "the Gram's comoments cannot be read as float64 ({e})"
+                ))
+            });
         }
         PyBuffer::<f32>::get(obj)
             .and_then(|b| b.to_vec(py))
@@ -240,13 +247,23 @@ fn read(py: Python<'_>, g: &GramIn<'_>) -> PyResult<InGram> {
     };
     let comoments = Matrix::read(py, &g.3)?;
     let m = base.target_weights.len();
-    let packed = comoments.len() != k * k && comoments.len() == k * (k + 1) / 2;
+    // A `k` whose square passes the integers wrapped, and a wrapped length
+    // could pass the check below (review 2026-11-23, PYO3-3).
+    let kk = k
+        .checked_mul(k)
+        .filter(|_| k.checked_mul(m.max(1)).is_some())
+        .ok_or_else(|| {
+            internal(format!(
+                "the Gram's k, {k}, is past what its arrays can hold"
+            ))
+        })?;
+    let packed = comoments.len() != kk && comoments.len() == k * (k + 1) / 2;
     let shapes = [
         ("means", base.means.len(), k),
         (
             "comoments",
             comoments.len(),
-            if packed { k * (k + 1) / 2 } else { k * k },
+            if packed { k * (k + 1) / 2 } else { kk },
         ),
         ("cross_moments", base.cross_moments.len(), m * k),
         ("means_by_target", base.means_by_target.len(), m * k),

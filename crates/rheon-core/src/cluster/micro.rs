@@ -908,9 +908,18 @@ impl OnlineModel for Micro {
                 // The feature moments, the metric weights and every centre
                 // `p` wide (review 2026-09-18, B3).
                 let p = m.cfg.n_features;
+                // And the cluster count the potential summaries' labels: a
+                // smaller one underflowed at the drop of a label's last
+                // summary (review 2026-11-23, STATE-3).
+                let labels: std::collections::BTreeSet<u64> =
+                    m.mc.iter()
+                        .filter(|c| c.potential)
+                        .map(|c| c.label)
+                        .collect();
                 if !m.moments.has_shape(p)
                     || m.mw.len() != p
                     || m.mc.iter().any(|c| !c.s.has_width(p))
+                    || labels.len() != m.n_clusters
                 {
                     return Err(crate::model::damaged(
                         "micro",
@@ -961,6 +970,35 @@ mod tests {
         match Micro::restore(&s) {
             Err(StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{e}"),
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// Review 2026-11-23, STATE-3: the cluster count is the number of
+    /// labels the potential summaries carry. A state that said fewer loaded,
+    /// and dropping the last summary of a label took the count below 0 (a
+    /// panic in a debug build, a wrap in a release one).
+    #[test]
+    fn a_cluster_count_that_is_not_the_labels_is_refused() {
+        use crate::{ModelState, OnlineModel, StateError};
+        let mut m = Micro::new(cfg()).unwrap();
+        for _ in 0..5 {
+            m.step(&[0.0, 0.0], &[], 1.0, 1.0);
+        }
+        for _ in 0..5 {
+            m.step(&[5.0, 5.0], &[], 1.0, 1.0);
+        }
+        assert_eq!(m.n_clusters(), 2);
+        assert!(Micro::restore(&m.state()).is_ok());
+        for n in [0, 1, 3] {
+            let mut s = m.state();
+            let ModelState::Micro(inner) = &mut s.model else {
+                unreachable!()
+            };
+            inner.n_clusters = n;
+            match Micro::restore(&s) {
+                Err(StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{e}"),
+                other => panic!("{n}: {other:?}"),
+            }
         }
     }
 

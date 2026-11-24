@@ -1223,6 +1223,44 @@ def test_concurrent_fit_predict_says_so(method):
     assert bank.fit_predict(df.head(10)).height == 10
 
 
+def test_reading_threads_while_the_bank_learns_says_so():
+    """Review 2026-11-23, PYO3-1: ``ModelBank.threads`` read during a
+    ``fit_predict`` on another thread raised PyO3's "Already mutably
+    borrowed"; it is refused with the sentence every other method gives."""
+    n = 200_000
+    df = pl.DataFrame(
+        {
+            "x0": np.random.default_rng(0).standard_normal(n),
+            "y": np.random.default_rng(1).standard_normal(n),
+        }
+    )
+    bank = rp.ModelBank([_spec_dict(half_life=[10.0, 100.0, 1000.0], coef_every=1)])
+    errors: list[BaseException] = []
+    for _ in range(5):
+        started = threading.Event()
+
+        def learn(started: threading.Event = started) -> None:
+            started.set()
+            bank.fit_predict(df)
+
+        learner = threading.Thread(target=learn)
+        learner.start()
+        started.wait()
+        while learner.is_alive():
+            try:
+                bank.threads  # noqa: B018
+            except RuntimeError as e:
+                errors.append(e)
+                break
+        learner.join()
+        if errors:
+            break
+    else:
+        pytest.fail("the read never overlapped the run in five rounds")
+    assert "ModelBank.threads:" in str(errors[0]), errors[0]
+    assert "in use on another thread" in str(errors[0]), errors[0]
+
+
 def _overlapping_calls(make, call) -> list[RuntimeError]:
     """Four threads leave a barrier together and `call` one object `make`
     built, a round at a time, until two calls overlap: the second finds the

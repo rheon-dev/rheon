@@ -173,6 +173,14 @@ def _save_path(save_state: State | None, who: str) -> str | None:
     if save_state is None:
         return None
     path = os.fspath(save_state)
+    if path and os.path.isdir(path):
+        msg = f"{who}: save_state {path!r} is a folder, not a file. Name a file in it."
+        raise IsADirectoryError(msg)
+    # An empty path, or one ending in a separator, names no file: each was
+    # taken here and failed once the stream had run (review 2026-11-23).
+    if path == "" or path.endswith(("/", os.sep)):
+        msg = f"{who}: save_state {path!r} names no file. Name a file, such as 'run.state'."
+        raise ValueError(msg)
     parent = os.path.dirname(os.path.abspath(path))
     if not os.path.isdir(parent):
         msg = (
@@ -180,9 +188,6 @@ def _save_path(save_state: State | None, who: str) -> str | None:
             "Make the folder, or name a file in a folder that does."
         )
         raise FileNotFoundError(msg)
-    if os.path.isdir(path):
-        msg = f"{who}: save_state {path!r} is a folder, not a file. Name a file in it."
-        raise IsADirectoryError(msg)
     return path
 
 
@@ -1636,8 +1641,7 @@ class LazyFrameRheonNamespace:
         :class:`~rheon.WrongTypeError`
             A column the bank reads is of a type its role cannot take, such
             as a text feature, or a column is ``UInt128``, which no frame can
-            carry into the bank. It is both a ``TypeError`` and a
-            ``ValueError``.
+            carry into the bank. It is a ``TypeError``.
         ``TypeError``
             ``bank`` is neither a bank nor a path, or ``threads`` is not an
             integer.

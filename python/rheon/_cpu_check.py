@@ -169,6 +169,9 @@ class _Cpuid:
             mprotect.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
             mprotect.restype = ctypes.c_int
             if mprotect(address, len(code), mmap.PROT_READ | mmap.PROT_EXEC) != 0:
+                # The map is closed, not left to the collector (review
+                # 2026-11-23, PYO3-2).
+                self._close_map()
                 raise OSError("could not make memory executable for the CPU check")
             self._release = self._close_map
         prototype = ctypes.CFUNCTYPE(

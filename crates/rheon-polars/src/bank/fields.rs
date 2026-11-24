@@ -505,35 +505,55 @@ pub fn duplicate_field(spec: &Spec) -> Option<String> {
         let Some(first) = seen.insert(f.field.as_str(), f) else {
             continue;
         };
-        let describe = |m: &FieldMeta| {
-            let mut s = format!("{:?}", m.kind);
-            if let Some(t) = &m.target {
-                s.push_str(&format!(" of target {t:?}"));
-            }
-            if let Some(c) = &m.columns {
-                s.push_str(&format!(" over columns {c:?}"));
-            }
-            if let Some(fs) = &m.feature_set {
-                s.push_str(&format!(" in feature set {fs:?}"));
-            }
-            if let Some(r) = m.ridge {
-                s.push_str(&format!(" at ridge {r}"));
-            }
-            if let Some(h) = m.half_life {
-                s.push_str(&format!(" at half_life {h}"));
-            }
-            s
-        };
         return Some(format!(
             "spec {:?}: two outputs render to the same field name {:?}: {} and {}; rename a \
              target, feature or grid label to tell them apart",
             spec.name,
             f.field,
-            describe(first),
-            describe(f)
+            described(first),
+            described(f)
         ));
     }
     None
+}
+
+/// The first output field whose name holds a NUL character, which the Arrow
+/// export cannot carry: it panicked there, after the bank had learned the
+/// chunk (review 2026-11-23, SPEC-1). The spec's own names are refused by
+/// name in `Spec::validate`; this catches the names a model makes of its
+/// settings: a feature set, a `deco` block, an `ew_class` class.
+pub(crate) fn nul_field(spec: &Spec) -> Option<String> {
+    let f = output_index(spec)
+        .into_iter()
+        .find(|f| f.field.contains('\0'))?;
+    Some(format!(
+        "spec {:?}: the output field {:?} ({}) holds a NUL character (\\0), which no column \
+         name of an Arrow export can hold. Rename the setting that names it without one.",
+        spec.name,
+        f.field,
+        described(&f)
+    ))
+}
+
+/// An output field in words: its kind and what it is of.
+fn described(m: &FieldMeta) -> String {
+    let mut s = format!("{:?}", m.kind);
+    if let Some(t) = &m.target {
+        s.push_str(&format!(" of target {t:?}"));
+    }
+    if let Some(c) = &m.columns {
+        s.push_str(&format!(" over columns {c:?}"));
+    }
+    if let Some(fs) = &m.feature_set {
+        s.push_str(&format!(" in feature set {fs:?}"));
+    }
+    if let Some(r) = m.ridge {
+        s.push_str(&format!(" at ridge {r}"));
+    }
+    if let Some(h) = m.half_life {
+        s.push_str(&format!(" at half_life {h}"));
+    }
+    s
 }
 
 /// A `list[str]` column of these lists, null where a row has none.

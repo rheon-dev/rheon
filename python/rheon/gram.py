@@ -1996,8 +1996,8 @@ def lars_path(
     .. rubric:: Raises
 
     :class:`~rheon.WrongTypeError`
-        A limit that is not a whole number or ``None``. It is both a
-        ``TypeError`` and a ``ValueError``.
+        A limit that is not a whole number or ``None``. It is a
+        ``TypeError``.
     ``ValueError``
         A limit below 1; ``penalty_weights`` of the wrong length, or not
         finite and above 0; ``threads`` below 1; the intercept or a column
@@ -2402,8 +2402,8 @@ def solve_subsets(
         - ``threads`` is below 1.
     :class:`~rheon.WrongTypeError`
         ``jobs`` is neither a list nor a ``DataFrame``, a job is not a
-        mapping, or a limit in ``path`` is not a whole number. It is both a
-        ``TypeError`` and a ``ValueError``.
+        mapping, or a limit in ``path`` is not a whole number. It is a
+        ``TypeError``.
     ``TypeError``
         ``threads`` is not an integer or ``None``, or ``path`` has ``max_steps``,
         the older name of ``max_iter``.

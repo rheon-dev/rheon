@@ -725,6 +725,20 @@ impl OnlineModel for Ftrl {
                         "its saved target weights have the wrong shape",
                     ));
                 }
+                // The squared gradients' sums and the weights are sums of
+                // non-negative terms: a negative `n` read `sqrt(n)` as NaN
+                // and zeroed its coordinate for good (review 2026-11-23,
+                // STATE-3).
+                let non_negative = |v: f64| v.is_finite() && v >= 0.0;
+                if !m.n.iter().flatten().all(|&v| non_negative(v))
+                    || !non_negative(m.w_sum)
+                    || !m.w_target.iter().all(|&v| non_negative(v))
+                {
+                    return Err(crate::model::damaged(
+                        "ftrl",
+                        "its running sums hold a value no stream writes",
+                    ));
+                }
                 if m.pending.len() != n {
                     return Err(crate::model::damaged(
                         "ftrl",
@@ -781,6 +795,32 @@ mod tests {
         match Ftrl::restore(&s) {
             Err(StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{e}"),
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// Review 2026-11-23, STATE-3: a squared gradients' sum below 0 loaded,
+    /// and `sqrt` read it as NaN; so did a weight below 0.
+    #[test]
+    fn a_negative_sum_is_refused() {
+        use crate::{ModelState, OnlineModel, StateError};
+        let mut m = Ftrl::new(cfg(2, 1)).unwrap();
+        m.step(&[1.0, -1.0], &[Some(1.0)], 1.0, 1.0);
+        assert!(Ftrl::restore(&m.state()).is_ok());
+        let edits: [fn(&mut Ftrl); 3] = [
+            |f| f.n[0][1] = -4.0,
+            |f| f.w_sum = -1.0,
+            |f| f.w_target[0] = f64::NAN,
+        ];
+        for (i, edit) in edits.into_iter().enumerate() {
+            let mut s = m.state();
+            let ModelState::Ftrl(inner) = &mut s.model else {
+                unreachable!()
+            };
+            edit(inner);
+            match Ftrl::restore(&s) {
+                Err(StateError::Invalid(e)) => assert!(e.contains("no stream writes"), "{e}"),
+                other => panic!("edit {i}: {other:?}"),
+            }
         }
     }
 

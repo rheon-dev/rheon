@@ -3394,15 +3394,13 @@ impl WindowsRun {
             run.held.push_back(Arc::new(held));
         }
         if file.resume_skip > 0 && !file.last_row.is_empty() {
-            let last = IpcReader::new(Cursor::new(file.last_row))
-                .finish()
-                .map_err(|e| {
-                    format!(
-                        "{WHO}: the last row the state read cannot be read back ({e}), so it is \
+            let last = crate::envelope::read_ipc(&file.last_row).map_err(|e| {
+                format!(
+                    "{WHO}: the last row the state read cannot be read back ({e}), so it is \
                          damaged. Load an undamaged copy of the state file, or leave out \
                          load_state to start over."
-                    )
-                })?;
+                )
+            })?;
             let have: Vec<(String, DataType)> = last
                 .schema()
                 .iter()

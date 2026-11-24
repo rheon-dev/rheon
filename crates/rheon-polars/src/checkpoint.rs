@@ -82,7 +82,9 @@ impl<'de> Deserialize<'de> for ByteBuf {
                 Ok(ByteBuf(v))
             }
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<ByteBuf, A::Error> {
-                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                // At most 4 KiB reserved ahead of the bytes read (review
+                // 2026-11-23, STATE-2).
+                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
                 while let Some(b) = seq.next_element::<u8>()? {
                     out.push(b);
                 }
@@ -448,5 +450,57 @@ mod tests {
         rmpv::encode::write_value(&mut newer, &v).unwrap();
         let err = load_checkpoint(&crate::reseal(&newer)).unwrap_err();
         assert!(err.contains("newer than the 1"), "{err}");
+    }
+
+    /// Review 2026-11-23, STATE-1: a stage cut short after its head, with
+    /// a flipped byte inside its checksum's key, or with a byte after its
+    /// checksum, ends with no checksum at all (`Seal::Absent`), and was taken
+    /// as a stage: the save replaced the good checkpoint with it. A stage
+    /// from a file before the envelope is refused too: a stage is what this
+    /// build's `save_bytes` writes, and such a file is loaded and saved
+    /// again first.
+    #[test]
+    fn a_stage_without_its_checksum_is_refused_and_the_old_checkpoint_kept() {
+        let a = state(Kind::Bank, 1);
+        let dir =
+            std::env::temp_dir().join(format!("rheon-checkpoint-unsealed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("run.checkpoint");
+        save_checkpoint(&path, &[("bank", &a)]).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let n = a.len();
+        let mut flipped = a.clone();
+        flipped[n - 12] ^= 1; // inside "checksum", the trailer's key
+        let mut trailing = a.clone();
+        trailing.push(0xc0);
+        #[derive(Serialize)]
+        struct Old<'a> {
+            magic: &'a str,
+            version: u32,
+        }
+        let legacy = rmp_serde::to_vec_named(&Old {
+            magic: "polars-online-bank",
+            version: 2,
+        })
+        .unwrap();
+        for (what, bytes) in [
+            ("cut after its head", &a[..40]),
+            ("cut before its checksum", &a[..n - 19]),
+            ("a flip in its checksum's key", &flipped[..]),
+            ("a byte after its checksum", &trailing[..]),
+            ("a file before the envelope", &legacy[..]),
+        ] {
+            // Not a checksum that fails: none at all.
+            assert!(
+                crate::checksum::check(bytes) == crate::checksum::Seal::Absent,
+                "{what}"
+            );
+            let err =
+                save_checkpoint(&path, &[("bank", bytes)]).expect_err(&format!("{what}: saved"));
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{what}");
+            assert!(checkpoint_bytes(&[("bank", bytes)]).is_err(), "{what}");
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -255,6 +255,36 @@ def test_coef_index_and_coef_fields_agree_for_every_kind():
         assert first.select(index.columns).equals(index), name
 
 
+def test_a_feature_named_intercept_is_refused_exactly_where_coef_names_one():
+    """Review 2026-11-23, SPEC-6: a feature named ``intercept`` is refused
+    beside ``fit_intercept`` exactly by the kinds whose ``coef`` names a term
+    ``intercept`` of its own (``ModelKind::names_its_intercept``); six kinds
+    with none refused it."""
+    checked = 0
+    for name in sorted(MINIMAL):
+        kw: dict[str, object] = {"targets": ["y"], "features": ["x0"], "half_life": 50.0}
+        kw.update(MINIMAL[name])
+        features = kw.get("features")
+        if not isinstance(features, list) or "x0" not in features:
+            continue
+        kw = {k: v for k, v in kw.items() if v is not None}
+        names_one = "intercept" in rp.spec.coef_index(getattr(rp.spec, name)("m", **kw))["term"]
+        kw["features"] = ["intercept" if f == "x0" else f for f in features]
+        try:
+            rp.ModelBank([getattr(rp.spec, name)("m", **kw)])
+            refused = False
+        except ValueError as e:
+            if 'features lists "intercept"' not in str(e):
+                # A kind that names `x0` elsewhere too (`ewm_moments`' legs):
+                # renamed here alone, it is refused for that, not tested.
+                assert '"x0"' in str(e), (name, e)
+                continue
+            refused = True
+        assert refused == names_one, name
+        checked += 1
+    assert checked >= 20, checked
+
+
 def test_coef_every_is_taken_exactly_where_there_is_a_coef():
     """``coef_every`` schedules the ``coef`` field, so a kind whose output has
     none has nothing for it to do, and refuses it; the rule is held to the

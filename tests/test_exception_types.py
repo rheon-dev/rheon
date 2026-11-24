@@ -1101,8 +1101,14 @@ IO_KINDS: dict[str, Kind] = {
         "ended the save (task 460's Rust test `a_retried_interruption_is_not_the_error_a_"
         "later_failure_is_reported_as`)",
     ),
+    "AlreadyExists": Kind(
+        "FileExistsError",
+        gap="a save returns it only once 1,024 names of its temporary are taken (the "
+        "temporary is created new, review 2026-11-23, IO-2), which only filling the folder "
+        "by hand does: the Rust test `a_failed_write_leaves_the_destination_alone` does so",
+    ),
     "<others pyo3 maps>": Kind(
-        "AlreadyExists, BrokenPipe, Connection*, WouldBlock, TimedOut, OutOfMemory",
+        "BrokenPipe, Connection*, WouldBlock, TimedOut, OutOfMemory",
         gap="no call of a save or a write reaches them (a rename over a non-empty "
         "folder is `IsADirectory` or `PermissionDenied` here); pyo3's own mapping, "
         "which its tests hold",
@@ -1332,3 +1338,31 @@ def test_every_test_listed_as_elsewhere_exists() -> None:
             ):
                 missing.append(ref)
     assert not missing, f"tests the inventory points to are gone or renamed: {missing}"
+
+
+def test_no_docstring_says_an_error_is_both_a_type_and_a_value_error():
+    """Review 2026-11-23, PY-5: ``WrongTypeError`` is a ``TypeError`` and
+    ``RefusedValueError`` a ``ValueError``, each alone, but docstrings across
+    the package said each was both, so a reader catching the other class
+    missed it. Held over every source a public docstring comes from."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    sources = [
+        *(root / "python" / "rheon").rglob("*.py"),
+        root / "crates" / "rheon-py" / "src" / "lib.rs",
+    ]
+    claim = re.compile(
+        r"both a\s+(?:``|`)?(?:TypeError|ValueError)(?:``|`)?\s+and\s+a\s+"
+        r"(?:``|`)?(?:TypeError|ValueError)"
+    )
+    found = []
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        for m in claim.finditer(text):
+            found.append(f"{path.relative_to(root)}:{text.count(chr(10), 0, m.start()) + 1}")
+    assert issubclass(rheon.WrongTypeError, TypeError)
+    assert not issubclass(rheon.WrongTypeError, ValueError)
+    assert not issubclass(rheon.RefusedValueError, TypeError)
+    assert not found, found

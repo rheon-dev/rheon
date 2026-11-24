@@ -65,6 +65,21 @@ impl TryFrom<EwDiagWire> for EwDiag {
                 w.k
             ));
         }
+        // A weight below 0 made every variance negative, and a value that
+        // is no number never washes out (review 2026-11-23, STATE-3). The
+        // centred sums are of products of one sign, so never below 0.
+        let finite = |v: &[f64]| v.iter().all(|x| x.is_finite());
+        if !(w.w_sum.is_finite() && w.w_sum >= 0.0)
+            || !finite(&w.m)
+            || !finite(&w.m_lo)
+            || !w.c.iter().all(|c| c.is_finite() && *c >= 0.0)
+        {
+            return Err(
+                "a diagnostic's saved weight, means or variances are not ones a stream writes. \
+                 Load an undamaged copy of the state file, or rebuild it from its input."
+                    .to_string(),
+            );
+        }
         Ok(Self {
             k: w.k,
             w_sum: w.w_sum,
@@ -980,5 +995,25 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("wrong shape"), "{err}");
+    }
+
+    /// Review 2026-11-23, STATE-3: a weight below 0, which made each
+    /// variance negative, and a value that is no number are refused.
+    #[test]
+    fn a_weight_or_moment_no_stream_writes_is_refused() {
+        let ok = serde_json::json!({
+            "k": 1, "w_sum": 2.5, "m": [1.0], "c": [0.5], "m_lo": [0.0]
+        });
+        assert!(serde_json::from_value::<EwDiag>(ok.clone()).is_ok());
+        for (key, v) in [
+            ("w_sum", serde_json::json!(-2.5)),
+            ("c", serde_json::json!([-0.5])),
+            ("m", serde_json::json!([f64::NAN])),
+        ] {
+            let mut bad = ok.clone();
+            bad[key] = v;
+            let err = serde_json::from_value::<EwDiag>(bad).map(|_| ());
+            assert!(err.is_err(), "{key}");
+        }
     }
 }

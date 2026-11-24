@@ -112,9 +112,8 @@ def sgd(
     ``huber_refit_span``
         The same refit over a span of the clock in place of a count of rows:
         each target's rows from its first learned row through the first row
-        at least ``huber_refit_span`` after it, once they hold a row per coefficient
-        (three a coefficient under the quantile loss). A number of the
-        clock's units, or of rows where the spec has no clock, or a
+        at least ``huber_refit_span`` after it, once they hold a row per coefficient.
+        A number of the clock's units, or of rows where the spec has no clock, or a
         duration such as ``"1h"`` on a temporal clock; finite and above 0.
         The span is read off the rows' exact stamps, and a row of weight 0
         is no row of it, so on a clock of one unit a row it holds
@@ -818,6 +817,8 @@ def sgd(
         ("huber_scale", huber_scale, "loss", "huber", loss),
         ("huber_scale_half_life", huber_scale_half_life, "loss", "huber", loss),
         ("huber_refit_rows", huber_refit_rows, "loss", "huber", loss),
+        ("huber_refit_span", huber_refit_span, "loss", "huber", loss),
+        ("max_state_bytes", max_state_bytes, "loss", "huber", loss),
         ("refit_budget", refit_budget, "loss", "huber", loss),
         ("quantile", quantile, "loss", "quantile", loss),
         ("eps", eps, "loss", "epsilon_insensitive", loss),

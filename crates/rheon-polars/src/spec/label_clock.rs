@@ -178,6 +178,12 @@ impl Spec {
             }
             ModelKind::Hmm { .. } => Some("hmm's transitions age"),
             ModelKind::Micro { .. } => Some("micro's small clusters age"),
+            // Review 2026-11-23, SPEC-9: two more kinds whose prediction
+            // reads the clock since the newest learned row.
+            ModelKind::Hawkes { .. } => Some("hawkes' intensity decays"),
+            ModelKind::Bocpd {
+                hazard: Some(_), ..
+            } => Some("bocpd's chance of a break grows"),
             ModelKind::Audit { .. } => {
                 no.refuse(format!(
                     "spec {name:?}: label_clock does not apply to audit, which has no target \

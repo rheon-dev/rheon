@@ -55,6 +55,19 @@ fn io_err(what: &str, path: &Path, e: std::io::Error) -> PolarsError {
 /// directory was found after the output had been published (task 160,
 /// YB7). `what` is as for [`io_err`].
 fn check_parent(what: &str, path: &Path) -> PolarsResult<()> {
+    // A path ending in a separator that is no directory yet names one all
+    // the same: it passed here, and the rename at the end failed after the
+    // run (review 2026-11-23, CLI-5).
+    if !path.is_dir() && crate::atomic::names_a_folder(path) {
+        let e = std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "{} ends in a separator, so it names a directory, not a file. Name a file.",
+                path.display()
+            ),
+        );
+        return Err(io_err(what, path, e));
+    }
     if path.is_dir() {
         let e = std::io::Error::new(
             std::io::ErrorKind::IsADirectory,
@@ -1350,6 +1363,17 @@ impl LastReasons {
             };
             let reasons = field.cast(&DataType::String)?;
             let reasons = reasons.str()?;
+            // A row the spec skipped (a feature not usable: no prediction,
+            // no reason, no `weight_sum`) says nothing of the group's
+            // readiness, and as its last row it erased the reason the row
+            // before it was withheld for (review 2026-11-23, CLI-3). A row of
+            // weight 0 is predicted, with a `weight_sum`, and is noted.
+            let skipped = st
+                .fields_as_series()
+                .into_iter()
+                .find(|f| f.name().starts_with("weight_sum"))
+                .map(|w| w.is_null());
+            let skipped = |i: usize| skipped.as_ref().is_some_and(|m| m.get(i) == Some(true));
             // The key's text as the bank reads it: a zoned Datetime's is its
             // instant in UTC, which a plain cast to String could not write
             // in this build (review P3).
@@ -1367,6 +1391,9 @@ impl LastReasons {
                     Some(k) => k.get(i),
                     None => Some(""),
                 };
+                if skipped(i) {
+                    continue;
+                }
                 if seen.insert(key) {
                     map.insert(
                         GroupKey(key.map(str::to_string)),
@@ -1970,6 +1997,21 @@ fn without_categorical(dtype: &DataType) -> DataType {
     }
 }
 
+/// Whether [`temporal_text`] writes a value of `dtype` as text, itself or
+/// anywhere inside it.
+fn temporal_text_reaches(dtype: &DataType, format: TextFormat) -> bool {
+    let csv = format == TextFormat::Csv;
+    match dtype {
+        DataType::Datetime(_, tz) => csv || tz.is_some(),
+        DataType::Date | DataType::Time => csv,
+        DataType::List(inner) | DataType::Array(inner, _) => temporal_text_reaches(inner, format),
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|f| temporal_text_reaches(f.dtype(), format)),
+        _ => false,
+    }
+}
+
 /// Which text format [`temporal_text`] writes for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TextFormat {
@@ -2040,6 +2082,18 @@ fn temporal_text(s: &Series, format: TextFormat) -> PolarsResult<Option<Series>>
                 .with_outer_validity(ca.rechunk_validity())
                 .into_series()
         }
+        // In NDJSON, a list's or an array's elements as a column's values:
+        // a zoned instant inside one was written in its zone's wall time
+        // where the column beside it is in UTC (review 2026-11-23, CLI-2). A
+        // CSV takes no list of instants (`csv_flat`).
+        DataType::List(inner) if !csv && temporal_text_reaches(inner, format) => s
+            .list()?
+            .apply_to_inner(&|e| Ok(temporal_text(&e, format)?.unwrap_or(e)))?
+            .into_series(),
+        DataType::Array(inner, _) if !csv && temporal_text_reaches(inner, format) => s
+            .array()?
+            .apply_to_inner(&|e| Ok(temporal_text(&e, format)?.unwrap_or(e)))?
+            .into_series(),
         _ => return Ok(None),
     };
     Ok(Some(text.with_name(s.name().clone())))
@@ -2202,6 +2256,43 @@ mod tests {
         let (last, _) = run(close("session", r#", "session": "s""#), one);
         assert_eq!(last.0[0].len(), 1);
         assert!(last.0[0].contains_key(&GroupKey(Some("7".into()))));
+    }
+
+    /// Review 2026-11-23, CLI-3: a group's last row in the run that its
+    /// spec skipped (a feature null: no prediction, no `weight_sum`, no
+    /// reason) erased the reason its last predicted row was withheld for,
+    /// so the closing lines left the group out. A skipped row is not noted.
+    #[test]
+    fn a_skipped_last_row_keeps_the_reason_before_it() {
+        use super::{LastReasons, readiness_lines};
+        use crate::bank::{Bank, GroupKey};
+        let spec: crate::Spec = serde_json::from_str(
+            r#"{"name": "m", "model": {"type": "ewridge"}, "targets": ["y"],
+                "features": ["x"], "half_life": 10.0, "min_weight": 100.0}"#,
+        )
+        .expect("a spec");
+        let n = 12;
+        let x: Vec<Option<f64>> = (0..n)
+            .map(|i| (i + 1 < n).then(|| f64::from(i % 5)))
+            .collect();
+        let y: Vec<f64> = (0..n).map(|i| f64::from(i % 3)).collect();
+        let df = df!("x" => x, "y" => y).expect("a frame");
+        let mut bank = Bank::new(vec![spec]).expect("a bank");
+        let cols = bank.fit_predict(&df).expect("the run");
+        let out = df.hstack(&cols).expect("the output");
+        let mut last = LastReasons::default();
+        last.note(bank.specs(), &out).expect("noted");
+        assert_eq!(
+            last.0[0].get(&GroupKey::ungrouped()),
+            Some(&Some("below_min_weight".to_string()))
+        );
+        let lines = readiness_lines(&bank, &last);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("1 group whose last row was withheld")),
+            "{lines:?}"
+        );
     }
 
     /// `with_columns` against `DataFrame::with_column` called once a

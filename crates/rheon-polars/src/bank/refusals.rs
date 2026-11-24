@@ -443,7 +443,7 @@ pub(crate) fn clock_amount(spec: &Spec, v: f64) -> String {
 /// `glm` a value its family does not take (task 500), as glum refuses one,
 /// where the model would learn nothing from it with nothing said. `-0.0`
 /// is the count 0.
-pub(super) fn outside_support(spec: &Spec, v: &[f64]) -> Option<(usize, String, &'static str)> {
+pub(crate) fn outside_support(spec: &Spec, v: &[f64]) -> Option<(usize, String, &'static str)> {
     match &spec.model {
         ModelKind::Sgd { loss, .. } if loss.as_deref() == Some("poisson") => {
             let j = v.iter().position(|&f| usable(f) && f < 0.0)?;
