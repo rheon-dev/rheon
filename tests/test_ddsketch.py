@@ -42,6 +42,7 @@ import io
 import math
 
 import crick
+import mpmath
 import numpy as np
 import polars as pl
 import pytest
@@ -113,6 +114,9 @@ def _tail_magnitude(xs: np.ndarray, p: float) -> float:
     return float(np.abs(part).mean())
 
 
+mpmath.mp.prec = 200  # the exact values are formed to 60 digits
+
+
 class TestTheBucketsAreThePackages:
     @pytest.mark.parametrize("dist", DISTS)
     @pytest.mark.parametrize("alpha", [ALPHA, 0.01, 0.05])
@@ -128,11 +132,24 @@ class TestTheBucketsAreThePackages:
 
     @pytest.mark.parametrize("alpha", [ALPHA, 0.01, 1e-4])
     def test_each_representative_within_two_ulps(self, alpha: float) -> None:
+        """Ours, a series that is the same bits on every platform, is held
+        to the exact value of the representative `2^(k/mu) 2/(1 + gamma)`,
+        computed by mpmath from the same two doubles the package forms
+        (`mu`, `gamma`) and the two roundings the definition makes: the
+        quotient `k/mu` and the factor `2/(1 + gamma)`. The package is a
+        second opinion against the same exact value: its `math.pow` is the
+        platform's, within 1 ulp of it on macOS and Linux and within 3 on
+        the Windows C runtime (its key -4979 at alpha 1e-4 was 3 ulps from
+        ours there), so its bound is 4."""
         sk = DDSketch(relative_accuracy=alpha)
         keys = list(range(-5_000, 5_001, 7))
         ours = native.ddsketch_values(keys, alpha)
+        m = sk._mapping
+        factor = mpmath.mpf(2.0 / (1 + m.gamma))
         for k, v in zip(keys, ours, strict=True):
-            assert _ulps(v, sk._mapping.value(k)) <= 2, k
+            exact = float(mpmath.power(2, mpmath.mpf(k / m._multiplier)) * factor)
+            assert _ulps(v, exact) <= 2, (k, v, exact)
+            assert _ulps(m.value(k), exact) <= 4, (k, m.value(k), exact)
 
     @pytest.mark.parametrize("dist", DISTS)
     @pytest.mark.parametrize("seed", SEEDS)
