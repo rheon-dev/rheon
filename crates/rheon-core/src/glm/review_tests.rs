@@ -30,7 +30,7 @@ fn buffer(rows: &[(Vec<f64>, f64, f64)]) -> Vec<f64> {
 /// The batch target, `argmin Σ v d(y, μ)/2 + R/2 |b|²`, by Newton with step
 /// halving on full square systems solved by the oracle's LU (no arithmetic
 /// of the model's Cholesky), from `start`, for 200 passes.
-fn batch(c: &GlmCfg, buf: &[f64], start: &[f64]) -> Vec<f64> {
+pub(super) fn batch(c: &GlmCfg, buf: &[f64], start: &[f64]) -> Vec<f64> {
     let fam = c.family();
     let (k, nf) = (c.k_total(), c.n_features);
     let obj = |b: &[f64]| objective(c, &fam, buf, nf, b);

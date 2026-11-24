@@ -546,3 +546,253 @@ fn a_failed_solve_is_counted_and_teaches_nothing() {
         assert_eq!((&m.beta[0], &m.gram[0]), (&b, &g), "{family:?} {p}");
     }
 }
+
+fn normal(s: &mut u64) -> f64 {
+    let (u, v) = (lcg(s), lcg(s));
+    (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
+}
+
+/// A Gamma draw of shape `a` and scale `b` (Marsaglia and Tsang; below 1,
+/// boosted by `U^(1/a)`).
+fn gamma_draw(s: &mut u64, a: f64, b: f64) -> f64 {
+    if a < 1.0 {
+        return gamma_draw(s, a + 1.0, b) * lcg(s).powf(1.0 / a);
+    }
+    let d = a - 1.0 / 3.0;
+    let c = 1.0 / (9.0 * d).sqrt();
+    loop {
+        let z = normal(s);
+        let v = (1.0 + c * z).powi(3);
+        if v > 0.0 && lcg(s).ln() < 0.5 * z * z + d - d * v + d * v.ln() {
+            return d * v * b;
+        }
+    }
+}
+
+/// A Poisson draw by inversion, for the small means here.
+fn poisson_draw(s: &mut u64, mu: f64) -> f64 {
+    let l = (-mu).exp();
+    let (mut k, mut p) = (0.0, 1.0);
+    loop {
+        p *= lcg(s);
+        if p <= l {
+            return k;
+        }
+        k += 1.0;
+    }
+}
+
+/// A Tweedie amount of mean `mu`, power `p` and dispersion 2: the compound
+/// Poisson-Gamma below 2, a Gamma of variance `2 μ^p` above.
+fn tweedie_draw(s: &mut u64, mu: f64, p: f64) -> f64 {
+    let phi = 2.0;
+    if p < 2.0 {
+        let n = poisson_draw(s, mu.powf(2.0 - p) / (phi * (2.0 - p)));
+        if n == 0.0 {
+            return 0.0;
+        }
+        gamma_draw(
+            s,
+            n * (2.0 - p) / (p - 1.0),
+            phi * (p - 1.0) * mu.powf(p - 1.0),
+        )
+    } else {
+        gamma_draw(s, 1.0 / (phi * mu.powf(p - 2.0)), phi * mu.powf(p - 1.0))
+    }
+}
+
+/// A Tweedie stream under the power link: an intercept and two standard
+/// normal features, `η = 0.7 + 0.08 x1 − 0.06 x2` held above 0.2.
+fn tweedie_stream(p: f64, n: usize, seed: u64) -> Vec<(Vec<f64>, f64)> {
+    let mut s = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x0005_817e;
+    (0..n)
+        .map(|_| {
+            loop {
+                let x = vec![normal(&mut s), normal(&mut s)];
+                let eta = 0.7 + 0.08 * x[0] - 0.06 * x[1];
+                if eta > 0.2 {
+                    let y = tweedie_draw(&mut s, eta.powf(1.0 / (1.0 - p)), p);
+                    break (x, y);
+                }
+            }
+        })
+        .collect()
+}
+
+/// The rows through the Fisher step from `start`, no refit and no cap:
+/// the step before the exact one, at this link.
+fn fisher_path(c: &GlmCfg, rows: &[(Vec<f64>, f64)], start: &[f64]) -> Vec<f64> {
+    let mut m = Glm::new(c.clone()).unwrap();
+    m.refit.clear();
+    m.beta[0].copy_from_slice(start);
+    let fam = c.family();
+    m.ensure_work();
+    for (x, y) in rows {
+        let eta = dot_aug(&m.beta[0], x, true);
+        m.work.x[1..].copy_from_slice(x);
+        if let Some(wk) = fam.working(eta, *y) {
+            m.learn(0, wk.w, wk.w * (wk.z - wk.eta));
+        }
+    }
+    m.beta[0].clone()
+}
+
+/// The same rows through the model's own step from `start`.
+fn exact_path(c: &GlmCfg, rows: &[(Vec<f64>, f64)], start: Option<&[f64]>) -> Vec<f64> {
+    let mut m = Glm::new(c.clone()).unwrap();
+    match start {
+        Some(b) => {
+            m.refit.clear();
+            m.beta[0].copy_from_slice(b);
+        }
+        None => m.refit_give_up(),
+    }
+    for (x, y) in rows {
+        m.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    m.beta[0].clone()
+}
+
+/// The batch fit of the rows and its standard errors: `β*` by Newton on
+/// full systems solved by the oracle's LU, the errors from the Fisher
+/// information `Σ W x̃x̃'` at `β*` and the Pearson dispersion.
+fn batch_with_se(c: &GlmCfg, rows: &[(Vec<f64>, f64)]) -> (Vec<f64>, Vec<f64>) {
+    let mut buf = Vec::new();
+    for (x, y) in rows {
+        buf.extend_from_slice(x);
+        buf.push(*y);
+        buf.push(1.0);
+    }
+    let fam = c.family();
+    let flat = GlmCfg {
+        ridge: 1e-300,
+        ..c.clone()
+    };
+    let mut b = vec![
+        fam.start_eta(rows.iter().map(|r| r.1).sum::<f64>() / rows.len() as f64),
+        0.0,
+        0.0,
+    ];
+    b = super::review_tests::batch(&flat, &buf, &b);
+    let k = b.len();
+    let mut info = vec![0.0; k * k];
+    let mut pearson = 0.0;
+    for (x, y) in rows {
+        let xt: Vec<f64> = std::iter::once(1.0).chain(x.iter().copied()).collect();
+        let wk = fam.working(dot_aug(&b, x, true), *y).unwrap();
+        for i in 0..k {
+            for j in 0..k {
+                info[i * k + j] += wk.w * xt[i] * xt[j];
+            }
+        }
+        pearson += (y - wk.mu).powi(2) / fam.variance(wk.mu);
+    }
+    let phi = pearson / (rows.len() - k) as f64;
+    let inv = oracle::inverse(&info);
+    let se = (0..k).map(|i| (phi * inv[i * k + i]).sqrt()).collect();
+    (b, se)
+}
+
+/// Over `seeds` Tweedie streams of 1,000 rows under the power link at
+/// power `p`: the share of seeds on which the Fisher step from the link
+/// at the targets' mean, the exact step from it, and the exact step from
+/// every coefficient 0 (a given-up refit) ran away -- a coefficient not
+/// finite, or more than 20 of the batch fit's standard errors from it --
+/// and the exact steps' median gap, in those errors.
+fn runaway_shares(p: f64, seeds: std::ops::Range<u64>) -> ([usize; 3], [f64; 2]) {
+    let c = canonical_cfg(GlmFamily::Tweedie, GlmLink::Power, p, 2, 10);
+    let fam = c.family();
+    let mut away = [0; 3];
+    let (mut from_mean, mut from_zero) = (Vec::new(), Vec::new());
+    for seed in seeds {
+        let rows = tweedie_stream(p, 1000, seed);
+        let (want, se) = batch_with_se(&c, &rows);
+        let ybar = rows.iter().map(|r| r.1).sum::<f64>() / rows.len() as f64;
+        let start = [fam.start_eta(ybar), 0.0, 0.0];
+        let gap = |b: &[f64]| {
+            if b.iter().all(|v| v.is_finite()) {
+                b.iter()
+                    .zip(&want)
+                    .zip(&se)
+                    .map(|((a, w), s)| (a - w).abs() / s)
+                    .fold(0.0, f64::max)
+            } else {
+                f64::INFINITY
+            }
+        };
+        let gaps = [
+            gap(&fisher_path(&c, &rows, &start)),
+            gap(&exact_path(&c, &rows, Some(&start))),
+            gap(&exact_path(&c, &rows, None)),
+        ];
+        for (n, g) in away.iter_mut().zip(gaps) {
+            *n += usize::from(g > 20.0);
+        }
+        from_mean.push(gaps[1]);
+        from_zero.push(gaps[2]);
+    }
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    (away, [median(&mut from_mean), median(&mut from_zero)])
+}
+
+/// **Without a refit or a cap, the exact step does not run away where the
+/// Fisher step does** (PLAN 581, from Rheon C's oracle work: the Tweedie
+/// recursion with neither ran away on about 1 in 5 of its seeded streams).
+/// Under the power link a refit is required, so a stream learns with
+/// neither only once its refit is given up; here the Fisher step is run
+/// that way by hand (`fisher_path`, `Glm::learn` with the refit cleared)
+/// from the link at the targets' mean, as the refit starts, beside the
+/// exact step from the same start and from every coefficient 0. A seed
+/// runs away where a coefficient is not finite or is more than 20 of the
+/// batch fit's standard errors from it (the batch fit, unpenalized, by
+/// Newton on systems the oracle's LU solves; its errors from the Fisher
+/// information and the Pearson dispersion): far outside the batch fit's
+/// own sampling error, which the exact step's median seed sits within.
+/// Measured 2026-11-24 over 100 seeds a power (`p` 1.2, 1.5, 1.8, 2.5, 3;
+/// dispersion 2; 1,000 rows): the Fisher step ran away on 36%, 45%, 31%,
+/// 8% and 6% of them (126 of 500, a quarter; its median seed 3.5 to 15
+/// errors off), the exact step on none, from either start. The exact
+/// step's median seed was 0.12 to 0.75 errors off from the mean's link and
+/// 0.14 to 1.04 from 0, its worst 0.44, 0.92, 2.1, 14.7 and 10.9. Above 2
+/// its worst seeds stay several errors off without a refit, the first
+/// rows' curvature frozen in `G`, which the refit (the default) replaces:
+/// there the grid of `tests/test_second_opinion_glm_canonical.py` holds `p
+/// = 3` within 0.37. The essentials run 2 seeds a power (the Fisher step
+/// runs away on two of the ten); the extended form 100, where it runs away
+/// at every power. Under the log link the exact step does not apply: there
+/// the Fisher step with neither remedy is what it was, and the refit or
+/// the step cap is the remedy (its default).
+#[test]
+fn without_a_refit_the_tweedie_power_link_does_not_run_away() {
+    tweedie_runaways(0..2);
+}
+
+#[test]
+#[ignore = "extended: 100 seeded streams a power, five powers, a batch fit each"]
+fn without_a_refit_the_tweedie_power_link_does_not_run_away_over_100_seeds() {
+    tweedie_runaways(0..100);
+}
+
+fn tweedie_runaways(seeds: std::ops::Range<u64>) {
+    let mut fisher = 0;
+    for p in [1.2, 1.5, 1.8, 2.5, 3.0] {
+        let ([old, from_mean, from_zero], medians) = runaway_shares(p, seeds.clone());
+        assert_eq!(
+            (from_mean, from_zero),
+            (0, 0),
+            "p {p}: the exact step ran away"
+        );
+        assert!(
+            medians.iter().all(|m| *m <= 1.5),
+            "p {p}: the exact step's median seed {medians:?} errors off"
+        );
+        fisher += old;
+        if seeds.end >= 100 {
+            assert!(old > 0, "p {p}: the Fisher step ran away on no seed");
+        }
+    }
+    assert!(fisher > 0, "the Fisher step ran away on no seed");
+}

@@ -1169,7 +1169,10 @@ model that only the new build has is listed as an addition and passes.
   runs over the Poisson, Gamma, binomial and Tweedie under them, with the
   refit waiting, run and given up, capped and not, decayed and weighted,
   were equal before and after, and `glm/prox_tests.rs` replays their rows
-  through the Fisher step to the bit. The ridge under these links is not
+  through the Fisher step to the bit. With neither a refit nor a cap under
+  the power link, over 100 seeded streams at each of five powers from 1.2
+  to 3, the Fisher step ran more than 20 standard errors from the batch fit
+  on 6% to 45% of them, the exact step on none. The ridge under these links is not
   free of the target's units (`β` is on the scale of `1/μ`), now said in
   the docstring and MODELS.md. Moves: `glm.*` (the Gamma's inverse link
   and the Tweedie's power link only).
