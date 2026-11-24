@@ -169,6 +169,14 @@ exactly one window old counts toward `min_samples`, the fewest rows with a
 value a window must hold, and weighs nothing in a mean, since its interval
 ends at its row.
 
+**Looking ahead, a row holds its value from its own stamp to the next
+row's, so a mean ahead weighs the intervals inside the window.** On a
+regular grid of step `s`, a window of `window_size=s` under `"right"` holds
+only the row on its far edge, whose interval starts there, and its mean is
+null. A window of `3 * s` weighs the next two rows. For the mean of the rows
+themselves, each weighing 1, divide `rp.ewm_sum("x", ...)` by
+`rp.ewm_sum(pl.lit(1.0), ...)` over the same window.
+
 **Without a `window_size`, a window holds every row since its stretch
 began.** A *stretch* is the rows between two clock breaks: it starts at the
 stream's first row, or at the first row after a gap longer than `gap_cap`

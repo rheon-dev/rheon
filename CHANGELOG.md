@@ -1175,6 +1175,77 @@ model that only the new build has is listed as an addition and passes.
   said `WrongTypeError` and `RefusedValueError` were each both a
   `TypeError` and a `ValueError` say the one class each is. The build
   records the features a `target-cpu` psABI level and a `-feature` imply.
+- **The window operators far from their rows, and their state** (review
+  2026-11-23, PLAN 578d). An `ewm_quantile` window's sketch, made when its
+  rows turn over, was anchored at its end row whether that row held a
+  value or not, and its weights are discounts from the anchor: past 1074
+  half-lives from a null end row the rows with values weighed 0 and the
+  quantile was null (WIN-2). It is anchored at the nearest row with a
+  value, and a window looking ahead whose anchor row has left, leaving
+  rows weighing less than `2^-64` of it, is made again from the oldest of
+  them. A number clock whose every step is finite but whose distance from
+  its windows' first row passes the largest double is refused at that row
+  by name; its windows read nothing from there and the state it saved was
+  refused as damaged (WIN-9). A window run's state whose increment lists do
+  not fit its call, or that holds two states for one group, is refused as
+  damaged at its load; a short list panicked at the next row (WIN-11). A
+  quantile's state is checked for the weights a row's removal puts back
+  and for a weight with no anchor (WIN-7). On the suite's long-window and
+  definition streams no output moves by a bit.
+
+- **A window read far from its values weighs them by their own masses**
+  (review 2026-11-23, PLAN 578d, WIN-1 and WIN-2 (3)). The decayed mass of
+  an interval `[a, b]` seen from a row at `T` was the difference of two
+  masses from the row, `M(T − a) − M(T − b)`, which loses a bit of the mass
+  for every half-life between the row and the interval and is 0 from 54,
+  where both round to `h / ln 2`. So a window whose newest values are
+  followed by null rows, or looking ahead one whose values come long after
+  the row, read a mean, a variance and a standard deviation that drifted,
+  then dropped the older values, then went null. Against the definition in
+  80-digit decimal (`tests/reference_windows.py`), the mean of 100 and 200
+  a unit apart, read `T` half-lives later over a window of 200, was 1.2e-14
+  of 200 off at 10 half-lives, 8.7e-9 at 30, 1.5e-5 at 40, 4.0e-4 at 45 and
+  a quarter of it from 54; on a stream with runs of 40 null rows, a window
+  of 120 half-lives read a mean a quarter of the largest value off, and
+  null on 20 rows with a value in the window, and a window of 15 half-lives
+  read 4e-13 off. Under a finite half-life the mass is now the interval's
+  own, discounted from its near end: `λ^(T − b) M(b − a)` looking back and
+  `λ^(a − T) M(b − a)` ahead. With no decay it is the length, as it was. A
+  mean looking ahead is read where its sums are anchored, at the first row
+  in the window with a value: discounted to the row at its close, values
+  more than 1074 half-lives ahead weighed 0 and the mean was null. The two
+  forms against 120-digit decimal, over half-lives from `1e-3` to `1e9`,
+  intervals from `1e-12` to `1e4` half-lives long and from 0 to 1,000
+  half-lives away: the difference is 4 ulps off at one half-life, 2,400 at
+  10, 2.5e6 at 20 and all of the mass from 54; the product is 2 ulps off to
+  one half-life, 20 at 54 and 430 at 1,000 (its exponent `d / h` is rounded
+  once), and in no draw more than 4 ulps further off than the difference.
+  Through `with_windows`, over eight operators, half-lives of 0.5, 4, 50 and
+  none, windows of 7, 60 and 400 clock units and every `closed`: the
+  largest error was 0.31 of the largest value and is 9.5e-15, one cell of
+  the 96 is further off than before (9.0e-16 to 1.8e-15), and 104 rows null
+  on one side alone are 8. The `ewm_mean`, `ewm_var` and `ewm_std` of every
+  window with a finite half-life move, by rounding where the window is read
+  at its values and by the errors above where it is read past them; a sum,
+  a rate, a quantile, an extremum, a window with no decay and an operator
+  with no window do not. Moves: `*.pred_*`, `*.resid_*` and `*.coef` of a
+  model whose target is a window formula with a half-life (the release
+  probe's has none, and none of its fields moves).
+
+- **A running product of decays keeps a normal factor below `2^-512`**
+  (review 2026-11-23, CWIN-1). Taken by a product just above `2^-512`, one
+  exact scaling by `2^512` left it under `2^-512`, and the product forgot
+  everything before it: a window's snapshot then read a factor of 0 for
+  one of `2^-513`, and an emptied window kept its history. Two scalings
+  keep it; a subnormal factor still forgets.
+
+- **A correlation of columns near `1e80` or `1e-85` is read** (review
+  2026-11-23, CWIN-2). `corrchange`'s statistic, its critical value and its
+  window sums formed `√(S_aa S_bb)` as the root of the product, which
+  overflowed (every correlation 0, so 0 against a critical value of 0) or
+  underflowed (NaN). Where the product is not a normal double the two
+  roots are taken apart; elsewhere the bits are as before. Moves:
+  `corrchange.stat`, `corrchange.crit`.
 
 - **`power_variation`'s normalized terms scale by the returns' weight, and
   `n` is Kish's count under a window too** (Fable's W13 review, B1 and B2,
@@ -2269,6 +2340,28 @@ model that only the new build has is listed as an addition and passes.
   416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.
 
 ### Performance
+
+- **A windowed mean costs one more `exp2` a row on an irregular clock**
+  (review 2026-11-23, WIN-1), for a window that keeps its values'
+  proportions however far it is read from them. The oldest held value's
+  mass inside the window was two masses, one of a distance that repeats
+  (the window's length) and is kept between rows; it is a discount and a
+  mass, neither of which repeats unless the clock's steps do. Measured on
+  macOS arm64 (release, load 5, 1,000,000 rows, half-life 5 over a window
+  of 60, best of 12 runs alternated with the build before, and the same
+  alternation of one binary with its copy beside each): a mean on an
+  irregular clock 86.5 to 88.4 ns a row, 1.022 (identical binary 0.993); on
+  a regular clock 1.002 (0.998), no measurable change; with 30% null rows
+  1.027 (0.996); a standard deviation 1.008 (1.004); a mean, a deviation, a
+  sum and a variance of one kernel 1.033 (1.016); a mean looking ahead
+  1.020 (1.001) on an irregular clock and 1.015 (1.014) on a regular one;
+  an operator with no window 0.989 (0.979). Instructions retired, from the
+  difference of runs of one and two million rows: 2,471 to 2,525 a row for
+  the mean on an irregular clock (+54), 2,045 to 2,050 on a regular one,
+  2,759 to 2,810 for the deviation, and 2,640 to 2,623 for the mean looking
+  ahead, which takes one `exp2` fewer at its close. No state grows: the two
+  new memo slots (16 bytes a queue each) are not written to a state. Not
+  timed on x86-64.
 
 - **`huber`'s and `quantile`'s scales from every row cost 0.3% to 2.7%
   a row and `8(3k + 2)` bytes a target under `standardize=True`** (review

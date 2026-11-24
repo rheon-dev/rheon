@@ -64,6 +64,12 @@ fn a_memoed_discount_and_mass_are_the_unmemoed_ones() {
                     k.mass(d).to_bits(),
                     "cut mass of {d} at {half_life}, pass {pass}"
                 );
+                // The cut's discount, on its own slot.
+                assert_eq!(
+                    k.discount_slot(d, &mut memo.disc_cut).to_bits(),
+                    k.discount(d).to_bits(),
+                    "cut discount of {d} at {half_life}, pass {pass}"
+                );
                 // The held mass is the cut's from the lower cut on (a
                 // hundredth of a half-life), and `c (1 - d)` of the
                 // discount from it up.
@@ -86,7 +92,7 @@ fn a_memoed_discount_and_mass_are_the_unmemoed_ones() {
                         "slot mass of {d} at {half_life}, pass {pass}"
                     );
                 }
-                for slot in [&mut fwd.disc_seg, &mut fwd.disc_open] {
+                for slot in [&mut fwd.disc_seg, &mut fwd.disc_open, &mut fwd.disc_mean] {
                     assert_eq!(
                         k.discount_slot(d, slot).to_bits(),
                         k.discount(d).to_bits(),
@@ -117,9 +123,18 @@ fn a_queues_memo_answers_the_distance_it_holds_and_keeps_the_last() {
         mass: (2.0f64.to_bits(), 456.0),
         held: (2.0f64.to_bits(), 321.0),
         mass_far: (2.0f64.to_bits(), 789.0),
+        disc_cut: (2.0f64.to_bits(), 654.0),
         fwd: None,
         cut: None,
     };
+    // A window's cut reads its discount from its own slot, not from the
+    // one the fold across a queue's anchors keeps: an interval `[1, 4]`
+    // seen from 6 is 2 from the row and 3 long.
+    assert_eq!(
+        mass_between_in(&k, &mut memo, 6.0, 1.0, 4.0),
+        654.0 * k.mass(3.0)
+    );
+    assert_eq!(memo.discount, (2.0f64.to_bits(), 123.0));
     assert_eq!(k.discount_in(2.0, &mut memo), 123.0);
     assert_eq!(k.mass_in(2.0, &mut memo), 456.0);
     assert_eq!(k.mass_far_in(2.0, &mut memo), 789.0);

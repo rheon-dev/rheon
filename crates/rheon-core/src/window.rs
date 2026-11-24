@@ -556,6 +556,13 @@ impl Product {
         if m >= Self::DOWN {
             self.0 = m;
             self.1 += 1;
+        } else if lam >= f64::MIN_POSITIVE {
+            // A normal factor below `2⁻⁵¹²` on a product near `2⁻⁵¹²`: scaled
+            // twice, each scaling exact, the product rounded once and at
+            // least `2⁻⁵¹⁰` (review 2026-11-23, CWIN-1: it forgot, so a
+            // window's snapshot read a factor of 0 for one of `2⁻⁵¹³`).
+            self.0 = (self.0 * Self::UP) * (lam * Self::UP);
+            self.1 += 2;
         } else {
             // A factor below about `2⁻¹⁰²⁴` on one row: what came before
             // it is gone, as `factor` over a span holding it underflows.
@@ -2030,6 +2037,120 @@ mod tests {
             q.take(tiny);
             assert_eq!(q.since(before), 0.0, "{tiny:e}");
             assert!(q.0 >= Product::DOWN && q.0 <= 1.0);
+        }
+    }
+
+    /// CWIN-1 (the 2026-11-23 review, PLAN 578d): a normal factor taken by a
+    /// product just above `2⁻⁵¹²` is kept. One scaling by `2⁵¹²` leaves the
+    /// product below `2⁻⁵¹²` when the factor is below `2⁻⁵¹²` too, and the
+    /// product forgot: `since` read 0 where the factor, `2⁻⁵¹³` here, is a
+    /// weight a window subtracts (a snapshot's history then stayed in the
+    /// window). Every value a power of two times 3, so the products are
+    /// exact.
+    #[test]
+    fn a_normal_factor_below_the_scaling_is_kept() {
+        for lam in [
+            2f64.powi(-513),
+            2f64.powi(-700),
+            2f64.powi(-1000),
+            f64::MIN_POSITIVE,
+        ] {
+            let mut p = Product::ONE;
+            p.take(0.75 * 2f64.powi(-511));
+            let then = p;
+            p.take(lam);
+            assert_eq!(p.since(then), lam, "{lam:e}");
+            assert!(p.0 >= Product::DOWN && p.0 <= 1.0, "{p:?}");
+            // And it goes on: a further factor is the product of both.
+            let mid = p;
+            p.take(0.5);
+            assert_eq!(p.since(mid), 0.5);
+            assert_eq!(p.since(then), lam * 0.5, "{lam:e}");
+        }
+    }
+
+    /// CWIN-3 (the 2026-11-23 review, PLAN 578d): the window's mean as
+    /// `(w_now·m − f·w_old·m_old) / w` loses the digits of the level, not of
+    /// the spread: its rounding is `ε (w_now |m| + f w_old |m_old|) / w`. At
+    /// a level of `1e8`, a window holding 1% of the weight reads
+    /// `100000001.30000068` where the expression of these doubles is
+    /// `100000001.30000053`, 1.5e-7 off. The centred `m + r (m − m_old)`,
+    /// `r = f w_old / w`, rounds `r (m − m_old)`, the window's distance from
+    /// the running mean, and then the sum: within `3 ε r |m − m_old|` and one
+    /// ulp of the value, which each case here is held to.
+    ///
+    /// Each `want` is the expression of the case's doubles in exact
+    /// rationals (Python's `fractions`), rounded to the nearest double. The
+    /// uncentred form reads the four cases 1.5e-7, 3.9e-18, 3.6e-4 and
+    /// 1.1e-13 off; the centred reads them 1.0e-14, 5.9e-17, 2.9e-6 and
+    /// 2.1e-15 off. Over 180,000 draws at levels from 0 to `1e12`, spreads
+    /// from `1e-6` to `1e3` and windows holding a half to a millionth of
+    /// the weight, the centred form's largest and median error were at or
+    /// under the uncentred form's in each of the 90 cells, by the factor
+    /// `(w_now / w) |level| / |m − m_old|` where there is a level.
+    ///
+    /// Settled by that, and held all the same: the centred form moves the
+    /// bank fixture's `spread_window.sigma_y` by one ulp on the first row
+    /// after a load, in the current set and in `v71/bank`'s frozen frame,
+    /// and a kept set's frame is not edited (hard rule 5). It waits on the
+    /// user for that, and this test fails (`should_panic`) until it lands.
+    #[test]
+    #[should_panic(expected = "off the window's mean")]
+    fn a_truncated_mean_keeps_the_spreads_digits_at_a_level() {
+        let cases = [
+            (
+                (1.0, 1e8 + 0.31, 1.1, 1e8 + 0.3, 0.9),
+                100_000_001.300_000_53,
+            ),
+            ((3.3, 0.1, 1.7, 0.7, 0.9), -0.418_644_067_796_610_2),
+            (
+                (7.0, 1e12 + 3.0, 6.0, 1e12 + 1.0, 0.999),
+                1_000_000_000_014.916_5,
+            ),
+            ((1.0, 2.5e-3, 1.0, 2.4e-3, 0.999_999), 100.002_399_997_124_7),
+        ];
+        for ((w_now, mean, w_old, mean_old, f), want) in cases {
+            let (w, m) = truncated_scalar(w_now, mean, w_old, mean_old, f).unwrap();
+            assert!(w > 0.0);
+            let r = f * w_old / w;
+            let ulp = f64::EPSILON * f64::abs(want);
+            let bound = 3.0 * f64::EPSILON * r * (mean - mean_old).abs() + ulp;
+            assert!(
+                (m - want).abs() <= bound,
+                "{m} is {:e} off the window's mean {want}, past {bound:e}",
+                m - want
+            );
+            // The slice form is the scalar's, element by element.
+            let (ws, ms) =
+                truncated_mean(w_now, &[mean, mean_old], w_old, &[mean_old, mean], f).unwrap();
+            assert_eq!((ws.to_bits(), ms[0].to_bits()), (w.to_bits(), m.to_bits()));
+            let (_, other) = truncated_scalar(w_now, mean_old, w_old, mean, f).unwrap();
+            assert_eq!(ms[1].to_bits(), other.to_bits());
+        }
+    }
+
+    /// CWIN-3, the centred form's exact cases: with nothing to subtract
+    /// (`f = 0`) the window's mean is the running mean, and a window whose
+    /// mean is the snapshot's reads it, whatever the weights; and a level
+    /// near the largest double does not overflow on the way (`w_now·m` does
+    /// at `1e305` with a weight of `1e5`, and reads NaN). Held with the
+    /// test above, and failing (`should_panic`) until the fix lands.
+    #[test]
+    #[should_panic(expected = "of equal means")]
+    fn a_truncated_mean_of_equal_means_is_that_mean() {
+        for (w_now, w_old, f) in [(3.3, 1.7, 0.9), (1e5, 0.9e5, 0.9), (7.0, 6.0, 0.999)] {
+            for m in [0.1, -3.7e-9, 1e8 + 0.31, 1e305] {
+                let (_, got) = truncated_scalar(w_now, m, w_old, m, f).unwrap();
+                assert!(
+                    got.to_bits() == m.to_bits(),
+                    "the window's mean of equal means {m:e} read {got:e}"
+                );
+                let (w, got) = truncated_scalar(w_now, m, w_old, 0.7, 0.0).unwrap();
+                assert!(
+                    w == w_now && got.to_bits() == m.to_bits(),
+                    "with nothing to subtract the mean {m:e} read {got:e}"
+                );
+            }
         }
     }
 

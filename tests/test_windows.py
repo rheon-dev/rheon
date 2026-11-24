@@ -18,6 +18,7 @@ import math
 import re
 from collections import defaultdict
 from datetime import date, time, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ import polars as pl
 import pytest
 
 from polars_version import INSTALLED, needs_polars
+from reference_windows import loop_exact
 from rheon import polars as rp
 from rheon.polars._formula import FormulaError, from_tree, to_tree
 
@@ -1333,6 +1335,140 @@ def test_a_long_half_life_agrees_with_the_definition_and_tends_to_the_even_one()
     )
     assert far["y"].null_count() == even["y"].null_count() < 20
     assert_close(far["y"].to_list(), even["y"].to_list(), "1e17 against inf", tol=1e-12)
+
+
+def _from_the_definition(
+    t: list[float], x: list[float | None], op: str, **kw: Any
+) -> tuple[float, int]:
+    """How far ``op`` over the rows ``(t, x)`` is from its definition at 80
+    digits (``reference_windows.loop_exact``): the largest distance, as a
+    share of the largest value in ``x`` (of its square for a variance), and
+    the rows compared. A row null in one is null in the other."""
+    df = pl.DataFrame({"t": t, "x": x}, schema={"t": pl.Float64, "x": pl.Float64})
+    fn = getattr(rp, op.removeprefix("r"))
+    back = {"reverse": True} if op.startswith("rewm") else {}
+    got = rp.stream.with_windows(df, y=fn("x", **kw, **back), **CLOCK)["y"].to_list()
+    want = loop_exact(t, x, op, **kw)
+    scale = max(abs(v) for v in x if v is not None)
+    if op.endswith("var"):
+        scale *= scale
+    worst, rows = 0.0, 0
+    for i, (g, w) in enumerate(zip(got, want, strict=True)):
+        assert (g is None) == (w is None), f"{op} {kw} row {i}: {g} against {w}"
+        if g is not None and w is not None:
+            rows += 1
+            worst = max(worst, float(abs(Decimal(g) - w)) / scale)
+    return worst, rows
+
+
+#: Where a window operator and its definition at 80 digits may part, as a
+#: share of the largest value: 30 doubles next to 1 (`2^-52` each). A mass
+#: is a discount times the interval's own mass, each within 2 ulps, and the
+#: discount's exponent `d / h` is rounded once, which can move a discount `n`
+#: half-lives out by `0.7 n` ulps. Measured on arm64 macOS over the cases
+#: below: at most 5.4 on the two-value streams, to 663 half-lives, and 4.8
+#: on the streams with null runs; 17.4 at 1000 half-lives, which is held to
+#: 100.
+_FAR_TOL = 30 * 2.0**-52
+
+
+@pytest.mark.parametrize("closed", ["right", "left", "both", "none"])
+@pytest.mark.parametrize("half_life", [1.0, 0.3, math.inf])
+def test_a_mean_read_far_from_its_values_is_the_definition(closed: str, half_life: float) -> None:
+    """The review of 2026-11-23, WIN-1 and WIN-2 (3). A window that holds
+    two values and is read `T` after them (null rows; looking ahead, a row
+    `T` before them) weighs them by their masses' ratio, however small both
+    are seen from the row. The masses were differences of two masses from
+    the row, which lose `2^(T / h)` ulps: against the definition at 80
+    digits the mean of 100 and 200 was 1.2e-14 of 200 off at 10 half-lives,
+    8.7e-9 at 30, 1.5e-5 at 40, a quarter of it from 54 on (the older value
+    dropped), and null where it was the only one. Each mass is now its
+    interval's own, discounted from its near end; the distances straddle 54
+    half-lives, where the difference reached 0, and at a half-life of 0.3
+    reach 663. With no decay the masses are lengths, as they were."""
+    worst = 0.0
+    for far in (
+        2.0,
+        5.0,
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        45.0,
+        50.0,
+        53.0,
+        54.0,
+        60.0,
+        100.0,
+        150.0,
+        199.0,
+    ):
+        kw = {"half_life": half_life, "window_size": 200.0, "closed": closed}
+        back = ([0.0, 1.3, far + 0.7, far + 1.1], [100.0, 200.0, None, None])
+        e, rows = _from_the_definition(*back, "ewm_mean", **kw)
+        assert rows == 4 - (closed in ("left", "none")), (far, rows)
+        worst = max(worst, e)
+        ahead = ([0.0, far - 0.3, far + 0.9, 300.0, 600.0], [None, 100.0, 200.0, 999.0, 5.0])
+        e, rows = _from_the_definition(*ahead, "rewm_mean", **kw)
+        assert rows >= 2, (far, rows)
+        worst = max(worst, e)
+    assert worst <= _FAR_TOL, worst
+
+
+@pytest.mark.parametrize("closed", ["right", "left", "both", "none"])
+def test_a_mean_a_thousand_half_lives_from_its_values_is_the_definition(closed: str) -> None:
+    """As above at the far end of the normal doubles: masses of `2^-1000`
+    seen from the row, in each direction. Looking ahead the window's sums
+    were discounted to the row at its close, where from 1074 half-lives
+    they are 0 and the mean was null; a mean is a ratio, the same from any
+    time, so it is read at the first row with a value (WIN-2 (3)): the row
+    1102 half-lives before its window's values reads their mean."""
+    kw = {"half_life": 1.0, "window_size": 5000.0, "closed": closed}
+    e, rows = _from_the_definition(
+        [0.0, 1.3, 1000.7, 1001.1], [100.0, 200.0, None, None], "ewm_mean", **kw
+    )
+    assert rows == 4 - (closed in ("left", "none"))
+    assert e <= 100 * 2.0**-52, e
+    for far in (1000.0, 1102.0, 3000.0):
+        t = [0.0, far - 0.3, far + 1.9, 6000.0, 12000.0]
+        e, rows = _from_the_definition(t, [None, 100.0, 200.0, 999.0, 5.0], "rewm_mean", **kw)
+        assert rows >= 2, (far, rows)
+        assert e <= _FAR_TOL, (far, e)
+
+
+def _with_null_runs(n: int, seed: int) -> tuple[list[float], list[float | None]]:
+    """Irregular stamps, a value at most rows, and three runs of 40 rows
+    with none: a window longer than a run reads its last values from
+    across it."""
+    rng = np.random.default_rng(seed)
+    steps = rng.choice([0.25, 0.5, 1.0, 1.0, 2.0, 3.0, 6.0], n) * rng.uniform(0.9, 1.1, n)
+    x = rng.normal(size=n) * 3 + 1
+    x[rng.random(n) < 0.15] = np.nan
+    for start in rng.integers(0, n - 40, 3):
+        x[start : start + 40] = np.nan
+    return np.cumsum(steps).tolist(), [None if math.isnan(v) else float(v) for v in x]
+
+
+@pytest.mark.extended(reason="a grid against 80-digit arithmetic, 0.5 to 2 s a case")
+@pytest.mark.parametrize("closed", ["right", "left", "both", "none"])
+@pytest.mark.parametrize("half_life", [0.5, 4.0, math.inf])
+@pytest.mark.parametrize("op", ["ewm_mean", "rewm_mean", "ewm_var", "ewm_std"])
+def test_windows_across_null_runs_are_the_definition(
+    op: str, half_life: float, closed: str
+) -> None:
+    """WIN-1 on ordinary streams: over a run of null rows a window of 60
+    reads its last values 120 half-lives back at a half-life of 0.5. The
+    mean was a quarter of the largest value off there and null on 20 rows
+    with a value in the window, the variance a tenth of its square off; at
+    15 half-lives (a half-life of 4) it was 4e-13 off."""
+    t, x = _with_null_runs(200, 1)
+    kws: list[dict[str, Any]] = [{"half_life": half_life, "window_size": 60.0, "closed": closed}]
+    if op in ("ewm_var", "ewm_std"):
+        kws = [{**kws[0], "bias": bias} for bias in (False, True)]
+    for kw in kws:
+        e, rows = _from_the_definition(t, x, op, **kw)
+        assert rows > 100, rows
+        assert e <= _FAR_TOL, (kw, e)
 
 
 def test_a_number_clock_decides_an_edge_from_the_two_rows_clocks() -> None:
@@ -3542,3 +3678,57 @@ def test_like_a_weighted_spec_nulls_the_windows_ahead_of_the_rows_it_skips(
         assert lent[name].equals(want), name
     # Evidence the rule acted: windows the spelled-out call gives a value.
     assert sum(own[name][i] is not None for name in ahead for i in skipped) > 100
+
+
+# --------------------------------------------------------------------------
+# The 2026-11-23 review (PLAN 578d)
+
+
+def test_a_mean_ahead_one_step_long_on_a_grid_holds_only_its_far_edge() -> None:
+    """WIN-3, the rule kept and now written down: looking ahead, a row holds
+    its value from its own stamp to the next row's, so on a regular grid a
+    window one step long under ``"right"`` holds only the row on its far
+    edge, whose interval starts there, and the mean is null; three steps
+    long it weighs the two rows whose intervals lie inside. The mean of the
+    rows themselves, each weighing 1, is a ratio of two sums."""
+    df = pl.DataFrame({"t": [float(i) for i in range(6)], "x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]})
+    out = rp.stream.with_windows(
+        df,
+        one=rp.ewm_mean("x", half_life=math.inf, window_size=1.0, reverse=True),
+        three=rp.ewm_mean("x", half_life=math.inf, window_size=3.0, reverse=True),
+        rows=rp.ewm_sum("x", half_life=math.inf, window_size=3.0, reverse=True)
+        / rp.ewm_sum(pl.lit(1.0), half_life=math.inf, window_size=3.0, reverse=True),
+        **CLOCK,
+    )
+    assert out["one"].to_list() == [None] * 6
+    assert out["three"].to_list() == [2.5, 3.5, 4.5, None, None, None]
+    assert out["rows"].to_list()[:3] == [3.0, 4.0, 5.0]
+
+
+@pytest.mark.parametrize("closed", ["right", "both"])
+def test_a_saved_run_returns_the_last_stamps_rows(tmp_path: Any, closed: str) -> None:
+    """WIN-6, not reproduced: under ``save_state`` the windows looking back
+    that wait on the last stamp are read as they stand when the input ends,
+    so a saved run returns every row a run without a state returns, the
+    rows at the last stamp included, to the bit."""
+    df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 2.0], "x": [1.0, 2.0, 3.0, 4.0]})
+    y = {"m": rp.ewm_mean("x", half_life=1.0, window_size=5.0, closed=closed)}
+    saved = rp.stream.with_windows(df, **y, save_state=tmp_path / "w.state", **CLOCK)
+    whole = rp.stream.with_windows(df, **y, **CLOCK)
+    assert saved.height == 4
+    assert saved.equals(whole)
+
+
+def test_a_clock_past_the_largest_double_from_its_windows_start_is_refused() -> None:
+    """WIN-9: every step of ``t`` is finite, but from the first row the third
+    is ``2e308`` on, past the largest double; the windows read nothing from
+    there and the state saved there was refused as damaged. The row is
+    refused by name; from an origin at 0 the same clock runs on."""
+    df = pl.DataFrame({"t": [-1e308, 0.0, 1e308], "x": [10.0, 20.0, 30.0]})
+    y = {"m": rp.ewm_mean("x", half_life=10.0, window_size=50.0)}
+    with pytest.raises(
+        _REFUSAL, match=r'clock column "t" has run from .* at row 2 .*largest float'
+    ):
+        rp.stream.with_windows(df, **y, clock="t", gap_cap=1e308)
+    near = pl.DataFrame({"t": [0.0, 1e308, 1.5e308], "x": [10.0, 20.0, 30.0]})
+    assert rp.stream.with_windows(near, **y, clock="t", gap_cap=1e308).height == 3

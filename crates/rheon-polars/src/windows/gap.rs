@@ -191,21 +191,42 @@ pub(super) fn refuse_backwards(
 }
 
 /// `∫_a^b λ^(T - s) ds` for a backward kernel, `∫_a^b λ^(s - T) ds` for a
-/// forward one: the decayed mass of `[a, b]` seen from `T`, `a <= b`.
+/// forward one: the decayed mass of `[a, b]` seen from `T`, `a <= b`, the
+/// part of it on the far side of `T` none. Under a finite half-life it is
+/// the interval's own mass, `M(b − a)`, discounted from its near end to
+/// `T`: `λ^(T − b) M(b − a)` looking back, `λ^(a − T) M(b − a)` ahead. The
+/// difference `M(T − a) − M(T − b)` it was cancelled: both masses round to
+/// `h / ln 2` from about 54 half-lives on, and the interval weighed 0 where
+/// it was the only one (review 2026-11-23, WIN-1). With no decay the mass
+/// is the length, `M(T − a) − M(T − b)` as before.
 #[inline]
 pub(super) fn mass_between(k: &KernelDef, t: f64, a: f64, b: f64) -> f64 {
     if b <= a {
         return 0.0;
     }
     match k.direction {
-        // ∫_a^b λ^(T - s) ds = M(T - a) - M(T - b)
-        Direction::Backward => k.mass(t - a) - k.mass(t - b),
-        // ∫_a^b λ^(s - T) ds = M(b - T) - M(a - T)
-        Direction::Forward => k.mass(b - t) - k.mass(a - t),
+        Direction::Backward if k.half_life.is_infinite() => k.mass(t - a) - k.mass(t - b),
+        Direction::Forward if k.half_life.is_infinite() => k.mass(b - t) - k.mass(a - t),
+        Direction::Backward => {
+            let b = b.min(t);
+            if b <= a {
+                0.0
+            } else {
+                k.discount(t - b) * k.mass(b - a)
+            }
+        }
+        Direction::Forward => {
+            let a = a.max(t);
+            if b <= a {
+                0.0
+            } else {
+                k.discount(a - t) * k.mass(b - a)
+            }
+        }
     }
 }
 
-/// [`mass_between`] with both masses taken through `memo`: a window's cut
+/// [`mass_between`] with both factors taken through `memo`: a window's cut
 /// reads the same two distances for each operator of a kernel.
 #[inline]
 pub(super) fn mass_between_in(k: &KernelDef, memo: &mut DecayMemo, t: f64, a: f64, b: f64) -> f64 {
@@ -213,8 +234,18 @@ pub(super) fn mass_between_in(k: &KernelDef, memo: &mut DecayMemo, t: f64, a: f6
         return 0.0;
     }
     match k.direction {
-        Direction::Backward => k.mass_cut_in(t - a, memo) - k.mass_far_in(t - b, memo),
-        Direction::Forward => k.mass(b - t) - k.mass(a - t),
+        Direction::Backward if k.half_life.is_infinite() => {
+            k.mass_cut_in(t - a, memo) - k.mass_far_in(t - b, memo)
+        }
+        Direction::Backward => {
+            let b = b.min(t);
+            if b <= a {
+                0.0
+            } else {
+                k.discount_slot(t - b, &mut memo.disc_cut) * k.mass_cut_in(b - a, memo)
+            }
+        }
+        Direction::Forward => mass_between(k, t, a, b),
     }
 }
 
@@ -236,21 +267,34 @@ pub(super) fn mass_between_fill(
 }
 
 /// [`mass_between`] for a forward kernel's close: the open row's interval
-/// `[a, b]` seen from the row `t` being closed, its two masses on slots of
-/// their own beside the one a row's interval to the next row takes
-/// ([`mass_between_in`]), so each repeats where the clock does.
+/// `[a, b]` seen from `from`, the time the mean's sums are anchored at (the
+/// first row in the window with a value, at or before `a`), so the two add
+/// as they are; the mean is their ratio, the same from any time. Its
+/// discount and mass are on slots of their own beside the one a row's
+/// interval to the next row takes ([`mass_between_in`]), so each repeats
+/// where the clock does. With no decay the mass is the length, taken as the
+/// difference of the two distances from the row `t` being closed, as it was.
 #[inline]
 pub(super) fn mass_between_close(
     k: &KernelDef,
     memo: &mut DecayMemo,
     t: f64,
+    from: f64,
     a: f64,
     b: f64,
 ) -> f64 {
     if b <= a {
         return 0.0;
     }
-    k.mass_slot(b - t, &mut memo.mass_far) - k.mass_slot(a - t, &mut memo.fwd().mass_open)
+    if k.half_life.is_infinite() {
+        return k.mass_slot(b - t, &mut memo.mass_far)
+            - k.mass_slot(a - t, &mut memo.fwd().mass_open);
+    }
+    let a = a.max(from);
+    if b <= a {
+        return 0.0;
+    }
+    k.discount_slot(a - from, &mut memo.fwd().disc_mean) * k.mass_slot(b - a, &mut memo.mass_far)
 }
 
 /// [`mass_between`] for a backward kernel's interval ending at `t` -- a

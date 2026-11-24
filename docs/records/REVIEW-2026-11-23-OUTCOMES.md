@@ -327,3 +327,173 @@ and no state layout changed: every fix refuses, names or documents.
 - **UTIL-1**: whether to change the hasher (every hash moves, a word more a
   key on the per-row path) though no map is wrong. Recommendation: leave
   it, as documented.
+
+## Batch d: the window operators and their state (PLAN 578d)
+
+On `review-578d`, cut from `vm/w13-integration` at 51671e2e. "Confirmed"
+means the named test failed on 51671e2e for the review's reason. A test
+marked `should_panic` holds a confirmed defect whose fix moves outputs
+past 5 ulps, or is a choice of surface, and so waits on the user; it
+fails once the fix lands and is then made a plain test. Each such fix is
+built and kept as a patch under `.claude/coord/reviews/R1123/`. Rust test
+paths are under `crates/rheon-polars/src/` unless they name `rheon-core`;
+`far_tests` is `windows/far_tests.rs`. DRIFT-4 is batch e's.
+
+| ID | verdict | test | commit |
+|---|---|---|---|
+| WIN-1 | **confirmed, settled by oracle and fixed in the second round** ("Batch d, continued" below): each interval's mass is `λ^(T − b) M(b − a)` (ahead `λ^(a − T) M(b − a)`) under a finite half-life. `t = [0, 54]`, `x = [42, null]`, a window of 200: the windowed mean and variance were null; `t = [0, 1, 54]`: the mean 199.99999999999997 against 150; ahead, null and 99.99999999999999 against 42 and 150 | `far_tests::a_backward_window_read_far_past_its_rows_keeps_their_proportions`, `::a_forward_window_read_far_ahead_of_its_rows_keeps_their_proportions`; `tests/test_windows.py::test_a_mean_read_far_from_its_values_is_the_definition`, `::test_windows_across_null_runs_are_the_definition` | a55c62e1 (tests), 27098311 |
+| WIN-2 | (1), (2) confirmed, fixed: a quantile's sketch is anchored at the nearest row with a value, and a forward one whose anchor row left, its rest under `2^-64` of it, is made again from the oldest of them. No output of the core's streams or of `window_digest`'s 236 cases moves; the anchor moves a sketch's stored weights where the end row is null, so state bytes move and `window_digest`'s `BITS` with them (2800076a). (3) confirmed (`t = [1198, 2300, 2401]`, `x = [null, 42, null]` ahead: null against 42), **fixed in the second round**: a mean looking ahead is read where its sums are anchored, at the first row in the window with a value, and its open row's mass is seen from there | `far_tests::a_quantile_far_from_its_anchor_is_the_quantile_of_the_rows_moved_close`; `::a_forward_mean_closed_far_from_its_row_is_its_value`; `tests/test_windows.py::test_a_mean_a_thousand_half_lives_from_its_values_is_the_definition` | a55c62e1, 27098311 |
+| HAWKES-7 | **confirmed (`G₀₀` 0.25 against 0.75 after a quiet `1e16`); held to the 60-digit fit in the second round, the built fix is not the whole of it, and it goes back to the user** ("Batch d, continued"). The fix moves the older block's times to the newer block's first row; a quiet stretch after that row is as before. Patch `review-578d-HAWKES-7-rebase.patch` | `rheon-core/src/hawkes/mutant_tests.rs::a_window_of_events_after_a_long_quiet_stretch_keeps_their_gaps`, `::a_quiet_stretch_inside_the_newer_block_keeps_the_later_gaps` (both `should_panic`) | a55c62e1 (test), the commit after 27098311 (the second test) |
+| CWIN-1 | confirmed (`since` 0 for a factor of `2^-513`), fixed: a normal factor is taken with two exact scalings; a subnormal one still forgets | `rheon-core/src/window.rs::tests::a_normal_factor_below_the_scaling_is_kept` | a55c62e1 |
+| WIN-8 | confirmed, both. (1) Unbounded, over a null run: the unbiased variance 32.000000000055934 at row 519 (the pairs' sum `e` subnormal), the mean 33.0 on `[42, 50]` at row 1076 and null at 1077. (2) Under `"left"`: the mean is WIN-1's cancellation, and with WIN-1's fix the variance is still null at 540 (`e` underflows). **A decision for the user**, with WIN-4, 5 and 10 below | `far_tests::a_mean_over_null_rows_holds_however_far_they_run`, `::a_left_closed_window_far_from_its_rows_keeps_their_proportions` (`should_panic`) | a55c62e1 (tests) |
+| WIN-9 | confirmed (`t = [-1e308, 0, 1e308]`, `gap_cap=1e308`: every output null from the third row, and its state refused as damaged), fixed: the row whose distance from its windows' first row passes the largest double is refused by name (the run ends, as at a state cap); `check` holds the policy time finite, and the run's block paths end their block at such a row so that it reaches the refusal. From an origin at 0 the same clock runs on | `far_tests::a_clock_past_the_largest_double_from_its_origin_is_refused`; `windows_frame/load_tests.rs::a_clock_past_the_largest_double_is_refused_through_each_block_path`; `tests/test_windows.py::test_a_clock_past_the_largest_double_from_its_windows_start_is_refused` | a55c62e1, the block paths in the next commit |
+| WIN-10 | confirmed (`x = [1e100, 1e100]` at a half-life of `1e210`, and `[10, 20]` at `1e308`: the mean `inf`). **A decision for the user**, with WIN-4, 5 and 8 | `far_tests::a_half_life_near_the_largest_double_weighs_its_rows_alike` (`should_panic`) | a55c62e1 (test) |
+| CWIN-2 | confirmed (`corrchange`'s window statistic 0 against 0.566 at columns scaled by `1e80`), fixed at the six sites by `pair_corr`: the root of the product wherever the product is a normal double, so those bits do not move, and the two roots apart elsewhere. The existing test that held NaN for a pair whose product underflows now holds the pair's correlation | `rheon-core/src/corrchange_tests.rs::every_kind_is_free_of_its_columns_scale_at_the_ends_of_the_doubles`, `::a_windows_correlations_are_each_pairs_own` | a55c62e1 |
+| WIN-4 | confirmed (a half-life of `1.5e308`: the mean null and the rate 0). **A decision for the user**, with WIN-5, 8 and 10 | the same `should_panic` test | a55c62e1 (test) |
+| WIN-5 | confirmed (a half-life of `1e200`: the unbounded unbiased variance `inf`). **A decision for the user**, with WIN-4, 8 and 10 | the same `should_panic` test | a55c62e1 (test) |
+| WIN-7 | (a), (b) confirmed, fixed: the shape check holds what a pop puts back (finite and at least 0 for a row with a value, NaN for one without) and refuses a weight with no anchor; the existing test of the front now reads it in its own order, newest first. (c) confirmed by reading, **deferred**: an emptied arm keeps its peak buffers until it next fills, as a `Vec` does; letting them go on every turnover allocates again at each one for a value range past four octaves, a speed and memory trade to measure first | `window_quantile.rs::tests::what_a_pop_puts_back_and_a_weights_anchor_are_in_the_shape` | a55c62e1 |
+| WIN-11 | (1) confirmed (an increment list cut short loaded; the next row panicked), fixed: each group's lists are held to the call's width, one state per key and one for the null key. (2) `check` now holds each group's policy time finite; the queues' sums are not checked, since no panic from them is shown and the checksum refuses damage | `windows_frame/load_tests.rs::a_state_whose_increments_do_not_fit_its_call_is_refused`; the core's damage list in `windows.rs` | a55c62e1 |
+| WIN-3 | **the rule kept, now written down** (`docs/WINDOWS.md`, "Which rows a window holds"): looking ahead a row holds its value to the next row, so a window one grid step long under `"right"` holds only its far edge's row and is null; the mean of the rows themselves is a ratio of two sums. Part 2 was the review's own false positive | `tests/test_windows.py::test_a_mean_ahead_one_step_long_on_a_grid_holds_only_its_far_edge` | a55c62e1 |
+| WIN-6 | **not reproduced**: under `save_state` the backward windows waiting on the last stamp are read as they stand at the input's end (`w.settle()`), so a saved run returns the rows a run without a state returns, to the bit, and `WINDOWS.md` and the docstring say so | `tests/test_windows.py::test_a_saved_run_returns_the_last_stamps_rows` | a55c62e1 |
+| CWIN-3 | **confirmed (at a level of `1e8`, a window holding 1% of the weight reads 1.5e-7 off the exact value; the centred form 1e-14); settled by exact rationals in the second round, and held on the `v71` set's frozen frame** ("Batch d, continued"). Patch `review-578d-CWIN-3-centred-v2.patch` | `rheon-core/src/window.rs::tests::a_truncated_mean_keeps_the_spreads_digits_at_a_level`, `::a_truncated_mean_of_equal_means_is_that_mean` (both `should_panic`) | a55c62e1 (test), the commit after 27098311 (the cases and the second test) |
+| DRIFT-4 | batch e's (5cac6698) | -- | -- |
+
+## Batch d, continued (PLAN 578d, second round): the held fixes, settled by oracle
+
+On `review-578d`, from c8ddeb66 (27098311 and the commit after it). The user's rule for a fix that moves
+outputs past 5 ulps: establish the right answer first, by a third-party
+oracle, an exact or high-precision recursion, a simulation or a limit
+case; a fix the evidence settles proceeds with that evidence in its tests
+and a `Moves:` entry, and only what stays open goes back. Each oracle here
+is written from the definition in `decimal` or `fractions`, on the
+operands' own doubles, so it has no rounding to share with the code.
+
+| ID | the oracle | before | after | outcome |
+|---|---|---|---|---|
+| WIN-1 | The two forms of `mass_between` against 120-digit decimal, 32,640 draws: half-lives `1e-3` to `1e9`, intervals `1e-12` to `1e4` half-lives long, 0 to 1,000 half-lives from the row. Then `with_windows` against the definition at 80 digits (`tests/reference_windows.py`): two values read `T` half-lives on, each `closed`, both directions; and streams with runs of 40 null rows, eight operators, half-lives 0.5, 4, 50 and none, windows of 7, 60 and 400 | The difference: 4 ulps at one half-life, 2,400 at 10, 2.5e6 at 20, 1.9e9 at 30, 2.3e12 at 40, all of the mass from 54. The mean of 100 and 200: 1.2e-14 of 200 off at 10 half-lives, 8.7e-9 at 30, 1.5e-5 at 40, 4.0e-4 at 45, 0.25 from 54. Null-run streams: 0.25 (mean), 0.098 (variance), 0.31 (deviation) at 120 half-lives, 4e-13 at 15, 5e-6 at 100; 104 rows null on one side alone | The product: 2 ulps to one half-life, 5 at 10, 20 at 54, 90 at 200, 430 at 1,000, and in no draw more than 4 ulps further off than the difference. The mean of 100 and 200: at most 5.4 ulps of the largest value to 663 half-lives, 17.4 at 1,000. Null-run streams: at most 9.5e-15; one cell of 96 further off than before (9.0e-16 to 1.8e-15); 8 rows null on one side alone, all a variance at 800 half-lives (WIN-8's) | **applied**. 179 of `window_digest`'s 236 cases move (every case with a window but five refused at a step back; none without one), its null masks do not; the current `with_windows`, `with_windows_int`, `bank_formula` and `checkpoint` fixtures are regenerated, and every kept set goes on and converts as before. The release probe's fields do not move (its formula target has no decay) |
+| WIN-2 (3) | The same 80-digit definition, a row 1,000, 1,102 and 3,000 half-lives before its window's two values, each `closed` | null (the sums discounted to the row are 0 from 1,074 half-lives) | 0.13 ulps of the largest value | **applied** with WIN-1: a ratio is read where its sums are anchored. With no decay the mass is taken as it was |
+| HAWKES-7 | The windowed least-squares fit from its definition at 60 digits (`G = ∫ φ φᵀ`, `b = Σ m φ(t−)` over the window's events alone, solved by elimination), against the bank's `coef` on tick's simulated streams: one node and one decay, two nodes and two decays; `window_events` 3 to 150, clock windows of 3 to 80; quiet stretches of `1e3` to `1e18` on a number clock and on an integer clock, whose stamps stay exact. The oracle agrees with the build to 1e-15 at the median where the Gram is well conditioned (tick's own minimiser is the suite's second opinion there) | Ordinary streams, the rows where the 60-digit fit exists: median 3.7e-16 to 4.5e-14, worst 2.6e-6 (`window_events=3`, two nodes), 1.5e-7 (5), 1.0e-10 (8). After a quiet stretch on an integer clock, `window_events=8`: 1.6e-2 of the largest coefficient off at `1e16`, 2.5 times it at `1e18` (0.81 for two nodes) | With the built fix: the same medians and the same worst errors on ordinary streams, the fits moved by at most 1.2e-8 (3), 4.6e-10 (5), 1.7e-12 (8) and neither build the nearer (94 rows against 97, 173 against 165, 172 against 157). **After a quiet stretch: 1.6e-2 and 2.5, as before** | **not applied; open** (below) |
+| CWIN-3 | `truncated_scalar`'s two forms against exact rationals (`fractions`), 180,000 draws in 90 cells: levels 0 to `1e12` and `-1e8`, spreads `1e-6` to `1e3`, windows holding a half to a millionth of the weight. Both forms are plain IEEE arithmetic, so Python's doubles are Rust's | The uncentred form: its error grows as `ε (w_now / w) · level`. At a level of `1e8` and a spread of 1: 3.2e-8 of the spread with half the weight in the window, 2.1e-6 with 1%, 1.9e-2 with a millionth; at `1e12`, 2.1e2 spreads with a millionth; `w_now·m` overflows at `m = 1e305` and reads NaN | The centred form: half an ulp of the level in those cells (7.4e-9 of the spread at `1e8`). Its largest and median error are at or under the uncentred form's in each of the 90 cells; within `3 ε r abs(m − m_old)` and one ulp of the value on every draw; exact where the two means are equal or nothing is subtracted | **settled, not applied; held on rule 5** (below) |
+
+### WIN-1 and WIN-2 (3): what was built
+
+- `windows/gap.rs`: `mass_between`, `mass_between_in` and
+  `mass_between_close` take the product under a finite half-life and the
+  difference with none; `mass_between_fill` and `mass_held_to` already
+  read an interval ending at the row. `windows.rs`'s close reads a mean's
+  sums unscaled and its open row's mass from their anchor.
+- Two memo slots, neither written to a state: `disc_cut`, the cut's
+  discount, which shared `discount` with the fold across a queue's anchors
+  and, with several operators in a kernel, missed on every ask of either
+  (a mean, a deviation, a sum and a variance of one kernel ran 1.076 times
+  the build before with one slot, 1.033 with two); and `disc_mean`, the
+  discount of a mean's open row to its anchor.
+- The Rust brute force's mass (`mass_bf`) was the same difference, and is
+  now the integral itself by five-point Gauss-Legendre quadrature on panels
+  of at most half a half-life, every term above 0. The Python definition
+  at 80 digits is new (`tests/reference_windows.py`).
+- Speed, arm64 only (release, load 5, an ABBA of 12 runs a build with the
+  identical binary's beside it): a windowed mean on an irregular clock
+  1.022 (identical binary 0.993), on a regular one 1.002 (0.998), with 30%
+  nulls 1.027 (0.996); a deviation 1.008 (1.004); four operators of a
+  kernel 1.033 (1.016); a mean ahead 1.020 (1.001) and 1.015 (1.014); no
+  window 0.989 (0.979). Instructions retired: +54 a row for the mean on an
+  irregular clock (2,471 to 2,525), +6 on a regular one, +51 for the
+  deviation, −16 for the mean ahead. `instructions.window_ewm_mean_w10k`
+  is raised from 2,172,254 to 2,226,254 on that count, **arm64's, not
+  CI's**: its first count on the change is the one to hold. Not timed on
+  x86-64, which the workflow asks of a change to a per-row path before it
+  merges.
+
+### What waits on the user
+
+- **HAWKES-7: the built fix is half of it, and its fixture breaks a kept
+  set.** Three things the 60-digit fit showed.
+  1. *The 0.36 move is between two answers that do not exist.* The largest
+     moves (0.27 at `window_events=5`, 0.046 at 3, 0.055 under a clock
+     window of 10 after a quiet stretch) are all on rows whose Gram is
+     singular at 60 digits: a node whose only event in the window is the
+     reading row's own, so its excitation is 0 over the whole observation
+     and its kernels' coefficients are not identified. Both builds report
+     a fit there (rounding dust left by the window's subtractions, which
+     the scaling to a unit diagonal hides from the pivot test), and the fix
+     moves one dust to another. Where the 60-digit fit exists the two
+     builds are equally near it. So the move is neither toward the truth
+     nor away from it, and the fix is harmless to ordinary fits.
+  2. *The fix covers one of the defect's two paths.* It moves the block's
+     start to the newer block's first row. A quiet stretch after that row
+     still puts `1e16 + dt` in the later rows' times, and their gaps still
+     round away when the block turns over:
+     `a_quiet_stretch_inside_the_newer_block_keeps_the_later_gaps` fails
+     with the fix and without it, and through the bank the errors above
+     (1.6e-2 at `1e16`, 2.5 at `1e18`) are the same in both builds. The
+     whole fix keeps each newer row's gap to the row before it, and the
+     clock since the newest row beside the clock since the block's start:
+     one more double in the window's state (8 bytes a group, none a row),
+     and a row's `time` read as a gap while its block is the newer.
+  3. *Rule 5.* With the fix, `hawkes_window` regenerates and
+     `v71/hawkes_window` no longer converts to its bytes (the kept state
+     loads and goes on to the bit, but in the old block start, which is as
+     valid a state as the new one and another set of bytes). The whole fix
+     changes the same field's meaning, so either a load rebases a kept
+     state (exact where the stamps' sums are, as the fixture's are) or the
+     kept set is compared as `bank`'s windowed kinds are, an exception of
+     the user's.
+  Options: (a) the whole fix, with the new field and a rebase at load,
+  moving ordinary windowed fits once, by the rounding measured above
+  (1.2e-8 at three events, 1.7e-12 at eight, 1.1e-13 at twelve); (b)
+  the built fix now and the rest later, moving them twice; (c) neither,
+  and a quiet stretch so long that a gap after it is under its rounding
+  is documented as losing that gap. The recommendation is (a), as a
+  task of its own.
+  *A finding of its own, not the review's:* `hawkes` reports a fit for a
+  window in which a node has no excitation (above). Over the simulated
+  streams: 18 of 158 such rows under a clock window of 3 with one node, 3
+  of 18 under 10, 2 of 264 at `window_events=5` and 1 to 3 of 797 at 3 with
+  two nodes; the tiny case written by hand (the earlier events dropped
+  exactly) is withheld as it should be, so it is the subtraction's dust
+  that passes. The guard is the condition itself: a diagonal of `G` that
+  is rounding against its own terms (`β b + β² Q` against `R²`) is 0, and
+  the fit is withheld as not identified. No test is committed for it;
+  `hawkes_all.py`'s method (every row against the 60-digit Gram) is the
+  one to write it from.
+- **CWIN-3: settled, and held on `v71/bank`'s frozen frame.** The centred
+  form is the more accurate everywhere it was measured and exact where the
+  uncentred form rounds. It moves `spread_window.sigma_y` by one ulp on
+  the first row after a load (0.06739974994500428 to …426) in the current
+  `bank` fixture, which regenerates, and in `v71/bank`'s frame, which a
+  kept set holds to the bit on that row (hard rule 5: "its first output
+  row is the old build's to the bit"). No core fixture moves. The kept
+  frame is not edited here; landing the fix takes the user's word that
+  `v71/bank`'s windowed spread is compared as the rows after its first are
+  (the golden tolerance), an exception of the user's to count.
+- **WIN-4, WIN-5, WIN-8, WIN-10: masses and their squares at the ends of
+  the doubles, measured.** Nothing is built. Today a held row is 40 bytes
+  and 64 an operator (112 an operator in a kernel with a variance); a
+  kernel with no window keeps 24 or 48 bytes an operator a group. The
+  options, each with its cost on arm64 (a merge is what a row's push does;
+  the unbounded mean's row is 18.5 ns, a windowed mean's 86.5, a windowed
+  deviation's 105.5) and what it moves (emulated in doubles against the
+  exact recursion at 60 digits, 12,000 rows at a half-life of 5 with 15%
+  nulls, and 6,000 at a half-life of 2,000):
+
+  | option | fixes | bytes | time | outputs moved |
+  |---|---|---|---|---|
+  | (a) refuse a half-life from `2^511` | WIN-4, WIN-10, and WIN-5 where the half-life is the cause | 0 | 0 | none; a call legal today is refused (the suite's own mass test at `1e300`) |
+  | (b) a power of two a kernel as the masses' unit, 1 below `2^511` | the same, with no refusal: all nine half-lives of `far_tests`' case, `1e150` to the largest double | 0 in the state (a constant of the kernel) | none measurable: a mass 5.15 ns with the unit multiplied in against 5.12 to 5.15 | none below `2^511`, state bytes included. Alone, at the largest half-lives, a variance over steps under `1e-9` is null (the pairs' products underflow) and the mass's argument `t ln 2 / h` is subnormal from steps of `1e-12` (a mean 1e-4 off): the mass needs its length where that argument is under `2^-53` |
+  | (c) for the mean: the mean itself in place of `m x` | WIN-10 to `1.2e308`, not WIN-4 above it (`h / ln 2` overflows either way) | 0 | **+3.7 ns a merge** (4.3 to 8.0, a division; control ±0.02): a fifth of the unbounded mean's row, 4% to 9% of a windowed one's | 80% of means, a median of 1 ulp and at most 8 where the mean is not near 0 (a median of 34 and at most 102 at a half-life of 2,000), each nearer the exact recursion (0.3 to 0.6 ulps at the median against 0.8) |
+  | (c) for the variance: `r = 2e / w²` in place of the pairs' sum, and the variance `M2 / w` in place of `M2` | WIN-5 whatever the cause (no square is kept), and the variance's part of WIN-8's drift while the mass is above 0 | 0 (the same six doubles, two with another meaning: a windows state version and a loader) | +0.3 to +0.5 ns a merge for `r` alone, +0.1 to +0.3 with the variance too (8.7 to 9.1; control −0.03 to +0.14): under half a percent of a windowed deviation's row | 80% of unbiased variances, a median of 1 to 2 ulps and at most 15 (21 and 111 at a half-life of 2,000), as near the exact recursion or nearer (0.71 to 0.92 ulps at the median against 0.88 to 0.90). Past 5 ulps at the tail, so the user's |
+  | (d) read a mean and a variance where their sums are anchored, and let a row that adds nothing move no anchor (WIN-2 (3)'s reading, looking back) | WIN-8, both parts, for a kernel whose operators read one column; with an anchor an operator, for any | 0, or 8 an operator a row for the anchors | not measured in the engine; it removes the read's discount | half of means, a median of 0 to 1 ulp and at most 7 where the mean is not near 0, as near the exact recursion |
+
+  The recommendation: **(b)**, with the length for a subnormal argument,
+  for WIN-4 and WIN-10: it is free and moves nothing. **(c) for the
+  variance only**, both `r` and the variance, for WIN-5: under half a
+  percent, no bytes, and with (b) every half-life of the test passes
+  (emulated: today fails from `1e154`, (b) alone passes all nine, (c)
+  alone fails above `1.2e308`). **Not (c) for the mean**: a division a
+  merge for an overflow (b) already ends. **(d) for WIN-8, as a batch of
+  its own**, shared anchors first: it is the only one of the four that
+  touches the drift, since a unit and a ratio both still discount the mass
+  to 0 over 1,074 half-lives of null rows. (c) and (d) move outputs past 5
+  ulps at their tails and (c) changes what two of the state's doubles
+  mean, so both are the user's; (b) needs no decision.

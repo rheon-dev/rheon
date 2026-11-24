@@ -376,6 +376,9 @@ impl Sketch {
             && ok(self.zero)
             && ok(self.total)
             && !self.anchor.is_infinite()
+            // A weight is seen from its anchor: a total with none was
+            // counted and never read (WIN-7). A total of 0 may keep one.
+            && !(self.total > 0.0 && self.anchor.is_nan())
             && self.scale > 0.0
             && self.scale <= 1.0
     }
@@ -462,9 +465,15 @@ impl QSide {
         self.front.clear();
         self.prev.clear();
         if let (Some(&first), Some(&last)) = (tau.first(), tau.last()) {
+            // Anchored at the row nearest the window's that holds a value:
+            // the newest looking back, the oldest looking ahead. A null row
+            // there anchored the weights more than 1074 half-lives from the
+            // rows that hold one, and they underflowed to 0 (review
+            // 2026-11-23, WIN-2). With no value the anchor is the end row.
+            let valued = |i: &usize| !x(*i).is_nan();
             let anchor = match k.direction {
-                Direction::Backward => last,
-                Direction::Forward => first,
+                Direction::Backward => (0..tau.len()).rev().find(valued).map_or(last, |i| tau[i]),
+                Direction::Forward => (0..tau.len()).find(valued).map_or(first, |i| tau[i]),
             };
             self.front.anchor = anchor;
             for i in (0..tau.len()).rev() {
@@ -483,6 +492,23 @@ impl QSide {
             }
         }
         self.back.clear();
+    }
+
+    /// Whether a forward `front`, its anchor row gone, holds less than
+    /// `2^-64` of the anchor's weight: its rows are seen from a time so far
+    /// back that their weights lose their digits, and past 1074 half-lives
+    /// all of them (review 2026-11-23, WIN-2). [`QSide::rebuild_front`]
+    /// anchors them afresh.
+    pub(crate) fn faded(&self) -> bool {
+        !self.prev.is_empty() && self.front.total < RENORM
+    }
+
+    /// `front` made again from its rows, `tau` and `x(i)` oldest first as
+    /// [`QSide::turn_over`] takes them, `back` kept as it is.
+    pub(crate) fn rebuild_front(&mut self, k: &KernelDef, tau: &[f64], x: impl Fn(usize) -> f64) {
+        let back = std::mem::take(&mut self.back);
+        self.turn_over(k, tau, x);
+        self.back = back;
     }
 
     /// `front`'s oldest row, at index `top` with value `x`, leaves: its
@@ -516,11 +542,17 @@ impl QSide {
             && self.holds(front)
     }
 
-    /// Whether `front` holds the bucket of each of `values`.
-    fn holds(&self, mut values: impl Iterator<Item = f64>) -> bool {
-        values.all(|x| {
-            x.is_nan()
-                || match Key::of(x) {
+    /// Whether `front` holds the bucket of each of `values`, and what a pop
+    /// puts back for each: three stored weights, finite and at least 0, for
+    /// a row with a value, and NaN for one without (review 2026-11-23,
+    /// WIN-7: a damaged weight there was restored into the sketch).
+    fn holds(&self, values: impl Iterator<Item = f64>) -> bool {
+        values.zip(self.prev.as_chunks::<3>().0).all(|(x, p)| {
+            if x.is_nan() {
+                return p.iter().all(|v| v.is_nan());
+            }
+            p.iter().all(|v| v.is_finite() && *v >= 0.0)
+                && match Key::of(x) {
                     Key::Zero => true,
                     Key::Neg(k) => self.front.neg.covers(k),
                     Key::Pos(k) => self.front.pos.covers(k),
@@ -820,11 +852,13 @@ mod tests {
         let x = [0.5, -3.0, f64::NAN, 1e-320];
         let mut side = QSide::default();
         side.turn_over(&k, &tau, |i| x[i]);
+        // `front` is newest first, its row `j` the `tau` row `3 − j`.
+        let x = [1e-320, f64::NAN, -3.0, 0.5];
         assert!(side.has_shape(x.iter().copied()));
         assert!(side.holds(x.iter().copied()));
         for far in [1e300, -1e300, 4.0e-300] {
             assert!(
-                !side.holds([0.5, far, f64::NAN, 1e-320].into_iter()),
+                !side.holds([1e-320, f64::NAN, far, 0.5].into_iter()),
                 "{far:e}"
             );
         }
@@ -1148,5 +1182,50 @@ mod tests {
         let mut bad = q;
         bad.back.total = f64::NAN;
         assert!(!bad.has_shape(std::iter::empty()));
+    }
+
+    /// WIN-7 (the 2026-11-23 review, PLAN 578d): what a pop puts back is a
+    /// stored weight, finite and at least 0, for a row with a value and NaN
+    /// for one without; and a sketch with weight has an anchor. A damaged
+    /// `prev`, or a weight with no anchor, passed the shape check: the pop
+    /// then restored a NaN or a negative weight, and a sketch with a total
+    /// and no anchor read no weight while it counted it. Every state a run
+    /// makes passes: a turn-over over nulls only, which keeps its anchor
+    /// with a total of 0, and a pop to an empty `front`.
+    #[test]
+    fn what_a_pop_puts_back_and_a_weights_anchor_are_in_the_shape() {
+        let k = kernel(Direction::Backward, 2.0, Some(6.0));
+        let tau = [0.0, 1.0, 2.0];
+        let x = [0.5, f64::NAN, 3.0];
+        let mut side = QSide::default();
+        side.turn_over(&k, &tau, |i| x[i]);
+        // `front` is newest first: its row `j` is the `tau` row `2 − j`.
+        let x = [3.0, f64::NAN, 0.5];
+        assert!(side.has_shape(x.iter().copied()));
+        for (at, v) in [
+            (0, f64::NAN),
+            (1, -1.0),
+            (2, f64::INFINITY),
+            (3, 0.0),
+            (6, f64::NAN),
+        ] {
+            let mut bad = side.clone();
+            bad.prev[at] = v;
+            // Row 1 holds no value: its three are NaN, and 0 there is damage.
+            assert!(!bad.has_shape(x.iter().copied()), "prev[{at}] = {v}");
+        }
+        let mut bad = side.clone();
+        bad.front.anchor = f64::NAN;
+        assert!(!bad.has_shape(x.iter().copied()), "a total with no anchor");
+        // Popped to empty, oldest first as a window lets its rows go.
+        let mut empty = side.clone();
+        for top in (0..tau.len()).rev() {
+            empty.pop(top, x[top]);
+        }
+        assert!(empty.has_shape(std::iter::empty()));
+        let mut nulls = QSide::default();
+        nulls.turn_over(&k, &tau, |_| f64::NAN);
+        assert!(nulls.has_shape([f64::NAN; 3].into_iter()));
+        assert!(nulls.front.total == 0.0 && !nulls.front.anchor.is_nan());
     }
 }

@@ -37,6 +37,8 @@ use crate::wrong_type::{Refused, wrong_type};
 
 /// The plan's definitions of the operators that are not window operators.
 mod defs;
+#[cfg(test)]
+mod load_tests;
 use defs::{list_keys, moments_def, neighbor_list, profile_def};
 
 /// The spec behind `like=`: its name, for messages, and the columns whose
@@ -2954,6 +2956,19 @@ impl WindowsRun {
                 row(seq),
                 rows * row_bytes
             ),
+            Refusal::Span { seq, origin, now } => {
+                let column = self.k.config.clock.as_deref().unwrap_or("<row count>");
+                polars_err!(ComputeError:
+                    "{WHO}: clock column {column:?} has run from {} to {} at row {} (counting \
+                     from 0) since its windows last started over, a distance past the largest \
+                     float, which cannot be a number of clock units. Shift or rescale the clock \
+                     column, or set gap_cap or a session so that the windows start over within \
+                     a finite distance.",
+                    crate::spec::num_label(origin.seconds()),
+                    crate::spec::num_label(now.seconds()),
+                    row(seq)
+                )
+            }
         }
     }
 
@@ -3468,12 +3483,24 @@ impl WindowsRun {
             }
             run.resume_held = Some(want);
         }
+        // Each group's increment state holds one previous value per
+        // increment in each of its forms, and one state per key: a list cut
+        // short was indexed past its end at the next row, and a second state
+        // for a key hid the first (review 2026-11-23, WIN-11).
+        let width = run.k.increments.len();
         for (i, st) in file.increments.into_iter().enumerate() {
-            match &st.key {
-                Some(k) => {
-                    run.incr_index.insert(k.clone(), i);
-                }
-                None => run.incr_null = Some(i),
+            let fits =
+                st.prev.len() == width && st.prev_ns.len() == width && st.prev_int.len() == width;
+            let first = match &st.key {
+                Some(k) => run.incr_index.insert(k.clone(), i).is_none(),
+                None => run.incr_null.replace(i).is_none(),
+            };
+            if !(fits && first) {
+                return Err(format!(
+                    "{WHO}: the state is damaged. Load an undamaged copy of the state file, or \
+                     leave out load_state to start over."
+                )
+                .into());
             }
             run.incr_state.push(st);
         }

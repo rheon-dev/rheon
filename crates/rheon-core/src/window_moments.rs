@@ -250,12 +250,33 @@ impl Layout {
     pub(crate) fn corr(self, s: &[f64], a: usize, b: usize) -> f64 {
         let m = &s[self.at_m()..];
         let (aa, bb) = (m[a * (a + 1) / 2 + a], m[b * (b + 1) / 2 + b]);
-        let den = (aa * bb).sqrt();
-        if den > 0.0 {
-            m[a * (a + 1) / 2 + b] / den
-        } else {
-            f64::NAN
-        }
+        pair_corr(m[a * (a + 1) / 2 + b], aa, bb)
+    }
+}
+
+/// `ab / √(aa bb)`, the correlation of a cross sum over two columns' sums of
+/// squared deviations; NaN where either is not above 0. The root of the
+/// product, as before, wherever the product is a normal double; else the
+/// two roots apart, since the product overflows past `1.8e308` (columns
+/// near `1e80`, every correlation 0) or underflows (near `1e-85`, every one
+/// NaN) where neither root does (review 2026-11-23, CWIN-2).
+#[inline]
+pub(crate) fn pair_corr(ab: f64, aa: f64, bb: f64) -> f64 {
+    let p = aa * bb;
+    if p.is_normal() && p > 0.0 {
+        ab / p.sqrt()
+    } else {
+        pair_corr_apart(ab, aa, bb)
+    }
+}
+
+/// [`pair_corr`] past the product's range, out of line.
+#[inline(never)]
+fn pair_corr_apart(ab: f64, aa: f64, bb: f64) -> f64 {
+    if aa > 0.0 && bb > 0.0 && aa.is_finite() && bb.is_finite() {
+        ab / aa.sqrt() / bb.sqrt()
+    } else {
+        f64::NAN
     }
 }
 
