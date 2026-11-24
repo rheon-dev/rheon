@@ -1163,6 +1163,16 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 let base = read_anew.map_or(tol, |b| tol.max(b));
                 let tol = moved.map_or(base, |b| base.max(b));
                 let got = m.step(row);
+                // A `garch` of before the horizons reported one forecast
+                // (3 slots a target); this build reports its sum beside it
+                // (4), which the old build did not, so the sums are dropped
+                // from every comparison below and the rest goes on to the
+                // bit (`narrowed`).
+                let one_horizon = f.variant == "Garch"
+                    && schema <= 71
+                    && got.pred.len() == want.pred.len() / 3 * 4
+                    && got.pred.len() != want.pred.len();
+                let got = if one_horizon { narrowed(&got) } else { got };
                 if fresh {
                     let what = format!("{what}, row {i} after the save");
                     assert!(agree(got.n_eff, want.n_eff, tol), "{what}: weight_sum");
@@ -1212,19 +1222,6 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                         slots.end <= got.pred.len(),
                         "{what}: CONTINUES_WITHIN names slots past the predictions"
                     );
-                }
-                let one_horizon = f.variant == "Garch"
-                    && schema <= 71
-                    && got.pred.len() == want.pred.len() / 3 * 4
-                    && got.pred.len() != want.pred.len();
-                if one_horizon {
-                    same_out_by(
-                        &format!("{what}, row {i} after the save"),
-                        &narrowed(&got),
-                        &want,
-                        |_| tol,
-                    );
-                    continue;
                 }
                 same_out_by(
                     &format!("{what}, row {i} after the save"),
