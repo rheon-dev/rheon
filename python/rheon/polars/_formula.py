@@ -69,6 +69,8 @@ OPERATORS = (
     "cross_quantile",
     "cross_ref",
     "ewm_profile",
+    "stl",
+    "mstl",
 )
 
 #: The cross-group operators: a statistic over every group's row at one
@@ -1216,6 +1218,150 @@ def profile(
             raise WrongTypeError(msg) if wrong else ValueError(msg)
         params["max_state_bytes"] = int(max_state_bytes)
     return operator_column(["ewm_profile", tree, params])
+
+
+def _whole(who: str, key: str, value: Any, least: int) -> int:
+    """A whole number of an ``stl`` or ``mstl`` parameter, at least ``least``."""
+    wrong = isinstance(value, bool) or not isinstance(value, numbers.Integral)
+    if wrong or value < least or value > 2**32 - 1:
+        msg = (
+            f"{who}: {key} must be a whole number of at least {least}, but it is {value!r}. "
+            f"Give {key} as such a number."
+        )
+        raise WrongTypeError(msg) if wrong else ValueError(msg)
+    return int(value)
+
+
+def seasonal_decomposition(
+    input: Any,
+    *,
+    periods: list[int],
+    windows: list[int] | None,
+    iterate: Any,
+    season: Any,
+    component: Any,
+    window: Any,
+    lag: Any,
+    closed: Any,
+    trend: Any,
+    low_pass: Any,
+    seasonal_deg: Any,
+    trend_deg: Any,
+    low_pass_deg: Any,
+    seasonal_jump: Any,
+    trend_jump: Any,
+    low_pass_jump: Any,
+    robust: Any,
+    inner_iter: Any,
+    outer_iter: Any,
+    max_state_bytes: Any,
+    mstl: bool,
+    who: str,
+) -> pl.Expr:
+    """The expression of an ``stl`` or ``mstl`` node, each parameter checked
+    here by name and written with the keys and defaults the native reader
+    writes back, so the two spell its column alike."""
+    tree = _input_tree(who, input)
+    ps = [_whole(who, "periods" if mstl else "period", p, 2) for p in periods]
+    if windows is None:
+        # statsmodels' defaults: 7 for STL, 7 + 4 i for MSTL's i-th shortest.
+        spans = [7] if not mstl else [0] * len(ps)
+        if mstl:
+            for rank, i in enumerate(sorted(range(len(ps)), key=lambda i: ps[i])):
+                spans[i] = 7 + 4 * (rank + 1)
+    else:
+        spans = [_whole(who, "windows" if mstl else "seasonal", w, 3) for w in windows]
+        if len(spans) != len(ps):
+            raise ValueError(
+                f"{who}: windows has {len(spans)} spans for {len(ps)} periods. Give one span a "
+                f"period."
+            )
+    order = sorted(range(len(ps)), key=lambda i: ps[i])
+    seasons = [(ps[i], spans[i]) for i in order]
+    params: dict[str, Any] = {}
+    if mstl:
+        params["periods"] = [p for p, _ in seasons]
+        params["windows"] = [s for _, s in seasons]
+        params["iterate"] = _whole(who, "iterate", iterate, 1)
+    else:
+        params["period"], params["seasonal"] = seasons[0]
+    if trend is not None:
+        params["trend"] = _whole(who, "trend", trend, 3)
+    if low_pass is not None:
+        params["low_pass"] = _whole(who, "low_pass", low_pass, 3)
+    for key, deg in (
+        ("seasonal_deg", seasonal_deg),
+        ("trend_deg", trend_deg),
+        ("low_pass_deg", low_pass_deg),
+    ):
+        if isinstance(deg, bool) or deg not in (0, 1):
+            raise ValueError(
+                f"{who}: {key} must be 0 or 1, but it is {deg!r}. Give 0 for a local mean or 1 "
+                f"for a local line."
+            )
+        params[key] = int(deg)
+    for key, jump in (
+        ("seasonal_jump", seasonal_jump),
+        ("trend_jump", trend_jump),
+        ("low_pass_jump", low_pass_jump),
+    ):
+        params[key] = _whole(who, key, jump, 1)
+    if not isinstance(robust, bool):
+        raise TypeError(
+            f"{who}: robust must be True or False, but it is of type {type(robust).__name__}. "
+            f"Set robust to True or False."
+        )
+    params["robust"] = robust
+    for key, value, least in (
+        ("inner_iter", inner_iter, 1),
+        ("outer_iter", outer_iter, 0),
+        ("window", window, 1),
+        ("lag", lag, 0),
+    ):
+        if value is not None:
+            params[key] = _whole(who, key, value, least)
+    if closed not in ("left", "right"):
+        raise ValueError(
+            f'{who}: closed must be "left" or "right", but it is {closed!r}. Set closed to '
+            f'"left", which reads no row at or after the row\'s own, or "right".'
+        )
+    params["closed"] = closed
+    if component not in ("seasonal", "trend", "resid"):
+        raise ValueError(
+            f'{who}: component must be "seasonal", "trend" or "resid", but it is '
+            f"{component!r}. Set component to one of those words."
+        )
+    params["component"] = component
+    if component == "seasonal" and mstl:
+        if season is None:
+            raise ValueError(
+                f'{who}: component "seasonal" needs season, the period whose seasonal to read. '
+                f"Give season as one of the periods."
+            )
+        if season not in params["periods"]:
+            raise ValueError(
+                f"{who}: season {season!r} is not one of the periods {params['periods']}. Give "
+                f"season as one of them."
+            )
+        params["season"] = int(season)
+    elif season is not None:
+        raise TypeError(
+            f'{who}: season is given, but only mstl\'s component="seasonal" takes it. Leave '
+            f"out season."
+        )
+    if max_state_bytes is not None:
+        wrong = isinstance(max_state_bytes, bool) or not isinstance(
+            max_state_bytes, numbers.Integral
+        )
+        if wrong or not 1 <= max_state_bytes <= PROFILE_STATE_BYTES_CEILING:
+            msg = (
+                f"{who}: max_state_bytes must be a whole number from 1 to "
+                f"{PROFILE_STATE_BYTES_CEILING} (64 MiB), but it is {max_state_bytes!r}. Set it "
+                f"within that range, or leave it out for 262144 (256 KB)."
+            )
+            raise WrongTypeError(msg) if wrong else ValueError(msg)
+        params["max_state_bytes"] = int(max_state_bytes)
+    return operator_column(["mstl" if mstl else "stl", tree, params])
 
 
 def _offset(who: str, value: Any) -> float | str:

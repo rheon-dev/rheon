@@ -243,7 +243,7 @@ import polars as pl
 
 from rheon._errors import RefusedValueError
 from rheon._renamed import renamed_function
-from rheon.polars._formula import moments_operator, operator, profile
+from rheon.polars._formula import moments_operator, operator, profile, seasonal_decomposition
 from rheon.polars._fourier import calendar_fourier, fourier
 
 if TYPE_CHECKING:
@@ -266,8 +266,10 @@ __all__ = [
     "ewm_var",
     "fourier",
     "increment",
+    "mstl",
     "rolling_max",
     "rolling_min",
+    "stl",
 ]
 
 
@@ -2666,4 +2668,298 @@ def ewm_profile(
         min_samples=min_samples,
         bias=bias,
         max_state_bytes=max_state_bytes,
+    )
+
+
+def stl(
+    input: str | pl.Expr,
+    *,
+    period: int,
+    seasonal: int = 7,
+    component: Literal["trend", "seasonal", "resid"] = "trend",
+    window: int | None = None,
+    lag: int | None = None,
+    closed: Literal["left", "right"] = "left",
+    trend: int | None = None,
+    low_pass: int | None = None,
+    seasonal_deg: int = 1,
+    trend_deg: int = 1,
+    low_pass_deg: int = 1,
+    seasonal_jump: int = 1,
+    trend_jump: int = 1,
+    low_pass_jump: int = 1,
+    robust: bool = False,
+    inner_iter: int | None = None,
+    outer_iter: int | None = None,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """A component of STL, the seasonal-trend decomposition by loess, read a few rows late.
+
+    Use it to split a regular series into its trend, its season and the rest,
+    such as an hourly load into its level, its daily shape and its surprise,
+    exactly as statsmodels' ``STL`` splits it. A decomposition revises its
+    last rows as new ones arrive, so each value is read ``lag`` rows back,
+    from a window of the group's last ``W`` learned rows, where the
+    decomposition has stopped moving: the value of row ``t - lag`` arrives on row ``t``.
+
+    On each row, STL of the window ``y`` (Cleveland et al., 1990): five passes
+    of, with ``T = 0`` at first,
+
+    .. code-block:: text
+
+        C = loess of each cycle-subseries of y - T (span seasonal), extended a row each end
+        L = loess (span low_pass) of the moving averages of p, p and 3 rows of C
+        S = C - L,    T = loess (span trend) of y - S
+
+    each value bit-equal to statsmodels' on the same platform. A row is
+    learned when its input is present; a null learns nothing and counts in no
+    lag. A clock break, a session change or a reset empties the group's ring.
+
+    .. rubric:: Parameters
+
+    ``input``
+        The series: a column name, or an element-wise expression of the row.
+        It may hold no other window operator.
+    ``period``
+        The season's length in learned rows, at least 2: 24 for a daily
+        season of hourly rows.
+    ``seasonal``
+        The seasonal smoother's span, odd and at least 3: 7 by default.
+    ``component``
+        ``"trend"`` (the default), ``"seasonal"`` or ``"resid"``, the
+        remainder ``x - S - T``.
+    ``window``
+        ``W``, the learned rows each decomposition reads. ``None`` (the
+        default) is ``2 h + 1``, with ``h = max p (s - 1) / 2`` the seasonal
+        smoother's reach, so the row read sits at the window's center.
+    ``lag``
+        The learned rows back the value is read at. ``None`` (the default)
+        is ``h``, plus 1 under ``closed="left"``.
+    ``closed``
+        ``"left"`` (the default): the window before the row, so the value
+        reads no row at or after the row's own. ``"right"``: the window
+        ending at the row, which reads the row's own value; a column
+        decomposed this way and used to predict itself leaks its target.
+    ``trend``, ``low_pass``
+        The spans of the trend and of the low-pass filter, odd and above the
+        period. ``None`` (the default) is statsmodels' default for each.
+    ``seasonal_deg``, ``trend_deg``, ``low_pass_deg``
+        The degree of each loess, 0 or 1: 1 by default.
+    ``seasonal_jump``, ``trend_jump``, ``low_pass_jump``
+        The rows between the points each loess fits, the rest interpolated:
+        1 by default, every row.
+    ``robust``, ``inner_iter``, ``outer_iter``
+        statsmodels' robust fit, which downweighs outliers, and its passes:
+        by default 5 inner and no outer, or 2 and 15 when robust. A robust
+        fit costs about 7 times a plain one.
+    ``max_state_bytes``
+        The most bytes a group's ring may hold, ``8 W + 24``: 262144 (256
+        KB) by default, at most 64 MiB. A window past it is refused when
+        the run is built.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as
+    a column: null until a group has ``W`` learned rows, then the component.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        ``input`` is not a column name or an expression, or a setting is of
+        the wrong type.
+    ``ValueError``
+        A setting statsmodels refuses (an even span, a trend span not above
+        the period); a window under two periods; a lag outside the window; a
+        ring past ``max_state_bytes``.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        import polars as pl
+        from rheon import polars as rp
+
+        rows = pl.DataFrame({"t": range(40), "x": [float(i % 4 + i // 4) for i in range(40)]})
+        out = rp.stream.with_windows(
+            rows, rp.ops.stl("x", period=4).alias("trend"), clock="t", gap_cap=10.0
+        )
+        print(out["trend"].round(2).to_list()[-3:])
+
+    .. code-block:: text
+
+        [7.12, 7.38, 7.62]
+
+    .. rubric:: See also
+
+    - :func:`mstl`, the same with several seasons.
+    - :func:`ewm_profile`, a seasonal profile read on the row itself, with no
+      delay.
+    """
+    return seasonal_decomposition(
+        input,
+        periods=[period],
+        windows=[seasonal],
+        iterate=2,
+        season=None,
+        component=component,
+        window=window,
+        lag=lag,
+        closed=closed,
+        trend=trend,
+        low_pass=low_pass,
+        seasonal_deg=seasonal_deg,
+        trend_deg=trend_deg,
+        low_pass_deg=low_pass_deg,
+        seasonal_jump=seasonal_jump,
+        trend_jump=trend_jump,
+        low_pass_jump=low_pass_jump,
+        robust=robust,
+        inner_iter=inner_iter,
+        outer_iter=outer_iter,
+        max_state_bytes=max_state_bytes,
+        mstl=False,
+        who="rp.ops.stl",
+    )
+
+
+def mstl(
+    input: str | pl.Expr,
+    *,
+    periods: list[int],
+    windows: list[int] | None = None,
+    iterate: int = 2,
+    component: Literal["trend", "seasonal", "resid"] = "trend",
+    season: int | None = None,
+    window: int | None = None,
+    lag: int | None = None,
+    closed: Literal["left", "right"] = "left",
+    trend: int | None = None,
+    low_pass: int | None = None,
+    seasonal_deg: int = 1,
+    trend_deg: int = 1,
+    low_pass_deg: int = 1,
+    seasonal_jump: int = 1,
+    trend_jump: int = 1,
+    low_pass_jump: int = 1,
+    robust: bool = False,
+    inner_iter: int | None = None,
+    outer_iter: int | None = None,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """A component of MSTL, the decomposition with several seasons, read a few rows late.
+
+    Use it for a series with more than one season, such as an hourly load
+    with a daily and a weekly shape, decomposed as statsmodels' ``MSTL``
+    does (Bandara, Hyndman and Bergmeir, 2021): the seasons in ascending
+    period, ``iterate`` times, each season added back, fitted by STL with its
+    own period and span, and taken out again. The trend is the last STL's;
+    the remainder is the series less every season and the trend. Each value
+    is read ``lag`` learned rows back, as :func:`stl` reads it.
+
+    .. rubric:: Parameters
+
+    ``input``
+        The series: a column name, or an element-wise expression of the row.
+    ``periods``
+        Each season's length in learned rows, such as ``[24, 168]`` for a
+        daily and a weekly season of hourly rows. Each must be below half the
+        window.
+    ``windows``
+        Each season's seasonal span, in the order of ``periods``. ``None``
+        (the default) is statsmodels': 11, 15, ... from the shortest period.
+    ``iterate``
+        The passes over the seasons: 2 by default.
+    ``season``
+        For ``component="seasonal"``: the period whose seasonal to read.
+    ``component``
+        ``"trend"`` (the default), ``"seasonal"`` or ``"resid"``, the
+        remainder ``x - S - T``.
+    ``window``
+        ``W``, the learned rows each decomposition reads. ``None`` (the
+        default) is ``2 h + 1``, with ``h = max p (s - 1) / 2`` the seasonal
+        smoother's reach, so the row read sits at the window's center.
+    ``lag``
+        The learned rows back the value is read at. ``None`` (the default)
+        is ``h``, plus 1 under ``closed="left"``.
+    ``closed``
+        ``"left"`` (the default): the window before the row, so the value
+        reads no row at or after the row's own. ``"right"``: the window
+        ending at the row, which reads the row's own value; a column
+        decomposed this way and used to predict itself leaks its target.
+    ``trend``, ``low_pass``
+        The spans of the trend and of the low-pass filter, odd and above the
+        period. ``None`` (the default) is statsmodels' default for each.
+    ``seasonal_deg``, ``trend_deg``, ``low_pass_deg``
+        The degree of each loess, 0 or 1: 1 by default.
+    ``seasonal_jump``, ``trend_jump``, ``low_pass_jump``
+        The rows between the points each loess fits, the rest interpolated:
+        1 by default, every row.
+    ``robust``, ``inner_iter``, ``outer_iter``
+        statsmodels' robust fit, which downweighs outliers, and its passes:
+        by default 5 inner and no outer, or 2 and 15 when robust. A robust
+        fit costs about 7 times a plain one.
+    ``max_state_bytes``
+        The most bytes a group's ring may hold, ``8 W + 24``: 262144 (256
+        KB) by default, at most 64 MiB. A window past it is refused when
+        the run is built.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as
+    a column: null until a group has ``W`` learned rows, then the component.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        A setting is of the wrong type, or ``season`` is given without
+        ``component="seasonal"``.
+    ``ValueError``
+        As :func:`stl`; a period not below half the window; ``season`` not
+        among ``periods``.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        import polars as pl
+        from rheon import polars as rp
+
+        x = [float(i % 3 + 2 * (i % 5) + i // 15) for i in range(80)]
+        rows = pl.DataFrame({"t": range(80), "x": x})
+        three = rp.ops.mstl("x", periods=[3, 5], component="seasonal", season=3)
+        out = rp.stream.with_windows(rows, three.alias("s3"), clock="t", gap_cap=10.0)
+        print(out["s3"].is_not_null().sum())
+
+    .. code-block:: text
+
+        9
+
+    .. rubric:: See also
+
+    - :func:`stl`, one season.
+    """
+    return seasonal_decomposition(
+        input,
+        periods=list(periods),
+        windows=None if windows is None else list(windows),
+        iterate=iterate,
+        season=season,
+        component=component,
+        window=window,
+        lag=lag,
+        closed=closed,
+        trend=trend,
+        low_pass=low_pass,
+        seasonal_deg=seasonal_deg,
+        trend_deg=trend_deg,
+        low_pass_deg=low_pass_deg,
+        seasonal_jump=seasonal_jump,
+        trend_jump=trend_jump,
+        low_pass_jump=low_pass_jump,
+        robust=robust,
+        inner_iter=inner_iter,
+        outer_iter=outer_iter,
+        max_state_bytes=max_state_bytes,
+        mstl=True,
+        who="rp.ops.mstl",
     )

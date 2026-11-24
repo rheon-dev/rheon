@@ -171,7 +171,7 @@ FAMILIES: tuple[Family, ...] = (
     Family(
         "ops-seasonal",
         "ops",
-        tuple(f"{_RP}.ops.{m}" for m in ("fourier", "calendar_fourier")),
+        tuple(f"{_RP}.ops.{m}" for m in ("fourier", "calendar_fourier", "stl", "mstl")),
     ),
     Family(
         "eval-scores",
