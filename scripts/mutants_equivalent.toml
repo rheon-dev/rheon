@@ -3856,7 +3856,7 @@ on every path a family is built or restored by"""
 file = "crates/rheon-core/src/glm.rs"
 function = "Glm::learn"
 mutation = "replace > with >="
-line_has = "let scale = if moved.abs() > cap {"
+line_has = "let mut scale = if moved.abs() > cap {"
 why = """at `|moved| = cap` the scale is `cap/|moved| = 1`, the other arm's 1, to \
 the bit; an infinite cap ties only at an infinite `moved`, which cannot be: \
 `moved = s x̃'(G + R I)⁻¹x̃`, and `x̃'(G + R I)⁻¹x̃` is at most the \

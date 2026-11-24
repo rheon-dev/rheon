@@ -117,13 +117,11 @@ fn the_guards_root_solves_its_equation() {
             assert_eq!(guard_root(0.0, wq, p, 10f64.ln()), (10f64.ln(), 0), "{wq}");
         }
     }
-    if std::env::var_os("GLM4_PRINT").is_some() {
-        eprintln!(
-            "passes: most {most}, mean {}",
-            f64::from(total) / f64::from(roots)
-        );
-    }
-    assert!(most <= MOST_ROOT_PASSES, "{most} passes");
+    assert!(
+        most <= MOST_ROOT_PASSES,
+        "{most} passes, {} on average",
+        f64::from(total) / f64::from(roots)
+    );
 }
 
 /// C's design (Rheon C's oracle test): an intercept and two standard
@@ -406,10 +404,7 @@ const MEASURED_NO_REFIT_100: [usize; 7] = [0, 8, 0, 5, 7, 40, 57];
 const MEASURED_DEFAULT_100: [usize; 7] = [23, 35, 26, 29, 27, 43, 44];
 
 fn hold_runaways(seeds: std::ops::Range<u64>, default: bool, measured: [usize; 7]) {
-    let got = runaways(seeds.clone(), default);
-    if std::env::var_os("GLM4_PRINT").is_some() {
-        eprintln!("{seeds:?} default {default}: {got:?}");
-    }
+    let got = runaways(seeds, default);
     let off: Vec<usize> = got.iter().map(|g| g.0).collect();
     let on: Vec<usize> = got.iter().map(|g| g.1).collect();
     assert_eq!(off, measured, "the unguarded runaways moved");
