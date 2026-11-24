@@ -2260,6 +2260,54 @@ mod tests {
         assert_eq!(m.n, n);
     }
 
+    /// Review 2026-11-23, COV-5 (3), **left for the user** (`docs/records/
+    /// REVIEW-2026-11-23-OUTCOMES.md`, batch h): the jittered estimate is
+    /// the same read forwards and backwards (prices reversed, so returns
+    /// reversed and negated) on a stretch long enough for its two jitters,
+    /// and not on a stretch of fewer than `2m` returns, which emits its
+    /// lead at its `m`-th return and then cannot close its trail (the
+    /// module doc says so: there is no way to un-emit the lead). Stretches
+    /// of 3 returns at `m = 2` here. It panics until the lead is held.
+    #[test]
+    #[should_panic(expected = "short stretches")]
+    fn a_short_stretch_reads_the_same_backwards() {
+        let mut c = cfg(1, RcovKind::Kernel);
+        c.bandwidth = Some(0);
+        let rows = returns(120, 1, 5, 0.1);
+        let estimate = |stretches: &[Vec<Vec<f64>>]| {
+            let mut m = Rcov::new(c.clone()).unwrap();
+            for s in stretches {
+                feed(&mut m, s);
+                m.clear_lags();
+            }
+            m.estimate().rcov.unwrap()[0]
+        };
+        let backwards = |s: &[Vec<f64>]| -> Vec<Vec<f64>> {
+            s.iter()
+                .rev()
+                .map(|x| x.iter().map(|v| -v).collect())
+                .collect()
+        };
+        let long: Vec<Vec<Vec<f64>>> = rows.chunks(40).map(<[_]>::to_vec).collect();
+        let (f, b) = (
+            estimate(&long),
+            estimate(&long.iter().map(|s| backwards(s)).collect::<Vec<_>>()),
+        );
+        assert!(
+            (f - b).abs() <= 1e-12 * f.abs(),
+            "long stretches: {f} against {b}"
+        );
+        let short: Vec<Vec<Vec<f64>>> = rows.chunks(3).map(<[_]>::to_vec).collect();
+        let (f, b) = (
+            estimate(&short),
+            estimate(&short.iter().map(|s| backwards(s)).collect::<Vec<_>>()),
+        );
+        assert!(
+            (f - b).abs() <= 1e-12 * f.abs(),
+            "short stretches: {f} against {b}"
+        );
+    }
+
     /// A break splits the group into stretches: the estimate is what the two
     /// stretches give as separate groups, added. At `H = 0` that is exactly
     /// `Σ ỹỹ'` over each stretch's own effective returns, so the two sides

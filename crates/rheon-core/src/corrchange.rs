@@ -1910,6 +1910,25 @@ impl CorrChange {
             s2 += r * r;
         }
         let n = x.len() as f64;
+        // A sum of squares past the doubles (a standardised value past
+        // `1e154`): the sums again at a power of two of their own, which the
+        // estimate, a ratio of the squares' degree, does not read. It was
+        // NaN, and the row left out of the CUSUM (review 2026-11-23, COV-5).
+        if !s2.is_finite() {
+            let r = |i: usize| self.diag.deviation(i, x[i]) / self.diag.var(i).sqrt();
+            let top = (0..x.len()).map(|i| r(i).abs()).fold(0.0, f64::max);
+            if !(top.is_finite() && top > 0.0) {
+                return f64::NAN;
+            }
+            let (_, e) = crate::held_median::frexp(top);
+            let c = crate::sqsum::ldexp(1.0, -e);
+            (s1, s2) = (0.0, 0.0);
+            for i in 0..x.len() {
+                let ri = r(i) * c;
+                s1 += ri;
+                s2 += ri * ri;
+            }
+        }
         if s2 > 0.0 {
             (s1 * s1 - s2) / ((n - 1.0) * s2)
         } else {
