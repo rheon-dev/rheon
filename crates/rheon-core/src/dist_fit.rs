@@ -580,6 +580,7 @@ impl OnlineModel for DistFit {
     }
 }
 
+mod ged;
 mod skew_t;
 mod skewt_fit;
 mod student_t;
