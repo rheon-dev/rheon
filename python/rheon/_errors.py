@@ -159,13 +159,13 @@ class RefusedValueError(ValueError):
     .. code-block:: python
 
         try:
-            rp.ewm_mean("x", half_life=10.0, reverse=True)   # no window_size
+            rp.ops.ewm_mean("x", half_life=10.0, reverse=True)   # no window_size
         except ValueError as e:
             print(type(e).__name__, str(e).split(",")[0])
 
     .. code-block:: text
 
-        RefusedValueError rp.ewm_mean: reverse=True needs window_size
+        RefusedValueError rp.ops.ewm_mean: reverse=True needs window_size
 
     .. rubric:: See also
 

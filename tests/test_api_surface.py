@@ -1000,11 +1000,11 @@ def enum_values_section(cli: Path | None) -> list[str]:
             extra = {**extra, "quantile": 0.5}
         for key in ("closed", "partial"):
             refuse = python_refusal(
-                getattr(rp, op),
+                getattr(rp.ops, op),
                 {"input": "X", "half_life": 10.0, "window_size": 5.0, **extra},
                 key,
             )
-            out.append(f"  rp.{label}.{key}: {', '.join(sorted(taken_words(key, refuse)))}")
+            out.append(f"  rp.ops.{label}.{key}: {', '.join(sorted(taken_words(key, refuse)))}")
     reasons = (
         rp.ModelBank([rp.spec.ewridge("m", targets=["y"], features=["x"], half_life=10.0)])
         .fit_predict(pl.DataFrame({"x": [1.0, 2.0], "y": [1.0, 2.0]}))["m"]

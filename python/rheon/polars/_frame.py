@@ -1827,7 +1827,7 @@ class LazyFrameRheonNamespace:
             fitted = (
                 pl.scan_parquet("trades.parquet")
                 .rheon.with_windows(
-                    mid_5s=rp.ewm_mean("mid", half_life="5s", window_size="1m"),
+                    mid_5s=rp.ops.ewm_mean("mid", half_life="5s", window_size="1m"),
                     clock="ts", gap_cap="5m", group="symbol",
                 )
                 .collect()
@@ -2155,7 +2155,7 @@ class DataFrameRheonNamespace:
         .. code-block:: python
 
             out = trades.rheon.with_windows(
-                mid_5s=rp.ewm_mean("mid", half_life="5s", window_size="1m"),
+                mid_5s=rp.ops.ewm_mean("mid", half_life="5s", window_size="1m"),
                 clock="ts", gap_cap="5m", group="symbol",
             )
             print(out.columns[-1], out.height)

@@ -44,7 +44,7 @@ why the bank waits.
 
 1. **Write the target as an expression around an operator that looks
    ahead, and name it with `.alias()`.** The operators that look ahead are
-   `rp.ewm_mean`, `rp.ewm_sum`, `rp.ewm_rate` and `rp.ewm_quantile`, each
+   `rp.ops.ewm_mean`, `rp.ops.ewm_sum`, `rp.ops.ewm_rate` and `rp.ops.ewm_quantile`, each
    with `reverse=True`. The alias names the output fields: `.alias("fwd_edge")`
    gives `pred_fwd_edge`. An expression with no operator that looks ahead
    is known at its own row, and the spec builder raises `ValueError`
@@ -73,14 +73,14 @@ uses `trades.parquet` from [Example data](../EXAMPLE-DATA.md):
 # Features that look back, on one clock shared with the model.
 clock = dict(clock="ts", gap_cap="5m", group="symbol")             # one clock for the windows and the model
 trends = pl.scan_parquet("trades.parquet").rheon.with_windows(    # the features: windows that look back
-    trend_5s=pl.col("mid") - rp.ewm_mean("mid", half_life="5s", window_size="2m"),
-    trend_30s=pl.col("mid") - rp.ewm_mean("mid", half_life="30s", window_size="2m"),
+    trend_5s=pl.col("mid") - rp.ops.ewm_mean("mid", half_life="5s", window_size="2m"),
+    trend_30s=pl.col("mid") - rp.ops.ewm_mean("mid", half_life="30s", window_size="2m"),
     **clock,
 )
 # 1. A target that looks ahead: the next minute's VWAP, less the mid.
 notional = pl.col("price") * pl.col("quantity")
 next_minute = dict(half_life="10s", window_size="1m", reverse=True)
-fwd_edge = (rp.ewm_sum(notional, **next_minute) / rp.ewm_sum("quantity", **next_minute) - pl.col("mid")).alias("fwd_edge")
+fwd_edge = (rp.ops.ewm_sum(notional, **next_minute) / rp.ops.ewm_sum("quantity", **next_minute) - pl.col("mid")).alias("fwd_edge")
 # 2 to 4. The target in targets, learned two minutes late, once its minute is known.
 edge = rp.spec.ewridge("edge", targets=[fwd_edge], features=["trend_5s", "trend_30s"],
                        half_life="30m", embargo="2m", **clock)
@@ -177,7 +177,7 @@ flows = pl.scan_parquet("trades.parquet").with_columns(                   # a qu
     flow=pl.when(pl.col("side") == "buy").then(pl.col("quantity")).otherwise(-pl.col("quantity"))
 )
 fwd_move = (
-    rp.ewm_mean("price", half_life=float("inf"), window_size="5m", reverse=True)       # the mean trade price over the next five minutes
+    rp.ops.ewm_mean("price", half_life=float("inf"), window_size="5m", reverse=True)       # the mean trade price over the next five minutes
     - pl.col("mid")                                                        # less the mid at the row
 ).alias("fwd_move")                                                        # the alias names the target
 ahead_5m = rp.spec.ewridge("ahead_5m", targets=[fwd_move], features=["flow"],
@@ -219,7 +219,7 @@ about 1, where two positive numbers always agree, so its `hit_rate` reads
 1.0 whatever the fit. A difference sits about zero too. A target that
 looks ahead takes the same forms, such as the log of the next five
 minutes' mean trade price over the mid,
-`(rp.ewm_mean("price", half_life=float("inf"), window_size="5m", reverse=True) / pl.col("mid")).log().alias("fwd_log")`.
+`(rp.ops.ewm_mean("price", half_life=float("inf"), window_size="5m", reverse=True) / pl.col("mid")).log().alias("fwd_log")`.
 `mid * exp(pred)` turns its prediction back into a price. This code regresses four forms of a
 trade's price against the mid at its row on the same signed size, `flow`.
 It reads `trades.parquet` from [Example data](../EXAMPLE-DATA.md):

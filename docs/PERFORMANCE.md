@@ -402,7 +402,7 @@ measured on 2026-09-02 as the most memory the process held:
 
 ### What a window operator costs
 
-**A window operator, such as `rp.ewm_mean`, does the same work on a row
+**A window operator, such as `rp.ops.ewm_mean`, does the same work on a row
 however long its window, and holds about one window of rows.** So a window
 adds little memory: through `with_windows`, within 0.04 GB of reading and
 writing the file alone.

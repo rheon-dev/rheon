@@ -43,8 +43,8 @@ WINDOWS: dict[str, Any] = {"clock": "time_refresh", "gap_cap": 100.0}
 def windows(lf: pl.DataFrame, **state: Any) -> pl.DataFrame:
     return rp.stream.with_windows(
         lf,
-        level=rp.ewm_mean("a_value", half_life=5.0, window_size=20.0),
-        ahead=rp.ewm_mean("b_value", half_life=5.0, window_size=10.0, reverse=True),
+        level=rp.ops.ewm_mean("a_value", half_life=5.0, window_size=20.0),
+        ahead=rp.ops.ewm_mean("b_value", half_life=5.0, window_size=10.0, reverse=True),
         **WINDOWS,
         **state,
     )

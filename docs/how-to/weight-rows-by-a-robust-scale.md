@@ -4,7 +4,7 @@
 This how-to is for anyone who wants each row to count in a fit by a weight
 from a scale of its target that a few wild values do not move, such as
 `1 / scale²`.
-It makes the scale with `rp.ewm_quantile` from the targets already known
+It makes the scale with `rp.ops.ewm_quantile` from the targets already known
 on each row, so a row's own target never sets its weight.
 
 ## Prerequisites
@@ -26,14 +26,14 @@ These steps need the library and a stream with a clock:
   on the clock later, as under a spec's [`embargo`](../GLOSSARY.md#time)
   (the delay on the clock between predicting a row and learning from it).
 
-## Make a robust scale with `rp.ewm_quantile`
+## Make a robust scale with `rp.ops.ewm_quantile`
 
 **Divide the median of `|x|` by `Φ⁻¹(3/4)` for a scale that a few wild
 values do not move: the median absolute deviation (MAD) of `x` about 0.**
 `Φ⁻¹(3/4) = 0.6744897501960817` is the MAD of a standard normal, so for
 normal values the result estimates their standard deviation. It holds while
 up to half the weight is wild, where a single value of 1e6 is enough to set
-a standard deviation. `rp.ewm_quantile` is the quantile of a window's values, each
+a standard deviation. `rp.ops.ewm_quantile` is the quantile of a window's values, each
 weighed by its age on the clock, as [Quantiles and a robust scale](../WINDOWS.md#quantiles-and-a-robust-scale)
 describes.
 
@@ -44,7 +44,7 @@ describes.
    hold another operator. So make the median a column in one
    `with_windows` call, and take the MAD of the deviation from it in a
    second.
-2. **Make the scale a column with `rp.ewm_quantile` of the absolute
+2. **Make the scale a column with `rp.ops.ewm_quantile` of the absolute
    value, at `quantile=0.5`, divided by `0.6744897501960817`.** Call it
    in `with_windows` before the
    [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads), with
@@ -66,8 +66,8 @@ prints = trades.filter(pl.col("price").is_not_null()).with_row_index("i").with_c
 spread = dict(half_life="2m")
 scales = rp.stream.with_windows(
     prints,
-    mad=rp.ewm_quantile(pl.col("dev").abs(), quantile=0.5, **spread) / 0.6744897501960817,   # the EW-MAD about 0
-    std=rp.ewm_std("dev", **spread),                                                         # moved by every wild print
+    mad=rp.ops.ewm_quantile(pl.col("dev").abs(), quantile=0.5, **spread) / 0.6744897501960817,   # the EW-MAD about 0
+    std=rp.ops.ewm_std("dev", **spread),                                                         # moved by every wild print
     clock="ts", gap_cap="5m", group="symbol",
 )
 # The last row's EW-MAD again by hand: numpy's weighted median of |dev| over its symbol's prints.
@@ -85,7 +85,7 @@ medians over the prints: mad 0.0204, std 0.1815; the prints' spread is 0.02
 ```
 
 The two values of the last row are 0.27% apart, inside the 0.78% within
-which `rp.ewm_quantile` reads a quantile. One print in 40 at 50 times the
+which `rp.ops.ewm_quantile` reads a quantile. One print in 40 at 50 times the
 spread multiplies the standard deviation by nine, and moves the MAD by 2%.
 
 ## Leave out the targets not yet known
@@ -134,7 +134,7 @@ doubled = rp.stream.embargo(pl.scan_parquet("ticks.parquet"), clock="t", delay=5
 known = pl.when(pl.col("_online_role") == "learn").then(pl.col("ret").abs())   # a target counts once it has arrived
 scaled = (
     doubled.rheon.with_windows(
-        ret_scale=rp.ewm_quantile(known, quantile=0.5, half_life=20.0) / 0.6744897501960817,
+        ret_scale=rp.ops.ewm_quantile(known, quantile=0.5, half_life=20.0) / 0.6744897501960817,
         clock="t", gap_cap=10.0,
     )
     .filter(pl.col("_online_role") == "predict")                               # back to one row per row
@@ -239,9 +239,9 @@ rows skipped for a null weight: 4
 targets known by that row:** `np.quantile(x, 0.5, weights=w,
 method="inverted_cdf")`, with each value weighed by
 `0.5 ** (age / half_life)` from its arrival. The recipes of [Make a robust
-scale with `rp.ewm_quantile`](#make-a-robust-scale-with-rpewm_quantile)
+scale with `rp.ops.ewm_quantile`](#make-a-robust-scale-with-rpewm_quantile)
 and [Leave out the targets not yet
 known](#leave-out-the-targets-not-yet-known) do so. The two agree within the
-0.78% within which `rp.ewm_quantile` reads a quantile. Then check that the
+0.78% within which `rp.ops.ewm_quantile` reads a quantile. Then check that the
 scale is null until the first target arrives, and that `bank.summary()`
 counts those rows in `rows_skipped`.

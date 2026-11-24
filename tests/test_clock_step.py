@@ -228,8 +228,8 @@ def test_what_a_clock_step_refuses() -> None:
     with pytest.raises(TypeError, match="bias must be True or False"):
         rp.ops.clock_step("t", half_life=1.0, stat="std", bias=1)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="holds the operator increment"):
-        rp.ops.clock_step(rp.increment("t"), half_life=1.0)
+        rp.ops.clock_step(rp.ops.increment("t"), half_life=1.0)
     with pytest.raises(ValueError, match="another window operator"):
-        rp.ewm_mean(rp.ops.clock_step("t", half_life=1.0), half_life=1.0)
+        rp.ops.ewm_mean(rp.ops.clock_step("t", half_life=1.0), half_life=1.0)
     with pytest.raises(rp.WrongTypeError, match="must be a number or a temporal column"):
         rp.stream.with_windows(df, m=rp.ops.clock_step("s", half_life=1.0))

@@ -1,4 +1,4 @@
-"""``rp.rolling_max`` and ``rp.rolling_min``: the largest and smallest value
+"""``rp.ops.rolling_max`` and ``rp.ops.rolling_min``: the largest and smallest value
 of a window on the stream's clock, and since an event (task 561).
 
 Held to Polars itself, the library that has the operator: a backward window
@@ -61,7 +61,7 @@ def polars_extremum(df: pl.DataFrame, fn: str, by: str, w: Any, closed: str) -> 
 def rheon_extremum(
     df: pl.DataFrame, fn: str, clock: str, gap_cap: Any = 1e12, **kw: Any
 ) -> pl.Series:
-    op = getattr(rp, fn)("x", **kw)
+    op = getattr(rp.ops, fn)("x", **kw)
     return rp.stream.with_windows(df, out=op, clock=clock, gap_cap=gap_cap)["out"]
 
 
@@ -194,13 +194,13 @@ def test_the_running_maximum_is_numpys_over_each_run() -> None:
 
 def mixed() -> dict[str, pl.Expr]:
     return {
-        "back": rp.rolling_max("x", window_size=4.0),
-        "left": rp.rolling_min("x", window_size=3.0, closed="left", partial="null"),
-        "ahead": rp.rolling_max("x", window_size=2.5, reverse=True),
-        "run": rp.rolling_max("x", since="e"),
-        "run_left": rp.rolling_min("x", since="e", closed="left"),
-        "win_since": rp.rolling_min("x", window_size=5.0, since="e", partial="null"),
-        "dd": pl.col("x") - rp.rolling_max("x", since="e"),
+        "back": rp.ops.rolling_max("x", window_size=4.0),
+        "left": rp.ops.rolling_min("x", window_size=3.0, closed="left", partial="null"),
+        "ahead": rp.ops.rolling_max("x", window_size=2.5, reverse=True),
+        "run": rp.ops.rolling_max("x", since="e"),
+        "run_left": rp.ops.rolling_min("x", since="e", closed="left"),
+        "win_since": rp.ops.rolling_min("x", window_size=5.0, since="e", partial="null"),
+        "dd": pl.col("x") - rp.ops.rolling_max("x", since="e"),
     }
 
 
@@ -253,9 +253,9 @@ def test_a_save_and_load_at_any_row_is_one_run(tmp_path: Any) -> None:
 
 def test_a_gap_past_the_cap_starts_the_running_form_over() -> None:
     df = pl.DataFrame({"t": [0.0, 1.0, 100.0, 101.0], "x": [5.0, 1.0, 2.0, 3.0]})
-    out = rp.stream.with_windows(df, m=rp.rolling_max("x"), clock="t", gap_cap=10.0)
+    out = rp.stream.with_windows(df, m=rp.ops.rolling_max("x"), clock="t", gap_cap=10.0)
     assert out["m"].to_list() == [5.0, 5.0, 2.0, 3.0]
-    wide = rp.stream.with_windows(df, m=rp.rolling_max("x"), clock="t", gap_cap=1000.0)
+    wide = rp.stream.with_windows(df, m=rp.ops.rolling_max("x"), clock="t", gap_cap=1000.0)
     assert wide["m"].to_list() == [5.0, 5.0, 5.0, 5.0]
 
 
@@ -269,7 +269,7 @@ def test_since_is_each_groups_own() -> None:
         }
     )
     out = rp.stream.with_windows(
-        df, m=rp.rolling_max("x", since="e"), clock="t", gap_cap=10.0, group="g"
+        df, m=rp.ops.rolling_max("x", since="e"), clock="t", gap_cap=10.0, group="g"
     )
     assert out["m"].to_list() == [9.0, 9.0, 1.0, 9.0, 2.0, 9.0]
 
@@ -282,20 +282,22 @@ def test_the_row_clock_bound_refuses_on_both_sides_of_the_cap() -> None:
     df = pl.DataFrame({"x": np.arange(50, dtype=float)})
     w, row = 10, 8 * (5 + 8 + 1)
     need = (w + 2) * row
-    ok = rp.stream.with_windows(df, m=rp.rolling_max("x", window_size=w, max_state_bytes=need))
+    ok = rp.stream.with_windows(df, m=rp.ops.rolling_max("x", window_size=w, max_state_bytes=need))
     assert ok["m"].to_list()[-1] == 49.0
     with pytest.raises(
         Exception,
         match=r"holds up to 12 rows of 112 bytes each a group, 1344 bytes, past "
         r"max_state_bytes of 1343",
     ):
-        rp.stream.with_windows(df, m=rp.rolling_max("x", window_size=w, max_state_bytes=need - 1))
+        rp.stream.with_windows(
+            df, m=rp.ops.rolling_max("x", window_size=w, max_state_bytes=need - 1)
+        )
 
 
 def test_a_burst_past_the_cap_on_a_clock_is_refused_at_its_row() -> None:
     row = 8 * (5 + 8 + 1)
     burst = pl.DataFrame({"t": [0.0] * 20, "x": np.arange(20, dtype=float)})
-    op = rp.rolling_max("x", window_size=1.0, max_state_bytes=10 * row)
+    op = rp.ops.rolling_max("x", window_size=1.0, max_state_bytes=10 * row)
     with pytest.raises(Exception, match=r"at row 10 \(counting from 0\).*holds 11 rows"):
         rp.stream.with_windows(burst, m=op, clock="t", gap_cap=5.0)
     ten = rp.stream.with_windows(burst[:10], m=op, clock="t", gap_cap=5.0)
@@ -304,22 +306,22 @@ def test_a_burst_past_the_cap_on_a_clock_is_refused_at_its_row() -> None:
 
 def test_the_parameters_are_checked_by_name() -> None:
     with pytest.raises(ValueError, match="since cannot be combined with reverse=True yet"):
-        rp.rolling_max("x", window_size=2.0, reverse=True, since="e")
+        rp.ops.rolling_max("x", window_size=2.0, reverse=True, since="e")
     with pytest.raises(ValueError, match="reverse=True needs window_size"):
-        rp.rolling_min("x", reverse=True)
+        rp.ops.rolling_min("x", reverse=True)
     with pytest.raises(ValueError, match="max_state_bytes must be an integer above 0"):
-        rp.rolling_max("x", window_size=2.0, max_state_bytes=0)
+        rp.ops.rolling_max("x", window_size=2.0, max_state_bytes=0)
     with pytest.raises(ValueError, match="at most 67108864"):
-        rp.rolling_max("x", window_size=2.0, max_state_bytes=(64 << 20) + 1)
+        rp.ops.rolling_max("x", window_size=2.0, max_state_bytes=(64 << 20) + 1)
     with pytest.raises(TypeError):
-        rp.rolling_max("x", window_size=2.0, max_state_bytes=1.5)  # type: ignore[arg-type]
+        rp.ops.rolling_max("x", window_size=2.0, max_state_bytes=1.5)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="partial needs window_size"):
-        rp.rolling_max("x", partial="null")
+        rp.ops.rolling_max("x", partial="null")
     with pytest.raises(ValueError, match="holds another window operator"):
-        rp.rolling_max("x", since=rp.ewm_mean("y", half_life=1.0) > 0)
+        rp.ops.rolling_max("x", since=rp.ops.ewm_mean("y", half_life=1.0) > 0)
     df = pl.DataFrame({"t": [0.0, 1.0], "x": [1.0, 2.0], "e": [1, 0]})
     with pytest.raises(Exception, match="since must be a boolean"):
-        rp.stream.with_windows(df, m=rp.rolling_max("x", since="e"), clock="t", gap_cap=5.0)
+        rp.stream.with_windows(df, m=rp.ops.rolling_max("x", since="e"), clock="t", gap_cap=5.0)
 
 
 def test_drawdown_is_the_formula_around_the_peak() -> None:
@@ -330,7 +332,7 @@ def test_drawdown_is_the_formula_around_the_peak() -> None:
             "new_period": [False, False, False, False, True, False],
         }
     )
-    peak = rp.rolling_max("equity", since="new_period")
+    peak = rp.ops.rolling_max("equity", since="new_period")
     out = rp.stream.with_windows(df, peak=peak, dd=pl.col("equity") - peak, clock="t", gap_cap=10.0)
     assert out["peak"].to_list() == [1.0, 3.0, 3.0, 4.0, 1.0, 2.0]
     assert out["dd"].to_list() == [0.0, 0.0, -1.0, 0.0, 0.0, 0.0]
@@ -357,7 +359,7 @@ def test_a_weight_zero_row_moves_no_formula_targets_extremum() -> None:
     w[100] = 0.0
     df = pl.DataFrame({"x0": x0, "y": y, "w": w})
     big = df.with_columns(y=pl.when(pl.int_range(n) == 100).then(1e6).otherwise(pl.col("y")))
-    target = rp.rolling_max("y", window_size=5.0).alias("hi")
+    target = rp.ops.rolling_max("y", window_size=5.0).alias("hi")
 
     def preds(frame: pl.DataFrame) -> list[Any]:
         spec = rp.spec.ewridge("m", targets=[target], features=["x0"], half_life=50.0, weight="w")

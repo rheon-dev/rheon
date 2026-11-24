@@ -1910,8 +1910,8 @@ def _formulas(who: str, exprs: tuple[Any, ...], named: dict[str, Any]) -> list[d
                 f"computation, "
                 f'such as pl.col("x") + 1) over the window operators, but one is of type '
                 f"{type(e).__name__}. "
-                'Pass expressions such as rp.ewm_mean("x", half_life=10).alias("m"), or name '
-                'each as a keyword, as in with_windows(m=rp.ewm_mean("x", half_life=10)).'
+                'Pass expressions such as rp.ops.ewm_mean("x", half_life=10).alias("m"), or name '
+                'each as a keyword, as in with_windows(m=rp.ops.ewm_mean("x", half_life=10)).'
             )
         tree = _formula.to_tree(e, who)
         name = e.meta.output_name()
@@ -1936,7 +1936,7 @@ def _formulas(who: str, exprs: tuple[Any, ...], named: dict[str, Any]) -> list[d
             raise TypeError(
                 f"{who}: the keyword {name} names an output column, so it must be a pl.Expr "
                 f"over the window operators, but it is of type {type(e).__name__} ({e!r}). "
-                "Pass an expression such as rp.ewm_mean(...)."
+                "Pass an expression such as rp.ops.ewm_mean(...)."
             )
         out.append({"name": name, "tree": _formula.to_tree(e, who)})
     for f in out:
@@ -2141,8 +2141,8 @@ def with_windows(
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 5.0, 6.0], "x": [1.0, 2.0, 3.0, 4.0, 5.0]})
         out = rp.stream.with_windows(
             rows,
-            trend=pl.col("x") - rp.ewm_mean("x", half_life=1.0),   # x above its trailing mean
-            ahead=rp.ewm_sum("x", half_life=float("inf"), window_size=1.0, reverse=True),
+            trend=pl.col("x") - rp.ops.ewm_mean("x", half_life=1.0),   # x above its trailing mean
+            ahead=rp.ops.ewm_sum("x", half_life=float("inf"), window_size=1.0, reverse=True),
             clock="t", gap_cap=2.0,                    # the gap from 2 to 5 is a clock break
         )
         print(out["trend"].round(4).to_list())   # 0 at row 3: the windows start over
@@ -2166,11 +2166,11 @@ def with_windows(
         ahead = {"half_life": "10s", "window_size": "1m", "reverse": True, "min_samples": 1}
         out = rp.stream.with_windows(
             trades,
-            mid_trend=rp.ewm_mean("mid", half_life="5s", window_size="1m") - pl.col("mid"),
-            fwd_vwap=rp.ewm_sum(notional, half_life="10s", window_size="1m", reverse=True)
-                     / rp.ewm_sum("quantity", half_life="10s", window_size="1m", reverse=True),
-            fwd_buy_vwap=rp.ewm_sum(buys.then(notional), **ahead)
-                         / rp.ewm_sum(buys.then("quantity"), **ahead),
+            mid_trend=rp.ops.ewm_mean("mid", half_life="5s", window_size="1m") - pl.col("mid"),
+            fwd_vwap=rp.ops.ewm_sum(notional, half_life="10s", window_size="1m", reverse=True)
+                     / rp.ops.ewm_sum("quantity", half_life="10s", window_size="1m", reverse=True),
+            fwd_buy_vwap=rp.ops.ewm_sum(buys.then(notional), **ahead)
+                         / rp.ops.ewm_sum(buys.then("quantity"), **ahead),
             clock="ts", gap_cap="5m", group="symbol",
         )
         print(out.height, out.columns[-3:], out["fwd_vwap"].count())

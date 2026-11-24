@@ -129,7 +129,7 @@ def test_a_window_source_feeding_a_fit_through_unnest_gives_the_eager_result(mon
         return (
             df.lazy()
             .rheon.with_windows(
-                dev=pl.col("x1") - rp.ewm_mean("x1", half_life=20.0, window_size=60.0),
+                dev=pl.col("x1") - rp.ops.ewm_mean("x1", half_life=20.0, window_size=60.0),
                 clock="t",
                 gap_cap=10.0,
             )

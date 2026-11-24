@@ -186,8 +186,8 @@ later a real shift is found.
 2. **Center and scale each feature in the query before the bank,** since
    the tempered predictive density (the density the model gives each row
    before learning it) is not free of the data's units. Make its
-   z-score `(pl.col("x") - rp.ewm_mean("x", half_life=h)) /
-   rp.ewm_std("x", half_life=h)` with `lf.rheon.with_windows`, which
+   z-score `(pl.col("x") - rp.ops.ewm_mean("x", half_life=h)) /
+   rp.ops.ewm_std("x", half_life=h)` with `lf.rheon.with_windows`, which
    runs the window operators (Polars' `with_columns` cannot).
 3. **Give `robust_beta=0.1`, and keep it below about 0.2.** Above that, a
    real shift is found late or not at all. Over 50 streams with a

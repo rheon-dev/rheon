@@ -46,7 +46,7 @@ def zscores(df: pl.DataFrame, feats: list[str]) -> pl.DataFrame:
     per-standard-deviation recipe (README, *Features in units of their
     spread*). Streaming window operators, so nothing looks ahead."""
     z = {
-        f"z_{f}": (pl.col(f) - rp.ewm_mean(f, half_life=HL)) / rp.ewm_std(f, half_life=HL)
+        f"z_{f}": (pl.col(f) - rp.ops.ewm_mean(f, half_life=HL)) / rp.ops.ewm_std(f, half_life=HL)
         for f in feats
     }
     return rp.stream.with_windows(df, **z)
@@ -194,7 +194,8 @@ def main() -> None:
         "with `standardize=True`, so section 1's default schedule is section 2's `std` row |\n"
         "| **the features** | `x0` the row's log return, `x1` the last five's sum, `x2` and `x3` "
         "volume and trade count against their last 60 rows' mean and spread; section 6 also "
-        "runs each as a z-score, `(x - rp.ewm_mean(x)) / rp.ewm_std(x)` at the same half-life |\n"
+        "runs each as a z-score, `(x - rp.ops.ewm_mean(x)) / rp.ops.ewm_std(x)` at the same "
+        "half-life |\n"
         "| **the scores** | from `rp.eval.compare_specs`: `n` the rows scored, `r2` the "
         "out-of-sample R² against the target's mean over those rows, `ic` the correlation of "
         "the prediction with the target, `hit_rate` the share of rows whose sign it got "
@@ -445,8 +446,8 @@ def main() -> None:
         "The models of section 5 on the raw features and on each feature in units of its "
         "current spread, as [Scale a feature by its spread]"
         "(how-to/scale-a-feature-by-its-spread.md) makes it,"
-        f" `(x - rp.ewm_mean(x, half_life={HL:g})) / "
-        f"rp.ewm_std(x, half_life={HL:g})`, computed as columns by "
+        f" `(x - rp.ops.ewm_mean(x, half_life={HL:g})) / "
+        f"rp.ops.ewm_std(x, half_life={HL:g})`, computed as columns by "
         "`rp.stream.with_windows`. A z-scored feature's coefficient is a response per "
         "standard deviation of the feature as it is now, where a raw one is per unit. "
         "A z-scored feature fits better where the target moves with the feature relative "

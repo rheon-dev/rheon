@@ -22,7 +22,10 @@ for G in (10, 100, 1000, 10000):
         )
         t0 = time.perf_counter()
         s.rheon.with_windows(
-            S=rp.ewm_sum("y", half_life=1000.0, closed="left"), clock="c", gap_cap=1e12, group="g"
+            S=rp.ops.ewm_sum("y", half_life=1000.0, closed="left"),
+            clock="c",
+            gap_cap=1e12,
+            group="g",
         )
         el = time.perf_counter() - t0
         print(f"G={G:6d} n={n:7d}: {el:6.2f}s {el / n * 1e9:8.0f} ns a row", flush=True)

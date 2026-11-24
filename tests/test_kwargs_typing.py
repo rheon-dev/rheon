@@ -121,7 +121,7 @@ from rheon import polars as po
 t = po.target("y", name="m")
 cols: list[str] = ["y"]
 mixed: list[str | po.Target] = ["y", t]
-ahead = po.ewm_mean("y", half_life="1m", window_size="1m", reverse=True)
+ahead = po.ops.ewm_mean("y", half_life="1m", window_size="1m", reverse=True)
 forward = (ahead - pl.col("y")).alias("f")
 po.spec.ewridge("m", targets=["y"], features=["x"])
 po.spec.ewridge("m", targets=cols, features=cols)

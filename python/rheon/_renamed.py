@@ -13,15 +13,27 @@ These are the refusals every module uses: the stream functions'
 ``_spec._renamed_keywords`` (``chunk_size``, task 196) is
 :func:`renamed_keywords`. A rename is never forwarded: every old name is
 refused here, naming the new one.
+
+One exception, for a function that moved module after a release (PLAN 579):
+:func:`moved_function` keeps it under its released path as a forward that
+issues a ``RheonDeprecationWarning`` naming the new path, until the next
+major release. It is marked as a stub is, so the reference and the API
+snapshot show the new path only.
 """
 
 from __future__ import annotations
 
 import functools
+import warnings
 from collections.abc import Callable, Iterable, Mapping
 from typing import NoReturn
 
-from rheon._warnings import RENAMED_MARK
+from rheon._warnings import (
+    MOVED_MARK,
+    RENAMED_MARK,
+    RheonDeprecationWarning,
+    _user_stacklevel,
+)
 
 #: The qualified names a decorated function reports, as the reader calls it.
 _READER_NAMES = {
@@ -95,6 +107,35 @@ def renamed_function(old: str, new: str, more: str = "") -> Callable[..., NoRetu
     stub.__doc__ = f"Renamed {new}: calling it raises TypeError, naming the new name."
     setattr(stub, RENAMED_MARK, new)
     return stub
+
+
+def moved_function[**P, R](old: str, new: str, fn: Callable[P, R]) -> Callable[P, R]:
+    """``fn`` under the path ``old`` it had in a release, now at ``new``: each
+    call issues a ``RheonDeprecationWarning`` naming ``new`` and then is
+    ``fn``'s call, with its arguments, result and errors unchanged. Kept out
+    of its module's ``__all__``, as a stub is."""
+
+    @functools.wraps(fn)
+    def alias(*args: P.args, **kwargs: P.kwargs) -> R:
+        who = old
+        warnings.warn(
+            f"{who}: it moved to {new}. The old path works for now, and will be removed at "
+            f"the next major release. Call {new} instead.",
+            RheonDeprecationWarning,
+            stacklevel=_user_stacklevel(),
+        )
+        return fn(*args, **kwargs)
+
+    alias.__doc__ = f"Moved to :func:`{new}`: calling it warns, then calls it."
+    setattr(alias, RENAMED_MARK, new)
+    setattr(alias, MOVED_MARK, new)
+    return alias
+
+
+def is_moved(obj: object) -> bool:
+    """Whether ``obj`` is a forward from :func:`moved_function`: a released
+    path kept, with a deprecation warning, for a function that moved."""
+    return getattr(obj, MOVED_MARK, None) is not None
 
 
 def is_renamed(obj: object) -> bool:

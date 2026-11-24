@@ -235,9 +235,9 @@ def test_what_the_operators_refuse() -> None:
     with pytest.raises(TypeError, match="tol must be a number"):
         rp.ops.run_length("x", abs_tol="0")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="holds the operator increment"):
-        rp.ops.run_length(rp.increment("x"))
+        rp.ops.run_length(rp.ops.increment("x"))
     with pytest.raises(ValueError, match="another window operator"):
-        rp.ewm_mean(rp.ops.run_length("x"), half_life=1.0)
+        rp.ops.ewm_mean(rp.ops.run_length("x"), half_life=1.0)
     with pytest.raises(TypeError, match="half_life is required"):
         rp.ops.clock_lag("t", "x", half_life=None)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="half_life must be above 0"):

@@ -27,12 +27,12 @@ raw feature is a response per unit of the feature, the same in a calm hour
 and a volatile one. A coefficient on its z-score is a response per standard
 deviation, at the feature's spread as it stands on that row.
 
-1. **Make each z-score a column with `rp.ewm_mean` and `rp.ewm_std` in
+1. **Make each z-score a column with `rp.ops.ewm_mean` and `rp.ops.ewm_std` in
    the query's `.rheon.with_windows`
    ([`rp.stream.with_windows`](https://rheon-dev.github.io/rheon/stream.html#rheon.polars.stream.with_windows)),
    chained in the query before the
    [model bank](../GLOSSARY.md#the-model-bank-and-what-it-reads).** The
-   z-score is `(x − rp.ewm_mean(x)) / rp.ewm_std(x)`. Give both
+   z-score is `(x − rp.ops.ewm_mean(x)) / rp.ops.ewm_std(x)`. Give both
    [window operators](../GLOSSARY.md#fitting-a-model) the same
    `half_life`, how fast the mean and the spread forget, in the clock's
    units. [Make features that look back over the
@@ -44,7 +44,7 @@ deviation, at the feature's spread as it stands on that row.
 
 The truth is `y = 1 + 2·x0 − x1`, so per standard deviation of `x0` the
 response is 2 times `x0`'s spread on that row. The
-recipe prints the spread `rp.ewm_std` gives against Polars' own `ewm_std`,
+recipe prints the spread `rp.ops.ewm_std` gives against Polars' own `ewm_std`,
 and the fitted coefficients against the truth. This code uses
 `ticks.parquet` from [Example data](../EXAMPLE-DATA.md):
 
@@ -53,9 +53,9 @@ and the fitted coefficients against the truth. This code uses
 row_clock = dict(clock="t", gap_cap=10.0)                # one clock for the z-scores and the model; t steps by 1 a row
 spread = dict(half_life=100.0)                           # how fast the mean and the spread forget, in the clock's units
 zscored = pl.scan_parquet("ticks.parquet").rheon.with_windows(
-    z_x0=(pl.col("x0") - rp.ewm_mean("x0", **spread)) / rp.ewm_std("x0", **spread),   # x0 in units of its current spread
-    z_x1=(pl.col("x1") - rp.ewm_mean("x1", **spread)) / rp.ewm_std("x1", **spread),
-    sd_x0=rp.ewm_std("x0", **spread), sd_x1=rp.ewm_std("x1", **spread),
+    z_x0=(pl.col("x0") - rp.ops.ewm_mean("x0", **spread)) / rp.ops.ewm_std("x0", **spread),   # x0 in units of its current spread
+    z_x1=(pl.col("x1") - rp.ops.ewm_mean("x1", **spread)) / rp.ops.ewm_std("x1", **spread),
+    sd_x0=rp.ops.ewm_std("x0", **spread), sd_x1=rp.ops.ewm_std("x1", **spread),
     **row_clock,
 )
 per_sd = rp.spec.ewridge("per_sd", targets=["y"], features=["z_x0", "z_x1"], half_life=100.0, **row_clock)
@@ -63,7 +63,7 @@ fitted = zscored.rheon.fit_predict([per_sd]).collect()   # the rows, the z-score
 
 # The spread against Polars', and the fit against the truth.
 polars_sd = pl.read_parquet("ticks.parquet")["x0"].ewm_std(half_life=100.0, adjust=False)
-print(f"rp.ewm_std against Polars' ewm_std: largest difference {(fitted['sd_x0'] - polars_sd).abs().max():.12f}")
+print(f"rp.ops.ewm_std against Polars' ewm_std: largest difference {(fitted['sd_x0'] - polars_sd).abs().max():.12f}")
 last = fitted.row(-1, named=True)
 intercept, b0, b1 = last["per_sd"]["coef"]
 print(f"per standard deviation: z_x0 {b0:.2f} (truth 2 x {last['sd_x0']:.2f} = {2 * last['sd_x0']:.2f}), "
@@ -71,7 +71,7 @@ print(f"per standard deviation: z_x0 {b0:.2f} (truth 2 x {last['sd_x0']:.2f} = {
 ```
 
 ```text
-rp.ewm_std against Polars' ewm_std: largest difference 0.000000000000
+rp.ops.ewm_std against Polars' ewm_std: largest difference 0.000000000000
 per standard deviation: z_x0 1.81 (truth 2 x 0.95 = 1.90), z_x1 -0.92 (truth -1 x 0.98 = -0.98)
 ```
 
@@ -82,7 +82,7 @@ the same row.** In the recipe, the fitted responses sit within about a
 tenth of the truth, each read at the feature's spread on the last row.
 
 **Compare the spread with Polars' own `ewm_std`.** On a clock that steps
-by 1 a row, with `half_life` in rows, `rp.ewm_std` is Polars' `ewm_std`
+by 1 a row, with `half_life` in rows, `rp.ops.ewm_std` is Polars' `ewm_std`
 with `adjust=False`, as the recipe's first printed line shows. It gives
 those values over a stream in one pass, where Polars' form needs the
 column in memory. On any other clock, the operators weigh each row by the

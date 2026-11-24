@@ -33,7 +33,7 @@ def test_a_pushed_filter_is_applied_by_the_source():
     not apply it again, so the source applies it: the filtered plan gives
     the rows of the whole output that pass it."""
     lf = _frame().lazy()
-    windows = rp.stream.with_windows(lf, m=rp.ewm_mean("x", half_life=4.0))
+    windows = rp.stream.with_windows(lf, m=rp.ops.ewm_mean("x", half_life=4.0))
     whole = windows.collect()
     got = windows.filter(pl.col("x") > 0).collect()
     assert got.equals(whole.filter(pl.col("x") > 0))
@@ -44,7 +44,7 @@ def test_a_head_longer_than_the_stream_gives_the_whole_stream():
     """A slice Polars pushes into the source counts output rows; one longer
     than the stream ends with the rows the input's end resolves."""
     lf = _frame().lazy()
-    ahead = rp.ewm_mean("x", half_life=4.0, window_size=5.0, reverse=True)
+    ahead = rp.ops.ewm_mean("x", half_life=4.0, window_size=5.0, reverse=True)
     windows = rp.stream.with_windows(lf, clock="t", gap_cap=10.0, m=ahead)
     whole = windows.collect()
     assert windows.head(1_000).collect().equals(whole)
@@ -73,7 +73,7 @@ def _single_use(frame: pl.DataFrame) -> pl.LazyFrame:
 
 
 def test_with_windows_over_a_spent_single_use_source_warns():
-    windows = rp.stream.with_windows(_single_use(_frame()), m=rp.ewm_mean("x", half_life=4.0))
+    windows = rp.stream.with_windows(_single_use(_frame()), m=rp.ops.ewm_mean("x", half_life=4.0))
     assert windows.collect().height == 40
     with pytest.warns(
         rp.ConsumedSourceWarning,
@@ -101,14 +101,14 @@ def test_with_windows_refuses_what_is_not_an_expression_or_not_a_number():
         ValueError, match="with_windows: gap_cap is NaN, which is no number of clock units"
     ):
         rp.stream.with_windows(
-            lf, clock="t", gap_cap=float("nan"), m=rp.ewm_mean("x", half_life=4.0)
+            lf, clock="t", gap_cap=float("nan"), m=rp.ops.ewm_mean("x", half_life=4.0)
         )
 
 
 def test_a_chunk_size_below_one_is_refused():
     lf = _frame().lazy()
     with pytest.raises(ValueError, match="chunk_size must be at least 1, but it is 0"):
-        rp.stream.with_windows(lf, chunk_size=0, m=rp.ewm_mean("x", half_life=4.0))
+        rp.stream.with_windows(lf, chunk_size=0, m=rp.ops.ewm_mean("x", half_life=4.0))
     ticks = pl.DataFrame({"s": ["a", "b"], "t": [1.0, 2.0], "v": [1.0, 2.0]})
     with pytest.raises(ValueError, match="chunk_size must be at least 1, but it is 0"):
         rp.stream.refresh_time(
@@ -126,10 +126,10 @@ def test_a_chunk_size_that_is_not_a_whole_number_is_refused_by_name(bad):
     with pytest.raises(
         WrongTypeError, match="^with_windows: chunk_size must be a whole number of at least 1"
     ):
-        rp.stream.with_windows(lf, chunk_size=bad, m=rp.ewm_mean("x", half_life=4.0))
+        rp.stream.with_windows(lf, chunk_size=bad, m=rp.ops.ewm_mean("x", half_life=4.0))
     # A numpy integer is a whole number.
-    out = rp.stream.with_windows(lf, chunk_size=np.int64(2), m=rp.ewm_mean("x", half_life=4.0))
-    want = rp.stream.with_windows(lf, m=rp.ewm_mean("x", half_life=4.0))
+    out = rp.stream.with_windows(lf, chunk_size=np.int64(2), m=rp.ops.ewm_mean("x", half_life=4.0))
+    want = rp.stream.with_windows(lf, m=rp.ops.ewm_mean("x", half_life=4.0))
     assert out.collect().equals(want.collect())
 
 

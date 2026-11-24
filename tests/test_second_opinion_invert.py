@@ -195,7 +195,7 @@ def test_rp_invert_agrees_with_brentq_wherever_it_certifies():
     assert json.loads(column[len(_formula.PREFIX) :]) == NODE
     a, b, roots, t, expect = _rows()
     frame = pl.DataFrame({"a": a, "b": b, "t": pl.Series(t, dtype=pl.Float64)})
-    got = rp.stream.with_windows(frame, d=expr, level=rp.ewm_mean("a", half_life=4.0))
+    got = rp.stream.with_windows(frame, d=expr, level=rp.ops.ewm_mean("a", half_life=4.0))
     assert got.height == len(a)
     detail = got["d"].struct.unnest()
     out = {name: detail[name].to_list() for name in detail.columns}
@@ -205,6 +205,6 @@ def test_rp_invert_agrees_with_brentq_wherever_it_certifies():
     plain = rp.stream.with_windows(
         frame,
         x=rp.ops.invert(_python_f, "t", LO, HI, increasing=True, xtol=XTOL, rtol=RTOL),
-        level=rp.ewm_mean("a", half_life=4.0),
+        level=rp.ops.ewm_mean("a", half_life=4.0),
     )
     assert plain["x"].to_list() == out["root"]

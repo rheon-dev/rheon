@@ -338,7 +338,7 @@ def test_a_window_holds_what_polars_rolling_holds_on_the_integers(closed):
     window apart land on Polars' side of every edge."""
     df = frame(n=150, steps=(0, 1, 7, 100))
     out = rp.stream.with_windows(
-        df, s=rp.ewm_sum("x", half_life=math.inf, window_size=100.0, closed=closed), **CLOCK
+        df, s=rp.ops.ewm_sum("x", half_life=math.inf, window_size=100.0, closed=closed), **CLOCK
     )
     ref = df.select(pl.col("x").rolling_sum_by("t", window_size="100i", closed=closed))["x"]
     # An empty window sums to 0 from Polars 1.41.1 and to null before it
@@ -356,7 +356,7 @@ def test_a_window_holds_what_polars_rolling_holds_on_the_integers(closed):
 def test_a_gap_of_exactly_gap_cap_does_not_cut_a_window():
     """``gap_cap = 100``: a step of exactly 100 keeps the window open, one of
     101 cuts it. As doubles the first was a step of 256."""
-    sums = rp.ewm_sum("x", half_life=math.inf, window_size=1000.0)
+    sums = rp.ops.ewm_sum("x", half_life=math.inf, window_size=1000.0)
 
     def run_on(t):
         df = pl.DataFrame({"t": t, "x": [1.0, 10.0, 100.0]})
@@ -367,21 +367,21 @@ def test_a_gap_of_exactly_gap_cap_does_not_cut_a_window():
 
 
 def test_an_increment_of_an_integer_input_is_the_integers_step():
-    """``rp.increment`` of an ``Int64`` column near 1.79e18 is its step in
+    """``rp.ops.increment`` of an ``Int64`` column near 1.79e18 is its step in
     integers, then converted: 1, 7 and 100, where the doubles of the two
     values gave 0."""
     c = [T0, T0 + 1, T0 + 8, T0 + 108, T0 + 108, T0 + 5]
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], "c": c})
-    out = rp.stream.with_windows(df, d=rp.increment("c"), **CLOCK)
+    out = rp.stream.with_windows(df, d=rp.ops.increment("c"), **CLOCK)
     assert out["d"].to_list() == [None, 1.0, 7.0, 100.0, 0.0, -103.0]
     unsigned = df.with_columns(pl.col("c").cast(pl.UInt64))
-    out = rp.stream.with_windows(unsigned, d=rp.increment("c"), **CLOCK)
+    out = rp.stream.with_windows(unsigned, d=rp.ops.increment("c"), **CLOCK)
     assert out["d"].to_list() == [None, 1.0, 7.0, 100.0, 0.0, -103.0]
 
 
 def test_a_window_state_resumes_on_the_integers(tmp_path):
     df = frame(n=150, steps=(0, 1, 7, 100))
-    s = rp.ewm_sum("x", half_life=math.inf, window_size=100.0)
+    s = rp.ops.ewm_sum("x", half_life=math.inf, window_size=100.0)
     whole = rp.stream.with_windows(df, s=s, **CLOCK)["s"]
     state = tmp_path / "w.state"
     a = rp.stream.with_windows(df[:70], s=s, save_state=state, **CLOCK)
@@ -473,7 +473,7 @@ def test_an_int128_clock_is_refused_by_name(surface):
     if surface == "bank":
         call = lambda: rp.ModelBank([ridge()]).fit_predict(df)  # noqa: E731
     elif surface == "with_windows":
-        s = rp.ewm_sum("x", half_life=math.inf, window_size=5.0)
+        s = rp.ops.ewm_sum("x", half_life=math.inf, window_size=5.0)
         call = lambda: rp.stream.with_windows(df, s=s, **CLOCK)  # noqa: E731
     elif surface == "refresh_time":
         ticks = df.with_columns(series=pl.Series(["a", "b", "a", "b", "a"]))
@@ -503,7 +503,7 @@ def test_the_command_line_refuses_an_int128_clock_by_name(rheon_cli, tmp_path):
 
 
 def test_an_increment_of_an_int128_input_is_the_integers_step():
-    """``rp.increment`` of an ``Int128`` running count past the largest
+    """``rp.ops.increment`` of an ``Int128`` running count past the largest
     ``Int64`` -- ``2**63 + k`` -- is its step in integers, then made a float,
     as a 64-bit one's is: 1, 7, 100, 0 and -103. It was read as doubles,
     which resolve 2048 there, and gave 0.0 for every step (review round 5,
@@ -511,12 +511,12 @@ def test_an_increment_of_an_int128_input_is_the_integers_step():
     holds: it is taken whole and rounded once, to ``2**128``."""
     c = [BIG + k for k in (0, 1, 8, 108, 108, 5)]
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], "c": pl.Series(c, dtype=pl.Int128)})
-    out = rp.stream.with_windows(df, d=rp.increment("c"), **CLOCK)
+    out = rp.stream.with_windows(df, d=rp.ops.increment("c"), **CLOCK)
     assert out["d"].to_list() == [None, 1.0, 7.0, 100.0, 0.0, -103.0]
     ends = pl.DataFrame(
         {"t": [0.0, 1.0, 2.0], "c": pl.Series([-(2**127), 2**127 - 1, -(2**127)], dtype=pl.Int128)}
     )
-    out = rp.stream.with_windows(ends, d=rp.increment("c"), **CLOCK)
+    out = rp.stream.with_windows(ends, d=rp.ops.increment("c"), **CLOCK)
     assert out["d"].to_list() == [None, 2.0**128, -(2.0**128)]
 
 
@@ -526,7 +526,7 @@ def test_an_int128_increment_resumes_on_the_integers(tmp_path):
     exact too."""
     c = [BIG + k for k in (0, 1, 8, 108, 108, 5)]
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], "c": pl.Series(c, dtype=pl.Int128)})
-    d = rp.increment("c")
+    d = rp.ops.increment("c")
     state = tmp_path / "w.state"
     a = rp.stream.with_windows(df[:3], d=d, save_state=state, **CLOCK)
     b = rp.stream.with_windows(df[3:], d=d, load_state=state, **CLOCK)
@@ -566,7 +566,7 @@ SURFACES = [
 def _call(surface: str, df: pl.DataFrame):
     """``surface`` run on ``df``, its clock ``t``, as a callable."""
     if surface == "with_windows":
-        s = rp.ewm_sum("x", half_life=math.inf, window_size=5.0)
+        s = rp.ops.ewm_sum("x", half_life=math.inf, window_size=5.0)
         return lambda: rp.stream.with_windows(df, s=s, **CLOCK)
     if surface == "refresh_time":
         ticks = df.with_columns(series=pl.Series(["a", "b"] * (df.height // 2) + ["a"]))

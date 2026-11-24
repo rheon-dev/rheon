@@ -8,7 +8,7 @@ held by a plain test that pins it, naming the doc that says so.
 
 - PLAN 565: ``reverse=True`` window edges. Which rows a window holds is the
   report's table, and Polars' ``rolling_*_by`` on the negated clock agrees
-  (plain test). ``rp.ewm_mean`` is a time-weighted mean, so its far-edge row
+  (plain test). ``rp.ops.ewm_mean`` is a time-weighted mean, so its far-edge row
   weighs nothing (documented, plain test). Confirmed: a window looking ahead
   under ``"right"`` or ``"both"`` whose far edge is the input's last row is
   whole at the end of the input, as the same window before a gap is (fixed).
@@ -83,7 +83,7 @@ def _sum_by_polars(closed: str, w: int) -> list[float]:
 
 
 def _time_weighted_mean(closed: str, t: int, w: int) -> float | None:
-    """``rp.ewm_mean`` looking ahead, from WINDOWS.md's definition: a row is
+    """``rp.ops.ewm_mean`` looking ahead, from WINDOWS.md's definition: a row is
     in the window by its stamp, and each value is held from its row until the
     next row, so it weighs the part of ``[u, u_next)`` inside ``[t, t+w]``.
     Even weights (``half_life=inf``)."""
@@ -101,7 +101,7 @@ def _windows(op: str, closed: str, w: int) -> list[float | None]:
     kw: dict[str, Any] = dict(
         half_life=float("inf"), window_size=f"{w}m", closed=closed, partial="keep", reverse=True
     )
-    expr = getattr(rp, op)("x", **kw)
+    expr = getattr(rp.ops, op)("x", **kw)
     return rp.stream.with_windows(GRID, v=expr, clock="t", gap_cap="1h")["v"].to_list()
 
 
@@ -130,7 +130,7 @@ def test_reverse_window_membership_is_the_reports_table_and_polars(closed: str, 
 def test_reverse_mean_is_time_weighted_so_its_far_edge_row_weighs_nothing(
     closed: str, w: int
 ) -> None:
-    """PLAN 565, the documented part: ``rp.ewm_mean`` is a time-weighted
+    """PLAN 565, the documented part: ``rp.ops.ewm_mean`` is a time-weighted
     mean, and looking ahead "each value is held until the next row"
     (WINDOWS.md, "A row's weight on an uneven clock"; "A row is in a window by
     its stamp, but a mean weighs it by the part of its held interval inside
@@ -184,7 +184,7 @@ def test_a_reverse_window_whose_far_edge_is_the_last_row_is_whole_at_the_end_of_
     )
     if op == "ewm_quantile":
         kw["quantile"] = 0.5
-    expr = getattr(rp, op)("x", **kw)
+    expr = getattr(rp.ops, op)("x", **kw)
     edge = MINUTES.index(MINUTES[-1] - w)
     # The same rows with one more row past the far edge: the window's value.
     longer = pl.concat(
@@ -204,7 +204,7 @@ def _reverse_expr(op: str, closed: str, w: int) -> pl.Expr:
     )
     if op == "ewm_quantile":
         kw["quantile"] = 0.5
-    return getattr(rp, op)("x", **kw)
+    return getattr(rp.ops, op)("x", **kw)
 
 
 #: Two groups on one clock, in clock order across them: ``a`` ends at 25
@@ -463,7 +463,7 @@ def test_an_unsliced_save_emits_the_newest_stamps_backward_windows(tmp_path: Pat
     ``stream.py`` calls ``finish`` only when no state is saved (line 1792).
     Today 5 rows give 4, and two runs of 5 give 9 of 10."""
     state = tmp_path / "w.state"
-    f: dict[str, Any] = dict(m=rp.ewm_mean("x", half_life="10m", window_size="30m"))
+    f: dict[str, Any] = dict(m=rp.ops.ewm_mean("x", half_life="10m", window_size="30m"))
     one = rp.stream.with_windows(FIVE_MIN, **f, clock="t", gap_cap="1h")
     first = rp.stream.with_windows(FIVE_MIN.head(5), **f, clock="t", gap_cap="1h", save_state=state)
     # The held row's value is already final: it comes out unchanged later.
@@ -499,9 +499,9 @@ _SPLIT_FORMS: dict[str, Any] = {
 def _split_exprs() -> dict[str, pl.Expr]:
     out: dict[str, pl.Expr] = {}
     for name, kw in _SPLIT_FORMS.items():
-        out[f"{name}_mean"] = rp.ewm_mean("x", half_life="12m", **kw)
-        out[f"{name}_sum"] = rp.ewm_sum("x", half_life="12m", partial="keep", **kw)
-        out[f"{name}_q"] = rp.ewm_quantile("x", quantile=0.5, half_life="12m", **kw)
+        out[f"{name}_mean"] = rp.ops.ewm_mean("x", half_life="12m", **kw)
+        out[f"{name}_sum"] = rp.ops.ewm_sum("x", half_life="12m", partial="keep", **kw)
+        out[f"{name}_q"] = rp.ops.ewm_quantile("x", quantile=0.5, half_life="12m", **kw)
     return out
 
 
@@ -540,7 +540,7 @@ def test_backward_windows_alone_leave_whole_at_a_save(tmp_path: Path) -> None:
     leaves with it, the newest stamp's included, under every ``closed``."""
     state = tmp_path / "w.state"
     for name in ("back_right", "back_left", "back_both", "back_none"):
-        expr = rp.ewm_mean("x", half_life="12m", **_SPLIT_FORMS[name])
+        expr = rp.ops.ewm_mean("x", half_life="12m", **_SPLIT_FORMS[name])
         first = rp.stream.with_windows(
             SPLIT_FRAME.head(3), v=expr, clock="t", gap_cap="2h", save_state=state
         )
@@ -555,7 +555,7 @@ def test_a_resumed_row_at_any_groups_last_stamp_is_refused(tmp_path: Path) -> No
     clock refuses the row as a step back, so no row of any group joins the
     windows the save read. A first row at the stamp is refused by name."""
     state = tmp_path / "g.state"
-    f: dict[str, Any] = dict(m=rp.ewm_mean("x", half_life="10m", window_size="30m"))
+    f: dict[str, Any] = dict(m=rp.ops.ewm_mean("x", half_life="10m", window_size="30m"))
     kw: dict[str, Any] = dict(clock="t", gap_cap="2h", group="g")
     first = SPLIT_FRAME.head(5)  # ends at stamp 15, in groups a and b
     rp.stream.with_windows(first, **f, **kw, save_state=state)

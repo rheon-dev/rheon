@@ -232,7 +232,7 @@ class Case(NamedTuple):
 
 
 FWD = (
-    rp.ewm_mean("y", half_life=dt.timedelta(seconds=10), window_size="8s", reverse=True)
+    rp.ops.ewm_mean("y", half_life=dt.timedelta(seconds=10), window_size="8s", reverse=True)
     - pl.col("y")
 ).alias("fwd")
 SIDE: dict[str, Any] = dict(

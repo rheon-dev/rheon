@@ -282,7 +282,7 @@ thousand is followed by a jump of 50.
 
 1. **Make up three days of trades, one parquet file per day.**
 2. **Add the feature and the target as columns with
-   `.rheon.with_windows`.** `rp.ewm_mean("mid", half_life="1m",
+   `.rheon.with_windows`.** `rp.ops.ewm_mean("mid", half_life="1m",
    window_size="5m")` is the bounded EWMA of the last five minutes, and
    `reverse=True` makes it look at the next five.
 3. **Fit the first-stage ridge of the factor on its inputs,** with
@@ -343,8 +343,8 @@ for k in range(3):
 recent = dict(half_life="1m", window_size="5m")                    # weights halve each minute; rows past 5 minutes drop out
 # with_windows adds each expression as a column, computed as the rows stream past.
 windows = pl.scan_parquet("trades/*.parquet").rheon.with_windows(
-    stretch=pl.col("mid") - rp.ewm_mean("mid", **recent),                 # the mid against its last five minutes
-    fwd=rp.ewm_mean("mid", **recent, reverse=True) - pl.col("mid"),       # the next five minutes against the mid
+    stretch=pl.col("mid") - rp.ops.ewm_mean("mid", **recent),                 # the mid against its last five minutes
+    fwd=rp.ops.ewm_mean("mid", **recent, reverse=True) - pl.col("mid"),       # the next five minutes against the mid
     clock="ts", gap_cap="5m",                                             # the windows' clock, and its longest step
 )
 # 3. The first stage: a ridge of the factor on its inputs, in the same query.

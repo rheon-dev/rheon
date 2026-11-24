@@ -61,12 +61,15 @@ class RheonDeprecationWarning(RheonWarning, DeprecationWarning):
     """A warning that a name still read is on its way out.
 
     The library issues it for a name it still reads under a spelling it will
-    stop reading at the next major version. The one it reads that way is an
+    stop reading at the next major version. It reads two kinds that way. An
     environment variable under its name from before the rename
     (``POLARS_ONLINE_MAX_THREADS`` for ``RHEON_MAX_THREADS``, and the same for
-    ``RHEON_TIMING``, ``RHEON_WARN_UNSTABLE`` and ``RHEON_SKIP_CPU_CHECK``): it
+    ``RHEON_TIMING``, ``RHEON_WARN_UNSTABLE`` and ``RHEON_SKIP_CPU_CHECK``)
     is read while the new name is not set, with this warning once at
-    ``import rheon``, and not at all from the next major version. Any other
+    ``import rheon``. A window operator 2.0 exported at the root of
+    ``rheon.polars``, such as ``rp.ewm_mean``, now in ``rheon.polars.ops``,
+    still works at the root, with this warning at each call naming its
+    ``rp.ops`` path. Neither is read from the next major version. Any other
     renamed name is refused outright, naming the new one (``TypeError`` from a
     builder or a function, ``ValueError`` from a spec dict).
     Python shows a ``DeprecationWarning`` issued from a library only in
@@ -204,6 +207,11 @@ def unstable[**P, R](what: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
 #: API snapshot and the reference leave such a name out, so both show the new
 #: name only (``_renamed.is_renamed`` reads it).
 RENAMED_MARK = "__rheon_renamed__"
+
+#: The attribute that marks a forward kept, with a deprecation warning, under
+#: the path a function had in a release before it moved (``_renamed.is_moved``
+#: reads it). Such a forward carries ``RENAMED_MARK`` too.
+MOVED_MARK = "__rheon_moved__"
 
 
 class ReadinessWarning(RheonWarning, UserWarning):

@@ -290,7 +290,7 @@ OPS = ("ewm_mean", "rewm_mean", "ewm_sum", "rewm_sum", "ewm_rate", "rewm_rate")
 def test_each_operator_matches_the_definition(op: str, closed: str) -> None:
     df = ticks(700, 3)
     # A backward operator is `ewm_*(reverse=True)`; `rewm_*` names it in `loop`.
-    fn = getattr(rp, op.removeprefix("r"))
+    fn = getattr(rp.ops, op.removeprefix("r"))
     back = {"reverse": True} if op.startswith("rewm") else {}
     y = fn("x", half_life=4.0, window_size=7.0, closed=closed, min_samples=2, **back)
     out = rp.stream.with_windows(df, y=y, **CLOCK)
@@ -302,7 +302,7 @@ def test_each_operator_matches_the_definition(op: str, closed: str) -> None:
 @pytest.mark.parametrize("op", ["ewm_mean", "ewm_sum", "ewm_rate"])
 def test_a_backward_operator_without_a_window_runs_over_the_stretch(op: str) -> None:
     df = ticks(400, 5, repeats=False)
-    out = rp.stream.with_windows(df, y=getattr(rp, op)("x", half_life=3.0), **CLOCK)
+    out = rp.stream.with_windows(df, y=getattr(rp.ops, op)("x", half_life=3.0), **CLOCK)
     assert_close(out["y"].to_list(), loop(df, op, "x", half_life=3.0), op)
 
 
@@ -312,7 +312,7 @@ def test_the_mean_and_the_sum_are_the_recursions() -> None:
     definitions row by row."""
     df = ticks(500, 8, repeats=False)
     out = rp.stream.with_windows(
-        df, m=rp.ewm_mean("x", half_life=2.5), s=rp.ewm_sum("x", half_life=2.5), **CLOCK
+        df, m=rp.ops.ewm_mean("x", half_life=2.5), s=rp.ops.ewm_sum("x", half_life=2.5), **CLOCK
     )
     t = df["t"].to_list()
     x = [math.nan if v is None else v for v in df["x"].to_list()]
@@ -334,8 +334,8 @@ def test_polars_computes_the_same_mean_and_sum() -> None:
     )
     out = rp.stream.with_windows(
         df,
-        m=rp.ewm_mean("x", half_life="2s500ms"),
-        s=rp.ewm_sum("x", half_life="2s500ms"),
+        m=rp.ops.ewm_mean("x", half_life="2s500ms"),
+        s=rp.ops.ewm_sum("x", half_life="2s500ms"),
         clock="ts",
         gap_cap="1000s",
     )
@@ -378,7 +378,7 @@ def test_the_rate_is_polars_sum_over_scipys_integral_of_the_decay() -> None:
         .with_columns(ts=pl.from_epoch((pl.col("t") * 1e9).cast(pl.Int64), time_unit="ns"))
     )
     out = rp.stream.with_windows(
-        df, r=rp.ewm_rate("x", half_life="2s500ms"), clock="ts", gap_cap="1000s"
+        df, r=rp.ops.ewm_rate("x", half_life="2s500ms"), clock="ts", gap_cap="1000s"
     )
     if not hasattr(pl.Expr, "ewm_sum_by"):
         assert INSTALLED < (1, 43, 0), "ewm_sum_by arrived in 1.43.0"
@@ -413,7 +413,7 @@ def test_which_rows_a_window_holds_is_polars_rolling(closed: str) -> None:
         ts=pl.from_epoch(pl.col("t") * 1_000_000_000, time_unit="ns")
     )
     out = rp.stream.with_windows(
-        df, s=rp.ewm_sum("x", half_life=math.inf, window_size=2.0, closed=closed), **CLOCK
+        df, s=rp.ops.ewm_sum("x", half_life=math.inf, window_size=2.0, closed=closed), **CLOCK
     )
     ref = df.select(pl.col("x").rolling_sum_by("ts", window_size="2s", closed=closed))[
         "x"
@@ -425,7 +425,7 @@ def test_which_rows_a_window_holds_is_polars_rolling(closed: str) -> None:
 def test_min_samples_counts_rows_with_a_value() -> None:
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "x": [1.0, None, 2.0, 3.0]})
     out = rp.stream.with_windows(
-        df, s=rp.ewm_sum("x", half_life=math.inf, window_size=3.0, min_samples=2), **CLOCK
+        df, s=rp.ops.ewm_sum("x", half_life=math.inf, window_size=3.0, min_samples=2), **CLOCK
     )
     assert out["s"].to_list() == [None, None, 3.0, 5.0]
 
@@ -436,16 +436,16 @@ def test_a_forward_window_is_a_backward_one_over_the_reversed_stream() -> None:
     df = ticks(500, 13, repeats=False)
     fwd = rp.stream.with_windows(
         df,
-        m=rp.ewm_mean("x", half_life=3.0, window_size=5.0, reverse=True),
-        s=rp.ewm_sum("x", half_life=3.0, window_size=5.0, reverse=True),
+        m=rp.ops.ewm_mean("x", half_life=3.0, window_size=5.0, reverse=True),
+        s=rp.ops.ewm_sum("x", half_life=3.0, window_size=5.0, reverse=True),
         **CLOCK,
     )
     last = df["t"][-1]
     mirror = df.reverse().with_columns(t=last - pl.col("t"))
     back = rp.stream.with_windows(
         mirror,
-        m=rp.ewm_mean("x", half_life=3.0, window_size=5.0, closed="left"),
-        s=rp.ewm_sum("x", half_life=3.0, window_size=5.0, closed="left"),
+        m=rp.ops.ewm_mean("x", half_life=3.0, window_size=5.0, closed="left"),
+        s=rp.ops.ewm_sum("x", half_life=3.0, window_size=5.0, closed="left"),
         **CLOCK,
     ).reverse()
     for c in ("m", "s"):
@@ -499,13 +499,14 @@ def test_a_vwap_is_a_ratio_of_two_sums_and_a_side_is_a_when_inside_both() -> Non
     buys, sells = pl.when(pl.col("side") == "buy"), pl.when(pl.col("side") == "sell")
     out = rp.stream.with_windows(
         df,
-        vwap=rp.ewm_sum(notional, **h, reverse=True) / rp.ewm_sum("quantity", **h, reverse=True),
-        buy_vwap=rp.ewm_sum(buys.then(notional), **h, reverse=True, min_samples=1)
-        / rp.ewm_sum(buys.then("quantity"), **h, reverse=True, min_samples=1),
-        buy_vwap_nan=rp.ewm_sum(buys.then(notional), **h, reverse=True)
-        / rp.ewm_sum(buys.then("quantity"), **h, reverse=True),
-        sell_vwap=rp.ewm_sum(sells.then(notional), **h, reverse=True)
-        / rp.ewm_sum(sells.then("quantity"), **h, reverse=True),
+        vwap=rp.ops.ewm_sum(notional, **h, reverse=True)
+        / rp.ops.ewm_sum("quantity", **h, reverse=True),
+        buy_vwap=rp.ops.ewm_sum(buys.then(notional), **h, reverse=True, min_samples=1)
+        / rp.ops.ewm_sum(buys.then("quantity"), **h, reverse=True, min_samples=1),
+        buy_vwap_nan=rp.ops.ewm_sum(buys.then(notional), **h, reverse=True)
+        / rp.ops.ewm_sum(buys.then("quantity"), **h, reverse=True),
+        sell_vwap=rp.ops.ewm_sum(sells.then(notional), **h, reverse=True)
+        / rp.ops.ewm_sum(sells.then("quantity"), **h, reverse=True),
         **CLOCK,
     )
     pq = df.with_columns(pq=notional, bq=buys.then("quantity"), bpq=buys.then(notional))
@@ -544,8 +545,8 @@ def test_a_vwap_is_a_ratio_of_two_sums_and_a_side_is_a_when_inside_both() -> Non
     for other, label in ((split, "split"), (zero, "zero")):
         got = rp.stream.with_windows(
             other,
-            vwap=rp.ewm_sum(notional, **h, reverse=True)
-            / rp.ewm_sum("quantity", **h, reverse=True),
+            vwap=rp.ops.ewm_sum(notional, **h, reverse=True)
+            / rp.ops.ewm_sum("quantity", **h, reverse=True),
             **CLOCK,
         )
         assert_close(got["vwap"][:i].to_list(), out["vwap"][:i].to_list(), label)
@@ -563,9 +564,10 @@ def test_increments_give_a_vwap_from_running_sums_and_a_rate() -> None:
     h = {"half_life": 10.0}
     out = rp.stream.with_windows(
         df,
-        vwap=rp.ewm_sum(rp.increment("cum_pq"), **h) / rp.ewm_sum(rp.increment("cum_q"), **h),
-        rate=rp.ewm_rate(rp.increment("cum_q"), **h, window_size=30.0),
-        dq=rp.increment("cum_q"),
+        vwap=rp.ops.ewm_sum(rp.ops.increment("cum_pq"), **h)
+        / rp.ops.ewm_sum(rp.ops.increment("cum_q"), **h),
+        rate=rp.ops.ewm_rate(rp.ops.increment("cum_q"), **h, window_size=30.0),
+        dq=rp.ops.increment("cum_q"),
         **CLOCK,
     )
     pq = df.with_columns(pq=pl.col("price") * pl.col("quantity"))
@@ -588,14 +590,14 @@ def test_a_formula_composes_on_either_side_of_a_polars_operator() -> None:
     df = ticks(300, 21, repeats=False)
     out = rp.stream.with_windows(
         df,
-        a=rp.ewm_mean("x", half_life=3.0) - pl.col("x"),
-        b=(pl.col("x") / rp.ewm_mean("x", half_life=3.0)).log().clip(-1.0, 1.0),
-        c=pl.when(rp.ewm_sum("x", half_life=3.0) > 0).then(pl.lit(1)).otherwise(pl.lit(-1)),
-        d=rp.ewm_mean("x", half_life=3.0).fill_null(0.0).cast(pl.Float32) ** 2,
+        a=rp.ops.ewm_mean("x", half_life=3.0) - pl.col("x"),
+        b=(pl.col("x") / rp.ops.ewm_mean("x", half_life=3.0)).log().clip(-1.0, 1.0),
+        c=pl.when(rp.ops.ewm_sum("x", half_life=3.0) > 0).then(pl.lit(1)).otherwise(pl.lit(-1)),
+        d=rp.ops.ewm_mean("x", half_life=3.0).fill_null(0.0).cast(pl.Float32) ** 2,
         **CLOCK,
     )
     base = rp.stream.with_windows(
-        df, m=rp.ewm_mean("x", half_life=3.0), s=rp.ewm_sum("x", half_life=3.0), **CLOCK
+        df, m=rp.ops.ewm_mean("x", half_life=3.0), s=rp.ops.ewm_sum("x", half_life=3.0), **CLOCK
     )
     want = base.select(
         a=pl.col("m") - pl.col("x"),
@@ -612,13 +614,13 @@ def test_one_operator_asked_for_twice_is_computed_once() -> None:
     queue, so the queued rows do not grow with the operators."""
     df = ticks(200, 4, repeats=False)
     bank = {"half_life": 2.0, "window_size": 5.0}
-    one = rp.stream.with_windows(df, a=rp.ewm_sum("x", **bank), **CLOCK)
+    one = rp.stream.with_windows(df, a=rp.ops.ewm_sum("x", **bank), **CLOCK)
     four = rp.stream.with_windows(
         df,
-        a=rp.ewm_sum("x", **bank),
-        b=rp.ewm_sum("x", **bank) * 2,
-        c=rp.ewm_mean("x", **bank),
-        d=rp.ewm_rate("x", **bank),
+        a=rp.ops.ewm_sum("x", **bank),
+        b=rp.ops.ewm_sum("x", **bank) * 2,
+        c=rp.ops.ewm_mean("x", **bank),
+        d=rp.ops.ewm_rate("x", **bank),
         **CLOCK,
     )
     assert four["a"].equals(one["a"]) and four.select(pl.col("b") == 2 * pl.col("a"))["b"].all()
@@ -655,8 +657,8 @@ def test_the_tree_round_trips_every_node_kind() -> None:
         c.cast(pl.Int32),
         c.fill_null(0.0),
         c.alias("z"),
-        rp.ewm_mean("a", half_life="10s", window_size="1m") - c,
-        rp.ewm_sum(
+        rp.ops.ewm_mean("a", half_life="10s", window_size="1m") - c,
+        rp.ops.ewm_sum(
             c * d,
             half_life=5.0,
             window_size=60.0,
@@ -665,8 +667,8 @@ def test_the_tree_round_trips_every_node_kind() -> None:
             partial="keep",
             reverse=True,
         ),
-        rp.ewm_rate(rp.increment("a"), half_life=30.0),
-        rp.increment(c + d),
+        rp.ops.ewm_rate(rp.ops.increment("a"), half_life=30.0),
+        rp.ops.increment(c + d),
     ]
     for e in exprs:
         tree = to_tree(e)
@@ -685,28 +687,30 @@ def test_the_tree_round_trips_every_node_kind() -> None:
 def test_what_is_not_element_wise_is_refused_by_name() -> None:
     df = ticks(50, 1)
     for expr, says in [
-        (rp.ewm_mean("x", half_life=2.0).shift(1), "holds the method shift,"),
-        (rp.ewm_mean("x", half_life=2.0).cum_sum(), "holds the method cum_sum,"),
-        (rp.ewm_mean("x", half_life=2.0).mean(), "holds an aggregation,"),
-        (rp.ewm_mean("x", half_life=2.0).rolling_mean(3), "holds a rolling function,"),
+        (rp.ops.ewm_mean("x", half_life=2.0).shift(1), "holds the method shift,"),
+        (rp.ops.ewm_mean("x", half_life=2.0).cum_sum(), "holds the method cum_sum,"),
+        (rp.ops.ewm_mean("x", half_life=2.0).mean(), "holds an aggregation,"),
+        (rp.ops.ewm_mean("x", half_life=2.0).rolling_mean(3), "holds a rolling function,"),
         # Refused by the node's own name, which Polars spelled `Window` before
         # 1.36.1, below the floor of 1.37.0.
-        (rp.ewm_mean("x", half_life=2.0).over("g"), "holds the method over,"),
+        (rp.ops.ewm_mean("x", half_life=2.0).over("g"), "holds the method over,"),
         # `Date` is read since review 2026-10-05 (YB1), a date literal's dtype.
-        (rp.ewm_mean("x", half_life=2.0).cast(pl.Datetime("us")), 'a cast to "Datetime" \\('),
-        (~(rp.ewm_mean("x", half_life=2.0) > 0), "holds the operator ~,"),
+        (rp.ops.ewm_mean("x", half_life=2.0).cast(pl.Datetime("us")), 'a cast to "Datetime" \\('),
+        (~(rp.ops.ewm_mean("x", half_life=2.0) > 0), "holds the operator ~,"),
     ]:
         with pytest.raises(FormulaError, match=says):
             rp.stream.with_windows(df, y=expr, **CLOCK)
     with pytest.raises(ValueError, match="the input holds another window operator"):
-        rp.ewm_mean(rp.ewm_sum("x", half_life=2.0), half_life=2.0)
+        rp.ops.ewm_mean(rp.ops.ewm_sum("x", half_life=2.0), half_life=2.0)
     with pytest.raises(ValueError, match="holds no window operator"):
         rp.stream.with_windows(df, y=pl.col("x") * 2, **CLOCK)
     with pytest.raises(ValueError, match="an expression has no name of its own"):
-        rp.stream.with_windows(df, rp.ewm_mean("x", half_life=2.0), **CLOCK)
+        rp.stream.with_windows(df, rp.ops.ewm_mean("x", half_life=2.0), **CLOCK)
     assert (
         "y"
-        in rp.stream.with_windows(df, rp.ewm_mean("x", half_life=2.0).alias("y"), **CLOCK).columns
+        in rp.stream.with_windows(
+            df, rp.ops.ewm_mean("x", half_life=2.0).alias("y"), **CLOCK
+        ).columns
     )
 
 
@@ -725,7 +729,7 @@ def test_the_refusal_lists_exactly_what_a_formula_reads() -> None:
     list is the same."""
     from rheon.polars._formula import ACCEPTED, OPERATORS, accepted_text
 
-    x, w = pl.col("x"), rp.ewm_mean("x", half_life=2.0)
+    x, w = pl.col("x"), rp.ops.ewm_mean("x", half_life=2.0)
     every = (
         pl.when((w > 0) & (w >= 1) | (w < 2) & (w <= 3) | (w == 4) | (w != 5) | w.is_null())
         .then(-(((w + 1) - (x * 2) / pl.lit(3.0)) ** 2))
@@ -766,12 +770,12 @@ def test_the_calls_own_keywords_are_not_output_names() -> None:
         with pytest.raises(TypeError, match=f"{key} takes a (number or a duration|column name)"):
             rp.stream.with_windows(
                 df,
-                **{key: rp.ewm_mean("x", half_life=2.0)},
+                **{key: rp.ops.ewm_mean("x", half_life=2.0)},
                 **{k: v for k, v in CLOCK.items() if k != key},
             )
     with pytest.raises(TypeError):
-        rp.stream.with_windows(df, like=rp.ewm_mean("x", half_life=2.0), **CLOCK)  # type: ignore[arg-type]
-    out = rp.stream.with_windows(df, rp.ewm_mean("x", half_life=2.0).alias("session"), **CLOCK)
+        rp.stream.with_windows(df, like=rp.ops.ewm_mean("x", half_life=2.0), **CLOCK)  # type: ignore[arg-type]
+    out = rp.stream.with_windows(df, rp.ops.ewm_mean("x", half_life=2.0).alias("session"), **CLOCK)
     assert "session" in out.columns
 
 
@@ -787,20 +791,20 @@ def test_an_operators_parameters_are_checked_by_name() -> None:
         (dict(half_life=2.0, partial="maybe"), "partial must be"),
     ]:
         with pytest.raises((ValueError, TypeError), match=says):
-            rp.ewm_mean("x", **kw)  # type: ignore[arg-type]
+            rp.ops.ewm_mean("x", **kw)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="window_size"):
-        rp.ewm_mean("x", half_life=2.0, reverse=True)  # type: ignore[call-arg]
+        rp.ops.ewm_mean("x", half_life=2.0, reverse=True)  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="half_life"):
-        rp.ewm_mean("x")  # type: ignore[call-arg]
+        rp.ops.ewm_mean("x")  # type: ignore[call-arg]
     df = ticks(50, 1)
     with pytest.raises(ValueError, match="half_life is inf and window_size is not set"):
-        rp.stream.with_windows(df, y=rp.ewm_mean("x", half_life=math.inf), **CLOCK)
+        rp.stream.with_windows(df, y=rp.ops.ewm_mean("x", half_life=math.inf), **CLOCK)
     with pytest.raises(TypeError, match="input must be a number"):
-        rp.stream.with_windows(df, y=rp.ewm_mean("g", half_life=2.0), **CLOCK)
+        rp.stream.with_windows(df, y=rp.ops.ewm_mean("g", half_life=2.0), **CLOCK)
     with pytest.raises(ValueError, match="the input column"):
-        rp.stream.with_windows(df, y=rp.ewm_mean("nope", half_life=2.0), **CLOCK)
+        rp.stream.with_windows(df, y=rp.ops.ewm_mean("nope", half_life=2.0), **CLOCK)
     with pytest.raises(ValueError, match="already a column"):
-        rp.stream.with_windows(df, x=rp.ewm_mean("x", half_life=2.0), **CLOCK)
+        rp.stream.with_windows(df, x=rp.ops.ewm_mean("x", half_life=2.0), **CLOCK)
 
 
 # --------------------------------------------------------------------------
@@ -828,9 +832,9 @@ def test_a_gap_past_the_cap_and_a_session_change_cut_the_windows() -> None:
     df = event_stream()
     out = rp.stream.with_windows(
         df,
-        keep=rp.ewm_mean("x", half_life=1.0, window_size=5.0, partial="keep", reverse=True),
-        null=rp.ewm_mean("x", half_life=1.0, window_size=5.0, partial="null", reverse=True),
-        back=rp.ewm_sum("x", half_life=math.inf, window_size=100.0),
+        keep=rp.ops.ewm_mean("x", half_life=1.0, window_size=5.0, partial="keep", reverse=True),
+        null=rp.ops.ewm_mean("x", half_life=1.0, window_size=5.0, partial="null", reverse=True),
+        back=rp.ops.ewm_sum("x", half_life=math.inf, window_size=100.0),
         **events(),
     )
     assert out["keep"][0] is not None and out["null"][0] is None
@@ -838,7 +842,7 @@ def test_a_gap_past_the_cap_and_a_session_change_cut_the_windows() -> None:
     assert out["back"].to_list() == [1, 3, 6, 10, 5, 11, 18, 8, 17, 27, 38]
     dropped = rp.stream.with_windows(
         df,
-        d=rp.ewm_mean("x", half_life=1.0, window_size=5.0, partial="drop", reverse=True),
+        d=rp.ops.ewm_mean("x", half_life=1.0, window_size=5.0, partial="drop", reverse=True),
         **events(),
     )
     # The four rows the gap cut and the three the session change cut leave;
@@ -850,15 +854,15 @@ def test_a_gap_past_the_cap_and_a_session_change_cut_the_windows() -> None:
 def test_a_reset_discards_and_a_late_row_is_refused() -> None:
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 1.5, 2.5, 3.5], "x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]})
     with pytest.raises(_REFUSAL, match="steps back by 0.5 at row 3"):
-        rp.stream.with_windows(df, y=rp.ewm_sum("x", half_life=1.0), **CLOCK)
+        rp.stream.with_windows(df, y=rp.ops.ewm_sum("x", half_life=1.0), **CLOCK)
     with pytest.raises(_REFUSAL, match="no more than restart_after_step_back = 1"):
         rp.stream.with_windows(
-            df, y=rp.ewm_sum("x", half_life=1.0), restart_after_step_back=1.0, **CLOCK
+            df, y=rp.ops.ewm_sum("x", half_life=1.0), restart_after_step_back=1.0, **CLOCK
         )
     out = rp.stream.with_windows(
         df,
-        f=rp.ewm_sum("x", half_life=math.inf, window_size=10.0, partial="keep", reverse=True),
-        b=rp.ewm_sum("x", half_life=math.inf),
+        f=rp.ops.ewm_sum("x", half_life=math.inf, window_size=10.0, partial="keep", reverse=True),
+        b=rp.ops.ewm_sum("x", half_life=math.inf),
         restart_after_step_back=0.0,
         **CLOCK,
     )
@@ -876,7 +880,7 @@ def test_a_silent_group_holds_the_output_for_at_most_the_cap() -> None:
     )
     out = rp.stream.with_windows(
         df,
-        f=rp.ewm_sum("x", half_life=math.inf, window_size=100.0, partial="keep", reverse=True),
+        f=rp.ops.ewm_sum("x", half_life=math.inf, window_size=100.0, partial="keep", reverse=True),
         clock="t",
         gap_cap=10.0,
         group="g",
@@ -892,11 +896,11 @@ def test_like_takes_the_specs_clock_and_its_rule() -> None:
         "m", targets=["mid"], features=["price"], half_life=10.0, clock="t", gap_cap=50.0
     )
     out = rp.stream.with_windows(
-        df, f=rp.ewm_mean("mid", half_life=5.0, window_size=10.0, reverse=True), like=spec
+        df, f=rp.ops.ewm_mean("mid", half_life=5.0, window_size=10.0, reverse=True), like=spec
     )
     plain = rp.stream.with_windows(
         df,
-        f=rp.ewm_mean("mid", half_life=5.0, window_size=10.0, reverse=True),
+        f=rp.ops.ewm_mean("mid", half_life=5.0, window_size=10.0, reverse=True),
         clock="t",
         gap_cap=50.0,
     )
@@ -907,7 +911,7 @@ def test_like_takes_the_specs_clock_and_its_rule() -> None:
     with pytest.raises(ValueError, match="Leave out clock"):
         rp.stream.with_windows(
             df,
-            f=rp.ewm_mean("mid", half_life=5.0, window_size=10.0, reverse=True),
+            f=rp.ops.ewm_mean("mid", half_life=5.0, window_size=10.0, reverse=True),
             like=spec,
             clock="t",
         )
@@ -920,10 +924,10 @@ def test_like_takes_the_specs_clock_and_its_rule() -> None:
 def mixed() -> dict[str, pl.Expr]:
     h = {"half_life": 2.0}
     return {
-        "a": rp.ewm_mean("x", **h, window_size=5.0),
-        "b": rp.ewm_mean("x", **h, window_size=4.0, reverse=True) - pl.col("x"),
-        "c": rp.ewm_rate(rp.increment("x"), **h, window_size=6.0),
-        "d": rp.ewm_sum(
+        "a": rp.ops.ewm_mean("x", **h, window_size=5.0),
+        "b": rp.ops.ewm_mean("x", **h, window_size=4.0, reverse=True) - pl.col("x"),
+        "c": rp.ops.ewm_rate(rp.ops.increment("x"), **h, window_size=6.0),
+        "d": rp.ops.ewm_sum(
             pl.when(pl.col("x") > 0).then("x"), **h, window_size=3.0, closed="left", reverse=True
         ),
     }
@@ -956,9 +960,9 @@ def test_a_save_and_load_at_every_row_is_one_run(tmp_path: Any) -> None:
 def test_a_state_resumes_only_its_own_call(tmp_path: Any) -> None:
     df = ticks(30, 2)
     state = tmp_path / "w.state"
-    rp.stream.with_windows(df, a=rp.ewm_mean("x", half_life=2.0), save_state=state, **CLOCK)
+    rp.stream.with_windows(df, a=rp.ops.ewm_mean("x", half_life=2.0), save_state=state, **CLOCK)
     with pytest.raises(ValueError, match="another call"):
-        rp.stream.with_windows(df, a=rp.ewm_mean("x", half_life=3.0), load_state=state, **CLOCK)
+        rp.stream.with_windows(df, a=rp.ops.ewm_mean("x", half_life=3.0), load_state=state, **CLOCK)
 
 
 def test_a_slice_and_a_projection_are_honoured() -> None:
@@ -973,11 +977,11 @@ def test_a_slice_and_a_projection_are_honoured() -> None:
 
 def test_the_online_namespaces_are_the_same_call() -> None:
     df = ticks(100, 29)
-    want = rp.stream.with_windows(df, m=rp.ewm_mean("x", half_life=2.0), **CLOCK)
-    assert df.rheon.with_windows(m=rp.ewm_mean("x", half_life=2.0), **CLOCK).equals(want)
+    want = rp.stream.with_windows(df, m=rp.ops.ewm_mean("x", half_life=2.0), **CLOCK)
+    assert df.rheon.with_windows(m=rp.ops.ewm_mean("x", half_life=2.0), **CLOCK).equals(want)
     assert (
         df.lazy()
-        .rheon.with_windows(m=rp.ewm_mean("x", half_life=2.0), **CLOCK)
+        .rheon.with_windows(m=rp.ops.ewm_mean("x", half_life=2.0), **CLOCK)
         .collect()
         .equals(want)
     )
@@ -987,7 +991,7 @@ def test_window_columns_feed_a_model_in_one_query() -> None:
     df = ticks(400, 31, repeats=False)
     out = (
         df.lazy()
-        .rheon.with_windows(trend=rp.ewm_mean("x", half_life=5.0) - pl.col("x"), **CLOCK)
+        .rheon.with_windows(trend=rp.ops.ewm_mean("x", half_life=5.0) - pl.col("x"), **CLOCK)
         .rheon.fit_predict(
             [rp.spec.ewridge("m", targets=["x"], features=["trend"], half_life=50.0)]
         )
@@ -1000,21 +1004,25 @@ def test_a_temporal_clock_takes_durations() -> None:
     df = ticks(200, 37, repeats=False).with_columns(
         ts=pl.from_epoch((pl.col("t") * 1e9).cast(pl.Int64), time_unit="ns")
     )
-    want = rp.stream.with_windows(df, m=rp.ewm_mean("x", half_life=3.0, window_size=7.0), **CLOCK)
+    want = rp.stream.with_windows(
+        df, m=rp.ops.ewm_mean("x", half_life=3.0, window_size=7.0), **CLOCK
+    )
     for hl, w in (
         ("3s", "7s"),
         (timedelta(seconds=3), timedelta(seconds=7)),
         (pl.duration(seconds=3), pl.duration(seconds=7)),
     ):
         got = rp.stream.with_windows(
-            df, m=rp.ewm_mean("x", half_life=hl, window_size=w), clock="ts", gap_cap="1000s"
+            df, m=rp.ops.ewm_mean("x", half_life=hl, window_size=w), clock="ts", gap_cap="1000s"
         )
         # Stamps rounded to the nanosecond move each interval by up to 0.5 ns.
         assert_close(got["m"].to_list(), want["m"].to_list(), tol=1e-7)
     with pytest.raises(ValueError, match="half_life is a duration"):
-        rp.stream.with_windows(df, m=rp.ewm_mean("x", half_life="3s"), **CLOCK)
+        rp.stream.with_windows(df, m=rp.ops.ewm_mean("x", half_life="3s"), **CLOCK)
     with pytest.raises(ValueError, match="gap_cap is a duration and half_life is a number"):
-        rp.stream.with_windows(df, m=rp.ewm_mean("x", half_life=3.0), clock="ts", gap_cap="1000s")
+        rp.stream.with_windows(
+            df, m=rp.ops.ewm_mean("x", half_life=3.0), clock="ts", gap_cap="1000s"
+        )
 
 
 @pytest.mark.extended(reason="the network: a downloaded day of Binance quotes and trades")
@@ -1034,12 +1042,14 @@ def test_the_real_day_runs_and_the_recipes_agree_where_they_should() -> None:
     h = {"half_life": "10s", "window_size": "1m"}
     out = rp.stream.with_windows(
         df,
-        mid_trend=rp.ewm_mean("mid", half_life="5s", window_size="1m") - pl.col("mid"),
-        fwd_vwap=rp.ewm_sum(notional, **h, reverse=True) / rp.ewm_sum("quantity", **h, reverse=True)
+        mid_trend=rp.ops.ewm_mean("mid", half_life="5s", window_size="1m") - pl.col("mid"),
+        fwd_vwap=rp.ops.ewm_sum(notional, **h, reverse=True)
+        / rp.ops.ewm_sum("quantity", **h, reverse=True)
         - pl.col("mid"),
-        vwap_pq=rp.ewm_sum(notional, half_life="10s") / rp.ewm_sum("quantity", half_life="10s"),
-        vwap_sums=rp.ewm_sum(rp.increment("cum_pq"), half_life="10s")
-        / rp.ewm_sum(rp.increment("cum_q"), half_life="10s"),
+        vwap_pq=rp.ops.ewm_sum(notional, half_life="10s")
+        / rp.ops.ewm_sum("quantity", half_life="10s"),
+        vwap_sums=rp.ops.ewm_sum(rp.ops.increment("cum_pq"), half_life="10s")
+        / rp.ops.ewm_sum(rp.ops.increment("cum_q"), half_life="10s"),
         clock="ts",
         gap_cap="5m",
         chunk_size=50_000,
@@ -1068,12 +1078,14 @@ def test_a_state_saved_under_a_slice_resumes_alike_at_any_chunk_size(tmp_path: A
     for rows in (1, 10):
         state = tmp_path / f"s{rows}.state"
         df.lazy().rheon.with_windows(
-            dc=rp.increment("c"), clock="t", gap_cap=100.0, chunk_size=rows, save_state=state
+            dc=rp.ops.increment("c"), clock="t", gap_cap=100.0, chunk_size=rows, save_state=state
         ).head(2).collect()
         rest = (
             df.slice(2)
             .lazy()
-            .rheon.with_windows(dc=rp.increment("c"), clock="t", gap_cap=100.0, load_state=state)
+            .rheon.with_windows(
+                dc=rp.ops.increment("c"), clock="t", gap_cap=100.0, load_state=state
+            )
             .collect()
         )
         outs.append(rest["dc"].to_list())
@@ -1085,8 +1097,8 @@ def test_a_cast_is_strict_as_in_polars_unless_told_otherwise() -> None:
     Polars refuses became a silent null."""
     df = pl.DataFrame({"t": [0.0, 1.0], "x": [1000.0, 1.0]})
     with pytest.raises((pl.exceptions.PolarsError, TypeError), match="conversion from"):
-        rp.stream.with_windows(df, y=rp.ewm_sum("x", half_life=1.0).cast(pl.Int8), **CLOCK)
-    lax = rp.ewm_sum("x", half_life=1.0).cast(pl.Int8, strict=False)
+        rp.stream.with_windows(df, y=rp.ops.ewm_sum("x", half_life=1.0).cast(pl.Int8), **CLOCK)
+    lax = rp.ops.ewm_sum("x", half_life=1.0).cast(pl.Int8, strict=False)
     assert rp.stream.with_windows(df, y=lax, **CLOCK)["y"].to_list() == [None, None]
     assert to_tree(pl.col("x").cast(pl.Int8, strict=False))[-1] == "non_strict"
     for e in [pl.col("x").cast(pl.Int8), pl.col("x").cast(pl.Int8, strict=False)]:
@@ -1108,8 +1120,8 @@ def test_a_restart_on_the_streams_clock_restarts_every_groups_increments() -> No
     )
     out = rp.stream.with_windows(
         df,
-        dc=rp.increment("c"),
-        b=rp.ewm_sum("c", half_life=math.inf),
+        dc=rp.ops.increment("c"),
+        b=rp.ops.ewm_sum("c", half_life=math.inf),
         clock="t",
         gap_cap=1e9,
         restart_after_step_back=50.0,
@@ -1124,7 +1136,7 @@ def test_an_increment_skips_a_null_input() -> None:
     operators hold one from the last valued row; ``diff()`` would give three
     nulls."""
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0], "c": [1.0, None, 3.0]})
-    out = rp.stream.with_windows(df, dc=rp.increment("c"), **CLOCK)
+    out = rp.stream.with_windows(df, dc=rp.ops.increment("c"), **CLOCK)
     assert out["dc"].to_list() == [None, None, 2.0]
 
 
@@ -1133,7 +1145,7 @@ def test_the_operators_prefix_is_reserved_on_inputs() -> None:
     error; it is refused by name on both sides."""
     df = pl.DataFrame({"t": [0.0, 1.0], "@po:x": [1.0, 2.0]})
     with pytest.raises(FormulaError, match="which is kept for the window operators. own columns"):
-        rp.stream.with_windows(df, y=rp.ewm_sum("@po:x", half_life=1.0), **CLOCK)
+        rp.stream.with_windows(df, y=rp.ops.ewm_sum("@po:x", half_life=1.0), **CLOCK)
 
 
 def test_a_positional_expression_named_after_a_column_is_told_about_alias() -> None:
@@ -1141,7 +1153,7 @@ def test_a_positional_expression_named_after_a_column_is_told_about_alias() -> N
     the refusal says so."""
     df = pl.DataFrame({"t": [0.0, 1.0], "x": [1.0, 2.0]})
     with pytest.raises(ValueError, match=r"\.alias\(\)"):
-        rp.stream.with_windows(df, pl.col("x") - rp.ewm_mean("x", half_life=2.0), **CLOCK)
+        rp.stream.with_windows(df, pl.col("x") - rp.ops.ewm_mean("x", half_life=2.0), **CLOCK)
 
 
 def test_from_tree_takes_a_log_base_that_is_not_a_literal() -> None:
@@ -1162,10 +1174,10 @@ def test_a_row_count_clock_reads_every_backward_window() -> None:
     df = pl.DataFrame({"x": [1.0, 2.0, 3.0, 4.0]})
     out = rp.stream.with_windows(
         df,
-        s=rp.ewm_sum("x", half_life=2.0),
-        m=rp.ewm_mean("x", half_life=2.0),
-        w=rp.ewm_mean("x", half_life=2.0, window_size=2.0),
-        b=rp.ewm_sum("x", half_life=2.0, closed="both"),
+        s=rp.ops.ewm_sum("x", half_life=2.0),
+        m=rp.ops.ewm_mean("x", half_life=2.0),
+        w=rp.ops.ewm_mean("x", half_life=2.0, window_size=2.0),
+        b=rp.ops.ewm_sum("x", half_life=2.0, closed="both"),
     )
     t = [0.0, 1.0, 2.0, 3.0]
     assert_close(out["s"].to_list(), recursion_sum(t, df["x"].to_list(), 2.0))
@@ -1185,8 +1197,8 @@ def test_a_row_exactly_one_window_later_lands_on_the_edge_at_any_age() -> None:
     df = pl.DataFrame({"t": ts, "x": [1.0] * n})
     out = rp.stream.with_windows(
         df,
-        left=rp.ewm_sum("x", half_life=math.inf, window_size="1s", closed="left"),
-        fwd=rp.ewm_sum("x", half_life=math.inf, window_size="1s", reverse=True),
+        left=rp.ops.ewm_sum("x", half_life=math.inf, window_size="1s", closed="left"),
+        fwd=rp.ops.ewm_sum("x", half_life=math.inf, window_size="1s", reverse=True),
         clock="t",
         gap_cap="1h",
     )
@@ -1201,7 +1213,7 @@ def test_a_row_exactly_one_window_later_lands_on_the_edge_at_any_age() -> None:
     df = pl.DataFrame({"t": ts, "x": [1.0] * n})
     out = rp.stream.with_windows(
         df,
-        right=rp.ewm_sum("x", half_life=math.inf, window_size="1m"),
+        right=rp.ops.ewm_sum("x", half_life=math.inf, window_size="1m"),
         clock="t",
         gap_cap="1h",
     )
@@ -1217,8 +1229,8 @@ def test_forward_left_and_both_hold_every_row_at_the_stamp() -> None:
     df = pl.DataFrame({"t": [0.0, 0.0, 1.0, 3.0], "x": [1.0, 2.0, 3.0, 4.0]})
     out = rp.stream.with_windows(
         df,
-        left=rp.ewm_sum("x", half_life=math.inf, window_size=2.0, closed="left", reverse=True),
-        right=rp.ewm_sum("x", half_life=math.inf, window_size=2.0, reverse=True),
+        left=rp.ops.ewm_sum("x", half_life=math.inf, window_size=2.0, closed="left", reverse=True),
+        right=rp.ops.ewm_sum("x", half_life=math.inf, window_size=2.0, reverse=True),
         **CLOCK,
     )
     # [0, 2): rows at 0 (both) and 1, for both rows at the stamp.
@@ -1230,16 +1242,16 @@ def test_forward_left_and_both_hold_every_row_at_the_stamp() -> None:
     df = ticks(400, 21, repeats=True)
     fwd = rp.stream.with_windows(
         df,
-        m=rp.ewm_mean("x", half_life=3.0, window_size=5.0, closed="left", reverse=True),
-        s=rp.ewm_sum("x", half_life=3.0, window_size=5.0, closed="left", reverse=True),
+        m=rp.ops.ewm_mean("x", half_life=3.0, window_size=5.0, closed="left", reverse=True),
+        s=rp.ops.ewm_sum("x", half_life=3.0, window_size=5.0, closed="left", reverse=True),
         **CLOCK,
     )
     last = df["t"][-1]
     mirror = df.reverse().with_columns(t=last - pl.col("t"))
     back = rp.stream.with_windows(
         mirror,
-        m=rp.ewm_mean("x", half_life=3.0, window_size=5.0),
-        s=rp.ewm_sum("x", half_life=3.0, window_size=5.0),
+        m=rp.ops.ewm_mean("x", half_life=3.0, window_size=5.0),
+        s=rp.ops.ewm_sum("x", half_life=3.0, window_size=5.0),
         **CLOCK,
     ).reverse()
     for c in ("m", "s"):
@@ -1262,8 +1274,12 @@ def test_a_cut_window_ends_at_the_last_row_it_saw() -> None:
     for cap in (5.0, 300.0):
         out = rp.stream.with_windows(
             df,
-            r=rp.ewm_rate("x", half_life=math.inf, window_size=60.0, partial="keep", reverse=True),
-            m=rp.ewm_mean("x", half_life=math.inf, window_size=60.0, partial="keep", reverse=True),
+            r=rp.ops.ewm_rate(
+                "x", half_life=math.inf, window_size=60.0, partial="keep", reverse=True
+            ),
+            m=rp.ops.ewm_mean(
+                "x", half_life=math.inf, window_size=60.0, partial="keep", reverse=True
+            ),
             clock="t",
             gap_cap=cap,
         )
@@ -1286,7 +1302,7 @@ def test_a_row_on_the_far_edge_counts_but_weighs_nothing() -> None:
     with the core, not with Polars."""
     df = pl.DataFrame({"t": [0.0, 1.0], "x": [5.0, None]})
     out = rp.stream.with_windows(
-        df, m=rp.ewm_mean("x", half_life=math.inf, window_size=1.0, closed="left"), **CLOCK
+        df, m=rp.ops.ewm_mean("x", half_life=math.inf, window_size=1.0, closed="left"), **CLOCK
     )
     assert out["m"].to_list()[1] is None
     assert loop(df, "ewm_mean", "x", half_life=math.inf, window_size=1.0, closed="left")[1] is None
@@ -1300,7 +1316,7 @@ def test_a_row_on_the_far_edge_counts_but_weighs_nothing() -> None:
     # inside the window and the mean is the row's own value under "both".
     df = pl.DataFrame({"t": [0.0, 1.0], "x": [5.0, 7.0]})
     out = rp.stream.with_windows(
-        df, m=rp.ewm_mean("x", half_life=math.inf, window_size=1.0, closed="both"), **CLOCK
+        df, m=rp.ops.ewm_mean("x", half_life=math.inf, window_size=1.0, closed="both"), **CLOCK
     )
     assert out["m"].to_list()[1] == 7.0
 
@@ -1326,12 +1342,16 @@ def test_a_long_half_life_agrees_with_the_definition_and_tends_to_the_even_one()
     closed form by expm1; at 1e17 the mean is the even window's."""
     df = pl.DataFrame({"t": [float(i) for i in range(20)], "x": [float(i % 5) for i in range(20)]})
     for h in (1e9, 1e12):
-        out = rp.stream.with_windows(df, y=rp.ewm_mean("x", half_life=h, window_size=5.0), **CLOCK)
+        out = rp.stream.with_windows(
+            df, y=rp.ops.ewm_mean("x", half_life=h, window_size=5.0), **CLOCK
+        )
         want = loop(df, "ewm_mean", "x", half_life=h, window_size=5.0)
         assert_close(out["y"].to_list(), want, f"half_life {h}")
-    far = rp.stream.with_windows(df, y=rp.ewm_mean("x", half_life=1e17, window_size=5.0), **CLOCK)
+    far = rp.stream.with_windows(
+        df, y=rp.ops.ewm_mean("x", half_life=1e17, window_size=5.0), **CLOCK
+    )
     even = rp.stream.with_windows(
-        df, y=rp.ewm_mean("x", half_life=math.inf, window_size=5.0), **CLOCK
+        df, y=rp.ops.ewm_mean("x", half_life=math.inf, window_size=5.0), **CLOCK
     )
     assert far["y"].null_count() == even["y"].null_count() < 20
     assert_close(far["y"].to_list(), even["y"].to_list(), "1e17 against inf", tol=1e-12)
@@ -1345,7 +1365,7 @@ def _from_the_definition(
     share of the largest value in ``x`` (of its square for a variance), and
     the rows compared. A row null in one is null in the other."""
     df = pl.DataFrame({"t": t, "x": x}, schema={"t": pl.Float64, "x": pl.Float64})
-    fn = getattr(rp, op.removeprefix("r"))
+    fn = getattr(rp.ops, op.removeprefix("r"))
     back = {"reverse": True} if op.startswith("rewm") else {}
     got = rp.stream.with_windows(df, y=fn("x", **kw, **back), **CLOCK)["y"].to_list()
     want = loop_exact(t, x, op, **kw)
@@ -1478,11 +1498,11 @@ def test_a_number_clock_decides_an_edge_from_the_two_rows_clocks() -> None:
     is `0.30000000000000004` where `0.5 - 0.2` is `0.3`. The edge is the
     difference of the two rows' clocks, as on a temporal clock since R2-W1."""
     df = pl.DataFrame({"t": [0.1, 0.2, 0.5], "x": [1.0, 1.0, 1.0]})
-    left = rp.ewm_sum("x", half_life=math.inf, window_size=0.3, closed="left")
+    left = rp.ops.ewm_sum("x", half_life=math.inf, window_size=0.3, closed="left")
     assert rp.stream.with_windows(df, y=left, **CLOCK)["y"].to_list() == [0.0, 1.0, 1.0]
-    both = rp.ewm_sum("x", half_life=math.inf, window_size=0.3, closed="both")
+    both = rp.ops.ewm_sum("x", half_life=math.inf, window_size=0.3, closed="both")
     assert rp.stream.with_windows(df, y=both, **CLOCK)["y"].to_list() == [1.0, 2.0, 2.0]
-    right = rp.ewm_sum("x", half_life=math.inf, window_size=0.3, closed="right")
+    right = rp.ops.ewm_sum("x", half_life=math.inf, window_size=0.3, closed="right")
     assert rp.stream.with_windows(df, y=right, **CLOCK)["y"].to_list() == [1.0, 2.0, 1.0]
 
 
@@ -1491,7 +1511,9 @@ def test_a_subnormal_half_life_is_refused() -> None:
     inf, where every other bad half-life is refused by name."""
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0], "x": [0.3, 0.3, 0.3]})
     with pytest.raises(ValueError, match="half_life must be at least"):
-        rp.stream.with_windows(df, y=rp.ewm_rate("x", half_life=5e-324, window_size=2.0), **CLOCK)
+        rp.stream.with_windows(
+            df, y=rp.ops.ewm_rate("x", half_life=5e-324, window_size=2.0), **CLOCK
+        )
 
 
 #: The first py-polars whose `rolling_sum_by` gives 0.0, not null, for a
@@ -1508,7 +1530,7 @@ def test_a_row_exactly_one_window_from_another_lands_as_in_polars(base: int) -> 
     clock = {"clock": "t", "gap_cap": "1h"}
 
     def back(closed: str) -> pl.Expr:
-        return rp.ewm_sum("x", half_life=math.inf, window_size="300ms", closed=closed)
+        return rp.ops.ewm_sum("x", half_life=math.inf, window_size="300ms", closed=closed)
 
     # Backward "left": the row 300 ms older is at the far edge, in. Row 0's
     # window is empty: a sum of nothing, 0, here as in Polars.
@@ -1532,7 +1554,7 @@ def test_a_row_exactly_one_window_from_another_lands_as_in_polars(base: int) -> 
     # row 3's is unresolved at the end, null. Polars has no look-ahead; the
     # mirror is a backward "left" window on the negated clock.
     df = _ms([base, base + 100, base + 400, base + 800])
-    fwd = rp.ewm_sum("x", half_life=math.inf, window_size="300ms", closed="right", reverse=True)
+    fwd = rp.ops.ewm_sum("x", half_life=math.inf, window_size="300ms", closed="right", reverse=True)
     got = rp.stream.with_windows(df, y=fwd, **clock)["y"].to_list()
     mirror = (
         df.with_columns(u=-pl.col("t").dt.epoch("ms"))
@@ -1560,7 +1582,7 @@ def test_with_groups_a_session_is_each_groups() -> None:
         }
     )
     kw: dict[str, Any] = {"clock": "t", "gap_cap": 10.0, "session": "s"}
-    total = rp.ewm_sum("x", half_life=math.inf)
+    total = rp.ops.ewm_sum("x", half_life=math.inf)
     assert rp.stream.with_windows(df, y=total, group="g", **kw)["y"].to_list() == [1, 10, 4, 40]
     # A group's own session change ends its windows, and no other group's.
     own = df.with_columns(s=pl.Series(["a1", "b1", "a2", "b1"]))
@@ -1583,7 +1605,9 @@ def test_a_state_saved_under_a_slice_resumes_on_the_same_input(tmp_path: Any, ro
     skip not yet applied when a resumed run satisfied its slice from held
     rows was left out of the count, so the chain broke at ``chunk_size=1``)."""
     df = ticks(60, 19, groups=2)
-    dropping = {"e": rp.ewm_mean("x", half_life=2.0, window_size=4.0, partial="drop", reverse=True)}
+    dropping = {
+        "e": rp.ops.ewm_mean("x", half_life=2.0, window_size=4.0, partial="drop", reverse=True)
+    }
     for exprs, cap in [(mixed(), 20.0), (mixed() | dropping, 4.0)]:
         kw: dict[str, Any] = {"clock": "t", "gap_cap": cap, "group": "g", "chunk_size": rows}
         one = rp.stream.with_windows(df, **exprs, **kw)
@@ -1672,7 +1696,7 @@ def test_a_windows_state_of_another_version_is_refused_by_its_version(tmp_path: 
         match=r"the state's version is 2, but this version of rheon reads versions 9 to 14",
     ):
         rp.stream.with_windows(
-            ticks(5, 1), y=rp.ewm_sum("x", half_life=1.0), load_state=path, **CLOCK
+            ticks(5, 1), y=rp.ops.ewm_sum("x", half_life=1.0), load_state=path, **CLOCK
         )
 
 
@@ -1691,7 +1715,7 @@ def test_a_silent_groups_session_reset_after_a_capped_gap_is_a_cut() -> None:
             "x": [1.0, 10.0, 20.0, 1.0, 1.0, 30.0],
         }
     )
-    fwd = rp.ewm_sum("x", half_life=math.inf, window_size=10.0, partial="keep", reverse=True)
+    fwd = rp.ops.ewm_sum("x", half_life=math.inf, window_size=10.0, partial="keep", reverse=True)
     kw: dict[str, Any] = {"clock": "t", "gap_cap": 5.0, "session": "s", "session_gap": "reset"}
     grouped = rp.stream.with_windows(df, y=fwd, group="g", **kw)
     assert grouped["y"][1] == 20.0, grouped["y"].to_list()
@@ -1733,27 +1757,27 @@ def test_a_state_saved_under_a_slice_refuses_another_input(tmp_path: Any) -> Non
     bare = df.drop("t")
     state = tmp_path / "bare.state"
     bare.lazy().rheon.with_windows(
-        f=rp.ewm_sum("x", half_life=2.0, window_size=3.0, reverse=True), save_state=state
+        f=rp.ops.ewm_sum("x", half_life=2.0, window_size=3.0, reverse=True), save_state=state
     ).head(5).collect()
     one = rp.stream.with_windows(
-        bare, f=rp.ewm_sum("x", half_life=2.0, window_size=3.0, reverse=True)
+        bare, f=rp.ops.ewm_sum("x", half_life=2.0, window_size=3.0, reverse=True)
     )
     head = (
         bare.lazy()
         .rheon.with_windows(
-            f=rp.ewm_sum("x", half_life=2.0, window_size=3.0, reverse=True), save_state=state
+            f=rp.ops.ewm_sum("x", half_life=2.0, window_size=3.0, reverse=True), save_state=state
         )
         .head(5)
         .collect()
     )
     rest = rp.stream.with_windows(
-        bare, f=rp.ewm_sum("x", half_life=2.0, window_size=3.0, reverse=True), load_state=state
+        bare, f=rp.ops.ewm_sum("x", half_life=2.0, window_size=3.0, reverse=True), load_state=state
     )
     assert pl.concat([head, rest]).equals(one)
     with pytest.raises(_REFUSAL, match="another input"):
         rp.stream.with_windows(
             bare.slice(5),
-            f=rp.ewm_sum("x", half_life=2.0, window_size=3.0, reverse=True),
+            f=rp.ops.ewm_sum("x", half_life=2.0, window_size=3.0, reverse=True),
             load_state=state,
         )
 
@@ -1764,12 +1788,12 @@ def test_a_damaged_windows_state_says_so(tmp_path: Any) -> None:
     what the skip counts and added the identity, and the number did not move)."""
     df = ticks(30, 3)
     state = tmp_path / "w.state"
-    rp.stream.with_windows(df, y=rp.ewm_mean("x", half_life=2.0), save_state=state, **CLOCK)
+    rp.stream.with_windows(df, y=rp.ops.ewm_mean("x", half_life=2.0), save_state=state, **CLOCK)
     whole = state.read_bytes()
     cut = tmp_path / "cut.state"
     cut.write_bytes(whole[: len(whole) // 2])
     with pytest.raises(ValueError, match="damaged"):
-        rp.stream.with_windows(df, y=rp.ewm_mean("x", half_life=2.0), load_state=cut, **CLOCK)
+        rp.stream.with_windows(df, y=rp.ops.ewm_mean("x", half_life=2.0), load_state=cut, **CLOCK)
 
 
 def test_a_sliced_run_on_the_next_file_resumes_with_the_first_files_rows_held(
@@ -1810,7 +1834,7 @@ def test_a_sliced_state_that_holds_no_rows_knows_its_input_by_its_last_row(
     df = pl.DataFrame(
         {"t": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0], "x": [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0]}
     )
-    y = {"y": rp.ewm_mean("x", half_life=1.0, closed="left")}
+    y = {"y": rp.ops.ewm_mean("x", half_life=1.0, closed="left")}
     one = rp.stream.with_windows(df, **y, **CLOCK)
     state = tmp_path / "left.state"
     head = df.lazy().rheon.with_windows(**y, save_state=state, **CLOCK).head(3).collect()
@@ -1823,7 +1847,7 @@ def test_a_sliced_state_that_holds_no_rows_knows_its_input_by_its_last_row(
     # No clock column: the row-count clock repeats no stamp, so every row
     # resolves at its push and the state holds none.
     bare = df.drop("t")
-    y = {"y": rp.ewm_mean("x", half_life=2.0)}
+    y = {"y": rp.ops.ewm_mean("x", half_life=2.0)}
     one = rp.stream.with_windows(bare, **y)
     state = tmp_path / "bare-left.state"
     head = bare.lazy().rheon.with_windows(**y, save_state=state).head(4).collect()
@@ -1841,7 +1865,7 @@ def test_a_next_file_starts_after_the_last_stamp_the_state_read(tmp_path: Any) -
     last row it read for the same input sliced inside a tied stamp, since a
     file boundary inside one cannot be told from it, and refuses it by name;
     one that starts after that stamp is the next file."""
-    y = {"y": rp.ewm_mean("x", half_life=1.0, window_size=2.0, reverse=True)}
+    y = {"y": rp.ops.ewm_mean("x", half_life=1.0, window_size=2.0, reverse=True)}
     first = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "x": [1.0, 2.0, 3.0, 4.0]})
     state = tmp_path / "tie.state"
     a = first.lazy().rheon.with_windows(**y, save_state=state, **CLOCK).head(100).collect()
@@ -1862,7 +1886,7 @@ def test_an_unsliced_state_refuses_an_input_that_repeats_its_last_row(tmp_path: 
     gave 3,001 rows against one run's 3,000. It now refuses an input that
     starts at the last stamp it read, as a sliced state does, unless that row
     starts a new session; one that starts after it is the next file."""
-    y = {"y": rp.ewm_mean("x", half_life=1.0, window_size=2.0, reverse=True)}
+    y = {"y": rp.ops.ewm_mean("x", half_life=1.0, window_size=2.0, reverse=True)}
     first = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "x": [1.0, 2.0, 3.0, 4.0]})
     state = tmp_path / "unsliced.state"
     a = rp.stream.with_windows(first, **y, save_state=state, **CLOCK)
@@ -1903,7 +1927,7 @@ def test_a_sliced_state_takes_a_new_start_by_the_policys_word_for_the_next_file(
             "d": ["a"] * 7,
         }
     )
-    y = {"y": rp.ewm_mean("x", half_life=1.0, window_size=2.0, reverse=True)}
+    y = {"y": rp.ops.ewm_mean("x", half_life=1.0, window_size=2.0, reverse=True)}
     for start in (0.5, 0.0):
         day2 = pl.DataFrame(
             {"t": [start + i for i in range(8)], "x": [8.0 + i for i in range(8)], "d": ["b"] * 8}
@@ -1929,7 +1953,7 @@ def test_without_a_clock_the_next_file_begins_with_a_new_session(tmp_path: Any) 
     in the session the state last read is refused, not fed twice."""
     df = pl.DataFrame({"x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], "s": ["a", "a", "a", "b", "b", "b"]})
     kw: dict[str, Any] = {"session": "s"}
-    y = {"y": rp.ewm_mean("x", half_life=1.0)}
+    y = {"y": rp.ops.ewm_mean("x", half_life=1.0)}
     state = tmp_path / "rows.state"
     head = df.lazy().rheon.with_windows(**y, save_state=state, **kw).head(4).collect()
     assert head.height == 4
@@ -1960,7 +1984,7 @@ def test_a_restart_on_the_streams_clock_restarts_every_groups_clock() -> None:
                 "x": [1.0] * 5,
             }
         )
-        y = rp.ewm_sum("x", half_life=math.inf)
+        y = rp.ops.ewm_sum("x", half_life=math.inf)
         out = rp.stream.with_windows(
             df, y=y, clock="t", gap_cap=1e9, group="g", restart_after_step_back=10.0
         )
@@ -1975,7 +1999,7 @@ def test_a_state_refuses_a_group_or_session_column_of_another_dtype(tmp_path: An
     followed by a Float64 file keyed "1" then "1.0" and started every group
     over, silently; a session column's dtype change cut the windows. The
     state carries the two columns' dtypes and refuses another by name."""
-    y = {"y": rp.ewm_mean("x", half_life=2.0)}
+    y = {"y": rp.ops.ewm_mean("x", half_life=2.0)}
     first = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "x": [1.0, 2.0, 3.0, 4.0], "g": [1, 1, 2, 2]})
     second = pl.DataFrame({"t": [4.0, 5.0], "x": [5.0, 6.0], "g": [1.0, 2.0]})
     state = tmp_path / "keys.state"
@@ -2011,7 +2035,7 @@ def test_a_typed_literal_keeps_its_dtype() -> None:
     as a dynamic literal, so a formula's dtype and last bits could differ from
     Polars' own; it is carried through a cast, and the two agree."""
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "x": [1.0, 2.0, 4.0, 8.0]})
-    mean = rp.stream.with_windows(df, m=rp.ewm_mean("x", half_life=5.0), **CLOCK)
+    mean = rp.stream.with_windows(df, m=rp.ops.ewm_mean("x", half_life=5.0), **CLOCK)
     forms = [
         lambda c: c * pl.lit(0.1, dtype=pl.Float32),
         lambda c: (
@@ -2021,7 +2045,7 @@ def test_a_typed_literal_keeps_its_dtype() -> None:
         lambda c: c + pl.lit(np.float32(0.3)),
     ]
     for form in forms:
-        got = rp.stream.with_windows(df, y=form(rp.ewm_mean("x", half_life=5.0)), **CLOCK)["y"]
+        got = rp.stream.with_windows(df, y=form(rp.ops.ewm_mean("x", half_life=5.0)), **CLOCK)["y"]
         want = mean.select(form(pl.col("m")).alias("y"))["y"]
         assert got.dtype == want.dtype, (got.dtype, want.dtype)
         assert got.to_list() == want.to_list()
@@ -2036,7 +2060,7 @@ def test_a_date_literal_keeps_its_dtype() -> None:
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "x": [1.0, 2.0, 4.0, 8.0]}).with_columns(
         d=pl.lit(date(2024, 1, 1)) + pl.duration(days=pl.col("t").cast(pl.Int64))
     )
-    mean = rp.stream.with_windows(df, m=rp.ewm_mean("x", half_life=5.0), **CLOCK)
+    mean = rp.stream.with_windows(df, m=rp.ops.ewm_mean("x", half_life=5.0), **CLOCK)
     forms = [
         lambda c: (
             pl.when(pl.lit(date(2024, 1, 3)).cast(pl.String) == pl.lit("2024-01-03"))
@@ -2052,7 +2076,7 @@ def test_a_date_literal_keeps_its_dtype() -> None:
         ),
     ]
     for i, form in enumerate(forms):
-        expr = form(rp.ewm_mean("x", half_life=5.0))
+        expr = form(rp.ops.ewm_mean("x", half_life=5.0))
         got = rp.stream.with_windows(df, y=expr, **CLOCK)["y"]
         want = mean.select(form(pl.col("m")).alias("y"))["y"]
         assert got.dtype == want.dtype, (i, got.dtype, want.dtype)
@@ -2079,7 +2103,7 @@ def test_a_cast_to_a_parametrized_dtype_is_refused_by_name(dtype: Any, name: str
     mapping, which the refusal's lookup could not hash, so the cast died in a
     ``TypeError`` before it was named."""
     with pytest.raises(FormulaError, match=rf'holds a cast to "{name}" \(a formula casts only to'):
-        to_tree(rp.ewm_mean("x", half_life=5.0).cast(dtype))
+        to_tree(rp.ops.ewm_mean("x", half_life=5.0).cast(dtype))
 
 
 def test_partial_needs_a_window_size() -> None:
@@ -2087,11 +2111,11 @@ def test_partial_needs_a_window_size() -> None:
     gap or a session change gives, and with no ``window_size`` nothing is cut
     short: it was taken and did nothing. It is refused, as a forward
     operator without a window is."""
-    for op in (rp.ewm_mean, rp.ewm_sum, rp.ewm_rate):
+    for op in (rp.ops.ewm_mean, rp.ops.ewm_sum, rp.ops.ewm_rate):
         for partial in ("keep", "null", "drop"):
             with pytest.raises(ValueError, match=rf"^rp\.{op.__name__}: partial needs window_size"):
                 op("x", half_life=2.0, partial=partial)
-    rp.ewm_mean("x", half_life=2.0, window_size=5.0, partial="drop")
+    rp.ops.ewm_mean("x", half_life=2.0, window_size=5.0, partial="drop")
 
 
 def test_a_literal_that_is_not_finite_is_refused_by_name() -> None:
@@ -2100,7 +2124,7 @@ def test_a_literal_that_is_not_finite_is_refused_by_name() -> None:
     (...null)"; the refusal names the reason, and a clip with one bound has
     its own form."""
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0], "x": [-1.0, 2.0, 3.0]})
-    m = rp.ewm_mean("x", half_life=5.0)
+    m = rp.ops.ewm_mean("x", half_life=5.0)
     for bad in (m.clip(0, float("inf")), m.clip(float("nan"), 1)):
         with pytest.raises(
             FormulaError,
@@ -2123,7 +2147,7 @@ def test_at_a_repeated_stamp_every_row_carries_the_stamps_total() -> None:
         ts=pl.from_epoch((pl.col("t") * 1e9).cast(pl.Int64), time_unit="ns")
     )
     out = rp.stream.with_windows(
-        df, s=rp.ewm_sum("x", half_life="2s500ms"), clock="ts", gap_cap="1000s"
+        df, s=rp.ops.ewm_sum("x", half_life="2s500ms"), clock="ts", gap_cap="1000s"
     )
     ref = df.select(pl.col("x").ewm_sum_by("ts", half_life="2s500ms"))["x"].to_list()
     last = (df["ts"] != df["ts"].shift(-1)).fill_null(True).to_list()
@@ -2168,7 +2192,7 @@ def test_a_forward_window_whose_far_edge_is_the_last_row_before_a_break_is_whole
         call = {"clock": "t", "gap_cap": 1.5} | kw
         closed = call.pop("closed", "right")
         partial = call.pop("partial", "null")
-        f = rp.ewm_sum(
+        f = rp.ops.ewm_sum(
             "x", half_life=math.inf, window_size=2.0, closed=closed, partial=partial, reverse=True
         )
         return rp.stream.with_windows(frame, f=f, **call)
@@ -2221,7 +2245,7 @@ def test_a_reset_keeps_a_forward_window_whose_far_edge_is_the_last_row_before_it
     def run(
         frame: pl.DataFrame, closed: str = "right", partial: str = "null", **kw: Any
     ) -> pl.DataFrame:
-        f = rp.ewm_sum(
+        f = rp.ops.ewm_sum(
             "x", half_life=math.inf, window_size=2.0, closed=closed, partial=partial, reverse=True
         )
         return rp.stream.with_windows(frame, f=f, clock="t", gap_cap=100.0, **kw)
@@ -2269,7 +2293,7 @@ def test_a_window_looking_ahead_with_group_needs_a_clock_column() -> None:
             "x": [1.0, 2.0, 4.0, 8.0, 16.0],
         }
     )
-    fwd = rp.ewm_sum("x", half_life=math.inf, window_size=2.0, reverse=True)
+    fwd = rp.ops.ewm_sum("x", half_life=math.inf, window_size=2.0, reverse=True)
     msg = (
         "with_windows: a window looking ahead under group needs clock, but clock is not set.*"
         "Set clock and gap_cap, or leave group out"
@@ -2301,7 +2325,7 @@ def test_a_window_looking_ahead_with_group_needs_a_clock_column() -> None:
     assert rp.stream.with_windows(df, f=fwd, like=like).equals(clocked)
     # Looking back under groups, each group's running sum; looking ahead with
     # no group, the one stream's rows.
-    back = rp.stream.with_windows(df, b=rp.ewm_sum("x", half_life=math.inf), group="g")
+    back = rp.stream.with_windows(df, b=rp.ops.ewm_sum("x", half_life=math.inf), group="g")
     assert back["b"].to_list() == [1.0, 2.0, 6.0, 14.0, 30.0]
     # The row at t = 2 has its window (2, 4] whole: its far edge is the last row.
     assert rp.stream.with_windows(df, f=fwd)["f"].to_list() == [6.0, 12.0, 24.0, None, None]
@@ -2325,8 +2349,8 @@ def test_a_state_resumes_under_another_spelling_of_the_same_length(tmp_path: Any
     def run(frame: pl.DataFrame, gap_cap: str, window: str, **kw: Any) -> pl.DataFrame:
         return rp.stream.with_windows(
             frame,
-            b=rp.ewm_sum("x", half_life="1h", window_size=window),
-            f=rp.ewm_sum("x", half_life="1h", window_size=window, reverse=True),
+            b=rp.ops.ewm_sum("x", half_life="1h", window_size=window),
+            f=rp.ops.ewm_sum("x", half_life="1h", window_size=window, reverse=True),
             clock="t",
             gap_cap=gap_cap,
             **kw,
@@ -2355,8 +2379,8 @@ def test_a_zoned_datetime_group_is_keyed_by_its_instant() -> None:
     def run(frame: pl.DataFrame) -> pl.DataFrame:
         return rp.stream.with_windows(
             frame,
-            b=rp.ewm_sum("x0", half_life=3.0),
-            f=rp.ewm_sum("x0", half_life=3.0, window_size=4.0, reverse=True),
+            b=rp.ops.ewm_sum("x0", half_life=3.0),
+            f=rp.ops.ewm_sum("x0", half_life=3.0, window_size=4.0, reverse=True),
             clock="t",
             gap_cap=100.0,
             group="g",
@@ -2405,7 +2429,7 @@ def test_a_hand_built_operator_column_that_is_no_operator_is_refused_as_reserved
     out = rp.stream.with_windows(df, y=hand, **CLOCK)
     assert (
         out["y"].to_list()
-        == rp.stream.with_windows(df, y=rp.ewm_mean("x", half_life=1.0), **CLOCK)["y"].to_list()
+        == rp.stream.with_windows(df, y=rp.ops.ewm_mean("x", half_life=1.0), **CLOCK)["y"].to_list()
     )
 
 
@@ -2417,21 +2441,23 @@ def test_min_samples_takes_an_integer_of_any_kind_up_to_its_ceiling() -> None:
     both sides."""
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "x": [1.0, None, 2.0, 3.0]})
     for n in (2, np.int64(2), np.int32(2), np.uint8(2)):
-        e = rp.ewm_sum("x", half_life=math.inf, window_size=3.0, min_samples=n)
+        e = rp.ops.ewm_sum("x", half_life=math.inf, window_size=3.0, min_samples=n)
         assert rp.stream.with_windows(df, s=e, **CLOCK)["s"].to_list() == [None, None, 3.0, 5.0]
-    rp.ewm_sum("x", half_life=2.0, min_samples=4294967295)
+    rp.ops.ewm_sum("x", half_life=2.0, min_samples=4294967295)
     for bad in (2**32, 2**40, np.int64(2**40)):
-        with pytest.raises(ValueError, match=r"^rp\.ewm_sum: min_samples must be .*4294967295"):
-            rp.ewm_sum("x", half_life=2.0, min_samples=bad)
+        with pytest.raises(
+            ValueError, match=r"^rp\.ops\.ewm_sum: min_samples must be .*4294967295"
+        ):
+            rp.ops.ewm_sum("x", half_life=2.0, min_samples=bad)
     for bad in (-1, True, 2.0, "2"):
         with pytest.raises(
-            (TypeError, ValueError), match=r"^rp\.ewm_sum: min_samples must be an integer"
+            (TypeError, ValueError), match=r"^rp\.ops\.ewm_sum: min_samples must be an integer"
         ):
-            rp.ewm_sum("x", half_life=2.0, min_samples=bad)  # type: ignore[arg-type]
+            rp.ops.ewm_sum("x", half_life=2.0, min_samples=bad)  # type: ignore[arg-type]
     # A sum takes 0 (Polars' default for `rolling_sum_by`), every other
     # operator needs at least 1.
-    rp.ewm_sum("x", half_life=2.0, min_samples=0)
-    for make in (rp.ewm_mean, rp.ewm_rate, rp.ewm_std, rp.ewm_var):
+    rp.ops.ewm_sum("x", half_life=2.0, min_samples=0)
+    for make in (rp.ops.ewm_mean, rp.ops.ewm_rate, rp.ops.ewm_std, rp.ops.ewm_var):
         with pytest.raises(ValueError, match=r"min_samples must be an integer of at least 1 "):
             make("x", half_life=2.0, min_samples=0)
     tree = '@po:["ewm_mean",["col","x"],{"half_life":2.0,"min_samples":0}]'
@@ -2454,14 +2480,14 @@ def test_an_increment_of_a_time_of_day_is_seconds_and_negative_across_midnight()
     clock, since it starts again each midnight."""
     tod = [time(9, 0), time(10, 30), None, time(23, 0), time(1, 0, 0, 500)]
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0], "tod": tod})
-    got = rp.stream.with_windows(df, d=rp.increment("tod"), **CLOCK)["d"].to_list()
+    got = rp.stream.with_windows(df, d=rp.ops.increment("tod"), **CLOCK)["d"].to_list()
     # The null is skipped: 23:00 steps from 10:30, the last time with a value.
     assert got == [None, 5400.0, None, 45000.0, -79199.9995]
     diff = df.select(pl.col("tod").diff().dt.total_nanoseconds() / 1e9)["tod"].to_list()
     assert got[1] == pytest.approx(diff[1], rel=1e-15), diff
     assert got[4] == pytest.approx(diff[4], rel=1e-15), diff
     with pytest.raises(_REFUSAL, match="is a time of day, which starts again at midnight"):
-        rp.stream.with_windows(df, d=rp.increment("t"), clock="tod", gap_cap="1h")
+        rp.stream.with_windows(df, d=rp.ops.increment("t"), clock="tod", gap_cap="1h")
 
 
 @pytest.mark.parametrize(
@@ -2495,15 +2521,15 @@ def test_a_word_or_a_duration_not_above_zero_is_refused_where_it_is_written(
     serde path ("invalid windows: formulas[0].tree: ..."), where the same
     value as a number is refused at once. Each is refused in ``po.<op>``'s
     voice now, as the number is."""
-    with pytest.raises(ValueError, match=rf"^rp\.ewm_sum: {says}"):
-        rp.ewm_sum("x", **kw)
+    with pytest.raises(ValueError, match=rf"^rp\.ops\.ewm_sum: {says}"):
+        rp.ops.ewm_sum("x", **kw)
 
 
 def test_the_infinity_words_are_still_an_unbounded_half_life() -> None:
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "x": [1.0, 2.0, 3.0, 4.0]})
-    want = rp.stream.with_windows(df, s=rp.ewm_sum("x", half_life=math.inf), **CLOCK)["s"]
+    want = rp.stream.with_windows(df, s=rp.ops.ewm_sum("x", half_life=math.inf), **CLOCK)["s"]
     for word in ("inf", "+inf", "Infinity", "+infinity", " INF "):
-        got = rp.stream.with_windows(df, s=rp.ewm_sum("x", half_life=word), **CLOCK)["s"]
+        got = rp.stream.with_windows(df, s=rp.ops.ewm_sum("x", half_life=word), **CLOCK)["s"]
         assert got.to_list() == want.to_list() == [1.0, 3.0, 6.0, 10.0], word
 
 
@@ -2518,7 +2544,7 @@ def test_the_docs_say_what_a_null_row_and_a_streams_start_give() -> None:
     assert "where Polars' ``ewm_mean_by`` gives null" in doc
     assert "the stream's own start included" in doc
     dn = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "x": [1.0, None, 3.0, None]})
-    held = rp.stream.with_windows(dn, m=rp.ewm_mean("x", half_life=1.0), **CLOCK)
+    held = rp.stream.with_windows(dn, m=rp.ops.ewm_mean("x", half_life=1.0), **CLOCK)
     assert held["m"].to_list() == [1.0, 1.0, 2.5, 2.5]
     df = pl.DataFrame({"t": [float(i) for i in range(7)], "x": [1.0] * 7})
     polars = df.select(pl.col("x").rolling_sum_by(pl.col("t").cast(pl.Int64), "3i"))["x"]
@@ -2527,7 +2553,7 @@ def test_the_docs_say_what_a_null_row_and_a_streams_start_give() -> None:
         ("null", [None, None, None, 3.0, 3.0, 3.0, 3.0]),
         ("drop", [3.0, 3.0, 3.0, 3.0]),
     ):
-        e = rp.ewm_sum("x", half_life=math.inf, window_size=3.0, partial=partial)
+        e = rp.ops.ewm_sum("x", half_life=math.inf, window_size=3.0, partial=partial)
         assert rp.stream.with_windows(df, s=e, **CLOCK)["s"].to_list() == want, partial
 
 
@@ -2548,7 +2574,7 @@ def test_which_rows_a_window_holds_is_polars_rolling_on_a_long_random_stream(
         df = ticks(1500, seed).with_columns(
             ts=pl.from_epoch((pl.col("t") * 1e9).round().cast(pl.Int64), time_unit="ns")
         )
-        e = rp.ewm_sum(
+        e = rp.ops.ewm_sum(
             "x", half_life=math.inf, window_size="4s", closed=closed, min_samples=min_samples
         )
         out = rp.stream.with_windows(df, s=e, clock="ts", gap_cap="1000s")["s"].to_list()
@@ -2567,13 +2593,13 @@ def test_which_rows_a_window_holds_is_polars_rolling_on_a_long_random_stream(
 
 
 def _var_ops(**kw: Any) -> dict[str, pl.Expr]:
-    return {"v": rp.ewm_var("x", **kw), "s": rp.ewm_std("x", **kw)}
+    return {"v": rp.ops.ewm_var("x", **kw), "s": rp.ops.ewm_std("x", **kw)}
 
 
 #: Polars' ``ewm_var``/``ewm_std`` under ``bias=False`` give the first row
 #: null from 1.44 (measured: 0.0 on 1.42.0, null on 1.44.1 and 2.0.0; 1.43
 #: does not install on Python 3.12 to narrow it), the definition
-#: ``rp.ewm_var`` follows; the canary's floor leg met the old 0.0 on
+#: ``rp.ops.ewm_var`` follows; the canary's floor leg met the old 0.0 on
 #: 2026-10-09.
 NEEDS_UNBIASED_FIRST_NULL = needs_polars(
     "1.44.1", "Polars' ewm_var(bias=False), the reference, gives the first row null from 1.44"
@@ -2585,7 +2611,7 @@ NEEDS_UNBIASED_FIRST_NULL = needs_polars(
 def test_var_and_std_on_a_row_clock_are_polars_ewm_var_and_ewm_std(bias: bool, clock: bool) -> None:
     """On a clock that steps by 1 a row, with ``half_life`` in rows, the
     operators are Polars' ``ewm_var`` and ``ewm_std`` under ``adjust=False``:
-    the form ``rp.ewm_mean`` mirrors, since ``ewm_mean_by`` holds a stretch's
+    the form ``rp.ops.ewm_mean`` mirrors, since ``ewm_mean_by`` holds a stretch's
     first value from before it, which gives it the weight ``(1 - alpha) ** (n
     - 1)`` that ``adjust=False`` gives the first row. ``bias`` and
     ``min_samples`` are Polars' own, and so is the null on the first row
@@ -2622,12 +2648,12 @@ def test_var_and_std_on_a_row_clock_are_polars_ewm_var_and_ewm_std(bias: bool, c
 )
 def test_var_and_std_match_the_definition_on_an_irregular_clock(op: str, closed: str) -> None:
     """On an irregular clock -- bursts, gaps, repeated stamps, nulls -- a value
-    weighs what it weighs in ``rp.ewm_mean``: its held interval's decayed mass
+    weighs what it weighs in ``rp.ops.ewm_mean``: its held interval's decayed mass
     inside the window. The variance is about that mean, taken in two passes,
     and corrected for the unequal weights as Polars corrects its own
     (``loop``'s docstring)."""
     df = ticks(700, 3)
-    fn = getattr(rp, op)
+    fn = getattr(rp.ops, op)
     for bias in (False, True):
         for window in (7.0, None):
             e = fn("x", half_life=4.0, window_size=window, closed=closed, min_samples=2, bias=bias)
@@ -2648,10 +2674,11 @@ def test_var_and_std_match_the_definition_on_an_irregular_clock(op: str, closed:
 
 def _zscore() -> dict[str, pl.Expr]:
     return {
-        "v": rp.ewm_var("x", half_life=2.0, window_size=5.0),
-        "s": rp.ewm_std("x", half_life=3.0, bias=True),
-        "z": (pl.col("x") - rp.ewm_mean("x", half_life=3.0)) / rp.ewm_std("x", half_life=3.0),
-        "m": rp.ewm_mean("x", half_life=2.0, window_size=5.0, closed="left"),
+        "v": rp.ops.ewm_var("x", half_life=2.0, window_size=5.0),
+        "s": rp.ops.ewm_std("x", half_life=3.0, bias=True),
+        "z": (pl.col("x") - rp.ops.ewm_mean("x", half_life=3.0))
+        / rp.ops.ewm_std("x", half_life=3.0),
+        "m": rp.ops.ewm_mean("x", half_life=2.0, window_size=5.0, closed="left"),
     }
 
 
@@ -2667,9 +2694,9 @@ def test_var_and_std_chunking_changes_nothing(rows: int) -> None:
     assert one["z"].is_not_null().sum() > 600
     # A mean on a variance's kernel, whose queue is six wide, gives the
     # bits it gives on its own.
-    mean = rp.ewm_mean("x", half_life=3.0)
+    mean = rp.ops.ewm_mean("x", half_life=3.0)
     alone = rp.stream.with_windows(df, m=mean, **kw, chunk_size=rows)["m"]
-    beside = rp.stream.with_windows(df, m=mean, s=rp.ewm_std("x", half_life=3.0), **kw)["m"]
+    beside = rp.stream.with_windows(df, m=mean, s=rp.ops.ewm_std("x", half_life=3.0), **kw)["m"]
     assert alone.equals(beside)
 
 
@@ -2685,7 +2712,7 @@ def test_var_and_std_resume_through_a_state_at_any_row(tmp_path: Any) -> None:
 
 
 def test_a_null_row_gives_the_window_as_it_stands_and_the_next_value_its_interval() -> None:
-    """Nulls as ``rp.ewm_mean`` takes them: a row with no value gives the
+    """Nulls as ``rp.ops.ewm_mean`` takes them: a row with no value gives the
     window as it stands, where Polars' ``ewm_var`` gives null, and the next
     value is held from the last valued row, as ``ewm_mean_by`` skips a null.
     So row 2's 4.0 is held over ``(0, 2]``, two units at a half-life of 2,
@@ -2719,9 +2746,9 @@ def test_a_constant_input_has_a_variance_of_exactly_zero(level: float) -> None:
     ):
         out = rp.stream.with_windows(
             df,
-            b=rp.ewm_var("x", **kw, bias=True),
-            u=rp.ewm_var("x", **kw),
-            s=rp.ewm_std("x", **kw),
+            b=rp.ops.ewm_var("x", **kw, bias=True),
+            u=rp.ops.ewm_var("x", **kw),
+            s=rp.ops.ewm_std("x", **kw),
             **CLOCK,
         )
         for c in ("b", "u", "s"):
@@ -2739,7 +2766,7 @@ def test_a_variance_at_a_level_decays_with_its_history() -> None:
     before the step hold ``(-inf, t_49]``, the rows after it the rest)."""
     a, n_a, n, h = 1e8, 50, 500, 5.0
     df = pl.DataFrame({"t": np.arange(n, dtype=float), "x": [a] * n_a + [a + 1.0] * (n - n_a)})
-    v = rp.stream.with_windows(df, v=rp.ewm_var("x", half_life=h, bias=True), **CLOCK)["v"]
+    v = rp.stream.with_windows(df, v=rp.ops.ewm_var("x", half_life=h, bias=True), **CLOCK)["v"]
     for t in (n_a + 20, n_a + 100, n_a + 200, n - 1):
         p = 2.0 ** (-(t - (n_a - 1)) / h)
         want = p * (1.0 - p)
@@ -2748,13 +2775,13 @@ def test_a_variance_at_a_level_decays_with_its_history() -> None:
 
 def test_bias_is_a_variances_own_and_a_boolean() -> None:
     with pytest.raises(TypeError, match="bias"):
-        rp.ewm_mean("x", half_life=2.0, bias=True)  # type: ignore[call-arg]
+        rp.ops.ewm_mean("x", half_life=2.0, bias=True)  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="bias must be True or False, but it is of type int"):
-        rp.ewm_var("x", half_life=2.0, bias=1)  # type: ignore[arg-type]
+        rp.ops.ewm_var("x", half_life=2.0, bias=1)  # type: ignore[arg-type]
     df = ticks(50, 1)
     with pytest.raises(ValueError, match="half_life is inf and window_size is not set"):
-        rp.stream.with_windows(df, y=rp.ewm_std("x", half_life=math.inf), **CLOCK)
-    tree = to_tree(rp.ewm_std("x", half_life=2.0, bias=True) - pl.col("x"))
+        rp.stream.with_windows(df, y=rp.ops.ewm_std("x", half_life=math.inf), **CLOCK)
+    tree = to_tree(rp.ops.ewm_std("x", half_life=2.0, bias=True) - pl.col("x"))
     assert to_tree(from_tree(tree)) == tree
     assert tree[1][2]["bias"] is True
 
@@ -2821,29 +2848,29 @@ def _session_ops() -> tuple[dict[str, pl.Expr], dict[str, pl.Expr]]:
     """The seven operators looking back, each under every ``closed`` where
     it takes one, and the four that look ahead, kept when cut, so a cut
     window still gives a value: (backward, forward)."""
-    back: dict[str, pl.Expr] = {"increment": rp.increment("x")}
+    back: dict[str, pl.Expr] = {"increment": rp.ops.increment("x")}
     ahead: dict[str, pl.Expr] = {}
     win = {"half_life": _HL, "window_size": _W}
     for closed in ("right", "left", "both", "none"):
         c = {**win, "closed": closed}
         back |= {
-            f"mean_{closed}": rp.ewm_mean("x", **c),
-            f"sum_{closed}": rp.ewm_sum("x", **c),
-            f"rate_{closed}": rp.ewm_rate("x", **c),
-            f"quantile_{closed}": rp.ewm_quantile("x", quantile=0.3, **c),
-            f"var_{closed}": rp.ewm_var("x", **c),
-            f"std_{closed}": rp.ewm_std("x", **c),
+            f"mean_{closed}": rp.ops.ewm_mean("x", **c),
+            f"sum_{closed}": rp.ops.ewm_sum("x", **c),
+            f"rate_{closed}": rp.ops.ewm_rate("x", **c),
+            f"quantile_{closed}": rp.ops.ewm_quantile("x", quantile=0.3, **c),
+            f"var_{closed}": rp.ops.ewm_var("x", **c),
+            f"std_{closed}": rp.ops.ewm_std("x", **c),
         }
         ahead |= {
-            f"ahead_mean_{closed}": rp.ewm_mean("x", **c, reverse=True, partial="keep"),
-            f"ahead_sum_{closed}": rp.ewm_sum("x", **c, reverse=True, partial="keep"),
-            f"ahead_rate_{closed}": rp.ewm_rate("x", **c, reverse=True, partial="keep"),
-            f"ahead_quantile_{closed}": rp.ewm_quantile(
+            f"ahead_mean_{closed}": rp.ops.ewm_mean("x", **c, reverse=True, partial="keep"),
+            f"ahead_sum_{closed}": rp.ops.ewm_sum("x", **c, reverse=True, partial="keep"),
+            f"ahead_rate_{closed}": rp.ops.ewm_rate("x", **c, reverse=True, partial="keep"),
+            f"ahead_quantile_{closed}": rp.ops.ewm_quantile(
                 "x", quantile=0.3, **c, reverse=True, partial="keep"
             ),
         }
     # Looking ahead, a cut window is null by default.
-    ahead["ahead_mean_null"] = rp.ewm_mean("x", **win, reverse=True)
+    ahead["ahead_mean_null"] = rp.ops.ewm_mean("x", **win, reverse=True)
     return back, ahead
 
 
@@ -2897,8 +2924,8 @@ def test_a_duration_session_gap_is_refused_on_a_temporal_clock() -> None:
     df = _session_stream().with_columns(
         t=(pl.col("t") * 1e6).cast(pl.Int64).cast(pl.Datetime("us"))
     )
-    ahead = rp.ewm_sum("x", half_life="2s", window_size="2500ms", reverse=True, partial="keep")
-    back = rp.ewm_var("x", half_life="2s", window_size="2500ms")
+    ahead = rp.ops.ewm_sum("x", half_life="2s", window_size="2500ms", reverse=True, partial="keep")
+    back = rp.ops.ewm_var("x", half_life="2s", window_size="2500ms")
 
     def run(**kw: Any) -> pl.DataFrame:
         return rp.stream.with_windows(
@@ -3125,7 +3152,7 @@ def test_every_clock_refusal_is_said_in_the_calls_own_words(case: str) -> None:
         }
     )
     with pytest.raises(kind) as exc:
-        rp.stream.with_windows(df, y=rp.increment("x"), **kw)
+        rp.stream.with_windows(df, y=rp.ops.increment("x"), **kw)
     assert str(exc.value) == says
 
 
@@ -3137,7 +3164,7 @@ def test_a_span_keyword_takes_a_duration_expression(key: str) -> None:
     naming both remedies."""
     ts = pl.Series([0, 1_000, 2_000, 9_000, 3_000, 4_000]).cast(pl.Datetime("ms"))
     df = pl.DataFrame({"ts": ts, "x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]})
-    f = rp.ewm_mean("x", half_life="2s")
+    f = rp.ops.ewm_mean("x", half_life="2s")
     base = {"clock": "ts", "gap_cap": "5s", "restart_after_step_back": "4s"}
     want = rp.stream.with_windows(df, y=f, **base)
     for value in (pl.duration(seconds={"gap_cap": 5, "restart_after_step_back": 4}[key]),):
@@ -3187,8 +3214,8 @@ def _rel_op(name: str, input: str | pl.Expr = "x", *, quantile: float = _Q, **kw
     if stat != name:
         kw["reverse"] = True
     if stat == "quantile":
-        return rp.ewm_quantile(input, quantile=quantile, **kw)
-    fn: Any = getattr(rp, f"ewm_{stat}")
+        return rp.ops.ewm_quantile(input, quantile=quantile, **kw)
+    fn: Any = getattr(rp.ops, f"ewm_{stat}")
     return fn(input, **kw)
 
 
@@ -3357,8 +3384,8 @@ def test_min_samples_nulls_exactly_the_windows_with_fewer_values(closed: str, se
     count = _rel_run(
         df,
         {
-            "back": rp.ewm_sum(one, half_life=math.inf, window_size=_RW, closed=closed),
-            "ahead": rp.ewm_sum(
+            "back": rp.ops.ewm_sum(one, half_life=math.inf, window_size=_RW, closed=closed),
+            "ahead": rp.ops.ewm_sum(
                 one, half_life=math.inf, window_size=_RW, closed=closed, reverse=True
             ),
         },
@@ -3470,7 +3497,7 @@ def test_reverse_must_be_a_bool() -> None:
     for name in ("mean", "sum", "rate", "quantile"):
         extra: dict[str, Any] = {"quantile": 0.5} if name == "quantile" else {}
         with pytest.raises(TypeError) as exc:
-            getattr(rp, f"ewm_{name}")("x", half_life=1.0, window_size=2.0, reverse=1, **extra)
+            getattr(rp.ops, f"ewm_{name}")("x", half_life=1.0, window_size=2.0, reverse=1, **extra)
         assert str(exc.value) == (
             f"rp.ewm_{name}: reverse must be True or False, but it is 1. "
             "Pass reverse=True to read the rows after each row, or reverse=False."
@@ -3495,7 +3522,7 @@ def _policy_ops(closed: str) -> dict[str, pl.Expr]:
     ops = {n: _rel_op(n, **kw) for n in _BACK + _AHEAD}
     ops |= {f"{n}_keep": _rel_op(n, partial="keep", **kw) for n in _AHEAD}
     ops |= {f"running_{n}": _rel_op(n, half_life=_RH, closed=closed) for n in _BACK}
-    return ops | {"increment": rp.increment("x")}
+    return ops | {"increment": rp.ops.increment("x")}
 
 
 def _differing(a: pl.DataFrame, b: pl.DataFrame, names: list[str]) -> int:
@@ -3549,7 +3576,9 @@ def test_a_silent_group_is_cut_only_once_the_stream_is_past_the_cap() -> None:
         df = pl.DataFrame(
             {"t": [0.0, 0.5, 1.0, end], "g": ["a", "a", "b", "b"], "x": [1.0, 2.0, 3.0, 4.0]}
         )
-        kept = rp.ewm_sum("x", half_life=math.inf, window_size=100.0, partial="keep", reverse=True)
+        kept = rp.ops.ewm_sum(
+            "x", half_life=math.inf, window_size=100.0, partial="keep", reverse=True
+        )
         out = rp.stream.with_windows(df, y=kept, clock="t", gap_cap=10.0, group="g")
         return out["y"].to_list()
 
@@ -3694,10 +3723,10 @@ def test_a_mean_ahead_one_step_long_on_a_grid_holds_only_its_far_edge() -> None:
     df = pl.DataFrame({"t": [float(i) for i in range(6)], "x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]})
     out = rp.stream.with_windows(
         df,
-        one=rp.ewm_mean("x", half_life=math.inf, window_size=1.0, reverse=True),
-        three=rp.ewm_mean("x", half_life=math.inf, window_size=3.0, reverse=True),
-        rows=rp.ewm_sum("x", half_life=math.inf, window_size=3.0, reverse=True)
-        / rp.ewm_sum(pl.lit(1.0), half_life=math.inf, window_size=3.0, reverse=True),
+        one=rp.ops.ewm_mean("x", half_life=math.inf, window_size=1.0, reverse=True),
+        three=rp.ops.ewm_mean("x", half_life=math.inf, window_size=3.0, reverse=True),
+        rows=rp.ops.ewm_sum("x", half_life=math.inf, window_size=3.0, reverse=True)
+        / rp.ops.ewm_sum(pl.lit(1.0), half_life=math.inf, window_size=3.0, reverse=True),
         **CLOCK,
     )
     assert out["one"].to_list() == [None] * 6
@@ -3712,7 +3741,7 @@ def test_a_saved_run_returns_the_last_stamps_rows(tmp_path: Any, closed: str) ->
     so a saved run returns every row a run without a state returns, the
     rows at the last stamp included, to the bit."""
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 2.0], "x": [1.0, 2.0, 3.0, 4.0]})
-    y = {"m": rp.ewm_mean("x", half_life=1.0, window_size=5.0, closed=closed)}
+    y = {"m": rp.ops.ewm_mean("x", half_life=1.0, window_size=5.0, closed=closed)}
     saved = rp.stream.with_windows(df, **y, save_state=tmp_path / "w.state", **CLOCK)
     whole = rp.stream.with_windows(df, **y, **CLOCK)
     assert saved.height == 4
@@ -3725,7 +3754,7 @@ def test_a_clock_past_the_largest_double_from_its_windows_start_is_refused() -> 
     there and the state saved there was refused as damaged. The row is
     refused by name; from an origin at 0 the same clock runs on."""
     df = pl.DataFrame({"t": [-1e308, 0.0, 1e308], "x": [10.0, 20.0, 30.0]})
-    y = {"m": rp.ewm_mean("x", half_life=10.0, window_size=50.0)}
+    y = {"m": rp.ops.ewm_mean("x", half_life=10.0, window_size=50.0)}
     with pytest.raises(
         _REFUSAL, match=r'clock column "t" has run from .* at row 2 .*largest float'
     ):

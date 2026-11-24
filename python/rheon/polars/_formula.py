@@ -583,7 +583,7 @@ def _input_tree(who: str, value: Any) -> list[Any]:
             raise ValueError(
                 f"{who}: the input holds another window operator, but an operator's input may "
                 f"hold only columns and Polars expressions of the same row (a column "
-                f'computation, such as pl.col("x") + 1), rp.increment or rp.ops.tick_sign. To '
+                f'computation, such as pl.col("x") + 1), rp.ops.increment or rp.ops.tick_sign. To '
                 f"apply an operator to another's output, add the inner one as a column with "
                 f"rp.stream.with_windows first, and pass that column."
             )
@@ -683,9 +683,9 @@ def operator(
     """The expression of operator ``name`` over ``input`` with these
     parameters, checked here so a wrong value names its parameter; ``bias``
     a variance's alone, ``quantile`` a quantile's. ``who`` is the call a
-    message names, ``po.<name>`` unless given: a window looking ahead is
+    message names, ``rp.ops.<name>`` unless given: a window looking ahead is
     ``ewm_*(reverse=True)`` to the caller and ``rewm_*`` in the tree."""
-    who = who or f"rp.{name}"
+    who = who or f"rp.ops.{name}"
     tree = _input_tree(who, input)
     if name in STEPS:
         return operator_column([name, tree])
@@ -990,7 +990,7 @@ def moments_operator(
     """The expression of :func:`~rheon.polars.ops.ewm_moments`: its legs
     and their lags read from the keys of ``legs``, each checked here so a
     wrong value names its leg or its parameter."""
-    who = "rp.ewm_moments"
+    who = "rp.ops.ewm_moments"
     if not isinstance(legs, dict) or not legs:
         raise TypeError(
             f"{who}: legs must be a dict from each leg (a column, or a column and its lag "
@@ -1136,7 +1136,7 @@ def profile(
     min_samples: Any = 1,
     bias: Any = None,
     max_state_bytes: Any = None,
-    who: str = "rp.ewm_profile",
+    who: str = "rp.ops.ewm_profile",
 ) -> pl.Expr:
     """The expression of an ``ewm_profile`` node, each parameter checked
     here by name, written with the keys the native reader writes back, so
@@ -1322,7 +1322,7 @@ def row_operator(
     arrival time, against ``event``, or a clock step's ``stat`` of the
     steps of ``input``, decayed across ``half_life``. Checked here, so a
     wrong value names its parameter."""
-    who = f"rp.{name}"
+    who = f"rp.ops.{name}"
     if name == "clock_step":
         return _clock_step(who, input, half_life=half_life, stat=stat, bias=bias)
     if name == "run_length":

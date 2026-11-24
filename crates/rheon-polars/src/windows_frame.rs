@@ -497,7 +497,7 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         return Err(format!(
             "{WHO}: no expression (a column computation, such as pl.col(\"x\") + 1) was given. \
              Give at least one that holds a window operator or an increment, such as \
-             rp.ewm_mean(pl.col(\"x\"), half_life=10)."
+             rp.ops.ewm_mean(pl.col(\"x\"), half_life=10)."
         )
         .into());
     }

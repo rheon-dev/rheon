@@ -1,4 +1,4 @@
-"""The cross-group operators over a relation: ``rp.cross_ref``, a reference
+"""The cross-group operators over a relation: ``rp.ops.cross_ref``, a reference
 row's value read by every row of its stamp, and ``neighbors=``, a row's
 statistic over the rows of the groups its own list names.
 
@@ -91,8 +91,8 @@ def test_the_reference_read_is_a_join_on_the_clock():
     leader = pl.col("g") == "g0"
     out = run(
         df,
-        r=rp.cross_ref("x", where=leader),
-        l=rp.cross_ref("x", where=leader, closed="left"),
+        r=rp.ops.cross_ref("x", where=leader),
+        l=rp.ops.cross_ref("x", where=leader, closed="left"),
     )
     ref = df.filter(leader).select("t", ref="x")
     want = df.join(ref, on="t", how="left", maintain_order="left")["ref"]
@@ -111,9 +111,9 @@ def test_two_reference_rows_at_one_stamp_are_refused_by_row():
         }
     )
     with pytest.raises(Exception, match=r"picks row 3 .* picked row 2 at the same stamp"):
-        run(df, r=rp.cross_ref("x", where=pl.col("x") >= 3.0))
+        run(df, r=rp.ops.cross_ref("x", where=pl.col("x") >= 3.0))
     # One a stamp is read.
-    out = run(df, r=rp.cross_ref("x", where=pl.col("g") == "b"))
+    out = run(df, r=rp.ops.cross_ref("x", where=pl.col("g") == "b"))
     assert out["r"].to_list() == [2.0, 2.0, 4.0, 4.0, 4.0]
 
 
@@ -180,9 +180,9 @@ def test_the_neighbors_statistics_are_an_explode_and_a_join(closed: str):
     df = panel(300, 9, seed=22)
     out = run(
         df,
-        m=rp.cross_mean("x", weight="w", neighbors="peers", closed=closed),
-        s=rp.cross_std("x", neighbors="peers", closed=closed, weight=pl.col("w") > 0),
-        q=rp.cross_quantile(
+        m=rp.ops.cross_mean("x", weight="w", neighbors="peers", closed=closed),
+        s=rp.ops.cross_std("x", neighbors="peers", closed=closed, weight=pl.col("w") > 0),
+        q=rp.ops.cross_quantile(
             "x", 0.4, neighbors="peers", closed=closed, weight=(pl.col("w") > 0).cast(pl.Float64)
         ),
     )
@@ -214,7 +214,7 @@ def test_the_neighbors_rank_is_scipys(closed: str, method: str):
     though it were added last: SciPy's ``rankdata``."""
     # A rank takes no weight: every row with a value is a member.
     df = panel(200, 7, seed=23).with_columns(w=pl.lit(1.0))
-    out = run(df, r=rp.cross_rank("x", method=method, neighbors="peers", closed=closed))
+    out = run(df, r=rp.ops.cross_rank("x", method=method, neighbors="peers", closed=closed))
     e = exploded(df)
     if closed == "left":
         before = previous_stamps(df)
@@ -254,7 +254,7 @@ def test_an_integer_key_is_named_by_an_integer_list():
             "peers": [[2, 3], [1], [1, 2, 3]],
         }
     )
-    out = run(df, m=rp.cross_mean("x", neighbors="peers"))
+    out = run(df, m=rp.ops.cross_mean("x", neighbors="peers"))
     m = out["m"].to_list()
     assert m[:2] == [3.0, None]
     assert abs(m[2] - 7.0 / 3.0) < 1e-15
@@ -266,13 +266,13 @@ def test_an_integer_key_is_named_by_an_integer_list():
 def exprs() -> dict[str, Any]:
     leader = pl.col("g") == "g0"
     return {
-        "r": rp.cross_ref("x", where=leader),
-        "rl": rp.cross_ref("x", where=leader, closed="left"),
-        "m": rp.cross_mean("x", weight="w", neighbors="peers"),
-        "ml": rp.cross_std("x", neighbors="peers", closed="left"),
-        "k": rp.cross_rank("x", method="ordinal", neighbors="peers"),
-        "kl": rp.cross_rank("x", neighbors="peers", closed="left"),
-        "q": rp.cross_quantile("x", 0.5, neighbors="peers", closed="left"),
+        "r": rp.ops.cross_ref("x", where=leader),
+        "rl": rp.ops.cross_ref("x", where=leader, closed="left"),
+        "m": rp.ops.cross_mean("x", weight="w", neighbors="peers"),
+        "ml": rp.ops.cross_std("x", neighbors="peers", closed="left"),
+        "k": rp.ops.cross_rank("x", method="ordinal", neighbors="peers"),
+        "kl": rp.ops.cross_rank("x", neighbors="peers", closed="left"),
+        "q": rp.ops.cross_quantile("x", 0.5, neighbors="peers", closed="left"),
     }
 
 
@@ -304,8 +304,8 @@ def test_the_state_is_bounded_by_the_groups(tmp_path: Path):
         state = tmp_path / f"s{stamps}.state"
         rp.stream.with_windows(
             df,
-            rl=rp.cross_ref("x", where=pl.col("g") == "g0", closed="left"),
-            ml=rp.cross_mean("x", neighbors="peers", closed="left"),
+            rl=rp.ops.cross_ref("x", where=pl.col("g") == "g0", closed="left"),
+            ml=rp.ops.cross_mean("x", neighbors="peers", closed="left"),
             **CLOCK,
             save_state=state,
         )
@@ -330,23 +330,25 @@ def test_a_stamp_of_long_lists_is_held_to_the_cap():
         )
 
     with pytest.warns(Warning, match="past half of its max_state_bytes of 300"):
-        run(stamp(4), m=rp.cross_mean("x", neighbors="peers", max_state_bytes=300))
+        run(stamp(4), m=rp.ops.cross_mean("x", neighbors="peers", max_state_bytes=300))
     with pytest.raises(Exception, match=r"at row 4 .*past its max_state_bytes of 300"):
-        run(stamp(5), m=rp.cross_mean("x", neighbors="peers", max_state_bytes=300))
+        run(stamp(5), m=rp.ops.cross_mean("x", neighbors="peers", max_state_bytes=300))
 
 
 def test_the_refusals():
     df = pl.DataFrame({"t": [0.0], "g": ["a"], "x": [1.0], "peers": [["a"]], "n": [1.0]})
     with pytest.raises(TypeError, match="where is required"):
-        rp.cross_ref("x", where=None)  # type: ignore[arg-type]
+        rp.ops.cross_ref("x", where=None)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="neighbors must name a list column"):
-        rp.cross_mean("x", neighbors=1)  # type: ignore[arg-type]
+        rp.ops.cross_mean("x", neighbors=1)  # type: ignore[arg-type]
     with pytest.raises(Exception, match="must be a list of group keys"):
-        run(df, m=rp.cross_mean("x", neighbors="n"))
+        run(df, m=rp.ops.cross_mean("x", neighbors="n"))
     with pytest.raises(Exception, match="is not in the input"):
-        run(df, m=rp.cross_mean("x", neighbors="nope"))
+        run(df, m=rp.ops.cross_mean("x", neighbors="nope"))
     with pytest.raises(Exception, match="names no group column"):
-        rp.stream.with_windows(df, m=rp.cross_mean("x", neighbors="peers"), clock="t", gap_cap=1.0)
+        rp.stream.with_windows(
+            df, m=rp.ops.cross_mean("x", neighbors="peers"), clock="t", gap_cap=1.0
+        )
     from rheon.polars._formula import operator
 
     with pytest.raises(Exception, match="a reference read takes no weight"):

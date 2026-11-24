@@ -22,7 +22,7 @@ The clock is the row count: a row is a minute, and every number in clock units o
 | **no target is learned before it is known** | `y0` is the next row's log return and `y1` the sum of the next five, so each is known 1 and 5 rows after its own row; each spec takes that as its `embargo`, and a spec with both targets (section 4) the longer, 5 |
 | **the models are compared at matched memory** | every model at `half_life` = 500 rows, and `kalman`'s `coef_half_life` = 500 too; `ewridge` and `lasso` solve at their default cadence, once the weight learned since the last solve reaches `ln 2 / 50` of the fit's (every 10 rows at this half-life), so their coefficients lag a row-by-row fit; section 5 runs `ewridge` solved every row beside it |
 | **`ewridge` is standardized in sections 1, 5 and 6** | each `ewridge` there runs with `standardize=True`, so section 1's default schedule is section 2's `std` row |
-| **the features** | `x0` the row's log return, `x1` the last five's sum, `x2` and `x3` volume and trade count against their last 60 rows' mean and spread; section 6 also runs each as a z-score, `(x - rp.ewm_mean(x)) / rp.ewm_std(x)` at the same half-life |
+| **the features** | `x0` the row's log return, `x1` the last five's sum, `x2` and `x3` volume and trade count against their last 60 rows' mean and spread; section 6 also runs each as a z-score, `(x - rp.ops.ewm_mean(x)) / rp.ops.ewm_std(x)` at the same half-life |
 | **the scores** | from `rp.eval.compare_specs`: `n` the rows scored, `r2` the out-of-sample R² against the target's mean over those rows, `ic` the correlation of the prediction with the target, `hit_rate` the share of rows whose sign it got right, `mse` the mean squared residual |
 
 Every prediction is out-of-sample: each row is predicted before the model learns its target. A negative `r2` on financial data is normal. It means the model does worse than the target's mean over the rows scored, a mean no model could know in advance, not that anything is broken.
@@ -107,7 +107,7 @@ Each target under its own embargo, every model at the same memory ([How the runs
 
 ## 6. Features as z-scores (the per-standard-deviation recipe)
 
-The models of section 5 on the raw features and on each feature in units of its current spread, as [Scale a feature by its spread](how-to/scale-a-feature-by-its-spread.md) makes it, `(x - rp.ewm_mean(x, half_life=500)) / rp.ewm_std(x, half_life=500)`, computed as columns by `rp.stream.with_windows`. A z-scored feature's coefficient is a response per standard deviation of the feature as it is now, where a raw one is per unit. A z-scored feature fits better where the target moves with the feature relative to its volatility. The same rows, embargoes and memory as section 5.
+The models of section 5 on the raw features and on each feature in units of its current spread, as [Scale a feature by its spread](how-to/scale-a-feature-by-its-spread.md) makes it, `(x - rp.ops.ewm_mean(x, half_life=500)) / rp.ops.ewm_std(x, half_life=500)`, computed as columns by `rp.stream.with_windows`. A z-scored feature's coefficient is a response per standard deviation of the feature as it is now, where a raw one is per unit. A z-scored feature fits better where the target moves with the feature relative to its volatility. The same rows, embargoes and memory as section 5.
 
 | spec | target | features | n | r2 | ic | mse |
 |---|---|---|---|---|---|---|

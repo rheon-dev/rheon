@@ -134,7 +134,7 @@ def specs(window: str, case: str = "pipeline") -> tuple[list[dict[str, object]],
         )
         for f in range(K_F)
     ]
-    fwd = rp.ewm_mean("y", half_life="30s", window_size="150s", reverse=True) - pl.col("y")
+    fwd = rp.ops.ewm_mean("y", half_life="30s", window_size="150s", reverse=True) - pl.col("y")
     target: dict[str, object] = {"targets": [fwd.alias("B")], "embargo": "150s"}
     if case == "plain target":
         target = {"targets": ["y"]}

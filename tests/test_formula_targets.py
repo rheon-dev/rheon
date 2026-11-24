@@ -1,6 +1,6 @@
 """Window expressions as model targets (docs/PLAN.md task 104).
 
-A target may be a formula of the row's future -- ``rp.ewm_mean("mid", ...)
+A target may be a formula of the row's future -- ``rp.ops.ewm_mean("mid", ...)
 - pl.col("mid")`` in a spec's ``targets`` -- and the bank's own window core
 resolves it: each row is scored where it sits and learned from once its
 window has closed and its ``embargo`` has passed. The claim is parity with
@@ -38,7 +38,7 @@ def fwd(**kw: Any) -> pl.Expr:
     """The formula every test learns: the next window's mean of ``mid``,
     less the row's own."""
     return (
-        rp.ewm_mean("mid", half_life=H, window_size=W, **kw, reverse=True) - pl.col("mid")
+        rp.ops.ewm_mean("mid", half_life=H, window_size=W, **kw, reverse=True) - pl.col("mid")
     ).alias("fwd")
 
 
@@ -125,17 +125,18 @@ def test_three_vwaps_on_interleaved_trades_and_quotes() -> None:
     sells = pl.when(pl.col("side") == "sell")
     targets = [
         (
-            rp.ewm_sum(notional, **w, reverse=True) / rp.ewm_sum("quantity", **w, reverse=True)
+            rp.ops.ewm_sum(notional, **w, reverse=True)
+            / rp.ops.ewm_sum("quantity", **w, reverse=True)
             - pl.col("mid")
         ).alias("all"),
         (
-            rp.ewm_sum(buys.then(notional), **w, reverse=True)
-            / rp.ewm_sum(buys.then("quantity"), **w, reverse=True)
+            rp.ops.ewm_sum(buys.then(notional), **w, reverse=True)
+            / rp.ops.ewm_sum(buys.then("quantity"), **w, reverse=True)
             - pl.col("mid")
         ).alias("buy"),
         (
-            rp.ewm_sum(sells.then(notional), **w, reverse=True)
-            / rp.ewm_sum(sells.then("quantity"), **w, reverse=True)
+            rp.ops.ewm_sum(sells.then(notional), **w, reverse=True)
+            / rp.ops.ewm_sum(sells.then("quantity"), **w, reverse=True)
             - pl.col("mid")
         ).alias("sell"),
     ]
@@ -378,7 +379,7 @@ def test_predict_scores_without_the_target() -> None:
 
 def test_what_is_refused() -> None:
     with pytest.raises(ValueError, match="holds no window operator looking ahead"):
-        spec((rp.ewm_mean("mid", half_life=H) - pl.col("mid")).alias("back"))
+        spec((rp.ops.ewm_mean("mid", half_life=H) - pl.col("mid")).alias("back"))
 
 
 def test_a_target_formula_a_formula_cannot_carry_names_the_spec() -> None:
@@ -386,7 +387,9 @@ def test_a_target_formula_a_formula_cannot_carry_names_the_spec() -> None:
     spec's name: the builder is the call the expression was given to."""
     from rheon.polars._formula import accepted_text
 
-    shifted = rp.ewm_mean("mid", half_life=H, window_size=W, reverse=True) - pl.col("mid").shift(1)
+    shifted = rp.ops.ewm_mean("mid", half_life=H, window_size=W, reverse=True) - pl.col(
+        "mid"
+    ).shift(1)
     with pytest.raises(ValueError) as err:
         spec(shifted.alias("f"))
     assert str(err.value) == (
@@ -478,7 +481,7 @@ def test_a_target_known_at_its_own_row_is_pointed_to_the_call_that_makes_its_col
     The refusal used to send both to `with_windows` (docs/README-ITERATIONS.md,
     E11), so following it failed for the second."""
     with pytest.raises(ValueError, match="rp.stream.with_windows"):
-        spec((rp.ewm_mean("mid", half_life=H) - pl.col("mid")).alias("back"))
+        spec((rp.ops.ewm_mean("mid", half_life=H) - pl.col("mid")).alias("back"))
     with pytest.raises(ValueError, match="with_columns") as plain:
         spec((pl.col("price") - pl.col("mid")).alias("rel"))
     assert "with_windows" not in str(plain.value)
@@ -488,11 +491,11 @@ def test_a_target_known_at_its_own_row_is_pointed_to_the_call_that_makes_its_col
     with pytest.raises(ValueError, match="with_columns"):
         rp.stream.with_windows(frame, rel=pl.col("price") - pl.col("mid"), clock="t", gap_cap=10.0)
     made = rp.stream.with_windows(
-        frame, back=rp.ewm_mean("mid", half_life=H) - pl.col("mid"), clock="t", gap_cap=10.0
+        frame, back=rp.ops.ewm_mean("mid", half_life=H) - pl.col("mid"), clock="t", gap_cap=10.0
     )
     assert made.columns == ["t", "mid", "price", "back"]
     with pytest.raises(ValueError, match="needs a name"):
-        spec(rp.ewm_mean("mid", half_life=H, window_size=W, reverse=True))
+        spec(rp.ops.ewm_mean("mid", half_life=H, window_size=W, reverse=True))
     with pytest.raises(ValueError, match="group_close cannot be set beside a formula target"):
         spec(fwd(), group="g", group_close="monotone", embargo=None)
     with pytest.raises(ValueError, match="a formula target .* does not apply"):
@@ -577,7 +580,7 @@ def test_a_state_saved_inside_a_tied_stamp_resumes_as_one_run(tmp_path: Any) -> 
         }
     )
     target = (
-        rp.ewm_mean("mid", half_life="5d", window_size="10d", reverse=True) - pl.col("mid")
+        rp.ops.ewm_mean("mid", half_life="5d", window_size="10d", reverse=True) - pl.col("mid")
     ).alias("fwd")
     s = spec(target, gap_cap="100d", half_life="50d", embargo="13d", group="g")
     whole = native(dd, s)
@@ -697,7 +700,9 @@ def test_a_boolean_column_reaches_a_formula_target() -> None:
         is_buy=pl.Series(np.random.default_rng(1).random(300) < 0.5), qty=pl.lit(2.0)
     )
     expr = (
-        rp.ewm_sum(pl.when(pl.col("is_buy")).then("qty"), half_life=H, window_size=W, reverse=True)
+        rp.ops.ewm_sum(
+            pl.when(pl.col("is_buy")).then("qty"), half_life=H, window_size=W, reverse=True
+        )
         - pl.col("qty")
     ).alias("fwd")
     s = spec(expr)
@@ -741,11 +746,12 @@ def test_drop_on_one_target_leaves_the_rows_other_targets() -> None:
             "m",
             targets=[
                 (
-                    rp.ewm_mean("mid", half_life=H, window_size=20.0, partial=pa, reverse=True)
+                    rp.ops.ewm_mean("mid", half_life=H, window_size=20.0, partial=pa, reverse=True)
                     - pl.col("mid")
                 ).alias("a"),
                 (
-                    rp.ewm_mean("mid", half_life=H, window_size=5.0, reverse=True) - pl.col("mid")
+                    rp.ops.ewm_mean("mid", half_life=H, window_size=5.0, reverse=True)
+                    - pl.col("mid")
                 ).alias("b"),
             ],
             features=["x"],
@@ -771,7 +777,7 @@ def test_a_formulas_spans_are_the_specs_clock_spans() -> None:
             "m",
             targets=[
                 (
-                    rp.ewm_mean("mid", half_life="5s", window_size=600.0, reverse=True)
+                    rp.ops.ewm_mean("mid", half_life="5s", window_size=600.0, reverse=True)
                     - pl.col("mid")
                 ).alias("f")
             ],
@@ -821,7 +827,8 @@ def test_a_formula_target_is_never_order_free() -> None:
         "m",
         targets=[
             (
-                rp.ewm_mean("mid", half_life=5.0, window_size=10.0, reverse=True) - pl.col("mid")
+                rp.ops.ewm_mean("mid", half_life=5.0, window_size=10.0, reverse=True)
+                - pl.col("mid")
             ).alias("f")
         ],
         features=["x"],
@@ -849,7 +856,9 @@ def test_a_null_literal_has_a_form_toml_can_carry(rheon_cli: Any, tmp_path: Any)
     )
     df = stream(240, 43)
     target = (
-        rp.ewm_sum(pl.when(pl.col("x") > 0).then("mid"), half_life=H, window_size=W, reverse=True)
+        rp.ops.ewm_sum(
+            pl.when(pl.col("x") > 0).then("mid"), half_life=H, window_size=W, reverse=True
+        )
         - pl.col("mid")
     ).alias("fwd")
     s = spec(target)
@@ -914,7 +923,9 @@ def test_a_refused_chunk_leaves_every_specs_core_as_it_was() -> None:
     df = stream(300, 46).with_columns(ask=pl.col("mid") + 0.01)
     a = spec(fwd())
     b = spec(
-        (rp.ewm_mean("ask", half_life=H, window_size=W, reverse=True) - pl.col("ask")).alias("fwd")
+        (rp.ops.ewm_mean("ask", half_life=H, window_size=W, reverse=True) - pl.col("ask")).alias(
+            "fwd"
+        )
     )
     b["name"] = "b"
     fresh = rp.ModelBank([a, b]).fit_predict(df)
@@ -930,7 +941,7 @@ def test_a_non_strict_cast_survives_the_specs_round_trip() -> None:
     """R2-F2: the tree's serializer dropped ``"non_strict"``, so a saved spec
     ran a strict cast."""
     expr = (
-        rp.ewm_mean(
+        rp.ops.ewm_mean(
             pl.col("mid").cast(pl.Float32, strict=False), half_life=H, window_size=W, reverse=True
         )
         - pl.col("mid")
@@ -950,7 +961,9 @@ def test_a_boolean_also_read_as_a_number_reaches_the_formula_as_a_boolean() -> N
         is_buy=pl.Series(np.random.default_rng(2).random(300) < 0.5), qty=pl.lit(2.0)
     )
     expr = (
-        rp.ewm_sum(pl.when(pl.col("is_buy")).then("qty"), half_life=H, window_size=W, reverse=True)
+        rp.ops.ewm_sum(
+            pl.when(pl.col("is_buy")).then("qty"), half_life=H, window_size=W, reverse=True
+        )
         - pl.col("qty")
     ).alias("fwd")
     s = spec(expr, features=["x", "is_buy"])
@@ -1076,7 +1089,7 @@ def test_a_target_named_after_its_own_column_is_refused_at_the_builder(
     with pytest.raises(
         ValueError, match=r"takes its name from a column its formula reads.*\.alias"
     ):
-        spec(pl.col("mid") - rp.ewm_mean("mid", half_life=H, window_size=W, reverse=True))
+        spec(pl.col("mid") - rp.ops.ewm_mean("mid", half_life=H, window_size=W, reverse=True))
     # Task 160 (PB5): the same spec as a table, the form a dict or a TOML
     # file writes, passed the Rust validation and was refused only at the
     # first chunk. It is refused where every spec is checked: by
@@ -1103,9 +1116,9 @@ def test_a_target_named_after_its_own_column_is_refused_at_the_builder(
     # overflows. The bank's words, not the operator layer's.
     df = stream(60, 3).with_columns(mid=pl.col("mid") * 1e6)
     s = spec(
-        (rp.ewm_mean("mid", half_life=H, window_size=W, reverse=True).cast(pl.Int8) * 1.0).alias(
-            "fwd"
-        )
+        (
+            rp.ops.ewm_mean("mid", half_life=H, window_size=W, reverse=True).cast(pl.Int8) * 1.0
+        ).alias("fwd")
     )
     with pytest.raises(ValueError, match="conversion from") as err:
         rp.ModelBank([s]).fit_predict(df)
@@ -1117,7 +1130,7 @@ def test_a_clip_bound_left_out_is_the_null_literal_in_a_saved_spec() -> None:
     ``null``, where Python writes ``["lit"]``, the form TOML can carry; a
     saved spec holds no bare null in a formula."""
     target = (
-        rp.ewm_mean("mid", half_life=H, window_size=W, reverse=True).clip(lower_bound=0)
+        rp.ops.ewm_mean("mid", half_life=H, window_size=W, reverse=True).clip(lower_bound=0)
         - pl.col("mid")
     ).alias("fwd")
     saved = json.loads(rp.ModelBank([spec(target)]).write_json())

@@ -844,7 +844,7 @@ CHAIN_CHILD = textwrap.dedent(
         )
         for f in range(3)
     ]
-    forward = po.ewm_mean("y", half_life="30s", window_size="150s", reverse=True) - pl.col("y")
+    forward = po.ops.ewm_mean("y", half_life="30s", window_size="150s", reverse=True) - pl.col("y")
     stage2 = po.spec.ewridge(
         "stage2", targets=[forward.alias("B")], features=[f"resid_d{f}" for f in range(3)],
         window_size="2h", half_life=float("inf"), embargo="150s", min_weight=500.0, **clock,

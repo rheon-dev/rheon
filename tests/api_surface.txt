@@ -26,26 +26,10 @@
   ConsumedSourceWarning
   ModelBank
   OrderNotGuaranteedWarning
-  cross_mean(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
-  cross_quantile(input: 'str | pl.Expr', quantile: 'float', *, interpolation: "Literal['nearest', 'higher', 'lower', 'midpoint', 'linear', 'equiprobable'] | None" = None, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
-  cross_rank(input: 'str | pl.Expr', *, method: "Literal['average', 'min', 'max', 'dense', 'ordinal']" = 'average', descending: 'bool' = False, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
-  cross_ref(input: 'str | pl.Expr', where: 'pl.Expr', *, closed: "Literal['right', 'left']" = 'right', max_state_bytes: 'int | None' = None) -> 'pl.Expr'
-  cross_std(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', bias: 'bool' = False, neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   eval
-  ewm_mean(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
-  ewm_moments(legs: 'dict[str, int]', *, half_life: 'float | Duration', kind: "Literal['central', 'raw', 'standardized', 'cumulant']" = 'central', bias: 'bool | None' = None, window_size: 'float | Duration | None' = None, lag_tolerance: 'float | Duration | None' = None, partial: "Literal['keep', 'null', 'drop'] | None" = None) -> 'pl.Expr'
-  ewm_profile(input: 'str | pl.Expr', *, period: 'float | Duration', half_life: 'float | Duration', buckets: 'int | None' = None, harmonics: 'int | None' = None, stat: "Literal['mean', 'var', 'std', 'quantile']" = 'mean', quantile: 'float | None' = None, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', offset: 'float | Duration | None' = None, weight: 'str | pl.Expr | None' = None, min_samples: 'int' = 1, bias: 'bool | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
-  ewm_quantile(input: 'str | pl.Expr', *, quantile: 'float', half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
-  ewm_rate(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
-  ewm_std(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, bias: 'bool' = False) -> 'pl.Expr'
-  ewm_sum(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 0, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
-  ewm_var(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, bias: 'bool' = False) -> 'pl.Expr'
   fit_predict(frame: 'pl.LazyFrame | pl.DataFrame', specs: 'Specs | None' = None, *, load_state: 'State | ModelBank | None' = None, save_state: 'State | None' = None, closed_groups: 'State | None' = None, chunk_size: 'int | None' = None, threads: 'int | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
-  increment(input: 'str | pl.Expr') -> 'pl.Expr'
   ops
   predict(frame: 'pl.LazyFrame | pl.DataFrame', bank: 'ModelBank | State', *, chunk_size: 'int | None' = None, threads: 'int | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
-  rolling_max(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
-  rolling_min(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   sim  # unstable
   stream
   unnest(frame: 'pl.LazyFrame | pl.DataFrame', specs: 'Specs | ModelBank | State', *, separator: 'str | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
@@ -3263,26 +3247,26 @@
   sgd.huber_scale: mad, rms
   sgd.loss: epsilon_insensitive, huber, logistic, poisson, quantile, squared
   sgd.schedule: adagrad, constant, inv_scaling
-  rp.ewm_mean.closed: both, left, none, right
-  rp.ewm_mean.partial: drop, keep, null
-  rp.ewm_quantile.closed: both, left, none, right
-  rp.ewm_quantile.partial: drop, keep, null
-  rp.ewm_rate.closed: both, left, none, right
-  rp.ewm_rate.partial: drop, keep, null
-  rp.ewm_std.closed: both, left, none, right
-  rp.ewm_std.partial: drop, keep, null
-  rp.ewm_sum.closed: both, left, none, right
-  rp.ewm_sum.partial: drop, keep, null
-  rp.ewm_var.closed: both, left, none, right
-  rp.ewm_var.partial: drop, keep, null
-  rp.ewm_mean(reverse=True).closed: both, left, none, right
-  rp.ewm_mean(reverse=True).partial: drop, keep, null
-  rp.ewm_quantile(reverse=True).closed: both, left, none, right
-  rp.ewm_quantile(reverse=True).partial: drop, keep, null
-  rp.ewm_rate(reverse=True).closed: both, left, none, right
-  rp.ewm_rate(reverse=True).partial: drop, keep, null
-  rp.ewm_sum(reverse=True).closed: both, left, none, right
-  rp.ewm_sum(reverse=True).partial: drop, keep, null
+  rp.ops.ewm_mean.closed: both, left, none, right
+  rp.ops.ewm_mean.partial: drop, keep, null
+  rp.ops.ewm_quantile.closed: both, left, none, right
+  rp.ops.ewm_quantile.partial: drop, keep, null
+  rp.ops.ewm_rate.closed: both, left, none, right
+  rp.ops.ewm_rate.partial: drop, keep, null
+  rp.ops.ewm_std.closed: both, left, none, right
+  rp.ops.ewm_std.partial: drop, keep, null
+  rp.ops.ewm_sum.closed: both, left, none, right
+  rp.ops.ewm_sum.partial: drop, keep, null
+  rp.ops.ewm_var.closed: both, left, none, right
+  rp.ops.ewm_var.partial: drop, keep, null
+  rp.ops.ewm_mean(reverse=True).closed: both, left, none, right
+  rp.ops.ewm_mean(reverse=True).partial: drop, keep, null
+  rp.ops.ewm_quantile(reverse=True).closed: both, left, none, right
+  rp.ops.ewm_quantile(reverse=True).partial: drop, keep, null
+  rp.ops.ewm_rate(reverse=True).closed: both, left, none, right
+  rp.ops.ewm_rate(reverse=True).partial: drop, keep, null
+  rp.ops.ewm_sum(reverse=True).closed: both, left, none, right
+  rp.ops.ewm_sum(reverse=True).partial: drop, keep, null
   withheld_reason, in precedence order: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample, input_negative
   withheld_reason of a multiplicative holt season: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample, input_negative, target_not_positive
   toml.input_format: csv, ipc, ndjson, parquet

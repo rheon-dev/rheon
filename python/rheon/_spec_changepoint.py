@@ -176,7 +176,7 @@ def bocpd(
         ``"full"``. The tempered predictive is not free of the data's units,
         so center and scale each feature before a tempered run. In the
         query before the bank, make its z-score ``(pl.col("x") -
-        rp.ewm_mean("x", half_life=h)) / rp.ewm_std("x", half_life=h)``
+        rp.ops.ewm_mean("x", half_life=h)) / rp.ops.ewm_std("x", half_life=h)``
         with ``lf.rheon.with_windows``, which runs the window operators
         (Polars' ``with_columns`` cannot).
         *Tempering* in Notes gives the measurements.

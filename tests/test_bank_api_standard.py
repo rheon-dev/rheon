@@ -356,7 +356,7 @@ def test_m23_a_lazyframe_is_read_where_a_call_reads_a_query_and_refused_by_name_
 
 
 def test_m9_operator_parameters_are_typed():
-    params = inspect.signature(rp.ewm_mean).parameters
+    params = inspect.signature(rp.ops.ewm_mean).parameters
     assert "Duration" in str(params["half_life"].annotation)
     assert "Duration" in str(params["window_size"].annotation)
     assert "Literal" in str(params["closed"].annotation)
@@ -367,19 +367,19 @@ def test_m9_operator_parameters_are_typed():
 
 @pytest.mark.parametrize("kind", ["mean", "sum", "rate"])
 def test_m17_reverse_is_the_window_looking_ahead(kind):
-    new = getattr(rp, f"ewm_{kind}")("x0", half_life=2.0, window_size=5.0, reverse=True)
+    new = getattr(rp.ops, f"ewm_{kind}")("x0", half_life=2.0, window_size=5.0, reverse=True)
     with pytest.raises(TypeError, match=f"rewm_{kind}.*renamed.*reverse=True"):
         getattr(rp, f"rewm_{kind}")("x0", half_life=2.0, window_size=5.0)
     assert new.meta.eq(new)
     assert f"rewm_{kind}" not in rp.__all__
     assert f"rewm_{kind}" not in rp.ops.__all__
     with pytest.raises(ValueError, match="reverse=True needs window_size"):
-        getattr(rp, f"ewm_{kind}")("x0", half_life=2.0, reverse=True)
+        getattr(rp.ops, f"ewm_{kind}")("x0", half_life=2.0, reverse=True)
 
 
 def test_m17_reverse_runs_through_with_windows_and_targets():
     df = _df()
-    fwd = rp.ewm_mean("y", half_life=2.0, window_size=5.0, reverse=True)
+    fwd = rp.ops.ewm_mean("y", half_life=2.0, window_size=5.0, reverse=True)
     out = rp.stream.with_windows(df, fwd_y=fwd, clock="t", gap_cap=10.0)
     assert out["fwd_y"].null_count() < df.height
     spec = rp.spec.ewridge(

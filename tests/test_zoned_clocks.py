@@ -123,8 +123,8 @@ def test_with_windows_keeps_the_zone_and_resumes(tmp_path):
             lf,
             clock="t",
             gap_cap="1h",
-            back=rp.ewm_mean("x", half_life="20m", window_size="1h"),
-            ahead=rp.ewm_mean("y", half_life="20m", window_size="30m", reverse=True),
+            back=rp.ops.ewm_mean("x", half_life="20m", window_size="1h"),
+            ahead=rp.ops.ewm_mean("y", half_life="20m", window_size="30m", reverse=True),
             **state,  # type: ignore[arg-type]
         )
 
@@ -145,7 +145,7 @@ def test_a_zoned_pipeline_resumed_from_a_checkpoint_is_one_run(tmp_path):
             lf,
             clock="time_refresh",
             gap_cap="2h",
-            level=rp.ewm_mean("a_value", half_life="10m"),
+            level=rp.ops.ewm_mean("a_value", half_life="10m"),
             **state,  # type: ignore[arg-type]
         )
 
