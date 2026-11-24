@@ -224,7 +224,7 @@ impl Series {
         // EGARCH's first `ln s` lag is the backcast's logarithm, so a
         // backcast of 0 (the first 75 rows all 0) is read as the rows' mean
         // square, which no `ln` takes to `−∞` (review 2026-11-23, GARCH-5).
-        let bc = if cfg.vol == GarchVol::Egarch && !(bc > 0.0) {
+        let bc = if cfg.vol == GarchVol::Egarch && (bc.is_nan() || bc <= 0.0) {
             v
         } else {
             bc

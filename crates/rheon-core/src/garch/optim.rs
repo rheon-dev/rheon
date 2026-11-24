@@ -456,7 +456,10 @@ mod tests {
     /// `g` and `h` there); not a number anywhere else, so every probe of the
     /// curvature fails and the iteration reads the `h` given. What the line
     /// search decides at each listed point is then the rule's alone.
-    fn listed(at: Vec<(Vec<f64>, f64, Vec<f64>, Vec<f64>)>) -> impl Fn(&[f64], bool) -> Eval {
+    /// A point of [`listed`]: `x`, then `f`, `g` and `h` there.
+    type Point = (Vec<f64>, f64, Vec<f64>, Vec<f64>);
+
+    fn listed(at: Vec<Point>) -> impl Fn(&[f64], bool) -> Eval {
         move |x: &[f64], _grad: bool| {
             for (p, f, g, h) in &at {
                 if p.iter()
