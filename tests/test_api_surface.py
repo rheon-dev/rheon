@@ -1019,8 +1019,7 @@ def enum_values_section(cli: Path | None) -> list[str]:
     )
     assert isinstance(mul, pl.Enum)
     out.append(
-        "  withheld_reason of a multiplicative holt season: "
-        + ", ".join(mul.categories.to_list())
+        "  withheld_reason of a multiplicative holt season: " + ", ".join(mul.categories.to_list())
     )
     if cli is not None:
         # `output_layout` too (task 278): its key and flag were listed, but not
