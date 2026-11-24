@@ -921,6 +921,58 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **A spec is refused for what no stream can carry, and by its own key**
+  (the 2026-11-23 review, batch i, PLAN 578i). A NUL character in a
+  feature, a feature set, a `deco` block, an `ew_class` class or any column
+  a spec names reached a field name of the Arrow export, which panicked
+  after the bank had learned the chunk; each is refused when the spec is
+  checked. `kmeans`' `update_every` and `split_merge_every` and
+  `corrchange`'s `permute_every` at `inf` write `"inf"` in JSON, where
+  `null` made `resolved_defaults` and the state's JSON export refuse. A
+  refit's count given beside its span is refused at 0 too (the span ran and
+  the 0 was ignored). A feature named `intercept` is refused only by the
+  twelve models whose fit names its own constant so (`audit`, `bocpd`,
+  `corrchange`, `deco`, `rcov` and `marginal` refused it). `sgd` names
+  `huber_refit_span` and `max_state_bytes` with its other Huber parameters
+  under another loss, and a span refit at an infinite cut is named by its
+  span. A repeated level of `resid_quantiles` or `mahal_quantiles`, and a
+  repeated or overflowing half-life of `hawkes`' `kernel_half_lives`, are
+  refused by their own key (they blamed the output's field names, or
+  `kernel_decays`). A `refit_budget` with no refit is refused on `glm` and
+  `expectile`. A `glm`'s formula target resolved outside its family's
+  support is refused naming the row, as a column target is, where the model
+  skipped the row and still counted its weight. A bank file of another
+  model is told by its `type`, and a formula target with no operator
+  looking ahead is told all six that do. No output moves.
+- **State files and checkpoints** (the same review). `save_checkpoint`
+  refuses a stage whose checksum is missing (a state cut short, or damaged
+  in its last bytes), which replaced the good checkpoint on disk, and a
+  stage from a file written before the envelope. Damaged Arrow IPC in a
+  `refresh_time` state or a window run's last row is refused, not a panic;
+  a length a damaged file claims reserves at most 1 MiB ahead of the
+  bytes. A checkpoint's save holds no second copy of a stage. Every saved
+  file's temporary is created new (`O_EXCL`), never through a file or a
+  link already at its name, and with the destination's permission bits
+  from its first byte; setuid, setgid and sticky are not copied. A path
+  ending in a separator names no file and is refused before a run, in the
+  command line and in every Python plan form that saves. `audit`, `micro`,
+  `rcov`, `ftrl` and every model's diagnostic moments refuse a restored
+  state that no stream writes (a minimum above the maximum, a cluster count
+  that is not the labels', a ring past its depth, a negative sum). The
+  bank's save and load run without the GIL.
+- **The command line and Python** (the same review). The NDJSON output
+  writes a list or an array of zoned instants in UTC, as a column is
+  written. The closing lines keep a group whose last row was skipped among
+  the withheld. A required model key left out of a TOML file is said as
+  missing, without blaming a key given. `drift_options` is checked as any
+  mapping, and each key by its type; six counts added since 2.0 are told
+  their floor of 1. `hawkes` warns of a window past half its cap only once
+  the spec passes its checks. `ModelBank.threads` read during a
+  `fit_predict` on another thread says the bank is busy. Docstrings that
+  said `WrongTypeError` and `RefusedValueError` were each both a
+  `TypeError` and a `ValueError` say the one class each is. The build
+  records the features a `target-cpu` psABI level and a `-feature` imply.
+
 - **`power_variation`'s normalized terms scale by the returns' weight, and
   `n` is Kish's count under a window too** (Fable's W13 review, B1 and B2,
   as `realized` was fixed). `normalize` multiplied a term of powers `p` by
