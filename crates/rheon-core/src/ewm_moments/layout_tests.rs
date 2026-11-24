@@ -153,11 +153,12 @@ fn the_update_at_a_scale_is_the_update_to_the_bit() {
 fn a_summary_rises_past_the_range_and_falls_back() {
     let g = one_leg(5);
     let mut s = Summary::empty(&g);
+    let mut work = Work::default();
     for x in [0.5, -1.0, 2.0] {
-        s.learn(&g, 0.9, 1.0, &[x]);
+        s.learn(&g, 0.9, 1.0, &[x], &mut work);
     }
     let before = s.clone();
-    s.learn(&g, 0.9, 1.0, &[1e100]);
+    s.learn(&g, 0.9, 1.0, &[1e100], &mut work);
     assert!(s.e > 0, "the bound row raises the scale");
     assert!(s.c.iter().all(|v| v.is_finite()));
     // c_2 is of degree 2: read in the deviations' units it fits a double,
@@ -180,7 +181,7 @@ fn a_summary_rises_past_the_range_and_falls_back() {
     // a while, then it falls to 0 and stays there.
     let mut fell = None;
     for i in 0..40_000 {
-        s.learn(&g, 0.9, 1.0, &[(i % 7) as f64 - 3.0]);
+        s.learn(&g, 0.9, 1.0, &[(i % 7) as f64 - 3.0], &mut work);
         if s.e == 0 && fell.is_none() {
             fell = Some(i);
         }

@@ -287,6 +287,7 @@ impl OpNode {
             tol: 0.0,
             event: None,
             step: None,
+            stl: None,
         }
     }
 
@@ -2131,24 +2132,8 @@ fn stl_of(name: &str, input: Node, params: &Map<String, Value>) -> Result<OpNode
     };
     let kind = if mstl { OpKind::Mstl } else { OpKind::Stl };
     Ok(OpNode {
-        kind,
-        input: Box::new(input),
-        half_life: None,
-        window_size: None,
-        closed: Closed::Right,
-        min_samples: 1,
-        partial: None,
-        bias: false,
-        quantile: None,
-        weight: None,
-        max_state_bytes: None,
-        order: Order::default(),
-        neighbors: None,
-        pick: None,
-        moments: None,
-        profile: None,
-        since: None,
         stl: Some(Box::new(p)),
+        ..OpNode::row(kind, input)
     })
 }
 

@@ -149,11 +149,6 @@ impl Buffers {
             + n_models
             + n_models
             + on(spec.emit_error_inflation)
-            + if self.per_target {
-                n_models * spec.m()
-            } else {
-                0
-            }
             + if spec.emit_target_weight {
                 n_models * spec.m()
             } else {
