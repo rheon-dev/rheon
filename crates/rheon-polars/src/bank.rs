@@ -4883,6 +4883,8 @@ pub use learned::Learned;
 mod audit;
 pub use audit::AuditTable;
 
+mod smoothed;
+
 mod arrays;
 use arrays::{coef_list_array, named_column, named_columns, opt_bool_array, opt_f64_array};
 

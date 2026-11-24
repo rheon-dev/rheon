@@ -107,6 +107,23 @@ impl Spec {
             }
             return no.finish();
         }
+        // A held row is learned on the row whose clock releases it, and one
+        // row can release several, each of which can complete a lag: the
+        // row's line has room for one value a target, so the others would
+        // be lost.
+        for (key, set) in [
+            ("embargo", self.embargo.is_some()),
+            ("label_clock", self.label_clock.is_some()),
+        ] {
+            if set {
+                no.refuse(format!(
+                    "spec {name:?}: smooth_lag cannot be used with {key}: {key} holds each \
+                     row until a later row releases it, one row can release several, and the \
+                     smoothed value of each that completes its lag would need the same line. \
+                     Leave out {key}, or leave out smooth_lag."
+                ));
+            }
+        }
         if !covariance_form.is_covariance() {
             no.refuse(format!(
                 "spec {name:?}: smooth_lag needs covariance_form=\"covariance\", but it is \

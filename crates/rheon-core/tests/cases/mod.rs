@@ -1358,6 +1358,94 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // The fixed-lag smoother (schema 72, before any release): the form
+        // a spec builds with `smooth_lag` and `emit_smoothed_se`, its ring
+        // full and wrapped past its first emissions, each slot's gain, `c`
+        // and `K`'s triangle, and the pending pair carried through the
+        // transitions since the last observation.
+        case!(
+            "kalman_smooth",
+            "Kalman",
+            Kalman,
+            Kalman::new(KalmanCfg {
+                noise_units: true,
+                min_weight_holds_learning: false,
+                ..kalman_cfg()
+            })
+            .unwrap()
+            .with_smoother(8, true)
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // The means alone under `share_p`: one ring holding both targets'
+        // `c`, no `K`.
+        case!(
+            "kalman_smooth_shared",
+            "Kalman",
+            Kalman,
+            Kalman::new(KalmanCfg {
+                noise_units: true,
+                min_weight_holds_learning: false,
+                share_p: true,
+                ..kalman_cfg()
+            })
+            .unwrap()
+            .with_smoother(8, false)
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Saved after three rows: the ring short of its lag, slopes not yet
+        // sized at its first observations, and the rows held by `min_weight`.
+        case!(
+            "kalman_smooth_early",
+            "Kalman",
+            Kalman,
+            Kalman::new(KalmanCfg {
+                noise_units: true,
+                min_weight_holds_learning: false,
+                ..kalman_cfg()
+            })
+            .unwrap()
+            .with_smoother(8, true)
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            3
+        ),
+        // A break inside the ring: twenty rows, then one whose feature moves
+        // the moments past what a re-map carries, so the re-map is refused
+        // and the slot before it keeps its filtered pair (an empty gain).
+        case!(
+            "kalman_smooth_break",
+            "Kalman",
+            Kalman,
+            {
+                let mut m = Kalman::new(KalmanCfg {
+                    noise_units: true,
+                    min_weight_holds_learning: false,
+                    ..kalman_cfg()
+                })
+                .unwrap()
+                .with_smoother(50, true)
+                .unwrap();
+                for i in 0..20 {
+                    let a = (i as f64 * 0.37).sin();
+                    let b = (i as f64 * 0.71).cos();
+                    let y = 2.0 * a - b;
+                    let d = if i == 0 { 0.0 } else { 1.0 };
+                    m.step(&[a, b], &[Some(y), Some(y + 1.0)], d, 1.0);
+                }
+                m.step(&[1e7, 0.5], &[Some(1.0), Some(2.0)], 1.0, 1.0);
+                m
+            },
+            K,
+            Targets::Linear(2),
+            10
+        ),
         case!(
             "huber",
             "Robust",

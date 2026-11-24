@@ -340,55 +340,38 @@ fn the_min_weight_gate_withholds_the_value_describing_a_row_it_withheld() {
     assert!(held > 0 && stood > 0, "{held} held, {stood} stood");
 }
 
-/// Under the embargo a row is learned when released, so its value lands
-/// on the row whose clock completes the lag of released observations, and
-/// still names the described row by its own clock.
+/// A held row is learned on the row whose clock releases it, and one row
+/// can release several whose lags it completes, with one line for them:
+/// `smooth_lag` is refused beside `embargo` and `label_clock`, naming each,
+/// and the same spec without them is accepted and runs.
 #[test]
-fn under_the_embargo_the_value_names_the_released_row() {
-    let df = frame(400, 4964);
-    let lag = 4;
-    let s = spec(
-        &format!(r#", "smooth_lag": {lag}"#),
-        r#", "clock": "t", "embargo": 3"#,
+fn the_smoother_is_refused_beside_the_embargo() {
+    let mut s = spec(r#", "smooth_lag": 4"#, r#", "clock": "t", "embargo": 3"#);
+    let e = s.check().unwrap_err();
+    assert!(e.contains("smooth_lag cannot be used with embargo"), "{e}");
+    let mut s = spec(
+        r#", "smooth_lag": 4"#,
+        r#", "clock": "t", "label_clock": "t""#,
     );
-    let out = run(&s, &df, 400);
-    let described = field(&out, "smoothed_for_y");
-    let clock: Vec<f64> = df
-        .column("t")
-        .unwrap()
-        .f64()
-        .unwrap()
-        .into_no_null_iter()
-        .collect();
-    let w: Vec<f64> = df
-        .column("w")
-        .unwrap()
-        .f64()
-        .unwrap()
-        .into_no_null_iter()
-        .collect();
-    let y = df.column("y").unwrap().f64().unwrap();
-    let mut seen = 0;
-    for (i, d) in described.f64().unwrap().iter().enumerate() {
-        let Some(d) = d else { continue };
-        let row = clock.iter().position(|c| *c == d).unwrap();
-        assert!(w[row] > 0.0 && y.get(row).is_some());
-        // The row described is before this one, and was released by it or
-        // earlier: at least the embargo back.
-        assert!(clock[i] - d >= 3.0, "row {i} describes {row}");
-        seen += 1;
-    }
-    // Under the embargo several observations can be released on one row,
-    // and that row's line holds one value a target: the newest released.
-    // The rows the clock's gaps release together are counted here.
-    let obs = (0..df.height())
-        .filter(|&r| w[r] > 0.0 && y.get(r).is_some())
-        .count();
-    eprintln!(
-        "embargo: {seen} lines describe a row of {} observations past the lag",
-        obs - lag
+    let e = s.check().unwrap_err();
+    assert!(
+        e.contains("smooth_lag cannot be used with label_clock"),
+        "{e}"
     );
-    assert!(seen > 150, "{seen}");
+    let mut held = spec("", r#", "clock": "t", "embargo": 3"#);
+    held.check().unwrap();
+    let mut s = spec(r#", "smooth_lag": 4"#, r#", "clock": "t""#);
+    s.check().unwrap();
+    let out = run(&s, &frame(100, 4964), 100);
+    assert!(
+        field(&out, "smoothed_for_y")
+            .f64()
+            .unwrap()
+            .iter()
+            .flatten()
+            .count()
+            > 50
+    );
 }
 
 /// The settings are refused where they cannot hold, each saying why.
@@ -431,4 +414,70 @@ fn the_smoothers_settings_are_refused_where_they_cannot_hold() {
         "",
     );
     raised.check().unwrap();
+}
+
+/// The bank reads each group's last `L` observations from the state, the
+/// ones whose lag no row has completed: per target, oldest first, the
+/// newest the stream's last observation, by its clock; refused for a spec
+/// without a smoother.
+#[test]
+fn the_bank_reads_the_last_observations_from_the_state() {
+    let df = frame(300, 4965);
+    let lag = 5;
+    let s = spec(
+        &format!(r#", "smooth_lag": {lag}, "emit_smoothed_se": true"#),
+        r#", "clock": "t""#,
+    );
+    let mut bank = Bank::new(vec![s.clone()]).unwrap();
+    feed(&mut bank, &df, 300);
+    let tail = bank.smoothed_tail(0, None).unwrap();
+    assert_eq!(tail.height(), 2 * lag);
+    let names: Vec<&str> = tail.get_column_names().iter().map(|n| n.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "spec",
+            "group",
+            "instance",
+            "half_life",
+            "lam",
+            "target",
+            "smoothed_for",
+            "withheld",
+            "smoothed_coef",
+            "smoothed_se_coef"
+        ]
+    );
+    let w: Vec<f64> = df
+        .column("w")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
+    let clock: Vec<f64> = df
+        .column("t")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
+    let targets = tail.column("target").unwrap().str().unwrap();
+    let labels = tail.column("smoothed_for").unwrap().f64().unwrap();
+    for t in ["y", "z"] {
+        let y = df.column(t).unwrap().f64().unwrap();
+        let obs: Vec<f64> = (0..df.height())
+            .filter(|&i| w[i] > 0.0 && y.get(i).is_some())
+            .map(|i| clock[i])
+            .collect();
+        let got: Vec<f64> = (0..tail.height())
+            .filter(|&i| targets.get(i) == Some(t))
+            .map(|i| labels.get(i).unwrap())
+            .collect();
+        assert_eq!(got, obs[obs.len() - lag..], "{t}");
+    }
+    let mut plain = Bank::new(vec![spec("", r#", "clock": "t""#)]).unwrap();
+    feed(&mut plain, &df, 300);
+    let e = plain.smoothed_tail(0, None).unwrap_err();
+    assert!(e.contains("it has no fixed-lag smoother"), "{e}");
 }

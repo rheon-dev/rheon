@@ -2358,7 +2358,86 @@ fn kinds() -> Vec<Kind> {
             first: refresh_age_held_first,
             run: refresh_age_held_run,
         },
+        Kind {
+            name: "bank_smoothed",
+            first: smoothed_first,
+            run: smoothed_run,
+        },
     ]
+}
+
+/// The spec of `bank_smoothed`: `kalman`'s fixed-lag smoother with its
+/// standard errors (schema 72, before any release), two targets, a weight
+/// column whose zeros take no slot, and a `min_weight` that withholds `y`
+/// past the split and lets `mid` stand, so the file holds each
+/// covariance's ring, the clock labels, the held marks and the last row's
+/// smoothed fields.
+fn smoothed_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "smoothed", "model": {"type": "kalman", "coef_half_life": 40.0, "smooth_lag": 6, "emit_smoothed_se": true}, "targets": ["y", "mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w", "min_weight": [80.0, 1.0]}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn smoothed_gain(p: &str, v: &rmpv::Value) -> bool {
+    p.contains(".smoother.rings.") && p.contains(".g.") && v.as_f64().is_some_and(|f| f != 0.0)
+}
+
+fn smoothed_label(p: &str, v: &rmpv::Value) -> bool {
+    p.contains(".smoother.rings.") && p.ends_with(".label.F64") && v.as_f64().is_some()
+}
+
+fn smoothed_held(p: &str, v: &rmpv::Value) -> bool {
+    p.contains(".smoother.rings.") && p.contains(".held.") && v.as_u64() == Some(1)
+}
+
+fn smoothed_last(p: &str, v: &rmpv::Value) -> bool {
+    p.contains(".smoothed_coef.") && v.as_f64().is_some_and(f64::is_finite)
+}
+
+/// The state `bank_smoothed` saves holds each of the smoother's forms
+/// before any file is written: what its frozen file will freeze.
+#[test]
+fn the_smoothed_bank_holds_each_form_when_saved() {
+    let (bytes, _) = smoothed_first();
+    let v = rmpv::decode::read_value(&mut bytes.as_slice()).unwrap();
+    let mut all = Vec::new();
+    leaves(&v, "", &mut all);
+    for (form, holds) in [
+        ("a gain", smoothed_gain as fn(&str, &rmpv::Value) -> bool),
+        ("a clock label", smoothed_label),
+        ("a held row", smoothed_held),
+        ("the last row's fields", smoothed_last),
+    ] {
+        assert!(all.iter().any(|(p, v)| holds(p, v)), "no leaf holds {form}");
+    }
+}
+
+fn smoothed_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(smoothed_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn smoothed_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut bank = Bank::load_bytes(bytes, Some(&smoothed_specs()))?;
+    let again = bank.save_bytes()?;
+    let tail_before = bank.smoothed_tail(0, None)?;
+    let cols = bank.fit_predict(input).map_err(|e| e.to_string())?;
+    let out = DataFrame::new(input.height(), cols).map_err(|e| e.to_string())?;
+    Ok((
+        again,
+        vec![
+            ("smoothed_tail".into(), tail_before),
+            ("fit_predict".into(), out),
+        ],
+    ))
 }
 
 fn kind_of(f: &Fixture) -> Kind {
@@ -3604,6 +3683,15 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
     }
     type Holds = fn(&str, &rmpv::Value) -> bool;
     const FORMS: &[(&str, &str, Holds)] = &[
+        // `kalman`'s fixed-lag smoother (schema 72, before any release).
+        ("bank_smoothed", "a smoother slot's gain", smoothed_gain),
+        ("bank_smoothed", "a smoother's clock label", smoothed_label),
+        ("bank_smoothed", "a row the gate held", smoothed_held),
+        (
+            "bank_smoothed",
+            "the last row's smoothed fields",
+            smoothed_last,
+        ),
         ("bank", "ClockValue::I64", |p, _| {
             p.ends_with(".prev_clock.I64")
         }),

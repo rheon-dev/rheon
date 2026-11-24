@@ -3083,6 +3083,105 @@ fn kalmans_noise_units_form_is_written_with_its_intercept_open() {
     }
 }
 
+/// The forms of `kalman`'s fixed-lag smoother (schema 72, before any
+/// release), read from a state by case name: `kalman_smooth` holds slots
+/// with a gain and `K`'s triangle and a pending pair; `kalman_smooth_shared`
+/// one ring of both targets' means and no `K`; `kalman_smooth_early` a
+/// ring short of its lag with a slope not yet sized and a row `min_weight`
+/// held; `kalman_smooth_break` a slot whose gain is empty, the chain cut by
+/// a refused re-map.
+fn smoother_forms(state_of: &dyn Fn(&str) -> rmpv::Value) {
+    let ring = |name: &str| -> rmpv::Value {
+        let v = state_of(name);
+        let rings = at(&v, &["model", "Kalman", "smoother", "rings"])
+            .and_then(rmpv::Value::as_array)
+            .unwrap_or_else(|| panic!("{name}: no smoother"))
+            .clone();
+        assert!(!rings.is_empty(), "{name}");
+        rings[0].clone()
+    };
+    let slots = |r: &rmpv::Value| -> Vec<rmpv::Value> {
+        at(r, &["slots"])
+            .and_then(rmpv::Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let len = |v: &rmpv::Value, key: &str| {
+        at(v, &[key])
+            .and_then(rmpv::Value::as_array)
+            .map_or(0, Vec::len)
+    };
+    let full = ring("kalman_smooth");
+    let s = slots(&full);
+    assert_eq!(s.len(), 7, "a full ring holds lag - 1 slots");
+    assert!(s.iter().all(|x| len(x, "g") == 9 && len(x, "kk") == 6));
+    assert!(at(&full, &["pending"]).is_some_and(|p| !p.is_nil()));
+    let shared = ring("kalman_smooth_shared");
+    let s = slots(&shared);
+    assert!(!s.is_empty() && s.iter().all(|x| len(x, "c") == 6 && len(x, "kk") == 0));
+    let early = ring("kalman_smooth_early");
+    let described: Vec<rmpv::Value> = slots(&early)
+        .iter()
+        .chain(at(&early, &["pending"]))
+        .filter_map(|x| at(x, &["of"]).cloned())
+        .collect();
+    let any_of = |key: &str, hit: &dyn Fn(&rmpv::Value) -> bool| {
+        described.iter().any(|d| {
+            at(d, &[key])
+                .and_then(rmpv::Value::as_array)
+                .is_some_and(|v| v.iter().any(hit))
+        })
+    };
+    assert!(
+        any_of("sized", &|b| b.as_bool() == Some(false)),
+        "an unsized slot"
+    );
+    assert!(any_of("held", &|b| b.as_u64() != Some(0)), "a held row");
+    let cut = ring("kalman_smooth_break");
+    assert!(
+        slots(&cut)
+            .iter()
+            .any(|x| len(x, "g") == 0 && len(x, "kk") == 6)
+    );
+}
+
+/// The smoother's cases hold each of its forms when saved, before any
+/// file is written: what the frozen files will freeze.
+#[test]
+fn kalmans_smoother_cases_hold_each_form() {
+    smoother_forms(&|name| {
+        let case = all().into_iter().find(|c| c.name == name).expect("a case");
+        let (m, _) = saved(&case);
+        rmpv::decode::read_value(&mut named(&m.state()).as_slice()).unwrap()
+    });
+}
+
+/// The frozen files write every form of the smoother, and every other
+/// `kalman` case writes no `smoother`.
+#[test]
+fn kalmans_smoother_is_written_in_each_form() {
+    if regenerating() {
+        return;
+    }
+    smoother_forms(&|name| {
+        let f = frozen::ALL
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name}: no fixture; add the case and regenerate"));
+        rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap()
+    });
+    for f in frozen::ALL {
+        if f.variant == "Kalman" && !f.name.starts_with("kalman_smooth") {
+            let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+            assert!(
+                at(&v, &["model", "Kalman", "smoother"]).is_none(),
+                "{}",
+                f.name
+            );
+        }
+    }
+}
+
 /// `kalman`'s square root (schema 68, docs/PLAN.md task 281 (3)):
 /// `kalman_square_root` names its form, `covariance_form = "square_root"`,
 /// and holds each covariance as the factor `L = Cᵀ`, lower triangular with

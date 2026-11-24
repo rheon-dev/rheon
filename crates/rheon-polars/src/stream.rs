@@ -5432,8 +5432,10 @@ struct SmoothedOut<'a> {
 /// coefficients take their place in `smoothed_coef`'s list (NaN where the
 /// row emitted none of that target's), the standard errors are the
 /// variances' roots, and each target's `smoothed_for` is the clock label of
-/// the row its value describes. Where several released rows complete a
-/// target's lag on one line, the line holds the newest.
+/// the row its value describes. The spec refuses `smooth_lag` beside a
+/// held row's release (`embargo`, `label_clock`), which could put several
+/// values of one target on one line; a second write to a line keeps the
+/// targets it does not emit.
 fn write_smoothed(
     model: &AnyModel,
     buf: &mut rheon_core::Smoothed,
