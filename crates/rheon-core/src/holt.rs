@@ -94,6 +94,22 @@
 //! count of rows: the clock of rows to come is not known. Each target's
 //! slots follow the predictions, two a horizon.
 //!
+//! **The fixed forms** (`start = known | heuristic`, task 488;
+//! `holt/ets.rs`): a season `S` of `m` values over `P` clock units, added or
+//! a factor, and a trend damped by `φ` a clock unit. Every gain is the fixed
+//! one, `g = w·a/(λ + w·a)`, `a = 1 − λ` over the row's step (`a` itself at
+//! `w = 1`), and, with `p` the row's phase `⌊m·(c − c₀)/P⌋ mod m` of its raw
+//! clock and `L = l + φ_s·b`, `φ_s = φ(1 − φ^s)/(1 − φ)`:
+//!
+//! ```text
+//! pred  = L + S[p]  |  L·S[p]  |  L
+//! l'    = g·y − g·S[p] + (1 − g)·L  |  g·y/S[p] + (1 − g)·L  |  g·y + (1 − g)·L
+//! b'    = h·(l' − l)/s + (1 − h)·φ^s·b
+//! S'[p] = γ·y − γ·L + (1 − γ)·S[p]  |  γ·y/L + (1 − γ)·S[p]
+//! ```
+//!
+//! `γ` the fixed gain over the clock since phase `p` was last learned.
+//!
 //! **A row the model cannot learn from is transparent.** A null target, or a
 //! zero weight -- and a weight below the smallest normal double, `2⁻¹⁰²²`,
 //! which is read as 0 -- leaves the level and slope where the last observation put
@@ -107,6 +123,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
+
+mod ets;
+#[cfg(test)]
+mod ets_tests;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HoltCfg {
@@ -125,6 +145,45 @@ pub struct HoltCfg {
     /// has none and loads with the trend on, what it was produced under.
     #[serde(default = "default_true")]
     pub trend: bool,
+    // The fixed forms of seasonal exponential smoothing (task 488), each
+    // appended with a default that is the form above, so a config written
+    // before them loads as what it was produced under.
+    /// The seasonal component: none, added to the level, or a factor on it.
+    #[serde(default)]
+    pub season: HoltSeason,
+    /// `m`, the values a season is held in: one per bucket of
+    /// `season_length / season_periods` clock units. 0 without a season.
+    #[serde(default)]
+    pub season_periods: usize,
+    /// `P`, the season's span in clock units (seconds on a temporal clock).
+    /// 0 reads as `season_periods`: one bucket per clock unit, as on the
+    /// row clock.
+    #[serde(default)]
+    pub season_length: f64,
+    /// The half-life a seasonal value forgets at, in clock units: on an
+    /// even clock it is learned once a season, at `γ = 1 − 0.5^(P/h)`.
+    #[serde(default = "infinite", with = "crate::humanfloat::f64_or_tag")]
+    pub seasonal_half_life: f64,
+    /// The trend's damping as a half-life in clock units, `φ = 0.5^(1/h)`
+    /// a clock unit; `inf` does not damp.
+    #[serde(default = "infinite", with = "crate::humanfloat::f64_or_tag")]
+    pub damping_half_life: f64,
+    /// Where the fit starts: the weighted means' warm start, initial states
+    /// given, or statsmodels' heuristic on the first seasons.
+    #[serde(default)]
+    pub start: HoltStart,
+    /// Under the known start, per target: the level, the trend (empty
+    /// without one) and the `m` seasonal values, phase 0 first (empty
+    /// without a season).
+    #[serde(default)]
+    pub initial_level: Vec<f64>,
+    #[serde(default)]
+    pub initial_trend: Vec<f64>,
+    #[serde(default)]
+    pub initial_seasonal: Vec<Vec<f64>>,
+    /// The bytes the state may hold; `None` is [`HOLT_MAX_STATE_BYTES`].
+    #[serde(default)]
+    pub max_state_bytes: Option<u64>,
     /// The forecasts' horizons, each a span of the clock `Δ ≥ 0` past the
     /// row read, in its units: the forecast `l + b·(s + Δ)` and its integral
     /// over the span (see the module docs). Empty reports none; skipped
@@ -139,6 +198,66 @@ pub const HOLT_MAX_HORIZONS: usize = 64;
 
 fn default_true() -> bool {
     true
+}
+
+fn infinite() -> f64 {
+    f64::INFINITY
+}
+
+/// One target, no decay, no `min_weight`, the trend on, and none of the
+/// fixed forms: the base a literal names the fields it sets on.
+impl Default for HoltCfg {
+    fn default() -> Self {
+        Self {
+            n_targets: 1,
+            level_half_life: f64::INFINITY,
+            trend_half_life: f64::INFINITY,
+            min_weight: 0.0,
+            trend: true,
+            season: HoltSeason::None,
+            season_periods: 0,
+            season_length: 0.0,
+            seasonal_half_life: f64::INFINITY,
+            damping_half_life: f64::INFINITY,
+            start: HoltStart::Warm,
+            initial_level: Vec::new(),
+            initial_trend: Vec::new(),
+            initial_seasonal: Vec::new(),
+            max_state_bytes: None,
+            horizons: Vec::new(),
+        }
+    }
+}
+
+/// The bytes a `holt` state may hold by default: 256 KB, a group's.
+pub const HOLT_MAX_STATE_BYTES: u64 = 256 * 1024;
+/// The most `max_state_bytes` may be set to: 64 MiB.
+pub const HOLT_STATE_BYTES_CEILING: u64 = 64 * 1024 * 1024;
+
+/// The seasonal component of a `holt` fit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HoltSeason {
+    #[default]
+    None,
+    /// `ŷ = L + S[p]`.
+    Add,
+    /// `ŷ = L·S[p]`: every component must stay above 0.
+    Mul,
+}
+
+/// Where a `holt` fit starts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HoltStart {
+    /// The weighted means from no weight: the first observation is the
+    /// level, and the gains fall to the fixed ones as the weight gathers.
+    #[default]
+    Warm,
+    /// Initial states given, and every gain the fixed one from row 1.
+    Known,
+    /// statsmodels' heuristic on the first rows, then those rows replayed.
+    Heuristic,
 }
 
 impl HoltCfg {
@@ -194,6 +313,15 @@ impl HoltCfg {
                 break;
             }
         }
+        if !self.horizons.is_empty() && self.fixed() {
+            no.refuse(
+                "holt: horizons are forecasts of the plain level and trend, and a season, a \
+                 damped trend or a given or heuristic start has no such forecast to integrate. \
+                 Leave out horizons, or leave out the season, the damping and the start."
+                    .to_owned(),
+            );
+        }
+        self.validate_forms(&mut no);
         no.finish()
     }
 }
@@ -231,6 +359,35 @@ pub struct Holt {
     fit_age: Vec<f64>,
     #[serde(default)]
     fit_spread: Vec<f64>,
+    // The fixed forms (task 488), appended: empty or 0 in a state saved
+    // before them, which has no season, no damping and the warm start.
+    /// Per target, the `m` seasonal values, phase 0 first.
+    #[serde(default)]
+    season: Vec<Vec<f64>>,
+    /// Per target and phase, the decayed clock its value was last learned
+    /// at; NaN for one not learned since the start.
+    #[serde(default)]
+    season_at: Vec<Vec<f64>>,
+    /// The decayed clock, the sum of every step's `d_clock`: what a phase's
+    /// clock since it was last learned is read on.
+    #[serde(default)]
+    clock: f64,
+    /// The phase origin `c₀`: the raw clock of the first row of positive
+    /// weight, which is phase 0. `None` before it.
+    #[serde(default)]
+    origin: Option<crate::ClockValue>,
+    /// Per target, the rows the heuristic start holds until it has the
+    /// seasons its definition reads; empty once the start is fitted.
+    #[serde(default)]
+    held: Vec<ets::Held>,
+    /// The raw clock of the row the next step or prediction is for, handed
+    /// by [`OnlineModel::clock_next`]; `None` reads the model's own clock.
+    #[serde(skip)]
+    next_clock: Option<crate::ClockValue>,
+    /// Whether the last step left a target unlearned because a
+    /// multiplicative component would not stay above 0.
+    #[serde(skip)]
+    not_positive: bool,
 }
 
 impl Holt {
@@ -248,8 +405,16 @@ impl Holt {
             fit_weight: vec![0.0; m],
             fit_age: vec![0.0; m],
             fit_spread: vec![0.0; m],
+            season: Vec::new(),
+            season_at: Vec::new(),
+            clock: 0.0,
+            origin: None,
+            held: Vec::new(),
+            next_clock: None,
+            not_positive: false,
             cfg,
-        })
+        }
+        .started())
     }
 
     /// Whether the state keeps the line fit: every state made by this
@@ -409,6 +574,16 @@ impl OnlineModel for Holt {
         } else {
             weight
         };
+        if self.cfg.fixed() {
+            let pred = &mut out.pred;
+            pred.clear();
+            pred.resize(m, f64::NAN);
+            let n_eff = self.w_sum;
+            self.fixed_step(y, d_clock, weight, pred);
+            out.n_eff = n_eff;
+            out.extra = None;
+            return;
+        }
         // The decays for a target observed on the previous row, where `s` is
         // this row's delta: every target of a stream with no gaps.
         let row_decays = self.decays(d_clock);
@@ -595,7 +770,9 @@ impl OnlineModel for Holt {
         let m = self.cfg.n_targets;
         let per = 2 * self.cfg.horizons.len();
         let mut pred = vec![f64::NAN; m * (1 + per)];
-        if n_eff >= self.cfg.min_weight {
+        if n_eff >= self.cfg.min_weight && self.cfg.fixed() {
+            self.fixed_predict(d_clock, None, &mut pred);
+        } else if n_eff >= self.cfg.min_weight {
             for j in 0..m {
                 if self.seen[j] {
                     let s = self.since[j] + d_clock;
@@ -611,6 +788,34 @@ impl OnlineModel for Holt {
             pred,
             n_eff,
             extra: None,
+        }
+    }
+
+    /// The row's raw clock, which a season's phase is read from.
+    fn clock_next(&mut self, clock: crate::ClockValue) {
+        if self.cfg.season != HoltSeason::None {
+            self.next_clock = Some(clock);
+        }
+    }
+
+    fn predict_at_into(
+        &self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        clock: Option<crate::ClockValue>,
+        out: &mut Step,
+    ) {
+        if !(self.cfg.fixed() && clock.is_some()) {
+            self.predict_with_into(x, y, d_clock, out);
+            return;
+        }
+        out.pred.clear();
+        out.pred.resize(self.cfg.n_targets, f64::NAN);
+        out.n_eff = self.w_sum;
+        out.extra = None;
+        if self.w_sum >= self.cfg.min_weight {
+            self.fixed_predict(d_clock, clock, &mut out.pred);
         }
     }
 
@@ -640,6 +845,7 @@ impl OnlineModel for Holt {
                         .any(|v| v.len() != n)
                     || (fit_len != 0 && fit_len != n)
                     || fit.iter().any(|v| v.len() != fit_len)
+                    || !m.fixed_shape_ok()
                 {
                     return Err(crate::model::damaged(
                         "holt",
@@ -707,6 +913,7 @@ mod tests {
             trend_half_life: trend,
             min_weight: 0.0,
             trend: true,
+            ..Default::default()
         }
     }
 
@@ -917,6 +1124,7 @@ mod tests {
             trend_half_life: 9.0,
             min_weight: 2.5,
             trend: true,
+            ..Default::default()
         };
         let (want_pred, want_level, want_trend, want_w) = reference(&c, &ys, &ds, &ws);
 
@@ -948,6 +1156,7 @@ mod tests {
             trend_half_life: 40.0,
             min_weight: 3.0,
             trend: true,
+            ..Default::default()
         };
         let mut m = Holt::new(c).unwrap();
         assert_eq!(m.n_eff(), 0.0, "nothing seen yet");
@@ -1062,6 +1271,7 @@ mod tests {
             trend_half_life: 30.0,
             min_weight: 0.0,
             trend: true,
+            ..Default::default()
         };
         let mut m = Holt::new(c).unwrap();
         for i in 0..600 {
@@ -1830,6 +2040,7 @@ mod tests {
                 trend_half_life: trend,
                 min_weight: 0.25,
                 trend: true,
+                ..Default::default()
             })
             .unwrap();
             let mut s = 29u64;
@@ -2147,5 +2358,20 @@ mod tests {
         bad(vec![f64::INFINITY], "finite");
         bad(vec![2.0, 1.0, 2.0], "holds 2 twice");
         bad((0..65).map(f64::from).collect(), "at most 64");
+    }
+
+    /// Horizons are the plain level and trend's forecast: a damped trend, a
+    /// season or a given start has none to integrate, and is refused beside
+    /// them rather than reported without.
+    #[test]
+    fn horizons_are_refused_beside_the_fixed_forms() {
+        let e = Holt::new(HoltCfg {
+            horizons: vec![2.0],
+            damping_half_life: 9.0,
+            start: HoltStart::Heuristic,
+            ..cfg(5.0, 20.0)
+        })
+        .unwrap_err();
+        assert!(e.contains("horizons are forecasts of the plain level"), "{e}");
     }
 }

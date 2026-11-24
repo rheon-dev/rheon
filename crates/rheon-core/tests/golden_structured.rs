@@ -915,6 +915,7 @@ fn holt_trend_golden() {
         trend_half_life: 40.0,
         min_weight: 3.0,
         trend: true,
+        ..Default::default()
     })
     .unwrap();
     let rows = trend_rows();

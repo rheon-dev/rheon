@@ -678,6 +678,7 @@ mod tests {
             trend_half_life: 1.0,
             min_weight: 0.0,
             trend: true,
+            ..Default::default()
         })
         .unwrap();
         assert!(matches!(

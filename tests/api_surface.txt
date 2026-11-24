@@ -372,6 +372,16 @@
     trend_half_life = None
     trend = True
     horizons = None
+    seasonal = None
+    seasonal_periods = None
+    season_length = None
+    seasonal_half_life = None
+    damping_half_life = None
+    start = None
+    initial_level = None
+    initial_trend = None
+    initial_seasonal = None
+    max_state_bytes = None
     common
   huber:
     name
@@ -1016,9 +1026,19 @@
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
   holt(half_life=50.0, targets=['y']):
+    model.damping_half_life = "inf"
+    model.initial_level = []
+    model.initial_seasonal = []
+    model.initial_trend = []
     model.level_half_life = 50.0
+    model.max_state_bytes = null
     model.min_weight = 1.0
     model.n_targets = 1
+    model.season = "none"
+    model.season_length = 0.0
+    model.season_periods = 0
+    model.seasonal_half_life = "inf"
+    model.start = "warm"
     model.trend = true
     model.trend_half_life = 200.0
     stream.breaks_half_life = 50.0
@@ -3199,6 +3219,8 @@
   isotonic.out_of_bounds: clip, nan
   ddsketch.closed: both, right
   garch.vol: egarch, figarch, garch, gjr
+  holt.seasonal: add, mul
+  holt.start: heuristic, known, warm
   garch.dist: normal, skewt, t
   dcc.margins: garch, none
   dcc.vol: egarch, figarch, garch, gjr

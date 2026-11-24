@@ -178,6 +178,25 @@ def refusal(who: str, problems: Sequence[Exception]) -> Exception:
 #: row for good, and the Rust side's refusal says why.
 _INF_REFUSED_BY_RUST = frozenset({"gap_cap", "session_gap", "min_weight"})
 
+#: ``holt``'s keys written only when given, as the Rust spec skips them
+#: when absent: the trend switch and the seasonal forms' settings.
+_HOLT_OPTIONAL = frozenset(
+    {
+        "trend",
+        "horizons",
+        "seasonal",
+        "seasonal_periods",
+        "season_length",
+        "seasonal_half_life",
+        "damping_half_life",
+        "start",
+        "initial_level",
+        "initial_trend",
+        "initial_seasonal",
+        "max_state_bytes",
+    }
+)
+
 _INF_OK: dict[str, frozenset[str]] = {
     "*": frozenset(
         {
@@ -217,7 +236,7 @@ _INF_OK: dict[str, frozenset[str]] = {
     ),
     "quantile": frozenset({"refit_budget"}),
     "pa": frozenset({"c", "coef_min", "coef_max"}),
-    "holt": frozenset({"trend_half_life"}),
+    "holt": frozenset({"trend_half_life", "seasonal_half_life", "damping_half_life"}),
     # No cap on a row's step; no bound on the refit buffers.
     "glm": frozenset({"step_cap", "refit_budget"}),
     # No bound on the refit buffers.
@@ -237,9 +256,10 @@ _INF_OK: dict[str, frozenset[str]] = {
 #: bump. A builder writes each of these only when it is given, so the bank
 #: reports back the dict it made: a ``None`` the bank never writes made
 #: ``ModelBank([s]).specs[0] != s`` for every ``marginal`` (review
-#: 2026-10-05, the TB5 leg). ``holt``'s ``trend`` is written only when off.
+#: 2026-10-05, the TB5 leg). ``holt``'s ``trend`` is written only when off,
+#: and its seasonal forms' settings only when given.
 _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
-    "holt": frozenset({"trend", "horizons"}),
+    "holt": _HOLT_OPTIONAL,
     "hawkes": frozenset(
         {"kernel_half_lives", "window_events", "window_size", "closed", "max_state_bytes"}
     ),

@@ -54,6 +54,7 @@ impl Spec {
                 trend_half_life,
                 trend,
                 horizons,
+                ..
             } => {
                 let labels: Vec<String> = horizons
                     .iter()

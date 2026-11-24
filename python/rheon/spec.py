@@ -374,7 +374,9 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``snapshot_every``, ``solve_every``, ``ew_cov``'s ``pca_every``, ``micro``'s
 ``prune_every`` and the model half-lives: ``long_half_life``,
 ``select_half_life``, ``coef_half_life``,
-``revert_half_life``, ``trend_half_life`` and ``huber_scale_half_life``,
+``revert_half_life``, ``trend_half_life``, ``holt``'s
+``seasonal_half_life``, ``damping_half_life`` and ``season_length``, and
+``huber_scale_half_life``,
 ``hawkes``' ``kernel_half_lives``, a list of them, ``garch``'s
 ``start_span``, ``dcc``'s ``start_span`` and ``margin_start_span``,
 ``spectral``'s ``periods`` and ``spacing``, ``glm``'s and
@@ -462,15 +464,20 @@ releases none. A regression writes, with ``<t>`` a target:
     no gate did. ``below_min_settled_frac``, ``below_min_weight``,
     ``above_max_error_inflation``, ``below_warm_rows``, ``ill_conditioned``,
     ``unstable_rate``, ``not_identified``, ``scale_ratio_moved``, ``not_separated``,
-    ``level_beyond_sample`` and ``negative_input`` are named in that order, the first that
-    withheld anything.
+    ``level_beyond_sample``, ``negative_input`` and ``not_positive`` are named in that
+    order, the first that withheld anything.
     ``below_warm_rows`` is the model's own warm-up: the rows ``kmeans``,
     ``hmm`` and ``bocpd`` hold to seed their centres, states or prior from
     (``warm_rows``), a count of rows, where ``min_weight`` is a weight, the
     rows ``kalman`` takes a target's prior from before it is sized, the
     rows ``garch`` buffers for a target's start, and the rows before
     ``deco``'s standardizer holds more than five effective rows, while it
-    has no level.
+    has no level, and the rows a ``holt`` heuristic start holds.
+    ``not_positive`` alone names a row whose prediction stands: a
+    multiplicative ``holt`` season's row whose target, or the level or
+    seasonal factor its update would make, is 0 or below, which is
+    predicted and not learned. Only that form's ``Enum`` holds
+    ``not_positive``; every other spec's holds the reasons before it.
     ``ill_conditioned`` is an ``ewridge`` fit withheld because its normal
     equations are past the condition at which a solve keeps a digit: its
     ``coef`` and ``support_coef`` are null too, and the solve is counted in

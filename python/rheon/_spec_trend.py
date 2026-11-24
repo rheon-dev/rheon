@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Unpack
+from typing import Any, Literal, Unpack
 
 from rheon._duration import Duration, duration_text
 from rheon._kwargs import CommonKwargs
@@ -21,6 +21,16 @@ def holt(
     trend_half_life: float | Duration | None = None,
     trend: bool = True,
     horizons: list[float | Duration] | dict[str, float | Duration] | None = None,
+    seasonal: Literal["add", "mul"] | None = None,
+    seasonal_periods: int | None = None,
+    season_length: float | Duration | None = None,
+    seasonal_half_life: float | Duration | None = None,
+    damping_half_life: float | Duration | None = None,
+    start: Literal["warm", "known", "heuristic"] | None = None,
+    initial_level: float | list[float] | None = None,
+    initial_trend: float | list[float] | None = None,
+    initial_seasonal: list[float] | list[list[float]] | None = None,
+    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Holt's linear trend, which extrapolates the target's own level and slope.
@@ -44,10 +54,13 @@ def holt(
     ``half_life``. ``fit_intercept`` has nothing to act on, since the level
     is the prediction's intercept.
 
-    There is no seasonal term. For a seasonal index, make a column of the
-    phase (the hour of the day, say) with Polars' ``with_columns`` in the
-    query before the bank, and pass it as ``group=``: the bank then fits a
-    level and trend for each phase.
+    ``seasonal`` adds a season, ``damping_half_life`` damps the trend, and
+    ``start`` chooses where the fit starts: Holt-Winters and the fixed
+    forms of exponential smoothing (*Seasons and damping* in Notes). The
+    alternative for a seasonal index is a column of the phase (the hour of
+    the day, say), made with Polars' ``with_columns`` in the query before
+    the bank and passed as ``group=``: the bank then fits a level and trend
+    for each phase.
 
     This model's own parameters:
 
@@ -85,7 +98,48 @@ def holt(
         clock of evenly spaced rows of equal weight, once the gains have
         stopped moving, and the model keeps no noise variance of its own. At most
         64, each finite and 0 or more; a name must not begin with
-        ``"sum"``. Default none.
+        ``"sum"``. Refused beside ``seasonal``, ``damping_half_life`` or a
+        ``start`` other than ``"warm"``, whose forecasts are not a line to
+        integrate. Default none.
+    ``seasonal``
+        ``"add"`` adds a seasonal value to the level, ``"mul"`` multiplies
+        the level by a seasonal factor; under ``"mul"`` every value must
+        stay above 0. Default no season. Needs ``start`` ``"known"`` or
+        ``"heuristic"``.
+    ``seasonal_periods``
+        ``m``, the number of values a season is held in, at least 2.
+    ``season_length``
+        ``P``, the season's span in clock units (a duration on a temporal
+        clock): each value covers ``P / m`` of it. Default ``m``, one value
+        per clock unit, which is one per row without a clock column.
+    ``seasonal_half_life``
+        How fast a seasonal value forgets, in clock units: learned once a
+        season on an even clock, at ``γ = 1 - 0.5 ** (P / h)``. ``inf``
+        holds the values where they start. Required with ``seasonal``.
+    ``damping_half_life``
+        Damps the trend by ``φ = 0.5 ** (1 / h)`` a clock unit, so the
+        forecast levels off. Default ``inf``, undamped. Needs ``start``
+        ``"known"`` or ``"heuristic"``, and the trend on.
+    ``start``
+        ``"warm"`` (the default) starts from no weight, as above, and is
+        the start for the forms without a season or damping only.
+        ``"known"`` starts from ``initial_level``, ``initial_trend`` and
+        ``initial_seasonal``, with every gain the fixed one from the first
+        row. ``"heuristic"`` holds a target's first rows (10 without a
+        season, else 5 seasons, or more where ``m`` is small), fits the
+        initial states to them as statsmodels' ``initialization_method=
+        "heuristic"`` does, then learns those rows from those states; they
+        are withheld as ``below_warm_rows``.
+    ``initial_level``, ``initial_trend``, ``initial_seasonal``
+        The known start's states, the state one step before the first row:
+        a number per target (or one number for one target); the seasonal
+        values a list of ``m`` per target (or one list), phase 0 first,
+        phase 0 being the first row's.
+    ``max_state_bytes``
+        The bytes the model's state may hold, the heuristic start's held
+        rows included: 256 KB by default, at most 64 MiB. A season takes
+        16 bytes a value a target, and the heuristic start 36 bytes a held
+        row a target until it is fitted.
 
     .. rubric:: Output
 
@@ -256,6 +310,50 @@ def holt(
     gives the same level, trend and predictions as if it were absent. A row
     with a null target still adds its weight to ``weight_sum``.
 
+    **Seasons and damping.** Under ``start = "known"`` or
+    ``"heuristic"`` the gains are the fixed ones: ``α = 1 - λ_l`` over the
+    row's step ``s`` at weight 1. A weighted row's gain is the weighted
+    mean's whose held weight is the one rows at this step saturate at,
+    ``w * α / (λ + w * α)``. With ``L = l + φ_s * b`` the level carried
+    over the step, ``φ_s = φ * (1 - φ ** s) / (1 - φ)`` (``s`` undamped),
+    and ``p`` the row's phase:
+
+    .. code-block:: text
+
+        pred   = L + S[p]                       (add)     L * S[p]   (mul)
+        l'     = α * y - α * S[p] + (1 - α) * L  (add)
+        l'     = α * y / S[p] + (1 - α) * L      (mul)
+        l'     = α * y + (1 - α) * L             (no season)
+        b'     = β * (l' - l) / s + (1 - β) * φ ** s * b
+        S'[p]  = γ * y - γ * L + (1 - γ) * S[p]  (add)
+        S'[p]  = γ * y / L + (1 - γ) * S[p]      (mul)
+
+    with ``β = 1 - λ_b`` over ``s`` and ``γ = 1 - 0.5 ** (Δ / h)``, ``Δ``
+    the clock since the phase was last learned (``P`` on an even clock, and
+    ``P`` the first time). The other ``m - 1`` values are untouched. On a
+    row clock at weight 1 this is statsmodels' ``ExponentialSmoothing``
+    with ``smoothing_level = α``, ``smoothing_trend = β``,
+    ``smoothing_seasonal = γ`` and ``damping_trend = φ``, operation for
+    operation.
+
+    A row's phase is ``floor(m * (c - c0) / P) mod m``, ``c`` the row's own
+    clock value and ``c0`` the first row's, in integers on a temporal or
+    integer clock whose ``P`` is a whole number of its units; on a float
+    clock a row exactly on a bucket's edge may round to either side. It is
+    the row's raw clock value, which ``gap_cap`` and ``session_gap`` do not
+    shorten, so nothing between two rows moves a phase. A row with a null
+    target keeps its place, and its phase is not learned. Without a clock
+    column a row counts its place, and a row of weight 0 counts in no clock,
+    so the row after it takes its place: null the target instead to keep a
+    row's place in the season. A row at the clock of the last learned row
+    teaches nothing, since its gains, ``1 - λ ** 0``, are 0.
+
+    Under ``"mul"`` a row whose target is 0 or below, or whose update would
+    make the level or the seasonal factor 0 or below, is predicted and not
+    learned, and its ``withheld_reason`` is ``not_positive``, a category
+    only this form's ``Enum`` holds. The seasonal values are not
+    renormalized.
+
     **Extrapolating over the clock.** The trend is per clock unit, so an
     irregular clock extrapolates the right distance.
     :meth:`rheon.polars.ModelBank.predict` extrapolates over the clock
@@ -278,4 +376,20 @@ def holt(
             if isinstance(horizons, dict)
             else list(horizons)
         )
+    # The fixed forms' keys, each absent when not given, as the Rust spec
+    # leaves them out.
+    for key, value in (
+        ("seasonal", seasonal),
+        ("seasonal_periods", seasonal_periods),
+        ("season_length", season_length),
+        ("seasonal_half_life", seasonal_half_life),
+        ("damping_half_life", damping_half_life),
+        ("start", start),
+        ("initial_level", initial_level),
+        ("initial_trend", initial_trend),
+        ("initial_seasonal", initial_seasonal),
+        ("max_state_bytes", max_state_bytes),
+    ):
+        if value is not None:
+            model[key] = value
     return _common(name, model, targets=targets, features=[], **common)

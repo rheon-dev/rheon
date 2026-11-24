@@ -383,7 +383,8 @@ impl Spec {
     /// ([`Self::fit_memory`]) but for the models that keep a second:
     ///
     /// - **`holt`**, its trend's `trend_half_life` (default four times the
-    ///   level's) unless `trend = False`. Settled on the level alone, its
+    ///   level's) unless `trend = False`, and a season's
+    ///   `seasonal_half_life`. Settled on the level alone, its
     ///   CUSUM spread 2.7 and passed 3 on 28% of the 2,000 rows after the
     ///   diagnostics started on clean streams at a half-life of 200.
     /// - **`kalman`**, the longest of its finite `coef_half_life`s and the
@@ -408,13 +409,21 @@ impl Spec {
             super::ModelKind::Holt {
                 trend_half_life,
                 trend,
+                seasonal_half_life,
                 ..
-            } if *trend != Some(false) => {
-                take(
-                    trend_half_life
-                        .as_ref()
-                        .map_or(half_life_of(model) * 4.0, Span::value),
-                );
+            } => {
+                if *trend != Some(false) {
+                    take(
+                        trend_half_life
+                            .as_ref()
+                            .map_or(half_life_of(model) * 4.0, Span::value),
+                    );
+                }
+                // A season's values are learned once a season each, so a
+                // diagnostic waits for them too (task 488).
+                if let Some(h) = seasonal_half_life {
+                    take(h.value());
+                }
             }
             super::ModelKind::Kalman { coef_half_life, .. } => {
                 take(half_life_of(model));

@@ -1950,6 +1950,7 @@ mod tests {
             trend_half_life: 40.0,
             min_weight: 0.0,
             trend: true,
+            ..Default::default()
         })
         .unwrap()
         .state();

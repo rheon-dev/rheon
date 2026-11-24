@@ -293,6 +293,7 @@ fn a_model_without_a_window_could_refuse_nothing() {
             trend_half_life: 4.0,
             min_weight: 2.0,
             trend: true,
+            ..Default::default()
         })
         .unwrap(),
         1,

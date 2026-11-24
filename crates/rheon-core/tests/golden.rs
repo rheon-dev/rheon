@@ -625,6 +625,7 @@ fn holt_golden() {
         trend_half_life: 40.0,
         min_weight: 3.0,
         trend: true,
+        ..Default::default()
     })
     .unwrap();
     check("holt", &signature_of(&mut m, 0, false), GOLDEN_HOLT);

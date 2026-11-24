@@ -1688,7 +1688,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 207] = [
+    const FORMS: [(&str, &[&str]); 215] = [
         // PLAN 569, at schema 72: `ftrl`'s scaler and warm-up under
         // `standardize`, past the warm-up's count and inside it.
         ("ftrl_standardized", &["model", "Ftrl", "scaler", "m"]),
@@ -1701,6 +1701,23 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             "ftrl_standardized_warming",
             &["model", "Ftrl", "warmup", "w2"],
         ),
+        // Schema 72, unreleased (task 488): `holt`'s fixed forms -- each season, the
+        // damping, both starts, a start holding its rows, and the clocks
+        // the seasonal values were learned at.
+        ("holt_season_add", &["model", "Holt", "season"]),
+        ("holt_season_add", &["model", "Holt", "season_at"]),
+        (
+            "holt_season_add",
+            &["model", "Holt", "cfg", "initial_seasonal"],
+        ),
+        ("holt_season_mul_damped", &["model", "Holt", "season"]),
+        (
+            "holt_season_mul_damped",
+            &["model", "Holt", "cfg", "damping_half_life"],
+        ),
+        ("holt_heuristic", &["model", "Holt", "season"]),
+        ("holt_heuristic", &["model", "Holt", "clock"]),
+        ("holt_heuristic_holding", &["model", "Holt", "held"]),
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.

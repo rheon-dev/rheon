@@ -308,6 +308,7 @@ fn holt_cfg() -> HoltCfg {
         trend_half_life: 4.0 * HALFLIFE,
         min_weight: 3.0,
         trend: true,
+        ..Default::default()
     }
 }
 

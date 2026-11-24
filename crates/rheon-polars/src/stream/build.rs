@@ -478,6 +478,16 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             trend_half_life,
             trend,
             horizons,
+            seasonal,
+            seasonal_periods,
+            season_length,
+            seasonal_half_life,
+            damping_half_life,
+            start,
+            initial_level,
+            initial_trend,
+            initial_seasonal,
+            max_state_bytes,
         } => {
             // The level's half-life is the spec's own, so `half_life` means
             // the same thing here as it does for every other model; it had a
@@ -501,6 +511,24 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 trend_half_life: trend_half_life.as_ref().map_or(level * 4.0, Span::value),
                 min_weight: spec.min_periods_or_default(),
                 trend: trend.unwrap_or(true),
+                season: holt_season(seasonal.as_deref())?,
+                season_periods: seasonal_periods.unwrap_or(0),
+                season_length: season_length.as_ref().map_or(0.0, Span::value),
+                seasonal_half_life: seasonal_half_life
+                    .as_ref()
+                    .map_or(f64::INFINITY, Span::value),
+                damping_half_life: damping_half_life
+                    .as_ref()
+                    .map_or(f64::INFINITY, Span::value),
+                start: holt_start(start.as_deref())?,
+                initial_level: initial_level
+                    .as_ref()
+                    .map_or_else(Vec::new, FloatOrList::to_vec),
+                initial_trend: initial_trend
+                    .as_ref()
+                    .map_or_else(Vec::new, FloatOrList::to_vec),
+                initial_seasonal: holt_seasonal(initial_seasonal.as_deref()),
+                max_state_bytes: *max_state_bytes,
             };
             Ok(AnyModel::Holt(Box::new(Holt::new(cfg)?)))
         }
@@ -825,5 +853,44 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             m.set_keep_factor(spec.emit_se_coef);
             Ok(AnyModel::Ar(Box::new(m)))
         }
+    }
+}
+
+/// `holt`'s `seasonal`: absent, `"add"` or `"mul"`.
+fn holt_season(word: Option<&str>) -> Result<rheon_core::HoltSeason, String> {
+    match word {
+        None => Ok(rheon_core::HoltSeason::None),
+        Some("add") => Ok(rheon_core::HoltSeason::Add),
+        Some("mul") => Ok(rheon_core::HoltSeason::Mul),
+        Some(other) => Err(format!(
+            "holt: seasonal must be \"add\" or \"mul\", but it is {other:?}. Use one of those \
+             words."
+        )),
+    }
+}
+
+/// `holt`'s `start`: absent (the warm start), `"warm"`, `"known"` or
+/// `"heuristic"`.
+fn holt_start(word: Option<&str>) -> Result<rheon_core::HoltStart, String> {
+    match word {
+        None | Some("warm") => Ok(rheon_core::HoltStart::Warm),
+        Some("known") => Ok(rheon_core::HoltStart::Known),
+        Some("heuristic") => Ok(rheon_core::HoltStart::Heuristic),
+        Some(other) => Err(format!(
+            "holt: start must be \"warm\", \"known\" or \"heuristic\", but it is {other:?}. \
+             Use one of those words."
+        )),
+    }
+}
+
+/// `holt`'s `initial_seasonal`: one list of numbers, for a single target,
+/// or a list per target.
+fn holt_seasonal(given: Option<&[FloatOrList]>) -> Vec<Vec<f64>> {
+    match given {
+        None => Vec::new(),
+        Some(v) if v.iter().all(|e| matches!(e, FloatOrList::Float(_))) => {
+            vec![v.iter().flat_map(FloatOrList::to_vec).collect()]
+        }
+        Some(v) => v.iter().map(FloatOrList::to_vec).collect(),
     }
 }

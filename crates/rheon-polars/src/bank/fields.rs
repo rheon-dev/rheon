@@ -67,8 +67,9 @@ pub struct FieldMeta {
     #[serde(skip)]
     pub(super) src: Source,
     /// The categories of an `Enum` field in their order: `ew_class`'s
-    /// classes for `class`, the grid's slots for `selected_<t>`. `None` for
-    /// every other field (`withheld_reason`'s are fixed).
+    /// classes for `class`, the grid's slots for `selected_<t>`, the
+    /// reasons the spec can name for `withheld_reason`. `None` for every
+    /// other field.
     #[serde(skip)]
     pub(super) categories: Option<Vec<String>>,
 }
@@ -207,10 +208,9 @@ impl FieldMeta {
             | Source::SeCoef(_)
             | Source::SeCoefHc0(_)
             | Source::SeCoefHac(_) => DataType::List(Box::new(DataType::Float64)),
-            Source::Reason(_) => DataType::from_frozen_categories(
-                polars::prelude::FrozenCategories::new(crate::stream::WITHHELD_REASONS)
-                    .expect("distinct names"),
-            ),
+            // The reasons the spec can name, set from
+            // `stream::withheld_reasons` where the field is pushed.
+            Source::Reason(_) => enum_of(self.categories.as_deref().unwrap_or_default()),
             Source::Id(_) => DataType::Int64,
             Source::Flag(_) => DataType::Boolean,
             Source::Unset => unreachable!("every field is given a source in output_index"),
@@ -714,8 +714,13 @@ pub fn output_index(spec: &Spec) -> Vec<FieldMeta> {
                     FieldMeta::new(format!("settled_frac{suffix}"), "settled_frac")
                         .src(Source::Settled(mi)),
                 ));
+                let reasons: Vec<String> = crate::stream::withheld_reasons(spec)
+                    .iter()
+                    .map(|r| (*r).to_string())
+                    .collect();
                 fields.push(like(
                     FieldMeta::new(format!("withheld_reason{suffix}"), "withheld_reason")
+                        .categories(&reasons)
                         .src(Source::Reason(mi)),
                 ));
             }

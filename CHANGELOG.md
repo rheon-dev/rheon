@@ -248,6 +248,34 @@ model that only the new build has is listed as an addition and passes.
   at 1,000 values, 16 µs at 8,000), 3.4 ns a row under a window, and no
   allocation a row. The design and its open questions are in
   `docs/records/ISOTONIC-DESIGN.md`.
+- **`holt` fits a season, a damped trend and Holt-Winters' fixed forms**
+  (PLAN 488, part 2). `seasonal="add"` or `"mul"` with `seasonal_periods`
+  values over `season_length` clock units and a `seasonal_half_life`;
+  `damping_half_life` damps the trend; `start="known"` takes the initial
+  states (`initial_level`, `initial_trend`, `initial_seasonal`) and
+  `start="heuristic"` fits them to a target's first rows as statsmodels'
+  `initialization_method="heuristic"` does, withholding those rows as
+  `below_warm_rows`. Under either start every gain is the fixed one, and on
+  a row clock at weight 1 the predictions are statsmodels'
+  `ExponentialSmoothing`'s with the same parameters to the bit on Linux
+  x86-64 (nine forms: no, an additive or a multiplicative season, by no,
+  an additive or a damped trend); `ETSModel`'s within 8 ulps for its forms
+  without a multiplicative season, whose seasonal update it forms from
+  the new level; each seasonal form is held over 50 seeds in the oracle
+  ledger. A row's phase is read from its raw clock value, in
+  integers on a temporal or integer clock. A multiplicative season's row
+  whose target, or whose level or factor after the update, would be 0 or
+  below is predicted and not learned, with the new `withheld_reason`
+  `not_positive`, the one reason that stands beside a prediction. Only that
+  form's `withheld_reason` Enum holds the category, so every other spec's
+  output, a `holt` without a season included, keeps its dtype. `max_state_bytes`
+  (256 KB) bounds the state, 16 bytes a seasonal value a target and the
+  heuristic start's held rows, and refuses a spec past it with the bytes
+  it needs. Multiplicative trends, learned parameters and the error type
+  are not in this part. State schema 72, not yet released, carries them
+  (`holt`'s cfg and state gain the new fields at their end; a state of 71
+  or earlier loads as the warm, unseasoned form it was). A spec that gives
+  none of the new keys is unchanged.
 
 - **`dcc`, dynamic conditional correlation fitted one row at a time** (task
   493, with task 514's recursion): the full correlation matrix of `k` return

@@ -497,10 +497,16 @@ impl<'a> Sink<'a> {
                 col.finish_label_array_boxed(classes)
             }
             (Acc::Flat(col), _) => col.finish_array_boxed(),
-            (Acc::Codes(codes), _) => Box::new(crate::column::code_array(
-                &codes,
-                &crate::stream::WITHHELD_REASONS,
-            )),
+            (Acc::Codes(codes), _) => {
+                let names: Vec<&str> = f
+                    .categories
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(String::as_str)
+                    .collect();
+                Box::new(crate::column::code_array(&codes, &names))
+            }
             (Acc::Drift(drift), _) => opt_bool_array(&drift),
             (Acc::Lists(list), _) => {
                 // Finite-or-null inside the list too: an `ew_class` class
@@ -551,11 +557,7 @@ impl<'a> Sink<'a> {
                 // The reason, a class and a selected slot are each an `Enum`
                 // over their names: the metadata is what tells polars so
                 // (`column::enum_metadata`).
-                if matches!(f.src, Source::Reason(_)) {
-                    field.with_metadata(crate::column::enum_metadata(
-                        &crate::stream::WITHHELD_REASONS,
-                    ))
-                } else if let Some(names) = &f.categories {
+                if let Some(names) = &f.categories {
                     let names: Vec<&str> = names.iter().map(String::as_str).collect();
                     field.with_metadata(crate::column::enum_metadata(&names))
                 } else {

@@ -500,11 +500,13 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "withheld_reason",
         "why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, "
         "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, "
-        "`not_identified`, `scale_ratio_moved`, `not_separated` or `negative_input`. That order "
+        "`not_identified`, `scale_ratio_moved`, `not_separated`, `negative_input` or "
+        "`not_positive`. That order "
         "is their precedence, so the first that applies is the one named. `below_warm_rows` is the "
         "model's own warm-up, the rows "
         "`kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for "
-        "a target's start, in a `kalman` fit standardized with no intercept, the rows before "
+        "a target's start, the rows a `holt` heuristic start holds, in a `kalman` fit "
+        "standardized with no intercept, the rows before "
         "any of a target's coefficients is sized, and the rows before `deco`'s standardizer "
         "holds more than five effective rows, while it has no level. `ill_conditioned` is an "
         "`ewridge` "
@@ -519,7 +521,11 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "eigenvalues does not pass. "
         "`negative_input` is a `garch` row under GARCH or GJR with an input below 0, which its "
         "variance equation cannot read: the row reports nothing and is learned as a row of "
-        "weight 0",
+        "weight 0". "
+        "`not_positive` alone names a row whose prediction stands: a multiplicative `holt` "
+        "season's row whose target, or the level or seasonal factor its update would make, is 0 "
+        "or below, which is predicted and not learned. Only that form's `enum` holds "
+        "`not_positive`; every other spec's holds the reasons before it",
         "where nothing was withheld",
     ),
     (
