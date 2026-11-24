@@ -533,7 +533,8 @@ impl Summary {
             }
             // `EwDiag::update`'s step, from the row back where the history
             // keeps less than `comp::FORGOTTEN` (review 2026-11-23, REG-7).
-            for (((m, lo), &dx), &x) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(&*d).zip(z) {
+            for (((m, lo), &dx), &x) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(&*d).zip(z)
+            {
                 crate::comp::step_toward(m, lo, x, dx, a, b);
             }
         }
