@@ -98,6 +98,29 @@ def test_nearest_converges_as_its_docstring_measures():
         assert f"factor of {figure}" in doc or f"and {figure} on" in doc, figure
 
 
+def test_nearest_runs_on_from_a_first_projection_of_nothing():
+    """Review 2026-11-23, MATH-1: a negative definite input's first
+    projection onto the cone is 0, and the stopping test read each change
+    relative to the old iterate, so a change from 0 counted as none: the run
+    stopped at its second iteration with the identity. (4.1) reads each
+    relative to the new one. Where every off-diagonal entry is at least 1
+    the answer is all ones, each entry at its nearest value a correlation
+    can take, at any diagonal weight."""
+    cases = [
+        np.array([[-10.0, 1.0], [1.0, -10.0]]),
+        -10.0 * np.eye(3) + np.array([[0.0, 1.0, 2.0], [1.0, 0.0, 3.0], [2.0, 3.0, 0.0]]),
+    ]
+    for a in cases:
+        k = len(a)
+        for w in (None, np.arange(1.0, k + 1.0)):
+            x, dist, iters = corr.nearest(a, w, tol=1e-10, max_iter=1000)
+            ww = np.ones(k) if w is None else w
+            want = float(np.sqrt((np.outer(ww, ww) * (a - 1.0) ** 2).sum()))
+            assert iters > 2
+            np.testing.assert_allclose(x, np.ones((k, k)), rtol=0.0, atol=1e-8)
+            assert dist == pytest.approx(want, rel=1e-9)
+
+
 def test_nearest_obeys_highams_bounds():
     """Three consequences of his theorems, each a test."""
     # A diagonal matrix has nothing to repair but its scale.
@@ -532,6 +555,29 @@ def test_z_mse_is_the_scaled_fisher_error():
         corr.loss(a, b, "nope")
 
 
+def test_each_loss_reads_only_what_defines_it():
+    """Review 2026-11-23, MATH-5. ``z_mse``'s variance is ``1 / (n - 3)``,
+    so ``n`` is a number above 3: at 2 the loss was negative, and ``True``
+    was read as 1. ``qlike`` checked only that ``det(F^-1 R)`` was above
+    0, which two matrices with the same count of negative eigenvalues pass:
+    ``-I`` scored -4 against ``I``, better than ``I`` itself. ``minvar``
+    read any ``F`` and ``R`` and a ``mu`` of any length."""
+    eye = np.eye(2)
+    a = np.array([[1.0, 0.5], [0.5, 1.0]])
+    for n in (True, 3, 2, 0.5, float("nan"), float("inf"), "100"):
+        with pytest.raises(ValueError, match="n must be a number above 3"):
+            corr.loss(a, eye, "z_mse", n=n)  # type: ignore[arg-type]
+    assert corr.loss(a, eye, "z_mse", n=3.5) == pytest.approx(np.arctanh(0.5) ** 2 * 0.5)
+    for f, r in ((-eye, eye), (eye, -eye), (-eye, -eye)):
+        assert np.isnan(corr.loss(f, r, "qlike")), (f, r)
+        assert np.isnan(corr.loss(f, r, "minvar")), (f, r)
+    assert corr.loss(eye, eye, "qlike") == 0.0
+    for mu in ([1.0, 2.0, 3.0], [1.0], [1.0, float("nan")]):
+        with pytest.raises(ValueError, match="mu must hold one finite"):
+            corr.loss(a, eye, "minvar", mu=mu)
+    assert corr.loss(a, eye, "minvar", mu=[1.0, 2.0]) > 0.0
+
+
 @pytest.mark.parametrize("kind", ["qlike", "minvar"])
 def test_a_singular_forecast_has_no_loss(kind):
     """Review round 4 (YB13): a forecast with no inverse raised numpy's
@@ -567,6 +613,33 @@ def test_epps_invert_recovers_a_lagged_pair():
     assert np.allclose(np.diag(got), 1.0)
     # `L = 1` is the plain correlation.
     assert corr.epps_invert(g, L=1)[0, 1] == pytest.approx(plain, rel=1e-12)
+
+
+def test_epps_invert_has_no_correlation_where_a_long_run_variance_is_not_above_zero():
+    """Review 2026-11-23, MATH-2: a long-run variance the lags make negative
+    has no square root, but two of them multiply to a positive number, so
+    the pair read a finite correlation (1.56 in the review's case) where
+    either column has none. Each such column's row and column is ``nan``,
+    as :func:`rheon.gram.correlation` reads a constant column."""
+    rng = np.random.default_rng(3)
+    df = pl.DataFrame({f"x{i}": rng.standard_normal(500) for i in range(3)})
+    spec = rp.spec.ew_cov("c", features=["x0", "x1", "x2"], lam=1.0, stats=[], lags=[1])
+    bank = rp.ModelBank([spec])
+    bank.fit_predict(df)
+    g = dict(bank.gram("c")[0])
+    c0 = rp.gram._comoments(np, g)
+    # A lag-1 co-moment of -1.5 C0 on x0 and x1, +0.25 C0 elsewhere: at L = 2
+    # each variance is 2 C0 + 2 C1, so x0's and x1's are -C0, x2's 2.5 C0.
+    keep = [i for i, c in enumerate(g["columns"]) if c != rp.gram.INTERCEPT]
+    lag = np.zeros_like(c0)
+    for i, a in enumerate(keep):
+        for j, b in enumerate(keep):
+            lag[a, b] = (-1.5 if i < 2 and j < 2 else 0.25) * c0[a, b]
+    g["lags"] = [1]
+    g["lag_comoments"] = [lag]
+    got = corr.epps_invert(g, L=2)
+    assert np.isnan(got[:2, :]).all() and np.isnan(got[:, :2]).all(), got
+    assert got[2, 2] == 1.0
 
 
 @pytest.mark.parametrize("dtype", ["float64", "float32"])
