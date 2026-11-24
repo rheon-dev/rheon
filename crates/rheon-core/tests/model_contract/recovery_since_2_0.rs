@@ -114,6 +114,24 @@ fn spectral_recovers_from_bounded_extremes() {
 }
 
 #[test]
+fn vector_ar_recovers_from_bounded_extremes() {
+    recovers_from_bounded_extremes(
+        || VectorAr::new(vector_ar_cfg()).unwrap(),
+        2,
+        Recovery::Twin(1e-6),
+    );
+}
+
+/// `isotonic` keeps every distinct feature value, with its weight and its
+/// weighted sum: a row at the bound stays among them (a point at `1e100`
+/// beside the ordinary ones), so it is held to a finite state that goes on
+/// learning, as a digest is.
+#[test]
+fn isotonic_recovers_from_bounded_extremes() {
+    stays_finite_over(&bounded_script(2), || Isotonic::new(isotonic_cfg()).unwrap());
+}
+
+#[test]
 fn audit_recovers_from_bounded_extremes() {
     stays_finite_over(&bounded_script(0), || Audit::new(audit_cfg()).unwrap());
 }
