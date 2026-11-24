@@ -1466,7 +1466,30 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 122] = [
+    const FORMS: [(&str, &[&str]); 128] = [
+        // Schema 72, PLAN 558 part 5: `dist_fit`'s skewed t, a target's
+        // started fit (its four parameters, the surrogate's gradient and
+        // curvature) and a target still on its moments, under a fitted and a
+        // fixed location (the t's place, written empty before them, is held
+        // below).
+        (
+            "dist_fit_skewt",
+            &["model", "DistFit", "skewt", "0", "fit", "theta"],
+        ),
+        (
+            "dist_fit_skewt",
+            &["model", "DistFit", "skewt", "0", "fit", "grad"],
+        ),
+        (
+            "dist_fit_skewt",
+            &["model", "DistFit", "skewt", "0", "fit", "curv"],
+        ),
+        ("dist_fit_skewt", &["model", "DistFit", "skewt", "1", "c3"]),
+        ("dist_fit_skewt", &["model", "DistFit", "skewt", "1", "c4"]),
+        (
+            "dist_fit_skewt_floc",
+            &["model", "DistFit", "skewt", "1", "fit", "theta"],
+        ),
         // Schema 72, PLAN 558 part 5: `dist_fit`'s t, a target's started
         // fit (its parameters, the surrogate's gradient and curvature) and a
         // target still on its moments, under a fitted and a fixed location.
@@ -1742,6 +1765,23 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         let first = at(&v, &["model", variant, "refit", "0", "first"]).expect("a first stamp");
         assert!(!first.is_nil(), "{name}: no first stamp");
     }
+    // `dist_fit_skewt`'s second target joined late: its moments without a
+    // fit; and the t's place is written, empty, before the skewed t's.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "dist_fit_skewt")
+        .expect("dist_fit_skewt");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let fit = at(&v, &["model", "DistFit", "skewt", "1", "fit"]).expect("the second target's fit");
+    assert!(
+        fit.is_nil(),
+        "dist_fit_skewt: the second target has started"
+    );
+    let t = at(&v, &["model", "DistFit", "t"]).expect("the t's place");
+    assert!(
+        t.as_array().is_some_and(Vec::is_empty),
+        "dist_fit_skewt: the t's place is not empty"
+    );
     // `dist_fit_t`'s second target joined late: its moments without a fit.
     let f = frozen::ALL
         .iter()

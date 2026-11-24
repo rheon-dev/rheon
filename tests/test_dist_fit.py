@@ -234,7 +234,7 @@ def test_refusals(kw, says):
 
 def test_family_and_features_are_refused():
     with pytest.raises(ValueError, match="family"):
-        rp.spec.dist_fit("m", targets=["y"], half_life=10.0, family="skewt")  # type: ignore[arg-type]
+        rp.spec.dist_fit("m", targets=["y"], half_life=10.0, family="cauchy")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="features"):
         rp.spec.dist_fit("m", targets=["y"], features=["x"])  # type: ignore[call-arg]
 
@@ -333,6 +333,121 @@ def test_t_names_match_the_realized_struct():
         spec = _t_spec(targets=["y", "z"], **kw)
         out = rp.ModelBank([spec]).fit_predict(df)
         assert [f.name for f in out.schema["m"].fields] == rp.spec.output_fields(spec)
+    reasons = out.schema["m"].to_schema()["withheld_reason_y"]
+    assert list(reasons.categories) == [
+        "no_weight",
+        "min_weight",
+        "degenerate_variance",
+        "not_converged",
+        "shape_unidentified",
+    ]
+
+
+# Hansen's skewed t: what the bank owes it, as the t's tests above hold the
+# t. Its fit against the weighted maximum of arch's density is in
+# ``tests/test_second_opinion_skewt.py``.
+
+
+def _skewt_frame(n: int, seed: int) -> pl.DataFrame:
+    rng = np.random.default_rng(seed)
+    # a t of 4 degrees of freedom, its left half three times its right's
+    t = rng.standard_t(4, n)
+    skewed = np.where(t < 0, 1.5 * t, 0.5 * t)
+    return _t_frame(n, seed).with_columns(pl.Series("y", 3.0 + skewed))
+
+
+def _skewt_spec(**kw) -> dict:
+    return _spec(family="skewt", half_life=kw.pop("half_life", 300.0), **kw)
+
+
+def test_skewt_chunk_invariance_and_a_save_to_the_bit():
+    df = _skewt_frame(1500, 21)
+    s = _skewt_spec(targets=["y", "z"], group="g", weight="w", clock="t", gap_cap=5.0)
+    one = rp.ModelBank([s]).fit_predict(df)
+    reasons = one.unnest("m")["withheld_reason_y"].cast(pl.String).to_list()
+    assert {None, "not_converged"} <= set(reasons)
+    for size in (1, 37, 500):
+        bank = rp.ModelBank([s])
+        many = pl.concat([bank.fit_predict(df.slice(i, size)) for i in range(0, 1500, size)])
+        assert one.equals(many, null_equal=True), size
+    for floc in (None, 3.0):
+        s = _skewt_spec(targets=["y", "z"], group="g", weight="w", floc=floc)
+        for cut in (1, 40, 700):
+            a = rp.ModelBank([s])
+            a.fit_predict(df.slice(0, cut))
+            buf = io.BytesIO()
+            a.save(buf)
+            b = rp.ModelBank.load_bytes(buf.getvalue(), specs=[s])
+            rest = df.slice(cut)
+            assert a.fit_predict(rest).equals(b.fit_predict(rest), null_equal=True), cut
+
+
+def test_skewt_zero_weight_rows_learn_nothing_and_move_no_clock():
+    df = _skewt_frame(1200, 22).drop("g", "z")
+    s = _skewt_spec(weight="w", clock="t", gap_cap=1e6)
+    full = _out(s, df)
+    keep = pl.Series((df["w"] > 0).to_numpy())
+    thin = _out(s, df.filter(keep))
+    fields = (
+        "loc_y",
+        "scale_y",
+        "df_y",
+        "lambda_y",
+        "q0.99_y",
+        "es0.025_y",
+        "pit_y",
+        "log_score_y",
+    )
+    for f in fields:
+        assert full[f].filter(keep).equals(thin[f], null_equal=True), f
+    assert full.filter(~keep)["pit_y"].drop_nulls().len() > 20, "such a row is still read"
+
+
+def test_skewt_a_rows_fit_is_read_before_the_row():
+    df = _skewt_frame(800, 23).drop("g")
+    s = _skewt_spec()
+    a = _out(s, df)
+    # the outlier on a row whose own and next fit report everything
+    ready = a["withheld_reason_y"].is_null().to_list()
+    k = next(i for i in range(500, 799) if ready[i] and ready[i + 1])
+    b = _out(
+        s,
+        df.with_columns(
+            pl.when(pl.int_range(800) == k).then(400.0).otherwise(pl.col("y")).alias("y")
+        ),
+    )
+    for f in ("loc_y", "scale_y", "df_y", "lambda_y", "q0.05_y", "es0.1_y"):
+        assert a[f][: k + 1].equals(b[f][: k + 1], null_equal=True), f
+        assert a[f][k + 1] != b[f][k + 1], f
+    assert a["pit_y"][k] != b["pit_y"][k]
+
+
+def test_skewt_withholds_the_shape_until_it_is_told_from_the_normals():
+    """A normal stream: ``loc`` and ``scale`` report, and the shape's fields
+    are null with ``shape_unidentified`` on most rows; a skewed one reports
+    them, its skew of the sign it was made with."""
+    rng = np.random.default_rng(24)
+    t = rng.standard_t(5, 3000)
+    df = pl.DataFrame({"y": rng.standard_normal(3000), "z": np.where(t < 0, 1.6 * t, 0.4 * t)})
+    out = _out(_skewt_spec(targets=["y", "z"], half_life=1000.0), df)[1000:]
+    late = out["withheld_reason_y"].cast(pl.String)
+    assert (late == "shape_unidentified").mean() > 0.8
+    unidentified = out.filter(pl.col("withheld_reason_y") == "shape_unidentified")
+    assert unidentified["loc_y"].is_not_null().all() and unidentified["scale_y"].is_not_null().all()
+    for f in ("df_y", "lambda_y", "q0.05_y", "es0.1_y", "pit_y", "log_score_y"):
+        assert unidentified[f].is_null().all(), f
+    assert out["withheld_reason_z"].is_null().all()
+    assert out["lambda_z"].median() < -0.5
+
+
+def test_skewt_names_match_the_realized_struct():
+    df = _skewt_frame(100, 25)
+    for kw in ({}, {"quantiles": [], "es_levels": []}, {"floc": 0.0, "es_levels": [0.01]}):
+        spec = _skewt_spec(targets=["y", "z"], **kw)
+        out = rp.ModelBank([spec]).fit_predict(df)
+        names = [f.name for f in out.schema["m"].fields]
+        assert names == rp.spec.output_fields(spec)
+        assert names[:4] == ["loc_y", "scale_y", "df_y", "lambda_y"]
     reasons = out.schema["m"].to_schema()["withheld_reason_y"]
     assert list(reasons.categories) == [
         "no_weight",

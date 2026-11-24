@@ -1,8 +1,10 @@
 //! `dist_fit`: an online fit of a distribution to each target, exponentially
-//! weighted on the clock. The family is the normal (below) or Student's t
+//! weighted on the clock. The family is the normal (below), Student's t
 //! (`t_fit`), each in scipy's `loc`/`scale` parameterization (the normal's
 //! scale is the standard deviation, the t's scipy's `scale`, with `df` its
-//! degrees of freedom).
+//! degrees of freedom), or Hansen's skewed t (`skewt_fit`), whose `loc` is
+//! the mean and `scale` the standard deviation, with `df` and the skew
+//! `lambda`.
 //!
 //! **The estimand.** Per target, the rows `i` learned so far with weights
 //! `w_i` and `λ_i` the product of the decay factors since row `i`:
@@ -47,6 +49,11 @@
 //! noise; and `shape_unidentified`, every slot but `loc` and `scale`, while
 //! the tail cannot be told from the normal's.
 //!
+//! **Under the skewed t** a row reports `df` and `lambda` after `scale`, and
+//! its quantiles, shortfalls, `pit` and `log_score` are Hansen's (`skew_t`).
+//! The same two reasons withhold, `shape_unidentified` while the tail and
+//! the skew together cannot be told from the normal's.
+//!
 //! **Weights and the clock.** `weight_sum` is the weight learned before the
 //! row and before its own decay; each target's `min_weight` is read against
 //! its own weight, the rows it was present on. A row of weight 0 handed to
@@ -59,6 +66,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::{OnlineModel, State, StateError, Step, check_schema};
 use crate::{Decay, EwDiag, ModelState};
 
+use skewt_fit::SkewTFit;
 use t_fit::{TFit, TStatus};
 
 /// The family a [`DistFit`] fits.
@@ -70,6 +78,10 @@ pub enum DistFamily {
     /// Student's t, scipy's `loc`, `scale` and `df`, fitted by weighted
     /// maximum likelihood one row at a time (`t_fit`).
     StudentT,
+    /// Hansen's skewed t, `loc` the mean, `scale` the standard deviation,
+    /// `df` and the skew `lambda` as `arch`'s `SkewStudent` has them, fitted
+    /// as the t is (`skewt_fit`).
+    SkewT,
 }
 
 /// Why a target reports nothing on a row ([`DistFit::withheld`]).
@@ -83,12 +95,13 @@ pub enum DistWithheld {
     /// The fitted variance is 0: every learned value was the same (or, with
     /// a fixed location, equal to it).
     DegenerateVariance,
-    /// The t's fit has not started, or is further from the maximum of its
-    /// weighted likelihood than sampling noise alone would put it: nothing
-    /// reports.
+    /// The t's or the skewed t's fit has not started, or is further from
+    /// the maximum of its weighted likelihood than sampling noise alone would
+    /// put it: nothing reports.
     NotConverged,
-    /// The t's tail cannot yet be told from the normal's: `loc` and `scale`
-    /// report, and every value that reads the tail does not.
+    /// The t's tail, or the skewed t's tail and skew together, cannot yet be
+    /// told from the normal's: `loc` and `scale` report, and every value that
+    /// reads the shape does not.
     ShapeUnidentified,
 }
 
@@ -123,18 +136,20 @@ pub struct DistFitCfg {
 }
 
 impl DistFitCfg {
-    /// The output slots per target: `loc`, `scale`, the t's `df`, the
-    /// quantiles, the shortfalls, `pit`, `log_score`.
+    /// The output slots per target: `loc`, `scale`, the t's `df` (and the
+    /// skewed t's `lambda`), the quantiles, the shortfalls, `pit`,
+    /// `log_score`.
     pub fn slots(&self) -> usize {
         4 + self.shape_slots() + self.quantiles.len() + self.es_levels.len()
     }
 
-    /// The family's shape slots after `scale`: the t's `df`, none for the
-    /// normal.
+    /// The family's shape slots after `scale`: the t's `df`, the skewed t's
+    /// `df` and `lambda`, none for the normal.
     pub fn shape_slots(&self) -> usize {
         match self.family {
             DistFamily::Normal => 0,
             DistFamily::StudentT => 1,
+            DistFamily::SkewT => 2,
         }
     }
 
@@ -179,7 +194,13 @@ impl DistFitCfg {
 }
 
 /// An online distribution fit to each target. See the module docs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Its fields are written in this order, `t` and `skewt` only where a
+/// family needs them (the `Serialize` below): `t` under the t, and `t`
+/// empty then `skewt` under the skewed t, so a file written field by field
+/// in place of by name (msgpack's compact form) still reads each into its
+/// own field.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct DistFit {
     cfg: DistFitCfg,
     /// The weight learned by every row, before the next row's decay.
@@ -188,10 +209,38 @@ pub struct DistFit {
     /// location and of `y` without: the normal's fit, and the t's start and
     /// weight.
     fit: Vec<EwDiag>,
-    /// Each target's t fit under the t family; empty, and not written, under
-    /// the normal.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Each target's t fit under the t family; empty under the others, and
+    /// not written under the normal.
+    #[serde(default)]
     t: Vec<TFit>,
+    /// Each target's skewed-t fit under the skewed t; empty, and not
+    /// written, under the others.
+    #[serde(default)]
+    skewt: Vec<SkewTFit>,
+}
+
+impl Serialize for DistFit {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let with_skewt = !self.skewt.is_empty();
+        let with_t = with_skewt || !self.t.is_empty();
+        let n = 3 + usize::from(with_t) + usize::from(with_skewt);
+        let mut st = s.serialize_struct("DistFit", n)?;
+        st.serialize_field("cfg", &self.cfg)?;
+        st.serialize_field("w_sum", &self.w_sum)?;
+        st.serialize_field("fit", &self.fit)?;
+        if with_t {
+            st.serialize_field("t", &self.t)?;
+        } else {
+            st.skip_field("t")?;
+        }
+        if with_skewt {
+            st.serialize_field("skewt", &self.skewt)?;
+        } else {
+            st.skip_field("skewt")?;
+        }
+        st.end()
+    }
 }
 
 const HALF_LN_TAU: f64 = 0.918_938_533_204_672_8; // ½ ln 2π
@@ -201,13 +250,18 @@ impl DistFit {
     pub fn new(cfg: DistFitCfg) -> Result<Self, String> {
         cfg.validate()?;
         let t = match cfg.family {
-            DistFamily::Normal => Vec::new(),
             DistFamily::StudentT => (0..cfg.n_targets).map(|_| TFit::new()).collect(),
+            _ => Vec::new(),
+        };
+        let skewt = match cfg.family {
+            DistFamily::SkewT => (0..cfg.n_targets).map(|_| SkewTFit::new()).collect(),
+            _ => Vec::new(),
         };
         Ok(Self {
             fit: (0..cfg.n_targets).map(|_| EwDiag::new(1)).collect(),
             w_sum: 0.0,
             t,
+            skewt,
             cfg,
         })
     }
@@ -222,9 +276,13 @@ impl DistFit {
     }
 
     /// Target `j`'s fit as it stands, `(loc, scale)`, whether or not it
-    /// would be withheld; the t's before its start is the normal's.
+    /// would be withheld; the t's or the skewed t's before its start is the
+    /// normal's.
     pub fn params(&self, j: usize) -> (f64, f64) {
         if let Some((loc, scale, _)) = self.t.get(j).and_then(TFit::params) {
+            return (loc, scale);
+        }
+        if let Some((loc, scale, _, _)) = self.skewt.get(j).and_then(SkewTFit::params) {
             return (loc, scale);
         }
         let f = &self.fit[j];
@@ -251,20 +309,37 @@ impl DistFit {
         if scale.is_nan() || scale <= 0.0 {
             return Some(DistWithheld::DegenerateVariance);
         }
-        match self.t.get(j).map(|t| t.status(w, self.cfg.floc.is_some())) {
+        let fixed = self.cfg.floc.is_some();
+        let status = match self.t.get(j) {
+            Some(t) => Some(t.status(w, fixed)),
+            None => self.skewt.get(j).map(|s| s.status(w, fixed)),
+        };
+        match status {
             None | Some(TStatus::Identified) => None,
             Some(TStatus::NotConverged) => Some(DistWithheld::NotConverged),
             Some(TStatus::ShapeUnidentified) => Some(DistWithheld::ShapeUnidentified),
         }
     }
 
-    /// Target `j`'s t tail `df = 1/η` as it stands, once its fit has
-    /// started; `None` under the normal.
+    /// Target `j`'s t or skewed-t tail `df = 1/η` as it stands, once its
+    /// fit has started; `None` under the normal.
     pub fn df(&self, j: usize) -> Option<f64> {
-        self.t
+        if let Some(t) = self.t.get(j) {
+            return t.params().map(|(_, _, eta)| 1.0 / eta);
+        }
+        self.skewt
             .get(j)
-            .and_then(TFit::params)
-            .map(|(_, _, eta)| 1.0 / eta)
+            .and_then(SkewTFit::params)
+            .map(|(_, _, eta, _)| 1.0 / eta)
+    }
+
+    /// Target `j`'s skewed-t skew `λ` as it stands, once its fit has
+    /// started; `None` under the other families.
+    pub fn lambda(&self, j: usize) -> Option<f64> {
+        self.skewt
+            .get(j)
+            .and_then(SkewTFit::params)
+            .map(|(_, _, _, lam)| lam)
     }
 
     /// The normal's `(loc, scale)` from the moments.
@@ -306,6 +381,23 @@ impl DistFit {
                 .filter(|v| crate::model::usable(*v));
             let (qs, rest) = slots[first..].split_at_mut(nq);
             let es = &mut rest[..self.cfg.es_levels.len()];
+            if let Some((_, _, eta, lam)) = self.skewt.get(j).and_then(SkewTFit::params) {
+                let sh = skew_t::Shape::new(eta, lam);
+                for (s, &p) in qs.iter_mut().zip(&self.cfg.quantiles) {
+                    *s = loc + scale * sh.ppf(p);
+                }
+                for (s, &a) in es.iter_mut().zip(&self.cfg.es_levels) {
+                    *s = loc + scale * sh.lower_es(a);
+                }
+                slots[2] = 1.0 / eta;
+                slots[3] = lam;
+                if let Some(v) = v {
+                    let z = (v - loc) / scale;
+                    slots[per - 2] = sh.cdf(z);
+                    slots[per - 1] = sh.log_density(z) - libm::log(scale);
+                }
+                continue;
+            }
             match self.t.get(j).and_then(TFit::params) {
                 None => {
                     for (s, &p) in qs.iter_mut().zip(&self.cfg.quantiles) {
@@ -376,6 +468,7 @@ impl OnlineModel for DistFit {
         let fixed_loc = self.cfg.floc.is_some();
         for (j, f) in self.fit.iter_mut().enumerate() {
             let mut t = self.t.get_mut(j);
+            let mut sk = self.skewt.get_mut(j);
             // A history the decay ages into the subnormal range is
             // forgotten, as one it ages to exactly 0 is: what is left of it
             // is below a double's resolution beside any row it meets.
@@ -384,9 +477,15 @@ impl OnlineModel for DistFit {
                 if let Some(t) = t.as_deref_mut() {
                     *t = TFit::new();
                 }
+                if let Some(s) = sk.as_deref_mut() {
+                    *s = SkewTFit::new();
+                }
             }
             if let Some(t) = t.as_deref_mut() {
                 t.decay(lam);
+            }
+            if let Some(s) = sk.as_deref_mut() {
+                s.decay(lam);
             }
             match y.get(j).copied().flatten() {
                 Some(v) if weight > 0.0 => {
@@ -394,12 +493,22 @@ impl OnlineModel for DistFit {
                     if let Some(t) = t.as_deref_mut() {
                         t.learn_moments(f, v - shift, lam, weight);
                     }
+                    if let Some(s) = sk.as_deref_mut() {
+                        s.learn_moments(f, v - shift, lam, weight);
+                    }
                     f.update_one(v - shift, lam, weight);
                     if let Some(t) = t {
                         if t.started() {
                             t.learn(v, weight, w_before, fixed_loc);
                         } else {
                             t.try_start(f, self.cfg.floc);
+                        }
+                    }
+                    if let Some(s) = sk {
+                        if s.started() {
+                            s.learn(v, weight, w_before, fixed_loc);
+                        } else {
+                            s.try_start(f, self.cfg.floc);
                         }
                     }
                 }
@@ -430,14 +539,18 @@ impl OnlineModel for DistFit {
             ModelState::DistFit(m) => {
                 let m = (**m).clone();
                 crate::model::check_cfg("dist_fit", m.cfg.validate())?;
-                let n_t = match m.cfg.family {
-                    DistFamily::Normal => 0,
-                    DistFamily::StudentT => m.cfg.n_targets,
+                let n = m.cfg.n_targets;
+                let (n_t, n_skewt) = match m.cfg.family {
+                    DistFamily::Normal => (0, 0),
+                    DistFamily::StudentT => (n, 0),
+                    DistFamily::SkewT => (0, n),
                 };
                 if m.fit.len() != m.cfg.n_targets
                     || m.fit.iter().any(|f| f.k() != 1)
                     || m.t.len() != n_t
                     || !m.t.iter().all(TFit::sound)
+                    || m.skewt.len() != n_skewt
+                    || !m.skewt.iter().all(SkewTFit::sound)
                 {
                     return Err(crate::model::damaged(
                         "dist_fit",
@@ -467,6 +580,8 @@ impl OnlineModel for DistFit {
     }
 }
 
+mod skew_t;
+mod skewt_fit;
 mod student_t;
 mod t_fit;
 #[cfg(test)]

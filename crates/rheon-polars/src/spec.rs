@@ -1511,8 +1511,9 @@ pub enum ModelKind {
     /// `withheld_reason_<t>`. No features.
     #[serde(rename = "dist_fit")]
     DistFit {
-        /// The family: `"normal"`, the default, or `"t"`, Student's t, which
-        /// adds `df_<t>` after `scale_<t>`.
+        /// The family: `"normal"`, the default; `"t"`, Student's t, which
+        /// adds `df_<t>` after `scale_<t>`; or `"skewt"`, Hansen's skewed t,
+        /// which adds `df_<t>` and `lambda_<t>`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         family: Option<String>,
         /// The levels of the reported quantiles, each in `(0, 1)`. Absent is

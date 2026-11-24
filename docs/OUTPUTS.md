@@ -410,10 +410,10 @@ The fields of `po.spec.dist_fit("m", targets=["y"], half_life=50.0)`:
 | field | dtype | what it holds | also null |
 |---|---|---|---|
 | `loc_y` | `f64` | the location of the distribution fitted to `<t>`, from the rows before this one | while withheld, and where `withheld_reason_<t>` names a reason |
-| `scale_y` | `f64` | the scale of that fit: the normal's standard deviation, or the t's scale as `scipy.stats.t` has it | where `loc_<t>` is |
+| `scale_y` | `f64` | the scale of that fit: the normal's standard deviation, the t's scale as `scipy.stats.t` has it, or the skewed t's standard deviation | where `loc_<t>` is |
 | `pit_y` | `f64` | the fit's distribution function at the row's own `<t>` | where `q<level>_<t>` is, and where `<t>` is |
 | `log_score_y` | `f64` | the log of the fit's density at the row's own `<t>` | where `q<level>_<t>` is, and where `<t>` is |
-| `withheld_reason_y` | `enum` | why `<t>`'s fit reports nothing on this row: `no_weight`, `min_weight` or `degenerate_variance` (a scale of 0); under `family="t"`, `not_converged`, or `shape_unidentified`, which leaves `loc_<t>` and `scale_<t>` | where `<t>`'s fit reports, and while withheld |
+| `withheld_reason_y` | `enum` | why `<t>`'s fit reports nothing on this row: `no_weight`, `min_weight` or `degenerate_variance` (a scale of 0); under `family="t"` or `"skewt"`, `not_converged`, or `shape_unidentified`, which leaves `loc_<t>` and `scale_<t>` | where `<t>`'s fit reports, and while withheld |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |

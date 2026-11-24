@@ -3041,6 +3041,10 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
     // (PLAN 548): its targets are each a GARCH(1,1)'s returns at (0.05,
     // 0.6, 0.35), each row's variance and return kept here.
     let mut returns = vec![(1.0f64, 0.0f64); targets];
+    let skewt = matches!(
+        &m.state().model,
+        ModelState::DistFit(d) if d.cfg().family == DistFamily::SkewT
+    );
     for i in 0..400 {
         let x: Vec<f64> = (0..K).map(|_| lcg(&mut s) * 3.0).collect();
         let y: Vec<Option<f64>> = (0..targets)
@@ -3060,6 +3064,11 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
                 // the normal's, which the few rows a half-life of 20 holds
                 // do only for a heavy one: a normal over an exponential to
                 // the power ¾, of tail index 4/3.
+                // Its skewed t's variance must exist: an exponential, whose
+                // skew the few rows tell from the normal's.
+                if skewt {
+                    return Some(lin + 3.0 * (-lcg(&mut s).abs().max(1e-300).ln() - 1.0));
+                }
                 if kind == "dist_fit" {
                     let z = (0..12).map(|_| 0.5 * lcg(&mut s)).sum::<f64>();
                     let e = -lcg(&mut s).abs().max(1e-300).ln();
@@ -3116,7 +3125,16 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
     // would pass on NaN == NaN alone. A model that reports only where a
     // span closes has far fewer such rows, and that is the point of it:
     // `SPARSE_OUTPUT` says how many are enough.
-    let want = if SPARSE_OUTPUT.contains(&kind) {
+    // `dist_fit`'s skewed t starts once its moments pin the scale and the
+    // skew to a standard error of 1/4, about 35 rows of equal weight: the
+    // half-life of 20 holds that on this stream's missing targets, uneven
+    // weights and gaps only now and then (5 and 6 rows of 400 report every
+    // slot, its location fitted and fixed, and about 40 more `loc` and
+    // `scale`). Its own tests hold the parity on a longer half-life
+    // (`dist_fit::skewt_fit`).
+    let want = if skewt {
+        3
+    } else if SPARSE_OUTPUT.contains(&kind) {
         10
     } else {
         300
@@ -6460,6 +6478,49 @@ fn dist_fit_t_predict_is_the_step() {
                     n_targets: 1,
                     family: DistFamily::StudentT,
                     es_levels: vec![],
+                    floc,
+                    ..dist_fit_cfg()
+                })
+                .unwrap()
+            },
+            1,
+            false,
+        );
+    }
+}
+
+#[test]
+fn dist_fit_skewt() {
+    // Hansen's skewed t: loc, scale, df, lambda, two quantiles, one
+    // shortfall, the PIT and the log score a target; `n_eff` the decayed
+    // weight of every row.
+    let t = |n_targets, floc| DistFitCfg {
+        n_targets,
+        family: DistFamily::SkewT,
+        floc,
+        ..dist_fit_cfg()
+    };
+    let r = probe_with(DistFit::new(t(1, None)).unwrap(), 1, Some(&DistFit::n_eff));
+    assert_eq!(r.kind, "dist_fit");
+    assert_eq!(r.n_outputs, 9);
+    assert_eq!(r.pred_len, 9);
+    assert!(r.roundtrips);
+    let r = probe_with(
+        DistFit::new(t(2, Some(0.5))).unwrap(),
+        2,
+        Some(&DistFit::n_eff),
+    );
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn dist_fit_skewt_predict_is_the_step() {
+    for floc in [None, Some(-1.0)] {
+        predict_is_the_step_without_the_step(
+            || {
+                DistFit::new(DistFitCfg {
+                    n_targets: 1,
+                    family: DistFamily::SkewT,
                     floc,
                     ..dist_fit_cfg()
                 })

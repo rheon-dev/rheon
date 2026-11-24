@@ -17,7 +17,7 @@ def dist_fit(
     name: str,
     *,
     targets: TargetList,
-    family: Literal["normal", "t"] = "normal",
+    family: Literal["normal", "t", "skewt"] = "normal",
     quantiles: list[float] | None = None,
     es_levels: list[float] | None = None,
     floc: float | None = None,
@@ -31,9 +31,10 @@ def dist_fit(
     and the expected shortfall past it, or a score of how surprising each
     row was. Each target is fitted on its own, by weighted maximum
     likelihood over its rows, the older rows weighing less by the decay:
-    the normal, or Student's t where the tails are heavier than the
-    normal's. Every value a row reports is read from the fit before the row
-    is learned, so each is a forecast of that row.
+    the normal; Student's t where the tails are heavier than the normal's;
+    or Hansen's skewed t where they are heavier and unequal too. Every
+    value a row reports is read from the fit before the row is learned, so
+    each is a forecast of that row.
 
     .. rubric:: Parameters
 
@@ -58,7 +59,10 @@ def dist_fit(
         them; or ``"t"``, Student's t, with ``loc``, ``scale`` and ``df``
         (its degrees of freedom) as ``scipy.stats.t`` names them, so its
         ``scale`` is not the standard deviation, which is ``scale √(df/(df
-        - 2))`` where ``df > 2``.
+        - 2))`` where ``df > 2``; or ``"skewt"``, Hansen's skewed t as
+        ``arch``'s ``SkewStudent`` has it, with ``loc`` its mean, ``scale``
+        its standard deviation, ``df`` above 2 and ``lambda`` its skew,
+        between -0.99 and 0.99, 0 the t and above 0 a longer right tail.
     ``quantiles``
         The levels of the quantiles to report, each above 0 and below 1,
         such as ``[0.05, 0.95]`` for a 90% band. Default none.
@@ -84,9 +88,13 @@ def dist_fit(
         Per target: the fit's location and scale, from the rows before this
         one.
     ``df_<t>``
-        Under ``family="t"`` only, per target: the fit's degrees of freedom,
-        between 1 and infinity (the normal's tail); null while the tail
-        cannot be told from the normal's.
+        Under ``family="t"`` or ``"skewt"``, per target: the fit's degrees
+        of freedom, between 1 (2.05 under ``"skewt"``) and infinity (the
+        normal's tail); null while the shape cannot be told from the
+        normal's.
+    ``lambda_<t>``
+        Under ``family="skewt"`` only, per target, after ``df_<t>``: the
+        fit's skew, between -0.99 and 0.99; null where ``df_<t>`` is.
     ``q<level>_<t>``
         Per target and level of ``quantiles``, the quantile at that level,
         as ``q0.05_y``.
@@ -102,12 +110,12 @@ def dist_fit(
         to nothing), ``min_weight`` (under the floor) or
         ``degenerate_variance`` (every value learned was the same, or equal
         to ``floc``, so the scale is 0), each of which nulls every field.
-        Under ``family="t"``, two more: ``not_converged`` (the fit has not
-        started, or is further from the maximum of its likelihood than
-        noise alone would put it), which nulls every field, and
-        ``shape_unidentified`` (the tail cannot yet be told from the
-        normal's), which nulls every field but ``loc_<t>`` and
-        ``scale_<t>``. Null where the target reports, and on a row the
+        Under ``family="t"`` or ``"skewt"``, two more: ``not_converged``
+        (the fit has not started, or is further from the maximum of its
+        likelihood than noise alone would put it), which nulls every field,
+        and ``shape_unidentified`` (the tail, and under ``"skewt"`` the skew
+        with it, cannot yet be told from the normal's), which nulls every
+        field but ``loc_<t>`` and ``scale_<t>``. Null where the target reports, and on a row the
         shared gates withhold (``withheld_reason``).
     ``weight_sum``
         The weight the model has learned before the row and before the
@@ -119,7 +127,8 @@ def dist_fit(
 
     As every builder does (:mod:`rheon.spec`); ``TypeError`` for
     ``features``, which this model does not take; and ``ValueError`` naming
-    the problem for a ``family`` other than ``"normal"`` or ``"t"``, a level of
+    the problem for a ``family`` other than ``"normal"``, ``"t"`` or
+    ``"skewt"``, a level of
     ``quantiles`` or ``es_levels`` not above 0 and below 1, and a ``floc``
     that is not finite.
 
@@ -203,6 +212,62 @@ def dist_fit(
     where ``f`` is the standard t's density; ``es_α`` is ``-inf`` at ``df =
     1``, where the mean does not exist.
 
+    Under ``family="skewt"``, Hansen's skewed t, with ``z = (y - loc) /
+    scale``, the log density is
+
+    .. code-block:: text
+
+        c = Γ((df + 1)/2) / (√(π (df - 2)) Γ(df/2))
+        a = 4 λ c (df - 2) / (df - 1),    b = √(1 + 3λ² - a²)
+        x = b z + a,    q = 1 - λ where x < 0, else 1 + λ
+        log f(y) = ln b + ln c - ln scale - ((df + 1)/2) ln(1 + (x/q)² / (df - 2))
+
+    ``x`` is a t of variance 1 whose left half is scaled by ``1 - λ`` and
+    right half by ``1 + λ``, and ``a`` and ``b`` are its mean and standard
+    deviation. The fit is the maximum of ``Σ ω_i log f(y_i)`` over ``θ =
+    (loc, ln s, η, λ)``, ``η = 1/df`` between 0 and 1/2.05 and ``λ``
+    between -0.99 and 0.99, taken one row at a time as the t's. ``s = scale
+    √(1 - 2η)`` is the scale of the t inside the density, as
+    ``scipy.stats.t`` has it: near ``df = 2`` the standard deviation and
+    the tail are nearly one direction of the likelihood, and a step on ``ln
+    scale`` there could move it far for almost nothing, where a step on
+    ``ln s`` is the t's. It starts from the method of moments, the skew
+    left to the likelihood:
+
+    .. code-block:: text
+
+        loc₀ = the weighted mean (floc where it is given)
+        scale₀ = the weighted standard deviation (about floc under it)
+        η₀ = κ / (4κ + 6) where κ > 0, else 0,    λ₀ = 0
+
+    on the first row whose moments pin both ``ln scale`` and ``λ`` to a
+    standard error of 1/4 by the skewed t's information, about 35 rows of
+    equal weight. The weighted skewness is not matched: on so few rows it
+    is noisy, and the family's skewness rises slowly in ``λ``, so the
+    matched skew lands far out and the fit spends half-lives walking back
+    from it. Each row after it moves the fit to the same ``θ'`` as the
+    t's, with ``I(θ)`` the skewed t's expected information, which is
+    closed, found as the t's is, by Newton's method on the row's observed
+    information, also closed. From the fit, with ``G`` the distribution function
+    of the t of variance 1 at ``df`` and ``P(m) = ∫ u g(u) du`` over ``u ≤
+    m`` its lower partial moment:
+
+    .. code-block:: text
+
+        q_p    = loc + scale (x_p - a) / b
+        x_p    = (1 - λ) G⁻¹(p / (1 - λ))        where p < (1 - λ)/2
+               = -(1 + λ) G⁻¹((1 - p) / (1 + λ)) otherwise
+        pit    = (1 - λ) G(x / (1 - λ))          where x < 0
+               = 1 - (1 + λ) G(-x / (1 + λ))     otherwise
+        es_α   = loc + scale (L_α / α - a) / b
+        L_α    = (1 - λ)² P(x_α / (1 - λ))       where x_α < 0
+               = a + (1 + λ)² P(-x_α / (1 + λ))  otherwise
+        log_score = log f(y)
+
+    ``L_α`` is the mean of ``x`` times the indicator of ``x ≤ x_α``. With
+    ``κ = √(1 - 2η)`` and ``t_df`` the standard t's density, ``P(m) = -κ
+    (1 + η τ²) / (1 - η) t_df(τ)`` at ``τ = m / κ``.
+
     .. rubric:: Example
 
     This code fits a normal to a series of mean 5 and standard deviation 2,
@@ -254,7 +319,8 @@ def dist_fit(
     length or the levels asked for. Under ``family="t"`` each target keeps
     15 more: the sum of its squared weights, its third and fourth moments,
     ``θ`` (3), and the convergence check's gradient (3) and curvature (6),
-    another 120 bytes.
+    another 120 bytes. Under ``family="skewt"``, 21 more, the same with
+    ``θ`` and the gradient of 4 and the curvature of 10: another 168 bytes.
 
     **The t's checks.** Its fit reports once it is near the maximum of the
     whole weighted likelihood. Beside the fit it keeps, for every row
@@ -274,6 +340,17 @@ def dist_fit(
     ``shape_unidentified`` on most rows (18 streams of 20 at their end, in
     a test of 3,000 rows each), and ``family="normal"`` is the fit to
     read.
+
+    **The skewed t's checks** are the t's, ``p`` counting up to 4, but for
+    the shape. Its shape is identified while the joint Wald statistic ``sᵀ
+    V⁻¹ s``, ``s = (η, λ)`` and ``V`` the ``(η, λ)`` block of ``(W
+    I(θ))⁻¹ Σω²/W``, is above 5.1384. ``(η, λ) = (0, 0)`` is the normal:
+    ``η = 0`` is on the boundary of the parameters, and Hansen's skew is
+    regular at ``λ = 0``, inside them, where the information is positive
+    definite. With one parameter on the boundary and one inside, the
+    statistic's law is ``½χ²₁ + ½χ²₂`` (Self and Liang, 1987), whose 95%
+    quantile that is. A skew the test finds with a normal tail reports
+    ``df`` as infinity.
     """
     model: dict[str, Any] = {
         "type": "dist_fit",

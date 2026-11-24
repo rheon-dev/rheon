@@ -664,6 +664,27 @@ fn dist_fit_t_golden() {
     );
 }
 
+#[test]
+fn dist_fit_skewt_golden() {
+    // Hansen's skewed t: slot 1 is the scale, which reads the moment start
+    // and each row's Newton step on its log density; it reports from the row
+    // the fit is converged.
+    // A half-life of 200: the start's precision asks for about 35 rows of
+    // equal weight, more than the normal's half-life of 20 holds.
+    let mut m = DistFit::new(DistFitCfg {
+        family: DistFamily::SkewT,
+        decay: Decay::Halflife(200.0),
+        min_weight: 0.0,
+        ..dist_fit_model().cfg().clone()
+    })
+    .unwrap();
+    check(
+        "dist_fit_skewt",
+        &signature_of(&mut m, 1, false),
+        GOLDEN_DIST_FIT_SKEWT,
+    );
+}
+
 fn dist_fit_model() -> DistFit {
     {
         DistFit::new(DistFitCfg {
@@ -1982,6 +2003,7 @@ const GOLDEN_DIST_FIT: &[f64] = &[0.36222178080062084, 0.9761973474842893, 0.380
 const GOLDEN_DIST_FIT_LOG_SCORE: &[f64] =
     &[-1.042467858404618, -2.9111721140088753, -0.9865599151673602];
 const GOLDEN_DIST_FIT_T: &[f64] = &[f64::NAN, 0.9991329273243061, 0.9231340361574715];
+const GOLDEN_DIST_FIT_SKEWT: &[f64] = &[f64::NAN, 1.0639750328278947, 1.052534080974652];
 const GOLDEN_GLM: &[f64] = &[0.8190287945803094, 1.5909174696403168, 1.3226756022889994];
 const GOLDEN_GLM_CAP: &[f64] = &[0.8059966005129862, 2.2639186345702202, 1.0964813502655293];
 const GOLDEN_EXPECTILE: &[f64] = &[

@@ -117,10 +117,14 @@ MEANING: dict[str, str] = {
     "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
     "loc_<t>": "the location of the distribution fitted to `<t>`, from the rows before this one",
     "scale_<t>": (
-        "the scale of that fit: the normal's standard deviation, or the t's scale as "
-        "`scipy.stats.t` has it"
+        "the scale of that fit: the normal's standard deviation, the t's scale as "
+        "`scipy.stats.t` has it, or the skewed t's standard deviation"
     ),
-    "df_<t>": 'the degrees of freedom of the t fitted to `<t>` (`family="t"` only)',
+    "df_<t>": (
+        'the degrees of freedom of the t or skewed t fitted to `<t>` (`family="t"` or '
+        '`"skewt"` only)'
+    ),
+    "lambda_<t>": 'the skew of the skewed t fitted to `<t>` (`family="skewt"` only)',
     "q<level>_<t>": "the fit's quantile of `<t>` at `<level>`, one of `quantiles`",
     "es<level>_<t>": (
         "the fit's lower-tail expected shortfall of `<t>` at `<level>`, one of `es_levels`: the "
@@ -130,8 +134,8 @@ MEANING: dict[str, str] = {
     "log_score_<t>": "the log of the fit's density at the row's own `<t>`",
     "withheld_reason_<t>": (
         "why `<t>`'s fit reports nothing on this row: `no_weight`, `min_weight` or "
-        '`degenerate_variance` (a scale of 0); under `family="t"`, `not_converged`, or '
-        "`shape_unidentified`, which leaves `loc_<t>` and `scale_<t>`"
+        '`degenerate_variance` (a scale of 0); under `family="t"` or `"skewt"`, '
+        "`not_converged`, or `shape_unidentified`, which leaves `loc_<t>` and `scale_<t>`"
     ),
     "u": (
         "the equicorrelation this row alone implies"
@@ -224,6 +228,7 @@ ALSO_NULL: dict[str, str] = {
     "loc_<t>": "while withheld, and where `withheld_reason_<t>` names a reason",
     "scale_<t>": "where `loc_<t>` is",
     "df_<t>": "where `q<level>_<t>` is",
+    "lambda_<t>": "where `q<level>_<t>` is",
     "q<level>_<t>": "where `loc_<t>` is, and under `shape_unidentified`",
     "es<level>_<t>": "where `q<level>_<t>` is",
     "pit_<t>": "where `q<level>_<t>` is, and where `<t>` is",
@@ -686,6 +691,7 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             "pit",
             "log_score",
             "df",
+            "lambda",
             "withheld_reason",
         ):
             if base == f"{pre}_{t}":

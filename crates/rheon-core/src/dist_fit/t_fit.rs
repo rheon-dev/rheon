@@ -223,6 +223,24 @@ fn eval(y: f64, theta: &[f64; 3]) -> Option<Eval> {
     finite.then_some(e)
 }
 
+/// The central third and fourth moments `(c₃, c₄)` after the row `x` of
+/// weight `w > 0` and a decay of `lam`, read against the shared accumulator
+/// `m` *before* it takes the row ([`TFit::learn_moments`] has the update);
+/// the skewed t keeps the same two.
+pub(super) fn third_fourth(c3: f64, c4: f64, m: &EwDiag, x: f64, lam: f64, w: f64) -> (f64, f64) {
+    let w_new = lam * m.n_eff() + w;
+    let a = lam * m.n_eff() / w_new;
+    let b = w / w_new;
+    let d = m.deviation(0, x);
+    let c2 = m.var(0);
+    let (ab, d2) = (a * b, d * d);
+    let c4 = a * c4 - 4.0 * ab * d * c3
+        + 6.0 * ab * b * d2 * c2
+        + ab * d2 * d2 * (a * a * a + b * b * b);
+    let c3 = a * c3 - 3.0 * ab * d * c2 + ab * d2 * d * (a * a - b * b);
+    (c3, c4)
+}
+
 impl TFit {
     pub(super) fn new() -> Self {
         Self {
@@ -269,17 +287,7 @@ impl TFit {
     /// ```
     pub(super) fn learn_moments(&mut self, m: &EwDiag, x: f64, lam: f64, w: f64) {
         self.w2 += w * w;
-        let w_new = lam * m.n_eff() + w;
-        let a = lam * m.n_eff() / w_new;
-        let b = w / w_new;
-        let d = m.deviation(0, x);
-        let c2 = m.var(0);
-        let (ab, d2) = (a * b, d * d);
-        let c4 = a * self.c4 - 4.0 * ab * d * self.c3
-            + 6.0 * ab * b * d2 * c2
-            + ab * d2 * d2 * (a * a * a + b * b * b);
-        self.c3 = a * self.c3 - 3.0 * ab * d * c2 + ab * d2 * d * (a * a - b * b);
-        self.c4 = c4;
+        (self.c3, self.c4) = third_fourth(self.c3, self.c4, m, x, lam, w);
     }
 
     /// The moment start, tried on a learned row once the shared accumulator

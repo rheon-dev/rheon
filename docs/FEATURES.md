@@ -63,7 +63,7 @@ to start with.
 | [`rheon.spec.hmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm) | a Gaussian hidden Markov model, filtered as the stream runs | [entry](MODELS.md#hmm--which-regime-are-we-in) · [keep its states on their regimes](how-to/keep-hmm-states-on-their-regimes.md) |
 | [`rheon.spec.hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) | a self-exciting point process, fitted exactly by least squares | [entry](MODELS.md#hawkes--how-much-does-each-event-excite-the-next) |
 | [`rheon.spec.garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) | the GARCH family: a conditional variance for each return series, its parameters learned a row at a time | [entry](MODELS.md#garch--how-large-will-the-next-return-be) |
-| [`rheon.spec.dist_fit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dist_fit) | a normal distribution fitted to each target, and each row's quantiles, lower-tail expected shortfall, probability integral transform and log score from it | [entry](MODELS.md#dist_fit--what-values-will-the-target-take) |
+| [`rheon.spec.dist_fit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dist_fit) | a normal, Student's t or Hansen's skewed t distribution fitted to each target, and each row's quantiles, lower-tail expected shortfall, probability integral transform and log score from it | [entry](MODELS.md#dist_fit--what-values-will-the-target-take) |
 
 ## Running a bank
 

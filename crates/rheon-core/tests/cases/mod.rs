@@ -2742,6 +2742,29 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             60
         ),
+        // Hansen's skewed t (PLAN 558, part 5): the first target's fit
+        // started (its four parameters, the surrogate's gradient and
+        // curvature, the moments and squared weights), the second, joined
+        // late, still on its moments with no fit.
+        case!(
+            "dist_fit_skewt",
+            "DistFit",
+            DistFit,
+            DistFit::new(dist_fit_skewt_cfg(None)).unwrap(),
+            0,
+            Targets::JoiningFrom(2, 70),
+            80
+        ),
+        // Its location fixed: the fit steps the scale and the shape alone.
+        case!(
+            "dist_fit_skewt_floc",
+            "DistFit",
+            DistFit,
+            DistFit::new(dist_fit_skewt_cfg(Some(0.5))).unwrap(),
+            0,
+            Targets::Linear(2),
+            80
+        ),
     ]
 }
 
@@ -2760,6 +2783,14 @@ fn dist_fit_cfg(floc: Option<f64>) -> DistFitCfg {
 fn dist_fit_t_cfg(floc: Option<f64>) -> DistFitCfg {
     DistFitCfg {
         family: DistFamily::StudentT,
+        decay: Decay::Halflife(200.0),
+        ..dist_fit_cfg(floc)
+    }
+}
+
+fn dist_fit_skewt_cfg(floc: Option<f64>) -> DistFitCfg {
+    DistFitCfg {
+        family: DistFamily::SkewT,
         decay: Decay::Halflife(200.0),
         ..dist_fit_cfg(floc)
     }

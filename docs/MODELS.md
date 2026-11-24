@@ -56,7 +56,7 @@ to start with for which question.
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
 | [`garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) · [entry](#garch--how-large-will-the-next-return-be) | step | the GARCH family, a conditional variance for each return series: GARCH(1,1), GJR, EGARCH and FIGARCH, with normal, Student-t or skewed-t innovations, its parameters learned a row at a time after a start fitted by likelihood |
-| [`dist_fit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dist_fit) · [entry](#dist_fit--what-values-will-the-target-take) | accumulate | a normal distribution fitted to each target, exponentially weighted, and what it gives each row before the row is learned: quantiles, the lower-tail expected shortfall, the probability integral transform and the log score |
+| [`dist_fit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dist_fit) · [entry](#dist_fit--what-values-will-the-target-take) | accumulate | a normal, Student's t or Hansen's skewed t distribution fitted to each target, exponentially weighted, and what it gives each row before the row is learned: quantiles, the lower-tail expected shortfall, the probability integral transform and the log score |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
 | [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
@@ -3072,9 +3072,9 @@ forecast past one row has no closed form.
 
 *API:* [`rheon.spec.dist_fit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dist_fit) — *Rust:* [`dist_fit.rs`](../crates/rheon-core/src/dist_fit.rs) — *Outputs:* [fields](OUTPUTS.md#dist_fit)
 
-A normal or a Student's t distribution fitted to each target by weighted
-maximum likelihood, the older rows weighing less by the decay, and what the
-fit says of each row before the row is learned.
+A normal, Student's t or Hansen's skewed t distribution fitted to each
+target by weighted maximum likelihood, the older rows weighing less by the
+decay, and what the fit says of each row before the row is learned.
 
 Use `dist_fit` when the question is what values a series is likely to take,
 not what its mean will be. It gives a band to hold a reading to, a value at
@@ -3178,6 +3178,52 @@ field that reads the tail is null with `shape_unidentified`. On a normal
 stream that is most rows (18 streams of 20 at their end, in a test of
 3,000 rows each), and `family="normal"` is the fit to read. Each target
 keeps 120 bytes more under the t.
+
+#### Hansen's skewed t
+
+`family="skewt"` fits Hansen's (1994) skewed t, in the form `arch`'s
+`SkewStudent` has it: `loc` is the mean and `scale` the standard deviation,
+`df` the degrees of freedom, above 2, and `lambda` the skew, between −0.99
+and 0.99. It writes `df_<t>` and `lambda_<t>` after `scale_<t>`. `λ = 0` is
+the t, and a positive `λ` gives the longer tail on the right. With `z = (y −
+loc)/scale`:
+
+```
+c = Γ((df + 1)/2) / (√(π (df − 2)) Γ(df/2))
+a = 4 λ c (df − 2)/(df − 1),    b = √(1 + 3λ² − a²)
+x = b z + a,    q = 1 − λ where x < 0, else 1 + λ
+log f(y) = ln b + ln c − ln scale − ((df + 1)/2) ln(1 + (x/q)²/(df − 2))
+```
+
+`x` is a t of variance 1 whose left half is stretched by `1 − λ` and right
+half by `1 + λ`; `a` and `b` are its mean and standard deviation, which is
+what puts `z` at mean 0 and variance 1. The fit is the t's, one row at a
+time over `θ = (loc, ln s, η, λ)`, `η = 1/df` from 0 to 1/2.05, with the
+skewed t's own information, which is closed. `s = scale √(1 − 2η)` is the
+scale of the t inside the density. Near `df = 2` the standard deviation and
+the tail are nearly one direction of the likelihood, so a step on `ln
+scale` could move far along it for almost nothing. Its start is the method of
+moments for all but the skew: the weighted mean and standard deviation,
+`η₀` from the weighted kurtosis as the t's, and `λ₀ = 0`. The start waits
+until its moments pin both `ln scale` and `λ` to a standard error of 1/4 by
+that information, about 35 rows of equal weight. The weighted skewness is
+not matched. On so few rows it is noisy, and the family's skewness rises
+slowly in `λ`, so a matched `λ₀` lands far out (0.85 on some normal
+streams). The fit then spends half-lives walking back, and the convergence
+check withholds it all that time: 3,544 rows in 60 normal streams of 3,000,
+against none from `λ₀ = 0`.
+
+The quantiles, shortfall, `pit` and `log_score` are the t's on each half
+of `x`, rescaled. `not_converged` withholds as under the t. The shape is
+withheld with `shape_unidentified` while a joint Wald test cannot tell `(η,
+λ)` from the normal's `(0, 0)`. `η = 0` is on the boundary of the
+parameters, and Hansen's skew is regular at `λ = 0`, inside them, so the
+statistic's law under the normal is `½χ²₁ + ½χ²₂`, and its 95% quantile,
+5.1384, is the threshold. A skew the test finds with the normal's tail
+reports `df` as infinity. Against the maximum of the same weighted
+likelihood, with `arch`'s density and scipy's optimizer, the fit was
+measured within 0.5% of `scale` in `loc`, 2% in `scale`, 0.011 in `η` and
+0.005 in `λ`. Each target keeps 168 bytes more under the skewed t.
 
 #### Example
 

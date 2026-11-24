@@ -203,7 +203,8 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
 }
 
 /// A `dist_fit` spec's [`rheon_core::DistFitCfg`] at one decay: one fit a
-/// target, the normal family unless the spec names Student's t. The levels,
+/// target, the normal family unless the spec names Student's t or Hansen's
+/// skewed t. The levels,
 /// `floc` and `min_weight` are the model's own to check.
 pub fn dist_fit_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DistFitCfg, String> {
     let ModelKind::DistFit {
@@ -218,10 +219,11 @@ pub fn dist_fit_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DistFitCfg,
     let family = match family.as_deref().unwrap_or("normal") {
         "normal" => rheon_core::DistFamily::Normal,
         "t" => rheon_core::DistFamily::StudentT,
+        "skewt" => rheon_core::DistFamily::SkewT,
         other => {
             return Err(format!(
-                "dist_fit: family must be \"normal\" or \"t\", but it is {other:?}. Use one \
-                 of those words."
+                "dist_fit: family must be \"normal\", \"t\" or \"skewt\", but it is {other:?}. \
+                 Use one of those words."
             ));
         }
     };

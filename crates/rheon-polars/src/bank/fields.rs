@@ -1208,7 +1208,7 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
         return fields;
     }
     // dist_fit predicts no target's value: per target, the fit's `loc` and
-    // `scale`, the t's `df`, a quantile `q_<level>` per level, a lower-tail
+    // `scale`, the t's `df` (the skewed t's `df` and `lambda`), a quantile `q_<level>` per level, a lower-tail
     // shortfall `es_<level>` per level, the row's `pit` and `log_score`,
     // then why the target reports nothing, all read before the row is
     // learned (`DistFitRows`); then `n_eff`. No `coef`.
@@ -1223,17 +1223,20 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
             quantiles.as_deref().unwrap_or_default(),
             es_levels.as_deref().unwrap_or_default(),
         );
-        let is_t = family.as_deref() == Some("t");
-        let core_family = if is_t {
-            rheon_core::DistFamily::StudentT
-        } else {
-            rheon_core::DistFamily::Normal
+        let core_family = match family.as_deref() {
+            Some("t") => rheon_core::DistFamily::StudentT,
+            Some("skewt") => rheon_core::DistFamily::SkewT,
+            _ => rheon_core::DistFamily::Normal,
         };
         let reasons: Vec<String> = crate::stream::dist_withheld(core_family)
             .iter()
             .map(|r| r.to_string())
             .collect();
-        let shape = usize::from(is_t);
+        let shape = match core_family {
+            rheon_core::DistFamily::StudentT => 1,
+            rheon_core::DistFamily::SkewT => 2,
+            _ => 0,
+        };
         let n_slots = 5 + shape + qs.len() + es.len();
         let mut fields = Vec::new();
         for (mi, (suffix, d)) in decays.iter().enumerate() {
@@ -1248,8 +1251,11 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 };
                 fields.push(stat("loc", "loc", 0));
                 fields.push(stat("scale", "scale", 1));
-                if is_t {
+                if shape > 0 {
                     fields.push(stat("df", "df", 2));
+                }
+                if shape > 1 {
+                    fields.push(stat("lambda", "lambda", 3));
                 }
                 let levels = qs
                     .iter()

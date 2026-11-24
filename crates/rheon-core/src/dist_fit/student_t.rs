@@ -167,7 +167,7 @@ pub(crate) fn log_density(z: f64, eta: f64) -> f64 {
 }
 
 /// `A(η)`, the part of the `η` score that does not depend on `z`.
-fn score_const(eta: f64) -> f64 {
+pub(crate) fn score_const(eta: f64) -> f64 {
     if eta < ETA_SERIES {
         horner(&A_SERIES, eta)
     } else {
@@ -204,7 +204,7 @@ pub(crate) fn scores(z: f64, eta: f64) -> [f64; 3] {
 /// `A′(η)`, the derivative of [`score_const`]: with `Δψ = ψ((ν+1)/2) −
 /// ψ(ν/2)`, `ν³ Δψ + ¼ ν⁴ (ψ′((ν+1)/2) − ψ′(ν/2)) − ½ ν²`, or the
 /// derivative of `A`'s series below the switch.
-fn score_const_deriv(eta: f64) -> f64 {
+pub(crate) fn score_const_deriv(eta: f64) -> f64 {
     if eta < ETA_SERIES {
         let mut acc = 0.0;
         for (k, c) in A_SERIES.iter().enumerate().skip(1).rev() {
