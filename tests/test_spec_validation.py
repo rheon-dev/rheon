@@ -848,8 +848,10 @@ def test_fit_intercept_is_inert_on_every_kind_without_an_intercept():
     from test_every_kind import frame_for
     from test_model_registry import MINIMAL, REGRESSIONS, _build
 
-    inert = (frozenset(MINIMAL) - REGRESSIONS) | {"holt"}
-    assert len(inert) == 23, sorted(inert)
+    # `holt` and `sarima` are regressions with no intercept: `sarima` is
+    # `SARIMAX`'s `trend="n"`, a constant being a feature of ones.
+    inert = (frozenset(MINIMAL) - REGRESSIONS) | {"holt", "sarima"}
+    assert len(inert) == 24, sorted(inert)
 
     def run(name, flag):
         spec = {**_build(name), "fit_intercept": flag}

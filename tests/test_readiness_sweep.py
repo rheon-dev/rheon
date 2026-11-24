@@ -105,13 +105,16 @@ EXTRA: dict[str, dict[str, Any]] = {
     # weight there is about 27, so a floor of 30 withholds rows past the
     # start, until the weight passes it.
     "dcc": {"margins": "none", "margin_start_rows": None, "half_life": 25.0},
+    # `sarima`'s start opens where every standard error is under its bound,
+    # past this stream's rows at the default: a loose one opens it early.
+    "sarima": {"se_bound": 1e3},
 }
 #: The kinds that write no row of their own: they report through the state
 #: (``marginal``'s table, ``rcov``'s closed blocks).
 TABLE_KINDS = frozenset({"marginal", "rcov"})
 ROW_KINDS = [k for k in KINDS if k not in TABLE_KINDS]
 #: The kinds with no decay: ``min_settled_frac`` has nothing to settle.
-NO_DECAY = frozenset({"seqtest", "bocpd", "corrchange", "rcov", "garch", "tdigest"})
+NO_DECAY = frozenset({"seqtest", "bocpd", "corrchange", "rcov", "garch", "tdigest", "sarima"})
 SETTLED_KINDS = [k for k in KINDS if k not in NO_DECAY]
 #: The kinds whose ridge system reads ``max_error_inflation``.
 INFLATION_KINDS = ["ewridge", "rls", "lasso", "kalman"]
@@ -789,9 +792,9 @@ EMBARGO: dict[str, Any] = dict(clock="t", gap_cap=5.0, embargo=3.0)
         )
         for k in sorted(REGRESSIONS)
         for name, _ in _gates(k)
-        # `ar` refuses an embargo: its lags would be older for the rows it
-        # predicts than for the rows it learns.
-        for held in ((False,) if k == "ar" else (False, True))
+        # `ar` and `sarima` refuse an embargo: their lags would be older for
+        # the rows they predict than for the rows they learn.
+        for held in ((False,) if k in ("ar", "sarima") else (False, True))
     ],
 )
 def test_the_residual_spread_never_moves_with_a_gate(kind: str, name: str, held: bool):

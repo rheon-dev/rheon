@@ -655,7 +655,7 @@ fn settings_it_cannot_filter_are_refused() {
             params: vec![p],
             ..base.clone()
         },
-        "must hold 0 regressor, 1 ar, 1 ma",
+        "must hold 0 feature, 1 ar, 1 ma",
     );
     let mut p = arma_params();
     p.sigma2 = 0.0;

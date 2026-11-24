@@ -916,10 +916,11 @@ def _moved(a: pl.DataFrame, b: pl.DataFrame) -> list[str]:
     )
 
 
-#: A switch a model takes that moves nothing by design: `holt` has no
-#: intercept to drop, and `test_spec_validation.py` pins `fit_intercept` as
-#: inert on it.
-INERT = frozenset({("holt", "no intercept")})
+#: A switch a model takes that moves nothing by design: `holt` and `sarima`
+#: have no intercept to drop (`sarima` is `SARIMAX`'s `trend="n"`; a
+#: constant is a feature of ones), and `test_spec_validation.py` pins
+#: `fit_intercept` as inert on both.
+INERT = frozenset({("holt", "no intercept"), ("sarima", "no intercept")})
 
 
 def _new_value(c: str, plain: pl.DataFrame, got: pl.DataFrame) -> bool:

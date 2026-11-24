@@ -50,7 +50,7 @@ to start with for which question.
 | [`glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) · [entry](#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) | step | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood, for counts, positive amounts, proportions and amounts with an exact zero |
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
 | [`ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) · [entry](#ar--an-autoregression-on-the-targets-own-past) | solve | an autoregression for each target, AR(p), by least squares on lags the model keeps itself, with the features as further inputs, and `AutoReg`'s fit with no decay |
-| [`sarima`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sarima) · [entry](#sarima--seasonal-arima-estimated-online) | step | a seasonal ARIMA model with exogenous regressors for each target, SARIMAX: differenced exactly, a start fitted by conditional likelihood and gated on its standard errors, then recursive prediction error |
+| [`sarima`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sarima) · [entry](#sarima--seasonal-arima-estimated-online) | step | a seasonal ARIMA model with exogenous features for each target, SARIMAX: differenced exactly, a start fitted by conditional likelihood and held until its standard errors are small, then recursive prediction error |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
 | [`pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) · [entry](#pca--streaming-principal-components) | step | principal components learned a row at a time in state that grows with the components times the columns, not the columns squared: the incremental SVD, CCIPCA or Oja's rule, each component withheld until the data tells it apart from its neighbors |
@@ -2305,7 +2305,7 @@ decay it chose the order that minimizes the criterion over statsmodels'
 
 *API:* [`rheon.spec.sarima`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sarima) — *Rust:* [`sarima.rs`](../crates/rheon-core/src/sarima.rs) — *Outputs:* [fields](OUTPUTS.md#sarima)
 
-A seasonal ARIMA model with exogenous regressors for each target,
+A seasonal ARIMA model with exogenous features for each target,
 statsmodels' `SARIMAX(order, seasonal_order, trend="n")`, its parameters
 estimated as the stream runs.
 
@@ -2331,15 +2331,15 @@ plus `d + sD`; then the buffer's conditional likelihood, `σ²`
 concentrated, is maximized in `SARIMAX`'s unconstrained coordinates `x`.
 The fit is accepted only off every stationarity and invertibility bound,
 converged, and with every standard error at most `se_bound` (0.1): each
-ARMA coefficient's as it is, each regressor's coefficient's times the
-regressor's standard deviation over the innovations', `σ²`'s relative to
-`σ²`. The regressors' check is needed because two identical or
-near-collinear regressors leave the polynomials identified, so they pass
-the ARMA check, while the split of the effect between the two is not:
-measured with two regressors correlated 0.99995, the polynomial's
-standard error was 0.044 and the regressors' standardized ones 3.7, and
-still 2.1 at 1,233 rows, where a pair correlated 0.5 was accepted at 366
-rows. Otherwise the target
+ARMA coefficient's as it is, each feature's coefficient's times the
+feature's standard deviation over the innovations', `σ²`'s relative to
+`σ²`. The features' check is needed because two identical or
+near-collinear features leave the polynomials identified, so they pass
+the ARMA check, while the split of their effect between them is not.
+Measured with two features correlated 0.99995, the polynomial's standard
+error was 0.044 and the features' standardized ones 3.7, still 2.1 at
+1,233 rows; a pair correlated 0.5 was accepted at 366 rows. Otherwise the
+target
 keeps buffering and tries again once Kish's count has grown by half. From
 the accepted start, each learned row of weight `w` steps by recursive
 prediction error, `ψ = −∂e/∂x`:
@@ -2368,8 +2368,8 @@ coefficient and 0.0042 relative on `σ²`, within 0.35 of statsmodels' own
 standard errors. The starts opened between 162 and 366 rows.
 
 **State.** Past its start a target holds `9 (n + 2 + n² + L (6 + 2k))`
-bytes, `n = k + p + q + P + Q` and `L = max(p + sP, q + sQ, 1)`: 1,548 at
-`(1,1,1)(1,1,1,24)`, 9,324 at `s = 168`. Before it, its buffer is `9 (2 + k)`
+bytes, `n = k + p + q + P + Q` and `L = max(p + sP, q + sQ, 1)`. That is
+1,548 at `(1,1,1)(1,1,1,24)` and 9,324 at `s = 168`. Before it, its buffer is `9 (2 + k)`
 bytes a slot, held under `max_state_bytes`.
 
 ## Moments and correlation

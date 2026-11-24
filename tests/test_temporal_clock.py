@@ -552,7 +552,8 @@ class TestEveryClockParameterTakesADuration:
         "start_span": ("30m", {"start_rows": None}),
         "margin_start_span": ("30m", {"margin_start_rows": None, "margins": "garch"}),
         "periods": (["8h", "3h"], {}),
-        "spacing": ("1m", {"periods": ["8h", "3h"]}),
+        # `spectral`'s periods beside it are `_base`'s; `sarima` has none.
+        "spacing": ("1m", {}),
         "refit_span": ("30m", {"refit_rows": None}),
         "warm_span": ("30m", {"warm_rows": None}),
         "hazard": ("40m", {}),

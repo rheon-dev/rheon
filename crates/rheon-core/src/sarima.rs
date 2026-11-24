@@ -222,8 +222,8 @@ pub struct SarimaEstimate {
     pub enforce_invertibility: bool,
     /// The start's fit is accepted only with every standard error at most
     /// this, each in units free of the target's: an ARMA coefficient's as
-    /// it is (the coefficients are unit-free), a regressor's coefficient's
-    /// times the regressor's standard deviation over the innovations',
+    /// it is (the coefficients are unit-free), a feature's coefficient's
+    /// times the feature's standard deviation over the innovations',
     /// and `sigma2`'s relative to `sigma2`. The regressors' check is a
     /// rule of its own: identical or near-collinear regressors leave the
     /// polynomials identified, so they pass the ARMA check, while the split
@@ -420,7 +420,7 @@ impl SarimaCfg {
             ];
             if want != got {
                 no.refuse(format!(
-                    "sarima: target {j}'s parameters must hold {} regressor, {p} ar, {q} ma, \
+                    "sarima: target {j}'s parameters must hold {} feature, {p} ar, {q} ma, \
                      {sp} seasonal ar and {sq} seasonal ma coefficients, but they hold {}, \
                      {}, {}, {} and {}. Give one coefficient a lag of each polynomial and one \
                      a feature.",
@@ -454,7 +454,7 @@ impl SarimaCfg {
             if !poly::stationary(&prm.seasonal_ar) {
                 no.refuse(format!(
                     "sarima: target {j}'s seasonal ar coefficients {:?} are not stationary: \
-                     their polynomial 1 - Phi_1 B^s - ... has a root on or inside the unit \
+                     their seasonal autoregressive polynomial has a root on or inside the unit \
                      circle, so the series has no stationary start to filter from. Give \
                      stationary coefficients, or difference the series with D.",
                     prm.seasonal_ar

@@ -654,6 +654,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/realized.rs"]
 
+[messages."crates/rheon-core/src/sarima.rs"]
+
 [messages."crates/rheon-core/src/spectral.rs"]
 
 [messages."crates/rheon-core/src/streampca.rs"]
@@ -735,6 +737,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [docstrings."python/rheon/_spec_realized.py"]
 
+[docstrings."python/rheon/_spec_sarima.py"]
+
 [docstrings."python/rheon/_spec_tdigest.py"]
 
 [docstrings."python/rheon/polars/_errors.py"]
@@ -772,6 +776,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/psquared.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/realized.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/sarima.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/spectral.rs#messages"]
 
@@ -841,6 +847,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/_spec_power_variation.py#messages"]
 
 [vocabulary."python/rheon/_spec_realized.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_sarima.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_tdigest.py#docstrings"]
 

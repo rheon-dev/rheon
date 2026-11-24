@@ -27,7 +27,7 @@ def sarima(
     max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
-    """A seasonal ARIMA model with exogenous regressors, SARIMAX, for each
+    """A seasonal ARIMA model with exogenous features, SARIMAX, for each
     target, its parameters estimated online.
 
     Use it to predict a series one slot ahead from its own past, its past
@@ -57,7 +57,7 @@ def sarima(
         at least 2 where ``P``, ``D`` or ``Q`` is above 0. Default none,
         ``(0, 0, 0, 0)``.
     ``features``
-        Exogenous regressors, the same for every target, entering as
+        Exogenous features, the same for every target, entering as
         ``SARIMAX``'s ``exog``: differenced with the series, their
         coefficients estimated with the polynomials'. Default none.
     ``enforce_stationarity``, ``enforce_invertibility``
@@ -65,10 +65,10 @@ def sarima(
         ones invertible, through ``SARIMAX``'s transforms. Default on.
     ``se_bound``
         The largest standard error the start's fit is accepted with: each
-        ARMA coefficient's as it is (they are unit-free), each regressor's
-        coefficient's times the regressor's standard deviation over the
+        ARMA coefficient's as it is (they are unit-free), each feature's
+        coefficient's times the feature's standard deviation over the
         innovations', and ``sigma2``'s relative to ``sigma2``, so the gate
-        does not depend on the target's units. The regressors' standardized
+        does not depend on the target's units. The features' standardized
         standard errors are held as well as the ARMA coefficients': two
         identical or near-collinear features leave the polynomials
         identified, so they pass the ARMA check, but the split of their
@@ -77,8 +77,8 @@ def sarima(
         correlated 0.99995, the polynomial's standard error was 0.044 while
         each feature's standardized one was 3.7, and still 2.1 at 1,233
         rows, so the start was withheld; a pair correlated 0.5 was accepted
-        at 366 rows. Drop or combine such features. Finite and above 0. Default
-        0.1: measured over five specs and eight seeds each at 10,000 rows,
+        at 366 rows. Drop or combine such features. Finite and above 0.
+        Default 0.1: measured over five specs and eight seeds each at 10,000 rows,
         every start at 0.1 ended within 0.4 of ``SARIMAX.fit``'s standard
         errors of its parameters, where a bound of 0.15 or 0.2 left a spec
         whose seasonal factors nearly cancel 4.5 to 8 off. Smaller waits

@@ -1605,12 +1605,14 @@ fn sarima_filter(
         .is_some_and(|x| x.len() != y.len() || x.iter().any(|r| r.len() != k))
     {
         return Err(PyValueError::new_err(
-            "sarima_filter: exog must hold one row of the same length for each value of y",
+            "sarima_filter: exog must hold one row of the same length for each value of y. \
+             Give one row of features for each value of y.",
         ));
     }
     let prm = SarimaParams::from_flat(&params, k, order, seasonal_order).ok_or_else(|| {
         PyValueError::new_err(format!(
-            "sarima_filter: params holds {} values, which is not the orders' count",
+            "sarima_filter: params holds {} values, which is not the orders' count. Give one \
+             value for each parameter of the orders, in SARIMAX's param_names order.",
             params.len()
         ))
     })?;

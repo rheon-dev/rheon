@@ -541,6 +541,9 @@ GAP_CAP = 50.0
 CASES: dict[str, tuple[str, dict[str, object]]] = {name: (name, {}) for name in MINIMAL} | {
     "audit": ("audit", {"pairs": True}),
     "sgd_huber": ("sgd", {"loss": "huber"}),
+    # Its start opened in each group's rows on the irregular clock: the
+    # default bound is not reached there.
+    "sarima": ("sarima", {"se_bound": 1e3}),
 }
 #: Every case, ``huber`` and ``sgd``'s Huber loss with the refit of their
 #: first rows on (task 277).
