@@ -994,6 +994,13 @@ pub use window::{
 ///   held to that ([`Deco`]'s module docs; `tests/state_fixtures.rs`,
 ///   `RESTARTED_LEVEL`); the ratio's forms are the cases `deco`,
 ///   `deco_linear` and `deco_warming`.
+///
+///   Also at 72, before any release carried it (2026-11-23, PLAN 569):
+///   `ftrl` takes `standardize`, its cfg's flag and its `scaler` and
+///   `warmup` written last and only when on, so a state without it, every
+///   one an earlier build wrote, keeps its bytes and loads to the bit. The
+///   new forms are the cases `ftrl_standardized` (past the warm-up's count)
+///   and `ftrl_standardized_warming` (inside it, through the origin).
 pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`

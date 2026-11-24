@@ -1690,7 +1690,19 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 203] = [
+    const FORMS: [(&str, &[&str]); 207] = [
+        // PLAN 569, at schema 72: `ftrl`'s scaler and warm-up under
+        // `standardize`, past the warm-up's count and inside it.
+        ("ftrl_standardized", &["model", "Ftrl", "scaler", "m"]),
+        ("ftrl_standardized", &["model", "Ftrl", "warmup", "w"]),
+        (
+            "ftrl_standardized_warming",
+            &["model", "Ftrl", "scaler", "c"],
+        ),
+        (
+            "ftrl_standardized_warming",
+            &["model", "Ftrl", "warmup", "w2"],
+        ),
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.

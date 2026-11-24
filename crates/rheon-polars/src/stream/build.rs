@@ -344,6 +344,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             l2,
             strict_binary,
             loss,
+            standardize,
         } => {
             let loss = match loss.as_deref() {
                 None | Some("logistic") => FtrlLoss::Logistic,
@@ -368,6 +369,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 min_weight: spec.min_periods_or_default(),
                 strict_binary: *strict_binary,
                 loss,
+                standardize: *standardize,
             };
             Ok(AnyModel::Ftrl(Box::new(Ftrl::new(cfg)?)))
         }

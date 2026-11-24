@@ -1706,11 +1706,61 @@ pub fn all() -> Vec<Case> {
                 min_weight: 3.0,
                 strict_binary: false,
                 loss: FtrlLoss::Logistic,
+                standardize: false,
             })
             .unwrap(),
             K,
             Targets::Binary,
             40
+        ),
+        // Under `standardize` (PLAN 569, at schema 72): the scaler and its
+        // warm-up count, past the count's 22 (40 rows) and inside it (20
+        // rows, the continuation crossing it), and the cfg's flag.
+        case!(
+            "ftrl_standardized",
+            "Ftrl",
+            Ftrl,
+            Ftrl::new(FtrlCfg {
+                n_features: K,
+                n_targets: 2,
+                fit_intercept: true,
+                decay: decay(),
+                alpha: 0.1,
+                beta: 1.0,
+                l1: 0.01,
+                l2: 1.0,
+                min_weight: 3.0,
+                strict_binary: false,
+                loss: FtrlLoss::Squared,
+                standardize: true,
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        case!(
+            "ftrl_standardized_warming",
+            "Ftrl",
+            Ftrl,
+            Ftrl::new(FtrlCfg {
+                n_features: K,
+                n_targets: 1,
+                fit_intercept: false,
+                decay: decay(),
+                alpha: 0.1,
+                beta: 1.0,
+                l1: 0.01,
+                l2: 1.0,
+                min_weight: 3.0,
+                strict_binary: false,
+                loss: FtrlLoss::Logistic,
+                standardize: true,
+            })
+            .unwrap(),
+            K,
+            Targets::Binary,
+            20
         ),
         case!(
             "ew_cov",

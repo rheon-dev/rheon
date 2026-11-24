@@ -17,7 +17,8 @@ opens -- across
 - ``sgd``: every loss under every schedule, standardized and not;
 - ``pa``: every mode, standardized and not, unconstrained and under a box
   and a sum;
-- ``ftrl``: both losses under a half-life, with an L1.
+- ``ftrl``: both losses under a half-life, with an L1, standardized and not
+  (PLAN 569).
 
 The stream is the gradient oracles' (``test_oracles_gradient_paths._stream``):
 an irregular clock with two gaps past ``gap_cap`` and 25 rows on a clock
@@ -139,13 +140,15 @@ def _pa(mode: str, standardize: bool, variant: str) -> tuple[dict, str, bool]:
     return spec, "linear", standardize
 
 
-def _ftrl(loss: str, variant: str) -> tuple[dict, str, bool]:
+def _ftrl(loss: str, standardize: bool, variant: str) -> tuple[dict, str, bool]:
     kw = {"alpha": 0.3, "beta": 0.5, "l1": 0.5, "l2": 0.5}
     if loss == "squared":
         kw = {"alpha": 0.2, "l1": 0.2}
     common = COMMON | {"half_life": 150.0}
-    spec = rp.spec.ftrl("m", loss=loss, **kw, **VARIANTS[variant], **common)
-    return spec, ("linear" if loss == "squared" else "logistic"), False
+    spec = rp.spec.ftrl(
+        "m", loss=loss, standardize=standardize, **kw, **VARIANTS[variant], **common
+    )
+    return spec, ("linear" if loss == "squared" else "logistic"), standardize
 
 
 def _std(standardize: bool) -> str:
@@ -166,8 +169,9 @@ def _cells(losses: dict) -> list[tuple[str, tuple]]:
             for v in VARIANTS:
                 cells.append((f"pa-{mode}-{_std(std)}-{v}", ("pa", mode, std, v)))
     for loss in ("logistic", "squared"):
-        for v in ("plain", "no-intercept"):  # ftrl takes no box
-            cells.append((f"ftrl-{loss}-{v}", ("ftrl", loss, v)))
+        for std in (True, False):
+            for v in ("plain", "no-intercept"):  # ftrl takes no box
+                cells.append((f"ftrl-{loss}-{_std(std)}-{v}", ("ftrl", loss, std, v)))
     return cells
 
 
@@ -175,7 +179,8 @@ def _cells(losses: dict) -> list[tuple[str, tuple]]:
 ESSENTIAL = {
     "sgd-squared-adagrad-standardized-box-and-sum",
     "pa-pa1-standardized-box-and-sum",
-    "ftrl-logistic-plain",
+    "ftrl-logistic-raw-plain",
+    "ftrl-squared-standardized-plain",
 }
 
 

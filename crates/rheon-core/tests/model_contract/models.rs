@@ -210,12 +210,19 @@ fn ftrl_cfg() -> FtrlCfg {
         min_weight: 3.0,
         strict_binary: false,
         loss: FtrlLoss::Squared,
+        standardize: false,
     }
 }
 
 #[test]
 fn ftrl() {
     let cfg = ftrl_cfg();
+    let r = probe_with(Ftrl::new(cfg).unwrap(), 2, Some(&Ftrl::n_eff));
+    check(&r, "ftrl", 2, 1);
+    let cfg = FtrlCfg {
+        standardize: true,
+        ..ftrl_cfg()
+    };
     let r = probe_with(Ftrl::new(cfg).unwrap(), 2, Some(&Ftrl::n_eff));
     check(&r, "ftrl", 2, 1);
 }

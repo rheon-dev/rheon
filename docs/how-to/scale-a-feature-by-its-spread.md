@@ -102,12 +102,15 @@ deviation.
 the filter does not standardize them a second time against its own
 moments.
 
-**For `ftrl`, give it features near 0, z-scored or standardized in the
-query before the bank.** `ftrl` does not center a feature. The docstring
-of [`rheon.spec.ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl)
+**For `ftrl`, give it features near 0, z-scored in the query before the
+bank, or set `standardize=True`.** On its own `ftrl` does not center a
+feature. The docstring of
+[`rheon.spec.ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl)
 measures, in its Notes under *Features at a level*, how far a feature's
-level carries a coefficient's error into the prediction, and says why the
-model has no `standardize`.
+level carries a coefficient's error into the prediction. Under
+*Standardizing* it says what `standardize` changes: `l1` then zeroes a
+coefficient by its evidence in units of its feature's spread. Give z-scored columns
+with `standardize=False`, as for `kalman`.
 
 **On minute returns, every model lost less with z-scored features.**
 [Features as z-scores](../VALIDATION.md#6-features-as-z-scores-the-per-standard-deviation-recipe)

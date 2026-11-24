@@ -499,7 +499,7 @@ CASES: list[Case] = [
             "targets": ["hit"],
         },
     ),
-    Case("ftrl2", "ftrl", full2(loss="squared")),
+    Case("ftrl2", "ftrl", full2(loss="squared", standardize=True)),
     Case(
         "seqtest",
         "seqtest",

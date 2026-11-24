@@ -101,10 +101,34 @@
 //! the prediction multiplied by the feature, so a feature at a level `L`
 //! costs the squared loss about `0.018·L` of error on the stream of
 //! `tests/held_values.rs` (18.3 at ±1e3, 1.8e6 at 1e8, 0.75 at 0.5); a
-//! caller standardizes or z-scores such a feature upstream. There is no
-//! `standardize`: `l1` zeroes a coefficient in the feature's own units, and
-//! a scale inside the model would move which coefficients it zeroes as the
-//! feature's spread moved.
+//! caller standardizes or z-scores such a feature upstream, or sets
+//! `standardize`.
+//!
+//! **`standardize`** (off by default; docs/PLAN.md task 569). `l1` zeroes
+//! a coefficient in the units it is learned in, and AdaGrad's rate is not
+//! invariant to a feature's scale, so on the features as they stand a
+//! feature measured in thousandths has gradients a thousandth the size and
+//! never clears an `l1` that a feature in thousands clears with noise
+//! alone. Under `standardize` the recursion above runs unchanged on
+//! `z = [1, z_1, ..]`, `z_i = (x_i − m_i)/s_i` (without an intercept
+//! `x_i/s_i`, `s_i` the root of the raw second moment), the moments being
+//! `sgd`'s scaler's: the features' EW moments on the model's clock with the
+//! row admitted, at one row's weight of the stream, the history keeping at
+//! least `n/(n + 1)` of one row's weight into it, `n` Kish's count
+//! ([`crate::Warmup::read_in_moments`], [`crate::SgdCfg::standardize`]). So
+//! `l1`, `l2`, `alpha` and `beta` act on every feature in units of its
+//! spread, and a coefficient is zeroed when its evidence in those units is
+//! below `l1`. The fit is held in the standardized coordinates, where `l1`
+//! acts, for good: `sgd` and `pa` move theirs to the caller's units once
+//! their scaler has warmed up, which would take `l1` back to the features'
+//! own units. `coefficients()` reads it out with the moments as they stand,
+//! `b_i = β_i/s_i` and `b_0 = β_0 − Σ m_i b_i`, so a slope `l1` zeroes is 0
+//! in either. The cost is the one `sgd`'s warm-up pays: under a finite
+//! half-life the moments wander, and a prediction moves with them though no
+//! step was taken, and a row that teaches a target nothing still reads the
+//! moments as they now stand. Without decay the moments settle and the
+//! fit is plain FTRL on the standardized features
+//! (`ftrl/standardize_tests.rs` holds it to that, standardized longhand).
 //!
 //! `pred` is the probability computed from the state *before* the update, so it
 //! is out-of-sample like every other model; `resid = y - p`.
@@ -114,8 +138,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::Decay;
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
+use crate::sgd::{scaler_decay, standardized, unscaled};
+use crate::{Decay, EwDiag, Warmup};
 
 /// Which loss the FTRL updates follow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -149,6 +174,13 @@ pub struct FtrlCfg {
     /// Logistic (default) or squared loss.
     #[serde(default)]
     pub loss: FtrlLoss,
+    /// Run FTRL on the features standardized against their own running
+    /// moments, `sgd`'s scaler with the row admitted (the module docs,
+    /// *Standardize*), so that `l1`, `l2`, `alpha` and `beta` act on every
+    /// feature in units of its spread. Off by default. Written only when on,
+    /// so a state without it keeps its bytes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub standardize: bool,
 }
 
 impl FtrlCfg {
@@ -237,6 +269,29 @@ pub struct Ftrl {
     zbuf: Vec<f64>,
     #[serde(skip)]
     coef: Vec<f64>,
+    /// The raw row `[1, x]` the scaler learns, under `standardize`.
+    #[serde(skip)]
+    rawbuf: Vec<f64>,
+    /// Running feature means and variances, exactly when `standardize` is
+    /// on (docs/PLAN.md task 569). Last and skipped when absent, with
+    /// `warmup` after it, so a state without a scaler keeps its bytes in
+    /// both encodings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scaler: Option<EwDiag>,
+    /// The scaler's unit of weight, one row's of the stream, and Kish's
+    /// count of the rows it has learned ([`Warmup::read_in_moments`]).
+    /// Default, and not written, without a scaler.
+    #[serde(default, skip_serializing_if = "no_warmup")]
+    warmup: Warmup,
+}
+
+fn no_warmup(w: &Warmup) -> bool {
+    *w == Warmup::default()
+}
+
+thread_local! {
+    /// `predict`'s standardized row, as `sgd`'s.
+    static PREDICT_Z: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The penalties as the weights read them ([`Ftrl::penalties`]): under a
@@ -264,6 +319,9 @@ impl Ftrl {
             pending: vec![1.0; m],
             zbuf: vec![0.0; k],
             coef: vec![0.0; k],
+            rawbuf: vec![0.0; k],
+            scaler: cfg.standardize.then(|| EwDiag::new(k)),
+            warmup: Warmup::default(),
             cfg,
         })
     }
@@ -282,16 +340,25 @@ impl Ftrl {
         &self.w_target
     }
 
-    /// Proximal weights implied by the current FTRL state, per target.
+    /// Proximal weights implied by the current FTRL state, per target, in
+    /// the caller's units: under `standardize` the weights in the
+    /// standardized coordinates read out with the moments as they stand,
+    /// each slope over its feature's scale and the intercept absorbing the
+    /// means, as `sgd`'s are while its scaler warms up. A slope `l1` zeroes
+    /// is 0 in either.
     pub fn coefficients(&self) -> Vec<Vec<f64>> {
-        (0..self.cfg.n_targets)
+        let pen = self.penalties();
+        let beta: Vec<Vec<f64>> = (0..self.cfg.n_targets)
             .map(|j| {
-                let pen = self.penalties();
                 (0..self.cfg.k_total())
                     .map(|i| self.weight(pen, j, i))
                     .collect()
             })
-            .collect()
+            .collect();
+        match &self.scaler {
+            Some(sc) => unscaled(&beta, sc, self.cfg.fit_intercept),
+            None => beta,
+        }
     }
 
     #[inline]
@@ -378,6 +445,9 @@ impl Ftrl {
         if self.zbuf.len() != k {
             self.zbuf = vec![0.0; k];
             self.coef = vec![0.0; k];
+        }
+        if self.scaler.is_some() && self.rawbuf.len() != k {
+            self.rawbuf = vec![0.0; k];
         }
     }
 
@@ -489,11 +559,30 @@ impl OnlineModel for Ftrl {
         let m = self.cfg.n_targets;
         let lam = self.cfg.decay.factor(d_clock);
 
-        if self.cfg.fit_intercept {
+        let off = usize::from(self.cfg.fit_intercept);
+        if off == 1 {
             self.zbuf[0] = 1.0;
-            self.zbuf[1..].copy_from_slice(x);
-        } else {
-            self.zbuf.copy_from_slice(x);
+        }
+        // Under `standardize` the row is `[1, z]`, standardized against the
+        // moments with the row admitted at one row's weight of the stream
+        // (`Warmup::read_in_moments`), and the raw row `[1, x]` updates the
+        // scaler after the targets learn, at the row's own weight.
+        let read = self.warmup.read_in_moments();
+        match &self.scaler {
+            None => self.zbuf[off..].copy_from_slice(x),
+            Some(sc) => {
+                let (admit, floor) = read;
+                for (z, v) in self.zbuf[off..]
+                    .iter_mut()
+                    .zip(standardized(sc, off, x, lam, admit, floor))
+                {
+                    *z = v;
+                }
+                if off == 1 {
+                    self.rawbuf[0] = 1.0;
+                }
+                self.rawbuf[off..].copy_from_slice(x);
+            }
         }
 
         // The accumulators forget on the model's clock. Each target's decay
@@ -534,6 +623,10 @@ impl OnlineModel for Ftrl {
             // the row, and by no other target.
             self.w_target[j] = lam * self.w_target[j] + if taught { weight } else { 0.0 };
         }
+        if let Some(sc) = &mut self.scaler {
+            sc.update(&self.rawbuf, scaler_decay(sc, lam, weight, read.1), weight);
+            self.warmup.learn(weight);
+        }
         self.w_sum = lam * self.w_sum + weight;
         out.n_eff = n_eff;
         out.extra = None;
@@ -567,20 +660,35 @@ impl OnlineModel for Ftrl {
         let k = self.cfg.k_total();
         let off = usize::from(self.cfg.fit_intercept);
         let pen = self.penalties();
-        for (j, p) in pred.iter_mut().enumerate() {
-            if self.w_target[j] < self.cfg.min_weight {
-                continue;
+        let score = |x: &[f64], pred: &mut [f64]| {
+            for (j, p) in pred.iter_mut().enumerate() {
+                if self.w_target[j] < self.cfg.min_weight {
+                    continue;
+                }
+                let raw: f64 = (0..k)
+                    .map(|i| {
+                        let z = if i < off { 1.0 } else { x[i - off] };
+                        z * self.weight(pen, j, i)
+                    })
+                    .sum();
+                *p = match self.cfg.loss {
+                    FtrlLoss::Logistic => sigmoid(raw),
+                    FtrlLoss::Squared => raw,
+                };
             }
-            let raw: f64 = (0..k)
-                .map(|i| {
-                    let z = if i < off { 1.0 } else { x[i - off] };
-                    z * self.weight(pen, j, i)
-                })
-                .sum();
-            *p = match self.cfg.loss {
-                FtrlLoss::Logistic => sigmoid(raw),
-                FtrlLoss::Squared => raw,
-            };
+        };
+        match &self.scaler {
+            None => score(x, &mut pred),
+            // The row the step would see: standardized against the moments
+            // with it admitted after the step's decay, at the weight the
+            // step admits it at, so `predict` gives the step's number.
+            Some(sc) => crate::scratch::with_borrow_mut(&PREDICT_Z, |z| {
+                let lam = self.cfg.decay.factor(d_clock);
+                let (admit, floor) = self.warmup.read_in_moments();
+                z.clear();
+                z.extend(standardized(sc, off, x, lam, admit, floor));
+                score(z, &mut pred);
+            }),
         }
         Step {
             pred,
@@ -621,6 +729,18 @@ impl OnlineModel for Ftrl {
                     return Err(crate::model::damaged(
                         "ftrl",
                         "the decay it has yet to apply has the wrong shape",
+                    ));
+                }
+                // A scaler exactly when `standardize` is on, at the cfg's
+                // width, and a warm-up only beside one, as `pa`'s and
+                // `sgd`'s states are held to.
+                if m.cfg.standardize != m.scaler.is_some()
+                    || m.scaler.as_ref().is_some_and(|sc| sc.k() != k)
+                    || (m.scaler.is_none() && !no_warmup(&m.warmup))
+                {
+                    return Err(crate::model::damaged(
+                        "ftrl",
+                        "its saved feature scaler does not match its standardize setting",
                     ));
                 }
                 m.ensure_buffers();
@@ -955,6 +1075,7 @@ mod tests {
             min_weight: 10.0,
             strict_binary: false,
             loss: FtrlLoss::Logistic,
+            standardize: false,
         }
     }
 
@@ -1592,3 +1713,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "ftrl/standardize_tests.rs"]
+mod standardize_tests;

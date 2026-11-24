@@ -2421,6 +2421,7 @@ def ftrl(
     l2: float | None = None,
     strict_binary: bool = False,
     loss: Literal["logistic", "squared"] = "logistic",
+    standardize: bool = False,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Logistic regression for a 0/1 target, or a sparse linear regression, by FTRL-proximal.
@@ -2476,6 +2477,20 @@ def ftrl(
         differ in the link, and in how the target is read: ``"logistic"``
         clamps it into ``[0, 1]``, takes ``strict_binary`` and refuses a
         formula target. The gradient is ``(p - y) * z`` either way.
+    ``standardize``
+        Run the update on the features standardized against their running
+        moments, so that ``l1``, ``l2``, ``alpha`` and ``beta`` act on every
+        feature in units of its spread, and ``l1`` zeroes a coefficient
+        whose evidence in those units is below it. Each row is standardized
+        against the exponentially weighted (EW) moments with the row
+        admitted at one row's weight of the stream, as for :func:`sgd`:
+        ``z_i = (x_i - m_i) / s_i``, ``s_i = 1`` for a feature with no
+        spread yet, and without an intercept ``z_i = x_i / s_i``, ``s_i``
+        the column's root mean square. ``coef`` is read out in the
+        features' own units with the moments as they stand. Default
+        ``False``: the features as they stand, where a feature measured in
+        thousandths never clears an ``l1`` that one measured in thousands
+        clears with noise alone (*Standardizing* in Notes).
 
     ``min_weight`` counts the rows the target was present on, at their
     weights, decayed, where ``weight_sum`` counts every row. So rows with a
@@ -2699,12 +2714,27 @@ def ftrl(
     that sits at a level ``L`` carries it at ``L`` times its size. On the stream
     of ``crates/rheon-core/tests/held_values.rs``, with one of three features
     at ``L``, the squared loss's error is about ``0.018 * L``: 18.3 at 1,000 and
-    at -1,000, and 1.8e6 at 1e8, against 0.75 at 0.5. Standardize or z-score
-    such a feature before the bank, as `Scale a feature by its spread
+    at -1,000, and 1.8e6 at 1e8, against 0.75 at 0.5. Set ``standardize``, or
+    standardize or z-score such a feature before the bank, as `Scale a feature
+    by its spread
     <https://github.com/rheon-dev/rheon/blob/main/docs/how-to/scale-a-feature-by-its-spread.md>`_
-    shows. There is no ``standardize`` here because ``l1`` zeroes a coefficient
-    in the feature's own units: a scale inside the model would move which
-    coefficients it zeroes as the feature's spread moved.
+    shows.
+
+    **Standardizing.** ``l1`` zeroes a coefficient in the units it is learned
+    in, and the per-coefficient rate does not make the fit invariant to a
+    feature's scale. So on the features as they stand, the scale decides which
+    coefficients survive: a feature measured in thousandths has gradients a
+    thousandth the size of the same feature measured in units. Under
+    ``standardize`` the update of *The update* runs unchanged on
+    ``z = [1, z_1, ...]``, the row standardized, and the fit stays in those
+    coordinates, where ``l1`` acts. ``coef`` reads it out in the features' own
+    units with the moments as they stand: ``b_i = beta_i / s_i`` and the
+    intercept ``beta_0 - sum_i m_i b_i``, so a slope ``l1`` zeroes is 0 in
+    either. The fit is not moved to the features' own units once the moments
+    settle, as :func:`sgd`'s is, because ``l1`` would then act in those units
+    again. The cost is that under a finite half-life the moments keep moving,
+    and a prediction moves with them though no row was learned. Without a
+    half-life they settle, and the fit is FTRL on the standardized features.
     """
     model: dict[str, Any] = {
         "type": "ftrl",
@@ -2714,6 +2744,7 @@ def ftrl(
         "l2": l2,
         "strict_binary": strict_binary,
         "loss": loss,
+        "standardize": standardize,
     }
     return _common(name, model, targets=targets, features=features, **common)
 

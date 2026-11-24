@@ -329,8 +329,8 @@ the diagnostics
     orders them by the question each answers, with their thresholds,
     false-alarm rates, costs and the theory behind them, and a recipe for each.
 
-``standardize``, which eight models take, defaults to ``False`` in ``ewridge``,
-``huber`` and ``quantile``, and to ``True`` in ``kalman``, ``sgd``, ``pa``,
+``standardize``, which nine models take, defaults to ``False`` in ``ewridge``,
+``huber``, ``quantile`` and ``ftrl``, and to ``True`` in ``kalman``, ``sgd``, ``pa``,
 ``kmeans`` and ``micro``. Each builder says what it scales.
 
 .. rubric:: Clock units

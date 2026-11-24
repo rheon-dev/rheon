@@ -189,6 +189,18 @@ impl Warmup {
         }
     }
 
+    /// [`Self::read`] before the switch, on every row: the read of a fit that
+    /// is never held in the caller's units, `ftrl`'s under `standardize`,
+    /// whose `l1` acts in the standardized coordinates and so must stay in
+    /// them. The row is read at one row's weight, so `predict` (no weight)
+    /// reads what the step reads, and the history keeps `n / (n + 1)` of one
+    /// row's into it. Both stop moving at the switch, where the count stops.
+    pub(crate) fn read_in_moments(&self) -> (f64, f64) {
+        let one = self.row_weight();
+        let n = self.count();
+        (one, one * (n / (n + 1.0)))
+    }
+
     /// The scaler has learned a row at `weight`: counted, and `true` on the
     /// row that makes the switch. A row after the switch is not counted.
     pub(crate) fn learn(&mut self, weight: f64) -> bool {

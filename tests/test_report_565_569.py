@@ -20,7 +20,8 @@ held by a plain test that pins it, naming the doc that says so.
   windows, though a resumed input may not start at that stamp (confirmed).
 - PLAN 568: a null target counts in ``weight_sum`` but not in its own
   ``min_weight`` gate (documented, plain test).
-- PLAN 569: ``rp.spec.ftrl`` has no ``standardize`` (documented, plain test).
+- PLAN 569: ``rp.spec.ftrl`` had no ``standardize`` (documented); it takes one
+  now, off by default (plain test).
 """
 
 from __future__ import annotations
@@ -616,15 +617,12 @@ def test_a_null_target_counts_in_weight_sum_but_not_in_its_min_weight() -> None:
 # PLAN 569: standardize on the linear specs
 
 
-@pytest.mark.parametrize("kind", ["ftrl", "rls", "lasso", "expectile", "glm"])
+@pytest.mark.parametrize("kind", ["rls", "lasso", "expectile", "glm"])
 def test_the_specs_without_standardize_refuse_it_by_name(kind: str) -> None:
-    """PLAN 569, the documented behaviour for ``ftrl``: MODELS.md's table of
-    shared settings says "``ftrl`` never does" standardize, and its docstring
-    says why, under *Features at a level*: ``l1`` zeroes a coefficient in the
-    feature's own units, so a scale inside the model would move which
-    coefficients it zeroes. ``lasso`` always standardizes. ``rls``,
-    ``expectile`` and ``glm`` take no ``standardize`` either, which that
-    table does not say. ``ewridge``, ``huber``, ``quantile``, ``kalman``,
-    ``sgd`` and ``pa`` take it."""
+    """PLAN 569: ``lasso`` always standardizes, and ``rls``, ``expectile``
+    and ``glm`` take no ``standardize``, as MODELS.md's table of shared
+    settings says. ``ewridge``, ``huber``, ``quantile``, ``kalman``, ``sgd``,
+    ``pa`` and now ``ftrl`` take it (``ftrl``'s is held below and in
+    ``test_ftrl.py``)."""
     with pytest.raises(TypeError, match=f'{kind}\\(\\) takes no parameter "standardize"'):
         getattr(rp.spec, kind)("m", targets=["y"], features=["x"], standardize=True)

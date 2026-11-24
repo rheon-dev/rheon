@@ -429,6 +429,12 @@ pub enum ModelKind {
         /// "squared" (continuous targets, sparse linear regression).
         #[serde(default)]
         loss: Option<String>,
+        /// Run FTRL on the features standardized against their running
+        /// moments, so that `l1` zeroes a coefficient in units of its
+        /// feature's spread (docs/PLAN.md task 569). Default false: the
+        /// features as they stand, as `ewridge`'s.
+        #[serde(default)]
+        standardize: bool,
     },
     /// EW moments of the feature columns, no regression (docs/PLAN.md §4.7).
     /// `targets` is ignored; every column of interest goes in `features`.

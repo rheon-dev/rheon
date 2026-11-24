@@ -207,6 +207,22 @@ model that only the new build has is listed as an addition and passes.
   Off by default; off, a spec and a state file are written byte for byte as
   before, and no output moves. A learn mask is the `weight` column, as
   before: a row of weight 0 is scored and teaches nothing.
+- **`ftrl(standardize=True)`** (PLAN 569; off by default, so every output
+  and state of a spec without it is unchanged to the bit): the FTRL update
+  runs on the features standardized against their EW moments with the row
+  admitted, `sgd`'s scaler and unit of weight, so `l1`, `l2`, `alpha` and
+  `beta` act on each feature in units of its spread and `l1` zeroes a
+  coefficient by that evidence rather than by its units. The fit stays in
+  the standardized coordinates, where `l1` acts (it is not moved to the
+  caller's units after a warm-up, as `sgd`'s and `pa`'s are); `coef` reads
+  it out with the moments as they stand. Its state gains the scaler and
+  its warm-up count, written only when on (schema 72, unreleased; fixtures
+  `ftrl_standardized` and `ftrl_standardized_warming`): `2k + 1` doubles
+  of moments and three of count, about `24·k` bytes. Per row on arm64
+  (one thread, the model alone, min of 9, squared loss, half-life 100):
+  off 53/112/488 ns at k = 5/20/100 against the base's 51-56/111-113/487;
+  on 78/182/775 ns, 1.5-1.6 times off.
+
 - **`dcc`, dynamic conditional correlation fitted one row at a time** (task
   493, with task 514's recursion): the full correlation matrix of `k` return
   series, Engle's (2002) DCC or, with `asymmetric=True`, Cappiello, Engle
