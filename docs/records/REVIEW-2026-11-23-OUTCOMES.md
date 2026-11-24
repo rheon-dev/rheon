@@ -215,6 +215,17 @@ GARCH-1's line search. The kept `v71/` sets convert and continue as before.
 | GARCH-12 | confirmed (GJR at `α + γ = −4.1·10⁻¹⁵` and `e = −10⁸`: a variance of −38.7 reported; FIGARCH at `λ₁ = −9·10⁻¹³` and `e = 10⁹`: negative; the GJR t's `H` NaN; `project_metric` left GJR's `α` at `−1.6·10⁻¹⁴`), fixed: after each step's projection and at the start's fit, the bounds that keep each shock's weight at 0 or above are made exact (`series::exact`; GJR's as `γ ≥ −α`, whose sum rounds to an exact 0, EGARCH's box beside them), FIGARCH's weights are read at 0 or above, and a variance that is not a positive number is neither reported nor learned. Over three GJR series with `α = 0` the old build's steps kept the bounds (a pin, not evidence) | `review_tests.rs::garch_12_no_variance_at_or_below_zero_is_reported`, `::garch_12_the_shock_weights_bounds_are_made_exact`, `::garch_12_a_step_keeps_every_shock_weight_at_zero_or_above` | 7d41ce7c |
 | BANK-10 | (1) confirmed (a broken bank given a clock of another type: `fit_predict_arrow` and `predict_arrow` named the clock, `fit_predict` and `predict` the break), fixed: both ask first, and the Python binding asks before it converts the frame. (2) confirmed, fixed: `Garch::next` and `warning` are `#[serde(skip)]`, as every other model's are; the layout loses two keys at schema 72 (unreleased), the current fixtures regenerated, the `v71/` sets converting to them | `tests/test_exception_types.py::test_a_broken_bank_refuses_every_entry_point_before_it_reads_the_chunk`, `crates/rheon-polars/tests/arrow_chunk.rs::a_broken_bank_says_so_first_at_the_arrow_entry_points` | 7d41ce7c |
 
+Per-row cost (arm64, release build of the library's tests, one series
+after its 2,000-row start, 50,000 rows, best of seven, 51671e2e then this
+branch, load 4.6 to 8): `garch` 316.5 / 315.0 ns, `gjr` 346.8 / 350.5,
+`egarch` 562.8 / 568.4, `figarch` (1,000 lags) 2,766.6 / 2,803.4, `garch`
+t 397.8 / 399.4, skewed t 511.8 / 506.2: within 1.3% either way, the
+spread of such runs. The row adds the exact bounds' few comparisons after
+each step, a test of the variance's sign, and for FIGARCH a `max` a lag;
+the exact projection and the guard's new cut run only on the rare rows
+that need them. Not timed on x86-64. State: two keys fewer a `garch`
+(15 bytes).
+
 W12's mutants (the coordinator, 2026-11-24): five survivors of CI's
 changed-lines pass in `optim.rs`'s `maximize` (`/` → `*` in the step's
 scale, `+` → `*` in the rounding floor, `>` → `>=` at the floor, `+` → `-`
