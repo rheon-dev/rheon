@@ -2,7 +2,10 @@
 quantiles over a stream's clock, looking back or ahead, a variance and a
 standard deviation looking back, and the largest and smallest value of a
 window, or since an event. ``increment``, the step of a running total,
-gives a window operator an input.
+gives a window operator an input. ``run_length`` counts the rows a value has
+held, and ``clock_lag`` and ``clock_drift`` read the lag between an event's
+time and its arrival, and how fast it grows: a stream's health, read as
+columns.
 
 Each operator returns a ``pl.Expr`` that composes with Polars' own
 expressions, in which ``pl.col`` reads the current row.
@@ -92,6 +95,15 @@ half_life)``:
      - ``x_i - x_{i-1}`` within the group and session, null on a session's
        first row, and in seconds on a temporal column
      - the row before it
+   * - :func:`run_length`
+     - the rows, ending at this one, whose value is unchanged from the row
+       before: each row's place in its run, a run of nulls a run of its own
+     - Polars' ``rle``
+   * - :func:`clock_lag`, :func:`clock_drift`
+     - with ``d_i = a_i - e_i`` the lag of the arrival time behind the event
+       time and ``w_i = lam**(tau_t - tau_i)``, the weighted mean of ``d``,
+       and the weighted least-squares slope of ``d`` on ``a``
+     - numpy's weighted mean, and statsmodels' ``WLS`` under the same weights
 
 **Which rows a window holds follows Polars' rolling windows**
 (``rolling_*_by``). A window is a set of timestamps, and ``closed`` says
@@ -243,7 +255,7 @@ import polars as pl
 
 from rheon._errors import RefusedValueError
 from rheon._renamed import renamed_function
-from rheon.polars._formula import moments_operator, operator, profile
+from rheon.polars._formula import moments_operator, operator, profile, row_operator
 
 if TYPE_CHECKING:
     from rheon._duration import Duration
@@ -265,6 +277,9 @@ __all__ = [
     "increment",
     "rolling_max",
     "rolling_min",
+    "run_length",
+    "clock_lag",
+    "clock_drift",
 ]
 
 
@@ -2664,3 +2679,243 @@ def ewm_profile(
         bias=bias,
         max_state_bytes=max_state_bytes,
     )
+
+
+def run_length(input: str | pl.Expr, *, tol: float = 0.0) -> pl.Expr:
+    """The rows, ending at each row, whose value is unchanged: how long a
+    value has held.
+
+    Use it to find a frozen feed: a sensor holding its last reading, or a
+    countdown stopped at one value, shows as a run that keeps growing.
+
+    .. rubric:: Parameters
+
+    ``input``
+        The value: a column name, or an element-wise expression of the row.
+        It may hold no operator.
+    ``tol``
+        The largest difference two adjacent rows of one run may have. The
+        default, 0, asks for values exactly equal.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as
+    a column: on each row its place in its run, so the last row of a run
+    gives the run's whole length. It is a float, and is never null.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        ``input`` is neither a column name nor a ``pl.Expr``, or ``tol`` is
+        not a number.
+    ``ValueError``
+        ``tol`` is negative, NaN or infinite, or ``input`` holds an operator,
+        a part that is not element-wise, or a column whose name starts with
+        ``@po:``, the prefix the operators' own columns carry.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        rows = pl.DataFrame({"x": [1.0, 1.0, None, None, 1.0, 0.0, -0.0, 2.0]})
+        out = rp.stream.with_windows(rows, n=rp.run_length("x"))
+        print(out["n"].to_list())   # 0.0 and -0.0 are one value; two nulls are one run
+
+    .. code-block:: text
+
+        [1.0, 2.0, 1.0, 2.0, 1.0, 1.0, 2.0, 1.0]
+
+    .. rubric:: See also
+
+    - :func:`increment`, the step from the last value, which is 0 inside a
+      run under the default ``tol``.
+    - :func:`rheon.polars.stream.with_windows`, which computes the
+      operators over a stream.
+
+    .. rubric:: Notes
+
+    Row *t*'s value is the largest ``n`` such that each of rows ``t - n + 1``
+    to ``t`` is the same value as the row before it: that is Polars'
+    ``rle``, the run lengths, read row by row. Two numbers are the same when
+    ``abs(x_t - x_{t-1}) <= tol``, compared with ``==`` under the default, so
+    ``0.0`` and ``-0.0`` are one value, as ``rle`` has them. Each row is
+    compared with the row before it, so under a positive ``tol`` a run can
+    creep, each step within ``tol`` and its ends further apart.
+
+    A null is a value of its own, as in ``rle``: rows of null are one run,
+    and a null next to a number ends the run on both sides, so ``[3, null,
+    3]`` gives ``[1, 1, 1]``. A NaN, an infinity or a value beyond 1e100 in
+    magnitude is read as missing, as every operator reads it, so it is a null
+    here: it joins a run of nulls, where ``rle`` makes a run of NaN apart.
+
+    The run is a group's own, and starts again at a new session and where the
+    clock steps back past ``restart_after_step_back``, as an
+    :func:`increment` does. A gap past ``gap_cap`` leaves it as it is, since
+    a value held across a gap is still held. An integer column is compared
+    whole, so two neighbors past ``2**53`` stay two values, and a temporal
+    one in nanoseconds, with ``tol`` in seconds.
+    """
+    return row_operator("run_length", input, tol=tol)
+
+
+def clock_lag(
+    arrival: str | pl.Expr,
+    event: str | pl.Expr,
+    *,
+    half_life: float | Duration,
+) -> pl.Expr:
+    """The decayed mean lag of each row's arrival behind its event: how late
+    the rows arrive.
+
+    Use it where each row carries two times, such as an exchange's stamp
+    and the time a feed delivered it, and the lag between them says how
+    fresh the stream is. :func:`clock_drift` gives how fast the lag grows.
+
+    .. rubric:: Parameters
+
+    ``arrival``
+        The time each row arrived: a column name, or an element-wise
+        expression of the row. It may hold no operator.
+    ``event``
+        The time each row's event happened, in the same form. Both are
+        temporal, or both are numbers in one unit.
+    ``half_life``
+        How fast a row's weight halves on the stream's clock, in clock
+        units: a number, or a duration such as ``"5m"`` on a temporal
+        clock. ``float("inf")`` weighs every row the same.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as
+    a column: ``sum w_i d_i / sum w_i`` over the rows of the stretch up to
+    and including this one, with ``d_i = arrival_i - event_i`` and ``w_i =
+    2 ** (-(tau_t - tau_i) / half_life)``. It is a float, in seconds where
+    the times are temporal, and null until a row has both times.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        ``arrival`` or ``event`` is neither a column name nor a ``pl.Expr``,
+        or ``half_life`` is not given.
+    ``ValueError``
+        ``half_life`` is not above 0, or ``arrival`` or ``event`` holds an
+        operator, a part that is not element-wise, or a column whose name
+        starts with ``@po:``.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "e": [-0.5, 0.0, 0.5, 1.0]})
+        out = rp.stream.with_windows(
+            rows, lag=rp.clock_lag("t", "e", half_life=float("inf")), clock="t", gap_cap=10.0
+        )
+        print(out["lag"].to_list())   # the lag grows by 0.5 a row: 0.5, 1, 1.5, 2
+
+    .. code-block:: text
+
+        [0.5, 0.75, 1.0, 1.25]
+
+    .. rubric:: See also
+
+    - :func:`clock_drift`, the lag's slope on the arrival time.
+    - :func:`ewm_mean`, a time-weighted mean over a window, where this is a
+      mean of each row counted once.
+
+    .. rubric:: Notes
+
+    The weights decay on the stream's clock, the ``clock`` of
+    :func:`rheon.polars.stream.with_windows`, one unit a row without one. A
+    row missing either time, null, NaN, infinite or beyond 1e100, learns
+    nothing, and gives the mean as it stands. The sums are a group's own and
+    start again at a clock break (a gap past ``gap_cap`` or a session change)
+    and where the clock steps back past ``restart_after_step_back``.
+    Two temporal times are subtracted in nanoseconds, exactly, before they
+    become seconds.
+    """
+    return row_operator("clock_lag", arrival, event=event, half_life=half_life)
+
+
+def clock_drift(
+    arrival: str | pl.Expr,
+    event: str | pl.Expr,
+    *,
+    half_life: float | Duration,
+) -> pl.Expr:
+    """The decayed slope of the lag of each row's arrival behind its event,
+    on the arrival time: how fast the stream falls behind.
+
+    Use it beside :func:`clock_lag` to tell a feed that is late by a steady
+    amount from one whose lag grows, such as a consumer slower than its
+    producer, or two clocks that drift apart.
+
+    .. rubric:: Parameters
+
+    ``arrival``
+        The time each row arrived: a column name, or an element-wise
+        expression of the row. It may hold no operator.
+    ``event``
+        The time each row's event happened, in the same form. Both are
+        temporal, or both are numbers in one unit.
+    ``half_life``
+        How fast a row's weight halves on the stream's clock, in clock
+        units: a number, or a duration such as ``"5m"`` on a temporal
+        clock. ``float("inf")`` weighs every row the same.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as
+    a column: the weighted least-squares slope of ``d_i = arrival_i -
+    event_i`` on ``arrival_i`` over the rows of the stretch up to and
+    including this one, each weighing ``w_i = 2 ** (-(tau_t - tau_i) /
+    half_life)``. It is a float: seconds of lag a second of arrival where
+    the times are temporal, so 0.001 is a lag that grows a millisecond a
+    second. It is null while the rows with both times all arrived at one
+    time, a single row included, since no slope is defined there.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        ``arrival`` or ``event`` is neither a column name nor a ``pl.Expr``,
+        or ``half_life`` is not given.
+    ``ValueError``
+        ``half_life`` is not above 0, or ``arrival`` or ``event`` holds an
+        operator, a part that is not element-wise, or a column whose name
+        starts with ``@po:``.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "e": [-0.5, 0.0, 0.5, 1.0]})
+        out = rp.stream.with_windows(
+            rows, drift=rp.clock_drift("t", "e", half_life=float("inf")), clock="t", gap_cap=10.0
+        )
+        print(out["drift"].to_list())   # the lag grows half a unit a unit of arrival
+
+    .. code-block:: text
+
+        [None, 0.5, 0.5, 0.5]
+
+    .. rubric:: See also
+
+    - :func:`clock_lag`, the lag's decayed mean.
+
+    .. rubric:: Notes
+
+    With ``W = sum w_i``, ``a_bar`` and ``d_bar`` the weighted means, the
+    slope is ``sum w_i (a_i - a_bar)(d_i - d_bar) / sum w_i (a_i -
+    a_bar) ** 2``. The two sums are kept about their running means, never
+    as a mean square less a squared mean, which cancels where the times are
+    far from 0 next to their spread, and the arrivals are measured from the
+    stretch's first one, in nanoseconds where they are temporal. So the
+    denominator is 0 exactly while every arrival is one time, and the slope
+    is null there on the data's own condition, after no fixed count of rows.
+
+    The weights decay on the stream's clock, one unit a row without one. A
+    row missing either time learns nothing and gives the slope as it stands.
+    The sums are a group's own and start again at a clock break (a gap past
+    ``gap_cap`` or a session change) and where the clock steps back past
+    ``restart_after_step_back``.
+    """
+    return row_operator("clock_drift", arrival, event=event, half_life=half_life)

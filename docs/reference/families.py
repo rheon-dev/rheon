@@ -165,6 +165,9 @@ FAMILIES: tuple[Family, ...] = (
                 "cross_rank",
                 "cross_quantile",
                 "cross_ref",
+                "run_length",
+                "clock_lag",
+                "clock_drift",
             )
         ),
     ),

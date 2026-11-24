@@ -45,7 +45,8 @@ from rheon._rheon import parse_duration
 # would break formulas saved by 1.x.
 PREFIX = "@po:"
 
-#: The window operators, and the one that reads one row back.
+#: The window operators, and the row operators, computed a row at a time
+#: from the group's previous rows (task 564 adds the last three).
 OPERATORS = (
     "ewm_mean",
     "rewm_mean",
@@ -69,11 +70,21 @@ OPERATORS = (
     "cross_quantile",
     "cross_ref",
     "ewm_profile",
+    "run_length",
+    "clock_lag",
+    "clock_drift",
 )
 
 #: The cross-group operators: a statistic over every group's row at one
 #: stamp of the clock, with no kernel of their own.
 CROSS = ("cross_mean", "cross_std", "cross_rank", "cross_quantile", "cross_ref")
+
+#: The row operators: no window, each read off its group's previous rows.
+ROW_OPERATORS = ("increment", "run_length", "clock_lag", "clock_drift")
+
+#: The row operators that read two times, an arrival (their input) and an
+#: event (a parameter).
+CLOCKS = ("clock_lag", "clock_drift")
 
 #: The operators that take ``bias``: a variance's own (task 212).
 VARIANCES = ("ewm_var", "ewm_std")
@@ -392,7 +403,7 @@ def operators(tree: Any) -> list[list[Any]]:
             out.append(node)
             walk(node[1])
             if len(node) > 2 and isinstance(node[2], dict):
-                for key in ("weight", "where"):
+                for key in ("weight", "where", "event"):
                     if key in node[2]:
                         walk(node[2][key])
         elif head not in ("col", "lit"):
@@ -424,7 +435,7 @@ def columns(tree: Any) -> list[str]:
         elif head in OPERATORS:
             walk(node[1])
             if len(node) > 2 and isinstance(node[2], dict):
-                for key in ("weight", "where", "since"):
+                for key in ("weight", "where", "since", "event"):
                     if key in node[2]:
                         walk(node[2][key])
                 if node[2].get("neighbors") is not None and node[2]["neighbors"] not in out:
@@ -1239,3 +1250,77 @@ def _offset(who: str, value: Any) -> float | str:
         f"{who}: offset must be a number or a duration, but it is of type "
         f'{type(value).__name__}. Give it in clock units, or as a duration such as "9h30m".'
     )
+
+
+def _row_input(who: str, key: str, value: Any) -> list[Any]:
+    """A row operator's input (task 564): a column name, or an element-wise
+    expression of the row holding no operator at all."""
+    if isinstance(value, str):
+        if value.startswith(PREFIX):
+            raise _reserved(who, value)
+        return ["col", value]
+    if isinstance(value, pl.Expr):
+        tree = to_tree(value, who)
+        inner = operators(tree)
+        if inner:
+            raise ValueError(
+                f"{who}: {key} holds the operator {inner[0][0]}, but it may hold only columns "
+                f'and Polars expressions of the same row (a column computation, such as pl.col("x")'
+                f" + 1). Add the inner operator's result as a column with one "
+                f"rp.stream.with_windows call first, and pass that column to a second."
+            )
+        return tree
+    raise TypeError(
+        f"{who}: {key} must be a column name or a pl.Expr, but it is of type "
+        f'{type(value).__name__}. Pass a column name or an expression, such as pl.col("x").'
+    )
+
+
+def row_operator(
+    name: str,
+    input: Any,
+    *,
+    tol: Any = 0.0,
+    event: Any = None,
+    half_life: Any = None,
+) -> pl.Expr:
+    """The expression of the row operator ``name`` (task 564): a run length
+    over ``input`` with ``tol``, or a clock lag or drift of ``input``, the
+    arrival time, against ``event``, decayed across ``half_life``. Checked
+    here, so a wrong value names its parameter."""
+    who = f"rp.{name}"
+    if name == "run_length":
+        tree = _row_input(who, "input", input)
+        if isinstance(tol, bool) or not isinstance(tol, numbers.Real):
+            raise TypeError(
+                f"{who}: tol must be a number, but it is of type {type(tol).__name__}. Set tol "
+                f"to 0 for values exactly equal, or to the largest difference two adjacent rows "
+                f"of one run may have."
+            )
+        t = float(tol)
+        if not (math.isfinite(t) and t >= 0.0):
+            raise ValueError(
+                f"{who}: tol must be finite and at least 0, but it is {tol!r}. Set tol to 0 for "
+                f"values exactly equal, or to the largest difference two adjacent rows of one "
+                f"run may have."
+            )
+        # A run under the default tolerance carries no parameters, so one
+        # run asked for twice is one column whichever way it was written.
+        return operator_column(
+            ["run_length", tree] if t == 0.0 else ["run_length", tree, {"tol": t}]
+        )
+    assert name in CLOCKS, name
+    arrival = _row_input(who, "arrival", input)
+    if event is None:
+        raise TypeError(
+            f"{who}: event is required, but it is not given. Give event as the column of each "
+            f"row's event time."
+        )
+    happened = _row_input(who, "event", event)
+    if half_life is None:
+        raise TypeError(
+            f"{who}: half_life is required, but it is not given. Give half_life in clock units, "
+            f"or inf for no decay."
+        )
+    params = {"event": happened, "half_life": _span(who, "half_life", half_life, inf_ok=True)}
+    return operator_column([name, arrival, params])

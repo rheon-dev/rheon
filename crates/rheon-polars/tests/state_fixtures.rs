@@ -537,6 +537,25 @@ fn windows_extrema_config() -> WindowsConfig {
     .unwrap()
 }
 
+/// The row operators of task 564 (windows state 14): a run length exact
+/// and under a `tol`, a clock lag and drift whose sums are open across the
+/// save, beside an increment and a window looking ahead, so rows are held.
+/// The arrival is the clock, and the event a lag behind it that moves.
+fn windows_rows_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "held", "tree": ["run_length", [">", ["col", "mid"], ["lit", 100.0]]]},
+               {"name": "near", "tree": ["run_length", ["col", "mid"], {"tol": 0.5}]},
+               {"name": "lag", "tree": ["clock_lag", ["col", "t"], {"event": ["-", ["col", "t"], ["*", ["abs", ["col", "mid"]], ["lit", 0.001]]], "half_life": 5.0}]},
+               {"name": "drift", "tree": ["clock_drift", ["col", "t"], {"event": ["-", ["col", "t"], ["*", ["abs", ["col", "mid"]], ["lit", 0.001]]], "half_life": 5.0}]},
+               {"name": "step", "tree": ["increment", ["col", "mid"]]},
+               {"name": "ahead", "tree": ["rewm_mean", ["col", "mid"], {"half_life": 5.0, "window_size": 10.0}]}
+             ],
+             "clock": "t", "gap_cap": 50.0}"#,
+    )
+    .unwrap()
+}
+
 /// The same two means on the `Int64` clock, under a fractional `gap_cap`,
 /// and an `increment` of an integer input (task 200; review round 5, B1):
 /// the rows' `off` in the integer form, and the increment's previous value
@@ -1563,6 +1582,14 @@ fn windows_extrema_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_extrema_config(), bytes, input)
 }
 
+fn windows_rows_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_rows_config(), window_input(&frame()))
+}
+
+fn windows_rows_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_rows_config(), bytes, input)
+}
+
 fn windows_int_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_int_config(), window_int_input(&frame()))
 }
@@ -2309,6 +2336,11 @@ fn kinds() -> Vec<Kind> {
             run: windows_extrema_run,
         },
         Kind {
+            name: "with_windows_rows",
+            first: windows_rows_first,
+            run: windows_rows_run,
+        },
+        Kind {
             name: "refresh_time",
             first: refresh_first,
             run: refresh_run,
@@ -2765,7 +2797,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
         } else if name.starts_with("merge") {
             ("merge", 1)
         } else if name.starts_with("with_windows") {
-            ("windows", 13)
+            ("windows", 14)
         } else {
             ("bank", u64::from(SCHEMA_VERSION))
         }
@@ -2790,7 +2822,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             ("checkpoint", 1),
             ("merge", 3),
             ("refresh_time", 5),
-            ("windows", 7)
+            ("windows", 8)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
@@ -2799,7 +2831,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     let stages = load_checkpoint(&unhex(f.state)).unwrap();
     for (s, (kind, version)) in stages.iter().zip([
         ("refresh_time", 3),
-        ("windows", 13),
+        ("windows", 14),
         ("bank", 72),
         ("merge", 1),
     ]) {
@@ -4001,6 +4033,30 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             "an operator's max_state_bytes",
             |p, v| p.ends_with(".max_state_bytes") && v.as_u64() == Some(1_000_000),
         ),
+        // Windows state 14 (task 564): a group's row operators' states, a
+        // run length's run past its first row and its tolerance, a drift's
+        // sums with a spread and the arrival they are centred on, and an
+        // increment's place beside them.
+        ("with_windows_rows", "a run length's run", |p, v| {
+            p.contains(".rows.") && p.ends_with(".Run.n") && v.as_u64().is_some_and(|n| n > 1)
+        }),
+        ("with_windows_rows", "a run length's tol", |p, v| {
+            p.ends_with(".Run.tol") && v.as_f64() == Some(0.5)
+        }),
+        ("with_windows_rows", "a run length's last value", |p, _| {
+            p.contains(".Run.last.Float")
+        }),
+        ("with_windows_rows", "a drift's sums", |p, v| {
+            p.contains(".Drift.sums.")
+                && p.ends_with(".c_aa")
+                && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        ("with_windows_rows", "a drift's origin", |p, _| {
+            p.contains(".Drift.origin.Float")
+        }),
+        ("with_windows_rows", "an increment's place", |p, v| {
+            p.contains(".rows.") && v.as_str() == Some("Step")
+        }),
         // PLAN 541: a merge's state, in each form it takes -- an input's
         // last clock as a float and as an integer (a temporal clock's
         // physical one) and none, the rows held at a tie, an input started

@@ -91,7 +91,7 @@ impl Gap {
 /// `now` minus `last` in clock units: between two temporal values, taken
 /// in integer nanoseconds and rounded once; between two integer ones, in
 /// integers and rounded once (task 200).
-pub(super) fn elapsed(now: ClockValue, last: ClockValue) -> f64 {
+pub(crate) fn elapsed(now: ClockValue, last: ClockValue) -> f64 {
     match (now, last) {
         (ClockValue::Ns(c), ClockValue::Ns(p)) => seconds_of_ns(i128::from(c) - i128::from(p)),
         (ClockValue::I64(c), ClockValue::I64(p)) => int_step_f64(c, p),
@@ -129,7 +129,7 @@ pub(super) fn is_after(now: ClockValue, last: ClockValue) -> bool {
 /// integer clock their difference in integers against the cap, exactly
 /// (task 200), and as [`elapsed`] gives it otherwise.
 #[inline]
-pub(super) fn past_cap(now: ClockValue, last: ClockValue, cap: f64) -> bool {
+pub(crate) fn past_cap(now: ClockValue, last: ClockValue, cap: f64) -> bool {
     match (now, last) {
         // Between two temporal values, a step short of the cap's whole
         // seconds is not past it, as the integers say, with no conversion to

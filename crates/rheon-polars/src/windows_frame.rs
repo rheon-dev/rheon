@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Cursor;
 
 use polars::prelude::*;
-use rheon_core::{ClockCfg, ClockValue, SessionGap};
+use rheon_core::{ClockCfg, ClockDrift, ClockValue, RunLength, RunValue, SessionGap};
 use serde::{Deserialize, Serialize};
 
 use crate::arrow::{NanosRole, fits_64, key_text, nanos_array, wide_integer_clock};
@@ -105,6 +105,11 @@ const WINDOWS_KIND: &str = crate::envelope::Kind::Windows.tag();
 /// The magic a state began with before the envelope, version 11 and
 /// earlier.
 const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
+/// 14 since task 564: a group's increments' state may keep a run length's
+/// run or a clock drift's sums (`rows`), written only where there is a
+/// `run_length`, `clock_lag` or `clock_drift`, so a version-13 state is a
+/// version-14 state without one and loads as one; an older build refuses a
+/// 14 by its number rather than at the operator's name;
 /// 13 since task 561: a kernel may keep a `since` event (`since`), a queue
 /// its extrema (`ext`) and its last event's stamp (`since_off`), and an
 /// operator its `max_state_bytes`, each written only where there is an
@@ -143,7 +148,7 @@ const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
 /// task 143: formulas over operators, where 1 held descriptions. An older
 /// state would load with defaults and misbehave. The bank's schema moves
 /// with this number (review R4, A2; R6, D5).
-const WINDOWS_VERSION: u32 = 13;
+const WINDOWS_VERSION: u32 = 14;
 
 /// The last version written before the envelope.
 const LAST_LEGACY_VERSION: u32 = 11;
@@ -233,6 +238,113 @@ struct IncrState {
     prev_int: Vec<Option<i128>>,
     session: Option<u64>,
     clock: Option<ClockValue>,
+    /// Per row operator, where any is not an increment (task 564): a run
+    /// length's run, or a clock drift's sums and the arrival they are
+    /// centred on; empty where every row operator is an increment, and
+    /// then not written, so such a state keeps its bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    rows: Vec<RowState>,
+}
+
+/// A row operator's own state in a group (task 564), beside an increment's
+/// previous value, which [`IncrState`] keeps for every row operator.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+enum RowState {
+    /// An increment's: its previous value is in [`IncrState`].
+    Step,
+    /// A run length's run.
+    Run(RunLength),
+    /// A clock lag's or drift's sums, and the arrival they are centred on:
+    /// the first arrival taken since the sums last started.
+    Drift {
+        sums: ClockDrift,
+        origin: Option<RunValue>,
+    },
+}
+
+impl RowState {
+    fn of(op: &RowOp) -> Self {
+        match op.kind {
+            OpKind::RunLength => {
+                RowState::Run(RunLength::new(op.tol).expect("checked by the plan"))
+            }
+            OpKind::ClockLag | OpKind::ClockDrift => RowState::Drift {
+                sums: ClockDrift::new(op.half_life).expect("checked by the plan"),
+                origin: None,
+            },
+            _ => RowState::Step,
+        }
+    }
+
+    /// Start over at a new session or a reset; `gap` too at a gap past
+    /// `gap_cap`, which ends a drift's stretch as it ends a window's, and
+    /// leaves a run as it is.
+    fn restart(&mut self, gap: bool) {
+        match self {
+            RowState::Run(r) if !gap => r.restart(),
+            RowState::Drift { sums, origin } => {
+                sums.restart();
+                *origin = None;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A row operator of the plan: an increment, a run length, a clock lag or a
+/// clock drift (task 564), each computed one row at a time from its group's
+/// previous rows before the window core, as the hidden column `key`.
+#[derive(Debug, Clone, PartialEq)]
+struct RowOp {
+    key: String,
+    kind: OpKind,
+    /// The slot of its input: the value, or a drift's arrival time.
+    input: usize,
+    /// A drift's event time's slot.
+    event: Option<usize>,
+    /// A run length's tolerance in the units the input is read in, a
+    /// temporal input's in nanoseconds.
+    tol: f64,
+    /// A drift's half-life, in policy-clock units.
+    half_life: f64,
+}
+
+/// A row value as a run reads it, from slot `i` of `inputs` at row `r`: an
+/// integer or temporal input whole, a number that is not [`usable`] missing.
+fn row_value(inputs: &IncrInputs, i: usize, r: usize) -> RunValue {
+    if let Some(v) = &inputs.integer[i] {
+        return v[r].map_or(RunValue::Missing, RunValue::Int);
+    }
+    if let Some(v) = &inputs.numeric[i] {
+        return match v[r] {
+            Some(x) if usable(x) => RunValue::Float(x),
+            _ => RunValue::Missing,
+        };
+    }
+    if let Some(v) = &inputs.temporal[i] {
+        return v[r].map_or(RunValue::Missing, |ns| RunValue::Int(i128::from(ns)));
+    }
+    RunValue::Missing
+}
+
+/// `a − b` in the units a drift reports: two integers in integers and two
+/// temporal values in nanoseconds, each rounded once (seconds for the
+/// second); a double's difference as it is. `None` where either is missing.
+fn value_step(a: RunValue, b: RunValue, temporal: bool) -> Option<f64> {
+    match (a, b) {
+        (RunValue::Int(x), RunValue::Int(y)) if temporal => Some(rheon_core::seconds_of_ns(x - y)),
+        (RunValue::Int(x), RunValue::Int(y)) => Some(integer_step(x, y)),
+        (RunValue::Missing, _) | (_, RunValue::Missing) => None,
+        (x, y) => Some(as_f64(x) - as_f64(y)),
+    }
+}
+
+fn as_f64(v: RunValue) -> f64 {
+    match v {
+        RunValue::Int(i) => i as f64,
+        RunValue::Float(x) => x,
+        RunValue::Missing => f64::NAN,
+    }
 }
 
 /// The increments' state of a run, borrowed: a run's own, or a copy of it
@@ -304,12 +416,14 @@ pub struct Given {
     incr: Option<IncrInputs>,
 }
 
-/// One value an increment's step reads, per row of `keys`: `x_i - x_{i-1}`
-/// within each key's session, moving `track` as it goes.
+/// One value a row operator gives, per row of `keys`: an increment's
+/// `x_i - x_{i-1}` within each key's session, a run length's run and a
+/// clock drift's lag or slope (task 564), moving `track` as it goes.
+#[allow(clippy::too_many_lines)]
 fn step_increments(
     track: IncrTrack<'_>,
-    width: usize,
-    (restart, restarts): (f64, bool),
+    (ops, slots): (&[RowOp], &[(Node, bool)]),
+    (restart, restarts, gap_cap): (f64, bool, f64),
     inputs: &IncrInputs,
     keys: &[Option<&str>],
     clock: &Option<Vec<ClockValue>>,
@@ -327,6 +441,9 @@ fn step_increments(
         numeric,
         temporal,
     } = inputs;
+    let width = ops.len();
+    // Only a run length or a drift keeps a state beyond the previous value.
+    let keeps_rows = ops.iter().any(|o| o.kind != OpKind::Increment);
     let mut out: Vec<Vec<Option<f64>>> = vec![Vec::with_capacity(*n); width];
     for r in 0..*n {
         let found = match keys[r] {
@@ -344,6 +461,11 @@ fn step_increments(
                     prev_int: vec![None; width],
                     session: None,
                     clock: None,
+                    rows: if keeps_rows {
+                        ops.iter().map(RowState::of).collect()
+                    } else {
+                        Vec::new()
+                    },
                 });
                 match keys[r] {
                     Some(k) => {
@@ -366,6 +488,7 @@ fn step_increments(
                 st.prev.iter_mut().for_each(|p| *p = f64::NAN);
                 st.prev_ns.iter_mut().for_each(|p| *p = None);
                 st.prev_int.iter_mut().for_each(|p| *p = None);
+                st.rows.iter_mut().for_each(|s| s.restart(false));
             }
         }
         *stream_clock = now_clock;
@@ -382,46 +505,90 @@ fn step_increments(
             st.prev.iter_mut().for_each(|p| *p = f64::NAN);
             st.prev_ns.iter_mut().for_each(|p| *p = None);
             st.prev_int.iter_mut().for_each(|p| *p = None);
+            st.rows.iter_mut().for_each(|s| s.restart(false));
+        }
+        // A drift's step of the policy clock since the group's last row,
+        // and its stretch's end at a gap past `gap_cap`, as a window's
+        // (task 564). On the row-count clock a row is one unit.
+        let (d_clock, gap) = match (now_clock, st.clock) {
+            (Some(now), Some(prev)) => (
+                crate::windows::elapsed(now, prev).max(0.0),
+                crate::windows::past_cap(now, prev, gap_cap),
+            ),
+            (Some(_), None) => (0.0, false),
+            (None, _) => (1.0, false),
+        };
+        if gap && !new_start {
+            st.rows.iter_mut().for_each(|s| s.restart(true));
         }
         st.session = now_session;
         st.clock = now_clock;
-        for i in 0..width {
+        for (j, op) in ops.iter().enumerate() {
+            let i = op.input;
+            if op.kind != OpKind::Increment {
+                let value = match &mut st.rows[j] {
+                    RowState::Run(run) => run.step(row_value(inputs, i, r), 1.0).map(|c| c as f64),
+                    RowState::Drift { sums, origin } => {
+                        let t = slots[i].1;
+                        let a = row_value(inputs, i, r);
+                        let e = row_value(inputs, op.event.expect("a drift's event"), r);
+                        match value_step(a, e, t) {
+                            Some(d) => {
+                                let o = *origin.get_or_insert(a);
+                                let ac = value_step(a, o, t).expect("both present");
+                                sums.step(d_clock, ac, d, 1.0);
+                            }
+                            // A row missing either time learns nothing, and
+                            // the clock still decays the sums (rule 9).
+                            None => sums.step(d_clock, 0.0, 0.0, 0.0),
+                        }
+                        if op.kind == OpKind::ClockLag {
+                            sums.lag()
+                        } else {
+                            sums.slope()
+                        }
+                    }
+                    RowState::Step => unreachable!("a row operator keeps its own state"),
+                };
+                out[j].push(value);
+                continue;
+            }
             if let Some(vals) = &integer[i] {
                 let v = vals[r];
-                out[i].push(match (v, st.prev_int[i]) {
+                out[j].push(match (v, st.prev_int[j]) {
                     (Some(c), Some(p)) => Some(integer_step(c, p)),
                     // A previous value a float input of another chunk left.
-                    (Some(c), None) if !st.prev[i].is_nan() => Some(c as f64 - st.prev[i]),
+                    (Some(c), None) if !st.prev[j].is_nan() => Some(c as f64 - st.prev[j]),
                     _ => None,
                 });
                 if let Some(c) = v {
-                    st.prev_int[i] = Some(c);
-                    st.prev[i] = c as f64;
+                    st.prev_int[j] = Some(c);
+                    st.prev[j] = c as f64;
                 }
             } else if let Some(vals) = &numeric[i] {
                 let v = match vals[r] {
                     Some(x) if usable(x) => x,
                     _ => f64::NAN,
                 };
-                out[i].push(if v.is_nan() || st.prev[i].is_nan() {
+                out[j].push(if v.is_nan() || st.prev[j].is_nan() {
                     None
                 } else {
-                    Some(v - st.prev[i])
+                    Some(v - st.prev[j])
                 });
                 if !v.is_nan() {
-                    st.prev[i] = v;
-                    st.prev_int[i] = None;
+                    st.prev[j] = v;
+                    st.prev_int[j] = None;
                 }
             } else if let Some(vals) = &temporal[i] {
                 let v = vals[r];
-                out[i].push(match (v, st.prev_ns[i]) {
+                out[j].push(match (v, st.prev_ns[j]) {
                     (Some(c), Some(p)) => {
                         Some(rheon_core::seconds_of_ns(i128::from(c) - i128::from(p)))
                     }
                     _ => None,
                 });
                 if v.is_some() {
-                    st.prev_ns[i] = v;
+                    st.prev_ns[j] = v;
                 }
             }
         }
@@ -493,9 +660,12 @@ struct Plan {
     /// increment), each formula's hidden column: named once here, since
     /// naming one writes the operator out as JSON.
     bare: Option<Vec<String>>,
-    /// Distinct increments: the hidden column, the input formula and whether
-    /// the input is temporal (an increment in seconds).
-    increments: Vec<(String, Node, bool)>,
+    /// Distinct row operators: increments, run lengths and clock drifts
+    /// (task 564), each with its hidden column.
+    increments: Vec<RowOp>,
+    /// The row operators' distinct inputs: the formula, and whether it is
+    /// temporal (an increment in seconds).
+    slots: Vec<(Node, bool)>,
     /// Every span a kernel reads, with its parameter's name, for the scale
     /// check.
     spans: Vec<(&'static str, Span)>,
@@ -530,6 +700,43 @@ fn dtypes_of(schema: &Schema, exprs: Vec<Expr>) -> Result<Schema, String> {
         .collect_schema()
         .map(|s| s.as_ref().clone())
         .map_err(|e| e.to_string())
+}
+
+/// The slot of a row operator's input `node` among `slots`, added where it
+/// is new: its dtype must be a number or temporal, and `what` names it in a
+/// refusal.
+fn slot_of(
+    slots: &mut Vec<(Node, bool)>,
+    input: &Schema,
+    name: &str,
+    what: &str,
+    node: &Node,
+) -> Result<usize, Refused> {
+    if let Some(i) = slots.iter().position(|(n, _)| n == node) {
+        return Ok(i);
+    }
+    let dtype =
+        dtypes_of(input, vec![node.to_expr(&|_| unreachable!()).alias("@t")]).map_err(|e| {
+            format!(
+                "{WHO}: {name}: Polars cannot compute {what} ({e}). Check that the input reads \
+                 columns of the right type."
+            )
+        })?;
+    let dtype = dtype.get("@t").expect("aliased").clone();
+    let temporal = dtype.is_temporal();
+    if !(numeric(&dtype) || temporal) {
+        // "the increment's input" is "an increment's input" here, as it was.
+        let what = what
+            .strip_prefix("the increment's")
+            .map_or_else(|| what.to_string(), |rest| format!("an increment's{rest}"));
+        return Err(Refused::wrong_type(format!(
+            "{WHO}: {name}: {what} must be a number or a temporal column, but it is {}. Cast \
+             the input to a number, such as with .cast(pl.Float64).",
+            crate::arrow::dtype_name(&dtype)
+        )));
+    }
+    slots.push((node.clone(), temporal));
+    Ok(slots.len() - 1)
 }
 
 fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
@@ -619,6 +826,7 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         columns: Vec::new(),
         bare: None,
         increments: Vec::new(),
+        slots: Vec::new(),
         spans: Vec::new(),
         cross: Vec::new(),
         cross_columns: Vec::new(),
@@ -627,14 +835,14 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         profiles: Vec::new(),
         profile_columns: Vec::new(),
     };
-    // Increments first: an operator's input may read them.
+    // Row operators first: an operator's input may read an increment.
     for f in &config.formulas {
         for op in f.tree.operators() {
-            if op.kind != OpKind::Increment {
+            if !op.kind.is_row() {
                 continue;
             }
             let key = hidden(op);
-            if p.increments.iter().any(|(k, _, _)| *k == key) {
+            if p.increments.iter().any(|r| r.key == key) {
                 continue;
             }
             if op
@@ -652,34 +860,57 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                 )
                 .into());
             }
-            let dtype = dtypes_of(
-                input,
-                vec![op.input.to_expr(&|_| unreachable!()).alias("@t")],
-            )
-            .map_err(|e| {
-                format!(
-                    "{WHO}: {}: Polars cannot compute the increment's input ({e}). Check that \
-                     the input reads columns of the right type.",
-                    f.name
-                )
-            })?;
-            let dtype = dtype.get("@t").expect("aliased").clone();
-            let temporal = dtype.is_temporal();
-            if !(numeric(&dtype) || temporal) {
-                return Err(Refused::wrong_type(format!(
-                    "{WHO}: {}: an increment's input must be a number or a temporal column, but \
-                     it is {}. Cast the input to a number, such as with .cast(pl.Float64).",
-                    f.name,
-                    crate::arrow::dtype_name(&dtype)
-                )));
-            }
-            p.increments.push((key, (*op.input).clone(), temporal));
+            let what = match op.kind {
+                OpKind::Increment => "the increment's input",
+                OpKind::RunLength => "the run length's input",
+                _ => "the arrival time",
+            };
+            let input_slot = slot_of(&mut p.slots, input, &f.name, what, &op.input)?;
+            let event = match &op.event {
+                Some(e) => {
+                    let ei = slot_of(&mut p.slots, input, &f.name, "the event time", e)?;
+                    if p.slots[ei].1 != p.slots[input_slot].1 {
+                        return Err(format!(
+                            "{WHO}: {}: {}: the arrival time and the event time must both be \
+                             temporal or both be numbers, but one is temporal and the other is \
+                             not. Give both as Datetime columns, or both as numbers in one unit.",
+                            f.name,
+                            op.kind.name()
+                        )
+                        .into());
+                    }
+                    Some(ei)
+                }
+                None => None,
+            };
+            let half_life = match &op.half_life {
+                Some(h) => {
+                    p.spans.push(("half_life", h.clone()));
+                    h.value()
+                }
+                None => f64::INFINITY,
+            };
+            // A temporal input's run compares nanoseconds, so its `tol`,
+            // given in seconds, is read in them.
+            let tol = if p.slots[input_slot].1 {
+                op.tol * 1e9
+            } else {
+                op.tol
+            };
+            p.increments.push(RowOp {
+                key,
+                kind: op.kind,
+                input: input_slot,
+                event,
+                tol,
+                half_life,
+            });
         }
     }
     let incr_schema = {
         let mut s = input.clone();
-        for (k, _, _) in &p.increments {
-            s.insert(k.as_str().into(), DataType::Float64);
+        for r in &p.increments {
+            s.insert(r.key.as_str().into(), DataType::Float64);
         }
         s
     };
@@ -710,7 +941,7 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
     };
     for f in &config.formulas {
         for op in f.tree.operators() {
-            if op.kind == OpKind::Increment {
+            if op.kind.is_row() {
                 continue;
             }
             let key = hidden(op);
@@ -1219,7 +1450,9 @@ struct Constants {
     columns: Vec<(String, usize)>,
     /// [`Plan::bare`].
     bare: Option<Vec<String>>,
-    increments: Vec<(String, Node, bool)>,
+    /// [`Plan::increments`] and [`Plan::slots`].
+    increments: Vec<RowOp>,
+    slots: Vec<(Node, bool)>,
     accept: Vec<String>,
     /// [`Plan::lists`].
     lists: Vec<String>,
@@ -1438,8 +1671,8 @@ impl WindowsRun {
         // The output's dtypes: the formulas over the hidden columns, every
         // one a Float64, on an empty frame.
         let mut hidden_schema = input.clone();
-        for (k, _, _) in &p.increments {
-            hidden_schema.insert(k.as_str().into(), DataType::Float64);
+        for r in &p.increments {
+            hidden_schema.insert(r.key.as_str().into(), DataType::Float64);
         }
         for (k, _) in &p.columns {
             hidden_schema.insert(k.as_str().into(), DataType::Float64);
@@ -1542,6 +1775,7 @@ impl WindowsRun {
                 columns: p.columns,
                 bare: p.bare,
                 increments: p.increments,
+                slots: p.slots,
                 accept,
                 lists,
                 input: input.clone(),
@@ -1632,11 +1866,7 @@ impl WindowsRun {
 
     /// The hidden columns a held chunk carries beside the input's.
     fn hidden_names(&self) -> Vec<String> {
-        self.k
-            .increments
-            .iter()
-            .map(|(k, _, _)| k.clone())
-            .collect()
+        self.k.increments.iter().map(|r| r.key.clone()).collect()
     }
 
     /// Feed one chunk and return the rows it resolved, in input order, less
@@ -2379,7 +2609,7 @@ impl WindowsRun {
             Some(read) => read,
             None => self.increment_inputs(df)?,
         };
-        let (restart, restarts) = self.restart_policy();
+        let policy = self.restart_policy();
         let out = step_increments(
             IncrTrack {
                 state: &mut self.incr_state,
@@ -2387,8 +2617,8 @@ impl WindowsRun {
                 null: &mut self.incr_null,
                 stream_clock: &mut self.stream_clock,
             },
-            self.k.increments.len(),
-            (restart, restarts),
+            (&self.k.increments, &self.k.slots),
+            policy,
             &inputs,
             keys,
             clock,
@@ -2401,14 +2631,16 @@ impl WindowsRun {
     }
 
     /// The clock policy's reading of a step back: the span past which it is
-    /// a new start, and whether a step back starts anew at all.
-    fn restart_policy(&self) -> (f64, bool) {
+    /// a new start, and whether a step back starts anew at all; and the gap
+    /// past which a drift's stretch ends (task 564).
+    fn restart_policy(&self) -> (f64, bool, f64) {
         (
             self.core.clock_cfg().min_backwards_jump,
             matches!(
                 self.core.clock_cfg().on_clock_reset,
                 rheon_core::OnClockReset::ResetState
             ),
+            self.core.clock_cfg().gap_cap,
         )
     }
 
@@ -2418,9 +2650,9 @@ impl WindowsRun {
             .increments
             .iter()
             .zip(out)
-            .map(|((name, _, _), values)| {
+            .map(|(r, values)| {
                 let ca: Float64Chunked = values.into_iter().collect();
-                ca.with_name(name.as_str().into()).into_column()
+                ca.with_name(r.key.as_str().into()).into_column()
             })
             .collect()
     }
@@ -2432,11 +2664,11 @@ impl WindowsRun {
             .lazy()
             .select(
                 self.k
-                    .increments
+                    .slots
                     .iter()
                     .enumerate()
-                    .map(|(i, (_, node, _))| {
-                        node.to_expr(&|_| unreachable!("no operator in an increment's input"))
+                    .map(|(i, (node, _))| {
+                        node.to_expr(&|_| unreachable!("no operator in a row operator's input"))
                             .alias(input_column(i).as_str())
                     })
                     .collect::<Vec<_>>(),
@@ -2447,14 +2679,14 @@ impl WindowsRun {
 
     /// Each increment's input read in the form its step is taken in.
     fn read_increment_inputs(&self, inputs: &DataFrame) -> PolarsResult<IncrInputs> {
-        let width = self.k.increments.len();
+        let width = self.k.slots.len();
         // An integer input's values as integers (task 200): its step is
         // taken in integers and then converted, where two doubles of an
         // epoch-nanosecond column near 1.8e18 tied at a step of 1.
         let integer: Vec<Option<Vec<Option<i128>>>> = (0..width)
             .map(|i| {
                 let c = inputs.column(input_column(i).as_str())?;
-                if self.k.increments[i].2 || !integer_input(c.dtype()) {
+                if self.k.slots[i].1 || !integer_input(c.dtype()) {
                     Ok(None)
                 } else {
                     integer_values(c.as_materialized_series()).map(Some)
@@ -2463,7 +2695,7 @@ impl WindowsRun {
             .collect::<PolarsResult<_>>()?;
         let numeric: Vec<Option<Vec<Option<f64>>>> = (0..width)
             .map(|i| {
-                if self.k.increments[i].2 || integer[i].is_some() {
+                if self.k.slots[i].1 || integer[i].is_some() {
                     Ok(None)
                 } else {
                     let s = inputs
@@ -2475,7 +2707,7 @@ impl WindowsRun {
             .collect::<PolarsResult<_>>()?;
         let temporal: Vec<Option<Vec<Option<i64>>>> = (0..width)
             .map(|i| {
-                if self.k.increments[i].2 {
+                if self.k.slots[i].1 {
                     // A time of day is read too, in nanoseconds since
                     // midnight (review round 4, PD5).
                     let c = inputs.column(input_column(i).as_str())?;
@@ -2542,11 +2774,11 @@ impl WindowsRun {
             .lazy()
             .select(
                 self.k
-                    .increments
+                    .slots
                     .iter()
                     .enumerate()
-                    .map(|(i, (_, node, _))| {
-                        node.to_expr(&|_| unreachable!("no operator in an increment's input"))
+                    .map(|(i, (node, _))| {
+                        node.to_expr(&|_| unreachable!("no operator in a row operator's input"))
                             .alias(input_column(i).as_str())
                     })
                     .collect::<Vec<_>>(),
@@ -2609,7 +2841,7 @@ impl WindowsRun {
                 null: &mut null,
                 stream_clock: &mut stream_clock,
             },
-            self.k.increments.len(),
+            (&self.k.increments, &self.k.slots),
             self.restart_policy(),
             inputs,
             keys,
@@ -3405,6 +3637,25 @@ impl WindowsRun {
                 .into());
             }
             run.resume_held = Some(want);
+        }
+        // A group keeps a state for every row operator where any is a run
+        // length or a drift (task 564), and none where every one is an
+        // increment: a state of another shape is not this call's.
+        let keeps_rows = run.k.increments.iter().any(|r| r.kind != OpKind::Increment);
+        let width = run.k.increments.len();
+        if file.increments.iter().any(|st| {
+            st.prev.len() != width
+                || st.rows.len() != if keeps_rows { width } else { 0 }
+                || st.rows.iter().zip(&run.k.increments).any(|(s, r)| {
+                    std::mem::discriminant(s) != std::mem::discriminant(&RowState::of(r))
+                })
+        }) {
+            return Err(format!(
+                "{WHO}: the state's row operators (increment, run_length, clock_lag, \
+                 clock_drift) do not match its own call's, so it is damaged. Load an undamaged \
+                 copy of the state file, or leave out load_state to start over."
+            )
+            .into());
         }
         for (i, st) in file.increments.into_iter().enumerate() {
             match &st.key {
@@ -4489,7 +4740,7 @@ mod tests {
         assert!(
             err.contains(
                 "the state's version is 2, but this version of rheon reads versions 9 \
-                 to 13"
+                 to 14"
             ),
             "{err}"
         );
@@ -4651,11 +4902,13 @@ mod tests {
         // a 70 bank's 10 cores have none and load as they did. 72 with
         // windows state 12 (PLAN 542): both written in the envelope every
         // state file shares; a 71 bank's 11 cores load as they did.
-        // Windows state 13 (task 561, the extrema) within schema 72, which
-        // no release has written: this build reads a 12 core as a 13
-        // without an extremum, so a 72 bank holding window targets resumes
-        // here, and a released build refuses a 72 bank by number.
-        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (13, 72));
+        // Windows state 13 (task 561, the extrema) and 14 (task 564, the
+        // run lengths and clock drifts) within schema 72, which no release
+        // has written: this build reads a 12 core as a 14 without an
+        // extremum or a row operator's state, and a 13 as a 14 without the
+        // latter, so a 72 bank holding window targets resumes here, and a
+        // released build refuses a 72 bank by number.
+        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (14, 72));
         assert_eq!(MIN_WINDOWS_VERSION, 9);
     }
 

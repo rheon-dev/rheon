@@ -599,6 +599,70 @@ the window's rows are known, and a window past the cap is refused when the
 query is built. On a clock, the row that takes a group's window past it is
 refused.
 
+## A stream's health: run lengths and two clocks
+
+**`rp.run_length` counts the rows a value has held, ending at each row.**
+A feed that freezes, a sensor holding its last reading or a countdown
+stopped at one value, shows as a run that keeps growing. Each row gives its
+place in its run, which is Polars' `rle` read row by row: rows of null are
+one run, a null next to a number ends the run on both sides, and `0.0` and
+`-0.0` are one value. A NaN, an infinity or a value beyond 1e100 is missing,
+as every operator reads it, so it joins a run of nulls. With `tol`, two
+adjacent rows at most `tol` apart are one value, so a run can creep. A run
+starts again at a new session and at a reset, as an `rp.increment` does, and
+holds across a gap, since a value held across a gap is still held.
+
+**`rp.clock_lag` and `rp.clock_drift` read a row's two times.** Where each
+row carries the time its event happened and the time it arrived, the lag
+`d = arrival − event` says how fresh the stream is. `rp.clock_lag` is its
+decayed mean, each row weighing `2 ** (-(t − t_i) / half_life)` on the
+stream's clock. `rp.clock_drift` is the weighted least-squares slope of the
+lag on the arrival time: 0 for a feed late by a steady amount, and 0.001 for
+one falling behind a millisecond a second. The slope is null while every row
+arrived at one time, a single row included, since no line is defined there.
+Both start again at a clock break and a reset, as a window does.
+
+Neither keeps a window: a run is three numbers a group, and a drift six, so
+neither grows with the stream. This code shows each on a feed that freezes
+and falls behind:
+
+```python
+feed = pl.DataFrame({
+    "arrival": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+    "event": [-0.1, 0.85, 1.8, 2.7, 3.6, 4.5],
+    "x": [1.0, 2.0, 2.0, 2.0, 2.0, 3.0],
+})
+# x holds 2.0 for four rows, and the lag grows from 0.1 to 0.5.
+out = rp.stream.with_windows(
+    feed,
+    held=rp.run_length("x"),
+    lag=rp.clock_lag("arrival", "event", half_life=float("inf")),
+    drift=rp.clock_drift("arrival", "event", half_life=float("inf")),
+    clock="arrival", gap_cap=10.0,
+)
+print(out.select("held", pl.col("lag", "drift").round(3)))
+```
+
+```text
+shape: (6, 3)
+┌──────┬───────┬───────┐
+│ held ┆ lag   ┆ drift │
+│ ---  ┆ ---   ┆ ---   │
+│ f64  ┆ f64   ┆ f64   │
+╞══════╪═══════╪═══════╡
+│ 1.0  ┆ 0.1   ┆ null  │
+│ 1.0  ┆ 0.125 ┆ 0.05  │
+│ 2.0  ┆ 0.15  ┆ 0.05  │
+│ 3.0  ┆ 0.187 ┆ 0.065 │
+│ 4.0  ┆ 0.23  ┆ 0.075 │
+│ 1.0  ┆ 0.275 ┆ 0.081 │
+└──────┴───────┴───────┘
+```
+
+The run of 2.0 reaches 4 rows before 3.0 ends it. The slope is null on the
+first row, where one arrival has no spread, and then reads the lag's growth,
+each row weighed the same under `half_life=float("inf")`.
+
 ## Saving and resuming a window run
 
 **A window run's state holds the rows still waiting for their windows to

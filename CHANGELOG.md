@@ -349,6 +349,21 @@ model that only the new build has is listed as an addition and passes.
   A row of weight 0 in a spec's formula target still moves its window, as
   every operator's does (recorded by a test expected to fail).
 
+- **`rp.run_length`, `rp.clock_lag` and `rp.clock_drift`: a stream's health
+  as columns** (PLAN 564, part 2). `rp.run_length(x, tol=0.0)` gives each
+  row its place in the run of unchanged values it ends, so a frozen feed
+  shows as a run that keeps growing: Polars' `rle` read row by row, a run of
+  nulls a run of its own, `0.0` and `-0.0` one value, and a NaN, an infinity
+  or a value past 1e100 missing, as every operator reads it. `tol` takes two
+  adjacent rows within it as one value. `rp.clock_lag(arrival, event,
+  half_life=)` is the decayed mean of `arrival - event`, and
+  `rp.clock_drift(arrival, event, half_life=)` its weighted least-squares
+  slope on the arrival time, null while the arrivals have no spread. Each is
+  a group's own, computed a row at a time beside `rp.increment` in
+  `with_windows`, and costs 48 bytes (a run) or 88 (a drift) a group. Held
+  to Polars' `rle`, numpy's weighted mean and statsmodels' `WLS`. A window
+  run's state moves to version 14; a version-13 state loads as one without
+  these.
 - **`rp.stream.merge`: streams that each run in clock order, merged into one
   stream in clock order** (PLAN 541). It takes any number of frames or
   queries, by position or in a dict of name to frame, and gives every row

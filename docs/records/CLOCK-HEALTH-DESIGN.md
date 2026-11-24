@@ -110,6 +110,116 @@ rows of a group, with the window form where a window applies:
 7. **Dependency on 554 (B1 moments).** Recommend not waiting: a Welford update
    now, switched to B1's moments when it lands, with the oracle test unchanged.
 
+## Part 2: the answers, and what was built
+
+The review answered the questions (2026-11-23): an operator, not audit (1);
+exact equality, `tol=` opt-in (2); nulls as Polars' `rle` has them (3, below);
+a zero-weight row neither counts nor breaks a run (4); the drift by a centred
+two-sum decayed estimator, withheld where the arrivals have no spread (6);
+and the clock-step statistics on 554's moments (7), so they wait (below).
+
+**Built:** three row operators, `rp.run_length(x, tol=0.0)`,
+`rp.clock_lag(arrival, event, half_life=)` and
+`rp.clock_drift(arrival, event, half_life=)`. Each is a formula node read by
+`with_windows` (and by a formula target, beside a window looking ahead), each
+a hidden `Float64` column computed one row at a time from the group's own
+previous rows, in the pass that computes `increment`, before the window core.
+The recursions are in `rheon-core` (`run_length.rs`, `clock_drift.rs`), with
+no Polars type; the plumbing is `windows_frame.rs`'s increment pass, which now
+carries any row operator and its inputs ("slots"), a drift's two among them.
+
+### Nulls, measured
+
+Polars' `rle` on `[1, 1, null, null, 1, NaN, NaN, null, 0.0, -0.0, inf, inf,
+2, null]` under 1.38.1, 1.41.1 and 2.1.0 (the locked one) gives the same runs
+on all three: lengths `2, 2, 1, 2, 1, 2, 2, 1, 1`. So:
+
+- consecutive nulls are one run, of their own; a null beside a value ends the
+  run on both sides (`[1, null, 1]` is three runs);
+- `0.0` and `-0.0` are one value; NaN equals NaN, and `inf` equals `inf`;
+- integers: `[1, null, null, 2, 2]` gives `1, 2, 2`.
+
+The operator mirrors this, with the engine's rule for a value that is not
+usable (NaN, an infinity, beyond `1e100`): it is missing, as a null is, so it
+joins a run of nulls, where `rle` keeps a run of NaN apart. A null row reports
+its place in the null run, as `rle` read row by row does, not null (the first
+draft said null; the answer to question 3 replaced it). The oracle is `rle` on
+the series with the unusable values set to null. Under `tol > 0` two adjacent
+numbers are one value when `|x − prev| ≤ tol`, and a run can creep.
+
+### Restarts and zero-weight rows
+
+A run restarts where an increment does: at a new session and at a step back
+past `restart_after_step_back`, the group's own or the stream's. A gap past
+`gap_cap` leaves it, since a value held across a gap is still held. A drift's
+sums restart there and at a gap past `gap_cap` too, which ends a stretch, as
+for the window operators with no `window_size`.
+
+`with_windows` has no row weight, so the surface has no zero-weight row; the
+core takes one, and rule 9 is held there: a row of weight 0 neither extends
+nor ends a run and reports it as it stands (`None` before the first row), and
+a drift's row of weight 0 decays the sums and moves no mean, the first row
+included, with no `0/0`. A row missing either time of a drift is a row of
+weight 0.
+
+### The drift's estimator
+
+Per group, the decayed weight `W`, the weighted means of the centred arrival
+and of the lag, and the two sums about those means, `C_aa` and `C_ad`, by
+West's weighted update with the clock's decay scaling `W` and both sums. The
+arrivals are centred on the stretch's first arrival, subtracted in integer
+nanoseconds on a temporal column. The record's first draft kept `Σw·a`,
+`Σw·a²`, `Σw·d`, `Σw·a·d` about that origin; sums about the running means are
+the same two-sum estimator without the cancellation of `S·Saa − Sa²`, which
+grows with the stretch's age next to the half-life, and make `C_aa` 0 exactly
+while every arrival is one value, so the slope is withheld on that condition
+alone. The decay is on the policy clock (one unit a row on the row-count
+clock); the slope is in lag units per arrival unit (seconds a second on
+temporal times). Withheld means null in the column, with the reason in the
+docstrings: no row with both times (the lag), or no spread in the arrivals
+(the slope).
+
+### State bytes
+
+Per group and operator: a run length's tolerance, last value and count, 48
+bytes; a drift's half-life and five doubles, 56 bytes, and its origin, 32.
+Each sits beside the increment's previous value every row operator keeps (56
+bytes). None grows with the stream: no window, so `max_state_bytes` has
+nothing to bound and is not taken (a fixed cost, as an increment's is). The
+windows state moves to version 13: a group's state may carry `rows`, written
+only where there is a run length or a drift, so a version-12 state loads as a
+13 without one; an older build refuses a 13 by number.
+
+### Deferred
+
+- **Clock-step statistics.** They are to reuse 554's moments, which are not
+  on `main` (`vm/task-554-moments`). They wait until 554 merges; then this
+  branch is rebased, or they are added on top. Note for that part: `audit`
+  already keeps, on a `clock` column, each step's class (a duplicate stamp,
+  a gap at or past `gap_cap`, a regular step) and the regular steps' mean,
+  population spread, coefficient of variation and largest step. It does not
+  count step-backs itself: it refuses one as every spec does, and the bank's
+  `summary()` (`clock_backwards`) and `check()` (`step_back`) count them
+  under `restart_after_step_back`. So the operator's step statistics would
+  repeat audit's on a stream, and their value is the running column form;
+  the cross-check the first draft proposed is audit's table against the
+  operator's last row.
+- **A run length's window form.** It is the run truncated to the window,
+  `min(run_length, rows in the window)`, which a formula writes from
+  `rp.run_length` and an `rp.ewm_sum` of ones under `half_life=inf`; the
+  queue the first draft pointed at is 561's, which is not on `main` either.
+
+### Tests
+
+Rust: `run_length.rs` and `clock_drift.rs` in `rheon-core` (the definition,
+both sides of `tol` and of the spread, rule 9, restarts, save and load to
+the bit, state size); `windows_frame.rs` (the row operators through a run,
+chunking, a save at every row, a refused state of another shape); the
+windows fixture `with_windows_rows`. Python: `tests/test_run_length.py`,
+against Polars' `rle` and statsmodels' `WLS` (see its docstrings).
+
 ## Index row (for the Mac to add at merge)
 
+```text
 | [records/CLOCK-HEALTH-DESIGN.md](records/CLOCK-HEALTH-DESIGN.md) | record | Run length and clock health: the design of run length of unchanged values, clock-step statistics and two-clock drift (closes the design part of PLAN 564) |
+```
