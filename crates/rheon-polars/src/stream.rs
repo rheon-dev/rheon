@@ -757,7 +757,15 @@ impl AnyModel {
     /// where the JSON would not read back as the configuration, so an
     /// infinity written as `null` cannot be pinned as one (`faithful_json`).
     pub fn cfg_json(&self) -> Result<serde_json::Value, String> {
-        dispatch!(self, m => crate::defaults::faithful_json(m.cfg()))
+        let mut v = dispatch!(self, m => crate::defaults::faithful_json(m.cfg()))?;
+        // `ftrl`'s state writes `standardize` only when on, so that a state
+        // without it keeps its bytes (PLAN 569); the resolved settings name
+        // the default all the same.
+        if let (AnyModel::Ftrl(m), Some(o)) = (self, v.as_object_mut()) {
+            o.entry("standardize")
+                .or_insert(serde_json::Value::Bool(m.cfg().standardize));
+        }
+        Ok(v)
     }
 }
 
