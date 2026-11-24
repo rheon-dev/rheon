@@ -410,14 +410,10 @@ class TestOutputSchemaStability:
         one dtype and handed another.
         `sgd`, `pa`, `holt` and `ew_cov` all postdate that test.
         """
-        spec = getattr(rp.spec, model)(
-            "m",
-            targets=["y0"],
-            half_life=50.0,
-            min_weight=2.0,
-            **kw,
-            **extra,
-        )
+        # An entry's keywords over the base's; a None is a keyword the model
+        # does not take (sarima's half-life).
+        given = {"targets": ["y0"], "half_life": 50.0, "min_weight": 2.0, **kw, **extra}
+        spec = getattr(rp.spec, model)("m", **{k: v for k, v in given.items() if v is not None})
         df = _frame().drop("g")
         if model == "glm":
             # The default Poisson family takes counts.
