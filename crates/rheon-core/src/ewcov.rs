@@ -559,6 +559,18 @@ impl EwCov {
         Ok(ew)
     }
 
+    /// An accumulator standing at the given weight, means and centred
+    /// co-moments (`k × k`, row-major), with no precision prior: a mixture's
+    /// component entered at its start's fit.
+    pub(crate) fn at_moments(k: usize, w_sum: f64, means: &[f64], comoments: &[f64]) -> Self {
+        debug_assert!(means.len() == k && comoments.len() == k * k && w_sum >= 0.0);
+        let mut ew = Self::new(k);
+        ew.w_sum = w_sum;
+        ew.m.copy_from_slice(means);
+        ew.c.copy_from(comoments);
+        ew
+    }
+
     pub fn with_precision_prior(k: usize, prior: f64) -> Result<Self, String> {
         if prior <= 0.0 || !prior.is_finite() {
             return Err(format!(

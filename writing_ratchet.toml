@@ -628,6 +628,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/clock_span.rs"]
 
+[messages."crates/rheon-core/src/cluster/gmm.rs"]
+
 [messages."crates/rheon-core/src/dcc.rs"]
 
 [messages."crates/rheon-core/src/ddsketch.rs"]
@@ -746,6 +748,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/bocpd/span.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/clock_span.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/cluster/gmm.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/dcc.rs#messages"]
 

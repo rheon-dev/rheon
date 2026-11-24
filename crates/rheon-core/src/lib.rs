@@ -160,8 +160,9 @@ pub use clock::{
     PlainStep, SessionGap, Stamp, cmp_int_f64, ns_of_seconds, seconds_of_ns,
 };
 pub use cluster::{
-    ClusterSummary, FeatureMoments, KMeans, KMeansCfg, LINK_FACTOR, LINK_FLOOR, LINK_QUANTILE,
-    Micro, MicroCfg, MicroCluster, SeedRule, SplitMix64, dist2, merged_radius2,
+    ClusterSummary, FeatureMoments, Gmm, GmmCfg, GmmCovariance, GmmFit, GmmRead, GmmWait, KMeans,
+    KMeansCfg, LINK_FACTOR, LINK_FLOOR, LINK_QUANTILE, Micro, MicroCfg, MicroCluster, SeedRule,
+    SplitMix64, dist2, merged_radius2,
 };
 pub use conformal::{Conformal, gauss_gain, ln_basic, norm_ppf};
 pub use constraint::Constraint;

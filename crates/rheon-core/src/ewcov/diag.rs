@@ -89,6 +89,27 @@ impl EwCovDiag {
     }
 
     /// An accumulator standing at the given weight, means and centred
+    /// variances, with no precision prior: [`EwCov::at_moments`]'s diagonal,
+    /// for a mixture's component entered at its start's fit. Its ridge is
+    /// never read.
+    pub(crate) fn at_moments(k: usize, w_sum: f64, means: &[f64], variances: &[f64]) -> Self {
+        debug_assert!(means.len() == k && variances.len() == k && w_sum >= 0.0);
+        Self {
+            k,
+            w_sum,
+            q_sum: Some(0.0),
+            prior_scale: 1.0,
+            m: means.to_vec(),
+            v: variances.to_vec(),
+            precision_prior: 0.0,
+            precision_scale: 1.0,
+            runs: Runs::new(k),
+            rows_learned: 0,
+            m_lo: vec![0.0; k],
+        }
+    }
+
+    /// An accumulator standing at the given weight, means and centred
     /// variances, as [`EwCov::from_moments`] stands at a matrix whose
     /// diagonal is `variances`.
     pub fn from_moments(
