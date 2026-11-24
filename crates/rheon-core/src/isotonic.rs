@@ -564,12 +564,10 @@ impl Isotonic {
         } else {
             kept
         };
-        for j in 0..m {
-            let y = ring.y[j];
+        for ((t, mark), &y) in self.targets.iter_mut().zip(touched.iter_mut()).zip(&ring.y) {
             if y.is_nan() {
                 continue;
             }
-            let t = &mut self.targets[j];
             // The oldest of the rows equal to it in `(x, y)` is the first.
             let i = lower_bound(&t.x, &t.v, x, y);
             assert!(
@@ -584,7 +582,7 @@ impl Isotonic {
             } else {
                 (t.weight - w).max(0.0)
             };
-            touched[j] = true;
+            *mark = true;
         }
         ring.y.drain(..m);
         self.w_sum = if empty {
