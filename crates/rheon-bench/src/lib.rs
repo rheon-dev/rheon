@@ -69,6 +69,13 @@ pub const MODEL_CASES: &[&str] = &[
     "kmeans",
     "micro",
     "kalman",
+    // The fixed-lag smoother on top of the filter: a lag of 10 observations
+    // with its standard errors, one target, 6 and 21 coefficients. A row's
+    // gain (a Cholesky of the next prior and two triangular solves a row of
+    // `A`), `K`'s triangle, and the backward pass of 10 slots, means and
+    // covariance.
+    "kalman_smooth_k5",
+    "kalman_smooth_k20",
     "ew_cov",
     "lasso_k20",
     // One case per model kind that had none, and the paths the review of
@@ -592,6 +599,14 @@ fn case_spec(id: &str) -> (Value, Shape) {
         ),
         "kalman" => (
             fit(json!({"type": "kalman", "coef_half_life": 2000.0}), 20),
+            Shape::Linear,
+        ),
+        "kalman_smooth_k5" | "kalman_smooth_k20" => (
+            fit(
+                json!({"type": "kalman", "coef_half_life": 2000.0, "smooth_lag": 10,
+                       "emit_smoothed_se": true}),
+                if id == "kalman_smooth_k5" { 5 } else { 20 },
+            ),
             Shape::Linear,
         ),
         "bank_seqtest_groups" => {

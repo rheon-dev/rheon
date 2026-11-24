@@ -286,11 +286,30 @@ fn solve_factored(l: &[f64], n: usize, x: &mut [f64]) {
     }
 }
 
+/// `a · b` over four running sums, the products taken in index order
+/// within each, summed in a fixed order: the same bits on every platform,
+/// and four chains of adds that overlap.
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    let mut acc = [0.0; 4];
+    let (a4, b4) = (a.chunks_exact(4), b.chunks_exact(4));
+    let (ra, rb) = (a4.remainder(), b4.remainder());
+    for (x, y) in a4.zip(b4) {
+        for l in 0..4 {
+            acc[l] += x[l] * y[l];
+        }
+    }
+    let mut tail = 0.0;
+    for (x, y) in ra.iter().zip(rb) {
+        tail += x * y;
+    }
+    ((acc[0] + acc[1]) + (acc[2] + acc[3])) + tail
+}
+
 /// `out <- M v` for a row-major `k x k`.
 fn mat_vec(mtx: &[f64], v: &[f64], out: &mut [f64]) {
     let k = v.len();
     for (o, row) in out.iter_mut().zip(mtx.chunks_exact(k)) {
-        *o = row.iter().zip(v).map(|(a, b)| a * b).sum();
+        *o = dot(row, v);
     }
 }
 
@@ -472,7 +491,7 @@ impl Smoother {
                         let ai = &pend.a[i * k..(i + 1) * k];
                         for j in 0..=i {
                             let gj = &g[j * k..(j + 1) * k];
-                            kk[at] -= ai.iter().zip(gj).map(|(a, b)| a * b).sum::<f64>();
+                            kk[at] -= dot(ai, gj);
                             at += 1;
                         }
                     }
@@ -524,21 +543,26 @@ impl Smoother {
                 }
             }
             if se {
-                // gv = G V, then V = K + gv Gᵀ.
+                // gv = G V, then V = K + gv Gᵀ, each entry a dot product of
+                // two contiguous rows (V is symmetric, so its column `j` is
+                // its row `j`), and the second only on and below the
+                // diagonal, mirrored, so V stays symmetric to the bit.
                 w.gv.clear();
                 w.gv.resize(k * k, 0.0);
-                for i in 0..k {
-                    let gi = &slot.g[i * k..(i + 1) * k];
-                    for j in 0..k {
-                        w.gv[i * k + j] = (0..k).map(|l| gi[l] * w.v[l * k + j]).sum();
+                for (gi, out) in slot.g.chunks_exact(k).zip(w.gv.chunks_exact_mut(k)) {
+                    for (o, vj) in out.iter_mut().zip(w.v.chunks_exact(k)) {
+                        *o = dot(gi, vj);
                     }
                 }
                 full_of(&slot.kk, k, &mut w.v);
                 for i in 0..k {
                     let gvi = &w.gv[i * k..(i + 1) * k];
-                    for j in 0..k {
-                        let gj = &slot.g[j * k..(j + 1) * k];
-                        w.v[i * k + j] += gvi.iter().zip(gj).map(|(a, b)| a * b).sum::<f64>();
+                    for j in 0..=i {
+                        let add = dot(gvi, &slot.g[j * k..(j + 1) * k]);
+                        w.v[i * k + j] += add;
+                        if j != i {
+                            w.v[j * k + i] = w.v[i * k + j];
+                        }
                     }
                 }
             }
