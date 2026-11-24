@@ -4604,7 +4604,34 @@ fn each_part_of_a_state_is_checked_alone() {
         other => panic!("min_weight short a target: {other:?}"),
     }
     type Case<'a> = (&'a str, &'a Marginal, &'a dyn Fn(&mut Marginal));
-    let cases: [Case; 6] = [
+    // The runs and the snapshots' counts of learned rows, which a window
+    // reads to say a slot held one value over it: unchecked, a damaged one
+    // silently lost that, and runs kept without a window cost a row's
+    // tracking for nothing (review 2026-11-23, MARG-2).
+    let cases: [Case; 11] = [
+        (
+            "a snapshot short a target's count of rows",
+            &windowed,
+            &|m| {
+                first(m, |s| {
+                    if let Some(r) = s.rows.as_mut() {
+                        r.pop();
+                    }
+                });
+            },
+        ),
+        ("runs off under a window", &windowed, &|m| {
+            m.x_runs = crate::Runs::off();
+        }),
+        ("a target's runs off under a window", &windowed, &|m| {
+            m.y_runs = crate::Runs::off();
+        }),
+        ("runs of another width", &windowed, &|m| {
+            m.x_runs = crate::Runs::new(m.cfg.n_features * m.cfg.n_targets + 1);
+        }),
+        ("runs kept without a window", &lagged, &|m| {
+            m.y_runs = crate::Runs::new(m.cfg.n_targets);
+        }),
         ("lags the moments were not kept at", &lagged, &|m| {
             m.cfg.lags = vec![1, 3]
         }),

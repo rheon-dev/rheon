@@ -3421,7 +3421,10 @@ mod tests {
         m.split_merge_check();
         assert_eq!(m.events(), (0, 1));
         assert_eq!(m.clusters[0].n, 20.0, "the other cluster is untouched");
-        assert_eq!(m.clusters[1], ClusterSummary::at(vec![50.0, 50.0], 5.0, m.r2_typical));
+        assert_eq!(
+            m.clusters[1],
+            ClusterSummary::at(vec![50.0, 50.0], 5.0, m.r2_typical)
+        );
         assert_eq!(m.rows[1], RADIUS_ROWS);
     }
 

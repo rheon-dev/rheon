@@ -2181,7 +2181,10 @@ mod tests {
             let (tp1, f1) = horizon(1.0);
             for h in [0.01, 1.0, 100.0, 3600.0] {
                 let (tp, f) = horizon(h);
-                assert!((tp / h - tp1).abs() <= 1e-12 * tp1, "h {h}: {tp} against {tp1}");
+                assert!(
+                    (tp / h - tp1).abs() <= 1e-12 * tp1,
+                    "h {h}: {tp} against {tp1}"
+                );
                 assert!((f - f1).abs() <= 1e-12, "h {h}: {f} against {f1}");
                 let xi_inf = 1.0 / (1.0 - f);
                 assert!(

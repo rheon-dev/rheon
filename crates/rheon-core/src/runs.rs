@@ -73,6 +73,13 @@ impl Runs {
         self.x.len() == k && self.start.len() == k
     }
 
+    /// What a state of `k` runs may hold: none kept, none known yet (a
+    /// state written before them, or forgotten), or both halves of all `k`.
+    /// Anything else is a damaged state.
+    pub fn fits(&self, k: usize) -> bool {
+        self.off || (self.x.len() == self.start.len() && (self.x.is_empty() || self.x.len() == k))
+    }
+
     /// A learned row carrying every slot, the `row`-th learned row, counted
     /// from 1 by the caller: a value the run holds extends it; another
     /// value, or a slot's first learned row, starts a run at this row. Runs

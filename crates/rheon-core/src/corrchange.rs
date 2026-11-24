@@ -695,6 +695,21 @@ impl CorrChangeCfg {
                 }
             }
         }
+        // The window's cadence and nothing else's, as the bank's spec has
+        // it: unchecked under the other kinds, a NaN or a negative span
+        // was taken, and stepped a clock no draw reads (review 2026-11-23,
+        // REGIME-1).
+        if self.kind != CorrChangeKind::Window && self.permute_every.is_some() {
+            no.refuse(format!(
+                "corrchange: permute_every applies only under kind=\"window\", but kind is \"{}\". \
+                 Leave permute_every out, or set kind=\"window\".",
+                if self.kind == CorrChangeKind::Monitor {
+                    "monitor"
+                } else {
+                    "sequential"
+                }
+            ));
+        }
         no.finish()
     }
 
@@ -2743,7 +2758,10 @@ impl crate::OnlineModel for CorrChange {
                 // drawn over, only there.
                 let wrong_clock = m.clock.is_some() != on_clock
                     || m.keys.len() != if window && on_clock { m.ring.len() } else { 0 }
-                    || (m.perm_counts.is_some() && !(window && on_clock && m.perm_crit.is_some()));
+                    || (m.perm_counts.is_some() && !(window && on_clock && m.perm_crit.is_some()))
+                    // The clock since the last draw, exactly where the cfg
+                    // draws by the clock (review 2026-11-23, REGIME-1).
+                    || m.since_draw.is_some() != m.cfg.permute_every.is_some();
                 if m.diag.k() != d
                     || m.ring.iter().any(|r| r.len() != width)
                     || wrong_mon

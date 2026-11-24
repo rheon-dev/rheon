@@ -3010,6 +3010,7 @@ impl OnlineModel for Marginal {
                 let snaps_ok = m.win.as_ref().is_none_or(|w| {
                     w.snaps.iter().all(|s| {
                         [&s.wt, &s.qt, &s.my, &s.syy].iter().all(|v| v.len() == t)
+                            && s.rows.as_ref().is_none_or(|r| r.len() == t)
                             && [&s.mx, &s.sxx].iter().all(|v| v.len() == fx)
                             && s.sxy.len() == p * t
                             && match (&s.lag, &m.lag) {
@@ -3033,6 +3034,11 @@ impl OnlineModel for Marginal {
                     || !bins_ok
                     || !snaps_ok
                     || m.win.is_some() != m.cfg.window.is_some()
+                    // The runs, a window's alone (review 2026-11-23, MARG-2).
+                    || m.x_runs.is_off() != m.cfg.window.is_none()
+                    || m.y_runs.is_off() != m.cfg.window.is_none()
+                    || !m.x_runs.fits(p * t)
+                    || !m.y_runs.fits(t)
                 {
                     return Err(crate::model::damaged(
                         "marginal",
