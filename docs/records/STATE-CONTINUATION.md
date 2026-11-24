@@ -842,3 +842,17 @@ but `cusum_*`, `break_wald_*` and `calibration_wald_*` goes on to its frozen
 frames to the bit, and those three go on to the bit wherever the frozen
 value is a number and to a finite number where it is `None`. The current
 fixture `bank_diagnosed` regenerated, and freezes the three sums.
+
+A thirty-second, the user's (2026-11-24: "Drop the v71 glm states"; PLAN
+581, GLM-4), a removal: the kept schema-71 fixtures `v71/glm_cap` and
+`v71/glm_refit_done` (`rheon-core`) are deleted, and `KEPT_COUNTS` holds
+`v71/` at 102 of the 104 it was copied with. The log link's target guard
+now scales an upward step that would carry a row's `η` past its own `ln
+y`, and it fires on rows of both cases' generating streams (`glm_cap`: no
+refit, a cap of 1; `glm_refit_done`: after its refit), so the current
+fixtures of both were regenerated and their kept schema-71 states no
+longer convert to the current bytes: they hold the old step's arithmetic,
+which no build reaches from the same rows. No release wrote such a state:
+`glm` is new since 2.0.0, whose schema was 67. `v71/glm_refit` (the refit
+still waiting, where the guard does not apply) is kept and converts to the
+current bytes exactly. No layout moved, and there is no schema bump.

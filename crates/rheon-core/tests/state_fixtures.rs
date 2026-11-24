@@ -840,7 +840,10 @@ fn the_fixtures_cover_the_schemas_this_build_loads() {
 /// loader, and the checks above hold only that a set is not empty and
 /// that what was compiled in is what is on disk, so a deleted file or a
 /// partial copy passed. A new kept set adds its line here, with the count
-/// of the current set it was copied from.
+/// of the current set it was copied from. `v71/` was copied with 104 and
+/// holds 102: rule 5's thirty-second exception (the user's, 2026-11-24)
+/// removed `glm_cap` and `glm_refit_done` from it, states no release wrote
+/// whose generating streams the log link's target guard now fires on.
 const KEPT_COUNTS: &[(u32, usize)] = &[
     (61, 41),
     (62, 42),
@@ -852,7 +855,7 @@ const KEPT_COUNTS: &[(u32, usize)] = &[
     (68, 85),
     (69, 85),
     (70, 86),
-    (71, 104),
+    (71, 102),
 ];
 
 /// The names one set holds that the next does not, each set given as a
