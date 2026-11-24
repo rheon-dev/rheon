@@ -185,6 +185,10 @@ def spec(kind: str, **kw: Any) -> dict:
         a["warm_rows"] = 20
     if kind == "rcov":
         a["block_rows"] = 50
+    if kind == "sarima":
+        # Its start opened inside the stream, so a restart has a start to
+        # fit again: the default bound is not reached in 400 rows.
+        a["se_bound"] = 1e3
     a.update(kw)
     a = {k: v for k, v in a.items() if v is not None}
     build = getattr(rp.spec, builder)
@@ -415,7 +419,9 @@ STEP_BLIND: frozenset[str] = frozenset({"bocpd", "seqtest", "garch", "tdigest"})
 #: ``gap_cap`` does: ``rcov``'s block is split there (no product pairs two
 #: returns across it), ``corrchange`` abandons its span, windows or cycle,
 #: and ``ar`` empties its lags: the values either side are not adjacent.
-BREAK_AT_A_SESSION: frozenset[str] = frozenset({"rcov", "corrchange", "ar", "spectral"})
+#: ``sarima`` starts its series again there, and decays nothing, so the step
+#: a session change takes moves none of its numbers.
+BREAK_AT_A_SESSION: frozenset[str] = frozenset({"rcov", "corrchange", "ar", "spectral", "sarima"})
 #: Of those, the kinds that also decay: a session change is a break *and*
 #: a step of ``session_gap``, where a rewritten clock is a break only at a
 #: step past ``gap_cap``, which decays by the cap. The two agree only where

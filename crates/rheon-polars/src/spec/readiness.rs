@@ -96,6 +96,10 @@ impl Spec {
                 "a gradient fit keeps no second moments of the features to read one row's \
                  leverage from"
             }
+            ModelKind::Sarima { .. } => {
+                "its regressors' coefficients are estimated with its lag polynomials by \
+                 recursive prediction error, which has no least-squares leverage of one row"
+            }
             _ => "it fits no coefficients of features to read one row's leverage from",
         }
     }

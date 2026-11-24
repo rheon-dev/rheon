@@ -171,6 +171,16 @@ COEF_SPECS = [
     ),
     # Each target on its own lags, the features beside them.
     rp.spec.ar("m", targets=["y", "y2"], features=["x1", "x2"], lags=[1, 3], half_life=30),
+    # Each target a seasonal ARMA with the features as regressors; the bound
+    # loose enough that both starts open in 200 rows.
+    rp.spec.sarima(
+        "m",
+        targets=["y", "y2"],
+        features=["x1", "x2"],
+        order=(1, 0, 0),
+        seasonal_order=(0, 0, 1, 4),
+        se_bound=1e3,
+    ),
 ]
 
 

@@ -191,6 +191,21 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         r#""targets": ["y"], "features": ["x0"], "half_life": @50"#,
         ALL,
     ),
+    // Its slots are the clock's: a row of weight 0 counts in no clock, so
+    // it takes no slot. A slot is a row, or a quarter step of a clock, the
+    // stream's own; the bound loose, so the start opens in the stream.
+    (
+        "sarima",
+        r#"{"type": "sarima", "order": [1, 0, 1], "seasonal_order": [1, 0, 0, 4], "se_bound": 1000.0}"#,
+        r#""targets": ["y"], "features": ["x0"]"#,
+        &[Clock::Rows],
+    ),
+    (
+        "sarima",
+        r#"{"type": "sarima", "order": [1, 0, 1], "seasonal_order": [1, 0, 0, 4], "spacing": @0.25, "se_bound": 1000.0}"#,
+        r#""targets": ["y"], "features": ["x0"]"#,
+        CLOCKED,
+    ),
     // `hazard_rows`, a count of rows on every clock; `hazard`, the clock
     // time between changepoints on every clock, rows without one (task 547).
     (

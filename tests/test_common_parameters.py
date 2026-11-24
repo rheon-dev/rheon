@@ -84,6 +84,10 @@ VARIANTS["corrchange_scalar"] = ("corrchange", {"scalar": True, "half_life": HAL
 
 # With the refit of its first rows, on by default (task 277).
 VARIANTS["sgd_huber"] = ("sgd", {"loss": "huber"})
+# Its start opens where every standard error is under the bound; on this
+# stream's 400 rows (100 a group) the default 0.1 is not reached, so a loose
+# bound opens it and the steps after it run.
+VARIANTS["sarima"] = ("sarima", {"se_bound": 1e3})
 
 KINDS = tuple(VARIANTS)
 ESSENTIAL = ("ewridge", "ew_cov", "kmeans")
@@ -115,9 +119,10 @@ NO_FEATURES = frozenset(
 #: temporal clock: ``hawkes``' ``kernel_decays`` is refused there, by name.
 RATES = frozenset({"hawkes"})
 #: A capped step is a break by design: ``corrchange`` abandons its span,
-#: ``rcov`` splits the block into stretches, ``ar`` empties its lags and
-#: ``spectral`` its transform.
-CAP_IS_A_BREAK = frozenset({"corrchange", "corrchange_scalar", "rcov", "ar", "spectral"})
+#: ``rcov`` splits the block into stretches, ``ar`` empties its lags,
+#: ``spectral`` its transform and ``sarima`` its series, fitting its start
+#: again.
+CAP_IS_A_BREAK = frozenset({"corrchange", "corrchange_scalar", "rcov", "ar", "spectral", "sarima"})
 #: The kinds that sum weight as a count, with what makes it exact: the
 #: ewridge readiness gate reads Kish's effective count, which copies change,
 #: and its default solve cadence counts rows; kalman's learned noise reads a

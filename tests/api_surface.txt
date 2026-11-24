@@ -547,6 +547,18 @@
     delta = None
     coef_prior = None
     common
+  sarima:
+    name
+    targets
+    order
+    seasonal_order = None
+    features = None
+    enforce_stationarity = True
+    enforce_invertibility = True
+    se_bound = 0.1
+    spacing = None
+    max_state_bytes = None
+    common
   seqtest:
     name
     targets
@@ -1296,6 +1308,26 @@
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
+  sarima(features=['x0'], order=(1, 0, 0), targets=['y']):
+    model.estimate.enforce_invertibility = true
+    model.estimate.enforce_stationarity = true
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_features = 1
+    model.n_targets = 1
+    model.order = [1, 0, 0]
+    model.params = []
+    model.seasonal_order = [0, 0, 0, 0]
+    model.spacing = 1.0
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
   seqtest(targets=['y']):
     model.min_weight = 0.0
     model.n_targets = 1
@@ -2811,6 +2843,15 @@
     weight_sum: f64
     settled_frac: f64
     withheld_reason: enum
+  sarima minimal:
+    pred_y: f64
+    resid_y: f64
+    pred_z: f64
+    resid_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2988,6 +3029,7 @@
     rcov_psd_repaired: Boolean
   realized: the shared columns only
   rls: the shared columns only
+  sarima: the shared columns only
   seqtest: the shared columns only
   sgd: the shared columns only
   spectral: the shared columns only
@@ -3295,6 +3337,7 @@
     rcov: bandwidth, block_rows, iv_stride, jitter, kernel, kind, max_bandwidth, noise_stride, preavg_rows, psd, theta
     realized: closed, lm_beta, lm_window, max_state_bytes, window_rows, window_size
     rls: coef_prior, delta
+    sarima: enforce_invertibility, enforce_stationarity, max_state_bytes, order, se_bound, seasonal_order, spacing
     seqtest: a, a_suffix, b, b_suffix
     sgd: clip_gradient, coef_max, coef_min, coef_sum, eps, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, l2, learning_rate, loss, max_state_bytes, power, quantile, refit_budget, schedule, standardize, strict_binary
     spectral: closed, detrend, max_rows_between_snapshots, max_state_bytes, periods, scaling, snapshot_every, spacing, window_budget, window_size

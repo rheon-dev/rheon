@@ -172,6 +172,7 @@ EXCEPT = {
     "expectile": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_calibration", "emit_breaks"},
     "holt": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_feature_health"},
     "ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
+    "sarima": ONE_SLOT | NOT_LEAST_SQUARES,
 }
 
 
@@ -200,6 +201,23 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     ("expectile", "expectile", fullest("expectile", **FIT, expectile=0.8), []),
     ("holt", "holt", fullest("holt", targets=["y"], group="g", half_life=25.0, **CLOCK), []),
     ("ar", "ar", fullest("ar", **FIT, lags=[1, 3]), []),
+    # No decay: its feature health reads a memory of its own, given here. A
+    # slot is half a clock unit, so every step of the clock is whole slots;
+    # the bound is loose so the start opens on the irregular clock and the
+    # fields are dense.
+    (
+        "sarima",
+        "sarima",
+        fullest(
+            "sarima",
+            **{k: v for k, v in FIT.items() if k != "half_life"},
+            order=(1, 0, 0),
+            spacing=0.5,
+            se_bound=1e3,
+            feature_health_half_life=100.0,
+        ),
+        [],
+    ),
     (
         "ew_cov",
         "ew_cov",

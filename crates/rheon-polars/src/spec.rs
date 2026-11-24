@@ -4298,6 +4298,10 @@ impl Spec {
                     "a gradient fit keeps no second moments of the features to read a covariance \
                      from"
                 }
+                ModelKind::Sarima { .. } => {
+                    "its recursion keeps its parameters' information in the coordinates it \
+                     steps in, not their covariance in the reported ones"
+                }
                 _ => "it keeps no covariance of its coefficients",
             };
             no.refuse(format!(

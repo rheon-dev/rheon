@@ -922,6 +922,50 @@ CASES: list[Case] = [
             "window_budget": {"thin": 64.0},
         },
     ),
+    # Each target a seasonal ARMA with the features as regressors, its
+    # parameters estimated, every diagnostic on, its groups run to a close;
+    # no half-life (every learned
+    # row counts alike), so no gate on settling toward one either. A slot
+    # is half a clock unit, so every step is whole slots; the bound is loose
+    # so the starts open on this stream.
+    Case(
+        "sarima",
+        "sarima",
+        {
+            **{k: v for k, v in STREAM.items() if k not in ("half_life", "min_settled_frac")},
+            **OUTPUTS,
+            **CLOSE,
+            **XY,
+            "order": (1, 0, 1),
+            "seasonal_order": (1, 0, 0, 4),
+            "se_bound": 1e3,
+            "spacing": 0.5,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # The other stream keys but the embargo, which `sarima` refuses, with
+    # differencing and both transforms off; a slot of two clock units, so
+    # most steps are one slot and the differences are observed.
+    Case(
+        "sarima_differenced",
+        "sarima",
+        {
+            **{k: v for k, v in STREAM2.items() if k not in ("lam", "embargo")},
+            **XY,
+            "order": (0, 1, 1),
+            "seasonal_order": (0, 1, 1, 4),
+            "enforce_stationarity": False,
+            "enforce_invertibility": False,
+            "se_bound": 1e3,
+            "spacing": 2.0,
+            # Drift resetting the fit, as the regressions' second sets do.
+            "emit_drift": True,
+            "drift_action": "reset",
+            "drift_threshold": 6.0,
+            "drift_delta": 0.005,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
     # Each target a return series; no half-life (the recursion is per
     # observation), so no gate on settling toward one either.
     Case(

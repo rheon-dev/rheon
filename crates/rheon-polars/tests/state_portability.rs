@@ -49,6 +49,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["y", "x1"], "features": ["x0"], "half_life": 50.0"#,
     ),
     (
+        "sarima",
+        r#"{"type": "sarima", "order": [1, 0, 1], "seasonal_order": [1, 0, 0, 4], "se_bound": 1000.0}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"]"#,
+    ),
+    (
         "audit",
         r#"{"type": "audit", "pairs": true}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"]"#,

@@ -1111,6 +1111,47 @@ fn spectral_golden() {
     check_bits("spectral", &got, GOLDEN_SPECTRAL);
 }
 
+/// `sarima` on the same stream, its two paths: the exact filter at given
+/// parameters, an ARIMA(1,1,1) with a seasonal autoregression at a season
+/// of 4 and the two features as regressors; and the estimator, an AR(1)
+/// with the regressors whose start is gated at a loose bound so it opens
+/// inside the stream, then its fit at the end. The null target is a slot
+/// not observed, and the gap of 25 clock units is 25 slots predicted
+/// through.
+#[test]
+fn sarima_golden() {
+    let cfg = |order, seasonal_order, params, estimate| SarimaCfg {
+        n_targets: 1,
+        n_features: 2,
+        order,
+        seasonal_order,
+        params,
+        spacing: 1.0,
+        min_weight: 0.0,
+        max_state_bytes: None,
+        estimate,
+    };
+    let given = SarimaParams {
+        exog: vec![1.5, -0.75],
+        ar: vec![0.3],
+        ma: vec![0.2],
+        seasonal_ar: vec![0.1],
+        seasonal_ma: vec![],
+        sigma2: 0.01,
+    };
+    let mut m = Sarima::new(cfg([1, 1, 1], [1, 0, 0, 4], vec![given], None)).unwrap();
+    let mut got = signature(&mut m, 0);
+    let estimate = SarimaEstimate {
+        se_bound: 1e3,
+        ..SarimaEstimate::default()
+    };
+    let mut m = Sarima::new(cfg([1, 0, 0], [0, 0, 0, 0], vec![], Some(estimate))).unwrap();
+    got.extend(signature(&mut m, 0));
+    let fit = m.params(0).expect("the start opens inside the stream");
+    got.extend(fit.exog.iter().chain(&fit.ar).chain([&fit.sigma2]));
+    check("sarima", &got, GOLDEN_SARIMA);
+}
+
 /// `expectile` on the same stream: an upper expectile under decay whose
 /// first 15 learned rows are refit, then the fit at the end.
 #[test]
@@ -2986,6 +3027,19 @@ const GOLDEN_PA_BOX: &[f64] = &[0.5262123538733023, 1.6796740252199436, 0.156626
 // Regenerated for task 278 (D-H, 2026-10-26): a row takes the larger of the
 // weighted line fit's gains and the textbook's, so the warm-up is the line
 // fit, where the weighted means pinned the trend to the first observation.
+const GOLDEN_SARIMA: &[f64] = &[
+    0.12945123562839456,
+    2.201818698115,
+    -0.0006974711280243184,
+    0.14105475476248386,
+    2.1498099458176285,
+    -0.005890391500066872,
+    1.5214065970557253,
+    -0.741555682980741,
+    0.9259992210526329,
+    0.010222536756712084,
+];
+
 const GOLDEN_AR: &[f64] = &[
     0.20651737786601188,
     2.183823230103924,

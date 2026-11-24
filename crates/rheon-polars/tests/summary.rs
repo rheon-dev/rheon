@@ -1194,6 +1194,15 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["x0"]"#,
             true,
         ),
+        // Its starts accepted under a loose bound, its runs stepping.
+        (
+            "sarima",
+            r#"{"type": "sarima", "order": [1, 0, 1], "seasonal_order": [1, 0, 0, 4],
+                "se_bound": 1000.0}"#,
+            r#"["y"]"#,
+            r#"["x0"]"#,
+            false,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

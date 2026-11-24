@@ -462,6 +462,23 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # Each target a seasonal ARMA with the features as regressors, its
+    # parameters estimated; the bound loose enough that both starts open in
+    # a group's 133 rows, so the steps after them run too.
+    (
+        "sarima",
+        "sarima",
+        dict(
+            targets=["y", "z"],
+            features=["x0", "x1"],
+            order=(1, 0, 1),
+            seasonal_order=(1, 0, 0, 4),
+            se_bound=1e3,
+            group="g",
+            **CLOCK,
+        ),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",

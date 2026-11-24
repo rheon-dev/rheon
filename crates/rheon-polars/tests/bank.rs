@@ -1009,6 +1009,7 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         r#"{"type": "ewm_moments", "terms": {"m2": {"x0": 2}}}"#,
         r#"{"type": "ar", "lags": 2}"#,
         r#"{"type": "spectral", "periods": [8.0]}"#,
+        r#"{"type": "sarima", "order": [1, 0, 0]}"#,
     ];
     let mut seen = Vec::new();
     for model in kinds {
@@ -1030,9 +1031,15 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         } else {
             r#"["x0", "x1"]"#
         };
+        // `sarima` decays nothing, and refuses a half-life.
+        let decay = if model.contains("sarima") {
+            ""
+        } else {
+            r#""half_life": 50.0, "#
+        };
         let spec: Spec = serde_json::from_str(&format!(
             r#"{{"name": "s", "model": {model}, "targets": ["y"], "features": {features},
-                "half_life": 50.0, "min_weight": 2.0}}"#
+                {decay}"min_weight": 2.0}}"#
         ))
         .unwrap_or_else(|e| panic!("{model}: {e}"));
         let has_resid = rheon_polars::output_index(&spec)

@@ -116,6 +116,7 @@ KINDS = [
     "dcc",
     "holt",
     "ar",
+    "sarima",
     "kmeans",
     "micro",
     "ew_class",
@@ -146,6 +147,15 @@ def kind(name: str, h: float | str, **common) -> dict:
         "expectile": dict(targets=["y"], features=two, expectile=0.8),
         "holt": dict(targets=["y"]),
         "ar": dict(targets=["y"], features=two, lags=2, ridge=1e-3),
+        # A slot a minute, near the stream's mean step; the bound loose, so
+        # the start opens early on the irregular clock.
+        "sarima": dict(
+            targets=["y"],
+            features=two,
+            order=(1, 0, 0),
+            se_bound=1e3,
+            spacing="1m" if isinstance(h, str) else 60.0,
+        ),
         "kmeans": dict(features=two, n_clusters=2, warm_rows=50),
         "micro": dict(features=two, eps=0.3),
         "ew_class": dict(label="c", classes=["a", "b"], features=two, precision_prior=1.0),
@@ -155,7 +165,9 @@ def kind(name: str, h: float | str, **common) -> dict:
         "garch": dict(targets=["y"], start_rows=50),
         "dcc": dict(targets=["y", "x1"], margin_start_rows=50, start_rows=50),
     }[name]
-    decay = {} if name == "garch" else {"half_life": h}
+    # No half-life: `garch`'s recursion is per observation, and `sarima`
+    # weighs every row it has learned alike.
+    decay = {} if name in ("garch", "sarima") else {"half_life": h}
     return getattr(rp.spec, name)("m", weight="w", **decay, **own, **common)
 
 

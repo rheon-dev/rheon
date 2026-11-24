@@ -331,6 +331,11 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "ddsketch",
             "ewm_moments",
             "spectral",
+            # Its regressors' coefficients are estimated with its lag
+            # polynomials by recursive prediction error: no least-squares
+            # leverage, and its information is kept in the coordinates it
+            # steps in, not as the reported coefficients' covariance.
+            "sarima",
         )
     },
 }

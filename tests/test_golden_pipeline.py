@@ -141,6 +141,26 @@ def specs() -> list[dict]:
         ),
         # Two lags of the target with the features beside them.
         rp.spec.ar("ar", lags=[1, 2], ridge=0.01, **common),
+        # An AR(1) with the features as regressors, its parameters
+        # estimated: a slot each two clock units (the groups interleave), a
+        # null target a slot not observed, and the start gated at a loose
+        # bound so it opens inside each group's 60 rows. Its `gap_cap` is
+        # past the stream's long step (ten clock units in a group, five
+        # slots predicted through): a step `gap_cap` shortens is a break,
+        # which starts the series and its fit again.
+        rp.spec.sarima(
+            "sarima",
+            targets=["y0"],
+            features=["x0", "x1"],
+            order=(1, 0, 0),
+            se_bound=1e3,
+            spacing=2.0,
+            clock="t",
+            gap_cap=12.0,
+            weight="w",
+            group="g",
+            min_weight=4.0,
+        ),
         rp.spec.ew_cov(
             "moments",
             features=["x0", "x1"],
@@ -1082,6 +1102,21 @@ GOLDEN: dict[str, float | str | None] = {
     "holt.withheld_reason@25": None,
     "holt.withheld_reason@60": None,
     "holt.withheld_reason@119": None,
+    "sarima.pred_y0@25": -4.908145307534959,
+    "sarima.pred_y0@60": -0.39087214880114357,
+    "sarima.pred_y0@119": -0.2806993374193702,
+    "sarima.resid_y0@25": 0.05653948330024239,
+    "sarima.resid_y0@60": -0.08116898001593437,
+    "sarima.resid_y0@119": 0.23000056646114136,
+    "sarima.weight_sum@25": 11.0,
+    "sarima.weight_sum@60": 28.5,
+    "sarima.weight_sum@119": 57.0,
+    "sarima.settled_frac@25": None,
+    "sarima.settled_frac@60": None,
+    "sarima.settled_frac@119": None,
+    "sarima.withheld_reason@25": None,
+    "sarima.withheld_reason@60": None,
+    "sarima.withheld_reason@119": None,
     "moments.mean_x0@25": 0.14567573584298,
     "moments.mean_x0@60": 0.5319388857885933,
     "moments.mean_x0@119": 0.07562417774137233,

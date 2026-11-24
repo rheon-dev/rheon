@@ -343,6 +343,10 @@ def describe_api(cli: Path | None = None) -> str:
         ("ar", dict(targets=["y", "z"], features=["x0"], lags=[1, 3], half_life=100.0)),
         ("spectral", dict(targets=["y", "z"], periods=[24.0, 8.0], half_life=100.0)),
         (
+            "sarima",
+            dict(targets=["y", "z"], features=["x0"], order=(1, 0, 1), seasonal_order=(1, 0, 0, 4)),
+        ),
+        (
             "deco blocked",
             dict(
                 features=["x0", "x1", "x2", "x3"],

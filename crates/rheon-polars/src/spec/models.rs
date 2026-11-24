@@ -958,6 +958,16 @@ impl Spec {
                         self.name
                     ));
                 }
+                // As `ar`'s: a row learned under an embargo reads lags one
+                // slot back, a row predicted the last values learned.
+                if self.embargo.is_some() {
+                    no.refuse(format!(
+                        "spec {:?}: embargo does not apply to sarima, whose lags are the \
+                     target's last slots: under a delay the rows it predicts would read older \
+                     lags than the rows it learns from. Leave embargo out.",
+                        self.name
+                    ));
+                }
                 no.take(crate::stream::sarima_cfg(self).map(|_| ()).map_err(|e| {
                     format!("spec {:?}: {}", self.name, e.trim_start_matches("sarima: "))
                 }));
