@@ -3974,15 +3974,6 @@ rows, and `n0 <= width`, so `width >= 1` wherever the line runs: `> 0` and \
 `>= 0` agree"""
 
 [[equivalent]]
-file = "crates/rheon-core/src/garch/filter.rs"
-function = "Filter::predict"
-mutation = "replace < with <="
-line_has = "return if s < lo { lo } else { hi + math::ln(s / hi) };"
-columns = [33]
-why = """the line runs only inside `if s < lo || s > hi`, which `s = lo` does \
-not enter, so `s < lo` and `s <= lo` agree wherever it runs"""
-
-[[equivalent]]
 file = "crates/rheon-core/src/garch/dist.rs"
 function = "ln_gamma"
 mutation = "replace < with <="
