@@ -418,7 +418,15 @@ error types: 0-1 ulps without a season, at most 6 with an additive one
 6. *`not_positive` stands beside a prediction.* The answer asked for a
    named `withheld_reason` on a row predicted and not learned; every other
    reason names a null prediction. It is the eighth reason, last in
-   precedence, and every model's `withheld_reason` Enum gains it.
+   precedence. Part 2 first added it to every model's `withheld_reason`
+   Enum, which changed every model's output dtype; the coordinator's answer
+   (2026-11-24): a `holt` without a season, and every other model, keeps
+   the columns and dtypes it had. So the Enum holds `not_positive` only
+   where it can occur, a `holt` with a multiplicative season
+   (`stream::withheld_reasons`); the codes are the same either way, as the
+   reason is last. Tested both sides: an unseasoned `holt`'s output schema
+   is the one of a spec without the new keys, and a multiplicative
+   season's row names `not_positive`.
 7. *Schema.* Part 2 first took CLAUDE.md rule 5's from-1.0 path
    (schema 73, 72's sets copied to `v72/`). The coordinator's answer
    (2026-11-24): 72 is unreleased (2.0.0 holds schema 67), so there is no

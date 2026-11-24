@@ -996,6 +996,32 @@ def enum_values_section(cli: Path | None) -> list[str]:
     )
     assert isinstance(reasons, pl.Enum)
     out.append("  withheld_reason, in precedence order: " + ", ".join(reasons.categories.to_list()))
+    # `not_positive` is in the Enum of the one form that can name it, a
+    # `holt` with a multiplicative season; every other spec's Enum is the
+    # one above (task 488).
+    mul = (
+        rp.ModelBank(
+            [
+                rp.spec.holt(
+                    "m",
+                    targets=["y"],
+                    half_life=10.0,
+                    seasonal="mul",
+                    seasonal_periods=2,
+                    seasonal_half_life=10.0,
+                    start="heuristic",
+                )
+            ]
+        )
+        .fit_predict(pl.DataFrame({"y": [1.0, 2.0]}))["m"]
+        .struct.field("withheld_reason")
+        .dtype
+    )
+    assert isinstance(mul, pl.Enum)
+    out.append(
+        "  withheld_reason of a multiplicative holt season: "
+        + ", ".join(mul.categories.to_list())
+    )
     if cli is not None:
         # `output_layout` too (task 278): its key and flag were listed, but not
         # the words they take.

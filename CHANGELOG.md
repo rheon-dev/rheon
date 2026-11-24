@@ -211,8 +211,9 @@ model that only the new build has is listed as an addition and passes.
   integers on a temporal or integer clock. A multiplicative season's row
   whose target, or whose level or factor after the update, would be 0 or
   below is predicted and not learned, with the new `withheld_reason`
-  `not_positive`, the one reason that stands beside a prediction; every
-  model's `withheld_reason` Enum gains the category. `max_state_bytes`
+  `not_positive`, the one reason that stands beside a prediction. Only that
+  form's `withheld_reason` Enum holds the category, so every other spec's
+  output, a `holt` without a season included, keeps its dtype. `max_state_bytes`
   (256 KB) bounds the state, 16 bytes a seasonal value a target and the
   heuristic start's held rows, and refuses a spec past it with the bytes
   it needs. Multiplicative trends, learned parameters and the error type

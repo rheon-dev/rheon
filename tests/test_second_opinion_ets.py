@@ -367,6 +367,63 @@ def test_a_multiplicative_target_of_zero_or_below_is_predicted_and_not_learned(y
         assert out["pred_y"][121:].equals(other["pred_y"][121:])
 
 
+# The reasons every spec's `withheld_reason` Enum holds but a multiplicative
+# `holt` season's, in their order; written out, so a change to it fails here.
+OTHER_REASONS = [
+    "below_min_settled_frac",
+    "below_min_weight",
+    "above_max_error_inflation",
+    "below_warm_rows",
+    "ill_conditioned",
+    "unstable_rate",
+    "not_identified",
+    "scale_ratio_moved",
+    "not_separated",
+    "level_beyond_sample",
+]
+
+
+def test_a_holt_without_a_season_writes_the_schema_it_wrote_before():
+    """A `holt` without a season, warm-started as before seasons, writes the
+    same columns in the same dtypes, its `withheld_reason` the Enum of the
+    reasons every other model's holds: `not_positive` cannot occur
+    without a multiplicative season, so it is not in this form's Enum."""
+    frame = pl.DataFrame({"y": _series(50, None, 3)})
+    for spec in (
+        rp.spec.holt("h", targets=["y"], half_life=H_LEVEL),
+        rp.spec.holt("h", targets=["y"], half_life=H_LEVEL, trend=False),
+    ):
+        out = _fit(spec, frame)
+        assert out.schema == pl.Schema(
+            {
+                "pred_y": pl.Float64,
+                "resid_y": pl.Float64,
+                "weight_sum": pl.Float64,
+                "settled_frac": pl.Float64,
+                "withheld_reason": pl.Enum(OTHER_REASONS),
+                "coef": pl.List(pl.Float64),
+            }
+        )
+    ew = rp.ModelBank([rp.spec.ewridge("m", targets=["y"], features=["x"], half_life=10.0)])
+    got = ew.fit_predict(pl.DataFrame({"x": [1.0, 2.0], "y": [1.0, 2.0]}))["m"]
+    assert got.struct.field("withheld_reason").dtype == pl.Enum(OTHER_REASONS)
+
+
+@pytest.mark.parametrize("season", ["add", "mul"])
+def test_only_a_multiplicative_season_adds_not_positive_to_the_enum(season):
+    """The Enum holds `not_positive` where it can occur, a multiplicative
+    season, and there the row whose target is 0 names it; an additive
+    season's Enum is every other spec's."""
+    y = _series(200, season, 7)
+    y[120] = 0.0
+    out = _fit(_spec(season, True, False), pl.DataFrame({"y": y}))
+    want = [*OTHER_REASONS, "not_positive"] if season == "mul" else OTHER_REASONS
+    assert out.schema["withheld_reason"] == pl.Enum(want)
+    if season == "mul":
+        assert out["withheld_reason"][120] == "not_positive"
+    assert out["withheld_reason"].null_count() == (199 if season == "mul" else 200)
+
+
 @pytest.mark.parametrize("start", ["known", "heuristic"])
 def test_chunks_and_a_save_go_on_to_the_bit(start):
     """One chunk and many, the heuristic start's rows held across the

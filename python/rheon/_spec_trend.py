@@ -311,8 +311,9 @@ def holt(
 
     Under ``"mul"`` a row whose target is 0 or below, or whose update would
     make the level or the seasonal factor 0 or below, is predicted and not
-    learned, and its ``withheld_reason`` is ``not_positive``. The
-    seasonal values are not renormalized.
+    learned, and its ``withheld_reason`` is ``not_positive``, a category
+    only this form's ``Enum`` holds. The seasonal values are not
+    renormalized.
 
     **Extrapolating over the clock.** The trend is per clock unit, so an
     irregular clock extrapolates the right distance.

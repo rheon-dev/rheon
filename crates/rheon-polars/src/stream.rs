@@ -1499,7 +1499,8 @@ pub enum OwnWait {
 /// the rows have not yet told apart; `level_beyond_sample` after it (task
 /// 544), a `tdigest` or `ddsketch` level its rows do not identify yet;
 /// `not_positive` last (task 488), a multiplicative `holt` row predicted
-/// and not learned.
+/// and not learned. A spec's `Enum` holds the reasons it can name
+/// ([`withheld_reasons`]).
 pub const WITHHELD_REASONS: [&str; 11] = [
     "below_min_settled_frac",
     "below_min_weight",
@@ -1513,6 +1514,23 @@ pub const WITHHELD_REASONS: [&str; 11] = [
     "level_beyond_sample",
     "not_positive",
 ];
+
+/// The categories of `spec`'s `withheld_reason` `Enum`: every reason but
+/// `not_positive`, and that one too on a `holt` with a multiplicative
+/// season, the one form that can name it. So the output of every other
+/// spec, a `holt` without a season included, keeps the `Enum` it had
+/// before the reason was added (task 488, the coordinator's answer 3): a
+/// dtype is part of what a reader's code checks. The codes are the same
+/// either way, since the reason is last.
+pub fn withheld_reasons(spec: &Spec) -> &'static [&'static str] {
+    match &spec.model {
+        ModelKind::Holt {
+            seasonal: Some(season),
+            ..
+        } if season == "mul" => &WITHHELD_REASONS,
+        _ => &WITHHELD_REASONS[..WITHHELD_REASONS.len() - 1],
+    }
+}
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
 const REASON_INFLATION: u8 = 3;
