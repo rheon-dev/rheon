@@ -133,7 +133,7 @@ shows them at work.
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
            ``audit``, ``hawkes``, ``garch``, ``dcc``, ``realized``, ``pca``,
            ``power_variation``, ``tdigest``, ``ddsketch``, ``ewm_moments``,
-           ``ar``, ``spectral``
+           ``ar``, ``spectral``, ``sarima``
 ``min_settled_frac``
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
@@ -1179,6 +1179,7 @@ from rheon._spec import (
     rcov,
     realized,
     rls,
+    sarima,
     seqtest,
     sgd,
     spectral,
@@ -1225,4 +1226,5 @@ __all__ = [
     "tdigest",
     "ddsketch",
     "spectral",
+    "sarima",
 ]

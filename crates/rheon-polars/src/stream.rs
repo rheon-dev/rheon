@@ -124,6 +124,7 @@ pub enum AnyModel {
     EwmMoments(Box<rheon_core::EwmMoments>),
     Ar(Box<rheon_core::Ar>),
     Spectral(Box<rheon_core::Spectral>),
+    Sarima(Box<rheon_core::Sarima>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -183,6 +184,7 @@ macro_rules! dispatch {
             AnyModel::EwmMoments($m) => $body,
             AnyModel::Ar($m) => $body,
             AnyModel::Spectral($m) => $body,
+            AnyModel::Sarima($m) => $body,
         }
     };
 }
@@ -522,6 +524,7 @@ impl AnyModel {
                 | AnyModel::Deco(_)
                 | AnyModel::Garch(_)
                 | AnyModel::Dcc(_)
+                | AnyModel::Sarima(_)
         )
     }
 
@@ -537,6 +540,8 @@ impl AnyModel {
             // ways: buffering, or buffering for want of an effect.
             AnyModel::Garch(m) => Self::start_wait(m.starting(), || m.no_effect()),
             AnyModel::Dcc(m) => Self::start_wait(m.starting(), || m.no_effect()),
+            // `sarima`'s start: buffering, or a fit withheld at its gate.
+            AnyModel::Sarima(m) => Self::start_wait(m.starting(), || m.unidentified()),
             _ => OwnWait::None,
         }
     }
@@ -656,6 +661,7 @@ impl AnyModel {
             | AnyModel::Pca(_) => 0,
             // Each fit counts its own; none withholds a row as a failure.
             | AnyModel::Ar(_)
+            | AnyModel::Sarima(_)
             | AnyModel::Spectral(_) => 0,
         }
     }
@@ -748,6 +754,9 @@ impl AnyModel {
             AnyModel::Ar(m) => m.coefficients(),
             // Its value is the power it reports per row.
             AnyModel::Spectral(_) => None,
+            // Each target's parameters, statsmodels' order; not a number
+            // before its start is accepted.
+            AnyModel::Sarima(m) => Some(m.coefficients()),
         }
     }
 
@@ -773,8 +782,8 @@ use model_cfgs::read_floor;
 pub use model_cfgs::{
     BOCPD_HAZARD_ROWS, ar_cfg, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, ddsketch_cfg,
     deco_block_names, deco_cfg, expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg,
-    huber_model, pca_cfg, power_variation_cfg, quantile_model, rcov_cfg, realized_cfg, sgd_model,
-    spectral_cfg, tdigest_cfg,
+    huber_model, pca_cfg, power_variation_cfg, quantile_model, rcov_cfg, realized_cfg, sarima_cfg,
+    sgd_model, spectral_cfg, tdigest_cfg,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -888,6 +897,7 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::DdSketch { .. }
         | ModelKind::EwmMoments { .. }
         | ModelKind::Ar { .. }
+        | ModelKind::Sarima { .. }
         | ModelKind::Spectral(_) => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and

@@ -328,6 +328,42 @@ pub fn ar_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::ArCfg
     Ok(cfg)
 }
 
+/// A `sarima` spec's [`rheon_core::SarimaCfg`]: one series a target, the
+/// features its exogenous regressors, every target's parameters
+/// estimated. Every value is the model's own to check.
+pub fn sarima_cfg(spec: &Spec) -> Result<rheon_core::SarimaCfg, String> {
+    let ModelKind::Sarima {
+        order,
+        seasonal_order,
+        enforce_stationarity,
+        enforce_invertibility,
+        se_bound,
+        spacing,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "sarima_cfg", "sarima"));
+    };
+    let est = rheon_core::SarimaEstimate {
+        enforce_stationarity: enforce_stationarity.unwrap_or(true),
+        enforce_invertibility: enforce_invertibility.unwrap_or(true),
+        se_bound: se_bound.unwrap_or(rheon_core::SarimaEstimate::SE_BOUND),
+    };
+    let cfg = rheon_core::SarimaCfg {
+        n_targets: spec.m(),
+        n_features: spec.k(),
+        order: *order,
+        seasonal_order: seasonal_order.unwrap_or([0; 4]),
+        params: Vec::new(),
+        spacing: spacing.as_ref().map_or(1.0, Span::value),
+        min_weight: spec.min_periods_or_default(),
+        max_state_bytes: *max_state_bytes,
+        estimate: Some(est),
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
 /// A `spectral` spec's [`rheon_core::SpectralCfg`] under `decay`: its
 /// series are the spec's targets, its frequencies the periods' inverses.
 pub fn spectral_cfg(

@@ -743,6 +743,7 @@ __all__ = [
     "tdigest",
     "ddsketch",
     "spectral",
+    "sarima",
 ]
 
 
@@ -4825,6 +4826,7 @@ from rheon._spec_power_variation import power_variation  # noqa: E402
 from rheon._spec_realized import realized  # noqa: E402
 from rheon._spec_regimes import hmm, rcov  # noqa: E402
 from rheon._spec_robust import huber, quantile  # noqa: E402
+from rheon._spec_sarima import sarima  # noqa: E402
 from rheon._spec_tdigest import tdigest  # noqa: E402
 from rheon._spec_trend import holt  # noqa: E402
 

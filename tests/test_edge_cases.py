@@ -34,6 +34,7 @@ MODELS = [
     ("expectile", {"expectile": 0.8}),
     ("holt", {"features": None}),  # no features keyword
     ("ar", {"lags": 1, "ridge": 1e-3}),
+    ("sarima", {"order": (1, 0, 0), "half_life": None, "se_bound": 1e3}),
 ]
 
 

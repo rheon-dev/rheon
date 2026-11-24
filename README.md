@@ -422,7 +422,7 @@ defines every word the documents use for the library.
 
 ## Models
 
-rheon has thirty-five models in four families, and each family
+rheon has thirty-six models in four families, and each family
 answers one kind of question about a stream. A spec's clock, grouping and
 warm-up mean the same whichever model it names ([What every spec
 takes](docs/MODELS.md#what-every-spec-takes)), and [Choose a

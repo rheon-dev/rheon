@@ -106,6 +106,8 @@ MINIMAL: dict[str, dict[str, object]] = {
     "ewm_moments": {"targets": None, "terms": {"var": {"x0": 2}}},
     "ar": {"lags": 2},
     "spectral": {"features": None, "periods": [8.0, 3.0]},
+    # No decay: its estimate weighs every row it has learned.
+    "sarima": {"order": (1, 0, 0), "half_life": None},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --

@@ -421,6 +421,24 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             .chain(cfg.dist.names())
             .map(|n| n.to_string())
             .collect()
+    } else if let crate::ModelKind::Sarima {
+        order,
+        seasonal_order,
+        ..
+    } = &spec.model
+    {
+        // statsmodels' `SARIMAX(...).param_names`: the features, `ar.L<i>`,
+        // `ma.L<i>`, `ar.S.L<s i>`, `ma.S.L<s i>`, then `sigma2`
+        // (`Sarima::coefficients`).
+        let [p, _, q] = *order;
+        let [sp, _, sq, s] = seasonal_order.unwrap_or([0; 4]);
+        let mut t = spec.features.clone();
+        t.extend((1..=p).map(|i| format!("ar.L{i}")));
+        t.extend((1..=q).map(|i| format!("ma.L{i}")));
+        t.extend((1..=sp).map(|i| format!("ar.S.L{}", s * i)));
+        t.extend((1..=sq).map(|i| format!("ma.S.L{}", s * i)));
+        t.push("sigma2".to_string());
+        t
     } else if let crate::ModelKind::Ar { lags, .. } = &spec.model {
         // The constant, each lag, then the features: `Ar::coefficients`.
         let mut t = Vec::with_capacity(spec.features.len() + 1);

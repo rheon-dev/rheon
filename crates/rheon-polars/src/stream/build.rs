@@ -802,6 +802,9 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Spectral(_) => Ok(AnyModel::Spectral(Box::new(rheon_core::Spectral::new(
             spectral_cfg(spec, decay)?,
         )?))),
+        ModelKind::Sarima { .. } => Ok(AnyModel::Sarima(Box::new(rheon_core::Sarima::new(
+            sarima_cfg(spec)?,
+        )?))),
         ModelKind::Ar { .. } => {
             let mut m = rheon_core::Ar::new(ar_cfg(spec, decay)?)?;
             // Each fit's factor, which its standard errors are read from.

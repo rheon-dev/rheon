@@ -382,6 +382,10 @@ class TestOutputSchemaStability:
         ("expectile", {"features": ["x0", "x1"], "expectile": 0.8}),
         ("holt", {}),
         ("ar", {"features": ["x0", "x1"], "lags": 2}),
+        (
+            "sarima",
+            {"features": ["x0", "x1"], "order": (1, 0, 0), "half_life": None, "se_bound": 1e3},
+        ),
     ]
 
     @pytest.mark.parametrize(("model", "kw"), _ALL_MODELS, ids=[m for m, _ in _ALL_MODELS])

@@ -39,6 +39,8 @@ MODELS = [
     ("holt", {"features": None}),  # no features keyword
     # The features as exogenous regressors beside two lags of the target.
     ("ar", {"lags": 1, "ridge": 1e-3}),
+    # The features as exogenous regressors of an AR(1); no decay.
+    ("sarima", {"order": (1, 0, 0), "half_life": None, "se_bound": 1e3}),
 ]
 
 #: A second configuration of a model above, swept through the same

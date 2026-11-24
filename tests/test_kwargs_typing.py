@@ -32,6 +32,7 @@ BUILDERS = [
     "ewm_moments",
     "ar",
     "spectral",
+    "sarima",
     "bocpd",
     "corrchange",
     "deco",

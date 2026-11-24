@@ -90,6 +90,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
         "spectral",
         &["periods", "spacing", "window_size", "snapshot_every"],
     ),
+    ("sarima", &["spacing"]),
 ];
 
 /// The parameters that are a rate *per* clock unit: a decay factor per unit
@@ -507,6 +508,9 @@ impl Spec {
                 put(&mut out, "spacing", s.spacing.as_ref());
                 put(&mut out, "window_size", s.window_size.as_ref());
                 put(&mut out, "snapshot_every", s.snapshot_every.as_ref());
+            }
+            ModelKind::Sarima { spacing, .. } => {
+                put(&mut out, "spacing", spacing.as_ref());
             }
             ModelKind::Ar {
                 window_size,

@@ -659,6 +659,43 @@ impl Sarima {
         SarimaParams::from_flat(&flat, shape.k, self.cfg.order, self.cfg.seasonal_order)
     }
 
+    /// Each target's parameters in statsmodels' order, `beta`, `phi`,
+    /// `theta`, `Phi`, `Theta`, `sigma2`: the given ones, or the
+    /// estimator's; NaN where a target's start is not accepted yet.
+    pub fn coefficients(&self) -> Vec<Vec<f64>> {
+        let [p, _, q] = self.cfg.order;
+        let [sp, _, sq, _] = self.cfg.seasonal_order;
+        let n = self.cfg.n_features + p + q + sp + sq + 1;
+        (0..self.cfg.n_targets)
+            .map(|j| match self.params(j) {
+                Some(prm) => prm.all().copied().collect(),
+                None => vec![f64::NAN; n],
+            })
+            .collect()
+    }
+
+    /// Whether some target's start is still filling its differencing or
+    /// buffering below the structural minimum.
+    pub fn starting(&self) -> bool {
+        (0..self.est.len()).any(|j| {
+            matches!(
+                self.wait(j),
+                Some(SarimaWait::Filling | SarimaWait::Buffering)
+            )
+        })
+    }
+
+    /// Whether some target's start was fitted and withheld: on a bound,
+    /// not converged, or a standard error past `se_bound`.
+    pub fn unidentified(&self) -> bool {
+        (0..self.est.len()).any(|j| {
+            matches!(
+                self.wait(j),
+                Some(SarimaWait::NotConverged | SarimaWait::OnBound | SarimaWait::NotIdentified)
+            )
+        })
+    }
+
     /// Kish's count of target `j`'s buffer, where it is buffering.
     pub fn buffered_kish(&self, j: usize) -> Option<f64> {
         let e = self.est.get(j)?;

@@ -947,6 +947,21 @@ impl Spec {
                         }),
                 );
             }
+            // No decay: the estimate weighs every row it learned. Every
+            // other value is the model's own to check, here at the call,
+            // where the state's size against its cap is known too.
+            ModelKind::Sarima { .. } => {
+                if self.half_life.is_some() || self.lam.is_some() {
+                    no.refuse(format!(
+                        "spec {:?}: {decay_key} does not apply to sarima, whose estimate \
+                     weighs every row it has learned. Leave {decay_key} out.",
+                        self.name
+                    ));
+                }
+                no.take(crate::stream::sarima_cfg(self).map(|_| ()).map_err(|e| {
+                    format!("spec {:?}: {}", self.name, e.trim_start_matches("sarima: "))
+                }));
+            }
             ModelKind::Ar { .. } => {
                 // A late target joins the lags late: a row learned under an
                 // embargo reads lags one row back, but a row predicted reads

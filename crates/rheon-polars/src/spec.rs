@@ -1821,6 +1821,38 @@ pub enum ModelKind {
     /// per target and period, the power before the row. No features.
     #[serde(rename = "spectral")]
     Spectral(SpectralSpec),
+    /// A seasonal ARIMA model with exogenous regressors per target,
+    /// SARIMAX, its parameters estimated online (`rheon_core::Sarima` with
+    /// `estimate` on): a buffered start fitted by conditional likelihood and
+    /// gated on its standard errors, then recursive prediction error. Per
+    /// target, the one-slot prediction; the parameters, statsmodels' order,
+    /// in `coef`. No decay.
+    #[serde(rename = "sarima")]
+    Sarima {
+        /// `(p, d, q)`.
+        order: [usize; 3],
+        /// `(P, D, Q, s)`; absent is no season.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seasonal_order: Option<[usize; 4]>,
+        /// `SARIMAX`'s stationarity transform; absent is on.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enforce_stationarity: Option<bool>,
+        /// `SARIMAX`'s invertibility transform; absent is on.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enforce_invertibility: Option<bool>,
+        /// The largest standard error a start is accepted with; absent is
+        /// 0.1.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        se_bound: Option<f64>,
+        /// Clock units a slot: a number of the clock column's units, or a
+        /// duration on a temporal clock; absent is 1.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spacing: Option<Span>,
+        /// The bytes a group's state may hold, the start's buffer included.
+        /// Default 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
 }
 
 /// One term of a `power_variation` spec: its name, which names its fields
@@ -2008,6 +2040,7 @@ impl ModelKind {
         "ewm_moments",
         "ar",
         "spectral",
+        "sarima",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -2047,6 +2080,7 @@ impl ModelKind {
             ModelKind::EwmMoments { .. } => "ewm_moments",
             ModelKind::Ar { .. } => "ar",
             ModelKind::Spectral(_) => "spectral",
+            ModelKind::Sarima { .. } => "sarima",
         }
     }
 
@@ -3142,6 +3176,7 @@ impl Spec {
             | ModelKind::Bocpd { .. }
             | ModelKind::Audit { .. }
             | ModelKind::Garch { .. }
+            | ModelKind::Sarima { .. }
             | ModelKind::TDigest { .. } => true,
             ModelKind::CorrChange { scalar, .. } => !scalar.unwrap_or(false),
             _ => false,
@@ -3375,6 +3410,9 @@ impl Spec {
             ModelKind::Ar { .. } => 0.0,
             // A power is defined from the first row; nothing to wait for.
             ModelKind::Spectral(_) => 0.0,
+            // The start is the gate: nothing is reported before its fit is
+            // accepted, which waits on Kish's count and the standard errors.
+            ModelKind::Sarima { .. } => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3931,8 +3969,9 @@ impl Spec {
                     columns_counted(self.features.len())
                 ));
             }
-        } else if matches!(self.model, ModelKind::Ar { .. }) {
-            // Features are optional: a pure autoregression has none.
+        } else if matches!(self.model, ModelKind::Ar { .. } | ModelKind::Sarima { .. }) {
+            // Features are optional: a pure autoregression has none, and
+            // `sarima`'s are its exogenous regressors.
         } else if self.features.is_empty() && !(columns_missing && self.model.is_unsupervised()) {
             columns_missing = true;
             no.refuse(format!(
@@ -4189,7 +4228,8 @@ impl Spec {
                     | ModelKind::Rcov { .. }
                     | ModelKind::Bocpd { .. }
                     | ModelKind::Audit { .. }
-                    | ModelKind::Garch { .. } => false,
+                    | ModelKind::Garch { .. }
+                    | ModelKind::Sarima { .. } => false,
                     ModelKind::CorrChange { scalar, .. } => scalar.unwrap_or(false),
                     _ => true,
                 };

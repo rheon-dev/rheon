@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the thirty-five models a spec can name, by
+The reference entry of each of the thirty-six models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The thirty-five models fall into four families, and each family answers one
+The thirty-six models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -50,6 +50,7 @@ to start with for which question.
 | [`glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) · [entry](#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) | step | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood, for counts, positive amounts, proportions and amounts with an exact zero |
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
 | [`ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) · [entry](#ar--an-autoregression-on-the-targets-own-past) | solve | an autoregression for each target, AR(p), by least squares on lags the model keeps itself, with the features as further inputs, and `AutoReg`'s fit with no decay |
+| [`sarima`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sarima) · [entry](#sarima--seasonal-arima-estimated-online) | step | a seasonal ARIMA model with exogenous regressors for each target, SARIMAX: differenced exactly, a start fitted by conditional likelihood and gated on its standard errors, then recursive prediction error |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
 | [`pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) · [entry](#pca--streaming-principal-components) | step | principal components learned a row at a time in state that grows with the components times the columns, not the columns squared: the incremental SVD, CCIPCA or Oja's rule, each component withheld until the data tells it apart from its neighbors |
@@ -2299,6 +2300,69 @@ chose `ar_select_order`'s order on all twelve series of true orders 1 to 4
 it was checked on, by AIC and by BIC, with a feature and without. Under
 decay it chose the order that minimizes the criterion over statsmodels'
 `WLS` per order, on all six series checked.
+
+### `sarima` — seasonal ARIMA, estimated online
+
+*API:* [`rheon.spec.sarima`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sarima) — *Rust:* [`sarima.rs`](../crates/rheon-core/src/sarima.rs) — *Outputs:* [fields](OUTPUTS.md#sarima)
+
+A seasonal ARIMA model with exogenous regressors for each target,
+statsmodels' `SARIMAX(order, seasonal_order, trend="n")`, its parameters
+estimated as the stream runs.
+
+Use `sarima` to predict a series one slot ahead from its own past, its
+past errors and its season, where a moving-average term or a seasonal
+difference is part of the process: an hourly load with a daily cycle, a
+weekly count. The model differences each series itself and keeps the lags
+it reads. It takes no decay: every learned row counts alike.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.sarima),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#sarima). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes);
+`features` is optional, and `half_life` and `lam` are refused.
+
+#### The update
+
+With `B` one slot's lag, `w_t = (1 − B)^d (1 − B^s)^D y_t` and `xw` the
+features differenced alike, the model is
+`φ(B) Φ(B^s) (w_t − xw_tᵀβ) = θ(B) Θ(B^s) e_t`. Each target's slots are
+buffered until Kish's count of them, `(Σw)²/Σw²`, passes the parameters
+plus `d + sD`; then the buffer's conditional likelihood, `σ²`
+concentrated, is maximized in `SARIMAX`'s unconstrained coordinates `x`.
+The fit is accepted only off every stationarity and invertibility bound,
+converged, and with every standard error at most `se_bound` (0.1): each
+ARMA coefficient's as it is, `σ²`'s relative to `σ²`. Otherwise the target
+keeps buffering and tries again once Kish's count has grown by half. From
+the accepted start, each learned row of weight `w` steps by recursive
+prediction error, `ψ = −∂e/∂x`:
+
+```
+pred_t = xw_tᵀβ − Σ A_i z_{t−i} + Σ C_j e_{t−j}      z = w − xwᵀβ
+V'     = V + w,   a = w/V'
+R'     = R + a (ψψᵀ − R)
+x'     = x + a R'⁻¹ ψ e_t
+σ²'    = σ² + a (e_t² − σ²)
+```
+
+`A` and `C` are the coefficients of `φ(B)Φ(B^s)` and `θ(B)Θ(B^s)` past
+their first, and `pred` adds the differencing back. A row of weight 0, or a
+null target, is a slot not observed: it keeps its place, so the seasonal
+lags after it stay aligned, and is predicted through. Until a target's
+start is accepted its row says why: `below_warm_rows` while it fills and
+buffers, `not_identified` while a fit is withheld at its gate.
+
+#### Notes
+
+**Against `SARIMAX.fit`.** Over fifty seeds of 3,000 rows each of
+`(1,0,0)(0,0,1,4)`, `(1,0,1)` and `(0,1,1)`, the estimate after the last
+row was within 0.0071 of `SARIMAX.fit`'s on the same rows on every ARMA
+coefficient and 0.0042 relative on `σ²`, within 0.35 of statsmodels' own
+standard errors. The starts opened between 162 and 366 rows.
+
+**State.** Past its start a target holds `9 (n + 2 + n² + L (6 + 2k))`
+bytes, `n = k + p + q + P + Q` and `L = max(p + sP, q + sQ, 1)`: 1,548 at
+`(1,1,1)(1,1,1,24)`, 9,324 at `s = 168`. Before it, its buffer is `9 (2 + k)`
+bytes a slot, held under `max_state_bytes`.
 
 ## Moments and correlation
 
