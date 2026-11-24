@@ -5200,8 +5200,8 @@ Gₐᵦ = (β_a b_j(a)[b] + β_b b_j(b)[a] + β_a β_b Q_j(a)j(b) − R_a R_b) /
 `θ_i` minimizes the least-squares contrast `Σ_i ∫ λ_i² dt − 2 ∫ λ_i dN_i`,
 each instant weighted by its decay. `G` is not kept, since it can be read
 from `b` and `Q`. The state is `8 (k + D (1 + k) + D (D + 1) / 2 + 2)` bytes
-for `D` nodes and `k = D U` excitations: 72 bytes for one node and two
-decays, 208 for two nodes and three.
+for `D` nodes and `k = D U` excitations: 64 bytes for one node and two
+decays, 200 for two nodes and three.
 
 #### The kernels, and a temporal clock
 
@@ -5326,8 +5326,9 @@ fit, and the model keeps no record of it, so its weight is not counted. Set
 + k)` bytes a row (its clock, its weight, its marks and its `k` sums), 40 for
 one node and two decays, and `window_events` bounds its rows, so a group's
 whole state is known when the spec is built. A spec past `max_state_bytes` is
-refused, and one past half of it is warned of. At its default of 256 KB, that
-is about 4,090 rows of one node and two decays, or 3,200 of two nodes and
+refused, and one past half of it is warned of. `max_state_bytes` may be at
+most 64 MiB a group, as every model's. At its default of 256 KB, that
+is about 6,551 rows of one node and two decays, or 3,273 of two nodes and
 three. A `window_size` window holds as many events as its span does, which
 the data decides, so each row holds a stamp of 32 bytes more. The bytes are
 checked as the rows go in. The first row to take a group past half of

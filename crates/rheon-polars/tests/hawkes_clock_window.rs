@@ -358,3 +358,76 @@ fn a_temporal_clock_takes_durations_as_a_numeric_one_takes_seconds() {
         assert!(fitted > 300, "{fitted} values");
     }
 }
+
+/// A row of weight 0 is read at its own stamp, as its step would be handed
+/// it (review 2026-11-23, HAWKES-5): on a clock in tenths, where `0.2 +
+/// 0.7` is not `0.9`, the bank read such a row's window at the last
+/// learned row's stamp moved on by the step, and a row exactly a span old
+/// sat on the other side of the edge. The reference is the core model,
+/// each learned row handed its stamp and each row of weight 0 read with
+/// `predict_at` at its own, from the last row that counted.
+#[test]
+fn a_zero_weight_row_reads_the_window_at_its_own_stamp() {
+    let mut r = lcg(17);
+    let n = 400;
+    let (mut t, mut e, mut f, mut w) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut tenths = 0i64;
+    for i in 0..n {
+        tenths += (r() * 4.0).floor() as i64;
+        t.push(tenths as f64 / 10.0);
+        e.push(if r() < 0.6 { 1.0 } else { 0.0 });
+        f.push(if r() < 0.4 { 1.0 } else { 0.0 });
+        w.push(if i % 3 == 2 { 0.0 } else { 1.0 });
+    }
+    let df = df!("g" => vec!["a"; n], "t" => t.clone(), "e" => e.clone(), "f" => f.clone(),
+                 "w" => w.clone())
+    .unwrap();
+    let mut parted = 0;
+    for span in (1..30).map(|t| t as f64 / 10.0) {
+        let sp = spec(&format!(r#""window_size": {span}"#), r#""weight": "w","#);
+        let out = run(&sp, &df, 97);
+        let mut m = Hawkes::new(HawkesCfg {
+            n_targets: 2,
+            kernel_decays: vec![0.8, 4.0],
+            decay: rheon_core::Decay::Halflife(f64::INFINITY),
+            min_weight: 0.0,
+            window_events: None,
+            window_clock: Some(span),
+            closed: WindowClosed::Right,
+            max_state_bytes: None,
+        })
+        .unwrap();
+        let (mut want_e, mut want_f) = (Vec::new(), Vec::new());
+        let mut last: Option<f64> = None;
+        for i in 0..n {
+            let d = last.map_or(0.0, |l| t[i] - l);
+            let stamp = rheon_core::Stamp::Raw(t[i], 0.0);
+            let step = if w[i] > 0.0 {
+                last = Some(t[i]);
+                m.stamp_next(stamp);
+                m.step(&[], &[Some(e[i]), Some(f[i])], d, 1.0)
+            } else {
+                let ahead = m.predict(&[], d);
+                let at = m.predict_at(&[], d, stamp);
+                parted += usize::from(
+                    ahead.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                        != at.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                );
+                at
+            };
+            want_e.push(Some(step.pred[0]).filter(|v| v.is_finite()));
+            want_f.push(Some(step.pred[1]).filter(|v| v.is_finite()));
+        }
+        for (name, want) in [("intensity_e", &want_e), ("intensity_f", &want_f)] {
+            let got = field(&out, name);
+            let first = (0..n).find(|&i| bits(&got[i..=i]) != bits(&want[i..=i]));
+            assert_eq!(
+                first,
+                None,
+                "span {span}, {name}: {:?}",
+                first.map(|i| (t[i], w[i], got[i], want[i]))
+            );
+        }
+    }
+    assert!(parted > 0, "no row of weight 0 sat on an edge");
+}

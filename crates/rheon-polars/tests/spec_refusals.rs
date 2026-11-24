@@ -1204,6 +1204,19 @@ fn a_hawkes_window_past_its_state_cap_is_refused() {
         &spec(r#"{"type": "hawkes", "kernel_decays": [1.0, 5.0], "max_state_bytes": 0}"#),
         &["max_state_bytes must be above 0"],
     );
+    // Held to every model's ceiling, 64 MiB a group (review 2026-11-23,
+    // HAWKES-3): `u64::MAX` was taken.
+    accepted(&spec(
+        r#"{"type": "hawkes", "kernel_decays": [1.0, 5.0], "max_state_bytes": 67108864}"#,
+    ));
+    for cap in [67108865u64, u64::MAX] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "hawkes", "kernel_decays": [1.0, 5.0], "max_state_bytes": {cap}}}"#
+            )),
+            &["max_state_bytes may be at most 67108864"],
+        );
+    }
     refused(&spec(r#"{"type": "hawkes"}"#), &["needs its kernels"]);
     // A window whose bytes pass what a `u64` holds is refused, not wrapped
     // into a few bytes that pass the cap (review 2026-11-23, HAWKES-1:

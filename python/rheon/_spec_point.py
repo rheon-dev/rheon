@@ -114,7 +114,7 @@ def hawkes(
         it past the cap stops the run with an error naming the group and the
         bytes, the bank having learned part of the chunk. Each row of the
         window takes ``8 * (2 + D + D * U)`` bytes and a stamp of 32 beside
-        it. Default 256 KB, ``262144``.
+        it. Default 256 KB, ``262144``; at most 64 MiB.
 
     .. rubric:: Output
 
@@ -171,8 +171,10 @@ def hawkes(
     ``half_life``, ``window_size`` not finite or not above 0, beside a
     finite ``half_life`` or ``window_events``, ``closed``
     other than ``"right"`` or ``"both"``, or ``"both"`` without
-    ``window_size``, and a ``half_life`` whose rate ``ln 2 / half_life`` is
-    within 0.1% of a decay or of a sum of two.
+    ``window_size``, a ``half_life`` whose rate ``ln 2 / half_life`` is
+    within 0.1% of a decay or of a sum of two, or past the largest float,
+    ``kernel_decays`` two of which sum or multiply past it, and a
+    ``max_state_bytes`` of 0 or past 64 MiB.
 
     .. rubric:: The update
 
