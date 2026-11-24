@@ -36,6 +36,7 @@ fn every_state_kind_is_distinct_and_named() {
         "ddsketch",
         "ar",
         "spectral",
+        "gmm",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -80,6 +81,7 @@ fn every_state_kind_is_distinct_and_named() {
         DdSketchModel::new(ddsketch_cfg()).unwrap().state(),
         Ar::new(ar_cfg()).unwrap().state(),
         Spectral::new(spectral_cfg()).unwrap().state(),
+        Gmm::new(gmm_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -156,6 +158,7 @@ fn one_state_of_each_kind() -> Vec<State> {
         DdSketchModel::new(ddsketch_cfg()).unwrap().state(),
         Ar::new(ar_cfg()).unwrap().state(),
         Spectral::new(spectral_cfg()).unwrap().state(),
+        Gmm::new(gmm_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -302,4 +305,6 @@ fn every_model_hands_back_its_configuration() {
     same(Ar::new(c.clone()).unwrap(), &c, Ar::cfg);
     let c = spectral_cfg();
     same(Spectral::new(c.clone()).unwrap(), &c, Spectral::cfg);
+    let c = gmm_cfg();
+    same(Gmm::new(c.clone()).unwrap(), &c, Gmm::cfg);
 }

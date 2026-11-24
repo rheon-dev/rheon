@@ -339,6 +339,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
         ),
         refused(Ar::new(ar_cfg()).unwrap(), "decay", zero(), h),
         refused(Spectral::new(spectral_cfg()).unwrap(), "decay", zero(), h),
+        refused(Gmm::new(gmm_cfg()).unwrap(), "decay", zero(), h),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -769,6 +770,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ),
         ("ar", share(Ar::new(ar_cfg()).unwrap())),
         ("spectral", share(Spectral::new(spectral_cfg()).unwrap())),
+        ("gmm", share(Gmm::new(gmm_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -826,6 +828,7 @@ const PROBED: &[(&str, &str)] = &[
     ("EwmMoments", "ewm_moments"),
     ("Ar", "ar"),
     ("Spectral", "spectral"),
+    ("Gmm", "gmm"),
 ];
 
 #[test]

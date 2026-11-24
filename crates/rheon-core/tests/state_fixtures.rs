@@ -1502,7 +1502,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 35] = [
+    const FROZEN: [&str; 36] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1538,6 +1538,7 @@ fn the_variant_names_are_frozen() {
         "EwmMoments",
         "Ar",
         "Spectral",
+        "Gmm",
     ];
     assert_eq!(
         variants(),
@@ -1658,7 +1659,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 198] = [
+    const FORMS: [(&str, &[&str]); 201] = [
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.
@@ -2116,6 +2117,11 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("spectral_window", &["model", "Spectral", "win", "total"]),
         ("ar_filling", &["model", "Ar", "rings", "0"]),
         ("ar_filling", &["model", "Ar", "fits", "0", "acc"]),
+        // `gmm` (task 506): its started components, and before the start
+        // its buffer and the last try's fit.
+        ("gmm", &["model", "Gmm", "comps", "Full", "0", "w_sum"]),
+        ("gmm_buffer", &["model", "Gmm", "buf_w"]),
+        ("gmm_buffer", &["model", "Gmm", "last_fit"]),
     ];
     // Each refit's first stamp, written only under a span (task 538): in
     // glm on the summed clock, in expectile an integer stamp.

@@ -162,11 +162,25 @@ pass:
    stream with fewer than `K` clusters never starts, and its rows read
    `withheld_reason = "not_separated"`, as `pca`'s components do.
 3. **The likelihood has stopped moving.** The fit is stable as rows
-   arrive: the mean log-density of the rows added since the last fit,
-   under that fit (out of sample), is within `p / (2 n)` of its in-sample
-   value under the new fit (`p` the free parameters, `n` the buffer's Kish
-   size). That is AIC's estimate of the optimism of an in-sample
-   likelihood, so a gap that size is all the refit gained.
+   arrive: the rows added since the last try score, under the new fit, at
+   most `3 p / n` above their score under the last try's fit (`p` the free
+   parameters, `n` the buffer's Kish size). *Corrected in the build
+   (2026-11-24):* this note first set the bound at `p / (2 n)`, AIC's
+   optimism of one in-sample likelihood. That is the wrong comparison.
+   At a fixed point the last try's fit, from half the rows, loses about
+   `p / n` on the new rows out of sample, and the new fit's in-sample
+   optimism on them adds `p / (2 n)`. A converged fit therefore gains
+   about `3 p / (2 n)`, three times the first bound, and the bound is set
+   at twice that, `3 p / n`. Measured with the first bound and seeded
+   starts alone: a one-component fit on stationary rows did not start in
+   500 rows (it started at 1,024), and a separated pair stayed `"moving"`
+   through 4,000 rows. With `3 p / n` and the warm start below, they
+   start at 32 and 128 rows. A fit that has not converged
+   gains a constant a row, which no bound of order `p / n` admits as `n`
+   grows. Each try also runs EM from the last try's fit beside its seeded
+   starts: from a seeded start alone, successive tries on one stream
+   landed in different local optima, and the gain between them never
+   fell.
 
 At the start, the buffer's fit enters at its rows' weight (`W_j` the
 buffer's responsibility mass, decayed to the start's clock), which the

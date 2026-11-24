@@ -3662,6 +3662,37 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // A mixture of one full component, started within the rows: its
+        // components' weight, means and co-moments.
+        case!(
+            "gmm",
+            "Gmm",
+            Gmm,
+            Gmm::new(GmmCfg {
+                decay: decay(),
+                ..GmmCfg::new(3, 1, GmmCovariance::Full)
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        // Eight diagonal components over 40 rows, about five rows each,
+        // below the six parameters each carries: not yet identified, so
+        // the start's buffer and its last try's fit.
+        case!(
+            "gmm_buffer",
+            "Gmm",
+            Gmm,
+            Gmm::new(GmmCfg {
+                decay: decay(),
+                ..GmmCfg::new(3, 8, GmmCovariance::Diag)
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
         // Two series' transforms at three frequencies.
         case!(
             "spectral",

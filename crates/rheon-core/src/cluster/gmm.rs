@@ -57,6 +57,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::summary::SplitMix64;
+use crate::clock::Decay;
+use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
 use crate::{EwCov, EwCovDiag, SpdFactor};
 
 /// The shape of each component's covariance.
@@ -98,6 +100,10 @@ pub struct GmmCfg {
     pub tol: f64,
     /// The most bytes the start's buffer may hold.
     pub max_state_bytes: u64,
+    /// The decay over the clock, as every model takes it.
+    pub decay: Decay,
+    /// The weight before the row below which nothing is reported.
+    pub min_weight: f64,
 }
 
 impl GmmCfg {
@@ -114,6 +120,8 @@ impl GmmCfg {
             max_iter: 100,
             tol: 1e-3,
             max_state_bytes: 256 * 1024,
+            decay: Decay::Halflife(f64::INFINITY),
+            min_weight: 0.0,
         }
     }
 
@@ -132,6 +140,7 @@ impl GmmCfg {
                     .into(),
             );
         }
+        self.decay.check().map_err(|e| format!("gmm: {e}"))?;
         if !(self.reg_covar.is_finite() && self.reg_covar > 0.0) {
             return Err(format!(
                 "gmm: reg_covar must be a finite number above 0, but it is {}. Give a small \
@@ -148,6 +157,20 @@ impl GmmCfg {
         }
         if self.n_init == 0 || self.max_iter == 0 {
             return Err("gmm: n_init and max_iter must each be at least 1. Give 1 or more.".into());
+        }
+        if !(self.min_weight.is_finite() && self.min_weight >= 0.0) {
+            return Err(format!(
+                "gmm: min_weight must be a finite number of at least 0, but it is {}. Give 0, or \
+                 the weight a fit needs before it is read.",
+                self.min_weight
+            ));
+        }
+        if self.max_state_bytes == 0 {
+            return Err(
+                "gmm: max_state_bytes must be at least 1. Give the most bytes the start's \
+                        buffer may hold."
+                    .into(),
+            );
         }
         if !(self.tol.is_finite() && self.tol > 0.0) {
             return Err(format!(
@@ -232,6 +255,9 @@ pub struct Gmm {
     /// The last try's fit and the buffer's length then, for condition 3.
     last_fit: Option<(Fit, usize)>,
     wait: GmmWait,
+    /// The weight of the rows learned, by the shared recursion
+    /// `n ← λ n + w` (hard rule 8).
+    n: f64,
 }
 
 const LN_2PI: f64 = 1.837_877_066_409_345_3;
@@ -247,6 +273,7 @@ impl Gmm {
             next_try: 1,
             last_fit: None,
             wait: GmmWait::WarmUp,
+            n: 0.0,
         })
     }
 
@@ -263,14 +290,11 @@ impl Gmm {
         (!self.started()).then_some(self.wait)
     }
 
-    /// The weight the components hold, `Σ_j W_j`: `n_eff`, read before a
-    /// row; the buffer's weight before the start.
+    /// The weight of the rows learned, `n ← λ n + w`, read before a row:
+    /// `n_eff`, the same in every model (hard rule 8). Once started it is
+    /// the components' weight `Σ_j W_j`.
     pub fn n_eff(&self) -> f64 {
-        match &self.comps {
-            Some(Comps::Full(c)) => c.iter().map(EwCov::n_eff).sum(),
-            Some(Comps::Diag(c)) => c.iter().map(EwCovDiag::n_eff).sum(),
-            None => self.buf_w.iter().sum(),
-        }
+        self.n
     }
 
     /// The bytes the start's buffer holds.
@@ -388,7 +412,29 @@ impl Gmm {
     /// once started, else the buffer and, at its doublings, a try of the
     /// start. A row of weight 0 decays the weights and learns nothing.
     pub fn learn(&mut self, x: &[f64], w: f64, lam: f64) {
-        if let Some(read) = self.comps.is_some().then(|| self.read(x)).flatten() {
+        let read = self.read(x);
+        self.learn_read(x, w, lam, read.as_ref());
+    }
+
+    /// [`Self::learn`] with the row's read already taken from the state
+    /// before the row.
+    fn learn_read(&mut self, x: &[f64], w: f64, lam: f64, read: Option<&GmmRead>) {
+        // A history the decay took to 0, or to the subnormal range of the
+        // row it meets, is forgotten (`gaps::decay_into`'s rule): the model
+        // goes back to its start, with the row the first of a new buffer.
+        let held = self.comps.is_some() || !self.buf_w.is_empty();
+        if held && w > 0.0 && lam * self.n <= w * f64::MIN_POSITIVE {
+            self.comps = None;
+            self.buf_x.clear();
+            self.buf_w.clear();
+            self.next_try = 1;
+            self.last_fit = None;
+            self.wait = GmmWait::WarmUp;
+            self.n = 0.0;
+            return self.learn_read(x, w, 1.0, None);
+        }
+        self.n = lam * self.n + w;
+        if let Some(read) = read.filter(|_| self.comps.is_some()) {
             let comps = self.comps.as_mut().expect("started");
             match comps {
                 Comps::Full(c) => {
@@ -836,6 +882,144 @@ fn strictly_pd(a: &[f64], k: usize) -> bool {
         }
     }
     true
+}
+
+/// The slots a row reports: `cluster`, `log_density`, `dist`, then each
+/// component's responsibility.
+pub const GMM_LEAD_SLOTS: usize = 3;
+
+impl Gmm {
+    /// Output slot labels in emission order.
+    pub fn labels(n_components: usize) -> Vec<String> {
+        let mut out = vec!["cluster".to_string(), "log_density".into(), "dist".into()];
+        out.extend((0..n_components).map(|j| format!("membership{j}")));
+        out
+    }
+
+    /// The row's read after a decay `lam`: none where the decay leaves the
+    /// history below the smallest normal double, which the row forgets.
+    fn read_after(&self, x: &[f64], lam: f64) -> Option<GmmRead> {
+        if lam * self.n < f64::MIN_POSITIVE {
+            return None;
+        }
+        self.read(x)
+    }
+
+    /// The row's slots from its read, NaN where it is withheld.
+    fn write(&self, read: Option<&GmmRead>, n_before: f64, pred: &mut Vec<f64>) {
+        pred.clear();
+        pred.resize(GMM_LEAD_SLOTS + self.cfg.n_components, f64::NAN);
+        if let Some(r) = read.filter(|_| n_before >= self.cfg.min_weight) {
+            pred[0] = r.cluster as f64;
+            pred[1] = r.log_density;
+            pred[2] = r.dist;
+            pred[GMM_LEAD_SLOTS..].copy_from_slice(&r.resp);
+        }
+    }
+
+    fn has_shape(&self) -> bool {
+        let (k, kk) = (self.cfg.n_features, self.cfg.n_components);
+        let comps = match &self.comps {
+            None => true,
+            Some(Comps::Full(c)) => {
+                self.cfg.covariance == GmmCovariance::Full
+                    && c.len() == kk
+                    && c.iter().all(|e| e.has_shape(k))
+            }
+            Some(Comps::Diag(c)) => {
+                self.cfg.covariance == GmmCovariance::Diag
+                    && c.len() == kk
+                    && c.iter().all(|e| e.has_shape(k))
+            }
+        };
+        comps
+            && self.buf_x.len() == self.buf_w.len() * k
+            && (self.comps.is_none() || self.buf_w.is_empty())
+            && self.n.is_finite()
+            && self.n >= 0.0
+    }
+}
+
+impl OnlineModel for Gmm {
+    fn step_into(
+        &mut self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        weight: f64,
+        out: &mut Step,
+    ) {
+        if let Some(refused) = crate::model::refused_step(self, x, y, d_clock, weight) {
+            *out = refused;
+            return;
+        }
+        let lam = self.cfg.decay.factor(d_clock);
+        let n_before = self.n;
+        // Decay moves no weight ratio, mean or covariance, so the read
+        // before it is the read after it: `predict`'s.
+        let read = self.read_after(x, lam);
+        self.write(read.as_ref(), n_before, &mut out.pred);
+        let w = if weight.is_finite() && weight > 0.0 {
+            weight
+        } else {
+            0.0
+        };
+        self.learn_read(x, w, lam, read.as_ref());
+        out.n_eff = n_before;
+        out.extra = None;
+    }
+
+    fn predict(&self, x: &[f64], d_clock: f64) -> Step {
+        if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
+            return refused;
+        }
+        let mut pred = Vec::new();
+        let lam = self.cfg.decay.factor(d_clock);
+        self.write(self.read_after(x, lam).as_ref(), self.n, &mut pred);
+        Step {
+            pred,
+            n_eff: self.n,
+            extra: None,
+        }
+    }
+
+    fn state(&self) -> State {
+        State::new(ModelState::Gmm(Box::new(self.clone())))
+    }
+
+    fn restore(s: &State) -> Result<Self, StateError> {
+        check_schema(s)?;
+        match &s.model {
+            ModelState::Gmm(m) => {
+                let m = (**m).clone();
+                crate::model::check_cfg("gmm", m.cfg.check())?;
+                if !m.has_shape() {
+                    return Err(crate::model::damaged(
+                        "gmm",
+                        "its saved values have the wrong shape",
+                    ));
+                }
+                Ok(m)
+            }
+            other => Err(StateError::WrongModel {
+                expected: "gmm",
+                found: other.kind(),
+            }),
+        }
+    }
+
+    /// Zero: `gmm` regresses nothing, as `kmeans` does.
+    fn n_targets(&self) -> usize {
+        0
+    }
+
+    fn n_features(&self) -> usize {
+        self.cfg.n_features
+    }
+
+    fn n_outputs(&self) -> usize {
+        GMM_LEAD_SLOTS + self.cfg.n_components
+    }
 }
 
 #[cfg(test)]

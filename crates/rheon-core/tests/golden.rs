@@ -1087,6 +1087,31 @@ fn ar_golden() {
     check("ar", &got, GOLDEN_AR);
 }
 
+/// `gmm` on the same stream's two features, one full component under decay:
+/// the row's log-density and Mahalanobis distance at the signature's rows,
+/// then the fitted mean and covariance. The stream's features are
+/// independent noise, so one component is what it holds; two would never
+/// start (`cluster/gmm_tests.rs` holds two on separated rows).
+#[test]
+fn gmm_golden() {
+    let mut m = Gmm::new(GmmCfg {
+        decay: Decay::Halflife(40.0),
+        ..GmmCfg::new(2, 1, GmmCovariance::Full)
+    })
+    .unwrap();
+    let mut got = signature(&mut m, 1);
+    let p = m.parameters().unwrap();
+    got.extend(&p.means);
+    got.extend(&p.covs);
+    let mut d = Gmm::new(GmmCfg {
+        decay: Decay::Halflife(40.0),
+        ..GmmCfg::new(2, 1, GmmCovariance::Diag)
+    })
+    .unwrap();
+    got.extend(signature(&mut d, 2));
+    check("gmm", &got, GOLDEN_GMM);
+}
+
 /// `spectral` on the same stream's target: its power at three frequencies
 /// under decay, its null target and its gap among the rows.
 #[test]
@@ -4528,4 +4553,19 @@ const GOLDEN_DDSKETCH_DECAYED: &[f64] = &[
     -1.1778803166775635,
     1.988277768204018,
     20.212303545600623,
+];
+
+const GOLDEN_GMM: &[f64] = &[
+    -1.0729256327750933,
+    -2.4835567358111557,
+    -0.8356447539225859,
+    0.0020349675498298296,
+    0.10258104401329232,
+    0.3441423210807563,
+    -0.032364053365856044,
+    -0.032364053365856044,
+    0.3297016892820652,
+    0.9115068069900879,
+    2.070340820758845,
+    0.29201788667586726,
 ];

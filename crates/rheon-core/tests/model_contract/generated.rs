@@ -148,6 +148,10 @@ fn every_model_refuses_a_state_without_the_low_parts() {
             refuses_without_low_parts(|| KMeans::new(kmeans_cfg()).unwrap(), &none),
         ),
         (
+            "gmm",
+            refuses_without_low_parts(|| Gmm::new(gmm_cfg()).unwrap(), &none),
+        ),
+        (
             "micro",
             refuses_without_low_parts(|| Micro::new(micro_cfg()).unwrap(), &none),
         ),
@@ -1193,6 +1197,10 @@ mod generated {
             contract(|| KMeans::new(kmeans_cfg()).unwrap(), &rows, split)?;
         }
 
+        fn gmm_contract(rows in stream(0, false), split in 0usize..60) {
+            contract(|| Gmm::new(gmm_cfg()).unwrap(), &rows, split)?;
+        }
+
         #[test]
         fn micro(rows in stream(0, false), split in 0usize..60) {
             contract(|| Micro::new(micro_cfg()).unwrap(), &rows, split)?;
@@ -1783,6 +1791,65 @@ fn spectral_predict_is_the_step() {
             .unwrap()
         },
         2,
+        false,
+    );
+}
+
+/// Two components of the probes' two features, full covariances, under the
+/// probes' half-life.
+fn gmm_cfg() -> GmmCfg {
+    GmmCfg {
+        decay: Decay::Halflife(HALFLIFE),
+        ..GmmCfg::new(K, 2, GmmCovariance::Full)
+    }
+}
+
+#[test]
+fn gmm() {
+    // A mixture, not a fit: no targets, three slots and a responsibility a
+    // component, and `n_eff` every learned row's weight, decayed (rule 8),
+    // before the start as after it.
+    for cov in [GmmCovariance::Full, GmmCovariance::Diag] {
+        let m = Gmm::new(GmmCfg {
+            covariance: cov,
+            ..gmm_cfg()
+        })
+        .unwrap();
+        assert_eq!(m.n_targets(), 0);
+        assert_eq!(m.n_features(), K);
+        assert_eq!(m.n_outputs(), 5);
+        let r = probe_with(m, 0, Some(&Gmm::n_eff));
+        assert_eq!(r.kind, "gmm");
+        assert_eq!(r.pred_len, r.n_outputs);
+        assert_eq!(r.n_eff[0], 0.0);
+        assert_eq!(r.n_eff[1], 1.0);
+        assert!((r.n_eff[2] - (0.5f64.powf(1.0 / HALFLIFE) + 1.0)).abs() < 1e-12);
+        assert!((r.after_gap - (r.before_gap * 0.5f64.powi(10) + 1.0)).abs() < 1e-9);
+        assert!(r.roundtrips);
+    }
+}
+
+#[test]
+fn gmm_predict_is_the_step() {
+    // One component: the probes' two independent columns of one spread hold
+    // no two clusters, so a mixture of two never starts on them, by design
+    // (the start's BIC condition); `cluster/gmm_tests.rs` holds two
+    // components on separated streams.
+    let one = || GmmCfg {
+        n_components: 1,
+        ..gmm_cfg()
+    };
+    predict_is_the_step_without_the_step(|| Gmm::new(one()).unwrap(), 0, false);
+    predict_is_the_step_without_the_step(
+        || {
+            Gmm::new(GmmCfg {
+                covariance: GmmCovariance::Diag,
+                min_weight: 3.0,
+                ..one()
+            })
+            .unwrap()
+        },
+        0,
         false,
     );
 }
