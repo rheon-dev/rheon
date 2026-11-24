@@ -137,7 +137,7 @@ pub fn check(cfg: &GarchCfg) -> Result<(), String> {
     Ok(())
 }
 
-/// Reads `horizons`, or a state's `horizon` of before it (a count of rows
+/// Reads `forecast_rows`, or a state's `horizon` of before it (a count of rows
 /// ahead, 1 for none): `horizon = h` above 1 is `horizons = [h]`, the
 /// same forecast, now with its sum beside it.
 pub fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<usize>, D::Error> {
@@ -180,7 +180,7 @@ pub fn egarch_mgf(alpha: f64, gamma: f64, c: f64) -> f64 {
 /// The forecasts of one target from a row whose variance is `s`, at the
 /// parameters `theta` (the variance equation's, the inputs' `π` last) and
 /// the lags in `filter`, the inputs held at `xbar` past the row: for each
-/// of `horizons`, in its order, the variance at it and the sum to it, into
+/// of `forecast_rows`, in its order, the variance at it and the sum to it, into
 /// `out` (two slots a horizon). `scratch` holds FIGARCH's weights and the
 /// pass's values.
 pub fn forecasts(

@@ -733,7 +733,7 @@ fn a_state_of_one_horizon_loads_as_its_horizons() {
     assert_eq!(back, c);
     for (old, want) in [(3u64, vec![3usize]), (1, vec![])] {
         // the map as a state of schema 71 wrote it: `horizon`, and neither
-        // `horizons` nor `max_horizon_work`
+        // `forecast_rows` nor `max_horizon_work`
         let rmpv::Value::Map(entries) = rmpv::decode::read_value(&mut &named[..]).unwrap() else {
             panic!("a map")
         };

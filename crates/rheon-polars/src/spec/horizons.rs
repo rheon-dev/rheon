@@ -1,4 +1,4 @@
-//! The forecast horizons a spec's `horizons` is written in: spans of the
+//! The forecast horizons a spec's `forecast_spans` and `forecast_rows` are written in: spans of the
 //! clock for `holt` and `kalman` (a span, a duration, or a `[name, span]`
 //! pair, one or a list of them), and counts of rows for `garch` (a count or
 //! a `[name, count]` pair), each with the label its fields carry. Split from
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::num_label;
 use crate::span::Span;
 
-/// One forecast horizon on the clock (`holt`'s `horizons`): a span, its
+/// One forecast horizon on the clock (`holt`'s `forecast_spans`): a span, its
 /// fields labelled `h<number>` or by the duration as written, or a `[name,
 /// span]` pair labelled by the name.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -61,7 +61,7 @@ impl<'de> Deserialize<'de> for SpanHorizon {
     }
 }
 
-/// `horizons` read as one span or a list of them (a span or a `[name,
+/// `forecast_spans` read as one span or a list of them (a span or a `[name,
 /// span]` pair each), as `kernel_half_lives` reads one or a list.
 pub(super) fn one_or_more_horizons<'de, D: serde::Deserializer<'de>>(
     d: D,
@@ -140,7 +140,7 @@ pub fn check_horizon_labels(who: &str, labels: &[String]) -> Result<(), String> 
     Ok(())
 }
 
-/// One forecast horizon of a spec (`garch`'s `horizons`): a count of rows,
+/// One forecast horizon of a spec (`garch`'s `forecast_rows`): a count of rows,
 /// its fields labelled `h<count>`, or a `[name, count]` pair, labelled by
 /// the name (a Python dict's item).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

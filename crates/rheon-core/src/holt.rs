@@ -80,7 +80,7 @@
 //! irregular clock is handled correctly instead of every row counting the
 //! same.
 //!
-//! **Forecasts at horizons** (`horizons`, spans of the clock `Δ ≥ 0` past
+//! **Forecasts at horizons** (`forecast_spans`, spans of the clock `Δ ≥ 0` past
 //! the row read): from the level and trend as they stand before the row,
 //!
 //! ```text

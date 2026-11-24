@@ -1557,7 +1557,7 @@ pub enum ModelKind {
     /// zero-mean return series, its parameters estimated online by recursive
     /// quasi-maximum likelihood after a start fitted by batch likelihood
     /// (`rheon_core::Garch`). Per target, the variance, the standardized
-    /// residual and, with `horizons`, the forecasts; the parameters in
+    /// residual and, with `forecast_rows`, the forecasts; the parameters in
     /// `coef`. Its features, if any, are the inputs of the variance
     /// equation (GARCH-X), read on the row whose variance they enter.
     #[serde(rename = "garch")]

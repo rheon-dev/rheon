@@ -144,7 +144,7 @@
 //!
 //! **What a row reports**, per target, all before the row is learned
 //! (hard rule 2): the variance `s_t`; the standardized residual `z_t =
-//! e_t/√s_t`; and, at each of `horizons`, the variance `h − 1` rows past
+//! e_t/√s_t`; and, at each of `forecast_rows`, the variance `h − 1` rows past
 //! this one and the sum of the variances over those `h` rows, this one's
 //! included (`garch::horizons` states each process's recursion: each later
 //! row's `e²` read as its variance and GJR's asymmetric term as half of it,
