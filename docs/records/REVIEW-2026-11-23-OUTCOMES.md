@@ -684,6 +684,7 @@ a stall about 1,000).
   The review's alternative counts every row the target was given, a new
   field a target and a layout change. Recommended: keep, as hard rule 8
   reads a window's weight.
+
 ## Batch h: covariance and clustering: `ew_cov`, `ew_class`, `rheon.corr`, `marginal`, `micro`, `kmeans`, `deco`, `corrchange`, refresh time, moments (PLAN 578h)
 
 On `review-578h`, cut from 13f5ffe4. "Confirmed" means the named test
