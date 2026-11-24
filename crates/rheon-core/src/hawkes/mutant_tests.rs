@@ -324,3 +324,51 @@ fn a_window_of_events_after_a_long_quiet_stretch_keeps_their_gaps() {
         }
     }
 }
+
+/// HAWKES-7's second path (PLAN 578d, found against the 60-digit fit while
+/// the review's fix was held to it): the quiet stretch falls inside the
+/// newer block, not before its first row. With three rows held, the fifth
+/// row is the newer block's first, the stretch comes before the sixth, and
+/// the sixth and seventh rows' times are `1 + 1e16 + dt`: their gap of 0.25
+/// rounds away when they become the older block. Moving the older block's
+/// times to the newer block's first row (the review's fix) leaves this as
+/// it is, since that row is before the stretch. Through the bank, on an
+/// integer clock and `window_events = 8`, the fit after a stretch of `1e16`
+/// is 1.6e-2 of its largest coefficient off the fit of the window's events
+/// at 60 digits, and 2.5 times it after `1e18`, with the review's fix and
+/// without it. From row 8 the row dropped last is past the stretch, and the
+/// fit is that of the same rows after a stretch of 100.
+///
+/// Confirmed and held: the fix keeps each newer row's gap to the row before
+/// it, which the state has no field for, so it waits on the user, and this
+/// test fails until it lands.
+#[test]
+#[should_panic(expected = "against")]
+fn a_quiet_stretch_inside_the_newer_block_keeps_the_later_gaps() {
+    let run = |quiet: f64| {
+        let mut m = Hawkes::new(HawkesCfg {
+            window_events: Some(3),
+            ..cfg(1, &[2.0])
+        })
+        .unwrap();
+        let mut out = Vec::new();
+        for d in [0.0, 1.0, 1.0, 1.0, 1.0, quiet, 0.25, 0.5, 0.25, 0.75, 0.5] {
+            out.push(m.step(&[], &[Some(1.0)], d, 1.0).pred);
+        }
+        out
+    };
+    let (far, near) = (run(1e16), run(100.0));
+    assert!(
+        near[8..].iter().flatten().all(|x| x.is_finite()),
+        "{near:?}"
+    );
+    for (i, (a, b)) in far.iter().zip(&near).enumerate().skip(8) {
+        for (x, y) in a.iter().zip(b) {
+            assert!(
+                x.is_nan() == y.is_nan()
+                    && (x.is_nan() || (x - y).abs() <= 1e-9 * y.abs().max(1.0)),
+                "row {i}: {a:?} against {b:?}"
+            );
+        }
+    }
+}
