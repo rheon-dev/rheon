@@ -554,6 +554,13 @@ impl EwCov {
         }
         let mut ew = Self::with_precision_prior(k, prior)?;
         ew.w_sum = w_sum;
+        // The squared weights behind a given weight are not given: unknown,
+        // as in a state before they were kept, so Kish's size is too. A
+        // squared weight of 0 beside a weight of 100 made it 10,201 rows
+        // after one more (review 2026-11-23, COV-2).
+        if w_sum > 0.0 {
+            ew.q_sum = crate::sqsum::KishSum::of(None);
+        }
         ew.m.copy_from_slice(means);
         ew.c.copy_from(comoments);
         Ok(ew)
@@ -821,7 +828,7 @@ impl EwCov {
             // `W` decays by `lam`, so its square decays by `lam^2`; the row
             // adds `w^2`, at the sum's own power of two. Kish's `n` is then
             // `W^2 / Q`.
-            crate::sqsum::add(q, s, lam * lam, w);
+            crate::sqsum::add(q, s, lam, w);
         }
         self.prior_scale *= lam;
     }
@@ -1431,8 +1438,11 @@ impl EwCov {
         // arrived in.
         self.flush();
         self.w_sum *= lam;
-        if let Some(q) = self.q_sum.q.as_mut() {
-            *q *= lam * lam;
+        let crate::sqsum::KishSum { q, s } = &mut self.q_sum;
+        if let Some(q) = q.as_mut() {
+            // `λ² Q`, at the sum's own power of two where `λ²` would take
+            // it below the doubles (`crate::sqsum::add`).
+            crate::sqsum::add(q, s, lam, 0.0);
         }
         self.prior_scale *= lam;
     }
@@ -2999,7 +3009,15 @@ impl crate::OnlineModel for EwCovModel {
             self.since_pca.step(d_clock);
             let by_clock = self.cfg.pca_every <= 0.0 || self.since_pca.reached(self.cfg.pca_every);
             let by_rows = self.rows_since_pca >= self.cfg.max_rows_between_pca as usize;
-            if self.n_eff() >= self.cfg.min_weight && (self.pca.is_none() || by_clock || by_rows) {
+            // Components refreshed while the scale was not yet defined (one
+            // row read, or Kish's size not past 1, under `bias = false`)
+            // carry NaN variances, and are refreshed again on the next row,
+            // where the scale may be: waiting for the cadence kept them for
+            // all of it, on a first row whose weight alone reaches
+            // `min_weight`, and under a window right after a gap that
+            // emptied it (review 2026-11-23, COV-1).
+            let undefined = self.pca.as_ref().is_none_or(|p| p.trace.is_nan());
+            if self.n_eff() >= self.cfg.min_weight && (undefined || by_clock || by_rows) {
                 self.refresh_pca();
             }
         }

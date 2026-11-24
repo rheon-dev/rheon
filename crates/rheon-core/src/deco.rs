@@ -1014,6 +1014,18 @@ impl Deco {
     /// keeps its weight undecayed (task 115 (h)).
     fn advance_ratio(&mut self, row: &Row, lam: f64, w: f64) {
         let Row { s1, s2, n, u, .. } = row;
+        if w <= 0.0 {
+            // A row of no weight learns nothing, whatever its values (hard
+            // rule 9): each level's weight decays, as a value with an
+            // estimate's would at weight 0, and a value without one (a row
+            // at the standardiser's mean, where `u` is 0/0) is no exception.
+            // Skipping those kept their weight undecayed, so the row's
+            // values moved the levels after it (review 2026-11-23, DECO-1).
+            for rw in &mut self.rho_w {
+                *rw *= lam;
+            }
+            return;
+        }
         let k = self.blocks.len();
         for bi in 0..k {
             if u[bi].is_finite() {
@@ -2870,6 +2882,79 @@ mod tests {
             match Deco::restore(&s) {
                 Err(StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{what}: {e}"),
                 other => panic!("{what}: {other:?}"),
+            }
+        }
+    }
+
+    /// A row of weight 0 learns nothing whatever its values (hard rule 9):
+    /// one at the standardiser's mean, where `u` is 0/0, and one away from
+    /// it, leave the same model to the bit. Every level's weight decays
+    /// across the row either way; on the build before PLAN 578h (DECO-1) a
+    /// value without an estimate skipped its level's decay, so the two
+    /// streams' `rho` parted by 0.17.
+    #[test]
+    fn a_row_of_no_weight_at_the_mean_learns_what_one_away_from_it_does() {
+        let k = 2;
+        let rows = stream(60, k, 0.5, 5);
+        for dynamics in [DecoDynamics::Ew, DecoDynamics::Linear] {
+            let (alpha, beta) = match dynamics {
+                DecoDynamics::Ew => (None, None),
+                DecoDynamics::Linear => (Some(0.05), Some(0.9)),
+            };
+            let new = || {
+                Deco::new(DecoCfg {
+                    dynamics,
+                    alpha,
+                    beta,
+                    decay: Decay::Lam(0.75),
+                    ..cfg(k)
+                })
+                .unwrap()
+            };
+            // A history every step of which is exact: a first row of weight
+            // 4 at `centre`, then rows of weight 1 a clock apart, so the
+            // weight stays at 4 and each row takes a quarter, in pairs
+            // `centre + e`, `centre - 3e/4` on a grid of sixteenths, each
+            // pair leaving the mean at `centre` exactly. A row there has no
+            // deviation, and its `u` is 0/0.
+            let centre = [1.0, 2.0];
+            let grid =
+                |x: &[f64]| -> Vec<f64> { x.iter().map(|v| (v * 16.0).round() / 16.0).collect() };
+            let (mut at_mean, mut away) = (new(), new());
+            for m in [&mut at_mean, &mut away] {
+                m.step(&centre, &[], 0.0, 4.0);
+            }
+            for x in &rows[..30] {
+                let e = grid(x);
+                let up: Vec<f64> = e.iter().zip(&centre).map(|(e, c)| c + e).collect();
+                let down: Vec<f64> = e.iter().zip(&centre).map(|(e, c)| c - 0.75 * e).collect();
+                for m in [&mut at_mean, &mut away] {
+                    m.step(&up, &[], 1.0, 1.0);
+                    m.step(&down, &[], 1.0, 1.0);
+                }
+            }
+            assert!(
+                (0..k).all(|i| at_mean.diag.deviation(i, centre[i]) == 0.0),
+                "{:?}",
+                (0..k)
+                    .map(|i| at_mean.diag.mean_pair(i))
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                at_mean.rho_w.iter().all(|&w| w > 0.0),
+                "{:?}",
+                at_mean.rho_w
+            );
+            let u = at_mean.step(&centre, &[], 3.0, 0.0).pred[0];
+            assert!(u.is_nan(), "the row at the mean has no estimate: {u}");
+            away.step(&[1.5, 3.0], &[], 3.0, 0.0);
+            let bits = |v: &[f64]| v.iter().map(|p| p.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&at_mean.rho_w), bits(&away.rho_w), "{dynamics:?}");
+            for x in &rows[30..] {
+                let x: Vec<f64> = x.iter().zip(&centre).map(|(e, c)| c + e).collect();
+                let a = at_mean.step(&x, &[], 1.0, 1.0).pred;
+                let b = away.step(&x, &[], 1.0, 1.0).pred;
+                assert_eq!(bits(&a), bits(&b), "{dynamics:?}");
             }
         }
     }

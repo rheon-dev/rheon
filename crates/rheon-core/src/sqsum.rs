@@ -29,8 +29,8 @@ pub(crate) fn ldexp(mut x: f64, mut n: i64) -> f64 {
     x
 }
 
-/// The sum after a row: `λ² Q + w²`, `lam2` the decay's square (1 for an
-/// undecayed sum), `w` the row's weight at its own scale.
+/// The sum after a row: `λ² Q + w²`, `lam` the decay (1 for an undecayed
+/// sum), `w` the row's weight at its own scale.
 ///
 /// Every row of a model that keeps such a sum runs this, so the path of a
 /// sum at its own scale 0 and a weight inside `[2^-256, 2^256]` (or 0,
@@ -38,15 +38,20 @@ pub(crate) fn ldexp(mut x: f64, mut n: i64) -> f64 {
 /// where it is called; [`add_scaled`] takes the rest, the same arithmetic
 /// it ran before the split, to the bit.
 #[inline]
-pub(crate) fn add(q: &mut f64, s: &mut i32, lam2: f64, w: f64) {
+pub(crate) fn add(q: &mut f64, s: &mut i32, lam: f64, w: f64) {
     // A positive double's bits order as its value does, so one unsigned
     // comparison of the bits tells `[LO, HI]`; 0 and a weight that is not
     // finite move no scale either, and `add_scaled` gives them the same sum.
     let in_range = w.to_bits().wrapping_sub(LO.to_bits()) <= HI.to_bits() - LO.to_bits();
-    if *s == 0 && (in_range || w == 0.0) {
-        *q = lam2 * *q + w * w;
+    let held = lam * lam * *q;
+    // A decay that takes the sum held below the normal doubles is taken by
+    // the scale (`add_scaled`): a step of no weight across 538 half-lives
+    // made `λ²` 0, and Kish's size, which no decay moves, absent (review
+    // 2026-11-23, COV-4).
+    if *s == 0 && (in_range || w == 0.0) && (held >= f64::MIN_POSITIVE || *q == 0.0) {
+        *q = held + w * w;
     } else {
-        add_scaled(q, s, lam2, w);
+        add_scaled(q, s, lam, w);
     }
 }
 
@@ -54,8 +59,23 @@ pub(crate) fn add(q: &mut f64, s: &mut i32, lam2: f64, w: f64) {
 /// at it: rare, so out of line.
 #[cold]
 #[inline(never)]
-fn add_scaled(q: &mut f64, s: &mut i32, lam2: f64, w: f64) {
-    let mut held = lam2 * *q;
+fn add_scaled(q: &mut f64, s: &mut i32, lam: f64, w: f64) {
+    let mut held = lam * lam * *q;
+    // Where the decay would take the sum held below the normal doubles, the
+    // scale takes the decay's power of two and the sum's own: `λ = f · 2^e`
+    // and `q = g · 4^t`, `g` in `[1/4, 1)`, so `λ² · q · 4^s = (f² · g) ·
+    // 4^(s + e + t)`, exactly, and the part kept is near 1. Only while the
+    // scale stays one a weight makes; past it the sum fades as before.
+    if *q > 0.0 && lam > 0.0 && lam.is_finite() && !(held >= f64::MIN_POSITIVE) {
+        let (f, e) = crate::held_median::frexp(lam);
+        let (_, eq) = crate::held_median::frexp(*q);
+        let t = eq.div_euclid(2);
+        let moved = i64::from(*s) + e + t;
+        if scale_fits_i64(moved) {
+            held = f * f * ldexp(*q, -2 * t);
+            *s = moved as i32;
+        }
+    }
     let mut ws = ldexp(w, -i64::from(*s));
     // `ws` is infinite where a finite weight is past the doubles at this
     // scale (a weight of 1 at a scale of 2^-1073): the scale moves to the
@@ -113,6 +133,10 @@ pub(crate) fn per_weight(w: f64, q: f64, s: i32) -> Option<f64> {
 /// Whether a loaded exponent is one a weight in the doubles makes: within
 /// the doubles' exponents, `2^±1100`, with room for the steps that move it.
 pub(crate) fn scale_fits(s: i32) -> bool {
+    scale_fits_i64(i64::from(s))
+}
+
+fn scale_fits_i64(s: i64) -> bool {
     (-1200..=1200).contains(&s)
 }
 
@@ -178,14 +202,14 @@ mod tests {
         let ws: Vec<f64> = (0..50).map(|i| 0.5 + 0.03 * f64::from(i % 17)).collect();
         let (mut q, mut s, mut plain) = (0.0, 0, 0.0f64);
         for &w in &ws {
-            add(&mut q, &mut s, 0.81, w);
+            add(&mut q, &mut s, 0.9, w);
             plain = 0.81 * plain + w * w;
         }
         assert_eq!((q.to_bits(), s), (plain.to_bits(), 0));
         let sum = |c: f64| {
             let (mut q, mut s, mut w_sum) = (0.0, 0, 0.0);
             for &w in &ws {
-                add(&mut q, &mut s, 0.81, w * c);
+                add(&mut q, &mut s, 0.9, w * c);
                 w_sum = 0.9 * w_sum + w * c;
             }
             (
@@ -232,11 +256,11 @@ mod tests {
             f64::NAN,
         ];
         for &w in &ws {
-            for (q0, lam2) in [(0.0, 1.0), (2.5, 0.81), (1e-200, 0.5)] {
+            for (q0, lam) in [(0.0, 1.0), (2.5, 0.9), (1e-200, 0.5), (1e-300, 1e-10)] {
                 let (mut qa, mut sa) = (q0, 0);
                 let (mut qb, mut sb) = (q0, 0);
-                add(&mut qa, &mut sa, lam2, w);
-                add_scaled(&mut qb, &mut sb, lam2, w);
+                add(&mut qa, &mut sa, lam, w);
+                add_scaled(&mut qb, &mut sb, lam, w);
                 assert_eq!((qa.to_bits(), sa), (qb.to_bits(), sb), "w {w:e}, q {q0}");
                 let general_count = (qb > 0.0).then(|| {
                     let x = ldexp(w, -i64::from(sb));

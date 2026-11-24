@@ -560,3 +560,58 @@ fn a_window_holding_one_row_of_weight_reads_undefined() {
     }
     assert!(unbiased.cov.rows_learned() == 40);
 }
+
+/// Components refreshed while the unbiased scale is not yet defined (one
+/// row read, under `bias = false`) are refreshed again on the next row,
+/// where it is. Left to the cadence, their NaN variances stood for all of
+/// it (review 2026-11-23, COV-1), on a first row whose weight alone reaches
+/// `min_weight`, and under a window right after a gap that emptied it.
+#[test]
+fn components_wait_for_a_defined_scale() {
+    let rows = |seed: u64| -> Vec<Vec<f64>> {
+        let mut s = seed;
+        (0..40)
+            .map(|_| {
+                let f = super::tests::lcg(&mut s);
+                vec![
+                    f + super::tests::lcg(&mut s),
+                    2.0 * f,
+                    super::tests::lcg(&mut s),
+                ]
+            })
+            .collect()
+    };
+    let finite = |m: &EwCovModel| {
+        m.pca
+            .as_ref()
+            .is_some_and(|p| p.eig.iter().all(|v| v.is_finite()))
+    };
+    // A first row of weight 5 against a `min_weight` of 1, components every
+    // 1000 clock units: the second row's refresh is the first defined one.
+    let mut c = cfg(50.0, None, false);
+    c.min_weight = 1.0;
+    c.pca_every = 1000.0;
+    let mut m = EwCovModel::new(c).unwrap();
+    let data = rows(3);
+    m.step(&data[0], &[], 1.0, 5.0);
+    for x in &data[1..4] {
+        m.step(x, &[], 1.0, 1.0);
+    }
+    assert!(finite(&m), "{:?}", m.pca);
+    // A window of 10 clock units, components every 50: good components,
+    // then a gap of 100 that empties the window and brings the cadence
+    // round. The row after it is read alone, and the next row's refresh is
+    // defined.
+    let mut c = cfg(50.0, Some(10.0), false);
+    c.pca_every = 50.0;
+    let mut m = EwCovModel::new(c).unwrap();
+    for x in &data[..20] {
+        m.step(x, &[], 1.0, 1.0);
+    }
+    assert!(finite(&m), "{:?}", m.pca);
+    m.step(&data[20], &[], 100.0, 1.0);
+    for x in &data[21..24] {
+        m.step(x, &[], 1.0, 1.0);
+    }
+    assert!(finite(&m), "{:?}", m.pca);
+}

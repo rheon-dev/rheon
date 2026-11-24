@@ -57,7 +57,7 @@ fn direct(xs: &[Vec<f64>], lams: &[f64], ws: &[f64]) -> (f64, Vec<f64>, Vec<f64>
     (wsum, m, s)
 }
 
-fn lcg(state: &mut u64) -> f64 {
+pub(super) fn lcg(state: &mut u64) -> f64 {
     *state = state
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
@@ -3515,4 +3515,53 @@ fn kish_size_holds_at_weights_too_small_to_square() {
     );
     let back: EwCov = rmp_serde::from_slice(&rmp_serde::to_vec_named(&b).unwrap()).unwrap();
     assert_eq!(back.n_kish(), b.n_kish(), "the exponent saves");
+}
+
+/// An accumulator stood at a weight from moments knows nothing of the
+/// squared weights behind it, so Kish's size is unknown, before a row and
+/// after one; at no weight it is the empty accumulator's. On the build
+/// before PLAN 578h a weight of 100 read a squared weight of 0, and one
+/// row of weight 1 then made Kish's size 10,201 rows out of 101 (review
+/// 2026-11-23, COV-2).
+#[test]
+fn moments_given_at_a_weight_have_no_kish_size() {
+    let (m3, c9, v3) = (vec![0.5; 3], vec![0.0; 9], vec![1.0; 3]);
+    let mut cov = EwCov::from_moments(3, 100.0, &m3, &c9, 1.0).unwrap();
+    let mut diag = EwCovDiag::from_moments(3, 100.0, &m3, &v3, 1.0).unwrap();
+    assert_eq!((cov.n_kish(), diag.q_sum()), (None, None));
+    cov.update(&[1.0, 2.0, 3.0], 1.0, 1.0);
+    diag.update(&[1.0, 2.0, 3.0], 1.0, 1.0);
+    assert_eq!((cov.n_kish(), diag.q_sum()), (None, None));
+    assert!(cov.unbiased_factor().is_nan());
+    let empty = EwCov::from_moments(3, 0.0, &m3, &c9, 1.0).unwrap();
+    assert_eq!(empty.q_sum(), Some(0.0));
+    let empty = EwCovDiag::from_moments(3, 0.0, &m3, &v3, 1.0).unwrap();
+    assert_eq!(empty.q_sum(), Some(0.0));
+}
+
+/// The unbiased factor `n/(n − 1)` at Kish's size holds where the squared
+/// weights fall below the doubles: rows of weight `1e-160`, and a step of
+/// no weight across 538 half-lives, which decays the weight by `2^-538` and
+/// its squares by `2^-1076`. Kish's size does not move across a decay, so
+/// neither does the factor (review 2026-11-23, COV-4).
+#[test]
+fn the_unbiased_factor_holds_where_the_squared_weights_underflow() {
+    let mut s = 4u64;
+    let rows: Vec<Vec<f64>> = (0..30).map(|_| vec![lcg(&mut s), lcg(&mut s)]).collect();
+    let mut tiny = EwCov::with_precision_prior(2, 1.0).unwrap();
+    let mut unit = EwCov::with_precision_prior(2, 1.0).unwrap();
+    for x in &rows {
+        tiny.update(x, 0.9, 1e-160);
+        unit.update(x, 0.9, 1.0);
+    }
+    let want = unit.unbiased_factor();
+    assert!(want.is_finite() && want > 1.0, "{want}");
+    let got = tiny.unbiased_factor();
+    assert!((got - want).abs() <= 1e-12 * want, "{got} against {want}");
+    unit.update(&rows[0], 0.5f64.powi(538), 0.0);
+    let after = unit.unbiased_factor();
+    assert!(
+        (after - want).abs() <= 1e-12 * want,
+        "{after} against {want}"
+    );
 }

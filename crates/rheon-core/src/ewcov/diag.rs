@@ -114,6 +114,10 @@ impl EwCovDiag {
         }
         let mut ew = Self::with_precision_prior(k, prior)?;
         ew.w_sum = w_sum;
+        // Unknown squared weights, as [`EwCov::from_moments`] says.
+        if w_sum > 0.0 {
+            ew.q_sum = None;
+        }
         ew.m.copy_from_slice(means);
         ew.v.copy_from_slice(variances);
         Ok(ew)
