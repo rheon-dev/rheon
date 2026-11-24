@@ -2236,6 +2236,7 @@ impl ModelKind {
                 | ModelKind::Glm { .. }
                 | ModelKind::Expectile { .. }
                 | ModelKind::Ar { .. }
+                | ModelKind::VectorAr(_)
         )
     }
 
