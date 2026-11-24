@@ -677,13 +677,14 @@ impl CorrChangeCfg {
                          permute_every_rows to 1 or more.",
                     );
                 }
+                // `inf` never comes round (review 2026-11-23, SPEC-4).
                 if let Some(d) = self.permute_every
-                    && (d.is_nan() || d < 0.0)
+                    && !(d.is_finite() && d >= 0.0)
                 {
                     no.refuse(format!(
-                        "corrchange: permute_every must be at least 0 clock units, but it is \
-                         {d}. Set permute_every to a span of the clock, 0 for every report, or \
-                         leave it out."
+                        "corrchange: permute_every must be a finite number of clock units, at \
+                         least 0, but it is {d}. Set permute_every to a span of the clock, 0 for \
+                         every report, or leave it out."
                     ));
                 }
                 if self.scalar {

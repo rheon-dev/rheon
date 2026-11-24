@@ -286,14 +286,29 @@ fn the_spans_are_checked() {
                 update_every: Some(-1.0),
                 ..cfg(3)
             },
-            "update_every must be at least 0",
+            "update_every must be a finite number of clock units, at least 0",
         ),
         (
             KMeansCfg {
                 split_merge_every: Some(f64::NAN),
                 ..cfg(3)
             },
-            "split_merge_every must be at least 0",
+            "split_merge_every must be a finite number of clock units, at least 0",
+        ),
+        // `inf` never comes round (review 2026-11-23, SPEC-4).
+        (
+            KMeansCfg {
+                update_every: Some(f64::INFINITY),
+                ..cfg(3)
+            },
+            "update_every must be a finite number of clock units, at least 0",
+        ),
+        (
+            KMeansCfg {
+                split_merge_every: Some(f64::INFINITY),
+                ..cfg(3)
+            },
+            "split_merge_every must be a finite number of clock units, at least 0",
         ),
     ] {
         let e = KMeans::new(c).unwrap_err();

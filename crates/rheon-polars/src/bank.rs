@@ -1583,10 +1583,11 @@ pub(crate) use closed_rows::instance_decay;
 pub use closed_rows::{ClosedRow, Gram, PairRow, vech};
 use closed_rows::{check_closed_row, closed_frame, gram_of, spec_bins, spec_cross_lags, spec_lags};
 use inline::{join_maybe_par, map_maybe_par, map_range_maybe_par, map_vec_maybe_par, par};
+pub(crate) use refusals::outside_support;
 #[cfg(test)]
 use refusals::over_budget_message;
 pub(crate) use refusals::{CLOCK_ORDER_HOW_TO, clock_amount};
-use refusals::{backwards_clock, non_finite_step, outside_support, over_budget, over_state_cap};
+use refusals::{backwards_clock, non_finite_step, over_budget, over_state_cap};
 
 /// Drop the streams a refused chunk materialized, `(spec index, key)` each.
 /// A new group's Huber refit buffers against its spec's `refit_budget`
@@ -3674,11 +3675,11 @@ impl Bank {
         // row goes in -- a column the chunk has not got, a core that cannot
         // be built or resumed -- is done for every spec first; what can
         // refuse after -- a formula whose strict cast fails on the resolved
-        // rows, the window pre-pass -- is covered by a snapshot of the cores,
-        // taken only where such a refusal is possible: a formula with a
-        // cast, a second spec with formula targets (its own early refusals
-        // come after the first was fed), or a ring that could refuse (R1 D5,
-        // R2 F1). The clock check has run, so the cores refuse no row.
+        // rows, the window pre-pass, a `glm`'s target outside its support --
+        // is covered by a snapshot of the cores, taken only where such a
+        // refusal is possible: a formula with a cast, a second spec with
+        // formula targets (its own early refusals come after the first was
+        // fed), a `glm`, or a ring that could refuse (R1 D5, R2 F1). The clock check has run, so the cores refuse no row.
         let mut formulas: Vec<Option<FormulaBundle>> = specs.iter().map(|_| None).collect();
         let formula_specs: Vec<usize> = (0..specs.len())
             .filter(|&si| specs[si].targets.any_formula())
@@ -3718,6 +3719,11 @@ impl Bank {
         }
         let needs_snapshot = !formula_specs.is_empty()
             && (formula_specs.len() > 1
+                // A `glm`'s resolved targets are held to its family's
+                // support (review 2026-11-23, GLM-6).
+                || formula_specs
+                    .iter()
+                    .any(|&si| matches!(specs[si].model, ModelKind::Glm { .. }))
                 || formula_specs.iter().any(|&si| {
                     specs[si]
                         .targets
@@ -4871,6 +4877,7 @@ impl Bank {
 }
 
 mod fields;
+pub(crate) use fields::nul_field;
 pub use fields::{
     FieldMeta, coef_fields, coef_fields_frame, duplicate_field, output_fields, output_index,
     output_index_frame,

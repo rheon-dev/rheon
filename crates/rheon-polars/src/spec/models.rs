@@ -117,6 +117,8 @@ impl Spec {
                 huber_scale,
                 huber_scale_half_life,
                 huber_refit_rows,
+                huber_refit_span,
+                max_state_bytes,
                 refit_budget,
                 quantile,
                 eps,
@@ -204,6 +206,24 @@ impl Spec {
                     (
                         "huber_refit_rows",
                         huber_refit_rows.is_some(),
+                        "loss",
+                        "huber",
+                        loss,
+                    ),
+                    // The span refit and the cap on its buffers are the Huber
+                    // loss's too: the model refused them, but after any other
+                    // problem the spec's checks found (review 2026-11-23,
+                    // SPEC-7).
+                    (
+                        "huber_refit_span",
+                        huber_refit_span.is_some(),
+                        "loss",
+                        "huber",
+                        loss,
+                    ),
+                    (
+                        "max_state_bytes",
+                        max_state_bytes.is_some(),
                         "loss",
                         "huber",
                         loss,
@@ -402,6 +422,17 @@ impl Spec {
                              does not list it. Add \"mahal\" to stats, or leave out \
                              mahal_quantiles.",
                                 self.name
+                            ));
+                        }
+                        // Each level names its own fields (review 2026-11-23,
+                        // SPEC-10).
+                        if let Some(d) = first_duplicate(levels) {
+                            no.refuse(format!(
+                                "spec {:?}: mahal_quantiles must list each level once, since \
+                                 each names its own fields, but it lists {} more than once. \
+                                 Remove the repeats from mahal_quantiles.",
+                                self.name,
+                                num_label(d)
                             ));
                         }
                         let bad: Vec<String> = levels

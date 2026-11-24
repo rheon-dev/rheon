@@ -108,14 +108,22 @@ pub fn expectile_cfg(
         window_size,
         closed,
         max_state_bytes,
+        refit_budget,
         ..
     } = &spec.model
     else {
         return Err(not_a(spec, "expectile_cfg", "expectile"));
     };
+    one_refit(
+        spec,
+        "refit_rows",
+        *refit_rows,
+        "refit_span",
+        refit_span.as_ref(),
+    )?;
     let windowed = window_rows.is_some() || window_size.is_some();
     let cap = max_state_bytes.unwrap_or(rheon_core::EXPECTILE_MAX_STATE_BYTES);
-    Ok(rheon_core::ExpectileCfg {
+    let cfg = rheon_core::ExpectileCfg {
         n_features: spec.k(),
         n_targets: spec.m(),
         fit_intercept: spec.fit_intercept,
@@ -142,7 +150,51 @@ pub fn expectile_cfg(
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
         max_state_bytes: *max_state_bytes,
-    })
+    };
+    budget_of_a_refit(spec, *refit_budget, cfg.refit_rows, cfg.refit_clock)?;
+    Ok(cfg)
+}
+
+/// A refit of a target's first rows is set by its count or its span, never
+/// both, whatever the count: a count of 0, which says "no refit", given
+/// beside a span was read as absent and the span ran (review 2026-11-23,
+/// SPEC-5). The model refuses a count above 0 beside a span itself.
+fn one_refit(
+    spec: &Spec,
+    rows_key: &str,
+    rows: Option<u32>,
+    span_key: &str,
+    span: Option<&Span>,
+) -> Result<(), String> {
+    match (rows, span) {
+        (Some(n), Some(s)) => Err(format!(
+            "spec {:?}: {span_key} = {s} and {rows_key} = {n} both set the refit of a target's \
+             first rows, by the clock and by the rows, and a target is refit once. Leave one of \
+             them out.",
+            spec.name
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// A `refit_budget` bounds the memory a group's refit buffers hold, so a
+/// spec that runs no refit has nothing for it to bound: refused, as
+/// `marginal`'s is under the mean (review 2026-11-23, SPEC-10).
+fn budget_of_a_refit(
+    spec: &Spec,
+    budget: Option<crate::spec::Num>,
+    refit_rows: u32,
+    refit_clock: Option<f64>,
+) -> Result<(), String> {
+    if budget.is_some() && refit_rows == 0 && refit_clock.is_none() {
+        return Err(format!(
+            "spec {:?}: refit_budget bounds the memory of the refit of each group's first rows, \
+             but with these settings the spec runs no refit, so it bounds nothing. Leave \
+             refit_budget out, or turn the refit on.",
+            spec.name
+        ));
+    }
+    Ok(())
 }
 
 /// A `realized` spec's [`rheon_core::RealizedCfg`] at `decay`: one series a
@@ -1366,6 +1418,13 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
     else {
         return Err(not_a(spec, "huber_model", "huber"));
     };
+    one_refit(
+        spec,
+        "huber_refit_rows",
+        *huber_refit_rows,
+        "huber_refit_span",
+        huber_refit_span.as_ref(),
+    )?;
     let cfg = RobustCfg {
         n_features: spec.k(),
         n_targets: spec.m(),
@@ -1470,6 +1529,13 @@ pub fn quantile_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
     else {
         return Err(not_a(spec, "quantile_model", "quantile"));
     };
+    one_refit(
+        spec,
+        "quantile_refit_rows",
+        *quantile_refit_rows,
+        "quantile_refit_span",
+        quantile_refit_span.as_ref(),
+    )?;
     let cfg = RobustCfg {
         n_features: spec.k(),
         n_targets: spec.m(),
@@ -1542,6 +1608,13 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
     else {
         return Err(not_a(spec, "sgd_model", "sgd"));
     };
+    one_refit(
+        spec,
+        "huber_refit_rows",
+        *huber_refit_rows,
+        "huber_refit_span",
+        huber_refit_span.as_ref(),
+    )?;
     // Both words at once: neither check reads the other.
     let mut no = rheon_core::Refusals::new();
     let loss: Result<SgdLoss, String> = (|| {
@@ -1705,6 +1778,7 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         refit_span,
         max_state_bytes,
         step_cap,
+        refit_budget,
         ..
     } = &spec.model
     else {
@@ -1728,8 +1802,14 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         Some("power") => GlmLink::Power,
         Some(other) => return Err(words("link", &GLM_LINKS, other)),
     };
-    // A span in place of the count: the count's default is off beside it,
-    // and one given is the model's to refuse.
+    one_refit(
+        spec,
+        "refit_rows",
+        *refit_rows,
+        "refit_span",
+        refit_span.as_ref(),
+    )?;
+    // A span in place of the count: the count's default is off beside it.
     let refit_rows = refit_rows.unwrap_or_else(|| {
         if refit_span.is_some() {
             0
@@ -1741,6 +1821,12 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
             )
         }
     });
+    budget_of_a_refit(
+        spec,
+        *refit_budget,
+        refit_rows,
+        refit_span.as_ref().map(Span::value),
+    )?;
     Ok(rheon_core::GlmCfg {
         n_features: spec.k(),
         n_targets: spec.m(),

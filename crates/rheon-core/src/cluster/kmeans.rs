@@ -270,12 +270,15 @@ impl KMeansCfg {
             ("update_every", self.update_every),
             ("split_merge_every", self.split_merge_every),
         ] {
+            // `inf` never comes round, and no JSON of the spec says it back
+            // (review 2026-11-23, SPEC-4); leaving the key out says "by the
+            // rows alone".
             if let Some(d) = v
-                && (d.is_nan() || d < 0.0)
+                && !(d.is_finite() && d >= 0.0)
             {
                 no.refuse(format!(
-                    "kmeans: {name} must be at least 0 clock units, but it is {d}. Set {name} to \
-                     a span of the clock, 0 for every row, or leave it out."
+                    "kmeans: {name} must be a finite number of clock units, at least 0, but it \
+                     is {d}. Set {name} to a span of the clock, 0 for every row, or leave it out."
                 ));
             }
         }

@@ -652,20 +652,27 @@ impl RobustCfg {
             }
         }
         if self.refit_rows > 0 || self.refit_clock.is_some() {
+            // The key the refit was asked for by: its span named its count
+            // (review 2026-11-23, SPEC-7).
+            let key = if self.refit_clock.is_some() {
+                format!("{kind}_refit_span")
+            } else {
+                format!("{kind}_refit_rows")
+            };
             if let RobustLoss::Huber { delta } = self.loss
                 && delta == f64::INFINITY
             {
                 no.refuse(format!(
-                    "{kind}: huber_refit_rows refits a target's first rows to a Huber fit, \
-                     but huber_delta is {delta}, which makes that fit least squares. Set \
+                    "{kind}: {key} refits a target's first rows to a Huber fit, but \
+                     huber_delta is {delta}, which makes that fit least squares. Set \
                      huber_delta to a finite cut, or leave the refit out."
                 ));
             }
             if self.ridge_scale {
                 no.refuse(format!(
-                    "{kind}: {kind}_refit_rows and ridge_scale=\"sum\" cannot both be set: \
-                     the refit fits its first rows again after the ridge they were learned \
-                     under has faded. Leave out {kind}_refit_rows, or ridge_scale."
+                    "{kind}: {key} and ridge_scale=\"sum\" cannot both be set: the refit \
+                     fits its first rows again after the ridge they were learned under has \
+                     faded. Leave out {key}, or ridge_scale."
                 ));
             }
         }

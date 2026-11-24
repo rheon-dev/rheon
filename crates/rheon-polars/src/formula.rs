@@ -406,6 +406,19 @@ const WINDOW_HEADS: &[&str] = &[
     "rrolling_min",
 ];
 
+/// The window operators looking ahead, as a formula writes them: "a, b or
+/// c". A formula target's refusal of a formula with none names them all; it
+/// named three of six (review 2026-11-23, SPEC-11).
+pub(crate) fn forward_heads() -> String {
+    let ahead: Vec<&str> = WINDOW_HEADS
+        .iter()
+        .copied()
+        .filter(|h| OpKind::parse(h).is_some_and(|k| k.direction() == Direction::Forward))
+        .collect();
+    let (last, rest) = ahead.split_last().expect("operators looking ahead");
+    format!("{} or {last}", rest.join(", "))
+}
+
 /// What a formula reads around the window operators, in the words a reader
 /// looks for, each with the nodes it stands for. The refusal names their
 /// nodes, as a tree writes them; a unit test holds their nodes to `CALLS` with `col` and `lit`, and
