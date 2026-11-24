@@ -68,7 +68,7 @@ fn add_scaled(q: &mut f64, s: &mut i32, lam: f64, w: f64) {
     // weight the sum is of can still be a normal double, `Σw² ≤ (Σw)²`, so
     // to a scale of `2^-1022`: past it the weight itself is subnormal, and
     // the sum fades as before ([`count`] reads no size there).
-    if *q > 0.0 && lam > 0.0 && lam.is_finite() && !(held >= f64::MIN_POSITIVE) {
+    if *q > 0.0 && lam > 0.0 && lam.is_finite() && held < f64::MIN_POSITIVE {
         let (f, e) = crate::held_median::frexp(lam);
         let (_, eq) = crate::held_median::frexp(*q);
         let t = eq.div_euclid(2);
