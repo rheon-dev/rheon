@@ -1047,7 +1047,10 @@ impl Spec {
                         let l = n_lags as f64;
                         let c = cross_lags.as_ref().map_or(l, |c| c.len() as f64);
                         let base = (3.0 * p + 5.0) * t;
-                        let more = 2.0 * l * t + 2.0 * (l + c) * p * t;
+                        // The lagged products, the lagged rows' own sums
+                        // and the rows' sums now over the rows matched
+                        // with a lagged one, with their weights.
+                        let more = 6.0 * l * t + 3.0 * (l + c) * p * t;
                         no.refuse(format!(
                             "spec {:?}: lags under a hard window need window_lags=True, since \
                          each snapshot then also holds the lag moments: {more} values \

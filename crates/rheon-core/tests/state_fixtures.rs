@@ -587,6 +587,43 @@ const COUNTED_ZERO_WEIGHT: &[&str] = &["audit", "audit_exact", "audit_scaled"];
 ///   from these rows, so no output of them is held to a number.
 const NEW_STATISTICS: &[&str] = &["corrchange_monitor", "corrchange_sequential"];
 
+/// The windowed `ew_class` cases of schema 71 or earlier (rule 5's
+/// thirty-second exception, the user's, 2026-11-24: "No concern for
+/// continuing differently here"; review 2026-11-23, COV-3): a window's
+/// ridge is the prior's weight over the window's weight, `s·W / W_R`, where
+/// it was the whole history's share `s`. No layout changed, so a kept state
+/// converts to the current fixture's bytes exactly; its frozen
+/// continuation, read with the old ridge, is not what it is held to. It
+/// goes on as the current fixture does, every output to the bit.
+const WINDOW_RIDGE: &[&str] = &["ew_class_window"];
+
+/// The windowed `marginal` lag cases of schema 71 or earlier (review
+/// 2026-11-23, MARG-1, the user's decision of 2026-11-24, "(a), exact"):
+/// the lag moments keep, since, the sides now over the rows a lagged one
+/// was matched with and their weights, which a kept state holds none of.
+/// It loads with them started at 0 (`MarginalLags::start_matching`), and
+/// its window reads them once its boundary is a snapshot taken after the
+/// load, and the old way until then: so it goes on to its frozen
+/// continuation to the bit, and converts to the current fixture's state
+/// but for those sides ([`without_matched`]), which the current state
+/// holds from its first row.
+const MATCHED_FROM_LOAD: &[&str] = &["marginal_window_lags"];
+
+/// `v` with the sides over the matched rows taken out of every map
+/// ([`MATCHED_FROM_LOAD`]).
+fn without_matched(v: &rmpv::Value) -> rmpv::Value {
+    match v {
+        rmpv::Value::Map(m) => rmpv::Value::Map(
+            m.iter()
+                .filter(|(k, _)| k.as_str() != Some("matched"))
+                .map(|(k, v)| (k.clone(), without_matched(v)))
+                .collect(),
+        ),
+        rmpv::Value::Array(a) => rmpv::Value::Array(a.iter().map(without_matched).collect()),
+        v => v.clone(),
+    }
+}
+
 /// The `garch` cases of schema 71 saved within a start that had cleared its
 /// buffer: the start's rule of that schema tried at one, two and four times
 /// `start_rows` and then let every row go and buffered afresh, which no
@@ -1082,6 +1119,19 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     named(&again.state()) == saved,
                     "{what}: saved, loaded, saved"
                 );
+            } else if schema < 72 && MATCHED_FROM_LOAD.contains(&f.name) {
+                let saved = named(&m.state());
+                let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    named(&again.state()) == saved,
+                    "{what}: saved, loaded, saved"
+                );
+                let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
+                assert_eq!(
+                    without_matched(&decode(&saved)),
+                    without_matched(&decode(&current.bytes())),
+                    "{what}: converted, but for the sides over the matched rows"
+                );
             } else if renumbered.is_some() {
                 assert_eq!(schema, 65, "{what}: RENUMBERED is for schema 65's windows");
                 renumbered_rule(&case, &named(&m.state()), &current.bytes(), &|_| 0.0, &what);
@@ -1103,7 +1153,27 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             let new_statistics = NEW_STATISTICS.contains(&f.name);
             let exact = new_statistics && named(&m.state()) == current.bytes();
             let current_outs = current.outs();
+            // The window's ridge ([`WINDOW_RIDGE`]): as the current fixture.
+            let window_ridge = schema < 72 && WINDOW_RIDGE.contains(&f.name);
             for (i, (row, want)) in f.rows().iter().zip(f.outs()).enumerate() {
+                if window_ridge {
+                    let got = m.step(row);
+                    let tol = if current.writer == writer() { 0.0 } else { TOL };
+                    // A ring from before the running products (schema 61
+                    // to 64) reads in its last bits as a fresh run's does.
+                    let tol = if windowed && schema < 65 && i > 0 {
+                        tol.max(TOL)
+                    } else {
+                        tol
+                    };
+                    same_out(
+                        &format!("{what}, row {i} after the save"),
+                        &got,
+                        &current_outs[i],
+                        tol,
+                    );
+                    continue;
+                }
                 if new_statistics {
                     let got = m.step(row);
                     let what = format!("{what}, row {i} after the save");
@@ -4141,4 +4211,76 @@ fn the_scales_from_every_row_are_written() {
         }
     }
     assert!(kept >= 10, "{kept} standardized cases");
+}
+
+/// A windowed `marginal`'s lag moments keep, beside the lagged sides about
+/// the origin, the sides now over the rows a lagged one was matched with
+/// and those rows' weights, in one vector, `matched` (review 2026-11-23,
+/// MARG-1): every current set of a windowed lag case writes it, in the live
+/// moments and in every snapshot, non-empty, and the case whose second
+/// target joins late holds a weight over the matched rows below its rows'
+/// where the rows before it lacked a partner. A set of 71 or earlier
+/// writes none, the form a state saved before them takes (its load starts
+/// them).
+#[test]
+fn the_sides_over_the_matched_rows_are_written() {
+    if regenerating() {
+        return;
+    }
+    fn found<'v>(v: &'v rmpv::Value, out: &mut Vec<&'v rmpv::Value>) {
+        match v {
+            rmpv::Value::Map(m) => {
+                for (k, v) in m {
+                    if k.as_str() == Some("matched") {
+                        out.push(v);
+                    }
+                    found(v, out);
+                }
+            }
+            rmpv::Value::Array(a) => a.iter().for_each(|v| found(v, out)),
+            _ => {}
+        }
+    }
+    let decoded =
+        |f: &crate::cases::Fixture| rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let floats = |m: &rmpv::Value| -> Vec<f64> {
+        m.as_array()
+            .unwrap_or_else(|| panic!("{m}"))
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect()
+    };
+    for name in ["marginal_window_lags", "marginal_window_lags_joining"] {
+        let f = frozen::ALL.iter().find(|f| f.name == name).unwrap();
+        let v = decoded(f);
+        let mut out = Vec::new();
+        found(&v, &mut out);
+        // The live moments and at least one snapshot.
+        assert!(out.len() >= 2, "{name}: written {} times", out.len());
+        assert!(out.iter().all(|m| !floats(m).is_empty()), "{name}");
+        if name == "marginal_window_lags_joining" {
+            // Some value strictly inside (0, 1): a weight over the matched
+            // rows below the rows' own (the weights are each target's share).
+            let inside = out
+                .iter()
+                .flat_map(|m| floats(m))
+                .any(|w| w > 0.0 && w < 0.999);
+            assert!(
+                inside,
+                "{name}: no weight over the matched rows below the rows'"
+            );
+        }
+    }
+    for (schema, set) in previous_sets() {
+        for f in set.iter().filter(|f| f.name == "marginal_window_lags") {
+            let v = decoded(f);
+            let mut out = Vec::new();
+            found(&v, &mut out);
+            assert!(
+                out.is_empty(),
+                "v{schema}/{}: matched in a set before it",
+                f.name
+            );
+        }
+    }
 }

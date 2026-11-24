@@ -1492,9 +1492,31 @@ impl Marginal {
                     0.0
                 }
             };
+            // The sides now over the rows a lagged product was taken on, and
+            // their weight: `E_w[(a − m_a)(b − m_b)·1_P] = C − e_a·side_b −
+            // e_b·side_a + e_a·e_b·w_P` over the matched rows `P`. Without
+            // them a row with no partner (a target absent `ℓ` back, the
+            // first rows after a break) left `−e_b·Σ_unmatched w(a −
+            // m_a)/W` in the moment, growing with the series' drift from
+            // its origin: a lag correlation of 20 on noise (review
+            // 2026-11-23, MARG-1). Kept by every state this build writes;
+            // one saved before them reads without them until its window's
+            // boundary is a snapshot taken after the load.
+            let matched = lag.origin().filter(|o| o.matching()).filter(|_| {
+                self.boundary()
+                    .is_none_or(|(old, _)| old.lag.as_ref().is_some_and(|m| m.matching()))
+            });
             for li in 0..lag.lags().len() {
-                let cxx = at(lag.cxx(li, t, j), &|m| m.cxx(li, t, j)) - ex * side_x(li);
-                let cyy = at(lag.cyy(li, t), &|m| m.cyy(li, t)) - ey * side_y(li);
+                let mut cxx = at(lag.cxx(li, t, j), &|m| m.cxx(li, t, j)) - ex * side_x(li);
+                let mut cyy = at(lag.cyy(li, t), &|m| m.cyy(li, t)) - ey * side_y(li);
+                if let Some(o) = matched {
+                    let ax = at(o.matched().ax(li, t, j), &|m| m.matched().ax(li, t, j));
+                    let wx = at(o.matched().wx(li, t), &|m| m.matched().wx(li, t));
+                    let ay = at(o.matched().ay(li, t), &|m| m.matched().ay(li, t));
+                    let wy = at(o.matched().wy(li, t), &|m| m.matched().wy(li, t));
+                    cxx += ex * (ex * wx - ax);
+                    cyy += ey * (ey * wy - ay);
+                }
                 lag_corr_xx.push(norm(cxx, sd_x * sd_x));
                 lag_corr_yy.push(norm(cyy, sd_y * sd_y));
             }
@@ -1506,8 +1528,16 @@ impl Marginal {
                     .iter()
                     .position(|l| l == cl)
                     .expect("a cross lag is a lag");
-                let cxy = at(lag.cxy(ci, t, j), &|m| m.cxy(ci, t, j)) - ex * side_y(li);
-                let cyx = at(lag.cyx(ci, t, j), &|m| m.cyx(ci, t, j)) - ey * side_x(li);
+                let mut cxy = at(lag.cxy(ci, t, j), &|m| m.cxy(ci, t, j)) - ex * side_y(li);
+                let mut cyx = at(lag.cyx(ci, t, j), &|m| m.cyx(ci, t, j)) - ey * side_x(li);
+                if let Some(o) = matched {
+                    let axy = at(o.matched().axy(ci, t, j), &|m| m.matched().axy(ci, t, j));
+                    let ayx = at(o.matched().ayx(li, t), &|m| m.matched().ayx(li, t));
+                    let wx = at(o.matched().wx(li, t), &|m| m.matched().wx(li, t));
+                    let wy = at(o.matched().wy(li, t), &|m| m.matched().wy(li, t));
+                    cxy += ey * (ex * wy - axy);
+                    cyx += ex * (ey * wx - ayx);
+                }
                 lag_corr_xy.push(norm(cxy, sd_x * sd_y));
                 lag_corr_yx.push(norm(cyx, sd_x * sd_y));
             }
@@ -1917,7 +1947,7 @@ impl Marginal {
                         Some(Src::Row(q)) => d.ys[q * n_targets + t],
                         None => None,
                     };
-                    lag.step_by(li, t, m.a, m.b, reached, y_back);
+                    lag.step_by(li, t, m.a, m.b, reached, y_back, yt.unwrap_or(f64::NAN));
                 }
                 d.dy_lag.push(dy_lag);
             }
@@ -2055,7 +2085,10 @@ impl Marginal {
                         ring_x,
                         origin,
                     } = l.parts();
-                    let (origin, sides) = origin.unzip();
+                    let (origin, sides) = match origin {
+                        Some((o, bx, ax, axy)) => (Some(o), Some((bx, ax, axy))),
+                        None => (None, None),
+                    };
                     (Some([cxx, cxy, cyx]), Some(ring_x), origin, sides)
                 }
                 None => (None, None, None, None),
@@ -2088,10 +2121,14 @@ impl Marginal {
                 deal(values, p, &cuts, |k, v| parts[k].runs.push(v));
                 deal(start, p, &cuts, |k, v| parts[k].runs_start.push(v));
             }
-            if let Some(sides) = sides {
-                for v in sides.iter_mut() {
+            if let Some((bx, ax, axy)) = sides {
+                for v in bx.iter_mut() {
                     deal(v, p, &cuts, |k, v| parts[k].bx.push(v));
                 }
+                // The features' sides now over the matched rows; none in a
+                // state saved before them ([`crate::LagOrigin`]).
+                deal(ax, p, &cuts, |k, v| parts[k].ax.push(v));
+                deal(axy, p, &cuts, |k, v| parts[k].axy.push(v));
             }
             if let Some([cxx, cxy, cyx]) = moments {
                 for v in cxx.iter_mut() {
@@ -2554,6 +2591,11 @@ pub struct MarginalShard<'a> {
     /// Under a window, the features' lagged sides about the origin,
     /// `[lag·T + t]` as `cxx` (`crate::LagOrigin`); empty otherwise.
     bx: Vec<&'a mut [f64]>,
+    /// Under a window, the features' sides now over the rows whose
+    /// features `ℓ` back are in the ring (`[lag·T + t]`), and over those
+    /// whose target `ℓ` back was present (`[cross lag·T + t]`).
+    ax: Vec<&'a mut [f64]>,
+    axy: Vec<&'a mut [f64]>,
     /// Per target, this range's cells in the bins.
     w: Vec<&'a mut [f64]>,
     mean: Vec<&'a mut [f64]>,
@@ -2580,6 +2622,8 @@ impl<'a> MarginalShard<'a> {
             cxy: Vec::new(),
             cyx: Vec::new(),
             bx: Vec::new(),
+            ax: Vec::new(),
+            axy: Vec::new(),
             w: Vec::new(),
             mean: Vec::new(),
             m2: Vec::new(),
@@ -2737,6 +2781,12 @@ impl<'a> MarginalShard<'a> {
                         if let Some(bx) = self.bx.get_mut(xx) {
                             wait(m.a, bx);
                         }
+                        if let Some(ax) = self.ax.get_mut(xx) {
+                            wait(m.a, ax);
+                        }
+                        if let Some(axy) = ci.and_then(|ci| self.axy.get_mut(ci * n_targets + t)) {
+                            wait(m.a, axy);
+                        }
                         wait(m.a, self.cxx[xx]);
                         if let Some(ci) = ci {
                             wait(m.a, self.cxy[ci * n_targets + t]);
@@ -2754,9 +2804,20 @@ impl<'a> MarginalShard<'a> {
                         mx,
                         mx_lo,
                     };
-                    // The feature's lagged side about the origin.
+                    // The feature's lagged side about the origin, and its
+                    // sides now over the matched rows.
                     if let Some(bx) = self.bx.get_mut(xx) {
                         step_side(m.a, m.b, lagged.x_lag, mx, bx);
+                    }
+                    if let Some(ax) = self.ax.get_mut(xx) {
+                        step_side(m.a, m.b, x, mx, ax);
+                    }
+                    if let Some(axy) = ci.and_then(|ci| self.axy.get_mut(ci * n_targets + t)) {
+                        if lagged.dy_lag.is_some() {
+                            step_side(m.a, m.b, x, mx, axy);
+                        } else {
+                            wait(m.a, axy);
+                        }
                     }
                     match ci {
                         Some(ci) => step_all(
@@ -3090,6 +3151,14 @@ impl OnlineModel for Marginal {
                     && b.hist.is_some()
                 {
                     b.before_65 = false;
+                }
+                // A windowed state saved before the lag moments kept their
+                // sides over the matched rows starts them here, at 0
+                // ([`crate::LagOrigin`]; review 2026-11-23, MARG-1): its
+                // window reads them once its boundary is a snapshot taken
+                // after the load, and without them until then, as it did.
+                if let Some(l) = m.lag.as_mut() {
+                    l.start_matching();
                 }
                 Ok(m)
             }

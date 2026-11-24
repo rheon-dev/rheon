@@ -85,8 +85,10 @@
 //! **stretches** ([`crate::OnlineModel::clear_lags`]). Each stretch is
 //! closed as the group's last one is -- leading jitter, interior, trailing
 //! jitter -- and `Γ̂_h` is the sum over stretches, so no product ever pairs
-//! two returns across the break. A stretch that ends before its tail is
-//! full contributes only what it had already emitted. The subsampled grids
+//! two returns across the break. A stretch's leading jittered return waits
+//! until the stretch has `2m` returns: one of `2m − 1` closes with the one
+//! jittered return its two jitters make together, and a shorter one has
+//! none, so a stretch reads the same backwards. The subsampled grids
 //! behind the automatic bandwidth restart there too: each offset starts
 //! again at the new stretch's own `o`-th return, and a step in progress is
 //! dropped, so no step sums returns across the break.
@@ -703,8 +705,8 @@ pub struct RcovEstimate {
     pub rcorr: Option<Vec<f64>>,
     /// Effective returns behind it, by kind: `plain`, the returns accepted;
     /// `kernel`, the jittered returns, `n − 2m + 2` in a stretch of `n`
-    /// returns at a jitter of `m` (a stretch cut short before its tail
-    /// fills gives the ones it had emitted); `preavg`, the pre-averaged
+    /// returns at a jitter of `m` (none in a stretch of fewer than `2m − 1`);
+    /// `preavg`, the pre-averaged
     /// terms, `n − kₙ + 2` in a stretch of `n`. Summed over the stretches.
     pub n: i64,
     pub kind: &'static str,
@@ -899,6 +901,31 @@ impl Rcov {
         out
     }
 
+    /// The one jittered return of a stretch of `2m − 1` returns, whose two
+    /// jitters meet: `mean(X_m..X_{2m−1}) − mean(X_0..X_{m−1})`, written in
+    /// returns `(1/m)·Σᵢ min(i, 2m − i)·xᵢ` over the `m` in `head` and the
+    /// `m − 1` in `tail`. The lead alone, emitted at the `m`-th return, was
+    /// the stretch's only return before (review 2026-11-23, COV-5).
+    fn fused(&self) -> Vec<f64> {
+        let m = self.cfg.jitter;
+        let mut out = vec![0.0; self.k()];
+        for (idx, x) in self.head.iter().chain(&self.tail).enumerate() {
+            let i = idx + 1;
+            let w = i.min(2 * m - i) as f64 / m as f64;
+            for (o, v) in out.iter_mut().zip(x) {
+                *o += w * v;
+            }
+        }
+        out
+    }
+
+    /// Whether the stretch stands at `2m − 1` returns: its one jittered
+    /// return is [`Self::fused`], not yet emitted.
+    fn fuses(&self) -> bool {
+        let m = self.cfg.jitter;
+        self.cfg.kind == RcovKind::Kernel && self.head.len() == m && self.tail.len() + 1 == m
+    }
+
     /// One final effective return into the lagged products.
     fn emit(&mut self, y: Vec<f64>) {
         let k = self.k();
@@ -940,20 +967,28 @@ impl Rcov {
                 // The leading jitter: the first `m` returns of the stretch
                 // make one effective return between them and nothing else.
                 self.head.push(x.to_vec());
-                if self.head.len() == m {
-                    let y = self.lead();
-                    self.emit(y);
-                }
             } else {
                 // The interior: a return leaves the tail -- and so can no
                 // longer become part of the end jitter -- when the `m` after
                 // it have arrived.
-                if self.tail.len() == m {
+                let full = self.tail.len() == m;
+                if full {
                     let y = self.tail.pop_front().expect("m kept");
                     self.emit(y);
                 }
                 let row = self.spare.take_copy(x);
                 self.tail.push_back(row);
+                // The lead is emitted once the stretch has `2m` returns, the
+                // tail full for the first time (full before the row, it has
+                // been since): before that its jitters may
+                // still meet in one return ([`Self::fused`]), which a lead
+                // emitted at the `m`-th return could not be taken back from,
+                // and a stretch read backwards was another (review
+                // 2026-11-23, COV-5; rule 5's thirty-third exception).
+                if !full && self.tail.len() == m {
+                    let y = self.lead();
+                    self.emit(y);
+                }
             }
         }
         if self.cfg.kind == RcovKind::Preavg {
@@ -1021,12 +1056,13 @@ impl Rcov {
             RcovKind::Kernel => {
                 let m = self.cfg.jitter as u64;
                 // The last stretch contributes a trailing jitter only if it
-                // ran far enough to fill the tail; one cut short by a break
-                // contributes what it emitted before the break and no more.
-                // With no break the two agree: `n >= 2m` is exactly a full
-                // tail, so an unbroken group is unchanged to the bit.
+                // ran far enough to fill the tail. With no break the two
+                // agree: `n >= 2m` is exactly a full tail.
                 let closes = self.tail.len() == self.cfg.jitter;
-                if self.n < 2 * m || (self.emitted == 0 && !closes) {
+                // A last stretch of `2m − 1` returns closes with its one
+                // jittered return ([`Self::fused`]).
+                let fuses = self.fuses();
+                if self.n < 2 * m || (self.emitted == 0 && !closes && !fuses) {
                     return short(0);
                 }
                 let max_bandwidth = self.cfg.ring_for().unwrap_or(0);
@@ -1035,8 +1071,11 @@ impl Rcov {
                 if closes {
                     let y = self.trail();
                     add_lagged_products(&mut gamma, &y, &self.fin, k);
+                } else if fuses {
+                    let y = self.fused();
+                    add_lagged_products(&mut gamma, &y, &self.fin, k);
                 }
-                let n_eff = self.emitted as i64 + i64::from(closes);
+                let n_eff = self.emitted as i64 + i64::from(closes || fuses);
                 let h = self.bandwidth(n_eff as f64).min(max_bandwidth);
                 let mut out = vec![0.0; k * k];
                 for lag in 0..=h {
@@ -1324,10 +1363,13 @@ impl crate::OnlineModel for Rcov {
         if self.cfg.kind == RcovKind::Kernel && self.tail.len() == self.cfg.jitter {
             let y = self.trail();
             self.emit(y);
+        } else if self.fuses() {
+            // A stretch of `2m − 1` returns: its one jittered return.
+            let y = self.fused();
+            self.emit(y);
         }
-        // A stretch that never got past its leading jitter contributes what
-        // it already emitted and no more: a partial end jitter is not the
-        // paper's statistic, and there is no way to un-emit the lead.
+        // A stretch shorter than that has no jittered return: its lead is
+        // held until the stretch has `2m` returns, so none was emitted.
         self.head.clear();
         self.tail.clear();
         self.fin.clear();
@@ -1357,6 +1399,21 @@ impl crate::OnlineModel for Rcov {
                 // gone (docs/REVIEW-E54-E64.md R2).
                 while m.tail.len() > m.cfg.jitter {
                     m.tail.pop_front();
+                }
+                // A state of 71 or earlier inside a stretch short of `2m`
+                // returns has emitted its lead, which this build holds until
+                // the stretch has `2m` (rule 5's thirty-third exception, the
+                // user's, 2026-11-24): it would be emitted again. The stretch
+                // is closed as it stands, as a break closes one, and the next
+                // return starts another.
+                if s.schema_version < 72
+                    && m.cfg.kind == RcovKind::Kernel
+                    && m.head.len() == m.cfg.jitter
+                    && m.tail.len() < m.cfg.jitter
+                {
+                    m.head.clear();
+                    m.tail.clear();
+                    m.fin.clear();
                 }
                 // Every accumulator at the cfg's width and every buffered
                 // return row `k` long; `restore` only trimmed the tail
@@ -2260,16 +2317,14 @@ mod tests {
         assert_eq!(m.n, n);
     }
 
-    /// Review 2026-11-23, COV-5 (3), **left for the user** (`docs/records/
-    /// REVIEW-2026-11-23-OUTCOMES.md`, batch h): the jittered estimate is
-    /// the same read forwards and backwards (prices reversed, so returns
-    /// reversed and negated) on a stretch long enough for its two jitters,
-    /// and not on a stretch of fewer than `2m` returns, which emits its
-    /// lead at its `m`-th return and then cannot close its trail (the
-    /// module doc says so: there is no way to un-emit the lead). Stretches
-    /// of 3 returns at `m = 2` here. It panics until the lead is held.
+    /// The jittered estimate is the same read forwards and backwards (prices
+    /// reversed, so returns reversed and negated), on long stretches and on
+    /// stretches of `2m − 1` returns, whose one jittered return joins their
+    /// two jitters. A stretch emitted its lead at its `m`-th return and could
+    /// not then close its trail, so a short one read otherwise backwards
+    /// (review 2026-11-23, COV-5; rule 5's thirty-third exception). And a
+    /// stretch of fewer has none.
     #[test]
-    #[should_panic(expected = "short stretches")]
     fn a_short_stretch_reads_the_same_backwards() {
         let mut c = cfg(1, RcovKind::Kernel);
         c.bandwidth = Some(0);
@@ -2306,6 +2361,19 @@ mod tests {
             (f - b).abs() <= 1e-12 * f.abs(),
             "short stretches: {f} against {b}"
         );
+        // `2m − 1 = 3` returns a stretch: one jittered return each.
+        let count = |stretches: &[Vec<Vec<f64>>]| {
+            let mut m = Rcov::new(c.clone()).unwrap();
+            for s in stretches {
+                feed(&mut m, s);
+                m.clear_lags();
+            }
+            m.estimate().n
+        };
+        assert_eq!(count(&short), 40);
+        // Two returns a stretch: none.
+        let two: Vec<Vec<Vec<f64>>> = rows.chunks(2).map(<[_]>::to_vec).collect();
+        assert_eq!(count(&two), 0);
     }
 
     /// A break splits the group into stretches: the estimate is what the two

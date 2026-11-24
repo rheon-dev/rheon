@@ -508,9 +508,9 @@ def test_marginal_takes_a_window_with_lags_only_by_name():
     with pytest.raises(ValueError, match="need window_lags=True") as exc:
         rp.spec.marginal("m", half_life=10.0, window_size=50.0, lags=[1], **BASE)
     # BASE's one feature and one target at one lag, the cross lag at it:
-    # 2L·T + 2(L + C)·p·T = 2 + 4 = 6 doubles beside (3p + 5)·T = 8.
-    assert "6 values beside the 8" in str(exc.value), exc.value
-    assert "1.75 times the size" in str(exc.value), exc.value
+    # 6L·T + 3(L + C)·p·T = 6 + 6 = 12 doubles beside (3p + 5)·T = 8.
+    assert "12 values beside the 8" in str(exc.value), exc.value
+    assert "2.5 times the size" in str(exc.value), exc.value
     rp.spec.marginal("m", half_life=10.0, window_size=50.0, lags=[1], window_lags=True, **BASE)
     for kw in ({"window_size": 50.0}, {"lags": [1]}, {}):
         with pytest.raises(ValueError, match="window_lags applies only with both"):

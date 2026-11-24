@@ -1012,6 +1012,43 @@ model that only the new build has is listed as an addition and passes.
   class read `0/0` on every row after: the class and its probabilities
   were null for good. Such a class takes the jitter `"full"`'s and
   `"tied"`'s factorization takes. Moves: `ew_class.class`, `ew_class.p_*`.
+- **A window's ridge is the window's** (review 2026-11-23, COV-3; rule 5's
+  thirty-second exception). A windowed `ew_class` and `ew_cov` read their
+  precision prior's scale off the whole history, its share of the
+  history's weight, against the window's co-moments: after 394 rows had
+  left a window of 6, `ew_class` read 0.99 for a class a model of the
+  window's rows reads at 0.50, and `ew_cov`'s distance was 7.3 times off.
+  The window's scale is the prior's weight over the window's weight, which
+  with no decay is a fresh model's on the window's rows; `"tied"` and
+  `"diag"` read it off the window's accumulators, as `"full"` did. A
+  saved windowed state goes on with the window's ridge. Moves:
+  `ew_class.class`, `ew_class.p_*`, `ew_cov.mahal*`, `ew_cov.partial_corr*`.
+- **`marginal`'s windowed lag correlations are re-centred over the rows
+  they are taken on** (review 2026-11-23, MARG-1). Under a window the lag
+  moments are taken about the series' first values and re-centred at the
+  window's means when read, which is exact only where every row in the
+  window has its partner `ℓ` rows back. A target absent the row before, or
+  the first rows after a session break, left a term that grows with the
+  series' drift from its first value: a series at 1000 after a first row
+  at 0, one target missing, read a lag correlation of 20.6 where the
+  definition reads -0.12. The lag moments now keep, beside each lag, the
+  rows' sums now over the rows a lagged one was taken on and those rows'
+  weights, `6·L·T + 3·(L + C)·p·T` doubles a snapshot in place of `2·L·T +
+  2·(L + C)·p·T` (`window_lags`' table), and a windowed step costs 1.13
+  times what it did (arm64, 20 features, three lags, every lag crossed;
+  no window, unchanged). A state saved before them starts
+  them where it loads and reads them once its window's boundary is a
+  snapshot taken after the load. Moves: `marginal.lag_corr*`,
+  `marginal.n_serial`, `marginal.t_stat_serial`, `marginal.phi*`,
+  `marginal.split_gain_t`.
+- **`rcov`'s kernel estimate on stretches shorter than `2m` returns**
+  (review 2026-11-23, COV-5; rule 5's thirty-third exception). A stretch
+  emitted its leading jittered return at its `m`-th return and could not
+  then close its trailing one, so a stretch shorter than `2m` returns,
+  cut short by a break, read otherwise backwards. The lead is held until
+  the stretch has `2m` returns; a stretch of `2m − 1` closes with its one
+  jittered return, both jitters meeting, and a shorter one has none, as
+  `n − 2m + 2` counts. Moves: `rcov.*`.
 - **`marginal`'s Kish size is null where its squared weights faded**
   (review 2026-11-23, MARG-3). A missing target across 538 half-lives
   left `Σw²` at 0 beside a weight above 0: `n_kish` read `inf`, and `t`

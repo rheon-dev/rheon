@@ -3289,18 +3289,12 @@ mod tests {
     /// Under a window, the ridge each class's covariance takes is the
     /// window's: the same rows learned by a fresh model, with no decay, give
     /// the same class probabilities, under every covariance. `shared` and
-    /// `diag` read the ridge off the accumulators of the whole history
-    /// (fixed: they read the view's, as `full` does), and every view's ridge
-    /// is still the whole history's share, `s`, where the window's is `s·W
-    /// / W_R` (review 2026-11-23, COV-3): after 394 rows aged out of a
-    /// window of 6, `full` reads 0.99 for the class a fresh model reads at
-    /// 0.50. **Left for the user**: the window's ridge moves the
-    /// continuation of every saved windowed `ew_class` state (v61 to v71,
-    /// up to 1e-3 of a probability), which rule 5 needs an exception for
-    /// (`docs/records/REVIEW-2026-11-23-OUTCOMES.md`, batch h). It panics
-    /// until then.
+    /// `diag` read the ridge off the accumulators of the whole history, and
+    /// every view's ridge was the whole history's share `s`, where the
+    /// window's is `s·W / W_R`: after 394 rows aged out of a window of 6,
+    /// `full` read 0.99 for the class a fresh model reads at 0.50 (review
+    /// 2026-11-23, COV-3; rule 5's thirty-second exception).
     #[test]
-    #[should_panic(expected = "against")]
     fn a_window_reads_the_ridge_its_own_rows_give() {
         let (k, nc, width) = (2, 2, 6usize);
         let mut s = 11u64;

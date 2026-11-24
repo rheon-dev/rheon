@@ -1783,8 +1783,9 @@ fn a_windowed_lag_state_restored_from_bytes_goes_on_to_the_bit() {
 
 /// What the lag moments add to a window's snapshot (docs/PLAN.md task
 /// 137): `L·T + (L + 2C)·p·T` doubles and the width without a window, and
-/// with one the lagged sides' sums, `2L·T + 2(L + C)·p·T`, as `window_lags`
-/// documents.
+/// with one the lagged sides' sums and the sides now over the matched rows
+/// with their weights (review 2026-11-23, MARG-1), `6L·T + 3(L + C)·p·T`,
+/// as `window_lags` documents.
 #[test]
 fn the_lag_moments_add_what_window_lags_says() {
     for (p, t, lags, cross) in [
@@ -1801,12 +1802,13 @@ fn the_lag_moments_add_what_window_lags_says() {
         let (l, cl) = (lags.len(), cross.as_ref().map_or(lags.len(), Vec::len));
         let want = 8 * (l * t + (l + 2 * cl) * p * t) + std::mem::size_of::<usize>();
         assert_eq!(got, want, "p = {p}, T = {t}, L = {l}, C = {cl}");
-        // Under a window, the lagged sides' sums about the origin besides:
-        // `L·T + L·p·T` more (task 280, phase 3).
+        // Under a window, the lagged sides' sums about the origin besides,
+        // `L·T + L·p·T` more (task 280, phase 3), and the sides now over the
+        // matched rows with their weights, `4L·T + (L + C)·p·T` more.
         c.window = Some(50.0);
         let m = Marginal::new(c).unwrap();
         let got = crate::Footprint::footprint(&m.lag.as_ref().unwrap().moments());
-        let want = 8 * (2 * l * t + 2 * (l + cl) * p * t) + std::mem::size_of::<usize>();
+        let want = 8 * (6 * l * t + 3 * (l + cl) * p * t) + std::mem::size_of::<usize>();
         assert_eq!(got, want, "windowed: p = {p}, T = {t}, L = {l}, C = {cl}");
     }
 }
@@ -5410,20 +5412,18 @@ fn a_kish_size_whose_squared_weights_faded_is_unknown() {
     );
 }
 
-/// Review 2026-11-23, MARG-1, **left for the user** (`docs/records/
-/// REVIEW-2026-11-23-OUTCOMES.md`, batch h): under a window the lag moments
-/// are raw about a fixed origin (the series' first value) and re-centred at
-/// the read by `C − e_a·side_b`, which is exact only where every row in the
-/// window has its lagged partner. A row without one (a target absent the
-/// row before, or the first rows after a session break) leaves `−e_b ·
-/// Σ_{unmatched} w (a − m_a) / W` behind, which grows with the series'
-/// drift from its origin. The definition here: over the window's rows of
-/// the target `R`, with its mean `m`, `Σ_{i in R, y_{i−1} present} (y_i −
-/// m)(y_{i−1} − m) / |R|`, over the pair's variance. A series at 1000 after
-/// a first row at 0, one target missing: the model reads about 30 where
-/// the definition reads about 0. It panics until the fix is chosen.
+/// Under a window the lag moments are raw about a fixed origin (the
+/// series' first value) and re-centred at the read; re-centred by `C −
+/// e_a·side_b` alone, exact only where every row in the window has its
+/// lagged partner, a row without one (a target absent the row before, or
+/// the first rows after a session break) left `−e_b · Σ_{unmatched} w (a −
+/// m_a) / W` behind, which grows with the series' drift from its origin
+/// (review 2026-11-23, MARG-1). The definition here: over the window's rows
+/// of the target `R`, with its mean `m`, `Σ_{i in R, y_{i−1} present} (y_i
+/// − m)(y_{i−1} − m) / |R|`, over the pair's variance. A series at 1000
+/// after a first row at 0, one target missing: the model read 20.6 where
+/// the definition reads -0.12.
 #[test]
-#[should_panic(expected = "lag_corr_yy")]
 fn a_windowed_lag_correlation_with_an_unmatched_row_is_its_definition() {
     let mut c = cfg(1, 1);
     c.lags = vec![1];

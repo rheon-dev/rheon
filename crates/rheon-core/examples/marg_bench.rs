@@ -21,6 +21,7 @@
 //! measured the state's traffic (docs/records/PERFORMANCE-LOG.md §39). `stat`, `mean`
 //! or `huber`, is each bin's location (docs/PLAN.md task 272 (c)), and
 //! `spikes`, a percentage of rows whose targets take a spike of 50 (0).
+//! `window`, a `window_size` in rows (none).
 //! `-- targets=9 bins=16` is E71's shape (docs/PLAN.md task 122), and `-- targets=9
 //! lags=1,2,5,10,20,50 cross=1` E70's (task 123). The last line is a
 //! checksum of every pair's numbers, so two builds, or two loop orders, that
@@ -45,7 +46,7 @@ fn main() {
         .collect();
     let known = [
         "targets", "bins", "features", "absent", "lags", "cross", "rows", "runs", "moments",
-        "shards", "stat", "spikes",
+        "shards", "stat", "spikes", "window",
     ];
     if let Some((k, _)) = args.iter().find(|(k, _)| !known.contains(&k.as_str())) {
         panic!("unknown argument {k:?}; expected one of {known:?}");
@@ -127,7 +128,7 @@ fn main() {
                 Some("shared") => FeatureMomentLayout::Shared,
                 Some(other) => panic!("moments is per_target or shared, got {other:?}"),
             },
-            window: None,
+            window: get("window").map(|v| v.parse().expect("a span of the clock")),
             window_every: None,
             max_rows_between_snapshots: None,
         })
