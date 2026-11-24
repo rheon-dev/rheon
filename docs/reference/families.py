@@ -124,7 +124,7 @@ FAMILIES: tuple[Family, ...] = (
     Family(
         "clustering",
         "spec",
-        tuple(f"{_SPEC}.{m}" for m in ("kmeans", "micro", "ew_class")),
+        tuple(f"{_SPEC}.{m}" for m in ("kmeans", "gmm", "micro", "ew_class")),
     ),
     Family(
         "fields",

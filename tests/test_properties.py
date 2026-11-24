@@ -1297,6 +1297,7 @@ def test_each_kind_takes_every_stream_parameter_but_those_it_refuses():
     assert UNCLOCKED_KINDS == [
         "audit",
         "deco",
+        "gmm",
         "pca",
         "rcov",
         "seqtest",

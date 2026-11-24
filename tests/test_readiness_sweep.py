@@ -96,10 +96,12 @@ HALF_LIFE = 40.0
 KINDS = sorted(set(MINIMAL) - {"audit"})
 #: Per kind, keywords beyond ``MINIMAL`` so a gate shows past the model's
 #: own warm-up: ``hmm`` and ``kmeans`` seed from 1,000 and 500 rows by
-#: default, longer than the stream.
+#: default, longer than the stream. ``gmm`` never starts two components on
+#: the stream's one cluster, so it fits one, which starts in its first rows.
 EXTRA: dict[str, dict[str, Any]] = {
     "hmm": {"warm_rows": 20},
     "kmeans": {"warm_rows": 20},
+    "gmm": {"n_components": 1},
     # `dcc` reports from its start, the registry's `start_rows=50` with the
     # parameters given (no margins), and at a half-life of 25 rows its
     # weight there is about 27, so a floor of 30 withholds rows past the
