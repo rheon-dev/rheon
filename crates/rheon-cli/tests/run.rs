@@ -607,6 +607,91 @@ fn a_save_state_that_is_a_directory_is_refused_before_the_run() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A state file of another kind of run, given as the bank's to resume from,
+/// is refused before the run by what it is, the exit status 1, and so are a
+/// file that is not a state at all and one cut short: the envelope every state file is
+/// written in names its kind, and the bank's loader reads it first (review
+/// 2026-11-23, CI-5). Each test nothing wrote, the output included.
+#[test]
+fn a_state_of_another_kind_is_refused_naming_what_it_is() {
+    let dir = fresh_dir("ci5");
+    let (input, output) = (dir.join("in.parquet"), dir.join("out.parquet"));
+    write_input(&input, 300).unwrap();
+    let refresh = rheon_polars::RefreshTime::new(vec!["a".into(), "b".into()], false)
+        .unwrap()
+        .save_bytes()
+        .unwrap();
+    // The bank's own state, from a run of the same config.
+    let saved = dir.join("saved.state");
+    let (code, _, err) = online_with(
+        &dir,
+        &input,
+        &output,
+        "",
+        50.0,
+        &["-q", "--save-state", saved.to_str().unwrap()],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    std::fs::remove_file(&output).unwrap();
+    let bank = std::fs::read(&saved).unwrap();
+    let checkpoint = rheon_polars::checkpoint_bytes(&[("bank", &bank)]).unwrap();
+    for (name, bytes, says) in [
+        (
+            "refresh.state",
+            &refresh[..],
+            "these bytes are a refresh_time run's state, not a model bank's state",
+        ),
+        (
+            "checkpoint.state",
+            &checkpoint[..],
+            "these bytes are a pipeline checkpoint, not a model bank's state",
+        ),
+        (
+            "junk.state",
+            b"not a state at all".as_slice(),
+            "these bytes are not a rheon bank state file",
+        ),
+        (
+            "cut.state",
+            &bank[..bank.len() / 2],
+            "it is damaged (the checksum it ends with is missing or cut)",
+        ),
+    ] {
+        let state = dir.join(name);
+        std::fs::write(&state, bytes).unwrap();
+        let (code, _, err) = online_with(
+            &dir,
+            &input,
+            &output,
+            "",
+            50.0,
+            &["-q", "--load-state", state.to_str().unwrap()],
+        );
+        assert_eq!(code, Some(1), "{name}: {err}");
+        assert!(err.contains(says) && err.contains(name), "{name}: {err}");
+        assert!(!output.exists(), "{name}: the output was written");
+    }
+    // The bank's own state, the same bytes, loads and resumes (the rows it
+    // has learned skipped): the refusals are of the kinds, not of the files.
+    let state = dir.join("bank.state");
+    std::fs::write(&state, &bank).unwrap();
+    let (code, _, err) = online_with(
+        &dir,
+        &input,
+        &output,
+        "",
+        50.0,
+        &[
+            "-q",
+            "--skip-learned",
+            "--load-state",
+            state.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Task 160, YB12: the dry run said "config OK" for an input that is not
 /// there. It reads what the run would read first, and fails naming it.
 #[test]

@@ -1034,3 +1034,42 @@ fn ar_reads_its_system_in_place() {
     );
     check("ar under a window", windowed, bound(1.083, 34.083), 44.083);
 }
+
+/// The models since 2.0 (review 2026-11-23, CI-5: no case here held them),
+/// each through `step_into` and `step` as the cheap models above are:
+/// `glm`, `expectile`'s one pass and `hawkes` allocate nothing a row into a
+/// kept buffer, `garch` nothing but a refit's rare working space (0.001 a
+/// row here, under `start_rows = 500` and the default refit cadence), and
+/// `step` one more, its `pred`. `expectile`'s window refits its rows
+/// exactly on each, and the refit forms its lists of sides and the fits
+/// it has met anew each time: 10.18 a row, measured, held here so that no
+/// more come; keeping them is the performance round's.
+#[test]
+fn the_models_since_2_0_step_into_a_kept_buffer() {
+    for (id, into_bound) in [
+        ("glm_k20", 0.0),
+        ("expectile_k20", 0.0),
+        ("hawkes", 0.0),
+        ("garch", 0.002),
+        ("garch_figarch", 0.002),
+        ("expectile_window", 10.19),
+    ] {
+        let (step, into) = (case_per_row(id, false), case_per_row(id, true));
+        check(
+            &format!("{id} through step_into"),
+            into,
+            into_bound,
+            into_bound,
+        );
+        check(
+            &format!("{id} through step"),
+            step,
+            into_bound + 1.0,
+            into_bound + 1.0,
+        );
+        assert!(
+            into + 1.0 <= step + 1e-9,
+            "{id}: step_into {into} a row, step {step}: not one fewer"
+        );
+    }
+}

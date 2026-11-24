@@ -35,7 +35,7 @@ PYBIN=$(uv run python -c 'import sys; print(sys.executable)')
 echo "interpreter: $PYBIN"
 
 WORK=$(cat <<'PY'
-import gc, os, sys
+import gc, os, sys, tempfile
 import numpy as np, polars as pl, rheon.polars as rp
 n = int(sys.argv[1])
 control = os.environ.get("LEAKCHECK_CONTROL") == "1"
@@ -45,6 +45,14 @@ rng = np.random.default_rng(0)
 spec = rp.spec.ewridge("m", targets=["y"], features=["x0", "x1"],
                        half_life=50.0, min_weight=2.0)
 cat = None
+# The stream surfaces, each a native run fed through Polars' IO plugin: a
+# merge of two streams, a window run over it with its state saved and read
+# back, and a checkpoint of the stages written and read (review 2026-11-23,
+# CI-5: the check ran the bank alone).
+work = tempfile.mkdtemp()
+quotes = pl.DataFrame({"t": np.arange(300.0), "v": rng.standard_normal(300)})
+trades = pl.DataFrame({"t": np.arange(300.0) + 0.5, "v": rng.standard_normal(300)})
+later = trades.with_columns(pl.col("t") + 300.0)
 for i in range(n):
     df = pl.DataFrame({"x0": rng.standard_normal(700), "x1": rng.standard_normal(700)})
     df = df.with_columns(y=pl.col("x0") * 2)
@@ -63,12 +71,28 @@ for i in range(n):
         rp.ModelBank([spec]).fit_predict(cat)
     except Exception:
         pass
+    merged = rp.stream.merge(quotes, trades, clock="t", chunk_size=64)
+    win_state = os.path.join(work, "windows.state")
+    win = rp.stream.with_windows(merged, level=rp.ewm_mean("v", half_life=5.0),
+                                 clock="t", gap_cap=10.0, save_state=win_state)
+    bank = rp.ModelBank([rp.spec.ewridge("w", targets=["v"], features=["level"],
+                                         clock="t", gap_cap=10.0, half_life=40.0)])
+    _ = bank.fit_predict(win)["w"].struct.field("pred_v").sum()
+    rp.stream.with_windows(later, level=rp.ewm_mean("v", half_life=5.0), clock="t",
+                           gap_cap=10.0, load_state=win_state)
+    rp.stream.save_checkpoint(os.path.join(work, "run.checkpoint"),
+                              {"windows": win_state, "bank": bank})
+    stages = rp.stream.load_checkpoint(os.path.join(work, "run.checkpoint"))
+    rp.ModelBank.load_bytes(stages["bank"])
+    del merged, win, bank, stages
     if control:                # one Python object per iteration, never released
         ctypes.pythonapi.Py_IncRef(ctypes.py_object(bytearray(64)))
     del df, out
     if i % 50 == 0:
         gc.collect()
 gc.collect()
+import shutil
+shutil.rmtree(work)
 PY
 )
 
