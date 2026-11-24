@@ -49,7 +49,10 @@ model that only the new build has is listed as an addition and passes.
   0.2 / 0.6 it settles at 0.198 and 0.607 where it read 0.130 and 0.381; on
   ten series alternating every 1,200 rows its error falls from 0.171 to
   0.098 (`"ew"`) and from 0.162 to 0.074 (`"linear"`), and to 0.105 and
-  0.089 under t-tails of 4 degrees of freedom. The level learns from a row
+  0.089 under t-tails of 4 degrees of freedom. After a step it reaches the
+  midpoint between the two levels in one half-life, as an EW mean does: a
+  median of 99.5 rows at a half-life of 100, where the old level, settling
+  short of the truth on both sides, read 95. The level learns from a row
   only once the standardizer's weights hold a Kish size above 5, where a
   standardized row's fourth moment exists, and while no level has a value
   `withheld_reason` reads `below_warm_rows`; a half-life under 1.71 rows

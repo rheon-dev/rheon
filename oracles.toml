@@ -1099,27 +1099,27 @@ n = 1
 
 [case."truth_recovery.deco_level.rows_to_midpoint"]
 ideal = 0.0
-worst = 206.0
-p95 = 147.0
+worst = 176.0
+p95 = 140.0
 n = 150
 tolerance = 0.0
 
 [case."truth_recovery.deco_level.rows_to_midpoint_median"]
 ideal = 0.0
-worst = 95.0
-p95 = 95.0
+worst = 99.5
+p95 = 99.5
 n = 1
 
 [case."truth_recovery.deco_level.settled_at_0_2"]
 ideal = 0.2
-worst = 0.085866
-p95 = 0.1041657
+worst = 0.1475721
+p95 = 0.2414832
 n = 100
 
 [case."truth_recovery.deco_level.settled_at_0_6"]
 ideal = 0.6
-worst = 0.320823
-p95 = 0.34728
+worst = 0.5394158
+p95 = 0.6393712
 n = 100
 
 [case."truth_recovery.hmm_regimes.means_from_baum_welch"]
@@ -5734,38 +5734,56 @@ dataset = ""
 [case."convergence.glm.break_level_at_12"]
 ideal = 0.0
 n = 50
+worst = 0.00167432
+p95 = 0.00115833
 
 [case."convergence.glm.break_regime_at_12"]
 ideal = 0.0
 n = 50
+worst = 0.0319232
+p95 = 0.0254385
 
 [case."convergence.glm.break_slope_at_12"]
 ideal = 0.0
 n = 50
+worst = 0.00241687
+p95 = 0.00186434
 
 [case."convergence.glm.consistency_at_2000"]
 ideal = 0.0
 n = 50
+worst = 0.00364724
+p95 = 0.00179464
 
 [case."convergence.glm.consistency_at_32000"]
 ideal = 0.0
 n = 50
+worst = 0.000475854
+p95 = 0.000242153
 
 [case."convergence.glm.consistency_at_500"]
 ideal = 0.0
 n = 50
+worst = 0.00733461
+p95 = 0.00408329
 
 [case."convergence.glm.consistency_at_8000"]
 ideal = 0.0
 n = 50
+worst = 0.00128203
+p95 = 0.000758508
 
 [case."convergence.glm.start_200_at_3200"]
 ideal = 0.0
 n = 50
+worst = 0.00529491
+p95 = 0.00318918
 
 [case."convergence.glm.start_inf_at_32000"]
 ideal = 0.0
 n = 50
+worst = 0.0345249
+p95 = 0.0336872
 
 [group."convergence.expectile"]
 tests = [
@@ -5784,62 +5802,92 @@ dataset = ""
 [case."convergence.expectile.break_level_at_12"]
 ideal = 0.0
 n = 50
+worst = 0.00453397
+p95 = 0.00357416
 
 [case."convergence.expectile.break_regime_at_12"]
 ideal = 0.0
 n = 50
+worst = 0.0208905
+p95 = 0.0192634
 
 [case."convergence.expectile.break_slope_at_12"]
 ideal = 0.0
 n = 50
+worst = 0.00481926
+p95 = 0.00226316
 
 [case."convergence.expectile.break_variance_at_12"]
 ideal = 0.0
 n = 50
+worst = 0.019271
+p95 = 0.00793371
 
 [case."convergence.expectile.consistency_at_2000"]
 ideal = 0.0
 n = 50
+worst = 0.00206443
+p95 = 0.0012354
 
 [case."convergence.expectile.consistency_at_32000"]
 ideal = 0.0
 n = 50
+worst = 0.000174647
+p95 = 0.000166031
 
 [case."convergence.expectile.consistency_at_500"]
 ideal = 0.0
 n = 50
+worst = 0.0050888
+p95 = 0.00317774
 
 [case."convergence.expectile.consistency_at_8000"]
 ideal = 0.0
 n = 50
+worst = 0.000811923
+p95 = 0.000425564
 
 [case."convergence.expectile.large_level_at_8000"]
 ideal = 0.0
 n = 50
+worst = 0.000547255
+p95 = 0.000433347
 
 [case."convergence.expectile.level_zero_at_8000"]
 ideal = 0.0
 n = 50
+worst = 0.000547255
+p95 = 0.000433345
 
 [case."convergence.expectile.start_200_at_3200"]
 ideal = 0.0
 n = 50
+worst = 0.00302477
+p95 = 0.00276859
 
 [case."convergence.expectile.start_inf_truth_at_2000"]
 ideal = 0.0
 n = 50
+worst = 30.2602
+p95 = 30.1978
 
 [case."convergence.expectile.start_inf_truth_at_32000"]
 ideal = 0.0
 n = 50
+worst = 4.72202
+p95 = 4.70628
 
 [case."convergence.expectile.start_inf_truth_at_500"]
 ideal = 0.0
 n = 50
+worst = 40.7228
+p95 = 40.7092
 
 [case."convergence.expectile.start_inf_truth_at_8000"]
 ideal = 0.0
 n = 50
+worst = 14.8194
+p95 = 14.7825
 
 [group."second_opinion_pca.streampca_convergence"]
 tests = [
@@ -5898,154 +5946,222 @@ dataset = ""
 [case."second_opinion_dcc.dcc_batch.adcc2_gap_se"]
 ideal = 0.0
 n = 50
+worst = 1.16594
+p95 = 0.70758
 
 [case."second_opinion_dcc.dcc_batch.adcc2_outside_2se"]
 ideal = 0.0
 n = 1
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_dcc.dcc_batch.adcc2_persistence_gap"]
 ideal = 0.0
 n = 50
+worst = 0.00554312
+p95 = 0.00352223
 
 [case."second_opinion_dcc.dcc_batch.adcc2_rho_gap"]
 ideal = 0.0
 n = 50
+worst = 0.00751071
+p95 = 0.00693364
 
 [case."second_opinion_dcc.dcc_batch.adcc2_t5_gap_se"]
 ideal = 0.0
 n = 50
+worst = 1.95207
+p95 = 1.49376
 
 [case."second_opinion_dcc.dcc_batch.adcc2_t5_outside_2se"]
 ideal = 0.0
 n = 1
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_dcc.dcc_batch.adcc2_t5_persistence_gap"]
 ideal = 0.0
 n = 50
+worst = 0.0205891
+p95 = 0.0152674
 
 [case."second_opinion_dcc.dcc_batch.adcc2_t5_rho_gap"]
 ideal = 0.0
 n = 50
+worst = 0.0168807
+p95 = 0.0152274
 
 [case."second_opinion_dcc.dcc_batch.adcc3_gap_se"]
 ideal = 0.0
 n = 50
+worst = 0.907284
+p95 = 0.710007
 
 [case."second_opinion_dcc.dcc_batch.adcc3_outside_2se"]
 ideal = 0.0
 n = 1
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_dcc.dcc_batch.adcc3_persistence_gap"]
 ideal = 0.0
 n = 50
+worst = 0.00310648
+p95 = 0.00211815
 
 [case."second_opinion_dcc.dcc_batch.adcc3_rho_gap"]
 ideal = 0.0
 n = 50
+worst = 0.00971415
+p95 = 0.00809914
 
 [case."second_opinion_dcc.dcc_batch.dcc2_gap_se"]
 ideal = 0.0
 n = 50
+worst = 0.730268
+p95 = 0.679162
 
 [case."second_opinion_dcc.dcc_batch.dcc2_outside_2se"]
 ideal = 0.0
 n = 1
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_dcc.dcc_batch.dcc2_persistence_gap"]
 ideal = 0.0
 n = 50
+worst = 0.00783389
+p95 = 0.00639107
 
 [case."second_opinion_dcc.dcc_batch.dcc2_rho_gap"]
 ideal = 0.0
 n = 50
+worst = 0.00891539
+p95 = 0.00724214
 
 [case."second_opinion_dcc.dcc_batch.dcc3_gap_se"]
 ideal = 0.0
 n = 50
+worst = 0.740223
+p95 = 0.670321
 
 [case."second_opinion_dcc.dcc_batch.dcc3_outside_2se"]
 ideal = 0.0
 n = 1
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_dcc.dcc_batch.dcc3_persistence_gap"]
 ideal = 0.0
 n = 50
+worst = 0.00251811
+p95 = 0.00168206
 
 [case."second_opinion_dcc.dcc_batch.dcc3_rho_gap"]
 ideal = 0.0
 n = 50
+worst = 0.0091518
+p95 = 0.00822545
 
 [case."second_opinion_dcc.dcc_batch.dcc3_t5_gap_se"]
 ideal = 0.0
 n = 50
+worst = 0.822434
+p95 = 0.774845
 
 [case."second_opinion_dcc.dcc_batch.dcc3_t5_outside_2se"]
 ideal = 0.0
 n = 1
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_dcc.dcc_batch.dcc3_t5_persistence_gap"]
 ideal = 0.0
 n = 50
+worst = 0.00279102
+p95 = 0.00265685
 
 [case."second_opinion_dcc.dcc_batch.dcc3_t5_rho_gap"]
 ideal = 0.0
 n = 50
+worst = 0.01465
+p95 = 0.0111056
 
 [case."second_opinion_grids.realized_decay.bns_hl300_ulps"]
 ideal = 0.0
 n = 50
 floor = 12.0
+worst = 5.64473
+p95 = 4.58655
 
 [case."second_opinion_grids.realized_decay.bns_hl30_ulps"]
 ideal = 0.0
 n = 50
 floor = 12.0
+worst = 2.73826
+p95 = 2.68356
 
 [case."second_opinion_grids.realized_decay.bv_hl300_ulps"]
 ideal = 0.0
 n = 50
 floor = 48.0
+worst = 24.0
+p95 = 17.0
 
 [case."second_opinion_grids.realized_decay.bv_hl30_ulps"]
 ideal = 0.0
 n = 50
 floor = 48.0
+worst = 9.0
+p95 = 8.0
 
 [case."second_opinion_grids.realized_decay.rv_hl300_ulps"]
 ideal = 0.0
 n = 50
 floor = 36.0
+worst = 16.0
+p95 = 15.0
 
 [case."second_opinion_grids.realized_decay.rv_hl30_ulps"]
 ideal = 0.0
 n = 50
 floor = 36.0
+worst = 8.0
+p95 = 5.0
 
 [case."second_opinion_grids.realized_decay.tq_hl300_ulps"]
 ideal = 0.0
 n = 50
 floor = 60.0
+worst = 32.0
+p95 = 30.0
 
 [case."second_opinion_grids.realized_decay.tq_hl30_ulps"]
 ideal = 0.0
 n = 50
 floor = 60.0
+worst = 23.0
+p95 = 22.0
 
 [case."second_opinion_grids.realized_decay.tv_hl300_ulps"]
 ideal = 0.0
 n = 50
 floor = 40.0
+worst = 23.0
+p95 = 16.0
 
 [case."second_opinion_grids.realized_decay.tv_hl30_ulps"]
 ideal = 0.0
 n = 50
 floor = 40.0
+worst = 7.0
+p95 = 7.0
 
 [group."second_opinion_ets.ets_known"]
 tests = [
@@ -8058,3 +8174,19 @@ to = 0.101551
 date = 2026-11-18
 reason = "the permutation shuffle's draws changed with Lemire's multiply-shift reduction in place of a remainder (rule 5's seventeenth exception), so each of the grid's 50 streams flags its quiet rows against another critical value drawn from the same distribution; the worst stream's share of flagged quiet rows read 0.1016 on CI's linux-x86_64 run on 053d5b46 (44309732453) against 0.0980 with the old draws (+3.6%), while the same run tightened this case's p95 (0.0940 to 0.0870) and its worst detection delay (81 to 77) and six crit_error figures of corrchange.n_perm: another sample of the same false-alarm distribution, not a worse detector"
 changelog = "draws the swaps of its permutation critical value with an unbiased multiply-shift reduction"
+
+[[raised]]
+key = "truth_recovery.deco_level.rows_to_midpoint_median.worst"
+from = 95.0
+to = 99.5
+date = 2026-11-24
+reason = "PLAN 551 made deco's rho the ratio of the EW means of the row's numerator and denominator, the weighted Gaussian estimate, in place of the EW mean of the row estimate u, which settles at E[u], about two-thirds of the truth; the median rows from a step to the midpoint between the settled levels read 99.5 on CI's linux-x86_64 run on 13f5ffe4 (45370125290) against 95, which is one half-life of 100 rows, the delay of an EW mean to the midpoint of a step, while the same run tightened the settled levels' worst gaps from the truth (0.114 to 0.052 at 0.2, 0.279 to 0.061 at 0.6) and the worst and p95 delays (206 to 176, 147 to 140): the cost of a level that settles at the truth, not a slower one"
+changelog = "After a step it reaches the midpoint between the two levels in one half-life, as an EW mean does"
+
+[[raised]]
+key = "truth_recovery.deco_level.rows_to_midpoint_median.p95"
+from = 95.0
+to = 99.5
+date = 2026-11-24
+reason = "PLAN 551 made deco's rho the ratio of the EW means of the row's numerator and denominator, the weighted Gaussian estimate, in place of the EW mean of the row estimate u, which settles at E[u], about two-thirds of the truth; the median rows from a step to the midpoint between the settled levels read 99.5 on CI's linux-x86_64 run on 13f5ffe4 (45370125290) against 95, which is one half-life of 100 rows, the delay of an EW mean to the midpoint of a step, while the same run tightened the settled levels' worst gaps from the truth (0.114 to 0.052 at 0.2, 0.279 to 0.061 at 0.6) and the worst and p95 delays (206 to 176, 147 to 140): the cost of a level that settles at the truth, not a slower one"
+changelog = "After a step it reaches the midpoint between the two levels in one half-life, as an EW mean does"
