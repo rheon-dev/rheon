@@ -2382,11 +2382,14 @@ for _ in range(5_000):
     b.append(0.3 * b[-1] + 0.4 * a[-2] + rng.standard_normal())
 df = pl.DataFrame({"a": a, "b": b})
 
+# Two lags of each series, a test of each on the other, no decay.
 spec = rp.spec.vector_ar(
     "v", targets=["a", "b"], lags=2, half_life=float("inf"),
     causality=[{"caused": "b", "causing": "a"}, {"caused": "a", "causing": "b"}],
 )
 bank = rp.ModelBank([spec])
+
+# The tests on the last row, then b's response to a shock to a.
 last = bank.fit_predict(df)["v"][-1]
 print(f"a -> b: p = {last['causality0_p']:.0e}")
 print(f"b -> a: p = {last['causality1_p']:.2f}")

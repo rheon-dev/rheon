@@ -526,14 +526,12 @@ impl VectorArFit {
                 0.0
             }
         });
-        let ev = comp
-            .eigenvalues()
-            .map_err(|e| {
-                format!(
-                    "its companion matrix's eigenvalues did not converge ({e:?}). Read it again \
+        let ev = comp.eigenvalues().map_err(|e| {
+            format!(
+                "its companion matrix's eigenvalues did not converge ({e:?}). Read it again \
                      after more rows."
-                )
-            })?;
+            )
+        })?;
         let mut out: Vec<(f64, f64)> = ev.iter().map(|z| (z.re, z.im)).collect();
         out.sort_by(|a, b| b.0.hypot(b.1).total_cmp(&a.0.hypot(a.1)));
         Ok(out)

@@ -140,7 +140,7 @@ KISH = {"marginal": ("n_kish", "t_stat")}
 #: A state table's clock columns are in the clock's own type.
 CLOCK_COLUMNS = ("clock_min", "clock_max")
 #: The solving kinds, whose default cadence reads the half-life.
-SOLVES = frozenset({"ewridge", "lasso", "quantile", "huber"})
+SOLVES = frozenset({"ewridge", "lasso", "quantile", "huber", "vector_ar"})
 
 
 def _params(kinds, essential=ESSENTIAL):

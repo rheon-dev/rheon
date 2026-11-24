@@ -470,6 +470,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
             targets=["y", "z"],
             features=["x0", "x1"],
             lags=2,
+            select="aic",
             causality=[{"caused": "y", "causing": "z"}],
             group="g",
             half_life=25.0,
