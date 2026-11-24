@@ -56,7 +56,12 @@
 //! and at most the spec's `se_bound`, [`SE_BOUND`] by default, in units
 //! free of the target's: a polynomial's coefficient as it is, a
 //! regressor's coefficient times its regressor's standard deviation over
-//! the innovations', and `sigma2` relative to itself, `se / sigma2`). Otherwise the target keeps buffering, naming the condition
+//! the innovations', and `sigma2` relative to itself, `se / sigma2`). The
+//! regressors' standardized standard errors are held because identical or
+//! near-collinear regressors leave the polynomials identified, passing the
+//! ARMA check, with the split of their effect unidentified
+//! (`est_tests.rs`, `near_identical_regressors_are_not_identified`).
+//! Otherwise the target keeps buffering, naming the condition
 //! that failed, and the fit is tried again once Kish's count has grown by
 //! [`RETRY_GROWTH`]. On acceptance the buffer is replayed at the fit with
 //! the parameters held, which builds the rings, `R` and the weight `V`,
