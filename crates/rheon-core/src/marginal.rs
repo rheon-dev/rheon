@@ -1302,7 +1302,16 @@ impl Marginal {
         let (n_eff, n_kish, mean_x, mean_y, var_x, var_y, cov) = match self.boundary() {
             None => (
                 self.wt[t],
-                self.wt[t] * self.wt[t] / self.qt[t],
+                // Unknown where the squared weights have faded below the
+                // doubles and the weight has not (a missing target across
+                // 538 half-lives), as the windowed read and
+                // `TargetMoments::n_kish` have it: it read `+inf`, and `t`
+                // an infinity on noise (review 2026-11-23, MARG-3).
+                if self.qt[t] > 0.0 {
+                    self.wt[t] * self.wt[t] / self.qt[t]
+                } else {
+                    f64::NAN
+                },
                 self.mx[fi],
                 self.my[t],
                 self.sxx[fi].max(0.0),

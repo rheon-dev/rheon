@@ -3315,8 +3315,8 @@ fn the_kept_window_reads_as_a_fresh_one() {
 }
 
 /// A window's view written over a kept accumulator of its shape is
-/// `src.clone()` with the window's moments set, field for field and to the
-/// bytes, and is written in place: the kept vectors are the ones it held.
+/// `src.clone()` with the window's moments and prior scale set, field for
+/// field and to the bytes, and is written in place: the kept vectors are the ones it held.
 /// Where the kept one is not of the shape -- another side, or a part short
 /// of it -- or `src` holds rows not yet merged, a block or a damaged
 /// state's rows, it is that clone, made afresh.
@@ -3332,9 +3332,11 @@ fn a_window_view_is_written_in_place_only_over_one_of_its_shape() {
     };
     let mean = [0.25, -1.5, 2.0];
     let lower = [2.0, 0.5, 3.0, -0.25, 0.75, 1.5];
+    // The prior's scale the window's weight gives (review 2026-11-23, COV-3).
     let fresh = |src: &EwCov| {
         let mut e = src.clone();
         e.set_moments_packed(&mean, &lower, 4.5, Some(3.0));
+        e.precision_scale = window_precision_scale(src.precision_scale, src.w_sum, 4.5);
         e
     };
     let write = |src: &EwCov, out: &mut EwCov, what: &str| {
