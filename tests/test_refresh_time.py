@@ -1051,11 +1051,14 @@ def test_points_held_are_resumed_only_on_the_clock_they_were_saved_on(tmp_path):
         )
         after = clocks[resumed].filter(pl.col("i") > head["i"][-1])
         for frame in (after.clear(), after):
-            plan = stream.refresh_time(frame.lazy(), load_state=state, **kw)
+            # Refused while the plan is built, as its schema is read from a
+            # feed of no rows (Polars 2 lets a source's own error through,
+            # 1.x wraps it).
             with pytest.raises(
-                pl.exceptions.ComputeError, match="but the state it resumes was saved on"
+                (pl.exceptions.ComputeError, ValueError),
+                match="but the state it resumes was saved on",
             ):
-                plan.head(1).collect()
+                stream.refresh_time(frame.lazy(), load_state=state, **kw).head(1).collect()
 
 
 def test_refresh_time_checks_its_plan_as_a_bank_does():
