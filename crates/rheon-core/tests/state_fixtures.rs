@@ -3135,13 +3135,17 @@ fn kalmans_square_root_is_written_as_its_factor() {
     }
     let after = rmpv::decode::read_value(&mut named(&m.state()).as_slice()).unwrap();
     assert!(factors(&after).iter().all(|l| lower(l)), "the continuation");
+    // The others write no form, or, where the moments' gap is written
+    // after it (review 2026-11-23, KAL-6), the default one.
     for f in frozen::ALL.iter().filter(|f| f.variant == "Kalman") {
         if f.name == "kalman_square_root" {
             continue;
         }
         let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let form = at(&v, &["model", "Kalman", "covariance_form"]).and_then(rmpv::Value::as_str);
+        let gap = at(&v, &["model", "Kalman", "moments_gap"]);
         assert!(
-            at(&v, &["model", "Kalman", "covariance_form"]).is_none(),
+            form.is_none() || (form == Some("covariance") && gap.is_some()),
             "{}",
             f.name
         );
