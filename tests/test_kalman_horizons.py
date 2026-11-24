@@ -1,4 +1,4 @@
-"""``kalman``'s forecasts at forecast_spans on the clock (task 559): the prediction a
+"""``kalman``'s forecasts at horizons on the clock (task 559): the prediction a
 row of this row's features would get ``Δ`` past the row with no row between,
 its integral over the span and its variance, as the filter would make them.
 
@@ -199,7 +199,7 @@ def test_names():
     ("kw", "says"),
     [
         ({"forecast_spans": [-1.0]}, "finite span of the clock of 0 or more"),
-        ({"forecast_spans": [2.0, 2]}, 'two forecast_spans are labeled "h2"'),
+        ({"forecast_spans": [2.0, 2]}, 'two horizons are labeled "h2"'),
         ({"forecast_spans": {"sumx": 1.0}}, 'not begin with "sum"'),
     ],
 )

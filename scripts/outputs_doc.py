@@ -173,8 +173,8 @@ MEANING: dict[str, str] = {
         "same sketch: the lower tail at a level below 0.5, the upper above it"
     ),
     "variance_<h>_<t>": (
-        "the variance of `<t>` `h - 1` rows past this one, horizon `h` of `forecast_rows`, from the "
-        "same rows, each input past the row held at its weighted mean over the rows learned; "
+        "the variance of `<t>` `h - 1` rows past this one, horizon `h` of `forecast_rows`, from "
+        "the same rows, each input past the row held at its weighted mean over the rows learned; "
         "horizon 1 is `variance_<t>`"
     ),
     "variance_sum_<h>_<t>": (

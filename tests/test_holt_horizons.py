@@ -1,4 +1,4 @@
-"""``holt``'s forecasts at forecast_spans on the clock (task 559): the forecast a
+"""``holt``'s forecasts at horizons on the clock (task 559): the forecast a
 span ``Δ`` past the row, ``l + b (s + Δ)``, and its integral over the span,
 ``Δ (l + b (s + Δ/2))``, read before the row from the level and trend the
 rows before it left.
@@ -228,7 +228,7 @@ def test_names_and_a_half_life_grid():
     [
         ({"forecast_spans": [-1.0]}, "finite span of the clock of 0 or more"),
         ({"forecast_spans": [float("inf")]}, "finite"),
-        ({"forecast_spans": [3, 3.0]}, 'two forecast_spans are labeled "h3"'),
+        ({"forecast_spans": [3, 3.0]}, 'two horizons are labeled "h3"'),
         ({"forecast_spans": list(range(65))}, "at most 64"),
         ({"forecast_spans": {"sum": 1}}, 'not begin with "sum"'),
     ],

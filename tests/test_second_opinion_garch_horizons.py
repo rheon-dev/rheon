@@ -1,4 +1,4 @@
-"""`garch`'s forecasts at forecast_rows against `arch`'s (task 559).
+"""`garch`'s forecasts at horizons against `arch`'s (task 559).
 
 `arch` forecasts from the variance and the residual it has at an origin;
 here it is handed the bank's own, so the library computes the forecast from
@@ -53,7 +53,7 @@ def _bound(vol: str, h: int) -> float:
     """The gap allowed to `arch`'s forecast at horizon `h`, in units of the
     last place of `arch`'s value (and of the sum's). Measured 2026-11-23 on
     Linux x86-64, the largest over 79 rows (15 for FIGARCH) from row 2,050 to
-    2,599: GARCH 0, 1, 4, 15 and 37 at forecast_rows 1, 2, 5, 22 and 100, GJR 0,
+    2,599: GARCH 0, 1, 4, 15 and 37 at horizons 1, 2, 5, 22 and 100, GJR 0,
     2, 4, 13 and 32, their sums at most 30. The bank forms the persistence
     `P = α + γ/2 + β` once and steps `ω + P f`, as the single horizon did,
     where `arch` adds `ω`, `α f`, `γ f/2` and `β f` a step: `P`'s one

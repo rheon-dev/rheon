@@ -382,7 +382,9 @@ def garch(
         model["start_span"] = start_span
     if forecast_rows is not None:
         model["forecast_rows"] = (
-            [[k, h] for k, h in forecast_rows.items()] if isinstance(forecast_rows, dict) else list(forecast_rows)
+            [[k, h] for k, h in forecast_rows.items()]
+            if isinstance(forecast_rows, dict)
+            else list(forecast_rows)
         )
     if max_horizon_work is not None:
         model["max_horizon_work"] = max_horizon_work
