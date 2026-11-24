@@ -203,6 +203,61 @@ mod tests {
         assert_eq!(count(0.0, 0.0, 0), None);
     }
 
+    /// The inlined path at scale 0 is the general one, to the bit, on each
+    /// side of both edges of its range, at 0 of either sign, and on a
+    /// weight negative, infinite or not a number: the split moved the
+    /// cost of the scale's test, not a single sum or count.
+    #[test]
+    fn the_inlined_path_is_the_general_one_at_scale_0() {
+        let up = |x: f64| f64::from_bits(x.to_bits() + 1);
+        let down = |x: f64| f64::from_bits(x.to_bits() - 1);
+        let ws = [
+            LO,
+            up(LO),
+            down(LO),
+            HI,
+            up(HI),
+            down(HI),
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            0.37,
+            1e-300,
+            1e300,
+            f64::MIN_POSITIVE,
+            5e-324,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        for &w in &ws {
+            for (q0, lam2) in [(0.0, 1.0), (2.5, 0.81), (1e-200, 0.5)] {
+                let (mut qa, mut sa) = (q0, 0);
+                let (mut qb, mut sb) = (q0, 0);
+                add(&mut qa, &mut sa, lam2, w);
+                add_scaled(&mut qb, &mut sb, lam2, w);
+                assert_eq!((qa.to_bits(), sa), (qb.to_bits(), sb), "w {w:e}, q {q0}");
+                let general_count = (qb > 0.0).then(|| {
+                    let x = ldexp(w, -i64::from(sb));
+                    x * x / qb
+                });
+                assert_eq!(
+                    count(w, qa, sa).map(f64::to_bits),
+                    general_count.map(f64::to_bits),
+                    "count at w {w:e}"
+                );
+                let general_per = (w > 0.0 && qb > 0.0)
+                    .then(|| ldexp(qb / ldexp(w, -i64::from(sb)), i64::from(sb)));
+                assert_eq!(
+                    per_weight(w, qa, sa).map(f64::to_bits),
+                    general_per.map(f64::to_bits),
+                    "per_weight at w {w:e}"
+                );
+            }
+        }
+    }
+
     /// A tiny row beside a sum of ordinary rows adds nothing and moves no
     /// scale; ordinary rows after tiny ones take the scale back.
     #[test]
