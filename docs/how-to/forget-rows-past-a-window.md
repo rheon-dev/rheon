@@ -11,7 +11,7 @@ row `w` [clock units](../GLOSSARY.md#time) old or older count for exactly
 nothing, give the [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads)
 `window_size=w`, a [hard window](../GLOSSARY.md#fitting-a-model). This
 page is about the models that cut it from snapshots of their running
-sums: `ewridge`, `lasso`, `ar`, `ew_cov`, `ew_class`, `marginal` and
+sums: `ewridge`, `lasso`, `ar`, `vector_ar`, `ew_cov`, `ew_class`, `marginal` and
 `spectral`. [A hard window](../MODELS.md#a-hard-window) names the models
 that take a `window_size` of their own.
 [A hard window](../explanation/time-and-decay.md#a-hard-window) explains
@@ -29,7 +29,7 @@ These steps need the library and a spec of one of those models:
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `ticks.parquet`, 400 rows a unit of the clock `t` apart, in which the
   coefficient of `ret` on `signal_a` flips from 0.8 to −0.8 at row 200.
-- A spec of `ewridge`, `lasso`, `ar`, `ew_cov`, `ew_class`, `marginal` or
+- A spec of `ewridge`, `lasso`, `ar`, `vector_ar`, `ew_cov`, `ew_class`, `marginal` or
   `spectral`. With a
   [clock](../GLOSSARY.md#time), `window_size` is in its units: a number, or
   a duration such as `"1h"` on a clock of times. Without one, it counts

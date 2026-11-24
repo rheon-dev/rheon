@@ -18,7 +18,7 @@ exact spec you built.
 
 | family | models |
 |---|---|
-| [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) · [`ar`](#ar) · [`isotonic`](#isotonic) |
+| [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) · [`ar`](#ar) · [`isotonic`](#isotonic) · [`vector_ar`](#vector_ar) |
 | [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`ewm_moments`](#ewm_moments) · [`pca`](#pca) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) · [`power_variation`](#power_variation) · [`tdigest`](#tdigest) · [`ddsketch`](#ddsketch) · [`spectral`](#spectral) |
 | [Clustering and classification](MODELS.md#clustering-and-classification) | [`kmeans`](#kmeans) · [`micro`](#micro) · [`ew_class`](#ew_class) |
 | [Sequential tests and regimes](MODELS.md#sequential-tests-and-regimes) | [`seqtest`](#seqtest) · [`corrchange`](#corrchange) · [`bocpd`](#bocpd) · [`hmm`](#hmm) · [`hawkes`](#hawkes) |
@@ -101,7 +101,7 @@ row, as `rp.spec.output_index(spec)` lists it:
 | `i64` | `Int64` |
 | `bool` | `Boolean` |
 | `list[f64]` | `List(Float64)`: `coef` and the fields laid out like it. A list stores nothing for a null row, and `coef` is null on most rows. For an `(n, k)` matrix, `k` the height of `rp.spec.coef_index(spec)`, keep the rows that carry it and fix their width. For the output `out` of a spec named `m`: `out.select(pl.col("m").struct.field("coef")).filter(pl.col("coef").is_not_null()).select(pl.col("coef").list.to_array(k)).to_series().to_numpy()` |
-| `enum` | an `Enum` of its values, in their order: `withheld_reason`'s ten, an `ew_class` spec's `classes` for `class`, a grid's slots for `selected_<t>` |
+| `enum` | an `Enum` of its values, in their order: `withheld_reason`'s eleven, an `ew_class` spec's `classes` for `class`, a grid's slots for `selected_<t>` |
 | `clock` | the clock column's own type, an integer clock in its own width; with no clock, `Int64`, the group's row index |
 
 **Every integer is an `Int64`**, in a field and in every frame the bank and
@@ -133,7 +133,7 @@ Four fields appear in nearly every model's table, and are defined here once:
 |---|---|---|---|
 | `weight_sum` | `f64` | the accumulated weight before the model learns this row, and before the row's own decay | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row: `1 - 2^(-T/half_life)`, with `T` the decay time seen so far, so 0.5 at one half-life and 0.75 at two. `min_settled_frac` gates on it | where nothing decays |
-| `withheld_reason` | `enum` | why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, `not_identified`, `scale_ratio_moved`, `not_separated`, `input_negative` or `target_not_positive`. That order is their precedence, so the first that applies is the one named. `below_warm_rows` is the model's own warm-up, the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows a `holt` heuristic start holds, in a `kalman` fit standardized with no intercept, the rows before any of a target's coefficients is sized, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level. `ill_conditioned` is an `ewridge` fit whose normal equations are too nearly singular for a solve to keep a digit. `unstable_rate` is an `sgd` target whose learning rate is past its stability bound: its recent steps' gains have a mean square above twice their mean, so each step grows its own row's residual and the fit diverges. `not_identified` is a `garch` start whose rows do not yet tell its variance process from a constant variance, so it buffers more, or a `hawkes` fit its events do not identify. `scale_ratio_moved` is a `corrchange` span past its critical value whose two columns' scale ratio moved inside it, so its `flag` is null. `not_separated` is a `pca` component the data does not yet tell apart from a neighbor: the test of the equality of their two eigenvalues does not pass. `input_negative` is a `garch` row under GARCH or GJR with an input below 0, which its variance equation cannot read: the row reports nothing and is learned as a row of weight 0. `target_not_positive` alone names a row whose prediction stands: a multiplicative `holt` season's row whose target, or the level or seasonal factor its update would make, is 0 or below, which is predicted and not learned. Only that form's `enum` holds `target_not_positive`; every other spec's holds the reasons before it | where nothing was withheld |
+| `withheld_reason` | `enum` | why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, `not_identified`, `scale_ratio_moved`, `not_separated`, `level_beyond_sample` or `input_negative`. That order is their precedence, so the first that applies is the one named. `below_warm_rows` is the model's own warm-up, the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows a `holt` heuristic start holds, in a `kalman` fit standardized with no intercept, the rows before any of a target's coefficients is sized, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level. `ill_conditioned` is an `ewridge` fit whose normal equations are too nearly singular for a solve to keep a digit. `unstable_rate` is an `sgd` target whose learning rate is past its stability bound: its recent steps' gains have a mean square above twice their mean, so each step grows its own row's residual and the fit diverges. `not_identified` is a `garch` start whose rows do not yet tell its variance process from a constant variance, so it buffers more, or a `hawkes` fit its events do not identify. `scale_ratio_moved` is a `corrchange` span past its critical value whose two columns' scale ratio moved inside it, so its `flag` is null. `not_separated` is a `pca` component the data does not yet tell apart from a neighbor: the test of the equality of their two eigenvalues does not pass. `level_beyond_sample` is a `tdigest` or `ddsketch` level past what the rows before it identify, `1/(n + 1)` or `n/(n + 1)` of `n` rows. `input_negative` is a `garch` row under GARCH or GJR with an input below 0, which its variance equation cannot read: the row reports nothing and is learned as a row of weight 0. `target_not_positive` alone names a row whose prediction stands: a multiplicative `holt` season's row whose target, or the level or seasonal factor its update would make, is 0 or below, which is predicted and not learned. Only that form's `enum` holds `target_not_positive`; every other spec's holds the reasons before it | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit, as one flat list written after the row is learned: a regression's coefficients, or what a model that is not a regression keeps in their place, such as its centers or state means. Its builder's docstring lays the list out. A model that solves on a schedule (`solve_every`) shows its latest solve. The entries of a target or class with no fit yet are null: a target no solve has fit, a `holt` target not yet observed, an `ew_class` class not yet seen. `hmm` writes zeros, not nulls, on its seeding rows before the last. `ewridge` does not run a solve that comes due while its weight is too far below the floor for any row to read it before the next one, so there it shows the last fit solved. Under an `embargo`, learning the row waits for the delay, so `coef` is written after the rows this row releases, and is the fit the next row is predicted with only when the next row releases none | on every row but those `coef_every` or `max_rows_between_coefs` fills, which with neither are each group's last row not skipped in each chunk; on an `ill_conditioned` row; and before the model has anything to report, such as a first solve |
 
 ## What is not listed
@@ -355,7 +355,7 @@ The fields of `rp.spec.ar("m", targets=["y"], features=["x0"], half_life=50.0, l
 
 ## `isotonic`
 
-The fields of `po.spec.isotonic("m", targets=["y"], features=["x0"], half_life=50.0)`:
+The fields of `rp.spec.isotonic("m", targets=["y"], features=["x0"], half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -364,6 +364,19 @@ The fields of `po.spec.isotonic("m", targets=["y"], features=["x0"], half_life=5
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
+## `vector_ar`
+
+The fields of `rp.spec.vector_ar("m", targets=["y"], features=["x0"], half_life=50.0, lags=1)`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `pred_y` | `f64` | the prediction for `<t>`, computed from the state **before** this row | while withheld |
+| `resid_y` | `f64` | `y - pred` for `<t>` | while withheld; where the target is null; and on every row of a target that is a formula target, whose value is not known at its row |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+| `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
 
 ## `ew_cov`
 
@@ -458,7 +471,7 @@ The fields of `rp.spec.audit("m", columns=["x0", "x1"])`:
 
 ## `garch`
 
-The fields of `po.spec.garch("m", targets=["y"], start_rows=50, forecast_rows=[5])`:
+The fields of `rp.spec.garch("m", targets=["y"], start_rows=50, forecast_rows=[5])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -470,12 +483,6 @@ The fields of `po.spec.garch("m", targets=["y"], start_rows=50, forecast_rows=[5
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
-
-Under `horizon=5`, it also writes:
-
-| field | dtype | what it holds | also null |
-|---|---|---|---|
-| `forecast_y` | `f64` | the variance of `<t>` `horizon - 1` rows past this one, from the same rows | where the variance is null |
 
 ## `dcc`
 

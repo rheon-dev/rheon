@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the thirty-six models a spec can name, by
+The reference entry of each of the thirty-seven models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The thirty-six models fall into four families, and each family answers one
+The thirty-seven models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -228,10 +228,10 @@ longer stands for the moment just before.
 `window_size` makes every row older than a span count for nothing ([Forget
 rows past a window](how-to/forget-rows-past-a-window.md) shows how, and
 what each model keeps inside the window). `ewridge`, `lasso`, `ar`,
-`ew_cov`, `ew_class`, `marginal` and `spectral` cut it from snapshots of
+`vector_ar`, `ew_cov`, `ew_class`, `marginal` and `spectral` cut it from snapshots of
 their running sums, spaced by `snapshot_every` and
 `max_rows_between_snapshots` and held under `window_budget`. `expectile`,
-`hawkes`, `realized`, `power_variation`, `ddsketch`, `ewm_moments` and
+`isotonic`, `hawkes`, `realized`, `power_variation`, `ddsketch`, `ewm_moments` and
 `corrchange` take a `window_size` of their own, without snapshots, and
 each one's entry says what it keeps and how its edge is read. Five things
 to know before reading the numbers of a model under a snapshot window:
