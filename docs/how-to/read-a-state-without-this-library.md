@@ -38,7 +38,11 @@ Export the state from Python, and read the JSON in the other program.
 4. **Turn the strings `"nan"`, `"inf"` and `"-inf"` back into numbers.**
    JSON has no literal for `NaN` or `±inf`, and an ordinary state can hold
    them, as a spec with `half_life=inf` (no forgetting) does. The strings
-   are the spelling a spec's `half_life` takes.
+   are the spelling a spec's `half_life` takes. A NaN keeps its bits: one
+   whose sign bit is set is written `"-nan"`, and any other but the usual
+   one `"nan:0x"` and the 16 hex digits of its bits. A reader that needs
+   only the value reads every string that starts with `nan` or `-nan` as
+   NaN.
 
 This code exports a bank whose spec forgets nothing, and reads its
 `half_life` back as a number. It uses `df` from [Example

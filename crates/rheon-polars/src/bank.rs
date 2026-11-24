@@ -4465,7 +4465,9 @@ impl Bank {
     /// `f64` is written as `"inf"`, `"-inf"` or `"nan"` -- the spelling
     /// [`crate::spec::Num`] already uses, so a spec's `half_life` and a
     /// stream's `decay` read the same way -- rather than as the `null`
-    /// `serde_json` would write unasked. See [`FiniteOrTag`].
+    /// `serde_json` would write unasked, wherever in the state it sits
+    /// ([`rheon_core::tagged`]); a NaN keeps its sign and bits (`"-nan"`,
+    /// `"nan:0x..."`), so the export reads back to the state byte for byte.
     ///
     /// Refused, as [`Bank::save_bytes`] is, for a bank a chunk broke (the
     /// `broken` field): its streams hold rows whose output was never
@@ -4474,12 +4476,7 @@ impl Bank {
     pub fn save_json_string(&self, pretty: bool) -> Result<String, String> {
         self.refuse_if_broken().map_err(|e| e.to_string())?;
         let file = self.to_file()?;
-        let text = if pretty {
-            serde_json::to_string_pretty(&file)
-        } else {
-            serde_json::to_string(&file)
-        }
-        .map_err(|e| e.to_string())?;
+        let text = file_encoding::to_json(&file, pretty)?;
         json_is_faithful(&file, &text)?;
         Ok(text)
     }

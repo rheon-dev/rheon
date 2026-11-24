@@ -145,6 +145,7 @@ mod stats;
 mod stl;
 mod stl_ring;
 mod streampca;
+pub mod tagged;
 mod tails;
 mod tdigest;
 mod tdigest_model;

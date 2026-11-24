@@ -1521,6 +1521,24 @@ model that only the new build has is listed as an addition and passes.
   infinite, and the bank refused its own saved state as damaged. The sums
   now stop at the largest double, the most a double holds; below that
   residual nothing changes, to the bit.
+- **`ModelBank.write_json` exports every state, NaN and infinities
+  included, wherever they sit** (JSON-NaN). The export tagged a non-finite
+  float only in a field annotated by hand; any other reached JSON as
+  `null`, so the export's read-back refused the bank. On main 31 of the 35
+  kinds refused under an embargo with withheld rows (a held `score_pred`
+  is NaN on a withheld row), and `deco` (`rho`), `garch` (`theta`) and
+  `tdigest` (an empty digest's `lo`, `inf`) refused without one. The JSON
+  export now passes every float through a wrapper around `serde_json`'s
+  serializer and deserializer (`rheon_core::tagged`), so a new field or
+  kind needs nothing. A NaN keeps its bits: `"nan"` is the usual one,
+  `"-nan"` one with the sign bit set (what `0.0 / 0.0` gives on x86-64),
+  and `"nan:0x"` with 16 hex digits any other, where every NaN was
+  `"nan"` and an x86-64 NaN would not have read back to the state's bytes.
+  The state file's msgpack is unchanged byte for byte: the frozen state
+  fixtures pass untouched. `tests/test_state_json_every_kind.py` exports
+  and resumes every kind of the registry with an embargo, withheld rows,
+  null and zero-weight rows and every output switch, at four points of
+  the stream.
 
 - **`power_variation`'s normalized terms scale by the returns' weight, and
   `n` is Kish's count under a window too** (Fable's W13 review, B1 and B2,

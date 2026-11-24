@@ -22,26 +22,56 @@ pub(super) fn near(text: &str, line: usize) -> String {
     out
 }
 
+/// `file` as JSON, every non-finite float tagged wherever it sits
+/// ([`rheon_core::tagged`]): `serde_json` alone writes NaN and the
+/// infinities as `null`, which no `f64` reads back.
+pub(super) fn to_json(file: &BankFile, pretty: bool) -> Result<String, String> {
+    let mut out = Vec::new();
+    let done = if pretty {
+        file.serialize(rheon_core::tagged::Ser(
+            &mut serde_json::Serializer::pretty(&mut out),
+        ))
+    } else {
+        file.serialize(rheon_core::tagged::Ser(&mut serde_json::Serializer::new(
+            &mut out,
+        )))
+    };
+    done.map_err(|e| e.to_string())?;
+    String::from_utf8(out).map_err(|e| e.to_string())
+}
+
+/// A bank file from the text [`to_json`] wrote, every tag read back as the
+/// float it was written from.
+pub(super) fn from_json(text: &str) -> Result<BankFile, serde_json::Error> {
+    let mut de = serde_json::Deserializer::from_str(text);
+    let file = BankFile::deserialize(rheon_core::tagged::De(&mut de))?;
+    de.end()?;
+    Ok(file)
+}
+
 /// Is `text` the whole of `file`? The JSON is read back into a `BankFile`
 /// and re-encoded, and the msgpack must match the real state byte for byte.
 ///
-/// This is the enforcement behind [`rheon_core::humanfloat`], not a
-/// belt-and-braces check. JSON has no literal for `NaN` or `±inf` and
-/// `serde_json` writes all three as `null` without a word, so every config
-/// float a caller may set to infinity needs annotating -- and the only way
-/// to know one was missed is to read the export back. A `null` where an
-/// `f64` belongs fails to parse, and the byte comparison catches anything
-/// subtler. `O(state)` twice over, paid once at the end of a run.
+/// This is the enforcement behind [`rheon_core::tagged`], not a
+/// belt-and-braces check. JSON has no literal for `NaN` or `±inf`, and
+/// `serde_json` writes all three as `null` without a word; the export tags
+/// every float on its way through, but a float serde buffers before it
+/// knows its type (an untagged enum, a flattened field) reads its tag back
+/// as a string unless the field carries a [`rheon_core::humanfloat`]
+/// annotation, and the only way to know one was missed is to read the
+/// export back. A `null` or a string where an `f64` belongs fails to parse,
+/// and the byte comparison catches anything subtler, a NaN's sign among
+/// them. `O(state)` twice over, paid once at the end of a run.
 ///
-/// Note that the interception is in `serde_json`'s *serializer*, not its
-/// formatter: `serialize_f64` sends a non-finite value to `write_null`
-/// before any `Formatter` sees it, so a custom formatter cannot fix this
-/// and the annotation has to be on the field.
+/// The interception is in a wrapper around `serde_json`'s *serializer*,
+/// not in a formatter: `serialize_f64` sends a non-finite value to
+/// `write_null` before any `Formatter` sees it.
 pub(super) fn json_is_faithful(file: &BankFile, text: &str) -> Result<(), String> {
     let want = rmp_serde::to_vec_named(file).map_err(|e| e.to_string())?;
-    let back: BankFile = serde_json::from_str(text).map_err(|e| {
+    let back = from_json(text).map_err(|e| {
         format!(
-            // A field that writes NaN or ±inf as null, which needs
+            // A float serde buffered (an untagged enum, a flattened field)
+            // read its tag back as a string: annotate it with
             // `#[serde(with = "crate::humanfloat::f64_or_tag")]` in rheon-core.
             "ModelBank.write_json: the export dropped a value the state holds ({e}), which is a \
              defect in rheon. Open an issue at \

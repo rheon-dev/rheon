@@ -4089,7 +4089,9 @@ class ModelBank:
         holds everything :meth:`save` writes, every value included: NaN and
         the infinities, which JSON has no literal for, are written as the
         strings ``"nan"``, ``"inf"`` and ``"-inf"``, the spellings a spec's
-        ``half_life`` takes.
+        ``half_life`` takes. A NaN keeps its bits: one whose sign bit is set
+        is ``"-nan"``, and any other but the usual one is ``"nan:0x"`` and
+        the 16 hex digits of its bits.
 
         .. rubric:: Raises
 
