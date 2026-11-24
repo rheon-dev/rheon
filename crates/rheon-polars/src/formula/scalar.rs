@@ -54,7 +54,7 @@
 use std::sync::Arc;
 
 use polars::prelude::*;
-use rheon_core::{Bounded, RootReport, RootTolerance, Withheld, find_root, usable};
+use rheon_core::{Bounded, RootReport, RootTolerance, RootWithheld as Withheld, find_root, usable};
 use serde_json::Value;
 
 /// Half a machine epsilon: the relative rounding of one operation.
