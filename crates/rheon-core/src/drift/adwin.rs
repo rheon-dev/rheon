@@ -370,8 +370,11 @@ impl Adwin {
             let dv = x - self.total / (self.width - 1.0);
             inc = (self.width - 1.0) * dv * dv / self.width;
         }
-        self.var += inc;
-        self.total += x;
+        // A finite value past the square root of the largest double squares
+        // past it: the sums saturate there, the largest spread a double holds,
+        // so the state stays finite, as a restore holds it to (`sound`).
+        self.var = saturated(self.var + inc);
+        self.total = saturated(self.total + x);
         self.compress();
     }
 
@@ -384,9 +387,9 @@ impl Adwin {
             let [t1, v1] = self.levels[idx].pop_front().expect("M + 1 buckets");
             let mu1 = t0 / n1;
             let mu2 = t1 / n1;
-            let total12 = t0 + t1;
+            let total12 = saturated(t0 + t1);
             let temp = n1 * 0.5 * (mu1 - mu2) * (mu1 - mu2);
-            let v12 = v0 + v1 + temp;
+            let v12 = saturated(v0 + v1 + temp);
             if idx + 1 >= self.levels.len() {
                 self.levels.push(VecDeque::new());
             }
@@ -450,8 +453,8 @@ impl Adwin {
                     continue;
                 }
                 let d = total / n - sb / nb;
-                var += vb + n * nb / (n + nb) * d * d;
-                total += sb;
+                var = saturated(var + vb + n * nb / (n + nb) * d * d);
+                total = saturated(total + sb);
                 n += nb;
             }
         }
@@ -524,3 +527,9 @@ impl Adwin {
 #[cfg(test)]
 #[path = "adwin_tests.rs"]
 mod tests;
+
+/// `v`, or the largest double where a sum of finite values went past it.
+#[inline]
+fn saturated(v: f64) -> f64 {
+    v.min(f64::MAX)
+}

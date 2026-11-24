@@ -918,6 +918,14 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`drift_kind="adwin"` keeps a state that loads after a residual whose
+  square passes the largest double.** ADWIN sums each row's absolute
+  residual and its squared deviation; a residual past about 1.3e154 (an
+  `expectile` fit after a target at the input bound) made the spread
+  infinite, and the bank refused its own saved state as damaged. The sums
+  now stop at the largest double, the most a double holds; below that
+  residual nothing changes, to the bit.
+
 - **`power_variation`'s normalized terms scale by the returns' weight, and
   `n` is Kish's count under a window too** (Fable's W13 review, B1 and B2,
   as `realized` was fixed). `normalize` multiplied a term of powers `p` by

@@ -640,3 +640,29 @@ fn the_windows_range_is_saved_and_rivers_form_writes_no_range() {
     let damaged: Adwin = serde_json::from_value(v).unwrap();
     assert!(!damaged.sound() || a.levels[0].is_empty());
 }
+
+/// A finite value past the square root of the largest double squares past
+/// it. Its sums saturate at the largest double, so the detector stays sound
+/// and a save of it loads: a residual of 1e200 left `V` infinite, and the
+/// bank refused its own state on load as damaged (PLAN 578j, found by
+/// TEST-11's drift switches on an `expectile` fit). Below the square root
+/// nothing moves: the other tests here hold that to river's bits.
+#[test]
+fn values_whose_squares_overflow_leave_a_sound_detector() {
+    for restart in [false, true] {
+        let mut a = Adwin::new(AdwinCfg { restart, ..cfg() });
+        let mut s = 11u64;
+        for i in 0..400 {
+            let x = match i {
+                40 | 41 | 200 => 1e200,
+                90 => f64::MAX,
+                _ => lcg(&mut s),
+            };
+            a.update(x);
+            assert!(a.sound(), "row {i}, restart {restart}");
+        }
+        let text = serde_json::to_string(&a).unwrap();
+        let b: Adwin = serde_json::from_str(&text).unwrap();
+        assert!(b.sound());
+    }
+}
