@@ -2005,7 +2005,7 @@ model that only the new build has is listed as an addition and passes.
   `bocpd` dropping runs below `prune_below` and folding the runs at
   `max_run`, the low part of `kmeans`' and `micro`'s compensated means, a
   numeric and a temporal clock crossing a session, a temporal clock at a
-  decade's age, a reset after a step back in each of the 19 kinds that read
+  decade's age, a reset after a step back in each of the 23 kinds that read
   a clock, and every spec run again with each group's first row at weight 0,
   with it null, and saved mid-stream, loaded and continued: 6,158 fields of
   416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.

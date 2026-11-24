@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import polars as pl
@@ -289,7 +290,37 @@ PATHS = {
         f"sgd {loss}": _sgd_on(loss)
         for loss in ("huber", "quantile", "epsilon_insensitive", "poisson", "logistic")
     },
+    # The paths added since 2.0.0 (PLAN 578j, CI-2: the workload reached none).
+    **{
+        f"drift_kind {kind}": (lambda k: lambda b, kw: kw.get("drift_kind") == k)(kind)
+        for kind in ("cusum", "adwin", "ddm", "eddm", "kswin")
+    },
+    "kalman square_root": lambda b, kw: kw.get("covariance_form") == "square_root",
+    "hmm's factor form": lambda b, kw: b == "hmm" and len(kw.get("features", [])) >= 13,
+    "hmm prior_rows": lambda b, kw: b == "hmm" and "prior_rows" in kw,
+    "lasso's sweep in parts": lambda b, kw: b == "lasso" and len(kw.get("features", [])) >= 40,
+    **{
+        f"glm {family}": (lambda f: lambda b, kw: b == "glm" and kw.get("family") == f)(family)
+        for family in ("binomial", "gamma", "tweedie")
+    },
+    **{
+        f"glm link {link}": (lambda k: lambda b, kw: b == "glm" and kw.get("link") == k)(link)
+        for link in ("inverse", "power")
+    },
+    "an expectile window": lambda b, kw: b == "expectile" and "window_size" in kw,
+    "a hawkes window": lambda b, kw: b == "hawkes" and "window_size" in kw,
+    "hawkes kernel_half_lives": lambda b, kw: "kernel_half_lives" in kw,
+    **{
+        f"a cadence as a span: {key}": (lambda k: lambda b, kw: k in kw)(key)
+        for key in ("refit_span", "huber_refit_span", "start_span")
+    },
+    "garch on returns it starts on": lambda b, kw: b == "garch" and "ra" in kw["targets"],
+    "dcc on returns it starts on": lambda b, kw: b == "dcc" and "ra" in kw["targets"],
 }
+
+
+#: The memory workload's name of each of the probe's returns.
+RETURNS_AS = {"a": "y", "b": "z", "c": "x0"}
 
 
 def test_the_workload_reaches_every_field_name_and_every_named_path():
@@ -301,7 +332,11 @@ def test_the_workload_reaches_every_field_name_and_every_named_path():
 
     probed: set[str] = set()
     for name, builder, kw, _ in probe.WORKLOAD:
-        probed |= set(rp.spec.output_fields(probe.build(builder, name, kw)))
+        fields = rp.spec.output_fields(probe.build(builder, name, kw))
+        # `garch` and `dcc` read the returns `ra`, `rb` and `rc`, where the
+        # memory workload's own returns are `y`, `z` and `x0`: the same
+        # fields, under the probe's target names.
+        probed |= {re.sub(r"(?<=_)r([abc])(?=_|$)", lambda m: RETURNS_AS[m[1]], f) for f in fields}
     fullest: set[str] = set()
     for name, builder, kw, _ in memory.WORKLOAD:
         fullest |= set(rp.spec.output_fields(getattr(rp.spec, builder)(name, **kw)))
