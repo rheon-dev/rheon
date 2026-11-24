@@ -615,6 +615,7 @@ BUILDERS = {
     rp.spec.ewm_moments: dict(features=["x0", "y"], targets=None, terms={"var": {"x0": 2}}),
     rp.spec.ar: dict(lags=2),
     rp.spec.spectral: dict(features=None, periods=[8.0]),
+    rp.spec.isotonic: dict(features=["x0"]),
 }
 
 

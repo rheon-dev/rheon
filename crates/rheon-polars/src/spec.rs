@@ -2135,6 +2135,7 @@ impl ModelKind {
                 | ModelKind::DdSketch { .. }
                 | ModelKind::EwmMoments { .. }
                 | ModelKind::Spectral(_)
+                | ModelKind::Isotonic { .. }
         )
     }
 

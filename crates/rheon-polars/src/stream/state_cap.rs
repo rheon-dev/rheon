@@ -132,7 +132,7 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
             ..
         } => (format!("window_size = {w}"), "Shorten window_size", "rows"),
         ModelKind::Isotonic { .. } => (
-            "its feature".to_string(),
+            "the feature column".to_string(),
             "Round the feature to fewer values in the query, or give window_rows",
             "distinct values",
         ),

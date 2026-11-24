@@ -61,6 +61,7 @@ MODELS = [
     ("expectile", {"expectile": 0.8}),
     ("holt", {"features": None}),  # no features keyword
     ("ar", {"lags": 1, "ridge": 1e-3}),
+    ("isotonic", {"features": ["x0"], "out_of_bounds": "clip"}),
 ]
 IDS = [m[0] for m in MODELS]
 

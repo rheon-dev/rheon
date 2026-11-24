@@ -260,6 +260,18 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     "pca": frozenset({"n_components", "learning_rate", "max_state_bytes"}),
     "tdigest": frozenset({"compression", "max_state_bytes"}),
     "ddsketch": frozenset({"alpha", "window_rows", "window_size", "closed", "max_state_bytes"}),
+    "isotonic": frozenset(
+        {
+            "increasing",
+            "y_min",
+            "y_max",
+            "out_of_bounds",
+            "window_rows",
+            "window_size",
+            "closed",
+            "max_state_bytes",
+        }
+    ),
     "expectile": frozenset(
         {
             "ridge",

@@ -49,6 +49,7 @@ BUILDERS = [
     "pa",
     "glm",
     "expectile",
+    "isotonic",
     "holt",
     "kmeans",
     "micro",

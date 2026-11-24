@@ -1085,6 +1085,39 @@ CASES: list[Case] = [
         "tdigest",
         {**CLOSE, "targets": ["y"], "quantiles": [0.25, 0.75]},
     ),
+    # A monotone fit on one feature: no coefficients, so no cadence for
+    # them; a row window, the bounds and the clip.
+    Case(
+        "isotonic",
+        "isotonic",
+        {
+            **without(full(), ("max_rows_between_coefs",)),
+            "features": ["x0"],
+            "increasing": False,
+            "y_min": -3.0,
+            "y_max": 3.0,
+            "out_of_bounds": "clip",
+            "window_rows": 80,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # A clock window under the second stream's keys.
+    Case(
+        "isotonic2",
+        "isotonic",
+        {
+            **without(full2(), ("coef_every",)),
+            "features": ["x0"],
+            "window_size": 30.0,
+            "closed": "both",
+        },
+    ),
+    # Its groups run to a close.
+    Case(
+        "isotonic_close",
+        "isotonic",
+        {**CLOSE, "targets": ["y"], "features": ["x0"]},
+    ),
     # A sketch a target: no decay and no coefficients, every key it takes.
     Case(
         "ddsketch",

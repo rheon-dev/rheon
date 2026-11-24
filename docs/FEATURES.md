@@ -14,7 +14,7 @@ pages by the task you have in hand.
 
 | family | its features |
 |---|---|
-| [Models](#models) | the thirty-five models a spec can name |
+| [Models](#models) | the thirty-six models a spec can name |
 | [Running a bank](#running-a-bank) | a bank in a query, in a Python loop, and its output as Arrow |
 | [Saving, loading and serving](#saving-loading-and-serving) | a bank's state, written and read back |
 | [Reading a bank](#reading-a-bank) | what a bank holds, and the names of its output |
@@ -50,6 +50,7 @@ to start with.
 | [`rheon.spec.glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood | [entry](MODELS.md#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) · [a count target](how-to/fit-a-count-target.md) |
 | [`rheon.spec.holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) | Holt's linear trend, a baseline that extrapolates the target's own level and slope | [entry](MODELS.md#holt--holts-linear-trend) · [choose Holt's smoothing](how-to/choose-holts-smoothing.md) |
 | [`rheon.spec.ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) | an autoregression for each target, AR(p), on lags the model keeps itself, with exogenous features | [entry](MODELS.md#ar--an-autoregression-on-the-targets-own-past) |
+| [`rheon.spec.isotonic`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.isotonic) | isotonic regression of each target on one feature, the monotone calibrator, over every row, a window or a decay; scikit-learn's fit | [entry](MODELS.md#isotonic--a-monotone-function-of-one-feature) |
 | [`rheon.spec.ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) | running means, variances, covariances, correlations, partial correlations, Mahalanobis distances and principal components | [entry](MODELS.md#ew_cov--exponentially-weighted-moments) · [flag joint outliers](how-to/flag-joint-outliers.md) · [track principal components](how-to/track-principal-components.md) · [find which series leads](how-to/find-which-series-leads.md) |
 | [`rheon.spec.pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) | principal components learned a row at a time, in state of the components times the columns: the incremental SVD, CCIPCA or Oja's rule | [entry](MODELS.md#pca--streaming-principal-components) · [track principal components](how-to/track-principal-components.md) |
 | [`rheon.spec.ewm_moments`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewm_moments) | exponentially weighted or windowed moments of columns to any order, each leg perhaps lagged: skew, kurtosis, cumulants, co-moments, autocovariances and autocorrelations, each a term you name | [entry](MODELS.md#ewm_moments--moments-to-any-order-lagged-or-not) · [OUTPUTS.md](OUTPUTS.md#ewm_moments) |

@@ -800,6 +800,11 @@ PENDING: dict[str, str] = {}
 
 #: Models (or losses) that predict a target and have no registration, and why.
 NOT_REGISTERED: dict[str, str] = {
+    "isotonic": "it converges to scikit-learn's IsotonicRegression on the rows it holds, "
+    "which it computes exactly (the same pool-adjacent-violators, to the bit or within "
+    "its rounding), held row by row in tests/test_isotonic.py; the harness's streams "
+    "and oracles are linear designs, and a monotone truth's grids and bounds are still "
+    "to be measured",
     "ar": "its design is the target's own lags beside the features, which the "
     "harness's streams and oracles (`Stream.X`, the features' design) do not "
     "carry; its exactness against statsmodels' AutoReg and WLS is held in "

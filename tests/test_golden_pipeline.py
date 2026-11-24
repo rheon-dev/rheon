@@ -407,6 +407,21 @@ def specs() -> list[dict]:
             weight="w",
             group="g",
         ),
+        # A monotone fit on one feature, decreasing and clipped below, over a
+        # clock window: a feature beyond its rows withheld.
+        rp.spec.isotonic(
+            "isotonic",
+            targets=["y0"],
+            features=["x0"],
+            increasing=False,
+            y_min=-4.0,
+            window_size=150.0,
+            clock="t",
+            gap_cap=6.0,
+            half_life=25.0,
+            weight="w",
+            group="g",
+        ),
         # A sketch a target over a clock window, read at three levels with
         # their tail means, the tails withheld until the rows identify them.
         rp.spec.ddsketch(
@@ -1464,6 +1479,21 @@ GOLDEN: dict[str, float | str | None] = {
     "tdigest.withheld_reason@25": "level_beyond_sample",
     "tdigest.withheld_reason@60": None,
     "tdigest.withheld_reason@119": None,
+    "isotonic.pred_y0@25": -0.5069855721719836,
+    "isotonic.pred_y0@60": 0.34407187441562564,
+    "isotonic.pred_y0@119": -1.17378855152561,
+    "isotonic.resid_y0@25": -4.344620252062732,
+    "isotonic.resid_y0@60": -0.8161130032327035,
+    "isotonic.resid_y0@119": 1.1230897805673812,
+    "isotonic.weight_sum@25": 8.573837237596514,
+    "isotonic.weight_sum@60": 13.244185655943454,
+    "isotonic.weight_sum@119": 15.09397614533663,
+    "isotonic.settled_frac@25": 0.5136725262938573,
+    "isotonic.settled_frac@60": 0.8564127056253706,
+    "isotonic.settled_frac@119": 0.9793826888941736,
+    "isotonic.withheld_reason@25": None,
+    "isotonic.withheld_reason@60": None,
+    "isotonic.withheld_reason@119": None,
     "ddsketch.q0.05_y0@25": None,
     "ddsketch.q0.05_y0@60": -3.857406244389122,
     "ddsketch.q0.05_y0@119": -5.640697159022917,

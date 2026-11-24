@@ -256,6 +256,11 @@ struct Target {
     fx: Vec<f64>,
     #[serde(skip)]
     fy: Vec<f64>,
+    /// Without a window, each distinct `x`'s value `S / W`, kept beside
+    /// its sums so a refit divides only where a row landed; empty when it
+    /// must be formed again (a restore, a move of the origin). Never state.
+    #[serde(skip)]
+    uy: Vec<f64>,
 }
 
 /// A window's rows, oldest first: each row's `x`, its kept weight, a `y` a
@@ -286,11 +291,13 @@ struct Clock {
     on_rows: bool,
 }
 
-/// Scratch for a fit: the weights and scipy's block bounds.
+/// Scratch for a fit: the weights, scipy's block bounds, and which
+/// targets a row touched.
 #[derive(Debug, Clone, Default)]
 struct Scratch {
     w: Vec<f64>,
     r: Vec<usize>,
+    touched: Vec<bool>,
 }
 
 impl PartialEq for Scratch {
@@ -505,6 +512,7 @@ impl Isotonic {
                 *w *= down;
             }
             if !windowed {
+                t.uy.clear();
                 for s in &mut t.v {
                     *s *= down;
                 }
@@ -529,14 +537,6 @@ impl Isotonic {
         1.0
     }
 
-    /// A kept weight's weight now: times `decay.factor(own - origin)`.
-    fn weight_now(&self, kept: f64) -> f64 {
-        if !self.cfg.decays() {
-            return kept;
-        }
-        kept * self.cfg.decay.factor(self.clock.own - self.clock.origin)
-    }
-
     /// Whether the oldest row of a clock window has left at `now`.
     fn oldest_has_left(&self, now: Stamp) -> bool {
         let Some(span) = self.cfg.window_clock else {
@@ -558,10 +558,14 @@ impl Isotonic {
         };
         let kept = ring.w.pop_front().expect("a weight a row");
         ring.stamp.pop_front();
-        let ys: Vec<f64> = ring.y.drain(..m).collect();
         let empty = ring.x.is_empty();
-        let w = self.weight_now(kept);
-        for (j, y) in ys.into_iter().enumerate() {
+        let w = if self.cfg.decays() {
+            kept * self.cfg.decay.factor(self.clock.own - self.clock.origin)
+        } else {
+            kept
+        };
+        for j in 0..m {
+            let y = ring.y[j];
             if y.is_nan() {
                 continue;
             }
@@ -582,6 +586,7 @@ impl Isotonic {
             };
             touched[j] = true;
         }
+        ring.y.drain(..m);
         self.w_sum = if empty {
             0.0
         } else {
@@ -608,11 +613,13 @@ impl Isotonic {
             if windowed {
                 fit::pool_rows(&t.x, &t.v, &t.w, &mut t.fx, &mut t.fy, sw);
             } else {
-                for ((&x, &w), &s) in t.x.iter().zip(&t.w).zip(&t.v) {
-                    t.fx.push(x);
-                    t.fy.push(s / w);
-                    sw.push(w);
+                if t.uy.len() != t.x.len() {
+                    t.uy.clear();
+                    t.uy.extend(t.v.iter().zip(&t.w).map(|(s, w)| s / w));
                 }
+                t.fx.extend_from_slice(&t.x);
+                t.fy.extend_from_slice(&t.uy);
+                sw.extend_from_slice(&t.w);
             }
             fit::isotonic(
                 &mut t.fy,
@@ -774,7 +781,9 @@ impl OnlineModel for Isotonic {
             return;
         }
         let m = self.cfg.n_targets;
-        let mut touched = vec![false; m];
+        let mut touched = std::mem::take(&mut self.scratch.touched);
+        touched.clear();
+        touched.resize(m, false);
         let key = self.window_key(handed, d_clock, true);
         self.note_clock(handed, true);
         // The rows out of a clock window by now leave before the row is
@@ -786,10 +795,12 @@ impl OnlineModel for Isotonic {
         }
         self.read_into(x0, out);
         if self.over.is_some() {
+            self.scratch.touched = touched;
             return;
         }
         let (bytes, cap) = (self.bytes_with(x0, y), self.cfg.cap());
         if self.cfg.window_rows.is_none() && !self.held_cap().admit(bytes, cap) {
+            self.scratch.touched = touched;
             return;
         }
         // The row's own decay, after its read (hard rule 8: `n_eff` before
@@ -812,11 +823,17 @@ impl OnlineModel for Isotonic {
                     Some(&p) if p == x0 => {
                         t.w[i] += kept;
                         t.v[i] += yj * kept;
+                        if let Some(u) = t.uy.get_mut(i) {
+                            *u = t.v[i] / t.w[i];
+                        }
                     }
                     _ => {
                         t.x.insert(i, x0);
                         t.w.insert(i, 0.0 + kept);
                         t.v.insert(i, 0.0 + yj * kept);
+                        if t.uy.len() + 1 == t.x.len() {
+                            t.uy.insert(i, t.v[i] / t.w[i]);
+                        }
                     }
                 }
             }
@@ -837,6 +854,7 @@ impl OnlineModel for Isotonic {
             }
         }
         self.refit(&touched);
+        self.scratch.touched = touched;
         if self.cfg.window_rows.is_none() {
             let bytes = self.bytes();
             self.held_cap().note(bytes, cap);

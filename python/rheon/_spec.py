@@ -743,6 +743,7 @@ __all__ = [
     "tdigest",
     "ddsketch",
     "spectral",
+    "isotonic",
 ]
 
 
@@ -4818,6 +4819,7 @@ from rheon._spec_expectile import expectile  # noqa: E402
 from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
+from rheon._spec_isotonic import isotonic  # noqa: E402
 from rheon._spec_moments import ewm_moments  # noqa: E402
 from rheon._spec_pca import pca  # noqa: E402
 from rheon._spec_point import hawkes  # noqa: E402

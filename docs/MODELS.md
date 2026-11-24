@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the thirty-five models a spec can name, by
+The reference entry of each of the thirty-six models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The thirty-five models fall into four families, and each family answers one
+The thirty-six models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -50,6 +50,7 @@ to start with for which question.
 | [`glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) · [entry](#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) | step | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood, for counts, positive amounts, proportions and amounts with an exact zero |
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
 | [`ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) · [entry](#ar--an-autoregression-on-the-targets-own-past) | solve | an autoregression for each target, AR(p), by least squares on lags the model keeps itself, with the features as further inputs, and `AutoReg`'s fit with no decay |
+| [`isotonic`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.isotonic) · [entry](#isotonic--a-monotone-function-of-one-feature) | solve | isotonic regression of each target on one feature, the best non-decreasing (or non-increasing) function, refit by pool-adjacent-violators on every row: the monotone calibrator, scikit-learn's `IsotonicRegression` on the same rows |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
 | [`pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) · [entry](#pca--streaming-principal-components) | step | principal components learned a row at a time in state that grows with the components times the columns, not the columns squared: the incremental SVD, CCIPCA or Oja's rule, each component withheld until the data tells it apart from its neighbors |
@@ -275,7 +276,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `isotonic` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -306,7 +307,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), `scale_ratio_moved` (a `corrchange` flag withheld on a span whose two columns' scale ratio moved), `not_separated` (a `pca` component the data does not yet tell apart from a neighbor) or `level_beyond_sample` (a `tdigest` or `ddsketch` level past what the rows before it identify), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance, or an `isotonic` fit read at a feature beyond the rows before it), `scale_ratio_moved` (a `corrchange` flag withheld on a span whose two columns' scale ratio moved), `not_separated` (a `pca` component the data does not yet tell apart from a neighbor) or `level_beyond_sample` (a `tdigest` or `ddsketch` level past what the rows before it identify), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -2299,6 +2300,85 @@ chose `ar_select_order`'s order on all twelve series of true orders 1 to 4
 it was checked on, by AIC and by BIC, with a feature and without. Under
 decay it chose the order that minimizes the criterion over statsmodels'
 `WLS` per order, on all six series checked.
+
+### `isotonic` — a monotone function of one feature
+
+*API:* [`rheon.spec.isotonic`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.isotonic) — *Rust:* [`isotonic.rs`](../crates/rheon-core/src/isotonic.rs) — *Outputs:* [fields](OUTPUTS.md#isotonic)
+
+Isotonic regression of each target on one feature: the best function of the
+feature that never falls as it rises (or never rises, with
+`increasing=False`), fitted to the rows before each row and read at the
+row's own feature value.
+
+Use `isotonic` as a monotone calibrator, turning a score into a probability
+or a ranking into an expected value, or wherever a target should only move
+one way with a feature and nothing else is assumed of the shape. The fit is
+scikit-learn's `IsotonicRegression` on the same rows and weights: over every
+row, over a window of rows or of the clock, or on rows weighed by a decay.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.isotonic),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#isotonic). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes);
+`features` names exactly one column.
+
+#### The update
+
+For target `t` and the rows `(x_i, y_i, w_i)` learned before the row, each
+weight times its decay `d_i` (1 without one):
+
+```text
+f_t  = argmin_f  sum_i w_i d_i (y_i - f(x_i))^2   subject to  f non-decreasing in x
+f_t  <- min(max(f_t, y_min), y_max)
+pred = f_t at the row's x, on the line between the two nearest x fitted
+```
+
+Rows at one feature value are pooled first, their weights summed and their
+value the weighted mean. Pool-adjacent-violators then walks the distinct
+values in order. It merges each run of neighbors that breaks the order into
+one block at its weighted mean, and goes back over earlier blocks as a merge
+lowers them; the result is the unique solution of the problem above. The
+model runs scipy's implementation of it line for line, then reads the fit as
+`numpy.interp` does. Beyond the range of the rows learned the prediction is
+null (`out_of_bounds="nan"`, scikit-learn's default, withheld as
+`not_identified`) or the nearer end's value (`"clip"`); one distinct feature
+value is its value everywhere.
+
+**Every learned row refits in full.** A block of the old fit that does not
+hold the new row never splits, so a local refit would do, but its block
+means would be summed in another order than scipy's. The whole refit costs
+time in proportion to the distinct feature values held, `m`: about 2 ns a
+value on arm64 (macOS, release build, one target), so 0.3 µs a row at 100
+values, 2.0 µs at 1,000 and 16 µs at 8,000. Under a window it is about
+3.4 ns a row the window holds, since its rows at one value are pooled at
+each refit.
+
+**The state** is, a target, each distinct feature value once with its weight
+and its weighted sum, or under a window each row in it, sorted by feature
+and target value. Neither is bounded by the settings, so it is checked
+against `max_state_bytes` as the rows go in, and a run that would pass it
+stops naming the group. A continuous score never repeats, so round it in
+the query: `pl.col("score").round(3)` keeps at most 1,001 values between 0
+and 1, and the fit is then exactly scikit-learn's on the rounded score. A
+decay does not bound it either, since an old row's weight shrinks but stays
+in the fit; a window does.
+
+**A decay** keeps each row's weight scaled from an origin on the clock,
+`w / decay(t_i - t_0)`, since the fit does not move when every weight is
+scaled alike: no weight is touched on a row, and the origin moves every 128
+half-lives.
+
+**Against scikit-learn.** With no decay and no repeated feature value
+without a window, or under any window, each prediction is a longhand
+transcription of what scikit-learn runs, to the bit. In turn, scikit-learn's
+own prediction is that transcription to the bit on every fit too, unfused, or
+with each multiply and add fused into one rounding as the arm64 wheels of
+scipy and numpy compute them. So the only gap is that rounding: 8.3e-16
+at worst on targets of order 1, over ten seeds of six forms (both
+directions, both bounds, a row window and a clock window under either
+edge). A feature value repeated without a window is pooled as its rows
+arrive, and a decayed weight is one `exp2` of the clock, where scikit-learn
+is handed the decay factor: 2.1e-15 at worst on the same targets.
 
 ## Moments and correlation
 

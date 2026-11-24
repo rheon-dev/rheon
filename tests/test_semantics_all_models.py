@@ -39,6 +39,8 @@ MODELS = [
     ("holt", {"features": None}),  # no features keyword
     # The features as exogenous regressors beside two lags of the target.
     ("ar", {"lags": 1, "ridge": 1e-3}),
+    # One feature, read beyond the rows at its nearer end.
+    ("isotonic", {"features": ["x0"], "out_of_bounds": "clip"}),
 ]
 
 #: A second configuration of a model above, swept through the same

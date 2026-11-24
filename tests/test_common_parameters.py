@@ -111,6 +111,9 @@ NO_FEATURES = frozenset(
         "spectral",
     }
 )
+#: The kinds that read exactly one feature, so have no order of features:
+#: ``isotonic``'s target is a function of one column.
+ONE_FEATURE = frozenset({"isotonic"})
 #: The kinds whose clock parameters are rates, which have no unit on a
 #: temporal clock: ``hawkes``' ``kernel_decays`` is refused there, by name.
 RATES = frozenset({"hawkes"})
@@ -593,7 +596,9 @@ CONVERGED = {"lasso": {"max_iter": 100_000, "tol": 1e-14}}
 FEATURE_PAIR = {"pca": ("x0", "y")}
 
 
-@pytest.mark.parametrize(("variant", "seed"), _seeded([k for k in KINDS if k not in NO_FEATURES]))
+@pytest.mark.parametrize(
+    ("variant", "seed"), _seeded([k for k in KINDS if k not in NO_FEATURES | ONE_FEATURE])
+)
 def test_the_feature_order_moves_no_number(variant: str, seed: int):
     key = "columns" if variant == "audit" else "features"
     extra = CONVERGED.get(variant, {})
