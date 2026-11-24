@@ -35,7 +35,8 @@ impl Windows {
         }
         let nc = self.cross.as_ref().map_or(0, |c| c.defs().len());
         let np = self.profiles.len();
-        if no + nc + np == 0 || members != *self.members || members.iter().any(Vec::is_empty) {
+        let ns = self.seasonals.len();
+        if no + nc + np + ns == 0 || members != *self.members || members.iter().any(Vec::is_empty) {
             return Err("its kernels' operators are not its operators".into());
         }
         if let Some(c) = &self.cross
@@ -46,9 +47,12 @@ impl Windows {
         for p in self.profiles.iter() {
             p.check()?;
         }
+        for s in self.seasonals.iter() {
+            s.check()?;
+        }
         // The outputs are the window operators', then the cross-group
         // operators', then the profiles'.
-        let nout = no + nc + np;
+        let nout = no + nc + np + ns;
         if self.n_outputs != nout {
             return Err(format!("{} outputs for {nout} operators", self.n_outputs));
         }
@@ -116,7 +120,8 @@ impl Windows {
                 && g.waiting.iter().all(|w| is_held(w.seq))
                 && g.pending.iter().all(|&s| is_held(s))
                 && (!g.linked || g.last_raw.is_some())
-                && profile::fits(&self.profiles, &g.profile);
+                && profile::fits(&self.profiles, &g.profile)
+                && seasonal::fits(&self.seasonals, &g.seasonal);
             if !fits {
                 return Err(format!("group {gi} does not fit its kernels and held rows"));
             }

@@ -1584,6 +1584,10 @@ struct Group {
     /// empty before the group's first row after one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     profile: Vec<profile::ProfState>,
+    /// Per STL or MSTL operator, the group's ring since its last restart;
+    /// empty before the group's first row after one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    seasonal: Vec<seasonal::SeasState>,
 }
 
 #[cfg(test)]
@@ -1694,6 +1698,10 @@ pub struct Windows {
     /// output order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     profiles: Arc<Vec<ProfileDef>>,
+    /// The STL and MSTL operators (`stl`, `mstl`), after the profiles in
+    /// output order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    seasonals: Arc<Vec<StlDef>>,
     /// Whether a row has taken a profile's state past half of its cap:
     /// said once a run, and kept with the state so a resumed run does not
     /// say it again; and that warning, `(op, bytes, cap)`, not yet taken.
@@ -1776,6 +1784,7 @@ mod memo_tests;
 mod moments;
 mod plain;
 mod profile;
+mod seasonal;
 
 pub use cross::{
     CROSS_STATE_BYTES, CROSS_STATE_BYTES_CEILING, Cross, CrossClosed, CrossDef, CrossStat, Interp,
@@ -1791,6 +1800,7 @@ pub use profile::{
     BUCKET_BYTES as PROFILE_BUCKET_BYTES, PROFILE_STATE_BYTES, PROFILE_STATE_BYTES_CEILING,
     PhaseSpan, ProfileDef, ProfileStat, canonical_zone,
 };
+pub use seasonal::{StlComponent, StlDef};
 
 /// Group keys, as text, to their groups: hashed with a fixed, fast hasher,
 /// which the saved state never sees ([`sorted_map`]).
@@ -1862,13 +1872,17 @@ impl Windows {
         ops: Vec<OpDef>,
         cross: Vec<CrossDef>,
         profiles: Vec<ProfileDef>,
+        seasonals: Vec<StlDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
-        if ops.is_empty() && cross.is_empty() && profiles.is_empty() {
+        if ops.is_empty() && cross.is_empty() && profiles.is_empty() && seasonals.is_empty() {
             return Err("at least one operator is needed".into());
         }
         for p in &profiles {
             p.check()?;
+        }
+        for s in &seasonals {
+            s.check()?;
         }
         for k in &kernels {
             k.check()?;
@@ -1900,8 +1914,9 @@ impl Windows {
         let first_out = ops.len();
         Ok(Self {
             cross: (n_cross > 0).then(|| Box::new(Cross::new(cross, first_out))),
-            n_outputs: ops.len() + n_cross + profiles.len(),
+            n_outputs: ops.len() + n_cross + profiles.len() + seasonals.len(),
             profiles: Arc::new(profiles),
+            seasonals: Arc::new(seasonals),
             state_warned: false,
             state_warning: None,
             n_forward: u32::try_from(n_forward).map_err(|_| "too many kernels")?,
@@ -1933,6 +1948,11 @@ impl Windows {
     /// The profile operators, after [`Self::ops`] in output order.
     pub fn profiles(&self) -> &[ProfileDef] {
         &self.profiles
+    }
+
+    /// The STL and MSTL operators, after [`Self::profiles`] in output order.
+    pub fn seasonals(&self) -> &[StlDef] {
+        &self.seasonals
     }
 
     /// Per kernel, which of its operators are variances: what its queue is
@@ -2138,6 +2158,7 @@ impl Windows {
             linked: false,
             moments: self.moments.iter().map(MomentsRun::new).collect(),
             profile: Vec::new(),
+            seasonal: Vec::new(),
         });
         match key {
             Some(k) => {
@@ -2539,6 +2560,22 @@ impl Windows {
                 meta: &mut self.held_meta,
             };
             profile::row(&out, g, row.clock, row.values, new_stamp, seq, &mut held);
+        }
+        if !self.seasonals.is_empty() {
+            let out = seasonal::Out {
+                defs: &self.seasonals,
+                first: self.ops.len()
+                    + self.cross.as_ref().map_or(0, |c| c.defs().len())
+                    + self.profiles.len(),
+            };
+            let mut held = Held {
+                first: self.held_first,
+                n_outputs: self.n_outputs,
+                values: &mut self.held_values,
+                meta: &mut self.held_meta,
+            };
+            let clock = row.clock.map_or(f64::NAN, ClockValue::seconds);
+            seasonal::row(&out, g, clock, row.values, seq, &mut held);
         }
         if n_wait > 0 {
             g.pending.push(seq);
@@ -3325,6 +3362,7 @@ fn restart_in(g: &mut Group, origin: Option<ClockValue>) {
     g.stamp = None;
     g.pending.clear();
     g.profile.clear();
+    g.seasonal.clear();
 }
 
 /// Drop the waiting rows every forward kernel has closed.

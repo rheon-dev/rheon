@@ -701,6 +701,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 "remedy" = 2
 "where" = 2
 
+[messages."crates/rheon-polars/src/windows/seasonal.rs"]
+
 [messages."crates/rheon-polars/src/windows_frame/defs.rs"]
 
 [messages."python/rheon/_cpu_check.py"]
@@ -816,6 +818,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-polars/src/windows/moments.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/windows/profile.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/windows/seasonal.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/windows_frame/defs.rs#messages"]
 

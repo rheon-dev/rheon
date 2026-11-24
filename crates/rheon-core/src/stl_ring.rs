@@ -25,10 +25,12 @@
 //! **State.** `W` values, the head, the count and the last learned row's
 //! clock: `8 W + 24` bytes a group, bounded by the window, never the stream.
 
+use serde::{Deserialize, Serialize};
+
 use crate::stl::{Mstl, Stl};
 
 /// Which ring an emission reads: before or after the row is pushed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Closed {
     /// Before: no row at or after the current one is read.
     Left,
@@ -112,7 +114,7 @@ pub fn check_state_bytes(operator: &str, w: usize, cap: u64) -> Result<(), Strin
 }
 
 /// The last `W` learned rows of one group's series.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StlRing {
     values: Vec<f64>,
     head: usize,
