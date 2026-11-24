@@ -771,9 +771,12 @@ def rcov(
     grids start again at the clock break as well, so no step of ``omega2``,
     ``iv_sparse`` or ``iq`` sums returns across it either. Under
     ``session_gap = "reset"`` a session change starts the block over
-    instead, and drops the returns before it. A stretch too short to reach
-    its trailing jitter contributes only what it had already emitted, and
-    ``rcov_n`` says how many effective returns there were in total. Nothing
+    instead, and drops the returns before it. A stretch's leading jittered
+    return waits until the stretch has ``2 * jitter`` returns: a stretch of
+    one fewer closes with the one jittered return its two jitters make
+    together, and a shorter one has none, so a stretch reads the same
+    backwards. ``rcov_n`` says how many effective returns there were in
+    total. Nothing
     reads a future row: the jittered end point is formed at close from
     observations already in the state.
     """

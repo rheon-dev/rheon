@@ -1783,8 +1783,9 @@ fn a_windowed_lag_state_restored_from_bytes_goes_on_to_the_bit() {
 
 /// What the lag moments add to a window's snapshot (docs/PLAN.md task
 /// 137): `L·T + (L + 2C)·p·T` doubles and the width without a window, and
-/// with one the lagged sides' sums, `2L·T + 2(L + C)·p·T`, as `window_lags`
-/// documents.
+/// with one the lagged sides' sums and the sides now over the matched rows
+/// with their weights (review 2026-11-23, MARG-1), `6L·T + 3(L + C)·p·T`,
+/// as `window_lags` documents.
 #[test]
 fn the_lag_moments_add_what_window_lags_says() {
     for (p, t, lags, cross) in [
@@ -1801,12 +1802,13 @@ fn the_lag_moments_add_what_window_lags_says() {
         let (l, cl) = (lags.len(), cross.as_ref().map_or(lags.len(), Vec::len));
         let want = 8 * (l * t + (l + 2 * cl) * p * t) + std::mem::size_of::<usize>();
         assert_eq!(got, want, "p = {p}, T = {t}, L = {l}, C = {cl}");
-        // Under a window, the lagged sides' sums about the origin besides:
-        // `L·T + L·p·T` more (task 280, phase 3).
+        // Under a window, the lagged sides' sums about the origin besides,
+        // `L·T + L·p·T` more (task 280, phase 3), and the sides now over the
+        // matched rows with their weights, `4L·T + (L + C)·p·T` more.
         c.window = Some(50.0);
         let m = Marginal::new(c).unwrap();
         let got = crate::Footprint::footprint(&m.lag.as_ref().unwrap().moments());
-        let want = 8 * (2 * l * t + 2 * (l + cl) * p * t) + std::mem::size_of::<usize>();
+        let want = 8 * (6 * l * t + 3 * (l + cl) * p * t) + std::mem::size_of::<usize>();
         assert_eq!(got, want, "windowed: p = {p}, T = {t}, L = {l}, C = {cl}");
     }
 }
@@ -4604,7 +4606,34 @@ fn each_part_of_a_state_is_checked_alone() {
         other => panic!("min_weight short a target: {other:?}"),
     }
     type Case<'a> = (&'a str, &'a Marginal, &'a dyn Fn(&mut Marginal));
-    let cases: [Case; 6] = [
+    // The runs and the snapshots' counts of learned rows, which a window
+    // reads to say a slot held one value over it: unchecked, a damaged one
+    // silently lost that, and runs kept without a window cost a row's
+    // tracking for nothing (review 2026-11-23, MARG-2).
+    let cases: [Case; 11] = [
+        (
+            "a snapshot short a target's count of rows",
+            &windowed,
+            &|m| {
+                first(m, |s| {
+                    if let Some(r) = s.rows.as_mut() {
+                        r.pop();
+                    }
+                });
+            },
+        ),
+        ("runs off under a window", &windowed, &|m| {
+            m.x_runs = crate::Runs::off();
+        }),
+        ("a target's runs off under a window", &windowed, &|m| {
+            m.y_runs = crate::Runs::off();
+        }),
+        ("runs of another width", &windowed, &|m| {
+            m.x_runs = crate::Runs::new(m.cfg.n_features * m.cfg.n_targets + 1);
+        }),
+        ("runs kept without a window", &lagged, &|m| {
+            m.y_runs = crate::Runs::new(m.cfg.n_targets);
+        }),
         ("lags the moments were not kept at", &lagged, &|m| {
             m.cfg.lags = vec![1, 3]
         }),
@@ -5351,5 +5380,92 @@ fn a_negative_min_weight_is_refused_in_the_words_of_its_form() {
         two.validate().unwrap_err(),
         "marginal: min_weight must be at least 0, but one of its values is -1. Set that value \
          to 0, or to a positive weight."
+    );
+}
+
+/// Kish's size is `W² / Q`, and where the target's squared weights have
+/// faded below the doubles while its weight has not -- a missing target
+/// across 538 half-lives decays `W` by `2^-538` and `Q` by `2^-1076` -- it
+/// is unknown (NaN), as the windowed read and `TargetMoments` have it, and
+/// so is every statistic read at it. On the build before PLAN 578h it was
+/// `+inf`, and `t_stat` an infinity on noise (review 2026-11-23, MARG-3).
+#[test]
+fn a_kish_size_whose_squared_weights_faded_is_unknown() {
+    let mut c = cfg(1, 1);
+    c.lags = vec![1];
+    let mut m = Marginal::new(c).unwrap();
+    let mut s = 21u64;
+    for i in 0..70 {
+        m.step(&[lcg(&mut s)], &[Some(lcg(&mut s))], step_clock(i), 1.0);
+    }
+    let before = m.pair(0, 0);
+    assert!(before.n_kish.is_finite() && before.t.is_finite());
+    m.step(&[lcg(&mut s)], &[None], 538.1 * 20.0, 1.0);
+    let p = m.pair(0, 0);
+    assert!(p.n_eff > 0.0, "{}", p.n_eff);
+    assert!(p.n_kish.is_nan(), "{}", p.n_kish);
+    assert!(
+        p.t.is_nan() && p.n_serial.is_nan(),
+        "{} {}",
+        p.t,
+        p.n_serial
+    );
+}
+
+/// Under a window the lag moments are raw about a fixed origin (the
+/// series' first value) and re-centred at the read; re-centred by `C −
+/// e_a·side_b` alone, exact only where every row in the window has its
+/// lagged partner, a row without one (a target absent the row before, or
+/// the first rows after a session break) left `−e_b · Σ_{unmatched} w (a −
+/// m_a) / W` behind, which grows with the series' drift from its origin
+/// (review 2026-11-23, MARG-1). The definition here: over the window's rows
+/// of the target `R`, with its mean `m`, `Σ_{i in R, y_{i−1} present} (y_i
+/// − m)(y_{i−1} − m) / |R|`, over the pair's variance. A series at 1000
+/// after a first row at 0, one target missing: the model read 20.6 where
+/// the definition reads -0.12.
+#[test]
+fn a_windowed_lag_correlation_with_an_unmatched_row_is_its_definition() {
+    let mut c = cfg(1, 1);
+    c.lags = vec![1];
+    c.decay = Decay::Halflife(f64::INFINITY);
+    c.window = Some(50.0);
+    let mut m = Marginal::new(c).unwrap();
+    let mut s = 17u64;
+    let n = 100;
+    let ys: Vec<Option<f64>> = (0..n)
+        .map(|i| match i {
+            0 => Some(0.0),
+            75 => None,
+            _ => Some(1000.0 + lcg(&mut s)),
+        })
+        .collect();
+    for (i, y) in ys.iter().enumerate() {
+        let x = if i == 0 { 0.0 } else { 1000.0 + lcg(&mut s) };
+        m.step(&[x], &[*y], step_clock(i), 1.0);
+    }
+    // The window at clock 99 holds rows 50 to 99 (age below 50).
+    let held: Vec<usize> = (50..n).filter(|&i| ys[i].is_some()).collect();
+    let mean = held.iter().map(|&i| ys[i].unwrap()).sum::<f64>() / held.len() as f64;
+    let var = held
+        .iter()
+        .map(|&i| (ys[i].unwrap() - mean).powi(2))
+        .sum::<f64>()
+        / held.len() as f64;
+    let cyy: f64 = held
+        .iter()
+        .filter_map(|&i| ys[i - 1].map(|back| (ys[i].unwrap() - mean) * (back - mean)))
+        .sum::<f64>()
+        / held.len() as f64;
+    let want = cyy / var;
+    let p = m.pair(0, 0);
+    assert!(
+        (p.var_y - var).abs() <= 1e-9 * var,
+        "{} against {var}",
+        p.var_y
+    );
+    let got = p.lag_corr_yy[0];
+    assert!(
+        (got - want).abs() <= 1e-6,
+        "the window's lag_corr_yy {got} against its definition {want}"
     );
 }

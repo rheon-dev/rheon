@@ -775,7 +775,7 @@ impl OnlineModel for Rls {
         // Kish's squared-weight sum, on the rows the fit learns (the module
         // doc): decayed by `λ²` on every row, as the weights by `λ`.
         let w = if learns { weight } else { 0.0 };
-        crate::sqsum::add(&mut self.s2, &mut self.s2_scale, lam * lam, w);
+        crate::sqsum::add(&mut self.s2, &mut self.s2_scale, lam, w);
 
         // ---- update (only when every target is present) ----
         if learns {
@@ -1280,7 +1280,7 @@ mod tests {
         let learns = weight > 0.0 && y.iter().all(Option::is_some);
         crate::model::age_target_weights(&mut m.w_target, |_| learns, lam, weight);
         let w = if learns { weight } else { 0.0 };
-        crate::sqsum::add(&mut m.s2, &mut m.s2_scale, lam * lam, w);
+        crate::sqsum::add(&mut m.s2, &mut m.s2_scale, lam, w);
         let root = (lam != 1.0).then(|| lam.sqrt());
         let mut r = square::unpack(&m.r, k);
         if learns {
@@ -2255,13 +2255,15 @@ mod tests {
     /// Kish's size is `s₁² / s₂`, and there is none without a learned
     /// weight and a squared-weight sum both above 0 (the module doc;
     /// docs/PLAN.md task 220). `s₂` decays by `λ²` where `s₁` decays by
-    /// `λ`, so across a gap of zero-weight rows it underflows to 0 first:
-    /// at `λ = 1/4` after some 270 rows, with `s₁` near `2^-540`. The fit
-    /// then reads as one that has learned nothing, as `ewridge`'s and
-    /// `lasso`'s do where their `Σ w²` is 0 -- infinite, and no variance --
-    /// not as one of infinitely many rows, ready, and of variance 0. A
-    /// state whose learned weight is 0 has none either, whatever its
-    /// squared-weight sum holds.
+    /// `λ`, and its power of two takes the decay where `λ²` would take it
+    /// below the doubles (`crate::sqsum`), so across a gap of zero-weight
+    /// rows Kish's size holds while `s₁` is above 0: at `λ = 1/4` it used to
+    /// fade to 0 after some 270 rows, with `s₁` near `2^-540` (review
+    /// 2026-11-23, COV-4). Once `s₁` is 0 the fit reads as one that has
+    /// learned nothing, as `ewridge`'s and `lasso`'s do where their `Σ w²`
+    /// is 0 -- infinite, and no variance -- not as one of infinitely many
+    /// rows, ready, and of variance 0. A state whose learned weight is 0
+    /// has none either, whatever its squared-weight sum holds.
     #[test]
     fn a_squared_weight_sum_faded_to_0_reads_no_kish_size() {
         let mut c = rls_cfg(1, 1, 1.0, 1.0);
@@ -2274,12 +2276,27 @@ mod tests {
         }
         let mut out = Vec::new();
         assert!(m.error_inflation_into(&mut out) && out[0].is_finite());
+        let kish = |m: &Rls| {
+            let s1 = m.w_target[0];
+            crate::sqsum::count(s1, m.s2, m.s2_scale)
+        };
+        let before = kish(&m).unwrap();
         let mut gap = 0;
-        while m.s2 > 0.0 {
+        while m.w_target[0] >= f64::MIN_POSITIVE {
+            let n = kish(&m).unwrap();
+            assert!(
+                (n - before).abs() <= 1e-12 * before,
+                "row {gap}: {n} against {before}"
+            );
             m.step(&[0.2], &[Some(0.3)], 1.0, 0.0);
             gap += 1;
         }
-        assert!(m.w_target[0] > 0.0 && (260..280).contains(&gap), "{gap}");
+        assert!((505..520).contains(&gap), "{gap}");
+        // A subnormal `s₁` has lost its last bits: it counts as none.
+        assert_eq!(kish(&m), Some(0.0));
+        while m.w_target[0] > 0.0 {
+            m.step(&[0.2], &[Some(0.3)], 1.0, 0.0);
+        }
         assert!(
             m.error_inflation_into(&mut out) && out[0].is_infinite(),
             "{out:?}"

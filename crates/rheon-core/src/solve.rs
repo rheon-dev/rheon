@@ -252,6 +252,21 @@ fn jitter_base(trace: f64, k: usize, diag: impl Fn(usize) -> f64) -> f64 {
     }
 }
 
+/// The jitter [`factorize`]'s ladder settles on for a diagonal matrix whose
+/// entries are `diag(0..k)`: a diagonal matrix factorizes exactly when every
+/// entry is above 0, so this is the first rung's that makes them so, the
+/// same `eps · trace/k` the ladder adds, or `None` where none does. For a
+/// caller that keeps only the diagonal (`ew_class`'s `"diag"`), so it takes
+/// the jitter `"full"` and `"tied"` take (review 2026-11-23, COV-3).
+pub(crate) fn diagonal_jitter(k: usize, diag: impl Fn(usize) -> f64) -> Option<f64> {
+    let trace: f64 = (0..k).map(&diag).sum();
+    let base = jitter_base(trace, k, &diag);
+    JITTER
+        .iter()
+        .map(|&eps| jitter_of(base, eps))
+        .find(|&j| (0..k).all(|i| diag(i) + j > 0.0))
+}
+
 /// Rung `eps`'s jitter on `base`: none on the first rung, whatever the
 /// base.
 #[inline(always)]

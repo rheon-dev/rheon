@@ -4075,14 +4075,15 @@ def marginal(
            * - without lags
              - ``(3*p + 5)*T``
            * - the lag moments beside them
-             - ``2*L*T + 2*(L + C)*p*T``, about ``2*(L + C) / 3`` times its
-               size: the lagged products and, beside each lag, the lagged
-               rows' own sums
+             - ``6*L*T + 3*(L + C)*p*T``, about ``L + C`` times its size:
+               the lagged products and, beside each lag, the lagged rows'
+               own sums and the sums now over the rows a lagged one was
+               matched with, with their weights
            * - with ``cross_lags=[]``, the least
-             - ``2*L*(p + 1)*T``; ``n_serial`` does not read the cross terms
+             - ``3*L*(p + 2)*T``; ``n_serial`` does not read the cross terms
 
-        So, for many features, a snapshot is 2.3 times the size at one lag,
-        and 7.7 times at five lags with the default cross lags (every lag). The snapshots count in
+        So, for many features, a snapshot is 3 times the size at one lag,
+        and 11 times at five lags with the default cross lags (every lag). The snapshots count in
         ``window_budget``. Without ``window_lags``, ``lags`` and
         ``window_size`` together are refused with this spec's own numbers.
         ``window_lags=True`` without both ``window_size`` and ``lags`` is

@@ -119,6 +119,23 @@ pub struct LagOrigin {
     /// `[lag][target]`: `E_w[y_{t−ℓ} − r_y]` over the target's rows where
     /// it was present `ℓ` rows back, the lagged side of `cyy` and `cxy`.
     by: Vec<Vec<f64>>,
+    /// The sides **now** over the rows whose partner `ℓ` back exists, and
+    /// those rows' weight, each `E_w[·]` over the target's rows: a row
+    /// without its partner (a target absent `ℓ` rows back, the first rows of
+    /// a stream or after a break) is in the window's means but in no lagged
+    /// product, and re-centring at the window's means needs both sides of
+    /// the rows that are (review 2026-11-23, MARG-1). Laid out as
+    /// [`Matched`] says: per lag `ax`, `E_w[(x_t − r_x)·1{row t−ℓ is in the
+    /// ring}]` per `target*p + feature`; per lag `ayx`, the target now over
+    /// the same rows, `wx`, their weight, `ay` and `wy`, the target now and
+    /// the weight over the rows whose target was present `ℓ` back, each per
+    /// target; per cross lag `axy`, the features now over those. One vector,
+    /// so a window's snapshot copies it in one allocation. Empty in a state
+    /// saved before them, which starts them where it loads (their sums then
+    /// cover only the rows since, and a window reads them once its boundary
+    /// is a snapshot taken after the load).
+    #[serde(default)]
+    matched: Vec<f64>,
     /// `p` zeros, the low parts the origin's deviations take: none.
     #[serde(skip)]
     zeros: Vec<f64>,
@@ -133,38 +150,78 @@ impl PartialEq for LagOrigin {
             && self.y_set == other.y_set
             && self.bx == other.bx
             && self.by == other.by
+            && self.matched == other.matched
     }
 }
 
 impl LagOrigin {
-    fn new(p: usize, t: usize, l: usize) -> Self {
-        Self {
+    fn new(p: usize, t: usize, l: usize, n_cross: usize) -> Self {
+        let mut o = Self {
             x: vec![0.0; p],
             y: vec![0.0; t],
             x_set: vec![false; p],
             y_set: vec![false; t],
             bx: vec![vec![0.0; p * t]; l],
             by: vec![vec![0.0; t]; l],
+            matched: Vec::new(),
             zeros: vec![0.0; p],
+        };
+        o.start_matching(p, t, l, n_cross);
+        o
+    }
+
+    /// Whether the sides over the matched rows are kept ([`Self::ax`]'s
+    /// doc): every state this build writes, none it loaded from before them
+    /// until [`Self::start_matching`].
+    pub(crate) fn matching(&self) -> bool {
+        !self.matched.is_empty()
+    }
+
+    /// The layout of [`Self::matched`].
+    fn dims(&self) -> Matched {
+        Matched {
+            p: self.x.len(),
+            t: self.y.len(),
+            l: self.bx.len(),
         }
+    }
+
+    /// Start the sides over the matched rows at 0, where they are not kept.
+    pub(crate) fn start_matching(&mut self, p: usize, t: usize, l: usize, n_cross: usize) {
+        if self.matching() {
+            return;
+        }
+        self.matched = vec![0.0; Matched::len(p, t, l, n_cross)];
     }
 
     /// The lagged sides' sums of one learned row of target `t`, its mix
     /// `a`, `b`: per lag, the feature `ℓ` rows back and the target, where
     /// it was present, each against its origin; a lag the ring does not
     /// reach yet ages alone. `back(ℓ)` is the ring's row `ℓ` back.
+    #[allow(clippy::too_many_arguments)]
     fn step_sides<'r>(
         &mut self,
         t: usize,
         a: f64,
         b: f64,
         lags: &[usize],
+        cross: &[usize],
+        (x, yt): (&[f64], f64),
         back: impl Fn(usize) -> Option<(&'r [f64], Option<f64>)>,
     ) {
         let p = self.x.len();
         let r = t * p..(t + 1) * p;
+        let matching = self.matching();
+        let dy = crate::comp::dev(yt, self.y[t], 0.0);
+        // The next cross lag to meet, walking `lags` in order: `cross` is a
+        // subsequence of it.
+        let mut next_cross = 0;
         for (li, &lag) in lags.iter().enumerate() {
             let bx = &mut self.bx[li][r.clone()];
+            let ci = (cross.get(next_cross) == Some(&lag)).then(|| {
+                next_cross += 1;
+                next_cross - 1
+            });
             match back(lag) {
                 Some((x_lag, y_lag)) => {
                     step_side(a, b, x_lag, &self.x, bx);
@@ -173,12 +230,47 @@ impl LagOrigin {
                         Some(v) => a * *by + b * crate::comp::dev(v, self.y[t], 0.0),
                         None => a * *by,
                     };
+                    if matching {
+                        let d = self.dims();
+                        let m = &mut self.matched;
+                        step_side(a, b, x, &self.x, &mut m[d.ax(li, t)]);
+                        step_target_x(a, b, Some(dy), m, &d, li, t);
+                        let present = y_lag.is_some();
+                        step_target_y(a, b, present.then_some(dy), m, &d, li, t);
+                        if let Some(ci) = ci {
+                            let axy = &mut m[d.axy(ci, t)];
+                            if present {
+                                step_side(a, b, x, &self.x, axy);
+                            } else {
+                                wait(a, axy);
+                            }
+                        }
+                    }
                 }
                 None => {
                     wait(a, bx);
                     self.by[li][t] *= a;
+                    if matching {
+                        let d = self.dims();
+                        let m = &mut self.matched;
+                        wait(a, &mut m[d.ax(li, t)]);
+                        step_target_x(a, b, None, m, &d, li, t);
+                        step_target_y(a, b, None, m, &d, li, t);
+                        if let Some(ci) = ci {
+                            wait(a, &mut m[d.axy(ci, t)]);
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// The sides over the matched rows, read by the layout [`Matched`]
+    /// gives.
+    pub fn matched(&self) -> MatchedRead<'_> {
+        MatchedRead {
+            d: self.dims(),
+            v: &self.matched,
         }
     }
 
@@ -192,15 +284,17 @@ impl LagOrigin {
         self.y[t]
     }
 
-    fn has_shape(&self, p: usize, t: usize, l: usize) -> bool {
+    fn has_shape(&self, p: usize, t: usize, l: usize, n_cross: usize) -> bool {
+        let dims =
+            |m: &Vec<Vec<f64>>, n: usize, w: usize| m.len() == n && m.iter().all(|v| v.len() == w);
         self.x.len() == p
             && self.x_set.len() == p
             && self.y.len() == t
             && self.y_set.len() == t
-            && self.bx.len() == l
-            && self.bx.iter().all(|v| v.len() == p * t)
-            && self.by.len() == l
-            && self.by.iter().all(|v| v.len() == t)
+            && dims(&self.bx, l, p * t)
+            && dims(&self.by, l, t)
+            // The sides over the matched rows, none or all.
+            && (self.matched.is_empty() || self.matched.len() == Matched::len(p, t, l, n_cross))
     }
 }
 
@@ -277,9 +371,31 @@ pub struct LagMoments {
     bx: Vec<Vec<f64>>,
     #[serde(default)]
     by: Vec<Vec<f64>>,
+    /// The sides over the matched rows ([`LagOrigin`]'s `matched`), empty
+    /// where the moments are about the running means or the state was
+    /// saved before them. Last, and not skipped.
+    #[serde(default)]
+    matched: Vec<f64>,
 }
 
 impl LagMoments {
+    /// Whether the snapshot holds the sides over the matched rows.
+    pub fn matching(&self) -> bool {
+        !self.matched.is_empty()
+    }
+
+    /// The sides over the matched rows ([`LagOrigin::matched`]).
+    pub fn matched(&self) -> MatchedRead<'_> {
+        MatchedRead {
+            d: Matched {
+                p: self.p,
+                t: self.cyy.first().map_or(0, Vec::len),
+                l: self.cyy.len(),
+            },
+            v: &self.matched,
+        }
+    }
+
     pub fn cyy(&self, li: usize, t: usize) -> f64 {
         self.cyy[li][t]
     }
@@ -318,6 +434,12 @@ impl LagMoments {
             .origin
             .as_ref()
             .map_or((&empty, &empty), |o| (&o.bx, &o.by));
+        // The sides over the matched rows: none (a snapshot taken before
+        // they were kept), or those the lags keep.
+        let matched = match lags.origin.as_ref() {
+            Some(o) if o.matching() => !self.matching() || self.matched.len() == o.matched.len(),
+            _ => self.matched.is_empty(),
+        };
         self.p == lags.p
             && dims(&self.cyy, &lags.cyy)
             && dims(&self.cxx, &lags.cxx)
@@ -325,6 +447,7 @@ impl LagMoments {
             && dims(&self.cyx, &lags.cyx)
             && dims(&self.bx, bx)
             && dims(&self.by, by)
+            && matched
     }
 }
 
@@ -335,7 +458,8 @@ crate::pack_fields!(LagMoments {
     cxy,
     cyx,
     bx,
-    by
+    by,
+    matched
 });
 
 impl crate::Footprint for LagMoments {
@@ -347,6 +471,7 @@ impl crate::Footprint for LagMoments {
         .flat_map(|m| m.iter())
         .map(|v| crate::window::floats(v))
         .sum::<usize>()
+            + crate::window::floats(&self.matched)
             + std::mem::size_of::<usize>()
     }
 }
@@ -465,7 +590,7 @@ impl MarginalLags {
             ring_y: VecDeque::with_capacity(max),
             cross_lags,
             shared,
-            origin: about_origin.then(|| LagOrigin::new(p, t, l)),
+            origin: about_origin.then(|| LagOrigin::new(p, t, l, n_cross)),
         })
     }
 
@@ -537,18 +662,26 @@ impl MarginalLags {
     /// ring of raw rows is not in it, being the last `max(lags)` learned
     /// rows, inside any window.
     pub fn moments(&self) -> LagMoments {
-        let (bx, by) = self
-            .origin
-            .as_ref()
-            .map_or((Vec::new(), Vec::new()), |o| (o.bx.clone(), o.by.clone()));
+        let o = self.origin.as_ref();
+        let take = |f: fn(&LagOrigin) -> &Vec<Vec<f64>>| o.map_or_else(Vec::new, |o| f(o).clone());
         LagMoments {
             p: self.p,
             cyy: self.cyy.clone(),
             cxx: self.cxx.clone(),
             cxy: self.cxy.clone(),
             cyx: self.cyx.clone(),
-            bx,
-            by,
+            bx: take(|o| &o.bx),
+            by: take(|o| &o.by),
+            matched: o.map_or_else(Vec::new, |o| o.matched.clone()),
+        }
+    }
+
+    /// Start the sides over the matched rows of a state saved before they
+    /// were kept ([`LagOrigin`]): at 0, from this row on.
+    pub(crate) fn start_matching(&mut self) {
+        let (p, t, l, n_cross) = (self.p, self.t, self.lags.len(), self.cross_lags().len());
+        if let Some(o) = self.origin.as_mut() {
+            o.start_matching(p, t, l, n_cross);
         }
     }
 
@@ -592,7 +725,10 @@ impl MarginalLags {
             // every lag a row too recent (review 2026-09-26, B3).
             && self.ring_x.len() == self.ring_y.len()
             && self.ring_x.len() <= lags.last().copied().unwrap_or(0)
-            && self.origin.as_ref().is_none_or(|o| o.has_shape(p, t, l))
+            && self
+                .origin
+                .as_ref()
+                .is_none_or(|o| o.has_shape(p, t, l, n_cross))
     }
 
     /// `E_w[dy_t·dy_{t−ℓ}]` for target `t`, at the `li`-th configured lag.
@@ -736,13 +872,21 @@ impl MarginalLags {
         }
         let mut origin = origin;
         if let Some(o) = origin.as_mut() {
-            let depth = self.ring_x.len();
-            let (ring_x, ring_y) = (&self.ring_x, &self.ring_y);
-            o.step_sides(t, a, b, &self.lags, |lag| {
-                (lag <= depth).then(|| (&ring_x[depth - lag][..], ring_y[depth - lag][t]))
-            });
+            self.step_origin(o, t, a, b, x, yt);
         }
         self.origin = origin;
+    }
+
+    /// The sides about the origin of one target's learned row
+    /// ([`LagOrigin::step_sides`]): out of line, so a model without a
+    /// window, which keeps none, runs the loops it ran before them.
+    #[inline(never)]
+    fn step_origin(&self, o: &mut LagOrigin, t: usize, a: f64, b: f64, x: &[f64], yt: f64) {
+        let depth = self.ring_x.len();
+        let (ring_x, ring_y) = (&self.ring_x, &self.ring_y);
+        o.step_sides(t, a, b, &self.lags, self.cross_lags(), (x, yt), |lag| {
+            (lag <= depth).then(|| (&ring_x[depth - lag][..], ring_y[depth - lag][t]))
+        });
     }
 
     /// [`Self::update_target`] with the cross terms at every lag: the loop
@@ -947,16 +1091,21 @@ impl MarginalLags {
             cxy: &mut self.cxy,
             cyx: &mut self.cyx,
             ring_x: &self.ring_x,
-            origin: self
-                .origin
-                .as_mut()
-                .map(|o| ((&o.x[..], &o.zeros[..], &o.y[..]), &mut o.bx[..])),
+            origin: self.origin.as_mut().map(|o| {
+                let d = o.dims();
+                let n = o.matched.len();
+                let (ax, rest) = o.matched.split_at_mut(d.ax_len().min(n));
+                let from = (d.axy_from() - d.ax_len()).min(rest.len());
+                let axy = &mut rest[from..];
+                ((&o.x[..], &o.zeros[..], &o.y[..]), &mut o.bx[..], ax, axy)
+            }),
         }
     }
 
     /// Target `t`'s lagged side at the `li`-th lag about the origin, where
     /// there is one, stepped by its mix: `y_back` the target `ℓ` rows back
     /// where it was present, `reached` whether the ring reaches it.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn step_by(
         &mut self,
         li: usize,
@@ -965,6 +1114,7 @@ impl MarginalLags {
         b: f64,
         reached: bool,
         y_back: Option<f64>,
+        yt: f64,
     ) {
         if let Some(o) = self.origin.as_mut() {
             let by = &mut o.by[li][t];
@@ -972,6 +1122,15 @@ impl MarginalLags {
                 (true, Some(v)) => a * *by + b * crate::comp::dev(v, o.y[t], 0.0),
                 _ => a * *by,
             };
+            // The target's sides now over the matched rows, as
+            // [`LagOrigin::step_sides`] steps them.
+            if o.matching() {
+                let dy = crate::comp::dev(yt, o.y[t], 0.0);
+                let d = o.dims();
+                step_target_x(a, b, reached.then_some(dy), &mut o.matched, &d, li, t);
+                let present = reached && y_back.is_some();
+                step_target_y(a, b, present.then_some(dy), &mut o.matched, &d, li, t);
+            }
         }
     }
 }
@@ -983,9 +1142,16 @@ pub(crate) struct LagParts<'a> {
     pub cyx: &'a mut [Vec<f64>],
     pub ring_x: &'a VecDeque<Vec<f64>>,
     /// Under a window ([`LagOrigin`]): the features' origins, their low
-    /// parts (none) and the targets', and the features' lagged sides.
+    /// parts (none) and the targets', the features' lagged sides, and their
+    /// sides now over the matched rows (`ax` and `axy` of [`Matched`], each
+    /// lag's `p·T` in turn; empty in a state saved before them).
     #[allow(clippy::type_complexity)]
-    pub origin: Option<((&'a [f64], &'a [f64], &'a [f64]), &'a mut [Vec<f64>])>,
+    pub origin: Option<(
+        (&'a [f64], &'a [f64], &'a [f64]),
+        &'a mut [Vec<f64>],
+        &'a mut [f64],
+        &'a mut [f64],
+    )>,
 }
 
 /// What one target's lagged step reads over a range of features: its mix
@@ -1012,6 +1178,115 @@ pub(crate) struct Lagged<'a> {
 pub(crate) fn step_side(a: f64, b: f64, x_lag: &[f64], origin: &[f64], c: &mut [f64]) {
     for ((&xl, &r), c) in x_lag.iter().zip(origin).zip(c) {
         *c = a * *c + b * crate::comp::dev(xl, r, 0.0);
+    }
+}
+
+/// The layout of the sides over the matched rows ([`LagOrigin`]'s
+/// `matched`), for `p` features, `t` targets and `l` lags: `ax` (`l·p·t`),
+/// then `ayx`, `wx`, `ay`, `wy` (`l·t` each), then `axy` (`p·t` a cross
+/// lag).
+#[derive(Debug, Clone, Copy)]
+pub struct Matched {
+    p: usize,
+    t: usize,
+    l: usize,
+}
+
+impl Matched {
+    fn len(p: usize, t: usize, l: usize, c: usize) -> usize {
+        l * p * t + 4 * l * t + c * p * t
+    }
+
+    fn ax_len(&self) -> usize {
+        self.l * self.p * self.t
+    }
+
+    fn ax(&self, li: usize, t: usize) -> std::ops::Range<usize> {
+        let at = (li * self.t + t) * self.p;
+        at..at + self.p
+    }
+
+    /// `k`: 0 `ayx`, 1 `wx`, 2 `ay`, 3 `wy`.
+    fn scalar(&self, k: usize, li: usize, t: usize) -> usize {
+        self.ax_len() + (k * self.l + li) * self.t + t
+    }
+
+    fn axy_from(&self) -> usize {
+        self.ax_len() + 4 * self.l * self.t
+    }
+
+    fn axy(&self, ci: usize, t: usize) -> std::ops::Range<usize> {
+        let at = self.axy_from() + (ci * self.t + t) * self.p;
+        at..at + self.p
+    }
+}
+
+/// The sides over the matched rows of live moments or a snapshot, read.
+#[derive(Debug, Clone, Copy)]
+pub struct MatchedRead<'a> {
+    d: Matched,
+    v: &'a [f64],
+}
+
+impl MatchedRead<'_> {
+    /// Feature `j` now over the rows whose features `ℓ` back are in the
+    /// ring, at the `li`-th lag.
+    pub fn ax(&self, li: usize, t: usize, j: usize) -> f64 {
+        self.v[self.d.ax(li, t).start + j]
+    }
+
+    /// The target now over the rows whose features `ℓ` back are in the ring.
+    pub fn ayx(&self, li: usize, t: usize) -> f64 {
+        self.v[self.d.scalar(0, li, t)]
+    }
+
+    /// The weight of the rows whose features `ℓ` back are in the ring.
+    pub fn wx(&self, li: usize, t: usize) -> f64 {
+        self.v[self.d.scalar(1, li, t)]
+    }
+
+    /// The target now over the rows whose target `ℓ` back was present.
+    pub fn ay(&self, li: usize, t: usize) -> f64 {
+        self.v[self.d.scalar(2, li, t)]
+    }
+
+    /// The weight of the rows whose target `ℓ` back was present.
+    pub fn wy(&self, li: usize, t: usize) -> f64 {
+        self.v[self.d.scalar(3, li, t)]
+    }
+
+    /// Feature `j` now over the rows whose target `ℓ` back was present, at
+    /// the `ci`-th cross lag.
+    pub fn axy(&self, ci: usize, t: usize, j: usize) -> f64 {
+        self.v[self.d.axy(ci, t).start + j]
+    }
+}
+
+/// The target's side now and the weight over the rows whose features `ℓ`
+/// back are in the ring: `dy` its deviation from its origin on such a row,
+/// `None` on another.
+#[inline]
+fn step_target_x(a: f64, b: f64, dy: Option<f64>, m: &mut [f64], d: &Matched, li: usize, t: usize) {
+    step_pair(a, b, dy, m, d.scalar(0, li, t), d.scalar(1, li, t));
+}
+
+/// The same over the rows whose target `ℓ` back was present.
+#[inline]
+fn step_target_y(a: f64, b: f64, dy: Option<f64>, m: &mut [f64], d: &Matched, li: usize, t: usize) {
+    step_pair(a, b, dy, m, d.scalar(2, li, t), d.scalar(3, li, t));
+}
+
+#[inline]
+fn step_pair(a: f64, b: f64, dy: Option<f64>, m: &mut [f64], side: usize, weight: usize) {
+    match dy {
+        Some(d) => {
+            m[side] = a * m[side] + b * d;
+            m[weight] = a * m[weight] + b;
+        }
+        None => {
+            m[side] *= a;
+            m[weight] *= a;
+        }
     }
 }
 
@@ -1640,7 +1915,7 @@ mod tests {
     /// them differ (task 281).
     #[test]
     fn origins_are_equal_by_every_field_but_the_buffer() {
-        let mut o = LagOrigin::new(2, 2, 2);
+        let mut o = LagOrigin::new(2, 2, 2, 2);
         o.x = vec![1.0, 2.0];
         o.y = vec![3.0, 4.0];
         o.x_set = vec![true, false];

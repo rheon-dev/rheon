@@ -2001,7 +2001,7 @@ impl Robust {
             for (i2, (ci, &zi)) in self.cross[j].iter_mut().zip(z.iter()).enumerate() {
                 *ci = a * *ci + ab_dy * cov.deviation(i2, zi);
             }
-            crate::comp::add(&mut self.ybar[j], &mut self.ybar_lo[j], bb * dy);
+            crate::comp::step_toward(&mut self.ybar[j], &mut self.ybar_lo[j], target, dy, a, bb);
             self.cov[j].update_held(z, lam, w, &mut held);
             self.wj[j] = wj_new;
         }
@@ -3018,7 +3018,14 @@ impl OnlineModel for Robust {
                     {
                         *ci = a * *ci + ab_dy * cov.deviation(i, zi);
                     }
-                    crate::comp::add(&mut self.ybar[j], &mut self.ybar_lo[j], bb * dy);
+                    crate::comp::step_toward(
+                        &mut self.ybar[j],
+                        &mut self.ybar_lo[j],
+                        target,
+                        dy,
+                        a,
+                        bb,
+                    );
                     // The Gram moves: the band system kept from the last
                     // solve or nudge moves with it where that is exact, from
                     // the row's step read before the means move, and is

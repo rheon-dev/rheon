@@ -4067,3 +4067,31 @@ fn every_kind_is_free_of_its_columns_scale_at_the_ends_of_the_doubles() {
         }
     }
 }
+
+/// Under `scalar`, a row far past the spread its history had -- squares of
+/// its standardised values past the doubles -- has an equicorrelation, a
+/// ratio of the squares' degree, read at a power of two of its own; it was
+/// NaN, and the row left out of the CUSUM (review 2026-11-23, COV-5).
+#[test]
+fn a_row_far_past_its_spread_is_scalarised() {
+    let d = 3;
+    let mut c = cfg(d, CorrChangeKind::Monitor);
+    c.scalar = true;
+    c.decay = Decay::Halflife(50.0);
+    let mut m = CorrChange::new(c).unwrap();
+    let mut g = SplitMix64::new(5);
+    let mut u = || (g.next_u64() >> 11) as f64 / (1u64 << 53) as f64 - 0.5;
+    for _ in 0..80 {
+        let f = u();
+        let x: Vec<f64> = (0..d).map(|_| 1e-100 * (f + u())).collect();
+        m.step(&x, &[], 1.0, 1.0);
+    }
+    let jump = [1e80, 2e80, -0.5e80];
+    let r: Vec<f64> = (0..d)
+        .map(|i| m.diag.deviation(i, jump[i]) / m.diag.var(i).sqrt() * 1e-180)
+        .collect();
+    let (s1, s2) = (r.iter().sum::<f64>(), r.iter().map(|v| v * v).sum::<f64>());
+    let want = (s1 * s1 - s2) / ((d as f64 - 1.0) * s2);
+    let got = m.scalarise(&jump);
+    assert!((got - want).abs() <= 1e-12, "{got} against {want}");
+}

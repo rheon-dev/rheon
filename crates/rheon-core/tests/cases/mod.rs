@@ -2568,6 +2568,26 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // The second target joins at row 30, so the window holds rows whose
+        // target the row before was absent: the sides now over the matched
+        // rows part from the window's sums (review 2026-11-23, MARG-1).
+        case!(
+            "marginal_window_lags_joining",
+            "Marginal",
+            Marginal,
+            Marginal::new(MarginalCfg {
+                window: WINDOW.0,
+                window_every: WINDOW.1,
+                max_rows_between_snapshots: WINDOW.2,
+                lags: vec![1, 2],
+                cross_lags: Some(vec![2]),
+                ..marginal_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::JoiningFrom(2, 30),
+            40
+        ),
         case!(
             "deco",
             "Deco",

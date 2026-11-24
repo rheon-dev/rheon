@@ -831,6 +831,43 @@ impl Deco {
         self.standardise(x, &mut row.r);
         row.ok = self.block_sums_into(&row.r, &mut row.s1, &mut row.s2, &mut row.n);
         self.row_u_into(&row.s1, &row.s2, &row.n, &mut row.u);
+        // A sum of squares past the doubles (a standardised value past
+        // `1e154`, a feature far beyond the spread its history had) left
+        // `u` NaN, though each estimate is a ratio of sums of one degree in
+        // each block's squares: each block's sums are taken again at a power
+        // of two of their own, which no estimate reads (review 2026-11-23,
+        // COV-5). The level does not learn from such a row: its sums are
+        // past the doubles ([`Self::advance_ratio`]).
+        if row.s2.iter().any(|v| !v.is_finite()) {
+            let (mut s1, mut s2) = (row.s1.clone(), row.s2.clone());
+            for (bi, b) in self.blocks.iter().enumerate() {
+                // A block whose sums are doubles keeps them, to the bit; one
+                // with a variance below the normal doubles is not taken
+                // again: a history the decay all but forgot leaves one
+                // there, its digits gone, and its estimate stays NaN.
+                if s2[bi].is_finite() || b.iter().any(|&i| self.diag.var(i) < f64::MIN_POSITIVE) {
+                    continue;
+                }
+                let top = b
+                    .iter()
+                    .map(|&i| row.r[i].abs())
+                    .filter(|v| v.is_finite())
+                    .fold(0.0, f64::max);
+                if top > 0.0 {
+                    let (_, e) = crate::held_median::frexp(top);
+                    let c = crate::sqsum::ldexp(1.0, -e);
+                    (s1[bi], s2[bi]) = (0.0, 0.0);
+                    for &i in b {
+                        let ri = row.r[i];
+                        if ri.is_finite() {
+                            s1[bi] += ri * c;
+                            s2[bi] += (ri * c) * (ri * c);
+                        }
+                    }
+                }
+            }
+            self.row_u_into(&s1, &s2, &row.n, &mut row.u);
+        }
     }
 
     /// What the row whose sums are `row` reports: its outputs, once the
@@ -1014,20 +1051,36 @@ impl Deco {
     /// keeps its weight undecayed (task 115 (h)).
     fn advance_ratio(&mut self, row: &Row, lam: f64, w: f64) {
         let Row { s1, s2, n, u, .. } = row;
+        if w <= 0.0 {
+            // A row of no weight learns nothing, whatever its values (hard
+            // rule 9): each level's weight decays, as a value with an
+            // estimate's would at weight 0, and a value without one (a row
+            // at the standardiser's mean, where `u` is 0/0) is no exception.
+            // Skipping those kept their weight undecayed, so the row's
+            // values moved the levels after it (review 2026-11-23, DECO-1).
+            for rw in &mut self.rho_w {
+                *rw *= lam;
+            }
+            return;
+        }
         let k = self.blocks.len();
+        // A value learns where the row has an estimate for it and its sums
+        // are doubles: a row whose estimate came from sums taken at a power
+        // of two of their own ([`Self::row_into`]) has nothing the level can
+        // take, and is passed over as a row with no estimate is.
         for bi in 0..k {
-            if u[bi].is_finite() {
-                let nb = n[bi];
-                let a = (s1[bi] * s1[bi] - s2[bi]) / (nb * (nb - 1.0));
+            let nb = n[bi];
+            let a = (s1[bi] * s1[bi] - s2[bi]) / (nb * (nb - 1.0));
+            if u[bi].is_finite() && a.is_finite() && s2[bi].is_finite() {
                 self.learn_ratio(bi, None, [a, s2[bi] / nb, f64::NAN], lam, w);
             }
         }
         let mut m = k;
         for i in 0..k {
             for j in (i + 1)..k {
-                if u[m].is_finite() {
-                    let c = s1[i] * s1[j] / (n[i] * n[j]);
-                    let v = [c, s2[i] / n[i], s2[j] / n[j]];
+                let c = s1[i] * s1[j] / (n[i] * n[j]);
+                let v = [c, s2[i] / n[i], s2[j] / n[j]];
+                if u[m].is_finite() && v.iter().all(|x| x.is_finite()) {
                     self.learn_ratio(m, Some(m - k), v, lam, w);
                 }
                 m += 1;
@@ -2872,5 +2925,106 @@ mod tests {
                 other => panic!("{what}: {other:?}"),
             }
         }
+    }
+
+    /// A row of weight 0 learns nothing whatever its values (hard rule 9):
+    /// one at the standardiser's mean, where `u` is 0/0, and one away from
+    /// it, leave the same model to the bit. Every level's weight decays
+    /// across the row either way; on the build before PLAN 578h (DECO-1) a
+    /// value without an estimate skipped its level's decay, so the two
+    /// streams' `rho` parted by 0.17.
+    #[test]
+    fn a_row_of_no_weight_at_the_mean_learns_what_one_away_from_it_does() {
+        let k = 2;
+        let rows = stream(60, k, 0.5, 5);
+        for dynamics in [DecoDynamics::Ew, DecoDynamics::Linear] {
+            let (alpha, beta) = match dynamics {
+                DecoDynamics::Ew => (None, None),
+                DecoDynamics::Linear => (Some(0.05), Some(0.9)),
+            };
+            let new = || {
+                Deco::new(DecoCfg {
+                    dynamics,
+                    alpha,
+                    beta,
+                    decay: Decay::Lam(0.75),
+                    ..cfg(k)
+                })
+                .unwrap()
+            };
+            // A history every step of which is exact: a first row of weight
+            // 4 at `centre`, then rows of weight 1 a clock apart, so the
+            // weight stays at 4 and each row takes a quarter, in pairs
+            // `centre + e`, `centre - 3e/4` on a grid of sixteenths, each
+            // pair leaving the mean at `centre` exactly. A row there has no
+            // deviation, and its `u` is 0/0.
+            let centre = [1.0, 2.0];
+            let grid =
+                |x: &[f64]| -> Vec<f64> { x.iter().map(|v| (v * 16.0).round() / 16.0).collect() };
+            let (mut at_mean, mut away) = (new(), new());
+            for m in [&mut at_mean, &mut away] {
+                m.step(&centre, &[], 0.0, 4.0);
+            }
+            for x in &rows[..30] {
+                let e = grid(x);
+                let up: Vec<f64> = e.iter().zip(&centre).map(|(e, c)| c + e).collect();
+                let down: Vec<f64> = e.iter().zip(&centre).map(|(e, c)| c - 0.75 * e).collect();
+                for m in [&mut at_mean, &mut away] {
+                    m.step(&up, &[], 1.0, 1.0);
+                    m.step(&down, &[], 1.0, 1.0);
+                }
+            }
+            assert!(
+                (0..k).all(|i| at_mean.diag.deviation(i, centre[i]) == 0.0),
+                "{:?}",
+                (0..k)
+                    .map(|i| at_mean.diag.mean_pair(i))
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                at_mean.rho_w.iter().all(|&w| w > 0.0),
+                "{:?}",
+                at_mean.rho_w
+            );
+            let u = at_mean.step(&centre, &[], 3.0, 0.0).pred[0];
+            assert!(u.is_nan(), "the row at the mean has no estimate: {u}");
+            away.step(&[1.5, 3.0], &[], 3.0, 0.0);
+            let bits = |v: &[f64]| v.iter().map(|p| p.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&at_mean.rho_w), bits(&away.rho_w), "{dynamics:?}");
+            for x in &rows[30..] {
+                let x: Vec<f64> = x.iter().zip(&centre).map(|(e, c)| c + e).collect();
+                let a = at_mean.step(&x, &[], 1.0, 1.0).pred;
+                let b = away.step(&x, &[], 1.0, 1.0).pred;
+                assert_eq!(bits(&a), bits(&b), "{dynamics:?}");
+            }
+        }
+    }
+
+    /// A row far past the spread its history had: standardised values near
+    /// `1e180`, whose squares are past the doubles. Its estimate `u` is a
+    /// ratio of the squares' degree and is read at a power of two of each
+    /// block's own; it was NaN (review 2026-11-23, COV-5). The level does
+    /// not learn from it, and stays a number.
+    #[test]
+    fn a_row_far_past_its_spread_has_an_estimate() {
+        let k = 3;
+        let mut m = Deco::new(cfg(k)).unwrap();
+        for x in stream(60, k, 0.5, 7) {
+            let x: Vec<f64> = x.iter().map(|v| 1e-100 * v).collect();
+            m.step(&x, &[], 1.0, 1.0);
+        }
+        let jump = [1e80, 2e80, -0.5e80];
+        let r: Vec<f64> = (0..k)
+            .map(|i| m.diag.deviation(i, jump[i]) / m.diag.var(i).sqrt() * 1e-180)
+            .collect();
+        assert!(r.iter().all(|v| v.abs() > 1e-10 && v.is_finite()), "{r:?}");
+        let (s1, s2) = (r.iter().sum::<f64>(), r.iter().map(|v| v * v).sum::<f64>());
+        let want = (s1 * s1 - s2) / ((k as f64 - 1.0) * s2);
+        let out = m.step(&jump, &[], 1.0, 1.0);
+        let u = out.pred[0];
+        assert!((u - want).abs() <= 1e-12, "{u} against {want}");
+        assert!(m.rho.iter().all(|v| v.is_finite()), "{:?}", m.rho);
+        let after = m.step(&[0.0, 1e-100, 0.0], &[], 1.0, 1.0);
+        assert!(after.pred[1].is_finite(), "{:?}", after.pred);
     }
 }

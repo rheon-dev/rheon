@@ -320,8 +320,10 @@ impl Summary {
                     _ => a2 * a2 * *r + b2 * b2,
                 };
             }
-            for ((m, lo), &x) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(d) {
-                crate::comp::add(m, lo, b * x);
+            // `EwDiag::update`'s step, from the row back where the history
+            // keeps less than `comp::FORGOTTEN` (review 2026-11-23, REG-7).
+            for (((m, lo), &dx), &x) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(d).zip(z) {
+                crate::comp::step_toward(m, lo, x, dx, a, b);
             }
         }
         self.w = w_new;
@@ -379,14 +381,24 @@ impl Summary {
                 _ => a2 * a2 * *r + b2 * b2 * ro,
             };
         }
-        for ((m, lo), d) in self
+        for (((m, lo), d), (om, olo)) in self
             .m
             .iter_mut()
             .zip(&mut self.m_lo)
             .zip(&delta)
+            .zip(other.m.iter().zip(&other.m_lo))
             .take(g.legs.len())
         {
-            crate::comp::add(m, lo, b * d);
+            if a < crate::comp::FORGOTTEN {
+                // `other`'s mean, less this one's share of the distance
+                // (`crate::comp::step_toward`; review 2026-11-23, REG-7).
+                (*m, *lo) = (*om, *olo);
+                if a > 0.0 {
+                    crate::comp::add(m, lo, -(a * d));
+                }
+            } else {
+                crate::comp::add(m, lo, b * d);
+            }
         }
         self.w = w;
     }

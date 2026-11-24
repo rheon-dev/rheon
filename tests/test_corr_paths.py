@@ -89,14 +89,23 @@ def test_the_equicorrelation_of_fewer_than_two_series_is_nan():
 
 
 def test_a_minimum_variance_weight_with_a_zero_normaliser_has_no_loss():
-    """``w = F^-1 mu / (mu' F^-1 mu)``: an indefinite forecast can make the
-    normaliser exactly zero, and the loss is then undefined (``nan``), not
-    an infinity or a division error."""
-    f = np.array([[1.0, 0.0], [0.0, -1.0]])
-    assert math.isnan(corr.loss(f, np.eye(2), "minvar", mu=[1.0, 1.0]))
-    # Off the zero, the same forecast has a loss: F^-1 mu = (1, -1/2), the
-    # normaliser 3/4, w = (4/3, -2/3), and w' I w = 20/9.
-    assert corr.loss(f, np.eye(2), "minvar", mu=[1.0, 0.5]) == pytest.approx(20 / 9, rel=1e-15)
+    """``w = F^-1 mu / (mu' F^-1 mu)``: a normaliser of exactly zero leaves
+    the loss undefined (``nan``), not an infinity or a division error. A
+    positive definite forecast has one only at ``mu = 0``. An indefinite
+    forecast holds no minimum-variance portfolio at all, so it has no loss
+    off the zero either: ``F^-1 mu = (1, -1/2)`` here is a saddle of
+    ``w' F w``, which scored 20/9 before PLAN 578h (review 2026-11-23,
+    MATH-5)."""
+    f = np.array([[2.0, 0.5], [0.5, 1.0]])
+    assert math.isnan(corr.loss(f, np.eye(2), "minvar", mu=[0.0, 0.0]))
+    indefinite = np.array([[1.0, 0.0], [0.0, -1.0]])
+    assert math.isnan(corr.loss(indefinite, np.eye(2), "minvar", mu=[1.0, 1.0]))
+    assert math.isnan(corr.loss(indefinite, np.eye(2), "minvar", mu=[1.0, 0.5]))
+    # A positive definite forecast off the zero: w' R w by its definition.
+    mu = np.array([1.0, 0.5])
+    w = np.linalg.solve(f, mu)
+    w = w / (mu @ w)
+    assert corr.loss(f, np.eye(2), "minvar", mu=mu) == pytest.approx(float(w @ w), rel=1e-15)
 
 
 def test_the_epps_inversion_reads_a_closed_row_as_the_gram_it_closed():

@@ -842,3 +842,40 @@ but `cusum_*`, `break_wald_*` and `calibration_wald_*` goes on to its frozen
 frames to the bit, and those three go on to the bit wherever the frozen
 value is a number and to a finite number where it is `None`. The current
 fixture `bank_diagnosed` regenerated, and freezes the three sums.
+
+A thirty-second, the user's (2026-11-24: "No concern for continuing
+differently here"; PLAN 578h, review 2026-11-23 COV-3): a window's
+precision prior is the prior's weight in sum form over the window's
+weight, `s·W/W_R`, where it was the whole history's share `s` read against
+the window's co-moments. The prior is one row at the stream's start that
+decays as the rows do, and the window lets go of rows, not of it: with no
+decay this is a fresh accumulator's scale on the window's rows, and a
+window nothing has left reads the live accumulator as before. It moves
+every windowed `ew_class`'s class probabilities and every windowed
+`ew_cov`'s distance and partial correlations once a row has left the
+window (the `ew_class_windowed` golden by up to `3.5e-4` relative). No
+layout changed, so a kept state converts to the current fixture's bytes
+exactly, and goes on with the window's ridge: its frozen continuation, read
+with the old ridge, parts from it (by up to `1e-3` of a probability over 16
+rows). The kept sets `v61/` to `v71/` `ew_class_window` are held to that
+(`crates/rheon-core/tests/state_fixtures.rs`, `WINDOW_RIDGE`): each
+converts to the current fixture's bytes exactly and goes on as the current
+fixture does, every output to the bit (the rings of 61 to 64, which carry
+no running products, within the fixtures' tolerance after the first row,
+as for every case).
+
+A thirty-third, the user's (2026-11-24: "No concern for continuing
+differently here"; PLAN 578h, review 2026-11-23 COV-5): `rcov`'s kernel
+estimate holds a stretch's leading jittered return until the stretch has
+`2m` returns, and a stretch of `2m − 1` returns closes with its one
+jittered return, `mean(X_m..X_{2m−1}) − mean(X_0..X_{m−1})`, where its lead
+alone was emitted at its `m`-th return; a shorter one has none. The lead
+could not be taken back once emitted, so a short stretch read otherwise
+backwards. It moves the estimate of a group with stretches shorter than
+`2m` (cut short by a break), and `n` with it. A kept state saved inside a
+stretch past its lead and short of `2m` returns has emitted that lead,
+which this build would emit again: it loads with that stretch closed as it
+stands, as a break closes one, and the next return starts another. No
+kept set holds such a state (`v61/` to `v71/` `rcov` were saved after 40
+returns of one stretch): each converts to the current fixture's bytes
+exactly and goes on to its frozen continuation to the bit.

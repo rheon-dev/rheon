@@ -5549,11 +5549,11 @@ fn the_gate_bound_is_the_largest_edf_ratio_and_only_below_the_limit() {
     );
 }
 
-/// A Gram whose Kish count is 0 -- its `Σ w²` held at the smallest
-/// subnormal by rounding while `W²` underflows, over thousands of rows
-/// of weight 0 -- with a fit of no degrees of freedom (no intercept, a
-/// feature always 0, a ridge of 1) reads the infinite ratio, not
-/// `sqrt(1 + 0/0)`.
+/// A Gram whose Kish count is 0 -- its weight decayed past the normal
+/// doubles over thousands of rows of weight 0 (its `Σ w²`, kept at a power
+/// of two of its own, no longer fades first: review 2026-11-23, COV-4) -- with a
+/// fit of no degrees of freedom (no intercept, a feature always 0, a ridge
+/// of 1) reads the infinite ratio, not `sqrt(1 + 0/0)`.
 #[test]
 fn a_kish_count_of_zero_reads_an_infinite_ratio() {
     let mut c = cfg(1, 1);
@@ -6370,5 +6370,27 @@ fn pairwise_errors_are_read_at_the_targets_own_rows() {
     let (pair, own) = (vars(TargetGaps::Pairwise), vars(TargetGaps::OwnRows));
     for (p, o) in pair.iter().zip(&own) {
         assert!((p / o - 1.0).abs() < 0.08, "{pair:?} against {own:?}");
+    }
+}
+
+/// After a gap that forgot the history (`lam = 0`, ten thousand half-lives)
+/// the fit is the new rows': the review's case, a row at `1e18` then rows at
+/// 1, predicted the row's level 0 where it is 1, every target and feature
+/// mean taking the row through a step `1 − 1e18` rounds away (review
+/// 2026-11-23, REG-7). Under each target gap rule's accumulator.
+#[test]
+fn a_gap_that_forgot_the_history_fits_the_rows_after_it() {
+    for gaps in [TargetGaps::OwnRows, TargetGaps::Pairwise] {
+        let mut c = cfg(1, 1);
+        c.decay = Decay::Halflife(1.0);
+        c.min_weight = 0.0;
+        c.target_gaps = gaps;
+        let mut m = EwRidge::new(c).unwrap();
+        m.step(&[1e18], &[Some(1e18)], 0.0, 1.0);
+        m.step(&[1.0], &[Some(1.0)], 10_000.0, 1.0);
+        let pred = m.step(&[1.0], &[Some(1.0)], 1.0, 1.0).pred[0];
+        assert!((pred - 1.0).abs() < 1e-9, "{gaps:?}: {pred}");
+        let pred = m.step(&[2.0], &[Some(3.0)], 1.0, 1.0).pred[0];
+        assert!((pred - 1.0).abs() < 1e-6, "{gaps:?}: {pred}");
     }
 }

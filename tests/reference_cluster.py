@@ -1034,8 +1034,11 @@ class MicroRef:
         h = self.halflife_units()
         if not math.isfinite(h) or self.beta_mu <= 1.0:
             return None
-        tp = math.ceil(h * math.log2(self.beta_mu / (self.beta_mu - 1.0)))
-        f_tp = self.factor(float(tp))
+        # Not rounded up to a whole clock unit, as DenStream's integer
+        # timestamps are: the horizon is the same in any clock unit (review
+        # 2026-11-23, CLUST-1).
+        tp = h * math.log2(self.beta_mu / (self.beta_mu - 1.0))
+        f_tp = self.factor(tp)
         return (float(tp), f_tp) if f_tp < 1.0 else None
 
     def checkpoint(self) -> None:

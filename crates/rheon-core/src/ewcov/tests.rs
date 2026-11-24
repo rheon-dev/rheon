@@ -57,7 +57,7 @@ fn direct(xs: &[Vec<f64>], lams: &[f64], ws: &[f64]) -> (f64, Vec<f64>, Vec<f64>
     (wsum, m, s)
 }
 
-fn lcg(state: &mut u64) -> f64 {
+pub(super) fn lcg(state: &mut u64) -> f64 {
     *state = state
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
@@ -3315,8 +3315,8 @@ fn the_kept_window_reads_as_a_fresh_one() {
 }
 
 /// A window's view written over a kept accumulator of its shape is
-/// `src.clone()` with the window's moments set, field for field and to the
-/// bytes, and is written in place: the kept vectors are the ones it held.
+/// `src.clone()` with the window's moments and prior scale set, field for
+/// field and to the bytes, and is written in place: the kept vectors are the ones it held.
 /// Where the kept one is not of the shape -- another side, or a part short
 /// of it -- or `src` holds rows not yet merged, a block or a damaged
 /// state's rows, it is that clone, made afresh.
@@ -3332,9 +3332,11 @@ fn a_window_view_is_written_in_place_only_over_one_of_its_shape() {
     };
     let mean = [0.25, -1.5, 2.0];
     let lower = [2.0, 0.5, 3.0, -0.25, 0.75, 1.5];
+    // The prior's scale the window's weight gives (review 2026-11-23, COV-3).
     let fresh = |src: &EwCov| {
         let mut e = src.clone();
         e.set_moments_packed(&mean, &lower, 4.5, Some(3.0));
+        e.scale_prior_to_window_of(src);
         e
     };
     let write = |src: &EwCov, out: &mut EwCov, what: &str| {
@@ -3515,4 +3517,111 @@ fn kish_size_holds_at_weights_too_small_to_square() {
     );
     let back: EwCov = rmp_serde::from_slice(&rmp_serde::to_vec_named(&b).unwrap()).unwrap();
     assert_eq!(back.n_kish(), b.n_kish(), "the exponent saves");
+}
+
+/// An accumulator stood at a weight from moments knows nothing of the
+/// squared weights behind it, so Kish's size is unknown, before a row and
+/// after one; at no weight it is the empty accumulator's. On the build
+/// before PLAN 578h a weight of 100 read a squared weight of 0, and one
+/// row of weight 1 then made Kish's size 10,201 rows out of 101 (review
+/// 2026-11-23, COV-2).
+#[test]
+fn moments_given_at_a_weight_have_no_kish_size() {
+    let (m3, c9, v3) = (vec![0.5; 3], vec![0.0; 9], vec![1.0; 3]);
+    let mut cov = EwCov::from_moments(3, 100.0, &m3, &c9, 1.0).unwrap();
+    let mut diag = EwCovDiag::from_moments(3, 100.0, &m3, &v3, 1.0).unwrap();
+    assert_eq!((cov.n_kish(), diag.q_sum()), (None, None));
+    cov.update(&[1.0, 2.0, 3.0], 1.0, 1.0);
+    diag.update(&[1.0, 2.0, 3.0], 1.0, 1.0);
+    assert_eq!((cov.n_kish(), diag.q_sum()), (None, None));
+    assert!(cov.unbiased_factor().is_nan());
+    let empty = EwCov::from_moments(3, 0.0, &m3, &c9, 1.0).unwrap();
+    assert_eq!(empty.q_sum(), Some(0.0));
+    let empty = EwCovDiag::from_moments(3, 0.0, &m3, &v3, 1.0).unwrap();
+    assert_eq!(empty.q_sum(), Some(0.0));
+}
+
+/// The unbiased factor `n/(n − 1)` at Kish's size holds where the squared
+/// weights fall below the doubles: rows of weight `1e-160`, and a step of
+/// no weight across 538 half-lives, which decays the weight by `2^-538` and
+/// its squares by `2^-1076`. Kish's size does not move across a decay, so
+/// neither does the factor (review 2026-11-23, COV-4).
+#[test]
+fn the_unbiased_factor_holds_where_the_squared_weights_underflow() {
+    let mut s = 4u64;
+    let rows: Vec<Vec<f64>> = (0..30).map(|_| vec![lcg(&mut s), lcg(&mut s)]).collect();
+    let mut tiny = EwCov::with_precision_prior(2, 1.0).unwrap();
+    let mut unit = EwCov::with_precision_prior(2, 1.0).unwrap();
+    for x in &rows {
+        tiny.update(x, 0.9, 1e-160);
+        unit.update(x, 0.9, 1.0);
+    }
+    let want = unit.unbiased_factor();
+    assert!(want.is_finite() && want > 1.0, "{want}");
+    let got = tiny.unbiased_factor();
+    assert!((got - want).abs() <= 1e-12 * want, "{got} against {want}");
+    unit.update(&rows[0], 0.5f64.powi(538), 0.0);
+    let after = unit.unbiased_factor();
+    assert!(
+        (after - want).abs() <= 1e-12 * want,
+        "{after} against {want}"
+    );
+}
+
+/// A history the decay forgot (`lam = 0`) leaves the row alone: the means,
+/// co-moments, weights and squared weights after it are a fresh
+/// accumulator's after the same rows, to the bit, row by row and in a block,
+/// for `EwCov`, `EwCovDiag` and a target's `TargetMoments`. A mean at
+/// `1e18` took a row at 1 to 0 (review 2026-11-23, REG-7).
+#[test]
+fn a_history_the_decay_forgot_leaves_the_row_alone() {
+    let k = 3;
+    let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    let rows: Vec<Vec<f64>> = (0..6)
+        .map(|i| (0..k).map(|j| 1.0 + (i * k + j) as f64 * 0.37).collect())
+        .collect();
+    for block in [0, 4] {
+        let mut m = EwCov::new(k);
+        m.set_block_rows(block);
+        m.update(&[1e18, -1e18, 3e17], 1.0, 1.0);
+        m.update(&[2e18, -1e17, 3e17], 0.5, 2.0);
+        let mut fresh = EwCov::new(k);
+        fresh.set_block_rows(block);
+        for (i, x) in rows.iter().enumerate() {
+            m.update(x, if i == 0 { 0.0 } else { 0.5 }, 1.0);
+            fresh.update(x, 0.5, 1.0);
+        }
+        m.flush();
+        fresh.flush();
+        assert_eq!(bits(m.means()), bits(fresh.means()), "block {block}");
+        assert_eq!(bits(&m.m_lo), bits(&fresh.m_lo), "block {block}");
+        // Row by row to the bit; in blocks the two merge at other rows (a
+        // fresh accumulator's first row is not held), so to a rounding.
+        let (cm, cf) = (m.comoments().to_full(), fresh.comoments().to_full());
+        if block == 0 {
+            assert_eq!(bits(&cm), bits(&cf));
+        } else {
+            for (a, b) in cm.iter().zip(&cf) {
+                assert!(
+                    (a - b).abs() <= 4.0 * f64::EPSILON * b.abs(),
+                    "{a} against {b}"
+                );
+            }
+        }
+        assert_eq!(m.w_sum.to_bits(), fresh.w_sum.to_bits());
+    }
+    let mut m = EwCovDiag::with_precision_prior(k, 1.0).unwrap();
+    m.update(&[1e18, -1e18, 3e17], 1.0, 1.0);
+    let mut fresh = EwCovDiag::with_precision_prior(k, 1.0).unwrap();
+    for (i, x) in rows.iter().enumerate() {
+        m.update(x, if i == 0 { 0.0 } else { 0.5 }, 1.0);
+        fresh.update(x, 0.5, 1.0);
+    }
+    assert_eq!(bits(m.means()), bits(fresh.means()));
+    let vars = |d: &EwCovDiag| (0..k).map(|i| d.var(i).to_bits()).collect::<Vec<_>>();
+    assert_eq!(vars(&m), vars(&fresh));
+    let mut t = TargetMoments::new(1);
+    t.learn(0, 1e18, 0.0, 1.0, 1.0, 1.0);
+    t.learn(0, 1.0, 0.0, 1.0, 0.0, 1.0);
+    assert_eq!(t.means(), &[1.0]);
 }

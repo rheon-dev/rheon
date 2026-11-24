@@ -1469,6 +1469,116 @@ model that only the new build has is listed as an addition and passes.
   `[q, s]`. Moves: `sgd.*`,
   `pa.*`, `rls.*`, `ewridge.*`, `lasso.*`, `ew_cov.*`.
 
+- **A mean takes a row after a gap that forgot its history as the row
+  itself** (review 2026-11-23, REG-7). A mean steps toward each row by `b·(x
+  − m)`, and where the history keeps almost none of the weight (`b`
+  within a rounding of 1) that step is rounded at the mean's level: a
+  mean at `1e18` took a row at 1, after a gap of ten thousand half-lives,
+  to 0, and `ewridge` predicted 0 where its rows read 1. Below a history's
+  share of `2^-52` the step is taken from the row back, `x − a·(x − m)`,
+  the same number exactly, rounded at the result's level; after a gap
+  that forgot everything the mean is the row's, to the bit. A row whose
+  history keeps more than `2^-52` of the weight moves no bit. Moves:
+  `ewridge.*`, `lasso.*`, `ew_cov.*`, `ew_class.*`, `sgd.*`, `huber.*`,
+  `quantile.*`, `kalman.*`, `hmm.*`, `deco.*`, `corrchange.*`.
+- **Kish's size holds across a long decay** (review 2026-11-23, COV-4). A
+  step of no weight decays the weight by `λ` and the squared weights by
+  `λ²`, which across 538 half-lives is below the doubles: `Σw²` faded to 0
+  first, and `ew_cov(bias=False)`'s variances, covariances and distances
+  went NaN, `rls`, `ewridge` and `lasso` read an infinite error inflation
+  and no standard errors, though no decay moves Kish's size. The sum's
+  power of two now takes such a decay, to the scale of the least normal
+  weight, and a weight decayed past the normal doubles counts as no rows.
+  Moves: `ew_cov.*`, `rls.*`, `ewridge.*`, `lasso.*`.
+- **`ew_cov`'s components wait for a defined scale** (review 2026-11-23,
+  COV-1). Under `bias=False`, components refreshed while one row was read
+  (a first row whose weight alone reaches `min_weight`, or a window just
+  emptied by a gap) have NaN variances, and stood for the whole
+  `pca_every` cadence; they are refreshed again on the next row. Moves:
+  `ew_cov.pc*`.
+- **`deco` learns nothing from a row of weight 0 at its standardiser's
+  mean** (review 2026-11-23, DECO-1). Such a row has no estimate, `0/0`,
+  and skipped the decay of its level's weight that a row of weight 0 away
+  from the mean took, so the row's values moved `rho` after it. A row
+  whose squared standardised values pass the doubles now has an estimate
+  `u`, read at a power of two of each block's sums, where it was NaN, in
+  `deco` and in `corrchange`'s `scalar` CUSUM (COV-5). Moves: `deco.*`,
+  `corrchange.*`.
+- **`ew_class("diag")` scores a class with a constant feature after its
+  ridge has faded** (review 2026-11-23, COV-3). Past about 1,075
+  half-lives the decaying ridge is 0, and a feature constant within a
+  class read `0/0` on every row after: the class and its probabilities
+  were null for good. Such a class takes the jitter `"full"`'s and
+  `"tied"`'s factorization takes. Moves: `ew_class.class`, `ew_class.p_*`.
+- **A window's ridge is the window's** (review 2026-11-23, COV-3; rule 5's
+  thirty-second exception). A windowed `ew_class` and `ew_cov` read their
+  precision prior's scale off the whole history, its share of the
+  history's weight, against the window's co-moments: after 394 rows had
+  left a window of 6, `ew_class` read 0.99 for a class a model of the
+  window's rows reads at 0.50, and `ew_cov`'s distance was 7.3 times off.
+  The window's scale is the prior's weight over the window's weight, which
+  with no decay is a fresh model's on the window's rows; `"tied"` and
+  `"diag"` read it off the window's accumulators, as `"full"` did. A
+  saved windowed state goes on with the window's ridge. Moves:
+  `ew_class.class`, `ew_class.p_*`, `ew_cov.mahal*`, `ew_cov.partial_corr*`.
+- **`marginal`'s windowed lag correlations are re-centred over the rows
+  they are taken on** (review 2026-11-23, MARG-1). Under a window the lag
+  moments are taken about the series' first values and re-centred at the
+  window's means when read, which is exact only where every row in the
+  window has its partner `ℓ` rows back. A target absent the row before, or
+  the first rows after a session break, left a term that grows with the
+  series' drift from its first value: a series at 1000 after a first row
+  at 0, one target missing, read a lag correlation of 20.6 where the
+  definition reads -0.12. The lag moments now keep, beside each lag, the
+  rows' sums now over the rows a lagged one was taken on and those rows'
+  weights, `6·L·T + 3·(L + C)·p·T` doubles a snapshot in place of `2·L·T +
+  2·(L + C)·p·T` (`window_lags`' table), and a windowed step costs 1.13
+  times what it did (arm64, 20 features, three lags, every lag crossed;
+  no window, unchanged). A state saved before them starts
+  them where it loads and reads them once its window's boundary is a
+  snapshot taken after the load. Moves: `marginal.lag_corr*`,
+  `marginal.n_serial`, `marginal.t_stat_serial`, `marginal.phi*`,
+  `marginal.split_gain_t`.
+- **`rcov`'s kernel estimate on stretches shorter than `2m` returns**
+  (review 2026-11-23, COV-5; rule 5's thirty-third exception). A stretch
+  emitted its leading jittered return at its `m`-th return and could not
+  then close its trailing one, so a stretch shorter than `2m` returns,
+  cut short by a break, read otherwise backwards. The lead is held until
+  the stretch has `2m` returns; a stretch of `2m − 1` closes with its one
+  jittered return, both jitters meeting, and a shorter one has none, as
+  `n − 2m + 2` counts. Moves: `rcov.*`.
+- **`marginal`'s Kish size is null where its squared weights faded**
+  (review 2026-11-23, MARG-3). A missing target across 538 half-lives
+  left `Σw²` at 0 beside a weight above 0: `n_kish` read `inf`, and `t`
+  an infinity on noise. Moves: `marginal.n_kish`, `marginal.t_stat*`,
+  `marginal.n_serial`, `marginal.split_gain_t`.
+- **`micro`'s prune horizon is in the clock's own unit** (review
+  2026-11-23, CLUST-1). DenStream rounds `Tp` up to a whole timestamp; a
+  clock here is any unit, and rounded up, a half-life of 1 at `beta_mu =
+  72` held an old outlier summary to 2 rows where it is 72. Moves:
+  `micro.*`.
+- **`kmeans` re-places a dead cluster on its own far rows with their
+  weight** (review 2026-11-23, CLUST-2): it took half the weight it was
+  dead at, and came back dead. Moves: `kmeans.*`.
+- **`rheon.corr`** (review 2026-11-23, MATH-1, MATH-2, MATH-5): `nearest`
+  reads each change relative to the new iterate, as Higham's test does,
+  so a negative definite input no longer stops at its second iteration
+  with the identity; `epps_invert` is `nan` for a column whose long-run
+  variance is not above 0, where two negative ones read a correlation;
+  `loss` refuses a `z_mse` `n` that is not a number above 3 and a `mu` of
+  the wrong length, and is `nan` for a `qlike` pair not both positive
+  definite and a `minvar` forecast that is not.
+- **Refusals** (review 2026-11-23, REFRESH-1, REFRESH-2, REGIME-1, MARG-2,
+  COV-2): `rp.stream.refresh_time` resumed on a clock of the other kind is
+  refused before the points a state held come out (they came out cast to
+  the input's clock), refuses a state whose last clock is not a number or
+  of the other kind, warns of an order hazard and of a spent single-use
+  source, and is not pure where it saves a state; `corrchange` refuses
+  `permute_every` outside `kind="window"`, and a state whose clock since
+  the last draw does not match its cadence; `marginal` refuses a state
+  whose runs do not match its window; `EwCov::from_moments` and
+  `EwCovDiag::from_moments` at a weight above 0 know no squared weights.
+
 - **Five edge cases of `rheon.corr` and `rheon.gram`** (review 2026-11-23,
   MATH-6). `corr.mp_edge` and `corr.mp_density` refuse a count `n` or `m`
   that is not finite; NaN passed the check and gave NaN edges.

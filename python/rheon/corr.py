@@ -68,6 +68,7 @@ Polars' either. Nothing here needs scipy or scikit-learn.
 
 from __future__ import annotations
 
+import math
 import numbers
 import operator
 from collections.abc import Sequence
@@ -439,9 +440,16 @@ def nearest(
         # (review round 4, YB7).
         return float(np.abs(m).sum(axis=1).max())
 
-    def rel(p: Any, q: Any) -> float:
-        d = norm(q)
-        return norm(p - q) / d if d > 0.0 else 0.0
+    def rel(new: Any, old: Any) -> float:
+        # Each change relative to the new iterate, as (4.1) has it: the
+        # old one's norm read a change from 0 as none, and on a negative
+        # definite input, whose first projection is 0, the run stopped at
+        # its second iteration with the identity.
+        change = norm(new - old)
+        d = norm(new)
+        if d > 0.0:
+            return change / d
+        return float("inf") if change > 0.0 else 0.0
 
     ds = np.zeros((k, k))
     y = x.copy()
@@ -1534,7 +1542,8 @@ def loss(
         For ``"minvar"``, the expected returns that set the portfolio.
         Default ``None``, a vector of ones.
     ``n``
-        For ``"z_mse"``, the sample size behind the correlations.
+        For ``"z_mse"``, the sample size behind the correlations, above 3:
+        the z's sampling variance is ``1 / (n - 3)``.
 
     .. rubric:: Returns
 
@@ -1546,15 +1555,21 @@ def loss(
         z_mse   sum_{i<j} (z_ij(F) - z_ij(R))**2 * (n - 3)
         minvar  w' R w,    w = F^-1 mu / (mu' F^-1 mu)
 
-    It is ``nan`` where the loss is undefined: a forecast with no inverse, a
-    determinant of ``F^-1 R`` that is not above 0, or a zero denominator.
+    It is ``nan`` where the loss is undefined: a forecast that is not
+    positive definite, so with no inverse or no minimum-variance portfolio;
+    under ``"qlike"`` a realized matrix that is not positive definite,
+    whose log determinant is not a number; under ``"minvar"`` one with a
+    negative eigenvalue, which gives a portfolio a negative variance; or a
+    zero denominator.
 
     .. rubric:: Raises
 
     ``ValueError``
         A ``kind`` that is none of the three; matrices of different shapes;
-        ``"z_mse"`` without ``n``; an array that is not square; a Gram
-        column other than the intercept with no variance.
+        ``"z_mse"`` without ``n``, or with an ``n`` that is not a number
+        above 3; a ``mu`` without one finite value per column; an array that
+        is not square; a Gram column other than the intercept with no
+        variance.
 
     .. rubric:: Examples
 
@@ -1588,7 +1603,16 @@ def loss(
         )
         raise ValueError(msg)
     k = f.shape[0]
+
+    def eigs(m: Any) -> Any:
+        return np.linalg.eigvalsh(0.5 * (m + m.T))
+
     if kind == "qlike":
+        # Both must be positive definite: two matrices with the same count
+        # of negative eigenvalues give `det(F^-1 R) > 0`, and `-I` scored
+        # better against `I` than `I` did.
+        if not (eigs(f).min() > 0.0 and eigs(r).min() > 0.0):
+            return float("nan")
         try:
             m = np.linalg.solve(f, r)
         except np.linalg.LinAlgError:
@@ -1608,11 +1632,38 @@ def loss(
                 "from."
             )
             raise ValueError(msg)
+        # The z's sampling variance is `1 / (n - 3)`: `n` a number above 3,
+        # not a bool, which Python reads as 1.
+        if (
+            isinstance(n, bool)
+            or not isinstance(n, (int, float, np.integer, np.floating))
+            or not (math.isfinite(n) and n > 3)
+        ):
+            msg = (
+                f'rheon.corr.loss: kind="z_mse" needs n above 3, the fewest rows at which the '
+                f"z's sampling variance is defined, but it is {n!r}. Set n to the number of rows "
+                "the correlations were computed from."
+            )
+            raise ValueError(msg)
         iu = np.triu_indices(k, 1)
         d = to_z(f[iu]) - to_z(r[iu])
         return float((d * d).sum() * (n - 3))
     if kind == "minvar":
         m = np.ones(k) if mu is None else np.asarray(mu, dtype=float).reshape(-1)
+        if m.shape != (k,) or not np.isfinite(m).all():
+            some = "" if np.isfinite(m).all() else ", not all finite"
+            msg = (
+                f"rheon.corr.loss: mu must hold one finite expected return for each of the {k} "
+                f"columns, but it has {m.size} values{some}. Pass a vector of one expected return "
+                "per column."
+            )
+            raise ValueError(msg)
+        # A forecast that is not positive definite holds no minimum-variance
+        # portfolio, and a realized matrix with a negative eigenvalue gives
+        # some portfolio a negative variance.
+        ev_r = eigs(r)
+        if not (eigs(f).min() > 0.0 and ev_r.min() >= -1e-12 * max(abs(ev_r).max(), 1.0)):
+            return float("nan")
         try:
             w = np.linalg.solve(f, m)
         except np.linalg.LinAlgError:
@@ -1654,8 +1705,9 @@ def epps_invert(gram_or_row: Any, *, L: int) -> Any:  # noqa: N803 - the paper's
     .. rubric:: Returns
 
     The ``k x k`` correlation matrix at scale ``L``, over the input's
-    columns other than an intercept, with ``nan`` where a column has no
-    variance.
+    columns other than an intercept, with ``nan`` in the row and the
+    column of a column whose long-run variance at scale ``L`` is not above
+    0: none, or one the lags make negative.
 
     .. rubric:: Raises
 
@@ -1731,10 +1783,15 @@ def epps_invert(gram_or_row: Any, *, L: int) -> Any:  # noqa: N803 - the paper's
         cl = np.asarray(lag_c[lags.index(ell)], dtype=float)
         num = num + (L - ell) * (cl + cl.T)
     auto = np.diag(num)
+    # A long-run variance the lags make 0 or negative has no square root:
+    # its column correlates with nothing. Two negative ones multiply to a
+    # positive number, which read a finite correlation, as large as 1.56.
+    ok = auto > 0.0
+    s = np.sqrt(np.where(ok, auto, np.nan))
     with np.errstate(invalid="ignore", divide="ignore"):
-        out = num / np.sqrt(np.outer(auto, auto))
+        out = num / np.outer(s, s)
     out[~np.isfinite(out)] = np.nan
-    np.fill_diagonal(out, np.where(auto > 0.0, 1.0, np.nan))
+    np.fill_diagonal(out, np.where(ok, 1.0, np.nan))
     assert out.shape == (k, k)
     # Without the intercept, as every function here reads a Gram.
     cols = _gram._columns(g, "rheon.corr.epps_invert")

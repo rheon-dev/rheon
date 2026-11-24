@@ -535,3 +535,53 @@ fn the_clock_forms_are_checked() {
         .is_ok()
     );
 }
+
+/// `permute_every` is the window's cadence and nothing else's: refused under
+/// `monitor` and `sequential`, as the bank's spec refuses it, where it went
+/// unchecked (a NaN or a negative span taken) and stepped a clock no draw
+/// reads. A state's clock since the last draw is there exactly when the cfg
+/// has the cadence: a window state with one and not the other is refused,
+/// where it loaded and drew by the clock never, or kept a clock it never
+/// read (review 2026-11-23, REGIME-1).
+#[test]
+fn permute_every_is_the_windows_and_its_clock_matches_it() {
+    for kind in [CorrChangeKind::Monitor, CorrChangeKind::Sequential] {
+        for d in [5.0, f64::NAN, -1.0] {
+            let e = CorrChange::new(CorrChangeCfg {
+                span_rows: 20,
+                monitor_rows: 20,
+                permute_every: Some(d),
+                ..cfg(kind)
+            })
+            .unwrap_err();
+            assert!(
+                e.contains("permute_every applies only under kind=\"window\""),
+                "{e}"
+            );
+        }
+    }
+    let window = CorrChangeCfg {
+        span_rows: 10,
+        permute_every: Some(5.0),
+        ..cfg(CorrChangeKind::Window)
+    };
+    let mut m = CorrChange::new(window.clone()).unwrap();
+    for (i, x) in rows(30, 4).iter().enumerate() {
+        m.step(x, &[], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+    }
+    assert!(CorrChange::restore(&m.state()).is_ok());
+    let mut without = m.clone();
+    without.since_draw = None;
+    let mut extra = CorrChange::new(CorrChangeCfg {
+        permute_every: None,
+        ..window
+    })
+    .unwrap();
+    extra.since_draw = Some(Since::default());
+    for (what, bad) in [("no clock", without), ("a clock", extra)] {
+        match CorrChange::restore(&bad.state()) {
+            Err(crate::StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{what}: {e}"),
+            other => panic!("{what}: {other:?}"),
+        }
+    }
+}

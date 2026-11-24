@@ -296,8 +296,10 @@ def kmeans(
     so a cut the data has outgrown widens until the rows are learned again.
 
     **Dead centers.** The freed center takes half the weight of the
-    cluster it is split from, which keeps the other half, so from a cluster
-    at an equal share both halves start at ``weight_sum / (2 n_clusters)``:
+    cluster it is split from, which keeps the other half (a dead center
+    holding the most far rows itself is moved onto them with their
+    weight), so from a cluster at an equal share both halves start at
+    ``weight_sum / (2 n_clusters)``:
     the floor itself at 0.5. Each check then re-places one of them on the
     far rows, and the clustering is lost. Over 50 streams with a check every
     25 rows, a center whose blob vanished was re-placed once on every stream
@@ -591,10 +593,13 @@ def micro(
 
         xi(age) = (2 ** (-(age + Tp) / h) - 1) / (2 ** (-Tp / h) - 1)
                 = sum_{i <= age / Tp} 2 ** (-i Tp / h)        where age / Tp is whole
-        Tp      = ceil(h log2(beta_mu / (beta_mu - 1)))
+        Tp      = h log2(beta_mu / (beta_mu - 1))
 
     That is the weight of a summary that had taken one row of the mean
-    weight every ``Tp`` clock units since it opened. Both count rows, as
+    weight every ``Tp`` clock units since it opened. DenStream rounds
+    ``Tp`` up to a whole timestamp; here it is not rounded, so the
+    horizon is the same in any clock unit, and an old summary is held to
+    ``beta_mu`` rows. Both count rows, as
     DenStream's do: a stream with more rows to a clock unit fills its
     summaries faster. With no decay, or with ``beta_mu`` at most 1, where
     ``Tp`` has no value, no summary that is not yet established is pruned.

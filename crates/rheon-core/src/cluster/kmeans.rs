@@ -889,11 +889,17 @@ impl KMeans {
 
     /// ISODATA's split on the far rows themselves: `source` keeps half its
     /// weight, `target` takes the other half at the far rows' mean with the
-    /// typical radius (`target == source` re-places a cluster on its own far
-    /// rows).
+    /// typical radius. `target == source` re-places a cluster on its own far
+    /// rows, with their weight: a dead cluster gives its own rows up, and
+    /// halving the weight it was dead at brought it back dead (review
+    /// 2026-11-23, CLUST-2).
     fn split(&mut self, target: usize, source: usize) {
-        self.clusters[source].n *= 0.5;
-        let n = self.clusters[source].n;
+        let n = if target == source {
+            self.far[source].n
+        } else {
+            self.clusters[source].n *= 0.5;
+            self.clusters[source].n
+        };
         self.clusters[target] = ClusterSummary::at_centre_of(&self.far[source], n, self.r2_typical);
         self.rows[target] = RADIUS_ROWS;
     }
@@ -3412,6 +3418,26 @@ mod tests {
         m.split_merge_check();
         assert_eq!(m.events(), (0, 0));
         assert_eq!(m.clusters[0].c, vec![0.0, 0.0]);
+    }
+
+    /// A dead cluster that holds the most far weight is re-placed on its
+    /// own far rows with their weight: it gave its own rows up, so it is
+    /// what the far rows make it. On the build before PLAN 578h it halved
+    /// the weight it was dead at (1 to 0.5) and dropped the far rows' 5,
+    /// so it came back below its floor, dead again (review 2026-11-23,
+    /// CLUST-2).
+    #[test]
+    fn a_dead_cluster_re_placed_on_its_own_far_rows_takes_their_weight() {
+        // Floor 0.25 · 100 / 2 = 12.5; the far rows are cluster 1's, weight 5.
+        let mut m = placed(&[[0.0, 0.0], [10.0, 0.0]], &[20.0, 1.0], 1, 0.5, 0.25);
+        m.split_merge_check();
+        assert_eq!(m.events(), (0, 1));
+        assert_eq!(m.clusters[0].n, 20.0, "the other cluster is untouched");
+        assert_eq!(
+            m.clusters[1],
+            ClusterSummary::at(vec![50.0, 50.0], 5.0, m.r2_typical)
+        );
+        assert_eq!(m.rows[1], RADIUS_ROWS);
     }
 
     /// The buffer's cut: `far_factor` times its rows' weighted mean squared

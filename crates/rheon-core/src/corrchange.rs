@@ -701,6 +701,21 @@ impl CorrChangeCfg {
                 }
             }
         }
+        // The window's cadence and nothing else's, as the bank's spec has
+        // it: unchecked under the other kinds, a NaN or a negative span
+        // was taken, and stepped a clock no draw reads (review 2026-11-23,
+        // REGIME-1).
+        if self.kind != CorrChangeKind::Window && self.permute_every.is_some() {
+            no.refuse(format!(
+                "corrchange: permute_every applies only under kind=\"window\", but kind is \"{}\". \
+                 Leave permute_every out, or set kind=\"window\".",
+                if self.kind == CorrChangeKind::Monitor {
+                    "monitor"
+                } else {
+                    "sequential"
+                }
+            ));
+        }
         no.finish()
     }
 
@@ -1894,6 +1909,31 @@ impl CorrChange {
             s2 += r * r;
         }
         let n = x.len() as f64;
+        // A sum of squares past the doubles (a standardised value past
+        // `1e154`): the sums again at a power of two of their own, which the
+        // estimate, a ratio of the squares' degree, does not read. It was
+        // NaN, and the row left out of the CUSUM (review 2026-11-23, COV-5).
+        if !s2.is_finite() {
+            // Not where a variance is below the normal doubles: a history
+            // the decay all but forgot leaves one there, with its digits
+            // gone, and the row is read as it was, with no estimate.
+            if (0..x.len()).any(|i| self.diag.var(i) < f64::MIN_POSITIVE) {
+                return f64::NAN;
+            }
+            let r = |i: usize| self.diag.deviation(i, x[i]) / self.diag.var(i).sqrt();
+            let top = (0..x.len()).map(|i| r(i).abs()).fold(0.0, f64::max);
+            if !(top.is_finite() && top > 0.0) {
+                return f64::NAN;
+            }
+            let (_, e) = crate::held_median::frexp(top);
+            let c = crate::sqsum::ldexp(1.0, -e);
+            (s1, s2) = (0.0, 0.0);
+            for i in 0..x.len() {
+                let ri = r(i) * c;
+                s1 += ri;
+                s2 += ri * ri;
+            }
+        }
         if s2 > 0.0 {
             (s1 * s1 - s2) / ((n - 1.0) * s2)
         } else {
@@ -2741,7 +2781,10 @@ impl crate::OnlineModel for CorrChange {
                 // drawn over, only there.
                 let wrong_clock = m.clock.is_some() != on_clock
                     || m.keys.len() != if window && on_clock { m.ring.len() } else { 0 }
-                    || (m.perm_counts.is_some() && !(window && on_clock && m.perm_crit.is_some()));
+                    || (m.perm_counts.is_some() && !(window && on_clock && m.perm_crit.is_some()))
+                    // The clock since the last draw, exactly where the cfg
+                    // draws by the clock (review 2026-11-23, REGIME-1).
+                    || m.since_draw.is_some() != m.cfg.permute_every.is_some();
                 if m.diag.k() != d
                     || m.ring.iter().any(|r| r.len() != width)
                     || wrong_mon

@@ -33,6 +33,28 @@ mod diag;
 mod held;
 mod lower;
 mod merge_bound;
+/// The precision prior's scale `s` (the share of the ridge in the
+/// normalised co-moments, the prior read as one row at the stream's start
+/// that decays as the rows do) for a window of weight `w_window` cut from
+/// an accumulator of weight `w` at scale `s`: the prior's weight in sum form,
+/// `s·W`, is the stream's and not a row the window lets go of, so over the
+/// window's weight it is `s·W / W_R`. The whole history's `s` read against
+/// the window's co-moments made the ridge the history's share: after 394
+/// rows aged out of a window of 6, `ew_class` read 0.99 for a class a model
+/// of the window's rows reads at 0.50 (review 2026-11-23, COV-3; rule 5's
+/// thirty-second exception). With no decay it is a fresh accumulator's
+/// scale on the window's rows. An empty window, or a ratio past the
+/// doubles, keeps `s`.
+pub(crate) fn window_precision_scale(s: f64, w: f64, w_window: f64) -> f64 {
+    if w_window > 0.0 && w > 0.0 {
+        let v = s * (w / w_window);
+        if v.is_finite() {
+            return v;
+        }
+    }
+    s
+}
+
 #[cfg(test)]
 pub(crate) use merge_bound::SUBNORMALS as MERGE_SUBNORMALS;
 mod par;
@@ -554,6 +576,13 @@ impl EwCov {
         }
         let mut ew = Self::with_precision_prior(k, prior)?;
         ew.w_sum = w_sum;
+        // The squared weights behind a given weight are not given: unknown,
+        // as in a state before they were kept, so Kish's size is too. A
+        // squared weight of 0 beside a weight of 100 made it 10,201 rows
+        // after one more (review 2026-11-23, COV-2).
+        if w_sum > 0.0 {
+            ew.q_sum = crate::sqsum::KishSum::of(None);
+        }
         ew.m.copy_from_slice(means);
         ew.c.copy_from(comoments);
         Ok(ew)
@@ -821,7 +850,7 @@ impl EwCov {
             // `W` decays by `lam`, so its square decays by `lam^2`; the row
             // adds `w^2`, at the sum's own power of two. Kish's `n` is then
             // `W^2 / Q`.
-            crate::sqsum::add(q, s, lam * lam, w);
+            crate::sqsum::add(q, s, lam, w);
         }
         self.prior_scale *= lam;
     }
@@ -1171,7 +1200,21 @@ impl EwCov {
             },
         );
         let share = u_sum / w_new;
+        // The history's share: below `comp::FORGOTTEN` each mean is taken
+        // from the block's back, `m_B − a·Δ` (`crate::comp::step_toward`;
+        // review 2026-11-23, REG-7).
+        let a = w_a / w_new;
         for ((i, mi), lo) in self.m.iter_mut().enumerate().zip(self.m_lo.iter_mut()) {
+            if a < crate::comp::FORGOTTEN {
+                (*mi, *lo) = (m_b[i], 0.0);
+                if delta[i] != 0.0 {
+                    crate::comp::add(mi, lo, delta[i]);
+                }
+                if a > 0.0 {
+                    crate::comp::add(mi, lo, -(a * big[i]));
+                }
+                continue;
+            }
             crate::comp::add(mi, lo, share * d_hi[i]);
             // A block of one row, or of one value, has no residue, and a
             // step of 0 could round the pair afresh (`crate::comp::add`).
@@ -1303,7 +1346,11 @@ impl EwCov {
         // Each mean takes its step as a pair, so no part of it is rounded off
         // (docs/PLAN.md task 101); a row of weight 0 takes none
         // (`crate::comp::add` says why).
-        if b > 0.0 {
+        if b > 0.0 && a < crate::comp::FORGOTTEN {
+            // A history the decay all but forgot: each mean from the row
+            // back (`crate::comp::step_toward`; review 2026-11-23, REG-7).
+            crate::comp::from_rows(&mut self.m, &mut self.m_lo, d, x, a);
+        } else if b > 0.0 {
             for ((mi, lo), &di) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(d.iter()) {
                 crate::comp::add(mi, lo, b * di);
             }
@@ -1368,6 +1415,12 @@ impl EwCov {
     /// between rows ([`crate::window::truncated_into`]). Where `self` is not
     /// of `src`'s shape, or `src` holds a block (whose flush the clone
     /// would run), it is the clone.
+    /// The precision prior's scale for these moments as a window cut from
+    /// `src`, once `w_sum` is the window's ([`window_precision_scale`]).
+    pub(crate) fn scale_prior_to_window_of(&mut self, src: &EwCov) {
+        self.precision_scale = window_precision_scale(src.precision_scale, src.w_sum, self.w_sum);
+    }
+
     pub(crate) fn set_window_of(
         &mut self,
         src: &EwCov,
@@ -1380,6 +1433,7 @@ impl EwCov {
         if held || !self.has_shape(src.k) || self.c.packed().len() != row_at(src.k) {
             *self = src.clone();
             self.set_moments_packed(mean, lower, w_sum, q_sum);
+            self.scale_prior_to_window_of(src);
             return;
         }
         // Every field named, so a field added to `EwCov` is a compile error
@@ -1404,7 +1458,7 @@ impl EwCov {
         } = src;
         self.prior_scale = *prior_scale;
         self.precision_prior = *precision_prior;
-        self.precision_scale = *precision_scale;
+        self.precision_scale = window_precision_scale(*precision_scale, src.w_sum, w_sum);
         self.threads = *threads;
         self.rows_learned = *rows_learned;
         // `set_moments_packed` forgets the runs and keeps whether they are
@@ -1431,8 +1485,11 @@ impl EwCov {
         // arrived in.
         self.flush();
         self.w_sum *= lam;
-        if let Some(q) = self.q_sum.q.as_mut() {
-            *q *= lam * lam;
+        let crate::sqsum::KishSum { q, s } = &mut self.q_sum;
+        if let Some(q) = q.as_mut() {
+            // `λ² Q`, at the sum's own power of two where `λ²` would take
+            // it below the doubles (`crate::sqsum::add`).
+            crate::sqsum::add(q, s, lam, 0.0);
         }
         self.prior_scale *= lam;
     }
@@ -1539,7 +1596,7 @@ impl TargetMoments {
         self.var[t] = a * self.var[t] + a * b * d * d;
         // A row of weight 0 takes no step (`crate::comp::add` says why).
         if b > 0.0 {
-            crate::comp::add(&mut self.mean[t], &mut self.mean_lo[t], b * d);
+            crate::comp::step_toward(&mut self.mean[t], &mut self.mean_lo[t], y, d, a, b);
         }
         self.q[t] = lam * lam * self.q[t] + w * w;
     }
@@ -2999,7 +3056,15 @@ impl crate::OnlineModel for EwCovModel {
             self.since_pca.step(d_clock);
             let by_clock = self.cfg.pca_every <= 0.0 || self.since_pca.reached(self.cfg.pca_every);
             let by_rows = self.rows_since_pca >= self.cfg.max_rows_between_pca as usize;
-            if self.n_eff() >= self.cfg.min_weight && (self.pca.is_none() || by_clock || by_rows) {
+            // Components refreshed while the scale was not yet defined (one
+            // row read, or Kish's size not past 1, under `bias = false`)
+            // carry NaN variances, and are refreshed again on the next row,
+            // where the scale may be: waiting for the cadence kept them for
+            // all of it, on a first row whose weight alone reaches
+            // `min_weight`, and under a window right after a gap that
+            // emptied it (review 2026-11-23, COV-1).
+            let undefined = self.pca.as_ref().is_none_or(|p| p.trace.is_nan());
+            if self.n_eff() >= self.cfg.min_weight && (undefined || by_clock || by_rows) {
                 self.refresh_pca();
             }
         }

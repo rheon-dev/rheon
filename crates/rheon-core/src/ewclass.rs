@@ -703,7 +703,9 @@ impl EwClass {
         }
     }
 
-    /// The ridge in force on class `c`'s covariance.
+    /// The ridge in force on class `c`'s covariance over the whole
+    /// history; a row is scored with its view's ([`Self::class_ridge`]).
+    #[cfg(test)]
     fn ridge(&self, c: usize) -> f64 {
         let scale = match self.classes.get(c) {
             Some(cov) => cov.precision_scale(),
@@ -839,7 +841,9 @@ impl EwClass {
                 seen.extend((0..nc).filter(|&c| weights[c] > 0.0));
                 for &c in seen.iter() {
                     let pi = weights[c] / total;
-                    let ridge = self.ridge(c);
+                    // The view's: under a window, the window's ridge
+                    // (review 2026-11-23, COV-3).
+                    let ridge = self.class_ridge(&classes[c]);
                     // The lower triangle, which the factorization reads,
                     // a row's run `[i·k, i·k + i]` at a time: indexed slot
                     // by slot, the loop checked both bounds on every
@@ -884,7 +888,30 @@ impl EwClass {
                     if weights[c] <= 0.0 {
                         continue;
                     }
-                    let ridge = self.ridge(c);
+                    // The view's: under a window, the window's ridge
+                    // (review 2026-11-23, COV-3).
+                    let ridge = self.cfg.precision_prior * cov.precision_scale();
+                    // A variance of 0 where the ridge has faded to 0 (past
+                    // about 1,075 half-lives) read `0/0` on every row after:
+                    // such a class takes the jitter the factorization of
+                    // `"full"` and `"tied"` takes, and a row of no variance
+                    // with none reads nothing (`crate::solve`).
+                    if !(0..k).all(|i| cov.var(i) + ridge > 0.0) {
+                        let Some(jitter) = crate::solve::diagonal_jitter(k, |i| cov.var(i) + ridge)
+                        else {
+                            *solve_failed = true;
+                            return nan(out);
+                        };
+                        let (mut log_det, mut q) = (0.0, 0.0);
+                        for (i, xi) in x.iter().enumerate() {
+                            let v = (cov.var(i) + ridge) + jitter;
+                            let d = cov.deviation(i, *xi);
+                            log_det += v.ln();
+                            q += d * d / v;
+                        }
+                        ell[c] = (weights[c] / total).ln() - 0.5 * log_det - 0.5 * q;
+                        continue;
+                    }
                     let kept = match (factors.as_deref_mut(), view.is_none()) {
                         (Some(f), true) => Some(f.diag_log_det(c, nc, cov, ridge, k)),
                         _ => None,
@@ -3257,5 +3284,79 @@ mod tests {
         let out = m.step(&[0.0, 0.0], &[None], 1.0, 1.0);
         assert!(out.pred.iter().all(|v| v.is_nan()), "{out:?}");
         assert_eq!(m.solve_failures, 1);
+    }
+
+    /// Under a window, the ridge each class's covariance takes is the
+    /// window's: the same rows learned by a fresh model, with no decay, give
+    /// the same class probabilities, under every covariance. `shared` and
+    /// `diag` read the ridge off the accumulators of the whole history, and
+    /// every view's ridge was the whole history's share `s`, where the
+    /// window's is `s·W / W_R`: after 394 rows aged out of a window of 6,
+    /// `full` read 0.99 for the class a fresh model reads at 0.50 (review
+    /// 2026-11-23, COV-3; rule 5's thirty-second exception).
+    #[test]
+    fn a_window_reads_the_ridge_its_own_rows_give() {
+        let (k, nc, width) = (2, 2, 6usize);
+        let mut s = 11u64;
+        let rows: Vec<(Vec<f64>, usize)> = (0..400)
+            .map(|i| {
+                let c = i % nc;
+                let at = if c == 0 { -0.5 } else { 0.5 };
+                (vec![at + 0.3 * lcg(&mut s), 0.4 * lcg(&mut s)], c)
+            })
+            .collect();
+        for covariance in [Covariance::Full, Covariance::Shared, Covariance::Diagonal] {
+            let mut c = cfg(k, nc, covariance);
+            c.decay = Decay::Halflife(f64::INFINITY);
+            c.precision_prior = 1.0;
+            let mut windowed = c.clone();
+            windowed.window = Some(width as f64);
+            let mut m = EwClass::new(windowed).unwrap();
+            for (x, label) in &rows {
+                m.step(x, &[Some(*label as f64)], 1.0, 1.0);
+            }
+            let mut fresh = EwClass::new(c).unwrap();
+            for (x, label) in &rows[rows.len() - width..] {
+                fresh.step(x, &[Some(*label as f64)], 1.0, 1.0);
+            }
+            let probe = [0.1, 0.05];
+            let got = m.predict(&probe, 1.0).pred;
+            let want = fresh.predict(&probe, 1.0).pred;
+            assert_eq!(got[0], want[0], "{covariance:?}: {got:?} against {want:?}");
+            for (g, w) in got[1..].iter().zip(&want[1..]) {
+                assert!(
+                    (g - w).abs() <= 1e-9,
+                    "{covariance:?}: {got:?} against {want:?}"
+                );
+            }
+        }
+    }
+
+    /// A feature that holds one value inside a class has no variance there,
+    /// and past about 1,075 half-lives the decaying ridge is 0 too: `diag`
+    /// read `0/0` for that feature on every row after, and reported nothing
+    /// for good (review 2026-11-23, COV-3). It takes the jitter the other
+    /// two covariances' factorization takes, `1e-12` of the mean variance.
+    #[test]
+    fn a_class_constant_feature_scores_after_the_ridge_has_faded() {
+        let (k, nc) = (2, 2);
+        let mut c = cfg(k, nc, Covariance::Diagonal);
+        c.decay = Decay::Halflife(1.0);
+        let mut m = EwClass::new(c).unwrap();
+        let mut s = 3u64;
+        let mut last = Vec::new();
+        for i in 0..1200 {
+            let label = i % nc;
+            // Feature 1 is 0 on every row of class 0.
+            let x = [
+                label as f64 + 0.3 * lcg(&mut s),
+                if label == 0 { 0.0 } else { lcg(&mut s) },
+            ];
+            last = m.step(&x, &[Some(label as f64)], 1.0, 1.0).pred;
+        }
+        assert_eq!(m.ridge(0), 0.0, "the ridge has faded");
+        assert!(last.iter().all(|v| v.is_finite()), "{last:?}");
+        let at_zero = m.predict(&[0.0, 0.0], 1.0).pred;
+        assert_eq!(at_zero[0], 0.0, "{at_zero:?}");
     }
 }

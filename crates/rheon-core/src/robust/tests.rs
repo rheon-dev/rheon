@@ -3428,3 +3428,22 @@ fn a_quantile_refit_inside_the_warm_up_names_the_least_count() {
         with(k, least).validate().unwrap();
     }
 }
+
+/// After a gap that forgot the history (`lam = 0`) each target's mean is
+/// the new row's, not 0: a row at `1e18` then rows at 1 (review 2026-11-23,
+/// REG-7). Both losses.
+#[test]
+fn a_gap_that_forgot_the_history_leaves_the_targets_mean_at_the_row() {
+    for loss in [
+        RobustLoss::Huber { delta: 1.5 },
+        RobustLoss::Quantile { tau: 0.5 },
+    ] {
+        let mut c = cfg(1, 1, loss);
+        c.decay = Decay::Halflife(1.0);
+        c.min_weight = 0.0;
+        let mut m = Robust::new(c).unwrap();
+        m.step(&[1e18], &[Some(1e18)], 0.0, 1.0);
+        m.step(&[1.0], &[Some(1.0)], 10_000.0, 1.0);
+        assert_eq!((m.ybar[0], m.ybar_lo[0]), (1.0, 0.0), "{loss:?}");
+    }
+}
