@@ -556,6 +556,13 @@ impl Product {
         if m >= Self::DOWN {
             self.0 = m;
             self.1 += 1;
+        } else if lam >= f64::MIN_POSITIVE {
+            // A normal factor below `2⁻⁵¹²` on a product near `2⁻⁵¹²`: scaled
+            // twice, each scaling exact, the product rounded once and at
+            // least `2⁻⁵¹⁰` (review 2026-11-23, CWIN-1: it forgot, so a
+            // window's snapshot read a factor of 0 for one of `2⁻⁵¹³`).
+            self.0 = (self.0 * Self::UP) * (lam * Self::UP);
+            self.1 += 2;
         } else {
             // A factor below about `2⁻¹⁰²⁴` on one row: what came before
             // it is gone, as `factor` over a span holding it underflows.
@@ -2031,6 +2038,57 @@ mod tests {
             assert_eq!(q.since(before), 0.0, "{tiny:e}");
             assert!(q.0 >= Product::DOWN && q.0 <= 1.0);
         }
+    }
+
+    /// CWIN-1 (the 2026-11-23 review, PLAN 578d): a normal factor taken by a
+    /// product just above `2⁻⁵¹²` is kept. One scaling by `2⁵¹²` leaves the
+    /// product below `2⁻⁵¹²` when the factor is below `2⁻⁵¹²` too, and the
+    /// product forgot: `since` read 0 where the factor, `2⁻⁵¹³` here, is a
+    /// weight a window subtracts (a snapshot's history then stayed in the
+    /// window). Every value a power of two times 3, so the products are
+    /// exact.
+    #[test]
+    fn a_normal_factor_below_the_scaling_is_kept() {
+        for lam in [
+            2f64.powi(-513),
+            2f64.powi(-700),
+            2f64.powi(-1000),
+            f64::MIN_POSITIVE,
+        ] {
+            let mut p = Product::ONE;
+            p.take(0.75 * 2f64.powi(-511));
+            let then = p;
+            p.take(lam);
+            assert_eq!(p.since(then), lam, "{lam:e}");
+            assert!(p.0 >= Product::DOWN && p.0 <= 1.0, "{p:?}");
+            // And it goes on: a further factor is the product of both.
+            let mid = p;
+            p.take(0.5);
+            assert_eq!(p.since(mid), 0.5);
+            assert_eq!(p.since(then), lam * 0.5, "{lam:e}");
+        }
+    }
+
+    /// CWIN-3 (the 2026-11-23 review, PLAN 578d), confirmed and held for the
+    /// user: the window's mean as `(w_now·m − f·w_old·m_old) / w` loses the
+    /// digits of the level, not of the spread. At a level of `1e8`, a window
+    /// holding 1% of the weight reads `100000001.30000068` where the
+    /// expression of these doubles is `100000001.30000053` (Python's
+    /// `fractions`, exact), 1.5e-7 off; the centred `m + (f·w_old/w)(m −
+    /// m_old)` reads it to 1e-14. The fix moves every windowed `ewridge` and
+    /// `lasso` read by more than 5 ulps, so it waits on the user, and this
+    /// test fails (`should_panic`) until it lands.
+    #[test]
+    #[should_panic(expected = "off the window's mean")]
+    fn a_truncated_mean_keeps_the_spreads_digits_at_a_level() {
+        let (w, m) = truncated_scalar(1.0, 1e8 + 0.31, 1.1, 1e8 + 0.3, 0.9).unwrap();
+        assert!(w > 0.0);
+        let want = 100_000_001.300_000_53;
+        assert!(
+            (m - want).abs() <= 1e-9,
+            "{m} is {:e} off the window's mean",
+            m - want
+        );
     }
 
     /// A factor that forgets, taken by a product that has never scaled,

@@ -116,6 +116,9 @@ impl Windows {
                 && g.waiting.iter().all(|w| is_held(w.seq))
                 && g.pending.iter().all(|&s| is_held(s))
                 && (!g.linked || g.last_raw.is_some())
+                // The policy time is a finite distance from the stretch's
+                // origin (review 2026-11-23, WIN-11 and WIN-9).
+                && g.tau.is_finite()
                 && profile::fits(&self.profiles, &g.profile);
             if !fits {
                 return Err(format!("group {gi} does not fit its kernels and held rows"));

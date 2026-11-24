@@ -282,3 +282,45 @@ fn a_clock_window_trims_every_row_that_has_left() {
     m.step(&[], &[None], 18.25, 1.0);
     assert_eq!(m.window_rows(), 0);
 }
+
+/// HAWKES-7 (the 2026-11-23 review, PLAN 578d): a window of events holds
+/// its newer block's times from the block's start, which only the forming
+/// of an older block moved. After a quiet stretch of `1e16` the newer
+/// rows' times were `1e16 + dt`, and their gaps of 0.25 rounded away when
+/// they became the older block: the observation `G₀₀` read 0, the solve
+/// failed, and every intensity was NaN. The same events after a quiet
+/// stretch of 100, where the kernels' `e^(−2·100)` is as nothing, are the
+/// reference: once the window's dropped row is past the stretch (from row
+/// 6), its fit over the last two events is the one after `1e16`.
+///
+/// Confirmed; the fix (the older block's times moved to the newer block's
+/// first row) moves ordinary windowed fits past 5 ulps, so it waits on the
+/// user, and this test fails until it lands.
+#[test]
+#[should_panic(expected = "against")]
+fn a_window_of_events_after_a_long_quiet_stretch_keeps_their_gaps() {
+    let run = |quiet: f64| {
+        let mut m = Hawkes::new(HawkesCfg {
+            window_events: Some(2),
+            ..cfg(1, &[2.0])
+        })
+        .unwrap();
+        let mut out = Vec::new();
+        for d in [0.0, 1.0, 1.0, quiet, 0.25, 0.5, 0.25, 0.75] {
+            out.push(m.step(&[], &[Some(1.0)], d, 1.0).pred);
+        }
+        (out, m.g0)
+    };
+    let (far, g_far) = run(1e16);
+    let (near, g_near) = run(100.0);
+    assert!(g_far > 0.0 && g_far == g_near, "{g_far} against {g_near}");
+    for (i, (a, b)) in far.iter().zip(&near).enumerate().skip(6) {
+        for (x, y) in a.iter().zip(b) {
+            assert!(
+                x.is_nan() == y.is_nan()
+                    && (x.is_nan() || (x - y).abs() <= 1e-9 * y.abs().max(1.0)),
+                "row {i}: {a:?} against {b:?}"
+            );
+        }
+    }
+}

@@ -755,6 +755,16 @@ pub enum Refusal {
         row_bytes: usize,
         cap: u64,
     },
+    /// A number clock's distance from its stretch's first row, `origin`, to
+    /// this row, `now`, is past the largest double, each step being finite:
+    /// the policy time a window's edges and masses are read from has no
+    /// value (review 2026-11-23, WIN-9). As [`Refusal::OverCap`], the row is
+    /// taken, the run is refused, and the core is not to be fed again.
+    Span {
+        seq: u64,
+        origin: ClockValue,
+        now: ClockValue,
+    },
 }
 
 /// A segment's sums and how two are joined, in a module of their own.
@@ -1292,7 +1302,16 @@ impl Queue {
             }
             for (j, q) in self.quant.iter_mut().enumerate() {
                 if let Some(q) = q {
-                    q.pop(top, self.front.x::<W>(top, j));
+                    let x = self.front.x::<W>(top, j);
+                    q.pop(top, x);
+                    // Looking ahead, the rows left are seen from the one that
+                    // went: made again from the oldest of them once that is
+                    // too far back to read them (WIN-2).
+                    if !x.is_nan() && k.direction == Direction::Forward && q.faded() {
+                        let front = &self.front;
+                        let tau: Vec<f64> = (0..top).rev().map(|i| front.tau[i]).collect();
+                        q.rebuild_front(k, &tau, |i| front.x::<W>(top - 1 - i, j));
+                    }
                 }
             }
             self.ext.iter_mut().flatten().for_each(XSide::pop);
@@ -1767,6 +1786,8 @@ mod cross;
 mod empty_sum_tests;
 #[cfg(test)]
 mod extrema_tests;
+#[cfg(test)]
+mod far_tests;
 mod held_mass;
 #[cfg(test)]
 mod int_clock_tests;
@@ -2361,6 +2382,9 @@ impl Windows {
             // row exactly one window later landed on either side of the
             // edge by the sum's noise (review R1, C2).
             g.tau = elapsed(now, origin);
+            if !g.tau.is_finite() {
+                return Err(Refusal::Span { seq, origin, now });
+            }
         } else {
             g.tau += own.d_clock;
             if g.origin.is_none() {
@@ -3614,7 +3638,7 @@ mod tests {
         assert_ne!(head, tail, "two groups listed");
         let fit = "does not fit";
         type Damage<'a> = (&'a str, &'a dyn Fn(&mut Windows));
-        let damage: [Damage; 23] = [
+        let damage: [Damage; 24] = [
             ("names kernel", &|c| {
                 Arc::make_mut(&mut c.ops)[0].kernel = 99
             }),
@@ -3645,6 +3669,8 @@ mod tests {
                 c.groups[pending].pending[0] = c.held_first.wrapping_sub(1);
             }),
             (fit, &|c| c.groups[head].last_raw = None),
+            // A policy time past the largest double (review 2026-11-23, WIN-9).
+            (fit, &|c| c.groups[0].tau = f64::INFINITY),
             ("open windows", &|c| c.held_meta[c.ready].open += 1),
             ("silent list", &|c| c.head = Some(c.groups.len())),
             ("silent list", &|c| c.groups[tail].next_link = Some(head)),

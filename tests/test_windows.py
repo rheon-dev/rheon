@@ -3542,3 +3542,55 @@ def test_like_a_weighted_spec_nulls_the_windows_ahead_of_the_rows_it_skips(
         assert lent[name].equals(want), name
     # Evidence the rule acted: windows the spelled-out call gives a value.
     assert sum(own[name][i] is not None for name in ahead for i in skipped) > 100
+
+
+# --------------------------------------------------------------------------
+# The 2026-11-23 review (PLAN 578d)
+
+
+def test_a_mean_ahead_one_step_long_on_a_grid_holds_only_its_far_edge() -> None:
+    """WIN-3, the rule kept and now written down: looking ahead, a row holds
+    its value from its own stamp to the next row's, so on a regular grid a
+    window one step long under ``"right"`` holds only the row on its far
+    edge, whose interval starts there, and the mean is null; three steps
+    long it weighs the two rows whose intervals lie inside. The mean of the
+    rows themselves, each weighing 1, is a ratio of two sums."""
+    df = pl.DataFrame({"t": [float(i) for i in range(6)], "x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]})
+    out = rp.stream.with_windows(
+        df,
+        one=rp.ewm_mean("x", half_life=math.inf, window_size=1.0, reverse=True),
+        three=rp.ewm_mean("x", half_life=math.inf, window_size=3.0, reverse=True),
+        rows=rp.ewm_sum("x", half_life=math.inf, window_size=3.0, reverse=True)
+        / rp.ewm_sum(pl.lit(1.0), half_life=math.inf, window_size=3.0, reverse=True),
+        **CLOCK,
+    )
+    assert out["one"].to_list() == [None] * 6
+    assert out["three"].to_list() == [2.5, 3.5, 4.5, None, None, None]
+    assert out["rows"].to_list()[:3] == [3.0, 4.0, 5.0]
+
+
+@pytest.mark.parametrize("closed", ["right", "both"])
+def test_a_saved_run_returns_the_last_stamps_rows(tmp_path: Any, closed: str) -> None:
+    """WIN-6, not reproduced: under ``save_state`` the windows looking back
+    that wait on the last stamp are read as they stand when the input ends,
+    so a saved run returns every row a run without a state returns, the
+    rows at the last stamp included, to the bit."""
+    df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 2.0], "x": [1.0, 2.0, 3.0, 4.0]})
+    y = {"m": rp.ewm_mean("x", half_life=1.0, window_size=5.0, closed=closed)}
+    saved = rp.stream.with_windows(df, **y, save_state=tmp_path / "w.state", **CLOCK)
+    whole = rp.stream.with_windows(df, **y, **CLOCK)
+    assert saved.height == 4
+    assert saved.equals(whole)
+
+
+def test_a_clock_past_the_largest_double_from_its_windows_start_is_refused() -> None:
+    """WIN-9: every step of ``t`` is finite, but from the first row the third
+    is ``2e308`` on, past the largest double; the windows read nothing from
+    there and the state saved there was refused as damaged. The row is
+    refused by name; from an origin at 0 the same clock runs on."""
+    df = pl.DataFrame({"t": [-1e308, 0.0, 1e308], "x": [10.0, 20.0, 30.0]})
+    y = {"m": rp.ewm_mean("x", half_life=10.0, window_size=50.0)}
+    with pytest.raises(_REFUSAL, match=r'clock column "t" has run from .* at row 2 .*largest float'):
+        rp.stream.with_windows(df, **y, clock="t", gap_cap=1e308)
+    near = pl.DataFrame({"t": [0.0, 1e308, 1.5e308], "x": [10.0, 20.0, 30.0]})
+    assert rp.stream.with_windows(near, **y, clock="t", gap_cap=1e308).height == 3

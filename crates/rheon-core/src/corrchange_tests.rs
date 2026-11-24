@@ -2798,8 +2798,9 @@ fn the_scalar_change_is_dated_by_eq_8() {
 /// after the means and the squared deviations, are [`CorrChange::corr_of`]'s
 /// for each pair in the pairs' order, to the bit: on correlated columns,
 /// one pair of them negatively; on two columns whose spreads are each a
-/// number but whose product underflows to 0, where there is no
-/// correlation to read, NaN and not the `±inf` of a sum over 0; and on
+/// number but whose product underflows to 0, their correlation, read from
+/// the two roots apart (it was NaN, as if there were none to read; review
+/// 2026-11-23, CWIN-2); and on
 /// a column that is exactly `3 − 2x` of another, whose correlation is
 /// `−1` by the definition.
 #[test]
@@ -2852,7 +2853,15 @@ fn a_windows_correlations_are_each_pairs_own() {
     assert!(m.window_corr(w, |i| &windows[0][i])[6] < -0.3);
     let tiny = m.window_corr(w, |i| &windows[1][i]);
     assert!(tiny[3] > 0.0 && tiny[4] > 0.0 && tiny[3] * tiny[4] == 0.0);
-    assert!(tiny[6].is_nan() && tiny[7].is_finite());
+    let back: Vec<Vec<f64>> = windows[1]
+        .iter()
+        .map(|r| vec![r[0] * 1e90, r[1] * 1e90, r[2]])
+        .collect();
+    let want = m.window_corr(w, |i| &back[i])[6];
+    assert!(
+        (tiny[6] - want).abs() <= 1e-12 && tiny[7].is_finite(),
+        "{tiny:?} {want}"
+    );
     let line = m.window_corr(w, |i| &windows[2][i])[6];
     assert!((line + 1.0).abs() < 1e-12, "{line}");
 }
@@ -3994,5 +4003,67 @@ fn the_merged_windows_keep_the_window_kinds_rules() {
             );
         }
         assert_eq!(with.ring_rows, rows.len() as u64);
+    }
+}
+
+/// CWIN-2 (the 2026-11-23 review, PLAN 578d): a correlation is free of its
+/// columns' units, so every kind reads the same statistic and critical
+/// value from rows scaled by `1e80` or by `1e-85` as from the rows
+/// themselves. Each denominator was `√(S_aa S_bb)` formed as the root of
+/// the product, which overflows at the first scale (`S` near `1e160`, the
+/// statistic 0) and underflows at the second (NaN).
+#[test]
+fn every_kind_is_free_of_its_columns_scale_at_the_ends_of_the_doubles() {
+    let kinds = [
+        CorrChangeCfg {
+            span_rows: 19,
+            n_perm: 40,
+            permute_every_rows: 9,
+            ..cfg(3, CorrChangeKind::Window)
+        },
+        CorrChangeCfg {
+            span_rows: 120,
+            n_perm: 40,
+            permute_every_rows: 9,
+            ..cfg(3, CorrChangeKind::Window)
+        },
+        CorrChangeCfg {
+            span_rows: 60,
+            ..cfg(3, CorrChangeKind::Monitor)
+        },
+        seq_cfg(3, 60, 120, 0.0),
+    ];
+    let mut n = Normals::new(23);
+    let rows: Vec<Vec<f64>> = (0..400)
+        .map(|i| {
+            let mut r = n.pair(if i % 150 < 75 { 0.1 } else { 0.8 });
+            r.push(n.normal());
+            r
+        })
+        .collect();
+    for c in kinds {
+        let run = |s: f64| -> Vec<Vec<f64>> {
+            let mut m = CorrChange::new(c.clone()).unwrap();
+            rows.iter()
+                .map(|r| {
+                    let r: Vec<f64> = r.iter().map(|v| v * s).collect();
+                    m.step(&r, &[], 1.0, 1.0).pred
+                })
+                .collect()
+        };
+        let base = run(1.0);
+        let valued = base.iter().flatten().filter(|v| v.is_finite()).count();
+        assert!(valued > 20, "{:?}: {valued} values", c.kind);
+        for s in [1e80, 1e-85] {
+            for (i, (a, b)) in run(s).iter().zip(&base).enumerate() {
+                for (x, y) in a.iter().zip(b) {
+                    assert!(
+                        x.is_nan() && y.is_nan() || (x - y).abs() <= 1e-9 * y.abs().max(1.0),
+                        "{:?} at a scale of {s:e}, row {i}: {a:?} against {b:?}",
+                        c.kind
+                    );
+                }
+            }
+        }
     }
 }

@@ -921,6 +921,39 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **The window operators far from their rows, and their state** (review
+  2026-11-23, PLAN 578d). An `ewm_quantile` window's sketch, made when its
+  rows turn over, was anchored at its end row whether that row held a
+  value or not, and its weights are discounts from the anchor: past 1074
+  half-lives from a null end row the rows with values weighed 0 and the
+  quantile was null (WIN-2). It is anchored at the nearest row with a
+  value, and a window looking ahead whose anchor row has left, leaving
+  rows weighing less than `2^-64` of it, is made again from the oldest of
+  them. A number clock whose every step is finite but whose distance from
+  its windows' first row passes the largest double is refused at that row
+  by name; its windows read nothing from there and the state it saved was
+  refused as damaged (WIN-9). A window run's state whose increment lists do
+  not fit its call, or that holds two states for one group, is refused as
+  damaged at its load; a short list panicked at the next row (WIN-11). A
+  quantile's state is checked for the weights a row's removal puts back
+  and for a weight with no anchor (WIN-7). On the suite's long-window and
+  definition streams no output moves by a bit.
+
+- **A running product of decays keeps a normal factor below `2^-512`**
+  (review 2026-11-23, CWIN-1). Taken by a product just above `2^-512`, one
+  exact scaling by `2^512` left it under `2^-512`, and the product forgot
+  everything before it: a window's snapshot then read a factor of 0 for
+  one of `2^-513`, and an emptied window kept its history. Two scalings
+  keep it; a subnormal factor still forgets.
+
+- **A correlation of columns near `1e80` or `1e-85` is read** (review
+  2026-11-23, CWIN-2). `corrchange`'s statistic, its critical value and its
+  window sums formed `√(S_aa S_bb)` as the root of the product, which
+  overflowed (every correlation 0, so 0 against a critical value of 0) or
+  underflowed (NaN). Where the product is not a normal double the two
+  roots are taken apart; elsewhere the bits are as before. Moves:
+  `corrchange.stat`, `corrchange.crit`.
+
 - **`power_variation`'s normalized terms scale by the returns' weight, and
   `n` is Kish's count under a window too** (Fable's W13 review, B1 and B2,
   as `realized` was fixed). `normalize` multiplied a term of powers `p` by

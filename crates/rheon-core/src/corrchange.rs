@@ -1324,8 +1324,7 @@ impl CorrChange {
             vbb += db * db;
             vab += da * db;
         }
-        let den = (vaa * vbb).sqrt();
-        if den > 0.0 { vab / den } else { f64::NAN }
+        crate::window_moments::pair_corr(vab, vaa, vbb)
     }
 
     /// `D̂`, the delta-method long-run standard deviation of `ρ̂` over the
@@ -1735,16 +1734,11 @@ impl CorrChange {
             for bb in (a + 1)..d {
                 let m2b = mon.m2[bb] + dev[bb] * (row[bb] - mean[bb]);
                 let c = mon.cross[idx] + dev[a] * (row[bb] - mean[bb]);
-                let den = (m2a * m2b).sqrt();
                 // A correlation's rounding can put it a hair past `±1`, where
                 // `atanh` has no value: it is `±1` there, `z` infinite, and a
                 // period whose rows are collinear where the history's were
                 // not has changed.
-                let rho = if den > 0.0 {
-                    (c / den).clamp(-1.0, 1.0)
-                } else {
-                    f64::NAN
-                };
+                let rho = crate::window_moments::pair_corr(c, m2a, m2b).clamp(-1.0, 1.0);
                 let level = mon.level[idx];
                 let z = libm::atanh(rho) - mon.z_level[idx];
                 let ratio = (factor * z.abs() * (1.0 - level * level) / mon.scale[idx]) / w;
@@ -1803,8 +1797,7 @@ impl CorrChange {
                     saa += da * (r[a] - ma);
                     sbb += db * (r[b] - mb);
                     sab += da * (r[b] - mb);
-                    let den = (saa * sbb).sqrt();
-                    if den > 0.0 { sab / den } else { f64::NAN }
+                    crate::window_moments::pair_corr(sab, saa, sbb)
                 })
                 .collect()
         };
@@ -2137,8 +2130,7 @@ impl CorrChange {
         let mut p = 0;
         for a in 0..d {
             for b in (a + 1)..d {
-                let den = (ss[a] * ss[b]).sqrt();
-                corr[p] = if den > 0.0 { corr[p] / den } else { f64::NAN };
+                corr[p] = crate::window_moments::pair_corr(corr[p], ss[a], ss[b]);
                 p += 1;
             }
         }
