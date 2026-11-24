@@ -564,6 +564,21 @@ impl AnyModel {
         }
     }
 
+    /// Whether the row's report was withheld because its events do not
+    /// identify the fit, read from the step's own report: `hawkes`'
+    /// intensities, not numbers with its weight at `min_weight`, where its
+    /// least-squares system was singular or too near it -- a node with no
+    /// excitation over the observation, as before its first event or in a
+    /// window that holds none of its events, or two terms the events cannot
+    /// tell apart (`rheon_core::Hawkes::not_identified`). Every other model
+    /// that waits so names its wait before the step ([`Self::own_wait`]).
+    pub fn not_identified_by_its_row(&self, step: &rheon_core::Step) -> bool {
+        match self {
+            AnyModel::Hawkes(m) => m.not_identified(step),
+            _ => false,
+        }
+    }
+
     /// Whether a slot's fit is withheld because the system it was solved
     /// from is past the condition at which a solve keeps a digit:
     /// `ewridge`'s, whose normal equations can factorize past it
@@ -1469,7 +1484,9 @@ pub enum OwnWait {
 /// `unstable_rate` after it (task 278, D8), `sgd`'s gate, which no model
 /// with an earlier reason of its own has; `not_identified` after that (PLAN
 /// 548), `garch`'s wait for a start whose rows tell its variance process
-/// from a constant one, which comes after its own warm-up;
+/// from a constant one, which comes after its own warm-up, and (HAWKES-7's
+/// finding beside it) a `hawkes` fit its events do not identify, read from
+/// the row's own report;
 /// `scale_ratio_moved` last (PLAN 553), `corrchange`'s flag withheld where
 /// the correlation's CUSUM is off its null law because the two columns'
 /// scale ratio moved, which no model with an earlier reason has;
@@ -4268,6 +4285,7 @@ fn run_instance(
     let waits = inst.model.get().waits();
     let is_dcc = matches!(inst.model.get(), AnyModel::Dcc(_));
     let is_corrchange = matches!(inst.model.get(), AnyModel::CorrChange(_));
+    let is_hawkes = matches!(inst.model.get(), AnyModel::Hawkes(_));
     let is_pca = matches!(inst.spec.model, ModelKind::Pca { .. });
     let has_levels = matches!(
         inst.model.get(),
@@ -4587,6 +4605,7 @@ fn run_instance(
         let n_slots = step.pred.len();
         // Read from the step's own report, before a gate below nulls it.
         let ratio_moved = is_corrchange && inst.model.get().withheld_by_its_row(&step.pred);
+        let unidentified = is_hawkes && inst.model.get().not_identified_by_its_row(step);
         // `ew_cov` has no targets; its slots are statistics, so every one
         // maps to "target 0" for the warmup check. Slot `s` belongs to target
         // `s / nc`; the passes below walk the slots in groups of `nc` rather
@@ -4733,6 +4752,11 @@ fn run_instance(
         // read names both.
         if reason == 0 {
             reason = own_reason;
+        }
+        // So, read from the row's own report, for a `hawkes` fit its events
+        // do not identify, which no gate above withheld.
+        if reason == 0 && unidentified {
+            reason = REASON_NOT_IDENTIFIED;
         }
         // A fit withheld because its system was past the condition at which
         // a solve keeps a digit, where no gate above has withheld the row.

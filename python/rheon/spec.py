@@ -468,7 +468,9 @@ releases none. A regression writes, with ``<t>`` a target:
     start whose rows do not yet tell its variance process from a constant
     variance, or a ``dcc`` start whose rows do not tell its correlation's
     recursion from constant correlation, so it buffers more rows before it
-    reports; each builder's docstring has the test. ``scale_ratio_moved`` is a
+    reports; each builder's docstring has the test. It is also a ``hawkes``
+    fit its events do not identify: a node with no excitation over the
+    observation, or two terms the events cannot tell apart. ``scale_ratio_moved`` is a
     ``corrchange`` span whose correlation statistic passed its critical
     value while the two columns' scale ratio moved inside it, where the
     statistic is off its null law: its ``flag`` is null; the
