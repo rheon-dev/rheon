@@ -204,7 +204,9 @@ class TestNullPolicy:
         # `settled_frac` is read before the row's step, so the row after the
         # null target's has counted its step and the zero-weight one's not.
         assert_frame_equal(a.select("settled_frac")[1:], b.select("settled_frac")[1:], **near)
-        lam = 0.5 ** (1.0 / 200.0)  # the rows are one clock unit apart
+        # The rows are one clock unit apart; a kind that decays nothing
+        # (`decays`) keeps the row's weight whole.
+        lam = 0.5 ** (1.0 / 200.0) if decays(model) else 1.0
         more = a["weight_sum"].to_numpy() - b["weight_sum"].to_numpy()
         # From the row after next, for the same reason as `settled_frac`.
         np.testing.assert_allclose(more[1:], lam ** np.arange(1, len(more)), rtol=1e-9)

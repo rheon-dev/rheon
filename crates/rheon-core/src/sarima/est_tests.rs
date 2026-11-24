@@ -211,6 +211,44 @@ const PSI_SHAPE: Shape = Shape {
 
 const PSI_PAR: [f64; 6] = [0.7, -0.4, 0.5, 0.3, 0.4, -0.5];
 
+/// A null target learns nothing from its row: with a difference and a
+/// feature, before the start and after it, a row whose target is null
+/// leaves every later prediction and the fit to the bit as the same row at
+/// weight 0 does. Its features enter its estimator as unknown and its
+/// value in the ring is NaN, as a skipped slot's.
+#[test]
+fn a_null_target_leaves_the_state_a_zero_weight_row_leaves() {
+    let (order, seasonal) = ([1, 1, 0], [0, 0, 1, 4]);
+    let mut truth = params(&[0.4], &[], &[], &[-0.4], 0.7);
+    truth.exog = vec![1.5];
+    let n = 600;
+    let mut rng = 8;
+    let x: Vec<f64> = (0..n).map(|_| normal(&mut rng)).collect();
+    let ys = simulate(order, seasonal, &truth, &x, n, 21);
+    for at in [20, 450] {
+        let mut null = Sarima::new(estimated(order, seasonal, 1)).unwrap();
+        let mut zero = Sarima::new(estimated(order, seasonal, 1)).unwrap();
+        let (mut a, mut b) = (Step::default(), Step::default());
+        for t in 0..n {
+            let y = (t != at).then_some(ys[t]);
+            let w = if t == at { 0.0 } else { 1.0 };
+            null.step_into(&x[t..t + 1], &[y], 1.0, 1.0, &mut a);
+            zero.step_into(&x[t..t + 1], &[Some(ys[t])], 1.0, w, &mut b);
+            if t > at {
+                assert_eq!(
+                    a.pred[0].to_bits(),
+                    b.pred[0].to_bits(),
+                    "row {t}, null at {at}"
+                );
+            }
+        }
+        assert!(null.params(0).is_some(), "the start never opened");
+        assert_eq!(null.params(0), zero.params(0));
+        assert_eq!(null.est, zero.est);
+        assert_eq!(null.series[0].ys.len(), zero.series[0].ys.len());
+    }
+}
+
 /// The start's gradient is exact: the conditional sum of squares'
 /// gradient, `-2 sum w e psi`, against its central difference, at a
 /// seasonal spec with regressors, missing slots and a regressor not known.

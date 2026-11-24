@@ -50,7 +50,10 @@
 //!   positions stay aligned. A row of weight 0 keeps nothing of its own,
 //!   its features included: with regressors, its value in the ring is NaN,
 //!   as a skipped slot's, and the rows whose differencing reads it report
-//!   none.
+//!   none. Where the parameters are estimated, a target null on the row
+//!   keeps nothing of the row either: its estimator takes the slot's
+//!   features as unknown, and with regressors its value in the ring is
+//!   NaN, so a null target and a row of weight 0 leave the same state.
 //! - A clock step of `n` slots (`d_clock / spacing`, rounded) leaves the
 //!   `n - 1` slots between unobserved, predicted through the same way. A
 //!   skipped slot has no features, so with regressors its value is NaN,
@@ -900,9 +903,19 @@ impl Sarima {
         let kept = learns || self.cfg.n_features == 0;
         if self.cfg.estimate.is_some() {
             let xw = self.known_xw();
+            // A target not observed on the row learns nothing from it: the
+            // slot keeps nothing of the row for that target (its features
+            // enter its estimator as unknown, and no prediction formed from
+            // them takes its value's place), as a skipped slot or a row of
+            // weight 0 does. A row no target observes keeps none of its
+            // features, so it leaves the state a row of weight 0 leaves.
+            let mut any = false;
             for (j, target) in y.iter().enumerate() {
-                let yj = target.filter(|_| learns && self.over.is_none());
-                let y_hat = self.est_slot(j, yj, weight, xw.as_deref(), learns, kept);
+                let observed = learns && target.is_some();
+                any |= observed;
+                let yj = target.filter(|_| observed && self.over.is_none());
+                let fill = observed || self.cfg.n_features == 0;
+                let y_hat = self.est_slot(j, yj, weight, xw.as_deref(), observed, fill);
                 if self.series[j].weight >= floor {
                     out.pred[j] = y_hat;
                 }
@@ -910,7 +923,7 @@ impl Sarima {
                     self.series[j].weight += weight;
                 }
             }
-            self.push_x(learns.then_some(x));
+            self.push_x(any.then_some(x));
             self.n_eff += weight;
             return;
         }
