@@ -1640,9 +1640,9 @@ def loss(
             or not (math.isfinite(n) and n > 3)
         ):
             msg = (
-                f'rheon.corr.loss: kind="z_mse" reads the z\'s sampling variance 1 / (n - 3), so '
-                f"n must be a number above 3, but it is {n!r}. Set n to the number of rows the "
-                "correlations were computed from."
+                f'rheon.corr.loss: kind="z_mse" needs n above 3, the fewest rows at which the '
+                f"z's sampling variance is defined, but it is {n!r}. Set n to the number of rows "
+                "the correlations were computed from."
             )
             raise ValueError(msg)
         iu = np.triu_indices(k, 1)

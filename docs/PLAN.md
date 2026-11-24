@@ -2084,7 +2084,7 @@ Each task: a new option defaults off, so no existing output moves (if one would,
   - [ ] 578e. diagnostics: drift detectors, checks, audit, calibration, conformal, `rp.eval` and metrics (31; Critical DRIFT-4, GLM-METRICS).
   - [ ] 578f. state-space and events: `kalman`, `hmm`, `bocpd`, `hawkes` (23).
   - [ ] 578g. the regressions: `ewridge`, `sgd`, `ftrl`, `huber`/`quantile` and their refits, `holt`, `lasso` and LARS, `constraint`, the Gram merge (22; Critical REG-1, REG-2).
-  - [ ] 578h. covariance and clustering: `ew_cov`, `ew_class`, `rheon.corr`, `marginal`, `micro`, `kmeans`, `deco`, `corrchange`, refresh time, moments (18).
+  - [ ] 578h. covariance and clustering: `ew_cov`, `ew_class`, `rheon.corr`, `marginal`, `micro`, `kmeans`, `deco`, `corrchange`, refresh time, moments (18). *Done on `review-578h`* (the OUTCOMES record's batch h): every finding confirmed; fixed but three left for the user with a `should_panic` test each, MARG-1 (exact windowed lag re-centring, +50% lag state), COV-3 (b) (the window's ridge, which needs rule 5's next exception for the windowed `ew_class` fixtures' continuations) and COV-5 (3) (`rcov`'s short stretches).
   - [ ] 578i. the surfaces and the state file: spec validation, Python, PyO3, envelope and checkpoints, atomic IO, checksum, CLI (28; Critical SPEC-1, STATE-1).
   - [ ] 578j. tests, oracles, CI and docs (18; CI-1..4, TEST-*, DOC-*).
   Each batch ends with a table in `docs/records/REVIEW-2026-11-23-OUTCOMES.md`: ID, verdict (confirmed and fixed / not reproduced, with the test / a decision for the user), commit. The review file moves to `docs/records/` with an index row when the first batch merges.

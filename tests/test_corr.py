@@ -565,7 +565,7 @@ def test_each_loss_reads_only_what_defines_it():
     eye = np.eye(2)
     a = np.array([[1.0, 0.5], [0.5, 1.0]])
     for n in (True, 3, 2, 0.5, float("nan"), float("inf"), "100"):
-        with pytest.raises(ValueError, match="n must be a number above 3"):
+        with pytest.raises(ValueError, match="needs n above 3"):
             corr.loss(a, eye, "z_mse", n=n)  # type: ignore[arg-type]
     assert corr.loss(a, eye, "z_mse", n=3.5) == pytest.approx(np.arctanh(0.5) ** 2 * 0.5)
     for f, r in ((-eye, eye), (eye, -eye), (-eye, -eye)):
