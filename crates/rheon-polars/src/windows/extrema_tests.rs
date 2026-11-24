@@ -334,3 +334,68 @@ fn what_an_extremum_cannot_run_is_refused_by_name() {
     )
     .unwrap();
 }
+
+/// The flush's completeness test gated on `since` (`complete_at`, W13
+/// budgets) against `extrema::complete` itself, at every row of streams
+/// with repeated stamps and events, in every `closed`, with and without a
+/// window: a kernel without `since` never has a queue's `since_off` set, so
+/// the window test alone answers as the extrema's does; with `since` the
+/// two are one call. Both sides of the window's edge are read at each row.
+#[test]
+fn the_flush_completeness_gated_on_since_agrees_with_the_extrema_test() {
+    let closed = [Closed::Right, Closed::Left, Closed::Both, Closed::Neither];
+    let mut checked = [0usize; 2];
+    for seed in 1..4 {
+        let rows = stream(seed, 200);
+        for window in [None, Some(2.0), Some(5.5)] {
+            for &c in &closed {
+                for since in [None, Some(1)] {
+                    let k = kernel(window, c, since);
+                    let ops: Vec<OpDef> = match since {
+                        Some(_) => vec![op(Stat::Max, Partial::Keep, None)],
+                        // A mean under an infinite half-life needs a window.
+                        None => [Stat::Sum, Stat::Max, Stat::Mean]
+                            .into_iter()
+                            .take(if window.is_some() { 3 } else { 2 })
+                            .map(|s| op(s, Partial::Null, None))
+                            .collect(),
+                    };
+                    let mut core = Windows::new(vec![k.clone()], ops, cfg()).unwrap();
+                    for &(t, x, ev) in &rows {
+                        let group = core.group(None);
+                        core.push(&RowIn {
+                            group,
+                            clock: Some(ClockValue::F64(t)),
+                            session: None,
+                            values: &[x, if ev { 1.0 } else { 0.0 }],
+                            accept: true,
+                            lists: &[],
+                        })
+                        .unwrap();
+                        let g = &core.groups[group];
+                        let q = &g.queues[0];
+                        if since.is_none() {
+                            assert_eq!(q.since_off, None, "{k:?}");
+                        }
+                        let w = window.unwrap_or(1.0);
+                        for (tau, off) in [
+                            (g.tau, g.off),
+                            (w, g.off),
+                            (w - 0.25, g.off - 1),
+                            (g.tau + w, g.off + 3),
+                        ] {
+                            assert_eq!(
+                                complete_at(&k, q, tau, off, g.form),
+                                extrema::complete(&k, q, tau, off, g.form),
+                                "{k:?} at tau {tau}, off {off}"
+                            );
+                        }
+                        checked[usize::from(q.since_off.is_some())] += 1;
+                    }
+                }
+            }
+        }
+    }
+    // Both forms of a queue were read: with an event's offset and without.
+    assert!(checked.iter().all(|&n| n > 0), "{checked:?}");
+}

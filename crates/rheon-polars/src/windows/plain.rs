@@ -111,6 +111,10 @@ pub(super) struct Derived {
     pub(super) push_only: bool,
     /// Per kernel, its cap on a group's queue in rows (`extrema::cap_of`).
     pub(super) cap_rows: Vec<Option<usize>>,
+    /// Per kernel, whether the plain loop folds it a block at a time
+    /// ([`fast_kernel`]): asked of every kernel at every group's run, which
+    /// at one row a group is every row.
+    pub(super) fast: Vec<bool>,
     /// Rows the plain loop has taken since the core was built or read back.
     taken: u64,
     bufs: Bufs,
@@ -143,6 +147,9 @@ impl Derived {
             .collect();
         let push_only =
             kernels.iter().any(|k| k.since.is_some()) || cap_rows.iter().any(Option::is_some);
+        let fast = (0..kernels.len())
+            .map(|ki| fast_kernel(&kernels[ki], &members[ki], ops))
+            .collect();
         let of = |d: Direction| {
             (0..kernels.len())
                 .filter(|&ki| kernels[ki].direction == d)
@@ -157,6 +164,7 @@ impl Derived {
             off,
             push_only,
             cap_rows,
+            fast,
             taken: 0,
             bufs: Bufs::default(),
             multi: Multi::default(),
@@ -436,6 +444,9 @@ pub(super) struct Parts<'a> {
     pub(super) moments: &'a [MomentsDef],
     /// The profile operators, after the window operators.
     pub(super) profiles: &'a [super::ProfileDef],
+    /// [`Derived::fast`]: read by the plain loop alone, whose core's
+    /// `Derived` is worked out; empty where it is not.
+    pub(super) fast: &'a [bool],
 }
 
 /// A group a pass over several has met.
@@ -712,6 +723,7 @@ impl Windows {
             scratch_row,
             scratch_sum,
             n_forward,
+            derived,
             ..
         } = &mut *self;
         let seq0 = *next_seq;
@@ -750,6 +762,7 @@ impl Windows {
             n_forward: *n_forward,
             moments: &[],
             profiles: &[],
+            fast: derived.fast.as_slice(),
         };
         let cols = Cols {
             whole: Whole::Slices(rows.values),
@@ -930,14 +943,18 @@ impl Windows {
     /// what a read at its time reads is the sums as they stand.
     #[inline]
     fn queues_at_rest(&self, g: &Group) -> bool {
-        self.kernels
+        #[cfg(debug_assertions)]
+        for (ki, k) in self.kernels.iter().enumerate() {
+            assert_eq!(
+                self.derived.fast[ki],
+                fast_kernel(k, &self.members[ki], &self.ops)
+            );
+        }
+        self.derived
+            .fast
             .iter()
             .zip(&g.queues)
-            .zip(self.members.iter())
-            .all(|((k, q), m)| {
-                !fast_kernel(k, m, &self.ops)
-                    || (q.total_at == g.tau && q.total.len() == q.sum_w() * q.n)
-            })
+            .all(|(&fast, q)| !fast || (q.total_at == g.tau && q.total.len() == q.sum_w() * q.n))
     }
 
     /// A group of the pass's first row of it, if it can continue a plain run:
@@ -1014,6 +1031,7 @@ impl Windows {
             scratch_row,
             scratch_sum,
             n_forward,
+            derived,
             ..
         } = &mut *self;
         let seq0 = *next_seq;
@@ -1039,6 +1057,7 @@ impl Windows {
             n_forward: *n_forward,
             moments: &[],
             profiles: &[],
+            fast: derived.fast.as_slice(),
         };
         let n_inputs = rows.values.len();
         let mut xg = std::mem::take(&mut m.xg);
@@ -1423,7 +1442,10 @@ fn run_group(p: &mut Parts<'_>, g: &mut Group, cols: Cols<'_>, bufs: &mut Bufs, 
     // kernel is taken over the whole block before the next.
     for (ki, k) in p.kernels.iter().enumerate() {
         let m = &p.members[ki];
-        if k.direction == Direction::Forward || (!first && fast_kernel(k, m, p.ops)) {
+        // The kernel's answer, worked out once: the plain loop's tests run
+        // in a debug build, so each of them holds it to the definition.
+        debug_assert_eq!(p.fast[ki], fast_kernel(k, m, p.ops));
+        if k.direction == Direction::Forward || (!first && p.fast[ki]) {
             continue;
         }
         let q = &mut g.queues[ki];
@@ -1586,7 +1608,8 @@ fn run_group(p: &mut Parts<'_>, g: &mut Group, cols: Cols<'_>, bufs: &mut Bufs, 
     };
 
     for (ki, k) in p.kernels.iter().enumerate() {
-        if first || !fast_kernel(k, &p.members[ki], p.ops) {
+        debug_assert_eq!(p.fast[ki], fast_kernel(k, &p.members[ki], p.ops));
+        if first || !p.fast[ki] {
             continue;
         }
         let q = &mut g.queues[ki];

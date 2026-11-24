@@ -2644,6 +2644,7 @@ impl Windows {
                 n_forward: *n_forward,
                 moments: moments.as_slice(),
                 profiles: profiles.as_slice(),
+                fast: derived.fast.as_slice(),
             },
             groups,
         )
@@ -3167,6 +3168,20 @@ fn forward_step(
     g.open[ki] = Some((seq, tau, off));
 }
 
+/// [`extrema::complete`] where kernel `k` can have a `since` event, and its
+/// window test alone where it cannot: only an extremum takes `since`
+/// (`extrema::check_op`), and only a `since` event sets a queue's
+/// `since_off`, so without one the two answer alike. A frame with no
+/// extremum pays nothing of the extrema's test a kernel a flush.
+#[inline(always)]
+fn complete_at(k: &KernelDef, q: &Queue, tau: f64, off: i64, form: OffForm) -> bool {
+    if k.since.is_some() {
+        extrema::complete(k, q, tau, off, form)
+    } else {
+        k.window_size.is_none_or(|w| tau >= w)
+    }
+}
+
 /// Resolve the pending backward windows of group `g` at its stamp: every
 /// kernel that waits for the next stamp is read as the group stands, and the
 /// pending rows are written.
@@ -3204,7 +3219,7 @@ fn flush_in(p: &mut Parts<'_>, g: &mut Group) {
         if !p.moments.is_empty() {
             read_moments(ki, p.ops, m, p.moments, g, tau);
         }
-        let complete = extrema::complete(k, &g.queues[ki], tau, off, form);
+        let complete = complete_at(k, &g.queues[ki], tau, off, form);
         for &seq in &g.pending {
             let held = Held {
                 first: p.held_first,
