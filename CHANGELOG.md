@@ -205,9 +205,10 @@ model that only the new build has is listed as an addition and passes.
   a row clock at weight 1 the predictions are statsmodels'
   `ExponentialSmoothing`'s with the same parameters to the bit on Linux
   x86-64 (nine forms: no, an additive or a multiplicative season, by no,
-  an additive or a damped trend); `ETSModel`'s within 6 ulps for its forms
+  an additive or a damped trend); `ETSModel`'s within 8 ulps for its forms
   without a multiplicative season, whose seasonal update it forms from
-  the new level. A row's phase is read from its raw clock value, in
+  the new level; each seasonal form is held over 50 seeds in the oracle
+  ledger. A row's phase is read from its raw clock value, in
   integers on a temporal or integer clock. A multiplicative season's row
   whose target, or whose level or factor after the update, would be 0 or
   below is predicted and not learned, with the new `withheld_reason`

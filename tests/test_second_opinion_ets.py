@@ -17,14 +17,15 @@ clock.
   rows it reads. The start is the same definition in another order (a least
   squares line by its normal equations, where statsmodels takes NumPy's
   ``pinv``; the moving average summed afresh, where pandas keeps a running
-  sum), and the replay carries that rounding on: measured at most 6 ulps of
-  the prediction over 8 seeds of 600 rows (Linux x86-64), held at 16.
+  sum), and the replay carries that rounding on: measured at most 7 ulps of
+  the prediction over seeds 0-49 of 600 rows (Linux x86-64), held at 16.
 - ``ETSModel`` with the known start, for the forms without a season and with
   an additive one, both error types, whose recursions are one (the error
   type enters the likelihood, not the states): ``smoothing_trend`` is
   ``α·β``. Its additive season is updated from the new level with
   ``γ/(1 − α)``, the same number in another order, so it agrees within a
-  few ulps (measured at most 6 over the same seeds), held at 16. Its
+  few ulps (measured at most 8 over seeds 0-49, the damped trend's), held
+  at 16. Its
   multiplicative season is another recursion, ``γ/(1 − α)·y/l_t`` on the
   new level, where Hyndman's and ``ExponentialSmoothing``'s divide by the
   level carried to the row; ``holt`` is the latter, so that form is held to
@@ -33,10 +34,18 @@ clock.
 What statsmodels cannot compute -- a clock column, rows of other weights, a
 row of weight 0, an uneven clock -- is held to the definitions written out
 below (``_written_out``), and chunking and a save to the bank itself.
+
+The six seasonal forms over seeds 0-49 are the oracle grids
+(``TestFiftySeeds``), recorded in ``oracles.toml`` as
+``second_opinion_ets.*`` (Linux x86-64, 2026-11-24): ``ExponentialSmoothing``
+with the known start 0 ulps in every form; with the heuristic start at most
+4 to 7 ulps by form; ``ETSModel``, additive season, at most 4 (no trend), 6
+(additive) and 8 (damped) ulps under either error type.
 """
 
 from __future__ import annotations
 
+import functools
 import io
 import warnings
 from datetime import datetime, timedelta
@@ -47,6 +56,7 @@ import pytest
 from statsmodels.tsa.exponential_smoothing.ets import ETSModel
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
+import ledger
 from rheon import polars as rp
 
 TIER = "essential"
@@ -191,6 +201,129 @@ def test_the_error_type_does_not_enter_the_ets_recursion(season, trend, damped, 
     params = [ALPHA] + [ALPHA * BETA] * trend + [GAMMA] * bool(season) + [PHI] * damped
     res = model.smooth(np.array(params))
     assert _ulps(pred, np.asarray(res.fittedvalues)) <= 16.0
+
+
+# --- the 50-seed grids, recorded in the oracle ledger ------------------------
+
+GRID_SEEDS = range(50)
+SEASONAL_FORMS = [f for f in FORMS if f[0]]
+#: The forms `ETSModel` computes as `holt` does: an additive season.
+ETS_FORMS = [f for f in SEASONAL_FORMS if f[0] == "add"]
+
+
+def _form(season, trend, damped) -> str:
+    return f"{season}_{'damped' if damped else 'add' if trend else 'none'}"
+
+
+def _heuristic_rows(season) -> int:
+    return 5 * M if season else 10
+
+
+@functools.cache
+def _grid_pred(start: str, season, trend, damped, seed: int) -> np.ndarray:
+    """``holt``'s predictions on seed ``seed``'s 600 rows, from the first
+    row the start predicts."""
+    y = _series(600, season, seed)
+    pred = _fit(_spec(season, trend, damped, start=start), pl.DataFrame({"y": y}))["pred_y"]
+    return pred.to_numpy()[_heuristic_rows(season) if start == "heuristic" else 0 :]
+
+
+ledger.guard(
+    "holtwinters_known",
+    lambda: [_grid_pred("known", *f, s) for f in SEASONAL_FORMS for s in GRID_SEEDS],
+    oracles=["statsmodels"],
+    bits=52,
+)
+ledger.guard(
+    "holtwinters_heuristic",
+    lambda: [_grid_pred("heuristic", *f, s) for f in SEASONAL_FORMS for s in GRID_SEEDS],
+    oracles=["statsmodels"],
+    bits=52,
+)
+ledger.guard(
+    "ets_known",
+    lambda: [_grid_pred("known", *f, s) for f in ETS_FORMS for s in GRID_SEEDS],
+    oracles=["statsmodels"],
+    bits=52,
+)
+
+
+def _ets_smooth(y, season, trend, damped, error) -> np.ndarray:
+    model = ETSModel(
+        y,
+        error=error,
+        trend="add" if trend else None,
+        damped_trend=damped,
+        seasonal=season,
+        seasonal_periods=M if season else None,
+        initialization_method="known",
+        initial_level=50.0,
+        initial_trend=0.2 if trend else None,
+        initial_seasonal=_initial(season) if season else None,
+    )
+    params = [ALPHA] + [ALPHA * BETA] * trend + [GAMMA] * bool(season) + [PHI] * damped
+    return np.asarray(model.smooth(np.array(params)).fittedvalues)
+
+
+class TestFiftySeeds:
+    """Each seasonal form over seeds 0-49 of 600 rows, the largest distance
+    of a seed's predictions from statsmodels' in ulps, recorded in
+    ``oracles.toml`` with a floor at the bound the one-seed tests hold:
+    under it the distance is the platforms' last bits in ``exp2`` and
+    ``pow``, not a difference in the recursion."""
+
+    @pytest.mark.oracle_grid(reason="50 seeds x 6 seasonal forms against ExponentialSmoothing")
+    def test_holtwinters_known(self):
+        worst = {}
+        for f in SEASONAL_FORMS:
+            ulps = [
+                _ulps(
+                    _grid_pred("known", *f, s),
+                    np.asarray(_holtwinters(_series(600, f[0], s), *f).fittedvalues),
+                )
+                for s in GRID_SEEDS
+            ]
+            ledger.record("holtwinters_known", _form(*f), ulps, floor=5.0)
+            worst[_form(*f)] = max(ulps)
+        print(f"ExponentialSmoothing, known start, worst ulps: {worst}")
+        assert max(worst.values()) <= 5.0, worst
+
+    @pytest.mark.oracle_grid(reason="50 seeds x 6 seasonal forms, the heuristic start")
+    def test_holtwinters_heuristic(self):
+        worst = {}
+        for f in SEASONAL_FORMS:
+            n = _heuristic_rows(f[0])
+            ulps = [
+                _ulps(
+                    _grid_pred("heuristic", *f, s),
+                    np.asarray(
+                        _holtwinters(_series(600, f[0], s), *f, start="heuristic").fittedvalues
+                    )[n:],
+                )
+                for s in GRID_SEEDS
+            ]
+            ledger.record("holtwinters_heuristic", _form(*f), ulps, floor=16.0)
+            worst[_form(*f)] = max(ulps)
+        print(f"ExponentialSmoothing, heuristic start, worst ulps: {worst}")
+        assert max(worst.values()) <= 16.0, worst
+
+    @pytest.mark.oracle_grid(reason="50 seeds x 3 additive seasonal forms x 2 errors, ETSModel")
+    def test_ets_known(self):
+        worst = {}
+        for f in ETS_FORMS:
+            for error in ("add", "mul"):
+                ulps = [
+                    _ulps(
+                        _grid_pred("known", *f, s),
+                        _ets_smooth(_series(600, f[0], s), *f, error),
+                    )
+                    for s in GRID_SEEDS
+                ]
+                case = f"{_form(*f)}_{error}_error"
+                ledger.record("ets_known", case, ulps, floor=16.0)
+                worst[case] = max(ulps)
+        print(f"ETSModel, known start, worst ulps: {worst}")
+        assert max(worst.values()) <= 16.0, worst
 
 
 # --- what statsmodels cannot compute: the definitions written out ------------

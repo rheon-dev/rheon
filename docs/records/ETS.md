@@ -369,7 +369,7 @@ most 6 ulps over 8 seeds of 600 rows (held at 16): statsmodels fits the line
 by `pinv` and pandas keeps a running sum for the moving average, `holt`
 solves the normal equations and sums afresh. `ETSModel`, known start, both
 error types: 0-1 ulps without a season, at most 6 with an additive one
-(held at 16), since it updates the season from the new level with `γ/(1 −
+on 8 seeds, 8 on 50 (held at 16), since it updates the season from the new level with `γ/(1 −
 α)`.
 
 **Departures from the design, each with its reason.**
@@ -439,5 +439,28 @@ error types: 0-1 ulps without a season, at most 6 with an additive one
    the macOS writer, as their bytes are macOS's loaded and re-saved. The
    Mac regenerates both crates' sets with `PRINT_STATE_FIXTURES=1` on
    macOS at the merge, so no Mac-only bytes are made here.
-8. *Grids.* No 50-seed grid is in `oracles.toml`; the essentials hold three
-   seeds of each form and the measurements above are from 8.
+8. *Grids.* Part 2 measured on 8 seeds. Part 3 (2026-11-24) adds the
+   50-seed grids to `oracles.toml` (`tests/test_second_opinion_ets.py`,
+   `TestFiftySeeds`; seeds 0-49 of 600 rows, the six seasonal forms;
+   Linux x86-64, statsmodels 0.15.0), each case the largest distance of a
+   seed's predictions in ulps, its floor the one-seed tests' bound:
+   `second_opinion_ets.holtwinters_known` (`ExponentialSmoothing`, known
+   start) 0 ulps in all six forms, floor 5; `holtwinters_heuristic` (from
+   the row after the start's rows) 4 (`add_none`), 6 (`add_add`), 5
+   (`add_damped`), 6 (`mul_none`), 7 (`mul_add`, `mul_damped`), floor 16;
+   `ets_known` (`ETSModel`, additive season, both error types) 4, 6 and 8
+   ulps for no, an additive and a damped trend, floor 16. The
+   multiplicative season against `ETSModel` is not a grid (departure 1:
+   another recursion). The hashes of the three groups are not written
+   here: `oracle_hashes.toml` holds macOS's (`darwin-arm64`), where a rerun
+   of three groups on Linux is refused, so the Mac's
+   `uv run python scripts/oracles.py rerun` at the merge writes them (the
+   Linux guard reports a group with no hash and fails nothing).
+9. *Rebased onto `vm/w13-integration`* (2026-11-24, at `51671e2e`). It
+   carries no task 559 (no `horizons` in `holt`), so the new fields follow
+   `fit_spread` and `trend` as before. `not_positive` is the eleventh
+   reason, after `scale_ratio_moved`, `not_separated` and
+   `level_beyond_sample`, still last; a `holt` with a heuristic start joins
+   the kinds whose own wait is asked a row (`AnyModel::waits`). Upstream's
+   new `holt_trending` case is macOS's bytes loaded and re-saved by this
+   build, as `holt.rs` and `holt_inf.rs` are.
