@@ -72,6 +72,35 @@ span by 2.7e-10 relative on the first rows, so its oracle reads the
 nanosecond stamps. (4) `seqtest`'s candidate, confseq, does not build.
 Ranks 15 and 16 have no oracle beyond their reductions.*
 
+*2026-11-24, sixth pass (C17 part 2): libraries for what the rows above
+held by a longhand, by one shape, or only in row form. Each is a test, its
+bound derived beside it: `spectral` on a rectangular window against
+scipy's `periodogram(window="boxcar", detrend="constant")` at every grid
+frequency (the Nyquist on and off the grid), without detrending against
+`periodogram(detrend=False)`, and Lomb-Scargle against scipy's unweighted
+`lombscargle(normalize="normalize")`, with the spread threshold met on
+both sides (`test_second_opinion_spectral.py`); `glm`'s Tweedie recursion
+at powers 1.2, 1.8, 2.5 and 3 against statsmodels' family objects, and
+its refit at the power link against `GLM.score` (`R β` at the fit);
+`ewm_moments`' lagged terms against pandas `expanding`/`ewm` on pairs
+built by a shift or Polars' `join_asof` with its tolerance met on both
+sides; the span refits against `RLM` and `QuantReg` on the span's rows,
+the span one ulp past the edge row on the other side
+(`test_second_opinion_refit_span.py`); `hmm`'s explicit `prior_rows`
+against QDA's `reg_param`; `corrchange`'s clock spans and windows against
+`S_hac_simple`, `breaks_cusumolsresid` (the scale-ratio withholding by
+name) and `corrcoef` (`test_second_opinion_corrchange_clock.py`). Four
+findings, none a defect. (1) pandas computes no `cov` with `times=`, so
+the clock lag's oracle is its `ewm(times=).mean()` of the legs and their
+products. (2) Without the refit or a cap the `glm` recursion runs away from
+its first rows on some streams (about one in five at these powers), whose
+path is chaotic, so the row-by-row oracle takes a stream that does not and
+says so. (3) scikit-learn's `HuberRegressor` estimates its scale jointly
+with the fit, which the refit does not, so `RLM` with the MAD scale is the
+span refit's oracle, as it is the row count's. (4) `bocpd`'s clock hazard
+`1 − exp(−Δ/τ)` was already held to the package's posterior
+(`test_a_clock_hazard_on_irregular_steps_is_the_packages_with_each_steps_chance`).*
+
 ## 1. Purpose and definitions
 
 This record lists every user-facing model, feature and parameter. For each
