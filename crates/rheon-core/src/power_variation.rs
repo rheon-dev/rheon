@@ -82,6 +82,26 @@
 //! exact stamps under `closed` (`Right` drops a row exactly `D` old, `Both`
 //! keeps it). A window forgets by dropping, so it takes no decay.
 //!
+//! **Past the largest double.** A term of returns near the input bound can
+//! pass the largest double: `|r|⁴` of a return of `1e100` is `1e400`, and
+//! the square of a `K`-step return of them times a weight passes it at a
+//! `K` above 13. Such a term, and a sum it takes past the largest double,
+//! is held at it, the largest a double holds: a bound on the term, where
+//! `inf` would never decay (`f · inf` is `inf`) and a window's next
+//! take-back of it, `inf − inf`, would be NaN. A product of powers that
+//! passes the largest double on the way, or reads `0 · inf`, is formed
+//! again from each factor's fraction and power of two, so a term that fits
+//! is kept and a factor of 0 makes it 0. Each output reads its own sums,
+//! so one held at the bound moves no other. Below the largest double
+//! nothing moves, to the bit.
+//!
+//! A window takes a term back from a sum held at the bound by summing the
+//! credits it still holds again, and does the same where a term leaving is
+//! more than `1/ε` times what it leaves (a return near the bound leaving a
+//! window of ordinary ones): the compensated pair keeps a sum to about
+//! `ε²` of the largest term it has held, so what it leaves is otherwise
+//! the rounding of that term, and it would never leave.
+//!
 //! **The state.** Per target, the sums (16 bytes each: `W`, `V`, one a
 //! multipower or plain kernel term, six a centered kernel term), the last
 //! `K_max − 1` returns and, per scale, the last `K`-step returns its lags

@@ -365,6 +365,10 @@ pub enum Targets {
     /// near-Gaussian with arithmetic alone): a correlation to test, and a
     /// change in it (PLAN 550's realistic case for `corrchange`).
     CorrelatedPair(usize),
+    /// None, and the first feature at the input bound on the row given:
+    /// a value whose higher moments pass the largest double, so a model
+    /// that keeps moments holds them at a scale (`ewm_moments`).
+    BoundAt(usize),
 }
 
 /// The process of a [`Targets::Garch`] stream.
@@ -517,6 +521,12 @@ impl Case {
                         x.extend((2..self.n_features).map(|_| normal()));
                         x
                     }
+                    Targets::BoundAt(at) => (0..self.n_features)
+                        .map(|j| {
+                            let v = shift + lcg(&mut s);
+                            if i == at && j == 0 { INPUT_BOUND } else { v }
+                        })
+                        .collect(),
                     _ => (0..self.n_features).map(|_| shift + lcg(&mut s)).collect(),
                 };
                 let x0 = x.first().copied().unwrap_or(0.0);
@@ -589,7 +599,7 @@ impl Case {
                         let label = ((signal + noise + 2.0).max(0.0) as usize).min(c - 1);
                         vec![(!null).then_some(label as f64)]
                     }
-                    Targets::None | Targets::CorrelatedPair(_) => Vec::new(),
+                    Targets::None | Targets::CorrelatedPair(_) | Targets::BoundAt(_) => Vec::new(),
                     Targets::Correlated(..) => {
                         series[i].iter().map(|v| (!null).then_some(*v)).collect()
                     }
@@ -3566,6 +3576,18 @@ pub fn all() -> Vec<Case> {
             EwmMoments::new(ewm_moments_cfg(true)).unwrap(),
             1,
             Targets::None,
+            40
+        ),
+        // A value at the input bound five rows before the save: its moments
+        // of orders 3 to 6 pass the largest double, so the summary is held
+        // at a scale, the form a state of such a stream takes.
+        case!(
+            "ewm_moments_scaled",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_cfg(true)).unwrap(),
+            1,
+            Targets::BoundAt(35),
             40
         ),
         // The plug-in terms alone: Kish's `r_2` and no other.

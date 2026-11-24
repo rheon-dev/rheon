@@ -918,6 +918,29 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`ewm_moments`, `realized` and `power_variation` recover from a value at
+  the input bound.** A moment or a power of a value near `1e100` passes
+  the largest double (a fourth power is `1e400`) and overflowed to `inf`,
+  which no decay washes out: 29,000 rows later `ewm_moments`' kurtosis and
+  `realized`'s `tq` were still NaN, and a window's next take-back of the
+  term, `inf − inf`, left `realized`'s and `power_variation`'s window sums
+  NaN for as long as the window held a row. `ewm_moments` now holds each
+  summary's moments at a scale of a power of two once they would pass the
+  largest double, so they are kept exactly however large, a skew or a
+  kurtosis is read while its moments are past a double's range, and a
+  central moment or a cumulant past it is withheld as overflowed; they
+  wash out as the stream's own do (a fifth moment of a row at the bound,
+  of weight at the bound, takes about 2,000 half-lives). `realized` and
+  `power_variation` hold a term and a sum past the largest double at it,
+  a bound that each output reads alone, and a window sums its terms again
+  where one leaving would leave it only rounding (a return near the bound
+  leaving a window of ordinary ones, whose compensated sum kept nothing of
+  what was left); `realized`'s Lee and Mykland window does the same, and
+  `power_variation` forms a product of powers that passes the largest
+  double from each factor's fraction and power of two, so `0 · inf` is 0.
+  Below the bound nothing moves, to the bit: every output and state on
+  heavy-tailed GARCH returns, row by row, is the build's before.
+
 - **`drift_kind="adwin"` keeps a state that loads after a residual whose
   square passes the largest double.** ADWIN sums each row's absolute
   residual and its squared deviation; a residual past about 1.3e154 (an

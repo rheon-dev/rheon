@@ -11,11 +11,64 @@ use super::{Held, PvTerm, PvTermKind};
 /// `hi + lo += x` by Knuth's TwoSum: the rounding of `hi + x` is found
 /// exactly whatever the two sizes and goes into `lo`, so a window can take
 /// back a term larger than what is left and keep the digits.
+///
+/// A sum that would pass the largest double is held at it, `lo` 0: the
+/// largest sum a double holds, a bound on the sum, where `inf` is one no
+/// decay ever brings back (its next take-back would be `inf − inf`). Below
+/// it nothing moves, to the bit.
 pub(super) fn add(hi: &mut f64, lo: &mut f64, x: f64) {
     let s = *hi + x;
+    if s.abs() >= f64::MAX {
+        *hi = f64::MAX.copysign(s);
+        *lo = 0.0;
+        return;
+    }
     let bb = s - *hi;
     *lo += (*hi - (s - bb)) + (x - bb);
     *hi = s;
+}
+
+/// Whether taking the term `x` back from a compensated sum left `rest`
+/// keeps too little of it. The pair holds a sum to about `ε²` of the
+/// largest term it has held, so once a term leaves that is more than `1/ε`
+/// times what is left (a return near the bound leaving a window of
+/// ordinary ones), what is left is rounding of it, and it is summed again
+/// from the terms held.
+fn lost(x: f64, rest: f64) -> bool {
+    x.abs() * f64::EPSILON > rest.abs()
+}
+
+/// `x`, or the largest double of its sign where a term passed it: a bound
+/// on the term, which a sum holds as [`add`] holds its own.
+fn capped(x: f64) -> f64 {
+    x.clamp(-f64::MAX, f64::MAX)
+}
+
+/// `w Π |r_i|^{p_i}`, for a product of powers that passes the largest
+/// double on the way (`|r|^4` of a return near the bound) or reads `0 ·
+/// inf`: each factor as a fraction and a power of two, which neither
+/// overflows nor underflows, the term then formed once, held at the
+/// largest double where it passes it. A factor of 0 makes the term 0. A
+/// power that is not whole rounds its exponent `e p`, so the term is the
+/// plain product's to `ln 2 · ε · |e p|`, below `1e-13` for any exponent a
+/// double has; this runs only where the plain product is not finite.
+fn product_past_range(w: f64, factors: &[(f64, f64)]) -> f64 {
+    let (mut m, e) = libm::frexp(w);
+    let mut e = f64::from(e);
+    for &(a, p) in factors {
+        if a == 0.0 {
+            return 0.0;
+        }
+        let (am, ae) = libm::frexp(a);
+        let (mm, me) = libm::frexp(m * libm::pow(am, p));
+        m = mm;
+        e += f64::from(ae) * p + f64::from(me);
+    }
+    let whole = e.floor();
+    let m = m * libm::exp2(e - whole);
+    // Past twice the exponents a double has, the term is past it whatever
+    // the fraction; the cast is then of a number an `i32` holds.
+    capped(libm::scalbn(m, whole.clamp(-4096.0, 4096.0) as i32))
 }
 
 /// The returns' weight `W` and squared weights `V`, the first two sums.
@@ -339,18 +392,31 @@ impl Series {
                     if len < (m - 1) * k + 1 || !holds(back) {
                         continue;
                     }
+                    let at = |i: usize| ring[len - 1 - (m - 1 - i) * k].abs();
                     let mut acc = 1.0;
                     for (i, &p) in powers.iter().enumerate() {
-                        acc *= power(ring[len - 1 - (m - 1 - i) * k].abs(), p);
+                        acc *= power(at(i), p);
                     }
-                    sink.add(t.at, back, w * acc);
+                    let mut x = w * acc;
+                    if !x.is_finite() {
+                        let factors: Vec<(f64, f64)> = powers
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &p)| (at(i), p))
+                            .collect();
+                        x = product_past_range(w, &factors);
+                    }
+                    sink.add(t.at, back, x);
                 }
                 Form::Kernel { c2, center } => {
                     let rt = ring[len - 1];
                     if !holds(k - 1) {
                         continue;
                     }
-                    sink.add(t.at, k - 1, w * (rt * rt));
+                    // A `K`-step return sums `K` returns, so its square
+                    // times a weight can pass the largest double: held at
+                    // it ([`capped`]), as every product below.
+                    sink.add(t.at, k - 1, capped(w * (rt * rt)));
                     if *center {
                         sink.add(t.at + 1, k - 1, w * rt);
                         sink.add(t.at + 2, k - 1, w * rt);
@@ -367,7 +433,7 @@ impl Series {
                             continue;
                         }
                         let x = ring[len - 1 - h * k];
-                        sink.add(t.at, back, w * (c * (rt * x)));
+                        sink.add(t.at, back, capped(w * (c * (rt * x))));
                         if *center {
                             sink.add(t.at + 1, back, w * (c * rt));
                             sink.add(t.at + 2, back, w * (c * x));
@@ -394,22 +460,62 @@ impl Series {
         let Some(e) = self.held.pop_front() else {
             return;
         };
-        add(&mut self.hi[NW], &mut self.lo[NW], -e.w);
-        add(&mut self.hi[W2], &mut self.lo[W2], -(e.w * e.w));
+        let mut again = vec![false; self.hi.len()];
+        self.take(NW, e.w, 0.0, &mut again);
+        self.take(W2, e.w * e.w, 0.0, &mut again);
         let stride = 2 * (self.hi.len() - BASE);
         for i in 0..stride / 2 {
             let (Some(h), Some(l)) = (self.credits.pop_front(), self.credits.pop_front()) else {
                 break;
             };
-            let at = BASE + i;
-            add(&mut self.hi[at], &mut self.lo[at], -h);
-            add(&mut self.hi[at], &mut self.lo[at], -l);
+            self.take(BASE + i, h, l, &mut again);
         }
         if self.held.is_empty() {
             self.hi.fill(0.0);
             self.lo.fill(0.0);
             self.credits.clear();
+            return;
         }
+        for k in (0..again.len()).filter(|&k| again[k]) {
+            self.rebuild(k, stride);
+        }
+    }
+
+    /// The credit `h + l` of sum `k` taken back as its return leaves the
+    /// window, marked in `again` to be summed again from the credits the
+    /// window still holds where taking it back cannot leave the sum: a sum
+    /// held at the largest double ([`add`]) is a bound, not a sum, so a
+    /// credit large enough to move it (a unit in the last place of the
+    /// largest double, or more) is not taken from it, and a smaller one
+    /// leaves the bound within that unit; and a credit that leaves too
+    /// little of the sum for its pair to keep ([`lost`]).
+    fn take(&mut self, k: usize, h: f64, l: f64, again: &mut [bool]) {
+        if self.hi[k].abs() == f64::MAX {
+            again[k] |= h.abs() >= f64::MAX * f64::EPSILON;
+        } else {
+            add(&mut self.hi[k], &mut self.lo[k], -h);
+            add(&mut self.hi[k], &mut self.lo[k], -l);
+            again[k] |= lost(h, self.sum(k));
+        }
+    }
+
+    /// Sum `k` summed again from what the window holds: the weights of its
+    /// returns, or the credits of each.
+    fn rebuild(&mut self, k: usize, stride: usize) {
+        let (mut hi, mut lo) = (0.0, 0.0);
+        for (j, e) in self.held.iter().enumerate() {
+            let (h, l) = match k {
+                NW => (e.w, 0.0),
+                W2 => (e.w * e.w, 0.0),
+                _ => {
+                    let i = j * stride + 2 * (k - BASE);
+                    (self.credits[i], self.credits[i + 1])
+                }
+            };
+            add(&mut hi, &mut lo, h);
+            add(&mut hi, &mut lo, l);
+        }
+        (self.hi[k], self.lo[k]) = (hi, lo);
     }
 
     /// The numbers the series holds, counted: what [`Plan::series_bytes`]
@@ -499,3 +605,7 @@ impl Series {
         out.push(n);
     }
 }
+
+#[cfg(test)]
+#[path = "series_tests.rs"]
+mod tests;

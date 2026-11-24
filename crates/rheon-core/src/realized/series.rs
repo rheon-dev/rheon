@@ -13,11 +13,31 @@ use super::{BNS_THETA, BV_SCALE, Held, OUTPUTS_PER_TARGET, TQ_SCALE, TV_SCALE};
 /// back a term larger than what is left (a jump leaving) and keep the
 /// digits; Kahan's step (`crate::comp::add`) is exact only while the step is
 /// the smaller.
+///
+/// A sum that would pass the largest double is held at it, `lo` 0: the
+/// largest sum a double holds, a bound on the sum, where `inf` is one no
+/// decay ever brings back (its next take-back would be `inf − inf`). Below
+/// it nothing moves, to the bit.
 pub(super) fn add(hi: &mut f64, lo: &mut f64, x: f64) {
     let s = *hi + x;
+    if s.abs() >= f64::MAX {
+        *hi = f64::MAX.copysign(s);
+        *lo = 0.0;
+        return;
+    }
     let bb = s - *hi;
     *lo += (*hi - (s - bb)) + (x - bb);
     *hi = s;
+}
+
+/// Whether taking the term `x` back from a compensated sum left `rest`
+/// keeps too little of it. The pair holds a sum to about `ε²` of the
+/// largest term it has held, so once a term leaves that is more than `1/ε`
+/// times what is left (a return near the bound leaving a window of
+/// ordinary ones), what is left is rounding of it, and it is summed again
+/// from the terms held.
+fn lost(x: f64, rest: f64) -> bool {
+    x.abs() * f64::EPSILON > rest.abs()
 }
 
 /// The sums a target keeps, as indices into its pairs.
@@ -88,8 +108,24 @@ impl LmRing {
         if self.products.len() > k - 2
             && let Some((wp, w)) = self.products.pop_front()
         {
+            let held = [self.p_hi, self.w_hi].map(|h| h.abs() == f64::MAX);
             add(&mut self.p_hi, &mut self.p_lo, -wp);
             add(&mut self.w_hi, &mut self.w_lo, -w);
+            if held.contains(&true)
+                || lost(wp, self.p_hi + self.p_lo)
+                || lost(w, self.w_hi + self.w_lo)
+            {
+                self.resum();
+            }
+        }
+    }
+
+    /// Both sums summed again from the products held.
+    fn resum(&mut self) {
+        (self.p_hi, self.p_lo, self.w_hi, self.w_lo) = (0.0, 0.0, 0.0, 0.0);
+        for &(wp, w) in &self.products {
+            add(&mut self.p_hi, &mut self.p_lo, wp);
+            add(&mut self.w_hi, &mut self.w_lo, w);
         }
     }
 
@@ -211,7 +247,13 @@ impl Series {
         let bv = w * (a * self.a1);
         let t = c * self.c1 * self.c2;
         let tv = w * (t * t);
-        let tq = w * ((t * t) * (t * t));
+        let mut tq = w * ((t * t) * (t * t));
+        if !tq.is_finite() {
+            // `t⁴` of returns near the bound passes the largest double: the
+            // weight goes in first, where `w t²` still fits, and a term past
+            // the largest double is held at it, a bound on the term.
+            tq = (w * (t * t) * (t * t)).min(f64::MAX);
+        }
         // A product is taken where every return in it is held: under a
         // window, only those of its returns the window still has.
         let links = match seq {
@@ -260,22 +302,65 @@ impl Series {
         let Some(e) = self.held.pop_front() else {
             return;
         };
-        self.add(NW, -e.w);
-        self.add(W2, -(e.w * e.w));
-        self.add(RV, -e.rv);
+        let mut again = [false; SUMS];
+        self.take(NW, e.w, &mut again);
+        self.take(W2, e.w * e.w, &mut again);
+        self.take(RV, e.rv, &mut again);
         if let Some(f) = self.held.front().filter(|f| f.links >= 1) {
             let (bv, w) = (f.bv, f.w);
-            self.add(BV, -bv);
-            self.add(PW, -w);
+            self.take(BV, bv, &mut again);
+            self.take(PW, w, &mut again);
         }
         if let Some(g) = self.held.get(1).filter(|g| g.links >= 2) {
             let (tv, tq) = (g.tv, g.tq);
-            self.add(TV, -tv);
-            self.add(TQ, -tq);
+            self.take(TV, tv, &mut again);
+            self.take(TQ, tq, &mut again);
         }
         if self.held.is_empty() {
             (self.hi, self.lo) = ([0.0; SUMS], [0.0; SUMS]);
+            return;
         }
+        for k in (0..SUMS).filter(|&k| again[k]) {
+            self.rebuild(k);
+        }
+    }
+
+    /// The term `x` of sum `k` taken back as its row leaves the window,
+    /// marked in `again` to be summed again from the terms the window
+    /// still holds where taking it back cannot leave the sum: a sum held
+    /// at the largest double ([`add`]) is a bound, not a sum, so a term
+    /// large enough to move it (a unit in the last place of the largest
+    /// double, or more) is not taken from it, and a smaller one leaves the
+    /// bound within that unit; and a term that leaves too little of the sum
+    /// for its pair to keep ([`lost`]).
+    fn take(&mut self, k: usize, x: f64, again: &mut [bool; SUMS]) {
+        if self.hi[k].abs() == f64::MAX {
+            again[k] |= x.abs() >= f64::MAX * f64::EPSILON;
+        } else {
+            self.add(k, -x);
+            again[k] |= lost(x, self.sum(k));
+        }
+    }
+
+    /// Sum `k` summed again from the window's terms: a return's own terms
+    /// from each it holds, a product from each whose return before it is
+    /// held too, a triple from each whose two returns before it are.
+    fn rebuild(&mut self, k: usize) {
+        let (mut hi, mut lo) = (0.0, 0.0);
+        for (i, e) in self.held.iter().enumerate() {
+            let x = match k {
+                NW => e.w,
+                W2 => e.w * e.w,
+                RV => e.rv,
+                BV if e.links >= 1 && i >= 1 => e.bv,
+                PW if e.links >= 1 && i >= 1 => e.w,
+                TV if e.links >= 2 && i >= 2 => e.tv,
+                TQ if e.links >= 2 && i >= 2 => e.tq,
+                _ => continue,
+            };
+            add(&mut hi, &mut lo, x);
+        }
+        (self.hi[k], self.lo[k]) = (hi, lo);
     }
 
     /// Whether a restored series has the shape its settings give it: an
@@ -339,3 +424,7 @@ impl Series {
         out.extend([rv, bv, tv, tq, z, lm, lm_jump(lm, n, beta)]);
     }
 }
+
+#[cfg(test)]
+#[path = "series_tests.rs"]
+mod tests;

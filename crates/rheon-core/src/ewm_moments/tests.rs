@@ -16,6 +16,7 @@ include!("reference_values.rs");
 
 mod part4;
 mod part5;
+mod scale;
 
 fn lcg(state: &mut u64) -> f64 {
     *state = state

@@ -189,6 +189,61 @@ fn hawkes_recovers_from_bounded_extremes_in_a_window() {
     }
 }
 
+/// Its moments are kept exactly past the largest double, at a scale of a
+/// power of two, so a moment of order 5 of a row at the bound of weight at
+/// the bound (`1e600` on the sum scale) washes out as the stream's own
+/// does: over the 2,012 half-lives the order asks for, where its square
+/// (`1e300`) needs [`bounded_script`]'s 1,000 (PLAN 578j, TEST-10).
+#[test]
+fn ewm_moments_recovers_from_bounded_extremes() {
+    recovers_over(
+        &bounded_script_for_order(0, 5),
+        || EwmMoments::new(ewm_moments_cfg()).unwrap(),
+        Recovery::Twin(1e-6),
+    );
+}
+
+/// In a window the row at the bound leaves: the window's summaries are
+/// merged at the larger of their scales, and once it has left every
+/// output is the twin's, a window of the same rows.
+#[test]
+fn ewm_moments_recovers_from_bounded_extremes_in_a_window() {
+    let rows = EwmMomentsCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        window_rows: Some(12),
+        ..ewm_moments_cfg()
+    };
+    let clock = EwmMomentsCfg {
+        clocked: true,
+        window_rows: None,
+        window_clock: Some(12.5),
+        ..rows.clone()
+    };
+    for cfg in [rows, clock] {
+        recovers_from_bounded_extremes(
+            move || EwmMoments::new(cfg.clone()).unwrap(),
+            0,
+            Recovery::Twin(1e-6),
+        );
+    }
+}
+
+#[test]
+fn realized_recovers_from_bounded_extremes() {
+    recovers_from_bounded_extremes(|| Realized::new(realized_cfg()).unwrap(), 2, Recovery::Twin(1e-6));
+}
+
+/// The windows take each term back as its row leaves: a quarticity past the
+/// largest double, held at it, and a return near the bound leaving a window
+/// of ordinary ones, whose compensated sums kept only rounding of what was
+/// left (PLAN 578j, found beside TEST-10's `realized`).
+#[test]
+fn realized_recovers_from_bounded_extremes_in_a_window() {
+    for cfg in [realized_rows_cfg(), realized_clock_cfg()] {
+        recovers_from_bounded_extremes(move || Realized::new(cfg.clone()).unwrap(), 2, Recovery::Twin(1e-6));
+    }
+}
+
 /// The kinds with no recovery test here, each with why. Every other kind
 /// the contract probes (`PROBED`) has `<kind>_recovers_from_bounded_extremes`
 /// or, where a bound row is no evidence at all, `<kind>_is_indifferent_to_bounded_extremes`.
@@ -199,16 +254,6 @@ const RECOVERY_PENDING: &[(&str, &str)] = &[
         "glm",
         "a target at the bound freezes a coefficient for good (the review's GLM-5, PLAN 578b): \
          30,000 rows on its slot 0 predicts 1.1e13 where the twin predicts 0.29",
-    ),
-    (
-        "ewm_moments",
-        "a moment of a value at the bound overflows to inf, which no decay washes out: its \
-         slot 2 is NaN 29,000 rows on, where the twin's is 1.76",
-    ),
-    (
-        "realized",
-        "a power of a return at the bound overflows to inf, which no decay washes out: its \
-         slot 3 is NaN 29,000 rows on, where the twin's is 317",
     ),
 ];
 
@@ -230,3 +275,51 @@ fn every_model_has_a_recovery_test_or_a_reason() {
     }
     assert!(missing.is_empty(), "no recovery test: {missing:?}");
 }
+
+/// Fourth powers, a tripower quarticity and a kernel over returns of twenty
+/// steps, under a decay and in both windows: `|r|⁴` of a return near the
+/// bound, and the square of a twenty-step return of them, pass the largest
+/// double. The probes' powers are squares, which never do, so the sums'
+/// overflow to `inf`, which no decay washes out, went unseen (PLAN 578j,
+/// found beside TEST-10's `ewm_moments` and `realized`).
+#[test]
+fn power_variation_recovers_from_bounded_extremes_at_higher_powers() {
+    let mp = |powers: &[f64], normalize: bool| PvTerm {
+        kind: PvTermKind::Multipower {
+            powers: powers.to_vec(),
+            normalize,
+        },
+        scale: 1,
+    };
+    let wide = PvTerm {
+        kind: PvTermKind::Kernel {
+            kernel: PvKernel::Parzen,
+            bandwidth: 2,
+            flat_top: false,
+            center: true,
+        },
+        scale: 20,
+    };
+    let quartic = |base: PowerVariationCfg| PowerVariationCfg {
+        terms: vec![
+            mp(&[4.0], false),
+            mp(&[2.0], false),
+            mp(&[4.0 / 3.0; 3], true),
+            mp(&[2.0, 2.0], true),
+            wide.clone(),
+        ],
+        ..base
+    };
+    for cfg in [
+        quartic(power_variation_cfg()),
+        quartic(power_variation_rows_cfg()),
+        quartic(power_variation_clock_cfg()),
+    ] {
+        recovers_from_bounded_extremes(
+            move || PowerVariation::new(cfg.clone()).unwrap(),
+            2,
+            Recovery::Twin(1e-6),
+        );
+    }
+}
+
