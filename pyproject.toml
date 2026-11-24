@@ -235,6 +235,9 @@ dev = [
     # targeted `omega` for the variance-targeted form. NCSA. The floor is
     # the version measured.
     "arch>=9.0.0",
+    # mpmath: the 50-digit reference the core's special functions are held to
+    # in tests/test_second_opinion_special.py, beside scipy as a second opinion.
+    "mpmath>=1.4.1",
 ]
 # The API reference: Sphinx over the docstrings, which are written in its
 # dialect (``:class:`` roles, ``::`` literal blocks). Its own group, so a
