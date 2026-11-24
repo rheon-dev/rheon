@@ -14,6 +14,7 @@ pub(crate) struct Series {
     /// The last `depth = d + sD` slots' values, oldest first: the value
     /// observed, or for a slot not observed, its prediction (NaN where
     /// there was none).
+    #[serde(with = "crate::humanfloat::deque_f64_or_tag")]
     pub(crate) ys: VecDeque<f64>,
     /// Whether each slot of `ys` was observed.
     pub(crate) seen: VecDeque<bool>,

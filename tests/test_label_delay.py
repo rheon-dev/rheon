@@ -1048,11 +1048,14 @@ EVERY_KIND = pytest.mark.extended(reason="the sweep over every kind that takes a
 #: The kinds that refuse an embargo, and the words each refuses it in:
 #: `audit` counts what it is given and learns nothing a delay could hold
 #: back; `rcov` needs `group_close`, and a closed group cannot release the
-#: rows it still holds.
+#: rows it still holds; `ar` and `sarima` read the target's last values as
+#: lags, which a delay would make older for the rows predicted than for the
+#: rows learned.
 REFUSE_EMBARGO = {
     "audit": "embargo",
     "rcov": "group_close and embargo cannot both be set",
     "ar": "embargo does not apply to ar",
+    "sarima": "embargo does not apply to sarima",
 }
 
 #: A sweep name that is not a kind: `sgd`'s Huber loss, with the refit of

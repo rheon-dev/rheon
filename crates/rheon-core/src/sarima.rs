@@ -520,6 +520,7 @@ pub struct Sarima {
     series: Vec<Series>,
     /// Per regressor, its last `d + sD` slots, oldest first (NaN for a
     /// slot the clock skipped).
+    #[serde(with = "crate::humanfloat::vec_deque_f64_or_tag")]
     xs: Vec<VecDeque<f64>>,
     /// The weight of every row before the next (hard rule 8).
     n_eff: f64,

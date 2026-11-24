@@ -640,3 +640,61 @@ mod tests {
         assert!(same(&lists.v, &[None, Some(vec![2.0, f64::INFINITY])]));
     }
 }
+
+/// A `VecDeque<f64>`, element by element, as [`vec_f64_or_tag`] (a ring
+/// of past values, NaN for a slot with none).
+pub mod deque_f64_or_tag {
+    use super::*;
+    use std::collections::VecDeque;
+
+    pub fn serialize<S: Serializer>(v: &VecDeque<f64>, s: S) -> Result<S::Ok, S::Error> {
+        if !s.is_human_readable() {
+            return v.serialize(s);
+        }
+        let (a, b) = v.as_slices();
+        use serde::ser::SerializeSeq;
+        let mut seq = s.serialize_seq(Some(v.len()))?;
+        for x in a.iter().chain(b) {
+            if x.is_finite() {
+                seq.serialize_element(x)?;
+            } else {
+                seq.serialize_element(tag(*x))?;
+            }
+        }
+        seq.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<VecDeque<f64>, D::Error> {
+        vec_f64_or_tag::deserialize(d).map(VecDeque::from)
+    }
+}
+
+/// A `Vec<VecDeque<f64>>`, each ring as [`deque_f64_or_tag`] (a ring per
+/// regressor).
+pub mod vec_deque_f64_or_tag {
+    use super::*;
+    use std::collections::VecDeque;
+
+    struct Inner<'a>(&'a VecDeque<f64>);
+    impl Serialize for Inner<'_> {
+        fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            deque_f64_or_tag::serialize(self.0, s)
+        }
+    }
+
+    pub fn serialize<S: Serializer>(v: &[VecDeque<f64>], s: S) -> Result<S::Ok, S::Error> {
+        if !s.is_human_readable() {
+            return v.serialize(s);
+        }
+        use serde::ser::SerializeSeq;
+        let mut seq = s.serialize_seq(Some(v.len()))?;
+        for x in v {
+            seq.serialize_element(&Inner(x))?;
+        }
+        seq.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<VecDeque<f64>>, D::Error> {
+        vec_vec_f64_or_tag::deserialize(d).map(|v| v.into_iter().map(VecDeque::from).collect())
+    }
+}

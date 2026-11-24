@@ -333,10 +333,11 @@ def test_every_kind_settles_by_the_formula_and_withholds_until_it(name):
     writes a row, ``T = i - 1`` on a row-count clock (a group's first row
     decays by nothing), and ``min_settled_frac = 0.5`` withholds rows 0 to
     10, naming that gate, with the kind's first field null there, and no row
-    after them for that reason. `seqtest`, `bocpd`, `garch` and `tdigest`
-    take no half-life and are refused by name: an e-process does not
-    forget, a run-length posterior is what forgets, a GARCH recursion is per
-    observation, and a merging digest cannot take a row out. It was
+    after them for that reason. `seqtest`, `bocpd`, `garch`, `tdigest` and
+    `sarima` take no half-life and are refused by name: an e-process does
+    not forget, a run-length posterior is what forgets, a GARCH recursion is
+    per observation, a merging digest cannot take a row out, and a SARIMA
+    estimate weighs every row it has learned. It was
     value-tested on `ewridge` alone, the rest for the fields' presence
     (review 2026-10-06, TB7)."""
     kw: dict[str, object] = dict(
@@ -349,7 +350,7 @@ def test_every_kind_settles_by_the_formula_and_withholds_until_it(name):
     def build() -> dict:
         return getattr(rp.spec, name)("m", **{k: v for k, v in kw.items() if v is not None})
 
-    if name in ("seqtest", "bocpd", "garch", "tdigest"):
+    if name in ("seqtest", "bocpd", "garch", "tdigest", "sarima"):
         with pytest.raises(ValueError, match=f"- half_life does not apply to {name}, "):
             build()
         return

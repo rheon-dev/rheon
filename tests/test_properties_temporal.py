@@ -635,6 +635,12 @@ def clock_specs(draw, model: str, step: int, cap: int):
         kw |= maybe("window_size", 1, 60)
         if "window_size" in kw:
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
+    elif model == "sarima":
+        # A slot a step of the column, its zero-weight rows in no clock and
+        # its skipped slots predicted through; no half-life and no embargo,
+        # both refused; the bound loose, so its start opens in a short stream.
+        kw |= dict(targets=["y"], features=["x0", "x1"], order=(1, 0, 0), se_bound=1e3)
+        kw["spacing"] = steps(1, 1)
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)
@@ -754,10 +760,11 @@ DELAYED_ARGS: dict[str, dict] = {"kalman": {"coef_half_life": "1h"}}
 #: every regression, since ``embargo`` is a parameter they all share. Built
 #: from `test_model_registry.REGRESSIONS`, so a new regression is swept
 #: without an edit here (a hand-kept list held five of the ten), less
-#: ``ar``, which refuses ``embargo``: a delay would make its lags older for
-#: the rows it predicts than for the rows it learns.
+#: ``ar`` and ``sarima``, which refuse ``embargo``: a delay would make their
+#: lags older for the rows they predict than for the rows they learn.
 DELAYED_MODELS = {
-    name: MINIMAL[name] | DELAYED_ARGS.get(name, {}) for name in sorted(REGRESSIONS - {"ar"})
+    name: MINIMAL[name] | DELAYED_ARGS.get(name, {})
+    for name in sorted(REGRESSIONS - {"ar", "sarima"})
 }
 
 
@@ -835,6 +842,7 @@ N_EFF_EXEMPT = {
         "learned"
     ),
     "tdigest": "whose merging digest cannot take a row out again",
+    "sarima": "whose estimate weighs every row it has learned",
 }
 
 #: The kinds with a rate for a parameter (``hawkes``' ``kernel_decays``, per

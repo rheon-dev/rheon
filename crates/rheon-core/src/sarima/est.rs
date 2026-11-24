@@ -317,14 +317,22 @@ fn push(ring: &mut VecDeque<f64>, v: f64) {
 /// oldest first, zero before the first slot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Rings {
+    #[serde(with = "crate::humanfloat::deque_f64_or_tag")]
     z: VecDeque<f64>,
+    #[serde(with = "crate::humanfloat::deque_f64_or_tag")]
     e: VecDeque<f64>,
+    #[serde(with = "crate::humanfloat::deque_f64_or_tag")]
     u: VecDeque<f64>,
+    #[serde(with = "crate::humanfloat::deque_f64_or_tag")]
     v: VecDeque<f64>,
+    #[serde(with = "crate::humanfloat::deque_f64_or_tag")]
     r: VecDeque<f64>,
+    #[serde(with = "crate::humanfloat::deque_f64_or_tag")]
     g: VecDeque<f64>,
     /// Per regressor, its differenced value and its filtered one.
+    #[serde(with = "crate::humanfloat::vec_deque_f64_or_tag")]
     xw: Vec<VecDeque<f64>>,
+    #[serde(with = "crate::humanfloat::vec_deque_f64_or_tag")]
     xf: Vec<VecDeque<f64>>,
 }
 
@@ -467,8 +475,11 @@ impl Rings {
 /// known, `k` a slot.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Buffer {
+    #[serde(with = "crate::humanfloat::vec_f64_or_tag")]
     pub w: Vec<f64>,
+    #[serde(with = "crate::humanfloat::vec_f64_or_tag")]
     pub weight: Vec<f64>,
+    #[serde(with = "crate::humanfloat::vec_f64_or_tag")]
     pub xw: Vec<f64>,
 }
 

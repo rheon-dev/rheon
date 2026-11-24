@@ -664,6 +664,49 @@ fn a_save_at_every_row_continues_to_the_bit() {
     assert_eq!(whole, saved);
 }
 
+/// The state reads back from JSON as it was, at every row, before the
+/// start and after it: its NaNs (a slot not observed in the buffer, a
+/// regressor the clock skipped, a ring's value with no prediction) are
+/// written as `"nan"`, which JSON has a literal for, not as `null`.
+#[test]
+fn the_state_reads_back_from_json_at_every_row() {
+    let (order, seasonal) = ([1, 1, 0], [0, 0, 1, 4]);
+    let mut truth = params(&[0.4], &[], &[], &[-0.4], 0.7);
+    truth.exog = vec![1.5];
+    let n = 400;
+    let mut rng = 5;
+    let x: Vec<f64> = (0..n).map(|_| normal(&mut rng)).collect();
+    let ys = simulate(order, seasonal, &truth, &x, n, 13);
+    let c = SarimaCfg {
+        estimate: Some(SarimaEstimate {
+            se_bound: 0.3,
+            ..SarimaEstimate::default()
+        }),
+        ..estimated(order, seasonal, 1)
+    };
+    let mut m = Sarima::new(c).unwrap();
+    let mut out = Step::default();
+    let (mut nans, mut opened) = (0, false);
+    for t in 0..n {
+        let w = if t % 17 == 3 { 0.0 } else { 1.0 };
+        let y = (t % 29 != 11).then_some(ys[t]);
+        let d = if t % 41 == 40 { 3.0 } else { 1.0 };
+        m.step_into(&x[t..t + 1], &[y], d, w, &mut out);
+        opened |= out.pred[0].is_finite();
+        let state = m.state();
+        let text = serde_json::to_string(&state).unwrap();
+        nans += text.matches("\"nan\"").count();
+        let back: State = serde_json::from_str(&text).unwrap_or_else(|e| panic!("row {t}: {e}"));
+        assert_eq!(
+            rmp_serde::to_vec_named(&back).unwrap(),
+            rmp_serde::to_vec_named(&state).unwrap(),
+            "row {t}"
+        );
+    }
+    assert!(opened, "the start never opened");
+    assert!(nans > 0, "no NaN was written, so the test held nothing");
+}
+
 /// A break starts each series again: its ring, and its start fitted again
 /// from a new buffer; the weights kept.
 #[test]
