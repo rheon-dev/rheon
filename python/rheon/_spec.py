@@ -86,9 +86,9 @@ def _json(spec: dict[str, Any] | list[dict[str, Any]]) -> str:
             if math.isinf(v):
                 return "inf" if v > 0 else "-inf"
             return v
-        if isinstance(v, dict):
+        if isinstance(v, Mapping):
             # The spec's and its model table's keys are parameters; any
-            # other dict is one parameter's value.
+            # other dict (or read-only mapping) is one parameter's value.
             if key in ("spec", "model"):
                 return {k: enc(x, k, who) for k, x in v.items()}
             return {k: enc(x, key, who, inner=True) for k, x in v.items()}
@@ -175,9 +175,11 @@ def _matches(v: Any, hint: Any) -> bool:
         # a list parameter means.
         (inner,) = typing.get_args(hint)
         return isinstance(v, (list, tuple)) and all(_matches(x, inner) for x in v)
-    if origin is dict:
+    if origin in (dict, Mapping):
+        # A `Mapping` parameter takes any mapping, a read-only one too; it
+        # fell through to "not read" (review 2026-11-23, PY-3).
         key, val = typing.get_args(hint)
-        return isinstance(v, dict) and all(
+        return isinstance(v, dict if origin is dict else Mapping) and all(
             _matches(k, key) and _matches(x, val) for k, x in v.items()
         )
     if hint is bool:
@@ -243,9 +245,10 @@ def _describe(hint: Any, plural: bool = False) -> str:
     if origin in (list, Sequence):
         (inner,) = typing.get_args(hint)
         return ("lists of " if plural else "a list of ") + _describe(inner, plural=True)
-    if origin is dict:
+    if origin in (dict, Mapping):
         key, val = typing.get_args(hint)
-        return f"a dict from {_describe(key, plural=True)} to {_describe(val, plural=True)}"
+        noun = "a dict" if origin is dict else "a mapping"
+        return f"{noun} from {_describe(key, plural=True)} to {_describe(val, plural=True)}"
     nouns = {float: ("a number", "numbers"), int: ("an int", "ints")}
     nouns |= {bool: ("a bool", "bools"), str: ("a str", "strs")}
     one, many = nouns.get(hint, (str(hint), str(hint)))
@@ -268,7 +271,7 @@ def _takes_duration(hint: Any) -> bool:
 def _finite(value: Any) -> bool:
     if isinstance(value, (list, tuple)):
         return all(_finite(x) for x in value)
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return all(_finite(x) for x in value.values())
     if isinstance(value, numbers.Real) and not isinstance(value, bool):
         return not math.isinf(value)
@@ -320,7 +323,64 @@ _FLOOR = {
     "preavg_rows": ("2 (3 under psd=False)", "2 or more (3 or more under psd=False)"),
     # 0 is the Rust side's to refuse, which says why: no component.
     "pca": ("1", "1 or more"),
+    # The counts the models added since 2.0, each refused at 0 on the Rust
+    # side with its reason; a negative one was told "Set it to 0 or more"
+    # (review 2026-11-23, PY-13). `window_rows`' floor is the model's own
+    # above 1 where it has one (`expectile`: a row per coefficient), and
+    # `start_rows`' `garch`'s by its form, which the Rust side says.
+    "horizon": ("1", "1 or more"),
+    "truncation": ("1", "1 or more"),
+    "window_events": ("1", "1 or more"),
+    "window_rows": ("1", "1 or more"),
+    "max_state_bytes": ("1", "1 or more"),
+    "start_rows": ("1", "1 or more, and to garch's least for its form"),
 }
+
+
+#: Each ``drift_options`` key's type, as the Rust side's ``DriftOptions``
+#: reads it: a key outside it is the Rust side's to name, with the keys it
+#: takes. Unchecked, ``{"delta": True}`` or ``{"stat_size": 1.5}`` reached
+#: the Rust parser and its raw error (review 2026-11-23, PY-13).
+_DRIFT_OPTION_TYPES: dict[str, Any] = {
+    **dict.fromkeys(("delta", "error_above", "drift_threshold", "beta", "alpha"), float),
+    **dict.fromkeys(
+        (
+            "clock",
+            "max_buckets",
+            "min_window_length",
+            "grace_period",
+            "max_width",
+            "max_state_bytes",
+            "warm_start",
+            "window_size",
+            "stat_size",
+            "seed",
+        ),
+        int,
+    ),
+    "restart": bool,
+    "range": float | Literal["window"],
+}
+
+
+def _drift_option_problem(who: str, options: Mapping[str, Any]) -> Exception | None:
+    """The first ``drift_options`` value of the wrong type, or a count below
+    0, as its refusal."""
+    for k, v in options.items():
+        hint = _DRIFT_OPTION_TYPES.get(k)
+        if hint is None:
+            continue
+        if not _matches(v, hint):
+            return TypeError(
+                f"{who}: drift_options[{k!r}] must be {_describe(hint)}, but it is {_got(v)}. "
+                "Pass a value of that kind."
+            )
+        if hint is int and v < 0:
+            return ValueError(
+                f"{who}: drift_options[{k!r}] must be at least 0, but it is {v}. "
+                f"Set drift_options[{k!r}] to 0 or more."
+            )
+    return None
 
 
 def _int_floor(key: str) -> tuple[int, str, str]:
@@ -407,7 +467,7 @@ def _lists(value: Any) -> Any:
     YA5)."""
     if isinstance(value, (list, tuple)):
         return [_lists(v) for v in value]
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {k: _lists(v) for k, v in value.items()}
     return value
 
@@ -642,8 +702,11 @@ def _keyword_problem(
                 )
             )
             return
+    if key == "drift_options" and (problem := _drift_option_problem(who, value)) is not None:
+        problems.append(problem)
+        return
     if key not in inf_ok and key not in _INF_REFUSED_BY_RUST and not _finite(value):
-        if isinstance(value, (list, tuple, dict)):
+        if isinstance(value, (list, tuple, Mapping)):
             problems.append(
                 ValueError(
                     f"{who}: {key} must hold finite numbers, but one of its values is "

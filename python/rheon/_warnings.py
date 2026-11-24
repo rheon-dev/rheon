@@ -108,14 +108,13 @@ class UnstableWarning(RheonWarning, UserWarning):
     Each unstable part says so in its docstring, and may change in any
     release without that counting as a breaking change:
 
-    - the state file of :func:`rheon.polars.stream.with_windows`;
-    - the written form of a formula target's tree, in a TOML file or a
-      saved state;
+    - the written form of a formula target's tree in a TOML file (inside
+      a state file it is promised, as the state is);
     - :meth:`rheon.polars.ModelBank.fit_predict_arrow`,
       :meth:`rheon.polars.ModelBank.predict_arrow` and
       :class:`rheon.ArrowStruct`;
-    - the modules :mod:`rheon.polars.sim`, :mod:`rheon.corr` and
-      :mod:`rheon.polars._gbdt`.
+    - the modules :mod:`rheon.polars.sim` and :mod:`rheon.corr`, and the
+      inputs built for XGBoost and LightGBM.
 
     Everything else in ``__all__`` is promised.
 

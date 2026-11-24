@@ -84,6 +84,15 @@ def _run_build_script(
     return res, package / "_build_flags.py"
 
 
+#: The x86-64 psABI levels' features, in rustc's names, as ``build.rs``
+#: records each (the levels of the System V AMD64 ABI supplement; ``lahf_lm``
+#: has no rustc feature, and v4's are AVX-512's).
+V2 = "+cmpxchg16b,+popcnt,+sse3,+sse4.1,+sse4.2,+ssse3"
+V3 = V2 + ",+avx,+avx2,+bmi1,+bmi2,+f16c,+fma,+lzcnt,+movbe,+xsave"
+V4 = V3 + ",+avx512f,+avx512bw,+avx512cd,+avx512dq,+avx512vl"
+V3_NO_AVX2 = V3.replace(",+avx2", "")
+
+
 def _recorded(path: Path) -> str:
     (value,) = re.findall(r'^BUILD_FEATURE_FLAGS = "([^"]*)"$', path.read_text("utf-8"), re.M)
     return value
@@ -102,8 +111,19 @@ def _recorded(path: Path) -> str:
         (["-C", "target-feature=+avx2,-sse4a,+crt-static,-crt-static"], "+avx2"),
         (["-C", "target-feature=-crt-static"], ""),
         # Other flags do not name features.
-        (["-C", "target-cpu=x86-64-v3", "-C", "link-arg=-fuse-ld=lld", "-Zthreads=4"], ""),
+        (["-C", "link-arg=-fuse-ld=lld", "-Zthreads=4"], ""),
         (["-C", "target-feature=+avx2", "-C", "target-cpu=native", "--cfg", "x"], "+avx2"),
+        # A psABI level names its features (review 2026-11-23, PYO3-2): a
+        # build for `x86-64-v3` recorded none, so its check said nothing.
+        (["-C", "target-cpu=x86-64-v2"], V2),
+        (["-C", "target-cpu=x86-64-v3", "-C", "link-arg=-fuse-ld=lld", "-Zthreads=4"], V3),
+        (["-Ctarget-cpu=x86-64-v4"], V4),
+        # A feature turned off after it was turned on is not needed, whatever
+        # turned it on; one turned on again is.
+        (["-C", "target-cpu=x86-64-v3", "-C", "target-feature=-avx2"], V3_NO_AVX2),
+        (["-C", "target-feature=+avx2,+fma", "-C", "target-feature=-avx2"], "+fma"),
+        (["-C", "target-feature=+avx2,-avx2,+avx2"], "+avx2"),
+        (["-C", "target-cpu=x86-64-v2", "-C", "target-feature=+avx2"], V2 + ",+avx2"),
         ([], ""),
         (None, ""),
     ],

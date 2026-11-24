@@ -627,14 +627,21 @@ impl PyModelBank {
     /// wrapped in `io::Error::other` ([`save_err`]).
     fn save(slf: &Bound<'_, Self>, path: &str) -> PyResult<()> {
         let this = slf.try_borrow().map_err(|_| busy("save"))?;
-        this.inner
-            .save(std::path::Path::new(path))
+        // The serialization and the file's write run without the GIL, as
+        // `fit_predict` does, so other threads run meanwhile (review
+        // 2026-11-23, PYO3-3).
+        let bank = &this.inner;
+        slf.py()
+            .detach(|| bank.save(std::path::Path::new(path)))
             .map_err(|e| save_err(path, e))
     }
 
     fn save_bytes(slf: &Bound<'_, Self>) -> PyResult<Vec<u8>> {
         let this = slf.try_borrow().map_err(|_| busy("save_bytes"))?;
-        this.inner.save_bytes().map_err(PyValueError::new_err)
+        let bank = &this.inner;
+        slf.py()
+            .detach(|| bank.save_bytes())
+            .map_err(PyValueError::new_err)
     }
 
     /// The state as JSON, for reading. `ValueError` when the state holds a
@@ -648,8 +655,9 @@ impl PyModelBank {
     #[pyo3(signature = (pretty = true))]
     fn save_json_string(slf: &Bound<'_, Self>, pretty: bool) -> PyResult<String> {
         let this = slf.try_borrow().map_err(|_| busy("save_json_string"))?;
-        this.inner
-            .save_json_string(pretty)
+        let bank = &this.inner;
+        slf.py()
+            .detach(|| bank.save_json_string(pretty))
             .map_err(PyValueError::new_err)
     }
 
@@ -662,13 +670,16 @@ impl PyModelBank {
     /// not in the state, so the file says nothing about it.
     #[pyo3(signature = (bytes, specs_json=None, threads=None))]
     fn load_bytes(
+        py: Python<'_>,
         bytes: &[u8],
         specs_json: Option<&str>,
         threads: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let threads = threads_arg(threads)?;
         let specs = specs_json.map(parse_specs).transpose()?;
-        let mut inner = Bank::load_bytes(bytes, specs.as_deref()).map_err(PyValueError::new_err)?;
+        let mut inner = py
+            .detach(|| Bank::load_bytes(bytes, specs.as_deref()))
+            .map_err(PyValueError::new_err)?;
         inner
             .set_threads(threads)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -678,8 +689,12 @@ impl PyModelBank {
     /// The `threads` count the bank was given, `None` for the process
     /// default.
     #[getter]
-    fn threads(&self) -> Option<usize> {
-        self.inner.threads().asked()
+    fn threads(slf: &Bound<'_, Self>) -> PyResult<Option<usize>> {
+        // Read under the bank's borrow as every other method is: a `&self`
+        // read during a `fit_predict` on another thread raised PyO3's
+        // "Already mutably borrowed" (review 2026-11-23, PYO3-1).
+        let this = slf.try_borrow().map_err(|_| busy("threads"))?;
+        Ok(this.inner.threads().asked())
     }
 
     /// Pickle and `copy.deepcopy` support, routed through the same versioned
@@ -1874,7 +1889,12 @@ fn save_checkpoint(
     let views: Vec<(&str, &[u8])> = stages.iter().map(|(n, b)| (n.as_str(), &b[..])).collect();
     py.detach(|| rheon_polars::save_checkpoint(std::path::Path::new(path), &views))
         .map_err(|e| match e.kind() {
-            std::io::ErrorKind::InvalidInput => PyValueError::new_err(e.to_string()),
+            // The library's refusal of the stages; a system call's own
+            // EINVAL (a filesystem that cannot sync a directory) is the
+            // filesystem's `OSError` (review 2026-11-23, IO-2).
+            std::io::ErrorKind::InvalidInput if e.raw_os_error().is_none() => {
+                PyValueError::new_err(e.to_string())
+            }
             _ => save_err(path, e),
         })
 }

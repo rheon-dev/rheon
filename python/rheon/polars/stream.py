@@ -233,7 +233,7 @@ def embargo(
         wider than 64 bits (``Int128``), which a bank refuses as a clock, or
         is a ``Time``, since a time of day starts again at midnight; or, on
         a numeric clock, ``delay`` is neither a number nor a duration, such
-        as ``None``. It is both a ``TypeError`` and a ``ValueError``.
+        as ``None``. It is a ``TypeError``.
     ``ValueError``
         When:
 
@@ -637,8 +637,7 @@ def refresh_time(
         ``Int64`` an integer clock is held in, or is a ``Time``, which starts
         again at midnight; the ``value`` column is not numeric; or a column,
         read or not, is ``UInt128``, which rheon cannot read (the
-        message names a cast to make). It is both a ``TypeError`` and a
-        ``ValueError``.
+        message names a cast to make). It is a ``TypeError``.
     ``ValueError``
         When:
 
@@ -993,7 +992,7 @@ def merge(
         which are named; a column of one name has two dtypes in two streams,
         which are named; or a column, read or not, is ``UInt128``, which
         rheon cannot read; or ``carry`` holds something other than text. It
-        is both a ``TypeError`` and a ``ValueError``.
+        is a ``TypeError``.
     ``ValueError``
         When the query is built: no stream is given, or a name twice; a
         stream already has a column named ``source``; ``carry`` names the
@@ -1532,14 +1531,12 @@ def with_windows(
         one duration reading no column, a keyword under its old name, or a
         ``like`` that is not a spec.
     :class:`~rheon.RefusedValueError`
-        A clock keyword given beside ``like=``. It is both a ``ValueError`` and
-        a ``TypeError``.
+        A clock keyword given beside ``like=``. It is a ``ValueError``.
     :class:`~rheon.WrongTypeError`
         When the query is built, a window operator's input is not a number,
         or an increment's is neither a number nor temporal; or a column, read
         or not, is ``UInt128``, which rheon cannot read (the message
-        names a cast to make). It is both a ``TypeError`` and a
-        ``ValueError``.
+        names a cast to make). It is a ``TypeError``.
     ``ValueError``
         When the query is built:
 

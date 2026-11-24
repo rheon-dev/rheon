@@ -1261,7 +1261,7 @@ def lightgbm_dataset(
         ``max_bin`` or ``threads`` is not a whole number; a feature, the
         label, the weight or the margin is of a type LightGBM does not
         read, a ``pl.Categorical`` among them; or ``categorical`` names a
-        float column. It is both a ``TypeError`` and a ``ValueError``.
+        float column. It is a ``TypeError``.
     :class:`~rheon.ColumnNotFoundError`
         A column named is not in the source. It is both Polars'
         ``ColumnNotFoundError`` and a ``ValueError``.

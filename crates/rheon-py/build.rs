@@ -24,17 +24,47 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-/// The features `-C target-feature=...` turns on in a `CARGO_ENCODED_RUSTFLAGS`
-/// value (the flags joined by `0x1f`), in order. Features it turns off, and
-/// `crt-static`, which is a linking choice and no CPU feature, are left out.
+/// The x86-64 psABI levels' features in rustc's names (the levels of the
+/// System V AMD64 ABI supplement; `lahf_lm` has no rustc feature), each
+/// level's beyond the one below it.
+const V2: &[&str] = &["cmpxchg16b", "popcnt", "sse3", "sse4.1", "sse4.2", "ssse3"];
+const V3: &[&str] = &[
+    "avx", "avx2", "bmi1", "bmi2", "f16c", "fma", "lzcnt", "movbe", "xsave",
+];
+const V4: &[&str] = &["avx512f", "avx512bw", "avx512cd", "avx512dq", "avx512vl"];
+
+/// The features a `-C target-cpu=...` value needs: a psABI level's, and
+/// none for another CPU (`native` is the building machine's, unknown here).
+fn cpu_features(cpu: &str) -> Vec<String> {
+    let levels: &[&[&str]] = match cpu {
+        "x86-64-v2" => &[V2],
+        "x86-64-v3" => &[V2, V3],
+        "x86-64-v4" => &[V2, V3, V4],
+        _ => &[],
+    };
+    levels
+        .iter()
+        .flat_map(|l| l.iter())
+        .map(|f| f.to_string())
+        .collect()
+}
+
+/// The features the flags in a `CARGO_ENCODED_RUSTFLAGS` value (the flags
+/// joined by `0x1f`) make the build need, in order: the last `target-cpu`'s
+/// psABI level, then each `target-feature` item in turn, `+name` adding one
+/// and `-name` taking it away, as rustc reads them (review 2026-11-23,
+/// PYO3-2: a `-name` after a `+name` was ignored, and a `target-cpu` level
+/// recorded nothing). `crt-static`, a linking choice and no CPU feature, is
+/// left out.
 fn required_features(encoded: &str) -> Vec<String> {
     let flags: Vec<&str> = encoded.split('\u{1f}').filter(|f| !f.is_empty()).collect();
-    let mut out: Vec<String> = Vec::new();
+    let mut cpu: Vec<String> = Vec::new();
+    let mut items: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < flags.len() {
         let flag = flags[i];
-        // `-C target-feature=...` (two words), `-Ctarget-feature=...`,
-        // `--codegen target-feature=...` and `--codegen=target-feature=...`.
+        // `-C name=...` (two words), `-Cname=...`, `--codegen name=...` and
+        // `--codegen=name=...`.
         let value = if flag == "-C" || flag == "--codegen" {
             i += 1;
             flags.get(i).copied()
@@ -44,14 +74,26 @@ fn required_features(encoded: &str) -> Vec<String> {
             flag.strip_prefix("-C")
         };
         if let Some(list) = value.and_then(|v| v.strip_prefix("target-feature=")) {
-            out.extend(
-                list.split(',')
-                    .filter_map(|feature| feature.strip_prefix('+'))
-                    .filter(|name| !name.is_empty() && *name != "crt-static")
-                    .map(str::to_string),
-            );
+            items.extend(list.split(','));
+        } else if let Some(name) = value.and_then(|v| v.strip_prefix("target-cpu=")) {
+            cpu = cpu_features(name);
         }
         i += 1;
+    }
+    let mut out = cpu;
+    for item in items {
+        let (on, name) = match item.split_at_checked(1) {
+            Some(("+", name)) => (true, name),
+            Some(("-", name)) => (false, name),
+            _ => continue,
+        };
+        if name.is_empty() || name == "crt-static" {
+            continue;
+        }
+        out.retain(|f| f != name);
+        if on {
+            out.push(name.to_string());
+        }
     }
     out
 }

@@ -861,8 +861,7 @@ def metrics(
     :class:`~rheon.WrongTypeError`
         A ``group`` column is an ``Object``, which a query's chunks cannot
         be matched by: cast it to ``String`` or ``Categorical``. Or
-        ``min_samples`` is not a whole number. It is both a ``TypeError``
-        and a ``ValueError``.
+        ``min_samples`` is not a whole number. It is a ``TypeError``.
 
     A query is refused as its result would be, with the same message,
     before it runs.
@@ -1124,8 +1123,8 @@ def window_metrics(
         ``min_samples`` and ``binary``.
     :class:`~rheon.WrongTypeError`
         The ``clock`` column is neither numeric nor temporal, or is a
-        ``Time``, which starts again at midnight. It is both a ``TypeError``
-        and a ``ValueError``, as a bank's refusal of the same clock is.
+        ``Time``, which starts again at midnight. It is a ``TypeError``, as
+        a bank's refusal of the same clock is.
     :class:`~rheon.ColumnNotFoundError`
         ``df`` does not have the ``clock`` column or a ``group`` column. It
         is both Polars' ``ColumnNotFoundError`` and a ``ValueError``.
@@ -2113,11 +2112,10 @@ def grid_search(
         dict; a key is not a str; or a value is not a list.
     :class:`~rheon.RefusedValueError`
         ``param_grid`` is given beside specs already built, or is empty, or
-        one of its lists is empty. It is both a ``ValueError`` and a
-        ``TypeError``.
+        one of its lists is empty. It is a ``ValueError``.
     :class:`~rheon.WrongTypeError`
         ``n_splits``, ``gap`` or ``chunk_size`` is not a whole number. It
-        is both a ``TypeError`` and a ``ValueError``.
+        is a ``TypeError``.
     :class:`~rheon.ColumnNotFoundError`
         A spec's target has no column in the stream. A formula target never
         has one, since the bank computes it as it learns and does not write
@@ -3668,8 +3666,8 @@ def from_sums(s: pl.DataFrame, *, min_samples: int = 30, binary: bool = False) -
     ``TypeError`` for an ``s`` that is not a ``DataFrame``; ``ValueError``
     for one that lacks a column of :data:`SUM_FIELDS`, such as the scores
     :func:`metrics` returns, and for a ``min_samples`` below 0; and
-    :class:`~rheon.WrongTypeError`, both a ``TypeError`` and a
-    ``ValueError``, for a ``min_samples`` that is not a whole number.
+    :class:`~rheon.WrongTypeError`, a ``TypeError``, for a ``min_samples``
+    that is not a whole number.
 
     .. rubric:: Examples
 
@@ -4589,8 +4587,8 @@ def diebold_mariano(
     ``half_life`` that is not finite and above 0, or so long that ``0.5 **
     (1 / half_life)`` is 1.0 in a double (from about 1.25e16 rows), and,
     with ``half_life``, for a ``name`` that ``df`` already has as a
-    column, which the result would replace. :class:`~rheon.WrongTypeError`, both a
-    ``TypeError`` and a ``ValueError``, for a ``lags`` that is not a whole
+    column, which the result would replace. :class:`~rheon.WrongTypeError`, a
+    ``TypeError``, for a ``lags`` that is not a whole
     number, such as ``1.5``.
 
     .. rubric:: Update equation

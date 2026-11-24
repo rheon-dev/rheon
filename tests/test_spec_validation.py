@@ -869,3 +869,75 @@ def test_fit_intercept_is_inert_on_every_kind_without_an_intercept():
         if (name in inert) != same:
             moved.append((name, "inert" if name in inert else "fits an intercept", same))
     assert not moved, moved
+
+
+# ---------------------------------------------------------------------------
+# The 2026-11-23 review, batch i (PLAN 578i).
+
+
+def test_drift_options_are_checked_as_any_mapping_is():
+    """PY-3: ``drift_options`` is a ``Mapping``, which the shape check did not
+    read, so a value that is no mapping reached ``dict()`` and raised its raw
+    error, and a read-only mapping's infinity passed the finite check."""
+    from types import MappingProxyType
+
+    build = lambda opts: rp.spec.ewridge(  # noqa: E731
+        "m",
+        targets=["y"],
+        features=["x"],
+        half_life=10.0,
+        emit_drift=True,
+        drift_kind="adwin",
+        drift_options=opts,
+    )
+    for bad in (123, "ab"):
+        with pytest.raises(TypeError, match="drift_options must be a mapping from strs"):
+            build(bad)
+    with pytest.raises(ValueError, match="drift_options must hold finite numbers"):
+        build(MappingProxyType({"delta": float("inf")}))
+    spec = build(MappingProxyType({"delta": 0.01}))
+    assert spec["drift_options"] == {"delta": 0.01}
+
+
+def test_each_drift_option_is_held_to_its_own_type():
+    """PY-13 (3): a ``bool`` where a number goes, or a fraction where a count
+    goes, reached the Rust side's parser and its raw error. Each is named by
+    its key."""
+    build = lambda opts: rp.spec.ewridge(  # noqa: E731
+        "m",
+        targets=["y"],
+        features=["x"],
+        half_life=10.0,
+        emit_drift=True,
+        drift_kind="kswin",
+        drift_options=opts,
+    )
+    for opts, words in (
+        ({"delta": True}, r"drift_options\['delta'\] must be a number, but it is bool"),
+        ({"stat_size": 1.5}, r"drift_options\['stat_size'\] must be an int, but it is float"),
+        ({"restart": 1}, r"drift_options\['restart'\] must be a bool, but it is int"),
+        ({"stat_size": -1}, r"drift_options\['stat_size'\] must be at least 0"),
+    ):
+        with pytest.raises((TypeError, ValueError), match=words):
+            build(opts)
+    build({"stat_size": 30, "window_size": 100, "alpha": 0.005, "seed": 1})
+
+
+@pytest.mark.parametrize(
+    ("builder", "key", "kw"),
+    [
+        ("garch", "horizon", {"targets": ["y"], "start_rows": 50}),
+        ("garch", "truncation", {"targets": ["y"], "start_rows": 50, "vol": "figarch"}),
+        ("garch", "start_rows", {"targets": ["y"]}),
+        ("hawkes", "window_events", {"targets": ["y"], "kernel_decays": [1.0], "half_life": 10.0}),
+        ("ddsketch", "window_rows", {"targets": ["y"], "quantiles": [0.5]}),
+        ("glm", "max_state_bytes", {"targets": ["y"], "features": ["x"], "half_life": 10.0}),
+    ],
+)
+def test_a_count_below_its_floor_is_told_the_floor(builder, key, kw):
+    """PY-13 (2): six counts whose Rust floor is 1 (``start_rows``: at least 1,
+    and ``garch``'s own least by its form) were told "Set it to 0 or more" for
+    a negative value, and 0 was then refused."""
+    with pytest.raises(ValueError, match=rf"{key} must be at least 1, but it is -1") as e:
+        getattr(rp.spec, builder)("m", **kw, **{key: -1})
+    assert "0 or more" not in str(e.value)

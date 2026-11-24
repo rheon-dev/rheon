@@ -12,6 +12,7 @@ from typing import Any, Literal, Unpack
 from rheon._duration import Duration
 from rheon._kwargs import CommonKwargs
 from rheon._spec import TargetList, _checked, _common
+from rheon._spec_words import quoted
 from rheon._warnings import RheonWarning, _user_stacklevel
 
 #: A group's state may hold this many bytes unless ``max_state_bytes`` says
@@ -288,6 +289,9 @@ def hawkes(
         model["closed"] = closed
     if max_state_bytes is not None:
         model["max_state_bytes"] = max_state_bytes
+    # The spec's own checks first, so a spec refused for another reason is
+    # not warned of first (review 2026-11-23, PY-4).
+    spec = _common(name, model, targets=targets, features=[], **common)
     cap = MAX_STATE_BYTES if max_state_bytes is None else max_state_bytes
     kernels = kernel_decays if kernel_decays is not None else kernel_half_lives
     if isinstance(kernels, list) and isinstance(window_events, int) and cap > 0:
@@ -295,10 +299,10 @@ def hawkes(
         if cap // 2 < need <= cap:
             warnings.warn(
                 RheonWarning(
-                    f"spec {name!r}: hawkes will hold {need} bytes in each group, past half of "
-                    f"max_state_bytes ({cap}): its window keeps {window_events} rows. Lower "
-                    "window_events, or raise max_state_bytes to keep this warning quiet."
+                    f"spec {quoted(name)}: hawkes will hold {need} bytes in each group, past "
+                    f"half of max_state_bytes ({cap}): its window keeps {window_events} rows. "
+                    "Lower window_events, or raise max_state_bytes to keep this warning quiet."
                 ),
                 stacklevel=_user_stacklevel(),
             )
-    return _common(name, model, targets=targets, features=[], **common)
+    return spec

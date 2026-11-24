@@ -229,7 +229,7 @@ class ModelBank:
           the same bound.
     :class:`~rheon.WrongTypeError`
         ``specs`` is one spec, a string or bytes, in place of a list of specs. It
-        is both a ``TypeError`` and a ``ValueError``.
+        is a ``TypeError``.
     ``TypeError``
         ``specs`` is not iterable, or ``threads`` is not an integer, a bool
         included.
@@ -618,8 +618,7 @@ class ModelBank:
         :class:`~rheon.WrongTypeError`
             A clock column is not a number, a ``Date``, a ``Datetime`` or a
             ``Duration``, or a clock is temporal in the frame and was numeric
-            in the bank, or the other way round. It is both a ``TypeError``
-            and a ``ValueError``.
+            in the bank, or the other way round. It is a ``TypeError``.
         :class:`~rheon.ColumnNotFoundError`
             A spec's clock or group column is not in the frame. It is both a
             ``ValueError`` and Polars' ``ColumnNotFoundError``.
@@ -796,8 +795,8 @@ class ModelBank:
             A column a spec reads is not in ``df``. It is both a
             ``ValueError`` and Polars' ``ColumnNotFoundError``.
         :class:`~rheon.WrongTypeError`
-            A column of a type its role cannot take. It is both a
-            ``TypeError`` and a ``ValueError``. When:
+            A column of a type its role cannot take. It is a
+            ``TypeError``. When:
 
             - a column of ``df`` is ``UInt128``, which rheon cannot
               read;

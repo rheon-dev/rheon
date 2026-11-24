@@ -994,8 +994,8 @@ def spectral(r: Any, k: int) -> tuple[Any, Any]:
         ``r`` is an array that is not square, a Gram column other than the
         intercept has no variance, or ``k`` is below 1.
     :class:`~rheon.WrongTypeError`
-        ``k`` is not a whole number, such as ``2.5``. It is both a
-        ``TypeError`` and a ``ValueError``.
+        ``k`` is not a whole number, such as ``2.5``. It is a
+        ``TypeError``.
     ``numpy.linalg.LinAlgError``
         ``r`` is an array holding ``nan`` entries, where numpy's eigensolver
         does not converge.

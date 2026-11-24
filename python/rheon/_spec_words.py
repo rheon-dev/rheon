@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import types
 import typing
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 
@@ -59,7 +59,7 @@ def _bad_word(v: Any, hint: Any) -> tuple[str, tuple[str, ...]] | None:
             words = typing.get_args(inner)
             return next(((x, words) for x in v if x not in words), None)
         return None
-    if origin is dict and isinstance(v, dict):
+    if origin in (dict, Mapping) and isinstance(v, Mapping):
         key, _ = typing.get_args(hint)
         if typing.get_origin(key) is Literal and all(isinstance(k, str) for k in v):
             words = typing.get_args(key)

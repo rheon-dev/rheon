@@ -404,8 +404,7 @@ def ewm_mean(
           element-wise, or a column whose name starts with ``@po:``, the prefix
           the operators' own columns carry.
     :class:`~rheon.RefusedValueError`
-        ``reverse=True`` without ``window_size``. It is both a ``ValueError``
-        and a ``TypeError``.
+        ``reverse=True`` without ``window_size``. It is a ``ValueError``.
 
     :func:`rheon.polars.stream.with_windows` refuses the rest when it builds
     its query, such as a window looking ahead under ``group`` with no clock
@@ -560,8 +559,7 @@ def ewm_sum(
           element-wise, or a column whose name starts with ``@po:``, the prefix
           the operators' own columns carry.
     :class:`~rheon.RefusedValueError`
-        ``reverse=True`` without ``window_size``. It is both a ``ValueError``
-        and a ``TypeError``.
+        ``reverse=True`` without ``window_size``. It is a ``ValueError``.
 
     :func:`rheon.polars.stream.with_windows` refuses the rest when it builds
     its query, such as a window looking ahead under ``group`` with no clock
@@ -708,8 +706,7 @@ def ewm_rate(
           element-wise, or a column whose name starts with ``@po:``, the prefix
           the operators' own columns carry.
     :class:`~rheon.RefusedValueError`
-        ``reverse=True`` without ``window_size``. It is both a ``ValueError``
-        and a ``TypeError``.
+        ``reverse=True`` without ``window_size``. It is a ``ValueError``.
 
     :func:`rheon.polars.stream.with_windows` refuses the rest when it builds
     its query, such as a window looking ahead under ``group`` with no clock
@@ -857,8 +854,7 @@ def ewm_quantile(
           element-wise, or a column whose name starts with ``@po:``, the prefix
           the operators' own columns carry.
     :class:`~rheon.RefusedValueError`
-        ``reverse=True`` without ``window_size``. It is both a ``ValueError``
-        and a ``TypeError``.
+        ``reverse=True`` without ``window_size``. It is a ``ValueError``.
 
     :func:`rheon.polars.stream.with_windows` refuses the rest when it builds
     its query, such as a window looking ahead under ``group`` with no clock
@@ -1074,7 +1070,7 @@ def rolling_max(
           element-wise, or a column whose name starts with ``@po:``.
     :class:`~rheon.RefusedValueError`
         ``reverse=True`` without ``window_size``, or with ``since``. It is
-        both a ``ValueError`` and a ``TypeError``.
+        a ``ValueError``.
 
     :func:`rheon.polars.stream.with_windows` refuses the rest when it builds
     its query: a ``since`` that is not a boolean, a window past
@@ -1263,7 +1259,7 @@ def rolling_min(
           element-wise, or a column whose name starts with ``@po:``.
     :class:`~rheon.RefusedValueError`
         ``reverse=True`` without ``window_size``, or with ``since``. It is
-        both a ``ValueError`` and a ``TypeError``.
+        a ``ValueError``.
 
     :func:`rheon.polars.stream.with_windows` refuses the rest when it builds
     its query: a ``since`` that is not a boolean, a window past
