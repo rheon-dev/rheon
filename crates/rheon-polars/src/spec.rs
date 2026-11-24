@@ -19,6 +19,7 @@ pub(crate) use checks::render_refusal;
 use checks::*;
 mod names;
 mod readiness;
+mod smooth;
 
 pub use names::*;
 mod values;
@@ -281,6 +282,20 @@ pub enum ModelKind {
             skip_serializing_if = "rheon_core::CovarianceForm::is_covariance"
         )]
         covariance_form: rheon_core::CovarianceForm,
+        /// The fixed-lag smoother's lag, in observations of each target
+        /// (`spec/smooth.rs`): on the row that completes it, the estimate of
+        /// the coefficients at the observation that many before, given every
+        /// row since. Skipped when absent, so a spec without it serializes
+        /// as it did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        smooth_lag: Option<u64>,
+        /// The smoothed coefficients' standard errors beside them.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        emit_smoothed_se: bool,
+        /// The bytes the smoother may hold a group: 256 KB by default, at
+        /// most 64 MiB, held to before a row is read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
     },
     /// Huber regression (docs/PLAN.md §4.5).
     Huber {

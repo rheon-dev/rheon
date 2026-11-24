@@ -119,6 +119,13 @@ pub(super) enum Source {
     /// column's own type (docs/PLAN.md task 152).
     ScoredClock,
     LearnedClock,
+    /// `kalman`'s fixed-lag smoother, per instance: `smoothed_coef` and
+    /// `smoothed_se_coef`, laid out like `Coef`, and `smoothed_for_<t>`,
+    /// per instance and target (`instance * m + target`), in the clock
+    /// column's own type.
+    SmoothedCoef(usize),
+    SmoothedSe(usize),
+    SmoothedFor(usize),
     LamSelected(usize),
     SelPred(usize),
     SelName(usize),
@@ -171,7 +178,10 @@ impl FieldMeta {
     fn src(mut self, src: Source) -> Self {
         // The clock fields take the clock column's own type, known only
         // when a chunk arrives (task 152).
-        let is_clock = matches!(src, Source::ScoredClock | Source::LearnedClock);
+        let is_clock = matches!(
+            src,
+            Source::ScoredClock | Source::LearnedClock | Source::SmoothedFor(_)
+        );
         self.src = src;
         self.dtype = if is_clock {
             "clock".to_string()
@@ -201,7 +211,9 @@ impl FieldMeta {
             | Source::SupportCoef(_)
             | Source::SeCoef(_)
             | Source::SeCoefHc0(_)
-            | Source::SeCoefHac(_) => DataType::List(Box::new(DataType::Float64)),
+            | Source::SeCoefHac(_)
+            | Source::SmoothedCoef(_)
+            | Source::SmoothedSe(_) => DataType::List(Box::new(DataType::Float64)),
             Source::Reason(_) => DataType::from_frozen_categories(
                 polars::prelude::FrozenCategories::new(crate::stream::WITHHELD_REASONS)
                     .expect("distinct names"),
@@ -694,6 +706,26 @@ pub fn output_index(spec: &Spec) -> Vec<FieldMeta> {
                         FieldMeta::new(format!("se_coef{suffix}"), "se_coef")
                             .src(Source::SeCoef(mi)),
                     ));
+                }
+                // The fixed-lag smoother's, on the rows that complete a lag.
+                if spec.smooth_lag().is_some() {
+                    fields.push(like(
+                        FieldMeta::new(format!("smoothed_coef{suffix}"), "smoothed_coef")
+                            .src(Source::SmoothedCoef(mi)),
+                    ));
+                    if spec.emit_smoothed_se() {
+                        fields.push(like(
+                            FieldMeta::new(format!("smoothed_se_coef{suffix}"), "smoothed_se_coef")
+                                .src(Source::SmoothedSe(mi)),
+                        ));
+                    }
+                    for (t_i, t) in spec.targets.iter().enumerate() {
+                        fields.push(like(
+                            FieldMeta::new(format!("smoothed_for_{t}{suffix}"), "smoothed_for")
+                                .target(t)
+                                .src(Source::SmoothedFor(mi * spec.m() + t_i)),
+                        ));
+                    }
                 }
                 // The robust ones beside it, opt-in (task 221 (c)).
                 if spec.emit_robust_se && spec.has_robust_se() {

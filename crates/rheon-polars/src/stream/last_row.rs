@@ -84,6 +84,22 @@ pub struct LastRow {
     pub se_coef_hc0: Vec<Option<Vec<f64>>>,
     #[serde(default, with = "rheon_core::humanfloat::vec_opt_vec_f64_or_tag")]
     pub se_coef_hac: Vec<Option<Vec<f64>>>,
+    /// `kalman`'s fixed-lag smoother under `smooth_lag`; empty, and not
+    /// written, without one.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_opt_vec_f64_or_tag"
+    )]
+    pub smoothed_coef: Vec<Option<Vec<f64>>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_opt_vec_f64_or_tag"
+    )]
+    pub smoothed_se: Vec<Option<Vec<f64>>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub smoothed_for: Vec<Option<ClockValue>>,
 }
 
 /// Row `ri` of a buffer of `n_rows` rows: in every `ChunkOut` buffer the row
@@ -135,6 +151,9 @@ impl LastRow {
         take_list_row(&mut self.se_coef, &out.se_coef, ri);
         take_list_row(&mut self.se_coef_hc0, &out.se_coef_hc0, ri);
         take_list_row(&mut self.se_coef_hac, &out.se_coef_hac, ri);
+        take_list_row(&mut self.smoothed_coef, &out.smoothed_coef, ri);
+        take_list_row(&mut self.smoothed_se, &out.smoothed_se, ri);
+        take_row(&mut self.smoothed_for, &out.smoothed_for, n, ri);
     }
 
     /// A one-row chunk at absolute row `row`, marked processed, for
@@ -173,6 +192,9 @@ impl LastRow {
             out.se_coef_hac.len() == self.se_coef_hac.len(),
             out.scored_clock.len() == self.scored_clock.len(),
             out.learned_clock.len() == self.learned_clock.len(),
+            out.smoothed_coef.len() == self.smoothed_coef.len(),
+            out.smoothed_se.len() == self.smoothed_se.len(),
+            out.smoothed_for.len() == self.smoothed_for.len(),
         ];
         if same.contains(&false) {
             return Err(format!(
@@ -216,6 +238,13 @@ impl LastRow {
         for (dst, src) in out.se_coef_hac.iter_mut().zip(&self.se_coef_hac) {
             dst[0].clone_from(src);
         }
+        for (dst, src) in out.smoothed_coef.iter_mut().zip(&self.smoothed_coef) {
+            dst[0].clone_from(src);
+        }
+        for (dst, src) in out.smoothed_se.iter_mut().zip(&self.smoothed_se) {
+            dst[0].clone_from(src);
+        }
+        out.smoothed_for.clone_from(&self.smoothed_for);
         Ok(out)
     }
 }

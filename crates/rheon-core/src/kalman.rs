@@ -2680,8 +2680,12 @@ impl OnlineModel for Kalman {
         }
     }
 
-    fn stamp_next(&mut self, stamp: crate::Stamp) {
-        self.smooth_stamp(stamp);
+    fn label_next(&mut self, label: crate::ClockValue) {
+        self.smooth_label(label);
+    }
+
+    fn hold_smoothed(&mut self, target: usize) {
+        self.smooth_hold(target);
     }
 
     fn smoothed_into(&self, out: &mut Smoothed) -> bool {

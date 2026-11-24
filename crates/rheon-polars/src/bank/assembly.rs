@@ -225,6 +225,8 @@ fn lists_of<'c>(src: &Source, ch: &'c mut ChunkOut) -> &'c mut [Vec<Option<Vec<f
         Source::SeCoef(_) => &mut ch.se_coef,
         Source::SeCoefHc0(_) => &mut ch.se_coef_hc0,
         Source::SeCoefHac(_) => &mut ch.se_coef_hac,
+        Source::SmoothedCoef(_) => &mut ch.smoothed_coef,
+        Source::SmoothedSe(_) => &mut ch.smoothed_se,
         _ => unreachable!("only a list field reads a coef-like buffer"),
     }
 }
@@ -276,8 +278,12 @@ impl<'a> Sink<'a> {
                 | Source::SupportCoef(_)
                 | Source::SeCoef(_)
                 | Source::SeCoefHc0(_)
-                | Source::SeCoefHac(_) => Acc::Lists(Vec::new()),
-                Source::ScoredClock | Source::LearnedClock => Acc::Clocks(vec![None; n]),
+                | Source::SeCoefHac(_)
+                | Source::SmoothedCoef(_)
+                | Source::SmoothedSe(_) => Acc::Lists(Vec::new()),
+                Source::ScoredClock | Source::LearnedClock | Source::SmoothedFor(_) => {
+                    Acc::Clocks(vec![None; n])
+                }
                 Source::SelPred(_) | Source::SelName(_) | Source::AvgPred(_) => Acc::Derived,
                 Source::Unset => unreachable!("every field is given a source in output_index"),
                 _ if prefill => Acc::Flat(F64Column::appending(n)),
@@ -600,9 +606,11 @@ fn absorb_field(
             }
         }
         Acc::Clocks(values) => {
-            let v = match src {
-                Source::ScoredClock => &ch.scored_clock,
-                _ => &ch.learned_clock,
+            let nr = ch.rows.len();
+            let v = match *src {
+                Source::ScoredClock => &ch.scored_clock[..],
+                Source::SmoothedFor(i) => &ch.smoothed_for[i * nr..(i + 1) * nr],
+                _ => &ch.learned_clock[..],
             };
             for (ri, &row) in ch.rows.iter().enumerate() {
                 if ch.processed[ri] {
@@ -623,7 +631,9 @@ fn take_lists(list: &mut Vec<(usize, Vec<f64>)>, src: &Source, ch: &mut ChunkOut
         | Source::SupportCoef(mi)
         | Source::SeCoef(mi)
         | Source::SeCoefHc0(mi)
-        | Source::SeCoefHac(mi) => mi,
+        | Source::SeCoefHac(mi)
+        | Source::SmoothedCoef(mi)
+        | Source::SmoothedSe(mi) => mi,
         _ => unreachable!("only a list field takes lists"),
     };
     let rows = std::mem::take(&mut ch.rows);

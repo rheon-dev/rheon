@@ -35,7 +35,9 @@
 //! covariance with it being 0. The slot keeps `(c_n, G_n)`, and `K_n`'s
 //! lower triangle when the smoothed variances are asked for, so the pass
 //! needs no `F`: `m <- c_n + G_n m`, `V <- K_n + G_n V G_nᵀ`. Each slot also
-//! keeps what reads its observation out: its stamp, which slots were
+//! keeps what reads its observation out: its row's clock label (the
+//! clock column's value as the caller hands it, or its row number), which
+//! slots were
 //! sized, whether the filter's gate let the observation's prediction
 //! stand, and the anchor its coordinates are those of. A ring of `L − 1`
 //! complete slots and the newest observation's pending pair is the state,
@@ -58,7 +60,7 @@
 //! continues through both, its noise charged for the gap.
 //!
 //! **What is emitted.** On a row that completes a lag, for each target of
-//! the covariance: the described observation's stamp, its coefficients in
+//! the covariance: the described observation's clock label, its coefficients in
 //! the caller's units (read out through that observation's anchor, as
 //! `coefficients` reads the filter's), and with variances asked for, the
 //! diagonal of `T V Tᵀ` times the target's noise as it stands, as
@@ -73,7 +75,7 @@ use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
 
 use super::Kalman;
-use crate::Stamp;
+use crate::ClockValue;
 
 /// The described observation's prediction stood: its smoothed value is
 /// emitted.
@@ -88,14 +90,14 @@ pub const SMOOTH_UNSEEN: u8 = 2;
 
 /// What one row emitted, per target: whether the row completed the lag of
 /// an observation of the target and, where it did, that observation's
-/// stamp, whether its value stands ([`SMOOTH_STOOD`]) or why not, its
+/// label, whether its value stands ([`SMOOTH_STOOD`]) or why not, its
 /// smoothed coefficients in the caller's units (`k_total` a target, NaN
 /// where there is no value) and, with the variances asked for, their
 /// variances laid out the same way.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Smoothed {
     pub emitted: Vec<bool>,
-    pub stamp: Vec<Option<Stamp>>,
+    pub label: Vec<Option<ClockValue>>,
     pub held: Vec<u8>,
     pub coef: Vec<f64>,
     pub var: Vec<f64>,
@@ -103,24 +105,24 @@ pub struct Smoothed {
 
 /// One observation's smoothed value given every row so far, as
 /// [`Kalman::smoothed_tail`] reads it from the state: the target, the
-/// stamp, whether it stands, the coefficients and (with the variances
+/// label, whether it stands, the coefficients and (with the variances
 /// asked for) their variances, NaN where there is no value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SmoothedRow {
     pub target: usize,
-    pub stamp: Stamp,
+    pub label: ClockValue,
     pub held: u8,
     pub coef: Vec<f64>,
     pub var: Vec<f64>,
 }
 
-/// What reads an observation out: its stamp, which slots the filter had
+/// What reads an observation out: its label, which slots the filter had
 /// sized (a variance not 0), whether each target's prediction stood
 /// ([`SMOOTH_STOOD`] and the rest), and the anchor of its coordinates,
 /// `[means' high parts, low parts, scales]`, empty without `standardize`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Described {
-    stamp: Stamp,
+    label: ClockValue,
     sized: Vec<bool>,
     held: Vec<u8>,
     anchor: Vec<f64>,
@@ -159,15 +161,15 @@ struct Ring {
 }
 
 /// The smoother's state: the lag, whether the variances are kept, a ring
-/// per covariance, the stamp handed for the next row and the model's own
-/// clock for a row handed none.
+/// per covariance, the clock label handed for the next row and the model's
+/// own clock for a row handed none.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct Smoother {
     lag: usize,
     se: bool,
     rings: Vec<Ring>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    next: Option<Stamp>,
+    next: Option<ClockValue>,
     clock: f64,
     #[serde(skip)]
     row: Work,
@@ -177,7 +179,10 @@ pub(super) struct Smoother {
 /// smoothers are equal whatever either holds here.
 #[derive(Debug, Clone, Default)]
 struct Work {
-    stamp: Option<Stamp>,
+    label: Option<ClockValue>,
+    /// Which rings took a pending pair on this row: what
+    /// [`Kalman::hold_smoothed`] may mark.
+    fresh: Vec<bool>,
     out: Smoothed,
     chol: Vec<f64>,
     idx: Vec<usize>,
@@ -194,7 +199,7 @@ struct Work {
 
 /// One pair the smoother read: covariance `pi`'s prior (`prior`) or
 /// filtered pair of an observation, each target's `b` one after another,
-/// the anchor as it stood and the row's stamp.
+/// the anchor as it stood and the row's label.
 #[cfg(test)]
 #[derive(Debug, Clone)]
 pub(super) struct Logged {
@@ -203,7 +208,7 @@ pub(super) struct Logged {
     pub(super) p: Vec<f64>,
     pub(super) b: Vec<f64>,
     pub(super) anchor: Vec<f64>,
-    pub(super) stamp: Stamp,
+    pub(super) label: ClockValue,
 }
 
 impl PartialEq for Work {
@@ -330,16 +335,18 @@ impl Smoother {
             })
     }
 
-    /// A row begins: nothing emitted yet, and its stamp the one handed, or
+    /// A row begins: nothing emitted yet, and its label the one handed, or
     /// the model's own clock.
     fn begin(&mut self, d_clock: f64, m: usize, k: usize) {
         self.clock += d_clock;
-        self.row.stamp = Some(self.next.take().unwrap_or(Stamp::from(self.clock)));
+        self.row.fresh.clear();
+        self.row.fresh.resize(self.rings.len(), false);
+        self.row.label = Some(self.next.take().unwrap_or(ClockValue::F64(self.clock)));
         let out = &mut self.row.out;
         out.emitted.clear();
         out.emitted.resize(m, false);
-        out.stamp.clear();
-        out.stamp.resize(m, None);
+        out.label.clear();
+        out.label.resize(m, None);
         out.held.clear();
         out.held.resize(m, SMOOTH_STOOD);
         out.coef.clear();
@@ -660,7 +667,7 @@ impl Kalman {
                     p: self.p[pi].clone(),
                     b: b_prior.clone(),
                     anchor: self.smooth_anchor(),
-                    stamp: s.row.stamp.expect("a row's stamp"),
+                    label: s.row.label.expect("a row's label"),
                 });
                 s.link(pi, &self.p[pi], &b_prior, k);
             }
@@ -699,7 +706,7 @@ impl Kalman {
                 for r in rows {
                     let j = r.target;
                     out.emitted[j] = true;
-                    out.stamp[j] = Some(r.stamp);
+                    out.label[j] = Some(r.label);
                     out.held[j] = r.held;
                     out.coef[j * k..(j + 1) * k].copy_from_slice(&r.coef);
                     if se {
@@ -731,14 +738,15 @@ impl Kalman {
                 p: p.clone(),
                 b: b.clone(),
                 anchor: anchor.clone(),
-                stamp: s.row.stamp.expect("a row's stamp"),
+                label: s.row.label.expect("a row's label"),
             });
             let of = Described {
-                stamp: s.row.stamp.unwrap_or(Stamp::from(s.clock)),
+                label: s.row.label.unwrap_or(ClockValue::F64(s.clock)),
                 sized: (0..k).map(|i| p[i * k + i] != 0.0).collect(),
                 held,
                 anchor,
             };
+            s.row.fresh[pi] = true;
             s.rings[pi].pending = Some(Pending {
                 of,
                 b,
@@ -834,7 +842,7 @@ impl Kalman {
                 }
                 SmoothedRow {
                     target: j,
-                    stamp: of.stamp,
+                    label: of.label,
                     held,
                     coef,
                     var,
@@ -859,10 +867,53 @@ impl Kalman {
         &self.smoother.as_ref().expect("a smoother").row.log
     }
 
-    /// The stamp of the next row stepped (`OnlineModel::stamp_next`).
-    pub(super) fn smooth_stamp(&mut self, stamp: Stamp) {
+    /// The caller's gate withheld target `j`'s prediction on this row for
+    /// its `min_weight`: the observation the row added, if it added one,
+    /// is not reported when its lag completes ([`SMOOTH_MIN_WEIGHT`]).
+    pub(super) fn smooth_hold(&mut self, j: usize) {
+        let pi = if self.cfg.share_p { 0 } else { j };
+        let t = if self.cfg.share_p { j } else { 0 };
+        if let Some(s) = self.smoother.as_deref_mut()
+            && s.row.fresh.get(pi).copied().unwrap_or(false)
+            && let Some(p) = &mut s.rings[pi].pending
+            && p.of.held[t] == SMOOTH_STOOD
+        {
+            p.of.held[t] = SMOOTH_MIN_WEIGHT;
+        }
+    }
+
+    /// The bytes a smoother of `lag` observations takes in a state file at
+    /// most, its variances kept with `se`, for a filter of `k` coefficients
+    /// (the intercept's included) and `m` targets, one covariance for all
+    /// of them under `share_p`, with an anchor under `standardize`: per
+    /// covariance, `lag` slots (the pending pair among them) of `G` (`k²`),
+    /// each target's `c` (`k`), `K`'s triangle with `se` and the anchor
+    /// (`3k`), nine bytes a number as the file writes one, the sized and
+    /// held marks, and 128 bytes for the clock label and the slot's names
+    /// and lengths. What a spec holds to its `max_state_bytes` before a row
+    /// is read.
+    pub fn smoother_bytes(
+        k: usize,
+        m: usize,
+        share_p: bool,
+        standardize: bool,
+        lag: usize,
+        se: bool,
+    ) -> u64 {
+        let (rings, per) = if share_p { (1, m) } else { (m, 1) };
+        let (k, per, lag) = (k as u64, per as u64, lag as u64);
+        let floats = per * k
+            + k * k
+            + if se { k * (k + 1) / 2 } else { 0 }
+            + if standardize { 3 * k } else { 0 };
+        let slot = 9 * floats + k + per + 128;
+        (rings as u64).saturating_mul(lag.saturating_mul(slot))
+    }
+
+    /// The label of the next row stepped (`OnlineModel::label_next`).
+    pub(super) fn smooth_label(&mut self, label: ClockValue) {
         if let Some(s) = self.smoother.as_deref_mut() {
-            s.next = Some(stamp);
+            s.next = Some(label);
         }
     }
 }

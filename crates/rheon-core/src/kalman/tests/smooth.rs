@@ -10,7 +10,7 @@
 //! itself, the filter's gate, and the refusals.
 
 use super::*;
-use crate::Stamp;
+use crate::ClockValue;
 use crate::kalman::smooth::Logged;
 
 #[derive(Clone)]
@@ -111,12 +111,12 @@ struct Run {
     preds: Vec<Vec<u64>>,
 }
 
-fn run(model: Kalman, rows: &[Row], stamps: &[f64]) -> Run {
+fn run(model: Kalman, rows: &[Row], labels: &[f64]) -> Run {
     let mut model = model;
     let mut emitted = vec![];
     let mut preds = vec![];
     for (r, row) in rows.iter().enumerate() {
-        model.stamp_next(Stamp::from(stamps[r]));
+        model.label_next(ClockValue::F64(labels[r]));
         let out = model.step(&row.x, &row.y, row.d, row.w);
         preds.push(out.pred.iter().map(|p| p.to_bits()).collect());
         if let Some(s) = model.smoothed()
@@ -184,7 +184,7 @@ struct Pair {
     b: Vec<Vec<f64>>,
     p: Vec<f64>,
     sized: Vec<bool>,
-    stamp: Stamp,
+    label: ClockValue,
 }
 
 fn in_caller_units(l: &Logged, k: usize) -> Pair {
@@ -193,7 +193,7 @@ fn in_caller_units(l: &Logged, k: usize) -> Pair {
         b: l.b.chunks_exact(k).map(|b| mat_vec(&t, b)).collect(),
         p: mul(&mul(&t, &l.p, k), &transpose(&t, k), k),
         sized: (0..k).map(|i| l.p[i * k + i] != 0.0).collect(),
-        stamp: l.stamp,
+        label: l.label,
     }
 }
 
@@ -287,7 +287,7 @@ fn check(r: &Run, lag: usize, f: &dyn Fn(usize, usize) -> Vec<f64>) -> (f64, usi
             let (_, out, ratios) = r
                 .emitted
                 .iter()
-                .find(|(_, o, _)| targets.iter().any(|&j| o.stamp[j] == Some(posts[s].stamp)))
+                .find(|(_, o, _)| targets.iter().any(|&j| o.label[j] == Some(posts[s].label)))
                 .expect("every observation a lag back is emitted");
             for (ti, &j) in targets.iter().enumerate() {
                 assert!(out.emitted[j]);
@@ -312,7 +312,7 @@ fn check(r: &Run, lag: usize, f: &dyn Fn(usize, usize) -> Vec<f64>) -> (f64, usi
             for (ti, &j) in targets.iter().enumerate() {
                 let row = tail
                     .iter()
-                    .find(|row| row.target == j && row.stamp == posts[s].stamp)
+                    .find(|row| row.target == j && row.label == posts[s].label)
                     .expect("each of the last observations in the tail");
                 if row.held != SMOOTH_STOOD {
                     continue;
@@ -517,7 +517,7 @@ fn a_row_of_weight_0_is_no_observation() {
         let mut rows = stream(300, 2, 1, 4964, false);
         rows[0].w = 0.0;
         rows[0].y = vec![Some(1e300)];
-        let stamps = ids(rows.len());
+        let labels = ids(rows.len());
         let mut kept = vec![];
         let mut kept_stamps = vec![];
         let mut carry = 0.0;
@@ -530,7 +530,7 @@ fn a_row_of_weight_0_is_no_observation() {
             row.d += carry;
             carry = 0.0;
             kept.push(row);
-            kept_stamps.push(stamps[r]);
+            kept_stamps.push(labels[r]);
         }
         assert!(kept.len() < rows.len() - 10);
         let all = run(
@@ -539,7 +539,7 @@ fn a_row_of_weight_0_is_no_observation() {
                 .with_smoother(5, true)
                 .unwrap(),
             &rows,
-            &stamps,
+            &labels,
         );
         let dropped = run(
             Kalman::new(cfg).unwrap().with_smoother(5, true).unwrap(),
@@ -549,8 +549,8 @@ fn a_row_of_weight_0_is_no_observation() {
         assert_eq!(all.emitted.len(), dropped.emitted.len());
         for ((ra, a, _), (rd, d, _)) in all.emitted.iter().zip(&dropped.emitted) {
             assert!(rows[*ra].w > 0.0);
-            assert_eq!(stamps[*ra], kept_stamps[*rd]);
-            assert_eq!(a.stamp, d.stamp);
+            assert_eq!(labels[*ra], kept_stamps[*rd]);
+            assert_eq!(a.label, d.label);
             assert_eq!(a.held, d.held);
             for (u, v) in a.coef.iter().chain(&a.var).zip(d.coef.iter().chain(&d.var)) {
                 if u.is_nan() || v.is_nan() {
@@ -574,25 +574,25 @@ fn a_state_saved_mid_ring_goes_on_to_the_bit() {
         ..base(3, 1)
     };
     let rows = stream(400, 3, 1, 4965, true);
-    let stamps = ids(400);
+    let labels = ids(400);
     let whole = run(
         Kalman::new(cfg.clone())
             .unwrap()
             .with_smoother(30, true)
             .unwrap(),
         &rows,
-        &stamps,
+        &labels,
     );
     let first = run(
         Kalman::new(cfg).unwrap().with_smoother(30, true).unwrap(),
         &rows[..217],
-        &stamps[..217],
+        &labels[..217],
     );
     let bytes = rmp_serde::to_vec_named(&first.model.state()).unwrap();
     let state: State = rmp_serde::from_slice(&bytes).unwrap();
     let loaded = Kalman::restore(&state).unwrap();
     assert_eq!(rmp_serde::to_vec_named(&loaded.state()).unwrap(), bytes);
-    let rest = run(loaded, &rows[217..], &stamps[217..]);
+    let rest = run(loaded, &rows[217..], &labels[217..]);
     let joined: Vec<_> = first
         .emitted
         .iter()
@@ -605,7 +605,7 @@ fn a_state_saved_mid_ring_goes_on_to_the_bit() {
         let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
         assert_eq!(bits(&a.coef), bits(&b.coef));
         assert_eq!(bits(&a.var), bits(&b.var));
-        assert_eq!(a.stamp, b.stamp);
+        assert_eq!(a.label, b.label);
     }
 }
 
@@ -627,19 +627,19 @@ fn a_refused_re_map_cuts_the_chain() {
     let jump = 120;
     rows[jump].x[0] = 1e7;
     let lag = 10;
-    let stamps = ids(rows.len());
+    let labels = ids(rows.len());
     let whole = run(
         Kalman::new(cfg.clone())
             .unwrap()
             .with_smoother(lag, true)
             .unwrap(),
         &rows,
-        &stamps,
+        &labels,
     );
     let cut = run(
         Kalman::new(cfg).unwrap().with_smoother(lag, true).unwrap(),
         &rows[..=jump],
-        &stamps[..=jump],
+        &labels[..=jump],
     );
     let tail = cut.model.smoothed_tail().unwrap();
     assert_eq!(tail.len(), lag);
@@ -647,12 +647,12 @@ fn a_refused_re_map_cuts_the_chain() {
         let (_, out, _) = whole
             .emitted
             .iter()
-            .find(|(_, o, _)| o.stamp[0] == Some(row.stamp))
+            .find(|(_, o, _)| o.label[0] == Some(row.label))
             .expect("emitted after the break");
         let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
         // The variances read the noise as it stands, which the rows after
         // the break move; the coefficients read nothing after it.
-        assert_eq!(bits(&row.coef), bits(&out.coef), "{:?}", row.stamp);
+        assert_eq!(bits(&row.coef), bits(&out.coef), "{:?}", row.label);
     }
     // Without the break the rows after it move those values.
     let mut smooth_rows = rows.clone();
@@ -666,13 +666,13 @@ fn a_refused_re_map_cuts_the_chain() {
         .with_smoother(lag, true)
         .unwrap(),
         &smooth_rows[..=jump],
-        &stamps[..=jump],
+        &labels[..=jump],
     );
     let moved = unbroken.model.smoothed_tail().unwrap();
     let (_, later, _) = whole
         .emitted
         .iter()
-        .find(|(_, o, _)| o.stamp[0] == Some(moved[0].stamp))
+        .find(|(_, o, _)| o.label[0] == Some(moved[0].label))
         .unwrap();
     assert_ne!(
         moved[0]
@@ -697,13 +697,13 @@ fn a_covariance_sized_again_cuts_the_chain() {
     let mut first = run(model, &rows[..80], &ids(80));
     let before = first.model.smoothed_tail().unwrap();
     first.model.size_again(0);
-    let stamps = ids(120);
-    let rest = run(first.model, &rows[80..], &stamps[80..]);
+    let labels = ids(120);
+    let rest = run(first.model, &rows[80..], &labels[80..]);
     for row in &before {
         let (_, out, _) = rest
             .emitted
             .iter()
-            .find(|(_, o, _)| o.stamp[0] == Some(row.stamp))
+            .find(|(_, o, _)| o.label[0] == Some(row.label))
             .expect("emitted after the break");
         assert_eq!(row.coef, out.coef[..3]);
     }
@@ -790,4 +790,67 @@ fn the_smoothers_refusals() {
         .unwrap_err()
         .to_string();
     assert!(e.contains("smoother has the wrong shape"), "{e}");
+}
+
+/// The bytes the build holds a spec to bound the smoother's own bytes in a
+/// state file with its ring full, for every form of it.
+#[test]
+fn the_smoothers_bytes_are_bounded_by_the_formula() {
+    for (share_p, standardize, se, m) in [
+        (false, false, false, 1),
+        (false, true, true, 2),
+        (true, true, true, 3),
+        (true, false, false, 2),
+    ] {
+        let cfg = KalmanCfg {
+            share_p,
+            standardize,
+            ..base(3, m)
+        };
+        let lag = 17;
+        let rows = stream(200, 3, m, 4970, false);
+        let r = run(
+            Kalman::new(cfg).unwrap().with_smoother(lag, se).unwrap(),
+            &rows,
+            &ids(200),
+        );
+        let s = r.model.smoother.as_ref().unwrap();
+        let bytes = rmp_serde::to_vec_named(s).unwrap().len() as u64;
+        let bound = Kalman::smoother_bytes(4, m, share_p, standardize, lag, se);
+        assert!(bytes <= bound, "{bytes} over {bound}");
+        assert!(bytes * 2 > bound, "{bytes} far under {bound}");
+    }
+}
+
+/// The caller's gate marks the observation its row added, and no other:
+/// emitted on its lag's row with the reason and no value.
+#[test]
+fn the_callers_gate_holds_the_rows_observation() {
+    let rows = stream(120, 2, 1, 4971, false);
+    let mut model = Kalman::new(base(2, 1))
+        .unwrap()
+        .with_smoother(3, false)
+        .unwrap();
+    let held_row = (60..120)
+        .find(|&r| rows[r].w > 0.0 && rows[r].y[0].is_some())
+        .unwrap();
+    let quiet = (held_row..120).find(|&r| rows[r].w == 0.0).unwrap();
+    let mut seen = None;
+    for (r, row) in rows.iter().enumerate() {
+        model.label_next(ClockValue::F64(r as f64));
+        model.step(&row.x, &row.y, row.d, row.w);
+        // A row that added no observation marks nothing.
+        if r == held_row || r == quiet {
+            model.hold_smoothed(0);
+        }
+        let out = model.smoothed().unwrap();
+        if out.emitted[0] && out.label[0] == Some(ClockValue::F64(held_row as f64)) {
+            seen = Some(out.clone());
+        } else if out.emitted[0] {
+            assert_eq!(out.held[0], SMOOTH_STOOD, "row {r}");
+        }
+    }
+    let out = seen.expect("the held observation is described");
+    assert_eq!(out.held[0], SMOOTH_MIN_WEIGHT);
+    assert!(out.coef.iter().all(|v| v.is_nan()));
 }

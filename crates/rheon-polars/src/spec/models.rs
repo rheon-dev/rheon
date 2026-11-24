@@ -1694,6 +1694,7 @@ impl Spec {
                         num_label(v)
                     ));
                 }
+                no.take(self.check_smoother());
             }
             ModelKind::Lasso {
                 penalties,

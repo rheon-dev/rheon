@@ -61,6 +61,9 @@ pub(super) fn build_instances<'a>(
     let mut o_se_coef = out.se_coef.iter_mut();
     let mut o_se_hc0 = out.se_coef_hc0.iter_mut();
     let mut o_se_hac = out.se_coef_hac.iter_mut();
+    let mut o_smoothed = out.smoothed_coef.iter_mut();
+    let mut o_smoothed_se = out.smoothed_se.iter_mut();
+    let mut o_smoothed_for = out.smoothed_for.chunks_mut((spec.m() * n_rows).max(1));
 
     let n_slots = out.n_slots;
     let mut decays = decays.iter();
@@ -120,6 +123,9 @@ pub(super) fn build_instances<'a>(
             o_se_coef: o_se_coef.next().expect("one per instance"),
             o_se_hc0: o_se_hc0.next().expect("one per instance"),
             o_se_hac: o_se_hac.next().expect("one per instance"),
+            o_smoothed: o_smoothed.next(),
+            o_smoothed_se: o_smoothed_se.next(),
+            o_smoothed_for: o_smoothed_for.next().unwrap_or_default(),
             decay_time: decay_time.next().expect("one per instance"),
             restarted: restarted.next().expect("one per instance"),
             notified: notified.next().expect("one per instance"),

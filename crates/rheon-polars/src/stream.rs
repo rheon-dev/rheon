@@ -377,6 +377,24 @@ impl AnyModel {
         dispatch!(self, m => m.stamp_next_on_rows(stamp))
     }
 
+    /// The next stepped row's clock label for a fixed-lag smoother
+    /// ([`OnlineModel::label_next`]).
+    pub fn label_next(&mut self, label: ClockValue) {
+        dispatch!(self, m => m.label_next(label))
+    }
+
+    /// The gate withheld `target` on the row just stepped
+    /// ([`OnlineModel::hold_smoothed`]).
+    pub fn hold_smoothed(&mut self, target: usize) {
+        dispatch!(self, m => m.hold_smoothed(target))
+    }
+
+    /// What the row's fixed-lag smoother emitted
+    /// ([`OnlineModel::smoothed_into`]).
+    pub fn smoothed_into(&self, out: &mut rheon_core::Smoothed) -> bool {
+        dispatch!(self, m => m.smoothed_into(out))
+    }
+
     /// Bound the model's window ([`OnlineModel::set_window_budget`]).
     pub fn set_window_budget(&mut self, budget: Option<rheon_core::WindowBudget>) {
         dispatch!(self, m => m.set_window_budget(budget))
@@ -3918,6 +3936,8 @@ pub struct Scratch {
     /// withholds something on.
     ungated: Vec<f64>,
     r_spread: Vec<f64>,
+    /// What `kalman`'s fixed-lag smoother emitted on the row.
+    smoothed: rheon_core::Smoothed,
 }
 
 /// One model instance's state and its disjoint slice of the chunk output.
@@ -3977,6 +3997,12 @@ struct Instance<'a> {
     o_se_coef: &'a mut Vec<Option<Vec<f64>>>,
     o_se_hc0: &'a mut Vec<Option<Vec<f64>>>,
     o_se_hac: &'a mut Vec<Option<Vec<f64>>>,
+    /// `kalman`'s fixed-lag smoother's outputs (`smoothed_coef`,
+    /// `smoothed_se_coef`, and each target's `smoothed_for`, a target's
+    /// `n_rows` after another), where the spec has one.
+    o_smoothed: Option<&'a mut Vec<Option<Vec<f64>>>>,
+    o_smoothed_se: Option<&'a mut Vec<Option<Vec<f64>>>>,
+    o_smoothed_for: &'a mut [Option<ClockValue>],
     /// The decay time this instance has seen (docs/WARMUP-AND-CONVERGENCE.md
     /// §2), read before each row and advanced by the rows it learns from.
     decay_time: &'a mut f64,
@@ -4554,6 +4580,11 @@ fn run_instance(
                     inst.model.get_mut().stamp_next(stamp);
                 }
             }
+            // The row's clock as the clock fields show it, for a smoother
+            // to say which row a smoothed value describes.
+            if let (Some(label), true) = (plan.clock, inst.o_smoothed.is_some()) {
+                inst.model.get_mut().label_next(label);
+            }
             // An audit counts the step as it elapsed, which no decay reads
             // (review 6, C-5: its largest step read `gap_cap`).
             let step_d = if matches!(inst.model.get(), AnyModel::Audit(_)) {
@@ -4652,6 +4683,11 @@ fn run_instance(
                 if reason == 0 {
                     reason = REASON_MIN_PERIODS;
                 }
+                // Its smoothed value is not reported either, when its lag
+                // completes.
+                if learn && inst.o_smoothed.is_some() {
+                    inst.model.get_mut().hold_smoothed(tj);
+                }
             }
             // A row of weight 0 is in no clock, the waits included: it
             // neither starts nor ends one (hard rule 9).
@@ -4698,6 +4734,16 @@ fn run_instance(
         if unmet_floor {
             inst.notified.unreachable = true;
             inst.notified.restart_waits();
+        }
+        if learn && inst.o_smoothed.is_some() {
+            let at = if emit { ri } else { plan.drift_ri };
+            let outs = SmoothedOut {
+                coef: inst.o_smoothed.as_deref_mut(),
+                se: inst.o_smoothed_se.as_deref_mut(),
+                labels: &mut *inst.o_smoothed_for,
+                n_rows: inst.n_rows,
+            };
+            write_smoothed(inst.model.get(), &mut sc.smoothed, outs, at);
         }
         // At or above the ratio: at equality the estimation variance is the
         // noise, and one observation's mean -- `edf = n_kish = 1`, exactly
@@ -5370,6 +5416,62 @@ fn run_instance(
     }
     line.keep();
     drift_seen
+}
+
+/// An instance's smoother outputs, borrowed apart from its model.
+struct SmoothedOut<'a> {
+    coef: Option<&'a mut Vec<Option<Vec<f64>>>>,
+    se: Option<&'a mut Vec<Option<Vec<f64>>>>,
+    labels: &'a mut [Option<ClockValue>],
+    n_rows: usize,
+}
+
+/// What `kalman`'s fixed-lag smoother emitted on a learned row, onto
+/// output row `at`: the row itself, or, for a row released from the
+/// `embargo` buffer, the row whose clock released it. Each target's
+/// coefficients take their place in `smoothed_coef`'s list (NaN where the
+/// row emitted none of that target's), the standard errors are the
+/// variances' roots, and each target's `smoothed_for` is the clock label of
+/// the row its value describes. Where several released rows complete a
+/// target's lag on one line, the line holds the newest.
+fn write_smoothed(
+    model: &AnyModel,
+    buf: &mut rheon_core::Smoothed,
+    out: SmoothedOut<'_>,
+    at: usize,
+) {
+    let n_rows = out.n_rows;
+    if at >= n_rows || !model.smoothed_into(buf) || !buf.emitted.contains(&true) {
+        return;
+    }
+    for (j, label) in buf.label.iter().enumerate() {
+        if buf.emitted[j] {
+            out.labels[j * n_rows + at] = *label;
+        }
+    }
+    let k = buf.coef.len() / buf.emitted.len().max(1);
+    // A line already written by an earlier release on the same row keeps
+    // the targets this step did not emit.
+    let merge = |line: &mut Option<Vec<f64>>, vals: &[f64], root: bool| {
+        let list = line.get_or_insert_with(|| vec![f64::NAN; vals.len()]);
+        for (j, e) in buf.emitted.iter().enumerate() {
+            if *e {
+                for (o, v) in list[j * k..(j + 1) * k].iter_mut().zip(&vals[j * k..]) {
+                    *o = if root && !v.is_nan() {
+                        v.max(0.0).sqrt()
+                    } else {
+                        *v
+                    };
+                }
+            }
+        }
+    };
+    if let Some(o) = out.coef {
+        merge(&mut o[at], &buf.coef, false);
+    }
+    if let Some(o) = out.se {
+        merge(&mut o[at], &buf.var, true);
+    }
 }
 
 #[cfg(test)]

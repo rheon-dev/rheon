@@ -993,6 +993,11 @@ pub use window::{
 ///   held to that ([`Deco`]'s module docs; `tests/state_fixtures.rs`,
 ///   `RESTARTED_LEVEL`); the ratio's forms are the cases `deco`,
 ///   `deco_linear` and `deco_warming`.
+///
+///   Also at 72, before any release carried it (2026-11-24): `kalman` may
+///   carry a fixed-lag smoother, its ring under `smoother`, and a bank's
+///   last row the smoother's fields, each written only where a spec sets
+///   `smooth_lag`, so no state without one moved.
 pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`
