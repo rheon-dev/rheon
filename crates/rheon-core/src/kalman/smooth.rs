@@ -291,9 +291,8 @@ fn solve_factored(l: &[f64], n: usize, x: &mut [f64]) {
 /// and four chains of adds that overlap.
 fn dot(a: &[f64], b: &[f64]) -> f64 {
     let mut acc = [0.0; 4];
-    let (a4, b4) = (a.chunks_exact(4), b.chunks_exact(4));
-    let (ra, rb) = (a4.remainder(), b4.remainder());
-    for (x, y) in a4.zip(b4) {
+    let ((a4, ra), (b4, rb)) = (a.as_chunks::<4>(), b.as_chunks::<4>());
+    for (x, y) in a4.iter().zip(b4) {
         for l in 0..4 {
             acc[l] += x[l] * y[l];
         }
