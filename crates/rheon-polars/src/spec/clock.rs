@@ -61,7 +61,15 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ),
     ("quantile", &["solve_every", "quantile_refit_span"]),
     ("ew_cov", &["pca_every", "window_size", "snapshot_every"]),
-    ("holt", &["trend_half_life"]),
+    (
+        "holt",
+        &[
+            "trend_half_life",
+            "season_length",
+            "seasonal_half_life",
+            "damping_half_life",
+        ],
+    ),
     ("sgd", &["huber_scale_half_life", "huber_refit_span"]),
     ("micro", &["prune_every"]),
     (
@@ -449,9 +457,16 @@ impl Spec {
                 put(&mut out, "snapshot_every", snapshot_every.as_ref());
             }
             ModelKind::Holt {
-                trend_half_life, ..
+                trend_half_life,
+                season_length,
+                seasonal_half_life,
+                damping_half_life,
+                ..
             } => {
                 put(&mut out, "trend_half_life", trend_half_life.as_ref());
+                put(&mut out, "season_length", season_length.as_ref());
+                put(&mut out, "seasonal_half_life", seasonal_half_life.as_ref());
+                put(&mut out, "damping_half_life", damping_half_life.as_ref());
             }
             ModelKind::Hawkes {
                 window_size,

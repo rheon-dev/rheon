@@ -893,6 +893,7 @@ fn restoring_the_wrong_model_is_an_error_that_names_both() {
         trend_half_life: 40.0,
         min_weight: 0.0,
         trend: true,
+        ..Default::default()
     })
     .unwrap();
     let s = holt.state();

@@ -53,6 +53,7 @@ impl Spec {
             ModelKind::Holt {
                 trend_half_life,
                 trend,
+                ..
             } => {
                 if *trend == Some(false) && trend_half_life.is_some() {
                     no.refuse(format!(

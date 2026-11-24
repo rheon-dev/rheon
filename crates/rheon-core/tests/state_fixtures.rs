@@ -834,6 +834,7 @@ const KEPT_COUNTS: &[(u32, usize)] = &[
     (69, 85),
     (70, 86),
     (71, 104),
+    (72, 120),
 ];
 
 /// The names one set holds that the next does not, each set given as a
@@ -1658,7 +1659,24 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 198] = [
+    const FORMS: [(&str, &[&str]); 206] = [
+        // Schema 72, unreleased (task 488): `holt`'s fixed forms -- each season, the
+        // damping, both starts, a start holding its rows, and the clocks
+        // the seasonal values were learned at.
+        ("holt_season_add", &["model", "Holt", "season"]),
+        ("holt_season_add", &["model", "Holt", "season_at"]),
+        (
+            "holt_season_add",
+            &["model", "Holt", "cfg", "initial_seasonal"],
+        ),
+        ("holt_season_mul_damped", &["model", "Holt", "season"]),
+        (
+            "holt_season_mul_damped",
+            &["model", "Holt", "cfg", "damping_half_life"],
+        ),
+        ("holt_heuristic", &["model", "Holt", "season"]),
+        ("holt_heuristic", &["model", "Holt", "clock"]),
+        ("holt_heuristic_holding", &["model", "Holt", "held"]),
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.

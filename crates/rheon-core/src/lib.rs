@@ -210,7 +210,9 @@ pub use hasher::{FixedHasher, FixedState};
 pub use hawkes::{Hawkes, HawkesCfg, MAX_STATE_BYTES as HAWKES_MAX_STATE_BYTES};
 pub use health::FeatureHealth;
 pub use hmm::{EwFactor, Hmm, HmmCfg, Stabilized};
-pub use holt::{Holt, HoltCfg};
+pub use holt::{
+    HOLT_MAX_STATE_BYTES, HOLT_STATE_BYTES_CEILING, Holt, HoltCfg, HoltSeason, HoltStart,
+};
 pub use huber_refit::{
     BIN_REFIT_ROWS_PER_BIN, DEFAULT_REFIT_MAX_FEATURES, DEFAULT_REFIT_ROWS, MAX_REFIT_ROWS,
     REFIT_PASSES, REFIT_RUNS_PER_ROW, RefitStatus, default_bin_refit_rows, default_refit_rows,
@@ -990,6 +992,21 @@ pub use window::{
 ///   held to that ([`Deco`]'s module docs; `tests/state_fixtures.rs`,
 ///   `RESTARTED_LEVEL`); the ratio's forms are the cases `deco`,
 ///   `deco_linear` and `deco_warming`.
+///
+///   Also at 72, before any release carried it (2026-11-24, task 488):
+///   `holt`'s fixed forms of seasonal exponential smoothing. Its cfg gains,
+///   at its end, the season (`season`, `season_periods`, `season_length`,
+///   `seasonal_half_life`), the damping (`damping_half_life`), the start
+///   (`start` and the known start's `initial_level`, `initial_trend` and
+///   `initial_seasonal`) and `max_state_bytes`; its state gains, at its
+///   end, the seasonal values and the clock each was last learned at, the
+///   decayed clock, the phase origin and the heuristic start's held rows.
+///   Each new field defaults to the form `holt` had, so a `holt` state of
+///   71 or earlier loads with no season, no damping and the warm start,
+///   goes on to the bit and re-saves the current fixture's bytes (the cases
+///   `holt` and `holt_inf`; the new forms in `holt_season_add`,
+///   `holt_season_mul_damped`, `holt_heuristic` and
+///   `holt_heuristic_holding`).
 pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`

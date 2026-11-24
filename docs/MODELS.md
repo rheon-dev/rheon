@@ -306,7 +306,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), `scale_ratio_moved` (a `corrchange` flag withheld on a span whose two columns' scale ratio moved), `not_separated` (a `pca` component the data does not yet tell apart from a neighbor) or `level_beyond_sample` (a `tdigest` or `ddsketch` level past what the rows before it identify), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows a `holt` heuristic start holds, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), `scale_ratio_moved` (a `corrchange` flag withheld on a span whose two columns' scale ratio moved), `not_separated` (a `pca` component the data does not yet tell apart from a neighbor), `level_beyond_sample` (a `tdigest` or `ddsketch` level past what the rows before it identify) or `not_positive` (a multiplicative `holt` season's row predicted and not learned, its target or its update 0 or below: the one reason beside a prediction, and in that form's `enum` alone), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -2061,6 +2061,44 @@ half-life, and `b = 0`. A target's first observation sets `l = y`,
 predicts nothing, and starts the trend at 0. The docstring's Notes, under
 *The textbook gains*, *The line fit* and *Which gain a row takes*, give
 what each gain is and when each wins.
+
+#### Seasons, damping and the starts
+
+`seasonal="add"` or `"mul"` adds a season of `seasonal_periods` values `S`
+over `season_length` clock units, `damping_half_life` damps the trend, and
+`start` says where the fit starts: `"known"` from the initial states given,
+`"heuristic"` from statsmodels' heuristic on a target's first rows (10, or
+5 seasons), which it then learns from those states and withholds as
+`below_warm_rows`. A season or a damped trend needs one of these two
+starts; `"warm"` is the start above. Under them every gain is the fixed
+one, `α = 1 − λ_l` at weight 1, and the update is the Holt-Winters
+recursion, `p` the row's phase and `L` the level carried over the step:
+
+```
+φ_s = φ·(1 − φ^s)/(1 − φ)  (s undamped)        φ = 0.5^(1/damping_half_life)
+L = l + φ_s·b                                   pred = L + S[p]  or  L·S[p]
+l' = α·y − α·S[p] + (1 − α)·L    (add)          l' = α·y/S[p] + (1 − α)·L    (mul)
+b' = β·(l' − l)/s + (1 − β)·φ^s·b
+S'[p] = γ·y − γ·L + (1 − γ)·S[p] (add)          S'[p] = γ·y/L + (1 − γ)·S[p] (mul)
+```
+
+`β = 1 − λ_b`, and `γ = 1 − 0.5^(Δ/seasonal_half_life)` with `Δ` the clock
+since phase `p` was last learned: the season's length on an even clock. A
+row of weight `w` takes `w·α/(λ + w·α)` in place of each gain. On a row
+clock at weight 1 this is statsmodels' `ExponentialSmoothing` with the same
+fixed parameters, operation for operation, to the bit on Linux x86-64.
+
+A row's phase is `⌊m·(c − c₀)/P⌋ mod m` of its own clock value `c`, `c₀`
+the first row's: the raw value, which `gap_cap` and `session_gap` do not
+shorten, in integers on a temporal or an integer clock. A null target keeps
+its row's place in the season; without a clock column a row of weight 0
+counts in no clock, so the row after it takes its place. Under `"mul"` a
+row whose target, or whose level or factor after the update, would be 0 or
+below is predicted, not learned, and its `withheld_reason` is
+`not_positive`. The state grows by 16 bytes a seasonal value a target, and
+the heuristic start's held rows by 36 bytes each until it is fitted;
+`max_state_bytes` (256 KB by default) refuses a spec past it, naming the
+bytes it needs.
 
 #### Example
 

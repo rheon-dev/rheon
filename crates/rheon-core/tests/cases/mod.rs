@@ -2008,6 +2008,7 @@ pub fn all() -> Vec<Case> {
                 trend_half_life: 4.0 * H,
                 min_weight: 3.0,
                 trend: true,
+                ..Default::default()
             })
             .unwrap(),
             0,
@@ -2028,6 +2029,7 @@ pub fn all() -> Vec<Case> {
                 trend_half_life: 4.0 * H,
                 min_weight: 3.0,
                 trend: true,
+                ..Default::default()
             })
             .unwrap(),
             0,
@@ -2044,11 +2046,109 @@ pub fn all() -> Vec<Case> {
                 trend_half_life: f64::INFINITY,
                 min_weight: 3.0,
                 trend: true,
+                ..Default::default()
             })
             .unwrap(),
             0,
             Targets::Linear(2),
             40
+        ),
+        // The fixed forms of seasonal smoothing (schema 73, task 488). An
+        // additive season under the known start, 4 values over 8 clock
+        // units, so the clock of 1 puts two rows in a bucket and its gap of
+        // 9 leaves a bucket empty.
+        case!(
+            "holt_season_add",
+            "Holt",
+            Holt,
+            Holt::new(HoltCfg {
+                n_targets: 2,
+                level_half_life: H,
+                trend_half_life: 4.0 * H,
+                min_weight: 3.0,
+                season: HoltSeason::Add,
+                season_periods: 4,
+                season_length: 8.0,
+                seasonal_half_life: 3.0 * H,
+                start: HoltStart::Known,
+                initial_level: vec![0.25, -0.75],
+                initial_trend: vec![0.0, 0.01],
+                initial_seasonal: vec![vec![0.1, -0.1, 0.05, -0.05], vec![0.0, 0.2, -0.2, 0.0]],
+                ..Default::default()
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // A multiplicative season and a damped trend, known.
+        case!(
+            "holt_season_mul_damped",
+            "Holt",
+            Holt,
+            Holt::new(HoltCfg {
+                n_targets: 2,
+                level_half_life: H,
+                trend_half_life: 4.0 * H,
+                min_weight: 3.0,
+                season: HoltSeason::Mul,
+                season_periods: 3,
+                seasonal_half_life: 3.0 * H,
+                damping_half_life: 2.0 * H,
+                start: HoltStart::Known,
+                initial_level: vec![1.0, 2.0],
+                initial_trend: vec![0.0, -0.01],
+                initial_seasonal: vec![vec![1.1, 0.9, 1.0], vec![0.95, 1.0, 1.05]],
+                ..Default::default()
+            })
+            .unwrap(),
+            0,
+            Targets::Positive(2),
+            40
+        ),
+        // The heuristic start, fitted (12 rows at m = 2) and learning on.
+        case!(
+            "holt_heuristic",
+            "Holt",
+            Holt,
+            Holt::new(HoltCfg {
+                n_targets: 2,
+                level_half_life: H,
+                trend_half_life: 4.0 * H,
+                min_weight: 3.0,
+                season: HoltSeason::Add,
+                season_periods: 2,
+                seasonal_half_life: 3.0 * H,
+                start: HoltStart::Heuristic,
+                ..Default::default()
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // The heuristic start saved while it holds its rows: 20 wanted at
+        // m = 4, fewer held after 14 rows.
+        case!(
+            "holt_heuristic_holding",
+            "Holt",
+            Holt,
+            Holt::new(HoltCfg {
+                n_targets: 2,
+                level_half_life: H,
+                trend_half_life: 4.0 * H,
+                min_weight: 3.0,
+                season: HoltSeason::Mul,
+                season_periods: 4,
+                seasonal_half_life: 3.0 * H,
+                damping_half_life: 2.0 * H,
+                start: HoltStart::Heuristic,
+                ..Default::default()
+            })
+            .unwrap(),
+            0,
+            Targets::Positive(2),
+            14
         ),
         // Saved with its warm-up buffer still filling: 10 rows wanted, 6
         // held.

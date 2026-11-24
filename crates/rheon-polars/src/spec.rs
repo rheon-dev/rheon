@@ -663,6 +663,40 @@ pub enum ModelKind {
         /// absent: the trend is on.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trend: Option<bool>,
+        // The fixed forms of seasonal exponential smoothing (task 488), each
+        // skipped when absent, so a spec that gives none of them writes what
+        // it wrote before.
+        /// `"add"` or `"mul"`: a seasonal component added to the level, or
+        /// a factor on it. Absent: no season.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seasonal: Option<String>,
+        /// `m`, the values a season is held in.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seasonal_periods: Option<usize>,
+        /// `P`, the season's span in clock units; default `seasonal_periods`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        season_length: Option<Span>,
+        /// The seasonal values' half-life, in clock units.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seasonal_half_life: Option<Span>,
+        /// The trend's damping as a half-life, in clock units.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        damping_half_life: Option<Span>,
+        /// `"warm"` (the default), `"known"` or `"heuristic"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<String>,
+        /// The known start's level, trend and seasonal values: a number per
+        /// target, or one for a single target; the seasonal values a list
+        /// per target, or one list for a single target.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial_level: Option<FloatOrList>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial_trend: Option<FloatOrList>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial_seasonal: Option<Vec<FloatOrList>>,
+        /// The bytes the state may hold; default 256 KB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
     },
     Rls {
         /// Prior strength: `A0 = delta I`, i.e. `P0 = I / delta`, the

@@ -358,6 +358,26 @@ impl AnyModel {
         dispatch!(self, m => m.predict_with_floor(x, y, d_clock, floor))
     }
 
+    /// [`Self::predict_into`] for a row at raw clock `clock`
+    /// ([`OnlineModel::predict_at_into`]), which a seasonal `holt` reads
+    /// its phase from.
+    pub fn predict_at_clock_into(
+        &self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        clock: Option<ClockValue>,
+        out: &mut rheon_core::Step,
+    ) {
+        dispatch!(self, m => m.predict_at_into(x, y, d_clock, clock, out))
+    }
+
+    /// Hand the model the row's raw clock ([`OnlineModel::clock_next`]); a
+    /// no-op for every model but a seasonal `holt`.
+    pub fn clock_next(&mut self, clock: ClockValue) {
+        dispatch!(self, m => m.clock_next(clock))
+    }
+
     /// Drop the row-lagged state ([`OnlineModel::clear_lags`]); a no-op for
     /// a model that keeps none.
     pub fn clear_lags(&mut self) {
@@ -522,7 +542,7 @@ impl AnyModel {
                 | AnyModel::Deco(_)
                 | AnyModel::Garch(_)
                 | AnyModel::Dcc(_)
-        )
+        ) || matches!(self, AnyModel::Holt(m) if m.heuristic_start())
     }
 
     #[inline]
@@ -533,6 +553,8 @@ impl AnyModel {
             AnyModel::Bocpd(m) if m.warming() => OwnWait::Seeding,
             AnyModel::Kalman(m) if m.sizing() => OwnWait::Seeding,
             AnyModel::Deco(m) if m.warming() => OwnWait::Seeding,
+            // A `holt` heuristic start holding a target's first rows.
+            AnyModel::Holt(m) if m.starting() => OwnWait::Seeding,
             // `garch`'s start and `dcc`'s, its margins' and its own, wait two
             // ways: buffering, or buffering for want of an effect.
             AnyModel::Garch(m) => Self::start_wait(m.starting(), || m.no_effect()),
@@ -1475,8 +1497,10 @@ pub enum OwnWait {
 /// scale ratio moved, which no model with an earlier reason has;
 /// `not_separated` last (PLAN 505), `pca`'s wait for components whose eigenvalues
 /// the rows have not yet told apart; `level_beyond_sample` after it (task
-/// 544), a `tdigest` or `ddsketch` level its rows do not identify yet.
-pub const WITHHELD_REASONS: [&str; 10] = [
+/// 544), a `tdigest` or `ddsketch` level its rows do not identify yet;
+/// `not_positive` last (task 488), a multiplicative `holt` row predicted
+/// and not learned.
+pub const WITHHELD_REASONS: [&str; 11] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
@@ -1487,6 +1511,7 @@ pub const WITHHELD_REASONS: [&str; 10] = [
     "scale_ratio_moved",
     "not_separated",
     "level_beyond_sample",
+    "not_positive",
 ];
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
@@ -1498,6 +1523,11 @@ const REASON_NOT_IDENTIFIED: u8 = 7;
 const REASON_SCALE_RATIO: u8 = 8;
 const REASON_NOT_SEPARATED: u8 = 9;
 const REASON_BEYOND_SAMPLE: u8 = 10;
+/// A row a multiplicative `holt` form predicted and did not learn from,
+/// since its target, or the level or seasonal factor its update would make,
+/// was 0 or below (task 488). The one reason that names a row whose
+/// prediction stands: what it withholds is the row's update.
+const REASON_NOT_POSITIVE: u8 = 11;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices
@@ -4231,6 +4261,14 @@ fn run_instance(
     let mut drift_seen = false;
     // No clock column: the clock is the row count.
     let row_clock = inst.spec.clock.is_none();
+    // A model whose rows read their raw clock: a seasonal `holt`.
+    let seasonal_clock = matches!(
+        &inst.spec.model,
+        ModelKind::Holt {
+            seasonal: Some(_),
+            ..
+        }
+    );
     let n_rows = inst.n_rows;
     let block = inst.n_slots * n_rows;
     // Whether `pred` is a probability against a 0/1 label rather than a
@@ -4401,6 +4439,18 @@ fn run_instance(
             &row.xs
         };
         let m_targets = sc.ys.len();
+        // A seasonal `holt` reads its row's phase from the row's raw clock,
+        // never the decayed one (task 488): handed to the model before
+        // anything reads it for the row. Without a clock column it counts
+        // its own steps, so none is handed.
+        let raw_clock = (seasonal_clock && !row_clock)
+            .then_some(plan.clock)
+            .flatten();
+        if let Some(c) = raw_clock
+            && let Some(m) = inst.model.learning()
+        {
+            m.clock_next(c);
+        }
         // Each target's own weight, read before the step: the rows it was
         // present on, as `n_eff` is the rows the model saw (review 2026-09-12,
         // S2). `false` for a model that keeps only the shared one.
@@ -4579,10 +4629,17 @@ fn run_instance(
             }
         } else {
             // A row only scored, of weight 0 or held for its label, read at
-            // its stamp where the model's read decides a window's edge.
-            inst.model
-                .get()
-                .predict_at_into(xs, &sc.ys, score_d, plan.stamp, step);
+            // its stamp where the model's read decides a window's edge, or
+            // at its raw clock where a seasonal `holt` reads its phase.
+            if raw_clock.is_some() {
+                inst.model
+                    .get()
+                    .predict_at_clock_into(xs, &sc.ys, score_d, raw_clock, step);
+            } else {
+                inst.model
+                    .get()
+                    .predict_at_into(xs, &sc.ys, score_d, plan.stamp, step);
+            }
         }
         let n_slots = step.pred.len();
         // Read from the step's own report, before a gate below nulls it.
@@ -4770,6 +4827,12 @@ fn run_instance(
         // writes past its floor.
         if reason == 0 && is_pca && step.pred.iter().any(|p| p.is_nan()) {
             reason = REASON_NOT_SEPARATED;
+        }
+        // A row a multiplicative `holt` form could not learn from, its
+        // prediction standing (task 488), where nothing above was withheld.
+        if reason == 0 && learn && matches!(inst.model.get(), AnyModel::Holt(m) if m.not_positive())
+        {
+            reason = REASON_NOT_POSITIVE;
         }
         // The noise gate has not been met: the stream has all but settled,
         // the gate has withheld every row for a further half-life, and the

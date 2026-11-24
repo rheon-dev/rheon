@@ -348,3 +348,70 @@ as at every bump.
 12. **Math library.** *Recommend the platform's `powf` and `exp2`, as `holt`
     uses today, with the cross-OS ulps test; the `libm` crate only if the
     estimator and its optimizer ship, for the reason `garch` took it.*
+
+## (h) Part 2 as built (2026-11-24, from `4f688d99`)
+
+The Mac's answers bound part 2; the fixed forms are built in `holt`
+(`crates/rheon-core/src/holt/ets.rs`), the stream hands a seasonal `holt` its
+row's raw clock (`OnlineModel::clock_next`, `predict_at_into` for a shared
+model), and the spec, the Python builder and the docs take the new keys.
+
+**Built.** Seasons `add` and `mul` by trends none, additive and damped
+additive (nine of the fifteen recursions); the `known` and `heuristic`
+starts, `warm` only for today's forms; `max_state_bytes` (256 KB, ceiling
+64 MiB) refused at build with the bytes needed; `not_positive`; schema 73
+with schema 72's sets kept.
+
+**The oracle, measured on Linux x86-64.** `ExponentialSmoothing`, known
+start: 0 ulps at every row of all nine forms (`holt` follows `model.py`'s
+`_predict` operation for operation; held at 5 ulps). Heuristic start: at
+most 6 ulps over 8 seeds of 600 rows (held at 16): statsmodels fits the line
+by `pinv` and pandas keeps a running sum for the moving average, `holt`
+solves the normal equations and sums afresh. `ETSModel`, known start, both
+error types: 0-1 ulps without a season, at most 6 with an additive one
+(held at 16), since it updates the season from the new level with `γ/(1 −
+α)`.
+
+**Departures from the design, each with its reason.**
+
+1. *(a) is wrong for `ETSModel`'s multiplicative season.* Its smoother
+   (`_ets_smooth.pyx`) sets `s' = γ*·y/l_t + (1 − γ*)·s`, `γ* = γ/(1 −
+   α)`, on the new level; Hyndman's table and `ExponentialSmoothing` divide
+   by the level carried to the row, `γ·y/L`. These agree for an additive
+   season and not for a multiplicative one (3e-5 to 1e-5 relative on the
+   test's series). `holt` is Hyndman's; that form is held to
+   `ExponentialSmoothing` alone (`tests/test_second_opinion_ets.py`).
+2. *The fixed gains on a clock.* (a) item 1 held `W` at `1/(1 − λ_l)` per
+   clock unit, which on a clock column whose rows come every `δ` units
+   gives a gain near `1 − λ` per unit, not per row. The gain is instead the
+   weighted mean's whose held weight is the one rows at this step saturate
+   at, `1/(1 − λ^s)`: `w·a/(λ^s + w·a)`, `a = 1 − λ^s` (Wright's irregular
+   smoothing at weight 1), `a` to the bit at `w = 1`. (a) item 3's seasonal
+   gain is the same form over `Δ_p`. So a row at the clock of the last one
+   teaches nothing (`1 − λ⁰ = 0`).
+3. *The initial states stand one step before the first row*: a season's
+   bucket `P/m`, or one clock unit without a season, as statsmodels' are on
+   a row clock.
+4. *The multiplicative trends (`M`, `Md`) are not built.* `b^φ` and
+   `(l'/l)^{1/s}` need a power, a platform function not yet in `holt`'s
+   state, which question 12's answer bars; the `libm` crate's `pow` would
+   give the same bits everywhere, but `docs/TESTING.md` records it declined
+   for speed outside `garch`. A question for the user.
+5. *`season_origin` is not built*: the origin is the first row of positive
+   weight. *The seasonal values are not in `coef`*, which stays `[level,
+   trend]`; the Rust accessor `Holt::seasonal` has them.
+6. *`not_positive` stands beside a prediction.* The answer asked for a
+   named `withheld_reason` on a row predicted and not learned; every other
+   reason names a null prediction. It is the eighth reason, last in
+   precedence, and every model's `withheld_reason` Enum gains it.
+7. *Schema.* The task asked for the pre-1.0 path (regenerate, raise the
+   minimums); the library is past 1.0 (2.0.0 holds schema 67), so CLAUDE.md
+   rule 5's from-1.0 path is taken: schema 72's sets copied to `v72/`, the
+   loader the new fields' defaults, the minimums unchanged. The current
+   sets of both crates are schema 72's macOS bytes loaded and re-saved by
+   this build (the bytes the Mac's regeneration writes for every case the
+   change does not touch), and the four new `holt` cases were written on
+   Linux x86-64. The Mac regenerates both crates' sets with
+   `PRINT_STATE_FIXTURES=1` before the push.
+8. *Grids.* No 50-seed grid is in `oracles.toml`; the essentials hold three
+   seeds of each form and the measurements above are from 8.

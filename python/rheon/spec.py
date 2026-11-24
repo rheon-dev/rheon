@@ -447,15 +447,21 @@ releases none. A regression writes, with ``<t>`` a target:
     Which gate withheld the row's predictions, as an ``Enum``, and null where
     no gate did. ``below_min_settled_frac``, ``below_min_weight``,
     ``above_max_error_inflation``, ``below_warm_rows``, ``ill_conditioned``,
-    ``unstable_rate``, ``not_identified``, ``scale_ratio_moved``, ``not_separated`` and
-    ``level_beyond_sample`` are named in that order, the first that withheld anything.
+    ``unstable_rate``, ``not_identified``, ``scale_ratio_moved``, ``not_separated``,
+    ``level_beyond_sample`` and ``not_positive`` are named in that order, the
+    first that withheld anything.
     ``below_warm_rows`` is the model's own warm-up: the rows ``kmeans``,
     ``hmm`` and ``bocpd`` hold to seed their centres, states or prior from
     (``warm_rows``), a count of rows, where ``min_weight`` is a weight, the
     rows ``kalman`` takes a target's prior from before it is sized, the
     rows ``garch`` buffers for a target's start, and the rows before
     ``deco``'s standardizer holds more than five effective rows, while it
-    has no level.
+    has no level, and the rows a ``holt`` heuristic start holds.
+    ``not_positive`` alone names a row whose prediction stands: a
+    multiplicative ``holt`` season's row whose target, or the level or
+    seasonal factor its update would make, is 0 or below, which is
+    predicted and not learned. Only that form's ``Enum`` holds
+    ``not_positive``; every other spec's holds the reasons before it.
     ``ill_conditioned`` is an ``ewridge`` fit withheld because its normal
     equations are past the condition at which a solve keeps a digit: its
     ``coef`` and ``support_coef`` are null too, and the solve is counted in

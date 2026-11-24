@@ -813,6 +813,7 @@ fn refuse_reading_with<M: OnlineModel>(m: &M, x: &[f64], y: &[Option<f64>], d_cl
 ///     trend_half_life: 4.0,
 ///     min_weight: 2.0,
 ///     trend: true,
+///     ..Default::default()
 /// })?;
 /// for t in 0..60 {
 ///     model.step(&[], &[Some(t as f64)], 1.0, 1.0);
@@ -971,6 +972,30 @@ pub trait OnlineModel: Sized {
     /// A window reads the stamp as it reads any, hence the default.
     fn stamp_next_on_rows(&mut self, stamp: crate::Stamp) {
         self.stamp_next(stamp);
+    }
+
+    /// The raw clock value of the row the next step or prediction is for,
+    /// as the clock column gives it: integer nanoseconds, the integer or the
+    /// double, never the decayed clock that `gap_cap` and `session_gap`
+    /// shorten (task 488). A seasonal `holt` reads its row's phase from it;
+    /// a stream with no clock column hands none, and the model reads its
+    /// own clock, the sum of its steps. Every other model ignores it --
+    /// hence the default.
+    fn clock_next(&mut self, _clock: crate::ClockValue) {}
+
+    /// [`Self::predict_with_into`] for a row at raw clock `clock`
+    /// ([`Self::clock_next`]), on a model shared for scoring, which no hook
+    /// can be handed to. The default ignores the clock.
+    fn predict_at_into(
+        &self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        clock: Option<crate::ClockValue>,
+        out: &mut Step,
+    ) {
+        let _ = clock;
+        self.predict_with_into(x, y, d_clock, out);
     }
 
     /// Bound this model's window, if it has one ([`crate::WindowBudget`]).
@@ -1471,6 +1496,7 @@ mod tests {
             trend_half_life: 20.0,
             min_weight: 0.0,
             trend: true,
+            ..Default::default()
         })
         .unwrap();
         for i in 0..5 {
