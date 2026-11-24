@@ -1398,3 +1398,41 @@ fn a_skip_learned_error_names_the_inputs_row() {
     }
     cleanup(&[first, all, output, state]);
 }
+
+/// Review 2026-11-23, CLI-2: a passed-through list of zoned instants (and an
+/// array of them) was written in NDJSON in its zone's wall time with the
+/// zone's offset, `2024-01-01T00:00:00-05:00`, beside a zoned column written
+/// in UTC: the text form went into a struct's fields and not into a list's
+/// or an array's elements. The same instant, so not the break the review
+/// read; each element is now written in UTC, as a column's is.
+#[test]
+fn a_list_of_zoned_instants_is_written_in_utc_in_ndjson() {
+    let df = with_zoned_day(40);
+    let day = df.column("day").unwrap().as_materialized_series().clone();
+    let dims = [ReshapeDimension::Infer, ReshapeDimension::new_dimension(1)];
+    let list = day.reshape_list(&dims).unwrap().with_name("days".into());
+    let array = day
+        .reshape_array(&dims)
+        .unwrap()
+        .with_name("days_array".into());
+    assert!(
+        matches!(list.dtype(), DataType::List(inner) if matches!(**inner, DataType::Datetime(_, Some(_))))
+    );
+    assert!(matches!(array.dtype(), DataType::Array(..)));
+    let mut df = df;
+    df.with_column(list.into_column()).unwrap();
+    df.with_column(array.into_column()).unwrap();
+    let input = tmp("zoned-list-in.parquet");
+    write(&input, Format::Parquet, &df);
+    let output = tmp("zoned-list-out.jsonl");
+    let cfg = config(&input, &output);
+    run_config(&cfg, no_progress).unwrap_or_else(|e| panic!("{e}"));
+    let text = std::fs::read_to_string(&output).unwrap();
+    let first = text.lines().next().unwrap();
+    assert!(
+        first.contains(r#""days":["2024-01-01T05:00:00+00:00"]"#)
+            && first.contains(r#""days_array":["2024-01-01T05:00:00+00:00"]"#),
+        "{first}"
+    );
+    cleanup(&[input, output]);
+}

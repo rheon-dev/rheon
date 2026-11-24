@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import gc
 import math
+import os
 import time
 
 import numpy as np
@@ -552,3 +553,21 @@ def test_a_save_state_that_is_a_directory_is_refused_before_the_stream(tmp_path)
     ):
         with pytest.raises(IsADirectoryError, match="save_state .* is a folder, not a file"):
             build()
+
+
+def test_a_save_state_that_names_no_file_is_refused_before_the_stream(tmp_path, monkeypatch):
+    """Review 2026-11-23 (IO-2 (5), CLI-5): an empty ``save_state``, and a path
+    ending in a separator that is not yet a folder, name no file. Both passed
+    the checks made while the plan is built and failed once every row had been
+    read. Each is refused then, by every plan form that saves."""
+    monkeypatch.chdir(tmp_path)
+    df = _frame(n=100)
+    for where in ("", "not_yet_a_folder/", "not_yet_a_folder" + os.sep):
+        for build in (
+            lambda w: df.lazy().rheon.fit_predict([_spec()], save_state=w),
+            lambda w: df.lazy().rheon.with_windows(
+                f=rp.ewm_mean("x0", half_life=5.0), clock="t", gap_cap=10.0, save_state=w
+            ),
+        ):
+            with pytest.raises(ValueError, match="save_state .* names no file"):
+                build(where)

@@ -304,7 +304,8 @@ struct Cli {
 /// reads a model, an internally tagged enum, into a buffer before the
 /// variant, so the error points at the `[specs.model]` table and names no
 /// key (review 2026-10-06, PC11). Each model's keys are read again alone
-/// beside its `type`, and the first that gives the same message is the one.
+/// beside its `type`, and the first that gives the same message there, and
+/// not when the model is read without it, is the one.
 fn model_key(doc: &toml::Table, msg: &str) -> Option<String> {
     for spec in doc.get("specs")?.as_array()? {
         let Some(model) = spec.get("model").and_then(toml::Value::as_table) else {
@@ -313,14 +314,22 @@ fn model_key(doc: &toml::Table, msg: &str) -> Option<String> {
         let Some(tag) = model.get("type") else {
             continue;
         };
+        let refused = |t: toml::Table| {
+            toml::Value::Table(t)
+                .try_into::<rheon_polars::ModelKind>()
+                .is_err_and(|e| e.message() == msg)
+        };
         for (key, value) in model.iter().filter(|(k, _)| k.as_str() != "type") {
             let mut alone = toml::Table::new();
             alone.insert("type".into(), tag.clone());
             alone.insert(key.clone(), value.clone());
-            let refused = toml::Value::Table(alone)
-                .try_into::<rheon_polars::ModelKind>()
-                .is_err_and(|e| e.message() == msg);
-            if refused {
+            // And the model without the key no longer gives the message: a
+            // required key left out ("missing field `penalties`") gives it
+            // with any one key beside the `type`, and the first was blamed
+            // (review 2026-11-23, CLI-4).
+            let mut without = model.clone();
+            without.remove(key);
+            if refused(alone) && !refused(without) {
                 let name = spec.get("name").and_then(toml::Value::as_str).unwrap_or("");
                 return Some(format!("spec {name:?}: model.{key}"));
             }
