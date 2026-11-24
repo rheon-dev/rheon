@@ -169,6 +169,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": 50.0"#,
     ),
     (
+        "gmm",
+        r#"{"type": "gmm", "n_components": 1}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": 50.0"#,
+    ),
+    (
         "lasso",
         r#"{"type": "lasso", "penalties": [0.1, 0.0], "target_gaps": "own_rows"}"#,
         r#""targets": ["y"], "features": ["x0"], "half_life": 50.0"#,

@@ -67,6 +67,7 @@ to start with for which question.
 | [`ddsketch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ddsketch) · [entry](#ddsketch--how-large-are-this-columns-quantiles-and-tails) | accumulate | quantiles and tail means of each column within a relative accuracy `alpha` of the value, from a DDSketch over every row or over a window of rows or of the clock |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
+| [`gmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.gmm) · [entry](#gmm--a-gaussian-mixture-by-online-em) | step | a Gaussian mixture by online EM: each row's responsibilities, log-density and most responsible component read before the row is learned, started from batch EM once its rows identify and separate the components |
 | [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
 | [`ew_class`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_class) · [entry](#ew_class--gaussian-classification-on-ew_cov-moments) | accumulate | Gaussian classification, QDA, LDA or naive Bayes, with one set of running moments per class: a label column in, class probabilities out |
 | **[Sequential tests and regimes](#sequential-tests-and-regimes)** | | give evidence that something holds or has changed, and which regime the stream is in |
@@ -275,7 +276,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `gmm` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -4274,6 +4275,72 @@ same weighted rows, and `init="k-means++"` to scikit-learn's
 `kmeans_plusplus` in distribution. On hundreds of thousands of rows, the
 labels are held to the clusters that generated them and to scikit-learn's
 `KMeans` on the same rows.
+
+### `gmm` — a Gaussian mixture by online EM
+
+*API:* [`rheon.spec.gmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.gmm) — *Rust:* [`cluster/gmm.rs`](../crates/rheon-core/src/cluster/gmm.rs) — *Outputs:* [fields](OUTPUTS.md#gmm)
+
+A Gaussian mixture over the feature columns, learned one row at a time.
+
+Use `gmm` when each row comes from one of a fixed number of Gaussian
+clusters that differ in size, spread or orientation: it reads each row's
+responsibilities, its log-density under the mixture and its most
+responsible component before the row is learned. Use
+[`kmeans`](#kmeans--exponentially-weighted-k-means) where a distance to the
+nearest center is enough.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.gmm),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#gmm). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes).
+
+#### The update
+
+Each component is an exponentially weighted mean and covariance, fed the row
+at weight `w r_j`, its responsibility read from the components before the
+row (Cappé and Moulines' online EM, in the mean form):
+
+```
+r_j   = π_j N(x; μ_j, Σ_j) / Σ_l π_l N(x; μ_l, Σ_l)      Σ_j = C_j + reg_covar · I
+W'_j  = λW_j + w r_j                                    μ'_j = μ_j + (w r_j / W'_j)(x − μ_j)
+C'_j  = (λW_j / W'_j)(C_j + (w r_j / W'_j)(x − μ_j)(x − μ_j)ᵀ)
+```
+
+Until it starts, the model buffers its rows and fits batch EM to them each
+time the buffer doubles. It starts once every component is identified, the
+fit beats one fewer component by `delta_bic`, and the fit has stopped moving
+between tries; the docstring's Notes give each condition, under *The start*.
+
+#### Example
+
+**Two clusters of different sizes are found with their weights.** This
+code plants two clusters, 65 and 35 percent of the rows, and prints each
+component's weight and mean at the end:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+rng = np.random.default_rng(1)
+n = 4_000
+far = rng.random(n) < 0.65
+x = rng.standard_normal((n, 2)) * 0.5 + np.where(far[:, None], [4.0, 3.0], [0.0, 0.0])
+pl.DataFrame(x, schema=["a", "b"]).write_parquet("pair.parquet")
+
+gm = rp.spec.gmm("gm", features=["a", "b"], n_components=2, half_life=float("inf"))
+bank = rp.ModelBank([gm])
+bank.fit(pl.scan_parquet("pair.parquet"))
+found = bank.coef().pivot(on="term", index="cluster", values="coef").sort("cluster")
+for r in found.iter_rows(named=True):
+    a, b = round(r["a"], 1) + 0.0, round(r["b"], 1) + 0.0  # + 0.0: no "-0.0"
+    print(f"weight {r['weight']:.2f} at ({a}, {b})")
+```
+
+```text
+weight 0.66 at (4.0, 3.0)
+weight 0.34 at (0.0, 0.0)
+```
 
 ### `micro` — density-based clustering, any shape
 

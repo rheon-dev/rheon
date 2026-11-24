@@ -981,6 +981,7 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         r#"{"type": "rls"}"#,
         r#"{"type": "ew_cov", "stats": ["mean"]}"#,
         r#"{"type": "kmeans", "n_clusters": 2}"#,
+        r#"{"type": "gmm", "n_components": 2}"#,
         r#"{"type": "micro", "eps": 1.0}"#,
         r#"{"type": "ew_class", "classes": ["a", "b"], "precision_prior": 1.0}"#,
         r#"{"type": "seqtest"}"#,

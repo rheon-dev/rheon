@@ -1201,6 +1201,25 @@ CASES: list[Case] = [
             "scale_floor": 1e-3,
         },
     ),
+    Case(
+        "gmm",
+        "gmm",
+        {
+            **STREAM,
+            **CLOSE,
+            "features": ["x1", "x2"],
+            "n_components": 1,
+            "covariance_type": "diag",
+            "reg_covar": 1e-5,
+            "delta_bic": 6.0,
+            "n_init": 2,
+            "seed": 3,
+            "max_iter": 50,
+            "tol": 1e-4,
+            "max_state_bytes": 65536,
+        },
+    ),
+    Case("gmm2", "gmm", {**STREAM2, "features": ["x1", "x2"], "n_components": 1}),
     # Task 538: the warm-up and both cadences on the clock.
     Case(
         "kmeans3",

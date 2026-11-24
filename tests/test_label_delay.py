@@ -1126,6 +1126,10 @@ def kind_spec(kind: str, **kw) -> dict:
     if builder in ("kmeans", "hmm"):
         # Seeded inside the stream's first rows, so most rows are scored.
         a["warm_rows"] = 20
+    if builder == "gmm":
+        # These frames hold one cluster, which two components never separate:
+        # one component starts inside the stream's first rows.
+        a["n_components"] = 1
     if builder == "realized":
         # A confidence low enough that some rows of these frames, which hold
         # no jump, are flagged: the flag reads the row's own return.
@@ -1192,6 +1196,9 @@ STATE_READS: dict[str, frozenset[str]] = {
     "ddsketch": frozenset({"q0.05_y", "q0.25_y", "q0.95_y", "es0.05_y", "es0.25_y", "es0.95_y"}),
     # Its power reads the state alone.
     "spectral": frozenset({"power_y_p0", "power_y_p1"}),
+    # One component (`kind_spec`): the most responsible is it, at 1, once
+    # started, whatever the row.
+    "gmm": frozenset({"cluster", "membership_0"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),
@@ -1551,6 +1558,7 @@ DOUBLED: dict[str, dict] = {
     "expectile": {},
     "huber": {},
     "kmeans": {},
+    "gmm": {},
     "lasso": {},
     "marginal": {},
     "quantile": {},

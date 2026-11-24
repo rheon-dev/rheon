@@ -504,6 +504,12 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "gmm",
+        r#"{"type": "gmm", "n_components": 1}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": @50"#,
+        ALL,
+    ),
+    (
         "hawkes_rows",
         r#"{"type": "hawkes", "kernel_decays": [0.5, 2.0], "window_events": 25}"#,
         r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,

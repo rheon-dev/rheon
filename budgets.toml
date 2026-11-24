@@ -1760,6 +1760,18 @@ settled_frac = { budget = 8.0 }
 weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.125 }
 
+[memory.gmm]
+cluster = { budget = 8.125 }
+coef = { budget = 54.1882 }
+dist = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+log_density = { budget = 8.125 }
+membership_0 = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
+
 # --- raises and sign-offs -------------------------------------------------------
 
 [[raised]]

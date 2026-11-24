@@ -51,6 +51,7 @@ BUILDERS = [
     "expectile",
     "holt",
     "kmeans",
+    "gmm",
     "micro",
     "ew_class",
     "seqtest",

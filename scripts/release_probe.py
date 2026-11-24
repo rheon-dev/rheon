@@ -350,6 +350,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         [],
     ),
     ("kmeans", "kmeans", dict(features=["x1", "x2"], n_clusters=2, half_life=25.0, **CLOCK), []),
+    ("gmm", "gmm", dict(features=["x1", "x2"], n_components=1, half_life=25.0, **CLOCK), []),
     ("micro", "micro", dict(features=["x1", "x2"], eps=0.5, half_life=25.0, **CLOCK), []),
     (
         "ew_class",

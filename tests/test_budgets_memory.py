@@ -237,6 +237,13 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         [],
     ),
     (
+        "gmm",
+        "gmm",
+        dict(features=["x1", "x2"], n_components=1, half_life=25.0, coef_every=0, emit_clocks=True)
+        | CLOCK,
+        [],
+    ),
+    (
         "micro",
         "micro",
         dict(features=["x1", "x2"], eps=0.5, half_life=25.0, coef_every=0, emit_clocks=True)

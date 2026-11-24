@@ -1098,6 +1098,13 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             true,
         ),
         (
+            "gmm",
+            r#"{"type": "gmm", "n_components": 1}"#,
+            "[]",
+            r#"["x0", "x1"]"#,
+            true,
+        ),
+        (
             "hawkes",
             r#"{"type": "hawkes", "kernel_decays": [0.5, 2.0]}"#,
             r#"["y"]"#,
