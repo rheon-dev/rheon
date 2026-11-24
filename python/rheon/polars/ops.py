@@ -2020,7 +2020,7 @@ def tick_sign(input: str | pl.Expr) -> pl.Expr:
 
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
                              "p": [10.0, 10.0, 10.5, 10.5, 10.25, 10.25]})
-        out = rp.stream.with_windows(rows, s=rp.tick_sign("p"), clock="t", gap_cap=10.0)
+        out = rp.stream.with_windows(rows, s=rp.ops.tick_sign("p"), clock="t", gap_cap=10.0)
         print(out["s"].to_list())   # no sign until the price first moves
 
     .. code-block:: text
@@ -2797,7 +2797,7 @@ def ewm_profile(
     )
 
 
-def run_length(input: str | pl.Expr, *, tol: float = 0.0) -> pl.Expr:
+def run_length(input: str | pl.Expr, *, abs_tol: float = 0.0) -> pl.Expr:
     """The rows, ending at each row, whose value is unchanged: how long a
     value has held.
 
@@ -2809,7 +2809,7 @@ def run_length(input: str | pl.Expr, *, tol: float = 0.0) -> pl.Expr:
     ``input``
         The value: a column name, or an element-wise expression of the row.
         It may hold no operator.
-    ``tol``
+    ``abs_tol``
         The largest difference two adjacent rows of one run may have. The
         default, 0, asks for values exactly equal.
 
@@ -2822,10 +2822,10 @@ def run_length(input: str | pl.Expr, *, tol: float = 0.0) -> pl.Expr:
     .. rubric:: Raises
 
     ``TypeError``
-        ``input`` is neither a column name nor a ``pl.Expr``, or ``tol`` is
+        ``input`` is neither a column name nor a ``pl.Expr``, or ``abs_tol`` is
         not a number.
     ``ValueError``
-        ``tol`` is negative, NaN or infinite, or ``input`` holds an operator,
+        ``abs_tol`` is negative, NaN or infinite, or ``input`` holds an operator,
         a part that is not element-wise, or a column whose name starts with
         ``@po:``, the prefix the operators' own columns carry.
 
@@ -2834,7 +2834,7 @@ def run_length(input: str | pl.Expr, *, tol: float = 0.0) -> pl.Expr:
     .. code-block:: python
 
         rows = pl.DataFrame({"x": [1.0, 1.0, None, None, 1.0, 0.0, -0.0, 2.0]})
-        out = rp.stream.with_windows(rows, n=rp.run_length("x"))
+        out = rp.stream.with_windows(rows, n=rp.ops.run_length("x"))
         print(out["n"].to_list())   # 0.0 and -0.0 are one value; two nulls are one run
 
     .. code-block:: text
@@ -2844,7 +2844,7 @@ def run_length(input: str | pl.Expr, *, tol: float = 0.0) -> pl.Expr:
     .. rubric:: See also
 
     - :func:`increment`, the step from the last value, which is 0 inside a
-      run under the default ``tol``.
+      run under the default ``abs_tol``.
     - :func:`rheon.polars.stream.with_windows`, which computes the
       operators over a stream.
 
@@ -2853,10 +2853,10 @@ def run_length(input: str | pl.Expr, *, tol: float = 0.0) -> pl.Expr:
     Row *t*'s value is the largest ``n`` such that each of rows ``t - n + 1``
     to ``t`` is the same value as the row before it: that is Polars'
     ``rle``, the run lengths, read row by row. Two numbers are the same when
-    ``abs(x_t - x_{t-1}) <= tol``, compared with ``==`` under the default, so
+    ``abs(x_t - x_{t-1}) <= abs_tol``, compared with ``==`` under the default, so
     ``0.0`` and ``-0.0`` are one value, as ``rle`` has them. Each row is
-    compared with the row before it, so under a positive ``tol`` a run can
-    creep, each step within ``tol`` and its ends further apart.
+    compared with the row before it, so under a positive ``abs_tol`` a run can
+    creep, each step within ``abs_tol`` and its ends further apart.
 
     A null is a value of its own, as in ``rle``: rows of null are one run,
     and a null next to a number ends the run on both sides, so ``[3, null,
@@ -2869,9 +2869,9 @@ def run_length(input: str | pl.Expr, *, tol: float = 0.0) -> pl.Expr:
     :func:`increment` does. A gap past ``gap_cap`` leaves it as it is, since
     a value held across a gap is still held. An integer column is compared
     whole, so two neighbors past ``2**53`` stay two values, and a temporal
-    one in nanoseconds, with ``tol`` in seconds.
+    one in nanoseconds, with ``abs_tol`` in seconds.
     """
-    return row_operator("run_length", input, tol=tol)
+    return row_operator("run_length", input, abs_tol=abs_tol)
 
 
 def clock_lag(
@@ -2924,7 +2924,7 @@ def clock_lag(
 
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "e": [-0.5, 0.0, 0.5, 1.0]})
         out = rp.stream.with_windows(
-            rows, lag=rp.clock_lag("t", "e", half_life=float("inf")), clock="t", gap_cap=10.0
+            rows, lag=rp.ops.clock_lag("t", "e", half_life=float("inf")), clock="t", gap_cap=10.0
         )
         print(out["lag"].to_list())   # the lag grows by 0.5 a row: 0.5, 1, 1.5, 2
 
@@ -3005,7 +3005,7 @@ def clock_drift(
 
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "e": [-0.5, 0.0, 0.5, 1.0]})
         out = rp.stream.with_windows(
-            rows, drift=rp.clock_drift("t", "e", half_life=float("inf")), clock="t", gap_cap=10.0
+            rows, drift=rp.ops.clock_drift("t", "e", half_life=float("inf")), clock="t", gap_cap=10.0
         )
         print(out["drift"].to_list())   # the lag grows half a unit a unit of arrival
 
@@ -3097,8 +3097,8 @@ def clock_step(
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 2.0, 5.0]})
         out = rp.stream.with_windows(
             rows,
-            mean=rp.clock_step("t", half_life=float("inf")),
-            zeros=rp.clock_step("t", half_life=float("inf"), stat="zeros"),
+            mean=rp.ops.clock_step("t", half_life=float("inf")),
+            zeros=rp.ops.clock_step("t", half_life=float("inf"), stat="zeros"),
             clock="t",
             gap_cap=10.0,
         )
@@ -3188,7 +3188,7 @@ def invert(
         ``8.881784197001252e-16``, the default.
     ``detail``
         ``True`` for a struct with the root, the certified bracket, the
-        evaluations it took, their bound and the reason a root is withheld.
+        evaluations it took, their bound and the reason a root is withheld, as ``withheld_reason``.
         Default ``False``: the root alone.
 
     .. rubric:: Returns
@@ -3201,7 +3201,7 @@ def invert(
     column is a ``Float64``, the root, null where it is withheld. Under
     ``detail`` it is a struct of ``root`` (``Float64``), ``lo`` and ``hi``
     (``Float64``, the final bracket, null where none was searched),
-    ``evaluations`` and ``bound`` (``UInt32``) and ``reason`` (``String``,
+    ``evaluations`` and ``bound`` (``UInt32``) and ``withheld_reason`` (``String``,
     null where a root is given).
 
     .. rubric:: Raises
@@ -3234,7 +3234,7 @@ def invert(
             clock="t", gap_cap=10.0,
         )
         print(out["x"].round(9).to_list())
-        print(out["d"].struct.field("reason").to_list())   # y null, and y past f(5) = 130
+        print(out["d"].struct.field("withheld_reason").to_list())   # y null, and y past f(5) = 130
 
     .. code-block:: text
 
@@ -3290,7 +3290,7 @@ def invert(
        :header-rows: 1
        :widths: 22 78
 
-       * - ``reason``
+       * - ``withheld_reason``
          - when
        * - ``input_missing``
          - a column the equation reads, ``equals``, or a bracket end is

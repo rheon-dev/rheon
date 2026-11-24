@@ -2,7 +2,7 @@
 variance equation against its definition written out in numpy, row by row,
 at the parameters the bank reports; the forecasts with the inputs held at
 their learned mean; a negative input under GARCH and GJR withheld as
-``negative_input``; and what the bank owes every model -- chunk invariance,
+``input_negative``; and what the bank owes every model -- chunk invariance,
 a save mid-stream, zero weights, its refusals and its coefficient names.
 
 The definition, with ``x_t`` the row's own inputs:
@@ -170,7 +170,7 @@ def test_the_forecasts_hold_the_inputs_at_their_learned_mean(vol):
 @pytest.mark.parametrize("vol", ["garch", "gjr", "egarch"])
 def test_a_negative_input_is_withheld_under_garch_and_gjr(vol):
     """Under GARCH and GJR an input below 0 is refused: the row reports
-    nothing, ``withheld_reason`` says ``negative_input``, and it is learned as
+    nothing, ``withheld_reason`` says ``input_negative``, and it is learned as
     a row of weight 0, so every other row is what the stream with that row
     at weight 0 gives. Under EGARCH an input takes any sign."""
     n = 3000
@@ -184,12 +184,12 @@ def test_a_negative_input_is_withheld_under_garch_and_gjr(vol):
     got = _out(s, neg)
     if vol == "egarch":
         assert got["variance_y"][bad].is_not_null().all()
-        assert got["withheld_reason"].drop_nulls().ne("negative_input").all()
+        assert got["withheld_reason"].drop_nulls().ne("input_negative").all()
         return
     w = np.ones(n)
     w[bad] = 0.0
     zero = _out(s, neg.with_columns(pl.Series("w", w), pl.Series("x1", np.where(w > 0, x1, 0.0))))
-    assert got["withheld_reason"][bad].to_list() == ["negative_input"] * 3
+    assert got["withheld_reason"][bad].to_list() == ["input_negative"] * 3
     assert got["variance_y"][bad].is_null().all()
     assert got["std_resid_y"][bad].is_null().all()
     keep = pl.Series(w > 0)

@@ -1,4 +1,4 @@
-"""``rp.run_length``, ``rp.clock_lag`` and ``rp.clock_drift`` (task 564), the
+"""``rp.ops.run_length``, ``rp.ops.clock_lag`` and ``rp.ops.clock_drift`` (task 564), the
 row operators a stream's health is read from.
 
 The run length is held to Polars' ``rle``: the run lengths, read row by row
@@ -65,7 +65,7 @@ def test_a_run_length_is_polars_rle_row_by_row(chunk_size: int | None) -> None:
     s = _values(500, 7)
     df = s.to_frame()
     kwargs: dict[str, Any] = {} if chunk_size is None else {"chunk_size": chunk_size}
-    out = rp.stream.with_windows(df, n=rp.run_length("x"), **kwargs)
+    out = rp.stream.with_windows(df, n=rp.ops.run_length("x"), **kwargs)
     assert out["n"].to_list() == _rle_rows(_missing_as_null(s))
 
 
@@ -73,12 +73,12 @@ def test_nulls_are_runs_of_their_own_as_in_rle() -> None:
     # Both sides of each rule, against rle itself: two nulls are one run; a
     # null next to a value ends it on both sides; 0.0 and -0.0 are one value.
     s = pl.Series("x", [1.0, 1.0, None, None, 1.0, 0.0, -0.0, 2.0, None])
-    out = rp.stream.with_windows(s.to_frame(), n=rp.run_length("x"))
+    out = rp.stream.with_windows(s.to_frame(), n=rp.ops.run_length("x"))
     assert out["n"].to_list() == _rle_rows(s) == [1, 2, 1, 2, 1, 1, 2, 1, 1]
     # A NaN is missing here, so it joins a run of nulls where rle keeps it
     # apart; a value at 1e100 is a value, and the next double past it is not.
     s = pl.Series("x", [None, float("nan"), None, BIG, BIG, np.nextafter(BIG, np.inf)])
-    out = rp.stream.with_windows(s.to_frame(), n=rp.run_length("x"))
+    out = rp.stream.with_windows(s.to_frame(), n=rp.ops.run_length("x"))
     assert out["n"].to_list() == [1.0, 2.0, 3.0, 1.0, 2.0, 1.0]
     assert _rle_rows(s) == [1.0, 1.0, 1.0, 1.0, 2.0, 1.0]
     assert out["n"].to_list() == _rle_rows(_missing_as_null(s))
@@ -105,7 +105,7 @@ def _creeping_runs(x: pl.Series, tol: float) -> list[float]:
 @pytest.mark.parametrize("tol", [0.0, 0.5, 1.0, 3.0])
 def test_a_run_under_a_tolerance_is_its_definition(tol: float) -> None:
     s = _values(400, 11)
-    out = rp.stream.with_windows(s.to_frame(), n=rp.run_length("x", tol=tol), chunk_size=13)
+    out = rp.stream.with_windows(s.to_frame(), n=rp.ops.run_length("x", abs_tol=tol), chunk_size=13)
     assert out["n"].to_list() == _creeping_runs(s, tol)
     if tol == 0.0:
         assert out["n"].to_list() == _rle_rows(_missing_as_null(s))
@@ -116,7 +116,7 @@ def test_tol_is_inclusive() -> None:
     # past it ends the run.
     edge = np.nextafter(1.5, np.inf)
     df = pl.DataFrame({"x": [1.0, 1.5, 1.0, edge]})
-    out = rp.stream.with_windows(df, n=rp.run_length("x", tol=0.5))
+    out = rp.stream.with_windows(df, n=rp.ops.run_length("x", abs_tol=0.5))
     assert out["n"].to_list() == [1.0, 2.0, 3.0, 1.0]
 
 
@@ -130,7 +130,7 @@ def test_a_run_is_each_groups_and_restarts_at_a_session_not_at_a_gap() -> None:
         }
     )
     out = rp.stream.with_windows(
-        df, n=rp.run_length("x"), clock="t", gap_cap=10.0, group="g", session="s"
+        df, n=rp.ops.run_length("x"), clock="t", gap_cap=10.0, group="g", session="s"
     )
     # a: 1, 2, then a gap of 98 keeps the run (3), a new session starts one.
     assert out["n"].to_list() == [1.0, 1.0, 2.0, 3.0, 2.0, 1.0, 2.0]
@@ -140,9 +140,9 @@ def test_a_run_is_saved_and_resumed_at_every_row(tmp_path: Any) -> None:
     s = _values(60, 3)
     df = pl.DataFrame({"t": np.arange(60.0), "x": s})
     ops = {
-        "n": rp.run_length("x"),
-        "lag": rp.clock_lag("t", pl.col("t") - 0.01 * pl.col("t"), half_life=5.0),
-        "drift": rp.clock_drift("t", pl.col("t") - 0.01 * pl.col("t"), half_life=5.0),
+        "n": rp.ops.run_length("x"),
+        "lag": rp.ops.clock_lag("t", pl.col("t") - 0.01 * pl.col("t"), half_life=5.0),
+        "drift": rp.ops.clock_drift("t", pl.col("t") - 0.01 * pl.col("t"), half_life=5.0),
     }
     one = rp.stream.with_windows(df, **ops, clock="t", gap_cap=10.0)
     for at in (1, 2, 17, 33, 59):
@@ -178,7 +178,7 @@ def test_the_lag_is_numpys_weighted_mean() -> None:
     df = _drift_frame(150, 5)
     out = rp.stream.with_windows(
         df,
-        lag=rp.clock_lag("arrival", "event", half_life="10s"),
+        lag=rp.ops.clock_lag("arrival", "event", half_life="10s"),
         clock="arrival",
         gap_cap="1h",
     )
@@ -196,8 +196,8 @@ def test_the_slope_is_withheld_while_the_arrivals_have_no_spread() -> None:
     df = pl.DataFrame({"a": [5.0, 5.0, 5.0, 6.0, 6.0], "e": [4.0, 4.5, 3.0, 5.0, 5.5]})
     out = rp.stream.with_windows(
         df,
-        lag=rp.clock_lag("a", "e", half_life=float("inf")),
-        drift=rp.clock_drift("a", "e", half_life=float("inf")),
+        lag=rp.ops.clock_lag("a", "e", half_life=float("inf")),
+        drift=rp.ops.clock_drift("a", "e", half_life=float("inf")),
         clock="a",
         gap_cap=10.0,
     )
@@ -207,7 +207,7 @@ def test_the_slope_is_withheld_while_the_arrivals_have_no_spread() -> None:
     # The lag is withheld until a row has both times.
     df = pl.DataFrame({"a": [1.0, 2.0, 3.0], "e": [None, None, 2.5]})
     out = rp.stream.with_windows(
-        df, lag=rp.clock_lag("a", "e", half_life=4.0), clock="a", gap_cap=10.0
+        df, lag=rp.ops.clock_lag("a", "e", half_life=4.0), clock="a", gap_cap=10.0
     )
     assert out["lag"].to_list() == [None, None, 0.5]
 
@@ -218,7 +218,7 @@ def test_the_drift_restarts_at_a_gap_past_gap_cap() -> None:
     rows = {"a": [0.0, 1.0, 2.0, 12.0, 22.5, 23.0], "e": [0.0, 0.5, 1.0, 6.0, 11.0, 11.0]}
     out = rp.stream.with_windows(
         pl.DataFrame(rows),
-        drift=rp.clock_drift("a", "e", half_life=float("inf")),
+        drift=rp.ops.clock_drift("a", "e", half_life=float("inf")),
         clock="a",
         gap_cap=10.0,
     )
@@ -229,21 +229,21 @@ def test_the_drift_restarts_at_a_gap_past_gap_cap() -> None:
 def test_what_the_operators_refuse() -> None:
     df = pl.DataFrame({"t": [1.0, 2.0], "x": [1.0, 2.0], "s": ["a", "b"]})
     with pytest.raises(ValueError, match="tol must be finite and at least 0"):
-        rp.run_length("x", tol=-0.1)
+        rp.ops.run_length("x", abs_tol=-0.1)
     with pytest.raises(ValueError, match="tol must be finite and at least 0"):
-        rp.run_length("x", tol=float("nan"))
+        rp.ops.run_length("x", abs_tol=float("nan"))
     with pytest.raises(TypeError, match="tol must be a number"):
-        rp.run_length("x", tol="0")  # type: ignore[arg-type]
+        rp.ops.run_length("x", abs_tol="0")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="holds the operator increment"):
-        rp.run_length(rp.increment("x"))
+        rp.ops.run_length(rp.increment("x"))
     with pytest.raises(ValueError, match="another window operator"):
-        rp.ewm_mean(rp.run_length("x"), half_life=1.0)
+        rp.ewm_mean(rp.ops.run_length("x"), half_life=1.0)
     with pytest.raises(TypeError, match="half_life is required"):
-        rp.clock_lag("t", "x", half_life=None)  # type: ignore[arg-type]
+        rp.ops.clock_lag("t", "x", half_life=None)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="half_life must be above 0"):
-        rp.clock_drift("t", "x", half_life=0.0)
+        rp.ops.clock_drift("t", "x", half_life=0.0)
     with pytest.raises(rp.WrongTypeError, match="must be a number or a temporal column"):
-        rp.stream.with_windows(df, n=rp.run_length("s"))
+        rp.stream.with_windows(df, n=rp.ops.run_length("s"))
     dt = df.with_columns(pl.datetime(2026, 1, 1).alias("ts"))
     with pytest.raises(ValueError, match="both be temporal or both be numbers"):
-        rp.stream.with_windows(dt, d=rp.clock_drift("ts", "x", half_life=1.0))
+        rp.stream.with_windows(dt, d=rp.ops.clock_drift("ts", "x", half_life=1.0))

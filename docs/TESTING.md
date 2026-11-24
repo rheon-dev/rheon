@@ -254,7 +254,7 @@ Its volume and dollar bars reset the running sum to 0 at each bar, so they
 are `kind="imbalance"` of a quantity that is never negative. Its
 fixed-threshold imbalance bars close at `|θ| >= threshold` and reset, as
 `kind="imbalance"` does. It signs trades by the tick rule, and its
-`tick_rule_signs` is `rp.tick_sign`'s oracle, with its first trade's +1
+`tick_rule_signs` is `rp.ops.tick_sign`'s oracle, with its first trade's +1
 filled in. Its sums are plain doubles in row order, exact on a dyadic grid
 of prices and sizes, so `tests/test_stream_bars.py` and
 `tests/test_tick_sign.py` hold the bars, their aggregates and the signs to

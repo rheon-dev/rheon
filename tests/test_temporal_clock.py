@@ -566,7 +566,7 @@ class TestEveryClockParameterTakesADuration:
         "revert_half_life": ("1h", {}),
         "trend_half_life": ("20m", {}),
         "horizons": (["1h", "10m"], {}),
-        "season_length": (
+        "period": (
             "1d",
             {"seasonal": "add", "seasonal_periods": 4, "start": "heuristic"},
         ),
@@ -612,7 +612,7 @@ class TestEveryClockParameterTakesADuration:
         "trend_half_life": float("inf"),
         "seasonal_half_life": float("inf"),
         "damping_half_life": float("inf"),
-        "season_length": None,
+        "period": None,
         "huber_scale_half_life": float("inf"),
         "long_half_life": float("inf"),
         "select_half_life": float("inf"),

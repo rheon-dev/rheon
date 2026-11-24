@@ -2122,7 +2122,7 @@ pub fn all() -> Vec<Case> {
                 min_weight: 3.0,
                 season: HoltSeason::Add,
                 season_periods: 4,
-                season_length: 8.0,
+                period: 8.0,
                 seasonal_half_life: 3.0 * H,
                 start: HoltStart::Known,
                 initial_level: vec![0.25, -0.75],

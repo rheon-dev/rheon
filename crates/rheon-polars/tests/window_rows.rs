@@ -71,7 +71,7 @@ fn config(group: bool, session: bool) -> WindowsConfig {
     let mut c = json!({
         "formulas": [
             {"name": "n", "tree": ["run_length", ["col", "x"]]},
-            {"name": "n_tol", "tree": ["run_length", ["col", "x"], {"tol": 1.0}]},
+            {"name": "n_tol", "tree": ["run_length", ["col", "x"], {"abs_tol": 1.0}]},
             {"name": "lag", "tree": ["clock_lag", ["col", "ts"], {"event": ["col", "ev"], "half_life": "20s"}]},
             {"name": "drift", "tree": ["clock_drift", ["col", "ts"], {"event": ["col", "ev"], "half_life": "20s"}]},
             {"name": "flat", "tree": ["clock_drift", ["col", "ts"], {"event": ["col", "ev"], "half_life": "inf"}]},
@@ -539,7 +539,7 @@ fn a_run_of_integers_is_compared_whole() {
         "formulas": [
             {"name": "n", "tree": ["run_length", ["col", "x"]]},
             {"name": "f", "tree": ["run_length", ["cast", ["col", "x"], "Float64"]]},
-            {"name": "t", "tree": ["run_length", ["col", "x"], {"tol": 1.0}]},
+            {"name": "t", "tree": ["run_length", ["col", "x"], {"abs_tol": 1.0}]},
         ],
     }))
     .unwrap();
@@ -560,7 +560,7 @@ fn a_temporal_runs_tol_is_in_seconds() {
         .collect()
         .unwrap();
     let cfg: WindowsConfig = serde_json::from_value(json!({
-        "formulas": [{"name": "n", "tree": ["run_length", ["col", "x"], {"tol": 1.0}]}],
+        "formulas": [{"name": "n", "tree": ["run_length", ["col", "x"], {"abs_tol": 1.0}]}],
     }))
     .unwrap();
     assert_eq!(

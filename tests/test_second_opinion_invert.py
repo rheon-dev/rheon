@@ -142,7 +142,7 @@ def _held_to_brentq(out: dict, a, b, roots, t, expect) -> float:
     eps = XTOL  # the bracket holds 0
     worst = 0.0
     for i in range(len(a)):
-        x, why = out["root"][i], out["reason"][i]
+        x, why = out["root"][i], out["withheld_reason"][i]
         assert out["evaluations"][i] <= out["bound"][i]
         assert why == expect[i], (i, why, expect[i])
         if expect[i] is not None:

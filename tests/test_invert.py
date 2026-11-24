@@ -57,11 +57,11 @@ def test_the_detail_struct_names_its_fields_and_types():
             "hi": pl.Float64,
             "evaluations": pl.UInt32,
             "bound": pl.UInt32,
-            "reason": pl.String,
+            "withheld_reason": pl.String,
         }
     )
     rows = d["d"].struct.unnest()
-    assert rows["reason"].to_list() == [None, "below_range", "above_range"]
+    assert rows["withheld_reason"].to_list() == [None, "below_range", "above_range"]
     assert rows["root"][0] is not None and rows["root"][1:].to_list() == [None, None]
     assert rows["lo"][0] <= rows["root"][0] <= rows["hi"][0]
     assert rows["hi"][0] - rows["lo"][0] <= 4 * _formula.INVERT_XTOL + 1e-15
@@ -82,7 +82,7 @@ def test_a_null_nan_or_unusable_input_is_input_missing(bad, where):
     cols[col][1] = bad
     frame = pl.DataFrame(cols, schema=dict.fromkeys(cols, pl.Float64))
     rows = detail(frame, rp.ops.invert(cubic, "y", "lo", "hi", increasing=True, detail=True))
-    assert rows["reason"].to_list() == [None, "input_missing"]
+    assert rows["withheld_reason"].to_list() == [None, "input_missing"]
     assert rows["root"][1] is None and rows["lo"][1] is None and rows["hi"][1] is None
     assert rows["evaluations"][1] == 0
     assert round(rows["root"][0], 9) == 1.0
@@ -111,12 +111,12 @@ def test_each_reason_a_row_can_give():
         detail=True,
     )
     rows = detail(frame, expr)
-    assert rows["reason"].to_list()[:3] == [None, "bracket_invalid", "wrong_direction"]
+    assert rows["withheld_reason"].to_list()[:3] == [None, "bracket_invalid", "wrong_direction"]
     domain = rp.ops.invert(
         lambda x: (x + 6.0).log() + x, "y", "lo", "hi", increasing=True, detail=True
     )
     lows = frame.with_columns(lo=pl.lit(-7.0))
-    assert detail(lows, domain)["reason"][0] == "not_finite"
+    assert detail(lows, domain)["withheld_reason"][0] == "not_finite"
     # A function flat to the last bit near its root: its sign there is
     # rounding, so the root is not fixed to the tolerance.
     flat = rp.ops.invert(
@@ -127,7 +127,7 @@ def test_each_reason_a_row_can_give():
         increasing=True,
         detail=True,
     )
-    assert detail(frame.with_columns(lo=pl.lit(-5.0), hi=pl.lit(5.0)), flat)["reason"][0] == (
+    assert detail(frame.with_columns(lo=pl.lit(-5.0), hi=pl.lit(5.0)), flat)["withheld_reason"][0] == (
         "not_determined"
     )
 
@@ -139,7 +139,7 @@ def test_a_decreasing_function_is_solved_where_declared():
     wrong = run(
         frame, d=rp.ops.invert(lambda x: -cubic(x), "y", -5.0, 5.0, increasing=True, detail=True)
     )
-    assert wrong["d"].struct.field("reason")[0] == "wrong_direction"
+    assert wrong["d"].struct.field("withheld_reason")[0] == "wrong_direction"
 
 
 def test_a_bracket_of_numbers_not_in_order_is_refused_when_the_call_is_made():

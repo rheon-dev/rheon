@@ -1524,12 +1524,12 @@ pub enum OwnWait {
 /// `not_separated` last (PLAN 505), `pca`'s wait for components whose eigenvalues
 /// the rows have not yet told apart; `level_beyond_sample` after it (task
 /// 544), a `tdigest` or `ddsketch` level its rows do not identify yet;
-/// `negative_input` after that (PLAN 559), a GARCH-X row under GARCH or GJR
+/// `input_negative` after that (PLAN 559), a GARCH-X row under GARCH or GJR
 /// whose input is below 0, which its variance equation cannot read.
 /// An `isotonic` fit read at a feature outside the range of the rows
 /// learned, or before any, is `not_identified` (PLAN 573): the rows do not
 /// identify the fit there.
-/// `not_positive` after that (task 488), a multiplicative `holt` row predicted
+/// `target_not_positive` after that (task 488), a multiplicative `holt` row predicted
 /// and not learned. A spec's `Enum` holds the reasons it can name
 /// ([`withheld_reasons`]).
 pub const WITHHELD_REASONS: [&str; 12] = [
@@ -1543,12 +1543,12 @@ pub const WITHHELD_REASONS: [&str; 12] = [
     "scale_ratio_moved",
     "not_separated",
     "level_beyond_sample",
-    "negative_input",
-    "not_positive",
+    "input_negative",
+    "target_not_positive",
 ];
 
 /// The categories of `spec`'s `withheld_reason` `Enum`: every reason but
-/// `not_positive`, and that one too on a `holt` with a multiplicative
+/// `target_not_positive`, and that one too on a `holt` with a multiplicative
 /// season, the one form that can name it. So the output of every other
 /// spec, a `holt` without a season included, keeps the `Enum` it had
 /// before the reason was added (task 488, the coordinator's answer 3): a

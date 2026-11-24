@@ -56,9 +56,9 @@ impl HoltCfg {
     }
 
     /// `P`, the season's span in clock units.
-    pub(crate) fn period(&self) -> f64 {
-        if self.season_length > 0.0 {
-            self.season_length
+    pub(crate) fn span(&self) -> f64 {
+        if self.period > 0.0 {
+            self.period
         } else {
             self.season_periods as f64
         }
@@ -70,7 +70,7 @@ impl HoltCfg {
         if self.season == HoltSeason::None {
             1.0
         } else {
-            self.period() / self.season_periods as f64
+            self.span() / self.season_periods as f64
         }
     }
 
@@ -137,12 +137,12 @@ impl HoltCfg {
                     self.season_periods
                 ));
             }
-            if !(self.season_length >= 0.0 && self.season_length.is_finite()) {
+            if !(self.period >= 0.0 && self.period.is_finite()) {
                 no.refuse(format!(
-                    "holt: season_length must be a positive number of clock units, but it is \
+                    "holt: period must be a positive number of clock units, but it is \
                      {}. Give the season's span, or leave it out for seasonal_periods clock \
                      units.",
-                    self.season_length
+                    self.period
                 ));
             }
             if self.seasonal_half_life <= 0.0 || self.seasonal_half_life.is_nan() {
@@ -154,9 +154,9 @@ impl HoltCfg {
                 ));
             }
         } else {
-            if self.season_periods != 0 || self.season_length != 0.0 {
+            if self.season_periods != 0 || self.period != 0.0 {
                 no.refuse(
-                    "holt: seasonal_periods and season_length size a season, but seasonal is \
+                    "holt: seasonal_periods and period size a season, but seasonal is \
                      not set. Set seasonal to \"add\" or \"mul\", or leave them out.",
                 );
             }
@@ -420,7 +420,7 @@ impl Holt {
         let Some(o) = self.origin else {
             return 0;
         };
-        let p = self.cfg.period();
+        let p = self.cfg.span();
         let int = |c: i64, o: i64, per: f64| -> Option<usize> {
             // A whole period, in integers: exact at any clock's size.
             (per.fract() == 0.0 && per >= 1.0 && per < 2f64.powi(62)).then(|| {
@@ -553,7 +553,7 @@ impl Holt {
             season => {
                 let since = self.season_at[j][p];
                 let gap = if since.is_nan() {
-                    self.cfg.period()
+                    self.cfg.span()
                 } else {
                     at - since
                 };

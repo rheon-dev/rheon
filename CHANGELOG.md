@@ -250,7 +250,7 @@ model that only the new build has is listed as an addition and passes.
   `docs/records/ISOTONIC-DESIGN.md`.
 - **`holt` fits a season, a damped trend and Holt-Winters' fixed forms**
   (PLAN 488, part 2). `seasonal="add"` or `"mul"` with `seasonal_periods`
-  values over `season_length` clock units and a `seasonal_half_life`;
+  values over `period` clock units and a `seasonal_half_life`;
   `damping_half_life` damps the trend; `start="known"` takes the initial
   states (`initial_level`, `initial_trend`, `initial_seasonal`) and
   `start="heuristic"` fits them to a target's first rows as statsmodels'
@@ -266,7 +266,7 @@ model that only the new build has is listed as an addition and passes.
   integers on a temporal or integer clock. A multiplicative season's row
   whose target, or whose level or factor after the update, would be 0 or
   below is predicted and not learned, with the new `withheld_reason`
-  `not_positive`, the one reason that stands beside a prediction. Only that
+  `target_not_positive`, the one reason that stands beside a prediction. Only that
   form's `withheld_reason` Enum holds the category, so every other spec's
   output, a `holt` without a season included, keeps its dtype. `max_state_bytes`
   (256 KB) bounds the state, 16 bytes a seasonal value a target and the
@@ -454,13 +454,13 @@ model that only the new build has is listed as an addition and passes.
   `fractions.Fraction`, and to bar-forge's tick, volume, dollar and
   imbalance bars (a test-only dependency).
 
-- **`rp.tick_sign`: the tick rule, as a window operator** (PLAN 562). A
+- **`rp.ops.tick_sign`: the tick rule, as a window operator** (PLAN 562). A
   row's sign is +1 on a price above its last one within the group and
   session, -1 below it, and over a step of 0 the sign of the last step that
   was not 0; null on a row with no step (a session's first, a missing
   price) and on the rows at the first price until it moves. It is a step,
   as `rp.increment` is: `with_windows` computes it, a window operator's
-  input may read it (signed flow, `rp.ewm_sum(rp.tick_sign("price") *
+  input may read it (signed flow, `rp.ewm_sum(rp.ops.tick_sign("price") *
   pl.col("size"), ...)`), and it feeds `rp.stream.bars`' imbalance bars.
   Each tick sign carries its sign in the windows state's `prev`, past the
   increments' previous values, so the layout of a state file is unchanged
@@ -470,24 +470,24 @@ model that only the new build has is listed as an addition and passes.
   Polars' `sign` of `diff` with the last nonzero sign filled forward, to the
   bit.
 
-- **`rp.run_length`, `rp.clock_lag` and `rp.clock_drift`: a stream's health
-  as columns** (PLAN 564, part 2). `rp.run_length(x, tol=0.0)` gives each
+- **`rp.ops.run_length`, `rp.ops.clock_lag` and `rp.ops.clock_drift`: a stream's health
+  as columns** (PLAN 564, part 2). `rp.ops.run_length(x, abs_tol=0.0)` gives each
   row its place in the run of unchanged values it ends, so a frozen feed
   shows as a run that keeps growing: Polars' `rle` read row by row, a run of
   nulls a run of its own, `0.0` and `-0.0` one value, and a NaN, an infinity
-  or a value past 1e100 missing, as every operator reads it. `tol` takes two
-  adjacent rows within it as one value. `rp.clock_lag(arrival, event,
+  or a value past 1e100 missing, as every operator reads it. `abs_tol` takes two
+  adjacent rows within it as one value. `rp.ops.clock_lag(arrival, event,
   half_life=)` is the decayed mean of `arrival - event`, and
-  `rp.clock_drift(arrival, event, half_life=)` its weighted least-squares
+  `rp.ops.clock_drift(arrival, event, half_life=)` its weighted least-squares
   slope on the arrival time, null while the arrivals have no spread. Each is
   a group's own, computed a row at a time beside `rp.increment` in
   `with_windows`, and costs 48 bytes (a run) or 88 (a drift) a group. Held
   to Polars' `rle`, numpy's weighted mean and statsmodels' `WLS`. A window
   run's state moves to version 14; a version-13 state loads as one without
   these.
-- **`rp.clock_step`: a decayed statistic of a time's steps** (PLAN 564,
+- **`rp.ops.clock_step`: a decayed statistic of a time's steps** (PLAN 564,
   part 3). Each row's step is its time less the time before it in its
-  group, and `rp.clock_step(time, half_life=, stat=)` gives the steps'
+  group, and `rp.ops.clock_step(time, half_life=, stat=)` gives the steps'
   decayed mean (`"mean"`), variance (`"var"`) or standard deviation
   (`"std"`), corrected for the weights' count as Polars' `ewm_var` is unless
   `bias=True`, or the decayed weight of the steps of exactly 0 (`"zeros"`)
@@ -937,7 +937,7 @@ model that only the new build has is listed as an addition and passes.
   lagged by the caller. Under GARCH and GJR `π ≥ 0` and an input must be at
   least 0, so the variance stays positive: a row whose input is below 0
   reports nothing and is learned as a row of weight 0, named by a new
-  `withheld_reason`, `negative_input`, after `not_identified`. Under EGARCH
+  `withheld_reason`, `input_negative`, after `not_identified`. Under EGARCH
   `π` and the input take any sign. The start's test against constant
   variance takes one more restriction an input (`π = 0`; 16.3 for `garch`
   with one, χ² at 0.999), a `π` at 0 is no bound that makes a start wait,

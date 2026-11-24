@@ -419,7 +419,7 @@ def test_a_temporal_clock_reads_its_phase_from_its_raw_values(season):
         trend_half_life="2d",
         seasonal=season,
         seasonal_periods=24,
-        season_length="1d",
+        period="1d",
         seasonal_half_life="4d",
         start="known",
         initial_level=30.0,
@@ -466,7 +466,7 @@ def test_a_row_of_weight_zero_is_as_if_absent(clock):
         {"t": np.arange(n) * 2, "y": y, "w": np.where(np.arange(n) % 17 == 9, 0.0, 1.0)}
     )
     kw = (
-        dict(weight="w", clock="t", gap_cap=1000.0, season_length=2.0 * M)
+        dict(weight="w", clock="t", gap_cap=1000.0, period=2.0 * M)
         if clock
         else dict(weight="w")
     )
@@ -495,7 +495,7 @@ def test_a_multiplicative_target_of_zero_or_below_is_predicted_and_not_learned(y
         assert out["withheld_reason"][120] is None
         assert not out["pred_y"][121:].equals(other["pred_y"][121:])
     else:
-        assert out["withheld_reason"][120] == "not_positive"
+        assert out["withheld_reason"][120] == "target_not_positive"
         assert out["withheld_reason"].null_count() == 199
         assert out["pred_y"][121:].equals(other["pred_y"][121:])
 
@@ -513,14 +513,14 @@ OTHER_REASONS = [
     "scale_ratio_moved",
     "not_separated",
     "level_beyond_sample",
-    "negative_input",
+    "input_negative",
 ]
 
 
 def test_a_holt_without_a_season_writes_the_schema_it_wrote_before():
     """A `holt` without a season, warm-started as before seasons, writes the
     same columns in the same dtypes, its `withheld_reason` the Enum of the
-    reasons every other model's holds: `not_positive` cannot occur
+    reasons every other model's holds: `target_not_positive` cannot occur
     without a multiplicative season, so it is not in this form's Enum."""
     frame = pl.DataFrame({"y": _series(50, None, 3)})
     for spec in (
@@ -545,16 +545,16 @@ def test_a_holt_without_a_season_writes_the_schema_it_wrote_before():
 
 @pytest.mark.parametrize("season", ["add", "mul"])
 def test_only_a_multiplicative_season_adds_not_positive_to_the_enum(season):
-    """The Enum holds `not_positive` where it can occur, a multiplicative
+    """The Enum holds `target_not_positive` where it can occur, a multiplicative
     season, and there the row whose target is 0 names it; an additive
     season's Enum is every other spec's."""
     y = _series(200, season, 7)
     y[120] = 0.0
     out = _fit(_spec(season, True, False), pl.DataFrame({"y": y}))
-    want = [*OTHER_REASONS, "not_positive"] if season == "mul" else OTHER_REASONS
+    want = [*OTHER_REASONS, "target_not_positive"] if season == "mul" else OTHER_REASONS
     assert out.schema["withheld_reason"] == pl.Enum(want)
     if season == "mul":
-        assert out["withheld_reason"][120] == "not_positive"
+        assert out["withheld_reason"][120] == "target_not_positive"
     assert out["withheld_reason"].null_count() == (199 if season == "mul" else 200)
 
 

@@ -56,7 +56,7 @@ session. It is null on the first row of each group and of each session, on a row
 whose input is null, and after a reset, and in seconds when `x` is a
 temporal column.
 
-`rp.tick_sign`, the tick rule, is the sign of that step: +1 on a price
+`rp.ops.tick_sign`, the tick rule, is the sign of that step: +1 on a price
 above its last one, -1 below it, and over a step of 0 the sign of the
 last step that was not 0. On a price grid, that carried sign is most
 trades' sign. It
@@ -232,7 +232,7 @@ with_windows: 'out' holds no window operator, so it reads only its own row
 ```
 
 **An operator's input can be a formula of the same kind, `rp.increment`
-and `rp.tick_sign` included, but not another operator.** To window an operator's output, make
+and `rp.ops.tick_sign` included, but not another operator.** To window an operator's output, make
 it a column in one `with_windows` call, and window that column in a second
 ([Window an operator's
 output](how-to/make-window-features.md#window-an-operators-output)).
@@ -618,22 +618,22 @@ refused.
 
 ## A stream's health: run lengths and two clocks
 
-**`rp.run_length` counts the rows a value has held, ending at each row.**
+**`rp.ops.run_length` counts the rows a value has held, ending at each row.**
 A feed that freezes, a sensor holding its last reading or a countdown
 stopped at one value, shows as a run that keeps growing. Each row gives its
 place in its run, which is Polars' `rle` read row by row: rows of null are
 one run, a null next to a number ends the run on both sides, and `0.0` and
 `-0.0` are one value. A NaN, an infinity or a value beyond 1e100 is missing,
-as every operator reads it, so it joins a run of nulls. With `tol`, two
-adjacent rows at most `tol` apart are one value, so a run can creep. A run
+as every operator reads it, so it joins a run of nulls. With `abs_tol`, two
+adjacent rows at most `abs_tol` apart are one value, so a run can creep. A run
 starts again at a new session and at a reset, as an `rp.increment` does, and
 holds across a gap, since a value held across a gap is still held.
 
-**`rp.clock_lag` and `rp.clock_drift` read a row's two times.** Where each
+**`rp.ops.clock_lag` and `rp.ops.clock_drift` read a row's two times.** Where each
 row carries the time its event happened and the time it arrived, the lag
-`d = arrival − event` says how fresh the stream is. `rp.clock_lag` is its
+`d = arrival − event` says how fresh the stream is. `rp.ops.clock_lag` is its
 decayed mean, each row weighing `2 ** (-(t − t_i) / half_life)` on the
-stream's clock. `rp.clock_drift` is the weighted least-squares slope of the
+stream's clock. `rp.ops.clock_drift` is the weighted least-squares slope of the
 lag on the arrival time: 0 for a feed late by a steady amount, and 0.001 for
 one falling behind a millisecond a second. The slope is null while every row
 arrived at one time, a single row included, since no line is defined there.
@@ -652,9 +652,9 @@ feed = pl.DataFrame({
 # x holds 2.0 for four rows, and the lag grows from 0.1 to 0.5.
 out = rp.stream.with_windows(
     feed,
-    held=rp.run_length("x"),
-    lag=rp.clock_lag("arrival", "event", half_life=float("inf")),
-    drift=rp.clock_drift("arrival", "event", half_life=float("inf")),
+    held=rp.ops.run_length("x"),
+    lag=rp.ops.clock_lag("arrival", "event", half_life=float("inf")),
+    drift=rp.ops.clock_drift("arrival", "event", half_life=float("inf")),
     clock="arrival", gap_cap=10.0,
 )
 print(out.select("held", pl.col("lag", "drift").round(3)))
@@ -680,8 +680,8 @@ The run of 2.0 reaches 4 rows before 3.0 ends it. The slope is null on the
 first row, where one arrival has no spread, and then reads the lag's growth,
 each row weighed the same under `half_life=float("inf")`.
 
-**`rp.clock_step` reads a time's cadence.** Each row's step is its time
-less the time before it in its group. `rp.clock_step` gives a decayed
+**`rp.ops.clock_step` reads a time's cadence.** Each row's step is its time
+less the time before it in its group. `rp.ops.clock_step` gives a decayed
 statistic of the steps so far, each step weighing
 `2 ** (-(t − t_i) / half_life)` on the stream's clock, as a lag does. The
 statistic is `stat="mean"` (the default), `"var"` or `"std"`, each
@@ -701,8 +701,8 @@ the state is a few numbers a group, whatever the stream's length:
 feed = pl.DataFrame({"t": [0.0, 1.0, 1.0, 2.0, 2.0, 2.0, 5.0]})
 out = rp.stream.with_windows(
     feed,
-    step=rp.clock_step("t", half_life=float("inf")),
-    repeats=rp.clock_step("t", half_life=float("inf"), stat="zeros"),
+    step=rp.ops.clock_step("t", half_life=float("inf")),
+    repeats=rp.ops.clock_step("t", half_life=float("inf"), stat="zeros"),
     clock="t", gap_cap=10.0,
 )
 print(out.select(pl.col("step").round(3), "repeats"))

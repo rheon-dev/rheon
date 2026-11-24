@@ -377,7 +377,7 @@ CASES: list[Case] = [
             "targets": ["y"],
             "seasonal": "add",
             "seasonal_periods": 4,
-            "season_length": 8.0,
+            "period": 8.0,
             "seasonal_half_life": 40.0,
             "damping_half_life": 30.0,
             "start": "known",

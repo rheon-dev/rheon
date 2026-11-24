@@ -23,7 +23,7 @@ def holt(
     horizons: list[float | Duration] | dict[str, float | Duration] | None = None,
     seasonal: Literal["add", "mul"] | None = None,
     seasonal_periods: int | None = None,
-    season_length: float | Duration | None = None,
+    period: float | Duration | None = None,
     seasonal_half_life: float | Duration | None = None,
     damping_half_life: float | Duration | None = None,
     start: Literal["warm", "known", "heuristic"] | None = None,
@@ -108,7 +108,7 @@ def holt(
         ``"heuristic"``.
     ``seasonal_periods``
         ``m``, the number of values a season is held in, at least 2.
-    ``season_length``
+    ``period``
         ``P``, the season's span in clock units (a duration on a temporal
         clock): each value covers ``P / m`` of it. Default ``m``, one value
         per clock unit, which is one per row without a clock column.
@@ -350,7 +350,7 @@ def holt(
 
     Under ``"mul"`` a row whose target is 0 or below, or whose update would
     make the level or the seasonal factor 0 or below, is predicted and not
-    learned, and its ``withheld_reason`` is ``not_positive``, a category
+    learned, and its ``withheld_reason`` is ``target_not_positive``, a category
     only this form's ``Enum`` holds. The seasonal values are not
     renormalized.
 
@@ -381,7 +381,7 @@ def holt(
     for key, value in (
         ("seasonal", seasonal),
         ("seasonal_periods", seasonal_periods),
-        ("season_length", season_length),
+        ("period", period),
         ("seasonal_half_life", seasonal_half_life),
         ("damping_half_life", damping_half_life),
         ("start", start),

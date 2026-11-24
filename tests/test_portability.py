@@ -37,7 +37,7 @@ REASON_DTYPE = pl.Enum(
         "scale_ratio_moved",
         "not_separated",
         "level_beyond_sample",
-        "negative_input",
+        "input_negative",
     ]
 )
 

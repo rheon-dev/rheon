@@ -347,7 +347,7 @@ fn the_detail_struct_carries_the_bracket_the_count_and_the_reason() {
     let s = out.struct_().unwrap();
     let field = |n: &str| s.field_by_name(n).unwrap();
     let root = field("root");
-    let reason = field("reason");
+    let reason = field("withheld_reason");
     let (evals, bound) = (field("evaluations"), field("bound"));
     let (lo, hi) = (field("lo"), field("hi"));
     for i in 0..df.height() {

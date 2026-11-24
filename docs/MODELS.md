@@ -321,7 +321,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows a `holt` heuristic start holds, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance, or an `isotonic` fit read at a feature beyond the rows before it), `scale_ratio_moved` (a `corrchange` flag withheld on a span whose two columns' scale ratio moved), `not_separated` (a `pca` component the data does not yet tell apart from a neighbor), `level_beyond_sample` (a `tdigest` or `ddsketch` level past what the rows before it identify) `negative_input` (a `garch` row under GARCH or GJR whose input is below 0) or `not_positive` (a multiplicative `holt` season's row predicted and not learned, its target or its update 0 or below: the one reason beside a prediction, and in that form's `enum` alone), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows a `holt` heuristic start holds, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance, or an `isotonic` fit read at a feature beyond the rows before it), `scale_ratio_moved` (a `corrchange` flag withheld on a span whose two columns' scale ratio moved), `not_separated` (a `pca` component the data does not yet tell apart from a neighbor), `level_beyond_sample` (a `tdigest` or `ddsketch` level past what the rows before it identify) `input_negative` (a `garch` row under GARCH or GJR whose input is below 0) or `target_not_positive` (a multiplicative `holt` season's row predicted and not learned, its target or its update 0 or below: the one reason beside a prediction, and in that form's `enum` alone), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -2117,7 +2117,7 @@ what each gain is and when each wins.
 #### Seasons, damping and the starts
 
 `seasonal="add"` or `"mul"` adds a season of `seasonal_periods` values `S`
-over `season_length` clock units, and `damping_half_life` damps the trend.
+over `period` clock units, and `damping_half_life` damps the trend.
 `start` says where the fit starts. `"known"` starts from the initial states
 given. `"heuristic"` fits them to a target's first rows (10, or 5 seasons)
 as statsmodels' heuristic does, then learns those rows from them, and
@@ -2147,7 +2147,7 @@ its row's place in the season; without a clock column a row of weight 0
 counts in no clock, so the row after it takes its place. Under `"mul"` a
 row whose target, or whose level or factor after the update, would be 0 or
 below is predicted, not learned, and its `withheld_reason` is
-`not_positive`. The state grows by 16 bytes a seasonal value a target, and
+`target_not_positive`. The state grows by 16 bytes a seasonal value a target, and
 the heuristic start's held rows by 36 bytes each until it is fitted;
 `max_state_bytes` (256 KB by default) refuses a spec past it, naming the
 bytes it needs.
@@ -3617,7 +3617,7 @@ before, such as a realized variance, to make it known before the return
 it explains; `rugarch`'s `external.regressors` read the same row. Under
 GARCH and GJR each `π` is at least 0 and an input must be at least 0, so
 the variance stays positive. A row whose input is below 0 reports nothing,
-`withheld_reason` `negative_input`, and is learned as a row of weight 0,
+`withheld_reason` `input_negative`, and is learned as a row of weight 0,
 as a row with a null feature is. Under EGARCH the input enters the
 log-variance, and `π` and the input take any sign. Each `π`'s sensitivity
 is the filter's own recursion driven by the input, `∂s_t/∂π = x_t + β

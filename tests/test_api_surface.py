@@ -1013,7 +1013,7 @@ def enum_values_section(cli: Path | None) -> list[str]:
     )
     assert isinstance(reasons, pl.Enum)
     out.append("  withheld_reason, in precedence order: " + ", ".join(reasons.categories.to_list()))
-    # `not_positive` is in the Enum of the one form that can name it, a
+    # `target_not_positive` is in the Enum of the one form that can name it, a
     # `holt` with a multiplicative season; every other spec's Enum is the
     # one above (task 488).
     mul = (

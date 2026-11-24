@@ -1,4 +1,4 @@
-"""``rp.clock_drift`` against statsmodels' ``WLS``, and ``rp.clock_step``
+"""``rp.ops.clock_drift`` against statsmodels' ``WLS``, and ``rp.ops.clock_step``
 against statsmodels' ``DescrStatsW`` (task 564).
 
 The slope of the lag ``d = arrival - event`` on the arrival time, each row
@@ -7,7 +7,7 @@ weighted least-squares slope of ``d`` on ``arrival`` with a constant. Only
 the weights are written here, from the definition; statsmodels fits the
 line. Its intercept's mean is checked too: the fitted line passes through
 the weighted means, so ``intercept + slope * a_bar`` is the lag's weighted
-mean, which ``rp.clock_lag`` gives.
+mean, which ``rp.ops.clock_lag`` gives.
 
 The tolerance: ``WLS`` solves by a pseudo-inverse of the weighted design, and
 the operator updates two sums about running means, so the two share no
@@ -63,8 +63,8 @@ def test_the_drift_is_statsmodels_wls(half_life: str | None) -> None:
     span = float("inf") if half_life is None else half_life
     out = rp.stream.with_windows(
         df,
-        lag=rp.clock_lag("arrival", "event", half_life=span),
-        drift=rp.clock_drift("arrival", "event", half_life=span),
+        lag=rp.ops.clock_lag("arrival", "event", half_life=span),
+        drift=rp.ops.clock_drift("arrival", "event", half_life=span),
         clock="arrival",
         gap_cap="1h",
     )
@@ -107,9 +107,9 @@ def test_a_clock_step_is_statsmodels_descrstatsw(half_life: str | None) -> None:
     span = float("inf") if half_life is None else half_life
     out = rp.stream.with_windows(
         df,
-        m=rp.clock_step("t", half_life=span),
-        b=rp.clock_step("t", half_life=span, stat="var", bias=True),
-        u=rp.clock_step("t", half_life=span, stat="std"),
+        m=rp.ops.clock_step("t", half_life=span),
+        b=rp.ops.clock_step("t", half_life=span, stat="var", bias=True),
+        u=rp.ops.clock_step("t", half_life=span, stat="std"),
         clock="t",
         gap_cap="1h",
     )

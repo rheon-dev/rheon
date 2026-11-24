@@ -69,7 +69,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
         &[
             "trend_half_life",
             "horizons",
-            "season_length",
+            "period",
             "seasonal_half_life",
             "damping_half_life",
         ],
@@ -468,7 +468,7 @@ impl Spec {
             ModelKind::Holt {
                 trend_half_life,
                 horizons,
-                season_length,
+                period,
                 seasonal_half_life,
                 damping_half_life,
                 ..
@@ -477,7 +477,7 @@ impl Spec {
                 for h in horizons.iter().flatten() {
                     put(&mut out, "horizons", Some(h.span()));
                 }
-                put(&mut out, "season_length", season_length.as_ref());
+                put(&mut out, "period", period.as_ref());
                 put(&mut out, "seasonal_half_life", seasonal_half_life.as_ref());
                 put(&mut out, "damping_half_life", damping_half_life.as_ref());
             }

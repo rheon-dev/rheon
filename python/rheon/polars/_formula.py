@@ -46,7 +46,7 @@ from rheon._rheon import parse_duration
 PREFIX = "@po:"
 
 #: The window operators, and the row operators, computed a row at a time
-#: from the group's previous rows: the steps, then the last three (task 564).
+#: from the group's previous rows: the steps, then the last three.
 OPERATORS = (
     "ewm_mean",
     "rewm_mean",
@@ -95,7 +95,7 @@ STEPS = ("increment", "tick_sign")
 #: The row operators: no window, each read off its group's previous rows.
 ROW_OPERATORS = ("increment", "tick_sign", "run_length", "clock_lag", "clock_drift", "clock_step")
 
-#: What a clock step reads of its time's steps (task 564).
+#: What a clock step reads of its time's steps.
 STEP_STATS = ("mean", "var", "std", "zeros", "backs")
 
 #: The row operators that read two times, an arrival (their input) and an
@@ -583,7 +583,7 @@ def _input_tree(who: str, value: Any) -> list[Any]:
             raise ValueError(
                 f"{who}: the input holds another window operator, but an operator's input may "
                 f"hold only columns and Polars expressions of the same row (a column "
-                f'computation, such as pl.col("x") + 1), rp.increment or rp.tick_sign. To apply '
+                f'computation, such as pl.col("x") + 1), rp.increment or rp.ops.tick_sign. To apply '
                 f"an operator to another's output, add the inner one as a column with "
                 f"rp.stream.with_windows first, and pass that column."
             )
@@ -1284,7 +1284,7 @@ def _offset(who: str, value: Any) -> float | str:
 
 
 def _row_input(who: str, key: str, value: Any) -> list[Any]:
-    """A row operator's input (task 564): a column name, or an element-wise
+    """A row operator's input: a column name, or an element-wise
     expression of the row holding no operator at all."""
     if isinstance(value, str):
         if value.startswith(PREFIX):
@@ -1311,14 +1311,14 @@ def row_operator(
     name: str,
     input: Any,
     *,
-    tol: Any = 0.0,
+    abs_tol: Any = 0.0,
     event: Any = None,
     half_life: Any = None,
     stat: Any = "mean",
     bias: Any = None,
 ) -> pl.Expr:
-    """The expression of the row operator ``name`` (task 564): a run length
-    over ``input`` with ``tol``, a clock lag or drift of ``input``, the
+    """The expression of the row operator ``name``: a run length
+    over ``input`` with ``abs_tol``, a clock lag or drift of ``input``, the
     arrival time, against ``event``, or a clock step's ``stat`` of the
     steps of ``input``, decayed across ``half_life``. Checked here, so a
     wrong value names its parameter."""
@@ -1327,23 +1327,23 @@ def row_operator(
         return _clock_step(who, input, half_life=half_life, stat=stat, bias=bias)
     if name == "run_length":
         tree = _row_input(who, "input", input)
-        if isinstance(tol, bool) or not isinstance(tol, numbers.Real):
+        if isinstance(abs_tol, bool) or not isinstance(abs_tol, numbers.Real):
             raise TypeError(
-                f"{who}: tol must be a number, but it is of type {type(tol).__name__}. Set tol "
+                f"{who}: abs_tol must be a number, but it is of type {type(abs_tol).__name__}. Set abs_tol "
                 f"to 0 for values exactly equal, or to the largest difference two adjacent rows "
                 f"of one run may have."
             )
-        t = float(tol)
+        t = float(abs_tol)
         if not (math.isfinite(t) and t >= 0.0):
             raise ValueError(
-                f"{who}: tol must be finite and at least 0, but it is {tol!r}. Set tol to 0 for "
+                f"{who}: abs_tol must be finite and at least 0, but it is {abs_tol!r}. Set abs_tol to 0 for "
                 f"values exactly equal, or to the largest difference two adjacent rows of one "
                 f"run may have."
             )
         # A run under the default tolerance carries no parameters, so one
         # run asked for twice is one column whichever way it was written.
         return operator_column(
-            ["run_length", tree] if t == 0.0 else ["run_length", tree, {"tol": t}]
+            ["run_length", tree] if t == 0.0 else ["run_length", tree, {"abs_tol": t}]
         )
     assert name in CLOCKS, name
     arrival = _row_input(who, "arrival", input)
@@ -1363,7 +1363,7 @@ def row_operator(
 
 
 def _clock_step(who: str, input: Any, *, half_life: Any, stat: Any, bias: Any) -> pl.Expr:
-    """A clock step's node (task 564): its time, half-life and statistic,
+    """A clock step's node: its time, half-life and statistic,
     and a spread's ``bias``, resolved to ``False`` where not given, as the
     native reader writes it back."""
     tree = _row_input(who, "time", input)

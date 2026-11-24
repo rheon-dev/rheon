@@ -35,7 +35,7 @@ fn known(season: HoltSeason, trend: bool, damped: bool) -> HoltCfg {
         trend,
         season,
         season_periods: if seasonal { M } else { 0 },
-        season_length: if seasonal { 8.0 } else { 0.0 },
+        period: if seasonal { 8.0 } else { 0.0 },
         seasonal_half_life: if seasonal { 20.0 } else { f64::INFINITY },
         damping_half_life: if damped { 9.0 } else { f64::INFINITY },
         start: HoltStart::Known,
@@ -103,7 +103,7 @@ fn written_out(cfg: &HoltCfg, rows: &[(Option<f64>, f64, f64)]) -> (Vec<f64>, f6
     let half = |s: f64, h: f64| 0.5f64.powf(s / h);
     let seasonal = cfg.season != HoltSeason::None;
     let m = cfg.season_periods;
-    let p_len = cfg.season_length;
+    let p_len = cfg.period;
     let mut l = cfg.initial_level[0];
     let mut b = cfg.initial_trend.first().copied().unwrap_or(0.0);
     let mut seas = cfg.initial_seasonal.first().cloned().unwrap_or_default();
@@ -261,7 +261,7 @@ fn the_phase_is_the_raw_clocks_not_the_steps() {
     let cfg = HoltCfg {
         season: HoltSeason::Add,
         season_periods: 24,
-        season_length: 86_400.0,
+        period: 86_400.0,
         seasonal_half_life: 86_400.0 * 3.0,
         initial_seasonal: vec![vec![0.0; 24]],
         ..known(HoltSeason::Add, true, false)
@@ -290,7 +290,7 @@ fn the_phase_is_the_raw_clocks_not_the_steps() {
 #[test]
 fn a_phase_on_each_side_of_a_buckets_edge() {
     let cfg = HoltCfg {
-        season_length: 10.0,
+        period: 10.0,
         ..known(HoltSeason::Add, false, false)
     };
     let mut m = Holt::new(cfg.clone()).unwrap();
@@ -306,11 +306,7 @@ fn a_phase_on_each_side_of_a_buckets_edge() {
         .map(|&c| m.phase(ClockValue::F64(c)))
         .collect();
     assert_eq!(floats, [0, 0, 1, 1, 2, 3, 0, 3]);
-    let mut odd = Holt::new(HoltCfg {
-        season_length: 2.5,
-        ..cfg
-    })
-    .unwrap();
+    let mut odd = Holt::new(HoltCfg { period: 2.5, ..cfg }).unwrap();
     odd.origin = Some(ClockValue::I64(0));
     let phases: Vec<usize> = (0..6).map(|c| odd.phase(ClockValue::I64(c))).collect();
     assert_eq!(
@@ -414,7 +410,7 @@ fn the_heuristic_start_holds_its_rows_and_no_more() {
         cfg.initial_seasonal.clear();
         if season != HoltSeason::None {
             cfg.season_periods = m;
-            cfg.season_length = m as f64;
+            cfg.period = m as f64;
         }
         let need = cfg.start_rows();
         let mut model = Holt::new(cfg).unwrap();
@@ -549,7 +545,7 @@ fn each_form_is_refused_where_it_has_no_definition() {
         ok(HoltCfg {
             season: HoltSeason::None,
             season_periods: 0,
-            season_length: 0.0,
+            period: 0.0,
             seasonal_half_life: f64::INFINITY,
             ..warm.clone()
         })
@@ -621,7 +617,7 @@ fn the_state_is_held_to_its_cap_on_both_sides() {
         n_targets: 3,
         season: HoltSeason::Add,
         season_periods: 8760,
-        season_length: 8760.0,
+        period: 8760.0,
         seasonal_half_life: 1e5,
         start: HoltStart::Heuristic,
         ..HoltCfg::default()
@@ -650,7 +646,7 @@ fn the_state_is_held_to_its_cap_on_both_sides() {
     // Under the default cap, a season of a week's hours with a known start.
     let week = HoltCfg {
         season_periods: 168,
-        season_length: 168.0,
+        period: 168.0,
         start: HoltStart::Known,
         initial_level: vec![0.0],
         initial_trend: vec![0.0],

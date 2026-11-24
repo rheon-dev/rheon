@@ -1,4 +1,4 @@
-"""``rp.clock_step`` (task 564): a decayed statistic of the steps between
+"""``rp.ops.clock_step`` (task 564): a decayed statistic of the steps between
 each time and the one before it, a stream's cadence read as a column.
 
 On a stream with no clock column every row is one unit of the clock, and the
@@ -59,9 +59,9 @@ def test_the_steps_statistics_are_polars_ewm_of_diff(
         pytest.skip("a mean takes no bias")
     s = _times(400, 11)
     op = (
-        rp.clock_step("t", half_life=half_life)
+        rp.ops.clock_step("t", half_life=half_life)
         if stat == "mean"
-        else rp.clock_step("t", half_life=half_life, stat=stat, bias=bias)  # type: ignore[arg-type]
+        else rp.ops.clock_step("t", half_life=half_life, stat=stat, bias=bias)  # type: ignore[arg-type]
     )
     got = rp.stream.with_windows(s.to_frame(), v=op)["v"].to_list()
     want = _polars(s, stat, half_life, bias)
@@ -86,8 +86,8 @@ def test_a_count_is_the_decayed_weight_of_its_steps() -> None:
     h = 6.0
     out = rp.stream.with_windows(
         s.to_frame(),
-        zeros=rp.clock_step("t", half_life=h, stat="zeros"),
-        backs=rp.clock_step("t", half_life=h, stat="backs"),
+        zeros=rp.ops.clock_step("t", half_life=h, stat="zeros"),
+        backs=rp.ops.clock_step("t", half_life=h, stat="backs"),
     )
     d = s.diff().to_numpy()
     for i in range(len(s)):
@@ -109,8 +109,8 @@ def test_a_count_is_by_sign_on_both_sides_of_zero() -> None:
     s = pl.Series("t", [0.0, 0.0, -0.0, tiny, 0.0, 1.0], dtype=pl.Float64)
     out = rp.stream.with_windows(
         s.to_frame(),
-        zeros=rp.clock_step("t", half_life=INF, stat="zeros"),
-        backs=rp.clock_step("t", half_life=INF, stat="backs"),
+        zeros=rp.ops.clock_step("t", half_life=INF, stat="zeros"),
+        backs=rp.ops.clock_step("t", half_life=INF, stat="backs"),
     )
     assert out["zeros"].to_list() == [0.0, 1.0, 2.0, 2.0, 2.0, 2.0]
     assert out["backs"].to_list() == [0.0, 0.0, 0.0, 0.0, 1.0, 1.0]
@@ -120,7 +120,7 @@ def test_a_missing_time_reports_null_and_restarts_the_chain() -> None:
     # A null and a NaN: each gives null, and the next time takes no step
     # across it, so the mean of the steps 1 and 1 holds until the step 4.
     s = pl.Series("t", [0.0, 1.0, None, 9.0, 10.0, float("nan"), 50.0, 54.0])
-    out = rp.stream.with_windows(s.to_frame(), m=rp.clock_step("t", half_life=INF))
+    out = rp.stream.with_windows(s.to_frame(), m=rp.ops.clock_step("t", half_life=INF))
     assert out["m"].to_list() == [None, 1.0, None, 1.0, 1.0, None, 1.0, 2.0]
 
 
@@ -130,8 +130,8 @@ def test_a_spread_is_withheld_while_one_step_carries_the_weight() -> None:
     s = pl.Series("t", [0.0, 2.0, 3.0], dtype=pl.Float64)
     out = rp.stream.with_windows(
         s.to_frame(),
-        b=rp.clock_step("t", half_life=INF, stat="var", bias=True),
-        u=rp.clock_step("t", half_life=INF, stat="var"),
+        b=rp.ops.clock_step("t", half_life=INF, stat="var", bias=True),
+        u=rp.ops.clock_step("t", half_life=INF, stat="var"),
     )
     assert out["b"].to_list() == [None, 0.0, 0.25]
     assert out["u"].to_list() == [None, None, 0.5]
@@ -147,7 +147,7 @@ def test_the_steps_are_each_groups_and_restart_at_a_gap_and_a_session() -> None:
     )
     out = rp.stream.with_windows(
         df,
-        m=rp.clock_step("t", half_life=INF),
+        m=rp.ops.clock_step("t", half_life=INF),
         clock="t",
         gap_cap=12.0,
         group="g",
@@ -159,7 +159,7 @@ def test_the_steps_are_each_groups_and_restart_at_a_gap_and_a_session() -> None:
     # A step of exactly gap_cap keeps the steps.
     out = rp.stream.with_windows(
         pl.DataFrame({"t": [0.0, 1.0, 11.0]}),
-        m=rp.clock_step("t", half_life=INF),
+        m=rp.ops.clock_step("t", half_life=INF),
         clock="t",
         gap_cap=10.0,
     )
@@ -172,8 +172,8 @@ def test_a_temporal_time_steps_in_seconds() -> None:
     df = pl.DataFrame({"ts": ts}).with_columns(pl.col("ts").dt.cast_time_unit("ns"))
     out = rp.stream.with_windows(
         df,
-        m=rp.clock_step("ts", half_life=INF),
-        z=rp.clock_step("ts", half_life=INF, stat="zeros"),
+        m=rp.ops.clock_step("ts", half_life=INF),
+        z=rp.ops.clock_step("ts", half_life=INF, stat="zeros"),
         clock="ts",
         gap_cap="1h",
     )
@@ -188,10 +188,10 @@ def test_chunking_changes_no_bit(chunk_size: int) -> None:
     s = _times(500, 3)
     df = pl.DataFrame({"c": np.arange(500.0) * 0.5, "t": s, "g": ["a", "b"] * 250})
     ops = {
-        "m": rp.clock_step("t", half_life=4.0),
-        "sd": rp.clock_step("t", half_life=4.0, stat="std"),
-        "z": rp.clock_step("t", half_life=4.0, stat="zeros"),
-        "b": rp.clock_step("t", half_life=4.0, stat="backs"),
+        "m": rp.ops.clock_step("t", half_life=4.0),
+        "sd": rp.ops.clock_step("t", half_life=4.0, stat="std"),
+        "z": rp.ops.clock_step("t", half_life=4.0, stat="zeros"),
+        "b": rp.ops.clock_step("t", half_life=4.0, stat="backs"),
     }
     kw: dict[str, Any] = {"clock": "c", "gap_cap": 10.0, "group": "g"}
     one = rp.stream.with_windows(df, **ops, **kw)
@@ -203,9 +203,9 @@ def test_a_run_is_saved_and_resumed_at_every_row(tmp_path: Any) -> None:
     s = _times(60, 9)
     df = pl.DataFrame({"c": np.arange(60.0), "t": s})
     ops = {
-        "m": rp.clock_step("t", half_life=5.0),
-        "v": rp.clock_step("t", half_life=5.0, stat="var", bias=True),
-        "z": rp.clock_step("t", half_life=5.0, stat="zeros"),
+        "m": rp.ops.clock_step("t", half_life=5.0),
+        "v": rp.ops.clock_step("t", half_life=5.0, stat="var", bias=True),
+        "z": rp.ops.clock_step("t", half_life=5.0, stat="zeros"),
     }
     one = rp.stream.with_windows(df, **ops, clock="c", gap_cap=10.0)
     for at in range(1, 60):
@@ -218,18 +218,18 @@ def test_a_run_is_saved_and_resumed_at_every_row(tmp_path: Any) -> None:
 def test_what_a_clock_step_refuses() -> None:
     df = pl.DataFrame({"t": [1.0, 2.0], "s": ["a", "b"]})
     with pytest.raises(TypeError, match="half_life is required"):
-        rp.clock_step("t", half_life=None)  # type: ignore[arg-type]
+        rp.ops.clock_step("t", half_life=None)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="half_life must be above 0"):
-        rp.clock_step("t", half_life=0.0)
+        rp.ops.clock_step("t", half_life=0.0)
     with pytest.raises(ValueError, match='stat must be "mean"'):
-        rp.clock_step("t", half_life=1.0, stat="median")  # type: ignore[arg-type]
+        rp.ops.clock_step("t", half_life=1.0, stat="median")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match='only stat="var" or "std" takes it'):
-        rp.clock_step("t", half_life=1.0, bias=True)
+        rp.ops.clock_step("t", half_life=1.0, bias=True)
     with pytest.raises(TypeError, match="bias must be True or False"):
-        rp.clock_step("t", half_life=1.0, stat="std", bias=1)  # type: ignore[arg-type]
+        rp.ops.clock_step("t", half_life=1.0, stat="std", bias=1)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="holds the operator increment"):
-        rp.clock_step(rp.increment("t"), half_life=1.0)
+        rp.ops.clock_step(rp.increment("t"), half_life=1.0)
     with pytest.raises(ValueError, match="another window operator"):
-        rp.ewm_mean(rp.clock_step("t", half_life=1.0), half_life=1.0)
+        rp.ewm_mean(rp.ops.clock_step("t", half_life=1.0), half_life=1.0)
     with pytest.raises(rp.WrongTypeError, match="must be a number or a temporal column"):
-        rp.stream.with_windows(df, m=rp.clock_step("s", half_life=1.0))
+        rp.stream.with_windows(df, m=rp.ops.clock_step("s", half_life=1.0))

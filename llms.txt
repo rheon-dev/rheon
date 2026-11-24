@@ -134,7 +134,7 @@ Windows alike.
   `rp.ewm_var`, `rp.ewm_std`, `rp.ewm_moments` (one term of the moments of one or more
   columns, each perhaps lagged: a skew, a kurtosis, a cumulant, an autocorrelation)
   -- Polars expressions over a stream's clock -- and
-  `rp.increment`, a column's step from its last value, and `rp.tick_sign`, the tick
+  `rp.increment`, a column's step from its last value, and `rp.ops.tick_sign`, the tick
   rule's sign of that step, all run by
   `lf.rheon.with_windows(*exprs, **named, clock=...)` in one pass. A look-ahead one
   is also a spec's target, learned once its window has passed: `fit_predict`

@@ -367,7 +367,14 @@ pub struct Invert {
 }
 
 /// The fields of the struct `detail` gives, in order.
-pub const INVERT_DETAIL_FIELDS: [&str; 6] = ["root", "lo", "hi", "evaluations", "bound", "reason"];
+pub const INVERT_DETAIL_FIELDS: [&str; 6] = [
+    "root",
+    "lo",
+    "hi",
+    "evaluations",
+    "bound",
+    "withheld_reason",
+];
 
 impl Invert {
     /// Read the node from its list form.

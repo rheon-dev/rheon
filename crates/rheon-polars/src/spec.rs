@@ -696,7 +696,7 @@ pub enum ModelKind {
         seasonal_periods: Option<usize>,
         /// `P`, the season's span in clock units; default `seasonal_periods`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        season_length: Option<Span>,
+        period: Option<Span>,
         /// The seasonal values' half-life, in clock units.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seasonal_half_life: Option<Span>,

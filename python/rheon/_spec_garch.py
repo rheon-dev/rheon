@@ -62,7 +62,7 @@ def garch(
         ``π`` is at least 0 and an input must be at least 0, so the variance
         stays positive: a row with an input below 0 reports nothing and is
         learned as a row of weight 0 (``withheld_reason``
-        ``negative_input``), as a row with a null feature is. Under
+        ``input_negative``), as a row with a null feature is. Under
         ``"egarch"`` the input enters the log-variance, and ``π`` and the
         input take any sign. ``"figarch"`` and ``variance_targeting`` take
         none. At most 8. Default none.

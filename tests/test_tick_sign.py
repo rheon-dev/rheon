@@ -1,4 +1,4 @@
-"""``rp.tick_sign``: the tick rule as a window operator.
+"""``rp.ops.tick_sign``: the tick rule as a window operator.
 
 A row's sign is +1 on a price above the last one, -1 below it, and over a
 step of 0 the sign of the last step that was not 0. A row with no step (the
@@ -70,7 +70,7 @@ def polars_tick_sign(price: pl.Expr) -> pl.Expr:
 
 
 def signed(df: pl.DataFrame, **kw: object) -> pl.Series:
-    out = rp.stream.with_windows(df, s=rp.tick_sign("price"), **CLOCK, **kw)
+    out = rp.stream.with_windows(df, s=rp.ops.tick_sign("price"), **CLOCK, **kw)
     assert isinstance(out, pl.DataFrame)
     return out["s"]
 
@@ -154,7 +154,7 @@ def test_a_tick_sign_inside_an_operator_signs_the_flow() -> None:
     df = ticks(4, n=200)
     out = rp.stream.with_windows(
         df,
-        flow=rp.ewm_sum(rp.tick_sign("price") * pl.col("size"), half_life=float("inf")),
+        flow=rp.ewm_sum(rp.ops.tick_sign("price") * pl.col("size"), half_life=float("inf")),
         **CLOCK,
     )
     want = (polars_tick_sign(pl.col("price")) * pl.col("size")).fill_null(0.0).cum_sum()
@@ -164,16 +164,16 @@ def test_a_tick_sign_inside_an_operator_signs_the_flow() -> None:
 def test_a_tick_sign_of_a_tick_sign_or_of_a_window_is_refused() -> None:
     df = ticks(5, n=10)
     with pytest.raises(ValueError, match="holds another window operator"):
-        rp.tick_sign(rp.ewm_sum("price", half_life=1.0))
+        rp.ops.tick_sign(rp.ewm_sum("price", half_life=1.0))
     nested = "a tick sign's input holds another tick sign"
     with pytest.raises((pl.exceptions.ComputeError, ValueError), match=nested):
-        rp.stream.with_windows(df, s=rp.tick_sign(rp.tick_sign("price")), **CLOCK)
+        rp.stream.with_windows(df, s=rp.ops.tick_sign(rp.ops.tick_sign("price")), **CLOCK)
     with pytest.raises(
         (pl.exceptions.ComputeError, ValueError), match="a tick sign's input holds an increment"
     ):
-        rp.stream.with_windows(df, s=rp.tick_sign(rp.increment("price")), **CLOCK)
+        rp.stream.with_windows(df, s=rp.ops.tick_sign(rp.increment("price")), **CLOCK)
     with pytest.raises(TypeError, match="column name or a pl.Expr"):
-        rp.tick_sign(3.0)  # type: ignore[arg-type]
+        rp.ops.tick_sign(3.0)  # type: ignore[arg-type]
 
 
 def test_a_text_price_is_refused_as_the_wrong_type() -> None:
@@ -182,7 +182,7 @@ def test_a_text_price_is_refused_as_the_wrong_type() -> None:
         (pl.exceptions.ComputeError, TypeError),
         match="a tick sign's input must be a number or a temporal column",
     ):
-        rp.stream.with_windows(df, s=rp.tick_sign("price"), **CLOCK)
+        rp.stream.with_windows(df, s=rp.ops.tick_sign("price"), **CLOCK)
 
 
 # --------------------------------------------------------------------------
@@ -276,7 +276,7 @@ def test_a_row_of_weight_zero_moves_the_sign_as_any_row() -> None:
         clock="t",
         gap_cap=1e9,
     )
-    lent = rp.stream.with_windows(df, s=rp.tick_sign("price"), like=spec)
+    lent = rp.stream.with_windows(df, s=rp.ops.tick_sign("price"), like=spec)
     assert isinstance(lent, pl.DataFrame)
     assert df["w"][0] == 0.0
     assert_series_equal(lent["s"], signed(df))

@@ -374,7 +374,7 @@ class TestAccumulateOnly:
             "scale_ratio_moved",
             "not_separated",
             "level_beyond_sample",
-            "negative_input",
+            "input_negative",
         ]
         assert out.schema["c"] == pl.Struct(
             {

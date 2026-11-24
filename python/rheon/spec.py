@@ -375,7 +375,7 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``prune_every`` and the model half-lives: ``long_half_life``,
 ``select_half_life``, ``coef_half_life``,
 ``revert_half_life``, ``trend_half_life``, ``holt``'s
-``seasonal_half_life``, ``damping_half_life`` and ``season_length``, and
+``seasonal_half_life``, ``damping_half_life`` and ``period``, and
 ``huber_scale_half_life``,
 ``hawkes``' ``kernel_half_lives``, a list of them, ``garch``'s
 ``start_span``, ``dcc``'s ``start_span`` and ``margin_start_span``,
@@ -464,7 +464,7 @@ releases none. A regression writes, with ``<t>`` a target:
     no gate did. ``below_min_settled_frac``, ``below_min_weight``,
     ``above_max_error_inflation``, ``below_warm_rows``, ``ill_conditioned``,
     ``unstable_rate``, ``not_identified``, ``scale_ratio_moved``, ``not_separated``,
-    ``level_beyond_sample``, ``negative_input`` and ``not_positive`` are named in that
+    ``level_beyond_sample``, ``input_negative`` and ``target_not_positive`` are named in that
     order, the first that withheld anything.
     ``below_warm_rows`` is the model's own warm-up: the rows ``kmeans``,
     ``hmm`` and ``bocpd`` hold to seed their centres, states or prior from
@@ -473,11 +473,11 @@ releases none. A regression writes, with ``<t>`` a target:
     rows ``garch`` buffers for a target's start, and the rows before
     ``deco``'s standardizer holds more than five effective rows, while it
     has no level, and the rows a ``holt`` heuristic start holds.
-    ``not_positive`` alone names a row whose prediction stands: a
+    ``target_not_positive`` alone names a row whose prediction stands: a
     multiplicative ``holt`` season's row whose target, or the level or
     seasonal factor its update would make, is 0 or below, which is
     predicted and not learned. Only that form's ``Enum`` holds
-    ``not_positive``; every other spec's holds the reasons before it.
+    ``target_not_positive``; every other spec's holds the reasons before it.
     ``ill_conditioned`` is an ``ewridge`` fit withheld because its normal
     equations are past the condition at which a solve keeps a digit: its
     ``coef`` and ``support_coef`` are null too, and the solve is counted in
@@ -501,7 +501,7 @@ releases none. A regression writes, with ``<t>`` a target:
     ``tdigest`` or ``ddsketch`` level its rows do not identify yet: past the
     expected level of the smallest or largest row, ``1/(n + 1)`` and
     ``n/(n + 1)`` for ``n`` rows; the ``tdigest`` builder's docstring has
-    the rule. ``negative_input`` is a ``garch`` row
+    the rule. ``input_negative`` is a ``garch`` row
     under ``vol="garch"`` or ``"gjr"`` with an input (a feature) below 0,
     which its variance equation cannot read: the row reports nothing and is
     learned as a row of weight 0. Fields null for another reason,

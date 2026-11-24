@@ -149,17 +149,17 @@ pub struct HoltCfg {
     // appended with a default that is the form above, so a config written
     // before them loads as what it was produced under.
     /// The seasonal component: none, added to the level, or a factor on it.
-    #[serde(default)]
+    #[serde(default, rename = "seasonal")]
     pub season: HoltSeason,
     /// `m`, the values a season is held in: one per bucket of
-    /// `season_length / season_periods` clock units. 0 without a season.
-    #[serde(default)]
+    /// `period / season_periods` clock units. 0 without a season.
+    #[serde(default, rename = "seasonal_periods")]
     pub season_periods: usize,
     /// `P`, the season's span in clock units (seconds on a temporal clock).
     /// 0 reads as `season_periods`: one bucket per clock unit, as on the
     /// row clock.
     #[serde(default)]
-    pub season_length: f64,
+    pub period: f64,
     /// The half-life a seasonal value forgets at, in clock units: on an
     /// even clock it is learned once a season, at `γ = 1 − 0.5^(P/h)`.
     #[serde(default = "infinite", with = "crate::humanfloat::f64_or_tag")]
@@ -216,7 +216,7 @@ impl Default for HoltCfg {
             trend: true,
             season: HoltSeason::None,
             season_periods: 0,
-            season_length: 0.0,
+            period: 0.0,
             seasonal_half_life: f64::INFINITY,
             damping_half_life: f64::INFINITY,
             start: HoltStart::Warm,

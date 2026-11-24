@@ -1025,7 +1025,7 @@ pub use window::{
 ///   and `ftrl_standardized_warming` (inside it, through the origin).
 ///   Also at 72, before any release carried it (2026-11-24, task 488):
 ///   `holt`'s fixed forms of seasonal exponential smoothing. Its cfg gains,
-///   at its end, the season (`season`, `season_periods`, `season_length`,
+///   at its end, the season (`season`, `season_periods`, `period`,
 ///   `seasonal_half_life`), the damping (`damping_half_life`), the start
 ///   (`start` and the known start's `initial_level`, `initial_trend` and
 ///   `initial_seasonal`) and `max_state_bytes`; its state gains, at its

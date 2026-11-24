@@ -22,7 +22,7 @@
 //! `["ewm_moments", ["legs", leg, ...], {params}]` (a leg's power and lag
 //! among its parameters), `["increment", input]` and `["tick_sign", input]`. The row
 //! operators of task 564 are
-//! `["run_length", input]` (with `{"tol": x}` after it where `tol` is above
+//! `["run_length", input]` (with `{"abs_tol": x}` after it where `abs_tol` is above
 //! 0) and `["clock_lag", arrival, {"event": e, "half_life": h}]` and
 //! `["clock_drift", ...]` of the same form, and
 //! `["clock_step", time, {"half_life": h, "stat": s}]` (with a `bias`
@@ -278,7 +278,7 @@ impl OpNode {
             m.insert("event".into(), e.to_json());
         }
         if self.kind == OpKind::RunLength {
-            m.insert("tol".into(), json!(self.tol));
+            m.insert("abs_tol".into(), json!(self.tol));
             return Value::Object(m);
         }
         let ext = self.kind.stat().is_some_and(Stat::is_extremum);
@@ -701,14 +701,14 @@ impl Node {
                     let Value::Object(params) = p else {
                         return Err(format!(
                             "formula: \"run_length\" takes its parameters as an object, but it \
-                             has {}. Give them as an object, such as {{\"tol\": 0.5}}.",
+                             has {}. Give them as an object, such as {{\"abs_tol\": 0.5}}.",
                             short(p)
                         ));
                     };
                     for (k, v) in params {
-                        if k != "tol" {
+                        if k != "abs_tol" {
                             return Err(format!(
-                                "run_length: {k:?} is not one of its parameters, which is tol. \
+                                "run_length: {k:?} is not one of its parameters, which is abs_tol. \
                                  Remove {k:?}, or correct its name."
                             ));
                         }
@@ -717,8 +717,8 @@ impl Node {
                             .filter(|t| t.is_finite() && *t >= 0.0)
                             .ok_or_else(|| {
                                 format!(
-                                    "run_length: tol must be a finite number of at least 0, but \
-                                     it is {}. Set tol to 0 for values exactly equal, or to the \
+                                    "run_length: abs_tol must be a finite number of at least 0, but \
+                                     it is {}. Set abs_tol to 0 for values exactly equal, or to the \
                                      largest difference two adjacent rows of one run may have.",
                                     short(v)
                                 )

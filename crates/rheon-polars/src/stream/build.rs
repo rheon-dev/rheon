@@ -480,7 +480,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             horizons,
             seasonal,
             seasonal_periods,
-            season_length,
+            period,
             seasonal_half_life,
             damping_half_life,
             start,
@@ -513,7 +513,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 trend: trend.unwrap_or(true),
                 season: holt_season(seasonal.as_deref())?,
                 season_periods: seasonal_periods.unwrap_or(0),
-                season_length: season_length.as_ref().map_or(0.0, Span::value),
+                period: period.as_ref().map_or(0.0, Span::value),
                 seasonal_half_life: seasonal_half_life
                     .as_ref()
                     .map_or(f64::INFINITY, Span::value),

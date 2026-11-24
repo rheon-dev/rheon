@@ -70,7 +70,7 @@ import os
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import timedelta
-from typing import Any, overload
+from typing import Any, Literal, overload
 
 import polars as pl
 from polars.io.plugins import register_io_source
@@ -974,7 +974,7 @@ def bars(
     lf: pl.LazyFrame | pl.DataFrame,
     *,
     clock: str,
-    kind: str,
+    kind: Literal["count", "sum", "imbalance"],
     threshold: float | str | pl.Expr,
     quantity: str | pl.Expr | None = None,
     group: str | None = None,
@@ -983,8 +983,8 @@ def bars(
     gap_cap: float | Duration | None = None,
     max_span: float | Duration | None = None,
     restart_after_step_back: float | Duration | None = None,
-    partial: str = "keep",
-    group_close: str | None = None,
+    partial: Literal["keep", "drop"] = "keep",
+    group_close: Literal["monotone"] | None = None,
     final: bool = False,
     max_state_bytes: int = 256 * 1024,
     max_total_bytes: int = 1 << 30,

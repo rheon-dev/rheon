@@ -548,7 +548,7 @@ fn windows_rows_config() -> WindowsConfig {
     serde_json::from_str(
         r#"{"formulas": [
                {"name": "held", "tree": ["run_length", [">", ["col", "mid"], ["lit", 100.0]]]},
-               {"name": "near", "tree": ["run_length", ["col", "mid"], {"tol": 0.5}]},
+               {"name": "near", "tree": ["run_length", ["col", "mid"], {"abs_tol": 0.5}]},
                {"name": "lag", "tree": ["clock_lag", ["col", "t"], {"event": ["-", ["col", "t"], ["*", ["abs", ["col", "mid"]], ["lit", 0.001]]], "half_life": 5.0}]},
                {"name": "drift", "tree": ["clock_drift", ["col", "t"], {"event": ["-", ["col", "t"], ["*", ["abs", ["col", "mid"]], ["lit", 0.001]]], "half_life": 5.0}]},
                {"name": "step", "tree": ["increment", ["col", "mid"]]},

@@ -186,7 +186,7 @@ _HOLT_OPTIONAL = frozenset(
         "horizons",
         "seasonal",
         "seasonal_periods",
-        "season_length",
+        "period",
         "seasonal_half_life",
         "damping_half_life",
         "start",
