@@ -229,6 +229,15 @@ fn a_state_saved_without_the_shape_reads_on_as_it_was_saved() {
             written(&now.state()).windows(6).any(|w| w == b"shaped"),
             "{covariance:?}"
         );
+        // Read and written again with no load between, as an export's
+        // check does: the flag goes back as it was read.
+        let named = rmp_serde::to_vec_named(&now).unwrap();
+        let raw: Hmm = rmp_serde::from_slice(&named).unwrap();
+        assert_eq!(
+            rmp_serde::to_vec_named(&raw).unwrap(),
+            named,
+            "{covariance:?}"
+        );
         let mut again = Hmm::restore(&now.state()).unwrap();
         assert!(again.stabilized().unwrap().shape().is_some());
         for x in &rows[30..] {

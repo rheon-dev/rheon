@@ -269,7 +269,9 @@ impl From<Stabilized> for Saved {
             scale: st.scale,
             scale_weight: st.scale_w,
             factored_prior: st.held,
-            shaped: st.shape.is_some(),
+            // The flag as held, not the shape: a state read and not yet
+            // rebuilt holds no shape, and writes back what it read.
+            shaped: st.shaped,
         }
     }
 }
