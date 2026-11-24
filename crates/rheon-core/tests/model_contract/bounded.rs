@@ -114,6 +114,9 @@ enum Recovery {
     /// on two labelings of the same data, so neither the label nor the
     /// distance of one row is a property two copies share, but the fit is.
     Fit(f64),
+    /// `Twin`, where a slot both withhold (NaN) agrees as well: a model
+    /// whose fit can decline to predict on clean data too.
+    TwinWithheld(f64),
 }
 
 /// The stream layer accepts any finite value with `|v| <= BOUND`, so a model
@@ -160,13 +163,16 @@ fn recovers_over<M: OnlineModel>(rows: &[Row], build: impl Fn() -> M, how: Recov
             continue;
         }
         for (slot, (pa, pb)) in a.pred.iter().zip(&b.pred).enumerate() {
+            if matches!(how, Recovery::TwinWithheld(_)) && pa.is_nan() && pb.is_nan() {
+                continue;
+            }
             assert!(
                 pa.is_finite(),
                 "{kind}: slot {slot} predicts {pa} at row {i} (twin: {pb})"
             );
             let rel = |a: f64, b: f64| (a - b).abs() / (1.0 + b.abs());
             match how {
-                Recovery::Twin(tol) => {
+                Recovery::Twin(tol) | Recovery::TwinWithheld(tol) => {
                     let err = rel(*pa, *pb);
                     assert!(
                         err <= tol,
@@ -199,7 +205,7 @@ fn recovers_over<M: OnlineModel>(rows: &[Row], build: impl Fn() -> M, how: Recov
         }
     }
     match how {
-        Recovery::Twin(_) => {
+        Recovery::Twin(_) | Recovery::TwinWithheld(_) => {
             eprintln!("{kind}: worst relative disagreement with the twin {worst:.2e}")
         }
         Recovery::Tube(_) => eprintln!("{kind}: worst relative error of model or twin {worst:.2e}"),
