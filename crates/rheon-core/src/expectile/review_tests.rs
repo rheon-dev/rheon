@@ -472,10 +472,13 @@ fn low_5_a_state_missing_its_span_start_or_stopped_without_a_span_is_refused() {
 /// EXP-2 (2), the one pass, a confirmed defect whose fix is the user's to
 /// allow: a feature at `1e6 + 1e-3 N(0, 1)`. The one pass keeps the
 /// mean-form Gram over `[1, x]`, whose centred block `E[x²] − E[x]²` is a
-/// spread of 1e-6 read off a level of 1e12, every digit of it lost, so the
-/// solve about the means fails or reads noise. Only a state that keeps the
-/// features' centred moments (Welford's) fits it: a layout change. This
-/// test fails once that lands, and is then turned into a plain test.
+/// spread of 1e-6 read off a level of 1e12, its digits lost, so the solve
+/// about the means fails on 118 of 200 rows (31 under a half-life of 69
+/// rows) and the fit before stands: a prediction up to 4.9 from the ridged
+/// least-squares fit's, against noise of spread 1.5. Only a state that
+/// keeps the features' centred moments (Welford's) fits it, a layout
+/// change. This test fails once that lands, and is then turned into a
+/// plain test.
 #[test]
 #[should_panic(expected = "the one pass")]
 fn exp_2_the_one_pass_fits_a_feature_far_from_zero() {
@@ -486,20 +489,24 @@ fn exp_2_the_one_pass_fits_a_feature_far_from_zero() {
     let mut c = cfg_of(1, 0.5);
     c.ridge = 1e-6;
     let mut m = Expectile::new(c).unwrap();
-    for (x, y) in &rows {
+    for (i, (x, y)) in rows.iter().enumerate() {
         m.step(x, &[Some(*y)], 1.0, 1.0);
+        if i < 2 {
+            continue;
+        }
+        let shifted: Vec<_> = rows[..=i]
+            .iter()
+            .map(|(x, y)| (vec![1.0, x[0] - 1e6], *y, 1.0, 0.5))
+            .collect();
+        let b = lu_ridged(&shifted, 1e-6);
+        let want = b[0] + b[1] * 1e-3;
+        let got = m.predict(&[1e6 + 1e-3], 1.0).pred[0];
+        // The fitted value's own rounding: the difference of two numbers of
+        // order 2000 * 1e6.
+        let tol = 1e-11 * (b[1].abs() * 1e6 + want.abs());
+        assert!(
+            (got - want).abs() <= tol,
+            "after row {i} the one pass reads {got} where the ridged least-squares fit reads {want}"
+        );
     }
-    let shifted: Vec<_> = rows
-        .iter()
-        .map(|(x, y)| (vec![1.0, x[0] - 1e6], *y, 1.0, 0.5))
-        .collect();
-    let b = lu_ridged(&shifted, 1e-6);
-    let x = 1e6 + 1e-3;
-    let want = b[0] + b[1] * 1e-3;
-    let got = m.predict(&[x], 1.0).pred[0];
-    let tol = 1e-9 * (b[1].abs() * 1e6 + want.abs());
-    assert!(
-        (got - want).abs() <= tol,
-        "the one pass reads {got} where the ridged least-squares fit reads {want}"
-    );
 }
