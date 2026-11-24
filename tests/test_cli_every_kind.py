@@ -591,13 +591,14 @@ CASES: list[Case] = [
         {
             **NOCOEF,
             "features": F3,
-            "stats": ["mean", "var", "std", "cov", "corr", "partial_corr", "mahal"],
+            "stats": ["mean", "var", "std", "cov", "corr", "partial_corr", "mahal", "shrinkage"],
             "bias": True,
             "precision_prior": 1e-6,
             "mahal_quantiles": [0.5, 0.99],
             "pca": 2,
             "pca_every": 5.0,
             "gram_threads": 2,
+            "shrinkage": "ledoit_wolf",
         },
     ),
     Case(
@@ -610,6 +611,8 @@ CASES: list[Case] = [
             "lags": [1, 3],
             "pca": 1,
             "max_rows_between_pcas": 6,
+            "shrinkage": 0.2,
+            "shrinkage_target": [[1.0, 0.1], [0.1, 2.0]],
         },
     ),
     Case(
@@ -634,6 +637,7 @@ CASES: list[Case] = [
             "classes": ["down", "up"],
             "covariance_type": "tied",
             "precision_prior": 0.5,
+            "shrinkage": "oas",
         },
     ),
     Case(
@@ -659,6 +663,8 @@ CASES: list[Case] = [
             "label": "lab",
             "classes": ["down", "up"],
             "precision_prior": 1.0,
+            "shrinkage": 0.3,
+            "shrinkage_target": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         },
     ),
     Case(

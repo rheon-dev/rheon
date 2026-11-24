@@ -298,7 +298,8 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
     "quantile": frozenset(
         {"quantile_refit_rows", "quantile_refit_span", "max_state_bytes", "refit_budget"}
     ),
-    "ew_cov": frozenset({"gram_threads"}),
+    "ew_cov": frozenset({"gram_threads", "shrinkage", "shrinkage_target"}),
+    "ew_class": frozenset({"shrinkage", "shrinkage_target"}),
     "marginal": frozenset(
         {
             "lags",
