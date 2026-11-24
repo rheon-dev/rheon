@@ -1092,7 +1092,9 @@ HELPERS: dict[str, tuple[str, ...]] = {
 
 #: Where a ``raise`` re-raises an exception the code did not build: the name
 #: of what it raises, and the function, so a new one is looked at.
-RERAISES = {("_gbdt.py", "_native_or_none")}
+#: `fourier`'s is the package's own error from `duration_text`, which already
+#: begins with the call's name.
+RERAISES = {("_gbdt.py", "_native_or_none"), ("_fourier.py", "fourier")}
 
 
 @dataclass(frozen=True)

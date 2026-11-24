@@ -28,7 +28,7 @@ from statsmodels.tsa.vector_ar.var_model import VARProcess
 
 from rheon import polars as rp
 
-TIER = "essential"
+TIER = "mixed"
 INF = float("inf")
 
 
@@ -557,7 +557,7 @@ def test_the_reads_refuse_by_name():
         other.vector_ar()
 
 
-@pytest.mark.extended
+@pytest.mark.extended(reason="calibration: 1,000 groups of 2,000 rows, twice")
 def test_the_f_test_holds_its_size_under_decay():
     """Calibration: a VAR(1) of two series with unit noise and no causation
     from ``y1`` to ``y0``, 1,000 groups of 2,000 rows, the test read at each

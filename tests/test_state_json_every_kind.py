@@ -105,7 +105,14 @@ def stressed(kind: str) -> tuple[dict, list[str]]:
 @pytest.mark.parametrize(
     "kind",
     [
-        pytest.param(k, marks=() if k in ("ewridge", "sarima", "gmm") else pytest.mark.extended)
+        pytest.param(
+            k,
+            marks=()
+            if k in ("ewridge", "sarima", "gmm")
+            else pytest.mark.extended(
+                reason="a state exported and resumed at every cut, a kind each"
+            ),
+        )
         for k in sorted(MINIMAL)
     ],
 )
