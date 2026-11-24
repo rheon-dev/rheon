@@ -174,8 +174,8 @@ from rheon.polars.ops import (
     rewm_sum,  # noqa: F401
     rolling_max,
     rolling_min,
-    tick_sign,
     run_length,
+    tick_sign,
 )
 
 __all__ = [

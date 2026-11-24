@@ -3642,10 +3642,10 @@ input waits for 16.3. `π = 0` is where an input that explains nothing
 sits, so a fit with a `π` at 0 is no bound that makes a start wait. A
 start with inputs also waits while its rows do not tell the inputs apart:
 an input constant over them is `ω` again, and two that move together are
-one. It waits where a pivot of the Cholesky factorization of the start's
-information in the variance equation's parameters, scaled to a unit
-diagonal, is at or under `10⁻¹⁰` of the largest diagonal entry, the
-relative pivot rule the library's other definite solves read a system by.
+one. It waits where the start's information in the variance equation's
+parameters, scaled to a unit diagonal, fails the relative pivot rule the
+library's other definite solves read a system by. A pivot of its Cholesky
+factorization at or under `10⁻¹⁰` of the largest diagonal entry fails it.
 Until one does, its rows are withheld as
 `not_identified`. A fit that passes but is not at its optimum is never
 stepped from either; its wait is the start's own, `below_warm_rows`. A try
