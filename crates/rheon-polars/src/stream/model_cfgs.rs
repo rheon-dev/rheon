@@ -391,7 +391,8 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
         variance_targeting,
         start_rows,
         start_span,
-        horizon,
+        horizons,
+        max_horizon_work,
         max_state_bytes,
     } = &spec.model
     else {
@@ -428,11 +429,23 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
         variance_targeting: variance_targeting.unwrap_or(false),
         start_rows: start_rows.unwrap_or(GARCH_START_ROWS),
         start_span: start_span.as_ref().map(Span::value),
-        horizon: horizon.unwrap_or(1),
+        horizons: horizons
+            .iter()
+            .flatten()
+            .map(crate::Horizon::rows)
+            .collect(),
+        max_horizon_work: *max_horizon_work,
         min_weight: spec.min_periods_or_default(),
         max_state_bytes: *max_state_bytes,
+        n_inputs: spec.features.len(),
     };
     cfg.validate()?;
+    let labels: Vec<String> = horizons
+        .iter()
+        .flatten()
+        .map(crate::Horizon::label)
+        .collect();
+    crate::spec::check_horizon_labels("garch", &labels)?;
     Ok(cfg)
 }
 
@@ -601,9 +614,11 @@ pub fn dcc_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DccCfg, String> 
             variance_targeting: variance_targeting.unwrap_or(false),
             start_rows: margin_start_rows.unwrap_or(GARCH_START_ROWS),
             start_span: margin_start_span.as_ref().map(Span::value),
-            horizon: 1,
+            horizons: Vec::new(),
+            max_horizon_work: None,
             min_weight: 0.0,
             max_state_bytes: None,
+            n_inputs: 0,
         }),
         params,
         decay,

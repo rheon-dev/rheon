@@ -564,6 +564,17 @@ impl AnyModel {
         }
     }
 
+    /// Whether the model refuses the row's inputs `xs`, and so reports
+    /// nothing for it: `garch`'s, an input below 0 under GARCH or GJR
+    /// ([`rheon_core::GarchCfg::refuses_inputs`]). Every other model reads
+    /// any finite feature.
+    pub fn refuses_inputs(&self, xs: &[f64]) -> bool {
+        match self {
+            AnyModel::Garch(m) => m.cfg().refuses_inputs(xs),
+            _ => false,
+        }
+    }
+
     /// Whether a slot's fit is withheld because the system it was solved
     /// from is past the condition at which a solve keeps a digit:
     /// `ewridge`'s, whose normal equations can factorize past it
@@ -1475,8 +1486,10 @@ pub enum OwnWait {
 /// scale ratio moved, which no model with an earlier reason has;
 /// `not_separated` last (PLAN 505), `pca`'s wait for components whose eigenvalues
 /// the rows have not yet told apart; `level_beyond_sample` after it (task
-/// 544), a `tdigest` or `ddsketch` level its rows do not identify yet.
-pub const WITHHELD_REASONS: [&str; 10] = [
+/// 544), a `tdigest` or `ddsketch` level its rows do not identify yet;
+/// `negative_input` after that (PLAN 559), a GARCH-X row under GARCH or GJR
+/// whose input is below 0, which its variance equation cannot read.
+pub const WITHHELD_REASONS: [&str; 11] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
@@ -1487,6 +1500,7 @@ pub const WITHHELD_REASONS: [&str; 10] = [
     "scale_ratio_moved",
     "not_separated",
     "level_beyond_sample",
+    "negative_input",
 ];
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
@@ -1498,6 +1512,7 @@ const REASON_NOT_IDENTIFIED: u8 = 7;
 const REASON_SCALE_RATIO: u8 = 8;
 const REASON_NOT_SEPARATED: u8 = 9;
 const REASON_BEYOND_SAMPLE: u8 = 10;
+const REASON_NEGATIVE_INPUT: u8 = 11;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices
@@ -4496,6 +4511,10 @@ fn run_instance(
         // And whether a quantile level is past what the rows before this one
         // identify (task 544): read before the step, as the levels are.
         let beyond = has_levels && inst.model.get().beyond_sample();
+        // And whether the row's inputs are ones the model refuses: a
+        // GARCH-X's input below 0 under GARCH or GJR, a row it reports
+        // nothing for and learns at weight 0.
+        let negative = inst.model.get().refuses_inputs(xs);
 
         // The residual spread folds each slot's own prediction, whether or
         // not a readiness gate withholds it from the output
@@ -4587,6 +4606,13 @@ fn run_instance(
         let n_slots = step.pred.len();
         // Read from the step's own report, before a gate below nulls it.
         let ratio_moved = is_corrchange && inst.model.get().withheld_by_its_row(&step.pred);
+        // A regression's forecasts at horizons ride after its predictions
+        // (`holt`, `kalman`): the model's row inflation is one a prediction,
+        // so the forecasts' slots read none, and a held row's record keeps
+        // one a slot as every other part of it does.
+        if has_row_infl && sc.row_infl.len() < n_slots {
+            sc.row_infl.resize(n_slots, f64::NAN);
+        }
         // `ew_cov` has no targets; its slots are statistics, so every one
         // maps to "target 0" for the warmup check. Slot `s` belongs to target
         // `s / nc`; the passes below walk the slots in groups of `nc` rather
@@ -4770,6 +4796,11 @@ fn run_instance(
         // writes past its floor.
         if reason == 0 && is_pca && step.pred.iter().any(|p| p.is_nan()) {
             reason = REASON_NOT_SEPARATED;
+        }
+        // A row whose inputs the model refuses, where nothing above has
+        // withheld it: a GARCH-X's input below 0 under GARCH or GJR.
+        if reason == 0 && negative {
+            reason = REASON_NEGATIVE_INPUT;
         }
         // The noise gate has not been met: the stream has all but settled,
         // the gate has withheld every row for a further half-life, and the

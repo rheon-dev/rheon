@@ -54,14 +54,17 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
             "snapshot_every",
         ],
     ),
-    ("kalman", &["coef_half_life", "revert_half_life"]),
+    (
+        "kalman",
+        &["coef_half_life", "revert_half_life", "horizons"],
+    ),
     (
         "huber",
         &["solve_every", "huber_scale_half_life", "huber_refit_span"],
     ),
     ("quantile", &["solve_every", "quantile_refit_span"]),
     ("ew_cov", &["pca_every", "window_size", "snapshot_every"]),
-    ("holt", &["trend_half_life"]),
+    ("holt", &["trend_half_life", "horizons"]),
     ("sgd", &["huber_scale_half_life", "huber_refit_span"]),
     ("micro", &["prune_every"]),
     (
@@ -382,10 +385,14 @@ impl Spec {
             ModelKind::Kalman {
                 coef_half_life,
                 revert_half_life,
+                horizons,
                 ..
             } => {
                 put_list(&mut out, "coef_half_life", coef_half_life.as_ref());
                 put_list(&mut out, "revert_half_life", revert_half_life.as_ref());
+                for h in horizons.iter().flatten() {
+                    put(&mut out, "horizons", Some(h.span()));
+                }
             }
             ModelKind::Huber {
                 solve_every,
@@ -449,9 +456,14 @@ impl Spec {
                 put(&mut out, "snapshot_every", snapshot_every.as_ref());
             }
             ModelKind::Holt {
-                trend_half_life, ..
+                trend_half_life,
+                horizons,
+                ..
             } => {
                 put(&mut out, "trend_half_life", trend_half_life.as_ref());
+                for h in horizons.iter().flatten() {
+                    put(&mut out, "horizons", Some(h.span()));
+                }
             }
             ModelKind::Hawkes {
                 window_size,

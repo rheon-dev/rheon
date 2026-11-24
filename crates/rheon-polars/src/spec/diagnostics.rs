@@ -408,6 +408,7 @@ impl Spec {
             super::ModelKind::Holt {
                 trend_half_life,
                 trend,
+                ..
             } if *trend != Some(false) => {
                 take(
                     trend_half_life

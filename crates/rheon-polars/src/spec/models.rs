@@ -53,7 +53,18 @@ impl Spec {
             ModelKind::Holt {
                 trend_half_life,
                 trend,
+                horizons,
             } => {
+                let labels: Vec<String> = horizons
+                    .iter()
+                    .flatten()
+                    .map(crate::SpanHorizon::label)
+                    .collect();
+                no.take(
+                    crate::spec::check_horizon_labels("holt", &labels).map_err(|e| {
+                        format!("spec {:?}: {}", self.name, e.trim_start_matches("holt: "))
+                    }),
+                );
                 if *trend == Some(false) && trend_half_life.is_some() {
                     no.refuse(format!(
                         "spec {:?}: trend_half_life sets how fast the trend forgets, but \
@@ -1574,8 +1585,19 @@ impl Spec {
                 obs_var,
                 p0,
                 revert_half_life,
+                horizons,
                 ..
             } => {
+                let labels: Vec<String> = horizons
+                    .iter()
+                    .flatten()
+                    .map(crate::SpanHorizon::label)
+                    .collect();
+                no.take(
+                    crate::spec::check_horizon_labels("kalman", &labels).map_err(|e| {
+                        format!("spec {:?}: {}", self.name, e.trim_start_matches("kalman: "))
+                    }),
+                );
                 let k_total = self.k() + usize::from(self.fit_intercept);
                 // The intercept is a coefficient only where the spec fits one.
                 let (included, each) = if self.fit_intercept {

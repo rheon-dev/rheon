@@ -246,6 +246,7 @@ fn huber_origin_standardized_golden() {
 #[test]
 fn kalman_plain_golden() {
     let mut m = Kalman::new(KalmanCfg {
+        horizons: Vec::new(),
         // The form a state saved before schema 64 goes on in: `P` absolute
         // and `min_weight` holding learning back, as `tests/reference.py`'s
         // `kalman_ref` has it (task 278, D10).
@@ -286,6 +287,7 @@ fn rls_golden() {
 #[test]
 fn kalman_golden() {
     let mut m = Kalman::new(KalmanCfg {
+        horizons: Vec::new(),
         // The form a state saved before schema 64 goes on in: `P` absolute
         // and `min_weight` holding learning back, as `tests/reference.py`'s
         // `kalman_ref` has it (task 278, D10).
@@ -313,6 +315,7 @@ fn kalman_golden() {
 #[test]
 fn kalman_revert_golden() {
     let mut m = Kalman::new(KalmanCfg {
+        horizons: Vec::new(),
         // The form a state saved before schema 64 goes on in: `P` absolute
         // and `min_weight` holding learning back, as `tests/reference.py`'s
         // `kalman_ref` has it (task 278, D10).
@@ -614,6 +617,7 @@ fn pa_box_golden() {
 #[test]
 fn holt_golden() {
     let mut m = Holt::new(HoltCfg {
+        horizons: Vec::new(),
         n_targets: 1,
         level_half_life: 10.0,
         trend_half_life: 40.0,
@@ -1173,6 +1177,7 @@ fn expectile_window_golden() {
 fn garch_signature(vol: GarchVol, dist: GarchDist, targeting: bool) -> Vec<f64> {
     let fig = vol == GarchVol::Figarch;
     let mut m = Garch::new(GarchCfg {
+        n_inputs: 0,
         n_targets: 1,
         vol,
         dist,
@@ -1180,7 +1185,12 @@ fn garch_signature(vol: GarchVol, dist: GarchDist, targeting: bool) -> Vec<f64> 
         variance_targeting: targeting,
         start_rows: if fig { 2000 } else { 50 },
         start_span: None,
-        horizon: if vol == GarchVol::Egarch { 1 } else { 4 },
+        horizons: if vol == GarchVol::Egarch {
+            Vec::new()
+        } else {
+            vec![4]
+        },
+        max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: Some(if fig { 40_000 } else { 1700 }),
     })
@@ -1339,6 +1349,7 @@ fn garch_figarch_golden() {
 /// (`garch_series`), so these are the same bits on every platform.
 fn garch_realistic(vol: GarchVol, dist: GarchDist, targeting: bool, ys: &[f64]) -> Vec<f64> {
     let mut m = Garch::new(GarchCfg {
+        n_inputs: 0,
         n_targets: 1,
         vol,
         dist,
@@ -1346,7 +1357,8 @@ fn garch_realistic(vol: GarchVol, dist: GarchDist, targeting: bool, ys: &[f64]) 
         variance_targeting: targeting,
         start_rows: 2000,
         start_span: None,
-        horizon: if vol == GarchVol::Egarch { 1 } else { 5 },
+        horizons: vec![5, 1],
+        max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
     })
@@ -1532,9 +1544,11 @@ fn dcc_signature(
             variance_targeting: false,
             start_rows: 300,
             start_span: None,
-            horizon: 1,
+            horizons: Vec::new(),
+            max_horizon_work: None,
             min_weight: 0.0,
             max_state_bytes: None,
+            n_inputs: 0,
         }),
         params,
         decay,
@@ -2107,6 +2121,7 @@ fn lasso_windowed_golden() {
 #[test]
 fn kalman_noise_golden() {
     let cfg = || KalmanCfg {
+        horizons: Vec::new(),
         // The form a state saved before schema 64 goes on in: `P` absolute
         // and `min_weight` holding learning back, as `tests/reference.py`'s
         // `kalman_ref` has it (task 278, D10).
@@ -3171,8 +3186,14 @@ const GOLDEN_GARCH: &[f64] = &[
     f64::NAN,
     f64::NAN,
     f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
 ];
 const GOLDEN_GARCH_TARGETED: &[f64] = &[
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
     f64::NAN,
     f64::NAN,
     f64::NAN,
@@ -3201,8 +3222,14 @@ const GOLDEN_GARCH_GJR_T: &[f64] = &[
     f64::NAN,
     f64::NAN,
     f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
 ];
 const GOLDEN_GARCH_SKEWT: &[f64] = &[
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
     f64::NAN,
     f64::NAN,
     f64::NAN,
@@ -3244,17 +3271,29 @@ const GOLDEN_GARCH_FIGARCH: &[f64] = &[
     f64::NAN,
     f64::NAN,
     f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
 ];
 const GOLDEN_GARCH_REALISTIC: &[f64] = &[
     2.2399589474984163,
     -0.727664650290237,
     2.2219621790100286,
+    11.154139420457081,
+    2.2399589474984163,
+    2.2399589474984163,
     1.6963910313546728,
     0.03311181645164273,
     1.7450322055127563,
+    8.60531059604579,
+    1.6963910313546728,
+    1.6963910313546728,
     1.6821436824777916,
     1.3101133530662716,
     1.7283180776263207,
+    8.527892739666806,
+    1.6821436824777916,
+    1.6821436824777916,
     0.06204666892870737,
     0.06647116055943113,
     0.9038518417965252,
@@ -3263,12 +3302,21 @@ const GOLDEN_GARCH_TARGETED_REALISTIC: &[f64] = &[
     0.9949557097392965,
     0.6697869730267316,
     0.9869391845608312,
+    4.954533901106475,
+    0.9949557097392965,
+    0.9949557097392965,
     0.5845801290178484,
     1.4824140245744857,
     0.6076356166942833,
+    2.981118394500516,
+    0.5845801290178484,
+    0.5845801290178484,
     1.5989122167611232,
     0.1674656286367991,
     1.546284265907806,
+    7.861694389456653,
+    1.5989122167611232,
+    1.5989122167611232,
     0.017697936123760687,
     0.07901947063002264,
     0.9014151625116107,
@@ -3277,12 +3325,21 @@ const GOLDEN_GARCH_GJR_REALISTIC: &[f64] = &[
     0.6957581299499292,
     -0.7765016170142898,
     0.7440189323922475,
+    3.6015736076780795,
+    0.6957581299499292,
+    0.6957581299499292,
     1.6647155976298975,
     -0.34741537159647373,
     1.5891310258171312,
+    8.13135232341462,
+    1.6647155976298975,
+    1.6647155976298975,
     1.329196214346552,
     0.5278220056374964,
     1.2914196310249186,
+    6.549780223959964,
+    1.329196214346552,
+    1.329196214346552,
     0.03867863132859658,
     0.07031250265564645,
     0.09628848609412849,
@@ -3291,10 +3348,22 @@ const GOLDEN_GARCH_GJR_REALISTIC: &[f64] = &[
 const GOLDEN_GARCH_EGARCH_REALISTIC: &[f64] = &[
     0.5335048315756751,
     -0.0945140560276713,
+    0.5793074546162525,
+    2.7833688567644908,
+    0.5335048315756751,
+    0.5335048315756751,
     1.3526435148288876,
     -1.4297205226217766,
+    1.3139557657490408,
+    6.666480665062554,
+    1.3526435148288876,
+    1.3526435148288876,
     2.6581900669492162,
     0.44762947637609185,
+    2.392526310737723,
+    12.6109069037114,
+    2.6581900669492162,
+    2.6581900669492162,
     -0.005263731925161575,
     0.14292607726452722,
     -0.09394030945738703,
@@ -3304,12 +3373,21 @@ const GOLDEN_GARCH_FIGARCH_REALISTIC: &[f64] = &[
     0.39857348364694856,
     -1.026908584366157,
     0.3999136067672373,
+    2.01803673349308,
+    0.39857348364694856,
+    0.39857348364694856,
     0.428903421965956,
     -0.5086366140567313,
     0.44168157307532596,
+    2.1772076422068976,
+    0.428903421965956,
+    0.428903421965956,
     0.24858950048201273,
     0.06590265675494203,
     0.29325100332608156,
+    1.36228522242274,
+    0.24858950048201273,
+    0.24858950048201273,
     0.0323399409875803,
     0.2393473448668678,
     0.3265372342419699,
@@ -3319,12 +3397,21 @@ const GOLDEN_GARCH_T_REALISTIC: &[f64] = &[
     2.2885496942968775,
     0.1603749979725027,
     2.297274104176434,
+    11.464866689975453,
+    2.2885496942968775,
+    2.2885496942968775,
     1.0120613568512764,
     0.19068359152910785,
     1.156773710662873,
+    5.427604918985226,
+    1.0120613568512764,
+    1.0120613568512764,
     2.6129661337355947,
     0.4844816887283076,
     2.56087583115259,
+    12.932513414717125,
+    2.6129661337355947,
+    2.6129661337355947,
     0.06900346251738707,
     0.088405421257835,
     0.8798915769497312,
@@ -3334,12 +3421,21 @@ const GOLDEN_GARCH_T_LOW_PERSISTENCE: &[f64] = &[
     0.7759270295334134,
     -0.4709311869580696,
     0.8559123344287154,
+    4.089434673550422,
+    0.7759270295334134,
+    0.7759270295334134,
     0.6851240521286311,
     -0.5758610993529932,
     0.782619621277854,
+    3.681110872448417,
+    0.6851240521286311,
+    0.6851240521286311,
     1.0028983182918356,
     -0.23741988745156573,
     0.9828288037937298,
+    4.961950124338716,
+    1.0028983182918356,
+    1.0028983182918356,
     0.08466421653019822,
     0.10798964854289916,
     0.8016825284821371,
@@ -3349,12 +3445,21 @@ const GOLDEN_GARCH_SKEWT_REALISTIC: &[f64] = &[
     2.8167569753019492,
     -0.6190502808173738,
     2.6825102611870455,
+    13.742825525638576,
+    2.8167569753019492,
+    2.8167569753019492,
     1.2468102828207452,
     -0.3600732663796168,
     1.2983459614253783,
+    6.364812235775348,
+    1.2468102828207452,
+    1.2468102828207452,
     1.3185241083003951,
     -1.79375181690488,
     1.3637097264676832,
+    6.706994262873854,
+    1.3185241083003951,
+    1.3185241083003951,
     0.04402310635217727,
     0.06254476813741976,
     0.9129694209409008,
@@ -3365,12 +3470,21 @@ const GOLDEN_GARCH_GJR_T_REALISTIC: &[f64] = &[
     1.2758366452078276,
     -0.9848155860088434,
     1.2192427614221337,
+    6.2355746555305185,
+    1.2758366452078276,
+    1.2758366452078276,
     0.7389351386485398,
     0.9455510641880728,
     0.7401976431214408,
+    3.697884285971264,
+    0.7389351386485398,
+    0.7389351386485398,
     0.3534741623503383,
     -3.315999459195701,
     0.4015018694337203,
+    1.8894553358710924,
+    0.3534741623503383,
+    0.3534741623503383,
     0.024661551390733224,
     0.035612763820360764,
     0.12241777500356756,

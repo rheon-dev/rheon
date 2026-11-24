@@ -88,6 +88,7 @@ fn lasso() {
 /// form a state saved before it goes on in is held below too.
 fn kalman_cfg() -> KalmanCfg {
     KalmanCfg {
+        horizons: Vec::new(),
         min_weight_holds_learning: false,
         noise_units: true,
         n_features: K,
@@ -294,6 +295,7 @@ fn pa() {
 
 fn holt_cfg() -> HoltCfg {
     HoltCfg {
+        horizons: Vec::new(),
         n_targets: 2,
         level_half_life: HALFLIFE,
         trend_half_life: 4.0 * HALFLIFE,

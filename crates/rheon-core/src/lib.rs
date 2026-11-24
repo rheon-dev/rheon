@@ -200,7 +200,9 @@ pub use ftrl::{Ftrl, FtrlCfg, FtrlLoss};
 pub use gaps::{GramPart, TargetGaps};
 pub use garch::{
     FIGARCH_TRUNCATION, GARCH_MAX_STATE_BYTES, GARCH_STATE_BYTES_CEILING, Garch, GarchCfg,
-    GarchDist, GarchVol, MIN_START_ROWS as GARCH_MIN_START_ROWS,
+    GarchDist, GarchVol, HORIZON_WORK as GARCH_HORIZON_WORK,
+    HORIZON_WORK_CEILING as GARCH_HORIZON_WORK_CEILING, LIBM_CALL_COST as GARCH_LIBM_CALL_COST,
+    MAX_HORIZONS as GARCH_MAX_HORIZONS, MIN_START_ROWS as GARCH_MIN_START_ROWS,
 };
 pub use glm::{
     DEFAULT_GLM_REFIT_ROWS, GLM_GROUP_REFIT_CAP, GLM_REFIT_PASSES, Glm, GlmCfg,
@@ -210,14 +212,14 @@ pub use hasher::{FixedHasher, FixedState};
 pub use hawkes::{Hawkes, HawkesCfg, MAX_STATE_BYTES as HAWKES_MAX_STATE_BYTES};
 pub use health::FeatureHealth;
 pub use hmm::{EwFactor, Hmm, HmmCfg, Stabilized};
-pub use holt::{Holt, HoltCfg};
+pub use holt::{HOLT_MAX_HORIZONS, Holt, HoltCfg};
 pub use huber_refit::{
     BIN_REFIT_ROWS_PER_BIN, DEFAULT_REFIT_MAX_FEATURES, DEFAULT_REFIT_ROWS, MAX_REFIT_ROWS,
     REFIT_PASSES, REFIT_RUNS_PER_ROW, RefitStatus, default_bin_refit_rows, default_refit_rows,
     refit_reservation,
 };
 pub use influence::Influence;
-pub use kalman::{CovarianceForm, Kalman, KalmanCfg};
+pub use kalman::{CovarianceForm, KALMAN_MAX_HORIZONS, Kalman, KalmanCfg};
 pub use lasso::{Lasso, LassoCfg};
 pub use margbins::{BinCfg, BinRule, BinStat};
 pub(crate) use margbins::{MarginalBins, edges_from};

@@ -239,7 +239,7 @@ _INF_OK: dict[str, frozenset[str]] = {
 #: ``ModelBank([s]).specs[0] != s`` for every ``marginal`` (review
 #: 2026-10-05, the TB5 leg). ``holt``'s ``trend`` is written only when off.
 _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
-    "holt": frozenset({"trend"}),
+    "holt": frozenset({"trend", "horizons"}),
     "hawkes": frozenset(
         {"kernel_half_lives", "window_events", "window_size", "closed", "max_state_bytes"}
     ),
@@ -251,7 +251,8 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "variance_targeting",
             "start_rows",
             "start_span",
-            "horizon",
+            "horizons",
+            "max_horizon_work",
             "max_state_bytes",
         }
     ),
@@ -319,7 +320,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         }
     ),
     "audit": frozenset({"pairs", "distinct_cap"}),
-    "kalman": frozenset({"covariance_form"}),
+    "kalman": frozenset({"covariance_form", "horizons"}),
     "glm": frozenset({"refit_span", "max_state_bytes"}),
     "kmeans": frozenset({"warm_span", "update_every", "split_merge_every"}),
     "hmm": frozenset({"warm_span"}),

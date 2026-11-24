@@ -1548,8 +1548,6 @@ zscore_y = { budget = 8.125 }
 zscore_z = { budget = 8.125 }
 [memory.garch]
 coef = { budget = 86.125 }
-forecast_y = { budget = 8.125 }
-forecast_z = { budget = 8.125 }
 learned_clock = { budget = 8.125 }
 scored_clock = { budget = 8.0 }
 settled_frac = { budget = 8.125 }
@@ -1559,6 +1557,10 @@ variance_y = { budget = 8.125 }
 variance_z = { budget = 8.125 }
 weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.125 }
+variance_h3_y = { budget = 8.125 }
+variance_h3_z = { budget = 8.125 }
+variance_sum_h3_y = { budget = 8.125 }
+variance_sum_h3_z = { budget = 8.125 }
 
 [memory.dcc]
 coef = { budget = 31.525 }

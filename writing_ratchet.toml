@@ -642,11 +642,15 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/garch.rs"]
 
+[messages."crates/rheon-core/src/garch/horizons.rs"]
+
 [messages."crates/rheon-core/src/glm.rs"]
 
 [messages."crates/rheon-core/src/hawkes.rs"]
 
 [messages."crates/rheon-core/src/kalman/forms.rs"]
+
+[messages."crates/rheon-core/src/kalman/horizons.rs"]
 
 [messages."crates/rheon-core/src/power_variation.rs"]
 
@@ -725,6 +729,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [docstrings."python/rheon/_spec_glm.py"]
 
+[docstrings."python/rheon/_spec_kalman.py"]
+
 [docstrings."python/rheon/_spec_moments.py"]
 
 [docstrings."python/rheon/_spec_pca.py"]
@@ -761,11 +767,15 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-core/src/garch.rs#messages"]
 
+[vocabulary."crates/rheon-core/src/garch/horizons.rs#messages"]
+
 [vocabulary."crates/rheon-core/src/glm.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/hawkes.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/kalman/forms.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/kalman/horizons.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/power_variation.rs#messages"]
 
@@ -828,6 +838,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/_spec_garch.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_glm.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_kalman.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_moments.py#docstrings"]
 

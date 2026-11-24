@@ -453,6 +453,25 @@ const CONTINUES_WITHIN: &[(&str, f64, std::ops::Range<usize>)] = &[
 ///   macOS arm64; the bound is 24 times that.
 const RENUMBERED: &[(&str, f64, std::ops::Range<usize>)] = &[("corrchange_window", 1e-14, 0..1)];
 
+/// `garch`'s states of schema 71 and before, whose forecast was one
+/// `horizon` (task 559): each loads as the one horizon it named, and goes
+/// on reporting its sum beside it, so a target's slots are four where they
+/// were three (the variance, the standardized residual, the forecast, and
+/// now the sum). The sums, which the old build did not report, are dropped
+/// from the comparison ([`narrowed`]); every other number goes on to the
+/// bit, the forecast's arithmetic being the old build's. This is such a
+/// row in schema 71's layout from this build's, the sums dropped: each
+/// target's four slots to the three of before.
+fn narrowed(got: &Out) -> Out {
+    let mut out = got.clone();
+    out.pred = got
+        .pred
+        .chunks(4)
+        .flat_map(|c| c[..3].iter().copied())
+        .collect();
+    out
+}
+
 /// The `hmm` cases a kept set holds under `covariance_type` `"full"` and
 /// `"diag"` with `learn` on, which go on under the stabilized prior (schema
 /// 70; rule 5's twenty-second exception, the user's, 2026-11-20). A state
@@ -1194,6 +1213,19 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                         "{what}: CONTINUES_WITHIN names slots past the predictions"
                     );
                 }
+                let one_horizon = f.variant == "Garch"
+                    && schema <= 71
+                    && got.pred.len() == want.pred.len() / 3 * 4
+                    && got.pred.len() != want.pred.len();
+                if one_horizon {
+                    same_out_by(
+                        &format!("{what}, row {i} after the save"),
+                        &narrowed(&got),
+                        &want,
+                        |_| tol,
+                    );
+                    continue;
+                }
                 same_out_by(
                     &format!("{what}, row {i} after the save"),
                     &got,
@@ -1658,7 +1690,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 198] = [
+    const FORMS: [(&str, &[&str]); 203] = [
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.
@@ -1911,6 +1943,13 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         // fit such a wait withheld.
         ("garch", &["model", "Garch", "series", "1", "buffer"]),
         ("garch_started", &["model", "Garch", "series", "0", "theta"]),
+        // the forecasts' horizons (task 559): several, out of order, and a
+        // work cap of the spec's own
+        ("garch_realistic", &["model", "Garch", "cfg", "horizons"]),
+        (
+            "garch_figarch_realistic",
+            &["model", "Garch", "cfg", "max_horizon_work"],
+        ),
         ("garch_realistic", &["model", "Garch", "series", "0", "h"]),
         (
             "garch_realistic",
@@ -1990,6 +2029,14 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             "ddsketch_clock",
             &["model", "DdSketch", "cfg", "window_clock"],
         ),
+        // GARCH-X (task 559, part 4): the inputs' count, their running
+        // mean once started, and the start's inputs within it.
+        ("garch_x_realistic", &["model", "Garch", "cfg", "n_inputs"]),
+        (
+            "garch_x_realistic",
+            &["model", "Garch", "series", "1", "xbar"],
+        ),
+        ("garch_x_start", &["model", "Garch", "series", "0", "xbuf"]),
         // A refit over a span of the clock (task 538): the span in each
         // cfg, glm's clock summed from the steps, and each buffer.
         ("glm_refit_clock", &["model", "Glm", "cfg", "refit_clock"]),

@@ -17,36 +17,36 @@ use super::*;
 fn the_egarch_variance_is_bounded_below_and_grows_only_logarithmically_above() {
     let f = Filter::new(GarchVol::Egarch, 4, 0, 1.0);
     let mut dl = [1.0; 4];
-    let s = f.predict(GarchVol::Egarch, &[0.0, 0.1, 0.1, 0.1], &mut dl);
+    let s = f.predict(GarchVol::Egarch, &[0.0, 0.1, 0.1, 0.1], &[], &mut dl);
     assert_eq!(s, 1.0);
     assert!(dl.iter().any(|d| *d != 0.0), "a slope inside");
     // Just inside each bound.
-    let inside_hi = f.predict(GarchVol::Egarch, &[13.8, 0.0, 0.0, 0.0], &mut dl);
+    let inside_hi = f.predict(GarchVol::Egarch, &[13.8, 0.0, 0.0, 0.0], &[], &mut dl);
     assert!(
         (inside_hi - math::exp(13.8)).abs() < 1e-6 * inside_hi,
         "{inside_hi}"
     );
-    let inside_lo = f.predict(GarchVol::Egarch, &[-13.8, 0.0, 0.0, 0.0], &mut dl);
+    let inside_lo = f.predict(GarchVol::Egarch, &[-13.8, 0.0, 0.0, 0.0], &[], &mut dl);
     assert!(
         (inside_lo - math::exp(-13.8)).abs() < 1e-6 * inside_lo,
         "{inside_lo}"
     );
     // Below: the floor, flat.
     dl = [1.0; 4];
-    let low = f.predict(GarchVol::Egarch, &[-20.0, 0.0, 0.0, 0.0], &mut dl);
+    let low = f.predict(GarchVol::Egarch, &[-20.0, 0.0, 0.0, 0.0], &[], &mut dl);
     assert_eq!(low, 1e-6);
     assert_eq!(dl, [0.0; 4]);
     // Above: the ceiling and the log of the excess over it, flat.
     for t in [13.9, 20.0, 40.0] {
         dl = [1.0; 4];
-        let s = f.predict(GarchVol::Egarch, &[t, 0.0, 0.0, 0.0], &mut dl);
+        let s = f.predict(GarchVol::Egarch, &[t, 0.0, 0.0, 0.0], &[], &mut dl);
         let want = 1e6 + (t - 1e6f64.ln());
         assert!((s - want).abs() < 1e-9 * want, "{t}: {s} against {want}");
         assert_eq!(dl, [0.0; 4]);
     }
     // The bounds follow the mean of `e²`, not a constant.
     let wide = Filter::new(GarchVol::Egarch, 4, 0, 1e4);
-    let s = wide.predict(GarchVol::Egarch, &[-20.0, 0.0, 0.0, 0.0], &mut dl);
+    let s = wide.predict(GarchVol::Egarch, &[-20.0, 0.0, 0.0, 0.0], &[], &mut dl);
     assert_eq!(s, 1e4 / 1e6);
 }
 

@@ -142,7 +142,6 @@ MEANING: dict[str, str] = {
         "the power of `<t>` at the `k`-th period, scipy's periodogram of the rows before this "
         "one with the decay's amplitudes as the window"
     ),
-    "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
     "rv_<t>": "the realized variance of `<t>`'s returns before this row, the sum of their squares",
     "bv_<t>": "the bipower variation of `<t>`'s returns before this row, which leaves jumps out",
     "tv_<t>": "the tripower variation of `<t>`'s returns before this row, which leaves jumps out",
@@ -171,6 +170,25 @@ MEANING: dict[str, str] = {
     "es<level>_<t>": (
         "the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the "
         "same sketch: the lower tail at a level below 0.5, the upper above it"
+    ),
+    "variance_<h>_<t>": (
+        "the variance of `<t>` `h - 1` rows past this one, horizon `h` of `horizons`, from the "
+        "same rows, each input past the row held at its weighted mean over the rows learned; "
+        "horizon 1 is `variance_<t>`"
+    ),
+    "variance_sum_<h>_<t>": (
+        "the sum of the variances of `<t>` over the `h` rows from this one, this row's included: "
+        "the variance of the `h`-row return"
+    ),
+    "forecast_<h>_<t>": (
+        "the prediction of `<t>` a span `Δ` of the clock past this row, horizon `<h>` of "
+        "`horizons`, from the rows before it, a regression's at this row's features held; at "
+        "`Δ = 0` it is `pred_<t>`"
+    ),
+    "forecast_sum_<h>_<t>": "the integral of that prediction over the span from this row",
+    "forecast_var_<h>_<t>": (
+        "the variance of that prediction, as the filter would read it for a row at that clock "
+        "with no row between"
     ),
     "u": (
         "the equicorrelation this row alone implies"
@@ -280,7 +298,6 @@ ALSO_NULL: dict[str, str] = {
     ),
     "variance_<t>": "while withheld, and before the target's start is fitted",
     "std_resid_<t>": "where the variance is null, and where `<t>` is",
-    "forecast_<t>": "where the variance is null",
     "rv_<t>": WITHHELD,
     "bv_<t>": WITHHELD,
     "tv_<t>": WITHHELD,
@@ -302,6 +319,11 @@ ALSO_NULL: dict[str, str] = {
         "(`level_beyond_sample`)"
     ),
     "power_<t>_p<k>": "while withheld, and before the target's first row",
+    "variance_<h>_<t>": "where the variance is null",
+    "variance_sum_<h>_<t>": "where the variance is null",
+    "forecast_<h>_<t>": "where `pred_<t>` is",
+    "forecast_sum_<h>_<t>": "where `pred_<t>` is",
+    "forecast_var_<h>_<t>": "where `pred_<t>` is, and before there is a noise",
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -477,7 +499,7 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "withheld_reason",
         "why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, "
         "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, "
-        "`not_identified`, `scale_ratio_moved` or `not_separated`. That order is their "
+        "`not_identified`, `scale_ratio_moved`, `not_separated` or `negative_input`. That order is their "
         "precedence, so the first that applies is the one named. `below_warm_rows` is the "
         "model's own warm-up, the rows "
         "`kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for "
@@ -493,7 +515,10 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "`scale_ratio_moved` is a `corrchange` span past its critical value whose two columns' "
         "scale ratio moved inside it, so its `flag` is null. `not_separated` is a `pca` component "
         "the data does not yet tell apart from a neighbor: the test of the equality of their two "
-        "eigenvalues does not pass",
+        "eigenvalues does not pass. "
+        "`negative_input` is a `garch` row under GARCH or GJR with an input below 0, which its "
+        "variance equation cannot read: the row reports nothing and is learned as a row of "
+        "weight 0",
         "where nothing was withheld",
     ),
     (
@@ -794,7 +819,6 @@ def stem(
             "intensity",
             "variance",
             "std_resid",
-            "forecast",
             "rv",
             "bv",
             "tv",
@@ -807,6 +831,14 @@ def stem(
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"
+        # a forecast at a horizon, labelled `h<span>` or by its name
+        for pre in ("forecast_sum", "forecast_var", "forecast"):
+            if base.startswith(pre + "_") and base.endswith(f"_{t}"):
+                return f"{pre}_<h>_<t>"
+        if base.startswith("variance_sum_") and base.endswith(f"_{t}"):
+            return "variance_sum_<h>_<t>"
+        if base.startswith("variance_") and base.endswith(f"_{t}"):
+            return "variance_<h>_<t>"
         level, sep, column = base.partition("_")
         if sep and column == t:
             for pre in ("q", "es"):

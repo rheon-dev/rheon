@@ -627,9 +627,11 @@ fn a_save_and_load_continues_to_the_bit() {
         variance_targeting: false,
         start_rows: 2000,
         start_span: None,
-        horizon: 1,
+        horizons: Vec::new(),
+        max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        n_inputs: 0,
     });
     for c in [cfg(2, true, None), with] {
         for cut in [100, 499, 500, 1200, 2400, 2600] {
@@ -683,9 +685,11 @@ fn the_margins_are_the_garch_models() {
         variance_targeting: false,
         start_rows: 1000,
         start_span: None,
-        horizon: 1,
+        horizons: Vec::new(),
+        max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        n_inputs: 0,
     };
     let mut c = cfg(k, false, None);
     c.margins = Some(gcfg.clone());
@@ -730,9 +734,11 @@ fn a_margin_with_no_fourth_moment_is_said_once() {
         variance_targeting: false,
         start_rows: 2000,
         start_span: None,
-        horizon: 1,
+        horizons: Vec::new(),
+        max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        n_inputs: 0,
     };
     let mut c = cfg(k, false, None);
     c.margins = Some(gcfg.clone());
@@ -939,9 +945,11 @@ fn with_margins_predict_is_the_step() {
         variance_targeting: false,
         start_rows: 1000,
         start_span: None,
-        horizon: 1,
+        horizons: Vec::new(),
+        max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        n_inputs: 0,
     });
     let mut m = Dcc::new(c).unwrap();
     let mut ready = 0;

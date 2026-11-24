@@ -332,6 +332,7 @@ CASES: list[Case] = [
             share_p=True,
             revert_half_life=[INF, 200.0, 200.0, 200.0],
             standardize=False,
+            horizons=[0.0, 3.0],
         ),
     ),
     Case("kalman2", "kalman", full2(q=[0.0, 1e-4, 1e-4], covariance_form="square_root")),
@@ -358,7 +359,12 @@ CASES: list[Case] = [
     Case(
         "holt",
         "holt",
-        {**no_features(full(**CLOSE)), "targets": ["y"], "trend_half_life": 80.0},
+        {
+            **no_features(full(**CLOSE)),
+            "targets": ["y"],
+            "trend_half_life": 80.0,
+            "horizons": [1.0, 10.0],
+        },
     ),
     Case("holt2", "holt", {**no_features(full2()), "targets": ["y"], "trend": False}),
     Case(
@@ -933,7 +939,8 @@ CASES: list[Case] = [
             "vol": "gjr",
             "dist": "t",
             "start_rows": 50,
-            "horizon": 3,
+            "horizons": [3, 5],
+            "max_horizon_work": 1000,
             "max_state_bytes": 1 << 20,
         },
     ),
@@ -1043,6 +1050,21 @@ CASES: list[Case] = [
             "targets": ["y"],
             "variance_targeting": True,
             "start_rows": 60,
+        },
+    ),
+    # GARCH-X: features as inputs of EGARCH's variance equation, which
+    # reads them at any sign.
+    Case(
+        "garch_x",
+        "garch",
+        {
+            **{k: v for k, v in STREAM.items() if k not in ("half_life", "min_settled_frac")},
+            "targets": ["y"],
+            "features": ["x1", "x2"],
+            "vol": "egarch",
+            "start_rows": 50,
+            "horizons": [2],
+            "max_state_bytes": 1 << 20,
         },
     ),
     # FIGARCH, its start a span of the clock, checked as the rows go in, its

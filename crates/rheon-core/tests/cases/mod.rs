@@ -694,6 +694,7 @@ fn lasso_cfg() -> LassoCfg {
 
 fn kalman_cfg() -> KalmanCfg {
     KalmanCfg {
+        horizons: Vec::new(),
         min_weight_holds_learning: true,
         noise_units: false,
         n_features: K,
@@ -2003,6 +2004,7 @@ pub fn all() -> Vec<Case> {
             "Holt",
             Holt,
             Holt::new(HoltCfg {
+                horizons: Vec::new(),
                 n_targets: 2,
                 level_half_life: H,
                 trend_half_life: 4.0 * H,
@@ -2023,6 +2025,7 @@ pub fn all() -> Vec<Case> {
             "Holt",
             Holt,
             Holt::new(HoltCfg {
+                horizons: Vec::new(),
                 n_targets: 2,
                 level_half_life: H,
                 trend_half_life: 4.0 * H,
@@ -2039,6 +2042,7 @@ pub fn all() -> Vec<Case> {
             "Holt",
             Holt,
             Holt::new(HoltCfg {
+                horizons: Vec::new(),
                 n_targets: 2,
                 level_half_life: f64::INFINITY,
                 trend_half_life: f64::INFINITY,
@@ -3004,6 +3008,7 @@ pub fn all() -> Vec<Case> {
             "Garch",
             Garch,
             Garch::new(GarchCfg {
+                n_inputs: 0,
                 variance_targeting: true,
                 ..garch_cfg(GarchVol::Garch, GarchDist::Normal)
             })
@@ -3039,6 +3044,7 @@ pub fn all() -> Vec<Case> {
             "Garch",
             Garch,
             Garch::new(GarchCfg {
+                n_inputs: 0,
                 truncation: Some(20),
                 start_rows: 2000,
                 // too small a cap to double its start: the fixture stays short
@@ -3307,6 +3313,7 @@ pub fn all() -> Vec<Case> {
             "Garch",
             Garch,
             Garch::new(GarchCfg {
+                n_inputs: 0,
                 variance_targeting: true,
                 ..realistic(GarchVol::Garch, GarchDist::Normal)
             })
@@ -3338,7 +3345,10 @@ pub fn all() -> Vec<Case> {
             "Garch",
             Garch,
             Garch::new(GarchCfg {
+                n_inputs: 0,
                 truncation: Some(20),
+                // a cap of its own on the forecasts' work: 22 a step to 10
+                max_horizon_work: Some(220),
                 ..realistic(GarchVol::Figarch, GarchDist::Normal)
             })
             .unwrap(),
@@ -3373,6 +3383,7 @@ pub fn all() -> Vec<Case> {
             "Garch",
             Garch,
             Garch::new(GarchCfg {
+                n_inputs: 0,
                 start_span: Some(80.0),
                 ..garch_cfg(GarchVol::Garch, GarchDist::T)
             })
@@ -3457,7 +3468,7 @@ pub fn all() -> Vec<Case> {
             Dcc,
             Dcc::new(DccCfg {
                 margins: Some(GarchCfg {
-                    horizon: 1,
+                    horizons: Vec::new(),
                     start_rows: 400,
                     ..garch_cfg(GarchVol::Garch, GarchDist::Normal)
                 }),
@@ -3744,6 +3755,37 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             2
         ),
+        // GARCH-X (task 559, part 4): EGARCH's with two inputs, its start
+        // fitted and stepped (the inputs' `π`, their running mean `x̄`, `H`
+        // and the sensitivity over them); and GJR's saved within its start,
+        // holding the start's inputs beside its rows, the rows whose input
+        // falls below 0 learned as rows of weight 0.
+        case!(
+            "garch_x_realistic",
+            "Garch",
+            Garch,
+            Garch::new(GarchCfg {
+                n_inputs: 2,
+                ..realistic(GarchVol::Egarch, GarchDist::Normal)
+            })
+            .unwrap(),
+            2,
+            Targets::Garch(2, Process::Egarch),
+            2800
+        ),
+        case!(
+            "garch_x_start",
+            "Garch",
+            Garch,
+            Garch::new(GarchCfg {
+                n_inputs: 2,
+                ..realistic(GarchVol::Gjr, GarchDist::Normal)
+            })
+            .unwrap(),
+            2,
+            Targets::Garch(2, Process::Garch(garch_series::Innovations::Normal)),
+            300
+        ),
     ]
 }
 
@@ -3909,6 +3951,7 @@ fn expectile_cfg(refit_rows: u32) -> ExpectileCfg {
 
 fn garch_cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
     GarchCfg {
+        n_inputs: 0,
         n_targets: 2,
         vol,
         dist,
@@ -3916,16 +3959,26 @@ fn garch_cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
         variance_targeting: false,
         start_rows: 50,
         start_span: None,
-        horizon: if vol == GarchVol::Egarch { 1 } else { 3 },
+        // EGARCH's states of schema 71 have no horizon; the others one,
+        // at 3 rows (task 559 read them as these horizons)
+        horizons: if vol == GarchVol::Egarch {
+            Vec::new()
+        } else {
+            vec![3]
+        },
+        max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
     }
 }
 
-/// [`garch_cfg`] at the default start of 2,000 rows, for a realistic case.
+/// [`garch_cfg`] at the default start of 2,000 rows, for a realistic case,
+/// its forecasts at three horizons out of order (task 559).
 fn realistic(vol: GarchVol, dist: GarchDist) -> GarchCfg {
     GarchCfg {
+        n_inputs: 0,
         start_rows: 2000,
+        horizons: vec![10, 1, 3],
         ..garch_cfg(vol, dist)
     }
 }

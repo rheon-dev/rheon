@@ -672,6 +672,7 @@ mod tests {
         }
         assert_eq!(m.state().model.kind(), "seqtest");
         let holt = crate::Holt::new(crate::HoltCfg {
+            horizons: Vec::new(),
             n_targets: 1,
             level_half_life: 1.0,
             trend_half_life: 1.0,

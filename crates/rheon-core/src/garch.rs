@@ -13,6 +13,24 @@
 //!          λ_1 = φ − β + d,  λ_j = β λ_{j−1} + δ_j − φ δ_{j−1},  δ_j = d Π_{i=2..j} (i − 1 − d)/i
 //! ```
 //!
+//! **Inputs** (GARCH-X, `n_inputs` of them, the row's features): the
+//! row's own `x_t`, known before its residual by the bank's contract,
+//! enters its variance, each with a coefficient `π` after the process's
+//! parameters:
+//!
+//! ```text
+//! garch-X   s_t = ω + α e²_{t−1} + β s_{t−1} + π'x_t                   π ≥ 0, x_t ≥ 0
+//! gjr-X     s_t = ω + α e²_{t−1} + γ 1[e_{t−1} < 0] e²_{t−1} + β s_{t−1} + π'x_t
+//! egarch-X  ln s_t = ω + α (|z_{t−1}| − √(2/π)) + γ z_{t−1} + β ln s_{t−1} + π'x_t
+//! ```
+//!
+//! (`rugarch`'s `external.regressors`, which read the same row: the caller
+//! lags an input measured the row before.) Under GARCH and GJR the variance
+//! is positive by `π ≥ 0` with `x ≥ 0`, so a row with an input below 0 is
+//! refused as a row with a feature that is not a number is: it reports
+//! nothing and is learned at weight 0. EGARCH-X's `π` and input take any
+//! sign. FIGARCH and variance targeting take no inputs.
+//!
 //! FIGARCH is the fractionally integrated GARCH(1,d,1) written as an
 //! ARCH(∞) and cut at `M` lags (`truncation`, 1,000 by default, `arch`'s);
 //! the untruncated weights sum to 1, so its long-run variance is set by the
@@ -96,8 +114,16 @@
 //! them changes nothing), reaches χ² at 0.999 for the restrictions
 //! constant variance puts on the process: 2 for GARCH(1,1), free or
 //! targeted (`α = β = 0`), 13.8; 3 for GJR and EGARCH (`α = γ = β = 0`)
-//! and FIGARCH (`d = 0`, `φ = β`), 16.3 (`withheld_reason` names the wait,
-//! `not_identified`). A fit that passes is stepped from only at its
+//! and FIGARCH (`d = 0`, `φ = β`), 16.3; and one more for each input (`π =
+//! 0`). With inputs the fit is withheld too while the start's information
+//! in the variance equation's parameters, scaled to a unit diagonal, fails
+//! the relative pivot rule: a pivot of its Cholesky factorization at or
+//! under `10⁻¹⁰` of its largest diagonal entry (`fit::PIVOT_FLOOR`), as the
+//! library's other definite solves read a system. An input constant over
+//! the start is `ω` again, and two inputs that move together are one. `π =
+//! 0`, where an input that explains nothing sits, is no bound that makes a
+//! start wait (`withheld_reason` names the wait, `not_identified`). A fit
+//! that passes is stepped from only at its
 //! optimum: the gain its Newton step predicts inside the process's set,
 //! `gᵀd − ½ dᵀ M d` for the step `d` projected onto the set in `M`'s
 //! metric (`½ gᵀ M⁻¹ g` where it stays inside), at most `10⁻⁶` nats at
@@ -115,14 +141,14 @@
 //!
 //! **What a row reports**, per target, all before the row is learned
 //! (hard rule 2): the variance `s_t`; the standardized residual `z_t =
-//! e_t/√s_t`; and, with `horizon = h > 1`, the variance `h − 1` rows past
-//! this one, each later row's `e²` read as its variance and GJR's
-//! asymmetric term as half of it (`arch`'s analytic forecast): `ω + P f`
-//! repeated, `P = α + γ/2 + β`, for `garch` and `gjr`, FIGARCH's weights
-//! over the forecasts and the ring for `figarch`. EGARCH's is not linear in
-//! its own past and has no closed form past one row, so `egarch` takes
-//! `horizon = 1` only. Not a number before the start, or while the target's
-//! weight is under `min_weight`.
+//! e_t/√s_t`; and, at each of `horizons`, the variance `h − 1` rows past
+//! this one and the sum of the variances over those `h` rows, this one's
+//! included (`garch::horizons` states each process's recursion: each later
+//! row's `e²` read as its variance and GJR's asymmetric term as half of it,
+//! as `arch`'s analytic forecast reads them; EGARCH's by Nelson's closed
+//! form; each input past the row held at `x̄`, its weighted mean over the
+//! rows learned). Horizon 1 is `s_t` itself. Not a number before the start, or
+//! while the target's weight is under `min_weight`.
 //!
 //! **Rows, weights and the clock.** The recursion is per observation: a
 //! row's lags are the row before it, however far back on the clock that
@@ -147,10 +173,12 @@
 //! fixed order, so a row's outputs and the state are the same bits
 //! everywhere.
 //!
-//! **State**, per target, in bytes: `8 (2k + m + n(n + 1)/2 + 9)` for `k`
-//! process parameters, `m` shape parameters and `n` stepped coordinates,
+//! **State**, per target, in bytes: `8 (2k + q + m + n(n + 1)/2 + 9)` for
+//! `k` parameters in the variance equation, `q` of them inputs' (their
+//! running mean `x̄` the `q`), `m` shape parameters and `n` stepped
+//! coordinates,
 //! EGARCH's 64 bins of `z` (512) beside them, plus the larger of the start's
-//! buffer, 16 bytes a row until it is fitted, and FIGARCH's ring, `8 M`: 168
+//! buffer, `16 + 8q` bytes a row until it is fitted, and FIGARCH's ring, `8 M`: 168
 //! for `garch` (144 targeted), 216 for `gjr`, 728 for `egarch`, 208 and 256
 //! for `garch` with a t and a skewed t, 264 for `gjr` with a t, and `216 + 8
 //! M` (8,216 at `M = 1000`) for `figarch`, each with 32,000 for the default
@@ -170,11 +198,13 @@ mod dist;
 mod filter;
 mod fit;
 mod guard;
+mod horizons;
 mod linalg;
 mod math;
 mod optim;
 mod series;
 
+pub use horizons::{HORIZON_WORK, HORIZON_WORK_CEILING, LIBM_CALL_COST, MAX_HORIZONS};
 use series::{Series, bound};
 
 /// The bytes a group's state may hold by default, a spec's
@@ -189,6 +219,11 @@ pub const MIN_START_ROWS: usize = 50;
 pub const FIGARCH_MIN_START_ROWS: usize = 2000;
 /// FIGARCH's truncation by default, `arch`'s.
 pub const FIGARCH_TRUNCATION: usize = 1000;
+/// The most inputs a spec may give the variance equation.
+pub const MAX_INPUTS: usize = 8;
+/// The most parameters a variance equation holds: EGARCH's or GJR's four
+/// and [`MAX_INPUTS`].
+pub(crate) const MAX_K: usize = 4 + MAX_INPUTS;
 
 /// The variance process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -268,14 +303,37 @@ pub struct GarchCfg {
     /// decides.
     #[serde(default)]
     pub start_span: Option<f64>,
-    /// The forecast's rows ahead; 1 reports none beyond the variance.
-    pub horizon: usize,
+    /// The forecasts' horizons in rows, each at least 1: horizon `h` is the
+    /// variance `h − 1` rows past the row read and the sum of the
+    /// variances over those `h` rows (`garch::horizons`). Empty reports
+    /// none. A state of before it holds `horizon`, a count of rows ahead
+    /// (1 for none), read as the one horizon it names.
+    #[serde(default, alias = "horizon", deserialize_with = "horizons::read")]
+    pub horizons: Vec<usize>,
+    /// The multiply-adds a target's forecasts may take a row: the largest
+    /// horizon times one step's work ([`horizons::step_cost`]). `None` is
+    /// [`HORIZON_WORK`]. Neither field is skipped when empty, so a state
+    /// written as an array (`rmp_serde::to_vec`) keeps its positions.
+    #[serde(default)]
+    pub max_horizon_work: Option<u64>,
     /// `weight_sum` before a row reports, each target's own.
     pub min_weight: f64,
     /// The bytes a group's state may hold, the start's buffer included;
     /// `None` is [`GARCH_MAX_STATE_BYTES`].
     #[serde(default)]
     pub max_state_bytes: Option<u64>,
+    /// The exogenous inputs `x` in the variance equation, `q` of them: the
+    /// row's features, read on the row whose variance they enter, each with
+    /// its own coefficient `π` after the process's (GARCH-X). 0 for none,
+    /// and then not written, so a state of before it loads and re-saves its
+    /// bytes, and as the last field a state written as an array keeps its
+    /// places.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub n_inputs: usize,
+}
+
+fn is_zero(v: &usize) -> bool {
+    *v == 0
 }
 
 impl GarchCfg {
@@ -287,10 +345,37 @@ impl GarchCfg {
         }
     }
 
+    /// The inputs' count, `q`.
+    pub fn q(&self) -> usize {
+        self.n_inputs
+    }
+
+    /// The variance equation's parameters: the process's, then each
+    /// input's `π`.
+    pub fn k(&self) -> usize {
+        self.vol.k() + self.n_inputs
+    }
+
     /// The parameters `coefficients` reports for a target: the process's,
-    /// then the shape's.
+    /// each input's, then the shape's.
     pub fn n_params(&self) -> usize {
-        self.vol.k() + self.dist.shape_len()
+        self.k() + self.dist.shape_len()
+    }
+
+    /// The inputs a row's features give the model: the first `q`, the
+    /// features past them not read.
+    pub fn inputs_of<'a>(&self, x: &'a [f64]) -> &'a [f64] {
+        &x[..self.n_inputs.min(x.len())]
+    }
+
+    /// Whether a row's inputs are refused: one below 0 under GARCH or GJR,
+    /// whose variance is positive only where `π'x ≥ 0`, held by `π ≥ 0` and
+    /// `x ≥ 0`. EGARCH-X's input enters the log-variance and may take any
+    /// sign.
+    pub fn refuses_inputs(&self, x: &[f64]) -> bool {
+        self.n_inputs > 0
+            && matches!(self.vol, GarchVol::Garch | GarchVol::Gjr)
+            && self.inputs_of(x).iter().any(|v| *v < 0.0)
     }
 
     /// The coordinates the step moves: `(α, β)` under variance targeting,
@@ -304,9 +389,9 @@ impl GarchCfg {
     }
 
     /// Each target's slots in a row's report: the variance, the
-    /// standardized residual, and the forecast where `horizon > 1`.
+    /// standardized residual, and each horizon's variance and sum.
     pub fn slots(&self) -> usize {
-        2 + usize::from(self.horizon > 1)
+        2 + 2 * self.horizons.len()
     }
 
     fn cap(&self) -> u64 {
@@ -367,6 +452,34 @@ impl GarchCfg {
                     .into(),
             );
         }
+        if self.n_inputs > 0 {
+            if self.vol == GarchVol::Figarch {
+                return Err(format!(
+                    "garch: vol = \"figarch\" takes no inputs, but features lists {}. \
+                     FIGARCH's variance is an ARCH(∞) cut at its lags, and an input term in it \
+                     has no form checked against another implementation. Leave out features, \
+                     or set vol to \"garch\", \"gjr\" or \"egarch\".",
+                    self.n_inputs
+                ));
+            }
+            if self.variance_targeting {
+                return Err(
+                    "garch: variance_targeting takes no inputs, but features is not empty. \
+                     Targeting sets ω from the running mean square as the long-run variance, \
+                     ω = v̄ (1 − α − β), which an input term moves. Leave out features, or \
+                     variance_targeting."
+                        .into(),
+                );
+            }
+            if self.n_inputs > MAX_INPUTS {
+                return Err(format!(
+                    "garch: it takes at most {MAX_INPUTS} inputs, but features lists {}. Each \
+                     adds a coefficient to the start's fit and the step's information matrix, \
+                     whose size grows with their square. Give {MAX_INPUTS} or fewer.",
+                    self.n_inputs
+                ));
+            }
+        }
         let least = if self.vol == GarchVol::Figarch {
             FIGARCH_MIN_START_ROWS
         } else {
@@ -399,22 +512,7 @@ impl GarchCfg {
                  clock span the start buffers, or leave it out for start_rows."
             ));
         }
-        if self.horizon == 0 {
-            return Err(
-                "garch: horizon must be at least 1, but it is 0. Give the rows ahead \
-                        of the forecast, or leave it out for 1, the variance alone."
-                    .into(),
-            );
-        }
-        if self.horizon > 1 && self.vol == GarchVol::Egarch {
-            return Err(format!(
-                "garch: vol = \"egarch\" forecasts one row ahead only, but horizon is {}. \
-                 EGARCH's log-variance depends on |z| of each row between, so a forecast past one \
-                 row has no closed form and is made only by simulation. Leave horizon out, or \
-                 set vol to \"garch\", \"gjr\" or \"figarch\".",
-                self.horizon
-            ));
-        }
+        horizons::check(self)?;
         crate::model::check_min_weight("garch", self.min_weight)?;
         if let Some(cap) = self.max_state_bytes {
             if cap == 0 {
@@ -482,7 +580,8 @@ impl GarchDist {
 }
 
 thread_local! {
-    /// FIGARCH's weights for a forecast, read on the row and dropped.
+    /// FIGARCH's weights and the forecast pass's values, read on the row
+    /// and dropped.
     static SCRATCH: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -529,18 +628,19 @@ impl Garch {
     }
 
     /// The bytes one target's series holds with `rows` buffered for its
-    /// start: `8 (2k + m + n(n + 1)/2 + 9)`, EGARCH's bins, `8 · 64`, and
-    /// the larger of the buffer,
-    /// `16 rows`, and FIGARCH's ring, `8 M`.
+    /// start: `8 (2k + q + m + n(n + 1)/2 + 9)` for `k` parameters in the
+    /// variance equation, `q` of them inputs' (whose running mean is the
+    /// `q`), EGARCH's bins, `8 · 64`, and the larger of the buffer, `(16 +
+    /// 8q) rows`, and FIGARCH's ring, `8 M`.
     pub fn series_bytes(cfg: &GarchCfg, rows: usize) -> u64 {
-        let (k, m, n) = (cfg.vol.k(), cfg.dist.shape_len(), cfg.n_free());
+        let (k, q, m, n) = (cfg.k(), cfg.q(), cfg.dist.shape_len(), cfg.n_free());
         let bins = if cfg.vol == GarchVol::Egarch {
             guard::BINS
         } else {
             0
         };
-        let fixed = 8 * (2 * k + m + n * (n + 1) / 2 + 9 + bins) as u64;
-        fixed + (16 * rows as u64).max(8 * cfg.truncation() as u64)
+        let fixed = 8 * (2 * k + q + m + n * (n + 1) / 2 + 9 + bins) as u64;
+        fixed + ((16 + 8 * q as u64) * rows as u64).max(8 * cfg.truncation() as u64)
     }
 
     /// The bytes a model of `cfg` holds with `rows` buffered for each
@@ -647,45 +747,71 @@ impl Garch {
             Some(e) if open => e / s.sqrt(),
             _ => f64::NAN,
         };
-        if self.cfg.horizon > 1 {
-            out[base + 2] = if open {
-                crate::scratch::with_borrow_mut(&SCRATCH, |sc| series.forecast(&self.cfg, s, sc))
+        if !self.cfg.horizons.is_empty() {
+            let at = &mut out[base + 2..base + self.cfg.slots()];
+            if open {
+                crate::scratch::with_borrow_mut(&SCRATCH, |sc| {
+                    horizons::forecasts(
+                        &self.cfg,
+                        &series.theta[..self.cfg.k()],
+                        &series.xbar,
+                        &series.filter,
+                        s,
+                        at,
+                        sc,
+                    )
+                });
             } else {
-                f64::NAN
-            };
+                at.fill(f64::NAN);
+            }
         }
     }
 
-    /// The row's report, the state untouched; `y` where the residual is
-    /// known.
-    fn read_into(&self, y: Option<&[Option<f64>]>, out: &mut Step) {
+    /// The row's report, the state untouched, `x` the row's inputs; `y`
+    /// where the residual is known. A row whose inputs are refused
+    /// ([`GarchCfg::refuses_inputs`]) reports nothing.
+    fn read_into(&self, x: &[f64], y: Option<&[Option<f64>]>, out: &mut Step) {
         out.pred.clear();
         out.pred
             .resize(self.cfg.n_targets * self.cfg.slots(), f64::NAN);
+        out.n_eff = self.w_sum;
+        out.extra = None;
+        if self.cfg.refuses_inputs(x) {
+            return;
+        }
         for j in 0..self.cfg.n_targets {
-            let s = self.series[j].variance(&self.cfg);
+            let s = self.series[j].variance(&self.cfg, x);
             let e = y.and_then(|y| y.get(j).copied().flatten());
             self.report(j, s, e, &mut out.pred);
         }
-        out.n_eff = self.w_sum;
-        out.extra = None;
     }
 }
 
 impl OnlineModel for Garch {
     fn step_into(
         &mut self,
-        _x: &[f64],
+        x: &[f64],
         y: &[Option<f64>],
         d_clock: f64,
         weight: f64,
         out: &mut Step,
     ) {
-        // A residual or a weight that is not usable, by the rule every model
-        // keeps (`OnlineModel`): such a residual is absent, and such a
-        // weight learns nothing. The model reads no features.
-        if let Some(refused) = crate::model::refused_step(self, &[], y, d_clock, weight) {
+        // A residual, an input or a weight that is not usable, by the rule
+        // every model keeps (`OnlineModel`): such a residual is absent, such
+        // an input or weight makes the row one of weight 0 that reports
+        // nothing. The model reads its `q` inputs, none without them.
+        let x = self.cfg.inputs_of(x);
+        if let Some(refused) = crate::model::refused_step(self, x, y, d_clock, weight) {
             *out = refused;
+            return;
+        }
+        // An input below 0 under GARCH or GJR is refused the same way: its
+        // term could take the variance below 0, so the row reports nothing
+        // and is learned as a row of weight 0, every input 0.
+        if self.cfg.refuses_inputs(x) {
+            let zeros = vec![0.0; x.len()];
+            self.step_into(&zeros, y, d_clock, 0.0, out);
+            out.pred.fill(f64::NAN);
             return;
         }
         let handed = self.next.take();
@@ -693,7 +819,7 @@ impl OnlineModel for Garch {
             self.own += d_clock;
             handed.unwrap_or(Stamp::from(self.own))
         });
-        let (n, k) = (self.cfg.n_targets, self.cfg.vol.k());
+        let (n, k) = (self.cfg.n_targets, self.cfg.k());
         out.pred.clear();
         out.pred.resize(n * self.cfg.slots(), f64::NAN);
         out.n_eff = self.w_sum;
@@ -702,10 +828,10 @@ impl OnlineModel for Garch {
         if learns {
             self.w_sum += weight;
         }
-        let mut dl = [0.0; 4];
+        let mut dl = [0.0; MAX_K];
         for j in 0..n {
             let e = y.get(j).copied().flatten();
-            let s = self.series[j].read(&self.cfg, &mut dl[..k]);
+            let s = self.series[j].read(&self.cfg, x, &mut dl[..k]);
             self.report(j, s, e, &mut out.pred);
             // A row of weight 0, or with no residual for this target, is
             // not learned: the recursion does not step, so the next row
@@ -715,7 +841,7 @@ impl OnlineModel for Garch {
             };
             let series = &mut self.series[j];
             if series.started {
-                series.learn(&self.cfg, e, weight, s, &dl[..k], false);
+                series.learn(&self.cfg, e, x, weight, s, &dl[..k], false);
                 continue;
             }
             // The start's buffer. A first span's rows are checked against
@@ -736,25 +862,30 @@ impl OnlineModel for Garch {
                 held.note(with, cap);
             }
             let grows = with <= cap && (rows as u64) < bound(&self.cfg);
-            if self.series[j].buffer_row(&self.cfg, e, weight, now, grows) {
+            if self.series[j].buffer_row(&self.cfg, e, x, weight, now, grows) {
                 self.series[j].start(&self.cfg);
             }
         }
     }
 
-    fn predict(&self, _x: &[f64], _d_clock: f64) -> Step {
+    fn predict(&self, x: &[f64], d_clock: f64) -> Step {
+        let x = self.cfg.inputs_of(x);
+        if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
+            return refused;
+        }
         let mut out = Step::default();
-        self.read_into(None, &mut out);
+        self.read_into(x, None, &mut out);
         out
     }
 
     /// The standardized residual reads the row's residual out of `y`.
-    fn predict_with(&self, _x: &[f64], y: &[Option<f64>], _d_clock: f64) -> Step {
-        if let Some(refused) = crate::model::refused_predict_with(self, &[], y, _d_clock) {
+    fn predict_with(&self, x: &[f64], y: &[Option<f64>], d_clock: f64) -> Step {
+        let x = self.cfg.inputs_of(x);
+        if let Some(refused) = crate::model::refused_predict_with(self, x, y, d_clock) {
             return refused;
         }
         let mut out = Step::default();
-        self.read_into(Some(y), &mut out);
+        self.read_into(x, Some(y), &mut out);
         out
     }
 
@@ -811,9 +942,10 @@ impl OnlineModel for Garch {
         self.cfg.n_targets
     }
 
-    /// The series are the targets; the model reads no features.
+    /// The series are the targets; the features are the inputs, none
+    /// without them.
     fn n_features(&self) -> usize {
-        0
+        self.cfg.q()
     }
 
     fn n_outputs(&self) -> usize {
@@ -825,3 +957,5 @@ impl OnlineModel for Garch {
 mod mutant_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_x;

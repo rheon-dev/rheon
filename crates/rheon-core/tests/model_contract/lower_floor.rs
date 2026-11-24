@@ -755,6 +755,7 @@ fn hawkes() {
 /// learned row.
 fn garch_cfg() -> GarchCfg {
     GarchCfg {
+        n_inputs: 0,
         n_targets: 1,
         vol: GarchVol::Garch,
         dist: GarchDist::Normal,
@@ -762,7 +763,8 @@ fn garch_cfg() -> GarchCfg {
         variance_targeting: false,
         start_rows: 50,
         start_span: None,
-        horizon: 3,
+        horizons: vec![3],
+        max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: Some(1700),
     }
@@ -778,8 +780,8 @@ fn garch() {
     let r = probe_with(m, 1, Some(&Garch::n_eff));
     assert_eq!(r.kind, "garch");
     assert_eq!(r.n_targets, 1);
-    assert_eq!(r.n_outputs, 3);
-    assert_eq!(r.pred_len, 3);
+    assert_eq!(r.n_outputs, 4);
+    assert_eq!(r.pred_len, 4);
     assert!(r.roundtrips);
     for (vol, dist) in [
         (GarchVol::Gjr, GarchDist::T),
@@ -788,9 +790,10 @@ fn garch() {
         (GarchVol::Figarch, GarchDist::Normal),
     ] {
         let c = GarchCfg {
+            n_inputs: 0,
             vol,
             dist,
-            horizon: if vol == GarchVol::Egarch { 1 } else { 3 },
+            horizons: vec![3],
             truncation: (vol == GarchVol::Figarch).then_some(30),
             start_rows: if vol == GarchVol::Figarch { 2000 } else { 50 },
             n_targets: 2,
@@ -799,6 +802,25 @@ fn garch() {
         };
         let r = probe_with(Garch::new(c).unwrap(), 2, Some(&Garch::n_eff));
         assert!(r.roundtrips, "{vol:?} {dist:?}");
+    }
+    // GARCH-X: the features are the variance equation's inputs (PLAN 559).
+    // EGARCH's, which read any sign: the probe's features fall below 0,
+    // which GARCH and GJR refuse as rows of weight 0 (`garch/tests_x.rs`).
+    {
+        let vol = GarchVol::Egarch;
+        // a cap that holds the start of 50 rows with its inputs, and not
+        // its doubling
+        let c = GarchCfg {
+            n_inputs: K,
+            vol,
+            max_state_bytes: Some(3000),
+            ..garch_cfg()
+        };
+        let m = Garch::new(c).unwrap();
+        assert_eq!(m.n_features(), K, "garch-X reads its inputs");
+        let r = probe_with(m, 1, Some(&Garch::n_eff));
+        assert!(r.roundtrips, "{vol:?} with inputs");
+        assert_eq!(r.n_outputs, 4);
     }
 }
 
@@ -839,6 +861,7 @@ fn garch_predict_is_the_step() {
     predict_is_the_step_without_the_step(
         || {
             Garch::new(GarchCfg {
+                n_inputs: 0,
                 vol: GarchVol::Gjr,
                 dist: GarchDist::T,
                 ..garch_cfg()
@@ -851,8 +874,8 @@ fn garch_predict_is_the_step() {
     predict_is_the_step_without_the_step(
         || {
             Garch::new(GarchCfg {
+                n_inputs: 0,
                 vol: GarchVol::Egarch,
-                horizon: 1,
                 ..garch_cfg()
             })
             .unwrap()
@@ -860,9 +883,27 @@ fn garch_predict_is_the_step() {
         1,
         false,
     );
+    // EGARCH-X: its inputs read any sign, as the features here take
+    {
+        let vol = GarchVol::Egarch;
+        predict_is_the_step_without_the_step(
+            move || {
+                Garch::new(GarchCfg {
+                    n_inputs: K,
+                    vol,
+                    max_state_bytes: Some(3000),
+                    ..garch_cfg()
+                })
+                .unwrap()
+            },
+            1,
+            false,
+        );
+    }
     predict_is_the_step_without_the_step(
         || {
             Garch::new(GarchCfg {
+                n_inputs: 0,
                 variance_targeting: true,
                 ..garch_cfg()
             })
@@ -918,7 +959,7 @@ fn dcc() {
         params: Some(vec![0.05, 0.9]),
         margins: Some(GarchCfg {
             start_rows: 50,
-            horizon: 1,
+            horizons: Vec::new(),
             n_targets: 3,
             max_state_bytes: None,
             ..garch_cfg()

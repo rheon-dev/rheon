@@ -808,6 +808,7 @@ fn refuse_reading_with<M: OnlineModel>(m: &M, x: &[f64], y: &[Option<f64>], d_cl
 ///
 /// // Holt's linear trend has no features, so `x` is empty.
 /// let mut model = Holt::new(HoltCfg {
+///     horizons: Vec::new(),
 ///     n_targets: 1,
 ///     level_half_life: 2.0,
 ///     trend_half_life: 4.0,
@@ -1466,6 +1467,7 @@ mod tests {
     #[test]
     fn a_model_of_fixed_state_has_no_warning_and_no_overrun() {
         let mut m = crate::Holt::new(crate::HoltCfg {
+            horizons: Vec::new(),
             n_targets: 1,
             level_half_life: 10.0,
             trend_half_life: 20.0,

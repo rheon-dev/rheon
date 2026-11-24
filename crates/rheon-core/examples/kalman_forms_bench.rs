@@ -45,6 +45,7 @@ fn main() {
                 .iter()
                 .map(|(_, f)| {
                     let mut m = Kalman::new(KalmanCfg {
+                        horizons: Vec::new(),
                         n_features: k,
                         n_targets: 1,
                         fit_intercept: true,

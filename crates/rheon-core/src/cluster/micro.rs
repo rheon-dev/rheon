@@ -1906,6 +1906,7 @@ mod tests {
         let more = blobs(100, 4);
         assert_eq!(run(&mut r, &more), run(&mut m, &more));
         let other = crate::Holt::new(crate::HoltCfg {
+            horizons: Vec::new(),
             n_targets: 1,
             level_half_life: 10.0,
             trend_half_life: 40.0,

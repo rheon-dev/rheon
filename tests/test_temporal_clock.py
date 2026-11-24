@@ -565,6 +565,7 @@ class TestEveryClockParameterTakesADuration:
         "coef_half_life": ("2m", {}),
         "revert_half_life": ("1h", {}),
         "trend_half_life": ("20m", {}),
+        "horizons": (["1h", "10m"], {}),
         "huber_scale_half_life": ("20m", {}),
         "pca_every": ("10m", {"pca": 1}),
         "prune_every": ("10m", {}),

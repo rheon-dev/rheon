@@ -224,7 +224,7 @@ impl DccCfg {
     fn margin_cfg(&self) -> Option<GarchCfg> {
         self.margins.as_ref().map(|m| GarchCfg {
             n_targets: self.n_targets,
-            horizon: 1,
+            horizons: Vec::new(),
             min_weight: 0.0,
             max_state_bytes: Some(self.cap().saturating_sub(self.stage_bytes() + 32).max(1)),
             ..m.clone()

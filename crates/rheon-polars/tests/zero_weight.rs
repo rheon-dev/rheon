@@ -427,7 +427,7 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
     ),
     (
         "garch",
-        r#"{"type": "garch", "start_rows": 50, "horizon": 2}"#,
+        r#"{"type": "garch", "start_rows": 50, "horizons": [2, 1]}"#,
         r#""targets": ["y"], "features": []"#,
         ALL,
     ),

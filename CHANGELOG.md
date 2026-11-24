@@ -695,7 +695,8 @@ model that only the new build has is listed as an addition and passes.
   lags, 1,000 by default), with normal, Student-t or skewed-t innovations
   (`dist`; the t on `garch` and `gjr`, the skewed t on `garch`). Each row
   reports its variance before it is learned, its standardized residual and,
-  with `horizon`, the variance further ahead; `coef` holds the parameters.
+  at each of `horizons`, the variance further ahead and its sum (below);
+  `coef` holds the parameters.
   The parameters are learned by a recursive Gauss-Newton step on each row's
   score, `θ ← Proj_H(θ + a H⁻¹ g)`, projected onto the process's set in
   `H`'s own metric, after a start of `start_rows` rows (2,000) or a
@@ -736,6 +737,71 @@ model that only the new build has is listed as an addition and passes.
   `IncrementalPCA` (7.0e-13 rad), `PCA` and `eigh` on the weighted rows
   (1.4e-14 rad), and, for the stochastic two, their definitions and their
   convergence to `PCA`. No window: none of the three can remove a row.
+- **`garch`'s forecasts at several horizons, with their sums** (task 559,
+  in place of the single `horizon` and its `forecast_<t>`): `horizons`, a
+  list of row counts or a dict naming them, gives per target and horizon
+  `h` the variance `h − 1` rows past the row, `variance_h<h>_<t>`, and the
+  sum of the variances over the `h` rows, `variance_sum_h<h>_<t>`, the
+  variance of the `h`-row return; horizon 1 is `variance_<t>` itself. Every
+  process takes them: GARCH and GJR by the recursion run ahead, FIGARCH by
+  its weights over the forecasts and its ring, and EGARCH, which took one
+  row only, by Nelson's closed form for normal innovations, the product of
+  the news terms' moment generating function (`arch` simulates it; its
+  simulation agrees within its sampling error). One pass makes every horizon
+  and carries the sum, compensated; its work, the largest horizon times one
+  step's (4, `truncation + 2` or 164 multiply-adds), is held under
+  `max_horizon_work`, 2^20 a target a row by default, refused at the spec
+  with the work it would take. Horizons count rows: the recursion steps once
+  a learned row, so a span of the clock has no forecast. No state is added.
+  The forecast's arithmetic is the single horizon's, `ω + P f` with `P = α
+  + γ/2 + β`, so its values are unchanged to the bit; a state saved with
+  `horizon = h` loads as `horizons = [h]` and goes on to the bit.
+- **`holt` and `kalman` forecast at horizons on the clock** (task 559):
+  `horizons`, spans of the clock past the row (numbers of clock units, rows
+  without a clock, or durations such as `"30d"`; a dict names them), give per
+  target and horizon the forecast `forecast_<h>_<t>` and its integral over
+  the span `forecast_sum_<h>_<t>`, read before the row from the rows before
+  it; at a span of 0 the forecast is `pred_<t>`, to the bit. `holt`'s is
+  `l + b (s + Δ)` and `Δ (l + b (s + Δ/2))`, held to `statsmodels`' `Holt`
+  forecast and scipy's integral of it; it has no forecast variance, since
+  ETS's counts the innovations of the rows a span holds under fixed gains,
+  which holds here only on evenly spaced rows of equal weight once the gains
+  stop moving (it matched within 0.7% there). `kalman`'s is the prediction a
+  row of this row's features would get `Δ` past the row with no row
+  between, its integral, and its variance `forecast_var_<h>_<t>` from the
+  covariance carried through the transition and the drift of the clock
+  since the last observation plus `Δ`; against `filterpy`'s filter on the
+  same rows the three agree to 1.4e-15. No state is added; a configuration
+  without horizons is written as before. The Python `kalman` builder moves
+  to a module of its own (`_spec.py` passed its 250 KB cap).
+- **`garch` takes inputs in its variance equation, GARCH-X** (task 559):
+  `features` are inputs `x` whose row's own value enters that row's
+  variance, `π'x_t` added to GARCH's and GJR's `s_t` and to EGARCH's
+  `ln s_t`, each `π` learned beside the process's parameters, by the start's
+  likelihood and the online step, its sensitivity the filter's recursion
+  driven by the input. The row's own input is read, as `rugarch`'s
+  `external.regressors` read it (measured: its variance equation and the
+  definition agree to 7.2e-16), so an input measured the row before is
+  lagged by the caller. Under GARCH and GJR `π ≥ 0` and an input must be at
+  least 0, so the variance stays positive: a row whose input is below 0
+  reports nothing and is learned as a row of weight 0, named by a new
+  `withheld_reason`, `negative_input`, after `not_identified`. Under EGARCH
+  `π` and the input take any sign. The start's test against constant
+  variance takes one more restriction an input (`π = 0`; 16.3 for `garch`
+  with one, χ² at 0.999), a `π` at 0 is no bound that makes a start wait,
+  and a start waits (`not_identified`) while its information in the
+  variance equation's parameters is singular to the rounding, as an input
+  constant over its rows makes it. The forecasts at horizons past the row
+  hold each input at its weighted mean over the rows learned. FIGARCH and
+  variance targeting take no inputs; at most 8. A target's state is `8 (2k
+  + q + m + n(n + 1)/2 + 9)` bytes, `k` parameters in the variance
+  equation and `n` stepped coordinates each counting the `q` inputs' `π`,
+  the `q` their running mean, and the start's buffer `16 + 8q` bytes a row:
+  288 bytes for `garch` with two inputs, 168 with none. A spec with no
+  inputs writes the state it wrote, to the byte, and its outputs do not
+  move. `withheld_reason`'s new
+  name changes its Enum's categories in every model's output. Moves:
+  `*.withheld_reason`.
 - **`hawkes`, a self-exciting point process** (task 498): each target a
   node, a value above 0 on a row an event of that mark; exponential kernels
   at the given `kernel_decays`. Each row reports every node's

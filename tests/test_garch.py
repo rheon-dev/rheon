@@ -130,18 +130,35 @@ def test_a_rows_variance_is_read_before_the_row():
     assert a["variance_y"][:n0].is_null().all() and a["variance_y"][n0:].is_not_null().all()
 
 
-@pytest.mark.parametrize("kw", [{}, {"vol": "egarch"}, {"vol": "gjr", "dist": "t", "horizon": 4}])
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {},
+        {"vol": "egarch", "horizons": [3, 1, 12]},
+        {"vol": "gjr", "dist": "t", "horizons": {"week": 5, "now": 1}},
+        {"vol": "figarch", "truncation": 30, "start_rows": 2000, "horizons": [4]},
+    ],
+)
 def test_chunk_invariance(kw):
-    df = _frame(700, 6)
+    n = 4400 if kw.get("vol") == "figarch" else 700
+    df = _frame(n, 6)
     s = _spec(group="g", weight="w", coef_every=0, **kw)
     one = rp.ModelBank([s]).fit_predict(df)
-    for size in (1, 13, 211):
+    for size in (1, 13, 211) if n == 700 else (211, 997):
         bank = rp.ModelBank([s])
-        many = pl.concat([bank.fit_predict(df.slice(i, size)) for i in range(0, 700, size)])
+        many = pl.concat([bank.fit_predict(df.slice(i, size)) for i in range(0, n, size)])
         assert one.equals(many, null_equal=True), size
 
 
-@pytest.mark.parametrize("kw", [{}, {"dist": "skewt"}, {"variance_targeting": True}])
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {},
+        {"dist": "skewt", "horizons": [2, 9]},
+        {"variance_targeting": True},
+        {"vol": "egarch", "horizons": {"day": 1, "fortnight": 10}},
+    ],
+)
 def test_a_save_goes_on_to_the_bit(kw):
     df = _frame(600, 7)
     s = _spec(group="g", weight="w", **kw)
@@ -155,12 +172,20 @@ def test_a_save_goes_on_to_the_bit(kw):
         assert a.fit_predict(rest).equals(b.fit_predict(rest), null_equal=True), cut
 
 
-@pytest.mark.parametrize("kw", [{}, {"vol": "figarch", "truncation": 30, "start_rows": 2000}])
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"horizons": [1, 4]},
+        {"vol": "figarch", "truncation": 30, "start_rows": 2000, "horizons": [3]},
+        {"vol": "egarch", "horizons": [2, 6]},
+    ],
+)
 def test_a_zero_weight_row_steps_no_recursion(kw):
     """The stream with rows of weight 0, and rows whose return is null,
     gives every other row, to the bit, the output of the stream without
-    them: the recursion is per observation, and such a row is none. They
-    are still read."""
+    them: the recursion is per observation, and such a row is none, so a
+    horizon counts no such row either. They are still read, and their
+    forecasts are those the next learned row reads from the same state."""
     n = 2600 if "vol" in kw else 900
     df = _frame(n, 8).drop("g")
     df = df.with_columns(
@@ -170,10 +195,18 @@ def test_a_zero_weight_row_steps_no_recursion(kw):
     full = _out(s, df)
     keep = ((df["w"] > 0) & df["y"].is_not_null()).to_numpy()
     thin = _out(s, df.filter(pl.Series(keep)))
-    for f in ("variance_y", "std_resid_y", "coef"):
+    labels = [f"h{h}" for h in kw["horizons"]]
+    forecasts = [f"variance{p}_{h}_y" for h in labels for p in ("", "_sum")]
+    for f in ("variance_y", "std_resid_y", "coef", *forecasts):
         assert full[f].filter(pl.Series(keep)).equals(thin[f], null_equal=True), f
     read = full.filter(pl.Series(~keep))
     assert read["variance_y"].drop_nulls().len() > 20, "such a row is still read"
+    # a row that is not learned reads the forecasts of the next learned row
+    for i in np.flatnonzero(~keep[:-1] & keep[1:])[:50]:
+        if full["variance_y"][int(i)] is None:
+            continue
+        for f in forecasts:
+            assert full[f][int(i)] == full[f][int(i) + 1], (f, i)
 
 
 def test_a_weight_scales_nothing_but_the_weight():
@@ -187,23 +220,67 @@ def test_a_weight_scales_nothing_but_the_weight():
     np.testing.assert_allclose(b["weight_sum"].to_numpy(), 2 * a["weight_sum"].to_numpy())
 
 
-def test_the_forecast_reverts_to_the_long_run_variance():
-    """``forecast_<t>`` is ``ω + (α + β) f`` run ``horizon - 1`` rows from the
-    row's variance, at the parameters reported after the row before."""
-    df = pl.DataFrame({"y": _returns(600, 10)})
-    out = _out(_spec(horizon=6, coef_every=0), df)
-    s, fc, coef = out["variance_y"], out["forecast_y"], out["coef"].to_list()
+def _definition(vol: str, theta: list[float], s: float, h: int) -> list[float]:
+    """The variances ``f_1 .. f_h`` from a row whose variance is ``s``, by the
+    recursion written out: each later row's ``e²`` read as its variance and
+    GJR's asymmetric term as half of it, ``ω + P f`` with the persistence
+    ``P = α + γ/2 + β`` formed once."""
+    p = theta[1] + 0.5 * theta[2] + theta[3] if vol == "gjr" else theta[1] + theta[2]
+    f = [s]
+    for _ in range(h - 1):
+        f.append(theta[0] + p * f[-1])
+    return f
+
+
+@pytest.mark.parametrize("vol", ["garch", "gjr"])
+def test_the_forecasts_are_the_recursion_run_ahead(vol):
+    """``variance_h<h>_<t>`` is the recursion run ``h - 1`` rows from the row's
+    variance at the parameters reported after the row before, to the bit,
+    and ``variance_sum_h<h>_<t>`` the variances' sum to within one rounding
+    (``math.fsum``); horizon 1 is the row's variance itself."""
+    df = pl.DataFrame({"y": _returns(600, 10, gamma=0.08 if vol == "gjr" else 0.0)})
+    hs = [6, 1, 40]
+    out = _out(_spec(vol=vol, horizons=hs, coef_every=0), df)
+    s, coef = out["variance_y"], out["coef"].to_list()
     for t in (450, 520, 598):
-        om, a, b = coef[t]
-        f = s[t + 1]
-        for _ in range(5):
-            f = om + (a + b) * f
-        assert abs(fc[t + 1] - f) <= 1e-13 * f, t
+        f = _definition(vol, coef[t], s[t + 1], max(hs))
+        for h in hs:
+            got = out[f"variance_h{h}_y"][t + 1]
+            assert got == f[h - 1], (t, h, got, f[h - 1])
+            want = math.fsum(f[:h])
+            assert abs(out[f"variance_sum_h{h}_y"][t + 1] - want) <= math.ulp(want), (t, h)
+        assert out["variance_h1_y"][t + 1] == s[t + 1]
+        assert out["variance_sum_h1_y"][t + 1] == s[t + 1]
+        # reverting toward the long-run variance ω / (1 - P)
+        p = coef[t][1] + coef[t][-1] + (0.5 * coef[t][2] if vol == "gjr" else 0.0)
+        long_run = coef[t][0] / (1.0 - p)
+        assert abs(f[-1] - long_run) < abs(s[t + 1] - long_run)
+
+
+def test_a_forecast_reads_no_row_it_forecasts():
+    """Out of sample by construction: changing a row's return moves no
+    forecast on that row or before it, at any horizon."""
+    df = pl.DataFrame({"y": _returns(500, 12)})
+    spec = _spec(horizons=[1, 3, 25], vol="gjr")
+    a = _out(spec, df)
+    for t in (300, 420):
+        moved = df.with_columns(
+            pl.when(pl.int_range(500) == t).then(pl.col("y") * 7.0 + 3.0).otherwise(pl.col("y"))
+        )
+        b = _out(spec, moved)
+        for f in a.columns:
+            if f.startswith("variance"):
+                assert a[f][: t + 1].equals(b[f][: t + 1], null_equal=True), (f, t)
+                assert not a[f][t + 1 :].equals(b[f][t + 1 :], null_equal=True), (f, t)
 
 
 def test_names_match_the_realized_struct():
     df = _frame(300, 11).with_columns(pl.col("y").alias("z"))
-    for kw in ({}, {"horizon": 3}, {"vol": "gjr", "dist": "t"}):
+    for kw in (
+        {},
+        {"horizons": [3]},
+        {"vol": "gjr", "dist": "t", "horizons": {"week": 5, "day": 1}},
+    ):
         spec = rp.spec.garch("m", targets=["y", "z"], start_rows=100, **kw)
         out = rp.ModelBank([spec]).fit_predict(df)
         assert [f.name for f in out.schema["m"].fields] == rp.spec.output_fields(spec)
@@ -221,7 +298,15 @@ def test_names_match_the_realized_struct():
         ({"dist": "ged"}, "dist"),
         ({"vol": "gjr", "dist": "skewt"}, 'does not take vol = "gjr"'),
         ({"vol": "egarch", "dist": "t"}, "takes vol"),
-        ({"vol": "egarch", "horizon": 2}, "one row ahead only"),
+        ({"horizons": [0]}, "each of horizons must be at least 1"),
+        ({"horizons": [3, 1, 3]}, "holds 3 twice"),
+        ({"horizons": list(range(1, 66))}, "at most 64"),
+        ({"horizons": {"sum5": 5}}, 'not begin with "sum"'),
+        ({"horizons": {"a": 2, "b": 2}}, "holds 2 twice"),
+        ({"horizons": [300_000]}, "would take 1200000 multiply-adds a target a row"),
+        ({"vol": "egarch", "horizons": [7000]}, "Lower the largest horizon to 6393"),
+        ({"max_horizon_work": 0}, "max_horizon_work must be above 0"),
+        ({"max_horizon_work": 2**30 + 1}, "at most 1073741824"),
         ({"vol": "gjr", "variance_targeting": True}, "variance_targeting"),
         ({"truncation": 100}, "truncation is FIGARCH's"),
         ({"vol": "figarch", "start_rows": 500}, "at least 2000"),
@@ -234,11 +319,6 @@ def test_names_match_the_realized_struct():
 def test_refusals(kw, says):
     with pytest.raises(ValueError, match=says):
         rp.ModelBank([_spec(**kw)])
-
-
-def test_features_are_refused():
-    with pytest.raises(TypeError, match="features"):
-        rp.spec.garch("m", targets=["y"], features=["x"])
 
 
 def test_a_start_span_on_a_temporal_clock_is_a_duration():

@@ -306,7 +306,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), `scale_ratio_moved` (a `corrchange` flag withheld on a span whose two columns' scale ratio moved), `not_separated` (a `pca` component the data does not yet tell apart from a neighbor) or `level_beyond_sample` (a `tdigest` or `ddsketch` level past what the rows before it identify), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), `scale_ratio_moved` (a `corrchange` flag withheld on a span whose two columns' scale ratio moved), `not_separated` (a `pca` component the data does not yet tell apart from a neighbor), `level_beyond_sample` (a `tdigest` or `ddsketch` level past what the rows before it identify) or `negative_input` (a `garch` row under GARCH or GJR whose input is below 0), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -876,6 +876,20 @@ every spec takes are in [What every spec takes](#what-every-spec-takes).
 Here `half_life` decays the noise estimate and the features'
 standardization, and `coef_half_life` sets how fast a coefficient may
 drift.
+
+
+**Forecasts at horizons.** `horizons` asks for the prediction a row of
+this row's features would get a span `Δ` of the clock past the row, with no
+row between, as the filter would make it. `forecast_<h>_<t>` is that
+prediction and `forecast_sum_<h>_<t>` its integral over the span.
+`forecast_var_<h>_<t>` is its variance, from the covariance carried through
+the transition over `Δ` and the drift of the clock since the target's last
+observation plus `Δ`. At `Δ = 0` the
+forecast is `pred_<t>`. The features are held at the row's: the forecast is
+the regression's at them. Under the default random walk the forecast does
+not move with `Δ` and only its variance grows; under `revert_half_life` it
+reverts too. Against `filterpy`'s filter run on the same rows, unstandardized
+with a given noise, the three agree to 1.4e-15.
 
 #### The update
 
@@ -2032,6 +2046,22 @@ Its parameters, their defaults and what each refuses are in its
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#holt). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes),
 apart from `features`, which `holt` does not take.
+
+
+**Forecasts at horizons.** `horizons` asks for the forecast a span `Δ` of
+the clock past the row and its integral over the span. Both read the level
+and trend before the row: `forecast_<h>_<t> = l + b (s + Δ)` and
+`forecast_sum_<h>_<t> = Δ (l + b (s + Δ/2))`. At `Δ = 0` the forecast is
+`pred_<t>`. A span is a number of clock units, rows without a clock, or a
+duration such as `"30d"`, never a count of rows: the trend is per clock unit
+and the clock of rows to come is not known. No forecast variance is given.
+The variance of exponential smoothing's forecast (ETS with additive errors
+and trend, `statsmodels`' `ETSModel`) counts the innovations of the rows
+within the span and assumes fixed gains. Here that holds only on evenly
+spaced rows of equal weight once the gains have stopped moving. There it
+matched the forecast errors' variance within 0.7% at 1 to 10 rows ahead,
+over 195,000 simulated rows. On a clock the rows a span holds are the data's
+to decide, and the model keeps no noise variance of its own.
 
 #### The update
 
@@ -3396,16 +3426,17 @@ time, when you want each row's variance forecast before the row arrives: a
 risk limit, a position size, a standardized residual for a detector
 downstream. Each target is its own series with its own parameters. The
 start's rows (2,000 by default) report nothing; after them every row
-reports its variance, its standardized residual and, with `horizon`, the
-variance further ahead.
+reports its variance, its standardized residual and, at each of `horizons`,
+the variance further ahead and the variance of the return over the rows to
+it.
 
 Its parameters, their defaults and what each refuses are in its
 [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch),
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md#garch). The parameters
 every spec takes are in [What every spec takes](#what-every-spec-takes),
-apart from `features`, `half_life` and `lam`, which it refuses: the
-recursion is per observation and the estimate weighs every row it has
-learned. A row's weight scales its evidence. A row of weight 0, or whose
+apart from `half_life` and `lam`, which it refuses: the recursion is per
+observation and the estimate weighs every row it has learned. Its
+`features`, if any, are inputs of the variance equation (GARCH-X, below). A row's weight scales its evidence. A row of weight 0, or whose
 return is null, steps nothing: the next row's lags are those of the last row
 learned, as if it were not there; it is still read.
 
@@ -3431,6 +3462,28 @@ innovations: normal; Student's t, whose degrees of freedom `ν` are learned;
 Hansen's skewed t, which learns a skew `λ` too. The t takes `garch` and
 `gjr`, the skewed t `garch` alone. Every lag before the first row is the
 backcast, the `0.94^i`-weighted mean of the first 75 squared returns.
+
+**Inputs (GARCH-X).** `features` are inputs `x` of the variance equation,
+each with a coefficient `π` of its own, learned beside the process's:
+
+```
+garch-X   s_t = ω + π'x_t + α e²_{t−1} + β s_{t−1}                       π ≥ 0, x_t ≥ 0
+gjr-X     s_t = ω + π'x_t + α e²_{t−1} + γ 1[e_{t−1} < 0] e²_{t−1} + β s_{t−1}
+egarch-X  ln s_t = ω + π'x_t + α (|z_{t−1}| − √(2/π)) + γ z_{t−1} + β ln s_{t−1}
+```
+
+The row's own `x_t` is read, as every model reads its features: they are
+known before the row's target. So lag a column that measures the day
+before, such as a realized variance, to make it known before the return
+it explains; `rugarch`'s `external.regressors` read the same row. Under
+GARCH and GJR each `π` is at least 0 and an input must be at least 0, so
+the variance stays positive. A row whose input is below 0 reports nothing,
+`withheld_reason` `negative_input`, and is learned as a row of weight 0,
+as a row with a null feature is. Under EGARCH the input enters the
+log-variance, and `π` and the input take any sign. Each `π`'s sensitivity
+is the filter's own recursion driven by the input, `∂s_t/∂π = x_t + β
+∂s_{t−1}/∂π` (EGARCH's carries `β − (α |z| + γ z)/2` in place of `β`).
+FIGARCH and variance targeting take no inputs; at most 8.
 
 #### The update
 
@@ -3483,7 +3536,16 @@ stepped from only when its likelihood-ratio statistic against a constant
 variance, `2 (l_fit − l_const)` with the weights at Kish's count, reaches
 χ² at 0.999 for the restrictions a constant variance puts on the process.
 That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
-`figarch` (three each). Until one does, its rows are withheld as
+`figarch` (three each); each input adds one, `π = 0`, so `garch` with one
+input waits for 16.3. `π = 0` is where an input that explains nothing
+sits, so a fit with a `π` at 0 is no bound that makes a start wait. A
+start with inputs also waits while its rows do not tell the inputs apart:
+an input constant over them is `ω` again, and two that move together are
+one. It waits where a pivot of the Cholesky factorization of the start's
+information in the variance equation's parameters, scaled to a unit
+diagonal, is at or under `10⁻¹⁰` of the largest diagonal entry, the
+relative pivot rule the library's other definite solves read a system by.
+Until one does, its rows are withheld as
 `not_identified`. A fit that passes but is not at its optimum is never
 stepped from either; its wait is the start's own, `below_warm_rows`. A try
 that does not start keeps its rows and fits again once as many new rows
@@ -3501,13 +3563,67 @@ at persistence 0.98 its forecasts, each made before its row, lost a mean of
 3.4 nats over 8,000 rows to the true process, against 2.8 for the free `ω`:
 its level rides on one running mean the whole stream shares.
 
-The state is `8 (2k + m + n(n + 1)/2 + 9)` bytes a target for `k` process
-parameters, `m` shape parameters and `n` stepped coordinates. EGARCH keeps
+The state is `8 (2k + q + m + n(n + 1)/2 + 9)` bytes a target for `k`
+parameters in the variance equation, `q` of them the inputs' `π` (whose
+running mean adds the `q`), `m` shape parameters and `n` stepped
+coordinates. EGARCH keeps
 64 bins of residuals beside them, 512 bytes. That is 168 bytes for `garch`,
 216 for `gjr`, 728 for `egarch`, 208 for `garch` with a t, and `216 + 8 M`
 for `figarch` (8,216 at 1,000 lags). The start's buffer adds 16 bytes a
-row until it is fitted, 32,000 at the default, and after a try that does
-not start up to the target's share of `max_state_bytes`.
+row until it is fitted (8 more for each input), 32,000 at the default, and after a try that does
+not start up to the target's share of `max_state_bytes`. `garch` with two
+inputs holds 288 bytes a target.
+
+#### Forecasts at horizons
+
+`horizons` asks for the variance further ahead. Each horizon is a count of
+rows `h` from the row read, its own included. It gives the variance `h − 1`
+rows past this one, `variance_h<h>_<t>`, and the sum of the variances over
+those `h` rows, `variance_sum_h<h>_<t>`. That sum is the variance of the
+`h`-row return, the quantity an option's implied variance over the same span
+is set beside.
+Horizon 1 is `variance_<t>` itself, the same number. Both are read before the
+row is learned, from the rows before it, so a forecast never reads a row it
+forecasts. A dict names the horizons, `horizons={"week": 5, "month": 21}`
+giving `variance_month_<t>`.
+
+The recursion runs ahead from the row's variance, each later row's `e²`
+read as its variance and GJR's asymmetric term as half of it, as `arch`'s
+analytic forecast reads them:
+
+```
+garch, gjr  f_1 = s_t,  f_h = ω + α f_{h−1} + γ f_{h−1}/2 + β f_{h−1}
+egarch      f_h = exp(L_h) Π_{j=1..h−1} M(β^{j−1}),  L_1 = ln s_t,  L_h = ω + β L_{h−1}
+            M(c) = E exp(c (α (|z| − √(2/π)) + γ z))
+figarch     f_h = ω/(1 − β) + Σ_{j=1..M} λ_j e²_{t+h−1−j},  a forecast for each row at or after t
+sum         F_h = f_1 + … + f_h
+```
+
+With inputs, horizon 1 reads the row's own `x_t`, and every later row
+holds them at `x̄`, their weighted mean over the rows learned, the start's
+included: no input past the row is known. So `ω` above reads `ω̄ = ω +
+π'x̄` past the row, and the forecasts revert to the long-run variance the
+inputs' mean gives.
+
+GARCH and GJR revert geometrically to `ω/(1 − P)`, `P = α + γ/2 + β`.
+EGARCH's is Nelson's closed form for normal innovations. The log-variance is
+linear in the news terms, which are independent from row to row. So the
+variance's mean is the exponential of the log-variance's mean times the
+product of the news terms' moment generating function,
+`M(c) = e^{−cα√(2/π)} [e^{(cα+cγ)²/2} Φ(cα + cγ) + e^{(cα−cγ)²/2} Φ(cα − cγ)]`.
+`arch` makes it only by simulation, and agrees within its sampling error.
+The forecasts are not held within the bounds the filter holds the row's own
+variance to.
+
+One pass from horizon 1 to the largest makes every horizon and carries the
+sum, so no horizon is summed twice; the sum is compensated, the variances'
+own to a rounding. The pass costs the largest horizon times one step's
+work: 4 multiply-adds for `garch` and `gjr`, `truncation + 2` for `figarch`,
+and 164 for `egarch`, whose step calls `exp` and `erfc` five times, each
+counted as 32. A spec whose forecasts would take more than
+`max_horizon_work` (2^20 a target a row by default) is refused, naming the
+work: that holds `garch` to horizons of 262,144 rows, `egarch` to 6,393 and
+`figarch` at 1,000 lags to 1,046. The forecasts add nothing to the state.
 
 #### Rows and the clock
 
@@ -3518,7 +3634,10 @@ form: `β` is a share of the last observation's variance, not of an hour's. The 
 `start_span`, a number of the clock column's units or a duration such as
 `"1d"` on a temporal clock. A span's rows are the data's to decide, so their
 bytes are checked as they come: a warning past half of `max_state_bytes`,
-and a refusal at it.
+and a refusal at it. The horizons count rows and have no clock form: the
+recursion steps once a learned row, so a span of the clock holds as many
+steps as the data puts in it. A row of weight 0 is no step, so it is in no
+horizon, and it reads the forecasts the next learned row reads.
 
 #### Example
 
@@ -3582,8 +3701,9 @@ from series to series, and the online fit is not yet held to a tolerance.
 GJR with the skewed t: under skewed innovations GJR's persistence reads
 `E[z² 1(z < 0)]` rather than the half of `E[z²]` its forecast uses. A t on
 EGARCH or FIGARCH, APARCH, the generalized error distribution and a mean
-model: none has an online estimator checked against `arch`. EGARCH's
-forecast past one row has no closed form.
+model: none has an online estimator checked against `arch`. A t on EGARCH
+would also have no variance forecast past one row: `E e^{c|z|}` is infinite
+for a t.
 
 ### `dcc` — how do the correlations move from row to row?
 

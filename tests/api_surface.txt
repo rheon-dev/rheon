@@ -305,13 +305,15 @@
   garch:
     name
     targets
+    features = None
     vol = 'garch'
     dist = 'normal'
     truncation = None
     variance_targeting = False
     start_rows = None
     start_span = None
-    horizon = 1
+    horizons = None
+    max_horizon_work = None
     max_state_bytes = None
     common
   glm:
@@ -362,6 +364,7 @@
     targets
     trend_half_life = None
     trend = True
+    horizons = None
     common
   huber:
     name
@@ -394,6 +397,7 @@
     revert_half_life = None
     standardize = True
     covariance_form = 'covariance'
+    horizons = None
     common
   kmeans:
     name
@@ -905,7 +909,8 @@
     stream.tails_half_life = 50.0
   garch(targets=['y']):
     model.dist = "normal"
-    model.horizon = 1
+    model.horizons = []
+    model.max_horizon_work = null
     model.max_state_bytes = null
     model.min_weight = 0.0
     model.n_targets = 1
@@ -1476,9 +1481,13 @@
     model.kernel_decays = [1.38629436112, 0.17328679514]
   garch(start_rows=2000, targets=['y'], vol='figarch'), the lines that differ from garch's:
     model.vol = "figarch"
-  garch(horizon=5, targets=['y'], variance_targeting=True), the lines that differ from garch's:
-    model.horizon = 5
+  garch(horizons=[5], targets=['y'], variance_targeting=True), the lines that differ from garch's:
+    model.horizons = [5]
     model.variance_targeting = true
+  garch(horizons={'week': 5}, max_horizon_work=5000, targets=['y'], vol='egarch'), the lines that differ from garch's:
+    model.horizons = [5]
+    model.max_horizon_work = 5000
+    model.vol = "egarch"
   garch(start_span=500.0, targets=['y']), the lines that differ from garch's:
     model.start_span = 500.0
   dcc(a=0.03, asymmetric=True, b=0.9, g=0.04, half_life=50.0, targets=['y', 'x0']), the lines that differ from dcc's:
@@ -1624,7 +1633,7 @@
     resid_y: Float64
     weight_sum: Float64
     settled_frac: Float64
-    withheld_reason: Enum[below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample]
+    withheld_reason: Enum[below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample], negative_input
     coef: List[Float64]
     support_coef: List[Float64]
   ModelBank.marginal():
@@ -2678,10 +2687,12 @@
   garch minimal:
     variance_y: f64
     std_resid_y: f64
-    forecast_y: f64
+    variance_h3_y: f64
+    variance_sum_h3_y: f64
     variance_z: f64
     std_resid_z: f64
-    forecast_z: f64
+    variance_h3_z: f64
+    variance_sum_h3_z: f64
     weight_sum: f64
     settled_frac: f64
     withheld_reason: enum
@@ -3176,7 +3187,7 @@
   rp.ewm_rate(reverse=True).partial: drop, keep, null
   rp.ewm_sum(reverse=True).closed: both, left, none, right
   rp.ewm_sum(reverse=True).partial: drop, keep, null
-  withheld_reason, in precedence order: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample
+  withheld_reason, in precedence order: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample, negative_input
   toml.input_format: csv, ipc, ndjson, parquet
   toml.output_format: csv, ipc, ndjson, parquet
   toml.output_layout: flat, struct
@@ -3277,13 +3288,13 @@
     ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
     expectile: closed, expectile, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, window_rows, window_size
     ftrl: alpha, beta, l1, l2, loss, strict_binary
-    garch: dist, horizon, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
+    garch: dist, horizons, max_horizon_work, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     glm: family, link, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, step_cap, var_power
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows, warm_span
-    holt: trend, trend_half_life
+    holt: horizons, trend, trend_half_life
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, max_rows_between_solves, max_state_bytes, refit_budget, ridge, ridge_scale, solve_every, standardize
-    kalman: coef_half_life, covariance_form, obs_var, p0, q, revert_half_life, share_p, standardize
+    kalman: coef_half_life, covariance_form, horizons, obs_var, p0, q, revert_half_life, share_p, standardize
     kmeans: dead_frac, init, n_clusters, scale_floor, seed, split_merge, split_merge_every, split_merge_every_rows, standardize, update_every, update_every_rows, warm_rows, warm_span
     lasso: closed, l1_ratio, max_iter, max_rows_between_snapshots, max_rows_between_solves, penalties, select_half_life, snapshot_every, solve_every, target_gaps, tol, window_budget, window_size
     marginal: bin_budget, bin_edges, bin_huber_delta, bin_refit_rows, bin_rule, bin_stat, bin_warm_rows, bins, closed, cross_lags, feature_moments, lags, max_rows_between_snapshots, refit_budget, serial_rule, shards, snapshot_every, window_budget, window_lags, window_size

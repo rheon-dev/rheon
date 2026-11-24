@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Unpack
 
-from rheon._duration import Duration
+from rheon._duration import Duration, duration_text
 from rheon._kwargs import CommonKwargs
 from rheon._spec import TargetList, _checked, _common
 
@@ -20,6 +20,7 @@ def holt(
     targets: TargetList,
     trend_half_life: float | Duration | None = None,
     trend: bool = True,
+    horizons: list[float | Duration] | dict[str, float | Duration] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Holt's linear trend, which extrapolates the target's own level and slope.
@@ -66,6 +67,25 @@ def holt(
         times ``0.5 ** (age / half_life)``, which is pandas'
         ``ewm(adjust=True)`` for unit weights. ``trend_half_life`` is refused
         beside it. Default ``True``.
+    ``horizons``
+        The forecasts to report, each a span of the clock ``Δ`` past the
+        row read: a number of clock units (rows without a clock), or a
+        duration such as ``"30d"`` on a temporal clock. Each gives the
+        forecast ``Δ`` past the row and its integral over the span, read
+        before the row is learned, as ``pred_<t>`` is; at ``Δ = 0`` the
+        forecast is ``pred_<t>`` itself. A list labels each horizon's fields
+        ``h<Δ>`` for a number and by the duration as written
+        (``horizons=[5, 20]`` gives ``forecast_h5_<t>`` and
+        ``forecast_sum_h5_<t>``); a dict names them. They are spans of the
+        clock, never counts of rows: the trend is per clock unit, and the
+        clock of the rows to come is not known. There is no forecast
+        variance: the variance of exponential smoothing's forecast (ETS
+        with additive errors and trend) counts the innovations of the rows
+        within the span and assumes fixed gains, which holds here only on a
+        clock of evenly spaced rows of equal weight, once the gains have
+        stopped moving, and the model keeps no noise variance of its own. At most
+        64, each finite and 0 or more; a name must not begin with
+        ``"sum"``. Default none.
 
     .. rubric:: Output
 
@@ -90,6 +110,11 @@ def holt(
         ``min_weight``. A target's first observation has no prediction,
         since it sets the level: with ``min_weight=0``, ``pred_<t>`` and
         ``withheld_reason`` both read null there.
+    ``forecast_<h>_<t>``, ``forecast_sum_<h>_<t>``
+        Per target and horizon: the forecast ``Δ`` past the row,
+        ``l + b * (s + Δ)``, and its integral over the span,
+        ``Δ * (l + b * (s + Δ / 2))``, from the level and trend before the
+        row. Null where ``pred_<t>`` is.
     ``coef``
         ``[level, trend]`` per target after the row is learned, the two
         numbers a prediction reads, which :func:`coef_index` names. Null
@@ -104,8 +129,10 @@ def holt(
     As every builder does (:mod:`rheon.spec`); ``TypeError`` for
     ``features``, which this model does not take, and for
     ``level_half_life``, whose name is ``half_life``; and ``ValueError``
-    naming the problem for a ``trend_half_life`` not above 0, and
-    ``trend_half_life`` beside ``trend=False``.
+    naming the problem for a ``trend_half_life`` not above 0,
+    ``trend_half_life`` beside ``trend=False``, and a horizon below 0, not
+    finite, given twice, more than 64 of them or a name beginning with
+    ``"sum"``.
 
     .. rubric:: The update
 
@@ -135,6 +162,16 @@ def holt(
         l' = pred + g * e      g = g_f under half_life = inf, else max(g_f, g_t)
         b' = b + h * e         h = h_f under trend_half_life = inf or at s = 0,
                                else max(h_f, h_t)
+
+    The forecasts at the horizons extrapolate the level and trend before the
+    row, ``Δ`` clock units past it, and integrate them over the span; nothing
+    decays across the span, since the half-lives weigh the evidence behind
+    ``l`` and ``b``, not the extrapolation:
+
+    .. code-block:: text
+
+        f(Δ) = l + b * (s + Δ)                       f(0) = pred
+        F(Δ) = Δ * (l + b * (s + Δ / 2))             the integral of f over [0, Δ]
 
     Under ``trend=False`` the line fit is not used: ``g = g_t`` at every
     half-life, ``inf`` included, and ``b = 0``.
@@ -232,4 +269,13 @@ def holt(
         # Absent when on, as the Rust spec leaves it out, so a bank reports
         # the dict this made (`ModelBank.specs`).
         model["trend"] = False
+    if horizons is not None:
+        # A dict is `[name, span]` pairs, each span a number or a duration's
+        # text, as the Rust spec reads them.
+        who = f"spec {name!r}"
+        model["horizons"] = (
+            [[k, duration_text(v, who, "horizons")] for k, v in horizons.items()]
+            if isinstance(horizons, dict)
+            else list(horizons)
+        )
     return _common(name, model, targets=targets, features=[], **common)

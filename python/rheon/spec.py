@@ -372,7 +372,8 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 (``"x@5m"``),
 ``hmm``'s and ``bocpd``'s ``warm_span``, ``bocpd``'s ``hazard``,
 ``corrchange``'s ``permute_every`` and ``monitor_span``, ``huber``'s and ``sgd``'s
-``huber_refit_span`` and ``quantile``'s ``quantile_refit_span``. Each that
+``huber_refit_span``, ``quantile``'s ``quantile_refit_span``, and
+``holt``'s and ``kalman``'s ``horizons``, a list of spans. Each that
 counts rows where the quantity has a meaning on the clock has its count
 beside it, such as ``warm_rows`` beside ``warm_span`` and ``bocpd``'s
 ``hazard_rows`` beside ``hazard``, and the two are refused together.
@@ -447,8 +448,9 @@ releases none. A regression writes, with ``<t>`` a target:
     Which gate withheld the row's predictions, as an ``Enum``, and null where
     no gate did. ``below_min_settled_frac``, ``below_min_weight``,
     ``above_max_error_inflation``, ``below_warm_rows``, ``ill_conditioned``,
-    ``unstable_rate``, ``not_identified``, ``scale_ratio_moved``, ``not_separated`` and
-    ``level_beyond_sample`` are named in that order, the first that withheld anything.
+    ``unstable_rate``, ``not_identified``, ``scale_ratio_moved``, ``not_separated``,
+    ``level_beyond_sample`` and ``negative_input`` are named in that order, the first that
+    withheld anything.
     ``below_warm_rows`` is the model's own warm-up: the rows ``kmeans``,
     ``hmm`` and ``bocpd`` hold to seed their centres, states or prior from
     (``warm_rows``), a count of rows, where ``min_weight`` is a weight, the
@@ -476,7 +478,10 @@ releases none. A regression writes, with ``<t>`` a target:
     ``tdigest`` or ``ddsketch`` level its rows do not identify yet: past the
     expected level of the smallest or largest row, ``1/(n + 1)`` and
     ``n/(n + 1)`` for ``n`` rows; the ``tdigest`` builder's docstring has
-    the rule. Fields null for another reason,
+    the rule. ``negative_input`` is a ``garch`` row
+    under ``vol="garch"`` or ``"gjr"`` with an input (a feature) below 0,
+    which its variance equation cannot read: the row reports nothing and is
+    learned as a row of weight 0. Fields null for another reason,
     such as a skipped row or a statistic not yet due, leave it null. An
     ``Enum`` rather than a string, because a string column costs sixteen
     bytes a row even when every value is null.

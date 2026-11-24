@@ -231,6 +231,7 @@ fn drifting_rows() -> Vec<Row> {
 
 fn kalman_cfg(half_life: Vec<f64>) -> KalmanCfg {
     KalmanCfg {
+        horizons: Vec::new(),
         min_weight_holds_learning: false,
         noise_units: true,
         n_features: 2,

@@ -61,7 +61,7 @@ fn figarch_series(n: usize, seed: u64) -> Vec<f64> {
     let mut dl = [0.0; 4];
     let mut out = Vec::with_capacity(n);
     for t in 0..n + 3000 {
-        let v = f.predict(GarchVol::Figarch, &th, &mut dl);
+        let v = f.predict(GarchVol::Figarch, &th, &[], &mut dl);
         let e = v.sqrt() * normal(&mut s);
         f.push(GarchVol::Figarch, e, v, &dl);
         if t >= 3000 {
@@ -90,6 +90,7 @@ fn series_of(c: &GarchCfg, n: usize, seed: u64) -> Vec<f64> {
 
 fn cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
     GarchCfg {
+        n_inputs: 0,
         n_targets: 1,
         vol,
         dist,
@@ -97,7 +98,8 @@ fn cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
         variance_targeting: false,
         start_rows: if vol == GarchVol::Figarch { 2000 } else { 500 },
         start_span: None,
-        horizon: 1,
+        horizons: Vec::new(),
+        max_horizon_work: None,
         min_weight: 0.0,
         // FIGARCH's start too big to double, so its tests stay short
         max_state_bytes: (vol == GarchVol::Figarch).then_some(40_000),
@@ -118,6 +120,7 @@ const FORMS: [(GarchVol, GarchDist); 7] = [
 fn every_cfg() -> Vec<GarchCfg> {
     let mut out: Vec<GarchCfg> = FORMS.iter().map(|&(v, d)| cfg(v, d)).collect();
     out.push(GarchCfg {
+        n_inputs: 0,
         variance_targeting: true,
         ..cfg(GarchVol::Garch, GarchDist::Normal)
     });
@@ -243,7 +246,7 @@ fn each_filter_is_its_recursion() {
         let (mut e2, mut asym, mut s) = (bc, 0.5 * bc, bc);
         let mut dl = vec![0.0; k];
         for y in &ys {
-            let got = f.predict(vol, &th, &mut dl);
+            let got = f.predict(vol, &th, &[], &mut dl);
             let want = if k == 3 {
                 th[0] + th[1] * e2 + th[2] * s
             } else {
@@ -260,7 +263,7 @@ fn each_filter_is_its_recursion() {
     let (mut z, mut l, mut fresh) = (0.0f64, bc.ln(), true);
     let mut dl = [0.0; 4];
     for y in &ys {
-        let got = f.predict(GarchVol::Egarch, &th, &mut dl);
+        let got = f.predict(GarchVol::Egarch, &th, &[], &mut dl);
         let news = if fresh {
             0.0
         } else {
@@ -280,7 +283,7 @@ fn each_filter_is_its_recursion() {
     let mut f = Filter::new(GarchVol::Figarch, 4, m, bc);
     let mut dl = [0.0; 4];
     for (t, y) in ys.iter().enumerate() {
-        let got = f.predict(GarchVol::Figarch, &th, &mut dl);
+        let got = f.predict(GarchVol::Figarch, &th, &[], &mut dl);
         let want = th[0] / (1.0 - th[3])
             + (1..=m)
                 .map(|j| lam[j] * if j <= t { ys[t - j] * ys[t - j] } else { bc })
@@ -309,7 +312,7 @@ fn each_sensitivity_is_its_variances_slope() {
             let mut dl = vec![0.0; k];
             ys.iter()
                 .map(|y| {
-                    let s = f.predict(vol, th, &mut dl);
+                    let s = f.predict(vol, th, &[], &mut dl);
                     f.push(vol, *y, s, &dl);
                     (s, dl.clone())
                 })
@@ -492,6 +495,7 @@ fn the_fit_finds_the_process() {
     for c in [
         cfg(GarchVol::Garch, GarchDist::Normal),
         GarchCfg {
+            n_inputs: 0,
             variance_targeting: true,
             ..cfg(GarchVol::Garch, GarchDist::Normal)
         },
@@ -573,47 +577,176 @@ fn wild_rows_leave_the_state_finite() {
     }
 }
 
-/// The forecast against its recursion written out: `ω + P f` for GARCH and
-/// GJR, and FIGARCH's weights over the forecasts and the ring, longhand.
+/// `Σ x` in double-double, rounded once: the sums' reference.
+fn exact_sum(xs: &[f64]) -> f64 {
+    let (mut hi, mut lo) = (0.0f64, 0.0f64);
+    for &x in xs {
+        let s = hi + x;
+        let bb = s - hi;
+        lo += (hi - (s - bb)) + (x - bb);
+        hi = s;
+        let t = hi + lo;
+        lo -= t - hi;
+        hi = t;
+    }
+    hi + lo
+}
+
+/// EGARCH's `E e^{c g(z)}` by Simpson's rule over `z` in `[−40, 40]`, the
+/// definition integrated with no closed form.
+fn mgf_by_quadrature(alpha: f64, gamma: f64, c: f64) -> f64 {
+    let n = 400_000;
+    let (a, b) = (-40.0f64, 40.0f64);
+    let h = (b - a) / n as f64;
+    let f = |z: f64| {
+        let g = alpha * (z.abs() - super::filter::ABS_Z) + gamma * z;
+        (c * g - 0.5 * z * z).exp() / (std::f64::consts::TAU).sqrt()
+    };
+    let mut terms = vec![f(a), f(b)];
+    for i in 1..n {
+        terms.push(f(a + i as f64 * h) * if i % 2 == 1 { 4.0 } else { 2.0 });
+    }
+    exact_sum(&terms) * h / 3.0
+}
+
+/// The forecasts of a started series, read on the row with `predict`,
+/// against their definitions written out: GARCH's and GJR's recursion `ω +
+/// P f`, FIGARCH's weights over the forecasts and
+/// the ring, EGARCH's log-variance and the product of `M`. GARCH, GJR and
+/// FIGARCH to the bit, EGARCH's `M` against its integral; horizon 1 is the
+/// row's variance itself, and each sum is the variances' to a rounding.
 #[test]
-fn the_forecast_is_the_variance_recursion_run_ahead() {
-    for vol in [GarchVol::Garch, GarchVol::Gjr, GarchVol::Figarch] {
+fn the_forecasts_are_their_definitions_written_out() {
+    let hs = vec![7, 1, 2, 30, 5];
+    for vol in [
+        GarchVol::Garch,
+        GarchVol::Gjr,
+        GarchVol::Egarch,
+        GarchVol::Figarch,
+    ] {
         let mut c = cfg(vol, GarchDist::Normal);
-        c.horizon = 5;
+        c.horizons = hs.clone();
         let n0 = start(&c);
         let ys = series_of(&c, n0 + 200, 18);
         let mut m = Garch::new(c).unwrap();
         run(&mut m, &ys[..n0 + 150], &vec![1.0; n0 + 150]);
-        assert!(m.started()[0]);
+        assert!(m.started()[0], "{vol:?}");
         let out = m.predict(&[], 1.0).pred;
-        let (s, fc) = (out[0], out[2]);
+        let s = out[0];
         let th = m.coefficients()[0].clone();
-        let want = if vol == GarchVol::Figarch {
-            let mm = 100;
-            let mut lam = vec![0.0; mm + 1];
-            figarch_weights(&th, mm, false, |j, l, _, _, _| lam[j] = l);
-            let ring = &m.series[0].filter;
-            let back = |j: usize| ring.ring[(ring.head + j - 1) % mm];
-            let mut f = vec![s];
-            for i in 1..5 {
-                let mut h = th[0] / (1.0 - th[3]);
-                for j in 1..=mm {
-                    h += lam[j] * if j <= i { f[i - j] } else { back(j - i) };
+        let mut f = vec![s];
+        match vol {
+            GarchVol::Figarch => {
+                let mm = 100;
+                let mut lam = vec![0.0; mm + 1];
+                figarch_weights(&th, mm, false, |j, l, _, _, _| lam[j] = l);
+                let ring = &m.series[0].filter;
+                let back = |j: usize| ring.ring[(ring.head + j - 1) % mm];
+                for i in 1..30 {
+                    let mut h = th[0] / (1.0 - th[3]);
+                    for j in 1..=mm {
+                        h += lam[j] * if j <= i { f[i - j] } else { back(j - i) };
+                    }
+                    f.push(h);
                 }
-                f.push(h);
             }
-            f[4]
-        } else {
-            let p = if vol == GarchVol::Gjr {
-                th[1] + 0.5 * th[2] + th[3]
+            GarchVol::Egarch => {
+                let (w, a, g, b) = (th[0], th[1], th[2], th[3]);
+                for h in 2..=30 {
+                    let lnf = (0..h - 1).fold(super::math::ln(s), |l, _| w + b * l);
+                    let prod: f64 = (0..h - 1)
+                        .map(|j| mgf_by_quadrature(a, g, b.powi(j)))
+                        .product();
+                    f.push(lnf.exp() * prod);
+                }
+            }
+            _ => {
+                let p = if vol == GarchVol::Gjr {
+                    th[1] + 0.5 * th[2] + th[3]
+                } else {
+                    th[1] + th[2]
+                };
+                for _ in 1..30 {
+                    let v = *f.last().unwrap();
+                    f.push(th[0] + p * v);
+                }
+            }
+        }
+        for (i, &h) in hs.iter().enumerate() {
+            let (got, sum) = (out[2 + 2 * i], out[3 + 2 * i]);
+            let want = f[h - 1];
+            if vol == GarchVol::Egarch && h > 1 {
+                assert!(
+                    (got - want).abs() <= 1e-12 * want,
+                    "{vol:?} h {h}: {got} {want}"
+                );
             } else {
-                th[1] + th[2]
-            };
-            (0..4).fold(s, |f, _| th[0] + p * f)
+                assert_eq!(got.to_bits(), want.to_bits(), "{vol:?} h {h}: {got} {want}");
+            }
+            if vol == GarchVol::Egarch {
+                let wsum = exact_sum(&f[..h]);
+                assert!(
+                    (sum - wsum).abs() <= 1e-12 * wsum,
+                    "{vol:?} h {h}: {sum} {wsum}"
+                );
+            } else {
+                // the forecasts' own sum to within one rounding
+                let wsum = exact_sum(&f[..h]);
+                assert!(
+                    (sum - wsum).abs() <= wsum * f64::EPSILON,
+                    "{vol:?} h {h}: {sum} {wsum}"
+                );
+            }
+        }
+        // horizon 1 is the row's variance, and the sum to it the same number
+        assert_eq!(out[4].to_bits(), s.to_bits(), "{vol:?}");
+        assert_eq!(out[5].to_bits(), s.to_bits(), "{vol:?}");
+        // the forecasts revert toward the long run: finite and positive
+        assert!(f.iter().all(|v| v.is_finite() && *v > 0.0), "{vol:?}");
+    }
+}
+
+/// EGARCH's `M(c)` against its integral over a grid of `c`, `α` and `γ`,
+/// and `M(0) = 1`.
+#[test]
+fn egarch_mgf_is_its_integral() {
+    for (a, g) in [(0.1, -0.05), (0.3, 0.2), (0.05, 0.0), (0.9, -0.6)] {
+        for c in [0.0, 0.01, 0.3, 0.97, 1.0] {
+            let got = super::horizons::egarch_mgf(a, g, c);
+            let want = mgf_by_quadrature(a, g, c);
+            assert!(
+                (got - want).abs() <= 1e-14 * want,
+                "{a} {g} {c}: {got} {want}"
+            );
+        }
+    }
+    assert_eq!(super::horizons::egarch_mgf(0.3, -0.2, 0.0), 1.0);
+}
+
+/// A state of before the horizons, whose `horizon` named one row count
+/// ahead (1 for none), loads as the one horizon it named.
+#[test]
+fn a_state_of_one_horizon_loads_as_its_horizons() {
+    let c = cfg(GarchVol::Garch, GarchDist::Normal);
+    let named = rmp_serde::to_vec_named(&c).unwrap();
+    let back: GarchCfg = rmp_serde::from_slice(&named).unwrap();
+    assert_eq!(back, c);
+    for (old, want) in [(3u64, vec![3usize]), (1, vec![])] {
+        // the map as a state of schema 71 wrote it: `horizon`, and neither
+        // `horizons` nor `max_horizon_work`
+        let rmpv::Value::Map(entries) = rmpv::decode::read_value(&mut &named[..]).unwrap() else {
+            panic!("a map")
         };
-        assert!((fc - want).abs() < 1e-12 * want, "{vol:?}: {fc} {want}");
-        // the forecast reverts toward the long-run variance
-        assert!(fc.is_finite() && fc > 0.0);
+        let mut entries: Vec<(rmpv::Value, rmpv::Value)> = entries
+            .into_iter()
+            .filter(|(k, _)| !matches!(k.as_str(), Some("horizons" | "max_horizon_work")))
+            .collect();
+        entries.push(("horizon".into(), old.into()));
+        let mut bytes = Vec::new();
+        rmpv::encode::write_value(&mut bytes, &rmpv::Value::Map(entries)).unwrap();
+        let back: GarchCfg = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(back.horizons, want, "horizon {old}");
+        assert_eq!(back.max_horizon_work, None);
     }
 }
 
@@ -625,6 +758,7 @@ fn the_state_is_bounded_by_its_settings() {
     assert_eq!(Garch::series_bytes(&c, 0), 168);
     assert_eq!(Garch::series_bytes(&c, 500), 168 + 8000);
     let t = GarchCfg {
+        n_inputs: 0,
         variance_targeting: true,
         ..c.clone()
     };
@@ -745,6 +879,7 @@ fn a_clock_span_start_closes_at_its_span() {
 fn a_state_of_the_wrong_shape_is_refused() {
     let ys = t_series(900, 22, 1.0);
     let mut m = Garch::new(GarchCfg {
+        n_inputs: 0,
         start_rows: 100,
         ..cfg(GarchVol::Gjr, GarchDist::T)
     })
@@ -825,13 +960,42 @@ fn the_settings_are_checked() {
         },
         "variance_targeting",
     );
-    refused(&|c| c.horizon = 0, "horizon");
+    refused(&|c| c.horizons = vec![1, 0], "at least 1");
+    refused(&|c| c.horizons = vec![5, 2, 5], "holds 5 twice");
+    refused(&|c| c.horizons = (1..=65).collect(), "at most 64");
+    refused(
+        &|c| c.max_horizon_work = Some(0),
+        "max_horizon_work must be above 0",
+    );
+    refused(
+        &|c| c.max_horizon_work = Some((1 << 30) + 1),
+        "at most 1073741824",
+    );
+    // the work: GARCH's 4 a step to 2^18 rows is 2^20, one more is past it
+    let ok = |f: &dyn Fn(&mut GarchCfg)| {
+        let mut c = cfg(GarchVol::Garch, GarchDist::Normal);
+        f(&mut c);
+        c.validate()
+    };
+    assert!(ok(&|c| c.horizons = vec![1 << 18]).is_ok());
+    refused(
+        &|c| c.horizons = vec![(1 << 18) + 1],
+        "would take 1048580 multiply-adds a target a row (262145 rows of 4 each), past \
+         max_horizon_work of 1048576. Lower the largest horizon to 262144",
+    );
+    assert!(
+        ok(&|c| {
+            c.horizons = vec![(1 << 18) + 1];
+            c.max_horizon_work = Some(1_048_580)
+        })
+        .is_ok()
+    );
     refused(
         &|c| {
             c.vol = GarchVol::Egarch;
-            c.horizon = 2
+            c.horizons = vec![10_000]
         },
-        "one row ahead",
+        "1640000 multiply-adds",
     );
     refused(&|c| c.min_weight = -1.0, "min_weight");
     refused(&|c| c.max_state_bytes = Some(0), "above 0");
@@ -920,13 +1084,13 @@ fn the_lr_cut_is_chi_squared_at_its_restrictions() {
         GarchVol::Egarch,
         GarchVol::Figarch,
     ] {
-        let df = restrictions(vol);
+        let df = restrictions(vol, 0);
         assert_eq!(df, if vol == GarchVol::Garch { 2 } else { 3 }, "{vol:?}");
-        let cut = lr_cut(vol);
+        let cut = lr_cut(vol, 0);
         assert!((survival(df, cut) - 0.001).abs() < 1e-15, "{vol:?}: {cut}");
-        assert!(identified(vol, cut), "{vol:?}");
-        assert!(!identified(vol, cut.next_down()), "{vol:?}");
-        assert!(!identified(vol, f64::NAN), "{vol:?}");
+        assert!(identified(vol, 0, cut), "{vol:?}");
+        assert!(!identified(vol, 0, cut.next_down()), "{vol:?}");
+        assert!(!identified(vol, 0, f64::NAN), "{vol:?}");
     }
 }
 
@@ -994,7 +1158,7 @@ fn the_lr_statistic_is_twice_the_gain_at_kish_scale() {
         (GarchVol::Gjr, GarchDist::Normal),
         (GarchVol::Garch, GarchDist::T),
     ] {
-        let got = fit(vol, dist, false, 0, &unit, bc, v).unwrap();
+        let got = fit(vol, dist, false, 0, &unit, &[], bc, v).unwrap();
         // f₀ by the definition: every row's variance the constant
         let k = vol.k();
         let m = dist.shape_len();
@@ -1002,7 +1166,7 @@ fn the_lr_statistic_is_twice_the_gain_at_kish_scale() {
             let (mut f, mut filter) = (0.0, Filter::new(vol, k, 0, bc));
             let mut dl = [0.0; 4];
             for &e in &ys {
-                let s = filter.predict(vol, &theta[..k], &mut dl[..k]);
+                let s = filter.predict(vol, &theta[..k], &[], &mut dl[..k]);
                 f += match m {
                     0 => -0.5 * (libm::log(std::f64::consts::TAU) + libm::log(s) + e * e / s),
                     _ => super::dist::log_density(e / s.sqrt(), theta[k], 0.0) - 0.5 * libm::log(s),
@@ -1035,10 +1199,14 @@ fn the_lr_statistic_is_twice_the_gain_at_kish_scale() {
             (got.lr - 2.0 * (f - f0)).abs() < 1e-8 * (1.0 + got.lr),
             "{vol:?} {dist:?}"
         );
-        assert!(got.lr > 2.0 * lr_cut(vol), "{vol:?} {dist:?}: {}", got.lr);
+        assert!(
+            got.lr > 2.0 * lr_cut(vol, 0),
+            "{vol:?} {dist:?}: {}",
+            got.lr
+        );
         // every weight scaled by 3: the same fit, the same statistic
         let tripled: Vec<[f64; 2]> = ys.iter().map(|&e| [e, 3.0]).collect();
-        let same = fit(vol, dist, false, 0, &tripled, bc, v).unwrap();
+        let same = fit(vol, dist, false, 0, &tripled, &[], bc, v).unwrap();
         assert!((same.lr - got.lr).abs() < 1e-9 * got.lr, "{vol:?} {dist:?}");
         assert_eq!(same.sound, got.sound, "{vol:?} {dist:?}");
     }
@@ -1058,17 +1226,27 @@ fn a_start_waits_under_the_lr_cut_and_starts_over_it() {
         for n in (60..=1200).step_by(60) {
             let rows: Vec<[f64; 2]> = ys[..n].iter().map(|&e| [e, 1.0]).collect();
             let v = ys[..n].iter().map(|e| e * e).sum::<f64>() / n as f64;
-            let lr = fit(vol, GarchDist::Normal, false, 0, &rows, backcast(&rows), v)
-                .unwrap()
-                .lr;
+            let lr = fit(
+                vol,
+                GarchDist::Normal,
+                false,
+                0,
+                &rows,
+                &[],
+                backcast(&rows),
+                v,
+            )
+            .unwrap()
+            .lr;
             let c = GarchCfg {
+                n_inputs: 0,
                 start_rows: n,
                 max_state_bytes: Some(Garch::state_bytes(&cfg(vol, GarchDist::Normal), n)),
                 ..cfg(vol, GarchDist::Normal)
             };
             let mut m = Garch::new(c).unwrap();
             let out = run(&mut m, &ys[..=n], &vec![1.0; n + 1]);
-            let pass = identified(vol, lr);
+            let pass = identified(vol, 0, lr);
             sides[usize::from(pass)] += 1;
             assert_eq!(m.started()[0], pass, "{vol:?} {n}: {lr}");
             assert_eq!(m.no_effect(), !pass, "{vol:?} {n}: {lr}");

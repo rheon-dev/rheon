@@ -281,6 +281,14 @@ pub enum ModelKind {
             skip_serializing_if = "rheon_core::CovarianceForm::is_covariance"
         )]
         covariance_form: rheon_core::CovarianceForm,
+        /// The forecasts' horizons, each a span of the clock past the row,
+        /// as `holt`'s are. Absent reports none.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "one_or_more_horizons"
+        )]
+        horizons: Option<Vec<SpanHorizon>>,
     },
     /// Huber regression (docs/PLAN.md §4.5).
     Huber {
@@ -663,6 +671,16 @@ pub enum ModelKind {
         /// absent: the trend is on.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trend: Option<bool>,
+        /// The forecasts' horizons, each a span of the clock past the row
+        /// (a number of clock units, rows without a clock, or a duration),
+        /// labelled `h<number>` or by the duration as written, or a `[name,
+        /// span]` pair labelled by its name. Absent reports none.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "one_or_more_horizons"
+        )]
+        horizons: Option<Vec<SpanHorizon>>,
     },
     Rls {
         /// Prior strength: `A0 = delta I`, i.e. `P0 = I / delta`, the
@@ -1490,8 +1508,9 @@ pub enum ModelKind {
     /// zero-mean return series, its parameters estimated online by recursive
     /// quasi-maximum likelihood after a start fitted by batch likelihood
     /// (`rheon_core::Garch`). Per target, the variance, the standardized
-    /// residual and, with `horizon`, the forecast; the parameters in `coef`.
-    /// No features.
+    /// residual and, with `horizons`, the forecasts; the parameters in
+    /// `coef`. Its features, if any, are the inputs of the variance
+    /// equation (GARCH-X), read on the row whose variance they enter.
     #[serde(rename = "garch")]
     Garch {
         /// The process: `"garch"` (the default), `"gjr"`, `"egarch"` or
@@ -1515,9 +1534,16 @@ pub enum ModelKind {
         /// of the clock column's units, or a duration on a temporal clock.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         start_span: Option<Span>,
-        /// The forecast's rows ahead; absent is 1, the variance alone.
+        /// The forecasts' horizons in rows, each a count (its fields
+        /// labelled `h<n>`) or a `[name, count]` pair (labelled by the
+        /// name): the variance `count − 1` rows past the row and the sum of
+        /// the variances over those rows. Absent reports none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        horizon: Option<usize>,
+        horizons: Option<Vec<Horizon>>,
+        /// The multiply-adds a target's forecasts may take a row; absent is
+        /// 2^20.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_horizon_work: Option<u64>,
         /// The bytes a group's state may hold, the start's buffer included.
         /// Default 256 KB, at most 64 MiB.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1909,6 +1935,164 @@ impl ArLags {
             ArLags::Order(p) if *p > rheon_core::MAX_LAG => vec![*p],
             ArLags::Order(p) => (1..=*p).collect(),
             ArLags::List(l) => l.clone(),
+        }
+    }
+}
+
+/// One forecast horizon on the clock (`holt`'s `horizons`): a span, its
+/// fields labelled `h<number>` or by the duration as written, or a `[name,
+/// span]` pair labelled by the name.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum SpanHorizon {
+    Span(Span),
+    Named(String, Span),
+}
+
+impl<'de> Deserialize<'de> for SpanHorizon {
+    /// A span as [`Span`] reads one (its errors, a word that is no duration
+    /// named as such), or a `[name, span]` pair.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = SpanHorizon;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a span of the clock, or a [name, span] pair")
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<SpanHorizon, E> {
+                Ok(SpanHorizon::Span(Span::Units(v)))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<SpanHorizon, E> {
+                Ok(SpanHorizon::Span(Span::Units(v as f64)))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<SpanHorizon, E> {
+                Ok(SpanHorizon::Span(Span::Units(v as f64)))
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<SpanHorizon, E> {
+                use serde::de::IntoDeserializer;
+                let d: serde::de::value::StrDeserializer<'_, E> = v.into_deserializer();
+                Span::deserialize(d).map(SpanHorizon::Span)
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<SpanHorizon, A::Error> {
+                use serde::de::Error;
+                let name: String = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(0, &"a [name, span] pair"))?;
+                let span: Span = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(1, &"a [name, span] pair"))?;
+                Ok(SpanHorizon::Named(name, span))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// `horizons` read as one span or a list of them (a span or a `[name,
+/// span]` pair each), as `kernel_half_lives` reads one or a list.
+fn one_or_more_horizons<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Vec<SpanHorizon>>, D::Error> {
+    struct V;
+    impl<'de> serde::de::Visitor<'de> for V {
+        type Value = Vec<SpanHorizon>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a span of the clock, or a list of spans or [name, span] pairs")
+        }
+        fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            Ok(vec![SpanHorizon::Span(Span::Units(v))])
+        }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(vec![SpanHorizon::Span(Span::Units(v as f64))])
+        }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(vec![SpanHorizon::Span(Span::Units(v as f64))])
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            use serde::de::IntoDeserializer;
+            let d: serde::de::value::StrDeserializer<'_, E> = v.into_deserializer();
+            Span::deserialize(d).map(|s| vec![SpanHorizon::Span(s)])
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut out = Vec::new();
+            while let Some(h) = seq.next_element::<SpanHorizon>()? {
+                out.push(h);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_any(V).map(Some)
+}
+
+impl SpanHorizon {
+    pub fn span(&self) -> &Span {
+        match self {
+            SpanHorizon::Span(s) | SpanHorizon::Named(_, s) => s,
+        }
+    }
+
+    /// The label its fields carry: `h<number>`, the duration as written,
+    /// or its name.
+    pub fn label(&self) -> String {
+        match self {
+            SpanHorizon::Span(Span::Units(v)) => format!("h{}", num_label(*v)),
+            SpanHorizon::Span(s) => s.label(),
+            SpanHorizon::Named(name, _) => name.clone(),
+        }
+    }
+}
+
+/// The labels of a list of horizons checked: each non-empty, none beginning
+/// with `sum` (which `<quantity>_sum_<label>` would confuse) and none given
+/// twice. `who` names the model in the message.
+pub fn check_horizon_labels(who: &str, labels: &[String]) -> Result<(), String> {
+    for (i, l) in labels.iter().enumerate() {
+        if l.is_empty() || l.starts_with("sum") {
+            return Err(format!(
+                "{who}: a horizon's name must be non-empty and not begin with \"sum\", but one \
+                 is {l:?}. It names a field and the sum's field beside it, which a name \
+                 beginning with \"sum\" would confuse. Rename it."
+            ));
+        }
+        if labels[..i].contains(l) {
+            return Err(format!(
+                "{who}: two horizons are labeled {l:?}. Each labels its fields, so each label is \
+                 given once. Rename one, or leave out the second."
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// One forecast horizon of a spec (`garch`'s `horizons`): a count of rows,
+/// its fields labelled `h<count>`, or a `[name, count]` pair, labelled by
+/// the name (a Python dict's item).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Horizon {
+    Rows(usize),
+    Named(String, usize),
+}
+
+impl Horizon {
+    /// The rows it counts, the row read included.
+    pub fn rows(&self) -> usize {
+        match self {
+            Horizon::Rows(n) | Horizon::Named(_, n) => *n,
+        }
+    }
+
+    /// The label its fields carry: `h<count>`, or its name.
+    pub fn label(&self) -> String {
+        match self {
+            Horizon::Rows(n) => format!("h{n}"),
+            Horizon::Named(name, _) => name.clone(),
         }
     }
 }
@@ -3130,6 +3314,34 @@ impl Spec {
         self.targets.len()
     }
 
+    /// The labels of a regression's forecasts at horizons (`holt`,
+    /// `kalman`), in order; empty for every other spec.
+    pub fn forecast_labels(&self) -> Vec<String> {
+        match &self.model {
+            ModelKind::Holt { horizons, .. } | ModelKind::Kalman { horizons, .. } => {
+                horizons.iter().flatten().map(SpanHorizon::label).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// What a regression reports at each horizon, in its slot order: the
+    /// forecast and its integral (`holt`), and its variance (`kalman`).
+    pub fn forecast_kinds(&self) -> &'static [&'static str] {
+        match &self.model {
+            ModelKind::Holt { .. } => &["forecast", "forecast_sum"],
+            ModelKind::Kalman { .. } => &["forecast", "forecast_sum", "forecast_var"],
+            _ => &[],
+        }
+    }
+
+    /// The slots a regression's forecasts take after its predictions, per
+    /// model instance: each target's [`Self::forecast_kinds`] at each
+    /// horizon.
+    pub fn forecast_slots(&self) -> usize {
+        self.m() * self.forecast_kinds().len() * self.forecast_labels().len()
+    }
+
     /// Decay values, one per half-life grid entry (one model instance each).
     pub fn decays(&self) -> Result<Vec<(String, Decay)>, String> {
         // A model that takes no decay has one undecayed instance whatever
@@ -3885,14 +4097,9 @@ impl Spec {
                 }
             }
         } else if let ModelKind::Garch { .. } = &self.model {
-            if !self.features.is_empty() {
-                no.refuse(format!(
-                    "spec {name:?}: garch takes no features, but features lists {}: each of \
-                     its targets is a return series whose variance it models. Put the return \
-                     columns in targets, and leave out features.",
-                    columns_counted(self.features.len())
-                ));
-            }
+            // Its features are optional: the inputs of a GARCH-X's variance
+            // equation, none for a plain GARCH; the model checks their
+            // count and the process that takes them.
         } else if let ModelKind::Dcc { .. } = &self.model {
             if !self.features.is_empty() {
                 no.refuse(format!(

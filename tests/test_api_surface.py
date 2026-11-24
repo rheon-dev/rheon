@@ -312,7 +312,7 @@ def describe_api(cli: Path | None = None) -> str:
         ("deco", dict(features=["x0", "x1", "x2"], half_life=100.0)),
         ("audit", dict(columns=["x0", "x1"], pairs=True)),
         ("hawkes", dict(targets=["y", "z"], kernel_decays=[1.0, 5.0], half_life=100.0)),
-        ("garch", dict(targets=["y", "z"], vol="gjr", dist="t", horizon=3)),
+        ("garch", dict(targets=["y", "z"], vol="gjr", dist="t", horizons=[3])),
         ("dcc", dict(targets=["y", "z", "w"], asymmetric=True, half_life=float("inf"))),
         ("realized", dict(targets=["y", "z"], half_life=100.0, lm_window=30)),
         ("pca", dict(features=["x0", "x1", "x2"], n_components=2, half_life=100.0)),
@@ -442,7 +442,8 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("hawkes", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
     ("hawkes", {"kernel_decays": None, "kernel_half_lives": [0.5, 4.0]}),
     ("garch", {"vol": "figarch", "start_rows": 2000}),
-    ("garch", {"variance_targeting": True, "horizon": 5}),
+    ("garch", {"variance_targeting": True, "horizons": [5]}),
+    ("garch", {"vol": "egarch", "horizons": {"week": 5}, "max_horizon_work": 5000}),
     ("garch", {"start_rows": None, "start_span": 500.0}),
     ("dcc", {"asymmetric": True, "a": 0.03, "b": 0.9, "g": 0.04}),
     (

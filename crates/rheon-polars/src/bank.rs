@@ -2140,7 +2140,8 @@ pub struct SpecDerived {
     nc: usize,
     /// Targets.
     m: usize,
-    /// Slots one instance owns: `m * nc`, or the statistic count for `ew_cov`.
+    /// Slots one instance owns: `m * nc` and its forecasts' (`holt`), or the
+    /// statistic count for `ew_cov`.
     per_model: usize,
     /// For a `seqtest` that compares two specs: their indices in the bank,
     /// `(a, b)`. Resolved once in [`Bank::new`], which also checks that the
@@ -2170,7 +2171,8 @@ impl SpecDerived {
                 .count()
                 / n_models
         } else {
-            m * nc
+            // a regression's forecasts at horizons ride after its predictions
+            m * nc + spec.forecast_slots()
         };
         Self {
             schema,

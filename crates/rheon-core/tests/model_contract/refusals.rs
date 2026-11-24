@@ -308,9 +308,9 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
         ),
         refused(
             Garch::new(garch_cfg()).unwrap(),
-            "horizon",
-            0.into(),
-            "horizon must be at least 1",
+            "horizons",
+            rmpv::Value::Array(vec![2.into(), 0.into()]),
+            "each of horizons must be at least 1",
         ),
         refused(
             Dcc::new(dcc_cfg()).unwrap(),
@@ -888,6 +888,7 @@ fn fn_body<'a>(src: &'a str, signature: &str) -> Option<&'a str> {
 #[test]
 fn restoring_the_wrong_model_is_an_error_that_names_both() {
     let holt = Holt::new(HoltCfg {
+        horizons: Vec::new(),
         n_targets: 1,
         level_half_life: 10.0,
         trend_half_life: 40.0,

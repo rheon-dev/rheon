@@ -287,6 +287,7 @@ fn a_model_without_a_window_could_refuse_nothing() {
     check(
         "holt",
         Holt::new(HoltCfg {
+            horizons: Vec::new(),
             n_targets: 1,
             level_half_life: 2.0,
             trend_half_life: 4.0,

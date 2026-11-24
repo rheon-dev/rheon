@@ -80,6 +80,20 @@
 //! irregular clock is handled correctly instead of every row counting the
 //! same.
 //!
+//! **Forecasts at horizons** (`horizons`, spans of the clock `Δ ≥ 0` past
+//! the row read): from the level and trend as they stand before the row,
+//!
+//! ```text
+//! f(Δ) = l + b·(s + Δ)                         f(0) = pred
+//! F(Δ) = ∫_0^Δ f(u) du = Δ·(l + b·(s + Δ/2))
+//! ```
+//!
+//! the forecast `Δ` past the row and its integral over the span. Nothing
+//! decays across the span: the half-lives weigh the evidence behind `l`
+//! and `b`, not the extrapolation. A horizon is a span of the clock, never a
+//! count of rows: the clock of rows to come is not known. Each target's
+//! slots follow the predictions, two a horizon.
+//!
 //! **A row the model cannot learn from is transparent.** A null target, or a
 //! zero weight -- and a weight below the smallest normal double, `2⁻¹⁰²²`,
 //! which is read as 0 -- leaves the level and slope where the last observation put
@@ -111,7 +125,17 @@ pub struct HoltCfg {
     /// has none and loads with the trend on, what it was produced under.
     #[serde(default = "default_true")]
     pub trend: bool,
+    /// The forecasts' horizons, each a span of the clock `Δ ≥ 0` past the
+    /// row read, in its units: the forecast `l + b·(s + Δ)` and its integral
+    /// over the span (see the module docs). Empty reports none; skipped
+    /// then, so a configuration of before it is written as it was, and,
+    /// being the last field, a state written as an array keeps its places.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub horizons: Vec<f64>,
 }
+
+/// The most horizons a `holt` spec may ask for.
+pub const HOLT_MAX_HORIZONS: usize = 64;
 
 fn default_true() -> bool {
     true
@@ -143,6 +167,33 @@ impl HoltCfg {
         // A NaN `min_weight` is never reached, and a negative one is no
         // floor; `inf` never predicts, which is legal (review round 5, C6).
         no.take(crate::model::check_min_weight("holt", self.min_weight));
+        if self.horizons.len() > HOLT_MAX_HORIZONS {
+            no.refuse(format!(
+                "holt: horizons may hold at most {HOLT_MAX_HORIZONS} spans, but it holds {}. Each \
+                 adds two fields a target to every row. Ask for {HOLT_MAX_HORIZONS} or fewer.",
+                self.horizons.len()
+            ));
+        }
+        if let Some(h) = self
+            .horizons
+            .iter()
+            .find(|h| !(h.is_finite() && **h >= 0.0))
+        {
+            no.refuse(format!(
+                "holt: each of horizons must be a finite span of the clock of 0 or more, but one \
+                 is {h}. A horizon is the clock past the row read: 0 is the row's own forecast. \
+                 Give a span of 0 or more."
+            ));
+        }
+        for (i, h) in self.horizons.iter().enumerate() {
+            if self.horizons[..i].contains(h) {
+                no.refuse(format!(
+                    "holt: horizons holds {h} twice. Each horizon's fields are named by it, so it \
+                     may be asked for once. Leave out the second."
+                ));
+                break;
+            }
+        }
         no.finish()
     }
 }
@@ -274,6 +325,19 @@ impl Holt {
         &self.cfg
     }
 
+    /// Target `j`'s forecasts at the horizons, from its level and trend as
+    /// they stand and the clock `s` since its last observation, this row's
+    /// included, into `out` (two slots a horizon): the forecast `Δ` past the
+    /// row, `l + b·(s + Δ)`, and its integral over the span, `Δ·(l + b·(s +
+    /// Δ/2))`. At `Δ = 0` the first is the row's own prediction, to the bit.
+    fn forecasts_into(&self, j: usize, s: f64, out: &mut [f64]) {
+        let (l, b) = (self.level[j], self.trend[j]);
+        for (k, &dt) in self.cfg.horizons.iter().enumerate() {
+            out[2 * k] = l + b * (s + dt);
+            out[2 * k + 1] = dt * (l + b * (s + 0.5 * dt));
+        }
+    }
+
     pub fn level(&self) -> &[f64] {
         &self.level
     }
@@ -351,11 +415,11 @@ impl OnlineModel for Holt {
 
         let n_eff = self.w_sum;
         let ready = n_eff >= self.cfg.min_weight;
-        let pred = &mut out.pred;
-        pred.clear();
-        pred.resize(m, f64::NAN);
-        for j in 0..m {
-            let yj = y[j].filter(|v| v.is_finite() && weight > 0.0);
+        let per = 2 * self.cfg.horizons.len();
+        out.pred.clear();
+        out.pred.resize(m * (1 + per), f64::NAN);
+        for (j, yv) in y.iter().enumerate().take(m) {
+            let yj = yv.filter(|v| v.is_finite() && weight > 0.0);
             if !self.seen[j] {
                 // Nothing to extrapolate from yet: the first observation is
                 // the level, at its own weight.
@@ -375,7 +439,11 @@ impl OnlineModel for Holt {
             let s = self.since[j] + d_clock;
             let p = self.level[j] + self.trend[j] * s;
             if ready {
-                pred[j] = p;
+                out.pred[j] = p;
+                if per > 0 {
+                    let at = m + j * per;
+                    self.forecasts_into(j, s, &mut out.pred[at..at + per]);
+                }
             }
             let Some(yj) = yj else {
                 // Nothing to learn from: carry the clock to the next
@@ -524,11 +592,18 @@ impl OnlineModel for Holt {
 
     fn predict(&self, _x: &[f64], d_clock: f64) -> Step {
         let n_eff = self.w_sum;
-        let mut pred = vec![f64::NAN; self.cfg.n_targets];
+        let m = self.cfg.n_targets;
+        let per = 2 * self.cfg.horizons.len();
+        let mut pred = vec![f64::NAN; m * (1 + per)];
         if n_eff >= self.cfg.min_weight {
-            for (j, p) in pred.iter_mut().enumerate() {
+            for j in 0..m {
                 if self.seen[j] {
-                    *p = self.level[j] + self.trend[j] * (self.since[j] + d_clock);
+                    let s = self.since[j] + d_clock;
+                    pred[j] = self.level[j] + self.trend[j] * s;
+                    if per > 0 {
+                        let at = m + j * per;
+                        self.forecasts_into(j, s, &mut pred[at..at + per]);
+                    }
                 }
             }
         }
@@ -588,6 +663,12 @@ impl OnlineModel for Holt {
     fn n_features(&self) -> usize {
         0
     }
+
+    /// A prediction a target, then each target's forecasts at the horizons,
+    /// two a horizon.
+    fn n_outputs(&self) -> usize {
+        self.cfg.n_targets * (1 + 2 * self.cfg.horizons.len())
+    }
 }
 
 #[cfg(test)]
@@ -620,6 +701,7 @@ mod tests {
 
     fn cfg(level: f64, trend: f64) -> HoltCfg {
         HoltCfg {
+            horizons: Vec::new(),
             n_targets: 1,
             level_half_life: level,
             trend_half_life: trend,
@@ -829,6 +911,7 @@ mod tests {
             .collect();
         ys[5] = None;
         let c = HoltCfg {
+            horizons: Vec::new(),
             n_targets: 1,
             level_half_life: 4.0,
             trend_half_life: 9.0,
@@ -859,6 +942,7 @@ mod tests {
     #[test]
     fn n_eff_decays_on_the_clock_and_gates_output() {
         let c = HoltCfg {
+            horizons: Vec::new(),
             n_targets: 1,
             level_half_life: 10.0,
             trend_half_life: 40.0,
@@ -972,6 +1056,7 @@ mod tests {
         // `n_targets` and the per-target loop: two targets with unrelated
         // series must not contaminate each other, and both must be reported.
         let c = HoltCfg {
+            horizons: Vec::new(),
             n_targets: 2,
             level_half_life: 8.0,
             trend_half_life: 30.0,
@@ -1739,6 +1824,7 @@ mod tests {
         const N: usize = 8;
         let run = |level: f64, trend: f64| {
             let mut m = Holt::new(HoltCfg {
+                horizons: Vec::new(),
                 n_targets: N,
                 level_half_life: level,
                 trend_half_life: trend,
@@ -1954,6 +2040,55 @@ mod tests {
         }
     }
 
+    /// The forecasts at horizons, task 559: each target's two a horizon
+    /// after the predictions, `l + b·(s + Δ)` and `Δ·(l + b·(s + Δ/2))` from
+    /// the level and trend before the row, to the bit; `Δ = 0` is the row's
+    /// prediction; `predict` reads what `step` writes.
+    #[test]
+    fn the_forecasts_are_the_line_run_ahead_and_its_integral() {
+        use crate::OnlineModel;
+        let spans = vec![0.0, 2.5, 40.0];
+        let mut m = Holt::new(HoltCfg {
+            horizons: spans.clone(),
+            n_targets: 2,
+            ..cfg(5.0, 20.0)
+        })
+        .unwrap();
+        assert_eq!(m.n_outputs(), 2 * (1 + 6));
+        let mut state = 9u64;
+        for i in 0..300 {
+            let d = 0.5 + (lcg(&mut state) + 1.0) * 0.5;
+            let y0 = 1.0 + 0.3 * i as f64 + lcg(&mut state);
+            let y1 = -2.0 + 0.1 * i as f64 + lcg(&mut state);
+            let (l, b) = (m.level.clone(), m.trend.clone());
+            let since = m.since.clone();
+            let read = m.predict(&[], d).pred;
+            let got = m.step(&[], &[Some(y0), Some(y1)], d, 1.0).pred;
+            assert_eq!(got.len(), 14);
+            assert_eq!(
+                got.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                read.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                "row {i}: predict and step"
+            );
+            if i == 0 {
+                assert!(got.iter().all(|v| v.is_nan()), "nothing to extrapolate");
+                continue;
+            }
+            for j in 0..2 {
+                let s = since[j] + d;
+                for (k, &dt) in spans.iter().enumerate() {
+                    let at = 2 + j * 6 + 2 * k;
+                    assert_eq!(got[at].to_bits(), (l[j] + b[j] * (s + dt)).to_bits());
+                    let area = dt * (l[j] + b[j] * (s + 0.5 * dt));
+                    assert_eq!(got[at + 1].to_bits(), area.to_bits());
+                }
+                // Δ = 0 is the prediction, and its integral 0
+                assert_eq!(got[2 + j * 6].to_bits(), got[j].to_bits());
+                assert_eq!(got[3 + j * 6], 0.0);
+            }
+        }
+    }
+
     /// Scaling every weight by a power of two moves no prediction past
     /// rounding while the line fit's spread is inside the doubles (review
     /// 2026-11-23, REG-5): it was formed as `S0 · w · ā² / S0'`, whose
@@ -1994,5 +2129,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A horizon below 0, not finite, given twice, or too many, is refused.
+    #[test]
+    fn horizons_are_refused_with_a_reason() {
+        let bad = |h: Vec<f64>, says: &str| {
+            let e = Holt::new(HoltCfg {
+                horizons: h,
+                ..cfg(5.0, 20.0)
+            })
+            .unwrap_err();
+            assert!(e.contains(says), "{says}: {e}");
+        };
+        bad(vec![-1.0], "0 or more");
+        bad(vec![f64::NAN], "0 or more");
+        bad(vec![f64::INFINITY], "finite");
+        bad(vec![2.0, 1.0, 2.0], "holds 2 twice");
+        bad((0..65).map(f64::from).collect(), "at most 64");
     }
 }

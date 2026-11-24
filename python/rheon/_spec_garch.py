@@ -17,13 +17,15 @@ def garch(
     name: str,
     *,
     targets: TargetList,
+    features: list[str] | None = None,
     vol: Literal["garch", "gjr", "egarch", "figarch"] = "garch",
     dist: Literal["normal", "t", "skewt"] = "normal",
     truncation: int | None = None,
     variance_targeting: bool = False,
     start_rows: int | None = None,
     start_span: float | Duration | None = None,
-    horizon: int = 1,
+    horizons: list[int] | dict[str, int] | None = None,
+    max_horizon_work: int | None = None,
     max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
@@ -50,6 +52,20 @@ def garch(
 
     This model's own parameters:
 
+    ``features``
+        The inputs of the variance equation, GARCH-X: each column's value
+        on a row enters that row's variance, ``π'x_t``, with a coefficient
+        ``π`` of its own learned beside the process's. The row's own value
+        is read, as every model reads its features, so lag a column that
+        measures the day before (a realized variance, a volume) to make it
+        known before the row's return. Under ``"garch"`` and ``"gjr"`` each
+        ``π`` is at least 0 and an input must be at least 0, so the variance
+        stays positive: a row with an input below 0 reports nothing and is
+        learned as a row of weight 0 (``withheld_reason``
+        ``negative_input``), as a row with a null feature is. Under
+        ``"egarch"`` the input enters the log-variance, and ``π`` and the
+        input take any sign. ``"figarch"`` and ``variance_targeting`` take
+        none. At most 8. Default none.
     ``vol``
         The process: ``"garch"``, the default, GARCH(1,1); ``"gjr"``, with a
         leverage term for negative returns; ``"egarch"``, in the logarithm
@@ -94,15 +110,35 @@ def garch(
         rows as it held. How many rows the span holds, the data decides, so
         its bytes are checked as the rows go in (see
         ``max_state_bytes``).
-    ``horizon``
-        Report the variance this many rows ahead too, as ``forecast_<t>``.
-        Default 1, the variance alone. ``vol="egarch"`` takes 1 only: its
-        forecast past one row has no closed form.
+    ``horizons``
+        The variance forecasts to report, each a count of rows ``h`` from
+        the row read, its own included: the variance of the return ``h - 1``
+        rows past this one, and the sum of the variances over those ``h``
+        rows, the variance of the ``h``-row return. Both are read before
+        the row is learned, from the rows before it, as ``variance_<t>`` is,
+        and horizon 1 is ``variance_<t>`` itself. A list labels each
+        horizon's fields ``h<h>`` (``horizons=[1, 5, 21]`` gives
+        ``variance_h5_<t>`` and ``variance_sum_h5_<t>``); a dict names them
+        (``horizons={"week": 5, "month": 21}`` gives ``variance_month_<t>``).
+        Every process takes them, EGARCH included. They count rows, never a
+        span of the clock: the recursion steps once a learned row, however
+        far apart the rows are, so a span of the clock holds as many steps as
+        the data puts in it and has no forecast. At most 64; a name must not
+        begin with ``"sum"``. Default none.
+    ``max_horizon_work``
+        The work a target's forecasts may take a row, in multiply-adds: the
+        largest horizon times one step's work, 4 for ``"garch"`` and
+        ``"gjr"``, ``truncation + 2`` for ``"figarch"`` and 164 for
+        ``"egarch"`` (its step calls ``exp`` and ``erfc`` five times, each
+        counted as 32). A spec past it is refused, naming the work it would
+        take. Default 2^20, ``1048576``, which holds ``"garch"`` to horizons
+        of 262,144 rows, ``"egarch"`` to 6,393 and ``"figarch"`` at its
+        default truncation to 1,046; at most 2^30.
     ``max_state_bytes``
         The bytes a group's state may hold, the start's buffer included (16
-        bytes a row until it is fitted). A spec whose start or FIGARCH ring
-        is past it is refused. A ``start_span`` start is checked as the rows
-        go in: the first row to take a group past half of it raises a
+        bytes a row until it is fitted, and 8 more for each input). A spec
+        whose start or FIGARCH ring is past it is refused. A ``start_span``
+        start is checked as the rows go in: the first row to take a group past half of it raises a
         warning, once for the group, and the row that would take it past
         the cap stops the run with an error naming the group and the bytes.
         A start that waits after a try keeps at most each target's share
@@ -123,9 +159,15 @@ def garch(
     ``std_resid_<t>``
         Per target: the row's return over the square root of its variance,
         null where either is.
-    ``forecast_<t>``
-        Per target, with ``horizon`` above 1: the variance ``horizon - 1``
-        rows past this one, from the same rows as ``variance_<t>``.
+    ``variance_<h>_<t>``
+        Per target and horizon: the variance of the return ``h - 1`` rows
+        past this one, from the same rows as ``variance_<t>``, each input
+        past the row held at its weighted mean over the rows learned. Null
+        where the variance is.
+    ``variance_sum_<h>_<t>``
+        Per target and horizon: the sum of the variances over the ``h``
+        rows from this one, this row's included. Null where the variance
+        is.
     ``weight_sum``
         The weight the model has learned before the row: every learned
         row's weight, the start's included, with no decay.
@@ -134,19 +176,23 @@ def garch(
     ``coef``
         Per target, after the row: ``omega``, then ``alpha``, ``gamma``
         (``gjr``, ``egarch``) and ``beta``, or FIGARCH's ``omega``, ``phi``,
-        ``d`` and ``beta``; then ``nu`` for a t, and ``lambda`` for a
-        skewed t. Null before the start. :func:`coef_index` names them.
+        ``d`` and ``beta``; then ``pi_<f>`` for each input ``f``; then
+        ``nu`` for a t, and ``lambda`` for a skewed t. Null before the
+        start. :func:`coef_index` names them.
 
     .. rubric:: Raises
 
-    As every builder does (:mod:`rheon.spec`); ``TypeError`` for
-    ``features``, which this model does not take; and ``ValueError`` naming
-    the problem for ``vol`` or ``dist`` not one of the words above, a t on
+    As every builder does (:mod:`rheon.spec`); and ``ValueError`` naming
+    the problem for ``vol`` or ``dist`` not one of the words above,
+    ``features`` on ``figarch`` or beside ``variance_targeting``, or more
+    than 8 of them, a t on
     ``egarch`` or ``figarch``, a skewed t on ``gjr``, ``variance_targeting``
     on any form but ``garch`` with normal innovations, ``truncation`` on a
     process but FIGARCH or below 1, ``start_rows`` below its floor or beside
-    ``start_span``, ``start_span`` not finite or not above 0, ``horizon``
-    below 1 or above 1 on ``egarch``, ``half_life`` or ``lam``, and a state
+    ``start_span``, ``start_span`` not finite or not above 0, a horizon below
+    1, given twice, more than 64 of them or a name beginning with ``"sum"``,
+    forecasts past ``max_horizon_work``, a ``max_horizon_work`` of 0 or past
+    2^30, ``half_life`` or ``lam``, and a state
     past ``max_state_bytes``, or a ``max_state_bytes`` of 0 or past 64 MiB.
 
     .. rubric:: The update
@@ -163,6 +209,18 @@ def garch(
                  λ_1 = φ - β + d,  λ_j = β λ_{j-1} + δ_j - φ δ_{j-1},
                  δ_j = d Π_{i=2..j} (i - 1 - d) / i
 
+    With ``features`` ``x``, the row's own inputs enter its variance,
+    added to ``s_t`` under ``garch`` and ``gjr`` and to ``ln s_t`` under
+    ``egarch``, and each ``π``'s sensitivity is the same recursion driven by
+    the input:
+
+    .. code-block:: text
+
+        garch-X   s_t = ω + π'x_t + α e²_{t-1} + β s_{t-1}          π ≥ 0, x_t ≥ 0
+        gjr-X     s_t = ω + π'x_t + α e²_{t-1} + γ 1[e_{t-1} < 0] e²_{t-1} + β s_{t-1}
+        egarch-X  ln s_t = ω + π'x_t + α (|z_{t-1}| - sqrt(2/π)) + γ z_{t-1} + β ln s_{t-1}
+        ∂s_t / ∂π = x_t + β ∂s_{t-1} / ∂π    (egarch: ∂ln s_t / ∂π, β - (α |z| + γ z)/2 for β)
+
     Before the first row every lag is ``arch``'s backcast, the
     ``0.94^i``-weighted mean of the first 75 squared returns. Each learned
     row of weight ``w_t`` steps the parameters by the score of its
@@ -175,6 +233,31 @@ def garch(
         a_t = w_t / W_t          W_t the weight learned, the start's included
         H  ← H + a_t (I_t - H)   I_t = ½ ∂ln s ∂ln sᵀ, or the score's outer product under a t
         θ  ← Proj_H(θ + a_t H⁻¹ g_t)
+
+    The forecasts at the horizons run the recursion ahead from the row's
+    variance ``s_t``, each later row's ``e²`` read as its variance and GJR's
+    asymmetric term as half of it, as ``arch``'s analytic forecast reads
+    them, and sum the variances as they go:
+
+    .. code-block:: text
+
+        garch, gjr  f_1 = s_t,  f_h = ω̄ + α f_{h-1} + γ f_{h-1}/2 + β f_{h-1}
+        egarch      f_h = exp(L_h) Π_{j=1..h-1} M(β^{j-1}),
+                    L_1 = ln s_t,  L_h = ω̄ + β L_{h-1},
+                    M(c) = E exp(c (α (|z| - sqrt(2/π)) + γ z))
+                         = exp(-c α sqrt(2/π))
+                           [exp((cα + cγ)²/2) Φ(cα + cγ) + exp((cα - cγ)²/2) Φ(cα - cγ)]
+        figarch     f_h = ω / (1 - β) + Σ_{j=1..M} λ_j e²_{t+h-1-j},
+                    e² a forecast for each row at or after t
+        sum         F_h = f_1 + ... + f_h
+        inputs      ω̄ = ω + π'x̄,  x̄ = Σ w x / Σ w over the rows learned  (ω without inputs)
+
+    EGARCH's is Nelson's (1991) closed form for normal innovations: its
+    log-variance is linear in the news terms, independent from row to row,
+    so the variance's mean is the exponential of the log-variance's mean
+    times the product of the news terms' moment generating function.
+    ``arch`` makes it only by simulation, and its simulation agrees within
+    its own sampling error.
 
     ``Proj_H`` projects onto the process's admissible set, ``arch``'s with
     the persistence at most ``1 - 1e-4``, in ``H``'s own metric. A t's
@@ -265,11 +348,21 @@ def garch(
     restrictions a constant variance puts on the process: 13.8 for
     ``garch`` and the variance-targeted GARCH (``α = β = 0``), 16.3 for
     ``gjr`` and ``egarch`` (``α = γ = β = 0``) and ``figarch`` (``d = 0``,
-    ``φ = β``). The weights enter at Kish's count, the statistic read as
+    ``φ = β``), with one more for each input (``π = 0``): 16.3 for
+    ``garch`` with one input, 18.5 for ``gjr`` or ``egarch`` with one.
+    The weights enter at Kish's count, the statistic read as
     ``2 (l_fit - l_const) Σw / Σw²``, so scaling every weight changes
     nothing. On simulated series of persistence 0.97 to 0.985, and of
     0.90, it passed every 2,000-row start; on returns with no conditional
-    variance it passed none, at starts of 500 to 2,000 rows.
+    variance it passed none, at starts of 500 to 2,000 rows. With inputs,
+    a start also waits while its rows do not tell the inputs apart: an
+    input constant over them is ``ω`` again, and two that move together are
+    one. It waits under the relative pivot rule the library's other
+    definite solves read: the start's information in the variance
+    equation's parameters, scaled to a unit diagonal, waits where a pivot of
+    its Cholesky factorization is at most ``1e-10`` of its largest diagonal
+    entry (a condition number over ``1e10``); exactly collinear inputs give
+    the rounding's, ``1e-15`` or less.
     """
     model: dict[str, Any] = {"type": "garch"}
     # Each absent when not given, as the Rust spec leaves it out, so a bank
@@ -286,8 +379,12 @@ def garch(
         model["start_rows"] = start_rows
     if start_span is not None:
         model["start_span"] = start_span
-    if horizon != 1:
-        model["horizon"] = horizon
+    if horizons is not None:
+        model["horizons"] = (
+            [[k, h] for k, h in horizons.items()] if isinstance(horizons, dict) else list(horizons)
+        )
+    if max_horizon_work is not None:
+        model["max_horizon_work"] = max_horizon_work
     if max_state_bytes is not None:
         model["max_state_bytes"] = max_state_bytes
-    return _common(name, model, targets=targets, features=[], **common)
+    return _common(name, model, targets=targets, features=list(features or []), **common)

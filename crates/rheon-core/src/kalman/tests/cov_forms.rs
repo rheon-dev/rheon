@@ -35,6 +35,7 @@ fn rows(n: usize, seed: u64) -> Vec<([f64; 3], f64, f64)> {
 /// at the half-life `h` (`inf`: none), the noise's decay at the same.
 fn units_cfg(p0: f64, h: f64) -> KalmanCfg {
     KalmanCfg {
+        horizons: Vec::new(),
         min_weight_holds_learning: false,
         noise_units: true,
         n_features: 3,
@@ -244,6 +245,7 @@ fn under_drift_a_huge_prior_costs_the_covariance_form_digits_and_not_the_factor(
 #[test]
 fn every_form_is_the_same_filter_at_a_modest_prior() {
     let base = KalmanCfg {
+        horizons: Vec::new(),
         min_weight_holds_learning: false,
         noise_units: true,
         n_features: 3,
@@ -594,6 +596,7 @@ fn each_form_kernel_is_its_definition() {
 #[test]
 fn the_factors_process_noise_leaves_a_diffuse_intercept_diffuse() {
     let cfg = KalmanCfg {
+        horizons: Vec::new(),
         min_weight_holds_learning: false,
         noise_units: true,
         n_features: 2,
