@@ -361,6 +361,9 @@ pub struct Invert {
     detail: bool,
     /// The columns the four parts read, in slot order.
     columns: Vec<String>,
+    /// The four parts' list forms as read, which [`Invert::to_json`] writes
+    /// back, so a window run's state holds the node as it was given.
+    parts: [Value; 4],
 }
 
 /// The fields of the struct `detail` gives, in order.
@@ -480,7 +483,32 @@ impl Invert {
             tol,
             detail,
             columns,
+            parts: [
+                items[1].clone(),
+                items[2].clone(),
+                items[3].clone(),
+                items[4].clone(),
+            ],
         })
+    }
+
+    /// The list form, every parameter written: [`Invert::from_json`] reads
+    /// it back to an equal node.
+    pub fn to_json(&self) -> Value {
+        let [f, equals, lo, hi] = &self.parts;
+        serde_json::json!([
+            "invert",
+            f,
+            equals,
+            lo,
+            hi,
+            {
+                "increasing": self.increasing,
+                "xtol": self.tol.xtol(),
+                "rtol": self.tol.rtol(),
+                "detail": self.detail,
+            }
+        ])
     }
 
     /// Read the node from its text.

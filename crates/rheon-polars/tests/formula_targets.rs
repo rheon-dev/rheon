@@ -563,6 +563,15 @@ fn what_a_formula_target_may_not_be() {
     .unwrap_err()
     .to_string();
     assert!(err.contains("looking ahead"), "{err}");
+    // An invert is a node of the windows' grammar, not yet of a target's,
+    // whose state is the bank's (PLAN 563, part 2c).
+    let inv = r#"["invert", ["-", ["unknown"], ["col", "x"]], ["lit", 0.0], ["lit", -10.0], ["lit", 10.0], {"increasing": true}]"#;
+    let err = serde_json::from_str::<Spec>(&format!(
+        r#"{{"name": "m", "model": {{"type": "ewridge"}}, "targets": [{{"name": "f", "formula": ["+", {TREE}, {inv}]}}], "features": ["x"]}}"#
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("holds an invert"), "{err}");
     let mut s = spec(
         &format!(r#"[{{"name": "fwd", "formula": {TREE}}}]"#),
         None,

@@ -537,6 +537,21 @@ fn windows_extrema_config() -> WindowsConfig {
     .unwrap()
 }
 
+/// The invert node (PLAN 563, windows state 14): a root of the row beside
+/// a mean looking ahead, so rows are held across the save, and a mean of
+/// the roots, every parameter of the node written.
+fn windows_invert_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "ahead", "tree": ["rewm_mean", ["col", "mid"], {"half_life": 5.0, "window_size": 10.0}]},
+               {"name": "root", "tree": ["invert", ["+", ["**", ["unknown"], ["lit", 3.0]], ["unknown"]], ["col", "mid"], ["lit", -10.0], ["lit", 10.0], {"increasing": true, "xtol": 1e-10, "rtol": 1e-12, "detail": false}]},
+               {"name": "smooth", "tree": ["ewm_mean", ["invert", ["-", ["exp", ["unknown"]], ["lit", 1.0]], ["col", "mid"], ["lit", 0.0], ["lit", 10.0], {"increasing": true}], {"half_life": 5.0}]}
+             ],
+             "clock": "t", "gap_cap": 50.0}"#,
+    )
+    .unwrap()
+}
+
 /// The same two means on the `Int64` clock, under a fractional `gap_cap`,
 /// and an `increment` of an integer input (task 200; review round 5, B1):
 /// the rows' `off` in the integer form, and the increment's previous value
@@ -1563,6 +1578,14 @@ fn windows_extrema_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_extrema_config(), bytes, input)
 }
 
+fn windows_invert_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_invert_config(), window_input(&frame()))
+}
+
+fn windows_invert_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_invert_config(), bytes, input)
+}
+
 fn windows_int_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_int_config(), window_int_input(&frame()))
 }
@@ -2309,6 +2332,11 @@ fn kinds() -> Vec<Kind> {
             run: windows_extrema_run,
         },
         Kind {
+            name: "with_windows_invert",
+            first: windows_invert_first,
+            run: windows_invert_run,
+        },
+        Kind {
             name: "refresh_time",
             first: refresh_first,
             run: refresh_run,
@@ -2765,7 +2793,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
         } else if name.starts_with("merge") {
             ("merge", 1)
         } else if name.starts_with("with_windows") {
-            ("windows", 13)
+            ("windows", 14)
         } else {
             ("bank", u64::from(SCHEMA_VERSION))
         }
@@ -2790,7 +2818,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             ("checkpoint", 1),
             ("merge", 3),
             ("refresh_time", 5),
-            ("windows", 7)
+            ("windows", 8)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
@@ -2799,7 +2827,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     let stages = load_checkpoint(&unhex(f.state)).unwrap();
     for (s, (kind, version)) in stages.iter().zip([
         ("refresh_time", 3),
-        ("windows", 13),
+        ("windows", 14),
         ("bank", 72),
         ("merge", 1),
     ]) {
@@ -2834,7 +2862,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             };
             assert_eq!(
                 envelope_head(&bytes),
-                Some(("rheon-state".to_owned(), "windows".to_owned(), 13))
+                Some(("rheon-state".to_owned(), "windows".to_owned(), 14))
             );
             assert!(sealed(&bytes));
             cores += 1;
@@ -4000,6 +4028,19 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             "with_windows_extrema",
             "an operator's max_state_bytes",
             |p, v| p.ends_with(".max_state_bytes") && v.as_u64() == Some(1_000_000),
+        ),
+        // Windows state 14 (PLAN 563): a formula's invert node, its unknown,
+        // and an operator whose input is one.
+        ("with_windows_invert", "an invert node", |p, v| {
+            p.contains(".formulas.") && v.as_str() == Some("invert")
+        }),
+        ("with_windows_invert", "the unknown", |p, v| {
+            p.contains(".formulas.") && v.as_str() == Some("unknown")
+        }),
+        (
+            "with_windows_invert",
+            "an operator over an invert",
+            |p, v| p.contains(".formulas.2.tree.1.") && v.as_str() == Some("invert"),
         ),
         // PLAN 541: a merge's state, in each form it takes -- an input's
         // last clock as a float and as an integer (a temporal clock's

@@ -689,3 +689,41 @@ certified and within `2 eps + xtol + rtol |x|`).
   bound raises an error naming the row's values.
 - **Deferred:** `rp.invert`, `rp.unknown`, `rp.norm_cdf` in Python; the
   Polars-definition oracle (A9); the bench cell (A10).
+
+## 6. Slice 2, second cut (part 2c): the node in the formula grammar
+
+Built 2026-11-24 on this branch, after merging the W13 integration branch.
+
+- **A node of the grammar.** `Node::Invert` holds the compiled `Invert`;
+  `Node::from_json` reads `["invert", ...]` anywhere a node may stand, and
+  `to_json` writes it back with its four parts as given and every parameter
+  (`increasing`, `xtol`, `rtol`, `detail`) written, so a node read back is
+  equal to the one written. It reads its parts' columns (`columns()`), holds
+  no operator, and is evaluated by `to_expr` as part 2b's element-wise
+  expression over the input's columns.
+- **In `with_windows`.** A formula that holds an invert and no operator is
+  accepted (A2: the invert counts as the library's node), beside a window
+  operator, under arithmetic, or as an operator's input (`ewm_mean` of the
+  roots). A run whose formulas hold no operator at all is refused by name,
+  since its window engine has nothing to compute; a part of the invert that
+  holds a window operator is refused by part 2b's interpreter.
+- **The state.** `WINDOWS_VERSION` 13 to 14 within bank schema 72, on the
+  extrema's reading: 72 is unreleased, and a 13 state is a 14 without an
+  invert and loads as one. `state_fixtures.rs` gains the case
+  `with_windows_invert` (a root, a mean looking ahead so rows are held, and
+  a mean over a second invert) and three forms it must write; its bytes,
+  and the version 14 the fixtures' heads now expect, come from the
+  regeneration at the merge.
+- **Not in a formula target yet.** A target formula holding an invert is
+  refused when the spec is read: its state is the bank's, and holding it
+  there is the bank schema's change (A3), left for its own cut.
+- **Tests.** `crates/rheon-polars/tests/window_invert.rs`: the list form read
+  and written back; a run's roots equal to part 2b's expression to the bit
+  and the window over them equal to the window over that column; the same
+  bits at 1, 7, 333 and 1,000 rows a chunk; a save mid-run that loads,
+  re-saves byte for byte and goes on to the bit, and refuses another invert;
+  and the refusals. `formula_targets.rs` holds the target's refusal.
+- **Deferred:** the Python names (`rp.invert`, `rp.unknown`, `rp.norm_cdf`);
+  an invert in a formula target; a run of inverts alone; `clip`, `when`,
+  comparisons, `norm_cdf`, `erf` and `erfc` in the interpreter; the
+  `detail` reason as an `Enum`; the bench cell.
