@@ -126,6 +126,7 @@ mod specification;
 mod spread;
 mod stats;
 mod stl;
+mod stl_ring;
 mod tails;
 /// The thread pools of the tests that run one computation at several pool
 /// sizes, held within what a Windows runner can commit.
@@ -227,6 +228,10 @@ pub use stats::{
     EW_QUANTILE_ALPHA, EwAutoCorr, EwQuantile, HitTest, MAX_BAND_OCTAVES, SlotMetrics,
 };
 pub use stl::{Mstl, MstlFit, Stl, StlCfg, StlFit};
+pub use stl_ring::{
+    Closed, Components, Decomposition, StlOperator, StlRing, check_state_bytes, default_lag,
+    default_window, seasonal_reach, state_bytes,
+};
 pub use tails::Tails;
 pub use warmup::{WARMUP_ROWS, Warmup};
 pub use window::{
