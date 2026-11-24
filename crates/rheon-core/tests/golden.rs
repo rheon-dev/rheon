@@ -1258,6 +1258,75 @@ fn ddsketch_golden() {
     check_bits("ddsketch", &got, GOLDEN_DDSKETCH);
 }
 
+/// `isotonic` of the stream's target on its first feature, over the 60
+/// rows five times (so every `x` is tied five times by the end), pooled,
+/// under a row window and under a clock window, increasing and
+/// decreasing: no decay, so no `libm`, and the same bits everywhere.
+#[test]
+fn isotonic_golden() {
+    let mut got = Vec::new();
+    for (rows, clock, increasing) in [
+        (None, None, true),
+        (Some(40), None, false),
+        (None, Some(80.0), true),
+    ] {
+        let mut m = Isotonic::new(IsotonicCfg {
+            n_targets: 1,
+            increasing,
+            y_min: None,
+            y_max: Some(2.0),
+            out_of_bounds: IsotonicOutOfBounds::Clip,
+            min_weight: 0.0,
+            window_rows: rows,
+            window_clock: clock,
+            closed: WindowClosed::Right,
+            decay: Decay::Halflife(f64::INFINITY),
+            max_state_bytes: None,
+        })
+        .unwrap();
+        let stream = stream();
+        for i in 0..300 {
+            let (x, y, d, w) = &stream[i % 60];
+            let step = m.step(&x[..1], y, *d, *w);
+            if [20, 150, 170, 299].contains(&i) {
+                got.extend(&step.pred);
+            }
+        }
+    }
+    check_bits("isotonic", &got, GOLDEN_ISOTONIC);
+}
+
+/// `isotonic` under a decay of 20 rows: the weights are the platform's
+/// `exp2`, so it is held to the golden files' tolerance, not to the bit.
+#[test]
+fn isotonic_decayed_golden() {
+    let mut m = Isotonic::new(IsotonicCfg {
+        n_targets: 1,
+        increasing: true,
+        y_min: None,
+        y_max: None,
+        out_of_bounds: IsotonicOutOfBounds::Nan,
+        min_weight: 0.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(20.0),
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut got = Vec::new();
+    let stream = stream();
+    for i in 0..300 {
+        let (x, y, d, w) = &stream[i % 60];
+        let step = m.step(&x[..1], y, *d, *w);
+        if [20, 150, 170, 299].contains(&i) {
+            got.extend(&step.pred);
+            got.push(step.n_eff);
+        }
+    }
+    check("isotonic_decayed", &got, GOLDEN_ISOTONIC_DECAYED);
+}
+
 /// `ddsketch`'s decayed form, a half-life of 20 rows: the factor is the
 /// platform's `exp2`, so it is held to the golden files' tolerance, not to
 /// the bit.
@@ -2537,6 +2606,30 @@ fn ewm_moments_golden() {
 }
 
 // --- generated; see the module docs ---
+const GOLDEN_ISOTONIC: &[f64] = &[
+    0.058108255205977066,
+    -1.1322602444563972,
+    0.7026314179645919,
+    -0.14824593943839737,
+    0.5234052159619503,
+    0.2924647563908718,
+    0.23662083677230278,
+    0.098572970303041,
+    0.058108255205977066,
+    -1.2452224788841555,
+    1.2824141151347344,
+    -0.3156758345391851,
+];
+const GOLDEN_ISOTONIC_DECAYED: &[f64] = &[
+    0.060139151477943076,
+    14.342256954981341,
+    -0.9887640434617117,
+    26.867539807603332,
+    0.7998676929930724,
+    16.92073916656056,
+    -0.18039268640178485,
+    20.212303545600623,
+];
 const GOLDEN_REALIZED: &[f64] = &[
     20.301763088150093,
     14.524981482223351,
