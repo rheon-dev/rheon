@@ -1896,6 +1896,99 @@ fn load_checkpoint(
         .collect())
 }
 
+/// `rp.stream.bars` (`rheon_polars::Bars`): fed a stream's chunks in
+/// order, it returns the bars each chunk closed. Each group's open bar stays
+/// here, and in the state file, until a later row closes it.
+#[pyclass(name = "Bars", module = "rheon._rheon")]
+struct PyBars {
+    inner: rheon_polars::Bars,
+}
+
+/// The error for a run reached from a second thread while a call is on the
+/// first: one stream, fed from one place.
+fn bars_busy() -> PyErr {
+    PyRuntimeError::new_err(
+        "rp.stream.bars: a run of rp.stream.bars is one ordered stream, and this one is in use \
+         on another thread, so it cannot be fed from two places at once. Wait for the call to \
+         return, or call rp.stream.bars once in each thread.",
+    )
+}
+
+#[pymethods]
+impl PyBars {
+    /// A run of `config` (the JSON `rp.stream.bars` writes) over an input
+    /// whose schema is `input`'s, a frame of no rows.
+    #[new]
+    fn new(config: &str, input: PyDataFrame) -> PyResult<Self> {
+        let config: rheon_polars::BarsConfig =
+            parse_json(config, "bars").map_err(PyValueError::new_err)?;
+        let inner =
+            rheon_polars::Bars::new(config, input.0.schema()).map_err(PyValueError::new_err)?;
+        Ok(Self { inner })
+    }
+
+    /// A run that goes on from a saved state, which must have been saved by
+    /// the same call.
+    #[staticmethod]
+    fn load_bytes(state: &[u8], config: &str, input: PyDataFrame) -> PyResult<Self> {
+        let config: rheon_polars::BarsConfig =
+            parse_json(config, "bars").map_err(PyValueError::new_err)?;
+        let inner = rheon_polars::Bars::load_bytes(state, config, input.0.schema())
+            .map_err(PyValueError::new_err)?;
+        Ok(Self { inner })
+    }
+
+    /// The state, written to `path` whole or not at all ([`save_err`]).
+    fn save(slf: &Bound<'_, Self>, path: &str) -> PyResult<()> {
+        let this = slf.try_borrow().map_err(|_| bars_busy())?;
+        this.inner
+            .save(std::path::Path::new(path))
+            .map_err(|e| save_err(path, e))
+    }
+
+    /// The state's bytes.
+    fn save_bytes<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        let this = slf.try_borrow().map_err(|_| bars_busy())?;
+        let bytes = this.inner.save_bytes().map_err(PyValueError::new_err)?;
+        Ok(pyo3::types::PyBytes::new(slf.py(), &bytes))
+    }
+
+    /// The bars this chunk closed, in order; with `limit`, rows are read
+    /// only until `limit` bars are out (`Bars::feed`). The GIL is released
+    /// for the run.
+    #[pyo3(signature = (df, limit=None))]
+    fn feed(slf: &Bound<'_, Self>, df: PyDataFrame, limit: Option<usize>) -> PyResult<PyDataFrame> {
+        let mut this = slf.try_borrow_mut().map_err(|_| bars_busy())?;
+        let inner = &mut this.inner;
+        let df = df.0;
+        let out = slf
+            .py()
+            .detach(|| inner.feed(&df, limit))
+            .map_err(|e| run_err(&e, None))?;
+        Ok(PyDataFrame(out))
+    }
+
+    /// The open bars at the input's end, each with `complete = false`
+    /// (`Bars::finish`).
+    fn finish(slf: &Bound<'_, Self>) -> PyResult<PyDataFrame> {
+        let mut this = slf.try_borrow_mut().map_err(|_| bars_busy())?;
+        let out = this.inner.finish().map_err(|e| run_err(&e, None))?;
+        Ok(PyDataFrame(out))
+    }
+
+    /// The readiness notices since the last call.
+    fn take_notices(slf: &Bound<'_, Self>) -> PyResult<Vec<String>> {
+        let mut this = slf.try_borrow_mut().map_err(|_| bars_busy())?;
+        Ok(this.inner.take_notices())
+    }
+
+    /// The bytes a group holds at most, with a key of `key_len` bytes.
+    fn group_bytes(slf: &Bound<'_, Self>, key_len: usize) -> PyResult<u64> {
+        let this = slf.try_borrow().map_err(|_| bars_busy())?;
+        Ok(this.inner.group_bytes(key_len))
+    }
+}
+
 #[pymodule]
 fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyModelBank>()?;
@@ -1903,6 +1996,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRefreshTime>()?;
     m.add_class::<PyMerge>()?;
     m.add_class::<PyWindows>()?;
+    m.add_class::<PyBars>()?;
     gbdt::register(m)?;
     m.add_function(wrap_pyfunction!(gramfit::gram_lars_paths, m)?)?;
     m.add_function(wrap_pyfunction!(gramfit::gram_cd_path, m)?)?;

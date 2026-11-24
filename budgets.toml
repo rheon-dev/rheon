@@ -240,16 +240,16 @@ what = "rcov, 4 features, kernel, the rows a block takes in: AnyModel::step_into
 budget = 24375035
 
 [instructions.hawkes]
-what = "hawkes, one node, three kernels: AnyModel::step_into, into one kept Step, a 4 x 4 solve a row; its budget is CI's first count"
+what = "hawkes, one node, three kernels: AnyModel::step_into, into one kept Step, a 4 x 4 solve a row; its budget is CI's first count (locally 1,735,679)"
 
 [instructions.garch]
-what = "garch, one series after its start: AnyModel::step_into, into one kept Step, a 3 x 3 step a row; its budget is CI's first count"
+what = "garch, one series after its start: AnyModel::step_into, into one kept Step, a 3 x 3 step a row; its budget is CI's first count (locally 1,735,679)"
 
 [instructions.pca]
 what = "pca, one component of 20 features by the incremental SVD: AnyModel::step_into, into one kept Step, a few Jacobi sweeps over 3 rows of 20 a row; its budget is CI's first count"
 
 [instructions.garch_figarch]
-what = "garch, FIGARCH of 1,000 lags after its start: AnyModel::step_into, its O(M) pass of the weights and their derivatives a row; its budget is CI's first count"
+what = "garch, FIGARCH of 1,000 lags after its start: AnyModel::step_into, its O(M) pass of the weights and their derivatives a row; its budget is CI's first count (locally 1,735,679)"
 
 [instructions.dcc]
 what = "dcc, three series, the asymmetric model learned after its start, no margins: AnyModel::step_into, into one kept Step, R's 3 x 3 factor and inverse and three R⁻¹ ∂R a row; its budget is CI's first count"
@@ -309,6 +309,12 @@ budget = 2552147
 [instructions.window_ewm_sum_groups10k]
 what = "WindowsRun::feed of one frame, ewm_sum of x0 with no window, half-life 1000, grouped by g over 10,000 groups, one row of each in turn, each row its own stamp, gap_cap 1e12 (no group is ever cut), after a warm-up of two rows a group: a row resolves the one group pending, whatever the groups behind it"
 budget = 2221103
+
+[instructions.bars_volume]
+what = "Bars::feed of one frame, volume bars of 1,000 over sizes of 1 to 100 (about 20 rows a bar), with the open, high, low and close of the price, the volume and the rows: the exact running total, the crossing test and six aggregates a row, about 50 bars closed into the output; its budget is CI's first count (locally 1,735,679)"
+
+[instructions.bars_volume_groups100]
+what = "Bars::feed of one frame, as bars_volume, grouped over 100 groups, one row of each in turn after a warm-up of 20 rows a group: a row finds its group's open bar, about half the groups close one; its budget is CI's first count (locally 2,276,447)"
 
 # --- scaling ---------------------------------------------------------------------
 # How a cost grows, not what it is (docs/PERFORMANCE.md, "How cost grows";
@@ -1432,6 +1438,12 @@ windows = { budget = 73.1016 }
 windows = { budget = 116.4766 }
 darwin = { budget = 117.8438 }
 linux = { budget = 128.9688 }
+
+# `bars_5m` (rp.stream.bars over the same five million rows, count bars of
+# 100 rows with six aggregates; tests/test_budgets_memory.py) is added
+# unmeasured: its budgets are CI's floor-leg readings, set by
+# `scripts/budgets.py apply`. Linux read 136.7 and 136.3 MiB locally
+# (2026-11-23), the bank's streamed run 130.9 and 131.2 beside it.
 
 [rss.predict_wide]
 windows = { budget = 153.168 }

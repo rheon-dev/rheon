@@ -85,7 +85,8 @@ def test_every_library_a_test_imports_is_declared_in_the_dev_group() -> None:
     declared |= {_name(r) for v in META["project"]["optional-dependencies"].values() for r in v}
     dists = importlib.metadata.packages_distributions()
     imports = _imports()
-    assert {"numpy", "pandas", "pyarrow", "river"} <= set(imports), sorted(imports)
+    # bar_forge: the bars' and the tick rule's oracle (docs/TESTING.md).
+    assert {"bar_forge", "numpy", "pandas", "pyarrow", "river"} <= set(imports), sorted(imports)
     missing = {
         module: ({_name(d) for d in dists.get(module, [])} or "not installed", sorted(files))
         for module, files in sorted(imports.items())

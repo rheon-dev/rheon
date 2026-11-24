@@ -21,8 +21,12 @@
 pub mod scaling;
 
 use polars::prelude::*;
+use rheon_polars::rheon_core::bars::BarKind;
 use rheon_polars::rheon_core::{ClockCfg, ClockState, ClockValue, ExactCaps};
-use rheon_polars::{AnyModel, Bank, Spec, WindowsConfig, WindowsRun, build_models};
+use rheon_polars::{
+    AggKind, AggSpec, AnyModel, Bank, BarThreshold, Bars, BarsConfig, Spec, WindowsConfig,
+    WindowsRun, build_models,
+};
 use serde_json::{Value, json};
 
 /// Rows each case steps before the measured block, outside the count.
@@ -194,6 +198,20 @@ pub const WINDOW_CASES: &[&str] = &[
     "window_ewm_quantile_running",
     "window_ewm_sum_groups10k",
 ];
+
+/// The bar cases: a frame of trades through the bars operator's core
+/// (`Bars::feed`, as `rp.stream.bars` runs it), volume bars of 1,000 over
+/// sizes of 1 to 100, about 20 rows a bar, each with the open, high, low
+/// and close of the price, the volume and the rows: a row adds its size to
+/// the exact running total, tests the crossing and folds six aggregates,
+/// and about one row in 20 closes a bar into the output. Ungrouped, and
+/// over [`BAR_GROUPS`] groups, one row of each in turn, ten rows a group in
+/// the block, so about half the groups close a bar in it: a row finds its
+/// group's open bar among the others.
+pub const BAR_CASES: &[&str] = &["bars_volume", "bars_volume_groups100"];
+
+/// Groups in the grouped bar case.
+pub const BAR_GROUPS: usize = 100;
 
 /// Groups in the grouped window case: its warm-up is two rows of each.
 pub const WINDOW_GROUPS: usize = 10_000;
@@ -1161,6 +1179,95 @@ pub fn windows_setup(id: &str) -> WindowsCase {
 #[inline(never)]
 pub fn rheon_budget_windows_rows(run: &mut WindowsCase) -> DataFrame {
     run.run
+        .feed(&run.frame, None)
+        .unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// A bar case, warmed up: the core and the frame of its measured block.
+pub struct BarsCase {
+    pub bars: Bars,
+    frame: DataFrame,
+}
+
+/// The trades of a bar case: an irregular clock `t`, a price `p` on a grid
+/// of 1/64 walking a tick at most, a size `q` of 1 to 100, and the group
+/// `g`, the row's place modulo [`BAR_GROUPS`].
+fn bar_trades(n: usize, seed: u64) -> DataFrame {
+    let mut r = Lcg(seed);
+    let (mut t, mut p, mut q) = (
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+    );
+    let (mut clock, mut price) = (0.0, 100.0);
+    for _ in 0..n {
+        clock += step_of(r.next());
+        price += (3.0 * r.next()).floor() / 64.0 - 1.0 / 64.0;
+        t.push(clock);
+        p.push(price);
+        q.push((100.0 * r.next()).floor() + 1.0);
+    }
+    let g: Vec<i64> = (0..n).map(|i| (i % BAR_GROUPS) as i64).collect();
+    df!("t" => t, "p" => p, "q" => q, "g" => g).expect("columns of one height")
+}
+
+/// A bar case's call: volume bars of 1,000 with six aggregates.
+pub fn bars_config(id: &str) -> BarsConfig {
+    let agg = |kind: AggKind, column: Option<&str>, name: &str| AggSpec {
+        kind,
+        column: column.map(str::to_string),
+        name: name.into(),
+    };
+    BarsConfig {
+        kind: BarKind::Sum,
+        clock: "t".into(),
+        threshold: BarThreshold::Value(1_000.0),
+        quantity: Some("q".into()),
+        group: id.ends_with("_groups100").then(|| "g".into()),
+        weight: None,
+        session: None,
+        gap_cap: None,
+        max_span: None,
+        restart_after_step_back: None,
+        keep_partial: true,
+        monotone: false,
+        max_state_bytes: 256 * 1024,
+        max_total_bytes: 1 << 30,
+        aggregates: vec![
+            agg(AggKind::First, Some("p"), "open"),
+            agg(AggKind::Max, Some("p"), "high"),
+            agg(AggKind::Min, Some("p"), "low"),
+            agg(AggKind::Last, Some("p"), "close"),
+            agg(AggKind::Sum, Some("q"), "volume"),
+            agg(AggKind::Len, None, "rows"),
+        ],
+        call: [("clock".to_string(), "t".to_string())]
+            .into_iter()
+            .collect(),
+    }
+}
+
+/// The setup of a bar case: the core fed the [`WARM_ROWS`] warm-up rows as
+/// one frame, 20 a group in the grouped case, so every group has closed a
+/// bar and holds an open one when the block starts.
+pub fn bars_setup(id: &str) -> BarsCase {
+    let warm = WARM_ROWS;
+    let trades = bar_trades(warm + ROWS, 11);
+    let first = trades.slice(0, warm);
+    let mut bars =
+        Bars::new(bars_config(id), first.schema()).unwrap_or_else(|e| panic!("{id}: {e}"));
+    bars.feed(&first, None)
+        .unwrap_or_else(|e| panic!("{id}: {e}"));
+    let frame = trades.slice(warm as i64, ROWS);
+    BarsCase { bars, frame }
+}
+
+/// The measured block of a bar case: one `Bars::feed` of [`ROWS`] rows. The
+/// bars it closes are returned, so their drop falls outside the count.
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub fn rheon_budget_bars_rows(run: &mut BarsCase) -> DataFrame {
+    run.bars
         .feed(&run.frame, None)
         .unwrap_or_else(|e| panic!("{e}"))
 }

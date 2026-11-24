@@ -231,7 +231,7 @@ separate question, and three kinds of need have come up:
 
 | need | libraries | example |
 |---|---|---|
-| an oracle, computed independently of this library | numpy, pandas, scipy | pandas' `ewm(times=)` against the temporal clock |
+| an oracle, computed independently of this library | numpy, pandas, scipy, bar-forge | pandas' `ewm(times=)` against the temporal clock; bar-forge's bars against `rp.stream.bars` |
 | a second opinion from another implementation | river, statsmodels, filterpy, bayesian-changepoint-detection, scikit-learn, Vowpal Wabbit, hmmlearn, padasip | `river.optim.FTRLProximal`, row for row; `HuberRegressor` beside `huber`; `GaussianHMM` beside `hmm` |
 | interop, the other library reading a bank's output or feeding one | pyarrow, duckdb, the ADBC SQLite driver | `pa.table(s)` on `fit_predict_arrow`'s output |
 
@@ -244,7 +244,21 @@ from the paper, such as the normal equations a fit must solve.
 | where the test is | library oracles | example |
 |---|---|---|
 | Rust, which `cargo mutants` runs | `faer`, already an `rheon-core` dependency, through `crates/rheon-core/src/oracle.rs`: its LU and eigensolver, never the model's own Cholesky in `solve.rs` | `every_solve_is_its_closed_form_across_targets_and_ridges` solves the normal equations with `oracle::solve`, `faer`'s LU |
-| Python | scikit-learn, scipy, statsmodels, pandas, numpy | `TestEwRidgeIsSklearnsRidge` holds every `ewridge` solve to `sklearn.linear_model.Ridge`, 20 cases to 1e-8 |
+| Python | scikit-learn, scipy, statsmodels, pandas, numpy, bar-forge | `TestEwRidgeIsSklearnsRidge` holds every `ewridge` solve to `sklearn.linear_model.Ridge`, 20 cases to 1e-8 |
+
+**bar-forge is the bars' oracle** (MIT, on PyPI, NumPy its one
+dependency). Of the bar libraries checked, it is the one that computes the
+same bars and installs beside the tests' NumPy, and its three bar rules are
+three configurations of `rp.stream.bars`. Its tick bars are `kind="count"`.
+Its volume and dollar bars reset the running sum to 0 at each bar, so they
+are `kind="imbalance"` of a quantity that is never negative. Its
+fixed-threshold imbalance bars close at `|θ| >= threshold` and reset, as
+`kind="imbalance"` does. It signs trades by the tick rule, and its
+`tick_rule_signs` is `rp.tick_sign`'s oracle, with its first trade's +1
+filled in. Its sums are plain doubles in row order, exact on a dyadic grid
+of prices and sizes, so `tests/test_stream_bars.py` and
+`tests/test_tick_sign.py` hold the bars, their aggregates and the signs to
+it bit for bit.
 
 **A mutant can be killed only from Rust**, because `cargo mutants` runs
 `cargo test` and never the pytest suite. Where a library oracle exists only

@@ -72,9 +72,11 @@ use std::path::{Path, PathBuf};
 
 use polars::prelude::*;
 use rheon_polars::rheon_core::SCHEMA_VERSION;
+use rheon_polars::rheon_core::bars::BarKind;
 use rheon_polars::{
-    Bank, MIN_BANK_SCHEMA_VERSION, Merge, MergeConfig, RefreshCols, RefreshTime, Spec, StateKind,
-    WindowsConfig, WindowsRun, checkpoint_bytes, load_checkpoint,
+    AggKind, AggSpec, Bank, BarThreshold, Bars, BarsConfig, MIN_BANK_SCHEMA_VERSION, Merge,
+    MergeConfig, RefreshCols, RefreshTime, Spec, StateKind, WindowsConfig, WindowsRun,
+    checkpoint_bytes, load_checkpoint,
 };
 
 /// One frozen fixture, as `tests/state_fixtures/<name>.rs` holds it.
@@ -569,6 +571,23 @@ fn windows_profile_config() -> WindowsConfig {
     .unwrap()
 }
 
+/// Two tick signs and an increment. The first signs `mid` in
+/// tenths, an integer input whose step is often 0, so the sign carried over
+/// a step of 0 is read across the save; the second signs `mid` itself inside
+/// a decayed sum, the signed flow. Each tick sign's carried sign rides in
+/// its group's `prev` past the increments' previous values.
+fn windows_tick_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "sign", "tree": ["tick_sign", ["cast", ["*", ["col", "mid"], ["lit", 10.0]], "Int64"]]},
+               {"name": "flow", "tree": ["ewm_sum", ["*", ["tick_sign", ["col", "mid"]], ["col", "cum"]], {"half_life": 5.0, "window_size": 10.0}]},
+               {"name": "step", "tree": ["increment", ["col", "cum"]]}
+             ],
+             "clock": "t", "gap_cap": 50.0}"#,
+    )
+    .unwrap()
+}
+
 /// The clock in Amsterdam's zone, the same instants.
 fn window_profile_input(df: &DataFrame) -> DataFrame {
     let zone = TimeZone::opt_try_new(Some("Europe/Amsterdam")).unwrap();
@@ -603,6 +622,10 @@ fn windows_profile_units_config() -> WindowsConfig {
              "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
     )
     .unwrap()
+}
+
+fn window_tick_input(df: &DataFrame) -> DataFrame {
+    df.select(["t", "mid", "cum"]).unwrap()
 }
 
 fn window_int_input(df: &DataFrame) -> DataFrame {
@@ -1563,6 +1586,14 @@ fn windows_extrema_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_extrema_config(), bytes, input)
 }
 
+fn windows_tick_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_tick_config(), window_tick_input(&frame()))
+}
+
+fn windows_tick_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_tick_config(), bytes, input)
+}
+
 fn windows_int_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_int_config(), window_int_input(&frame()))
 }
@@ -2191,6 +2222,237 @@ fn checkpoint_run(bytes: &[u8], input: &DataFrame) -> Ran {
     Ok((again, frames))
 }
 
+// --- bars ---------------------------------------------------------------------
+
+/// The aggregation `kind` of `column`, written as `name`.
+fn bar_agg(kind: AggKind, column: Option<&str>, name: &str) -> AggSpec {
+    AggSpec {
+        kind,
+        column: column.map(str::to_string),
+        name: name.into(),
+    }
+}
+
+/// The three calls of the bars fixtures: `bars`, ungrouped, `"sum"` on a
+/// float clock; `bars_by`, grouped, `"imbalance"` of an integer past 2^53 on
+/// an integer clock, with a threshold column, a weight, a session and the
+/// clock's cuts; `bars_count`, `"count"` on a temporal clock under a
+/// monotone close and `max_span`.
+fn bars_cfg(name: &str) -> BarsConfig {
+    let mut cfg = BarsConfig {
+        kind: BarKind::Sum,
+        clock: "t".into(),
+        threshold: BarThreshold::Value(10.0),
+        quantity: Some("q".into()),
+        group: None,
+        weight: None,
+        session: None,
+        gap_cap: None,
+        max_span: None,
+        restart_after_step_back: None,
+        keep_partial: true,
+        monotone: false,
+        max_state_bytes: 256 * 1024,
+        max_total_bytes: 1 << 30,
+        aggregates: vec![
+            bar_agg(AggKind::First, Some("p"), "open"),
+            bar_agg(AggKind::Max, Some("p"), "high"),
+            bar_agg(AggKind::Min, Some("x"), "low"),
+            bar_agg(AggKind::Last, Some("p"), "close"),
+            bar_agg(AggKind::Sum, Some("x"), "sx"),
+            bar_agg(AggKind::Sum, Some("n"), "sn"),
+            bar_agg(AggKind::Count, Some("p"), "np"),
+            bar_agg(AggKind::Len, None, "rows"),
+        ],
+        call: [("clock".to_string(), "t".to_string())]
+            .into_iter()
+            .collect(),
+    };
+    match name {
+        "bars_by" => {
+            cfg.kind = BarKind::Imbalance;
+            cfg.quantity = Some("n".into());
+            cfg.threshold = BarThreshold::Column("th".into());
+            cfg.group = Some("g".into());
+            cfg.weight = Some("w".into());
+            cfg.session = Some("day".into());
+            cfg.gap_cap = Some(6.0);
+            cfg.restart_after_step_back = Some(100.0);
+            cfg.aggregates = vec![
+                bar_agg(AggKind::Last, Some("d"), "last_d"),
+                bar_agg(AggKind::Min, Some("b"), "all_b"),
+                bar_agg(AggKind::Sum, Some("b"), "n_b"),
+                bar_agg(AggKind::Max, Some("u"), "max_u"),
+            ];
+        }
+        "bars_count" => {
+            cfg.kind = BarKind::Count;
+            cfg.quantity = None;
+            cfg.threshold = BarThreshold::Value(3.0);
+            cfg.group = Some("day".into());
+            cfg.monotone = true;
+            cfg.keep_partial = false;
+            cfg.max_span = Some(5e9);
+            cfg.aggregates = vec![
+                bar_agg(AggKind::First, Some("u"), "first_u"),
+                bar_agg(AggKind::Sum, Some("u"), "sum_u"),
+            ];
+        }
+        _ => {}
+    }
+    cfg
+}
+
+/// Each fixture's whole input, and the row its first part ends at.
+fn bars_input(name: &str) -> (DataFrame, usize) {
+    let tiny = 2f64.powi(-60);
+    match name {
+        "bars" => {
+            // The open bar at the cut holds a total of 3 + 2^-60 + 1e-30
+            // in three parts, a null first `p`, a NaN in `x` and a sum of
+            // `x` in two parts.
+            let t: Vec<f64> = (0..12).map(|i| f64::from(i) * 0.5).collect();
+            let q = [
+                4.0,
+                6.0,
+                3.0,
+                tiny,
+                1e-30,
+                9.0,
+                0.5,
+                25.0,
+                f64::NAN,
+                1.0,
+                2.0,
+                3.0,
+            ];
+            let p = [
+                Some(1.0),
+                Some(2.0),
+                None,
+                Some(1.5),
+                Some(0.5),
+                Some(3.0),
+                None,
+                Some(2.5),
+                Some(2.0),
+                None,
+                Some(1.0),
+                Some(4.0),
+            ];
+            let x = [
+                1.0,
+                -2.0,
+                1e10,
+                1e-10,
+                f64::NAN,
+                0.25,
+                3.0,
+                -1.0,
+                2.0,
+                f64::INFINITY,
+                0.5,
+                1.0,
+            ];
+            let n: Vec<i32> = (0..12).map(|i| i * 7 - 30).collect();
+            let df = df!("t" => t, "q" => q, "p" => p, "x" => x, "n" => n).unwrap();
+            (df, 5)
+        }
+        "bars_by" => {
+            let big = (1i64 << 53) + 1;
+            let t: Vec<i64> = vec![0, 1, 2, 3, 3, 4, 12, 13, 14, 15, 16, 17];
+            let g = ["a", "b", "a", "b", "a", "b", "a", "b", "a", "b", "a", "b"];
+            let n = [big, -5, -big, 7, 3, -4, big, 1, 2, -big, 5, 9];
+            let th = [
+                1e16, 6.0, 1e16, 6.0, 1e16, 6.0, 1e16, 6.0, 1e16, 6.0, 1e16, 6.0,
+            ];
+            let w = [1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0];
+            let day = [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2];
+            let d: Vec<i64> = (0..12).map(|i| 1_700_000_000_000_000 + i * 1_000).collect();
+            let b = [
+                Some(true),
+                Some(false),
+                None,
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                None,
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(true),
+            ];
+            let u: Vec<u64> = (0..12).map(|i| u64::MAX - 100 * i).collect();
+            let mut df = df!("t" => t, "g" => g, "n" => n, "th" => th, "w" => w, "day" => day,
+                "d" => d, "b" => b, "u" => u)
+            .unwrap();
+            df.apply("d", |s| {
+                s.cast(&DataType::Datetime(TimeUnit::Microseconds, None))
+                    .unwrap()
+            })
+            .unwrap();
+            (df, 6)
+        }
+        _ => {
+            let t: Vec<i64> = (0..12)
+                .map(|i| 1_700_000_000_000_000_000 + i * 2_000_000_000)
+                .collect();
+            let day: Vec<i64> = vec![1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3];
+            let u: Vec<u64> = (0..12).map(|i| 3 * i + 1).collect();
+            let mut df = df!("t" => t, "day" => day, "u" => u).unwrap();
+            df.apply("t", |s| {
+                s.cast(&DataType::Datetime(TimeUnit::Nanoseconds, None))
+                    .unwrap()
+            })
+            .unwrap();
+            (df, 7)
+        }
+    }
+}
+
+fn bars_first_of(name: &str) -> (Vec<u8>, DataFrame) {
+    let (df, cut) = bars_input(name);
+    let mut b = Bars::new(bars_cfg(name), df.schema()).unwrap();
+    b.feed(&df.head(Some(cut)), None).unwrap();
+    (
+        b.save_bytes().unwrap(),
+        df.slice(cut as i64, df.height() - cut),
+    )
+}
+
+fn bars_run_of(name: &str, bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut b = Bars::load_bytes(bytes, bars_cfg(name), input.schema())?;
+    let again = b.save_bytes()?;
+    let out = b.feed(input, None).map_err(|e| e.to_string())?;
+    let open = b.finish().map_err(|e| e.to_string())?;
+    Ok((again, vec![("bars".into(), out), ("open".into(), open)]))
+}
+
+fn bars_first() -> (Vec<u8>, DataFrame) {
+    bars_first_of("bars")
+}
+
+fn bars_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bars_run_of("bars", bytes, input)
+}
+
+fn bars_by_first() -> (Vec<u8>, DataFrame) {
+    bars_first_of("bars_by")
+}
+
+fn bars_by_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bars_run_of("bars_by", bytes, input)
+}
+
+fn bars_count_first() -> (Vec<u8>, DataFrame) {
+    bars_first_of("bars_count")
+}
+
+fn bars_count_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bars_run_of("bars_count", bytes, input)
+}
+
 fn kinds() -> Vec<Kind> {
     vec![
         Kind {
@@ -2309,6 +2571,11 @@ fn kinds() -> Vec<Kind> {
             run: windows_extrema_run,
         },
         Kind {
+            name: "with_windows_tick",
+            first: windows_tick_first,
+            run: windows_tick_run,
+        },
+        Kind {
             name: "refresh_time",
             first: refresh_first,
             run: refresh_run,
@@ -2357,6 +2624,21 @@ fn kinds() -> Vec<Kind> {
             name: "refresh_time_age_held",
             first: refresh_age_held_first,
             run: refresh_age_held_run,
+        },
+        Kind {
+            name: "bars",
+            first: bars_first,
+            run: bars_run,
+        },
+        Kind {
+            name: "bars_by",
+            first: bars_by_first,
+            run: bars_by_run,
+        },
+        Kind {
+            name: "bars_count",
+            first: bars_count_first,
+            run: bars_count_run,
         },
     ]
 }
@@ -2760,6 +3042,8 @@ fn every_current_fixture_is_written_in_the_envelope() {
     let kind_of = |name: &str| {
         if name == "checkpoint" {
             ("checkpoint", 1)
+        } else if name.starts_with("bars") {
+            ("bars", 1)
         } else if name.starts_with("refresh_time") {
             ("refresh_time", 3)
         } else if name.starts_with("merge") {
@@ -2787,10 +3071,11 @@ fn every_current_fixture_is_written_in_the_envelope() {
         kinds.into_iter().collect::<Vec<_>>(),
         [
             ("bank", 17),
+            ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),
             ("refresh_time", 5),
-            ("windows", 7)
+            ("windows", 8)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
@@ -4001,6 +4286,13 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             "an operator's max_state_bytes",
             |p, v| p.ends_with(".max_state_bytes") && v.as_u64() == Some(1_000_000),
         ),
+        // A tick sign's carried sign, past the three slots of the
+        // previous values (two tick signs and an increment), each +1 or -1.
+        ("with_windows_tick", "a tick sign's carried sign", |p, v| {
+            p.starts_with(".increments.")
+                && (p.ends_with(".prev.3") || p.ends_with(".prev.4"))
+                && v.as_f64().is_some_and(|f| f.abs() == 1.0)
+        }),
         // PLAN 541: a merge's state, in each form it takes -- an input's
         // last clock as a float and as an integer (a temporal clock's
         // physical one) and none, the rows held at a tie, an input started
@@ -4373,6 +4665,53 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
                     && v.as_u64().is_some_and(|n| n > 0 && n < u64::MAX)
             },
         ),
+        // A bars run's state, in each form it takes: a running quantity
+        // of several parts, a count, an open bar's null first value and
+        // non-finite float sum, a float sum of several parts, an integer
+        // sum, each kind of clock, a threshold column, a weight and a
+        // session, the one key of an ungrouped run, and a monotone close's
+        // high-water key.
+        ("bars", "a running quantity of several parts", |p, v| {
+            p.ends_with(".crossing.running.Exact.2") && v.as_f64().is_some()
+        }),
+        ("bars", "a null first value", |p, v| {
+            p.ends_with(".First") && v.as_str() == Some("Null")
+        }),
+        ("bars", "a float sum's NaN", |p, v| {
+            p.ends_with(".SumFloat.nan") && v.as_bool() == Some(true)
+        }),
+        ("bars", "a float sum of several parts", |p, v| {
+            p.ends_with(".SumFloat.exact.1") && v.as_f64().is_some()
+        }),
+        ("bars", "an integer sum", |p, v| {
+            p.ends_with(".SumInt") && !v.is_nil()
+        }),
+        ("bars", "Instant::Number", |p, _| {
+            p.ends_with(".time_open.Number")
+        }),
+        ("bars", "the one key without a group", |p, v| {
+            p == ".groups.0.0" && v.as_str() == Some("")
+        }),
+        ("bars_by", "Instant::Int", |p, _| {
+            p.ends_with(".last_clock.Int")
+        }),
+        ("bars_by", "a threshold column", |p, v| {
+            p == ".config.threshold.column" && v.as_str() == Some("th")
+        }),
+        ("bars_by", "a session", |p, v| {
+            p.ends_with(".session") && v.as_u64().is_some()
+        }),
+        ("bars_by", "an unsigned value", |p, _| p.ends_with(".U")),
+        ("bars_by", "a Boolean value", |p, _| p.ends_with(".B")),
+        ("bars_count", "Running::Count", |p, v| {
+            p.ends_with(".crossing.running.Count") && v.as_u64().is_some_and(|n| n > 0)
+        }),
+        ("bars_count", "Instant::Nanos", |p, _| {
+            p.ends_with(".time_open.Nanos")
+        }),
+        ("bars_count", "a monotone close's high-water key", |p, v| {
+            p == ".high_water" && v.as_str().is_some()
+        }),
         // R3-3: the values an autocorrelation keeps for its lag.
         (
             "bank_autocorr",

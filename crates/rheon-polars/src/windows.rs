@@ -257,6 +257,7 @@ pub enum OpKind {
     CrossRef,
     /// A periodic profile ([`ProfileDef`]): no kernel, a group's buckets.
     EwmProfile,
+    TickSign,
 }
 
 impl OpKind {
@@ -284,6 +285,7 @@ impl OpKind {
             OpKind::CrossQuantile => "cross_quantile",
             OpKind::CrossRef => "cross_ref",
             OpKind::EwmProfile => "ewm_profile",
+            OpKind::TickSign => "tick_sign",
         }
     }
 
@@ -311,6 +313,7 @@ impl OpKind {
             "cross_quantile" => Some(OpKind::CrossQuantile),
             "cross_ref" => Some(OpKind::CrossRef),
             "ewm_profile" => Some(OpKind::EwmProfile),
+            "tick_sign" => Some(OpKind::TickSign),
             _ => None,
         }
     }
@@ -327,7 +330,12 @@ impl OpKind {
         }
     }
 
-    /// The statistic of a window operator; `None` for `increment`.
+    /// A step (`increment`, `tick_sign`): the row before, not a window.
+    pub fn is_step(self) -> bool {
+        matches!(self, OpKind::Increment | OpKind::TickSign)
+    }
+
+    /// The statistic of a window operator; `None` for a step.
     pub fn stat(self) -> Option<Stat> {
         match self {
             OpKind::EwmMean | OpKind::RewmMean => Some(Stat::Mean),
@@ -340,6 +348,7 @@ impl OpKind {
             OpKind::RollingMax | OpKind::RrollingMax => Some(Stat::Max),
             OpKind::RollingMin | OpKind::RrollingMin => Some(Stat::Min),
             OpKind::Increment
+            | OpKind::TickSign
             | OpKind::CrossMean
             | OpKind::CrossStd
             | OpKind::CrossRank

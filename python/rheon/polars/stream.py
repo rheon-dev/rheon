@@ -47,13 +47,17 @@ beside a bank. They share three rules:
        Barndorff-Nielsen, Hansen, Lunde & Shephard's refresh-time rule: a
        grid point wherever every series has ticked at least once since the
        last one
+   * - :func:`bars`
+     - aggregates a stream into bars that close when a running count, sum
+       or signed sum reaches a threshold: tick, volume, dollar and
+       imbalance bars, the running total kept exactly
    * - :func:`save_checkpoint`, :func:`load_checkpoint`
      - save the states of a run's stages, such as a grid, a window run and a
        bank, as one file that a crash leaves whole, old or new, and read each
        stage's state back to load where it was saved
 
 Each streams: :func:`embargo` merges two sorted copies of the same input with
-Polars' ``merge_sorted``, and the other three run as an operator of the Rust
+Polars' ``merge_sorted``, and the other four run as an operator of the Rust
 core fed one chunk at a time, read as a lazy source.
 """
 
@@ -76,7 +80,7 @@ from rheon._duration import Duration, duration_text
 from rheon._errors import RefusedValueError, WrongTypeError
 from rheon._rheon import parse_duration
 from rheon._spec import _RENAMED, _RENAMED_KEYWORDS, _renamed_keywords
-from rheon._warnings import RheonWarning, _user_stacklevel
+from rheon._warnings import ReadinessWarning, RheonWarning, _user_stacklevel
 from rheon.polars import _formula
 from rheon.polars._bank import ModelBank, _refuse_uint128
 from rheon.polars._clock import clock_nanoseconds
@@ -99,6 +103,7 @@ from rheon.polars._frame import (
 
 __all__ = [
     "ROLE",
+    "bars",
     "embargo",
     "load_checkpoint",
     "merge",
@@ -863,6 +868,546 @@ def refresh_time(
     return plan if isinstance(lf, pl.LazyFrame) else plan.collect()
 
 
+#: The kinds of bar :func:`bars` builds.
+_BAR_KINDS = ("count", "sum", "imbalance")
+
+#: The aggregations a bar takes, by Polars' serialized name.
+_BAR_AGGS = {"First": "first", "Last": "last", "Min": "min", "Max": "max", "Sum": "sum"}
+
+#: The columns every bar has, which an aggregate cannot be named.
+_BAR_COLUMNS = ("bar", "time_open", "time_close", "thresholds", "carry", "complete")
+
+#: The prefix of the columns :func:`bars` computes for itself.
+_BAR_HIDDEN = "_rp_bars_"
+
+
+def _bar_aggregates(
+    named: dict[str, Any], prefix: str
+) -> tuple[list[tuple[str, Any]], list[dict[str, Any]], dict[str, pl.Expr], list[str]]:
+    """Each aggregate of :func:`bars` split in two: the aggregations it
+    holds, each over an element-wise input computed as a column, and the
+    element-wise expression around them, computed on each bar's row.
+
+    Returns the outer expression of each name (its tree), the aggregations
+    (the JSON the Rust side reads), the input columns to compute, and each
+    aggregate's text for the state's check."""
+    who = "rp.stream.bars"
+    seen: dict[str, str] = {}
+    aggs: list[dict[str, Any]] = []
+    inputs: dict[str, pl.Expr] = {}
+    outer: list[tuple[str, Any]] = []
+    texts: list[str] = []
+    accepted = "first, last, min, max, sum, count and pl.len()"
+    for name, expr in named.items():
+        if not isinstance(expr, pl.Expr):
+            raise TypeError(
+                f"{who}: aggregate {name!r} must be a Polars aggregation, such as "
+                f'pl.col("price").last(), but it is {type(expr).__name__}. Give each aggregate as '
+                "an expression."
+            )
+        if name in _BAR_COLUMNS or name.startswith(_BAR_HIDDEN):
+            raise ValueError(
+                f"{who}: an aggregate is named {name!r}, which a bar's own column takes. Name it "
+                "otherwise."
+            )
+        found = 0
+
+        def walk(node: Any, name: str = name) -> Any:
+            nonlocal found
+            if node == "Len":
+                kind, tree = "len", None
+            elif isinstance(node, dict) and len(node) == 1 and "Agg" in node:
+                ((agg, body),) = node["Agg"].items()
+                if agg in _BAR_AGGS:
+                    inner = body["input"] if isinstance(body, dict) and "input" in body else body
+                    kind = _BAR_AGGS[agg]
+                elif agg == "Count" and isinstance(body, dict):
+                    inner = body["input"]
+                    kind = "len" if body.get("include_nulls") else "count"
+                else:
+                    raise RefusedValueError(
+                        f"{who}: aggregate {name!r} holds the aggregation {agg}, which a bar does "
+                        f"not take. Write it with {accepted}, over an element-wise expression of "
+                        "the row, with element-wise arithmetic around them."
+                    )
+                tree = _formula._walk(inner, f"{who}: the input of aggregate {name!r}")
+            else:
+                if isinstance(node, dict):
+                    return {k: walk(v) for k, v in node.items()}
+                if isinstance(node, list):
+                    return [walk(v) for v in node]
+                return node
+            found += 1
+            key = json.dumps([kind, tree], sort_keys=True)
+            if key not in seen:
+                column = None
+                if tree is not None:
+                    if tree[0] == "col":
+                        column = tree[1]
+                    else:
+                        column = f"{prefix}in{len(inputs)}"
+                        inputs[column] = _formula.from_tree(tree)
+                seen[key] = f"{prefix}agg{len(aggs)}"
+                aggs.append({"kind": kind, "column": column, "name": seen[key]})
+            return {"Column": seen[key]}
+
+        try:
+            replaced = walk(json.loads(expr.meta.serialize(format="json")))
+        except KeyError:
+            raise RefusedValueError(
+                f"{who}: aggregate {name!r} has an aggregation this version of rheon cannot read "
+                f"under this version of Polars. Write it with {accepted}."
+            ) from None
+        if found == 0:
+            raise ValueError(
+                f"{who}: aggregate {name!r} holds no aggregation, so it has no value for a bar. "
+                f'Write an aggregation of the rows, such as pl.col("price").last(), with '
+                f"{accepted}."
+            )
+        tree = _formula._walk(replaced, f"{who}: aggregate {name!r}")
+        outer.append((name, tree))
+        texts.append(f"{name}={_formula.compact(tree)}")
+    return outer, aggs, inputs, texts
+
+
+@_renamed_keywords
+def bars(
+    lf: pl.LazyFrame | pl.DataFrame,
+    *,
+    clock: str,
+    kind: str,
+    threshold: float | str | pl.Expr,
+    quantity: str | pl.Expr | None = None,
+    group: str | None = None,
+    weight: str | None = None,
+    session: str | None = None,
+    gap_cap: float | Duration | None = None,
+    max_span: float | Duration | None = None,
+    restart_after_step_back: float | Duration | None = None,
+    partial: str = "keep",
+    group_close: str | None = None,
+    final: bool = False,
+    max_state_bytes: int = 256 * 1024,
+    max_total_bytes: int = 1 << 30,
+    chunk_size: int | None = None,
+    load_state: State | bytes | None = None,
+    save_state: State | None = None,
+    **aggregates: pl.Expr,
+) -> pl.LazyFrame | pl.DataFrame:
+    """Aggregate a stream into bars that close when a running quantity reaches a threshold.
+
+    Use it for tick, volume, dollar and imbalance bars: a bar is one output
+    row for a run of consecutive input rows, and it closes at the row where
+    the run's count, sum or signed sum reaches ``threshold``. Feed the bars to
+    a bank or to :func:`with_windows` as any other stream: a statistic over
+    the last 50 bars, such as VPIN, is a window of 50 rows over them.
+
+    .. rubric:: Parameters
+
+    ``lf``
+        The rows, a ``LazyFrame`` or a ``DataFrame``, in ``clock`` order
+        within each ``group``, as a stream must be.
+    ``clock``
+        The clock column: numeric, or a ``Datetime``, ``Date`` or
+        ``Duration``. A temporal clock is compared exactly, in integer
+        nanoseconds.
+    ``kind``
+        What the running quantity is:
+
+        - ``"count"``: the bar's rows. A bar of ``threshold`` rows: tick bars.
+        - ``"sum"``: the sum of ``quantity``, which must not be below 0. The
+          bars are the multiples of ``threshold`` on the running total: a bar
+          closes at the row that brings the total to the next multiple, and
+          the part past it is carried into the next bar. Volume bars, and
+          dollar bars with ``quantity=pl.col("price") * pl.col("size")``.
+        - ``"imbalance"``: the signed sum of ``quantity`` within the bar, which
+          closes once ``|sum| >= threshold`` and starts the next bar from 0.
+          Tick, volume and dollar imbalance bars, with the sign of each row
+          in ``quantity``.
+    ``threshold``
+        A number above 0 and at most 1e100 (under ``"count"`` a whole number
+        of rows), or a column or an element-wise expression read at each row,
+        such as a day's expected volume joined from a small table. A bar
+        closes when its quantity *reaches* the threshold: ``>=``.
+    ``quantity``
+        Under ``"sum"`` and ``"imbalance"``, the column or element-wise
+        expression of the row to sum, such as
+        ``pl.col("price") * pl.col("size")``. A value that is null, NaN,
+        infinite or past 1e100 in magnitude (the rule every spec column
+        follows) adds 0, and the row is still a row of the bar. Not taken under
+        ``"count"``.
+    ``group``
+        A column whose every value has bars of its own, such as a symbol: an
+        integer, a String, a Categorical or a Date. The bars of all groups come
+        out in the order of their closing rows. Default ``None``: one stream.
+    ``weight``
+        A column of 0 and 1. A row of weight 0 is in no bar and no clock: it
+        adds nothing to the quantity, enters no aggregate, is never a bar's
+        open or close, and cannot end a gap or start a session; it is still
+        read for the order check. A null weight is 0. Any other value is
+        refused: a row is in its bar or not, and a bar's count or high has no
+        meaning for a fraction of a row. For a weighted count, sum the weight
+        column with ``kind="sum"``. Default ``None``: every row is in.
+    ``session``, ``gap_cap``, ``max_span``, ``restart_after_step_back``
+        Optional cuts by the clock, each off by default. The open bar is cut
+        short, before the row that cuts it, at the first row of a new
+        ``session``; at a row whose step from its group's last row is past
+        ``gap_cap``; at a row more than ``max_span`` after the bar's first
+        row; and at a row whose clock steps back by more than
+        ``restart_after_step_back`` (without it any step back is refused).
+        A span is a number of clock units, or a duration on a temporal clock.
+        A cut also drops the remainder carried, since the carry counts
+        thresholds over one unbroken stretch of the stream.
+    ``partial``
+        ``"keep"``, the default, emits a bar cut short with ``complete`` false
+        and ``thresholds`` 0; ``"drop"`` leaves it out.
+    ``group_close``
+        ``"monotone"``: a row of a greater ``group`` key closes every group
+        before it, its open bar cut and its state dropped, which bounds the
+        state of a key that only grows, such as a trading day. Keys must then
+        come in ascending order, as numbers for an integer column and as
+        text otherwise. Default ``None``.
+    ``final``
+        ``True`` when the input is the whole stream: the bars still open at its
+        end are emitted, with ``complete`` false, and a saved state holds none
+        open. Default ``False``: an open bar has not reached its threshold, so
+        it is not a bar of the rule; it is kept in the state for the next run.
+    ``max_state_bytes``
+        The most bytes one group may hold, 256 KiB by default. A group's bytes
+        are fixed by the call but for its key's text, so a call past it is
+        refused when the query is built, and a group whose key takes it past
+        is refused when it first appears.
+    ``max_total_bytes``
+        The most bytes the groups together may hold, 1 GiB by default. A new
+        group past it is refused, naming the group, and a
+        :class:`~rheon.ReadinessWarning` comes once at half of it.
+    ``chunk_size``
+        The rows read at a time, at least 1. The default, ``None``, is the
+        library's default chunk size. It changes no output.
+    ``load_state``
+        The path of a state :func:`bars` saved, to go on from, or the state's
+        bytes, such as a stage :func:`load_checkpoint` gives back. It must have
+        been saved by the same call. Default ``None``.
+    ``save_state``
+        The path of a file to save the state to once the input is fed. Default
+        ``None``: save nothing.
+    ``**aggregates``
+        Each output column's name and its Polars aggregation over the bar's
+        rows: ``first``, ``last``, ``min``, ``max``, ``sum``, ``count`` and
+        ``pl.len()``, each over an element-wise expression of the row, with
+        element-wise arithmetic around them, such as
+        ``vwap=(pl.col("price") * pl.col("size")).sum() / pl.col("size").sum()``.
+        Each gives what Polars' ``group_by`` gives over the bar's rows, dtype
+        and nulls included. A float sum is rounded once, to nearest, as
+        Python's ``math.fsum`` rounds it; Polars' own float sum is not
+        correctly rounded, so it can differ from it in the last bits.
+
+    .. rubric:: Returns
+
+    The kind of frame it was given, with one row per bar, in the order of the
+    rows that closed them: the ``group`` column, in its input dtype;
+    ``bar``, the bar's index within its group from 0, continued across a
+    resume; ``time_open`` and ``time_close``, the clock of the bar's first
+    and last row, in the clock's dtype; ``thresholds``, how many thresholds
+    the closing row crossed (1 almost always, more for a row larger than the
+    threshold, which stays whole in one bar; 0 for a bar cut short);
+    ``carry``, under ``"sum"`` only, the remainder carried into the next bar,
+    rounded once to a double; ``complete``, false for a bar cut short or
+    emitted by ``final``; and the aggregates, in the order given.
+
+    .. rubric:: Raises
+
+    :class:`~rheon.ColumnNotFoundError`
+        A column named is not in the frame.
+    :class:`~rheon.WrongTypeError`
+        A column is of a type the call cannot read, or a keyword's value is.
+    ``ValueError``
+        A setting outside its range, an aggregate that is not one a bar
+        takes, a ``load_state`` saved by another call, or, when the query
+        runs, a row the call cannot take, named: a null clock, a step back, a
+        weight other than 0 or 1, a quantity below 0 under ``"sum"``, a
+        missing or non-positive threshold, or a group past the caps. Under
+        py-polars 1.x the error arrives inside Polars' ``ComputeError``.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        trades = pl.DataFrame({
+            "t": [1, 2, 3, 4, 5, 6],
+            "price": [10.0, 10.5, 10.25, 10.0, 9.75, 10.0],
+            "size": [4.0, 6.0, 3.0, 35.0, 2.0, 8.0],
+        })
+        volume_bars = rp.stream.bars(
+            trades, clock="t", kind="sum", quantity="size", threshold=10.0,
+            close=pl.col("price").last(), volume=pl.col("size").sum(),
+        )
+        for row in volume_bars.rows():
+            print(row)
+
+    .. code-block:: text
+
+        (0, 1, 2, 1, 0.0, True, 10.5, 10.0)
+        (1, 3, 4, 3, 8.0, True, 10.0, 38.0)
+        (2, 5, 5, 1, 0.0, True, 9.75, 2.0)
+
+    The second bar's last row, a trade of 35, takes the total from 13 to 48:
+    it crosses three multiples of 10 at once and stays whole in the bar, and
+    the 8 past the fourth multiple is carried, so the next bar closes at the
+    row of size 2, at a total of 50.
+
+    .. rubric:: Notes
+
+    **The running total is exact.** A total kept in one double rounds at each
+    row, and a rounding that moves the total across a multiple of the
+    threshold moves a row from one bar to the next. The remainder is kept
+    instead as a short list of doubles whose exact sum it is (Shewchuk's
+    expansion sums), changed only by exact additions and by scaling a
+    threshold by a power of two. So the bars are those of exact arithmetic,
+    and the same bits on every system: a state saved on one continues to
+    the bit on another.
+
+    **A bar's clock is its close.** A bar is known only at the row that
+    closes it, and every value in it comes from rows at or before that row, so
+    a bank that learns on bars at ``time_close`` still predicts each bar
+    before learning from it. Ties on the clock are broken by row order: a row
+    at the closing row's clock but after it opens the next bar, so two bars
+    can share a ``time_close``.
+
+    **It streams and it resumes.** A chunk gives the bars it closed, and the
+    open bars stay in memory, one a group: feeding the input as one chunk or a
+    thousand gives the same bars, to the bit. Under a slice of the output
+    (``.head(n)``) the input is read up to the row that gave the last bar
+    returned, and the state saved is the state after it. A run resumed from
+    a state goes on with the next bar. A bar has no decay and no window: a
+    bar of 10,000 shares holds 10,000 shares however long they took; decay
+    and windows belong to the statistics over the bars.
+    """
+    who = "rp.stream.bars"
+    if kind not in _BAR_KINDS:
+        raise ValueError(
+            f'{who}: kind must be "count", "sum" or "imbalance", but it is {kind!r}. Set kind '
+            "to one of those."
+        )
+    if partial not in ("keep", "drop"):
+        raise ValueError(
+            f'{who}: partial must be "keep" or "drop", but it is {partial!r}. Set it to one of '
+            "those."
+        )
+    if group_close not in (None, "monotone"):
+        raise ValueError(
+            f'{who}: group_close must be "monotone" or None, but it is {group_close!r}. Set it '
+            "to one of those, or leave it out."
+        )
+    if not isinstance(final, bool):
+        raise WrongTypeError(
+            f"{who}: final must be True or False, but it is {final!r}. Pass final=True to emit "
+            f"the bars still open at the end."
+        )
+    for key, cap in (("max_state_bytes", max_state_bytes), ("max_total_bytes", max_total_bytes)):
+        if isinstance(cap, bool) or not isinstance(cap, numbers.Integral) or cap < 1:
+            raise ValueError(
+                f"{who}: {key} must be a whole number of bytes of at least 1, but it is {cap!r}. "
+                f"Give it as an int, such as {key}=1 << 20."
+            )
+    lazy = lf.lazy()
+    in_schema = lazy.collect_schema()
+    for role, col in (("clock", clock), ("group", group), ("weight", weight), ("session", session)):
+        if col is None:
+            continue
+        if not isinstance(col, str):
+            raise TypeError(
+                f"{who}: {role} takes a column name, but it is {type(col).__name__}. Give the "
+                "column's name."
+            )
+        if col not in in_schema:
+            raise ColumnNotFoundError(
+                f"{who}: the input has no {role} column {col!r}, only {in_schema.names()}. Set "
+                f"{role} to one of those columns."
+            )
+    if any(c.startswith(_BAR_HIDDEN) for c in in_schema.names()):
+        raise ValueError(
+            f"{who}: the input has a column whose name starts with {_BAR_HIDDEN!r}, which the "
+            "call keeps for the columns it computes. Rename it."
+        )
+    _refuse_uint128(in_schema, who, (clock,))
+    clock_dtype = in_schema[clock]
+    if not (
+        clock_dtype.is_numeric() or isinstance(clock_dtype, pl.Datetime | pl.Date | pl.Duration)
+    ):
+        raise WrongTypeError(
+            f"{who}: clock column {clock!r} must be a number, a Datetime, a Date or a Duration, "
+            f"but it is {clock_dtype}. Cast it, such as with pl.col({clock!r}).cast(pl.Float64)."
+        )
+    computed: dict[str, pl.Expr] = {}
+    call: dict[str, str] = {"clock": clock}
+    for role, col in (("group", group), ("weight", weight), ("session", session)):
+        if col is not None:
+            call[role] = col
+
+    def column_of(role: str, value: Any) -> str:
+        if isinstance(value, str):
+            if value not in in_schema:
+                raise ColumnNotFoundError(
+                    f"{who}: the input has no {role} column {value!r}, only {in_schema.names()}. "
+                    f"Give {role} as one of those columns, or as an expression."
+                )
+            call[role] = value
+            return value
+        tree = _formula.to_tree(value, f"{who}: {role}")
+        call[role] = _formula.compact(tree)
+        name = f"{_BAR_HIDDEN}{role}"
+        computed[name] = value
+        return name
+
+    if kind == "count" and quantity is not None:
+        raise ValueError(
+            f'{who}: kind="count" counts rows, so it takes no quantity. Leave out quantity, or set '
+            'kind to "sum" or "imbalance".'
+        )
+    if kind != "count" and quantity is None:
+        raise ValueError(
+            f"{who}: kind={kind!r} sums a quantity, but none is given. Give quantity, a column or "
+            "an element-wise expression of the row."
+        )
+    if quantity is not None and not isinstance(quantity, str | pl.Expr):
+        raise TypeError(
+            f"{who}: quantity takes a column name or an expression, but it is "
+            f'{type(quantity).__name__}. Pass a column name, such as quantity="size".'
+        )
+    q_col = column_of("quantity", quantity) if quantity is not None else None
+    if isinstance(threshold, bool):
+        raise WrongTypeError(
+            f"{who}: threshold must be a number or a column, but it is a bool. Give the "
+            f"threshold as a number, such as threshold=500."
+        )
+    if isinstance(threshold, numbers.Real):
+        th: dict[str, Any] = {"value": float(threshold)}
+        if float(threshold) != threshold:
+            raise ValueError(
+                f"{who}: threshold {threshold!r} is not exactly a double. Give a number a double "
+                "holds, such as an integer up to 2^53."
+            )
+        call["threshold"] = repr(float(threshold))
+    elif isinstance(threshold, str | pl.Expr):
+        th = {"column": column_of("threshold", threshold)}
+    else:
+        raise TypeError(
+            f"{who}: threshold takes a number, a column name or an expression, but it is "
+            f"{type(threshold).__name__}. Give a number, such as threshold=500, or a column."
+        )
+    outer, aggs, inputs, texts = _bar_aggregates(aggregates, _BAR_HIDDEN)
+    computed.update(inputs)
+    call["aggregates"] = ";".join(texts)
+    spans: dict[str, Any] = {}
+    for key, value in (
+        ("gap_cap", gap_cap),
+        ("max_span", max_span),
+        ("restart_after_step_back", restart_after_step_back),
+    ):
+        x, text = _restart_setting(value, clock_dtype, who, clock, key)
+        if x is not None:
+            spans[key] = x
+    config = {
+        "kind": kind,
+        "clock": clock,
+        "threshold": th,
+        "quantity": q_col,
+        "group": group,
+        "weight": weight,
+        "session": session,
+        **spans,
+        "keep_partial": partial == "keep",
+        "monotone": group_close == "monotone",
+        "max_state_bytes": int(max_state_bytes),
+        "max_total_bytes": int(max_total_bytes),
+        "aggregates": aggs,
+        "call": call,
+    }
+    config_json = json.dumps(config)
+    needed = [clock, group, weight, session, q_col, th.get("column")]
+    needed += [a["column"] for a in aggs]
+    keep_cols: list[str] = []
+    for c in needed:
+        if c is not None and c not in keep_cols:
+            keep_cols.append(c)
+    prepared = lazy.with_columns(**computed) if computed else lazy
+    prepared = prepared.select(keep_cols)
+    rows = _check_chunk_size(chunk_size, who) or _native.default_chunk_size()
+    plan_text = _plan_text(lazy)
+    _warn_if_order_unspecified(
+        lazy, who, plan_text, reads="a bar is a run of rows in row order", before="the bars"
+    )
+    loaded = _read_state(load_state) if load_state is not None else None
+    save_path = _save_path(save_state, who)
+    empty = pl.DataFrame(schema=prepared.collect_schema())
+
+    def build() -> _native.Bars:
+        if loaded is not None:
+            return _native.Bars.load_bytes(loaded, config_json, empty)
+        return _native.Bars(config_json, empty)
+
+    fixed = [c for c in ([group] if group is not None else [])]
+    fixed += ["bar", "time_open", "time_close", "thresholds"]
+    fixed += ["carry"] if kind == "sum" else []
+    fixed += ["complete"]
+    finals = [pl.col(c) for c in fixed] + [
+        _formula.from_tree(tree).alias(name) for name, tree in outer
+    ]
+
+    def finish(out: pl.DataFrame) -> pl.DataFrame:
+        return out.select(finals)
+
+    schema = finish(build().feed(empty)).schema
+
+    def source(
+        with_columns: list[str] | None,
+        predicate: pl.Expr | None,
+        n_rows: int | None,
+        batch_size: int | None,
+    ) -> Iterator[pl.DataFrame]:
+        # The slice counts bars, the output's rows: under it the run stops
+        # at the row that gave the last bar wanted, so a saved state goes on
+        # from there whatever the chunk size.
+        b = build()
+        seen = 0
+
+        def emit(out: pl.DataFrame) -> pl.DataFrame:
+            for notice in b.take_notices():
+                warnings.warn(ReadinessWarning(notice), stacklevel=_user_stacklevel())
+            out = finish(out)
+            if predicate is not None:
+                out = out.filter(predicate)
+            if with_columns is not None:
+                out = out.select(with_columns)
+            return out
+
+        sliced = False
+        for chunk in prepared.collect_batches(chunk_size=rows, maintain_order=True):
+            out = b.feed(chunk, None if n_rows is None else n_rows - seen)
+            seen += out.height
+            yield from _in_morsels(emit(out))
+            if n_rows is not None and seen >= n_rows:
+                sliced = True
+                break
+        if final and not sliced:
+            out = b.finish()
+            if n_rows is not None:
+                out = out.head(n_rows - seen)
+            yield from _in_morsels(emit(out))
+        if save_path is not None:
+            b.save(save_path)
+
+    plan = register_io_source(
+        source,
+        schema=schema,
+        validate_schema=True,
+        is_pure=save_path is None,
+        **_explain_named(f"bars: kind={kind}"),
+    )
+    return plan if isinstance(lf, pl.LazyFrame) else plan.collect()
+
+
 #: What :func:`merge` takes as its inputs: frames by position, or one mapping
 #: of each input's name to its frame.
 _Frame = pl.LazyFrame | pl.DataFrame
@@ -1261,12 +1806,21 @@ def _merge_inputs(frames: tuple[Any, ...], who: str) -> list[tuple[str, _Frame]]
 
 
 def _restart_setting(
-    value: Any, dtype: pl.DataType | None, who: str, clock: str
+    value: Any,
+    dtype: pl.DataType | None,
+    who: str,
+    clock: str,
+    key: str = "restart_after_step_back",
 ) -> tuple[float | None, str | None]:
-    """``restart_after_step_back`` in the clock's units, integer nanoseconds
-    on a temporal clock, and as the message names it; ``(None, None)``
-    left out."""
-    key = "restart_after_step_back"
+    """``restart_after_step_back``, or another span of the clock named by
+    ``key``, in the clock's units, integer nanoseconds on a temporal clock,
+    and as the message names it; ``(None, None)`` left out."""
+    restart = key == "restart_after_step_back"
+    what = (
+        "the smallest step back that starts a stream again"
+        if restart
+        else "a span of the clock's units"
+    )
     if value is None:
         return None, None
     if dtype is not None and isinstance(dtype, pl.Time):
@@ -1301,14 +1855,13 @@ def _restart_setting(
     if isinstance(value, bool) or not isinstance(value, numbers.Real):
         raise WrongTypeError(
             f"{who}: {key} must be a number on numeric clock column {clock!r}, but its type is "
-            f"{type(value).__name__}. Set it to the smallest step back that starts a stream "
-            "again, such as 3600."
+            f"{type(value).__name__}. Set it to {what}, such as 3600."
         )
     x = float(value)
     if math.isnan(x) or x < 0:
         raise ValueError(
-            f"{who}: {key} must be 0 or more, but it is {value!r}. Set it to the smallest step "
-            "back that starts a stream again, or leave it out to refuse every step back."
+            f"{who}: {key} must be 0 or more, but it is {value!r}. Set it to {what}, or leave it "
+            f"out{' to refuse every step back' if restart else ''}."
         )
     return x, ("inf" if math.isinf(x) else repr(value) if isinstance(value, float) else str(value))
 

@@ -208,7 +208,7 @@ pub struct RefreshTime {
 /// a float are ordered exactly against each other, so a state saved from
 /// one resumes on the other.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-enum Instant {
+pub(crate) enum Instant {
     Number(f64),
     Nanos(i64),
     Int(i64),
@@ -234,7 +234,7 @@ impl PartialOrd for Instant {
 
 impl Instant {
     /// The value as the column shows it: a temporal one in its own kind.
-    fn show(self, dtype: &DataType) -> String {
+    pub(crate) fn show(self, dtype: &DataType) -> String {
         const DAY: i64 = 86_400 * 1_000_000_000;
         match (self, dtype) {
             (Self::Number(v), _) => format!("{v}"),
@@ -256,7 +256,7 @@ impl Instant {
         }
     }
 
-    fn kind(self) -> ClockKind {
+    pub(crate) fn kind(self) -> ClockKind {
         match self {
             Self::Number(_) | Self::Int(_) => ClockKind::Numeric,
             Self::Nanos(_) => ClockKind::Temporal,
@@ -320,13 +320,13 @@ struct LegacyRefreshFile {
 
 /// Which kind of clock a sampler has been fed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum ClockKind {
+pub(crate) enum ClockKind {
     Numeric,
     Temporal,
 }
 
 impl ClockKind {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Numeric => "numeric",
             Self::Temporal => "temporal",

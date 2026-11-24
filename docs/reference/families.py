@@ -136,7 +136,10 @@ FAMILIES: tuple[Family, ...] = (
     Family(
         "stream",
         "stream",
-        tuple(f"{_RP}.stream.{m}" for m in ("with_windows", "embargo", "refresh_time", "merge")),
+        tuple(
+            f"{_RP}.stream.{m}"
+            for m in ("with_windows", "embargo", "refresh_time", "merge", "bars")
+        ),
     ),
     Family(
         "stream-checkpoint",
@@ -165,6 +168,7 @@ FAMILIES: tuple[Family, ...] = (
                 "cross_rank",
                 "cross_quantile",
                 "cross_ref",
+                "tick_sign",
             )
         ),
     ),

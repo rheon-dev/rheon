@@ -142,6 +142,12 @@ dev = [
     # Mahalanobis distance. The floors are the versions measured.
     "pandas>=3.0.5",
     "scipy>=1.18.1",
+    # tests/test_stream_bars.py: the one bar library of those checked that
+    # computes the same bars as rp.stream.bars and installs beside the
+    # tests' NumPy (docs/records/BARS-DESIGN.md, "Oracles"): its tick bars,
+    # its volume and dollar bars, and its fixed-threshold imbalance bars.
+    # MIT, NumPy its one dependency. The floor is the version checked.
+    "bar-forge>=1.0.1",
     # scripts/cpu_paths.py's `check` (cpu-paths.yml): which kernels each
     # loaded OpenBLAS runs, NumPy's copy and SciPy's, so a leg that pins
     # OPENBLAS_CORETYPE shows it took effect. BSD-3-Clause; the floor is

@@ -28,9 +28,9 @@ use gungraun::prelude::*;
 use gungraun::{Callgrind, EntryPoint};
 use rheon_bench::scaling::{ScaleRun, rheon_budget_scale_rows, scale_setup};
 use rheon_bench::{
-    BankRun, ClockRun, ModelRun, WindowsCase, bank_setup, clock_setup, model_setup,
-    rheon_budget_bank_rows, rheon_budget_clock_rows, rheon_budget_model_rows,
-    rheon_budget_windows_rows, windows_setup,
+    BankRun, BarsCase, ClockRun, ModelRun, WindowsCase, bank_setup, bars_setup, clock_setup,
+    model_setup, rheon_budget_bank_rows, rheon_budget_bars_rows, rheon_budget_clock_rows,
+    rheon_budget_model_rows, rheon_budget_windows_rows, windows_setup,
 };
 
 /// Count from `entry` on, with each pool held to one thread, and under the
@@ -160,6 +160,14 @@ fn windows(mut run: WindowsCase) -> WindowsCase {
     run
 }
 
+#[library_benchmark(config = counted_from("rheon_budget_bars_rows"))]
+#[bench::bars_volume(args = ("bars_volume"), setup = bars_setup)]
+#[bench::bars_volume_groups100(args = ("bars_volume_groups100"), setup = bars_setup)]
+fn bars(mut run: BarsCase) -> BarsCase {
+    black_box(rheon_budget_bars_rows(black_box(&mut run)));
+    run
+}
+
 // The scaling table's cells, each at its two sizes (`rheon_bench::scaling`):
 // `scripts/budgets.py` holds the ratio of a cell's two counts to the growth
 // `budgets.toml`'s `[scaling.cells]` declares, within the run. A bank's cell
@@ -227,7 +235,7 @@ fn scaling(mut run: ScaleRun) -> ScaleRun {
 
 library_benchmark_group!(
     name = hot_paths,
-    benchmarks = [model, clock, bank, windows, scaling]
+    benchmarks = [model, clock, bank, windows, bars, scaling]
 );
 
 main!(library_benchmark_groups = hot_paths);

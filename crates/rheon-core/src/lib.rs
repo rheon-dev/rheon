@@ -61,6 +61,7 @@
 
 mod ar;
 mod audit;
+pub mod bars;
 mod bocpd;
 mod boundary;
 mod breaks;
@@ -87,6 +88,7 @@ mod ewdiag;
 mod ewlagcov;
 mod ewm_moments;
 mod ewridge;
+pub mod exact;
 mod expectile;
 mod family;
 mod ftrl;
