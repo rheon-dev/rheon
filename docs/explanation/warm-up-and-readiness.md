@@ -25,9 +25,7 @@ whose rows do not yet tell its variance process from a constant variance
 is `not_identified`, and a `corrchange` flag on a span whose two columns'
 scale ratio moved is `scale_ratio_moved`.
 `level_beyond_sample` is a `tdigest` or `ddsketch` level past what its rows
-identify. A `gmm` start whose fit still moves between tries is
-`not_converged`, and its buffer at its bound with no start is
-`above_max_state_bytes`. [Is it
+identify. [Is it
 ready?](../DIAGNOSTICS.md#is-it-ready) lists every reason in their order of precedence, and [Decide
 when a model is ready](../how-to/decide-when-a-model-is-ready.md) runs the
 three main gates on one stream.
