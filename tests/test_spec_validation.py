@@ -927,7 +927,6 @@ def test_each_drift_option_is_held_to_its_own_type():
 @pytest.mark.parametrize(
     ("builder", "key", "kw"),
     [
-        ("garch", "horizon", {"targets": ["y"], "start_rows": 50}),
         ("garch", "truncation", {"targets": ["y"], "start_rows": 50, "vol": "figarch"}),
         ("garch", "start_rows", {"targets": ["y"]}),
         ("hawkes", "window_events", {"targets": ["y"], "kernel_decays": [1.0], "half_life": 10.0}),

@@ -168,8 +168,8 @@ fn one_refit(
 ) -> Result<(), String> {
     match (rows, span) {
         (Some(n), Some(s)) => Err(format!(
-            "spec {:?}: {span_key} = {s} and {rows_key} = {n} both set the refit of a target's \
-             first rows, by the clock and by the rows, and a target is refit once. Leave one of \
+            "spec {:?}: {span_key} = {s} and {rows_key} = {n} are two refits of the first rows, \
+             one by the clock and one by the rows, and a target is refit once. Leave one of \
              them out.",
             spec.name
         )),

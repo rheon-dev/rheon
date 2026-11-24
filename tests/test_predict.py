@@ -26,7 +26,7 @@ import pytest
 from conftest import run_online
 from data import synthetic
 from rheon import polars as rp
-from test_semantics_all_models import IDS, SWEEP
+from test_semantics_all_models import IDS, NO_COEF, SWEEP
 
 TIER = "essential"
 
@@ -109,6 +109,8 @@ def _spec(model, extra, **kw):
     opts.update(kw)
     if opts.get("features", ()) is None:
         del opts["features"]  # a model with no features keyword (holt)
+    if model in NO_COEF:
+        del opts["max_rows_between_coefs"]  # a fit with no coefficients to report
     return getattr(rp.spec, model)("m", **opts)
 
 
