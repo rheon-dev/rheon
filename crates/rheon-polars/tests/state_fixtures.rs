@@ -2869,6 +2869,8 @@ fn same_series(what: &str, got: &Series, want: &Series, tol: f64) {
                     (None, None) => true,
                     (Some(a), Some(b)) if a.is_nan() || b.is_nan() => a.is_nan() && b.is_nan(),
                     (Some(a), Some(b)) if tol == 0.0 => a.to_bits() == b.to_bits(),
+                    // an infinity the same on both sides: their difference is NaN
+                    (Some(a), Some(b)) if a == b => true,
                     (Some(a), Some(b)) => (a - b).abs() <= tol * (1.0 + b.abs()),
                     _ => false,
                 };
@@ -3240,7 +3242,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             };
             assert_eq!(
                 envelope_head(&bytes),
-                Some(("rheon-state".to_owned(), "windows".to_owned(), 13))
+                Some(("rheon-state".to_owned(), "windows".to_owned(), 14))
             );
             assert!(sealed(&bytes));
             cores += 1;
