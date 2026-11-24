@@ -1919,6 +1919,100 @@ date = 2026-11-21
 reason = "PLAN 539, hard rule 9: a row of weight 0 counts in no clock, so the stream's planning pass tests each row's weight and plans such a row on copies of the clock, a model kept aside for a fresh or blended scoring is put back after the row, and each group's step and clock checks take the weights and refuse at the first row in the input. CI's count on 1819e678 (W9): 9,608,553 to 9,901,589, +3.05%. Traced natively on arm64 (retired instructions of the block, median of 15) at the commits of the change, and ablated: the planning pass's branch and the kept model carry the whole of the first case's +2.4% (the branch out of line and the kept model boxed return about 1% of it), the groups' +2.2% lies in the bank's per-group path and was not attributed to one piece (the step and clock checks, the first-refused-row reduction and the planning pass each ablated to no change). Set to CI's count"
 changelog = "A row of weight 0 counting in no clock costs the bank's cheapest case"
 
+
+# TODO(coordinator): the raises below wait for CI's Valgrind counts on the
+# wave's sha. Uncomment each that is still over its budget, set `to` to the
+# count, drop the TODO from its reason, and keep `from` as the budget the
+# case had before the raise.
+#
+# [[raised]]
+# key = "instructions.deco"
+# from = 3006026
+# to = TODO
+# date = 2026-11-24
+# reason = "PLAN 551, rule 5's twenty-sixth exception (the user, 2026-11-22): `deco`'s `rho` is the ratio of the weighted means EW(A)/EW(V), the equicorrelation's weighted maximum-likelihood estimate, where the EW mean of `u` read two-thirds of it; each value keeps the EW means of the row's numerator and denominator, and the level learns once the standardizer's Kish size is above 5. +5.9% in the Linux bisect at bebd2336. TODO(coordinator): `to` from CI's count"
+# changelog = "`deco`'s ratio level costs 3-4% a row unblocked"
+#
+# [[raised]]
+# key = "instructions.corrchange_monitor_w2500"
+# from = 4375320
+# to = TODO
+# date = 2026-11-24
+# reason = "PLAN 553: the monitor holds its level at every span (the CUSUM of the delta-method series, against the Kolmogorov quantile) and keeps the CUSUM of the squared standardized difference beside each pair's, to withhold a flag where the scale ratio moved; +4.7% in the Linux bisect at ebe72622. TODO(coordinator): `to` from CI's count"
+# changelog = "`corrchange`'s monitor and window kinds cost 4.7% and 2.3% more"
+#
+# [[raised]]
+# key = "instructions.corrchange_window_w100"
+# from = 15037429
+# to = TODO
+# date = 2026-11-24
+# reason = "PLAN 553: the window kind carries the clock's spans and the state's bound that `window_size` on the clock needs; +2.3% in the Linux bisect at ebe72622. TODO(coordinator): `to` from CI's count"
+# changelog = "`corrchange`'s monitor and window kinds cost 4.7% and 2.3% more"
+#
+# [[raised]]
+# key = "instructions.ftrl"
+# from = 3512553
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-9: a row whose gradient would take a target's sum of squares past the largest double is skipped, on a bound read from the target's largest feature and largest sum, a pass over its slots a row; +3.4% in the Linux bisect. TODO(coordinator): `to` from CI's count"
+# changelog = "`ftrl` bounds each target's sum of squared gradients before its"
+#
+# [[raised]]
+# key = "instructions.holt"
+# from = 535026
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-4 and REG-5: a trend and a line fit formed in range at the ends of the doubles, each product tested as a normal double before use; +5.6% in the Linux bisect. TODO(coordinator): `to` from CI's count"
+# changelog = "`holt` forms its trend and line fit in range at the ends of the"
+#
+# [[raised]]
+# key = "instructions.huber_k20_sum"
+# from = 5926403
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-18 (rule 5's twenty-ninth exception): huber standardizes from every row's moments, a second EwDiag a target; +1.0% in the Linux bisect at 0c6b9975. TODO(coordinator): `to` from CI's count, net of the REG-12 fast path"
+# changelog = "`huber`'s and `quantile`'s scales from every row cost 0.3% to 2.7%"
+#
+# [[raised]]
+# key = "instructions.ewridge_k5"
+# from = 2119477
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
+# changelog = "A sum of squared weights kept at its own power of two costs a test a"
+#
+# [[raised]]
+# key = "instructions.sgd"
+# from = 2537026
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
+# changelog = "A sum of squared weights kept at its own power of two costs a test a"
+#
+# [[raised]]
+# key = "instructions.sgd_huber"
+# from = 2881700
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
+# changelog = "A sum of squared weights kept at its own power of two costs a test a"
+#
+# [[raised]]
+# key = "instructions.bank_ewridge_k5"
+# from = 5201744
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
+# changelog = "A sum of squared weights kept at its own power of two costs a test a"
+#
+# [[raised]]
+# key = "instructions.bank_ewridge_k5_groups"
+# from = 14662027
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
+# changelog = "A sum of squared weights kept at its own power of two costs a test a"
+
 [[signoff]]
 key = "instructions.clock_temporal"
 version = "1.3.0"

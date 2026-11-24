@@ -2043,6 +2043,42 @@ model that only the new build has is listed as an addition and passes.
   in a check of this kind: with the wait read as a constant the count is as
   now.
 
+- **A sum of squared weights kept at its own power of two costs a test a
+  row** (review 2026-11-23, REG-12), for Kish's count, `rls`'s error
+  inflation and `sgd`'s level and warm-up at weights whose squares are
+  below the doubles, where they were 0 for good. Every row of `ew_cov`,
+  the Grams of `ewridge`, `rls`, and `sgd`'s and `pa`'s level and warm-up
+  tests the sum's power and the weight's range before the plain update; a
+  row outside it, or a sum whose power has moved, takes the general update
+  out of line. Retired instructions of one 1,000-row block on macOS arm64
+  (bench profile, exact to a few instructions), before the review, with
+  its first form, and now: `ewridge` with 5 features 1,977,682, 2,009,682
+  and 1,987,685 (+0.51%); `sgd` 2,469,977, 2,555,852 and 2,500,726
+  (+1.24%, about 20 instructions a row of it the level's sum); `rls`
+  6,034,477 and 6,049,477 now (+0.25%); `ew_cov` 7,413,477 and 7,426,477
+  (+0.18%). Outputs are unchanged.
+
+- **`ftrl` bounds each target's sum of squared gradients before its
+  step** (review 2026-11-23, REG-9), so a row that would take a sum past
+  the largest double is skipped instead of leaving a coefficient NaN for
+  good. The bound reads the largest feature and the largest sum of the
+  target, a pass over its `k` slots a row: 3.4% more instructions a row in
+  CI's count on Linux (20 features, logistic loss).
+
+- **`holt` forms its trend and line fit in range at the ends of the
+  doubles** (review 2026-11-23, REG-4 and REG-5): a row tests whether each
+  product it forms is a normal double before using it, and forms the term
+  another way where it is not, so a trend no longer goes infinite and a
+  slope no longer drops out at tiny weights. 5.6% more instructions a row
+  in CI's count on Linux (one column, half-life 1,000).
+
+- **`corrchange`'s monitor and window kinds cost 4.7% and 2.3% more
+  instructions a row** (PLAN 553, CI's count on Linux): the monitor keeps
+  the CUSUM of `x̃² − ỹ²` beside each pair's, to withhold a flag where the
+  two columns' scale ratio moved, and both kinds carry the clock's spans
+  and the state's bound that a span of the clock needs, which a span of
+  rows pays a branch apiece for.
+
 - **`deco`'s ratio level costs 3-4% a row unblocked and 18-22% over four
   blocks** (PLAN 551), for a level that reads the equicorrelation where the
   EW mean of `u` read two-thirds of it. Each value keeps the EW means of the
