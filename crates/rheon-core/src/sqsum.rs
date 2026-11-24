@@ -65,13 +65,15 @@ fn add_scaled(q: &mut f64, s: &mut i32, lam: f64, w: f64) {
     // scale takes the decay's power of two and the sum's own: `λ = f · 2^e`
     // and `q = g · 4^t`, `g` in `[1/4, 1)`, so `λ² · q · 4^s = (f² · g) ·
     // 4^(s + e + t)`, exactly, and the part kept is near 1. Only while the
-    // scale stays one a weight makes; past it the sum fades as before.
+    // weight the sum is of can still be a normal double, `Σw² ≤ (Σw)²`, so
+    // to a scale of `2^-1022`: past it the weight itself is subnormal, and
+    // the sum fades as before ([`count`] reads no size there).
     if *q > 0.0 && lam > 0.0 && lam.is_finite() && !(held >= f64::MIN_POSITIVE) {
         let (f, e) = crate::held_median::frexp(lam);
         let (_, eq) = crate::held_median::frexp(*q);
         let t = eq.div_euclid(2);
         let moved = i64::from(*s) + e + t;
-        if scale_fits_i64(moved) {
+        if moved >= MIN_DECAYED_SCALE && scale_fits_i64(moved) {
             held = f * f * ldexp(*q, -2 * t);
             *s = moved as i32;
         }
@@ -98,16 +100,27 @@ fn add_scaled(q: &mut f64, s: &mut i32, lam: f64, w: f64) {
     *q = held + ws * ws;
 }
 
+/// The least scale a decay takes the sum to ([`add_scaled`]): `4^-1022`,
+/// the square of the least normal double.
+const MIN_DECAYED_SCALE: i64 = -1022;
+
 /// `Q`, a double: 0 where it is below the doubles.
 pub(crate) fn value(q: f64, s: i32) -> f64 {
     ldexp(q, 2 * i64::from(s))
 }
 
 /// Kish's count `W² / Q` from `W` and the sum in parts; `None` where the
-/// sum is not above 0.
+/// sum is not above 0, and 0 where `W` is a subnormal double.
 #[inline]
 pub(crate) fn count(w: f64, q: f64, s: i32) -> Option<f64> {
-    if q > 0.0 && s == 0 {
+    if q > 0.0 && w > 0.0 && w < f64::MIN_POSITIVE {
+        // A weight past the normal doubles has lost its last bits (one
+        // decayed there sticks at the least subnormal while the sum, kept
+        // at its own scale, decays on): read against the sum it was a size
+        // of `1e292` (review 2026-11-23, COV-4). It counts as none, as its
+        // square, 0 in the doubles, always made it.
+        Some(0.0)
+    } else if q > 0.0 && s == 0 {
         Some(w * w / q)
     } else if q > 0.0 {
         let ws = ldexp(w, -i64::from(s));
@@ -118,10 +131,13 @@ pub(crate) fn count(w: f64, q: f64, s: i32) -> Option<f64> {
 }
 
 /// `Q / W`, the weight of a row in Kish's sense; `None` where either is not
-/// above 0.
+/// above 0, or `W` is a subnormal double.
 #[inline]
 pub(crate) fn per_weight(w: f64, q: f64, s: i32) -> Option<f64> {
     if !(w > 0.0 && q > 0.0) {
+        None
+    } else if w < f64::MIN_POSITIVE {
+        // As [`count`]: a subnormal weight has lost its last bits.
         None
     } else if s == 0 {
         Some(q / w)
@@ -262,16 +278,18 @@ mod tests {
                 add(&mut qa, &mut sa, lam, w);
                 add_scaled(&mut qb, &mut sb, lam, w);
                 assert_eq!((qa.to_bits(), sa), (qb.to_bits(), sb), "w {w:e}, q {q0}");
+                // A subnormal weight counts as none (`count`).
+                let subnormal = w > 0.0 && w < f64::MIN_POSITIVE;
                 let general_count = (qb > 0.0).then(|| {
                     let x = ldexp(w, -i64::from(sb));
-                    x * x / qb
+                    if subnormal { 0.0 } else { x * x / qb }
                 });
                 assert_eq!(
                     count(w, qa, sa).map(f64::to_bits),
                     general_count.map(f64::to_bits),
                     "count at w {w:e}"
                 );
-                let general_per = (w > 0.0 && qb > 0.0)
+                let general_per = (w > 0.0 && qb > 0.0 && !subnormal)
                     .then(|| ldexp(qb / ldexp(w, -i64::from(sb)), i64::from(sb)));
                 assert_eq!(
                     per_weight(w, qa, sa).map(f64::to_bits),

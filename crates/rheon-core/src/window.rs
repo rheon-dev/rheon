@@ -1358,7 +1358,6 @@ pub fn truncated(cov: &EwCov, old: &Moments, f: f64) -> Option<EwCov> {
     let (w, q) = truncated_parts(cov, old, f, &mut work)?;
     let mut out = cov.clone();
     out.set_moments_packed(&work.mean, &work.cen, w, q);
-    out.scale_prior_to_window_of(cov);
     Some(out)
 }
 
@@ -1720,7 +1719,6 @@ pub fn truncated_diag(cov: &EwCovDiag, old: &DiagMoments, f: f64) -> Option<EwCo
     let (w, q) = truncated_diag_parts(cov, old, f, &mut work)?;
     let mut out = cov.clone();
     out.set_moments(&work.mean, &work.cen, w, q);
-    out.scale_prior_to_window_of(cov);
     Some(out)
 }
 

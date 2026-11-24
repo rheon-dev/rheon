@@ -203,6 +203,14 @@ impl EwDiag {
         }
         let a = lam * self.w_sum / w_new; // weight of the old statistics
         let b = w / w_new; // weight of the new point
+        // A history the decay all but forgot: each mean steps from the row
+        // back (`crate::comp::step_toward`), out of line, as rare as a gap
+        // of 52 half-lives.
+        if a < crate::comp::FORGOTTEN && b > 0.0 {
+            self.update_forgotten(x, a, b);
+            self.w_sum = w_new;
+            return;
+        }
         // Weighted Welford, as `EwCov::update` writes its diagonal: the
         // deviation is against the OLD mean, and the expression
         // `a * c + a * b * d * d` is kept in that order so the bits agree.
@@ -245,6 +253,25 @@ impl EwDiag {
         self.w_sum = w_new;
     }
 
+    /// [`Self::update`]'s loop on a row whose history keeps less than
+    /// [`crate::comp::FORGOTTEN`] of the weight: each mean taken from the row
+    /// back (review 2026-11-23, REG-7).
+    #[cold]
+    #[inline(never)]
+    fn update_forgotten(&mut self, x: &[f64], a: f64, b: f64) {
+        for (((ci, mi), lo), &xi) in self
+            .c
+            .iter_mut()
+            .zip(self.m.iter_mut())
+            .zip(self.m_lo.iter_mut())
+            .zip(x)
+        {
+            let d = crate::comp::dev(xi, *mi, *lo);
+            *ci = a * *ci + a * b * d * d;
+            crate::comp::from_row(mi, lo, xi, d, a);
+        }
+    }
+
     /// [`Self::update`], the moments read against a history of at least
     /// `floor`, up to `had`, the weight the history had before the gap:
     /// where the history's decayed weight `lam·W` is below `H = min(had,
@@ -283,7 +310,7 @@ impl EwDiag {
         {
             let d = crate::comp::dev(xi, *mi, *lo);
             *ci = a * *ci + a * b * d * d;
-            crate::comp::add(mi, lo, b * d);
+            crate::comp::step_toward(mi, lo, xi, d, a, b);
         }
         self.w_sum = carried + w;
         true
@@ -331,7 +358,7 @@ impl EwDiag {
             {
                 let d = crate::comp::dev(xi, *mi, *lo);
                 *ci = a * *ci + a * b * d * d;
-                crate::comp::add(mi, lo, b * d);
+                crate::comp::step_toward(mi, lo, xi, d, a, b);
             }
         }
         self.w_sum = w_new;
@@ -367,7 +394,7 @@ impl EwDiag {
         {
             let d = crate::comp::dev(x, *mi, *lo);
             *ci = a * *ci + a * b * d * d;
-            crate::comp::add(mi, lo, b * d);
+            crate::comp::step_toward(mi, lo, x, d, a, b);
         }
         self.w_sum = w_new;
     }
@@ -483,7 +510,7 @@ impl Including<'_> {
         let d = crate::comp::dev(x, hi, lo);
         let c = self.a * c + self.a * self.b * d * d;
         let (mut hi, mut lo) = (hi, lo);
-        crate::comp::add(&mut hi, &mut lo, self.b * d);
+        crate::comp::step_toward(&mut hi, &mut lo, x, d, self.a, self.b);
         (
             hi,
             crate::solve::clamp_rounding(c),
@@ -530,6 +557,48 @@ pub(crate) const SMALL_SHARE: f64 = 1.0 / 1024.0;
 mod tests {
     use super::*;
     use crate::EwCov;
+
+    /// A history the decay forgot (`lam = 0`) leaves the row alone: the
+    /// accumulator after it is a fresh one's after the same rows, to the bit,
+    /// through `update` at every width (the lanes' among them on x86-64),
+    /// `update_one` and the admitted row's view. A mean at `1e18` took a row
+    /// at 1 to 0 (review 2026-11-23, REG-7). And a history of `2^-60` of the
+    /// weight beside a mean of `2^60` takes a row at 1 to 2, `x + a·(m − x)`.
+    #[test]
+    fn a_history_the_decay_forgot_leaves_the_row_alone() {
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        let state = |m: &EwDiag| (bits(&m.m), bits(&m.m_lo), bits(&m.c), m.w_sum.to_bits());
+        for k in [1, 3, 9, 13] {
+            let row = |i: usize, v: f64| -> Vec<f64> {
+                (0..k).map(|j| v + (i + j) as f64 * 0.37).collect()
+            };
+            let mut m = EwDiag::new(k);
+            m.update(&row(0, 1e18), 1.0, 1.0);
+            m.update(&row(1, -3e17), 0.5, 2.0);
+            let mut fresh = EwDiag::new(k);
+            let (x1, x2) = (row(2, 1.0), row(3, -2.5));
+            let (mean, _, _) = m.including(0.0).moments(0, x1[0]);
+            assert_eq!(
+                mean.to_bits(),
+                x1[0].to_bits(),
+                "k {k}: the admitted row's mean"
+            );
+            m.update(&x1, 0.0, 1.5);
+            fresh.update(&x1, 1.0, 1.5);
+            assert_eq!(state(&m), state(&fresh), "k {k}");
+            m.update(&x2, 0.5, 1.0);
+            fresh.update(&x2, 0.5, 1.0);
+            assert_eq!(state(&m), state(&fresh), "k {k}");
+        }
+        let mut one = EwDiag::new(1);
+        one.update_one(1e18, 1.0, 1.0);
+        one.update_one(1.0, 0.0, 1.0);
+        assert_eq!(one.mean(0), 1.0);
+        let mut near = EwDiag::new(1);
+        near.update(&[2f64.powi(60)], 1.0, 1.0);
+        near.update(&[1.0], 2f64.powi(-60), 1.0);
+        assert_eq!(near.mean(0), 2.0);
+    }
 
     /// The update through the lanes (on an x86-64 CPU with AVX2) and the
     /// scalar loop leave the same bits in every moment, at every width

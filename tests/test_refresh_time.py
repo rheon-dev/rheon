@@ -1029,6 +1029,61 @@ def test_a_resumed_run_sliced_below_the_points_held_holds_the_rest(tmp_path):
     assert held["i"].to_list() == [tick] * (k - 1)
 
 
+def test_points_held_are_resumed_only_on_the_clock_they_were_saved_on(tmp_path):
+    """Review 2026-11-23, REFRESH-1: the clock's kind was checked row by row,
+    so points held in a state came out before any row was read, cast to the
+    input's clock: instants saved on a ``Datetime`` clock came out as their
+    count of microseconds on a ``Float64`` one, and an ``Int64`` clock's
+    values as instants of 1970 on a ``Datetime`` one. The chunk's columns are
+    checked first, a chunk of no rows and a sliced run's included."""
+    df, kw, whole = _slice_case(True)
+    r, _ = _first_tick_of(whole, 3)
+    micros = (pl.col("t") * 1e6).cast(pl.Int64)
+    clocks = {
+        "datetime": df.with_columns(micros.cast(pl.Datetime("us"))),
+        "float": df.with_columns(micros.cast(pl.Float64)),
+        "int": df.with_columns(micros),
+    }
+    for saved, resumed in [("datetime", "float"), ("datetime", "int"), ("int", "datetime")]:
+        state = tmp_path / f"{saved}.state"
+        head = (
+            stream.refresh_time(clocks[saved].lazy(), save_state=state, **kw).head(r + 1).collect()
+        )
+        after = clocks[resumed].filter(pl.col("i") > head["i"][-1])
+        for frame in (after.clear(), after):
+            plan = stream.refresh_time(frame.lazy(), load_state=state, **kw)
+            with pytest.raises(
+                pl.exceptions.ComputeError, match="but the state it resumes was saved on"
+            ):
+                plan.head(1).collect()
+
+
+def test_refresh_time_checks_its_plan_as_a_bank_does():
+    """Review 2026-11-23, REFRESH-2: ``refresh_time`` made none of the plan
+    checks ``merge`` and ``with_windows`` make: it named no order hazard in
+    its input, said nothing of a single-use Python source gone spent, and
+    told polars its source was pure, though it writes a state."""
+    df, kw, _ = _slice_case(False)
+    other = df.select("i", pl.col("i").alias("j")).lazy()
+    unordered = df.lazy().join(other, on="i")
+    with pytest.warns(rp.OrderNotGuaranteedWarning, match="rp.stream.refresh_time"):
+        stream.refresh_time(unordered, **kw)
+    spent: list[bool] = []
+
+    def io_source(with_columns, predicate, n_rows, batch_size):  # noqa: ANN001, ANN202
+        if spent:
+            return
+        spent.append(True)
+        yield df
+
+    from polars.io.plugins import register_io_source
+
+    grid = stream.refresh_time(register_io_source(io_source=io_source, schema=df.schema), **kw)
+    assert grid.collect().height > 0
+    with pytest.warns(rp.ConsumedSourceWarning, match="refresh_time: the query gave no rows"):
+        assert grid.collect().height == 0
+
+
 _GRID_ORDERS = [XYZ, ["z", "x", "y"], ["y", "x", "z"]]
 
 

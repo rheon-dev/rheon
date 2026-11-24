@@ -67,6 +67,42 @@ pub fn add(hi: &mut f64, lo: &mut f64, s: f64) {
     *hi = t;
 }
 
+/// The history's share `a` below which a mean's step is taken from the row
+/// back rather than from the mean forward: `x − a·d` in place of `m + b·d`
+/// ([`step_toward`]).
+pub const FORGOTTEN: f64 = f64::EPSILON;
+
+/// The mean `hi + lo` takes the row `x` at the row's share `b`, the
+/// history keeping `a = 1 − b`, `d` the row's deviation from the mean
+/// ([`dev`]). In exact arithmetic `m + b·d = x − a·d`, and each form is
+/// good where its own step is small beside the result. Kahan's forward step
+/// [`add`] carries the rounding of `b·d`, about `2⁻⁵³·|m − x|`: nothing while
+/// the history keeps a share, and the whole answer once `a` is below a
+/// rounding of 1 and the mean is far from the row. After a gap that forgot
+/// the history (`a = 0`) a mean at `1e18` took a row at 1 to 0, where the
+/// answer is the row itself (review 2026-11-23, REG-7). Below [`FORGOTTEN`]
+/// the step is taken from the row back, `x` and then `−a·d`, good to a
+/// rounding of the result; at `a = 0` the pair is `(x, 0)`, the first row's
+/// to the bit. Above it this is [`add`], so a row whose history keeps more
+/// than `2⁻⁵²` of the weight moves no bit.
+#[inline(always)]
+pub fn step_toward(hi: &mut f64, lo: &mut f64, x: f64, d: f64, a: f64, b: f64) {
+    if a < FORGOTTEN {
+        from_row(hi, lo, x, d, a);
+    } else {
+        add(hi, lo, b * d);
+    }
+}
+
+/// [`step_toward`] below [`FORGOTTEN`]: the pair `(x, 0)`, then `−a·d`.
+#[inline]
+pub fn from_row(hi: &mut f64, lo: &mut f64, x: f64, d: f64, a: f64) {
+    (*hi, *lo) = (x, 0.0);
+    if a > 0.0 {
+        add(hi, lo, -(a * d));
+    }
+}
+
 // A `lo` vector is sized with its means when they are made, and a restored
 // one of another length is refused as every other vector of a state is. The
 // repair that sized one at its first use, for a state written before the low
@@ -171,6 +207,46 @@ mod tests {
             } else {
                 assert_eq!(hi, x, "level {level}");
             }
+        }
+    }
+
+    /// A mean far from the row it takes, the history all but forgotten: at
+    /// `a = 0` the row itself, a fresh mean's first step to the bit; at `a =
+    /// 2^-60` beside a mean of `2^60` and a row at 1, `x + a·(m − x) = 2`
+    /// (to a rounding), where the forward step gave 0 for both (review
+    /// 2026-11-23, REG-7). At a share of the history above `FORGOTTEN` it is
+    /// `add`'s step.
+    #[test]
+    fn a_step_toward_a_row_that_forgot_the_mean_is_the_row() {
+        let big = 2f64.powi(60);
+        for (a, want) in [(0.0, 1.0), (2f64.powi(-60), 2.0)] {
+            let (mut hi, mut lo) = (big, 0.0);
+            let d = dev(1.0, hi, lo);
+            let b = 1.0 - a;
+            let (mut fh, mut fl) = (big, 0.0);
+            add(&mut fh, &mut fl, b * d);
+            assert_eq!(fh + fl, 0.0, "the forward step lost the row");
+            step_toward(&mut hi, &mut lo, 1.0, d, a, b);
+            assert_eq!((hi, lo), (want, 0.0), "a = {a:e}");
+        }
+        let (mut fresh, mut fresh_lo) = (0.0, 0.0);
+        add(&mut fresh, &mut fresh_lo, dev(-3.25, 0.0, 0.0));
+        let (mut hi, mut lo) = (1e18, 7.0);
+        step_toward(&mut hi, &mut lo, -3.25, dev(-3.25, 1e18, 7.0), 0.0, 1.0);
+        assert_eq!(
+            (hi.to_bits(), lo.to_bits()),
+            (fresh.to_bits(), fresh_lo.to_bits())
+        );
+        for a in [FORGOTTEN, 0.25, 0.5] {
+            let (mut h1, mut l1, mut h2, mut l2) = (3.0, 1e-17, 3.0, 1e-17);
+            let d = dev(5.5, 3.0, 1e-17);
+            step_toward(&mut h1, &mut l1, 5.5, d, a, 1.0 - a);
+            add(&mut h2, &mut l2, (1.0 - a) * d);
+            assert_eq!(
+                (h1.to_bits(), l1.to_bits()),
+                (h2.to_bits(), l2.to_bits()),
+                "a = {a}"
+            );
         }
     }
 }

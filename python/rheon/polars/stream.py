@@ -799,6 +799,18 @@ def refresh_time(
         raise WrongTypeError(msg)
     checked = _check_chunk_size(chunk_size, "rp.stream.refresh_time")
     rows = checked if checked is not None else _native.default_chunk_size()
+    # The two plan checks a bank makes of its input, made here of this one's,
+    # as `merge` and `with_windows` make them: a bank after this sees only
+    # this source, and not the plan beneath it.
+    plan_text = _plan_text(lazy)
+    _warn_if_order_unspecified(
+        lazy,
+        "rp.stream.refresh_time",
+        plan_text,
+        reads="the grid reads each series' ticks in row order",
+        before="the sampler",
+    )
+    python_scan = _is_python_scan(lazy, plan_text)
     # Read now, as a bank's `load_state` is: a plan collected twice goes on
     # from the same state, whatever the file holds by then.
     loaded = _read_state(load_state) if load_state is not None else None
@@ -829,8 +841,10 @@ def refresh_time(
         # the last point wanted (`feed(limit=)`), so the state is the state
         # after the input behind the rows returned, as a bank's is after a
         # `head(n)`, and the same whatever the chunk size.
+        this_run = _source_started()
         rt = build()
         seen = 0
+        read = 0
 
         def emit(out: pl.DataFrame) -> pl.DataFrame:
             if predicate is not None:
@@ -840,6 +854,7 @@ def refresh_time(
             return out
 
         for chunk in lazy.collect_batches(chunk_size=rows, maintain_order=True):
+            read += chunk.height
             # Exactly the points still wanted: the rest of a tick's points
             # past them are held, in the state too, for the next feed.
             out = rt.feed(chunk, None if n_rows is None else n_rows - seen)
@@ -858,8 +873,31 @@ def refresh_time(
         # caller abandons, nor one the sampler ended with an error.
         if save_path is not None:
             rt.save(save_path)
+        # As the bank warns (`ConsumedSourceWarning`): no rows at all from a
+        # Python scan is the shape of a spent single-use stream.
+        if python_scan and read == 0 and n_rows != 0 and not _sources_ran_since(this_run):
+            warnings.warn(
+                ConsumedSourceWarning(
+                    "rp.stream.refresh_time: the query gave no rows, and it reads a source "
+                    "written in Python, such as `pl.scan_arrow_c_stream` over a DuckDB relation, "
+                    "a pyarrow reader or anything with `__arrow_c_stream__`, which gives its rows "
+                    "once, so a second run of the query reads nothing. Build the query again for "
+                    "each run, calling `pl.scan_arrow_c_stream(...)` inside the loop, or, if the "
+                    "source really is empty, silence this warning with "
+                    '`warnings.simplefilter("ignore", rheon.polars.ConsumedSourceWarning)`.'
+                ),
+                stacklevel=_user_stacklevel(),
+            )
 
-    plan = register_io_source(source, schema=schema, validate_schema=True)
+    # Not pure where it saves a state: polars may not run it twice, or not
+    # at all, as it may a pure source (`merge`, `with_windows`).
+    plan = register_io_source(
+        source,
+        schema=schema,
+        validate_schema=True,
+        is_pure=save_path is None,
+        **_explain_named(f"refresh_time: {len(names)} series"),
+    )
     return plan if isinstance(lf, pl.LazyFrame) else plan.collect()
 
 

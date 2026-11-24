@@ -3315,8 +3315,8 @@ fn the_kept_window_reads_as_a_fresh_one() {
 }
 
 /// A window's view written over a kept accumulator of its shape is
-/// `src.clone()` with the window's moments and prior scale set, field for
-/// field and to the bytes, and is written in place: the kept vectors are the ones it held.
+/// `src.clone()` with the window's moments set, field for field and to the
+/// bytes, and is written in place: the kept vectors are the ones it held.
 /// Where the kept one is not of the shape -- another side, or a part short
 /// of it -- or `src` holds rows not yet merged, a block or a damaged
 /// state's rows, it is that clone, made afresh.
@@ -3332,11 +3332,9 @@ fn a_window_view_is_written_in_place_only_over_one_of_its_shape() {
     };
     let mean = [0.25, -1.5, 2.0];
     let lower = [2.0, 0.5, 3.0, -0.25, 0.75, 1.5];
-    // The prior's scale the window's weight gives (review 2026-11-23, COV-3).
     let fresh = |src: &EwCov| {
         let mut e = src.clone();
         e.set_moments_packed(&mean, &lower, 4.5, Some(3.0));
-        e.precision_scale = window_precision_scale(src.precision_scale, src.w_sum, 4.5);
         e
     };
     let write = |src: &EwCov, out: &mut EwCov, what: &str| {
@@ -3566,4 +3564,62 @@ fn the_unbiased_factor_holds_where_the_squared_weights_underflow() {
         (after - want).abs() <= 1e-12 * want,
         "{after} against {want}"
     );
+}
+
+/// A history the decay forgot (`lam = 0`) leaves the row alone: the means,
+/// co-moments, weights and squared weights after it are a fresh
+/// accumulator's after the same rows, to the bit, row by row and in a block,
+/// for `EwCov`, `EwCovDiag` and a target's `TargetMoments`. A mean at
+/// `1e18` took a row at 1 to 0 (review 2026-11-23, REG-7).
+#[test]
+fn a_history_the_decay_forgot_leaves_the_row_alone() {
+    let k = 3;
+    let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+    let rows: Vec<Vec<f64>> = (0..6)
+        .map(|i| (0..k).map(|j| 1.0 + (i * k + j) as f64 * 0.37).collect())
+        .collect();
+    for block in [0, 4] {
+        let mut m = EwCov::new(k);
+        m.set_block_rows(block);
+        m.update(&[1e18, -1e18, 3e17], 1.0, 1.0);
+        m.update(&[2e18, -1e17, 3e17], 0.5, 2.0);
+        let mut fresh = EwCov::new(k);
+        fresh.set_block_rows(block);
+        for (i, x) in rows.iter().enumerate() {
+            m.update(x, if i == 0 { 0.0 } else { 0.5 }, 1.0);
+            fresh.update(x, 0.5, 1.0);
+        }
+        m.flush();
+        fresh.flush();
+        assert_eq!(bits(m.means()), bits(fresh.means()), "block {block}");
+        assert_eq!(bits(&m.m_lo), bits(&fresh.m_lo), "block {block}");
+        // Row by row to the bit; in blocks the two merge at other rows (a
+        // fresh accumulator's first row is not held), so to a rounding.
+        let (cm, cf) = (m.comoments().to_full(), fresh.comoments().to_full());
+        if block == 0 {
+            assert_eq!(bits(&cm), bits(&cf));
+        } else {
+            for (a, b) in cm.iter().zip(&cf) {
+                assert!(
+                    (a - b).abs() <= 4.0 * f64::EPSILON * b.abs(),
+                    "{a} against {b}"
+                );
+            }
+        }
+        assert_eq!(m.w_sum.to_bits(), fresh.w_sum.to_bits());
+    }
+    let mut m = EwCovDiag::with_precision_prior(k, 1.0).unwrap();
+    m.update(&[1e18, -1e18, 3e17], 1.0, 1.0);
+    let mut fresh = EwCovDiag::with_precision_prior(k, 1.0).unwrap();
+    for (i, x) in rows.iter().enumerate() {
+        m.update(x, if i == 0 { 0.0 } else { 0.5 }, 1.0);
+        fresh.update(x, 0.5, 1.0);
+    }
+    assert_eq!(bits(m.means()), bits(fresh.means()));
+    let vars = |d: &EwCovDiag| (0..k).map(|i| d.var(i).to_bits()).collect::<Vec<_>>();
+    assert_eq!(vars(&m), vars(&fresh));
+    let mut t = TargetMoments::new(1);
+    t.learn(0, 1e18, 0.0, 1.0, 1.0, 1.0);
+    t.learn(0, 1.0, 0.0, 1.0, 0.0, 1.0);
+    assert_eq!(t.means(), &[1.0]);
 }

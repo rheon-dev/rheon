@@ -655,15 +655,17 @@ fn lasso_reads_each_target_and_path_point_in_its_own_slot() {
 /// Where the Gram has no weight, every path point reads infinite (the
 /// module doc), the one whose fit has no column through the origin
 /// included, whose `df` is 0 (docs/PLAN.md task 220). Across 5,000 rows of
-/// weight 0 at `λ = 0.9` both of Kish's sums fade until each holds only
-/// the smallest doubles, where `λ` above one half keeps them: `W` some
-/// `2.5e-323`, whose square is 0, and `Σ w²` one `2^-1074`, so `n_kish`
-/// is 0 -- and `0 / 0` is no statistic.
+/// weight 0 at `λ = 0.9` the weight is `1.6e-228`, whose square is 0, and
+/// Kish's size, which no decay moves, holds, so the ratio is the one before
+/// them; it read infinite while `Σ w²` faded below the doubles (review
+/// 2026-11-23, COV-4). Once the weight itself is subnormal, its last bits
+/// gone, Kish's size is 0 -- and `0 / 0` is no statistic.
 #[test]
 fn lasso_reads_infinite_where_the_gram_has_no_weight() {
     let mut m = lasso(1, false, vec![1e6, 0.0], 0.9);
     let mut rng = Rng(29);
     let mut out = Vec::new();
+    let mut at_49 = Vec::new();
     for i in 0..5050 {
         let x = rng.row(2);
         let y = 2.0 * x[0] + 0.5 * rng.normal();
@@ -672,6 +674,7 @@ fn lasso_reads_infinite_where_the_gram_has_no_weight() {
         assert!(m.error_inflation_into(&mut out));
         if i == 49 {
             assert!(out.iter().all(|v| v.is_finite()), "{out:?}");
+            at_49 = out.clone();
         }
     }
     let fit = &m.coefficients().unwrap()[0];
@@ -684,6 +687,16 @@ fn lasso_reads_infinite_where_the_gram_has_no_weight() {
         "{:e}",
         m.n_eff()
     );
+    for (got, want) in out.iter().zip(&at_49) {
+        assert!(
+            (got - want).abs() <= 1e-9 * want,
+            "{out:?} against {at_49:?}"
+        );
+    }
+    while m.n_eff() >= f64::MIN_POSITIVE {
+        m.step(&rng.row(2), &[Some(0.0)], 1.0, 0.0);
+    }
+    assert!(m.error_inflation_into(&mut out));
     assert!(out.iter().all(|v| *v == f64::INFINITY), "{out:?}");
 }
 
@@ -691,9 +704,10 @@ fn lasso_reads_infinite_where_the_gram_has_no_weight() {
 
 /// Where the Gram has no weight, no coefficient has a variance: NaN, not
 /// `1 / 0` (docs/PLAN.md task 220). The faded Gram of
-/// `lasso_reads_infinite_where_the_gram_has_no_weight`: `Q ≤ W²` holds of
-/// the sums but not of their doubles once `W²` underflows to 0 while `Q`
-/// keeps `2^-1074`, so `n_kish` is 0 there, not a number above it.
+/// `lasso_reads_infinite_where_the_gram_has_no_weight`: where `W²`
+/// underflows to 0 Kish's size holds, `Σ w²` kept at a power of two of its
+/// own (review 2026-11-23, COV-4), and so do the variances; once `W` is
+/// subnormal, `n_kish` is 0, not a number above it.
 #[test]
 fn ewridge_coef_variance_is_none_where_the_gram_has_no_weight() {
     let mut c = cfg(2, 1.0);
@@ -704,6 +718,7 @@ fn ewridge_coef_variance_is_none_where_the_gram_has_no_weight() {
         Some(CoefVariance::PerNoise(v)) => v[0].clone(),
         other => panic!("{other:?}"),
     };
+    let mut at_49 = Vec::new();
     for i in 0..5050 {
         let x = rng.row(2);
         let y = 1.0 + 2.0 * x[0] + 0.5 * rng.normal();
@@ -712,6 +727,7 @@ fn ewridge_coef_variance_is_none_where_the_gram_has_no_weight() {
         if i == 49 {
             let v = variances(&m);
             assert!(v.iter().all(|v| v.is_finite() && *v > 0.0), "{v:?}");
+            at_49 = v;
         }
     }
     assert!(
@@ -719,6 +735,13 @@ fn ewridge_coef_variance_is_none_where_the_gram_has_no_weight() {
         "{:e}",
         m.n_eff()
     );
+    let v = variances(&m);
+    for (got, want) in v.iter().zip(&at_49) {
+        assert!((got - want).abs() <= 1e-9 * want, "{v:?} against {at_49:?}");
+    }
+    while m.n_eff() >= f64::MIN_POSITIVE {
+        m.step(&rng.row(2), &[Some(0.0)], 1.0, 0.0);
+    }
     let v = variances(&m);
     assert!(v.iter().all(|v| v.is_nan()), "{v:?}");
 }

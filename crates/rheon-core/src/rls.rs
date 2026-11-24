@@ -2282,23 +2282,21 @@ mod tests {
         };
         let before = kish(&m).unwrap();
         let mut gap = 0;
-        while m.w_target[0] > 0.0 {
+        while m.w_target[0] >= f64::MIN_POSITIVE {
             let n = kish(&m).unwrap();
-            // To a rounding while `s₁` is a normal double, and to its own
-            // precision once it is subnormal.
-            let tol = if m.w_target[0] >= f64::MIN_POSITIVE {
-                1e-12
-            } else {
-                1.0
-            };
             assert!(
-                (n - before).abs() <= tol * before,
+                (n - before).abs() <= 1e-12 * before,
                 "row {gap}: {n} against {before}"
             );
             m.step(&[0.2], &[Some(0.3)], 1.0, 0.0);
             gap += 1;
         }
-        assert!((530..545).contains(&gap), "{gap}");
+        assert!((505..520).contains(&gap), "{gap}");
+        // A subnormal `s₁` has lost its last bits: it counts as none.
+        assert_eq!(kish(&m), Some(0.0));
+        while m.w_target[0] > 0.0 {
+            m.step(&[0.2], &[Some(0.3)], 1.0, 0.0);
+        }
         assert!(
             m.error_inflation_into(&mut out) && out[0].is_infinite(),
             "{out:?}"

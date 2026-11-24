@@ -33,27 +33,6 @@ mod diag;
 mod held;
 mod lower;
 mod merge_bound;
-/// The precision prior's scale `s` (the share of the ridge in the
-/// normalised co-moments, the prior read as one row at the stream's start
-/// that decays as the rows do) for a window of weight `w_window` cut from
-/// an accumulator of weight `w` at scale `s`: the prior's weight in sum form,
-/// `s·W`, is the stream's and not a row the window lets go of, so over the
-/// window's weight it is `s·W / W_R`. The whole history's `s` read against
-/// the window's co-moments made the ridge the history's share: after 990
-/// rows aged out of a window of 5, a ridge 200 times too small, a Mahalanobis
-/// distance 7.3 times off and `ew_class`'s classes flipped (review
-/// 2026-11-23, COV-3). With no decay it is a fresh accumulator's scale on
-/// the window's rows. An empty window, or a ratio past the doubles, keeps `s`.
-pub(crate) fn window_precision_scale(s: f64, w: f64, w_window: f64) -> f64 {
-    if w_window > 0.0 && w > 0.0 {
-        let v = s * (w / w_window);
-        if v.is_finite() {
-            return v;
-        }
-    }
-    s
-}
-
 #[cfg(test)]
 pub(crate) use merge_bound::SUBNORMALS as MERGE_SUBNORMALS;
 mod par;
@@ -1199,7 +1178,21 @@ impl EwCov {
             },
         );
         let share = u_sum / w_new;
+        // The history's share: below `comp::FORGOTTEN` each mean is taken
+        // from the block's back, `m_B − a·Δ` (`crate::comp::step_toward`;
+        // review 2026-11-23, REG-7).
+        let a = w_a / w_new;
         for ((i, mi), lo) in self.m.iter_mut().enumerate().zip(self.m_lo.iter_mut()) {
+            if a < crate::comp::FORGOTTEN {
+                (*mi, *lo) = (m_b[i], 0.0);
+                if delta[i] != 0.0 {
+                    crate::comp::add(mi, lo, delta[i]);
+                }
+                if a > 0.0 {
+                    crate::comp::add(mi, lo, -(a * big[i]));
+                }
+                continue;
+            }
             crate::comp::add(mi, lo, share * d_hi[i]);
             // A block of one row, or of one value, has no residue, and a
             // step of 0 could round the pair afresh (`crate::comp::add`).
@@ -1331,7 +1324,19 @@ impl EwCov {
         // Each mean takes its step as a pair, so no part of it is rounded off
         // (docs/PLAN.md task 101); a row of weight 0 takes none
         // (`crate::comp::add` says why).
-        if b > 0.0 {
+        if b > 0.0 && a < crate::comp::FORGOTTEN {
+            // A history the decay all but forgot: each mean from the row
+            // back (`crate::comp::step_toward`; review 2026-11-23, REG-7).
+            for (((mi, lo), &di), &xi) in self
+                .m
+                .iter_mut()
+                .zip(self.m_lo.iter_mut())
+                .zip(d.iter())
+                .zip(x)
+            {
+                crate::comp::from_row(mi, lo, xi, di, a);
+            }
+        } else if b > 0.0 {
             for ((mi, lo), &di) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(d.iter()) {
                 crate::comp::add(mi, lo, b * di);
             }
@@ -1396,12 +1401,6 @@ impl EwCov {
     /// between rows ([`crate::window::truncated_into`]). Where `self` is not
     /// of `src`'s shape, or `src` holds a block (whose flush the clone
     /// would run), it is the clone.
-    /// The precision prior's scale for these moments as a window cut from
-    /// `src`, once `w_sum` is the window's ([`window_precision_scale`]).
-    pub(crate) fn scale_prior_to_window_of(&mut self, src: &EwCov) {
-        self.precision_scale = window_precision_scale(src.precision_scale, src.w_sum, self.w_sum);
-    }
-
     pub(crate) fn set_window_of(
         &mut self,
         src: &EwCov,
@@ -1414,7 +1413,6 @@ impl EwCov {
         if held || !self.has_shape(src.k) || self.c.packed().len() != row_at(src.k) {
             *self = src.clone();
             self.set_moments_packed(mean, lower, w_sum, q_sum);
-            self.precision_scale = window_precision_scale(src.precision_scale, src.w_sum, w_sum);
             return;
         }
         // Every field named, so a field added to `EwCov` is a compile error
@@ -1439,7 +1437,7 @@ impl EwCov {
         } = src;
         self.prior_scale = *prior_scale;
         self.precision_prior = *precision_prior;
-        self.precision_scale = window_precision_scale(*precision_scale, src.w_sum, w_sum);
+        self.precision_scale = *precision_scale;
         self.threads = *threads;
         self.rows_learned = *rows_learned;
         // `set_moments_packed` forgets the runs and keeps whether they are
@@ -1577,7 +1575,7 @@ impl TargetMoments {
         self.var[t] = a * self.var[t] + a * b * d * d;
         // A row of weight 0 takes no step (`crate::comp::add` says why).
         if b > 0.0 {
-            crate::comp::add(&mut self.mean[t], &mut self.mean_lo[t], b * d);
+            crate::comp::step_toward(&mut self.mean[t], &mut self.mean_lo[t], y, d, a, b);
         }
         self.q[t] = lam * lam * self.q[t] + w * w;
     }

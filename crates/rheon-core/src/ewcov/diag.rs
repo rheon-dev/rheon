@@ -279,7 +279,7 @@ impl EwCovDiag {
             let ab_di = a * b * d;
             *vi = a * *vi + ab_di * d;
             if b > 0.0 {
-                crate::comp::add(mi, lo, b * d);
+                crate::comp::step_toward(mi, lo, xi, d, a, b);
             }
         }
         // `EwCov::commit_scalars`.
@@ -323,13 +323,6 @@ impl EwCovDiag {
     /// for field, writing over what `self` holds: [`EwCov`]'s
     /// `set_window_of`, for a diagonal accumulator. Where `self` is not of
     /// `src`'s shape it is the clone.
-    /// The precision prior's scale for these moments as a window cut from
-    /// `src`, once `w_sum` is the window's ([`super::window_precision_scale`]).
-    pub(crate) fn scale_prior_to_window_of(&mut self, src: &EwCovDiag) {
-        self.precision_scale =
-            super::window_precision_scale(src.precision_scale, src.w_sum, self.w_sum);
-    }
-
     pub(crate) fn set_window_of(
         &mut self,
         src: &EwCovDiag,
@@ -341,8 +334,6 @@ impl EwCovDiag {
         if !self.has_shape(src.k) {
             *self = src.clone();
             self.set_moments(mean, variances, w_sum, q_sum);
-            self.precision_scale =
-                super::window_precision_scale(src.precision_scale, src.w_sum, w_sum);
             return;
         }
         // Every field named, as `EwCov::set_window_of` names them.
@@ -361,7 +352,7 @@ impl EwCovDiag {
         } = src;
         self.prior_scale = *prior_scale;
         self.precision_prior = *precision_prior;
-        self.precision_scale = super::window_precision_scale(*precision_scale, src.w_sum, w_sum);
+        self.precision_scale = *precision_scale;
         self.rows_learned = *rows_learned;
         self.runs.forget_as(runs);
         self.m.copy_from_slice(mean);

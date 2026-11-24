@@ -651,6 +651,21 @@ impl RefreshTime {
                  leave out load_state to start over."
             ));
         }
+        // Each group's last clock is a number or an instant of the kind the
+        // state was saved on: a NaN read every later clock as not below it,
+        // so no backward step was refused, and the other kind could not be
+        // ordered against the input's (review 2026-11-23, REFRESH-2).
+        if file.last_time.iter().any(|(_, t)| {
+            matches!(t, Instant::Number(v) if !v.is_finite())
+                || file.clock_kind.is_none_or(|k| k != t.kind())
+        }) {
+            return Err(
+                "rp.stream.refresh_time: the state is damaged: a group's last clock is not a \
+                 number, or not of the kind of clock the state was saved on. Load an undamaged \
+                 copy of the state file, or leave out load_state to start over."
+                    .to_string(),
+            );
+        }
         rt.states = file.states.into_iter().collect();
         rt.last_time = file.last_time.into_iter().collect();
         rt.grouped = Some(grouped);
@@ -766,6 +781,11 @@ impl RefreshTime {
         cols: &RefreshCols<'_>,
         limit: Option<usize>,
     ) -> PolarsResult<DataFrame> {
+        // The columns are checked before anything held is drained: the held
+        // row is cast to this input's types, and a temporal clock resumed on
+        // a number cast its instants to their raw count (and an integer one
+        // to a 1970 date), with nothing said (review 2026-11-23, REFRESH-1).
+        self.check_columns(df, cols)?;
         let Some(held) = &self.held else {
             return self.scan(df, cols, limit);
         };
@@ -806,18 +826,13 @@ impl RefreshTime {
         names
     }
 
-    /// The scan of [`Self::feed_limited`], holding nothing on entry.
-    fn scan(
-        &mut self,
-        df: &DataFrame,
-        cols: &RefreshCols<'_>,
-        limit: Option<usize>,
-    ) -> PolarsResult<DataFrame> {
-        let n = df.height();
-        let series = df.column(cols.series)?.cast(&DataType::String)?;
-        let series = series.str()?;
-        let time_col = df.column(cols.clock)?;
-        let time_dtype = time_col.dtype().clone();
+    /// The chunk's columns against the rule and the state, before a row is
+    /// read: a number or temporal clock (and an integer one that fits 64
+    /// bits), a number value, the grouping the chunks before it had, and the
+    /// clock's kind the state was saved on, read from the column's type so
+    /// that a chunk of no rows is held to it as well.
+    fn check_columns(&mut self, df: &DataFrame, cols: &RefreshCols<'_>) -> PolarsResult<()> {
+        let time_dtype = df.column(cols.clock)?.dtype().clone();
         // A number or a temporal column, as a spec's clock is: a boolean or a
         // column of nulls is a number (task 197, PC7's rule for `value`).
         // Cast without the check, text of digits was read as a clock.
@@ -832,7 +847,6 @@ impl RefreshTime {
                 cols.clock, crate::arrow::dtype_name(&time_dtype), cols.clock, cols.clock
             );
         }
-        let base = self.rows_fed;
         let grouped = cols.group.is_some();
         match self.grouped {
             Some(g) if g != grouped => polars_bail!(ComputeError:
@@ -847,6 +861,51 @@ impl RefreshTime {
             polars_bail!(InvalidOperation: "{}",
                 crate::arrow::wide_integer_clock("rp.stream.refresh_time", cols.clock, &time_dtype));
         }
+        // The other kind of clock cannot be ordered against a saved one.
+        let kind = if time_dtype.is_temporal() {
+            ClockKind::Temporal
+        } else {
+            ClockKind::Numeric
+        };
+        if let Some(k) = self.kind
+            && k != kind
+        {
+            polars_bail!(ComputeError:
+                "rp.stream.refresh_time: clock column {:?} is {}, but the state it resumes \
+                 was saved on a {} clock. Resume the state on a clock of the kind it was \
+                 saved with.",
+                cols.clock, kind.name(), k.name()
+            );
+        }
+        // A number, as a spec's feature is: a boolean or a column of nulls
+        // too, and nothing else (review round 4, PC7). Cast without the
+        // check, text that is not a number came out all null -- an empty
+        // grid, nothing said -- and a `Date` came out as its day count.
+        let dtype = df.column(cols.value)?.dtype();
+        if !(dtype.is_numeric() || matches!(dtype, DataType::Boolean | DataType::Null)) {
+            polars_bail!(InvalidOperation:
+                "rp.stream.refresh_time: value column {:?} must be a number, but it is {}. \
+                 Cast it, such as with pl.col({:?}).cast(pl.Float64).",
+                cols.value, crate::arrow::dtype_name(dtype), cols.value
+            );
+        }
+        Ok(())
+    }
+
+    /// The scan of [`Self::feed_limited`], holding nothing on entry, its
+    /// columns checked ([`Self::check_columns`]).
+    fn scan(
+        &mut self,
+        df: &DataFrame,
+        cols: &RefreshCols<'_>,
+        limit: Option<usize>,
+    ) -> PolarsResult<DataFrame> {
+        let n = df.height();
+        let series = df.column(cols.series)?.cast(&DataType::String)?;
+        let series = series.str()?;
+        let time_col = df.column(cols.clock)?;
+        let time_dtype = time_col.dtype().clone();
+        let base = self.rows_fed;
         let integer = time_dtype.is_integer() && crate::arrow::fits_64(&time_dtype);
         let (numbers, nanos) = if time_dtype.is_temporal() {
             let ns = crate::arrow::nanos_array(
@@ -899,20 +958,7 @@ impl RefreshTime {
                 _ => None,
             }
         };
-        // A number, as a spec's feature is: a boolean or a column of nulls
-        // too, and nothing else (review round 4, PC7). Cast without the
-        // check, text that is not a number came out all null -- an empty
-        // grid, nothing said -- and a `Date` came out as its day count.
-        let value = df.column(cols.value)?;
-        let dtype = value.dtype();
-        if !(dtype.is_numeric() || matches!(dtype, DataType::Boolean | DataType::Null)) {
-            polars_bail!(InvalidOperation:
-                "rp.stream.refresh_time: value column {:?} must be a number, but it is {}. \
-                 Cast it, such as with pl.col({:?}).cast(pl.Float64).",
-                cols.value, crate::arrow::dtype_name(dtype), cols.value
-            );
-        }
-        let value = value.cast(&DataType::Float64)?;
+        let value = df.column(cols.value)?.cast(&DataType::Float64)?;
         let value = value.f64()?;
         let by = match cols.group {
             Some(b) => Some(key_text(df.column(b)?)?),
@@ -1933,6 +1979,42 @@ mod tests {
             let bytes = reencoded(pairs, &|_| {});
             assert!(RefreshTime::load_bytes(&bytes, names.clone(), pairs, false).is_ok());
         }
+    }
+
+    /// Each group's last clock is checked on load (review 2026-11-23,
+    /// REFRESH-2): a NaN, which no later clock is below, so a backward step
+    /// went unrefused; an instant of the other kind than the state's clock;
+    /// and a clock with no kind of clock recorded.
+    #[test]
+    fn a_state_whose_last_clock_is_damaged_is_refused() {
+        let names: Vec<String> = ["a", "b", "c"].map(str::to_string).to_vec();
+        let reencoded = |edit: &dyn Fn(&mut RefreshFile)| {
+            let mut rt = RefreshTime::new(names.clone(), false).unwrap();
+            rt.feed(&long(&[("a", 1.0, 1.0), ("b", 2.0, 2.0)]), &cols(&[]))
+                .unwrap();
+            let mut file: RefreshFile = rmp_serde::from_slice(&rt.save_bytes().unwrap()).unwrap();
+            edit(&mut file);
+            crate::reseal(&rmp_serde::to_vec_named(&file).unwrap())
+        };
+        type Case<'a> = (&'a str, &'a dyn Fn(&mut RefreshFile));
+        let cases: Vec<Case> = vec![
+            ("a NaN", &|f| f.last_time[0].1 = Instant::Number(f64::NAN)),
+            ("an infinity", &|f| {
+                f.last_time[0].1 = Instant::Number(f64::INFINITY)
+            }),
+            ("an instant on a number clock", &|f| {
+                f.last_time[0].1 = Instant::Nanos(5)
+            }),
+            ("no kind of clock", &|f| f.clock_kind = None),
+        ];
+        for (what, edit) in cases {
+            match RefreshTime::load_bytes(&reencoded(edit), names.clone(), false, false) {
+                Err(e) => assert!(e.contains("damaged"), "{what}: {e}"),
+                Ok(_) => panic!("{what}: loaded"),
+            }
+        }
+        let fine = reencoded(&|f| f.last_time[0].1 = Instant::Int(3));
+        assert!(RefreshTime::load_bytes(&fine, names.clone(), false, false).is_ok());
     }
 
     fn ab() -> Vec<String> {

@@ -192,7 +192,16 @@ impl Cross {
         // arithmetic (task 132's own means cost a 10-target `ewridge` a
         // quarter of its rows a second with checks inside; PERFORMANCE-LOG §26).
         // A row of weight 0 takes no step (`crate::comp::add` says why).
-        if bj > 0.0 {
+        if bj > 0.0 && aj < crate::comp::FORGOTTEN {
+            // A history the decay all but forgot: each mean from the row
+            // back (`crate::comp::step_toward`; review 2026-11-23, REG-7).
+            for (((m, lo), ci), &zi) in mj.iter_mut().zip(mj_lo.iter_mut()).zip(c.iter_mut()).zip(z)
+            {
+                let u = dev(zi, *m, *lo);
+                *ci = aj * *ci + ab_dy * u;
+                crate::comp::from_row(m, lo, zi, u, aj);
+            }
+        } else if bj > 0.0 {
             for (((m, lo), ci), &zi) in mj.iter_mut().zip(mj_lo.iter_mut()).zip(c.iter_mut()).zip(z)
             {
                 let u = dev(zi, *m, *lo);
@@ -206,7 +215,7 @@ impl Cross {
             }
         }
         if bj > 0.0 {
-            add(&mut self.my[j], &mut self.my_lo[j], bj * dy);
+            crate::comp::step_toward(&mut self.my[j], &mut self.my_lo[j], y, dy, aj, bj);
         }
     }
 
@@ -214,11 +223,10 @@ impl Cross {
     /// [`Cross::learn`] takes it: what a blocked Gram's targets keep per row,
     /// their cross-moments and feature means waiting for the block's merge
     /// ([`Held`]).
-    pub(crate) fn learn_mean(&mut self, j: usize, y: f64, bj: f64) {
-        use crate::comp::{add, dev};
-        let dy = dev(y, self.my[j], self.my_lo[j]);
+    pub(crate) fn learn_mean(&mut self, j: usize, y: f64, aj: f64, bj: f64) {
+        let dy = crate::comp::dev(y, self.my[j], self.my_lo[j]);
         if bj > 0.0 {
-            add(&mut self.my[j], &mut self.my_lo[j], bj * dy);
+            crate::comp::step_toward(&mut self.my[j], &mut self.my_lo[j], y, dy, aj, bj);
         }
     }
 
@@ -226,10 +234,14 @@ impl Cross {
     /// it. The weight by `EwCov::update`'s recursion.
     pub(crate) fn advance(&mut self, z: &[f64], lam: f64, w: f64, b: f64) {
         if b > 0.0 {
-            use crate::comp::{add, dev};
+            use crate::comp::dev;
+            // The history's share, for a history the decay all but forgot
+            // (`crate::comp::step_toward`; review 2026-11-23, REG-7).
+            let carried = lam * self.w;
+            let a = carried / (carried + w);
             for ((mi, lo), &zi) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(z) {
                 let u = dev(zi, *mi, *lo);
-                add(mi, lo, b * u);
+                crate::comp::step_toward(mi, lo, zi, u, a, b);
             }
         }
         // `EwCov::update`'s recursion, whose one refusal -- no weight at all,
@@ -909,7 +921,7 @@ impl Acc {
                     }
                     let wj_new = lam * *wj + w;
                     let (a, b) = (lam * *wj / wj_new, w / wj_new);
-                    self.cross.learn_mean(j, yj, b);
+                    self.cross.learn_mean(j, yj, a, b);
                     self.tm.learn(j, yj, a, b, lam, w);
                     rows.push(RowTarget {
                         value: if w > 0.0 { yj } else { f64::NAN },

@@ -930,7 +930,7 @@ impl EwAutoCorr {
         } else {
             self.w_pairs *= lam;
         }
-        crate::comp::add(&mut self.mean, &mut self.mean_lo, b * d);
+        crate::comp::step_toward(&mut self.mean, &mut self.mean_lo, x, d, a, b);
         self.w = w_new;
     }
 }
@@ -1139,6 +1139,18 @@ pub enum HitTest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// After a step that forgot the history (`lam = 0`) the autocorrelation's
+    /// mean is the row: a mean at `1e18` took a row at 1 to 0 (review
+    /// 2026-11-23, REG-7).
+    #[test]
+    fn an_autocorrelations_mean_after_a_forgetting_step_is_the_row() {
+        let mut a = EwAutoCorr::new(1).unwrap();
+        a.update_weighted(1e18, 1.0, 1.0);
+        a.update_weighted(1.0, 1.0, 0.0);
+        assert_eq!((a.mean, a.mean_lo), (1.0, 0.0));
+        assert_eq!(a.var, 0.0);
+    }
 
     /// A residual whose weighted square overflows -- a prediction, which no
     /// bound holds, far past its target -- leaves the mean squared error

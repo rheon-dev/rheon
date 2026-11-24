@@ -2064,8 +2064,11 @@ pub(crate) fn standardize_row(
     // even into those. Each feature is its own lane and runs `moments_of`'s
     // operations in the same order, each rounded once as IEEE 754 rounds
     // it, with no fused multiply-add, so the two paths agree to the bit.
+    // A row whose history keeps less than `comp::FORGOTTEN` of the weight
+    // takes its means from the row back, which the lanes do not: the loop.
     #[cfg(target_arch = "x86_64")]
     if n >= LANES_FROM
+        && inc.weights().0 >= crate::comp::FORGOTTEN
         && let Some(simd) = x86_v3()
     {
         let (a, b) = inc.weights();
