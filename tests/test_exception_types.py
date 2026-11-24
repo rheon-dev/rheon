@@ -398,7 +398,7 @@ CASES: list[Case] = [
     ),
     Case(
         "refused-value-reverse-without-a-window",
-        lambda w: rp.ewm_mean("x", half_life=10.0, reverse=True),
+        lambda w: rp.ops.ewm_mean("x", half_life=10.0, reverse=True),
         rp.RefusedValueError,
         "reverse",
         bases=(ValueError,),
@@ -440,7 +440,7 @@ CASES: list[Case] = [
     ),
     Case(
         "formula-a-shift-reads-other-rows",
-        lambda w: rp.ewm_mean(pl.col("x").shift(1), half_life=5.0),
+        lambda w: rp.ops.ewm_mean(pl.col("x").shift(1), half_life=5.0),
         FormulaError,
         "holds the method shift",
         bases=(ValueError,),

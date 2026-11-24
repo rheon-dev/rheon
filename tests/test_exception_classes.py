@@ -91,7 +91,7 @@ def _builder(name: str, **kw: Any) -> dict[str, Any]:
 
 
 def _rewm_without_window() -> None:
-    rp.ewm_mean("x0", half_life=10.0, reverse=True)  # type: ignore[call-arg]
+    rp.ops.ewm_mean("x0", half_life=10.0, reverse=True)  # type: ignore[call-arg]
 
 
 def _look_ahead_without_window() -> None:
@@ -106,7 +106,7 @@ def _like_clash() -> None:
     like = rp.spec.ewridge(
         "m", targets=["y"], features=["x0"], half_life=10.0, clock="t", gap_cap=5.0
     )
-    rp.stream.with_windows(_df(), f=rp.ewm_mean("x0", half_life=5.0), like=like, clock="t")
+    rp.stream.with_windows(_df(), f=rp.ops.ewm_mean("x0", half_life=5.0), like=like, clock="t")
 
 
 def _bank(df: pl.DataFrame, **kw: Any) -> Callable[[], None]:
@@ -188,7 +188,8 @@ RUST_SITES: list[tuple[str, Callable[[], Any]]] = [
     (
         "with_windows, a text input",
         _windows(
-            _df().with_columns(x0=pl.col("x0").cast(pl.String)), rp.ewm_mean("x0", half_life=5.0)
+            _df().with_columns(x0=pl.col("x0").cast(pl.String)),
+            rp.ops.ewm_mean("x0", half_life=5.0),
         ),
     ),
     (
@@ -196,7 +197,7 @@ RUST_SITES: list[tuple[str, Callable[[], Any]]] = [
         "with_windows, a text clock",
         _windows(
             _df().with_columns(t=pl.col("t").cast(pl.String)),
-            rp.ewm_mean("x0", half_life=5.0),
+            rp.ops.ewm_mean("x0", half_life=5.0),
             **_CLOCKED,
         ),
     ),
@@ -204,13 +205,15 @@ RUST_SITES: list[tuple[str, Callable[[], Any]]] = [
         "with_windows, an Int128 clock",
         _windows(
             _df().with_columns(t=pl.col("t").cast(pl.Int128)),
-            rp.ewm_mean("x0", half_life=5.0),
+            rp.ops.ewm_mean("x0", half_life=5.0),
             **_CLOCKED,
         ),
     ),
     (
         "with_windows, a time-of-day clock",
-        _windows(_time_of_day(_df()), rp.ewm_mean("x0", half_life="5s"), clock="t", gap_cap="5s"),
+        _windows(
+            _time_of_day(_df()), rp.ops.ewm_mean("x0", half_life="5s"), clock="t", gap_cap="5s"
+        ),
     ),
     ("refresh_time, an Int128 clock", _refresh(pl.Int128, pl.Float64)),
     ("refresh_time, a time-of-day clock", _refresh(pl.Time, pl.Float64)),
@@ -255,7 +258,7 @@ _SAME_INPUT: dict[str, list[Callable[[], Any]]] = {
         _window_metrics(_df().with_columns(t=pl.col("t").cast(pl.String)), 10.0),
         _windows(
             _df().with_columns(t=pl.col("t").cast(pl.String)),
-            rp.ewm_mean("x0", half_life=5.0),
+            rp.ops.ewm_mean("x0", half_life=5.0),
             **_CLOCKED,
         ),
     ],
@@ -265,7 +268,7 @@ _SAME_INPUT: dict[str, list[Callable[[], Any]]] = {
         _refresh(pl.Int128, pl.Float64),
         _windows(
             _df().with_columns(t=pl.col("t").cast(pl.Int128)),
-            rp.ewm_mean("x0", half_life=5.0),
+            rp.ops.ewm_mean("x0", half_life=5.0),
             **_CLOCKED,
         ),
     ],
@@ -273,7 +276,9 @@ _SAME_INPUT: dict[str, list[Callable[[], Any]]] = {
         _bank(_time_of_day(_df()), **_CLOCKED),
         lambda: rp.stream.embargo(_time_of_day(_df()), clock="t", delay="1s"),
         _refresh(pl.Time, pl.Float64),
-        _windows(_time_of_day(_df()), rp.ewm_mean("x0", half_life="5s"), clock="t", gap_cap="5s"),
+        _windows(
+            _time_of_day(_df()), rp.ops.ewm_mean("x0", half_life="5s"), clock="t", gap_cap="5s"
+        ),
         _window_metrics(_time_of_day(_df()), "5s"),
     ],
 }
@@ -293,7 +298,7 @@ def test_a_text_clock_of_digits_is_refused_by_with_windows() -> None:
     path refuses a text clock by its type (task 356)."""
     df = _df().with_columns(t=pl.col("t").cast(pl.String))
     with pytest.raises(rp.WrongTypeError) as caught:
-        rp.stream.with_windows(df, f=rp.ewm_mean("x0", half_life=5.0), clock="t", gap_cap=5.0)
+        rp.stream.with_windows(df, f=rp.ops.ewm_mean("x0", half_life=5.0), clock="t", gap_cap=5.0)
     assert str(caught.value) == (
         'with_windows: clock column "t" must be a number or temporal, but it is String. '
         'Cast it, such as with pl.col("t").cast(pl.Float64), or to a Datetime.'
@@ -366,7 +371,7 @@ SITES: list[tuple[str, Callable[[], Any], type[Exception], type[Exception], type
     ),
     (
         "window operator, min_samples=1.5",
-        lambda: rp.ewm_mean("x0", half_life=5.0, window_size=10.0, min_samples=1.5),  # type: ignore[arg-type]
+        lambda: rp.ops.ewm_mean("x0", half_life=5.0, window_size=10.0, min_samples=1.5),  # type: ignore[arg-type]
         rp.WrongTypeError,
         ValueError,
         TypeError,
@@ -453,7 +458,7 @@ SITES: list[tuple[str, Callable[[], Any], type[Exception], type[Exception], type
     # A value out of range or a combination refused: ValueError, once TypeError.
     (
         "ewm_mean, reverse=True without window_size",
-        lambda: rp.ewm_mean("x0", half_life=5.0, reverse=True),
+        lambda: rp.ops.ewm_mean("x0", half_life=5.0, reverse=True),
         rp.RefusedValueError,
         TypeError,
         ValueError,
@@ -529,7 +534,7 @@ def test_wrong_kind_inputs_that_are_also_out_of_range_still_split_by_kind() -> N
     """A whole number out of range stays a plain ``ValueError`` where the check
     for the type and the range was one condition."""
     with pytest.raises(ValueError) as caught:
-        rp.ewm_mean("x0", half_life=5.0, window_size=10.0, min_samples=0)
+        rp.ops.ewm_mean("x0", half_life=5.0, window_size=10.0, min_samples=0)
     assert not isinstance(caught.value, TypeError)
     with pytest.raises(ValueError) as caught:
         rp.eval.grid_search(_df(), _spec(), n_splits=0)

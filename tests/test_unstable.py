@@ -52,7 +52,7 @@ def ridge() -> dict:
 
 def formula_spec() -> dict:
     target = (
-        rp.ewm_mean("mid", half_life=5.0, window_size=10.0, reverse=True) - pl.col("mid")
+        rp.ops.ewm_mean("mid", half_life=5.0, window_size=10.0, reverse=True) - pl.col("mid")
     ).alias("fwd")
     return rp.spec.ewridge(
         "edge",
@@ -138,7 +138,10 @@ def test_a_promised_surface_never_warns(monkeypatch, tmp_path):
         rp.ModelBank.load(tmp_path / "plain.state")
         bank.write_json()
         rp.stream.with_windows(
-            df, level=rp.ewm_mean("mid", half_life=5.0, window_size=10.0), clock="t", gap_cap=50.0
+            df,
+            level=rp.ops.ewm_mean("mid", half_life=5.0, window_size=10.0),
+            clock="t",
+            gap_cap=50.0,
         )
         rp.eval.metrics(out, "m")
         # A window run's state and a formula target inside a bank's state
@@ -146,14 +149,14 @@ def test_a_promised_surface_never_warns(monkeypatch, tmp_path):
         windows = tmp_path / "windows.state"
         rp.stream.with_windows(
             df,
-            level=rp.ewm_mean("mid", half_life=5.0, window_size=10.0),
+            level=rp.ops.ewm_mean("mid", half_life=5.0, window_size=10.0),
             clock="t",
             gap_cap=50.0,
             save_state=windows,
         )
         rp.stream.with_windows(
             df.with_columns(pl.col("t") + 1000.0),
-            level=rp.ewm_mean("mid", half_life=5.0, window_size=10.0),
+            level=rp.ops.ewm_mean("mid", half_life=5.0, window_size=10.0),
             clock="t",
             gap_cap=50.0,
             load_state=windows,

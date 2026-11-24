@@ -120,6 +120,7 @@ del _polars
 # (`rheon._errors.flavoured`). The other names are `rheon`'s own objects.
 from rheon import __version__, corr, gram, spec
 from rheon._errors import RefusedValueError, WrongTypeError
+from rheon._renamed import moved_function, renamed_function
 from rheon._rheon import (
     ArrowStruct,
     native_version,
@@ -149,47 +150,24 @@ from rheon.polars._frame import (
     unnest,
 )
 from rheon.polars._warnings import UnstableWarning
-from rheon.polars.ops import (
-    cross_mean,
-    cross_quantile,
-    cross_rank,
-    cross_ref,
-    cross_std,
-    ewm_mean,
-    ewm_moments,
-    ewm_profile,
-    ewm_quantile,
-    ewm_rate,
-    ewm_std,
-    ewm_sum,
-    ewm_var,
-    increment,
-    # The old names of `ewm_*(reverse=True)`, which refuse a call naming the
-    # new form and are kept out of `__all__`, so the reference shows it alone.
-    rewm_mean,  # noqa: F401
-    rewm_rate,  # noqa: F401
-    rewm_sum,  # noqa: F401
-    rolling_max,
-    rolling_min,
-)
+
+# The window operators live in `rp.ops`. The seven a release had at the root
+# stay there as forwards that warn, naming the `rp.ops` path, until the next
+# major release; the old names of `ewm_*(reverse=True)` refuse the call there
+# as they do in `rp.ops`. Each is kept out of `__all__`, so the reference and
+# the API snapshot show the `rp.ops` path alone.
+ewm_mean = moved_function("rp.ewm_mean", "rp.ops.ewm_mean", ops.ewm_mean)
+ewm_quantile = moved_function("rp.ewm_quantile", "rp.ops.ewm_quantile", ops.ewm_quantile)
+ewm_rate = moved_function("rp.ewm_rate", "rp.ops.ewm_rate", ops.ewm_rate)
+ewm_std = moved_function("rp.ewm_std", "rp.ops.ewm_std", ops.ewm_std)
+ewm_sum = moved_function("rp.ewm_sum", "rp.ops.ewm_sum", ops.ewm_sum)
+ewm_var = moved_function("rp.ewm_var", "rp.ops.ewm_var", ops.ewm_var)
+increment = moved_function("rp.increment", "rp.ops.increment", ops.increment)
+rewm_mean = renamed_function("rp.rewm_mean", "rp.ops.ewm_mean(..., reverse=True)")
+rewm_sum = renamed_function("rp.rewm_sum", "rp.ops.ewm_sum(..., reverse=True)")
+rewm_rate = renamed_function("rp.rewm_rate", "rp.ops.ewm_rate(..., reverse=True)")
 
 __all__ = [
-    "cross_mean",
-    "cross_std",
-    "cross_rank",
-    "cross_quantile",
-    "cross_ref",
-    "ewm_mean",
-    "ewm_moments",
-    "ewm_profile",
-    "ewm_quantile",
-    "ewm_rate",
-    "ewm_std",
-    "ewm_sum",
-    "ewm_var",
-    "increment",
-    "rolling_max",
-    "rolling_min",
     "ops",
     "ArrowStruct",
     "ColumnNotFoundError",

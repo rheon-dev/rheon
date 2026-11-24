@@ -77,9 +77,9 @@ def one(out: Path, case: str, n: int, h: str) -> None:
         embargo=h,
     )
     notional = pl.col("price") * pl.col("quantity")
-    fwd_vwap = rp.ewm_sum(notional, half_life="10s", window_size=h, reverse=True) / rp.ewm_sum(
-        "quantity", half_life="10s", window_size=h, reverse=True
-    )
+    fwd_vwap = rp.ops.ewm_sum(
+        notional, half_life="10s", window_size=h, reverse=True
+    ) / rp.ops.ewm_sum("quantity", half_life="10s", window_size=h, reverse=True)
     columns = out / f"windows_{n}_{h}.parquet"
     start = time.perf_counter()
     if case == "with_windows":
@@ -88,7 +88,7 @@ def one(out: Path, case: str, n: int, h: str) -> None:
     elif case.startswith(("shared", "separate")):
         kind, k = case.split()
         ops = {
-            f"m{i}": rp.ewm_mean(
+            f"m{i}": rp.ops.ewm_mean(
                 pl.col("mid") * (i + 1),
                 half_life="10s" if kind == "shared" else f"{10 + i}s",
                 window_size=h,

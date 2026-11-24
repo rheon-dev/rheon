@@ -548,7 +548,7 @@ def test_a_save_state_that_is_a_directory_is_refused_before_the_stream(tmp_path)
     for build in (
         lambda: df.lazy().rheon.fit_predict([_spec()], save_state=where),
         lambda: df.lazy().rheon.with_windows(
-            f=rp.ewm_mean("x0", half_life=5.0), clock="t", gap_cap=10.0, save_state=where
+            f=rp.ops.ewm_mean("x0", half_life=5.0), clock="t", gap_cap=10.0, save_state=where
         ),
     ):
         with pytest.raises(IsADirectoryError, match="save_state .* is a folder, not a file"):
@@ -566,7 +566,7 @@ def test_a_save_state_that_names_no_file_is_refused_before_the_stream(tmp_path, 
         for build in (
             lambda w: df.lazy().rheon.fit_predict([_spec()], save_state=w),
             lambda w: df.lazy().rheon.with_windows(
-                f=rp.ewm_mean("x0", half_life=5.0), clock="t", gap_cap=10.0, save_state=w
+                f=rp.ops.ewm_mean("x0", half_life=5.0), clock="t", gap_cap=10.0, save_state=w
             ),
         ):
             with pytest.raises(ValueError, match="save_state .* names no file"):

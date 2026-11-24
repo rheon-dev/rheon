@@ -2721,7 +2721,7 @@ whose size the terms, the lags and the window fix, whatever the stream's
 length. Use [`ew_cov`](#ew_cov--exponentially-weighted-moments) for the
 means, covariances and correlations of many columns and the statistics read
 off them. For one term as a window column of a stream, read after its row
-as the other window operators are, use the operator `rp.ewm_moments`
+as the other window operators are, use the operator `rp.ops.ewm_moments`
 ([WINDOWS.md](WINDOWS.md)).
 
 Its parameters, their defaults and what each refuses are in its
@@ -2817,9 +2817,9 @@ fourth moment, is the term furthest from its truth.
 The operator and the models beside it:
 
 - The window operator
-  [`rp.ewm_moments`](https://rheon-dev.github.io/rheon/ops.html#rheon.polars.ops.ewm_moments),
+  [`rp.ops.ewm_moments`](https://rheon-dev.github.io/rheon/ops.html#rheon.polars.ops.ewm_moments),
   one term as a column of a stream, each row weighing the time its value is
-  held, as `rp.ewm_var` weighs it.
+  held, as `rp.ops.ewm_var` weighs it.
 - [`ew_cov`](#ew_cov--exponentially-weighted-moments), the means,
   covariances, correlations and principal components of many columns.
 - [`audit`](#audit--what-a-streams-columns-hold), a column's lag pairs and

@@ -145,8 +145,8 @@ def kalman(
         and give it with ``standardize = False``. `Scale a feature by its
         spread
         <https://github.com/rheon-dev/rheon/blob/main/docs/how-to/scale-a-feature-by-its-spread.md>`_
-        builds the column with :func:`rheon.polars.ewm_mean
-        <rheon.polars.ops.ewm_mean>` and :func:`rheon.polars.ewm_std
+        builds the column with :func:`rheon.polars.ops.ewm_mean
+        <rheon.polars.ops.ewm_mean>` and :func:`rheon.polars.ops.ewm_std
         <rheon.polars.ops.ewm_std>`.
     ``covariance_form``
         How the filter holds ``P``. ``"covariance"``, the default, holds

@@ -18,7 +18,7 @@ from rheon.polars import _formula
 
 TIER = "essential"
 
-LEVEL = {"level": rp.ewm_mean("y", half_life=2.0)}
+LEVEL = {"level": rp.ops.ewm_mean("y", half_life=2.0)}
 
 
 def cubic(x: pl.Expr) -> pl.Expr:
@@ -162,7 +162,9 @@ def test_the_call_refuses_what_the_solve_cannot_read():
         with pytest.raises(ValueError, match="f does not hold the unknown"):
             rp.ops.invert(no_unknown, "y", 0.0, 1.0, increasing=True)
     with pytest.raises(ValueError, match="holds the window operator ewm_mean"):
-        rp.ops.invert(lambda x: x - rp.ewm_mean("a", half_life=1.0), "y", 0.0, 1.0, increasing=True)
+        rp.ops.invert(
+            lambda x: x - rp.ops.ewm_mean("a", half_life=1.0), "y", 0.0, 1.0, increasing=True
+        )
     with pytest.raises(ValueError, match="'when', which the solve does not evaluate"):
         rp.ops.invert(
             lambda x: pl.when(x > 0).then(x).otherwise(-x), "y", 0.0, 1.0, increasing=True
@@ -212,7 +214,7 @@ def test_the_node_carries_every_parameter_and_reads_back():
         {"increasing": True, "xtol": 2e-12, "rtol": 4 * 2.0**-52, "detail": False},
     ]
     assert _formula.columns(node) == ["a", "y", "hi"]
-    tree = _formula.to_tree(rp.ewm_mean(pl.col("y"), half_life=1.0) - expr)
+    tree = _formula.to_tree(rp.ops.ewm_mean(pl.col("y"), half_life=1.0) - expr)
     assert _formula.holds_invert(tree) and _formula.to_tree(_formula.from_tree(tree)) == tree
 
 
@@ -222,7 +224,7 @@ def test_a_run_of_inverts_alone_is_refused_and_a_target_does_not_take_one():
         rp.stream.with_windows(frame, x=rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True))
     with pytest.raises(ValueError, match="holds no window operator"):
         rp.stream.with_windows(frame, x=pl.col("y") + 1, **LEVEL)
-    ahead = rp.ewm_mean("y", half_life=1.0, window_size=2.0, reverse=True)
+    ahead = rp.ops.ewm_mean("y", half_life=1.0, window_size=2.0, reverse=True)
     target = (ahead - rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True)).alias("t")
     with pytest.raises(ValueError, match="holds rp.ops.invert, which a formula target"):
         rp.spec.ewridge(
@@ -240,9 +242,11 @@ def test_the_roots_feed_an_operator_and_sit_under_arithmetic():
     frame = pl.DataFrame({"a": [1.0, 2.0, 1.0, 2.0], "y": [2.0, 3.0, 2.0, 3.0]})
     root = rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True)
     got = rp.stream.with_windows(
-        frame, x=root, smooth=rp.ewm_mean(root, half_life=1.0), gap=root - pl.col("a")
+        frame, x=root, smooth=rp.ops.ewm_mean(root, half_life=1.0), gap=root - pl.col("a")
     )
-    want = rp.stream.with_windows(got.select("a", "y", "x"), smooth=rp.ewm_mean("x", half_life=1.0))
+    want = rp.stream.with_windows(
+        got.select("a", "y", "x"), smooth=rp.ops.ewm_mean("x", half_life=1.0)
+    )
     assert got["smooth"].to_list() == want["smooth"].to_list()
     assert (got["gap"] - (got["x"] - got["a"])).abs().max() == 0.0
 

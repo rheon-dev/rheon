@@ -1,7 +1,7 @@
 """The window operators held to Polars itself, on a wider grid than
-``test_windows.py``'s one stream: ``rp.ewm_mean`` against ``ewm_mean_by``
+``test_windows.py``'s one stream: ``rp.ops.ewm_mean`` against ``ewm_mean_by``
 over every datetime unit, half-lives from a microsecond to an hour, stamps
-that repeat, nulls and two epochs; and ``rp.ewm_sum(half_life=inf,
+that repeat, nulls and two epochs; and ``rp.ops.ewm_sum(half_life=inf,
 window_size=...)`` against ``rolling_sum_by`` under all four values of
 ``closed``. Polars is the reference, so what differs is stated:
 
@@ -9,7 +9,7 @@ window_size=...)`` against ``rolling_sum_by`` under all four values of
   window there, which a null row does not move. The comparison is at rows
   with a value.
 - ``rolling_sum_by`` gives 0 for a window that holds no row with a value, and
-  so does ``rp.ewm_sum`` under its default ``min_samples`` of 0, as Polars'
+  so does ``rp.ops.ewm_sum`` under its default ``min_samples`` of 0, as Polars'
   default is; with ``min_samples=1`` or more both give null there.
 """
 
@@ -70,7 +70,7 @@ def test_the_mean_is_polars_ewm_mean_by(unit: str, epoch: str, nulls: float, tie
     valued = df["x"].is_not_null().to_list()
     for h in HALF_LIVES:
         out = rp.stream.with_windows(
-            df, m=rp.ewm_mean("x", half_life=h), clock="ts", gap_cap="1000h"
+            df, m=rp.ops.ewm_mean("x", half_life=h), clock="ts", gap_cap="1000h"
         )
         ref = df.select(pl.col("x").ewm_mean_by("ts", half_life=h))["x"].to_list()
         seen = _close(out["m"].to_list(), ref, valued, f"{unit} {epoch} {h}")
@@ -101,7 +101,7 @@ def test_the_plain_sum_over_a_window_is_polars_rolling_sum_by(
     for w in ("5ms", "1s", "5s"):
         out = rp.stream.with_windows(
             df,
-            s=rp.ewm_sum("x", half_life=math.inf, window_size=w, closed=closed, **kw),
+            s=rp.ops.ewm_sum("x", half_life=math.inf, window_size=w, closed=closed, **kw),
             clock="ts",
             gap_cap="1000h",
         )["s"].to_list()
@@ -151,7 +151,7 @@ def test_a_window_with_no_row_sums_to_zero_as_polars_does() -> None:
     for min_samples in (0, 1):
         got = rp.stream.with_windows(
             df,
-            s=rp.ewm_sum(
+            s=rp.ops.ewm_sum(
                 "x", half_life=math.inf, window_size="2s", closed="left", min_samples=min_samples
             ),
             **clock,

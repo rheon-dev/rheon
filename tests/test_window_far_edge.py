@@ -199,10 +199,10 @@ def test_a_backward_window_weighs_its_far_edge_row_at_nothing(closed: str, h: fl
                     frame = _frame(ts, xs)
                     got = rp.stream.with_windows(
                         frame,
-                        mean=rp.ewm_mean(
+                        mean=rp.ops.ewm_mean(
                             "x", half_life=h, window_size=f"{w_ms}ms", closed=closed, partial="keep"
                         ),
-                        var=rp.ewm_var(
+                        var=rp.ops.ewm_var(
                             "x",
                             half_life=h,
                             window_size=f"{w_ms}ms",
@@ -240,7 +240,7 @@ def test_a_forward_window_weighs_its_far_edge_row_at_nothing(closed: str, h: flo
                     ts, xs = _stretch(s_ms, a_ms + w_ms, w_ms, offsets, values)
                     got = rp.stream.with_windows(
                         _frame(ts, xs),
-                        mean=rp.ewm_mean(
+                        mean=rp.ops.ewm_mean(
                             "x",
                             half_life=h,
                             window_size=f"{w_ms}ms",
@@ -268,7 +268,7 @@ def test_the_reviews_input() -> None:
         ts = [start * 10**6, 400 * 10**6, 1500 * 10**6, 1501 * 10**6]
         out = rp.stream.with_windows(
             _frame(ts, [None, 5.0, None, None]),
-            m=rp.ewm_mean("x", half_life="1s", window_size="1100ms", closed="both"),
+            m=rp.ops.ewm_mean("x", half_life="1s", window_size="1100ms", closed="both"),
             clock="t",
             gap_cap="1h",
         )
@@ -307,8 +307,10 @@ def test_a_number_clock_weighs_its_far_edge_row_at_nothing() -> None:
                 )
                 out = rp.stream.with_windows(
                     frame,
-                    m=rp.ewm_mean("x", half_life=h, window_size=w, closed=closed, partial="keep"),
-                    v=rp.ewm_var(
+                    m=rp.ops.ewm_mean(
+                        "x", half_life=h, window_size=w, closed=closed, partial="keep"
+                    ),
+                    v=rp.ops.ewm_var(
                         "x", half_life=h, window_size=w, closed=closed, partial="keep", bias=True
                     ),
                     clock="t",

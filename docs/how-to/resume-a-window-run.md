@@ -57,7 +57,7 @@ data](../EXAMPLE-DATA.md):
 ```python
 # The forward VWAP in one run over the whole stream, for comparison.
 next_minute = dict(half_life="10s", window_size="1m", reverse=True)
-vwap = dict(fwd_vwap=rp.ewm_sum(pl.col("price") * pl.col("quantity"), **next_minute) / rp.ewm_sum("quantity", **next_minute))
+vwap = dict(fwd_vwap=rp.ops.ewm_sum(pl.col("price") * pl.col("quantity"), **next_minute) / rp.ops.ewm_sum("quantity", **next_minute))
 clock = dict(clock="ts", gap_cap="5m", group="symbol")
 one_run = rp.stream.with_windows(trades, **vwap, **clock)
 

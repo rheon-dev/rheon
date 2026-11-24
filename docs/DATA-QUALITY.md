@@ -933,7 +933,7 @@ differenced column is null, so the model skips it.
 
 **What to do.** Difference a level with `diff()` in the query before the
 bank, or take its deviation from a moving mean, such as
-`pl.col("x") - rp.ewm_mean("x", ...)`. Model the change of the target on
+`pl.col("x") - rp.ops.ewm_mean("x", ...)`. Model the change of the target on
 the changes of the features. A level that truly belongs in the model, such
 as a spread between two prices that reverts, is not a random walk, and its
 Dickey-Fuller statistic says so.

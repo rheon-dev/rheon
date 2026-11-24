@@ -449,7 +449,7 @@ and to each path in its `PATHS`, by the keyword that takes it:
 
 **The script compares each spec's output fields, and the frame
 `closed_groups` drains, bit by bit.** What it does not run is outside the
-comparison. That is the window operators (`rp.ewm_mean` and the rest,
+comparison. That is the window operators (`rp.ops.ewm_mean` and the rest,
 `with_windows`), `rheon.gram`, an internal helper for gradient-boosted trees, `refresh_time`, a bank's
 `threads=`, and every combination of settings beyond the ones named. It
 prints each field that differs, with the first row where it does, and

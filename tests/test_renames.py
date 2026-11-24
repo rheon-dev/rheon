@@ -332,9 +332,9 @@ def test_with_windows_refuses_an_old_clock_name_in_like_and_in_a_keyword():
         "min_backwards_jump": 1.0,
     }
     with pytest.raises(TypeError, match="on_clock_reset was renamed restart_after_step_back"):
-        rp.stream.with_windows(df, f=rp.ewm_mean("x", half_life=2.0), like=like)
+        rp.stream.with_windows(df, f=rp.ops.ewm_mean("x", half_life=2.0), like=like)
     with pytest.raises(TypeError, match="max_dclock was renamed gap_cap"):
-        rp.stream.with_windows(df, f=rp.ewm_mean("x", half_life=2.0), clock="t", max_dclock=5.0)
+        rp.stream.with_windows(df, f=rp.ops.ewm_mean("x", half_life=2.0), clock="t", max_dclock=5.0)
 
 
 @pytest.mark.parametrize("name", ["window", "halflife", "min_periods", "reset", "label_delay"])
@@ -344,7 +344,7 @@ def test_with_windows_takes_an_old_spec_parameter_name_as_an_output_name(name):
     took it (task 352). Only the old names of its own keywords are refused,
     as above; any other is an output name, on every surface."""
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0], "x": [1.0, 2.0, 3.0]})
-    window = rp.ewm_mean("x", half_life=2.0)
+    window = rp.ops.ewm_mean("x", half_life=2.0)
     want = rp.stream.with_windows(df, f=window, clock="t", gap_cap=5.0).rename({"f": name})
     got = [
         rp.stream.with_windows(df, **{name: window}, clock="t", gap_cap=5.0),
@@ -474,7 +474,7 @@ def _chunk_calls():
     lf = _FRAME.lazy()
     fitted = rp.ModelBank([_SPEC])
     fitted.fit_predict(_FRAME)
-    window = rp.ewm_mean("x", half_life=2.0)
+    window = rp.ops.ewm_mean("x", half_life=2.0)
     refresh = pl.DataFrame({"s": ["a", "b"], "t": [0.0, 1.0], "v": [1.0, 2.0]})
     refresh_kw = dict(series="s", names=["a", "b"], clock="t", value="v")
     return [

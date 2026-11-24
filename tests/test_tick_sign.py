@@ -154,7 +154,7 @@ def test_a_tick_sign_inside_an_operator_signs_the_flow() -> None:
     df = ticks(4, n=200)
     out = rp.stream.with_windows(
         df,
-        flow=rp.ewm_sum(rp.ops.tick_sign("price") * pl.col("size"), half_life=float("inf")),
+        flow=rp.ops.ewm_sum(rp.ops.tick_sign("price") * pl.col("size"), half_life=float("inf")),
         **CLOCK,
     )
     want = (polars_tick_sign(pl.col("price")) * pl.col("size")).fill_null(0.0).cum_sum()
@@ -164,14 +164,14 @@ def test_a_tick_sign_inside_an_operator_signs_the_flow() -> None:
 def test_a_tick_sign_of_a_tick_sign_or_of_a_window_is_refused() -> None:
     df = ticks(5, n=10)
     with pytest.raises(ValueError, match="holds another window operator"):
-        rp.ops.tick_sign(rp.ewm_sum("price", half_life=1.0))
+        rp.ops.tick_sign(rp.ops.ewm_sum("price", half_life=1.0))
     nested = "a tick sign's input holds another tick sign"
     with pytest.raises((pl.exceptions.ComputeError, ValueError), match=nested):
         rp.stream.with_windows(df, s=rp.ops.tick_sign(rp.ops.tick_sign("price")), **CLOCK)
     with pytest.raises(
         (pl.exceptions.ComputeError, ValueError), match="a tick sign's input holds an increment"
     ):
-        rp.stream.with_windows(df, s=rp.ops.tick_sign(rp.increment("price")), **CLOCK)
+        rp.stream.with_windows(df, s=rp.ops.tick_sign(rp.ops.increment("price")), **CLOCK)
     with pytest.raises(TypeError, match="column name or a pl.Expr"):
         rp.ops.tick_sign(3.0)  # type: ignore[arg-type]
 

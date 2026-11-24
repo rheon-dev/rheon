@@ -43,8 +43,8 @@ def _maxrss() -> float:
 r0 = _maxrss()
 t0 = time.perf_counter()
 out = stream.rheon.with_windows(
-    S=rp.ewm_sum("y", half_life=hl, closed="left"),
-    W=rp.ewm_sum("one", half_life=hl, closed="left"),
+    S=rp.ops.ewm_sum("y", half_life=hl, closed="left"),
+    W=rp.ops.ewm_sum("one", half_life=hl, closed="left"),
     clock="c",
     gap_cap=1e12,
     group="tailnum",

@@ -1,4 +1,4 @@
-"""``rp.ewm_quantile``: the exponentially weighted quantile of a column over
+"""``rp.ops.ewm_quantile``: the exponentially weighted quantile of a column over
 a window of the stream's clock (docs/PLAN.md task 272 (d)).
 
 The operator reads each value as the bucket it falls in, each bucket
@@ -126,9 +126,9 @@ def test_the_running_quantile_is_numpys_weighted_quantile(q: float) -> None:
     sketch's accuracy of numpy's weighted quantile, and the level shift
     shows (the median crosses to the new level within a few half-lives)."""
     df = stream(600, 1, shift_at=300)
-    out = rp.stream.with_windows(df, y=rp.ewm_quantile("x", quantile=q, half_life=4.0), **CLOCK)[
-        "y"
-    ].to_list()
+    out = rp.stream.with_windows(
+        df, y=rp.ops.ewm_quantile("x", quantile=q, half_life=4.0), **CLOCK
+    )["y"].to_list()
     assert within(out, oracle(df, q, half_life=4.0)) == []
     if q == 0.5:
         assert out[290] < 10 and out[-1] > 40, (out[290], out[-1])
@@ -143,7 +143,7 @@ def test_a_windowed_quantile_is_numpys_over_the_rows_a_window_holds(closed: str,
     df = stream(500, 2, shift_at=250)
     out = rp.stream.with_windows(
         df,
-        y=rp.ewm_quantile("x", quantile=q, half_life=6.0, window_size=15.0, closed=closed),
+        y=rp.ops.ewm_quantile("x", quantile=q, half_life=6.0, window_size=15.0, closed=closed),
         **CLOCK,
     )["y"].to_list()
     assert within(out, oracle(df, q, half_life=6.0, window=15.0, closed=closed)) == []
@@ -164,7 +164,7 @@ def test_a_quantile_looking_ahead_is_numpys_over_the_rows_after(closed: str) -> 
     df = stream(400, 3, shift_at=200)
     out = rp.stream.with_windows(
         df,
-        y=rp.ewm_quantile(
+        y=rp.ops.ewm_quantile(
             "x", quantile=0.3, half_life=3.0, window_size=8.0, closed=closed, reverse=True
         ),
         **CLOCK,
@@ -186,7 +186,7 @@ def test_an_even_window_is_the_rolling_quantile_and_the_ew_mad_is_statsmodels_ma
     df = pl.DataFrame({"t": np.arange(1500.0), "r": r})
     out = rp.stream.with_windows(
         df,
-        scale=rp.ewm_quantile(
+        scale=rp.ops.ewm_quantile(
             pl.col("r").abs(), quantile=0.5, half_life=math.inf, window_size=101.0
         )
         / Z75,
@@ -214,8 +214,8 @@ def test_a_scale_of_a_target_leaves_the_rows_own_label_out_under_closed_left() -
     kw = {"quantile": 0.95, "half_life": 10.0}
     out = rp.stream.with_windows(
         df,
-        left=rp.ewm_quantile(pl.col("y").abs(), **kw, closed="left"),
-        right=rp.ewm_quantile(pl.col("y").abs(), **kw),
+        left=rp.ops.ewm_quantile(pl.col("y").abs(), **kw, closed="left"),
+        right=rp.ops.ewm_quantile(pl.col("y").abs(), **kw),
         **CLOCK,
     )
     left, right = out["left"].to_list(), out["right"].to_list()
@@ -231,8 +231,8 @@ def test_nulls_count_for_nothing_and_min_samples_counts_values() -> None:
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0], "x": [5.0, None, 1.0, None, 3.0]})
     out = rp.stream.with_windows(
         df,
-        a=rp.ewm_quantile("x", quantile=0.5, half_life=math.inf),
-        b=rp.ewm_quantile("x", quantile=0.5, half_life=math.inf, min_samples=2),
+        a=rp.ops.ewm_quantile("x", quantile=0.5, half_life=math.inf),
+        b=rp.ops.ewm_quantile("x", quantile=0.5, half_life=math.inf, min_samples=2),
         **CLOCK,
     )
     a, b = out["a"].to_list(), out["b"].to_list()
@@ -243,10 +243,10 @@ def test_nulls_count_for_nothing_and_min_samples_counts_values() -> None:
 def mixed() -> dict[str, pl.Expr]:
     h = {"half_life": 2.0}
     return {
-        "run": rp.ewm_quantile("x", quantile=0.5, **h),
-        "win": rp.ewm_quantile(pl.col("x").abs(), quantile=0.9, **h, window_size=5.0),
-        "left": rp.ewm_quantile("x", quantile=0.2, **h, window_size=4.0, closed="left"),
-        "ahead": rp.ewm_quantile("x", quantile=0.7, **h, window_size=4.0, reverse=True),
+        "run": rp.ops.ewm_quantile("x", quantile=0.5, **h),
+        "win": rp.ops.ewm_quantile(pl.col("x").abs(), quantile=0.9, **h, window_size=5.0),
+        "left": rp.ops.ewm_quantile("x", quantile=0.2, **h, window_size=4.0, closed="left"),
+        "ahead": rp.ops.ewm_quantile("x", quantile=0.7, **h, window_size=4.0, reverse=True),
     }
 
 
@@ -288,19 +288,19 @@ def test_a_quantiles_parameters_are_checked_by_name() -> None:
         ({"quantile": "0.5"}, TypeError, "but it is of type str"),
     ]:
         with pytest.raises(err, match=says):
-            rp.ewm_quantile("x", half_life=1.0, **bad)
-    with pytest.raises(ValueError, match="rp.ewm_quantile: reverse=True needs window_size"):
-        rp.ewm_quantile("x", quantile=0.5, half_life=1.0, reverse=True)
+            rp.ops.ewm_quantile("x", half_life=1.0, **bad)
+    with pytest.raises(ValueError, match="rp.ops.ewm_quantile: reverse=True needs window_size"):
+        rp.ops.ewm_quantile("x", quantile=0.5, half_life=1.0, reverse=True)
     with pytest.raises(ValueError, match="the input holds another window operator"):
-        rp.ewm_quantile(rp.ewm_mean("x", half_life=1.0), quantile=0.5, half_life=1.0)
+        rp.ops.ewm_quantile(rp.ops.ewm_mean("x", half_life=1.0), quantile=0.5, half_life=1.0)
     with pytest.raises(TypeError):
-        rp.ewm_quantile("x", half_life=1.0)  # type: ignore[call-arg]
+        rp.ops.ewm_quantile("x", half_life=1.0)  # type: ignore[call-arg]
 
 
 def test_two_levels_are_two_columns_and_one_asked_twice_is_one() -> None:
-    a = rp.ewm_quantile("x", quantile=0.5, half_life=1.0)
-    b = rp.ewm_quantile("x", quantile=0.5, half_life=1.0)
-    c = rp.ewm_quantile("x", quantile=0.6, half_life=1.0)
+    a = rp.ops.ewm_quantile("x", quantile=0.5, half_life=1.0)
+    b = rp.ops.ewm_quantile("x", quantile=0.5, half_life=1.0)
+    c = rp.ops.ewm_quantile("x", quantile=0.6, half_life=1.0)
     assert a.meta.output_name() == b.meta.output_name() != c.meta.output_name()
 
 
@@ -314,7 +314,7 @@ def test_a_quantile_looking_ahead_is_a_target_the_bank_learns_as_its_column() ->
     df = pl.DataFrame(
         {"t": np.cumsum(rng.uniform(0.5, 1.5, n)), "x0": x0, "y": 2 * x0 + rng.standard_normal(n)}
     )
-    fwd = rp.ewm_quantile("y", quantile=0.5, half_life=3.0, window_size=6.0, reverse=True)
+    fwd = rp.ops.ewm_quantile("y", quantile=0.5, half_life=3.0, window_size=6.0, reverse=True)
     kw: dict[str, Any] = {"clock": "t", "gap_cap": 50.0, "half_life": 40.0, "embargo": 8.0}
     spec = rp.spec.ewridge("m", targets=[fwd.alias("fwd_med")], features=["x0"], **kw)
     by_expr = rp.ModelBank([spec]).fit_predict(df)["m"].struct.field("pred_fwd_med")
@@ -352,7 +352,7 @@ def _levels(df: pl.DataFrame, input: Any, qs: Any, *, closed: str, ahead: bool) 
     out = rp.stream.with_windows(
         df,
         **{
-            f"q{j}": rp.ewm_quantile(input, quantile=q, **kw, reverse=ahead)
+            f"q{j}": rp.ops.ewm_quantile(input, quantile=q, **kw, reverse=ahead)
             for j, q in enumerate(qs)
         },
         **CLOCK,

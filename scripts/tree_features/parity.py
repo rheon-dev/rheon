@@ -32,8 +32,8 @@ rows = pl.concat(
     ]
 ).sort("c", "role", "rid")
 nowcast = dict(
-    S=rp.ewm_sum("y", half_life=60.0, closed="left"),
-    W=rp.ewm_sum("one", half_life=60.0, closed="left"),
+    S=rp.ops.ewm_sum("y", half_life=60.0, closed="left"),
+    W=rp.ops.ewm_sum("one", half_life=60.0, closed="left"),
 )
 cut = 273 * 1440.0
 with tempfile.TemporaryDirectory() as d:

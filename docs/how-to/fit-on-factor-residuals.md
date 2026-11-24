@@ -43,7 +43,7 @@ ridge on their residuals.
    `resid_d0`.
 3. **Make the second ridge's target with a
    [window operator](../GLOSSARY.md#fitting-a-model) that looks
-   ahead,** as `rp.ewm_mean("y", half_life=5.0, window_size=10.0,
+   ahead,** as `rp.ops.ewm_mean("y", half_life=5.0, window_size=10.0,
    reverse=True) - pl.col("y")`: the forward mean of `y` over the next ten
    clock units, less `y`. Under the default `closed="right"`, the window
    holds the rows after the row, up to `window_size` later, and not the row
@@ -109,7 +109,7 @@ factors = [rp.spec.ewridge(f"fac{f}", targets=[f"d{f}"], features=[f"x{f}_{j}" f
                            half_life=500.0, **clock) for f in range(2)]
 residuals = [pl.col(f"fac{f}").struct.field(f"resid_d{f}") for f in range(2)]
 # 3-6. The second ridge: a target that looks ahead, under a hard window, learned once it is known.
-forward = rp.ewm_mean("y", half_life=5.0, window_size=10.0, reverse=True) - pl.col("y")
+forward = rp.ops.ewm_mean("y", half_life=5.0, window_size=10.0, reverse=True) - pl.col("y")
 stage2 = rp.spec.ewridge(
     "stage2", targets=[forward.alias("fwd")], features=["resid_d0", "resid_d1"],
     window_size=1_000.0, half_life=float("inf"),   # 4. every row of the last 1,000 clock units alike

@@ -31,6 +31,23 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **The window operators live in `rheon.polars.ops` alone; the root names
+  2.0.0 exported are deprecated** (PLAN 579; the user, 2026-11-24).
+  `rp.ewm_mean`, `rp.ewm_quantile`, `rp.ewm_rate`, `rp.ewm_std`,
+  `rp.ewm_sum`, `rp.ewm_var` and `rp.increment` still work, each issuing a
+  `RheonDeprecationWarning` that names its new path, `rp.ops.ewm_mean` and
+  the rest, and each gives the same expression as before; the next major
+  release removes them. They leave `rheon.polars.__all__`, so
+  `from rheon.polars import *` no longer brings them. `rp.rewm_mean`,
+  `rp.rewm_sum` and `rp.rewm_rate` still refuse the call, now naming
+  `rp.ops.ewm_mean(..., reverse=True)` and the rest. The operators added
+  since 2.0.0 are in `rp.ops` only: `rp.ops.cross_mean`,
+  `rp.ops.cross_quantile`, `rp.ops.cross_rank`, `rp.ops.cross_ref`,
+  `rp.ops.cross_std`, `rp.ops.ewm_moments`, `rp.ops.ewm_profile`,
+  `rp.ops.rolling_max` and `rp.ops.rolling_min`, as `rp.ops.tick_sign`,
+  `rp.ops.run_length` and the clock operators already were. An operator's
+  error message names it by its `rp.ops` path.
+
 - **`deco`'s `rho` reads the equicorrelation: the ratio of the weighted
   means** (PLAN 551; the user, 2026-11-22: "Replace rho with the ratio").
   The row's estimate `u`, Engle and Kelly's eq. 20, is a ratio over one row
@@ -389,7 +406,7 @@ model that only the new build has is listed as an addition and passes.
   ns a tick against 46 on a joint grid of four series, and 182 against 155
   with `pairs`.
 
-- **`rp.ewm_profile`: a column's EW mean, variance, standard deviation or
+- **`rp.ops.ewm_profile`: a column's EW mean, variance, standard deviation or
   quantile by each row's phase of a period** (PLAN 560), read at the row's
   own phase, one profile per group, in `rp.stream.with_windows`. The
   phase is Polars' `t − t.dt.truncate(period)` less an `offset`, on the
@@ -403,7 +420,7 @@ model that only the new build has is listed as an addition and passes.
   Each phase decays by the clock's age; `window_size` keeps each phase's
   rows in two stacks, so a row leaves without a subtraction. A phase is
   read once it holds `min_samples` rows. `closed="right"` by default, as
-  `rp.ewm_mean`; `"left"` for an adjustment from earlier rows alone. The
+  `rp.ops.ewm_mean`; `"left"` for an adjustment from earlier rows alone. The
   state is bounded by the period's shape and the window and held to
   `max_state_bytes` (a warning at half, a refusal at the cap naming the
   row). Held to Polars' `group_by` over the phase, `zoneinfo` row by row
@@ -413,7 +430,7 @@ model that only the new build has is listed as an addition and passes.
   Polars and `rheon-core`, are named by `rheon-polars` for the zone and the
   harmonic basis.
 
-- **`rp.rolling_max` and `rp.rolling_min`: the largest and smallest value
+- **`rp.ops.rolling_max` and `rp.ops.rolling_min`: the largest and smallest value
   of a window on the clock, or since an event** (PLAN 561, the min and max
   of PLAN 518's window operators). Polars' `rolling_max_by` and
   `rolling_min_by` over every `closed`, held to them bit for bit (on 400
@@ -426,7 +443,7 @@ model that only the new build has is listed as an addition and passes.
   stamp is null. `since` with `reverse=True` is refused, saying why. A NaN
   or an infinity is read as missing, as for every operator, where Polars
   lets a NaN make the window NaN. A drawdown is the formula
-  `pl.col("x") - rp.rolling_max("x", since=...)`. A windowed extremum's
+  `pl.col("x") - rp.ops.rolling_max("x", since=...)`. A windowed extremum's
   queue is bounded by `max_state_bytes` (256 KB a group, at most 64 MiB):
   refused when the query is built on the row clock, at the row that passes
   it on a clock; a row costs 112 bytes for one extremum on its own window.
@@ -462,8 +479,8 @@ model that only the new build has is listed as an addition and passes.
   session, -1 below it, and over a step of 0 the sign of the last step that
   was not 0; null on a row with no step (a session's first, a missing
   price) and on the rows at the first price until it moves. It is a step,
-  as `rp.increment` is: `with_windows` computes it, a window operator's
-  input may read it (signed flow, `rp.ewm_sum(rp.ops.tick_sign("price") *
+  as `rp.ops.increment` is: `with_windows` computes it, a window operator's
+  input may read it (signed flow, `rp.ops.ewm_sum(rp.ops.tick_sign("price") *
   pl.col("size"), ...)`), and it feeds `rp.stream.bars`' imbalance bars.
   Each tick sign carries its sign in the windows state's `prev`, past the
   increments' previous values, so the layout of a state file is unchanged
@@ -483,7 +500,7 @@ model that only the new build has is listed as an addition and passes.
   half_life=)` is the decayed mean of `arrival - event`, and
   `rp.ops.clock_drift(arrival, event, half_life=)` its weighted least-squares
   slope on the arrival time, null while the arrivals have no spread. Each is
-  a group's own, computed a row at a time beside `rp.increment` in
+  a group's own, computed a row at a time beside `rp.ops.increment` in
   `with_windows`, and costs 48 bytes (a run) or 88 (a drift) a group. Held
   to Polars' `rle`, numpy's weighted mean and statsmodels' `WLS`. A window
   run's state moves to version 14; a version-13 state loads as one without
@@ -494,7 +511,7 @@ model that only the new build has is listed as an addition and passes.
   decayed mean (`"mean"`), variance (`"var"`) or standard deviation
   (`"std"`), corrected for the weights' count as Polars' `ewm_var` is unless
   `bias=True`, or the decayed weight of the steps of exactly 0 (`"zeros"`)
-  or below 0 (`"backs"`). The statistics are `rp.ewm_moments`' decayed
+  or below 0 (`"backs"`). The statistics are `rp.ops.ewm_moments`' decayed
   moments (one term, order 1 or 2), a count the weight of a moments state
   that learns only the steps it counts, so no second running sum is kept.
   A row whose time is missing gives null and the next time takes no step
@@ -537,9 +554,9 @@ model that only the new build has is listed as an addition and passes.
   Polars' readers of the same streams alone, read in turn, peaked at 104,
   199 and 731 MB and Polars' sort of the concatenation at 949 to 1,148 MB.
 
-- **Cross-group operators** (PLAN 557): `rp.cross_mean`, `rp.cross_std`,
-  `rp.cross_rank` and `rp.cross_quantile` reduce every group's row at one
-  stamp of the clock and give each row the result, and `rp.cross_ref`
+- **Cross-group operators** (PLAN 557): `rp.ops.cross_mean`, `rp.ops.cross_std`,
+  `rp.ops.cross_rank` and `rp.ops.cross_quantile` reduce every group's row at one
+  stamp of the clock and give each row the result, and `rp.ops.cross_ref`
   reads one reference row's value (the row its `where=` predicate picks)
   at each stamp. They run in `rp.stream.with_windows` under a `clock`.
   Under `closed="right"`, the default, a row reads its own stamp and is
@@ -606,7 +623,7 @@ model that only the new build has is listed as an addition and passes.
   unreleased).
 
 - **`ewm_moments`, moments to any order, and the window operator
-  `rp.ewm_moments`** (PLAN 554). A new spec kind,
+  `rp.ops.ewm_moments`** (PLAN 554). A new spec kind,
   `rheon.spec.ewm_moments(name, terms=...)`, names its terms: each maps its
   legs, a column or a column lagged `k` back (`"x@1"`, `"x@5m"` on a
   temporal clock), to a power, and reads it as a central, raw or
@@ -617,9 +634,9 @@ model that only the new build has is listed as an addition and passes.
   are its terms, read before each row from one bounded state, merged a row
   at a time by Pebay's update. Its fields are each term, `se_<term>` after
   every term, `weight_sum`, `settled_frac` and `withheld_reason`. The window
-  operator `rp.ewm_moments(legs, half_life=..., kind=..., ...)` gives one
+  operator `rp.ops.ewm_moments(legs, half_life=..., kind=..., ...)` gives one
   term a call as a column of `with_windows`, read after its row, each value
-  weighing the decayed time it is held over, as `rp.ewm_var`'s does; fed
+  weighing the decayed time it is held over, as `rp.ops.ewm_var`'s does; fed
   those weights the spec gives the same bits. Held to scipy's `moment`,
   `skew`, `kurtosis` and `kstat`, numpy's weighted averages and `cov`,
   statsmodels' `acovf` and Polars' `rolling_skew` and `rolling_kurtosis`.
@@ -1813,7 +1830,7 @@ model that only the new build has is listed as an addition and passes.
   Moves: `*.cusum_*`, `*.break_wald_*`, `*.calibration_wald_*`.
 - **A window looking ahead whose far edge is the input's last row is whole
   at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
-  `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
+  `rp.ops.ewm_sum`, `rp.ops.ewm_mean`, `rp.ops.ewm_rate` and `rp.ops.ewm_quantile` with
   `reverse=True` gave null for a row whose window's far edge fell on its
   group's last row, where the same window before a gap or a reset was
   whole. Nothing later can join it, so it now gives its value. A window
@@ -2673,7 +2690,7 @@ model that only the new build has is listed as an addition and passes.
   at order 4), where its plain mean took `8 (P + 3)`: the pair's low part
   keeps the deviation `z - m` at the spread's scale under a large level, so
   a moment at a level decays with its history rather than settling on a
-  stalled mean's rounding, as `ew_cov`'s and `rp.ewm_var`'s means do. Order
+  stalled mean's rounding, as `ew_cov`'s and `rp.ops.ewm_var`'s means do. Order
   2 then runs `ew_cov`'s update operation for operation, and a variance here
   is `ew_cov`'s to the bit.
 - **`ar` reads its fits' systems in place** (PLAN 491). Its order

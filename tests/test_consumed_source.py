@@ -397,7 +397,7 @@ def test_a_chain_of_two_plan_forms_over_an_empty_frame_does_not_warn() -> None:
         warnings.simplefilter("always")
         chained = (
             empty.lazy()
-            .rheon.with_windows(f=rp.ewm_mean(feature, half_life=5.0))
+            .rheon.with_windows(f=rp.ops.ewm_mean(feature, half_life=5.0))
             .rheon.fit_predict([SPEC])
             .collect()
         )
@@ -408,7 +408,7 @@ def test_a_chain_of_two_plan_forms_over_an_empty_frame_does_not_warn() -> None:
         # 2026-10-05, YB6).
         fitted = rp.ModelBank([again])
         fitted.fit(empty.lazy().rheon.fit_predict([SPEC]))
-        windowed = empty.lazy().rheon.with_windows(f=rp.ewm_mean(feature, half_life=5.0))
+        windowed = empty.lazy().rheon.with_windows(f=rp.ops.ewm_mean(feature, half_life=5.0))
         batches = list(rp.ModelBank([SPEC]).fit_predict_batches(windowed))
     assert chained.height == 0 and twice.height == 0
     assert fitted.rows_fed == 0 and sum(b.height for b in batches) == 0

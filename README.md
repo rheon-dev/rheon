@@ -132,7 +132,7 @@ local = rp.spec.ewridge(
 betas = pl.scan_parquet("prices.parquet").rheon.fit_predict([local]).rheon.unnest([local]).collect()   # a row of betas per input row
 
 # 5. A target that looks ahead: each row's mean return over the next ten minutes.
-fwd_ret = rp.ewm_mean("ret", half_life=float("inf"), window_size="10m", reverse=True).alias("fwd_ret")
+fwd_ret = rp.ops.ewm_mean("ret", half_life=float("inf"), window_size="10m", reverse=True).alias("fwd_ret")
 ahead = rp.spec.ewridge(
     "ahead", targets=[fwd_ret], features=["signal_a", "signal_b"], group="stock_id",
     clock="ts", half_life="10m", gap_cap="5m",
@@ -224,7 +224,7 @@ from 10:30, stock A's beta on `signal_a` climbs with the true one, which is
 
 **Step 5 predicts a target that looks ahead.** `fwd_ret`, a Polars
 expression (a column computation, such as `pl.col("x") + 1`) written with
-`rp.ewm_mean(..., reverse=True)`, is the mean of the stock's returns over
+`rp.ops.ewm_mean(..., reverse=True)`, is the mean of the stock's returns over
 the next ten minutes, weighted by time. Its value at a row is known only
 ten minutes later. With `embargo="10m"`, the bank predicts each row where
 it sits and learns from it ten minutes later. So `ahead` learns nothing

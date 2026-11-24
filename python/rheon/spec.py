@@ -30,7 +30,7 @@ shows them at work.
     pl.col("mid")).log()`` or a difference sits about zero, where ``hit_rate``
     takes its sign. A :func:`rheon.target` is a column under a name of
     its own. A target may also be a window expression looking ahead
-    (:mod:`rheon.polars.ops`), named by its alias: ``(rp.ewm_mean("mid",
+    (:mod:`rheon.polars.ops`), named by its alias: ``(rp.ops.ewm_mean("mid",
     half_life="10s", window_size="1m", reverse=True) - pl.col("mid")).alias("fwd")``. The
     bank resolves it when the row's window closes, and learns the row then,
     under the ``embargo``. ``fit_predict`` asks the embargo to cover the

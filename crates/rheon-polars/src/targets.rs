@@ -10,8 +10,8 @@
 //!
 //! A target may also be a **formula of the row's future** (docs/PLAN.md task
 //! 104): a table with a `name` and a `formula`, task 143's compact tree of
-//! window operators -- `rp.rewm_mean("mid", half_life="10s",
-//! window_size="1m") - pl.col("mid")` in Python, the same tree in TOML --
+//! window operators -- `rp.ops.ewm_mean("mid", half_life="10s",
+//! window_size="1m", reverse=True) - pl.col("mid")` in Python, the same tree in TOML --
 //! holding at least one forward operator. Its value is not known at its row:
 //! the bank's window core resolves it when the window closes, and the row is
 //! learned from then, under the spec's `embargo`.

@@ -129,12 +129,12 @@ Windows alike.
 - [Gram accessors](https://rheon-dev.github.io/rheon/gram.html)
 - [Correlation toolkit](https://rheon-dev.github.io/rheon/corr.html)
 - [Stream transforms](https://rheon-dev.github.io/rheon/stream.html)
-- [Window operators](https://rheon-dev.github.io/rheon/ops.html): `rp.ewm_mean`,
-  `rp.ewm_sum`, `rp.ewm_rate`, `rp.ewm_quantile` (each looking ahead under `reverse=True`),
-  `rp.ewm_var`, `rp.ewm_std`, `rp.ewm_moments` (one term of the moments of one or more
+- [Window operators](https://rheon-dev.github.io/rheon/ops.html): `rp.ops.ewm_mean`,
+  `rp.ops.ewm_sum`, `rp.ops.ewm_rate`, `rp.ops.ewm_quantile` (each looking ahead under `reverse=True`),
+  `rp.ops.ewm_var`, `rp.ops.ewm_std`, `rp.ops.ewm_moments` (one term of the moments of one or more
   columns, each perhaps lagged: a skew, a kurtosis, a cumulant, an autocorrelation)
   -- Polars expressions over a stream's clock -- and
-  `rp.increment`, a column's step from its last value, and `rp.ops.tick_sign`, the tick
+  `rp.ops.increment`, a column's step from its last value, and `rp.ops.tick_sign`, the tick
   rule's sign of that step, all run by
   `lf.rheon.with_windows(*exprs, **named, clock=...)` in one pass. A look-ahead one
   is also a spec's target, learned once its window has passed: `fit_predict`

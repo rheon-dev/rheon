@@ -76,7 +76,7 @@ error: `warnings.simplefilter("error", po.PolarsOnlineDeprecationWarning)`.
 | what 1.x still read | what 2.0 takes |
 |---|---|
 | the model keywords and words renamed on 2026-10-11, such as `kmeans`' `k` and `"kmeanspp"` | the names in [Names that changed](#names-that-changed), such as `n_clusters` and `"k-means++"` |
-| `po.rewm_mean`, `po.rewm_sum` and `po.rewm_rate` | `rp.ewm_mean(..., reverse=True)` and the rest |
+| `po.rewm_mean`, `po.rewm_sum` and `po.rewm_rate` | `rp.ops.ewm_mean(..., reverse=True)` and the rest |
 | `ModelBank.to_json` and `save_json`; `save(path=)` and `load(path=)` | `write_json(file=None)`; `save(file=)` and `load(source=)` |
 | the calls `bank.rows_fed()` and `bank.output_fields()` | the properties `bank.rows_fed` and `bank.output_fields` |
 | `closed_groups` and `chunk_size` given by position to `fit` and `fit_predict_batches` | the same arguments by keyword |
@@ -389,6 +389,13 @@ name another model still takes, such as `ewridge`'s `k` as a feature, is
 not touched. A name that has no current spelling to point to, or whose
 model takes none, gets the plain unknown-name error.
 
+**One kind of name is still read under its old path: a window operator
+2.0 exported at the root of `rheon.polars`.** The operators live in
+`rheon.polars.ops`. `rp.ewm_mean`, `rp.ewm_quantile`, `rp.ewm_rate`,
+`rp.ewm_std`, `rp.ewm_sum`, `rp.ewm_var` and `rp.increment` still work,
+each with a `RheonDeprecationWarning` naming its `rp.ops` path, and give
+the same expression; the next major release removes them.
+
 ### Names that changed
 
 **Each name renamed or removed since 0.x has one current name or
@@ -433,7 +440,7 @@ new spelling (see [How an old name is refused](#how-an-old-name-is-refused)).
 | `corrchange`'s `horizon` and `window`; `rcov`'s `window` | `span_rows`; `preavg_rows` | 0.3.0 |
 | `po.run`, the Python runner | removed: the `rheon` command line, or `ModelBank.fit(lf)` | 0.7.0 |
 | the expression plugin: `pl.col(...).online.<model>`, `po.online` and `InMemoryExpressionWarning` | removed, because a stateful expression is handed its whole column: `lf.rheon.fit_predict` | 0.7.0 |
-| `po.window.ewm` and `po.window.lookahead_rewm`, with `split=` | removed: the window operators, such as `rp.ewm_mean` and `rp.ewm_sum(..., reverse=True)`, run by `with_windows` or as a spec's target | 2026-10-03 |
+| `po.window.ewm` and `po.window.lookahead_rewm`, with `split=` | removed: the window operators, such as `rp.ops.ewm_mean` and `rp.ops.ewm_sum(..., reverse=True)`, run by `with_windows` or as a spec's target | 2026-10-03 |
 | a spec's `type = "ew_ridge"` | `type = "ewridge"`, the builder's spelling | 2026-10-07 |
 | `chunk_rows`, and the command line's `--chunk-rows` | `chunk_size` and `--chunk-size`, Polars' name | 2026-10-07 |
 | the command line's `--resume` | `--load-state`, beside the TOML key `load_state` | 2026-10-07 |
@@ -458,10 +465,11 @@ new spelling (see [How an old name is refused](#how-an-old-name-is-refused)).
 | `audit()`'s `rows`, `null`, `nan`, `pos_inf`, `neg_inf`, `beyond_bound` and `distinct`, and its clock table's `max_step` | `rows_fed`, `null_count`, `nan_count`, `pos_inf_count`, `neg_inf_count`, `beyond_bound_count` and `n_unique`, and `step_max` | 1.0.0 |
 | `marginal()`'s `t_serial`; `closed_groups()`' `pair_t_serial`; `gram()`'s `cross_centred` | `t_stat_serial`; `pair_t_stat_serial`; `cross_centered` | 1.0.0 |
 | the bank's `save(path=)`, `load(path=)`, `to_json` and `save_json`; the methods `rows_fed()` and `output_fields()` | `save(file=)`, `load(source=)` and `write_json(file=None)`; the properties `rows_fed` and `output_fields` | 1.0.0 |
-| `po.rewm_mean`, `po.rewm_sum` and `po.rewm_rate` | `rp.ewm_mean(..., reverse=True)` and the rest | 1.0.0 |
+| `po.rewm_mean`, `po.rewm_sum` and `po.rewm_rate` | `rp.ops.ewm_mean(..., reverse=True)` and the rest | 1.0.0 |
 | `po.eval`'s `spec_name` and `spec_names` | `spec`, a name or the spec dict, and `specs` | 1.0.0 |
 | `po.gram.subset(cols=)`; `lars_path`'s and `lars_paths`' `max_steps`; `po.corr.matrix` | `columns=`; `max_iter`; `rheon.gram.correlation` | 1.0.0 |
 | the command `online`, and its variable `ONLINE_TIMING` | `rheon`, and `RHEON_TIMING`, on at `1` only | 1.0.0, then 2.0.0 |
+| `rp.ewm_mean`, `rp.ewm_quantile`, `rp.ewm_rate`, `rp.ewm_std`, `rp.ewm_sum`, `rp.ewm_var` and `rp.increment`, at the root of `rheon.polars` | `rp.ops.ewm_mean` and the rest; the root names warn until the next major release | 2026-11-24 |
 
 ### State files across releases
 

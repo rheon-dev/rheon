@@ -179,12 +179,14 @@ This code reads ``trades`` from `Example data
     buys = pl.when(pl.col("side") == "buy")
     out = rp.stream.with_windows(
         trades,
-        mid_trend=rp.ewm_mean("mid", half_life="5s", window_size="1m") - pl.col("mid"),
-        fwd_vwap_vs_mid=rp.ewm_sum(notional, half_life="10s", window_size="1m", reverse=True)
-                        / rp.ewm_sum("quantity", half_life="10s", window_size="1m", reverse=True)
+        mid_trend=rp.ops.ewm_mean("mid", half_life="5s", window_size="1m") - pl.col("mid"),
+        fwd_vwap_vs_mid=rp.ops.ewm_sum(notional, half_life="10s", window_size="1m",
+                                       reverse=True)
+                        / rp.ops.ewm_sum("quantity", half_life="10s", window_size="1m",
+                                         reverse=True)
                         - pl.col("mid"),
-        buy_vwap=rp.ewm_sum(buys.then(notional), half_life="10s", min_samples=1)
-                 / rp.ewm_sum(buys.then("quantity"), half_life="10s", min_samples=1),
+        buy_vwap=rp.ops.ewm_sum(buys.then(notional), half_life="10s", min_samples=1)
+                 / rp.ops.ewm_sum(buys.then("quantity"), half_life="10s", min_samples=1),
         clock="ts", gap_cap="5m", group="symbol",
     )
 
@@ -201,7 +203,7 @@ gives the measured gain. This code reads ``trades.parquet`` from
 .. code-block:: python
 
     spread = {"half_life": "30m"}
-    z_mid = (pl.col("mid") - rp.ewm_mean("mid", **spread)) / rp.ewm_std("mid", **spread)
+    z_mid = (pl.col("mid") - rp.ops.ewm_mean("mid", **spread)) / rp.ops.ewm_std("mid", **spread)
     zscored = pl.scan_parquet("trades.parquet").rheon.with_windows(
         z_mid=z_mid, clock="ts", gap_cap="5m", group="symbol"
     ).collect()
@@ -327,7 +329,7 @@ def _window(
     """The mean, sum, rate or quantile ``name`` names, looking back, or ahead
     under ``reverse``: the operator over the rows after each row, which the
     tree keeps as ``r<name>``."""
-    who = f"rp.{name}"
+    who = f"rp.ops.{name}"
     if not isinstance(reverse, bool):
         raise TypeError(
             f"{who}: reverse must be True or False, but it is {reverse!r}. "
@@ -347,7 +349,7 @@ def _window(
         min_samples=min_samples,
         partial=partial,
         quantile=quantile,
-        who=f"rp.{name}(reverse=True)" if reverse else None,
+        who=f"rp.ops.{name}(reverse=True)" if reverse else None,
     )
 
 
@@ -461,8 +463,8 @@ def ewm_mean(
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0, 5.0]})
         out = rp.stream.with_windows(
             rows,
-            back=rp.ewm_mean("x", half_life=1.0),        # the rows at or before each row
-            ahead=rp.ewm_mean("x", half_life=1.0, window_size=2.0, reverse=True),   # next 2 units
+            back=rp.ops.ewm_mean("x", half_life=1.0),        # the rows at or before each row
+            ahead=rp.ops.ewm_mean("x", half_life=1.0, window_size=2.0, reverse=True),  # next 2
             clock="t", gap_cap=10.0,
         )
         polars = rows.select(pl.col("x").ewm_mean_by(pl.col("t").cast(pl.Int64), half_life="1i"))
@@ -614,7 +616,8 @@ def ewm_sum(
     .. code-block:: python
 
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0, 5.0]})
-        out = rp.stream.with_windows(rows, s=rp.ewm_sum("x", half_life=1.0), clock="t", gap_cap=10)
+        s = rp.ops.ewm_sum("x", half_life=1.0)
+        out = rp.stream.with_windows(rows, s=s, clock="t", gap_cap=10)
         polars = rows.select(pl.col("x").ewm_sum_by(pl.col("t").cast(pl.Int64), half_life="1i"))
         print(out["s"].round(4).to_list(), polars["x"].round(4).to_list())   # the same as Polars'
 
@@ -762,7 +765,7 @@ def ewm_rate(
 
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0, 5.0]})
         # half_life=inf weighs the window evenly: the sum over the last 2 units, per unit.
-        rate = rp.ewm_rate("x", half_life=float("inf"), window_size=2.0)
+        rate = rp.ops.ewm_rate("x", half_life=float("inf"), window_size=2.0)
         out = rp.stream.with_windows(rows, r=rate, clock="t", gap_cap=10.0)
         print(out["r"].round(4).to_list())   # null on row 0, whose window spans no time yet
 
@@ -910,7 +913,7 @@ def ewm_quantile(
 
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0, 5.0]})
         # The median of the last 3 units, weighed evenly.
-        med = rp.ewm_quantile("x", quantile=0.5, half_life=float("inf"), window_size=3.0)
+        med = rp.ops.ewm_quantile("x", quantile=0.5, half_life=float("inf"), window_size=3.0)
         out = rp.stream.with_windows(rows, med=med, clock="t", gap_cap=10.0)
         print(out["med"].round(3).to_list())   # within 0.78% of the exact medians 1, 1, 2, 3, 4
 
@@ -948,7 +951,7 @@ def ewm_quantile(
     while up to half the window is wild, where a root mean square is moved by
     one row. For a residual, which the fit centers on 0::
 
-        mad = rp.ewm_quantile(pl.col("resid").abs(), quantile=0.5, half_life=500)
+        mad = rp.ops.ewm_quantile(pl.col("resid").abs(), quantile=0.5, half_life=500)
         scale = mad / 0.6744897501960817
 
     ``closed="left"`` leaves the row's own value out of its window. So a scale
@@ -982,7 +985,7 @@ def _extremum(
 ) -> pl.Expr:
     """The maximum or minimum ``name`` names, looking back, or ahead under
     ``reverse``, which the tree keeps as ``r<name>``."""
-    who = f"rp.{name}"
+    who = f"rp.ops.{name}"
     if not isinstance(reverse, bool):
         raise TypeError(
             f"{who}: reverse must be True or False, but it is {reverse!r}. "
@@ -1002,7 +1005,7 @@ def _extremum(
         partial=partial,
         since=since,
         max_state_bytes=max_state_bytes,
-        who=f"rp.{name}(reverse=True)" if reverse else None,
+        who=f"rp.ops.{name}(reverse=True)" if reverse else None,
     )
 
 
@@ -1130,12 +1133,12 @@ def rolling_max(
             "equity": [1.0, 3.0, 2.0, 4.0, 1.0, 2.0],
             "new_period": [False, False, False, False, True, False],
         })
-        peak = rp.rolling_max("equity", since="new_period")   # the high-water mark
+        peak = rp.ops.rolling_max("equity", since="new_period")   # the high-water mark
         out = rp.stream.with_windows(
             rows,
             peak=peak,
             drawdown=pl.col("equity") - peak,
-            last_3=rp.rolling_max("equity", window_size=3.0),
+            last_3=rp.ops.rolling_max("equity", window_size=3.0),
             clock="t", gap_cap=10.0,
         )
         print(out["peak"].to_list())
@@ -1177,7 +1180,7 @@ def rolling_max(
     stands.
 
     **Drawdown** is a formula around it, not an operator of its own: with
-    ``peak = rp.rolling_max("equity", since="new_period")``, the drawdown is
+    ``peak = rp.ops.rolling_max("equity", since="new_period")``, the drawdown is
     ``pl.col("equity") - peak``, 0 at a new high and negative below it, and
     ``pl.col("equity") / peak - 1`` the relative one. Its running worst is
     :func:`rolling_min` of that column, in a second call.
@@ -1317,8 +1320,8 @@ def rolling_min(
         rows = pl.DataFrame({"t": [0, 1, 2, 3, 4], "x": [3.0, 1.0, 2.0, 5.0, 4.0]})
         out = rp.stream.with_windows(
             rows,
-            low=rp.rolling_min("x", window_size=2),
-            ahead=rp.rolling_min("x", window_size=2, reverse=True),
+            low=rp.ops.rolling_min("x", window_size=2),
+            ahead=rp.ops.rolling_min("x", window_size=2, reverse=True),
             clock="t", gap_cap=10,
         )
         polars = rows.select(pl.col("x").rolling_min_by("t", window_size="2i"))
@@ -1359,7 +1362,7 @@ def rolling_min(
     stands.
 
     **Drawdown** is a formula around it, not an operator of its own: with
-    ``peak = rp.rolling_max("equity", since="new_period")``, the drawdown is
+    ``peak = rp.ops.rolling_max("equity", since="new_period")``, the drawdown is
     ``pl.col("equity") - peak``, 0 at a new high and negative below it, and
     ``pl.col("equity") / peak - 1`` the relative one. Its running worst is
     :func:`rolling_min` of that column, in a second call.
@@ -1379,9 +1382,9 @@ def rolling_min(
 
 #: The names the reversed operators had, which refuse the call naming the
 #: ``reverse=True`` form that replaced them.
-rewm_mean = renamed_function("rp.rewm_mean", "rp.ewm_mean(..., reverse=True)")
-rewm_sum = renamed_function("rp.rewm_sum", "rp.ewm_sum(..., reverse=True)")
-rewm_rate = renamed_function("rp.rewm_rate", "rp.ewm_rate(..., reverse=True)")
+rewm_mean = renamed_function("rp.ops.rewm_mean", "rp.ops.ewm_mean(..., reverse=True)")
+rewm_sum = renamed_function("rp.ops.rewm_sum", "rp.ops.ewm_sum(..., reverse=True)")
+rewm_rate = renamed_function("rp.ops.rewm_rate", "rp.ops.ewm_rate(..., reverse=True)")
 
 
 def ewm_var(
@@ -1487,7 +1490,8 @@ def ewm_var(
     .. code-block:: python
 
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0, 5.0]})
-        out = rp.stream.with_windows(rows, v=rp.ewm_var("x", half_life=1.0), clock="t", gap_cap=10)
+        v = rp.ops.ewm_var("x", half_life=1.0)
+        out = rp.stream.with_windows(rows, v=v, clock="t", gap_cap=10)
         polars = rows.select(pl.col("x").ewm_var(half_life=1.0, adjust=False))   # 1 a row
         print(out["v"].round(4).to_list(), polars["x"].round(4).to_list())   # the same as Polars'
 
@@ -1645,8 +1649,8 @@ def ewm_std(
     .. code-block:: python
 
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 3.0, 4.0, 5.0]})
-        z = (pl.col("x") - rp.ewm_mean("x", half_life=1.0)) / rp.ewm_std("x", half_life=1.0)
-        sd = rp.ewm_std("x", half_life=1.0)
+        z = (pl.col("x") - rp.ops.ewm_mean("x", half_life=1.0)) / rp.ops.ewm_std("x", half_life=1.0)
+        sd = rp.ops.ewm_std("x", half_life=1.0)
         out = rp.stream.with_windows(rows, sd=sd, z=z, clock="t", gap_cap=10.0)
         polars = rows.select(pl.col("x").ewm_std(half_life=1.0, adjust=False))   # 1 a row
         print(out["sd"].round(4).to_list(), polars["x"].round(4).to_list())   # the same as Polars'
@@ -1785,9 +1789,9 @@ def ewm_moments(
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0, 4.0], "x": [1.0, 2.0, 4.0, 3.0, 7.0]})
         out = rp.stream.with_windows(
             rows,
-            m2=rp.ewm_moments({"x": 2}, half_life=1.0, bias=True),
-            v=rp.ewm_var("x", half_life=1.0, bias=True),
-            ac1=rp.ewm_moments({"x": 1, "x@1": 1}, half_life=2.0, kind="standardized"),
+            m2=rp.ops.ewm_moments({"x": 2}, half_life=1.0, bias=True),
+            v=rp.ops.ewm_var("x", half_life=1.0, bias=True),
+            ac1=rp.ops.ewm_moments({"x": 1, "x@1": 1}, half_life=2.0, kind="standardized"),
             clock="t",
             gap_cap=10.0,
         )
@@ -1933,7 +1937,7 @@ def increment(input: str | pl.Expr) -> pl.Expr:
     .. code-block:: python
 
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "x": [1.0, None, 3.0, 4.0]})
-        out = rp.stream.with_windows(rows, d=rp.increment("x"), clock="t", gap_cap=10.0)
+        out = rp.stream.with_windows(rows, d=rp.ops.increment("x"), clock="t", gap_cap=10.0)
         print(out["d"].to_list())   # the null row is skipped: 3 steps from 1, the last value
 
     .. code-block:: text
@@ -2069,7 +2073,7 @@ def cross_mean(
 
     Use it for a cross-sectional level, such as the average return of every
     symbol at each timestamp, broadcast back to each symbol's row; a row's
-    deviation from it, ``pl.col("r") - rp.cross_mean("r")``, is its
+    deviation from it, ``pl.col("r") - rp.ops.cross_mean("r")``, is its
     cross-sectional residual. :func:`cross_std` gives the spread about it.
 
     .. rubric:: Parameters
@@ -2150,7 +2154,7 @@ def cross_mean(
         )
         out = rp.stream.with_windows(
             df,
-            resid=pl.col("r") - rp.cross_mean("r"),
+            resid=pl.col("r") - rp.ops.cross_mean("r"),
             clock="t",
             gap_cap=10,
             group="symbol",
@@ -2246,7 +2250,7 @@ def cross_std(
         )
         out = rp.stream.with_windows(
             df,
-            z=(pl.col("r") - rp.cross_mean("r")) / rp.cross_std("r"),
+            z=(pl.col("r") - rp.ops.cross_mean("r")) / rp.ops.cross_std("r"),
             clock="t",
             gap_cap=10,
             group="symbol",
@@ -2344,7 +2348,7 @@ def cross_rank(
             }
         )
         out = rp.stream.with_windows(
-            df, rank=rp.cross_rank("r"), clock="t", gap_cap=10, group="symbol"
+            df, rank=rp.ops.cross_rank("r"), clock="t", gap_cap=10, group="symbol"
         )
         print(out["rank"].to_list())
 
@@ -2443,7 +2447,7 @@ def cross_quantile(
         )
         out = rp.stream.with_windows(
             df,
-            resid=pl.col("r") - rp.cross_quantile("r", 0.5),
+            resid=pl.col("r") - rp.ops.cross_quantile("r", 0.5),
             clock="t",
             gap_cap=10,
             group="symbol",
@@ -2537,7 +2541,7 @@ def cross_ref(
         )
         out = rp.stream.with_windows(
             df,
-            excess=pl.col("r") - rp.cross_ref("r", where=pl.col("symbol") == "idx"),
+            excess=pl.col("r") - rp.ops.cross_ref("r", where=pl.col("symbol") == "idx"),
             clock="t",
             gap_cap=10,
             group="symbol",
@@ -2727,10 +2731,10 @@ def ewm_profile(
         )
         out = rp.stream.with_windows(
             df,
-            hourly=rp.ewm_profile(
+            hourly=rp.ops.ewm_profile(
                 "delay", period="1d", buckets=24, half_life=float("inf")
             ),
-            before=rp.ewm_profile(
+            before=rp.ops.ewm_profile(
                 "delay", period="1d", buckets=24, half_life=float("inf"), closed="left"
             ),
             clock="t",
@@ -3199,7 +3203,7 @@ def invert(
     A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as
     a column, in a run that computes at least one window operator. It may
     stand alone, under arithmetic beside an operator, or as an operator's
-    input, such as ``rp.ewm_mean`` of the roots. Polars' ``with_columns``
+    input, such as ``rp.ops.ewm_mean`` of the roots. Polars' ``with_columns``
     does not compute it, and a spec's formula target does not take it. The
     column is a ``Float64``, the root, null where it is withheld. Under
     ``detail`` it is a struct of ``root`` (``Float64``), ``lo`` and ``hi``
@@ -3233,7 +3237,7 @@ def invert(
             rows,
             x=rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True),
             d=rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True, detail=True),
-            level=rp.ewm_mean("y", half_life=1.0),   # a run computes a window operator
+            level=rp.ops.ewm_mean("y", half_life=1.0),   # a run computes a window operator
             clock="t", gap_cap=10.0,
         )
         print(out["x"].round(9).to_list())
@@ -3369,7 +3373,7 @@ def unknown() -> pl.Expr:
         out = rp.stream.with_windows(
             rows,
             root=rp.ops.invert(x * x, "k", 0.0, 10.0, increasing=True),   # the square root
-            level=rp.ewm_mean("k", half_life=1.0),
+            level=rp.ops.ewm_mean("k", half_life=1.0),
         )
         print(out["root"].round(9).to_list())
 

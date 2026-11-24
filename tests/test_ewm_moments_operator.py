@@ -1,4 +1,4 @@
-"""The window operator ``rp.ewm_moments``: one term a call, each row's value
+"""The window operator ``rp.ops.ewm_moments``: one term a call, each row's value
 weighing the decayed mass of the interval it is held over, as ``ewm_var``'s
 does.
 
@@ -111,7 +111,7 @@ def test_the_operator_is_the_spec_kind_fed_its_weights_to_the_bit(
     h = kw.pop("half_life", 15.0)
     frame = _frame()
     op = rp.stream.with_windows(
-        frame, v=rp.ewm_moments(legs, half_life=h, **kw), clock="t", gap_cap=1e9
+        frame, v=rp.ops.ewm_moments(legs, half_life=h, **kw), clock="t", gap_cap=1e9
     )["v"]
     w = _held(frame["t"].to_numpy(), h, kw.get("window_size"))
     spec = rp.spec.ewm_moments(
@@ -188,7 +188,7 @@ def test_the_operator_is_the_weighted_definition(
     frame = _frame(160)
     got = rp.stream.with_windows(
         frame,
-        v=rp.ewm_moments(legs, half_life=h, kind=kind, bias=True, window_size=window),  # type: ignore[arg-type]
+        v=rp.ops.ewm_moments(legs, half_life=h, kind=kind, bias=True, window_size=window),  # type: ignore[arg-type]
         clock="t",
         gap_cap=1e9,
     )["v"].to_list()
@@ -212,7 +212,7 @@ def test_a_lagged_term_pairs_each_row_with_its_as_of_row() -> None:
     x = frame["ar"].to_numpy()
     got = rp.stream.with_windows(
         frame,
-        v=rp.ewm_moments({"ar": 1, "ar@1.5": 1}, half_life=h, bias=True),
+        v=rp.ops.ewm_moments({"ar": 1, "ar@1.5": 1}, half_life=h, bias=True),
         clock="t",
         gap_cap=1e9,
     )["v"].to_list()
@@ -239,8 +239,8 @@ def test_the_variance_term_is_ewm_var(bias: bool) -> None:
     frame = _frame()
     out = rp.stream.with_windows(
         frame,
-        m=rp.ewm_moments({"g": 2}, half_life=7.0, bias=bias),
-        v=rp.ewm_var("g", half_life=7.0, bias=bias),
+        m=rp.ops.ewm_moments({"g": 2}, half_life=7.0, bias=bias),
+        v=rp.ops.ewm_var("g", half_life=7.0, bias=bias),
         clock="t",
         gap_cap=1e9,
     )
@@ -253,10 +253,10 @@ def test_the_variance_term_is_ewm_var(bias: bool) -> None:
 
 def _ops() -> dict[str, pl.Expr]:
     return {
-        "s": rp.ewm_moments({"x": 3}, half_life=4.0, kind="standardized", window_size=9.0),
-        "a": rp.ewm_moments({"x": 1, "x@1": 1}, half_life=6.0, kind="standardized"),
-        "k": rp.ewm_moments({"x": 4}, half_life=5.0, kind="cumulant"),
-        "v": rp.ewm_var("x", half_life=4.0, window_size=9.0),
+        "s": rp.ops.ewm_moments({"x": 3}, half_life=4.0, kind="standardized", window_size=9.0),
+        "a": rp.ops.ewm_moments({"x": 1, "x@1": 1}, half_life=6.0, kind="standardized"),
+        "k": rp.ops.ewm_moments({"x": 4}, half_life=5.0, kind="cumulant"),
+        "v": rp.ops.ewm_var("x", half_life=4.0, window_size=9.0),
     }
 
 
@@ -303,7 +303,7 @@ def test_a_repeated_stamp_and_a_missing_value_move_nothing() -> None:
     base = pl.DataFrame({"t": [0.0, 1.0, 2.0, 4.0, 5.0, 7.0], "x": [1.0, 3.0, 2.0, 6.0, 4.0, 5.0]})
     extra = pl.DataFrame({"t": [2.0, 4.5], "x": [50.0, None]})
     both = pl.concat([base, extra]).sort("t", maintain_order=True)
-    op = {"k": rp.ewm_moments({"x": 3}, half_life=h, kind="standardized")}
+    op = {"k": rp.ops.ewm_moments({"x": 3}, half_life=h, kind="standardized")}
     alone = rp.stream.with_windows(base, **op, clock="t", gap_cap=1e9)
     got = rp.stream.with_windows(both, **op, clock="t", gap_cap=1e9)
     want = dict(zip(alone["t"].to_list(), alone["k"].to_list(), strict=True))
@@ -318,7 +318,7 @@ def test_a_clock_break_starts_the_moments_over() -> None:
     frame = _frame(80)
     later = frame.with_columns(pl.col("t") + 1e4)
     both = pl.concat([frame, later])
-    op = {"k": rp.ewm_moments({"g": 4}, half_life=9.0, kind="standardized")}
+    op = {"k": rp.ops.ewm_moments({"g": 4}, half_life=9.0, kind="standardized")}
     whole = rp.stream.with_windows(both, **op, clock="t", gap_cap=100.0)
     alone = rp.stream.with_windows(later, **op, clock="t", gap_cap=100.0)
     assert whole["k"][80:].equals(alone["k"])
@@ -332,7 +332,7 @@ def test_a_row_count_clock_lags_by_rows() -> None:
     frame = pl.DataFrame({"x": x})
     got = rp.stream.with_windows(
         frame,
-        v=rp.ewm_moments({"x": 1, "x@2": 1}, half_life=math.inf, window_size=30.0, bias=True),
+        v=rp.ops.ewm_moments({"x": 1, "x@2": 1}, half_life=math.inf, window_size=30.0, bias=True),
     )["v"].to_list()
     for i in (10, 31, 59):
         idx = np.arange(max(2, i - 29), i + 1)
@@ -366,14 +366,14 @@ def test_the_operator_refuses_by_name(
 ) -> None:
     kw = {"half_life": 5.0, **kw}
     with pytest.raises(error, match=match):
-        rp.ewm_moments(legs, **kw)
+        rp.ops.ewm_moments(legs, **kw)
 
 
 def test_a_duration_lag_needs_a_temporal_clock() -> None:
     frame = pl.DataFrame({"t": [0.0, 1.0, 2.0], "x": [1.0, 2.0, 4.0]})
     with pytest.raises(ValueError, match="duration"):
         rp.stream.with_windows(
-            frame, v=rp.ewm_moments({"x": 1, "x@5m": 1}, half_life=5.0), clock="t", gap_cap=1e9
+            frame, v=rp.ops.ewm_moments({"x": 1, "x@5m": 1}, half_life=5.0), clock="t", gap_cap=1e9
         )
 
 
@@ -383,11 +383,11 @@ def test_a_temporal_clock_takes_duration_lags() -> None:
         nanoseconds=(pl.col("t") * 1e9).cast(pl.Int64)
     )
     temporal = frame.with_columns(ts=ts)
-    v = rp.ewm_moments({"ar": 1, "ar@1500ms": 1}, half_life="15s", window_size="40s")
+    v = rp.ops.ewm_moments({"ar": 1, "ar@1500ms": 1}, half_life="15s", window_size="40s")
     got = rp.stream.with_windows(temporal, v=v, clock="ts", gap_cap="1h")["v"]
     num = rp.stream.with_windows(
         temporal.with_columns(pl.col("ts").dt.epoch("ns") / 1e9),
-        v=rp.ewm_moments({"ar": 1, "ar@1.5": 1}, half_life=15.0, window_size=40.0),
+        v=rp.ops.ewm_moments({"ar": 1, "ar@1.5": 1}, half_life=15.0, window_size=40.0),
         clock="ts",
         gap_cap=3600.0,
     )["v"]

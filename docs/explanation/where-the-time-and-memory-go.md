@@ -236,7 +236,7 @@ groups, with `.over("group")` or `group_by=`, holds every row of its input:
 against a spec's groups](../PERFORMANCE.md#polars-rolling-windows-against-a-specs-groups)
 measures.
 
-**A window operator, such as `rp.ewm_mean`, holds the rows of its window,
+**A window operator, such as `rp.ops.ewm_mean`, holds the rows of its window,
 and does the same work on a row whatever the window's length.** [What a window operator
 costs](../PERFORMANCE.md#what-a-window-operator-costs) measures its time
 and memory against Polars' `rolling`.

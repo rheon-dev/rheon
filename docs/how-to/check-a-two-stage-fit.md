@@ -96,17 +96,17 @@ pl.DataFrame({"ts": ts, "mid": p + u, "s1": s[0], "s2": s[1], "s3": s[2]}).write
 clock = dict(clock="ts", gap_cap="5m")
 back = dict(half_life="10m", window_size="60m")
 windows = pl.scan_parquet("quotes.parquet").rheon.with_windows(
-    A=pl.col("mid") - rp.ewm_mean("mid", **back),
-    x1=pl.col("s1") - rp.ewm_mean("s1", **back),
-    x2=pl.col("s2") - rp.ewm_mean("s2", **back),
-    x3=pl.col("s3") - rp.ewm_mean("s3", **back),
+    A=pl.col("mid") - rp.ops.ewm_mean("mid", **back),
+    x1=pl.col("s1") - rp.ops.ewm_mean("s1", **back),
+    x2=pl.col("s2") - rp.ops.ewm_mean("s2", **back),
+    x3=pl.col("s3") - rp.ops.ewm_mean("s3", **back),
     **clock,
 )
 fair = rp.spec.ewridge("fair", targets=["A"], features=["x1", "x2", "x3"], half_life="2h", **clock)
 
 # Stage 2, reversion: the next 150 s's 30-second EWMA of the mid, less the mid, regressed on
 # resid_A. Each row is learned once its window has closed (embargo), and its residuals overlap.
-fwd = (rp.ewm_mean("mid", half_life="30s", window_size="150s", reverse=True) - pl.col("mid")).alias("B")
+fwd = (rp.ops.ewm_mean("mid", half_life="30s", window_size="150s", reverse=True) - pl.col("mid")).alias("B")
 settings = dict(
     targets=[fwd], half_life=float("inf"), embargo="150s", min_weight=1_000.0,
     emit_se_coef=True, emit_robust_se=True,                # 2.

@@ -1356,7 +1356,9 @@ def test_gap_cap_without_a_clock_is_refused_by_name():
         rp.spec.ew_cov("c", features=["x0", "y"], half_life=10.0, lags=[1], gap_cap=0.5)
     with pytest.raises(ValueError, match="with_windows: gap_cap needs clock"):
         rp.stream.with_windows(
-            _df(), f=rp.ewm_sum("x0", half_life=10.0, window_size=3.0, reverse=True), gap_cap=0.5
+            _df(),
+            f=rp.ops.ewm_sum("x0", half_life=10.0, window_size=3.0, reverse=True),
+            gap_cap=0.5,
         )
     # With the clock, the same cap is a cap.
     rp.spec.ewridge("m", **BASE, clock="t", gap_cap=0.5)
@@ -1769,7 +1771,7 @@ def test_a_nul_in_a_name_is_refused_not_a_panic(call):
     the name."""
     df = pl.DataFrame({"t": [0.0, 1.0, 2.0], "x": [1.0, 2.0, 3.0], "y": [1.0, 2.0, 3.0]})
     nul = df.with_columns(pl.col("x").alias("a\0b"))
-    forward = rp.ewm_sum("y", half_life=1.0, window_size=1.0, reverse=True)
+    forward = rp.ops.ewm_sum("y", half_life=1.0, window_size=1.0, reverse=True)
     calls = {
         "spec name": lambda: rp.ModelBank(
             [rp.spec.ewridge("m\0x", targets=["y"], features=["x"], half_life=5.0)]
@@ -1798,10 +1800,10 @@ def test_a_nul_in_a_name_is_refused_not_a_panic(call):
             [rp.spec.ewridge("m", targets=["y"], features=["x"], half_life=5.0)]
         ).fit_predict(nul),
         "with_windows output": lambda: rp.stream.with_windows(
-            df, **{"a\0b": rp.ewm_sum("x", half_life=1.0)}, clock="t", gap_cap=5.0
+            df, **{"a\0b": rp.ops.ewm_sum("x", half_life=1.0)}, clock="t", gap_cap=5.0
         ),
         "with_windows input column": lambda: rp.stream.with_windows(
-            nul, s=rp.ewm_sum("x", half_life=1.0), clock="t", gap_cap=5.0
+            nul, s=rp.ops.ewm_sum("x", half_life=1.0), clock="t", gap_cap=5.0
         ),
     }
     with pytest.raises(ValueError, match="NUL character"):

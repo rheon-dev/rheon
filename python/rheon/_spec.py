@@ -847,7 +847,7 @@ class FormulaTarget(TypedDict):
 
     .. code-block:: python
 
-        ahead = rp.ewm_mean("y", half_life=5.0, window_size=10.0, reverse=True).alias("y_ahead")
+        ahead = rp.ops.ewm_mean("y", half_life=5.0, window_size=10.0, reverse=True).alias("y_ahead")
         spec = rp.spec.ewridge("m", targets=[ahead], features=["x0"], half_life=50.0)
         print(list(spec["targets"][0]), spec["targets"][0]["name"])   # a FormulaTarget
 
@@ -1461,7 +1461,7 @@ def ewridge(
         Which edge of the hard window holds the row exactly ``window_size``
         old, in Polars' words (``rolling_sum_by(closed=)``). ``"right"``, the
         default, keeps the rows less than ``window_size`` old, as the window
-        operators (:func:`rheon.polars.ewm_mean <rheon.polars.ops.ewm_mean>`)
+        operators (:func:`rheon.polars.ops.ewm_mean`)
         and ``rolling_sum_by`` do. ``"both"`` keeps that row too, and is
         refused without ``window_size``. ``"left"`` and ``"none"`` would
         leave out the row the hard window ends at, which a model cannot do,
