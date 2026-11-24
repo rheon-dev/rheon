@@ -123,7 +123,7 @@ pub struct Stl {
 fn odd_at_least_3(name: &str, v: usize) -> Result<(), String> {
     if v < 3 || v.is_multiple_of(2) {
         return Err(format!(
-            "{name} must be an odd integer of at least 3, but it is {v}."
+            "{name} must be an odd integer of at least 3, but it is {v}. Give an odd span such as 7."
         ));
     }
     Ok(())
@@ -133,7 +133,9 @@ impl Stl {
     pub fn new(cfg: &StlCfg) -> Result<Self, String> {
         let p = cfg.period;
         if p < 2 {
-            return Err(format!("period must be at least 2, but it is {p}."));
+            return Err(format!(
+                "period must be at least 2, but it is {p}. Give the season's length in rows."
+            ));
         }
         odd_at_least_3("seasonal", cfg.seasonal)?;
         let trend = cfg.trend.unwrap_or_else(|| {
@@ -143,7 +145,7 @@ impl Stl {
         odd_at_least_3("trend", trend)?;
         if trend <= p {
             return Err(format!(
-                "trend must be above the period {p}, but it is {trend}."
+                "trend must be above the period {p}, but it is {trend}. Give a wider odd span, or leave it to its default."
             ));
         }
         let low_pass = cfg
@@ -152,7 +154,7 @@ impl Stl {
         odd_at_least_3("low_pass", low_pass)?;
         if low_pass <= p {
             return Err(format!(
-                "low_pass must be above the period {p}, but it is {low_pass}."
+                "low_pass must be above the period {p}, but it is {low_pass}. Give a wider odd span, or leave it to its default."
             ));
         }
         for (name, d) in [
@@ -161,7 +163,9 @@ impl Stl {
             ("low_pass_deg", cfg.low_pass_deg),
         ] {
             if d > 1 {
-                return Err(format!("{name} must be 0 or 1, but it is {d}."));
+                return Err(format!(
+                    "{name} must be 0 or 1, but it is {d}. Give 0 for a local mean or 1 for a local line."
+                ));
             }
         }
         for (name, j) in [
@@ -170,7 +174,9 @@ impl Stl {
             ("low_pass_jump", cfg.low_pass_jump),
         ] {
             if j == 0 {
-                return Err(format!("{name} must be at least 1, but it is 0."));
+                return Err(format!(
+                    "{name} must be at least 1, but it is 0. Give 1 to fit every row."
+                ));
             }
         }
         Ok(Self {
@@ -572,10 +578,15 @@ impl Mstl {
     /// setting each STL takes (its `period` and `seasonal` are ignored).
     pub fn new(seasons: &[(usize, usize)], base: &StlCfg, iterate: usize) -> Result<Self, String> {
         if seasons.is_empty() {
-            return Err("MSTL needs at least one season.".to_string());
+            return Err(
+                "MSTL needs at least one season, but it has none. Give one or more periods."
+                    .to_string(),
+            );
         }
         if iterate == 0 {
-            return Err("iterate must be at least 1, but it is 0.".to_string());
+            return Err(
+                "iterate must be at least 1, but it is 0. Give 1 or more passes.".to_string(),
+            );
         }
         let mut sorted = seasons.to_vec();
         sorted.sort_by_key(|&(p, _)| p);
