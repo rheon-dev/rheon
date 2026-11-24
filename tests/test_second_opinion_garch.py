@@ -76,7 +76,7 @@ from arch.univariate.distribution import SkewStudent, StudentsT
 from arch.univariate.recursions import figarch_weights
 from scipy.optimize import minimize
 from scipy.signal import lfilter
-from scipy.stats import chi2
+from scipy.stats import chi2, norm
 
 import ledger
 from rheon import polars as rp
@@ -785,3 +785,88 @@ def test_the_wait_is_arch_likelihood_ratio_test_on_twenty_seeds():
     ledger.record("arch_grids", "wait_differs_from_arch", [len(differ)], exact=True)
     ledger.record("arch_grids", "wait_clear_share", [clear / n], ideal=1.0)
     assert clear >= n * 3 // 4 and not differ, (clear, n, differ)
+
+
+def figarch_lr(r: np.ndarray) -> tuple[float, np.ndarray]:
+    """`arch`'s statistic for FIGARCH: its FIGARCH fit, truncated at 1,000
+    lags as the bank's default is, against its `ConstantVariance` fit, both
+    normal; and the fit's parameters."""
+    res = arch_model_of("figarch", r).fit(disp="off", options={"maxiter": 1000})
+    const = arch_model(r, mean="Zero", vol="Constant", rescale=False).fit(disp="off")
+    return 2.0 * float(res.loglikelihood - const.loglikelihood), np.asarray(res.params)
+
+
+@pytest.mark.extended(reason="four arch FIGARCH fits of 2,000 rows at 1,000 lags, 20 s")
+def test_figarchs_wait_is_arch_likelihood_ratio_test():
+    """FIGARCH's start, which is 2,000 rows at least, is held to `arch`'s
+    statistic as the other forms' are at 500 (`lr_cases` leaves it out for
+    that): two seeds of its truth and two of returns with no conditional
+    variance. The bank's first fit waits (`not_identified`) exactly where
+    `arch`'s statistic, clear of the cut and its fit inside the bank's set,
+    is under the cut."""
+    cases = [("figarch", series_of("hi", "figarch", 2100, s)) for s in range(2)]
+    cases += [("iid", np.random.default_rng([5490, 99, s]).standard_normal(2100)) for s in range(2)]
+    clear, differ = [], []
+    for truth, r in cases:
+        lr, theta = figarch_lr(r[:2000])
+        a, b = set_rows("figarch", "normal", r[:2000])
+        if abs(lr - LR_CUT["figarch"]) < 0.5 or not np.all(a @ theta - b >= 0.0):
+            continue
+        clear.append((truth, lr))
+        spec = rp.spec.garch("g", targets=["r"], vol="figarch", start_rows=2000)
+        out = rp.ModelBank([spec]).fit_predict(pl.DataFrame({"r": r})).unnest("g")
+        waits = out["withheld_reason"].cast(pl.String)[2000] == "not_identified"
+        if waits != (lr < LR_CUT["figarch"]):
+            differ.append((truth, lr, waits))
+    truths = {t for t, _ in clear}
+    assert truths == {"figarch", "iid"} and not differ, (clear, differ)
+
+
+def weighted_loglik(am, r: np.ndarray, w: np.ndarray, theta: np.ndarray) -> float:  # noqa: ANN001
+    """`Σ w_t l_t`: each row's normal log-density at `arch`'s variance for
+    it under `theta` (scipy's density), weighted by its row's weight."""
+    s2 = np.asarray(am.fix(theta).conditional_volatility) ** 2
+    ll = norm.logpdf(r, scale=np.sqrt(s2))
+    v = float(np.sum(w * ll))
+    return v if math.isfinite(v) else -1e300
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_a_weighted_start_is_the_weighted_likelihoods_optimum(seed):
+    """Rows of unequal weight: the start maximizes `Σ w_t l_t` over the
+    bank's set, each row's log-likelihood `arch`'s variance and scipy's
+    normal density, the best found by scipy's SLSQP from the start's fit
+    and from `arch`'s own unweighted fit. The start is short of it by at
+    most `SHORT_IN_SET` at Kish's count of the weights, the scale its
+    gain is cut at, and the unweighted fit is short of it by far more:
+    the weights are read."""
+    r = series_of("hi", "garch", 2001, seed)
+    w = np.random.default_rng([578, seed]).choice([0.5, 1.0, 2.0, 4.0], len(r))
+    spec = rp.spec.garch("g", targets=["r"], weight="w", start_rows=2000, coef_every=0)
+    out = rp.ModelBank([spec]).fit_predict(pl.DataFrame({"r": r, "w": w})).unnest("g")
+    var = out["variance_r"].to_numpy().astype(float)
+    assert np.isfinite(var[2000]) and not np.isfinite(var[:2000]).any()
+    theta = np.asarray(out["coef"].to_list()[1999], dtype=float)
+    rows, ws = r[:2000], w[:2000]
+    am = arch_model(rows, mean="Zero", vol="GARCH", p=1, q=1, rescale=False)
+    unweighted = np.asarray(am.fit(disp="off", options={"maxiter": 1000}).params)
+    a, b = set_rows("garch", "normal", rows)
+
+    def nll(x: np.ndarray) -> float:
+        return -weighted_loglik(am, rows, ws, x)
+
+    best = -math.inf
+    for x0 in (theta, unweighted):
+        res = minimize(
+            nll,
+            x0,
+            method="SLSQP",
+            constraints=[{"type": "ineq", "fun": lambda x: a @ x - b, "jac": lambda x: a}],
+            options={"ftol": 1e-14, "maxiter": 1000},
+        )
+        if np.all(a @ res.x - b >= -1e-10 * (1.0 + np.abs(b))):
+            best = max(best, -float(res.fun))
+    kish = float(ws.sum() / np.sum(ws * ws))
+    ours = weighted_loglik(am, rows, ws, theta)
+    assert (best - ours) * kish <= SHORT_IN_SET, (best - ours) * kish
+    assert (best - weighted_loglik(am, rows, ws, unweighted)) * kish > 1e-4

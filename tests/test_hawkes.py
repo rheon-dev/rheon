@@ -592,7 +592,23 @@ def test_a_temporal_clock_takes_durations(quarter):
                 held = (b["weight_sum"] >= 5).to_numpy()
                 assert held.sum() > 150
                 if f == "coef" and window[0] not in "19":
-                    continue  # a few events fit ten terms: no digits to compare
+                    # A few events fit ten terms, near singular: coefficients
+                    # in the thousands, so held relative to their size, on
+                    # every row (4.0e-10 measured).
+                    got, want = (
+                        np.array(
+                            [
+                                [np.nan if x is None else x for x in v] if v else [np.nan] * 10
+                                for v in c.to_list()
+                            ]
+                        )
+                        for c in (a[f], b[f])
+                    )
+                    nan = np.isnan(want)
+                    assert np.array_equal(np.isnan(got), nan), (window, f)
+                    gap = np.abs(got[~nan] - want[~nan]) / (1.0 + np.abs(want[~nan]))
+                    assert gap.max() < 1e-9 and np.abs(want[~nan]).max() > 1e3, (window, f)
+                    continue
                 if f == "coef":
 
                     def rows(c: pl.Series) -> np.ndarray:

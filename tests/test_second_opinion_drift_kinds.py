@@ -6,7 +6,8 @@ the oracle the rows the bank's detector reads -- a weight above 0 and a
 residual, and for the two scaled kinds a scale -- and holds the flags row for
 row:
 
-- ``adwin``, ``ddm`` and ``eddm`` against river's ``drift.ADWIN``,
+- ``adwin``, ``ddm`` and ``eddm`` against river's ``drift.ADWIN`` (under
+  ``restart = False``, the window it wraps, ``AdaptiveWindowing``),
   ``drift.binary.DDM`` and ``drift.binary.EDDM`` on the same values (``|resid|``,
   or whether it passes ``error_above``). river's detectors take no weights,
   so a row of positive weight is one row, and a zero-weight row none.
@@ -32,6 +33,7 @@ import polars as pl
 import pytest
 import river.drift as river_drift
 import river.drift.binary as river_binary
+from river.drift.adwin import AdaptiveWindowing
 from scipy.stats import ks_2samp
 
 from rheon import polars as rp
@@ -107,6 +109,15 @@ def _held(flags: np.ndarray, read: np.ndarray, oracle) -> list[int]:
     return flagged
 
 
+#: river's `ADWIN` defaults, which its `AdaptiveWindowing` takes by name.
+ADWIN_DEFAULTS = {
+    "delta": 0.002,
+    "clock": 32,
+    "max_buckets": 5,
+    "min_window_length": 5,
+    "grace_period": 10,
+}
+
 ADWIN_CASES = [
     {},
     {"clock": 1, "delta": 0.05},
@@ -130,6 +141,75 @@ def test_adwin_is_rivers(options):
     flagged = _held(flags, read, oracle)
     assert any(f >= 1500 for f in flagged), flagged
     assert read.sum() > 3700
+
+
+@pytest.mark.parametrize("options", ADWIN_CASES, ids=["defaults", "clock1", "buckets3", "range1"])
+def test_adwin_kept_after_a_flag_is_rivers_window(options):
+    """``restart = False``, the paper's ADWIN2: the window the cuts left is
+    kept after a flag, so a change is flagged again as its old rows are
+    found. river's ``ADWIN`` starts again empty, but its window,
+    ``AdaptiveWindowing``, which ``ADWIN`` wraps, keeps what the cuts left:
+    the oracle, row for row."""
+    df = _frame()
+    out = _fit(df, drift_kind="adwin", drift_options={**options, "restart": False})
+    resid, _, flags, read = _read(df, out)
+    window = AdaptiveWindowing(
+        **{**ADWIN_DEFAULTS, **{k: v for k, v in options.items() if k != "range"}}
+    )
+
+    def oracle(i: int) -> bool:
+        return bool(window.update(float(abs(resid[i]))))
+
+    flagged = _held(flags, read, oracle)
+    restarted = np.flatnonzero(_read(df, _fit(df, drift_kind="adwin", drift_options=options))[2])
+    assert len(flagged) > len(restarted), "kept, a change is flagged again"
+
+
+def test_adwins_max_width_binds_above_the_widest_window_and_not_at_it():
+    """``max_width``, which river does not have, on both sides of the widest
+    window river's ``ADWIN`` reaches on the stream: at it, nothing is ever
+    dropped and every flag is river's; one below, the flags are river's up
+    to the row whose window would pass the cap, the first the cap moves."""
+    df = _frame()
+    resid, _, _, read = _read(df, _fit(df, drift_kind="adwin", drift_options={}))
+    river = river_drift.ADWIN()
+    widths, want = [], []
+    for i in range(len(read)):
+        if read[i]:
+            river.update(float(abs(resid[i])))
+            widths.append(river.width)
+            want.append(bool(river.drift_detected))
+        else:
+            widths.append(0.0)
+            want.append(False)
+    widest = int(max(widths))
+    for cap, binds in ((widest, False), (widest - 1, True)):
+        out = _fit(df, drift_kind="adwin", drift_options={"max_width": cap})
+        r2, _, flags, read2 = _read(df, out)
+        # The detector's flags move the fit (a flag resets it), so the
+        # residuals are the same up to the first row the cap moves.
+        first = next((i for i, v in enumerate(widths) if v > cap), len(widths))
+        assert binds == (first < len(widths)), (cap, first)
+        assert np.array_equal(flags[:first], np.array(want[:first])), cap
+        assert np.array_equal(r2[:first], resid[:first], equal_nan=True), cap
+
+
+@pytest.mark.parametrize("kind", ["ddm", "eddm"])
+@pytest.mark.parametrize("error_above", [0.75, 1.5])
+def test_ddm_and_eddm_at_their_defaults_are_rivers(kind, error_above):
+    """Every setting but ``error_above`` left at its default, river's:
+    DDM's ``warm_start`` 30 and threshold 3, EDDM's ``warm_start`` 30,
+    ``alpha`` 0.95 and ``beta`` 0.9."""
+    df = _frame()
+    out = _fit(df, drift_kind=kind, drift_options={"error_above": error_above})
+    resid, _, flags, read = _read(df, out)
+    det = river_binary.DDM() if kind == "ddm" else river_binary.EDDM()
+
+    def oracle(i: int) -> bool:
+        det.update(1 if abs(resid[i]) > error_above else 0)
+        return bool(det.drift_detected)
+
+    _held(flags, read, oracle)
 
 
 @pytest.mark.parametrize("kind", ["ddm", "eddm"])
