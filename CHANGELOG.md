@@ -2063,6 +2063,21 @@ model that only the new build has is listed as an addition and passes.
   update (KAL-5), and the intercept's variance in the current coordinates
   and the prior quadratic form read a rounding below 0 as 0 (KAL-7).
   Elsewhere, to the bit.
+- **`kalman` under `standardize` reads the moments' own gap** (review
+  2026-11-23, KAL-6). On a row more than a half-life after the moments
+  last moved, the moments read their history at no less than the row's
+  own weight. That gap was read as the clock since a target was last
+  observed, but a row that observes no target moves the moments all the
+  same, so the floor opened on rows whose moments had moved one row
+  before: on 16 of 20 such rows at a half-life of 5. It binds, and moves
+  the moments from the plain recursion, where such a row weighs more
+  than the history's decayed weight. The gap is now the moments' own, the
+  clock since the last row of weight above 0, kept in the state where it
+  is not the clock since a target was observed. Streams with a run of
+  missing targets longer than a half-life move from the first such row
+  the floor bound on; elsewhere, to the bit. A state saved before this
+  change reads the clock since a target was observed until its next row
+  of weight above 0. Moves: `kalman.pred_*`, `kalman.coef`.
 - **`bocpd` keeps its joint a number** (review 2026-11-23, BOCPD-1,
   BOCPD-3 and BOCPD-5). A run that cannot have produced a row has
   tempered likelihood `π⁰ = 1` under `robust` and at a row of no share,

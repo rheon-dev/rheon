@@ -216,29 +216,104 @@ fn the_intercepts_variance_in_the_current_coordinates_is_never_below_0() {
 }
 
 /// KAL-6, claim 2: rows that observe no target still move the moments,
-/// so the moments have no gap, but the clock since a target was observed
-/// runs on across them, and the floor on their history opened on every
-/// such row from a half-life on. Confirmed; the fix keeps the moments' own
-/// gap in the state and moves outputs where targets are missing, so it is
-/// the user's call.
+/// so the moments have no gap, but the floor on their history read the
+/// clock since a target was observed, which runs on across them, and it
+/// opened on 16 of 20 such rows at a half-life of 5. By the definition the
+/// floor is shut on a row within a half-life of the last that moved the
+/// moments: here every row, a clock step of 1 at a half-life of 5. So the
+/// moments are the plain recursion's on every row, to the bit, an
+/// `EwDiag` fed the same rows beside the filter the oracle. The run of
+/// missing targets is long enough that the clock since a target was
+/// observed passes the half-life on 16 of its rows, and one row in ten
+/// weighs 1,000, more than the history's decayed weight, where an open
+/// floor binds: read from that clock, the moments left the plain recursion
+/// there.
 #[test]
-#[should_panic(expected = "the floor opened")]
 fn rows_with_no_target_leave_the_moments_floor_shut() {
     let mut cfg = plain_cfg(0.5, 5.0);
     cfg.standardize = true;
     cfg.noise_units = true;
     cfg.obs_var = None;
     let mut m = Kalman::new(cfg).unwrap();
+    let mut plain = EwDiag::new(3);
+    let lam = m.cfg.decay.factor(1.0);
     let mut s = 9u64;
-    let mut opened = 0;
+    let (mut opened, mut past) = (0, 0);
     for i in 0..60 {
         let x = [lcg(&mut s), lcg(&mut s)];
         // Every row learns the features; the target is missing on rows 20
         // to 39, a run four half-lives long.
         let y = (!(20..40).contains(&i)).then(|| 1.0 + x[0] + 0.1 * lcg(&mut s));
-        let unobserved = m.elapsed.iter().copied().fold(f64::INFINITY, f64::min) + 1.0;
-        opened += usize::from(m.keeps_history(unobserved));
-        m.step(&x, &[y], 1.0, 1.0);
+        let w = if i % 10 == 9 { 1000.0 } else { 1.0 };
+        opened += usize::from(m.keeps_history(m.moments_gap() + 1.0));
+        past += usize::from(m.keeps_history(super::unobserved(&m.elapsed) + 1.0));
+        m.step(&x, &[y], 1.0, w);
+        plain.update(&[1.0, x[0], x[1]], lam, w);
+        assert_eq!(m.stats, plain, "row {i}");
     }
     assert_eq!(opened, 0, "the floor opened on {opened} rows");
+    assert_eq!(past, 16, "the run of missing targets");
+}
+
+/// KAL-6's gap in the state: written only where the last row that moved
+/// the moments observed no target, so a state whose did keeps its bytes,
+/// and after the covariance form where it is written, so the positional
+/// encoding reads each in its place. A state without it, as every state of
+/// schema 71 and earlier, reads the clock since a target was observed.
+#[test]
+fn the_moments_gap_is_written_where_it_is_not_the_clock_since_a_target() {
+    for form in [CovarianceForm::Covariance, CovarianceForm::SquareRoot] {
+        let mut cfg = plain_cfg(0.5, 5.0);
+        cfg.standardize = true;
+        let mut m = Kalman::new(cfg)
+            .unwrap()
+            .with_covariance_form(form)
+            .unwrap();
+        let mut s = 4u64;
+        for i in 0..12 {
+            let x = [lcg(&mut s), lcg(&mut s)];
+            let y = (i < 8).then(|| 1.0 + x[0]);
+            m.step(&x, &[y], 1.5, 1.0);
+            let named = rmp_serde::to_vec_named(&m).unwrap();
+            let v = rmpv::decode::read_value(&mut named.as_slice()).unwrap();
+            let gap = v
+                .as_map()
+                .unwrap()
+                .iter()
+                .find(|(k, _)| k.as_str() == Some("moments_gap"))
+                .map(|(_, v)| v.as_f64().unwrap());
+            if i < 8 {
+                assert_eq!(gap, None, "{form:?}, row {i}");
+            } else {
+                assert_eq!(gap, Some(0.0), "{form:?}, row {i}");
+                assert_eq!(super::unobserved(&m.elapsed), 1.5 * (i - 7) as f64);
+            }
+            for bytes in [named.clone(), rmp_serde::to_vec(&m).unwrap()] {
+                let back: Kalman = rmp_serde::from_slice(&bytes).unwrap();
+                assert_eq!(back.moments_gap(), m.moments_gap(), "{form:?}, row {i}");
+                assert_eq!(back.covariance_form(), form);
+                assert_eq!(rmp_serde::to_vec_named(&back).unwrap(), named);
+            }
+        }
+        // Without the field: the clock since a target was observed.
+        let named = rmp_serde::to_vec_named(&m).unwrap();
+        let mut v = rmpv::decode::read_value(&mut named.as_slice()).unwrap();
+        if let rmpv::Value::Map(fields) = &mut v {
+            fields.retain(|(k, _)| k.as_str() != Some("moments_gap"));
+        }
+        let mut bytes = Vec::new();
+        rmpv::encode::write_value(&mut bytes, &v).unwrap();
+        let before: Kalman = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(before.moments_gap(), 6.0, "{form:?}");
+        // A gap that is not a clock is damaged.
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            let mut v = v.clone();
+            if let rmpv::Value::Map(fields) = &mut v {
+                fields.push(("moments_gap".into(), bad.into()));
+            }
+            let mut bytes = Vec::new();
+            rmpv::encode::write_value(&mut bytes, &v).unwrap();
+            assert!(rmp_serde::from_slice::<Kalman>(&bytes).is_err(), "{bad}");
+        }
+    }
 }
