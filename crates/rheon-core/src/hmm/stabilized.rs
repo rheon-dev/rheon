@@ -297,6 +297,7 @@ impl Stabilized {
         fallback: f64,
         shape: Option<Shape>,
     ) -> Self {
+        let fallback = Self::fallback_of(fallback, shape.as_ref());
         Self {
             prior_rows,
             scale: vec![0.0; d],
@@ -340,11 +341,24 @@ impl Stabilized {
         self.prior_rows = prior_rows;
         self.slow = slow_of(decay);
         self.slow_at = None;
-        self.fallback = fallback;
+        self.fallback = Self::fallback_of(fallback, shape.as_ref());
         self.shape = shape;
         self.psi = vec![fallback; d];
         self.refresh_psi();
         true
+    }
+
+    /// `ψ` where every `ŝ` is 0: the ridge `precision_prior`, a variance,
+    /// where `ψ` is one; and 1 under a shape, where `ψ` is a multiple of
+    /// each state's given covariance, so the states read the covariances
+    /// they were given (review 2026-11-23, HMM-2: a ridge of `1e-3` read
+    /// them a thousand times too narrow).
+    fn fallback_of(precision_prior: f64, shape: Option<&Shape>) -> f64 {
+        if shape.is_some() {
+            1.0
+        } else {
+            precision_prior
+        }
     }
 
     /// `ψ`.
@@ -437,7 +451,7 @@ impl Stabilized {
 
     /// `ŝ` from the seeded states' variances `pooled`, at weight `w`.
     pub(crate) fn seed(&mut self, pooled: &[f64], w: f64) {
-        if w > 0.0 {
+        if w > 0.0 && pooled.iter().all(|p| p.is_finite()) {
             self.scale.copy_from_slice(pooled);
             self.scale_w = w;
         }
@@ -459,6 +473,15 @@ impl Stabilized {
                 self.slow_at = Some((d_clock, lam));
                 lam
             }
+        };
+        // A row whose squared deviations leave the doubles (`1e80` from a
+        // state given a variance of `1e-150`) would leave `ŝ` infinite, and
+        // the next row NaN, a state no load takes: it ages `V` as a row of
+        // no weight does (review 2026-11-23, HMM-1).
+        let w = if e.iter().all(|v| v.is_finite()) {
+            w
+        } else {
+            0.0
         };
         let v = lam * self.scale_w + w;
         if v > 0.0 && w > 0.0 {

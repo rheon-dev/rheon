@@ -213,7 +213,7 @@ def hmm(
     - a ``warm_rows`` below ``n_components``, and a ``seed`` below 0;
     - ``exog_tvtp`` without ``tvtp_coef`` or the reverse, and a
       ``tvtp_coef`` whose ``A`` and ``B`` are not
-      ``n_components x n_components``;
+      ``n_components x n_components`` or hold a value that is not finite;
     - ``transition`` or ``transition_prior`` beside ``tvtp_coef``, and
       ``warm_rows``, ``init`` or ``seed`` beside given states;
     - a switch that reads residuals, such as ``emit_sigma``,
