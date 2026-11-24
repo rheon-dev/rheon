@@ -265,43 +265,27 @@ impl Spec {
                 // The shrinkage's own rules (an estimator's name, an
                 // intensity in [0, 1], a symmetric PSD target of `k` by `k`
                 // under a fixed one), each refused by the spec's name.
-                match crate::spec::shrinkage_of(
+                for e in crate::spec::shrinkage_refusals(
+                    &self.name,
+                    "ew_cov",
                     shrinkage.as_ref(),
                     shrinkage_target.as_deref(),
                     self.k(),
+                    window.is_some(),
                 ) {
-                    Ok(Some(sh)) => {
-                        if let Err(e) = sh.validate("ew_cov", self.k()) {
-                            no.refuse(format!(
-                                "spec {:?}: {}",
-                                self.name,
-                                e.trim_start_matches("ew_cov: ")
-                            ));
-                        }
-                        if window.is_some() && sh.needs_fourth() {
-                            no.refuse(format!(
-                                "spec {:?}: window_size and shrinkage \"ledoit_wolf\" cannot \
-                                 both be set yet: the window does not cut the rows' fourth \
-                                 moments the intensity reads. Use shrinkage \"oas\" or a fixed \
-                                 intensity under a window, or leave out window_size.",
-                                self.name
-                            ));
-                        }
-                    }
-                    Ok(None) => {
-                        if stats
-                            .as_ref()
-                            .is_some_and(|st| st.iter().any(|s| s == "shrinkage"))
-                        {
-                            no.refuse(format!(
-                                "spec {:?}: \"shrinkage\" in stats needs shrinkage, but it is \
-                                 not set. Set shrinkage to \"ledoit_wolf\", \"oas\" or a \
-                                 fixed intensity, or leave \"shrinkage\" out of stats.",
-                                self.name
-                            ));
-                        }
-                    }
-                    Err(e) => no.refuse(format!("spec {:?}: {e}", self.name)),
+                    no.refuse(e);
+                }
+                if shrinkage.is_none()
+                    && stats
+                        .as_ref()
+                        .is_some_and(|st| st.iter().any(|s| s == "shrinkage"))
+                {
+                    no.refuse(format!(
+                        "spec {:?}: \"shrinkage\" in stats needs shrinkage, but it is not set. \
+                         Set shrinkage to \"ledoit_wolf\", \"oas\" or a fixed intensity, or \
+                         leave \"shrinkage\" out of stats.",
+                        self.name
+                    ));
                 }
                 if let Some(w) = window
                     && (!w.value().is_finite() || w.value() <= 0.0)
@@ -699,7 +683,28 @@ impl Spec {
                 max_rows_between_snapshots: _,
                 window_budget: _,
                 closed: _,
+                shrinkage,
+                shrinkage_target,
             } => {
+                for e in crate::spec::shrinkage_refusals(
+                    &self.name,
+                    "ew_class",
+                    shrinkage.as_ref(),
+                    shrinkage_target.as_deref(),
+                    self.k(),
+                    window.is_some(),
+                ) {
+                    no.refuse(e);
+                }
+                if shrinkage.is_some() && covariance_type.as_deref() == Some("diag") {
+                    no.refuse(format!(
+                        "spec {:?}: shrinkage needs covariance_type \"full\" or \"tied\", but \
+                         it is \"diag\": a diagonal class keeps its variances alone, which is no \
+                         matrix to shrink. Use covariance_type \"full\" or \"tied\", or leave \
+                         out shrinkage.",
+                        self.name
+                    ));
+                }
                 if let Some(w) = window
                     && (!w.value().is_finite() || w.value() <= 0.0)
                 {

@@ -1,7 +1,7 @@
-//! `ew_cov` without shrinkage is the model it was before shrinkage existed,
-//! to the bit: every output, every `n_eff` and every state byte, over fixed
-//! seeded streams through each of its optional parts (docs/PLAN.md task
-//! 511). A hash of all of them, held to the hash `origin/main` at 13f5ffe4
+//! `ew_cov` and `ew_class` without shrinkage are the models they were
+//! before shrinkage existed, to the bit: every output, every `n_eff` and
+//! every state byte, over fixed seeded streams through each of their
+//! optional parts (docs/PLAN.md task 511). A hash of all of them, held to the hash `origin/main` at 13f5ffe4
 //! gave for this same file before the shrinkage landed.
 //!
 //! The configurations are read from JSON, which omits every field added
@@ -15,9 +15,11 @@
 //! statistics read through faer's factorizations (`partial_corr`, `mahal`,
 //! the components), whose last bits follow the math library and the CPU's
 //! paths (docs/TESTING.md, "The math library's last bits"): it is held
-//! where it was measured, Linux on x86-64.
+//! where it was measured, Linux on x86-64. `ew_class`'s scores read `ln`
+//! and `exp`, so its portable hash is of its `n_eff` and state bytes
+//! alone, and its whole one adds the posteriors.
 
-use rheon_core::{EwCovCfg, EwCovModel, OnlineModel, State};
+use rheon_core::{EwClass, EwClassCfg, EwCovCfg, EwCovModel, OnlineModel, State};
 
 /// FNV-1a, 64 bits: a hash with no dependency and no platform in it.
 struct Fnv(u64);
@@ -224,5 +226,88 @@ fn without_shrinkage_every_factorized_output_is_as_before() {
         format!("{:016x}", digest(whole(), true)),
         "3c332a8fc97cddc6",
         "ew_cov without shrinkage moved"
+    );
+}
+
+/// `ew_class` in each shape, with and without a window: the label every
+/// third row of each class, a null label now and then.
+fn classifiers() -> Vec<String> {
+    let mut out = Vec::new();
+    for shape in ["full", "tied", "diag"] {
+        for window in ["", r#", "window": 25.0, "window_every": 2.0"#] {
+            out.push(format!(
+                r#"{{"n_features": 3, "n_classes": 3, "decay": {{"Lam": 0.95}},
+                "min_weight": 0.0, "covariance": "{shape}", "precision_prior": 0.01{window}}}"#
+            ));
+        }
+    }
+    out
+}
+
+fn classifier_digest(libm: bool) -> u64 {
+    let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+    for (seed, json) in classifiers().into_iter().enumerate() {
+        let cfg: EwClassCfg = serde_json::from_str(&json).unwrap();
+        let mut m = EwClass::new(cfg).unwrap();
+        let mut g = Rng(0x51_7cc1_b727_220a ^ (seed as u64 + 1));
+        for r in 0..300 {
+            let c = r % 3;
+            let x: Vec<f64> = (0..3)
+                .map(|i| {
+                    let z = if libm { g.normal() } else { g.normal12() };
+                    c as f64 * (1.0 + i as f64) + z
+                })
+                .collect();
+            let y = if r % 11 == 5 { None } else { Some(c as f64) };
+            let w = if r == 0 || r % 9 == 4 {
+                0.0
+            } else {
+                0.5 + g.uniform()
+            };
+            let dt = if libm {
+                [1.0, 0.5, 3.0][r % 3]
+            } else {
+                [1.0, 0.0, 1.0][r % 3]
+            };
+            let step = m.step(&x, &[y], dt, w);
+            if libm {
+                for v in &step.pred {
+                    h.float(*v);
+                }
+            }
+            h.float(step.n_eff);
+            if r % 100 == 99 {
+                let state = m.state();
+                h.bytes(&rmp_serde::to_vec_named(&state).unwrap());
+                if r == 199 {
+                    let bytes = rmp_serde::to_vec_named(&state).unwrap();
+                    let back: State = rmp_serde::from_slice(&bytes).unwrap();
+                    m = EwClass::restore(&back).unwrap();
+                }
+            }
+        }
+    }
+    h.0
+}
+
+#[test]
+fn without_shrinkage_every_classifier_state_byte_is_as_before() {
+    assert_eq!(
+        format!("{:016x}", classifier_digest(false)),
+        "d8a441ad73bdcfa4",
+        "ew_class without shrinkage moved"
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(all(target_os = "linux", target_arch = "x86_64")),
+    ignore = "its libm bits were measured on Linux x86-64; the portable digest runs here"
+)]
+fn without_shrinkage_every_classifier_output_is_as_before() {
+    assert_eq!(
+        format!("{:016x}", classifier_digest(true)),
+        "9a95ecef92176e3c",
+        "ew_class without shrinkage moved"
     );
 }

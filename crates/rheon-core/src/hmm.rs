@@ -2684,6 +2684,7 @@ mod tests {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            shrinkage: None,
         })
         .unwrap();
         let mut s = 3u64;

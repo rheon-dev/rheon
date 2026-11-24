@@ -3324,20 +3324,42 @@ fn ew_covs_bias_is_written_in_both_values() {
 /// Shrinkage's forms (schema 72, docs/PLAN.md task 511), each frozen
 /// non-empty: Ledoit and Wolf's fourth moments `t`, `f` and the kept Kish
 /// size; OAS's kept size, unwindowed and windowed; a fixed intensity with a
-/// given target, and toward `μ I` under a window. The cfg's tail is written
+/// given target, and toward `μ I` under a window; and the classifier's, a
+/// state a class, `tied` under Ledoit and Wolf's, `full` under OAS and a
+/// fixed intensity with a target under a window. The cfg's tail is written
 /// in each, the row cap as nil before a shrinkage that follows it.
 #[test]
-fn ew_covs_shrinkage_is_written_in_every_form() {
+fn the_shrinkage_is_written_in_every_form() {
     if regenerating() {
         return;
     }
-    let model = |name: &str| {
+    shrinkage_forms(&|name: &str| {
         let f = frozen::ALL
             .iter()
             .find(|f| f.name == name)
             .unwrap_or_else(|| panic!("{name}: no fixture; add the case and regenerate"));
         rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap()
-    };
+    });
+}
+
+/// [`the_shrinkage_is_written_in_every_form`]'s checks on the states the
+/// cases write as this build runs them, with no file read: the cases hold
+/// every form, whichever platform wrote the fixtures.
+#[test]
+fn the_shrinkage_cases_write_every_form() {
+    let cases = cases::all();
+    shrinkage_forms(&|name: &str| {
+        let case = cases
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("{name}: no case"));
+        let (m, _) = saved(case);
+        rmpv::decode::read_value(&mut named(&m.state()).as_slice()).unwrap()
+    });
+}
+
+/// The shrinkage's forms in the states `model` gives by case name.
+fn shrinkage_forms(model: &dyn Fn(&str) -> rmpv::Value) {
     for (name, estimator, fourth, window) in [
         ("ew_cov_lw", "ledoit_wolf", true, false),
         ("ew_cov_oas", "oas", false, false),
@@ -3383,7 +3405,48 @@ fn ew_covs_shrinkage_is_written_in_every_form() {
     )
     .expect("the given target");
     assert!(held(target) >= 5, "the target is empty");
+    // The classifier's, one state a class.
+    for (name, estimator, fourth, window) in [
+        ("ew_class_tied_lw", "ledoit_wolf", true, false),
+        ("ew_class_full_oas", "oas", false, false),
+        ("ew_class_fixed_window", "fixed", false, true),
+    ] {
+        let v = model(name);
+        let m = at(&v, &["model", "EwClass"]).unwrap_or_else(|| panic!("{name}"));
+        let sh = at(m, &["cfg", "shrinkage"]).unwrap_or_else(|| panic!("{name}: no shrinkage"));
+        let tag = match sh {
+            rmpv::Value::String(s) => s.as_str().map(str::to_string),
+            rmpv::Value::Map(kv) => kv.first().and_then(|(k, _)| k.as_str()).map(str::to_string),
+            _ => None,
+        };
+        assert_eq!(tag.as_deref(), Some(estimator), "{name}");
+        let states = at(m, &["shrink"])
+            .and_then(rmpv::Value::as_array)
+            .unwrap_or_else(|| panic!("{name}: no shrink states"));
+        assert_eq!(states.len(), 3, "{name}");
+        for st in states {
+            let kish = at(st, &["kish"]).and_then(rmpv::Value::as_f64);
+            assert!(kish.is_some_and(|n| n > 1.0), "{name}: kish {kish:?}");
+            let f = at(st, &["fourth"]).unwrap_or_else(|| panic!("{name}: no fourth"));
+            if fourth {
+                assert!(held(f) >= 2, "{name}: the fourth moments are empty");
+            } else {
+                assert!(f.is_nil(), "{name}");
+            }
+        }
+        assert_eq!(
+            at(m, &["win"]).is_some_and(|w| !w.is_nil()),
+            window,
+            "{name}"
+        );
+    }
     // A model without shrinkage writes neither field.
+    for name in ["ew_class", "ew_class_window"] {
+        let v = model(name);
+        let m = at(&v, &["model", "EwClass"]).unwrap();
+        assert!(at(m, &["shrink"]).is_none(), "{name}");
+        assert!(at(m, &["cfg", "shrinkage"]).is_none(), "{name}");
+    }
     for name in ["ew_cov", "ew_cov_window"] {
         let v = model(name);
         let m = at(&v, &["model", "EwCovModel"]).unwrap();

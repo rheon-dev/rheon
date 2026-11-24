@@ -98,7 +98,7 @@ impl Covariance {
 }
 
 /// Configuration for [`EwClass`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct EwClassCfg {
     pub n_features: usize,
     /// Number of classes, `>= 2`; a label is an index below it.
@@ -137,8 +137,72 @@ pub struct EwClassCfg {
     /// At most this many rows between the window's snapshots, counted on
     /// every row the model is stepped with, rows of weight zero included;
     /// `1` is every row, and `0` is refused (docs/PLAN.md task 196).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Skipped when absent and nothing follows it; written as nil when
+    /// `shrinkage` follows it ([`EwClassCfg`]'s `Serialize`).
+    #[serde(default)]
     pub max_rows_between_snapshots: Option<usize>,
+    /// Shrink each class's covariance toward a target before it is used,
+    /// `(1 − s) C_c + s T_c`, with the class's own intensity under
+    /// Ledoit and Wolf's or OAS ([`crate::Shrinkage`]); `tied` pools the
+    /// shrunk class matrices by the priors. The ridge `precision_prior`
+    /// is added after, as without shrinkage. Refused under `diag`. Absent
+    /// for none, every output and state byte as without it. Last, and
+    /// skipped when absent.
+    #[serde(default)]
+    pub shrinkage: Option<crate::Shrinkage>,
+}
+
+impl Serialize for EwClassCfg {
+    /// The derived layout, except at the tail: the row cap and the
+    /// shrinkage each skip when absent, and the row cap is written as nil
+    /// when the shrinkage follows it, so the compact encoding's positions
+    /// hold (`crate::EwCovCfg`'s `Serialize` says why). Without shrinkage
+    /// the bytes are the ones the derive wrote before it.
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename = "EwClassCfg")]
+        struct Out<'a> {
+            n_features: usize,
+            n_classes: usize,
+            decay: &'a Decay,
+            min_weight: f64,
+            covariance: Covariance,
+            precision_prior: f64,
+            window: Option<f64>,
+            window_every: Option<f64>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            max_rows_between_snapshots: Option<Option<usize>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            shrinkage: Option<&'a crate::Shrinkage>,
+        }
+        let EwClassCfg {
+            n_features,
+            n_classes,
+            decay,
+            min_weight,
+            covariance,
+            precision_prior,
+            window,
+            window_every,
+            max_rows_between_snapshots,
+            shrinkage,
+        } = self;
+        Out {
+            n_features: *n_features,
+            n_classes: *n_classes,
+            decay,
+            min_weight: *min_weight,
+            covariance: *covariance,
+            precision_prior: *precision_prior,
+            window: *window,
+            window_every: *window_every,
+            max_rows_between_snapshots: (max_rows_between_snapshots.is_some()
+                || shrinkage.is_some())
+            .then_some(*max_rows_between_snapshots),
+            shrinkage: shrinkage.as_ref(),
+        }
+        .serialize(ser)
+    }
 }
 
 impl EwClassCfg {
@@ -174,6 +238,25 @@ impl EwClassCfg {
             self.window_every,
             self.max_rows_between_snapshots,
         ));
+        if let Some(sh) = &self.shrinkage {
+            no.take(sh.validate("ew_class", self.n_features));
+            if matches!(self.covariance, Covariance::Diagonal) {
+                no.refuse(
+                    "ew_class: shrinkage needs covariance_type \"full\" or \"tied\", but it is \
+                     \"diag\": a diagonal class keeps its variances alone, which is no matrix \
+                     to shrink. Use covariance_type \"full\" or \"tied\", or leave out \
+                     shrinkage.",
+                );
+            }
+            if self.window.is_some() && sh.needs_fourth() {
+                no.refuse(
+                    "ew_class: window_size and shrinkage \"ledoit_wolf\" cannot both be set \
+                     yet: the window does not cut the rows' fourth moments the intensity reads. \
+                     Use shrinkage \"oas\" or a fixed intensity under a window, or leave out \
+                     window_size.",
+                );
+            }
+        }
         no.finish()
     }
 }
@@ -270,6 +353,12 @@ impl Factors {
         }
     }
 
+    /// Whether class `c`'s factor is made, or failed, and kept: [`Self::get`]
+    /// then reads no matrix.
+    fn settled(&self, c: usize, n_classes: usize) -> bool {
+        self.slots.len() == n_classes && !matches!(self.slots[c], Cached::Stale)
+    }
+
     /// Class `c`'s factor is stale; a ready one is kept to be written
     /// over, so no more are kept than there are classes.
     fn invalidate(&mut self, c: usize) {
@@ -331,6 +420,11 @@ struct ScoreWork {
     quad: QuadWork,
     view: crate::window::Kept<View>,
     shared: crate::window::Kept<SharedWork>,
+    /// A class's shrunk co-moments, packed, and the fourth moments' step's
+    /// deviations and `C u`, under shrinkage.
+    shrunk: Vec<f64>,
+    dev: Vec<f64>,
+    cu: Vec<f64>,
 }
 
 /// The `shared` shape's buffers, kept between rows as [`ScoreWork`]'s
@@ -355,7 +449,7 @@ impl PartialEq for ScoreWork {
 }
 
 /// Class-conditional Gaussian classifier; see the [module docs](self).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct EwClass {
     cfg: EwClassCfg,
     /// One accumulator per class, in label order, under `full` and `tied`;
@@ -373,17 +467,66 @@ pub struct EwClass {
     /// alone may skip.
     #[serde(default)]
     diag_classes: Vec<EwCovDiag>,
-    /// The hard-cutoff window, when the spec asks for one. Last among the
-    /// serialized fields, for the reason `EwClassCfg::window` gives;
-    /// `factors` is skipped, so it does not count.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The hard-cutoff window, when the spec asks for one. Skipped when
+    /// absent and nothing follows it, for the reason `EwClassCfg::window`
+    /// gives; written as nil when `shrink` follows it (the `Serialize`
+    /// below). `factors` is skipped, so it does not count.
+    #[serde(default)]
     win: Option<Windowed>,
+    /// What each class's shrinkage reads beside its moments, in label order
+    /// ([`crate::ShrinkState`]), when the spec asks for shrinkage
+    /// (docs/PLAN.md task 511). Absent otherwise and skipped. Last.
+    #[serde(default)]
+    shrink: Option<Vec<crate::ShrinkState>>,
     /// The `full` shape's per-class factors between rows; see [`Factors`].
     #[serde(skip)]
     factors: Factors,
     /// The step's buffers between rows; see [`ScoreWork`].
     #[serde(skip)]
     work: ScoreWork,
+}
+
+impl Serialize for EwClass {
+    /// The derived layout, except at the tail: `win` and `shrink` each skip
+    /// when absent, and `win` is written as nil when `shrink` follows it
+    /// ([`EwClassCfg`]'s `Serialize` says why). Without shrinkage the bytes
+    /// are the ones the derive wrote before it.
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename = "EwClass")]
+        struct Out<'a> {
+            cfg: &'a EwClassCfg,
+            classes: &'a [EwCov],
+            n_eff: f64,
+            solve_failures: u64,
+            diag_classes: &'a [EwCovDiag],
+            #[serde(skip_serializing_if = "Option::is_none")]
+            win: Option<&'a Option<Windowed>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            shrink: Option<&'a [crate::ShrinkState]>,
+        }
+        let EwClass {
+            cfg,
+            classes,
+            n_eff,
+            solve_failures,
+            diag_classes,
+            win,
+            shrink,
+            factors: _,
+            work: _,
+        } = self;
+        Out {
+            cfg,
+            classes,
+            n_eff: *n_eff,
+            solve_failures: *solve_failures,
+            diag_classes,
+            win: (win.is_some() || shrink.is_some()).then_some(win),
+            shrink: shrink.as_deref(),
+        }
+        .serialize(ser)
+    }
 }
 
 /// The window's clock and the snapshots it subtracts.
@@ -533,6 +676,11 @@ impl EwClass {
             }),
             None => None,
         };
+        let shrink = cfg.shrinkage.as_ref().map(|sh| {
+            (0..cfg.n_classes)
+                .map(|_| crate::ShrinkState::new(sh, cfg.n_features))
+                .collect()
+        });
         Ok(Self {
             cfg,
             classes,
@@ -540,6 +688,7 @@ impl EwClass {
             solve_failures: 0,
             diag_classes,
             win,
+            shrink,
             factors: Factors::default(),
             work: ScoreWork::default(),
         })
@@ -724,6 +873,36 @@ impl EwClass {
         self.cfg.precision_prior * cov.precision_scale()
     }
 
+    /// Class `c`'s co-moments, from `cov` (the accumulator the row is
+    /// scored on), shrunk at the class's own intensity into `out`, packed;
+    /// `false` without shrinkage. Kish's size is the class's kept one,
+    /// moved only by a row the class learns, so its factor stays good
+    /// across rows it does not ([`Cached`]); under a window, the window's.
+    fn shrunk_class(&self, c: usize, cov: &EwCov, out: &mut Vec<f64>) -> bool {
+        let (Some(sh), Some(st)) = (
+            self.cfg.shrinkage.as_ref(),
+            self.shrink.as_ref().and_then(|v| v.get(c)),
+        ) else {
+            return false;
+        };
+        let k = self.cfg.n_features;
+        let packed = cov.comoments().packed();
+        let n = if self.win.is_some() {
+            cov.n_kish()
+        } else {
+            st.kish()
+        };
+        let s = crate::shrink::intensity(sh, packed, k, n, st.fourth().map(crate::Fourth::f));
+        let target = match sh {
+            crate::Shrinkage::Fixed { target, .. } => target.as_deref(),
+            _ => None,
+        };
+        out.clear();
+        out.resize(packed.len(), 0.0);
+        crate::shrink::shrink_into(packed, k, s, target, out);
+        true
+    }
+
     /// `[class, p_0, .., p_{C-1}]` for `x` from the current state, written
     /// over `out` (the step's kept buffer, or `predict`'s new one); NaN
     /// throughout before `min_weight`, before any labelled row, on a
@@ -753,6 +932,9 @@ impl EwClass {
             quad,
             view,
             shared,
+            shrunk,
+            dev: _,
+            cu: _,
         } = work;
         let nc = self.cfg.n_classes;
         let k = self.cfg.n_features;
@@ -796,7 +978,18 @@ impl EwClass {
                         *d = cov.deviation(i, xi);
                     }
                     let fresh;
-                    let (packed, ridge) = (cov.comoments().packed(), self.class_ridge(cov));
+                    let ridge = self.class_ridge(cov);
+                    // The shrunk matrix, formed only where a factor is to
+                    // be made of it.
+                    let made = match factors.as_deref() {
+                        Some(cache) => cache.settled(c, nc),
+                        None => self.factors.peek(c).is_some(),
+                    };
+                    let packed = if !made && self.shrunk_class(c, cov, shrunk) {
+                        shrunk.as_slice()
+                    } else {
+                        cov.comoments().packed()
+                    };
                     let factor = match factors.as_deref_mut() {
                         Some(cache) => cache.get(c, nc, packed, ridge, k),
                         None => match self.factors.peek(c) {
@@ -845,7 +1038,11 @@ impl EwClass {
                     // by slot, the loop checked both bounds on every
                     // product and ran a slot at a time, about a tenth of
                     // a 20-feature row's time on arm64 (task 314).
-                    let cl = classes[c].comoments().packed();
+                    let cl = if self.shrunk_class(c, &classes[c], shrunk) {
+                        shrunk.as_slice()
+                    } else {
+                        classes[c].comoments().packed()
+                    };
                     for i in 0..k {
                         let at = crate::ewcov::row_at(i);
                         let run = i * k..i * k + i + 1;
@@ -1063,7 +1260,23 @@ impl OnlineModel for EwClass {
         }
         for (c, cov) in self.classes.iter_mut().enumerate() {
             if label == Some(c) {
-                cov.update(x, lam, weight);
+                // The class's fourth moments, in step with its update, by
+                // its own mixing factors (`crate::shrink::Fourth`).
+                let st = self.shrink.as_mut().and_then(|v| v.get_mut(c));
+                if let Some(st) = st {
+                    if let Some(fourth) = st.fourth.as_mut()
+                        && let Some((a, b)) = cov.mixing(lam, weight)
+                    {
+                        let ScoreWork { dev, cu, .. } = &mut self.work;
+                        dev.clear();
+                        dev.extend(x.iter().enumerate().map(|(i, &xi)| cov.deviation(i, xi)));
+                        fourth.learn(cov.comoments().packed(), dev, a, b, cu);
+                    }
+                    cov.update(x, lam, weight);
+                    st.kish = cov.n_kish();
+                } else {
+                    cov.update(x, lam, weight);
+                }
                 // The one matrix this row moved.
                 self.factors.invalidate(c);
             } else {
@@ -1142,11 +1355,19 @@ impl OnlineModel for EwClass {
                 } else {
                     (m.classes.len(), m.diag_classes.len())
                 };
+                // What each class's shrinkage reads, where the cfg asks for
+                // it.
+                let shrink_ok = match (&m.cfg.shrinkage, &m.shrink) {
+                    (Some(sh), Some(v)) => v.len() == nc && v.iter().all(|st| st.fits(sh, k)),
+                    (None, None) => true,
+                    _ => false,
+                };
                 if kept != nc
                     || other != 0
                     || m.classes.iter().any(|c| !c.has_shape(k))
                     || m.diag_classes.iter().any(|c| !c.has_shape(k))
                     || m.win.is_some() != m.cfg.window.is_some()
+                    || !shrink_ok
                 {
                     return Err(crate::model::damaged(
                         "ew_class",
@@ -1663,6 +1884,7 @@ mod tests {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            shrinkage: None,
         }
     }
 
@@ -3259,3 +3481,7 @@ mod tests {
         assert_eq!(m.solve_failures, 1);
     }
 }
+
+#[cfg(test)]
+#[path = "ewclass_shrink_tests.rs"]
+mod shrink_tests;

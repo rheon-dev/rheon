@@ -778,6 +778,7 @@ fn ew_class_cfg() -> EwClassCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     }
 }
 
@@ -2267,6 +2268,60 @@ pub fn all() -> Vec<Case> {
                 window: WINDOW.0,
                 window_every: WINDOW.1,
                 max_rows_between_snapshots: WINDOW.2,
+                ..ew_class_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Class(3),
+            40
+        ),
+        // Shrinkage (schema 72, docs/PLAN.md task 511): `tied` under Ledoit
+        // and Wolf's, each class's fourth moments and kept Kish size; `full`
+        // under OAS; and a fixed intensity with a given target under a
+        // window.
+        case!(
+            "ew_class_tied_lw",
+            "EwClass",
+            EwClass,
+            EwClass::new(EwClassCfg {
+                covariance: Covariance::Shared,
+                shrinkage: Some(rheon_core::Shrinkage::LedoitWolf),
+                ..ew_class_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Class(3),
+            40
+        ),
+        case!(
+            "ew_class_full_oas",
+            "EwClass",
+            EwClass,
+            EwClass::new(EwClassCfg {
+                shrinkage: Some(rheon_core::Shrinkage::Oas),
+                ..ew_class_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Class(3),
+            40
+        ),
+        case!(
+            "ew_class_fixed_window",
+            "EwClass",
+            EwClass,
+            EwClass::new(EwClassCfg {
+                window: WINDOW.0,
+                window_every: WINDOW.1,
+                max_rows_between_snapshots: None,
+                shrinkage: Some(rheon_core::Shrinkage::Fixed {
+                    intensity: 0.3,
+                    target: Some(
+                        (0..K)
+                            .flat_map(|i| (0..=i).map(move |j| if i == j { 1.0 } else { 0.1 }))
+                            .collect(),
+                    ),
+                }),
                 ..ew_class_cfg()
             })
             .unwrap(),

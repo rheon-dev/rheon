@@ -600,6 +600,8 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             max_rows_between_snapshots,
             window_budget: _,
             closed: _,
+            shrinkage,
+            shrinkage_target,
         } => {
             let cfg = EwClassCfg {
                 n_features: spec.k(),
@@ -614,6 +616,11 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 window: window.as_ref().map(Span::value),
                 window_every: snapshot_every.as_ref().map(Span::value),
                 max_rows_between_snapshots: max_rows_between_snapshots.map(|r| r as usize),
+                shrinkage: crate::spec::shrinkage_of(
+                    shrinkage.as_ref(),
+                    shrinkage_target.as_deref(),
+                    spec.k(),
+                )?,
             };
             Ok(AnyModel::EwClass(Box::new(EwClass::new(cfg)?)))
         }

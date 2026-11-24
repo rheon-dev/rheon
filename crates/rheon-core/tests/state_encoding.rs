@@ -392,3 +392,51 @@ fn a_bins_budget_round_trips_in_both_encodings() {
         "seven fields: the statistic, the refit's count, the anchor, and no budget"
     );
 }
+
+/// `ew_class`'s tail, as `ew_cov`'s (task 511): the window and the
+/// shrinkage each present or absent, in both encodings, the cfg alone and
+/// the model with rows in it.
+#[test]
+fn ew_class_round_trips_with_every_optional_part_present_or_absent() {
+    let shrinks = [
+        None,
+        Some(rheon_core::Shrinkage::LedoitWolf),
+        Some(rheon_core::Shrinkage::Oas),
+        Some(rheon_core::Shrinkage::Fixed {
+            intensity: 0.25,
+            target: Some(vec![2.0, 0.5, 1.0]),
+        }),
+    ];
+    for shrinkage in shrinks {
+        for (window, every, rows) in WINDOWS {
+            if window.is_some() && shrinkage.as_ref().is_some_and(|s| s.needs_fourth()) {
+                continue;
+            }
+            for covariance in [rheon_core::Covariance::Full, rheon_core::Covariance::Shared] {
+                let cfg = rheon_core::EwClassCfg {
+                    n_features: 2,
+                    n_classes: 2,
+                    decay: Decay::Halflife(10.0),
+                    min_weight: 0.0,
+                    covariance,
+                    precision_prior: 0.1,
+                    window,
+                    window_every: every,
+                    max_rows_between_snapshots: rows,
+                    shrinkage: shrinkage.clone(),
+                };
+                let what = format!(
+                    "ew_class {covariance:?} window={window:?} every={every:?} rows={rows:?} shrinkage={shrinkage:?}"
+                );
+                roundtrip(&cfg, &what);
+                let mut m = rheon_core::EwClass::new(cfg).unwrap();
+                for i in 0..10 {
+                    let v = i as f64;
+                    let label = (i % 2) as f64;
+                    OnlineModel::step(&mut m, &[v, -0.5 * v + label], &[Some(label)], v, 1.0);
+                }
+                roundtrip(&m, &what);
+            }
+        }
+    }
+}

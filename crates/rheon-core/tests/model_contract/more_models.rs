@@ -9,6 +9,7 @@ fn ew_class_cfg() -> EwClassCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     }
 }
 

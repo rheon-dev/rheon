@@ -28,6 +28,8 @@ def ew_class(
     snapshot_every: float | Duration | None = None,
     max_rows_between_snapshots: int | None = None,
     window_budget: dict[Literal["thin", "refuse"], float] | None = None,
+    shrinkage: Literal["ledoit_wolf", "oas"] | float | None = None,
+    shrinkage_target: list[list[float]] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A Gaussian classifier on exponentially weighted moments, one set per class.
@@ -113,6 +115,21 @@ def ew_class(
         ``window_budget`` bounds each ring in MiB and thins or refuses past
         the bound. Each is refused without
         ``window_size``.
+    ``shrinkage``, ``shrinkage_target``
+        Shrink each class's covariance toward a target before it is used,
+        as :func:`ew_cov`'s ``shrinkage``: ``"ledoit_wolf"`` or ``"oas"``
+        for an intensity estimated from each class's own moments, toward
+        ``mu_c * I`` with ``mu_c`` the class's mean variance; or a number
+        from 0 to 1 for a fixed intensity, toward ``mu_c * I`` or toward
+        ``shrinkage_target``, a symmetric positive semidefinite matrix in
+        the features' units. ``"tied"`` pools the shrunk class matrices by
+        the priors, scikit-learn's ``LinearDiscriminantAnalysis`` with a
+        ``covariance_estimator``. ``precision_prior`` is still required and
+        added after: a class seen once has no spread and a trace of 0, so
+        shrinkage alone leaves its matrix singular. Refused under
+        ``covariance_type="diag"``, whose classes keep variances alone, and
+        ``"ledoit_wolf"`` beside ``window_size``. Default ``None``: no
+        shrinkage, and the model as without it to the bit.
 
     .. rubric:: Output
 
@@ -165,6 +182,12 @@ def ew_class(
       whose MiB is not above 0;
     - ``closed="both"``, ``snapshot_every``, ``max_rows_between_snapshots``
       or ``window_budget`` without ``window_size``;
+    - a ``shrinkage`` that is neither ``"ledoit_wolf"``, ``"oas"`` nor a
+      number from 0 to 1, a ``shrinkage_target`` beside an estimator's name
+      or without ``shrinkage``, one not square in the features, not
+      symmetric, not finite or not positive semidefinite, ``shrinkage``
+      under ``covariance_type="diag"``, and ``"ledoit_wolf"`` beside
+      ``window_size``;
     - a switch that reads residuals, such as ``emit_sigma``, and
       ``emit_feature_health``.
 
@@ -190,6 +213,11 @@ def ew_class(
         M_c  = diag(C_c) + omega_c I                        ("diag")
         l_c  = ln pi_c - 1/2 ln det M_c - 1/2 (x - mu_c)' M_c^-1 (x - mu_c)
         p_c  = exp(l_c - max_c' l_c') / sum_c' exp(l_c' - max l)
+
+    Under ``shrinkage``, ``C_c`` above is ``(1 - s_c) C_c + s_c T_c``, with
+    ``T_c = (tr C_c / p) I`` or ``shrinkage_target``, and ``s_c`` the class's
+    own intensity, :func:`ew_cov`'s formula on the class's moments, its
+    weights and its rows' fourth moments.
 
     Then the class of the row learns it:
 
@@ -272,6 +300,11 @@ def ew_class(
         "max_rows_between_snapshots": max_rows_between_snapshots,
         "window_budget": window_budget,
     }
+    # Written only when given, as the Rust spec skips them when absent.
+    if shrinkage is not None:
+        model["shrinkage"] = shrinkage
+    if shrinkage_target is not None:
+        model["shrinkage_target"] = shrinkage_target
     if "targets" in common:
         msg = (
             f"spec {quoted(name)}: ew_class() takes no targets, since label names the "

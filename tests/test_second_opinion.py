@@ -5557,3 +5557,83 @@ class TestShrinkageIsScikitLearns:
             s = np.cov(x[:i].T, ddof=0)
             want = 0.75 * s + 0.25 * np.array(target)
             np.testing.assert_allclose(_shrunk_matrix(out, i, p), want, rtol=0, atol=1e-12 * 4)
+
+
+class TestClassShrinkageIsScikitLearns:
+    """``ew_class(shrinkage=...)`` against scikit-learn at unit weights and
+    no decay, the class priors the class proportions: ``tied`` is
+    ``LinearDiscriminantAnalysis(solver="lsqr", covariance_estimator=...)``,
+    which shrinks each class's covariance and pools them by the priors, and
+    ``full`` is each class's ``LedoitWolf`` or ``OAS`` covariance through
+    ``scipy.stats.multivariate_normal.logpdf`` plus ``ln pi_c``, softmaxed.
+    ``precision_prior`` is required and added after shrinkage: at 1e-12 it
+    moves the posteriors by under 1e-12 here.
+
+    Measured on these streams on Linux x86-64, the posteriors agree to
+    2.1e-15 at worst; the bound, 1e-10, leaves room for the ridge and for
+    scikit-learn's ``lstsq`` against the model's Cholesky on another CPU's
+    paths."""
+
+    P, NC = 4, 3
+
+    def _rows(self, n: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+        rng = np.random.default_rng(seed)
+        y = np.arange(n) % self.NC
+        z = rng.normal(0.0, 1.0, (n, self.P))
+        x = z + 0.5 * np.roll(z, 1, axis=1) + y[:, None] * 0.8
+        return x, y
+
+    def _out(self, x: np.ndarray, y: np.ndarray, shape: str, kind: str) -> Any:
+        spec = rp.spec.ew_class(
+            "m",
+            features=[f"x{i}" for i in range(self.P)],
+            label="c",
+            classes=[str(c) for c in range(self.NC)],
+            covariance_type=shape,
+            precision_prior=1e-12,
+            half_life=float("inf"),
+            min_weight=0,
+            shrinkage=0.3 if kind == "fixed" else kind,
+        )
+        cols = {f"x{i}": x[:, i] for i in range(self.P)}
+        cols["c"] = [str(v) for v in y]
+        return rp.ModelBank([spec]).fit_predict(pl.DataFrame(cols))["m"].struct.unnest()
+
+    def _est(self, kind: str):
+        from sklearn.covariance import OAS, LedoitWolf, ShrunkCovariance
+
+        return {
+            "ledoit_wolf": LedoitWolf(),
+            "oas": OAS(),
+            "fixed": ShrunkCovariance(shrinkage=0.3),
+        }[kind]
+
+    @pytest.mark.parametrize("kind", ["ledoit_wolf", "oas", "fixed"])
+    def test_tied_is_lda_with_the_estimator(self, kind):
+        from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+
+        x, y = self._rows(240, 31)
+        out = self._out(x, y, "tied", kind)
+        for i in [30, 31, 90, 239]:
+            lda = LinearDiscriminantAnalysis(solver="lsqr", covariance_estimator=self._est(kind))
+            want = lda.fit(x[:i], y[:i]).predict_proba(x[i : i + 1])[0]
+            got = [out[f"p_{c}"][i] for c in range(self.NC)]
+            np.testing.assert_allclose(got, want, rtol=0, atol=1e-10)
+
+    @pytest.mark.parametrize("kind", ["ledoit_wolf", "oas", "fixed"])
+    def test_full_is_each_class_estimator_through_scipy(self, kind):
+        from scipy.stats import multivariate_normal
+
+        x, y = self._rows(240, 32)
+        out = self._out(x, y, "full", kind)
+        for i in [30, 31, 90, 239]:
+            ell = []
+            for c in range(self.NC):
+                xc = x[:i][y[:i] == c]
+                cov = self._est(kind).fit(xc).covariance_
+                prior = len(xc) / i
+                ell.append(np.log(prior) + multivariate_normal(xc.mean(0), cov).logpdf(x[i]))
+            ell = np.array(ell)
+            want = np.exp(ell - ell.max()) / np.exp(ell - ell.max()).sum()
+            got = [out[f"p_{c}"][i] for c in range(self.NC)]
+            np.testing.assert_allclose(got, want, rtol=0, atol=1e-10)

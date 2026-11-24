@@ -841,6 +841,14 @@ pub enum ModelKind {
         /// MiB (review 2026-09-12, P4).
         #[serde(default)]
         window_budget: Option<WindowBudgetSpec>,
+        /// Shrink each class's covariance ([`rheon_core::EwClassCfg::shrinkage`],
+        /// docs/PLAN.md task 511), as `ew_cov`'s `shrinkage`; refused under
+        /// `"diag"`. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shrinkage: Option<ShrinkSpec>,
+        /// The target of a fixed intensity, as `ew_cov`'s. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shrinkage_target: Option<Vec<Vec<f64>>>,
     },
     /// Sequential test of a sign by betting (docs/ENHANCEMENTS.md E42;
     /// PLAN §11a, task 30): per target, two e-processes, one for "positive"
@@ -1985,6 +1993,40 @@ pub(crate) fn shrinkage_of(
             }))
         }
     }
+}
+
+/// The refusals of a spec's `shrinkage` and `shrinkage_target` for a
+/// model of `k` features (`model` names it in the core's messages): the
+/// parameters' own rules, the model's range and PSD check, and Ledoit and
+/// Wolf's intensity under a window. Each begins with the spec's name.
+pub(crate) fn shrinkage_refusals(
+    name: &str,
+    model: &str,
+    shrinkage: Option<&ShrinkSpec>,
+    target: Option<&[Vec<f64>]>,
+    k: usize,
+    windowed: bool,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    match shrinkage_of(shrinkage, target, k) {
+        Ok(Some(sh)) => {
+            if let Err(e) = sh.validate(model, k) {
+                let e = e.trim_start_matches(model).trim_start_matches(": ");
+                out.push(format!("spec {name:?}: {e}"));
+            }
+            if windowed && sh.needs_fourth() {
+                out.push(format!(
+                    "spec {name:?}: window_size and shrinkage \"ledoit_wolf\" cannot both be set \
+                     yet: the window does not cut the rows' fourth moments the intensity reads. \
+                     Use shrinkage \"oas\" or a fixed intensity under a window, or leave out \
+                     window_size."
+                ));
+            }
+        }
+        Ok(None) => {}
+        Err(e) => out.push(format!("spec {name:?}: {e}")),
+    }
+    out
 }
 
 /// `ar`'s lags: the order `p`, for `1..=p`, or the lags themselves.

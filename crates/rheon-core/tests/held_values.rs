@@ -1291,6 +1291,7 @@ fn ew_class_classifies_the_same_at_every_level() {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            shrinkage: None,
         })
         .unwrap()
     };
