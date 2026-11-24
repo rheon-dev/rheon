@@ -176,6 +176,7 @@ _GROWTH: list[dict[str, object]] = [
             "emit_error_inflation",
             "emit_se_coef",
             "emit_clocks",
+            "emit_target_weight",
             "emit_sigma",
             "emit_zscore",
             "emit_selected",

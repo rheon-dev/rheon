@@ -213,6 +213,7 @@ def describe_api(cli: Path | None = None) -> str:
                 emit_error_inflation=True,
                 emit_se_coef=True,
                 emit_clocks=True,
+                emit_target_weight=True,
                 emit_calibration=True,
                 emit_breaks=True,
                 emit_robust_se=True,

@@ -578,6 +578,11 @@ OPTIONAL: list[tuple[str, str]] = [
         " and the table of its two fields after this one",
     ),
     (
+        "`emit_target_weight`, every model's with a target: `weight_<t>`, the weight `<t>`'s"
+        " `min_weight` reads, beside `weight_sum`",
+        "[Warm-up gates](MODELS.md#warm-up-gates)",
+    ),
+    (
         "`emit_huber_scale`, `huber`'s: `huber_scale_<t>`, the scale each row's cut is drawn in",
         "[`huber`'s table](#huber), and its [entry](MODELS.md#huber--robust-regression)",
     ),

@@ -1023,6 +1023,7 @@ def _common(
     emit_error_inflation: bool = False,
     emit_se_coef: bool = False,
     emit_clocks: bool = False,
+    emit_target_weight: bool = False,
     coef_every: float | Duration | None = None,
     max_rows_between_coefs: int | None = None,
     emit_sigma: bool = False,
@@ -1140,6 +1141,10 @@ def _common(
         spec["held_overflow"] = held_overflow
     if drift_kind is not None:
         spec["drift_kind"] = drift_kind
+    # Anything but the default goes through, so a value that is not a bool
+    # is refused as `emit_clocks=1` is.
+    if emit_target_weight is not False:
+        spec["emit_target_weight"] = emit_target_weight
     if drift_options is not None:
         spec["drift_options"] = dict(drift_options)
     validate_spec(_json(spec))

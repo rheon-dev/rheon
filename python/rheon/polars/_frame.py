@@ -833,6 +833,9 @@ _ORDER_FREE_ANY = frozenset(
         # The clock fields are read from the state and change no number a
         # fit produces (task 152).
         "emit_clocks",
+        # Each target's own weight, read from the state as `weight_sum` is
+        # (task 568).
+        "emit_target_weight",
         "group",
         "clock",
         "gap_cap",

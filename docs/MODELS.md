@@ -267,7 +267,21 @@ weight of the rows it was present on, so an often-null target reports
 later than the others. For `rls`, which learns a row only when every target
 is present, that is the weight of the rows it learned from. The
 `weight_sum` field is the shared weight either way. To set one threshold
-per target, give `min_weight` a list. The default depends on the model:
+per target, give `min_weight` a list.
+
+**`emit_target_weight=True` writes the weight each target's gate reads, as
+`weight_<target>` beside `weight_sum`.** A row whose target is null teaches
+that target nothing, so it adds to `weight_sum` and not to that target's
+weight. A row can then show `weight_sum` above `min_weight` together with
+`withheld_reason = "below_min_weight"`, and `weight_<target>` is the number
+below the floor. It has `weight_sum`'s meaning: the weight before the row and
+before its own decay, inside the window under one. Every model with a target
+keeps a weight per target, except `seqtest`, `hawkes` and `dcc`. Those three
+gate every target on the shared weight, so their `weight_<target>` is
+`weight_sum`. A model with no target, and `marginal`, which writes no
+prediction to withhold, refuse the switch. To keep a row out of the learning
+without dropping it, give it weight 0 in the `weight` column, which is the
+library's learn mask: the row is scored and teaches nothing. The default depends on the model:
 
 | default | models |
 |---|---|

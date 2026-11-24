@@ -59,6 +59,7 @@ class CommonKwargs(TypedDict, total=False):
     emit_error_inflation: bool
     emit_se_coef: bool
     emit_clocks: bool
+    emit_target_weight: bool
     coef_every: float | Duration | None
     max_rows_between_coefs: int | None
     emit_sigma: bool

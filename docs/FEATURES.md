@@ -220,7 +220,7 @@ parameters are on its builder's reference page.
 | the clock's policy | `session`, `session_gap`, `restart_after_step_back` | what a session boundary and a step back do | [Handle sessions, gaps and steps back](how-to/handle-sessions-gaps-and-steps-back.md) |
 | groups | `group`, `group_close` | one model per value of a column, and when a group closes | [Fit one model per group](how-to/fit-one-model-per-group.md) · [Close groups](how-to/close-groups.md) |
 | weights | `weight` | how much each row counts | [Weight rows](how-to/weight-rows.md) |
-| warm-up | `min_weight`, `min_settled_frac`, `max_error_inflation`, `emit_error_inflation` | when a model has seen enough to report | [Warm-up gates](MODELS.md#warm-up-gates) · [Decide when a model is ready](how-to/decide-when-a-model-is-ready.md) |
+| warm-up | `min_weight`, `min_settled_frac`, `max_error_inflation`, `emit_error_inflation`, `emit_target_weight` | when a model has seen enough to report, and each target's weight its floor reads | [Warm-up gates](MODELS.md#warm-up-gates) · [Decide when a model is ready](how-to/decide-when-a-model-is-ready.md) |
 | targets known late | `embargo`, `label_clock`, `max_held_rows`, `held_overflow` | when each row's target is learned, and how many rows may wait | [Learn targets known late](how-to/learn-targets-known-late.md) |
 | coefficients | `coef_every`, `max_rows_between_coefs`, `emit_se_coef` | which rows carry the coefficients, and their standard errors | [Read the coefficients](how-to/read-the-coefficients.md) · [Check standard errors](how-to/check-standard-errors.md) |
 | clocks in the output | `emit_clocks` | each row's clock, and the clock it was learned at | [Learn targets known late](how-to/learn-targets-known-late.md#give-every-row-the-same-delay) |
