@@ -6047,6 +6047,462 @@ ideal = 0.0
 n = 50
 floor = 40.0
 
+[group."second_opinion_garch.arch_grids"]
+tests = [
+    "tests/test_second_opinion_garch.py::test_at_100k_rows_the_free_forms_are_the_batch_fit[egarch]",
+    "tests/test_second_opinion_garch.py::test_at_100k_rows_the_free_forms_are_the_batch_fit[figarch]",
+    "tests/test_second_opinion_garch.py::test_at_100k_rows_the_free_forms_are_the_batch_fit[garch]",
+    "tests/test_second_opinion_garch.py::test_at_100k_rows_the_free_forms_are_the_batch_fit[garch_skewt]",
+    "tests/test_second_opinion_garch.py::test_at_100k_rows_the_free_forms_are_the_batch_fit[garch_t]",
+    "tests/test_second_opinion_garch.py::test_at_100k_rows_the_free_forms_are_the_batch_fit[gjr]",
+    "tests/test_second_opinion_garch.py::test_at_100k_rows_the_free_forms_are_the_batch_fit[gjr_t]",
+    "tests/test_second_opinion_garch.py::test_fifty_seeds_a_form_against_arch[egarch]",
+    "tests/test_second_opinion_garch.py::test_fifty_seeds_a_form_against_arch[egarch_985]",
+    "tests/test_second_opinion_garch.py::test_fifty_seeds_a_form_against_arch[figarch]",
+    "tests/test_second_opinion_garch.py::test_fifty_seeds_a_form_against_arch[garch]",
+    "tests/test_second_opinion_garch.py::test_fifty_seeds_a_form_against_arch[garch_skewt]",
+    "tests/test_second_opinion_garch.py::test_fifty_seeds_a_form_against_arch[garch_t]",
+    "tests/test_second_opinion_garch.py::test_fifty_seeds_a_form_against_arch[gjr]",
+    "tests/test_second_opinion_garch.py::test_fifty_seeds_a_form_against_arch[gjr_t]",
+    "tests/test_second_opinion_garch.py::test_fifty_seeds_of_the_targeted_form",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-egarch-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-egarch-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-egarch-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-egarch_985-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-egarch_985-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-egarch_985-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-figarch-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-garch-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-garch-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-garch-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-garch_skewt-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-garch_skewt-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-garch_skewt-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-garch_t-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-garch_t-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-garch_t-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-gjr-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-gjr-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-gjr-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-gjr_t-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-gjr_t-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[hi-gjr_t-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-egarch-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-egarch-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-egarch-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-garch-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-garch-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-garch-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-garch_skewt-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-garch_skewt-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-garch_skewt-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-garch_t-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-garch_t-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-garch_t-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-gjr-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-gjr-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-gjr-500]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-gjr_t-1000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-gjr_t-2000]",
+    "tests/test_second_opinion_garch.py::test_no_start_is_short_of_arch[lo-gjr_t-500]",
+    "tests/test_second_opinion_garch.py::test_the_wait_is_arch_likelihood_ratio_test_on_twenty_seeds",
+]
+oracles = { "arch" = "9.0.0" }
+dataset = ""
+
+[group."second_opinion_glm.glum_twenty"]
+tests = [
+    "tests/test_second_opinion_glm.py::test_twenty_coefficients[gamma-100000]",
+    "tests/test_second_opinion_glm.py::test_twenty_coefficients[gamma-10000]",
+    "tests/test_second_opinion_glm.py::test_twenty_coefficients[poisson-100000]",
+    "tests/test_second_opinion_glm.py::test_twenty_coefficients[poisson-10000]",
+    "tests/test_second_opinion_glm.py::test_twenty_coefficients[tweedie-100000]",
+    "tests/test_second_opinion_glm.py::test_twenty_coefficients[tweedie-10000]",
+]
+oracles = { "glum" = "3.5.0", "statsmodels" = "0.15.0" }
+dataset = ""
+
+[case."second_opinion_garch.arch_grids.egarch_985_d"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.egarch_985_excess_over_t"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.egarch_985_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.egarch_d"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.egarch_d_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.egarch_excess_over_t"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.egarch_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.egarch_gap_se_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.figarch_d"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.figarch_d_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.figarch_excess_over_t"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.figarch_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.figarch_gap_se_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_d"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_d_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_excess_over_t"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_gap_se_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_skewt_d"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_skewt_d_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_skewt_excess_over_t"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_skewt_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_skewt_gap_se_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_t_d"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_t_d_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_t_excess_over_t"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_t_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.garch_t_gap_se_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.gjr_d"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.gjr_d_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.gjr_excess_over_t"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.gjr_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.gjr_gap_se_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.gjr_t_d"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.gjr_t_d_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.gjr_t_excess_over_t"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.gjr_t_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.gjr_t_gap_se_100k"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_egarch_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_egarch_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_egarch_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_egarch_985_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_egarch_985_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_egarch_985_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_figarch_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_garch_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_garch_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_garch_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_garch_skewt_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_garch_skewt_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_garch_skewt_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_garch_t_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_garch_t_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_garch_t_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_gjr_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_gjr_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_gjr_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_gjr_t_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_gjr_t_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_hi_gjr_t_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_egarch_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_egarch_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_egarch_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_garch_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_garch_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_garch_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_garch_skewt_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_garch_skewt_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_garch_skewt_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_garch_t_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_garch_t_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_garch_t_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_gjr_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_gjr_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_gjr_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_gjr_t_1000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_gjr_t_2000_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.start_lo_gjr_t_500_short_in_set"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.targeted_d"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.targeted_excess_over_refit"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.targeted_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_garch.arch_grids.wait_clear_share"]
+ideal = 1.0
+n = 1
+
+[case."second_opinion_garch.arch_grids.wait_differs_from_arch"]
+ideal = 0.0
+n = 1
+tolerance = 0.0
+
+[case."second_opinion_glm.glum_twenty.gamma_100000_to_glum"]
+ideal = 0.0
+n = 5
+
+[case."second_opinion_glm.glum_twenty.gamma_100000_to_statsmodels"]
+ideal = 0.0
+n = 5
+
+[case."second_opinion_glm.glum_twenty.gamma_10000_to_glum"]
+ideal = 0.0
+n = 5
+
+[case."second_opinion_glm.glum_twenty.gamma_10000_to_statsmodels"]
+ideal = 0.0
+n = 5
+
+[case."second_opinion_glm.glum_twenty.poisson_100000_to_glum"]
+ideal = 0.0
+n = 5
+
+[case."second_opinion_glm.glum_twenty.poisson_100000_to_statsmodels"]
+ideal = 0.0
+n = 5
+
+[case."second_opinion_glm.glum_twenty.poisson_10000_to_glum"]
+ideal = 0.0
+n = 5
+
+[case."second_opinion_glm.glum_twenty.poisson_10000_to_statsmodels"]
+ideal = 0.0
+n = 5
+
+[case."second_opinion_glm.glum_twenty.tweedie_100000_to_glum"]
+ideal = 0.0
+n = 5
+
+[case."second_opinion_glm.glum_twenty.tweedie_100000_to_statsmodels"]
+ideal = 0.0
+n = 5
+
+[case."second_opinion_glm.glum_twenty.tweedie_10000_to_glum"]
+ideal = 0.0
+n = 5
+
+[case."second_opinion_glm.glum_twenty.tweedie_10000_to_statsmodels"]
+ideal = 0.0
+n = 5
+
 # --- raises
 
 [[raised]]

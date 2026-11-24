@@ -34,6 +34,7 @@ import polars as pl
 import pytest
 import statsmodels.api as sm
 
+import ledger
 from rheon import polars as rp
 
 TIER = "mixed"
@@ -241,13 +242,24 @@ GRID_TOL = {
 }
 
 
-@pytest.mark.extended(reason="20 coefficients, 100,000 rows, two batch fits a case")
+# Two batch fits of up to 100,000 rows a seed: the oracle tier
+# (`oracle_grid`), which CI shards and the ledger holds (`oracles.toml`), not
+# the full tier every workflow runs (PLAN 578j, CI-1).
+ledger.guard(
+    "glum_twenty",
+    lambda: [online(family, *design(family, 20, 2_000, 0)) for family, _ in sorted(GRID_TOL)],
+    oracles=["glum", "statsmodels"],
+)
+
+
+@pytest.mark.oracle_grid(reason="20 coefficients, 100,000 rows, two batch fits a seed")
 @pytest.mark.parametrize(("family", "n"), sorted(GRID_TOL))
-@pytest.mark.parametrize("seed", range(5))
-def test_twenty_coefficients(family, n, seed):
-    to_glum, to_sm = gaps(family, 20, n, seed)
+def test_twenty_coefficients(family, n):
+    got = np.array([gaps(family, 20, n, seed) for seed in range(5)])
+    ledger.record("glum_twenty", f"{family}_{n}_to_glum", got[:, 0])
+    ledger.record("glum_twenty", f"{family}_{n}_to_statsmodels", got[:, 1])
     tol = GRID_TOL[(family, n)]
-    assert to_glum <= tol and to_sm <= tol, (to_glum, to_sm)
+    assert got.max() <= tol, got
 
 
 @pytest.mark.parametrize("family", ["poisson", "gamma"])

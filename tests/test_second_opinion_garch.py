@@ -78,6 +78,7 @@ from scipy.optimize import minimize
 from scipy.signal import lfilter
 from scipy.stats import chi2
 
+import ledger
 from rheon import polars as rp
 
 TIER = "mixed"
@@ -262,7 +263,27 @@ def test_two_seeds_a_form_are_arch_to_first_order(form):
         assert c["excess"] <= 4.0 * c["T"], (form, seed, c["excess"], c["T"])
 
 
-# --- the extended grids: 50 seeds a form ------------------------------------
+# --- the grids: 50 seeds a form ----------------------------------------------
+#
+# Each grid runs thousands of `arch` fits, minutes a case, so they are the
+# oracle tier (`oracle_grid`), which CI shards and the ledger holds
+# (`oracles.toml`): marked `extended`, they ran in every leg of every
+# workflow that runs the full tier, and under Intel SDE's emulation, and no
+# ledger ratcheted their numbers (PLAN 578j, CI-1).
+
+
+def _guard_outputs() -> list:
+    """The bank's variances, two seeds a form at 2,000 rows, and a targeted
+    form's: the library's outputs on the grids' inputs, with no `arch` in
+    them (`tests/ledger.py`)."""
+    out = [
+        bank_run(form, simulate(form, 2_000, seed))[0] for form in sorted(FORMS) for seed in (0, 1)
+    ]
+    out.append(bank_run("garch", simulate("garch", 2_000, 0), targeting=True)[0])
+    return out
+
+
+ledger.guard("arch_grids", _guard_outputs, oracles=["arch"])
 
 SEEDS = range(50)
 #: Within 2 SE on every parameter: measured 50 of 50 on every form (both
@@ -270,7 +291,7 @@ SEEDS = range(50)
 FLOOR = 46
 
 
-@pytest.mark.extended(reason="50 seeds a form at 10,000 rows, an arch fit each")
+@pytest.mark.oracle_grid(reason="50 seeds a form at 10,000 rows, an arch fit each")
 @pytest.mark.parametrize("form", sorted(FORMS))
 def test_fifty_seeds_a_form_against_arch(form):
     cs = [compare(form, simulate(form, 10_000, s)) for s in SEEDS]
@@ -278,6 +299,9 @@ def test_fifty_seeds_a_form_against_arch(form):
     within = sum(c["within2"] for c in cs)
     ratio = np.array([c["excess"] / c["T"] for c in cs])
     d = np.array([c["D"] for c in cs])
+    ledger.record("arch_grids", f"{form}_excess_over_t", ratio)
+    ledger.record("arch_grids", f"{form}_d", d)
+    ledger.record("arch_grids", f"{form}_gap_se", [np.max(np.abs(c["gap"])) for c in cs])
     assert within >= FLOOR, (form, within)
     assert np.median(ratio) <= 1.5, (form, np.median(ratio))
     assert ratio.max() <= 4.0, (form, ratio.max())
@@ -288,7 +312,7 @@ def test_fifty_seeds_a_form_against_arch(form):
 FREE = sorted(f for f in FORMS if f != "egarch_985")
 
 
-@pytest.mark.extended(reason="50 seeds a form at 100,000 rows, two arch fits each")
+@pytest.mark.oracle_grid(reason="50 seeds a form at 100,000 rows, two arch fits each")
 @pytest.mark.parametrize("form", FREE)
 def test_at_100k_rows_the_free_forms_are_the_batch_fit(form):
     """At 100,000 rows: median D at most k/32, its 90th percentile at most
@@ -304,6 +328,8 @@ def test_at_100k_rows_the_free_forms_are_the_batch_fit(form):
     g = np.median(np.abs(np.array([c["gap"] for c in big])))
     g10 = np.median(np.abs(np.array([c["gap"] for c in small])))
     print(f"{form}: median |gap| {g10:.3f} at 10k, {g:.3f} at 100k, ratio {g / g10:.2f}")
+    ledger.record("arch_grids", f"{form}_d_100k", d)
+    ledger.record("arch_grids", f"{form}_gap_se_100k", [np.median(np.abs(c["gap"])) for c in big])
     assert np.median(d) <= k / 32.0, (form, np.median(d))
     assert np.percentile(d, 90) <= k / 8.0, (form, np.percentile(d, 90))
     assert g <= 0.25, (form, g)
@@ -451,13 +477,16 @@ def test_the_targeted_form_is_arch_targeted_fit_on_two_seeds():
         assert c["excess_over_refit"] <= 6.0, (seed, c["excess_over_refit"])
 
 
-@pytest.mark.extended(reason="50 seeds at 10,000 rows, an arch fit and 80 prefix refits each")
+@pytest.mark.oracle_grid(reason="50 seeds at 10,000 rows, an arch fit and 80 prefix refits each")
 def test_fifty_seeds_of_the_targeted_form():
     cs = [vt_compare(s) for s in SEEDS]
     within = sum(bool(np.all(np.abs(c["gap"]) <= 2.0)) for c in cs)
     gaps = np.abs(np.array([c["gap"] for c in cs]))
     d = np.array([c["D"] for c in cs])
     over = np.array([c["excess_over_refit"] for c in cs])
+    ledger.record("arch_grids", "targeted_gap_se", gaps.max(axis=1))
+    ledger.record("arch_grids", "targeted_d", d)
+    ledger.record("arch_grids", "targeted_excess_over_refit", over)
     assert within >= FLOOR, within
     assert np.median(gaps) <= 0.5, np.median(gaps)
     assert np.percentile(d, 90) <= 3.0, np.percentile(d, 90)
@@ -661,7 +690,7 @@ START_CELLS = [
 ]
 
 
-@pytest.mark.extended(reason="50 seeds a truth and a start, a bank and two arch fits each")
+@pytest.mark.oracle_grid(reason="50 seeds a truth and a start, a bank and two arch fits each")
 @pytest.mark.parametrize(("truth", "form", "start"), START_CELLS)
 def test_no_start_is_short_of_arch(truth, form, start):
     """Fifty seeds a truth and a start: from 1,000 rows no start is short of
@@ -673,6 +702,7 @@ def test_no_start_is_short_of_arch(truth, form, start):
     gots = [start_of(truth, form, series_of(truth, form, 10_000, s), start) for s in SEEDS]
     shorts = np.array([g["short_in_set"] for g in gots if g["short"] is not None])
     assert len(shorts) == len(gots), "every realistic series starts within 10,000 rows"
+    ledger.record("arch_grids", f"start_{truth}_{form}_{start}_short_in_set", shorts)
     outside = [g for g in gots if g["short"] > SHORT_IN_SET and g["arch_in_set"]]
     if start >= 1000:
         assert shorts.max() <= SHORT_IN_SET, (truth, form, start, shorts.max())
@@ -749,7 +779,9 @@ def test_the_wait_is_arch_likelihood_ratio_test():
     assert clear >= n // 2 and not differ, (clear, n, differ)
 
 
-@pytest.mark.extended(reason="20 seeds of 19 truths at 500 rows, two arch fits each")
+@pytest.mark.oracle_grid(reason="20 seeds of 19 truths at 500 rows, two arch fits each")
 def test_the_wait_is_arch_likelihood_ratio_test_on_twenty_seeds():
     clear, n, differ = lr_agreement(lr_cases(range(20)))
+    ledger.record("arch_grids", "wait_differs_from_arch", [len(differ)], exact=True)
+    ledger.record("arch_grids", "wait_clear_share", [clear / n], ideal=1.0)
     assert clear >= n * 3 // 4 and not differ, (clear, n, differ)
