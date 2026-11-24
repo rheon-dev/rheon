@@ -19,8 +19,9 @@ row:
   definition: no maintained library computes the tabular CUSUM (``pyspc``
   fixes ``k`` at half a deviation, starts no sum again after a signal and
   needs matplotlib; R's ``qcc`` does not run on this machine's arm64 R).
-  ``crates/rheon-core/src/drift/cusum.rs`` holds the scheme's published
-  average run lengths.
+  Its average run length on a null stream is held to the published tables
+  (Montgomery's Tables 9.3 and 9.4), with Siegmund's approximation checking
+  the entries as copied.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from scipy.stats import ks_2samp
 
 from rheon import polars as rp
 
-TIER = "essential"
+TIER = "mixed"
 
 N = 4000
 
@@ -340,6 +341,162 @@ def test_a_cusum_default_threshold_is_five():
     b = _fit(df, drift_kind="cusum", drift_threshold=5.0)["drift_y"]
     assert a.equals(b)
     assert not a.equals(_fit(df, drift_kind="cusum", drift_threshold=4.0)["drift_y"])
+
+
+# --- CUSUM, its average run length against the published tables ----------------
+
+#: The in-control average run length (ARL) of the two-sided tabular CUSUM on
+#: standard normal errors, from D. C. Montgomery, *Introduction to
+#: Statistical Quality Control*, 6th ed. (Wiley, 2009), chapter 9: Table 9.3
+#: (``k = 1/2``; the shift-0 row, 168 at ``h = 4`` and 465 at ``h = 5``) and
+#: Table 9.4 (the ``h`` that gives an ARL of 370 at each ``k``: 8.01 at ``k =
+#: 1/4``, 2.52 at ``k = 1``). Each entry is ``(k, h, ARL, how far the entry
+#: can be from the scheme it names)``: half a unit in the ARL's last printed
+#: digit for Table 9.3; for Table 9.4, whose ``h`` is printed to two
+#: decimals, half a unit of the ARL's printed digit plus what half a unit in
+#: ``h``'s last digit (0.005) moves an ARL of 370, by Siegmund's
+#: approximation's slope (``cusum_h_rounding`` below).
+CUSUM_TABLES = [
+    (0.5, 4.0, 168.0, 0.5),
+    (0.5, 5.0, 465.0, 0.5),
+    (0.25, 8.01, 370.0, None),
+    (1.0, 2.52, 370.0, None),
+]
+
+#: Siegmund's (1985) approximation for one side, as Montgomery gives it in the
+#: same chapter, checked against his worked example: at ``k = 1/2`` and ``h =
+#: 5`` each side's ARL is 938.2 and the two-sided one 469.1, to the printed
+#: tenth.
+SIEGMUND_EXAMPLE = (0.5, 5.0, 938.2, 469.1)
+
+
+def siegmund_arl(k: float, h: float, shift: float = 0.0) -> float:
+    """The two-sided CUSUM's ARL by Siegmund's approximation: each side's
+    ``(exp(-2 D b) + 2 D b - 1) / (2 D^2)``, ``D = shift - k`` for the upper
+    sum and ``-shift - k`` for the lower, ``b = h + 1.166``, and the two
+    sides combined as ``1 / ARL = 1 / ARL+ + 1 / ARL-``."""
+    b = h + 1.166
+
+    def side(d: float) -> float:
+        return (np.exp(-2.0 * d * b) + 2.0 * d * b - 1.0) / (2.0 * d * d)
+
+    return 1.0 / (1.0 / side(shift - k) + 1.0 / side(-shift - k))
+
+
+def cusum_h_rounding(k: float, h: float, arl: float) -> float:
+    """What half a unit in the last printed digit of ``h`` (0.005) can move an
+    ARL of ``arl``: its relative change over that step by Siegmund's
+    approximation, the larger of the two directions, times ``arl``."""
+    at = siegmund_arl(k, h)
+    return arl * max(siegmund_arl(k, h + 0.005) / at - 1.0, 1.0 - siegmund_arl(k, h - 0.005) / at)
+
+
+#: The rows of the null stream, fed to the bank a million at a time.
+ARL_ROWS = 6_000_000
+ARL_CHUNK = 1_000_000
+
+
+def _null_stream(n: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """A target whose standardized error, as the bank reads it, is a standard
+    normal draw on every row it reads, and that scale before each row.
+
+    Against a feature that is always 0 and no intercept, the prediction is 0
+    and the residual the target itself. Its scale before row ``t`` is the
+    root mean square of the residuals before it (no decay): the bank folds
+    no residual of row 0, which it cannot predict, so the scale before row 2
+    is ``|y_1|`` and row 2 is the first the detector reads. So ``y_0 = y_1 =
+    1`` and ``y_t = s_t z_t`` from row 2 on, ``z`` the draws and ``s_t^2 =
+    mean(y_1..y_{t-1}^2)``, whose recursion ``s_{t+1}^2 = s_t^2 (m + z_t^2) /
+    (m + 1)``, ``m = t - 1`` rows folded before row ``t``, is a running
+    product, taken as a sum of logs."""
+    z = np.random.default_rng(seed).standard_normal(n)
+    m = np.arange(1, n - 2, dtype=float)
+    logs = np.concatenate([[0.0], np.cumsum(np.log((m + z[2:-1] ** 2) / (m + 1.0)))])
+    scale = np.full(n, np.nan)
+    scale[2:] = np.exp(0.5 * logs)
+    y = np.ones(n)
+    y[2:] = scale[2:] * z[2:]
+    return y, scale
+
+
+@pytest.mark.extended(reason="6,000,000 rows through four CUSUMs, for their average run lengths")
+def test_the_cusums_average_run_length_is_the_published_tables():
+    """Page's (1954) scheme on a null stream runs to a false alarm, on
+    average, as long as the published tables say. The bank reads a residual
+    over its scale before the row, on a row clock: on the stream above that
+    is a standard normal draw, so each run between flags (both sums start
+    again from 0 at each) is one draw of the in-control run length. The
+    estimate is the mean run, its standard error the runs' standard
+    deviation over the root of their count. The tolerance is the table's
+    own precision plus four standard errors; never what this seed gave.
+
+    Measured 2026-11-24 (seed 1508, aarch64, Linux), runs, ARL (standard
+    error) against the table within the tolerance: ``h = 4``, 35,682 runs,
+    168.1 (0.88) against 168 within 4.0; ``h = 5``, 12,938, 463.7 (3.98)
+    against 465 within 16.4; ``k = 1/4``, 16,215, 370.0 (2.79) against 370
+    within 12.6; ``k = 1``, 16,118, 372.2 (2.94) against 370 within 16.0."""
+    y, scale = _null_stream(ARL_ROWS, seed=1508)
+    specs = [
+        rp.spec.rls(
+            f"c{i}",
+            features=["x"],
+            targets=["y"],
+            half_life=float("inf"),
+            fit_intercept=False,
+            min_weight=0.0,
+            emit_sigma=i == 0,
+            emit_drift=True,
+            drift_kind="cusum",
+            drift_delta=k,
+            drift_threshold=h,
+        )
+        for i, (k, h, _, _) in enumerate(CUSUM_TABLES)
+    ]
+    bank = rp.ModelBank(specs)
+    flags: list[list[np.ndarray]] = [[] for _ in CUSUM_TABLES]
+    for start in range(0, ARL_ROWS, ARL_CHUNK):
+        rows = slice(start, start + ARL_CHUNK)
+        out = bank.fit_predict(pl.DataFrame({"x": np.zeros(ARL_CHUNK), "y": y[rows]}))
+        first = out["c0"].struct.unnest()
+        # The construction, not the tolerance: the bank's scale is the one
+        # the stream was built on (a running mean of up to 6e6 squares, so
+        # to n u), and its prediction 0.
+        assert (first["pred_y"].drop_nulls() == 0.0).all()
+        sigma = first["sigma_y"].to_numpy()
+        read = np.isfinite(scale[rows])
+        np.testing.assert_allclose(sigma[read], scale[rows][read], rtol=1e-8)
+        for i in range(len(CUSUM_TABLES)):
+            hit = out[f"c{i}"].struct.field("drift_y").fill_null(False).to_numpy()
+            flags[i].append(np.flatnonzero(hit) + start)
+    # Rows 0 and 1 are not read; the first run starts at row 2.
+    for (k, h, table, precision), hit in zip(CUSUM_TABLES, flags, strict=True):
+        runs = np.diff(np.concatenate([[1], *hit]))
+        arl = runs.mean()
+        se = runs.std(ddof=1) / np.sqrt(len(runs))
+        if precision is None:
+            precision = 0.5 + cusum_h_rounding(k, h, table)
+        tol = precision + 4.0 * se
+        print(
+            f"k={k} h={h}: {len(runs)} runs, ARL {arl:.1f} (se {se:.2f}) against the table's "
+            f"{table:g} within {tol:.2f}; Siegmund {siegmund_arl(k, h):.1f}"
+        )
+        assert abs(arl - table) <= tol, (k, h, arl, se, table, tol)
+
+
+def test_siegmunds_approximation_is_the_published_worked_example_and_near_the_tables():
+    """The approximation as written above gives Montgomery's worked example
+    to its printed tenth, and is within 1% of each Table 9.3 entry and of
+    Table 9.4's at ``k = 1/4``: a check that those entries were copied
+    right. At ``k = 1`` it reads 396 against the table's 370, which is the
+    approximation's error there (a simulation of 400,000 runs, 2026-11-24,
+    gave 371.9 with a standard error of 0.6), so that entry is not held to
+    it."""
+    k, h, side, both = SIEGMUND_EXAMPLE
+    assert siegmund_arl(k, h) == pytest.approx(both, abs=0.05)
+    assert 2.0 * siegmund_arl(k, h) == pytest.approx(side, abs=0.05)
+    for k, h, table, _ in CUSUM_TABLES:
+        if k < 1.0:
+            assert siegmund_arl(k, h) == pytest.approx(table, rel=0.01), (k, h)
 
 
 # --- every kind: chunks, a save mid-stream, zero-weight rows -------------------
