@@ -241,7 +241,10 @@ pub use isotonic::{
     ISOTONIC_POINT_BYTES, ISOTONIC_ROW_BYTES, Isotonic, IsotonicCfg,
     OutOfBounds as IsotonicOutOfBounds,
 };
-pub use kalman::{CovarianceForm, KALMAN_MAX_HORIZONS, Kalman, KalmanCfg};
+pub use kalman::{
+    CovarianceForm, KALMAN_MAX_HORIZONS, Kalman, KalmanCfg, SMOOTH_MIN_WEIGHT, SMOOTH_STOOD,
+    SMOOTH_UNSEEN, Smoothed, SmoothedRow,
+};
 pub use lasso::{Lasso, LassoCfg};
 pub use margbins::{BinCfg, BinRule, BinStat};
 pub(crate) use margbins::{MarginalBins, edges_from};
@@ -1057,6 +1060,10 @@ pub use window::{
 ///   kept `v71/hawkes_window` and `v71/hawkes_clock_window` go on to the bit
 ///   and convert to the current bytes. The form with `last` above 0 is the
 ///   case `hawkes_window_quiet`.
+///   Also at 72, before any release carried it (2026-11-24): `kalman` may
+///   carry a fixed-lag smoother, its ring under `smoother`, and a bank's
+///   last row the smoother's fields, each written only where a spec sets
+///   `smooth_lag`, so no state without one moved.
 pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`

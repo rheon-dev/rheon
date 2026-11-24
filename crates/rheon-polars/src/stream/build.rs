@@ -299,6 +299,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             standardize,
             covariance_form,
             horizons,
+            ..
         } => {
             let cfg = KalmanCfg {
                 horizons: horizons
@@ -332,7 +333,10 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 // (docs/PLAN.md task 278); a state saved before keeps its own.
                 noise_units: true,
             };
-            let model = Kalman::new(cfg)?.with_covariance_form(*covariance_form)?;
+            let mut model = Kalman::new(cfg)?.with_covariance_form(*covariance_form)?;
+            if let Some(lag) = spec.smooth_lag() {
+                model = model.with_smoother(lag, spec.emit_smoothed_se())?;
+            }
             Ok(AnyModel::Kalman(Box::new(model)))
         }
         ModelKind::Huber { .. } => huber_model(spec, decay),

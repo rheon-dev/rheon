@@ -28,6 +28,9 @@ def kalman(
     standardize: bool = True,
     covariance_form: Literal["covariance", "square_root"] = "covariance",
     forecast_spans: list[float | Duration] | dict[str, float | Duration] | None = None,
+    smooth_lag: int | None = None,
+    emit_smoothed_se: bool = False,
+    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A regression whose coefficients drift, tracked by a Kalman filter.
@@ -177,6 +180,31 @@ def kalman(
         never counts of rows: the filter's drift and reversion are per clock
         unit. At most 64, each finite and 0 or more; a name must not begin
         with ``"sum"``. Default none.
+    ``smooth_lag``
+        A fixed-lag smoother of ``L`` observations, an integer of at least 1:
+        on the row that completes ``L`` observations of a target after an
+        earlier one, the coefficients at that earlier observation estimated
+        from every row up to this one, which the filter's ``coef`` could only
+        estimate from the rows up to it (*The smoother* in Notes). Default
+        none, no smoother. An observation is a row on which the target is
+        present at a weight above 0, so a row of weight 0 or a null target
+        counts in no lag. The smoothed value is never fed back: every
+        prediction is the filter's, to the bit. Refused under
+        ``covariance_form="square_root"``, and beside ``embargo`` or
+        ``label_clock``, which release several held rows on one row whose
+        values would need the same line.
+    ``emit_smoothed_se``
+        The smoothed coefficients' standard errors beside them, in
+        ``smoothed_se_coef``. Default ``False``. Only with ``smooth_lag``.
+    ``max_state_bytes``
+        The bytes a group's smoothers may hold in a state file, for every
+        target and every ``half_life`` of a grid: default 262144 (256 KB), at most 67108864
+        (64 MiB). The ring holds ``L`` slots of ``k ** 2`` numbers and more a
+        covariance, ``k`` the coefficients, so its size is known from the
+        settings, and a spec past the cap is refused before a row is read,
+        naming the bytes. One target with 21 coefficients and ``L = 100``
+        takes about 600 KB with the standard errors. Only with
+        ``smooth_lag``.
 
     .. rubric:: Output
 
@@ -215,6 +243,27 @@ def kalman(
         Per target, the intercept (unless ``fit_intercept=False``) then one
         entry per feature, in the original units, after the row is learned (:func:`coef_index`).
 
+    With ``smooth_lag``, on the rows that complete a lag (null on every other
+    row):
+
+    ``smoothed_coef``
+        The smoothed coefficients, laid out like ``coef``, in the original
+        units; NaN in a target's place where this row completed no lag of
+        it, where the filter's ``min_weight`` gate withheld the described
+        row's prediction, and for a coefficient the filter had not yet
+        sized at the described row.
+    ``smoothed_se_coef``
+        Under ``emit_smoothed_se``, their standard errors, laid out the same
+        way.
+    ``smoothed_for_<t>``
+        The clock of the row the target's smoothed value describes, in the
+        clock column's own type, or its row index in the group with no clock
+        column; null where the row completed no lag of the target.
+
+    The last ``L`` observations of each target, whose lags no row has yet
+    completed, are read from the state with
+    :meth:`rheon.polars.ModelBank.smoothed_tail`.
+
     plus the fields of the diagnostics switched on, as
     :mod:`rheon.spec` describes them. ``se_coef`` and
     ``error_inflation`` read the filter's own covariance, and are exact only
@@ -232,7 +281,12 @@ def kalman(
       below 0 or not finite;
     - an ``obs_var`` or ``p0`` not finite or not above 0;
     - ``emit_robust_se``: the filter's covariance is its own posterior,
-      which ``emit_se_coef`` reports.
+      which ``emit_se_coef`` reports;
+    - a ``smooth_lag`` of 0, ``emit_smoothed_se`` or ``max_state_bytes``
+      without ``smooth_lag``, ``smooth_lag`` under
+      ``covariance_form="square_root"`` or beside ``embargo`` or
+      ``label_clock``, a ``max_state_bytes`` not above 0 or above 64 MiB, and
+      a smoother whose bytes pass ``max_state_bytes``.
 
     .. rubric:: The update
 
@@ -265,6 +319,22 @@ def kalman(
     over a gap ``D`` is ``Q_i * r_i(D) ** 2`` in place of ``Q_i * D ** 2``,
     with ``r_i(D) = (1 - 2 ** (-D / kappa_i)) / theta_i`` and
     ``theta_i = ln 2 / kappa_i``.
+
+    With ``smooth_lag = L``, on the row of observation ``t`` of a target,
+    after its update, the Rauch-Tung-Striebel recursion runs back over the
+    ``L`` observations before it. With ``b_n``, ``P_n`` the filtered pair
+    after observation ``n``, ``b⁻``, ``P⁻`` the prior observation ``n + 1``'s
+    update starts from, and ``F`` the map the filter applies to the
+    coefficients between the two (each row's ``Phi``, and each change of the
+    standardizer's coordinates):
+
+    .. code-block:: text
+
+        G_n = P_n F' (P⁻_{n+1})^-1
+        m   <- b_n + G_n (m - b⁻_{n+1})          from m = b_t
+        V   <- P_n + G_n (V - P⁻_{n+1}) G_n'     from V = P_t
+        smoothed_coef  = m at n = t - L, in the original units
+        smoothed_se    = sqrt(diag(V)) * sqrt(R_j), likewise
 
     .. rubric:: Example
 
@@ -386,6 +456,42 @@ def kalman(
     noise, the filter is the ridge regression with penalty ``1 / p0``. A
     covariance whose diagonal goes below 0 is sized again at ``p0``.
 
+    **The smoother.** The step back from ``n + 1`` to ``n`` reads only
+    observation ``n``'s filtered pair and the smoothed pair at ``n + 1``, so
+    ``L`` steps from ``t`` are the smoother of every row up to ``t``, read at
+    ``t - L``, exactly. Measured against the same recursion written from the
+    filter's own pairs with gains by an independent solve, within ``2.3e-15``
+    on a random walk and ``1.6e-13`` under ``share_p``. A larger ``L`` brings
+    the value closer to the smoother of the whole stream, at the cost of the
+    delay: the remaining revision shrinks with the product of the ``L``
+    gains, a memory of about ``sqrt(R / (q x ** 2))`` observations on one
+    feature. Each observation keeps its gain ``G_n``, computed once with the
+    next observation's prior by a Cholesky factorization of ``P⁻`` on its
+    sized coefficients, and the pass runs on the rows that emit. Where the
+    filter does not continue itself, the step back does not cross: a
+    covariance sized again, a change of coordinates the standardizer
+    refused, or a ``P⁻`` whose factorization fails. The observation before
+    such a break keeps its filtered value, and the ones before it are
+    smoothed with the rows up to it. A session change or a capped gap is no
+    break: the filter continues through both. The value is written on the
+    line of the row that completed the lag, named for the row it describes,
+    and never on the described row's own line: used as a target for that
+    row, it needs an ``embargo`` on a downstream spec at least the lag's
+    span.
+
+    **The smoother's cost.** With ``k`` coefficients, a row that observes the
+    target costs ``O(k ** 3)`` for its gain (the Cholesky factorization of
+    ``P⁻`` and two triangular solves for each of ``k`` rows), and a row that
+    emits ``O(L k ** 2)`` a target for the means, or ``O(L k ** 3)`` with
+    ``emit_smoothed_se``. With no ``smooth_lag`` the filter does none of it.
+    Measured on an x86-64 machine with rustc 1.97 by ``cargo run --release
+    -p rheon-bench --example smooth_bench``, the median of 7 blocks of
+    20,000 rows after 2,000 rows of warm-up, one target, a lag of 10, at a
+    load of about 2, over two runs: at 6 coefficients 0.21 µs a row for the
+    filter alone, 1.07 to 1.20 with the smoothed means and 2.7 to 3.0 with
+    their standard errors; at 21 coefficients 0.69, 11.3 to 11.6 and 50.7 to
+    51.2.
+
     **The square root.** Under ``covariance_form="square_root"`` the filter
     holds ``C``, upper triangular with ``P_j = C C'``. A row with ``f = C'
     z``, ``a_0 = 1 / w`` (``R_j / w`` under ``obs_var``) and ``a_j =
@@ -500,6 +606,13 @@ def kalman(
     # Written only where it is not the default, as the Rust spec skips it there.
     if covariance_form == "covariance":
         del model["covariance_form"]
+    # The smoother's settings likewise, so a spec without them is as it was.
+    if smooth_lag is not None:
+        model["smooth_lag"] = smooth_lag
+    if emit_smoothed_se:
+        model["emit_smoothed_se"] = True
+    if max_state_bytes is not None:
+        model["max_state_bytes"] = max_state_bytes
     if forecast_spans is not None:
         # A dict is `[name, span]` pairs, as the Rust spec reads them.
         who = f"spec {quoted(name)}"

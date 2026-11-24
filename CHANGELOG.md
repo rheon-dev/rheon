@@ -416,6 +416,25 @@ model that only the new build has is listed as an addition and passes.
   built: ten series at ten lags (462,088 bytes) are refused by default.
   New in the state at schema 72 (unreleased): the `VectorAr` variant, with
   its frozen fixtures.
+- **`kalman`'s fixed-lag smoother, `smooth_lag`** (task 496): on the row
+  that completes `L` observations of a target after an earlier one, the
+  coefficients at that earlier observation estimated from every row up to
+  this one, by the Rauch-Tung-Striebel recursion run back `L` observations
+  over a ring of each observation's gain `G_n = P_n Fᵀ (P⁻)⁻¹`, `F` the
+  filter's own map between observations (its transitions and re-maps).
+  Fields `smoothed_coef`, `smoothed_se_coef` (under `emit_smoothed_se`) and
+  `smoothed_for_<t>`, the clock of the row described, written on the line
+  of the row that completed the lag and never fed back: every prediction is
+  the filter's, to the bit. A row of weight 0 or a null target takes no
+  slot and counts in no lag; a value describing a row `min_weight` withheld
+  is null. The ring's bytes are held to `max_state_bytes` (256 KB a group by
+  default, 64 MiB at most) when the spec is built. Refused under
+  `covariance_form="square_root"` and beside `embargo` or `label_clock`.
+  `ModelBank.smoothed_tail` reads the last `L` observations from the state.
+  Exact against the whole-prefix smoother written from the filter's pairs
+  with LU gains: within 2.3e-15 on a random walk and 1.6e-13 under
+  `share_p`. New state rides on schema 72 (written only when a spec sets
+  `smooth_lag`).
 
 - **`dcc`, dynamic conditional correlation fitted one row at a time** (task
   493, with task 514's recursion): the full correlation matrix of `k` return

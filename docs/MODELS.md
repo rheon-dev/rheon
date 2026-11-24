@@ -965,6 +965,52 @@ statsmodels' Kalman filter under its exact diffuse initialization, its
 predictions agree to 3.3e-13 where the covariance form's are up to 0.78
 off.
 
+#### The fixed-lag smoother
+
+`smooth_lag = L` adds, on the row that completes `L` observations of a
+target after an earlier one, the coefficients at that earlier observation
+estimated from every row up to this one. They are `smoothed_coef`, laid
+out like `coef`, with `smoothed_se_coef` under `emit_smoothed_se`, and
+`smoothed_for_<t>` is the clock of the row each target's value describes.
+`coef` can only estimate a row's coefficients from the rows up to it; the
+smoothed value also reads the `L` observations after it. An observation is
+a row on which the target is present at a weight above 0, so a row of
+weight 0 or a null target counts in no lag.
+
+After observation `t`'s update the Rauch-Tung-Striebel recursion runs back
+`L` observations. `β_n`, `P_n` is the filtered pair after observation `n`,
+`β⁻`, `P⁻` the prior observation `n + 1`'s update starts from, and `F` the
+map the filter applies to the coefficients between the two: each row's
+`Φ`, and each change of the standardizer's coordinates.
+
+```
+G_n = P_n Fᵀ (P⁻_{n+1})⁻¹
+m ← β_n + G_n (m − β⁻_{n+1})          from m = β_t
+V ← P_n + G_n (V − P⁻_{n+1}) G_nᵀ     from V = P_t
+```
+
+A step reads only observation `n`'s filtered pair and the smoothed pair at
+`n + 1`, so `L` steps from `t` are exactly the smoother of every row up to
+`t`, read at `t − L`. Each observation keeps its gain, computed once from
+the next observation's prior, and the pass runs on the rows that emit.
+The state is `L` gains of `k²` numbers a covariance, `k` the coefficients.
+The settings bound it, and it is held to `max_state_bytes` (256 KB a group
+by default) before a row is read.
+
+The smoothed value is never fed back: every prediction is the filter's, to
+the bit. It is written on the line of the row that completed the lag, named
+for the row it describes, and never on that row's own line, where a reader
+would take it for something known then. Used as a target for the described
+row, it needs an `embargo` on the downstream spec of at least the lag's
+span. `smooth_lag` is refused beside this spec's own `embargo` or
+`label_clock`, which release several held rows on one row, and under
+`covariance_form = "square_root"`. Where the filter does not continue
+itself (a covariance sized again, a change of coordinates refused, a prior
+whose factorization fails) the recursion does not cross, and the
+observations before are smoothed with the rows up to the break. The last
+`L` observations, whose lags no row has completed, are read from the state
+with [`bank.smoothed_tail()`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.smoothed_tail).
+
 #### Example
 
 **A coefficient that may drift follows a jump that running sums only

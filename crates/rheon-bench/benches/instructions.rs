@@ -90,6 +90,8 @@ const FAKETIME_ENV: [&str; 4] = [
 #[bench::kmeans(args = ("kmeans"), setup = model_setup)]
 #[bench::micro(args = ("micro"), setup = model_setup)]
 #[bench::kalman(args = ("kalman"), setup = model_setup)]
+#[bench::kalman_smooth_k5(args = ("kalman_smooth_k5"), setup = model_setup)]
+#[bench::kalman_smooth_k20(args = ("kalman_smooth_k20"), setup = model_setup)]
 #[bench::ew_cov(args = ("ew_cov"), setup = model_setup)]
 #[bench::lasso_k20(args = ("lasso_k20"), setup = model_setup)]
 #[bench::rls(args = ("rls"), setup = model_setup)]

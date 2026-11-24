@@ -74,6 +74,14 @@ pub struct ChunkOut {
     /// and the newest learned row's when it was scored (task 152).
     pub scored_clock: Vec<Option<ClockValue>>,
     pub learned_clock: Vec<Option<ClockValue>>,
+    /// `kalman`'s fixed-lag smoother under `smooth_lag`, else empty: the
+    /// smoothed coefficients and (under `emit_smoothed_se`) their standard
+    /// errors, `[model][row]` on the rows that complete a lag, and the
+    /// clock label of the row each target's value describes, `n_models *
+    /// n_targets * n_rows`.
+    pub smoothed_coef: Vec<Vec<Option<Vec<f64>>>>,
+    pub smoothed_se: Vec<Vec<Option<Vec<f64>>>>,
+    pub smoothed_for: Vec<Option<ClockValue>>,
     /// Slot counts this layout was built for.
     pub n_models: usize,
     pub n_slots: usize,
@@ -192,6 +200,9 @@ impl ChunkOut {
             se_coef_hac: Vec::new(),
             scored_clock: Vec::new(),
             learned_clock: Vec::new(),
+            smoothed_coef: Vec::new(),
+            smoothed_se: Vec::new(),
+            smoothed_for: Vec::new(),
             n_models: 0,
             n_slots: 0,
             n_levels: 0,
@@ -309,6 +320,12 @@ impl ChunkOut {
         let clocks = if spec.emit_clocks { n_rows } else { 0 };
         fill(&mut self.scored_clock, clocks, None);
         fill(&mut self.learned_clock, clocks, None);
+        let smooths = spec.smooth_lag().is_some();
+        let smoothed = if smooths { n_models } else { 0 };
+        lists(&mut self.smoothed_coef, smoothed, n_rows);
+        let se = if spec.emit_smoothed_se() { smoothed } else { 0 };
+        lists(&mut self.smoothed_se, se, n_rows);
+        fill(&mut self.smoothed_for, smoothed * spec.m() * n_rows, None);
         self.n_models = n_models;
         self.n_slots = n_slots;
         self.n_levels = n_levels;
@@ -364,6 +381,7 @@ impl ChunkOut {
             + cap(&self.reason)
             + cap(&self.scored_clock)
             + cap(&self.learned_clock)
+            + cap(&self.smoothed_for)
     }
 
     /// The bytes held by the `coef`-like lists: each list's header and
@@ -381,6 +399,8 @@ impl ChunkOut {
             &self.se_coef,
             &self.se_coef_hc0,
             &self.se_coef_hac,
+            &self.smoothed_coef,
+            &self.smoothed_se,
         ]
         .into_iter()
         .map(lists)

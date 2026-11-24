@@ -79,6 +79,17 @@ SHARED = "([shared field](#fields-most-models-write))"
 #: One line per field *stem*. `<t>` is a target, `<f>` a feature, `<a>`/`<b>` a
 #: pair of columns, `<j>` an index, `<label>` a class label.
 MEANING: dict[str, str] = {
+    "smoothed_coef": (
+        "on the row that completes `smooth_lag` observations of a target after an earlier one, "
+        "the coefficients at that earlier observation estimated from every row up to this one, "
+        "laid out like `coef`; NaN in a target's place where the row completed no lag of it, "
+        "where `min_weight` withheld the described row, and for a coefficient not yet sized"
+    ),
+    "smoothed_se_coef": "the standard errors of `smoothed_coef`, laid out like it",
+    "smoothed_for_<t>": (
+        "the clock of the row `<t>`'s smoothed value describes, in the clock column's own type; "
+        "with no clock, the row's index in its group"
+    ),
     "pred_<t>": "the prediction for `<t>`, computed from the state **before** this row",
     "pred_<f>": "the predictive mean for feature `<f>` under the fitted model",
     "resid_<t>": "`y - pred` for `<t>`",
@@ -261,6 +272,9 @@ EW_CLASS_NULL = (
     "covariance cannot be factorized"
 )
 ALSO_NULL: dict[str, str] = {
+    "smoothed_coef": "on every row that completes no target's lag",
+    "smoothed_se_coef": "where `smoothed_coef` is",
+    "smoothed_for_<t>": "on every row that completes no lag of `<t>`",
     "pred_<t>": WITHHELD,
     "pred_<f>": WITHHELD,
     "resid_<t>": (
@@ -436,6 +450,10 @@ SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
     "huber": ("emit_huber_scale=True", {"emit_huber_scale": True}),
     "dcc": ('margins="garch"', {"margins": "garch"}),
     "ewm_moments": ("se=True", {"se": True}),
+    "kalman": (
+        "smooth_lag=5, emit_smoothed_se=True",
+        {"smooth_lag": 5, "emit_smoothed_se": True},
+    ),
 }
 
 #: What a model writes when it writes nothing per row.
@@ -914,6 +932,7 @@ def stem(
             "lm",
             "lrv",
             "n",
+            "smoothed_for",
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"

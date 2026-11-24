@@ -4899,6 +4899,7 @@ pub use audit::AuditTable;
 
 mod vector_ar;
 pub use vector_ar::VectorArRead;
+mod smoothed;
 
 mod arrays;
 use arrays::{coef_list_array, named_column, named_columns, opt_bool_array, opt_f64_array};

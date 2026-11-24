@@ -1203,6 +1203,26 @@ pub trait OnlineModel: Sized {
         }
     }
 
+    /// What this row's fixed-lag smoother emitted ([`crate::Smoothed`]),
+    /// written over `out`, and whether the model has one: `kalman`'s
+    /// `smooth_lag`. Every other model keeps the default, `false`.
+    fn smoothed_into(&self, _out: &mut crate::Smoothed) -> bool {
+        false
+    }
+
+    /// The next stepped row's clock label, as the caller shows the row's
+    /// clock (the clock column's value, or its row number), which a
+    /// fixed-lag smoother keeps beside each observation to say which row a
+    /// smoothed value describes. Every other model ignores it -- hence the
+    /// default.
+    fn label_next(&mut self, _label: crate::ClockValue) {}
+
+    /// The caller's `min_weight` gate withheld `target`'s prediction on the
+    /// row just stepped: a fixed-lag smoother does not report the
+    /// observation that row added. Every other model ignores it -- hence
+    /// the default.
+    fn hold_smoothed(&mut self, _target: usize) {}
+
     fn state(&self) -> State;
     fn restore(s: &State) -> Result<Self, StateError>;
     /// [`Self::restore`] taking the state, for a model that can move its

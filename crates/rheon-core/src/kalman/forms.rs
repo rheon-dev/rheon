@@ -202,6 +202,14 @@ impl Kalman {
                     .into(),
             );
         }
+        if form == CovarianceForm::SquareRoot && self.smoother.is_some() {
+            return Err(
+                "kalman: covariance_form=\"square_root\" cannot carry smooth_lag: the smoother \
+                 reads the covariance itself, which the square root's form does not hold. Leave \
+                 covariance_form at its default to smooth."
+                    .into(),
+            );
+        }
         // A diagonal `P`'s factor is its roots, and back again its squares
         // (review 2026-11-23, KAL-4: the way back kept the roots).
         let root = |v: f64| match form {

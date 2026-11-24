@@ -220,6 +220,14 @@ The fields of `rp.spec.kalman("m", targets=["y"], features=["x0"], half_life=50.
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
 
+Under `smooth_lag=5, emit_smoothed_se=True`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `smoothed_coef` | `list[f64]` | on the row that completes `smooth_lag` observations of a target after an earlier one, the coefficients at that earlier observation estimated from every row up to this one, laid out like `coef`; NaN in a target's place where the row completed no lag of it, where `min_weight` withheld the described row, and for a coefficient not yet sized | on every row that completes no target's lag |
+| `smoothed_se_coef` | `list[f64]` | the standard errors of `smoothed_coef`, laid out like it | where `smoothed_coef` is |
+| `smoothed_for_y` | `clock` | the clock of the row `<t>`'s smoothed value describes, in the clock column's own type; with no clock, the row's index in its group | on every row that completes no lag of `<t>` |
+
 ## `huber`
 
 The fields of `rp.spec.huber("m", targets=["y"], features=["x0"], half_life=50.0)`:
