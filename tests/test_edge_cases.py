@@ -16,7 +16,7 @@ INF = float("inf")
 
 
 #: Models with no solve schedule (they update every row by construction).
-_NO_SOLVE_SCHEDULE = {"rls", "kalman", "ftrl", "sgd", "pa", "holt", "glm", "expectile", "ar"}
+_NO_SOLVE_SCHEDULE = {"rls", "kalman", "ftrl", "sgd", "pa", "holt", "glm", "expectile", "ar", "sarima"}
 
 #: Every regression model, with the least it needs to be constructible.
 #: `tests/test_model_registry.py` holds this list complete.
@@ -46,7 +46,9 @@ def _spec(model="ewridge", **kw):
     d.update(kw)
     if d.get("features", ()) is None:
         del d["features"]  # a model with no features keyword (holt)
-    return getattr(rp.spec, model)("m", **d)
+    # A keyword a model's entry sets to None it does not take (sarima's
+    # half-life).
+    return getattr(rp.spec, model)("m", **{k: v for k, v in d.items() if v is not None})
 
 
 def _run(df, spec=None):
@@ -88,7 +90,7 @@ class TestWeights:
             y = [float(v > 2.5) for v in y]
         x[at], y[at], w[at] = 99.0, (1.0 if binary else -500.0), 0.0
         df = pl.DataFrame({"x0": x, "y0": y, "w": w})
-        spec = _spec(model, weight="w", half_life=5.0, min_weight=0.0, **extra)
+        spec = _spec(model, **{"weight": "w", "half_life": 5.0, "min_weight": 0.0, **extra})
         out = _run(df, spec)
         nulled = _run(df.with_columns(y0=pl.when(pl.int_range(n) == at).then(None)
                                       .otherwise(pl.col("y0"))), spec)  # fmt: skip
@@ -118,7 +120,15 @@ class TestWeights:
             y0=np.linspace(2.0, 4.0, n),
         )
         spec = _spec(
-            model, weight="w", clock="t", gap_cap=5.0, half_life=50.0, min_weight=2.0, **extra
+            model,
+            **{
+                "weight": "w",
+                "clock": "t",
+                "gap_cap": 5.0,
+                "half_life": 50.0,
+                "min_weight": 2.0,
+                **extra,
+            },
         )
         lead = _run(pl.DataFrame({**base, "w": [0.0] * 3 + [1.0] * (n - 3)}), spec)
         none = _run(pl.DataFrame({**base, "w": [1.0] * n}), spec)
