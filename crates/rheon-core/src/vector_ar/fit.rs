@@ -486,12 +486,12 @@ fn wald_on(
     // M = βᵀ X, `ne × ne`.
     s.mx.clear();
     s.mx.resize(ne * ne, 0.0);
-    for c1 in 0..ne {
+    for (c1, &e1) in caused.iter().enumerate() {
         for c2 in 0..ne {
             s.mx[c1 * ne + c2] = rows
                 .iter()
                 .enumerate()
-                .map(|(a, &r)| s.b[r * k + caused[c1]] * s.x[a * ne + c2])
+                .map(|(a, &r)| s.b[r * k + e1] * s.x[a * ne + c2])
                 .sum();
         }
     }
