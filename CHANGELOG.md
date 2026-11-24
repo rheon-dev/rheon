@@ -216,9 +216,10 @@ model that only the new build has is listed as an addition and passes.
   (256 KB) bounds the state, 16 bytes a seasonal value a target and the
   heuristic start's held rows, and refuses a spec past it with the bytes
   it needs. Multiplicative trends, learned parameters and the error type
-  are not in this part. State schema 73 (`holt`'s cfg and state gain the
-  new fields at their end; a schema-72 state loads as the warm, unseasoned
-  form it was). A spec that gives none of the new keys is unchanged.
+  are not in this part. State schema 72, not yet released, carries them
+  (`holt`'s cfg and state gain the new fields at their end; a state of 71
+  or earlier loads as the warm, unseasoned form it was). A spec that gives
+  none of the new keys is unchanged.
 
 - **`dcc`, dynamic conditional correlation fitted one row at a time** (task
   493, with task 514's recursion): the full correlation matrix of `k` return

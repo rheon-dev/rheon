@@ -359,8 +359,8 @@ model), and the spec, the Python builder and the docs take the new keys.
 **Built.** Seasons `add` and `mul` by trends none, additive and damped
 additive (nine of the fifteen recursions); the `known` and `heuristic`
 starts, `warm` only for today's forms; `max_state_bytes` (256 KB, ceiling
-64 MiB) refused at build with the bytes needed; `not_positive`; schema 73
-with schema 72's sets kept.
+64 MiB) refused at build with the bytes needed; `not_positive`; the new
+fields in schema 72, which no release holds yet (departure 7).
 
 **The oracle, measured on Linux x86-64.** `ExponentialSmoothing`, known
 start: 0 ulps at every row of all nine forms (`holt` follows `model.py`'s
@@ -392,11 +392,26 @@ error types: 0-1 ulps without a season, at most 6 with an additive one
 3. *The initial states stand one step before the first row*: a season's
    bucket `P/m`, or one clock unit without a season, as statsmodels' are on
    a row clock.
-4. *The multiplicative trends (`M`, `Md`) are not built.* `b^φ` and
-   `(l'/l)^{1/s}` need a power, a platform function not yet in `holt`'s
-   state, which question 12's answer bars; the `libm` crate's `pow` would
-   give the same bits everywhere, but `docs/TESTING.md` records it declined
-   for speed outside `garch`. A question for the user.
+4. *The multiplicative trends (`M`, `Md`) are deferred, a follow-up*
+   (the coordinator's answer, 2026-11-24). Their recursions raise the
+   state to a power: `b^φ` in the damped forecast and `(l'/l)^{1/s}` for a
+   trend learned over a clock step of `s`. That puts a new libm function,
+   `pow` of the state itself, into `holt`'s state, which question 12's
+   answer rules out: today `holt`'s `powf` and `exp2` act on the half-lives
+   and the clock alone, so a platform's last bit moves a gain, and the
+   state's own values only through it; a power of the state feeds that bit
+   back into every row after it. What would lift it: the user's word on
+   one of two routes, each with its measurement beside it. (i) The
+   platform's `powf` on the state, under CLAUDE.md's libm rule: the
+   trend's fields compared across OSes within the smallest ulps that pass
+   over the 50-seed grids, the bound stated beside the test, and taken to
+   the user if not tiny. (ii) The `libm` crate's `pow` for `holt`, the same
+   bits on every OS, as `garch` took it, with its measured per-row cost
+   against the budgets (`docs/TESTING.md` records the crate declined for
+   speed outside `garch`). Either way the forms then need their
+   `ExponentialSmoothing` grids (`trend="mul"`, damped and not), the
+   fixture forms an `M` and an `Md` state take, and the `max_state_bytes`
+   count unchanged (no new state, the trend stays one value a target).
 5. *`season_origin` is not built*: the origin is the first row of positive
    weight. *The seasonal values are not in `coef`*, which stays `[level,
    trend]`; the Rust accessor `Holt::seasonal` has them.
@@ -404,14 +419,17 @@ error types: 0-1 ulps without a season, at most 6 with an additive one
    named `withheld_reason` on a row predicted and not learned; every other
    reason names a null prediction. It is the eighth reason, last in
    precedence, and every model's `withheld_reason` Enum gains it.
-7. *Schema.* The task asked for the pre-1.0 path (regenerate, raise the
-   minimums); the library is past 1.0 (2.0.0 holds schema 67), so CLAUDE.md
-   rule 5's from-1.0 path is taken: schema 72's sets copied to `v72/`, the
-   loader the new fields' defaults, the minimums unchanged. The current
-   sets of both crates are schema 72's macOS bytes loaded and re-saved by
-   this build (the bytes the Mac's regeneration writes for every case the
-   change does not touch), and the four new `holt` cases were written on
-   Linux x86-64. The Mac regenerates both crates' sets with
-   `PRINT_STATE_FIXTURES=1` before the push.
+7. *Schema.* Part 2 first took CLAUDE.md rule 5's from-1.0 path
+   (schema 73, 72's sets copied to `v72/`). The coordinator's answer
+   (2026-11-24): 72 is unreleased (2.0.0 holds schema 67), so there is no
+   bump; the copy is dropped and `holt`'s new fields and forms go into
+   schema 72's sets, its loader the new fields' defaults for a state of 71
+   or earlier (`v71/holt.rs`, `v71/holt_inf.rs`). The current sets of both
+   crates are the merged tree's, and the new `holt` cases (an A season, an
+   M season with a damped trend, the heuristic start, and one holding its
+   rows) were written on Linux x86-64; `holt.rs` and `holt_inf.rs` keep
+   the macOS writer, as their bytes are macOS's loaded and re-saved. The
+   Mac regenerates both crates' sets with `PRINT_STATE_FIXTURES=1` on
+   macOS at the merge, so no Mac-only bytes are made here.
 8. *Grids.* No 50-seed grid is in `oracles.toml`; the essentials hold three
    seeds of each form and the measurements above are from 8.

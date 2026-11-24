@@ -2053,7 +2053,7 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
-        // The fixed forms of seasonal smoothing (schema 73, task 488). An
+        // The fixed forms of seasonal smoothing (schema 72, task 488). An
         // additive season under the known start, 4 values over 8 clock
         // units, so the clock of 1 puts two rows in a bucket and its gap of
         // 9 leaves a bucket empty.
