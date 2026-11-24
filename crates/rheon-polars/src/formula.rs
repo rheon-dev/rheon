@@ -412,6 +412,10 @@ pub enum Node {
     /// list form has them. `cast` and `alias` carry their text as a `Lit`.
     Call(String, Vec<Node>),
     Op(OpNode),
+    /// The root in an unknown of a function of the row, solved row by row
+    /// (`formula/scalar.rs`): an element-wise node the library evaluates
+    /// itself, counted as one of its own where a formula must hold one.
+    Invert(Box<scalar::Invert>),
 }
 
 /// The element-wise nodes and their arities.
@@ -595,6 +599,7 @@ impl Node {
             }
         };
         match head.as_str() {
+            "invert" => Ok(Node::Invert(Box::new(scalar::Invert::from_json(v)?))),
             "col" => {
                 arity(1)?;
                 match &args[0] {
@@ -1370,6 +1375,7 @@ impl Node {
                 }
                 Value::Array(items)
             }
+            Node::Invert(i) => i.to_json(),
         }
     }
 
@@ -1382,7 +1388,7 @@ impl Node {
 
     fn collect<'a>(&'a self, out: &mut Vec<&'a OpNode>) {
         match self {
-            Node::Col(_) | Node::Lit(_) => {}
+            Node::Col(_) | Node::Lit(_) | Node::Invert(_) => {}
             Node::Call(_, args) => args.iter().for_each(|a| a.collect(out)),
             Node::Op(op) => {
                 out.push(op);
@@ -1412,6 +1418,13 @@ impl Node {
                 }
             }
             Node::Lit(_) => {}
+            Node::Invert(i) => {
+                for c in i.columns() {
+                    if !out.contains(c) {
+                        out.push(c.clone());
+                    }
+                }
+            }
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns(out)),
             Node::Op(op) => {
                 op.input.collect_columns(out);
@@ -1438,6 +1451,7 @@ impl Node {
     pub fn contains_call(&self, name: &str) -> bool {
         match self {
             Node::Col(_) | Node::Lit(_) => false,
+            Node::Invert(_) => name == "invert",
             Node::Call(n, args) => n == name || args.iter().any(|a| a.contains_call(name)),
             Node::Op(op) => {
                 op.input.contains_call(name)
@@ -1463,6 +1477,13 @@ impl Node {
                 }
             }
             Node::Lit(_) => {}
+            Node::Invert(i) => {
+                for c in i.columns() {
+                    if !out.contains(&c.as_str()) {
+                        out.push(c.as_str());
+                    }
+                }
+            }
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns_ref(out)),
             Node::Op(op) => {
                 op.input.collect_columns_ref(out);
@@ -1538,6 +1559,7 @@ impl Node {
             Node::Col(c) => col(c.as_str()),
             Node::Lit(l) => l.to_expr(),
             Node::Op(op) => resolve(op),
+            Node::Invert(i) => i.to_expr(),
             Node::Call(name, args) => {
                 let e = |i: usize| args[i].to_expr(resolve);
                 match name.as_str() {
@@ -2143,6 +2165,8 @@ fn short(v: &Value) -> String {
         None => s,
     }
 }
+
+pub(crate) mod scalar;
 
 #[cfg(test)]
 mod tests {

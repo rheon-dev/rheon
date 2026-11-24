@@ -306,6 +306,13 @@ impl<'de> Deserialize<'de> for Targets {
                                  the subtraction in the formula"
                             )));
                         }
+                        if tree.contains_call("invert") {
+                            return Err(serde::de::Error::custom(format!(
+                                "target {name:?}: a formula target holds an invert, which a \
+                                 target does not read yet; solve it as a column with \
+                                 rp.stream.with_windows and name that column in the formula"
+                            )));
+                        }
                         if tree.operators().iter().any(|op| op.kind.cross().is_some()) {
                             return Err(serde::de::Error::custom(format!(
                                 "target {name:?}: a formula target holds a cross-group operator \

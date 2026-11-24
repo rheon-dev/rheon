@@ -3,10 +3,12 @@ quantiles over a stream's clock, looking back or ahead, a variance and a
 standard deviation looking back, and the largest and smallest value of a
 window, or since an event. ``increment``, the step of a running total,
 and ``tick_sign``, the sign of a price's last change, give a window
-operator an input. ``run_length`` counts the rows a value has held,
-``clock_lag`` and ``clock_drift`` read the lag between an event's time and
-its arrival, and how fast it grows, and ``clock_step`` the steps between a
-time and the one before it: a stream's health, read as columns.
+operator an input. :func:`invert` solves an equation of the row for
+:func:`unknown`, in the same run: a root a row, never a window. ``run_length``
+counts the rows a value has held, ``clock_lag`` and ``clock_drift`` read the
+lag between an event's time and its arrival, and how fast it grows, and
+``clock_step`` the steps between a time and the one before it: a stream's
+health, read as columns.
 
 Each operator returns a ``pl.Expr`` that composes with Polars' own
 expressions, in which ``pl.col`` reads the current row.
@@ -264,13 +266,21 @@ variance or a standard deviation, and a window looking ahead under
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Literal
 
 import polars as pl
 
 from rheon._errors import RefusedValueError
 from rheon._renamed import renamed_function
-from rheon.polars._formula import moments_operator, operator, profile, row_operator
+from rheon.polars._formula import (
+    UNKNOWN_COLUMN,
+    invert_node,
+    moments_operator,
+    operator,
+    profile,
+    row_operator,
+)
 
 if TYPE_CHECKING:
     from rheon._duration import Duration
@@ -290,6 +300,7 @@ __all__ = [
     "ewm_sum",
     "ewm_var",
     "increment",
+    "invert",
     "rolling_max",
     "rolling_min",
     "tick_sign",
@@ -297,6 +308,7 @@ __all__ = [
     "clock_lag",
     "clock_drift",
     "clock_step",
+    "unknown",
 ]
 
 
@@ -3124,3 +3136,246 @@ def clock_step(
     subtracted in nanoseconds, exactly, before they become seconds.
     """
     return row_operator("clock_step", time, half_life=half_life, stat=stat, bias=bias)
+
+
+def invert(
+    f: pl.Expr | Callable[[pl.Expr], pl.Expr],
+    equals: str | float | pl.Expr,
+    lo: str | float | pl.Expr,
+    hi: str | float | pl.Expr,
+    *,
+    increasing: bool,
+    xtol: float = 2e-12,
+    rtol: float = 4 * 2.0**-52,
+    detail: bool = False,
+) -> pl.Expr:
+    """Solve an equation of the row for one unknown: the ``x`` in ``[lo, hi]``
+    where ``f(x) = equals``, row by row.
+
+    Use it to invert a closed-form function of the row's columns, such as a
+    pricing formula for the volatility that gives a quoted price, where the
+    function rises or falls with the unknown over the bracket. The solve
+    never calls Python a row: the equation is read once, when the call is
+    made, and the library evaluates it in Rust on each row. A root is given only
+    where the function's own rounding fixes it to the tolerance, and is
+    withheld as null otherwise, never clipped to the bracket.
+
+    .. rubric:: Parameters
+
+    ``f``
+        The equation's left side: a ``pl.Expr`` in :func:`unknown`, such as
+        ``x ** 3 + pl.col("a") * x`` with ``x = rp.ops.unknown()``, or a
+        function of one argument that returns one, called once with
+        :func:`unknown`. The expression may hold the unknown, columns,
+        numbers, ``+ - * /``, ``**``, negation, ``abs``, ``exp``, ``log``,
+        ``sqrt`` and a cast to ``pl.Float64``.
+    ``equals``
+        The value ``f`` must take: a column name, a number, or an expression
+        of the row in the nodes ``f`` may hold, without the unknown.
+    ``lo``, ``hi``
+        The bracket's ends, in the forms ``equals`` takes. Each row's
+        bracket is its own where an end reads a column.
+    ``increasing``
+        Required: ``True`` where ``f`` rises with the unknown over the
+        bracket, ``False`` where it falls. The direction names the side of
+        the function's range a target outside it lies on, and catches a
+        function that is not as declared.
+    ``xtol``
+        The absolute tolerance, in the unknown's units: finite and above 0.
+        Default ``2e-12``.
+    ``rtol``
+        The relative tolerance: finite and at least four machine epsilons,
+        ``8.881784197001252e-16``, the default.
+    ``detail``
+        ``True`` for a struct with the root, the certified bracket, the
+        evaluations it took, their bound and the reason a root is withheld.
+        Default ``False``: the root alone.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as
+    a column, in a run that computes at least one window operator. It may
+    stand alone, under arithmetic beside an operator, or as an operator's
+    input, such as ``rp.ewm_mean`` of the roots. Polars' ``with_columns``
+    does not compute it, and a spec's formula target does not take it. The
+    column is a ``Float64``, the root, null where it is withheld. Under
+    ``detail`` it is a struct of ``root`` (``Float64``), ``lo`` and ``hi``
+    (``Float64``, the final bracket, null where none was searched),
+    ``evaluations`` and ``bound`` (``UInt32``) and ``reason`` (``String``,
+    null where a root is given).
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        ``f`` is neither a ``pl.Expr`` nor a function returning one; ``equals``,
+        ``lo`` or ``hi`` is neither a column name, a number nor a
+        ``pl.Expr``; ``increasing`` or ``detail`` is not a bool; ``xtol``
+        or ``rtol`` is not a number.
+    ``ValueError``
+        ``f`` does not hold the unknown; ``equals``, ``lo`` or ``hi``
+        holds it; a part holds a window operator or a node the solve does not
+        evaluate; the equation reads no column; ``lo`` and ``hi`` are
+        numbers with ``lo`` not below ``hi``; a number is not finite;
+        ``xtol`` or ``rtol`` is out of its range.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "a": [1.0, 2.0, 0.5, 1.0],
+                             "y": [2.0, 3.0, None, 500.0]})
+        x = rp.ops.unknown()
+        cubic = x ** 3 + pl.col("a") * x   # rises with x where a >= 0
+        out = rp.stream.with_windows(
+            rows,
+            x=rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True),
+            d=rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True, detail=True),
+            level=rp.ewm_mean("y", half_life=1.0),   # a run computes a window operator
+            clock="t", gap_cap=10.0,
+        )
+        print(out["x"].round(9).to_list())
+        print(out["d"].struct.field("reason").to_list())   # y null, and y past f(5) = 130
+
+    .. code-block:: text
+
+        [1.0, 1.0, None, None]
+        [None, None, 'input_missing', 'above_range']
+
+    .. rubric:: See also
+
+    - :func:`unknown`, the quantity solved for.
+    - :func:`rheon.polars.stream.with_windows`, which computes it.
+    - ``scipy.optimize.brentq``, the oracle it is held to.
+
+    .. rubric:: Notes
+
+    **The method.** With ``h(x) = f(x) - equals``, negated where ``f`` is
+    declared decreasing, the solve keeps a bracket ``[a, b]`` with ``h(a) <
+    0 < h(b)``, from ``[lo, hi]``. Each step evaluates ``h`` at one point
+    and keeps the half whose ends' signs differ. The point is the ITP
+    method's (Oliveira and Takahashi, ACM Transactions on Mathematical
+    Software 47(1), 2021): the regula falsi point ``a - h(a) (b - a) / (h(b)
+    - h(a))``, moved toward the midpoint ``m = (a + b) / 2`` by ``0.2 (b -
+    a)² / (hi - lo)``, and kept within ``r_j = eps 2^(n_max - j) - (b - a) /
+    2`` of ``m`` at step ``j``. That radius keeps the bracket after step ``j``
+    no wider than ``eps 2^(n_max - j)``: never wider than bisection's after
+    ``j - 1`` steps, while a smooth function converges as regula falsi does.
+
+    **The tolerance and the bound.** ``eps = xtol + rtol min(|lo|, |hi|)``,
+    or ``xtol`` alone where the bracket holds 0. The solve stops when ``b -
+    a <= 2 eps + 8 u max(|a|, |b|)``, ``u`` the machine epsilon (or ``a``
+    and ``b`` are adjacent doubles), or when an evaluation is exactly 0, and
+    gives the midpoint: within ``eps + 5 u |x|`` of a sign change of the
+    computed function. With ``n_max = ceil(log2((hi - lo) / (2 eps))) + 1``,
+    it takes at most ``bound = n_max + 4`` evaluations: the two ends,
+    ``n_max`` steps and two for the certificate below. The bound follows
+    from the tolerance before the first step, so it is a property of the row
+    and not a cap: ``[1e-4, 5]`` at ``xtol=2e-12`` is at most 46.
+
+    **The certificate.** Each value carries a bound on its rounding error,
+    by running error analysis: an operation adds half a unit in the last
+    place of its result, and ``2^-1074`` so that a result that underflowed
+    is not read as exact, to the bounds of its operands; ``exp``, ``log``
+    and ``**`` add two units more. A sign counts only where the value
+    exceeds its bound. Where the function is flat at the root, every point
+    within ``e / |f'(x)|`` of it, ``e`` the rounding, is a root of the
+    computed function, so a bracket narrowed there is not fixed by the
+    function. A root is therefore given only where the final bracket's ends
+    have certain signs, or the two points ``m - 2 eps`` and ``m + 2 eps``
+    around its midpoint do, and that wider bracket is then the one reported.
+
+    **What is withheld**, each reason named under ``detail``:
+
+    .. list-table::
+       :header-rows: 1
+       :widths: 22 78
+
+       * - ``reason``
+         - when
+       * - ``input_missing``
+         - a column the equation reads, ``equals``, or a bracket end is
+           null, NaN, infinite or past ``1e100`` in magnitude
+       * - ``bracket_invalid``
+         - ``lo >= hi`` on the row, or ``hi - lo`` overflows
+       * - ``below_range``, ``above_range``
+         - ``h`` has one sign at both ends, each beyond its bound: the
+           target lies below or above the function's values on the bracket,
+           so a monotone function has no root in it
+       * - ``wrong_direction``
+         - the ends' signs change against ``increasing``: the function is
+           not what was declared on this row
+       * - ``not_finite``
+         - NaN at an end or a step, a domain error such as the log of a
+           negative. An infinity has a sign, and is no such error
+       * - ``not_monotone``
+         - a step's value lies outside the values at the bracket's ends,
+           beyond their bounds: the root may not be unique. It is checked
+           at no extra evaluation, so a function that is not monotone can
+           pass unseen
+       * - ``not_determined``
+         - the certificate fails, or an end's sign or the ends' order is
+           within its rounding, so the target may lie inside the bracket
+
+    A solve that took its whole bound without meeting the tolerance would be
+    a defect of the solver, which the method rules out: the query raises an
+    error naming the row's values rather than give a null.
+
+    **Rows and state.** A row's root is a function of that row alone, so it
+    is the same however the stream is chunked, and a run's saved state holds
+    the equation and nothing of the rows. ``exp``, ``log`` and ``**`` call
+    the platform's math library, as Polars does for the same expression, so
+    across operating systems a root can differ in its last bits, or by up to
+    the tolerance where a last bit moves a step to the other side.
+    """
+    return invert_node(
+        f,
+        equals,
+        lo,
+        hi,
+        increasing=increasing,
+        xtol=xtol,
+        rtol=rtol,
+        detail=detail,
+    )
+
+
+def unknown() -> pl.Expr:
+    """The quantity :func:`invert` solves for, in the expression of its
+    equation.
+
+    Use it to write an equation's left side as a Polars expression, such as
+    ``x ** 3 + pl.col("a") * x`` with ``x = rp.ops.unknown()``, and hand that
+    expression to :func:`invert`. It composes with Polars' operators and
+    the element-wise functions :func:`invert` evaluates, as a column does.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that stands for the unknown: a column under the prefix
+    ``@po:``, which the window operators' own columns carry. Only the
+    function :func:`invert` solves may hold it. Polars cannot compute it,
+    and a formula of :func:`rheon.polars.stream.with_windows`, an invert's
+    target or bracket, or a spec's target that holds it is refused when the
+    query or the spec is built.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        x = rp.ops.unknown()
+        rows = pl.DataFrame({"k": [1.0, 4.0, 9.0]})
+        out = rp.stream.with_windows(
+            rows,
+            root=rp.ops.invert(x * x, "k", 0.0, 10.0, increasing=True),   # the square root
+            level=rp.ewm_mean("k", half_life=1.0),
+        )
+        print(out["root"].round(9).to_list())
+
+    .. code-block:: text
+
+        [1.0, 2.0, 3.0]
+
+    .. rubric:: See also
+
+    - :func:`invert`, which solves for it.
+    """
+    return pl.col(UNKNOWN_COLUMN)

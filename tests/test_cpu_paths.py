@@ -252,6 +252,12 @@ class TestTheOracleMark:
         second = REPO / "tests/test_second_opinion.py"
         assert oracle_marks.is_oracle_test(second, ["tmp_path"])
         assert not oracle_marks.is_oracle_test(second, ["tmp_path", "rheon_cli"])
+        root = REPO / "tests/test_second_opinion_root.py"
+        assert oracle_marks.is_oracle_module(root)
+        assert not oracle_marks.is_oracle_test(root, ["root_solver", "quotes"])
+        invert = REPO / "tests/test_second_opinion_invert.py"
+        assert oracle_marks.is_oracle_module(invert)
+        assert not oracle_marks.is_oracle_test(invert, ["invert_solver"])
         assert not oracle_marks.is_oracle_module(REPO / "tests/test_ci_cost_policy.py")
 
     def test_a_test_here_is_not_one(self, request):

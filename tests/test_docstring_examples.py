@@ -56,7 +56,9 @@ def _documented() -> list[tuple[str, object]]:
     # `rheon` first: the neutral classes `rheon.polars` subclasses keep
     # docstrings of their own, run here too.
     modules = [rheon, rp, rp.spec, rp._bank, rp._frame]
-    modules += [rp.gram, rp.eval, rp.corr, rp.stream, rp.sim]
+    # `rp.ops` for the names it alone exports (`invert`, `unknown`): the
+    # operators it shares with `rp` are run once, under `rp`.
+    modules += [rp.gram, rp.eval, rp.corr, rp.stream, rp.sim, rp.ops]
     seen: set[int] = set()
     out: list[tuple[str, object]] = []
     for mod in modules:

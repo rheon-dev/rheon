@@ -103,6 +103,7 @@ pub use checkpoint::{
 };
 pub use defaults::resolved_defaults;
 pub use envelope::Kind as StateKind;
+pub use formula::scalar::{INVERT_DETAIL_FIELDS, Invert};
 pub use formula::{Formula, Literal, Node, OpNode};
 pub use merge::{Merge, MergeConfig};
 /// The Rust Polars this crate is built against, which the command line's

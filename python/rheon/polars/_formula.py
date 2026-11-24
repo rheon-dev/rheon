@@ -77,6 +77,13 @@ OPERATORS = (
     "clock_step",
 )
 
+#: The column the unknown of :func:`~rheon.polars.ops.invert` stands in as
+#: while its function is read: an operator's prefix and the leaf's list.
+UNKNOWN_COLUMN = PREFIX + '["unknown"]'
+
+#: An invert's node: its head, its four parts and its parameters.
+INVERT_ARITY = 6
+
 #: The cross-group operators: a statistic over every group's row at one
 #: stamp of the clock, with no kernel of their own.
 CROSS = ("cross_mean", "cross_std", "cross_rank", "cross_quantile", "cross_ref")
@@ -286,13 +293,21 @@ def _literal(v: Any, who: str) -> tuple[Any, str | None]:
     raise _refuse(who, "a literal of a type a formula does not carry, such as a list or bytes")
 
 
-def _walk(node: Any, who: str) -> Any:
+def _walk(node: Any, who: str, unknown: bool = False) -> Any:
     if isinstance(node, str) and node in _REFUSED_KINDS:
         raise _refuse(who, _REFUSED_KINDS[node])
     if not isinstance(node, dict) or len(node) != 1:
         raise _refuse(who, "a part of the expression it does not recognize")
     ((kind, body),) = node.items()
     if kind == "Column":
+        if body == UNKNOWN_COLUMN:
+            if unknown:
+                return ["unknown"]
+            raise FormulaError(
+                f"{who}: an expression holds rp.ops.unknown() outside the function f of "
+                f"rp.ops.invert. The unknown stands only in the function an invert solves. Write "
+                f"the target and the bracket, and every other formula, without it."
+            )
         if isinstance(body, str) and body.startswith(PREFIX):
             reserved = _reserved(who, body)
             try:
@@ -304,6 +319,10 @@ def _walk(node: Any, who: str) -> Any:
             # parameters. A short list raised a bare IndexError where the tree
             # is walked, and a number was refused as holding no operator
             # (review round 4, PD3).
+            # An invert's node: its four parts and its parameters, checked
+            # where rp.ops.invert wrote it and again where the run reads it.
+            if isinstance(op, list) and len(op) == INVERT_ARITY and op[0] == "invert":
+                return op
             if not (isinstance(op, list) and len(op) in (2, 3) and op[0] in OPERATORS):
                 raise reserved
             return op
@@ -317,13 +336,13 @@ def _walk(node: Any, who: str) -> Any:
         op = body.get("op")
         if op not in _BINARY:
             raise _refuse(who, f"the operator {_REFUSED_OPERATORS.get(op, _method(str(op)))}")
-        return [_BINARY[op], _walk(body["left"], who), _walk(body["right"], who)]
+        return [_BINARY[op], _walk(body["left"], who, unknown), _walk(body["right"], who, unknown)]
     if kind == "Ternary":
         return [
             "when",
-            _walk(body["predicate"], who),
-            _walk(body["truthy"], who),
-            _walk(body["falsy"], who),
+            _walk(body["predicate"], who, unknown),
+            _walk(body["truthy"], who, unknown),
+            _walk(body["falsy"], who, unknown),
         ]
     if kind == "Cast":
         dtype = body.get("dtype")
@@ -343,16 +362,16 @@ def _walk(node: Any, who: str) -> Any:
         # cast (`wrap_numerical=True`) has no form here.
         options = body.get("options", "Strict")
         if options == "Strict":
-            return ["cast", _walk(body["expr"], who), name]
+            return ["cast", _walk(body["expr"], who, unknown), name]
         if options == "NonStrict":
-            return ["cast", _walk(body["expr"], who), name, "non_strict"]
+            return ["cast", _walk(body["expr"], who, unknown), name, "non_strict"]
         raise _refuse(who, f"a cast with options {json.dumps(options)}")
     if kind == "Alias":
         expr, name = body
-        return ["alias", _walk(expr, who), name]
+        return ["alias", _walk(expr, who, unknown), name]
     if kind == "Function":
         fn = body.get("function")
-        args = [_walk(a, who) for a in body.get("input", [])]
+        args = [_walk(a, who, unknown) for a in body.get("input", [])]
         if isinstance(fn, str):
             if fn in _REFUSED_KINDS:
                 raise _refuse(who, _REFUSED_KINDS[fn])
@@ -391,13 +410,14 @@ def _walk(node: Any, who: str) -> Any:
     raise _refuse(who, _REFUSED_KINDS.get(kind, "a part of the expression it does not recognize"))
 
 
-def to_tree(expr: pl.Expr, who: str = "window formula") -> list[Any]:
-    """The compact tree of ``expr``, the operators inlined.
+def to_tree(expr: pl.Expr, who: str = "window formula", *, unknown: bool = False) -> list[Any]:
+    """The compact tree of ``expr``, the operators inlined; under
+    ``unknown``, the stand-in of an invert's unknown read as its leaf.
 
     Raises :class:`FormulaError` for an expression a formula cannot carry,
     naming ``who``, the call the expression was given to.
     """
-    return _walk(json.loads(expr.meta.serialize(format="json")), who)
+    return _walk(json.loads(expr.meta.serialize(format="json")), who, unknown)
 
 
 def operators(tree: Any) -> list[list[Any]]:
@@ -482,8 +502,10 @@ def from_tree(tree: Any) -> pl.Expr:
             f"Give it a tree that to_tree wrote."
         )
     head, args = tree[0], tree[1:]
-    if head in OPERATORS:
+    if head in OPERATORS or head == "invert":
         return operator_column(tree)
+    if head == "unknown":
+        return pl.col(UNKNOWN_COLUMN)
     if head == "col":
         return pl.col(args[0])
     if head == "lit":
@@ -1373,3 +1395,211 @@ def _clock_step(who: str, input: Any, *, half_life: Any, stat: Any, bias: Any) -
             f'{who}: bias is given, but only stat="var" or "std" takes it. Leave out bias.'
         )
     return operator_column(["clock_step", tree, params])
+
+
+def holds_invert(tree: Any) -> bool:
+    """Whether ``tree`` holds an invert's node anywhere."""
+    if not isinstance(tree, list) or not tree:
+        return False
+    if tree[0] == "invert":
+        return True
+    if tree[0] in ("col", "lit"):
+        return False
+    return any(holds_invert(arg) for arg in tree[1:])
+
+
+#: The nodes the solve evaluates a row at a time, in each part of an invert:
+#: the leaf of the unknown, columns, numbers, arithmetic, ``**``, negation,
+#: ``abs``, ``exp``, ``sqrt``, ``log`` and a cast to Float64.
+INVERT_NODES = (
+    "unknown",
+    "col",
+    "lit",
+    "+",
+    "-",
+    "*",
+    "/",
+    "**",
+    "log",
+    "neg",
+    "abs",
+    "exp",
+    "sqrt",
+    "cast",
+)
+
+#: The default absolute tolerance of an invert, in the unknown's units.
+INVERT_XTOL = 2e-12
+
+#: The least relative tolerance of an invert: four machine epsilons.
+INVERT_MIN_RTOL = 4 * 2.0**-52
+
+
+def _invert_nodes(who: str, part: str, tree: Any) -> None:
+    """Refuse, naming ``part``, a node of ``tree`` that the solve does not
+    evaluate a row at a time."""
+    if not isinstance(tree, list) or not tree:
+        raise FormulaError(f"{who}: its {part} is not an expression it can read. Rewrite it.")
+    head = tree[0]
+    if head in OPERATORS or head == "invert":
+        what = "another invert" if head == "invert" else f"the window operator {head}"
+        raise FormulaError(
+            f"{who}: its {part} holds {what}, but the solve evaluates its equation a row at a "
+            f"time and reads the row alone. Add it as a column with rp.stream.with_windows "
+            f"first, and read that column."
+        )
+    if head not in INVERT_NODES:
+        raise FormulaError(
+            f"{who}: its {part} holds {head!r}, which the solve does not evaluate. It can hold "
+            f"columns, numbers, + - * /, ** (pow), negation, abs, exp, log and sqrt, and a cast "
+            f"to Float64. Compute anything else as a column first and read that column."
+        )
+    if head == "lit":
+        value = tree[1] if len(tree) == 2 else None
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, numbers.Real)
+            or not math.isfinite(value)
+        ):
+            raise FormulaError(
+                f"{who}: its {part} holds the literal {value!r}, but the solve reads only finite "
+                f"numbers. Write the literal as a number."
+            )
+        return
+    if head == "cast":
+        if len(tree) != 3 or tree[2] != "Float64":
+            raise FormulaError(
+                f"{who}: its {part} holds a cast to {tree[2] if len(tree) > 2 else None!r}, but "
+                f"the solve reads every value as a Float64, so it casts to Float64 alone, and "
+                f"strictly. Cast to pl.Float64, or leave the cast out; for a typed number, give "
+                f"a plain float."
+            )
+        _invert_nodes(who, part, tree[1])
+        return
+    if head == "col":
+        return
+    for arg in tree[1:]:
+        _invert_nodes(who, part, arg)
+
+
+def _holds_unknown(tree: Any) -> bool:
+    if not isinstance(tree, list) or not tree:
+        return False
+    if tree[0] == "unknown":
+        return True
+    if tree[0] in ("col", "lit"):
+        return False
+    return any(_holds_unknown(arg) for arg in tree[1:])
+
+
+def _invert_value(who: str, key: str, value: Any) -> list[Any]:
+    """``equals``, ``lo`` or ``hi`` as a tree: a column name, a finite
+    number, or an expression of the row without the unknown."""
+    if isinstance(value, str):
+        if value.startswith(PREFIX):
+            raise _reserved(who, value)
+        return ["col", value]
+    if isinstance(value, bool) or not isinstance(value, (numbers.Real, pl.Expr)):
+        raise TypeError(
+            f"{who}: {key} must be a column name, a number or a pl.Expr of the row, but it is of "
+            f'type {type(value).__name__}. Give {key} such as "price", 1.5 or pl.col("price").'
+        )
+    if isinstance(value, numbers.Real):
+        if not math.isfinite(float(value)):
+            raise ValueError(
+                f"{who}: {key} must be finite, but it is {value!r}. Give {key} a finite number, "
+                f"or a column that holds one on each row."
+            )
+        return ["lit", float(value)]
+    return to_tree(value, f"{who}: {key}")
+
+
+def invert_node(
+    f: Any,
+    equals: Any,
+    lo: Any,
+    hi: Any,
+    *,
+    increasing: Any,
+    xtol: Any,
+    rtol: Any,
+    detail: Any,
+) -> pl.Expr:
+    """The expression of :func:`~rheon.polars.ops.invert`: its function read
+    with the unknown as a leaf, its target and bracket as trees, its
+    parameters checked here so a wrong one is named, and the node written
+    with every parameter, as the native reader writes it back."""
+    who = "rp.ops.invert"
+    if isinstance(f, pl.Expr):
+        expr = f
+    elif callable(f):
+        expr = f(pl.col(UNKNOWN_COLUMN))
+        if not isinstance(expr, pl.Expr):
+            raise TypeError(
+                f"{who}: f must return a pl.Expr of the unknown, but it returns a value of type "
+                f"{type(expr).__name__}. Write f with Polars' operators on its argument, and "
+                f"return the expression."
+            )
+    else:
+        raise TypeError(
+            f"{who}: f must be a pl.Expr in rp.ops.unknown(), or a function of the unknown that "
+            f"returns one, but it is of type {type(f).__name__}. Give the equation's left side "
+            f"as such an expression."
+        )
+    trees = {"function": to_tree(expr, f"{who}: f", unknown=True)}
+    if not _holds_unknown(trees["function"]):
+        raise ValueError(
+            f"{who}: f does not hold the unknown, so there is nothing to solve for. Write f in "
+            f"terms of rp.ops.unknown(), or of its argument where f is a function."
+        )
+    for key, value in (("equals", equals), ("lo", lo), ("hi", hi)):
+        trees[key] = _invert_value(who, key, value)
+    for part, tree in trees.items():
+        _invert_nodes(who, part, tree)
+    if not any(columns(tree) for tree in trees.values()):
+        raise ValueError(
+            f"{who}: the equation reads no column, so it has the same root on every row. Read a "
+            f"column in f, equals, lo or hi, or compute the root once."
+        )
+    if trees["lo"][0] == "lit" and trees["hi"][0] == "lit" and not trees["lo"][1] < trees["hi"][1]:
+        raise ValueError(
+            f"{who}: the bracket is [{trees['lo'][1]!r}, {trees['hi'][1]!r}], but lo must be "
+            f"below hi, so it holds no interval to search. Give lo below hi."
+        )
+    for key, value in (("increasing", increasing), ("detail", detail)):
+        if not isinstance(value, bool):
+            raise TypeError(
+                f"{who}: {key} must be True or False, but it is {value!r}. Set {key} to True or "
+                f"False."
+            )
+    tol: dict[str, float] = {}
+    for key, value, least in (("xtol", xtol, 0.0), ("rtol", rtol, INVERT_MIN_RTOL)):
+        if isinstance(value, bool) or not isinstance(value, numbers.Real):
+            raise TypeError(
+                f"{who}: {key} must be a number, but it is of type {type(value).__name__}. Set "
+                f"{key} to a number."
+            )
+        x = float(value)
+        ok = math.isfinite(x) and (x > least if key == "xtol" else x >= least)
+        if not ok:
+            need = "above 0" if key == "xtol" else f"at least {least!r} (four machine epsilons)"
+            why = (
+                "at 0 a bracket around a root at 0 would never narrow to it"
+                if key == "xtol"
+                else "below that a bracket around a large root cannot narrow as asked"
+            )
+            raise ValueError(
+                f"{who}: {key} must be finite and {need}, but it is {value!r}: {why}. Set {key} "
+                f"within that range."
+            )
+        tol[key] = x
+    params = {"increasing": increasing, "xtol": tol["xtol"], "rtol": tol["rtol"], "detail": detail}
+    node = [
+        "invert",
+        trees["function"],
+        trees["equals"],
+        trees["lo"],
+        trees["hi"],
+        params,
+    ]
+    return operator_column(node)

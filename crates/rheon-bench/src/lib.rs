@@ -201,6 +201,7 @@ pub const WINDOW_CASES: &[&str] = &[
     "window_ewm_quantile_w10k",
     "window_ewm_quantile_running",
     "window_ewm_sum_groups10k",
+    "window_invert_cubic",
 ];
 
 /// The bar cases: a frame of trades through the bars operator's core
@@ -216,6 +217,25 @@ pub const BAR_CASES: &[&str] = &["bars_volume", "bars_volume_groups100"];
 
 /// Groups in the grouped bar case.
 pub const BAR_GROUPS: usize = 100;
+
+/// The invert case (PLAN 563): the root in `u` of `u^3 + u + exp(u / 2) =
+/// x0` on `[-10, 10]`, solved on every row by the formula's own interpreter,
+/// beside a running sum of x0, since a run computes at least one window
+/// operator; the sum keeps no row, so the block's cost is the solve's.
+/// `windows_setup` builds it and `tests/workloads.rs` runs it natively. It
+/// joins [`WINDOW_CASES`] and `benches/instructions.rs` together with its
+/// entry in budgets.toml, which every counted case needs.
+pub const INVERT_CASE: &str = "window_invert_cubic";
+
+/// The invert case's node: `u^3 + u + exp(u / 2) = x0` on `[-10, 10]`,
+/// increasing, at the default tolerance.
+fn invert_tree() -> Value {
+    let u = json!(["unknown"]);
+    json!(["invert",
+        ["+", ["+", ["**", u, ["lit", 3.0]], u], ["exp", ["*", ["lit", 0.5], u]]],
+        ["col", "x0"], ["lit", -10.0], ["lit", 10.0],
+        {"increasing": true}])
+}
 
 /// Groups in the grouped window case: its warm-up is two rows of each.
 pub const WINDOW_GROUPS: usize = 10_000;
@@ -1140,6 +1160,7 @@ fn window_tree(id: &str) -> Value {
         "window_ewm_sum_groups10k" => {
             return json!(["ewm_sum", ["col", "x0"], {"half_life": 1000.0}]);
         }
+        "window_invert_cubic" => return invert_tree(),
         other => panic!("no case {other:?}"),
     };
     json!([op, ["col", "x0"], {"half_life": 1000.0, "window_size": 12_500.0}])
@@ -1150,6 +1171,8 @@ fn window_tree(id: &str) -> Value {
 /// column, the row's place modulo [`WINDOW_GROUPS`], on the same irregular
 /// clock, so each row is a stamp of its own; its cap of 1e12 never cuts a
 /// group, and its warm-up of two rows a group puts every group on the list.
+/// The invert case ([`INVERT_CASE`]) adds a second formula, a running sum,
+/// as a run of inverts alone is refused.
 pub fn windows_setup(id: &str) -> WindowsCase {
     let grouped = id.ends_with("_groups10k");
     let mut config = json!({
@@ -1157,6 +1180,13 @@ pub fn windows_setup(id: &str) -> WindowsCase {
         "clock": "t",
         "gap_cap": 100.0,
     });
+    if id == INVERT_CASE {
+        let sum = json!(["ewm_sum", ["col", "x0"], {"half_life": 1000.0}]);
+        config["formulas"]
+            .as_array_mut()
+            .expect("a list of formulas")
+            .push(json!({"name": "s", "tree": sum}));
+    }
     let warm_rows = if grouped {
         config["gap_cap"] = json!(1e12);
         config["group"] = json!("g");

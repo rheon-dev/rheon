@@ -954,6 +954,12 @@ def formula_target(who: str, expr: pl.Expr) -> Target | FormulaTarget:
             f"the bank cannot add it beside that column. Give it a name of its own with "
             '.alias("...").'
         )
+    if _formula.holds_invert(tree):
+        raise ValueError(
+            f"{who}: target {quoted(name)} holds rp.ops.invert, which a formula target does not "
+            "read. Compute the root as a column with rp.stream.with_windows in the query before "
+            "the bank, and read that column in the formula."
+        )
     if not _formula.looks_ahead(tree):
         # Name the call that makes the column: with_windows for a formula over
         # operators looking back, Polars' with_columns for one of the row alone,

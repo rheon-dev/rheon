@@ -313,6 +313,9 @@ budget = 2552147
 what = "WindowsRun::feed of one frame, ewm_sum of x0 with no window, half-life 1000, grouped by g over 10,000 groups, one row of each in turn, each row its own stamp, gap_cap 1e12 (no group is ever cut), after a warm-up of two rows a group: a row resolves the one group pending, whatever the groups behind it"
 budget = 2221103
 
+[instructions.window_invert_cubic]
+what = "WindowsRun::feed of one frame, the root in u of u^3 + u + exp(u / 2) = x0 on [-10, 10] a row by the formula's own interpreter, beside a running sum of x0 with no window and half-life 1000: every row a solve, none held; its budget is CI's first count"
+
 [instructions.bars_volume]
 what = "Bars::feed of one frame, volume bars of 1,000 over sizes of 1 to 100 (about 20 rows a bar), with the open, high, low and close of the price, the volume and the rows: the exact running total, the crossing test and six aggregates a row, about 50 bars closed into the output; its budget is CI's first count (locally 1,735,679)"
 

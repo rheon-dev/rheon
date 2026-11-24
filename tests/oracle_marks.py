@@ -12,7 +12,11 @@ OpenBLAS's kernels and NumPy's loops pinned one way and another.
 
 A test that runs the command line (the ``rheon_cli`` fixture) is left
 unmarked: it compares the binary with the bank, not with an oracle, and
-building the binary would take a CPU-paths leg most of its time.
+building the binary would take a CPU-paths leg most of its time. So is a
+test that runs the root-finder's example binaries (the ``root_solver`` and
+``invert_solver`` fixtures), for the second reason: its oracle is scipy's, but its numbers
+are the Rust solver's, which no CPU path moves, against a tolerance a
+thousand times the last bit.
 """
 
 from __future__ import annotations
@@ -39,6 +43,10 @@ ORACLE_MODULES = frozenset(
 
 #: The fixture of the tests that run the command line.
 CLI_FIXTURE = "rheon_cli"
+
+#: The fixtures of the tests that run a binary cargo builds, which a
+#: CPU-paths leg does not build.
+BINARY_FIXTURES = frozenset({CLI_FIXTURE, "root_solver", "invert_solver"})
 
 
 def _numpy_linalg(node: ast.AST) -> bool:
@@ -75,4 +83,4 @@ def is_oracle_module(path: Path) -> bool:
 
 def is_oracle_test(path: Path, fixtures: tuple[str, ...] | list[str]) -> bool:
     """Whether a test, from its module's path and its fixtures, is one."""
-    return CLI_FIXTURE not in fixtures and is_oracle_module(path)
+    return BINARY_FIXTURES.isdisjoint(fixtures) and is_oracle_module(path)

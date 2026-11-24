@@ -128,6 +128,7 @@ mod realized;
 mod refusals;
 mod rls;
 mod robust;
+mod root;
 mod run_length;
 mod runs;
 mod sandwich;
@@ -262,6 +263,10 @@ pub use realized::{
 pub use refusals::{Refusals, STOPPED, STOPPED_MANY};
 pub use rls::{Rls, RlsCfg};
 pub use robust::{HuberScale, MAD_BAND_OCTAVES, NORMAL_Q3, Robust, RobustCfg, RobustLoss};
+pub use root::{
+    Bounded, DEFAULT_XTOL, MIN_RTOL, RootReport, RootTolerance, Withheld as RootWithheld,
+    find_root, itp_steps,
+};
 pub use run_length::{RunLength, RunValue};
 pub use runs::Runs;
 pub use sandwich::Sandwich;

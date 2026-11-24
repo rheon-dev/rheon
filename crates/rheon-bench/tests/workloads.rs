@@ -5,10 +5,11 @@
 
 use polars::prelude::*;
 use rheon_bench::{
-    BANK_CASES, BAR_CASES, BAR_GROUPS, CLOCK_CASES, GROUPS, MODEL_CASES, ROWS, SILENT_CASES,
-    SPAN_CASE, WARM_ROWS, WIDE_CASES, WIDE_ROWS, WINDOW_CASES, bank_setup, bars_setup, clock_setup,
-    model_setup, rheon_budget_bank_rows, rheon_budget_bars_rows, rheon_budget_clock_rows,
-    rheon_budget_model_rows, rheon_budget_windows_rows, spec, windows_setup,
+    BANK_CASES, BAR_CASES, BAR_GROUPS, CLOCK_CASES, GROUPS, INVERT_CASE, MODEL_CASES, ROWS,
+    SILENT_CASES, SPAN_CASE, WARM_ROWS, WIDE_CASES, WIDE_ROWS, WINDOW_CASES, bank_setup,
+    bars_setup, clock_setup, model_setup, rheon_budget_bank_rows, rheon_budget_bars_rows,
+    rheon_budget_clock_rows, rheon_budget_model_rows, rheon_budget_windows_rows, spec,
+    windows_setup,
 };
 use rheon_polars::{AnyModel, ChunkOut, PAR_MIN_ROWS, Stream};
 
@@ -283,8 +284,9 @@ fn every_window_case_reads_its_block_inside_the_first_window() {
             .expect("floats");
         assert_eq!(w.null_count(), 0, "{id}");
         assert!(w.into_no_null_iter().all(f64::is_finite), "{id}");
-        // A window with no size keeps its running sums alone, no row.
-        let held = if id.ends_with("_running") || id.ends_with("_groups10k") {
+        // A window with no size keeps its running sums alone, no row; the
+        // invert case's running sum has none, and its solves hold nothing.
+        let held = if id.ends_with("_running") || id.ends_with("_groups10k") || id == INVERT_CASE {
             0
         } else {
             WARM_ROWS + ROWS
@@ -328,6 +330,24 @@ fn every_bar_case_closes_bars_through_its_block() {
             );
         }
     }
+}
+
+/// The invert case solves every row of its block: each root certified and
+/// a root of its row's equation, `u^3 + u + exp(u / 2) = x0`, and the
+/// running sum beside it holds no row, so the block is the solves.
+#[test]
+fn the_invert_case_solves_every_row_of_its_block() {
+    let mut run = windows_setup(INVERT_CASE);
+    let out = rheon_budget_windows_rows(&mut run);
+    assert_eq!(out.height(), ROWS);
+    let roots = out.column("w").expect("the roots").f64().expect("floats");
+    let x0 = out.column("x0").expect("the input").f64().expect("floats");
+    assert_eq!(roots.null_count(), 0, "every row certified");
+    for (u, x) in roots.into_no_null_iter().zip(x0.into_no_null_iter()) {
+        let f = u * u * u + u + (0.5 * u).exp();
+        assert!((f - x).abs() <= 1e-10, "u {u}: f(u) {f} for x0 {x}");
+    }
+    assert_eq!(run.run.queued(), 0, "the running sum keeps no row");
 }
 
 /// The wide cases learn their block on the pool they are named for, in

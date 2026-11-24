@@ -111,12 +111,14 @@ const WINDOWS_KIND: &str = crate::envelope::Kind::Windows.tag();
 /// The magic a state began with before the envelope, version 11 and
 /// earlier.
 const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
-/// 14 since task 564: a group's increments' state may keep a run length's
-/// run, a clock drift's sums or a clock step's moments (`rows`), written
-/// only where there is a `run_length`, `clock_lag`, `clock_drift` or
-/// `clock_step`, so a version-13 state is a
-/// version-14 state without one and loads as one; an older build refuses a
-/// 14 by its number rather than at the operator's name;
+/// 14 since task 564 and PLAN 563: a group's increments' state may keep a run
+/// length's run, a clock drift's sums or a clock step's moments (`rows`),
+/// written only where there is a `run_length`, `clock_lag`, `clock_drift` or
+/// `clock_step`; and a formula may hold an `invert` node, its four parts and
+/// its parameters written as the node's list form. So a version-13 state is
+/// a version-14 state without either and loads as one; an older build
+/// refuses a 14 by its number rather than at the operator's or the node's
+/// name;
 /// 13 since task 561: a kernel may keep a `since` event (`since`), a queue
 /// its extrema (`ext`) and its last event's stamp (`since_off`), and an
 /// operator its `max_state_bytes`, each written only where there is an
@@ -547,8 +549,9 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             ).into());
         }
         // Each formula holds an operator (one rule with the Python side,
-        // review R1, N7), and reads no column under a reserved prefix (N8).
-        if f.tree.operators().is_empty() {
+        // review R1, N7), or an invert, the library's own node (PLAN 563),
+        // and reads no column under a reserved prefix (N8).
+        if f.tree.operators().is_empty() && !f.tree.contains_call("invert") {
             return Err(format!(
                 "{WHO}: the expression {:?} (a column computation, such as pl.col(\"x\") + 1) \
                  holds no window operator or increment, and a window run computes only those. \
@@ -569,6 +572,18 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             }
             has("input", &c)?;
         }
+    }
+    if config
+        .formulas
+        .iter()
+        .all(|f| f.tree.operators().is_empty())
+    {
+        return Err(format!(
+            "{WHO}: no expression holds a window operator or increment, and an invert reads \
+             the row alone, so the run has no window to compute. Add the inverts to a run that \
+             computes a window operator, such as a running mean of a column the run reads."
+        )
+        .into());
     }
     let mut p = Plan {
         kernels: Vec::new(),
@@ -4804,6 +4819,8 @@ mod tests {
         // extremum or a row operator's state, and a 13 as a 14 without the
         // latter, so a 72 bank holding window targets resumes here, and a
         // released build refuses a 72 bank by number.
+        // Windows state 14 also holds PLAN 563's invert node on the same
+        // reading: a 13 core loads as a 14 without an invert.
         assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (14, 72));
         assert_eq!(MIN_WINDOWS_VERSION, 9);
     }
