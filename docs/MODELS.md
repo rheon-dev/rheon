@@ -2331,15 +2331,7 @@ plus `d + sD`; then the buffer's conditional likelihood, `σ²`
 concentrated, is maximized in `SARIMAX`'s unconstrained coordinates `x`.
 The fit is accepted only off every stationarity and invertibility bound,
 converged, and with every standard error at most `se_bound` (0.1): each
-ARMA coefficient's as it is, each regressor's coefficient's times the
-regressor's standard deviation over the innovations', `σ²`'s relative to
-`σ²`. The regressors' check is needed because two identical or
-near-collinear regressors leave the polynomials identified, so they pass
-the ARMA check, while the split of the effect between the two is not:
-measured with two regressors correlated 0.99995, the polynomial's
-standard error was 0.044 and the regressors' standardized ones 3.7, and
-still 2.1 at 1,233 rows, where a pair correlated 0.5 was accepted at 366
-rows. Otherwise the target
+ARMA coefficient's as it is, `σ²`'s relative to `σ²`. Otherwise the target
 keeps buffering and tries again once Kish's count has grown by half. From
 the accepted start, each learned row of weight `w` steps by recursive
 prediction error, `ψ = −∂e/∂x`:
