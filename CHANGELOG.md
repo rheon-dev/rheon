@@ -2003,6 +2003,21 @@ model that only the new build has is listed as an addition and passes.
 
 ### Tests and documents
 
+- The release comparison now starts `garch` and `dcc`, on returns
+  whose variance and correlation move, where on the linear targets it fed
+  them every output was null; it resets `garch` and `hawkes` after a step
+  back, and reaches every drift detector, `kalman`'s square root, `hmm`'s
+  factor form, `lasso` past 40 features, `glm`'s other families and links,
+  the windows of `expectile` and `hawkes`, and the cadences given as spans.
+  The heavy `garch` and `glm` oracle grids run in the oracle tier, held by
+  its ledger, rather than in every full run. A timed-out mutant fails the
+  mutation report as a survivor does. The x86-64 wheels the VM checks time
+  are built as the release builds them, with AVX2 and FMA.
+- The guides name the frame namespace `rheon` throughout, the output
+  reference lists every `withheld_reason` and `garch`'s `forecast_<t>`, and
+  the model lists and counts in the guides and docstrings match the
+  builders.
+
 - Every output is compared with the newest release's, bit for bit, on every
   push and pull request, on Linux, macOS and Windows, and a field that moves
   without a `Moves:` declaration fails the run (the header above has the
