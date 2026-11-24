@@ -329,11 +329,30 @@ fn a_window_of_the_clock_is_the_definition_on_its_returns() {
 
 /// Normalized, the four multipower terms are `realized`'s `rv`, `bv`, `tv`
 /// and `tq` (its definitions; its arithmetic takes cube roots where this
-/// takes powers). Measured (ulps): 0, 0, 5, 9 one pass; 0, 0, 9 at a
-/// half-life of 80 rows, where `tq` is out of reach of the comparison
-/// (below).
+/// takes powers), one pass and at a half-life of 80 rows. `rv` and `bv`
+/// are the same arithmetic on both sides, so the same bits. `tv` and `tq`
+/// are held to a bound derived from both sides' rounding, each call to
+/// `pow` or `cbrt` (the `libm` crate's) within `LIBM` units of `u`:
+///
+/// - `tv`: `realized`'s three cube roots, the triple, its square, the
+///   weight, the read and the scale, `6 LIBM + 8`; this one's three powers,
+///   two products, the weight, the read and the factor, `3 LIBM + 5`;
+/// - `tq`: `12 LIBM + 15` (the triple to the fourth, and the weight it is
+///   multiplied by) and `3 LIBM + 6`;
+/// - the factors, this one's `1 / Π μ_p` against `realized`'s correctly
+///   rounded constant: their gap, read directly;
+/// - under the decay, both sides decay the same sums by the same factor,
+///   but sums that differ in their last bits round the product apart, `u`
+///   a side a row ([`crate::oracle::decayed_error`]). The factor is the
+///   platform's `exp2`, so where those roundings fall is the platform's:
+///   Windows Server 2022 read 12 and 18 ulps where the bound of 16 measured
+///   on macOS stood.
+///
+/// Measured on aarch64 (macOS), the largest share of its bound: `tv` 0.083
+/// and `tq` 0.092 one pass, 0.056 and 0.087 under the decay.
 #[test]
 fn normalized_terms_are_realized_measures() {
+    use crate::oracle::{LIBM, U, decayed_error, up};
     let (t, q) = (2.0 / 3.0, 4.0 / 3.0);
     let terms = vec![
         mp(&[2.0], 1, true),
@@ -341,7 +360,20 @@ fn normalized_terms_are_realized_measures() {
         mp(&[t, t, t], 1, true),
         mp(&[q, q, q], 1, true),
     ];
+    // Each factor as this model forms it, against `realized`'s.
+    let factor = |p: f64| {
+        let mu: f64 = [p; 3]
+            .iter()
+            .map(|&p| series::abs_normal_moment(p))
+            .product();
+        1.0 / mu
+    };
+    let gaps = [
+        (factor(t) - crate::TV_SCALE).abs() / crate::TV_SCALE,
+        (factor(q) - crate::TQ_SCALE).abs() / crate::TQ_SCALE,
+    ];
     let r = noisy_day(1_000, 7);
+    let rows = unit_rows(&r);
     for h in [f64::INFINITY, 80.0] {
         let mut a = PowerVariation::new(cfg(1, terms.clone(), h)).unwrap();
         let mut b = crate::Realized::new(crate::RealizedCfg {
@@ -356,19 +388,44 @@ fn normalized_terms_are_realized_measures() {
             max_state_bytes: None,
         })
         .unwrap();
-        let mut worst = [0.0f64; 4];
-        for (d, y, w) in unit_rows(&r) {
-            let x = a.step(&[], &y, d, w);
-            let z = b.step(&[], &y, d, w);
-            for (k, g) in worst.iter_mut().enumerate() {
-                *g = g.max(gap(x.pred[k], z.pred[k], 0.0));
+        let (mut xs, mut zs) = (Vec::new(), Vec::new());
+        for (d, y, w) in &rows {
+            xs.push(a.step(&[], y, *d, *w).pred);
+            zs.push(b.step(&[], y, *d, *w).pred);
+        }
+        let mut worst = [0.0f64; 2];
+        for (k, terms) in [(2usize, 9.0 * LIBM + 13.0), (3, 15.0 * LIBM + 21.0)] {
+            let decay = decayed_error(rows.iter().zip(&zs).map(|((d, _, _), z)| {
+                let v = if z[k].is_finite() { z[k] } else { 0.0 };
+                // A factor of 1 is no decay: neither side multiplies.
+                let f = Decay::Halflife(h).factor(*d);
+                (v, f, if f == 1.0 { 0.0 } else { U })
+            }));
+            for (i, (x, z)) in xs.iter().zip(&zs).enumerate() {
+                if x[k] == z[k] {
+                    continue;
+                }
+                let rho = gaps[k - 2] + terms * U;
+                // Both sides' decay roundings, each bounded by the one run.
+                let bound = (rho * z[k].abs() + 2.0 * decay[i]) * up(8);
+                let share = (x[k] - z[k]).abs() / bound;
+                assert!(
+                    share <= 1.0,
+                    "h {h}, row {i}, output {k}: {} against {}, past {bound}",
+                    x[k],
+                    z[k]
+                );
+                worst[k - 2] = worst[k - 2].max(share);
             }
         }
-        eprintln!("against realized, half-life {h}: {worst:?}");
-        assert!(worst[..2].iter().all(|w| *w == 0.0), "{worst:?}");
-        // the quarticity's factor the period's weight `W` in both (W13 B1),
-        // so under a decay too
-        assert!(worst.iter().all(|w| *w <= 16.0), "{worst:?}");
+        for (i, (x, z)) in xs.iter().zip(&zs).enumerate() {
+            assert_eq!(
+                (x[0].to_bits(), x[1].to_bits()),
+                (z[0].to_bits(), z[1].to_bits()),
+                "h {h}, row {i}"
+            );
+        }
+        eprintln!("against realized, half-life {h}: shares of the bounds {worst:?}");
     }
 }
 

@@ -1095,14 +1095,35 @@ fn ar_golden() {
 }
 
 /// `spectral` on the same stream's target: its power at three frequencies
-/// under decay, its null target and its gap among the rows.
+/// under decay, its null target and its gap among the rows. Held to the
+/// golden tolerance, not the bit: the decay factor is the platform's
+/// `exp2`, whose last bit differs between platforms (Windows Server 2022's
+/// `ucrtbase.dll` against Apple's and glibc's), and the power at 0.1 moves
+/// 84 ulps for one ulp of `λ` (measured on aarch64 by moving the half-life:
+/// `d ln P / d ln λ ≈ 105`, the ages of the rows it weighs, a property of
+/// the estimate rather than of its arithmetic), so Server 2022 read it 7
+/// ulps away.
 #[test]
 fn spectral_golden() {
+    let got = spectral_rows(Decay::Halflife(15.0));
+    check("spectral", &got, GOLDEN_SPECTRAL);
+}
+
+/// The same without a decay. Its trigonometry is the `libm` crate's and
+/// nothing decays, so no platform library is called: the same bits on
+/// every platform.
+#[test]
+fn spectral_undecayed_golden() {
+    let got = spectral_rows(Decay::Halflife(f64::INFINITY));
+    check_bits("spectral_undecayed", &got, GOLDEN_SPECTRAL_UNDECAYED);
+}
+
+fn spectral_rows(decay: Decay) -> Vec<f64> {
     let mut m = Spectral::new(SpectralCfg {
         n_targets: 1,
         frequencies: vec![0.0, 0.1, 0.5],
         spacing: 1.0,
-        decay: Decay::Halflife(15.0),
+        decay,
         scaling: SpectralScaling::Density,
         detrend: true,
         min_weight: 0.0,
@@ -1114,8 +1135,7 @@ fn spectral_golden() {
     .unwrap();
     let mut got = signature_of(&mut m, 1, false);
     got.extend(&m.powers()[0]);
-    // Its trigonometry is the `libm` crate's: the same bits everywhere.
-    check_bits("spectral", &got, GOLDEN_SPECTRAL);
+    got
 }
 
 /// `expectile` on the same stream: an upper expectile under decay whose
@@ -3114,6 +3134,15 @@ const GOLDEN_SPECTRAL: &[f64] = &[
     0.0,
     0.9737255863944811,
     2.9174867193629694,
+];
+
+const GOLDEN_SPECTRAL_UNDECAYED: &[f64] = &[
+    0.6776738003578449,
+    0.2110513549455075,
+    1.1460205332362976,
+    0.0,
+    1.2172479193873462,
+    3.7411947465245143,
 ];
 const GOLDEN_HOLT: &[f64] = &[1.510543784944197, 0.05346222911849938, 0.1063893470704486];
 const GOLDEN_SEQTEST: &[f64] = &[-0.6443570163905132, -1.086393303225433, -0.9577414997686987];
