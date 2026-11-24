@@ -111,9 +111,11 @@ Measured on this Mac against scikit-learn 1.9.1 and scipy 1.18.1:
   is said, and a row that would pass the cap is not learned, nor any after
   it, and the bank refuses the run naming the group and the bytes. A
   `window_rows` window's bytes are fixed by the settings and checked at the
-  call. A distinct `x` is 32 bytes a target (`x`, the weight, the sum,
-  the fitted value); a windowed row 8 bytes, a stamp under `window_size`,
-  and 40 bytes a target present.
+  call. A distinct `x` is counted at 40 bytes a target (`x`, the weight,
+  the sum, and beside them the value `S / W` and the fitted value); a
+  windowed row at 16 bytes and 8 a target in its ring, a stamp under
+  `window_size`, and 40 bytes a target present (`x`, `y`, the weight, and
+  its place in the fit).
 - **The refit is the whole fit, each learned row**, over the distinct `x`
   (`m` of them): `O(m)` a row, `m` bounded by the cap. It is what makes the
   fit scipy's bits; an update local to the block the row lands in would be

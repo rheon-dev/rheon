@@ -267,7 +267,7 @@ what = "power_variation, two series under a decay, a sum of squares, normalized 
 what = "tdigest, one column at compression 100, three levels: AnyModel::step_into, a merge of a copy of its buffer a row; its budget is CI's first count"
 
 [instructions.isotonic]
-what = "isotonic, one target on one feature over a window of 200 rows under a decay: AnyModel::step_into, a sorted insert and a whole pool-adjacent-violators pass over the window a row; its budget is CI's first count"
+what = "isotonic, one target on one feature over a window of 200 rows under a decay, read at the nearer end beyond them: AnyModel::step_into, a sorted insert and a whole pool-adjacent-violators pass over the window a row; its budget is CI's first count"
 
 [instructions.ddsketch]
 what = "ddsketch, one column at the default alpha, three levels: AnyModel::step_into, a walk of its live buckets a row for the levels and tail means; its budget is CI's first count"

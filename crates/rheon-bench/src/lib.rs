@@ -797,7 +797,10 @@ fn case_spec(id: &str) -> (Value, Shape) {
             (s, Shape::Linear)
         }
         "isotonic" => {
-            let mut s = fit(json!({"type": "isotonic", "window_rows": 200}), 1);
+            let mut s = fit(
+                json!({"type": "isotonic", "window_rows": 200, "out_of_bounds": "clip"}),
+                1,
+            );
             s.as_object_mut().expect("an object").remove("min_weight");
             (s, Shape::Linear)
         }
