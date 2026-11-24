@@ -827,3 +827,87 @@ fn garch_12_the_shock_weights_bounds_are_made_exact() {
     exact(GarchVol::Garch, &mut y, floor);
     assert!(y[0].is_nan() && y[1] == 0.1);
 }
+
+/// W14-15: a state saved after a row at the input bound loads, and goes on
+/// to the bit. At `|e| = 10¹⁰⁰` the step's `ω` is near `10¹⁹⁵`, and the
+/// projection in its metric left GARCH's and GJR's `α` and `β` at its
+/// rounding, `10¹⁶⁷` to `10¹⁸⁰`, outside the set the load reads; and under
+/// variance targeting the information matrix took a square past `10³⁰⁸`,
+/// `∞` for good. Each form and shape, each sign, saved after the bound row
+/// and after the row past it. The other side: a state outside the set, or
+/// with an information matrix that is not a number, is still refused.
+#[test]
+fn a_state_after_a_row_at_the_input_bound_loads_and_goes_on_to_the_bit() {
+    let mut forms = Vec::new();
+    for vol in [
+        GarchVol::Garch,
+        GarchVol::Gjr,
+        GarchVol::Egarch,
+        GarchVol::Figarch,
+    ] {
+        for dist in [GarchDist::Normal, GarchDist::T, GarchDist::Skewt] {
+            let c = cfg(vol, dist);
+            if c.validate().is_ok() {
+                forms.push(c);
+            }
+        }
+    }
+    forms.push(GarchCfg {
+        variance_targeting: true,
+        ..cfg(GarchVol::Garch, GarchDist::Normal)
+    });
+    let after = gjr_series([0.05, 0.08, 0.0, 0.9], 40, 99, 1.0);
+    for c in &forms {
+        let m0 = started(c);
+        for bound in [crate::INPUT_BOUND, -crate::INPUT_BOUND] {
+            for past in 0..2 {
+                let mut m = m0.clone();
+                run(&mut m, &[bound], 1.0);
+                run(&mut m, &after[..past], 1.0);
+                let what = format!(
+                    "{:?} {:?} vt {} at {bound:e}, {past} row past",
+                    c.vol, c.dist, c.variance_targeting
+                );
+                let mut back =
+                    Garch::restore(&m.state()).unwrap_or_else(|e| panic!("{what}: refused: {e}"));
+                assert_eq!(back, m, "{what}");
+                let set = super::fit::set_of(c.vol, c.q(), 0.0);
+                let k = c.k();
+                // in the set to the projection's tolerance, `10⁻¹²` of each
+                // constraint's size, as every step leaves it
+                assert!(
+                    set.holds(&m.series[0].theta[..k], 1e-12),
+                    "{what}: {:?}",
+                    m.series[0].theta
+                );
+                let (a, b) = (run(&mut m, &after, 1.0), run(&mut back, &after, 1.0));
+                assert_eq!(bits(&a), bits(&b), "{what}");
+                assert!(a.iter().flatten().all(|v| !v.is_infinite()), "{what}");
+            }
+        }
+    }
+    // the other side: outside the set, or an information matrix that is
+    // not a number, is damage
+    let refused = |m: &Garch, what: &str| {
+        assert!(Garch::restore(&m.state()).is_err(), "{what}: loaded");
+    };
+    let g = started(&cfg(GarchVol::Garch, GarchDist::Normal));
+    let mut bad = g.clone();
+    bad.series[0].theta[1] = 0.2;
+    bad.series[0].theta[2] = 0.9;
+    refused(&bad, "garch alpha + beta 1.1");
+    let mut bad = g.clone();
+    bad.series[0].theta[2] = 1.8e167;
+    refused(&bad, "garch beta 1.8e167");
+    let j = started(&cfg(GarchVol::Gjr, GarchDist::Normal));
+    let mut bad = j.clone();
+    bad.series[0].theta[1..4].copy_from_slice(&[8.8e179, -8.8e179, 0.0]);
+    refused(&bad, "gjr alpha + gamma / 2 8.8e179 / 2");
+    let v = started(&GarchCfg {
+        variance_targeting: true,
+        ..cfg(GarchVol::Garch, GarchDist::Normal)
+    });
+    let mut bad = v.clone();
+    bad.series[0].h[0] = f64::INFINITY;
+    refused(&bad, "an information matrix of inf");
+}

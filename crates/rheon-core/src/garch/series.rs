@@ -361,6 +361,15 @@ impl Series {
     /// variance was `s` and sensitivity `dl`: the running means, the
     /// information matrix and, unless `replay`, the step; then the filter's
     /// lags.
+    ///
+    /// A row whose update a running mean cannot hold, a term past `f64`'s
+    /// range, is not learned, as an absent residual is not: the next row
+    /// reads the lags the last learned row left. Under variance targeting
+    /// the score's direction in `α` is `∂ln s/∂α − v̄ ∂ln s/∂ω`, and a squared
+    /// return at the input bound (`10²⁰⁰`) takes `v̄` to about `10¹⁹⁸`, whose
+    /// square in the information matrix is past `10³⁰⁸`. Learned, that entry
+    /// was `∞` for good: no step could be solved again, and the state was
+    /// refused at its load.
     #[allow(clippy::too_many_arguments)]
     pub fn learn(
         &mut self,
@@ -373,16 +382,14 @@ impl Series {
         replay: bool,
     ) {
         let (vol, k, nf) = (cfg.vol, cfg.k(), cfg.n_free());
-        self.w_sum += w;
-        let a = w / self.w_sum;
+        let w_sum = self.w_sum + w;
+        let a = w / w_sum;
         let e2 = e * e;
-        self.mean_e2 += a * (e2 - self.mean_e2);
-        for (m, v) in self.xbar.iter_mut().zip(x) {
-            *m += a * (v - *m);
-        }
-        if vol == GarchVol::Egarch {
-            self.zbins[guard::bin(e / s.sqrt())] += w;
-        }
+        let mean_e2 = self.mean_e2 + a * (e2 - self.mean_e2);
+        let (mut kappa, mut slope) = (self.kappa, self.slope);
+        // the information matrix's lower triangle after the row
+        let mut h = [0.0; (MAX_K + 2) * (MAX_K + 3) / 2];
+        let h = &mut h[..self.h.len()];
         let mut sc = [0.0; MAX_K + 2];
         if cfg.dist == GarchDist::Normal {
             let mut df = [0.0; MAX_K];
@@ -391,16 +398,16 @@ impl Series {
                 // the free (α, β) through ω = v̄ (1 − α − β), and the
                 // Huber-clipped score centred on its own running mean,
                 // whose level the target fixes
-                let v = self.mean_e2;
+                let v = mean_e2;
                 df[0] = dl[1] - v * dl[0];
                 df[1] = dl[2] - v * dl[0];
                 let clipped = z2.min(HUBER_C2);
-                self.kappa += a * (clipped - self.kappa);
-                self.slope += a * (if z2 < HUBER_C2 { z2 } else { 0.0 } - self.slope);
-                if self.slope > 0.0 {
-                    (clipped - self.kappa) / self.slope
+                kappa += a * (clipped - kappa);
+                slope += a * (if z2 < HUBER_C2 { z2 } else { 0.0 } - slope);
+                if slope > 0.0 {
+                    (clipped - kappa) / slope
                 } else {
-                    clipped - self.kappa
+                    clipped - kappa
                 }
             } else {
                 df[..k].copy_from_slice(dl);
@@ -410,7 +417,7 @@ impl Series {
                 sc[i] = 0.5 * resid * df[i];
                 for j in 0..=i {
                     let t = tri(i, j);
-                    self.h[t] += a * (0.5 * df[i] * df[j] - self.h[t]);
+                    h[t] = self.h[t] + a * (0.5 * df[i] * df[j] - self.h[t]);
                 }
             }
         } else {
@@ -427,9 +434,27 @@ impl Series {
             for i in 0..nf {
                 for j in 0..=i {
                     let t = tri(i, j);
-                    self.h[t] += a * (sc[i] * sc[j] - self.h[t]);
+                    h[t] = self.h[t] + a * (sc[i] * sc[j] - self.h[t]);
                 }
             }
+        }
+        if !(mean_e2.is_finite()
+            && kappa.is_finite()
+            && slope.is_finite()
+            && h.iter().all(|v| v.is_finite()))
+        {
+            return;
+        }
+        self.w_sum = w_sum;
+        self.mean_e2 = mean_e2;
+        self.kappa = kappa;
+        self.slope = slope;
+        self.h.copy_from_slice(h);
+        for (m, v) in self.xbar.iter_mut().zip(x) {
+            *m += a * (v - *m);
+        }
+        if vol == GarchVol::Egarch {
+            self.zbins[guard::bin(e / s.sqrt())] += w;
         }
         if !replay {
             self.step(cfg, a, &sc[..nf]);
@@ -459,10 +484,9 @@ impl Series {
         let th = &self.theta;
         let new = if cfg.variance_targeting {
             let prop = [th[1] + mv[0], th[2] + mv[1]];
-            let (mut y, _) = project(&ab_set(), &prop, &hm, 2);
-            y[0] = y[0].max(0.0);
-            y[1] = y[1].max(0.0);
-            vec![self.mean_e2 * (1.0 - y[0] - y[1]), y[0], y[1]]
+            let (y, _) = project(&ab_set(), &prop, &hm, 2);
+            let (alpha, beta) = stationary(y[0], y[1]);
+            vec![self.mean_e2 * (1.0 - alpha - beta), alpha, beta]
         } else {
             let floor = OMEGA_FLOOR_FRAC * self.mean_e2;
             let mut prop: Vec<f64> = th.iter().zip(&mv).map(|(t, m)| t + m).collect();
@@ -554,17 +578,29 @@ fn project(set: &HalfSpaces, prop: &[f64], hm: &[f64], kc: usize) -> (Vec<f64>, 
     (y, shift)
 }
 
-/// The bounds that keep every shock's weight in the variance at 0 or above,
-/// made exact on a projected `θ`: the projection meets them only to its
-/// tolerance (`10⁻¹²` of each constraint's size), and a weight a hair below
-/// 0 times a squared return as large as the inputs allow (`10²⁰⁰`) takes
-/// the variance below 0 (review 2026-11-23, GARCH-12). `ω` at least its
-/// floor, and GARCH's `α, β ≥ 0`; GJR's `α ≥ 0`, `α + γ ≥ 0` (as `γ ≥ −α`,
-/// which rounds to an exact 0 sum) and `β ≥ 0`; FIGARCH's `φ ≥ 0`, `0 ≤ d ≤
-/// 1 − 10⁻⁴`, `2φ + d ≤ 1` and `0 ≤ β ≤ φ + d`, whose weights' own
+/// The process's set made exact on a projected `θ`: the projection meets
+/// it only to its tolerance (`10⁻¹²` of each constraint's size), and a
+/// weight a hair below 0 times a squared return as large as the inputs
+/// allow (`10²⁰⁰`) takes the variance below 0 (review 2026-11-23,
+/// GARCH-12). `ω` at least its floor; GARCH's `α, β ≥ 0` and `α + β ≤ 1 −
+/// 10⁻⁴`; GJR's `α ≥ 0`, `α + γ ≥ 0` (as `γ ≥ −α`, which rounds to an exact
+/// 0 sum), `β ≥ 0` and `α + γ/2 + β ≤ 1 − 10⁻⁴`; FIGARCH's `φ ≥ 0`, `0 ≤ d
+/// ≤ 1 − 10⁻⁴`, `2φ + d ≤ 1` and `0 ≤ β ≤ φ + d`, whose weights' own
 /// rounding the filter takes care of ([`super::filter`]). EGARCH's
 /// variance is an exponential; its box, `|γ| ≤ α ≤ 1` and `0 ≤ β ≤ 1 −
 /// 10⁻⁴`, is made exact too, as the guard reads it.
+///
+/// GARCH's and GJR's bound on the sum, which keeps the process stationary
+/// with a margin of `10⁻⁴`, is held to the projection's own tolerance
+/// rather than made exact: a sum a hair past it is no threat, and a point
+/// the projection left inside its tolerance keeps its bits. A sum past it
+/// by more is cut back to the bound: `β` first, then, where the news terms
+/// alone are past it, `α` (and GJR's `γ` with it, scaled, which keeps `α +
+/// γ ≥ 0`). The projection's tolerance is relative to its point's scale,
+/// which in the step's metric `ω` sets: after a squared return at the input
+/// bound `ω` is near `10¹⁹⁵`, and the projected `α` and `β` were its
+/// rounding, `10¹⁶⁷` to `10¹⁸⁰`, outside the set and never brought back,
+/// so the state was refused at its load.
 pub(super) fn exact(vol: GarchVol, y: &mut [f64], floor: f64) {
     if !y.iter().all(|v| v.is_finite()) {
         return;
@@ -574,8 +610,7 @@ pub(super) fn exact(vol: GarchVol, y: &mut [f64], floor: f64) {
         // under GARCH and GJR (`π ≥ 0`), and free under EGARCH
         GarchVol::Garch => {
             y[0] = y[0].max(floor);
-            y[1] = y[1].max(0.0);
-            y[2] = y[2].max(0.0);
+            (y[1], y[2]) = stationary(y[1], y[2]);
             y[3..].iter_mut().for_each(|p| *p = p.max(0.0));
         }
         GarchVol::Gjr => {
@@ -583,6 +618,19 @@ pub(super) fn exact(vol: GarchVol, y: &mut [f64], floor: f64) {
             y[1] = y[1].max(0.0);
             y[2] = y[2].max(-y[1]);
             y[3] = y[3].max(0.0);
+            // `α + γ/2 ≥ α/2 ≥ 0` once `γ ≥ −α`
+            let news = y[1] + 0.5 * y[2];
+            let top = 1.0 - super::fit::MARGIN;
+            if past(news + y[3], top) {
+                if news > top {
+                    let cut = top / news;
+                    y[1] *= cut;
+                    y[2] *= cut;
+                    y[3] = 0.0;
+                } else {
+                    y[3] = top - news;
+                }
+            }
             y[4..].iter_mut().for_each(|p| *p = p.max(0.0));
         }
         GarchVol::Figarch => {
@@ -599,6 +647,26 @@ pub(super) fn exact(vol: GarchVol, y: &mut [f64], floor: f64) {
             y[3] = y[3].clamp(0.0, 1.0 - super::fit::MARGIN);
         }
     }
+}
+
+/// GARCH's `(α, β)` on its set ([`exact`]): `α, β ≥ 0` exactly, `α + β ≤
+/// 1 − 10⁻⁴` to the projection's tolerance. The variance-targeted form's
+/// free pair too.
+fn stationary(alpha: f64, beta: f64) -> (f64, f64) {
+    let (alpha, beta) = (alpha.max(0.0), beta.max(0.0));
+    let top = 1.0 - super::fit::MARGIN;
+    if !past(alpha + beta, top) {
+        return (alpha, beta);
+    }
+    let alpha = alpha.min(top);
+    (alpha, top - alpha)
+}
+
+/// Whether a sum of parameters at 0 or above is past its bound `top` by
+/// more than the projection meets a constraint to, `10⁻¹²` of its size
+/// ([`HalfSpaces::holds`]).
+fn past(sum: f64, top: f64) -> bool {
+    sum - top > 1e-12 * (sum + top)
 }
 
 /// The rows a target's start may buffer: its share of what

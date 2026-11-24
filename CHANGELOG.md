@@ -1231,6 +1231,25 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **A `garch` state saved after a row at the input bound loads again**
+  (W14-15, from TEST-11's property test: 133 returns, `1e100` at row 123,
+  saved after it). After a squared return of `1e200` the step's `ω` is near
+  `1e195`, and the projection in the step's metric, whose tolerance its
+  point's scale sets, left GARCH's and GJR's `α` and `β` at `ω`'s
+  rounding, `1e167` to `1e180`: an explosive process, outside the set the
+  load reads, so the load refused it as damaged. The step now holds the
+  sum's bound, `α + β ≤ 1 − 1e-4` (GJR's `α + γ/2 + β`), as it holds the
+  bounds at 0, cutting a sum past it back to the bound; a point the
+  projection left inside its own tolerance keeps its bits, so no stream
+  without such a row moves. Under variance targeting the same row took an
+  entry of the information matrix past `1e308`, `inf` for good: no step
+  was solved again and the state was refused too. A row whose update a
+  running mean cannot hold is now not learned, as an absent residual is
+  not. Each form and shape, after `±1e100` and the row past it, now loads
+  and goes on to the bit (`a_state_after_a_row_at_the_input_bound_loads_and_goes_on_to_the_bit`),
+  and a state outside the set is still refused. Only the rows after a row
+  at the input bound move. Moves: `garch.*`.
+
 - **`glm` under the log link no longer runs away on an upward step**
   (PLAN 581, GLM-4; from Rheon C's oracle work). The Fisher step moves the
   row's own `η` by `δ = q' w μ^(1−p) (y − μ)` (`q' = x̃'(G + R I)⁻¹x̃`, `p`
