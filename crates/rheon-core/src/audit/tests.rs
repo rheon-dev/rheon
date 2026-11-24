@@ -982,7 +982,13 @@ fn a_state_of_the_wrong_shape_is_refused() {
         fed.step(&[v, -v, v * 0.5], &[], i as f64, 1.0);
     }
     assert!(Audit::restore(&fed.state()).is_ok());
-    let edits: [fn(&mut Audit); 16] = [
+    let edits: [fn(&mut Audit); 17] = [
+        // A minimum above the maximum, which `report`'s `clamp` panicked on
+        // once the digest read the median (review 2026-11-23, STATE-3).
+        |a| {
+            let c = &mut a.columns[0];
+            (c.min, c.max) = (c.max, c.min);
+        },
         |a| a.columns[0].moments.scale = 3.0,
         |a| a.clock.regular.scale = 0.5,
         |a| a.columns[1].moments.m4 = f64::INFINITY,

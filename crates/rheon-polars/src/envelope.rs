@@ -203,22 +203,52 @@ pub(crate) fn legacy_kind(bytes: &[u8]) -> Option<Kind> {
     }
 }
 
-/// The kind of any state file this build reads, enveloped or not, or why
-/// it is none: for a caller that takes a state of any kind, as a pipeline
-/// checkpoint does. The file's checksum is checked first.
+/// The kind of a state file as this build writes it -- enveloped, and
+/// ending with a checksum that holds -- or why it is none: for a caller
+/// that takes a state of any kind this build saves, as a pipeline checkpoint
+/// does. A file with no checksum at the end (`Seal::Absent`) is one cut
+/// short, or damaged in its last bytes, and was taken as a stage, which then
+/// replaced the good checkpoint on disk (review 2026-11-23, STATE-1); a file
+/// before the envelope is loaded by its own kind's call and saved again.
 pub(crate) fn kind_of(bytes: &[u8]) -> Result<Kind, String> {
-    if crate::checksum::check(bytes) == crate::checksum::Seal::Broken {
-        return Err("it is damaged (its bytes do not match the checksum it was saved with)".into());
+    let seal = crate::checksum::check(bytes);
+    if seal == crate::checksum::Seal::Broken {
+        return Err(Refused::Damaged.of_a_stage());
     }
     match head(bytes) {
-        Some(h) => Kind::from_tag(h.kind).ok_or_else(|| {
-            format!(
-                "it is a state of the kind {:?}, which this version of rheon does not read",
-                h.kind
-            )
+        Some(h) => {
+            let kind = Kind::from_tag(h.kind).ok_or_else(|| {
+                format!(
+                    "it is a state of the kind {:?}, which this version of rheon does not read",
+                    h.kind
+                )
+            })?;
+            if seal != crate::checksum::Seal::Holds {
+                return Err(Refused::Unsealed.of_a_stage());
+            }
+            Ok(kind)
+        }
+        None => Err(match legacy_kind(bytes) {
+            Some(k) => format!(
+                "it is {} written by an earlier version of rheon, in a layout this version \
+                 reads but does not save. Load it, and save it again with this version",
+                k.noun()
+            ),
+            None => "it is not a rheon state".to_string(),
         }),
-        None => legacy_kind(bytes).ok_or_else(|| "it is not a rheon state".to_string()),
     }
+}
+
+/// A frame a state holds as Arrow IPC, read back. Polars' IPC reader
+/// unwraps a field of a record batch's header, so bytes damaged there panic
+/// inside it rather than return its error (review P7): the panic is taken
+/// as the damage it reports, as an error the caller words. Every state
+/// read of IPC goes through here or catches the panic itself (review
+/// 2026-11-23, STATE-2: two sites did neither).
+pub(crate) fn read_ipc(bytes: &[u8]) -> polars::prelude::PolarsResult<polars::prelude::DataFrame> {
+    use polars::prelude::{IpcReader, SerReader, polars_err};
+    std::panic::catch_unwind(|| IpcReader::new(std::io::Cursor::new(bytes)).finish())
+        .unwrap_or_else(|_| Err(polars_err!(ComputeError: "its Arrow IPC bytes are damaged")))
 }
 
 /// How a loader of `want` opens `bytes`, before decoding any of them.
@@ -245,6 +275,12 @@ pub(crate) enum Refused {
 }
 
 impl Refused {
+    /// The refusal of a pipeline checkpoint's stage, a clause its caller
+    /// words: "it is ...".
+    pub(crate) fn of_a_stage(&self) -> String {
+        format!("it is {}", self.what())
+    }
+
     /// The refusal as a sentence's middle: "the state file is ...".
     pub(crate) fn what(&self) -> String {
         match self {
@@ -479,7 +515,8 @@ mod tests {
             assert_eq!(head(&old), None);
             assert_eq!(legacy_kind(&old), Some(kind));
             assert_eq!(open(&old, kind), Ok(Opened::Legacy { sealed: false }));
-            assert_eq!(kind_of(&old), Ok(kind));
+            // A stage is what this build saves (review 2026-11-23, STATE-1).
+            assert!(kind_of(&old).unwrap_err().contains("earlier version"));
         }
         assert_eq!(legacy_kind(&bytes), None);
         assert_eq!(kind_of(&bytes), Ok(Kind::Windows));

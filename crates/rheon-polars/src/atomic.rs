@@ -54,16 +54,55 @@ static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 /// filesystem (`fs::rename` does not cross mount points), named by pid and
 /// sequence number, so no two writers -- processes or threads -- share one.
 fn temp_name(dest: &Path, seq: u64) -> io::Result<PathBuf> {
-    let name = dest.file_name().ok_or_else(|| {
-        // The path is not in the message: every caller names it itself, and
-        // one that did too read it twice.
-        io::Error::new(io::ErrorKind::InvalidInput, "not a file path")
-    })?;
+    // The path is not in the message: every caller names it itself, and
+    // one that did too read it twice.
+    let not_a_file = || io::Error::new(io::ErrorKind::InvalidInput, "not a file path");
+    // `out/` names a folder, though `file_name` reads `out` from it: the
+    // temporary was written beside it and the rename over it failed at the
+    // end, after a run's every row (review 2026-11-23, CLI-5).
+    if names_a_folder(dest) {
+        return Err(not_a_file());
+    }
+    let name = dest.file_name().ok_or_else(not_a_file)?;
     Ok(dest.with_file_name(format!(
         ".{}.tmp{}-{seq}",
         name.to_string_lossy(),
         std::process::id()
     )))
+}
+
+/// Whether `path` ends in a separator, which names a folder whether or not
+/// one is there.
+pub(crate) fn names_a_folder(path: &Path) -> bool {
+    path.as_os_str()
+        .as_encoded_bytes()
+        .last()
+        .is_some_and(|&b| std::path::is_separator(char::from(b)))
+}
+
+/// How many taken names [`AtomicFile::create`] passes over before it gives
+/// up with the filesystem's `AlreadyExists`: more than any process leaves
+/// by accident, so only a directory filled on purpose reaches it.
+const TEMP_TRIES: u32 = 1024;
+
+/// `tmp`, created new, with `dest`'s permission bits where it has some.
+#[cfg(unix)]
+fn create_new(tmp: &Path, dest: &Path) -> io::Result<File> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    if let Ok(m) = fs::metadata(dest) {
+        options.mode((m.permissions().mode() & 0o777) | 0o200);
+    }
+    options.open(tmp)
+}
+
+#[cfg(not(unix))]
+fn create_new(tmp: &Path, _dest: &Path) -> io::Result<File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(tmp)
 }
 
 /// A file being written next to `dest`, renamed over it by [`Self::commit`].
@@ -81,18 +120,36 @@ impl AtomicFile {
     /// Create the temporary and hand back the handle to write into. The
     /// caller owns the handle (a `ParquetWriter` consumes one), so `commit`
     /// takes the paths rather than the file.
+    ///
+    /// The temporary is created new (`O_EXCL`): a name already taken -- a
+    /// file or a link planted there, or left by a process of the same pid
+    /// -- is passed over for the next, so nothing is written through a link
+    /// and renamed over the destination (review 2026-11-23, IO-2). On Unix
+    /// it is created with the destination's permission bits (and the
+    /// owner's write, to write it), so a private file's new bytes are never
+    /// readable by others while they are written.
     pub(crate) fn create(dest: &Path) -> io::Result<(File, Self)> {
         let dest = resolve_symlink(dest);
-        let tmp = temp_name(&dest, NEXT_TEMP.fetch_add(1, Ordering::Relaxed))?;
-        let file = File::create(&tmp)?;
-        Ok((
-            file,
-            Self {
-                dest,
-                tmp,
-                pending: true,
-            },
-        ))
+        let mut tries = 0;
+        loop {
+            let tmp = temp_name(&dest, NEXT_TEMP.fetch_add(1, Ordering::Relaxed))?;
+            match create_new(&tmp, &dest) {
+                Ok(file) => {
+                    return Ok((
+                        file,
+                        Self {
+                            dest,
+                            tmp,
+                            pending: true,
+                        },
+                    ));
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists && tries < TEMP_TRIES => {
+                    tries += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Flush the temporary to disk and rename it over the destination.
@@ -237,7 +294,10 @@ fn keep_mode(dest: &Path, tmp: &Path) -> io::Result<()> {
     match fs::metadata(dest) {
         Ok(m) => fs::set_permissions(
             tmp,
-            fs::Permissions::from_mode(m.permissions().mode() & 0o7777),
+            // The permission bits alone: setuid, setgid and sticky are not
+            // a state file's to carry, and setting them can be refused
+            // (review 2026-11-23, IO-2).
+            fs::Permissions::from_mode(m.permissions().mode() & 0o777),
         ),
         Err(_) => Ok(()),
     }
@@ -343,13 +403,15 @@ mod tests {
         let dest = dir.join("state.msgpack");
         fs::write(&dest, b"the good state").unwrap();
 
-        // Make `File::create` on the temporary fail, by putting a directory
-        // where it goes. That is the same shape as a full disk: the failure
-        // happens on the temporary, before the destination is touched. The
-        // name carries a process-wide sequence number, so block the next
-        // few hundred: other tests in this binary take some in between.
+        // Make creating the temporary fail, by putting a directory where it
+        // goes. That is the same shape as a full disk: the failure happens
+        // on the temporary, before the destination is touched. A taken name
+        // is passed over for the next, up to `TEMP_TRIES` of them, and the
+        // name carries a process-wide sequence number, so block that many
+        // and a few hundred more: other tests in this binary take some in
+        // between.
         let first = NEXT_TEMP.load(Ordering::Relaxed);
-        let blockers: Vec<PathBuf> = (first..first + 256)
+        let blockers: Vec<PathBuf> = (first..first + u64::from(TEMP_TRIES) + 512)
             .map(|n| temp_name(&dest, n).unwrap())
             .collect();
         for b in &blockers {
@@ -357,6 +419,7 @@ mod tests {
         }
 
         let err = write(&dest, b"the new state").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{err}");
         assert_eq!(fs::read(&dest).unwrap(), b"the good state", "{err}");
 
         for b in &blockers {
@@ -470,6 +533,79 @@ mod tests {
                 .is_symlink(),
             "the link was replaced by a regular file"
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Review 2026-11-23, IO-2 (1): the temporary is created new
+    /// (`O_EXCL`), so a file or a link already at its name -- planted, or
+    /// left by a process of the same pid -- is never written through: the
+    /// name after it is taken. `File::create` followed a planted link,
+    /// wrote into its target, and renamed the link over the destination.
+    #[cfg(unix)]
+    #[test]
+    fn a_temporary_is_created_new_and_never_through_a_planted_link() {
+        let dir = std::env::temp_dir().join(format!("rheon-atomic-excl-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("state.msgpack");
+        let victim = dir.join("victim");
+        fs::write(&victim, b"untouched").unwrap();
+        let first = NEXT_TEMP.load(Ordering::Relaxed);
+        for seq in first..first + 64 {
+            std::os::unix::fs::symlink(&victim, temp_name(&dest, seq).unwrap()).unwrap();
+        }
+        write(&dest, b"new").unwrap();
+        assert_eq!(fs::read(&victim).unwrap(), b"untouched");
+        assert_eq!(fs::read(&dest).unwrap(), b"new");
+        assert!(fs::symlink_metadata(&dest).unwrap().file_type().is_file());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Review 2026-11-23, IO-2 (2) and (3): the temporary is created with
+    /// the destination's mode, so a private file's new bytes are never
+    /// readable by others while they are written (it was the process's
+    /// default, 644 under a umask of 022, until the commit); and the mode
+    /// copied is the permission bits alone, not setuid, setgid or sticky.
+    #[cfg(unix)]
+    #[test]
+    fn the_temporary_is_as_private_as_the_destination_while_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("rheon-atomic-priv-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("state.msgpack");
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+        fs::write(&dest, b"old").unwrap();
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o600)).unwrap();
+        let (file, pending) = AtomicFile::create(&dest).unwrap();
+        assert_eq!(mode(&pending.tmp), 0o600, "while it is written");
+        drop(file);
+        pending.commit().unwrap();
+        assert_eq!(mode(&dest), 0o600);
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o4755)).unwrap();
+        assert_eq!(mode(&dest), 0o4755, "the setuid bit took");
+        write(&dest, b"new").unwrap();
+        assert_eq!(mode(&dest), 0o755, "no special bit is copied");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Review 2026-11-23, CLI-5: a path ending in a separator names a
+    /// folder, and no file is made for it. Its temporary was made beside it,
+    /// and the rename at the end failed (`ENOTDIR`), after the run.
+    #[test]
+    fn a_path_ending_in_a_separator_is_refused_at_once() {
+        let dir = std::env::temp_dir().join(format!("rheon-atomic-slash-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut slashed = dir.join("out").into_os_string();
+        slashed.push(std::path::MAIN_SEPARATOR_STR);
+        let err = AtomicFile::create(Path::new(&slashed))
+            .map(drop)
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            0,
+            "a temporary was made"
+        );
+        assert!(AtomicFile::create(&dir.join("out")).is_ok());
         fs::remove_dir_all(&dir).unwrap();
     }
 }

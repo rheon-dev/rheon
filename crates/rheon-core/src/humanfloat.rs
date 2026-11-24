@@ -20,6 +20,16 @@
 
 use serde::{Deserializer, Serialize, Serializer};
 
+/// The elements to reserve ahead of reading a sequence whose length the
+/// file claims: at most 1 MiB of them, as serde's own collections reserve,
+/// so a damaged or crafted length (`0xffffffff`) reserves no more than the
+/// bytes in hand justify (review 2026-11-23, STATE-2). The sequence still
+/// grows to its true length as it is read.
+fn cautious(hint: Option<usize>) -> usize {
+    hint.unwrap_or(0)
+        .min((1 << 20) / std::mem::size_of::<f64>())
+}
+
 fn tag(v: f64) -> &'static str {
     if v.is_nan() {
         "nan"
@@ -115,7 +125,7 @@ pub mod vec_f64_or_tag {
                 self,
                 mut a: A,
             ) -> Result<Vec<f64>, A::Error> {
-                let mut out = Vec::with_capacity(a.size_hint().unwrap_or(0));
+                let mut out = Vec::with_capacity(cautious(a.size_hint()));
                 while let Some(x) = a.next_element_seed(One)? {
                     out.push(x);
                 }
@@ -168,7 +178,7 @@ pub mod vec_vec_f64_or_tag {
                 self,
                 mut a: A,
             ) -> Result<Vec<Vec<f64>>, A::Error> {
-                let mut out = Vec::with_capacity(a.size_hint().unwrap_or(0));
+                let mut out = Vec::with_capacity(cautious(a.size_hint()));
                 while let Some(x) = a.next_element_seed(One)? {
                     out.push(x);
                 }
@@ -221,7 +231,7 @@ pub mod vec_vec_vec_f64_or_tag {
                 self,
                 mut a: A,
             ) -> Result<Vec<Vec<Vec<f64>>>, A::Error> {
-                let mut out = Vec::with_capacity(a.size_hint().unwrap_or(0));
+                let mut out = Vec::with_capacity(cautious(a.size_hint()));
                 while let Some(x) = a.next_element_seed(One)? {
                     out.push(x);
                 }
@@ -277,7 +287,7 @@ pub mod vec_opt_vec_f64_or_tag {
                 self,
                 mut a: A,
             ) -> Result<Vec<Option<Vec<f64>>>, A::Error> {
-                let mut out = Vec::with_capacity(a.size_hint().unwrap_or(0));
+                let mut out = Vec::with_capacity(cautious(a.size_hint()));
                 while let Some(x) = a.next_element_seed(One)? {
                     out.push(x);
                 }

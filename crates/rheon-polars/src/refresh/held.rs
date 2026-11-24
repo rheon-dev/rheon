@@ -23,8 +23,6 @@
 //! are the same dtypes within a run, and a resumed run on a temporal clock
 //! may give another unit.
 
-use std::io::Cursor;
-
 use polars::prelude::*;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -55,7 +53,10 @@ impl<'de> Deserialize<'de> for Bin {
                 Ok(Bin(v))
             }
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Bin, A::Error> {
-                let mut v = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                // A length the file claims reserves at most 4 KiB ahead of
+                // the bytes read, as serde's own collections do: a claimed
+                // `0xffffffff` reserved 4 GiB (review 2026-11-23, STATE-2).
+                let mut v = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
                 while let Some(b) = seq.next_element()? {
                     v.push(b);
                 }
@@ -180,7 +181,7 @@ impl Cell {
             Self::Duration(v, u) => Series::new(n, [*v]).into_duration((*u).into()),
             Self::Time(v) => Series::new(n, [*v]).into_time(),
             Self::Arrow(b) => {
-                let frame = IpcReader::new(Cursor::new(&b.0)).finish()?;
+                let frame = crate::envelope::read_ipc(&b.0)?;
                 let col = frame.columns().first().ok_or_else(|| {
                     polars_err!(ComputeError:
                         "rp.stream.refresh_time: the state is damaged: a value it holds has no \
@@ -281,5 +282,57 @@ impl Held {
             cols.push(s.into_column());
         }
         DataFrame::new(1, cols)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review 2026-11-23, STATE-2: a value kept as Arrow IPC (a list here)
+    /// whose bytes are damaged is refused as damage, never a panic: Polars'
+    /// IPC reader unwraps a field of a record batch's header, so bytes damaged
+    /// there panicked inside it (review P7 caught it at two other sites).
+    #[test]
+    fn a_damaged_arrow_value_is_refused_and_never_panics() {
+        let list = Series::new("v".into(), [1.0f64, 2.0, 3.0])
+            .implode()
+            .unwrap()
+            .into_series();
+        let cell = Cell::of(&list.into_column()).unwrap();
+        let Cell::Arrow(Bin(good)) = &cell else {
+            panic!("a list is kept as Arrow")
+        };
+        assert_eq!(cell.series("v").unwrap().len(), 1);
+        let mut refused = 0;
+        for i in 0..good.len() {
+            for v in [0x00u8, 0xff] {
+                if good[i] == v {
+                    continue;
+                }
+                let mut bad = good.clone();
+                bad[i] = v;
+                let got =
+                    std::panic::catch_unwind(move || Cell::Arrow(Bin(bad)).series("v").map(drop));
+                match got {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => refused += 1,
+                    Err(_) => panic!("byte {i} set to {v:#04x} panicked the read"),
+                }
+            }
+        }
+        assert!(refused > 0, "some damage is refused");
+    }
+
+    /// A binary given as an array claiming more elements than the file holds
+    /// is refused, and its claimed length reserves no memory past a small
+    /// bound (review 2026-11-23, STATE-2): `0xffffffff` reserved 4 GiB.
+    #[test]
+    fn an_array_claiming_more_bytes_than_it_holds_is_refused() {
+        let mut bytes = vec![0xdd, 0xff, 0xff, 0xff, 0xff];
+        bytes.extend([1, 2, 3]);
+        assert!(rmp_serde::from_slice::<Bin>(&bytes).is_err());
+        let ok = [0x93, 1, 2, 3];
+        assert_eq!(rmp_serde::from_slice::<Bin>(&ok).unwrap().0, vec![1, 2, 3]);
     }
 }

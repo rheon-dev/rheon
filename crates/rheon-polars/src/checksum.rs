@@ -121,12 +121,25 @@ fn held(pending: &RefCell<Pending>) -> io::Result<std::cell::RefMut<'_, Pending>
 impl<W: Write> Write for Hashing<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut p = held(&self.pending)?;
-        p.buf.extend_from_slice(buf);
-        if p.buf.len() >= BLOCK {
-            let Pending { hasher, buf: block } = &mut *p;
+        if p.buf.len() + buf.len() < BLOCK {
+            p.buf.extend_from_slice(buf);
+            return Ok(buf.len());
+        }
+        // The block is handed on first, then a write of a block or more
+        // goes straight through: copied into the block, a stage's bytes
+        // were held twice through a checkpoint's save (review 2026-11-23,
+        // IO-1). The bytes hashed and written, and their order, are the same.
+        let Pending { hasher, buf: block } = &mut *p;
+        if !block.is_empty() {
             hasher.update(block);
             self.inner.write_all(block)?;
             block.clear();
+        }
+        if buf.len() >= BLOCK {
+            hasher.update(buf);
+            self.inner.write_all(buf)?;
+        } else {
+            block.extend_from_slice(buf);
         }
         Ok(buf.len())
     }
@@ -315,6 +328,51 @@ mod tests {
             let m = v.as_map().unwrap();
             assert_eq!(m.len(), fields + 1);
             assert_eq!(m.last().unwrap().0.as_str(), Some("checksum"));
+        }
+    }
+
+    /// Review 2026-11-23, IO-1: a write of a whole stage (a checkpoint
+    /// writes each stage's bytes in one call) was copied into the block
+    /// before it was hashed, so the save held a second copy of the stage.
+    /// A write past a block goes straight through; the bytes and the digest
+    /// are a block-at-a-time pass's, on every split of the writes.
+    #[test]
+    fn a_large_write_is_not_copied_into_the_block() {
+        let big: Vec<u8> = (0..(3 * BLOCK + 17))
+            .map(|i| (i * 31 % 251) as u8)
+            .collect();
+        let mut whole = Vec::new();
+        {
+            let (mut w, trailer) = Hashing::new(&mut whole);
+            w.write_all(&big[..5]).unwrap();
+            w.write_all(&big[5..]).unwrap();
+            let Trailer::Streamed(p) = &trailer else {
+                unreachable!()
+            };
+            assert!(
+                p.borrow().buf.capacity() <= BLOCK,
+                "the block grew to {}",
+                p.borrow().buf.capacity()
+            );
+            w.flush().unwrap();
+            let mut h = Xxh3::new();
+            h.update(&big);
+            assert_eq!(p.borrow().hasher.digest(), h.digest());
+        }
+        assert_eq!(whole, big);
+        for split in [1, 7, BLOCK - 1, BLOCK, BLOCK + 1, 2 * BLOCK] {
+            let mut out = Vec::new();
+            let (mut w, trailer) = Hashing::new(&mut out);
+            for chunk in big.chunks(split) {
+                w.write_all(chunk).unwrap();
+            }
+            w.flush().unwrap();
+            let Trailer::Streamed(p) = &trailer else {
+                unreachable!()
+            };
+            assert_eq!(p.borrow().hasher.digest(), xxh3_64(&big), "split {split}");
+            drop(w);
+            assert_eq!(out, big, "split {split}");
         }
     }
 }
