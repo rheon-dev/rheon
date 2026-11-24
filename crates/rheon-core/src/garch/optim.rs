@@ -45,7 +45,7 @@
 
 use super::linalg::{cholesky, lu_solve, ridged};
 
-pub(super) const MAX_ITER: u32 = 50;
+pub(crate) const MAX_ITER: u32 = 50;
 const MAX_HALVINGS: u32 = 30;
 const ARMIJO: f64 = 1e-4;
 const RIDGE: f64 = 1e-10;
@@ -57,7 +57,7 @@ const UNSEEN: f64 = 1e-10;
 const STALLED: f64 = 1e-11;
 
 /// An objective's value, gradient and Gauss-Newton matrix (row-major).
-pub(super) struct Eval {
+pub(crate) struct Eval {
     pub f: f64,
     pub g: Vec<f64>,
     pub h: Vec<f64>,
@@ -75,13 +75,13 @@ impl Eval {
 
 /// How a fit stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Stop {
+pub(crate) enum Stop {
     Converged,
     NoAscent,
     IterationCap,
 }
 
-pub(super) struct Fit {
+pub(crate) struct Fit {
     pub theta: Vec<f64>,
     /// How many iterations ran, and why they stopped: what the tests read
     /// of a fit.
@@ -174,7 +174,7 @@ fn directions(
 /// Maximize `obj` over the set `project` maps onto, from the best point of
 /// `grid` (each projected first). `None` when no grid point has a finite
 /// value.
-pub(super) fn maximize(
+pub(crate) fn maximize(
     obj: &dyn Fn(&[f64], bool) -> Eval,
     project: &dyn Fn(&[f64]) -> Vec<f64>,
     grid: &[Vec<f64>],
@@ -297,7 +297,7 @@ fn decrement(obj: &dyn Fn(&[f64], bool) -> Eval, theta: &[f64], e: &Eval, units:
 
 /// A projection onto a set in a metric: the point, then the metric
 /// (row-major), to the nearest point of the set.
-pub(super) type InMetric<'a> = dyn Fn(&[f64], &[f64]) -> Vec<f64> + 'a;
+pub(crate) type InMetric<'a> = dyn Fn(&[f64], &[f64]) -> Vec<f64> + 'a;
 
 /// The Newton decrement inside the set: the gain the Newton step predicts
 /// once it is projected onto the set in the curvature's own metric, `gᵀd −
@@ -308,7 +308,7 @@ pub(super) type InMetric<'a> = dyn Fn(&[f64], &[f64]) -> Vec<f64> + 'a;
 /// though the decrement there is not. Never more than the decrement: `θ`
 /// is in the set, and `P_M` is the point of the set nearest the step.
 /// Infinite where no step is.
-pub(super) fn decrement_in(
+pub(crate) fn decrement_in(
     obj: &dyn Fn(&[f64], bool) -> Eval,
     theta: &[f64],
     units: &[f64],

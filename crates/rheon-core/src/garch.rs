@@ -170,9 +170,9 @@ mod dist;
 mod filter;
 mod fit;
 mod guard;
-mod linalg;
+pub(crate) mod linalg;
 mod math;
-mod optim;
+pub(crate) mod optim;
 mod series;
 
 use series::{Series, bound};

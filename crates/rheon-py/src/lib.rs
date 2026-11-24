@@ -1625,6 +1625,7 @@ fn sarima_filter(
         // The most a group's state may hold: a season of 168 or more is
         // filtered here whatever the bank's default cap would say.
         max_state_bytes: Some(64 << 20),
+        estimate: None,
     })
     .map_err(PyValueError::new_err)?;
     let (mut w_hat, mut y_hat) = (Vec::with_capacity(y.len()), Vec::with_capacity(y.len()));

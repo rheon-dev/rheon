@@ -65,6 +65,25 @@
 //!   weight enters these sums only: the filter conditions on an observed
 //!   value whatever it weighs.
 //!
+//! # Estimated parameters
+//!
+//! With `estimate` set and no `params`, each target's parameters are
+//! estimated from its own rows: its slots past the differencing's fill
+//! are buffered until a start is fitted and accepted, then the buffer is
+//! replayed at the fit and dropped, and each learned row steps the
+//! parameters by recursive prediction error (the equations are in the
+//! `est` module). A target reports nothing until its start is accepted,
+//! and [`Sarima::wait`] names why: the differencing filling; Kish's count
+//! of the buffer, `(sum w)^2 / sum w^2`, not past the structural minimum
+//! (every parameter, `sigma2` among them, plus `d + sD`); or a fit that
+//! sits on a stationarity or invertibility bound, has not converged, or
+//! has a standard error past its bound. `min_weight` is checked on top of
+//! that, against the target's own weight, as at given parameters. A break
+//! fits the start again from a new buffer. The prediction is the
+//! conditional recursion's, `ŵ_t = xw_t' beta - sum_i A_i z_{t-i} + sum_j
+//! C_j e_{t-j}` with `z = w - xw' beta`, not the Kalman filter's: its state
+//! is linear in the season where the filter's covariance is quadratic.
+//!
 //! # The state
 //!
 //! Per target, the ring (`d + sD` values and flags), `a` (`r`) and `P`'s
@@ -74,15 +93,28 @@
 //! hold. Bounded by the orders,
 //! never by the stream: [`Sarima::state_bytes`], capped by
 //! `max_state_bytes` when the model is built.
+//!
+//! Where the parameters are estimated there is no filter. Per target, the
+//! ring, and the run: `9 (n + 2 + n^2 + L (6 + 2k))` bytes for
+//! `n = k + p + q + P + Q` parameters and rings of
+//! `L = max(p + sP, q + sQ, 1)` lags (at `(1,1,1)(1,1,1,s)` without
+//! regressors, `9 (22 + 6 (s + 1))`: 1,548 bytes at `s = 24`, 9,324 at
+//! `s = 168`); and until its start is accepted its buffer, `9 (2 + k)`
+//! bytes a slot, checked against `max_state_bytes` as it grows (a warning
+//! past half of it, and the slot that would pass it refused, after which
+//! nothing more is buffered).
 
+mod est;
 mod poly;
 mod series;
+mod transform;
 
 use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
+pub use est::SarimaWait;
 use poly::Ssm;
 use series::{Diff, Series, Work};
 
@@ -173,9 +205,58 @@ pub struct SarimaCfg {
     /// [`crate::DEFAULT_STATE_BYTES`].
     #[serde(default)]
     pub max_state_bytes: Option<u64>,
+    /// Estimate each target's parameters (`params` then empty), rather
+    /// than filter at given ones.
+    #[serde(default)]
+    pub estimate: Option<SarimaEstimate>,
+}
+
+/// How the parameters are estimated: whether the autoregressive factors
+/// are held stationary and the moving-average ones invertible, through
+/// `SARIMAX`'s transforms (`enforce_stationarity`,
+/// `enforce_invertibility`, both on by default there and here).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SarimaEstimate {
+    pub enforce_stationarity: bool,
+    pub enforce_invertibility: bool,
+}
+
+impl Default for SarimaEstimate {
+    fn default() -> Self {
+        Self {
+            enforce_stationarity: true,
+            enforce_invertibility: true,
+        }
+    }
 }
 
 impl SarimaCfg {
+    /// The estimator's layout of the parameters; `None` at given ones.
+    fn shape(&self) -> Option<est::Shape> {
+        let e = self.estimate?;
+        let [p, _, q] = self.order;
+        let [sp, _, sq, _] = self.seasonal_order;
+        Some(est::Shape {
+            k: self.n_features,
+            p,
+            q,
+            sp,
+            sq,
+            s: self.s(),
+            stationary: e.enforce_stationarity,
+            invertible: e.enforce_invertibility,
+        })
+    }
+
+    /// The structural minimum Kish's count must pass before a start is
+    /// fitted: every parameter estimated, `sigma2` with them, and the
+    /// differencing's `d + sD`.
+    pub fn structural_minimum(&self) -> f64 {
+        let [p, _, q] = self.order;
+        let [sp, _, sq, _] = self.seasonal_order;
+        (self.n_features + p + q + sp + sq + 1) as f64 + self.depth() as f64
+    }
+
     fn seasonal(&self) -> bool {
         let [sp, sd, sq, _] = self.seasonal_order;
         sp + sd + sq > 0
@@ -228,7 +309,14 @@ impl SarimaCfg {
                  has none. Name at least one column in targets.",
             );
         }
-        if self.params.len() != self.n_targets {
+        if self.estimate.is_some() && !self.params.is_empty() {
+            no.refuse(format!(
+                "sarima: params must be empty when the parameters are estimated, but it gives \
+                 {} sets. Give no params, or switch estimation off to filter at them.",
+                self.params.len()
+            ));
+        }
+        if self.estimate.is_none() && self.params.len() != self.n_targets {
             no.refuse(format!(
                 "sarima: params must give one set of parameters a target, {}, but it gives {}. \
                  Give one set for each target.",
@@ -323,12 +411,19 @@ impl SarimaCfg {
         no.stop_here()?;
         let bytes = Sarima::state_bytes(self);
         if bytes > self.cap() {
+            let what = if self.estimate.is_some() {
+                format!(
+                    "the estimator's rings of {} lags",
+                    self.shape().map_or(0, |s| s.lags())
+                )
+            } else {
+                format!("{} states", self.states())
+            };
             no.refuse(format!(
-                "sarima: the state of {} targets with {} states and {} slots of differencing \
+                "sarima: the state of {} targets with {what} and {} slots of differencing \
                  would hold {bytes} bytes, past max_state_bytes of {}. Use a shorter season or \
                  lower orders, or raise max_state_bytes.",
                 self.n_targets,
-                self.states(),
                 self.depth(),
                 self.cap()
             ));
@@ -375,6 +470,18 @@ pub struct Sarima {
     xs: Vec<VecDeque<f64>>,
     /// The weight of every row before the next (hard rule 8).
     n_eff: f64,
+    /// Each target's estimator, where the parameters are estimated; empty
+    /// at given ones.
+    #[serde(default)]
+    est: Vec<est::Est>,
+    /// The bytes a buffered slot would have taken the state to, past the
+    /// cap: from then on nothing is buffered.
+    #[serde(default)]
+    over: Option<u64>,
+    #[serde(default)]
+    warned: bool,
+    #[serde(default)]
+    warning: Option<u64>,
     /// Each target's state-space matrices, from `cfg`: not state.
     #[serde(skip)]
     ssm: Vec<Ssm>,
@@ -392,6 +499,12 @@ impl Sarima {
         let ssm = cfg.ssms();
         let depth = cfg.depth() as usize;
         let mut series = Vec::with_capacity(cfg.n_targets);
+        let est = if cfg.estimate.is_some() {
+            series.extend((0..cfg.n_targets).map(|_| Series::new(depth, 0, &[])));
+            (0..cfg.n_targets).map(|_| est::Est::new()).collect()
+        } else {
+            Vec::new()
+        };
         for (j, m) in ssm.iter().enumerate() {
             let p0 = m.stationary_cov().ok_or_else(|| {
                 format!(
@@ -408,6 +521,10 @@ impl Sarima {
                 .collect(),
             series,
             n_eff: 0.0,
+            est,
+            over: None,
+            warned: false,
+            warning: None,
             xw: Scratch(Vec::with_capacity(cfg.n_features)),
             work: Work::default(),
             ssm,
@@ -429,12 +546,26 @@ impl Sarima {
     /// depth) + depth` for `P`'s triangle, `a`, the ring and its flags,
     /// and its parameters; `9 depth` a regressor; and the names and
     /// settings around them.
+    ///
+    /// Where the parameters are estimated there is no filter (`r` is 0 and
+    /// no parameters are given); a target holds instead its run,
+    /// `9 (n + 2 + n^2 + L (6 + 2k))` for `n` parameters stepped and rings
+    /// of `L = max(p + sP, q + sQ, 1)` lags, and its buffer until the start
+    /// is accepted, [`Self::buffer_bytes`] a slot, which is checked as it
+    /// grows ([`Self::bytes`]).
     pub fn state_bytes(cfg: &SarimaCfg) -> u64 {
-        let (r, depth) = (cfg.states(), cfg.depth());
+        let estimated = cfg.shape();
+        let (r, depth) = match estimated {
+            Some(_) => (0, cfg.depth()),
+            None => (cfg.states(), cfg.depth()),
+        };
         let [p, _, q] = cfg.order.map(|v| v as u64);
         let [sp, _, sq, _] = cfg.seasonal_order.map(|v| v as u64);
         let k = cfg.n_features as u64;
-        let params = 9 * (k + p + q + sp + sq + 1) + 96;
+        let params = match estimated {
+            Some(shape) => (est::Run::len(&shape) as u64).saturating_mul(9) + 160,
+            None => 9 * (k + p + q + sp + sq + 1) + 96,
+        };
         let per = r
             .saturating_mul(r.saturating_add(1))
             .saturating_div(2)
@@ -447,6 +578,46 @@ impl Sarima {
         per.saturating_mul(cfg.n_targets as u64)
             .saturating_add(depth.saturating_mul(9).saturating_add(8).saturating_mul(k))
             .saturating_add(320)
+    }
+
+    /// The bytes one buffered slot adds to a target's state: its
+    /// differenced value, its weight and its `k` differenced regressors.
+    pub fn buffer_bytes(cfg: &SarimaCfg) -> u64 {
+        9 * (2 + cfg.n_features as u64)
+    }
+
+    /// The bytes the state holds as it stands: [`Self::state_bytes`] and
+    /// each target's buffer.
+    pub fn bytes(&self) -> u64 {
+        let slots: usize = self.est.iter().map(|e| e.buf.w.len()).sum();
+        Self::state_bytes(&self.cfg)
+            .saturating_add((slots as u64).saturating_mul(Self::buffer_bytes(&self.cfg)))
+    }
+
+    /// Why target `j` reports nothing, where its parameters are estimated
+    /// and its start has not been accepted; `None` once it has, and at
+    /// given parameters.
+    pub fn wait(&self, j: usize) -> Option<SarimaWait> {
+        let e = self.est.get(j)?;
+        e.run.is_none().then_some(e.wait)
+    }
+
+    /// Target `j`'s parameters as they stand: the given ones, or the
+    /// estimator's once its start is accepted (`None` before).
+    pub fn params(&self, j: usize) -> Option<SarimaParams> {
+        let Some(shape) = self.cfg.shape() else {
+            return self.cfg.params.get(j).cloned();
+        };
+        let run = self.est.get(j)?.run.as_ref()?;
+        let par = run.params(&shape);
+        let flat: Vec<f64> = par.iter().copied().chain([run.sigma2]).collect();
+        SarimaParams::from_flat(&flat, shape.k, self.cfg.order, self.cfg.seasonal_order)
+    }
+
+    /// Kish's count of target `j`'s buffer, where it is buffering.
+    pub fn buffered_kish(&self, j: usize) -> Option<f64> {
+        let e = self.est.get(j)?;
+        e.run.is_none().then(|| e.kish())
     }
 
     /// The slots a clock step of `d_clock` leaves unobserved before the
@@ -474,6 +645,76 @@ impl Sarima {
             let p0 = if cov { ssm.stationary_cov() } else { None };
             series.restart(p0.as_deref());
         }
+        if self.cfg.estimate.is_some() {
+            // The start is fitted again from a new buffer.
+            for (series, e) in self.series.iter_mut().zip(&mut self.est) {
+                series.restart(None);
+                *e = est::Est::new();
+            }
+        }
+    }
+
+    /// One slot of target `j` where the parameters are estimated: its
+    /// prediction `ŷ_t`, then the slot buffered or stepped. `y` is the
+    /// slot's value where observed with a weight above 0, `xw` the slot's
+    /// differenced regressors where known, `keep` whether the state keeps
+    /// them (not for a row of weight 0, which keeps nothing of its own),
+    /// `fill` whether a slot not observed keeps its prediction in the ring.
+    fn est_slot(
+        &mut self,
+        j: usize,
+        y: Option<f64>,
+        weight: f64,
+        xw: Option<&[f64]>,
+        keep: bool,
+        fill: bool,
+    ) -> f64 {
+        let kept_xw = xw.filter(|_| keep);
+        let Some(shape) = self.cfg.shape() else {
+            return f64::NAN;
+        };
+        let diff = self.cfg.diff();
+        let depth = diff.depth();
+        let floor = self.cfg.structural_minimum();
+        let series = &mut self.series[j];
+        if series.ys.len() < depth {
+            series.push(y.unwrap_or(f64::NAN), y.is_some(), depth);
+            return f64::NAN;
+        }
+        let lpart = diff.of(&series.ys, 0.0, &mut self.work);
+        let w = y.and_then(|v| {
+            let w = diff.of_seen(&series.ys, &series.seen, v, &mut self.work);
+            (!w.is_nan()).then_some(w)
+        });
+        let y_hat = match self.est[j].run.as_mut() {
+            Some(run) => run.slot(&shape, w, weight, xw, kept_xw) - lpart,
+            None => {
+                let with = self.bytes().saturating_add(Self::buffer_bytes(&self.cfg));
+                let cap = self.cfg.cap();
+                let mut held = crate::clock_span::HeldCap {
+                    over: &mut self.over,
+                    warned: &mut self.warned,
+                    warning: &mut self.warning,
+                };
+                if held.admit(with, cap) {
+                    held.note(with, cap);
+                    self.est[j].buffer(&shape, w, weight, kept_xw, floor);
+                }
+                f64::NAN
+            }
+        };
+        let kept = if fill { y_hat } else { f64::NAN };
+        self.series[j].push(y.unwrap_or(kept), y.is_some(), depth);
+        y_hat
+    }
+
+    /// The slot's differenced regressors, where every one is known.
+    fn known_xw(&self) -> Option<Vec<f64>> {
+        self.xw
+            .0
+            .iter()
+            .all(|v| v.is_finite())
+            .then(|| self.xw.0.clone())
     }
 
     /// The slot's differenced regressors into `xw`: NaN where their rings
@@ -517,6 +758,14 @@ impl Sarima {
     fn skip_slot(&mut self, cov: bool) {
         let diff = self.cfg.diff();
         self.exog_into(None);
+        if self.cfg.estimate.is_some() {
+            let xw = self.known_xw();
+            for j in 0..self.series.len() {
+                self.est_slot(j, None, 0.0, xw.as_deref(), false, true);
+            }
+            self.push_x(None);
+            return;
+        }
         for j in 0..self.series.len() {
             let d_t = self.exog_part(j);
             self.series[j].slot(&self.ssm[j], diff, None, d_t, true, cov, &mut self.work);
@@ -557,6 +806,22 @@ impl Sarima {
         // A row of weight 0 keeps nothing of its own: not its regressors,
         // and so not a prediction formed from them in its value's place.
         let kept = learns || self.cfg.n_features == 0;
+        if self.cfg.estimate.is_some() {
+            let xw = self.known_xw();
+            for (j, target) in y.iter().enumerate() {
+                let yj = target.filter(|_| learns && self.over.is_none());
+                let y_hat = self.est_slot(j, yj, weight, xw.as_deref(), learns, kept);
+                if self.series[j].weight >= floor {
+                    out.pred[j] = y_hat;
+                }
+                if yj.is_some() {
+                    self.series[j].weight += weight;
+                }
+            }
+            self.push_x(learns.then_some(x));
+            self.n_eff += weight;
+            return;
+        }
         for (j, target) in y.iter().enumerate() {
             let yj = target.filter(|_| learns);
             let d_t = self.exog_part(j);
@@ -585,7 +850,11 @@ impl Sarima {
     /// `(ŵ_t, ŷ_t)` for a slot after `skipped` unobserved ones, `y` `None`
     /// for one not observed. What the comparison with statsmodels' filter
     /// reads.
+    /// At estimated parameters there is no filter: every value is NaN.
     pub fn filter_row(&mut self, x: &[f64], y: &[Option<f64>], skipped: usize) -> Vec<(f64, f64)> {
+        if self.cfg.estimate.is_some() {
+            return vec![(f64::NAN, f64::NAN); y.len()];
+        }
         for _ in 0..skipped {
             self.skip_slot(true);
         }
@@ -654,6 +923,14 @@ impl OnlineModel for Sarima {
         true
     }
 
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        self.warning.take().map(|bytes| (bytes, self.cfg.cap()))
+    }
+
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.over.map(|bytes| (bytes, self.cfg.cap()))
+    }
+
     fn state(&self) -> State {
         State::new(ModelState::Sarima(Box::new(self.clone())))
     }
@@ -665,8 +942,26 @@ impl OnlineModel for Sarima {
                 let mut m = (**m).clone();
                 crate::model::check_cfg("sarima", m.cfg.validate())?;
                 let depth = m.cfg.depth() as usize;
-                let r = m.cfg.states() as usize;
-                let shaped = m.series.len() == m.cfg.n_targets
+                let shape = m.cfg.shape();
+                let r = if shape.is_some() {
+                    0
+                } else {
+                    m.cfg.states() as usize
+                };
+                let k = m.cfg.n_features;
+                let estimators = match shape {
+                    Some(shape) => {
+                        m.est.len() == m.cfg.n_targets
+                            && m.est.iter().all(|e| {
+                                e.buf.weight.len() == e.buf.w.len()
+                                    && e.buf.xw.len() == k * e.buf.w.len()
+                                    && e.run.as_ref().is_none_or(|r| r.shaped(&shape))
+                            })
+                    }
+                    None => m.est.is_empty(),
+                };
+                let shaped = estimators
+                    && m.series.len() == m.cfg.n_targets
                     && m.xs.len() == m.cfg.n_features
                     && m.series.iter().all(|s| {
                         s.ys.len() == s.seen.len()
@@ -703,5 +998,7 @@ impl OnlineModel for Sarima {
     }
 }
 
+#[cfg(test)]
+mod est_tests;
 #[cfg(test)]
 mod tests;

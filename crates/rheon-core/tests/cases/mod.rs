@@ -3768,6 +3768,31 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             2
         ),
+        // Its parameters estimated, saved 300 rows in: the first target's
+        // start accepted from its buffer and the recursion's steps since,
+        // its rings and `R`; the second, whose level its regressors leave
+        // to the autoregression, still buffering.
+        case!(
+            "sarima_estimated",
+            "Sarima",
+            Sarima,
+            Sarima::new(sarima_estimated_cfg()).unwrap(),
+            K,
+            Targets::Linear(2),
+            300
+        ),
+        // The same, saved 40 rows in: both targets buffering their starts
+        // (fits tried and withheld), the buffer's slots with gaps among
+        // them.
+        case!(
+            "sarima_buffering",
+            "Sarima",
+            Sarima,
+            Sarima::new(sarima_estimated_cfg()).unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
     ]
 }
 
@@ -3791,6 +3816,20 @@ fn sarima_cfg() -> SarimaCfg {
         spacing: 1.0,
         min_weight: 2.0,
         max_state_bytes: None,
+        estimate: None,
+    }
+}
+
+/// ARIMA(1,0,0) with the case's two features as regressors, over two
+/// targets, its parameters estimated.
+fn sarima_estimated_cfg() -> SarimaCfg {
+    SarimaCfg {
+        order: [1, 0, 0],
+        seasonal_order: [0, 0, 0, 0],
+        params: vec![],
+        min_weight: 0.0,
+        estimate: Some(SarimaEstimate::default()),
+        ..sarima_cfg()
     }
 }
 

@@ -1807,6 +1807,7 @@ fn sarima_cfg() -> SarimaCfg {
         spacing: 1.0,
         min_weight: 3.0,
         max_state_bytes: None,
+        estimate: None,
     }
 }
 
@@ -1871,6 +1872,53 @@ fn sarima_predict_is_the_step() {
             Sarima::new(SarimaCfg {
                 min_weight: 0.0,
                 ..sarima_arma_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
+}
+
+/// A regression on the probe's two features with ARMA(0,0) errors, its
+/// parameters estimated: each target buffers until its start is accepted,
+/// then steps. (The probe's targets carry a level the regressors do not,
+/// with no differencing and no constant, which an autoregression would
+/// take up with `phi` at its bound; and its 400 rows leave the start only
+/// a few dozen rows to open in for the ready count, which a moving average's
+/// standard error under its bound needs more than.)
+fn sarima_estimated_cfg() -> SarimaCfg {
+    SarimaCfg {
+        order: [0, 0, 0],
+        seasonal_order: [0, 0, 0, 0],
+        params: vec![],
+        estimate: Some(SarimaEstimate::default()),
+        ..sarima_cfg()
+    }
+}
+
+#[test]
+fn sarima_estimated() {
+    // The same contract with the parameters estimated: `n_eff` the plain
+    // sum (rule 8), the buffer and the run in the round trip, and the
+    // rings and the start what `clear_lags` starts again.
+    let r = probe_with(
+        Sarima::new(sarima_estimated_cfg()).unwrap(),
+        2,
+        Some(&Sarima::n_eff),
+    );
+    assert_eq!(r.kind, "sarima");
+    assert!(r.roundtrips);
+    assert!(!r.lags_are_a_no_op);
+}
+
+#[test]
+fn sarima_estimated_predict_is_the_step() {
+    predict_is_the_step_without_the_step(
+        || {
+            Sarima::new(SarimaCfg {
+                min_weight: 0.0,
+                ..sarima_estimated_cfg()
             })
             .unwrap()
         },

@@ -409,6 +409,27 @@ forgets its start: 1 ulp by row 500. The tests therefore hold every row
 within `1e-13` of the largest `|w|` and the rows past 500 within 8 ulps,
 the study's bound for `s <= 24`.
 
+**Settled against the exact filter** (2026-11-24, part 3's session). A
+scratch reference in mpmath at 60 digits, sharing no arithmetic with
+either filter (the stationary covariance as its defining series `sigma2
+sum_j (T^j R)(T^j R)'`, 4,969 terms, its Lyapunov residual 8e-61 of its
+scale; the Kalman filter in the same precision), on the grid's fifty seeds
+of `(1,0,1)(1,0,1,24)`, 2,000 rows each, in ulps of the largest `|w|`:
+
+| | every row: worst (median) | first 50 rows | past row 500 |
+|---|---|---|---|
+| statsmodels' `SARIMAX.filter` from the exact | 99.9 (96.5) | 99.9 | 2.4 |
+| the core's filter from the exact | 3.5 (2.5) | 3.5 | 2.6 |
+| the two from each other | 100 (97) | 100 | 2 |
+
+statsmodels' stationary covariance is 5.4e-14 of its scale from the
+exact one on every seed (the spec fixes it). So the core is the exact one
+and statsmodels' start is off. `tests/test_sarima_filter.py` now holds the
+core within 4 ulps of the exact filter over the first 200 rows of seed 1
+(`test_the_first_rows_are_the_exact_filter`, extended: about 7 s), with
+mpmath declared in the dev group by name; the comparison with statsmodels
+keeps its bounds (`1e-13` from the first row, 8 ulps past row 500).
+
 **The grid**, fifty seeds of each of three specs, 2,000 rows: past row 500
 the worst seed at 0 (airline), 0.125 (`(1,1,1)(1,1,1,24)`) and 2 ulps
 (`(1,0,1)(1,0,1,24)`); over every row 1, 4.5 and 100 ulps, at most 1.32e-14
@@ -432,3 +453,116 @@ products are dense, `O(r^3)` a row at 170 states); the core's filter took
   built. `uv run python scripts/oracles.py rerun sarima_filter.filter_grid`
   runs the grid and writes the group's hash, and CI's oracle workflow
   fills its numbers.
+
+## Part 3: the estimator, built
+
+Built 2026-11-24 in `rheon-core` (`sarima/est.rs`, `sarima/transform.rs`,
+`sarima/est_tests.rs`), behind `SarimaCfg::estimate` (`params` then
+empty). Where it departs from "The estimator (part 3, designed)" above,
+and why:
+
+- **The start's likelihood is the conditional one**, the zero pre-sample
+  recursion the steps themselves run, `sigma2` concentrated out
+  (`-W/2 ln(S/W)`), not the exact (Kalman) likelihood. It is the study's
+  batch start (§6.1), its gradient is cheap, and the per-row step after it
+  minimizes the same criterion. The gradient is exact (forward-mode
+  derivatives of the recursion, held to a central difference with missing
+  slots and an unknown regressor); with no slot missing it equals the
+  filtered signals' `psi` (held too).
+- **After the start the prediction is the conditional recursion's**, not
+  the Kalman filter's: no covariance is kept, so the state is linear in
+  `s` (the table below). The fixed-parameter form keeps the filter.
+- **`sigma2`** is the conditional likelihood's (the innovations' mean
+  square), stepped as `sigma2 + a (e^2 - sigma2)` (question 7's "state the
+  difference"): it is not `SARIMAX`'s exact-likelihood parameter, and the
+  two differ by the start's terms, which fade as `1/n`. Measured against
+  `SARIMAX.fit` at 10,000 rows, `sigma2` is among the parameters within
+  0.4 of its standard errors in the table below.
+- **The gate's order**: the bound first (a fit drifting to a bound has no
+  optimum inside the region, so it would also fail to converge; the bound
+  is the more telling reason), then convergence (Newton decrement at most
+  `1e-6` at Kish's count, `garch`'s cut), then the standard errors.
+- **The standard errors' bound is 0.1** in standardized units (a
+  coefficient as it is, a regressor's coefficient times its regressor's
+  standard deviation over the innovations', `sigma2` relative to itself),
+  from the conditional information `sum w psi psi' / sigma2` at Kish's
+  count. Chosen by measurement, not from a count of rows: five specs,
+  eight seeds each, 10,000 rows, the worst coefficient's gap at the last
+  row from `SARIMAX.fit(method="lbfgs", cov_type="opg")` in its standard
+  errors, and the rows the gate opened at (scratch harness over the core,
+  2026-11-24):
+
+  | bound | `(0,1,1)(0,1,1,7)` | `(1,0,1)(1,0,1,24)` | `(1,1,1)(1,1,0,24)` | `(1,1,1)(1,1,1,24)` | `(1,0,1)` |
+  |---|---|---|---|---|---|
+  | 0.1 | 148-323, 0.23 | 548-822, 0.28 | 255-370, 0.24 | 6,240-9,348, 0.38 | 243-548, 0.20 |
+  | 0.15 | 70-148, 0.26 | 243-548, 0.25 | 127-178, 1.24 | 1,866-6,240, **4.48** | 108-243, 0.29 |
+  | 0.2 | 49-101, 0.25 | 162-365, 0.74 | 70-127, 1.17 | 267-4,168, **8.16** | 48-108, 0.51 |
+  | 0.3 | 26-49, 0.33 | 108-243, **2.57** | 70, 0.27 | 267-2,787, **8.16** | 32-48, 0.96 |
+
+  At 0.1 all forty land within 0.4 standard errors. Looser bounds open
+  earlier but start some series from fits the per-row step does not
+  recover from in 10,000 rows (the full seasonal spec, whose seasonal
+  factors `1 - 0.4 B^24` and `1 - 0.5 B^24` nearly cancel, at 0.15 and
+  above). The price is that spec's wait: 6,240 to 9,348 rows, a buffer of
+  up to 168 KB a target without regressors, under the default
+  `max_state_bytes` of 256 KiB for one target but past it for two, where
+  the slot that would pass the cap is refused. The other specs open by
+  822 rows. A bound of 0.5 (the 95% interval as wide as `(-1, 1)`) was
+  tried first: it opened at 6 to 26 rows on the simple specs and ended up
+  to 8 standard errors off on the full one.
+- **Retries** at each growth of Kish's count by 1.5: the openings above
+  fall on that grid (148, 218, 323, 548, 822, ...).
+- **A row of weight 0** keeps none of its regressors in the rings or the
+  buffer (the contract every model keeps), while its own prediction reads
+  them.
+- **The model contract's ready count** for `sarima` is 200 of its probe's
+  400 rows, not 300: an estimated start needs Kish's count near 100
+  before its standard errors pass 0.1.
+
+**State** (msgpack, 9 bytes a double), per target past its start: the
+differencing ring and the run, `9 (n + 2 + n^2 + L (6 + 2k))` for `n = k +
+p + q + P + Q` and `L = max(p + sP, q + sQ, 1)`; before it, the buffer,
+`9 (2 + k)` a slot, held under `max_state_bytes`. Beside the filter's
+(part 2's table), at `(1,1,1)(1,1,1,s)` without regressors:
+
+| | `s = 7` | `s = 24` | `s = 168` | `s = 1440` |
+|---|---|---|---|---|
+| filter at given parameters (doubles) | 62 | 404 | 14,874 | 1,042,566 |
+| estimator's run (doubles) | 70 | 172 | 1,036 | 8,668 |
+
+No decay, no window: the run is bounded by the orders and the season,
+the buffer by the cap.
+
+**Fixtures**: `sarima_estimated` (300 rows: the first target's run, the
+second's buffer) and `sarima_buffering` (40 rows: both buffering), and the
+two part-2 fixtures regenerated for the layout's new fields (`est`,
+`over`, `warned`, `warning`, `estimate`). No release and no kept fixture
+set holds a `Sarima` (schema 72 is unreleased, the variant new in it), so
+the layout change needs no loader and no copy to `v<N>/`.
+
+**At fad8ea9d, `test_a_season_of_168_is_sarimax_too` fails** (extended
+tier; the Python tests had not run in part 2): `(1,1,1)(1,1,1,168)`, 600
+rows, the gap from `SARIMAX.filter` is 12.4 ulps of the largest `|w|`
+against its bound of 8 (part 2 had measured 6.2 through a scratch
+harness). An extended-precision reference (x87 80-bit, `eps` 1.1e-19; the
+stationary covariance as its defining series, 4,705 terms, Lyapunov
+residual 3.1e-19 of its scale; the filter in the same precision) settles
+it on this machine: the core is within 0.88 ulps of it on every row,
+statsmodels 12.5 (7.2 over the first 50 rows, 8.7 past row 300), its
+dense products at 170 states. The test is left failing as it stands: the
+reference is not portable (macOS arm64's `long double` is a double), an
+mpmath one at 170 states would take tens of minutes, and a bound loosened
+to statsmodels' error is the coordinator's call, not this session's.
+
+**At fad8ea9d** (part 2), `state_fixtures` failed two tests: the
+committed `sarima` and `sarima_filling` fixtures were not what that build
+wrote (`sarima`, row 3 after the save, target 0: 0.4624 against a frozen
+0.7943). Part 2's fixtures were written before its last change; this
+part's regeneration replaces them.
+
+**Measured against `SARIMAX.fit`**, eight seeds of each of five specs at
+10,000 rows (bound 0.1; the table above, measured before the start's `ln`
+became the `libm` crate's): every parameter within 0.4 of `SARIMAX`'s OPG
+standard errors. The fifty-seed oracle test of "Oracles" (48 of 50 seeds
+within 2) is not yet in `tests/`: it needs a Python entry for the
+estimated form, which comes with the bank entry.

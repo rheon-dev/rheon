@@ -1659,7 +1659,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 205] = [
+    const FORMS: [(&str, &[&str]); 212] = [
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.
@@ -2127,6 +2127,38 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("sarima", &["model", "Sarima", "cfg", "params", "1", "exog"]),
         ("sarima_filling", &["model", "Sarima", "series", "0", "ys"]),
         ("sarima_filling", &["model", "Sarima", "xs", "0"]),
+        // Estimated (task 487, part 3): a run's parameters, `R`, its rings
+        // and its regressors' filtered ring; a buffer's slots and their
+        // regressors before the start (in both fixtures; `sarima_estimated`
+        // holds a run and a buffer side by side).
+        (
+            "sarima_estimated",
+            &["model", "Sarima", "est", "0", "run", "x"],
+        ),
+        (
+            "sarima_estimated",
+            &["model", "Sarima", "est", "0", "run", "rm"],
+        ),
+        (
+            "sarima_estimated",
+            &["model", "Sarima", "est", "0", "run", "rings", "z"],
+        ),
+        (
+            "sarima_estimated",
+            &["model", "Sarima", "est", "0", "run", "rings", "xf", "1"],
+        ),
+        (
+            "sarima_buffering",
+            &["model", "Sarima", "est", "1", "buf", "w"],
+        ),
+        (
+            "sarima_buffering",
+            &["model", "Sarima", "est", "1", "buf", "xw"],
+        ),
+        (
+            "sarima_estimated",
+            &["model", "Sarima", "est", "1", "buf", "w"],
+        ),
     ];
     // Each refit's first stamp, written only under a span (task 538): in
     // glm on the summed clock, in expectile an integer stamp.

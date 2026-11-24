@@ -204,7 +204,7 @@ impl Series {
         Slot { w_hat, y_hat }
     }
 
-    fn push(&mut self, v: f64, seen: bool, depth: usize) {
+    pub(crate) fn push(&mut self, v: f64, seen: bool, depth: usize) {
         if depth == 0 {
             return;
         }

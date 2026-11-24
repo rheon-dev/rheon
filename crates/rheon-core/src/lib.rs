@@ -251,7 +251,10 @@ pub use rls::{Rls, RlsCfg};
 pub use robust::{HuberScale, MAD_BAND_OCTAVES, NORMAL_Q3, Robust, RobustCfg, RobustLoss};
 pub use runs::Runs;
 pub use sandwich::Sandwich;
-pub use sarima::{MAX_GAP_SLOTS as SARIMA_MAX_GAP_SLOTS, Sarima, SarimaCfg, SarimaParams};
+pub use sarima::{
+    MAX_GAP_SLOTS as SARIMA_MAX_GAP_SLOTS, Sarima, SarimaCfg, SarimaEstimate, SarimaParams,
+    SarimaWait,
+};
 pub use seqtest::{SLOTS as SEQTEST_SLOTS, SeqTest, SeqTestCfg};
 pub use sgd::{LearningRate, Sgd, SgdCfg, SgdLoss};
 pub use solve::{SpdFactor, quad_forms_logdet, solve_spd};

@@ -120,6 +120,13 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
         // on a stream whose components differ, with the same weights and
         // gaps.
         0
+    } else if kind == "sarima" {
+        // An estimated start opens only once every standard error is under
+        // 0.1 in its standardized units, Kish's count near 100 at the
+        // least: about 150 of this stream's rows, with its nulls and
+        // weights, so 250 of its 400 can be ready (the form at given
+        // parameters has more than 300 and is held to 200 with it).
+        200
     } else {
         300
     };

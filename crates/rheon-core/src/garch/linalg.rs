@@ -8,13 +8,13 @@
 #![allow(clippy::needless_range_loop)]
 
 /// The index of `(i, j)` in a packed lower triangle.
-pub(super) fn tri(i: usize, j: usize) -> usize {
+pub(crate) fn tri(i: usize, j: usize) -> usize {
     let (i, j) = if i >= j { (i, j) } else { (j, i) };
     i * (i + 1) / 2 + j
 }
 
 /// A packed symmetric `n × n` matrix unpacked row-major.
-pub(super) fn unpack(h: &[f64], n: usize) -> Vec<f64> {
+pub(crate) fn unpack(h: &[f64], n: usize) -> Vec<f64> {
     let mut a = vec![0.0; n * n];
     for i in 0..n {
         for j in 0..n {
@@ -27,7 +27,7 @@ pub(super) fn unpack(h: &[f64], n: usize) -> Vec<f64> {
 /// The lower Cholesky factor of a row-major `n × n` matrix, `None` where a
 /// pivot is not a positive finite number (the matrix is not positive
 /// definite, or holds a value that is not a number).
-pub(super) fn cholesky(a: &[f64], n: usize) -> Option<Vec<f64>> {
+pub(crate) fn cholesky(a: &[f64], n: usize) -> Option<Vec<f64>> {
     let mut l = vec![0.0; n * n];
     for i in 0..n {
         for j in 0..=i {
@@ -49,7 +49,7 @@ pub(super) fn cholesky(a: &[f64], n: usize) -> Option<Vec<f64>> {
 }
 
 /// `L z = b` by forward substitution.
-pub(super) fn forward(l: &[f64], n: usize, b: &[f64]) -> Vec<f64> {
+pub(crate) fn forward(l: &[f64], n: usize, b: &[f64]) -> Vec<f64> {
     let mut z = b.to_vec();
     for i in 0..n {
         for k in 0..i {
@@ -61,7 +61,7 @@ pub(super) fn forward(l: &[f64], n: usize, b: &[f64]) -> Vec<f64> {
 }
 
 /// `Lᵀ x = z` by back substitution.
-pub(super) fn backward(l: &[f64], n: usize, z: &[f64]) -> Vec<f64> {
+pub(crate) fn backward(l: &[f64], n: usize, z: &[f64]) -> Vec<f64> {
     let mut x = z.to_vec();
     for i in (0..n).rev() {
         for k in i + 1..n {
@@ -74,14 +74,14 @@ pub(super) fn backward(l: &[f64], n: usize, z: &[f64]) -> Vec<f64> {
 
 /// `A x = b` for a row-major `A` that is positive definite, by Cholesky;
 /// `None` where it is not.
-pub(super) fn chol_solve(a: &[f64], n: usize, b: &[f64]) -> Option<Vec<f64>> {
+pub(crate) fn chol_solve(a: &[f64], n: usize, b: &[f64]) -> Option<Vec<f64>> {
     let l = cholesky(a, n)?;
     Some(backward(&l, n, &forward(&l, n, b)))
 }
 
 /// `A x = b` by Gaussian elimination with partial pivoting, `None` for a
 /// singular `A` or an answer that is not finite.
-pub(super) fn lu_solve(a: &[f64], n: usize, b: &[f64]) -> Option<Vec<f64>> {
+pub(crate) fn lu_solve(a: &[f64], n: usize, b: &[f64]) -> Option<Vec<f64>> {
     let mut m = a.to_vec();
     let mut x = b.to_vec();
     for c in 0..n {
@@ -115,7 +115,7 @@ pub(super) fn lu_solve(a: &[f64], n: usize, b: &[f64]) -> Option<Vec<f64>> {
 /// A matrix with each diagonal entry raised by `rel` of its own size: a
 /// ridge that scales with each parameter's units, so scaling a series
 /// leaves the step it gives unchanged.
-pub(super) fn ridged(a: &[f64], n: usize, rel: f64) -> Vec<f64> {
+pub(crate) fn ridged(a: &[f64], n: usize, rel: f64) -> Vec<f64> {
     let mut r = a.to_vec();
     for i in 0..n {
         r[i * n + i] += rel * r[i * n + i].abs();
@@ -125,7 +125,7 @@ pub(super) fn ridged(a: &[f64], n: usize, rel: f64) -> Vec<f64> {
 
 /// Half-spaces `A x ≥ b`, `A` row-major with `n` columns.
 #[derive(Debug, Clone)]
-pub(super) struct HalfSpaces {
+pub(crate) struct HalfSpaces {
     pub a: Vec<f64>,
     pub b: Vec<f64>,
     pub n: usize,

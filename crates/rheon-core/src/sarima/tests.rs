@@ -36,6 +36,7 @@ fn cfg(order: [usize; 3], seasonal_order: [usize; 4], params: SarimaParams) -> S
         spacing: 1.0,
         min_weight: 0.0,
         max_state_bytes: None,
+        estimate: None,
     }
 }
 

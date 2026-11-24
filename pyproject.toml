@@ -250,6 +250,13 @@ dev = [
     # (no small-sample factor, as the papers). MIT, pure Python over numpy.
     # The floor is the version measured.
     "hfvol>=0.1.0",
+    # tests/test_sarima_filter.py: mpmath's arbitrary precision computes
+    # the exact stationary covariance (its defining series, summed at 40
+    # digits) and the exact Kalman filter of a seasonal ARMA, which settles
+    # whether the core's filter or statsmodels' is off on a series' first
+    # rows, where the two double-precision filters part by up to 100 ulps.
+    # BSD-3-Clause, pure Python. The floor is the version measured.
+    "mpmath>=1.4.1",
 ]
 # The R oracles (tests/r_oracle/): R's `highfrequency` and `yuima`, the
 # reference implementations of the realized measures and the jump tests,

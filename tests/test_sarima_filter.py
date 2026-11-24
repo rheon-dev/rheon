@@ -18,8 +18,10 @@ Lyapunov equation its own way, and statsmodels' solution misses the
 equation by up to about ``1.6e-14`` of its scale (the core's doubling by
 under ``2e-15``), a gap that fades as the filter forgets its start. At
 ``(1,0,1)(1,0,1,24)`` that is about 100 ulps on the first rows and 2 by row
-500; elsewhere the two agree within 5 ulps from the first row. Past the
-start the two differ only in the order of their sums: statsmodels' dense
+500; elsewhere the two agree within 5 ulps from the first row. Which side
+is off there is settled by the exact filter, in 40 digits: the core's
+predictions are within 4 ulps of it from the first row, statsmodels' up
+to 100. Past the start the two differ only in the order of their sums: statsmodels' dense
 BLAS products against the core's two terms an entry of the companion
 matrix.
 
@@ -29,6 +31,7 @@ and predicts through, so seasonal positions stay aligned.
 
 from __future__ import annotations
 
+import mpmath as mp
 import numpy as np
 import pytest
 from statsmodels.tsa.statespace.sarimax import SARIMAX
@@ -198,6 +201,107 @@ def test_the_steady_state_switch_moves_sarimax_by_little():
     depth = _depth(order, seasonal)
     gap = np.max(np.abs(w_hat[depth:] - theirs)) / np.max(np.abs(w))
     assert gap < 5e-9, gap
+
+
+def _exact(w, order, seasonal_order, params, rows, digits=40):
+    """The one-step predictions of the first ``rows`` slots, exactly: the
+    stationary covariance as its defining series ``sigma2 sum_j (T^j R)
+    (T^j R)'``, summed until a term is under ``10^-(digits + 5)`` of the
+    sum, and the Kalman filter, both in mpmath at ``digits`` digits, from
+    the parameters as the doubles they are. Shares no arithmetic with
+    either double-precision filter."""
+    mp.mp.dps = digits
+    p, _, q = order
+    sp, _, sq, s = seasonal_order
+    par = [mp.mpf(float(v)) for v in params]
+    ar, ma = par[:p], par[p : p + q]
+    sar, sma = par[p + q : p + q + sp], par[p + q + sp : p + q + sp + sq]
+
+    def poly(coefs, step, sign):
+        out = [mp.mpf(0)] * (len(coefs) * step + 1)
+        out[0] = mp.mpf(1)
+        for i, c in enumerate(coefs):
+            out[(i + 1) * step] = sign * c
+        return out
+
+    def mul(a, b):
+        out = [mp.mpf(0)] * (len(a) + len(b) - 1)
+        for i, x in enumerate(a):
+            for j, y in enumerate(b):
+                out[i + j] += x * y
+        return out
+
+    a = mul(poly(ar, 1, -1), poly(sar, s, -1))
+    c = mul(poly(ma, 1, 1), poly(sma, s, 1))
+    r = max(len(a) - 1, len(c))
+    tcol = [-a[i + 1] if i + 1 < len(a) else mp.mpf(0) for i in range(r)]
+    big_r = [c[i] if i < len(c) else mp.mpf(0) for i in range(r)]
+    sigma2 = par[-1]
+
+    def t_vec(v):
+        return [tcol[i] * v[0] + (v[i + 1] if i + 1 < r else 0) for i in range(r)]
+
+    def t_p_t(pm):
+        m = [
+            [tcol[i] * pm[0][j] + (pm[i + 1][j] if i + 1 < r else 0) for j in range(r)]
+            for i in range(r)
+        ]
+        return [
+            [m[i][0] * tcol[j] + (m[i][j + 1] if j + 1 < r else 0) for j in range(r)]
+            for i in range(r)
+        ]
+
+    pm = [[mp.mpf(0)] * r for _ in range(r)]
+    v = list(big_r)
+    tol = mp.mpf(10) ** (-(digits + 5))
+    while True:
+        for i in range(r):
+            vi = v[i] * sigma2
+            for k in range(r):
+                pm[i][k] += vi * v[k]
+        if max(abs(x) for x in v) ** 2 < tol:
+            break
+        v = t_vec(v)
+    state = [mp.mpf(0)] * r
+    out = []
+    for wt in w[:rows]:
+        out.append(state[0])
+        if np.isfinite(wt):
+            f = pm[0][0]
+            gain = [pm[i][0] / f for i in range(r)]
+            innov = mp.mpf(float(wt)) - state[0]
+            state = [state[i] + gain[i] * innov for i in range(r)]
+            row0 = list(pm[0])
+            pm = [[pm[i][k] - gain[i] * row0[k] for k in range(r)] for i in range(r)]
+        state = t_vec(state)
+        pm = t_p_t(pm)
+        for i in range(r):
+            for k in range(r):
+                pm[i][k] += big_r[i] * sigma2 * big_r[k]
+    return out
+
+
+@pytest.mark.extended(reason="the exact filter in 40 digits takes about 10 s")
+def test_the_first_rows_are_the_exact_filter():
+    """On ``(1,0,1)(1,0,1,24)`` statsmodels' filter and the core's part by
+    about 100 ulps of the largest ``|w|`` on the first rows. The exact
+    filter (``_exact``, in 40 digits) says which is off: the core's is
+    within 4 ulps of it from the first row (measured over fifty seeds and
+    every one of 2,000 rows: 3.5 at worst, 2.6 past row 500), statsmodels'
+    up to 100 ulps on the first rows (its stationary covariance is 5.4e-14
+    of its scale from the exact one) and 2.4 past row 500."""
+    order, seasonal, params = SPECS["arma_24"]
+    y, _ = _sim(order, seasonal, params, 2000, seed=1)
+    _, w = _sarimax(y, order, seasonal, params)
+    w_hat, _ = _ours(y, order, seasonal, params)
+    rows = 200
+    exact = _exact(w, order, seasonal, params, rows)
+    unit = np.spacing(np.max(np.abs(w)))
+    gap = [
+        float(abs(mp.mpf(float(a)) - b)) / unit for a, b in zip(w_hat[:rows], exact, strict=True)
+    ]
+    worst = int(np.argmax(gap))
+    assert max(gap) <= 4.0, f"{max(gap):.2f} ulps from the exact filter at row {worst}"
 
 
 @pytest.mark.extended(reason="SARIMAX's dense filter at 170 states takes over two minutes")
