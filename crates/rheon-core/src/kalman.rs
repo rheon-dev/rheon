@@ -2744,7 +2744,9 @@ impl Kalman {
             return;
         }
         // Here, not before the refusal, which steps the row again.
-        self.smooth_begin(d_clock);
+        if self.smoother.is_some() {
+            self.smooth_begin(d_clock);
+        }
         self.ensure_buffers();
         let k = self.cfg.k_total();
         let m = self.cfg.n_targets;
@@ -2932,7 +2934,9 @@ impl Kalman {
 
         // The smoother's slot for each observed covariance's last
         // observation takes this one's prior (`kalman/smooth.rs`).
-        self.smooth_link(y, weight);
+        if self.smoother.is_some() {
+            self.smooth_link(y, weight);
+        }
 
         // ---- Kalman update per target ----
         // Under `share_p`, `P z` is read once, from `P` as the row finds it,
@@ -3029,7 +3033,9 @@ impl Kalman {
         if shared_update {
             self.take::<FACTOR>(0, open_shared, shared_s, shared_r);
         }
-        self.smooth_observe(y, weight, ready);
+        if self.smoother.is_some() {
+            self.smooth_observe(y, weight, ready);
+        }
 
         // Standardization stats update last, so this row's z used the prior
         // stats; a row that moved them is followed by the drift check, and

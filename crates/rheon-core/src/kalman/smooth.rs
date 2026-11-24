@@ -663,6 +663,8 @@ impl Kalman {
 
     /// A row begins (`step_into`, before anything else, a refused row
     /// included).
+    #[cold]
+    #[inline(never)]
     pub(super) fn smooth_begin(&mut self, d_clock: f64) {
         let (m, k) = (self.cfg.n_targets, self.cfg.k_total());
         if let Some(s) = self.smoother.as_deref_mut() {
@@ -672,6 +674,8 @@ impl Kalman {
 
     /// Each observed covariance's prior is formed, before the row's
     /// update: its pending pair becomes a slot.
+    #[cold]
+    #[inline(never)]
     pub(super) fn smooth_link(&mut self, y: &[Option<f64>], weight: f64) {
         let k = self.cfg.k_total();
         let Some(mut s) = self.smoother.take() else {
@@ -704,6 +708,8 @@ impl Kalman {
     /// covariance whose ring holds `L` slots emits its oldest observation,
     /// and the row's pair becomes the pending one. `ready` is whether
     /// `min_weight` let the row's prediction out.
+    #[cold]
+    #[inline(never)]
     pub(super) fn smooth_observe(&mut self, y: &[Option<f64>], weight: f64, ready: bool) {
         let k = self.cfg.k_total();
         let Some(mut s) = self.smoother.take() else {

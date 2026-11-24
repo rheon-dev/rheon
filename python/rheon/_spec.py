@@ -2845,6 +2845,19 @@ def kalman(
     row, it needs an ``embargo`` on a downstream spec at least the lag's
     span.
 
+    **The smoother's cost.** With ``k`` coefficients, a row that observes the
+    target costs ``O(k ** 3)`` for its gain (the Cholesky factorization of
+    ``P⁻`` and two triangular solves for each of ``k`` rows), and a row that
+    emits ``O(L k ** 2)`` a target for the means, or ``O(L k ** 3)`` with
+    ``emit_smoothed_se``. With no ``smooth_lag`` the filter does none of it.
+    Measured on an x86-64 machine with rustc 1.97 by ``cargo run --release
+    -p rheon-bench --example smooth_bench``, the median of 7 blocks of
+    20,000 rows after 2,000 rows of warm-up, one target, a lag of 10, at a
+    load of about 2, over two runs: at 6 coefficients 0.21 µs a row for the
+    filter alone, 1.07 to 1.20 with the smoothed means and 2.7 to 3.0 with
+    their standard errors; at 21 coefficients 0.69, 11.3 to 11.6 and 50.7 to
+    51.2.
+
     **The square root.** Under ``covariance_form="square_root"`` the filter
     holds ``C``, upper triangular with ``P_j = C C'``. A row with ``f = C'
     z``, ``a_0 = 1 / w`` (``R_j / w`` under ``obs_var``) and ``a_j =
