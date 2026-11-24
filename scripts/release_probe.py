@@ -520,6 +520,22 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # Every target on every target's lags, a Granger test read per row.
+    (
+        "vector_ar",
+        "vector_ar",
+        dict(
+            targets=["y", "z"],
+            features=["x0", "x1"],
+            lags=2,
+            select="aic",
+            causality=[{"caused": "y", "causing": "z"}],
+            group="g",
+            half_life=25.0,
+            **CLOCK,
+        ),
+        [],
+    ),
     # Each row where `y` or `z` is above 0 an event of that node; the zero weights
     # learn none of theirs.
     (

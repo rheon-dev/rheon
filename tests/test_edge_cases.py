@@ -46,6 +46,7 @@ MODELS = [
     ("holt", {"features": None}),  # no features keyword
     ("ar", {"lags": 1, "ridge": 1e-3}),
     ("isotonic", {"out_of_bounds": "clip"}),
+    ("vector_ar", {"lags": 1, "ridge": 1e-3}),
 ]
 
 

@@ -646,6 +646,17 @@ def clock_specs(draw, model: str, step: int, cap: int):
         elif window == "clock":
             kw["window_size"] = steps(1, 60)
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
+    elif model == "vector_ar":
+        # Two targets' lags beside the features, a test read per row, a solve
+        # cadence and a window of the clock, each as durations. No embargo:
+        # `vector_ar` refuses one.
+        kw |= xy | dict(
+            targets=["y", "x0"], features=["x1"], lags=draw(st.integers(1, 2)), ridge=1e-6
+        )
+        kw |= maybe("solve_every", 1, 5)
+        kw |= maybe("window_size", 1, 60)
+        if "window_size" in kw:
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)
@@ -765,10 +776,11 @@ DELAYED_ARGS: dict[str, dict] = {"kalman": {"coef_half_life": "1h"}}
 #: every regression, since ``embargo`` is a parameter they all share. Built
 #: from `test_model_registry.REGRESSIONS`, so a new regression is swept
 #: without an edit here (a hand-kept list held five of the ten), less
-#: ``ar``, which refuses ``embargo``: a delay would make its lags older for
-#: the rows it predicts than for the rows it learns.
+#: ``ar`` and ``vector_ar``, which refuse ``embargo``: a delay would make
+#: their lags older for the rows they predict than for the rows they learn.
 DELAYED_MODELS = {
-    name: MINIMAL[name] | DELAYED_ARGS.get(name, {}) for name in sorted(REGRESSIONS - {"ar"})
+    name: MINIMAL[name] | DELAYED_ARGS.get(name, {})
+    for name in sorted(REGRESSIONS - {"ar", "vector_ar"})
 }
 
 

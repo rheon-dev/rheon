@@ -32,6 +32,7 @@ BUILDERS = [
     "ewm_moments",
     "ar",
     "spectral",
+    "vector_ar",
     "bocpd",
     "corrchange",
     "deco",

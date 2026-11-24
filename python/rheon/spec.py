@@ -139,7 +139,7 @@ shows them at work.
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
            ``audit``, ``hawkes``, ``garch``, ``dcc``, ``realized``, ``pca``,
            ``power_variation``, ``tdigest``, ``ddsketch``, ``ewm_moments``,
-           ``ar``, ``spectral``, ``isotonic``
+           ``ar``, ``spectral``, ``isotonic``, ``vector_ar``
 ``emit_target_weight``
     Why: a row whose target is null teaches that target nothing but still
     adds to the shared ``weight_sum``, so a row can show ``weight_sum`` above
@@ -497,7 +497,8 @@ releases none. A regression writes, with ``<t>`` a target:
     start whose rows do not yet tell its variance process from a constant
     variance, or a ``dcc`` start whose rows do not tell its correlation's
     recursion from constant correlation, so it buffers more rows before it
-    reports; each builder's docstring has the test. It is also an
+    reports, or a ``vector_ar`` fit whose regressors' moments are not yet
+    positive definite; each builder's docstring has the test. It is also an
     ``isotonic`` row whose feature lies outside the range of the rows learned
     before it, or comes before any, where the fit is not identified and
     ``out_of_bounds`` is ``"nan"``. It is also a ``hawkes`` fit its events do
@@ -1225,6 +1226,7 @@ from rheon._spec import (
     sgd,
     spectral,
     tdigest,
+    vector_ar,
 )
 
 __all__ = [
@@ -1268,4 +1270,5 @@ __all__ = [
     "ddsketch",
     "spectral",
     "isotonic",
+    "vector_ar",
 ]

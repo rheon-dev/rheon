@@ -922,6 +922,54 @@ CASES: list[Case] = [
             "select": "bic",
         },
     ),
+    # Two series together, a lag of each in each equation, the features
+    # beside them, a test of each on the other read per row and every
+    # diagnostic its least squares takes, its groups run to a close.
+    Case(
+        "vector_ar",
+        "vector_ar",
+        full(
+            **CLOSE,
+            targets=["y", "x0"],
+            features=["x1"],
+            lags=2,
+            causality=[{"caused": "y", "causing": "x0"}, {"caused": "x0"}],
+            causality_kind="ssr_f",
+            max_state_bytes=1 << 20,
+            emit_se_coef=True,
+            solve_every=3.0,
+            max_rows_between_solves=5,
+        ),
+    ),
+    # The order chosen, a ridge without tests, under a hard window with its
+    # cadence, edge and budget.
+    Case(
+        "vector_ar_window",
+        "vector_ar",
+        full(
+            targets=["y", "x0"],
+            features=["x1"],
+            lags=3,
+            select="hqic",
+            window_size=40.0,
+            closed="both",
+            snapshot_every=2.0,
+            max_rows_between_snapshots=3,
+            window_budget={"thin": 64.0},
+        ),
+    ),
+    # A ridge, the other stream keys without the embargo it refuses.
+    Case(
+        "vector_ar_pure",
+        "vector_ar",
+        {
+            **{k: v for k, v in full2().items() if k != "embargo"},
+            "targets": ["y", "x0"],
+            "features": ["x1"],
+            "lags": 1,
+            "ridge": 0.01,
+        },
+    ),
     # Each target's power at two periods, its groups run to a close; and the
     # other stream keys with the spectrum's scaling.
     Case(

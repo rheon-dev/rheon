@@ -51,6 +51,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "holt",
         "ar",
         "isotonic",
+        "vector_ar",
     ),
     "Moments and correlation": (
         "ew_cov",
@@ -145,6 +146,12 @@ MEANING: dict[str, str] = {
         "the power of `<t>` at the `k`-th period, scipy's periodogram of the rows before this "
         "one with the decay's amplitudes as the window"
     ),
+    "causality<i>_stat": (
+        "the `i`-th Granger test's statistic, of `causality_kind`, from the fit at the last solve "
+        "before this row"
+    ),
+    "causality<i>_p": "the `i`-th Granger test's p-value, its law's upper tail at the statistic",
+    "order": "the lag order `select` chose at the last solve before this row",
     "rv_<t>": "the realized variance of `<t>`'s returns before this row, the sum of their squares",
     "bv_<t>": "the bipower variation of `<t>`'s returns before this row, which leaves jumps out",
     "tv_<t>": "the tripower variation of `<t>`'s returns before this row, which leaves jumps out",
@@ -328,6 +335,12 @@ ALSO_NULL: dict[str, str] = {
     "forecast_<h>_<t>": "where `pred_<t>` is",
     "forecast_sum_<h>_<t>": "where `pred_<t>` is",
     "forecast_var_<h>_<t>": "where `pred_<t>` is, and before there is a noise",
+    "causality<i>_stat": (
+        "while withheld, while the fit is not identified (`not_identified`), and while its "
+        "residual degrees of freedom are not above 0"
+    ),
+    "causality<i>_p": "where `causality<i>_stat` is",
+    "order": "while withheld, and while the fit is not identified (`not_identified`)",
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
@@ -927,6 +940,10 @@ def stem(
     for pre in ("filtered_state", "predicted_state"):
         if base.startswith(pre) and base[len(pre) :].isdigit():
             return f"{pre}<j>"
+    for kind in ("stat", "p"):
+        rest = base.removeprefix("causality").removesuffix(f"_{kind}")
+        if base.startswith("causality") and base.endswith(f"_{kind}") and rest.isdigit():
+            return f"causality<i>_{kind}"
     if base.startswith("p_") and base != "p_change":
         return "p_<label>"
     if base.startswith("pc") and "_" in base and base[2 : base.index("_")].isdigit():

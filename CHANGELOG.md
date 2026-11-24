@@ -381,6 +381,41 @@ model that only the new build has is listed as an addition and passes.
   (`holt`'s cfg and state gain the new fields at their end; a state of 71
   or earlier loads as the warm, unseasoned form it was). A spec that gives
   none of the new keys is unchanged.
+- **`vector_ar`, a vector autoregression with online Granger tests**: a
+  VAR(p) of the targets together, by exponentially weighted least squares on
+  lags the model keeps itself, with the features as exogenous regressors in
+  every equation and the constant under `fit_intercept`. Its fit is one
+  `ewridge` over the regressors and the targets, solved on the regressors on
+  `ewridge`'s schedule and defaults, so its running means hold the targets'
+  co-moments beside the regressors'. Each declared test
+  (`causality=[{"caused": ..., "causing": ...}]`) writes its statistic and
+  p-value on every row, read at the last solve from one Cholesky factor
+  with no restricted fit run, as `causality_kind` `"f"` (the default) or
+  `"wald"` (statsmodels' `test_causality`) or the single-equation
+  `"ssr_f"`, `"ssr_chi2"` and `"lr"` (`grangercausalitytests`); the F and
+  χ² tails are written on the `libm` crate and read for output only.
+  `select` chooses the order by AIC, BIC, HQIC or FPE at each solve, as
+  `VAR.select_order` does, with Kish's count. `emit_se_coef` is
+  statsmodels' `bse`. `ModelBank.vector_ar` reads the impulse responses and
+  their standard errors (orthogonalized too, with `Σ_u`'s own estimation
+  term), the forecast-error variance decomposition, the companion matrix's
+  eigenvalues, the long-run mean, every order's criteria and a test of any
+  two sets from the moments as they stand, with nothing kept for them. With
+  no decay it is statsmodels' `VAR` on the same rows: coefficients within
+  1e-12, standard errors within 1e-11, tests within 1e-11 and their
+  p-values within 1e-10, the reads within 1e-10. A row of weight 0 or with
+  a target null learns nothing and is not a lag (`missing="drop"`), the row
+  with a target null still predicted; a session change or a capped gap
+  empties the lags and keeps the fit; `embargo` is refused; the fit is read
+  once its Gram is positive definite, withheld as `not_identified` before,
+  with no count of rows; the tests need `df = n − (d + 1) > 0` at Kish's
+  count `n`. Under decay the F test at 5% rejected 4.4% at an effective 199
+  rows and 3.6% at 39. `window_size` is `ewridge`'s snapshot window. The
+  state, `8kp` bytes of lags, the fit over `K = kp + e + k + 1` slots and
+  the last solve's read, is held to `max_state_bytes` when the spec is
+  built: ten series at ten lags (462,088 bytes) are refused by default.
+  New in the state at schema 72 (unreleased): the `VectorAr` variant, with
+  its frozen fixtures.
 
 - **`dcc`, dynamic conditional correlation fitted one row at a time** (task
   493, with task 514's recursion): the full correlation matrix of `k` return

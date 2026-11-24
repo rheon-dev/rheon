@@ -2975,6 +2975,190 @@ class ModelBank:
             idx = self._spec_index(spec, "ModelBank.audit")
         return self._native.audit(idx, _group_keys(group, "ModelBank.audit"), table, pooled)
 
+    def vector_ar(
+        self,
+        spec: str | int | None = None,
+        group: str | Iterable[str | None] | None = None,
+        *,
+        table: Literal[
+            "irf", "orth_irf", "fevd", "stability", "mean", "order", "causality"
+        ] = "irf",
+        periods: int = 10,
+        stderr: bool = False,
+        caused: str | Iterable[str] | None = None,
+        causing: str | Iterable[str] | None = None,
+        kind: Literal["f", "wald", "ssr_f", "ssr_chi2", "lr"] | None = None,
+    ) -> pl.DataFrame:
+        """Return what a ``vector_ar`` spec's fit implies, read from its moments as they stand.
+
+        Use it for what a VAR is fitted for beyond its next row: the impulse
+        responses and their standard errors, the forecast-error variance
+        decomposition, whether the process is stable and its long-run mean,
+        every order's information criteria, and a Granger test of any two
+        sets of series asked after the fact. Each is computed when asked,
+        from the fit as it stands after the last row the bank learned, at
+        the order in force; none is kept in the state, so a bank loaded from
+        its file reads the same.
+
+        .. rubric:: Parameters
+
+        ``spec``
+            The ``vector_ar`` spec to read, by name or by position
+            (:func:`rheon.spec.vector_ar`). The default, ``None``, reads the
+            bank's one ``vector_ar`` spec.
+        ``group``
+            The group to read: one group key, as :meth:`groups` reports it,
+            or a list of keys, with ``None`` in the list for the null group.
+            The default, ``None``, reads every group. A key the bank has
+            never seen gives no rows.
+        ``table``
+            Which read to return (each described under Returns): ``"irf"``,
+            the default, ``"orth_irf"``, ``"fevd"``, ``"stability"``,
+            ``"mean"``, ``"order"`` or ``"causality"``.
+        ``periods``
+            The periods of the impulse responses (``0`` to ``periods``) and
+            the horizons of the decomposition (``1`` to ``periods``).
+            Default 10.
+        ``stderr``
+            ``True`` adds each impulse response's asymptotic standard
+            error. Default ``False``.
+        ``caused``, ``causing``, ``kind``
+            For ``table="causality"``: the target columns whose equations
+            the test reads (a name or a list; required), those whose lags
+            it tests (left out, every other target), and the statistic, as
+            :func:`rheon.spec.vector_ar`'s ``causality_kind`` (left out, the
+            spec's).
+
+        .. rubric:: Returns
+
+        A ``DataFrame`` led by ``spec``, ``group`` and ``instance`` (the
+        decay grid's suffix), one block per group and instance. With
+        ``Φ_0 = I``, ``Φ_i = Σ_{j ≤ min(i, q)} Φ_{i-j} A_j`` and
+        ``Σ_u = P Pᵀ`` (Cholesky, the targets in their given order):
+
+        ``table="irf"``
+            ``period``, ``response``, ``impulse``, ``value``: ``Φ_i``'s entry,
+            the response of ``response`` ``period`` rows after a unit shock
+            to ``impulse``, statsmodels' ``irf(periods).irfs``. With
+            ``stderr``, ``stderr``, the square root of the diagonal of
+            ``Cov(vec Φ_i) = G_i Σ_α G_iᵀ``, its ``irf().stderr()``.
+        ``table="orth_irf"``
+            The same for ``Θ_i = Φ_i P``, the response to a shock of one
+            standard deviation of ``impulse``'s orthogonalized noise,
+            ``irf().orth_irfs``; its ``stderr`` adds the term from ``Σ_u``'s
+            own estimation, ``irf().stderr(orth=True)``.
+        ``table="fevd"``
+            ``horizon``, ``response``, ``shock``, ``share``: the share of
+            ``response``'s forecast-error variance ``horizon`` rows ahead
+            that ``shock``'s orthogonalized noise accounts for,
+            statsmodels' ``fevd(periods).decomp``. Each response's shares
+            sum to 1 at every horizon.
+        ``table="stability"``
+            ``root``, ``real``, ``imag``, ``modulus``, ``stable``: the
+            eigenvalues of the companion matrix, largest modulus first, and
+            whether every one is inside the unit circle. statsmodels'
+            ``roots`` are their reciprocals.
+        ``table="mean"``
+            ``target``, ``mean``: the long-run mean ``(I - Σ A_j)⁻¹ c``,
+            statsmodels' ``mean()``; null where ``I - Σ A_j`` is singular.
+        ``table="order"``
+            ``order``, ``aic``, ``bic``, ``hqic``, ``fpe``, ``in_force``: each
+            order's criteria on the same rows, statsmodels'
+            ``select_order(lags).ics``, with Kish's count for the rows; null
+            for an order the moments do not identify. ``in_force`` marks the
+            order the fit reads at.
+        ``table="causality"``
+            One row: ``order``, ``statistic``, ``p_value``, ``df_num``,
+            ``df_denom`` (null for a χ² law), as statsmodels'
+            ``test_causality`` and ``grangercausalitytests`` report them.
+
+        .. rubric:: Raises
+
+        ``KeyError``
+            ``spec`` is a name the bank does not have.
+        ``IndexError``
+            ``spec`` is a position the bank does not have.
+        ``TypeError``
+            ``group`` is not a str, a list of them with ``None`` allowed, or
+            ``None``.
+        ``ValueError``
+            When:
+
+            - ``spec`` is ``None`` and the bank holds no ``vector_ar`` spec,
+              or several;
+            - ``spec`` is not a ``vector_ar`` spec;
+            - a group's fit is not identified yet (the group and the reason
+              are named);
+            - ``table`` or ``kind`` is not one of its words;
+            - ``table="causality"`` without ``caused``, or naming a column
+              that is not a target, or one series on both sides;
+            - ``table="mean"`` of a spec with features, whose mean depends
+              on their values.
+
+        .. rubric:: Examples
+
+        .. code-block:: python
+
+            import numpy as np
+
+            rng = np.random.default_rng(5)
+            a, b = [0.0], [0.0]
+            for _ in range(2_000):
+                a.append(0.5 * a[-1] + rng.standard_normal())
+                b.append(0.3 * b[-1] + 0.4 * a[-2] + rng.standard_normal())
+            df = pl.DataFrame({"a": a, "b": b})
+
+            model = rp.spec.vector_ar("v", targets=["a", "b"], lags=1, half_life=float("inf"))
+            bank = rp.ModelBank([model])
+            bank.fit(df)
+            irf = bank.vector_ar(table="irf", periods=2).filter(response="b", impulse="a")
+            print([(p, round(v, 3)) for p, v in irf.select("period", "value").rows()])
+            print(bank.vector_ar(table="stability")["stable"][0])
+
+        .. code-block:: text
+
+            [(0, 0.0), (1, 0.448), (2, 0.341)]
+            True
+
+        .. rubric:: See also
+
+        - :func:`rheon.spec.vector_ar`, the spec, its tests per row and the
+          algebra.
+        - :meth:`coef`, the coefficients themselves.
+        """
+        who = "ModelBank.vector_ar"
+        if spec is None:
+            found = [i for i, s in enumerate(self._specs) if s["model"]["type"] == "vector_ar"]
+            if len(found) != 1:
+                names = [self._specs[i]["name"] for i in found]
+                msg = (
+                    f"{who}: the bank has {len(found)} vector_ar specs, {names}. Name the one "
+                    "to read with spec=."
+                    if found
+                    else f"{who}: the bank has no vector_ar spec. Add rheon.spec.vector_ar(...) "
+                    "to its specs."
+                )
+                raise ValueError(msg)
+            idx = found[0]
+        else:
+            idx = self._spec_index(spec, who)
+
+        def as_list(v: str | Iterable[str] | None) -> list[str] | None:
+            if v is None:
+                return None
+            return [v] if isinstance(v, str) else list(v)
+
+        return self._native.vector_ar(
+            idx,
+            _group_keys(group, who),
+            table,
+            periods,
+            stderr,
+            as_list(caused),
+            as_list(causing),
+            kind,
+        )
+
     def closed_groups(self, spec: str | int | None = None, *, drop: bool = True) -> pl.DataFrame:
         """Return the groups that have closed and not yet been read, oldest first, as one frame.
 

@@ -62,6 +62,7 @@ MODELS = [
     ("holt", {"features": None}),  # no features keyword
     ("ar", {"lags": 1, "ridge": 1e-3}),
     ("isotonic", {"features": ["x0"], "out_of_bounds": "clip"}),
+    ("vector_ar", {"lags": 1, "ridge": 1e-3}),
 ]
 IDS = [m[0] for m in MODELS]
 
@@ -639,7 +640,7 @@ class TestUniversalProperties:
         kw = {"max_error_inflation": float("inf")} if model == "ewridge" else {}
         # `ar` learns from a row only once its lag is there, so its default
         # gate waits past the warm rows; its ridge defines the early fits.
-        if model == "ar":
+        if model in ("ar", "vector_ar"):
             kw = {"min_weight": 0.0}
 
         def check(df, data):

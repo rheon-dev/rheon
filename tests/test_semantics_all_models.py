@@ -41,6 +41,8 @@ MODELS = [
     ("ar", {"lags": 1, "ridge": 1e-3}),
     # One feature, read beyond the rows at its nearer end.
     ("isotonic", {"features": ["x0"], "out_of_bounds": "clip"}),
+    # Every target's lags in every target's equation, the features beside.
+    ("vector_ar", {"lags": 1, "ridge": 1e-3}),
 ]
 
 #: The regressions with no `coef`: `isotonic`'s fit is a curve.
@@ -112,7 +114,7 @@ WITH_FEATURES_IDS = [i for (m, _), i in zip(SWEEP, IDS, strict=True) if m != "ho
 #: the sweep's ``lags=1``), so the target's own weight, which its
 #: ``min_weight`` reads (hard rule 8), starts that many rows later than
 #: ``weight_sum``.
-HOLD_BACK = {"ar": 1}
+HOLD_BACK = {"ar": 1, "vector_ar": 1}
 
 
 @pytest.mark.parametrize(("model", "extra"), WITH_FEATURES, ids=WITH_FEATURES_IDS)

@@ -532,13 +532,14 @@ def test_check_places_every_regression():
     """A new regression joins ``_check._REGRESSIONS`` (``few_rows``), and is
     measured for ``_UNCENTRED_LIMITS`` if it does not centre its features.
     ``holt`` sits out: it fits a level and a trend to the target alone;
-    ``ar``, whose rows before its lags fill teach nothing, so a count of its
-    learned rows against its coefficients is not ``few_rows``' reading; and
-    ``isotonic``, which has no coefficients: its fit is identified at a
-    feature once rows lie on both sides of it, which it reports itself."""
+    ``ar`` and ``vector_ar``, whose rows before their lags fill teach nothing,
+    so a count of their learned rows against their coefficients is not
+    ``few_rows``' reading; and ``isotonic``, which has no coefficients: its fit
+    is identified at a feature once rows lie on both sides of it, which it
+    reports itself."""
     from test_model_registry import REGRESSIONS
 
-    assert REGRESSIONS - {"holt", "ar", "isotonic"} == _check._REGRESSIONS
+    assert REGRESSIONS - {"holt", "ar", "isotonic", "vector_ar"} == _check._REGRESSIONS
     assert set(_check._UNCENTRED_LIMITS) <= _check._REGRESSIONS
     assert _check._RIDGED <= _check._REGRESSIONS
     assert set(_native.model_kinds()) >= _check._GRAMMED

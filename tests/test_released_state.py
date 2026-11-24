@@ -105,6 +105,7 @@ INTRODUCED = {
     "ar": "2.1.0",
     "spectral": "2.1.0",
     "isotonic": "2.1.0",
+    "vector_ar": "2.1.0",
 }
 
 #: The workload's specs that need a parameter newer than a release, by the

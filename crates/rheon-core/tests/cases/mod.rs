@@ -27,8 +27,8 @@ pub struct Row {
 }
 
 /// What a row reports: the prediction slots, `n_eff`, and the numbers of
-/// the step's extra (lasso's selected penalties, or `huber`'s emitted
-/// scales), in that order.
+/// the step's extra (lasso's selected penalties, `huber`'s emitted scales,
+/// or `vector_ar`'s tests), in that order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Out {
     pub pred: Vec<f64>,
@@ -50,6 +50,7 @@ impl<M: OnlineModel> Run for Model<M> {
         let extra = match s.extra {
             Some(Extra::Lasso { lam_selected }) => lam_selected,
             Some(Extra::Huber { scale }) => scale,
+            Some(Extra::VectorAr { values }) => values,
             Some(other) => panic!("an extra the harness does not know: {other:?}"),
             None => Vec::new(),
         };
@@ -4071,7 +4072,115 @@ pub fn all() -> Vec<Case> {
             Targets::Garch(2, Process::Garch(garch_series::Innovations::Normal)),
             300
         ),
+        // A VAR(2) of two targets with the features exogenous and a Granger
+        // test, its coefficients' variances read: the ring, the fit and
+        // what the last solve read, each test's statistic among it.
+        case!(
+            "vector_ar",
+            "VectorAr",
+            VectorAr,
+            {
+                let mut m = VectorAr::new(vector_ar_cfg()).unwrap();
+                m.set_keep_factor(true);
+                m
+            },
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Its order chosen by AIC at every solve: the chosen coefficients.
+        case!(
+            "vector_ar_select",
+            "VectorAr",
+            VectorAr,
+            VectorAr::new(VectorArCfg {
+                select: Some(VectorArSelect::Aic),
+                ..vector_ar_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Under a hard window of 15 clock units: the fit's snapshots.
+        case!(
+            "vector_ar_window",
+            "VectorAr",
+            VectorAr,
+            VectorAr::new(VectorArCfg {
+                window: Some(15.0),
+                ..vector_ar_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Through the origin, on a solve schedule.
+        case!(
+            "vector_ar_origin",
+            "VectorAr",
+            VectorAr,
+            VectorAr::new(VectorArCfg {
+                fit_intercept: false,
+                solve_every: 3.0,
+                max_rows_between_solves: u32::MAX,
+                causality: vec![],
+                ..vector_ar_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Saved two rows into an order of 3: the ring partly filled, no fit.
+        case!(
+            "vector_ar_filling",
+            "VectorAr",
+            VectorAr,
+            VectorAr::new(VectorArCfg {
+                lags: 3,
+                ..vector_ar_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            2
+        ),
     ]
+}
+
+/// A VAR(2) of two targets under decay with the features exogenous, a
+/// Granger test of each on the other, solving every row.
+fn vector_ar_cfg() -> VectorArCfg {
+    VectorArCfg {
+        n_targets: 2,
+        n_features: K,
+        lags: 2,
+        fit_intercept: true,
+        decay: decay(),
+        ridge: 0.0,
+        min_weight: 2.0,
+        solve_every: 0.0,
+        max_rows_between_solves: 1,
+        solve_share: None,
+        max_state_bytes: None,
+        select: None,
+        causality: vec![
+            VectorArTest {
+                caused: vec![0],
+                causing: vec![1],
+            },
+            VectorArTest {
+                caused: vec![1],
+                causing: vec![0],
+            },
+        ],
+        causality_kind: CausalityKind::F,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    }
 }
 
 /// Rows before `dcc_margins`' save: past its margins' start, within the

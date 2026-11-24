@@ -187,6 +187,30 @@ fn ar(k: usize) -> Ar {
     .unwrap()
 }
 
+/// A VAR(2) of `t` series with `k` features: its one fit's window.
+fn vector_ar(k: usize, t: usize) -> VectorAr {
+    VectorAr::new(VectorArCfg {
+        n_targets: t,
+        n_features: k,
+        lags: 2,
+        fit_intercept: true,
+        decay: Decay::Halflife(1e6),
+        ridge: 1e-6,
+        min_weight: 0.0,
+        solve_every: 1e18,
+        max_rows_between_solves: u32::MAX,
+        solve_share: None,
+        max_state_bytes: Some(64 << 20),
+        select: None,
+        causality: vec![],
+        causality_kind: CausalityKind::F,
+        window: Some(WINDOW),
+        window_every: None,
+        max_rows_between_snapshots: None,
+    })
+    .unwrap()
+}
+
 fn lasso(k: usize, t: usize) -> Lasso {
     Lasso::new(LassoCfg {
         min_weight_holds_learning: false,
@@ -285,6 +309,12 @@ fn cases(rows: usize) -> Vec<(String, Measured)> {
     }
     for k in [3, 30] {
         out.push((format!("ar k={k} t=1"), measure(|| ar(k), k, 1, None, rows)));
+    }
+    for t in [2, 4] {
+        out.push((
+            format!("vector_ar k=3 t={t}"),
+            measure(|| vector_ar(3, t), 3, t, None, rows),
+        ));
     }
     out.push((
         "marginal k=3 t=1 lags=[1, 2]".into(),

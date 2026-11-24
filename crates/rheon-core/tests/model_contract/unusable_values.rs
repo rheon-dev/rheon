@@ -36,6 +36,7 @@ fn same_bits(a: &Step, b: &Step) -> bool {
             same(u, v)
         }
         (Some(Extra::Huber { scale: u }), Some(Extra::Huber { scale: v })) => same(u, v),
+        (Some(Extra::VectorAr { values: u }), Some(Extra::VectorAr { values: v })) => same(u, v),
         (u, v) => u == v,
     };
     a.pred.len() == b.pred.len()
@@ -169,6 +170,7 @@ fn reports_nothing(s: &Step) -> bool {
         && match &s.extra {
             None => true,
             Some(Extra::Lasso { lam_selected }) => lam_selected.iter().all(|v| v.is_nan()),
+            Some(Extra::VectorAr { values }) => values.iter().all(|v| v.is_nan()),
             Some(_) => false,
         }
 }

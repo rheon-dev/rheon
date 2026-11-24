@@ -1737,6 +1737,128 @@ fn ar_predict_is_the_step() {
     );
 }
 
+/// A VAR(2) of two series with the probe's features as exogenous
+/// regressors, the probes' half-life, solving every row. A small ridge, as
+/// `ar_cfg` has: the probes' streams predict from the first rows, where
+/// least squares alone is singular.
+fn vector_ar_cfg() -> VectorArCfg {
+    VectorArCfg {
+        n_targets: 2,
+        n_features: K,
+        lags: 2,
+        fit_intercept: true,
+        decay: Decay::Halflife(HALFLIFE),
+        ridge: 0.01,
+        min_weight: 3.0,
+        solve_every: 0.0,
+        max_rows_between_solves: 1,
+        solve_share: None,
+        max_state_bytes: None,
+        select: None,
+        causality: vec![],
+        causality_kind: CausalityKind::F,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    }
+}
+
+/// `vector_ar_cfg` at least squares with two tests and `select`, so a row
+/// carries the tests' statistics, p-values and the order.
+fn vector_ar_tested_cfg() -> VectorArCfg {
+    VectorArCfg {
+        ridge: 0.0,
+        select: Some(VectorArSelect::Aic),
+        causality: vec![
+            VectorArTest {
+                caused: vec![0],
+                causing: vec![1],
+            },
+            VectorArTest {
+                caused: vec![1],
+                causing: vec![0],
+            },
+        ],
+        causality_kind: CausalityKind::Lr,
+        ..vector_ar_cfg()
+    }
+}
+
+#[test]
+fn vector_ar() {
+    // A prediction per target from both targets' lags and the features;
+    // `n_eff` every row's weight, decayed (rule 8); the ring is what
+    // `clear_lags` empties.
+    let r = probe_with(VectorAr::new(vector_ar_cfg()).unwrap(), 2, Some(&VectorAr::n_eff));
+    assert_eq!(r.kind, "vector_ar");
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 2);
+    assert_eq!(r.pred_len, 2);
+    assert!(r.roundtrips);
+    assert!(!r.lags_are_a_no_op);
+    let pure = VectorArCfg {
+        lags: 3,
+        fit_intercept: false,
+        ridge: 0.5,
+        ..vector_ar_cfg()
+    };
+    assert!(probe_with(VectorAr::new(pure).unwrap(), 2, Some(&VectorAr::n_eff)).roundtrips);
+    let tested = probe_with(
+        VectorAr::new(vector_ar_tested_cfg()).unwrap(),
+        2,
+        Some(&VectorAr::n_eff),
+    );
+    assert!(tested.roundtrips);
+    // On a schedule, as `ewridge`'s default under a finite half-life.
+    let scheduled = VectorArCfg {
+        solve_every: 4.0,
+        max_rows_between_solves: u32::MAX,
+        ..vector_ar_cfg()
+    };
+    assert!(probe_with(VectorAr::new(scheduled).unwrap(), 2, Some(&VectorAr::n_eff)).roundtrips);
+    // Under a hard window its weight is the window's, read by the caller.
+    let windowed = VectorArCfg {
+        window: Some(15.0),
+        ..vector_ar_cfg()
+    };
+    let r = probe_windowed(VectorAr::new(windowed).unwrap(), 2, Some(&VectorAr::n_eff));
+    assert!(r.roundtrips && !r.lags_are_a_no_op);
+}
+
+#[test]
+fn vector_ar_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| VectorAr::new(vector_ar_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(
+        || VectorAr::new(vector_ar_tested_cfg()).unwrap(),
+        2,
+        false,
+    );
+    predict_is_the_step_without_the_step(
+        || {
+            VectorAr::new(VectorArCfg {
+                window: Some(25.0),
+                ..vector_ar_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
+    predict_is_the_step_without_the_step(
+        || {
+            VectorAr::new(VectorArCfg {
+                min_weight: 6.0,
+                solve_every: 3.0,
+                max_rows_between_solves: u32::MAX,
+                ..vector_ar_tested_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
+}
+
 /// Two series at three frequencies, the DC and the Nyquist among them, the
 /// probes' half-life.
 fn spectral_cfg() -> SpectralCfg {

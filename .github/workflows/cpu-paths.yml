@@ -98,7 +98,7 @@ jobs:
         ewdiag:: ewridge:: exact:: expectile:: gaps:: garch:: glm:: gramfit:: hawkes:: hmm:: holt:: huber_refit::
         kalman:: lasso:: margbins:: oracle:: pieces:: rcov:: rls:: robust:: sandwich::
         seqtest:: sgd:: solve:: spectral::
-        specification:: streampca:: window_moments::
+        specification:: streampca:: vector_ar:: window_moments::
       # A release build, ten or more times faster than the debug build CI
       # tests, which matters under an emulator; with the debug build's
       # assertions and overflow checks, so the tests that expect one to

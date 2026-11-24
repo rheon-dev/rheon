@@ -575,6 +575,23 @@ pub struct EwRidge {
     /// keeps that way ([`crate::window::Kept`]).
     #[serde(skip)]
     spare_fit: crate::window::Kept<Vec<Vec<f64>>>,
+    /// The solves this model has run since it was built or loaded
+    /// ([`EwRidge::solves`]). Not state.
+    #[serde(skip)]
+    solves: SolveCount,
+}
+
+/// A count of solves that is not state: a load starts it at 0, and two
+/// models compare equal whatever it holds. A model built on a fit, as
+/// [`crate::VectorAr`] is, reads it before and after a step to know whether
+/// the step solved.
+#[derive(Debug, Default, Clone, Copy)]
+struct SolveCount(u64);
+
+impl PartialEq for SolveCount {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 /// What a window needs beyond the accumulators: where the clock has got to,
@@ -746,8 +763,15 @@ impl EwRidge {
             factors: Factors::default(),
             view: crate::window::Kept::default(),
             spare_fit: crate::window::Kept::default(),
+            solves: SolveCount::default(),
             cfg,
         })
+    }
+
+    /// The solves run since the model was built or loaded: a step that
+    /// moves it solved. Not state, so only a difference means anything.
+    pub(crate) fn solves(&self) -> u64 {
+        self.solves.0
     }
 
     pub fn cfg(&self) -> &EwRidgeCfg {
@@ -1088,6 +1112,7 @@ impl EwRidge {
     }
 
     fn solve(&mut self) {
+        self.solves.0 += 1;
         // The view is kept between solves and written over; taken out while
         // the solve borrows the model.
         let mut view = self.view.take();

@@ -118,9 +118,11 @@ ONE_FEATURE = frozenset({"isotonic"})
 #: temporal clock: ``hawkes``' ``kernel_decays`` is refused there, by name.
 RATES = frozenset({"hawkes"})
 #: A capped step is a break by design: ``corrchange`` abandons its span,
-#: ``rcov`` splits the block into stretches, ``ar`` empties its lags and
-#: ``spectral`` its transform.
-CAP_IS_A_BREAK = frozenset({"corrchange", "corrchange_scalar", "rcov", "ar", "spectral"})
+#: ``rcov`` splits the block into stretches, ``ar`` and ``vector_ar`` empty
+#: their lags and ``spectral`` its transform.
+CAP_IS_A_BREAK = frozenset(
+    {"corrchange", "corrchange_scalar", "rcov", "ar", "spectral", "vector_ar"}
+)
 #: The kinds that sum weight as a count, with what makes it exact: the
 #: ewridge readiness gate reads Kish's effective count, which copies change,
 #: and its default solve cadence counts rows; kalman's learned noise reads a
@@ -141,7 +143,7 @@ KISH = {"marginal": ("n_kish", "t_stat")}
 #: A state table's clock columns are in the clock's own type.
 CLOCK_COLUMNS = ("clock_min", "clock_max")
 #: The solving kinds, whose default cadence reads the half-life.
-SOLVES = frozenset({"ewridge", "lasso", "quantile", "huber"})
+SOLVES = frozenset({"ewridge", "lasso", "quantile", "huber", "vector_ar"})
 
 
 def _params(kinds, essential=ESSENTIAL):

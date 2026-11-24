@@ -38,8 +38,10 @@ pub use horizons::{Horizon, SpanHorizon, check_horizon_labels};
 pub use renamed::RENAMED_WHERE_EXPECTED;
 pub use renamed::{RENAMED, RENAMED_VALUES, name_renamed};
 mod moments;
+mod vector_ar;
 pub(crate) use moments::moment_leg_column;
 pub use moments::{MOMENT_KINDS, MomentKinds, MomentLegs, MomentTerms, ewm_moments_cfg};
+pub use vector_ar::{CausalitySpec, VectorArSpec, causality_kind_of, test_of, vector_ar_cfg};
 
 #[cfg(test)]
 mod kinds_tests;
@@ -1940,6 +1942,10 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// A VAR(p) of the targets together, with online Granger tests
+    /// (`rheon_core::VectorAr`).
+    #[serde(rename = "vector_ar")]
+    VectorAr(VectorArSpec),
 }
 
 /// One term of a `power_variation` spec: its name, which names its fields
@@ -2128,6 +2134,7 @@ impl ModelKind {
         "ar",
         "spectral",
         "isotonic",
+        "vector_ar",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -2168,6 +2175,7 @@ impl ModelKind {
             ModelKind::Ar { .. } => "ar",
             ModelKind::Spectral(_) => "spectral",
             ModelKind::Isotonic { .. } => "isotonic",
+            ModelKind::VectorAr(_) => "vector_ar",
         }
     }
 
@@ -2324,6 +2332,11 @@ impl ModelKind {
                 window_size: window,
                 window_budget,
                 ..
+            })
+            | ModelKind::VectorAr(VectorArSpec {
+                window_size: window,
+                window_budget,
+                ..
             }) => Some((window.as_ref().map(Span::value), *window_budget)),
             _ => None,
         }
@@ -2399,6 +2412,11 @@ impl ModelKind {
                 snapshot_every,
                 max_rows_between_snapshots,
                 ..
+            })
+            | ModelKind::VectorAr(VectorArSpec {
+                snapshot_every,
+                max_rows_between_snapshots,
+                ..
             }) => Some((snapshot_every.as_ref(), *max_rows_between_snapshots)),
             _ => None,
         }
@@ -2414,7 +2432,8 @@ impl ModelKind {
             | ModelKind::EwClass { closed, .. }
             | ModelKind::Marginal { closed, .. }
             | ModelKind::Ar { closed, .. }
-            | ModelKind::Spectral(SpectralSpec { closed, .. }) => Some(*closed),
+            | ModelKind::Spectral(SpectralSpec { closed, .. })
+            | ModelKind::VectorAr(VectorArSpec { closed, .. }) => Some(*closed),
             _ => None,
         }
     }
@@ -2449,7 +2468,11 @@ impl ModelKind {
             | ModelKind::Quantile {
                 max_rows_between_solves,
                 ..
-            } => caps.push((
+            }
+            | ModelKind::VectorAr(VectorArSpec {
+                max_rows_between_solves,
+                ..
+            }) => caps.push((
                 "max_rows_between_solves",
                 *max_rows_between_solves,
                 "solve_every",
@@ -2505,6 +2528,10 @@ impl ModelKind {
                 ..
             }
             | ModelKind::Spectral(SpectralSpec {
+                window_size: Some(w),
+                ..
+            })
+            | ModelKind::VectorAr(VectorArSpec {
                 window_size: Some(w),
                 ..
             }) => Some((w.value(), self.snapshot_cadence()?)),
@@ -3452,7 +3479,7 @@ impl Spec {
             // The fit's definiteness is the gate (`rheon_core::Ar`): a
             // target predicts once its lags and features span every
             // direction, which no count of rows says.
-            ModelKind::Ar { .. } => 0.0,
+            ModelKind::Ar { .. } | ModelKind::VectorAr(_) => 0.0,
             // A power is defined from the first row; nothing to wait for.
             ModelKind::Spectral(_) => 0.0,
             // The noise gate is this model's readiness gate
@@ -4081,7 +4108,7 @@ impl Spec {
                     columns_counted(self.features.len())
                 ));
             }
-        } else if matches!(self.model, ModelKind::Ar { .. }) {
+        } else if matches!(self.model, ModelKind::Ar { .. } | ModelKind::VectorAr(_)) {
             // Features are optional: a pure autoregression has none.
         } else if matches!(self.model, ModelKind::Isotonic { .. }) {
             if self.features.len() != 1 {

@@ -4886,8 +4886,8 @@ impl Bank {
 mod fields;
 pub(crate) use fields::nul_field;
 pub use fields::{
-    FieldMeta, coef_fields, coef_fields_frame, duplicate_field, output_fields, output_index,
-    output_index_frame,
+    FieldMeta, coef_fields, coef_fields_frame, duplicate_field, extra_width, output_fields,
+    output_index, output_index_frame,
 };
 use fields::{Source, slot_labels};
 
@@ -4896,6 +4896,9 @@ pub use learned::Learned;
 
 mod audit;
 pub use audit::AuditTable;
+
+mod vector_ar;
+pub use vector_ar::VectorArRead;
 
 mod arrays;
 use arrays::{coef_list_array, named_column, named_columns, opt_bool_array, opt_f64_array};

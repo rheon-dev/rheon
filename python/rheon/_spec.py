@@ -806,6 +806,7 @@ __all__ = [
     "ddsketch",
     "spectral",
     "isotonic",
+    "vector_ar",
 ]
 
 
@@ -4472,6 +4473,7 @@ from rheon._spec_regimes import hmm, rcov  # noqa: E402
 from rheon._spec_robust import huber, quantile  # noqa: E402
 from rheon._spec_tdigest import tdigest  # noqa: E402
 from rheon._spec_trend import holt  # noqa: E402
+from rheon._spec_vector_ar import vector_ar  # noqa: E402
 
 UNSUPERVISED = frozenset(
     {

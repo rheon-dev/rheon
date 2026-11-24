@@ -104,7 +104,7 @@ impl Spec {
     /// variances ([`rheon_core::OnlineModel::coef_variance`]), the field
     /// `emit_se_coef` writes: `ewridge`, `rls`, `kalman` and `ar`, whose
     /// fits are `ewridge`'s (docs/PLAN.md
-    /// task 116, F).
+    /// task 116, F), and `vector_ar`, whose are statsmodels' `bse`.
     pub fn has_se_coef(&self) -> bool {
         matches!(
             self.model,
@@ -112,6 +112,7 @@ impl Spec {
                 | ModelKind::Rls { .. }
                 | ModelKind::Kalman { .. }
                 | ModelKind::Ar { .. }
+                | ModelKind::VectorAr(_)
         )
     }
 

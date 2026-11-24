@@ -174,6 +174,7 @@ EXCEPT = {
     "ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
     # A curve, not coefficients: no `coef` and no cadence for it.
     "isotonic": ONE_SLOT | NOT_LEAST_SQUARES | {"coef_every"},
+    "vector_ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
 }
 
 
@@ -206,6 +207,15 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         "isotonic",
         "isotonic",
         fullest("isotonic", **dict(FIT, features=["x0"]), window_size=50.0),
+        "vector_ar",
+        "vector_ar",
+        fullest(
+            "vector_ar",
+            **FIT,
+            lags=2,
+            select="aic",
+            causality=[{"caused": "y", "causing": "z"}],
+        ),
         [],
     ),
     (

@@ -223,6 +223,7 @@ WINDOWED = {
     "marginal": lambda **kw: rp.spec.marginal("m", targets=["y"], features=["x0"], **kw),
     "ar": lambda **kw: rp.spec.ar("m", targets=["y"], features=["x0"], lags=2, **kw),
     "spectral": lambda **kw: rp.spec.spectral("m", targets=["y"], periods=[8.0], **kw),
+    "vector_ar": lambda **kw: rp.spec.vector_ar("m", targets=["y"], features=["x0"], lags=2, **kw),
 }
 
 

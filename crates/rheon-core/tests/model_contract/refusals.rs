@@ -345,6 +345,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             (-1.0).into(),
             "min_weight must be at least 0",
         ),
+        refused(VectorAr::new(vector_ar_cfg()).unwrap(), "decay", zero(), h),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -711,7 +712,8 @@ fn every_core_validate_refuses_what_the_spec_refuses() {
 }
 
 /// Exactly the models that solve on a schedule report a solve share --
-/// `ewridge`, `lasso`, and `robust` under both losses -- each the share it
+/// `ewridge`, `lasso`, `robust` under both losses and `vector_ar`, whose
+/// fit is an `ewridge`'s -- each the share it
 /// is given; every other model keeps the trait's `None` whatever it is set
 /// to (docs/EXTENDING.md's table of hooks; review 2026-10-05, CF7). The
 /// stream sets the spec's share on every model it builds or restores, so
@@ -776,13 +778,17 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("ar", share(Ar::new(ar_cfg()).unwrap())),
         ("spectral", share(Spectral::new(spectral_cfg()).unwrap())),
         ("isotonic", share(Isotonic::new(isotonic_cfg()).unwrap())),
+        ("vector_ar", share(VectorAr::new(vector_ar_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
         .filter(|(_, s)| s.is_some())
         .map(|(name, _)| *name)
         .collect();
-    assert_eq!(reporting, ["ewridge", "lasso", "huber", "quantile"]);
+    assert_eq!(
+        reporting,
+        ["ewridge", "lasso", "huber", "quantile", "vector_ar"]
+    );
     for (name, s) in shares {
         assert!(s.is_none() || s == Some(0.3), "{name}: {s:?}");
     }
@@ -834,6 +840,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Ar", "ar"),
     ("Spectral", "spectral"),
     ("Isotonic", "isotonic"),
+    ("VectorAr", "vector_ar"),
 ];
 
 #[test]

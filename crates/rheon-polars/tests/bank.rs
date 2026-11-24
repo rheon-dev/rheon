@@ -1010,6 +1010,7 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         r#"{"type": "ar", "lags": 2}"#,
         r#"{"type": "spectral", "periods": [8.0]}"#,
         r#"{"type": "isotonic"}"#,
+        r#"{"type": "vector_ar", "lags": 1}"#,
     ];
     let mut seen = Vec::new();
     for model in kinds {

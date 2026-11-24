@@ -266,7 +266,15 @@ fn probe_checked<M: OnlineModel + Clone>(
 /// move under `clear_lags`. Everything else must not: `clear_lags` is not a
 /// reset, and a model that quietly threw away a mean here would look like a
 /// decay bug three chunks later (docs/PLAN.md task 47).
-const KEEPS_LAGS: &[&str] = &["rcov", "corrchange", "ew_cov", "marginal", "ar", "spectral"];
+const KEEPS_LAGS: &[&str] = &[
+    "rcov",
+    "corrchange",
+    "ew_cov",
+    "marginal",
+    "ar",
+    "spectral",
+    "vector_ar",
+];
 
 /// The model that counts a value that is not usable rather than refusing
 /// it: `audit`, whose counts of nulls, NaNs and infinities are what it is for

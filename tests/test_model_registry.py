@@ -108,6 +108,7 @@ MINIMAL: dict[str, dict[str, object]] = {
     "spectral": {"features": None, "periods": [8.0, 3.0]},
     # One feature, the score it is monotone in.
     "isotonic": {"features": ["x0"]},
+    "vector_ar": {"lags": 1},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -331,6 +332,8 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
     "quantile": {"support_coef"},
     # Its fits are ewridge's: their standard errors, no more.
     "ar": {"emit_se_coef"},
+    # statsmodels' standard errors of its least squares, no more.
+    "vector_ar": {"emit_se_coef"},
     **{
         name: set()
         for name in (

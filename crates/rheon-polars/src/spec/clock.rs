@@ -100,6 +100,10 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("ewm_moments", &["lag_tolerance", "window_size"]),
     ("ar", &["window_size", "snapshot_every"]),
     (
+        "vector_ar",
+        &["solve_every", "window_size", "snapshot_every"],
+    ),
+    (
         "spectral",
         &["periods", "spacing", "window_size", "snapshot_every"],
     ),
@@ -543,6 +547,11 @@ impl Spec {
             } => {
                 put(&mut out, "window_size", window_size.as_ref());
                 put(&mut out, "snapshot_every", snapshot_every.as_ref());
+            }
+            ModelKind::VectorAr(v) => {
+                put(&mut out, "solve_every", v.solve_every.as_ref());
+                put(&mut out, "window_size", v.window_size.as_ref());
+                put(&mut out, "snapshot_every", v.snapshot_every.as_ref());
             }
             ModelKind::Garch { start_span, .. } => {
                 put(&mut out, "start_span", start_span.as_ref());

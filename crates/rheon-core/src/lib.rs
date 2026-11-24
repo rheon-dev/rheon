@@ -152,6 +152,7 @@ mod tdigest_model;
 /// sizes, held within what a Windows runner can commit.
 #[cfg(test)]
 mod test_pool;
+mod vector_ar;
 mod warmup;
 mod window;
 mod window_moments;
@@ -297,6 +298,9 @@ pub use streampca::{
 pub use tails::Tails;
 pub use tdigest::TDigest;
 pub use tdigest_model::{TDIGEST_COMPRESSION, TDigestModel, TDigestModelCfg, level_identified};
+pub use vector_ar::{
+    CausalityKind, VectorAr, VectorArCfg, VectorArFit, VectorArSelect, VectorArTable, VectorArTest,
+};
 pub use warmup::{WARMUP_ROWS, Warmup};
 pub use window::{
     At, Bytes, Cadence, DiagMoments, Edit, Footprint, Moments, Offer, Pack, Packer, Snapshots,

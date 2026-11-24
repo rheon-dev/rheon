@@ -198,7 +198,7 @@ POLICIES = [
 
 @pytest.mark.parametrize(
     ("model", "extra"),
-    [("ar", {"lags": 2}), ("spectral", {"periods": [8.0, 3.0]})],
+    [("ar", {"lags": 2}), ("spectral", {"periods": [8.0, 3.0]}), ("vector_ar", {"lags": 2})],
 )
 @pytest.mark.parametrize("policy", POLICIES[:2])
 def test_a_break_clears_the_lags_a_row_is_scored_with(model, extra, policy):

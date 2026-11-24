@@ -152,7 +152,7 @@ impl FlatLoc {
             },
             Source::Settled(mi) => place(Buf::Settled, 0, mi),
             Source::Inflation(i) => at(Buf::Inflation, i),
-            Source::LamSelected(i) => place(Buf::LamSelected, 0, i),
+            Source::LamSelected(i) | Source::ExtraId(i) => place(Buf::LamSelected, 0, i),
             // Reported as it is, as `n_eff` is: a weight is never null on
             // a processed row.
             Source::TargetWeight(i) => Self {
@@ -487,7 +487,7 @@ impl<'a> Sink<'a> {
             acc => acc,
         };
         match (acc, &f.src) {
-            (Acc::Flat(col), Source::Id(_)) => col.finish_i64_array_boxed(),
+            (Acc::Flat(col), Source::Id(_) | Source::ExtraId(_)) => col.finish_i64_array_boxed(),
             (Acc::Flat(col), Source::Flag(_)) => col.finish_bool_array_boxed(),
             (Acc::Flat(col), Source::Label(_)) => {
                 let classes: &[String] = match &spec.model {

@@ -930,6 +930,41 @@ impl PyModelBank {
             .map_err(PyValueError::new_err)
     }
 
+    /// A `vector_ar` spec's fit read as a frame (`Bank::vector_ar`): `table`
+    /// is `"irf"`, `"orth_irf"`, `"fevd"`, `"stability"`, `"mean"`,
+    /// `"order"` or `"causality"`.
+    #[pyo3(signature = (
+        spec, group=None, table="irf", periods=10, stderr=false, caused=None, causing=None,
+        kind=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn vector_ar(
+        slf: &Bound<'_, Self>,
+        spec: usize,
+        group: Option<Vec<Option<String>>>,
+        table: &str,
+        periods: usize,
+        stderr: bool,
+        caused: Option<Vec<String>>,
+        causing: Option<Vec<String>>,
+        kind: Option<String>,
+    ) -> PyResult<PyDataFrame> {
+        let this = slf.try_borrow().map_err(|_| busy("vector_ar"))?;
+        let table =
+            rheon_polars::rheon_core::VectorArTable::parse(table).map_err(PyValueError::new_err)?;
+        let read = rheon_polars::VectorArRead {
+            periods,
+            stderr,
+            caused: caused.unwrap_or_default(),
+            causing,
+            kind,
+        };
+        this.inner
+            .vector_ar(spec, keys(group).as_deref(), table, &read)
+            .map(PyDataFrame)
+            .map_err(PyValueError::new_err)
+    }
+
     fn spec_names(slf: &Bound<'_, Self>) -> PyResult<Vec<String>> {
         let this = slf.try_borrow().map_err(|_| busy("spec_names"))?;
         Ok(this.inner.specs().iter().map(|s| s.name.clone()).collect())

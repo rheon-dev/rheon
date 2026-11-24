@@ -809,6 +809,11 @@ NOT_REGISTERED: dict[str, str] = {
     "harness's streams and oracles (`Stream.X`, the features' design) do not "
     "carry; its exactness against statsmodels' AutoReg and WLS is held in "
     "tests/test_ar.py meanwhile, and its grids and bounds are still to be measured",
+    "vector_ar": "its design is every target's lags beside the features, which the "
+    "harness's streams and oracles (`Stream.X`, the features' design, one target "
+    "at a time) do not carry; its exactness against statsmodels' VAR, WLS and "
+    "VARProcess is held in tests/test_vector_ar.py meanwhile, and its grids and "
+    "bounds are still to be measured",
 }
 
 

@@ -1625,7 +1625,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 36] = [
+    const FROZEN: [&str; 37] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1662,6 +1662,7 @@ fn the_variant_names_are_frozen() {
         "Ar",
         "Spectral",
         "Isotonic",
+        "VectorAr",
     ];
     assert_eq!(
         variants(),
@@ -1782,7 +1783,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 220] = [
+    const FORMS: [(&str, &[&str]); 228] = [
         // PLAN 569, at schema 72: `ftrl`'s scaler and warm-up under
         // `standardize`, past the warm-up's count and inside it.
         ("ftrl_standardized", &["model", "Ftrl", "scaler", "m"]),
@@ -2308,6 +2309,17 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("spectral_window", &["model", "Spectral", "win", "total"]),
         ("ar_filling", &["model", "Ar", "rings", "0"]),
         ("ar_filling", &["model", "Ar", "fits", "0", "acc"]),
+        // `vector_ar`: its ring, full and filling, its fit, and what the
+        // last solve read: each test's statistic, the variances, and the
+        // chosen coefficients under `select`.
+        ("vector_ar", &["model", "VectorAr", "ring"]),
+        ("vector_ar", &["model", "VectorAr", "fit", "beta"]),
+        ("vector_ar", &["model", "VectorAr", "last", "wald"]),
+        ("vector_ar", &["model", "VectorAr", "last", "coef_var"]),
+        ("vector_ar", &["model", "VectorAr", "cfg", "causality"]),
+        ("vector_ar_select", &["model", "VectorAr", "last", "chosen"]),
+        ("vector_ar_window", &["model", "VectorAr", "fit", "win"]),
+        ("vector_ar_filling", &["model", "VectorAr", "ring"]),
     ];
     // Each refit's first stamp, written only under a span (task 538): in
     // glm on the summed clock, in expectile an integer stamp.

@@ -1011,6 +1011,29 @@ impl Spec {
                         }),
                 );
             }
+            ModelKind::VectorAr(_) => {
+                // As for `ar`: under a delay the rows predicted would read
+                // older lags than the rows learned.
+                if self.embargo.is_some() {
+                    no.refuse(format!(
+                        "spec {:?}: embargo does not apply to vector_ar, whose lags are the \
+                         targets' last values: under a delay the rows it predicts would read \
+                         older lags than the rows it learns from. Leave embargo out.",
+                        self.name
+                    ));
+                }
+                no.take(
+                    crate::spec::vector_ar_cfg(self, rheon_core::Decay::Halflife(f64::INFINITY))
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!(
+                                "spec {:?}: {}",
+                                self.name,
+                                e.trim_start_matches("vector_ar: ")
+                            )
+                        }),
+                );
+            }
             ModelKind::Ar { .. } => {
                 // A late target joins the lags late: a row learned under an
                 // embargo reads lags one row back, but a row predicted reads
