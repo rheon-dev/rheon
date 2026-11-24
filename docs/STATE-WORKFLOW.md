@@ -162,8 +162,9 @@ refusal. Here is what each rule guarantees, and the test that holds it:
 | a state of another version, or a damaged file | refused by its version, or reported as damaged | `test_a_windows_state_of_another_version_is_refused_by_its_version`, `test_a_damaged_windows_state_says_so` |
 
 The windows state is version 14, and this build reads 9 to 13 too. Version
-13 is 14 without an `invert` and without a row operator's own state (a
-`run_length`, `clock_lag`, `clock_drift` or `clock_step`). Version 12 is 13
+13 is 14 without an `invert`, without a row operator's own state (a
+`run_length`, `clock_lag`, `clock_drift` or `clock_step`) and without an
+`stl` or `mstl` ring. Version 12 is 13
 without a `rolling_max` or `rolling_min`, 12 is 11 in the envelope, 11's
 layout is 10's with the checksum, and 9's is 10's without a quantile
 operator. A state one release saves loads in every later

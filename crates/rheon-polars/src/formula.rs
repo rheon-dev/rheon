@@ -152,6 +152,36 @@ pub struct OpNode {
     /// What a clock step (`clock_step`) reads of its time's steps; `None`
     /// for every other operator. A spread's `bias` is [`OpNode::bias`].
     pub step: Option<rheon_core::StepStat>,
+    /// An STL or MSTL operator's (`stl`, `mstl`) own parameters; `None` for
+    /// every other operator.
+    pub stl: Option<Box<StlParams>>,
+}
+
+/// What an `stl` or `mstl` takes: statsmodels' settings, the window, the
+/// lag, which ring it reads and the component it emits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StlParams {
+    /// `(period, seasonal span)` per season, shortest period first.
+    pub seasons: Vec<(u32, u32)>,
+    pub iterate: u32,
+    pub trend: Option<u32>,
+    pub low_pass: Option<u32>,
+    pub seasonal_deg: u8,
+    pub trend_deg: u8,
+    pub low_pass_deg: u8,
+    pub seasonal_jump: u32,
+    pub trend_jump: u32,
+    pub low_pass_jump: u32,
+    pub robust: bool,
+    pub inner_iter: Option<u32>,
+    pub outer_iter: Option<u32>,
+    /// Unset: the embargo's `2 h + 1`.
+    pub window: Option<u32>,
+    /// Unset: `h`, plus 1 under `"left"`.
+    pub lag: Option<u32>,
+    pub closed: rheon_core::Closed,
+    pub component: crate::windows::StlComponent,
+    pub max_state_bytes: Option<u64>,
 }
 
 /// What an `ewm_profile` takes beside the window operators' parameters.
@@ -273,6 +303,9 @@ impl OpNode {
     }
 
     fn params_json(&self) -> Value {
+        if let Some(p) = &self.stl {
+            return stl_json(self.kind, p);
+        }
         let mut m = Map::new();
         if let Some(e) = &self.event {
             m.insert("event".into(), e.to_json());
@@ -896,6 +929,7 @@ impl Node {
                     tol: 0.0,
                     event: None,
                     step: None,
+                    stl: None,
                 };
                 let std = kind == OpKind::CrossStd;
                 let stat = kind.cross().expect("checked");
@@ -1074,6 +1108,19 @@ impl Node {
                 Ok(Node::Op(op))
             }
             "ewm_moments" => moments_from_json(args),
+            "stl" | "mstl" => {
+                arity(2)?;
+                let input = Node::from_json(&args[0])?;
+                input.no_window_operator(head.as_str())?;
+                let Value::Object(params) = &args[1] else {
+                    return Err(format!(
+                        "formula: {head:?} takes its parameters as an object, but it has {}. \
+                         Give them as an object, such as {{\"period\": 24}}.",
+                        short(&args[1])
+                    ));
+                };
+                stl_of(head.as_str(), input, params).map(Node::Op)
+            }
             "ewm_profile" => {
                 let name = "ewm_profile";
                 arity(2)?;
@@ -1124,6 +1171,7 @@ impl Node {
                     tol: 0.0,
                     event: None,
                     step: None,
+                    stl: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);
@@ -1725,6 +1773,7 @@ fn moments_from_json(args: &[Value]) -> Result<Node, String> {
         tol: 0.0,
         event: None,
         step: None,
+        stl: None,
     };
     let mut powers: Option<Vec<u32>> = None;
     let mut lags: Option<Vec<Span>> = None;
@@ -1896,6 +1945,278 @@ fn moments_from_json(args: &[Value]) -> Result<Node, String> {
     Ok(Node::Op(op))
 }
 
+/// A whole number of an `stl` or `mstl` parameter, at least `min`.
+fn stl_uint(name: &str, k: &str, v: &Value, min: u32) -> Result<u32, String> {
+    v.as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|&n| n >= min)
+        .ok_or_else(|| {
+            format!(
+                "{name}: {k} must be a whole number of at least {min}, but it is {}. Give {k} \
+                 as such a number.",
+                short(v)
+            )
+        })
+}
+
+/// An `stl` or `mstl` node from its parameters, each checked by name; the
+/// spans, degrees and the window are checked against statsmodels' rules
+/// when the run is built.
+fn stl_of(name: &str, input: Node, params: &Map<String, Value>) -> Result<OpNode, String> {
+    let mstl = name == "mstl";
+    let mut periods: Option<Vec<u32>> = None;
+    let mut spans: Option<Vec<u32>> = None;
+    let mut season: Option<u32> = None;
+    let mut component = "trend".to_string();
+    let mut p = StlParams {
+        seasons: Vec::new(),
+        iterate: 2,
+        trend: None,
+        low_pass: None,
+        seasonal_deg: 1,
+        trend_deg: 1,
+        low_pass_deg: 1,
+        seasonal_jump: 1,
+        trend_jump: 1,
+        low_pass_jump: 1,
+        robust: false,
+        inner_iter: None,
+        outer_iter: None,
+        window: None,
+        lag: None,
+        closed: rheon_core::Closed::Left,
+        component: crate::windows::StlComponent::Trend,
+        max_state_bytes: None,
+    };
+    let list = |k: &str, v: &Value| -> Result<Vec<u32>, String> {
+        match v {
+            Value::Array(a) if !a.is_empty() => a.iter().map(|x| stl_uint(name, k, x, 1)).collect(),
+            _ => Err(format!(
+                "{name}: {k} must be a list of whole numbers, but it is {}. Give {k} as a list, \
+                 such as [24, 168].",
+                short(v)
+            )),
+        }
+    };
+    let deg = |k: &str, v: &Value| -> Result<u8, String> {
+        match v.as_u64() {
+            Some(0) => Ok(0),
+            Some(1) => Ok(1),
+            _ => Err(format!(
+                "{name}: {k} must be 0 or 1, but it is {}. Give 0 for a local mean or 1 for a \
+                 local line.",
+                short(v)
+            )),
+        }
+    };
+    for (k, v) in params {
+        match (k.as_str(), mstl) {
+            ("period", false) => periods = Some(vec![stl_uint(name, k, v, 2)?]),
+            ("seasonal", false) => spans = Some(vec![stl_uint(name, k, v, 3)?]),
+            ("periods", true) => periods = Some(list(k, v)?),
+            ("windows", true) => spans = Some(list(k, v)?),
+            ("iterate", true) => p.iterate = stl_uint(name, k, v, 1)?,
+            ("season", true) => season = Some(stl_uint(name, k, v, 2)?),
+            ("trend", _) => p.trend = Some(stl_uint(name, k, v, 3)?),
+            ("low_pass", _) => p.low_pass = Some(stl_uint(name, k, v, 3)?),
+            ("seasonal_deg", _) => p.seasonal_deg = deg(k, v)?,
+            ("trend_deg", _) => p.trend_deg = deg(k, v)?,
+            ("low_pass_deg", _) => p.low_pass_deg = deg(k, v)?,
+            ("seasonal_jump", _) => p.seasonal_jump = stl_uint(name, k, v, 1)?,
+            ("trend_jump", _) => p.trend_jump = stl_uint(name, k, v, 1)?,
+            ("low_pass_jump", _) => p.low_pass_jump = stl_uint(name, k, v, 1)?,
+            ("inner_iter", _) => p.inner_iter = Some(stl_uint(name, k, v, 1)?),
+            ("outer_iter", _) => p.outer_iter = Some(stl_uint(name, k, v, 0)?),
+            ("window", _) => p.window = Some(stl_uint(name, k, v, 1)?),
+            ("lag", _) => p.lag = Some(stl_uint(name, k, v, 0)?),
+            ("max_state_bytes", _) => {
+                p.max_state_bytes = Some(v.as_u64().filter(|&b| b > 0).ok_or_else(|| {
+                    format!(
+                        "{name}: max_state_bytes must be a whole number above 0, but it is {}. \
+                         Give the most bytes a group's ring may hold.",
+                        short(v)
+                    )
+                })?);
+            }
+            ("robust", _) => {
+                p.robust = v.as_bool().ok_or_else(|| {
+                    format!(
+                        "{name}: robust must be true or false, but it is {}. Set robust to true \
+                         or false.",
+                        short(v)
+                    )
+                })?;
+            }
+            ("closed", _) => {
+                p.closed = match v.as_str() {
+                    Some("left") => rheon_core::Closed::Left,
+                    Some("right") => rheon_core::Closed::Right,
+                    _ => {
+                        return Err(format!(
+                            "{name}: closed must be \"left\" or \"right\", but it is {}. Set \
+                             closed to \"left\", which reads no row at or after the row's own, \
+                             or \"right\".",
+                            short(v)
+                        ));
+                    }
+                };
+            }
+            ("component", _) => {
+                component = match v.as_str() {
+                    Some(c @ ("seasonal" | "trend" | "resid")) => c.to_string(),
+                    _ => {
+                        return Err(format!(
+                            "{name}: component must be \"seasonal\", \"trend\" or \"resid\", \
+                             but it is {}. Set component to one of those words.",
+                            short(v)
+                        ));
+                    }
+                };
+            }
+            _ => {
+                return Err(format!(
+                    "{name}: {k:?} is not one of its parameters. Remove it, or check its \
+                     spelling."
+                ));
+            }
+        }
+    }
+    let Some(periods) = periods else {
+        let k = if mstl { "periods" } else { "period" };
+        return Err(format!(
+            "{name}: {k} is needed. Give the season's length in rows."
+        ));
+    };
+    // statsmodels' defaults: 7 for STL; 7 + 4 i for MSTL's i-th shortest.
+    let mut order: Vec<usize> = (0..periods.len()).collect();
+    order.sort_by_key(|&i| periods[i]);
+    let spans = match spans {
+        Some(s) if s.len() != periods.len() => {
+            return Err(format!(
+                "{name}: windows has {} spans for {} periods. Give one span a period.",
+                s.len(),
+                periods.len()
+            ));
+        }
+        Some(s) => s,
+        None if mstl => {
+            let mut s = vec![0; periods.len()];
+            for (rank, &i) in order.iter().enumerate() {
+                s[i] = 7 + 4 * (rank as u32 + 1);
+            }
+            s
+        }
+        None => vec![7],
+    };
+    p.seasons = order.iter().map(|&i| (periods[i], spans[i])).collect();
+    p.component = match component.as_str() {
+        "trend" => crate::windows::StlComponent::Trend,
+        "resid" => crate::windows::StlComponent::Resid,
+        _ if !mstl => crate::windows::StlComponent::Seasonal(0),
+        _ => {
+            let Some(want) = season else {
+                return Err(format!(
+                    "{name}: component \"seasonal\" needs season, the period whose seasonal \
+                     to read. Give season as one of the periods."
+                ));
+            };
+            let Some(i) = p.seasons.iter().position(|&(per, _)| per == want) else {
+                return Err(format!(
+                    "{name}: season {want} is not one of the periods. Give season as one of \
+                     them."
+                ));
+            };
+            crate::windows::StlComponent::Seasonal(i as u32)
+        }
+    };
+    let kind = if mstl { OpKind::Mstl } else { OpKind::Stl };
+    Ok(OpNode {
+        kind,
+        input: Box::new(input),
+        half_life: None,
+        window_size: None,
+        closed: Closed::Right,
+        min_samples: 1,
+        partial: None,
+        bias: false,
+        quantile: None,
+        weight: None,
+        max_state_bytes: None,
+        order: Order::default(),
+        neighbors: None,
+        pick: None,
+        moments: None,
+        profile: None,
+        since: None,
+        stl: Some(Box::new(p)),
+    })
+}
+
+/// An `stl` or `mstl` node's parameters as the list form writes them.
+fn stl_json(kind: OpKind, p: &StlParams) -> Value {
+    let mut m = Map::new();
+    if kind == OpKind::Mstl {
+        m.insert(
+            "periods".into(),
+            json!(p.seasons.iter().map(|s| s.0).collect::<Vec<_>>()),
+        );
+        m.insert(
+            "windows".into(),
+            json!(p.seasons.iter().map(|s| s.1).collect::<Vec<_>>()),
+        );
+        m.insert("iterate".into(), json!(p.iterate));
+    } else {
+        m.insert("period".into(), json!(p.seasons[0].0));
+        m.insert("seasonal".into(), json!(p.seasons[0].1));
+    }
+    for (k, v) in [("trend", p.trend), ("low_pass", p.low_pass)] {
+        if let Some(v) = v {
+            m.insert(k.into(), json!(v));
+        }
+    }
+    m.insert("seasonal_deg".into(), json!(p.seasonal_deg));
+    m.insert("trend_deg".into(), json!(p.trend_deg));
+    m.insert("low_pass_deg".into(), json!(p.low_pass_deg));
+    m.insert("seasonal_jump".into(), json!(p.seasonal_jump));
+    m.insert("trend_jump".into(), json!(p.trend_jump));
+    m.insert("low_pass_jump".into(), json!(p.low_pass_jump));
+    m.insert("robust".into(), json!(p.robust));
+    for (k, v) in [
+        ("inner_iter", p.inner_iter),
+        ("outer_iter", p.outer_iter),
+        ("window", p.window),
+        ("lag", p.lag),
+    ] {
+        if let Some(v) = v {
+            m.insert(k.into(), json!(v));
+        }
+    }
+    let closed = if p.closed == rheon_core::Closed::Left {
+        "left"
+    } else {
+        "right"
+    };
+    m.insert("closed".into(), json!(closed));
+    match p.component {
+        crate::windows::StlComponent::Trend => {
+            m.insert("component".into(), json!("trend"));
+        }
+        crate::windows::StlComponent::Resid => {
+            m.insert("component".into(), json!("resid"));
+        }
+        crate::windows::StlComponent::Seasonal(i) => {
+            m.insert("component".into(), json!("seasonal"));
+            if kind == OpKind::Mstl {
+                m.insert("season".into(), json!(p.seasons[i as usize].0));
+            }
+        }
+    }
+    if let Some(b) = p.max_state_bytes {
+        m.insert("max_state_bytes".into(), json!(b));
+    }
+    Value::Object(m)
+}
+
 /// An `ewm_profile` node from its parameters, each checked by name.
 /// The most harmonics a profile takes: a period cut finer than this is
 /// what `buckets` is for.
@@ -1924,6 +2245,7 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
         tol: 0.0,
         event: None,
         step: None,
+        stl: None,
     };
     let (mut period, mut offset, mut buckets, mut stat) = (None, None, None, ProfileStat::Mean);
     let mut harmonics: Option<u32> = None;

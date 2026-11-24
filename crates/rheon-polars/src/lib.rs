@@ -135,7 +135,8 @@ pub use summary::{ColumnStats, DataSummary, Role};
 pub use targets::{TargetDef, Targets};
 pub use timing::{TIMING_VAR, renamed_timing_notice};
 pub use windows::{
-    Closed, Direction, Emitted, KernelDef, OpDef, OpKind, Partial, Refusal, RowIn, Stat, Windows,
+    Closed, Direction, Emitted, KernelDef, OpDef, OpKind, Partial, Refusal, RowIn, Stat,
+    StlComponent, StlDef, Windows,
 };
 pub use windows_frame::{Like, WindowsConfig, WindowsRun};
 pub use wrong_type::{Refused, is_wrong_type, wrong_type};

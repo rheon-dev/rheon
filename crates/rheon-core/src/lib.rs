@@ -142,6 +142,8 @@ mod spectral;
 mod spread;
 mod sqsum;
 mod stats;
+mod stl;
+mod stl_ring;
 mod streampca;
 mod tails;
 mod tdigest;
@@ -283,6 +285,11 @@ pub use specification::Specification;
 pub use spectral::{MAX_FREQUENCIES, Spectral, SpectralCfg, SpectralScaling};
 pub use stats::{
     EW_QUANTILE_ALPHA, EwAutoCorr, EwQuantile, HitTest, MAX_BAND_OCTAVES, SlotMetrics,
+};
+pub use stl::{Mstl, MstlFit, Stl, StlCfg, StlFit};
+pub use stl_ring::{
+    Closed, Components, Decomposition, StlOperator, StlRing, check_state_bytes, default_lag,
+    default_window, seasonal_reach, state_bytes,
 };
 pub use streampca::{
     OJA_DEFAULT_LEARNING_RATE, PCA_MAX_STATE_BYTES, PcaMethod, StreamPca, StreamPcaCfg,

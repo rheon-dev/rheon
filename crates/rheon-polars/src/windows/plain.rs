@@ -525,7 +525,10 @@ impl Windows {
     #[doc(hidden)]
     pub fn set_plain_run(&mut self, on: bool) {
         self.scratch();
-        self.derived.off = !on || !self.moments.is_empty() || !self.profiles.is_empty();
+        self.derived.off = !on
+            || !self.moments.is_empty()
+            || !self.profiles.is_empty()
+            || !self.seasonals.is_empty();
     }
 
     /// Rows the plain loop has taken: for a test to see that it ran.

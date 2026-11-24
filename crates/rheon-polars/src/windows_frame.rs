@@ -33,7 +33,7 @@ use crate::stream::usable;
 use crate::windows::{ChunkKeys, session_hashes};
 use crate::windows::{
     Closed, CrossClosed, CrossDef, Direction, KernelDef, MomentsDef, OpDef, OpKind, Partial, Peek,
-    PhaseSpan, PlainRows, ProfileDef, Refusal, RowIn, Stat, StateOf, Windows,
+    PhaseSpan, PlainRows, ProfileDef, Refusal, RowIn, Stat, StateOf, StlDef, Windows,
 };
 use crate::wrong_type::{Refused, wrong_type};
 
@@ -41,7 +41,7 @@ use crate::wrong_type::{Refused, wrong_type};
 mod defs;
 #[cfg(test)]
 mod load_tests;
-use defs::{list_keys, moments_def, neighbor_list, profile_def};
+use defs::{list_keys, moments_def, neighbor_list, profile_def, stl_def};
 mod rows;
 use rows::{RowOp, RowState, step_increments};
 
@@ -111,14 +111,16 @@ const WINDOWS_KIND: &str = crate::envelope::Kind::Windows.tag();
 /// The magic a state began with before the envelope, version 11 and
 /// earlier.
 const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
-/// 14 since task 564 and PLAN 563: a group's increments' state may keep a run
-/// length's run, a clock drift's sums or a clock step's moments (`rows`),
-/// written only where there is a `run_length`, `clock_lag`, `clock_drift` or
-/// `clock_step`; and a formula may hold an `invert` node, its four parts and
-/// its parameters written as the node's list form. So a version-13 state is
-/// a version-14 state without either and loads as one; an older build
-/// refuses a 14 by its number rather than at the operator's or the node's
-/// name;
+/// 14 since task 564, PLAN 563 and PLAN 490: a group's increments' state may
+/// keep a run length's run, a clock drift's sums or a clock step's moments
+/// (`rows`), written only where there is a `run_length`, `clock_lag`,
+/// `clock_drift` or `clock_step`; a formula may hold an `invert` node, its
+/// four parts and its parameters written as the node's list form; and a
+/// group may keep an STL or MSTL operator's ring (`seasonal`) and the core
+/// its operators (`seasonals`), each written only where there is such an
+/// operator. So a version-13 state is a version-14 state without any of them
+/// and loads as one; an older build refuses a 14 by its number rather than
+/// at the operator's, the node's or the ring's name;
 /// 13 since task 561: a kernel may keep a `since` event (`since`), a queue
 /// its extrema (`ext`) and its last event's stamp (`since_off`), and an
 /// operator its `max_state_bytes`, each written only where there is an
@@ -430,6 +432,10 @@ struct Plan {
     /// and each one's hidden column.
     profiles: Vec<ProfileDef>,
     profile_columns: Vec<String>,
+    /// The STL and MSTL operators, after the profiles in output order, and
+    /// each one's hidden column.
+    seasonals: Vec<StlDef>,
+    seasonal_columns: Vec<String>,
 }
 
 fn dtype_of<'a>(input: &'a Schema, column: &str) -> &'a DataType {
@@ -600,6 +606,8 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         moments: Vec::new(),
         profiles: Vec::new(),
         profile_columns: Vec::new(),
+        seasonals: Vec::new(),
+        seasonal_columns: Vec::new(),
     };
     // Row operators first: an operator's input may read an increment.
     for f in &config.formulas {
@@ -723,6 +731,7 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             if p.columns.iter().any(|(k, _)| *k == key)
                 || p.cross_columns.contains(&key)
                 || p.profile_columns.contains(&key)
+                || p.seasonal_columns.contains(&key)
             {
                 continue;
             }
@@ -772,6 +781,12 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                     pick,
                 });
                 p.cross_columns.push(key);
+                continue;
+            }
+            if let Some(params) = &op.stl {
+                let def = stl_def(&mut p, &f.name, op, params, &incr_schema)?;
+                p.seasonals.push(def);
+                p.seasonal_columns.push(key);
                 continue;
             }
             if let Some(params) = &op.profile {
@@ -884,11 +899,19 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
     {
         p.columns.push((key, p.ops.len() + p.cross.len() + pi));
     }
+    for (si, key) in std::mem::take(&mut p.seasonal_columns)
+        .into_iter()
+        .enumerate()
+    {
+        p.columns
+            .push((key, p.ops.len() + p.cross.len() + p.profiles.len() + si));
+    }
     debug_assert!(
         !(p.ops.is_empty()
             && p.increments.is_empty()
             && p.cross.is_empty()
-            && p.profiles.is_empty()),
+            && p.profiles.is_empty()
+            && p.seasonals.is_empty()),
         "checked per formula"
     );
     p.bare = config
@@ -1473,9 +1496,17 @@ impl WindowsRun {
             output.insert(f.name.as_str().into(), dtype);
         }
         let lists = std::mem::take(&mut p.lists);
-        let mut core = if !p.cross.is_empty() || !p.profiles.is_empty() {
-            Windows::with_all(p.kernels, p.ops, p.cross, p.moments, p.profiles, cfg)
-                .map_err(|e| format!("{WHO}: {e}"))?
+        let mut core = if !p.cross.is_empty() || !p.profiles.is_empty() || !p.seasonals.is_empty() {
+            Windows::with_seasonals(
+                p.kernels,
+                p.ops,
+                p.cross,
+                p.moments,
+                p.profiles,
+                p.seasonals,
+                cfg,
+            )
+            .map_err(|e| format!("{WHO}: {e}"))?
         } else if p.ops.is_empty() {
             // Increments alone: the core carries a kernel that reads nothing,
             // so rows pass straight through it. A sum over no window, read
@@ -3268,6 +3299,7 @@ impl WindowsRun {
             || file.core.cross_defs() != run.core.cross_defs()
             || file.core.moments() != run.core.moments()
             || file.core.profiles() != run.core.profiles()
+            || file.core.seasonals() != run.core.seasonals()
             || same_clock(file.core.clock_cfg()) != same_clock(run.core.clock_cfg())
         {
             return Err(format!(

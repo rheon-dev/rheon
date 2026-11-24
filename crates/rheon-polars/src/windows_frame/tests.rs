@@ -1334,7 +1334,9 @@ fn a_windows_state_version_moves_the_banks_schema_with_it() {
     // latter, so a 72 bank holding window targets resumes here, and a
     // released build refuses a 72 bank by number.
     // Windows state 14 also holds PLAN 563's invert node on the same
-    // reading: a 13 core loads as a 14 without an invert.
+    // reading: a 13 core loads as a 14 without an invert. Windows
+    // state 14 holds PLAN 490's STL rings likewise: a 13 core loads as a 14
+    // without a ring.
     assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (14, 72));
     assert_eq!(MIN_WINDOWS_VERSION, 9);
 }

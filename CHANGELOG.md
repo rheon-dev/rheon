@@ -491,6 +491,27 @@ model that only the new build has is listed as an addition and passes.
   ns a tick against 46 on a joint grid of four series, and 182 against 155
   with `pairs`.
 
+- **`rp.ops.fourier` and `rp.ops.calendar_fourier`: Fourier terms of the
+  clock** (PLAN 489), the sine and cosine of each row's phase in a fixed
+  period or a calendar hour, day, week, month, quarter or year, as plain
+  Polars expressions with no state. The phase is reduced in whole numbers
+  before it becomes an angle, so its rounding does not grow with the clock;
+  the terms are statsmodels' `Fourier` and `CalendarFourier` to the last
+  bit, a zoned clock read on its wall clock. They live in `rheon.polars.ops`
+  alone.
+- **`rp.ops.stl` and `rp.ops.mstl`: STL and MSTL read behind an embargo**
+  (PLAN 490), in `rp.stream.with_windows`: on each row, the trend, a season
+  or the remainder of statsmodels' `STL` or `MSTL` of the group's last `W`
+  learned rows, read `lag` rows back, bit-equal to statsmodels on the same
+  platform (a port of its compiled STL, the authors' Fortran). By default
+  `W = 2h + 1` and the lag `h + 1`, `h = max p (s - 1) / 2` the seasonal
+  smoother's reach; `closed="left"` by default, so a value reads no row at
+  or after its own, where `"right"` reads the row's own value and leaks it
+  as a feature of itself. A null learns nothing; a clock break, session
+  change or reset empties the ring. A group's state is its ring, `8 W + 24`
+  bytes, refused past `max_state_bytes` (256 KB) when the run is built.
+  Windows state 14, within bank schema 72: a 13 state loads as a 14
+  without a ring. They live in `rheon.polars.ops` alone.
 - **`rp.ops.ewm_profile`: a column's EW mean, variance, standard deviation or
   quantile by each row's phase of a period** (PLAN 560), read at the row's
   own phase, one profile per group, in `rp.stream.with_windows`. The

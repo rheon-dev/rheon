@@ -676,6 +676,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/spectral.rs"]
 
+[messages."crates/rheon-core/src/stl.rs"]
+
+[messages."crates/rheon-core/src/stl_ring.rs"]
+
 [messages."crates/rheon-core/src/streampca.rs"]
 
 [messages."crates/rheon-core/src/tdigest.rs"]
@@ -725,6 +729,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 "remedy" = 2
 "where" = 2
 
+[messages."crates/rheon-polars/src/windows/seasonal.rs"]
+
 [messages."crates/rheon-polars/src/windows_frame/defs.rs"]
 
 [messages."python/rheon/_cpu_check.py"]
@@ -740,6 +746,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."python/rheon/polars/__init__.py"]
 
 [messages."python/rheon/polars/_clock.py"]
+
+[messages."python/rheon/polars/_fourier.py"]
 
 [docstrings."python/rheon/_spec_ar.py"]
 
@@ -770,6 +778,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [docstrings."python/rheon/_spec_tdigest.py"]
 
 [docstrings."python/rheon/polars/_errors.py"]
+
+[docstrings."python/rheon/polars/_fourier.py"]
 
 [docstrings."python/rheon/polars/_warnings.py"]
 
@@ -823,6 +833,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-core/src/spectral.rs#messages"]
 
+[vocabulary."crates/rheon-core/src/stl.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/stl_ring.rs#messages"]
+
 [vocabulary."crates/rheon-core/src/streampca.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/tdigest.rs#messages"]
@@ -860,6 +874,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-polars/src/windows/moments.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/windows/profile.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/windows/seasonal.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/windows_frame/defs.rs#messages"]
 
@@ -907,6 +923,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/polars/_clock.py#messages"]
 
 [vocabulary."python/rheon/polars/_errors.py#docstrings"]
+
+[vocabulary."python/rheon/polars/_fourier.py#docstrings"]
+
+[vocabulary."python/rheon/polars/_fourier.py#messages"]
 
 [vocabulary."python/rheon/polars/_warnings.py#docstrings"]
 

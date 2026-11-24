@@ -190,6 +190,11 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family("ops-solve", "ops", (f"{_RP}.ops.invert", f"{_RP}.ops.unknown")),
     Family(
+        "ops-seasonal",
+        "ops",
+        tuple(f"{_RP}.ops.{m}" for m in ("fourier", "calendar_fourier", "stl", "mstl")),
+    ),
+    Family(
         "eval-scores",
         "eval",
         tuple(

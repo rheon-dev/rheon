@@ -288,9 +288,34 @@ impl Windows {
         profiles: Vec<ProfileDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
+        Self::with_seasonals(
+            kernels,
+            ops,
+            cross,
+            moments,
+            profiles,
+            Vec::new(),
+            clock_cfg,
+        )
+    }
+
+    /// [`Self::with_all`] with STL and MSTL operators after the profiles.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`], and an operator's settings or ring past its cap.
+    pub fn with_seasonals(
+        kernels: Vec<KernelDef>,
+        ops: Vec<OpDef>,
+        cross: Vec<CrossDef>,
+        moments: Vec<MomentsDef>,
+        profiles: Vec<ProfileDef>,
+        seasonals: Vec<StlDef>,
+        clock_cfg: ClockCfg,
+    ) -> Result<Self, String> {
         check_moments(&ops, &moments).map_err(|e| defect(&e))?;
-        let mut core =
-            Self::build(kernels, ops, cross, profiles, clock_cfg).map_err(|e| defect(&e))?;
+        let mut core = Self::build(kernels, ops, cross, profiles, seasonals, clock_cfg)
+            .map_err(|e| defect(&e))?;
         core.moments = Arc::new(moments);
         Ok(core)
     }

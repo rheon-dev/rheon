@@ -235,3 +235,91 @@ pub(super) fn profile_def(
     }
     Ok(def)
 }
+
+/// An `stl` or `mstl` operator's definition: its input, its settings, and
+/// its window and lag resolved by the embargo where the call leaves them
+/// out. The settings and the ring's bytes are checked when the core is
+/// built ([`StlDef::check`]).
+pub(super) fn stl_def(
+    p: &mut Plan,
+    f: &str,
+    op: &OpNode,
+    params: &crate::formula::StlParams,
+    incr_schema: &Schema,
+) -> Result<StlDef, Refused> {
+    let name = op.kind.name();
+    let resolve_incr = |op: &OpNode| col(hidden(op).as_str());
+    let node = &*op.input;
+    let x = match p.inputs.iter().position(|n| n == node) {
+        Some(i) => i,
+        None => {
+            let dtype = dtypes_of(incr_schema, vec![node.to_expr(&resolve_incr).alias("@t")])
+                .map_err(|e| {
+                    format!(
+                        "{WHO}: {f}: Polars cannot compute {name}'s input ({e}). Check that the \
+                         input reads columns of the right type."
+                    )
+                })?;
+            let dtype = dtype.get("@t").expect("aliased").clone();
+            if !numeric(&dtype) {
+                return Err(Refused::wrong_type(format!(
+                    "{WHO}: {f}: {name}'s input must be a number, but it is {}. Cast it to a \
+                     number, such as with .cast(pl.Float64).",
+                    crate::arrow::dtype_name(&dtype)
+                )));
+            }
+            p.inputs.push(node.clone());
+            p.inputs.len() - 1
+        }
+    };
+    let seasons: Vec<(usize, usize)> = params
+        .seasons
+        .iter()
+        .map(|&(a, b)| (a as usize, b as usize))
+        .collect();
+    let window = match params.window {
+        Some(w) => w,
+        None => u32::try_from(rheon_core::default_window(&seasons)).map_err(|_| {
+            format!("{WHO}: {f}: {name}'s default window is too long. Give window.")
+        })?,
+    };
+    let lag = match params.lag {
+        Some(l) => l,
+        None => u32::try_from(rheon_core::default_lag(&seasons, params.closed))
+            .map_err(|_| format!("{WHO}: {f}: {name}'s default lag is too long. Give lag."))?,
+    };
+    let cap = params
+        .max_state_bytes
+        .unwrap_or(crate::windows::PROFILE_STATE_BYTES);
+    let ceiling = crate::windows::PROFILE_STATE_BYTES_CEILING;
+    if cap > ceiling {
+        return Err(format!(
+            "{WHO}: {f}: {name}'s max_state_bytes is {cap}, past the most a window operator \
+             may hold, {ceiling}. Give max_state_bytes of at most {ceiling}."
+        )
+        .into());
+    }
+    let def = StlDef {
+        seasons: params.seasons.clone(),
+        iterate: params.iterate,
+        trend: params.trend,
+        low_pass: params.low_pass,
+        seasonal_deg: params.seasonal_deg,
+        trend_deg: params.trend_deg,
+        low_pass_deg: params.low_pass_deg,
+        seasonal_jump: params.seasonal_jump,
+        trend_jump: params.trend_jump,
+        low_pass_jump: params.low_pass_jump,
+        robust: params.robust,
+        inner_iter: params.inner_iter,
+        outer_iter: params.outer_iter,
+        window,
+        lag,
+        closed: params.closed,
+        component: params.component,
+        input: x,
+        cap,
+    };
+    def.check().map_err(|e| format!("{WHO}: {f}: {e}"))?;
+    Ok(def)
+}
