@@ -322,6 +322,23 @@ def test_the_fold_leaves_every_run_below_the_cap_the_packages():
 # --- a hazard on the clock, through the package's hazard function --------------------
 
 
+def package_on_steps(x: np.ndarray, after: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The package's posterior ``R``, its modes and each row's log predictive,
+    with ``after[c]`` the chance of a break after row ``c``. The package takes
+    no vector of hazards: it calls its hazard function once a row, on that
+    row's run lengths, so a function that counts its calls gives each row
+    its own chance."""
+    calls = iter(range(len(x)))
+
+    def hazard_function(r: np.ndarray) -> np.ndarray:
+        return np.full(r.shape, after[next(calls)])
+
+    model = Recording(NU0 / 2.0, PSI0 / 2.0, KAPPA0, 0.0)
+    r, maxes = bcd.online_changepoint_detection(x, hazard_function, model)
+    loglik = np.log([r[: c + 1, c] @ model.densities[c] for c in range(len(x))])
+    return r, maxes, loglik
+
+
 def test_a_clock_hazard_on_irregular_steps_is_the_packages_with_each_steps_chance():
     """``hazard = tau`` on a number clock puts the chance ``h = 1 - exp(-dt /
     tau)`` of the step into a row before the row (task 547). The package
@@ -344,14 +361,7 @@ def test_a_clock_hazard_on_irregular_steps_is_the_packages_with_each_steps_chanc
     x = level + rng.normal(0.0, 1.0, n)
     # The chance of the step after row c, and an arbitrary one after the last.
     after = np.concatenate([-np.expm1(-np.diff(secs) / tau), [0.5]])
-    calls = iter(range(n))
-
-    def hazard_function(r: np.ndarray) -> np.ndarray:
-        return np.full(r.shape, after[next(calls)])
-
-    model = Recording(NU0 / 2.0, PSI0 / 2.0, KAPPA0, 0.0)
-    r, maxes = bcd.online_changepoint_detection(x, hazard_function, model)
-    loglik = np.log([r[: c + 1, c] @ model.densities[c] for c in range(n)])
+    r, maxes, loglik = package_on_steps(x, after)
     clock = rp.spec.bocpd(
         "b",
         features=["x"],
@@ -377,6 +387,86 @@ def test_a_clock_hazard_on_irregular_steps_is_the_packages_with_each_steps_chanc
     shared = np.flatnonzero(gaps[1:] == 0.0) + 1
     assert len(shared) > 5 and (out["p_change"].to_numpy()[shared] == 0.0).all()
     assert out["p_change"].max() > 0.5
+
+
+#: The clock form's gap cap, its ``tau`` and the steps the test below puts
+#: at the cap and beside it, in clock units.
+GAP_CAP = 30.0
+CAP_TAU = 40.0
+AT_THE_CAP = (29.9, 30.0, 30.1, 30.0 + 1e-9, 45.0, 120.0, 600.0)
+
+
+def test_a_clock_hazard_is_the_packages_on_both_sides_of_the_gap_cap():
+    """A step past ``gap_cap`` counts as the cap, so the chance it carries is
+    ``1 - exp(-min(d, cap) / tau)``. The package, fed each step's chance so
+    capped, is the clock form's posterior on every learned row, with steps
+    below the cap, at it, a hair past it and far past it, and shared stamps.
+    A row of weight 0 counts in no clock: its step goes to the next learned
+    row, so a gap it splits into two pieces below the cap is one step past
+    it, capped once, and its wild value is learned by no run.
+
+    Tolerances: ``TestBocpdAtALevel``'s at level 0, as the test above, one
+    recursion against another through libm. Measured 2026-11-24 (aarch64,
+    Linux): ``p_change`` 2.8e-14, ``run_mean`` 5.1e-14 relative, ``loglik``
+    4.5e-14, ``run_mode`` exact. The package fed the uncapped chances instead
+    misses ``p_change`` by 0.82, so the bound sees the cap."""
+    rng = np.random.default_rng(5472)
+    n = 300
+    gaps = rng.exponential(10.0, n).round(1)
+    gaps[0] = 0.0
+    gaps[rng.random(n) < 0.05] = 0.0
+    far = rng.choice(np.arange(1, n), 30, replace=False)
+    gaps[far] = rng.uniform(GAP_CAP, 8.0 * GAP_CAP, len(far)).round(1)
+    near = rng.choice(np.setdiff1d(np.arange(1, n), far), len(AT_THE_CAP), replace=False)
+    gaps[near] = AT_THE_CAP
+    # Three steps of 50, each split into two pieces of 25 by a row of
+    # weight 0 forty noise sds out.
+    split = rng.choice(np.setdiff1d(np.arange(1, n), np.concatenate([far, near])), 3, replace=False)
+    gaps[split] = 50.0
+    secs = np.cumsum(gaps)
+    level = np.where(np.arange(n) < 100, 0.0, np.where(np.arange(n) < 220, 3.0, -1.0))
+    x = level + rng.normal(0.0, 1.0, n)
+    frame = pl.DataFrame({"t": secs, "x": x, "w": np.ones(n)})
+    weightless = pl.DataFrame({"t": secs[split] - 25.0, "x": 40.0, "w": 0.0})
+    stream = pl.concat([frame, weightless]).sort("t", maintain_order=True)
+    learned = stream["w"].to_numpy() > 0
+    steps = np.diff(secs)
+    assert learned.sum() == n and (stream["x"].filter(pl.Series(~learned)) == 40.0).all()
+    # Both sides of the cap, and within a hair of it on both.
+    assert (steps > GAP_CAP).sum() >= 35 and ((steps > 0) & (steps < GAP_CAP)).sum() > 200
+    assert (np.abs(steps - GAP_CAP) < 0.2).sum() >= 4
+    assert (np.abs(steps[split - 1] - 50.0) < 1e-9).all()
+    capped = -np.expm1(-np.minimum(steps, GAP_CAP) / CAP_TAU)
+    # The chance of the step after each learned row, an arbitrary one after
+    # the last.
+    after = np.concatenate([capped, [0.5]])
+    r, maxes, loglik = package_on_steps(x, after)
+    spec = rp.spec.bocpd(
+        "b",
+        features=["x"],
+        hazard=CAP_TAU,
+        clock="t",
+        gap_cap=GAP_CAP,
+        weight="w",
+        covariance_type="diag",
+        mean_prior=[0.0],
+        mean_precision_prior=KAPPA0,
+        covariance_prior=[PSI0],
+        prune_below=0.0,
+        max_run=n + 2,
+        min_weight=0.0,
+    )
+    out = rp.ModelBank([spec]).fit_predict(stream).unnest("b").filter(pl.Series(learned))
+    np.testing.assert_allclose(out["p_change"], r[1, 1:] / (1.0 - after), rtol=0, atol=P_TOL)
+    np.testing.assert_allclose(out["run_mean"], np.arange(n + 1) @ r[:, :n], rtol=1e-9)
+    np.testing.assert_allclose(out["loglik"], loglik, rtol=1e-9, atol=1e-9)
+    np.testing.assert_array_equal(out["run_mode"], maxes[:n])
+    # The cap acted: the package on the uncapped steps is another posterior.
+    uncapped = np.concatenate([-np.expm1(-steps / CAP_TAU), [0.5]])
+    r_far, _, _ = package_on_steps(x, uncapped)
+    missed = np.abs(out["p_change"].to_numpy() - r_far[1, 1:] / (1.0 - uncapped)).max()
+    print(f"p_change against the uncapped chances: {missed:.3g}")
+    assert missed > 1e-3
 
 
 # --- the robust emission against its definition ---------------------------------------
