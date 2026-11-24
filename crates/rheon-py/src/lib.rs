@@ -1708,6 +1708,15 @@ fn ddsketch_decayed_buckets(
     ))
 }
 
+/// The mapping's `gamma` and multiplier `ln 2 / ln gamma` at `alpha`, the
+/// two doubles its representatives are read from.
+#[pyfunction]
+fn ddsketch_mapping(alpha: f64) -> PyResult<(f64, f64)> {
+    let map =
+        rheon_polars::rheon_core::DdSketchMapping::new(alpha).map_err(PyValueError::new_err)?;
+    Ok((map.gamma(), map.multiplier()))
+}
+
 /// The representative of each of `keys` at `alpha`.
 #[pyfunction]
 fn ddsketch_values(keys: Vec<i32>, alpha: f64) -> PyResult<Vec<f64>> {
@@ -2039,6 +2048,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tdigest_tail_means, m)?)?;
     m.add_function(wrap_pyfunction!(tdigest_centroids, m)?)?;
     m.add_function(wrap_pyfunction!(ddsketch_buckets, m)?)?;
+    m.add_function(wrap_pyfunction!(ddsketch_mapping, m)?)?;
     m.add_function(wrap_pyfunction!(ddsketch_values, m)?)?;
     m.add_function(wrap_pyfunction!(ddsketch_decayed_buckets, m)?)?;
     m.add_function(wrap_pyfunction!(ddsketch_reads, m)?)?;

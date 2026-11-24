@@ -178,6 +178,12 @@ impl Mapping {
         self.gamma
     }
 
+    /// `ln 2 / ln gamma`, the multiplier [`Self::key`] and [`Self::value`]
+    /// read: from the crate's own `ln_1p`, the same bits on every OS.
+    pub fn multiplier(&self) -> f64 {
+        self.multiplier
+    }
+
     /// The bucket of a magnitude above [`Self::min_possible`].
     pub fn key(&self, x: f64) -> i32 {
         (log2(x) * self.multiplier).ceil() as i32
