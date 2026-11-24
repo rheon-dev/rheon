@@ -1,5 +1,6 @@
-//! A window run's state file read back: what its increments' part may hold
-//! (the 2026-11-23 review, WIN-11; PLAN 578d).
+//! A window run's state file read back, what its increments' part may hold
+//! (the 2026-11-23 review, WIN-11), and a clock past the largest double
+//! through the run's block paths (WIN-9; PLAN 578d).
 use super::*;
 
 const INCR: &str = r#"{"formulas": [{"name": "f", "tree": ["ewm_mean", ["increment",
@@ -82,4 +83,31 @@ fn a_state_whose_increments_do_not_fit_its_call_is_refused() {
     let whole = with_increments(&file, &file.increments);
     let mut run = WindowsRun::load_bytes(&whole, config(), df.schema()).unwrap();
     run.feed(&df.slice(4, 2), None).unwrap();
+}
+
+/// WIN-9 through a frame: the blocks a run takes its rows in, one group and
+/// several, end at a row whose distance from its windows' first row passes
+/// the largest double, and the row is refused by name, as one pushed alone.
+#[test]
+fn a_clock_past_the_largest_double_is_refused_through_each_block_path() {
+    for grouped in [false, true] {
+        let json = format!(
+            r#"{{"formulas": [{{"name": "f", "tree": ["ewm_mean", ["col", "x"],
+            {{"half_life": 10, "window_size": 50}}]}}], "clock": "t", "gap_cap": 1e308{}}}"#,
+            if grouped { r#", "group": "g""# } else { "" }
+        );
+        let config = serde_json::from_str::<WindowsConfig>(&json).unwrap();
+        let df = df!(
+            "t" => [-1e308, 0.0, 1e308],
+            "x" => [10.0, 20.0, 30.0],
+            "g" => ["a", "a", "a"],
+        )
+        .unwrap();
+        let mut run = WindowsRun::new(config, df.schema()).unwrap();
+        let err = run.feed(&df, None).expect_err("refused").to_string();
+        assert!(
+            err.contains("has run from") && err.contains("largest float"),
+            "grouped {grouped}: {err}"
+        );
+    }
 }

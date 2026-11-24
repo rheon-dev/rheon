@@ -640,13 +640,16 @@ impl Windows {
                 _ => true,
             };
             let keys_ok = rows.keys.is_none_or(|k| k.code(at + j) == k.code(at));
-            if !(step_ok && session_ok && keys_ok) {
+            // A policy time past the largest double ends the block: the row
+            // goes to `push`, which refuses it (review 2026-11-23, WIN-9).
+            let tau = elapsed(now, origin);
+            if !(step_ok && session_ok && keys_ok && tau.is_finite()) {
                 break;
             }
             let new = now != last;
             news += usize::from(new);
             bufs.new.push(new);
-            bufs.tau.push(elapsed(now, origin));
+            bufs.tau.push(tau);
             bufs.off.push(offset_of(now));
             last = now;
             last_session = session;
@@ -1178,11 +1181,13 @@ impl Windows {
             } else {
                 // A group whose pending rows a later stamp resolved does not
                 // begin on a tie of its own stamp.
-                if !ok || (t.count == 0 && !new && n_wait > 0 && !t.waiting) {
+                let tau = elapsed(now, t.origin);
+                // Past the largest double, as the block above (WIN-9).
+                if !ok || (t.count == 0 && !new && n_wait > 0 && !t.waiting) || !tau.is_finite() {
                     break;
                 }
                 m.rows.push(RowRec {
-                    tau: elapsed(now, t.origin),
+                    tau,
                     off: offset_of(now),
                     slot: slot as u32,
                     new,
