@@ -105,6 +105,11 @@ const WINDOWS_KIND: &str = crate::envelope::Kind::Windows.tag();
 /// The magic a state began with before the envelope, version 11 and
 /// earlier.
 const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
+/// 14 since PLAN 490: a group may keep an STL or MSTL operator's ring
+/// (`seasonal`) and the core its operators (`seasonals`), each written only
+/// where there is such an operator, so a version-13 state is a version-14
+/// state without one and loads as one; an older build refuses a 14 by its
+/// number rather than at the ring's name;
 /// 13 since task 561: a kernel may keep a `since` event (`since`), a queue
 /// its extrema (`ext`) and its last event's stamp (`since_off`), and an
 /// operator its `max_state_bytes`, each written only where there is an
@@ -143,7 +148,7 @@ const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
 /// task 143: formulas over operators, where 1 held descriptions. An older
 /// state would load with defaults and misbehave. The bank's schema moves
 /// with this number (review R4, A2; R6, D5).
-const WINDOWS_VERSION: u32 = 13;
+const WINDOWS_VERSION: u32 = 14;
 
 /// The last version written before the envelope.
 const LAST_LEGACY_VERSION: u32 = 11;
@@ -4519,7 +4524,7 @@ mod tests {
         assert!(
             err.contains(
                 "the state's version is 2, but this version of rheon reads versions 9 \
-                 to 13"
+                 to 14"
             ),
             "{err}"
         );
@@ -4684,8 +4689,10 @@ mod tests {
         // Windows state 13 (task 561, the extrema) within schema 72, which
         // no release has written: this build reads a 12 core as a 13
         // without an extremum, so a 72 bank holding window targets resumes
-        // here, and a released build refuses a 72 bank by number.
-        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (13, 72));
+        // here, and a released build refuses a 72 bank by number. Windows
+        // state 14 (PLAN 490, the STL rings) within schema 72 likewise: a 13
+        // core loads as a 14 without a ring.
+        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (14, 72));
         assert_eq!(MIN_WINDOWS_VERSION, 9);
     }
 

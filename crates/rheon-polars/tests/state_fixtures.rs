@@ -1563,6 +1563,72 @@ fn windows_extrema_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_extrema_config(), bytes, input)
 }
 
+/// STL and MSTL (windows state 14): a ring of six learned rows a group,
+/// with an operator looking ahead so rows are held across the save.
+fn windows_stl_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "trend", "tree": ["stl", ["col", "mid"], {"period": 2, "seasonal": 3, "window": 6, "lag": 1}]},
+               {"name": "season", "tree": ["mstl", ["col", "mid"], {"periods": [2, 3], "windows": [3, 3], "window": 7, "lag": 0, "closed": "right", "component": "seasonal", "season": 3}]},
+               {"name": "ahead", "tree": ["rewm_mean", ["col", "mid"], {"half_life": 5.0, "window_size": 3.0}]}
+             ],
+             "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
+    )
+    .unwrap()
+}
+
+/// Groups whose rings stand, at the save, in each form a ring takes: full
+/// (six rows, its head back at 0), wrapped past six (its head at 2),
+/// filling (three rows), empty (its rows' values all null), and emptied (a
+/// gap past `gap_cap` started it over, at a row with no value).
+fn window_stl_input() -> DataFrame {
+    let mut g: Vec<&str> = Vec::with_capacity(N);
+    let mut mid: Vec<Option<f64>> = Vec::with_capacity(N);
+    let plan: [(&str, usize, bool); 6] = [
+        ("cut", 5, true),
+        ("full", 6, true),
+        ("wrap", 8, true),
+        ("fill", 3, true),
+        ("empty", 3, false),
+        ("bulk", 40, true),
+    ];
+    for (name, rows, valued) in plan {
+        for _ in 0..rows {
+            g.push(name);
+            mid.push(valued.then_some(0.0));
+        }
+    }
+    // The cut group's next row, past the gap cap, with no value.
+    g.push("cut");
+    mid.push(None);
+    while g.len() < SPLIT {
+        g.push("bulk");
+        mid.push(Some(0.0));
+    }
+    let after = ["full", "wrap", "fill", "empty", "cut"];
+    for i in SPLIT..N {
+        g.push(after[i % after.len()]);
+        mid.push(Some(0.0));
+    }
+    // Values of two seasons and a trend, from arithmetic alone.
+    let mid: Vec<Option<f64>> = mid
+        .iter()
+        .enumerate()
+        .map(|(i, v)| v.map(|_| [1.5, -0.5][i % 2] + [0.25, 0.0, -0.75][i % 3] + 0.03 * i as f64))
+        .collect();
+    let t: Vec<f64> = (0..N).map(|i| i as f64).collect();
+    assert_eq!(g.len(), N);
+    df!("t" => t, "g" => g, "mid" => mid).unwrap()
+}
+
+fn windows_stl_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_stl_config(), window_stl_input())
+}
+
+fn windows_stl_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_stl_config(), bytes, input)
+}
+
 fn windows_int_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_int_config(), window_int_input(&frame()))
 }
@@ -2309,6 +2375,11 @@ fn kinds() -> Vec<Kind> {
             run: windows_extrema_run,
         },
         Kind {
+            name: "with_windows_stl",
+            first: windows_stl_first,
+            run: windows_stl_run,
+        },
+        Kind {
             name: "refresh_time",
             first: refresh_first,
             run: refresh_run,
@@ -2765,7 +2836,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
         } else if name.starts_with("merge") {
             ("merge", 1)
         } else if name.starts_with("with_windows") {
-            ("windows", 13)
+            ("windows", 14)
         } else {
             ("bank", u64::from(SCHEMA_VERSION))
         }
@@ -2799,7 +2870,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     let stages = load_checkpoint(&unhex(f.state)).unwrap();
     for (s, (kind, version)) in stages.iter().zip([
         ("refresh_time", 3),
-        ("windows", 13),
+        ("windows", 14),
         ("bank", 72),
         ("merge", 1),
     ]) {
@@ -4001,6 +4072,25 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             "an operator's max_state_bytes",
             |p, v| p.ends_with(".max_state_bytes") && v.as_u64() == Some(1_000_000),
         ),
+        // Windows state 14 (PLAN 490): the STL operators and each form a
+        // group's ring takes at the save.
+        ("with_windows_stl", "an STL operator's window", |p, v| {
+            p.contains(".seasonals.") && p.ends_with(".window") && v.as_u64() == Some(6)
+        }),
+        ("with_windows_stl", "a full ring", |p, v| {
+            p.contains(".seasonal.") && p.ends_with(".count") && v.as_u64() == Some(6)
+        }),
+        (
+            "with_windows_stl",
+            "a ring wrapped past its window",
+            |p, v| p.contains(".seasonal.") && p.ends_with(".head") && v.as_u64() == Some(2),
+        ),
+        ("with_windows_stl", "a filling ring", |p, v| {
+            p.contains(".seasonal.") && p.ends_with(".count") && v.as_u64() == Some(3)
+        }),
+        ("with_windows_stl", "an empty or emptied ring", |p, v| {
+            p.contains(".seasonal.") && p.ends_with(".count") && v.as_u64() == Some(0)
+        }),
         // PLAN 541: a merge's state, in each form it takes -- an input's
         // last clock as a float and as an integer (a temporal clock's
         // physical one) and none, the rows held at a tie, an input started
