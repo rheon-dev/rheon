@@ -658,3 +658,34 @@ Decisions taken in the build, beside the record:
 - **The example binary is left out of the `oracle` mark**, as the command
   line's tests are (`tests/oracle_marks.py`): a CPU-paths leg does not
   build it, and the Rust solver's numbers move with no CPU path.
+
+## 5. Slice 2, first cut (part 2b): the node in `rheon-polars`
+
+Built 2026-11-24 on this branch. Code: `crates/rheon-polars/src/formula/scalar.rs`
+(`Invert`, exported from the crate), its tests in `formula/scalar/tests.rs`,
+and the example `crates/rheon-polars/examples/invert_rows`, which
+`tests/test_second_opinion_invert.py` holds to scipy's `brentq` on a seeded
+monotone closed form (`x^3 + a x + exp(b x)`, 1,000 rows, every in-range row
+certified and within `2 eps + xtol + rtol |x|`).
+
+- **Not yet a node of the formula grammar.** `Invert` reads its own list
+  form, `["invert", f, equals, lo, hi, {params}]` with the leaf
+  `["unknown"]`, and is not read by `Node::from_json`, so a window run's
+  state cannot hold it and the window state's version and fixtures are
+  untouched. Wiring it into `Node` (and so into `with_windows`) is the next
+  cut, with the version bump and fixtures that holding the new forms needs.
+- **The interpreter's nodes** are `col`, numeric `lit`, `unknown`,
+  `+ - * / **`, `neg abs exp sqrt`, `log` with a base and a cast to
+  `Float64`. `clip`, `when`, comparisons, `norm_cdf`, `erf` and `erfc` are
+  refused by name for now.
+- **All four parts run in the interpreter**, the target and the bracket
+  included, so the target's own rounding enters the certificate's bound.
+  Each operation's running bound adds `u |v|` and `2^-1074`; `exp`, `ln` and
+  `powf` add two ulps of their result besides.
+- **As a Polars expression** the node is `map_multiple` over the columns it
+  reads (element-wise, so a streaming plan may hand it any slice), giving
+  `Float64` or, under `detail`, the struct of A6 with `reason` as a
+  `String` (an `Enum` waits for the grammar's cut). A solve that reaches its
+  bound raises an error naming the row's values.
+- **Deferred:** `rp.invert`, `rp.unknown`, `rp.norm_cdf` in Python; the
+  Polars-definition oracle (A9); the bench cell (A10).

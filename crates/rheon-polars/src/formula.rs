@@ -878,6 +878,8 @@ fn short(v: &Value) -> String {
     }
 }
 
+pub(crate) mod scalar;
+
 #[cfg(test)]
 mod tests {
     /// Review R1, B3: the message's cut of a long value fell inside a
