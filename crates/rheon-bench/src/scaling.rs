@@ -190,6 +190,12 @@ pub const CELLS: &[Cell] = &[
     cell("spectral.periods", 4, 8, Pow(1), Pow(1)),
     cell("spectral.targets", 1, 8, Pow(1), Pow(1)),
     cell("spectral.history", 1000, 8, Const, Const),
+    // Each target's run steps its lags' rings and the parameters' `n x n`
+    // information a row: in the season, `L = max(p + sP, q + sQ)` lags read
+    // and held; each target its own run; past the start its buffer is gone.
+    cell("sarima.season", 4, 8, Pow(1), Pow(1)),
+    cell("sarima.targets", 1, 8, Pow(1), Pow(1)),
+    cell("sarima.history", 1000, 8, Const, Const),
     cell("ew_cov.k", 4, 8, Pow(2), Pow(2)),
     cell("ew_cov.lags", 1, 8, Pow(1), Pow(1)),
     cell("ew_cov.window", 500, 8, Const, Pow(1)),
@@ -888,6 +894,28 @@ fn model_case(id: &str, n: usize) -> ModelCase {
             let mut s = fit(expectile(Some(n)), 4, 1);
             s["half_life"] = json!("inf");
             ModelCase::new(s, lin)
+        }
+        // On the row clock, so every row is a slot; no decay; the bound
+        // loose, so the start opens in the warm-up and every block steps.
+        // The targets an AR(1) alone: target `j`'s level is `j`, which no
+        // constant takes up, and a seasonal ARMA's factors on it come near
+        // cancelling, so its start would wait past the warm-up.
+        ("sarima", "season" | "targets" | "history") => {
+            let season = if dim == "season" { n } else { 4 };
+            let t = if dim == "targets" { n } else { 1 };
+            let model = if dim == "targets" {
+                json!({"type": "sarima", "order": [1, 0, 0], "se_bound": 1000.0})
+            } else {
+                json!({"type": "sarima", "order": [1, 0, 1],
+                    "seasonal_order": [1, 0, 1, season], "se_bound": 1000.0})
+            };
+            let mut s = fit(model, 0, t);
+            let o = s.as_object_mut().expect("an object");
+            for key in ["clock", "gap_cap", "half_life", "min_weight"] {
+                o.remove(key);
+            }
+            let c = ModelCase::new(s, lin);
+            if dim == "history" { c.warm(n) } else { c }
         }
         ("spectral", "periods" | "targets" | "history") => {
             let f = if dim == "periods" { n } else { 8 };

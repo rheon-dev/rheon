@@ -120,6 +120,7 @@ const FAKETIME_ENV: [&str; 4] = [
 #[bench::ddsketch(args = ("ddsketch"), setup = model_setup)]
 #[bench::ar(args = ("ar"), setup = model_setup)]
 #[bench::spectral(args = ("spectral"), setup = model_setup)]
+#[bench::sarima(args = ("sarima"), setup = model_setup)]
 fn model(mut run: ModelRun) -> ModelRun {
     black_box(rheon_budget_model_rows(black_box(&mut run)));
     run

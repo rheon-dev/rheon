@@ -274,6 +274,9 @@ what = "ar, an AR(5) with no features: AnyModel::step_into, into one kept Step, 
 [instructions.spectral]
 what = "spectral, sixteen periods on an even clock: AnyModel::step_into, into one kept Step, a rotation and an add a period a row; its budget is CI's first count"
 
+[instructions.sarima]
+what = "sarima, an ARMA(1,1) with a seasonal ARMA(1,1) at a season of 24, no features, after its start: AnyModel::step_into, into one kept Step, its lags' rings and a step of the 4 x 4 information and the parameters a row; its budget is CI's first count"
+
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
 budget = 847018

@@ -125,6 +125,11 @@ pub const MODEL_CASES: &[&str] = &[
     "ar",
     // Sixteen periods on an even clock: a rotation and an add each a row.
     "spectral",
+    // An ARMA(1,1) with a seasonal ARMA(1,1) at a season of 24, no
+    // features, its start accepted in the warm-up: a row's prediction over
+    // its lags and the recursive prediction error's step of the 4 x 4
+    // information and the parameters.
+    "sarima",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -790,6 +795,18 @@ fn case_spec(id: &str) -> (Value, Shape) {
             let periods: Vec<f64> = (0..16).map(|k| 2.0 + k as f64).collect();
             let mut s = fit(json!({"type": "spectral", "periods": periods}), 0);
             s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
+        "sarima" => {
+            let mut s = fit(
+                json!({"type": "sarima", "order": [1, 0, 1],
+                    "seasonal_order": [1, 0, 1, 24], "se_bound": 1000.0}),
+                0,
+            );
+            let o = s.as_object_mut().expect("an object");
+            for key in ["clock", "gap_cap", "half_life", "min_weight"] {
+                o.remove(key);
+            }
             (s, Shape::Linear)
         }
         "ar" => {
