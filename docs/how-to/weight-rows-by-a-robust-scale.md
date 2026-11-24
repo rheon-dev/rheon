@@ -239,7 +239,7 @@ rows skipped for a null weight: 4
 targets known by that row:** `np.quantile(x, 0.5, weights=w,
 method="inverted_cdf")`, with each value weighed by
 `0.5 ** (age / half_life)` from its arrival. The recipes of [Make a robust
-scale with `rp.ops.ewm_quantile`](#make-a-robust-scale-with-rpewm_quantile)
+scale with `rp.ops.ewm_quantile`](#make-a-robust-scale-with-rpopsewm_quantile)
 and [Leave out the targets not yet
 known](#leave-out-the-targets-not-yet-known) do so. The two agree within the
 0.78% within which `rp.ops.ewm_quantile` reads a quantile. Then check that the

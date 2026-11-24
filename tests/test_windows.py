@@ -2113,7 +2113,9 @@ def test_partial_needs_a_window_size() -> None:
     operator without a window is."""
     for op in (rp.ops.ewm_mean, rp.ops.ewm_sum, rp.ops.ewm_rate):
         for partial in ("keep", "null", "drop"):
-            with pytest.raises(ValueError, match=rf"^rp\.{op.__name__}: partial needs window_size"):
+            with pytest.raises(
+                ValueError, match=rf"^rp\.ops\.{op.__name__}: partial needs window_size"
+            ):
                 op("x", half_life=2.0, partial=partial)
     rp.ops.ewm_mean("x", half_life=2.0, window_size=5.0, partial="drop")
 
@@ -3499,7 +3501,7 @@ def test_reverse_must_be_a_bool() -> None:
         with pytest.raises(TypeError) as exc:
             getattr(rp.ops, f"ewm_{name}")("x", half_life=1.0, window_size=2.0, reverse=1, **extra)
         assert str(exc.value) == (
-            f"rp.ewm_{name}: reverse must be True or False, but it is 1. "
+            f"rp.ops.ewm_{name}: reverse must be True or False, but it is 1. "
             "Pass reverse=True to read the rows after each row, or reverse=False."
         )
 

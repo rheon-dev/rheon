@@ -161,7 +161,11 @@ class _Formula:
         kw = dict(self.kw)
         if self.op.startswith("ewm"):
             kw.setdefault("half_life", INF)
-        return getattr(po, self.op)(self.column, reverse=True, **kw).alias(self.alias)
+        # The operators' home is `ops` (a root name of 2.0.0 warns there);
+        # a release before `ops` had them at the root alone.
+        home = getattr(po, "ops", po)
+        fn = getattr(home, self.op, None) or getattr(po, self.op)
+        return fn(self.column, reverse=True, **kw).alias(self.alias)
 
 
 def _fullest() -> dict[str, dict]:
