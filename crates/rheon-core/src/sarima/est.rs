@@ -53,10 +53,10 @@
 //! region to converge to, so the bound is the reason it names); it
 //! converged (its Newton decrement at most `1e-6` at Kish's count of
 //! rows); and its information is conditioned (each standard error finite
-//! and at most [`SE_BOUND`] in standardized units: a polynomial's
-//! coefficient as it is, a regressor's coefficient times its regressor's
-//! standard deviation over the innovations', and `sigma2` relative to
-//! itself). Otherwise the target keeps buffering, naming the condition
+//! and at most the spec's `se_bound`, [`SE_BOUND`] by default, in units
+//! free of the target's: a polynomial's coefficient as it is, a
+//! regressor's coefficient times its regressor's standard deviation over
+//! the innovations', and `sigma2` relative to itself, `se / sigma2`). Otherwise the target keeps buffering, naming the condition
 //! that failed, and the fit is tried again once Kish's count has grown by
 //! [`RETRY_GROWTH`]. On acceptance the buffer is replayed at the fit with
 //! the parameters held, which builds the rings, `R` and the weight `V`,
@@ -101,8 +101,9 @@ pub(crate) const SOUND_DECREMENT: f64 = 1e-6;
 /// stationarity (invertibility) bound.
 pub(crate) const BOUND_MARGIN: f64 = 1e-3;
 
-/// The largest standard error a start is accepted with, in standardized
-/// units (a polynomial's coefficient as it is). It decides how good a
+/// The default largest standard error a start is accepted with (the
+/// spec's `se_bound`), in standardized units (a polynomial's coefficient
+/// as it is, `sigma2`'s relative to itself). It decides how good a
 /// start the recursion steps from, and so where it ends: measured over
 /// five specs and eight seeds each, 10,000 rows, the worst coefficient's
 /// gap at the last row from `SARIMAX`'s batch fit of the same rows, in its
@@ -139,7 +140,7 @@ pub enum SarimaWait {
     NotConverged,
     /// The start's fit sits on a stationarity or invertibility bound.
     OnBound,
-    /// The start's fit has a standard error past its bound.
+    /// The start's fit has a standard error past `se_bound`.
     NotIdentified,
 }
 
@@ -789,8 +790,10 @@ fn grid(shape: &Shape, beta: &[f64]) -> Vec<Vec<f64>> {
 }
 
 /// The start's fit of `buf` and its gate: `Ok` with the accepted start, or
-/// `Err` with the condition it failed.
-pub(crate) fn fit(shape: &Shape, buf: &Buffer) -> Result<Accepted, SarimaWait> {
+/// `Err` with the condition it failed. `bound` is the largest standard
+/// error accepted: an ARMA coefficient's as it is, a regressor's
+/// standardized, `sigma2`'s relative to it.
+pub(crate) fn fit(shape: &Shape, buf: &Buffer, bound: f64) -> Result<Accepted, SarimaWait> {
     let n = shape.n();
     let (sd_x, sd_w) = spreads(shape, buf);
     let beta = ols(shape, buf);
@@ -834,12 +837,12 @@ pub(crate) fn fit(shape: &Shape, buf: &Buffer) -> Result<Accepted, SarimaWait> {
             1.0
         };
         let se = var.sqrt() * unit;
-        if !(se.is_finite() && se <= SE_BOUND) {
+        if !(se.is_finite() && se <= bound) {
             se_ok = false;
         }
     }
-    // `sigma2`'s relative standard error at Kish's count, from the fourth
-    // moment of the residuals.
+    // `sigma2`'s relative standard error at Kish's count, `se / sigma2`,
+    // from the fourth moment of the residuals: free of the target's units.
     let (mut m4, mut w) = (0.0, 0.0);
     {
         let pol = Polys::new(shape, &par);
@@ -855,7 +858,7 @@ pub(crate) fn fit(shape: &Shape, buf: &Buffer) -> Result<Accepted, SarimaWait> {
         }
     }
     let rel = (m4 / w / kish).sqrt() / sigma2;
-    if !(se_ok && rel.is_finite() && rel <= SE_BOUND) {
+    if !(se_ok && rel.is_finite() && rel <= bound) {
         return Err(SarimaWait::NotIdentified);
     }
     let rm = congruent(
@@ -1004,7 +1007,7 @@ impl Est {
     }
 
     /// A slot into the buffer; then, past the structural minimum `floor`
-    /// and the retry's count, the start's fit and its gate.
+    /// and the retry's count, the start's fit and its gate at `bound`.
     pub(crate) fn buffer(
         &mut self,
         shape: &Shape,
@@ -1012,6 +1015,7 @@ impl Est {
         weight: f64,
         xw: Option<&[f64]>,
         floor: f64,
+        bound: f64,
     ) {
         let seen = w.filter(|_| weight > 0.0 && (shape.k == 0 || xw.is_some()));
         self.buf.w.push(seen.unwrap_or(f64::NAN));
@@ -1034,7 +1038,7 @@ impl Est {
         if !(kish > floor && kish >= self.next_try) {
             return;
         }
-        match fit(shape, &self.buf) {
+        match fit(shape, &self.buf, bound) {
             Ok(a) => {
                 self.run = Some(Run::of(a));
                 self.buf = Buffer::default();

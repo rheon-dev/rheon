@@ -1912,9 +1912,14 @@ fn sarima_estimated() {
     assert!(!r.lags_are_a_no_op);
 }
 
+/// The ready count is every model's, 300 of 400 rows: a row before a
+/// target's start is accepted counts where the model names why that
+/// target waits (`Sarima::wait`), and the ready path itself must still
+/// carry a third of the stream.
 #[test]
 fn sarima_estimated_predict_is_the_step() {
-    predict_is_the_step_without_the_step(
+    let waits = |m: &Sarima, j: usize| m.wait(j).map(SarimaWait::name);
+    predict_is_the_step_naming_waits(
         || {
             Sarima::new(SarimaCfg {
                 min_weight: 0.0,
@@ -1924,5 +1929,6 @@ fn sarima_estimated_predict_is_the_step() {
         },
         2,
         false,
+        Some(&waits),
     );
 }

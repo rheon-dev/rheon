@@ -281,6 +281,72 @@ def _exact(w, order, seasonal_order, params, rows, digits=40):
     return out
 
 
+def _blp(w, order, seasonal_order, params, digits=40):
+    """The one-step predictions of every slot of ``w``, exactly, by another
+    route than ``_exact``'s: the best linear predictor of a stationary
+    series from its finite past is what the Kalman filter from the
+    stationary start computes, and Durbin-Levinson computes it from the
+    autocovariances. Those are ``sigma2 sum_j psi_j psi_{j+h}`` over the
+    MA(infinity) weights ``psi`` (summed until a whole span of them is under
+    ``10^-(digits + 5)``) up to the larger polynomial's degree, and the AR
+    recursion past it. All in mpmath at ``digits`` digits, from the
+    parameters and ``w`` as the doubles they are. Its cost is the
+    polynomials' degree times the ``psi`` weights' length plus the square
+    of the rows, where ``_exact``'s is the square of the states a row, so
+    it reaches ``s = 168`` (170 states) in seconds."""
+    mp.mp.dps = digits
+    p, _, q = order
+    sp, _, sq, s = seasonal_order
+    par = [mp.mpf(float(v)) for v in params]
+    ar, ma = par[:p], par[p : p + q]
+    sar, sma = par[p + q : p + q + sp], par[p + q + sp : p + q + sp + sq]
+
+    def poly(coefs, step, sign):
+        out = [mp.mpf(0)] * (len(coefs) * step + 1)
+        out[0] = mp.mpf(1)
+        for i, c in enumerate(coefs):
+            out[(i + 1) * step] = sign * c
+        return out
+
+    def mul(a, b):
+        out = [mp.mpf(0)] * (len(a) + len(b) - 1)
+        for i, x in enumerate(a):
+            for j, y in enumerate(b):
+                if x and y:
+                    out[i + j] += x * y
+        return out
+
+    a = mul(poly(ar, 1, -1), poly(sar, s, -1))
+    c = mul(poly(ma, 1, 1), poly(sma, s, 1))
+    sigma2 = par[-1]
+    phi = [(i, -a[i]) for i in range(1, len(a)) if a[i]]
+    span = max(len(a), len(c))
+    tol = mp.mpf(10) ** (-(digits + 5))
+    psi = []
+    while True:
+        j = len(psi)
+        v = c[j] if j < len(c) else mp.mpf(0)
+        for i, f in phi:
+            if j >= i:
+                v += f * psi[j - i]
+        psi.append(v)
+        if len(psi) > span and max(abs(x) for x in psi[-span:]) ** 2 < tol:
+            break
+    n = len(w)
+    top = min(span - 1, n - 1)
+    gam = [sigma2 * mp.fdot(psi[: len(psi) - h], psi[h:]) for h in range(top + 1)]
+    for h in range(top + 1, n):
+        gam.append(mp.fsum(f * gam[h - i] for i, f in phi))
+    x = [mp.mpf(float(v)) for v in w]
+    out, coef, var = [mp.mpf(0)], [], gam[0]
+    for t in range(1, n):
+        k = (gam[t] - mp.fdot(coef, gam[t - 1 : 0 : -1])) / var
+        coef = [cj - k * coef[t - 2 - j] for j, cj in enumerate(coef)] + [k]
+        var *= 1 - k * k
+        out.append(mp.fdot(coef, x[t - 1 :: -1]))
+    return out
+
+
 @pytest.mark.extended(reason="the exact filter in 40 digits takes about 10 s")
 def test_the_first_rows_are_the_exact_filter():
     """On ``(1,0,1)(1,0,1,24)`` statsmodels' filter and the core's part by
@@ -289,7 +355,10 @@ def test_the_first_rows_are_the_exact_filter():
     within 4 ulps of it from the first row (measured over fifty seeds and
     every one of 2,000 rows: 3.5 at worst, 2.6 past row 500), statsmodels'
     up to 100 ulps on the first rows (its stationary covariance is 5.4e-14
-    of its scale from the exact one) and 2.4 past row 500."""
+    of its scale from the exact one) and 2.4 past row 500. ``_blp``, the
+    reference the ``s = 168`` test reads, is the same predictions by
+    another route: within ``1e-20`` ulps of ``_exact`` here (8e-25 when
+    measured)."""
     order, seasonal, params = SPECS["arma_24"]
     y, _ = _sim(order, seasonal, params, 2000, seed=1)
     _, w = _sarimax(y, order, seasonal, params)
@@ -302,16 +371,52 @@ def test_the_first_rows_are_the_exact_filter():
     ]
     worst = int(np.argmax(gap))
     assert max(gap) <= 4.0, f"{max(gap):.2f} ulps from the exact filter at row {worst}"
+    other = _blp(w[:rows], order, seasonal, params)
+    agree = max(float(abs(a - b)) / unit for a, b in zip(other, exact, strict=True))
+    assert agree <= 1e-20, f"the two exact routes part by {agree:.1e} ulps"
 
 
-@pytest.mark.extended(reason="SARIMAX's dense filter at 170 states takes over two minutes")
+@pytest.mark.extended(reason="SARIMAX's dense filter and the 40-digit reference, about 8 s")
 def test_a_season_of_168_is_sarimax_too():
     """At ``s = 168`` (hourly data, a weekly season) the state has 170
-    entries; every row from the first within 8 ulps (6.2 at worst over
-    2,000 rows when measured, 3.5 over the first 50)."""
+    entries. The core is held to the exact predictions (``_blp``, 40
+    digits, every one of the 431 differenced rows from the first): within
+    4 ulps of the largest ``|w|``, and ``ŷ_t`` within 4 of the largest
+    ``|y|`` (0.88 and 0.95 when measured). statsmodels is the second
+    opinion, and the inexact side here: its predictions are up to 12.5
+    ulps from the exact ones (row 130 when measured; its stationary
+    covariance, a Lyapunov solution at 170 states, is the less exact
+    start), so it is held to 13 against them, and the two filters to each
+    other within the sum of their bounds. An 80-bit Kalman filter from the
+    defining series of the start measured the same: the core 0.88 ulps
+    off, statsmodels 12.5."""
     order, seasonal = (1, 1, 1), (1, 1, 1, 168)
     params = [0.5, -0.3, 0.4, -0.5, 2.0]
-    _holds(*_ulps(order, seasonal, params, 600, seed=5, burn=0), "s = 168")
+    y, _ = _sim(order, seasonal, params, 600, seed=5)
+    theirs, w = _sarimax(y, order, seasonal, params)
+    w_hat, y_hat = _ours(y, order, seasonal, params)
+    depth = _depth(order, seasonal)
+    assert np.isnan(w_hat[:depth]).all() and np.isnan(y_hat[:depth]).all()
+    mine = w_hat[depth:]
+    exact = _blp(w, order, seasonal, params)
+    unit = np.spacing(np.max(np.abs(w)))
+
+    def ulps(got):
+        return [float(abs(mp.mpf(float(a)) - b)) / unit for a, b in zip(got, exact, strict=True)]
+
+    ours, sm = ulps(mine), ulps(theirs)
+    assert max(ours) <= 4.0, f"the core: {max(ours):.2f} ulps at row {int(np.argmax(ours))}"
+    assert max(sm) <= 13.0, f"statsmodels: {max(sm):.2f} ulps at row {int(np.argmax(sm))}"
+    both = float(np.max(np.abs(mine - theirs)) / unit)
+    assert both <= 4.0 + 13.0, f"the two filters part by {both:.2f} ulps"
+    y_unit = np.spacing(np.max(np.abs(y)))
+    back = [
+        b + mp.mpf(float(v)) - mp.mpf(float(u)) for b, v, u in zip(exact, y[depth:], w, strict=True)
+    ]
+    y_err = max(
+        float(abs(mp.mpf(float(a)) - b)) / y_unit for a, b in zip(y_hat[depth:], back, strict=True)
+    )
+    assert y_err <= 4.0, f"the core's y: {y_err:.2f} ulps"
 
 
 GRID_SEEDS = range(50)

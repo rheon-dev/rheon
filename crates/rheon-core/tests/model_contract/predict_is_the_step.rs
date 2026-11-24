@@ -32,6 +32,23 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
     targets: usize,
     binary: bool,
 ) {
+    predict_is_the_step_naming_waits(build, targets, binary, None);
+}
+
+/// Target `j`'s reason for reporting nothing, as the model names it, or
+/// `None` where it is not withholding.
+type Waits<'a, M> = &'a dyn Fn(&M, usize) -> Option<&'static str>;
+
+/// The parity above; with `waits`, a row whose slots are not all ready
+/// counts towards the ready count where every slot that is NaN is a
+/// target the model names a reason for before the row (a start not yet
+/// accepted): the row is accounted for, not lost.
+fn predict_is_the_step_naming_waits<M: OnlineModel + Clone>(
+    build: impl Fn() -> M,
+    targets: usize,
+    binary: bool,
+    waits: Option<Waits<'_, M>>,
+) {
     let mut m = build();
     let kind = m.state().model.kind();
     // A twin stepped through `step_into` on one kept buffer, as the bank
@@ -40,6 +57,8 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
     let mut kept = Step::default();
     let mut s = 20260902u64;
     let mut ready = 0usize;
+    // The rows every slot of which is a number, waits or not.
+    let mut live = 0usize;
     // `garch` models a variance, and its start waits on a target with none
     // (PLAN 548): its targets are each a GARCH(1,1)'s returns at (0.05,
     // 0.6, 0.35), each row's variance and return kept here.
@@ -81,6 +100,10 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
         // `predict_with`, not `predict`: two models read a number out of
         // the targets slot, and the parity that matters is against the
         // answer the step gives for the same row (C1).
+        let named: Vec<Option<&'static str>> = match waits {
+            Some(f) => (0..targets).map(|j| f(&m, j)).collect(),
+            None => vec![None; targets],
+        };
         let p = m.predict_with(&x, &y, d);
         let step = m.step(&x, &y, d, w);
         same_step(kind, i, &p, &step);
@@ -104,6 +127,13 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
             .all(|(slot, v)| v.is_finite() || flagged_only(slot))
         {
             ready += 1;
+            live += 1;
+        } else if waits.is_some()
+            && step.pred.iter().enumerate().all(|(slot, v)| {
+                v.is_finite() || named.get(slot).copied().flatten().is_some_and(|r| !r.is_empty())
+            })
+        {
+            ready += 1;
         }
     }
     // The stream must actually have exercised the ready path, or the test
@@ -120,19 +150,18 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
         // on a stream whose components differ, with the same weights and
         // gaps.
         0
-    } else if kind == "sarima" {
-        // An estimated start opens only once every standard error is under
-        // 0.1 in its standardized units, Kish's count near 100 at the
-        // least: about 150 of this stream's rows, with its nulls and
-        // weights, so 250 of its 400 can be ready (the form at given
-        // parameters has more than 300 and is held to 200 with it).
-        200
     } else {
         300
     };
     assert!(
         ready > want || (want == 0 && ready == 0),
-        "{kind}: only {ready} rows had every slot ready"
+        "{kind}: only {ready} rows had every slot ready or named its wait"
+    );
+    // Where waits count, the ready path is exercised still: at least a
+    // third of the stream reports every slot.
+    assert!(
+        waits.is_none() || 3 * live > 400,
+        "{kind}: only {live} rows had every slot ready"
     );
     // Of mixed signs, and all positive and all negative at a level of 1,000
     // (docs/PLAN.md task 209 (a)'s one-sided streams).

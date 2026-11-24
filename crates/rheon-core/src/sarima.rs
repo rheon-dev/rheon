@@ -77,7 +77,7 @@
 //! of the buffer, `(sum w)^2 / sum w^2`, not past the structural minimum
 //! (every parameter, `sigma2` among them, plus `d + sD`); or a fit that
 //! sits on a stationarity or invertibility bound, has not converged, or
-//! has a standard error past its bound. `min_weight` is checked on top of
+//! has a standard error past `se_bound`. `min_weight` is checked on top of
 //! that, against the target's own weight, as at given parameters. A break
 //! fits the start again from a new buffer. The prediction is the
 //! conditional recursion's, `ŵ_t = xw_t' beta - sum_i A_i z_{t-i} + sum_j
@@ -214,11 +214,46 @@ pub struct SarimaCfg {
 /// How the parameters are estimated: whether the autoregressive factors
 /// are held stationary and the moving-average ones invertible, through
 /// `SARIMAX`'s transforms (`enforce_stationarity`,
-/// `enforce_invertibility`, both on by default there and here).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// `enforce_invertibility`, both on by default there and here), and the
+/// largest standard error a start is accepted with (`se_bound`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SarimaEstimate {
     pub enforce_stationarity: bool,
     pub enforce_invertibility: bool,
+    /// The start's fit is accepted only with every standard error at most
+    /// this, each in units free of the target's: an ARMA coefficient's as
+    /// it is (the coefficients are unit-free), a regressor's coefficient's
+    /// times the regressor's standard deviation over the innovations',
+    /// and `sigma2`'s relative to `sigma2`. Default
+    /// [`SarimaEstimate::SE_BOUND`], 0.1; finite and above 0. Smaller waits
+    /// longer for a better start. Written to a state only where it is not
+    /// the default.
+    #[serde(
+        default = "SarimaEstimate::default_se_bound",
+        skip_serializing_if = "SarimaEstimate::is_default_se_bound"
+    )]
+    pub se_bound: f64,
+}
+
+impl SarimaEstimate {
+    /// `se_bound`'s default. It decides how good a start the recursion
+    /// steps from, and so where it ends: measured over five specs and
+    /// eight seeds each, 10,000 rows, at 0.1 every start's worst
+    /// coefficient ends within 0.4 of its standard errors of `SARIMAX`'s
+    /// batch fit of the same rows; at 0.15 and 0.2 a spec whose seasonal
+    /// factors nearly cancel ends 4.5 and 8.2 off (the table is at
+    /// `est::SE_BOUND`'s measurement).
+    pub const SE_BOUND: f64 = est::SE_BOUND;
+
+    fn default_se_bound() -> f64 {
+        Self::SE_BOUND
+    }
+
+    // serde's `skip_serializing_if` takes a reference.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    fn is_default_se_bound(v: &f64) -> bool {
+        v.to_bits() == Self::SE_BOUND.to_bits()
+    }
 }
 
 impl Default for SarimaEstimate {
@@ -226,6 +261,7 @@ impl Default for SarimaEstimate {
         Self {
             enforce_stationarity: true,
             enforce_invertibility: true,
+            se_bound: Self::SE_BOUND,
         }
     }
 }
@@ -348,6 +384,15 @@ impl SarimaCfg {
                 "sarima: spacing must be finite and above 0, but it is {}. Set spacing to the \
                  clock units between two slots, 1 on a clock that counts rows.",
                 self.spacing
+            ));
+        }
+        if let Some(e) = self.estimate
+            && !(e.se_bound.is_finite() && e.se_bound > 0.0)
+        {
+            no.refuse(format!(
+                "sarima: se_bound must be finite and above 0, but it is {}. Set it to the \
+                 largest standard error a start is accepted with, 0.1 by default.",
+                e.se_bound
             ));
         }
         no.take(crate::model::check_min_weight("sarima", self.min_weight));
@@ -676,6 +721,7 @@ impl Sarima {
         let diff = self.cfg.diff();
         let depth = diff.depth();
         let floor = self.cfg.structural_minimum();
+        let bound = self.cfg.estimate.map_or(est::SE_BOUND, |e| e.se_bound);
         let series = &mut self.series[j];
         if series.ys.len() < depth {
             series.push(y.unwrap_or(f64::NAN), y.is_some(), depth);
@@ -698,7 +744,7 @@ impl Sarima {
                 };
                 if held.admit(with, cap) {
                     held.note(with, cap);
-                    self.est[j].buffer(&shape, w, weight, kept_xw, floor);
+                    self.est[j].buffer(&shape, w, weight, kept_xw, floor, bound);
                 }
                 f64::NAN
             }

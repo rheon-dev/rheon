@@ -515,9 +515,24 @@ and why:
 - **A row of weight 0** keeps none of its regressors in the rings or the
   buffer (the contract every model keeps), while its own prediction reads
   them.
-- **The model contract's ready count** for `sarima` is 200 of its probe's
-  400 rows, not 300: an estimated start needs Kish's count near 100
-  before its standard errors pass 0.1.
+- **The model contract's ready count** for `sarima` is every model's,
+  300 of its probe's 400 rows (part 3 had lowered it to 200; the
+  coordinator's ruling restored it): a row before an estimated start is
+  accepted counts where the model names why each withheld target waits
+  (`Sarima::wait`), and at least a third of the rows must report every
+  slot, so the ready path is still exercised.
+- **The bound is the spec's `se_bound`** (default 0.1, on
+  `SarimaEstimate`; finite and above 0), by the coordinator's ruling: the
+  ARMA coefficients' standard errors as they are (unit-free), `sigma2`'s
+  relative, `se / sigma2`, so the gate does not depend on the target's
+  units (it already was relative in part 3's code; the ruling makes it
+  the stated rule). A regressor's coefficient keeps its standardized
+  standard error (times its regressor's standard deviation over the
+  innovations'), also unit-free: without it two equal regressors would
+  pass the gate with an unidentified split. Written to a state only where
+  it is not the default, so the fixtures' bytes do not move; a fixture
+  with a bound not the default is for the macOS regeneration at the
+  merge.
 
 **State** (msgpack, 9 bytes a double), per target past its start: the
 differencing ring and the run, `9 (n + 2 + n^2 + L (6 + 2k))` for `n = k +
@@ -534,9 +549,12 @@ No decay, no window: the run is bounded by the orders and the season,
 the buffer by the cap.
 
 **Fixtures**: `sarima_estimated` (300 rows: the first target's run, the
-second's buffer) and `sarima_buffering` (40 rows: both buffering), and the
-two part-2 fixtures regenerated for the layout's new fields (`est`,
-`over`, `warned`, `warning`, `estimate`). No release and no kept fixture
+second's buffer) and `sarima_buffering` (40 rows: both buffering). Part 3
+regenerated the two part-2 fixtures on Linux for the layout's new fields
+(`est`, `over`, `warned`, `warning`, `estimate`); by the coordinator's
+ruling that is reverted to their fad8ea9d bytes, so `state_fixtures`
+fails on those two alone until the macOS machine writes them at the
+merge. No release and no kept fixture
 set holds a `Sarima` (schema 72 is unreleased, the variant new in it), so
 the layout change needs no loader and no copy to `v<N>/`.
 
@@ -549,10 +567,20 @@ stationary covariance as its defining series, 4,705 terms, Lyapunov
 residual 3.1e-19 of its scale; the filter in the same precision) settles
 it on this machine: the core is within 0.88 ulps of it on every row,
 statsmodels 12.5 (7.2 over the first 50 rows, 8.7 past row 300), its
-dense products at 170 states. The test is left failing as it stands: the
-reference is not portable (macOS arm64's `long double` is a double), an
-mpmath one at 170 states would take tens of minutes, and a bound loosened
-to statsmodels' error is the coordinator's call, not this session's.
+dense products at 170 states. Resolved (coordinator's ruling, part 3
+follow-up): the test holds the core to a portable exact reference within
+4 ulps, and statsmodels, the inexact side, to 13 against it. The
+reference is the best linear predictor by Durbin-Levinson in mpmath (40
+digits) on the exact autocovariances (`sigma2 sum psi_j psi_{j+h}` up to
+the polynomials' degree, 9,411 `psi` weights here, the AR recursion past
+it), which is what the Kalman filter from the stationary start computes
+by another route: it agrees with the 40-digit Kalman filter (`_exact`)
+within 8e-25 ulps on the `(1,0,1)(1,0,1,24)` case and costs 4 s at
+`s = 168` where that filter would take tens of minutes. Measured: the core
+0.88 ulps of the largest `|w|` (row 347), `ŷ` 0.95 of the largest `|y|`;
+statsmodels 12.47 (row 130); the two filters 12.4 apart. The same
+numbers as the 80-bit reference. The whole test runs in about 8 s
+(`SARIMAX.filter` 3.6 s at 600 rows).
 
 **At fad8ea9d** (part 2), `state_fixtures` failed two tests: the
 committed `sarima` and `sarima_filling` fixtures were not what that build

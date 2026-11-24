@@ -308,6 +308,71 @@ fn the_gate_opens_on_an_identified_start() {
     assert_eq!(m.bytes(), Sarima::state_bytes(m.cfg()));
 }
 
+/// `se_bound` on both sides, on the series the gate opens on above: at the
+/// default the start is accepted; tightened to 0.02, past the standard
+/// error 1,500 rows can give (about `1 / sqrt(1500)`, 0.026, for `sigma2`'s
+/// relative one and more for the coefficients'), it is withheld and says
+/// why; loosened to 0.3 it opens earlier. The bound reads `sigma2`'s
+/// standard error relative to it and the coefficients' as they are, so the
+/// same series in other units (times 1,024, exact in binary) opens at the
+/// same row.
+#[test]
+fn se_bound_is_the_gate_on_both_sides() {
+    let order = [1, 0, 0];
+    let seasonal = [0, 1, 1, 4];
+    let truth = params(&[0.6], &[], &[], &[-0.5], 1.0);
+    let n = 1500;
+    let ys = simulate(order, seasonal, &truth, &[], n, 3);
+    let w = vec![1.0; n];
+    let at = |bound: f64, scale: f64| {
+        let c = SarimaCfg {
+            estimate: Some(SarimaEstimate {
+                se_bound: bound,
+                ..SarimaEstimate::default()
+            }),
+            ..estimated(order, seasonal, 0)
+        };
+        let mut m = Sarima::new(c).unwrap();
+        let ys: Vec<f64> = ys.iter().map(|v| v * scale).collect();
+        let preds = run(&mut m, &some(&ys), &[], &w);
+        (opened(&preds), m.wait(0), m.params(0))
+    };
+    let (open, wait, fit) = at(SarimaEstimate::SE_BOUND, 1.0);
+    let open = open.expect("accepted at the default bound");
+    assert_eq!(wait, None);
+    assert!((fit.unwrap().ar[0] - 0.6).abs() < 0.12);
+    let (tight, wait, fit) = at(0.02, 1.0);
+    assert_eq!(tight, None);
+    assert_eq!(wait, Some(SarimaWait::NotIdentified));
+    assert_eq!(
+        wait.unwrap().name(),
+        "start not identified: standard errors past the bound"
+    );
+    assert!(fit.is_none());
+    let (loose, wait, _) = at(0.3, 1.0);
+    assert_eq!(wait, None);
+    assert!(loose.unwrap() < open, "{loose:?} against {open}");
+    let (scaled, wait, fit) = at(SarimaEstimate::SE_BOUND, 1024.0);
+    assert_eq!((scaled, wait), (Some(open), None));
+    assert!((fit.unwrap().sigma2 / (1024.0 * 1024.0) - 1.0).abs() < 0.12);
+}
+
+/// A bound that is not finite and above 0 is refused, naming it.
+#[test]
+fn se_bound_must_be_finite_and_above_zero() {
+    for bad in [0.0, -0.1, f64::NAN, f64::INFINITY] {
+        let c = SarimaCfg {
+            estimate: Some(SarimaEstimate {
+                se_bound: bad,
+                ..SarimaEstimate::default()
+            }),
+            ..estimated([1, 0, 0], [0, 0, 0, 0], 0)
+        };
+        let e = Sarima::new(c).unwrap_err();
+        assert!(e.contains("se_bound must be finite and above 0"), "{e}");
+    }
+}
+
 /// With regressors: their coefficients estimated beside the polynomials'.
 #[test]
 fn regressors_are_estimated_with_the_polynomials() {
@@ -372,7 +437,7 @@ fn a_fit_on_the_stationarity_bound_is_withheld() {
     let mut free = Sarima::new(SarimaCfg {
         estimate: Some(SarimaEstimate {
             enforce_stationarity: false,
-            enforce_invertibility: true,
+            ..SarimaEstimate::default()
         }),
         ..estimated(order, seasonal, 0)
     })
@@ -395,7 +460,7 @@ fn a_fit_with_no_finite_likelihood_has_not_converged() {
     let shape = m.cfg().shape().unwrap();
     let buf = &m.est[0].buf;
     assert!(matches!(
-        est::fit(&shape, buf),
+        est::fit(&shape, buf, est::SE_BOUND),
         Err(SarimaWait::NotConverged)
     ));
 }
