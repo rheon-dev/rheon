@@ -273,6 +273,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::DdSketch { .. }
             | crate::ModelKind::EwmMoments { .. }
             | crate::ModelKind::Spectral(_)
+            | crate::ModelKind::Isotonic { .. }
     ) {
         return Vec::new();
     }

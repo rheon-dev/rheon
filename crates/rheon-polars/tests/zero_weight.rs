@@ -492,6 +492,30 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         UNTIMED,
     ),
     (
+        "isotonic",
+        r#"{"type": "isotonic", "out_of_bounds": "clip"}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"]"#,
+        ALL,
+    ),
+    (
+        "isotonic_decayed",
+        r#"{"type": "isotonic", "y_min": -1.0}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "isotonic_rows",
+        r#"{"type": "isotonic", "window_rows": 30, "increasing": false}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"]"#,
+        UNTIMED,
+    ),
+    (
+        "isotonic_clock",
+        r#"{"type": "isotonic", "window_size": @30, "closed": "both", "out_of_bounds": "clip"}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"], "half_life": @50"#,
+        ALL,
+    ),
+    (
         "ddsketch_clock",
         r#"{"type": "ddsketch", "quantiles": [0.25, 0.75], "window_size": @30, "closed": "both"}"#,
         r#""targets": ["y", "x0"], "features": []"#,

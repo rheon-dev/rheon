@@ -91,8 +91,10 @@ Measured on this Mac against scikit-learn 1.9.1 and scipy 1.18.1:
 - **No row count gates the fit.** A fit is identified at `x` once a row has
   been learned at or on both sides of it: the prediction at `x` is NaN
   outside the range of the learned `x` under `out_of_bounds = "nan"`, and
-  before any row under either, with the withheld reason
-  `feature_beyond_sample`. The kind's default `min_weight` is 0, as for
+  before any row under either, with the withheld reason `not_identified`
+  (the rows do not identify the fit there; a reason of its own would have
+  changed every frozen bank fixture's output schema, whose `withheld_reason`
+  enum lists the reasons). The kind's default `min_weight` is 0, as for
   every model whose own rule is the gate.
 - **Chunk invariance** (hard rule 3) holds by construction: the state is
   the rows or the pooled points, and nothing reads a chunk's edge.

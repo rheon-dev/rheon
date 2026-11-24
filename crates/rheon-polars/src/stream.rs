@@ -124,6 +124,7 @@ pub enum AnyModel {
     EwmMoments(Box<rheon_core::EwmMoments>),
     Ar(Box<rheon_core::Ar>),
     Spectral(Box<rheon_core::Spectral>),
+    Isotonic(Box<rheon_core::Isotonic>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -183,6 +184,7 @@ macro_rules! dispatch {
             AnyModel::EwmMoments($m) => $body,
             AnyModel::Ar($m) => $body,
             AnyModel::Spectral($m) => $body,
+            AnyModel::Isotonic($m) => $body,
         }
     };
 }
@@ -649,6 +651,7 @@ impl AnyModel {
             | AnyModel::PowerVariation(_)
             | AnyModel::TDigest(_)
             | AnyModel::DdSketch(_)
+            | AnyModel::Isotonic(_)
             // A term it withholds is withheld by its condition, no failure.
             | AnyModel::EwmMoments(_) => 0,
             // The components are withheld, never failed: the rotation has no
@@ -748,6 +751,8 @@ impl AnyModel {
             AnyModel::Ar(m) => m.coefficients(),
             // Its value is the power it reports per row.
             AnyModel::Spectral(_) => None,
+            // Its fit is a curve, read at each row's feature.
+            AnyModel::Isotonic(_) => None,
         }
     }
 
@@ -773,8 +778,8 @@ use model_cfgs::read_floor;
 pub use model_cfgs::{
     BOCPD_HAZARD_ROWS, ar_cfg, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, ddsketch_cfg,
     deco_block_names, deco_cfg, expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg,
-    huber_model, pca_cfg, power_variation_cfg, quantile_model, rcov_cfg, realized_cfg, sgd_model,
-    spectral_cfg, tdigest_cfg,
+    huber_model, isotonic_cfg, pca_cfg, power_variation_cfg, quantile_model, rcov_cfg,
+    realized_cfg, sgd_model, spectral_cfg, tdigest_cfg,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -888,7 +893,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::DdSketch { .. }
         | ModelKind::EwmMoments { .. }
         | ModelKind::Ar { .. }
-        | ModelKind::Spectral(_) => vec![Combo::default()],
+        | ModelKind::Spectral(_)
+        | ModelKind::Isotonic { .. } => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
@@ -1476,6 +1482,9 @@ pub enum OwnWait {
 /// `not_separated` last (PLAN 505), `pca`'s wait for components whose eigenvalues
 /// the rows have not yet told apart; `level_beyond_sample` after it (task
 /// 544), a `tdigest` or `ddsketch` level its rows do not identify yet.
+/// An `isotonic` fit read at a feature outside the range of the rows
+/// learned, or before any, is `not_identified` (PLAN 573): the rows do not
+/// identify the fit there.
 pub const WITHHELD_REASONS: [&str; 10] = [
     "below_min_settled_frac",
     "below_min_weight",
@@ -4269,6 +4278,7 @@ fn run_instance(
     let is_dcc = matches!(inst.model.get(), AnyModel::Dcc(_));
     let is_corrchange = matches!(inst.model.get(), AnyModel::CorrChange(_));
     let is_pca = matches!(inst.spec.model, ModelKind::Pca { .. });
+    let is_isotonic = matches!(inst.spec.model, ModelKind::Isotonic { .. });
     let has_levels = matches!(
         inst.model.get(),
         AnyModel::TDigest(_) | AnyModel::DdSketch(_)
@@ -4770,6 +4780,11 @@ fn run_instance(
         // writes past its floor.
         if reason == 0 && is_pca && step.pred.iter().any(|p| p.is_nan()) {
             reason = REASON_NOT_SEPARATED;
+        }
+        // An `isotonic` fit read beyond the rows that identify it, where no
+        // gate above has withheld the row: its only null past its floor.
+        if reason == 0 && is_isotonic && step.pred.iter().any(|p| p.is_nan()) {
+            reason = REASON_NOT_IDENTIFIED;
         }
         // The noise gate has not been met: the stream has all but settled,
         // the gate has withheld every row for a further half-life, and the

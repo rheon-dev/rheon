@@ -1186,6 +1186,15 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             "[]",
             true,
         ),
+        // A clock window part full under a decay: its ring, each target's
+        // sorted rows and the decay's origin.
+        (
+            "isotonic",
+            r#"{"type": "isotonic", "window_size": 40, "increasing": false}"#,
+            r#"["y"]"#,
+            r#"["x0"]"#,
+            true,
+        ),
         // Its rings full and its fits solved.
         (
             "ar",
