@@ -285,7 +285,7 @@ gain is formed from.
 
 One model, so one tag: the `ModelState::Holt` variant stays (its name is
 frozen). The new fields go at the **end** of `Holt` and of `HoltCfg`, after
-`horizons` (task 559), with `#[serde(default)]`, so a state written as an
+`horizons` (on `vm/task-559-horizons`), with `#[serde(default)]`, so a state written as an
 array keeps its places. That makes this branch rebase onto 559 first.
 
 From 1.0 a layout change copies the current fixture sets to `v<N>/`, ships a

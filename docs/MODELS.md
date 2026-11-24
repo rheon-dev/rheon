@@ -2065,11 +2065,11 @@ what each gain is and when each wins.
 #### Seasons, damping and the starts
 
 `seasonal="add"` or `"mul"` adds a season of `seasonal_periods` values `S`
-over `season_length` clock units, `damping_half_life` damps the trend, and
-`start` says where the fit starts: `"known"` from the initial states given,
-`"heuristic"` from statsmodels' heuristic on a target's first rows (10, or
-5 seasons), which it then learns from those states and withholds as
-`below_warm_rows`. A season or a damped trend needs one of these two
+over `season_length` clock units, and `damping_half_life` damps the trend.
+`start` says where the fit starts. `"known"` starts from the initial states
+given. `"heuristic"` fits them to a target's first rows (10, or 5 seasons)
+as statsmodels' heuristic does, then learns those rows from them, and
+withholds them as `below_warm_rows`. A season or a damped trend needs one of these two
 starts; `"warm"` is the start above. Under them every gain is the fixed
 one, `α = 1 − λ_l` at weight 1, and the update is the Holt-Winters
 recursion, `p` the row's phase and `L` the level carried over the step:

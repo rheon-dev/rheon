@@ -361,7 +361,9 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``snapshot_every``, ``solve_every``, ``ew_cov``'s ``pca_every``, ``micro``'s
 ``prune_every`` and the model half-lives: ``long_half_life``,
 ``select_half_life``, ``coef_half_life``,
-``revert_half_life``, ``trend_half_life`` and ``huber_scale_half_life``,
+``revert_half_life``, ``trend_half_life``, ``holt``'s
+``seasonal_half_life``, ``damping_half_life`` and ``season_length``, and
+``huber_scale_half_life``,
 ``hawkes``' ``kernel_half_lives``, a list of them, ``garch``'s
 ``start_span``, ``dcc``'s ``start_span`` and ``margin_start_span``,
 ``spectral``'s ``periods`` and ``spacing``, ``glm``'s and

@@ -361,6 +361,25 @@ CASES: list[Case] = [
         {**no_features(full(**CLOSE)), "targets": ["y"], "trend_half_life": 80.0},
     ),
     Case("holt2", "holt", {**no_features(full2()), "targets": ["y"], "trend": False}),
+    # The fixed forms: an additive season, a damped trend, the known start.
+    Case(
+        "holt3",
+        "holt",
+        {
+            **no_features(full2()),
+            "targets": ["y"],
+            "seasonal": "add",
+            "seasonal_periods": 4,
+            "season_length": 8.0,
+            "seasonal_half_life": 40.0,
+            "damping_half_life": 30.0,
+            "start": "known",
+            "initial_level": 0.0,
+            "initial_trend": 0.0,
+            "initial_seasonal": [0.0, 0.1, -0.1, 0.0],
+            "max_state_bytes": 100_000,
+        },
+    ),
     Case(
         "sgd",
         "sgd",

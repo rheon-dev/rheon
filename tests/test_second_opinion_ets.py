@@ -49,6 +49,8 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 from rheon import polars as rp
 
+TIER = "essential"
+
 M = 12
 H_LEVEL, H_TREND, H_SEASON, H_DAMP = 3.0, 20.0, 40.0, 30.0
 ALPHA = 1.0 - 0.5 ** (1.0 / H_LEVEL)

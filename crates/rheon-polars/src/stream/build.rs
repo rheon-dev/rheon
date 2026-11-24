@@ -846,8 +846,8 @@ fn holt_season(word: Option<&str>) -> Result<rheon_core::HoltSeason, String> {
         Some("add") => Ok(rheon_core::HoltSeason::Add),
         Some("mul") => Ok(rheon_core::HoltSeason::Mul),
         Some(other) => Err(format!(
-            "holt: seasonal must be \"add\" or \"mul\", but it is {other:?}. Leave it out for \
-             no season."
+            "holt: seasonal must be \"add\" or \"mul\", but it is {other:?}. Use one of those \
+             words."
         )),
     }
 }
@@ -860,7 +860,8 @@ fn holt_start(word: Option<&str>) -> Result<rheon_core::HoltStart, String> {
         Some("known") => Ok(rheon_core::HoltStart::Known),
         Some("heuristic") => Ok(rheon_core::HoltStart::Heuristic),
         Some(other) => Err(format!(
-            "holt: start must be \"warm\", \"known\" or \"heuristic\", but it is {other:?}."
+            "holt: start must be \"warm\", \"known\" or \"heuristic\", but it is {other:?}. \
+             Use one of those words."
         )),
     }
 }

@@ -237,9 +237,24 @@ _INF_OK: dict[str, frozenset[str]] = {
 #: bump. A builder writes each of these only when it is given, so the bank
 #: reports back the dict it made: a ``None`` the bank never writes made
 #: ``ModelBank([s]).specs[0] != s`` for every ``marginal`` (review
-#: 2026-10-05, the TB5 leg). ``holt``'s ``trend`` is written only when off.
+#: 2026-10-05, the TB5 leg). ``holt``'s ``trend`` is written only when off,
+#: and its seasonal forms' settings only when given.
 _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
-    "holt": frozenset({"trend"}),
+    "holt": frozenset(
+        {
+            "trend",
+            "seasonal",
+            "seasonal_periods",
+            "season_length",
+            "seasonal_half_life",
+            "damping_half_life",
+            "start",
+            "initial_level",
+            "initial_trend",
+            "initial_seasonal",
+            "max_state_bytes",
+        }
+    ),
     "hawkes": frozenset(
         {"kernel_half_lives", "window_events", "window_size", "closed", "max_state_bytes"}
     ),

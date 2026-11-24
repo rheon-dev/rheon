@@ -1043,7 +1043,8 @@ def test_a_bank_state_from_before_the_windows_state_changed_is_refused_by_number
     state, so 68 loads too; 70 since ``hmm``'s stabilized prior under
     ``"full"`` and ``"diag"``, so 69 loads too; 71 since the checksum a file
     ends with, so 70 loads too; 72 since the envelope every state file is
-    written in, so 71 loads too. A file before 71 has no checksum entry and
+    written in, so 71 loads too; 73 since ``holt``'s seasonal forms, so 72
+    loads too. A file before 71 has no checksum entry and
     a file before 72 begins with the bank's old magic, so the files here
     drop the one and rewrite the other as well as naming an older number: a
     71 file whose number was edited would be refused as damaged instead."""
@@ -1052,7 +1053,7 @@ def test_a_bank_state_from_before_the_windows_state_changed_is_refused_by_number
     state = _before_the_envelope(_unsealed(bank.save_bytes()))
     key = b"\xaeschema_version"
     i = state.index(key) + len(key)
-    assert state[i] == 72, state[i]
+    assert state[i] == 73, state[i]
     for before in range(25, 61):
         old = state[:i] + bytes([before]) + state[i + 1 :]
         with pytest.raises(

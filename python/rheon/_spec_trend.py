@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Unpack
+from typing import Any, Literal, Unpack
 
 from rheon._duration import Duration
 from rheon._kwargs import CommonKwargs
@@ -20,12 +20,12 @@ def holt(
     targets: TargetList,
     trend_half_life: float | Duration | None = None,
     trend: bool = True,
-    seasonal: str | None = None,
+    seasonal: Literal["add", "mul"] | None = None,
     seasonal_periods: int | None = None,
     season_length: float | Duration | None = None,
     seasonal_half_life: float | Duration | None = None,
     damping_half_life: float | Duration | None = None,
-    start: str | None = None,
+    start: Literal["warm", "known", "heuristic"] | None = None,
     initial_level: float | list[float] | None = None,
     initial_trend: float | list[float] | None = None,
     initial_seasonal: list[float] | list[list[float]] | None = None,
