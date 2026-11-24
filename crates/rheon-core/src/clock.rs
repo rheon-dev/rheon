@@ -91,6 +91,24 @@ impl Decay {
             Decay::Lam(l) => l.powf(d_clock),
         }
     }
+
+    /// [`Decay::factor`] from the `libm` crate's `exp2` and `pow`, not the
+    /// platform's: the same bits on every OS. For a value that leaves the
+    /// model only inside bytes compared byte for byte: the clock operators
+    /// (`clock_lag`, `clock_drift`, `clock_step`) are run on each row
+    /// before a window's rows are held, and their values ride in the held
+    /// rows' Arrow bytes in a windows state, where a platform's last bit
+    /// would make one state's bytes another's (Linux's `exp2` put one of
+    /// `clock_drift`'s values an ulp from Apple's).
+    pub(crate) fn portable_factor(&self, d_clock: f64) -> f64 {
+        match *self {
+            Decay::Halflife(h) if h.is_infinite() => 1.0,
+            Decay::Halflife(h) => libm::exp2(-(d_clock / h)),
+            Decay::Lam(l) if d_clock == 1.0 => l,
+            Decay::Lam(_) if d_clock == 0.0 => 1.0,
+            Decay::Lam(l) => libm::pow(l, d_clock),
+        }
+    }
 }
 
 /// What a clock that goes back within a session means (docs/PLAN.md §3 and

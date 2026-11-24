@@ -99,7 +99,7 @@ impl ClockDrift {
             w.is_finite() && w >= 0.0,
             "a weight is finite and at least 0"
         );
-        let f = self.decay.factor(d_clock);
+        let f = self.decay.portable_factor(d_clock);
         let total = f * self.w + w;
         self.c_aa *= f;
         self.c_ad *= f;

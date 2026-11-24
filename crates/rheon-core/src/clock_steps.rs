@@ -160,7 +160,7 @@ impl ClockSteps {
             w.is_finite() && w >= 0.0,
             "a weight is finite and at least 0"
         );
-        let lam = self.moments.cfg().decay.factor(d_clock);
+        let lam = self.moments.cfg().decay.portable_factor(d_clock);
         let (x, w) = match (s, self.stat) {
             (None, _) => (0.0, 0.0),
             (Some(s), StepStat::Zeros) => (0.0, if s == 0.0 { w } else { 0.0 }),
