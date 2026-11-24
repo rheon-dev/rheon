@@ -241,7 +241,9 @@ def moments(
     return mean, cov + w0 * c0 / total, total
 
 
-def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str, Any]:
+def rule_from_scratch(
+    s: dict[str, Any], half_life: float, cov: str, prior_rows: float | None = None
+) -> dict[str, Any]:
     """The stated rule, rebuilt from the rows: every row's ``filtered_state``,
     ``predicted_state`` and ``loglik`` as the model reads them before the
     row, and the learned means, covariances and counts after the last.
@@ -320,7 +322,8 @@ def rule_from_scratch(s: dict[str, Any], half_life: float, cov: str) -> dict[str
         if prior_shapes(cov):
             # The row's own decay before its read; none on the first row.
             w_read = totals * (lam_row if t else 1.0)
-            share = w_read / (w_read + d)
+            # The prior's weight: `prior_rows`, `d` by default.
+            share = w_read / (w_read + (d if prior_rows is None else prior_rows))
             rows["shrink"][t] = share
             root = np.sqrt(psi)
             for st in range(k):
@@ -1133,3 +1136,87 @@ class TestTheLimitIsBaumWelch:
             )
             ledger.record("hmm_batch_limit", f"{key}_over_tolerance", values)
         assert max(max(r[key] for key in LIMITS) for r in rows) <= 1.0
+
+
+def factor_errors(seed: int, d: int, prior_rows: float | None) -> dict[str, float]:
+    """`em_errors`' filter quantities, and the learned means, where the model
+    keeps each state's covariance as a Cholesky factor (13 features and
+    more) or weighs its prior as ``prior_rows`` rows: every row's
+    ``filtered_state``, ``predicted_state`` and ``loglik`` and the means
+    after the last, against the rule rebuilt with hmmlearn, scipy and numpy,
+    each over its derived bound."""
+    s = hmm_stream(seed, 2, n=200, d=d)
+    features = [f"x{i}" for i in range(d)]
+    spec = rp.spec.hmm(
+        "h",
+        features=features,
+        n_components=2,
+        precision_prior=RIDGE,
+        covariance_type="full",
+        half_life=30.0,
+        means=s["m0"].ravel().tolist(),
+        covs=s["c0"].ravel().tolist(),
+        weight="w",
+        **({} if prior_rows is None else {"prior_rows": prior_rows}),
+    )
+    frame = pl.DataFrame({f: s["x"][:, i] for i, f in enumerate(features)}).with_columns(w=s["w"])
+    bank = rp.ModelBank([spec])
+    out = bank.fit_predict(frame)["h"].struct.unnest()
+    model = json.loads(bank.write_json())["states"][0][0][1]["models"][0]["model"]["Hmm"]
+    states = model["factor_states"] if d >= 13 else model["states"]
+    assert len(states) == 2, sorted(k for k in model if model[k])
+    kept = s["w"] > 0.0
+    counted = {**s, "x": s["x"][kept], "w": s["w"][kept]}
+    out = out.filter(pl.Series(kept))
+    want = rule_from_scratch(counted, 30.0, "full", prior_rows)
+    bound = rule_error_bound(counted, 30.0, "full", want)
+
+    def over(error: np.ndarray, key: str) -> float:
+        return float((error / np.maximum(bound[key], U)).max())
+
+    means = np.array([st["m"] for st in states])
+    filtered = out.select(f"filtered_state{j}" for j in range(2)).to_numpy()
+    predicted = out.select(f"predicted_state{j}" for j in range(2)).to_numpy()
+    rel = np.abs(out["loglik"].to_numpy() - want["loglik"]) / (1.0 + np.abs(want["loglik"]))
+    return {
+        "filtered": over(np.abs(filtered - want["filtered"]), "filtered"),
+        "predicted": over(np.abs(predicted - want["predicted"]), "predicted"),
+        "loglik": over(rel, "loglik"),
+        "means": over(np.abs(means - want["means"]) / (1.0 + np.abs(want["means"])), "means"),
+        "moved": float(np.abs(means - s["m0"]).max()),
+        "filtered_gap": float(np.abs(filtered - want["filtered"]).max()),
+        "loglik_gap": float(rel.max()),
+        "means_gap": float((np.abs(means - want["means"]) / (1.0 + np.abs(want["means"]))).max()),
+    }
+
+
+@pytest.mark.parametrize("prior_rows", [0.5, 25.0])
+def test_a_prior_of_its_own_weight_is_the_rule_rebuilt(prior_rows):
+    """Every oracle test above weighs the prior as ``d`` rows, its default:
+    a ``prior_rows`` of its own had none (PLAN 578j, TEST-6). Each quantity
+    within the bound the rule's own conditioning gives."""
+    e = factor_errors(0, 2, prior_rows)
+    print({key: f"{v:.3g}" for key, v in e.items()})
+    assert e["moved"] > 0.1
+    assert max(e[k] for k in ("filtered", "predicted", "loglik", "means")) <= 1.0, e
+
+
+@pytest.mark.extended(reason="the rule rebuilt with its error bound at 13 to 20 features")
+@pytest.mark.parametrize(("d", "prior_rows"), [(13, None), (16, None), (20, None), (13, 40.0)])
+def test_the_factor_form_is_near_the_rule_rebuilt(d, prior_rows):
+    """From 13 features a state keeps a Cholesky factor and moves the prior's
+    share of ``Sigma_l`` back only when a coordinate leaves 1/16 of its
+    target, so it is not the exact rule but near it (the builder's account),
+    and no oracle reached it (PLAN 578j, TEST-6). Against the rule rebuilt
+    with hmmlearn, scipy and numpy, over 200 rows at a half-life of 30, two
+    states: measured on seeds 0 to 2 at 13, 16 and 20 features, a filtered
+    posterior parted by at most 0.050, a log-likelihood by 0.021 of ``1 +
+    |loglik|`` and a mean by 0.011 of ``1 + |mean|``; held at 0.06, 0.03 and
+    0.02. The builder's 0.009 was measured over 2,000 rows, where the data
+    outweighs the prior."""
+    e = factor_errors(0, d, prior_rows)
+    print({key: f"{v:.3g}" for key, v in e.items()})
+    assert e["moved"] > 0.1
+    assert e["filtered_gap"] <= 0.06, e
+    assert e["loglik_gap"] <= 0.03, e
+    assert e["means_gap"] <= 0.02, e
