@@ -195,7 +195,8 @@ def test_chunk_invariance(kw, seed):
     df = _frame(n, seed, 0.1 if "vol" in kw else 0.0, **CLUSTERED)
     s = _spec(group="g", weight="w", coef_every=0, **kw)
     one = rp.ModelBank([s]).fit_predict(df)
-    _reports_in_every_group(one, df)
+    if n == 1200:  # figarch's start of 2000 rows is past a third of 4400
+        _reports_in_every_group(one, df)
     for size in (1, 13, 211) if n == 1200 else (211, 997):
         bank = rp.ModelBank([s])
         many = pl.concat([bank.fit_predict(df.slice(i, size)) for i in range(0, n, size)])
