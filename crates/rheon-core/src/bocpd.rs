@@ -226,6 +226,8 @@ mod held;
 mod mutant_tests;
 #[cfg(test)]
 mod product_tests;
+#[cfg(test)]
+mod review_tests;
 mod span;
 #[cfg(test)]
 mod tests_cache;
@@ -907,17 +909,58 @@ fn ln_gamma(x: f64) -> f64 {
 /// `Σ ln vᵢ` as a log of the product of each block
 /// of 8, where the product is a normal number far from overflow, else the
 /// logs one at a time.
+///
+/// The product is read only where every partial product on the way to it
+/// is a normal number too: `1e-160 · 7.4e-164` passes through the
+/// subnormals, keeping a bit of its 53, and `· 1e160 · 1e164` brought it
+/// back into the range 0.4 off in its log (review 2026-11-23, BOCPD-2).
 fn ln_sum_prod(v: &[f64]) -> f64 {
     let mut total = 0.0;
     for block in v.chunks(8) {
-        let p: f64 = block.iter().product();
-        total += if (1e-280..1e280).contains(&p) {
+        let mut p = 1.0f64;
+        let mut normal = true;
+        for x in block {
+            p *= x;
+            normal &= p.is_normal();
+        }
+        total += if normal && (1e-280..1e280).contains(&p) {
             p.ln()
         } else {
             block.iter().map(|x| x.ln()).sum::<f64>()
         };
     }
     total
+}
+
+/// The prior's pull on a run's scatter, `(κ₀n/κₙ) a b` with `a`, `b` the
+/// run's mean less the prior's: as it was formed, to the bit, where that
+/// is a number, and as `(κ₀/κₙ) n a b` where `κ₀n` overflowed (`κ₀ =
+/// 1e307`) and met a mean at the prior's, `∞·0` (review 2026-11-23,
+/// BOCPD-5).
+#[inline]
+fn pull(k0: f64, n: f64, kn: f64, a: f64, b: f64) -> f64 {
+    let g = k0 * n / kn * a * b;
+    if g.is_finite() {
+        g
+    } else {
+        (k0 / kn) * n * a * b
+    }
+}
+
+/// A run's predictive variance per feature, `ψₙ(κₙ + 1)/(νₙκₙ)`: as it was
+/// formed, to the bit, where that is a normal number, and as `(ψₙ/νₙ)((κₙ +
+/// 1)/κₙ)` where `ψₙ(κₙ + 1)` overflowed first (`ψ₀ = 1e308`, whose
+/// variance is half that), or `νₙκₙ` did (`κ₀ = 1e307`); an infinite
+/// variance had passed the `≤ 0` check and read every row as impossible
+/// (review 2026-11-23, BOCPD-5).
+#[inline]
+fn variance(psin: f64, kn: f64, nun: f64) -> f64 {
+    let var = psin * (kn + 1.0) / (nun * kn);
+    if var.is_normal() {
+        var
+    } else {
+        (psin / nun) * ((kn + 1.0) / kn)
+    }
 }
 
 /// A stack slot that puts the frame holding it at a multiple of 4096, so
@@ -990,7 +1033,15 @@ fn grow_into(
     new.resize(r + 1, f64::NEG_INFINITY);
     cp.clear();
     for i in 0..r {
-        let base = joint[i] + weights[i] * logpi[i];
+        // A weight of 0 is the likelihood to the power 0, which is 1 even
+        // where the run could not have produced the row (`ln π = −∞`, and
+        // `0·(−∞)` NaN; review 2026-11-23, BOCPD-1): the run passes on as
+        // it is.
+        let base = if weights[i] == 0.0 {
+            joint[i]
+        } else {
+            joint[i] + weights[i] * logpi[i]
+        };
         new[i + 1] = base + next.ln_grow;
         cp.push(base + next.ln_break);
     }
@@ -1028,6 +1079,15 @@ impl Branches {
     /// `None` for a step that is no step: negative, NaN or infinite.
     fn over(d: f64, tau: f64) -> Option<Self> {
         let x = d / tau;
+        // A step so long that `d/τ` leaves the doubles (`1e100` under
+        // `1e-250`) is a break for certain, the limit `H = 1` (review
+        // 2026-11-23, BOCPD-3).
+        if x == f64::INFINITY && d.is_finite() {
+            return Some(Self {
+                ln_break: 0.0,
+                ln_grow: f64::NEG_INFINITY,
+            });
+        }
         (x >= 0.0 && x.is_finite()).then(|| Self {
             ln_break: (-(-x).exp_m1()).ln(),
             ln_grow: -x,
@@ -1461,12 +1521,17 @@ impl Bocpd {
         if dof <= 0.0 {
             return None;
         }
-        let scale = (kn + 1.0) / (kn * dof);
+        // `(κₙ + 1)/(κₙ dof)`, and where `κₙ dof` overflows (`κ₀ = 1e307`)
+        // `((κₙ + 1)/κₙ)/dof` (review 2026-11-23, BOCPD-5).
+        let scale = match (kn + 1.0) / (kn * dof) {
+            s if s.is_normal() => s,
+            _ => (kn + 1.0) / kn / dof,
+        };
         sigma.clear();
         sigma.extend_from_slice(psi0);
         for i in 0..d {
             for j in 0..=i {
-                let g = k0 * run.n / kn * (run.mean[i] - mu0[i]) * (run.mean[j] - mu0[j]);
+                let g = pull(k0, run.n, kn, run.mean[i] - mu0[i], run.mean[j] - mu0[j]);
                 let psi = sigma[i * d + j] + (run.m2[i * d + j] + g);
                 sigma[i * d + j] = psi * scale;
             }
@@ -1562,13 +1627,20 @@ impl Bocpd {
                     None => gamma_diff(nun, 1.0),
                 };
                 let dm = run.mean[0] - mu0[0];
-                let psin = psi0[0] + run.m2[0] + k0 * run.n / kn * dm * dm;
-                let var = psin * (kn + 1.0) / (nun * kn);
-                if var.is_nan() || var <= 0.0 || nun <= 0.0 {
+                let psin = psi0[0] + run.m2[0] + pull(k0, run.n, kn, dm, dm);
+                let var = variance(psin, kn, nun);
+                if !(var.is_finite() && var > 0.0 && nun > 0.0) {
                     return None;
                 }
                 let z = (x[0] - self.run_mean_at(run, mu0, 0)) / var.sqrt();
-                let base = gammas - 0.5 * (nun * std::f64::consts::PI * var).ln();
+                // `ln(νπ var)`, as one log where the product is a number.
+                let spread = nun * std::f64::consts::PI * var;
+                let ln_spread = if spread.is_finite() {
+                    spread.ln()
+                } else {
+                    (nun * std::f64::consts::PI).ln() + var.ln()
+                };
+                let base = gammas - 0.5 * ln_spread;
                 let lp = base - 0.5 * (nun + 1.0) * (1.0 + z * z / nun).ln();
                 return Some((lp, base));
             }
@@ -1592,9 +1664,9 @@ impl Bocpd {
             qs.clear();
             for i in 0..d {
                 let dm = run.mean[i] - mu0[i];
-                let psin = psi0[i * d + i] + run.m2[i] + k0 * run.n / kn * dm * dm;
-                let var = psin * (kn + 1.0) / (nun * kn);
-                if var.is_nan() || var <= 0.0 || nun <= 0.0 {
+                let psin = psi0[i * d + i] + run.m2[i] + pull(k0, run.n, kn, dm, dm);
+                let var = variance(psin, kn, nun);
+                if !(var.is_finite() && var > 0.0 && nun > 0.0) {
                     return None;
                 }
                 let z = (x[i] - self.run_mean_at(run, mu0, i)) / var.sqrt();
@@ -1754,8 +1826,16 @@ impl Bocpd {
                 nan(out);
                 return None;
             };
+            // A predictive with no mode to weigh the row against has no
+            // weight to give it (`−∞ − (−∞)` is NaN, which `clamp` keeps;
+            // review 2026-11-23, BOCPD-1).
+            let robust = self.cfg.emission == BocpdEmission::Robust;
+            if robust && !mode.is_finite() {
+                nan(out);
+                return None;
+            }
             logpi.push(lp);
-            weights.push(if self.cfg.emission == BocpdEmission::Robust {
+            weights.push(if robust {
                 (self.cfg.robust_beta * (lp - mode)).exp().clamp(0.0, 1.0)
             } else {
                 1.0
@@ -1847,7 +1927,15 @@ impl Bocpd {
                 *w *= rel;
             }
             grow_into(joint, logpi, weights, next, new, cp);
-            None
+            // The joint the row teaches must be a number, as the one it
+            // reports is (review 2026-11-23, BOCPD-1): a share `rel` past
+            // 1 can take every run to `−∞`. It is the `z` `prune` reads.
+            let z = log_sum_exp(new);
+            if !z.is_finite() {
+                nan(out);
+                return None;
+            }
+            Some(z)
         };
         if self.n_eff < self.cfg.min_weight {
             nan(out);
