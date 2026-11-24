@@ -323,26 +323,20 @@ class TestWindowedSpread:
         return pl.DataFrame({"x0": x[:, 0], "x1": x[:, 1], "y": y})
 
     def _spec(self, kind, **kw):
-        common = dict(
-            targets=["y"],
-            features=["x0", "x1"],
-            half_life=self.H,
-            window_size=self.W,
-            solve_every=1e-9,
-            emit_sigma=True,
-            emit_zscore=True,
-            **kw,
-        )
+        common = dict(targets=["y"], features=["x0", "x1"], half_life=self.H, **kw)
+        common |= dict(window_size=self.W, emit_sigma=True, emit_zscore=True)
+        if kind == "ar":
+            return rp.spec.ar("m", lags=1, **common)
         if kind == "lasso":
-            return rp.spec.lasso("m", penalties=[0.01], **common)
-        return rp.spec.ewridge("m", **common)
+            return rp.spec.lasso("m", penalties=[0.01], solve_every=1e-9, **common)
+        return rp.spec.ewridge("m", solve_every=1e-9, **common)
 
     @staticmethod
     def _field(out, spec, prefix):
         name = next(n for n in rp.spec.output_fields(spec) if n.startswith(prefix))
         return out["m"].struct.field(name).to_numpy().astype(float)
 
-    @pytest.mark.parametrize("kind", ["ewridge", "lasso"])
+    @pytest.mark.parametrize("kind", ["ewridge", "lasso", "ar"])
     def test_sigma_is_the_spread_of_the_residuals_inside_the_window(self, kind):
         df = self._frame()
         spec = self._spec(kind)
@@ -5309,3 +5303,56 @@ def test_kalmans_square_root_at_a_vague_prior_is_statsmodels_exact_diffuse_filte
         off[form] = float(np.max(np.abs(got - want) / np.maximum(np.abs(want), 1.0)))
     assert off["square_root"] < 1e-11, off
     assert off["covariance"] > 1e-3, off
+
+
+class TestEwridgePairwiseStandardErrors:
+    """``ewridge`` under ``target_gaps="pairwise"`` reads each target's
+    standard errors at the size of its own rows (review 2026-11-23,
+    REG-13). Its slopes solve the Gram of every row against the target's
+    cross-moments over the rows it is present on, so their variance is the
+    noise over those rows' Kish size, and its intercept is centred at the
+    target's own column means. The errors read the Gram's size, every row,
+    and its means: a target present on a quarter of the rows had errors
+    half the size of least squares' on its rows. Against statsmodels' WLS
+    on the pairwise-complete rows (unit weights, no decay), each error over
+    the noise it is read at."""
+
+    def test_each_error_is_wls_on_the_targets_rows(self):
+        import statsmodels.api as sm
+
+        rng = np.random.default_rng(78)
+        n = 8000
+        x = rng.normal(size=(n, 2)) + np.array([1.5, -0.5])
+        y = 0.5 + x @ np.array([1.0, -2.0]) + rng.normal(size=n)
+        seen = rng.random(n) < 0.25
+        frame = pl.DataFrame(
+            {
+                "x0": x[:, 0],
+                "x1": x[:, 1],
+                "y": [float(v) if s else None for v, s in zip(y, seen, strict=True)],
+                "z": y + rng.normal(size=n),
+            }
+        )
+        spec = rp.spec.ewridge(
+            "m",
+            targets=["y", "z"],
+            features=["x0", "x1"],
+            target_gaps="pairwise",
+            lam=1.0,
+            ridge=1e-9,
+            standardize=False,
+            min_weight=5.0,
+            max_rows_between_solves=1,
+            emit_se_coef=True,
+            emit_sigma=True,
+        )
+        out = rp.ModelBank([spec]).fit_predict(frame)["m"].struct
+        se = np.array(out.field("se_coef").to_list()[-1], dtype=float)[:3]
+        sigma = out.field("sigma_y").to_list()[-1]
+        rows = sm.add_constant(x[seen])
+        wls = sm.WLS(y[seen], rows, weights=np.ones(seen.sum())).fit()
+        want = wls.bse / np.sqrt(wls.scale)
+        got = se / sigma
+        # The Gram's covariance of every row stands for the rows' own, a
+        # sampling gap of about `1 / sqrt(n_j)`, 2% at 2,000 rows.
+        assert got == pytest.approx(want, rel=0.06), (got, want)

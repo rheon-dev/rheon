@@ -80,7 +80,7 @@ dataset = ""
 
 [group."truth_recovery.deco_level"]
 tests = [
-    "tests/test_truth_recovery.py::test_deco_level_settles_low_and_moves_at_its_half_life[50 seeds]",
+    "tests/test_truth_recovery.py::test_deco_level_settles_at_the_truth_and_moves_at_its_half_life[50 seeds]",
 ]
 oracles = {}
 dataset = ""
@@ -5840,6 +5840,212 @@ n = 50
 [case."convergence.expectile.start_inf_truth_at_8000"]
 ideal = 0.0
 n = 50
+
+[group."second_opinion_pca.streampca_convergence"]
+tests = [
+    "tests/test_second_opinion_pca.py::test_the_stochastic_methods_converge_to_pca[ccipca-2000.0]",
+    "tests/test_second_opinion_pca.py::test_the_stochastic_methods_converge_to_pca[ccipca-inf]",
+    "tests/test_second_opinion_pca.py::test_the_stochastic_methods_converge_to_pca[oja-2000.0]",
+    "tests/test_second_opinion_pca.py::test_the_stochastic_methods_converge_to_pca[oja-inf]",
+]
+oracles = { "scikit-learn" = "1.9.1", "scipy" = "1.18.1" }
+dataset = ""
+
+[case."second_opinion_pca.streampca_convergence.ccipca_hl2000_angle"]
+ideal = 0.0
+worst = 0.00291056
+p95 = 0.00291056
+n = 10
+
+[case."second_opinion_pca.streampca_convergence.ccipca_hlinf_angle"]
+ideal = 0.0
+worst = 0.00321393
+p95 = 0.00321393
+n = 10
+
+[case."second_opinion_pca.streampca_convergence.oja_hl2000_angle"]
+ideal = 0.0
+worst = 0.00821172
+p95 = 0.00821172
+n = 10
+
+[case."second_opinion_pca.streampca_convergence.oja_hlinf_angle"]
+ideal = 0.0
+worst = 0.00450845
+p95 = 0.00450845
+n = 10
+
+[group."second_opinion_dcc.dcc_batch"]
+tests = [
+    "tests/test_second_opinion_dcc.py::test_fifty_seeds_a_form_against_the_batch_fit[adcc2]",
+    "tests/test_second_opinion_dcc.py::test_fifty_seeds_a_form_against_the_batch_fit[adcc2_t5]",
+    "tests/test_second_opinion_dcc.py::test_fifty_seeds_a_form_against_the_batch_fit[adcc3]",
+    "tests/test_second_opinion_dcc.py::test_fifty_seeds_a_form_against_the_batch_fit[dcc2]",
+    "tests/test_second_opinion_dcc.py::test_fifty_seeds_a_form_against_the_batch_fit[dcc3]",
+    "tests/test_second_opinion_dcc.py::test_fifty_seeds_a_form_against_the_batch_fit[dcc3_t5]",
+]
+oracles = { "scipy" = "1.18.1", "statsmodels" = "0.15.0" }
+dataset = ""
+
+[group."second_opinion_grids.realized_decay"]
+tests = [
+    "tests/test_second_opinion_grids.py::test_realized_under_a_decay_is_its_definition_over_fifty_seeds[30.0]",
+    "tests/test_second_opinion_grids.py::test_realized_under_a_decay_is_its_definition_over_fifty_seeds[300.0]",
+]
+oracles = { "numpy" = "2.5.2", "scipy" = "1.18.1" }
+dataset = ""
+
+[case."second_opinion_dcc.dcc_batch.adcc2_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.adcc2_outside_2se"]
+ideal = 0.0
+n = 1
+tolerance = 0.0
+
+[case."second_opinion_dcc.dcc_batch.adcc2_persistence_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.adcc2_rho_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.adcc2_t5_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.adcc2_t5_outside_2se"]
+ideal = 0.0
+n = 1
+tolerance = 0.0
+
+[case."second_opinion_dcc.dcc_batch.adcc2_t5_persistence_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.adcc2_t5_rho_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.adcc3_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.adcc3_outside_2se"]
+ideal = 0.0
+n = 1
+tolerance = 0.0
+
+[case."second_opinion_dcc.dcc_batch.adcc3_persistence_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.adcc3_rho_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.dcc2_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.dcc2_outside_2se"]
+ideal = 0.0
+n = 1
+tolerance = 0.0
+
+[case."second_opinion_dcc.dcc_batch.dcc2_persistence_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.dcc2_rho_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.dcc3_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.dcc3_outside_2se"]
+ideal = 0.0
+n = 1
+tolerance = 0.0
+
+[case."second_opinion_dcc.dcc_batch.dcc3_persistence_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.dcc3_rho_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.dcc3_t5_gap_se"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.dcc3_t5_outside_2se"]
+ideal = 0.0
+n = 1
+tolerance = 0.0
+
+[case."second_opinion_dcc.dcc_batch.dcc3_t5_persistence_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_dcc.dcc_batch.dcc3_t5_rho_gap"]
+ideal = 0.0
+n = 50
+
+[case."second_opinion_grids.realized_decay.bns_hl300_ulps"]
+ideal = 0.0
+n = 50
+floor = 12.0
+
+[case."second_opinion_grids.realized_decay.bns_hl30_ulps"]
+ideal = 0.0
+n = 50
+floor = 12.0
+
+[case."second_opinion_grids.realized_decay.bv_hl300_ulps"]
+ideal = 0.0
+n = 50
+floor = 48.0
+
+[case."second_opinion_grids.realized_decay.bv_hl30_ulps"]
+ideal = 0.0
+n = 50
+floor = 48.0
+
+[case."second_opinion_grids.realized_decay.rv_hl300_ulps"]
+ideal = 0.0
+n = 50
+floor = 36.0
+
+[case."second_opinion_grids.realized_decay.rv_hl30_ulps"]
+ideal = 0.0
+n = 50
+floor = 36.0
+
+[case."second_opinion_grids.realized_decay.tq_hl300_ulps"]
+ideal = 0.0
+n = 50
+floor = 60.0
+
+[case."second_opinion_grids.realized_decay.tq_hl30_ulps"]
+ideal = 0.0
+n = 50
+floor = 60.0
+
+[case."second_opinion_grids.realized_decay.tv_hl300_ulps"]
+ideal = 0.0
+n = 50
+floor = 40.0
+
+[case."second_opinion_grids.realized_decay.tv_hl30_ulps"]
+ideal = 0.0
+n = 50
+floor = 40.0
 
 # --- raises
 

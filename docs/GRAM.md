@@ -282,13 +282,16 @@ matrix, so there each penalty takes a solve of its own.
 **`coef_stats` computes least squares' standard errors from the Gram:**
 
 ```text
-resid_var = V − 2 b'c + b'C b
+resid_var = V − 2 b'c + b'C b + (b_0 + m'b − ȳ)²
 sigma2    = resid_var · n / (n − p)      n = target_n_kish; p, the columns with variance and the intercept
 se_j      = sqrt((C⁻¹)_jj · sigma2 / n)
 se_0      = sqrt((1 + m'C⁻¹m) · sigma2 / n)      the intercept's, m the column means
 t_j       = b_j / se_j
 ```
 
+The last term is the intercept's error against least squares' `ȳ − m'b`,
+0 to a rounding for the coefficients `solve` returns, so `resid_var` is
+the residuals' mean square for any coefficients passed in.
 With `half_life=float("inf")` and every row's weight 1, `n` is the row
 count, and these are the classical standard errors: the recipe of [Fit a
 ridge from a Gram](how-to/fit-a-ridge-from-a-gram.md) gets the ones numpy

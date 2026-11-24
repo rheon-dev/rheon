@@ -1049,7 +1049,11 @@ EVERY_KIND = pytest.mark.extended(reason="the sweep over every kind that takes a
 #: `audit` counts what it is given and learns nothing a delay could hold
 #: back; `rcov` needs `group_close`, and a closed group cannot release the
 #: rows it still holds.
-REFUSE_EMBARGO = {"audit": "embargo", "rcov": "group_close and embargo cannot both be set"}
+REFUSE_EMBARGO = {
+    "audit": "embargo",
+    "rcov": "group_close and embargo cannot both be set",
+    "ar": "embargo does not apply to ar",
+}
 
 #: A sweep name that is not a kind: `sgd`'s Huber loss, with the refit of
 #: its first rows on as `huber`'s is (task 277).
@@ -1093,7 +1097,9 @@ def kind_frame(kind: str, *, n: int = 400, steps=None, seed: int = 5) -> pl.Data
         # returns with a conditional variance, a GARCH(1,1) at (0.05, 0.5,
         # 0.45): on the linear target `garch`'s start waits on every row
         # (PLAN 548), and its fields would carry no number
-        g = np.random.default_rng([548, seed])
+        # (the stream of 400 rows keyed 548 was one the start never took, so
+        # the keyed stream is one that starts, a third of the way in)
+        g = np.random.default_rng([1, seed])
         s, e, ret = 1.0, 0.0, np.empty(n)
         for i, z in enumerate(g.standard_normal(n)):
             s = 0.05 + 0.5 * e * e + 0.45 * s
@@ -1120,6 +1126,10 @@ def kind_spec(kind: str, **kw) -> dict:
     if builder in ("kmeans", "hmm"):
         # Seeded inside the stream's first rows, so most rows are scored.
         a["warm_rows"] = 20
+    if builder == "realized":
+        # A confidence low enough that some rows of these frames, which hold
+        # no jump, are flagged: the flag reads the row's own return.
+        a["lm_beta"] = 0.01
     a.update(kw)
     return getattr(rp.spec, builder)("m", **{k: v for k, v in a.items() if v is not None})
 
@@ -1164,9 +1174,24 @@ STATE_READS: dict[str, frozenset[str]] = {
     "corrchange": frozenset({"crit", "since_flag"}),
     "deco": frozenset({"rho"}),
     "ew_cov": frozenset({"mean_x0", "mean_x1", "std_x0", "std_x1", "corr_x0_x1"}),
+    "ewm_moments": frozenset({"var"}),
     # A variance and its forecast read the state alone; the standardized
     # residual reads the row's own target.
     "garch": frozenset({"variance_y"}),
+    # The pairs' correlations read the state alone; the log-density reads
+    # the row's own targets.
+    "dcc": frozenset({"corr_y_x0"}),
+    # The measures and the ratio test read the state alone; Lee and
+    # Mykland's statistic and its flag read the row's own return.
+    "realized": frozenset({"rv_y", "bv_y", "tv_y", "tq_y", "bns_y"}),
+    # Every term and the count read the state alone.
+    "power_variation": frozenset({"rv_y", "lrv_y", "n_y"}),
+    # Each level and its tail mean read the digest alone.
+    "tdigest": frozenset({"q0.05_y", "q0.25_y", "q0.95_y", "es0.05_y", "es0.25_y", "es0.95_y"}),
+    # Each level and its tail mean read the sketch alone.
+    "ddsketch": frozenset({"q0.05_y", "q0.25_y", "q0.95_y", "es0.05_y", "es0.25_y", "es0.95_y"}),
+    # Its power reads the state alone.
+    "spectral": frozenset({"power_y_p0", "power_y_p1"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),
@@ -1174,6 +1199,9 @@ STATE_READS: dict[str, frozenset[str]] = {
     "holt": frozenset({"pred_y"}),
     "lasso": frozenset({"penalty_selected_y"}),
     "micro": frozenset({"n_clusters", "n_micro"}),
+    # A component's variance, share and loadings are the state's; its score
+    # reads the row.
+    "pca": frozenset({"pc0_var", "pc0_share", "pc0_loading_x0", "pc0_loading_y"}),
     "seqtest": frozenset({"log_e_pos_y", "log_e_neg_y", "n_pos_y", "n_neg_y"}),
 }
 ALWAYS_STATE = frozenset({"weight_sum", "withheld_reason"})
@@ -1499,12 +1527,27 @@ DOUBLED: dict[str, dict] = {
     "deco": {},
     "ew_class": {},
     "ew_cov": {},
+    # Its moments are of the rows learned, in the order learned: a lesson
+    # late folds the same rows in the same order.
+    "ewm_moments": {},
     "ewridge": {},
     "ftrl": {},
     # Its recursion is per observation: a lesson late steps it in the same
     # order, from the same rows.
     "garch": {},
+    # The same: its recursion steps once a row, in the rows' order.
+    "dcc": {},
+    # A digest of the same rows, added in the same order.
+    "tdigest": {},
+    # A sketch of the same rows' buckets.
+    "ddsketch": {},
+    "spectral": {},
     "glm": {},
+    # Its sums take each return in the order of the rows learned: a lesson
+    # late steps them the same, from the same rows.
+    "realized": {},
+    "pca": {},
+    "power_variation": {},
     "expectile": {},
     "huber": {},
     "kmeans": {},
@@ -1662,6 +1705,18 @@ DIAGNOSTICS = dict(
     # be told, on a clock where the embargo is not in rows).
     horizon_rows=0,
 )
+#: The mean's checks, which an expectile off the mean (the registry's is
+#: 0.8) refuses.
+OFF_MEAN = ("emit_calibration", "emit_breaks", "horizon_rows")
+
+
+def diagnostics(kind: str) -> dict:
+    """`DIAGNOSTICS` as ``kind`` takes them."""
+    if kind == "expectile":
+        return {k: v for k, v in DIAGNOSTICS.items() if k not in OFF_MEAN}
+    return DIAGNOSTICS
+
+
 SHORT = 0.5
 #: The drift flags' prefix.
 DRIFT = "drift_"
@@ -1698,7 +1753,7 @@ class TestADelayShorterThanEveryStep:
         df = short_frame(kind)
         kw: dict[str, object] = {"clock": "t", "gap_cap": 1e9}
         if scores_a_target(kind):
-            kw.update(DIAGNOSTICS)
+            kw.update(diagnostics(kind))
         if has_coef(kind):
             kw["coef_every"] = 0
         plain = unnested(kind_spec(kind, **kw), df)
@@ -1747,7 +1802,7 @@ class TestADelayShorterThanEveryStep:
         if kind not in NO_HALF_LIFE:
             kw["half_life"] = math.inf
         if scores_a_target(kind):
-            kw.update(DIAGNOSTICS)
+            kw.update(diagnostics(kind))
         plain = unnested(kind_spec(kind, weight="w", **kw), df)
         doubled_ = stream.embargo(df, clock="t", delay=SHORT, weight="w")
         oracle = (
@@ -1778,3 +1833,94 @@ class TestADelayShorterThanEveryStep:
         )
         assert same(plain["weight_sum"], oracle["weight_sum"])
         assert not same(plain["pred_y"], oracle["pred_y"])
+
+
+# Review 2026-11-23, STRM-1, and the user's decision (2026-11-23: "Score as
+# predict"): a row of weight 0 under `embargo` or `label_clock` is scored as
+# `predict` scores it, from the state as it stands, and releases no held row
+# into the live models. It released the rows its clock had seen out, so a
+# later row of positive weight at an earlier clock was scored by a model
+# that had learned a label the embargo still held there (hard rule 2), and a
+# stream that ended on such a row saved what the stream without it held back
+# (hard rule 9). The cost, stated in the docs: such a row does not see the
+# labels matured at its own clock.
+
+
+def test_a_zero_weight_row_releases_no_label_a_later_row_before_it_would_not_see():
+    zero = pl.DataFrame(
+        {
+            "t": [0.0, 100.0, 5.0],
+            "x": [1.0, 1.0, 1.0],
+            "y": [100.0, 0.0, 50.0],
+            "w": [1.0, 0.0, 1.0],
+        }
+    )
+    s = spec(embargo=10.0, weight="w", min_weight=0.0, half_life=1e9)
+    with_it = rp.ModelBank([s]).fit_predict(zero)["m"].struct.unnest()
+    without = rp.ModelBank([s]).fit_predict(zero.filter(pl.col("w") > 0))["m"].struct.unnest()
+    # Row 2 at t = 5 is before row 0's label is known (t = 10): neither bank
+    # has learned anything by then.
+    assert with_it["weight_sum"][2] == without["weight_sum"][1] == 0.0
+    assert with_it.row(2) == without.row(1)
+
+
+def test_a_stream_ending_on_a_zero_weight_row_saves_what_it_would_without_it():
+    df = pl.DataFrame(
+        {"t": [0.0, 15.0, 16.0], "x": [1.0, 1.0, 2.0], "y": [10.0, 0.0, 0.0], "w": [1.0, 0.0, 0.0]}
+    )
+    s = spec(embargo=10.0, weight="w", min_weight=0.0, half_life=1e9)
+    a, b = rp.ModelBank([s]), rp.ModelBank([s])
+    a.fit(df)
+    b.fit(df.head(1))
+    assert a.coef().equals(b.coef())
+    # And the two go on alike, to the bit.
+    more = pl.DataFrame({"t": [20.0, 21.0], "x": [1.5, 3.0], "y": [1.0, 2.0], "w": [1.0, 1.0]})
+    assert a.fit_predict(more).equals(b.fit_predict(more))
+
+
+def test_a_number_clock_and_a_temporal_one_agree_at_a_zero_weight_row_that_starts_a_session():
+    """A row of weight 0 that starts a session under ``session_gap="reset"``
+    and an ``embargo`` read its place on a fresh stream's elapsed clock, which
+    a number clock and a temporal one gave differently, so one released the
+    rows held before the reset and the other did not. It releases none on
+    either, and the two clocks agree."""
+    t = [0.0, 1.0, 2.0, 3.0, 20.0, 21.0, 22.0]
+    df = pl.DataFrame(
+        {
+            "t": t,
+            "s": ["a", "a", "a", "a", "b", "b", "b"],
+            "x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            "y": [2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0],
+            "w": [1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0],
+        }
+    )
+    ts = df.with_columns(
+        (pl.datetime(2024, 1, 1) + pl.duration(seconds=pl.col("t")))
+        .cast(pl.Datetime("ns"))
+        .alias("t")
+    )
+    kw = dict(weight="w", min_weight=0.0, session="s", session_gap="reset")
+    num = rp.ModelBank([spec(embargo=2.0, **kw)]).fit_predict(df)["m"].struct.unnest()
+    tem = (
+        rp.ModelBank([spec(embargo="2s", **{**kw, "half_life": "50s", "gap_cap": "1000000000s"})])
+        .fit_predict(ts)["m"]
+        .struct.unnest()
+    )
+    for field in ("pred_y", "weight_sum"):
+        assert num[field].equals(tem[field]), field
+
+
+def test_the_doubled_stream_takes_an_input_holding_its_helper_columns_names():
+    """Review 2026-11-23, PY-7: ``rp.stream.embargo`` named its two helper
+    columns ``__embargo_key`` and ``__embargo_order``, and an input holding
+    either died in a polars error. The helpers take names the input does
+    not hold, and the input's columns come back as they were. (A weight of
+    ``inf`` gives its predict copy a NaN weight, as ``inf * 0`` is: the
+    bank skips both copies, as it skips the row under ``embargo``, so that
+    half of the claim is the rule kept.)"""
+    df = pl.DataFrame(
+        {"t": [0.0, 1.0], "x": [1.0, 2.0], "__embargo_key": [7, 8], "__embargo_order": ["a", "b"]}
+    )
+    out = stream.embargo(df, clock="t", delay=1.0)
+    assert out.columns == [*df.columns, stream.ROLE + "_weight", stream.ROLE]
+    assert out.filter(pl.col(stream.ROLE) == "predict").select(df.columns).equals(df)

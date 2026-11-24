@@ -40,6 +40,44 @@ fn an_unknown_key_is_refused_at_either_level() {
     );
 }
 
+/// Task 544: a window given to a `tdigest` is refused naming the windowed
+/// DDSketch, from JSON and from TOML; the same unknown key on another model
+/// is told nothing of it.
+#[test]
+fn a_tdigest_window_is_refused_naming_the_windowed_ddsketch() {
+    let json = serde_json::from_str::<super::Spec>(
+        r#"{"name": "m", "model": {"type": "tdigest", "quantiles": [0.25], "window_size": 20},
+            "targets": ["y"], "features": []}"#,
+    )
+    .unwrap_err()
+    .to_string();
+    let json = super::name_renamed(&json);
+    assert!(
+        json.contains("window_size does not apply to tdigest")
+            && json.contains("ewm_quantile with a window_size"),
+        "{json}"
+    );
+    let toml = toml::from_str::<super::Spec>(
+        "name = \"m\"\ntargets = [\"y\"]\n[model]\ntype = \"tdigest\"\n\
+         quantiles = [0.5]\nwindow_rows = 10\n",
+    )
+    .unwrap_err()
+    .to_string();
+    let toml = super::name_renamed(&toml);
+    assert!(
+        toml.contains("window_rows does not apply to tdigest"),
+        "{toml}"
+    );
+    assert!(toml.contains("the windowed DDSketch"), "{toml}");
+    let other = serde_json::from_str::<super::Spec>(
+        r#"{"name": "m", "model": {"type": "garch", "window_size": 20},
+            "targets": ["y"], "features": []}"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(!super::name_renamed(&other).contains("DDSketch"));
+}
+
 /// Task 144: an old name is refused naming the new one, from JSON and
 /// from TOML, at the spec's level and the model's.
 #[test]

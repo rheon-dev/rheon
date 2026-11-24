@@ -519,10 +519,10 @@ in the table.
 
 ### The table
 
-**127 cells: 90 over the 26 model kinds' rows, 19 over the
-bank, 3 over the command line, 9 over the window operators, 4 over
-`refresh_time` and 2 over the sample of an internal helper for
-gradient-boosted trees.** Each row is one cell: the
+**147 cells: 106 over the 31 model kinds' rows, 19 over the
+bank, 3 over the command line, 9 over the window operators, 6 over
+`refresh_time`, 2 over `merge`'s `carry` and 2 over the sample of an
+internal helper for gradient-boosted trees.** Each row is one cell: the
 size it varies, its two sizes, the growth declared for a row's work and for
 the state in that size (written in `n`, the size), and the reason. The last
 column has the four native ratios from large to small, as measured on
@@ -532,7 +532,13 @@ column has the four native ratios from large to small, as measured on
 2026-11-20 by a release build (`--release`) at a load of 7, and the four
 `hawkes` cells' on 2026-11-21 by a debug build at a load of 5. The four
 `expectile` cells' were measured on 2026-11-21 the same way, at a load of 14, and the three
-`garch` cells the same day the same way, at a load of 11. The two `.window` cells were
+`garch` cells the same day the same way, at a load of 11. The two `dcc` cells were
+measured on 2026-11-22 the same way, at a load of 9, the four `realized` cells at a
+load of 0.5 and the four `power_variation` cells on 2026-11-23 the same way, at a load of 1. The two
+`refresh.age_` cells and the two `merge.carry_` cells were measured on
+2026-11-22 the same way, at a load of 3. The three
+`tdigest` cells were measured on 2026-11-22 the same way, at a load of 3, and the three
+`ddsketch` cells on 2026-11-23 the same way, at a load of 2. The two `.window` cells were
 measured again on 2026-11-06, once a window's snapshots were laid out
 flat. A row's time and allocations are per
 row; the saved state and the heap are the state's. `(CI)` marks the 25 cells
@@ -589,6 +595,9 @@ largest buffer at the smaller.
 | `ew_cov.lags` | lags L | 1 → 8 | O(n) | O(n) | a lagged co-moment block a lag | 2.51 · 1.00 · 3.33 · 1.49 |
 | `ew_cov.window` (CI) | window W clock units | 500 → 4,000 | O(1) | O(n) | a snapshot added and one subtracted a row; a snapshot a row held | 1.00 · 1.00 · 8.23 · 7.86 |
 | `ew_cov.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | moments only | 1.00 · 1.00 · 1.00 · 1.00 |
+| `pca.k` | columns k | 4 → 32 | O(n) | O(n) | a few rotation sweeps over the 3 kept directions and the row, each of k; the directions held | 3.48 · 1.00 · 5.89 · 2.72 |
+| `pca.components` | components r, of 16 columns | 1 → 8 | O(n^2) | O(n) | the sweeps rotate each pair of the r + 1 kept directions and the row; r + 1 directions held | 13.21 · 1.00 · 2.32 · 2.42 |
+| `pca.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the directions and the moments only | 1.03 · 1.00 · 1.00 · 1.00 |
 | `marginal.k` (CI) | features p | 4 → 32 | O(n) | O(n) | each feature's pair with the target, p | 2.63 · 1.00 · 4.59 · 1.40 |
 | `marginal.targets` | targets T | 1 → 8 | O(n) | O(n) | p pairs a target | 6.14 · 1.00 · 6.67 · 1.92 |
 | `marginal.lags` | lags L | 1 → 8 | O(n) | O(n) | each lag's pair moments, p·L | 3.49 · 1.00 · 3.56 · 1.74 |
@@ -632,6 +641,22 @@ largest buffer at the smaller.
 | `garch.targets` | targets T, one series each | 1 → 8 | O(n) | O(n) | each target steps its own series and keeps its own parameters, information matrix and lags | 8.10 · 8.39 · 6.33 · 2.51 |
 | `garch.truncation` | FIGARCH's lags M | 100 → 800 | O(n) | O(n) | a row is one pass of the M weights, their derivatives and the ring; the ring holds M squared returns | 3.18 · 0.97 · 6.35 · 3.30 |
 | `garch.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the parameters, the information matrix and the lags only; the start's buffer is gone | 1.01 · 1.00 · 1.00 · 1.00 |
+| `dcc.series` | series k, the asymmetric model learned | 2 → 16 | O(n^3) | O(n^2) | a row factors and inverts R and forms R⁻¹ ∂R for each of its three parameters, k³; the state holds Q, its two targets and three sensitivities, k² each | 66.00 · 1.00 · 32.89 · 7.08 |
+| `dcc.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the targets, Q, its sensitivities and the information only; the start's buffer is gone | 0.99 · 1.00 · 1.00 · 1.00 |
+| `realized.targets` | targets T, one series each | 1 → 8 | O(n) | O(n) | each target adds its terms to its own seven compensated sums and keeps its last returns | 6.94 · 1.00 · 5.80 · 2.26 |
+| `realized.window` | window W rows, one series | 100 → 800 | O(1) | O(n) | a leaving row takes back its terms, its successor's product and triple; W rows held, 16 + 56 bytes each | 1.00 · 1.00 · 7.73 · 7.23 |
+| `realized.lm_window` | Lee and Mykland's K, one series | 100 → 800 | O(1) | O(n) | one product into the ring and one out a row; K − 2 products held | 0.98 · 1.00 · 7.24 · 4.89 |
+| `realized.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | its compensated sums and last returns only | 1.04 · 1.00 · 1.00 · 1.00 |
+| `power_variation.targets` | targets T, one series each, three terms | 1 → 8 | O(n) | O(n) | each target adds its terms to its own compensated sums and keeps its rings of returns | 7.23 · 1.00 · 5.58 · 2.43 |
+| `power_variation.bandwidth` | a centered Parzen sum's bandwidth H, one series | 10 → 80 | O(n) | O(n) | H products a row into the kernel sum's four sums; a ring of H + 1 returns | 3.17 · 1.00 · 2.44 · 1.57 |
+| `power_variation.window` | window W rows, one series | 100 → 800 | O(1) | O(n) | a leaving row takes back the terms credited to its return; W rows held, 16 + 16 a sum bytes each | 0.99 · 1.00 · 7.81 · 7.34 |
+| `power_variation.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | its compensated sums and rings only | 0.99 · 1.00 · 1.00 · 1.00 |
+| `tdigest.targets` | targets T, a digest each | 1 → 8 | O(n) | O(n) | each target's digest is read from a merged copy and learns its own row | 8.05 · 7.99 · 7.68 · 4.97 |
+| `tdigest.compression` | the compression δ | 50 → 400 | O(n^(5/4)) | O(n) | a row's read merges a copy of up to 8δ buffered rows into δ + 1 centroids, sorting them: O(δ log δ); the state holds both | 10.34 · 1.13 · 6.63 · 6.89 |
+| `tdigest.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | the centroids are at most δ + 1 and the buffer at most 8δ rows, whatever the stream's length | 1.02 · 1.00 · 1.02 · 1.00 |
+| `ddsketch.targets` | targets T, a sketch each | 1 → 8 | O(n) | O(n) | each target's live buckets are walked for its levels and tail means, and learn its own row | 2.41 · 4.49 · 1.76 · 1.63 |
+| `ddsketch.window` | a row window W | 100 → 800 | O(log n) | O(n) | a row walks the window's live buckets, which grow with the range its rows span; the ring holds W rows, 8 + 4 bytes each | 2.51 · 1.00 · 5.64 · 4.10 |
+| `ddsketch.history` | rows already seen | 1,000 → 8,000 | O(log n) | O(log n) | the live buckets are the values' distinct ones, which an unbounded stream's widening range adds as the log of its rows | 1.47 · 1.00 · 1.24 · 1.30 |
 | `bank.groups_seen` (CI) | groups seen G (a block over 50 of them) | 250 → 2,000 | O(1) | O(n) | a row touches its group's state alone; a state a group | 1.03 · 1.00 · 7.99 · 7.14 |
 | `bank.groups_seen_per_call` (CI) | groups seen G, calls of four rows to one group each | 1,000 → 8,000 | O(1) | O(n) | a call finds each of its groups' state by key and takes only their notices; a state a group | 1.00 · 1.00 · 7.98 · 7.33 |
 | `bank.specs` (CI) | specs S, one set of columns | 1 → 8 | O(n) | O(n) | each spec steps its model, S | 8.28 · 7.67 · 7.80 · 7.23 |
@@ -668,6 +693,10 @@ largest buffer at the smaller.
 | `refresh.pairs` | series m, pairs | 8 → 64 | O(n) | O(n^2) | a tick updates its m−1 pairs; m² pairs held | 10.45 · 8.96 · 67.43 · 43.77 |
 | `refresh.groups` (CI) | groups G | 100 → 800 | O(1) | O(n) | a tick touches its group | 1.01 · 1.00 · 8.05 · 7.70 |
 | `refresh.history` (CI) | ticks already seen | 1,000 → 8,000 | O(1) | O(1) | the grid's last values only | 1.00 · 1.00 · 1.00 · 1.00 |
+| `refresh.age_groups` | groups G, with `age=True` | 100 → 800 | O(1) | O(n) | a tick touches its group; the clock of each series' last tick a group | 0.99 · 1.00 · 8.03 · 7.76 |
+| `refresh.age_history` | ticks already seen, with `age=True` | 1,000 → 8,000 | O(1) | O(1) | one clock a series, since the last point | 0.98 · 1.00 · 1.00 · 1.00 |
+| `merge.carry_groups` | groups G, two columns carried | 100 → 800 | O(1) | O(n) | a pull gathers the values its groups read and appends those they end on, whatever the groups; one value a column a group | 1.06 · 1.06 · 8.03 · 6.42 |
+| `merge.carry_history` | rows already merged, two columns carried | 1,000 → 8,000 | O(1) | O(1) | the values a column's store holds are gathered down to the groups' once past twice their number | 1.00 · 1.00 · 1.00 · 1.00 |
 | `gbdt.history` | rows offered | 10,000 → 80,000 | O(1) | O(1) | a priority sample: a row is kept or not by its hash, the heap holds the sample | 0.53 · 0.83 · 1.00 · 1.00 |
 | `gbdt.sample` | sample size N | 1,000 → 8,000 | O(log n) | O(n) | a heap of N, log N; N rows kept | 1.90 · 1.01 · 8.00 · 7.30 |
 

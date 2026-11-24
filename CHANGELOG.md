@@ -31,6 +31,109 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **`deco`'s `rho` reads the equicorrelation: the ratio of the weighted
+  means** (PLAN 551; the user, 2026-11-22: "Replace rho with the ratio").
+  The row's estimate `u`, Engle and Kelly's eq. 20, is a ratio over one row
+  and reads toward 0 whatever the half-life or the number of series (1/3 at
+  a true 0.6 for two series, 0.41 for many). `rho` was its EW mean, or the
+  linear recursion on it targeted at that mean with `alpha + beta < 1`, so
+  it settled at `E[u]`: two-thirds of the truth, a bias of this library's
+  two departures from the paper, whose maximum-likelihood fit of the
+  intercept and of `alpha + beta` rescales `u`. `rho` is now `EW(A)/EW(V)`,
+  `A` the row's mean off-diagonal product and `V` its mean square (between
+  blocks `EW(C)/sqrt(EW(V_A) EW(V_B))`): the weighted Gaussian
+  maximum-likelihood estimate over the window, held to scipy's to 6.6e-9.
+  Under `"linear"` it is the DCC recursion of `Q` averaged to two scalars,
+  `N` and `D`, held to the full `n x n` recursion to 1e-11 and within
+  2.7e-3 on average of the paper's eq. 7 on it. On five series alternating
+  0.2 / 0.6 it settles at 0.198 and 0.607 where it read 0.130 and 0.381; on
+  ten series alternating every 1,200 rows its error falls from 0.171 to
+  0.098 (`"ew"`) and from 0.162 to 0.074 (`"linear"`), and to 0.105 and
+  0.089 under t-tails of 4 degrees of freedom. The level learns from a row
+  only once the standardizer's weights hold a Kish size above 5, where a
+  standardized row's fourth moment exists, and while no level has a value
+  `withheld_reason` reads `below_warm_rows`; a half-life under 1.71 rows
+  never learns. `u` does not move. A state saved by 2.0.0 or earlier
+  switches to the ratio on load with its level restarted, since the sums
+  the ratio needs are not in it: its standardizer, `u` and `weight_sum` go
+  on as saved, and the level starts empty and relearns from the next rows
+  under the same warm-up, `rho` null and `withheld_reason` `below_warm_rows`
+  until it has a value. Moves: `deco.rho*`, `deco.loglik`,
+  `deco.coef`, `deco.withheld_reason`.
+
+- **`corrchange`'s monitor and sequential tests hold their level at every
+  span length and correlation** (PLAN 553). Both papers' statistics compare
+  a correlation of a span's or a period's first few rows with a reference,
+  and a correlation of two rows is `±1` whatever the data: Wied, Krämer and
+  Dehling's monitor flagged 26% of stable spans of 100 rows at a
+  correlation of 0.9 and 41% of spans of 8 rows at 0, and Wied and
+  Galeano's detector 23% to 33% of stable cycles at `boundary_gamma = 0.45`
+  and a correlation of 0.6, at every history up to 1,000 rows, each at a
+  nominal 0.05. (1) `kind="monitor"` is the linear form of the same test,
+  the CUSUM `max_j |Σ_{t≤j} ξ_t| / (√T·D̂)` of the delta-method series `ξ`
+  their proof reduces the statistic to, against the Kolmogorov quantile
+  less `0.5826/√T` (a maximum over `T` rows, where the quantile is of a
+  supremum): measured at 0.006 to 0.046 of stable spans in every cell of 8
+  to 1,000 rows, Gaussian, `t_5`, GARCH and both scales doubling, and power
+  0.42 / 0.83 for a jump from 0.5 to 0.7 at 200 / 500 rows. The same CUSUM
+  of `x̃² − ỹ²` is read beside it: where the two columns' scale ratio
+  moved, which takes `ξ` off its null law (0.93 of spans of 1,000 rows
+  flagged at 0.9 with one scale doubling, nothing else moving), the flag
+  is withheld, null, and `withheld_reason` names it `scale_ratio_moved`, a
+  new reason, last in precedence. (2) `kind="sequential"` compares the
+  monitored rows' correlation with the history's on Fisher's scale, each
+  at its own variance: `((k − 3)/√(m − 3))·|atanh ρ̂_k − atanh ρ̂_h|·(1 −
+  ρ̂_h²)/D̂` against Wied and Galeano's boundary at `b = (k − 3)/(m − 3)`,
+  and their critical value at the period's information `(K − 3)/(m − 3)`
+  (unchanged where `monitor_rows = window_rows`): 0.047 to 0.083 of stable
+  cycles at every `boundary_gamma`, histories of 50 to 1,000 rows, Gaussian
+  and GARCH; heavy tails at a short history are left, 0.121 at 50 rows of
+  `t_5`. The first three monitored rows report nothing, as the first did;
+  `monitor_rows` is at least 4 between pairs (2 under `scalar`), since a
+  shorter period could report nothing. (3) No least count of rows is
+  added: a span or history too short for a verdict is tested and cannot
+  flag, by the statistic's own bound. Every number is held against its
+  third-party pieces: statsmodels' `breaks_cusumolsresid` and
+  `S_hac_simple`, numpy's `arctanh` and the information scipy's `pearsonr`
+  puts on Fisher's `z`, and scipy's exact `permutation_test` for the window
+  kind's `perm_block`. A state saved by an earlier build loads as it was
+  and goes on under the new statistics; what it keeps of the old ones is
+  where they flagged (the count since the last flag, and a sequential
+  cycle's start). The new reason is a new category of every model's
+  `withheld_reason` Enum, every value as it was. Moves: `corrchange.stat`,
+  `corrchange.crit`, `corrchange.flag`, `corrchange.since_flag`,
+  `corrchange.since_change`, `*.withheld_reason`.
+
+- **`rp.stream.with_windows(..., save_state=...)` returns the newest
+  stamp's rows** (PLAN 567). At the end of the whole input, the windows
+  looking back that waited on the last stamp (under `closed="right"` or
+  `"both"`) were held in the state and came out with the next run. A run
+  resumed on an input that starts at that stamp is refused, so no row can
+  join them: they are now read as they stand, and the rows whose windows
+  have all resolved leave with this run, the last stamp's included. Only the
+  rows with a window looking ahead still open are saved. One run equals any
+  split into saved runs, to the bit, at every split point between stamps;
+  the windows state's format is unchanged. With `group` the refusal needed
+  no extension: the stream's clock refuses a row at any group's last stamp
+  that follows a later row, as a step back. A run that the slice `head(n)`
+  stopped holds its rows as before.
+- **A zero-weight row leaves the clock where it was**, in the wording of
+  the docs: the `weight` parameter's, `embargo`'s, `rows_zero_weight`'s and
+  two Notes said it advanced the clock. The behavior is as it was.
+
+- **`skip_learned` (and `--skip-learned`) keeps a row one spec has not
+  learned** (PLAN 566). A row was kept only if every spec that reads a
+  clock had it after its group's last clock, so one spec's tie at its last
+  clock dropped a row that another spec, grouping differently, had not
+  learned, though the bank takes that row. A row is now dropped when any
+  spec has it strictly before its group's last clock, and kept when at
+  least one spec has it after, in a group it has not seen, or on a null
+  clock. A row of weight 0 at a last clock is kept too, unless a spec
+  learned it at a positive weight there: it learns nothing and counts in no
+  clock, so the predict rows of `rp.stream.embargo` survive a resume. A
+  spec that has already learned a kept row learns it again, the cost of one
+  list of rows for every spec. A row that was kept is still kept.
+
 - **`bocpd` takes its hazard in rows or on the clock** (PLAN 547).
   `hazard_rows` is the expected rows between changepoints, `H =
   1/hazard_rows` the chance of a break after each row of positive weight on
@@ -91,6 +194,161 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`dcc`, dynamic conditional correlation fitted one row at a time** (task
+  493, with task 514's recursion): the full correlation matrix of `k` return
+  series, Engle's (2002) DCC or, with `asymmetric=True`, Cappiello, Engle
+  and Sheppard's (2006) ADCC, `Q_{t+1} = (1 − a − b) Q̄ − g N̄ + a z zᵀ + g n
+  nᵀ + b Q_t`, its targets the running means of the rows learned. Each
+  series is standardized by its own GARCH(1,1) margin, `garch`'s model
+  unchanged (`vol`, `dist`, `truncation`, `variance_targeting`,
+  `margin_start_rows`, `margin_start_span`), or taken as a standardized
+  residual already (`margins="none"`). Each row reports, before it is
+  learned, every series' variance, every pair's correlation `corr_<a>_<b>`
+  and its Gaussian log-density; `coef` holds `a`, `b` (and `g`). The
+  parameters are given (`a`, `b`, `g`) or learned by recursive
+  quasi-likelihood, `θ ← Proj_H(θ + r H⁻¹ g)` with the expected information,
+  after a start of `start_rows` rows (500) or a `start_span` of the clock
+  fitted by the model's own projected Fisher scoring. Both are held at
+  every row in `a, b, g ≥ 0`, `a + b + δ g ≤ 1 − 10⁻⁴`, `δ` the largest
+  eigenvalue of `Q̄^{−1/2} N̄ Q̄^{−1/2}`, exactly where every `Q` is positive
+  definite. A Student-t margin fitted at or below 4 degrees of freedom is
+  said once, as a warning. A decay (`half_life` or `lam`, required, `"inf"`
+  for none) acts on the targets, the weight and the gain; no rolling window,
+  since the estimate's sensitivities cannot have a row taken back out.
+  State: `32 k² + 96` bytes for DCC and `48 k² + 144` for ADCC, learned
+  (`16 k² + 64` and `24 k² + 72` given), the margins' 168 a series, and
+  each start's buffer until it is fitted (`8 (k + 2)` bytes a row of the
+  correlation's, 16 a row a series of the margins'), held to
+  `max_state_bytes` (256 KB, eight series at the default starts; at most 64
+  MiB). Against the batch quasi-likelihood fit written from the definition
+  and maximized by scipy (no Python library fits DCC), on 50 simulated
+  series of each of six forms at 10,000 rows, every parameter was within two
+  of its standard errors on all 50 (largest gap 1.17 SE under normal
+  innovations, 1.95 under t(5)). The start reports only a recursion its rows
+  identify, by the condition and no count of rows: its fit is withheld
+  (`withheld_reason` `not_identified`) until the likelihood-ratio statistic
+  against constant correlation, at Kish's count, reaches χ² at 0.999 (13.8
+  for DCC, 16.3 for ADCC) with the information positive definite, and is
+  stepped from only at its optimum (the projected Newton step's predicted
+  gain at most 1e-6 nats); a start that fails waits for twice its rows,
+  at most twice, then buffers afresh. `start_rows` takes any count from 1. Its cost through the bank, on arm64 only
+  (an optimized build of the wheel without LTO, one thread, a load of 7 to
+  9, the best of three runs of 200,000 rows): 0.4 µs a row at two and three
+  series, 1.0 to 1.3 µs at five and 5.0 to 6.5 µs at ten, learned, about
+  half that with the parameters given, and 1.7 µs at three series with
+  GARCH margins; a learned row allocates nothing.
+
+- **`corrchange` on the clock: `window_size` and `monitor_span`** (PLAN
+  553), in place of `window_rows` and `monitor_rows`, a number of the
+  clock's units or a duration. A `"monitor"` span and a `"sequential"`
+  history run from their first row through the first at least
+  `window_size` after it (on a clock of one unit a row, `window_size = n`
+  is `window_rows = n + 1` to the bit); a period ends at the first of
+  `monitor_span` and `⌊m·monitor_span/window_size⌋` rows, its critical
+  value read at its own `m`; `"window"`'s two windows are `(t − 2D, t − D]`
+  and `(t − D, t]`, its held permutation value rescaled to each report's
+  counts by `√((1/n₁ + 1/n₂)/(1/n₁⁰ + 1/n₂⁰))`. Each is tested at the rows
+  it holds, checked against `max_state_bytes` (256 KB by default) as they
+  come. A clock window reads both windows whole, `p²` times its rows a
+  report.
+
+- **Polars' time-zone support is built in** (PLAN 556; the user,
+  2026-11-23). The Rust side's Polars is built with its `timezones` and
+  `dtype-date` features. Without them, a cast of a column to a zoned
+  `Datetime` came back naive, and a zoned clock cast to its own dtype no
+  longer subtracted from a column of nulls; a zoned clock now keeps its
+  zone through every cast, as it already did through every path that
+  returns a clock (`rp.stream.merge`, `rp.stream.refresh_time`, a bank's
+  clocks, `with_windows`, a pipeline checkpoint), which
+  `tests/test_zoned_clocks.py` holds on a clock across a daylight-saving
+  change. No output moves. The zone data was already linked; on arm64 the
+  CLI grows 1.55% and the wheel 1.65% (to 27.0 MB, 77.3 MB installed).
+
+- **A stream's last value carried forward, with its age on the clock**
+  (PLAN 556): `rp.stream.merge(..., carry=[...])` and
+  `rp.stream.refresh_time(..., age=True)`, so that how stale a value may be
+  is a threshold the user writes in Polars, such as
+  `pl.col("bid_age") <= pl.duration(seconds=1)`. Under `carry`, each column
+  named is filled forward over the merged rows of each `by` group, as
+  Polars' `forward_fill` fills it (a null is no value, so the value before
+  it goes on), and a column `<c>_age` gives the row's clock less the clock
+  of the row the value came from, by Polars' own subtraction of the clock's
+  dtype (a `Duration` on a temporal clock); before a group's first value
+  both are null. Under `restart_after_step_back` a value is carried within
+  its day only. Held to the bit against the backward `join_asof` of each
+  merged row onto the rows with a value (on the row's place in the merge,
+  and on the clock where no two rows share one) and against
+  `forward_fill(...).over(by)`, over Hypothesis-drawn streams, clock
+  dtypes, ties, nulls, groups and chunkings (`tests/test_stream_carry.py`),
+  and in Rust to the definition (`merge/carry_tests.rs`). Under `age=True`,
+  each point of the refresh grid gains `<s>_age` (`a_age` and `b_age` under
+  `pairs`): `time_refresh` less the clock of the tick `<s>_value` came from,
+  held to the backward `join_asof` of each point's completing tick onto the
+  series' ticks with a value; the grid's other columns do not move. Both
+  are resumable: a merge's state keeps each group's last value of each
+  column, with its clock, and a grid's the clock of each series' last tick
+  since the last point, one value a column (or a series) a group, whatever
+  the stream's length (the scaling cells `merge.carry_groups`,
+  `merge.carry_history`, `refresh.age_groups` and `refresh.age_history`).
+  Neither state's version moves: a state without the option writes the
+  bytes it did, and one saved with it loads only into a call with it (and
+  the reverse), refused by name; frozen fixtures `merge_carry`,
+  `refresh_time_age` and `refresh_time_age_held` hold each new form. The
+  how-to [Merge streams by the clock](docs/how-to/merge-streams-by-the-clock.md)
+  gains a staleness example. Its cost on arm64 (M4 Pro, best of 5, load 3,
+  the dev-wheel build): carrying two columns of two streams of 2M rows each
+  takes 45 ns a row against 25 without, and 60 against 38 under `by` over
+  100 groups, about 10 ns a row a column; a merge state of 100 groups
+  grows from 3.1 KB to 14 KB with two columns carried. `age=True` takes 51
+  ns a tick against 46 on a joint grid of four series, and 182 against 155
+  with `pairs`.
+
+- **`rp.ewm_profile`: a column's EW mean, variance, standard deviation or
+  quantile by each row's phase of a period** (PLAN 560), read at the row's
+  own phase, one profile per group, in `rp.stream.with_windows`. The
+  phase is Polars' `t − t.dt.truncate(period)` less an `offset`, on the
+  wall clock of the clock column's own time zone, so a rush hour keeps its
+  phase across a daylight-saving change; a week starts on Monday; a
+  calendar period (`"1mo"`) is refused. `buckets=` keeps a weighted
+  Welford mean and variance per phase, or `ewm_quantile`'s sketch for a
+  quantile; `harmonics=` fits a Fourier series of `x` and `x²` by EW least
+  squares, its variance the fit of `x²` less the fit of `x` squared,
+  withheld where negative or where the rows do not pin the curve down.
+  Each phase decays by the clock's age; `window_size` keeps each phase's
+  rows in two stacks, so a row leaves without a subtraction. A phase is
+  read once it holds `min_samples` rows. `closed="right"` by default, as
+  `rp.ewm_mean`; `"left"` for an adjustment from earlier rows alone. The
+  state is bounded by the period's shape and the window and held to
+  `max_state_bytes` (a warning at half, a refusal at the cap naming the
+  row). Held to Polars' `group_by` over the phase, `zoneinfo` row by row
+  across both daylight-saving changes, NumPy's weighted `inverted_cdf`,
+  statsmodels' `WLS` on `CalendarFourier`'s basis, chunk invariance, and a
+  save and load. `chrono-tz` and `libm`, already in the build through
+  Polars and `rheon-core`, are named by `rheon-polars` for the zone and the
+  harmonic basis.
+
+- **`rp.rolling_max` and `rp.rolling_min`: the largest and smallest value
+  of a window on the clock, or since an event** (PLAN 561, the min and max
+  of PLAN 518's window operators). Polars' `rolling_max_by` and
+  `rolling_min_by` over every `closed`, held to them bit for bit (on 400
+  frames of `0.0`, `-0.0`, `1.0` and `-1.0` too: the earliest row of a
+  window wins a tie, and looking ahead the latest), looking back and, under
+  `reverse=True`, ahead. With no `window_size` the running form: every row
+  since the stretch began, in a few doubles a group. `since=`, an
+  element-wise boolean, starts the window over at the stamp of a true row,
+  every row of that stamp in; under `closed="left"` or `"none"` the event's
+  stamp is null. `since` with `reverse=True` is refused, saying why. A NaN
+  or an infinity is read as missing, as for every operator, where Polars
+  lets a NaN make the window NaN. A drawdown is the formula
+  `pl.col("x") - rp.rolling_max("x", since=...)`. A windowed extremum's
+  queue is bounded by `max_state_bytes` (256 KB a group, at most 64 MiB):
+  refused when the query is built on the row clock, at the row that passes
+  it on a clock; a row costs 112 bytes for one extremum on its own window.
+  The windows state is version 13, which reads a 12 as a 13 without an
+  extremum; the bank's schema stays 72, which no release has written.
+  A row of weight 0 in a spec's formula target still moves its window, as
+  every operator's does (recorded by a test expected to fail).
+
 - **`rp.stream.merge`: streams that each run in clock order, merged into one
   stream in clock order** (PLAN 541). It takes any number of frames or
   queries, by position or in a dict of name to frame, and gives every row
@@ -124,6 +382,142 @@ model that only the new build has is listed as an addition and passes.
   Polars' readers of the same streams alone, read in turn, peaked at 104,
   199 and 731 MB and Polars' sort of the concatenation at 949 to 1,148 MB.
 
+- **Cross-group operators** (PLAN 557): `rp.cross_mean`, `rp.cross_std`,
+  `rp.cross_rank` and `rp.cross_quantile` reduce every group's row at one
+  stamp of the clock and give each row the result, and `rp.cross_ref`
+  reads one reference row's value (the row its `where=` predicate picks)
+  at each stamp. They run in `rp.stream.with_windows` under a `clock`.
+  Under `closed="right"`, the default, a row reads its own stamp and is
+  held until the stamp closes: Polars' `over(clock)` on the whole frame,
+  to the bit for the mean's, the rank's and the quantile's tests but
+  `"linear"`'s, which Polars reads from an index offset by a group's
+  nulls. Under `closed="left"` a row reads the stamp before, known as it
+  arrives. `neighbors=` names a List column of group keys, and each row
+  reads the rows of the groups its list names. A weight above 0 and a
+  value make a row a member; a cross-section of fewer than two members is
+  null; a stamp earlier than the open one is refused by row. A rank
+  takes Polars' tie rules but `"random"` and no weight; a weighted
+  quantile reads only `"equiprobable"`, NumPy's weighted `inverted_cdf`.
+  The state is the open stamp's rows, held to `max_state_bytes` (256 KB
+  by default, at most 64 MiB, a warning past half and a refusal at the
+  cap naming the row), never the stream's length. A formula target
+  refuses a cross operator, since a model learns each group apart. Held
+  to Polars' `over`, `group_by` and joins, `join_asof`, SciPy's
+  `rankdata` and NumPy's `quantile` on one chunk, and to chunk
+  invariance and a save and load at every stamp.
+
+- **`rheon.spec.ddsketch`: quantiles and tail means of each column within a
+  relative accuracy** (PLAN 544). A spec of `type = "ddsketch"` takes its
+  columns as `targets`, the levels as `quantiles=[...]` and an `alpha`
+  (default `tanh(1/128)`, about 0.0078), and writes `q<level>_<column>` and
+  `es<level>_<column>` for each level and column, read before the row is
+  added, beside `weight_sum`, `settled_frac` and `withheld_reason`; no
+  `pred` or `coef`. Each column has its own DDSketch in each group (Masson,
+  Rim and Lee's sketch with the `ddsketch` package's logarithmic mapping,
+  sparse stores), every quantile within `alpha` of the exact one and every
+  tail mean (the partial-mass rule over the buckets) within `alpha` times
+  the tail's mean magnitude; its buckets and quantiles are the `ddsketch`
+  package's (3.0.1). `window_rows` or `window_size` (with `closed`) reads a
+  window's rows alone, a ring taking each row out of its bucket exactly; a
+  `half_life` or `lam` decays every bucket, each step rounded once, so a
+  bucket formed `k` rows ago is its exact decayed sum within a relative
+  `2k 2^-53` (refused beside a window). A level is null until
+  its rows identify it (`level_beyond_sample`), and 0.5 is refused by name.
+  The buckets are checked against `max_state_bytes` as the rows go in. The
+  state file gains the variant `DdSketch`, with no schema change (72 is
+  unreleased).
+
+- **`rheon.spec.tdigest`: quantiles of each column from a merging
+  t-digest** (PLAN 544). A spec of `type = "tdigest"` takes its columns as
+  `targets`, the levels as `quantiles=[...]` and a `compression` (default
+  100, at least 10 and no ceiling but `max_state_bytes`), and writes `q<level>_<column>` and
+  `es<level>_<column>` for each level and column, read before the row is
+  added, beside `weight_sum`, `settled_frac` and `withheld_reason`; no
+  `pred` or `coef`. `es<level>_<column>` is the expected shortfall, the
+  partial-mass mean of the digest's own centroids past the quantile (within
+  4.3% of the exact tail mean at compression 100), the lower
+  tail below a level of 0.5 and the upper above it (0.5 itself is refused
+  by name), in the values' own sign; the quantile is the value at risk. Each column has its own digest in
+  each group (Dunning and Ertl's merging digest on the `k_1` scale), its
+  rank error measured at most 2.0e-3 at compression 100 and 9.3e-4 at 200
+  against exact ranks, and read within those tolerances of the `tdigest`
+  package. A level is null until its rows identify it, `p (n + 1) >= 1` and
+  `(1 - p)(n + 1) >= 1` for Kish's effective size `n`, and
+  `withheld_reason` names the new `level_beyond_sample` there. The state is
+  bounded by the compression, refused at the call past `max_state_bytes`;
+  a `half_life`, `lam` or window is refused, naming the windowed DDSketch
+  (`ewm_quantile` with a `window_size`) as the quantile that forgets. The
+  state file gains the variant `TDigest`, with no schema change (72 is
+  unreleased).
+
+- **`ewm_moments`, moments to any order, and the window operator
+  `rp.ewm_moments`** (PLAN 554). A new spec kind,
+  `rheon.spec.ewm_moments(name, terms=...)`, names its terms: each maps its
+  legs, a column or a column lagged `k` back (`"x@1"`, `"x@5m"` on a
+  temporal clock), to a power, and reads it as a central, raw or
+  standardized moment or a cumulant (`kind`), plug-in or unbiased to order
+  4 (`bias`, each statistic's Polars default), with its standard error
+  under `se=True`, decayed or over `window_rows` or `window_size`. Skew,
+  kurtosis, cumulants, co-skewness, autocovariances and autocorrelations
+  are its terms, read before each row from one bounded state, merged a row
+  at a time by Pebay's update. Its fields are each term, `se_<term>` after
+  every term, `weight_sum`, `settled_frac` and `withheld_reason`. The window
+  operator `rp.ewm_moments(legs, half_life=..., kind=..., ...)` gives one
+  term a call as a column of `with_windows`, read after its row, each value
+  weighing the decayed time it is held over, as `rp.ewm_var`'s does; fed
+  those weights the spec gives the same bits. Held to scipy's `moment`,
+  `skew`, `kurtosis` and `kstat`, numpy's weighted averages and `cov`,
+  statsmodels' `acovf` and Polars' `rolling_skew` and `rolling_kurtosis`.
+  Schema 72 gains `ewm_moments`' state and a window run's state the
+  operator's, each absent from a file without them, so no file saved before
+  moves a byte. No output of another model moves.
+
+- **`spectral`, the power of each target at chosen periods** (task 491):
+  an exponentially weighted Fourier transform on the clock (a row a clock
+  unit without a clock column), read as scipy's `periodogram` with the
+  decay's amplitudes as the window: `scaling` `"density"` (the default) or
+  `"spectrum"`, the weighted mean removed under `detrend`. A direct
+  transform at the periods given, `O(F)` a row, no FFT; its `sin` and
+  `cos` from the `libm` crate, the same bits on every OS. A break empties
+  the transform; the state is `8 (4F + 3)` bytes a target, held to
+  `max_state_bytes`. `scaling="lomb_scargle"` reads the generalised
+  Lomb-Scargle power instead (the share of the weighted variance a
+  sinusoid explains, scipy's `lombscargle(normalize=True,
+  floating_mean=detrend)` with the amplitudes as weights), which needs no
+  even clock: two sums more, `8 (6F + 4)` bytes a target, its early rows
+  guarded by the fit's spread, not a count. `window_size` (with `closed`,
+  `snapshot_every`, `max_rows_between_snapshots` and `window_budget`)
+  gives the sliding-window transform of the rows inside it: the rows in
+  blocks, each block's sums at its own clock origin, a closed block turned
+  once to a reference origin and added to a running total, written afresh
+  when the reference moves; within 1e-12 of the direct sum over the
+  window's rows from a thousand to ten million rows, with the clock near 0
+  and near 2^40.
+- **`ar`, an autoregression for each target** (task 486): AR(p), or any
+  list of lags, by exponentially weighted least squares on lags the model
+  keeps itself, with the features as exogenous regressors and the constant
+  under `fit_intercept` (statsmodels' `trend="c"` or `"n"`). Each target is
+  its own series: a ring of its last `max(lags)` learned values and a fit of
+  its own, solved after every learned row. With no decay its coefficients are
+  `AutoReg`'s on the same rows, within 1e-9; under decay, weighted least
+  squares with the weights on the clock. A row of weight 0 or a null target
+  is not a lag (`AutoReg(missing="drop")`), a session change or a capped gap
+  empties the lags and keeps the fit, `embargo` is refused (a delay would
+  make the lags older for the rows predicted than for the rows learned), a
+  target predicts once its Gram is positive definite (no count of rows
+  guards the early fits; `min_weight` defaults to 0), `emit_se_coef` is
+  `ewridge`'s standard error of each target's fit, `select="aic"` or
+  `"bic"` chooses the order after every learned row with Kish's effective
+  count (`ar_select_order`'s choice with no decay), `window_size` cuts each
+  target's fit at a span of the clock under one `window_budget` for the
+  group (each target's fit a share), its definiteness checked on every row
+  under a window,
+  and the state, `8 max(lags)` plus at
+  most `8 (4k² + 17k + 64)` bytes a target, is held to `max_state_bytes`
+  when the spec is built. Spans: the half-life in rows or on the clock; the
+  lags count learned rows only, since a value `ℓ` rows back has no meaning
+  on a clock. New in the state at schema 72 (unreleased): the `Ar` variant,
+  with its frozen fixtures.
 - **Clock forms for the remaining counts of rows** (task 538, part 2), each
   beside its count and refused with it, each a number of the clock's units
   (rows without a clock) or a duration on a temporal clock, read off the
@@ -323,6 +717,25 @@ model that only the new build has is listed as an addition and passes.
   to `arch`'s path a median 0.9 of its expected size and at most 2.6 times
   it; at 100,000 rows the median gap 0.04 to 0.14 standard errors. GARCH(2,2)
   is left out: its two `β`s are not yet held to a tolerance.
+
+- **`pca`, principal components learned one row at a time** (task 505):
+  the top `n_components` directions of the decayed covariance of the
+  features, in state of `8 (2 + 3k + qk + q)` bytes for `k` features and
+  `q` kept directions (one more than written), checked against
+  `max_state_bytes` when the spec is built. Three methods: `"svd"`, the
+  incremental SVD (scikit-learn's `IncrementalPCA` update, a row at a time,
+  under decay and weights; exact while the data's rank is at most `q`),
+  `"ccipca"` and `"oja"` (a gain, `learning_rate`, default 4). Per
+  component its variance, its share, its loadings and the row's score, read
+  before the row; a component is withheld until the test of the equality of
+  its eigenvalue with a neighbor's passes at 1% at Kish's effective size,
+  with a new `withheld_reason`, `"not_separated"`: every model's
+  `withheld_reason` enum gains the category after the six before it, and
+  no value moves: the release comparison reads the new category as the
+  field's dtype moving. Moves: `*.withheld_reason`. Checked against
+  `IncrementalPCA` (7.0e-13 rad), `PCA` and `eigh` on the weighted rows
+  (1.4e-14 rad), and, for the stochastic two, their definitions and their
+  convergence to `PCA`. No window: none of the three can remove a row.
 - **`hawkes`, a self-exciting point process** (task 498): each target a
   node, a value above 0 on a row an event of that mark; exponential kernels
   at the given `kernel_decays`. Each row reports every node's
@@ -350,6 +763,52 @@ model that only the new build has is listed as an addition and passes.
   / half-life`, in place of `kernel_decays`), the intensity and `mu` in
   events per second. A row of weight 0 counts in no clock, is in no window
   and no `weight_sum`, and is still read (task 539).
+- **`realized`, realized volatility and the jump tests on it** (task
+  499): each target a series of returns; each row reports, from the returns
+  before it, the realized variance `rv`, the bipower and tripower
+  variations `bv` and `tv` (which leave jumps out), the tripower quarticity
+  `tq` and Barndorff-Nielsen and Shephard's adjusted ratio test `bns`, and
+  of its own return Lee and Mykland's statistic `lm` (the return over the
+  volatility of the returns before it, `lm_window = K` returns of its own or
+  the measures') and its flag `lm_jump` at confidence `lm_beta` (0.99). No
+  small-sample factor, as the papers: a window of `W` returns holds `W - 1`
+  products and `W - 2` triples. The count of returns `n` both tests read is
+  Kish's effective count of the returns' weights, decayed or in a window;
+  the quarticity's factor is their weight. One pass, a decay (the default form), a window of rows
+  (checked against `max_state_bytes` when the spec is built, refused naming
+  the largest that fits) or of the clock (`window_size`, `closed`; checked
+  as the rows go in, a warning past half of the cap and a refusal at it).
+  The sums are TwoSum-compensated pairs: a day of 23,400 returns keeps the
+  rounding of its terms, and a window takes a leaving jump back exactly.
+  State `8 + 144 m` bytes for `m` targets; a window `32` and `16 + 56 m` a
+  row; `lm_window` `16 (K - 2) + 32` a target. Against R's `highfrequency`
+  and `yuima` and Python's `hfvol` (test-only; R's through rpy2 in its own
+  `r-oracles` group and CI job, the `r_oracle` marker), with their
+  small-sample factors divided out: RV and BV to a few units in the last
+  place, TV and TQ to 64, the ratio test to the rounding of its difference,
+  `lm` to 8 ulps of `intradayJumpTest`'s (`dontIncludeLast = TRUE`), whose
+  flags at `alpha = 0.05` are the rows past the paper's critical value.
+- **`power_variation`, power variation and kernel-weighted autocovariance
+  sums** (task 555): each target a series of returns; each row reports,
+  from the returns before it, each named term (`<term>_<t>`) and the count
+  of returns `n_<t>`. A term is a multipower sum of consecutive absolute
+  returns at any powers, oldest first (`normalize` gives Barndorff-Nielsen
+  and Shephard's multipower variation, so `realized`'s `rv`, `bv` and `tq`
+  are terms, the first two to the bit, under a decay too), or a kernel sum `Σ r_j² + 2 Σ_h c_h
+  r_j r_{j-h}` up to a bandwidth `H` with the Bartlett, Parzen,
+  Tukey-Hanning or rectangular kernel at `c_h = k(h/(H + 1))`; `flat_top`
+  for the flat-top realized kernel's `k((h - 1)/H)`, `center` for the sum
+  about the mean (the HAC long-run variance times `n`). A `scale` of `K`
+  takes a term of the `K`-step returns, averaged over the `K` offsets, from
+  which two-scale realized variance is composed in Polars. No small-sample
+  factor. The forms are `realized`'s: one pass, a decay, a window of rows
+  or of the clock, each checked against `max_state_bytes`; a term is in a
+  window while every return in it is. State `8` bytes and, per target, `16`
+  a sum and `8` a return a term reaches back over. Against R's `yuima`
+  (`mpv`, any powers) and `highfrequency` (`rMPVar`, `rKernelCov`) to 9 ulps
+  and 2.2 ε of a kernel sum's scale, `sandwich`'s `kernHAC` to 1.2 ε,
+  Python's `arch` (its kernel long-run covariances) to 0.2 ε and `hfhd`
+  (`krvm`, `tsrc`) to 3 ulps, test-only.
 - **`kalman(covariance_form="square_root")`** (task 281 (3)): the filter
   holds its covariance as an upper-triangular factor, `P = C Cᵀ`, and
   updates the factor by Carlson's step, so a vague prior costs it no
@@ -462,12 +921,568 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`power_variation`'s normalized terms scale by the returns' weight, and
+  `n` is Kish's count under a window too** (Fable's W13 review, B1 and B2,
+  as `realized` was fixed). `normalize` multiplied a term of powers `p` by
+  `n^(Σp/2 − 1)` with `n` Kish's count, so the tripower quarticity over
+  the bipower variation squared was `W/V`, not 1, at a constant volatility
+  under unequal or decayed weights: bipower's statistic made of the terms,
+  `√n (1 − BV/RV)/√(ϑ max(1, TQ/BV²))`, had a standard deviation of 0.70
+  under a half-life of 100 rows, 0.5 at a weight of 0.25 (simulated, 2,000
+  streams a case). The factor is now the weight `W`, which is `n` at unit
+  weights without a decay, and `n` under a window is Kish's count of its
+  weights where it was the count of returns: the statistic's sd is 0.96 to
+  0.99 and its size at 2.326 0.009 to 0.014 in each case (2,000 and 20,000
+  streams), and the normalized quarticity is `realized`'s `tq` under a
+  decay too.
+  Terms whose powers sum to 2 (`[2]`, `[1, 1]`) do not move. Moves:
+  `power_variation.*`.
+- **`huber` and `quantile` under `standardize=True` take their scales
+  from every row** (review 2026-11-23, REG-18; the user's decision,
+  "Scales from every row"). The scales came from the moments of the rows
+  the fit's own Gram holds. Under `quantile` that Gram holds only the rows
+  inside the smoothing band, near the fit, so a 0/1 feature that is
+  constant on them had no variance there. It was dropped, and its
+  coefficient held at 0: `y = 2x₀ + 20x₁` with two outliers fit
+  `[16.67, 0.29, 0.0]`. Each target now keeps its features' moments over
+  every row it is learned on with a positive weight, decayed as the
+  model's own, and its scales are read from them, refreshed at each row
+  that moves its band. The case above fits as the unstandardized fit and
+  statsmodels' `QuantReg` do, within the band's half-width. A feature is
+  dropped only where it has no spread over those rows (and none in the
+  band). Under `huber` the scales move from the Huber-weighted rows' to
+  every row's, which moves its fit by the ridge's share. A state of schema
+  71 or earlier loads and starts the moments at its first row after the
+  load, reading the band's scales until they give one (rule 5's
+  twenty-ninth exception). Moves: `huber.*`, `quantile.*`.
+
+- **Weights too small to square in a double count as rows** (review
+  2026-11-23, REG-12). Kish's count `(Σw)² / Σw²` is the same at every
+  scale of the weights, but below about `1.5·10^-154` each `w²` was 0.
+  `sgd`'s and `pa`'s warm-up then never switched, `sgd`'s level never
+  warmed, `rls`'s Kish ratio (and with it `se_coef` and the error
+  inflation) was absent, and every accumulator's Kish size, which
+  standard errors divide by, was absent too. Each sum of squared weights
+  is now kept beside a power of two of its own, and a row's weight enters
+  it at that scale. While the weights square to doubles the exponent is 0
+  and every operation is the plain one, to the bit. A state writes no
+  exponent then, so its bytes are as before; one at such weights writes
+  `w2_scale` or `s2_scale` beside its sum, or an accumulator's `q_sum` as
+  `[q, s]`. Moves: `sgd.*`,
+  `pa.*`, `rls.*`, `ewridge.*`, `lasso.*`, `ew_cov.*`.
+
+- **Five edge cases of `rheon.corr` and `rheon.gram`** (review 2026-11-23,
+  MATH-6). `corr.mp_edge` and `corr.mp_density` refuse a count `n` or `m`
+  that is not finite; NaN passed the check and gave NaN edges.
+  `corr.absorption` and `corr.spectral` read a matrix's symmetric part:
+  the eigensolvers read the lower triangle alone, so the upper half of a
+  matrix whose halves differ went unread. `corr.from_blocks` names the
+  pair that fails its symmetry check where one side is NaN; it named
+  another pair that matched. `gram.subset` of a Gram with no targets gives
+  `cross_moments` the subset's width. `gram.solve_subsets` refuses a
+  position that is not a whole number, where `True` read as 1 and `0.5`
+  as 0.
+
+- **`ewridge` under `target_gaps="pairwise"` reads each target's errors at
+  its own rows** (review 2026-11-23, REG-13). Its slopes solve the Gram
+  of every row against the target's cross-moments over the rows it is
+  present on, so their variance is the noise over those rows' Kish size,
+  and its intercept is centred at those rows' column means. `se_coef`, the
+  error inflation and the row's leverage read the Gram's size and means
+  instead. A target present on a quarter of the rows had standard errors
+  half the size of least squares' on its rows (statsmodels' WLS on the
+  pairwise-complete rows); they now agree within the sampling gap between
+  the two Grams. `"own_rows"` does not move. Moves: `ewridge.*`.
+
+- **`rheon.gram.merge` takes nothing from a part with no weight on a
+  target** (review 2026-11-23, MATH-3). The merge weights each part's
+  target moments by its share of the target's weight, so a part with none
+  entered at a share of 0. A Gram built elsewhere may hold NaN for a target
+  it has no rows of, and `0 · NaN` made the pooled moments NaN, under
+  `within=True` too. A part's moments for a target it has no weight on are
+  now read as 0, and the merge with it is the other parts alone for that
+  target. The Grams `ModelBank.gram()` returns hold 0 there and merge as
+  before.
+
+- **`rheon.gram.coef_stats` counts an intercept off the fit in the
+  residuals** (review 2026-11-23, MATH-4). Its residual variance was the
+  residuals' variance about their own mean, so coefficients whose
+  intercept was not least squares' `ȳ − m'b` read as fitting better than
+  they do: `[100, 2]` on `y = 2x` gave `r2` 1 and `sigma2` 0. It is now
+  their mean square, with the intercept's error squared added, which is 0
+  to a rounding for the coefficients `rheon.gram.solve` returns.
+
+- **`huber` and `quantile` refuse a state whose refit span has no place on
+  the clock** (review 2026-11-23, REG-16). A refit over a span of the
+  clock keeps where the span began, and `sgd`'s load checked that a state
+  has that place exactly when its configuration has a span, but
+  `huber`'s and `quantile`'s did not. A damaged state without its place
+  loaded and never closed its span, holding rows until `max_state_bytes`
+  stopped them. It is now refused as damaged, as `sgd`'s is.
+
+- **`lasso` reads the size a decayed stream grows to with its first row at
+  no clock** (review 2026-11-23, LASSO-2). A descent that runs out of
+  sweeps is not counted in `solve_failures` while the Gram's rows are too
+  few for its features and more rows would cure it. Whether they would is
+  read from the Kish size the stream settles at under its decay, from the
+  product of the decays the Gram has taken. The first row has no clock
+  before it and decays by 1, so that product is `λ^{t−1}` after `t` rows,
+  where it was read as `λᵗ`. The settled size came out up to twice the
+  true one, so at 50 features a half-life of 30, which settles at 87 rows
+  against a bound of 115, was excused on its first rows. The decay per row
+  is now solved from the size and the product together. Moves: `lasso.*`.
+
+- **A positive definite system whose trace is past the largest double
+  solves** (review 2026-11-23, SOLVE-1). The factorization's jitters are
+  multiples of the mean diagonal, the trace over `k`. At `diag(1e308,
+  1e308)` the trace was infinite, the first rung's jitter `0 · ∞` NaN, and
+  every rung failed, so the fit was counted a failure. The first rung now
+  adds nothing whatever the base, and the base is the sum of each entry
+  over `k` where the trace is infinite. A finite trace keeps its bits.
+
+- **The weighted LARS path holds at penalty weights near the ends of the
+  doubles** (review 2026-11-23, MATH-8). The path with a penalty weight
+  per column runs on the correlations over `w_i w_j`, which were 0 at
+  weights of `1e200`, so every column read as collinear and every slope
+  stayed 0, and infinite at `1e-160`. The weights are now taken to a power
+  of two near 1 first, which moves no bit of the path and multiplies its
+  penalties back. Weights more than `2^256` (about `1.2e77`) apart, past
+  what those correlations can hold, are refused with a message that says
+  so.
+
+- **`sgd`'s and `pa`'s coefficient constraints project soundly at any
+  feature scales** (review 2026-11-23, REG-8 and REG-19). Under
+  `standardize=True` the projection onto `coef_min`, `coef_max` and
+  `coef_sum` takes steps of `1/s_i²` per unit of its multiplier, `s_i` each
+  feature's scale. At a spread near `1e-155` that step is infinite, and the
+  fit was NaN for good from the row the warm-up ended. Near `1e-154` the
+  sum of the steps was infinite and the point was left off the sum. At
+  scales `10^156` apart a breakpoint left the doubles and was dropped from
+  the search, and the point was off the sum by a third; at `10^85` apart
+  the steps cancelled and a coefficient read `-3.6·10^121`. Where a step is
+  not a normal double, a breakpoint of a finite bound is lost, or the point
+  is off the sum, the projection is now made again in the caller's units
+  by scale groups. It solves the coordinates within `2^53` of the smallest
+  scale with steps normalized to at most 1, holding the stiffer ones where
+  they are while the others can meet the sum, and then meets the sum from
+  itself. A projection that was sound keeps its bits. A coordinate whose
+  value in the standardized coordinates is not a double, such as
+  `coef_min = 1e-220` at a scale of `1e-110`, still rounds there.
+  Moves: `sgd.*`, `pa.*`.
+
+- **`lasso`'s warm start begins at 0 where the last fit is not a number in
+  the new scale** (review 2026-11-23, LASSO-3). Each solve starts from the
+  last one's coefficients times the features' new spreads. A coefficient
+  near `1e229`, fitted while a feature's spread was `1e-130` beside a
+  target near `1e99`, is finite, but times a spread widened to `1e99` it
+  is not: the descent started at `±inf` and the fit was counted a failure
+  and withheld. Such a coordinate now starts at 0, and the solve converges.
+  Moves: `lasso.*`.
+
+- **`ftrl`'s and `sgd`'s AdaGrad sums never pass the largest double**
+  (review 2026-11-23, REG-9). A row whose squared gradient would overflow
+  was skipped, but not one whose square fits while the sum it joins does
+  not: two gradients of `1.2·10^154` left the sum infinite. Under `ftrl`
+  the step from it made the coefficient NaN for good; under
+  `sgd(learning_rate="adagrad")` with an infinite `clip_gradient` the
+  slot's steps were 0 for good, and NaN after a gap past the decay's
+  underflow. Such a row is now skipped as the square's check skips one:
+  under `ftrl` by a bound on the largest sum, which also refuses a step
+  past the largest double at a small `alpha`, and under `sgd` slot by slot.
+  `ftrl` forms the largest gradient in the update's own order, so a row
+  whose gradient overflowed while the check's did not is refused too.
+  Rows of ordinary size move nothing. Moves: `ftrl.*`, `sgd.*`.
+
+- **`sgd`'s Huber refit on the row its scaler's warm-up completes is
+  projected with the scaler's means** (review 2026-11-23, REG-6). Under
+  `standardize=True` and a constraint, a refit projects its fit in the
+  metric of the standardized coordinates, and the intercept takes
+  `Σ m_i (β_i − β'_i)` of the slopes' move. The map of means and scales it
+  reads is formed only on a row that starts in the caller's units, so on
+  the switching row it was still `m = 0`, `s = 1`: the intercept kept the
+  unprojected value (off by 1.46 on a 60-row test stream). It is now the
+  scaler's on that row. Moves: `sgd.*`.
+
+- **`ewridge`'s residual variance stays finite where a weighted square of
+  a residual is past the largest double** (review 2026-11-23, REG-10). At
+  a weight of `1e100` and a residual of `2·10^104` the square is in range
+  but `w·r·r` overflowed, so `σ²` was infinite, and at the next gap past
+  the decay's underflow `0·∞` made it NaN for good, with `sigma2`,
+  `se_coef` and `pred_se`. Such a mean is now formed as the mean of shares,
+  and a square past the largest double ages `σ²`'s weight as a row without
+  a prediction does. A finite mean keeps its bits. Moves: `ewridge.*`.
+
+- **`holt` keeps a finite level and trend across a clock step too small
+  for its slope** (review 2026-11-23, REG-4). A step was read as clock
+  wherever its reciprocal is finite, so at `y = 0, 10` a step of `1e-308`
+  apart measured a slope of `5·10^308`, past the largest double. The trend
+  was infinite, and the level NaN for good from the next row. Such a step
+  is now read as one of no clock, as a step whose reciprocal is infinite
+  already was: the level moves and the trend holds. A trend or a level
+  whose weighted mean is in range while `w·slope` or `held·pred` is not
+  (a step of `1e-200`, a rise of `1e50`, a weight of `1e100`) is formed as
+  the mean of shares. A finite trend and level keep their bits.
+  Moves: `holt.*`.
+
+- **`holt`'s line fit keeps its slope at weights near the ends of the
+  doubles** (review 2026-11-23, REG-5). The spread of the ages took the
+  term `S0·w·ā²/S0'` in that order, so `S0·w` underflowed to 0 at weights
+  near `2^-512` and overflowed near `2^512` beside a long clock step. The
+  slope's gain was then lost: a straight line at every weight `1e-200`
+  forecast 41% short. Where `S0·w·ā²` is not a normal double the term is
+  now formed from `S0/S0'` first; a term formed in range keeps its bits.
+  Only streams at such weights move. Moves: `holt.*`.
+
+- **A coordinate descent that runs to infinities is not converged**
+  (review 2026-11-23, LASSO-1). `lasso`'s and the Gram path's descent end
+  when a sweep's largest move is under the tolerance. On a correlation
+  matrix that is not positive semidefinite, which a window's subtraction
+  can leave, the moves grow until the coefficients are `±inf`. There
+  `|inf − inf|` is NaN, which `f64::max` drops, so the sweep read as one
+  that moved nothing and the fit counted as converged. A descent that
+  settles now converges only at finite coefficients; one that does not is
+  counted in `solve_failures`, and its prediction is withheld as before.
+
+- **A gap past the decay's underflow while a refit buffer is open forgets
+  the rows before it, and the state saves and loads** (review 2026-11-23,
+  REG-1). At a half-life `h`, a gap of `1075 h` or more decays by exactly
+  0. Under `huber`, `quantile` or `sgd(loss="huber")` with a refit still
+  filling and the MAD scale, a row whose target was null across such a gap
+  took `frexp(0)` in the held median: a debug build panicked, and a release
+  build read `2^-1087` for the 0, so the rows before the gap kept their
+  weight in the scale. A row learned across the gap stored its factor of 0
+  in the buffer, and the load refused it as damaged. The held median now
+  lets every row go on a run of decays of 0, as on one decay of 0, and a
+  buffer's factors may be 0. Only streams with such a gap move.
+  Moves: `huber.*`, `quantile.*`, `sgd.*`.
+
+- **A `kswin` detector's state holding a value that is not finite is
+  refused on load, and a value that is not finite is no row for it**
+  (review 2026-11-23, DRIFT-4). `KSWIN` sorts each sample with NaN at an
+  end, where its scan reads the gap between the two samples' counts, so a
+  damaged file whose ring held a NaN loaded and read a wrong statistic on
+  every row the NaN stayed in the ring. The bank feeds it only finite
+  residuals, so no output moves.
+- **A pooled audit whose counters pass `distinct_cap` drops the counters
+  below the cut** (review 2026-11-23, AUDIT-1). Merging two columns' counts
+  past the cap takes the `(cap + 1)`-th largest count from every counter;
+  a counter below it was taken below zero, which wrapped to nearly `2^64`
+  in a release build (a debug build panicked). Two groups pooled under a
+  cap of 2, counts 10, 8, 6 and 2, read a `top_count` of `2^63 - 1` and an
+  `equal_by_chance` of `5e35`, and the merged state no longer loaded. That
+  counter now goes, as Misra-Gries' merge drops each one at the cut.
+- **An `adwin` detector takes its window's sum and spread again from the
+  buckets left when it drops one** (review 2026-11-23, DRIFT-2). It took
+  the dropped bucket's share out of them, as river does, and that
+  subtraction cancels when the bucket held most of the window's spread:
+  two outliers of `1e20` and `3.3e19` leaving a `max_width` of 25 left a
+  window of zeros with a sum of squared deviations of `1.2e24`, whose
+  bound no later shift could pass, and other values left it below 0, where
+  the bound is NaN and nothing is cut again. The flags under the default
+  `restart` are river's as before, since a row's first cut flags it and
+  empties the window; under `restart=False`, or once `max_width` drops a
+  bucket, a flag can come where it did not.
+- **A `kswin` ring or a `hawkes` window too large for its bytes to be
+  counted is refused** (review 2026-11-23, HAWKES-1). Their bytes were
+  multiplied out in a `u64` that wrapped: `window_size = 2^61` read 48
+  bytes and passed `max_state_bytes`, then asked for the ring at the first
+  row; `stat_size = 2^63` doubled to 0 and passed the check that the ring
+  holds two samples; and `hawkes`' `window_events = 2^59` read 72 bytes. A
+  debug build panicked on each. The bytes now stop at the largest `u64`,
+  which no cap takes.
+- **Every drift detector in a loaded state is held to a shape its rows run
+  on** (review 2026-11-23, DRIFT-5). Only `adwin` and `kswin` were checked,
+  so a damaged file loaded an `eddm` whose last error came after its last
+  row, where the next distance wrapped to `1.8e19` (a debug build
+  panicked), and `ddm`, `page_hinkley` and `cusum` numbers out of their
+  range or not finite. Each kind is checked against the bounds a spec
+  takes and the invariants its rows keep. `adwin`'s check also refuses an
+  empty top level, a window wider than `max_width`, a `min_window_length`
+  of 0, and sums that are not finite or a spread below 0. The review's
+  endless loop on an empty top level was gone before this change, which
+  bounded that loop; the window stayed past its cap instead.
+- **A `glm` refuses `emit_specification` and `emit_tails`, and an
+  `expectile` at a level other than 0.5 refuses `emit_calibration` and
+  `emit_breaks`** (review 2026-11-23, DIAG-11). Each test's null fails on
+  such a fit by construction. A `glm`'s residuals have its family's
+  variance and shape: on a stream a Poisson fit fits exactly,
+  Breusch-Pagan and Jarque-Bera rejected on every row and RESET on a
+  quarter. An expectile off the mean has residuals whose mean is not 0: at
+  0.9 the calibration's Wald and the CUSUM rejected on every row. Both
+  models are new in this release, so no released spec is refused.
+- **`emit_tails` reads null where the doubles cannot hold its moments, and
+  a residual whose fourth power overflows no longer breaks the saved state**
+  (review 2026-11-23, DIAG-4). After a gap of about 538 half-lives `Σω²`
+  underflowed to 0 while `W` did not, and `jarque_bera` read infinite;
+  residuals near `1e-90` underflowed `m_2²` and `m_4`, and `kurtosis` read
+  NaN; and a residual past about `1.2e77`, inside the input bound, made
+  `m_4` infinite, after which the saved state no longer loaded. Each of
+  the three reads null there, and such a residual only ages the sums. No
+  output in the doubles' normal range moves.
+- **`rp.eval.window_metrics` windows an `Int64` or `Duration` clock without
+  wrapping** (review 2026-11-23, PY-1). An `Int64` clock near its least
+  value, windowed by 10, had its window start wrap to near its greatest;
+  a `Duration("ms")` or `Duration("us")` clock past 292 years was read
+  through its nanoseconds, which wrapped, and a clock of `1e13` ms windowed
+  by a second started at -267.7 years. The window's edge is now the clock
+  less its floor remainder, in the clock's own units where `every` is a
+  whole number of them, and a window that would start before the least
+  value the clock's type holds is refused by name.
+- **`micro`'s and the conformal band's mean weight no longer cancel**
+  (review 2026-11-23, CLUST-3; the user, 2026-11-23: "Exception 30, full
+  fix"). After a row of weight `1e16`, a gap of 60 half-lives and a row of
+  weight 1, the Welford step `1e16 + (1 − 1e16) / 1` read 0, and a `micro`
+  summary scaled by it admitted a point `1.4e6` away at `eps = 1`; at a
+  share of `2^-30` it read `8e-8` off, and the band's read 0 after total
+  forgetting. Each is now taken at the old mean's and the row's shares,
+  `(R/R')·w̄ + (1/R')·w`, so neither term cancels, and a `micro` mean at 0
+  or below reads a row of weight 1. A constant weight is its own mean to
+  the bit; uneven weights move the mean weight in its last bits, and a
+  saved state goes on by the new step (rule 5's thirtieth exception).
+  Moves: `micro.*`, `*.lo_*`, `*.hi_*`, `*.coverage_*`.
+- **`calibration_wald` under a horizon is read about the predictions' own
+  mean** (review 2026-11-23, DIAG-2). Its Newey-West covariance was moved
+  from the frame its sums are kept in to the predictions' own units before
+  it was solved, which multiplied its condition by the square of the
+  predictions' level over their spread: a target at `1e6` read the test
+  `3.9e-5` off statsmodels', and one at `1e8` read 0.722 where the test is
+  0.593 (or null, where the covariance did not factorize). A test of every
+  coefficient, as the calibration's is, now reads the distance in that
+  frame, where it is statsmodels' HAC kernel to `1e-6` at both levels.
+  Elsewhere it moves the test by rounding. Moves: `*.calibration_wald_*`.
+- **`emit_specification` keeps its saved state loadable after a row whose
+  powers overflow** (review 2026-11-23, DIAG-3, in part). Inside the input
+  bound, a prediction past about `1e51` from the first one made RESET's
+  sums of `q⁶` infinite, and a residual past about `1e77` Breusch-Pagan's
+  sums of `e⁴`, after which the saved state no longer loaded. Such a row
+  now only ages the sums. RESET read about a first prediction far from
+  where the predictions settle (`1e4` to `1e6` away) still reads null:
+  its powers' moments lose the curvature in rounding there, which a
+  change of origin, not of the solve, would fix.
+- **`page_hinkley` and `cusum` read a residual whose ratio to its scale
+  overflows as a drift, and keep reading past an overflow** (review
+  2026-11-23, DRIFT-6). A finite residual over a scale near `1e-250` read
+  infinite and was dropped as no row; on a step of 0 such a ratio made
+  CUSUM's sums `0 · ∞ = NaN`, which `max(0, ·)` read as 0, wiping both; and
+  a Page-Hinkley excess that overflowed below left its statistic NaN for
+  good. The ratio is now the largest double, which flags; a step of 0 adds
+  nothing to CUSUM; and Page-Hinkley starts its sums again at such a low,
+  where its statistic is 0. No finite path moves.
+- **`drift_kind="ddm"` refuses a `drift_threshold` of 1 or under**
+  (review 2026-11-23, DRIFT-7). DDM flags where `p + s` passes `p_min +
+  drift_threshold · s_min`, and the row that sets the minimum has `p + s =
+  p_min + s_min`, so at 1 or under a stream whose error rate never moved
+  flagged on the first row past each warm start: 10 flags in 310 rows at
+  0.5. `drift_kind` is new in this release, so no released spec is
+  refused.
+- **A standardizing `kalman` holds its history up after a gap no further
+  than the weight it had** (review 2026-11-23, REG-15). More than a
+  half-life after a target was last learned, the feature moments read
+  their history at no less than the row's own weight, and so a history
+  lighter than the row was lifted past what it held: a row of weight
+  `1e-6`, then a row of weight 1 a little past a half-life later, read the
+  light row at half the share. The history is now read at `max(lam·W,
+  min(W, w))`, `W` its weight before the gap, as `sgd`'s scaler reads it,
+  and the same however rows of weight 0 split the gap. Moves:
+  `kalman.pred_*`, `kalman.coef`.
+- **A `conformal` level within `2^-53` of 1 starts its band** (review
+  2026-11-23, DIAG-6). `1 − α/2` rounds to 1 there, and `Φ⁻¹(1)` made the
+  band's starting multiplier and its gain NaN for good. The upper quantile
+  is read from the lower tail where that rounding happens, and every other
+  level keeps its bits. A weight that is not a finite number above 0 only
+  ages the band, as a weight of 0 does, for a caller of the Rust type.
+- **`emit_metrics` and `emit_influence` keep a saved state loadable after a
+  prediction far past its target** (review 2026-11-23, DIAG-12). No bound
+  holds a prediction, and one near `1e160` squared past the largest double
+  in the metrics' moments and the influence's spread, after which `r2` read
+  null and the saved state no longer loaded. Such a row is aged and not
+  scored. And an error inflation past `1.34e154`, whose square overflowed,
+  read the influence infinite; it is read as `e·sqrt(1 − 1/infl²)` there.
+- **An audit's `unit_root_t` reads a lagged spread near the smallest or
+  the largest doubles** (review 2026-11-23, AUDIT-3, in part). On `[0,
+  1e-155, 0, 1]` the Dickey-Fuller standard error's denominator underflowed
+  and the ratio overflowed, `se` read infinite and the statistic `-0.0`
+  where it is `-0.577`. Where either leaves the normal doubles the ratio is
+  taken in its square roots; elsewhere it keeps its bits. The moments'
+  scale for values near `1e-81`, which still corrupts `kurtosis` there, is
+  not changed in this release.
+- **`drift_kind="adwin"` takes a `range`** (review 2026-11-23, DRIFT-1;
+  the user, 2026-11-23: "Allow both by parameter"). ADWIN's bound has the
+  values' range `R` in its second term, which river, and so this detector,
+  writes as 1, so its flags depend on the residuals' unit: a threefold rise
+  in their spread was found in 15 rows at a spread of 1, in 655 at 0.01
+  and not in 8,000 at 0.001. `drift_options={"range": ...}` takes a number,
+  the residuals' range in the target's units (1, river's, by default, its
+  flags river's to the bit), or `"window"`, the range the window holds
+  now, under which the flags are the same in any unit, to the bit at a
+  power of two. Each bucket then keeps its least and greatest value, two
+  numbers more. No default moves.
+- **`emit_feature_health` reads an `expectile` window as its memory, and
+  `garch` is not told to set a finite `half_life`** (review 2026-11-23,
+  SPEC-8). Beside `expectile(window_size=...)`, or `window_rows=...` with
+  no clock column, feature health was refused as "half_life is inf, with
+  no window_size", and the diagnostics read the infinite half-life, not the
+  window's; `window_rows` on a clock now says its rows are no span of the
+  clock. And `min_settled_frac` on `garch`, which refuses a finite
+  `half_life`, advised setting one; it now says `garch` does not decay.
+- **`kswin`'s critical count is found in about `r ln r` operations**
+  (review 2026-11-23, DRIFT-8). The search for the least `h` whose exact
+  tail is at most `alpha` built the binomial ratios again for each `h`,
+  `r^{3/2}` operations and a vector of `r + 1` numbers a step, about 219 MB
+  allocated in all at `stat_size = 50,000`. They are built once; the
+  numbers and their order are the same, so `h*` is the same to the bit.
+- **`rp.eval`'s tests and windows refuse arguments of the wrong type by
+  name** (review 2026-11-23, PY-6). `diebold_mariano` and `clark_west`
+  scored with a `min_samples` of -5, `True` or `None`, and raised Polars'
+  or Python's own error on `"30"` or 2.5; a `half_life` of `True` read as
+  one row; `window_metrics(every=True)` read one clock unit and
+  `every=None` raised Python's own comparison error; and
+  `seqtest(targets="ret")` read the columns `r`, `e` and `t`. Each is now a
+  `WrongTypeError` or `ValueError` naming the argument.
+- **`rp.eval.seqtest` checks `min_weight`, and the scores refuse `binary`
+  given as a string** (review 2026-11-23, PY-15). `min_weight=nan` nulled
+  every output and -5 or `True` were taken; `binary="false"`, a non-empty
+  string, read as true and scored a regression as a classifier. Each is
+  refused by name.
+- **`emit_breaks` studentizes no row by a spread a step has forgotten, and
+  keeps its saved state loadable** (review 2026-11-23, DIAG-8). A row after
+  a step whose decay is 0 (a gap past about 1,075 half-lives) was
+  studentized by the rows the step had forgotten; it now joins the sums as
+  a fresh stream's first row does. A studentized residual whose fourth
+  power overflows (a residual near `1e100` against a spread near `1e-80`),
+  and a row whose twin-fit products overflow (a weight and a feature near
+  the input bound), only age the sums, where they left them infinite.
+- **A loaded state's conformal bands are held to a shape their rows run
+  on** (review 2026-11-23, DIAG-10). A damaged file whose band held a
+  negative multiplier, a coverage past 1 or a weight that is not a number
+  loaded and ran; it is refused as damaged, as the other diagnostics' are.
+- **Two audits merge only under the same clock settings** (review
+  2026-11-23, AUDIT-2). A merge of an audit with a clock column and one
+  without, or under two `gap_cap`s, was taken, and the merged clock's gaps
+  read as neither stream's; it is refused as other settings that differ
+  are.
+- **Under a horizon, `cusum`, `break_wald` and a quantile fit's
+  `calibration_wald` read a statistic where their long-run variance read
+  none** (review 2026-11-23, DIAG-1; the user, 2026-11-23). The variance
+  pairs the null's lag 0 with the residuals' Bartlett-weighted lag
+  products, which shocks alternating in sign can cancel to 0 or below, and
+  there each read null. Where that happens it now takes the terms' own lag
+  0, Newey and West's estimate, statsmodels' `S_hac_simple` at the same
+  lags; everywhere else every number is as it was. Size and power on
+  simulated streams are the old form's. A saved state starts the new sum
+  at the null's value and goes on (rule 5's thirty-first exception).
+  Moves: `*.cusum_*`, `*.break_wald_*`, `*.calibration_wald_*`.
+- **A window looking ahead whose far edge is the input's last row is whole
+  at the end of the input** (PLAN 565). Under `closed="right"` or `"both"`,
+  `rp.ewm_sum`, `rp.ewm_mean`, `rp.ewm_rate` and `rp.ewm_quantile` with
+  `reverse=True` gave null for a row whose window's far edge fell on its
+  group's last row, where the same window before a gap or a reset was
+  whole. Nothing later can join it, so it now gives its value. A window
+  reaching past the last row stays null. A formula target of a spec learns
+  those rows' targets, which it did not. Only those windows' values move.
+
+- **`pca` under `"oja"` writes a component only where its rate has found
+  it** (Fable's W13 review, C1). The eigengap test is of two eigenvalue
+  estimates; `oja`'s variances are running means along directions that
+  still move, and its rate `c/t`, `c = learning_rate / tr` per unit of
+  variance, turns a direction toward an eigenvector faster than its
+  sampling error shrinks only where `c · gap > 1/2`. Below that the test read
+  the directions' convergence error as a gap: at 20 features with
+  variances 4, 4 and then 1, one component and the default gain (0.46),
+  the component the tie leaves unidentified was written on every row of
+  the second half of 20,000 on 3 of 8 seeds (58% on one, reproduced in
+  Rust). `oja` now also needs `learning_rate · gap / tr > 1/2` against each
+  neighbor and is withheld otherwise, as a component its rows have not
+  told apart; a tie is now
+  tested under all three methods, and an isotropic stream too. `svd` and
+  `ccipca` do not move. Moves: `pca.pc*`, `pca.withheld_reason`.
+
+- **`dcc`'s start judges `Q̄` by its conditioning and waits on its evidence
+  with no count of tries** (Fable's W13 review, A1 to A3). The "`Q̄`
+  positive definite" gate was a Cholesky pivot `> 0`, so a `Q̄` short of
+  rank (fewer rows than series, two series the same) was passed or refused
+  by the rounding of an exact 0: at `start_rows = 1` four series once
+  started on two rows, and eight never on the 1, 2 and 4 rows they were
+  tried at. It now refuses a condition number past `1 / (k ε)` (measured:
+  at least 4.2 times that short of rank, at most `5·10⁻⁴` of it at `k`
+  rows). A try that does not start keeps its buffer, which grows to what
+  `max_state_bytes` holds and then keeps the latest rows, each try on rows
+  the last did not see; it was dropped after two doublings, so at
+  `start_rows = 100` a stream identified at 1,000 rows was never looked at
+  past 400. A fit short of its optimum is withheld rather than stepped from
+  once the doublings ran out, and the wait after it is `below_warm_rows`
+  rather than the earlier try's `not_identified`. Where a start fires
+  earlier, later or not at all moves every output of the rows around it.
+  Moves: `dcc.corr_*`, `dcc.loglik`, `dcc.coef`, `dcc.withheld_reason`.
+
+- **`garch`'s start waits on its evidence with no count of tries, and
+  steps only from a fit at its optimum** (Fable's W13 review, A2, which
+  found `dcc`'s start's count of tries and named `garch`'s as the same).
+  A start that did not start waited for twice its rows and fitted again,
+  at most twice, then let every row go and buffered afresh, or, for a fit
+  short of its optimum, stepped from it; so a FIGARCH whose cap could not
+  hold twice its start stepped at once from whatever its first fit gave.
+  Now a try that does not start keeps its rows, and the next comes once as
+  many new rows have come as it held: twice its rows while
+  `max_state_bytes` holds them (each target's share of it), then the
+  latest rows the share holds, the oldest leaving as each new one comes.
+  No count of tries ends the wait, nothing is cleared, and a fit short of
+  its optimum is never stepped from: the wait after it is
+  `below_warm_rows`, after one its rows did not identify
+  `not_identified`, the last try's reason alone. A fit is at its optimum
+  when the gain its Newton step predicts inside the process's set is at
+  most `10⁻⁶` nats, the step projected onto the set (a t's shape held to
+  its range beside it) in the curvature's metric: an optimum on a face of
+  the set, a GJR whose `α` is 0 or a t whose `ν` reaches its ceiling, is
+  one, where before a fit on any bound was not, so without the count it
+  would never have started. On the tests' series every form starts at its
+  first or second try. Where a start fires earlier, later or not at all
+  moves every output of the rows around it. Moves: `garch.*`.
+
+- **`realized`'s `bns` is a standard normal without jumps under a decay
+  and under weights** (Fable's W13 review, B1 and B2). It read one count
+  `n`, Kish's `(Σw)²/Σw²`, both in front (`√n`) and inside the tripower
+  quarticity (`TQ = n μ⁻³ Σ`). The two stand for different things once the
+  weights are unequal: `1 - BV/RV` has the variance `ϑ Σw²/(Σw)² = ϑ/n`, so
+  `√n` is Kish's, but `TQ/BV²` is 1 at a constant volatility only with
+  `TQ`'s factor the weight `W = Σw`. With Kish's count there `max(1,
+  TQ/BV²)` read `W/V`, about `1 + λ` under any decay, and `bns` was
+  N(0, 1/(1 + λ)): a simulated null under a half-life of 100 rows gave an
+  sd of 0.70 and a size of 0.0009 at a nominal 0.01; at a constant weight
+  of 0.25 the sd was 0.5. `TQ` is now `W μ⁻³ Σ`, and under a window `n` is
+  Kish's count of its weights too (it was the count of returns whatever
+  their weights): the simulated null gives an sd within 0.035 of 1 and a
+  size between 0.008 and 0.016 over 20,000 streams under the decay, a
+  weight of 0.25 and a window of weights from 0.1 to 1.9, and `bns` no
+  longer moves with the weights' scale. Without a decay at unit weights `W`
+  and `n` are both the count of returns, so the papers' forms, and the
+  R `highfrequency` and `yuima` oracles, are unmoved. Moves: `realized.tq_*`,
+  `realized.bns_*`, `realized.lm_jump_*`.
+
 - **`ModelBank.write_json` of a `bocpd` with its hazard on the clock**
   (PLAN 547). Under a clock hazard the empty run's log joint is `-inf`
   after every row, which JSON has no number for: the export wrote it as
   null, failed its own read-back and raised, for a duration `hazard` too.
   It is now written `"-inf"`, as every other non-finite value in a state's
   JSON is. The state file's bytes are unchanged.
+- **`predict` scores a row after a break as `fit_predict` reads it**
+  (PLAN 491). A row after a gap past `gap_cap`, or in a new session, breaks
+  the rows behind it: a learning stream clears what is lagged by rows
+  before it reads the row. `predict` scored such a row with the lags it
+  had, so `ar` predicted from lags `fit_predict` had dropped, and
+  `spectral`'s power read across the break. Such a row is now scored with
+  a copy whose lags are cleared, as a row in a new session is scored with
+  a blended copy.
+
+- **A window's refusal names the row and the bytes** (PLAN 491). A chunk
+  that would take a hard window past a refusing `window_budget` is refused
+  before any row is learned, as it was; the message now says which of the
+  chunk's rows would take it there, counted from 0, and the MiB the window
+  would then hold, and that the bank learned none of the chunk.
+
+- **`output_index` tells `spectral`'s periods apart** (PLAN 491). Each
+  `power_<t>_p<k>` field's `component` is its period's place in
+  `periods`; the fields of one target matched apart from their names.
 
 - **`garch` gives the same numbers on every platform** (W10's CI on
   f1aa0fe0, run 44991677911: the `garch_egarch` and `garch_skewt` goldens
@@ -546,8 +1561,10 @@ model that only the new build has is listed as an addition and passes.
   start's fit costs 1.13 to 1.20 times what it did under the normal, and
   1.9 to 2.6 times with a t, which fits the constant-variance null's shape
   too (2,000 rows: 2.2 ms for `garch`, 70 ms with a t, 144 with a skewed
-  t, once a start, on arm64); a row after the start costs what it did.
-  Moves: `garch.*`.
+  t, once a start, on arm64); a row after the start costs what it did. The
+  new reason is a new category of every model's `withheld_reason` Enum,
+  every value of the other models as it was. Moves: `garch.*`,
+  `*.withheld_reason`.
 
 - **`glm`'s refit gives the same fit on every platform** (W9's CI on
   1819e678: the committed `glm_refit_done` state fixture failed on Windows
@@ -874,6 +1891,111 @@ model that only the new build has is listed as an addition and passes.
   chunks, `2.5` failed only when the plan ran, and `"a"` raised Python's own
   comparison error. Each is now a `WrongTypeError` naming `chunk_size`.
 
+- **A `glm`'s `hit_rate` is its family's** (review 2026-11-23, GLM-METRICS).
+  `emit_metrics` and `rp.eval` read every `glm` by the sign test about
+  zero. A binomial `glm`'s mean is a probability against a 0/1 label, so
+  every row with label 0 was a miss: its `hit_rate` is now the 0.5
+  threshold's, as a logistic `sgd`'s, and `rp.eval` scores it as a
+  classifier (`log_loss`, `brier_skill`, `accuracy`). A Poisson, Gamma or
+  Tweedie mean is positive against a target never negative, so the sign
+  test agreed on every row and read 1.0 whatever the fit: its `hit_rate` is
+  null, as a Poisson `sgd`'s is. Moves: `glm.hit_rate_*`.
+- **`rp.stream.merge(...).head(n)` reads no row past the slice** (review
+  2026-11-23, MERGE-1). When the slice's last row ended a stream's chunk,
+  the merge read that stream's next chunk before it stopped, so a clock
+  past the slice that is not a number, or a step back there, refused a
+  slice that never reaches it.
+- **A number clock whose capped-off time passes the largest double is
+  refused by row** (review 2026-11-23, CLOCK-1). Two finite steps,
+  `-1e308` to 0 to `1e308` under a `gap_cap` of 10, took about `2e308` out
+  of the decayed clock, and its removed time, infinite, made every later
+  stamp less an older one `inf - inf`: every span, clock window and
+  `coef_every` compared equal to any length from then on. The bank
+  refuses the row whose step could take the removed time there, as it
+  refuses a single step past the largest double; only a clock whose
+  values span more than a double holds reaches it.
+- **A row of weight 0 under `embargo` or `label_clock` releases nothing**
+  (review 2026-11-23, STRM-1; the user, 2026-11-23: "Score as predict").
+  Such a row released the held rows whose wait or label time its clock had
+  seen out into the live models before it was scored. A row of weight 0
+  counts in no step-back rule, so a later row of positive weight at an
+  earlier clock was then scored by a model that had learned a label the
+  embargo still held there, and a stream that ended on such a row saved a
+  state that had learned what the stream without it still held. It is now
+  scored as `predict` scores it, from the rows learned before it, over the
+  held rows' clock and its own step, and moves no live state: the cost is
+  that it does not see a label that matured at its own clock. The rows of
+  positive weight move only after a row of weight 0 that stepped past
+  them. Moves: `*.pred_*`, `*.resid_*`, `*.sigma_*`, `*.zscore_*`,
+  `*.lo_*`, `*.hi_*`, `*.coverage_*`, `*.ic_*`, `*.r2_*`, `*.hit_rate_*`,
+  `*.weight_sum`, `*.settled_frac`, `*.withheld_reason`, `*.coef`,
+  `*.support_coef`, `*.learned_clock`.
+- **A row of weight 0 that starts a fresh session reads a fresh stream's
+  diagnostics** (review 2026-11-23, STRM-2). Under `session_gap = "reset"`
+  (or a session that closes its group) such a row was scored by a fresh
+  model beside the closed session's `settled_frac`, `sigma`, metrics,
+  conformal band, checks and `learned_clock`, so its `min_settled_frac`
+  gate opened on a model that had seen nothing. It now reads what `predict`
+  reads for it, a fresh stream's, and `predict`'s `learned_clock` on such a
+  row is null too. No row of positive weight moves.
+- **`summary()["weight_sum_settled"]` leaves out the rows of weight 0**
+  (review 2026-11-23, STRM-3). The ceiling's first-row term took the
+  rows' mean weight over every row processed, the rows of weight 0
+  among them: with one after each row it read half the weight, 2% off
+  after 20 rows at a half-life of 30. The mean is over the rows that
+  carry weight.
+- **`ew_class` holds `min_weight` to its labelled rows** (review
+  2026-11-23, STRM-4). Its weight counted every row with its features, a
+  row whose label is null among them, so four unlabelled rows opened the
+  gate and the first labelled row's class was predicted with certainty.
+  `min_weight` is checked against the label's own weight, the classes'
+  weights summed (inside the window under one), as a regression checks
+  each target's own; `weight_sum` stays the shared weight. And
+  `learned_clock` moves only on a row with a target to learn: a row whose
+  every target is null is only predicted, as the summary counts it.
+  Moves: `ew_class.p_*`, `ew_class.class`, `ew_class.withheld_reason`,
+  `*.learned_clock`.
+- **`rheon.gram.solve_subsets` and the LARS paths pool a part with no
+  weight for a target as nothing** (review 2026-11-23, MATH-7 and REG-14).
+  A part whose target is null (`rheon.gram.from_row` writes its moments
+  NaN at weight 0) was multiplied in at 0, and `0 · NaN` made every merged
+  moment of the target, and every fit on it, NaN. The co-moments' spread
+  weight `W_a W_b / W²` overflowed past `1.3e154` and underflowed below
+  `1.5e-154`, so parts that light or heavy merged to NaN: it, the blends
+  and each target's `Σ w²` are read in shares or over a power of two
+  where the plain form leaves the doubles, and keep their bits where it
+  does not. A weighted part with no Kish size added nothing to `Σ w²`, so
+  beside 10 rows a part of weight 1000 made a size of 102,010: the merged
+  size is now unknown (NaN), as it is where no part has one.
+- **A refit over a span of the clock holds its ageing rows to
+  `max_state_bytes`** (review 2026-11-23, REG-2). Under
+  `huber_refit_span` or `quantile_refit_span` (`huber`, `quantile`,
+  `sgd(loss="huber")`) a row whose target is null adds a run of 32 bytes
+  to the open buffer wherever its decay is not the last run's, and no cap
+  saw it: on an irregular clock a target that went quiet grew its buffer
+  a run a row, with no warning or refusal. It is held to the cap as a
+  learned row is.
+- **`ModelBank.skip_learned` and `--skip-learned` drop a group a monotone
+  close closed, and keep an infinite clock** (review 2026-11-23, BANK-1
+  and BANK-2). Under `group_close = "monotone"` a closed group is gone from
+  the bank's last clocks, so its rows were kept as a group the bank had not
+  seen, and `fit_predict` refused them as below the largest group read; a
+  group below that key is now dropped, in key order. A clock of `-inf`
+  read as before the last clock and its row was dropped, where a NaN or a
+  null is kept for the bank to refuse by row; so is `-inf`.
+- The refit budget's notice names the setting each model sizes its refit
+  by (review 2026-11-23, BANK-5): `refit_rows` for `glm` and `expectile`,
+  which were told of `huber_refit_rows`, and `max_state_bytes` under a
+  refit over a span of the clock. A notice or refusal for the null group of
+  a grouped spec names `group null`, where it named no group (BANK-8).
+  `rp.stream.embargo` takes an input that holds a column named
+  `__embargo_key` or `__embargo_order` (PY-7), and `ModelBank.check()`'s
+  `ridge_shrinks` tells an `expectile`, which takes no `standardize`, to
+  lower its ridge (PY-11). A temporal step or span past 292 years is said
+  at its length, where a cast to 64 bits said 292 years, and `audit`'s
+  duration columns give such a span as null rather than the range's end
+  (BANK-9).
+
 ### Tests and documents
 
 - Every output is compared with the newest release's, bit for bit, on every
@@ -892,6 +2014,132 @@ model that only the new build has is listed as an addition and passes.
   416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.
 
 ### Performance
+
+- **`huber`'s and `quantile`'s scales from every row cost 0.3% to 2.7%
+  a row and `8(3k + 2)` bytes a target under `standardize=True`** (review
+  2026-11-23, REG-18), for a feature that varies anywhere in the stream
+  never dropped from the fit. Each target keeps its features' moments over
+  every row it learns, an `O(k)` update a row, and the `k` scales its band
+  last moved at. Measured on macOS arm64 (release, load 5, best of 3 over
+  200,000 rows, the moments' update beside `quantile`'s step): 6.7 ns a row
+  at 4 features against the step's 251 ns, 12.9 at 20 against 1,394, and
+  18.8 at 50 against 6,783. The state grows by 112, 496 and 1,216 bytes a
+  target for the moments, and by `8k` for the scales. Unstandardized,
+  neither is kept.
+
+- **A model bank row reads each model's kind once an instance, not once a
+  row** (PLAN 548 to 553). The checks a few kinds add to a row (the start a
+  `garch`, `dcc`, `deco`, `kmeans`, `hmm`, `bocpd` or `kalman` waits on, a
+  `dcc` margin's heavy tail, a `corrchange` flag's scale ratio, a `pca`
+  component's separation) each dispatched on the model's kind every row,
+  about 20 instructions for the first of them and 30 for the four after,
+  paid by every other kind. They are decided when an instance starts, and a
+  row of any other kind pays a branch apiece. Measured as retired
+  instructions of one 1,000-row chunk through the bank on macOS arm64
+  (minimum of 20 runs, one thread): `seqtest` 2,127,009 before 548, 2,156,376
+  with it and 2,189,619 with the rest of wave 13, 2,159,977 now;
+  `ewridge` with 5 features 4,998,290, 5,034,588, 5,066,990 and 5,045,486.
+  The rest of the rise since 548, about 33 to 47 instructions a row, is not
+  in a check of this kind: with the wait read as a constant the count is as
+  now.
+
+- **A sum of squared weights kept at its own power of two costs a test a
+  row** (review 2026-11-23, REG-12), for Kish's count, `rls`'s error
+  inflation and `sgd`'s level and warm-up at weights whose squares are
+  below the doubles, where they were 0 for good. Every row of `ew_cov`,
+  the Grams of `ewridge`, `rls`, and `sgd`'s and `pa`'s level and warm-up
+  tests the sum's power and the weight's range before the plain update; a
+  row outside it, or a sum whose power has moved, takes the general update
+  out of line. Retired instructions of one 1,000-row block on macOS arm64
+  (bench profile, exact to a few instructions), before the review, with
+  its first form, and now: `ewridge` with 5 features 1,977,682, 2,009,682
+  and 1,987,685 (+0.51%); `sgd` 2,469,977, 2,555,852 and 2,500,726
+  (+1.24%, about 20 instructions a row of it the level's sum); `rls`
+  6,034,477 and 6,049,477 now (+0.25%); `ew_cov` 7,413,477 and 7,426,477
+  (+0.18%). Outputs are unchanged.
+
+- **`ftrl` bounds each target's sum of squared gradients before its
+  step** (review 2026-11-23, REG-9), so a row that would take a sum past
+  the largest double is skipped instead of leaving a coefficient NaN for
+  good. The bound reads the largest feature and the largest sum of the
+  target, a pass over its `k` slots a row: 3.4% more instructions a row in
+  CI's count on Linux (20 features, logistic loss).
+
+- **`holt` forms its trend and line fit in range at the ends of the
+  doubles** (review 2026-11-23, REG-4 and REG-5): a row tests whether each
+  product it forms is a normal double before using it, and forms the term
+  another way where it is not, so a trend no longer goes infinite and a
+  slope no longer drops out at tiny weights. 5.6% more instructions a row
+  in CI's count on Linux (one column, half-life 1,000).
+
+- **`corrchange`'s monitor and window kinds cost 4.7% and 2.3% more
+  instructions a row** (PLAN 553, CI's count on Linux): the monitor keeps
+  the CUSUM of `x̃² − ỹ²` beside each pair's, to withhold a flag where the
+  two columns' scale ratio moved, and both kinds carry the clock's spans
+  and the state's bound that a span of the clock needs, which a span of
+  rows pays a branch apiece for.
+
+- **`deco`'s ratio level costs 3-4% a row unblocked and 18-22% over four
+  blocks** (PLAN 551), for a level that reads the equicorrelation where the
+  EW mean of `u` read two-thirds of it. Each value keeps the EW means of the
+  row's numerator and denominator, a pair keeps its second block's too, and
+  `"linear"` its `N` and `D`, where it kept the mean of `u`. Measured on
+  macOS arm64 (best of 7, 20,000 rows of 20 features, load 4-8): unblocked
+  112.2 -> 116.7 ns a row (`"ew"`), 112.7 -> 116.3 (`"linear"`); four blocks
+  of five, ten values, 240.5 -> 283.0 and 244.2 -> 297.7. The state grows
+  by 127 and 145 bytes unblocked, 397 and 631 over four blocks (807 -> 934,
+  827 -> 972, 1,156 -> 1,553, 1,176 -> 1,807), bounded by the blocks. Not
+  measured on x86-64.
+
+- **`corrchange(kind="sequential")` costs one `atanh` a pair a row more**
+  (PLAN 553): the Fisher-`z` detector takes `atanh` of each pair's
+  monitored correlation, from the `libm` crate so its bits are the same on
+  every platform. Measured on arm64 (release, best of 7, 60,000 rows, a
+  critical value no row reaches so both builds monitor the same rows, load
+  5-8): one pair 87 to 99 ns a row, six pairs 121 to 150 ns. With the
+  detector's own critical value the cycles differ (the old one flagged
+  stable cycles in their first rows and spent more rows in history), 85 to
+  111 and 119 to 160 ns. `kind="monitor"` is level (one pair 34 against 34
+  ns, six pairs over spans of 2,500 rows 94 against 97 ns): the CUSUM forms
+  no prefix correlations, where the check on the scale ratio adds one
+  series a pair. `kind="window"` is unchanged.
+
+- **`ewm_moments` reads a window through two stacks, 12.7 to 214 times as
+  fast as merging the window's blocks on each read, at the same accuracy**
+  (PLAN 554). The window's rows are cut into blocks; the back stack folds
+  the rows from a block boundary on, one merge a row, and the front holds
+  each block's merge to that boundary, formed once, so a read is one merge
+  whatever the window's length, where merging the blocks took `w / b`
+  merges and up to `2b` row folds a read. Measured on one release test
+  binary holding both forms (the minimum of three rounds of 20,000 steps
+  after three windows of warm-up; a skew, a kurtosis and a correlation):
+  1,000 rows 4.25 against 53.7 µs a row (12.7), 1,000 clock units 4.35
+  against 85.8 (19.7), 10,000 rows 4.23 against 178 (42.1), 10,000 clock
+  units 4.23 against 907 (214). Both are within a few times 1e-15 of a
+  fresh fold of the window's rows. The cost is the stacks' working memory,
+  `rows / b + b + 2` summaries where merging the blocks kept `rows / b + 2`
+  (one column to order 4 at 10,000 rows: 14.5 KB against 7.3 KB, beside the
+  ring's 240 KB), and one number more in the saved ring, 8 bytes, the
+  stacks' boundary, from which the stacks are rebuilt on loading.
+
+- **`ewm_moments` keeps each mean as a compensated pair: 8 bytes more a
+  column** (PLAN 554). One column to order `P` takes `8 (P + 4)` bytes (64
+  at order 4), where its plain mean took `8 (P + 3)`: the pair's low part
+  keeps the deviation `z - m` at the spread's scale under a large level, so
+  a moment at a level decays with its history rather than settling on a
+  stalled mean's rounding, as `ew_cov`'s and `rp.ewm_var`'s means do. Order
+  2 then runs `ew_cov`'s update operation for operation, and a variance here
+  is `ew_cov`'s to the bit.
+- **`ar` reads its fits' systems in place** (PLAN 491). Its order
+  selection and, under a window, the definiteness check it makes on every
+  row read each fit's own accumulators and a window view kept between
+  rows, where they copied the Gram and its cross-moments and factored into
+  new buffers a row. Outputs are unchanged to the bit. Allocations a row in
+  a release build, `lags=6, select="bic"`: 22 -> 1; `lags=3,
+  window_size=200`: 44.083 -> 1.083. Measured on an x86-64 Linux VM, one
+  target and one feature over 60,000 rows (the best of 5): 1,491-1,605 ->
+  1,063-1,132 ns a row under `select`, and 2,289-2,390 -> 1,080-1,139 ns a
+  row under the window.
 
 - **A state loads faster in the envelope, and its size moves by a few
   bytes** (PLAN 542). A load reads the file's kind and version from its

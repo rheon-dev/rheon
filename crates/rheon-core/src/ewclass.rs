@@ -958,6 +958,39 @@ impl OnlineModel for EwClass {
         self.win.as_ref().and_then(|win| win.snaps.over_budget())
     }
 
+    /// The label's own weight: the rows it was a class on, the classes'
+    /// weights summed, inside the window under one, read as [`Self::n_eff`]
+    /// reads the shared weight. The shared weight counts every row with
+    /// its features, a row whose label is null among them, so `min_weight`
+    /// checked against it opened on unlabelled rows and the first labelled
+    /// row's class was predicted with certainty (review 2026-11-23,
+    /// STRM-4). A label is the model's one target, so one entry.
+    fn target_n_eff_into(&self, out: &mut Vec<f64>) -> bool {
+        out.clear();
+        let total = self.classes.iter().map(EwCov::n_eff).sum::<f64>()
+            + self.diag_classes.iter().map(EwCovDiag::n_eff).sum::<f64>();
+        let cut = self
+            .win
+            .as_ref()
+            .and_then(|win| win.snaps.cut(win.clock, self.cfg.decay, 0));
+        let labelled = match cut {
+            Some((f, old)) if old.n_eff > 0.0 => {
+                let gone = old.classes.iter().map(|m| m.w).sum::<f64>()
+                    + old.diag_classes.iter().map(|m| m.w).sum::<f64>();
+                let wn = total - f * gone;
+                // Zeroed below the same fraction `n_eff` zeroes at.
+                if wn <= crate::window::EMPTY_FRACTION * total || !wn.is_finite() {
+                    0.0
+                } else {
+                    wn
+                }
+            }
+            _ => total,
+        };
+        out.push(labelled);
+        true
+    }
+
     /// The ring's shadow, its snapshots formed as the step forms them
     /// (docs/PLAN.md task 115 (d)).
     fn window_shadow(&self) -> Option<crate::WindowShadow> {

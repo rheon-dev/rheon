@@ -11,9 +11,11 @@
 //!
 //! `r` is the row's out-of-sample residual and `σ` the slot's error scale
 //! before the row. The two read on the clock need the scale, and a row
-//! without one ages Page-Hinkley's mean and is not read; ADWIN and KSWIN test
-//! a location or a distribution with no unit in their settings, so they read
-//! the error's size as it is; DDM and EDDM count errors, and what counts as
+//! without one ages Page-Hinkley's mean and is not read; ADWIN and KSWIN read
+//! the error's size as it is. KSWIN's test compares ranks, so its flags are
+//! the same in any unit; ADWIN's bound takes the values' range `R`, river's
+//! 1 by default, so its flags are not, unless `R` is the window's own range
+//! ([`crate::AdwinRange::Window`]); DDM and EDDM count errors, and what counts as
 //! one is the caller's `error_above`, in the target's units. ADWIN, KSWIN, DDM
 //! and EDDM count rows, not clock: their statistics are defined on a number of
 //! observations (ADWIN's bound on its parts' rows, KSWIN's exact null on two
@@ -48,6 +50,12 @@ pub enum DriftDetector {
     Cusum(Cusum),
 }
 
+/// `error_above` as a spec takes it: at least 0 and not NaN. A spec that
+/// leaves it out of a kind that does not count errors stores infinity.
+fn error_above_sound(v: f64) -> bool {
+    v >= 0.0
+}
+
 impl DriftDetector {
     /// Feed one row's residual `r`, the slot's scale before it, the row's
     /// clock step `d` and the decay `lam` over it. Returns whether the row
@@ -56,16 +64,19 @@ impl DriftDetector {
     #[inline]
     pub fn update(&mut self, r: f64, scale: f64, d: f64, lam: f64) -> bool {
         let scaled = scale.is_finite() && scale > 0.0;
+        // A finite residual whose ratio to a positive scale overflows is the
+        // largest double of scales out, not a row unseen: so read, it flags.
+        let ratio = |r: f64| (r / scale).clamp(-f64::MAX, f64::MAX);
         match self {
             Self::PageHinkley(p) => {
                 if scaled {
-                    p.update(r.abs() / scale, d, lam)
+                    p.update(ratio(r.abs()), d, lam)
                 } else {
                     p.age(lam);
                     false
                 }
             }
-            Self::Cusum(c) => scaled && c.update(r / scale, d),
+            Self::Cusum(c) => scaled && c.update(ratio(r), d),
             Self::Adwin(a) => a.update(r.abs()),
             Self::Kswin(k) => k.update(r.abs()),
             Self::Ddm(e) => e.detector.update(r.abs() > e.error_above),
@@ -87,9 +98,12 @@ impl DriftDetector {
     pub fn restores_as(&self, fresh: &Self) -> bool {
         std::mem::discriminant(self) == std::mem::discriminant(fresh)
             && match self {
+                Self::PageHinkley(p) => p.sound(),
                 Self::Adwin(a) => a.sound(),
                 Self::Kswin(k) => k.sound(),
-                _ => true,
+                Self::Cusum(c) => c.sound(),
+                Self::Ddm(e) => error_above_sound(e.error_above) && e.detector.sound(),
+                Self::Eddm(e) => error_above_sound(e.error_above) && e.detector.sound(),
             }
     }
 
@@ -271,6 +285,169 @@ mod tests {
         );
     }
 
+    /// Every kind is held to a shape its rows run on, each bound on its own
+    /// (review 2026-11-23, DRIFT-5): an ADWIN whose top level is empty (its
+    /// next drop, of the oldest bucket, finds none), wider than its cap, with
+    /// no shortest part or a sum or spread that is not a finite number;
+    /// an EDDM whose last error is after its last row (`n - last_error`
+    /// wraps); a DDM, a Page-Hinkley or a CUSUM whose numbers are out of
+    /// their range. Each kind saved mid-stream restores. (A number that is
+    /// not finite, which JSON cannot write, is held in each kind's own
+    /// tests.)
+    #[test]
+    fn every_kind_is_held_to_its_shape() {
+        let mut s = 21u64;
+        for fresh in every_kind() {
+            let mut a = fresh.clone();
+            for i in 0..400 {
+                let r = lcg(&mut s) * 2.0 + if i > 300 { 1.5 } else { 0.0 };
+                a.update(r, 1.0, 1.0, 0.99);
+            }
+            assert!(a.restores_as(&fresh), "{a:?}");
+        }
+        // Each kind after 100 rows of steady noise: every number finite
+        // (a DDM's minimum is infinite before its first).
+        let damaged = |kind: usize, edit: &dyn Fn(&mut serde_json::Value)| {
+            let fresh = every_kind().swap_remove(kind);
+            let mut fed = fresh.clone();
+            let mut s = 23u64;
+            for _ in 0..100 {
+                fed.update(lcg(&mut s), 1.0, 1.0, 0.99);
+            }
+            assert!(fed.restores_as(&fresh));
+            let mut v = serde_json::to_value(&fed).unwrap();
+            edit(&mut v);
+            let d = serde_json::from_value::<DriftDetector>(v).unwrap();
+            d.restores_as(&fresh)
+        };
+        // Page-Hinkley, untagged.
+        for edit in [
+            &(|v: &mut serde_json::Value| v["threshold"] = serde_json::json!(0.0))
+                as &dyn Fn(&mut serde_json::Value),
+            &|v| v["delta"] = serde_json::json!(-1.0),
+            &|v| v["n"] = serde_json::json!(-1.0),
+            &|v| v["w"] = serde_json::json!(-1.0),
+            &|v| v["min_cum"] = serde_json::json!(1.0),
+            &|v| {
+                v["cum"] = serde_json::json!(-2.0);
+                v["min_cum"] = serde_json::json!(-1.0);
+            },
+        ] {
+            assert!(!damaged(0, edit), "page_hinkley");
+        }
+        // ADWIN.
+        for edit in [
+            &(|v: &mut serde_json::Value| {
+                v["Adwin"]["levels"] = serde_json::json!([[[1.0, 0.0]], []]);
+                v["Adwin"]["width"] = serde_json::json!(1.0);
+                v["Adwin"]["total"] = serde_json::json!(1.0);
+            }) as &dyn Fn(&mut serde_json::Value),
+            &|v| {
+                v["Adwin"]["levels"] = serde_json::json!([[[1.0, 0.0], [1.0, 0.0]]]);
+                v["Adwin"]["width"] = serde_json::json!(2.0);
+                v["Adwin"]["max_width"] = serde_json::json!(1);
+            },
+            &|v| v["Adwin"]["min_window_length"] = serde_json::json!(0),
+            &|v| v["Adwin"]["var"] = serde_json::json!(-1.0),
+            &|v| {
+                v["Adwin"]["levels"] = serde_json::json!([[[1.0, -1.0]]]);
+                v["Adwin"]["width"] = serde_json::json!(1.0);
+            },
+        ] {
+            assert!(!damaged(1, edit), "adwin");
+        }
+        // DDM.
+        for edit in [
+            &(|v: &mut serde_json::Value| v["Ddm"]["detector"]["p"] = serde_json::json!(1.5))
+                as &dyn Fn(&mut serde_json::Value),
+            &|v| v["Ddm"]["detector"]["n"] = serde_json::json!(-1.0),
+            &|v| v["Ddm"]["detector"]["drift_threshold"] = serde_json::json!(0.0),
+            &|v| v["Ddm"]["detector"]["s_min"] = serde_json::json!(-1.0),
+            &|v| v["Ddm"]["error_above"] = serde_json::json!(-1.0),
+        ] {
+            assert!(!damaged(2, edit), "ddm");
+        }
+        // EDDM.
+        for edit in [
+            &(|v: &mut serde_json::Value| {
+                v["Eddm"]["detector"]["last_error"] = serde_json::json!(101)
+            }) as &dyn Fn(&mut serde_json::Value),
+            &|v| v["Eddm"]["detector"]["errors"] = serde_json::json!(101),
+            &|v| v["Eddm"]["detector"]["k"] = serde_json::json!(3.0),
+            &|v| v["Eddm"]["detector"]["beta"] = serde_json::json!(0.0),
+            &|v| v["Eddm"]["detector"]["sq"] = serde_json::json!(-1.0),
+        ] {
+            assert!(!damaged(3, edit), "eddm");
+        }
+        // CUSUM.
+        for edit in [
+            &(|v: &mut serde_json::Value| v["Cusum"]["h"] = serde_json::json!(0.0))
+                as &dyn Fn(&mut serde_json::Value),
+            &|v| v["Cusum"]["k"] = serde_json::json!(-1.0),
+            &|v| v["Cusum"]["up"] = serde_json::json!(-1.0),
+            &|v| v["Cusum"]["down"] = serde_json::json!(-0.5),
+        ] {
+            assert!(!damaged(5, edit), "cusum");
+        }
+    }
+
+    /// A damaged ADWIN whose top level is empty is refused; were it run, the
+    /// drop of its oldest bucket would find none and leave the window past
+    /// its cap.
+    #[test]
+    fn an_empty_top_level_is_no_window() {
+        let mut a = Adwin::new(AdwinCfg {
+            max_width: 1,
+            ..AdwinCfg::default()
+        });
+        a.update(1.0);
+        let mut v = serde_json::to_value(&a).unwrap();
+        v["levels"] = serde_json::json!([[[1.0, 0.0]], []]);
+        let d: Adwin = serde_json::from_value(v).unwrap();
+        assert!(!d.sound());
+    }
+
+    /// A residual so many scales out that `r / σ` overflows is a drift, not
+    /// a row unseen; a clock step of 0 with such a residual wipes nothing;
+    /// and an excess that overflows below leaves Page-Hinkley reading on,
+    /// not NaN forever (review 2026-11-23, DRIFT-6).
+    #[test]
+    fn overflowing_rows_flag_or_pass_and_leave_the_detectors_reading() {
+        // (2) `|r| / σ = inf`: Page-Hinkley and CUSUM flag.
+        for k in [
+            DriftDetector::PageHinkley(PageHinkley::new(0.5, 20.0)),
+            DriftDetector::Cusum(Cusum::new(0.5, 5.0)),
+        ] {
+            let mut k = k;
+            for _ in 0..50 {
+                k.update(0.3, 1.0, 1.0, 0.99);
+            }
+            assert!(k.update(1e100, 1e-250, 1.0, 0.99), "{k:?}");
+        }
+        // (3) A step of 0 with `r / σ = ±inf` keeps CUSUM's sums.
+        let mut c = Cusum::new(0.5, 50.0);
+        for _ in 0..20 {
+            c.update(2.0, 1.0);
+        }
+        let before = c.sums();
+        let mut k = DriftDetector::Cusum(c);
+        k.update(1e100, 1e-250, 0.0, 1.0);
+        k.update(-1e100, 1e-250, 0.0, 1.0);
+        let DriftDetector::Cusum(c) = k else {
+            unreachable!()
+        };
+        assert_eq!(c.sums(), before);
+        // (1) A mean of `1e305`, then a long step with an error of 0: the
+        // excess overflows below, and the statistic stays a number that
+        // the next rows of a drift move past the threshold.
+        let mut ph = PageHinkley::new(0.5, 20.0);
+        ph.update(1e305, 1.0, 1.0);
+        ph.update(0.0, 86400.0, 1.0);
+        assert!(!ph.statistic().is_nan(), "{ph:?}");
+        let flagged = (0..1000).any(|_| ph.update(1e306, 1.0, 1.0));
+        assert!(flagged, "{ph:?}");
+    }
+
     /// The tags a file carries for each kind other than Page-Hinkley are
     /// frozen: a rename would break every file that holds one.
     #[test]
@@ -312,6 +489,77 @@ mod tests {
         // With a scale, z = 3 / 2 = 1.5 and C+ = 1, past h = 0.9.
         let mut c = DriftDetector::Cusum(Cusum::new(0.5, 0.9));
         assert!(c.update(3.0, 2.0, 1.0, 1.0));
+    }
+
+    /// A row is read through its scale: Page-Hinkley takes `|r| / σ` and
+    /// CUSUM `r / σ`, to the bit, and a scale that is not a positive finite
+    /// number is no row for CUSUM, even for a residual that would flag it.
+    #[test]
+    fn a_row_is_read_in_units_of_its_scale() {
+        let ph = PageHinkley::new(0.5, 20.0);
+        let (mut a, mut direct) = (DriftDetector::PageHinkley(ph.clone()), ph);
+        for (r, scale, d) in [(3.0, 2.0, 1.5), (-1.0, 0.5, 0.7), (4.0, 3.0, 2.0)] {
+            assert_eq!(
+                a.update(r, scale, d, 0.9),
+                direct.update(f64::abs(r) / scale, d, 0.9)
+            );
+            assert_eq!(a, DriftDetector::PageHinkley(direct.clone()));
+        }
+        assert!(direct.n() == 3.0);
+        let cusum = Cusum::new(0.5, 4.0);
+        let (mut a, mut direct) = (DriftDetector::Cusum(cusum.clone()), cusum);
+        for (r, scale, d) in [(3.0, 2.0, 1.5), (-5.0, 0.5, 0.7), (4.0, 3.0, 2.0)] {
+            assert_eq!(a.update(r, scale, d, 1.0), direct.update(r / scale, d));
+            assert_eq!(a, DriftDetector::Cusum(direct.clone()));
+        }
+        // No scale: no row, whatever the residual.
+        for scale in [
+            0.0,
+            -1.0,
+            -1e-300,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let mut c = DriftDetector::Cusum(Cusum::new(0.5, 1.0));
+            assert!(!c.update(100.0, scale, 1.0, 1.0), "scale {scale}");
+            assert!(!c.update(-100.0, scale, 1.0, 1.0), "scale {scale}");
+            assert_eq!(c, DriftDetector::Cusum(Cusum::new(0.5, 1.0)));
+        }
+    }
+
+    /// A row with nothing to read ages Page-Hinkley's mean and no other kind.
+    #[test]
+    fn age_moves_page_hinkleys_mean_and_nothing_else() {
+        let mut ph = PageHinkley::new(0.5, 1e9);
+        for e in [1.0, 2.0, 3.0] {
+            ph.update(e, 1.0, 0.9);
+        }
+        let mut aged = ph.clone();
+        aged.age(0.5);
+        assert_ne!(aged, ph);
+        let mut a = DriftDetector::PageHinkley(ph.clone());
+        a.age(0.5);
+        assert_eq!(a, DriftDetector::PageHinkley(aged));
+        for mut k in every_kind().into_iter().skip(1) {
+            let before = k.clone();
+            k.age(0.5);
+            assert_eq!(k, before);
+        }
+    }
+
+    /// `reset` starts each kind again from nothing seen: equal to a new one.
+    #[test]
+    fn reset_is_a_new_detector_of_every_kind() {
+        for (mut a, fresh) in every_kind().into_iter().zip(every_kind()) {
+            let mut s = 13u64;
+            for _ in 0..300 {
+                a.update(lcg(&mut s) * 2.0 + 1.0, 1.0, 1.0, 0.95);
+            }
+            assert_ne!(a, fresh, "{a:?} has seen rows");
+            a.reset();
+            assert_eq!(a, fresh);
+        }
     }
 
     /// What each kind reads: CUSUM the signed scaled residual (a residual of

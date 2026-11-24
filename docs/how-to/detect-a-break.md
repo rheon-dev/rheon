@@ -258,15 +258,21 @@ defines its three kinds and its statistic.
    checks that they are stable.
 2. **Set `boundary_gamma` to catch an early change sooner.** Above 0 the
    boundary starts lower, so a change soon after the history is caught
-   sooner, and a late one later. Near the top of the range, up to 0.49,
-   it also flags more stable streams. Wied and Galeano measured these
-   rates on GARCH pairs (their Table 2):
+   sooner, and a late one later. Each monitored row's correlation is
+   compared on Fisher's scale at its own variance, so the share of stable
+   cycles flagged holds at every `boundary_gamma`. Measured on Wied and
+   Galeano's GARCH pairs and on Gaussian ones, at histories of 50 to 1,000
+   rows and a nominal 0.05:
 
    | `boundary_gamma` | a change soon after the history | stable streams flagged, at a nominal 0.05 |
    |---|---|---|
-   | 0, the default | caught latest | 0.050 to 0.077 |
-   | 0.25 | caught sooner | 0.047 to 0.087 |
-   | 0.45 | caught soonest | 0.106 to 0.174 |
+   | 0, the default | caught latest | 0.051 to 0.083 |
+   | 0.45 | caught soonest | 0.047 to 0.074 |
+
+   The paper's own detector, which compared a correlation of the first two
+   monitored rows with the history's, flagged 0.106 to 0.174 of stable
+   cycles at 0.45 in their Table 2, and up to a third at a correlation of
+   0.6.
 
 3. **Run the query, and read the rows where `flag` is true.** Each reports
    `stat` and the `crit` it passed.
@@ -303,24 +309,25 @@ for gamma in [0.0, 0.25, 0.45]:
 ```
 
 ```text
-boundary_gamma 0.0: flags at rows [620]
+boundary_gamma 0.0: flags at rows [614]
 boundary_gamma 0.25: flags at rows [595]
-boundary_gamma 0.45: flags at rows [593, 1095]
+boundary_gamma 0.45: flags at rows [593]
 ```
 
-The change at row 560 is flagged 60 rows after it at the default, and 35
-and 33 rows after it at 0.25 and 0.45. At 0.45 the next cycle, whose
-history starts at row 594 and holds no change, flags again at row 1,095: a
-false alarm, of the kind the table's last row counts.
+The change at row 560 is flagged 54 rows after it at the default, and 35
+and 33 rows after it at 0.25 and 0.45. The next cycle, whose history starts
+at the row after the flag and holds no change, flags nothing at any
+`boundary_gamma`.
 
 **Count a run of `kind="window"`'s flags as one change.** That kind
 compares the correlations of two adjacent windows of `window_rows` rows
 on every row, and flags against a permutation quantile at the level
 `alpha` (0.05 by default). Two windows that slide by one row are almost
 the same windows, so a statistic above the quantile stays above it for a
-run of rows, and no rate of `alpha` per row applies. Set
-`change_action="reset"`, which empties both windows at a flag, so one
-change gives one flag.
+run of rows. Each report flags at the rate `alpha`, but a stretch of a
+window's length of reports holds a flag about a third of the time on rows
+where nothing changed. Set `change_action="reset"`, which empties both
+windows at a flag, so one change gives one flag.
 
 ## Date a regime with `bocpd`
 
@@ -407,4 +414,5 @@ break. Where they are not:
 | a break you planted, and no CUSUM flag beside a gradient fit | the fit absorbs a level at its learning rate, so its residuals carry little of the move | read `break_wald`, which reads the target and the features alone |
 | a slope break, and no CUSUM flag | a slope on a feature centered at zero leaves the residuals' mean at zero | read `break_wald` |
 | flags on a target that looks ahead, with nothing broken | the residuals overlap by construction | give the spec `horizon_rows=` (with a clock) or `embargo=` (without one), so each test allows for it ([Can its t be trusted?](../DIAGNOSTICS.md#can-its-t-be-trusted)) |
-| `corrchange` flags on stable streams at a high `boundary_gamma` | the boundary starts too low | lower `boundary_gamma` toward 0 |
+| `corrchange` flags on stable streams under `kind="sequential"` | a short or heavy-tailed history: its correlation and long-run deviation have not converged (0.08 to 0.12 of cycles at 50 rows of `t_5` pairs) | lengthen `window_rows` to a few hundred rows |
+| a `corrchange` `flag` null, with `withheld_reason` `scale_ratio_moved` | under `kind="monitor"`, one column's scale moved against the other's inside the span, where the statistic is off its null law | use `kind="window"`, whose windows' correlations are each free of their own scale |

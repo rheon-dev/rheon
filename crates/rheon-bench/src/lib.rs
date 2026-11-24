@@ -99,6 +99,32 @@ pub const MODEL_CASES: &[&str] = &[
     // (task 492); and FIGARCH, its O(M) pass of 1,000 lags a row.
     "garch",
     "garch_figarch",
+    // Three series' correlation, the asymmetric model learned after its
+    // start: a row's 3 x 3 factor, inverse and three R⁻¹ ∂R (task 493); and
+    // the same through GARCH margins.
+    "dcc",
+    "dcc_margins",
+    // Two return series under a decay, Lee and Mykland's own window of 100:
+    // a row's compensated sums and ring (task 499).
+    "realized",
+    // One component of 20 features by the incremental SVD: a row rotates
+    // the 2 kept directions and the row's deviation until orthogonal.
+    "pca",
+    // Two return series under a decay, a term of each kind: a row's
+    // multipower products, two kernel sums of 20 and 10 lags and a scale of
+    // 10 (task 555).
+    "power_variation",
+    // One column's digest at compression 100, read at three levels: a row's
+    // merge of a copy of its buffer (task 544).
+    "tdigest",
+    // One column's DDSketch at the default accuracy, read at three levels
+    // with their tail means: a row's walk of its buckets (task 544).
+    "ddsketch",
+    // An AR(5) with no features: a row's ring, design, rank-one update of a
+    // 6 x 6 Gram and its Cholesky.
+    "ar",
+    // Sixteen periods on an even clock: a rotation and an add each a row.
+    "spectral",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -233,6 +259,13 @@ enum Shape {
     /// returns with no conditional variance waits, so on `Linear` targets a
     /// `garch` case would time its start's buffer, not its step (PLAN 548).
     Garch,
+    /// The targets a DCC process at `(a, b) = (0.04, 0.92)`, every target
+    /// correlation 0.5 (twelve uniforms less six, through the Cholesky
+    /// factor of each row's `R`), and with the flag each scaled by its own
+    /// GARCH(1,1) at `(0.05, 0.15, 0.8)`: what `dcc` is for. A start on
+    /// series of one constant correlation waits (PLAN 493), so on `Linear`
+    /// targets a learned `dcc` case would time its start's buffer.
+    Dcc(bool),
 }
 
 /// Rows in the layout a model steps them: features row-major, targets
@@ -257,6 +290,11 @@ impl Rows {
         let mut clock = 1_000.0;
         // each target's variance and last return, for `Shape::Garch`
         let mut garch: Vec<(f64, f64)> = vec![(1.0, 0.0); m];
+        // the DCC process's Q, for `Shape::Dcc`
+        let qbar: Vec<f64> = (0..m * m)
+            .map(|ij| if ij / m == ij % m { 1.0 } else { 0.5 })
+            .collect();
+        let mut q = qbar.clone();
         for i in 0..n {
             let row = x.len();
             match shape {
@@ -284,6 +322,46 @@ impl Rows {
                         y.push(Some(*e));
                     }
                 }
+                Shape::Dcc(scaled) => {
+                    x.extend((0..k).map(|_| g.signed()));
+                    let mut l = vec![0.0; m * m];
+                    for a in 0..m {
+                        for b in 0..=a {
+                            let r = if a == b {
+                                1.0
+                            } else {
+                                q[a * m + b] / (q[a * m + a] * q[b * m + b]).sqrt()
+                            };
+                            let acc = r - (0..b).map(|c| l[a * m + c] * l[b * m + c]).sum::<f64>();
+                            l[a * m + b] = if a == b {
+                                acc.sqrt()
+                            } else {
+                                acc / l[b * m + b]
+                            };
+                        }
+                    }
+                    let u: Vec<f64> = (0..m)
+                        .map(|_| (0..12).map(|_| g.next()).sum::<f64>() - 6.0)
+                        .collect();
+                    let z: Vec<f64> = (0..m)
+                        .map(|a| (0..=a).map(|b| l[a * m + b] * u[b]).sum())
+                        .collect();
+                    for a in 0..m {
+                        for b in 0..m {
+                            let ab = a * m + b;
+                            q[ab] = 0.04 * qbar[ab] + 0.04 * z[a] * z[b] + 0.92 * q[ab];
+                        }
+                    }
+                    for (j, (s, e)) in garch.iter_mut().enumerate() {
+                        if scaled {
+                            *s = 0.05 + 0.15 * *e * *e + 0.8 * *s;
+                            *e = (*s).sqrt() * z[j];
+                        } else {
+                            *e = z[j];
+                        }
+                        y.push(Some(*e));
+                    }
+                }
             }
             let fit: f64 = x[row..]
                 .iter()
@@ -293,7 +371,10 @@ impl Rows {
             // With no features, a column whose sign a sequential test
             // watches: either sign, a small drift up.
             let (level, noise) = if k == 0 { (0.05, 1.0) } else { (0.5, 0.3) };
-            if !matches!(shape, Shape::Labelled | Shape::Classes(_) | Shape::Garch) {
+            if !matches!(
+                shape,
+                Shape::Labelled | Shape::Classes(_) | Shape::Garch | Shape::Dcc(_)
+            ) {
                 y.extend((0..m).map(|j| Some(level + fit + j as f64 + noise * g.signed())));
             }
             let step = if i == 0 { 0.0 } else { step_of(g.next()) };
@@ -539,6 +620,79 @@ fn case_spec(id: &str) -> (Value, Shape) {
             }),
             Shape::Garch,
         ),
+        // Both starts within the warm-up: the correlation's 500 rows, after
+        // the margins' 300 (doubled at most twice) where it has them.
+        "dcc" => (
+            json!({
+                "name": "m",
+                "model": {"type": "dcc", "margins": "none", "asymmetric": true},
+                "targets": ["y0", "y1", "y2"],
+                "features": [],
+                "half_life": "inf",
+            }),
+            Shape::Dcc(false),
+        ),
+        "dcc_margins" => (
+            json!({
+                "name": "m",
+                "model": {"type": "dcc", "asymmetric": true, "margin_start_rows": 300},
+                "targets": ["y0", "y1", "y2"],
+                "features": [],
+                "half_life": "inf",
+            }),
+            Shape::Dcc(true),
+        ),
+        "realized" => (
+            json!({
+                "name": "m",
+                "model": {"type": "realized", "lm_window": 100},
+                "targets": ["y0", "y1"],
+                "features": [],
+                "clock": "t",
+                "half_life": 1000.0,
+                "gap_cap": 100.0,
+            }),
+            Shape::Linear,
+        ),
+        "power_variation" => (
+            json!({
+                "name": "m",
+                "model": {
+                    "type": "power_variation",
+                    "terms": [
+                        {"name": "rv", "powers": [2.0]},
+                        {"name": "bv", "powers": [1.0, 1.0], "normalize": true},
+                        {"name": "lrv", "kernel": "parzen", "bandwidth": 20, "center": true},
+                        {"name": "rk", "kernel": "bartlett", "bandwidth": 10, "flat_top": true},
+                        {"name": "sub", "powers": [2.0], "scale": 10}
+                    ],
+                },
+                "targets": ["y0", "y1"],
+                "features": [],
+                "clock": "t",
+                "half_life": 1000.0,
+                "gap_cap": 100.0,
+            }),
+            Shape::Linear,
+        ),
+        "tdigest" => (
+            json!({
+                "name": "m",
+                "model": {"type": "tdigest", "quantiles": [0.05, 0.25, 0.95]},
+                "targets": ["y0"],
+                "features": [],
+            }),
+            Shape::Linear,
+        ),
+        "ddsketch" => (
+            json!({
+                "name": "m",
+                "model": {"type": "ddsketch", "quantiles": [0.05, 0.25, 0.95]},
+                "targets": ["y0"],
+                "features": [],
+            }),
+            Shape::Linear,
+        ),
         "hawkes" => (
             json!({
                 "name": "m",
@@ -562,6 +716,16 @@ fn case_spec(id: &str) -> (Value, Shape) {
             }),
             Shape::Linear,
         ),
+        "pca" => {
+            // Rows around two centres: one direction of a larger variance,
+            // so its component is written, where independent features of
+            // one spread (and three symmetric centres) are tied and withheld.
+            let mut s = fit(json!({"type": "pca", "n_components": 1}), 20);
+            let s = s.as_object_mut().expect("an object");
+            s.remove("targets");
+            s.remove("min_weight");
+            (Value::Object(s.clone()), Shape::Classes(2))
+        }
         "ew_cov" | "bank_ew_cov_wide_t1" | "bank_ew_cov_wide_t4" => {
             let mut s = fit(json!({"type": "ew_cov"}), 20);
             let s = s.as_object_mut().expect("an object");
@@ -622,6 +786,17 @@ fn case_spec(id: &str) -> (Value, Shape) {
             Shape::Linear,
         ),
         "ftrl" => (fit(json!({"type": "ftrl"}), 20), Shape::Linear),
+        "spectral" => {
+            let periods: Vec<f64> = (0..16).map(|k| 2.0 + k as f64).collect();
+            let mut s = fit(json!({"type": "spectral", "periods": periods}), 0);
+            s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
+        "ar" => {
+            let mut s = fit(json!({"type": "ar", "lags": 5}), 0);
+            s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
         // Level and trend of one column, no features.
         "holt" => {
             let mut s = fit(json!({"type": "holt"}), 0);

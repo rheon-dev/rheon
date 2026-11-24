@@ -556,3 +556,47 @@ fn a_cleared_hold_is_a_new_one_with_its_room() {
         assert_eq!(h.weights(1), fresh.weights(1));
     }
 }
+
+/// A run of decays of 0 -- a gap past the decay's underflow while a buffer
+/// ages -- forgets every row held, as one decay of 0 does (review
+/// 2026-11-23, REG-1): `frexp` takes no 0, the rows before it weigh
+/// nothing, and a run of none leaves the decay where the run began. The
+/// buffer that ages so reads the rows after the gap alone, live and rebuilt.
+#[test]
+fn a_run_of_decays_of_zero_forgets_every_row() {
+    let mut h = HeldMedian::new(1);
+    for e in [1.0, 2.0, 3.0] {
+        h.decay(0.9);
+        h.insert(0, e, 1.0);
+    }
+    h.begin_run();
+    h.run(0.0, 0);
+    assert_eq!(h.median(0), Some(2.0));
+    h.run(0.0, 1);
+    assert_eq!(h.median(0), None);
+    h.run(0.0, 2);
+    assert!(h.weights(0).iter().all(|&(_, w)| w == 0.0));
+    for e in [7.0, 8.0, 9.0] {
+        h.decay(1.0);
+        h.insert(0, e, 1.0);
+    }
+    assert_eq!(h.median(0), Some(8.0));
+    assert_eq!(h.median(0), definition(&h, 0));
+
+    let mut b = RefitBuf::keeping_resid();
+    for e in [100.0, 200.0, 300.0] {
+        b.learn_scored(&[0.0], 0.0, e, 1.0, 0.5, 0.5, 10);
+    }
+    b.age(0.0, 0.0, 10);
+    b.age(0.0, 0.0, 10);
+    b.learn_scored(&[0.0], 0.0, 4.0, 1.0, 0.5, 0.5, 10);
+    // A learned row across the gap, its own decay 0.
+    b.learn_scored(&[0.0], 0.0, 5.0, 1.0, 0.0, 0.0, 10);
+    b.learn_scored(&[0.0], 0.0, 6.0, 1.0, 1.0, 1.0, 10);
+    b.learn_scored(&[0.0], 0.0, 7.0, 1.0, 1.0, 1.0, 10);
+    let want = 6.0 / crate::robust::NORMAL_Q3;
+    assert_eq!(b.warm_scale(), Some(Some(want)));
+    assert!(b.fits(1, 10, true), "a buffer the stream writes loads");
+    let back = read_back(&b);
+    assert_eq!(back.warm_scale(), Some(Some(want)), "rebuilt");
+}

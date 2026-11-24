@@ -341,8 +341,13 @@ pub struct EwCov {
     /// field that skips anywhere but last slides the fields after it
     /// (`crates/rheon-core/tests/state_encoding.rs`). `pending` is the one
     /// that skips, and it is last.
+    ///
+    /// Kept beside a power of two of its own ([`crate::sqsum::KishSum`]):
+    /// at weights of `1e-200` every square was 0, and Kish's size absent
+    /// for good (review 2026-11-23, REG-12). Written as the plain number
+    /// while the power is 0, the bytes of a state before it.
     #[serde(default)]
-    q_sum: Option<f64>,
+    q_sum: crate::sqsum::KishSum,
     /// Product of all decay factors applied so far (a decaying prior's scale).
     prior_scale: f64,
     /// EW mean vector, length `k`.
@@ -442,7 +447,7 @@ impl EwCov {
         Self {
             k,
             w_sum: 0.0,
-            q_sum: Some(0.0),
+            q_sum: crate::sqsum::KishSum::of(Some(0.0)),
             prior_scale: 1.0,
             m: vec![0.0; k],
             c: LowerTriangle::zeros(k),
@@ -637,16 +642,23 @@ impl EwCov {
     /// a sample size.
     #[inline]
     pub fn n_kish(&self) -> Option<f64> {
-        match self.q_sum {
-            Some(q) if q > 0.0 => Some(self.w_sum * self.w_sum / q),
-            _ => None,
-        }
+        let s = self.q_sum.s;
+        self.q_sum
+            .q
+            .and_then(|q| crate::sqsum::count(self.w_sum, q, s))
     }
 
-    /// `Sum w^2` behind these moments, or `None` for a pre-task-38 state.
+    /// `Sum w^2` behind these moments, or `None` for a pre-task-38 state:
+    /// 0 where it is below the doubles, which [`Self::n_kish`] reads in
+    /// parts.
     #[inline]
     pub fn q_sum(&self) -> Option<f64> {
-        self.q_sum
+        let s = self.q_sum.s;
+        if s == 0 {
+            self.q_sum.q
+        } else {
+            self.q_sum.q.map(|q| crate::sqsum::value(q, s))
+        }
     }
 
     /// The factor that makes these moments' covariance unbiased,
@@ -666,8 +678,16 @@ impl EwCov {
     /// [`crate::truncated`]), as [`Self::n_kish`] gives `None`. Read, never
     /// stored: the moments themselves stay the weighted means.
     pub fn unbiased_factor(&self) -> f64 {
+        if self.q_sum.s != 0 {
+            // Weights whose squares are kept at a power of two of their
+            // own: `n / (n − 1)` at Kish's size, which they keep.
+            return match self.n_kish() {
+                Some(n) if n > 1.0 && n.is_finite() => n / (n - 1.0),
+                _ => f64::NAN,
+            };
+        }
         let w2 = self.w_sum * self.w_sum;
-        match self.q_sum {
+        match self.q_sum.q {
             Some(q) if q > 0.0 && w2 - q > 0.0 && w2.is_finite() => w2 / (w2 - q),
             _ => f64::NAN,
         }
@@ -796,10 +816,12 @@ impl EwCov {
             self.precision_scale * a
         };
         self.w_sum = w_new;
-        if let Some(q) = self.q_sum.as_mut() {
+        let crate::sqsum::KishSum { q, s } = &mut self.q_sum;
+        if let Some(q) = q.as_mut() {
             // `W` decays by `lam`, so its square decays by `lam^2`; the row
-            // adds `w^2`. Kish's `n` is then `W^2 / Q`.
-            *q = lam * lam * *q + w * w;
+            // adds `w^2`, at the sum's own power of two. Kish's `n` is then
+            // `W^2 / Q`.
+            crate::sqsum::add(q, s, lam * lam, w);
         }
         self.prior_scale *= lam;
     }
@@ -1309,7 +1331,7 @@ impl EwCov {
         self.c.copy_from(centered);
         self.merged.forget();
         self.w_sum = w_sum;
-        self.q_sum = q_sum;
+        self.q_sum = crate::sqsum::KishSum::of(q_sum);
         // New moments stand for rows the runs never saw (a blend with the
         // slow twin, say), so no run is known to cover any of them: each
         // starts again from the next row. That can leave a window reading a
@@ -1336,7 +1358,7 @@ impl EwCov {
         self.c.copy_from_packed(lower);
         self.merged.forget();
         self.w_sum = w_sum;
-        self.q_sum = q_sum;
+        self.q_sum = crate::sqsum::KishSum::of(q_sum);
         self.runs.forget();
     }
 
@@ -1397,7 +1419,7 @@ impl EwCov {
         self.c.copy_from_packed(lower);
         self.merged.forget();
         self.w_sum = w_sum;
-        self.q_sum = q_sum;
+        self.q_sum = crate::sqsum::KishSum::of(q_sum);
     }
 
     /// Age the accumulator without adding data (pure decay: means unchanged,
@@ -1409,7 +1431,7 @@ impl EwCov {
         // arrived in.
         self.flush();
         self.w_sum *= lam;
-        if let Some(q) = self.q_sum.as_mut() {
+        if let Some(q) = self.q_sum.q.as_mut() {
             *q *= lam * lam;
         }
         self.prior_scale *= lam;

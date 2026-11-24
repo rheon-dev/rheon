@@ -121,9 +121,11 @@ pub struct MicroCfg {
     /// Clock units between checkpoints, as `solve_every` is the
     /// regressions' (docs/PLAN.md task 163): `0` checkpoints on every row,
     /// `inf` never by the clock. DenStream checks every `Tp` clock units
-    /// (the module docs). A row of weight zero advances the clock, so a quiet
-    /// spell still checkpoints, and a gap capped at `gap_cap` counts as the
-    /// cap; it is measured from the last checkpoint on the rows' stamps, the
+    /// (the module docs). A quiet spell of the clock still checkpoints: the
+    /// next row's step reaches across it, and a gap capped at `gap_cap`
+    /// counts as the cap. The stream hands the model no row of weight zero,
+    /// which is in no clock (hard rule 9); handed one directly, the model
+    /// ages its state over the row's step, as every model does; it is measured from the last checkpoint on the rows' stamps, the
     /// decayed clock held exactly, where the caller hands them (task 180).
     /// Infinite under the row cap alone, the default, which a JSON export
     /// writes as a tag (`crate::humanfloat`).
@@ -349,6 +351,24 @@ pub struct Micro {
     factors: StepFactors,
 }
 
+/// The rows' EW mean weight after one more row of weight `w`, `rows` the
+/// decayed count of rows before it (moved to count this one): the old mean
+/// and the row at their shares, `(R/R')·w̄ + (1/R')·w`, `R' = R + 1`. The
+/// Welford step `w̄ + (w − w̄)/R'` cancels where a heavy mean meets a light
+/// row it has all but forgotten: after a row of `1e16` and 60 half-lives,
+/// `R' = 1` and `1e16 + (1 − 1e16)` read 0, and at a share of `2^-30` it
+/// read 8e-8 off. Both terms here are at least 0, so neither cancels. A row
+/// at the mean leaves it to the bit, so a constant weight is its own mean.
+pub(crate) fn mean_weight(rows: &mut f64, mean: f64, w: f64) -> f64 {
+    let prev = *rows;
+    *rows = prev + 1.0;
+    if w == mean {
+        mean
+    } else {
+        (prev / *rows) * mean + w / *rows
+    }
+}
+
 impl Micro {
     pub fn new(cfg: MicroCfg) -> Result<Self, String> {
         cfg.validate()?;
@@ -379,9 +399,15 @@ impl Micro {
 
     /// A row of the stream's mean weight: what `beta_mu` and `ξ` count, and
     /// what a summary admits. `1` before any row, and for any constant
-    /// weight.
+    /// weight; `1` too where the mean has cancelled to 0 or below, as a heavy
+    /// row all but forgotten leaves it (`1e16`, then 60 half-lives, then a
+    /// row of 1), where a summary admitted any point at all.
     fn unit(&self) -> f64 {
-        if self.w_rows > 0.0 { self.w_mean } else { 1.0 }
+        if self.w_rows > 0.0 && self.w_mean > 0.0 {
+            self.w_mean
+        } else {
+            1.0
+        }
     }
 
     pub fn cfg(&self) -> &MicroCfg {
@@ -829,8 +855,7 @@ impl OnlineModel for Micro {
         self.score_into(dec.as_ref(), n_before, &mut out.pred);
 
         if let Some(dec) = dec.filter(|_| learn) {
-            self.w_rows += 1.0;
-            self.w_mean += (weight - self.w_mean) / self.w_rows;
+            self.w_mean = mean_weight(&mut self.w_rows, self.w_mean, weight);
             self.moments.absorb(x, weight);
             self.learn_row(x, weight, &dec);
         }
@@ -1059,6 +1084,53 @@ mod tests {
         assert!(m.nearest(&[0.0, 0.0], true).is_none());
     }
 
+    /// The stream's mean weight after a heavy row has all but decayed away:
+    /// the weighted mean of the two rows' weights at their present shares,
+    /// to rounding, and never 0 (review 2026-11-23, CLUST-3: `1e16` then a
+    /// gap of 60 half-lives then `1`, where `1e16 + (1 − 1e16) / 1` read 0
+    /// and the next summary admitted a point `1.4e6` away at `eps = 1`).
+    /// The gaps cover total forgetting and shares of `2^-50` to `2^-30`,
+    /// where the Welford step's cancellation read 20% off.
+    ///
+    /// The share form moves the mean weight's last bits on every stream of
+    /// uneven weights, so a state saved before it continues within rule 5's
+    /// thirtieth exception, not to the bit.
+    #[test]
+    fn the_mean_weight_survives_a_heavy_row_decaying_away() {
+        for half_lives in [30.0, 40.0, 50.0, 53.0, 60.0, 2000.0] {
+            let mut m = Micro::new(cfg()).unwrap();
+            crate::OnlineModel::step(&mut m, &[0.0, 0.0], &[], 0.0, 1e16);
+            crate::OnlineModel::step(&mut m, &[0.1, 0.1], &[], 500.0 * half_lives, 1.0);
+            let share = 0.5f64.powf(half_lives);
+            let want = (1e16 * share + 1.0) / (share + 1.0);
+            let got = m.unit();
+            assert!(
+                (got - want).abs() <= 1e-12 * want,
+                "{half_lives} half-lives: {got} against {want}"
+            );
+        }
+        // A constant weight is its own mean, to the bit.
+        let mut m = Micro::new(cfg()).unwrap();
+        let mut g = crate::SplitMix64::new(9);
+        for _ in 0..200 {
+            crate::OnlineModel::step(&mut m, &[g.uniform(), g.uniform()], &[], g.uniform(), 2.5);
+            assert_eq!(m.unit(), 2.5);
+        }
+    }
+
+    /// Where the mean weight cancels to 0 (the review's case), a summary is
+    /// read at a row of weight 1, not 0: the point `1.4e6` away is no member
+    /// of the summary at the origin under `eps = 1`.
+    #[test]
+    fn a_mean_weight_cancelled_to_nothing_admits_no_far_point() {
+        let mut m = Micro::new(MicroCfg { eps: 1.0, ..cfg() }).unwrap();
+        crate::OnlineModel::step(&mut m, &[0.0, 0.0], &[], 0.0, 1e16);
+        crate::OnlineModel::step(&mut m, &[0.0, 0.0], &[], 500.0 * 60.0, 1.0);
+        assert!(m.unit() > 0.0);
+        let d = m.decide(&[1e6, 1e6], 1.0);
+        assert!(d.target.is_none(), "{:?}", d.target);
+    }
+
     fn cfg() -> MicroCfg {
         MicroCfg {
             n_features: 2,
@@ -1078,8 +1150,9 @@ mod tests {
     /// The checkpoint's schedule (task 163): every `prune_every` clock units
     /// or every `max_rows_between_prunes` learned rows, whichever comes
     /// first. Held to that rule written out over irregular clock steps with
-    /// rows of weight zero among them, which advance the clock and not the
-    /// row count. A checkpoint shows as both counters reset on a row that
+    /// rows of weight zero handed to the model directly among them, which
+    /// age it over their steps and add nothing to the row count (the stream
+    /// hands none: hard rule 9). A checkpoint shows as both counters reset on a row that
     /// moved one of them.
     #[test]
     fn checkpoints_follow_the_clock_or_the_learned_rows_whichever_comes_first() {
@@ -1129,8 +1202,10 @@ mod tests {
     }
 
     /// The reason for the clock (task 163): a summary that has faded is
-    /// pruned on time through a quiet spell of rows of weight zero, where a
-    /// cadence of learned rows alone waited for the next learned row.
+    /// pruned on time through a quiet spell of the clock, here rows of
+    /// weight zero handed to the model directly (the stream hands none, and
+    /// the next row's step reaches across the spell), where a cadence of
+    /// learned rows alone waited for the next learned row.
     #[test]
     fn a_quiet_spell_still_prunes_on_the_clock() {
         let run = |every: f64| {
@@ -1687,7 +1762,7 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_weight_row_advances_the_clock_and_learns_nothing_even_first() {
+    fn a_zero_weight_row_handed_directly_ages_the_state_and_learns_nothing_even_first() {
         let mut m = Micro::new(cfg()).unwrap();
         let s = m.step(&[1.0, 2.0], &[], 1.0, 0.0);
         assert_eq!(s.n_eff, 0.0);

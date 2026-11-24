@@ -1347,7 +1347,7 @@ fn process<'s>(
                                 None => outs.push((si, Ok(out))),
                             }
                             if let Some((bytes, cadence)) = stream.window_over_budget() {
-                                outs.push((si, Err(over_budget(spec, key, bytes, cadence, true))));
+                                outs.push((si, Err(over_budget(spec, key, bytes, cadence, None))));
                                 break 'segments;
                             }
                             // A state the data sizes that a row would have taken
@@ -1643,15 +1643,45 @@ fn reserve_refits(
                  gave it up. To keep the refit"
             )
         };
+        // The setting that sizes each refit: the model's own count of rows,
+        // or under a refit over a span of the clock, whose rows the data
+        // decides, the bytes it may hold (review 2026-11-23, BANK-5: `glm`
+        // and `expectile` were told of `huber_refit_rows`, and a span of a
+        // count it does not take).
+        use crate::ModelKind as K;
+        let span = matches!(
+            &spec.model,
+            K::Huber {
+                huber_refit_span: Some(_),
+                ..
+            } | K::Sgd {
+                huber_refit_span: Some(_),
+                ..
+            } | K::Quantile {
+                quantile_refit_span: Some(_),
+                ..
+            } | K::Glm {
+                refit_span: Some(_),
+                ..
+            } | K::Expectile {
+                refit_span: Some(_),
+                ..
+            }
+        );
+        let lower = if span {
+            "max_state_bytes, the bytes each refit's buffers may hold"
+        } else {
+            match spec.model {
+                K::Marginal { .. } => "bin_refit_rows, the rows each refit holds",
+                K::Quantile { .. } => "quantile_refit_rows, the rows each refit holds",
+                K::Glm { .. } | K::Expectile { .. } => "refit_rows, the rows each refit holds",
+                _ => "huber_refit_rows, the rows each refit holds",
+            }
+        };
         notices.push(format!(
             "spec {:?}: {opening}, increase refit_budget (in MiB, or inf for no bound), or lower \
-             {rows}, the rows each refit holds.",
+             {lower}.",
             spec.name,
-            rows = match spec.model {
-                crate::ModelKind::Marginal { .. } => "bin_refit_rows",
-                crate::ModelKind::Quantile { .. } => "quantile_refit_rows",
-                _ => "huber_refit_rows",
-            },
         ));
     }
 }
@@ -1727,15 +1757,24 @@ fn place_of(streams: &Streams, key: groups::RawKey<'_>) -> Option<usize> {
 
 /// A stream's notices, taken and named by its spec and group, and under
 /// `group_close = "session"` by the span that raised each (`Notice`).
+/// The group a message names, behind the spec: none for a spec with no
+/// groups, whose one stream's key is the empty text, a value the reader
+/// never gave (WRITING §11); ` group null` for the null group, which named
+/// none before and read as a spec without groups (review 2026-11-23,
+/// BANK-8), as a state file's refusals name it.
+pub(crate) fn group_label(spec: &Spec, key: &GroupKey) -> String {
+    match (&spec.group, key.as_str()) {
+        (None, _) => String::new(),
+        (Some(_), Some(g)) => format!(" group {g:?}"),
+        (Some(_), None) => " group null".to_string(),
+    }
+}
+
 fn say_notices(notices: &mut Vec<String>, spec: &Spec, key: &GroupKey, stream: &mut Stream) {
     for notice in stream.take_notices(spec) {
         // A spec with no groups names none: its one stream's key is the
         // empty text, a value the reader never gave (WRITING §11).
-        let group = key
-            .0
-            .as_deref()
-            .filter(|_| spec.group.is_some())
-            .map_or(String::new(), |g| format!(" group {g:?}"));
+        let group = group_label(spec, key);
         let span = notice.span.as_deref().unwrap_or("");
         // The where every notice body is said behind (WRITING §11).
         let prefix = format!("spec {:?}{group}{span}", spec.name);
@@ -2449,6 +2488,21 @@ impl Bank {
     /// `ModelBank.skip_learned` compares a resumed input against (task 120).
     pub fn last_clocks(&self) -> Vec<Vec<(GroupKey, Option<rheon_core::ClockValue>)>> {
         self.per_group(|s| s.persisted.clock.last_clock())
+    }
+
+    /// Per spec under `group_close = "monotone"`, the largest group key the
+    /// bank has read and whether its keys order as numbers ([`key_cmp`]):
+    /// every group below it was learned and closed, and is gone from
+    /// [`Self::last_clocks`] (review 2026-11-23, BANK-1). `None` for a spec
+    /// that closes no group by its key, or has read none.
+    pub fn group_marks(&self) -> Vec<Option<(GroupKey, bool)>> {
+        (0..self.specs.len())
+            .map(|si| {
+                self.high_water[si]
+                    .clone()
+                    .map(|key| (key, self.integer_keys(si)))
+            })
+            .collect()
     }
 
     /// `read` of every group's stream, per spec, in key order.
@@ -3532,7 +3586,13 @@ impl Bank {
             // A step that is not a number of clock units, refused by row as
             // a clock value that is not a number is (review 2026-10-06, PB7).
             let steps = stream
-                .check_steps(sc.clock.as_ref(), sc.weight.as_deref(), idx, *base)
+                .check_steps(
+                    &cfgs[*si],
+                    sc.clock.as_ref(),
+                    sc.weight.as_deref(),
+                    idx,
+                    *base,
+                )
                 .err()
                 .map(|r| (r.row, *si, non_finite_step(&specs[*si], r, chunk.rows())));
             let clock = stream
@@ -3744,7 +3804,7 @@ impl Bank {
                         spare.insert(Stream::new(spec).ok()?)
                     };
                     let run = &idx[start..end];
-                    if let Some((bytes, cadence)) = s.window_prepass(
+                    if let Some((bytes, cadence, row)) = s.window_prepass(
                         spec,
                         &cfgs[*si],
                         &sc.features,
@@ -3757,7 +3817,7 @@ impl Bank {
                         *base + start,
                         formulas[*si].as_ref().map(|b| b.targets(key)),
                     ) {
-                        return Some(over_budget(spec, key, bytes, cadence, false));
+                        return Some(over_budget(spec, key, bytes, cadence, Some(row)));
                     }
                 }
                 None
@@ -4680,11 +4740,7 @@ impl Bank {
                 let stream = Stream::restore_owned(&bank.specs[si], st).map_err(|e| {
                     // The where of every refusal a stream's restore says.
                     let spec = &bank.specs[si];
-                    let group = match (&spec.group, key.as_str()) {
-                        (None, _) => String::new(),
-                        (Some(_), Some(g)) => format!(" group {g:?}"),
-                        (Some(_), None) => " group null".to_string(),
-                    };
+                    let group = group_label(spec, &key);
                     let prefix = format!("state file: spec {:?}{group}", spec.name);
                     format!("{prefix}: {e}")
                 })?;

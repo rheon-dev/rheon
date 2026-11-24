@@ -86,8 +86,9 @@ shows them at work.
     ``gap_cap`` like any other step; ``"reset"`` starts the model over
     instead. Units: clock units.
 ``weight``
-    A row-weight column. A row of weight 0 is scored, advances the clock and
-    teaches nothing; a null weight skips the row. ``seqtest`` and ``audit``
+    A row-weight column. A row of weight 0 is scored and teaches nothing, and
+    it leaves the clock where it was: the next row decays as if it were not
+    there. A null weight skips the row. ``seqtest`` and ``audit``
     refuse a weight column, and ``rcov`` takes only weights of 0 and 1, since
     each counts rows: a chunk with another weight is refused, naming the row.
 ``min_weight``
@@ -130,7 +131,9 @@ shows them at work.
          - ``bocpd``
        * - 0, each having a gate of its own or nothing to gate
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
-           ``audit``, ``hawkes``, ``garch``
+           ``audit``, ``hawkes``, ``garch``, ``dcc``, ``realized``, ``pca``,
+           ``power_variation``, ``tdigest``, ``ddsketch``, ``ewm_moments``,
+           ``ar``, ``spectral``
 ``min_settled_frac``
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
@@ -208,8 +211,12 @@ shows them at work.
     values on a number clock, in integers on an integer clock. A break
     releases nothing early: its events
     wait with the row after it, and run when that row is learned. A reset
-    drops the held rows. Units: clock units, or without a ``clock`` the
-    group's rows, a skipped row included.
+    drops the held rows. A row of weight 0 is held for nothing and releases
+    nothing: it is scored as ``predict`` scores it, from the rows learned
+    before it, so it does not see a label that matured at its own clock,
+    and a later row at an earlier clock is never scored by a model that
+    learned a label still held there. Units: clock units, or without a
+    ``clock`` the group's rows, a skipped row included.
 ``label_clock``, ``max_held_rows``, ``held_overflow``
     Why: when each label arrives at a time of its own, a flight's delay at
     its landing, one delay for every row learns some labels before they are
@@ -222,9 +229,10 @@ shows them at work.
     learned before an earlier long one. ``resid`` on the row is its label
     less that served prediction. ``embargo=d`` is the case
     ``label_clock = clock + d``, and gives the same numbers wherever the
-    clock adds up exactly. A row with weight 0 is held like any row and
-    learned at its label time, where it moves the clock and teaches nothing,
-    as ``embargo`` learns it; it counts against ``max_held_rows``. A row
+    clock adds up exactly. A row with weight 0 is held for nothing and
+    releases nothing, as under ``embargo``: it is scored as ``predict``
+    scores it, from the labels learned before it, not from those its own
+    clock has reached, and it takes no room under ``max_held_rows``. A row
     whose label time is null is scored and not held: its label never
     arrives, and :meth:`~rheon.polars.ModelBank.summary` counts it in
     ``labels_missing``. A null label time is how to keep a row that is only
@@ -355,10 +363,15 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``select_half_life``, ``coef_half_life``,
 ``revert_half_life``, ``trend_half_life`` and ``huber_scale_half_life``,
 ``hawkes``' ``kernel_half_lives``, a list of them, ``garch``'s
-``start_span``, ``glm``'s and ``expectile``'s ``refit_span``, and
+``start_span``, ``dcc``'s ``start_span`` and ``margin_start_span``,
+``spectral``'s ``periods`` and ``spacing``, ``glm``'s and
+``expectile``'s ``refit_span``, and
 ``kmeans``' ``warm_span``, ``update_every`` and ``split_merge_every``,
+``realized``'s and ``power_variation``'s ``window_size``,
+``ewm_moments``' ``lag_tolerance`` and a lag written on a term's leg
+(``"x@5m"``),
 ``hmm``'s and ``bocpd``'s ``warm_span``, ``bocpd``'s ``hazard``,
-``corrchange``'s ``permute_every``, ``huber``'s and ``sgd``'s
+``corrchange``'s ``permute_every`` and ``monitor_span``, ``huber``'s and ``sgd``'s
 ``huber_refit_span`` and ``quantile``'s ``quantile_refit_span``. Each that
 counts rows where the quantity has a meaning on the clock has its count
 beside it, such as ``warm_rows`` beside ``warm_span`` and ``bocpd``'s
@@ -434,13 +447,15 @@ releases none. A regression writes, with ``<t>`` a target:
     Which gate withheld the row's predictions, as an ``Enum``, and null where
     no gate did. ``below_min_settled_frac``, ``below_min_weight``,
     ``above_max_error_inflation``, ``below_warm_rows``, ``ill_conditioned``,
-    ``unstable_rate`` and ``not_identified`` are named in that order, the
-    first that withheld anything.
+    ``unstable_rate``, ``not_identified``, ``scale_ratio_moved``, ``not_separated`` and
+    ``level_beyond_sample`` are named in that order, the first that withheld anything.
     ``below_warm_rows`` is the model's own warm-up: the rows ``kmeans``,
     ``hmm`` and ``bocpd`` hold to seed their centres, states or prior from
     (``warm_rows``), a count of rows, where ``min_weight`` is a weight, the
-    rows ``kalman`` takes a target's prior from before it is sized, and the
-    rows ``garch`` buffers for a target's start.
+    rows ``kalman`` takes a target's prior from before it is sized, the
+    rows ``garch`` buffers for a target's start, and the rows before
+    ``deco``'s standardizer holds more than five effective rows, while it
+    has no level.
     ``ill_conditioned`` is an ``ewridge`` fit withheld because its normal
     equations are past the condition at which a solve keeps a digit: its
     ``coef`` and ``support_coef`` are null too, and the solve is counted in
@@ -451,8 +466,17 @@ releases none. A regression writes, with ``<t>`` a target:
     own row's residual in mean square, and the fit diverges; the ``sgd``
     builder's docstring has the gain. ``not_identified`` is a ``garch``
     start whose rows do not yet tell its variance process from a constant
-    variance, so it buffers more rows before it reports; the ``garch``
-    builder's docstring has the test. Fields null for another reason,
+    variance, or a ``dcc`` start whose rows do not tell its correlation's
+    recursion from constant correlation, so it buffers more rows before it
+    reports; each builder's docstring has the test. ``scale_ratio_moved`` is a
+    ``corrchange`` span whose correlation statistic passed its critical
+    value while the two columns' scale ratio moved inside it, where the
+    statistic is off its null law: its ``flag`` is null; the
+    ``corrchange`` builder's docstring has the check. ``level_beyond_sample`` is a
+    ``tdigest`` or ``ddsketch`` level its rows do not identify yet: past the
+    expected level of the smallest or largest row, ``1/(n + 1)`` and
+    ``n/(n + 1)`` for ``n`` rows; the ``tdigest`` builder's docstring has
+    the rule. Fields null for another reason,
     such as a skipped row or a statistic not yet due, leave it null. An
     ``Enum`` rather than a string, because a string column costs sixteen
     bytes a row even when every value is null.
@@ -742,7 +766,12 @@ The diagnostics add, per slot:
          (default 0.5) and ``h`` is ``drift_threshold``, a clock parameter
          as above, default 5 without a clock column. At ``k = 0.5`` on a
          row clock its average run on standard normal errors is about 168
-         rows at ``h = 4`` and 465 at ``h = 5``.
+         rows at ``h = 4`` and 465 at ``h = 5``. On a clock it depends on
+         the steps, since ``d`` scales the noise as well as the drift: at
+         ``h = 5`` and a mean step of 1 it is 469 rows at steps of 1, 79
+         at steps drawn from ``Exp(1)``, and 30 at steps of 0.1 nine times
+         in ten and 9.1 otherwise. Where a steady false-alarm rate
+         matters, use a regular clock or a row clock.
        - ``"adwin"``, Bifet and Gavaldà's (2007) adaptive window on
          ``|resid|``, flag for flag river's ``drift.ADWIN``: an exponential
          histogram of the last rows (``max_buckets`` buckets of each size,
@@ -756,14 +785,24 @@ The diagnostics add, per slot:
          ``1/m = 1/(n0 - L + 1) + 1/(n1 - L + 1)``, ``L`` the
          ``min_window_length``. A break where it cuts. ``max_width``
          (default 1,000,000) bounds the window, river's has no bound.
+         The second term's ``(2/3) * c * (1/m)`` is the paper's
+         ``(2/3) * R * c * (1/m)`` at a range ``R`` of 1, river's, which
+         takes ``|resid|`` to be of order 1: the same stream in another
+         unit is cut sooner or later, or not at all (a threefold rise in
+         the residuals' spread is found in 15 rows at a spread of 1 and
+         not in 8,000 at 0.001). ``range`` sets ``R``: a number, the
+         residuals' range in the target's units, or ``"window"``, the
+         range the window holds now, under which the flags are the same
+         in any unit; each bucket then keeps its least and greatest
+         value.
        - ``"ddm"`` and ``"eddm"`` count errors: a row is one where
          ``|resid|`` passes ``error_above``, which they require, in the
          target's units (0.5 for a probability of a 0/1 target makes an
          error a misclassification). DDM (Gama et al. 2004) flags past
          ``warm_start`` rows (default 30) where ``p + s`` passes
-         ``p_min + drift_threshold * s_min`` (default 3), ``p`` the error
-         rate, ``s = sqrt(p * (1 - p) / n)``, and ``(p_min, s_min)`` the
-         pair where ``p + s`` was least. EDDM (Baena-García et al. 2006)
+         ``p_min + drift_threshold * s_min`` (default 3, and above 1),
+         ``p`` the error rate, ``s = sqrt(p * (1 - p) / n)``, and
+         ``(p_min, s_min)`` the pair where ``p + s`` was least. EDDM (Baena-García et al. 2006)
          keeps the mean ``p'`` and sample deviation ``s'`` of the rows
          between errors and flags, past ``warm_start`` rows and errors,
          where ``(p' + 2 * s')`` falls under ``beta`` (default 0.9) times
@@ -1105,14 +1144,18 @@ config each fill its defaults and build its models.
 """
 
 from rheon._spec import (
+    ar,
     audit,
     bocpd,
     coef_fields,
     coef_index,
     corrchange,
+    dcc,
+    ddsketch,
     deco,
     ew_class,
     ew_cov,
+    ewm_moments,
     ewridge,
     expectile,
     ftrl,
@@ -1130,17 +1173,24 @@ from rheon._spec import (
     output_fields,
     output_index,
     pa,
+    pca,
+    power_variation,
     quantile,
     rcov,
+    realized,
     rls,
     seqtest,
     sgd,
+    spectral,
+    tdigest,
 )
 
 __all__ = [
+    "ar",
     "audit",
     "ew_class",
     "ew_cov",
+    "ewm_moments",
     "ewridge",
     "expectile",
     "ftrl",
@@ -1155,6 +1205,7 @@ __all__ = [
     "lasso",
     "bocpd",
     "corrchange",
+    "dcc",
     "deco",
     "marginal",
     "rcov",
@@ -1164,8 +1215,14 @@ __all__ = [
     "coef_index",
     "output_index",
     "pa",
+    "pca",
+    "power_variation",
     "quantile",
+    "realized",
     "rls",
     "seqtest",
     "sgd",
+    "tdigest",
+    "ddsketch",
+    "spectral",
 ]

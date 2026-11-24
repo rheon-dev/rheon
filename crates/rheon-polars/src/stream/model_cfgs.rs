@@ -145,9 +145,243 @@ pub fn expectile_cfg(
     })
 }
 
+/// A `realized` spec's [`rheon_core::RealizedCfg`] at `decay`: one series a
+/// target. Every value is the model's own to check, the state's bytes
+/// against `max_state_bytes` among them.
+pub fn realized_cfg(
+    spec: &Spec,
+    decay: rheon_core::Decay,
+) -> Result<rheon_core::RealizedCfg, String> {
+    let ModelKind::Realized {
+        window_rows,
+        window_size,
+        closed,
+        lm_window,
+        lm_beta,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "realized_cfg", "realized"));
+    };
+    Ok(rheon_core::RealizedCfg {
+        n_targets: spec.m(),
+        decay,
+        min_weight: spec.min_periods_or_default(),
+        window_rows: *window_rows,
+        window_clock: window_size.as_ref().map(Span::value),
+        closed: closed.edge(),
+        lm_window: *lm_window,
+        lm_beta: lm_beta.unwrap_or(rheon_core::REALIZED_LM_BETA),
+        max_state_bytes: *max_state_bytes,
+    })
+}
+
+/// A `power_variation` spec's [`rheon_core::PowerVariationCfg`] at
+/// `decay`: one series a target, each named term as the core's. A term's
+/// shape (powers or a kernel, the options each takes) and its name are
+/// checked here; every other value is the model's own to check.
+pub fn power_variation_cfg(
+    spec: &Spec,
+    decay: rheon_core::Decay,
+) -> Result<rheon_core::PowerVariationCfg, String> {
+    use rheon_core::{PvTerm, PvTermKind};
+    let ModelKind::PowerVariation {
+        terms,
+        window_rows,
+        window_size,
+        closed,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "power_variation_cfg", "power_variation"));
+    };
+    let mut no = rheon_core::Refusals::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(terms.len());
+    for t in terms {
+        let name = &t.name;
+        if name.is_empty() {
+            no.refuse(
+                "power_variation: a term's name is empty. Give each term a name: its fields are \
+                 <name>_<target>.",
+            );
+        } else if name == "n" || name == "weight_sum" {
+            no.refuse(format!(
+                "power_variation: a term is named {name:?}, which names a field every \
+                 power_variation reports. Give the term another name."
+            ));
+        } else if !seen.insert(name.as_str()) {
+            no.refuse(format!(
+                "power_variation: two terms are named {name:?}, and a name names a term's \
+                 fields. Give each term its own name."
+            ));
+        }
+        let scale = t.scale.unwrap_or(1);
+        match (&t.powers, t.kernel) {
+            (Some(powers), None) => {
+                if t.bandwidth.is_some() || t.flat_top || t.center {
+                    no.refuse(format!(
+                        "power_variation: term {name:?} has powers, and bandwidth, flat_top \
+                         and center belong to a kernel term. Leave them out, or give the term \
+                         a kernel in place of its powers."
+                    ));
+                }
+                out.push(PvTerm {
+                    kind: PvTermKind::Multipower {
+                        powers: powers.clone(),
+                        normalize: t.normalize,
+                    },
+                    scale,
+                });
+            }
+            (None, Some(kernel)) => {
+                if t.normalize {
+                    no.refuse(format!(
+                        "power_variation: term {name:?} is a kernel term, and normalize \
+                         belongs to a multipower term. Leave normalize out."
+                    ));
+                }
+                match t.bandwidth {
+                    Some(bandwidth) => out.push(PvTerm {
+                        kind: PvTermKind::Kernel {
+                            kernel,
+                            bandwidth,
+                            flat_top: t.flat_top,
+                            center: t.center,
+                        },
+                        scale,
+                    }),
+                    None => no.refuse(format!(
+                        "power_variation: term {name:?} has a kernel and no bandwidth. Give \
+                         its bandwidth H, the last lag with weight."
+                    )),
+                }
+            }
+            (Some(_), Some(_)) => no.refuse(format!(
+                "power_variation: term {name:?} has both powers and a kernel, and a term is \
+                 one of the two. Split it into two terms."
+            )),
+            (None, None) => no.refuse(format!(
+                "power_variation: term {name:?} has neither powers nor a kernel. Give its \
+                 powers, such as [1, 1], or a kernel and a bandwidth."
+            )),
+        }
+    }
+    no.finish()?;
+    Ok(rheon_core::PowerVariationCfg {
+        n_targets: spec.m(),
+        terms: out,
+        decay,
+        min_weight: spec.min_periods_or_default(),
+        window_rows: *window_rows,
+        window_clock: window_size.as_ref().map(Span::value),
+        closed: closed.edge(),
+        max_state_bytes: *max_state_bytes,
+    })
+}
+
 /// A `garch` spec's [`rheon_core::GarchCfg`]: one series a target, the
 /// start 2,000 rows unless the spec gives rows or a span. Every value is
 /// the model's own to check.
+/// An `ar` spec's [`rheon_core::ArCfg`] under `decay`: its series are the
+/// spec's targets and its exogenous regressors the features; every
+/// parameter check is the model's.
+pub fn ar_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::ArCfg, String> {
+    let ModelKind::Ar {
+        lags,
+        ridge,
+        max_state_bytes,
+        select,
+        window_size,
+        snapshot_every,
+        max_rows_between_snapshots,
+        ..
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "ar_cfg", "ar"));
+    };
+    let cfg = rheon_core::ArCfg {
+        n_targets: spec.m(),
+        n_features: spec.k(),
+        lags: lags.lags(),
+        fit_intercept: spec.fit_intercept,
+        decay,
+        ridge: ridge.unwrap_or(0.0),
+        min_weight: spec.min_periods_or_default(),
+        max_state_bytes: *max_state_bytes,
+        select: match select.as_deref() {
+            None => None,
+            Some("aic") => Some(rheon_core::ArSelect::Aic),
+            Some("bic") => Some(rheon_core::ArSelect::Bic),
+            Some(other) => {
+                return Err(format!(
+                    "ar: select must be \"aic\" or \"bic\", but it is {other:?}. Use one of \
+                     those words."
+                ));
+            }
+        },
+        window: window_size.as_ref().map(Span::value),
+        window_every: snapshot_every.as_ref().map(Span::value),
+        max_rows_between_snapshots: max_rows_between_snapshots.map(|r| r as usize),
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
+/// A `spectral` spec's [`rheon_core::SpectralCfg`] under `decay`: its
+/// series are the spec's targets, its frequencies the periods' inverses.
+pub fn spectral_cfg(
+    spec: &Spec,
+    decay: rheon_core::Decay,
+) -> Result<rheon_core::SpectralCfg, String> {
+    let ModelKind::Spectral(s) = &spec.model else {
+        return Err(not_a(spec, "spectral_cfg", "spectral"));
+    };
+    let scaling = match s.scaling.as_deref().unwrap_or("density") {
+        "density" => rheon_core::SpectralScaling::Density,
+        "spectrum" => rheon_core::SpectralScaling::Spectrum,
+        "lomb_scargle" => rheon_core::SpectralScaling::LombScargle,
+        other => {
+            return Err(format!(
+                "spectral: scaling must be \"density\", \"spectrum\" or \"lomb_scargle\", but \
+                 it is {other:?}. Use one of those words."
+            ));
+        }
+    };
+    let mut no = rheon_core::Refusals::new();
+    let frequencies = s
+        .periods
+        .spans()
+        .iter()
+        .map(|p| {
+            let v = p.value();
+            if !(v.is_finite() && v > 0.0) {
+                no.refuse(format!(
+                    "spectral: each period must be finite and above 0, but one is {v}. Give \
+                     the periods to transform at, in clock units."
+                ));
+            }
+            1.0 / v
+        })
+        .collect();
+    no.stop_here()?;
+    let cfg = rheon_core::SpectralCfg {
+        n_targets: spec.m(),
+        frequencies,
+        spacing: s.spacing.as_ref().map_or(1.0, Span::value),
+        decay,
+        scaling,
+        detrend: s.detrend.unwrap_or(true),
+        min_weight: spec.min_periods_or_default(),
+        max_state_bytes: s.max_state_bytes,
+        window: s.window_size.as_ref().map(Span::value),
+        window_every: s.snapshot_every.as_ref().map(Span::value),
+        max_rows_between_snapshots: s.max_rows_between_snapshots.map(|r| r as usize),
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
 pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
     use rheon_core::{GarchDist, GarchVol};
     let ModelKind::Garch {
@@ -202,8 +436,195 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
     Ok(cfg)
 }
 
+/// A `tdigest` spec's [`rheon_core::TDigestModelCfg`]: one digest a target,
+/// at compression 100 unless the spec gives one. Every value is the
+/// model's own to check.
+pub fn tdigest_cfg(spec: &Spec) -> Result<rheon_core::TDigestModelCfg, String> {
+    let ModelKind::TDigest {
+        compression,
+        quantiles,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "tdigest_cfg", "tdigest"));
+    };
+    let cfg = rheon_core::TDigestModelCfg {
+        n_targets: spec.m(),
+        compression: compression.unwrap_or(rheon_core::TDIGEST_COMPRESSION),
+        levels: quantiles.clone(),
+        max_state_bytes: *max_state_bytes,
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
+/// A `ddsketch` spec's [`rheon_core::DdSketchModelCfg`] under `decay`: one
+/// sketch a target, at `alpha = tanh(1/128)` unless the spec gives one, its
+/// window in rows or in clock units. Every value is the model's own to check.
+pub fn ddsketch_cfg(
+    spec: &Spec,
+    decay: rheon_core::Decay,
+) -> Result<rheon_core::DdSketchModelCfg, String> {
+    let ModelKind::DdSketch {
+        alpha,
+        quantiles,
+        window_rows,
+        window_size,
+        closed,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "ddsketch_cfg", "ddsketch"));
+    };
+    let cfg = rheon_core::DdSketchModelCfg {
+        n_targets: spec.m(),
+        alpha: alpha.unwrap_or(rheon_core::EW_QUANTILE_ALPHA),
+        levels: quantiles.clone(),
+        window_rows: *window_rows,
+        window_clock: window_size.as_ref().map(Span::value),
+        closed: closed.edge(),
+        decay,
+        max_state_bytes: *max_state_bytes,
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
 /// A `garch` spec's start, in rows, when it gives neither rows nor a span.
 pub const GARCH_START_ROWS: usize = 2000;
+
+/// A `dcc` spec's [`rheon_core::DccCfg`] under `decay`: the targets the
+/// series, a GARCH margin each unless `margins` is `"none"` (its start
+/// 2,000 rows unless the spec gives rows or a span), the correlation's
+/// start 500 rows unless the spec gives rows or a span, and `(a, b[, g])`
+/// held where the spec gives them. Every value is the model's own to check.
+pub fn dcc_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DccCfg, String> {
+    use rheon_core::{GarchDist, GarchVol};
+    let ModelKind::Dcc {
+        asymmetric,
+        margins,
+        vol,
+        dist,
+        truncation,
+        variance_targeting,
+        margin_start_rows,
+        margin_start_span,
+        a,
+        b,
+        g,
+        start_rows,
+        start_span,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "dcc_cfg", "dcc"));
+    };
+    let asymmetric = asymmetric.unwrap_or(false);
+    let with_margins = match margins.as_deref().unwrap_or("garch") {
+        "garch" => true,
+        "none" => false,
+        other => {
+            return Err(format!(
+                "dcc: margins must be \"garch\" or \"none\", but it is {other:?}. Use one of \
+                 those words."
+            ));
+        }
+    };
+    let margin_keys_given = vol.is_some()
+        || dist.is_some()
+        || truncation.is_some()
+        || variance_targeting.is_some()
+        || margin_start_rows.is_some()
+        || margin_start_span.is_some();
+    if !with_margins && margin_keys_given {
+        return Err(
+            "dcc: margins = \"none\" runs no GARCH margin, but the spec sets one of vol, dist, \
+             truncation, variance_targeting, margin_start_rows or margin_start_span. Leave them \
+             out, or set margins to \"garch\"."
+                .into(),
+        );
+    }
+    let vol = match vol.as_deref().unwrap_or("garch") {
+        "garch" => GarchVol::Garch,
+        "gjr" => GarchVol::Gjr,
+        "egarch" => GarchVol::Egarch,
+        "figarch" => GarchVol::Figarch,
+        other => {
+            return Err(format!(
+                "dcc: vol must be \"garch\", \"gjr\", \"egarch\" or \"figarch\", but it is \
+                 {other:?}. Use one of those words."
+            ));
+        }
+    };
+    let dist = match dist.as_deref().unwrap_or("normal") {
+        "normal" => GarchDist::Normal,
+        "t" => GarchDist::T,
+        "skewt" => GarchDist::Skewt,
+        other => {
+            return Err(format!(
+                "dcc: dist must be \"normal\", \"t\" or \"skewt\", but it is {other:?}. Use \
+                 one of those words."
+            ));
+        }
+    };
+    let params = match (a, b, g) {
+        (None, None, None) => None,
+        (Some(a), Some(b), None) if !asymmetric => Some(vec![*a, *b]),
+        (Some(a), Some(b), Some(g)) if asymmetric => Some(vec![*a, *b, *g]),
+        _ => {
+            return Err(format!(
+                "dcc: the spec gives {} of the parameters, but they are held only all together. \
+                 Give {}, or leave every one out to estimate them.",
+                [("a", a), ("b", b), ("g", g)]
+                    .iter()
+                    .filter(|(_, v)| v.is_some())
+                    .map(|(n, _)| *n)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+                    + if !asymmetric && g.is_some() {
+                        " (g is the asymmetric model's: set asymmetric to true)"
+                    } else {
+                        ""
+                    },
+                if asymmetric { "a, b and g" } else { "a and b" },
+            ));
+        }
+    };
+    let cfg = rheon_core::DccCfg {
+        n_targets: spec.m(),
+        asymmetric,
+        margins: with_margins.then(|| rheon_core::GarchCfg {
+            n_targets: spec.m(),
+            vol,
+            dist,
+            truncation: *truncation,
+            variance_targeting: variance_targeting.unwrap_or(false),
+            start_rows: margin_start_rows.unwrap_or(GARCH_START_ROWS),
+            start_span: margin_start_span.as_ref().map(Span::value),
+            horizon: 1,
+            min_weight: 0.0,
+            max_state_bytes: None,
+        }),
+        params,
+        decay,
+        start_rows: start_rows.unwrap_or(rheon_core::DCC_START_ROWS),
+        start_span: start_span.as_ref().map(Span::value),
+        min_weight: spec.min_periods_or_default(),
+        max_state_bytes: *max_state_bytes,
+    };
+    // A margin's refusal names the margins' parameters as the spec spells
+    // them.
+    cfg.validate()
+        .map_err(|e| match e.strip_prefix("dcc: garch: ") {
+            Some(rest) => format!(
+                "dcc: {}",
+                rest.replace("start_rows", "margin_start_rows")
+                    .replace("start_span", "margin_start_span")
+            ),
+            None => e,
+        })?;
+    Ok(cfg)
+}
 
 /// A `bocpd` spec's expected rows between changepoints, where it gives
 /// neither `hazard_rows` nor `hazard`.
@@ -313,6 +734,9 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
         monitor_rows,
         boundary_gamma,
         permute_every,
+        window_size,
+        monitor_span,
+        max_state_bytes,
     } = &spec.model
     else {
         return Err(not_a(spec, "corrchange_cfg", "corrchange"));
@@ -337,9 +761,12 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
             ));
         }
     };
-    let span_rows = match *span_rows {
-        Some(rows) => rows,
-        None => {
+    let span_rows = match (*span_rows, window_size) {
+        (Some(rows), _) => rows,
+        // On the clock: the model refuses the two together, and reads the
+        // span from `span_clock`.
+        (None, Some(_)) => 0,
+        (None, None) => {
             // A subject either way: the spec's render drops "corrchange: ".
             let kind_said = if kind_given {
                 format!("kind={name:?} ")
@@ -348,7 +775,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
             };
             no.refuse(format!(
                 "corrchange: {kind_said}needs window_rows, {}, but it is not set. Set window_rows \
-                 to a number of rows, {} or more.",
+                 to a number of rows, {} or more, or window_size to a span of the clock.",
                 match kind {
                     CorrChangeKind::Sequential =>
                         "the rows of history each monitored period is tested against",
@@ -446,11 +873,21 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
     );
     if !sequential {
         refuse(monitor_rows.is_some(), "monitor_rows", "\"sequential\"", "");
+        refuse(monitor_span.is_some(), "monitor_span", "\"sequential\"", "");
         refuse(
             boundary_gamma.is_some(),
             "boundary_gamma",
             "\"sequential\"",
             "",
+        );
+    }
+    // The rows a span of rows holds are bounded by its count; only a span
+    // of the clock holds what the data sizes.
+    if max_state_bytes.is_some() && window_size.is_none() {
+        no.refuse(
+            "corrchange: max_state_bytes applies only under window_size, where the rows a span \
+             of the clock holds are the data's to number; window_rows bounds them already. \
+             Leave max_state_bytes out, or give window_size in place of window_rows.",
         );
     }
     no.finish()?;
@@ -467,24 +904,43 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
         n_perm: n_perm.unwrap_or(200),
         // One critical value in force for one shift of the windows: the
         // draws then cost `n_perm · k²` a row whatever `window_rows` is.
-        // A clock cadence alone has no count of reports.
-        permute_every_rows: permute_every_rows.unwrap_or(if permute_every.is_some() {
-            usize::MAX
-        } else {
-            span_rows
-        }),
+        // A clock cadence alone has no count of reports, and under
+        // `window_size` the shift is a span of the clock (below).
+        permute_every_rows: permute_every_rows.unwrap_or(
+            if permute_every.is_some() || window_size.is_some() {
+                usize::MAX
+            } else {
+                span_rows
+            },
+        ),
         perm_block: perm_block.unwrap_or(1),
         norm,
         seed: seed.unwrap_or(0),
         reset,
-        // W&G's `T = 1`: as many rows monitored as the history has.
-        monitor_rows: if sequential {
-            monitor_rows.unwrap_or(span_rows)
-        } else {
-            0
+        // W&G's `T = 1`: as many rows monitored as the history has, or
+        // under `window_size` a period as long as the history's span.
+        monitor_rows: match (sequential, window_size) {
+            (false, _) => 0,
+            (true, None) => monitor_rows.unwrap_or(span_rows),
+            (true, Some(_)) => monitor_rows.unwrap_or(0),
         },
         boundary_gamma: boundary_gamma.unwrap_or(0.0),
-        permute_every: permute_every.as_ref().map(Span::value),
+        // Under `window_size` the value is redrawn once the windows have
+        // moved on by a window, as `window_rows`' default redraws once
+        // they have moved on by its rows.
+        permute_every: permute_every.as_ref().map(Span::value).or_else(|| {
+            window_size
+                .as_ref()
+                .filter(|_| window && permute_every_rows.is_none())
+                .map(Span::value)
+        }),
+        span_clock: window_size.as_ref().map(Span::value),
+        monitor_clock: match (sequential, window_size, monitor_span) {
+            (true, _, Some(s)) => Some(s.value()),
+            (true, Some(w), None) if monitor_rows.is_none() => Some(w.value()),
+            (_, _, s) => s.as_ref().map(Span::value),
+        },
+        max_state_bytes: *max_state_bytes,
     })
 }
 
@@ -1302,6 +1758,43 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
             || rheon_core::default_glm_step_cap(refit_rows.max(u32::from(refit_span.is_some()))),
             |n| n.0,
         ),
+    })
+}
+
+/// A `pca` spec's [`rheon_core::StreamPcaCfg`]: the features its columns,
+/// two components unless the spec gives a count (one for one feature),
+/// the incremental SVD unless it names a method. Every value is the model's
+/// own to check.
+pub fn pca_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::StreamPcaCfg, String> {
+    use rheon_core::PcaMethod;
+    let ModelKind::Pca {
+        n_components,
+        method,
+        learning_rate,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "pca_cfg", "pca"));
+    };
+    let method = match method.as_deref().unwrap_or("svd") {
+        "svd" => PcaMethod::Svd,
+        "ccipca" => PcaMethod::Ccipca,
+        "oja" => PcaMethod::Oja,
+        other => {
+            return Err(format!(
+                "pca: method must be \"svd\", \"ccipca\" or \"oja\", but it is {other:?}. \
+                 Use one of those words."
+            ));
+        }
+    };
+    Ok(rheon_core::StreamPcaCfg {
+        n_features: spec.k(),
+        n_components: n_components.unwrap_or(spec.k().min(2)),
+        method,
+        decay,
+        min_weight: spec.min_periods_or_default(),
+        learning_rate: *learning_rate,
+        max_state_bytes: *max_state_bytes,
     })
 }
 

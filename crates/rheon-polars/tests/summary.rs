@@ -1112,6 +1112,22 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["x0", "x1"]"#,
             true,
         ),
+        // Lee and Mykland's ring part full when the file is saved.
+        (
+            "realized",
+            r#"{"type": "realized", "lm_window": 600}"#,
+            r#"["y"]"#,
+            "[]",
+            true,
+        ),
+        // Its rings and a raw return held when the file is saved.
+        (
+            "power_variation",
+            r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}]}"#,
+            r#"["y"]"#,
+            "[]",
+            true,
+        ),
         // Saved after its start, a t's shape beside the process.
         (
             "garch",
@@ -1119,6 +1135,64 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["y"]"#,
             "[]",
             false,
+        ),
+        // Saved after its margins' start and its own: two GARCH margins,
+        // the targets, Q and its sensitivities.
+        (
+            "dcc",
+            r#"{"type": "dcc", "asymmetric": true, "margin_start_rows": 50, "start_rows": 50}"#,
+            r#"["y", "x0"]"#,
+            "[]",
+            true,
+        ),
+        // Its directions started, the last kept one beside the emitted.
+        (
+            "pca",
+            r#"{"type": "pca", "n_components": 1}"#,
+            r#"["x0"]"#,
+            r#"["x0", "x1"]"#,
+            true,
+        ),
+        // Saved past its merges, its buffer part full.
+        (
+            "tdigest",
+            r#"{"type": "tdigest", "compression": 10, "quantiles": [0.1, 0.4, 0.9]}"#,
+            r#"["y"]"#,
+            "[]",
+            false,
+        ),
+        // A clock window part full, its ring and both stores.
+        (
+            "ddsketch",
+            r#"{"type": "ddsketch", "quantiles": [0.1, 0.4, 0.9], "window_size": 40}"#,
+            r#"["y"]"#,
+            "[]",
+            false,
+        ),
+        // A lag's buffer and the standard errors' moments in the file.
+        (
+            "ewm_moments",
+            r#"{"type": "ewm_moments", "se": true, "kind": {"rho1": "standardized"},
+                "terms": {"m3": {"x0": 3}, "rho1": {"x0": 1, "x1@1": 1}}}"#,
+            "[]",
+            r#"["x0", "x1"]"#,
+            true,
+        ),
+        // Its transforms at two periods.
+        (
+            "spectral",
+            r#"{"type": "spectral", "periods": [8.0, 3.0]}"#,
+            r#"["y"]"#,
+            "[]",
+            true,
+        ),
+        // Its rings full and its fits solved.
+        (
+            "ar",
+            r#"{"type": "ar", "lags": [1, 2], "ridge": 0.01}"#,
+            r#"["y"]"#,
+            r#"["x0"]"#,
+            true,
         ),
     ];
     let mut seen = Vec::new();

@@ -317,6 +317,16 @@ class TestValues:
         var = df["x0"].var()
         assert row["value"] == pytest.approx(1.0 / var, rel=1e-12)
 
+    def test_an_expectiles_ridge_is_told_its_own_way_out(self):
+        """Review 2026-11-23, PY-11: ``expectile`` keeps its ridge in the
+        features' squared units, so the finding holds for it, but it takes
+        no ``standardize``, which the finding told it to set."""
+        df, _ = cs.clean_independent(0)
+        c = dict(targets=["y"], features=cs.FEATURES, half_life=200.0)
+        f = cs.findings(df, [rp.spec.expectile("e", expectile=0.5, ridge=1.0, **c)])
+        message = f.filter(code="ridge_shrinks", spec="e", column="x0")["message"][0]
+        assert "lower ridge, or rescale" in message and "standardize" not in message
+
     def test_few_learned_fires_on_more_than_half_skipped_and_not_at_half(self):
         """The docstring's line: more than half the rows skipped for a missing
         feature. At exactly half, ``rows_processed / rows_fed`` is 0.5, which
@@ -521,10 +531,12 @@ class TestAuditTenSeeds:
 def test_check_places_every_regression():
     """A new regression joins ``_check._REGRESSIONS`` (``few_rows``), and is
     measured for ``_UNCENTRED_LIMITS`` if it does not centre its features.
-    ``holt`` sits out: it fits a level and a trend to the target alone."""
+    ``holt`` sits out: it fits a level and a trend to the target alone; and
+    ``ar``, whose rows before its lags fill teach nothing, so a count of its
+    learned rows against its coefficients is not ``few_rows``' reading."""
     from test_model_registry import REGRESSIONS
 
-    assert REGRESSIONS - {"holt"} == _check._REGRESSIONS
+    assert REGRESSIONS - {"holt", "ar"} == _check._REGRESSIONS
     assert set(_check._UNCENTRED_LIMITS) <= _check._REGRESSIONS
     assert _check._RIDGED <= _check._REGRESSIONS
     assert set(_native.model_kinds()) >= _check._GRAMMED

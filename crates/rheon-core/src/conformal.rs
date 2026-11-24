@@ -178,7 +178,7 @@ impl From<Saved> for Conformal {
             released: s.released,
             q: if q.is_finite() { q } else { f64::NAN },
             gain: gauss_gain(s.alpha),
-            z: norm_ppf(1.0 - 0.5 * s.alpha),
+            z: upper_z(s.alpha),
         }
     }
 }
@@ -251,8 +251,31 @@ impl Conformal {
             released: 0.0,
             q: f64::NAN,
             gain: gauss_gain(alpha),
-            z: norm_ppf(1.0 - 0.5 * alpha),
+            z: upper_z(alpha),
         })
+    }
+
+    /// Whether a restored tracker keeps the shape every row relies on: a
+    /// level in `(0, 1)` and a rate above 0, a multiplier and a kept radius
+    /// that are each NaN (not started) or a finite number at least 0, a
+    /// coverage in `[0, 1]`, and weights and counts that are finite and at
+    /// least 0. A file that says otherwise is damaged (review 2026-11-23,
+    /// DIAG-10 (4)).
+    pub fn has_shape(&self) -> bool {
+        let unset_or_held = |v: f64| v.is_nan() || (v.is_finite() && v >= 0.0);
+        let held = |v: f64| v.is_finite() && v >= 0.0;
+        self.alpha > 0.0
+            && self.alpha < 1.0
+            && self.rate.is_finite()
+            && self.rate > 0.0
+            && unset_or_held(self.m)
+            && unset_or_held(self.q)
+            && (0.0..=1.0).contains(&self.cov)
+            && held(self.cov_w)
+            && held(self.w_mean)
+            && held(self.w_rows)
+            && held(self.held_mean)
+            && held(self.released)
     }
 
     /// The half-width of the interval for a row whose residual spread
@@ -327,7 +350,7 @@ impl Conformal {
         shown: Option<f64>,
         held: usize,
     ) {
-        if !resid.is_finite() || w <= 0.0 {
+        if !(resid.is_finite() && w > 0.0 && w.is_finite()) {
             self.cov_w *= lam;
             self.w_rows *= lam;
             return;
@@ -335,8 +358,8 @@ impl Conformal {
         // The stream's mean weight, this row's included, so the first row
         // reads its own weight as 1; and the mean of the rows waiting, on the
         // same count.
-        self.w_rows = lam * self.w_rows + 1.0;
-        self.w_mean += (w - self.w_mean) / self.w_rows;
+        self.w_rows *= lam;
+        self.w_mean = crate::cluster::mean_weight(&mut self.w_rows, self.w_mean, w);
         // (A tracker that has never been passed a count skips the division,
         // whose result would be 0: the fixed step costs what it did.)
         if held > 0 || self.held_mean != 0.0 {
@@ -435,10 +458,24 @@ impl Conformal {
 /// the bit wherever its state is loaded. `Φ⁻¹` is [`norm_ppf`], whose tails
 /// read [`ln_basic`], basic arithmetic too.
 pub fn gauss_gain(alpha: f64) -> f64 {
-    let z = norm_ppf(1.0 - 0.5 * alpha);
+    let z = upper_z(alpha);
     // 1 / sqrt(2π)
     const INV_SQRT_2PI: f64 = 0.398_942_280_401_432_7;
     2.0 * INV_SQRT_2PI * exp_neg(0.5 * z * z)
+}
+
+/// `Φ⁻¹(1 − α/2)`, the upper `α/2` quantile of a standard normal. Where
+/// `1 − α/2` rounds to 1 (a coverage within `2⁻⁵³` of 1, which a spec
+/// takes) it is read from the lower tail, `−Φ⁻¹(α/2)`: `Φ⁻¹(1)` is no
+/// number, and made the tracker's start and gain NaN for good. Elsewhere it
+/// is the form it always was, to the bit.
+fn upper_z(alpha: f64) -> f64 {
+    let p = 1.0 - 0.5 * alpha;
+    if p < 1.0 {
+        norm_ppf(p)
+    } else {
+        -norm_ppf(0.5 * alpha)
+    }
 }
 
 /// `e^{−x}` for `x ≥ 0` in basic arithmetic, the same bits on every
@@ -583,6 +620,101 @@ pub fn norm_ppf(p: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A restored tracker is held to its shape, each bound on its own; one
+    /// fed mid-stream is sound (review 2026-11-23, DIAG-10 (4)).
+    #[test]
+    fn a_restored_trackers_shape_is_checked() {
+        let mut c = Conformal::new(0.9, 0.05).unwrap();
+        assert!(c.has_shape());
+        for i in 0..50 {
+            c.update(f64::from(i % 5) - 2.0, 1.0, 0.99, 1.0);
+        }
+        assert!(c.has_shape());
+        for edit in [
+            &(|c: &mut Conformal| c.alpha = 1.0) as &dyn Fn(&mut Conformal),
+            &|c| c.rate = 0.0,
+            &|c| c.m = -1.0,
+            &|c| c.m = f64::INFINITY,
+            &|c| c.q = -1.0,
+            &|c| c.cov = 1.5,
+            &|c| c.cov_w = f64::NAN,
+            &|c| c.w_mean = -1.0,
+            &|c| c.w_rows = f64::INFINITY,
+            &|c| c.held_mean = -1.0,
+            &|c| c.released = f64::NAN,
+        ] {
+            let mut d = c.clone();
+            edit(&mut d);
+            assert!(!d.has_shape(), "{d:?}");
+        }
+    }
+
+    /// A coverage just under 1 is a coverage the tracker takes: `1 − α/2`
+    /// rounds to 1 there, and `Φ⁻¹(1)` made the multiplier's start and its
+    /// gain NaN for good (review 2026-11-23, DIAG-6). The upper quantile
+    /// is read from the lower tail there, and a weight that is not a
+    /// finite number above 0 only ages the tracker.
+    #[test]
+    fn a_coverage_just_under_one_and_a_weight_that_is_no_number_keep_it_finite() {
+        for coverage in [1.0f64.next_down(), 1.0 - 1e-15, 0.999_999_999] {
+            let mut c = Conformal::new(coverage, 0.01).unwrap();
+            assert!(c.z.is_finite() && c.z > 5.0, "{coverage}: z {}", c.z);
+            assert!(
+                c.gain.is_finite() && c.gain > 0.0,
+                "{coverage}: gain {}",
+                c.gain
+            );
+            for _ in 0..50 {
+                c.update(0.3, 1.0, 0.99, 1.0);
+            }
+            assert!(c.radius(1.0).is_some_and(f64::is_finite), "{coverage}");
+        }
+        // The levels a spec is usually given keep their bits.
+        for coverage in [0.5, 0.8, 0.9, 0.95, 0.99] {
+            let c = Conformal::new(coverage, 0.01).unwrap();
+            let alpha = 1.0 - coverage;
+            assert_eq!(c.z.to_bits(), norm_ppf(1.0 - 0.5 * alpha).to_bits());
+        }
+        let mut c = Conformal::new(0.9, 0.01).unwrap();
+        for _ in 0..20 {
+            c.update(0.3, 1.0, 0.99, 1.0);
+        }
+        for w in [f64::NAN, f64::INFINITY] {
+            let mut d = c.clone();
+            d.update(0.3, 1.0, 1.0, w);
+            assert_eq!(d.w_mean.to_bits(), c.w_mean.to_bits(), "{w}");
+            assert!(d.radius(1.0).is_some_and(f64::is_finite), "{w}");
+        }
+    }
+
+    /// The stream's mean weight after a heavy row has all but decayed away:
+    /// the two rows' weights at their present shares, to rounding (review
+    /// 2026-11-23, CLUST-3: the Welford step read `1e16 + (1 − 1e16) / 1 =
+    /// 0` after total forgetting, and up to 20% off at shares near `2^-50`).
+    ///
+    /// The share form moves the mean weight's last bits, so a state saved
+    /// before it continues within rule 5's thirtieth exception.
+    #[test]
+    fn the_mean_weight_survives_a_heavy_row_decaying_away() {
+        for share in [
+            0.0,
+            2f64.powi(-60),
+            2f64.powi(-50),
+            2f64.powi(-40),
+            2f64.powi(-30),
+        ] {
+            let mut c = Conformal::new(0.9, 0.01).unwrap();
+            c.update(0.5, 1.0, 1.0, 1e16);
+            c.update(0.5, 1.0, share, 1.0);
+            let want = (1e16 * share + 1.0) / (share + 1.0);
+            assert!(
+                (c.w_mean - want).abs() <= 1e-12 * want,
+                "share {share}: {} against {want}",
+                c.w_mean
+            );
+        }
+    }
 
     fn lcg(state: &mut u64) -> f64 {
         *state = state

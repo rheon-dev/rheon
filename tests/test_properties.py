@@ -60,6 +60,7 @@ MODELS = [
     ("glm", {}),
     ("expectile", {"expectile": 0.8}),
     ("holt", {"features": None}),  # no features keyword
+    ("ar", {"lags": 1, "ridge": 1e-3}),
 ]
 IDS = [m[0] for m in MODELS]
 
@@ -635,6 +636,10 @@ class TestUniversalProperties:
         base run scored."""
         compared = []
         kw = {"max_error_inflation": float("inf")} if model == "ewridge" else {}
+        # `ar` learns from a row only once its lag is there, so its default
+        # gate waits past the warm rows; its ridge defines the early fits.
+        if model == "ar":
+            kw = {"min_weight": 0.0}
 
         def check(df, data):
             df = binarize(df, model)
@@ -1284,7 +1289,7 @@ COMBINATIONS = {kind: _combinations(kind) for kind in UNCLOCKED_KINDS}
 
 
 def test_each_kind_takes_every_stream_parameter_but_those_it_refuses():
-    """The probe is no false skip: the four kinds are the ones no sweep
+    """The probe is no false skip: the five kinds are the ones no sweep
     cut, and each runs under every stream parameter but the ones `REFUSED`
     names, all together too. `corrchange`, `hmm` and `kmeans` left the list
     when they took clock forms (task 538): the temporal-clock property
@@ -1292,8 +1297,10 @@ def test_each_kind_takes_every_stream_parameter_but_those_it_refuses():
     assert UNCLOCKED_KINDS == [
         "audit",
         "deco",
+        "pca",
         "rcov",
         "seqtest",
+        "tdigest",
     ]
     for kind in UNCLOCKED_KINDS:
         taken = {name for names in COMBINATIONS[kind] for name in names}

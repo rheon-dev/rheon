@@ -579,14 +579,21 @@ impl Hawkes {
     /// The numbers of the running sums, in bytes: `8 (k + D (1 + k) + D (D +
     /// 1) / 2 + 2)`.
     fn sums_bytes(n: u64, k: u64) -> u64 {
-        8 * (k + n * (1 + k) + n * (n + 1) / 2 + 2)
+        let pairs = n.saturating_mul(n.saturating_add(1)) / 2;
+        k.saturating_add(n.saturating_mul(k.saturating_add(1)))
+            .saturating_add(pairs)
+            .saturating_add(2)
+            .saturating_mul(8)
     }
 
     /// The bytes of a window's rows: `8 (2 + D + k)` each, with the newer
     /// block's sum `B`, the clock since its start and the weight inside, `8
     /// (k + 2)`.
     fn window_bytes(n: u64, k: u64, rows: u64) -> u64 {
-        8 * (rows * (2 + n + k) + k + 2)
+        rows.saturating_mul(n.saturating_add(k).saturating_add(2))
+            .saturating_add(k)
+            .saturating_add(2)
+            .saturating_mul(8)
     }
 
     /// The bytes of the numbers a model of this shape holds at most: its
@@ -595,10 +602,13 @@ impl Hawkes {
     /// its clock and its weight, `8 (k + 2)`. The one part whose size the
     /// data could set is the window's rows, and `W` bounds it, so this is
     /// known from the settings alone. A window of clock units is not
-    /// bounded by its settings: see [`Self::clock_state_bytes`].
+    /// bounded by its settings: see [`Self::clock_state_bytes`]. Past what a
+    /// `u64` counts it reads `u64::MAX`, which no cap takes.
     pub fn state_bytes(n_targets: usize, n_decays: usize, window_events: Option<usize>) -> u64 {
-        let (n, k) = (n_targets as u64, (n_targets * n_decays) as u64);
-        Self::sums_bytes(n, k) + window_events.map_or(0, |w| Self::window_bytes(n, k, w as u64))
+        let n = n_targets as u64;
+        let k = n.saturating_mul(n_decays as u64);
+        Self::sums_bytes(n, k)
+            .saturating_add(window_events.map_or(0, |w| Self::window_bytes(n, k, w as u64)))
     }
 
     /// The bytes a window of clock units holds with `rows` event rows in it:
@@ -608,7 +618,9 @@ impl Hawkes {
     /// holds, so it is read as the rows go in.
     pub fn clock_state_bytes(n_targets: usize, n_decays: usize, rows: usize) -> u64 {
         let stamp = std::mem::size_of::<Stamp>() as u64;
-        Self::state_bytes(n_targets, n_decays, Some(rows)) + (rows as u64 + 1) * stamp + 8
+        Self::state_bytes(n_targets, n_decays, Some(rows))
+            .saturating_add((rows as u64).saturating_add(1).saturating_mul(stamp))
+            .saturating_add(8)
     }
 
     /// The stamp last handed to a step of a clock window ([`Stamp`]), `None`

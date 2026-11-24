@@ -304,11 +304,31 @@ impl Spec {
                 return Decay::Halflife(h);
             }
         }
-        match self.model.window_parts() {
-            Some((Some(w), _)) if w.is_finite() && w > 0.0 => {
+        match self.memory_window() {
+            Some(w) if w.is_finite() && w > 0.0 => {
                 Decay::Halflife(window_half_life(w, model, self.clock.is_some()))
             }
             _ => model,
+        }
+    }
+
+    /// The window a fit is read over, in clock units: a windowed model's
+    /// `window_size`, and `expectile`'s `window_size`, or its `window_rows`
+    /// where there is no clock column and a row is a unit. `None` for a fit
+    /// with no window, and for `window_rows` on a clock, whose rows are no
+    /// span of the clock.
+    pub fn memory_window(&self) -> Option<f64> {
+        match &self.model {
+            super::ModelKind::Expectile {
+                window_size,
+                window_rows,
+                ..
+            } => window_size.as_ref().map(Span::value).or_else(|| {
+                window_rows
+                    .filter(|_| self.clock.is_none())
+                    .map(|n| n as f64)
+            }),
+            _ => self.model.window_parts().and_then(|(w, _)| w),
         }
     }
 
@@ -351,8 +371,8 @@ impl Spec {
                 return (hs[0], f64::INFINITY);
             }
         }
-        match self.model.window_parts() {
-            Some((Some(w), _)) if w.is_finite() && w > 0.0 => (half_life_of(model), w),
+        match self.memory_window() {
+            Some(w) if w.is_finite() && w > 0.0 => (half_life_of(model), w),
             _ => (half_life_of(self.fit_memory(model)), f64::INFINITY),
         }
     }

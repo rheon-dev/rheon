@@ -1,5 +1,5 @@
-//! The words for a state the data sizes (`hawkes`' window of clock units,
-//! `garch`'s start over a span of the clock),
+//! The words for a state the data sizes (`hawkes`' and `realized`'s windows
+//! of clock units, `garch`'s start over a span of the clock),
 //! which the settings cannot bound at the call: the notice that it is past
 //! half of its cap, and what the bank says when a row would pass the cap.
 
@@ -73,11 +73,60 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
         ModelKind::Expectile {
             window_size: Some(w),
             ..
+        }
+        | ModelKind::Realized {
+            window_size: Some(w),
+            ..
+        }
+        | ModelKind::PowerVariation {
+            window_size: Some(w),
+            ..
+        }
+        | ModelKind::EwmMoments {
+            window_size: Some(w),
+            ..
         } => (format!("window_size = {w}"), "Shorten window_size", "rows"),
+        ModelKind::CorrChange {
+            window_size: Some(w),
+            monitor_span,
+            ..
+        } => (
+            match monitor_span {
+                Some(m) => format!("window_size = {w} and monitor_span = {m}"),
+                None => format!("window_size = {w}"),
+            },
+            "Shorten window_size, or give window_rows",
+            "rows",
+        ),
         ModelKind::Garch {
             start_span: Some(s),
             ..
+        }
+        | ModelKind::Dcc {
+            start_span: Some(s),
+            ..
         } => (format!("start_span = {s}"), "Shorten start_span", "rows"),
+        ModelKind::Dcc {
+            margin_start_span: Some(s),
+            ..
+        } => (
+            format!("margin_start_span = {s}"),
+            "Shorten margin_start_span",
+            "rows",
+        ),
+        ModelKind::DdSketch {
+            window_size: Some(w),
+            ..
+        } => (
+            format!("window_size = {w}"),
+            "Shorten window_size, or raise alpha",
+            "rows and buckets",
+        ),
+        ModelKind::DdSketch { .. } => (
+            "the range of its values".to_string(),
+            "Raise alpha",
+            "buckets",
+        ),
         ModelKind::Expectile {
             refit_span: Some(s),
             ..
@@ -108,6 +157,12 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
         } => (
             format!("quantile_refit_span = {s}"),
             "Shorten quantile_refit_span, or give quantile_refit_rows",
+            "rows",
+        ),
+        // No window on the clock: the lag buffers are what the data sizes.
+        ModelKind::EwmMoments { .. } => (
+            "the reach of its lags".to_string(),
+            "Shorten the lags or lag_tolerance",
             "rows",
         ),
         _ => ("its window".to_string(), "Shorten the window", "events"),

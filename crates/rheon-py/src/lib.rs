@@ -966,6 +966,20 @@ impl PyModelBank {
             .collect())
     }
 
+    /// Per spec under `group_close = "monotone"`: `(largest group key read,
+    /// whether the keys order as numbers)`, or `None` (review 2026-11-23,
+    /// BANK-1).
+    #[allow(clippy::type_complexity)]
+    fn group_marks(slf: &Bound<'_, Self>) -> PyResult<Vec<Option<(Option<String>, bool)>>> {
+        let this = slf.try_borrow().map_err(|_| busy("group_marks"))?;
+        Ok(this
+            .inner
+            .group_marks()
+            .into_iter()
+            .map(|m| m.map(|(k, integer)| (k.0, integer)))
+            .collect())
+    }
+
     #[pyo3(signature = (keys, spec=None))]
     fn drop_groups(
         slf: &Bound<'_, Self>,
@@ -1001,7 +1015,8 @@ struct PyRefreshTime {
 #[pymethods]
 impl PyRefreshTime {
     #[new]
-    #[pyo3(signature = (names, series, clock, value, group=None, pairs=false, keep=None))]
+    #[pyo3(signature = (names, series, clock, value, group=None, pairs=false, keep=None, age=false))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         names: Vec<String>,
         series: String,
@@ -1010,9 +1025,12 @@ impl PyRefreshTime {
         group: Option<String>,
         pairs: bool,
         keep: Option<Vec<String>>,
+        age: bool,
     ) -> PyResult<Self> {
         Ok(Self {
-            inner: rheon_polars::RefreshTime::new(names, pairs).map_err(PyValueError::new_err)?,
+            inner: rheon_polars::RefreshTime::new(names, pairs)
+                .map_err(PyValueError::new_err)?
+                .with_age(age),
             series,
             clock,
             value,
@@ -1024,7 +1042,7 @@ impl PyRefreshTime {
     /// A sampler that goes on from a saved state (`RefreshTime::load_bytes`):
     /// `names` and `pairs` must be the ones it was saved with.
     #[staticmethod]
-    #[pyo3(signature = (state, names, series, clock, value, group=None, pairs=false, keep=None))]
+    #[pyo3(signature = (state, names, series, clock, value, group=None, pairs=false, keep=None, age=false))]
     #[allow(clippy::too_many_arguments)]
     fn load_bytes(
         state: &[u8],
@@ -1035,10 +1053,17 @@ impl PyRefreshTime {
         group: Option<String>,
         pairs: bool,
         keep: Option<Vec<String>>,
+        age: bool,
     ) -> PyResult<Self> {
         Ok(Self {
-            inner: rheon_polars::RefreshTime::load_bytes(state, names, pairs, group.is_some())
-                .map_err(PyValueError::new_err)?,
+            inner: rheon_polars::RefreshTime::load_bytes_with_age(
+                state,
+                names,
+                pairs,
+                group.is_some(),
+                age,
+            )
+            .map_err(PyValueError::new_err)?,
             series,
             clock,
             value,
@@ -1124,6 +1149,7 @@ fn merge_parts(
     by: Option<String>,
     restart: Option<f64>,
     restart_text: Option<String>,
+    carry: Option<Vec<String>>,
 ) -> (Vec<polars::prelude::Schema>, rheon_polars::MergeConfig) {
     let schemas = frames
         .into_iter()
@@ -1135,6 +1161,7 @@ fn merge_parts(
         by,
         restart,
         restart_text,
+        carry: carry.unwrap_or_default(),
     };
     (schemas, cfg)
 }
@@ -1142,7 +1169,8 @@ fn merge_parts(
 #[pymethods]
 impl PyMerge {
     #[new]
-    #[pyo3(signature = (names, frames, clock, source, by=None, restart=None, restart_text=None))]
+    #[pyo3(signature = (names, frames, clock, source, by=None, restart=None, restart_text=None, carry=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         names: Vec<String>,
         frames: Vec<PyDataFrame>,
@@ -1151,8 +1179,9 @@ impl PyMerge {
         by: Option<String>,
         restart: Option<f64>,
         restart_text: Option<String>,
+        carry: Option<Vec<String>>,
     ) -> PyResult<Self> {
-        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text);
+        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text, carry);
         Ok(Self {
             inner: rheon_polars::Merge::new(names, schemas, cfg).map_err(|e| run_err(&e, None))?,
         })
@@ -1160,7 +1189,7 @@ impl PyMerge {
 
     /// A merge that goes on from a saved state (`Merge::load_bytes`).
     #[staticmethod]
-    #[pyo3(signature = (state, names, frames, clock, source, by=None, restart=None, restart_text=None))]
+    #[pyo3(signature = (state, names, frames, clock, source, by=None, restart=None, restart_text=None, carry=None))]
     #[allow(clippy::too_many_arguments)]
     fn load_bytes(
         state: &[u8],
@@ -1171,8 +1200,9 @@ impl PyMerge {
         by: Option<String>,
         restart: Option<f64>,
         restart_text: Option<String>,
+        carry: Option<Vec<String>>,
     ) -> PyResult<Self> {
-        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text);
+        let (schemas, cfg) = merge_parts(frames, clock, source, by, restart, restart_text, carry);
         Ok(Self {
             inner: rheon_polars::Merge::load_bytes(state, names, schemas, cfg)
                 .map_err(|e| run_err(&e, None))?,
@@ -1361,6 +1391,19 @@ impl PyWindows {
         Ok(PyDataFrame(out))
     }
 
+    /// The whole input is fed and the state is about to be saved: the rows
+    /// resolved by reading the windows waiting on the last stamp as they
+    /// stand. The GIL is released for it, as for `feed`.
+    fn settle(slf: &Bound<'_, Self>) -> PyResult<PyDataFrame> {
+        let mut this = slf.try_borrow_mut().map_err(|_| windows_busy("settle"))?;
+        let run = &mut this.inner;
+        let out = slf
+            .py()
+            .detach(|| run.settle())
+            .map_err(|e| run_err(&e, None))?;
+        Ok(PyDataFrame(out))
+    }
+
     /// The columns the windows read: what a source reads however narrow
     /// the query's projection.
     fn needed(slf: &Bound<'_, Self>) -> PyResult<Vec<String>> {
@@ -1373,6 +1416,16 @@ impl PyWindows {
     fn consumed(slf: &Bound<'_, Self>) -> PyResult<usize> {
         let this = slf.try_borrow().map_err(|_| windows_busy("consumed"))?;
         Ok(this.inner.consumed())
+    }
+
+    /// The warning a cross-group operator or a profile raised, once a run,
+    /// when a stamp or a row took its state past half of its
+    /// `max_state_bytes`; taken by the call.
+    fn take_warning(slf: &Bound<'_, Self>) -> PyResult<Option<String>> {
+        let mut this = slf
+            .try_borrow_mut()
+            .map_err(|_| windows_busy("take_warning"))?;
+        Ok(this.inner.take_warning())
     }
 }
 
@@ -1506,8 +1559,171 @@ fn parse_duration(text: &str) -> PyResult<i64> {
 
 /// The text a duration of `ns` nanoseconds is written as: `"10m"`.
 #[pyfunction]
-fn format_duration(ns: i64) -> String {
+fn format_duration(ns: i128) -> String {
     rheon_polars::format_duration(ns)
+}
+
+/// The P² estimate (Jain and Chlamtac 1985) at each of `levels`, read after
+/// every one of `values` in turn: one list a level, as long as `values`. A
+/// value that is not finite is not seen, and the read before it repeats.
+/// The core's estimate itself, with no clock, weight or group: what the
+/// comparison with river's `stats.Quantile` runs, row for row.
+#[pyfunction]
+fn psquared_reads(values: Vec<f64>, levels: Vec<f64>) -> PyResult<Vec<Vec<Option<f64>>>> {
+    let mut est =
+        rheon_polars::rheon_core::PSquared::new(&levels).map_err(PyValueError::new_err)?;
+    let mut out = vec![Vec::with_capacity(values.len()); levels.len()];
+    for v in values {
+        est.update(v);
+        for (l, reads) in out.iter_mut().enumerate() {
+            reads.push(est.get(l));
+        }
+    }
+    Ok(out)
+}
+
+/// The merging t-digest's estimate at each of `levels` after every one of
+/// `values` (each of weight 1) at `compression`: the core's digest itself,
+/// with no clock, weight or group, which the agreement test with the
+/// `tdigest` package reads.
+#[pyfunction]
+fn tdigest_quantiles(
+    values: Vec<f64>,
+    compression: f64,
+    levels: Vec<f64>,
+) -> PyResult<Vec<Option<f64>>> {
+    let mut est =
+        rheon_polars::rheon_core::TDigest::new(compression).map_err(PyValueError::new_err)?;
+    for v in values {
+        est.update(v, 1.0);
+    }
+    Ok(est.quantiles(&levels))
+}
+
+/// The merging t-digest's centroids `(mean, weight)` after `values` (each of
+/// weight 1) at `compression`, the buffer merged in: what the partial-mass
+/// tail mean is read from, for the definition test.
+#[pyfunction]
+fn tdigest_centroids(values: Vec<f64>, compression: f64) -> PyResult<Vec<(f64, f64)>> {
+    let mut est =
+        rheon_polars::rheon_core::TDigest::new(compression).map_err(PyValueError::new_err)?;
+    for v in values {
+        est.update(v, 1.0);
+    }
+    Ok(est.settled())
+}
+
+/// The merging t-digest's tail mean (expected shortfall) at each of
+/// `levels` after `values` (each of weight 1) at `compression`, the lower
+/// tail below a level of 0.5 and the upper above it: the core's digest
+/// itself, which the agreement test with the `tdigest` package's trimmed
+/// mean and the exact tail mean reads.
+#[pyfunction]
+fn tdigest_tail_means(
+    values: Vec<f64>,
+    compression: f64,
+    levels: Vec<f64>,
+) -> PyResult<Vec<Option<f64>>> {
+    let mut est =
+        rheon_polars::rheon_core::TDigest::new(compression).map_err(PyValueError::new_err)?;
+    for v in values {
+        est.update(v, 1.0);
+    }
+    Ok(est
+        .quantiles_and_tails(&levels)
+        .into_iter()
+        .map(|r| r.map(|(_, es)| es))
+        .collect())
+}
+
+/// A store's buckets as `(key, weight)`, ascending by key.
+type Buckets = Vec<(i32, f64)>;
+
+/// The DDSketch's buckets after `values` (each of weight 1) at `alpha`: the
+/// positive store's and the negative store's `(key, weight)` pairs and the
+/// zero count, which the agreement test with the `ddsketch` package reads.
+#[pyfunction]
+fn ddsketch_buckets(values: Vec<f64>, alpha: f64) -> PyResult<(Buckets, Buckets, f64)> {
+    use rheon_polars::rheon_core::{DdSketch, DdSketchMapping, DdSketchSlot};
+    let map = DdSketchMapping::new(alpha).map_err(PyValueError::new_err)?;
+    let mut d = DdSketch::default();
+    for v in values.into_iter().filter(|v| v.is_finite()) {
+        d.add(&map, DdSketchSlot::of(&map, v), 1.0, false);
+    }
+    Ok((
+        d.positive().buckets().collect(),
+        d.negative().buckets().collect(),
+        d.zero_weight(),
+    ))
+}
+
+/// The decayed DDSketch's positive buckets after `values` (each of weight
+/// 1, a clock step of 1 apart) at `alpha` and `half_life`, and the factor
+/// each step multiplied by: the model's own decayed form, which the
+/// rounding-bound test holds against exact sums.
+#[pyfunction]
+fn ddsketch_decayed_buckets(
+    values: Vec<f64>,
+    alpha: f64,
+    half_life: f64,
+) -> PyResult<(Buckets, f64)> {
+    use rheon_polars::rheon_core::{
+        DdSketchModel, DdSketchModelCfg, Decay, OnlineModel, WindowClosed,
+    };
+    let decay = Decay::Halflife(half_life);
+    let mut m = DdSketchModel::new(DdSketchModelCfg {
+        n_targets: 1,
+        alpha,
+        levels: vec![0.25],
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay,
+        max_state_bytes: Some(1 << 26),
+    })
+    .map_err(PyValueError::new_err)?;
+    for v in values {
+        m.step(&[], &[Some(v)], 1.0, 1.0);
+    }
+    Ok((
+        m.sketch(0).positive().buckets().collect(),
+        decay.factor(1.0),
+    ))
+}
+
+/// The representative of each of `keys` at `alpha`.
+#[pyfunction]
+fn ddsketch_values(keys: Vec<i32>, alpha: f64) -> PyResult<Vec<f64>> {
+    let map =
+        rheon_polars::rheon_core::DdSketchMapping::new(alpha).map_err(PyValueError::new_err)?;
+    Ok(keys.into_iter().map(|k| map.value(k)).collect())
+}
+
+/// The DDSketch's quantile and tail mean at each of `levels` after `values`
+/// of `weights` at `alpha`: the core's sketch itself, with no clock or
+/// group, which the agreement tests read.
+#[pyfunction]
+fn ddsketch_reads(
+    values: Vec<f64>,
+    weights: Vec<f64>,
+    alpha: f64,
+    levels: Vec<f64>,
+) -> PyResult<Vec<Option<(f64, f64)>>> {
+    use rheon_polars::rheon_core::{DdSketch, DdSketchMapping, DdSketchSlot};
+    if values.len() != weights.len() {
+        return Err(PyValueError::new_err(
+            "ddsketch_reads: values and weights must be as long as each other. Give one \
+             weight a value.",
+        ));
+    }
+    let map = DdSketchMapping::new(alpha).map_err(PyValueError::new_err)?;
+    let mut d = DdSketch::default();
+    for (v, w) in values.into_iter().zip(weights) {
+        if v.is_finite() && w > 0.0 && w.is_finite() {
+            d.add(&map, DdSketchSlot::of(&map, v), w, false);
+        }
+    }
+    Ok(d.reads(&levels))
 }
 
 /// The parameters measured in clock units, which take a duration under a
@@ -1702,6 +1918,14 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(model_kinds, m)?)?;
     m.add_function(wrap_pyfunction!(validate_spec, m)?)?;
     m.add_function(wrap_pyfunction!(parse_duration, m)?)?;
+    m.add_function(wrap_pyfunction!(psquared_reads, m)?)?;
+    m.add_function(wrap_pyfunction!(tdigest_quantiles, m)?)?;
+    m.add_function(wrap_pyfunction!(tdigest_tail_means, m)?)?;
+    m.add_function(wrap_pyfunction!(tdigest_centroids, m)?)?;
+    m.add_function(wrap_pyfunction!(ddsketch_buckets, m)?)?;
+    m.add_function(wrap_pyfunction!(ddsketch_values, m)?)?;
+    m.add_function(wrap_pyfunction!(ddsketch_decayed_buckets, m)?)?;
+    m.add_function(wrap_pyfunction!(ddsketch_reads, m)?)?;
     m.add_function(wrap_pyfunction!(format_duration, m)?)?;
     m.add_function(wrap_pyfunction!(spec_clock_fields, m)?)?;
     m.add_function(wrap_pyfunction!(format_of_path, m)?)?;

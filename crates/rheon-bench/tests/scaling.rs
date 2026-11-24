@@ -402,10 +402,19 @@ const SURFACES: &[&[&str]] = &[
         "pa.",
         "ftrl.",
         "holt.",
+        "ar.",
         "glm.",
         "expectile.",
     ],
-    &["ew_cov.", "marginal.", "deco.", "rcov.", "corrchange."],
+    &[
+        "ew_cov.",
+        "pca.",
+        "ewm_moments.",
+        "marginal.",
+        "deco.",
+        "rcov.",
+        "corrchange.",
+    ],
     &[
         "hmm.",
         "kmeans.",
@@ -416,9 +425,15 @@ const SURFACES: &[&[&str]] = &[
         "audit.",
         "hawkes.",
         "garch.",
+        "dcc.",
+        "realized.",
+        "power_variation.",
+        "tdigest.",
+        "ddsketch.",
+        "spectral.",
     ],
     &["bank."],
-    &["runner.", "windows.", "refresh.", "gbdt."],
+    &["runner.", "windows.", "refresh.", "merge.", "gbdt."],
 ];
 
 #[test]

@@ -173,9 +173,16 @@ def test_the_refit_budget_gives_the_later_groups_up():
     # 3 features, 200 rows: 200 * 5 * 8 = 8,000 bytes a group.
     s = spec(group="g", refit_rows=200, refit_budget=2.5 * 8000 / 2**20)
     bank = rp.ModelBank([s])
-    with pytest.warns(rp.ReadinessWarning):
+    # The notice names the setting `glm` takes (review 2026-11-23, BANK-5:
+    # it named `huber_refit_rows`).
+    with pytest.warns(rp.ReadinessWarning, match="or lower refit_rows, the rows each refit holds"):
         bank.fit(df)
     assert bank.summary()["refit_given_up"].sum() == 2
+    # Under a span of the clock the rows are the data's, and the notice
+    # names the bytes a refit may hold.
+    s = spec(group="g", refit_span=50.0, refit_budget=2.5 * 8000 / 2**20, max_state_bytes=8000)
+    with pytest.warns(rp.ReadinessWarning, match="or lower max_state_bytes, the bytes each"):
+        rp.ModelBank([s]).fit(df)
 
 
 def test_a_refit_past_the_groups_cap_is_refused_at_the_call():
@@ -243,3 +250,90 @@ def test_a_zero_weight_row_is_in_no_count_and_the_weighted_rows_are_the_stream_w
     # The zero-weight rows are predicted all the same.
     zeros = rp.ModelBank([spec(**kw)]).fit_predict(withzero)["m"].struct.unnest().filter(~mask)
     assert zeros["pred_y"].drop_nulls().len() > 0
+
+
+def _family_frame(family: str, n: int = 600) -> pl.DataFrame:
+    rng = np.random.default_rng([578, len(family)])
+    x = rng.standard_normal(n)
+    mu = np.exp(0.2 + 0.4 * x)
+    y = {
+        "binomial": (rng.random(n) < 1.0 / (1.0 + np.exp(-(0.2 + 0.8 * x)))).astype(float),
+        "poisson": rng.poisson(mu).astype(float),
+        "gamma": rng.gamma(2.0, mu / 2.0),
+        "tweedie": rng.poisson(mu).astype(float),
+    }[family]
+    return pl.DataFrame({"x0": x, "y": y})
+
+
+@pytest.mark.parametrize("family", ["binomial", "poisson", "gamma", "tweedie"])
+def test_each_familys_hit_rate_is_its_own_test_in_the_bank_and_in_eval(family):
+    """Review 2026-11-23, GLM-METRICS: ``emit_metrics`` and ``rp.eval`` read
+    a ``glm``'s ``hit_rate`` by the sign test about zero, as for a
+    regression target. A binomial ``pred`` is a probability against a 0/1
+    label, so its hit is the 0.5 threshold, as for a logistic ``sgd``, and
+    ``rp.eval`` reads it as a classifier (``log_loss``); a Poisson, Gamma or
+    Tweedie mean is positive against a target never negative, so the sign
+    test agrees on every row and ``hit_rate`` is null, as for a Poisson
+    ``sgd``."""
+    df = _family_frame(family)
+    s = spec(features=["x0"], family=family, emit_metrics=True, min_weight=5.0)
+    out = rp.ModelBank([s]).fit_predict(df)
+    hit = out["m"].struct.field("hit_rate_y")
+    m = rp.eval.metrics(out, s, min_samples=1)
+    if family == "binomial":
+        pred = out["m"].struct.field("pred_y").to_numpy()
+        ok = ~np.isnan(pred)
+        assert ((pred[ok] > 0.0) & (pred[ok] < 1.0)).all()
+        last = hit.drop_nulls()[-1]
+        # The bank's figure, read before the last row, against the
+        # threshold's over the rows ahead of it, with no decay.
+        y = df["y"].to_numpy()
+        rows = ok.copy()
+        rows[-1] = False
+        want = np.mean((pred[rows] > 0.5) == (y[rows] > 0.5))
+        assert last == pytest.approx(want, abs=1e-12)
+        assert "log_loss" in m.columns
+    else:
+        assert hit.null_count() == df.height
+        assert m["hit_rate"][0] is None
+    # A spec without a family is a Poisson fit.
+    if family == "poisson":
+        raw = dict(s)
+        raw["model"] = {k: v for k, v in raw["model"].items() if k != "family"}
+        assert rp.eval.metrics(out, raw, min_samples=1)["hit_rate"][0] is None
+
+
+@pytest.mark.parametrize("key", ["emit_specification", "emit_tails"])
+def test_a_glm_refuses_the_checks_of_a_constant_normal_residual(key):
+    """A glm's residuals have its family's variance, a function of the mean,
+    and its family's shape: on a stream a Poisson fit fits exactly,
+    Breusch-Pagan and Jarque-Bera rejected on every row, and RESET, read
+    under a constant variance, on a quarter of them (review 2026-11-23,
+    DIAG-11). Each switch is refused, by name."""
+    with pytest.raises(ValueError, match=f"{key} tests residuals of constant variance"):
+        rp.ModelBank(
+            [rp.spec.glm("m", features=["x"], targets=["y"], half_life=200.0, **{key: True})]
+        )
+
+
+def test_a_glms_mean_checks_hold_their_level_on_an_exact_fit():
+    """The calibration's Wald, a sandwich, and the CUSUM read a glm's mean:
+    on a stream a Poisson fit fits exactly each holds its 5% level after
+    the first thousand rows."""
+    rng = np.random.default_rng(1)
+    n = 4000
+    x = rng.normal(size=n)
+    y = rng.poisson(np.exp(0.3 + 0.5 * x)).astype(float)
+    spec = rp.spec.glm(
+        "m",
+        features=["x"],
+        targets=["y"],
+        half_life=200.0,
+        family="poisson",
+        emit_calibration=True,
+        emit_breaks=True,
+    )
+    out = rp.ModelBank([spec]).fit_predict(pl.DataFrame({"x": x, "y": y}))["m"].struct.unnest()
+    out = out[1000:]
+    assert (out["calibration_wald_y"] > 5.991).mean() < 0.1
+    assert (out["cusum_y"].abs() > 1.96).mean() < 0.1

@@ -97,13 +97,27 @@ DECAYING = tuple(
 #: The kinds that refuse a weight column.
 UNWEIGHTED = frozenset({"seqtest", "audit"})
 #: The kinds that read no features.
-NO_FEATURES = frozenset({"holt", "seqtest", "hawkes", "garch"})
+NO_FEATURES = frozenset(
+    {
+        "holt",
+        "seqtest",
+        "hawkes",
+        "garch",
+        "dcc",
+        "realized",
+        "power_variation",
+        "tdigest",
+        "ddsketch",
+        "spectral",
+    }
+)
 #: The kinds whose clock parameters are rates, which have no unit on a
 #: temporal clock: ``hawkes``' ``kernel_decays`` is refused there, by name.
 RATES = frozenset({"hawkes"})
 #: A capped step is a break by design: ``corrchange`` abandons its span,
-#: ``rcov`` splits the block into stretches.
-CAP_IS_A_BREAK = frozenset({"corrchange", "corrchange_scalar", "rcov"})
+#: ``rcov`` splits the block into stretches, ``ar`` empties its lags and
+#: ``spectral`` its transform.
+CAP_IS_A_BREAK = frozenset({"corrchange", "corrchange_scalar", "rcov", "ar", "spectral"})
 #: The kinds that sum weight as a count, with what makes it exact: the
 #: ewridge readiness gate reads Kish's effective count, which copies change,
 #: and its default solve cadence counts rows; kalman's learned noise reads a
@@ -562,7 +576,10 @@ ORDER_RTOL = 1e-12
 #: 3.5e-9 on ``pred`` at the worst of 50 seeds (2026-11-21). It now runs to
 #: its rounding, and every seed agrees to under 1e-14 (2026-11-22), so it
 #: takes ``ORDER_RTOL``.
-ORDER_RTOL_BY_KIND = {"lasso": 1e-10, "quantile": 2e-11}
+#: ``ar`` least squares (ridge 0): its first fits read a system just past
+#: definite, whose solve carries a reordered sum's last bits further, 2.0e-12
+#: at the worst seed (16, 2026-11-23).
+ORDER_RTOL_BY_KIND = {"lasso": 1e-10, "quantile": 2e-11, "ar": 1e-11}
 #: ``lasso``'s descent visits the features in the order given and stops at
 #: its sweep cap (100) or its tolerance, so at its defaults the order picks
 #: which unconverged point a solve returns: 4.6e-4 relative on ``pred`` at
@@ -570,13 +587,18 @@ ORDER_RTOL_BY_KIND = {"lasso": 1e-10, "quantile": 2e-11}
 #: counted in ``solve_failures``; at ``max_iter=10_000`` 1.1e-8. Run
 #: converged, it is order-free to 1.1e-12.
 CONVERGED = {"lasso": {"max_iter": 100_000, "tol": 1e-14}}
+#: The features reversed where ``x0`` and ``x1`` cannot show a number:
+#: they are independent and of one spread, so ``pca``'s two components are
+#: tied and withheld on every row; ``x0`` and ``y`` are correlated.
+FEATURE_PAIR = {"pca": ("x0", "y")}
 
 
 @pytest.mark.parametrize(("variant", "seed"), _seeded([k for k in KINDS if k not in NO_FEATURES]))
 def test_the_feature_order_moves_no_number(variant: str, seed: int):
     key = "columns" if variant == "audit" else "features"
     extra = CONVERGED.get(variant, {})
-    fw, bw = {key: ["x0", "x1"], **extra}, {key: ["x1", "x0"], **extra}
+    a0, a1 = FEATURE_PAIR.get(variant, ("x0", "x1"))
+    fw, bw = {key: [a0, a1], **extra}, {key: [a1, a0], **extra}
     df = _stream(seed)
     a = run(variant, df, **fw)
     b = run(variant, df, **bw)
@@ -599,6 +621,8 @@ def _clock_parameters(variant: str) -> dict[str, Any]:
         kw["half_life"] = HALF_LIFE
     if variant == "kalman":
         kw["coef_half_life"] = MINIMAL["kalman"]["coef_half_life"]
+    if variant == "spectral":
+        kw["periods"] = MINIMAL["spectral"]["periods"]
     return kw
 
 
@@ -613,7 +637,10 @@ def test_durations_are_numbers_of_seconds(variant: str):
         t=pl.lit(origin) + pl.duration(milliseconds=(pl.col("t") * 1000).cast(pl.Int64))
     ).with_columns(pl.col("t").dt.cast_time_unit("ms"))
     numbers = _clock_parameters(variant)
-    durations = {k: _as_duration(v) for k, v in numbers.items()}
+    durations = {
+        k: [_as_duration(x) for x in v] if isinstance(v, list) else _as_duration(v)
+        for k, v in numbers.items()
+    }
     a = run(variant, clock="t", **numbers)
     b = run(variant, when, clock="t", **durations)
     assert_live(a, variant)

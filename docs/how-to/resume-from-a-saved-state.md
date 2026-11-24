@@ -168,10 +168,12 @@ the rows the state has learned, so each row is learned once:
 
 | a row of the input | `skip_learned` |
 |---|---|
-| after its group's last clock value, in every spec that reads a clock | keeps it |
-| of a group the bank has not seen | keeps it |
-| with a null clock | keeps it, for the bank to refuse by name |
-| at or before its group's last clock value | drops it: the state has learned it |
+| strictly before its group's last clock value in any spec that reads a clock | drops it: the state is past it |
+| otherwise, after its group's last clock value in at least one spec | keeps it: that spec has not learned it |
+| otherwise, of a group that a spec has not seen | keeps it |
+| otherwise, with a null clock | keeps it, for the bank to refuse by name |
+| otherwise, of weight 0 at a last clock, with no spec having learned it at a positive weight | keeps it: it learns nothing and moves no clock |
+| otherwise, at its group's last clock value in every spec | drops it: the state has learned it |
 
 **`skip_learned` finds the learned rows by each group's last clock value,
 so it is right only where, within a group, the clock never goes back.** A
@@ -205,8 +207,10 @@ give the spec a clock, so that `skip_learned` can find them.
 
 The comparison is exact: a temporal clock is compared in the integer
 nanoseconds the state keeps, whatever the column's unit or time zone. A row
-at a group's last clock value counts as learned, so a stream saved between
-two rows with the same clock value loses every later row with that value.
+of positive weight at a group's last clock value counts as learned, so a stream
+saved between two rows with the same clock value loses every later row with
+that value. With specs that group differently, a row goes to every spec if
+any one has not learned it, so a spec that has learned it learns it again.
 
 This code saves a bank after 1,500 rows, then resumes it on a file that
 starts 100 rows before the save. It builds its own rows:

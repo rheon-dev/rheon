@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the twenty-six models a spec can name, by
+The reference entry of each of the thirty-five models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The twenty-six models fall into four families, and each family answers one
+The thirty-five models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -49,13 +49,22 @@ to start with for which question.
 | [`ftrl`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ftrl) · [entry](#ftrl--online-logistic-regression) | step | FTRL-proximal regression, logistic by default, with an L1 penalty that zeroes coefficients |
 | [`glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) · [entry](#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) | step | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood, for counts, positive amounts, proportions and amounts with an exact zero |
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
+| [`ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) · [entry](#ar--an-autoregression-on-the-targets-own-past) | solve | an autoregression for each target, AR(p), by least squares on lags the model keeps itself, with the features as further inputs, and `AutoReg`'s fit with no decay |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
+| [`pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) · [entry](#pca--streaming-principal-components) | step | principal components learned a row at a time in state that grows with the components times the columns, not the columns squared: the incremental SVD, CCIPCA or Oja's rule, each component withheld until the data tells it apart from its neighbors |
+| [`ewm_moments`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewm_moments) · [entry](#ewm_moments--moments-to-any-order-lagged-or-not) | accumulate | moments and cross-moments of columns to any order, each leg perhaps lagged, each a term you name: skew, kurtosis, cumulants, co-skewness, autocovariances and autocorrelations, decayed or over a window, unbiased to order 4 and with standard errors |
 | [`marginal`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal) · [entry](#marginal--every-pairs-moments-kept-in-the-state) | accumulate | every (feature, target) pair's running mean, variance, covariance, correlation, slope and t, for a wide set of columns, kept in the state and read back as a table; optionally at a set of lags, and with binned target moments for the relations a correlation cannot see |
 | [`deco`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) · [entry](#deco--one-correlation-for-the-whole-matrix) | accumulate | one correlation for the whole matrix: Engle & Kelly's equicorrelation, or one per block and per pair of blocks |
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
+| [`spectral`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.spectral) · [entry](#spectral--how-strong-is-each-cycle) | accumulate | the power of each target at chosen periods, from an exponentially weighted Fourier transform on the clock, read as scipy's periodogram |
 | [`garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) · [entry](#garch--how-large-will-the-next-return-be) | step | the GARCH family, a conditional variance for each return series: GARCH(1,1), GJR, EGARCH and FIGARCH, with normal, Student-t or skewed-t innovations, its parameters learned a row at a time after a start fitted by likelihood |
+| [`dcc`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dcc) · [entry](#dcc--how-do-the-correlations-move-from-row-to-row) | step | dynamic conditional correlation and its asymmetric form: the full correlation matrix of a few return series, each standardized by its own GARCH, moving every row, its two or three parameters given or learned a row at a time after a start fitted by quasi-likelihood |
+| [`realized`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.realized) · [entry](#realized--how-much-did-it-move-and-did-it-jump) | accumulate | realized volatility and the jump tests on it, for each return series: realized variance, bipower and tripower variation, tripower quarticity, Barndorff-Nielsen and Shephard's ratio test, and Lee and Mykland's statistic of each return with its flag |
+| [`power_variation`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.power_variation) · [entry](#power_variation--power-variation-and-kernel-weighted-autocovariance) | accumulate | power variation and kernel-weighted autocovariance sums, for each return series: named multipower terms, kernel sums (Bartlett, Parzen, Tukey-Hanning, rectangular; flat-top or centered) and subsampled scales, with their count of returns |
+| [`tdigest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.tdigest) · [entry](#tdigest--where-do-this-columns-quantiles-stand) | accumulate | quantiles of each column at the levels you list, from a merging t-digest whose error is uniform in rank, each level withheld until the rows identify it |
+| [`ddsketch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ddsketch) · [entry](#ddsketch--how-large-are-this-columns-quantiles-and-tails) | accumulate | quantiles and tail means of each column within a relative accuracy `alpha` of the value, from a DDSketch over every row or over a window of rows or of the clock |
 | **[Clustering and classification](#clustering-and-classification)** | | put labels on rows |
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
 | [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
@@ -73,7 +82,7 @@ answer depends on the row order:**
 | learns by | what the model does with a row | with decay off | order-dependent even so |
 |---|---|---|---|
 | **solve** | keeps running sums and computes its coefficients from them | converges to the batch answer, in any row order | `lasso`'s `penalty_selected`, ranked by out-of-sample error, though its path converges in any order |
-| **accumulate** | keeps running sums and reports them | converges to the batch answer, in any row order | a lag, in `ew_cov` or `marginal`, which counts learned rows; `rcov`'s block and `deco`'s per-row estimate; `audit`'s runs, smallest change, lag pairs and clock steps, and past `distinct_cap` the digest's `median`, `mad` and `robust_z` and the counters' `top_value`, `top_count`, `second_count` and `equal_by_chance`, each within its bound |
+| **accumulate** | keeps running sums and reports them | converges to the batch answer, in any row order | a lag, in `ew_cov`, `marginal` or `ewm_moments`, which counts learned rows; `rcov`'s block and `deco`'s per-row estimate; `audit`'s runs, smallest change, lag pairs and clock steps, and past `distinct_cap` the digest's `median`, `mad` and `robust_z` and the counters' `top_value`, `top_count`, `second_count` and `equal_by_chance`, each within its bound |
 | **reweight** | solves from running sums, but lets the fit before each row decide how that row enters them | depends on the row order | |
 | **step** | moves its coefficients a little on each row | depends on the row order | |
 | **filter** | carries a belief forward from row to row | depends on the row order | |
@@ -266,7 +275,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -297,7 +306,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, and the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges) or `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance), `scale_ratio_moved` (a `corrchange` flag withheld on a span whose two columns' scale ratio moved), `not_separated` (a `pca` component the data does not yet tell apart from a neighbor) or `level_beyond_sample` (a `tdigest` or `ddsketch` level past what the rows before it identify), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -457,16 +466,17 @@ first prediction at t = 30: weight_sum 27.18, settled_frac 0.182
 
 ## Linear models
 
-Eleven models predict a numeric target. Ten regress it on features, and
-`holt`, a baseline, uses none. Several of them take the same parameters:
+Thirteen models predict a numeric target. Eleven regress it on features,
+`holt`, a baseline, uses none, and `ar` regresses it on its own last
+values, and on features where they are given. Several of them take the same parameters:
 
 | parameters | taken by | explained under |
 |---|---|---|
 | `ridge` | `ewridge`, where a list fits a grid; `huber` and `quantile`, as one number. `rls` refuses it and takes `delta` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) and [`rls`](#rls--recursive-least-squares) |
 | `solve_every`, `max_rows_between_solves` | `ewridge`, `lasso`, `huber`, `quantile` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) |
 | `target_gaps` | `ewridge`, `lasso` | [`ewridge`'s docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge) |
-| `window_size` | `ewridge`, `lasso` | [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
-| `standardize` | `ewridge`, `huber` and `quantile`, off by default; `kalman`, `sgd` and `pa`, on by default. `lasso` always standardizes, and `ftrl` never does | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), [`kalman`](#kalman--random-walk-β-dynamic-linear-model) and [`ftrl`](#ftrl--online-logistic-regression) |
+| `window_size` | `ewridge`, `lasso`, `ar` | [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
+| `standardize` | `ewridge`, `huber` and `quantile`, off by default; `kalman`, `sgd` and `pa`, on by default. `lasso` always standardizes. `ftrl`, `rls`, `expectile` and `glm` take no `standardize` and refuse it by name: `ftrl`'s `l1` zeroes a coefficient in the feature's own units, so a scale inside the model would move which it zeroes; `rls`'s prior (`delta`, `coef_prior`) is in the features' own units; and `expectile`'s and `glm`'s `ridge` is a penalty in the features' squared units. Scale such a feature before the bank | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), [`kalman`](#kalman--random-walk-β-dynamic-linear-model) and [`ftrl`](#ftrl--online-logistic-regression) |
 | `coef_min`, `coef_max`, `coef_sum` | `sgd`, `pa` | [`sgd`](#sgd--stochastic-gradient-descent) |
 | `weight` | every model, though `rls`, `kalman`, `sgd`, `pa` and `ftrl` read it differently from a weighted mean | [Weights](how-to/weight-rows.md) |
 
@@ -484,6 +494,7 @@ What `half_life` decays differs by model:
 | `ftrl` | its per-coordinate sums, but not its penalties, so a shorter half-life shrinks the fit more |
 | `glm` | each target's Gram `G`, and its ridge with the rows, so a row of weight 0 moves no coefficient |
 | `holt` | the level, and the trend at `trend_half_life`, four times `half_life` by default |
+| `ar` | each target's running sums, which its fit is solved from; not its lags, which count learned rows |
 
 ### `ewridge` — exponentially weighted ridge regression
 
@@ -2132,12 +2143,170 @@ half-lives (from row 745 at half-lives of 6 and 25). From row 1,000 in
 that run, where the textbook gains have reached statsmodels' fixed
 ones to 1e-12, the fit is statsmodels' `Holt` to 1e-12.
 
+### `ar` — an autoregression on the target's own past
+
+*API:* [`rheon.spec.ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) — *Rust:* [`ar.rs`](../crates/rheon-core/src/ar.rs) — *Outputs:* [fields](OUTPUTS.md#ar)
+
+An autoregression for each target, AR(p): the target regressed on its own
+last values, and on the features where they are given, by exponentially
+weighted least squares.
+
+Use `ar` to forecast a series one row ahead from its recent past, without
+building lag columns in the query: the model keeps each target's last
+values itself. With no decay its coefficients are statsmodels' `AutoReg`'s
+on the same rows; with a `half_life` it follows dynamics that drift. Each
+target is its own series, with its own lags and fit.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ar). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes);
+`features` is optional.
+
+#### The update
+
+For lags `ℓ_1 < … < ℓ_q`, row `t`'s design is
+`z_t = (y_{t−ℓ_1}, …, y_{t−ℓ_q}, x_t)`, its lags read from the target's last
+learned values. `W_y` is the target's own weight, and `S`, `r` its running
+means of `z zᵀ` and `z·y`, kept centered:
+
+```
+pred_t = c + β·z_t                       from the fit before the row
+W_y'   = λ·W_y + w                       a learned row of the target only
+S'     = (λ·W_y·S + w·z zᵀ)/W_y'          r' = (λ·W_y·r + w·z·y)/W_y'
+β      = (S + ridge·I)⁻¹ r                c = ȳ − β·z̄     after every learned row
+```
+
+A learned row of a target has a weight above 0 and the target present. It
+joins the target's last values, and enters `S` and `r` once `max(lags)`
+values precede it. A row of weight 0, or with the target null, is not a
+lag: the next row's lags are those before it. A lag counts learned rows,
+not clock units, and a session change or a gap past `gap_cap` empties the
+lags, keeping the fit. A target predicts once its Gram plus the ridge
+is positive definite, every Cholesky pivot above `1e-10` of its diagonal: the guard on
+the early rows is that condition, not a count of rows, and `min_weight`
+defaults to 0.
+
+#### Example
+
+**An AR(2) found from the series alone.** Here `y` follows
+`2 + 0.6·y₋₁ − 0.3·y₋₂` plus noise:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# y = 2 + 0.6 y[-1] - 0.3 y[-2] + noise, one row a clock unit.
+rng = np.random.default_rng(3)
+y = [5.0, 5.0]
+for e in rng.standard_normal(20_000):
+    y.append(2.0 + 0.6 * y[-1] - 0.3 * y[-2] + e)
+pl.DataFrame({"y": y}).write_parquet("series.parquet")
+
+# Two lags and a constant, from the whole history.
+bank = rp.ModelBank([rp.spec.ar("a", targets=["y"], lags=2, half_life=float("inf"))])
+bank.fit(pl.scan_parquet("series.parquet"))
+for row in bank.coef().iter_rows(named=True):
+    print(f"{row['term']}: {row['coef']:.3f}")
+```
+
+```text
+intercept: 2.022
+lag1: 0.603
+lag2: -0.309
+```
+
+The fit lands within sampling error of `(2, 0.6, −0.3)` after 20,000 rows.
+
+**A trend or a season comes in as features.** `ar` has no `trend` or
+`seasonal` parameter of its own: a model sees the clock with every gap past
+`gap_cap` shortened, so a time or a phase read from it would drift after
+each long gap. Make them as columns in the query, from the clock column as
+it is, and pass them in `features`. Here an hourly series has a slow trend
+and a daily cycle on top of its AR(1) noise:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# y = 10 + 0.001 t + 2 sin(2 pi t / 24) + e, e an AR(1) of 0.6, one row an hour.
+rng = np.random.default_rng(5)
+n = 24 * 400
+t = np.arange(n, dtype=float)
+e = np.zeros(n)
+for i in range(1, n):
+    e[i] = 0.6 * e[i - 1] + rng.standard_normal()
+y = 10.0 + 0.001 * t + 2.0 * np.sin(2 * np.pi * t / 24) + e
+pl.DataFrame({"t": t, "y": y}).write_parquet("hourly.parquet")
+
+# The time and the day's phase, made in the query.
+phase = 2 * np.pi * pl.col("t") / 24
+lf = pl.scan_parquet("hourly.parquet").with_columns(
+    trend=pl.col("t"), day_sin=phase.sin(), day_cos=phase.cos()
+)
+spec = rp.spec.ar(
+    "a", targets=["y"], lags=1, features=["trend", "day_sin", "day_cos"],
+    clock="t", gap_cap=24.0, half_life=float("inf"),
+)
+bank = rp.ModelBank([spec])
+bank.fit(lf)
+for row in bank.coef().iter_rows(named=True):
+    print(f"{row['term']}: {row['coef']:.4g}")
+```
+
+```text
+intercept: 3.983
+lag1: 0.6042
+trend: 0.0003951
+day_sin: 0.8368
+day_cos: 0.3044
+```
+
+The lag of `y` carries part of the trend and the cycle, so their
+coefficients are the generating ones seen through it. The trend's is
+`0.001 · (1 − 0.6)`. The cycle's are `2 (1 − 0.6 cos(2π/24))` and
+`2 · 0.6 sin(2π/24)`, about 0.84 and 0.31.
+
+#### See also
+
+When the lags are not of the target, or the question is not its value:
+
+- [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), the same
+  least squares on lag columns made in the query, for lags across columns.
+- [`holt`](#holt--holts-linear-trend), a level and a trend rather than a
+  regression on lags.
+- [`garch`](#garch--how-large-will-the-next-return-be), for the variance
+  of a series rather than its value.
+
+#### Notes
+
+**With no decay, `ar` is `AutoReg`.** Its coefficients are least squares on
+the rows after the first `max(lags)`, which is what
+`AutoReg(y, lags, trend="c", exog=x).fit()` computes: within 1e-9 relative
+over 5,000 rows, at orders 2 to 5 and at lags `[1, 2, 12]`. A null target
+is `AutoReg(missing="drop")`. Under a half-life the coefficients are
+statsmodels' `WLS` on the lag design, each row weighted
+`w·0.5^(age/half_life)` on the clock, within 1e-9 as well.
+
+**`select` chooses the order as `ar_select_order` does.** Every order is
+read from the one fit at the largest: with the features first and the lags
+after, an order's system is a leading block of the largest one's, so one
+Cholesky factor gives every order's residuals. The count in AIC and BIC is
+Kish's effective number of rows, the row count with no decay. With no decay it
+chose `ar_select_order`'s order on all twelve series of true orders 1 to 4
+it was checked on, by AIC and by BIC, with a feature and without. Under
+decay it chose the order that minimizes the criterion over statsmodels'
+`WLS` per order, on all six series checked.
+
 ## Moments and correlation
 
 These models measure the columns you name without fitting a target: their
 means, variances and correlations, for a few columns or for thousands, and,
-in `audit`'s case, the counts of what the columns hold. `ew_cov` and `deco`
-write their statistics on every row, from the state before that row. The
+in `audit`'s case, the counts of what the columns hold. `ew_cov`,
+`ewm_moments` and `deco` write their statistics on every row, from the state
+before that row. The
 means, spreads, correlations and `rho` read that state alone, so they can
 serve as features for the row without leaking it. `mahal`, the
 principal-component scores, `u` and `loglik` measure the row's own values
@@ -2145,7 +2314,8 @@ against that state. `marginal`,
 `rcov` and `audit` write only `weight_sum` on a row, and keep their results
 in the state: read them as a table after the run, or, for `rcov`, when a
 block closes. `garch` forecasts each return's variance before the row
-arrives, from a model of how variance clusters in time.
+arrives, from a model of how variance clusters in time, and `dcc` the
+correlations of several returns from a model of how they move together.
 
 ### `ew_cov` — exponentially weighted moments
 
@@ -2280,6 +2450,228 @@ with `n`. Measured, the spec ran 24 times as fast at a 74-row
 window and 1,100 times at a 4,680-row one. So use the spec for a stream, a
 state to save, or speed. The docstring's Notes, under *Against Polars*,
 give how to weight the rows.
+
+### `pca` — streaming principal components
+
+*API:* [`rheon.spec.pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) — *Rust:* [`streampca.rs`](../crates/rheon-core/src/streampca.rs) — *Outputs:* [fields](OUTPUTS.md#pca)
+
+Principal components of the feature columns, learned one row at a time.
+
+Use `pca` for the leading directions of a stream's columns, the variance
+along each and each row's scores, where the columns are too many for a
+`k x k` covariance to be kept per group. Its state is `8 (2 + 3k + qk + q)`
+bytes for `k` columns and `q` kept directions, one more than the components
+written where there is room. So 2,000 columns and 12 components hold
+256,120 bytes, where `ew_cov`'s covariance would hold 16 MB. For a few
+hundred columns or fewer, [`ew_cov`](#ew_cov--exponentially-weighted-moments)'s
+`pca` gives the exact components of the same decayed covariance, and of a
+hard window too.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca), and
+the fields it writes in [OUTPUTS.md](OUTPUTS.md#pca).
+
+#### The update
+
+Each method keeps the weight `W`, the sum of squared weights `Q`, the mean
+`m` and the trace `tr` of the decayed covariance `C`, never `C` itself.
+With `a = λW / W'`, `b = w / W'` and `d = x - m`, `C' = a C + a b d d'`.
+
+- **`svd`** (the default), the incremental SVD that scikit-learn's
+  `IncrementalPCA` runs, here a row at a time and under the decay. The `q`
+  directions, each scaled by `sqrt(a)` times its singular value, and
+  `sqrt(a b) d` beside them are rotated in pairs until orthogonal, and the
+  `q` longest are kept. It is exact while the data's rank is at most `q`.
+- **`ccipca`**, candid covariance-free incremental PCA: each direction is
+  kept as its variance times its unit vector, `v' = a v + a b (u . e) u`,
+  and the row deflated by each direction in turn.
+- **`oja`**, Oja's rule: the directions move by `eta (V d) d'`, `eta =
+  learning_rate b / tr'`, and are kept orthonormal in order.
+
+#### When a component is written
+
+A component whose eigenvalue equals a neighbor's is not identified: any
+rotation of the two fits as well. So component `j` is written while it
+passes the likelihood-ratio test of the equality of two eigenvalues
+(Anderson 1963) against the component above it and the one below. The
+statistic is `(n - 1) ln(((l + m)/2)^2 / (l m))` at Kish's effective size
+`n`, and the test passes above 9.21, the chi-squared 99th percentile with
+two degrees of freedom. No count of rows enters: the
+first rows are withheld because `n` is small, and a tie is withheld for as
+long as it lasts, its rows' `withheld_reason` reading `"not_separated"`.
+
+The test reads two eigenvalue estimates, which `"svd"`'s and `"ccipca"`'s
+variances are. `"oja"`'s are running means along directions that still
+move. Its rate is `c/t`, with `c = learning_rate / tr` per unit of
+variance. That rate turns a direction toward an eigenvector faster than
+the direction's sampling error shrinks only where `c` times the gap to a
+neighbor passes 1/2. Below that the variances differ by the directions'
+convergence error, which the test would read as a gap. Take 20 features
+with variances 4, 4 and then 1, one component and the default gain (`4 ·
+3/26 = 0.46`): the tied component was written on every late row of 3 seeds
+in 8. So `"oja"`
+writes component `j` only where `learning_rate · gap / tr > 1/2` against
+each neighbor as well, and withholds it as `"not_separated"` otherwise. A
+wide stream, whose gaps are small against its trace, needs a larger
+`learning_rate`.
+
+#### Checked against
+
+Each method is held to a third-party library where one computes it, and to
+its definition where none does:
+
+- scikit-learn's `IncrementalPCA.partial_fit`, row by row at no decay: the
+  components, `explained_variance_` and `explained_variance_ratio_`, within
+  7.0e-13 rad and 5.4e-13.
+- scikit-learn's `PCA` and scipy's `eigh` on the decay-weighted rows, every
+  direction kept: within 1.4e-14 rad and 3.3e-13.
+- CCIPCA and Oja's rule against their definitions written out in numpy, to
+  rounding, and against `PCA`'s subspace over ten seeds of 20,000 rows:
+  within 0.0045 rad without decay and 0.0082 under a half-life of 2,000
+  rows (the worst seed).
+
+#### See also
+
+One other model reads the same components:
+
+- [`ew_cov`](#ew_cov--exponentially-weighted-moments)'s `pca`, the exact
+  components, and of a hard window.
+
+### `ewm_moments` — moments to any order, lagged or not
+
+*API:* [`rheon.spec.ewm_moments`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewm_moments) — *Rust:* [`ewm_moments.rs`](../crates/rheon-core/src/ewm_moments.rs) — *Outputs:* [fields](OUTPUTS.md#ewm_moments)
+
+Exponentially weighted, or windowed, moments and cross-moments of columns,
+to any order, each leg read at the row or lagged.
+
+Use `ewm_moments` for the running shape of a stream's columns: a skew or a
+kurtosis, a cumulant, a co-skewness of two columns, or an autocovariance or
+autocorrelation at a lag, each a term you name. Each is read before its row,
+so it can be a feature for that row. Every term comes from one state
+whose size the terms, the lags and the window fix, whatever the stream's
+length. Use [`ew_cov`](#ew_cov--exponentially-weighted-moments) for the
+means, covariances and correlations of many columns and the statistics read
+off them. For one term as a window column of a stream, read after its row
+as the other window operators are, use the operator `rp.ewm_moments`
+([WINDOWS.md](WINDOWS.md)).
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewm_moments),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ewm_moments). The
+parameters every spec takes are in [What every spec
+takes](#what-every-spec-takes).
+
+#### The update
+
+A term names its legs and a power of each: `{"m3": {"x": 3}}` is the third
+moment of `x`, `{"xy2": {"x": 1, "y": 2}}` a cross-moment, and
+`{"ac1": {"x": 1, "x@1": 1}}` the first autocovariance. Row `t` holds the
+weight `ω_t`, its own weight times every later row's decay, and with
+`W = Σ ω_t` and `z_t` the legs' values:
+
+```
+mean           m    = Σ ω_t z_t / W
+central        μ_a  = Σ ω_t (z_t − m)^a / W          (a, the powers over the legs)
+raw            μ'_a = Σ ω_t z_t^a / W
+standardized   s_a  = μ_a / Π_j μ_{2e_j}^(a_j/2)     (a skew, a kurtosis, a correlation)
+cumulant       κ_p  = μ_p − Σ_{j=2..p−2} C(p−1, j−1) κ_j μ_{p−j}     (one leg)
+```
+
+The state keeps `W`, the means, the normalized central moments `c_a = μ_a`
+below each term and the ratios `r_k = Σ ω_t^k / W^k` (`1 / r_2` is Kish's
+effective number of rows). A row of weight `w` after a decay `λ` merges
+into them by Pébay's rule:
+
+```
+W' = λW + w      a = λW / W'      b = w / W'      d = z − m
+c'_a = Σ_{β ≤ a} C(a, β) a c_{a−β} (−b d)^β  +  b (a d)^a      (c_0 = 1, c_1 = 0)
+r'_k = a^k r_k + b^k      m' = m + b d
+```
+
+Every product is at the scale of the spread, so a column at `1e6` with a
+spread of 1 keeps its fourth moment, where power sums keep no digit of it,
+and decay multiplies `W` alone, so a long gap moves no moment. Under
+`bias=False` a term of order 2 to 4 is the form unbiased for rows drawn
+independently under these weights (Rimoldini's weighted moments; scipy's
+`kstat`, `skew(bias=False)` and `kurtosis(bias=False)` at equal weights).
+A lag pairs a row with the row `k` learned rows back, or on a clock with
+the latest at or before `t − k` within `lag_tolerance`, and the pairs are
+centered on their own weighted means. Under a window the moments are read
+by merging summaries of the window's parts, so a row leaving it is never
+subtracted.
+
+#### Example
+
+**It reads a distribution's shape and a series' memory as the rows
+arrive.** This code draws a gamma column, whose skew is 1 and kurtosis
+4.5, and an autoregressive one whose lag-1 autocorrelation is 0.6, and
+reads the last row's terms under a half-life of 10,000 rows:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# A skewed column and an autoregressive one.
+rng = np.random.default_rng(5)
+n = 50_000
+e, ar = rng.standard_normal(n), np.zeros(n)
+for t in range(1, n):
+    ar[t] = 0.6 * ar[t - 1] + e[t]                            # the truth: an autocorrelation of 0.6
+frame = pl.DataFrame({"g": rng.gamma(4.0, size=n), "ar": ar})    # the truth: skew 1, kurtosis 4.5
+
+# Fit, and read the last row's terms.
+model = rp.spec.ewm_moments(
+    "shape",
+    terms={"skew": {"g": 3}, "kurt": {"g": 4}, "ac1": {"ar": 1, "ar@1": 1}},
+    kind="standardized",
+    half_life=10_000.0,
+)
+last = rp.ModelBank([model]).fit_predict(frame)["shape"][-1]
+print(f"skew: true 1.00, found {last['skew']:.2f}")
+print(f"kurtosis: true 4.50, found {last['kurt']:.2f}")
+print(f"lag-1 autocorrelation: true 0.60, found {last['ac1']:.2f}")
+```
+
+```text
+skew: true 1.00, found 0.99
+kurtosis: true 4.50, found 4.43
+lag-1 autocorrelation: true 0.60, found 0.60
+```
+
+A half-life of 10,000 rows weighs the rows as about 29,000 equal ones
+would (Kish's effective size, `2 · 10,000 / ln 2`), and the kurtosis, a
+fourth moment, is the term furthest from its truth.
+
+#### See also
+
+The operator and the models beside it:
+
+- The window operator
+  [`rp.ewm_moments`](https://rheon-dev.github.io/rheon/ops.html#rheon.polars.ops.ewm_moments),
+  one term as a column of a stream, each row weighing the time its value is
+  held, as `rp.ewm_var` weighs it.
+- [`ew_cov`](#ew_cov--exponentially-weighted-moments), the means,
+  covariances, correlations and principal components of many columns.
+- [`audit`](#audit--what-a-streams-columns-hold), a column's lag pairs and
+  tails counted once over the whole stream.
+
+#### Notes
+
+**Held to scipy, statsmodels and Polars.** With every weight 1 and no
+decay the terms are scipy's `moment`, `skew`, `kurtosis` and `kstat`
+within 1e-12, and a lagged term of order (1, 1) is numpy's
+`cov(x[k:], x[:-k], bias=True)`. Under decay and unequal weights they are
+numpy's weighted averages of the same products. Over a window of rows they
+are Polars' `rolling_skew` and `rolling_kurtosis`.
+
+**An autocorrelation centers each leg on its own pairs.** The pairs are centered
+on their own means, so the lag-1 correlation differs from statsmodels'
+`acf`, which centers on the whole stream's mean and divides by its
+variance, by a few thousandths on an autoregressive series. `ew_cov`'s
+`lag_corr` centers both legs on the stream's mean before the row and reads
+the whole stream's variance, a third statistic: on an AR(1) series it parts
+from this one by about 4e-2 at lag 2.
 
 ### `marginal` — every pair's moments, kept in the state
 
@@ -2519,7 +2911,7 @@ statsmodels' `acf`.
 Engle and Kelly's dynamic equicorrelation, one number for the whole
 correlation matrix of the features.
 
-Use `deco` (Engle & Kelly 2012) for one number that moves with the
+Use `deco` (Engle & Kelly) for one number that moves with the
 correlation of many series. It replaces the `m(m−1)/2` free entries of the
 correlation matrix of `m` series with their average, the
 *equicorrelation*, and estimates that in O(m) a row, where keeping every
@@ -2536,30 +2928,45 @@ every spec takes are in [What every spec takes](#what-every-spec-takes).
 #### The update
 
 The row is standardized against the means and variances as they stood
-before it, `ζ_i = (x_i − m_i)/√v_i`. With `S₁ = Σ ζ_i` and `S₂ = Σ ζ_i²`
-over the `n` features that have a standardized value, the row's estimate
-`u` is Engle and Kelly's Lemma 2.3, which lies in `[−1/(n − 1), 1]`.
-Between two blocks `A` and `B` the estimate is `u_AB`. The reported level,
-`rho`, then follows `u` under one of two dynamics, with `α` and `β` the
-`"linear"` dynamic's two weights and `ρ̄` the `"ew"` level run beside it:
+before it, `ζ_i = (x_i − m_i)/√v_i`. The sums `S₁ = Σ ζ_i` and
+`S₂ = Σ ζ_i²` run over the `n` features that have a standardized value.
+The row's estimate `u` is Engle and Kelly's eq. 20, the mean product of two
+standardized values over the mean square, which lies in `[−1/(n − 1), 1]`
+(their Lemma 2.3). Between two blocks `A` and `B` the estimate is `u_AB`:
 
 ```
-u    = (S₁² − S₂) / ((n − 1)·S₂)        = (mean of ζ_i·ζ_j over i ≠ j) / (mean of ζ_i²)
-u_AB = S₁_A·S₁_B / √(n_A·n_B·S₂_A·S₂_B)
-
-"ew":      W' = λW + w,  b = w/W'      ρ' = ρ + b·(u − ρ)                       ρ = u at W = 0
-"linear":  ρ' = (1 − α − β)·ρ̄' + α·u + β·ρ                                      ρ' = u on the first row, ρ' = ρ at w = 0
+u    = A / V,       A = (S₁² − S₂) / (n(n − 1)),   V = S₂ / n
+u_AB = C / √(V_A·V_B),   C = S₁_A·S₁_B / (n_A·n_B)
 ```
 
-The `"ew"` level is the exponentially weighted mean of `u`, decayed on the
-model's clock. The docstring's Notes, under *The clock* and *Departures
-from the paper*, give how the `"linear"` level treats a capped gap and a
-row's weight, and why its intercept is written as
-`(1 - alpha - beta) * rho_bar`.
+`u` is a ratio over one row, and the mean of a ratio is not the ratio of
+the means. It reads toward 0, at 1/3 for a true 0.6 with two series and
+about 0.41 with many. Neither more series nor a longer half-life shrinks
+that, since every row sees one draw of the common factor. So the
+reported level, `rho`, averages the numerator and the denominator and
+divides once, with `α` and `β` the `"linear"` dynamic's two weights:
+
+```
+W' = λW + w,  b = w/W',  Ā' = Ā + b·(A − Ā),  V̄' = V̄ + b·(V − V̄)
+"ew":      ρ = Ā / V̄
+"linear":  N' = (1 − α − β)·Ā' + α·A + β·N,   D' = (1 − α − β)·V̄' + α·V + β·D,   ρ = N / D
+```
+
+The `"ew"` level is the weighted Gaussian maximum-likelihood estimate of
+the equicorrelation over the exponentially weighted window: their Lemma
+2.4, which reads `u` as the one-row estimate, with the sums taken over the
+window. The `"linear"` level is a DCC model's correlation recursion,
+targeted at the window's means and averaged over its off-diagonal and its
+diagonal. The level learns from a row only once the standardizer's weights
+hold more than five effective rows, where a standardized row's fourth
+moment exists. The docstring's Notes give the rest. *The clock* says how
+the `"linear"` level treats a capped gap and a row's weight, *The
+standardizer's warm-up* what the warm-up reads, and *Departures from the
+paper* why the intercept is `(1 - alpha - beta)` times the means.
 
 #### Example
 
-**`rho` moves with the average correlation, and reads below it.** This code
+**`rho` moves with the average correlation, and reads it.** This code
 makes ten series whose every pair correlates at 0.2 and then, from row
 2,000, at 0.6. It runs `deco` beside an `ew_cov` over the same columns, and
 prints `rho` beside the mean of the 45 pairwise correlations:
@@ -2589,12 +2996,12 @@ for row in (1999, 3999):
 ```
 
 ```text
-row 1999: truth 0.2, deco's rho 0.14, the mean of ew_cov's corr 0.19
-row 3999: truth 0.6, deco's rho 0.40, the mean of ew_cov's corr 0.60
+row 1999: truth 0.2, deco's rho 0.19, the mean of ew_cov's corr 0.19
+row 3999: truth 0.6, deco's rho 0.59, the mean of ew_cov's corr 0.60
 ```
 
-`deco` takes O(m) a row where the `ew_cov` takes O(m²), and its `rho`
-reads low, at about two-thirds of the truth here.
+`deco` takes O(m) a row where the `ew_cov` takes O(m²), and reads the same
+average.
 
 #### See also
 
@@ -2613,18 +3020,19 @@ For each pair's correlation, or a test of a change in it:
 
 #### Notes
 
-**`u` is biased downward, as Engle and Kelly note:** `E[u]` is about 0.20
-for a true 0.30 at six series. `rho`, an average of `u`, carries the same
-bias, and
+**`u` is biased toward 0, as Engle and Kelly note, and `rho` is not.**
+`u` reads 0.130 for a true 0.2 and 0.379 for a true 0.6 on five series,
+where `rho` reads 0.198 and 0.607 at a half-life of 100:
 [`deco`: an equicorrelation that moves](REGIMES.md#7-deco-an-equicorrelation-that-moves)
-measures it reading near two-thirds of the truth.
+measures both.
 
-**Under `"ew"`, `rho` is exactly what an `ew_cov(stats=["mean"])` on the
-`u` column, over the rows that have one, would report, to the bit, wherever both report.** The `"linear"` level at
-`alpha` and `beta` of 0 is the `"ew"` level, to the bit, and `loglik` is
-held to the dense Gaussian density of the correlation matrix the levels
-describe. The docstring's Notes, under *The estimate's downward bias*, give
-the paper's alternative estimate, which this model does not compute.
+**The `"ew"` level is held to scipy's weighted Gaussian likelihood,
+maximized over the window, and the `"linear"` level to the full `n × n`
+DCC recursion averaged.** The `"linear"` level at `alpha` and `beta` of 0 is
+the `"ew"` level, to the bit, and `loglik` is held to the dense Gaussian
+density of the correlation matrix the levels describe. The docstring's
+Notes, under *Departures from the paper*, give the paper's alternative row
+estimate, which this model does not compute.
 
 ### `rcov` — a block's realized covariance, robust to noise
 
@@ -2871,6 +3279,111 @@ they are within about 1% of the rows in rank. Each pair's correlation
 agrees with `np.corrcoef` over the rows where both columns are usable,
 within 1e-13 relative, in each group and in the pooled merge.
 
+### `spectral` — how strong is each cycle?
+
+*API:* [`rheon.spec.spectral`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.spectral) — *Rust:* [`spectral.rs`](../crates/rheon-core/src/spectral.rs) — *Outputs:* [fields](OUTPUTS.md#spectral)
+
+The power of each target at chosen periods, from an exponentially weighted
+Fourier transform on the clock, read as scipy's periodogram.
+
+Use `spectral` to watch how strong a known cycle is as the stream runs: a
+daily rhythm in a load, a weekly one in sales, a line in a vibration. Each
+row reports the power at each period before the row, under the spec's
+`half_life`. Its parameters, their defaults and what each refuses are in
+its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.spectral),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#spectral). It takes no
+features.
+
+#### The update
+
+Per row of clock step `Δ`, weight `w` and target `x`, with the rotation
+`r = e^{2πi f Δ}` for each frequency `f`, the inverse of a period:
+
+```
+X ← λ·r·X + w·x        U ← λ·r·U + w
+A ← λ·A + w            B ← λ·B + w·x        Q ← λ²·Q + w²
+P = c·|X − m·U|²·spacing / Q      (density; m = B / A, the weighted mean)
+```
+
+`X` is the transform of the rows at amplitudes `w·λ^age`, referred to the
+current clock, and `U` the amplitudes' own, which removes the mean. `c` is
+2, and 1 at the zero frequency and the Nyquist. Under `scaling="spectrum"`
+the power is `c·|X − m·U|² / A²`. The `sin` and `cos` come from one
+library on every platform, so the state is the same bits everywhere. A
+session change or a gap past `gap_cap` empties the transform, since the
+phase across it is not known.
+
+**Lomb-Scargle.** Under `scaling="lomb_scargle"` the power at each period
+is the generalized Lomb-Scargle power: the share of the target's weighted
+variance that a sinusoid of that period explains, between 0 and 1. It
+comes from the weighted least squares fit of `a·cos + b·sin`, and a
+constant with `detrend`. It needs no even clock and has no Nyquist limit, so it is the
+read for an uneven clock. It keeps two sums more: the amplitudes'
+transform at twice each frequency, `V ← λ·r²·V + w`, and `S ← λ·S + w·x²`.
+The fit's cross-products are read from them: `CC = (A + Re V)/2`,
+`SS = (A − Re V)/2`, `CS = Im V / 2`. Where the rows' phases have not yet
+spread over enough of a cycle to tell a cosine from a sine, the power is
+null. It equals scipy's `lombscargle(normalize=True, weights=a,
+floating_mean=detrend)` of the rows to 1e-9.
+
+**A window.** Under `window_size` the power is of the rows less than
+`window_size` old alone, the sliding-window transform: with no decay,
+scipy's `periodogram` of the window's rows. The rows are kept in blocks,
+closed on `snapshot_every` and `max_rows_between_snapshots` (every row by
+default), each block's sums referred to its own origin, the clock of its
+first row. A closed block is turned once to a reference origin and added
+to a running total; it leaves whole once its first row is past the window.
+The reference moves once it is two windows old and the total is written
+afresh, so no sum is turned row after row. Over ten million rows, with
+the clock starting near 0 or near 2^40, the power is within 1e-12 of the
+direct sum over the window's rows. `closed` and `window_budget` are as
+`ewridge`'s.
+
+#### Example
+
+**A daily cycle found in an hourly series:**
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# A cycle of 24 rows under noise of the same size.
+rng = np.random.default_rng(1)
+t = np.arange(24 * 60, dtype=float)
+y = np.sin(2 * np.pi * t / 24) + rng.standard_normal(t.size)
+pl.DataFrame({"y": y}).write_parquet("hourly.parquet")
+
+spec = rp.spec.spectral("s", targets=["y"], periods=[24.0, 10.0], half_life=float("inf"))
+out = pl.scan_parquet("hourly.parquet").rheon.fit_predict([spec]).collect()
+last = out["s"][-1]
+print(f"24 h: {last['power_y_p0']:.1f}, 10 h: {last['power_y_p1']:.1f}")
+```
+
+```text
+24 h: 684.0, 10 h: 1.4
+```
+
+The daily period's power is hundreds of times the other's.
+
+#### See also
+
+When the question is a forecast or a spread rather than a cycle:
+
+- [`ar`](#ar--an-autoregression-on-the-targets-own-past), to forecast a
+  series from its own past.
+- [`ew_cov`](#ew_cov--exponentially-weighted-moments), for a series'
+  variance rather than its cycles.
+
+#### Notes
+
+**With no decay it is scipy's `periodogram`.** On an even clock of spacing
+0.5, the power before a row equals `periodogram(x − m, fs=2, window=a,
+detrend=False)` of the rows before it to 1e-9, `a` the decay's amplitudes.
+That holds at two frequencies and the Nyquist, in both scalings, with no
+decay and under a half-life. On an uneven clock with weights, where scipy has no
+periodogram, it equals the definition written out with numpy to 1e-9.
+
 ### `garch` — how large will the next return be?
 
 *API:* [`rheon.spec.garch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch) — *Rust:* [`garch.rs`](../crates/rheon-core/src/garch.rs) — *Outputs:* [fields](OUTPUTS.md#garch)
@@ -2956,8 +3469,12 @@ first `start_span` of the clock, are fitted by the model's own projected
 Newton on their likelihood, from a small grid, and replayed at the fit to
 build `H`. They report nothing, as `below_warm_rows`. The Newton runs until
 a step is at the parameters' rounding, so where it stops is not a matter of
-`ln`'s last bits. A fit is at its optimum when its Newton decrement, `½ gᵀ
-M⁻¹ g` with `M` the observed curvature, is at most `10⁻⁶` nats.
+`ln`'s last bits. A fit is at its optimum when the gain its Newton step
+predicts inside the process's bounds is at most `10⁻⁶` nats. Where the step
+stays inside, that gain is the Newton decrement `½ gᵀ M⁻¹ g`, with `M` the
+observed curvature; where it does not, the step is projected onto the
+bounds in `M`'s metric. So an optimum on a bound, a GJR whose `α` is 0, is
+one.
 
 **It reports only a process its rows identify.** On returns with no
 conditional variance the likelihood is flat along a ridge, where `β` is not
@@ -2966,12 +3483,14 @@ stepped from only when its likelihood-ratio statistic against a constant
 variance, `2 (l_fit − l_const)` with the weights at Kish's count, reaches
 χ² at 0.999 for the restrictions a constant variance puts on the process.
 That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
-`figarch` (three each). Until one does, the start waits for twice the rows and
-refits, at most twice, while `max_state_bytes` holds the doubled buffer,
-and then buffers afresh; its rows are withheld as `not_identified`. A fit
-that passes but is not at its optimum, or sits on a bound of the process's
-parameters, waits and refits the same way, and with no doubling left is
-stepped from.
+`figarch` (three each). Until one does, its rows are withheld as
+`not_identified`. A fit that passes but is not at its optimum is never
+stepped from either; its wait is the start's own, `below_warm_rows`. A try
+that does not start keeps its rows and fits again once as many new rows
+have come as it held. That is twice its rows while `max_state_bytes` holds
+them (each target's share of it), then the latest rows the share holds, the
+oldest leaving as each new one comes. No count of tries ends the wait, and
+nothing is cleared, which could not cure a shortage of evidence.
 
 **Variance targeting** (`variance_targeting=True`, `vol="garch"` with
 normal innovations) sets the level by the running mean square, `ω = v̄ (1 −
@@ -2987,7 +3506,8 @@ parameters, `m` shape parameters and `n` stepped coordinates. EGARCH keeps
 64 bins of residuals beside them, 512 bytes. That is 168 bytes for `garch`,
 216 for `gjr`, 728 for `egarch`, 208 for `garch` with a t, and `216 + 8 M`
 for `figarch` (8,216 at 1,000 lags). The start's buffer adds 16 bytes a
-row until it is fitted, 32,000 at the default.
+row until it is fitted, 32,000 at the default, and after a try that does
+not start up to the target's share of `max_state_bytes`.
 
 #### Rows and the clock
 
@@ -3064,6 +3584,582 @@ GJR with the skewed t: under skewed innovations GJR's persistence reads
 EGARCH or FIGARCH, APARCH, the generalized error distribution and a mean
 model: none has an online estimator checked against `arch`. EGARCH's
 forecast past one row has no closed form.
+
+### `dcc` — how do the correlations move from row to row?
+
+*API:* [`rheon.spec.dcc`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dcc) — *Rust:* [`dcc.rs`](../crates/rheon-core/src/dcc.rs) — *Outputs:* [fields](OUTPUTS.md#dcc)
+
+Dynamic conditional correlation (Engle 2002) and its asymmetric form
+(Cappiello, Engle and Sheppard 2006): the full correlation matrix of `k`
+return series given the rows before the row, with two or three numbers that
+drive it, given or learned one row at a time.
+
+Use `dcc` on a few return series whose correlations change with time, and
+rise after joint falls, when you want each pair's correlation forecast
+before the row arrives: a portfolio's risk, a hedge ratio, a pair's spread.
+Each series is standardized by its own GARCH(1,1) margin, as `garch` would
+fit it. The margins' start (2,000 rows by default) reports no variance, and
+the correlation's own start (500 rows) after it reports no correlation;
+after them every row reports each series' variance, each pair's
+correlation and the row's log-density under it.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dcc),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#dcc). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes),
+apart from `features`, which it refuses. `half_life` or `lam` is required,
+`"inf"` for no decay. A row's weight scales its evidence. A row of weight 0,
+or with any series null, steps nothing, and is still read.
+
+#### The recursion
+
+With `z_t` the row's standardized residuals, each series' return over the
+square root of its margin's variance read before the row, and `n_t` their
+negative parts:
+
+```
+Q_{t+1} = (1 − a − b) Q̄ − g N̄ + a z_t z_tᵀ + g n_t n_tᵀ + b Q_t
+R_t     = diag(Q_t)^{−1/2} Q_t diag(Q_t)^{−1/2}
+Q̄ ← Q̄ + (w/W)(z zᵀ − Q̄),   N̄ ← N̄ + (w/W)(n nᵀ − N̄),   W ← λ W + w
+```
+
+`R_t` is the correlation reported for row `t`. The targets `Q̄` and `N̄` are
+the weighted means of the rows learned, so the level the correlations
+revert to is the stream's own. `g = 0` is DCC(1,1): set `asymmetric=True`
+for the asymmetric model, whose correlations also answer joint negative
+returns. With `margins="none"` the targets are taken as standardized
+residuals already.
+
+**The set it holds** is `a, b, g ≥ 0` and `a + b + δ g ≤ 1 − 10⁻⁴`, with `δ`
+the largest eigenvalue of `Q̄^{−1/2} N̄ Q̄^{−1/2}`. That is exactly where the
+intercept `(1 − a − b) Q̄ − g N̄` is positive semi-definite, so every `Q_t` is
+positive definite and every `R_t` a correlation matrix. It is also where a
+covariance-stationary `Q_t` exists, given innovations with a finite fourth
+moment: the recursions of `Q`'s mean and variance have the matrices `b I`
+and `b² I`, so `δ` enters only through positivity. A Student-t margin
+fitted at or below 4 degrees of freedom has no fourth moment, and the bank
+says so once. The targets move, and `δ` with them, so the set is held at
+every row: parameters the targets have left outside are projected back onto
+it before the next `Q` is formed. Given parameters are projected afresh
+each row, so they return as given once the targets do.
+
+#### The update
+
+Each learned row of weight `w` steps the parameters by the score of its
+quasi-log-likelihood `l_t = −½ (ln |R_t| + z_tᵀ R_t⁻¹ z_t)`. The score
+reads `∂R` from `∂Q`, and its own recursion carries `∂Q` at the parameters
+of its time:
+
+```
+r = w / W
+H ← H + r (I_t − H)          I_t = ½ tr(R⁻¹ ∂R_i R⁻¹ ∂R_j)
+θ ← Proj_H(θ + r H⁻¹ g_t)    g_t = ½ (uᵀ ∂R_i u − tr(R⁻¹ ∂R_i)),  u = R⁻¹ z
+```
+
+`Proj_H` is the nearest point of the set in `H`'s own metric, as `garch`
+projects. With no decay `r = 1/(n + N)` after a start of `N` rows; under a
+half-life it floors at `1 − λ`, a tracking estimator whose targets and
+information forget at the same rate.
+
+**The start.** The correlation's first `start_rows` rows after the
+margins', or the rows of its first `start_span` of the clock, are buffered.
+Their weighted means are the targets, and the parameters are the maximum of
+their batch quasi-likelihood with `Q_1 = Q̄`, by the model's own projected
+Fisher scoring from a small grid, run to its rounding. The buffer is then
+replayed at the fit to build `H`.
+
+**A start reports only a recursion its rows identify.** The test is the
+condition itself, not a count of rows. The fit is withheld unless its
+likelihood-ratio statistic against constant correlation (`a = b = 0`, and
+`g = 0`), with the weights at Kish's count, reaches χ² at 0.999 for those
+restrictions: 13.8 for DCC's two and 16.3 for the asymmetric model's three.
+The information there must be positive definite too, and a buffer whose
+`Q̄` is not positive definite is withheld the same way: fewer rows than
+series, a series constant over them, or two the same. `Q̄` is judged by its
+conditioning, a condition number past `1 / (k ε)` refused, because a `Q̄`
+short of rank has an exact 0 eigenvalue that the factor computes with
+rounding of either sign. A fit that passes is stepped from only at its
+optimum: the gain its projected Newton step predicts is at most `10⁻⁶`
+nats, which an optimum on a bound of the set meets as well. A start that
+fails either keeps its rows and fits again once as many new rows have come
+as it held: twice its rows while `max_state_bytes` holds them, then the
+latest rows the cap holds, the oldest leaving as each new one comes. No
+count of tries ends the wait, and nothing is cleared, which could not cure
+a shortage of rows. While a fit is withheld, `withheld_reason` reads
+`not_identified`; while it is short of its optimum alone, the start's own
+warm-up, `below_warm_rows`. With `a` and `b` given there is nothing to
+identify, and the start waits only for a `Q̄` that is positive definite.
+Under a decay the evidence a buffer holds stops growing: its rows' weights
+are decayed to the last, so Kish's count of them is at most about `(1 +
+λ)/(1 − λ)`, 289 at a half-life of 100 rows. Give a half-life several times
+the rows that tell the recursion from a constant correlation.
+
+The state is `32 k² + 96` bytes for DCC and `48 k² + 144` for the
+asymmetric model, learned (`16 k² + 64` and `24 k² + 72` given), for `k`
+series, and the margins' 168 bytes a series. Each start's buffer adds its
+own until it is fitted: 16 bytes a row a series for the margins', `8 (k +
+2)` a row for the correlation's, which a start that waits grows up to what
+`max_state_bytes` holds. The margins' start comes first, so with
+the default starts `max_state_bytes`' 256 KB holds eight series. A row
+costs `O(p k³)` for `p` parameters: the factor and inverse of `R`, and `R⁻¹
+∂R` for each parameter.
+
+#### Rows and the clock
+
+**The recursion is per observation**, as a GARCH's is: `Q_{t+1}` follows
+row `t` however far back on the clock it was. The decay acts on the clock,
+through the targets, the weight and the estimator's gain, so a half-life in
+clock units forgets the same at any row rate. Each start is a span of rows,
+`start_rows` and `margin_start_rows`, or of the clock, `start_span` and
+`margin_start_span`, a number of the clock column's units or a duration
+such as `"1d"` on a temporal clock. A span's rows are the data's to decide,
+so their bytes are checked as they come: a warning past half of
+`max_state_bytes`, and a refusal at it.
+
+**No rolling window.** The targets could be read over a window, but the
+estimate could not: its sensitivities and information are the recursion's
+whole path, from which no row can be taken back out. A half-life gives the
+targets and the estimate the same memory.
+
+#### Example
+
+**It recovers the process it did not see made.** This code simulates two
+series whose correlation follows a DCC at `(a, b) = (0.04, 0.93)` and prints
+the fit after 20,000 rows:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# Set the truth: the parameters and the level the correlations revert to.
+rng = np.random.default_rng(3)
+a, b, qbar = 0.04, 0.93, np.array([[1.0, 0.5], [0.5, 1.0]])
+
+# Simulate the process: each row's correlation from the rows before.
+q, rows = qbar.copy(), []
+for _ in range(20_000):
+    d = np.sqrt(np.diag(q))
+    z = np.linalg.cholesky(q / np.outer(d, d)) @ rng.standard_normal(2)
+    q = (1 - a - b) * qbar + a * np.outer(z, z) + b * q
+    rows.append(z)
+
+# Write the two series to a file.
+z = np.array(rows)
+pl.DataFrame({"x": z[:, 0], "y": z[:, 1]}).write_parquet("z.parquet")
+
+# Fit it, a row at a time after the start of 500 rows.
+model = rp.spec.dcc("c", targets=["x", "y"], margins="none", half_life="inf")
+bank = rp.ModelBank([model])
+bank.fit(pl.scan_parquet("z.parquet"))
+
+# Read the fit's terms by name and compare them with the truth.
+coef = {row["term"]: row["coef"] for row in bank.coef().iter_rows(named=True)}
+print(f"a: true 0.04, found {coef['a']:.2f}")
+print(f"b: true 0.93, found {coef['b']:.2f}")
+```
+
+```text
+a: true 0.04, found 0.04
+b: true 0.93, found 0.93
+```
+
+#### See also
+
+For correlations measured another way:
+
+- [`garch`](#garch--how-large-will-the-next-return-be), for each series'
+  variance alone.
+- [`deco`](#deco--one-correlation-for-the-whole-matrix), for one average
+  correlation across many series, at `O(k)` a row.
+- [`ew_cov`](#ew_cov--exponentially-weighted-moments), for a correlation
+  with a fixed decay rather than a fitted recursion.
+
+#### Notes
+
+**It agrees with the batch fit to first order.** It is the recursive
+prediction-error method: with the gain `1/W` and a batch start, its
+estimate agrees with the batch fit of the same rows to first order. No
+Python library fits DCC, so the batch fit it was held to is Engle's
+definition written out, its targets the sample means, maximized by scipy's
+SLSQP, with the second stage's sandwich standard errors. It was run on 50
+simulated series of 10,000 rows for each of six forms: two and three
+series, DCC and the asymmetric model, normal and Student-t(5) innovations.
+On every form every parameter was within two of those standard errors on
+all 50 series. The largest gap was 1.17 of them under normal innovations
+and 1.95 under t(5), and the median gap between the two correlation paths
+over the second half of the rows was at most 0.017. Through GARCH margins, against
+`arch`'s margins and the same second stage, ten series of two forms were
+within 1.2 standard errors.
+
+**Two stages.** As in the batch method, the margins' estimation error is
+not carried into the correlation's: the quasi-likelihood is the second
+stage's alone, and the margins are `garch`'s, unchanged.
+
+### `realized` — how much did it move, and did it jump?
+
+*API:* [`rheon.spec.realized`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.realized) — *Rust:* [`realized.rs`](../crates/rheon-core/src/realized.rs) — *Outputs:* [fields](OUTPUTS.md#realized)
+
+Realized volatility, measured three ways, and two tests for a jump, for
+each series of returns, one pass.
+
+Use `realized` on log returns of a price sampled at intervals, when you
+want to know how much a series has moved and whether a move was a jump.
+The realized variance counts every move. Bipower and tripower variation
+leave the jumps out, and the difference between them is the jump part.
+Barndorff-Nielsen and Shephard's ratio test says whether the stretch the
+measures cover holds a jump; Lee and Mykland's statistic says whether this
+row's own return is one, against the volatility of the returns before it.
+Each target is its own series. Set `session` with `session_gap="reset"` to
+measure a day at a time, or a window, or a half-life, to measure the
+recent past.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.realized),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#realized). The
+parameters every spec takes are in [What every spec takes](#what-every-spec-takes),
+apart from `features`, which it refuses. A row's weight counts its return
+that many times. A row of weight 0 counts in no clock, and its return is in
+no product. A null return is that target's alone, and its products reach
+across the row to its last return. A gap past `gap_cap` or a session's
+edge is a step of the clock like any other, its products reaching across
+it; `session_gap="reset"` measures each session on its own.
+
+#### The measures
+
+For `n` returns `r_j`, `a_j = |r_j|` and `μ_p = E|Z|^p` of a standard
+normal (Barndorff-Nielsen and Shephard 2004, 2006; Lee and Mykland 2008):
+
+```text
+RV  = Σ r_j²
+BV  = μ_1^-2 Σ_{j≥2} a_j a_{j-1}                      μ_1^-2 = π/2
+TV  = μ_{2/3}^-3 Σ_{j≥3} (a_j a_{j-1} a_{j-2})^(2/3)
+TQ  = n μ_{4/3}^-3 Σ_{j≥3} (a_j a_{j-1} a_{j-2})^(4/3)
+bns = √n (1 - BV/RV) / √(ϑ max(1, TQ/BV²))      ϑ = π²/4 + π - 5
+lm  = r_i / σ_i,   σ_i² the mean of a_j a_{j-1} over the products before row i
+```
+
+`RV` converges to the integrated variance plus the squared jumps, `BV` and
+`TV` to the integrated variance alone. `bns` is a standard normal without
+jumps and large and positive with them. `√(2/π) · lm` is a standard normal
+without a jump, so it reads as a z-score. Every field but `lm` and
+`lm_jump` is of the returns before the row, so a row's own return is in its
+statistic and in nothing it is tested against.
+
+**No small-sample factor.** The papers have none, so neither has
+`realized`: no `n/(n-1)` on `BV`, no `n/(n-2)` on `TQ`. Libraries differ
+here, and the [tested against](#tested-against) note below says by how
+much.
+
+**A window of `W` returns holds `W - 1` products and `W - 2` triples**, as
+the papers' sums over `W` returns do. A product is in the window only while
+both of its returns are, so a window's measures are the papers' on its
+returns.
+
+**The count `n`.** `bns` and the flag read the count of returns the
+measures are of: Kish's effective count `(Σ w)² / Σ w²` of the returns'
+weights, decayed or in a window, which is the count itself at equal weights
+without a decay. `TQ`'s factor is the weight `Σ w` instead, the length of
+the period its sum is of, so `TQ/BV²` is 1 at a constant volatility whatever
+the weights. With unequal weights `1 - BV/RV` has the variance `ϑ Σ w² / (Σ
+w)² = ϑ / n`, so with these two factors `bns` is a standard normal without
+jumps under a decay as well. A simulated null of 20,000 streams under a
+half-life of 100 rows gives a standard deviation within 0.035 of 1, and a
+size at the 1% cut between 0.008 and 0.016. The sums themselves are
+weighted, so they scale with the weights; `n`, `bns` and the flag do not.
+
+**Lee and Mykland's flag.** It is the paper's test of the largest `|lm|`
+among `n` returns, at confidence `lm_beta` (0.99, a test at 1%):
+
+```text
+C_n = √(2 ln n)/c - (ln π + ln ln n) / (2 c √(2 ln n))     S_n = 1 / (c √(2 ln n))
+lm_jump = (|lm| - C_n) / S_n > -ln(-ln lm_beta)            c = √(2/π)
+```
+
+`lm_window = K` takes `σ_i` from the target's `K - 1` returns before the row
+alone, the paper's window; without it, `σ_i` is read from the measures'
+own window or decay.
+
+#### The forms
+
+The measures take one of four forms:
+
+- **One pass** (`half_life = inf`): the measures of every return so far.
+- **A decay** (`half_life`): each term decays by `0.5 ** (Δclock /
+  half_life)` from its row, the default form.
+- **A window of rows** (`window_rows`): the last `W` rows of positive
+  weight. Its bytes, `16 + 56 m` a row for `m` targets, are known from the
+  settings, so a window past `max_state_bytes` is refused when the spec is
+  built, naming the largest that fits.
+- **A window of the clock** (`window_size`): the rows of the last span,
+  `closed` deciding the row exactly that old. The data decides how many
+  rows it holds, so its bytes are checked as the rows go in: past half of
+  `max_state_bytes` a warning names the group once, and the row that would
+  pass the cap stops the run.
+
+A window forgets by dropping, so it takes no decay: set `half_life` to
+`inf` beside one. Without a window a group holds `8 + 144 m` bytes,
+whatever the stream's length.
+
+#### Tested against
+
+The measures and both tests are held to R's `highfrequency` (`rRVar`,
+`rBPCov`, `rMPVar`, `rTPQuar`, `BNSjumpTest`, `intradayJumpTest`) and
+`yuima` (`bns.test`), the field's reference implementations. RV and BV are
+held to Python's `hfvol` too. The days are simulated, with and without
+planted jumps, and Binance's BTCUSDT minutes and ETCUSDT trades.
+`highfrequency` puts `N/(N-2)` on its tripower measures, and `yuima` takes
+the number of prices `n + 1` where the paper has the `n` returns. With
+those factors divided out every measure agrees to a few units in the last
+place, and each test to the rounding of the difference it is built on.
+`intradayJumpTest` agrees on `√(2/π) · lm` with `dontIncludeLast = TRUE`,
+which leaves the row's own return out of its volatility as the paper does;
+its default puts it in.
+
+#### See also
+
+Where `realized` is not the measure you need:
+
+- [`rcov`](#rcov--a-blocks-realized-covariance-robust-to-noise), for a
+  block's realized covariance robust to microstructure noise.
+- [`garch`](#garch--how-large-will-the-next-return-be), for a conditional
+  variance fitted to the returns.
+
+### `power_variation` — power variation and kernel-weighted autocovariance
+
+*API:* [`rheon.spec.power_variation`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.power_variation) — *Rust:* [`power_variation.rs`](../crates/rheon-core/src/power_variation.rs) — *Outputs:* [fields](OUTPUTS.md#power_variation)
+
+Sums of powers of returns and of their kernel-weighted autocovariances,
+for each series of returns, one pass: the building block the realized
+measures are made of.
+
+Use `power_variation` on returns when the measure you need is one of these
+sums, or is composed from them in Polars. Each term is named, and its name
+names its fields:
+
+- **A multipower term** (`powers`): the sum of products of powers of
+  consecutive absolute returns, oldest first. `[2]` is the realized
+  variance, `[1, 1]` the bipower sum, `[4/3, 4/3, 4/3]` the tripower
+  quarticity's; with `normalize` each is Barndorff-Nielsen and Shephard's
+  multipower variation, `W^(Σp/2 - 1) / Π μ_p` times the sum. `W` is the
+  returns' weight, which is their count `n` at unit weights without a
+  decay.
+- **A kernel term** (`kernel`, `bandwidth`): `Σ_j [r_j² + 2 Σ_h c_h r_j
+  r_{j-h}]` for lags up to the bandwidth `H`, with the Bartlett, Parzen,
+  Tukey-Hanning or rectangular kernel at `c_h = k(h/(H + 1))`, Newey and
+  West's weights for the Bartlett kernel. `flat_top` gives lag 1 the full
+  weight, `c_h = k((h - 1)/H)`, the flat-top realized kernel, which takes a
+  bid-ask bounce out of a realized variance. `center` takes each product
+  about the mean, which is the HAC long-run variance times `n`.
+- **A scale** (`scale = K`) on either: the term of the `K`-step returns
+  at every row, divided by `K`, which averages it over the `K` offset grids.
+  The sum of squares at two scales is what two-scale realized variance is
+  composed from: `sub_K - (n̄_K / n̄_J) sub_J`, `n̄_K = (n - K + 1) / K`.
+
+Each target reports `n` beside its terms, the count of returns they are of:
+Kish's effective count `(Σ w)² / Σ w²` of their weights, decayed or in the
+window, which is the count at equal weights. No term carries a
+small-sample factor such as `n/(n - h)`; divide or multiply in Polars
+where a convention needs one. Its forms are
+`realized`'s: one pass, a decay, a window of rows (checked against
+`max_state_bytes` when the spec is built) and a window of the clock
+(checked as the rows go in); a term is in a window while every return in
+it is. Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.power_variation).
+
+### `tdigest` — where do this column's quantiles stand?
+
+*API:* [`rheon.spec.tdigest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.tdigest) — *Rust:* [`tdigest_model.rs`](../crates/rheon-core/src/tdigest_model.rs) — *Outputs:* [fields](OUTPUTS.md#tdigest)
+
+Quantiles of each target column, read at the levels you list from a merging
+t-digest whose error is uniform in rank, each beside the mean of the tail past
+it: the value at risk and the expected shortfall. Each row reports every
+level from the rows before it, so a row's own value is never in its own
+quantile.
+
+Use it for a column whose values sit near 0 or take both signs (returns,
+residuals, spreads), where a sketch of relative accuracy misreads. Each
+target has its own digest in each group. The digest never forgets: for a
+quantile that does, use `ewm_quantile` with a `window_size`, the windowed
+DDSketch, whose buckets drop a row as it leaves the window.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.tdigest),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#tdigest). The
+parameters every spec takes are in [What every spec
+takes](#what-every-spec-takes), apart from `features`, `half_life` and
+`lam`, which it refuses. It takes no window either: a merging digest folds
+each row into a centroid's mean and cannot take it out again.
+A row's weight is its mass in the digest, and scaling every weight changes
+nothing but `weight_sum`. A row of weight 0, or whose value is null, adds
+nothing; it is still read.
+
+#### The update
+
+Each target `t` keeps a merging t-digest `D_t` (Dunning and Ertl, 2019, on
+the scale function `k(q) = δ/(2π) asin(2q − 1)`), with the weight `W_t` and
+the squared weights `S_t` of the rows it holds. For a row of weight `w` and
+value `y`:
+
+```text
+q_p,t  = D_t.quantile(p)        read first: the rows before this one
+es_p,t = mean of Q_t over the tail past q_p,t
+D_t    ← D_t + (y, w)           when w > 0 and y is present
+W_t    ← W_t + w,   S_t ← S_t + w²
+```
+
+The digest keeps centroids ascending by mean, each spanning at most 1 in
+`k`, and merges a buffer of `8δ` rows into them. A read merges a copy, so
+the state is the rows' alone, and interpolates between the centroids'
+centers from the smallest row to the largest. The merge's limit `k⁻¹(k(q) +
+1)` is taken through the sine addition formula with `sin` and `cos` of `2π/δ`
+summed from their series, so no math library's last bit decides a merge and
+the digest is the same bits on every platform.
+
+**The tail's mean comes from the digest's own centroids.** A level below
+0.5 reads the lower tail, `E[X | X ≤ q]`, and one above it the upper,
+`E[X | X ≥ q]`; 0.5 itself has no tail of its own and is refused by name.
+The tail holds the mass `m = p W_t` from the smallest mean, or
+`m = (1 − p) W_t` from the largest. Each centroid wholly inside counts at its
+mean, and the one the level falls in is split, counted at only the weight
+the tail still needs:
+
+```text
+es_p,t = (Σ_{i<j} m_i c_i + (m − M_{j−1}) c_j) / m
+```
+
+The values keep their sign (a loss is not negated), and it is null where
+its level is. On 100,000 rows of the four streams below it was within 4.3%
+of the exact tail mean at `δ = 100` and 1.2% at 200. A mean of the read's
+interpolated curve was tried first and is not used: its end pieces run to
+the smallest and largest row over half a centroid's weight, and on a heavy
+tail that took the mean as far as 97% off.
+
+**A level is withheld until its rows identify it.** Take Kish's effective
+size `n_t = W_t²/S_t`, the rows themselves for rows of equal weight. The
+`i`-th smallest of `n` rows sits at level `i/(n + 1)` in expectation, so a
+level past `1/(n + 1)` or `n/(n + 1)` lies beyond the smallest or largest
+row, where the digest can read only the extreme. Such a level is null and
+`withheld_reason` is `level_beyond_sample`, while
+
+```text
+p (n_t + 1) < 1   or   (1 − p) (n_t + 1) < 1
+```
+
+Levels of 0.25 and 0.75 are reported from the fourth row, 0.05 and 0.95
+from the twentieth, 0.01 and 0.99 from the hundredth; no count of rows is
+fixed.
+
+**State.** At most `δ + 1` centroids and `8δ` buffered rows a target, 16
+bytes each, plus a fixed header: about 14.5 KB a target at `δ = 100` and
+29 KB at 200, whatever the stream's length. A spec past `max_state_bytes`
+(256 KB by default) is refused at the call.
+
+#### Notes
+
+**Its rank error, against exact ranks and the `tdigest` package.** It was
+measured at 100,000 rows of normal, lognormal, Student-t(3) and Pareto(2.5)
+values over 20 seeds, at the levels 0.01, 0.05, 0.5, 0.95 and 0.99. The
+largest rank error `|F(q̂) − p|` was 2.0e-3 at `δ = 100` and 9.3e-4 at 200,
+held under 3.8e-3 and 1.8e-3. The `tdigest` package's own digest read the
+same quantiles within those tolerances in rank. The error is largest at the
+median and smallest in the tails, where `k_1` keeps the centroids small.
+
+**A read costs a merge.** Each row's read merges a copy of the buffer into
+the centroids, `O(δ log δ)` a target, so a digest of compression 100 costs
+more a row than a running moment does.
+
+### `ddsketch` — how large are this column's quantiles and tails?
+
+*API:* [`rheon.spec.ddsketch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ddsketch) — *Rust:* [`ddsketch_model.rs`](../crates/rheon-core/src/ddsketch_model.rs) — *Outputs:* [fields](OUTPUTS.md#ddsketch)
+
+Quantiles of each target column, read at the levels you list from a DDSketch
+whose error is relative to the value, each beside the mean of the tail past
+it: the value at risk and the expected shortfall. Each row reports every
+level from the rows before it, so a row's own value is never in its own
+quantile.
+
+Use it where a reading within 1% of the true quantile is what is asked,
+whatever the value's size: latencies, sizes, prices, losses. Each target has
+its own sketch in each group. It forgets by a window, exactly: `window_rows`
+(the last rows of positive weight) or `window_size` (the rows of the last
+span of the clock). Or it forgets by a decay, `half_life` or `lam`, rounded;
+or it never forgets. For values near 0 or of both signs whose rank matters,
+use `tdigest`.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ddsketch),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#ddsketch). The
+parameters every spec takes are in [What every spec
+takes](#what-every-spec-takes), apart from `features`, which it refuses,
+and `half_life` and `lam`, which it refuses beside a window. A row's weight is its mass in the sketch, and scaling every weight
+changes nothing but `weight_sum`. A row of weight 0 counts in no clock and
+is in no window.
+
+#### The update
+
+With `γ = (1 + α)/(1 − α)`, a value `x > 0` goes to the bucket
+`k = ⌈log_γ x⌉`, which covers `(γ^(k−1), γ^k]` and reads `2γ^k/(1 + γ)`,
+within `α` of every value in it. This is Masson, Rim and Lee's sketch (2019)
+with the `ddsketch` package's logarithmic mapping. A negative value goes to a second
+store by its magnitude, and one within about `2.2e-308` of 0 to a count of
+its own. For a row of weight `w` and value `y`:
+
+```text
+q_p,t  = the representative of the first bucket, in value order, whose weight reaches p W_t
+es_p,t = (Σ_{k<j} c_k r_k + (m − C_{j−1}) r_j) / m
+D_t    ← D_t + (y, w)           when w > 0 and y is present
+W_t    ← W_t + w,   S_t ← S_t + w²
+```
+
+The tail is the lower one below a level of 0.5, `m = p W_t` from the
+smallest value, and the upper one above it, `m = (1 − p) W_t` from the
+largest; 0.5 itself is refused by name. The bucket the tail ends in counts
+only the weight the tail still needs, so the tail's mean is within `α` times
+the tail's mean magnitude of the exact one, and the quantile within `α` of
+the exact quantile (numpy's `inverted_cdf` over the rows). The logarithm and
+the power are summed from their series in plain arithmetic, so a row's
+bucket is the same on every platform.
+
+**A window takes a row out exactly.** A ring keeps each row's weight and, per
+target, its bucket; a row leaving takes its weight out of its bucket, and a
+bucket whose rows have all left is removed, so the sketch is the one the
+window's rows alone build. A clock window's rows leave at the first row at
+or after the one they age out on, before that row's read; `closed` decides
+whether a row exactly `window_size` old stays. Under a window, `weight_sum`
+is the weight of the rows the row reads.
+
+**A decay is rounded.** Under `half_life` or `lam` each row, after its read,
+multiplies every bucket's weight, the zero count and the weights by its
+clock step's factor `f` before it adds itself, each multiply and add rounded
+once. A bucket formed `k` rows ago then holds its exact decayed sum within a
+relative `2ku/(1 − 2ku)`, `u = 2⁻⁵³`: about `2.2e-12` after 10,000 rows. The
+tests hold each bucket to its exact sum in fractions, from the same factor,
+within that bound. No row can be taken out of such a weight exactly, which is
+why the window is the form that drops one. A bucket that decays to 0 is
+removed. The factor is the platform's, so a decayed sketch agrees across
+platforms within its last bits.
+
+**A level is withheld until its rows identify it**, by `tdigest`'s rule:
+null while `p (n_t + 1) < 1` or `(1 − p)(n_t + 1) < 1`, `n_t` Kish's
+effective size of the rows, with `withheld_reason` `level_beyond_sample`.
+
+**State.** Each store keeps its live buckets alone, 12 bytes each (16 under
+a window, with a row count): at most the data's log-range over `ln γ`,
+about 1,470 a store for values spanning `1e-5` to `1e5` at the default `α`,
+whatever the stream's length. A row window adds `window_rows (8 + 4m)` bytes
+for `m` targets, checked at the call; the buckets and a clock window's rows
+are checked against `max_state_bytes` as the rows go in, said past half of
+it and refused at it.
+
+#### Notes
+
+**Against the `ddsketch` package and exact reads.** The streams were normal,
+lognormal, Student-t(3) and Pareto(2.5), 100,001 rows each over 20 seeds.
+Every bucket's key and count was the package's, and each representative and
+each quantile was the package's within 2 ulps. Each quantile was within `α`
+of the exact quantile, and each tail mean within `α` times the tail's mean
+magnitude of the exact tail mean, with weights of 1 and of many sizes.
 
 ## Clustering and classification
 
@@ -3540,7 +4636,7 @@ Each kind answers its own question:
 | `kind` | the question | reports | against | a change is found |
 |---|---|---|---|---|
 | `"monitor"` | was the correlation constant over a span? | on a span's last row | the span's own correlation | at the span's end, up to `window_rows` rows late, and reliably only where it falls well inside a span |
-| `"sequential"` | has it left the level a stable history set? | on each row tested against the history, from the second on | a history of `window_rows` rows | as soon as it crosses a boundary |
+| `"sequential"` | has it left the level a stable history set? | on each row tested against the history, from the fourth on | a history of `window_rows` rows | as soon as it crosses a boundary |
 | `"window"` | how big is the change? | on every row once both windows are full, `2·window_rows` rows in | the window before | as soon as the two windows differ |
 
 Under `"monitor"` and `"sequential"`, the statistic is the largest over the
@@ -3548,28 +4644,50 @@ pairs, and the level `alpha` (0.05 by default) is spread over the pairs as
 `alpha / npairs` unless `alpha_adjust="none"`.
 
 `kind="monitor"` is the closed-sample constancy test of Wied, Krämer and
-Dehling (2012). With `m = window_rows`, `ρ̂_j` the correlation of the span's
-first `j` rows, and `D̂` the delta-method long-run standard deviation of
-`ρ̂`, the last row of a span reports, per pair:
+Dehling (2012) in its linear form. Its span is `T = window_rows` rows,
+centered at their means and scaled by their standard deviations (`x̃`,
+`ỹ`), with correlation `ρ̂`. `D̂` is the Bartlett long-run standard
+deviation of `ξ`, the delta-method deviation of `ρ̂`. The last row of a
+span reports, per pair:
 
 ```
-Q = max_{2≤j≤m} (j/√m)·|ρ̂_j − ρ̂_m| / D̂
+ξ_t  = x̃_t ỹ_t − (ρ̂/2)(x̃_t² + ỹ_t²)
+Q    = max_{1≤j≤T} |Σ_{t≤j} ξ_t| / (√T·D̂)
+crit = q(1 − α) − 0.5826/√T                q the Kolmogorov quantile, 1.3581 at 5%
 ```
+
+The paper's own statistic, `max_j (j/√T)·|ρ̂_j − ρ̂_T| / D̂`, compares the
+correlation of the span's first few rows, `±1` at two rows whatever the data,
+with the span's: it flagged 26% of stable spans of 100 rows at a correlation
+of 0.9. The partial sums of `ξ`, to which their proof reduces it, form no
+such correlation and have the same limit. A pair flags where the same CUSUM
+of `x̃² − ỹ²`, which moves only when the two columns' scale ratio moves, does
+not pass `crit`; where it does, the flag is withheld, named
+`scale_ratio_moved`.
 
 `kind="sequential"` is the monitoring procedure of Wied and Galeano (2013).
 A cycle is `window_rows` rows of history, taken as stable, then up to
 `monitor_rows` rows, each tested against the history as it arrives. A flag,
 or the cycle's last monitored row, ends the cycle, and the row after it
 starts a new history. From the history it reads each pair's correlation
-`ρ̂_h` and its `D̂`. The `k`-th monitored row then reports
+`ρ̂_h` and its `D̂`. The `k`-th monitored row then reports, on Fisher's scale,
+each side at its own finite-sample variance
 
 ```
-V_k  = (k/√m)·(ρ̂_k − ρ̂_h) / D̂           m = window_rows, ρ̂_k over the k monitored rows
-stat = max over pairs of |V_k| / w(k/m)
+V_k  = ((k−3)/√(m−3))·|atanh ρ̂_k − atanh ρ̂_h|·(1 − ρ̂_h²) / D̂     m = window_rows
+stat = max over pairs of V_k / w((k−3)/(m−3))
 w(b) = (1 + b)·(b/(1 + b))^γ               γ = boundary_gamma, 0 ≤ γ ≤ 0.49
 ```
 
-and flags where `stat` passes `crit`.
+and flags where `stat` passes `crit`. The paper's own detector, `(k/√m)·|ρ̂_k
+− ρ̂_h| / D̂` from the second row, flagged a quarter to a third of the
+cycles in their first rows at `γ = 0.45` with nothing changed. This one
+holds 0.05 to 0.07 on Gaussian pairs at every `γ`.
+
+Every kind takes its span on the clock too, as `window_size` in place of
+`window_rows` (and `monitor_span` in place of `monitor_rows`). Each span,
+history or pair of windows is then tested at the rows it holds, and the
+window kind's held critical value is rescaled to each report's two windows.
 
 `kind="window"` reports `‖vech(R_pre − R_post)‖₁` (under `norm="linf"`, its
 largest absolute entry instead) over two adjacent windows of `window_rows` rows each. `R_pre` and `R_post` are the windows'
@@ -3612,11 +4730,11 @@ for r in out.with_row_index("row").filter(pl.col("flag")).iter_rows(named=True):
 ```
 
 ```text
-flag at row 2285: stat 1.84 past crit 1.83
+flag at row 2284: stat 1.83 past crit 1.83
 ```
 
 The break falls in the second cycle's monitored rows, which start at row
-2,000, and the flag comes 85 rows after it. No row of the first cycle, or of
+2,000, and the flag comes 84 rows after it. No row of the first cycle, or of
 the second cycle before the break, is flagged.
 
 #### See also
@@ -3661,16 +4779,17 @@ whatever the window. Each value is held for `permute_every_rows` reports, so
 a report is compared with draws from windows up to
 `permute_every_rows − 1` rows older than its own.
 
-**The monitor's size and power are close to Wied, Krämer and Dehling's
-tables,** on the `t_5` design of their own paper ([Is the monitor the size
+**The monitor's size is at or under the nominal 5% at every span length and
+correlation,** where the paper's statistic was not ([Is the monitor the size
 its paper says?](REGIMES.md#2-is-the-monitor-the-size-its-paper-says) and
 [And is it the power its paper says?](REGIMES.md#3-and-is-it-the-power-its-paper-says)). The sequential
-detector's size is within two standard errors of Wied and Galeano's Table 2
-in every cell ([The sequential detector against its
+detector's size on Wied and Galeano's own design is 0.05 to 0.07 at every
+`boundary_gamma`, where their Table 2 reads up to 0.174 at 0.45 ([The
+sequential detector against its
 paper](REGIMES.md#9-the-sequential-detector-against-its-paper)). Its critical
-values are within 0.03 of their Table 1. Over 200 streams of independent
-rows, the window kind flagged 4.8% to 5.2% of non-overlapping spans at
-`alpha` 0.05, as the docstring's Notes give under *The window test*.
+values are within 0.03 of their Table 1. The window kind flags `alpha` of its
+reports, and a stretch of a window's length of reports holds a flag about a
+third of the time, as the docstring's Notes give under *The window test*.
 
 ### `bocpd` — how long has this regime lasted?
 

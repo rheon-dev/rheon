@@ -542,7 +542,15 @@ fn the_served_predictions_are_the_doubled_streams_scored_copies() {
             served > 400,
             "half_life {half_life}: {served} rows served a prediction"
         );
-        let bad: Vec<usize> = (0..got.len()).filter(|&i| got[i] != want[i]).collect();
+        // A row of weight 0 is scored as `predict` scores it, from the
+        // labels learned before it, and releases none matured at its clock
+        // (the user, 2026-11-23: "Score as predict"; review 2026-11-23,
+        // STRM-1), where the doubled stream's scored copy sees them:
+        // `zero_weight.rs` holds those rows to `predict`.
+        let w = df.column("w").unwrap().f64().unwrap();
+        let bad: Vec<usize> = (0..got.len())
+            .filter(|&i| w.get(i) != Some(0.0) && got[i] != want[i])
+            .collect();
         assert!(bad.is_empty(), "half_life {half_life}: rows {bad:?}");
     }
 }
@@ -1124,8 +1132,13 @@ fn the_interval_is_the_multiplier_fold_of_the_served_residuals() {
                     w_rows *= lam;
                     continue;
                 }
-                w_rows = lam * w_rows + 1.0;
-                w_mean += (w[j] - w_mean) / w_rows;
+                // The mean weight at the old mean's and the row's shares
+                // (rule 5's thirtieth exception).
+                let prev = lam * w_rows;
+                w_rows = prev + 1.0;
+                if w[j] != w_mean {
+                    w_mean = (prev / w_rows) * w_mean + w[j] / w_rows;
+                }
                 let waiting = (held.len() + due.len() - k - 1) as f64;
                 if auto && (waiting > 0.0 || nbar != 0.0) {
                     nbar += (waiting - nbar) / w_rows;

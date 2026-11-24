@@ -393,9 +393,18 @@ impl HeldMedian {
 
     /// A run of decays, `λ` `count` times since [`Self::begin_run`]: the
     /// decay where the run began times `λ^count`, so a run lengthened row
-    /// by row and one replayed whole reach the same decay.
+    /// by row and one replayed whole reach the same decay. A run of none is
+    /// the decay where it began; a run of a decay of 0 -- a gap past the
+    /// decay's underflow -- is [`Self::decay`] of 0, every row held let go
+    /// (`frexp` takes no 0).
     pub(crate) fn run(&mut self, lam: f64, count: u64) {
-        self.d = self.run_base.times(Split::pow(lam, count));
+        if count == 0 {
+            self.d = self.run_base;
+        } else if lam > 0.0 {
+            self.d = self.run_base.times(Split::pow(lam, count));
+        } else {
+            self.decay(0.0);
+        }
     }
 
     /// A run of equal decays begins here ([`Self::run`]).

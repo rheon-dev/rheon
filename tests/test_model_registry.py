@@ -83,6 +83,29 @@ MINIMAL: dict[str, dict[str, object]] = {
     "audit": {"targets": None, "features": None, "half_life": None, "columns": ["x0", "x1"]},
     "hawkes": {"features": None, "kernel_decays": [1.0, 5.0]},
     "garch": {"features": None, "half_life": None, "start_rows": 50},
+    # The parameters given and no margins: these frames hold no correlation
+    # dynamics or variance process for a start to identify, and a learned
+    # start would withhold every row (`not_identified`).
+    "dcc": {
+        "features": None,
+        "targets": ["y", "x0"],
+        "margins": "none",
+        "a": 0.05,
+        "b": 0.9,
+        "start_rows": 50,
+    },
+    "realized": {"features": None, "lm_window": 30},
+    "pca": {"targets": None, "features": ["x0", "y"], "n_components": 1},
+    "power_variation": {
+        "features": None,
+        "terms": {"rv": {"powers": [2]}, "lrv": {"kernel": "parzen", "bandwidth": 3}},
+    },
+    "tdigest": {"features": None, "half_life": None, "quantiles": [0.05, 0.25, 0.95]},
+    # Its decayed form, under the half-life every sweep gives.
+    "ddsketch": {"features": None, "quantiles": [0.05, 0.25, 0.95]},
+    "ewm_moments": {"targets": None, "terms": {"var": {"x0": 2}}},
+    "ar": {"lags": 2},
+    "spectral": {"features": None, "periods": [8.0, 3.0]},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -93,7 +116,12 @@ MINIMAL: dict[str, dict[str, object]] = {
 #: hidden state), ``corrchange`` (a test statistic), ``bocpd`` (a posterior
 #: over run lengths), ``audit`` (counts, read from the state), ``hawkes`` (an
 #: intensity of events, not a target's value), ``garch`` (a target's
-#: variance, not its value) -- sit them out.
+#: variance, not its value), ``dcc`` (the targets' correlations), ``realized``
+#: and ``power_variation`` (measures of a target's variation, not its value),
+#: ``pca`` (components, no target), ``tdigest`` and ``ddsketch`` (a target's
+#: quantiles, read from the rows before it), ``ewm_moments`` (moments of
+#: the columns) and ``spectral`` (a target's power at chosen periods) -- sit
+#: them out.
 REGRESSIONS = frozenset(MINIMAL) - {
     "ew_cov",
     "kmeans",
@@ -109,6 +137,14 @@ REGRESSIONS = frozenset(MINIMAL) - {
     "audit",
     "hawkes",
     "garch",
+    "dcc",
+    "realized",
+    "pca",
+    "power_variation",
+    "tdigest",
+    "ddsketch",
+    "ewm_moments",
+    "spectral",
 }
 
 
@@ -260,6 +296,8 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
     "lasso": {"max_error_inflation"},
     "huber": {"support_coef"},
     "quantile": {"support_coef"},
+    # Its fits are ewridge's: their standard errors, no more.
+    "ar": {"emit_se_coef"},
     **{
         name: set()
         for name in (
@@ -283,6 +321,14 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "audit",
             "hawkes",
             "garch",
+            "dcc",
+            "realized",
+            "pca",
+            "power_variation",
+            "tdigest",
+            "ddsketch",
+            "ewm_moments",
+            "spectral",
         )
     },
 }

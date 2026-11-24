@@ -30,16 +30,36 @@
 //! ```
 //!
 //! the paper's Bernstein form (its section 4, `δ' = δ / ln(width)`), with
-//! `1/m` shifted by `L` as MOA and river shift it. A cut drops the oldest
-//! bucket, `(u, v)` of `n` rows:
+//! `1/m` shifted by `L` as MOA and river shift it.
+//!
+//! **The range.** The bound's second term is the paper's `(2/3) R d/m`, `R`
+//! the range the values lie in. The paper and river take values in `[0, 1]`
+//! and write `R = 1`, which is this detector's default (`AdwinRange::Fixed`
+//! of 1), river's to the bit; so it is not scale-free: the same stream in
+//! other units is cut sooner or later (river finds a threefold rise in the
+//! spread of `|N(0, σ)|` in 15 rows at `σ = 1`, in 655 at `σ = 0.01`, and
+//! not in 8,000 at `σ = 0.001`). A fixed `R` of the caller's states the
+//! values' range in their own units. `AdwinRange::Window` reads `R` as the
+//! range the window holds now, `max − min` over its buckets, each bucket
+//! keeping its values' least and greatest: then `ε` scales with the values,
+//! as `|u0/n0 − u1/n1|` does, and the flags are the same at any scale (to
+//! the bit at a power of two). A cut drops the oldest
+//! bucket, of `n` rows, and takes `S` and `V` again from the buckets left,
+//! oldest first, by the pairwise merge of the compression above:
 //!
 //! ```text
-//! width −= n;   S −= u;   V −= v + n·width (u/n − S/width)² / (n + width)
+//! width −= n;   S = S_a + S_b;   V = V_a + V_b + n_a n_b / (n_a + n_b) (S_a/n_a − S_b/n_b)²
 //! ```
 //!
 //! and the scan starts again on the shorter window; the row is flagged if any
-//! cut was made. Each expression is evaluated in river's order, so the flags
-//! and the window's fields are river's to the bit.
+//! cut was made. river takes the bucket's share out of `S` and `V` instead,
+//! a subtraction that cancels when the bucket held most of the window's
+//! spread (two outliers leaving left `V` far above 0 on a window of zeros,
+//! or below it), which blinds every later test; under river's `restart` a
+//! row's first cut flags it and empties the window, so the flags are
+//! river's either way. Each other expression is evaluated in river's order,
+//! so the flags and, until a bucket is dropped, the window's fields are
+//! river's to the bit.
 //!
 //! Two things river does not have. `max_width` caps the window, dropping the
 //! oldest bucket while `width > max_width`, so the state is bounded by the
@@ -74,6 +94,17 @@ pub struct AdwinCfg {
     /// Start from an empty window after a flag (river), or keep the cut one
     /// (the paper).
     pub restart: bool,
+    /// The range `R` in the bound's second term (module doc, "The range").
+    pub range: AdwinRange,
+}
+
+/// The range `R` the cut's bound takes (module doc, "The range").
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AdwinRange {
+    /// A range in the values' units: river's 1 by default.
+    Fixed(f64),
+    /// The range the window holds now, `max − min`: scale-free.
+    Window,
 }
 
 impl Default for AdwinCfg {
@@ -86,6 +117,7 @@ impl Default for AdwinCfg {
             grace_period: 10,
             max_width: Adwin::DEFAULT_MAX_WIDTH,
             restart: true,
+            range: AdwinRange::Fixed(1.0),
         }
     }
 }
@@ -112,6 +144,22 @@ pub struct Adwin {
     /// Level `i`'s buckets of `2^i` rows, oldest first, each `[sum, sum of
     /// squared deviations]`. Never empty: level 0 is kept with no bucket.
     levels: Vec<VecDeque<[f64; 2]>>,
+    /// A fixed range `R`, 1 unless set (and 1 under the window's range);
+    /// absent from a file where it is 1, so river's form writes what it did.
+    #[serde(default = "unit_range", skip_serializing_if = "is_unit_range")]
+    range: f64,
+    /// Under [`AdwinRange::Window`], each bucket's `[least, greatest]`,
+    /// shaped as `levels`; empty, and absent from the file, otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    extents: Vec<VecDeque<[f64; 2]>>,
+}
+
+fn unit_range() -> f64 {
+    1.0
+}
+
+fn is_unit_range(r: &f64) -> bool {
+    *r == 1.0
 }
 
 impl Adwin {
@@ -121,6 +169,10 @@ impl Adwin {
     pub fn new(cfg: AdwinCfg) -> Self {
         debug_assert!(cfg.delta > 0.0 && cfg.delta < 1.0);
         debug_assert!(cfg.clock >= 1 && cfg.max_buckets >= 1 && cfg.max_width >= 1);
+        let (range, extents) = match cfg.range {
+            AdwinRange::Fixed(r) => (r, Vec::new()),
+            AdwinRange::Window => (1.0, vec![VecDeque::new()]),
+        };
         Self {
             delta: cfg.delta,
             clock: cfg.clock,
@@ -134,7 +186,29 @@ impl Adwin {
             width: 0.0,
             tick: 0,
             levels: vec![VecDeque::new()],
+            range,
+            extents,
         }
+    }
+
+    /// Whether `R` is the window's range ([`AdwinRange::Window`]).
+    fn windowed_range(&self) -> bool {
+        !self.extents.is_empty()
+    }
+
+    /// `R` for this scan: the fixed range, or `max − min` over the window.
+    fn range_now(&self) -> f64 {
+        if !self.windowed_range() {
+            return self.range;
+        }
+        let (lo, hi) = self
+            .extents
+            .iter()
+            .flatten()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &[a, b]| {
+                (lo.min(a), hi.max(b))
+            });
+        if hi >= lo { hi - lo } else { 0.0 }
     }
 
     /// The most levels a window of `width` rows can hold at `M` buckets a
@@ -156,9 +230,22 @@ impl Adwin {
     /// The bytes an ADWIN's state holds at most under `max_width`, in its
     /// file's terms: each level `M + 1` buckets of two numbers and a count,
     /// and thirteen numbers of settings and totals.
+    /// Under [`AdwinRange::Window`] each bucket keeps two more numbers, its
+    /// extent: [`Self::state_bytes_with`].
     pub fn state_bytes(max_width: u64, max_buckets: usize) -> u64 {
-        let per_level = 16 * (max_buckets as u64 + 1) + 8;
-        Self::levels_bound(max_width, max_buckets) * per_level + 104
+        Self::state_bytes_with(max_width, max_buckets, false)
+    }
+
+    /// [`Self::state_bytes`], with each bucket's extent where `extents`.
+    pub fn state_bytes_with(max_width: u64, max_buckets: usize, extents: bool) -> u64 {
+        let numbers = if extents { 2 } else { 1 };
+        let per_level = (max_buckets as u64)
+            .saturating_add(1)
+            .saturating_mul(16 * numbers)
+            .saturating_add(8 * numbers);
+        Self::levels_bound(max_width, max_buckets)
+            .saturating_mul(per_level)
+            .saturating_add(104)
     }
 
     /// The rows in the window.
@@ -192,8 +279,10 @@ impl Adwin {
     }
 
     /// Whether a restored state keeps the shape every row relies on: a level
-    /// to put a row in, no level past `M` buckets, settings in range, and a
-    /// width that is the rows its buckets hold.
+    /// to put a row in, a top level holding the oldest bucket (the one a
+    /// drop takes), no level past `M` buckets, settings in range, a width
+    /// that is the rows its buckets hold and no more than `max_width`, and
+    /// sums that are finite numbers, the spread at least 0.
     pub fn sound(&self) -> bool {
         let held: f64 = self
             .levels
@@ -203,13 +292,39 @@ impl Adwin {
             .sum();
         !self.levels.is_empty()
             && self.levels.len() < 64
+            && (self.levels.len() == 1 || self.levels.last().is_some_and(|l| !l.is_empty()))
             && self.levels.iter().all(|l| l.len() <= self.max_buckets)
+            && self
+                .levels
+                .iter()
+                .flatten()
+                .all(|&[t, v]| t.is_finite() && v.is_finite() && v >= 0.0)
             && self.delta > 0.0
             && self.delta < 1.0
             && self.clock >= 1
             && self.max_buckets >= 1
+            && self.min_window_length >= 1
             && self.max_width >= 1
             && held == self.width
+            && self.width <= self.max_width as f64
+            && self.total.is_finite()
+            && self.var.is_finite()
+            && self.var >= 0.0
+            && (if self.windowed_range() {
+                self.extents.len() == self.levels.len()
+                    && self
+                        .extents
+                        .iter()
+                        .zip(&self.levels)
+                        .all(|(e, l)| e.len() == l.len())
+                    && self
+                        .extents
+                        .iter()
+                        .flatten()
+                        .all(|&[a, b]| a.is_finite() && b.is_finite() && a <= b)
+            } else {
+                self.range.is_finite() && self.range > 0.0
+            })
     }
 
     pub fn reset(&mut self) {
@@ -219,14 +334,23 @@ impl Adwin {
         self.tick = 0;
         self.levels.clear();
         self.levels.push(VecDeque::new());
+        if self.windowed_range() {
+            self.extents.clear();
+            self.extents.push(VecDeque::new());
+        }
     }
 
     /// Feed one value. Returns whether the window was cut on this row; under
     /// `restart` it then starts again empty.
     pub fn update(&mut self, x: f64) -> bool {
         self.insert(x);
-        while self.width > self.max_width as f64 {
+        // Each pass drops a bucket, so no more than the buckets held can be
+        // wanted: a bound that holds the loop to a pass count it cannot reach
+        // unless a pass drops nothing.
+        let mut held = self.levels.iter().map(VecDeque::len).sum::<usize>();
+        while self.width > self.max_width as f64 && held > 0 {
             self.delete_oldest();
+            held -= 1;
         }
         let change = self.detect();
         if change && self.restart {
@@ -237,6 +361,9 @@ impl Adwin {
 
     fn insert(&mut self, x: f64) {
         self.levels[0].push_back([x, 0.0]);
+        if self.windowed_range() {
+            self.extents[0].push_back([x, x]);
+        }
         self.width += 1.0;
         let mut inc = 0.0;
         if self.width > 1.0 {
@@ -264,6 +391,14 @@ impl Adwin {
                 self.levels.push(VecDeque::new());
             }
             self.levels[idx + 1].push_back([total12, v12]);
+            if self.windowed_range() {
+                let [a0, b0] = self.extents[idx].pop_front().expect("M + 1 extents");
+                let [a1, b1] = self.extents[idx].pop_front().expect("M + 1 extents");
+                if idx + 1 >= self.extents.len() {
+                    self.extents.push(VecDeque::new());
+                }
+                self.extents[idx + 1].push_back([a0.min(a1), b0.max(b1)]);
+            }
             if self.levels[idx + 1].len() <= m {
                 break;
             }
@@ -275,35 +410,64 @@ impl Adwin {
     fn delete_oldest(&mut self) {
         let last = self.levels.len() - 1;
         let n = (1u64 << last) as f64;
-        let Some([u, vv]) = self.levels[last].pop_front() else {
+        if self.levels[last].pop_front().is_none() {
             return;
-        };
-        let mu = u / n;
-        self.width -= n;
-        self.total -= u;
-        if self.width > 0.0 {
-            let muw = self.total / self.width;
-            let inc = vv + n * self.width * (mu - muw) * (mu - muw) / (n + self.width);
-            self.var -= inc;
-        } else {
-            // The whole window went: nothing is left to hold a deviation, and
-            // `0 / 0` would poison the next row.
-            self.total = 0.0;
-            self.var = 0.0;
         }
+        if self.windowed_range() {
+            self.extents[last].pop_front();
+        }
+        self.width -= n;
         // The top level goes when it empties, and so does any below it left
         // empty (only at `M = 1`, where a merge leaves no bucket behind).
         while self.levels.len() > 1 && self.levels.last().is_some_and(VecDeque::is_empty) {
             self.levels.pop();
+            if self.windowed_range() {
+                self.extents.pop();
+            }
         }
+        self.resum();
+    }
+
+    /// `S` and `V` taken again from the buckets left, oldest first, by the
+    /// pairwise merge of their sums and sums of squared deviations:
+    ///
+    /// ```text
+    /// S = S_a + S_b,   V = V_a + V_b + n_a n_b / (n_a + n_b) (S_a/n_a − S_b/n_b)²
+    /// ```
+    ///
+    /// rather than the dropped bucket's share taken out of them. That
+    /// subtraction cancels where the bucket held most of the window's
+    /// spread: two outliers leaving a window of zeros left `V` at `1.2e24`,
+    /// or below 0, where `ε` is NaN, and either way no split was cut again.
+    /// At most `M` buckets a level, so the scan this follows costs as much.
+    fn resum(&mut self) {
+        let (mut n, mut total, mut var) = (0.0f64, 0.0f64, 0.0f64);
+        for (idx, level) in self.levels.iter().enumerate().rev() {
+            let nb = (1u64 << idx) as f64;
+            for &[sb, vb] in level {
+                if n == 0.0 {
+                    (n, total, var) = (nb, sb, vb);
+                    continue;
+                }
+                let d = total / n - sb / nb;
+                var += vb + n * nb / (n + nb) * d * d;
+                total += sb;
+                n += nb;
+            }
+        }
+        self.total = total;
+        self.var = var;
     }
 
     /// The cut test for a split of `n0` older and `n1` newer rows whose means
     /// differ by `dmean`, `d` the scan's `ln(2 ln(width) / delta)`.
-    fn cut(&self, n0: f64, n1: f64, dmean: f64, d: f64) -> bool {
+    /// `r` the range `R` ([`Self::range_now`]); at river's 1 the product is
+    /// river's term to the bit.
+    fn cut(&self, n0: f64, n1: f64, dmean: f64, d: f64, r: f64) -> bool {
         let l = self.min_window_length as f64;
         let m_recip = 1.0 / (n0 - l + 1.0) + 1.0 / (n1 - l + 1.0);
-        let eps = (2.0 * m_recip * (self.var / self.width) * d).sqrt() + 2.0 / 3.0 * d * m_recip;
+        let eps =
+            (2.0 * m_recip * (self.var / self.width) * d).sqrt() + 2.0 / 3.0 * d * m_recip * r;
         dmean.abs() > eps
     }
 
@@ -314,11 +478,15 @@ impl Adwin {
             return false;
         }
         let l = self.min_window_length as f64;
-        loop {
+        // A pass that cuts drops a bucket and one that does not ends the scan,
+        // so the buckets held and one more are the most passes there can be.
+        let passes = self.levels.iter().map(VecDeque::len).sum::<usize>() + 1;
+        for _ in 0..passes {
             let mut reduce = false;
             let (mut n0, mut n1, mut u0, mut u1) = (0.0, self.width, 0.0, self.total);
             // The width holds until a cut, after which the scan starts over.
             let d = (2.0 * self.width.ln() / self.delta).ln();
+            let r = self.range_now();
             'scan: for idx in (0..self.levels.len()).rev() {
                 let size = (1u64 << idx) as f64;
                 let cnt = self.levels[idx].len();
@@ -328,11 +496,14 @@ impl Adwin {
                     let tk = self.levels[idx][k][0];
                     u0 += tk;
                     u1 -= tk;
-                    if idx == 0 && k == cnt - 1 {
+                    // The newest bucket leaves no newer part; at one bucket
+                    // a level with level 0 empty it is not level 0's, and
+                    // `u1 / 0` read a rounding of the sums as infinite.
+                    if (idx == 0 && k == cnt - 1) || n1 <= 0.0 {
                         break 'scan;
                     }
                     let dmean = (u0 / n0) - (u1 / n1);
-                    if n1 >= l && n0 >= l && self.cut(n0, n1, dmean, d) {
+                    if n1 >= l && n0 >= l && self.cut(n0, n1, dmean, d, r) {
                         reduce = true;
                         change = true;
                         if self.width > 0.0 {

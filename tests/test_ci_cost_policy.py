@@ -943,7 +943,8 @@ class TestTheLinuxPrepIsOneAction:
         # Every caller by name, so a new one is a decision: the two NumPy
         # jobs were added on 2026-09-30, the two floor legs on 2026-10-07,
         # the instruction counts (Valgrind) on 2026-10-12, the oracle grids'
-        # shards on 2026-10-25, the VM checks' wheel builds on 2026-11-18.
+        # shards on 2026-10-25, the VM checks' wheel builds on 2026-11-18,
+        # the R oracles on 2026-11-22.
         assert sorted(callers) == [
             "budgets.yml:instructions",
             "ci.yml:bits",
@@ -952,6 +953,7 @@ class TestTheLinuxPrepIsOneAction:
             "leakcheck.yml:native",
             "mutants.yml:changed",
             "oracles.yml:grid",
+            "oracles.yml:r-oracles",
             "polars-canary.yml:floor-polars",
             "polars-canary.yml:latest-polars",
             "polars-canary.yml:next-numpy",

@@ -96,16 +96,22 @@
 //! them changes nothing), reaches χ² at 0.999 for the restrictions
 //! constant variance puts on the process: 2 for GARCH(1,1), free or
 //! targeted (`α = β = 0`), 13.8; 3 for GJR and EGARCH (`α = γ = β = 0`)
-//! and FIGARCH (`d = 0`, `φ = β`), 16.3. A withheld start waits for twice
-//! the rows and refits, at most twice, while the state's cap holds the
-//! doubled buffer, then buffers afresh (`withheld_reason` names the wait,
-//! `not_identified`). A fit that passes but is not at its optimum -- its
-//! Newton decrement `½ gᵀ M⁻¹ g` over `10⁻⁶` nats at Kish's count -- or
-//! sits on a bound of the process's set waits and refits the same way, and
-//! with no doubling left is stepped from. How the iteration stopped decides
-//! nothing: a stop for want of an ascent at an optimum (decrement at the
-//! rounding, `10⁻¹²` or less) once doubled a start on one platform and not
-//! another.
+//! and FIGARCH (`d = 0`, `φ = β`), 16.3 (`withheld_reason` names the wait,
+//! `not_identified`). A fit that passes is stepped from only at its
+//! optimum: the gain its Newton step predicts inside the process's set,
+//! `gᵀd − ½ dᵀ M d` for the step `d` projected onto the set in `M`'s
+//! metric (`½ gᵀ M⁻¹ g` where it stays inside), at most `10⁻⁶` nats at
+//! Kish's count, which an optimum on a face of the set (a GJR whose `α` is
+//! 0) meets as one inside it does. A try that does not start keeps its
+//! buffer: the next comes once as many new rows have come as it held, so
+//! twice the rows while `max_state_bytes` holds them (each target's share
+//! of it), and from then on the latest rows the share holds, the oldest
+//! leaving as each new one comes. Nothing is cleared, which could not cure
+//! a shortage of evidence, no count of tries ends the wait, and a fit short
+//! of its optimum is never stepped from: the wait after it is the start's
+//! own warm-up. How the iteration stopped decides nothing: a stop for want
+//! of an ascent at an optimum (decrement at the rounding, `10⁻¹²` or less)
+//! once doubled a start on one platform and not another.
 //!
 //! **What a row reports**, per target, all before the row is learned
 //! (hard rule 2): the variance `s_t`; the standardized residual `z_t =
@@ -147,8 +153,9 @@
 //! buffer, 16 bytes a row until it is fitted, and FIGARCH's ring, `8 M`: 168
 //! for `garch` (144 targeted), 216 for `gjr`, 728 for `egarch`, 208 and 256
 //! for `garch` with a t and a skewed t, 264 for `gjr` with a t, and `216 + 8
-//! M` (8,216 at `M = 1000`) for `figarch`, each with 32,000 for the default start's buffer until it is
-//! fitted (64,000 or 128,000 after a refit), and 16 for the model. A row
+//! M` (8,216 at `M = 1000`) for `figarch`, each with 32,000 for the default
+//! start's buffer until it is fitted (after a try that does not start, up
+//! to its share of `max_state_bytes`), and 16 for the model. A row
 //! costs `O(n³)` (the solve, `n ≤ 5`) and FIGARCH's `O(M)` pass for its
 //! weights and their derivatives.
 
@@ -168,7 +175,7 @@ mod math;
 mod optim;
 mod series;
 
-use series::{Series, start_due};
+use series::{Series, bound};
 
 /// The bytes a group's state may hold by default, a spec's
 /// `max_state_bytes`: 256 KB.
@@ -588,14 +595,26 @@ impl Garch {
         self.series.iter().any(|s| s.no_effect())
     }
 
+    /// Target `j`'s Student-t degrees of freedom `ν` as they stand, where
+    /// its innovations are a t or a skewed t and its start has been
+    /// fitted; `None` otherwise. Read without forming
+    /// [`Self::coefficients`].
+    pub fn nu(&self, j: usize) -> Option<f64> {
+        let s = self.series.get(j)?;
+        (self.cfg.dist != GarchDist::Normal && s.started)
+            .then(|| s.theta.get(self.cfg.vol.k()).copied())
+            .flatten()
+    }
+
     /// Whether each target's start has been fitted.
     pub fn started(&self) -> Vec<bool> {
         self.series.iter().map(|s| s.started).collect()
     }
 
-    /// Each target's start, as it stands: how many times it doubled its
-    /// rows and refitted, and whether the fit it steps from converged off
-    /// every bound of the process's set (false before the start).
+    /// Each target's start, as it stands: its tries that did not start, and
+    /// whether the fit it steps from was at its optimum (false before the
+    /// start; always, after it, since a fit short of it is never stepped
+    /// from).
     pub fn start_report(&self) -> Vec<(u32, bool)> {
         self.series.iter().map(|s| (s.refits, s.sound)).collect()
     }
@@ -699,30 +718,26 @@ impl OnlineModel for Garch {
                 series.learn(&self.cfg, e, weight, s, &dl[..k], false);
                 continue;
             }
-            // The start's buffer: a clock span's rows are checked against
-            // the cap as they come, the warning at half of it once.
-            if self.cfg.start_span.is_some() {
-                let with = self.series.iter().map(|s| s.bytes(&self.cfg)).sum::<u64>() + 16 + 16;
-                let cap = self.cfg.cap();
+            // The start's buffer. A first span's rows are checked against
+            // the cap as they come, the warning at half of it once, and a
+            // row past it refused, as every span the data sizes is. After a
+            // try the buffer grows to its share of the cap ([`bound`]) while
+            // the state holds a row more, and then keeps its latest rows.
+            let tried = self.series[j].tried > 0;
+            let mine = self.series[j].bytes(&self.cfg);
+            let rows = self.series[j].buffer.len();
+            let with = self.bytes() - mine + Self::series_bytes(&self.cfg, rows + 1);
+            let cap = self.cfg.cap();
+            if self.cfg.start_span.is_some() && !tried {
                 let mut held = self.held_cap();
                 if !held.admit(with, cap) {
                     continue;
                 }
                 held.note(with, cap);
             }
-            let series = &mut self.series[j];
-            if series.buffer.is_empty() {
-                series.first = now;
-            }
-            series.buffer.push([e, weight]);
-            series.w_sum += weight;
-            if start_due(&self.cfg, series, now) {
-                // a refit doubles this buffer: the cap must hold it
-                let others: u64 = self.series.iter().map(|s| s.bytes(&self.cfg)).sum::<u64>()
-                    - self.series[j].bytes(&self.cfg);
-                let doubled = Self::series_bytes(&self.cfg, 2 * self.series[j].buffer.len());
-                let may_double = others + doubled + 16 <= self.cfg.cap();
-                self.series[j].start(&self.cfg, may_double);
+            let grows = with <= cap && (rows as u64) < bound(&self.cfg);
+            if self.series[j].buffer_row(&self.cfg, e, weight, now, grows) {
+                self.series[j].start(&self.cfg);
             }
         }
     }
@@ -806,5 +821,7 @@ impl OnlineModel for Garch {
     }
 }
 
+#[cfg(test)]
+mod mutant_tests;
 #[cfg(test)]
 mod tests;

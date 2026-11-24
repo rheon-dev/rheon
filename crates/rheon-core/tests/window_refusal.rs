@@ -25,6 +25,28 @@ type Make = (&'static str, Box<dyn Fn() -> Box<dyn Probe>>);
 fn models() -> Vec<Make> {
     vec![
         (
+            "ar",
+            Box::new(|| {
+                Box::new(
+                    Ar::new(ArCfg {
+                        n_targets: 2,
+                        n_features: K,
+                        lags: vec![1, 2],
+                        fit_intercept: true,
+                        decay: decay(),
+                        ridge: 1e-6,
+                        min_weight: 4.0,
+                        max_state_bytes: None,
+                        select: None,
+                        window: Some(WINDOW),
+                        window_every: None,
+                        max_rows_between_snapshots: None,
+                    })
+                    .unwrap(),
+                ) as Box<dyn Probe>
+            }),
+        ),
+        (
             "ewridge",
             Box::new(|| {
                 Box::new(

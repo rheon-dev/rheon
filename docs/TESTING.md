@@ -51,7 +51,7 @@ spec and clock:
 | tolerated mutant | a mutant that differs from the original only at an exact tie or by less than the computation's own error, so no test a correct implementation passes can kill it; listed apart, not as equivalent ([Mutation survivors](#mutation-survivors)) |
 | IC | the correlation of prediction with target, `rp.eval`'s `ic` |
 | hard rule N | the numbered hard rules in `CLAUDE.md` |
-| a model kind | one of the 26 model types a spec can name; `MINIMAL` in `tests/test_model_registry.py` holds one spec of each |
+| a model kind | one of the 33 model types a spec can name; `MINIMAL` in `tests/test_model_registry.py` holds one spec of each |
 | the ten regression models | the models the per-model sweeps run: `ewridge`, `rls`, `lasso`, `kalman`, `huber`, `quantile`, `sgd`, `pa`, `ftrl` and `holt`, which `REGRESSIONS` in `tests/test_model_registry.py` lists |
 | the window operators | exponentially weighted means, variances, sums, rates and quantiles of a column along the clock, with or without a hard window, which `rp.stream.with_windows` runs over a stream: `rp.ewm_mean`, `rp.ewm_sum`, `rp.ewm_rate`, `rp.ewm_quantile`, `rp.ewm_var` and `rp.ewm_std` look back, and the first four look ahead under `reverse=True` |
 | a formula target | a spec's target written as an expression over a window operator that looks ahead, such as `rp.ewm_mean("mid", ...) - pl.col("mid")`, which the bank resolves once the window has closed |
@@ -158,6 +158,7 @@ in `tests/test_second_opinion.py`, Vowpal Wabbit among them.
 | `quantile`'s every fit | the stationarity condition of the smoothed check loss it solves, rebuilt from the rows by the module doc's rules, band and nudge rows alike (`TestTheQuantileFitsDefinition`) | 1e-10 of the gradient's scale (1e-15 measured) |
 | Huber | `river.linear_model.LinearRegression(loss=optim.losses.Huber)` | statistical |
 | quantile | `river.stats.Quantile` | statistical |
+| `PSquared`, the core's P² estimate | `river.stats.Quantile`, every read after every value, at three levels on four seeded streams (`TestPSquaredIsRivers`) | bit for bit |
 | FTRL | `ftrl_ref` | ~1e-16 |
 | `ftrl`'s targets and decay, `pa`, `sgd`, `holt` | `ftrl_ref`; the docstrings' update equations, written out (`pa_ref`, `sgd_ref`, `holt_ref`), in `tests/test_oracles_gradient_paths.py` | pred 8.2e-16 |
 | FTRL | `river.optim.FTRLProximal`, row for row | 1e-12 |
@@ -184,6 +185,8 @@ in `tests/test_second_opinion.py`, Vowpal Wabbit among them.
 | `sgd`'s squared, epsilon-insensitive (at `eps = 0`, its tube being in the target's own EW std) and logistic losses under `"constant"`, weighted or not; `"inv_scaling"` at unit weights; the Huber cut is `sgd_ref`'s | scikit-learn's `SGDRegressor` and `SGDClassifier(loss="log_loss")`, `partial_fit` one row at a time (`TestSgdIsScikitLearnsSgd`) | 1e-12 (1.0e-15 measured) |
 | `hmm` at fixed parameters | hmmlearn's `GaussianHMM`: the filtered and predicted probabilities, and each row's log-likelihood (`TestHmmIsHmmlearns`) | 1e-10 (1.4e-13 measured) |
 | `rls` | padasip's `FilterRLS`, at unit weights on a row clock (`TestRlsIsPadasips`) | 1e-11 (1.6e-14 measured) |
+| `realized` | the papers' estimators in numpy (`tests/reference_realized.py`) on simulated days and Binance's data; `hfvol` on RV, BV and the jump variation; R's `highfrequency` (`rRVar`, `rBPCov`, `rMPVar`, `rTPQuar`, `BNSjumpTest`, `intradayJumpTest`) and `yuima` (`bns.test`) in `tests/r_oracle/`, their small-sample factors divided out | a few ulps (RV, BV, `lm`), 64 ulps (TV, TQ), 64 units of `cond · ε` (the ratio test) |
+| `power_variation` | the definitions in numpy (`tests/reference_power_variation.py`) on simulated returns with a bid-ask bounce and ETCUSDT's trades; `arch`'s kernel long-run covariances (plain and centered) and `hfhd`'s `krvm` (flat-top Parzen) and `tsrc` (two scales, composed in Polars); R's `yuima` (`mpv`, any powers), `highfrequency` (`rMPVar`, `rKernelCov`) and `sandwich` (`kernHAC`) in `tests/r_oracle/`, their conventions divided out | 16 ulps (one pass, windows), 256 under a decay; 9 ulps (`mpv`, `rMPVar`); 3 ulps (`krvm`, `tsrc`); 4 to 8 ε of a kernel sum's scale `(2H + 1) Σ r²` (`arch`, `rKernelCov`, `kernHAC`) |
 | `seqtest` | `reference.seqtest_ref`, the paper's betting recursion in scalar code, and its closed form where the clip never binds (`tests/test_seqtest.py`) | 1e-12, relative |
 | `emit_drift` | river's `PageHinkley` at `half_life = inf` (`TestAZeroWeightRowIsNotSeen`) | flag for flag |
 | a prediction under `embargo` | river's progressive validation with `delay` (`TestLabelDelayFoldsWhatWasScored`) | 1e-12 |
@@ -193,7 +196,8 @@ in `tests/test_second_opinion.py`, Vowpal Wabbit among them.
 | the `session_shrink` blend | numpy's `cov(aweights=)` of the rows at their blended weights (`TestSessionShrinkBlend`) | 1e-12 |
 | `conformal` | **definition only**: a longhand replay of the recursion over the bank's own `pred`, `resid` and `sigma`, and the telescoped coverage bound (`tests/test_conformal.py`); no library computes an adaptive conformal radius | bit for bit |
 | `huber` and `quantile` under a finite half-life, with nulls, several targets, `standardize` or zero weights; `ftrl` under a half-life; `sgd`'s Poisson loss and AdaGrad schedule; `ew_class` under decay; `EwQuantile` | **definition only**: `robust_ref`, `ftrl_ref`, `sgd_ref` and the definitions in `tests/test_diagnostics.py` and `tests/test_ew_class.py`. No library checked forgets as a half-life does, and scikit-learn's SGD has neither the Poisson loss nor AdaGrad | as each such model's row of the table gives |
-| `micro`, `seqtest`, `deco`, `corrchange`, `rcov` | **definition only**: the longhand oracles of [An oracle, not a golden number](#an-oracle-not-a-golden-number), each written from its paper. river's `DenStream` takes another macro step, so it could agree only statistically, and no Python library computes the other four | as each such model's row of the table gives |
+| `deco`'s level | scipy's weighted Gaussian likelihood of the equicorrelation, `multivariate_normal.logpdf` maximized by `optimize.minimize` over the weighted window, for `"ew"`; for `"linear"`, the DCC recursion on the full `n × n` matrix, averaged, and the paper's own level read from it (`tests/test_second_opinion_deco.py`) | 1e-7 (6.6e-9 measured, the optimizer's stop); 1e-11; the paper's level within 5e-3 on average (2.7e-3 measured) |
+| `micro`, `seqtest`, `corrchange`, `rcov`, `deco`'s row estimate | **definition only**: the longhand oracles of [An oracle, not a golden number](#an-oracle-not-a-golden-number), each written from its paper. river's `DenStream` takes another macro step, so it could agree only statistically, and no Python library computes the other four | as each such model's row of the table gives |
 | the window operators | the brute force; the time-reversal identity; Polars' `ewm_mean_by` and `ewm_sum_by`; Polars' `rolling_sum_by`, for which rows a window holds ([The window operators and formula targets](#the-window-operators-and-formula-targets)) | 1e-9; 1e-9; 1e-9; exactly |
 | `rp.ewm_quantile`, looking back with and without a window, and looking ahead | numpy's weighted quantile, `np.quantile(..., weights=, method="inverted_cdf")`, over the rows each window holds at the weights `rp.ewm_sum` gives them; under even weights, statsmodels' MAD about 0 of the last 101 rows (`tests/test_ewm_quantile.py`) | `tanh(1/128)`, relative, the sketch's accuracy |
 | a formula target | its column form | bit for bit, every prediction |
@@ -265,7 +269,14 @@ source and where: `bayesian-changepoint-detection`'s wheel declares none,
 and its repository's `LICENSE` is MIT.
 
 **A library that must not be in every contributor's environment, for its
-platforms, gets a group of its own and a CI job of its own.**
+platforms, gets a group of its own and a CI job of its own.** R's `highfrequency` and `yuima`, the reference
+implementations of the realized measures and the jump tests, and
+`sandwich`'s HAC long-run variance are such:
+they need R. So rpy2 is the `r-oracles` group, and `tests/r_oracle/` is
+collected only under `-m r_oracle` (`tests/conftest.py`).
+`.github/workflows/oracles.yml`'s `r-oracles` job installs R, its packages
+and the group on Linux and runs them. `tests/test_dependency_policy.py`
+holds their imports to that group and the dev group.
 
 **Rule 3 reaches the child interpreters a test spawns.** `tests/child.py`
 puts `tests/_site/sitecustomize.py`, which installs the same finder, on the
@@ -334,7 +345,7 @@ holds:
 | what is resumed | the claim | held by |
 |---|---|---|
 | a bank of any kind | saved mid-stream and loaded, it goes on exactly as the one that was not | `tests/test_every_kind.py`; `model_contract.rs`'s generated streams, at any row; a `quantile` fit holding a moved band factor, at 101 save points (`robust.rs`) and at every row from 990 to 1010 through the bank (`test_robust.py::TestTheBandFactorIsState`) |
-| a bank on input that overlaps its state | `ModelBank.skip_learned` keeps each row after its group's last clock, so the rerun learns each row once | `tests/test_skip_learned.py` |
+| a bank on input that overlaps its state | `ModelBank.skip_learned` drops a row a spec has before its group's last clock and keeps one that a spec has after it, so the rerun learns each row once | `tests/test_skip_learned.py` |
 | a formula target with a window open | a state saved mid-window resumes as one run | `a_state_saved_mid_window_resumes_as_one_run`, in `formula_targets.rs` and in `test_formula_targets.py` |
 | a window run, saved at a row | a save and load at row 1, 2, 17, 33 or 59 is one run | `test_a_save_and_load_at_every_row_is_one_run` |
 | a chain of window runs under a slice | six sliced runs, each resumed from the last state and saved again, then the rest, give one run's output, at `chunk_size` of 1, 7 and 100,000 | `test_a_state_saved_under_a_slice_resumes_on_the_same_input`, and its Rust twin in `windows_frame.rs` |
@@ -381,7 +392,7 @@ pure-noise targets checks the same thing from the other side
 `tests/test_properties.py`.
 
 **Fixed numbers.** Each model has one golden stream in the Rust core
-(`crates/rheon-core/tests/golden.rs`). The whole pipeline, from reading the columns through the models and
+(`crates/rheon-core/tests/golden.rs`; the models that look for structure also have one on a stream that has it, `golden_structured.rs`). The whole pipeline, from reading the columns through the models and
 the diagnostics to assembling each spec's output, is pinned to fixed output
 and compared on every operating system (`tests/test_golden_pipeline.py`). So a divergence in Polars'
 vectorized paths on another CPU would show.
@@ -537,11 +548,11 @@ missing or extended:
 | hard rule | essentials tests |
 |---|---|
 | 1, no data files | `tests/test_repo_hygiene.py::test_no_data_files_are_tracked` |
-| 2, out-of-sample | `tests/test_bank.py::TestOutOfSample::test_noise_target_has_no_ic`, `tests/test_properties.py::TestUniversalProperties::test_prediction_never_depends_on_the_current_target`, `crates/rheon-core/tests/model_contract.rs::ewridge_predict_is_the_step` and each model's beside it |
+| 2, out-of-sample | `tests/test_bank.py::TestOutOfSample::test_noise_target_has_no_ic`, `tests/test_properties.py::TestUniversalProperties::test_prediction_never_depends_on_the_current_target`, `crates/rheon-core/tests/model_contract/unusable_values.rs::ewridge_predict_is_the_step` and each model's beside it |
 | 3, chunk invariance | `tests/test_bank.py::TestChunkInvariance::test_chunked_equals_single`, `tests/test_semantics_all_models.py::TestUniversalInvariants::test_chunk_invariance`, `crates/rheon-polars/tests/bank.rs::chunk_invariance`, `crates/rheon-polars/tests/summary.rs::chunking_cannot_move_a_bit` |
 | 5, frozen fixtures | `crates/rheon-core/tests/state_fixtures.rs::every_fixture_goes_on_to_the_bit`, `crates/rheon-core/tests/state_fixtures.rs::every_fixture_saves_its_bytes_again`, `crates/rheon-polars/tests/state_fixtures.rs::every_fixture_loads_goes_on_to_the_bit_and_saves_its_bytes_again` |
-| 8, `weight_sum` | `crates/rheon-core/tests/model_contract.rs::ewridge` and each model's probe beside it, which hold the accessor and the reported weight to the one recursion; `tests/test_semantics_all_models.py::TestWarmup::test_n_eff_is_reported_before_the_update`, `tests/test_semantics_all_models.py::TestWarmup::test_min_weight_reads_the_weight_before_the_rows_decay` |
-| 9, a zero weight | `crates/rheon-core/tests/model_contract.rs::ewridge` and each model's probe beside it, which run `zero_weight_rows_leave_no_nan` (a row of weight 0 handed to a model directly); `crates/rheon-polars/tests/zero_weight.rs`, every kind at the bank on three clocks against the stream without such rows, to the bit (a row of weight 0 counts in no clock); `tests/test_edge_cases.py::TestWeights` |
+| 8, `weight_sum` | `crates/rheon-core/tests/model_contract/models.rs::ewridge` and each model's probe beside it, which hold the accessor and the reported weight to the one recursion; `tests/test_semantics_all_models.py::TestWarmup::test_n_eff_is_reported_before_the_update`, `tests/test_semantics_all_models.py::TestWarmup::test_min_weight_reads_the_weight_before_the_rows_decay` |
+| 9, a zero weight | `crates/rheon-core/tests/model_contract/models.rs::ewridge` and each model's probe beside it, which run `zero_weight_rows_leave_no_nan` (a row of weight 0 handed to a model directly); `crates/rheon-polars/tests/zero_weight.rs`, every kind at the bank on three clocks against the stream without such rows, to the bit (a row of weight 0 counts in no clock); `tests/test_edge_cases.py::TestWeights` |
 
 The build holds rule 4 and rule 6's ban on `unsafe`: `rheon-core`'s manifest has no Polars
 dependency and forbids `unsafe_code`. Rule 7 is a practice.
@@ -1271,7 +1282,7 @@ against the last. There are three kinds:
 
 | kind | what is measured | where it runs | tolerance |
 |---|---|---|---|
-| `instructions` | the instructions one block of 1,000 rows executes, after 2,000 rows of warm-up, counted by Callgrind. The cases are the lists in `crates/rheon-bench/src/lib.rs`: a step of each of the 26 models at a standard width, and beside them the costlier options (`ewridge` at 200 features, `ewridge` at 50 features with 10 targets folded into a 64-row block's merge, the refit of the first rows of `huber`, `sgd`'s Huber loss and `quantile`, `huber`'s feature sets and `ridge_scale="sum"`, `sgd`'s Huber loss, `bocpd`'s full run, `ew_cov`'s lags, `marginal`'s Huber bins, and `corrchange`'s monitor and window); the clock's step on a float and on a nanosecond clock; `Bank::fit_predict` around `seqtest` and around `ewridge`, as one stream and as 1,000 groups of one row each, and around a window target that holds 1,000 rows back; five window cases through `WindowsRun::feed` (a mean, a sum and two quantiles, one within a window and one running, and a sum over 10,000 groups); and `Bank::fit_predict` of 8,192 rows of `ew_cov`'s 230 statistics on a pool of one thread | `.github/workflows/budgets.yml`, on Linux | 2% |
+| `instructions` | the instructions one block of 1,000 rows executes, after 2,000 rows of warm-up, counted by Callgrind. The cases are the lists in `crates/rheon-bench/src/lib.rs`: a step of each of the 29 models at a standard width, and beside them the costlier options (`ewridge` at 200 features, `ewridge` at 50 features with 10 targets folded into a 64-row block's merge, the refit of the first rows of `huber`, `sgd`'s Huber loss and `quantile`, `huber`'s feature sets and `ridge_scale="sum"`, `sgd`'s Huber loss, `bocpd`'s full run, `ew_cov`'s lags, `marginal`'s Huber bins, and `corrchange`'s monitor and window); the clock's step on a float and on a nanosecond clock; `Bank::fit_predict` around `seqtest` and around `ewridge`, as one stream and as 1,000 groups of one row each, and around a window target that holds 1,000 rows back; five window cases through `WindowsRun::feed` (a mean, a sum and two quantiles, one within a window and one running, and a sum over 10,000 groups); and `Bank::fit_predict` of 8,192 rows of `ew_cov`'s 230 statistics on a pool of one thread | `.github/workflows/budgets.yml`, on Linux | 2% |
 | `memory` | the bytes per row of every output field of every model with every output it has switched on, over 20,000 rows, from `estimated_size()` | `tests/test_budgets_memory.py`, on every CI leg | 2% |
 | `rss` | the peak resident memory a standard run adds over its process's baseline, per platform, in MiB, for six runs: `ewridge` with ten targets over 200,000 rows; `ew_cov`'s 230 moments a row over 200,000; an eager `predict` of 1,000 features over 20,000 rows; a windowed `ewridge` (`window_size` 20,000) over 200,000; `bocpd` holding up to 200 runs over 50,000; and five million rows streamed from one parquet file to another. The streamed run has Polars reading one row group ahead on four threads, and the allocator giving freed pages back at once (`_RJEM_MALLOC_CONF=dirty_decay_ms:0,muzzy_decay_ms:0`, `MIMALLOC_PURGE_DELAY=0`), so its peak is the live memory. A control reads the same rows whole before the plan, and must exceed the streamed run's budget | the same file, in the extended tier: held on CI at each OS's floor Python, on Windows on `windows-latest` alone, and reported everywhere else. The interpreter alone moved macOS's peak 18-20% between 3.12 and 3.14, and the machine moved the streaming run's 23%. Windows Server 2022 and Server 2025 read the six runs up to 8% apart on one build, so the two images would each tighten the budget below the other | 30% over: two runs of one build on one CI runner read 14-18% apart; tightened at 7.5% under |
 
@@ -1453,15 +1464,15 @@ integration tests through `run_config`. `rheon-core/src/robust.rs` is at 98%.
 2026-09-24.** `mutants.yml` runs `cargo mutants` over the changed lines of
 `rheon-core` and `rheon-polars/src/span.rs`, on every push to `main` and
 every pull request. It fails on a survivor that
-`scripts/mutants_equivalent.toml` does not list. That file holds 427
-entries (2026-11-21), each an equivalent mutant -- a few
+`scripts/mutants_equivalent.toml` does not list. That file holds 423
+entries (2026-11-23), each an equivalent mutant -- a few
 name two that share a line -- with the reason no input can tell it from
 the original. The weekly pass over all of `rheon-core`, 11,138 mutants on
 2026-10-03, reports its survivors without failing on them.
 
 **A survivor a test could tell apart only by a difference no caller can act
 on is tolerated, and listed apart** (2026-10-05).
-`scripts/mutants_tolerated.toml` names 76, in 71 entries, each with its kind
+`scripts/mutants_tolerated.toml` names 73, in 68 entries, each with its kind
 and the measured size of the difference, or the loop it makes endless. The report shows them by kind and
 fails on none of them, in either job. The kinds:
 

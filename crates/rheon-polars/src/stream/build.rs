@@ -775,5 +775,38 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Garch { .. } => Ok(AnyModel::Garch(Box::new(rheon_core::Garch::new(
             garch_cfg(spec)?,
         )?))),
+        ModelKind::Dcc { .. } => Ok(AnyModel::Dcc(Box::new(rheon_core::Dcc::new(dcc_cfg(
+            spec, decay,
+        )?)?))),
+        ModelKind::Realized { .. } => Ok(AnyModel::Realized(Box::new(rheon_core::Realized::new(
+            realized_cfg(spec, decay)?,
+        )?))),
+
+        ModelKind::Pca { .. } => Ok(AnyModel::Pca(Box::new(rheon_core::StreamPca::new(
+            pca_cfg(spec, decay)?,
+        )?))),
+        ModelKind::PowerVariation { .. } => Ok(AnyModel::PowerVariation(Box::new(
+            rheon_core::PowerVariation::new(power_variation_cfg(spec, decay)?)?,
+        ))),
+        // No decay: a merging digest cannot take a row out.
+        ModelKind::TDigest { .. } => Ok(AnyModel::TDigest(Box::new(
+            rheon_core::TDigestModel::new(tdigest_cfg(spec)?)?,
+        ))),
+        // A decay (rounded) or a window (exact), not both.
+        ModelKind::DdSketch { .. } => Ok(AnyModel::DdSketch(Box::new(
+            rheon_core::DdSketchModel::new(ddsketch_cfg(spec, decay)?)?,
+        ))),
+        ModelKind::EwmMoments { .. } => Ok(AnyModel::EwmMoments(Box::new(
+            rheon_core::EwmMoments::new(crate::spec::ewm_moments_cfg(spec, decay)?)?,
+        ))),
+        ModelKind::Spectral(_) => Ok(AnyModel::Spectral(Box::new(rheon_core::Spectral::new(
+            spectral_cfg(spec, decay)?,
+        )?))),
+        ModelKind::Ar { .. } => {
+            let mut m = rheon_core::Ar::new(ar_cfg(spec, decay)?)?;
+            // Each fit's factor, which its standard errors are read from.
+            m.set_keep_factor(spec.emit_se_coef);
+            Ok(AnyModel::Ar(Box::new(m)))
+        }
     }
 }

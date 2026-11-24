@@ -611,3 +611,234 @@ weight 0 before the save, at least as many as the current one's. No bank's
 of weight 0 continues to the bit: every output of `scripts/compare_outputs.py`'s
 unweighted cases moved 0 ulps against a3554b27, and a bank state saved
 without one is the same bytes but for `hawkes`'.
+Widened, the user's (2026-11-23: "Widen exception 25"; no new number): the
+same change continued. After the review of 2026-11-23 (STRM-1), a row of
+weight 0 under `embargo` or `label_clock` is scored as `predict` scores it
+and releases no held row, where it released the rows its clock had seen
+out into the live models. A kept state whose continued rows include such a
+row goes on further from its frozen frame, and `ZERO_WEIGHT_CLOCK` is held
+to the figures measured on macOS arm64 that day, each bound rounded up:
+`bank` 3.77e-2 (0.04, unchanged); `bank_gated` 1.67e-1 and two other cells
+of its frame (0.17, 2 cells, where no cell moved before);
+`bank_label_clock` 4.11e-2 for `v67/` and `v68/` and 1.64e-1 for `v69/` and
+`v70/` (0.17, unchanged); `bank_conformal_auto` 1.79e-2 for `v67/` and
+`v68/` and 1.17e-1 for `v69/` and `v70/` (0.12, was 0.05). The schema-71
+set, written by the build that counted such rows in no clock but released at
+them, still loads and converts to the current schema's bytes exactly; its
+frozen frames of those four kinds were rewritten to what its unchanged
+state now continues to, and its state bytes are untouched. The current
+fixtures of the four kinds were regenerated. The count in CLAUDE.md's rule 5
+does not move.
+
+A twenty-sixth, the user's (2026-11-22: "Switch, restarting the level",
+asked whether a saved `deco` state of an earlier schema keeps the old form
+of its level or switches to the new one; PLAN 551): a `deco` state of
+schema 61 to 71 switches to the ratio level on load, its level restarted.
+From schema 72 `deco`'s level `rho` is the ratio of the exponentially
+weighted means of the row's numerator and denominator, `EW(A)/EW(V)` (or
+their averaged DCC recursion, `N/D`, under `"linear"`), kept in the state's
+`ratio`; a state of 71 or earlier kept `rho_bar` and `rho_bar_lo`, the
+weighted mean of the row estimate `u` and what it leaves out, from which
+neither mean can be had, and no `Σw²/(Σw)²` of the standardiser. What
+continues: the configuration, the blocks and the standardiser (its weight,
+means and variances) load as saved, so `u`, `weight_sum` and `settled_frac`
+go on to the bit of the old build's continuation, and `loglik` is read
+under the new level as soon as it has one. What restarts: the level. Every
+value's `rho` is NaN, its weight 0, its means of `A`, `V` (and a pair's
+second `V`) and `"linear"`'s `N` and `D` empty, and `rho_bar` is let go;
+the standardiser's share `Σw²/(Σw)²`, which the warm-up reads, is taken as
+1, one effective row, the cold side. The level then relearns from the next
+rows under the same warm-up as a new model's (a row teaches it only once
+the standardiser's Kish size `(Σw)²/Σw²` passes 5), and until it has a
+value `rho` and `loglik` are null and `withheld_reason` reads
+`below_warm_rows`. From the share of 1, the share falls below a fifth in
+about 1.2 half-lives of rows at a steady rate (24 rows at a half-life of
+20), where a state of this build that was warm carries on at once. So such
+a state continues neither to its frozen continuation nor to a fresh run of
+this build. The state re-saves in the current layout, bytes that load back
+the same. No layout of any other model moved, and there is no schema bump
+of its own (schema 72 was unreleased). The kept `deco` files of `v61/` to
+`v71/` (`rheon-core`) are held by `RESTARTED_LEVEL`
+(`restarted_level_rule`, `crates/rheon-core/tests/state_fixtures.rs`):
+each loads, re-saves bytes that load back the same with the kept
+configuration, blocks and standardiser, every `rho` NaN, every weight 0,
+empty means and a share of 1, in the current fixture's layout key for key;
+and continues with `weight_sum` and `u` to the bit of its frozen
+continuation, and `rho` and `loglik` null until the level relearns and
+numbers after, the relearning reached inside the 16 rows. `deco.rs`'s
+`a_state_from_before_the_ratio_restarts_its_level` holds the restarted
+model to this build's model with the same standardiser and its level
+emptied by hand, to the bit, under both dynamics and with blocks. A
+release's own `deco` file (`tests/test_released_state.py`,
+`RESTARTED_LEVEL`) is declared moved since 2.0.0 and held, every release
+from 1.0.0 to 2.0.0, to the release's own continuation in `u`,
+`weight_sum` and `settled_frac` to the bit, `rho` and `loglik` null on a
+run of first rows and numbers after it, and `withheld_reason`
+`below_warm_rows` on that run and the release's value after. No bank
+fixture of `rheon-polars` holds a `deco`. The current fixtures `deco`,
+`deco_linear` and `deco_warming` of `rheon-core` are the ratio's.
+
+A twenty-seventh, the user's (2026-11-22, PLAN 553: "Switch to the new
+statistics", asked whether a state saved before keeps the papers'
+statistics or switches; the twenty-sixth is `deco`'s, on its own branch):
+`corrchange`'s `monitor` is the linear CUSUM `max_j |Σ_{t≤j} ξ_t|/(√T·D̂)`
+against the Kolmogorov quantile less `0.5826/√T`, a pair's flag withheld
+where the same CUSUM of `x̃² − ỹ²` passes it too, and its `sequential`
+detector compares the monitored rows' correlation with the history's on
+Fisher's scale, `((k − 3)/√(m − 3))·|atanh ρ̂_k − atanh ρ̂_h|·(1 − ρ̂_h²)/D̂`,
+its critical value at `(K − 3)/(m − 3)`. No layout changed and there is no
+schema bump: the state holds no number either old statistic computed (a
+span's rows, a history's rows or its correlation and long-run deviation, the
+monitored rows and their sums), so a state of schema 61 to 71 loads as it
+was, re-saves the same bytes, and goes on under the new statistics from its
+first row after the load. What it keeps of the old statistics is where they
+flagged: `since_flag` counts from the last flag the old statistic made, and a
+`sequential` cycle in progress began at the row after an old flag (or an old
+period's end), so it monitors the rows of that cycle against that history
+with the new detector, where this build from the same rows would be in
+another cycle. The outputs from the load on are as this build computes them
+from the state: `stat`, `crit`, `flag`, `since_change` and, after the next
+flag, `since_flag`; under `monitor` a state goes on exactly as this build
+from the same rows wherever the two statistics flagged alike before the
+save. No loader is needed or could do more: the rows before an old flag are
+not in the state. The kept sets `v61/` to `v71/` of `corrchange_monitor` and
+`corrchange_sequential` are held by `NEW_STATISTICS`
+(`crates/rheon-core/tests/state_fixtures.rs`): no span of the monitor's rows
+flagged under either statistic before its save, so a kept `monitor` state
+converts to the current fixture's bytes exactly and goes on to the current
+fixture's frozen continuation to the bit; a kept `sequential` state (the old
+detector flagged 8 learned rows before the save, the new one 19) saves bytes
+that load back to the same and goes on with its frozen continuation's
+`weight_sum` to the bit, its reports the new detector's over the old cycle.
+The current fixtures `corrchange_monitor` and `corrchange_sequential`
+regenerated (`corrchange_window` and `corrchange_permute_every` did not
+move). A release's own file of `corrchange` (`tests/test_released_state.py`,
+the probe's `monitor` over spans of 40 rows, every release from 1.0.0 to
+2.0.0) is held by `NEW_STATISTICS` there: it goes on as this build goes on
+from both halves, every field to the bit but `since_flag`; its release's own
+continuation differs in `stat` from the first span closed after the load
+(row 89: 0.704 against the release's 0.849).
+
+A twenty-eighth, the user's (2026-11-23: "Accept exception 28"; Fable's
+W13 review, A2, for `garch`; branch `w14-followups`): a `garch` state of
+schema 71 saved within a start that had cleared its buffer goes on under the
+current start rule, not to the current fixture's bytes. The start of schema
+71 tried at one, two and four times `start_rows`, then let every row go and
+buffered afresh; the start now keeps its rows after a try that does not
+start, grows the buffer to each target's share of `max_state_bytes` and then
+keeps the latest rows, with no count of tries. The rows let go are not in
+the state, so no build reaches the current fixture's state from it, and no
+loader could. Such a state loads as it was (its buffer a first one, `tried`
+0, its next try at `start_rows`, at once where it holds them), re-saves the
+same bytes, goes on with its frozen continuation's `weight_sum` to the bit,
+and reports nothing wherever the frozen continuation does. No release wrote
+such a state: `garch` is new since 2.0.0, whose schema was 67. The kept
+sets `v71/` of `garch_egarch`, `garch_figarch`, `garch_skewt`,
+`garch_started` and `garch_targeted` are held by `KEPT_START`
+(`crates/rheon-core/tests/state_fixtures.rs`); `garch` and `garch_span`,
+saved before a first try, convert to the current bytes exactly.
+
+A moved readout, not an exception (the user, 2026-11-23: "Accept"; review
+2026-11-23, STRM-3): `summary()["weight_sum_settled"]` now takes the rows'
+mean weight over the rows that carry weight, the rows of weight 0 left out,
+so a bank state with rows of weight 0 reports another value from the same
+bytes. The kept schema-71 fixture `v71/bank_label_clock` loads, re-saves and
+goes on to the bit as before; only its frozen frame of that one summary field
+was updated, to what its state, loaded and continued, now reports
+(16.398890461263203 where it froze 16.411711841536942), beside the current
+set's regenerated `bank_label_clock`. Its state bytes are untouched, so the
+count of exceptions in CLAUDE.md's rule 5 does not move.
+
+A twenty-ninth, the user's (2026-11-23, review 2026-11-23's REG-18:
+"Exception 29: start fresh", after the decision "Scales from every row"):
+under `standardize=True`, `huber` and `quantile` read each feature's scale
+from its moments over every row the target is learned on with a positive
+weight, decayed as the model's own (`Robust::spread`), refreshed at each
+row that moves the target's band (`Robust::spread_scale`), where they read
+them from the band's Gram. The band holds only the rows near the fit under
+the quantile loss, and a 0/1 feature constant on them had no variance
+there, was dropped and held at 0 (the review's case read `[16.67, 0.29,
+0.0]` where the unstandardized fit and statsmodels' `QuantReg` read `[0.0,
+2.0, 20.0]`). A state of schema 71 or earlier holds no such moments, and
+the rows before its save are not in it, so no loader can build them. It
+loads with them empty and starts them at its first row after the load;
+until they give a feature a scale (a usable variance over the rows since
+the load, at least two rows apart), the feature's scale is the band's, as
+it was, and a feature with neither is dropped, as it was. So its
+continuation is neither the old build's nor this build's from the same
+rows. No layout of any other model moved, and there is no schema bump of
+its own (schema 72 was unreleased). The kept `huber*` and `quantile*`
+files of `v61/` to `v71/` (`rheon-core`) are held by `started_fresh`
+(`started_fresh_rule`, `crates/rheon-core/tests/state_fixtures.rs`): each
+loads; re-saves bytes that load back the same, with every key the kept
+state held, in the current fixture's layout key for key, each target's
+moments empty under `standardize` (no weight, every moment 0) and its
+scales none, and neither without it; and continues with `weight_sum` to the
+bit of its frozen continuation, each prediction a number where the frozen
+one is, and within `STARTED_FRESH_BOUND`, 2e-5 relative to the larger of
+the frozen value and 1, of it (measured: at most 1.56e-5, `huber`'s fourth
+row after the load in every kept set; 3,540 of 4,554 predictions moved,
+every null kept). The kept bank files of `rheon-polars` that hold such a
+model, `bank_diagnosed`, `bank_refit` and `bank_refit_64` of `v61/` to
+`v71/`, are held by `STARTED_FRESH` there: each loads, saves bytes that load
+back the same, and its frames go on to the bit of its frozen ones (the
+fresh start moves no cell of them over their rows). The current fixtures
+of every `huber*` and `quantile*` case and of those three banks were
+regenerated, and `the_scales_from_every_row_are_written` holds the new form:
+each standardized case's moments holding weight and its scales written,
+neither in a case without `standardize`.
+
+A thirtieth, the user's (2026-11-23: "Exception 30, full fix"; PLAN 578e,
+review 2026-11-23 CLUST-3): the rows' EW mean weight kept by `micro` (its
+`w_mean`, the unit a summary admits and `beta_mu` counts) and by the
+conformal band (`Conformal::w_mean`, which scales its step) is taken at the
+old mean's and the row's shares, `(R/R')·w̄ + (1/R')·w` with `R' = R + 1`,
+where the Welford step `w̄ + (w − w̄)/R'` was. The Welford step cancels
+where a heavy mean meets a light row it has all but forgotten: after a row
+of weight `1e16`, a gap of 60 half-lives and a row of weight 1, `micro`'s
+mean read 0 and a summary admitted a point `1.4e6` away at `eps = 1`; at a
+share of `2^-30` it read `8e-8` off; and the band's read 0 after total
+forgetting. A row at the mean leaves it to the bit, so a stream of constant
+weights moves nothing; a stream of uneven weights moves the mean weight in
+its last bits. No layout changes. A state saved before the change holds the
+old step's bits: it loads, re-saves bytes that load back the same, and goes
+on by the new step. The kept sets are held to bounds, not to the bit:
+`v61/` to `v71/` `micro` (`crates/rheon-core/tests/state_fixtures.rs`,
+`MOVED`, 1e-14 of `1 + |value|`; `w_mean` moved by one ulp, `2.2e-16`
+relative, measured 2026-11-23), and `v71/` `bank_conformal_auto` and
+`bank_label_clock` (`crates/rheon-polars/tests/state_fixtures.rs`,
+`MEAN_WEIGHT_MOVED`, every frame within `TOL`, 1e-12 relative). The
+current fixtures `micro`, `bank_conformal_auto` and `bank_label_clock`
+regenerated.
+
+A thirty-first, the user's (2026-11-23: the seed and its decay, with the
+fallback form; PLAN 578e, review 2026-11-23 DIAG-1): under a horizon, the
+breaks' long-run variance (`cusum_*`, and `break_wald_*` through the
+residuals' long-run factor) and a quantile fit's coverage Wald
+(`calibration_wald_*`) take the null's lag 0 (`Σ ω²` of the terms, or `q
+(1 − q) Σ ω²` of the indicators) wherever that leaves the variance above 0,
+and the terms' own lag 0 (`G1 = Σ (ω t)²`, Newey and West's, which
+Bartlett's weights keep at or above 0) only where it does not. Before,
+such a row read `None`. Where the null's form is above 0 every number is
+the old one, to the bit. Measured on simulated nulls and shifts, size and
+power are the null form's: run-once size 4.6%, 6.3% and 6.6% at horizons
+of 1, 3 and 5, and the same rows to a flag after a shift of 1, 3, 10 and
+1000 standard deviations. The empirical lag 0 alone would have held the
+size (4.3%, 5.8%, 6.7%) and lost power: 197 rows to flag a 1000-sd break
+where the null's form flags it on its row. The new sums, `Breaks::g1`,
+`Breaks::gz` (a quantile fit's residuals) and `Coverage::g`, are kept on
+every row under a horizon, written only there, and absent from a state
+saved before the change. Such a state loads, reads the null's lag 0 in
+their place until its next row, and on that row starts each at the
+null's value, from which it decays as `Σ ω²` does and takes each row's own
+square, so the seed's share fades with the horizon's weight. Its
+continuation reads every number the old build read where that was one, to
+the bit; where the old build read `None`, it reads a finite number, from
+the seed and the rows after it, not the current fixture's. The kept sets
+`v61/` to `v71/` `bank_diagnosed` are held to that
+(`crates/rheon-polars/tests/state_fixtures.rs`, `seeded_lag0` and
+`fallback_cells`): each saves bytes that load back the same, every field
+but `cusum_*`, `break_wald_*` and `calibration_wald_*` goes on to its frozen
+frames to the bit, and those three go on to the bit wherever the frozen
+value is a number and to a finite number where it is `None`. The current
+fixture `bank_diagnosed` regenerated, and freezes the three sums.

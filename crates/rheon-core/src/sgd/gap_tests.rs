@@ -479,3 +479,97 @@ fn a_gap_split_by_zero_weight_rows_is_one_gap() {
         }
     }
 }
+
+/// AdaGrad's sums never pass the largest double (review 2026-11-23,
+/// REG-9): at an infinite `clip_gradient`, two gradients of `1.2e154` each
+/// pass the square's check, `1.44e308`, but their sum does not. The sum
+/// was infinite, the slot's steps 0 for good, and at the next gap past the
+/// decay's underflow `0·∞` made it NaN. A row whose sum would pass it is
+/// refused, as one whose square would is, with or without a scaler and on
+/// the intercept's slot as on a slope's.
+#[test]
+fn adagrads_sums_never_pass_the_largest_double() {
+    for standardize in [false, true] {
+        let mut c = cfg(1, 1e-60, LearningRate::AdaGrad);
+        c.clip_gradient = f64::INFINITY;
+        c.target_spread = false;
+        c.standardize = standardize;
+        c.decay = Decay::Halflife(1.0);
+        let mut m = Sgd::new(c).unwrap();
+        for i in 0..40 {
+            // A target `1.2e54` off the prediction at the input bound: a
+            // slope's gradient of `1.2e154` (and, while standardized, of
+            // that over the feature's scale).
+            let x = if i % 2 == 0 { 1e100 } else { -1e100 };
+            let p = m.predict(&[x], 1.0).pred[0];
+            let p = if p.is_finite() { p } else { 0.0 };
+            let d = if i == 30 { 5000.0 } else { 1.0 };
+            m.step(&[x], &[Some(p - 1.2e54)], d, 1.0);
+            assert!(
+                m.g2.iter().flatten().all(|v| v.is_finite()),
+                "standardize {standardize}, row {i}: {:?}",
+                m.g2
+            );
+        }
+        let back = Sgd::restore(&m.state()).expect("a state that loads");
+        assert_eq!(back.coefficients(), m.coefficients());
+    }
+}
+
+/// A coefficient sum under `standardize` on features whose spread is near
+/// `1e-155` (review 2026-11-23, REG-8): the projection's step per unit of
+/// its multiplier, `1/s²`, was infinite once the fit was held in the
+/// caller's units, and every coefficient NaN for good. The fit stays on the
+/// sum and in the box.
+#[test]
+fn a_sum_on_features_near_the_smallest_doubles_holds() {
+    let mut c = cfg(2, 0.05, LearningRate::AdaGrad);
+    c.constraint = Some(crate::constraint::Constraint {
+        lo: vec![0.0, 0.0],
+        hi: vec![f64::INFINITY, f64::INFINITY],
+        sum: Some(1.0),
+    });
+    let mut m = Sgd::new(c).unwrap();
+    let mut r = Rng(5);
+    for i in 0..80 {
+        let x = [1e-155 * r.n(), 1e-155 * r.n()];
+        let y = 1e155 * (0.3 * x[0] + 0.7 * x[1]) + 0.1 * r.n();
+        m.step(&x, &[Some(y)], 1.0, 1.0);
+        let b = &m.coefficients()[0];
+        assert!(b.iter().all(|v| v.is_finite()), "row {i}: {b:?}");
+        assert!((b[1] + b[2] - 1.0).abs() < 1e-12, "row {i}: {b:?}");
+    }
+}
+
+/// Weights too small to square in a double count as rows (review
+/// 2026-11-23, REG-12): the warm-up's and the level's Kish counts are
+/// `(Σw)² / Σw²`, and at weights of `2^-664` each `w²` was 0, so both
+/// counts stayed 0: the scaler never switched and the level never warmed.
+/// Every weight times `2^-664` now counts as at unit weights, to the bit,
+/// and the switch comes on the same row. (A weight is also a step size
+/// here, `tests/test_weight_scale.py`, so the fits themselves part: at
+/// such weights AdaGrad's epsilon outweighs every gradient, and the review's
+/// 0.9 quantile held at the mean is that, not the count.)
+#[test]
+fn weights_too_small_to_square_count_as_rows() {
+    let run = |scale: f64| {
+        let mut c = cfg(1, 0.05, LearningRate::AdaGrad);
+        c.loss = SgdLoss::Quantile { tau: 0.9 };
+        let mut m = Sgd::new(c).unwrap();
+        let mut r = Rng(9);
+        (0..60)
+            .map(|_| {
+                let y = 1.0 + r.n();
+                m.step(&[r.n()], &[Some(y)], 1.0, scale * (0.5 + r.u()));
+                (
+                    m.warmup().switched(),
+                    m.warmup().count().to_bits(),
+                    m.level[0].count().to_bits(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let (unit, tiny) = (run(1.0), run(crate::sqsum::ldexp(1.0, -664)));
+    assert_eq!(unit, tiny);
+    assert!(tiny.last().is_some_and(|t| t.0), "the scaler switched");
+}

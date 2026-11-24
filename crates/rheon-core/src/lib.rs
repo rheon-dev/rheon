@@ -59,6 +59,7 @@
 //! into capped, session-aware deltas, and every model decays by them.
 //! See `docs/PLAN.md` §2 and §4.
 
+mod ar;
 mod audit;
 mod bocpd;
 mod boundary;
@@ -75,12 +76,16 @@ pub mod comp;
 mod conformal;
 mod constraint;
 mod corrchange;
+mod dcc;
+pub mod ddsketch;
+mod ddsketch_model;
 mod deco;
 mod drift;
 mod ewclass;
 mod ewcov;
 mod ewdiag;
 mod ewlagcov;
+mod ewm_moments;
 mod ewridge;
 mod expectile;
 mod family;
@@ -111,7 +116,10 @@ mod model;
 mod oracle;
 mod pa;
 mod pieces;
+mod power_variation;
+mod psquared;
 mod rcov;
+mod realized;
 mod refusals;
 mod rls;
 mod robust;
@@ -123,11 +131,16 @@ mod sgd;
 mod since;
 mod solve;
 mod specification;
+mod spectral;
 mod spread;
+mod sqsum;
 mod stats;
 mod stl;
 mod stl_ring;
+mod streampca;
 mod tails;
+mod tdigest;
+mod tdigest_model;
 /// The thread pools of the tests that run one computation at several pool
 /// sizes, held within what a Windows runner can commit.
 #[cfg(test)]
@@ -136,6 +149,7 @@ mod warmup;
 mod window;
 mod window_moments;
 
+pub use ar::{Ar, ArCfg, ArSelect, check_lags as check_ar_lags};
 pub use audit::{
     Audit, AuditCfg, ClockReport as AuditClock, ColumnReport as AuditColumn, DISTINCT_CAP,
     MAX_DISTINCT_CAP, NULL, PairReport as AuditPair, is_null,
@@ -157,10 +171,15 @@ pub use corrchange::{
     ChangeNorm, CorrChange, CorrChangeCfg, CorrChangeKind, MAX_PERM, kolmogorov_cdf,
     kolmogorov_quantile,
 };
+pub use dcc::{DCC_PERSISTENCE_CAP, DCC_START_ROWS, Dcc, DccCfg};
+pub use ddsketch::{
+    DDSKETCH_MIN_ALPHA, DdSketch, Mapping as DdSketchMapping, Slot as DdSketchSlot,
+};
+pub use ddsketch_model::{DdSketchModel, DdSketchModelCfg};
 pub use deco::{Deco, DecoCfg, DecoDynamics};
 pub use drift::{
-    Adwin, AdwinCfg, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg, PageHinkley,
-    ks_critical_h, ks_equal_tail,
+    Adwin, AdwinCfg, AdwinRange, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg,
+    PageHinkley, ks_critical_h, ks_equal_tail,
 };
 pub use ewclass::{Covariance, EwClass, EwClassCfg};
 pub use ewcov::{
@@ -169,6 +188,10 @@ pub use ewcov::{
 };
 pub use ewdiag::{EwDiag, Including};
 pub use ewlagcov::{EwLagCov, MAX_LAG, check_lag_ceiling};
+pub use ewm_moments::{
+    EWM_MOMENTS_CLOCK_BLOCK_ROWS, EWM_MOMENTS_MAX_STATE_BYTES, EwmMoments, EwmMomentsCfg,
+    Leg as MomentLeg, MAX_UNBIASED_MOMENT_ORDER, MomentKind, MomentTerm, Withheld,
+};
 pub use ewridge::{EwRidge, EwRidgeCfg};
 pub use expectile::{
     DEFAULT_EXPECTILE_REFIT_ROWS, EXPECTILE_MAX_STATE_BYTES, EXPECTILE_REFIT_PASSES,
@@ -211,9 +234,18 @@ pub use model::{
 };
 pub use pa::{Pa, PaCfg, PaMode};
 pub use pieces::Sequential;
+pub use power_variation::{
+    PowerVariation, PowerVariationCfg, PvKernel, PvTerm, PvTermKind,
+    outputs_per_target as power_variation_outputs,
+};
+pub use psquared::PSquared;
 pub use rcov::{
     Rcov, RcovCfg, RcovEstimate, RcovKind, parzen, parzen_c_star, phi_11, phi_12, phi_22, preavg_g,
     psi1, psi2,
+};
+pub use realized::{
+    BNS_THETA, BV_SCALE, DEFAULT_LM_BETA as REALIZED_LM_BETA,
+    OUTPUTS_PER_TARGET as REALIZED_OUTPUTS, Realized, RealizedCfg, TQ_SCALE, TV_SCALE,
 };
 pub use refusals::{Refusals, STOPPED, STOPPED_MANY};
 pub use rls::{Rls, RlsCfg};
@@ -224,6 +256,7 @@ pub use seqtest::{SLOTS as SEQTEST_SLOTS, SeqTest, SeqTestCfg};
 pub use sgd::{LearningRate, Sgd, SgdCfg, SgdLoss};
 pub use solve::{SpdFactor, quad_forms_logdet, solve_spd};
 pub use specification::Specification;
+pub use spectral::{MAX_FREQUENCIES, Spectral, SpectralCfg, SpectralScaling};
 pub use stats::{
     EW_QUANTILE_ALPHA, EwAutoCorr, EwQuantile, HitTest, MAX_BAND_OCTAVES, SlotMetrics,
 };
@@ -232,7 +265,12 @@ pub use stl_ring::{
     Closed, Components, Decomposition, StlOperator, StlRing, check_state_bytes, default_lag,
     default_window, seasonal_reach, state_bytes,
 };
+pub use streampca::{
+    OJA_DEFAULT_LEARNING_RATE, PCA_MAX_STATE_BYTES, PcaMethod, StreamPca, StreamPcaCfg,
+};
 pub use tails::Tails;
+pub use tdigest::TDigest;
+pub use tdigest_model::{TDIGEST_COMPRESSION, TDigestModel, TDigestModelCfg, level_identified};
 pub use warmup::{WARMUP_ROWS, Warmup};
 pub use window::{
     At, Bytes, Cadence, DiagMoments, Edit, Footprint, Moments, Offer, Pack, Packer, Snapshots,
@@ -937,7 +975,28 @@ pub use window::{
 ///   and named it `schema_version`. No model's own state moved. A bank file
 ///   of 71 or earlier loads as it did, to the bit, and re-saves the current
 ///   fixture's bytes. Schema 71's fixtures are kept
-///   (`tests/state_fixtures/v71/`).
+///   (`tests/state_fixtures/v71/`). A new model's state rides on the same
+///   schema: `ewm_moments`' [`ModelState::EwmMoments`], appended, which
+///   moves no other layout (the cases `ewm_moments` and
+///   `ewm_moments_plugin`; its lag buffers and window ring, row and clock,
+///   with the boundary of the window's two stacks, in `ewm_moments_lags`,
+///   `ewm_moments_clock_lags`, `ewm_moments_window` and
+///   `ewm_moments_clock_window`).
+///
+///   Also at 72, before any release carried it (2026-11-22, PLAN 551, the
+///   user's "Replace rho with the ratio"): `deco`'s level is the ratio of
+///   the EW means of the row's numerator and denominator (or their averaged
+///   DCC recursion under `"linear"`), kept in `ratio` -- the means, a pair's
+///   second denominator, `"linear"`'s `N` and `D`, and the standardiser's
+///   `Σw²/(Σw)²` its warm-up reads -- where `rho_bar` and `rho_bar_lo` kept
+///   the EW mean of `u`. A state of 71 or earlier has no `ratio`: it loads
+///   with its level restarted (CLAUDE.md rule 5's twenty-sixth exception,
+///   the user's "Switch, restarting the level", 2026-11-22): its
+///   standardiser and `u` go on to the bit, its level's sums start empty
+///   and relearn, and its share is taken as 1. The kept `deco` files are
+///   held to that ([`Deco`]'s module docs; `tests/state_fixtures.rs`,
+///   `RESTARTED_LEVEL`); the ratio's forms are the cases `deco`,
+///   `deco_linear` and `deco_warming`.
 pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`

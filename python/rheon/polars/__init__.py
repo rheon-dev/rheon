@@ -150,7 +150,14 @@ from rheon.polars._frame import (
 )
 from rheon.polars._warnings import UnstableWarning
 from rheon.polars.ops import (
+    cross_mean,
+    cross_quantile,
+    cross_rank,
+    cross_ref,
+    cross_std,
     ewm_mean,
+    ewm_moments,
+    ewm_profile,
     ewm_quantile,
     ewm_rate,
     ewm_std,
@@ -162,16 +169,27 @@ from rheon.polars.ops import (
     rewm_mean,  # noqa: F401
     rewm_rate,  # noqa: F401
     rewm_sum,  # noqa: F401
+    rolling_max,
+    rolling_min,
 )
 
 __all__ = [
+    "cross_mean",
+    "cross_std",
+    "cross_rank",
+    "cross_quantile",
+    "cross_ref",
     "ewm_mean",
+    "ewm_moments",
+    "ewm_profile",
     "ewm_quantile",
     "ewm_rate",
     "ewm_std",
     "ewm_sum",
     "ewm_var",
     "increment",
+    "rolling_max",
+    "rolling_min",
     "ops",
     "ArrowStruct",
     "ColumnNotFoundError",

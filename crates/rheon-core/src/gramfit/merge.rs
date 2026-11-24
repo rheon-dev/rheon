@@ -90,6 +90,12 @@ impl OwnedGram {
     }
 }
 
+/// Whether a weight is a positive number: false for 0 and for NaN.
+#[inline]
+fn weighs(w: f64) -> bool {
+    w > 0.0
+}
+
 /// Each target's `ȳ`: its cross-moment at the intercept, or its own mean
 /// without one.
 fn ybar_of(p: &GramArrays<'_>, icept: Option<usize>) -> Vec<f64> {
@@ -101,20 +107,98 @@ fn ybar_of(p: &GramArrays<'_>, icept: Option<usize>) -> Vec<f64> {
         .collect()
 }
 
-/// Each target's `Q = w² / n_kish`, 0 where its Kish size is not a
-/// positive number.
-fn q_of(p: &GramArrays<'_>) -> Vec<f64> {
+/// Each target's `Q = w² / n_kish`: 0 where the part has no weight for it,
+/// and NaN where it has weight but no Kish size, so the merged size is
+/// unknown rather than one that counts the part's weight and none of its
+/// rows (review 2026-11-23, REG-14: a part of weight 1000 beside one of 10
+/// rows made a size of 102,010). A part with weight and a size of 0 is
+/// one that could not count its rows, and the same.
+///
+/// Each `w` is read over `scale`, a power of two a target (the largest
+/// weight's, [`kish_scales`]), so `w²` neither overflows past `1.3e154` nor
+/// underflows below `1.5e-154`; a power of two divides exactly, so in
+/// range the result is `w² / n_kish` over `scale²` to the bit.
+fn q_of(p: &GramArrays<'_>, scale: &[f64]) -> Vec<f64> {
     p.target_weights
         .iter()
         .zip(p.target_n_kish)
-        .map(|(&w, &nk)| {
-            if nk.is_finite() && nk > 0.0 {
-                w * w / nk
-            } else {
+        .zip(scale)
+        .map(|((&w, &nk), &s)| {
+            if !weighs(w) {
                 0.0
+            } else if nk.is_finite() && nk > 0.0 {
+                let ws = w / s;
+                ws * ws / nk
+            } else {
+                f64::NAN
             }
         })
         .collect()
+}
+
+/// Per target, the power of two at or below the largest weight any part
+/// has for it (1 where none has one): what [`q_of`] reads each weight over.
+fn kish_scales(parts: &[GramArrays<'_>]) -> Vec<f64> {
+    let m = parts[0].targets();
+    (0..m)
+        .map(|t| {
+            let top = parts
+                .iter()
+                .map(|p| p.target_weights[t])
+                .fold(0.0, f64::max);
+            if top.is_finite() && top >= f64::MIN_POSITIVE {
+                f64::from_bits(top.to_bits() & 0x7ff0_0000_0000_0000)
+            } else {
+                1.0
+            }
+        })
+        .collect()
+}
+
+/// A target's merged Kish size from its weight and its `Q` over `scale²`.
+#[inline]
+fn kish(tw: f64, qt: f64, s: f64) -> f64 {
+    if qt > 0.0 {
+        let ws = tw / s;
+        ws * ws / qt
+    } else {
+        f64::NAN
+    }
+}
+
+/// The spread term's weight `W_a W_b / W²`, read in shares where the
+/// product or the square leaves the doubles: past `1.3e154` or below
+/// `1.5e-154` the plain form is `inf / inf` or `0 / 0` (review 2026-11-23,
+/// REG-14). The plain form wherever it is a number, so a merge in range
+/// keeps its bits, and `rheon.gram.merge`'s with them.
+#[inline]
+fn spread_weight(w: f64, wb: f64, total: f64) -> f64 {
+    let plain = w * wb / (total * total);
+    if plain.is_finite() && (plain > 0.0 || w == 0.0 || wb == 0.0) {
+        plain
+    } else {
+        (w / total) * (wb / total)
+    }
+}
+
+/// `(w a + wb b) / total`, read in shares where a product leaves the
+/// doubles, as [`spread_weight`]; `a` alone where `wb` is 0 and `b` alone
+/// where `w` is, so a part that adds nothing adds nothing even where its
+/// moments are NaN (review 2026-11-23, MATH-7: `0 · NaN` is NaN).
+#[inline]
+fn blend(w: f64, a: f64, wb: f64, b: f64, total: f64) -> f64 {
+    if wb == 0.0 {
+        return a;
+    }
+    if w == 0.0 {
+        return b;
+    }
+    let plain = (w * a + wb * b) / total;
+    if plain.is_finite() || !(a.is_finite() && b.is_finite()) {
+        plain
+    } else {
+        (w / total) * a + (wb / total) * b
+    }
 }
 
 /// `parts` pooled, on the columns `cols` (positions in every part's
@@ -154,7 +238,8 @@ pub fn merge(parts: &[GramArrays<'_>], cols: &[usize], icept: Option<usize>) -> 
         return g;
     }
     g.within = None;
-    let mut q = q_of(first);
+    let scales = kish_scales(parts);
+    let mut q = q_of(first, &scales);
     let mut ybar = ybar_of(first, icept);
     for p in &parts[1..] {
         let (w, wb) = (g.weight_sum, p.weight_sum);
@@ -165,23 +250,54 @@ pub fn merge(parts: &[GramArrays<'_>], cols: &[usize], icept: Option<usize>) -> 
                 .zip(&g.means)
                 .map(|(&i, &mean)| p.means[i] - mean)
                 .collect();
-            let spread = w * wb / (total * total);
+            let spread = spread_weight(w, wb, total);
             for (r, &i) in cols.iter().enumerate() {
                 for (c, &j) in cols.iter().enumerate() {
                     let e = &mut g.comoments[r * n + c];
-                    *e = (w * *e + wb * p.comoments.get(k, i, j)) / total + spread * (d[r] * d[c]);
+                    let pooled = blend(w, *e, wb, p.comoments.get(k, i, j), total);
+                    *e = if w == 0.0 || wb == 0.0 {
+                        pooled
+                    } else {
+                        pooled + spread * (d[r] * d[c])
+                    };
                 }
             }
-            for (mean, dr) in g.means.iter_mut().zip(&d) {
-                *mean += (wb / total) * dr;
+            if w == 0.0 {
+                for (mean, &i) in g.means.iter_mut().zip(cols) {
+                    *mean = p.means[i];
+                }
+            } else if wb > 0.0 {
+                for (mean, dr) in g.means.iter_mut().zip(&d) {
+                    *mean += (wb / total) * dr;
+                }
             }
         }
         g.weight_sum = total;
         let ybar_b = ybar_of(p, icept);
-        let q_b = q_of(p);
+        let q_b = q_of(p, &scales);
         for t in 0..m {
             let (tw, twb) = (g.target_weights[t], p.target_weights[t]);
             let ttotal = tw + twb;
+            q[t] += q_b[t];
+            // A part with no weight for the target adds nothing to it, and
+            // the first with weight is its moments as they are: neither is
+            // multiplied in at 0, where its moments may be NaN (MATH-7).
+            if !weighs(twb) {
+                continue;
+            }
+            if !weighs(tw) {
+                g.target_vars[t] = p.target_vars[t];
+                g.target_means[t] = p.target_means[t];
+                ybar[t] = ybar_b[t];
+                for (r, &i) in cols.iter().enumerate() {
+                    let (e, src) = (t * n + r, t * k + i);
+                    g.cross_moments[e] = p.cross_moments[src];
+                    g.cross_centred[e] = p.cross_centred[src];
+                    g.means_by_target[e] = p.means_by_target[src];
+                }
+                g.target_weights[t] = ttotal;
+                continue;
+            }
             let live = ttotal > 0.0;
             let (a, b) = if live {
                 (tw / ttotal, twb / ttotal)
@@ -195,13 +311,17 @@ pub fn merge(parts: &[GramArrays<'_>], cols: &[usize], icept: Option<usize>) -> 
             };
             g.target_vars[t] = a * g.target_vars[t] + b * p.target_vars[t] + a * b * dt * dt;
             g.target_means[t] += b * dt;
-            q[t] += q_b[t];
             let scale = if live { 1.0 / ttotal } else { 0.0 };
             let dy = if live { ybar_b[t] - ybar[t] } else { 0.0 };
             for (r, &i) in cols.iter().enumerate() {
                 let e = t * n + r;
                 let src = t * k + i;
-                g.cross_moments[e] = (tw * g.cross_moments[e] + twb * p.cross_moments[src]) * scale;
+                let plain = (tw * g.cross_moments[e] + twb * p.cross_moments[src]) * scale;
+                g.cross_moments[e] = if plain.is_finite() {
+                    plain
+                } else {
+                    a * g.cross_moments[e] + b * p.cross_moments[src]
+                };
                 let dm = if live {
                     p.means_by_target[src] - g.means_by_target[e]
                 } else {
@@ -215,8 +335,14 @@ pub fn merge(parts: &[GramArrays<'_>], cols: &[usize], icept: Option<usize>) -> 
             g.target_weights[t] = ttotal;
         }
     }
-    for ((nk, &tw), &qt) in g.target_n_kish.iter_mut().zip(&g.target_weights).zip(&q) {
-        *nk = if qt > 0.0 { tw * tw / qt } else { f64::NAN };
+    for (((nk, &tw), &qt), &sc) in g
+        .target_n_kish
+        .iter_mut()
+        .zip(&g.target_weights)
+        .zip(&q)
+        .zip(&scales)
+    {
+        *nk = kish(tw, qt, sc);
     }
     g
 }
@@ -240,7 +366,7 @@ pub fn merge_within(parts: &[GramArrays<'_>], cols: &[usize], icept: Option<usiz
             for (r, &i) in cols.iter().enumerate() {
                 for (c, &j) in cols.iter().enumerate() {
                     let e = &mut comoments[r * n + c];
-                    *e = (w * *e + wb * p.comoments.get(k, i, j)) / total;
+                    *e = blend(w, *e, wb, p.comoments.get(k, i, j), total);
                 }
             }
         }
@@ -248,26 +374,31 @@ pub fn merge_within(parts: &[GramArrays<'_>], cols: &[usize], icept: Option<usiz
     }
     let mut target_weights = first.target_weights.to_vec();
     let mut target_vars = first.target_vars.to_vec();
-    let mut q = q_of(first);
+    let scales = kish_scales(parts);
+    let mut q = q_of(first, &scales);
     for p in &parts[1..] {
-        let q_b = q_of(p);
+        let q_b = q_of(p, &scales);
         for t in 0..m {
             let (tw, twb) = (target_weights[t], p.target_weights[t]);
             let ttotal = tw + twb;
-            let (a, b) = if ttotal > 0.0 {
-                (tw / ttotal, twb / ttotal)
-            } else {
-                (0.0, 0.0)
-            };
-            target_vars[t] = a * target_vars[t] + b * p.target_vars[t];
             q[t] += q_b[t];
+            // As [`merge`]: a part with no weight adds nothing (MATH-7).
+            if !weighs(twb) {
+                continue;
+            }
+            target_vars[t] = if tw > 0.0 {
+                (tw / ttotal) * target_vars[t] + (twb / ttotal) * p.target_vars[t]
+            } else {
+                p.target_vars[t]
+            };
             target_weights[t] = ttotal;
         }
     }
     let target_n_kish = target_weights
         .iter()
         .zip(&q)
-        .map(|(&tw, &qt)| if qt > 0.0 { tw * tw / qt } else { f64::NAN })
+        .zip(&scales)
+        .map(|((&tw, &qt), &sc)| kish(tw, qt, sc))
         .collect();
     let within = (0..m)
         .map(|t| {
@@ -325,14 +456,20 @@ pub fn within_cross(parts: &[GramArrays<'_>], cols: &[usize], signs: &[f64]) -> 
         for (t, w) in tw.iter_mut().enumerate() {
             let wb = p.target_weights[t];
             let ttotal = *w + wb;
-            let (a, b) = if ttotal > 0.0 {
-                (*w / ttotal, wb / ttotal)
-            } else {
-                (0.0, 0.0)
-            };
+            // As [`merge`]: a part with no weight adds nothing (MATH-7).
+            if !weighs(wb) {
+                continue;
+            }
+            let first = !weighs(*w);
+            let (a, b) = (*w / ttotal, wb / ttotal);
             for (r, &i) in cols.iter().enumerate() {
                 let e = t * n + r;
-                cc[e] = a * cc[e] + b * (s * p.cross_centred[t * k + i]);
+                let theirs = s * p.cross_centred[t * k + i];
+                cc[e] = if first {
+                    theirs
+                } else {
+                    a * cc[e] + b * theirs
+                };
             }
             *w = ttotal;
         }

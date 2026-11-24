@@ -75,14 +75,17 @@ def oracle(
 ) -> list[float | None]:
     """Row by row, numpy's weighted quantile at ``q`` over the window's
     values, each weighing ``2 ** (-|t_j - t| / half_life)``. A forward window
-    no later row has closed is unresolved: null."""
+    no later row has closed is unresolved: null, unless its far edge is the
+    last row, under ``"right"`` or ``"both"``."""
     t = df["t"].to_numpy()
     x = df["x"].to_numpy(allow_copy=True).astype(float)
     out: list[float | None] = []
     for i in range(len(t)):
         if forward:
             past = t > t[i] + window if closed in ("right", "both") else t >= t[i] + window
-            if not past.any():
+            # Whole too when, under "right" or "both", its far edge is the last row.
+            edge = closed in ("right", "both") and t[-1] == t[i] + window
+            if not past.any() and not edge:
                 out.append(None)
                 continue
         m = members(t, i, window=window, closed=closed, forward=forward)

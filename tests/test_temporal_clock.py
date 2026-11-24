@@ -524,7 +524,11 @@ class TestEveryClockParameterTakesADuration:
             kw["kernel_half_lives"] = ["30s", "2m"]
         if builder == "glm":
             kw["targets"] = ["c"]
-        if builder in ("hawkes", "expectile"):
+        if builder == "spectral":
+            # Its periods are clock parameters too: durations beside the
+            # window's.
+            kw["periods"] = ["8h", "3h"]
+        if builder in ("hawkes", "expectile", "realized", "power_variation", "ddsketch"):
             # A window takes no decay beside it: the parameter under test
             # sets its own half_life where it is that one.
             kw["half_life"] = float("inf")
@@ -540,9 +544,15 @@ class TestEveryClockParameterTakesADuration:
         "embargo": ("30s", {}),
         "long_half_life": ("1h", {"session": "s", "session_gap": "10m", "session_shrink": 0.5}),
         "solve_every": ("10s", {}),
-        "window_size": ("30m", {}),
+        # `corrchange`'s takes no `window_rows` beside it; another
+        # builder's has none to drop.
+        "window_size": ("30m", {"window_rows": None}),
+        "monitor_span": ("45m", {"kind": "sequential", "window_rows": None, "window_size": "30m"}),
         "kernel_half_lives": (["20s", "10m"], {}),
         "start_span": ("30m", {"start_rows": None}),
+        "margin_start_span": ("30m", {"margin_start_rows": None, "margins": "garch"}),
+        "periods": (["8h", "3h"], {}),
+        "spacing": ("1m", {"periods": ["8h", "3h"]}),
         "refit_span": ("30m", {"refit_rows": None}),
         "warm_span": ("30m", {"warm_rows": None}),
         "hazard": ("40m", {}),
@@ -568,6 +578,7 @@ class TestEveryClockParameterTakesADuration:
         "tails_half_life": ("20m", {"emit_tails": True}),
         "influence_half_life": ("20m", {"emit_influence": True}),
         "feature_health_half_life": ("20m", {"emit_feature_health": True}),
+        "lag_tolerance": ("1m", {"terms": {"ac": {"x0": 1, "x0@5m": 1}}}),
     }
 
     def _cases(self):
@@ -594,7 +605,9 @@ class TestEveryClockParameterTakesADuration:
         "select_half_life": float("inf"),
         "revert_half_life": float("inf"),
         "window_size": None,
+        "monitor_span": None,
         "start_span": None,
+        "margin_start_span": None,
         "refit_span": None,
         "warm_span": None,
         "hazard": None,

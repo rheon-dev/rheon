@@ -95,10 +95,8 @@ def fold(df, pred, coverage=0.9, rate=0.05, auto=False):
     step from the label time released before it (capped) and folding
     `y - pred` at its weight, its interval scored against the radius it was
     shown; then the row reads `sigma`, its interval `pred ± m·sigma` and the
-    coverage, and is held, unless its label time is null: a row of weight 0
-    is held too, and its release steps the folds by its label step and adds
-    nothing (in the conformal step it only ages the coverage and the count
-    of rows `w̄` is over). The multiplier `m` starts at `Φ⁻¹(1 − α/2)` on the
+    coverage, and is held, unless its label time is null. A row of weight 0
+    releases nothing and is held for nothing. The multiplier `m` starts at `Φ⁻¹(1 − α/2)` on the
     first release with a residual, unscored, and steps by
     `rate · (w/w̄) · (err − α)`.
 
@@ -124,8 +122,11 @@ def fold(df, pred, coverage=0.9, rate=0.05, auto=False):
     for i in range(n):
         if x[i] is None:
             continue
-        due = sorted(h for h in held if h[0] <= t[i])
-        held = [h for h in held if h[0] > t[i]]
+        # A row of weight 0 releases nothing: it is scored as `predict`
+        # scores it, from the folds as they stand (the user, 2026-11-23:
+        # "Score as predict"; review 2026-11-23, STRM-1).
+        due = sorted(h for h in held if h[0] <= t[i]) if w[i] > 0.0 else []
+        held = [h for h in held if h[0] > t[i]] if w[i] > 0.0 else held
         for k, (label, j, shown) in enumerate(due):
             d = 0.0 if last is None else min(float(label - last), GAP_CAP)
             last = label
@@ -146,8 +147,11 @@ def fold(df, pred, coverage=0.9, rate=0.05, auto=False):
                 cov_w *= lam
                 w_rows *= lam
             else:
-                w_rows = lam * w_rows + 1.0
-                w_mean += (w[j] - w_mean) / w_rows
+                # The mean weight at the old mean's and the row's shares.
+                prev = lam * w_rows
+                w_rows = prev + 1.0
+                if w[j] != w_mean:
+                    w_mean = (prev / w_rows) * w_mean + w[j] / w_rows
                 if auto:
                     waiting = len(held) + len(due) - k - 1
                     nbar += (waiting - nbar) / w_rows

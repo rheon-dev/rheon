@@ -58,11 +58,11 @@ R2 = np.array([[1.0, 0.3], [0.3, 1.0]])
         ),
         (
             lambda: corr.mp_edge(0, 10),
-            "rheon.corr.mp_edge: n and m must be above 0, but they are 0 and 10",
+            "rheon.corr.mp_edge: n and m must be finite numbers above 0, but they are 0 and 10",
         ),
         (
             lambda: corr.mp_edge(10, -1),
-            "rheon.corr.mp_edge: n and m must be above 0, but they are 10 and -1",
+            "rheon.corr.mp_edge: n and m must be finite numbers above 0, but they are 10 and -1",
         ),
         (
             lambda: corr.signal_share(np.zeros(3), np.ones(2)),
@@ -127,3 +127,42 @@ def test_the_epps_inversion_reads_a_closed_row_as_the_gram_it_closed():
     got = corr.epps_invert(row, L=3)
     np.testing.assert_array_equal(got, want)
     assert got[0, 1] != rp.gram.correlation(open_gram)[0, 1], "the lags moved it"
+
+
+# --- review 2026-11-23, MATH-6 -------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf])
+@pytest.mark.parametrize("which", ["n", "m"])
+def test_the_noise_floor_refuses_a_count_that_is_not_finite(bad, which):
+    """MATH-6 (1): ``n`` or ``m`` NaN passed ``n <= 0`` and gave NaN edges;
+    an infinite one gave edges that bound nothing. Each is refused by name,
+    by ``mp_edge`` and by ``mp_density``."""
+    kw = {"n": 400, "m": 100, which: bad}
+    with pytest.raises(ValueError, match=r"n and m must be finite numbers above 0"):
+        corr.mp_edge(**kw)
+    with pytest.raises(ValueError, match=r"n and m must be finite numbers above 0"):
+        corr.mp_density([1.0], **kw)
+
+
+def test_an_unsymmetric_matrix_is_read_as_its_symmetric_part():
+    """MATH-6 (2): ``eigh`` and ``eigvalsh`` read the lower triangle alone,
+    so ``absorption`` and ``spectral`` of a matrix whose halves differ were
+    those of its lower half mirrored, the upper half unread. Each reads
+    ``(r + r') / 2``, as ``nearest`` does."""
+    r = np.array([[1.0, 0.9], [0.1, 1.0]])
+    sym = 0.5 * (r + r.T)
+    assert corr.absorption(r, 1) == pytest.approx(corr.absorption(sym, 1), rel=1e-15)
+    assert corr.absorption(r, 1) == pytest.approx(0.75)
+    got, want = corr.spectral(r, 2), corr.spectral(sym, 2)
+    np.testing.assert_allclose(got[0], want[0], rtol=1e-15)
+    np.testing.assert_allclose(got[1], want[1], rtol=1e-15)
+
+
+def test_a_nan_off_its_mirror_is_named_where_it_is():
+    """MATH-6 (3): a NaN at ``b[0, 1]`` against a number at ``b[1, 0]``
+    fails the symmetry check, but ``nanargmax`` skipped it and named the
+    largest of the other gaps, a pair that matched."""
+    b = np.array([[1.0, math.nan, 0.2], [0.4, 1.0, 0.3], [0.2, 0.3, 1.0]])
+    with pytest.raises(ValueError, match=r"b\[0, 1\] is nan and b\[1, 0\] is 0\.4"):
+        corr.from_blocks(b, ["a", "b", "c"])

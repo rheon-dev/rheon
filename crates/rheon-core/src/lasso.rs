@@ -1074,9 +1074,13 @@ impl Lasso {
                 let mut b = vec![0.0; k];
                 if let Some(prev) = &self.beta {
                     for i in 0..k {
-                        let p = prev[j][0][i + off];
-                        if s[i] > 0.0 && p.is_finite() {
-                            b[i] = p * s[i];
+                        // In the new scale, where that is a number: a
+                        // coefficient fitted at a spread of `1e-130` and
+                        // read at one of `1e99` started the descent at
+                        // `±inf` (review 2026-11-23, LASSO-3).
+                        let start = prev[j][0][i + off] * s[i];
+                        if s[i] > 0.0 && start.is_finite() {
+                            b[i] = start;
                         }
                     }
                 }
@@ -1192,7 +1196,9 @@ fn descend(
             cd_sweep(c, k, d, s, l1, l2, b, &mut support.acc)
         };
         if crate::gramfit::settled(delta, limit) {
-            return true;
+            // A descent that ran to infinities settles on NaN moves, which
+            // `max` dropped: not converged.
+            return crate::gramfit::finite(b);
         }
     }
     false
@@ -1795,6 +1801,84 @@ impl OnlineModel for Lasso {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The warm start reads the last solve's coefficient in the new
+    /// scale only where that is a number (review 2026-11-23, LASSO-3): a
+    /// feature whose spread was `1e-130` beside a target near `1e99` has a
+    /// coefficient near `1e229`, finite, and once rows at `1e99` widen its
+    /// spread the standardized start `β · s` was infinite. The descent ran
+    /// from infinities, and the fit was NaN, its prediction withheld for
+    /// good. Started at 0 there, the solve converges and predicts.
+    #[test]
+    fn a_warm_start_past_the_largest_double_starts_at_zero() {
+        for k in [2, split::SPLIT_MIN_K + 5] {
+            let mut c = cfg(k, 1, vec![0.0]);
+            c.min_weight = 0.0;
+            let mut m = Lasso::new(c).unwrap();
+            let mut s = 7u64;
+            let mut lcg = || {
+                s = s
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+            };
+            let row = |u: f64, scale: f64, v: &mut dyn FnMut() -> f64| -> Vec<f64> {
+                // The last coordinate, so every other one reads its start.
+                (0..k)
+                    .map(|i| if i == k - 1 { scale * u } else { v() })
+                    .collect()
+            };
+            for _ in 0..3 * k {
+                let u = lcg();
+                let x = row(u, 1e-130, &mut lcg);
+                m.step(&x, &[Some(1e99 * u)], 1.0, 1.0);
+            }
+            let fit = m.coefficients().expect("a fit")[0][0][k];
+            assert!(fit.abs() > 1e220 && fit.is_finite(), "{fit:e}");
+            let before = m.solve_failures;
+            let mut last = f64::NAN;
+            for _ in 0..3 * k {
+                let u = lcg();
+                let x = row(u, 1e99, &mut lcg);
+                last = m.step(&x, &[Some(0.5 * u)], 1.0, 1.0).pred[0];
+            }
+            assert!(last.is_finite(), "k {k}: {last}");
+            assert_eq!(m.solve_failures, before, "k {k}");
+        }
+    }
+
+    /// A descent that runs to infinities has not converged (review
+    /// 2026-11-23, LASSO-1): on a symmetric `c` that is not positive
+    /// semidefinite, `[[1, 2], [2, 1]]` (a window's subtraction can leave a
+    /// correlation past 1), each sweep multiplies the moves until they are
+    /// `±inf`, where `|inf − inf|` is NaN and `f64::max` dropped it, so a
+    /// sweep of NaN moves read as one of none and settled. Under both sweeps:
+    /// the one-chain one at two features and the split one at its threshold
+    /// (the bad pair beside an identity).
+    #[test]
+    fn a_descent_that_diverges_is_not_converged() {
+        for k in [2, split::SPLIT_MIN_K] {
+            let mut c = vec![0.0; k * k];
+            for i in 0..k {
+                c[i * k + i] = 1.0;
+            }
+            c[1] = 2.0;
+            c[k] = 2.0;
+            let d: Vec<f64> = (0..k)
+                .map(|i| if i < 2 { 1.0 - 0.5 * i as f64 } else { 0.1 })
+                .collect();
+            let s = vec![1.0; k];
+            let mut b = vec![0.0; k];
+            let mut support = Support::default();
+            let converged = descend(&c, k, &d, &s, (0.0, 0.0), &mut b, 5000, 1e-9, &mut support);
+            assert!(
+                !converged || b.iter().all(|v| v.is_finite()),
+                "k {k}: settled at {:?}",
+                &b[..2]
+            );
+            assert!(!converged, "k {k}: {:?}", &b[..2]);
+        }
+    }
 
     /// A selection index past the path is refused, where it loaded and
     /// panicked in `lam_selected` (review 2026-09-18, B3); so is a threshold
@@ -4772,7 +4856,10 @@ mod tests {
                         cd_sweep_serial(&c, k, &d, &s, l1, 0.0, &mut serial)
                     };
                     if crate::gramfit::settled(delta, limit) {
-                        converged_serial = true;
+                        // At 90 features this `c` is not positive
+                        // semidefinite and one penalty's descent runs to
+                        // infinities: settled, not converged (LASSO-1).
+                        converged_serial = crate::gramfit::finite(&serial);
                         break;
                     }
                 }

@@ -38,8 +38,9 @@ pub struct FieldMeta {
     /// Lag, in learned rows, of an `ew_cov` `lag_corr_*` field
     /// (docs/ENHANCEMENTS.md E56); `None` for every other field.
     pub lag: Option<usize>,
-    /// The principal component an `ew_cov` `pc<j>_*` field is about; `None`
-    /// for every other field.
+    /// The principal component an `ew_cov` `pc<j>_*` field is about, or a
+    /// `spectral` field's period, by its place in `periods`; `None` for
+    /// every other field.
     pub component: Option<usize>,
     /// The hidden state an `hmm` posterior is about, `filtered_state<s>`
     /// and `predicted_state<s>`; `None` for every other field. With `lag`,
@@ -265,8 +266,52 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::CorrChange { .. }
             | crate::ModelKind::Bocpd { .. }
             | crate::ModelKind::Audit { .. }
+            | crate::ModelKind::Realized { .. }
+            | crate::ModelKind::Pca { .. }
+            | crate::ModelKind::PowerVariation { .. }
+            | crate::ModelKind::TDigest { .. }
+            | crate::ModelKind::DdSketch { .. }
+            | crate::ModelKind::EwmMoments { .. }
+            | crate::ModelKind::Spectral(_)
     ) {
         return Vec::new();
+    }
+    // dcc's `coef` is its parameters, `a`, `b` and the asymmetric model's
+    // `g`, one slot each and no target: `coef_a`.
+    if let crate::ModelKind::Dcc { asymmetric, .. } = &spec.model {
+        let names: &[&str] = if asymmetric.unwrap_or(false) {
+            &["a", "b", "g"]
+        } else {
+            &["a", "b"]
+        };
+        let mut out = Vec::new();
+        for (suffix, d) in spec.decays().expect("validated") {
+            for (position, n) in names.iter().enumerate() {
+                out.push(CoefField {
+                    field: format!("coef{suffix}"),
+                    position,
+                    name: format!("coef_{n}{suffix}"),
+                    target: None,
+                    instance: suffix.clone(),
+                    half_life: match d {
+                        rheon_core::Decay::Halflife(h) => Some(h),
+                        rheon_core::Decay::Lam(_) => None,
+                    },
+                    lam: match d {
+                        rheon_core::Decay::Lam(l) => Some(l),
+                        rheon_core::Decay::Halflife(_) => None,
+                    },
+                    ridge: None,
+                    feature_set: None,
+                    penalty: None,
+                    cluster: None,
+                    state: None,
+                    class: None,
+                    term: n.to_string(),
+                });
+            }
+        }
+        return out;
     }
     // deco's `coef` is the correlation values themselves, one slot each,
     // named for the block or the pair of blocks they belong to.
@@ -376,6 +421,15 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             .chain(cfg.dist.names())
             .map(|n| n.to_string())
             .collect()
+    } else if let crate::ModelKind::Ar { lags, .. } = &spec.model {
+        // The constant, each lag, then the features: `Ar::coefficients`.
+        let mut t = Vec::with_capacity(spec.features.len() + 1);
+        if spec.fit_intercept {
+            t.push("intercept".to_string());
+        }
+        t.extend(lags.lags().iter().map(|l| format!("lag{l}")));
+        t.extend(spec.features.iter().cloned());
+        t
     } else if matches!(
         spec.model,
         crate::ModelKind::KMeans { .. }
@@ -881,6 +935,42 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
         }
         return fields;
     }
+    // pca is not a regression: per component its variance, its share, its
+    // loadings and the row's score, named as `ew_cov`'s components are, and
+    // `n_eff`; no targets or coefficients.
+    if matches!(spec.model, crate::ModelKind::Pca { .. }) {
+        let r = crate::stream::pca_cfg(spec, rheon_core::Decay::Halflife(f64::INFINITY))
+            .map_or(0, |c| c.n_components);
+        let all = spec.features.clone();
+        let labels = rheon_core::EwCovModel::labels(&spec.features, &[], &[], r, &[]);
+        let mut meta: Vec<(&str, Vec<String>, usize)> = Vec::new();
+        for j in 0..r {
+            meta.push(("pc_var", all.clone(), j));
+            meta.push(("pc_share", all.clone(), j));
+            for col in &spec.features {
+                meta.push(("pc_loading", vec![col.clone()], j));
+            }
+            meta.push(("pc_score", all.clone(), j));
+        }
+        let n_slots = labels.len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            for (slot, (l, (kind, cols, j))) in labels.iter().zip(&meta).enumerate() {
+                let mut m = FieldMeta::new(format!("{l}{suffix}"), kind)
+                    .decay(suffix, d)
+                    .src(Source::Stat(mi * n_slots + slot));
+                m.columns = Some(cols.clone());
+                m.component = Some(*j);
+                fields.push(m);
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+        }
+        return fields;
+    }
     // kmeans is not a regression either: per instance, the nearest centre
     // and two distances (read before the row is learned), `n_eff`, and the
     // centres as `coef`.
@@ -1160,6 +1250,161 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
         }
         return fields;
     }
+    // dcc predicts no target's value either: with margins each target's
+    // variance, then each pair's correlation and the row's log-density
+    // (read before the row is learned); then `n_eff` and the parameters as
+    // `coef`. An instance a decay.
+    if matches!(spec.model, crate::ModelKind::Dcc { .. }) {
+        let margins = !matches!(
+            &spec.model,
+            crate::ModelKind::Dcc { margins: Some(m), .. } if m == "none"
+        );
+        let k = spec.targets.len();
+        let n_slots = if margins { k } else { 0 } + k * (k - 1) / 2 + 1;
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let mut at = mi * n_slots;
+            if margins {
+                for t in &spec.targets {
+                    fields.push(
+                        FieldMeta::new(format!("variance_{t}{suffix}"), "variance")
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::Stat(at)),
+                    );
+                    at += 1;
+                }
+            }
+            for i in 0..k {
+                for j in (i + 1)..k {
+                    let (a, b) = (&spec.targets[i], &spec.targets[j]);
+                    let mut m = FieldMeta::new(format!("corr_{a}_{b}{suffix}"), "corr")
+                        .decay(suffix, d)
+                        .src(Source::Stat(at));
+                    m.columns = Some(vec![a.clone(), b.clone()]);
+                    fields.push(m);
+                    at += 1;
+                }
+            }
+            let mut m = FieldMeta::new(format!("loglik{suffix}"), "loglik")
+                .decay(suffix, d)
+                .src(Source::Stat(at));
+            m.columns = Some(spec.targets.iter().cloned().collect());
+            fields.push(m);
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+            fields.push(
+                FieldMeta::new(format!("coef{suffix}"), "coef")
+                    .decay(suffix, d)
+                    .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // realized predicts no target's value: per instance and target, the
+    // estimators of the returns before the row, Lee and Mykland's statistic
+    // of the row's own return and its flag; then `n_eff`. No `coef`.
+    if matches!(spec.model, crate::ModelKind::Realized { .. }) {
+        const NAMES: [&str; rheon_core::REALIZED_OUTPUTS] =
+            ["rv", "bv", "tv", "tq", "bns", "lm", "lm_jump"];
+        let n_slots = NAMES.len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.targets.len() * n_slots;
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                for (slot, name) in NAMES.iter().enumerate() {
+                    let at = base + t_i * n_slots + slot;
+                    let src = if *name == "lm_jump" {
+                        Source::Flag(at)
+                    } else {
+                        Source::Stat(at)
+                    };
+                    fields.push(
+                        FieldMeta::new(format!("{name}_{t}{suffix}"), name)
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(src),
+                    );
+                }
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+        }
+        return fields;
+    }
+    // power_variation predicts no target's value: per instance and target,
+    // each named term of the returns before the row, then their count `n`;
+    // then `n_eff`. No `coef`.
+    if let crate::ModelKind::PowerVariation { terms, .. } = &spec.model {
+        let names: Vec<&str> = terms.iter().map(|t| t.name.as_str()).chain(["n"]).collect();
+        let n_slots = names.len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.targets.len() * n_slots;
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                for (slot, name) in names.iter().enumerate() {
+                    fields.push(
+                        FieldMeta::new(format!("{name}_{t}{suffix}"), name)
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::Stat(base + t_i * n_slots + slot)),
+                    );
+                }
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+        }
+        return fields;
+    }
+    // ewm_moments predicts no target's value: per instance, each term in the
+    // order the spec names them, then under `se` each term's standard error
+    // in the same order, then `n_eff` (the weight inside the window under
+    // one). Each is read before the row is learned; no `coef`.
+    if let crate::ModelKind::EwmMoments { terms, se, .. } = &spec.model {
+        let se = se.unwrap_or(false);
+        let n_slots = terms.0.len() * if se { 2 } else { 1 };
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let columns = |legs: &crate::spec::MomentLegs| {
+                let mut cols: Vec<String> = Vec::new();
+                for (key, _) in &legs.0 {
+                    let col = crate::spec::moment_leg_column(&spec.features, key);
+                    if !cols.contains(&col) {
+                        cols.push(col);
+                    }
+                }
+                cols
+            };
+            let names = terms.0.iter().map(|(t, legs)| (t.clone(), "moment", legs));
+            let ses = terms
+                .0
+                .iter()
+                .filter(|_| se)
+                .map(|(t, legs)| (format!("se_{t}"), "se_moment", legs));
+            for (slot, (name, kind, legs)) in names.chain(ses).enumerate() {
+                let mut f = FieldMeta::new(format!("{name}{suffix}"), kind)
+                    .decay(suffix, d)
+                    .src(Source::Stat(mi * n_slots + slot));
+                f.columns = Some(columns(legs));
+                fields.push(f);
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+        }
+        return fields;
+    }
     // garch predicts no target's value: per target, the variance and the
     // standardized residual (read before the row is learned) and, with a
     // horizon past one row, the forecast; then `n_eff` and the parameters as
@@ -1202,6 +1447,64 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 FieldMeta::new(format!("coef{suffix}"), "coef")
                     .decay(suffix, d)
                     .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // tdigest and ddsketch predict no target's value: per target, one quantile a level,
+    // `q<level>_<target>`, then the tail mean past it a level,
+    // `es<level>_<target>` (both read before the row is added), then
+    // `n_eff`. One undecayed instance; no `coef`.
+    if let crate::ModelKind::TDigest { quantiles, .. }
+    | crate::ModelKind::DdSketch { quantiles, .. } = &spec.model
+    {
+        let mut fields = Vec::new();
+        let nl = quantiles.len();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.targets.len() * 2 * nl;
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                for (part, role) in ["q", "es"].into_iter().enumerate() {
+                    for (li, q) in quantiles.iter().enumerate() {
+                        let name = format!("{role}{}_{t}{suffix}", crate::spec::num_label(*q));
+                        let mut f = FieldMeta::new(name, role)
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::Stat(base + (2 * t_i + part) * nl + li));
+                        f.quantile = Some(*q);
+                        fields.push(f);
+                    }
+                }
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+        }
+        return fields;
+    }
+    // spectral: per target and period, the power read before the row, then
+    // `n_eff`; no `coef`. Its periods are named by their place in the list.
+    if let crate::ModelKind::Spectral(s) = &spec.model {
+        let n_slots = s.periods.spans().len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.targets.len() * n_slots;
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                for k in 0..n_slots {
+                    let mut m = FieldMeta::new(format!("power_{t}_p{k}{suffix}"), "power")
+                        .decay(suffix, d)
+                        .target(t)
+                        .src(Source::Stat(base + t_i * n_slots + k));
+                    // The period's place in `periods` tells the fields apart.
+                    m.component = Some(k);
+                    fields.push(m);
+                }
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
             );
         }
         return fields;

@@ -97,6 +97,12 @@ impl Place {
         self.next = Some(stamp);
     }
 
+    /// The place of a row `d_clock` after the last, read and not taken:
+    /// the stamp handed, or the summed clock.
+    pub fn peek(&self, d_clock: f64) -> Stamp {
+        self.next.unwrap_or(Stamp::from(self.own + d_clock))
+    }
+
     /// One row stepped `d_clock` after the last: its place, the stamp handed
     /// or the summed clock.
     pub fn step(&mut self, d_clock: f64) -> Stamp {
@@ -214,5 +220,29 @@ mod tests {
         assert_eq!(*cap.over, Some(101));
         assert!(!cap.admit(10, 100), "nothing after a row past the cap");
         assert_eq!(*cap.over, Some(101));
+    }
+
+    /// `max_state_bytes` is above 0 and at most 64 MiB: both ends, and each
+    /// refusal in its own words.
+    #[test]
+    fn max_state_bytes_is_held_to_its_range() {
+        assert_eq!(check_max_state_bytes("glm", None), Ok(()));
+        assert_eq!(check_max_state_bytes("glm", Some(1)), Ok(()));
+        assert_eq!(
+            check_max_state_bytes("glm", Some(STATE_BYTES_CEILING)),
+            Ok(())
+        );
+        let zero = check_max_state_bytes("glm", Some(0)).unwrap_err();
+        assert!(
+            zero.starts_with("glm: max_state_bytes must be above 0"),
+            "{zero}"
+        );
+        let over = check_max_state_bytes("sgd", Some(STATE_BYTES_CEILING + 1)).unwrap_err();
+        assert!(
+            over.starts_with("sgd: max_state_bytes may be at most 67108864 (64 MiB)"),
+            "{over}"
+        );
+        assert!(over.contains("but it is 67108865"), "{over}");
+        assert!(check_max_state_bytes("sgd", Some(u64::MAX)).is_err());
     }
 }

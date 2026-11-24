@@ -1750,7 +1750,8 @@ fn a_nudge_never_moves_its_row_past_its_residual() {
 
 /// On uncorrelated features the full leverage is the diagonal one: a
 /// band Gram set to a diagonal matrix reads a row's leverage as `Σ
-/// d²/(v + ridge)` unstandardized and `Σ (d²/v)/(1 + ridge)` standardized,
+/// d²/(v + ridge)` unstandardized and `Σ d²/(v + ridge·s²)` standardized,
+/// `s` the feature's spread over every row (review 2026-11-23, REG-18),
 /// to rounding, and so as the old reading, `Σ d²/v`, to the ridge's
 /// share of the smallest variance.
 #[test]
@@ -1785,7 +1786,10 @@ fn the_full_leverage_is_the_diagonal_one_on_uncorrelated_features() {
             + (1..4)
                 .map(|i| {
                     if standardize {
-                        term(i) / var[i] / (1.0 + ridge)
+                        // Scaled by the features' spread over every row
+                        // (REG-18): the ridge on `d/s` is `ridge·s²` on `d`.
+                        let sc = m.spread_scale[0][i - 1];
+                        term(i) / (var[i] + ridge * sc * sc)
                     } else {
                         term(i) / (var[i] + ridge)
                     }

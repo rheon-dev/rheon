@@ -1061,7 +1061,15 @@ impl SlotMetrics {
 
     /// Score one row under the hit test `hit` ([`HitTest`]).
     pub fn update_with(&mut self, pred: f64, y: f64, lam: f64, w: f64, hit: HitTest) {
-        if !pred.is_finite() || !y.is_finite() || w <= 0.0 {
+        // A row whose weighted squares the moments cannot hold (a prediction
+        // far past its target, past about `1e154`: no bound holds a
+        // prediction) is aged and not scored, as a row with no prediction
+        // is, so the state stays one a load takes.
+        let held = |v: f64| {
+            let t = 2.0 * v;
+            (w * t * t).is_finite()
+        };
+        if !pred.is_finite() || !y.is_finite() || w <= 0.0 || !(held(pred) && held(y)) {
             // Age the estimates but do not score: a row with no prediction is
             // not evidence of a bad one. The means themselves are unchanged;
             // only the effective counts shrink.
@@ -1131,6 +1139,21 @@ pub enum HitTest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A residual whose weighted square overflows -- a prediction, which no
+    /// bound holds, far past its target -- leaves the mean squared error
+    /// finite, so a saved state loads (review 2026-11-23, DIAG-12).
+    #[test]
+    fn a_weighted_square_that_overflows_leaves_the_mse_finite() {
+        let mut m = SlotMetrics::new();
+        m.update(1.0, 1.5, 1.0, 1.0, false);
+        m.update(2.0, 1.5, 1.0, 1.0, false);
+        m.update(1e160, 1.0, 1.0, 1.0, false);
+        m.update(3e100, -1e100, 1.0, 1e100, false);
+        assert!(m.has_shape(), "{m:?}");
+        m.update(1.0, 1.2, 1.0, 1.0, false);
+        assert!(m.has_shape(), "{m:?}");
+    }
 
     fn lcg(state: &mut u64) -> f64 {
         *state = state

@@ -81,6 +81,10 @@ pub struct StepRefusal {
     /// The clock value of the row before it in the stream, and its own.
     pub prev: f64,
     pub now: f64,
+    /// Whether the step itself is finite and it is the time the caps and
+    /// session steps remove that would pass the largest double (review
+    /// 2026-11-23, CLOCK-1).
+    pub removed: bool,
 }
 
 /// Enum dispatch over the models the bank can run (serde-friendly).
@@ -111,6 +115,15 @@ pub enum AnyModel {
     Expectile(Box<rheon_core::Expectile>),
     Hawkes(Box<rheon_core::Hawkes>),
     Garch(Box<rheon_core::Garch>),
+    Dcc(Box<rheon_core::Dcc>),
+    Realized(Box<rheon_core::Realized>),
+    Pca(Box<rheon_core::StreamPca>),
+    PowerVariation(Box<rheon_core::PowerVariation>),
+    TDigest(Box<rheon_core::TDigestModel>),
+    DdSketch(Box<rheon_core::DdSketchModel>),
+    EwmMoments(Box<rheon_core::EwmMoments>),
+    Ar(Box<rheon_core::Ar>),
+    Spectral(Box<rheon_core::Spectral>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -161,6 +174,15 @@ macro_rules! dispatch {
             AnyModel::Expectile($m) => $body,
             AnyModel::Hawkes($m) => $body,
             AnyModel::Garch($m) => $body,
+            AnyModel::Dcc($m) => $body,
+            AnyModel::Realized($m) => $body,
+            AnyModel::Pca($m) => $body,
+            AnyModel::PowerVariation($m) => $body,
+            AnyModel::TDigest($m) => $body,
+            AnyModel::DdSketch($m) => $body,
+            AnyModel::EwmMoments($m) => $body,
+            AnyModel::Ar($m) => $body,
+            AnyModel::Spectral($m) => $body,
         }
     };
 }
@@ -290,6 +312,25 @@ impl AnyModel {
     /// (docs/REVIEW-E54-E64.md C1).
     pub fn predict(&self, x: &[f64], y: &[Option<f64>], d_clock: f64) -> rheon_core::Step {
         dispatch!(self, m => m.predict_with(x, y, d_clock))
+    }
+
+    /// [`Self::predict_into`] for a row whose stamp the stream knows: a
+    /// model whose read decides a window's edge on the clock
+    /// ([`ModelKind::reads_at_stamp`]) reads it at `stamp`, as a step would
+    /// be handed it; every other model, and a row with no stamp, as
+    /// `predict_into`.
+    pub fn predict_at_into(
+        &self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        stamp: Option<Stamp>,
+        out: &mut rheon_core::Step,
+    ) {
+        match (self, stamp) {
+            (AnyModel::EwmMoments(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
+            _ => self.predict_into(x, y, d_clock, out),
+        }
     }
 
     /// [`Self::predict`] into the caller's step, which it overwrites in
@@ -460,26 +501,66 @@ impl AnyModel {
     /// The model's own wait, if it is in one, and so reports nothing:
     /// [`OwnWait::Seeding`] while it holds its first rows to seed itself
     /// from, its `warm_rows` -- `kmeans`' centres, `hmm`'s states, `bocpd`'s
-    /// prior, `kalman`'s unsized priors, and the rows `garch`'s start
-    /// buffers for a target; [`OwnWait::NotIdentified`] while a fit is
+    /// prior, `kalman`'s unsized priors, the rows `garch`'s start
+    /// buffers for a target, and the rows before `deco`'s standardiser is
+    /// warm enough for its level to learn; [`OwnWait::NotIdentified`] while a fit is
     /// withheld because its rows do not identify the model -- `garch`'s
     /// start, whose likelihood did not tell the variance process from a
-    /// constant variance, so it buffers more rows. One dispatch a row
-    /// answers both.
+    /// constant variance, and `dcc`'s, whose did not tell the correlation's
+    /// recursion from constant correlation, so they buffer more rows. One
+    /// dispatch a row answers both.
+    /// Whether the model is one of the kinds [`Self::own_wait`] can answer
+    /// for, so a row of every other kind is spared the dispatch. Keep it in
+    /// step with that match: a kind missing here never reports its wait.
+    pub fn waits(&self) -> bool {
+        matches!(
+            self,
+            AnyModel::KMeans(_)
+                | AnyModel::Hmm(_)
+                | AnyModel::Bocpd(_)
+                | AnyModel::Kalman(_)
+                | AnyModel::Deco(_)
+                | AnyModel::Garch(_)
+                | AnyModel::Dcc(_)
+        )
+    }
+
+    #[inline]
     pub fn own_wait(&self) -> OwnWait {
-        let seeding = match self {
-            AnyModel::KMeans(m) => !m.seeded(),
-            AnyModel::Hmm(m) => !m.seeded(),
-            AnyModel::Bocpd(m) => m.warming(),
-            AnyModel::Kalman(m) => m.sizing(),
-            AnyModel::Garch(m) if m.starting() => true,
-            AnyModel::Garch(m) if m.no_effect() => return OwnWait::NotIdentified,
-            _ => false,
-        };
-        if seeding {
+        match self {
+            AnyModel::KMeans(m) if !m.seeded() => OwnWait::Seeding,
+            AnyModel::Hmm(m) if !m.seeded() => OwnWait::Seeding,
+            AnyModel::Bocpd(m) if m.warming() => OwnWait::Seeding,
+            AnyModel::Kalman(m) if m.sizing() => OwnWait::Seeding,
+            AnyModel::Deco(m) if m.warming() => OwnWait::Seeding,
+            // `garch`'s start and `dcc`'s, its margins' and its own, wait two
+            // ways: buffering, or buffering for want of an effect.
+            AnyModel::Garch(m) => Self::start_wait(m.starting(), || m.no_effect()),
+            AnyModel::Dcc(m) => Self::start_wait(m.starting(), || m.no_effect()),
+            _ => OwnWait::None,
+        }
+    }
+
+    #[inline]
+    fn start_wait(starting: bool, no_effect: impl FnOnce() -> bool) -> OwnWait {
+        if starting {
             OwnWait::Seeding
+        } else if no_effect() {
+            OwnWait::NotIdentified
         } else {
             OwnWait::None
+        }
+    }
+
+    /// Whether the row's own report withheld part of what it reports, read
+    /// from the step's predictions: `corrchange`'s flag, withheld where
+    /// every pair over the critical value is one whose two columns' scale
+    /// ratio moved inside the span (`rheon_core::CorrChange::flag_withheld`).
+    /// Every other model withholds no part of a report by the row itself.
+    pub fn withheld_by_its_row(&self, pred: &[f64]) -> bool {
+        match self {
+            AnyModel::CorrChange(_) => rheon_core::CorrChange::flag_withheld(pred),
+            _ => false,
         }
     }
 
@@ -505,6 +586,21 @@ impl AnyModel {
         match self {
             AnyModel::Sgd(m) if m.unstable() => m.unstable_targets(),
             _ => Vec::new(),
+        }
+    }
+
+    /// Whether some level a `tdigest` reads is withheld because the rows
+    /// before it do not identify it: past the plotting position of the
+    /// smallest or largest row (`rheon_core::TDigestModel::beyond_sample`).
+    /// Read from the state, so it names the levels the next row reads. A
+    /// bank row asks only of the two kinds here (`run_instance`'s
+    /// `has_levels`, decided once an instance): keep that in step with
+    /// this match.
+    pub fn beyond_sample(&self) -> bool {
+        match self {
+            AnyModel::TDigest(m) => m.beyond_sample(),
+            AnyModel::DdSketch(m) => m.beyond_sample(),
+            _ => false,
         }
     }
 
@@ -547,7 +643,20 @@ impl AnyModel {
             | AnyModel::Audit(_)
             // Every read it withholds is a row's, not a failure.
             | AnyModel::Hawkes(_)
-            | AnyModel::Garch(_) => 0,
+            | AnyModel::Garch(_)
+            | AnyModel::Dcc(_)
+            | AnyModel::Realized(_)
+            | AnyModel::PowerVariation(_)
+            | AnyModel::TDigest(_)
+            | AnyModel::DdSketch(_)
+            // A term it withholds is withheld by its condition, no failure.
+            | AnyModel::EwmMoments(_) => 0,
+            // The components are withheld, never failed: the rotation has no
+            // factorization to fail.
+            | AnyModel::Pca(_) => 0,
+            // Each fit counts its own; none withholds a row as a failure.
+            | AnyModel::Ar(_)
+            | AnyModel::Spectral(_) => 0,
         }
     }
 
@@ -621,6 +730,24 @@ impl AnyModel {
             AnyModel::Hawkes(m) => Some(m.coefficients()),
             // Each target's process parameters, then its shape.
             AnyModel::Garch(m) => Some(m.coefficients()),
+            // `a`, `b` and the asymmetric model's `g`, one row; not a number
+            // before a learned model's start.
+            AnyModel::Dcc(m) => Some(vec![m.coefficients()]),
+            // realized has none: its outputs are the estimators.
+            AnyModel::Realized(_) => None,
+            // pca has none: its components are its output fields.
+            AnyModel::Pca(_) => None,
+            // power_variation has none: its outputs are the terms.
+            AnyModel::PowerVariation(_) => None,
+            // tdigest has none: its value is the levels it reads.
+            AnyModel::TDigest(_) | AnyModel::DdSketch(_) => None,
+            // ewm_moments has none: its outputs are the terms.
+            AnyModel::EwmMoments(_) => None,
+            // The constant, the lags, then the features, one row per
+            // target; absent until a target has a fit.
+            AnyModel::Ar(m) => m.coefficients(),
+            // Its value is the power it reports per row.
+            AnyModel::Spectral(_) => None,
         }
     }
 
@@ -644,9 +771,10 @@ use build::{build_one, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
-    BOCPD_HAZARD_ROWS, audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg,
-    expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model, quantile_model, rcov_cfg,
-    sgd_model,
+    BOCPD_HAZARD_ROWS, ar_cfg, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, ddsketch_cfg,
+    deco_block_names, deco_cfg, expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg,
+    huber_model, pca_cfg, power_variation_cfg, quantile_model, rcov_cfg, realized_cfg, sgd_model,
+    spectral_cfg, tdigest_cfg,
 };
 
 /// One grid combo: the rendered label plus the machine values it encodes, so
@@ -752,7 +880,16 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Glm { .. }
         | ModelKind::Hawkes { .. }
         | ModelKind::Expectile { .. }
-        | ModelKind::Garch { .. } => vec![Combo::default()],
+        | ModelKind::Garch { .. }
+        | ModelKind::Dcc { .. }
+        | ModelKind::Realized { .. }
+        | ModelKind::PowerVariation { .. }
+        | ModelKind::TDigest { .. }
+        | ModelKind::DdSketch { .. }
+        | ModelKind::EwmMoments { .. }
+        | ModelKind::Ar { .. }
+        | ModelKind::Spectral(_) => vec![Combo::default()],
+        ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
         // writes none, while the machine value says which it is.
@@ -1310,12 +1447,15 @@ pub fn settled_weight(weight: f64, first: f64, settled: f64, steps: f64) -> f64 
     }
 }
 
-/// A model's own wait ([`AnyModel::own_wait`]).
+/// A model's own wait ([`AnyModel::own_wait`]), as the code of the reason
+/// it withholds a row under (0 for none): a row reads the wait once, before
+/// its step, and says the code where nothing earlier withheld it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum OwnWait {
-    None,
-    Seeding,
-    NotIdentified,
+    None = 0,
+    Seeding = REASON_WARM_ROWS,
+    NotIdentified = REASON_NOT_IDENTIFIED,
 }
 
 /// The reasons a row's predictions are withheld, as `withheld_reason`
@@ -1329,8 +1469,14 @@ pub enum OwnWait {
 /// `unstable_rate` after it (task 278, D8), `sgd`'s gate, which no model
 /// with an earlier reason of its own has; `not_identified` after that (PLAN
 /// 548), `garch`'s wait for a start whose rows tell its variance process
-/// from a constant one, which comes after its own warm-up.
-pub const WITHHELD_REASONS: [&str; 7] = [
+/// from a constant one, which comes after its own warm-up;
+/// `scale_ratio_moved` last (PLAN 553), `corrchange`'s flag withheld where
+/// the correlation's CUSUM is off its null law because the two columns'
+/// scale ratio moved, which no model with an earlier reason has;
+/// `not_separated` last (PLAN 505), `pca`'s wait for components whose eigenvalues
+/// the rows have not yet told apart; `level_beyond_sample` after it (task
+/// 544), a `tdigest` or `ddsketch` level its rows do not identify yet.
+pub const WITHHELD_REASONS: [&str; 10] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
@@ -1338,6 +1484,9 @@ pub const WITHHELD_REASONS: [&str; 7] = [
     "ill_conditioned",
     "unstable_rate",
     "not_identified",
+    "scale_ratio_moved",
+    "not_separated",
+    "level_beyond_sample",
 ];
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
@@ -1346,6 +1495,9 @@ const REASON_WARM_ROWS: u8 = 4;
 const REASON_ILL_CONDITIONED: u8 = 5;
 const REASON_UNSTABLE_RATE: u8 = 6;
 const REASON_NOT_IDENTIFIED: u8 = 7;
+const REASON_SCALE_RATIO: u8 = 8;
+const REASON_NOT_SEPARATED: u8 = 9;
+const REASON_BEYOND_SAMPLE: u8 = 10;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices
@@ -1671,11 +1823,15 @@ impl Stream {
             .model
             .window_parts()
             .is_some_and(|(window, _)| window.is_some());
+        // The mean over the rows that carry weight: a row of weight 0 adds
+        // none, and counted in the mean it took a share of the first row's
+        // weight out of the ceiling (review 2026-11-23, STRM-3).
+        let weighted = self.summary().map_or(self.persisted.rows_seen, |d| {
+            self.persisted.rows_seen.saturating_sub(d.rows_zero_weight)
+        });
         let row_weight = match (&spec.weight, self.summary()) {
             (None, _) => 1.0,
-            (Some(_), Some(d)) if self.persisted.rows_seen > 0 => {
-                d.weight_sum / self.persisted.rows_seen as f64
-            }
+            (Some(_), Some(d)) if weighted > 0 => d.weight_sum / weighted as f64,
             _ => f64::NAN,
         };
         let weight_sum_settled = match model {
@@ -1860,6 +2016,7 @@ mod last_row;
 pub use last_row::LastRow;
 
 mod conformal_rows;
+mod heavy_tail;
 mod notified;
 mod pre_row_sigma;
 mod stack_line;
@@ -2217,7 +2374,7 @@ impl Stream {
             "conformal intervals",
             &mut p.conformal,
             &fresh.conformal,
-            |_, _| true,
+            |s, _| s.has_shape(),
         )?;
         // Task 221's accumulators, by the same rule: absent, or kept for
         // another set of switches, they start over; this spec's count but
@@ -2362,8 +2519,19 @@ impl Stream {
     /// between rows at -1e308 and 1e308 let both steps through in one chunk,
     /// and `check_clock` then named the step of infinity a step back; cut
     /// after it, the step was refused here (PLAN 539).
+    ///
+    /// Two finite steps can still sum past it in the time the caps remove:
+    /// `-1e308` to 0 to `1e308` under a `gap_cap` of 10 removes about
+    /// `2e308`, and the removed time, infinite, made every later stamp less
+    /// an older one `inf - inf` (review 2026-11-23, CLOCK-1). So the row
+    /// whose step could take the removed time past the largest double is
+    /// refused too, on a bound: a forward step removes at most its part
+    /// past `gap_cap`, a step back or one across a session at most its size
+    /// and the session's gap. Only a clock whose values span more than a
+    /// double holds reaches it.
     pub fn check_steps(
         &self,
+        cfg: &rheon_core::ClockCfg,
         clock: Option<&ClockCol>,
         weight: Option<&[f64]>,
         rows: &[usize],
@@ -2376,15 +2544,47 @@ impl Stream {
             Some(ClockValue::F64(p)) => Some(p),
             _ => None,
         };
+        let (removed, elapsed_removed) = self.persisted.clock.removed_times();
+        let mut bound = removed.abs().max(elapsed_removed.abs());
+        let session = match cfg.session_gap {
+            Some(rheon_core::SessionGap::Gap(g)) => Some(g.abs()),
+            Some(rheon_core::SessionGap::Reset) => Some(0.0),
+            None => None,
+        };
         for (ri, &row) in rows.iter().enumerate() {
             let at = base + ri;
             let now = values[at];
-            if let Some(p) = prev
-                && !(now - p).is_finite()
-            {
-                return Err(StepRefusal { row, prev: p, now });
+            let zero = weight.is_some_and(|w| w[at] == 0.0);
+            if let Some(p) = prev {
+                let step = now - p;
+                if !step.is_finite() {
+                    return Err(StepRefusal {
+                        row,
+                        prev: p,
+                        now,
+                        removed: false,
+                    });
+                }
+                // A row of weight 0 removes nothing: the stream's clock
+                // never takes its step.
+                if zero {
+                    continue;
+                }
+                bound += match session {
+                    Some(g) => step.abs() + g,
+                    None if step < 0.0 => -step,
+                    None => (step - cfg.gap_cap).max(0.0),
+                };
+                if !bound.is_finite() {
+                    return Err(StepRefusal {
+                        row,
+                        prev: p,
+                        now,
+                        removed: true,
+                    });
+                }
             }
-            if !weight.is_some_and(|w| w[at] == 0.0) {
+            if !zero {
                 prev = Some(now);
             }
         }
@@ -2503,20 +2703,21 @@ impl Stream {
             // planned on copies of the clock and left out of everything the
             // schedule counts ([`Self::weightless_plan`]).
             if w == Some(0.0) {
-                let (plan, place) = self.weightless_plan(
+                let plan = self.weightless_plan(
                     spec,
                     cfg,
                     (&clock_state, restart_fold.as_ref().filter(|_| fresh_steps)),
                     (c, session.map(|s| s[i])),
                     (ri, i, fed, accept),
-                    keep_elapsed,
                 );
                 if accept {
                     rows_seen = rows_seen.saturating_add(1);
                 }
                 plans.push(plan);
+                // It releases nothing, so it has no place on the elapsed
+                // clock (review 2026-11-23, STRM-1).
                 if keep_elapsed {
-                    elapsed.push(place);
+                    elapsed.push(None);
                 }
                 continue;
             }
@@ -2640,7 +2841,7 @@ impl Stream {
         rows: &[usize],
         base: usize,
         formulas: Option<FormulaTargets<'_>>,
-    ) -> Option<(usize, rheon_core::Cadence)> {
+    ) -> Option<(usize, rheon_core::Cadence, usize)> {
         // A learned row adds at most one snapshot to a ring, and the rows a
         // `embargo` holds are learned in this chunk at the most. A shadow
         // copies its ring, so it is formed only where one could refuse.
@@ -2720,8 +2921,10 @@ impl Stream {
             }
             for shadow in &mut live {
                 shadow.learn(plan.d_clock, plan.stamp);
-                if let Some(over) = shadow.over_budget() {
-                    return Some(over);
+                if let Some((bytes, cadence)) = shadow.over_budget() {
+                    // The row that took it past: the input row, counted
+                    // from 0 in the chunk, its rows a held row's release.
+                    return Some((bytes, cadence, rows.get(plan.ri).copied().unwrap_or(plan.i)));
                 }
             }
         }
@@ -3086,10 +3289,29 @@ impl Stream {
             }
             if spec.emit_clocks && plan.emit && plan.accept {
                 out.scored_clock[plan.ri] = plan.clock;
-                out.learned_clock[plan.ri] = self.persisted.last_learned;
+                // A row a fresh stream scores reads a fresh stream's clock
+                // of rows learned: none (review 2026-11-23, STRM-2).
+                out.learned_clock[plan.ri] = if plan.zero == Weightless::Fresh {
+                    None
+                } else {
+                    self.persisted.last_learned
+                };
             }
             let restarted_here = fired.next_if_eq(&pi).is_some();
-            if plan.accept && plan.learn && plan.w > 0.0 {
+            // A row learned from has a target to learn: one whose every
+            // target is null is only predicted, as the summary counts it,
+            // and moved the clock of rows learned (review 2026-11-23,
+            // STRM-4). A model without targets learns every row. Read only
+            // where the rest of the test has not already decided it.
+            let has_target = || {
+                targets.is_empty()
+                    || if plan.direct() {
+                        targets.iter().any(|t| usable(t[plan.i]))
+                    } else {
+                        released[plan.pending].ys.iter().any(Option::is_some)
+                    }
+            };
+            if plan.accept && plan.learn && plan.w > 0.0 && (restarted_here || has_target()) {
                 self.persisted.last_learned = if restarted_here {
                     None
                 } else if plan.direct() {
@@ -3146,10 +3368,15 @@ impl Stream {
     ) {
         let n_rows = rows.len();
         out.rows.extend_from_slice(rows);
-        // Three classes of row, by what the clock says the row would do to
-        // the state it is scored against: nothing, reset it, or blend it.
-        let mut classes: [Vec<RowPlan>; 3] = Default::default();
-        let [as_is, fresh, blended] = [0, 1, 2];
+        // Four classes of row, by what the clock says the row would do to
+        // the state it is scored against: nothing, reset it, blend it, or
+        // break the rows behind it from it. A session change blends and
+        // breaks; a gap past `gap_cap` breaks alone. A break clears what is
+        // lagged by rows (`OnlineModel::clear_lags`), as a learning stream
+        // clears it before it reads the row: `ar`'s lags, `spectral`'s
+        // transform. The copy is scored and dropped.
+        let mut classes: [Vec<RowPlan>; 4] = Default::default();
+        let [as_is, fresh, blended, unlagged] = [0, 1, 2, 3];
         // (class, position in it) of the last accepted row, which carries
         // the coefficients for the chunk.
         let mut last_accepted: Option<(usize, usize)> = None;
@@ -3185,8 +3412,22 @@ impl Stream {
                         .d_clock
                 }),
                 elapsed_step: adv.d_clock,
-                // Scored, never learned: no window moves, no row is held.
-                stamp: None,
+                // Scored, never learned: no window moves, no row is held. A
+                // model whose read decides a window's edge reads it at the
+                // row's stamp, on a copy of the clock.
+                stamp: spec
+                    .model
+                    .reads_at_stamp()
+                    .then(|| {
+                        weightless::read_stamp(
+                            &self.persisted.clock,
+                            cfg,
+                            &self.exact_caps,
+                            clock.map(|c| c.at(i)),
+                            session.map(|s| s[i]),
+                        )
+                    })
+                    .flatten(),
                 // Without a clock column, the row's index in its group: the
                 // rows learned, then this call's rows in order, as
                 // `fit_predict` counts them (task 159, B2: every scored row
@@ -3200,9 +3441,9 @@ impl Stream {
                 backwards: false,
                 // Scoring moves nothing, the lag ring included: the classes
                 // below give the row a *copy* of the model in the state a
-                // learning stream would have reached, and a copy that
-                // cleared its lags would answer for a stream that had
-                // learned the row. `predict` never mutates.
+                // learning stream would have reached before reading it, its
+                // lags cleared where the row breaks them (`unlagged`,
+                // `blended`). `predict` never mutates.
                 capped: false,
                 accept,
                 want_coef: false,
@@ -3214,12 +3455,6 @@ impl Stream {
                 w: 1.0,
                 zero: Weightless::No,
             };
-            // Scored against the state as it stands, so the learned clock is
-            // the fit's last learned row on every row (task 152).
-            if spec.emit_clocks && accept {
-                out.scored_clock[ri] = plan.clock;
-                out.learned_clock[ri] = self.persisted.last_learned;
-            }
             // A new session's row under `group_close = "session"` is a fresh
             // stream's first row, as `fit_predict` restarts the stream at the
             // change; it was scored by the closed session's fit (review
@@ -3228,9 +3463,22 @@ impl Stream {
                 fresh
             } else if adv.session_changed {
                 blended
+            } else if adv.capped {
+                unlagged
             } else {
                 as_is
             };
+            // Scored against the state as it stands, so the learned clock is
+            // the fit's last learned row (task 152); a row a fresh stream
+            // scores reads that stream's, none (review 2026-11-23, STRM-2).
+            if spec.emit_clocks && accept {
+                out.scored_clock[ri] = plan.clock;
+                out.learned_clock[ri] = if class == fresh {
+                    None
+                } else {
+                    self.persisted.last_learned
+                };
+            }
             classes[class].push(plan);
             if accept {
                 last_accepted = Some((class, classes[class].len() - 1));
@@ -3263,12 +3511,26 @@ impl Stream {
         }
         if !classes[blended].is_empty() {
             let mut models = self.models.clone();
-            models
-                .iter_mut()
-                .for_each(|(_, m)| m.blend_toward_long_run());
+            models.iter_mut().for_each(|(_, m)| {
+                m.blend_toward_long_run();
+                m.clear_lags();
+            });
             self.score(
                 spec,
                 &classes[blended],
+                &models,
+                features,
+                targets,
+                out,
+                n_rows,
+            );
+        }
+        if !classes[unlagged].is_empty() {
+            let mut models = self.models.clone();
+            models.iter_mut().for_each(|(_, m)| m.clear_lags());
+            self.score(
+                spec,
+                &classes[unlagged],
                 &models,
                 features,
                 targets,
@@ -3752,7 +4014,96 @@ fn rounding_steps(steps: u64, notified: &Notified) -> f64 {
     notified.learned_since_restart.unwrap_or(steps) as f64
 }
 
+/// What a row of weight 0 that starts a fresh stream sets aside while a
+/// fresh instance scores it: everything [`Instance::reset`] rebuilds, and
+/// the held rows' clock, put back after the row (review 2026-11-23,
+/// STRM-2). Only the model was set aside before, so such a row read the
+/// closed session's `settled_frac`, `sigma`, metrics and the rest beside a
+/// fresh model's prediction, where `predict` reads a fresh stream's.
+struct KeptFresh {
+    model: AnyModel,
+    resid_var: Vec<f64>,
+    resid_w: Vec<f64>,
+    decay_time: f64,
+    restarted: bool,
+    notified: Notified,
+    resid_win: Option<ResidWindow>,
+    drift: Option<Vec<DriftDetector>>,
+    resid_q: Option<Vec<EwQuantile>>,
+    autocorr: Option<Vec<EwAutoCorr>>,
+    metrics: Option<Vec<SlotMetrics>>,
+    conformal: Option<Vec<Conformal>>,
+    checks: Option<Checks>,
+    pending_clock: Option<f64>,
+}
+
+/// What a row of weight 0 is scored by, set aside and put back after it.
+enum Kept {
+    Model(AnyModel),
+    Fresh(Box<KeptFresh>),
+}
+
 impl Instance<'_> {
+    /// Set this instance aside and leave a fresh one in its place, as a
+    /// fresh stream's ([`KeptFresh`]).
+    fn swap_fresh(&mut self) -> KeptFresh {
+        let kept = KeptFresh {
+            model: self.model.get().clone(),
+            resid_var: self.resid_var.clone(),
+            resid_w: self.resid_w.clone(),
+            decay_time: *self.decay_time,
+            restarted: *self.restarted,
+            notified: self.notified.clone(),
+            resid_win: self.resid_win.as_ref().map(|r| r.get().clone()),
+            drift: self.drift.as_deref().cloned(),
+            resid_q: self.resid_q.as_deref().cloned(),
+            autocorr: self.autocorr.as_deref().cloned(),
+            metrics: self.metrics.as_deref().cloned(),
+            conformal: self.conformal.as_deref().cloned(),
+            checks: self.checks.as_deref().cloned(),
+            pending_clock: self.pending_clock.as_deref().copied(),
+        };
+        self.reset();
+        if let Some(c) = self.pending_clock.as_deref_mut() {
+            *c = 0.0;
+        }
+        kept
+    }
+
+    /// Put back what [`Self::swap_fresh`] set aside.
+    fn restore_fresh(&mut self, kept: KeptFresh) {
+        *self.model.get_mut() = kept.model;
+        *self.resid_var = kept.resid_var;
+        *self.resid_w = kept.resid_w;
+        *self.decay_time = kept.decay_time;
+        *self.restarted = kept.restarted;
+        *self.notified = kept.notified;
+        if let (Some(ring), Some(r)) = (self.resid_win.as_mut(), kept.resid_win) {
+            *ring.get_mut() = r;
+        }
+        if let (Some(d), Some(k)) = (self.drift.as_deref_mut(), kept.drift) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.resid_q.as_deref_mut(), kept.resid_q) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.autocorr.as_deref_mut(), kept.autocorr) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.metrics.as_deref_mut(), kept.metrics) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.conformal.as_deref_mut(), kept.conformal) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.checks.as_deref_mut(), kept.checks) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.pending_clock.as_deref_mut(), kept.pending_clock) {
+            *d = k;
+        }
+    }
+
     /// Restart this instance: the same thing a clock reset or a drift break
     /// does, applied to one instance rather than the whole stream.
     fn reset(&mut self) {
@@ -3891,6 +4242,9 @@ fn run_instance(
     let binary_loss = match &inst.spec.model {
         ModelKind::Sgd { loss, .. } => loss.as_deref() == Some("logistic"),
         ModelKind::Ftrl { loss, .. } => loss.as_deref().unwrap_or("logistic") == "logistic",
+        // A binomial `glm`'s mean is a probability against a 0/1 label
+        // (review 2026-11-23, GLM-METRICS).
+        ModelKind::Glm { family, .. } => family.as_deref() == Some("binomial"),
         _ => false,
     };
     // A Poisson fit has no sign to hit: a rate is positive and a count is
@@ -3899,8 +4253,26 @@ fn run_instance(
     // metric that is not defined (review round 4, CC5; docs/PLAN.md task
     // 195, S5). Every other target's test is about zero: task 201 removed
     // the ratio target, whose test was about 1.
-    let poisson = matches!(&inst.spec.model, ModelKind::Sgd { loss, .. }
-        if loss.as_deref() == Some("poisson"));
+    // A `glm` of every other family -- Poisson (its default), Gamma,
+    // Tweedie -- is the same: a positive mean against a target never
+    // negative (review 2026-11-23, GLM-METRICS).
+    let poisson = match &inst.spec.model {
+        ModelKind::Sgd { loss, .. } => loss.as_deref() == Some("poisson"),
+        ModelKind::Glm { family, .. } => family.as_deref() != Some("binomial"),
+        _ => false,
+    };
+    // What a model's kind adds to a row, decided once an instance: a row of
+    // every other kind pays a branch on each, where reading the kind from the
+    // model each row cost it a dispatch apiece (about 30 instructions a row,
+    // PLAN 548 to 505).
+    let waits = inst.model.get().waits();
+    let is_dcc = matches!(inst.model.get(), AnyModel::Dcc(_));
+    let is_corrchange = matches!(inst.model.get(), AnyModel::CorrChange(_));
+    let is_pca = matches!(inst.spec.model, ModelKind::Pca { .. });
+    let has_levels = matches!(
+        inst.model.get(),
+        AnyModel::TDigest(_) | AnyModel::DdSketch(_)
+    );
     let hit_test = if poisson {
         HitTest::Undefined
     } else if binary_loss {
@@ -3966,14 +4338,14 @@ fn run_instance(
         // back after the row (hard rule 9). Boxed, so that every row that
         // keeps none pays a null check and not a model's drop.
         let kept_model = match plan.zero {
-            Weightless::Fresh => Some(Box::new(std::mem::replace(
-                inst.model.get_mut(),
-                build_one(inst.spec, inst.decay).expect("spec was already validated"),
-            ))),
+            Weightless::Fresh => Some(Box::new(Kept::Fresh(Box::new(inst.swap_fresh())))),
             Weightless::Blended => {
                 let mut copy = inst.model.get().clone();
                 copy.blend_toward_long_run();
-                Some(Box::new(std::mem::replace(inst.model.get_mut(), copy)))
+                Some(Box::new(Kept::Model(std::mem::replace(
+                    inst.model.get_mut(),
+                    copy,
+                ))))
             }
             Weightless::No | Weightless::AsIs => None,
         };
@@ -4107,8 +4479,11 @@ fn run_instance(
         // Read before the step, which may seed the model on this row, or
         // fit a start that waited on its evidence: the row itself was still
         // read by the unseeded model, and reports nothing.
-        let wait = inst.model.get().own_wait();
-        let seeding = wait == OwnWait::Seeding;
+        let own_reason = if waits {
+            inst.model.get().own_wait() as u8
+        } else {
+            0
+        };
         // So, for the same reason, is whether the fit this row is predicted
         // from was withheld as too ill-conditioned to carry a digit: the
         // step may solve again on this row, and the reason names the fit
@@ -4118,6 +4493,9 @@ fn run_instance(
         // from the state before the step, as the model's own gate reads it
         // (task 278, D8).
         let unstable = inst.model.get().unstable_targets();
+        // And whether a quantile level is past what the rows before this one
+        // identify (task 544): read before the step, as the levels are.
+        let beyond = has_levels && inst.model.get().beyond_sample();
 
         // The residual spread folds each slot's own prediction, whether or
         // not a readiness gate withholds it from the output
@@ -4191,10 +4569,24 @@ fn run_instance(
             if let Some((bytes, cap)) = inst.model.get_mut().take_state_warning() {
                 inst.notified.raise(state_cap_notice(inst.spec, bytes, cap));
             }
+            // A dcc margin with no fourth moment: said once, by the bank.
+            if is_dcc
+                && let AnyModel::Dcc(m) = inst.model.get_mut()
+                && let Some((j, nu)) = m.take_heavy_tail()
+            {
+                inst.notified
+                    .raise(heavy_tail::heavy_tail_notice(inst.spec, j, nu));
+            }
         } else {
-            inst.model.get().predict_into(xs, &sc.ys, score_d, step);
+            // A row only scored, of weight 0 or held for its label, read at
+            // its stamp where the model's read decides a window's edge.
+            inst.model
+                .get()
+                .predict_at_into(xs, &sc.ys, score_d, plan.stamp, step);
         }
         let n_slots = step.pred.len();
+        // Read from the step's own report, before a gate below nulls it.
+        let ratio_moved = is_corrchange && inst.model.get().withheld_by_its_row(&step.pred);
         // `ew_cov` has no targets; its slots are statistics, so every one
         // maps to "target 0" for the warmup check. Slot `s` belongs to target
         // `s / nc`; the passes below walk the slots in groups of `nc` rather
@@ -4333,8 +4725,14 @@ fn run_instance(
         // with a noise gate seeds itself). It is a count of learned rows,
         // not of weight, so it is not `min_weight`'s: a decayed weight can
         // sit above the floor for every row of it.
-        if reason == 0 && seeding {
-            reason = REASON_WARM_ROWS;
+        //
+        // So it is for a fit withheld because the rows so far do not identify
+        // it: `garch`'s and `dcc`'s start waiting for rows that tell its
+        // process from a constant one. No model that waits so has an
+        // ill-conditioned or unstable fit, which are read below, so the one
+        // read names both.
+        if reason == 0 {
+            reason = own_reason;
         }
         // A fit withheld because its system was past the condition at which
         // a solve keeps a digit, where no gate above has withheld the row.
@@ -4342,6 +4740,11 @@ fn run_instance(
         // claim it; the model's own null is then named for what it is.
         if reason == 0 && ill {
             reason = REASON_ILL_CONDITIONED;
+        }
+        // A quantile level the rows before the row do not identify, where no
+        // gate above has withheld it: the model's own null, named.
+        if reason == 0 && beyond {
+            reason = REASON_BEYOND_SAMPLE;
         }
         // A target withheld because its learning rate is past its stability
         // bound, where no gate above has withheld the row; said once an
@@ -4356,11 +4759,17 @@ fn run_instance(
                 inst.notified.raise(unstable_rate_notice(inst.spec, target));
             }
         }
-        // A fit withheld because the rows so far do not identify it, where
-        // no gate or wait above has withheld the row: `garch`'s start
-        // waiting for rows that tell its process from a constant variance.
-        if reason == 0 && wait == OwnWait::NotIdentified {
-            reason = REASON_NOT_IDENTIFIED;
+        // A `corrchange` flag withheld because the two columns' scale ratio
+        // moved inside the span, where no gate above has withheld the row.
+        if reason == 0 && ratio_moved {
+            reason = REASON_SCALE_RATIO;
+        }
+        // A `pca` component its model withheld because the data does not
+        // yet tell it apart from a neighbor, where no gate above has
+        // withheld the row: such a component is the only null a `pca` row
+        // writes past its floor.
+        if reason == 0 && is_pca && step.pred.iter().any(|p| p.is_nan()) {
+            reason = REASON_NOT_SEPARATED;
         }
         // The noise gate has not been met: the stream has all but settled,
         // the gate has withheld every row for a further half-life, and the
@@ -4942,8 +5351,10 @@ fn run_instance(
                 });
             }
         }
-        if let Some(model) = kept_model {
-            *inst.model.get_mut() = *model;
+        match kept_model.map(|k| *k) {
+            Some(Kept::Model(model)) => *inst.model.get_mut() = model,
+            Some(Kept::Fresh(kept)) => inst.restore_fresh(*kept),
+            None => {}
         }
         if reset_on_drift && row_drift {
             inst.reset();

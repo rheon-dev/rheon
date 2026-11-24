@@ -728,6 +728,9 @@ fn corrchange_golden() {
         monitor_rows: 0,
         boundary_gamma: 0.0,
         permute_every: None,
+        span_clock: None,
+        monitor_clock: None,
+        max_state_bytes: None,
     })
     .unwrap();
     let mut out = Vec::new();
@@ -738,6 +741,82 @@ fn corrchange_golden() {
         }
     }
     check("corrchange", &out, GOLDEN_CORRCHANGE);
+}
+
+/// A correlated pair whose correlation moves from 0.3 to 0.85 at row 350 of
+/// 600, each column an Irwin-Hall draw (twelve uniforms less 6), so the
+/// stream is the same bits on every platform: the realistic case (PLAN 550)
+/// beside `stream()`'s independent columns.
+fn correlated_pair() -> Vec<[f64; 2]> {
+    let mut s = 553u64;
+    let mut normal = || (0..12).map(|_| lcg(&mut s) / 2.0 + 0.5).sum::<f64>() - 6.0;
+    (0..600)
+        .map(|i| {
+            let rho: f64 = if i < 350 { 0.3 } else { 0.85 };
+            let (a, b) = (normal(), normal());
+            [a, rho * a + (1.0 - rho * rho).sqrt() * b]
+        })
+        .collect()
+}
+
+/// `corrchange`'s monitor and sequential detector on [`correlated_pair`]:
+/// every report's statistic, critical value and flag, and a flag's date
+/// (PLAN 553). The monitor's spans of 100 rows flag the one the change
+/// falls in; the sequential detector's history of 100 rows flags inside the
+/// period the change falls in.
+#[test]
+fn corrchange_realistic_golden() {
+    let base = |kind, span_rows, monitor_rows| CorrChangeCfg {
+        n_features: 2,
+        kind,
+        span_rows,
+        alpha: 0.05,
+        alpha_adjust: "bonferroni".into(),
+        bandwidth: None,
+        scalar: false,
+        decay: Decay::Halflife(f64::INFINITY),
+        crit: None,
+        n_perm: 20,
+        permute_every_rows: 10,
+        perm_block: 1,
+        norm: ChangeNorm::L1,
+        seed: 5,
+        reset: false,
+        monitor_rows,
+        boundary_gamma: 0.25,
+        permute_every: None,
+        span_clock: None,
+        monitor_clock: None,
+        max_state_bytes: None,
+    };
+    for (name, cfg, want) in [
+        (
+            "corrchange_monitor_realistic",
+            base(CorrChangeKind::Monitor, 100, 0),
+            GOLDEN_CORRCHANGE_MONITOR_REALISTIC,
+        ),
+        (
+            "corrchange_sequential_realistic",
+            base(CorrChangeKind::Sequential, 100, 150),
+            GOLDEN_CORRCHANGE_SEQUENTIAL_REALISTIC,
+        ),
+    ] {
+        let mut m = CorrChange::new(cfg).unwrap();
+        let mut out = Vec::new();
+        let mut flags = 0;
+        for x in correlated_pair() {
+            let step = m.step(&x, &[], 1.0, 1.0);
+            if step.pred[0].is_finite() {
+                out.extend([step.pred[0], step.pred[1], step.pred[2]]);
+            }
+            if step.pred[2] == 1.0 {
+                out.push(step.pred[4]);
+                flags += 1;
+            }
+        }
+        assert!(flags >= 1, "{name}: the change is found");
+        check(name, &out, want);
+    }
 }
 
 /// Slot 5 is `loglik`, which reads the transition matrix, both densities
@@ -870,6 +949,168 @@ fn hawkes_golden() {
     check("hawkes_window", &got, GOLDEN_HAWKES_WINDOW);
 }
 
+/// `realized` on the same stream, its one target read as a return series:
+/// every output (`rv`, `bv`, `tv`, `tq`, `bns`, `lm`, `lm_jump`) at the
+/// three rows, under a decay with Lee and Mykland's own window of 10, then
+/// in a window of 12 rows; the null target and the gap move both. The window
+/// calls no platform math library (its cube roots and logarithms are the
+/// `libm` crate's, and nothing decays), so it is pinned to the bit.
+#[test]
+fn realized_golden() {
+    let all = |m: &mut Realized| {
+        let mut out = Vec::new();
+        for (i, (_, y, d, w)) in stream().into_iter().enumerate() {
+            let step = m.step(&[], &y, d, w);
+            if matches!(i, 20 | 45 | 59) {
+                out.extend(&step.pred);
+            }
+        }
+        out
+    };
+    let cfg = RealizedCfg {
+        n_targets: 1,
+        decay: Decay::Halflife(15.0),
+        min_weight: 0.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        lm_window: Some(10),
+        lm_beta: 0.99,
+        max_state_bytes: None,
+    };
+    let got = all(&mut Realized::new(cfg.clone()).unwrap());
+    check("realized", &got, GOLDEN_REALIZED);
+    let got = all(&mut Realized::new(RealizedCfg {
+        decay: Decay::Halflife(f64::INFINITY),
+        window_rows: Some(12),
+        lm_window: None,
+        ..cfg
+    })
+    .unwrap());
+    check_bits("realized_window", &got, GOLDEN_REALIZED_WINDOW);
+}
+
+/// `power_variation` on the same stream: a term of each form (a sum of
+/// squares, normalized bipower and tripower quarticity, unequal powers, a
+/// centered Parzen sum, a flat-top Bartlett sum, a Tukey-Hanning sum and the
+/// squares of three-step returns) and `n`, at the three rows, under a
+/// decay; the null target and the gap move them.
+#[test]
+fn power_variation_golden() {
+    let got = power_variation_rows(Decay::Halflife(15.0), None);
+    check("power_variation", &got, GOLDEN_POWER_VARIATION);
+}
+
+/// The same in a window of 12 rows. Nothing decays and its powers, cosines
+/// and gammas are the `libm` crate's, so it is pinned to the bit.
+#[test]
+fn power_variation_window_golden() {
+    let got = power_variation_rows(Decay::Halflife(f64::INFINITY), Some(12));
+    check_bits(
+        "power_variation_window",
+        &got,
+        GOLDEN_POWER_VARIATION_WINDOW,
+    );
+}
+
+fn power_variation_rows(decay: Decay, window_rows: Option<usize>) -> Vec<f64> {
+    let mp = |powers: &[f64], normalize: bool, scale: usize| PvTerm {
+        kind: PvTermKind::Multipower {
+            powers: powers.to_vec(),
+            normalize,
+        },
+        scale,
+    };
+    let ker = |kernel, bandwidth, flat_top, center| PvTerm {
+        kind: PvTermKind::Kernel {
+            kernel,
+            bandwidth,
+            flat_top,
+            center,
+        },
+        scale: 1,
+    };
+    let q = 4.0 / 3.0;
+    let mut m = PowerVariation::new(PowerVariationCfg {
+        n_targets: 1,
+        terms: vec![
+            mp(&[2.0], false, 1),
+            mp(&[1.0, 1.0], true, 1),
+            mp(&[q, q, q], true, 1),
+            mp(&[1.0, 0.5], false, 1),
+            ker(PvKernel::Parzen, 4, false, true),
+            ker(PvKernel::Bartlett, 3, true, false),
+            ker(PvKernel::TukeyHanning, 2, false, false),
+            mp(&[2.0], false, 3),
+        ],
+        decay,
+        min_weight: 0.0,
+        window_rows,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut out = Vec::new();
+    for (i, (_, y, d, w)) in stream().into_iter().enumerate() {
+        let step = m.step(&[], &y, d, w);
+        if matches!(i, 20 | 45 | 59) {
+            out.extend(&step.pred);
+        }
+    }
+    out
+}
+
+/// `ar` on the same stream: an AR(2) under decay with the two features as
+/// exogenous regressors, then its coefficients at the end. The ring (its
+/// null target and its gap), the design read from it and the fit all move
+/// these.
+#[test]
+fn ar_golden() {
+    let mut m = Ar::new(ArCfg {
+        n_targets: 1,
+        n_features: 2,
+        lags: vec![1, 2],
+        fit_intercept: true,
+        decay: Decay::Halflife(15.0),
+        ridge: 1e-6,
+        min_weight: 2.0,
+        max_state_bytes: None,
+        select: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    })
+    .unwrap();
+    let mut got = signature(&mut m, 0);
+    got.extend(&m.coefficients().unwrap()[0]);
+    check("ar", &got, GOLDEN_AR);
+}
+
+/// `spectral` on the same stream's target: its power at three frequencies
+/// under decay, its null target and its gap among the rows.
+#[test]
+fn spectral_golden() {
+    let mut m = Spectral::new(SpectralCfg {
+        n_targets: 1,
+        frequencies: vec![0.0, 0.1, 0.5],
+        spacing: 1.0,
+        decay: Decay::Halflife(15.0),
+        scaling: SpectralScaling::Density,
+        detrend: true,
+        min_weight: 0.0,
+        max_state_bytes: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    })
+    .unwrap();
+    let mut got = signature_of(&mut m, 1, false);
+    got.extend(&m.powers()[0]);
+    // Its trigonometry is the `libm` crate's: the same bits everywhere.
+    check_bits("spectral", &got, GOLDEN_SPECTRAL);
+}
+
 /// `expectile` on the same stream: an upper expectile under decay whose
 /// first 15 learned rows are refit, then the fit at the end.
 #[test]
@@ -956,6 +1197,94 @@ fn garch_signature(vol: GarchVol, dist: GarchDist, targeting: bool) -> Vec<f64> 
     }
     got.extend(&m.coefficients()[0]);
     got
+}
+
+/// `tdigest` on the stream run five times at the smallest compression,
+/// whose buffer merges every 80 rows: the three levels and their tail means
+/// on three rows, each past a merge, one with a full buffer's merge just
+/// made. The merge's limit, its centroid means, the read's interpolation and
+/// the tail's partial mass move every one;
+/// no libm call is in it, so it is held to the bit.
+#[test]
+fn tdigest_golden() {
+    let mut m = TDigestModel::new(TDigestModelCfg {
+        n_targets: 1,
+        compression: 10.0,
+        levels: vec![0.05, 0.25, 0.95],
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let rows = stream();
+    let mut got = Vec::new();
+    for i in 0..300 {
+        let (_, y, d, w) = rows[i % 60];
+        let step = m.step(&[], &y, d, w);
+        if [150, 170, 299].contains(&i) {
+            got.extend(&step.pred);
+        }
+    }
+    check_bits("tdigest", &got, GOLDEN_TDIGEST);
+}
+
+/// `ddsketch` on the stream run five times: plain, under a row window of
+/// 40 and under a clock window of 80 units, the three levels and their tail
+/// means on three rows each. The key's logarithm, the representative's
+/// power and the partial-mass walk move every one; no libm call is in it,
+/// so it is held to the bit.
+#[test]
+fn ddsketch_golden() {
+    let mut got = Vec::new();
+    for (rows, clock) in [(None, None), (Some(40), None), (None, Some(80.0))] {
+        let mut m = DdSketchModel::new(DdSketchModelCfg {
+            n_targets: 1,
+            alpha: 0.01,
+            levels: vec![0.05, 0.25, 0.95],
+            window_rows: rows,
+            window_clock: clock,
+            closed: WindowClosed::Right,
+            decay: Decay::Halflife(f64::INFINITY),
+            max_state_bytes: None,
+        })
+        .unwrap();
+        let stream = stream();
+        for i in 0..300 {
+            let (_, y, d, w) = stream[i % 60];
+            let step = m.step(&[], &y, d, w);
+            if [150, 170, 299].contains(&i) {
+                got.extend(&step.pred);
+            }
+        }
+    }
+    check_bits("ddsketch", &got, GOLDEN_DDSKETCH);
+}
+
+/// `ddsketch`'s decayed form, a half-life of 20 rows: the factor is the
+/// platform's `exp2`, so it is held to the golden files' tolerance, not to
+/// the bit.
+#[test]
+fn ddsketch_decayed_golden() {
+    let mut m = DdSketchModel::new(DdSketchModelCfg {
+        n_targets: 1,
+        alpha: 0.01,
+        levels: vec![0.05, 0.25, 0.95],
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(20.0),
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let stream = stream();
+    let mut got = Vec::new();
+    for i in 0..300 {
+        let (_, y, d, w) = stream[i % 60];
+        let step = m.step(&[], &y, d, w);
+        if [150, 170, 299].contains(&i) {
+            got.extend(&step.pred);
+            got.push(step.n_eff);
+        }
+    }
+    check("ddsketch_decayed", &got, GOLDEN_DDSKETCH_DECAYED);
 }
 
 /// The free GARCH(1,1).
@@ -1115,6 +1444,156 @@ fn garch_gjr_t_realistic_golden() {
     let ys = garch_series::gjr(GJR_TRUTH, Innovations::T6, 2500, 9);
     let got = garch_realistic(GarchVol::Gjr, GarchDist::T, false, &ys);
     check_bits("garch_gjr_t_realistic", &got, GOLDEN_GARCH_GJR_T_REALISTIC);
+}
+
+/// A realistic asymmetric DCC stream for `dcc` (`(a, b, g) = (0.04, 0.92,
+/// 0.03)`, every target correlation 0.5), each series scaled by its own
+/// GARCH(1,1) volatility where asked: arithmetic and `sqrt` alone,
+/// innovations by Irwin and Hall's sum of twelve uniforms, so the same bits
+/// on every platform. Every 97th row has its second series absent, every
+/// 89th weighs 0.
+fn dcc_stream(k: usize, n: usize, garch: bool) -> Vec<(Vec<Option<f64>>, f64)> {
+    let mut s = 20261122u64;
+    let kk = k * k;
+    let mut qbar = vec![0.5_f64; kk];
+    for i in 0..k {
+        qbar[i * k + i] = 1.0;
+    }
+    let (a, b, g) = (0.04, 0.92, 0.03);
+    let mut q = qbar.clone();
+    let mut v = vec![1.0_f64; k];
+    let mut e = vec![0.0_f64; k];
+    let mut out = Vec::with_capacity(n);
+    for t in 0..n + 200 {
+        let mut l = vec![0.0_f64; kk];
+        for i in 0..k {
+            for j in 0..=i {
+                let r: f64 = q[i * k + j] / (q[i * k + i] * q[j * k + j]).sqrt();
+                let mut acc: f64 = if i == j { 1.0 } else { r };
+                for m in 0..j {
+                    acc -= l[i * k + m] * l[j * k + m];
+                }
+                l[i * k + j] = if i == j {
+                    acc.sqrt()
+                } else {
+                    acc / l[j * k + j]
+                };
+            }
+        }
+        let x: Vec<f64> = (0..k)
+            .map(|_| (0..12).map(|_| 0.5 * (lcg(&mut s) + 1.0)).sum::<f64>() - 6.0)
+            .collect();
+        let z: Vec<f64> = (0..k)
+            .map(|i| (0..=i).map(|j| l[i * k + j] * x[j]).sum())
+            .collect();
+        for i in 0..k {
+            for j in 0..k {
+                let ij = i * k + j;
+                q[ij] = (1.0 - a - b) * qbar[ij] - g * 0.5 * qbar[ij]
+                    + a * z[i] * z[j]
+                    + g * z[i].min(0.0) * z[j].min(0.0)
+                    + b * q[ij];
+            }
+        }
+        for i in 0..k {
+            v[i] = 0.05 + 0.08 * e[i] * e[i] + 0.9 * v[i];
+            e[i] = if garch { v[i].sqrt() * z[i] } else { z[i] };
+        }
+        if t >= 200 {
+            let row = t - 200;
+            let y = (0..k)
+                .map(|i| (!(i == 1 && row % 97 == 50)).then_some(e[i]))
+                .collect();
+            out.push((y, if row % 89 == 40 { 0.0 } else { 1.0 }));
+        }
+    }
+    out
+}
+
+/// `dcc` on [`dcc_stream`]: every slot on three rows after the start, and
+/// the parameters at the end. It calls no platform math library (`ln` is
+/// the `libm` crate's, and a decay by `lam` at unit steps takes no power),
+/// so its numbers are the same bits everywhere.
+fn dcc_signature(
+    asymmetric: bool,
+    params: Option<Vec<f64>>,
+    margins: bool,
+    decay: Decay,
+) -> Vec<f64> {
+    let k = 3;
+    let mut m = Dcc::new(DccCfg {
+        n_targets: k,
+        asymmetric,
+        margins: margins.then_some(GarchCfg {
+            n_targets: k,
+            vol: GarchVol::Garch,
+            dist: GarchDist::Normal,
+            truncation: None,
+            variance_targeting: false,
+            start_rows: 300,
+            start_span: None,
+            horizon: 1,
+            min_weight: 0.0,
+            max_state_bytes: None,
+        }),
+        params,
+        decay,
+        start_rows: 200,
+        start_span: None,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let n = 1500;
+    let mut got = Vec::new();
+    for (i, (y, w)) in dcc_stream(k, n, margins).iter().enumerate() {
+        let step = m.step(&[], y, 1.0, *w);
+        if [n - 700, n - 300, n - 1].contains(&i) {
+            got.extend(&step.pred);
+        }
+    }
+    got.extend(m.coefficients());
+    got
+}
+
+/// DCC(1,1), estimated, on standardized residuals.
+#[test]
+fn dcc_golden() {
+    let got = dcc_signature(false, None, false, Decay::Halflife(f64::INFINITY));
+    check_bits("dcc", &got, GOLDEN_DCC);
+}
+
+/// ADCC, estimated: `g`, `N̄` and `δ`'s projection.
+#[test]
+fn dcc_adcc_golden() {
+    let got = dcc_signature(true, None, false, Decay::Halflife(f64::INFINITY));
+    check_bits("dcc_adcc", &got, GOLDEN_DCC_ADCC);
+}
+
+/// ADCC with its parameters given.
+#[test]
+fn dcc_given_golden() {
+    let got = dcc_signature(
+        true,
+        Some(vec![0.04, 0.92, 0.03]),
+        false,
+        Decay::Halflife(f64::INFINITY),
+    );
+    check_bits("dcc_given", &got, GOLDEN_DCC_GIVEN);
+}
+
+/// DCC on returns, through GARCH margins.
+#[test]
+fn dcc_margins_golden() {
+    let got = dcc_signature(false, None, true, Decay::Halflife(f64::INFINITY));
+    check_bits("dcc_margins", &got, GOLDEN_DCC_MARGINS);
+}
+
+/// ADCC under a decay: the targets', the weight's and the gain's.
+#[test]
+fn dcc_decayed_golden() {
+    let got = dcc_signature(true, None, false, Decay::Lam(0.999));
+    check_bits("dcc_decayed", &got, GOLDEN_DCC_DECAYED);
 }
 
 /// The pre-averaged estimate on the same stream: the other arithmetic.
@@ -1747,6 +2226,9 @@ fn corrchange_sequential_golden() {
         monitor_rows: 20,
         boundary_gamma: 0.25,
         permute_every: None,
+        span_clock: None,
+        monitor_clock: None,
+        max_state_bytes: None,
     })
     .unwrap();
     let mut out = Vec::new();
@@ -1922,7 +2404,301 @@ fn ew_class_windowed_golden() {
     );
 }
 
+/// `pca` on the golden stream's two columns mixed, `(3 x0 + x1, x0 - 0.5
+/// x1)`, so its components differ (the columns alone are of one spread, a
+/// tie `pca` withholds): component 0's variance, first loading and score at
+/// rows 20, 45 and 59.
+fn pca_signature(method: PcaMethod) -> Vec<f64> {
+    let mut m = StreamPca::new(StreamPcaCfg {
+        n_features: 2,
+        n_components: 1,
+        method,
+        decay: Decay::Halflife(20.0),
+        min_weight: 0.0,
+        learning_rate: None,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut out = Vec::new();
+    for (i, (x, _, d, w)) in stream().into_iter().enumerate() {
+        let x = [3.0 * x[0] + x[1], x[0] - 0.5 * x[1]];
+        let step = m.step(&x, &[], d, w);
+        if matches!(i, 20 | 45 | 59) {
+            out.extend([step.pred[0], step.pred[2], step.pred[4]]);
+        }
+    }
+    out
+}
+
+#[test]
+fn pca_golden() {
+    check("pca", &pca_signature(PcaMethod::Svd), GOLDEN_PCA);
+}
+
+#[test]
+fn pca_ccipca_golden() {
+    check(
+        "pca_ccipca",
+        &pca_signature(PcaMethod::Ccipca),
+        GOLDEN_PCA_CCIPCA,
+    );
+}
+
+#[test]
+fn pca_oja_golden() {
+    check("pca_oja", &pca_signature(PcaMethod::Oja), GOLDEN_PCA_OJA);
+}
+
+/// A realistic stream for `ewm_moments`: a skewed column at a level of
+/// about 6 (a shifted exponential of mean 3), an AR(1) column at 0.6, a
+/// clock of uneven steps with a gap of 25, uneven weights with two rows of
+/// weight 0 (the first among them). 400 rows.
+fn moments_stream() -> Vec<([f64; 2], f64, f64)> {
+    let mut s = 554_u64;
+    let mut ar = 0.0;
+    (0..400)
+        .map(|i| {
+            let u = 0.5 * (lcg(&mut s) + 1.0);
+            let g = 3.0 - 3.0 * (1.0 - u).max(1e-12).ln();
+            ar = 0.6 * ar + lcg(&mut s);
+            let d = match i {
+                0 => 0.0,
+                200 => 25.0,
+                _ => 0.6 + 0.4 * lcg(&mut s),
+            };
+            let w = if i == 0 || i == 57 {
+                0.0
+            } else {
+                0.75 + 0.5 * lcg(&mut s)
+            };
+            ([g, ar], d, w)
+        })
+        .collect()
+}
+
+/// `ewm_moments`: a skew, an unbiased kurtosis, a fourth cumulant, a
+/// co-moment of order (1, 2), a raw second moment and an autocorrelation at
+/// a clock lag of 1.5, each with its standard error, read before rows 150,
+/// 260 and 399; then the same terms over a window of 40 clock units. The
+/// structure is held (two outputs a term, every one defined by row 150, a
+/// positive skew of the skewed column, a positive autocorrelation of the
+/// AR(1) one) and the numbers pinned.
+#[test]
+fn ewm_moments_golden() {
+    let col = |c, p| (MomentLeg::of(c), p);
+    let term = |name: &str, powers, kind, bias| MomentTerm {
+        name: name.into(),
+        powers,
+        kind,
+        bias,
+    };
+    let terms = vec![
+        term("skew", vec![col(0, 3)], MomentKind::Standardized, true),
+        term("kurt", vec![col(0, 4)], MomentKind::Standardized, false),
+        term("k4", vec![col(0, 4)], MomentKind::Cumulant, true),
+        term("co", vec![col(0, 1), col(1, 2)], MomentKind::Central, true),
+        term("raw2", vec![col(1, 2)], MomentKind::Raw, true),
+        term(
+            "ac",
+            vec![col(1, 1), (MomentLeg::lagged(1, 1.5), 1)],
+            MomentKind::Standardized,
+            true,
+        ),
+    ];
+    let mut cfg = EwmMomentsCfg::new(Decay::Halflife(80.0), terms);
+    cfg.clocked = true;
+    cfg.se = true;
+    for (name, window, want) in [
+        ("ewm_moments", None, GOLDEN_EWM_MOMENTS),
+        ("ewm_moments_window", Some(40.0), GOLDEN_EWM_MOMENTS_WINDOW),
+    ] {
+        let mut m = EwmMoments::new(EwmMomentsCfg {
+            window_clock: window,
+            ..cfg.clone()
+        })
+        .unwrap();
+        assert_eq!(
+            m.n_outputs(),
+            12,
+            "{name}: a term and its standard error each"
+        );
+        let mut got = Vec::new();
+        for (i, (x, d, w)) in moments_stream().into_iter().enumerate() {
+            let step = m.step(&x, &[], d, w);
+            if [150, 260, 399].contains(&i) {
+                assert!(step.pred.iter().all(|v| v.is_finite()), "{name}: row {i}");
+                assert!(step.pred[0] > 0.0 && step.pred[5] > 0.0, "{name}: row {i}");
+                got.extend(&step.pred);
+                got.push(step.n_eff);
+            }
+        }
+        check(name, &got, want);
+    }
+}
+
 // --- generated; see the module docs ---
+const GOLDEN_REALIZED: &[f64] = &[
+    20.301763088150093,
+    14.524981482223351,
+    15.210767597581253,
+    152.5427122837151,
+    1.4617729663448074,
+    0.26175973848626405,
+    0.0,
+    10.459155766645733,
+    10.642877740344339,
+    11.845985890132823,
+    97.82724355929129,
+    -0.08494201272143055,
+    2.354413313024124,
+    0.0,
+    15.904128496397625,
+    18.06313225979898,
+    19.541166883965733,
+    266.2749803565534,
+    -0.8091849003222343,
+    -0.18028949568691144,
+    0.0,
+];
+const GOLDEN_REALIZED_WINDOW: &[f64] = &[
+    23.20165621168584,
+    13.363161652229811,
+    14.77767677736757,
+    146.95773760815013,
+    1.7426913336195444,
+    0.2768024645607887,
+    0.0,
+    12.833685109912663,
+    13.473997818648956,
+    13.546309083923113,
+    188.87998695368736,
+    -0.20102730581128775,
+    2.6349174735544527,
+    0.0,
+    11.7484856053016,
+    13.10735007891979,
+    12.579384454213699,
+    131.7993766981005,
+    -0.47534076903068045,
+    -0.1662952885840179,
+    0.0,
+];
+
+const GOLDEN_PCA: &[f64] = &[
+    3.111731224759684,
+    0.9381509032059694,
+    0.3805052170124993,
+    3.5709325086051242,
+    0.9585947766729436,
+    2.0614940695355655,
+    3.993684243361783,
+    0.9648635656349285,
+    -0.6711049564076937,
+];
+const GOLDEN_PCA_CCIPCA: &[f64] = &[
+    3.0947140108359883,
+    0.9392450889119539,
+    0.381798733276914,
+    3.5578435679969886,
+    0.9579038842355805,
+    2.063278804381221,
+    3.984871387572133,
+    0.9643292688869347,
+    -0.6710734268145182,
+];
+const GOLDEN_PCA_OJA: &[f64] = &[
+    3.0407400810474576,
+    0.9162070213751425,
+    0.35588819104155783,
+    3.519191553423375,
+    0.9638677378816289,
+    2.0469372985484084,
+    3.954591836341751,
+    0.9755719093513584,
+    -0.6711043772119846,
+];
+const GOLDEN_EWM_MOMENTS: &[f64] = &[
+    2.8329964637774814,
+    16.02475808583336,
+    1342.4260623665018,
+    0.19749780915523601,
+    0.45361175689062017,
+    0.08653074498767489,
+    0.6227033929036353,
+    4.424843520682192,
+    1088.4487593316915,
+    0.15013223770551765,
+    0.0528104410605394,
+    0.1039648761186183,
+    75.16866030031775,
+    2.3011944298525524,
+    11.644114135119917,
+    941.9942065251553,
+    0.08280406423595192,
+    0.5782095311811001,
+    0.20838520778454261,
+    0.46604866892042085,
+    2.9573294573236737,
+    643.2681080958494,
+    0.13376235812053172,
+    0.054581904025623545,
+    0.07441600775973262,
+    86.00883395894138,
+    1.839216837975061,
+    8.407160392465022,
+    397.6953053029218,
+    0.33907848144993424,
+    0.7133314202793511,
+    0.393455614799461,
+    0.5006575162868554,
+    3.7577927563274716,
+    378.69849162898095,
+    0.18538010107369973,
+    0.05306375077557374,
+    0.05573958304140239,
+    120.41184145309974,
+];
+const GOLDEN_EWM_MOMENTS_WINDOW: &[f64] = &[
+    0.9302446287947042,
+    3.4345051986135253,
+    9.71287769945026,
+    0.16988343024479924,
+    0.5582423507347112,
+    0.13058435201476315,
+    0.19183122137139663,
+    0.6066857489249887,
+    16.83390768274169,
+    0.17041953387867434,
+    0.08487785071546758,
+    0.14374730188285947,
+    42.84779336144839,
+    1.9567292633956257,
+    9.476294398981619,
+    865.7713801823895,
+    -0.12223676107434481,
+    0.8094345047851008,
+    0.23519325716714704,
+    0.5372767949758197,
+    2.0912773835351843,
+    786.3941580315961,
+    0.3167673565461328,
+    0.1270772046877625,
+    0.12535619396484723,
+    35.608016459273706,
+    1.4778260868020379,
+    4.575808230696152,
+    98.92582037975185,
+    0.3087690477889771,
+    0.8932579053788221,
+    0.4522764808837566,
+    0.27975225011452476,
+    1.1735985002288558,
+    51.75962935810329,
+    0.39093203611902083,
+    0.12480108077550034,
+    0.10613107986933701,
+    46.13394192468252,
+];
 const GOLDEN_GLM: &[f64] = &[0.8190287945803094, 1.5909174696403168, 1.3226756022889994];
 const GOLDEN_GLM_CAP: &[f64] = &[0.8059966005129862, 2.2639186345702202, 1.0964813502655293];
 const GOLDEN_EXPECTILE: &[f64] = &[
@@ -1995,7 +2771,7 @@ const GOLDEN_BOCPD_ON_THE_CLOCK: &[f64] = &[
 // Regenerated 2026-09-28 (docs/PLAN.md task 114): the long-run variance's
 // kernel is WKD's `1 − l/γ`, where it was Newey–West's `1 − l/(γ+1)`
 // (0.8418929529846794, 0.7933802263147072, 0.787701333637405).
-const GOLDEN_CORRCHANGE: &[f64] = &[0.8103851544234802, 0.764942538158755, 0.6621041576121629];
+const GOLDEN_CORRCHANGE: &[f64] = &[0.6469993250907099, 0.6637003325160533, 0.5067551764605898];
 // Re-frozen 2026-09-06: `hmm`'s `min_weight` used to withhold a row from
 // the *update* as well as from the report, so the first rows of this stream
 // (`min_weight = 3`) never reached the filter. It now gates the report
@@ -2029,12 +2805,21 @@ const GOLDEN_RCOV: &[f64] = &[15.118271471980519, -2.2219191583655915, 22.721761
 // (`ψ₁ = 1`, `ψ₂ = 19/216`); each entry is the last pin times 19/16, to an ulp
 // (7.978660961271573, -1.6354544255766184, 20.275069787152503).
 const GOLDEN_RCOV_PREAVG: &[f64] = &[9.474659891509994, -1.9421021303722343, 24.0766453722436];
+// `deco` and `deco_loglik` re-pinned 2026-11-22 (PLAN 551): `rho` is the
+// ratio of the EW means of the row's numerator and denominator, and the
+// linear form their averaged DCC recursion, learning once the standardiser's
+// Kish size passes 5, where it was the EW mean of `u` and the recursion on
+// it; `loglik` moves with the level it is read at. The pins were
+// (-0.05328065158114557, -0.10464551302436545, -0.036211528292942816) and
+// (-2.2831901919538913, -3.7586606055778677, -1.896095909765855).
+// `deco.rs`'s `the_ratio_level_is_its_definition` holds the recursion to
+// its longhand sums.
 const GOLDEN_DECO: &[f64] = &[
-    -0.05328065158114557,
-    -0.10464551302436545,
-    -0.036211528292942816,
+    0.03481957260969185,
+    -0.18599722774742422,
+    -0.05901327009183074,
 ];
-const GOLDEN_DECO_LOGLIK: &[f64] = &[-2.2831901919538913, -3.7586606055778677, -1.896095909765855];
+const GOLDEN_DECO_LOGLIK: &[f64] = &[-2.2843768890798684, -3.654894485613948, -1.897177036587538];
 // `ewridge`, `ewridge_std` and `lasso` re-frozen 2026-09-14 (docs/PLAN.md
 // task 81): the target is null on row 31, and under `target_gaps =
 // "own_rows"` its Gram no longer learns that row's features, so rows 45 and
@@ -2129,7 +2914,7 @@ const GOLDEN_HUBER: &[f64] = &[0.2431909931355622, 2.2046451423295514, -0.064912
 // Gram's diagonal; the early rows' band Gram is not diagonal, so the bound
 // they bind moved, and the three values by 5.1e-4, 4.6e-4 and 1.5e-3 of
 // themselves. The QuantReg oracles hold.
-const GOLDEN_QUANTILE: &[f64] = &[0.2569661845683642, 2.2264188014755097, -0.02100641074469728];
+const GOLDEN_QUANTILE: &[f64] = &[0.25697145681782263, 2.226414143382377, -0.0210007825524009];
 // Regenerated for the code review's C24 (2026-09-15), this and the next:
 // under a half-life the proximal term is a decayed sum of its own, where `n`
 // was decayed inside its square root and every coefficient shrank.
@@ -2201,6 +2986,24 @@ const GOLDEN_PA_BOX: &[f64] = &[0.5262123538733023, 1.6796740252199436, 0.156626
 // Regenerated for task 278 (D-H, 2026-10-26): a row takes the larger of the
 // weighted line fit's gains and the textbook's, so the warm-up is the line
 // fit, where the weighted means pinned the trend to the first observation.
+const GOLDEN_AR: &[f64] = &[
+    0.20651737786601188,
+    2.183823230103924,
+    -0.061890170712155385,
+    0.2507806385801581,
+    0.0023940696647469463,
+    0.006207809809043063,
+    1.5217126158114949,
+    -0.7726238396515506,
+];
+const GOLDEN_SPECTRAL: &[f64] = &[
+    0.6649015871575261,
+    0.09516153180377941,
+    0.9749530137841262,
+    0.0,
+    0.9737255863944811,
+    2.9174867193629694,
+];
 const GOLDEN_HOLT: &[f64] = &[1.510543784944197, 0.05346222911849938, 0.1063893470704486];
 const GOLDEN_SEQTEST: &[f64] = &[-0.6443570163905132, -1.086393303225433, -0.9577414997686987];
 const GOLDEN_SEQTEST_NEG: &[f64] = &[
@@ -2247,25 +3050,23 @@ const GOLDEN_BOCPD_GAUSSIAN: &[f64] = &[
 ];
 const GOLDEN_BOCPD_ROBUST: &[f64] = &[0.05647515197223256, 0.05942243315748, 0.05285901703185968];
 const GOLDEN_CORRCHANGE_SEQUENTIAL: &[f64] = &[
-    0.8316281190223411,
-    0.6909945046453919,
-    0.8717864537157914,
-    1.088107497209456,
-    1.122362938000111,
-    0.8341873826345729,
-    0.8805008348308133,
-    0.9496344256708152,
-    0.32833736423817417,
-    0.07921916384339617,
-    0.2074817753847168,
-    0.30015612602690156,
-    0.49240780002347756,
-    0.5101683171994119,
-    0.5007703521180233,
-    0.755536012901163,
-    0.8179783419406013,
-    1.073767937120612,
-    0.7304393221230613,
+    0.4521205301189889,
+    0.8383825456783482,
+    0.9650674372722438,
+    0.68881947719374,
+    0.7687384238767587,
+    0.8665169652644557,
+    0.2804127989270904,
+    0.06733939091874662,
+    0.18234031021031075,
+    0.26903161489029487,
+    0.4527772374571688,
+    0.47343163795422794,
+    0.4672185819282127,
+    0.724875551702304,
+    0.7923589035682767,
+    1.072890953651047,
+    0.7050611338478604,
 ];
 const GOLDEN_EW_CLASS_WINDOWED: &[f64] = &[0.7905217777831282, 1.0, 0.8827845147955854];
 const GOLDEN_EW_COV_LAGS: &[f64] = &[
@@ -2575,4 +3376,1156 @@ const GOLDEN_GARCH_GJR_T_REALISTIC: &[f64] = &[
     0.12241777500356756,
     0.8699205611467933,
     7.114105652321648,
+];
+
+const GOLDEN_DCC: &[f64] = &[
+    0.4235966473744679,
+    0.6031760321276809,
+    0.3027091519596326,
+    -3.794013674519368,
+    0.26708833514569535,
+    0.486841844378243,
+    0.38410018784932287,
+    -2.8396861315938375,
+    0.55330438795163,
+    0.6788582582778027,
+    0.627134753655765,
+    -4.418521207829423,
+    0.05184281030720079,
+    0.9209945595510746,
+];
+const GOLDEN_DCC_ADCC: &[f64] = &[
+    0.48458418860922786,
+    0.5858299148208974,
+    0.3271127311070238,
+    -3.8573373987811443,
+    0.25507303762307754,
+    0.4323424899860381,
+    0.3294783259697756,
+    -2.8978143108253307,
+    0.5952965930206311,
+    0.6965144111810854,
+    0.6582222454076307,
+    -4.455481429051513,
+    0.03117901673842428,
+    0.9306037795258475,
+    0.043167478090169166,
+];
+const GOLDEN_DCC_GIVEN: &[f64] = &[
+    0.45993520774557745,
+    0.6023139356915606,
+    0.2741706822578032,
+    -3.8370129133266566,
+    0.27395386337185373,
+    0.46173822016843463,
+    0.3474341578277121,
+    -2.8728544091338266,
+    0.5769915893060064,
+    0.6921182452910445,
+    0.6510327833777574,
+    -4.424814565121372,
+    0.04,
+    0.92,
+    0.03,
+];
+const GOLDEN_DCC_MARGINS: &[f64] = &[
+    1.632449472378928,
+    1.6130389388363788,
+    3.119290393504543,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    f64::NAN,
+    1.1868143509543494,
+    1.642863259435476,
+    0.9385254085000607,
+    0.28248638780969604,
+    0.5110106953981232,
+    0.32446372320473277,
+    -2.847062701683519,
+    2.2035151422767525,
+    1.9748154475166262,
+    4.908019459058437,
+    0.5687575535034975,
+    0.6990426621259763,
+    0.6317942624649461,
+    -4.373001758543537,
+    0.06374974794547447,
+    0.90384097205027,
+];
+const GOLDEN_DCC_DECAYED: &[f64] = &[
+    0.46951936270545763,
+    0.594562666839342,
+    0.3230074798425693,
+    -3.8361085230644445,
+    0.26318076111417427,
+    0.44977193183375097,
+    0.3211419292378255,
+    -2.8939674916306273,
+    0.5966014976041538,
+    0.6977714869710139,
+    0.6585497263261488,
+    -4.457327754020744,
+    0.037419982718833344,
+    0.9226257409287546,
+    0.038106455446553146,
+];
+const GOLDEN_CORRCHANGE_MONITOR_REALISTIC: &[f64] = &[
+    0.5175388423443728,
+    1.299838923528649,
+    0.0,
+    0.927267384651194,
+    1.299838923528649,
+    0.0,
+    1.06354656443545,
+    1.299838923528649,
+    0.0,
+    1.5776864934719674,
+    1.299838923528649,
+    1.0,
+    52.0,
+    0.6103982837661497,
+    1.299838923528649,
+    0.0,
+    0.6761447573653405,
+    1.299838923528649,
+    0.0,
+];
+const GOLDEN_CORRCHANGE_SEQUENTIAL_REALISTIC: &[f64] = &[
+    0.37631039097771973,
+    2.0995546966895327,
+    0.0,
+    0.4782010402389974,
+    2.0995546966895327,
+    0.0,
+    0.4491729726949962,
+    2.0995546966895327,
+    0.0,
+    0.40169088520549484,
+    2.0995546966895327,
+    0.0,
+    0.473972288387234,
+    2.0995546966895327,
+    0.0,
+    0.97477991128773,
+    2.0995546966895327,
+    0.0,
+    0.7348085921815097,
+    2.0995546966895327,
+    0.0,
+    0.5365627330553566,
+    2.0995546966895327,
+    0.0,
+    0.5482585076980296,
+    2.0995546966895327,
+    0.0,
+    0.367721907450489,
+    2.0995546966895327,
+    0.0,
+    0.4538435090711439,
+    2.0995546966895327,
+    0.0,
+    0.5465345297053715,
+    2.0995546966895327,
+    0.0,
+    0.7894119394409368,
+    2.0995546966895327,
+    0.0,
+    0.7252163569141724,
+    2.0995546966895327,
+    0.0,
+    0.6832125290826009,
+    2.0995546966895327,
+    0.0,
+    0.41953128255309907,
+    2.0995546966895327,
+    0.0,
+    0.5009295389620827,
+    2.0995546966895327,
+    0.0,
+    0.4649433565572973,
+    2.0995546966895327,
+    0.0,
+    0.4696218632474659,
+    2.0995546966895327,
+    0.0,
+    0.47944492640782804,
+    2.0995546966895327,
+    0.0,
+    0.44802327061472064,
+    2.0995546966895327,
+    0.0,
+    0.4706166839446203,
+    2.0995546966895327,
+    0.0,
+    0.4731826338416649,
+    2.0995546966895327,
+    0.0,
+    0.5395472514891563,
+    2.0995546966895327,
+    0.0,
+    0.5710188538052846,
+    2.0995546966895327,
+    0.0,
+    0.5751961799553456,
+    2.0995546966895327,
+    0.0,
+    0.7259658893574313,
+    2.0995546966895327,
+    0.0,
+    0.7689979661502525,
+    2.0995546966895327,
+    0.0,
+    0.7977296039145975,
+    2.0995546966895327,
+    0.0,
+    0.800133750323979,
+    2.0995546966895327,
+    0.0,
+    0.8509229825430418,
+    2.0995546966895327,
+    0.0,
+    0.9184200714691402,
+    2.0995546966895327,
+    0.0,
+    0.937465387568265,
+    2.0995546966895327,
+    0.0,
+    0.956457485164983,
+    2.0995546966895327,
+    0.0,
+    0.6080449396876201,
+    2.0995546966895327,
+    0.0,
+    0.9587720827565909,
+    2.0995546966895327,
+    0.0,
+    0.9991292999057336,
+    2.0995546966895327,
+    0.0,
+    1.069286855411994,
+    2.0995546966895327,
+    0.0,
+    1.0736097943039378,
+    2.0995546966895327,
+    0.0,
+    1.083363925783781,
+    2.0995546966895327,
+    0.0,
+    1.0802696450399234,
+    2.0995546966895327,
+    0.0,
+    1.109967396481821,
+    2.0995546966895327,
+    0.0,
+    0.7424179099794448,
+    2.0995546966895327,
+    0.0,
+    0.794525240428222,
+    2.0995546966895327,
+    0.0,
+    0.809790628510859,
+    2.0995546966895327,
+    0.0,
+    0.8370007317728826,
+    2.0995546966895327,
+    0.0,
+    0.7690802356128759,
+    2.0995546966895327,
+    0.0,
+    0.6915890438618476,
+    2.0995546966895327,
+    0.0,
+    0.7046928585978578,
+    2.0995546966895327,
+    0.0,
+    0.6600623147719836,
+    2.0995546966895327,
+    0.0,
+    0.6474831301685352,
+    2.0995546966895327,
+    0.0,
+    0.5339542969454338,
+    2.0995546966895327,
+    0.0,
+    0.5889332813627571,
+    2.0995546966895327,
+    0.0,
+    0.6098465297162793,
+    2.0995546966895327,
+    0.0,
+    0.7386210246517276,
+    2.0995546966895327,
+    0.0,
+    0.7154636106460116,
+    2.0995546966895327,
+    0.0,
+    0.7326985542937365,
+    2.0995546966895327,
+    0.0,
+    0.6709952486152306,
+    2.0995546966895327,
+    0.0,
+    0.684121006428644,
+    2.0995546966895327,
+    0.0,
+    0.6373723535648865,
+    2.0995546966895327,
+    0.0,
+    0.6736185146833589,
+    2.0995546966895327,
+    0.0,
+    0.5573186846611754,
+    2.0995546966895327,
+    0.0,
+    0.5492049324664255,
+    2.0995546966895327,
+    0.0,
+    0.47579892301476406,
+    2.0995546966895327,
+    0.0,
+    0.45339776910979906,
+    2.0995546966895327,
+    0.0,
+    0.48394859736528756,
+    2.0995546966895327,
+    0.0,
+    0.4939408803299518,
+    2.0995546966895327,
+    0.0,
+    0.4614387637360561,
+    2.0995546966895327,
+    0.0,
+    0.46900248924473,
+    2.0995546966895327,
+    0.0,
+    0.48567710135601255,
+    2.0995546966895327,
+    0.0,
+    0.4293781154943662,
+    2.0995546966895327,
+    0.0,
+    0.6971339507035714,
+    2.0995546966895327,
+    0.0,
+    0.7447836257307305,
+    2.0995546966895327,
+    0.0,
+    0.8238238814492621,
+    2.0995546966895327,
+    0.0,
+    0.8630956781954591,
+    2.0995546966895327,
+    0.0,
+    0.9263294137704036,
+    2.0995546966895327,
+    0.0,
+    0.839470557157698,
+    2.0995546966895327,
+    0.0,
+    0.8132490007757339,
+    2.0995546966895327,
+    0.0,
+    0.7987907216009417,
+    2.0995546966895327,
+    0.0,
+    0.869902941965475,
+    2.0995546966895327,
+    0.0,
+    0.8478397457098449,
+    2.0995546966895327,
+    0.0,
+    0.7859631004847999,
+    2.0995546966895327,
+    0.0,
+    0.8601756489014052,
+    2.0995546966895327,
+    0.0,
+    0.8932371589493124,
+    2.0995546966895327,
+    0.0,
+    0.9845695955623129,
+    2.0995546966895327,
+    0.0,
+    1.011847431091807,
+    2.0995546966895327,
+    0.0,
+    0.9293749668620732,
+    2.0995546966895327,
+    0.0,
+    0.9593549600706618,
+    2.0995546966895327,
+    0.0,
+    0.9573941769390072,
+    2.0995546966895327,
+    0.0,
+    0.9262394711866417,
+    2.0995546966895327,
+    0.0,
+    0.9527291961829675,
+    2.0995546966895327,
+    0.0,
+    1.1939922534178478,
+    2.0995546966895327,
+    0.0,
+    1.2895132774286842,
+    2.0995546966895327,
+    0.0,
+    1.295831532816404,
+    2.0995546966895327,
+    0.0,
+    1.2622619405248714,
+    2.0995546966895327,
+    0.0,
+    1.3338082720383955,
+    2.0995546966895327,
+    0.0,
+    1.3115764949174988,
+    2.0995546966895327,
+    0.0,
+    1.2600926140374287,
+    2.0995546966895327,
+    0.0,
+    1.2196523269608133,
+    2.0995546966895327,
+    0.0,
+    1.0436744577900252,
+    2.0995546966895327,
+    0.0,
+    1.1710972065379772,
+    2.0995546966895327,
+    0.0,
+    1.185144111601391,
+    2.0995546966895327,
+    0.0,
+    1.129884877977235,
+    2.0995546966895327,
+    0.0,
+    1.0187320486090576,
+    2.0995546966895327,
+    0.0,
+    0.9901721807078712,
+    2.0995546966895327,
+    0.0,
+    0.9889062320581938,
+    2.0995546966895327,
+    0.0,
+    1.10566273306427,
+    2.0995546966895327,
+    0.0,
+    1.0912102956000003,
+    2.0995546966895327,
+    0.0,
+    1.0813725786269217,
+    2.0995546966895327,
+    0.0,
+    1.071095932431618,
+    2.0995546966895327,
+    0.0,
+    1.1097910414859815,
+    2.0995546966895327,
+    0.0,
+    1.112373000552525,
+    2.0995546966895327,
+    0.0,
+    1.1018435937574975,
+    2.0995546966895327,
+    0.0,
+    1.0996626823057374,
+    2.0995546966895327,
+    0.0,
+    1.0285658675930787,
+    2.0995546966895327,
+    0.0,
+    1.031326233534007,
+    2.0995546966895327,
+    0.0,
+    1.0339352450339785,
+    2.0995546966895327,
+    0.0,
+    1.0483064304946665,
+    2.0995546966895327,
+    0.0,
+    1.0341415719495706,
+    2.0995546966895327,
+    0.0,
+    0.9395644748016205,
+    2.0995546966895327,
+    0.0,
+    0.9099678126305076,
+    2.0995546966895327,
+    0.0,
+    0.9108825921560586,
+    2.0995546966895327,
+    0.0,
+    0.9099395776520443,
+    2.0995546966895327,
+    0.0,
+    0.9130063551707321,
+    2.0995546966895327,
+    0.0,
+    0.9182592887143443,
+    2.0995546966895327,
+    0.0,
+    0.8621885458850154,
+    2.0995546966895327,
+    0.0,
+    0.9127422624661345,
+    2.0995546966895327,
+    0.0,
+    0.9043604250433781,
+    2.0995546966895327,
+    0.0,
+    0.8459465690732716,
+    2.0995546966895327,
+    0.0,
+    0.8003760282852169,
+    2.0995546966895327,
+    0.0,
+    0.8284646058555889,
+    2.0995546966895327,
+    0.0,
+    0.855807243495259,
+    2.0995546966895327,
+    0.0,
+    0.7514494526665831,
+    2.0995546966895327,
+    0.0,
+    0.9329651131604942,
+    2.0995546966895327,
+    0.0,
+    0.9350262993726116,
+    2.0995546966895327,
+    0.0,
+    0.9373334375806442,
+    2.0995546966895327,
+    0.0,
+    0.9238128225698414,
+    2.0995546966895327,
+    0.0,
+    0.8803050051984886,
+    2.0995546966895327,
+    0.0,
+    0.904539919683849,
+    2.0995546966895327,
+    0.0,
+    0.9276932245972966,
+    2.0995546966895327,
+    0.0,
+    0.9384139430342365,
+    2.0995546966895327,
+    0.0,
+    0.7644920230729826,
+    2.0995546966895327,
+    0.0,
+    0.7378409982445477,
+    2.0995546966895327,
+    0.0,
+    0.7361921978689427,
+    2.0995546966895327,
+    0.0,
+    0.7548400820025435,
+    2.0995546966895327,
+    0.0,
+    0.7531698029740062,
+    2.0995546966895327,
+    0.0,
+    0.7400006566400981,
+    2.0995546966895327,
+    0.0,
+    0.31463847210500806,
+    2.0995546966895327,
+    0.0,
+    0.5384064611014164,
+    2.0995546966895327,
+    0.0,
+    0.6574309116248024,
+    2.0995546966895327,
+    0.0,
+    0.8152577552348628,
+    2.0995546966895327,
+    0.0,
+    0.5450657696539288,
+    2.0995546966895327,
+    0.0,
+    0.6268093910106167,
+    2.0995546966895327,
+    0.0,
+    0.775286608296337,
+    2.0995546966895327,
+    0.0,
+    0.4124232520845501,
+    2.0995546966895327,
+    0.0,
+    0.6986316343837219,
+    2.0995546966895327,
+    0.0,
+    0.6309553398203781,
+    2.0995546966895327,
+    0.0,
+    1.1109705143288073,
+    2.0995546966895327,
+    0.0,
+    1.0633829669353443,
+    2.0995546966895327,
+    0.0,
+    1.6199132497072055,
+    2.0995546966895327,
+    0.0,
+    1.7643181995898702,
+    2.0995546966895327,
+    0.0,
+    1.8541173694902753,
+    2.0995546966895327,
+    0.0,
+    2.1125045052432205,
+    2.0995546966895327,
+    1.0,
+    8.0,
+    0.3267303528567436,
+    2.0995546966895327,
+    0.0,
+    0.5954261482970906,
+    2.0995546966895327,
+    0.0,
+    0.8307228365501749,
+    2.0995546966895327,
+    0.0,
+    0.8220761946172391,
+    2.0995546966895327,
+    0.0,
+    0.9615154739127793,
+    2.0995546966895327,
+    0.0,
+    0.815625533086969,
+    2.0995546966895327,
+    0.0,
+    0.8966541218717585,
+    2.0995546966895327,
+    0.0,
+    0.6346179982231477,
+    2.0995546966895327,
+    0.0,
+    0.6129221404792131,
+    2.0995546966895327,
+    0.0,
+    0.7112889999346801,
+    2.0995546966895327,
+    0.0,
+    0.6164786674229163,
+    2.0995546966895327,
+    0.0,
+    0.6616099950232152,
+    2.0995546966895327,
+    0.0,
+    0.5790925941828617,
+    2.0995546966895327,
+    0.0,
+    0.6829065558212262,
+    2.0995546966895327,
+    0.0,
+    0.1759818712707995,
+    2.0995546966895327,
+    0.0,
+    0.14816933569462443,
+    2.0995546966895327,
+    0.0,
+    0.16419517757642646,
+    2.0995546966895327,
+    0.0,
+    0.41893407756984274,
+    2.0995546966895327,
+    0.0,
+    0.33813490017224,
+    2.0995546966895327,
+    0.0,
+    0.17881181469591526,
+    2.0995546966895327,
+    0.0,
+    0.19423257054551643,
+    2.0995546966895327,
+    0.0,
+    0.14201287106097876,
+    2.0995546966895327,
+    0.0,
+    0.21222960419803785,
+    2.0995546966895327,
+    0.0,
+    0.23373817615087528,
+    2.0995546966895327,
+    0.0,
+    0.23201669506161762,
+    2.0995546966895327,
+    0.0,
+    0.23618741641986465,
+    2.0995546966895327,
+    0.0,
+    0.25845995468448646,
+    2.0995546966895327,
+    0.0,
+    0.24255745420078836,
+    2.0995546966895327,
+    0.0,
+    0.23208236911922595,
+    2.0995546966895327,
+    0.0,
+    0.27488440821596705,
+    2.0995546966895327,
+    0.0,
+    0.35730545513016654,
+    2.0995546966895327,
+    0.0,
+    0.3598139193440761,
+    2.0995546966895327,
+    0.0,
+    0.21226627503289844,
+    2.0995546966895327,
+    0.0,
+    0.19879730382407615,
+    2.0995546966895327,
+    0.0,
+    0.010341861049069504,
+    2.0995546966895327,
+    0.0,
+    0.028657795814336567,
+    2.0995546966895327,
+    0.0,
+    0.039662353955954355,
+    2.0995546966895327,
+    0.0,
+    0.04953674609006061,
+    2.0995546966895327,
+    0.0,
+    0.30391227555543954,
+    2.0995546966895327,
+    0.0,
+    0.34151305424290485,
+    2.0995546966895327,
+    0.0,
+    0.3474161576173229,
+    2.0995546966895327,
+    0.0,
+    0.066811920550578,
+    2.0995546966895327,
+    0.0,
+    0.09071569002508945,
+    2.0995546966895327,
+    0.0,
+    0.15191284645594094,
+    2.0995546966895327,
+    0.0,
+    0.11676253719235884,
+    2.0995546966895327,
+    0.0,
+    0.14343965863717456,
+    2.0995546966895327,
+    0.0,
+    0.07982109270711707,
+    2.0995546966895327,
+    0.0,
+    0.04184846682579438,
+    2.0995546966895327,
+    0.0,
+    0.16337486471049645,
+    2.0995546966895327,
+    0.0,
+    0.1441566019987237,
+    2.0995546966895327,
+    0.0,
+    0.14611177656927704,
+    2.0995546966895327,
+    0.0,
+    0.15663811668718333,
+    2.0995546966895327,
+    0.0,
+    0.3084411597751212,
+    2.0995546966895327,
+    0.0,
+    0.20017544670610818,
+    2.0995546966895327,
+    0.0,
+    0.29549012655902446,
+    2.0995546966895327,
+    0.0,
+    0.4367249122864925,
+    2.0995546966895327,
+    0.0,
+    0.2201316996361567,
+    2.0995546966895327,
+    0.0,
+    0.20876560733865812,
+    2.0995546966895327,
+    0.0,
+    0.29704293880331195,
+    2.0995546966895327,
+    0.0,
+    0.3198452475926289,
+    2.0995546966895327,
+    0.0,
+    0.300653090698907,
+    2.0995546966895327,
+    0.0,
+    0.15005118074812054,
+    2.0995546966895327,
+    0.0,
+    0.138228605357463,
+    2.0995546966895327,
+    0.0,
+    0.01885542977162675,
+    2.0995546966895327,
+    0.0,
+    0.046013610159281744,
+    2.0995546966895327,
+    0.0,
+    0.02729663850565639,
+    2.0995546966895327,
+    0.0,
+    0.04896989822127926,
+    2.0995546966895327,
+    0.0,
+    0.058076514417387856,
+    2.0995546966895327,
+    0.0,
+    0.3399896293419202,
+    2.0995546966895327,
+    0.0,
+    0.3794735985845303,
+    2.0995546966895327,
+    0.0,
+    0.3525585595712578,
+    2.0995546966895327,
+    0.0,
+    0.19798737412961817,
+    2.0995546966895327,
+    0.0,
+    0.1418508904064168,
+    2.0995546966895327,
+    0.0,
+    0.14497924806066723,
+    2.0995546966895327,
+    0.0,
+    0.12827775992300497,
+    2.0995546966895327,
+    0.0,
+    0.019011120649123515,
+    2.0995546966895327,
+    0.0,
+    0.030796229490342733,
+    2.0995546966895327,
+    0.0,
+    0.13205109976981297,
+    2.0995546966895327,
+    0.0,
+    0.09932947565361314,
+    2.0995546966895327,
+    0.0,
+    0.09799815973371669,
+    2.0995546966895327,
+    0.0,
+    0.1665230249058771,
+    2.0995546966895327,
+    0.0,
+    0.09836387082167049,
+    2.0995546966895327,
+    0.0,
+    0.10681279893381958,
+    2.0995546966895327,
+    0.0,
+    0.05644153857158041,
+    2.0995546966895327,
+    0.0,
+    0.30686997093624935,
+    2.0995546966895327,
+    0.0,
+    0.19916066686317815,
+    2.0995546966895327,
+    0.0,
+    0.20729783862368487,
+    2.0995546966895327,
+    0.0,
+    0.29357824431765706,
+    2.0995546966895327,
+    0.0,
+    0.2879864809410163,
+    2.0995546966895327,
+    0.0,
+    0.2588865237777807,
+    2.0995546966895327,
+    0.0,
+    0.20344181549764145,
+    2.0995546966895327,
+    0.0,
+    0.2535083449713034,
+    2.0995546966895327,
+    0.0,
+    0.25635180755234144,
+    2.0995546966895327,
+    0.0,
+    0.3270110459142569,
+    2.0995546966895327,
+    0.0,
+    0.348364719833074,
+    2.0995546966895327,
+    0.0,
+    0.4337925744660372,
+    2.0995546966895327,
+    0.0,
+    0.31216624429535983,
+    2.0995546966895327,
+    0.0,
+    0.3210425947621258,
+    2.0995546966895327,
+    0.0,
+    0.3657513689269985,
+    2.0995546966895327,
+    0.0,
+    0.4751201073344292,
+    2.0995546966895327,
+    0.0,
+    0.3974820346658131,
+    2.0995546966895327,
+    0.0,
+    0.4240823996363771,
+    2.0995546966895327,
+    0.0,
+    0.40116224076756296,
+    2.0995546966895327,
+    0.0,
+    0.45597854502564034,
+    2.0995546966895327,
+    0.0,
+    0.42321018010138534,
+    2.0995546966895327,
+    0.0,
+    0.44743527661761134,
+    2.0995546966895327,
+    0.0,
+    0.42414861825029837,
+    2.0995546966895327,
+    0.0,
+    0.12896366985044055,
+    2.0995546966895327,
+    0.0,
+    0.11076936900010477,
+    2.0995546966895327,
+    0.0,
+    0.18791603785303002,
+    2.0995546966895327,
+    0.0,
+    0.16928171411948167,
+    2.0995546966895327,
+    0.0,
+    0.16581875026611434,
+    2.0995546966895327,
+    0.0,
+    0.15930353959707605,
+    2.0995546966895327,
+    0.0,
+    0.16341835362372686,
+    2.0995546966895327,
+    0.0,
+    0.17096649570012057,
+    2.0995546966895327,
+    0.0,
+    0.13202668439620868,
+    2.0995546966895327,
+    0.0,
+    0.13736010831257037,
+    2.0995546966895327,
+    0.0,
+    0.15215788087341356,
+    2.0995546966895327,
+    0.0,
+    0.1490209149920598,
+    2.0995546966895327,
+    0.0,
+    0.18243672711346387,
+    2.0995546966895327,
+    0.0,
+    0.2558606195111961,
+    2.0995546966895327,
+    0.0,
+    0.25318083227503024,
+    2.0995546966895327,
+    0.0,
+    0.205573988971439,
+    2.0995546966895327,
+    0.0,
+    0.1287735015252253,
+    2.0995546966895327,
+    0.0,
+    0.14659216927747448,
+    2.0995546966895327,
+    0.0,
+    0.21314344948015862,
+    2.0995546966895327,
+    0.0,
+    0.0058195813945725984,
+    2.0995546966895327,
+    0.0,
+    0.004094959914973394,
+    2.0995546966895327,
+    0.0,
+];
+
+const GOLDEN_POWER_VARIATION: &[f64] = &[
+    20.301763088150093,
+    14.524981482223351,
+    152.54271228371493,
+    9.302374921594874,
+    11.002419458319203,
+    29.464292253703377,
+    20.847172608307673,
+    14.276477863287328,
+    16.071940011962074,
+    10.459155766645733,
+    10.642877740344339,
+    97.82724355929126,
+    7.025526342384912,
+    2.778344739613954,
+    -0.0030414029344230124,
+    4.580167185467167,
+    5.553668494365291,
+    14.240623039921394,
+    15.904128496397625,
+    18.06313225979898,
+    266.2749803565534,
+    12.028522824449905,
+    5.811766800865598,
+    1.317485386565981,
+    9.772659335199275,
+    10.58332018400874,
+    21.63821001394927,
+];
+
+const GOLDEN_POWER_VARIATION_WINDOW: &[f64] = &[
+    23.20165621168584,
+    13.363161652229811,
+    146.95773760814996,
+    8.459800999631693,
+    8.726110417548874,
+    36.34337751793883,
+    25.735361329750464,
+    14.509426922427343,
+    10.285714285714286,
+    12.833685109912663,
+    13.473997818648956,
+    188.8799869536873,
+    8.860895137388496,
+    2.047731521551962,
+    -2.7628090527922424,
+    4.898316695965254,
+    6.419299085112919,
+    10.285714285714286,
+    11.7484856053016,
+    13.10735007891979,
+    131.79937669810045,
+    8.662419548382553,
+    5.47306623704143,
+    1.7445983458686738,
+    7.5394428256191475,
+    5.381814193807589,
+    10.285714285714286,
+];
+
+const GOLDEN_TDIGEST: &[f64] = &[
+    -1.4506754991295818,
+    -0.6153938389536291,
+    1.9669305121855334,
+    -1.4626009005582017,
+    -0.9992829396489874,
+    1.9874652286997394,
+    -1.4889104278521395,
+    -0.63596345124358,
+    1.948147518472067,
+    -1.5045266365995258,
+    -1.0229911855131937,
+    1.9616845856185046,
+    -1.5012510796384302,
+    -0.6234457757321644,
+    1.9185853898662055,
+    -1.5199855742701565,
+    -1.0211641212789853,
+    1.9367196420068518,
+];
+
+const GOLDEN_DDSKETCH: &[f64] = &[
+    -1.476926144063773,
+    -0.624961225664581,
+    1.7331981299642243,
+    -1.6254534993405247,
+    -1.071237747864269,
+    2.290251881689183,
+    -1.537202693153204,
+    -0.624961225664581,
+    1.7331981299642243,
+    -1.6592146905265275,
+    -1.0996546789342858,
+    2.27294307536278,
+    -1.537202693153204,
+    -0.600455344842521,
+    1.7331981299642243,
+    -1.6525632698860737,
+    -1.0992880578758688,
+    2.2435191601110698,
+    -1.3099107407241846,
+    -0.5220083628371914,
+    1.6652362387784885,
+    -1.4633920513902652,
+    -0.9858309127376075,
+    2.288711348987963,
+    -1.6322612637531722,
+    -0.7334027039711133,
+    2.2932675214577865,
+    -1.6840237592460194,
+    -1.18135595786429,
+    2.4401953309769513,
+    -1.6322612637531722,
+    -0.7334027039711133,
+    1.4476800818050848,
+    -1.6840237592460194,
+    -1.274658337302112,
+    1.8153649851088371,
+    -1.537202693153204,
+    -0.600455344842521,
+    1.7331981299642243,
+    -1.6570551861482388,
+    -1.0879553281795669,
+    2.2633900674796195,
+    -1.537202693153204,
+    -0.624961225664581,
+    1.7331981299642243,
+    -1.6614534427719094,
+    -1.1197345743729152,
+    2.28284665234257,
+    -1.537202693153204,
+    -0.7334027039711133,
+    1.6652362387784885,
+    -1.6626039126757866,
+    -1.136873377715784,
+    2.2829017763508332,
+];
+
+const GOLDEN_DDSKETCH_DECAYED: &[f64] = &[
+    -1.3099107407241846,
+    -0.7633344539546297,
+    1.6652362387784885,
+    -1.5388589569648967,
+    -1.0710360328115065,
+    2.315423616777208,
+    26.867539807603332,
+    -1.7331981299642243,
+    -0.7334027039711133,
+    1.7331981299642243,
+    -1.7331981299642243,
+    -1.2098232667812512,
+    2.260432223073342,
+    16.92073916656056,
+    -1.6322612637531722,
+    -0.600455344842521,
+    1.4476800818050848,
+    -1.7104392927357428,
+    -1.1778803166775635,
+    1.988277768204018,
+    20.212303545600623,
 ];

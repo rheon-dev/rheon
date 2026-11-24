@@ -44,11 +44,15 @@ standard errors exist. EGARCH is held at the study's truth, `beta = 0.97`,
 and at `beta = 0.985`, where the stricter invertibility guards bind.
 
 **The start itself** (PLAN 548, STUDY-549) is held to `arch` on its own
-rows: its fit scored by `arch`'s likelihood (`am.fix`) against the best of
-`arch`'s fits from its default start and from the start's fit, at starts of
-500, 1,000 and 2,000 rows, on these truths and on persistence-0.90 ones
-(`LO`). At 1,000 and 2,000 rows no start may be short of `arch` by more
-than 1e-6 nats (measured 9.1e-13 at most, 1,350 starts); at 500 rows a
+rows: its fit scored by `arch`'s likelihood (`am.fix`) against the best
+over the bank's own set (`arch`'s fits the set holds, and scipy's SLSQP on
+`arch`'s likelihood over the set), at starts of 500, 1,000 and 2,000 rows,
+on these truths and on persistence-0.90 ones (`LO`). At 1,000 and 2,000
+rows no start may be short of it by more than 1e-6 nats, the cut on the
+gain the start's Newton step predicts inside the set. A start short of
+`arch`'s own fit by more is one whose `arch` fit the set does not hold: a
+fit on a face of the set (an EGARCH at `α = |γ|`) is stepped from at its
+optimum over the set, where `arch`'s optimum lies outside it. At 500 rows a
 start can converge to a lower local maximum the grid's best point chose
 (2 of 650 short by more than 0.01 nats, at most one a cell), held at two a
 cell. A start waits until its likelihood-ratio statistic against constant
@@ -472,12 +476,97 @@ def series_of(truth: str, form: str, n: int, seed: int) -> np.ndarray:
     return simulate(form, n, seed) if truth == "hi" else simulate_lo(form, n, seed)
 
 
+#: The bank's set for each process, `A θ ≥ b` over its parameters, as the
+#: library states it (its `garch_set`, `gjr_set`, `egarch_set` and
+#: `figarch_set`): `ω` at least `1e-6` of the rows' mean square (EGARCH's
+#: free), the persistence at most `1 - 1e-4`, EGARCH's news term never
+#: negative (`α ≥ |γ|`, which `arch` leaves free), FIGARCH's weights all
+#: nonnegative. Each row is `(a, b)`; `F` stands for the floor on `ω`.
+F = "floor"
+MARGIN = 1e-4
+SETS: dict[str, list[tuple[tuple[float, ...], float | str]]] = {
+    "garch": [((1, 0, 0), F), ((0, 1, 0), 0.0), ((0, 0, 1), 0.0), ((0, -1, -1), MARGIN - 1)],
+    "gjr": [
+        ((1, 0, 0, 0), F),
+        ((0, 1, 0, 0), 0.0),
+        ((0, 1, 1, 0), 0.0),
+        ((0, 0, 0, 1), 0.0),
+        ((0, -1, -0.5, -1), MARGIN - 1),
+    ],
+    "egarch": [
+        ((0, 1, -1, 0), 0.0),
+        ((0, 1, 1, 0), 0.0),
+        ((0, -1, 0, 0), -1.0),
+        ((0, 0, 0, 1), 0.0),
+        ((0, 0, 0, -1), MARGIN - 1),
+    ],
+    "figarch": [
+        ((1, 0, 0, 0), F),
+        ((0, 1, 0, 0), 0.0),
+        ((0, 0, 1, 0), 0.0),
+        ((0, 0, -1, 0), MARGIN - 1),
+        ((0, -2, -1, 0), -1.0),
+        ((0, 0, 0, 1), 0.0),
+        ((0, 1, 1, -1), 0.0),
+    ],
+}
+#: A t's shape, held to the library's range beside the process: `ν` in
+#: [2.05, 300], `λ` within 0.99.
+SHAPE_RANGE = [(2.05, 300.0), (-0.99, 0.99)]
+
+
+def set_rows(vol: str, dist: str, r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The bank's set for `vol` with `dist`'s shape on rows `r`, as `A θ ≥ b`."""
+    k = len(SETS[vol][0][0])
+    m = len(SHAPE[dist])
+    floor = 1e-6 * float(np.mean(r * r))
+    a, b = [], []
+    for row, rhs in SETS[vol]:
+        a.append([*row, *([0.0] * m)])
+        b.append(floor if rhs == F else float(rhs))
+    for j, (lo, hi) in enumerate(SHAPE_RANGE[:m]):
+        for sign, bound in ((1.0, lo), (-1.0, -hi)):
+            row = [0.0] * (k + m)
+            row[k + j] = sign
+            a.append(row)
+            b.append(bound)
+    return np.array(a, dtype=float), np.array(b)
+
+
+def best_in_set(am, a: np.ndarray, b: np.ndarray, starts: list[np.ndarray]) -> float:  # noqa: ANN001
+    """The largest of `arch`'s likelihood over the bank's set, `A θ ≥ b`, by
+    scipy's SLSQP from each start: `arch` computes the likelihood, scipy
+    the constrained optimum, and neither shares the bank's arithmetic. A
+    start the set does not hold is moved into it first, along SLSQP's own
+    way to feasibility."""
+
+    def nll(x: np.ndarray) -> float:
+        v = float(am.fix(x).loglikelihood)
+        return -v if math.isfinite(v) else 1e12
+
+    best = -math.inf
+    for x0 in starts:
+        res = minimize(
+            nll,
+            x0,
+            method="SLSQP",
+            constraints=[{"type": "ineq", "fun": lambda x: a @ x - b, "jac": lambda x: a}],
+            options={"ftol": 1e-14, "maxiter": 1000},
+        )
+        if np.all(a @ res.x - b >= -1e-10 * (1.0 + np.abs(b))):
+            best = max(best, -float(res.fun))
+    return best
+
+
 def start_of(truth: str, form: str, r: np.ndarray, start: int) -> dict:
     """The bank's start on `r` with `start_rows=start`: the reason its first
     fit gave the row after it, the row it first reported on, and, where it
-    reported, its fit against `arch`'s on the start's own rows -- `short`,
-    the best of `arch`'s fits from its default start and from the start's
-    fit, less the start's fit, both by `arch`'s likelihood."""
+    reported, its fit against the best on the start's own rows by `arch`'s
+    likelihood: `short`, `arch`'s own fits (from its default start and from
+    the start's fit) less the start's fit; `short_in_set`, the best over the
+    bank's set (those of `arch`'s fits the set holds, and scipy's SLSQP over
+    the set from the start's fit and from each of `arch`'s) less the start's
+    fit; and whether `arch`'s best fit is in the bank's set."""
     vol, dist = vol_dist(truth, form)
     spec = rp.spec.garch("g", targets=["r"], vol=vol, dist=dist, start_rows=start, coef_every=0)
     out = rp.ModelBank([spec]).fit_predict(pl.DataFrame({"r": r})).unnest("g")
@@ -487,16 +576,31 @@ def start_of(truth: str, form: str, r: np.ndarray, start: int) -> dict:
     if not np.isfinite(var).any():
         return got
     n0 = int(np.argmax(np.isfinite(var)))
-    # a start's buffer doubles in place, or is buffered afresh at four times
-    rows = r[:n0] if n0 in (start, 2 * start, 4 * start) else r[n0 - 4 * start : n0]
+    # A try that does not start keeps its rows, and the next comes once as
+    # many new rows have come as it held: tries at `start` times a power of
+    # two, each on every row so far while `max_state_bytes` holds them (past
+    # 16,000 rows at the default for every form here, more than these
+    # streams have).
+    assert n0 % start == 0 and (n0 // start) & (n0 // start - 1) == 0, (form, start, n0)
+    rows = r[:n0]
     theta = np.asarray(out["coef"].to_list()[n0 - 1], dtype=float)
     am = arch_model_of(form, rows) if truth == "hi" else lo_model(form, rows)
     ours = float(am.fix(theta).loglikelihood)
-    best = max(
-        float(am.fit(disp="off", starting_values=sv, options={"maxiter": 1000}).loglikelihood)
+    fits = [
+        np.asarray(am.fit(disp="off", starting_values=sv, options={"maxiter": 1000}).params)
         for sv in (None, theta)
+    ]
+    lls = [float(am.fix(f).loglikelihood) for f in fits]
+    a, b = set_rows(vol, dist, rows)
+    held = [ll for f, ll in zip(fits, lls, strict=True) if np.all(a @ f - b >= 0.0)]
+    in_set = max([*held, best_in_set(am, a, b, [theta, *fits])])
+    top = int(np.argmax(lls))
+    got.update(
+        n0=n0,
+        short=max(lls) - ours,
+        short_in_set=in_set - ours,
+        arch_in_set=bool(np.all(a @ fits[top] - b >= 0.0)),
     )
-    got.update(n0=n0, short=best - ours)
     return got
 
 
@@ -512,15 +616,40 @@ def lo_model(form: str, r: np.ndarray):  # noqa: ANN201
 STARTS = [("hi", f) for f in sorted(FORMS)] + [("lo", f) for f in sorted(LO)]
 
 
+#: How far a start the bank steps from may fall short of the best fit over
+#: its own set, in nats: the cut on the gain its Newton step predicts inside
+#: the set. A start steps only once that gain, at Kish's count (the rows'
+#: count at unit weights), is at most 1e-6 nats, and that gain is the
+#: shortfall to the optimum over the set where the likelihood is quadratic
+#: about it, as it is near any optimum it has a positive definite curvature
+#: at.
+SHORT_IN_SET = 1e-6
+
+
 @pytest.mark.parametrize(("truth", "form"), STARTS)
 def test_the_default_start_is_arch_fit_of_its_rows(truth, form):
     """Seed 0 of each truth at the default start of 2,000 rows: its first fit
-    does not wait on the evidence, and the fit it reports from (the first,
-    or a refit of twice or four times the rows where a fit sat on a bound)
-    is short of `arch` by at most 1e-6 nats."""
+    does not wait on the evidence, and the fit it reports from (the first, or
+    a later try on twice or four times the rows) is short of the best over
+    the bank's set, by `arch`'s likelihood, by at most `SHORT_IN_SET`; where
+    it is short of `arch`'s own fit by more, `arch`'s lies outside the set."""
     got = start_of(truth, form, series_of(truth, form, 8001, 0), 2000)
     assert got["first"] != "not_identified", (truth, form)
-    assert got["short"] is not None and got["short"] <= 1e-6, (truth, form, got)
+    assert got["short"] is not None, (truth, form, got)
+    assert got["short_in_set"] <= SHORT_IN_SET, (truth, form, got)
+    assert got["short"] <= SHORT_IN_SET or not got["arch_in_set"], (truth, form, got)
+
+
+def test_a_start_on_a_face_is_short_of_arch_by_the_sets_price_alone():
+    """Both sides of the comparison on one start: seed 26 of the EGARCH at
+    `beta = 0.985`, 1,000 rows. The bank steps from its first fit, whose news
+    term sits on the set's face `α = |γ|`; `arch`, which leaves that free,
+    finds 0.0054 nats more with `α < |γ|`, outside the set. Over the set the
+    start is at its optimum, within `SHORT_IN_SET`."""
+    got = start_of("hi", "egarch_985", series_of("hi", "egarch_985", 10_000, 26), 1000)
+    assert got["n0"] == 1000, got
+    assert got["short"] > 1e-3 and not got["arch_in_set"], got
+    assert got["short_in_set"] <= SHORT_IN_SET, got
 
 
 #: Each truth at each start; FIGARCH's start is 2,000 rows at least.
@@ -535,11 +664,19 @@ START_CELLS = [
 @pytest.mark.extended(reason="50 seeds a truth and a start, a bank and two arch fits each")
 @pytest.mark.parametrize(("truth", "form", "start"), START_CELLS)
 def test_no_start_is_short_of_arch(truth, form, start):
+    """Fifty seeds a truth and a start: from 1,000 rows no start is short of
+    the best over the bank's set by more than `SHORT_IN_SET`, and one short
+    of `arch`'s own fit by more is one whose `arch` fit the set does not
+    hold (EGARCH's `α ≥ |γ|`, or the persistence's margin): the set's price,
+    not the fit's. At 500 rows at most two seeds stop at a lower local
+    maximum more than 0.01 nats short."""
     gots = [start_of(truth, form, series_of(truth, form, 10_000, s), start) for s in SEEDS]
-    shorts = np.array([g["short"] for g in gots if g["short"] is not None])
+    shorts = np.array([g["short_in_set"] for g in gots if g["short"] is not None])
     assert len(shorts) == len(gots), "every realistic series starts within 10,000 rows"
+    outside = [g for g in gots if g["short"] > SHORT_IN_SET and g["arch_in_set"]]
     if start >= 1000:
-        assert shorts.max() <= 1e-6, (truth, form, start, shorts.max())
+        assert shorts.max() <= SHORT_IN_SET, (truth, form, start, shorts.max())
+        assert not outside, (truth, form, start, outside)
     else:
         assert (shorts > 0.01).sum() <= 2, (truth, form, np.sort(shorts)[-3:])
     if start == 2000:

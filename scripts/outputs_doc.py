@@ -47,8 +47,24 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "glm",
         "expectile",
         "holt",
+        "ar",
     ),
-    "Moments and correlation": ("ew_cov", "marginal", "deco", "rcov", "audit", "garch"),
+    "Moments and correlation": (
+        "ew_cov",
+        "ewm_moments",
+        "pca",
+        "marginal",
+        "deco",
+        "rcov",
+        "audit",
+        "garch",
+        "dcc",
+        "realized",
+        "power_variation",
+        "tdigest",
+        "ddsketch",
+        "spectral",
+    ),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
@@ -70,6 +86,15 @@ MEANING: dict[str, str] = {
         f"how far the model had come toward its steady state under decay before this row {SHARED}"
     ),
     "withheld_reason": f"why the row's predictions are null {SHARED}",
+    "<term>": (
+        "a term of `terms`, under the name it is given there, in the order `terms` gives them: "
+        "the central, raw or standardized moment or the cumulant `kind` names, of the rows "
+        "before this one"
+    ),
+    "se_<term>": (
+        "the term's delta-method standard error at Kish's effective number of rows, after every "
+        "term and in the same order"
+    ),
     "support_coef": (
         "on `coef`'s rows, each coefficient's data share `1 - ridge * (S^-1)_jj`, with `S` "
         "the system the solve inverts, laid out like `coef`"
@@ -113,12 +138,48 @@ MEANING: dict[str, str] = {
         "the variance of `<t>` on this row given the rows before it, read before the row is learned"
     ),
     "std_resid_<t>": "`<t>` over the square root of its variance on this row",
+    "power_<t>_p<k>": (
+        "the power of `<t>` at the `k`-th period, scipy's periodogram of the rows before this "
+        "one with the decay's amplitudes as the window"
+    ),
     "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
+    "rv_<t>": "the realized variance of `<t>`'s returns before this row, the sum of their squares",
+    "bv_<t>": "the bipower variation of `<t>`'s returns before this row, which leaves jumps out",
+    "tv_<t>": "the tripower variation of `<t>`'s returns before this row, which leaves jumps out",
+    "tq_<t>": "the tripower quarticity of `<t>`'s returns before this row",
+    "bns_<t>": (
+        "Barndorff-Nielsen and Shephard's adjusted ratio test of `<t>`'s returns before this "
+        "row: a standard normal without jumps, large and positive with them"
+    ),
+    "lm_<t>": (
+        "Lee and Mykland's statistic of this row's `<t>`: the return over the volatility of the "
+        "returns before it; `sqrt(2/π)` times it is a standard normal without a jump"
+    ),
+    "lm_jump_<t>": "whether `lm_<t>` is a jump at confidence `lm_beta`, by Lee and Mykland's test",
+    "lrv_<t>": (
+        "a term named `lrv`, here a Parzen kernel sum of `<t>`'s returns before this row at a "
+        "bandwidth of 3: each term's field is named `<term>_<t>`"
+    ),
+    "n_<t>": (
+        "the count of `<t>`'s returns the terms are of: the returns a window holds, or Kish's "
+        "effective count of their decayed weights"
+    ),
+    "q<level>_<t>": (
+        "the quantile of `<t>` at `<level>` over the rows before this one (a window's, under a "
+        "window), read from its sketch before the row is added"
+    ),
+    "es<level>_<t>": (
+        "the mean of `<t>` past `q<level>_<t>` (expected shortfall) over the same rows, from the "
+        "same sketch: the lower tail at a level below 0.5, the upper above it"
+    ),
     "u": (
         "the equicorrelation this row alone implies"
-        " (Engle and Kelly's Lemma 2.3, from the standardized row)"
+        " (Engle and Kelly's eq. 20, from the standardized row; biased toward 0)"
     ),
-    "rho": "the block's equicorrelation level, the smoothed value `u` is folded into",
+    "rho": (
+        "the block's equicorrelation level: the ratio of the weighted means of `u`'s numerator"
+        " and denominator"
+    ),
     "stat": (
         "the test statistic, this row included, for the span, the pair of windows or the "
         "monitored row"
@@ -144,6 +205,18 @@ MEANING: dict[str, str] = {
     "predicted_state<j>": "one-step-ahead probability of state `<j>`",
     "state": "the most likely state for this row: the one with the largest `predicted_state<j>`",
     "huber_scale_<t>": "the scale the row's cut for `<t>` is drawn in",
+    "pc<j>_var": (
+        "the variance along component `<j>`, from 0: its eigenvalue, times Bessel's correction at "
+        "Kish's effective size"
+    ),
+    "pc<j>_share": (
+        "component `<j>`'s share of the total variance, the sum of the columns' variances"
+    ),
+    "pc<j>_loading_<f>": "component `<j>`'s unit loading on feature `<f>`",
+    "pc<j>_score": (
+        "the row's coordinate along component `<j>`, `e_j . (x - m)`, on the mean and the "
+        "component before this row"
+    ),
 }
 
 #: Where a field is null besides a skipped row, which nulls every field (see
@@ -173,6 +246,12 @@ ALSO_NULL: dict[str, str] = {
         "to report"
     ),
     "settled_frac": "where nothing decays",
+    "<term>": (
+        "while withheld; where the term is not defined: no weight or no lagged pair yet, a "
+        "standardized term of a leg with no spread, an unbiased form whose denominator keeps no "
+        "digit (one row carrying all the weight), or a value past a double's range"
+    ),
+    "se_<term>": "where its term is null, and where the error keeps no digit",
     "withheld_reason": "where nothing was withheld",
     "support_coef": "where `coef` is, and in the intercept's place, which is not a share",
     "penalty_selected_<t>": "never: it is written while the predictions are withheld too",
@@ -202,19 +281,43 @@ ALSO_NULL: dict[str, str] = {
     "variance_<t>": "while withheld, and before the target's start is fitted",
     "std_resid_<t>": "where the variance is null, and where `<t>` is",
     "forecast_<t>": "where the variance is null",
+    "rv_<t>": WITHHELD,
+    "bv_<t>": WITHHELD,
+    "tv_<t>": WITHHELD,
+    "tq_<t>": WITHHELD,
+    "bns_<t>": "while withheld, and where `rv_<t>` or `bv_<t>` is 0",
+    "lm_<t>": (
+        "while withheld, where the row has no `<t>`, and where the volatility of the returns "
+        "before it is 0"
+    ),
+    "lm_jump_<t>": "where `lm_<t>` is, and where the count of returns is 1 or less",
+    "lrv_<t>": WITHHELD,
+    "n_<t>": WITHHELD,
+    "q<level>_<t>": (
+        "while withheld, and while the rows before it do not identify the level "
+        "(`level_beyond_sample`)"
+    ),
+    "es<level>_<t>": (
+        "while withheld, and while the rows before it do not identify the level "
+        "(`level_beyond_sample`)"
+    ),
+    "power_<t>_p<k>": "while withheld, and before the target's first row",
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
         "before the row, and where every standardized value is 0"
     ),
-    "rho": "while withheld, and until the row after the first `u`",
+    "rho": "while withheld, and until the row after the first one the standardizer is warm for",
     "stat": "while withheld, and on every row but those a test is due on",
     "crit": "where `stat` is",
-    "flag": "where `stat` is",
+    "flag": (
+        'where `stat` is; and on a `"monitor"` span past `crit` whose two columns\' scale ratio '
+        "moved inside it (`withheld_reason` `scale_ratio_moved`)"
+    ),
     "since_flag": "where `stat` is",
     "since_change": (
         'on every row but a flag\'s; and on a `"sequential"` flag of the test between pairs '
-        "(without `scalar`) that has fewer than two monitored rows before it, or where either "
-        "column of the flagged pair is constant over those rows"
+        "(without `scalar`) where either column of the flagged pair is constant over the "
+        "monitored rows before it"
     ),
     "p_change": WITHHELD,
     "run_mode": WITHHELD,
@@ -224,6 +327,13 @@ ALSO_NULL: dict[str, str] = {
     "predicted_state<j>": UNTIL_SEEDED,
     "state": UNTIL_SEEDED,
     "huber_scale_<t>": "until the target has a scale above 0",
+    **{
+        f"pc<j>_{s}": (
+            "while withheld, and while the component is not told apart from the one above it "
+            "or below it (`not_separated`)"
+        )
+        for s in ("var", "share", "loading_<f>", "score")
+    },
 }
 
 #: `bocpd`'s fields, null while its first rows set a prior left out (task 195).
@@ -235,8 +345,27 @@ BOCPD_WARM = (
     "`ModelBank.solve_failures()`)"
 )
 
+#: A model whose meaning for a stem differs from `MEANING`'s.
+MEANING_BY_MODEL: dict[tuple[str, str], str] = {
+    ("dcc", "corr_<a>_<b>"): (
+        "the pair's correlation given the rows before this one, from the DCC recursion, read "
+        "before the row is learned"
+    ),
+    ("dcc", "loglik"): (
+        "the Gaussian log-density of the row's standardized residuals under that correlation"
+    ),
+}
+
 #: A model whose rule for a stem differs from `ALSO_NULL`'s.
 ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
+    ("dcc", "variance_<t>"): "while withheld, and before the target's margin's start is fitted",
+    ("dcc", "corr_<a>_<b>"): (
+        "while withheld, before the correlation's start is fitted, and while a learned start's "
+        "rows do not identify its recursion (`not_identified`)"
+    ),
+    ("dcc", "loglik"): (
+        "while withheld, before the correlation's start is fitted, and where any target is"
+    ),
     ("kmeans", "cluster"): (
         "while withheld, which includes the rows before seeding: seeding waits for `warm_rows` "
         "learned rows (at least `n_clusters`; by default 500, or `n_clusters` where that is "
@@ -266,6 +395,8 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
 #: switch, and the spec keywords that turn it on.
 SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
     "huber": ("emit_huber_scale=True", {"emit_huber_scale": True}),
+    "dcc": ('margins="garch"', {"margins": "garch"}),
+    "ewm_moments": ("se=True", {"se": True}),
 }
 
 #: What a model writes when it writes nothing per row.
@@ -345,17 +476,24 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
     (
         "withheld_reason",
         "why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, "
-        "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate` or "
-        "`not_identified`. That order is their precedence, so the first that applies is the one "
-        "named. `below_warm_rows` is the model's own warm-up, the rows `kmeans`, `hmm` and "
-        "`bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, "
-        "and, in a `kalman` fit standardized with no intercept, the rows before any of a "
-        "target's coefficients is sized. `ill_conditioned` is an `ewridge` "
+        "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, "
+        "`not_identified`, `scale_ratio_moved` or `not_separated`. That order is their "
+        "precedence, so the first that applies is the one named. `below_warm_rows` is the "
+        "model's own warm-up, the rows "
+        "`kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for "
+        "a target's start, in a `kalman` fit standardized with no intercept, the rows before "
+        "any of a target's coefficients is sized, and the rows before `deco`'s standardizer "
+        "holds more than five effective rows, while it has no level. `ill_conditioned` is an "
+        "`ewridge` "
         "fit whose normal equations are too nearly singular for a solve to keep a digit. "
         "`unstable_rate` is an `sgd` target whose learning rate is past its stability bound: its "
         "recent steps' gains have a mean square above twice their mean, so each step grows its "
         "own row's residual and the fit diverges. `not_identified` is a `garch` start whose rows "
-        "do not yet tell its variance process from a constant variance, so it buffers more",
+        "do not yet tell its variance process from a constant variance, so it buffers more. "
+        "`scale_ratio_moved` is a `corrchange` span past its critical value whose two columns' "
+        "scale ratio moved inside it, so its `flag` is null. `not_separated` is a `pca` component "
+        "the data does not yet tell apart from a neighbor: the test of the equality of their two "
+        "eigenvalues does not pass",
         "where nothing was withheld",
     ),
     (
@@ -624,9 +762,16 @@ the docs set it:
 """
 
 
-def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str:
-    """The `MEANING` key a realized field name belongs to."""
+def stem(
+    field: str, targets: tuple[str, ...], features: tuple[str, ...], terms: Sequence[str] = ()
+) -> str:
+    """The `MEANING` key a realized field name belongs to; ``terms``, an
+    ``ewm_moments`` spec's, are named by the user."""
     base, _, _grid = field.partition("__")
+    if base in terms:
+        return "<term>"
+    if base.startswith("se_") and base[3:] in terms:
+        return "se_<term>"
     # Features first: the unsupervised models name a *feature* as their
     # nominal target, so `pred_x0` there is a feature's predictive mean and
     # not a regression's prediction.
@@ -650,9 +795,27 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             "variance",
             "std_resid",
             "forecast",
+            "rv",
+            "bv",
+            "tv",
+            "tq",
+            "bns",
+            "lm_jump",
+            "lm",
+            "lrv",
+            "n",
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"
+        level, sep, column = base.partition("_")
+        if sep and column == t:
+            for pre in ("q", "es"):
+                if level.startswith(pre) and _is_number(level[len(pre) :]):
+                    return f"{pre}<level>_<t>"
+    for t in targets:
+        rest = base.removeprefix(f"power_{t}_p")
+        if rest != base and rest.isdigit():
+            return "power_<t>_p<k>"
     for pre in ("corr", "cov", "partial_corr"):
         if base.startswith(pre + "_"):
             return f"{pre}_<a>_<b>"
@@ -661,7 +824,18 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             return f"{pre}<j>"
     if base.startswith("p_") and base != "p_change":
         return "p_<label>"
+    if base.startswith("pc") and "_" in base and base[2 : base.index("_")].isdigit():
+        rest = base[base.index("_") + 1 :]
+        return "pc<j>_loading_<f>" if rest.startswith("loading_") else f"pc<j>_{rest}"
     return base
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
 
 
 def check_families() -> None:
@@ -697,15 +871,17 @@ def main() -> None:
             declared = dtypes(spec)
             targets = tuple(spec.get("targets") or ())
             features = tuple(spec.get("features") or ())
+            terms = tuple(spec["model"].get("terms", {}))
             print(f"\n## `{name}`\n")
             if name in STATE_ONLY:
                 print(f"{STATE_ONLY[name]}\n")
             print(f"The fields of `{call(name)}`:\n")
             rows = []
             for f, dtype in declared.items():
-                s = stem(f, targets, features)
+                s = stem(f, targets, features, terms)
                 null = ALSO_NULL_BY_MODEL.get((name, s), ALSO_NULL.get(s, "**undocumented**"))
-                rows.append((f"`{f}`", f"`{dtype}`", MEANING.get(s, "**undocumented**"), null))
+                meaning = MEANING_BY_MODEL.get((name, s), MEANING.get(s, "**undocumented**"))
+                rows.append((f"`{f}`", f"`{dtype}`", meaning, null))
             print(table(FIELD_HEAD, rows))
             if name in SWITCHED:
                 switch, extra = SWITCHED[name]
@@ -717,7 +893,7 @@ def main() -> None:
                 for f, dtype in more.items():
                     if f in declared:
                         continue
-                    s = stem(f, targets, features)
+                    s = stem(f, targets, features, terms)
                     null = ALSO_NULL.get(s, "**undocumented**")
                     rows.append((f"`{f}`", f"`{dtype}`", MEANING.get(s, "**undocumented**"), null))
                 print(f"\nUnder `{switch}`, it also writes:\n")

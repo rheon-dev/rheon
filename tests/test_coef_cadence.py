@@ -113,7 +113,9 @@ KINDS = [
     "glm",
     "expectile",
     "garch",
+    "dcc",
     "holt",
+    "ar",
     "kmeans",
     "micro",
     "ew_class",
@@ -143,6 +145,7 @@ def kind(name: str, h: float | str, **common) -> dict:
         "glm": dict(targets=["b"], features=two),
         "expectile": dict(targets=["y"], features=two, expectile=0.8),
         "holt": dict(targets=["y"]),
+        "ar": dict(targets=["y"], features=two, lags=2, ridge=1e-3),
         "kmeans": dict(features=two, n_clusters=2, warm_rows=50),
         "micro": dict(features=two, eps=0.3),
         "ew_class": dict(label="c", classes=["a", "b"], features=two, precision_prior=1.0),
@@ -150,6 +153,7 @@ def kind(name: str, h: float | str, **common) -> dict:
         "deco": dict(features=two),
         # No half-life: the recursion is per observation.
         "garch": dict(targets=["y"], start_rows=50),
+        "dcc": dict(targets=["y", "x1"], margin_start_rows=50, start_rows=50),
     }[name]
     decay = {} if name == "garch" else {"half_life": h}
     return getattr(rp.spec, name)("m", weight="w", **decay, **own, **common)

@@ -30,6 +30,9 @@ pub use drift::*;
 mod label_clock;
 pub(crate) use clock::{ClockPolicy, clock_cfg_of};
 pub use label_clock::*;
+mod moments;
+pub(crate) use moments::moment_leg_column;
+pub use moments::{MOMENT_KINDS, MomentKinds, MomentLegs, MomentTerms, ewm_moments_cfg};
 
 #[cfg(test)]
 mod kinds_tests;
@@ -1006,26 +1009,28 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         feature_moments: Option<String>,
     },
-    /// Dynamic equicorrelation (Engle & Kelly 2012; docs/ENHANCEMENTS.md
-    /// E55): one number for the whole correlation matrix, `O(m)` a row where
-    /// a full one is `O(m²)`.
+    /// Dynamic equicorrelation (Engle & Kelly, NYU FIN-08-038, 2008;
+    /// docs/ENHANCEMENTS.md E55): one number for the whole correlation
+    /// matrix, `O(m)` a row where a full one is `O(m²)`.
     ///
     /// The row is standardised against an [`rheon_core::EwDiag`]'s pre-row
     /// means and variances, and the average pairwise correlation of the
     /// standardised row is a closed form in two sums. `blocks` estimates one
     /// number per named block and one per pair of blocks instead of a single
     /// one, which is the useful middle between "one correlation" and "all of
-    /// them". Outputs `u` (the row's own estimate), `rho` (the level before
-    /// the row), `loglik` (the row's Gaussian density under it) and `n_eff`;
+    /// them". Outputs `u` (the row's own estimate, eq. 20), `rho` (the level
+    /// before the row: the ratio of the EW means of `u`'s numerator and
+    /// denominator, PLAN 551), `loglik` (the row's Gaussian density under
+    /// it) and `n_eff`;
     /// with blocks, one `u_*` and one `rho_*` per value and a single
     /// `loglik`. `half_life`/`lam` are the spec's and are required, since
     /// both the standardiser and the level decay on them.
     #[serde(rename = "deco")]
     Deco {
-        /// `"ew"` (default): `rho' = a·rho + b·u`, the exponentially
-        /// weighted mean of the row estimates. `"linear"`: Engle–Kelly
-        /// eq. 21 with correlation targeting, `rho' = (1 − α − β)·rho_bar' +
-        /// α·u + β·rho`, which needs `alpha` and `beta`.
+        /// `"ew"` (default): `rho = Abar/Vbar`, the ratio of the EW means
+        /// of the row's numerator and denominator. `"linear"`: the DCC `Q`
+        /// recursion (Engle–Kelly eq. 5, correlation targeting) averaged to
+        /// `N` and `D`, `rho = N/D`, which needs `alpha` and `beta`.
         #[serde(default)]
         dynamics: Option<String>,
         #[serde(default)]
@@ -1233,6 +1238,22 @@ pub enum ModelKind {
         /// none. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         permute_every: Option<Span>,
+        /// `window_rows` on the clock (docs/PLAN.md task 553): the span
+        /// `"monitor"` tests, the history `"sequential"` monitors against,
+        /// or each of `"window"`'s two windows, as a span of the clock in
+        /// place of a count of rows. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// `"sequential"` under `window_size`: the monitoring period as a
+        /// span of the clock, in place of `monitor_rows`; default
+        /// `window_size`. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        monitor_span: Option<Span>,
+        /// Under `window_size`, the bytes a group's state may hold: the rows
+        /// a span of the clock holds are the data's to number. Default 256
+        /// KB, at most 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
     },
     /// Bayesian online changepoint detection (docs/ENHANCEMENTS.md E61): a
     /// posterior over how long the current run has lasted, updated one row
@@ -1502,6 +1523,394 @@ pub enum ModelKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
     },
+    /// Dynamic conditional correlation (Engle 2002) and its asymmetric form
+    /// (Cappiello, Engle and Sheppard 2006): the full correlation matrix of
+    /// the targets, return series standardized by a GARCH margin each, its
+    /// `(a, b[, g])` given or estimated online by recursive
+    /// quasi-likelihood after a start fitted by batch quasi-likelihood
+    /// (`rheon_core::Dcc`). Per target its variance, per pair its
+    /// correlation, and the row's log-density; the parameters in `coef`.
+    /// No features.
+    #[serde(rename = "dcc")]
+    Dcc {
+        /// The asymmetric model (ADCC), with `g`. Absent is false.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asymmetric: Option<bool>,
+        /// `"garch"` (the default): a GARCH margin a target standardizes
+        /// its returns; `"none"`: the targets are standardized residuals
+        /// already.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        margins: Option<String>,
+        /// The margins' process, as `garch`'s `vol`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vol: Option<String>,
+        /// The margins' innovations, as `garch`'s `dist`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dist: Option<String>,
+        /// The margins' FIGARCH lags, as `garch`'s `truncation`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        truncation: Option<usize>,
+        /// The margins' variance targeting, as `garch`'s.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        variance_targeting: Option<bool>,
+        /// The rows the margins' start fits; absent is 2,000.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        margin_start_rows: Option<usize>,
+        /// The margins' start as a span of the clock.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        margin_start_span: Option<Span>,
+        /// `a`, given: held rather than estimated, with `b` (and `g`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        a: Option<f64>,
+        /// `b`, given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        b: Option<f64>,
+        /// `g`, given, the asymmetric model's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        g: Option<f64>,
+        /// The rows the correlation's start fits; absent is 500.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_rows: Option<usize>,
+        /// The correlation's start as a span of the clock.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_span: Option<Span>,
+        /// The bytes a group's state may hold, the starts' buffers
+        /// included. Default 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
+    /// Realized volatility and the jump tests on it (`rheon_core::Realized`):
+    /// each target a return series; per target, realized variance, bipower
+    /// and tripower variation, tripower quarticity, Barndorff-Nielsen and
+    /// Shephard's adjusted ratio test, Lee and Mykland's statistic of the
+    /// row's return and its flag, each read before the row is learned. No
+    /// features, no `coef`.
+    #[serde(rename = "realized")]
+    Realized {
+        /// The estimators of the last this many rows of positive weight
+        /// alone, in place of a decay (`half_life` "inf"). Skipped when
+        /// absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_rows: Option<usize>,
+        /// The estimators of the rows of the last this long on the clock
+        /// alone: a number of the clock column's units (rows when the spec
+        /// has no clock), or a duration on a temporal clock. The data
+        /// decides how many rows that is, so the state's bytes are checked
+        /// as the rows go in. Beside `window_rows` it is refused. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// Which edge of `window_size` holds the row exactly that old:
+        /// `"right"`, the default, or `"both"`. Skipped when `"right"`.
+        #[serde(default, skip_serializing_if = "ModelClosed::is_right")]
+        closed: ModelClosed,
+        /// Lee and Mykland's `K`, a count of returns: the volatility of a
+        /// row's return from the `K - 1` returns before it alone. Absent,
+        /// it is read from the estimators' own window or decay. Skipped when
+        /// absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lm_window: Option<usize>,
+        /// The confidence of Lee and Mykland's flag, above 0 and below 1;
+        /// absent is 0.99. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lm_beta: Option<f64>,
+        /// The bytes a group's state may hold, a window's rows included:
+        /// `window_rows` is checked against it here, `window_size` as the
+        /// rows go in. Default 256 KB, at most 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
+
+    /// Streaming principal components (`rheon_core::StreamPca`): the top
+    /// `n_components` directions of the decayed covariance of the features,
+    /// in `O(n_components x features)` state, by the incremental SVD, CCIPCA
+    /// or Oja's rule. Per component its variance, its share of the total
+    /// variance, its loadings and the row's score, each withheld while the
+    /// component is within its sampling error of a neighbour's. No targets.
+    #[serde(rename = "pca")]
+    Pca {
+        /// Components emitted, `1..=features`; absent is 2 (or 1 for one
+        /// feature).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        n_components: Option<usize>,
+        /// `"svd"` (the default), `"ccipca"` or `"oja"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        method: Option<String>,
+        /// `oja`'s gain on its rate; absent is
+        /// [`rheon_core::OJA_DEFAULT_LEARNING_RATE`]. Refused for the others.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        learning_rate: Option<f64>,
+        /// The bytes a group's state may hold, checked at the call: the
+        /// state's size is the shape's. Default 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
+    /// Power variation and kernel-weighted autocovariance sums
+    /// (`rheon_core::PowerVariation`): each target a return series; per
+    /// target, each named term of the returns before the row and their
+    /// count `n`. No features, no `coef`.
+    #[serde(rename = "power_variation")]
+    PowerVariation {
+        /// The terms each target reports, in order, each named.
+        terms: Vec<PvSpecTerm>,
+        /// The terms of the last this many rows of positive weight alone,
+        /// in place of a decay (`half_life` "inf"). Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_rows: Option<usize>,
+        /// The terms of the rows of the last this long on the clock alone:
+        /// a number of the clock column's units (rows when the spec has no
+        /// clock), or a duration on a temporal clock. Beside `window_rows`
+        /// it is refused. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// Which edge of `window_size` holds the row exactly that old:
+        /// `"right"`, the default, or `"both"`. Skipped when `"right"`.
+        #[serde(default, skip_serializing_if = "ModelClosed::is_right")]
+        closed: ModelClosed,
+        /// The bytes a group's state may hold, a window's rows included.
+        /// Default 256 KB, at most 64 MiB. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
+    /// Quantiles of each target column from a merging t-digest
+    /// (`rheon_core::TDigestModel`): one digest a target per group, read
+    /// at each of `quantiles` before the row is added. Per target and
+    /// level, `q<level>_<target>` and the tail mean past it,
+    /// `es<level>_<target>`; no `pred` or `coef`. No features, no decay and
+    /// no window: a merging digest cannot take a row out.
+    #[serde(rename = "tdigest")]
+    TDigest {
+        /// The digest's `delta`, at least 10; absent is 100.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compression: Option<f64>,
+        /// The levels read, each above 0 and below 1, and not 0.5.
+        quantiles: Vec<f64>,
+        /// The bytes a group's state may hold. Default 256 KB, at most 64
+        /// MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
+    /// Quantiles and tail means of each target column from a DDSketch
+    /// (`rheon_core::DdSketchModel`), relative to the value within `alpha`:
+    /// one sketch a target per group, read at each of `quantiles` before the
+    /// row is added. Per target and level, `q<level>_<target>` and
+    /// `es<level>_<target>`; no `pred` or `coef`. No features; a
+    /// `half_life` or `lam` decays the buckets (rounded), or `window_rows`
+    /// or `window_size` keeps a window's rows alone (exact), not both.
+    #[serde(rename = "ddsketch")]
+    DdSketch {
+        /// The relative accuracy, at least 1e-6 and below 1; absent is
+        /// `tanh(1/128)`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alpha: Option<f64>,
+        /// The levels read, each above 0 and below 1, and not 0.5.
+        quantiles: Vec<f64>,
+        /// Keep the last this many rows of positive weight alone. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_rows: Option<usize>,
+        /// Keep the rows of the last this long on the clock alone: a number
+        /// of the clock column's units (rows when the spec has no clock), or
+        /// a duration on a temporal clock. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// Which edge of `window_size` holds the row exactly that old:
+        /// `"right"`, the default, or `"both"`. Skipped when `"right"`.
+        #[serde(default, skip_serializing_if = "ModelClosed::is_right")]
+        closed: ModelClosed,
+        /// The bytes a group's state may hold: checked at the call for what
+        /// the settings fix, and as the rows go in for the buckets and a
+        /// clock window's rows. Default 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
+    /// Exponentially weighted, or windowed, moments and cross-moments of the
+    /// feature columns, each leg lagged or not, to any order: central, raw,
+    /// standardized (skew, kurtosis, a correlation) or a cumulant, plug-in
+    /// or unbiased, and each term's standard error on request
+    /// (`rheon_core::EwmMoments`, whose docs state the update). One output a
+    /// term, named after it, read before the row is learned. No targets.
+    #[serde(rename = "ewm_moments")]
+    EwmMoments {
+        /// The terms, by name, each a table from a leg to its power: a
+        /// feature, or one lagged `k` back written `x@k` (learned rows
+        /// without a clock, the clock's units with one, a duration on a
+        /// temporal clock). Required; the outputs keep its order.
+        terms: MomentTerms,
+        /// `"central"` (the default), `"raw"`, `"standardized"` or
+        /// `"cumulant"` for every term, or a table from a term's name to
+        /// its kind. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<MomentKinds>,
+        /// Polars' `bias` for every term: `true` the plug-in moment,
+        /// `false` the unbiased form (orders 2 to 4). Absent, each term
+        /// takes its statistic's default in Polars: a variance unbiased,
+        /// as `ewm_var`'s; every other order the plug-in, as `skew`'s and
+        /// `kurtosis`'s. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bias: Option<bool>,
+        /// Emit each term's standard error, `se_<term>`, after the terms.
+        /// Absent is false. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        se: Option<bool>,
+        /// How far before `t - k` the as-of row of a lag `k` on a clock may
+        /// sit and still pair: clock units, or a duration on a temporal
+        /// clock. Absent is each lag's own length; refused without a
+        /// clock. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lag_tolerance: Option<Span>,
+        /// The moments of the latest this many learned rows. Skipped when
+        /// absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_rows: Option<usize>,
+        /// The moments of the rows whose clock is in `(t - window_size,
+        /// t]`: clock units, or a duration on a temporal clock; needs a
+        /// clock. Beside `window_rows` it is refused. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// The bytes a group's state may hold, its lag buffers and window
+        /// included: checked at the call where the settings fix them, and
+        /// as the rows go in where the data does. Default 256 KB. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
+    /// An autoregression per target, AR(p), by exponentially weighted least
+    /// squares on lags of the target the model keeps itself, with the
+    /// features as exogenous regressors (`rheon_core::Ar`). Per target, the
+    /// prediction from its own last values; the constant, the lags and the
+    /// features in `coef`.
+    #[serde(rename = "ar")]
+    Ar {
+        /// The order `p`, for lags `1..=p`, or a list of lags in learned
+        /// rows, strictly increasing.
+        lags: ArLags,
+        /// The ridge on the lag and feature coefficients; absent is 0,
+        /// least squares.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ridge: Option<f64>,
+        /// The bytes a group's state may hold, its lags and fits. Default
+        /// 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+        /// Choose the order, lags `1..=q`, by `"aic"` or `"bic"` after every
+        /// learned row, with Kish's effective count. Absent fits every lag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        select: Option<String>,
+        /// Clock units of history each target's fit sees, a hard cutoff,
+        /// as `ewridge`'s `window_size`.
+        #[serde(default)]
+        window_size: Option<Span>,
+        /// Which edge holds a row exactly `window_size` old.
+        #[serde(default)]
+        closed: ModelClosed,
+        /// Clock units between the window's snapshots.
+        #[serde(default)]
+        snapshot_every: Option<Span>,
+        /// At most this many rows between the window's snapshots.
+        #[serde(default)]
+        max_rows_between_snapshots: Option<u32>,
+        /// Past this many MiB the group's snapshots thin or refuse, every
+        /// target's together: one budget a group, each target's fit a
+        /// share of it.
+        #[serde(default)]
+        window_budget: Option<WindowBudgetSpec>,
+    },
+    /// An exponentially weighted Fourier transform of each target at the
+    /// periods given, read as scipy's periodogram (`rheon_core::Spectral`):
+    /// per target and period, the power before the row. No features.
+    #[serde(rename = "spectral")]
+    Spectral(SpectralSpec),
+}
+
+/// One term of a `power_variation` spec: its name, which names its fields
+/// (`<name>_<target>`), and either `powers` (a multipower term) or `kernel`
+/// and `bandwidth` (a kernel-weighted autocovariance sum).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PvSpecTerm {
+    pub name: String,
+    /// One power a return of the product, oldest first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub powers: Option<Vec<f64>>,
+    /// Multiply a multipower term by `n^(Σp/2 − 1) Π μ_p^-1`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub normalize: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kernel: Option<rheon_core::PvKernel>,
+    /// `H`, the last lag with weight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandwidth: Option<usize>,
+    /// The flat-top weights `k((h − 1)/H)`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flat_top: bool,
+    /// About the mean of the returns.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub center: bool,
+    /// `K`: the term of the `K`-step returns, averaged over the `K`
+    /// offsets; absent is 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<usize>,
+}
+
+/// `spectral`'s settings beside its periods.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpectralSpec {
+    /// The periods to transform at, each a span of the clock (a duration on
+    /// a temporal clock); their inverses are the frequencies. One period
+    /// may be given alone.
+    pub periods: SpanList,
+    /// The clock units between rows, `1/fs`; absent is 1.
+    #[serde(default)]
+    pub spacing: Option<Span>,
+    /// `"density"` (the default, scipy's), `"spectrum"` or
+    /// `"lomb_scargle"`, the generalised Lomb-Scargle power.
+    #[serde(default)]
+    pub scaling: Option<String>,
+    /// Remove the weighted mean before the transform; absent is true.
+    #[serde(default)]
+    pub detrend: Option<bool>,
+    /// The bytes a group's state may hold.
+    #[serde(default)]
+    pub max_state_bytes: Option<u64>,
+    /// Clock units of history the transform holds, a hard cutoff: the
+    /// sliding-window transform of the rows inside it.
+    #[serde(default)]
+    pub window_size: Option<Span>,
+    /// Which edge holds a row exactly `window_size` old.
+    #[serde(default)]
+    pub closed: ModelClosed,
+    /// Clock units between the window's snapshots.
+    #[serde(default)]
+    pub snapshot_every: Option<Span>,
+    /// At most this many rows between the window's snapshots.
+    #[serde(default)]
+    pub max_rows_between_snapshots: Option<u32>,
+    /// Past this many MiB the group's snapshots thin or refuse.
+    #[serde(default)]
+    pub window_budget: Option<WindowBudgetSpec>,
+}
+
+/// `ar`'s lags: the order `p`, for `1..=p`, or the lags themselves.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ArLags {
+    Order(usize),
+    List(Vec<usize>),
+}
+
+impl ArLags {
+    /// The lags, `1..=p` for an order. An order past
+    /// [`rheon_core::MAX_LAG`] is the one lag `p`, which the model refuses
+    /// by name: listing `1..=p` would allocate the refused order first.
+    pub fn lags(&self) -> Vec<usize> {
+        match self {
+            ArLags::Order(p) if *p > rheon_core::MAX_LAG => vec![*p],
+            ArLags::Order(p) => (1..=*p).collect(),
+            ArLags::List(l) => l.clone(),
+        }
+    }
 }
 
 /// The two sides of a `seqtest` comparison, as [`ModelKind::compares`]
@@ -1590,6 +1999,15 @@ impl ModelKind {
         "hawkes",
         "expectile",
         "garch",
+        "dcc",
+        "realized",
+        "pca",
+        "power_variation",
+        "tdigest",
+        "ddsketch",
+        "ewm_moments",
+        "ar",
+        "spectral",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -1620,6 +2038,15 @@ impl ModelKind {
             ModelKind::Hawkes { .. } => "hawkes",
             ModelKind::Expectile { .. } => "expectile",
             ModelKind::Garch { .. } => "garch",
+            ModelKind::Dcc { .. } => "dcc",
+            ModelKind::Realized { .. } => "realized",
+            ModelKind::Pca { .. } => "pca",
+            ModelKind::PowerVariation { .. } => "power_variation",
+            ModelKind::TDigest { .. } => "tdigest",
+            ModelKind::DdSketch { .. } => "ddsketch",
+            ModelKind::EwmMoments { .. } => "ewm_moments",
+            ModelKind::Ar { .. } => "ar",
+            ModelKind::Spectral(_) => "spectral",
         }
     }
 
@@ -1645,8 +2072,9 @@ impl ModelKind {
 
     /// False for the models that report no coefficients -- no `coef` field
     /// in their output: `ew_cov`, `seqtest`, `marginal`, `rcov`, `corrchange`,
-    /// `bocpd` and `audit`. `tests/test_model_registry.py` holds this to the field
-    /// names, which are rendered elsewhere.
+    /// `bocpd`, `audit`, `realized`, `tdigest`, `ewm_moments` and `spectral`.
+    /// `tests/test_model_registry.py` holds this to the field names, which are
+    /// rendered elsewhere.
     pub fn has_coef(&self) -> bool {
         !matches!(
             self,
@@ -1657,6 +2085,13 @@ impl ModelKind {
                 | ModelKind::CorrChange { .. }
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. }
+                | ModelKind::Realized { .. }
+                | ModelKind::Pca { .. }
+                | ModelKind::PowerVariation { .. }
+                | ModelKind::TDigest { .. }
+                | ModelKind::DdSketch { .. }
+                | ModelKind::EwmMoments { .. }
+                | ModelKind::Spectral(_)
         )
     }
 
@@ -1731,7 +2166,17 @@ impl ModelKind {
                 window_size: window,
                 window_budget,
                 ..
-            } => Some((window.as_ref().map(Span::value), *window_budget)),
+            }
+            | ModelKind::Ar {
+                window_size: window,
+                window_budget,
+                ..
+            }
+            | ModelKind::Spectral(SpectralSpec {
+                window_size: window,
+                window_budget,
+                ..
+            }) => Some((window.as_ref().map(Span::value), *window_budget)),
             _ => None,
         }
     }
@@ -1796,7 +2241,17 @@ impl ModelKind {
                 snapshot_every,
                 max_rows_between_snapshots,
                 ..
-            } => Some((snapshot_every.as_ref(), *max_rows_between_snapshots)),
+            }
+            | ModelKind::Ar {
+                snapshot_every,
+                max_rows_between_snapshots,
+                ..
+            }
+            | ModelKind::Spectral(SpectralSpec {
+                snapshot_every,
+                max_rows_between_snapshots,
+                ..
+            }) => Some((snapshot_every.as_ref(), *max_rows_between_snapshots)),
             _ => None,
         }
     }
@@ -1809,7 +2264,9 @@ impl ModelKind {
             | ModelKind::Lasso { closed, .. }
             | ModelKind::EwCov { closed, .. }
             | ModelKind::EwClass { closed, .. }
-            | ModelKind::Marginal { closed, .. } => Some(*closed),
+            | ModelKind::Marginal { closed, .. }
+            | ModelKind::Ar { closed, .. }
+            | ModelKind::Spectral(SpectralSpec { closed, .. }) => Some(*closed),
             _ => None,
         }
     }
@@ -1894,14 +2351,36 @@ impl ModelKind {
             | ModelKind::Lasso {
                 window_size: Some(w),
                 ..
-            } => Some((w.value(), self.snapshot_cadence()?)),
+            }
+            | ModelKind::Ar {
+                window_size: Some(w),
+                ..
+            }
+            | ModelKind::Spectral(SpectralSpec {
+                window_size: Some(w),
+                ..
+            }) => Some((w.value(), self.snapshot_cadence()?)),
             _ => None,
         }
     }
 
+    /// Whether a read of the model, and not only a step, decides a window's
+    /// edge on the clock, so that a row only scored is read at its own
+    /// stamp ([`crate::AnyModel::predict_at_into`]): `ewm_moments` under
+    /// `window_size`.
+    pub fn reads_at_stamp(&self) -> bool {
+        matches!(
+            self,
+            ModelKind::EwmMoments {
+                window_size: Some(_),
+                ..
+            }
+        )
+    }
+
     /// True for the models that learn from no target column: `ew_cov`,
-    /// `kmeans`, `micro`, `deco`, `rcov`, `hmm`, `corrchange`, `bocpd` and
-    /// `audit`,
+    /// `kmeans`, `micro`, `deco`, `rcov`, `hmm`, `corrchange`, `bocpd`,
+    /// `audit` and `ewm_moments`,
     /// the list `_spec.py`'s `UNSUPERVISED` keeps too. Their `targets` mirror
     /// `features[0]` for plumbing, so a target that is also a feature is not
     /// a leak for them -- except the column [`Self::targets_slot_column`]
@@ -1918,6 +2397,8 @@ impl ModelKind {
                 | ModelKind::CorrChange { .. }
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. }
+                | ModelKind::Pca { .. }
+                | ModelKind::EwmMoments { .. }
         )
     }
 
@@ -1940,6 +2421,12 @@ impl ModelKind {
                     | ModelKind::Marginal { .. }
                     | ModelKind::Hawkes { .. }
                     | ModelKind::Garch { .. }
+                    | ModelKind::Dcc { .. }
+                    | ModelKind::Realized { .. }
+                    | ModelKind::PowerVariation { .. }
+                    | ModelKind::TDigest { .. }
+                    | ModelKind::DdSketch { .. }
+                    | ModelKind::Spectral(_)
             )
     }
 
@@ -2064,6 +2551,18 @@ pub fn name_renamed(msg: &str) -> String {
     for (old, new) in RENAMED_VALUES {
         if msg.contains(&format!("unknown variant `{old}`")) && msg.contains(&format!("`{new}`")) {
             return format!("{msg}; {old} was renamed {new}");
+        }
+    }
+    // A window given to a `tdigest` (whose fields are the ones serde lists
+    // as expected): a merging digest has no windowed form, so the refusal
+    // names the quantile that forgets (task 544).
+    let tdigest = msg.contains("`compression`") && msg.contains("`quantiles`");
+    for key in ["window_size", "window_rows", "span"] {
+        if tdigest
+            && msg.contains(&format!("unknown field `{key}`"))
+            && let Err(why) = rheon_core::TDigest::check_no_span(Some(key))
+        {
+            return format!("{msg}; {}", models::tdigest_words(&why));
         }
     }
     msg.to_string()
@@ -2572,6 +3071,11 @@ impl Spec {
     ///
     /// Idempotent, and a no-op for a spec that already says both.
     pub fn fill_defaults(&mut self) {
+        // `ewm_moments` with no features reads the columns its terms name,
+        // in the order they first name them.
+        if self.features.is_empty() && matches!(self.model, ModelKind::EwmMoments { .. }) {
+            self.features = self.moment_columns();
+        }
         if self.targets.is_empty() && self.model.is_unsupervised() {
             // A column the model reads from the slot fills it, as the
             // builders write it. `features[0]` went there, and was then read
@@ -2637,7 +3141,8 @@ impl Spec {
             | ModelKind::Rcov { .. }
             | ModelKind::Bocpd { .. }
             | ModelKind::Audit { .. }
-            | ModelKind::Garch { .. } => true,
+            | ModelKind::Garch { .. }
+            | ModelKind::TDigest { .. } => true,
             ModelKind::CorrChange { scalar, .. } => !scalar.unwrap_or(false),
             _ => false,
         };
@@ -2663,6 +3168,11 @@ impl Spec {
                 | ModelKind::CorrChange { .. }
                 | ModelKind::Bocpd { .. }
                 | ModelKind::Audit { .. } => {
+                    Ok(vec![(String::new(), Decay::Halflife(f64::INFINITY))])
+                }
+                // A sketch with no half-life never forgets, or forgets by
+                // its window: no decay is the plain form.
+                ModelKind::DdSketch { .. } => {
                     Ok(vec![(String::new(), Decay::Halflife(f64::INFINITY))])
                 }
                 // A window with no half-life is the common case of a flat
@@ -2841,7 +3351,30 @@ impl Spec {
             // told its terms apart.
             ModelKind::Hawkes { .. } => 0.0,
             // The start is the gate: nothing is reported before it is fitted.
-            ModelKind::Garch { .. } => 0.0,
+            ModelKind::Garch { .. } | ModelKind::Dcc { .. } => 0.0,
+            // Each estimator is defined from its first returns (a sum of
+            // none is 0, and a test or a statistic whose sums are 0 is
+            // `NaN`): no count of weight is the gate.
+            ModelKind::Realized { .. } => 0.0,
+            // The components' own gate is the eigengap against the sampling
+            // error at Kish's effective rows: no count of rows says when the
+            // data has told a component apart from its neighbours.
+            ModelKind::Pca { .. } => 0.0,
+            // As realized: each term is defined from its first returns.
+            ModelKind::PowerVariation { .. } => 0.0,
+            // Each level is withheld until its rows identify it, the
+            // model's own rule: no count of rows is the gate.
+            ModelKind::TDigest { .. } | ModelKind::DdSketch { .. } => 0.0,
+            // Each term is withheld by its own condition -- no weight, no
+            // lagged pair, no spread to standardize by, an unbiased form's
+            // denominator that keeps no digit -- not by a count of rows.
+            ModelKind::EwmMoments { .. } => 0.0,
+            // The fit's definiteness is the gate (`rheon_core::Ar`): a
+            // target predicts once its lags and features span every
+            // direction, which no count of rows says.
+            ModelKind::Ar { .. } => 0.0,
+            // A power is defined from the first row; nothing to wait for.
+            ModelKind::Spectral(_) => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3360,6 +3893,46 @@ impl Spec {
                     columns_counted(self.features.len())
                 ));
             }
+        } else if let ModelKind::Dcc { .. } = &self.model {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: dcc takes no features, but features lists {}: its targets \
+                     are the return series whose correlation it models. Put the return columns \
+                     in targets, and leave out features.",
+                    columns_counted(self.features.len())
+                ));
+            }
+        } else if let ModelKind::Realized { .. } | ModelKind::PowerVariation { .. } = &self.model {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: {} takes no features, but features lists {}: each of its \
+                     targets is a return series it measures. Put the return columns in \
+                     targets, and leave out features.",
+                    self.model.kind_name(),
+                    columns_counted(self.features.len())
+                ));
+            }
+        } else if let ModelKind::TDigest { .. } | ModelKind::DdSketch { .. } = &self.model {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: {} takes no features, but features lists {}: each of \
+                     its targets is a column whose quantiles it reads. Put those columns in \
+                     targets, and leave out features.",
+                    self.model.kind_name(),
+                    columns_counted(self.features.len())
+                ));
+            }
+        } else if matches!(self.model, ModelKind::Spectral(_)) {
+            if !self.features.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: spectral takes no features, but features lists {}: each of \
+                     its targets is a series it transforms. Put the series in targets, and \
+                     leave out features.",
+                    columns_counted(self.features.len())
+                ));
+            }
+        } else if matches!(self.model, ModelKind::Ar { .. }) {
+            // Features are optional: a pure autoregression has none.
         } else if self.features.is_empty() && !(columns_missing && self.model.is_unsupervised()) {
             columns_missing = true;
             no.refuse(format!(
@@ -3615,7 +4188,8 @@ impl Spec {
                     ModelKind::SeqTest { .. }
                     | ModelKind::Rcov { .. }
                     | ModelKind::Bocpd { .. }
-                    | ModelKind::Audit { .. } => false,
+                    | ModelKind::Audit { .. }
+                    | ModelKind::Garch { .. } => false,
                     ModelKind::CorrChange { scalar, .. } => scalar.unwrap_or(false),
                     _ => true,
                 };
@@ -3737,6 +4311,71 @@ impl Spec {
                  models.",
                 self.model.kind_name()
             ));
+        }
+        // The residual checks whose null a fit fails by construction. An
+        // expectile at a level other than one half is not the mean: its
+        // residuals' mean is not 0 on a stream it fits exactly (-1.0 at 0.9
+        // on unit Gaussian noise), so the Mincer-Zarnowitz Wald and the
+        // CUSUM rejected on every row of such a stream. A generalized linear
+        // fit's residuals have its family's variance, a function of the
+        // mean, and its family's shape: on an exact Poisson fit
+        // Breusch-Pagan and Jarque-Bera rejected on every row, and RESET,
+        // read without a heteroskedasticity correction, on a quarter of
+        // them (review 2026-11-23, DIAG-11).
+        if predicts {
+            let off_mean = match self.model {
+                ModelKind::Expectile { expectile, .. } if expectile != 0.5 => Some(expectile),
+                _ => None,
+            };
+            if let Some(tau) = off_mean {
+                for (on, key, what) in [
+                    (
+                        self.emit_calibration,
+                        "emit_calibration",
+                        "its Wald test asks whether the target's mean is the prediction",
+                    ),
+                    (
+                        self.emit_breaks,
+                        "emit_breaks",
+                        "its CUSUM sums residuals whose mean is 0 under no break",
+                    ),
+                ] {
+                    if on {
+                        no.refuse(format!(
+                            "spec {name:?}: {key} tests a fit of the mean, but expectile {} \
+                             is not the mean, so its residuals' mean is not 0 even where it \
+                             fits exactly, and the test rejects on every row: {what}. Leave \
+                             out {key}, or fit expectile 0.5, the mean.",
+                            num_label(tau)
+                        ));
+                    }
+                }
+            }
+            if matches!(self.model, ModelKind::Glm { .. }) {
+                for (on, key, what) in [
+                    (
+                        self.emit_specification,
+                        "emit_specification",
+                        "Breusch-Pagan's null is a constant variance, and RESET's is read \
+                         under one",
+                    ),
+                    (
+                        self.emit_tails,
+                        "emit_tails",
+                        "Jarque-Bera's null is a normal residual",
+                    ),
+                ] {
+                    if on {
+                        no.refuse(format!(
+                            "spec {name:?}: {key} tests residuals of constant variance and a \
+                             normal shape, but a glm's residuals have its family's variance, \
+                             which moves with the mean, and its family's shape, so the test \
+                             rejects on every row of a stream it fits exactly: {what}. Leave \
+                             out {key}; emit_calibration and emit_breaks read a glm's mean."
+                        ));
+                    }
+                }
+            }
         }
         if self.ljung_box_lags.is_some() && !self.emit_specification {
             no.refuse(needs("ljung_box_lags", "emit_specification"));
@@ -4202,8 +4841,18 @@ impl Spec {
                 .iter()
                 .any(|(_, d)| !forgets(self.diagnostic_decay_of(memory, *d, 1)))
             {
+                let rows_on_a_clock = matches!(
+                    self.model,
+                    ModelKind::Expectile {
+                        window_rows: Some(_),
+                        ..
+                    }
+                ) && self.clock.is_some();
                 let why = if memory.is_some() {
                     "feature_health_half_life is inf"
+                } else if rows_on_a_clock {
+                    "its memory is the fit's, and window_rows counts rows, which are no span \
+                     of the clock column, while half_life is inf"
                 } else if self.lam.is_some() {
                     "its memory is the fit's, which forgets nothing (lam is 1, with no \
                      window_size)"

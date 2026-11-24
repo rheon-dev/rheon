@@ -54,6 +54,29 @@ impl AnyModel {
                 Ok(AnyModel::Hawkes(Box::new(rheon_core::Hawkes::restore(s)?)))
             }
             ModelState::Garch(_) => Ok(AnyModel::Garch(Box::new(rheon_core::Garch::restore(s)?))),
+            ModelState::Dcc(_) => Ok(AnyModel::Dcc(Box::new(rheon_core::Dcc::restore(s)?))),
+            ModelState::Realized(_) => Ok(AnyModel::Realized(Box::new(
+                rheon_core::Realized::restore(s)?,
+            ))),
+            ModelState::StreamPca(_) => {
+                Ok(AnyModel::Pca(Box::new(rheon_core::StreamPca::restore(s)?)))
+            }
+            ModelState::PowerVariation(_) => Ok(AnyModel::PowerVariation(Box::new(
+                rheon_core::PowerVariation::restore(s)?,
+            ))),
+            ModelState::TDigest(_) => Ok(AnyModel::TDigest(Box::new(
+                rheon_core::TDigestModel::restore(s)?,
+            ))),
+            ModelState::DdSketch(_) => Ok(AnyModel::DdSketch(Box::new(
+                rheon_core::DdSketchModel::restore(s)?,
+            ))),
+            ModelState::EwmMoments(_) => Ok(AnyModel::EwmMoments(Box::new(
+                rheon_core::EwmMoments::restore(s)?,
+            ))),
+            ModelState::Ar(_) => Ok(AnyModel::Ar(Box::new(rheon_core::Ar::restore(s)?))),
+            ModelState::Spectral(_) => Ok(AnyModel::Spectral(Box::new(
+                rheon_core::Spectral::restore(s)?,
+            ))),
             // A kind only rheon-core builds, such as `ew_cov`'s bare running
             // sums: its name is the code's, so the message does not print it.
             _ => Err(StateError::Invalid(format!(
