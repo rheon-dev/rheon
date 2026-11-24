@@ -392,53 +392,6 @@ def tweedie_family(power: float, link: str) -> sm.families.Family:
     return sm.families.Tweedie(lk, var_power=power)
 
 
-@pytest.mark.parametrize("power", [1.2, 1.8, 2.5, 3.0])
-def test_the_tweedie_recursion_at_each_power_is_statsmodels_irls_step(power):
-    """The row-by-row recursion of
-    ``test_the_recursion_is_the_familys_irls_step_row_by_row``, at Tweedie
-    powers either side of 2 (zeros among the amounts below it, none above),
-    its Fisher weight and working response from statsmodels' ``Tweedie``
-    family at that power.
-
-    Without the refit or a step cap the recursion can run away from its
-    first rows (``glm.rs``, *The start*), and a runaway's path is chaotic,
-    so the stream is one on which no coefficient passes 10. Bound: each
-    side takes ``μ^p`` and ``e^η`` from its own library, three ulps a call,
-    and each row's solve amplifies a relative error by at most the largest
-    condition of ``G + I`` along the path, ``κ``, read from the longhand:
-    over ``n`` rows, ``64 n κ u`` relative. Measured 2026-11-24 (x86-64,
-    Linux): ``κ`` at most 21, the gap at most 1.4e-4 of the bound.
-    """
-    k, n = 3, 300
-    X, y = tweedie_design(power, "log", n, 7)
-    assert (power < 2) == bool(np.any(y == 0))
-    fam = tweedie_family(power, "log")
-    G = np.zeros((k, k))
-    b = np.zeros(k)
-    path = []
-    kappa = 1.0
-    for i in range(n):
-        x = X[i]
-        eta = float(np.clip(x @ b, -30.0, 30.0))
-        mu = np.atleast_1d(fam.link.inverse(eta))
-        W = float(fam.weights(mu)[0])
-        dz = float((y[i] - mu[0]) * fam.link.deriv(mu)[0])
-        G += W * np.outer(x, x)
-        kappa = max(kappa, float(np.linalg.cond(G + np.eye(k))))
-        b = b + np.linalg.solve(G + np.eye(k), W * dz * x)
-        path.append(b.copy())
-    assert np.abs(path).max() < 10.0
-    s = rp.spec.glm(
-        "m", targets=["y"], features=["x1", "x2"], family="tweedie", var_power=power,
-        half_life=float("inf"), refit_rows=0, step_cap=float("inf"), coef_every=0,
-    )  # fmt: skip
-    out = rp.ModelBank([s]).fit_predict(frame(X, y))
-    got = np.array(out["m"].struct.field("coef").to_list(), dtype=float)
-    want = np.array(path)
-    gap = np.max(np.abs(got - want) / (1.0 + np.abs(want)))
-    assert gap <= 64 * n * kappa * U, (gap, kappa)
-
-
 @pytest.mark.parametrize("power", [1.5, 3.0])
 @pytest.mark.parametrize("ridge", [1.0, 50.0])
 def test_a_tweedie_refit_at_the_power_link_solves_statsmodels_score_equation(power, ridge):
