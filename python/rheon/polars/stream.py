@@ -1388,11 +1388,19 @@ def _formulas(who: str, exprs: tuple[Any, ...], named: dict[str, Any]) -> list[d
             )
         out.append({"name": name, "tree": _formula.to_tree(e, who)})
     for f in out:
-        if not _formula.operators(f["tree"]):
+        if not _formula.operators(f["tree"]) and not _formula.holds_invert(f["tree"]):
             raise ValueError(
                 f"{who}: {f['name']!r} holds no window operator, so it reads only its own row. "
                 "Compute it with Polars' with_columns instead."
             )
+    if out and not any(_formula.operators(f["tree"]) for f in out):
+        # An invert counts as a formula's node, but reads the row alone: a
+        # run of inverts alone would compute no window.
+        raise ValueError(
+            f"{who}: no expression holds a window operator, and rp.invert reads the row alone, "
+            "so the run has no window to compute. Add the inverts to a run that computes a "
+            "window operator, such as a running mean of a column the run reads."
+        )
     return out
 
 
@@ -1512,9 +1520,11 @@ def with_windows(
     arithmetic, negation, comparisons, ``&`` and ``|``, ``log``, ``exp``,
     ``abs``, ``sqrt``, ``pow``, ``clip``, ``fill_null``, ``is_null``,
     ``is_not_null``, ``when/then/otherwise``, ``cast`` and ``alias``. Each
-    formula must hold at least one operator. A ``shift``, a cumulative or
-    rolling function, ``over`` or an aggregation would depend on the chunking,
-    and is refused by name when the query is built.
+    formula must hold at least one operator or a root solved by
+    :func:`rheon.polars.ops.invert`, and the run at least one operator. A
+    ``shift``, a cumulative or rolling function, ``over`` or an aggregation
+    would depend on the chunking, and is refused by name when the query is
+    built.
 
     .. rubric:: Returns
 
@@ -1547,8 +1557,9 @@ def with_windows(
           window looking ahead under ``group`` with no ``clock``, or
           ``half_life=float("inf")`` with no ``window_size`` for a mean, a
           variance or a standard deviation;
-        - a formula that holds no window operator, or a formula by position
-          that has no name of its own;
+        - a formula that holds no window operator or invert, a run whose
+          formulas hold no window operator, or a formula by position that
+          has no name of its own;
         - a ``session_gap`` without ``session``, or a
           ``restart_after_step_back`` without ``clock``, which would do
           nothing;

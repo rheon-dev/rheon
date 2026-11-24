@@ -168,6 +168,7 @@ FAMILIES: tuple[Family, ...] = (
             )
         ),
     ),
+    Family("ops-solve", "ops", (f"{_RP}.ops.invert",)),
     Family(
         "eval-scores",
         "eval",

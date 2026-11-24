@@ -5,8 +5,8 @@
 
 use polars::prelude::*;
 use rheon_bench::{
-    BANK_CASES, CLOCK_CASES, GROUPS, MODEL_CASES, ROWS, SILENT_CASES, SPAN_CASE, WARM_ROWS,
-    WIDE_CASES, WIDE_ROWS, WINDOW_CASES, bank_setup, clock_setup, model_setup,
+    BANK_CASES, CLOCK_CASES, GROUPS, INVERT_CASE, MODEL_CASES, ROWS, SILENT_CASES, SPAN_CASE,
+    WARM_ROWS, WIDE_CASES, WIDE_ROWS, WINDOW_CASES, bank_setup, clock_setup, model_setup,
     rheon_budget_bank_rows, rheon_budget_clock_rows, rheon_budget_model_rows,
     rheon_budget_windows_rows, spec, windows_setup,
 };
@@ -290,6 +290,24 @@ fn every_window_case_reads_its_block_inside_the_first_window() {
         };
         assert_eq!(run.run.queued(), held, "{id}: a row left the window");
     }
+}
+
+/// The invert case solves every row of its block: each root certified and
+/// a root of its row's equation, `u^3 + u + exp(u / 2) = x0`, and the
+/// running sum beside it holds no row, so the block is the solves.
+#[test]
+fn the_invert_case_solves_every_row_of_its_block() {
+    let mut run = windows_setup(INVERT_CASE);
+    let out = rheon_budget_windows_rows(&mut run);
+    assert_eq!(out.height(), ROWS);
+    let roots = out.column("w").expect("the roots").f64().expect("floats");
+    let x0 = out.column("x0").expect("the input").f64().expect("floats");
+    assert_eq!(roots.null_count(), 0, "every row certified");
+    for (u, x) in roots.into_no_null_iter().zip(x0.into_no_null_iter()) {
+        let f = u * u * u + u + (0.5 * u).exp();
+        assert!((f - x).abs() <= 1e-10, "u {u}: f(u) {f} for x0 {x}");
+    }
+    assert_eq!(run.run.queued(), 0, "the running sum keeps no row");
 }
 
 /// The wide cases learn their block on the pool they are named for, in

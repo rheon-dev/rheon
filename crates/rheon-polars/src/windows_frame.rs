@@ -625,7 +625,7 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         return Err(format!(
             "{WHO}: no expression holds a window operator or increment, and an invert reads \
              the row alone, so the run has no window to compute. Add the inverts to a run that \
-             computes a window operator, or solve them with Polars' with_columns."
+             computes a window operator, such as a running mean of a column the run reads."
         )
         .into());
     }

@@ -727,3 +727,48 @@ Built 2026-11-24 on this branch, after merging the W13 integration branch.
   an invert in a formula target; a run of inverts alone; `clip`, `when`,
   comparisons, `norm_cdf`, `erf` and `erfc` in the interpreter; the
   `detail` reason as an `Enum`; the bench cell.
+
+## 7. Slice 2, third cut (part 3): `rp.invert` in Python
+
+Built 2026-11-24 on this branch.
+
+- **The name.** `rp.invert(f, equals, lo, hi, *, increasing, xtol=2e-12,
+  rtol=4 eps_mach, detail=False)`, also `rp.ops.invert`, mirroring the node's
+  four parts and parameters. `increasing` is required, as the node requires
+  it. It returns the operators' kind of `pl.Expr`: a column under the
+  reserved prefix whose name is the node's compact JSON, every parameter
+  written, so one invert asked for twice is one column.
+- **The unknown without `rp.unknown`.** `rp.unknown` and `rp.norm_cdf` stay
+  deferred, so `f` is a Python function of one argument, called once with a
+  stand-in column (`@po:["unknown"]`) that the formula reader turns into the
+  leaf `["unknown"]` only while it reads `f`; anywhere else the stand-in is
+  refused by name. The form mirrors `brentq`'s callable, and a later
+  `rp.unknown()` can return the same stand-in.
+- **Checked when the call is made**, each refusal naming `rp.invert`: the
+  nodes each part may hold (the interpreter's: columns, numbers, `+ - * /`,
+  `**`, `neg abs exp sqrt log`, a strict cast to Float64), a window operator
+  or another invert in a part, the unknown outside `f`, a node reading no
+  column, a bracket of two numbers not in order or not finite, and the
+  parameters' types and ranges. The Rust reader checks the node again when
+  the run is built. A bracket that reads a column is checked row by row
+  (`bracket_invalid`).
+- **Where it runs.** `with_windows` takes a formula holding an invert, and
+  refuses a run whose formulas hold no window operator before the native
+  build does; that message (and the native one, which named Polars'
+  `with_columns`, where the node cannot run) now says to add the inverts to a
+  run that computes a window operator. A spec's formula target refuses an
+  invert when the spec is built.
+- **Docs.** The docstring states the method, the tolerance and the bound,
+  the certificate and every reason; the reference lists it under its own
+  family on the `ops` page; the feature index has its line.
+- **Oracle.** `tests/test_second_opinion_invert.py` holds `rp.invert`
+  through `with_windows` to `brentq` on the example's 1,000 seeded rows, and
+  asserts the node it writes is the example's.
+- **The bench case** `window_invert_cubic` (`u^3 + u + exp(u/2) = x0` on
+  `[-10, 10]` beside a running sum) is built by `windows_setup` and run
+  natively by `tests/workloads.rs`; it is not yet in `WINDOW_CASES` or
+  `benches/instructions.rs`, since a counted case needs its entry in
+  `budgets.toml` and this cut leaves that file to the coordinator.
+- **Deferred:** `rp.unknown`, `rp.norm_cdf`; a run of inverts alone; an
+  invert in a formula target; `clip`, `when`, comparisons and the special
+  functions in the interpreter; the `detail` reason as an `Enum`.

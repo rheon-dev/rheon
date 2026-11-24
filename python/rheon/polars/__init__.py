@@ -164,6 +164,7 @@ from rheon.polars.ops import (
     ewm_sum,
     ewm_var,
     increment,
+    invert,
     # The old names of `ewm_*(reverse=True)`, which refuse a call naming the
     # new form and are kept out of `__all__`, so the reference shows it alone.
     rewm_mean,  # noqa: F401
@@ -188,6 +189,7 @@ __all__ = [
     "ewm_sum",
     "ewm_var",
     "increment",
+    "invert",
     "rolling_max",
     "rolling_min",
     "ops",
