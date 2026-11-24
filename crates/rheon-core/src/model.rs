@@ -1168,6 +1168,13 @@ pub trait OnlineModel: Sized {
         }
     }
 
+    /// What this row's fixed-lag smoother emitted ([`crate::Smoothed`]),
+    /// written over `out`, and whether the model has one: `kalman`'s
+    /// `smooth_lag`. Every other model keeps the default, `false`.
+    fn smoothed_into(&self, _out: &mut crate::Smoothed) -> bool {
+        false
+    }
+
     fn state(&self) -> State;
     fn restore(s: &State) -> Result<Self, StateError>;
     /// [`Self::restore`] taking the state, for a model that can move its

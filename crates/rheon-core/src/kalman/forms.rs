@@ -175,6 +175,14 @@ impl Kalman {
                     .into(),
             );
         }
+        if form == CovarianceForm::SquareRoot && self.smoother.is_some() {
+            return Err(
+                "kalman: covariance_form=\"square_root\" cannot carry smooth_lag: the smoother \
+                 reads the covariance itself, which the square root's form does not hold. Leave \
+                 covariance_form at its default to smooth."
+                    .into(),
+            );
+        }
         if form == CovarianceForm::SquareRoot && self.form != CovarianceForm::SquareRoot {
             for p in &mut self.p {
                 for i in 0..k {

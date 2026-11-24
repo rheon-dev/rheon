@@ -217,7 +217,10 @@ pub use huber_refit::{
     refit_reservation,
 };
 pub use influence::Influence;
-pub use kalman::{CovarianceForm, Kalman, KalmanCfg};
+pub use kalman::{
+    CovarianceForm, Kalman, KalmanCfg, SMOOTH_MIN_WEIGHT, SMOOTH_STOOD, SMOOTH_UNSEEN, Smoothed,
+    SmoothedRow,
+};
 pub use lasso::{Lasso, LassoCfg};
 pub use margbins::{BinCfg, BinRule, BinStat};
 pub(crate) use margbins::{MarginalBins, edges_from};

@@ -513,7 +513,9 @@ use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schem
 use crate::{Decay, EwDiag};
 
 mod forms;
+mod smooth;
 pub use forms::CovarianceForm;
+pub use smooth::{SMOOTH_MIN_WEIGHT, SMOOTH_STOOD, SMOOTH_UNSEEN, Smoothed, SmoothedRow};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KalmanCfg {
@@ -995,6 +997,10 @@ pub struct Kalman {
     fbuf: Vec<f64>,
     #[serde(skip)]
     xbuf: Vec<f64>,
+    /// The fixed-lag smoother (`kalman/smooth.rs`), written only where one
+    /// was asked for, so no other state moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    smoother: Option<Box<smooth::Smoother>>,
 }
 
 /// The layout `Kalman` loads, checked on the way in: every vector at the
@@ -1019,6 +1025,8 @@ struct KalmanV4 {
     /// A state of schema 67 or earlier has none: the covariance form.
     #[serde(rename = "covariance_form", default)]
     form: CovarianceForm,
+    #[serde(default)]
+    smoother: Option<Box<smooth::Smoother>>,
 }
 
 impl TryFrom<KalmanV4> for Kalman {
@@ -1084,6 +1092,15 @@ impl TryFrom<KalmanV4> for Kalman {
         // Each message says what its check requires (docs/PLAN.md task 218):
         // the basis's said ">= 0" of a check that refuses a 0, and named
         // neither its lengths nor its bound.
+        if v.smoother.as_ref().is_some_and(|s| {
+            v.form != CovarianceForm::Covariance || !s.is_valid(k, m, n_p, cfg.standardize)
+        }) {
+            return Err(
+                "kalman: its saved smoother has the wrong shape. Load an undamaged copy of the \
+                 state file, or rebuild it from its input."
+                    .into(),
+            );
+        }
         if !v.basis.iter().all(NoiseBasis::is_valid) {
             return Err(
                 "kalman: its saved prior rows hold values no fit could have. Load an \
@@ -1125,6 +1142,7 @@ impl TryFrom<KalmanV4> for Kalman {
             form: v.form,
             fbuf: vec![],
             xbuf: vec![],
+            smoother: v.smoother,
         })
     }
 }
@@ -1186,6 +1204,7 @@ impl Kalman {
             form: CovarianceForm::Covariance,
             fbuf: vec![],
             xbuf: vec![],
+            smoother: None,
             cfg,
         };
         model.ensure_buffers();
@@ -1669,8 +1688,11 @@ impl Kalman {
                 self.map_c[i] = 0.0;
             }
         }
-        if within {
-            self.remap();
+        // The smoother's chain does not cross a re-map refused.
+        if !(within && self.remap())
+            && let Some(s) = self.smoother.as_deref_mut()
+        {
+            s.cut(None);
         }
         for i in off..k {
             self.anchor_slot_here(i);
@@ -1679,8 +1701,8 @@ impl Kalman {
 
     /// `b <- Mᵀ b`, `P <- Mᵀ P M` from the kept map, unless a number it
     /// would leave is not finite (the module doc). In place, every check
-    /// made before anything moves.
-    fn remap(&mut self) {
+    /// made before anything moves; whether it moved them.
+    fn remap(&mut self) -> bool {
         let k = self.cfg.k_total();
         let off = usize::from(self.cfg.fit_intercept);
         let (a, c) = (&self.map_a, &self.map_c);
@@ -1726,7 +1748,7 @@ impl Kalman {
             }
         }
         if !finite {
-            return;
+            return false;
         }
         for b in &mut self.beta {
             if off == 1 {
@@ -1762,6 +1784,10 @@ impl Kalman {
                 p[0] = u[0];
             }
         }
+        if let Some(s) = self.smoother.as_deref_mut() {
+            s.remap(a, c, off);
+        }
+        true
     }
 
     /// Whether covariance `pi` is unsized: all zero on its diagonal, as it
@@ -1878,6 +1904,9 @@ impl Kalman {
         }
         for p in &mut self.p {
             forms::transit_cov::<FACTOR>(p, &self.phi, coupled.then_some(&g[..]), &mut self.vbuf);
+        }
+        if let Some(s) = self.smoother.as_deref_mut() {
+            s.transit(&self.phi, coupled.then_some(&g[..]));
         }
         self.gbuf = g;
     }
@@ -2054,6 +2083,9 @@ impl Kalman {
     /// With no noise yet it stays unsized, and the next row that observes
     /// its target sizes it as the first did.
     fn size_again(&mut self, pi: usize) {
+        if let Some(s) = self.smoother.as_deref_mut() {
+            s.cut(Some(pi));
+        }
         self.p[pi].fill(0.0);
         if self.units() {
             // In units of the noise the prior needs none: `p0` on every
@@ -2648,6 +2680,17 @@ impl OnlineModel for Kalman {
         }
     }
 
+    fn stamp_next(&mut self, stamp: crate::Stamp) {
+        self.smooth_stamp(stamp);
+    }
+
+    fn smoothed_into(&self, out: &mut Smoothed) -> bool {
+        self.smoothed().is_some_and(|s| {
+            out.clone_from(s);
+            true
+        })
+    }
+
     fn state(&self) -> State {
         State::new(ModelState::Kalman(Box::new(self.clone())))
     }
@@ -2696,6 +2739,8 @@ impl Kalman {
             *out = refused;
             return;
         }
+        // Here, not before the refusal, which steps the row again.
+        self.smooth_begin(d_clock);
         self.ensure_buffers();
         let k = self.cfg.k_total();
         let m = self.cfg.n_targets;
@@ -2881,6 +2926,10 @@ impl Kalman {
             }
         }
 
+        // The smoother's slot for each observed covariance's last
+        // observation takes this one's prior (`kalman/smooth.rs`).
+        self.smooth_link(y, weight);
+
         // ---- Kalman update per target ----
         // Under `share_p`, `P z` is read once, from `P` as the row finds it,
         // and `P` takes the row once, after every target's update (the
@@ -2976,6 +3025,7 @@ impl Kalman {
         if shared_update {
             self.take::<FACTOR>(0, open_shared, shared_s, shared_r);
         }
+        self.smooth_observe(y, weight, ready);
 
         // Standardization stats update last, so this row's z used the prior
         // stats; a row that moved them is followed by the drift check, and
@@ -5701,4 +5751,6 @@ mod tests {
     // Review C1's follow-up: the moments keep the row's weight of history
     // after a gap of more than a half-life.
     mod gap_moments;
+    // Task 496's fixed-lag smoother against the whole-prefix smoother.
+    mod smooth;
 }
