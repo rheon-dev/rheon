@@ -305,12 +305,14 @@ the definition and an identity, with Polars where it has the same operator.
 
 **Each window operator is held three ways: to the definition, to Polars'
 own functions where Polars has the operator, and to the time-reversal
-identity.**
+identity.** The definition is computed twice over, in doubles on every
+stream and at 80 digits where a window is read far from its values.
 
 | oracle | what it checks | held by |
 |---|---|---|
-| the brute force | every operator, a mean, a sum and a rate, on nine kernels: each direction, every `closed`, finite and infinite half-lives. Five streams of 400 rows carry gaps, repeated stamps, sessions, nulls and groups. To 1e-9 | `windows.rs::every_operator_matches_its_definition` |
+| the brute force | every operator, a mean, a sum and a rate, on nine kernels: each direction, every `closed`, finite and infinite half-lives. Five streams of 400 rows carry gaps, repeated stamps, sessions, nulls and groups. An interval's mass is the integral itself, by Gauss-Legendre quadrature of the decay, which shares no closed form with the core. To 1e-9 | `windows.rs::every_operator_matches_its_definition` |
 | a loop from the definition, in Python | the mean, the sum and the rate, each looking back and looking ahead, under each `closed`, to 1e-9 | `test_windows.py::test_each_operator_matches_the_definition` |
+| the definition at 80 digits | the mean looking back and looking ahead, the variance and its root, where the window's values are far from the reading row: two values up to 663 half-lives away, then 1,000, and streams with runs of 40 null rows, under each `closed`, with and without decay. `tests/reference_windows.py` takes every mass and every power of the decay in `decimal`, so it has no rounding of its own to share with the core. To 30 doubles next to 1 (100 at 1,000 half-lives) | `test_windows.py::test_a_mean_read_far_from_its_values_is_the_definition`, `::test_a_mean_a_thousand_half_lives_from_its_values_is_the_definition`, `::test_windows_across_null_runs_are_the_definition` |
 | Polars' own functions | the backward mean and sum, with no window, against `ewm_mean_by` and `ewm_sum_by` (1.44.1 on) on a `Datetime` clock, to 1e-9; which rows a window holds under each `closed`, against `rolling_sum_by`, exactly | `test_polars_computes_the_same_mean_and_sum`; `test_which_rows_a_window_holds_is_polars_rolling` |
 | the time-reversal identity | a forward window against a backward one over the reversed stream, to 1e-9 | `windows.rs::a_forward_window_is_a_backward_one_over_the_reversed_stream`, and `test_windows.py`'s test of the same name |
 | chunking | chunks of 1, 2, 3, 7, 50 and 499 rows give one chunk's bits | `windows.rs::chunking_changes_no_bit` |
@@ -318,7 +320,11 @@ identity.**
 
 **Each oracle reaches what the others cannot.** The brute force and the
 identity check every row against the definition, so a forward window that
-counts a row from outside its stretch fails both. The day of
+counts a row from outside its stretch fails both. The definition at 80
+digits reaches the rounding. A mass taken as the difference of two masses
+from the reading row loses a bit a half-life. A loop that took the same
+difference agreed with it to 1e-9 until the window was read 30 half-lives
+from its values. The day of
 data is ETCUSDT on 2024-01-02, from data.binance.vision.
 `tests/data.py::public_quotes_and_trades` downloads it once and caches it
 under `.cache/microstructure`, and offline that one test skips.
@@ -1464,8 +1470,8 @@ integration tests through `run_config`. `rheon-core/src/robust.rs` is at 98%.
 2026-09-24.** `mutants.yml` runs `cargo mutants` over the changed lines of
 `rheon-core` and `rheon-polars/src/span.rs`, on every push to `main` and
 every pull request. It fails on a survivor that
-`scripts/mutants_equivalent.toml` does not list. That file holds 423
-entries (2026-11-23), each an equivalent mutant -- a few
+`scripts/mutants_equivalent.toml` does not list. That file holds 420
+entries (2026-11-24), each an equivalent mutant -- a few
 name two that share a line -- with the reason no input can tell it from
 the original. The weekly pass over all of `rheon-core`, 11,138 mutants on
 2026-10-03, reports its survivors without failing on them.

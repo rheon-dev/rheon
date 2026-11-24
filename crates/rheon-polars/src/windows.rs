@@ -616,6 +616,11 @@ pub(crate) struct DecayMemo {
     held: (u64, f64),
     /// The mass at the far end of an interval read in the window's cut.
     mass_far: (u64, f64),
+    /// The discount from the near end of the interval a window's cut reads
+    /// to the reading row: a slot of its own, since a read asks for it
+    /// between the discounts across its queue's anchors (`discount`), once
+    /// for each operator of the kernel, and one slot would hold neither.
+    disc_cut: (u64, f64),
     /// A forward kernel's close, which a backward kernel's queue never needs.
     fwd: Option<Box<FwdMemo>>,
     /// A windowed backward kernel's cut: the mass of the distance from a
@@ -635,6 +640,10 @@ pub(crate) struct FwdMemo {
     mass_open: (u64, f64),
     disc_seg: (u64, f64),
     disc_open: (u64, f64),
+    /// A mean's open row, discounted to its sums' anchor, not to the row as
+    /// a sum's is (`disc_open`): a slot of its own, so a mean and a sum of
+    /// one kernel each find their last distance.
+    disc_mean: (u64, f64),
     mass_span: (u64, f64),
 }
 
@@ -2989,6 +2998,12 @@ fn close<const W: bool>(
         let mut a = Acc::default();
         let mut any = seg.is_some();
         let mut first_own: Option<usize> = None;
+        // A mean is a ratio of its sums, the same seen from any time, so it
+        // is read where they are anchored: at the first row in the window
+        // with a value of its own, whose mass is discounted by nothing.
+        // Discounted to the row, a value more than 1074 half-lives ahead
+        // weighed 0 and the mean was null (review 2026-11-23, WIN-2 (3)).
+        let mut mean_at: Option<f64> = None;
         match op.stat {
             Stat::Mean => {
                 first_own = q
@@ -2999,8 +3014,9 @@ fn close<const W: bool>(
                     Some(0) => seg,
                     Some(p) => q.sum_after_op::<W>(k, p - 1, j),
                 };
-                if let Some(b) = base {
-                    a = scaled(&mut q.decay, b);
+                if let Some((b, at)) = base {
+                    a = b;
+                    mean_at = Some(at);
                 }
             }
             Stat::Sum | Stat::Rate | Stat::Quantile | Stat::Max | Stat::Min => {
@@ -3017,10 +3033,13 @@ fn close<const W: bool>(
             let n = f64::from(u8::from(own));
             match op.stat {
                 Stat::Mean if !h.is_nan() && (own || first_own.is_some()) => {
+                    // Seen from the sums' anchor; with no sums, from the
+                    // open row itself.
                     let m = if open_on_edge {
                         0.0
                     } else {
-                        mass_between_close(k, &mut q.decay, t.tau, otau, open_end.min(far))
+                        let from = mean_at.unwrap_or(otau);
+                        mass_between_close(k, &mut q.decay, t.tau, from, otau, open_end.min(far))
                     };
                     a = a.plus(
                         Acc {
@@ -3385,6 +3404,7 @@ mod tests {
     //! monoid and no closing order.
     use rheon_core::{OnClockReset, SessionGap};
 
+    use super::far_tests::mass_bf;
     use super::*;
 
     /// The integer short cuts in `past_cap` and `is_after` say what the
@@ -3758,29 +3778,6 @@ mod tests {
             };
             let err = k.check().expect_err("refused");
             assert!(err.contains("half_life must be at least"), "{err}");
-        }
-    }
-
-    /// `∫_a^b λ^(T - s) ds` / `∫_a^b λ^(s - T) ds`, written from the
-    /// definition with the discount as a closed form.
-    fn mass_bf(k: &KernelDef, t: f64, a: f64, b: f64) -> f64 {
-        if b <= a {
-            return 0.0;
-        }
-        let m = |d: f64| {
-            if d <= 0.0 {
-                0.0
-            } else if k.half_life.is_infinite() {
-                d
-            } else {
-                // The closed form by `exp_m1`, as `mass` takes it (task 159, W2).
-                -(k.half_life / std::f64::consts::LN_2)
-                    * (-(d * std::f64::consts::LN_2 / k.half_life)).exp_m1()
-            }
-        };
-        match k.direction {
-            Direction::Backward => m(t - a) - m(t - b),
-            Direction::Forward => m(b - t) - m(a - t),
         }
     }
 

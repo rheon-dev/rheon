@@ -842,16 +842,6 @@ why = "at `|x| = 1` both arms give 0"
 
 [[equivalent]]
 file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::corr_of"
-mutation = "replace > with >="
-line_has = "if den > 0.0 { vab / den } else { f64::NAN }"
-why = """`den = 0` is a column without spread (or a product that underflows): \
-the mutant's `vab / 0` is NaN or ±inf where the original gives NaN, and \
-every caller reads a correlation only through `is_finite`, on it or on a \
-ratio built from it"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
 function = "CorrChange::long_run_sd"
 mutation = "replace > with >="
 line_has = "if v > 0.0 { v.sqrt() } else { f64::NAN }"
@@ -883,15 +873,6 @@ line_has = "sab += da * (r[b] - mb);"
 why = """the mutant negates every prefix correlation and the last one alike \
 (`den` does not change); negation is exact, so each score is the same \
 double"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/corrchange.rs"
-function = "CorrChange::sequential_since_change"
-mutation = "replace > with >="
-line_has = "if den > 0.0 { sab / den } else { f64::NAN }"
-why = """at `den = 0` the mutant's `sab / 0` is NaN or ±inf: a score built \
-from it is not finite and is skipped, and a last prefix that is not finite \
-gives NaN either way"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/corrchange.rs"
@@ -3155,18 +3136,6 @@ line_has = "if a.is_finite() && w > 0.0 && w.is_finite() {"
 why = """both callers, `MarginalBins::update_row` and `judge_row`, take a row \
 only once `row_weight` has found its weight finite and above 0, so `w = 0` \
 never reaches this line"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/window_moments.rs"
-function = "Layout::corr"
-mutation = "replace > with >="
-line_has = "if den > 0.0 {"
-why = """at `den = 0` the mutant divides `M_ab` by 0, a NaN or an infinity, \
-where the original returns NaN; `corr`'s one caller, \
-`CorrChange::window_stat_merged`, returns NaN for the report the moment \
-either window's correlation is not finite, so the report is NaN either \
-way (`den` is never negative: the diagonal co-moments are sums of squares \
-and of non-negative merge terms)"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/window_moments.rs"

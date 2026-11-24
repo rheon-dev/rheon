@@ -60,7 +60,16 @@ const MASKS: u64 = 0x8ab94abb9163ebc2;
 /// state mid-stream; with the state bytes left out of the digest the run
 /// gives the build before's total (0xdc922818f4c86233 both), so no output
 /// bit moved.
-const BITS: u64 = 0x35af61ac52ba13af;
+///
+/// 0x35af61ac52ba13af until PLAN 578d's second round (WIN-1 and WIN-2 (3)):
+/// under a finite half-life an interval's mass is its own, discounted from
+/// its near end, where it was the difference of two masses from the reading
+/// row, and a mean looking ahead is read where its sums are anchored. The
+/// CASE lines that move are 179 of the 236: every case with a window but
+/// five whose stream is refused at its first step back, and none of the 52
+/// without a window. [`MASKS`] did not move: no output is null where it
+/// had a value on these streams, or the reverse.
+const BITS: u64 = 0x9627f432c08e8214;
 /// Rows a case runs over.
 const ROWS: usize = 2000;
 
