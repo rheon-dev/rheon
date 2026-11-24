@@ -1080,6 +1080,50 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`glm`'s refit at the log link's clip, a refit given up, and rows at
+  the doubles' edges** (review 2026-11-23, GLM-1, GLM-3 (2), GLM-4, GLM-5).
+  The refit of the first rows started at `ln ȳ` and read a row's score at
+  the clipped mean `e^30` as if it were not clipped, while its objective,
+  flat in `η` past the clip, read the clipped mean: at a Poisson target of
+  1e14 the intercept went to 32.33, and at 1e25 to 1e6, reported as
+  converged. A row past the clip now has no score or curvature in the
+  refit, the start is held to the clip, and the fit stops at the clip's
+  edge, the nearest mean the link gives. A line search that finds no step
+  lowering the objective is convergence only where the full step's
+  predicted fall is too small for the objective to show; otherwise the fit
+  stands and counts in `solve_failures` (under the Gamma's inverse link a
+  start `1e15` times worse than the fit in reach was reported converged).
+  A group past `refit_budget` kept no step cap where the spec left
+  `step_cap` out (a row moved its own `η` by 2.6); it now keeps the
+  start's cap of 1. A row whose score overflows (`x = 1e100` at `η = −30`)
+  teaches nothing, as one whose Gram overflows does, where it left `1e298`
+  in the Gram and froze that direction. The Tweedie deviance past the
+  largest double is `+∞`, not NaN, and the Gamma's where `y/μ` underflows
+  is finite; no family takes an infinite target; a negative weight handed
+  to the model directly is a weight of 0. Every row inside the clip, with a
+  refit that runs or no refit, keeps its bits. Moves: `glm.*` (the cases
+  above only).
+- **`expectile`'s windows and refits keep no fit of rows that left, and fit
+  a constant, far-off or dead feature** (review 2026-11-23, EXP-1 to
+  EXP-4). At `τ ≠ 1/2` a clock window emptied by a gap, or a row window
+  with fewer rows carrying the target than coefficients, read the fit of
+  the rows that had left; it now reads none, as `τ = 1/2` did, and the
+  lost fit counts in `solve_failures` at every level. The exact refit, of a
+  window or of the first rows, falls back, where its raw solve fails, to
+  the solve about its rows' own weighted means: a feature constant at
+  -1500 read NaN on every row of a window, and one at `1e6 + 1e-3 N(0,
+  1)` too; each now reads the exact fit. The solves about the means read
+  the pivot floor against each pivot's own diagonal, so a feature that is
+  always 0 beside one of spread 1e7 is fitted under the ridge, where the
+  one pass froze at an early row's fit. On the row clock, `predict` and a
+  row of weight 0 read a window `d_clock` rows on, as a numeric clock reads
+  it `d_clock` units on (the bank scores a row of weight 0 by `predict`,
+  so this moves rows scored under `embargo`). A clock window's `min_weight`
+  gate reads the weight the row reports, the window's before the rows
+  that leave at the row, as `n_eff` and `hawkes` read it: a row reporting
+  `weight_sum` 5 against a floor of 3 was withheld with no reason. Every
+  stream whose solves passed their floors keeps its bits. Moves:
+  `expectile.*` (the cases above only).
 - **`power_variation`'s normalized terms scale by the returns' weight, and
   `n` is Kish's count under a window too** (Fable's W13 review, B1 and B2,
   as `realized` was fixed). `normalize` multiplied a term of powers `p` by

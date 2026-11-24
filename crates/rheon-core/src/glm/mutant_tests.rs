@@ -42,7 +42,18 @@ fn a_waiting_buffer_one_short_of_its_count_is_the_shape_and_a_full_one_is_not() 
     };
     assert!(rows(5).fits(4, 6, false));
     assert!(!rows(6).fits(4, 6, false));
-    assert!(rows(7).fits(4, 6, true), "a span holds what its span has");
+    let spanned = |learned: u32| GlmRefit {
+        first: Some(Stamp::from(0.0)),
+        ..rows(learned)
+    };
+    assert!(
+        spanned(7).fits(4, 6, true),
+        "a span holds what its span has"
+    );
+    assert!(
+        !rows(7).fits(4, 6, true),
+        "a span's rows run from its first stamp"
+    );
     // A count of 0 reads as 1: the empty buffer fits, one row does not.
     assert!(rows(0).fits(4, 0, false));
     assert!(!rows(1).fits(4, 0, false));

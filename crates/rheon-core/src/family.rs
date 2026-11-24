@@ -218,15 +218,16 @@ impl Family {
 
     /// Whether `y` is in the family's support: a count is never negative,
     /// a Gamma amount (and a Tweedie one at `p > 2`) is above 0, and a
-    /// binomial proportion is in `[0, 1]`. `-0.0` is 0.
+    /// binomial proportion is in `[0, 1]`; none is infinite. `-0.0` is 0.
     pub fn takes(&self, y: f64) -> bool {
-        match self.family {
-            GlmFamily::Poisson => y >= 0.0,
-            GlmFamily::Gamma => y > 0.0,
-            GlmFamily::Binomial => (0.0..=1.0).contains(&y),
-            GlmFamily::Tweedie if self.power > 2.0 => y > 0.0,
-            GlmFamily::Tweedie => y >= 0.0,
-        }
+        y.is_finite()
+            && match self.family {
+                GlmFamily::Poisson => y >= 0.0,
+                GlmFamily::Gamma => y > 0.0,
+                GlmFamily::Binomial => (0.0..=1.0).contains(&y),
+                GlmFamily::Tweedie if self.power > 2.0 => y > 0.0,
+                GlmFamily::Tweedie => y >= 0.0,
+            }
     }
 
     /// What [`Self::takes`] refuses, in words for a message.
@@ -329,12 +330,28 @@ impl Family {
     }
 
     /// The unit deviance `d(y, μ)` (the module docs), `0 · ln 0 = 0`.
+    ///
+    /// Two forms guard the doubles' range, each only where the plain one
+    /// fails, so every deviance in range keeps its bits: the Gamma's
+    /// `ln(y/μ)` is `ln y − ln μ` where `y/μ` underflows to 0 or overflows;
+    /// the Tweedie's two `μ` terms, of opposite signs, are factored as
+    /// `μ^(1−p) (μ/(2−p) − y/(1−p))` where each alone is past the largest
+    /// double and their sum is NaN (at `p = 30`, `μ = e^−30`: the deviance
+    /// is past the largest double too, and the factored form says `+∞`).
     pub fn unit_deviance(&self, y: f64, mu: f64) -> f64 {
         // `y ln(y/m)`, 0 at `y = 0`.
         let xlogy = |y: f64, m: f64| if y == 0.0 { 0.0 } else { y * (y / m).ln() };
         match self.family {
             GlmFamily::Poisson => 2.0 * (xlogy(y, mu) - (y - mu)),
-            GlmFamily::Gamma => 2.0 * (-(y / mu).ln() + (y - mu) / mu),
+            GlmFamily::Gamma => {
+                let q = y / mu;
+                let l = if q > 0.0 && q.is_finite() {
+                    q.ln()
+                } else {
+                    y.ln() - mu.ln()
+                };
+                2.0 * (-l + (y - mu) / mu)
+            }
             GlmFamily::Binomial => 2.0 * (xlogy(y, mu) + xlogy(1.0 - y, 1.0 - mu)),
             GlmFamily::Tweedie => {
                 let p = self.power;
@@ -343,7 +360,12 @@ impl Family {
                 } else {
                     0.0
                 };
-                2.0 * (a - y * mu.powf(1.0 - p) / (1.0 - p) + mu.powf(2.0 - p) / (2.0 - p))
+                let d = 2.0 * (a - y * mu.powf(1.0 - p) / (1.0 - p) + mu.powf(2.0 - p) / (2.0 - p));
+                if d.is_nan() {
+                    2.0 * (a + mu.powf(1.0 - p) * (mu / (2.0 - p) - y / (1.0 - p)))
+                } else {
+                    d
+                }
             }
         }
     }

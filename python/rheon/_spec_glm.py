@@ -84,7 +84,7 @@ def glm(
         The learned rows (each of positive weight, with its target in the
         family's range) after which each target's first rows are fitted to
         convergence, once, as a batch fit does (*The start* in Notes).
-        Default ``max(200, 10 * k)``, ``k`` the coefficients, up to 100
+        Default ``max(200, 10 * k)``, ``k`` the features plus one, up to 100
         features, held to the rows the group's cap below holds, and off
         above 100 features or where the cap holds fewer than ``2 * k``
         rows. ``0`` turns the refit off. A group's buffers hold ``8 *
@@ -123,7 +123,9 @@ def glm(
         reserves the most its targets' buffers can hold when it first
         appears. The group that would cross the bound, and every new group
         after it, gives its refit up and keeps its one-pass fit, which
-        ``bank.summary()``'s ``refit_given_up`` counts.
+        ``bank.summary()``'s ``refit_given_up`` counts. Such a group's rows
+        are held to the start's step cap of 1 (or ``step_cap``, where
+        smaller) for good.
 
     .. rubric:: Output
 
@@ -237,10 +239,14 @@ def glm(
     the frozen weights, which shrinks as ``1/n`` against the standard
     error's ``1/√n``, and grows with the dispersion as its square root. Its
     error against the true coefficients equals the batch fit's to 0.01
-    standard errors on average. Under decay the ridge ages as the first row
-    does, so a row of weight 0 moves no coefficient, and the fit tends to
-    the decayed likelihood's maximum, statsmodels' ``GLM`` with the decayed
-    weights as ``freq_weights``.
+    standard errors on average. Under decay ``G`` decays and the ridge does
+    not: each step's penalty is in part one toward 0 that ages as the first
+    row does, and in part a pull toward the fits before the row, which
+    vanishes as the fit stops moving. So a row of weight 0 moves no
+    coefficient, and the fit tends to the decayed likelihood's maximum,
+    unpenalized: statsmodels' ``GLM`` with the decayed weights as
+    ``freq_weights``. The refit fits its rows at their decayed weights
+    under the whole ridge.
 
     **The start.** Before about ``k`` rows the fit is underdetermined and
     one row can move ``η`` by tens. With no remedy the recursion then runs

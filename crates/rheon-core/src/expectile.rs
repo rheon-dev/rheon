@@ -131,6 +131,8 @@ mod mutant_tests;
 #[cfg(test)]
 mod refit_clock_tests;
 #[cfg(test)]
+mod review_tests;
+#[cfg(test)]
 mod tests;
 
 /// The most passes an exact refit takes; one that takes them all counts in
@@ -447,9 +449,11 @@ impl Refit {
     /// (a span of the clock holds the rows its span has).
     fn fits(&self, width: usize, refit_rows: u32, clocked: bool) -> bool {
         let n = if self.done { 0 } else { self.learned as usize };
-        self.rows.len() == n * width
+        n.checked_mul(width) == Some(self.rows.len())
             && (self.done || clocked || self.learned < refit_rows.max(1))
             && (clocked || self.first.is_none())
+            // A span runs from the first row it holds.
+            && (!clocked || self.done || self.learned == 0 || self.first.is_some())
     }
 }
 
@@ -589,6 +593,8 @@ struct Work {
     l: Vec<f64>,
     d: Vec<f64>,
     fit: Fit,
+    /// The targets' weights a windowed row is gated on.
+    weights: Vec<f64>,
 }
 
 impl PartialEq for Work {
@@ -632,6 +638,25 @@ fn side_weight(r: f64, tau: f64) -> f64 {
 /// Cholesky factor written into `l`: `false` where a pivot is below
 /// [`PIVOT_FLOOR`] of `A`'s largest diagonal, or not finite -- no fit.
 fn chol_solve(a: &[f64], b: &[f64], k: usize, l: &mut Vec<f64>, x: &mut Vec<f64>) -> bool {
+    chol_solve_floor::<false>(a, b, k, l, x)
+}
+
+/// [`chol_solve`] with the floor read against each pivot's own diagonal
+/// where `OWN`: the pivot over its diagonal is one less the share of the
+/// column the columns before it explain, whatever the columns' scales.
+/// The centred solves read it so: a feature that is always 0 beside one
+/// whose spread is 1e7 has the ridge alone as its diagonal and its pivot,
+/// the whole of it, where against the largest diagonal it was under the
+/// floor and the fit was refused. A raw `[1, x]` system keeps the largest
+/// diagonal's floor, which also refuses a feature nearly constant against
+/// the intercept: the centred solve then takes it, about the means.
+fn chol_solve_floor<const OWN: bool>(
+    a: &[f64],
+    b: &[f64],
+    k: usize,
+    l: &mut Vec<f64>,
+    x: &mut Vec<f64>,
+) -> bool {
     let top = (0..k).fold(0.0_f64, |m, i| m.max(a[at(i, i)]));
     if !(top > 0.0 && top.is_finite()) {
         return false;
@@ -645,7 +670,8 @@ fn chol_solve(a: &[f64], b: &[f64], k: usize, l: &mut Vec<f64>, x: &mut Vec<f64>
                 s -= l[at(i, m)] * l[at(j, m)];
             }
             if i == j {
-                if !(s >= PIVOT_FLOOR * top && s.is_finite()) {
+                let floor = if OWN { a[at(i, i)] } else { top };
+                if !(s > 0.0 && s >= PIVOT_FLOOR * floor && s.is_finite()) {
                     return false;
                 }
                 l[at(i, i)] = s.sqrt();
@@ -684,7 +710,8 @@ fn chol_solve(a: &[f64], b: &[f64], k: usize, l: &mut Vec<f64>, x: &mut Vec<f64>
 /// left a pivot of the ridge alone, 1e-6, below 1e-12 of a diagonal of 1e6,
 /// and the model never fitted (docs/PLAN.md task 538, the property stream
 /// `test_expectile_collinear.py` pins). Reached only where the raw solve
-/// fails, so every stream it fitted keeps its bits.
+/// fails, so every stream it fitted keeps its bits. Its floor is read
+/// against each pivot's own diagonal ([`chol_solve_floor`]).
 fn centred_solve(g: &[f64], c: &[f64], k: usize, pen: f64) -> Option<Vec<f64>> {
     let p = k.checked_sub(1).filter(|&p| p > 0)?;
     let m: Vec<f64> = (0..p).map(|i| g[at(i + 1, 0)]).collect();
@@ -697,7 +724,7 @@ fn centred_solve(g: &[f64], c: &[f64], k: usize, pen: f64) -> Option<Vec<f64>> {
     }
     let b: Vec<f64> = (0..p).map(|i| c[i + 1] - m[i] * c[0]).collect();
     let (mut l, mut x) = (Vec::new(), Vec::new());
-    if !chol_solve(&a, &b, p, &mut l, &mut x) {
+    if !chol_solve_floor::<true>(&a, &b, p, &mut l, &mut x) {
         return None;
     }
     let intercept = c[0] - m.iter().zip(&x).map(|(mi, xi)| mi * xi).sum::<f64>();
@@ -777,12 +804,103 @@ impl Fit {
             }
         }
         let enough = if self.ridge > 0.0 { 1 } else { p };
-        counted >= enough && chol_solve(&self.g, &self.c, p, &mut self.l, out)
+        counted >= enough
+            && (chol_solve(&self.g, &self.c, p, &mut self.l, out)
+                || (self.icpt && p > 1 && self.centred_wls(sides_at, p, tau, out)))
+    }
+
+    /// [`Self::wls`] about the rows' own weighted means, where the raw
+    /// system failed its pivot floor: the same penalized minimiser, the
+    /// intercept being unpenalized, `β_s = (Σ c (z − m)(z − m)' + r V I)⁻¹
+    /// Σ c (z − m)(y − ȳ)` and the intercept `ȳ − m'β_s`, `m` and `ȳ` the
+    /// means at the weights `c = v a`. Formed from the rows themselves, it
+    /// is exact where a feature is constant (the raw pivot is the ridge
+    /// alone) or far from 0 against its spread (the raw pivot is lost to
+    /// the level squared), where the one pass's fallback, read from the
+    /// mean-form sums, can only be as good as their cancellation. Its floor
+    /// is read against each pivot's own diagonal ([`chol_solve_floor`]).
+    #[cold]
+    #[inline(never)]
+    fn centred_wls(
+        &mut self,
+        sides_at: Option<&[f64]>,
+        p: usize,
+        tau: f64,
+        out: &mut Vec<f64>,
+    ) -> bool {
+        let q = p - 1;
+        let n = self.n();
+        let mut cw = Vec::with_capacity(n);
+        let (mut s, mut sy) = (0.0, 0.0);
+        let mut m = vec![0.0; q];
+        for i in 0..n {
+            let z = &self.z[i * p..(i + 1) * p];
+            let a = match sides_at {
+                Some(b) => side_weight(self.y[i] - dot(z, b), tau),
+                None => 0.5,
+            };
+            let c = self.v[i] * a;
+            cw.push(c);
+            s += c;
+            sy += c * self.y[i];
+            for (mr, zr) in m.iter_mut().zip(&z[1..]) {
+                *mr += c * zr;
+            }
+        }
+        if !(s > 0.0 && s.is_finite()) {
+            return false;
+        }
+        let ybar = sy / s;
+        m.iter_mut().for_each(|v| *v /= s);
+        let mut a = vec![0.0; q * (q + 1) / 2];
+        let mut b = vec![0.0; q];
+        let mut d = vec![0.0; q];
+        for (i, &c) in cw.iter().enumerate() {
+            if c == 0.0 {
+                continue;
+            }
+            let z = &self.z[i * p + 1..(i + 1) * p];
+            for (dr, (zr, mr)) in d.iter_mut().zip(z.iter().zip(&m)) {
+                *dr = zr - mr;
+            }
+            let r = self.y[i] - ybar;
+            for t in 0..q {
+                let cd = c * d[t];
+                for (u, du) in d.iter().enumerate().take(t + 1) {
+                    a[at(t, u)] += cd * du;
+                }
+                b[t] += cd * r;
+            }
+        }
+        if self.ridge > 0.0 {
+            let v: f64 = self.v.iter().sum();
+            for t in 0..q {
+                a[at(t, t)] += self.ridge * v;
+            }
+        }
+        let (mut l, mut x) = (Vec::new(), Vec::new());
+        if !chol_solve_floor::<true>(&a, &b, q, &mut l, &mut x) {
+            return false;
+        }
+        out.clear();
+        out.push(ybar - m.iter().zip(&x).map(|(mi, xi)| mi * xi).sum::<f64>());
+        out.extend_from_slice(&x);
+        out.iter().all(|v| v.is_finite())
     }
 
     /// The exact expectile regression of the rows held, warm-started at
     /// `warm` (the module docs): `None` where the rows determine no fit.
     fn refit(&mut self, p: usize, tau: f64, warm: Option<&[f64]>) -> Option<Refitted> {
+        if tau == 0.5 {
+            let mut b = std::mem::take(&mut self.b);
+            let ok = self.wls(None, p, tau, &mut b);
+            self.b = b;
+            return ok.then(|| Refitted {
+                beta: self.b.clone(),
+                passes: 1,
+                converged: true,
+            });
+        }
         let mut beta = Vec::with_capacity(p);
         match warm {
             Some(b) => beta.extend_from_slice(b),
@@ -795,16 +913,6 @@ impl Fit {
                 }
                 beta.extend_from_slice(&self.b);
             }
-        }
-        if tau == 0.5 {
-            let mut b = std::mem::take(&mut self.b);
-            let ok = self.wls(None, p, tau, &mut b);
-            self.b = b;
-            return ok.then(|| Refitted {
-                beta: self.b.clone(),
-                passes: 1,
-                converged: true,
-            });
         }
         let n = self.n();
         let eps = f64::EPSILON;
@@ -828,6 +936,12 @@ impl Fit {
             let ok = self.wls(Some(&beta), p, tau, &mut new);
             if !ok {
                 self.trial = new;
+                // A warm start is a fit of other rows: where these rows
+                // give no first pass from it, they start cold, from least
+                // squares, or determine no fit.
+                if pass == 1 && warm.is_some() {
+                    return self.refit(p, tau, None);
+                }
                 return Some(Refitted {
                     beta: best.1,
                     passes: pass,
@@ -875,7 +989,9 @@ impl Fit {
             if h == 1.0 && new_sides == sides {
                 return done(beta);
             }
-            if moved <= (REFIT_TOL * scale).max(rounding) {
+            // Read only at a finite scale: residuals past the doubles'
+            // range give no yardstick for "moved".
+            if scale.is_finite() && moved <= (REFIT_TOL * scale).max(rounding) {
                 return done(beta);
             }
             // A side pattern met before with no lower loss since: rows at
@@ -1143,17 +1259,22 @@ impl Expectile {
     /// handed, else the clock summed from the steps.
     fn window_key(&self, now: Option<(Stamp, bool)>, d_clock: f64, counting: bool) -> Stamp {
         match now {
-            Some((_, true)) => Stamp::from((self.clock.counted + u64::from(counting)) as f64),
+            Some((_, true)) if counting => Stamp::from((self.clock.counted + 1) as f64),
+            // A row of weight 0 counts in no clock, and is read as a row
+            // `d_clock` on would be: as `predict` reads it.
+            Some((_, true)) => Stamp::from(self.clock.counted as f64 + d_clock),
             Some((s, false)) => s,
             None => Stamp::from(self.clock.own + d_clock),
         }
     }
 
     /// A read ahead's key, for a row `d_clock` after the last stepped that
-    /// would count.
+    /// would count: on the row clock `d_clock` rows on, as a clock of
+    /// numbers reads `d_clock` units on (a row scored under `embargo` sits
+    /// after the rows held, its step theirs and its own).
     fn key_ahead(&self, d_clock: f64) -> Stamp {
         match self.clock.read {
-            _ if self.clock.on_rows => Stamp::from(self.clock.counted as f64 + 1.0),
+            _ if self.clock.on_rows => Stamp::from(self.clock.counted as f64 + d_clock),
             Some(last) => back_by(last, -d_clock),
             None => Stamp::from(self.clock.own + d_clock),
         }
@@ -1214,7 +1335,15 @@ impl Expectile {
                     self.beta[j] = r.beta;
                     self.fitted[j] = true;
                 }
-                None => self.fitted[j] = false,
+                // A window whose rows no longer determine the fit it had
+                // (emptied, or too few rows carry the target) found no fit,
+                // which counts; a target never fitted lost nothing.
+                None => {
+                    if self.fitted[j] {
+                        self.solve_failures += 1;
+                    }
+                    self.fitted[j] = false;
+                }
             }
         }
     }
@@ -1339,16 +1468,24 @@ impl Expectile {
         self.fitted[j] = true;
     }
 
-    /// The row's reading: each target's prediction at the fit as it stands,
-    /// gated on its weight, and `n_eff`.
-    fn read_into(&self, x: &[f64], floor: f64, n_eff: f64, out: &mut Step) {
+    /// Each target's weight, the window's rows' under a window, into
+    /// `out`: what `min_weight` is checked against.
+    fn weights_into(&self, out: &mut Vec<f64>) {
         let m = self.cfg.n_targets;
+        out.clear();
+        match &self.window {
+            Some(w) => out.extend((0..m).map(|j| w.weight(m, Some(j)))),
+            None => out.extend_from_slice(&self.w_target),
+        }
+    }
+
+    /// The row's reading: each target's prediction at the fit as it stands,
+    /// gated on `weights`, the targets' weights before the row's own clock
+    /// step (a clock window's before the rows that leave at the row, as
+    /// `n_eff` is: hard rule 8), and `n_eff`.
+    fn read_into(&self, x: &[f64], floor: f64, n_eff: f64, weights: &[f64], out: &mut Step) {
         out.pred.clear();
-        for j in 0..m {
-            let weight = match &self.window {
-                Some(w) => w.weight(m, Some(j)),
-                None => self.w_target[j],
-            };
+        for (j, &weight) in weights.iter().enumerate() {
             out.pred.push(self.read(j, x, weight, floor));
         }
         out.n_eff = n_eff;
@@ -1360,16 +1497,18 @@ impl Expectile {
     /// on a copy; else the fit as it stands.
     fn read_ahead(&self, x: &[f64], d_clock: f64, key: Stamp, floor: f64, out: &mut Step) {
         let n_eff = self.n_eff();
+        let mut weights = Vec::new();
+        self.weights_into(&mut weights);
         if self.oldest_has_left(key) {
             let mut at = self.clone();
             at.ensure_work();
             at.trim(key);
             at.refit_window();
-            at.read_into(x, floor, n_eff, out);
+            at.read_into(x, floor, n_eff, &weights, out);
             return;
         }
         let _ = d_clock;
-        self.read_into(x, floor, n_eff, out);
+        self.read_into(x, floor, n_eff, &weights, out);
     }
 
     fn step_row(
@@ -1426,11 +1565,15 @@ impl Expectile {
         self.work.x[off..].copy_from_slice(x);
         if self.window.is_some() {
             // The rows out of a clock window by now leave before the row is
-            // read, and the fit of what is left is the one it reads.
+            // read, and the fit of what is left is the one it reads, gated
+            // on the weight before they left, as `n_eff` reports it.
+            let mut weights = std::mem::take(&mut self.work.weights);
+            self.weights_into(&mut weights);
             if self.cfg.window_clock.is_some() && self.trim(key) {
                 self.refit_window();
             }
-            self.read_into(x, floor, n_eff, out);
+            self.read_into(x, floor, n_eff, &weights, out);
+            self.work.weights = weights;
             if self.over.is_some() {
                 return;
             }
@@ -1461,7 +1604,7 @@ impl Expectile {
             }
             return;
         }
-        self.read_into(x, floor, n_eff, out);
+        self.read_into(x, floor, n_eff, &self.w_target, out);
         // A refit over a span of the clock holds the rows the span has: a
         // row that would take the state past the cap is not learned, nor
         // any after it.
@@ -1622,6 +1765,11 @@ impl OnlineModel for Expectile {
                     && m.refit
                         .iter()
                         .all(|r| r.fits(width, m.cfg.refit_rows, m.cfg.refit_clock.is_some()))
+                    // Only a span's buffers or a clock window can be stopped
+                    // at the cap.
+                    && (m.over.is_none()
+                        || m.cfg.refit_clock.is_some()
+                        || m.cfg.window_clock.is_some())
                     && match (&m.window, m.cfg.windowed()) {
                         (None, false) => true,
                         (Some(w), true) => {

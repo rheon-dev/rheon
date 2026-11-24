@@ -183,3 +183,90 @@ coordinator's.
 | MATH-6 | confirmed, all five (NaN and `inf` counts gave NaN edges; an unsymmetric matrix read by its lower half; a NaN pair misnamed; a stale `cross_moments` width; `True` and `0.5` read as positions), fixed | `tests/test_corr_paths.py::test_the_noise_floor_refuses_a_count_that_is_not_finite`, `::test_an_unsymmetric_matrix_is_read_as_its_symmetric_part`, `::test_a_nan_off_its_mirror_is_named_where_it_is`; `tests/test_gram_module.py::TestMath6` | d12cd115 |
 | REG-12 | confirmed (at weights `2^-664`: the warm-up count 0 and no switch, `rls`'s Kish ratio and every `EwCov`'s Kish size absent), fixed: `Warmup`, `sgd`'s `Level`, `Rls::s2` and `EwCov::q_sum` keep their sums of squared weights beside a power of two of their own (`sqsum`), exponent 0 and unwritten at ordinary weights (`q_sum` is written as `[q, s]` beside a power, one field, so the positional encoding the generated contract tests round-trip through does not slide), so every earlier fixture's bytes and continuations are unchanged. New fixtures `ewridge_tiny_weights`, `rls_tiny_weights` and `sgd_tiny_weights` freeze the new forms. The review's `sgd` 0.9 quantile held at the mean is not the count: at such weights AdaGrad's epsilon outweighs every gradient, a weight being a step size there (`tests/test_weight_scale.py`) | `sqsum.rs::tests`, `warmup.rs::tests::weights_too_small_to_square_count_as_rows`, `sgd/gap_tests.rs::weights_too_small_to_square_count_as_rows`, `rls.rs::tests::the_kish_ratio_holds_at_weights_too_small_to_square`, `ewcov/tests.rs::kish_size_holds_at_weights_too_small_to_square`, `tests/state_fixtures.rs::the_kish_sums_exponents_are_written` | 8c6936b3, 2f6e52e1 |
 | REG-18 | confirmed; fixed by the user's decisions (2026-11-23: "Scales from every row", and rule 5's twenty-ninth exception, "Exception 29: start fresh"). Under `standardize`, `huber` and `quantile` read each feature's scale from its moments over every row the target is learned on with a positive weight (`Robust::spread`), refreshed at each row that moves the band (`spread_scale`), so a kept band system and the next solve read the same scales; a feature with no spread over those rows reads the band's, as before, and is dropped where neither has one. The review's case fits as the unstandardized fit and statsmodels' `QuantReg` within the band's half-width (0.0023). A state of 71 or earlier starts the moments at its first row after the load (`docs/records/STATE-CONTINUATION.md`, the twenty-ninth); the kept `huber*`/`quantile*` sets continue within 2e-5 relative (measured 1.56e-5), the kept banks to the bit. Goldens `quantile` and `quantile_skewed` regenerated (moves 2e-5 and 2e-3 relative; the skewed case's own check against the 0.7 quantile's shift holds). `robust_ref` takes the rule. Cost: 0.3-2.7% a row, `8(3k+2) + 8k` bytes a target | `crates/rheon-core/src/robust/quantile_refit_tests.rs::a_binary_feature_keeps_its_coefficient_under_standardize`, `tests/test_quantile_refit.py::test_a_binary_feature_keeps_its_coefficient_under_standardize`, `tests/state_fixtures.rs::the_scales_from_every_row_are_written` | 0be33dee, 377d2825 |
+
+## Batch b: `glm` and `expectile` (PLAN 578b)
+
+On `review-578b`, cut from `vm/w13-integration` at 51671e2e. "Confirmed"
+means the named test failed on 51671e2e for the review's reason. Test
+paths are under `crates/rheon-core/src/` unless they start with `tests/`;
+`glm/review_tests.rs` and `expectile/review_tests.rs` hold one test or
+more a finding, named by its ID. A test marked `should_panic` holds a
+confirmed defect whose fix is the user's to allow, as in batch e.
+
+| ID | verdict | test | commit |
+|---|---|---|---|
+| EXP-1 | confirmed (cases 1 and 2: an emptied clock window, and a row window with fewer targets than coefficients, read the fit of the rows that left at `τ = 0.9`, where `τ = 1/2` read none), fixed: a first pass that fails from a warm start starts cold, from least squares, or finds no fit. A target that loses its fit counts in `solve_failures` at every level, as the field says ("refits that ... found no fit") and as `τ ≠ 1/2` counted before, so every fixture keeps its bytes. Case 3 (the first rows' refit failing its first pass) was EXP-2's constant feature, fixed there | `expectile/review_tests.rs::exp_1_an_emptied_clock_window_reads_no_fit_at_every_level`, `::exp_1_a_window_with_too_few_targets_reads_no_fit_at_every_level`, `::exp_2_a_constant_feature_is_fitted_by_the_window_and_the_refit`; `tests/test_expectile.py::test_a_clock_window_withholds_only_where_its_weight_says_so` | e6a1eee8 |
+| GLM-1 | (1) confirmed (the refit started at `ln y` past the log link's clip, where the objective is flat, and read the clipped mean's residual as the score: the intercept went to 32.33 at `y = 1e14` and to 1e6 at `1e25`, reported converged), fixed: a row past the clip has no score or curvature in the refit, and the start is held to the clip, so the fit stops at the clip's edge, the nearest mean the link gives. (2) confirmed (the Gamma's inverse link, every halving leaving a row's `η` below 0: the start returned as converged, `9.5e14` against an objective of 1.0 in reach), fixed: a line search that finds no fall is convergence only where the full step's predicted fall is below what `F` shows; otherwise the fit stands, counted unconverged. (3) not reproduced: the trapezoid rule decides only steps whose predicted fall is below `1e-10` of one plus the objective's size, and the Tweedie at `p = 3` (not convex in `η`) and the Gamma's log link land on the oracle's batch fit (Newton by faer's LU) to 1e-10 | `glm/review_tests.rs::glm_1_a_target_past_the_clip_never_raises_the_refits_objective`, `::glm_1_a_line_search_that_finds_no_fall_is_not_converged`, `::glm_1_the_trapezoid_rule_holds_on_non_quadratic_deviances` | e6a1eee8 |
+| EXP-2 | (1) confirmed (a feature constant at -1500: a window read NaN on every row, the first rows' refit kept the one pass's fit at `τ = 0.9`), fixed: the exact refit's WLS falls back, where its raw pivot fails, to the solve about the rows' own weighted means, formed from the rows (`Fit::centred_wls`). (2) the window and refit: confirmed (a feature at `1e6 + 1e-3 N(0, 1)`: NaN on every row), fixed by the same fallback, exact on the rows; the one pass: confirmed (its solve fails on 118 of 200 rows, and the fit before stands, up to 4.9 from the ridged least-squares fit against noise of spread 1.5), a decision for the user (below). (3) confirmed (a feature always 0 beside one of spread 1e7: the one pass froze at an early row's fit, the intercept 1.42 where the ridged least-squares fit is 2.33), fixed: the centred solves read the pivot floor against each pivot's own diagonal, which every system the raw floor accepted also passes, so no stream that fitted moves | `expectile/review_tests.rs::exp_2_a_constant_feature_is_fitted_by_the_window_and_the_refit`, `::exp_2_a_feature_far_from_zero_is_fitted_by_the_window`, `::exp_2_a_dead_feature_beside_a_wide_one_is_fitted`, `::exp_2_the_one_pass_fits_a_feature_far_from_zero` (`should_panic`) | e6a1eee8, 7495cf53 |
+| GLM-2 | (2) confirmed: under decay the recursion's sums are `h_t = λ h_{t−1} + (1 − λ) R β_{t−1} + w W z x̃`, a penalty toward 0 aged as the first row plus a pull toward the fits before, not the documented `F_t`'s; the module docs, `glm`'s docstring and docs/MODELS.md corrected. (1) the refit's undecayed `R` beside decayed weights is confirmed as stated and was documented as such; kept, and now said plainly in the docs: over 200 seeds of the review's case (binomial, 200 rows, `R = 1`), the full `R` gives the lowest excess log-loss against the truth at a half-life of 5 rows (mean 0.057, against 0.114 for the decayed likelihood's maximum and for `R` aged as the doc's `F_t`), and is within 0.002 of the best at 20 and 50 | `glm/review_tests.rs::glm_2_the_recursions_identity_under_decay_is_the_proximal_one`; `glm/tests.rs::the_refit_reads_the_decayed_weights` pins (1) | e6a1eee8 |
+| EXP-3 | confirmed (a read `d` rows on, on the row clock, keyed its window one row on whatever `d`; a row of weight 0 read the window without the step), fixed: `predict` and a row of weight 0 key the window `d_clock` rows on, as a clock of numbers keys it `d_clock` units on. The bank scores a row of weight 0 by `predict`, so it moves only `predict` under `embargo` on a row-clock window | `expectile/review_tests.rs::exp_3_a_read_on_the_row_clock_keys_its_window_d_rows_on` | e6a1eee8 |
+| EXP-4 | confirmed (a floor of 3, the window holding 5 before the row and 1 after the rows that left: `pred` null, `weight_sum` 5, no reason), fixed: the gate reads the weight the row reports, the window's before the rows that leave at the row, as `n_eff` and `hawkes` read it (hard rule 8) | `expectile/review_tests.rs::exp_4_the_gate_reads_the_weight_the_row_reports`; `tests/test_expectile.py::test_a_clock_window_withholds_only_where_its_weight_says_so` | e6a1eee8 |
+| GLM-3 | (1) confirmed (a group past `refit_budget` under the Gamma's inverse link or the Tweedie's power link: every coefficient 0, no mean, null forever), a decision for the user (below). (2) confirmed (a row moved its own `η` by 2.58 with the cap defaulted off for a refit that never ran), fixed: a given-up refit keeps the start's cap for good | `glm/review_tests.rs::glm_3_a_given_up_refit_under_a_link_undefined_at_zero_never_learns` (`should_panic`), `::glm_3_a_given_up_refit_keeps_the_starts_cap` | e6a1eee8, fa02efe6 |
+| GLM-5 | confirmed (a row of finite `G` and a score of `[1.07e211, ∞]` left 1e298 in `G` with no step), fixed: a row whose score is not finite teaches nothing, as one whose `G` overflows does. A solve that fails on a finite system still keeps its row's `G`, which the rows before a definite `G` need under a vanishing ridge (the review's fix, keeping `G` only on a solved step, failed `mutant_tests.rs::a_solve_that_fails_in_a_learned_row_is_counted`) | `glm/review_tests.rs::glm_5_a_row_whose_score_overflows_leaves_the_gram_as_it_was` | e6a1eee8 |
+| EXP-5 | (1) not reproduced: a warm start whose every residual squared overflows (`β_1 = -1e160`) reaches the cold start's fixed point, converged; the first pass's loss and scale are the new fit's, both finite. A scale that is not finite is now no yardstick for "moved" (a guard). (2) not a defect: a weight of `5e-324` at the side `0.1` teaches nothing, and every output after it is the stream's without it, to the bit | `expectile/review_tests.rs::exp_5_an_overflowing_warm_start_still_reaches_the_fixed_point`, `::exp_5_a_subnormal_weight_moves_no_output` | e6a1eee8 |
+| GLM-4 | (3) confirmed (the Tweedie deviance NaN at `p = 30`, `μ = e^−30`), fixed: `+∞`, factored only where the plain form is NaN. (4) confirmed (the Gamma deviance `+∞` at `y = 1e-200`, `μ = 1e150`), fixed: `ln y − ln μ` only where `y/μ` leaves the doubles. (5) `takes(∞)` confirmed, fixed; the review's rows for `β` past the largest double not reproduced (the slope stays at 1.7e279 over 40 rows); the rebuilt `G` and `moved` guards not added, no case reaching them being found. (1) and (2) confirmed by test, a decision for the user (below). The Pass-2 Tweedie power-link case not reproduced: `working` already returns no weight where `z` is not finite | `glm/review_tests.rs::glm_4_a_tweedie_deviance_past_the_largest_double_is_infinite`, `::glm_4_a_gamma_deviance_whose_ratio_underflows_is_finite`, `::glm_4_no_family_takes_an_infinite_target`, `::glm_4_the_reviews_rows_keep_every_coefficient_finite`, `::glm_4_the_score_at_the_clip_loses_its_digits` (`should_panic`), `::glm_4_the_binomials_weight_at_the_clip_loses_its_digits` (`should_panic`) | e6a1eee8 |
+| GLM-7 | not reproduced: `Glm::step_into` takes the handed stamp on every row (51671e2e's line 894, before any weight test), and a row refused for a feature is stepped again at weight 0, which takes it | `glm/review_tests.rs::glm_7_a_stamp_is_taken_by_its_own_row_whatever_its_weight` | e6a1eee8 |
+| GLM-EXP-LOW | (1) confirmed, fixed: `expectile`'s docstring says the ridge fits from the first row. (2) confirmed: `default_glm_refit_rows` counts the intercept whether or not the spec fits one; the docstring now says `k` is the features plus one (a code change would move the default for specs without an intercept above 19 features). (3) confirmed, fixed: a negative weight a caller hands `Glm` directly is a weight of 0 (the bank refuses one). (4) fixed: `τ = 1/2` solves once. (5) confirmed, fixed: `checked_mul`, and a span's buffer without its first stamp or a stop at the cap without a span refused as damaged. (6) confirmed, fixed: the refusal names `refit_span` | `glm/review_tests.rs::low_3_a_negative_weight_is_a_weight_of_0`, `::low_5_...`, `::low_6_the_links_refusal_names_both_refits`; `expectile/review_tests.rs::low_5_...` | e6a1eee8 |
+
+### Left for the user (batch b)
+
+- **EXP-2 (2), the one pass and a feature far from 0.** The one pass keeps
+  the mean-form Gram over `[1, x]`, so a feature whose level is about 1e9
+  times its spread (`1e6 + 1e-3 N(0, 1)`) has a centred block read off a
+  level of 1e12 with its digits lost: the solve fails on 118 of 200 rows
+  (31 under a half-life of 69 rows, the review's 124 of 200), the fit
+  before stands, and a prediction reads up to 4.9 from the ridged
+  least-squares fit's against noise of spread 1.5. Options: (a) keep the raw
+  moments and say in the docs that such a feature is centred before the
+  bank (the window and the refits now fit it exactly from their rows);
+  (b) keep each target's weighted feature means beside a centred Gram
+  (Welford's update): `k` more numbers a target, a few flops a row, a
+  layout change whose loader can only form the centred block from the raw
+  one, with the loss it has, and every one-pass `expectile` output moving
+  in its last bits. Recommended: (a). Held by
+  `expectile/review_tests.rs::exp_2_the_one_pass_fits_a_feature_far_from_zero`
+  (`should_panic`).
+- **GLM-4 (1) and (2), digits at the clip.** The score `W (z − η)` keeps
+  two digits of `y − μ` at `η = 30` and a residual of order 1, and the
+  binomial's `1 − μ` three digits at `η = 30`. Options: (a) keep; (b) a
+  closed-form score in `Working` (`(y − μ)/(g'(μ) V(μ))`, `y − μ` under
+  the canonical links) and `1 − μ = 1/(1 + e^η)` above 0. (b) is right,
+  but it moves every `glm` output's last bits, so every kept `glm` state
+  fixture needs rule 5's exception to continue, while the digits it gains
+  are at the clip's edge alone. Recommended: (a) until a release that
+  moves `glm`'s bits for another reason. Held by the two `should_panic`
+  tests named above.
+- **GLM-3 (1), a given-up refit under a link with no mean at 0.** Such a
+  group never learns. Tried here and set aside: starting its one-pass fit
+  from the intercept at the link of its first target, as the refit
+  starts, under the start's cap of 1. Against statsmodels' `GLM` (Gamma,
+  `InversePower`) on six streams of a well-specified inverse-link Gamma it
+  fit within 0.26, 0.26, 0.53, 0.60 and 0.45 standard errors, and 40 on
+  the sixth at 3,000 rows (the refitted fits: 0.05 to 0.16); a cap that
+  holds a row's mean within a factor `e` (`|Δη| ≤ (1 − e^−|q|) η`) left
+  that stream at 35 and took another to 4.0. The one-pass start without
+  its refit is not sound under these links, which is why the spec refuses
+  them without a refit. Options: (a) never give a refit up under such a
+  link, so `refit_budget` does not bind such a spec (each group's buffer
+  is still held to `max_state_bytes` and freed after its refit); (b) give
+  it up and withhold its predictions with a named reason, where today
+  they are null with none; (c) the start above, with its tail; (d) refuse
+  a finite `refit_budget` beside such a link. Recommended: (a), since the
+  link's own refusal says a refit is what it needs. Held by
+  `glm_3_a_given_up_refit_under_a_link_undefined_at_zero_never_learns`
+  (`should_panic`).
+- **GLM-2 (1), the refit's ridge** is kept (above): the review's 54% slope
+  cut at a half-life of 5 rows is the ridge's shrinkage over 7.7 rows'
+  weight, which lowers the excess log-loss; the user may prefer the
+  decayed likelihood's maximum.
+- **The log link's clip, `e^30`**, caps the mean at 1.07e13: a Gamma or
+  Tweedie amount above it cannot be fitted (GLM-1's case is such a
+  target). The clip keeps `μ` finite; under the log link any clip up to
+  about 700 does. Raising it moves outputs only on rows past 30. Not
+  changed here.
+- **EXP-4's direction.** The gate now reads the weight before the rows
+  that leave at the row, as `n_eff` and `hawkes` do. The other reading,
+  the weight after them in the field, the gate and the accessor, is the
+  weight the fit is read from, but the bank reads each target's weight
+  before the row's step and has no stamp to trim it at: it needs a trait
+  method that reads the weights at a stamp.

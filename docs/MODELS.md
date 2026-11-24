@@ -507,7 +507,7 @@ What `half_life` decays differs by model:
 | `sgd` | `weight_sum`, the running moments `standardize` scales by, the spreads its cut and tube are drawn in (the Huber cut's at `huber_scale_half_life` when given), and adagrad's sums, but not the coefficients |
 | `pa` | `weight_sum`, each target's own weight, the running moments `standardize` scales by and the spread its tube is drawn in, but not the coefficients |
 | `ftrl` | its per-coordinate sums, but not its penalties, so a shorter half-life shrinks the fit more |
-| `glm` | each target's Gram `G`, and its ridge with the rows, so a row of weight 0 moves no coefficient |
+| `glm` | each target's Gram `G`, but not its ridge: the step's penalty ages toward 0 as the first row does and pulls toward the fits before, so a row of weight 0 moves no coefficient |
 | `holt` | the level, and the trend at `trend_half_life`, four times `half_life` by default |
 | `ar` | each target's running sums, which its fit is solved from; not its lags, which count learned rows |
 
