@@ -14,6 +14,40 @@ import numpy as np
 TIER = "essential"
 
 
+def _mp_gamma_q_inv(a: float, q: float) -> float:
+    """The x with Q(a, x) = q at 50 digits: a secant solve of ln Q(a, e^t) =
+    ln q from scipy's value, checked to leave a relative residual of 10⁻³⁰."""
+    import mpmath as mp
+
+    guess = _gamma_guess(a, q)
+    if not (np.isfinite(guess) and guess > 0):
+        # The root lies below the smallest double (the far lower tail of a
+        # small shape), where no value is normal: the points the gap skips.
+        return float("nan")
+    with mp.workdps(50):
+        g = lambda t: mp.log(mp.gammainc(a, mp.exp(t), mp.inf, regularized=True)) - mp.log(q)  # noqa: E731
+        t = mp.findroot(g, mp.log(mp.mpf(guess)), solver="secant", tol=mp.mpf(10) ** -40)
+        x = mp.exp(t)
+        residual = mp.gammainc(a, x, mp.inf, regularized=True) / q - 1
+        assert abs(residual) < mp.mpf(10) ** -30, (a, q, residual)
+        return float(x)
+
+
+def _gamma_guess(a: float, q: float) -> float:
+    from scipy import special as sc
+
+    return float(sc.gammainccinv(a, q))
+
+
+def _mp_beta_inc_c(a: float, b: float, x: float) -> float:
+    """1 − I_x(a, b) at 160 digits: the upper tail, where its cancellation at
+    50 digits reads zero for values near 1e-55."""
+    import mpmath as mp
+
+    with mp.workdps(160):
+        return float(mp.betainc(a, b, x, 1, regularized=True))
+
+
 class TestSpecialFunctionsAreScipys:
     """The core's special functions (``rheon_core::special``, PLAN 558) against
     ``scipy.special`` over the domains a distribution fit reads: Student's t's
@@ -29,6 +63,11 @@ class TestSpecialFunctionsAreScipys:
     do better); an inverse against ``min(F, 1 - F) / (x f(x))``. ``ln Γ``,
     ``ψ`` and ``ln B`` cross zero, so they are judged absolutely, in ``ε``
     times ``max(1, |value|)``.
+
+    ``gamma_q_inv`` and ``beta_inc_c`` are held to 50- and 160-digit mpmath
+    references, rheon's own bounds; scipy is their second opinion at a bound
+    that covers its gap on each platform (scipy's values differ by platform,
+    so a bound set at one platform's maximum does not hold on another).
 
     Where a bound is wide the gap is scipy's: ``gammaincc`` near ``a = 1/2,
     x ≈ 1`` (to 380 half-ulps), ``betaln`` with one large argument (cephes
@@ -114,13 +153,22 @@ class TestSpecialFunctionsAreScipys:
         )
         for name, oracle, tail, bound in (
             ("gamma_p_inv", sc.gammaincinv, sc.gammainc, 72.0),  # measured 65.4
-            ("gamma_q_inv", sc.gammainccinv, sc.gammaincc, 168.0),  # measured 167.0
+            # scipy's second opinion; its gap varies by platform (167 here,
+            # 170 on macOS), so its bound covers both and rheon's does not.
+            ("gamma_q_inv", sc.gammainccinv, sc.gammaincc, 180.0),
         ):
             aa, _, pp, got = self._call(name, a, 0, p)
             want = oracle(aa, pp)
             with np.errstate(all="ignore"):
                 cond = tail(aa, want) / (want * stats.gamma.pdf(want, aa))
             assert self._worst(got, want, cond) <= bound, name
+        # rheon's own bound, against a 50-digit mpmath inverse: 20.0 measured on
+        # every third point of this grid, where the worst one is.
+        aa, _, pp, got = self._call("gamma_q_inv", a.ravel()[::3], 0, p.ravel()[::3])
+        ref = np.array([_mp_gamma_q_inv(float(x), float(q)) for x, q in zip(aa, pp, strict=True)])
+        with np.errstate(all="ignore"):
+            cond = sc.gammaincc(aa, ref) / (ref * stats.gamma.pdf(ref, aa))
+        assert self._worst(got, ref, cond) <= 24.0, "gamma_q_inv against mpmath"
 
     def test_incomplete_beta_and_its_inverse(self) -> None:
         from scipy import special as sc
@@ -131,7 +179,7 @@ class TestSpecialFunctionsAreScipys:
         a_g, b_g, x_g = np.meshgrid(self.SHAPES, self.SHAPES, np.geomspace(1e-6, 0.999, 60))
         for name, oracle, bound in (
             ("beta_inc", sc.betainc, 48.0),  # measured 8.5 (t), 41.0 (general)
-            ("beta_inc_c", sc.betaincc, 96.0),  # measured 13.2 (t), 84.8 (general)
+            ("beta_inc_c", sc.betaincc, 240.0),  # scipy's second opinion: 221 on macOS
         ):
             for a, b, x in ((a_t, 0.5, x_t), (a_g, b_g, x_g)):
                 aa, bb, xx, got = self._call(name, a, b, x)
@@ -139,6 +187,22 @@ class TestSpecialFunctionsAreScipys:
                 with np.errstate(all="ignore"):
                     cond = xx * stats.beta.pdf(xx, aa, bb) / want
                 assert self._worst(got, want, cond) <= bound, name
+        # rheon's own bound, against 160-digit mpmath: 6.6 (t) and 84.8 (general)
+        # measured on these grids, subsampled for time. scipy is exact there.
+        for a, b, x in (
+            (a_t[::8, ::3], 0.5, x_t[::8, ::3]),
+            (a_g[::2, ::2], b_g[::2, ::2], x_g[::2, ::2]),
+        ):
+            aa, bb, xx, got = self._call("beta_inc_c", a, b, x)
+            ref = np.array(
+                [
+                    _mp_beta_inc_c(float(p), float(q), float(r))
+                    for p, q, r in zip(aa, bb, xx, strict=True)
+                ]
+            )
+            with np.errstate(all="ignore"):
+                cond = xx * stats.beta.pdf(xx, aa, bb) / ref
+            assert self._worst(got, ref, cond) <= 96.0, "beta_inc_c against mpmath"
         aa, bb, _, got = self._call("ln_beta", a_g[..., 0], b_g[..., 0], 0)
         assert self._worst_abs(got, sc.betaln(aa, bb)) <= 260.0  # measured 257.5, scipy's
         a_i, p_i = np.meshgrid(self.NU_T[::8] / 2, self.P)
