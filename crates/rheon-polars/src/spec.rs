@@ -3165,12 +3165,11 @@ impl Spec {
     }
 
     /// Decay values, one per half-life grid entry (one model instance each).
-    pub fn decays(&self) -> Result<Vec<(String, Decay)>, String> {
-        // A model that takes no decay has one undecayed instance whatever
-        // `half_life` or `lam` hold: its own check refuses either given, and
-        // a second refusal here, of their values, would ask the reader to
-        // fix a setting the first tells them to leave out.
-        let decays_nothing = match &self.model {
+    /// Whether this spec's model takes no decay: its fit weighs every row
+    /// it has learned alike (or forgets by a rule of its own), whatever
+    /// `half_life` or `lam` hold.
+    pub fn decays_nothing(&self) -> bool {
+        match &self.model {
             ModelKind::SeqTest { .. }
             | ModelKind::Rcov { .. }
             | ModelKind::Bocpd { .. }
@@ -3180,8 +3179,15 @@ impl Spec {
             | ModelKind::TDigest { .. } => true,
             ModelKind::CorrChange { scalar, .. } => !scalar.unwrap_or(false),
             _ => false,
-        };
-        if decays_nothing {
+        }
+    }
+
+    pub fn decays(&self) -> Result<Vec<(String, Decay)>, String> {
+        // A model that takes no decay has one undecayed instance whatever
+        // `half_life` or `lam` hold: its own check refuses either given, and
+        // a second refusal here, of their values, would ask the reader to
+        // fix a setting the first tells them to leave out.
+        if self.decays_nothing() {
             return Ok(vec![(String::new(), Decay::Halflife(f64::INFINITY))]);
         }
         match (&self.half_life, self.lam) {
@@ -4910,6 +4916,32 @@ impl Spec {
                      field would be null. Set feature_health_half_life to a finite value."
                 ));
             }
+        }
+        // `break_wald`'s twin fits are at the breaks' memory and at four
+        // times it. Beside a model that decays nothing, that memory is the
+        // fit's unless `breaks_half_life` gives one, so both fits would read
+        // the whole stream and the field would be null on every row:
+        // refused rather than written null, as the feature health is. (A
+        // half-life of inf the spec chose keeps its CUSUMs, which forget
+        // nothing by design.)
+        if self.emit_breaks
+            && self.decays_nothing()
+            && !self.model.predicts_no_target()
+            && !self.breaks_half_life.as_ref().is_some_and(|m| {
+                let d = self.diagnostic_decay_of(Some(m), Decay::Halflife(f64::INFINITY), 1);
+                match d {
+                    Decay::Halflife(h) => h.is_finite(),
+                    Decay::Lam(l) => l < 1.0,
+                }
+            })
+        {
+            no.refuse(format!(
+                "spec {name:?}: emit_breaks's break_wald compares a fit of the target at its \
+                 memory with one at four times that memory, but {} decays nothing, so without \
+                 a finite breaks_half_life both read the whole stream and break_wald would be \
+                 null on every row. Set breaks_half_life to a finite value.",
+                self.model.kind_name()
+            ));
         }
         // Both choose across a target's slots, and one slot leaves nothing to
         // choose: `emit_averaged` there was the slot's own prediction under

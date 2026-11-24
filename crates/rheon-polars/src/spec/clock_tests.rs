@@ -143,6 +143,7 @@ fn with_duration(owner: &str, field: &str) -> Spec {
                 "ddsketch" => r#", "quantiles": [0.25]"#,
                 "ewm_moments" => r#", "terms": {"m2": {"x": 2}}"#,
                 "ar" => r#", "lags": 2"#,
+                "sarima" => r#", "order": [1, 0, 0]"#,
                 "spectral" if field != "periods" => r#", "periods": "1h""#,
                 _ => "",
             };

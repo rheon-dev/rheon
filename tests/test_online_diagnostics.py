@@ -506,6 +506,24 @@ def test_feature_health_is_refused_where_it_would_be_null():
     assert out["spread_ratio_x0"].drop_nulls().len() > 600
 
 
+def test_the_break_test_is_refused_beside_a_kind_that_decays_nothing():
+    """``break_wald``'s twin fits are at the breaks' memory and four times
+    it. Beside a kind that decays nothing (``sarima``) that memory is the
+    fit's unless ``breaks_half_life`` gives one, so both fits would read the
+    whole stream and the field would be null on every row: ``emit_breaks``
+    is refused there, naming the way out. Given a finite memory it is taken
+    and reads, and beside a kind that decays it is taken as it was."""
+    sarima = dict(targets=["y"], features=["x0"], order=(1, 0, 0), emit_breaks=True)
+    for kw in ({}, {"breaks_half_life": float("inf")}):
+        with pytest.raises(ValueError, match="emit_breaks.*sarima decays nothing"):
+            rp.spec.sarima("m", **sarima, **kw)
+    df = _frame()
+    out = _run(df, _spec("emit_breaks"))
+    assert out["break_wald_y"].drop_nulls().len() > 600
+    given = rp.spec.sarima("m", **sarima, breaks_half_life=100.0)
+    assert _run(df, given)["break_wald_y"].drop_nulls().len() > 0
+
+
 def test_feature_health_zero_weights_and_a_save():
     df = _frame().with_columns(pl.int_range(pl.len()).cast(pl.Float64).alias("t"))
     spec = _spec("emit_feature_health", clock="t", gap_cap=10.0)

@@ -202,7 +202,8 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     ("expectile", "expectile", fullest("expectile", **FIT, expectile=0.8), []),
     ("holt", "holt", fullest("holt", targets=["y"], group="g", half_life=25.0, **CLOCK), []),
     ("ar", "ar", fullest("ar", **FIT, lags=[1, 3]), []),
-    # No decay: its feature health reads a memory of its own, given here. A
+    # No decay: its feature health and its break test read a memory of
+    # their own, given here. A
     # slot is half a clock unit, so every step of the clock is whole slots;
     # the bound is loose so the start opens on the irregular clock and the
     # fields are dense.
@@ -218,6 +219,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
             # hold at the default se_bound.
             se_bound=1e3,
             feature_health_half_life=100.0,
+            breaks_half_life=100.0,
         ),
         [],
     ),

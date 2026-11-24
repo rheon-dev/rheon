@@ -927,8 +927,12 @@ The diagnostics add, per slot:
        is the Wald distance between two least-squares fits of the target on
        the slot's features, one at the memory and one at four times it,
        over the exact variance of their difference, about ``chi2(k)`` with
-       no break and null run once. That variance is singular over fewer
-       than ``2k`` rows, whatever their weights, so it waits for them.
+       no break, and null where its memory is ``inf``, where both fits read
+       the whole stream. Beside a kind that decays nothing (``sarima``),
+       whose fit's memory is ``inf``, ``emit_breaks`` is refused unless
+       ``breaks_half_life`` gives a finite one.
+       That variance is singular over fewer than ``2k`` rows, whatever
+       their weights, so it waits for them.
        It is formed from the difference of the fits' inverse Grams,
        ``D = A_f - A_s``, as ``D H_ff D' + A_s E_2 A_s + C + C'`` with
        ``C = D (H_ff - H_fs) A_s`` and ``E_2 = H_ff + H_ss - H_fs - H_fs'``,
