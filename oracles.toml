@@ -6360,6 +6360,82 @@ ideal = 0.0
 n = 20
 tolerance = 0.0
 
+[group."second_opinion_glm.log_link_guard"]
+tests = [
+    "tests/test_second_opinion_glm.py::test_with_no_refit_and_no_cap_no_seed_runs_away[gamma-2.0]",
+    "tests/test_second_opinion_glm.py::test_with_no_refit_and_no_cap_no_seed_runs_away[poisson-1.0]",
+    "tests/test_second_opinion_glm.py::test_with_no_refit_and_no_cap_no_seed_runs_away[tweedie-1.2]",
+    "tests/test_second_opinion_glm.py::test_with_no_refit_and_no_cap_no_seed_runs_away[tweedie-1.5]",
+    "tests/test_second_opinion_glm.py::test_with_no_refit_and_no_cap_no_seed_runs_away[tweedie-1.8]",
+    "tests/test_second_opinion_glm.py::test_with_no_refit_and_no_cap_no_seed_runs_away[tweedie-2.5]",
+    "tests/test_second_opinion_glm.py::test_with_no_refit_and_no_cap_no_seed_runs_away[tweedie-3.0]",
+]
+oracles = { "statsmodels" = "0.15.0" }
+dataset = ""
+
+[case."second_opinion_glm.log_link_guard.gamma"]
+ideal = 0.0
+n = 100
+
+[case."second_opinion_glm.log_link_guard.gamma_runaways"]
+ideal = 0.0
+n = 100
+tolerance = 0.0
+
+[case."second_opinion_glm.log_link_guard.poisson"]
+ideal = 0.0
+n = 100
+
+[case."second_opinion_glm.log_link_guard.poisson_runaways"]
+ideal = 0.0
+n = 100
+tolerance = 0.0
+
+[case."second_opinion_glm.log_link_guard.tweedie_1_2"]
+ideal = 0.0
+n = 100
+
+[case."second_opinion_glm.log_link_guard.tweedie_1_2_runaways"]
+ideal = 0.0
+n = 100
+tolerance = 0.0
+
+[case."second_opinion_glm.log_link_guard.tweedie_1_5"]
+ideal = 0.0
+n = 100
+
+[case."second_opinion_glm.log_link_guard.tweedie_1_5_runaways"]
+ideal = 0.0
+n = 100
+tolerance = 0.0
+
+[case."second_opinion_glm.log_link_guard.tweedie_1_8"]
+ideal = 0.0
+n = 100
+
+[case."second_opinion_glm.log_link_guard.tweedie_1_8_runaways"]
+ideal = 0.0
+n = 100
+tolerance = 0.0
+
+[case."second_opinion_glm.log_link_guard.tweedie_2_5"]
+ideal = 0.0
+n = 100
+
+[case."second_opinion_glm.log_link_guard.tweedie_2_5_runaways"]
+ideal = 0.0
+n = 100
+tolerance = 0.0
+
+[case."second_opinion_glm.log_link_guard.tweedie_3_0"]
+ideal = 0.0
+n = 100
+
+[case."second_opinion_glm.log_link_guard.tweedie_3_0_runaways"]
+ideal = 0.0
+n = 100
+tolerance = 0.0
+
 # --- raises
 
 [[raised]]
