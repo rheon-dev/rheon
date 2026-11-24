@@ -184,7 +184,9 @@ fn glm_1_the_trapezoid_rule_holds_on_non_quadratic_deviances() {
 /// recursion's identity is `h_t = λ h_{t−1} + (1 − λ) R β_{t−1} + w W z
 /// x̃`, `h_t = (G_t + R I) β_t`: a proximal term pulling to the past fits,
 /// which vanishes as the fit stops moving. The identity, row by row, to 1e-10 of
-/// its terms' size; the documented one misses by far more.
+/// its terms' size; the documented one misses by far more. It is the
+/// Fisher recursion's, so the target guard is off (a row it scales leaves
+/// the sums as a capped row does; `guard_tests.rs` holds it).
 #[test]
 fn glm_2_the_recursions_identity_under_decay_is_the_proximal_one() {
     let lam: f64 = 0.9;
@@ -196,6 +198,7 @@ fn glm_2_the_recursions_identity_under_decay_is_the_proximal_one() {
     let fam = c.family();
     let (k, r) = (3, c.ridge);
     let mut m = Glm::new(c).unwrap();
+    m.work.unguarded = true;
     let full = |g: &[f64]| -> Vec<f64> {
         let mut a = vec![0.0; k * k];
         for i in 0..k {

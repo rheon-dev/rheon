@@ -203,6 +203,23 @@ def glm(
     ``G`` is per target, since ``W`` depends on the target. Under the log
     and logit links ``η`` is clipped to ``±30`` before ``μ`` is formed.
 
+    Under the log link, on each row the start's cap does not hold (no
+    refit, or once it has run), an upward step that would carry the row's
+    own ``η`` past ``ln y`` is scaled, as ``step_cap`` scales one, so that
+    ``η`` lands instead on the one root ``u`` in ``(η, ln y]`` of the row's
+    own penalized deviance, ``w f(u) + (u - η)²/(2q)``, ``f`` the half unit
+    deviance at ``μ = e^u``, ``p`` the variance power (1 for the Poisson, 2
+    for the Gamma) and ``δ`` the step's move of ``η``:
+
+    .. code-block:: text
+
+        h(u) = u - η + w q e^((1-p)u) (e^u - y) = 0
+        q = x̃'(λG + R I)⁻¹x̃                      before the row
+        β = β + ((u - η)/δ) (G + R I)⁻¹ w W (z - η) x̃
+
+    Where ``step_cap`` scales the same step, the smaller scale wins. Every
+    other row takes the step above unchanged.
+
     Under the inverse and power links, once the refit has run or been given
     up, each row instead minimises its own penalized deviance exactly, ``β =
     argmin w d(y, μ(x̃'b))/2 + (b - β)'(G + R I)(b - β)/2`` (``G`` decayed,
@@ -295,6 +312,21 @@ def glm(
     capped rows' weights stay in ``G``: its largest gap at 100,000 rows was
     2.9 times the refit's for the Poisson family and 1.8 times for the
     Gamma. Under decay the two are the same.
+
+    **The target guard.** Under the log link a downward step moves ``η``
+    by less than 1, but an upward one grows as ``y μ^(1-p)`` without bound
+    as ``μ`` falls. With neither the refit nor a cap, over 100 seeded
+    streams of 300 rows at 3 coefficients, the step without the guard
+    passed ``|β|`` 10 on 0, 17, 0, 1, 7, 35 and 64 of them (Poisson, Gamma,
+    Tweedie at ``p`` 1.2, 1.5, 1.8, 2.5 and 3); under the default spec, after
+    its refit, one target 1000 times its draw did on 14, 41, 17, 38 and 48
+    of 100 (Poisson, Gamma, Tweedie at 1.5, 2.5 and 3). With the guard none
+    did. It is a floor, not a remedy: without a refit the first rows'
+    curvature stays in ``G``, and the refit or a cap of 1 is what makes the
+    fit accurate. The logit link needs no guard: its step moves ``η`` by
+    ``w (y - μ)`` times ``x̃'(G + R I)⁻¹x̃``, at most ``w |x̃|²/R`` either
+    way, and over 960 seeded streams down to means of ``e^-7`` it passed
+    10 on none.
 
     **The inverse and power links after the refit.** Each row's exact step
     keeps its own ``η`` above 0, so a target far from its mean no longer

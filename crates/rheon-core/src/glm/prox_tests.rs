@@ -8,7 +8,7 @@ use super::tests::cfg_of;
 use super::*;
 use crate::oracle;
 
-fn lcg(s: &mut u64) -> f64 {
+pub(super) fn lcg(s: &mut u64) -> f64 {
     *s = s
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
@@ -192,7 +192,7 @@ fn the_proximal_root_solves_its_equation() {
 
 /// The full matrix of `G`'s packed lower triangle, plus `r` on the
 /// diagonal.
-fn full(g: &[f64], k: usize, r: f64) -> Vec<f64> {
+pub(super) fn full(g: &[f64], k: usize, r: f64) -> Vec<f64> {
     let mut a = vec![0.0; k * k];
     for i in 0..k {
         for m in 0..=i {
@@ -344,7 +344,14 @@ fn the_log_and_logit_links_take_the_fisher_step_to_the_bit() {
                 e.ensure_work();
                 e.work.x[1..].copy_from_slice(&x);
                 if let Some(wk) = fam.working(eta, y) {
-                    e.learn(0, wk.w, wk.w * (wk.z - wk.eta));
+                    let target = (link == GlmLink::Log).then_some(Target {
+                        eta: wk.eta,
+                        mu: wk.mu,
+                        y,
+                        w: 1.0,
+                        p: variance_power(&fam),
+                    });
+                    e.learn(0, wk.w, wk.w * (wk.z - wk.eta), target);
                 }
                 let what = format!("{family:?} {link:?} refit {refit} {give_up} cap {cap} row {i}");
                 assert_eq!(got.to_bits(), want.to_bits(), "{what}");
@@ -547,14 +554,14 @@ fn a_failed_solve_is_counted_and_teaches_nothing() {
     }
 }
 
-fn normal(s: &mut u64) -> f64 {
+pub(super) fn normal(s: &mut u64) -> f64 {
     let (u, v) = (lcg(s), lcg(s));
     (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
 }
 
 /// A Gamma draw of shape `a` and scale `b` (Marsaglia and Tsang; below 1,
 /// boosted by `U^(1/a)`).
-fn gamma_draw(s: &mut u64, a: f64, b: f64) -> f64 {
+pub(super) fn gamma_draw(s: &mut u64, a: f64, b: f64) -> f64 {
     if a < 1.0 {
         return gamma_draw(s, a + 1.0, b) * lcg(s).powf(1.0 / a);
     }
@@ -570,7 +577,7 @@ fn gamma_draw(s: &mut u64, a: f64, b: f64) -> f64 {
 }
 
 /// A Poisson draw by inversion, for the small means here.
-fn poisson_draw(s: &mut u64, mu: f64) -> f64 {
+pub(super) fn poisson_draw(s: &mut u64, mu: f64) -> f64 {
     let l = (-mu).exp();
     let (mut k, mut p) = (0.0, 1.0);
     loop {
@@ -584,7 +591,7 @@ fn poisson_draw(s: &mut u64, mu: f64) -> f64 {
 
 /// A Tweedie amount of mean `mu`, power `p` and dispersion 2: the compound
 /// Poisson-Gamma below 2, a Gamma of variance `2 μ^p` above.
-fn tweedie_draw(s: &mut u64, mu: f64, p: f64) -> f64 {
+pub(super) fn tweedie_draw(s: &mut u64, mu: f64, p: f64) -> f64 {
     let phi = 2.0;
     if p < 2.0 {
         let n = poisson_draw(s, mu.powf(2.0 - p) / (phi * (2.0 - p)));
@@ -631,7 +638,7 @@ fn fisher_path(c: &GlmCfg, rows: &[(Vec<f64>, f64)], start: &[f64]) -> Vec<f64> 
         let eta = dot_aug(&m.beta[0], x, true);
         m.work.x[1..].copy_from_slice(x);
         if let Some(wk) = fam.working(eta, *y) {
-            m.learn(0, wk.w, wk.w * (wk.z - wk.eta));
+            m.learn(0, wk.w, wk.w * (wk.z - wk.eta), None);
         }
     }
     m.beta[0].clone()

@@ -2018,6 +2018,19 @@ the predictions before the refit are sound. `step_cap` instead holds each
 row's own step in `η` to a bound, with no buffer, at a larger bias without
 decay.
 
+**Under the log link a step stops at the row's own target.** An upward
+step moves `η` by an amount that grows as `y μ^(1−p)` as the mean falls,
+`p` the variance power. So with neither a refit nor a cap, or after the
+default refit, where the cap is off, one far target can send the
+coefficients away. Without either remedy that happened on 17 of 100
+seeded streams of 300 rows for the Gamma and on 64 for the Tweedie at `p =
+3`. Under the default spec, one target 1000 times its draw did it on 14 to
+48 of 100. On each row the start's cap does not hold, a step that would
+carry `η` past `ln y` is scaled as `step_cap` scales one. It lands on the
+root in `(η, ln y]` of the row's own penalized deviance, and none of those
+seeds runs away. Rows it does not fire on take the step unchanged. It is a
+floor, not a remedy: the refit, or a cap, is what makes the fit accurate.
+
 **The spans.** `half_life`, `gap_cap` and `refit_span` take a number (rows,
 with no clock) or a clock duration, as every spec's do. `refit_rows` counts
 rows of positive weight. `refit_span` is the same refit over a span of the

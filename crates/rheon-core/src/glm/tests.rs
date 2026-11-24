@@ -142,6 +142,9 @@ fn max_gap(a: &[f64], b: &[f64]) -> f64 {
 /// form written longhand with the oracle's LU, a capped row resetting `h`
 /// to `(G + R I) β`: the two share no solve, and agree to rounding
 /// (measured 2e-15 over 300 rows; the bound is 1e-10 of the fit's size).
+/// This is the Fisher recursion's algebra, so the target guard is off
+/// here: a row it scales is scaled as a capped row is
+/// (`guard_tests.rs` holds it).
 #[test]
 fn the_increment_form_is_the_sums_form() {
     for family in [GlmFamily::Poisson, GlmFamily::Gamma] {
@@ -151,6 +154,7 @@ fn the_increment_form_is_the_sums_form() {
             ..cfg(family, 3, 0)
         };
         let mut m = Glm::new(c.clone()).unwrap();
+        m.work.unguarded = true;
         let fam = c.family();
         let k = 4;
         let mut g = vec![0.0; k * k];
@@ -364,21 +368,24 @@ fn the_cap_holds_a_rows_own_step() {
 
 /// The start-up failure the refit and the cap exist for: Gamma with 20
 /// coefficients from zero runs away on the plain recursion on this seed
-/// (an `η` at the clip), and with either remedy stays near the truth.
+/// (an `η` at the clip; the Fisher step alone, the target guard off), and
+/// with either remedy stays near the truth.
 #[test]
 fn the_remedies_hold_the_start() {
     let rows = stream(GlmFamily::Gamma, 20, 2000, 6);
-    let fit = |refit: u32, cap: f64| {
+    let fit_of = |refit: u32, cap: f64, guarded: bool| {
         let mut m = Glm::new(GlmCfg {
             step_cap: cap,
             ..cfg(GlmFamily::Gamma, 19, refit)
         })
         .unwrap();
+        m.work.unguarded = !guarded;
         run(&mut m, &rows, |_| 1.0);
         (m.coefficients()[0][0] - 0.5).abs()
     };
+    let fit = |refit: u32, cap: f64| fit_of(refit, cap, true);
     assert!(
-        fit(0, f64::INFINITY) > 1.0,
+        fit_of(0, f64::INFINITY, false) > 1.0,
         "the plain recursion held on this seed"
     );
     assert!(fit(200, f64::INFINITY) < 0.1);

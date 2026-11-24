@@ -88,6 +88,54 @@
 //!   the capped rows' weights stay in `G`, and with decay the same as the
 //!   refit's.
 //!
+//! **The target guard under the log link** (docs/PLAN.md task 581,
+//! GLM-4). The Fisher step moves the row's own `η` by
+//!
+//! ```text
+//! δ = q' w μ^(1−p) (y − μ),      q' = x̃'(G_t + R I)⁻¹x̃
+//! ```
+//!
+//! (`p` the variance power, `V(μ) = μᵖ`: 1 for the Poisson, 2 for the
+//! Gamma). Downward (`y < μ`) `δ ≥ −q' w W > −1`, bounded by the step's own
+//! form; upward it grows as `y μ^(1−p)` without bound as `μ` falls, and
+//! every runaway is an upward step. With neither the refit nor a cap, over
+//! 100 seeded streams of 300 rows at 3 coefficients, the Fisher step passed
+//! `|β|` 10 on 0, 17, 0, 1, 7, 35 and 64 of them (Poisson, Gamma, Tweedie
+//! at `p` 1.2, 1.5, 1.8, 2.5, 3); and under the default spec, after its
+//! refit, where the cap is off, one target 1000 times its draw at row 250
+//! sent it past 10 on 14, 41, 17, 38 and 48 of 100 (Poisson, Gamma,
+//! Tweedie at 1.5, 2.5, 3). So on every learned row the start's cap does
+//! not hold (no refit, or once the refit has run), an upward step that
+//! would carry `η` past `ln y` -- the minimum of the row's own deviance,
+//! which no penalty asks it to pass -- is scaled as `step_cap` scales one,
+//! so that `η` lands instead on the root `u` in `(η, ln y]` of the row's
+//! own proximal problem `w f(u) + (u − η)²/(2q)`, `f` the half unit
+//! deviance at `μ = e^u`:
+//!
+//! ```text
+//! h(u) = u − η + w q e^((1−p)u) (e^u − y) = 0,     q = q'/(1 − w W q') = x̃'(λG + R I)⁻¹x̃
+//! β_t = β_{t−1} + ((u − η)/δ) (G_t + R I)⁻¹ w W (z − η) x̃
+//! ```
+//!
+//! `q` is the one before the row, by Sherman-Morrison from the step
+//! already solved (`q' = δ/s`), so there is no second solve; `G` takes the
+//! row at `W(η)` as before. On `[η, ln y]` `h` rises with a slope of at
+//! least 1 at every power, so `u` is unique ([`guard_root`]: Newton's
+//! passes held to a bracket, on `h` and, left of the root, on its log;
+//! an `exp` and an `expm1` a pass). Where a cap and the guard
+//! both scale a step the smaller scale wins. A row it does not fire on is
+//! the Fisher step's to the bit; most upward rows are settled by `δ ≤ 1 −
+//! μ/y` without a `ln`. With neither remedy no seed of either set passes
+//! 10. It is a floor, not a remedy: the first rows' curvature stays in
+//! `G`, and the refit or a cap of 1 is still what makes the fit accurate
+//! (in a simulation of the step at 21 coefficients and a mean near 55, the
+//! guard alone left the Poisson's 90th-percentile seed of 40 17 standard
+//! errors off where a cap of 1 left 3.3, and at `p = 3` it held 8 of 40
+//! seeds under 10 where the cap held all 40). The logit link takes no guard: its score is `w (y − μ)`, so `|δ| ≤
+//! q' w ≤ w |x̃|²/R` either way, and over 960 seeded streams (3 and 21
+//! coefficients, means down to `e^−7`, 0/1 and fractional targets) the
+//! Fisher step passed `|β|` 10 on none.
+//!
 //! **The exact row step under the inverse and power links** (docs/PLAN.md
 //! task 581). These links give a mean only where `η > 0`, and the Fisher
 //! step scores a row at the fit before it: a target far above its mean (a
@@ -163,6 +211,8 @@ use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schem
 use crate::solve::dot_aug;
 use crate::{Decay, RefitStatus, Stamp};
 
+#[cfg(test)]
+mod guard_tests;
 #[cfg(test)]
 mod mutant_tests;
 #[cfg(test)]
@@ -500,6 +550,13 @@ struct Work {
     /// The row's score, then its step.
     s: Vec<f64>,
     d: Vec<f64>,
+    /// The rows whose step the target guard scaled since the model was
+    /// made or restored ([`Glm::guarded_rows`]).
+    guarded: u64,
+    /// The guard switched off, for the tests that hold the rows it leaves
+    /// alone to the Fisher step's bits.
+    #[cfg(test)]
+    unguarded: bool,
 }
 
 impl PartialEq for Work {
@@ -609,6 +666,14 @@ impl Glm {
         &self.w_target
     }
 
+    /// The learned rows whose step the target guard scaled (the module
+    /// docs, *The target guard*), since the model was made or restored:
+    /// not state, a count for the tests and for a caller who asks how often
+    /// it fires.
+    pub fn guarded_rows(&self) -> u64 {
+        self.work.guarded
+    }
+
     /// Solves and refits that failed (the field's doc).
     pub fn solve_failures(&self) -> u64 {
         self.solve_failures
@@ -685,9 +750,11 @@ impl Glm {
 
     /// Target `j`'s learned row: `G += c x̃x̃'` if the result and the score
     /// `s x̃` are finite (else the row teaches nothing and `false`), then
-    /// the step `(G + R I)⁻¹ s x̃`, `s = c (z − η)`, held to the cap. A
-    /// solve that fails is counted and moves no coefficient.
-    fn learn(&mut self, j: usize, c: f64, s: f64) -> bool {
+    /// the step `(G + R I)⁻¹ s x̃`, `s = c (z − η)`, held to the cap and,
+    /// under the log link once the start's cap no longer holds the target,
+    /// to the row's own target (`target`; the module docs, *The target
+    /// guard*). A solve that fails is counted and moves no coefficient.
+    fn learn(&mut self, j: usize, c: f64, s: f64, target: Option<Target>) -> bool {
         let k = self.cfg.k_total();
         let Self {
             gram,
@@ -734,11 +801,22 @@ impl Glm {
         } else {
             cfg.step_cap
         };
-        let scale = if moved.abs() > cap {
+        let mut scale = if moved.abs() > cap {
             cap / moved.abs()
         } else {
             1.0
         };
+        // The target guard, on the rows the start's cap does not hold: an
+        // upward step that would carry the row's own `η` past `ln y` lands
+        // on the row's proximal root instead, the smaller scale winning.
+        #[cfg(test)]
+        let target = target.filter(|_| !work.unguarded);
+        if let Some(t) = target.filter(|_| !waiting)
+            && let Some(u) = t.guard(scale * moved, moved / s, c)
+        {
+            scale = (u - t.eta) / moved;
+            work.guarded += 1;
+        }
         for (b, d) in beta[j].iter_mut().zip(&work.d) {
             *b += scale * d;
         }
@@ -868,8 +946,151 @@ impl Glm {
 /// of the step, so that a loop that stopped closing in would end, wrongly,
 /// rather than never. Each pass at least doubles the distance from its
 /// start while far from the root and is quadratic near it; the most taken
-/// is the test's (`the_proximal_root_solves_its_equation`).
+/// is the test's (`the_proximal_root_solves_its_equation`). The target
+/// guard's root ([`guard_root`]) is held to the same count.
 const PROX_PASSES: u32 = 64;
+
+/// The family's variance power `p`, `V(μ) = μᵖ`: 1 for the Poisson, 2 for
+/// the Gamma, the Tweedie's own (the binomial's is not a power, and is
+/// never read).
+fn variance_power(fam: &Family) -> f64 {
+    match fam.family {
+        GlmFamily::Poisson => 1.0,
+        GlmFamily::Gamma => 2.0,
+        _ => fam.power,
+    }
+}
+
+/// A learned row's own target under the log link, which the target guard
+/// reads (the module docs): `η` as the row was scored (clipped), its mean
+/// `μ = e^η`, the target `y`, the row's weight `w`, and the variance power
+/// `p`, 1 for the Poisson and 2 for the Gamma.
+#[derive(Debug, Clone, Copy)]
+struct Target {
+    eta: f64,
+    mu: f64,
+    y: f64,
+    w: f64,
+    p: f64,
+}
+
+impl Target {
+    /// The row's new `η` where its step `δ` (after any cap) would carry `η`
+    /// past `ln y`: the root of the row's proximal problem in `(η, ln y]`
+    /// ([`guard_root`]). `None` where the step stops at or short of `ln
+    /// y`, every downward step (`y ≤ μ`) included. `qp` is `q' = x̃'(G_t +
+    /// R I)⁻¹x̃`, `G_t` holding the row's `c x̃x̃'`, read off the unscaled
+    /// step as `δ/s`; the `q` before the row is `q'/(1 − c q')` by
+    /// Sherman-Morrison, so no second solve is needed.
+    fn guard(&self, step: f64, qp: f64, c: f64) -> Option<f64> {
+        // `ln(y/μ) ≥ 1 − μ/y`, so a step of at most `1 − μ/y` stops short
+        // of `ln y`, and most upward rows are settled without a `ln`.
+        if !(self.y > self.mu && step > 1.0 - self.mu / self.y) {
+            return None;
+        }
+        // `step` is a number here: a NaN failed the test above.
+        let ln_y = self.y.ln();
+        if self.eta + step <= ln_y {
+            return None;
+        }
+        let q = qp / (1.0 - c * qp);
+        Some(guard_root(self.eta, self.w * q, self.p, ln_y).0)
+    }
+}
+
+/// The one root `u` in `(η, ln y]`, `y > e^η`, of the row's proximal
+/// problem under the log link,
+///
+/// ```text
+/// h(u) = u − η − wq G(u) = 0,     G(u) = e^((1−p)u) (y − e^u),     wq = w q
+/// ```
+///
+/// the stationary point of `w f(u) + (u − η)²/(2q)`, `f` the row's half
+/// unit deviance at `μ = e^u` (`f'(u) = −G(u)`). On `[η, ln y]` `G ≥ 0`
+/// falls, `G' = −e^((1−p)u) ((2 − p) e^u + (p − 1) y)` (above 2, `(2 − p)
+/// e^u + (p − 1) y ≥ y` where `e^u ≤ y`), so `h` rises with a slope of at
+/// least 1 from `h(η) ≤ 0` to `h(ln y) = ln y − η` through one root, and
+/// `h(η + wq G(η)) ≥ 0` bounds it above as well. `G` is formed as `E ω`,
+/// `E = e^(ln y + (1−p)u)` and `ω = 1 − e^(u − ln y)` (`expm1`), its
+/// exponents summed so that a target near the doubles' largest and a mean
+/// at the clip stay in range.
+///
+/// Newton's passes run from the upper bound. Right of the root a pass is
+/// Newton's on `h`; left of it, where `wq G` is a steep exponential and a
+/// pass on `h` creeps by about `1/(p − 1)`, the larger of that pass and
+/// one on `k(u) = ln(u − η) − ln(wq G(u))`, which has the same root and is
+/// nearly straight there. A pass that would leave the bracket the signs of
+/// `h` have narrowed takes the false position of the bracket's ends
+/// instead, or, after a false position, its midpoint. The passes stop
+/// where one does not move or the bracket is at its rounding; at the pass
+/// cap the point reached stands, inside the bracket. Each pass is one
+/// `exp` and one `expm1`, and three `ln` left of the root; the most taken
+/// is the test's (`guard_tests::the_guards_root_solves_its_equation`).
+/// Where `wq` is not a positive, finite number (`1 − c q'` rounded to 0 or
+/// below), the penalty has vanished and the root is `ln y` itself. Returns
+/// the root and the passes taken, the evaluation at `η` counted.
+fn guard_root(eta: f64, wq: f64, p: f64, ln_y: f64) -> (f64, u32) {
+    if !(wq > 0.0 && wq.is_finite()) {
+        return (ln_y, 0);
+    }
+    // `h(u)`, `E` and `ω` at `u`.
+    let at = |u: f64| {
+        let e = (ln_y + (1.0 - p) * u).exp();
+        let om = -(u - ln_y).exp_m1();
+        (u - eta - wq * e * om, e, om)
+    };
+    let (mut lo, mut hi) = (eta, ln_y);
+    let mut h_lo = at(eta).0;
+    if eta - h_lo < hi {
+        hi = eta - h_lo;
+    }
+    let mut h_hi = f64::NAN;
+    let mut u = hi;
+    let mut passes = 1;
+    let mut fell = false;
+    while passes < PROX_PASSES {
+        passes += 1;
+        let (h, e, om) = at(u);
+        // `h'(u) = 1 + wq E slope`.
+        let slope = (2.0 - p) * (1.0 - om) + p - 1.0;
+        let by_h = u - h / (1.0 + wq * e * slope);
+        let next = if h > 0.0 {
+            (hi, h_hi) = (u, h);
+            by_h
+        } else if h < 0.0 {
+            (lo, h_lo) = (u, h);
+            let k = (u - eta).ln() - wq.ln() - ln_y - (1.0 - p) * u - om.ln();
+            // A pass that is not a number (at `η`, or with `E` past the
+            // doubles) gives way to the other.
+            by_h.max(u - k / (1.0 / (u - eta) + slope / om))
+        } else {
+            break;
+        };
+        if next == u {
+            break;
+        }
+        if next > lo && next < hi {
+            u = next;
+            fell = false;
+            continue;
+        }
+        if !fell && h_hi.is_finite() && h_lo.is_finite() {
+            fell = true;
+            let at_fp = lo - h_lo * (hi - lo) / (h_hi - h_lo);
+            if at_fp > lo && at_fp < hi {
+                u = at_fp;
+                continue;
+            }
+        }
+        fell = false;
+        let mid = lo + 0.5 * (hi - lo);
+        if !(mid > lo && mid < hi) {
+            break;
+        }
+        u = mid;
+    }
+    (u, passes)
+}
 
 /// [`prox_root`]'s answer: the row's new `η`, its mean `μ = u^(−m)`, and
 /// the Newton passes it took (0 for the Gamma).
@@ -1230,6 +1451,7 @@ impl OnlineModel for Glm {
             }
         }
         let p = self.cfg.k_total();
+        let log_power = variance_power(&fam);
         for (j, &yj) in y.iter().enumerate().take(m) {
             let eta = dot_aug(&self.beta[j], x, self.cfg.fit_intercept);
             let mean = fam.mean(eta).map(|(_, mu)| mu);
@@ -1251,9 +1473,18 @@ impl OnlineModel for Glm {
                 if let Some(t) = teaching {
                     self.prox_learn(j, weight, t, eta, mean);
                 }
-            } else if let Some(wk) = teaching.and_then(|t| fam.working(eta, t)) {
+            } else if let Some((t, wk)) = teaching.and_then(|t| Some((t, fam.working(eta, t)?))) {
                 let c = weight * wk.w;
-                self.learn(j, c, c * (wk.z - wk.eta));
+                // Under the log link the step is held to the row's own
+                // target as well (the module docs, *The target guard*).
+                let target = (fam.link == GlmLink::Log).then_some(Target {
+                    eta: wk.eta,
+                    mu: wk.mu,
+                    y: t,
+                    w: weight,
+                    p: log_power,
+                });
+                self.learn(j, c, c * (wk.z - wk.eta), target);
             }
             // The refit's buffer ages with the sums, and keeps every row
             // that carried the target in the family's support, whether or

@@ -1139,6 +1139,48 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`glm` under the log link no longer runs away on an upward step**
+  (PLAN 581, GLM-4; from Rheon C's oracle work). The Fisher step moves the
+  row's own `η` by `δ = q' w μ^(1−p) (y − μ)` (`q' = x̃'(G + R I)⁻¹x̃`, `p`
+  the variance power, 1 for the Poisson and 2 for the Gamma): downward by
+  less than 1, but upward by an amount that grows as `y μ^(1−p)` without
+  bound as `μ` falls. With `refit_rows = 0` and `step_cap = inf`, over 100
+  seeded streams of 300 rows at 3 coefficients, the coefficients passed 10
+  on 0, 17, 0, 1, 7, 35 and 64 of them (Poisson, Gamma, Tweedie at `p` 1.2,
+  1.5, 1.8, 2.5, 3); under the default spec, whose cap is off after its
+  refit, one target 1000 times its draw at row 250 sent them past 10 on 14,
+  41, 17, 38 and 48 of 100 (Poisson, Gamma, Tweedie at 1.5, 2.5, 3). Now,
+  on every learned row the start's cap does not hold (no refit, or once it
+  has run), an upward step that would carry `η` past `ln y` is scaled, as
+  `step_cap` scales one, so that `η` lands on the root `u` in `(η, ln y]`
+  of the row's own proximal problem, `u − η + w q e^((1−p)u)(e^u − y) = 0`,
+  `q = x̃'(λG + R I)⁻¹x̃` before the row (by Sherman-Morrison from the step
+  already solved: no second solve), the smaller of its scale and a cap's
+  winning. The root is a bracketed Newton solve, run only on such rows.
+  With it no seed of either set passes 10, against statsmodels' family
+  objects and scipy's `brentq` row by row and statsmodels' `GLM` at the
+  end (`tests/test_second_opinion_glm.py`, in the oracle ledger as
+  `log_link_guard`), and over 100 seeds a family of the Rust tests' own
+  streams, where the step without it ran away on 0 to 57 (no refit) and 23
+  to 44 (default spec) (`glm/guard_tests.rs`). It is a floor, not a
+  remedy: without a refit the first rows' curvature stays in `G`, and the
+  refit or a cap of 1 makes the fit accurate. A row it does not fire on is
+  the Fisher step's to the bit: over the 1,440 log- and logit-link runs of
+  the grid that checked the exact step's change (refit waiting, run and
+  given up, capped and not, decayed and weighted), the 1,321 with no firing
+  row gave every output's bits as before, and the 119 with one moved (116
+  of them without a refit, 3 of the 288 after a refit of 40). The start's
+  cap still holds the rows before the refit, where the guard would have
+  fired on 17 to 30 of 100 calm streams. The logit link takes no guard: its
+  step moves `η` by `w (y − μ) q'`, at most `w |x̃|²/R` either way, and
+  over 960 seeded streams (3 and 21 coefficients, means down to `e^−7`,
+  0/1 and fractional targets) it passed 10 on none. No measurable cost on
+  arm64: a calm stream and one with a target 1000 times its draw every
+  100th row, at 3 and 21 coefficients, after a refit of 210, ran 0.98 to
+  1.02 times the time before at the median of 6 ABBA rounds, an identical
+  binary 0.98 to 1.02 (release, load 6 to 13); not timed on x86-64. Moves: `glm.*` on rows
+  where the guard fires.
+
 - **`glm` under the inverse and power links fits each row exactly after
   its refit** (PLAN 581; review 2026-11-23, GLM-3 (1)). These links give a
   mean only where `η > 0`, and the Fisher step scored a row at the fit
