@@ -887,6 +887,23 @@ impl Spec {
                         }),
                 );
             }
+            // Its features are checked with the shared checks; every value is
+            // the model's own to check, here at the call.
+            ModelKind::Gmm(_) => {
+                let decay = self
+                    .decays()
+                    .ok()
+                    .and_then(|d| d.first().map(|(_, d)| *d))
+                    .unwrap_or(rheon_core::Decay::Halflife(f64::INFINITY));
+                no.take(
+                    crate::stream::gmm_cfg(self, decay)
+                        .and_then(rheon_core::Gmm::new)
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!("spec {:?}: {}", self.name, e.trim_start_matches("gmm: "))
+                        }),
+                );
+            }
             // Its features are checked above. No decay and no window: a
             // merging digest folds each row into a centroid's mean and
             // cannot take it out, so a half-life is refused naming the

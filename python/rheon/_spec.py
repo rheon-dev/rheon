@@ -723,6 +723,7 @@ __all__ = [
     "ftrl",
     "garch",
     "glm",
+    "gmm",
     "hawkes",
     "holt",
     "huber",
@@ -4810,7 +4811,7 @@ from rheon._spec_ar import ar, spectral  # noqa: E402
 from rheon._spec_audit import audit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402
-from rheon._spec_cluster import kmeans, micro  # noqa: E402
+from rheon._spec_cluster import gmm, kmeans, micro  # noqa: E402
 from rheon._spec_dcc import dcc  # noqa: E402
 from rheon._spec_ddsketch import ddsketch  # noqa: E402
 from rheon._spec_deco import deco  # noqa: E402
@@ -4832,6 +4833,7 @@ UNSUPERVISED = frozenset(
     {
         "ew_cov",
         "kmeans",
+        "gmm",
         "micro",
         "deco",
         "rcov",

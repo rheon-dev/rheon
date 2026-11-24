@@ -1,4 +1,4 @@
-"""The clustering builders, :func:`kmeans` and :func:`micro`: a part of
+"""The clustering builders, :func:`kmeans`, :func:`gmm` and :func:`micro`: a part of
 :mod:`rheon._spec` in a file of its own, keeping that one under
 ``tests/test_repo_hygiene.py``'s 250 KB cap for a source file.
 :mod:`rheon.spec` documents them with the rest.
@@ -338,6 +338,242 @@ def kmeans(
         if value is not None:
             model[key] = value
     targets = _mirror_target(name, "kmeans", features, common, "its clusters are over")
+    return _common(name, model, targets=targets, features=features, **common)
+
+
+@_checked
+def gmm(
+    name: str,
+    *,
+    features: list[str],
+    n_components: int,
+    covariance_type: Literal["full", "diag"] = "full",
+    reg_covar: float | None = None,
+    delta_bic: float | None = None,
+    n_init: int | None = None,
+    seed: int | None = None,
+    max_iter: int | None = None,
+    tol: float | None = None,
+    max_state_bytes: int | None = None,
+    **common: Unpack[CommonKwargs],
+) -> dict[str, Any]:
+    """A Gaussian mixture over the feature columns, learned one row at a time.
+
+    Use it where each row comes from one of a fixed number of Gaussian
+    clusters that may differ in size, spread and orientation: each row's
+    responsibilities, its log-density under the mixture and its most
+    responsible component are read before the row is learned, so a
+    log-density is an out-of-sample anomaly score. Use :func:`kmeans` where
+    a distance to the nearest center is enough, and :func:`hmm` where a
+    row's cluster depends on the one before it.
+
+    .. rubric:: Parameters
+
+    The stream parameters every builder takes, such as ``clock``,
+    ``half_life``, ``gap_cap``, ``min_weight`` and ``group``, are in
+    :mod:`rheon.spec`. This model takes ``features`` and no ``targets``.
+    ``fit_intercept`` has nothing to act on, as there is no regression. No
+    diagnostic that reads residuals applies, and each such switch is refused
+    by name: ``emit_sigma``, ``emit_metrics``, ``conformal``, drift and the
+    rest. ``min_weight`` defaults to 0: the start (*The start* in Notes) is
+    the gate. This model's own, named as scikit-learn's
+    ``GaussianMixture`` names them:
+
+    ``n_components``
+        The number of components. Required, at least 1.
+    ``covariance_type``
+        ``"full"`` (the default), a whole covariance matrix a component, or
+        ``"diag"``, its diagonal alone.
+    ``reg_covar``
+        Added to the diagonal of each covariance, finite and above 0.
+        Default 1e-6, scikit-learn's. It keeps a component whose rows lie
+        on a line or a plane positive definite.
+    ``delta_bic``
+        The strength of evidence the start needs that ``n_components``
+        clusters are there: the fit with ``n_components`` must beat the fit
+        with one fewer by this much BIC. At least 0; default 10, which Kass
+        and Raftery (1995) call very strong evidence. 6 is strong, 2
+        positive.
+    ``n_init``, ``seed``
+        The seeded k-means++ starts each try of the start runs batch EM
+        from, the best kept, at least 1 (default 1), and their seed
+        (default 0).
+    ``max_iter``, ``tol``
+        The start's batch EM stops after ``max_iter`` iterations (at least
+        1, default 100) or once the mean log-likelihood moves by less than
+        ``tol`` (finite and above 0, default 1e-3).
+    ``max_state_bytes``
+        The bytes the start's buffer may hold in a group, at least 1.
+        Default 262,144 (256 KB). A row of ``k`` features takes
+        ``8 * (k + 1)`` bytes. A buffer that reaches it before the start is
+        withheld with its own reason and never forced to start.
+
+    .. rubric:: Output
+
+    One output column, named after the spec, whose value in each row is a
+    record of these fields, read before the row is learned:
+
+    ``cluster``
+        The most responsible component, an integer from 0.
+    ``log_density``
+        The row's log-density under the mixture, ``log f(x)``.
+    ``dist``
+        The row's Mahalanobis distance to ``cluster``'s component.
+    ``membership_<j>``
+        Component ``j``'s responsibility for the row, from 0; they sum to 1.
+    ``weight_sum``
+        The weight the model has accumulated before the row and before the
+        row's own decay.
+    ``settled_frac``
+        How far the model had come toward its steady state under decay
+        before the row.
+    ``withheld_reason``
+        Why the row's fields are null, null where they are not:
+        ``"below_warm_rows"`` before the start is first tried,
+        ``"not_identified"``, ``"not_separated"`` and ``"not_converged"``
+        for the condition of the start that failed (*The start* in Notes),
+        and ``"above_max_state_bytes"`` once the buffer is at its bound.
+
+    ``coef`` holds one position a component, ``component<j>``: its weight,
+    its mean (one term a feature), then its covariance with ``reg_covar``,
+    ``cov_<a>_<b>`` over the upper triangle by rows under ``"full"``, or
+    ``var_<a>`` under ``"diag"``.
+
+    .. rubric:: Raises
+
+    As every builder does (:mod:`rheon.spec`), ``TypeError`` for
+    ``targets``, which this model does not take, and ``ValueError`` naming the
+    problem for:
+
+    - an ``n_components`` of 0;
+    - a ``covariance_type`` other than the two;
+    - a ``reg_covar`` or ``tol`` not finite or not above 0, or a
+      ``delta_bic`` not finite or below 0;
+    - an ``n_init``, ``max_iter`` or ``max_state_bytes`` of 0;
+    - a switch that reads residuals, such as ``emit_sigma``.
+
+    .. rubric:: The update
+
+    Per row, ``w`` is the row's weight, ``λ = 0.5 ** (Δclock / half_life)``
+    its decay (``lam ** Δclock`` under ``lam``), and ``x`` the row's
+    features. Each component ``j`` keeps its weight ``W_j``, its mean
+    ``μ_j`` and its covariance ``C_j``, the mean form of online EM (Cappé
+    and Moulines, 2009). The row is read first, from the components before
+    it, then learned at weight ``w r_j`` by each:
+
+    .. code-block:: text
+
+        π_j   = W_j / Σ_l W_l            Σ_j = C_j + reg_covar * I
+        log ρ_j = log π_j - (k log 2π + log det Σ_j + (x - μ_j)' Σ_j^-1 (x - μ_j)) / 2
+        r_j   = exp(log ρ_j) / Σ_l exp(log ρ_l)
+        log f = log Σ_l exp(log ρ_l)
+        W_j'  = λ W_j + w r_j            d = x - μ_j
+        μ_j'  = μ_j + (w r_j / W_j') d
+        C_j'  = (λ W_j / W_j') (C_j + (w r_j / W_j') d d')
+
+    ``C_j`` is the covariance about the component's own mean, the batch
+    M-step's ``Σ_i r_ij (x_i - μ_j)(x_i - μ_j)' / N_j``.
+
+    .. rubric:: Example
+
+    This code plants two clusters of two columns, 65 and 35 percent of
+    the rows, and prints each component's weight and mean at the end:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        rng = np.random.default_rng(1)
+        n = 4_000
+        far = rng.random(n) < 0.65
+        x = rng.standard_normal((n, 2)) * 0.5 + np.where(far[:, None], [4.0, 3.0], [0.0, 0.0])
+        pl.DataFrame(x, schema=["a", "b"]).write_parquet("pair.parquet")
+
+        gm = rp.spec.gmm("gm", features=["a", "b"], n_components=2, half_life=float("inf"))
+        bank = rp.ModelBank([gm])
+        bank.fit(pl.scan_parquet("pair.parquet"))
+        found = bank.coef().pivot(on="term", index="cluster", values="coef").sort("cluster")
+        for r in found.iter_rows(named=True):
+            a, b = round(r["a"], 1) + 0.0, round(r["b"], 1) + 0.0  # + 0.0: no "-0.0"
+            print(f"weight {r['weight']:.2f} at ({a}, {b})")
+
+    .. code-block:: text
+
+        weight 0.66 at (4.0, 3.0)
+        weight 0.34 at (0.0, 0.0)
+
+    .. rubric:: See also
+
+    - :func:`kmeans`, hard assignments to centers by distance.
+    - :func:`hmm`, Gaussian states whose next state depends on the last.
+    - :func:`ew_class`, Gaussian classes named by a label column.
+
+    .. rubric:: Notes
+
+    **The start.** Online EM needs a start, and the start's weight decides
+    the fit, so the model holds its learned rows in a buffer and fits batch
+    EM to it each time the buffer doubles. Every row is withheld until three
+    conditions hold together; no count of rows is the gate:
+
+    1. every component is identified: Kish's effective count of the rows'
+       responsibilities, ``(Σ r)**2 / Σ r**2``, is above the parameters the
+       component carries, and its covariance is positive definite without
+       ``reg_covar``'s help (``"not_identified"``);
+    2. ``n_components`` clusters are told apart: the fit beats the fit with
+       one fewer by ``delta_bic`` (``"not_separated"``). The likelihood
+       ratio of a mixture against one fewer component is not chi-squared,
+       as the smaller model sits on the boundary of the larger, while BIC
+       picks the number of components consistently. So a stream with fewer
+       clusters than ``n_components`` never starts;
+    3. the fit has stopped moving: the rows added since the last try score
+       under the new fit at most ``3 p / n`` above their score under the
+       last try's, for ``p`` free parameters and a buffer of Kish size
+       ``n`` (``"not_converged"``). Out of sample, a converged fit from half
+       the rows loses about ``p / n`` on the new rows, and in sample the new
+       fit gains ``p / (2 n)`` of optimism, so a converged fit gains about
+       ``3 p / (2 n)``; one still moving gains a constant a row, which no
+       bound of that order admits as ``n`` grows.
+
+    Each try runs EM from the last try's fit beside the seeded starts. The
+    fit then enters at its rows' weight, with its components in a fixed
+    order, largest weight first, ties by the first coordinate of the mean.
+    A label keeps its meaning for the rest of the run: online EM moves each
+    component a row's worth at a time, so components do not switch.
+    Measured on two clusters 5 apart at unit spread, the start came at
+    128 rows; one component on stationary rows started at 32.
+
+    **Forgetting.** Under a decay each component forgets at the same rate,
+    so a cluster that stops getting rows loses weight and its ``π_j`` falls
+    toward 0; it is still scored, and takes rows again if they return near
+    it. A history decayed below the smallest normal double is forgotten:
+    the model starts over from an empty buffer.
+
+    **Cost.** A row costs ``O(n_components * k**3)`` under ``"full"``, each
+    covariance factorized afresh from its moments, and
+    ``O(n_components * k)`` under ``"diag"``. After the start the state is
+    each component's mean and covariance, ``8 * n_components * (k + k (k +
+    1) / 2)`` bytes under ``"full"`` and ``8 * n_components * 2 k`` under
+    ``"diag"``, with a few numbers a component beside them; before it, the
+    buffer, at most ``max_state_bytes``.
+    """
+    model: dict[str, Any] = {
+        "type": "gmm",
+        "n_components": n_components,
+        "covariance_type": covariance_type,
+    }
+    # Written only when given, as the Rust spec leaves each out when absent.
+    for key, value in [
+        ("reg_covar", reg_covar),
+        ("delta_bic", delta_bic),
+        ("n_init", n_init),
+        ("seed", seed),
+        ("max_iter", max_iter),
+        ("tol", tol),
+        ("max_state_bytes", max_state_bytes),
+    ]:
+        if value is not None:
+            model[key] = value
+    targets = _mirror_target(name, "gmm", features, common, "its components are over")
     return _common(name, model, targets=targets, features=features, **common)
 
 

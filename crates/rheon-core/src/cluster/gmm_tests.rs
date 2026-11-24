@@ -70,6 +70,37 @@ fn a_separated_stream_starts_and_orders_its_components_by_weight() {
 }
 
 #[test]
+fn the_coefficients_are_each_components_weight_mean_and_packed_covariance() {
+    for cov in [GmmCovariance::Full, GmmCovariance::Diag] {
+        let mut g = Gmm::new(GmmCfg::new(2, 2, cov)).unwrap();
+        assert_eq!(g.coefficients(), None);
+        feed(&mut g, &stream(2000, 2, 1), 1.0);
+        let (p, c) = (g.parameters().unwrap(), g.coefficients().unwrap());
+        assert_eq!(c.len(), 2);
+        for (j, row) in c.iter().enumerate() {
+            let want: Vec<f64> = match cov {
+                GmmCovariance::Full => {
+                    let s = &p.covs[4 * j..4 * j + 4];
+                    vec![
+                        p.weights[j],
+                        p.means[2 * j],
+                        p.means[2 * j + 1],
+                        s[0],
+                        s[1],
+                        s[3],
+                    ]
+                }
+                GmmCovariance::Diag => {
+                    let s = &p.covs[2 * j..2 * j + 2];
+                    vec![p.weights[j], p.means[2 * j], p.means[2 * j + 1], s[0], s[1]]
+                }
+            };
+            assert_eq!(row, &want, "{cov:?} component {j}");
+        }
+    }
+}
+
+#[test]
 fn one_cluster_asked_for_two_never_starts() {
     let mut g = Gmm::new(GmmCfg::new(2, 2, GmmCovariance::Full)).unwrap();
     feed(&mut g, &stream(3000, 1, 2), 1.0);

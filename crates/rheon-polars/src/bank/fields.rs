@@ -39,7 +39,8 @@ pub struct FieldMeta {
     /// (docs/ENHANCEMENTS.md E56); `None` for every other field.
     pub lag: Option<usize>,
     /// The principal component an `ew_cov` `pc<j>_*` field is about, or a
-    /// `spectral` field's period, by its place in `periods`; `None` for
+    /// `spectral` field's period, by its place in `periods`, or the
+    /// mixture component a `gmm` `membership_<j>` is about; `None` for
     /// every other field.
     pub component: Option<usize>,
     /// The hidden state an `hmm` posterior is about, `filtered_state<s>`
@@ -375,6 +376,14 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
                 ..slot(format!("cluster{j}"))
             })
             .collect(),
+        // One slot per component, its index in `cluster` as `kmeans`'
+        // centres are.
+        crate::ModelKind::Gmm(g) => (0..g.n_components)
+            .map(|j| Slot {
+                cluster: Some(j),
+                ..slot(format!("component{j}"))
+            })
+            .collect(),
         // One slot per hidden state, named as `kmeans` names its centres.
         crate::ModelKind::Hmm { k, .. } => (0..*k)
             .map(|j| Slot {
@@ -429,6 +438,21 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
         }
         t.extend(lags.lags().iter().map(|l| format!("lag{l}")));
         t.extend(spec.features.iter().cloned());
+        t
+    } else if let crate::ModelKind::Gmm(g) = &spec.model {
+        // The weight, the mean, then the covariance packed as
+        // `Gmm::coefficients` packs it: the upper triangle by rows, or the
+        // variances.
+        let f = &spec.features;
+        let mut t = vec!["weight".to_string()];
+        t.extend(f.iter().cloned());
+        if g.covariance_type.as_deref() == Some("diag") {
+            t.extend(f.iter().map(|a| format!("var_{a}")));
+        } else {
+            for (i, a) in f.iter().enumerate() {
+                t.extend(f[i..].iter().map(|b| format!("cov_{a}_{b}")));
+            }
+        }
         t
     } else if matches!(
         spec.model,
@@ -997,6 +1021,47 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                     .decay(suffix, d)
                     .src(Source::Stat(mi * n_slots + 2)),
             ));
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+            fields.push(
+                FieldMeta::new(format!("coef{suffix}"), "coef")
+                    .decay(suffix, d)
+                    .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // gmm is not a regression either: per instance, the most responsible
+    // component, the row's log-density, its distance to that component and
+    // each component's responsibility (read before the row is learned),
+    // `n_eff`, and the components as `coef`.
+    if let crate::ModelKind::Gmm(g) = &spec.model {
+        let labels = rheon_core::Gmm::labels(g.n_components);
+        let n_slots = labels.len();
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            for (slot, l) in labels.iter().enumerate() {
+                let at = mi * n_slots + slot;
+                // `cluster` is an index, so it comes out as an `i64`.
+                let src = if slot == 0 {
+                    Source::Id(at)
+                } else {
+                    Source::Stat(at)
+                };
+                let (kind, component) = match l.strip_prefix("membership_") {
+                    Some(j) => ("membership", j.parse().ok()),
+                    None => (l.as_str(), None),
+                };
+                let mut m = FieldMeta::new(format!("{l}{suffix}"), kind)
+                    .decay(suffix, d)
+                    .src(src);
+                m.columns = Some(spec.features.clone());
+                m.component = component;
+                fields.push(m);
+            }
             fields.push(
                 FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
                     .decay(suffix, d)

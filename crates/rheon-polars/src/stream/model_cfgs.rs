@@ -1798,6 +1798,37 @@ pub fn pca_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::StreamPcaCfg, St
     })
 }
 
+/// A `gmm` spec's [`rheon_core::GmmCfg`]: the features its columns, each
+/// setting scikit-learn's default where the spec leaves it out. Every value
+/// is the model's own to check.
+pub fn gmm_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::GmmCfg, String> {
+    use rheon_core::GmmCovariance;
+    let ModelKind::Gmm(g) = &spec.model else {
+        return Err(not_a(spec, "gmm_cfg", "gmm"));
+    };
+    let covariance = match g.covariance_type.as_deref().unwrap_or("full") {
+        "full" => GmmCovariance::Full,
+        "diag" => GmmCovariance::Diag,
+        other => {
+            return Err(format!(
+                "gmm: covariance_type must be \"full\" or \"diag\", but it is {other:?}. \
+                 Use one of those words."
+            ));
+        }
+    };
+    let mut cfg = rheon_core::GmmCfg::new(spec.k(), g.n_components, covariance);
+    cfg.reg_covar = g.reg_covar.unwrap_or(cfg.reg_covar);
+    cfg.delta_bic = g.delta_bic.unwrap_or(cfg.delta_bic);
+    cfg.n_init = g.n_init.unwrap_or(cfg.n_init);
+    cfg.seed = g.seed.unwrap_or(cfg.seed);
+    cfg.max_iter = g.max_iter.unwrap_or(cfg.max_iter);
+    cfg.tol = g.tol.unwrap_or(cfg.tol);
+    cfg.max_state_bytes = g.max_state_bytes.unwrap_or(cfg.max_state_bytes);
+    cfg.decay = decay;
+    cfg.min_weight = spec.min_periods_or_default();
+    Ok(cfg)
+}
+
 #[cfg(test)]
 mod refit_tests {
     //! The refit's default (docs/PLAN.md task 277): on at

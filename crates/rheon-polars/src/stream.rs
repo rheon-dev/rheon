@@ -101,6 +101,7 @@ pub enum AnyModel {
     Pa(Box<Pa>),
     Holt(Box<Holt>),
     KMeans(Box<KMeans>),
+    Gmm(Box<rheon_core::Gmm>),
     Micro(Box<Micro>),
     EwClass(Box<EwClass>),
     SeqTest(Box<SeqTest>),
@@ -160,6 +161,7 @@ macro_rules! dispatch {
             AnyModel::Pa($m) => $body,
             AnyModel::Holt($m) => $body,
             AnyModel::KMeans($m) => $body,
+            AnyModel::Gmm($m) => $body,
             AnyModel::Micro($m) => $body,
             AnyModel::EwClass($m) => $body,
             AnyModel::SeqTest($m) => $body,
@@ -507,8 +509,9 @@ impl AnyModel {
     /// withheld because its rows do not identify the model -- `garch`'s
     /// start, whose likelihood did not tell the variance process from a
     /// constant variance, and `dcc`'s, whose did not tell the correlation's
-    /// recursion from constant correlation, so they buffer more rows. One
-    /// dispatch a row answers both.
+    /// recursion from constant correlation, so they buffer more rows; and
+    /// `gmm`'s start by the condition that held it (`OwnWait::of_gmm`). One
+    /// dispatch a row answers each.
     /// Whether the model is one of the kinds [`Self::own_wait`] can answer
     /// for, so a row of every other kind is spared the dispatch. Keep it in
     /// step with that match: a kind missing here never reports its wait.
@@ -516,6 +519,7 @@ impl AnyModel {
         matches!(
             self,
             AnyModel::KMeans(_)
+                | AnyModel::Gmm(_)
                 | AnyModel::Hmm(_)
                 | AnyModel::Bocpd(_)
                 | AnyModel::Kalman(_)
@@ -537,6 +541,7 @@ impl AnyModel {
             // ways: buffering, or buffering for want of an effect.
             AnyModel::Garch(m) => Self::start_wait(m.starting(), || m.no_effect()),
             AnyModel::Dcc(m) => Self::start_wait(m.starting(), || m.no_effect()),
+            AnyModel::Gmm(m) => m.wait().map_or(OwnWait::None, OwnWait::of_gmm),
             _ => OwnWait::None,
         }
     }
@@ -657,6 +662,9 @@ impl AnyModel {
             // Each fit counts its own; none withholds a row as a failure.
             | AnyModel::Ar(_)
             | AnyModel::Spectral(_) => 0,
+            // A component its start cannot identify withholds the start,
+            // and a factorization that fails scores no row: neither fails.
+            AnyModel::Gmm(_) => 0,
         }
     }
 
@@ -699,6 +707,9 @@ impl AnyModel {
             AnyModel::Holt(m) => Some(m.coefficients()),
             // The centres, k rows of p; absent until seeded.
             AnyModel::KMeans(m) => m.coefficients(),
+            // Each component's weight, mean and packed covariance, one row
+            // each; absent until the start.
+            AnyModel::Gmm(m) => m.coefficients(),
             // micro: one row per potential summary -- ragged, and absent
             // until there is one.
             AnyModel::Micro(m) => m.coefficients(),
@@ -772,7 +783,7 @@ mod model_cfgs;
 use model_cfgs::read_floor;
 pub use model_cfgs::{
     BOCPD_HAZARD_ROWS, ar_cfg, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, ddsketch_cfg,
-    deco_block_names, deco_cfg, expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg,
+    deco_block_names, deco_cfg, expectile_cfg, garch_cfg, glm_cfg, gmm_cfg, hawkes_cfg, hmm_cfg,
     huber_model, pca_cfg, power_variation_cfg, quantile_model, rcov_cfg, realized_cfg, sgd_model,
     spectral_cfg, tdigest_cfg,
 };
@@ -867,6 +878,7 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Pa { .. }
         | ModelKind::Holt { .. }
         | ModelKind::KMeans { .. }
+        | ModelKind::Gmm(_)
         | ModelKind::Micro { .. }
         | ModelKind::EwClass { .. }
         | ModelKind::SeqTest { .. }
@@ -1456,6 +1468,23 @@ pub enum OwnWait {
     None = 0,
     Seeding = REASON_WARM_ROWS,
     NotIdentified = REASON_NOT_IDENTIFIED,
+    NotSeparated = REASON_NOT_SEPARATED,
+    NotConverged = REASON_NOT_CONVERGED,
+    AboveMaxStateBytes = REASON_ABOVE_MAX_STATE_BYTES,
+}
+
+impl OwnWait {
+    /// `gmm`'s wait before its start, each condition by its own name.
+    fn of_gmm(w: rheon_core::GmmWait) -> Self {
+        use rheon_core::GmmWait as W;
+        match w {
+            W::WarmUp => Self::Seeding,
+            W::NotIdentified => Self::NotIdentified,
+            W::NotSeparated => Self::NotSeparated,
+            W::Moving => Self::NotConverged,
+            W::OverCap => Self::AboveMaxStateBytes,
+        }
+    }
 }
 
 /// The reasons a row's predictions are withheld, as `withheld_reason`
@@ -1475,8 +1504,10 @@ pub enum OwnWait {
 /// scale ratio moved, which no model with an earlier reason has;
 /// `not_separated` last (PLAN 505), `pca`'s wait for components whose eigenvalues
 /// the rows have not yet told apart; `level_beyond_sample` after it (task
-/// 544), a `tdigest` or `ddsketch` level its rows do not identify yet.
-pub const WITHHELD_REASONS: [&str; 10] = [
+/// 544), a `tdigest` or `ddsketch` level its rows do not identify yet;
+/// `not_converged` and `above_max_state_bytes` after it (PLAN 506), `gmm`'s
+/// start whose fit still moves between tries, and its buffer at its bound.
+pub const WITHHELD_REASONS: [&str; 12] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
@@ -1487,6 +1518,8 @@ pub const WITHHELD_REASONS: [&str; 10] = [
     "scale_ratio_moved",
     "not_separated",
     "level_beyond_sample",
+    "not_converged",
+    "above_max_state_bytes",
 ];
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
@@ -1498,6 +1531,8 @@ const REASON_NOT_IDENTIFIED: u8 = 7;
 const REASON_SCALE_RATIO: u8 = 8;
 const REASON_NOT_SEPARATED: u8 = 9;
 const REASON_BEYOND_SAMPLE: u8 = 10;
+const REASON_NOT_CONVERGED: u8 = 11;
+const REASON_ABOVE_MAX_STATE_BYTES: u8 = 12;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices

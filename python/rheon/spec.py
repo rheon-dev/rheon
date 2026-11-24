@@ -447,8 +447,9 @@ releases none. A regression writes, with ``<t>`` a target:
     Which gate withheld the row's predictions, as an ``Enum``, and null where
     no gate did. ``below_min_settled_frac``, ``below_min_weight``,
     ``above_max_error_inflation``, ``below_warm_rows``, ``ill_conditioned``,
-    ``unstable_rate``, ``not_identified``, ``scale_ratio_moved``, ``not_separated`` and
-    ``level_beyond_sample`` are named in that order, the first that withheld anything.
+    ``unstable_rate``, ``not_identified``, ``scale_ratio_moved``, ``not_separated``,
+    ``level_beyond_sample``, ``not_converged`` and ``above_max_state_bytes`` are named
+    in that order, the first that withheld anything.
     ``below_warm_rows`` is the model's own warm-up: the rows ``kmeans``,
     ``hmm`` and ``bocpd`` hold to seed their centres, states or prior from
     (``warm_rows``), a count of rows, where ``min_weight`` is a weight, the
@@ -476,7 +477,12 @@ releases none. A regression writes, with ``<t>`` a target:
     ``tdigest`` or ``ddsketch`` level its rows do not identify yet: past the
     expected level of the smallest or largest row, ``1/(n + 1)`` and
     ``n/(n + 1)`` for ``n`` rows; the ``tdigest`` builder's docstring has
-    the rule. Fields null for another reason,
+    the rule. ``not_converged`` is a ``gmm`` start whose fit still moves
+    between tries of its buffer, and ``above_max_state_bytes`` a ``gmm``
+    buffer at its ``max_state_bytes`` with no start, which is never forced;
+    a ``gmm`` start also waits as ``not_identified`` and ``not_separated``,
+    and the ``gmm`` builder's docstring has each condition. Fields null for
+    another reason,
     such as a skipped row or a statistic not yet due, leave it null. An
     ``Enum`` rather than a string, because a string column costs sixteen
     bytes a row even when every value is null.
@@ -1161,6 +1167,7 @@ from rheon._spec import (
     ftrl,
     garch,
     glm,
+    gmm,
     hawkes,
     hmm,
     holt,
@@ -1196,6 +1203,7 @@ __all__ = [
     "ftrl",
     "garch",
     "glm",
+    "gmm",
     "hawkes",
     "hmm",
     "holt",

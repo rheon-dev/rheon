@@ -54,6 +54,7 @@ MINIMAL: dict[str, dict[str, object]] = {
     "expectile": {"expectile": 0.8},
     "holt": {"features": None},
     "kmeans": {"targets": None, "features": ["x0", "x1"], "n_clusters": 2},
+    "gmm": {"targets": None, "features": ["x0", "x1"], "n_components": 2},
     "micro": {"targets": None, "features": ["x0", "x1"], "eps": 0.3},
     "ew_class": {"targets": None, "label": "y", "classes": ["a", "b"], "precision_prior": 1.0},
     "seqtest": {"features": None, "half_life": None},

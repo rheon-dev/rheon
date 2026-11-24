@@ -34,6 +34,7 @@ impl AnyModel {
             ModelState::Pa(_) => Ok(AnyModel::Pa(Box::new(Pa::restore(s)?))),
             ModelState::Holt(_) => Ok(AnyModel::Holt(Box::new(Holt::restore(s)?))),
             ModelState::KMeans(_) => Ok(AnyModel::KMeans(Box::new(KMeans::restore(s)?))),
+            ModelState::Gmm(_) => Ok(AnyModel::Gmm(Box::new(rheon_core::Gmm::restore(s)?))),
             ModelState::Micro(_) => Ok(AnyModel::Micro(Box::new(Micro::restore(s)?))),
             ModelState::EwClass(_) => Ok(AnyModel::EwClass(Box::new(EwClass::restore(s)?))),
             ModelState::SeqTest(_) => Ok(AnyModel::SeqTest(Box::new(SeqTest::restore(s)?))),

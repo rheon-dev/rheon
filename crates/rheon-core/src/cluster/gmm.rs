@@ -892,8 +892,38 @@ impl Gmm {
     /// Output slot labels in emission order.
     pub fn labels(n_components: usize) -> Vec<String> {
         let mut out = vec!["cluster".to_string(), "log_density".into(), "dist".into()];
-        out.extend((0..n_components).map(|j| format!("membership{j}")));
+        out.extend((0..n_components).map(|j| format!("membership_{j}")));
         out
+    }
+
+    /// One row a component, in the fixed order: its weight `π_j`, its mean,
+    /// then its covariance with `reg_covar` (full: the upper triangle by
+    /// rows, `Σ_00, Σ_01, …, Σ_11, …`; diag: the variances). `None` before
+    /// the start.
+    pub fn coefficients(&self) -> Option<Vec<Vec<f64>>> {
+        let fit = self.parameters()?;
+        let (k, full) = (
+            self.cfg.n_features,
+            self.cfg.covariance == GmmCovariance::Full,
+        );
+        let per = if full { k * k } else { k };
+        Some(
+            (0..self.cfg.n_components)
+                .map(|j| {
+                    let mut row = vec![fit.weights[j]];
+                    row.extend_from_slice(&fit.means[j * k..(j + 1) * k]);
+                    let c = &fit.covs[j * per..(j + 1) * per];
+                    if full {
+                        for a in 0..k {
+                            row.extend_from_slice(&c[a * k + a..(a + 1) * k]);
+                        }
+                    } else {
+                        row.extend_from_slice(c);
+                    }
+                    row
+                })
+                .collect(),
+        )
     }
 
     /// The row's read after a decay `lam`: none where the decay leaves the

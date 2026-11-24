@@ -65,7 +65,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "ddsketch",
         "spectral",
     ),
-    "Clustering and classification": ("kmeans", "micro", "ew_class"),
+    "Clustering and classification": ("kmeans", "gmm", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
 
@@ -354,6 +354,14 @@ MEANING_BY_MODEL: dict[tuple[str, str], str] = {
     ("dcc", "loglik"): (
         "the Gaussian log-density of the row's standardized residuals under that correlation"
     ),
+    ("gmm", "cluster"): (
+        "the most responsible component, from 0, read before the row is learned from"
+    ),
+    ("gmm", "dist"): "the row's Mahalanobis distance to `cluster`'s component",
+    ("gmm", "log_density"): "the row's log-density under the mixture, `log f(x)`",
+    ("gmm", "membership_<j>"): (
+        "component `<j>`'s responsibility for the row, from 0; they sum to 1"
+    ),
 }
 
 #: A model whose rule for a stem differs from `ALSO_NULL`'s.
@@ -387,6 +395,13 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
         "the levels hold no correlation matrix the density can be solved for"
     ),
     ("micro", "cluster"): "while withheld, and while no summary is established",
+    **{
+        ("gmm", s): (
+            "while withheld, which includes every row before the start: the start waits until "
+            "its buffer identifies its components, tells them from one fewer and stops moving"
+        )
+        for s in ("cluster", "log_density", "dist", "membership_<j>")
+    },
     ("hmm", "loglik"): UNTIL_SEEDED,
     **{("bocpd", stem): BOCPD_WARM for stem in BOCPD_STEMS},
 }
@@ -477,7 +492,8 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "withheld_reason",
         "why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, "
         "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, "
-        "`not_identified`, `scale_ratio_moved` or `not_separated`. That order is their "
+        "`not_identified`, `scale_ratio_moved`, `not_separated`, `level_beyond_sample`, "
+        "`not_converged` or `above_max_state_bytes`. That order is their "
         "precedence, so the first that applies is the one named. `below_warm_rows` is the "
         "model's own warm-up, the rows "
         "`kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for "
@@ -493,7 +509,10 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "`scale_ratio_moved` is a `corrchange` span past its critical value whose two columns' "
         "scale ratio moved inside it, so its `flag` is null. `not_separated` is a `pca` component "
         "the data does not yet tell apart from a neighbor: the test of the equality of their two "
-        "eigenvalues does not pass",
+        "eigenvalues does not pass, or a `gmm` start whose fit does not beat one fewer "
+        "component by `delta_bic`. `not_converged` is a `gmm` start whose fit still moves "
+        "between tries of its buffer, and `above_max_state_bytes` a `gmm` buffer at its "
+        "`max_state_bytes` with no start",
         "where nothing was withheld",
     ),
     (
@@ -822,6 +841,8 @@ def stem(
     for pre in ("filtered_state", "predicted_state"):
         if base.startswith(pre) and base[len(pre) :].isdigit():
             return f"{pre}<j>"
+    if base.startswith("membership_") and base[len("membership_") :].isdigit():
+        return "membership_<j>"
     if base.startswith("p_") and base != "p_change":
         return "p_<label>"
     if base.startswith("pc") and "_" in base and base[2 : base.index("_")].isdigit():

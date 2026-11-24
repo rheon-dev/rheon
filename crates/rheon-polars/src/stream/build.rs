@@ -782,6 +782,9 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             realized_cfg(spec, decay)?,
         )?))),
 
+        ModelKind::Gmm(_) => Ok(AnyModel::Gmm(Box::new(rheon_core::Gmm::new(gmm_cfg(
+            spec, decay,
+        )?)?))),
         ModelKind::Pca { .. } => Ok(AnyModel::Pca(Box::new(rheon_core::StreamPca::new(
             pca_cfg(spec, decay)?,
         )?))),

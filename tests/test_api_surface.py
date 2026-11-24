@@ -273,6 +273,7 @@ def describe_api(cli: Path | None = None) -> str:
             ),
         ),
         ("kmeans", dict(features=["x0", "x1"], n_clusters=2, half_life=100.0)),
+        ("gmm", dict(features=["x0", "x1"], n_components=2, half_life=100.0)),
         ("micro", dict(features=["x0", "x1"], eps=0.3, half_life=100.0)),
         (
             "ew_class",
@@ -783,6 +784,7 @@ ENUM_PROBES: list[
         "word",
     ),
     ("pca.method", "pca", {}, "model.method", "word"),
+    ("gmm.covariance_type", "gmm", {}, "model.covariance_type", "word"),
     (
         "power_variation.closed",
         "power_variation",

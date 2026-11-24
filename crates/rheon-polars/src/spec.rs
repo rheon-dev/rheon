@@ -30,7 +30,9 @@ pub use drift::*;
 mod label_clock;
 pub(crate) use clock::{ClockPolicy, clock_cfg_of};
 pub use label_clock::*;
+mod gmm;
 mod moments;
+pub use gmm::GmmSpec;
 pub(crate) use moments::moment_leg_column;
 pub use moments::{MOMENT_KINDS, MomentKinds, MomentLegs, MomentTerms, ewm_moments_cfg};
 
@@ -1821,6 +1823,11 @@ pub enum ModelKind {
     /// per target and period, the power before the row. No features.
     #[serde(rename = "spectral")]
     Spectral(SpectralSpec),
+    /// A Gaussian mixture by exponentially weighted online EM
+    /// (`rheon_core::Gmm`), started from batch EM on a bounded buffer once
+    /// the buffer identifies and separates its components. No targets.
+    #[serde(rename = "gmm")]
+    Gmm(GmmSpec),
 }
 
 /// One term of a `power_variation` spec: its name, which names its fields
@@ -2008,6 +2015,7 @@ impl ModelKind {
         "ewm_moments",
         "ar",
         "spectral",
+        "gmm",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -2047,6 +2055,7 @@ impl ModelKind {
             ModelKind::EwmMoments { .. } => "ewm_moments",
             ModelKind::Ar { .. } => "ar",
             ModelKind::Spectral(_) => "spectral",
+            ModelKind::Gmm(_) => "gmm",
         }
     }
 
@@ -2379,7 +2388,7 @@ impl ModelKind {
     }
 
     /// True for the models that learn from no target column: `ew_cov`,
-    /// `kmeans`, `micro`, `deco`, `rcov`, `hmm`, `corrchange`, `bocpd`,
+    /// `kmeans`, `gmm`, `micro`, `deco`, `rcov`, `hmm`, `corrchange`, `bocpd`,
     /// `audit` and `ewm_moments`,
     /// the list `_spec.py`'s `UNSUPERVISED` keeps too. Their `targets` mirror
     /// `features[0]` for plumbing, so a target that is also a feature is not
@@ -2390,6 +2399,7 @@ impl ModelKind {
             self,
             ModelKind::EwCov { .. }
                 | ModelKind::KMeans { .. }
+                | ModelKind::Gmm(_)
                 | ModelKind::Micro { .. }
                 | ModelKind::Deco { .. }
                 | ModelKind::Rcov { .. }
@@ -3375,6 +3385,9 @@ impl Spec {
             ModelKind::Ar { .. } => 0.0,
             // A power is defined from the first row; nothing to wait for.
             ModelKind::Spectral(_) => 0.0,
+            // The start is the gate: it waits until its buffer identifies,
+            // separates and settles its components, which no row count says.
+            ModelKind::Gmm(_) => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the
@@ -3964,6 +3977,7 @@ impl Spec {
             self.model,
             ModelKind::EwCov { .. }
                 | ModelKind::KMeans { .. }
+                | ModelKind::Gmm(_)
                 | ModelKind::Micro { .. }
                 | ModelKind::EwClass { .. }
                 | ModelKind::Holt { .. }
