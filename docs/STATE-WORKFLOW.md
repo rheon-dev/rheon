@@ -161,10 +161,10 @@ refusal. Here is what each rule guarantees, and the test that holds it:
 | without a clock column, an input that does not begin with a new session | refused: a row-count clock steps forward at every row | `test_without_a_clock_the_next_file_begins_with_a_new_session` |
 | a state of another version, or a damaged file | refused by its version, or reported as damaged | `test_a_windows_state_of_another_version_is_refused_by_its_version`, `test_a_damaged_windows_state_says_so` |
 
-The windows state is version 13, and this build reads 9 to 12 too: 12 is
-13 without a `rolling_max` or `rolling_min`, 12 is 11 in the envelope, 11's
-layout is 10's with the checksum, and 9's is 10's without a quantile
-operator. A state one release saves loads in every later
+The windows state is version 14, and this build reads 9 to 13 too: 13 is
+14 without an `stl` or `mstl` ring, and 12 is 13 without a `rolling_max` or
+`rolling_min`. Version 12 is 11 in the envelope, 11's layout is 10's with
+the checksum, and 9's is 10's without a quantile operator. A state one release saves loads in every later
 release, the formula tree it holds included, as a bank's state does: each
 later layout ships a loader for the one before, held by frozen states of
 every version. A bank file carries a windows state for each formula target,
