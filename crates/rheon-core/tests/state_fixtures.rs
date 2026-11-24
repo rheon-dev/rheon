@@ -1658,7 +1658,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 198] = [
+    const FORMS: [(&str, &[&str]); 200] = [
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.
@@ -1875,6 +1875,17 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("hawkes_window", &["model", "Hawkes", "window", "fwd"]),
         ("hawkes_window", &["model", "Hawkes", "window", "new_sum"]),
         ("hawkes_window", &["model", "Hawkes", "window", "weight"]),
+        // Saved on a row with no event while the newer block holds three
+        // rows (HAWKES-7): the clock since the newest row, and the newer
+        // rows' gaps.
+        (
+            "hawkes_window_quiet",
+            &["model", "Hawkes", "window", "last"],
+        ),
+        (
+            "hawkes_window_quiet",
+            &["model", "Hawkes", "window", "time"],
+        ),
         // A window of clock units, its rows stamped: a stamp a row, and the
         // stamp the clock was last handed.
         (

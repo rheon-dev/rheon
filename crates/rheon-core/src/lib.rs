@@ -990,6 +990,16 @@ pub use window::{
 ///   held to that ([`Deco`]'s module docs; `tests/state_fixtures.rs`,
 ///   `RESTARTED_LEVEL`); the ratio's forms are the cases `deco`,
 ///   `deco_linear` and `deco_warming`.
+///
+///   Also at 72, before any release carried it (HAWKES-7): a `hawkes`
+///   window's newer rows after the block's first hold each its gap to the
+///   row before it, where they held their clock from the block's start, and
+///   the window keeps `last`, the clock since its newest row. A state
+///   without `last` (schema 71's, and 72's before the change) is moved to
+///   the gaps as it loads, exactly where the clock's sums were exact: the
+///   kept `v71/hawkes_window` and `v71/hawkes_clock_window` go on to the bit
+///   and convert to the current bytes. The form with `last` above 0 is the
+///   case `hawkes_window_quiet`.
 pub const SCHEMA_VERSION: u32 = 72;
 
 /// The default solve cadence of `ewridge`, `lasso`, `huber` and `quantile`

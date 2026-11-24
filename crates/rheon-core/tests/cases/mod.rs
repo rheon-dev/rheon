@@ -2888,6 +2888,19 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             45
         ),
+        // In a window of six rows with an event, saved on a row with none
+        // while the newer block holds rows (HAWKES-7): the clock since the
+        // newest row, beside the clock since the block's start, and the
+        // newer rows' gaps.
+        case!(
+            "hawkes_window_quiet",
+            "Hawkes",
+            Hawkes,
+            Hawkes::new(hawkes_cfg(Some(6))).unwrap(),
+            K,
+            Targets::Excited(2),
+            122
+        ),
         // Over a span of the clock, rows stamped: the older block's rows with
         // their stamps, the clock the model tracks and the last stamp.
         Case {

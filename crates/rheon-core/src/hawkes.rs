@@ -73,9 +73,19 @@
 //! has had an event, or before any clock has passed), or is so near
 //! singular that the events cannot tell two of its terms apart: a pivot of
 //! `G` scaled to a unit diagonal below `1e-10`, a condition number above
-//! `1e10`, as when two nodes' events fall on the same rows. `coefficients` reads
-//! `θ_i` the same way. The fit is unconstrained: a parameter, and an
-//! intensity, can be negative where the data say so.
+//! `1e10`, as when two nodes' events fall on the same rows. Under a window,
+//! also while the window holds no event of a node before the read's clock
+//! (none at all, or only on rows at that clock): the node's excitation is
+//! 0 over the whole observation, its column of `G` is 0 by its definition,
+//! and its kernels' parameters are not identified. That is decided from
+//! each node's count of the rows it holds, exactly, not from `G`, whose
+//! column the subtractions that took the node's events back leave as
+//! rounding, which the scaling to a unit diagonal would hide from the pivot
+//! test; and as a node's last event leaves, its sums are set to 0. Every
+//! such report but `min_weight`'s is one the events do not identify
+//! ([`Hawkes::not_identified`]). `coefficients` reads `θ_i` the same way.
+//! The fit is unconstrained: a parameter, and an intensity, can be negative
+//! where the data say so.
 //!
 //! **The weight.** A row's weight decides only whether its events are
 //! learned: 0 learns nothing and counts in no clock (hard rule 9: the
@@ -134,6 +144,17 @@
 //! row in either block (a newer row's `k` sums are 0 until its block becomes
 //! the older), and, under `D` clock units, a stamp of 32 bytes beside each.
 //! A window forgets by dropping, so it takes no decay.
+//!
+//! **The window's clock.** No time is held as the clock's sum. An older
+//! row holds `t_m − t_r`; the newer block's first row `t_r − t_m`; each
+//! later newer row its gap to the row before it, read from the clock since
+//! the newest row, which the window keeps beside the clock since `t_m`.
+//! When the newer block becomes the older, each row's clock to now is
+//! summed from the gaps, newest first. A gap after a long quiet stretch so
+//! keeps its digits: held from `t_m`, a gap of 0.25 after a stretch of
+//! `1e16` would be in `1e16 + 0.25`, which a double rounds to `1e16`, and
+//! the block formed from it would read the events after the stretch as
+//! all at one clock.
 //!
 //! **The weight under a window** (hard rule 8) is the weight inside it: the
 //! rows that carried an event and are held, each with its weight (8 bytes a
@@ -354,14 +375,24 @@ impl HawkesCfg {
 /// holds the same numbers -- its time, its weight, its `D` marks and its `k`
 /// forward sums, which a newer row holds at 0 until its block becomes the
 /// older -- so the window's size is its rows' count times one figure,
-/// whatever the blocks' split. Times are held relative to the newer block's
-/// start `t_m`, never as the clock's sum: an older row's `t_m − t_r`, a newer
-/// row's `t_r − t_m`. A window of clock units holds each row's stamp too,
-/// which decides when it leaves.
+/// whatever the blocks' split. Times are never held as the clock's sum: an
+/// older row's is `t_m − t_r`, from the newer block's start `t_m`; the newer
+/// block's first row's is `t_r − t_m`, and each later newer row's is its gap
+/// to the row before it. So a gap after a long quiet stretch keeps its
+/// digits: counted from `t_m`, a gap of 0.25 after a stretch of `1e16` would
+/// be held in `1e16 + 0.25`, which rounds to `1e16`. A window of clock units
+/// holds each row's stamp too, which decides when it leaves.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct EventWindow {
     /// The clock since `t_m`, now.
     since: f64,
+    /// The clock since the newer block's newest row, now, from which the
+    /// next row's gap is read; while the newer block is empty, the same
+    /// clock as `since`. Not a number in a state saved before the window
+    /// kept its gaps, whose newer rows' times are `t_r − t_m`: such a state
+    /// is moved to the gaps as it loads ([`EventWindow::rebase`]).
+    #[serde(default = "unset")]
+    last: f64,
     /// The rows of the older block, at the front.
     old: usize,
     time: VecDeque<f64>,
@@ -378,6 +409,15 @@ struct EventWindow {
     stamp: VecDeque<Stamp>,
     #[serde(default)]
     track: Option<ClockTrack>,
+    /// Each node's rows with an event the window holds, read from the marks;
+    /// never saved, and counted again as a state loads.
+    #[serde(skip)]
+    held: Vec<u32>,
+}
+
+/// A clock a state saved before it had the field holds: not a number.
+fn unset() -> f64 {
+    f64::NAN
 }
 
 /// Where a clock window reads the clock from: the steps summed, which times
@@ -391,9 +431,10 @@ struct ClockTrack {
 }
 
 impl EventWindow {
-    fn new(k: usize, clocked: bool) -> Self {
+    fn new(n: usize, k: usize, clocked: bool) -> Self {
         Self {
             since: 0.0,
+            last: 0.0,
             old: 0,
             time: VecDeque::new(),
             weight: VecDeque::new(),
@@ -403,6 +444,86 @@ impl EventWindow {
             new_sum: vec![0.0; k],
             stamp: VecDeque::new(),
             track: clocked.then(ClockTrack::default),
+            held: vec![0; n],
+        }
+    }
+
+    /// The clock from row `r − 1` to row `r`, `r ≥ 1`, from the times as the
+    /// blocks hold them.
+    fn gap_before(&self, r: usize) -> f64 {
+        if r > self.old {
+            self.time[r]
+        } else if r == self.old {
+            self.time[r] + self.time[r - 1]
+        } else {
+            self.time[r - 1] - self.time[r]
+        }
+    }
+
+    /// The clock since the newest row, `ahead` past where the window stands.
+    fn newest_age(&self, ahead: f64) -> f64 {
+        let rows = self.rows();
+        if rows > self.old {
+            self.last + ahead
+        } else {
+            self.since + ahead + self.time[rows - 1]
+        }
+    }
+
+    /// Whether some node's excitation is 0 over the whole observation read
+    /// `ahead` past where the window stands: the window holds no event of
+    /// it, or holds them only on the rows at the read's own clock. Its
+    /// column of `G` is then 0 by its definition, and its kernels'
+    /// parameters are not identified.
+    fn has_unexcited(&self, n: usize, ahead: f64) -> bool {
+        if self.held.contains(&0) {
+            return true;
+        }
+        if self.newest_age(ahead) > 0.0 {
+            return false;
+        }
+        // The rows at the read's own clock, newest first: `from..rows`.
+        let rows = self.rows();
+        let mut from = rows - 1;
+        while from > 0 && self.gap_before(from) == 0.0 {
+            from -= 1;
+        }
+        (0..n).any(|j| {
+            let at = (from..rows)
+                .filter(|&r| self.marks[r * n + j] > 0.0)
+                .count();
+            at == self.held[j] as usize
+        })
+    }
+
+    /// Each node's rows with an event, counted from the marks.
+    fn recount(&mut self, n: usize) {
+        self.held.clear();
+        self.held.resize(n, 0);
+        for (i, m) in self.marks.iter().enumerate() {
+            self.held[i % n] += u32::from(*m > 0.0);
+        }
+    }
+
+    /// A state saved before the window kept its gaps, whose newer rows'
+    /// times are `t_r − t_m`, to the gaps: each newer row after the block's
+    /// first takes its gap to the row before it, and `last` the clock since
+    /// the newest. Exact where the clock's sums were (a clock of whole
+    /// units, say), so such a state goes on to the bit and saves the bytes
+    /// the same rows give now; elsewhere it goes on within the rounding of
+    /// the times it held. A state with `last` is left as it is.
+    fn rebase(&mut self) {
+        if !self.last.is_nan() {
+            return;
+        }
+        let rows = self.rows();
+        self.last = if rows > self.old {
+            self.since - self.time[rows - 1]
+        } else {
+            self.since
+        };
+        for r in (self.old + 1..rows).rev() {
+            self.time[r] -= self.time[r - 1];
         }
     }
 
@@ -557,7 +678,7 @@ impl Hawkes {
             g0: 0.0,
             w_sum: 0.0,
             window: (cfg.window_events.is_some() || cfg.window_clock.is_some())
-                .then(|| EventWindow::new(k, cfg.window_clock.is_some())),
+                .then(|| EventWindow::new(n, k, cfg.window_clock.is_some())),
             over: None,
             warned: false,
             next: None,
@@ -587,19 +708,19 @@ impl Hawkes {
     }
 
     /// The bytes of a window's rows: `8 (2 + D + k)` each, with the newer
-    /// block's sum `B`, the clock since its start and the weight inside, `8
-    /// (k + 2)`.
+    /// block's sum `B`, the clock since its start, the clock since its
+    /// newest row and the weight inside, `8 (k + 3)`.
     fn window_bytes(n: u64, k: u64, rows: u64) -> u64 {
         rows.saturating_mul(n.saturating_add(k).saturating_add(2))
             .saturating_add(k)
-            .saturating_add(2)
+            .saturating_add(3)
             .saturating_mul(8)
     }
 
     /// The bytes of the numbers a model of this shape holds at most: its
     /// running sums, `8 (k + D (1 + k) + D (D + 1) / 2 + 2)`, and a full
     /// window of `W` rows with an event, `8 W (2 + D + k)`, with its sum `B`,
-    /// its clock and its weight, `8 (k + 2)`. The one part whose size the
+    /// its two clocks and its weight, `8 (k + 3)`. The one part whose size the
     /// data could set is the window's rows, and `W` bounds it, so this is
     /// known from the settings alone. A window of clock units is not
     /// bounded by its settings: see [`Self::clock_state_bytes`]. Past what a
@@ -628,6 +749,28 @@ impl Hawkes {
     /// its rows resumes from a restored state.
     pub fn last_stamp(&self) -> Option<Stamp> {
         self.window.as_ref()?.track.as_ref()?.last
+    }
+
+    /// Whether a step's or a read's report was withheld because the events
+    /// do not identify the fit: its intensities are not numbers though its
+    /// weight is at `min_weight`, so the system it was read from was
+    /// singular, or so near it that its terms cannot be told apart (see the
+    /// module docs).
+    pub fn not_identified(&self, out: &Step) -> bool {
+        out.n_eff >= self.cfg.min_weight
+            && !out.pred.is_empty()
+            && out.pred.iter().all(|v| v.is_nan())
+    }
+
+    /// Whether every node's excitation is above 0 somewhere in the
+    /// observation as read `ahead` past where the state stands: under a
+    /// window, from the rows it holds ([`EventWindow::has_unexcited`]);
+    /// without one, the solve decides, since a node's sums are 0 exactly
+    /// until its first event.
+    fn excited(&self, ahead: f64) -> bool {
+        self.window
+            .as_ref()
+            .is_none_or(|w| !w.has_unexcited(self.cfg.n_targets, ahead))
     }
 
     /// The rows with an event the window holds; 0 without a window.
@@ -663,19 +806,21 @@ impl Hawkes {
     pub fn coefficients(&self) -> Vec<Vec<f64>> {
         let (n, _, k) = self.cfg.dims();
         let p = 1 + k;
+        let excited = self.excited(0.0);
         with_scratch(p, |sc| {
-            let ok = solve_into(
-                &self.cfg.kernel_decays,
-                n,
-                self.gamma(),
-                &self.r,
-                &self.b,
-                &self.q,
-                self.g0,
-                &mut sc.solves,
-                &mut sc.g,
-                &mut sc.x,
-            );
+            let ok = excited
+                && solve_into(
+                    &self.cfg.kernel_decays,
+                    n,
+                    self.gamma(),
+                    &self.r,
+                    &self.b,
+                    &self.q,
+                    self.g0,
+                    &mut sc.solves,
+                    &mut sc.g,
+                    &mut sc.x,
+                );
             (0..n)
                 .map(|i| {
                     if ok {
@@ -695,6 +840,7 @@ impl Hawkes {
     fn intensities_into(
         cfg: &HawkesCfg,
         n_eff: f64,
+        excited: bool,
         r: &[f64],
         b: &[f64],
         q: &[f64],
@@ -707,6 +853,7 @@ impl Hawkes {
         pred.clear();
         let ReadScratch { solves, g, x, .. } = sc;
         if !(n_eff >= cfg.min_weight
+            && excited
             && solve_into(
                 &cfg.kernel_decays,
                 n,
@@ -788,12 +935,18 @@ impl Hawkes {
         let Some(w) = self.window.as_mut() else {
             return;
         };
-        w.time.push_back(w.since);
+        // The newer block's first row is held from its start; each later
+        // one by its gap to the row before it.
+        w.time
+            .push_back(if w.rows() == w.old { w.since } else { w.last });
+        w.last = 0.0;
         w.weight.push_back(weight);
         w.w_in += weight;
         w.stamp.extend(now);
         for j in 0..n {
-            w.marks.push_back(Self::mark(y.get(j).copied().flatten()));
+            let m = Self::mark(y.get(j).copied().flatten());
+            w.held[j] += u32::from(m > 0.0);
+            w.marks.push_back(m);
         }
         w.fwd.extend(std::iter::repeat_n(0.0, k));
         let at = w.marks.len() - n;
@@ -859,9 +1012,36 @@ impl Hawkes {
             w.w_in = 0.0;
         }
         w.stamp.pop_front();
-        w.marks.drain(..n);
         w.fwd.drain(..k);
         w.old -= 1;
+        for j in 0..n {
+            let m = w.marks.pop_front().unwrap_or(0.0);
+            if m <= 0.0 {
+                continue;
+            }
+            w.held[j] -= 1;
+            if w.held[j] == 0 {
+                // The node's last event has left: what it added is taken
+                // back to the rounding of the subtractions, and the
+                // window's sums for it are 0 exactly.
+                Self::clear_node(&self.cfg, j, &mut self.r, &mut self.b, &mut self.q);
+            }
+        }
+    }
+
+    /// Node `j`'s part of `R`, `b` and `Q` set to 0: its excitation, every
+    /// node's sums of it, its own events' sums, and its products of marks.
+    fn clear_node(cfg: &HawkesCfg, j: usize, r: &mut [f64], b: &mut [f64], q: &mut [f64]) {
+        let (n, u_n, k) = cfg.dims();
+        let p = 1 + k;
+        r[j * u_n..(j + 1) * u_n].fill(0.0);
+        for i in 0..n {
+            b[i * p + 1 + j * u_n..i * p + 1 + (j + 1) * u_n].fill(0.0);
+        }
+        b[j * p..(j + 1) * p].fill(0.0);
+        for l in 0..n {
+            q[tri(j, l)] = 0.0;
+        }
     }
 
     /// The older block has run out: the newer becomes it, less its oldest
@@ -873,13 +1053,14 @@ impl Hawkes {
         let betas = &self.cfg.kernel_decays;
         let w = self.window.as_mut().expect("windowed");
         let rows = w.time.len();
-        let now = w.since;
+        // Every row is the newer block's: row `r ≥ 1` holds its gap to row
+        // `r − 1`, and row 0, dropped here, needs none.
         // In place: a deque held in one piece reads as a slice.
         let marks: &[f64] = w.marks.make_contiguous();
         // Row `rows - 1` has no later row: its sums stay the 0 it was
         // pushed with. Row 0 is dropped, so it needs none.
         for r in (1..rows - 1).rev() {
-            let gap = w.time[r + 1] - w.time[r];
+            let gap = w.time[r + 1];
             for (u, beta) in betas.iter().enumerate() {
                 let e = (-beta * gap).exp();
                 for i in 0..n {
@@ -893,7 +1074,7 @@ impl Hawkes {
         self.q.fill(0.0);
         for r in 1..rows {
             if r > 1 {
-                let gap = w.time[r] - w.time[r - 1];
+                let gap = w.time[r];
                 for (u, beta) in betas.iter().enumerate() {
                     let e = (-beta * gap).exp();
                     for j in 0..n {
@@ -909,26 +1090,34 @@ impl Hawkes {
                 &mut self.q,
             );
         }
-        let gap = now - w.time[rows - 1];
+        let gap = w.last;
         for (u, beta) in betas.iter().enumerate() {
             let e = (-beta * gap).exp();
             for j in 0..n {
                 self.r[j * u_n + u] *= e;
             }
         }
-        self.g0 = now - w.time[0];
-        for t in w.time.iter_mut() {
-            *t = now - *t;
+        // Each row's clock to now, the newest's first, summed from the
+        // gaps: the older block's times.
+        let mut age = w.last;
+        for t in w.time.iter_mut().rev() {
+            let gap = *t;
+            *t = age;
+            age += gap;
         }
+        self.g0 = w.time[0];
         w.time.pop_front();
         w.weight.pop_front();
         w.w_in = w.weight.iter().sum();
         w.stamp.pop_front();
-        w.marks.drain(..n);
+        for (h, m) in w.held.iter_mut().zip(w.marks.drain(..n)) {
+            *h -= u32::from(m > 0.0);
+        }
         w.fwd.drain(..k);
         w.old = rows - 1;
         w.new_sum.fill(0.0);
         w.since = 0.0;
+        w.last = 0.0;
     }
 }
 
@@ -953,6 +1142,7 @@ impl Hawkes {
         self.g0 = f * self.g0 + Self::g0_step(gamma, d_clock);
         if let Some(w) = self.window.as_mut() {
             w.since += d_clock;
+            w.last += d_clock;
         }
         if let (Some(now), Some(span)) = (now, self.cfg.window_clock) {
             // A row that left means the clock is at least a span old; and
@@ -1030,7 +1220,15 @@ impl Hawkes {
         let mut pred = Vec::new();
         with_scratch(p, |sc| {
             Self::intensities_into(
-                &self.cfg, n_eff, &self.r, &self.b, &self.q, self.g0, sc, &mut pred,
+                &self.cfg,
+                n_eff,
+                self.excited(0.0),
+                &self.r,
+                &self.b,
+                &self.q,
+                self.g0,
+                sc,
+                &mut pred,
             )
         });
         Step {
@@ -1076,7 +1274,17 @@ impl Hawkes {
             b.extend(self.b.iter().map(|v| v * f));
             q.clear();
             q.extend(self.q.iter().map(|v| v * f));
-            Self::intensities_into(&self.cfg, self.n_eff(), &r, &b, &q, g0, sc, &mut pred);
+            Self::intensities_into(
+                &self.cfg,
+                self.n_eff(),
+                self.excited(d_clock),
+                &r,
+                &b,
+                &q,
+                g0,
+                sc,
+                &mut pred,
+            );
             sc.r = r;
             sc.b = b;
             sc.q = q;
@@ -1123,10 +1331,12 @@ impl OnlineModel for Hawkes {
         self.advance(d_clock, now);
         let f = self.cfg.decay.factor(d_clock);
         let p = self.b.len() / n;
+        let excited = self.excited(0.0);
         with_scratch(p, |sc| {
             Self::intensities_into(
                 &self.cfg,
                 n_eff,
+                excited,
                 &self.r,
                 &self.b,
                 &self.q,
@@ -1222,7 +1432,7 @@ impl OnlineModel for Hawkes {
         check_schema(s)?;
         match &s.model {
             ModelState::Hawkes(m) => {
-                let m = (**m).clone();
+                let mut m = (**m).clone();
                 crate::model::check_cfg("hawkes", m.cfg.validate())?;
                 let (n, _, k) = m.cfg.dims();
                 let shaped = m.r.len() == k
@@ -1240,6 +1450,10 @@ impl OnlineModel for Hawkes {
                         "hawkes",
                         "its running sums have the wrong shape",
                     ));
+                }
+                if let Some(w) = m.window.as_mut() {
+                    w.rebase();
+                    w.recount(n);
                 }
                 Ok(m)
             }
@@ -1268,3 +1482,5 @@ impl OnlineModel for Hawkes {
 mod mutant_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod window_tests;
