@@ -1995,6 +1995,70 @@ model that only the new build has is listed as an addition and passes.
   at its length, where a cast to 64 bits said 292 years, and `audit`'s
   duration columns give such a span as null rather than the range's end
   (BANK-9).
+- **`hawkes`' window holds nothing of the rows that have left it**
+  (review 2026-11-23, HAWKES-2). A window of clock units emptied by its
+  older block's last rows kept what their subtractions rounded to: marks
+  of `1e8` and 1 left `Q = 1e16 + 1 − 1e16 − 1 = −1`, and a burst of ten
+  events after it fitted from `Q = 9`, its `alpha` 8.5% off. An empty
+  window's sums are now 0 exactly, and its clock runs only while it holds
+  a row, so a quiet stretch of `1e16` no longer rounds the next gaps of
+  0.25 away; a window of events starts its clock at its first event. The
+  fit is the definition's on the events in the window, to `1e-12`, before
+  and after the window empties. Moves: `hawkes.intensity_*`.
+- **`hawkes` is held to the 64 MiB ceiling of `max_state_bytes`**, checks
+  its default cap of 256 KB as a given one, and refuses a saved window of
+  clock units that holds more than its cap takes (review 2026-11-23,
+  HAWKES-3). It refuses a `half_life` whose rate `ln 2 / half_life` is
+  past the largest double, where the first row's `G₀₀` was NaN, and
+  `kernel_decays` two of which sum or multiply past it (HAWKES-4). A row
+  of weight 0 reads a window of clock units at its own stamp, as its step
+  would be handed it, where it read the last learned row's stamp moved on
+  by the step, a sum that put a row exactly a span old on the other side
+  of the edge on a clock in tenths (HAWKES-5). `MODELS.md`'s figures are
+  64 and 200 bytes, and 6,551 and 3,273 rows (HAWKES-6). Moves:
+  `hawkes.intensity_*`.
+- **`hmm` refuses a `tvtp_coef` that is not finite** (review 2026-11-23,
+  SPEC-2), which made every transition row NaN; and, in Rust, a
+  `warm_span` beside given states (HMM-5), as the spec does. Under given
+  states, a row whose squared deviation in units of a state's given
+  variance passes the largest double (`1e80` from a state given `1e-150`)
+  no longer leaves the prior's scale NaN or infinite, a state no load
+  took: a state the row is not in adds nothing, and such a row ages the
+  scale as a row of no weight does (HMM-1). Where every tracked scale is
+  0, after a gap that leaves the scale no weight and a row exactly on the
+  means, given states read the covariances they were given, not a
+  thousandth of them (`precision_prior`; HMM-2). A failed move of the
+  prior on a row of weight 0 handed to the core directly is not counted
+  in `diagnostics`' failures (HMM-4). A saved state whose clock place does
+  not match its `warm_span` is refused, and the row that seeds the states
+  from a `warm_span` raises the half-cap warning when it is the row that
+  passed half the cap (HMM-5). Rows within the doubles read as before, to
+  the bit.
+- **`kalman`'s square-root form holds at every scale** (review 2026-11-23,
+  KAL-2 and KAL-3). Its rank-one update rotated by `sqrt(l² + x²)`, which
+  was NaN below `1.5e-154` and zeroed the factor's row above `1.3e154`, a
+  finite factor no check refused; the pair is scaled first where the sum
+  of squares is not a normal double. An exact observation (`R / w` of 0,
+  a noise of `1e-250` at a weight of `1e100`) made Carlson's update NaN
+  and lost the factor; it is the update's limit, as the covariance form's
+  is. A form given and given back squares the diagonal again (KAL-4). The
+  noise of a gap stays off a diffuse intercept in the readouts, as in the
+  update (KAL-5), and the intercept's variance in the current coordinates
+  and the prior quadratic form read a rounding below 0 as 0 (KAL-7).
+  Elsewhere, to the bit.
+- **`bocpd` keeps its joint a number** (review 2026-11-23, BOCPD-1,
+  BOCPD-3 and BOCPD-5). A run that cannot have produced a row has
+  tempered likelihood `π⁰ = 1` under `robust` and at a row of no share,
+  where `0·(−∞)` made the joint NaN for good; a second pass whose joint is
+  not a number refuses the row. A clock step whose `d/τ` passes the
+  largest double is a certain break, where it was refused. A run's
+  predictive variance is taken in its share form where `ψ₀ = 1e308` or
+  `κ₀ = 1e307` overflowed its first form, which read every row as
+  impossible and fabricated breaks on constant data; the run posterior is
+  the same at `ψ₀ = 1e308` as at `1e308 · 2⁻¹⁰⁰⁰`. The log of a product
+  of `ψₙ` reads its partial products where a value is below `2⁻¹²⁷`: one
+  that passed through the subnormals was 0.4 off (BOCPD-2). Elsewhere, to
+  the bit.
 
 ### Tests and documents
 

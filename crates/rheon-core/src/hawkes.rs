@@ -268,8 +268,8 @@ impl HawkesCfg {
             if !past.is_empty() {
                 no.refuse(format!(
                     "hawkes: kernel_decays are too large: the fit adds and multiplies each \
-                     pair of decays, and {} leave the range of a double. Measure the clock in \
-                     a smaller unit, so that the decays are smaller numbers.",
+                     pair of decays, and {} leave the range of a double. Use a smaller unit \
+                     for the clock, so that the decays are smaller numbers.",
                     crate::model::listed(&past),
                 ));
             }
