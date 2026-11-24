@@ -103,6 +103,18 @@ pub fn from_row(hi: &mut f64, lo: &mut f64, x: f64, d: f64, a: f64) {
     }
 }
 
+/// [`from_row`] over slices of means, their low parts, the row's deviations
+/// and the row: out of line, so a loop of [`add`] steps beside it keeps the
+/// shape it had (a row whose history keeps less than [`FORGOTTEN`] is as
+/// rare as a gap of 52 half-lives).
+#[cold]
+#[inline(never)]
+pub fn from_rows(hi: &mut [f64], lo: &mut [f64], d: &[f64], x: &[f64], a: f64) {
+    for (((h, l), &di), &xi) in hi.iter_mut().zip(lo.iter_mut()).zip(d).zip(x) {
+        from_row(h, l, xi, di, a);
+    }
+}
+
 // A `lo` vector is sized with its means when they are made, and a restored
 // one of another length is refused as every other vector of a state is. The
 // repair that sized one at its first use, for a state written before the low

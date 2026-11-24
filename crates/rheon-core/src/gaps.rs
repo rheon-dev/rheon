@@ -239,9 +239,16 @@ impl Cross {
             // (`crate::comp::step_toward`; review 2026-11-23, REG-7).
             let carried = lam * self.w;
             let a = carried / (carried + w);
-            for ((mi, lo), &zi) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(z) {
-                let u = dev(zi, *mi, *lo);
-                crate::comp::step_toward(mi, lo, zi, u, a, b);
+            if a < crate::comp::FORGOTTEN {
+                let u: Vec<f64> = (0..z.len())
+                    .map(|i| dev(z[i], self.m[i], self.m_lo[i]))
+                    .collect();
+                crate::comp::from_rows(&mut self.m, &mut self.m_lo, &u, z, a);
+            } else {
+                for ((mi, lo), &zi) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(z) {
+                    let u = dev(zi, *mi, *lo);
+                    crate::comp::add(mi, lo, b * u);
+                }
             }
         }
         // `EwCov::update`'s recursion, whose one refusal -- no weight at all,

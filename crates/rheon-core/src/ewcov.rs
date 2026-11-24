@@ -1327,15 +1327,7 @@ impl EwCov {
         if b > 0.0 && a < crate::comp::FORGOTTEN {
             // A history the decay all but forgot: each mean from the row
             // back (`crate::comp::step_toward`; review 2026-11-23, REG-7).
-            for (((mi, lo), &di), &xi) in self
-                .m
-                .iter_mut()
-                .zip(self.m_lo.iter_mut())
-                .zip(d.iter())
-                .zip(x)
-            {
-                crate::comp::from_row(mi, lo, xi, di, a);
-            }
+            crate::comp::from_rows(&mut self.m, &mut self.m_lo, d, x, a);
         } else if b > 0.0 {
             for ((mi, lo), &di) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(d.iter()) {
                 crate::comp::add(mi, lo, b * di);

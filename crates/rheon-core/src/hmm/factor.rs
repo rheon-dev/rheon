@@ -266,15 +266,11 @@ impl EwFactor {
         // The means' step, the accumulator's: none on a row of weight 0, and
         // from the row back where the history keeps less than
         // `comp::FORGOTTEN` (review 2026-11-23, REG-7).
-        if b > 0.0 {
-            for (((mi, lo), &di), &xi) in self
-                .m
-                .iter_mut()
-                .zip(self.m_lo.iter_mut())
-                .zip(v.iter())
-                .zip(x)
-            {
-                crate::comp::step_toward(mi, lo, xi, di, a, b);
+        if b > 0.0 && a < crate::comp::FORGOTTEN {
+            crate::comp::from_rows(&mut self.m, &mut self.m_lo, v, x, a);
+        } else if b > 0.0 {
+            for ((mi, lo), &di) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(v.iter()) {
+                crate::comp::add(mi, lo, b * di);
             }
         }
         self.precision_scale = if a <= 0.0 {
@@ -523,15 +519,11 @@ impl EwFactor {
                 .zip(&self.m_lo)
                 .map(|((&xi, &mi), &li)| crate::comp::dev(xi, mi, li)),
         );
-        if b > 0.0 {
-            for (((mi, lo), &di), &xi) in self
-                .m
-                .iter_mut()
-                .zip(self.m_lo.iter_mut())
-                .zip(v.iter())
-                .zip(x)
-            {
-                crate::comp::step_toward(mi, lo, xi, di, a, b);
+        if b > 0.0 && a < crate::comp::FORGOTTEN {
+            crate::comp::from_rows(&mut self.m, &mut self.m_lo, v, x, a);
+        } else if b > 0.0 {
+            for ((mi, lo), &di) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(v.iter()) {
+                crate::comp::add(mi, lo, b * di);
             }
         }
         self.w_sum = w_new;
