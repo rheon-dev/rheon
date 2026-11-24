@@ -236,14 +236,19 @@ fn glm_2_the_recursions_identity_under_decay_is_the_proximal_one() {
     assert!(worst_doc > 1e-3, "{worst_doc}");
 }
 
-/// GLM-3 (1): a group past `refit_budget` gives its refit up before its
-/// first row. Under the Gamma's inverse link (and the Tweedie's power one)
-/// every coefficient 0 gives no mean, so the group never learned and read
-/// NaN forever (51671e2e). The start the refit would have made, the
-/// intercept at the link of a target, is now made on the group's first
-/// target. The other side: a group whose refit runs reads as before.
+/// GLM-3 (1), a confirmed defect whose fix is the user's to choose: a
+/// group past `refit_budget` gives its refit up before its first row, and
+/// under the Gamma's inverse link (and the Tweedie's power one) every
+/// coefficient 0 gives no mean, so the group never learns and reads NaN
+/// forever. Starting it at the link of its first target, as the refit
+/// would, fits within 0.6 standard errors of statsmodels' on five of six
+/// streams and 35 to 40 off on the sixth (3,000 rows), so the fix is a
+/// choice among the outcomes' options. This test fails once one lands, and
+/// is then turned into a plain test. The other side: a group whose refit
+/// runs fits (`the_canonical_links_fit_through_the_refit`).
 #[test]
-fn glm_3_a_given_up_refit_under_a_link_undefined_at_zero_still_fits() {
+#[should_panic(expected = "never learns")]
+fn glm_3_a_given_up_refit_under_a_link_undefined_at_zero_never_learns() {
     for (family, link, power) in [
         (GlmFamily::Gamma, GlmLink::Inverse, 0.0),
         (GlmFamily::Tweedie, GlmLink::Power, 1.5),
@@ -253,47 +258,17 @@ fn glm_3_a_given_up_refit_under_a_link_undefined_at_zero_still_fits() {
             var_power: power,
             ..cfg_of(family, 2, 50)
         };
-        let rows = stream_of(GlmFamily::Gamma, 3, 400, 21);
-        for give_up in [true, false] {
-            let mut m = Glm::new(c.clone()).unwrap();
-            if give_up {
-                m.refit_give_up();
-            }
-            let mut finite = 0;
-            for (x, y) in &rows {
-                finite += usize::from(m.step(x, &[Some(*y)], 1.0, 1.0).pred[0].is_finite());
-            }
-            assert!(
-                finite >= 340 && m.coefficients()[0].iter().all(|v| v.is_finite()),
-                "{family:?} {link:?}, given up {give_up}: {finite} finite rows, {:?}",
-                m.coefficients()
-            );
-            // Against the batch fit of the same rows (Newton by faer's LU):
-            // the one-pass fit, capped, is a statistical approximation of it.
-            let all: Vec<_> = rows.iter().map(|(x, y)| (x.clone(), *y, 1.0)).collect();
-            let fam = c.family();
-            let ybar = rows.iter().map(|r| r.1).sum::<f64>() / rows.len() as f64;
-            let want = batch(&c, &buffer(&all), &[fam.start_eta(ybar), 0.0, 0.0]);
-            let got = &m.coefficients()[0];
-            let gap = got
-                .iter()
-                .zip(&want)
-                .fold(0.0_f64, |a, (p, q)| a.max((p - q).abs()));
-            // Measured: the refit's fit 1.3e-3 (Gamma) and 7.8e-4 (Tweedie)
-            // from the batch fit; given up, the Gamma's one-pass fit 1.2e-2
-            // from it, and the Tweedie's at its power link 0.19, the
-            // capped start's mistakes kept without decay (an open question
-            // for the user, PLAN 578b's outcomes).
-            let tol = match (give_up, family) {
-                (false, _) => 1e-2,
-                (true, GlmFamily::Gamma) => 0.05,
-                (true, _) => 0.5,
-            };
-            assert!(
-                gap <= tol,
-                "{family:?} given up {give_up}: {got:?} vs the batch fit {want:?}"
-            );
+        let mut m = Glm::new(c).unwrap();
+        m.refit_give_up();
+        let mut finite = 0;
+        for (x, y) in stream_of(GlmFamily::Gamma, 3, 400, 21) {
+            finite += usize::from(m.step(&x, &[Some(y)], 1.0, 1.0).pred[0].is_finite());
         }
+        assert!(
+            finite > 0,
+            "{family:?} {link:?}: a given-up refit never learns, {:?}",
+            m.coefficients()
+        );
     }
 }
 

@@ -922,7 +922,7 @@ model that only the new build has is listed as an addition and passes.
 ### Fixed
 
 - **`glm`'s refit at the log link's clip, a refit given up, and rows at
-  the doubles' edges** (review 2026-11-23, GLM-1, GLM-3, GLM-4, GLM-5).
+  the doubles' edges** (review 2026-11-23, GLM-1, GLM-3 (2), GLM-4, GLM-5).
   The refit of the first rows started at `ln ȳ` and read a row's score at
   the clipped mean `e^30` as if it were not clipped, while its objective,
   flat in `η` past the clip, read the clipped mean: at a Poisson target of
@@ -934,12 +934,8 @@ model that only the new build has is listed as an addition and passes.
   predicted fall is too small for the objective to show; otherwise the fit
   stands and counts in `solve_failures` (under the Gamma's inverse link a
   start `1e15` times worse than the fit in reach was reported converged).
-  A group past `refit_budget` under the inverse or power link read null
-  forever, its coefficients all 0 giving the link no mean: it now starts
-  from the intercept at the link of its first target, where the refit
-  would have, and fits statsmodels' `GLM` of its rows within 0.6 standard
-  errors. Such a group, under any link, kept no step cap where the spec
-  left `step_cap` out (a row moved its own `η` by 2.6); it now keeps the
+  A group past `refit_budget` kept no step cap where the spec left
+  `step_cap` out (a row moved its own `η` by 2.6); it now keeps the
   start's cap of 1. A row whose score overflows (`x = 1e100` at `η = −30`)
   teaches nothing, as one whose Gram overflows does, where it left `1e298`
   in the Gram and froze that direction. The Tweedie deviance past the

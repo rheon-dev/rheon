@@ -70,8 +70,7 @@
 //!   ([`WAITING_CAP`]), so the predictions before the refit are the capped
 //!   recursion's rather than a runaway's; the refit then replaces all it
 //!   left. A refit given up past a spec's budget replaces nothing, so its
-//!   target keeps that cap for good, and under the inverse or power link
-//!   starts from the intercept at the link of its first value. `refit_clock = D` is the same refit over a span of the clock
+//!   target keeps that cap for good. `refit_clock = D` is the same refit over a span of the clock
 //!   (docs/PLAN.md task 538): a target's rows from its first learned row
 //!   through the first at least `D` clock units after it, once they hold a
 //!   row per coefficient, `D` read off the rows' exact stamps
@@ -600,22 +599,14 @@ impl Glm {
     /// Give every target's refit up before it begins, past a spec's refit
     /// budget: its rows are freed and it keeps the one-pass fit, held to
     /// the start's cap ([`WAITING_CAP`]) for good, since no refit will
-    /// replace what the start leaves; under a link with no mean at 0, the
-    /// recursion starts from the intercept at the link of the target's
-    /// first value, where the refit would have started.
+    /// replace what the start leaves. Under a link with no mean at 0 the
+    /// one-pass fit never starts, every coefficient 0 giving no mean.
     pub fn refit_give_up(&mut self) {
         for r in self.refit.iter_mut().filter(|r| !r.done) {
             r.rows = Vec::new();
             r.done = true;
             r.over_budget = true;
         }
-    }
-
-    /// Whether target `j` gave its refit up past the budget before any row
-    /// moved its coefficients from 0: under a link with no mean at 0 its
-    /// recursion has no start.
-    fn unstarted(&self, j: usize) -> bool {
-        self.refit.get(j).is_some_and(|r| r.over_budget) && self.beta[j].iter().all(|&b| b == 0.0)
     }
 
     /// Target `j`'s mean at the fit as it stands, or NaN where the link
@@ -999,17 +990,6 @@ impl OnlineModel for Glm {
                 self.gram[j].iter_mut().for_each(|v| *v *= lam);
             }
             let teaching = yj.filter(|&t| weight > 0.0 && fam.takes(t));
-            // A link with no mean at 0 starts where the refit would have,
-            // at its first target, once that refit is given up before it
-            // ran: every coefficient 0 gives such a link no mean, and the
-            // recursion never starts from there.
-            let eta = match teaching {
-                Some(t) if !fam.link.defined_at_zero() && self.unstarted(j) => {
-                    self.beta[j][0] = fam.start_eta(t);
-                    self.beta[j][0]
-                }
-                _ => eta,
-            };
             if let Some(wk) = teaching.and_then(|t| fam.working(eta, t)) {
                 let c = weight * wk.w;
                 self.learn(j, c, c * (wk.z - wk.eta));

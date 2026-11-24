@@ -337,6 +337,7 @@ def test_a_clock_window_withholds_only_where_its_weight_says_so():
                 half_life=INF,
                 window_size=5.0,
                 clock="t",
+                gap_cap=100.0,
                 min_weight=3.0,
                 ridge=1e-6,
             ),

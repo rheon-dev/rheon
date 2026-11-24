@@ -125,8 +125,7 @@ def glm(
         after it, gives its refit up and keeps its one-pass fit, which
         ``bank.summary()``'s ``refit_given_up`` counts. Such a group's rows
         are held to the start's step cap of 1 (or ``step_cap``, where
-        smaller) for good, and under the inverse or power link its fit
-        starts from the intercept at the link of its first target.
+        smaller) for good.
 
     .. rubric:: Output
 
