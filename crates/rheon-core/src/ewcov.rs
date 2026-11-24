@@ -803,6 +803,18 @@ impl EwCov {
         Some((lam * self.w_sum / w_new, w / w_new, w_new))
     }
 
+    /// The mixing factors `(a, b)` [`Self::update`] would step the row by,
+    /// or `None` where it takes no step of the moments: the decay alone (a
+    /// row of weight 0 with no weight left to age) or nothing at all. For an
+    /// owner that keeps moments of its own in step with these, from the
+    /// same arithmetic ([`crate::shrink::Fourth`]).
+    pub(crate) fn mixing(&self, lam: f64, w: f64) -> Option<(f64, f64)> {
+        if w == 0.0 && lam * self.w_sum == 0.0 {
+            return None;
+        }
+        self.step_factors(lam, w).map(|(a, b, _)| (a, b))
+    }
+
     /// Everything the row does that is not the `k*k` matrix or the mean.
     /// `O(1)`, so the blocked path runs it per row and nothing emitted per
     /// row -- `n_eff`, `n_kish` -- can lag behind a pending block.
