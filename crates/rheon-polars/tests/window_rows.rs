@@ -640,6 +640,52 @@ fn the_plan_refuses_what_it_cannot_read() {
     assert!(e.contains("its input holds the operator increment"), "{e}");
 }
 
+/// A running clock step emits each row on that row, never held for a later
+/// one: fed a row at a time, each feed returns its own row, nothing is held
+/// after it, and the value is that row's own step folded in (it differs from
+/// the row before's at every row). On both sides of the gap: a step of
+/// exactly `gap_cap` (10) is not past it and joins the chain; a step of
+/// 10.5 is past it, so the chain starts again and that row has no step. A
+/// chunk of 1, 2, 3 or the whole stream gives the same bits.
+#[test]
+fn a_running_clock_step_emits_each_row_on_that_row_at_both_sides_of_a_gap() {
+    let t = [0.0, 1.0, 3.0, 13.0, 23.5, 24.5, 26.5];
+    let df = df!("t" => t).unwrap();
+    let cfg: WindowsConfig = serde_json::from_value(json!({
+        "formulas": [{"name": "m", "tree": ["clock_step", ["col", "t"], {"half_life": "inf", "stat": "mean"}]}],
+        "clock": "t", "gap_cap": 10.0,
+    }))
+    .unwrap();
+    // Steps 1, 2, 10 (at the cap: kept), then 10.5 (past it: the chain
+    // starts again with no step), 1, 2.
+    let want = [
+        None,
+        Some(1.0),
+        Some(1.5),
+        Some(13.0 / 3.0),
+        None,
+        Some(1.0),
+        Some(1.5),
+    ];
+    let mut r = WindowsRun::new(cfg.clone(), df.schema()).unwrap();
+    for (i, w) in want.iter().enumerate() {
+        let out = r.feed(&df.slice(i as i64, 1), None).unwrap();
+        assert_eq!(out.height(), 1, "row {i} is emitted on its own feed");
+        assert_eq!(r.held(), 0, "row {i} is held");
+        assert_eq!(floats(&out, "m"), [*w], "row {i}");
+    }
+    assert_eq!(r.finish().unwrap().height(), 0, "nothing is left to finish");
+    let whole = run(&cfg, &df, df.height());
+    assert_eq!(floats(&whole, "m"), want);
+    for chunk in [1, 2, 3] {
+        assert_eq!(
+            bits(&floats(&run(&cfg, &df, chunk), "m")),
+            bits(&floats(&whole, "m")),
+            "chunks of {chunk}"
+        );
+    }
+}
+
 /// A clock step on both sides of each threshold: a step of exactly 0 and
 /// the smallest step either side of it on an integer time, so a zero and a
 /// back are counted by sign alone; a null time reports none and starts the

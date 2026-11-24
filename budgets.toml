@@ -313,6 +313,7 @@ budget = 2552147
 what = "WindowsRun::feed of one frame, ewm_sum of x0 with no window, half-life 1000, grouped by g over 10,000 groups, one row of each in turn, each row its own stamp, gap_cap 1e12 (no group is ever cut), after a warm-up of two rows a group: a row resolves the one group pending, whatever the groups behind it"
 budget = 2221103
 
+# No budget yet: CI's Valgrind count of the first run sets it (`scripts/budgets.py apply`).
 [instructions.window_invert_cubic]
 what = "WindowsRun::feed of one frame, the root in u of u^3 + u + exp(u / 2) = x0 on [-10, 10] a row by the formula's own interpreter, beside a running sum of x0 with no window and half-life 1000: every row a solve, none held; its budget is CI's first count"
 
@@ -321,6 +322,13 @@ what = "Bars::feed of one frame, volume bars of 1,000 over sizes of 1 to 100 (ab
 
 [instructions.bars_volume_groups100]
 what = "Bars::feed of one frame, as bars_volume, grouped over 100 groups, one row of each in turn after a warm-up of 20 rows a group: a row finds its group's open bar, about half the groups close one; its budget is CI's first count (locally 2,276,447)"
+# No budget yet: CI's Valgrind count of the first run sets it (`scripts/budgets.py apply`).
+[instructions.window_ewm_mean_running]
+what = "WindowsRun::feed of one frame, ewm_mean of x0 with no window, half-life 1000: the running mean, the baseline of window_clock_step_running"
+
+# No budget yet: CI's Valgrind count of the first run sets it (`scripts/budgets.py apply`).
+[instructions.window_clock_step_running]
+what = "WindowsRun::feed of one frame, clock_step of the clock t with stat mean, half-life 1000, ungrouped: the decayed mean of the clock's steps, a row operator run before the window core (which carries a one-row stand-in kernel); its difference from window_ewm_mean_running is a row of the clock step above a running mean"
 
 # --- scaling ---------------------------------------------------------------------
 # How a cost grows, not what it is (docs/PERFORMANCE.md, "How cost grows";

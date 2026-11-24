@@ -284,9 +284,18 @@ fn every_window_case_reads_its_block_inside_the_first_window() {
             .expect("floats");
         assert_eq!(w.null_count(), 0, "{id}");
         assert!(w.into_no_null_iter().all(f64::is_finite), "{id}");
-        // A window with no size keeps its running sums alone, no row; the
-        // invert case's running sum has none, and its solves hold nothing.
-        let held = if id.ends_with("_running") || id.ends_with("_groups10k") || id == INVERT_CASE {
+        // The clock step emits each row on that row: none is held for later.
+        if id == "window_clock_step_running" {
+            assert_eq!(run.run.held(), 0, "{id}: a row is held");
+        }
+        // A window with no size keeps its running sums alone, no row. A row
+        // operator alone (the clock step) runs before the core, which then
+        // carries the stand-in kernel of every call of row operators alone,
+        // a sum over a window of one row: that row is its one queued, and
+        // the saved state holds it, so it stays (task 564).
+        let held = if id == "window_clock_step_running" {
+            1
+        } else if id.ends_with("_running") || id.ends_with("_groups10k") || id == INVERT_CASE {
             0
         } else {
             WARM_ROWS + ROWS
