@@ -156,11 +156,11 @@ budget = 12605148
 
 [instructions.corrchange_monitor_w2500]
 what = "corrchange monitor, 4 features (6 pairs), a span of 2,500 rows closing once in the block: AnyModel::step"
-budget = 4375320
+budget = 4588704
 
 [instructions.corrchange_window_w100]
 what = "corrchange window, 4 features, two windows of 100 rows, 100 permutations redrawn every 250 rows: AnyModel::step"
-budget = 15037429
+budget = 15488251
 
 [instructions.clock_float]
 what = "ClockState::advance_stamped, a float clock, gap_cap 100"
@@ -172,11 +172,11 @@ budget = 218029
 
 [instructions.bank_seqtest]
 what = "Bank::fit_predict of one frame, seqtest: every per-row step of the bank around the cheapest model"
-budget = 2119655
+budget = 2185915
 
 [instructions.bank_ewridge_k5]
 what = "Bank::fit_predict of one frame, ewridge with 5 features"
-budget = 5201744
+budget = 5346405
 
 [instructions.bank_seqtest_groups]
 what = "Bank::fit_predict of one frame of 1,000 groups, one row each, seqtest, on a pool of one thread: what a (spec, group) task costs whatever its rows"
@@ -184,7 +184,7 @@ budget = 9901589
 
 [instructions.bank_ewridge_k5_groups]
 what = "Bank::fit_predict of one frame of 1,000 groups, one row each, ewridge with 5 features and a solve every 4 rows, on a pool of one thread"
-budget = 14662027
+budget = 15105407
 
 [instructions.bank_ew_cov_wide_t1]
 what = "Bank::fit_predict of one frame of 8,192 rows, ew_cov's 230 statistics, on a pool of one thread: each run copied into the output as it ends, after the next is learned"
@@ -207,11 +207,11 @@ budget = 46716819
 
 [instructions.ftrl]
 what = "ftrl, 20 features, logistic loss, half-life 1000: AnyModel::step_into, into one kept Step"
-budget = 3512553
+budget = 3630540
 
 [instructions.holt]
 what = "holt, level and trend of one column, half-life 1000: AnyModel::step_into, into one kept Step"
-budget = 535026
+budget = 564024
 
 [instructions.marginal]
 what = "marginal, 20 features against one target, half-life 1000: AnyModel::step_into, into one kept Step"
@@ -229,7 +229,7 @@ budget = 36955252
 
 [instructions.deco]
 what = "deco, 20 features, ew dynamics: AnyModel::step_into, into one kept Step"
-budget = 3006026
+budget = 3192279
 
 [instructions.hmm]
 what = "hmm, 4 features, 2 states, full covariance, precision prior 1: AnyModel::step_into, into one kept Step"
@@ -288,7 +288,7 @@ budget = 17906026
 
 [instructions.formula_target_held1k]
 what = "Bank::fit_predict of one frame, ewridge with 5 features, its target the mean of y0 over the next 1,250 clock units (about 1,000 rows) and an embargo of the same span: about a thousand rows held behind each"
-budget = 12420859
+budget = 12706166
 
 [instructions.window_ewm_mean_w10k]
 what = "WindowsRun::feed of one frame, ewm_mean over a window of 12,500 clock units (about 10,000 rows), half-life 1000, inside the stream's first window: a mean cutting its oldest row's held interval on every row; held within 2x of window_ewm_sum_w10k"
@@ -1920,98 +1920,77 @@ reason = "PLAN 539, hard rule 9: a row of weight 0 counts in no clock, so the st
 changelog = "A row of weight 0 counting in no clock costs the bank's cheapest case"
 
 
-# TODO(coordinator): the raises below wait for CI's Valgrind counts on the
-# wave's sha. Uncomment each that is still over its budget, set `to` to the
-# count, drop the TODO from its reason, and keep `from` as the budget the
-# case had before the raise.
-#
-# [[raised]]
-# key = "instructions.deco"
-# from = 3006026
-# to = TODO
-# date = 2026-11-24
-# reason = "PLAN 551, rule 5's twenty-sixth exception (the user, 2026-11-22): `deco`'s `rho` is the ratio of the weighted means EW(A)/EW(V), the equicorrelation's weighted maximum-likelihood estimate, where the EW mean of `u` read two-thirds of it; each value keeps the EW means of the row's numerator and denominator, and the level learns once the standardizer's Kish size is above 5. +5.9% in the Linux bisect at bebd2336. TODO(coordinator): `to` from CI's count"
-# changelog = "`deco`'s ratio level costs 3-4% a row unblocked"
-#
-# [[raised]]
-# key = "instructions.corrchange_monitor_w2500"
-# from = 4375320
-# to = TODO
-# date = 2026-11-24
-# reason = "PLAN 553: the monitor holds its level at every span (the CUSUM of the delta-method series, against the Kolmogorov quantile) and keeps the CUSUM of the squared standardized difference beside each pair's, to withhold a flag where the scale ratio moved; +4.7% in the Linux bisect at ebe72622. TODO(coordinator): `to` from CI's count"
-# changelog = "`corrchange`'s monitor and window kinds cost 4.7% and 2.3% more"
-#
-# [[raised]]
-# key = "instructions.corrchange_window_w100"
-# from = 15037429
-# to = TODO
-# date = 2026-11-24
-# reason = "PLAN 553: the window kind carries the clock's spans and the state's bound that `window_size` on the clock needs; +2.3% in the Linux bisect at ebe72622. TODO(coordinator): `to` from CI's count"
-# changelog = "`corrchange`'s monitor and window kinds cost 4.7% and 2.3% more"
-#
-# [[raised]]
-# key = "instructions.ftrl"
-# from = 3512553
-# to = TODO
-# date = 2026-11-24
-# reason = "review 2026-11-23, REG-9: a row whose gradient would take a target's sum of squares past the largest double is skipped, on a bound read from the target's largest feature and largest sum, a pass over its slots a row; +3.4% in the Linux bisect. TODO(coordinator): `to` from CI's count"
-# changelog = "`ftrl` bounds each target's sum of squared gradients before its"
-#
-# [[raised]]
-# key = "instructions.holt"
-# from = 535026
-# to = TODO
-# date = 2026-11-24
-# reason = "review 2026-11-23, REG-4 and REG-5: a trend and a line fit formed in range at the ends of the doubles, each product tested as a normal double before use; +5.6% in the Linux bisect. TODO(coordinator): `to` from CI's count"
-# changelog = "`holt` forms its trend and line fit in range at the ends of the"
-#
-# [[raised]]
-# key = "instructions.huber_k20_sum"
-# from = 5926403
-# to = TODO
-# date = 2026-11-24
-# reason = "review 2026-11-23, REG-18 (rule 5's twenty-ninth exception): huber standardizes from every row's moments, a second EwDiag a target; +1.0% in the Linux bisect at 0c6b9975. TODO(coordinator): `to` from CI's count, net of the REG-12 fast path"
-# changelog = "`huber`'s and `quantile`'s scales from every row cost 0.3% to 2.7%"
-#
-# [[raised]]
-# key = "instructions.ewridge_k5"
-# from = 2119477
-# to = TODO
-# date = 2026-11-24
-# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
-# changelog = "A sum of squared weights kept at its own power of two costs a test a"
-#
-# [[raised]]
-# key = "instructions.sgd"
-# from = 2537026
-# to = TODO
-# date = 2026-11-24
-# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
-# changelog = "A sum of squared weights kept at its own power of two costs a test a"
-#
-# [[raised]]
-# key = "instructions.sgd_huber"
-# from = 2881700
-# to = TODO
-# date = 2026-11-24
-# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
-# changelog = "A sum of squared weights kept at its own power of two costs a test a"
-#
-# [[raised]]
-# key = "instructions.bank_ewridge_k5"
-# from = 5201744
-# to = TODO
-# date = 2026-11-24
-# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
-# changelog = "A sum of squared weights kept at its own power of two costs a test a"
-#
-# [[raised]]
-# key = "instructions.bank_ewridge_k5_groups"
-# from = 14662027
-# to = TODO
-# date = 2026-11-24
-# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
-# changelog = "A sum of squared weights kept at its own power of two costs a test a"
+[[raised]]
+key = "instructions.deco"
+from = 3006026
+to = 3192279
+date = 2026-11-24
+reason = "PLAN 551, rule 5's twenty-sixth exception (the user, 2026-11-22): `deco`'s `rho` is the ratio of the weighted means EW(A)/EW(V), the equicorrelation's weighted maximum-likelihood estimate, where the EW mean of `u` read two-thirds of it; each value keeps the EW means of the row's numerator and denominator, and the level learns once the standardizer's Kish size is above 5. +5.9% in the Linux bisect at bebd2336 (flat at every merge after it). CI's count on Linux at 0b93113c (Rheon D's Valgrind run of every case, as budgets.yml counts them, twice, agreeing to 0.0016%; written as the budget times the excess D reported to 0.001%, so within 0.0005% of its count), the head's: 657a19fb adds a test and 51671e2e touches no source: +6.196%"
+changelog = "`deco`'s ratio level costs 3-4% a row unblocked"
+
+[[raised]]
+key = "instructions.corrchange_monitor_w2500"
+from = 4375320
+to = 4588704
+date = 2026-11-24
+reason = "PLAN 553: the monitor holds its level at every span (the CUSUM of the delta-method series, against the Kolmogorov quantile) and keeps the CUSUM of the squared standardized difference beside each pair's, to withhold a flag where the scale ratio moved; +4.7% in the Linux bisect at ebe72622. CI's count on Linux at 0b93113c (Rheon D's Valgrind run of every case, as budgets.yml counts them, twice, agreeing to 0.0016%; written as the budget times the excess D reported to 0.001%, so within 0.0005% of its count), the head's: 657a19fb adds a test and 51671e2e touches no source: +4.877%"
+changelog = "`corrchange`'s monitor and window kinds cost 4.7% and 2.3% more"
+
+[[raised]]
+key = "instructions.corrchange_window_w100"
+from = 15037429
+to = 15488251
+date = 2026-11-24
+reason = "PLAN 553: the window kind carries the clock's spans and the state's bound that `window_size` on the clock needs; +2.3% in the Linux bisect at ebe72622. CI's count on Linux at 0b93113c (Rheon D's Valgrind run of every case, as budgets.yml counts them, twice, agreeing to 0.0016%; written as the budget times the excess D reported to 0.001%, so within 0.0005% of its count), the head's: 657a19fb adds a test and 51671e2e touches no source: +2.998%"
+changelog = "`corrchange`'s monitor and window kinds cost 4.7% and 2.3% more"
+
+[[raised]]
+key = "instructions.ftrl"
+from = 3512553
+to = 3630540
+date = 2026-11-24
+reason = "review 2026-11-23, REG-9: a row whose gradient would take a target's sum of squares past the largest double is skipped, on a bound read from the target's largest feature and largest sum, a pass over its slots a row; +3.4% in the Linux bisect at 6f19534a. CI's count on Linux at 0b93113c (Rheon D's Valgrind run of every case, as budgets.yml counts them, twice, agreeing to 0.0016%; written as the budget times the excess D reported to 0.001%, so within 0.0005% of its count), the head's: 657a19fb adds a test and 51671e2e touches no source: +3.359%"
+changelog = "`ftrl` bounds each target's sum of squared gradients before its"
+
+[[raised]]
+key = "instructions.holt"
+from = 535026
+to = 564024
+date = 2026-11-24
+reason = "review 2026-11-23, REG-4 and REG-5: a trend and a line fit formed in range at the ends of the doubles, each product tested as a normal double before use; +5.6% in the Linux bisect at 6f19534a. CI's count on Linux at 0b93113c (Rheon D's Valgrind run of every case, as budgets.yml counts them, twice, agreeing to 0.0016%; written as the budget times the excess D reported to 0.001%, so within 0.0005% of its count), the head's: 657a19fb adds a test and 51671e2e touches no source: +5.420%"
+changelog = "`holt` forms its trend and line fit in range at the ends of the"
+
+[[raised]]
+key = "instructions.bank_seqtest"
+from = 2119655
+to = 2185915
+date = 2026-11-24
+reason = "review 2026-11-23, CLOCK-1 and STRM-1 (merged at 4088cafa): the stream's step check adds each row's step past `gap_cap` (its size across a session) to a bound on the time the clock removes and refuses the row where the bound is no longer finite, matching the session rule a row, and a row of weight 0 releases nothing; +1.63% in the Linux bisect at 4088cafa. With it what remains of PLAN 553's stream changes (ebe72622: the reason a `corrchange` flag is withheld, tested a row; the per-row dispatch it added was taken back at d567b21e) and of PLAN 544's (13b3598c: beyond_sample, asked of tdigest and ddsketch alone since aa121fa0). CI's count on Linux at 0b93113c (Rheon D's Valgrind run of every case, as budgets.yml counts them, twice, agreeing to 0.0016%; written as the budget times the excess D reported to 0.001%, so within 0.0005% of its count), the head's: 657a19fb adds a test and 51671e2e touches no source: +3.126%"
+changelog = "The bank's step check bounds the time the clock's caps remove"
+
+[[raised]]
+key = "instructions.formula_target_held1k"
+from = 12420859
+to = 12706166
+date = 2026-11-24
+reason = "PLAN 557 (merged at f04a7fca): the window core can hold cross-group operators, so each row of its push asks whether there are any to check, step and hold the row for, and the feed hands each row its neighbor lists; +0.71% in the Linux bisect, placed in the window core's push and flush path, not on one line, and inside the run-to-run spread of the case's count on macOS arm64 (retired instructions of the block: 13,105,803 at 7fd17d3e, 13,135,294 at f04a7fca, the least of two runs of 9 each at a load of 15 to 30), so nothing a single-group formula skips cheaply was found. And review 2026-11-23, CLOCK-1 and STRM-1 (4088cafa): the stream's step check bounds the time the clock removes, a test a row, +0.35% in the Linux bisect; and the bank's `ewridge` underneath carries REG-12's remaining test a row, as instructions.bank_ewridge_k5 does. CI's count on Linux at 0b93113c (Rheon D's Valgrind run of every case, as budgets.yml counts them, twice, agreeing to 0.0016%; written as the budget times the excess D reported to 0.001%, so within 0.0005% of its count), the head's: 657a19fb adds a test and 51671e2e touches no source: +2.297%"
+changelog = "A window core that can hold cross-group operators costs a formula"
+
+[[raised]]
+key = "instructions.bank_ewridge_k5"
+from = 5201744
+to = 5346405
+date = 2026-11-24
+reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path of 0b93113c (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). And review 2026-11-23, CLOCK-1 and STRM-1 (4088cafa): the stream's step check bounds the time the clock removes, a test a row, +0.67% in the Linux bisect. CI's count on Linux at 0b93113c (Rheon D's Valgrind run of every case, as budgets.yml counts them, twice, agreeing to 0.0016%; written as the budget times the excess D reported to 0.001%, so within 0.0005% of its count), the head's: 657a19fb adds a test and 51671e2e touches no source: +2.781%"
+changelog = "A sum of squared weights kept at its own power of two costs a test a"
+
+[[raised]]
+key = "instructions.bank_ewridge_k5_groups"
+from = 14662027
+to = 15105407
+date = 2026-11-24
+reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path of 0b93113c (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). And review 2026-11-23, CLOCK-1 and STRM-1 (4088cafa): each group's step check bounds the time the clock removes, a test a row, +0.46% in the Linux bisect. CI's count on Linux at 0b93113c (Rheon D's Valgrind run of every case, as budgets.yml counts them, twice, agreeing to 0.0016%; written as the budget times the excess D reported to 0.001%, so within 0.0005% of its count), the head's: 657a19fb adds a test and 51671e2e touches no source: +3.024%"
+changelog = "A sum of squared weights kept at its own power of two costs a test a"
 
 [[signoff]]
 key = "instructions.clock_temporal"

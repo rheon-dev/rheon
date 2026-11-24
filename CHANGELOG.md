@@ -2079,6 +2079,26 @@ model that only the new build has is listed as an addition and passes.
   and the state's bound that a span of the clock needs, which a span of
   rows pays a branch apiece for.
 
+- **The bank's step check bounds the time the clock's caps remove, a test
+  a row** (review 2026-11-23, CLOCK-1 and STRM-1), so two finite steps can
+  no longer take the removed time past the largest double and make every
+  later span `inf - inf`. Each row's step adds its part past `gap_cap`, or
+  its size and the session's gap across a session, to a bound on what the
+  caps can remove, and the row is refused where the bound is no longer
+  finite; a row of weight 0 adds nothing and releases nothing. In the
+  Linux bisect of CI's count at the merge: `seqtest` through the bank
+  1.63% more instructions a row, `ewridge` with 5 features 0.67%, the same
+  over 1,000 groups 0.46%, and a formula target holding 1,000 rows 0.35%.
+
+- **A window core that can hold cross-group operators costs a formula
+  target 0.71% more instructions a row** (PLAN 557, the Linux bisect of
+  CI's count at the merge, a formula target holding 1,000 rows), though
+  the target has none: each row the core's push asks whether there are
+  cross-group operators to check, step and hold the row for, and the feed
+  hands each row its neighbor lists. The bisect placed the cost in the
+  window core's push and flush path, not on one line; on macOS arm64 it is
+  inside the run-to-run spread of the case's count.
+
 - **`deco`'s ratio level costs 3-4% a row unblocked and 18-22% over four
   blocks** (PLAN 551), for a level that reads the equicorrelation where the
   EW mean of `u` read two-thirds of it. Each value keeps the EW means of the
