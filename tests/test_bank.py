@@ -396,7 +396,24 @@ class TestPerTargetMinPeriods:
             "glm": lambda: rp.spec.glm("m", features=["x0"], family="gamma", **common),
             "expectile": lambda: rp.spec.expectile("m", features=["x0"], expectile=0.8, **common),
             "ar": lambda: rp.spec.ar("m", features=["x0"], lags=1, ridge=1e-6, **common),
+            # A regression with white-noise errors: `y1`'s slots are nine in
+            # ten unobserved, which leave no lag to identify. No decay; the
+            # bound loose: this checks the plumbing, not the accuracy, which
+            # the oracle tests hold at the default se_bound.
+            "sarima": lambda: rp.spec.sarima(
+                "m",
+                features=["x0"],
+                order=(0, 0, 0),
+                se_bound=1e3,
+                **{k: v for k, v in common.items() if k != "half_life"},
+            ),
         }[kind]()
+        if kind == "sarima":
+            # A target its features give exactly has innovations of variance
+            # 0, whose likelihood has no maximum: its start is withheld on
+            # every row (held in the sarima tests). A noisy one opens.
+            e = np.random.default_rng(3).standard_normal(n)
+            df = df.with_columns(pl.col("y0") + 0.3 * e, pl.col("y1") + 0.3 * e)
         if kind == "glm":
             # A Gamma amount is above 0.
             df = df.with_columns(pl.col("y0", "y1").abs() + 0.1)

@@ -530,6 +530,52 @@ fn a_fit_with_no_finite_likelihood_has_not_converged() {
     ));
 }
 
+/// A target the features give exactly, `y = 2 x_1 - x_2` with no noise,
+/// has innovations of variance 0, where the likelihood has no maximum: the
+/// start is withheld on every row, by the fit's own condition (it does not
+/// converge, or `sigma2` is not above its standard error), and the fits it
+/// tries grow with the log of the rows, never one a row (when measured: not
+/// converged, 12 fits in 600 rows). With noise of standard deviation
+/// `1e-3`, small but above 0, the same series opens at the default bound
+/// (row 210 when measured), its coefficients the truth: both sides.
+#[test]
+fn innovations_of_variance_zero_are_withheld_and_a_little_noise_opens() {
+    let (order, seasonal, n) = ([1, 0, 0], [0, 0, 0, 0], 600);
+    let mut rng = 23;
+    let x: Vec<f64> = (0..2 * n).map(|_| normal(&mut rng)).collect();
+    let line: Vec<f64> = (0..n).map(|t| 2.0 * x[2 * t] - x[2 * t + 1]).collect();
+    let mut m = Sarima::new(estimated(order, seasonal, 2)).unwrap();
+    let mut tries = 0;
+    let mut next = m.est[0].next_try;
+    let mut out = Step::default();
+    for t in 0..n {
+        m.step_into(&x[2 * t..2 * t + 2], &[Some(line[t])], 1.0, 1.0, &mut out);
+        assert!(out.pred[0].is_nan(), "row {t} predicted");
+        if m.est[0].next_try != next {
+            tries += 1;
+            next = m.est[0].next_try;
+        }
+    }
+    let wait = m.wait(0).unwrap();
+    assert!(
+        matches!(wait, SarimaWait::NotConverged | SarimaWait::NotIdentified),
+        "{wait:?}"
+    );
+    // A fit each time Kish's count grows by half: about log_1.5(600 / 4).
+    assert!(tries <= 16, "{tries} fits in {n} rows");
+    let noisy: Vec<f64> = line.iter().map(|v| v + 1e-3 * normal(&mut rng)).collect();
+    let mut m = Sarima::new(estimated(order, seasonal, 2)).unwrap();
+    let preds = run(&mut m, &some(&noisy), &x, &vec![1.0; n]);
+    let open = opened(&preds).expect("a little noise opens the start");
+    assert_eq!(m.wait(0), None);
+    let fit = m.params(0).unwrap();
+    assert!(
+        (fit.exog[0] - 2.0).abs() < 1e-3 && (fit.exog[1] + 1.0).abs() < 1e-3,
+        "{fit:?}"
+    );
+    assert!(open < 400, "opened at row {open}");
+}
+
 /// A retry waits for Kish's count to grow by the stated factor: the fits
 /// a long wait costs grow with the log of its length.
 #[test]

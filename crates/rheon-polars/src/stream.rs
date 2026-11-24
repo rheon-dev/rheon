@@ -755,8 +755,12 @@ impl AnyModel {
             // Its value is the power it reports per row.
             AnyModel::Spectral(_) => None,
             // Each target's parameters, statsmodels' order; not a number
-            // before its start is accepted.
-            AnyModel::Sarima(m) => Some(m.coefficients()),
+            // for a target whose start is not accepted yet, and absent, as
+            // `ar`'s, until some target's is: `coef` is null or complete.
+            AnyModel::Sarima(m) => {
+                let c = m.coefficients();
+                c.iter().flatten().any(|v| !v.is_nan()).then_some(c)
+            }
         }
     }
 

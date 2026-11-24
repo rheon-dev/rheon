@@ -132,6 +132,11 @@ class TestWeights:
             x0=np.linspace(1.0, 2.0, n),
             y0=np.linspace(2.0, 4.0, n),
         )
+        if model == "sarima":
+            # A target its feature gives exactly has innovations of variance
+            # 0, whose likelihood has no maximum: its start is withheld on
+            # every row (held in the sarima tests). A noisy one opens.
+            base["y0"] = base["y0"] + 0.1 * np.random.default_rng(4).standard_normal(n)
         spec = _spec(
             model,
             **{
