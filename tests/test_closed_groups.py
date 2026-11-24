@@ -1062,8 +1062,9 @@ def test_schema_version_is_current():
     ``full`` state (task 479), and 70 for ``hmm``'s stabilized prior under
     ``"full"`` and ``"diag"`` (rule 5's twenty-second exception), and 71 for
     the checksum a bank's and a window run's file ends with (no layout of a
-    model moved, so 70 loads too)."""
-    assert rp.schema_version() == 72
+    model moved, so 70 loads too), 72 for the envelope every state file is
+    written in, and 73 for ``holt``'s seasonal forms (task 488)."""
+    assert rp.schema_version() == 73
 
 
 def test_an_integer_key_used_as_both_session_and_group_orders_numerically():

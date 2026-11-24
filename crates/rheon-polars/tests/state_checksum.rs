@@ -342,7 +342,7 @@ fn the_json_export_carries_no_checksum() {
     assert!(json.get("checksum").is_none());
     assert_eq!(json["magic"], "rheon-state");
     assert_eq!(json["kind"], "bank");
-    assert_eq!(json["version"], 72);
+    assert_eq!(json["version"], 73);
 }
 
 /// A file is hashed as it is written and the bytes in memory are sealed
