@@ -334,11 +334,12 @@ impl Series {
     /// bound within that unit; and a term that leaves too little of the sum
     /// for its pair to keep ([`lost`]).
     fn take(&mut self, k: usize, x: f64, again: &mut [bool; SUMS]) {
-        if self.hi[k].abs() == f64::MAX {
-            again[k] |= x.abs() >= f64::MAX * f64::EPSILON;
-        } else {
+        let held = self.hi[k].abs() == f64::MAX;
+        if !held {
             self.add(k, -x);
-            again[k] |= lost(x, self.sum(k));
+        }
+        if (held && x.abs() >= f64::MAX * f64::EPSILON) || (!held && lost(x, self.sum(k))) {
+            again[k] = true;
         }
     }
 

@@ -57,6 +57,18 @@ fn a_sum_summed_again_is_the_windows_sum() {
         (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
     };
     let rows: Vec<(f64, f64)> = (0..40).map(|_| (u(), 1.0 + u())).collect();
+    // Before any row leaves: the second return's one product (it had one
+    // return before it) and the third's first triple.
+    let mut whole = windowed(&rows);
+    let kept = whole.clone();
+    for k in 0..SUMS {
+        whole.rebuild(k);
+        let (got, want) = (whole.sum(k), kept.sum(k));
+        assert!(
+            (got - want).abs() <= 4.0 * f64::EPSILON * want.abs(),
+            "sum {k}, nothing left: {got} summed again, {want} kept"
+        );
+    }
     let mut series = windowed(&rows);
     // Five rows leave, so the front's product and triple have left too.
     for seq in 0..5 {
@@ -144,6 +156,27 @@ fn lee_and_myklands_window_is_summed_again_where_it_must_be() {
         ring.variance()
     );
     assert_eq!(ring.weight(), 3.0);
+    // A product that dwarfs the rest leaving at an ordinary weight: the
+    // products' sum is lost and the weights' is not, and the ring is
+    // summed again for the one.
+    let mut ring = LmRing::new();
+    for (wp, w) in [(1e300, 1.0), (1e-200, 1.0), (2e-200, 1.0)] {
+        ring.push(wp, w, 5);
+    }
+    ring.push(3e-200, 1.0, 5);
+    assert!(
+        (ring.variance() - 2e-200).abs() < 1e-214,
+        "{}",
+        ring.variance()
+    );
+    // And a weight that dwarfs the rest leaving beside ordinary products.
+    let mut ring = LmRing::new();
+    for (wp, w) in [(1.0, 1e100), (2.0, 1.0), (4.0, 1.0)] {
+        ring.push(wp, w, 5);
+    }
+    ring.push(6.0, 1.0, 5);
+    assert_eq!(ring.weight(), 3.0);
+    assert_eq!(ring.variance(), 4.0);
     let mut ring = LmRing::new();
     ring.p_hi = f64::MAX;
     ring.products.extend([(1.0, 1.0), (2.0, 1.0), (3.0, 1.0)]);

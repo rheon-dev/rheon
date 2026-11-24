@@ -490,12 +490,13 @@ impl Series {
     /// leaves the bound within that unit; and a credit that leaves too
     /// little of the sum for its pair to keep ([`lost`]).
     fn take(&mut self, k: usize, h: f64, l: f64, again: &mut [bool]) {
-        if self.hi[k].abs() == f64::MAX {
-            again[k] |= h.abs() >= f64::MAX * f64::EPSILON;
-        } else {
+        let held = self.hi[k].abs() == f64::MAX;
+        if !held {
             add(&mut self.hi[k], &mut self.lo[k], -h);
             add(&mut self.hi[k], &mut self.lo[k], -l);
-            again[k] |= lost(h, self.sum(k));
+        }
+        if (held && h.abs() >= f64::MAX * f64::EPSILON) || (!held && lost(h, self.sum(k))) {
+            again[k] = true;
         }
     }
 

@@ -297,11 +297,10 @@ impl Group {
         let mut by = (d_exp + 1).max(1);
         for c in cs {
             for (v, a) in c.iter().zip(&self.keep[..self.held()]) {
+                // ⌈over / p⌉ where it is over; at most 0 where it is not.
                 let p = order(a) as i32;
                 let over = exponent(*v) - room;
-                if over > 0 {
-                    by = by.max((over + p - 1) / p);
-                }
+                by = by.max((over + p - 1) / p);
             }
         }
         by
@@ -528,13 +527,12 @@ impl Summary {
 
     /// The scale lowered as far as the moments allow ([`Group::fall`]).
     fn fall_back(&mut self, g: &Group) {
-        if self.e > 0 {
-            let to = g.fall(&self.c, self.e);
-            if to < self.e {
-                rescale(&mut self.c, g, to - self.e);
-                self.e = to;
-            }
+        if self.e == 0 {
+            return;
         }
+        let to = g.fall(&self.c, self.e);
+        rescale(&mut self.c, g, to - self.e);
+        self.e = to;
     }
 
     /// Pébay's merge with `other`, a summary of later rows: an empty side
