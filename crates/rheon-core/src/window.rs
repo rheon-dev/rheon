@@ -1848,10 +1848,14 @@ pub fn truncated_mean(
     if w <= EMPTY_FRACTION * w_now || !w.is_finite() {
         return None;
     }
+    // Centred: `m + (f·w_old / w)(m − m_old)` loses the digits of the
+    // spread, where `(w_now·m − f·w_old·m_old) / w` lost those of the level
+    // (review 2026-11-23, CWIN-3).
+    let r = f * w_old / w;
     let out = mean
         .iter()
         .zip(mean_old)
-        .map(|(m, m0)| (w_now * m - f * w_old * m0) / w)
+        .map(|(m, m0)| m + r * (m - m0))
         .collect();
     Some((w, out))
 }
@@ -1869,7 +1873,7 @@ pub fn truncated_scalar(
     if w <= EMPTY_FRACTION * w_now || !w.is_finite() {
         return None;
     }
-    Some((w, (w_now * mean - f * w_old * mean_old) / w))
+    Some((w, mean + (f * w_old / w) * (mean - mean_old)))
 }
 
 #[cfg(test)]
@@ -2091,13 +2095,12 @@ mod tests {
     /// under the uncentred form's in each of the 90 cells, by the factor
     /// `(w_now / w) |level| / |m − m_old|` where there is a level.
     ///
-    /// Settled by that, and held all the same: the centred form moves the
-    /// bank fixture's `spread_window.sigma_y` by one ulp on the first row
-    /// after a load, in the current set and in `v71/bank`'s frozen frame,
-    /// and a kept set's frame is not edited (hard rule 5). It waits on the
-    /// user for that, and this test fails (`should_panic`) until it lands.
+    /// Settled by that. The centred form moves the bank fixture's
+    /// `spread_window.sigma_y` by one ulp on the first row after a load, in
+    /// the current set and in `v71/bank`'s frozen frame, which is compared
+    /// at a tolerance for that field (rule 5's thirty-fourth exception, the
+    /// user's, 2026-11-24).
     #[test]
-    #[should_panic(expected = "off the window's mean")]
     fn a_truncated_mean_keeps_the_spreads_digits_at_a_level() {
         let cases = [
             (
@@ -2135,10 +2138,8 @@ mod tests {
     /// (`f = 0`) the window's mean is the running mean, and a window whose
     /// mean is the snapshot's reads it, whatever the weights; and a level
     /// near the largest double does not overflow on the way (`w_now·m` does
-    /// at `1e305` with a weight of `1e5`, and reads NaN). Held with the
-    /// test above, and failing (`should_panic`) until the fix lands.
+    /// at `1e305` with a weight of `1e5`, and reads NaN).
     #[test]
-    #[should_panic(expected = "of equal means")]
     fn a_truncated_mean_of_equal_means_is_that_mean() {
         for (w_now, w_old, f) in [(3.3, 1.7, 0.9), (1e5, 0.9e5, 0.9), (7.0, 6.0, 0.999)] {
             for m in [0.1, -3.7e-9, 1e8 + 0.31, 1e305] {

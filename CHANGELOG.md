@@ -2643,6 +2643,22 @@ model that only the new build has is listed as an addition and passes.
   from a `warm_span` raises the half-cap warning when it is the row that
   passed half the cap (HMM-5). Rows within the doubles read as before, to
   the bit.
+- **`hmm` reads given covariances that are the same diagonal in every
+  state, with variances that differ, as given** (review 2026-11-23,
+  HMM-3). Such covariances kept no shape, so the stabilized prior's scale
+  `psi` was the variances themselves, and its floor, `2^-100` of the
+  largest, lifted one more than `2^100` below another: `diag(1e-20, 1e20)`
+  read `7.9e-11` on the first row, where the same covariances one ulp
+  apart read `1e-20`. They now keep their shape, as covariances that
+  differ between states do, and only the same multiple of the identity in
+  every state keeps none. Under `"full"` and `"diag"` in a model that
+  learns, with such covariances, every output moves: to the given
+  variances where the floor bound, and elsewhere by rounding, at most
+  5.7e-14 relative over 2,000 rows at `diag(1e-6, 1e6)` (`diag(0.25, 4)`:
+  2.9e-14). A state saved before this change by such a model holds its
+  scale as variances, and loads and goes on as it was saved, to the bit;
+  a state saved now says it keeps the shape. Moves: `hmm.filtered_state*`,
+  `hmm.predicted_state*`, `hmm.state`, `hmm.loglik`, `hmm.coef`.
 - **`kalman`'s square-root form holds at every scale** (review 2026-11-23,
   KAL-2 and KAL-3). Its rank-one update rotated by `sqrt(l² + x²)`, which
   was NaN below `1.5e-154` and zeroed the factor's row above `1.3e154`, a
@@ -2655,6 +2671,39 @@ model that only the new build has is listed as an addition and passes.
   update (KAL-5), and the intercept's variance in the current coordinates
   and the prior quadratic form read a rounding below 0 as 0 (KAL-7).
   Elsewhere, to the bit.
+- **`kalman` under `standardize` reads the moments' own gap** (review
+  2026-11-23, KAL-6). On a row more than a half-life after the moments
+  last moved, the moments read their history at no less than the row's
+  own weight. That gap was read as the clock since a target was last
+  observed, but a row that observes no target moves the moments all the
+  same, so the floor opened on rows whose moments had moved one row
+  before: on 16 of 20 such rows at a half-life of 5. It binds, and moves
+  the moments from the plain recursion, where such a row weighs more
+  than the history's decayed weight. The gap is now the moments' own, the
+  clock since the last row of weight above 0, kept in the state where it
+  is not the clock since a target was observed. Streams with a run of
+  missing targets longer than a half-life move from the first such row
+  the floor bound on; elsewhere, to the bit. A state saved before this
+  change reads the clock since a target was observed until its next row
+  of weight above 0. Moves: `kalman.pred_*`, `kalman.coef`.
+- **A window's mean keeps the digits of its spread at a level** (review
+  2026-11-23, CWIN-3). A mean over a `window` is the running mean less a
+  snapshot's, formed as `(w_now·m − f·w_old·m_old) / w`, whose rounding is
+  that of the level: at a level of `1e8`, a window holding 1% of the
+  weight read 1.5e-7 off the exact value of its doubles, and at `1e305`
+  with a weight of `1e5` the product overflowed and read NaN. It is now
+  centred, `m + r·(m − m_old)` with `r = f·w_old / w`, whose rounding is
+  that of the window's distance from the running mean. Against exact
+  rationals over 180,000 draws in 90 cells (levels 0 to `1e12`, spreads
+  `1e-6` to `1e3`, windows holding a half to a millionth of the weight),
+  its largest and median error are at or under the old form's in every
+  cell, and it is exact where the two means are equal or nothing is
+  subtracted. What reads it moves in its last bits under a `window`: the
+  residual spread a bank keeps (and what reads it: `zscore`, the conformal
+  band, the drift scale, `emit_selected` and `emit_averaged`), `ewridge`'s
+  residual variance and `lasso`'s selection errors (the bank fixture's
+  `sigma_y` by one ulp). Moves: `*.sigma_*`, `*.zscore_*`, `*.lo_*`,
+  `*.hi_*`, `*.coverage_*`, `*.pred_*`, `ewridge.*`, `lasso.*`.
 - **`bocpd` keeps its joint a number** (review 2026-11-23, BOCPD-1,
   BOCPD-3 and BOCPD-5). A run that cannot have produced a row has
   tempered likelihood `π⁰ = 1` under `robust` and at a row of no share,

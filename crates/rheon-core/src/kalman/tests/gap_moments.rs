@@ -1,6 +1,6 @@
 //! Review C1's follow-up for `kalman` (`EwDiag::update_keeping`): under
-//! `standardize`, on a row more than a half-life after a target was last
-//! observed, the moments' update reads the history at no less than the
+//! `standardize`, on a row more than a half-life after the moments last
+//! moved, the moments' update reads the history at no less than the
 //! row's own weight, `H = max(lam·W, w)`. `b` and `P` are held in
 //! coordinates the moments define, and a history decayed to a share `a`
 //! left them one row's, a scale of `sqrt(a)` of the feature's spread, past
@@ -214,8 +214,7 @@ fn the_weight_is_the_plain_recursions_across_a_gap() {
                 _ => 1.0,
             };
             let w = if r.u() < 0.05 { 0.0 } else { 0.5 + r.u() };
-            let unobserved = m.elapsed.iter().copied().fold(f64::INFINITY, f64::min) + d;
-            bound += usize::from(m.keeps_history(unobserved) && w > 0.0);
+            bound += usize::from(m.keeps_history(m.moments_gap() + d) && w > 0.0);
             let st = m.step(&l.x[t], &[Some(l.y[t])], d, w);
             assert_eq!(st.n_eff.to_bits(), w_sum.to_bits(), "seed {seed}, row {t}");
             w_sum = m.cfg.decay.factor(d) * w_sum + w;
@@ -227,7 +226,7 @@ fn the_weight_is_the_plain_recursions_across_a_gap() {
 /// Hard rule 9: a gap of 0.5 to 1,000 half-lives at rows 2, 5 and 700,
 /// taken whole or in 2 or 5 parts with zero-weight rows inside it, at
 /// weights of 1 and of 0.5 to 1.5 times 2^-7. The gate reads the clock since
-/// a target was last observed, which a zero-weight row adds to and does not
+/// the moments last moved, which a zero-weight row adds to and does not
 /// clear, and `lam·W` is the same however the rows split it, so the
 /// predictions after the gap agree within 1e-10 relative and the weight
 /// within 1e-14 (the check: 1.7e-12). Past about 1,075 half-lives every
@@ -289,8 +288,8 @@ fn a_gap_split_by_zero_weight_rows_is_one_gap() {
     assert!(worst_n <= 1e-14, "the weight {worst_n:e} apart");
 }
 
-/// The floor binds only on a row more than a half-life after a target was
-/// last learned, where the history's decayed weight is below the row's own:
+/// The floor binds only on a row more than a half-life after the moments
+/// last moved, where the history's decayed weight is below the row's own:
 /// on a regular clock with weights of 0.5 to 1.5, one row in 20 of weight 0
 /// (which learns nothing, so the next row is two steps after the last
 /// learned one), at half-lives of 5 and 20 rows, it binds on no row, so
@@ -319,11 +318,10 @@ fn the_floor_binds_only_after_more_than_a_half_life() {
                     1.0
                 };
                 let w = if r.u() < 0.05 { 0.0 } else { 0.5 + r.u() };
-                let unobserved = m.elapsed.iter().copied().fold(f64::INFINITY, f64::min) + d;
+                let gap = m.moments_gap() + d;
                 let history = m.cfg.decay.factor(d) * m.stats.n_eff();
-                bound += usize::from(
-                    m.keeps_history(unobserved) && w > 0.0 && history > 0.0 && history < w,
-                );
+                bound +=
+                    usize::from(m.keeps_history(gap) && w > 0.0 && history > 0.0 && history < w);
                 m.step(&l.x[t], &[Some(l.y[t])], d, w);
             }
         }

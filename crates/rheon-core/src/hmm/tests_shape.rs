@@ -147,24 +147,37 @@ fn given_of(cfg: &HmmCfg, s: usize) -> Vec<f64> {
     g
 }
 
-/// Which matrices keep a shape: any that are not one diagonal matrix for
-/// every state. One diagonal for every state is the diagonal prior exactly,
+/// Which matrices keep a shape: any that are not the same multiple of the
+/// identity for every state. That multiple is the diagonal prior exactly,
 /// and keeps none; under `diag` the entries off the diagonal are not read.
+/// The same diagonal with variances that differ keeps one (review
+/// 2026-11-23, HMM-3), which a build before did not.
 #[test]
-fn one_diagonal_for_every_state_keeps_no_shape() {
+fn one_multiple_of_the_identity_for_every_state_keeps_no_shape() {
+    let identity = [2.0, 0.0, 0.0, 2.0, 2.0, 0.0, 0.0, 2.0];
+    assert!(Shape::of(&identity, 2, 2, false).is_none());
+    assert!(Shape::of(&identity, 2, 2, true).is_none());
+    let off = [2.0, 0.5, 0.5, 2.0, 2.0, 0.0, 0.0, 2.0];
+    assert!(Shape::of(&off, 2, 2, true).is_none());
+    assert!(Shape::of(&off, 2, 2, false).is_some_and(|g| g.kept_before()));
     let same = [2.0, 0.0, 0.0, 3.0, 2.0, 0.0, 0.0, 3.0];
-    assert!(Shape::of(&same, 2, 2, false).is_none());
-    assert!(Shape::of(&same, 2, 2, true).is_none());
+    for diagonal in [false, true] {
+        let g = Shape::of(&same, 2, 2, diagonal).unwrap();
+        assert_eq!((g.diag(0), g.diag(1)), (&[2.0, 3.0][..], &[2.0, 3.0][..]));
+        assert!(!g.kept_before());
+    }
     let variances = [2.0, 0.0, 0.0, 3.0, 2.0, 0.0, 0.0, 5.0];
     for diagonal in [false, true] {
         let g = Shape::of(&variances, 2, 2, diagonal).unwrap();
         assert_eq!((g.diag(0), g.diag(1)), (&[2.0, 3.0][..], &[2.0, 5.0][..]));
+        assert!(g.kept_before());
     }
     let correlated = [2.0, 1.0, 1.0, 3.0, 2.0, 0.0, 0.0, 3.0];
     let g = Shape::of(&correlated, 2, 2, false).unwrap();
     assert_eq!(g.tri(0), &[2.0, 1.0, 3.0]);
     assert_eq!(g.tri(1), &[2.0, 0.0, 3.0]);
-    assert!(Shape::of(&correlated, 2, 2, true).is_none());
+    // Under `diag` it is the same diagonal, `(2, 3)`, in both.
+    assert!(Shape::of(&correlated, 2, 2, true).is_some_and(|g| !g.kept_before()));
     // In the model: none before the states are given, none for one
     // diagonal, one where they differ; and none in a filter that does not
     // learn, which takes no prior.

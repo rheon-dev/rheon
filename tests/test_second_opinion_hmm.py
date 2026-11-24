@@ -24,12 +24,12 @@ covariances' diagonals pooled by weight (each given pair at weight 1) with
 ``e_i = sum_l p_l(s) (x_si - mu_li)^2`` (the means before the row),
 ``V <- lam^(1/10) V + w_s``, ``psi <- psi + (w_s / V) (e - psi)``, ``V``
 decaying alone on a row of weight 0. Where the given covariances
-``Sigma0_l`` are not one diagonal matrix for every state, each state's
-prior is its own given matrix rescaled, ``(W C_l + P0 diag(sqrt(psi))
-Sigma0_l diag(sqrt(psi))) / (W + P0)``, with ``psi`` started at 1 and
-moved by ``e_i = sum_l p_l(s) (x_si - mu_li)^2 / Sigma0_l,ii``. The
-transition counts are the decayed sum of the filtered joint of consecutive
-states,
+``Sigma0_l`` are not the same multiple of the identity for every state,
+each state's prior is its own given matrix rescaled, ``(W C_l + P0
+diag(sqrt(psi)) Sigma0_l diag(sqrt(psi))) / (W + P0)``, with ``psi``
+started at 1 and moved by ``e_i = sum_l p_l(s) (x_si - mu_li)^2 /
+Sigma0_l,ii``. The transition counts are the decayed sum of the filtered
+joint of consecutive states,
 
     A_kl = sum_s lam^(T - T_s) w_s xi_kl(s)
     xi_kl(s) = p_k(s-1) Pi_kl f_l(x_s) / sum_k'l' p_k'(s-1) Pi_k'l' f_l'(x_s)
@@ -180,15 +180,16 @@ def hmm_stream(seed: int, k: int, n: int = 300, d: int = 2, own: bool = False) -
 
 
 def given_shape(c0: np.ndarray, cov: str) -> np.ndarray | None:
-    """Each state's prior where the given covariances are not one diagonal
-    matrix for every state: the given matrices, their diagonals alone under
-    ``"diag"``. ``None`` where they are one diagonal matrix, whose prior is
-    the pooled variance on the diagonal, and under ``"tied"``."""
+    """Each state's prior where the given covariances are not the same
+    multiple of the identity for every state: the given matrices, their
+    diagonals alone under ``"diag"``. ``None`` where they are that multiple,
+    whose prior is the pooled variance on the diagonal, and under
+    ``"tied"``."""
     if not prior_shapes(cov):
         return None
     d = c0.shape[1]
     g = c0 * np.eye(d) if cov == "diag" else c0
-    return None if np.array_equal(g, np.broadcast_to(g[0] * np.eye(d), g.shape)) else g
+    return None if np.array_equal(g, np.broadcast_to(g[0, 0, 0] * np.eye(d), g.shape)) else g
 
 
 def model_run(

@@ -2799,6 +2799,24 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // Given states whose covariances are the same diagonal with
+        // variances that differ, which keep their shape (schema 72, review
+        // 2026-11-23, HMM-3): the prior's `ŝ` in units of the given
+        // variances, and the flag that says so, `shaped`.
+        case!(
+            "hmm_given",
+            "Hmm",
+            Hmm,
+            Hmm::new(HmmCfg {
+                means: Some(vec![0.0, 0.0, 2.0, 2.0]),
+                covs: Some(vec![0.25, 0.0, 0.0, 4.0, 0.25, 0.0, 0.0, 4.0]),
+                ..hmm_full_cfg(K)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
         case!(
             "corrchange_monitor",
             "CorrChange",

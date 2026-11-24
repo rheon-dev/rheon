@@ -581,6 +581,20 @@ const READ_ANEW: &[(&str, f64)] = &[
 /// none, and converts to the current bytes exactly.
 const COUNTED_ZERO_WEIGHT: &[&str] = &["audit", "audit_exact", "audit_scaled"];
 
+/// The `kalman` case whose kept states were saved after rows that observed
+/// no target (rule 5's thirty-fifth exception, the user's, 2026-11-24: "No
+/// concern for continuing differently here"; review 2026-11-23, KAL-6).
+/// Under `standardize` the moments' floor reads the moments' own gap, the
+/// clock since the last row of weight above 0, which a state keeps as
+/// `moments_gap` from schema 72; a state of 71 or earlier holds none, and
+/// reads the clock since a target was observed, which is not the moments'
+/// gap after such rows (here 2, where this build keeps 0). The rows are not
+/// in the state, so no loader can know it. Such a state loads, continues to
+/// the bit of its frozen continuation, and saves bytes that load back the
+/// same; it is not held to the current fixture's bytes. The sets `v64/` to
+/// `v71/`.
+const MOMENTS_GAP: &[&str] = &["kalman_noise_units"];
+
 /// The `corrchange` cases whose statistics were replaced with no layout
 /// changed (rule 5's twenty-seventh exception, the user's, 2026-11-22:
 /// "Switch to the new statistics"; PLAN 553): `monitor` is the linear
@@ -1151,6 +1165,16 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     without_matched(&decode(&current.bytes())),
                     "{what}: converted, but for the sides over the matched rows"
                 );
+            } else if schema <= 71 && MOMENTS_GAP.contains(&f.name) {
+                // The moments' gap ([`MOMENTS_GAP`]): today's reading, held
+                // to loading back the same.
+                let saved = named(&m.state());
+                let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    named(&again.state()) == saved,
+                    "{what}: saved, loaded, saved"
+                );
+                assert!(saved != current.bytes(), "{what}: now converts exactly");
             } else if renumbered.is_some() {
                 assert_eq!(schema, 65, "{what}: RENUMBERED is for schema 65's windows");
                 renumbered_rule(&case, &named(&m.state()), &current.bytes(), &|_| 0.0, &what);
@@ -1758,7 +1782,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 217] = [
+    const FORMS: [(&str, &[&str]); 219] = [
         // PLAN 569, at schema 72: `ftrl`'s scaler and warm-up under
         // `standardize`, past the warm-up's count and inside it.
         ("ftrl_standardized", &["model", "Ftrl", "scaler", "m"]),
@@ -1907,6 +1931,10 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("hmm_diag", &["model", "Hmm", "stabilized", "scale"]),
         ("hmm_diag", &["model", "Hmm", "stabilized", "scale_weight"]),
         ("hmm_full_warming", &["model", "Hmm", "cfg", "prior_rows"]),
+        // Schema 72 (review 2026-11-23, HMM-3): given states of the same
+        // diagonal with variances that differ, `ŝ` in units of them.
+        ("hmm_given", &["model", "Hmm", "stabilized", "scale"]),
+        ("hmm_given", &["model", "Hmm", "stabilized", "scale_weight"]),
         // Schema 69 (task 479): a wide `full` state's factor.
         ("hmm_full", &["model", "Hmm", "factor_states"]),
         // Schema 66 (task 327): a diagonal shape's variances alone.
@@ -3289,16 +3317,25 @@ fn kalmans_square_root_is_written_as_its_factor() {
     }
     let after = rmpv::decode::read_value(&mut named(&m.state()).as_slice()).unwrap();
     assert!(factors(&after).iter().all(|l| lower(l)), "the continuation");
+    // The others write no form, or, where the moments' gap is written
+    // after it (review 2026-11-23, KAL-6), the default one.
     for f in frozen::ALL.iter().filter(|f| f.variant == "Kalman") {
         if f.name == "kalman_square_root" {
             continue;
         }
         let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let form = at(&v, &["model", "Kalman", "covariance_form"]).and_then(rmpv::Value::as_str);
+        let gap = at(&v, &["model", "Kalman", "moments_gap"]);
         assert!(
-            at(&v, &["model", "Kalman", "covariance_form"]).is_none(),
+            form.is_none() || (form == Some("covariance") && gap.is_some()),
             "{}",
             f.name
         );
+        // The moments' gap (schema 72, rule 5's thirty-fifth exception):
+        // written in the case saved after rows with no target, the clock
+        // since the last row that moved the moments, 0; in no other.
+        let want = (f.name == "kalman_noise_units").then_some(0.0);
+        assert_eq!(gap.and_then(rmpv::Value::as_f64), want, "{}", f.name);
     }
 }
 
@@ -4247,6 +4284,38 @@ fn the_kish_sums_exponents_are_written() {
         ("ewridge", "q_scale"),
     ] {
         assert_eq!(scales(name, key), Vec::<i64>::new(), "{name}: {key}");
+    }
+}
+
+/// The prior's shape flag (schema 72, review 2026-11-23, HMM-3): given
+/// states of the same diagonal with variances that differ keep their shape
+/// and write `shaped`, `true`; the cases with no shape write none, the bytes
+/// they had, and a state without it loads as the build before read it.
+#[test]
+fn the_priors_shape_flag_is_written_where_a_shape_is_kept() {
+    if regenerating() {
+        return;
+    }
+    let shaped = |name: &str| {
+        let f = frozen::ALL
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name}: no fixture"));
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        assert!(
+            at(&v, &["model", "Hmm", "stabilized", "scale"]).is_some(),
+            "{name}: no prior"
+        );
+        at(&v, &["model", "Hmm", "stabilized", "shaped"]).cloned()
+    };
+    assert_eq!(shaped("hmm_given"), Some(rmpv::Value::Boolean(true)));
+    for name in [
+        "hmm_diag",
+        "hmm_full",
+        "hmm_full_narrow",
+        "hmm_full_warming",
+    ] {
+        assert_eq!(shaped(name), None, "{name}");
     }
 }
 

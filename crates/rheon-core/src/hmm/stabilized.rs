@@ -95,17 +95,24 @@
 //! diagonal prior read one matrix for every state: regimes that differ in
 //! correlation or in variance alone would be told apart by nothing but
 //! their data, and a state absent for a while was read as the others are.
-//! Given covariances that are one diagonal matrix for every state are the
-//! diagonal prior exactly (`ψᵢ·gᵢ` is the pooled variance), so no shape is
-//! kept for them ([`Shape::of`]). In the factor form the factor holds
+//! Given covariances that are the same multiple of the identity for every
+//! state are the diagonal prior exactly (`ψᵢ·g` is the pooled variance, and
+//! the floor reads every feature alike), so no shape is kept for them
+//! ([`Shape::of`]). The same diagonal with variances that differ keeps one:
+//! as variances, `ψ`'s floor would lift a variance more than `2¹⁰⁰` below
+//! the largest, where in units of the given ones every feature reads 1 on
+//! the first row. In the factor form the factor holds
 //! `W·M + diag(√f)·G_s·diag(√f)`, and a move adds the difference of two
 //! such matrices, `d²/2` sums a state beside the factorization's `d³/3`
 //! products; the prior as factored is the target with each feature's scale
 //! within `√(1 ± τ)` of it.
 //!
 //! The state is `ŝ`, `V` and, in the factor form, `f`: `2d + 1` numbers a
-//! model there, `d + 1` elsewhere. `ψ`, the slow decay, `P₀` and the shape
-//! are derived from `ŝ` and the configuration when a state is loaded.
+//! model there, `d + 1` elsewhere, and under a shape a flag that says so.
+//! `ψ`, the slow decay, `P₀` and the shape are derived from `ŝ` and the
+//! configuration when a state is loaded. A state without the flag, written
+//! by a build that kept no shape for the same diagonal in every state,
+//! loads without one there and keeps its variances.
 
 use serde::{Deserialize, Serialize};
 
@@ -137,22 +144,31 @@ pub(crate) struct Shape {
     /// Each state's diagonal, `K·d`.
     diag: Vec<f64>,
     d: usize,
+    /// Whether every state's matrix is the same diagonal one, which a build
+    /// before kept no shape for: a state it saved holds `ŝ` as variances,
+    /// and loads without the shape ([`Stabilized::rebuild`]).
+    same_diagonal: bool,
 }
 
 impl Shape {
     /// The shape `covs` gives (`K` matrices, each `d·d` row-major, positive
     /// definite: the configuration's check), read as its diagonals alone
     /// where `diagonal`. `None` where every state's matrix is the same
-    /// diagonal one: that is the diagonal prior exactly, which needs none.
+    /// multiple of the identity: that is the diagonal prior exactly, which
+    /// needs none. The same diagonal with variances that differ keeps one:
+    /// without it `ψ` is the variances themselves, and its floor, `2⁻¹⁰⁰`
+    /// of the largest, lifts one more than `2¹⁰⁰` below another (review
+    /// 2026-11-23, HMM-3: `diag(1e-20, 1e20)` read `7.9e-11` on the first
+    /// row).
     pub(crate) fn of(covs: &[f64], k: usize, d: usize, diagonal: bool) -> Option<Self> {
         debug_assert_eq!(covs.len(), k * d * d);
         let at = |s: usize, i: usize, j: usize| covs[s * d * d + i * d + j];
-        let plain = (0..k).all(|s| {
+        let same_diagonal = (0..k).all(|s| {
             (0..d).all(|i| {
                 at(s, i, i) == at(0, i, i) && (diagonal || (0..i).all(|j| at(s, i, j) == 0.0))
             })
         });
-        if plain {
+        if same_diagonal && (0..d).all(|i| at(0, i, i) == at(0, 0, 0)) {
             return None;
         }
         let mut diag = Vec::with_capacity(k * d);
@@ -165,7 +181,12 @@ impl Shape {
                 }
             }
         }
-        Some(Self { tri, diag, d })
+        Some(Self {
+            tri,
+            diag,
+            d,
+            same_diagonal,
+        })
     }
 
     /// State `s`'s matrix, its lower triangle packed row by row; empty
@@ -178,6 +199,13 @@ impl Shape {
     /// State `s`'s diagonal.
     pub(crate) fn diag(&self, s: usize) -> &[f64] {
         &self.diag[s * self.d..(s + 1) * self.d]
+    }
+
+    /// Whether a build before this one kept this shape too: every shape but
+    /// the same diagonal in every state, which it read as the diagonal
+    /// prior.
+    pub(crate) fn kept_before(&self) -> bool {
+        !self.same_diagonal
     }
 }
 
@@ -205,6 +233,10 @@ pub struct Stabilized {
     fallback: f64,
     /// Each state's prior's shape, where the states were given (derived).
     shape: Option<Shape>,
+    /// Whether `ŝ` is in units of each state's given covariance: a shape
+    /// is kept. Written as such; read back, it says which shape
+    /// [`Self::rebuild`] takes.
+    shaped: bool,
     /// Working space: the row's deviations, and every coordinate's move.
     pub(crate) e: Vec<f64>,
     add: Vec<f64>,
@@ -216,12 +248,19 @@ pub struct Stabilized {
     pub(crate) comoments: bool,
 }
 
-/// How [`Stabilized`] is written: `ŝ`, `V` and `f`.
+/// How [`Stabilized`] is written: `ŝ`, `V`, `f` and, where a shape is
+/// kept, `shaped`.
 #[derive(Serialize, Deserialize)]
 struct Saved {
     scale: Vec<f64>,
     scale_weight: f64,
     factored_prior: Vec<f64>,
+    /// Written, and last, only where a shape is kept, so a state without
+    /// one keeps its bytes. A state without it was written either with no
+    /// shape or by a build that kept none for the same diagonal in every
+    /// state, and loads as that build read it (review 2026-11-23, HMM-3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    shaped: bool,
 }
 
 impl From<Stabilized> for Saved {
@@ -230,6 +269,9 @@ impl From<Stabilized> for Saved {
             scale: st.scale,
             scale_weight: st.scale_w,
             factored_prior: st.held,
+            // The flag as held, not the shape: a state read and not yet
+            // rebuilt holds no shape, and writes back what it read.
+            shaped: st.shaped,
         }
     }
 }
@@ -248,6 +290,7 @@ impl From<Saved> for Stabilized {
             slow_at: None,
             fallback: f64::NAN,
             shape: None,
+            shaped: s.shaped,
             e: Vec::new(),
             add: Vec::new(),
             moves: Vec::new(),
@@ -258,14 +301,16 @@ impl From<Saved> for Stabilized {
     }
 }
 
-/// What a state holds: `P₀`, `ŝ`, `V` and `f`. Everything else is derived
-/// from them and the configuration, or is working space.
+/// What a state holds: `P₀`, `ŝ`, `V`, `f` and whether a shape is kept.
+/// Everything else is derived from them and the configuration, or is
+/// working space.
 impl PartialEq for Stabilized {
     fn eq(&self, other: &Self) -> bool {
         self.prior_rows.to_bits() == other.prior_rows.to_bits()
             && self.scale == other.scale
             && self.scale_w.to_bits() == other.scale_w.to_bits()
             && self.held == other.held
+            && self.shaped == other.shaped
     }
 }
 
@@ -277,6 +322,7 @@ impl std::fmt::Debug for Stabilized {
             .field("scale", &self.scale)
             .field("scale_w", &self.scale_w)
             .field("held", &self.held)
+            .field("shaped", &self.shaped)
             .finish()
     }
 }
@@ -307,6 +353,7 @@ impl Stabilized {
             slow: slow_of(decay),
             slow_at: None,
             fallback,
+            shaped: shape.is_some(),
             shape,
             e: Vec::with_capacity(d),
             add: Vec::with_capacity(d),
@@ -320,7 +367,14 @@ impl Stabilized {
     /// A loaded state's derived parts, from its configuration: `P₀`, the
     /// slow decay, the fallback, the shape and `ψ`. `false` where what was read
     /// cannot be this model's: `ŝ` not `d` numbers, any of `ŝ`, `V` and `f`
-    /// not finite or below 0, or `f` neither empty nor `d` long.
+    /// not finite or below 0, `f` neither empty nor `d` long, or written
+    /// under a shape the configuration does not give.
+    ///
+    /// `shape` is the configuration's ([`Shape::of`]). A state written
+    /// under a shape takes it; one written without takes it only where a
+    /// build before this one kept it too ([`Shape::kept_before`]), so a
+    /// state that build saved for the same diagonal in every state, whose
+    /// `ŝ` is a variance, reads on as it did.
     pub(crate) fn rebuild(
         &mut self,
         prior_rows: f64,
@@ -335,9 +389,12 @@ impl Stabilized {
             || !self.scale.iter().all(fine)
             || !self.held.iter().all(fine)
             || !fine(&self.scale_w)
+            || (self.shaped && shape.is_none())
         {
             return false;
         }
+        let shape = shape.filter(|g| self.shaped || g.kept_before());
+        self.shaped = shape.is_some();
         self.prior_rows = prior_rows;
         self.slow = slow_of(decay);
         self.slow_at = None;
@@ -611,6 +668,7 @@ mod tests {
                 scale: scale.to_vec(),
                 scale_weight: w,
                 factored_prior: held.to_vec(),
+                shaped: false,
             });
             st.rebuild(2.0, 3, Decay::Halflife(5.0), 1e-3, None)
         };

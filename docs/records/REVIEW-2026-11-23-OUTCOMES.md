@@ -159,7 +159,7 @@ batch d's.
 | SPEC-2 | confirmed in Rust (a Rust or TOML spec took it; Python's builder refused it already, by its check of every list of numbers), fixed: `HmmCfg::validate` refuses a `tvtp_coef` value that is not finite | `hmm/review_tests.rs::a_tvtp_coefficient_that_is_not_finite_is_refused`; `tests/test_hmm.py::test_a_bad_spec_is_refused_by_name` (the builder's refusal) | 4e422563 |
 | HMM-1 | confirmed (`ŝ` NaN after a row `1e80` from a state given `1e-150` at a posterior of 0; infinite at a posterior of 0.5), fixed: a state the row is not in adds nothing, a row whose deviations leave the doubles ages `V` as a row of no weight does, and the seeding pools no state of no weight. The share forms the review gives for `take_up_factors` and `shrink` were not taken: `P₀ψ` overflows only at `prior_rows` past `1e108`, since `ψ` is at most `INPUT_BOUND²`, and the share form moves every prior by rounding | `hmm/review_tests.rs::a_deviation_past_the_doubles_leaves_the_prior_loadable` | 4e422563 |
 | HMM-2 | confirmed (`ψ` fell back to `precision_prior`, `1e-3`, a variance, under a shape), fixed: the fallback is 1 under a shape, the covariances as given; unserialized, so no state moves | `hmm/review_tests.rs::with_given_states_no_scale_falls_back_to_the_given_covariances` | 4e422563 |
-| HMM-3 | **confirmed; left for the user** (below): `diag(1e-20, 1e20)` in both states reads `7.9e-11` on the first row, where the same one ulp apart reads `1e-20` | `hmm/review_tests.rs::the_same_anisotropic_diagonal_in_every_state_reads_as_given_on_the_first_row` (`should_panic`) | 4e422563 |
+| HMM-3 | confirmed (`diag(1e-20, 1e20)` in both states read `7.9e-11` on the first row, where the same one ulp apart read `1e-20`), fixed in the follow-ups by the coordinator's option (a): `Shape::of` keeps no shape only for the same multiple of the identity in every state, and `Saved` writes `shaped` where a shape is kept (`serde(default)`, last); a state without it loads with the shape the build before kept, so one it saved for the same diagonal reads on as saved, to the bit | `hmm/review_tests.rs::the_same_anisotropic_diagonal_in_every_state_reads_as_given_on_the_first_row`, `::a_state_saved_without_the_shape_reads_on_as_it_was_saved`, `::a_shaped_state_under_a_configuration_with_no_shape_is_refused`; `tests/state_fixtures.rs::the_priors_shape_flag_is_written_where_a_shape_is_kept` | 4e422563, f97b20c7 |
 | HMM-4 | (2) confirmed (a failed move on a row of weight 0 counted two failures), fixed: counted only where the restart is kept. (1) the rule kept: a row that starts a state again keeps every move (the docstring says so), and the same gap on the next learned row would age that state out too | `hmm/review_tests.rs::a_failed_move_on_a_row_of_weight_0_is_not_counted` | 4e422563 |
 | HMM-5 | (1) confirmed in the core (the spec refused it), fixed: `warm_span` beside given states is refused. (2) confirmed, fixed: a place that does not match `warm_span` is damaged. (3) confirmed, fixed: the seeding row's bytes are read before the seeding empties the buffer. (4) confirmed for the compact encoding, **left for the user** with BOCPD-4 | `hmm/review_tests.rs::a_warm_span_beside_given_states_is_refused`, `::a_restored_place_matches_the_warm_span`, `::the_seeding_row_raises_the_half_cap_warning`, `::a_compact_state_with_a_skipped_middle_field_round_trips` (`should_panic`) | 4e422563 |
 | KAL-1 | not taken: core only (the bank never hands a model a row of weight 0), and past about 1,075 half-lives every weight underflows to 0 under any rule; `kalman/tests/gap_moments.rs::a_gap_split_by_zero_weight_rows_is_one_gap` states the boundary | -- | -- |
@@ -167,7 +167,7 @@ batch d's.
 | KAL-3 | confirmed (`R/w = 1e-250/1e100 = 0`: the factor's `P` after the row was `1.3e-250` where the covariance form's is `2.0e-251`), fixed: Carlson's update at `α = 0` is its limit, a column with `f_j = 0` kept and the first other zeroed, as the covariance form's exact observation. The review's gate (`r > 0`) was not taken: it would refuse a row the covariance form learns | `kalman/tests/review.rs::an_exact_observation_is_the_same_in_both_forms` | 6dd64679 |
 | KAL-4 | confirmed (back from the square root, `P`'s diagonal held its roots), fixed: squared again, within an ulp of the start | `kalman/tests/review.rs::a_form_given_and_given_back_leaves_the_covariance_as_it_was` | 6dd64679 |
 | KAL-5 | confirmed on a state set by hand (the review's note: unreachable from the bank), fixed: the readout's gap noise stays off an open intercept | `kalman/tests/review.rs::a_diffuse_intercepts_readout_takes_no_noise_of_the_gap` | 6dd64679 |
-| KAL-6 | (2) **confirmed; left for the user** (below): rows that learn the features and observe no target opened the moments' floor on 16 of 20 such rows at a half-life of 5. (1) the documented rule: on a grid coarser than the half-life every row is "more than one half-life after a target was last learned" | `kalman/tests/review.rs::rows_with_no_target_leave_the_moments_floor_shut` (`should_panic`) | 6dd64679 |
+| KAL-6 | (2) confirmed, fixed in the follow-ups (below, "Follow-ups"; rule 5's thirty-fifth exception): rows that learn the features and observe no target opened the moments' floor on 16 of 20 such rows at a half-life of 5. (1) the documented rule: on a grid coarser than the half-life every row is "more than one half-life after a target was last learned" | `kalman/tests/review.rs::rows_with_no_target_leave_the_moments_floor_shut` (`should_panic`) | 6dd64679 |
 | KAL-7 | confirmed on a state set by hand (`c = 2000`, `P = v vᵀ` with `v ⊥ (1, c)`: `-9.3e-10`; a stream that shifted a feature by `1e5` of its scale did not reproduce it), fixed: `current_diagonal`'s intercept and `prior_quad` clamp a rounding below 0, as `coef_variance_of` does | `kalman/tests/review.rs::the_intercepts_variance_in_the_current_coordinates_is_never_below_0` | 6dd64679 |
 | BOCPD-1 | confirmed, both (a row of no share left the joint NaN; under `robust` the empty run's weight of 0 made every row after the first a failure), fixed: a weight of 0 passes its run on as it is, and a second pass whose joint is not a number refuses the row. The review's mode check is a `debug_assert`: once BOCPD-5's variance is a finite number above 0 the mode is too | `bocpd/review_tests.rs::a_row_of_no_share_leaves_the_joint_a_number`, `::a_robust_run_of_weight_0_passes_on_as_it_is` | 6d073513, 2a70fcc7 |
 | BOCPD-2 | confirmed (0.404 nats off on the review's values), fixed: a block's partial products are read where its least value is below `2^-127`, the only way one falls below the normal numbers (an overflowing partial stays infinite and the last one's range refuses it). The review's `[1e-35, 1e35]` was not taken: it moves every block outside it | `bocpd/review_tests.rs::a_sum_of_logs_holds_through_a_product_that_passes_the_subnormals` | 6d073513, 2a70fcc7 |
@@ -197,7 +197,8 @@ spread. Not measured on x86.
 
 ### Left for the user (batch f)
 
-- **HMM-3**: given covariances that are the same anisotropic diagonal in
+- **HMM-3** (done in the follow-ups, option (a); below): given
+  covariances that are the same anisotropic diagonal in
   every state take no shape, so `ψ` is a variance and its floor (`2^-100`
   of the largest) lifts the small one: `diag(1e-20, 1e20)` reads
   `7.9e-11` on the first row, where a state one ulp apart reads `1e-20`.
@@ -213,7 +214,9 @@ spread. Not measured on x86.
   form and say in `covs`' docstring that features whose given variances
   differ by more than `2^100` are floored. **Recommendation: (a)**: the
   shape is what `covs` says, and the flag keeps every saved state.
-- **KAL-6 (2)**: under `standardize`, rows that learn the features but
+- **KAL-6 (2)** (option (a) chosen; landed under rule 5's thirty-fifth
+  exception, below): under
+  `standardize`, rows that learn the features but
   observe no target leave the moments without a gap, yet the floor on
   their history reads the clock since a target was observed, so it opens
   on such rows from a half-life on (16 of 20 at a half-life of 5) and
@@ -235,6 +238,62 @@ spread. Not measured on x86.
   named msgpack only; (b) write every field always, which adds a few
   bytes to every such state and regenerates the current fixtures.
   **Recommendation: (a).**
+
+### Follow-ups (batch f), on `fix-578f-followups`
+
+The coordinator chose option (a) for both HMM-3 and KAL-6 (2).
+
+- **HMM-3: done** (f97b20c7). The case the definition settles: on the
+  first row a state reads the covariance it was given, `Ψ_s = G_s`, so
+  `diag(1e-20, 1e20)` reads `1e-20` and `1e20`, as the one-ulp-apart
+  covariances did. What moved: only given covariances that are the same
+  diagonal in every state with variances that differ, under `"full"` or
+  `"diag"` in a model that learns; there by rounding where the floor did
+  not bind (2,000 rows, every output of `hmm`: at most 2.9e-14 relative
+  at `diag(0.25, 4)`, 5.7e-14 at `diag(1e-6, 1e6)`), and to the given
+  variances where it did. No test, golden or release workload holds such
+  covariances (the second-opinion oracle's `given_shape` takes the rule).
+  New fixture `hmm_given` (schema 72, no bump) freezes `shaped: true`; no
+  other fixture's bytes moved, v71 and older included. A schema-69 state
+  takes the shape the build before kept. Per-row cost (arm64, release,
+  minimum of 6 interleaved runs, identical-binary control, load 6 to 15):
+  the affected configuration at 4 features pays the shaped path, diag
+  1.01 and full 1.02 against a control of 1.00 and 1.01; every other
+  configuration's path is unchanged.
+- **KAL-6 (2): landed** (fec71253, merged), after a stop on a fixture,
+  under the user's word (2026-11-24: "No concern for continuing
+  differently here"), rule 5's thirty-fifth exception: `MOMENTS_GAP`
+  holds `kalman_noise_units`' kept sets to loading, continuing to the bit
+  and saving bytes that load back the same. The fix: the moments' own
+  gap, the clock since the last row of weight above 0, kept as `moments_gap`, and
+  written, last and after the covariance form, only where it is not the
+  clock since a target was observed (so the positional encoding never
+  reads one in the other's place); a state without it reads that clock,
+  today's reading. The review's test is a plain test held to an `EwDiag`
+  fed the same rows, to the bit; on the old reading it fails at row 29,
+  where a row weighing more than the history's decayed weight is read
+  past the floor. Outputs move only where the floor binds: a row after a
+  run of missing targets longer than a half-life that weighs more than
+  the history's decayed weight (with even weights on a regular clock,
+  none past a stream's first rows). The stop: `kalman_noise_units` is
+  saved after three rows with no target, so this build writes a gap of 0
+  where its clock since a target is 2, and its v64 to v71 files, which
+  load with today's reading (2), continue to the bit but convert to other
+  bytes than the regenerated current fixture
+  (`every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes`
+  failed on them alone). No loader can know the gap, which an old state
+  does not hold; reading it as 0 (true of every state a bank wrote, since
+  the bank hands no row of weight 0) breaks the other cases, saved after
+  rows of weight 0. Per-row cost (as above): `kalman`, 4 features,
+  `standardize`, a target missing one row in five, 0.97 against a
+  control of 1.01, no measurable change.
+- **CWIN-3 (batch d's): landed here** under the same word, rule 5's
+  thirty-fourth exception: the centred truncated mean
+  (`review-578d-CWIN-3-centred-v2.patch`, adapted: its two tests, held by
+  `should_panic` on `review-578d`, are carried here as plain tests). No
+  core fixture moved; the current `bank` fixture regenerated (its frames'
+  last bits), and `v71/bank` is held at 1e-15 of `1 + |frozen|` on
+  `spread_window.sigma_y` alone (`moved_by_the_centred_mean`).
 
 ## Batch g: the regressions: `ewridge`, `sgd`, `ftrl`, `huber`/`quantile` and their refits, `holt`, `lasso` and LARS, `constraint`, the Gram merge (PLAN 578g)
 

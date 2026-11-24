@@ -282,15 +282,20 @@
 //! with the row in, and the row alone would move them by a scale of
 //! `sqrt(a)` of the feature's spread, past what the re-map carries (after
 //! 30 half-lives, an error 3e9 times the same rows' with no gap, at a
-//! half-life of 20 rows). So on a row more than one half-life after a
-//! target was last learned, the moments read their history at no less than
+//! half-life of 20 rows). So on a row more than one half-life after the
+//! moments last moved, the moments read their history at no less than
 //! the row's own weight, up to the weight the history had, `H = max(lam·W,
 //! min(W, w))`: shares `H/(H + w)` and `w/(H + w)`. (Uncapped, a history
 //! of weight `1e-6` read against a row of weight 1 took half the share.)
 //! The weight kept is `lam·W + w` as ever, so `n_eff` is the
-//! plain recursion's, and a row within a half-life of the last learned one
-//! is the plain update, to the bit. The gap is the clock since the last
-//! learned row, which a zero-weight row adds to and does not clear.
+//! plain recursion's, and a row within a half-life of the last one that
+//! moved the moments is the plain update, to the bit. The gap is the
+//! moments' own: the clock since the last row of weight above 0, which a
+//! zero-weight row adds to and does not clear. A row that observes no
+//! target still moves the moments, so it closes the gap; read from the
+//! clock since a target was observed, the floor opened on rows whose
+//! moments had moved one row before (16 of 20 such rows at a half-life of
+//! 5).
 //!
 //! **The first rows (docs/PLAN.md task 211).** In units of the noise each
 //! slope's prior is `p0` and the intercept's diffuse (above); the rest of
@@ -914,7 +919,7 @@ impl NoiseBasis {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(try_from = "KalmanV4")]
 pub struct Kalman {
     cfg: KalmanCfg,
@@ -937,6 +942,11 @@ pub struct Kalman {
     /// Per covariance: the clock since it last took a row that observes its
     /// target (the module doc, task 211).
     elapsed: Vec<f64>,
+    /// The moments' own gap: the clock since the last row that moved them,
+    /// a row of weight above 0, whether it observed a target or not (the
+    /// module doc, *After a long gap*). Written only where it is not the
+    /// clock since a target was last observed (review 2026-11-23, KAL-6).
+    moments_gap: f64,
     /// Per covariance: the squared innovations its prior is sized from.
     basis: Vec<NoiseBasis>,
     /// EW residual variance per target and its weight sum.
@@ -995,12 +1005,8 @@ pub struct Kalman {
     gap_factors: GapFactors,
     /// The form `p` is held and updated in (`kalman/forms.rs`): `P`, or
     /// its square root's factor. Written only where it is not the default,
-    /// so no state of the covariance form moves (schema 68).
-    #[serde(
-        rename = "covariance_form",
-        default,
-        skip_serializing_if = "CovarianceForm::is_covariance"
-    )]
+    /// so no state of the covariance form moves (schema 68), or where the
+    /// moments' gap is written after it.
     form: CovarianceForm,
     /// The factor's `f = Cᵀ z` and a slot's `x`.
     #[serde(skip)]
@@ -1031,6 +1037,48 @@ struct KalmanV4 {
     /// A state of schema 67 or earlier has none: the covariance form.
     #[serde(rename = "covariance_form", default)]
     form: CovarianceForm,
+    /// A state without it -- one of schema 71 or earlier, or one whose last
+    /// row that moved the moments observed a target -- reads the clock
+    /// since a target was last observed (review 2026-11-23, KAL-6).
+    #[serde(default)]
+    moments_gap: Option<f64>,
+}
+
+/// How [`Kalman`] is written: its fields in [`KalmanV4`]'s order, the
+/// covariance form only where it is not the default, and the moments' gap
+/// last, only where it is not the clock since a target was last observed.
+/// Where the gap is written so is the form before it, so the positional
+/// encoding, which has no names, never reads one in the other's place.
+impl Serialize for Kalman {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let gap = self.written_gap();
+        let form = gap.is_some() || !self.form.is_covariance();
+        let n = 12 + usize::from(form) + usize::from(gap.is_some());
+        let mut st = s.serialize_struct("Kalman", n)?;
+        st.serialize_field("cfg", &self.cfg)?;
+        st.serialize_field("stats", &self.stats)?;
+        st.serialize_field("anchor_hi", &self.anchor_hi)?;
+        st.serialize_field("anchor_lo", &self.anchor_lo)?;
+        st.serialize_field("anchor_scale", &self.anchor_scale)?;
+        st.serialize_field("beta", &self.beta)?;
+        st.serialize_field("p", &self.p)?;
+        st.serialize_field("elapsed", &self.elapsed)?;
+        st.serialize_field("basis", &self.basis)?;
+        st.serialize_field("sig2", &self.sig2)?;
+        st.serialize_field("wsig", &self.wsig)?;
+        st.serialize_field("wj", &self.wj)?;
+        if form {
+            st.serialize_field("covariance_form", &self.form)?;
+        } else {
+            st.skip_field("covariance_form")?;
+        }
+        match gap {
+            Some(g) => st.serialize_field("moments_gap", &g)?,
+            None => st.skip_field("moments_gap")?,
+        }
+        st.end()
+    }
 }
 
 impl TryFrom<KalmanV4> for Kalman {
@@ -1085,7 +1133,9 @@ impl TryFrom<KalmanV4> for Kalman {
                     .into(),
             );
         }
-        if !v.elapsed.iter().all(|e| e.is_finite() && *e >= 0.0) {
+        if !v.elapsed.iter().all(|e| e.is_finite() && *e >= 0.0)
+            || v.moments_gap.is_some_and(|g| !(g.is_finite() && g >= 0.0))
+        {
             return Err(
                 "kalman: its saved clocks since each observation hold values no fit \
                  could have. Load an undamaged copy of the state file, or rebuild it from its \
@@ -1093,6 +1143,7 @@ impl TryFrom<KalmanV4> for Kalman {
                     .into(),
             );
         }
+        let moments_gap = v.moments_gap.unwrap_or_else(|| unobserved(&v.elapsed));
         // Each message says what its check requires (docs/PLAN.md task 218):
         // the basis's said ">= 0" of a check that refuses a 0, and named
         // neither its lengths nor its bound.
@@ -1113,6 +1164,7 @@ impl TryFrom<KalmanV4> for Kalman {
             beta: v.beta,
             p: v.p,
             elapsed: v.elapsed,
+            moments_gap,
             basis: v.basis,
             sig2: v.sig2,
             wsig: v.wsig,
@@ -1174,6 +1226,7 @@ impl Kalman {
             beta: vec![vec![0.0; k]; m],
             p: vec![p_init; n_p],
             elapsed: vec![0.0; n_p],
+            moments_gap: 0.0,
             basis: vec![NoiseBasis::default(); n_p],
             sig2: vec![0.0; m],
             wsig: vec![0.0; m],
@@ -1267,12 +1320,27 @@ impl Kalman {
             .collect()
     }
 
-    /// Whether the moments' update on a row `unobserved` clock units after a
-    /// target was last observed keeps the row's own weight of history
-    /// (`step_as`, `EwDiag::update_keeping`): under `standardize`, more than
-    /// one half-life on, read from the clock alone.
-    pub(crate) fn keeps_history(&self, unobserved: f64) -> bool {
-        self.cfg.standardize && self.cfg.decay.past_half_life(unobserved)
+    /// Whether the moments' update on a row `gap` clock units after the
+    /// moments last moved keeps the row's own weight of history (`step_as`,
+    /// `EwDiag::update_keeping`): under `standardize`, more than one
+    /// half-life on, read from the clock alone.
+    pub(crate) fn keeps_history(&self, gap: f64) -> bool {
+        self.cfg.standardize && self.cfg.decay.past_half_life(gap)
+    }
+
+    /// The moments' gap as the last row left it: the clock since the last
+    /// row of weight above 0 (the module doc, *After a long gap*). The next
+    /// row's floor reads it with that row's step added.
+    #[cfg(test)]
+    pub(crate) fn moments_gap(&self) -> f64 {
+        self.moments_gap
+    }
+
+    /// The moments' gap where a state writes it: where it is not the clock
+    /// since a target was last observed, which a state without it reads.
+    fn written_gap(&self) -> Option<f64> {
+        (self.moments_gap.to_bits() != unobserved(&self.elapsed).to_bits())
+            .then_some(self.moments_gap)
     }
 
     pub fn n_eff(&self) -> f64 {
@@ -2359,6 +2427,12 @@ const REMAP_LIMIT: f64 = 1024.0;
 /// skips the update such a row would poison (docs/IMPROVEMENTS.md C2). Found
 /// by the generated stream in `tests/model_contract.rs` (docs/PLAN.md
 /// task 158).
+/// The clock since any target was last observed: the least of each
+/// covariance's ([`Kalman`]'s `elapsed`).
+fn unobserved(elapsed: &[f64]) -> f64 {
+    elapsed.iter().copied().fold(f64::INFINITY, f64::min)
+}
+
 fn a_number_or_none(v: f64) -> f64 {
     if v.is_finite() { v } else { f64::NAN }
 }
@@ -2725,10 +2799,13 @@ impl Kalman {
         for e in &mut self.elapsed {
             *e += d_clock;
         }
-        // The clock since any target was last observed, this row's step in:
-        // what the moments' floor below reads as the gap, the same number
-        // however zero-weight rows split it (hard rule 9).
-        let unobserved = self.elapsed.iter().copied().fold(f64::INFINITY, f64::min);
+        // The clock since the moments last moved, this row's step in: what
+        // the moments' floor below reads as the gap, the same number however
+        // zero-weight rows split it (hard rule 9). A row that observes no
+        // target moves the moments all the same, so it closes the gap
+        // (review 2026-11-23, KAL-6).
+        self.moments_gap += d_clock;
+        let gap = self.moments_gap;
 
         // Which slots hold anything, and the map from the anchor to the
         // moments as they stand: formed after the last row that moved them,
@@ -2997,19 +3074,22 @@ impl Kalman {
         // past it the re-map (the module doc). A row of weight 0 moves no
         // moment, and the map stays the one formed after the last row that
         // did.
-        // More than a half-life after a target was last learned, the
+        // More than a half-life after the moments last moved, the
         // moments keep the row's own weight of history (the module doc,
         // *After a long gap*); the weight kept, `n_eff`, is the plain
         // recursion's (hard rule 8).
-        if self.keeps_history(unobserved) {
+        if self.keeps_history(gap) {
             // The history's weight before the gap: what it holds now over
-            // the decay since the last row learned, zero-weight rows in it
+            // the decay since the last row moved it, zero-weight rows in it
             // or not (`inf` past the doubles, where nothing caps the floor).
-            let had = lam * self.stats.n_eff() / self.cfg.decay.factor(unobserved);
+            let had = lam * self.stats.n_eff() / self.cfg.decay.factor(gap);
             self.stats
                 .update_keeping(&self.zbuf, lam, weight, weight, had);
         } else {
             self.stats.update(&self.zbuf, lam, weight);
+        }
+        if weight > 0.0 {
+            self.moments_gap = 0.0;
         }
         if self.cfg.standardize && weight > 0.0 {
             self.follow_the_moments();

@@ -190,8 +190,9 @@ pub struct HmmCfg {
 
 impl HmmCfg {
     /// The shape of each state's prior under stabilized forgetting: the
-    /// given covariances, where they are given and are not one diagonal
-    /// matrix for every state ([`Stabilized`], "Given states").
+    /// given covariances, where they are given and are not the same
+    /// multiple of the identity for every state ([`Stabilized`], "Given
+    /// states").
     fn prior_shape(&self) -> Option<Shape> {
         // A test's stand-in for a build before the shape: the diagonal
         // prior under given states too.
@@ -1802,12 +1803,15 @@ impl Hmm {
     /// coordinate at its target.
     fn stabilize_loaded(&mut self, p0: f64) {
         let d = self.cfg.n_features;
+        // The shape a build before kept, so such a state reads on as it
+        // did: none for the same diagonal in every state
+        // ([`Shape::kept_before`]).
         self.stabilized = Some(Box::new(Stabilized::new(
             p0,
             d,
             self.cfg.decay,
             self.cfg.precision_prior,
-            self.cfg.prior_shape(),
+            self.cfg.prior_shape().filter(Shape::kept_before),
         )));
         if !self.seeded {
             return;

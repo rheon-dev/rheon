@@ -308,8 +308,11 @@ def hmm(
 
     with ``s`` started at 1, so a state reads ``G_l`` on the first row, and
     again, at the scale the rows have by then, when it has no data left.
-    Given covariances that are one diagonal matrix for every state are the
-    diagonal prior exactly. What they say about each regime's shape is
+    Given covariances that are the same multiple of the identity for every
+    state are the diagonal prior exactly. The same diagonal with variances
+    that differ keeps its shape, so a variance more than ``2^100`` below the
+    largest is read as given rather than lifted to the floor of ``psi``.
+    What they say about each regime's shape is
     trusted at ``prior_rows`` rows for as long as the model runs, so given
     covariances of the wrong shape cost a returning state its first rows.
 
