@@ -349,6 +349,56 @@ def warmed_streams(
     return pl.concat([head, rest])
 
 
+#: The kinds whose first prediction waits on a start past `WARM_ROWS`:
+#: ``sarima``'s estimated start fits once Kish's count of its own rows passes
+#: its parameters and its standard errors are under its bound. Their streams
+#: are warmed until the first prediction, and some rows past it, rather than
+#: for a fixed count (`_warmed_until_scored`).
+WARMED_UNTIL_SCORED = frozenset({"sarima"})
+#: The rows past a warm-up's first prediction it keeps, so the drawn rows
+#: after it follow a start already stepping.
+PAST_THE_FIRST = 5
+
+
+def _warmed_until_scored(df: pl.DataFrame, spec: dict, seed: int, sign: str) -> pl.DataFrame:
+    """``df`` behind a warm-up of group `g0` grown until the model's first
+    prediction, then `PAST_THE_FIRST` rows more: rows a clock unit apart at
+    weight 1, ``y0`` the features' mean plus a unit of noise, on the
+    stream's side of zero (`SIGNS`). The warm-up is drawn long, fitted once,
+    and cut where its first prediction falls."""
+    rng = np.random.default_rng(seed)
+    side = SIGNS[sign]
+    n = 2_000
+
+    def signed(v: np.ndarray) -> np.ndarray:
+        if "sign" not in side:
+            return v
+        return side["sign"] * np.abs(v) + side["offset"]
+
+    x0, x1 = signed(rng.standard_normal(n)), signed(rng.standard_normal(n))
+    y0 = 0.5 * (x0 + x1) + rng.standard_normal(n)
+    head = pl.DataFrame(
+        {
+            "g": ["g0"] * n,
+            "t": np.arange(float(n)),
+            "x0": x0,
+            "x1": x1,
+            "y0": y0,
+            "w": [1.0] * n,
+            "s": ["s0"] * n,
+        },
+    ).cast(df.schema)
+    field = next(f for f in rp.spec.output_fields(spec) if f.startswith("pred_"))
+    preds = rp.ModelBank([spec]).fit_predict(head)["m"].struct.field(field).to_list()
+    first = next((i for i, p in enumerate(preds) if p is not None), None)
+    assert first is not None, f"no prediction in a warm-up of {n} rows"
+    head = head.head(first + 1 + PAST_THE_FIRST)
+    rest = df.with_columns(
+        t=pl.when(pl.col("g") == "g0").then(pl.col("t") + head.height).otherwise("t")
+    )
+    return pl.concat([head, rest])
+
+
 def build(model, extra, **kw):
     opts = dict(
         targets=["y0"],
@@ -657,6 +707,13 @@ class TestUniversalProperties:
             # same stream with itself (review round 5, E3).
             usable = df.select((~_missing("y0")).alias("ok"))["ok"].to_list()
             scored = [i for i in range(df.height) if preds[i] is not None and usable[i]]
+            if not scored and model in WARMED_UNTIL_SCORED:
+                df = _warmed_until_scored(df, spec, data.draw(st.integers(0, 2**32 - 1)), sign)
+                base = rp.ModelBank([spec]).fit_predict(df)
+                preds = base["m"].struct.field(field).to_list()
+                y = df["y0"].to_list()
+                usable = df.select((~_missing("y0")).alias("ok"))["ok"].to_list()
+                scored = [i for i in range(df.height) if preds[i] is not None and usable[i]]
             assert scored, f"no row scored, not even warm row {WARM_ROWS - 1}"
             idx = data.draw(st.sampled_from(scored), label="scored row")
             was = y[idx]
