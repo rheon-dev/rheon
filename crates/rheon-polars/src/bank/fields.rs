@@ -120,6 +120,11 @@ pub(super) enum Source {
     ScoredClock,
     LearnedClock,
     LamSelected(usize),
+    /// `weight_<target>` under `emit_target_weight`: the weight the
+    /// target's `min_weight` gate read, per instance and target, laid out
+    /// like `LamSelected` in the `target_weight` buffer (docs/PLAN.md task
+    /// 568).
+    TargetWeight(usize),
     SelPred(usize),
     SelName(usize),
     AvgPred(usize),
@@ -671,6 +676,17 @@ pub fn output_index(spec: &Spec) -> Vec<FieldMeta> {
         match src {
             Source::NEff(mi) => {
                 let suffix = suffix.strip_prefix("weight_sum").unwrap_or("");
+                // Each target's own weight beside the shared one, opt-in
+                // (docs/PLAN.md task 568): the number its `min_weight` reads.
+                if spec.emit_target_weight {
+                    for (t_i, t) in spec.targets.iter().enumerate() {
+                        fields.push(like(
+                            FieldMeta::new(format!("weight_{t}{suffix}"), "weight")
+                                .target(t)
+                                .src(Source::TargetWeight(mi * spec.m() + t_i)),
+                        ));
+                    }
+                }
                 fields.push(like(
                     FieldMeta::new(format!("settled_frac{suffix}"), "settled_frac")
                         .src(Source::Settled(mi)),

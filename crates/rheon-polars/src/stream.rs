@@ -3963,6 +3963,9 @@ struct Instance<'a> {
     o_drift: &'a mut [bool],
     o_n_eff: &'a mut [f64],
     o_lam: &'a mut [f64],
+    /// Each target's own weight, `m * n_rows`, under `emit_target_weight`;
+    /// empty otherwise.
+    o_target_weight: &'a mut [f64],
     o_coef: &'a mut Vec<Option<Vec<f64>>>,
     o_settled: &'a mut [f64],
     o_reason: &'a mut [u8],
@@ -5185,6 +5188,20 @@ fn run_instance(
 
         if emit {
             inst.o_n_eff[ri] = step.n_eff;
+            // The weight each target's `min_weight` gate read above, under
+            // `emit_target_weight`: its own where the model keeps one, else
+            // the shared (docs/PLAN.md task 568). An empty slice, and no
+            // work, without it.
+            for (t_i, o) in inst
+                .o_target_weight
+                .chunks_exact_mut(n_rows.max(1))
+                .enumerate()
+            {
+                o[ri] = match sc.tn.get(t_i) {
+                    Some(&w) if own_weights => w,
+                    _ => step.n_eff,
+                };
+            }
             inst.o_settled[ri] = settled;
             inst.o_reason[ri] = reason;
             if has_row_infl && inst.spec.emit_error_inflation {

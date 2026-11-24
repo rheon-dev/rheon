@@ -96,14 +96,14 @@ shows them at work.
     converged, so it never reports a number it is not yet informed enough to
     give. What: the weight a model must have seen before its outputs stop being
     null; the model learns from every row either way. A list gives one
-    threshold per target. Thirteen models keep a weight per target: ``ewridge``,
-    ``lasso``, ``kalman``, ``huber``, ``quantile``, ``expectile``, ``holt``, ``sgd``,
-    ``pa``, ``ftrl``, ``rls``, ``glm`` and ``marginal``, whose table's ``corr``, ``beta`` and
-    ``t_stat`` are gated per target. Each checks a target's threshold against
-    that target's own weight: the rows it was present on, at their raw weights,
-    decayed, and inside the window under one. ``rls`` learns only from rows on
-    which every target is present, so its targets' weights are equal. The other
-    models check the shared ``weight_sum``. The ``weight_sum`` field is the
+    threshold per target. Every model with a target keeps a weight per target
+    but ``seqtest``, ``hawkes`` and ``dcc``, and so does ``marginal``, whose
+    table's ``corr``, ``beta`` and ``t_stat`` are gated per target. Each
+    checks a target's threshold against that target's own weight: the rows
+    it was present on, at their raw weights, decayed, and inside the window
+    under one. ``rls`` learns only from rows on which every target is
+    present, so its targets' weights are equal. The other models check the
+    shared ``weight_sum``. The ``weight_sum`` field is the
     shared weight in every model. So a target that is often null is gated on
     its own rows, and its first prediction comes later than the others'. Units:
     ``weight_sum`` units, not rows. ``rcov`` reports nothing per row, and its
@@ -134,7 +134,19 @@ shows them at work.
            ``audit``, ``hawkes``, ``garch``, ``dcc``, ``realized``, ``pca``,
            ``power_variation``, ``tdigest``, ``ddsketch``, ``ewm_moments``,
            ``ar``, ``spectral``
-``min_settled_frac``
+``emit_target_weight``
+    Why: a row whose target is null teaches that target nothing but still
+    adds to the shared ``weight_sum``, so a row can show ``weight_sum`` above
+    ``min_weight`` and ``withheld_reason = "below_min_weight"`` together.
+    What: write ``weight_<target>`` beside ``weight_sum``, per instance: the
+    weight that target's ``min_weight`` read on the row, with
+    ``weight_sum``'s meaning (before the row, and inside the window under
+    one). It is the target's own weight where the model keeps one, and
+    ``weight_sum`` in ``seqtest``, ``hawkes`` and ``dcc``, which keep none.
+    Default ``False``. Refused for a model with no target, and for
+    ``marginal``, which writes no prediction to withhold. To keep a row out
+    of the learning without dropping it, give it weight 0 in the ``weight``
+    column: it is still scored.
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
     What: predictions are withheld while ``settled_frac``, how far the decay
@@ -518,6 +530,7 @@ target, so their fields take no suffix:
     se_coef{instance}                           emit_se_coef
     se_coef_hc0{instance}, se_coef_hac{instance}  emit_robust_se
     penalty_selected_{target}{instance}         lasso: the path point in force
+    weight_{target}{instance}                   emit_target_weight: its min_weight's weight
     selected_{target}                           emit_selected: the chosen slot
     pred_{target}__selected                     emit_selected: its prediction
     pred_{target}__averaged                     emit_averaged

@@ -62,6 +62,14 @@ pub struct LastRow {
     pub n_eff: Vec<f64>,
     #[serde(with = "rheon_core::humanfloat::vec_f64_or_tag")]
     pub lam_selected: Vec<f64>,
+    /// Each target's own weight under `emit_target_weight` (docs/PLAN.md
+    /// task 568); empty, and not written, without it.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_f64_or_tag"
+    )]
+    pub target_weight: Vec<f64>,
     /// A slot no solve has fit is NaN (review round 4, CC1), as is the mean
     /// of an `ew_class` class no row has carried, so the export tags them.
     #[serde(with = "rheon_core::humanfloat::vec_opt_vec_f64_or_tag")]
@@ -127,6 +135,7 @@ impl LastRow {
         take_row(&mut self.scored_clock, &out.scored_clock, n, ri);
         take_row(&mut self.learned_clock, &out.learned_clock, n, ri);
         take_row(&mut self.lam_selected, &out.lam_selected, n, ri);
+        take_row(&mut self.target_weight, &out.target_weight, n, ri);
         take_list_row(&mut self.coef, &out.coef, ri);
         take_row(&mut self.settled, &out.settled, n, ri);
         take_row(&mut self.reason, &out.reason, n, ri);
@@ -163,6 +172,7 @@ impl LastRow {
             out.drift.len() == self.drift.len(),
             out.n_eff.len() == self.n_eff.len(),
             out.lam_selected.len() == self.lam_selected.len(),
+            out.target_weight.len() == self.target_weight.len(),
             out.coef.len() == self.coef.len(),
             out.settled.len() == self.settled.len(),
             out.reason.len() == self.reason.len(),
@@ -196,6 +206,7 @@ impl LastRow {
         out.drift.clone_from(&self.drift);
         out.n_eff.clone_from(&self.n_eff);
         out.lam_selected.clone_from(&self.lam_selected);
+        out.target_weight.clone_from(&self.target_weight);
         out.scored_clock.clone_from(&self.scored_clock);
         out.learned_clock.clone_from(&self.learned_clock);
         for (dst, src) in out.coef.iter_mut().zip(&self.coef) {

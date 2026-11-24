@@ -72,6 +72,7 @@ enum Buf {
     Settled,
     Inflation,
     LamSelected,
+    TargetWeight,
 }
 
 /// Where one flat field's values start in a run's buffers, found once for
@@ -152,6 +153,12 @@ impl FlatLoc {
             Source::Settled(mi) => place(Buf::Settled, 0, mi),
             Source::Inflation(i) => at(Buf::Inflation, i),
             Source::LamSelected(i) => place(Buf::LamSelected, 0, i),
+            // Reported as it is, as `n_eff` is: a weight is never null on
+            // a processed row.
+            Source::TargetWeight(i) => Self {
+                all: true,
+                ..place(Buf::TargetWeight, 0, i)
+            },
             _ => return None,
         })
     }
@@ -180,6 +187,7 @@ impl FlatLoc {
             Buf::NEff => (&ch.n_eff, self.col),
             Buf::Settled => (&ch.settled, self.col),
             Buf::LamSelected => (&ch.lam_selected, self.col),
+            Buf::TargetWeight => (&ch.target_weight, self.col),
         };
         &buf[unit * nr..][..nr]
     }

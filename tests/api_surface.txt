@@ -68,6 +68,7 @@
   emit_error_inflation = False
   emit_se_coef = False
   emit_clocks = False
+  emit_target_weight = False
   coef_every = None
   max_rows_between_coefs = None
   emit_sigma = False
@@ -2162,6 +2163,8 @@
     mean_shift_x0@h100: f64
     mean_shift_x1@h100: f64
     weight_sum@h100: f64
+    weight_y@h100: f64
+    weight_z@h100: f64
     settled_frac@h100: f64
     withheld_reason@h100: enum
     coef@h100: list[f64]
@@ -2406,6 +2409,8 @@
     mean_shift_x0@h500: f64
     mean_shift_x1@h500: f64
     weight_sum@h500: f64
+    weight_y@h500: f64
+    weight_z@h500: f64
     settled_frac@h500: f64
     withheld_reason@h500: enum
     coef@h500: list[f64]
@@ -3231,6 +3236,7 @@
     emit_sigma
     emit_specification
     emit_tails
+    emit_target_weight
     emit_zscore
     feature_health_half_life
     features

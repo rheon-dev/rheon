@@ -2694,6 +2694,17 @@ pub struct Spec {
     /// same rows at the same time. Default false.
     #[serde(default)]
     pub emit_clocks: bool,
+    /// Emit `weight_<target>` beside `weight_sum`, per instance: the weight
+    /// that target's `min_weight` gate reads on the row (CLAUDE.md rule 8,
+    /// S2; docs/PLAN.md task 568). Where the model keeps a weight per
+    /// target ([`rheon_core::OnlineModel::target_n_eff_into`]) it is that
+    /// target's own -- the rows it was present on, with `n_eff`'s meaning
+    /// -- so a null target holds it where it adds to `weight_sum`; where
+    /// the model keeps none, every target's gate reads the shared weight,
+    /// and the field is `weight_sum`. Refused for a model with no target.
+    /// Skipped when off, so a spec written before it serializes as it did.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub emit_target_weight: bool,
     /// When the `coef` field is filled, as `solve_every` schedules a solve
     /// (docs/PLAN.md task 178): a `coef` row once the clock has moved this
     /// far since the group's last one -- a number of the clock column's
@@ -4813,6 +4824,24 @@ impl Spec {
                     self.model.kind_name()
                 ));
             }
+        }
+        // Each target's own weight is a target's: a model that learns from
+        // none, or writes no row a target's floor could withhold
+        // (`marginal`), has none to report (docs/PLAN.md task 568).
+        if self.emit_target_weight
+            && (self.model.is_unsupervised() || matches!(self.model, ModelKind::Marginal { .. }))
+        {
+            let why = if self.model.is_unsupervised() {
+                "which learns from no target"
+            } else {
+                "which writes no prediction a target's min_weight could withhold: its pairs are \
+                 read from the bank's state"
+            };
+            no.refuse(format!(
+                "spec {name:?}: emit_target_weight reports the weight each target's min_weight \
+                 reads, but it does not apply to {}, {why}. Leave out emit_target_weight.",
+                self.model.kind_name()
+            ));
         }
         // Feature health reads the features alone: a model with none would
         // write no field, so the switch is refused rather than ignored

@@ -45,6 +45,10 @@ pub struct ChunkOut {
     /// `n_models * n_targets * n_rows`: lasso's selected penalty, or
     /// `huber`'s residual scale under `emit_huber_scale`; empty otherwise.
     pub lam_selected: Vec<f64>,
+    /// `n_models * n_targets * n_rows` under `emit_target_weight`, else
+    /// empty: the weight each target's `min_weight` gate read on the row
+    /// (docs/PLAN.md task 568).
+    pub target_weight: Vec<f64>,
     /// Emitted on a cadence rather than every row, so it stays boxed:
     /// `[model][row]`.
     pub coef: Vec<Vec<Option<Vec<f64>>>>,
@@ -148,6 +152,11 @@ impl Buffers {
             } else {
                 0
             }
+            + if spec.emit_target_weight {
+                n_models * spec.m()
+            } else {
+                0
+            }
     }
 }
 
@@ -177,6 +186,7 @@ impl ChunkOut {
             drift: Vec::new(),
             n_eff: Vec::new(),
             lam_selected: Vec::new(),
+            target_weight: Vec::new(),
             coef: Vec::new(),
             settled: Vec::new(),
             reason: Vec::new(),
@@ -291,6 +301,12 @@ impl ChunkOut {
             0
         };
         fill(&mut self.lam_selected, lam, f64::NAN);
+        let target_weight = if spec.emit_target_weight {
+            n_models * spec.m() * n_rows
+        } else {
+            0
+        };
+        fill(&mut self.target_weight, target_weight, f64::NAN);
         lists(&mut self.coef, n_models, n_rows);
         written(dense, &mut self.settled, n_models * n_rows, f64::NAN);
         written(dense, &mut self.reason, n_models * n_rows, 0);
@@ -346,6 +362,7 @@ impl ChunkOut {
                 &self.resid_q,
                 &self.n_eff,
                 &self.lam_selected,
+                &self.target_weight,
                 &self.settled,
                 &self.inflation,
             ]

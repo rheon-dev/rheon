@@ -120,7 +120,7 @@ Each question, the diagnostic that answers it, and its fields:
 | which row moved it? | `emit_influence` | `influence_<t>` | [Which row moved it?](#which-row-moved-it) |
 | are its features healthy? | `emit_feature_health` | `spread_ratio_<feature>`, `mean_shift_<feature>` | [Are its features healthy?](#are-its-features-healthy) |
 | is another model better? | `emit_metrics`, `emit_selected`, `emit_averaged`; `rp.eval` | `ic_<t>`, `r2_<t>`, `hit_rate_<t>`, `selected_<t>`, `pred_<t>__selected`, `pred_<t>__averaged` | [Is another model better?](#is-another-model-better) |
-| is it ready? | `min_weight`, `min_settled_frac`, `max_error_inflation`, `emit_error_inflation` | `weight_sum`, `settled_frac`, `withheld_reason`, `error_inflation_<t>` | [Is it ready?](#is-it-ready) |
+| is it ready? | `min_weight`, `min_settled_frac`, `max_error_inflation`, `emit_error_inflation`, `emit_target_weight` | `weight_sum`, `settled_frac`, `withheld_reason`, `error_inflation_<t>`, `weight_<t>` | [Is it ready?](#is-it-ready) |
 | how wide is its error? | `emit_sigma`, `emit_zscore`, `resid_quantiles`, `conformal` | `sigma_<t>`, `zscore_<t>`, `abs_resid_q<p>_<t>`, `lo_<t>`, `hi_<t>`, `coverage_<t>` | [How wide is its error?](#how-wide-is-its-error) |
 
 [Check a two-stage fit](how-to/check-a-two-stage-fit.md)

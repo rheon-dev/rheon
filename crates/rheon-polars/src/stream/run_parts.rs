@@ -53,6 +53,14 @@ pub(super) fn build_instances<'a>(
     let mut o_drift = out.drift.chunks_mut(block.max(1));
     let mut o_n_eff = out.n_eff.chunks_mut(n_rows.max(1));
     let mut o_lam = out.lam_selected.chunks_mut((n_targets * n_rows).max(1));
+    // Each target's own weight under `emit_target_weight`, a block of
+    // `m * n_rows` an instance (docs/PLAN.md task 568).
+    let tw_block = if spec.emit_target_weight {
+        spec.m() * n_rows
+    } else {
+        0
+    };
+    let mut o_target_weight = out.target_weight.chunks_mut(tw_block.max(1));
     let mut o_coef = out.coef.iter_mut();
     let mut o_settled = out.settled.chunks_mut(n_rows.max(1));
     let mut o_reason = out.reason.chunks_mut(n_rows.max(1));
@@ -112,6 +120,7 @@ pub(super) fn build_instances<'a>(
             o_drift: o_drift.next().unwrap_or_default(),
             o_n_eff: o_n_eff.next().unwrap_or_default(),
             o_lam: o_lam.next().unwrap_or_default(),
+            o_target_weight: o_target_weight.next().unwrap_or_default(),
             o_coef: o_coef.next().expect("one per instance"),
             o_settled: o_settled.next().unwrap_or_default(),
             o_reason: o_reason.next().unwrap_or_default(),

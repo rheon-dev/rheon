@@ -194,6 +194,19 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`emit_target_weight` writes `weight_<target>`, the weight that target's
+  `min_weight` reads** (PLAN 568; the user, 2026-11-23, from a workload
+  report on 2.0.0). A row whose target is null teaches that target nothing
+  but still adds to the shared `weight_sum`, so a row could show
+  `weight_sum` above `min_weight` and `withheld_reason = "below_min_weight"`
+  together, with nothing in the output naming the number below the floor.
+  The field sits beside `weight_sum`, per instance, with its meaning: the
+  target's own weight where the model keeps one, and `weight_sum` itself in
+  `seqtest`, `hawkes` and `dcc`, which gate every target on the shared
+  weight. Refused, by name, for a model with no target and for `marginal`.
+  Off by default; off, a spec and a state file are written byte for byte as
+  before, and no output moves. A learn mask is the `weight` column, as
+  before: a row of weight 0 is scored and teaches nothing.
 - **`dcc`, dynamic conditional correlation fitted one row at a time** (task
   493, with task 514's recursion): the full correlation matrix of `k` return
   series, Engle's (2002) DCC or, with `asymmetric=True`, Cappiello, Engle
