@@ -562,6 +562,20 @@ const READ_ANEW: &[(&str, f64)] = &[
 /// none, and converts to the current bytes exactly.
 const COUNTED_ZERO_WEIGHT: &[&str] = &["audit", "audit_exact", "audit_scaled"];
 
+/// The `kalman` case whose kept states were saved after rows that observed
+/// no target (rule 5's thirty-fifth exception, the user's, 2026-11-24: "No
+/// concern for continuing differently here"; review 2026-11-23, KAL-6).
+/// Under `standardize` the moments' floor reads the moments' own gap, the
+/// clock since the last row of weight above 0, which a state keeps as
+/// `moments_gap` from schema 72; a state of 71 or earlier holds none, and
+/// reads the clock since a target was observed, which is not the moments'
+/// gap after such rows (here 2, where this build keeps 0). The rows are not
+/// in the state, so no loader can know it. Such a state loads, continues to
+/// the bit of its frozen continuation, and saves bytes that load back the
+/// same; it is not held to the current fixture's bytes. The sets `v64/` to
+/// `v71/`.
+const MOMENTS_GAP: &[&str] = &["kalman_noise_units"];
+
 /// The `corrchange` cases whose statistics were replaced with no layout
 /// changed (rule 5's twenty-seventh exception, the user's, 2026-11-22:
 /// "Switch to the new statistics"; PLAN 553): `monitor` is the linear
@@ -1082,6 +1096,16 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     named(&again.state()) == saved,
                     "{what}: saved, loaded, saved"
                 );
+            } else if schema <= 71 && MOMENTS_GAP.contains(&f.name) {
+                // The moments' gap ([`MOMENTS_GAP`]): today's reading, held
+                // to loading back the same.
+                let saved = named(&m.state());
+                let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    named(&again.state()) == saved,
+                    "{what}: saved, loaded, saved"
+                );
+                assert!(saved != current.bytes(), "{what}: now converts exactly");
             } else if renumbered.is_some() {
                 assert_eq!(schema, 65, "{what}: RENUMBERED is for schema 65's windows");
                 renumbered_rule(&case, &named(&m.state()), &current.bytes(), &|_| 0.0, &what);
@@ -3149,6 +3173,11 @@ fn kalmans_square_root_is_written_as_its_factor() {
             "{}",
             f.name
         );
+        // The moments' gap (schema 72, rule 5's thirty-fifth exception):
+        // written in the case saved after rows with no target, the clock
+        // since the last row that moved the moments, 0; in no other.
+        let want = (f.name == "kalman_noise_units").then_some(0.0);
+        assert_eq!(gap.and_then(rmpv::Value::as_f64), want, "{}", f.name);
     }
 }
 

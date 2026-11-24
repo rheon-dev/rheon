@@ -2968,13 +2968,20 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 } else {
                     want
                 };
+                let centred: Vec<Within>;
+                let within = if moved_by_the_centred_mean(schema, f.name) {
+                    centred = [CONTINUES_WITHIN, CENTRED_MEAN].concat();
+                    &centred[..]
+                } else {
+                    CONTINUES_WITHIN
+                };
                 if windowed {
                     same_within(
                         &format!("{what}: {name}, the first row"),
                         &got.slice(0, 1),
                         &want.slice(0, 1),
                         tol,
-                        CONTINUES_WITHIN,
+                        within,
                     );
                 }
                 let tol = if windowed
@@ -2985,13 +2992,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 } else {
                     tol
                 };
-                same_within(
-                    &format!("{what}: {name}"),
-                    got,
-                    &want,
-                    tol,
-                    CONTINUES_WITHIN,
-                );
+                same_within(&format!("{what}: {name}"), got, &want, tol, within);
             }
         }
     }
@@ -3245,6 +3246,24 @@ fn fallback_cells(kept: &DataFrame, want: &DataFrame, got: &DataFrame) -> DataFr
         .collect();
     DataFrame::new(want.height(), columns).unwrap()
 }
+
+/// The kept bank fixture whose frozen frame a spread over a window read
+/// with the uncentred truncated mean (rule 5's thirty-fourth exception, the
+/// user's, 2026-11-24: "No concern for continuing differently here"; review
+/// 2026-11-23, CWIN-3). The window's mean is now `m + r (m − m_old)`, `r =
+/// f w_old / w`, which keeps the digits of the spread where `(w_now m − f
+/// w_old m_old) / w` lost those of the level, so the `spread_window`
+/// spec's `sigma_y` reads one ulp apart from the frozen frame on the first
+/// row after the load (`0.06739974994500426` where it froze
+/// `0.06739974994500428`). The state's bytes do not move: it converts to
+/// the current fixture's exactly, and every other field goes on to the bit.
+fn moved_by_the_centred_mean(schema: u32, name: &str) -> bool {
+    schema <= 71 && name == "bank"
+}
+
+/// [`moved_by_the_centred_mean`]'s field and bound, relative to `1 +
+/// |frozen|`: one ulp of the measured value is 1.4e-17 of it.
+const CENTRED_MEAN: &[Within] = &[("spread_window", &["sigma_y"], 1e-15)];
 
 fn moved_by_the_mean_weight(schema: u32, name: &str) -> bool {
     schema <= 71 && MEAN_WEIGHT_MOVED.contains(&name)

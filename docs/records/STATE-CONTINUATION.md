@@ -842,3 +842,55 @@ but `cusum_*`, `break_wald_*` and `calibration_wald_*` goes on to its frozen
 frames to the bit, and those three go on to the bit wherever the frozen
 value is a number and to a finite number where it is `None`. The current
 fixture `bank_diagnosed` regenerated, and freezes the three sums.
+
+A thirty-fourth, the user's (2026-11-24: "No concern for continuing
+differently here"; review 2026-11-23, CWIN-3): a mean over a window is the
+running mean less a snapshot's, and is now formed centred, `m + r·(m −
+m_old)` with `r = f·w_old / w`, where `(w_now·m − f·w_old·m_old) / w` was
+(`truncated_mean` and `truncated_scalar`, `crates/rheon-core/src/window.rs`).
+The old form rounds as the level does: at a level of `1e8` a window holding
+1% of the weight read 1.5e-7 off the exact value of its doubles, and at
+`1e305` with a weight of `1e5` it overflowed to NaN. Against exact
+rationals (Python's `fractions`) over 180,000 draws in 90 cells, the
+centred form's largest and median error are at or under the old form's in
+every cell, and it is exact where the two means are equal or nothing is
+subtracted. No layout changes and no state's bytes move: every core
+fixture, current and kept, loads, continues and converts as before. What
+moves is a read: the bank fixture's `spread_window` spec reads `sigma_y`
+one ulp apart on the first row after a load (`0.06739974994500426` where
+it froze `0.06739974994500428`). The current `bank` fixture regenerated
+(on macOS). The kept `bank` fixtures of schema 71 and earlier are held by
+`moved_by_the_centred_mean` and `CENTRED_MEAN`
+(`crates/rheon-polars/tests/state_fixtures.rs`): each loads, converts to
+the current fixture's bytes exactly, and goes on to its frozen frames to
+the bit in every field but `spread_window.sigma_y`, which is held within
+1e-15 of `1 + |frozen|` (one ulp of the measured value is 1.4e-17 of it).
+Only `v71/bank` holds a value that moved.
+
+A thirty-fifth, the user's (2026-11-24: "No concern for continuing
+differently here"; review 2026-11-23, KAL-6 claim (2)): under
+`standardize`, `kalman`'s floor on the moments' history, which reads the
+history at no less than the row's own weight on a row more than a
+half-life after the moments last moved, reads the moments' own gap: the
+clock since the last row of weight above 0. It read the clock since a
+target was last observed, which runs on across rows that observe no target
+although such rows move the moments, so the floor opened on 16 of 20 such
+rows at a half-life of 5, and bound where such a row weighed more than the
+history's decayed weight. The gap is kept in the state as `moments_gap`
+(schema 72, unreleased, no bump), written last, after the covariance form,
+and only where it is not the clock since a target was observed, so a
+state whose last row of weight above 0 observed a target keeps its bytes.
+A state of schema 71 or earlier holds no gap, and the rows before its save
+are not in it, so no loader can know it: it reads the clock since a target
+was observed, today's reading, until its next row of weight above 0. Where
+the last such row before its save observed no target, that is not the gap
+this build keeps from the same rows, so its continuation is not this
+build's. The case `kalman_noise_units` is saved after three rows with no
+target (its clock since a target 2, the moments' gap 0); its kept sets
+`v64/` to `v71/` are held by `MOMENTS_GAP`
+(`crates/rheon-core/tests/state_fixtures.rs`): each loads, continues to its
+frozen continuation to the bit, and saves bytes that load back the same; it
+is not held to the current fixture's bytes. The current fixture
+`kalman_noise_units` regenerated (on macOS), and freezes `moments_gap`;
+every other `kalman` case, current and kept, converts to the current
+bytes exactly.

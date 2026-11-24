@@ -1839,10 +1839,14 @@ pub fn truncated_mean(
     if w <= EMPTY_FRACTION * w_now || !w.is_finite() {
         return None;
     }
+    // Centred: `m + (f·w_old / w)(m − m_old)` loses the digits of the
+    // spread, where `(w_now·m − f·w_old·m_old) / w` lost those of the level
+    // (review 2026-11-23, CWIN-3).
+    let r = f * w_old / w;
     let out = mean
         .iter()
         .zip(mean_old)
-        .map(|(m, m0)| (w_now * m - f * w_old * m0) / w)
+        .map(|(m, m0)| m + r * (m - m0))
         .collect();
     Some((w, out))
 }
@@ -1860,7 +1864,7 @@ pub fn truncated_scalar(
     if w <= EMPTY_FRACTION * w_now || !w.is_finite() {
         return None;
     }
-    Some((w, (w_now * mean - f * w_old * mean_old) / w))
+    Some((w, mean + (f * w_old / w) * (mean - mean_old)))
 }
 
 #[cfg(test)]
@@ -2030,6 +2034,88 @@ mod tests {
             q.take(tiny);
             assert_eq!(q.since(before), 0.0, "{tiny:e}");
             assert!(q.0 >= Product::DOWN && q.0 <= 1.0);
+        }
+    }
+
+    /// CWIN-3 (the 2026-11-23 review, PLAN 578d): the window's mean as
+    /// `(w_now·m − f·w_old·m_old) / w` loses the digits of the level, not of
+    /// the spread: its rounding is `ε (w_now |m| + f w_old |m_old|) / w`. At
+    /// a level of `1e8`, a window holding 1% of the weight reads
+    /// `100000001.30000068` where the expression of these doubles is
+    /// `100000001.30000053`, 1.5e-7 off. The centred `m + r (m − m_old)`,
+    /// `r = f w_old / w`, rounds `r (m − m_old)`, the window's distance from
+    /// the running mean, and then the sum: within `3 ε r |m − m_old|` and one
+    /// ulp of the value, which each case here is held to.
+    ///
+    /// Each `want` is the expression of the case's doubles in exact
+    /// rationals (Python's `fractions`), rounded to the nearest double. The
+    /// uncentred form reads the four cases 1.5e-7, 3.9e-18, 3.6e-4 and
+    /// 1.1e-13 off; the centred reads them 1.0e-14, 5.9e-17, 2.9e-6 and
+    /// 2.1e-15 off. Over 180,000 draws at levels from 0 to `1e12`, spreads
+    /// from `1e-6` to `1e3` and windows holding a half to a millionth of
+    /// the weight, the centred form's largest and median error were at or
+    /// under the uncentred form's in each of the 90 cells, by the factor
+    /// `(w_now / w) |level| / |m − m_old|` where there is a level.
+    ///
+    /// Settled by that. The centred form moves the bank fixture's
+    /// `spread_window.sigma_y` by one ulp on the first row after a load, in
+    /// the current set and in `v71/bank`'s frozen frame, which is compared
+    /// at a tolerance for that field (rule 5's thirty-fourth exception, the
+    /// user's, 2026-11-24).
+    #[test]
+    fn a_truncated_mean_keeps_the_spreads_digits_at_a_level() {
+        let cases = [
+            (
+                (1.0, 1e8 + 0.31, 1.1, 1e8 + 0.3, 0.9),
+                100_000_001.300_000_53,
+            ),
+            ((3.3, 0.1, 1.7, 0.7, 0.9), -0.418_644_067_796_610_2),
+            (
+                (7.0, 1e12 + 3.0, 6.0, 1e12 + 1.0, 0.999),
+                1_000_000_000_014.916_5,
+            ),
+            ((1.0, 2.5e-3, 1.0, 2.4e-3, 0.999_999), 100.002_399_997_124_7),
+        ];
+        for ((w_now, mean, w_old, mean_old, f), want) in cases {
+            let (w, m) = truncated_scalar(w_now, mean, w_old, mean_old, f).unwrap();
+            assert!(w > 0.0);
+            let r = f * w_old / w;
+            let ulp = f64::EPSILON * f64::abs(want);
+            let bound = 3.0 * f64::EPSILON * r * (mean - mean_old).abs() + ulp;
+            assert!(
+                (m - want).abs() <= bound,
+                "{m} is {:e} off the window's mean {want}, past {bound:e}",
+                m - want
+            );
+            // The slice form is the scalar's, element by element.
+            let (ws, ms) =
+                truncated_mean(w_now, &[mean, mean_old], w_old, &[mean_old, mean], f).unwrap();
+            assert_eq!((ws.to_bits(), ms[0].to_bits()), (w.to_bits(), m.to_bits()));
+            let (_, other) = truncated_scalar(w_now, mean_old, w_old, mean, f).unwrap();
+            assert_eq!(ms[1].to_bits(), other.to_bits());
+        }
+    }
+
+    /// CWIN-3, the centred form's exact cases: with nothing to subtract
+    /// (`f = 0`) the window's mean is the running mean, and a window whose
+    /// mean is the snapshot's reads it, whatever the weights; and a level
+    /// near the largest double does not overflow on the way (`w_now·m` does
+    /// at `1e305` with a weight of `1e5`, and reads NaN).
+    #[test]
+    fn a_truncated_mean_of_equal_means_is_that_mean() {
+        for (w_now, w_old, f) in [(3.3, 1.7, 0.9), (1e5, 0.9e5, 0.9), (7.0, 6.0, 0.999)] {
+            for m in [0.1, -3.7e-9, 1e8 + 0.31, 1e305] {
+                let (_, got) = truncated_scalar(w_now, m, w_old, m, f).unwrap();
+                assert!(
+                    got.to_bits() == m.to_bits(),
+                    "the window's mean of equal means {m:e} read {got:e}"
+                );
+                let (w, got) = truncated_scalar(w_now, m, w_old, 0.7, 0.0).unwrap();
+                assert!(
+                    w == w_now && got.to_bits() == m.to_bits(),
+                    "with nothing to subtract the mean {m:e} read {got:e}"
+                );
+            }
         }
     }
 

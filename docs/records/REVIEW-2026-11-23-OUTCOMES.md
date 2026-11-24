@@ -167,7 +167,7 @@ batch d's.
 | KAL-3 | confirmed (`R/w = 1e-250/1e100 = 0`: the factor's `P` after the row was `1.3e-250` where the covariance form's is `2.0e-251`), fixed: Carlson's update at `α = 0` is its limit, a column with `f_j = 0` kept and the first other zeroed, as the covariance form's exact observation. The review's gate (`r > 0`) was not taken: it would refuse a row the covariance form learns | `kalman/tests/review.rs::an_exact_observation_is_the_same_in_both_forms` | 6dd64679 |
 | KAL-4 | confirmed (back from the square root, `P`'s diagonal held its roots), fixed: squared again, within an ulp of the start | `kalman/tests/review.rs::a_form_given_and_given_back_leaves_the_covariance_as_it_was` | 6dd64679 |
 | KAL-5 | confirmed on a state set by hand (the review's note: unreachable from the bank), fixed: the readout's gap noise stays off an open intercept | `kalman/tests/review.rs::a_diffuse_intercepts_readout_takes_no_noise_of_the_gap` | 6dd64679 |
-| KAL-6 | (2) **confirmed; fix held** (below, "Follow-ups"): rows that learn the features and observe no target opened the moments' floor on 16 of 20 such rows at a half-life of 5. (1) the documented rule: on a grid coarser than the half-life every row is "more than one half-life after a target was last learned" | `kalman/tests/review.rs::rows_with_no_target_leave_the_moments_floor_shut` (`should_panic`) | 6dd64679 |
+| KAL-6 | (2) confirmed, fixed in the follow-ups (below, "Follow-ups"; rule 5's thirty-fifth exception): rows that learn the features and observe no target opened the moments' floor on 16 of 20 such rows at a half-life of 5. (1) the documented rule: on a grid coarser than the half-life every row is "more than one half-life after a target was last learned" | `kalman/tests/review.rs::rows_with_no_target_leave_the_moments_floor_shut` (`should_panic`) | 6dd64679 |
 | KAL-7 | confirmed on a state set by hand (`c = 2000`, `P = v vᵀ` with `v ⊥ (1, c)`: `-9.3e-10`; a stream that shifted a feature by `1e5` of its scale did not reproduce it), fixed: `current_diagonal`'s intercept and `prior_quad` clamp a rounding below 0, as `coef_variance_of` does | `kalman/tests/review.rs::the_intercepts_variance_in_the_current_coordinates_is_never_below_0` | 6dd64679 |
 | BOCPD-1 | confirmed, both (a row of no share left the joint NaN; under `robust` the empty run's weight of 0 made every row after the first a failure), fixed: a weight of 0 passes its run on as it is, and a second pass whose joint is not a number refuses the row. The review's mode check is a `debug_assert`: once BOCPD-5's variance is a finite number above 0 the mode is too | `bocpd/review_tests.rs::a_row_of_no_share_leaves_the_joint_a_number`, `::a_robust_run_of_weight_0_passes_on_as_it_is` | 6d073513, 2a70fcc7 |
 | BOCPD-2 | confirmed (0.404 nats off on the review's values), fixed: a block's partial products are read where its least value is below `2^-127`, the only way one falls below the normal numbers (an overflowing partial stays infinite and the last one's range refuses it). The review's `[1e-35, 1e35]` was not taken: it moves every block outside it | `bocpd/review_tests.rs::a_sum_of_logs_holds_through_a_product_that_passes_the_subnormals` | 6d073513, 2a70fcc7 |
@@ -214,7 +214,8 @@ spread. Not measured on x86.
   form and say in `covs`' docstring that features whose given variances
   differ by more than `2^100` are floored. **Recommendation: (a)**: the
   shape is what `covs` says, and the flag keeps every saved state.
-- **KAL-6 (2)** (option (a) chosen; held on a fixture, below): under
+- **KAL-6 (2)** (option (a) chosen; landed under rule 5's thirty-fifth
+  exception, below): under
   `standardize`, rows that learn the features but
   observe no target leave the moments without a gap, yet the floor on
   their history reads the clock since a target was observed, so it opens
@@ -259,9 +260,12 @@ The coordinator chose option (a) for both HMM-3 and KAL-6 (2).
   the affected configuration at 4 features pays the shaped path, diag
   1.01 and full 1.02 against a control of 1.00 and 1.01; every other
   configuration's path is unchanged.
-- **KAL-6 (2): held, stopped on a fixture.** The fix is on
-  `fix-578f-followups-kal6-held` (fec71253): the moments' own gap, the
-  clock since the last row of weight above 0, kept as `moments_gap`, and
+- **KAL-6 (2): landed** (fec71253, merged), after a stop on a fixture,
+  under the user's word (2026-11-24: "No concern for continuing
+  differently here"), rule 5's thirty-fifth exception: `MOMENTS_GAP`
+  holds `kalman_noise_units`' kept sets to loading, continuing to the bit
+  and saving bytes that load back the same. The fix: the moments' own
+  gap, the clock since the last row of weight above 0, kept as `moments_gap`, and
   written, last and after the covariance form, only where it is not the
   clock since a target was observed (so the positional encoding never
   reads one in the other's place); a state without it reads that clock,
@@ -271,21 +275,25 @@ The coordinator chose option (a) for both HMM-3 and KAL-6 (2).
   past the floor. Outputs move only where the floor binds: a row after a
   run of missing targets longer than a half-life that weighs more than
   the history's decayed weight (with even weights on a regular clock,
-  none past a stream's first rows). The stop: `kalman_noise_units` is saved after three rows with no
-  target, so this build writes a gap of 0 where its clock since a target
-  is 2, and its v64 to v71 files, which load with today's reading (2),
-  continue to the bit but convert to other bytes than the regenerated
-  current fixture
+  none past a stream's first rows). The stop: `kalman_noise_units` is
+  saved after three rows with no target, so this build writes a gap of 0
+  where its clock since a target is 2, and its v64 to v71 files, which
+  load with today's reading (2), continue to the bit but convert to other
+  bytes than the regenerated current fixture
   (`every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes`
-  fails on them alone). No loader can know the gap, which an old state
+  failed on them alone). No loader can know the gap, which an old state
   does not hold; reading it as 0 (true of every state a bank wrote, since
   the bank hands no row of weight 0) breaks the other cases, saved after
-  rows of weight 0. The options: an exception for that case's previous
-  sets, held to loading, continuing to the bit and saving bytes that load
-  back the same (rule 5's, the user's); or keep KAL-6 (2) as the
-  documented rule. Per-row cost (as above): `kalman`, 4 features,
+  rows of weight 0. Per-row cost (as above): `kalman`, 4 features,
   `standardize`, a target missing one row in five, 0.97 against a
   control of 1.01, no measurable change.
+- **CWIN-3 (batch d's): landed here** under the same word, rule 5's
+  thirty-fourth exception: the centred truncated mean
+  (`review-578d-CWIN-3-centred-v2.patch`, adapted: its two tests, held by
+  `should_panic` on `review-578d`, are carried here as plain tests). No
+  core fixture moved; the current `bank` fixture regenerated (its frames'
+  last bits), and `v71/bank` is held at 1e-15 of `1 + |frozen|` on
+  `spread_window.sigma_y` alone (`moved_by_the_centred_mean`).
 
 ## Batch g: the regressions: `ewridge`, `sgd`, `ftrl`, `huber`/`quantile` and their refits, `holt`, `lasso` and LARS, `constraint`, the Gram merge (PLAN 578g)
 

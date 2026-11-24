@@ -2078,6 +2078,24 @@ model that only the new build has is listed as an addition and passes.
   the floor bound on; elsewhere, to the bit. A state saved before this
   change reads the clock since a target was observed until its next row
   of weight above 0. Moves: `kalman.pred_*`, `kalman.coef`.
+- **A window's mean keeps the digits of its spread at a level** (review
+  2026-11-23, CWIN-3). A mean over a `window` is the running mean less a
+  snapshot's, formed as `(w_now·m − f·w_old·m_old) / w`, whose rounding is
+  that of the level: at a level of `1e8`, a window holding 1% of the
+  weight read 1.5e-7 off the exact value of its doubles, and at `1e305`
+  with a weight of `1e5` the product overflowed and read NaN. It is now
+  centred, `m + r·(m − m_old)` with `r = f·w_old / w`, whose rounding is
+  that of the window's distance from the running mean. Against exact
+  rationals over 180,000 draws in 90 cells (levels 0 to `1e12`, spreads
+  `1e-6` to `1e3`, windows holding a half to a millionth of the weight),
+  its largest and median error are at or under the old form's in every
+  cell, and it is exact where the two means are equal or nothing is
+  subtracted. What reads it moves in its last bits under a `window`: the
+  residual spread a bank keeps (and what reads it: `zscore`, the conformal
+  band, the drift scale, `emit_selected` and `emit_averaged`), `ewridge`'s
+  residual variance and `lasso`'s selection errors (the bank fixture's
+  `sigma_y` by one ulp). Moves: `*.sigma_*`, `*.zscore_*`, `*.lo_*`,
+  `*.hi_*`, `*.coverage_*`, `*.pred_*`, `ewridge.*`, `lasso.*`.
 - **`bocpd` keeps its joint a number** (review 2026-11-23, BOCPD-1,
   BOCPD-3 and BOCPD-5). A run that cannot have produced a row has
   tempered likelihood `π⁰ = 1` under `robust` and at a row of no share,
