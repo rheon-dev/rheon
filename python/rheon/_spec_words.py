@@ -178,6 +178,24 @@ def refusal(who: str, problems: Sequence[Exception]) -> Exception:
 #: row for good, and the Rust side's refusal says why.
 _INF_REFUSED_BY_RUST = frozenset({"gap_cap", "session_gap", "min_weight"})
 
+#: ``holt``'s keys written only when given, as the Rust spec skips them
+#: when absent: the trend switch and the seasonal forms' settings.
+_HOLT_OPTIONAL = frozenset(
+    {
+        "trend",
+        "seasonal",
+        "seasonal_periods",
+        "season_length",
+        "seasonal_half_life",
+        "damping_half_life",
+        "start",
+        "initial_level",
+        "initial_trend",
+        "initial_seasonal",
+        "max_state_bytes",
+    }
+)
+
 _INF_OK: dict[str, frozenset[str]] = {
     "*": frozenset(
         {
@@ -240,21 +258,7 @@ _INF_OK: dict[str, frozenset[str]] = {
 #: 2026-10-05, the TB5 leg). ``holt``'s ``trend`` is written only when off,
 #: and its seasonal forms' settings only when given.
 _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
-    "holt": frozenset(
-        {
-            "trend",
-            "seasonal",
-            "seasonal_periods",
-            "season_length",
-            "seasonal_half_life",
-            "damping_half_life",
-            "start",
-            "initial_level",
-            "initial_trend",
-            "initial_seasonal",
-            "max_state_bytes",
-        }
-    ),
+    "holt": _HOLT_OPTIONAL,
     "hawkes": frozenset(
         {"kernel_half_lives", "window_events", "window_size", "closed", "max_state_bytes"}
     ),
