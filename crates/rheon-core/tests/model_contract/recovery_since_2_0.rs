@@ -8,17 +8,6 @@
 // forgets, and held to a finite state that goes on learning where it keeps
 // every row (a digest, a count).
 
-/// The script with each target made positive, for the families whose
-/// targets must be: `|y|`, a bound staying a bound.
-fn positive(rows: Vec<Row>) -> Vec<Row> {
-    rows.into_iter()
-        .map(|mut r| {
-            r.y.iter_mut().for_each(|y| *y = y.map(f64::abs));
-            r
-        })
-        .collect()
-}
-
 /// The script with `d` features: the two it has, and `d - 2` more drawn
 /// from them, a bound where the row's first feature is one.
 fn widened(rows: Vec<Row>, d: usize) -> Vec<Row> {
