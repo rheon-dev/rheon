@@ -102,9 +102,11 @@ fn an_empty_clock_window_counts_no_clock() {
         m.step(&[], &[Some(1.0)], 0.25, 1.0);
     }
     let w = m.window.as_ref().unwrap();
+    // The newer block holds the first row at the block's start and each
+    // later row by its gap to the row before it (HAWKES-7), so the stretch
+    // of `1e16` is in no gap: the three after the first are 0.25 each.
     let time: Vec<f64> = w.time.iter().copied().collect();
-    let gaps: Vec<f64> = time.windows(2).map(|p| p[1] - p[0]).collect();
-    assert_eq!(gaps, [0.25, 0.25, 0.25], "times {time:?}");
+    assert_eq!(time, [0.0, 0.25, 0.25, 0.25], "times {time:?}");
 }
 
 /// HAWKES-3 (1) and (2): `max_state_bytes` is held to the ceiling every

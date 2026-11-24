@@ -101,7 +101,7 @@ pub struct VectorArFit {
 }
 
 /// `out = a · b` for row-major `n × m` and `m × r`.
-fn matmul(a: &[f64], b: &[f64], n: usize, m: usize, r: usize) -> Vec<f64> {
+fn mat_mul(a: &[f64], b: &[f64], n: usize, m: usize, r: usize) -> Vec<f64> {
     let mut out = vec![0.0; n * r];
     for i in 0..n {
         for q in 0..m {
@@ -271,7 +271,7 @@ impl VectorArFit {
             let mut acc = vec![0.0; k * k];
             for j in 1..=i.min(self.order) {
                 let prev = &phi[(i - j) * k * k..(i - j + 1) * k * k];
-                let p = matmul(prev, self.a(j - 1), k, k, k);
+                let p = mat_mul(prev, self.a(j - 1), k, k, k);
                 for (o, v) in acc.iter_mut().zip(p) {
                     *o += v;
                 }
@@ -297,7 +297,7 @@ impl VectorArFit {
             return vec![f64::NAN; phi.len()];
         };
         phi.chunks(k * k)
-            .flat_map(|ph| matmul(ph, &p, k, k, k))
+            .flat_map(|ph| mat_mul(ph, &p, k, k, k))
             .collect()
     }
 
@@ -342,16 +342,16 @@ impl VectorArFit {
         for _ in 0..periods {
             let u = &pow[..k * kq];
             let va = match &p {
-                Some(p) if orth => matmul(&transpose(p, k, k), u, k, k, kq),
+                Some(p) if orth => mat_mul(&transpose(p, k, k), u, k, k, kq),
                 _ => u.to_vec(),
             };
-            vs.push(matmul(&va, &sig_lag, k, kq, kq));
+            vs.push(mat_mul(&va, &sig_lag, k, kq, kq));
             v.push(va);
-            pow = matmul(&pow, &comp_t, kq, kq, kq);
+            pow = mat_mul(&pow, &comp_t, kq, kq, kq);
         }
         // `Φ_m Σ_u`.
         let phis: Vec<Vec<f64>> = (0..=periods)
-            .map(|m| matmul(&phi[m * k * k..(m + 1) * k * k], &self.sigma_u, k, k, k))
+            .map(|m| mat_mul(&phi[m * k * k..(m + 1) * k * k], &self.sigma_u, k, k, k))
             .collect();
         for i in 1..=periods {
             for a in 0..k {
@@ -422,7 +422,7 @@ impl VectorArFit {
             let mut ds = vec![0.0; kk];
             ds[r * k + c] = 1.0;
             ds[c * k + r] = 1.0;
-            let x = matmul(&matmul(&pinv, &ds, k, k, k), &pinv_t, k, k, k);
+            let x = mat_mul(&mat_mul(&pinv, &ds, k, k, k), &pinv_t, k, k, k);
             let mut phi = vec![0.0; kk];
             for i in 0..k {
                 for j in 0..i {
@@ -430,7 +430,7 @@ impl VectorArFit {
                 }
                 phi[i * k + i] = 0.5 * x[i * k + i];
             }
-            let dp = matmul(p, &phi, k, k, k);
+            let dp = mat_mul(p, &phi, k, k, k);
             for i in 0..k {
                 for j in 0..k {
                     h[(j * k + i) * nv + col] = dp[i * k + j];
@@ -460,8 +460,8 @@ impl VectorArFit {
                 ssig[v1 * nv + v2] = 2.0 * s;
             }
         }
-        let hs = matmul(&h, &ssig, kk, nv, nv);
-        matmul(&hs, &transpose(&h, kk, nv), kk, nv, kk)
+        let hs = mat_mul(&h, &ssig, kk, nv, nv);
+        mat_mul(&hs, &transpose(&h, kk, nv), kk, nv, kk)
     }
 
     /// The forecast-error variance decomposition, `k × H × k`: equation,
@@ -481,8 +481,8 @@ impl VectorArFit {
                 *c += t * t;
             }
             let ph = &phi[h * kk..(h + 1) * kk];
-            let m = matmul(
-                &matmul(ph, &self.sigma_u, k, k, k),
+            let m = mat_mul(
+                &mat_mul(ph, &self.sigma_u, k, k, k),
                 &transpose(ph, k, k),
                 k,
                 k,
