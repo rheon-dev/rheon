@@ -433,6 +433,8 @@ def gmm(
         ``"not_identified"``, ``"not_separated"`` and ``"not_converged"``
         for the condition of the start that failed (*The start* in Notes),
         and ``"above_max_state_bytes"`` once the buffer is at its bound.
+        The ``Enum`` holds every model's reasons and, after them, these
+        last two, which only a ``gmm`` spec's holds.
 
     ``coef`` holds one position a component, ``component<j>``: its weight,
     its mean (one term a feature), then its covariance with ``reg_covar``,
@@ -528,9 +530,10 @@ def gmm(
     3. the fit has stopped moving: the rows added since the last try score
        under the new fit at most ``3 p / n`` above their score under the
        last try's, for ``p`` free parameters and a buffer of Kish size
-       ``n`` (``"not_converged"``). Out of sample, a converged fit from half
-       the rows loses about ``p / n`` on the new rows, and in sample the new
-       fit gains ``p / (2 n)`` of optimism, so a converged fit gains about
+       ``n`` (``"not_converged"``). On the new rows, which it was not fitted
+       to, a converged fit from half the rows loses about ``p / n``, and the
+       new fit, fitted to them, gains ``p / (2 n)`` of optimism, so a
+       converged fit gains about
        ``3 p / (2 n)``; one still moving gains a constant a row, which no
        bound of that order admits as ``n`` grows.
 

@@ -1504,10 +1504,9 @@ impl OwnWait {
 /// scale ratio moved, which no model with an earlier reason has;
 /// `not_separated` last (PLAN 505), `pca`'s wait for components whose eigenvalues
 /// the rows have not yet told apart; `level_beyond_sample` after it (task
-/// 544), a `tdigest` or `ddsketch` level its rows do not identify yet;
-/// `not_converged` and `above_max_state_bytes` after it (PLAN 506), `gmm`'s
-/// start whose fit still moves between tries, and its buffer at its bound.
-pub const WITHHELD_REASONS: [&str; 12] = [
+/// 544), a `tdigest` or `ddsketch` level its rows do not identify yet.
+/// A spec's `Enum` holds the reasons it can name ([`withheld_reasons`]).
+pub const WITHHELD_REASONS: [&str; 10] = [
     "below_min_settled_frac",
     "below_min_weight",
     "above_max_error_inflation",
@@ -1518,9 +1517,41 @@ pub const WITHHELD_REASONS: [&str; 12] = [
     "scale_ratio_moved",
     "not_separated",
     "level_beyond_sample",
-    "not_converged",
-    "above_max_state_bytes",
 ];
+
+/// `gmm`'s own reasons, after every shared one (PLAN 506; the Mac,
+/// 2026-11-24): a start whose fit still moves between tries of its buffer,
+/// and a buffer at its `max_state_bytes` with no start. Only a `gmm` spec's
+/// `Enum` holds them, so every other spec's output keeps the dtype it had:
+/// a dtype is part of what a reader's code checks.
+pub const GMM_WITHHELD_REASONS: [&str; 2] = ["not_converged", "above_max_state_bytes"];
+
+/// A `gmm` spec's categories: every shared reason, then its own two, so a
+/// code is the same index into either list.
+static GMM_REASON_ENUM: [&str; WITHHELD_REASONS.len() + GMM_WITHHELD_REASONS.len()] = {
+    let mut out = [""; WITHHELD_REASONS.len() + GMM_WITHHELD_REASONS.len()];
+    let mut i = 0;
+    while i < WITHHELD_REASONS.len() {
+        out[i] = WITHHELD_REASONS[i];
+        i += 1;
+    }
+    let mut j = 0;
+    while j < GMM_WITHHELD_REASONS.len() {
+        out[i + j] = GMM_WITHHELD_REASONS[j];
+        j += 1;
+    }
+    out
+};
+
+/// The categories of `spec`'s `withheld_reason` `Enum`: the shared
+/// reasons, and on a `gmm` its own two after them, the one kind that can
+/// name them.
+pub fn withheld_reasons(spec: &Spec) -> &'static [&'static str] {
+    match &spec.model {
+        ModelKind::Gmm(_) => &GMM_REASON_ENUM,
+        _ => &WITHHELD_REASONS,
+    }
+}
 const REASON_SETTLED: u8 = 1;
 const REASON_MIN_PERIODS: u8 = 2;
 const REASON_INFLATION: u8 = 3;
@@ -1531,8 +1562,9 @@ const REASON_NOT_IDENTIFIED: u8 = 7;
 const REASON_SCALE_RATIO: u8 = 8;
 const REASON_NOT_SEPARATED: u8 = 9;
 const REASON_BEYOND_SAMPLE: u8 = 10;
-const REASON_NOT_CONVERGED: u8 = 11;
-const REASON_ABOVE_MAX_STATE_BYTES: u8 = 12;
+// `gmm`'s two follow the shared list, whatever its length.
+const REASON_NOT_CONVERGED: u8 = WITHHELD_REASONS.len() as u8 + 1;
+const REASON_ABOVE_MAX_STATE_BYTES: u8 = WITHHELD_REASONS.len() as u8 + 2;
 
 /// The settled fraction at which a readiness notice judges a stream
 /// (docs/WARMUP-AND-CONVERGENCE.md §3): the one rule all three notices

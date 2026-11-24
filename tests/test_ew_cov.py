@@ -374,8 +374,6 @@ class TestAccumulateOnly:
             "scale_ratio_moved",
             "not_separated",
             "level_beyond_sample",
-            "not_converged",
-            "above_max_state_bytes",
         ]
         assert out.schema["c"] == pl.Struct(
             {

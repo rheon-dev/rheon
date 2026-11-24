@@ -706,6 +706,21 @@ class TestInvariants:
         )
         assert set(reasons(out)) <= REASONS | {None}
 
+    def test_only_a_gmm_specs_enum_holds_its_two_reasons(self):
+        own = ["not_converged", "above_max_state_bytes"]
+        df = frame(30)
+        g = rp.spec.gmm("g", features=["x0", "x1"], n_components=2, half_life=50.0)
+        out = rp.ModelBank([spec(), g]).fit_predict(df)
+
+        def categories(name: str) -> list[str]:
+            (dtype,) = [f.dtype for f in out.schema[name].fields if f.name == "withheld_reason"]
+            assert isinstance(dtype, pl.Enum), dtype
+            return dtype.categories.to_list()
+
+        shared = categories("m")
+        assert not set(own) & set(shared), shared
+        assert categories("g") == shared + own
+
     def test_field_order_and_names(self):
         s = spec(coef_every=1, emit_error_inflation=True)
         assert rp.spec.output_fields(s) == [

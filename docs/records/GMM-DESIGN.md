@@ -212,10 +212,20 @@ every check (no switching).
 | `dist` | `f64` | the Mahalanobis distance to `cluster`'s component |
 | `n_eff` (`weight_sum`) | `f64` | rule 8, unchanged |
 | `coef` | `list[list[f64]]` | per component, its weight, mean and covariance (packed), on `coef_every` rows, through the existing `coef` plumbing |
-| `withheld_reason` | as every model | `"warm_up"` before the gate is tried, `"not_separated"` while gate 2 fails |
+| `withheld_reason` | as every model, and two of its own | `"below_warm_rows"` before the gate is tried, then the condition that failed: `"not_identified"` (gate 1), `"not_separated"` (gate 2), `"not_converged"` (gate 3), and `"above_max_state_bytes"` at the buffer's bound (built 2026-11-24) |
 
 The fields follow `kmeans`' (`cluster`, `dist`, `membership`), so a user
-switches between the two without renaming.
+switches between the two without renaming. As built, the responsibilities
+are one field each, `membership_<j>`, as `hmm`'s posteriors are.
+
+**The two new reasons** (the Mac, 2026-11-24). `not_converged` and
+`above_max_state_bytes` follow every shared reason, and only a `gmm`
+spec's `withheld_reason` `Enum` holds them (`stream::withheld_reasons`),
+so no other spec's dtype changes; their codes are the shared list's length
+plus one and two. At the merge they go after `target_not_positive`, the
+shared list's last reason there. `not_converged` will be shared with
+`dist_fit` (branch F) at the merge, which names the same condition: a fit
+that has not stopped moving. Nothing is added for F on this branch.
 
 **State**, bounded by the shape and never by the stream (the study's §15):
 

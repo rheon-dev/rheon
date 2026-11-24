@@ -359,6 +359,14 @@ MEANING_BY_MODEL: dict[tuple[str, str], str] = {
     ),
     ("gmm", "dist"): "the row's Mahalanobis distance to `cluster`'s component",
     ("gmm", "log_density"): "the row's log-density under the mixture, `log f(x)`",
+    ("gmm", "withheld_reason"): (
+        "why the row's fields are null, as for every model, and two reasons only a `gmm` "
+        "spec's `Enum` holds, after the shared ones: `not_converged`, a start whose fit still "
+        "moves between tries of its buffer, and `above_max_state_bytes`, a buffer at its "
+        "`max_state_bytes` with no start, which is never forced. Before the start, "
+        "`below_warm_rows` until the start is first tried, then `not_identified` or "
+        "`not_separated` for the condition that failed"
+    ),
     ("gmm", "membership_<j>"): (
         "component `<j>`'s responsibility for the row, from 0; they sum to 1"
     ),
@@ -492,8 +500,7 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "withheld_reason",
         "why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, "
         "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, "
-        "`not_identified`, `scale_ratio_moved`, `not_separated`, `level_beyond_sample`, "
-        "`not_converged` or `above_max_state_bytes`. That order is their "
+        "`not_identified`, `scale_ratio_moved` or `not_separated`. That order is their "
         "precedence, so the first that applies is the one named. `below_warm_rows` is the "
         "model's own warm-up, the rows "
         "`kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for "
@@ -509,10 +516,7 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "`scale_ratio_moved` is a `corrchange` span past its critical value whose two columns' "
         "scale ratio moved inside it, so its `flag` is null. `not_separated` is a `pca` component "
         "the data does not yet tell apart from a neighbor: the test of the equality of their two "
-        "eigenvalues does not pass, or a `gmm` start whose fit does not beat one fewer "
-        "component by `delta_bic`. `not_converged` is a `gmm` start whose fit still moves "
-        "between tries of its buffer, and `above_max_state_bytes` a `gmm` buffer at its "
-        "`max_state_bytes` with no start",
+        "eigenvalues does not pass",
         "where nothing was withheld",
     ),
     (

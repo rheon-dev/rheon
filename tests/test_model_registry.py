@@ -121,8 +121,8 @@ MINIMAL: dict[str, dict[str, object]] = {
 #: and ``power_variation`` (measures of a target's variation, not its value),
 #: ``pca`` (components, no target), ``tdigest`` and ``ddsketch`` (a target's
 #: quantiles, read from the rows before it), ``ewm_moments`` (moments of
-#: the columns) and ``spectral`` (a target's power at chosen periods) -- sit
-#: them out.
+#: the columns), ``spectral`` (a target's power at chosen periods) and
+#: ``gmm`` (a mixture's components, no target) -- sit them out.
 REGRESSIONS = frozenset(MINIMAL) - {
     "ew_cov",
     "kmeans",
@@ -146,6 +146,7 @@ REGRESSIONS = frozenset(MINIMAL) - {
     "ddsketch",
     "ewm_moments",
     "spectral",
+    "gmm",
 }
 
 
@@ -310,6 +311,7 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "expectile",
             "holt",
             "kmeans",
+            "gmm",
             "micro",
             "ew_class",
             "seqtest",
