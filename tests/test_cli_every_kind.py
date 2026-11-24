@@ -160,6 +160,7 @@ OUTPUTS: dict[str, Any] = dict(
     tails_half_life=40.0,
     emit_feature_health=True,
     feature_health_half_life=40.0,
+    emit_target_weight=True,
 )
 #: What a least-squares fit adds.
 LS: dict[str, Any] = dict(
@@ -502,6 +503,7 @@ CASES: list[Case] = [
             gap_cap=6.0,
             **CLOSE,
             emit_clocks=True,
+            emit_target_weight=True,
             a="ra",
             b="rb",
             a_suffix="__r0.001",
@@ -633,6 +635,7 @@ CASES: list[Case] = [
             "label": "lab",
             "classes": ["down", "up"],
             "covariance_type": "tied",
+            "emit_target_weight": True,
             "precision_prior": 0.5,
         },
     ),
@@ -713,7 +716,13 @@ CASES: list[Case] = [
     Case(
         "hawkes",
         "hawkes",
-        {**STREAM, **CLOSE, "targets": ["hit", "y"], "kernel_decays": [0.5, 2.0]},
+        {
+            **STREAM,
+            **CLOSE,
+            "targets": ["hit", "y"],
+            "kernel_decays": [0.5, 2.0],
+            "emit_target_weight": True,
+        },
     ),
     Case("hawkes2", "hawkes", {**STREAM2, "targets": ["hit", "y"], "kernel_decays": [0.5, 2.0]}),
     # The kernels by their half-lives, as a temporal clock gives them.
@@ -760,7 +769,14 @@ CASES: list[Case] = [
     Case(
         "realized",
         "realized",
-        {**NOCOEF, **CLOSE, "targets": ["y", "x0"], "lm_window": 30, "lm_beta": 0.95},
+        {
+            **NOCOEF,
+            **CLOSE,
+            "targets": ["y", "x0"],
+            "lm_window": 30,
+            "lm_beta": 0.95,
+            "emit_target_weight": True,
+        },
     ),
     Case("realized2", "realized", {**NOCOEF2, "targets": ["y", "x0"]}),
     Case(
@@ -798,6 +814,7 @@ CASES: list[Case] = [
             **NOCOEF,
             **CLOSE,
             "targets": ["y", "x0"],
+            "emit_target_weight": True,
             "terms": {
                 "rv": {"powers": [2]},
                 "bv": {"powers": [1, 1], "normalize": True},
@@ -893,6 +910,7 @@ CASES: list[Case] = [
             "periods": [8.0, 3.0],
             "spacing": 1.0,
             "detrend": False,
+            "emit_target_weight": True,
             "max_state_bytes": 1 << 20,
         },
     ),
@@ -934,6 +952,7 @@ CASES: list[Case] = [
             "dist": "t",
             "start_rows": 50,
             "horizon": 3,
+            "emit_target_weight": True,
             "max_state_bytes": 1 << 20,
         },
     ),
@@ -946,6 +965,7 @@ CASES: list[Case] = [
             **STREAM,
             "targets": ["y", "x0", "x1"],
             "asymmetric": True,
+            "emit_target_weight": True,
             "vol": "gjr",
             "dist": "t",
             "margin_start_rows": 50,
@@ -1070,6 +1090,7 @@ CASES: list[Case] = [
             "targets": ["y", "x0"],
             "quantiles": [0.05, 0.25, 0.95],
             "compression": 200.0,
+            "emit_target_weight": True,
             "max_state_bytes": 1 << 20,
         },
     ),
@@ -1096,6 +1117,7 @@ CASES: list[Case] = [
             "alpha": 0.01,
             "window_rows": 60,
             "max_state_bytes": 1 << 20,
+            "emit_target_weight": True,
         },
     ),
     # A clock window, the other stream keys.
