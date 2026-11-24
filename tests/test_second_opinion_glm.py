@@ -278,3 +278,79 @@ def test_under_decay_the_target_is_the_decayed_likelihood(family):
         f = sm.GLM(y, X, family=sm_family(family), freq_weights=v).fit(tol=1e-12, maxiter=200)
     gap = float(np.max(np.abs(got - np.asarray(f.params)) / np.asarray(f.bse)))
     assert gap <= 0.15, gap
+
+
+# --- the binomial, the canonical links, a second power, weights (TEST-3) -----
+#
+# The statistical tests above read the log link of three families at unit
+# weights: the binomial, Gamma's inverse link, Tweedie's power link, a power
+# other than 1.5 and rows of uneven weight had no oracle (PLAN 578j, TEST-3).
+
+
+def linked(case: str, n: int, seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict, object]:
+    """A design whose truth is linear on ``case``'s link: the rows, the
+    target, uneven weights (0.5 to 2), the spec's family keywords and
+    statsmodels' family."""
+    rng = np.random.default_rng([578, 3, seed, len(case)])
+    X = np.column_stack([np.ones(n), rng.standard_normal((n, 2))])
+    w = rng.uniform(0.5, 2.0, n)
+    links = sm.families.links
+    if case == "binomial":
+        mu = 1.0 / (1.0 + np.exp(-(X @ [0.2, 0.8, -0.5])))
+        return X, (rng.random(n) < mu).astype(float), w, {"family": "binomial"}, sm_family(case)
+    if case == "gamma inverse":
+        mu = 1.0 / np.clip(X @ [1.0, 0.15, -0.1], 0.2, None)
+        y = rng.gamma(2.0, mu / 2.0)
+        return (
+            X,
+            y,
+            w,
+            {"family": "gamma", "link": "inverse"},
+            sm.families.Gamma(links.InversePower()),
+        )
+    p = 1.5 if case == "tweedie power" else 1.2
+    if case == "tweedie power":
+        mu = np.clip(X @ [0.8, 0.08, -0.08], 0.2, None) ** (1.0 / (1.0 - p))
+        family = sm.families.Tweedie(links.Power(1.0 - p), var_power=p)
+        kw = {"family": "tweedie", "link": "power", "var_power": p}
+    else:
+        mu = np.exp(X @ [0.5, 0.3, -0.2])
+        family = sm.families.Tweedie(links.Log(), var_power=p)
+        kw = {"family": "tweedie", "var_power": p}
+    lam = mu ** (2 - p) / (PHI * (2 - p))
+    count = rng.poisson(lam)
+    y = np.zeros(n)
+    pos = count > 0
+    y[pos] = rng.gamma(count[pos] * (2 - p) / (p - 1), PHI * (p - 1) * mu[pos] ** (p - 1))
+    return X, y, w, kw, family
+
+
+@pytest.mark.parametrize("case", ["binomial", "gamma inverse", "tweedie power", "tweedie 1.2"])
+@pytest.mark.parametrize("weighted", [False, True])
+def test_each_family_and_link_is_statsmodels_fit(case, weighted):
+    """At 10,000 rows, no decay and the defaults (a refit of the first
+    rows, then the one pass), the coefficients are statsmodels' maximum
+    likelihood fit of the same rows, weighted as the bank weighs them
+    (``freq_weights``), within 0.25 of its standard errors."""
+    n = 10_000
+    X, y, w, kw, family = linked(case, n, 0)
+    weights = w if weighted else np.ones(n)
+    s = rp.spec.glm(
+        "m",
+        targets=["y"],
+        features=["x1", "x2"],
+        half_life=float("inf"),
+        **kw,
+        **({"weight": "w"} if weighted else {}),
+    )
+    bank = rp.ModelBank([s])
+    bank.fit(frame(X, y).with_columns(w=w))
+    got = np.array([r["coef"] for r in bank.coef().iter_rows(named=True)])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        f = sm.GLM(y, X, family=family, freq_weights=weights).fit(
+            method="IRLS", tol=1e-12, maxiter=200
+        )
+    gap = float(np.max(np.abs(got - np.asarray(f.params)) / np.asarray(f.bse)))
+    print(f"{case}, weighted {weighted}: {gap:.3f} SE")
+    assert gap <= 0.25, (got, np.asarray(f.params), gap)
