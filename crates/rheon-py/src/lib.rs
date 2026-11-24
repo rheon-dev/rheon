@@ -1582,6 +1582,62 @@ fn psquared_reads(values: Vec<f64>, levels: Vec<f64>) -> PyResult<Vec<Vec<Option
     Ok(out)
 }
 
+/// The SARIMA(X) filter at fixed parameters over one series, row by row:
+/// each row's prediction of the differenced value and of the value, from
+/// the rows before it (NaN where none can be formed). `params` is
+/// statsmodels' flat vector in `SARIMAX(...).param_names`' order, `exog`
+/// a row of regressors a row, and a null value a slot not observed. The
+/// core's filter itself, with no clock, weight or group: what the
+/// comparison with statsmodels' `SARIMAX.filter` runs, row for row.
+#[pyfunction]
+#[pyo3(signature = (y, order, seasonal_order, params, exog=None))]
+fn sarima_filter(
+    y: Vec<Option<f64>>,
+    order: [usize; 3],
+    seasonal_order: [usize; 4],
+    params: Vec<f64>,
+    exog: Option<Vec<Vec<f64>>>,
+) -> PyResult<(Vec<f64>, Vec<f64>)> {
+    use rheon_polars::rheon_core::{Sarima, SarimaCfg, SarimaParams};
+    let k = exog.as_ref().and_then(|x| x.first()).map_or(0, Vec::len);
+    if exog
+        .as_ref()
+        .is_some_and(|x| x.len() != y.len() || x.iter().any(|r| r.len() != k))
+    {
+        return Err(PyValueError::new_err(
+            "sarima_filter: exog must hold one row of the same length for each value of y",
+        ));
+    }
+    let prm = SarimaParams::from_flat(&params, k, order, seasonal_order).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "sarima_filter: params holds {} values, which is not the orders' count",
+            params.len()
+        ))
+    })?;
+    let mut model = Sarima::new(SarimaCfg {
+        n_targets: 1,
+        n_features: k,
+        order,
+        seasonal_order,
+        params: vec![prm],
+        spacing: 1.0,
+        min_weight: 0.0,
+        // The most a group's state may hold: a season of 168 or more is
+        // filtered here whatever the bank's default cap would say.
+        max_state_bytes: Some(64 << 20),
+    })
+    .map_err(PyValueError::new_err)?;
+    let (mut w_hat, mut y_hat) = (Vec::with_capacity(y.len()), Vec::with_capacity(y.len()));
+    let none: Vec<f64> = Vec::new();
+    for (t, v) in y.into_iter().enumerate() {
+        let x = exog.as_ref().map_or(&none, |x| &x[t]);
+        let (w, p) = model.filter_row(x, &[v.filter(|v| v.is_finite())], 0)[0];
+        w_hat.push(w);
+        y_hat.push(p);
+    }
+    Ok((w_hat, y_hat))
+}
+
 /// The merging t-digest's estimate at each of `levels` after every one of
 /// `values` (each of weight 1) at `compression`: the core's digest itself,
 /// with no clock, weight or group, which the agreement test with the
@@ -1919,6 +1975,7 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_spec, m)?)?;
     m.add_function(wrap_pyfunction!(parse_duration, m)?)?;
     m.add_function(wrap_pyfunction!(psquared_reads, m)?)?;
+    m.add_function(wrap_pyfunction!(sarima_filter, m)?)?;
     m.add_function(wrap_pyfunction!(tdigest_quantiles, m)?)?;
     m.add_function(wrap_pyfunction!(tdigest_tail_means, m)?)?;
     m.add_function(wrap_pyfunction!(tdigest_centroids, m)?)?;

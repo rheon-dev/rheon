@@ -3744,7 +3744,54 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             2
         ),
+        // A SARIMA(X) at fixed parameters over two targets: each target's
+        // ring past its differencing's fill, with slots not observed (nulls,
+        // zero weights, the clock's steps of 9) predicted through, and its
+        // filter's state and covariance.
+        case!(
+            "sarima",
+            "Sarima",
+            Sarima,
+            Sarima::new(sarima_cfg()).unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Saved two rows in: the differencing's ring still filling, the
+        // filter not yet begun.
+        case!(
+            "sarima_filling",
+            "Sarima",
+            Sarima,
+            Sarima::new(sarima_cfg()).unwrap(),
+            K,
+            Targets::Linear(2),
+            2
+        ),
     ]
+}
+
+/// SARIMA(1,1,1)(0,1,1,4) with the case's two features as regressors, each
+/// target its own parameters.
+fn sarima_cfg() -> SarimaCfg {
+    let params = |beta: f64| SarimaParams {
+        exog: vec![beta, -0.5],
+        ar: vec![0.4],
+        ma: vec![0.3],
+        seasonal_ar: vec![],
+        seasonal_ma: vec![-0.5],
+        sigma2: 0.8,
+    };
+    SarimaCfg {
+        n_targets: 2,
+        n_features: K,
+        order: [1, 1, 1],
+        seasonal_order: [0, 1, 1, 4],
+        params: vec![params(1.0), params(0.7)],
+        spacing: 1.0,
+        min_weight: 2.0,
+        max_state_bytes: None,
+    }
 }
 
 /// Rows before `dcc_margins`' save: past its margins' start, within the

@@ -99,6 +99,7 @@ pub enum ModelState {
     EwmMoments(Box<crate::EwmMoments>),
     Ar(Box<crate::Ar>),
     Spectral(Box<crate::Spectral>),
+    Sarima(Box<crate::Sarima>),
 }
 
 #[derive(Debug, Error)]
@@ -230,6 +231,7 @@ impl ModelState {
             ModelState::EwmMoments(_) => "ewm_moments",
             ModelState::Ar(_) => "ar",
             ModelState::Spectral(_) => "spectral",
+            ModelState::Sarima(_) => "sarima",
         }
     }
 }

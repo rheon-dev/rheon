@@ -1786,3 +1786,95 @@ fn spectral_predict_is_the_step() {
         false,
     );
 }
+
+/// A SARIMA(1,1,1)(0,1,1,4) with the probe's two features as regressors,
+/// over two targets, at fixed parameters: each target's own.
+fn sarima_cfg() -> SarimaCfg {
+    let params = |beta: f64| SarimaParams {
+        exog: vec![beta, -0.5],
+        ar: vec![0.4],
+        ma: vec![0.3],
+        seasonal_ar: vec![],
+        seasonal_ma: vec![-0.5],
+        sigma2: 0.8,
+    };
+    SarimaCfg {
+        n_targets: 2,
+        n_features: K,
+        order: [1, 1, 1],
+        seasonal_order: [0, 1, 1, 4],
+        params: vec![params(1.0), params(0.7)],
+        spacing: 1.0,
+        min_weight: 3.0,
+        max_state_bytes: None,
+    }
+}
+
+#[test]
+fn sarima() {
+    // A prediction per target from its filter, before the row; `n_eff`
+    // every row's weight summed, with no decay (rule 8); the rings and the
+    // filter's state are what `clear_lags` starts again.
+    let r = probe_with(Sarima::new(sarima_cfg()).unwrap(), 2, Some(&Sarima::n_eff));
+    assert_eq!(r.kind, "sarima");
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 2);
+    assert_eq!(r.pred_len, 2);
+    assert!(r.roundtrips);
+    assert!(!r.lags_are_a_no_op);
+    let arma = SarimaCfg {
+        order: [2, 0, 1],
+        seasonal_order: [0, 0, 0, 0],
+        params: vec![
+            SarimaParams {
+                exog: vec![1.0, -0.5],
+                ar: vec![0.5, -0.2],
+                ma: vec![0.3],
+                seasonal_ar: vec![],
+                seasonal_ma: vec![],
+                sigma2: 1.0,
+            };
+            2
+        ],
+        ..sarima_cfg()
+    };
+    assert!(probe_with(Sarima::new(arma).unwrap(), 2, Some(&Sarima::n_eff)).roundtrips);
+}
+
+/// `sarima_cfg` with no differencing: the stream's clock steps of several
+/// slots leave slots with no features, whose values a differencing over
+/// regressors cannot form, so that spec reports on too few rows for the
+/// parity's count (`sarima/tests.rs` holds it there, on a stream without
+/// regressors).
+fn sarima_arma_cfg() -> SarimaCfg {
+    let params = |beta: f64| SarimaParams {
+        exog: vec![beta, -0.5],
+        ar: vec![0.4],
+        ma: vec![0.3],
+        seasonal_ar: vec![],
+        seasonal_ma: vec![-0.5],
+        sigma2: 0.8,
+    };
+    SarimaCfg {
+        order: [1, 0, 1],
+        seasonal_order: [0, 0, 1, 4],
+        params: vec![params(1.0), params(0.7)],
+        ..sarima_cfg()
+    }
+}
+
+#[test]
+fn sarima_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Sarima::new(sarima_arma_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(
+        || {
+            Sarima::new(SarimaCfg {
+                min_weight: 0.0,
+                ..sarima_arma_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
+}

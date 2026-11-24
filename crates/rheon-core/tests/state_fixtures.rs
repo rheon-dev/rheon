@@ -1502,7 +1502,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 35] = [
+    const FROZEN: [&str; 36] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1538,6 +1538,7 @@ fn the_variant_names_are_frozen() {
         "EwmMoments",
         "Ar",
         "Spectral",
+        "Sarima",
     ];
     assert_eq!(
         variants(),
@@ -1658,7 +1659,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 198] = [
+    const FORMS: [(&str, &[&str]); 205] = [
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.
@@ -2116,6 +2117,16 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("spectral_window", &["model", "Spectral", "win", "total"]),
         ("ar_filling", &["model", "Ar", "rings", "0"]),
         ("ar_filling", &["model", "Ar", "fits", "0", "acc"]),
+        // `sarima` (task 487): each target's ring and its flags, the
+        // filter's mean and covariance, the regressors' rings; filling,
+        // the ring alone.
+        ("sarima", &["model", "Sarima", "series", "1", "ys"]),
+        ("sarima", &["model", "Sarima", "series", "0", "a"]),
+        ("sarima", &["model", "Sarima", "series", "0", "p"]),
+        ("sarima", &["model", "Sarima", "xs", "1"]),
+        ("sarima", &["model", "Sarima", "cfg", "params", "1", "exog"]),
+        ("sarima_filling", &["model", "Sarima", "series", "0", "ys"]),
+        ("sarima_filling", &["model", "Sarima", "xs", "0"]),
     ];
     // Each refit's first stamp, written only under a span (task 538): in
     // glm on the summed clock, in expectile an integer stamp.

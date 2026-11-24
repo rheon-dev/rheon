@@ -265,7 +265,15 @@ fn probe_checked<M: OnlineModel + Clone>(
 /// move under `clear_lags`. Everything else must not: `clear_lags` is not a
 /// reset, and a model that quietly threw away a mean here would look like a
 /// decay bug three chunks later (docs/PLAN.md task 47).
-const KEEPS_LAGS: &[&str] = &["rcov", "corrchange", "ew_cov", "marginal", "ar", "spectral"];
+const KEEPS_LAGS: &[&str] = &[
+    "rcov",
+    "corrchange",
+    "ew_cov",
+    "marginal",
+    "ar",
+    "spectral",
+    "sarima",
+];
 
 /// The model that counts a value that is not usable rather than refusing
 /// it: `audit`, whose counts of nulls, NaNs and infinities are what it is for
@@ -287,11 +295,13 @@ const SPARSE_OUTPUT: &[&str] = &["corrchange", "garch"];
 /// would not be one if it forgot; `garch`, whose recursion is per
 /// observation and whose estimator weighs every row it learned; `tdigest`,
 /// a merging digest that cannot take a row out again; `ddsketch`, whose
-/// decayed form is refused (a window is its form that forgets). `probe_with` holds them to the sum where
+/// decayed form is refused (a window is its form that forgets); `sarima`,
+/// whose filter at fixed parameters weighs no row (decay is a weighted
+/// likelihood, not built). `probe_with` holds them to the sum where
 /// it holds every other model to rule 8's decayed recursion, so a model
 /// added here is a choice made in this file, not a default.
 const NO_DECAY: &[&str] = &[
-    "audit", "bocpd", "ddsketch", "garch", "rcov", "seqtest", "tdigest",
+    "audit", "bocpd", "ddsketch", "garch", "rcov", "sarima", "seqtest", "tdigest",
 ];
 
 /// Slots null by design except on a flag, which the ready count leaves out:

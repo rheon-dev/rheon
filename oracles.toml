@@ -5895,6 +5895,20 @@ tests = [
 oracles = { "numpy" = "2.5.2", "scipy" = "1.18.1" }
 dataset = ""
 
+# The SARIMA(X) filter at fixed parameters against SARIMAX.filter: three
+# specs up to s = 24, fifty seeds, 2,000 rows each. Its cost, measured
+# 2026-11-24 on a Linux x86-64 VM at a load of about 2: 62 s for the 150
+# filters and the simulations (SARIMAX 0.1 to 0.8 s a filter at 26 states).
+# s = 168 is left out of the grid for its cost: SARIMAX's dense filter at
+# 170 states took 492 s for 2,000 rows, so one spec at 600 rows sits in the
+# extended tier instead (test_a_season_of_168_is_sarimax_too).
+[group."sarima_filter.filter_grid"]
+tests = [
+    "tests/test_sarima_filter.py::test_fifty_seeds_of_each_spec_are_within_the_bound",
+]
+oracles = { "statsmodels" = "0.15.0" }
+dataset = ""
+
 [case."second_opinion_dcc.dcc_batch.adcc2_gap_se"]
 ideal = 0.0
 n = 50
@@ -6046,6 +6060,21 @@ floor = 40.0
 ideal = 0.0
 n = 50
 floor = 40.0
+
+[case."sarima_filter.filter_grid.airline_7_ulps"]
+ideal = 0.0
+n = 50
+floor = 8.0
+
+[case."sarima_filter.filter_grid.arma_24_ulps"]
+ideal = 0.0
+n = 50
+floor = 8.0
+
+[case."sarima_filter.filter_grid.full_24_ulps"]
+ideal = 0.0
+n = 50
+floor = 8.0
 
 # --- raises
 
