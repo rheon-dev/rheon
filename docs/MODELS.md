@@ -315,7 +315,7 @@ readiness fields:
 learn warn of a gate that will not open.** `summary()` adds
 `weight_sum_settled`, the weight `weight_sum` tops out at. Once
 `settled_frac` reaches 0.95, `fit`, `fit_predict`, `fit_predict_batches`
-and a query's `online.fit_predict` issue a `ReadinessWarning` that names,
+and a query's `rheon.fit_predict` issue a `ReadinessWarning` that names,
 once, a coefficient more ridge than data. It also names a noise gate or a
 `min_weight` that has withheld every row for a further half-life, and that
 the rows, at their rate so far, would not meet. It gives the half-life or

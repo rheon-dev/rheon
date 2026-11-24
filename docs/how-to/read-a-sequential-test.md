@@ -32,7 +32,7 @@ for a while and then negative, are even on average but break it, and the
 bet that follows the run grows.
 
 1. **Build a `seqtest` spec with the column in `targets=`.**
-2. **Add the spec to the query with `online.fit_predict([sign])`.**
+2. **Add the spec to the query with `rheon.fit_predict([sign])`.**
 3. **Run the query with `collect()`.** Each row gains `log_e_pos_<t>`,
    the log of the evidence that the sign tends positive, and
    `log_e_neg_<t>`, that it tends negative.

@@ -36,31 +36,31 @@ echo "interpreter: $PYBIN"
 
 WORK=$(cat <<'PY'
 import gc, os, sys
-import numpy as np, polars as pl, rheon.polars as po
+import numpy as np, polars as pl, rheon.polars as rp
 n = int(sys.argv[1])
 control = os.environ.get("LEAKCHECK_CONTROL") == "1"
 if control:
     import ctypes
 rng = np.random.default_rng(0)
-spec = po.spec.ewridge("m", targets=["y"], features=["x0", "x1"],
+spec = rp.spec.ewridge("m", targets=["y"], features=["x0", "x1"],
                        half_life=50.0, min_weight=2.0)
 cat = None
 for i in range(n):
     df = pl.DataFrame({"x0": rng.standard_normal(700), "x1": rng.standard_normal(700)})
     df = df.with_columns(y=pl.col("x0") * 2)
-    out = po.ModelBank([spec]).fit_predict(df)
+    out = rp.ModelBank([spec]).fit_predict(df)
     _ = out["m"].struct.field("pred_y").sum()
     # The other crossing. This was the expression plugin until task 85 removed
     # it; the Arrow PyCapsule path replaces it and is the better subject, since
     # its `release` callback runs in *this* binary and a capsule the consumer
     # never takes must still be freed -- exactly what this check is for.
-    structs = po.ModelBank([spec]).fit_predict_arrow(df)
+    structs = rp.ModelBank([spec]).fit_predict_arrow(df)
     _ = pl.Series(structs[0]).struct.field("pred_y").sum()
-    po.ModelBank([spec]).fit_predict_arrow(df)   # exported by nobody, dropped
+    rp.ModelBank([spec]).fit_predict_arrow(df)   # exported by nobody, dropped
     if cat is None:
         cat = df.with_columns(c=pl.col("x1").cast(pl.String).cast(pl.Categorical))
     try:                       # the error path, where release is easiest to miss
-        po.ModelBank([spec]).fit_predict(cat)
+        rp.ModelBank([spec]).fit_predict(cat)
     except Exception:
         pass
     if control:                # one Python object per iteration, never released

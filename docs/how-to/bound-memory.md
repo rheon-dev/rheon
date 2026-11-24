@@ -27,7 +27,7 @@ These steps need the library and a run that reads a file:
   `ticks.parquet`, 400 rows that Example data writes.
 - A run that reads a parquet file with `pl.scan_parquet`, which reads the
   file as a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads): a
-  query's `online.fit_predict`, `bank.fit_predict_batches`, or a loop of
+  query's `rheon.fit_predict`, `bank.fit_predict_batches`, or a loop of
   your own over its chunks.
 
 ## Put filters and computed columns after the bank

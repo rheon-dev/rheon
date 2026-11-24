@@ -112,10 +112,8 @@ RELEASE_BEFORE_2 = (
     "scripts/release_probe.py",
     "scripts/rheon_import.py",
     "scripts/bench_header.py",
-    "scripts/release_version.py",  # reads either name in the docs' pins
     "tests/data.py",
     "tests/test_released_state.py",
-    "tests/test_release_workflow.py",
     "tests/test_old_names.py",
 )
 
@@ -125,22 +123,8 @@ RELEASE_BEFORE_2 = (
 #: version a measurement was made on.
 PAST = (
     "docs/WRITING.md",  # the user's own wording, quoted
-    "docs/VALIDATION.md",  # the release the defaults were measured on
     "docs/contributing/cut-a-release.md",  # the last release before 2.0, by its project
     "docs/how-to/reproduce-an-earlier-versions-fit.md",  # installs 1.2.0
-)
-
-#: Not renamed yet: each still names the old project or links its old home.
-NOT_YET = (
-    ".github/workflows/ci.yml",
-    ".github/workflows/polars-canary.yml",
-    "examples/bank.toml",
-    "examples/pathway_integration.py",
-    "scripts/clustering_proto.py",
-    "scripts/ogbt_proto.py",
-    "scripts/doc_review.py",
-    "scripts/validate.py",
-    "tests/test_reference_pages.py",
 )
 
 CODE = (
@@ -178,7 +162,6 @@ RULES = (
             *RELEASE_BEFORE_2,
             *NAMES_THE_OLD,
             *PAST,
-            *NOT_YET,
             # The note under the title says what the package was called.
             "README.md",
             "llms.txt",
@@ -196,7 +179,6 @@ RULES = (
         CODE + PROSE + GUIDES,
         allowed=(
             "tests/test_old_names.py",
-            *NOT_YET,
             *NAMES_THE_OLD,
             "scripts/budgets.py",  # the baseline's fallback: the last polars-online release
             "tests/test_budgets.py",
@@ -228,6 +210,20 @@ RULES = (
         ),
     ),
     Rule(
+        "the frame namespace is `.rheon`: a sentence names its calls `rheon.fit_predict`",
+        # The accessor named on its own in prose, with no frame before it:
+        # `online.fit_predict`, `.online`, which the rule above cannot see.
+        re.compile(r"`(?:\.online[`.]|online\.[A-Za-z_])"),
+        CODE + PROSE + GUIDES,
+        allowed=("tests/test_old_names.py", *NAMES_THE_OLD, *PAST),
+    ),
+    Rule(
+        "the command line is `rheon`, and a query's calls are `rheon.`: a guide says no `online`",
+        re.compile(r"(?<!`)`online`(?!`)"),
+        PROSE + GUIDES,
+        allowed=(*NAMES_THE_OLD, *PAST),
+    ),
+    Rule(
         "there is no public `gbdt` module: the helper for gradient-boosted trees is internal",
         re.compile(r"\b(?:rp|po)\.gbdt"),
         PROSE + GUIDES,
@@ -246,8 +242,21 @@ RULES = (
         # `po.` at the start of a word: not `repo.`, `expo.` or a variable
         # called `po` in a Rust test (`po.link`).
         re.compile(r"(?<![A-Za-z0-9_])po\\?\.[A-Za-z_]"),
-        ("python/*", "crates/*", "tests/test_*.py"),
+        # The guides too, and the scripts that write a guide or that a
+        # contributor runs as written.
+        (
+            "python/*",
+            "crates/*",
+            "tests/test_*.py",
+            *GUIDES,
+            "scripts/outputs_doc.py",
+            "scripts/leakcheck.sh",
+        ),
         allowed=(
+            *NAMES_THE_OLD,
+            *PAST,
+            # The records' table names each record's subject by the name it had.
+            "docs/README.md",
             "crates/rheon-core/src/sgd.rs",  # a local variable called `po`
             "tests/test_old_names.py",
             # Child interpreters that import the package as `po` (code in a
@@ -255,7 +264,6 @@ RULES = (
             "tests/test_budgets_memory.py",
             "tests/test_eval_query.py",
             "tests/test_ffi_memory.py",
-            "tests/test_hardening.py",
             "tests/test_kwargs_typing.py",
             "tests/test_marginal_shards.py",
             "tests/test_portability.py",
@@ -265,14 +273,8 @@ RULES = (
             "tests/test_threads.py",
             "tests/test_released_state.py",
             "tests/test_api_links.py",
-            "tests/test_llms_txt.py",
-            "tests/test_calibration_page.py",
-            "tests/test_diagnostics_page.py",
             "tests/test_doc_review.py",
             "tests/test_doc_structure.py",
-            "tests/test_feature_index.py",
-            "tests/test_readiness.py",
-            "tests/test_gram_page.py",
             "tests/test_gbdt_page.py",
         ),
     ),
@@ -331,6 +333,9 @@ def test_the_scan_sees_what_it_is_meant_to():
         "__polars_online_renamed__",
         "LazyFrameOnlineNamespace",
         "lf.online.fit_predict",
+        "a query's `online.fit_predict`",
+        "the `.online` namespace",
+        "the `online` command",
         "df\\.online\\.predict",
         "POLARS_ONLINE_TIMING",
         "po.spec.ewridge",
@@ -349,6 +354,9 @@ def test_the_scan_sees_what_it_is_meant_to():
         "github.com/rheon-dev/rheon",
         'b"polars-online-bank"',
         'b"\\xb5polars-online windows"',
+        "`online-learning`",
+        "online.append(row)",
+        "fit online.",
     ):
         assert not any(r.pattern.search(s) for r in RULES), s
     files = set(tracked_and_new())
@@ -356,3 +364,19 @@ def test_the_scan_sees_what_it_is_meant_to():
         for allowed in rule.allowed:
             assert allowed in files, f"{allowed} is allowed by a rule and is not a file"
     assert len(files) > 500
+
+
+def test_every_exemption_is_used():
+    """A file a rule allows holds a spelling one of the rules that allow it
+    is about, so an exemption outlives no rewrite (nine files once stayed
+    exempt after the rename had finished with them)."""
+    used: dict[str, bool] = {}
+    for rule in RULES:
+        for path in rule.allowed:
+            if path == "tests/test_old_names.py":
+                continue
+            text = (REPO / path).read_text(encoding="utf-8")
+            hit = matches(path, rule.trees) and bool(rule.pattern.search(text))
+            used[path] = used.get(path, False) or hit
+    stale = sorted(p for p, hit in used.items() if not hit)
+    assert not stale, f"exempt from every rule that allows them, and breaking none: {stale}"

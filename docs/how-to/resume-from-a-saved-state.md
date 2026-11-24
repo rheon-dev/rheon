@@ -84,7 +84,7 @@ Use a query, a chain of Polars steps that runs only when you ask for its
 result, when the next rows are in a file or a stream too large to hold.
 
 1. **Name the state file in `load_state=` on the query's
-   `online.fit_predict`,** as `later.rheon.fit_predict(load_state=...)`.
+   `rheon.fit_predict`,** as `later.rheon.fit_predict(load_state=...)`.
    The specs come from the file, so the call needs none. To have the load
    check them, pass them too.
 2. **Name a file in `save_state=` to save the state when the run reaches

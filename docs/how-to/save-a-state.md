@@ -32,7 +32,7 @@ at all, and the same to the byte whichever way wrote it:
 | run by | saves with | loads with |
 |---|---|---|
 | a bank object | `bank.save(path)`, or `bank.save_bytes()` for a store that is not a file | `rp.ModelBank.load(path)`, or `rp.ModelBank.load_bytes(blob)` |
-| a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) (a Polars `LazyFrame`, which runs only when you ask for its result) | `save_state=` on `online.fit_predict` | `load_state=` on `online.fit_predict`, or the path given to `online.predict` |
+| a [query](../GLOSSARY.md#the-model-bank-and-what-it-reads) (a Polars `LazyFrame`, which runs only when you ask for its result) | `save_state=` on `rheon.fit_predict` | `load_state=` on `rheon.fit_predict`, or the path given to `rheon.predict` |
 | the command line | `--save-state` | `--load-state` |
 
 [One state file, however the bank is
@@ -45,11 +45,11 @@ same bytes.
 On a query, `load_state=` and `save_state=` may name one file, because the
 state is read when the query is built and written whole or not at all.
 
-1. **Name the file in `save_state=` on `online.fit_predict`.** The state
+1. **Name the file in `save_state=` on `rheon.fit_predict`.** The state
    is written once the bank has been fed its last row.
 2. **Run the query,** here with `sink_parquet`, which runs it and writes
    the result to a file without holding it all in memory.
-3. **Serve from the file with `online.predict(path)`.**
+3. **Serve from the file with `rheon.predict(path)`.**
 4. **Continue from the file with `load_state=`,** naming the same file in
    `save_state=` to save again.
 5. **Load the file into a bank object with `rp.ModelBank.load`,** or its

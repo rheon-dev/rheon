@@ -35,7 +35,7 @@ same pass over the rows.
    `group="stock_id"`. The bank fits a separate model for each distinct
    value.
 2. **Fit the bank as you would without groups,** with `fit_predict`, `fit`
-   or a query's `online.fit_predict`. Each row's output comes from the
+   or a query's `rheon.fit_predict`. Each row's output comes from the
    model of that row's group.
 3. **List the groups with `bank.groups()`,** which gives each group's key,
    the rows it was fed and its last clock value.

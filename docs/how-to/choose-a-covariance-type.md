@@ -92,7 +92,7 @@ regimes average together, and the predicted classes go to chance.
    cover only the rows inside the [hard
    window](forget-rows-past-a-window.md), and a row is predicted against
    them. Without a clock, the units are rows.
-2. **Add both specs to the query with `online.fit_predict(specs)`.**
+2. **Add both specs to the query with `rheon.fit_predict(specs)`.**
 3. **Run the query with `collect()`.**
 4. **Score each stretch of rows after a move.**
 
@@ -143,7 +143,7 @@ parameter on a regression.
 
 1. **Give `embargo=` the delay, in the clock's units,** such as `"5m"` on
    a temporal clock. Without a clock, the units are rows.
-2. **Add the spec to the query with `online.fit_predict([late])`.**
+2. **Add the spec to the query with `rheon.fit_predict([late])`.**
 3. **Run the query with `collect()`.** Each row is predicted when it
    arrives, and its class is learned once that much clock has passed, so
    `class` stays null until the first classes have been learned.

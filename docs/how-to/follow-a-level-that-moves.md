@@ -32,7 +32,7 @@ the default fit lags behind.
 
 1. **Give the spec `c=10`, or larger.**
 2. **Fit the spec as you would at the default `c`,** with `fit_predict`, or
-   a query's `online.fit_predict`.
+   a query's `rheon.fit_predict`.
 
 On a target falling from 1,000 to −1,000 at 0.5 a row, at a
 [half-life](../GLOSSARY.md#time) of 200 rows and noise 0.3, three runs

@@ -57,7 +57,7 @@ rows in a file or a stream too large to hold. To serve a frame:
 
 To serve a query:
 
-1. **Call the query's `online.predict` with the loaded bank or the path of
+1. **Call the query's `rheon.predict` with the loaded bank or the path of
    the state file.** It reads a bank as it stands when the query runs, and
    a path when the query is built. To pick up a newer state file, build the
    query again.

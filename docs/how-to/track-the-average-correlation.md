@@ -43,7 +43,7 @@ once. An [`ew_cov`](../MODELS.md#ew_cov--exponentially-weighted-moments)'s
 3. **For the correlation's size, build an `ew_cov` with `stats=["corr"]`
    over the series of one block, such as the banks.**
 4. **Add both specs to the query with
-   `online.fit_predict([eq, pairs])`.**
+   `rheon.fit_predict([eq, pairs])`.**
 5. **Run the query with `collect()`.** Each row gains `rho`, the level as
    it stood before the row, so it is safe as a feature for that same row.
 6. **Average the `ew_cov`'s `corr_*` fields with Polars'

@@ -38,7 +38,7 @@ before each row as the threshold: it assumes no distribution.
 3. **Give `mahal_quantiles=[0.99]`.** Each row gains `mahal_q0.99`, the
    exponentially weighted 99th percentile of the distances before it, at
    the model's half-life. The row's own distance joins after it is read.
-4. **Add the spec to the query with `online.fit_predict([mv])`.** The
+4. **Add the spec to the query with `rheon.fit_predict([mv])`.** The
    rows gain the spec's output column, `mv`, which holds its fields.
 5. **Unnest `mv` with Polars' `unnest("mv")`.** Its fields become columns.
 6. **Run the query with `collect()`.** Each row then has `mahal` and

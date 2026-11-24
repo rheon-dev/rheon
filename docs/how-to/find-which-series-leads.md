@@ -41,7 +41,7 @@ defines them.
 2. **Add `"lag_corr"` to the spec's `stats`.** Each row gains
    `lag_corr_l<l>_<a>_<b>` for each lag and each ordered pair, the pairs of
    a column with itself included: `k²` fields a lag for `k` columns.
-3. **Add the spec to the query with `online.fit_predict([mv])`.** The
+3. **Add the spec to the query with `rheon.fit_predict([mv])`.** The
    rows gain the spec's output column, `mv`, which holds its fields.
 4. **Unnest `mv` with Polars' `unnest("mv")`.** Its fields become columns.
 5. **Run the query with `collect()`.** Each row then has the `lag_corr_*`
