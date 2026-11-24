@@ -160,7 +160,9 @@ pub(super) fn event(
 
 /// Whether a backward window read at policy time `tau`, raw clock `off`,
 /// spans its whole `window_size`: inside its stretch, and since its
-/// kernel's last `since` event.
+/// kernel's last `since` event. Inlined: every backward kernel's flush reads
+/// it, and a kernel with no `window_size` answers at the first test.
+#[inline]
 pub(super) fn complete(k: &KernelDef, q: &Queue, tau: f64, off: i64, form: OffForm) -> bool {
     k.window_size.is_none_or(|w| {
         tau >= w
