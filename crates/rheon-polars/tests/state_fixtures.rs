@@ -1079,6 +1079,86 @@ fn bocpd_hazard_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&bocpd_hazard_specs(), bytes, input)
 }
 
+/// The spec of the bank file `bank_target_weight`: `emit_target_weight`
+/// (docs/PLAN.md task 568, at schema 72 before its release), which writes
+/// the spec's switch and each stream's last row's `target_weight`, both
+/// skipped when off. An `ewridge` over two targets, `y2` null on one row in
+/// three and on the twenty rows before the save, on a grid of two
+/// half-lives with uneven weights, so each instance's last row holds a
+/// weight per target and `y2`'s is short of the shared one.
+fn target_weight_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "own_weights", "model": {"type": "ewridge"}, "targets": ["y", "y2"], "features": ["x0", "x1"], "clock": "t", "half_life": [8.0, 40.0], "gap_cap": 50.0, "weight": "w", "min_weight": 6.0, "emit_target_weight": true}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+/// [`frame`] with a second target, `y2`: `0.5 y + 1`, null on one row in
+/// three and on rows 60-79, the last before [`SPLIT`].
+fn target_weight_frame() -> DataFrame {
+    let mut df = frame();
+    let y = df.column("y").unwrap().f64().unwrap().clone();
+    let y2: Vec<Option<f64>> = y
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            v.filter(|_| i % 3 != 1 && !(60..SPLIT).contains(&i))
+                .map(|v| 0.5 * v + 1.0)
+        })
+        .collect();
+    df.with_column(Column::new("y2".into(), y2)).unwrap();
+    df
+}
+
+fn target_weight_first() -> (Vec<u8>, DataFrame) {
+    let df = target_weight_frame();
+    let mut bank = Bank::new(target_weight_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn target_weight_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&target_weight_specs(), bytes, input)
+}
+
+/// The `bank_target_weight` fixture freezes the forms `emit_target_weight`
+/// writes, each skipped when the switch is off: the spec's switch, and in
+/// each stream's last row one weight a target for each instance, `y2`'s
+/// below `y`'s (hard rule 5: a test holds the new forms non-empty).
+#[test]
+fn the_target_weight_fixture_freezes_its_forms() {
+    if regenerating() {
+        return;
+    }
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "bank_target_weight")
+        .expect("the target_weight fixture");
+    let v = rmpv::decode::read_value(&mut unhex(f.state).as_slice()).unwrap();
+    let mut all = Vec::new();
+    leaves(&v, "", &mut all);
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.ends_with(".emit_target_weight") && v.as_bool() == Some(true)),
+        "the spec's switch is not in the file"
+    );
+    let weights: Vec<f64> = all
+        .iter()
+        .filter(|(p, _)| p.contains(".last_row.target_weight."))
+        .map(|(_, v)| v.as_f64().expect("a weight is a number"))
+        .collect();
+    // Two instances of two targets, laid out instance by instance.
+    assert_eq!(weights.len(), 4, "{weights:?}");
+    for pair in weights.chunks(2) {
+        assert!(pair[1] > 0.0 && pair[1] < pair[0], "{weights:?}");
+    }
+}
+
 /// The specs of the fifth bank file, `bank_refit`: `huber` and
 /// `sgd(loss = "huber")` grouped, each refitting a target's first 20 rows
 /// (docs/PLAN.md task 277, schema 64). `huber`'s `refit_budget` holds two
@@ -2274,6 +2354,11 @@ fn kinds() -> Vec<Kind> {
             run: bocpd_hazard_run,
         },
         Kind {
+            name: "bank_target_weight",
+            first: target_weight_first,
+            run: target_weight_run,
+        },
+        Kind {
             name: "with_windows",
             first: windows_first,
             run: windows_run,
@@ -2786,7 +2871,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 17),
+            ("bank", 18),
             ("checkpoint", 1),
             ("merge", 3),
             ("refresh_time", 5),
