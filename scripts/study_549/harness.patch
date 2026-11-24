@@ -1,0 +1,727 @@
+diff --git a/crates/rheon-core/src/garch.rs b/crates/rheon-core/src/garch.rs
+index f3120f6f..ac3658d4 100644
+--- a/crates/rheon-core/src/garch.rs
++++ b/crates/rheon-core/src/garch.rs
+@@ -768,3 +768,5 @@ impl OnlineModel for Garch {
+ 
+ #[cfg(test)]
+ mod tests;
++#[cfg(test)]
++mod study549;
+diff --git a/crates/rheon-core/src/garch/fit.rs b/crates/rheon-core/src/garch/fit.rs
+index 309a8ff8..92e921a2 100644
+--- a/crates/rheon-core/src/garch/fit.rs
++++ b/crates/rheon-core/src/garch/fit.rs
+@@ -153,7 +153,7 @@ pub(super) fn clip_shape(shape: &mut [f64]) {
+ /// The buffer's weighted log-likelihood under a GARCH, GJR or EGARCH `θ`
+ /// (all `k` parameters), with the shape `shape` (empty: normal), its
+ /// gradient in `(θ, shape)` and its matrix.
+-fn likelihood(
++pub(super) fn likelihood(
+     vol: GarchVol,
+     dist: GarchDist,
+     k: usize,
+@@ -231,7 +231,7 @@ fn likelihood(
+ /// The buffer's weighted Gaussian log-likelihood under FIGARCH's `θ`, its
+ /// weights read once and each row's lags past the buffer's start the
+ /// backcast.
+-fn figarch_likelihood(rows: &[[f64; 2]], bc: f64, m: usize, theta: &[f64], grad: bool) -> Eval {
++pub(super) fn figarch_likelihood(rows: &[[f64; 2]], bc: f64, m: usize, theta: &[f64], grad: bool) -> Eval {
+     if !(theta[0] > 0.0 && (0.0..1.0).contains(&theta[3]) && (0.0..1.0).contains(&theta[2])) {
+         return Eval::bad(4);
+     }
+diff --git a/crates/rheon-core/src/garch/math.rs b/crates/rheon-core/src/garch/math.rs
+index cd0ee4f6..239cd8eb 100644
+--- a/crates/rheon-core/src/garch/math.rs
++++ b/crates/rheon-core/src/garch/math.rs
+@@ -32,17 +32,22 @@
+ /// `ln x`.
+ #[inline]
+ pub(super) fn ln(x: f64) -> f64 {
+-    libm::log(x)
++    if PLATFORM.with(|p| p.get()) { x.ln() } else { libm::log(x) }
+ }
+ 
+ /// `eˣ`.
+ #[inline]
+ pub(super) fn exp(x: f64) -> f64 {
+-    libm::exp(x)
++    if PLATFORM.with(|p| p.get()) { x.exp() } else { libm::exp(x) }
+ }
+ 
+ /// `ln(1 + x)`.
+ #[inline]
+ pub(super) fn ln_1p(x: f64) -> f64 {
+-    libm::log1p(x)
++    if PLATFORM.with(|p| p.get()) { x.ln_1p() } else { libm::log1p(x) }
++}
++
++thread_local! {
++    /// STUDY 549 (scratch, not committed): the platform's library in place of the libm crate.
++    pub(super) static PLATFORM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+ }
+diff --git a/crates/rheon-core/src/garch/optim.rs b/crates/rheon-core/src/garch/optim.rs
+index 472dfdcd..745519a0 100644
+--- a/crates/rheon-core/src/garch/optim.rs
++++ b/crates/rheon-core/src/garch/optim.rs
+@@ -23,6 +23,12 @@
+ 
+ use super::linalg::{cholesky, lu_solve, ridged};
+ 
++thread_local! {
++    /// STUDY 549 (scratch): each fit's stop, iterations, θ, f and gradient.
++    pub(super) static LOG: std::cell::RefCell<Vec<(Stop, u32, Vec<f64>, f64, Vec<f64>)>> =
++        const { std::cell::RefCell::new(Vec::new()) };
++}
++
+ pub(super) const MAX_ITER: u32 = 50;
+ const MAX_HALVINGS: u32 = 30;
+ const ARMIJO: f64 = 1e-4;
+@@ -72,7 +78,7 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
+ /// Minus the Jacobian of the analytic gradient by central differences,
+ /// symmetrized; `None` where a probe is not finite or it is not positive
+ /// definite.
+-fn curvature(obj: &dyn Fn(&[f64], bool) -> Eval, theta: &[f64], units: &[f64]) -> Option<Vec<f64>> {
++pub(super) fn curvature(obj: &dyn Fn(&[f64], bool) -> Eval, theta: &[f64], units: &[f64]) -> Option<Vec<f64>> {
+     let p = theta.len();
+     let mut m = vec![0.0; p * p];
+     for j in 0..p {
+@@ -206,6 +212,7 @@ pub(super) fn maximize(
+             break;
+         }
+     }
++    LOG.with(|l| l.borrow_mut().push((stop, it, theta.clone(), e.f, e.g.clone())));
+     Some(Fit {
+         theta,
+         iterations: it,
+diff --git a/crates/rheon-core/src/garch/study549.rs b/crates/rheon-core/src/garch/study549.rs
+new file mode 100644
+index 00000000..9dafeb3a
+--- /dev/null
++++ b/crates/rheon-core/src/garch/study549.rs
+@@ -0,0 +1,625 @@
++//! PLAN 549 study harness (scratch; applied with scripts/study_549/harness.patch,
++//! never merged): each series run twice, once on the platform's `ln`/`exp`/
++//! `ln_1p` and once on the `libm` crate's, and the two compared.
++//!
++//! `cargo test -p rheon-core --release --lib garch::study549 -- --ignored --nocapture`
++//! reads `.cache/study549/manifest.csv` (scripts/study_549/gen.py) and writes
++//! `.cache/study549/runs.csv` and `golden.csv`.
++
++use std::fmt::Write as _;
++use std::sync::atomic::{AtomicUsize, Ordering};
++
++use super::fit::{backcast, clip_shape, egarch_start_admits, figarch_likelihood, likelihood, set_of};
++use super::math::PLATFORM;
++use super::optim::{Eval, LOG, Stop, curvature, maximize};
++use super::*;
++use crate::model::Step;
++
++type Logged = (Stop, u32, Vec<f64>, f64, Vec<f64>);
++
++struct Run {
++    pred: Vec<f64>,
++    slots: usize,
++    theta: Vec<f64>,
++    fits: Vec<Logged>,
++    refits: u32,
++    sound: bool,
++    first: usize,
++}
++
++fn cfg(vol: GarchVol, dist: GarchDist, start: usize) -> GarchCfg {
++    GarchCfg {
++        n_targets: 1,
++        vol,
++        dist,
++        truncation: None,
++        variance_targeting: false,
++        start_rows: start,
++        start_span: None,
++        horizon: if vol == GarchVol::Egarch { 1 } else { 5 },
++        min_weight: 0.0,
++        max_state_bytes: None,
++    }
++}
++
++fn run(vol: GarchVol, dist: GarchDist, start: usize, r: &[f64], platform: bool) -> Run {
++    PLATFORM.with(|p| p.set(platform));
++    LOG.with(|l| l.borrow_mut().clear());
++    let c = cfg(vol, dist, start);
++    let slots = c.slots();
++    let mut m = Garch::new(c).unwrap();
++    let mut out = Step::default();
++    let mut pred = Vec::with_capacity(r.len() * slots);
++    for &e in r {
++        m.step_into(&[], &[Some(e)], 1.0, 1.0, &mut out);
++        pred.extend_from_slice(&out.pred);
++    }
++    let first = (0..r.len()).find(|&i| pred[i * slots].is_finite()).unwrap_or(r.len());
++    let (refits, sound) = m.start_report()[0];
++    Run {
++        pred,
++        slots,
++        theta: m.coefficients()[0].clone(),
++        fits: LOG.with(|l| std::mem::take(&mut *l.borrow_mut())),
++        refits,
++        sound,
++        first,
++    }
++}
++
++fn ulps(a: f64, b: f64) -> u64 {
++    if a.to_bits() == b.to_bits() {
++        return 0;
++    }
++    if a.is_nan() || b.is_nan() {
++        return u64::MAX;
++    }
++    let o = |x: f64| {
++        let i = x.to_bits() as i64;
++        if i < 0 { i64::MIN.wrapping_sub(i) } else { i }
++    };
++    o(a).abs_diff(o(b))
++}
++
++fn rel(a: f64, b: f64) -> f64 {
++    if a.to_bits() == b.to_bits() {
++        return 0.0;
++    }
++    if !(a.is_finite() && b.is_finite()) {
++        return f64::INFINITY;
++    }
++    (a - b).abs() / a.abs().max(b.abs())
++}
++
++/// max rel and max ulps over two slices
++fn diff(a: &[f64], b: &[f64]) -> (f64, u64) {
++    a.iter()
++        .zip(b)
++        .fold((0.0f64, 0u64), |(r, u), (&x, &y)| (r.max(rel(x, y)), u.max(ulps(x, y))))
++}
++
++/// Diagnostics of a fit at `theta` on `r`: the observed information's and
++/// the Gauss-Newton/BHHH matrix's smallest eigenvalue after scaling to unit
++/// diagonal (NaN where the observed one is not positive definite), the LR
++/// statistic against constant variance (same innovations), and the fit's f.
++fn diag(vol: GarchVol, dist: GarchDist, r: &[f64], theta: &[f64]) -> (f64, f64, f64, f64) {
++    let rows: Vec<[f64; 2]> = r.iter().map(|&e| [e, 1.0]).collect();
++    let bc = backcast(&rows);
++    let n = rows.len() as f64;
++    let v = rows.iter().map(|x| x[0] * x[0]).sum::<f64>() / n;
++    let k = vol.k();
++    let m = dist.shape_len();
++    let obj = |x: &[f64], g: bool| -> Eval {
++        match vol {
++            GarchVol::Egarch => {
++                if !egarch_start_admits(x, &rows, bc) {
++                    return Eval::bad(4);
++                }
++                likelihood(vol, dist, 4, &rows, bc, x, g)
++            }
++            GarchVol::Figarch => figarch_likelihood(&rows, bc, 1000, x, g),
++            _ => likelihood(vol, dist, k, &rows, bc, x, g),
++        }
++    };
++    let mut units = vec![1.0; k + m];
++    if !matches!(vol, GarchVol::Egarch) {
++        units[0] = v;
++    }
++    let e = obj(theta, true);
++    let p = theta.len();
++    let norm_min = |mat: &[f64]| -> f64 {
++        let mut c = vec![0.0; p * p];
++        for i in 0..p {
++            for j in 0..p {
++                let d = (mat[i * p + i] * mat[j * p + j]).sqrt();
++                c[i * p + j] = if d > 0.0 { mat[i * p + j] / d } else { 0.0 };
++            }
++        }
++        let (ev, _) = crate::oracle::sym_eigen(&c);
++        ev.iter().cloned().fold(f64::INFINITY, f64::min)
++    };
++    let obs = curvature(&obj, theta, &units).map_or(f64::NAN, |mm| norm_min(&mm));
++    let gn = norm_min(&e.h);
++    // the constant-variance model: (ω, shape) with α = β = 0
++    let f0 = if m == 0 {
++        -0.5 * n * (1.837_877_066_409_345_5 + math::ln(v) + 1.0)
++    } else {
++        let floor = 1e-6 * v;
++        let o = |x: &[f64], g: bool| -> Eval {
++            let mut th = vec![x[0], 0.0, 0.0];
++            th.extend_from_slice(&x[1..]);
++            let full = likelihood(GarchVol::Garch, dist, 3, &rows, bc, &th, g);
++            let mut gg = vec![full.g[0]];
++            gg.extend_from_slice(&full.g[3..]);
++            let q = 1 + m;
++            let idx: Vec<usize> = std::iter::once(0).chain(3..3 + m).collect();
++            let mut h = vec![0.0; q * q];
++            for (a, &i) in idx.iter().enumerate() {
++                for (b, &j) in idx.iter().enumerate() {
++                    h[a * q + b] = full.h[i * (3 + m) + j];
++                }
++            }
++            Eval { f: full.f, g: gg, h }
++        };
++        let proj = |x: &[f64]| {
++            let mut y = x.to_vec();
++            y[0] = y[0].max(floor);
++            clip_shape(&mut y[1..]);
++            y
++        };
++        let mut grid = Vec::new();
++        for s in [[5.0, 0.0], [10.0, 0.0], [7.0, -0.2]] {
++            let mut x = vec![v];
++            x.extend_from_slice(&s[..m]);
++            grid.push(x);
++        }
++        let mut u = vec![1.0; 1 + m];
++        u[0] = v;
++        let fit = maximize(&o, &proj, &grid, &u);
++        LOG.with(|l| l.borrow_mut().pop());
++        fit.map_or(f64::NAN, |f| o(&f.theta, false).f)
++    };
++    let _ = set_of;
++    (obs, gn, 2.0 * (e.f - f0), e.f)
++}
++
++fn parse_vol(s: &str) -> GarchVol {
++    match s {
++        "gjr" => GarchVol::Gjr,
++        "egarch" => GarchVol::Egarch,
++        "figarch" => GarchVol::Figarch,
++        _ => GarchVol::Garch,
++    }
++}
++
++fn parse_dist(s: &str) -> GarchDist {
++    match s {
++        "t" => GarchDist::T,
++        "skewt" => GarchDist::Skewt,
++        _ => GarchDist::Normal,
++    }
++}
++
++fn stop_name(s: Stop) -> &'static str {
++    match s {
++        Stop::Converged => "conv",
++        Stop::NoAscent => "noasc",
++        Stop::IterationCap => "cap",
++    }
++}
++
++fn dir() -> std::path::PathBuf {
++    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.cache/study549")
++}
++
++fn one(line: &str) -> String {
++    let f: Vec<&str> = line.split(',').collect();
++    let (name, vol, dist, start, set) = (f[0], parse_vol(f[1]), parse_dist(f[2]), f[3], f[4]);
++    let start: usize = start.parse().unwrap();
++    let bytes = std::fs::read(dir().join("data").join(format!("{name}.f64"))).unwrap();
++    let r: Vec<f64> = bytes
++        .chunks_exact(8)
++        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
++        .collect();
++    let mut out = format!("{name},{},{},{start},{set}", f[1], f[2]);
++    let pl = run(vol, dist, start, &r, true);
++    let rows_p = start << pl.refits;
++    let dp = if pl.fits.is_empty() || rows_p > r.len() {
++        (f64::NAN, f64::NAN, f64::NAN, f64::NAN)
++    } else {
++        diag(vol, dist, &r[..rows_p], &pl.fits.last().unwrap().2)
++    };
++    let lb = run(vol, dist, start, &r, false);
++    let rows_l = start << lb.refits;
++    let dl = if lb.fits.is_empty() || rows_l > r.len() {
++        (f64::NAN, f64::NAN, f64::NAN, f64::NAN)
++    } else {
++        diag(vol, dist, &r[..rows_l], &lb.fits.last().unwrap().2)
++    };
++    PLATFORM.with(|p| p.set(false));
++    let path = |run: &Run| {
++        run.fits
++            .iter()
++            .map(|f| format!("{}{}", stop_name(f.0), f.1))
++            .collect::<Vec<_>>()
++            .join("|")
++    };
++    let (st_rel, st_ulp) = match (pl.fits.last(), lb.fits.last()) {
++        (Some(a), Some(b)) => diff(&a.2, &b.2),
++        _ => (f64::NAN, u64::MAX),
++    };
++    let n = r.len();
++    let s = pl.slots;
++    let r0 = pl.first.max(lb.first);
++    let win = |lo: usize, hi: usize, only_var: bool| -> (f64, u64) {
++        let (lo, hi) = (lo.min(n), hi.min(n));
++        let mut acc = (0.0f64, 0u64);
++        for i in lo..hi {
++            let sl = if only_var { 0..1 } else { 0..s };
++            let (rr, uu) = diff(&pl.pred[i * s..][sl.clone()], &lb.pred[i * s..][sl]);
++            acc = (acc.0.max(rr), acc.1.max(uu));
++        }
++        acc
++    };
++    let w1 = win(r0, r0 + 100, true);
++    let w2 = win(r0 + 100, r0 + 1000, true);
++    let w3 = win(r0 + 1000, n, true);
++    let wl = win(n - 1, n, true);
++    let wall = win(r0, n, false);
++    let ident = (r0..n)
++        .filter(|&i| pl.pred[i * s..(i + 1) * s].iter().zip(&lb.pred[i * s..(i + 1) * s]).all(|(a, b)| a.to_bits() == b.to_bits()))
++        .count();
++    let (th_rel, th_ulp) = diff(&pl.theta, &lb.theta);
++    let lfit = lb.fits.last();
++    let gnorm = lfit.map_or(f64::NAN, |f| f.4.iter().map(|g| g.abs()).fold(0.0, f64::max));
++    let theta_l = lfit.map_or(String::new(), |f| {
++        f.2.iter().map(|x| format!("{x:e}")).collect::<Vec<_>>().join(" ")
++    });
++    write!(
++        out,
++        ",{},{},{},{},{},{},{},{},{st_rel:e},{st_ulp},{},{},{:e},{},{:e},{},{:e},{},{:e},{},{:e},{},{ident},{},{th_rel:e},{th_ulp},{:e},{:e},{:e},{:e},{:e},{:e},{:e},{:e},{gnorm:e},{theta_l}",
++        path(&pl),
++        path(&lb),
++        pl.refits,
++        lb.refits,
++        pl.sound,
++        lb.sound,
++        rows_p,
++        rows_l,
++        pl.first,
++        lb.first,
++        w1.0,
++        w1.1,
++        w2.0,
++        w2.1,
++        w3.0,
++        w3.1,
++        wl.0,
++        wl.1,
++        wall.0,
++        wall.1,
++        n - r0,
++        dp.0,
++        dl.0,
++        dp.1,
++        dl.1,
++        dp.2,
++        dl.2,
++        dp.3,
++        dl.3,
++    )
++    .unwrap();
++    out
++}
++
++const HEADER: &str = "name,vol,dist,start,set,path_p,path_l,refits_p,refits_l,sound_p,sound_l,rows_p,rows_l,st_rel,st_ulp,first_p,first_l,w1_rel,w1_ulp,w2_rel,w2_ulp,w3_rel,w3_ulp,last_rel,last_ulp,all_rel,all_ulp,ident_rows,reported_rows,end_rel,end_ulp,obs_p,obs_l,gn_p,gn_l,lr_p,lr_l,f_p,f_l,gmax_l,theta_l";
++
++#[test]
++#[ignore = "study 549: reads .cache/study549, minutes"]
++fn study549_runs() {
++    let man = std::fs::read_to_string(dir().join("manifest.csv")).unwrap();
++    let filter = std::env::var("STUDY549_FILTER").unwrap_or_default();
++    let lines: Vec<&str> = man.lines().skip(1).filter(|l| l.contains(&filter)).collect();
++    let threads: usize = std::env::var("STUDY549_THREADS").ok().and_then(|s| s.parse().ok()).unwrap_or(6);
++    let next = AtomicUsize::new(0);
++    let results = std::sync::Mutex::new(vec![String::new(); lines.len()]);
++    std::thread::scope(|sc| {
++        for _ in 0..threads {
++            sc.spawn(|| {
++                loop {
++                    let i = next.fetch_add(1, Ordering::Relaxed);
++                    if i >= lines.len() {
++                        break;
++                    }
++                    let row = one(lines[i]);
++                    results.lock().unwrap()[i] = row;
++                    if i % 100 == 0 {
++                        eprintln!("{i}/{}", lines.len());
++                    }
++                }
++            });
++        }
++    });
++    let mut text = String::from(HEADER);
++    text.push('\n');
++    for r in results.into_inner().unwrap() {
++        text.push_str(&r);
++        text.push('\n');
++    }
++    let name = std::env::var("STUDY549_OUT").unwrap_or_else(|_| "runs.csv".into());
++    std::fs::write(dir().join(name), text).unwrap();
++}
++
++// --- the goldens' degenerate stream (tests/golden.rs), both libraries ---------
++
++fn lcg(state: &mut u64) -> f64 {
++    *state = state
++        .wrapping_mul(6364136223846793005)
++        .wrapping_add(1442695040888963407);
++    ((*state >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
++}
++
++type Row = ([f64; 2], [Option<f64>; 1], f64, f64);
++
++fn stream() -> Vec<Row> {
++    let mut s = 20240830u64;
++    (0..60)
++        .map(|i| {
++            let x = [lcg(&mut s), lcg(&mut s)];
++            let y = 1.5 * x[0] - 0.75 * x[1] + 0.25 + 0.1 * lcg(&mut s);
++            let target = if i == 31 { None } else { Some(y) };
++            let d = if i == 0 {
++                0.0
++            } else if i == 40 {
++                25.0
++            } else {
++                1.0
++            };
++            (x, [target], d, 0.5 + 0.5 * (i % 3) as f64)
++        })
++        .collect()
++}
++
++fn golden_sig(vol: GarchVol, dist: GarchDist, platform: bool, start: usize) -> (Vec<f64>, Vec<Logged>, Vec<[f64; 2]>) {
++    PLATFORM.with(|p| p.set(platform));
++    LOG.with(|l| l.borrow_mut().clear());
++    let fig = vol == GarchVol::Figarch;
++    let mut m = Garch::new(GarchCfg {
++        n_targets: 1,
++        vol,
++        dist,
++        truncation: fig.then_some(20),
++        variance_targeting: false,
++        start_rows: if fig { 2000 } else { start },
++        start_span: None,
++        horizon: if vol == GarchVol::Egarch { 1 } else { 4 },
++        min_weight: 0.0,
++        max_state_bytes: Some(if fig { 40_000 } else { 1700 }),
++    })
++    .unwrap();
++    let rows = stream();
++    let n = if fig { 2700 } else { 180 };
++    let mut got = Vec::new();
++    let mut buf = Vec::new();
++    for i in 0..n {
++        let (_, y, d, w) = rows[i % 60];
++        if let Some(e) = y[0]
++            && w > 0.0
++            && buf.len() < start
++        {
++            buf.push([e, w]);
++        }
++        let step = m.step(&[], &y, d, w);
++        if [n - 110, n - 50, n - 1].contains(&i) {
++            got.extend(&step.pred);
++        }
++    }
++    got.extend(&m.coefficients()[0]);
++    (got, LOG.with(|l| std::mem::take(&mut *l.borrow_mut())), buf)
++}
++
++#[test]
++#[ignore = "study 549"]
++fn study549_goldens() {
++    let mut text = String::from("case,path_p,path_l,sig_rel,sig_ulp,obs_l,gn_l,lr_l\n");
++    for (name, vol, dist) in [
++        ("garch", GarchVol::Garch, GarchDist::Normal),
++        ("gjr_t", GarchVol::Gjr, GarchDist::T),
++        ("skewt", GarchVol::Garch, GarchDist::Skewt),
++        ("egarch", GarchVol::Egarch, GarchDist::Normal),
++    ] {
++        let (a, la, _) = golden_sig(vol, dist, true, 50);
++        let (b, lb, buf) = golden_sig(vol, dist, false, 50);
++        let (r, u) = diff(&a, &b);
++        let path = |l: &[Logged]| l.iter().map(|f| format!("{}{}", stop_name(f.0), f.1)).collect::<Vec<_>>().join("|");
++        // the golden's rows are weighted; diag reads them unweighted, an approximation
++        let e: Vec<f64> = buf.iter().map(|x| x[0]).collect();
++        PLATFORM.with(|p| p.set(false));
++        let d = diag(vol, dist, &e, &lb.last().unwrap().2);
++        writeln!(text, "{name},{},{},{r:e},{u},{:e},{:e},{:e}", path(&la), path(&lb), d.0, d.1, d.2).unwrap();
++    }
++    std::fs::create_dir_all(dir()).unwrap();
++    std::fs::write(dir().join("golden.csv"), &text).unwrap();
++    print!("{text}");
++}
++
++/// Each fit of a run whose path holds a NoAscent stop, both libraries: the
++/// Newton decrement `gᵀ M⁻¹ g / 2` (the gain a full Newton step predicts)
++/// at the stop, with M the observed curvature (GN where it is not PD), and
++/// the gradient's largest entry scaled by the parameter units.
++#[test]
++#[ignore = "study 549"]
++fn study549_noascent() {
++    let runs = std::fs::read_to_string(dir().join("runs.csv")).unwrap();
++    let mut text = String::from("name,start,lib,fit,stop,iters,rows,decrement,gscaled,f\n");
++    for line in runs.lines().skip(1) {
++        let f: Vec<&str> = line.split(',').collect();
++        if !(f[5].contains("noasc") || f[6].contains("noasc")) || f[4] == "iid" {
++            continue;
++        }
++        let (name, vol, dist, start) = (f[0], parse_vol(f[1]), parse_dist(f[2]), f[3].parse::<usize>().unwrap());
++        if start < 500 {
++            continue;
++        }
++        let bytes = std::fs::read(dir().join("data").join(format!("{name}.f64"))).unwrap();
++        let r: Vec<f64> = bytes.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect();
++        for platform in [true, false] {
++            let run = run(vol, dist, start, &r, platform);
++            for (i, fit) in run.fits.iter().enumerate() {
++                let rows_n = start << i;
++                let rows: Vec<[f64; 2]> = r[..rows_n].iter().map(|&e| [e, 1.0]).collect();
++                let bc = backcast(&rows);
++                let v = rows.iter().map(|x| x[0] * x[0]).sum::<f64>() / rows_n as f64;
++                let k = vol.k();
++                let obj = |x: &[f64], g: bool| likelihood(vol, dist, k, &rows, bc, x, g);
++                let mut units = vec![1.0; fit.2.len()];
++                units[0] = v;
++                let e = obj(&fit.2, true);
++                let m = curvature(&obj, &fit.2, &units).unwrap_or_else(|| e.h.clone());
++                let p = fit.2.len();
++                let d = super::linalg::lu_solve(&m, p, &e.g).unwrap_or_else(|| vec![f64::NAN; p]);
++                let dec = 0.5 * e.g.iter().zip(&d).map(|(a, b)| a * b).sum::<f64>();
++                let gs = e.g.iter().zip(&units).map(|(g, u)| (g * u).abs()).fold(0.0, f64::max);
++                writeln!(text, "{name},{start},{},{i},{},{},{rows_n},{dec:e},{gs:e},{}", if platform { "p" } else { "l" }, stop_name(fit.0), fit.1, e.f).unwrap();
++            }
++        }
++    }
++    std::fs::write(dir().join("noascent.csv"), &text).unwrap();
++}
++
++/// The row's step alone: the start fitted on the libm crate in both runs
++/// (the same bits), then the platform's library from the first stepped row
++/// in one of them. What the per-row arithmetic carries on its own.
++#[test]
++#[ignore = "study 549"]
++fn study549_rows_only() {
++    let man = std::fs::read_to_string(dir().join("manifest.csv")).unwrap();
++    let mut text = String::from("name,vol,dist,start,set,w1_rel,w3_rel,last_rel,last_ulp,all_rel,end_rel,end_ulp\n");
++    for line in man.lines().skip(1) {
++        let f: Vec<&str> = line.split(',').collect();
++        if !(f[4] == "hi" || f[4] == "lo") || f[3] != "2000" {
++            continue;
++        }
++        let (vol, dist) = (parse_vol(f[1]), parse_dist(f[2]));
++        let bytes = std::fs::read(dir().join("data").join(format!("{}.f64", f[0]))).unwrap();
++        let r: Vec<f64> = bytes.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect();
++        let go = |hybrid: bool| {
++            PLATFORM.with(|p| p.set(false));
++            let c = cfg(vol, dist, 2000);
++            let s = c.slots();
++            let mut m = Garch::new(c).unwrap();
++            let mut out = Step::default();
++            let mut pred = Vec::new();
++            for &e in &r {
++                m.step_into(&[], &[Some(e)], 1.0, 1.0, &mut out);
++                pred.extend_from_slice(&out.pred);
++                if hybrid && m.started()[0] {
++                    PLATFORM.with(|p| p.set(true));
++                }
++            }
++            PLATFORM.with(|p| p.set(false));
++            (pred, m.coefficients()[0].clone(), s)
++        };
++        let (a, ta, s) = go(false);
++        let (b, tb, _) = go(true);
++        let n = r.len();
++        let r0 = (0..n).find(|&i| a[i * s].is_finite()).unwrap();
++        let var = |lo: usize, hi: usize| {
++            (lo..hi.min(n)).fold((0.0f64, 0u64), |acc, i| {
++                let (x, y) = (a[i * s], b[i * s]);
++                (acc.0.max(rel(x, y)), acc.1.max(ulps(x, y)))
++            })
++        };
++        let w1 = var(r0, r0 + 100);
++        let w3 = var(r0 + 1000, n);
++        let last = var(n - 1, n);
++        let all = diff(&a[r0 * s..], &b[r0 * s..]);
++        let end = diff(&ta, &tb);
++        writeln!(text, "{},{},{},{},{},{:e},{:e},{:e},{},{:e},{:e},{}", f[0], f[1], f[2], f[3], f[4], w1.0, w3.0, last.0, last.1, all.0, end.0, end.1).unwrap();
++    }
++    std::fs::write(dir().join("rows_only.csv"), &text).unwrap();
++}
++
++/// The start's optimum run to the rounding floor: from the libm crate's
++/// fit, eight more full Newton steps (observed curvature) under each
++/// library, and the two polished points compared. How far apart the two
++/// libraries' optima are, the path left out.
++#[test]
++#[ignore = "study 549"]
++fn study549_polished() {
++    let runs = std::fs::read_to_string(dir().join("runs.csv")).unwrap();
++    let mut text = String::from("name,vol,dist,start,set,theta_rel,theta_ulp,step_last\n");
++    for line in runs.lines().skip(1) {
++        let f: Vec<&str> = line.split(',').collect();
++        if !(f[4] == "hi" || f[4] == "lo") || f[3] != "2000" || f[1] == "figarch" {
++            continue;
++        }
++        let (vol, dist) = (parse_vol(f[1]), parse_dist(f[2]));
++        if f[9] != "true" || f[10] != "true" || f[7] != f[8] || f[7] != "0" {
++            continue; // sound, no refit, on both: the same 2000 rows
++        }
++        let bytes = std::fs::read(dir().join("data").join(format!("{}.f64", f[0]))).unwrap();
++        let r: Vec<f64> = bytes.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect();
++        let rows: Vec<[f64; 2]> = r[..2000].iter().map(|&e| [e, 1.0]).collect();
++        let bc = backcast(&rows);
++        let theta0: Vec<f64> = f[40].split(' ').map(|x| x.parse().unwrap()).collect();
++        let v = rows.iter().map(|x| x[0] * x[0]).sum::<f64>() / 2000.0;
++        let k = vol.k();
++        let polish = |platform: bool| {
++            PLATFORM.with(|p| p.set(platform));
++            let obj = |x: &[f64], g: bool| -> Eval {
++                if vol == GarchVol::Egarch && !egarch_start_admits(x, &rows, bc) {
++                    return Eval::bad(4);
++                }
++                likelihood(vol, dist, k, &rows, bc, x, g)
++            };
++            let mut units = vec![1.0; theta0.len()];
++            if vol != GarchVol::Egarch {
++                units[0] = v;
++            }
++            let mut th = theta0.clone();
++            let mut last = 0.0;
++            for _ in 0..8 {
++                let e = obj(&th, true);
++                let m = curvature(&obj, &th, &units).unwrap_or_else(|| e.h.clone());
++                let p = th.len();
++                let Some(d) = super::linalg::lu_solve(&m, p, &e.g) else { break };
++                last = d.iter().zip(&units).map(|(d, u)| (d / u).abs()).fold(0.0, f64::max);
++                for i in 0..p {
++                    th[i] += d[i];
++                }
++            }
++            PLATFORM.with(|p| p.set(false));
++            (th, last)
++        };
++        let (a, _) = polish(true);
++        let (b, sl) = polish(false);
++        let (rr, uu) = diff(&a, &b);
++        writeln!(text, "{},{},{},{},{},{rr:e},{uu},{sl:e}", f[0], f[1], f[2], f[3], f[4]).unwrap();
++    }
++    std::fs::write(dir().join("polished.csv"), &text).unwrap();
++}
++
++/// How often this platform's ln, exp and ln_1p differ from the libm
++/// crate's, over arguments of the size garch feeds them.
++#[test]
++#[ignore = "study 549"]
++fn study549_function_agreement() {
++    let mut s = 549u64;
++    let n = 10_000_000;
++    let (mut dl, mut de, mut d1, mut ml, mut me, mut m1) = (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
++    for _ in 0..n {
++        let u = (lcg(&mut s) + 1.0) / 2.0; // [0, 1)
++        let x = 10f64.powf(-3.0 + 6.0 * u); // ln of a variance, 1e-3..1e3
++        let y = -20.0 + 40.0 * u; // exp of a log variance
++        let z = 1e-3 + 50.0 * u; // ln_1p(z²/ν), the t's density
++        let (a, b, c) = (ulps(x.ln(), libm::log(x)), ulps(y.exp(), libm::exp(y)), ulps(z.ln_1p(), libm::log1p(z)));
++        dl += u64::from(a > 0);
++        de += u64::from(b > 0);
++        d1 += u64::from(c > 0);
++        ml = ml.max(a);
++        me = me.max(b);
++        m1 = m1.max(c);
++    }
++    println!("ln differs {dl}/{n} (max {ml} ulp); exp {de}/{n} (max {me}); ln_1p {d1}/{n} (max {m1})");
++}

@@ -1,0 +1,1598 @@
+"""A state written by a released wheel meets this build as the release policy
+says it will (docs/PLAN.md tasks 109 and 198).
+
+The releases before 1.0 are listed here; every 1.x release is read from
+PyPI's JSON when the suite is collected (``data.pypi_releases``), so a
+release is held from the moment it is uploaded, with no commit after it
+(task 317). Each release is installed from PyPI into the cache
+``scripts/compare_release.py`` keeps (``.cache/release-compare/<version>``),
+and ``scripts/release_probe.py --states`` runs under it: every spec of the
+release comparison's workload -- every kind the release has -- fitted on the first
+half of its stream and saved.
+
+**Before 1.0, a released file is refused by its version.** The bank's minimum
+schema (``MIN_BANK_SCHEMA_VERSION``, crates/rheon-polars/src/bank.rs) is the
+schema this build writes, above every release's: 0.10.0 wrote 14, 0.11.1 17,
+0.12.0 19 and 0.13.0 20. Each such file is refused naming the way out, and
+``test_a_pre_1_0_state_is_refused_by_its_version`` holds each to that.
+
+**From 1.0, a file a 1.x release wrote loads in every later 1.x and goes on as
+this build's own** (review round 4, D1, CI3 and TB3): this build loads it with
+its own spec and fits the second half, beside a bank of its own that fitted
+both halves, and every float, the closed groups, the coefficients and
+``marginal``'s table agree. It runs on the states this build writes itself
+too, so the harness ran before the first release that had to honour it.
+Every float goes on to the
+bit, as the release comparison holds its outputs; a spec a CHANGELOG entry
+moved since the release is named in ``DECLARED``, with the entry, and goes
+on as the release itself goes on from the same file, run under the
+release's own wheel (``test_a_moved_spec_goes_on_as_its_release_did``).
+
+Until 2026-09-28 the loading test held 0.11.1's files (schema 17) bit for
+bit and 0.10.0's (schema 14) within 2.2e-13; the pre-1.0 waiver (the user,
+"Do not worry about old specs") made them refusals. Downloading needs the
+network, so a release is skipped offline (hard rule 1), and so is the list
+of 1.x releases; this build's own states are not.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import subprocess
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+import numpy as np
+import polars as pl
+import pytest
+
+from data import Offline, is_transient, pypi_releases
+from rheon import polars as rp
+
+TIER = "extended"
+
+REPO = Path(__file__).resolve().parents[1]
+
+#: The releases before 1.0 the test holds, from 0.10.0, the oldest whose
+#: files a loader once promised: each wrote a schema of its own and is
+#: refused by it. Literal, since no later release is one of them.
+PRE_1_0 = ["0.10.0", "0.11.1", "0.12.0", "0.13.0"]
+
+
+def _published() -> list[str] | None:
+    """Every 1.x release on PyPI, not yanked, read when the suite is
+    collected: a release is held here from the moment it is uploaded, with
+    no edit to this file. ``None`` offline, where the 1.x releases' tests
+    are skipped as their downloads would be."""
+    try:
+        return [v for v in pypi_releases() if _major(v) >= 1]
+    except Offline:
+        return None
+
+
+def _major(version: str) -> int:
+    return int(version.split(".")[0])
+
+
+PUBLISHED = _published()
+
+#: Every release the test holds: before 1.0 each is refused by its schema;
+#: from 1.0 each loads and goes on.
+RELEASES = PRE_1_0 + (PUBLISHED or [])
+
+#: The releases before 1.0, whose files are refused by their version.
+REFUSED = [v for v in RELEASES if _major(v) < 1]
+
+#: The workload's kinds newer than a release, by the first version that has
+#: each: a release before it has no builder for one, and its probe records
+#: the refusal (`audit`, task 223 (b), after 0.13.0). A literal, read by
+#: `scripts/release_version.py` as `PARAMETER_INTRODUCED` is.
+INTRODUCED = {
+    "audit": "1.0.0",
+    "glm": "2.1.0",
+    "hawkes": "2.1.0",
+    "expectile": "2.1.0",
+    "garch": "2.1.0",
+    "dcc": "2.1.0",
+    "realized": "2.1.0",
+    "pca": "2.1.0",
+    "power_variation": "2.1.0",
+    "tdigest": "2.1.0",
+    "ddsketch": "2.1.0",
+    "ewm_moments": "2.1.0",
+    "ar": "2.1.0",
+    "spectral": "2.1.0",
+}
+
+#: The workload's specs that need a parameter newer than a release, by the
+#: first release that takes it (task 271's `huber_scale` in 1.3.0, task
+#: 277's `huber_refit_rows` in 1.4.0). An older release refuses the keyword
+#: itself, a `TypeError`, not the `AttributeError` of a builder it lacks.
+#: A spec that needs a new parameter is entered here under the next minor
+#: release when the parameter is added, so no release can build it until
+#: that release is on PyPI. A literal: `scripts/release_version.py
+#: --publish` reads it, and refuses to publish a version older than any
+#: version named here, since that release's files would then claim a
+#: parameter it does not take.
+PARAMETER_INTRODUCED = {
+    "huber_mad": "1.3.0",
+    "huber_rms": "1.3.0",
+    "sgd_huber_mad": "1.3.0",
+    "huber_refit": "1.4.0",
+    "sgd_huber_refit": "1.4.0",
+}
+
+
+def _parameter_newer(name: str, version: str) -> bool:
+    """Whether the spec `name` needs a parameter `version` does not take."""
+    return _version(version) < _version(PARAMETER_INTRODUCED.get(name, "0.0.0"))
+
+
+def _version(v: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in v.split("."))
+
+
+def _buildable(version: str) -> list[str]:
+    """The workload's specs a release can build: every one, for this build."""
+    return [
+        name
+        for name, builder, *_ in probe.WORKLOAD
+        if version == THIS_BUILD
+        or (
+            not _parameter_newer(name, version)
+            and _version(version) >= _version(INTRODUCED.get(builder, "0.0.0"))
+        )
+    ]
+
+
+#: The probe's `sgd` and `pa` specs, every one under `standardize` (the
+#: default) on weighted rows: rule 5's twenty-third exception moves them all.
+READ_ANEW = (
+    "sgd",
+    "full_sgd",
+    "sgd_huber",
+    "sgd_huber_mad",
+    "sgd_huber_refit",
+    "sgd_quantile",
+    "sgd_epsilon_insensitive",
+    "sgd_poisson",
+    "sgd_logistic",
+    "sgd_adagrad",
+    "pa",
+    "full_pa",
+    "pa_pa1",
+    "pa_pa2",
+)
+
+#: The specs whose numbers a CHANGELOG entry declares moved since a release,
+#: ``(spec, the newest release whose files it moves) -> the entry``. A file
+#: of that release or an older one goes on from its own numbers, not this
+#: build's: `test_a_moved_spec_goes_on_as_its_release_did` holds it to the
+#: release's own continuation instead. Every
+#: other spec of every 1.x release goes on to the bit: measured on
+#: 2026-10-23, 68 specs of 1.0.0, 1.0.1, 1.1.0 and 1.2.0, every gap 0 but
+#: these.
+DECLARED: dict[tuple[str, str], str] = {
+    ("ridge_blocked", "1.0.1"): "1.1.0, Changed: a blocked `ewridge`'s target cross-moments "
+    "move in their last bits (5.2e-16 here)",
+    # Task 271 (the next release's Changed): `huber` and `sgd(loss="huber")`
+    # scale their cut by the residuals' MAD by default, where every release
+    # through 1.2.0 used their plain RMS; a file of one goes on from the old
+    # scale's fit (3e-2 to 4e-1 here).
+    **{
+        (name, "1.2.0"): "the next release, Changed: the Huber scale is the MAD by default"
+        for name in ("huber", "full_huber", "sgd_huber")
+    },
+    # Task 270 (a), B-1 (the next release's Fixed): standardized with no
+    # `obs_var`, the rows past `min_weight` before a target's prior is sized
+    # predicted 0.0 and seeded the residual variance with the level squared;
+    # a file of one goes on from that variance.
+    ("kalman_unsized", "1.2.0"): "the next release, Fixed: `kalman` no longer predicts 0.0 "
+    "before a target's prior is sized",
+    # Task 278, batch 3 (the next release's Fixed): after `drift_action =
+    # "reset"` the next row reads a clock step of 0, as a fresh bank's first
+    # row does; a file whose reset fell in its first half went on from the
+    # step the release read (1.4e-2 here).
+    ("ridge_reset", "1.3.0"): "the next release, Fixed: a drift reset is a fresh bank from "
+    "the next row",
+    # Task 275 (the next release's Fixed, and rule 5's exception the user
+    # allowed on 2026-10-24): a window's snapshot decays by the product of
+    # the per-row factors its moments took. A windowed file saved by a
+    # release recorded no such products, so once a snapshot taken after its
+    # load is the window's edge it goes on within the golden tolerance, not
+    # to the bit (1.8e-15 at most here).
+    **{
+        (name, "1.2.0"): "the next release, Fixed: a window's snapshot decays by the "
+        "product of the per-row factors"
+        for name in (
+            "ridge_window",
+            "ridge_both",
+            "marginal_window",
+            "lasso_window",
+            "ew_class_window",
+        )
+    },
+    # Task 278, D7 and F3 (the next release's Fixed and Changed): `hmm`'s
+    # default seeding runs Lloyd's passes to a fixed point from greedy
+    # k-means++ starts. On the probe's rows it finds the same two means and
+    # numbers them the other way round (and in their last bits), so this
+    # build's own bank reads each state under the other's number (9.9e-1 in
+    # `filtered_state*` here). A file seeded by a release goes on exactly as
+    # that release did (measured against 1.3.0's own continuation, every
+    # value equal), as the entry says a state saved after seeding does.
+    ("hmm", "1.3.0"): "the next release, Fixed: `kmeans` and `hmm` seed with Lloyd's "
+    "passes to a fixed point, and may number their states differently",
+    # Task 278, D3 (the next release's Fixed, and rule 5's third exception,
+    # the user's): `lasso`'s `tol` is relative to the target's spread, so a
+    # file saved by 1.0-1.3 goes on within 1e-9 of this build's own, not to
+    # the bit (2.0e-10 at most here, in `full_lasso`'s diagnostics; 1.0e-11
+    # in `lasso_window`'s predictions, which 1.2.0 and older move by the
+    # window entry above too).
+    **{
+        (name, "1.3.0"): "the next release, Fixed: `lasso`'s `tol` is relative to the "
+        "target's spread"
+        for name in ("full_lasso", "lasso_window")
+    },
+    # Task 278 (the next release's Fixed): with no `obs_var`, `kalman` holds
+    # `P` in units of the noise, its gain reading no noise estimate, and its
+    # intercept's prior is diffuse. A file of a release has no such form and
+    # goes on as it was fitted, the estimate in the gain, where this build's
+    # own bank runs the new form; `seqtest` reads a `kalman`'s predictions.
+    **{
+        (name, "1.3.0"): "the next release, Fixed: `kalman` holds its covariance in units of "
+        "the noise, and its intercept's prior is diffuse"
+        for name in ("kalman", "full_kalman", "kalman_standardized", "kalman_unsized", "seqtest")
+    },
+    # Task 278, D-H (the next release's Fixed; rule 5's fifth exception, the
+    # user's): `holt`'s gains are the larger of the exact weighted line
+    # fit's and the textbook's. A file of a release goes on with the gains it
+    # was fitted with (3.0e-2 in `holt`'s predictions here, 1.0e-1 in
+    # `full_holt`'s diagnostics).
+    **{
+        (name, "1.3.0"): "the next release, Fixed: `holt`'s gains are the larger of the "
+        "weighted line fit's and the textbook's"
+        for name in ("holt", "full_holt")
+    },
+    # Task 278, D1, D2 and D-S (the next release's Fixed): `sgd`'s clip and
+    # AdaGrad's epsilon are in the target's own spread, and its intercept
+    # takes the running mean's step while the fit learns the level. A file
+    # of a release loads with the flag off (`target_spread`) and goes on as
+    # it was fitted, where this build's own bank runs the new steps (3.5e-1
+    # in `sgd`'s predictions, 4.6e-1 in `sgd_quantile`'s, 4.2 in `full_sgd`'s
+    # diagnostics here). `sgd_huber` moved at 1.2.0 too, by the MAD entry.
+    **{
+        (name, "1.3.0"): "the next release, Fixed: `sgd` steps in its target's own spread "
+        "and learns its level"
+        for name in (
+            "sgd",
+            "full_sgd",
+            "sgd_quantile",
+            "sgd_epsilon_insensitive",
+            "sgd_adagrad",
+            "sgd_huber",
+            "sgd_huber_mad",
+        )
+    },
+    # Task 278, batch 17 (the next release's Fixed): a stream a spec builds
+    # folds into its residual spread each slot's own prediction on the rows
+    # a readiness gate withholds, and weighs its residual autocorrelation by
+    # the row's weight. A file of a release has neither flag and goes on
+    # folding only the residuals it reported, each autocorrelation residual
+    # at 1, where this build's own bank runs the new rules: `sigma` and
+    # `zscore` 1e-3 to 6e-3 apart at the split here, the conformal interval
+    # that starts from `sigma` 1.4 to 12 (of `1 + |v|`), `autocorr` 0.1 to
+    # 0.2; no prediction moves.
+    **{
+        (name, "1.3.0"): "the next release, Fixed: a readiness gate no longer moves the "
+        "residual spread, and the residual autocorrelation weighs each residual by its row"
+        for name in (
+            "ridge_diag",
+            "full_ewridge",
+            "full_rls",
+            "full_quantile",
+            "full_ftrl",
+            "full_pa",
+        )
+    },
+    # Task 278, the anchored sketch (the next release's Fixed): the MAD's
+    # sketch keeps each residual in units of the first one it takes, where
+    # 1.3.0's buckets were fixed. A file of 1.3.0 keeps its fixed buckets and
+    # goes on as it was fitted, where this build's own bank anchors its
+    # sketch: `huber` (the MAD by default) and `huber_mad` 9.5e-4 to 1.4e-3
+    # apart in their predictions here, `huber_rms`, which keeps no sketch,
+    # to the bit. `full_huber` moves by the sketch and by batch 17's entry
+    # above as well (its `autocorr` 0.12 to 0.19).
+    **{
+        (name, "1.3.0"): "the next release, Fixed: the robust scale's sketch keeps each "
+        "residual in units of the first one it takes, so it rescales with the target"
+        for name in ("huber", "huber_mad")
+    },
+    ("full_huber", "1.3.0"): "the next release, Fixed: the robust scale's sketch keeps each "
+    "residual in units of the first one it takes; and a readiness gate no longer moves the "
+    "residual spread, and the residual autocorrelation weighs each residual by its row",
+    # Task 323 (the next release's Changed): no MAD sketch takes an anchor
+    # from the residuals one pass sees. While a refit waits the scale is the
+    # exact weighted median of the residuals its buffer holds, and with the
+    # refit off the sketch keeps its fixed buckets. A file of 1.4.0 keeps
+    # the first-value anchor and its buffers hold no residuals, so it goes on
+    # as it was fitted, where this build's own bank reads the exact median:
+    # 8.2e-4 to 1.2e-3 apart in their predictions here (4.8e-3 in
+    # `full_huber`'s diagnostics); `huber_rms`, which keeps no sketch, to
+    # the bit.
+    **{
+        (name, "1.4.0"): "the next release, Changed: the MAD scale reads the refit's held "
+        "residuals exactly, and no sketch is anchored at its first residual"
+        for name in (
+            "huber",
+            "huber_mad",
+            "huber_refit",
+            "full_huber",
+            "sgd_huber",
+            "sgd_huber_mad",
+            "sgd_huber_refit",
+        )
+    },
+    # Task 368 (the next release's Changed, and rule 5's exception the
+    # user allowed on 2026-11-09): the conformal tracker keeps a multiplier
+    # of the residual spread, `m`, where it kept the radius. A file of a
+    # release holds the radius, which this build shows as saved on the next
+    # row and converts to `m = q / sigma` there, so the interval and its
+    # coverage go on under the multiplier from that row (`CONVERTED`); every
+    # other field goes on as the release did.
+    **{
+        (name, "1.4.0"): "the next release, Changed: the conformal interval keeps a "
+        "multiplier of the residual spread"
+        for name in (
+            "ridge_diag",
+            "full_ewridge",
+            "full_rls",
+            "full_lasso",
+            "full_kalman",
+            "full_huber",
+            "full_quantile",
+            "full_ftrl",
+            "full_sgd",
+            "full_pa",
+            "full_holt",
+        )
+    },
+    # Task 462 (the next release's Changed, and rule 5's sixteenth
+    # exception, the user's, 2026-11-17): `bocpd` with `covariance_type =
+    # "diag"` and two features or more adds its features' log densities as
+    # the logs of products of blocks of 8. A file of a release holds the
+    # log joint the old arithmetic made, and goes on within rounding of the
+    # release's own continuation (`WITHIN`), not to the bit.
+    ("bocpd", "1.5.0"): "the next release, Changed: `bocpd`'s diagonal form of two "
+    "features or more takes its log densities as the logs of products of blocks of 8",
+    # Review C1 (the next release's Fixed, and rule 5's twenty-third
+    # exception, the user's, 2026-11-20): `sgd` and `pa` under `standardize`
+    # read each row in the stream's own unit of weight, one row's
+    # `Σw²/Σw`, where every release read it at 1. The probe's rows are
+    # weighted, so a file of any release goes on by the new read from the
+    # old read's moments and fit: neither the release's own continuation
+    # nor this build's, and within `WITHIN`'s bound of the release's.
+    **{
+        (name, "2.0.0"): "the next release, Fixed: `sgd` and `pa` with `standardize` read "
+        "each row in the stream's own unit of weight"
+        for name in READ_ANEW
+    },
+    # The next release's Changed (rule 5's twenty-second exception, the
+    # user's, 2026-11-20): `hmm` under `"full"` and `"diag"` that learns
+    # forgets its covariances toward a stabilized prior. A file of a release
+    # keeps no prior, loads with one seeded from its states' moments and goes
+    # on under it, neither as the release did nor as this build's own bank
+    # (`UNDER_THE_PRIOR`).
+    ("hmm", "2.0.0"): 'the next release, Changed: `hmm` under `"full"` and `"diag"` '
+    "forgets each state's covariance toward a prior",
+    # PLAN 551 (the next release's Changed, and rule 5's twenty-sixth
+    # exception, the user's "Switch, restarting the level", 2026-11-22):
+    # `deco`'s level is the ratio of the means, which a release's file does
+    # not hold, so it loads with its level restarted (`RESTARTED_LEVEL`).
+    ("deco", "2.0.0"): "the next release, Changed: `deco`'s `rho` is the ratio of the "
+    "weighted means",
+}
+
+#: The moved specs a release's file goes on in under a rule of this build's
+#: that the release never ran, by the newest release whose files it covers:
+#: `hmm`'s stabilized prior (rule 5's twenty-second exception), seeded from
+#: the file's states on its load. Such a file is held to the release's own
+#: continuation in `weight_sum` to the bit, in `withheld_reason` and in
+#: where each float is a number; the posteriors, `state`, `loglik` and
+#: `coef` go on under the prior.
+UNDER_THE_PRIOR: dict[str, str] = {"hmm": "2.0.0"}
+
+#: The moved specs whose level restarts on load, by the newest release whose
+#: files it covers: `deco` (rule 5's twenty-sixth exception). Its standardizer
+#: goes on as the release's, so `u`, `weight_sum` and `settled_frac` are held
+#: to the release's own continuation to the bit; `rho` and `loglik` are null
+#: on the rows before the level relearns and numbers after, the relearning
+#: reached in the second half, and `withheld_reason` reads `below_warm_rows`
+#: on the null rows and the release's value on the rest; the last `coef` is
+#: a number where the release's is.
+RESTARTED_LEVEL: dict[str, str] = {"deco": "2.0.0"}
+
+#: The fields of the conformal interval, which a release's file goes on in
+#: under this build's multiplier (`DECLARED`'s task 368 entry): each group's
+#: first row of the second half is shown the radius the file saved, as the
+#: release shows it, and is held to the release's to the bit; from the next
+#: row each is the multiplier's, which no release computes.
+CONVERTED = ("lo_", "hi_", "coverage_")
+
+#: The releases from 1.0, whose files load and go on; and this build, whose
+#: own files ran the harness before 1.0.0 was released and run beside them.
+THIS_BUILD = "this build"
+
+#: Offline, the 1.x releases cannot be listed: one parameter stands for
+#: them and is skipped, as their downloads would be (hard rule 1).
+OFFLINE = pytest.param(
+    "the 1.x releases",
+    marks=pytest.mark.skip(reason="offline: PyPI's list of releases cannot be read"),
+)
+
+
+def _from_1_0(versions: list) -> list:
+    """``versions``, with the offline stand-in when PyPI could not be read."""
+    return versions + ([OFFLINE] if PUBLISHED is None else [])
+
+
+LOADED = _from_1_0([v for v in RELEASES if _major(v) >= 1]) + [THIS_BUILD]
+
+# The workload's specs are built to reach every path, not to be ready: a
+# readiness warning about one of them is expected and says nothing here.
+pytestmark = [
+    pytest.mark.filterwarnings("ignore::rheon.ReadinessWarning"),
+    pytest.mark.extended(reason="the network: each release's wheel, downloaded from PyPI"),
+]
+
+
+def _load(name: str):
+    spec = importlib.util.spec_from_file_location(name, REPO / "scripts" / f"{name}.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+compare = _load("compare_release")
+probe = _load("release_probe")
+
+#: Rule 5's twenty-fifth exception (the user's, 2026-11-21: "539 exception
+#: approved"; hard rule 9): a row of weight 0 counts in no clock, so every
+#: weighted spec of the workload moved since 2.0.0, and a file of any
+#: release goes on under the new rule from the clock its zero-weight rows
+#: left. It is held to its release's own continuation on the rows that count
+#: (a row of weight 0 carries no `coef` now, and is scored from the state as
+#: it stands), within `ZERO_WEIGHT_WITHIN` of ``1 + |v|``.
+_WEIGHTED = {name for name, _, kw, _ in probe.WORKLOAD if kw.get("weight")}
+ZERO_WEIGHT_MOVED = _WEIGHTED | {
+    name for name, _, _, reads in probe.WORKLOAD if set(reads) & _WEIGHTED
+}
+DECLARED.update(
+    {
+        (name, "2.0.0"): "the next release, Changed: a row of weight 0 counts in no clock"
+        for name in ZERO_WEIGHT_MOVED
+    }
+)
+
+#: Rule 5's twenty-seventh exception (the user's, 2026-11-22: "Switch to
+#: the new statistics"; PLAN 553): `corrchange`'s monitor is the linear
+#: CUSUM against the grid-corrected critical value and its sequential
+#: detector the Fisher-`z` one, with no layout changed. A file of any
+#: release holds no number the old statistic computed (the span's rows), so
+#: it goes on under the new statistic, not the release's: its rows are held
+#: to this build's own continuation from both halves, every field to the
+#: bit but ``since_flag``, which counts from the last flag the release's
+#: statistic made in the first half. Keyed as `DECLARED` is.
+NEW_STATISTICS = {("corrchange", "2.0.0")}
+
+
+def _online() -> bool:
+    """Whether PyPI answers. An HTTP error is an ``OSError``, and a 404 here
+    is PyPI saying the package is gone, so only what a retry could fix reads
+    as offline (`data.is_transient`, review 2026-10-05, TA3)."""
+    try:
+        urllib.request.urlopen("https://pypi.org/simple/rheon/", timeout=15).close()
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        if not is_transient(e):
+            raise
+        return False
+    return True
+
+
+#: Each build's states, written once a module run: the loading test and the
+#: continuation test read the same files.
+_SAVED: dict[str, tuple[dict, Path]] = {}
+
+
+def _saved(version: str, factory: pytest.TempPathFactory) -> tuple[dict, Path]:
+    if version not in _SAVED:
+        _SAVED[version] = _states(version, factory.mktemp("states"))
+    return _SAVED[version]
+
+
+def _states(version: str, out: Path) -> tuple[dict, Path]:
+    """The workload's states as ``version`` writes them, and its manifest."""
+    manifest = out / "manifest.json"
+    if version == THIS_BUILD:
+        probe.states(str(out), str(manifest))
+    else:
+        if not _online():
+            pytest.skip("offline: the released wheel cannot be downloaded")
+        python = compare.released_python(version)
+        # `-I`: the released build imports its own package, not this checkout's.
+        subprocess.run(
+            [
+                str(python),
+                "-I",
+                str(REPO / "scripts" / "release_probe.py"),
+                "--states",
+                str(out),
+                str(manifest),
+            ],
+            check=True,
+        )
+    return json.loads(manifest.read_text(encoding="utf-8")), out
+
+
+@pytest.fixture(scope="module", params=REFUSED)
+def refused(request, tmp_path_factory):
+    """A release before 1.0: its version, its manifest, its states."""
+    version = request.param
+    manifest, out = _states(version, tmp_path_factory.mktemp(f"states-{version}"))
+    return version, manifest, out
+
+
+@pytest.fixture(scope="module", params=LOADED)
+def loaded(request, tmp_path_factory):
+    """A release from 1.0, or this build: its version, manifest, states."""
+    version = request.param
+    manifest, out = _saved(version, tmp_path_factory)
+    return version, manifest, out
+
+
+def test_every_spec_was_saved_by_the_release_at_an_older_schema(refused):
+    version, manifest, _ = refused
+    assert manifest["version"] == version
+    # The specs that reach the paths the first workload did not are written
+    # against the 1.0 API: a release before it may refuse one by a parameter
+    # it lacks (review round 9, J-2). The first workload's are held as before.
+    reach = {name for name, *_ in probe.REACH}
+    assert [n for n in manifest["saved"] if n not in reach] == [
+        n for n in _buildable(version) if n not in reach
+    ]
+    newer = {name for name, *_ in probe.WORKLOAD} - set(manifest["saved"]) - reach
+    assert set(manifest["refused"]) - reach == newer
+    builders = {name: builder for name, builder, *_ in probe.WORKLOAD}
+    for name, why in manifest["refused"].items():
+        if name not in reach and not _parameter_newer(name, version):
+            # The refusal names the builder a spec calls, which two specs of
+            # one kind (`glm`, `glm_tweedie_cap`) share.
+            assert why.startswith("AttributeError") and builders.get(name, name) in why, (
+                name,
+                why,
+            )
+    # An older schema: the refusal below is by the version, not the layout.
+    assert manifest["schema"] < rp.schema_version()
+
+
+def test_a_pre_1_0_state_is_refused_by_its_version(refused):
+    version, manifest, states = refused
+    built = {name: probe.build(b, name, kw) for name, b, kw, _ in probe.WORKLOAD}
+    for name, _, _, reads in probe.WORKLOAD:
+        if name not in manifest["saved"]:
+            continue
+        specs = [built[r] for r in reads] + [built[name]]
+        with pytest.raises(ValueError) as e:
+            rp.ModelBank.load(states / f"{name}.state", specs=specs)
+        message = str(e.value)
+        assert "written by a version of rheon older than this one reads" in message, message
+        assert "fit it on its input" in message, message
+
+
+def _floats(frame: pl.DataFrame, prefix: str = "") -> dict[str, np.ndarray]:
+    """Every float in a frame, by column, with structs and lists opened."""
+    out: dict[str, np.ndarray] = {}
+    for name in frame.columns:
+        s = frame[name]
+        if s.dtype == pl.Struct:
+            out.update(_floats(s.struct.unnest(), f"{prefix}{name}."))
+            continue
+        if isinstance(s.dtype, pl.List):
+            # Flattened by hand, not with `explode`, whose default polars is
+            # changing: nulls stay NaN, empty lists add nothing.
+            flat = _flatten(s.to_list())
+            if flat and all(isinstance(v, float) for v in flat):
+                out[f"{prefix}{name}"] = np.array(flat, dtype=float)
+            continue
+        if s.dtype == pl.Float64:
+            out[f"{prefix}{name}"] = s.to_numpy()
+    return out
+
+
+def _flatten(values: list) -> list:
+    out: list = []
+    for v in values:
+        if isinstance(v, list):
+            out.extend(_flatten(v))
+        else:
+            out.append(float("nan") if v is None else v)
+    return out
+
+
+def _worst_gap(got: pl.DataFrame, want: pl.DataFrame) -> float:
+    """The largest gap between two frames' floats, relative to ``1 + |v|``,
+    after their nulls are held to the same rows."""
+    a, b = _floats(got), _floats(want)
+    assert a.keys() == b.keys()
+    worst = 0.0
+    for name in a:
+        u, v = a[name], b[name]
+        assert u.shape == v.shape, name
+        np.testing.assert_array_equal(np.isnan(u), np.isnan(v), err_msg=name)
+        ok = np.isfinite(v)
+        if ok.any():
+            worst = max(worst, float((np.abs(u[ok] - v[ok]) / (1 + np.abs(v[ok]))).max()))
+    return worst
+
+
+def _tables(bank: rp.ModelBank, name: str) -> list[pl.DataFrame]:
+    """What a model keeps and a row does not show (``probe.tables``): the
+    rows a closed group emits, the coefficients where the kind has them (the
+    rest refuse by name), and ``marginal``'s pairs table."""
+    return list(probe.tables(bank, name).values())
+
+
+def test_a_released_state_loads_and_goes_on_as_this_builds_own(loaded):
+    version, manifest, states = loaded
+    assert manifest["saved"] == _buildable(version)
+    assert set(manifest["refused"]) == {n for n, *_ in probe.WORKLOAD} - set(manifest["saved"])
+    df = probe.stream()
+    first, second = df.head(probe.HALF), df.slice(probe.HALF)
+    built = {name: probe.build(b, name, kw) for name, b, kw, _ in probe.WORKLOAD}
+    # Every file goes on to the bit, as the release comparison holds the
+    # outputs (review round 9, J-5: a bound of 1e-12 was described as the
+    # comparison's, which allows nothing). A spec a CHANGELOG entry moved
+    # since the release is named in `DECLARED`, and held here to its row
+    # count, since its rows withheld may move too (task 278's `kalman`);
+    # `test_a_moved_spec_goes_on_as_its_release_did` holds every field of it
+    # to the release's own continuation.
+    moved = _moved(version)
+    gaps = {}
+    for name, _, _, reads in probe.WORKLOAD:
+        if name not in manifest["saved"]:
+            continue
+        specs = [built[r] for r in reads] + [built[name]]
+        file_bank = rp.ModelBank.load(states / f"{name}.state", specs=specs)
+        own = rp.ModelBank(specs)
+        own.fit_predict(first)
+        got_rows = file_bank.fit_predict(second).select(name)
+        want_rows = own.fit_predict(second).select(name)
+        if name in moved:
+            assert got_rows.height == want_rows.height, name
+            continue
+        gap = _worst_gap(got_rows, want_rows)
+        for got, want in zip(_tables(file_bank, name), _tables(own, name), strict=True):
+            assert got.height == want.height, name
+            if got.height:
+                gap = max(gap, _worst_gap(got, want))
+        gaps[name] = gap
+    wrong = {k: f"{v:.1e}" for k, v in gaps.items() if v > 0.0}
+    assert not wrong, wrong
+
+
+def _moved(version: str) -> set[str]:
+    """The specs a CHANGELOG entry moved since ``version``: its files go on
+    from their own numbers, not this build's."""
+    if version == THIS_BUILD:
+        return set()
+    return {n for (n, since), _ in DECLARED.items() if _version(version) <= _version(since)}
+
+
+#: The releases whose moved specs go on as the release itself goes on from
+#: the same file, run under its own wheel: every release whose files load
+#: and that has a spec a CHANGELOG entry moved since (a release with none
+#: goes on as this build's own in every spec, above).
+#: The CHANGELOG says so of each entry in `DECLARED`: `sgd` loads with the
+#: old rules and goes on to the bit, `kalman` goes on as it was fitted,
+#: `holt` with the textbook gains, the residual spread folding only the
+#: residuals it reported, `hmm` exactly as that release did, `huber`'s
+#: sketch with its fixed buckets, a Huber file of 1.2.0 on the scale it was
+#: fitted with. Measured 2026-10-31: every field of every moved spec of the
+#: five to the bit but those `WITHIN`, `ROUNDED`, `UPPER_READ`, `YOUNG` and `RESETS` name.
+RESUMED = _from_1_0([v for v in RELEASES if _major(v) >= 1 and _moved(v)])
+
+#: The golden pipeline's tolerance, the library's bound for a move within
+#: rounding (`tests/test_golden_pipeline.py`).
+GOLDEN = 1e-12
+
+#: Where a moved spec's file goes on within a tolerance of its release's own
+#: continuation, not to the bit, relative to ``1 + |v|``, as `DECLARED` is
+#: keyed: ``(spec, the newest release whose files it covers)``.
+#: - `lasso`'s `tol` is relative to the target's spread since 1.3.0, and a
+#:   state of an earlier schema goes on within 1e-9 (CLAUDE.md rule 5's third
+#:   exception): 6.8e-10 at most here.
+#: - A windowed file of 1.2.0 or older recorded no per-row decay factors,
+#:   so once a snapshot taken after its load is the window's edge it goes on
+#:   within the golden tolerance (rule 5's first exception): 2.9e-15 here.
+#: - A blocked `ewridge`'s target cross-moments moved in their last bits in
+#:   1.1.0: a file of 1.0.x goes on within rounding, 8.3e-16 here.
+#: - `holt` divides once into each denominator on its row-to-row chain and
+#:   multiplies by the reciprocal since task 291a, so a file of any release
+#:   goes on within rounding (CLAUDE.md rule 5's fifth exception): its
+#:   predictions by about 2e-16, and the diagnostics derived from many rows,
+#:   which amplify a last bit (the calibration's Wald, Ramsey's RESET), by up
+#:   to 2.0e-13 here, inside the golden tolerance.
+#: - `bocpd`'s diagonal form of two features or more adds its log densities
+#:   as the logs of products of blocks of 8 (rule 5's sixteenth exception), so
+#:   a file of any release goes on within rounding of that release's own
+#:   continuation, not to the bit: 1.8e-13 at most here (`run_mean`), inside
+#:   the golden tolerance.
+#: - `sgd` and `pa` under `standardize` read each row in the stream's own
+#:   unit of weight since review C1 (rule 5's twenty-third exception), so a
+#:   file of any release, its rows weighted, goes on by the new read from the
+#:   old read's moments and fit. Measured 2026-11-20 on every 1.x and 2.0.0
+#:   release, the largest gap of any field, of `1 + |v|`: the predictions,
+#:   residuals and coefficients 2.9e-3 (`sgd_logistic`) to 2.1e-2 (`pa`,
+#:   `pa_pa1`), so 0.06; a diagnosed spec's statistics up to 6.6e-2
+#:   (`full_sgd`'s Jarque-Bera) and 8.0e-2 (`full_pa`'s `hit_rate`), so
+#:   0.25. No non-float field, no null and no withheld row moved.
+WITHIN: dict[tuple[str, str], float] = {
+    ("bocpd", "1.5.0"): GOLDEN,
+    ("full_holt", "1.3.0"): GOLDEN,
+    ("holt", "1.3.0"): GOLDEN,
+    ("full_lasso", "1.3.0"): 1e-9,
+    ("lasso_window", "1.3.0"): 1e-9,
+    **{
+        (name, "1.2.0"): GOLDEN
+        for name in ("ridge_window", "ridge_both", "marginal_window", "lasso_window")
+    },
+    ("ew_class_window", "1.2.0"): GOLDEN,
+    ("ridge_blocked", "1.0.1"): GOLDEN,
+    **{(name, "2.0.0"): 0.25 if name.startswith("full_") else 0.06 for name in READ_ANEW},
+}
+
+
+#: `ZERO_WEIGHT_MOVED`'s bound, relative to ``1 + |v|``. Measured 2026-11-21
+#: on every 1.x and 2.0.0 release, the probe's rows of weight 0 all in the
+#: first half: 4.2e-2 in `ridge_session`'s residuals (3.7e-2 in its
+#: predictions), whose saved session and clock a zero-weight row moved;
+#: every other spec 5.4e-11 at most (`enet`).
+ZERO_WEIGHT_WITHIN = 0.05
+
+
+def _within(name: str, version: str) -> float:
+    """The widest tolerance `WITHIN` gives ``name`` for a file of ``version``."""
+    found = [
+        t for (n, since), t in WITHIN.items() if n == name and _version(version) <= _version(since)
+    ]
+    return max(found, default=0.0)
+
+
+#: A diagnosed state of schema 61-63 goes on to this build's values in its
+#: windowed `cusum_*` and `cusum_sq_*` fields while their sums are young
+#: (CLAUDE.md rule 5's fourth exception): each is its sum over the square
+#: root of its null's share of the plain variance, which this build reads at
+#: the sums' age, `r(x)`, where a release read the filled share `r(inf)` at
+#: every age. So where a young field parts from the release's, the two are
+#: one sum read at two shares, `got / release = sqrt(r(inf) / r(x))`, and the
+#: share it implies, `r(x) = r(inf) (release / got)²`, lies above the filled
+#: one and at most 1 (the plain sum's, `x = 0`). The filled shares, by field
+#: prefix: the CUSUM of squares' 1/2 (`cusum_null` at its own memory) in every
+#: diagnosed spec; the CUSUM's `h_m / (h_m + h_c)` beside a fit that absorbs
+#: a level, least squares or a quantile fit with an intercept, 1/2 here, its
+#: fit's and its own memory being one; the other fits' CUSUM keeps the plain
+#: sum, share 1 at every age, so it has no young form and goes on to the bit
+#: (checks.rs, `cusum_absorber`). Measured 2026-10-31 on every 1.x release:
+#: every such difference implies a share in `(1/2, 1]`; `full_holt`'s, on the
+#: second half's rows 179-199 only, are its CUSUM of squares' first rows --
+#: its diagnostics wait for the trend's memory to settle, the spread for
+#: Kish's 10 rows, so its sums begin there, aged 0 to 0.5 (`q = e^{-x}` 1 to
+#: 0.61), and the release divided them by 1/2 from their first row.
+YOUNG_SQ = {"cusum_sq_": 0.5}
+YOUNG = {**YOUNG_SQ, "cusum_": 0.5}
+#: The diagnosed specs whose fit absorbs a level, so whose CUSUM is young too.
+ABSORBS = {"full_ewridge", "full_rls", "full_lasso", "full_kalman", "full_quantile"}
+
+
+def _young_rows(u: pl.Series, v: pl.Series, filled: float) -> tuple[np.ndarray, np.ndarray]:
+    """The rows where a young field ``u`` parts from the release's ``v`` as
+    one sum read at a younger share, and the rows where it parts otherwise:
+    a null against a number, a sign, or an implied share outside
+    ``(filled, 1]``."""
+    a = u.cast(pl.Float64).to_numpy()
+    b = v.cast(pl.Float64).to_numpy()
+    nan_a, nan_b = np.isnan(a), np.isnan(b)
+    differ = ~nan_a & ~nan_b & (a != b)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        share = filled * (b / a) ** 2
+    explained = differ & (a * b > 0) & (share > filled) & (share <= 1.0 + 1e-12)
+    return explained, (nan_a != nan_b) | (differ & ~explained)
+
+
+#: The fields whose arithmetic changed since 1.3.0 within rounding, by the
+#: CHANGELOG's Fixed entry: the residuals' skewness reads `m_2·√m_2`, two
+#: correctly rounded operations, where it read the platform's `pow`. They
+#: and the Jarque-Bera statistic built on them move by an ulp or two (4e-16
+#: of `1 + |v|` at most here), in every spec that emits its tails.
+ROUNDED = (("skew_", "jarque_bera_"), 1e-15)
+
+#: The diagnostics read from a co-moment matrix's upper triangle, by the
+#: CHANGELOG's Changed entry (CLAUDE.md rule 5's sixth exception): every
+#: `EwCov` keeps its matrix as the lower triangle and reads an upper entry as
+#: its mirror, rounded apart from the entry a release kept on its own. The
+#: specification, calibration and break tests and the information
+#: coefficient each solve from one triangle and read their cross terms from
+#: the other, so they part from every release's by rounding, in every
+#: diagnosed spec. Measured 2026-11-01 on every 1.x release, of `1 + |v|`:
+#: `calibration_*` 1.1e-13, `ramsey_reset_*` 3.9e-14, `break_wald_*`
+#: 1.1e-14, `breusch_pagan_*` 8.8e-16, `ic_*` 2.7e-16.
+UPPER_READ = (("calibration_", "ramsey_reset_", "break_wald_", "breusch_pagan_", "ic_"), GOLDEN)
+
+#: A spec whose drift detector resets the model, by its flag: from the row
+#: after one that fires, every field is what a fresh bank fed those rows
+#: returns (the CHANGELOG's Fixed entry, "starts the model over exactly"),
+#: so a file goes on as its release did up to its first reset, and as a
+#: fresh bank of this build after it.
+RESETS = {"ridge_reset": "drift_y"}
+
+
+def _learned_clock_kept(
+    mine: pl.DataFrame,
+    want: pl.DataFrame,
+    name: str,
+    spec: dict,
+    second: pl.DataFrame,
+    wrong: dict[str, list[str]],
+    used: dict[str, int],
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """``learned_clock`` moves only on a row with a target to learn (review
+    2026-11-23, STRM-4): where the release's names the clock of a row whose
+    every target is null, this build's names an earlier row's; everywhere
+    else the two are equal. Checked here, and the column left out of the
+    general comparison."""
+    field = f"{name}.learned_clock"
+    if field not in mine.columns:
+        return mine, want
+    clock = spec.get("clock")
+    targets = [t for t in spec.get("targets", []) if isinstance(t, str)]
+    if clock is None or not targets or len(targets) != len(spec.get("targets", [])):
+        return mine, want
+    only_predicted = set(
+        second.filter(pl.all_horizontal(pl.col(t).is_null() for t in targets))[clock].to_list()
+    )
+    bad = []
+    for i, (g, w) in enumerate(zip(mine[field].to_list(), want[field].to_list(), strict=True)):
+        if g == w:
+            continue
+        if w in only_predicted and (g is None or g < w):
+            used["learned_clock"] = used.get("learned_clock", 0) + 1
+            continue
+        bad.append(f"{field} at row {i}: {g!r} against the release's {w!r}")
+    if bad:
+        wrong[f"{name}.learned_clock"] = bad[:3]
+    return mine.drop(field), want.drop(field)
+
+
+def _plain(frame: pl.DataFrame) -> pl.DataFrame:
+    """A frame's struct columns opened, an Enum as its values: a release's
+    `withheld_reason` has fewer categories, and its rows compare by value."""
+    out = frame.select(
+        pl.col(c).struct.unnest().name.prefix(f"{c}.") if frame[c].dtype == pl.Struct else pl.col(c)
+        for c in frame.columns
+    )
+    return out.with_columns(pl.col(pl.Enum, pl.Categorical).cast(pl.String))
+
+
+def _gaps(u: pl.Series, v: pl.Series) -> tuple[np.ndarray, np.ndarray]:
+    """Each row's gap between two float columns or float lists, relative to
+    ``1 + |v|`` (0 where they agree to the bit, NaN against NaN and null
+    against null included; inf where their nulls, NaNs or lengths part), and
+    whether the row agrees to the bit."""
+    if isinstance(v.dtype, pl.List) or isinstance(u.dtype, pl.List):
+        pairs = list(zip(u.to_list(), v.to_list(), strict=True))
+    else:
+        pairs = [([a], [b]) for a, b in zip(u.to_list(), v.to_list(), strict=True)]
+    gap = np.zeros(len(pairs))
+    exact = np.ones(len(pairs), dtype=bool)
+    for i, (x, y) in enumerate(pairs):
+        if (x is None) != (y is None) or (x is not None and len(x) != len(y)):
+            gap[i], exact[i] = np.inf, False
+            continue
+        if x is None:
+            continue
+        a = np.array(_flatten(x), dtype=float)
+        b = np.array(_flatten(y), dtype=float)
+        nan_a, nan_b = np.isnan(a), np.isnan(b)
+        if (nan_a != nan_b).any():
+            gap[i], exact[i] = np.inf, False
+            continue
+        ok = ~nan_b
+        exact[i] = bool((a[ok] == b[ok]).all())
+        if ok.any():
+            gap[i] = float((np.abs(a[ok] - b[ok]) / (1 + np.abs(b[ok]))).max())
+    return gap, exact
+
+
+def _differences(
+    got: pl.DataFrame,
+    want: pl.DataFrame,
+    *,
+    within: float = 0.0,
+    young: dict[str, float] | None = None,
+    against: str = "the release's",
+    counted: dict[str, int] | None = None,
+    converted: np.ndarray | None = None,
+) -> list[str]:
+    """Where ``got`` parts from ``want``, field by field: the first row, both
+    values, how many rows and the largest gap relative to ``1 + |v|``. Every
+    field ``want`` reports is compared; floats to the bit, or within
+    ``within``; a field starting with a prefix of ``young`` to the bit but
+    on rows where it is the release's sum read at a younger share than the
+    prefix's filled one (`YOUNG`), which ``counted["young"]`` counts; and,
+    where ``converted`` gives the rows held, a field starting with a prefix
+    of `CONVERTED` held on those rows alone, the rows it parts on elsewhere
+    counted in ``counted["converted"]``."""
+    got, want = _plain(got), _plain(want)
+    if got.height != want.height:
+        return [f"{got.height} rows against {against} {want.height}"]
+    lost = sorted(set(want.columns) - set(got.columns))
+    if lost:
+        return [f"{against} fields {lost} are gone"]
+    out = []
+    for c in want.columns:
+        u, v = got[c], want[c]
+        floats = any(
+            d.is_float() or (isinstance(d, pl.List) and d.inner.is_float())
+            for d in (u.dtype, v.dtype)
+        )
+        if floats:
+            gap, exact = _gaps(u, v)
+            field = c.split(".", 1)[-1]
+            prefix = next((p for p in young or {} if field.startswith(p)), None)
+            if prefix is not None:
+                explained, bad = _young_rows(u, v, (young or {})[prefix])
+                # The spec's own tolerance holds here too (`lasso`'s 1e-9
+                # moves the sums the share divides).
+                bad &= ~(gap <= within)
+                if counted is not None:
+                    counted["young"] = counted.get("young", 0) + int(explained.sum())
+            else:
+                tol = max(within, ROUNDED[1]) if field.startswith(ROUNDED[0]) else within
+                if field.startswith(UPPER_READ[0]):
+                    tol = max(tol, UPPER_READ[1])
+                bad = ~exact & ~(gap <= tol)
+                if converted is not None and field.startswith(CONVERTED):
+                    if counted is not None:
+                        counted["converted"] = counted.get("converted", 0) + int(
+                            (bad & ~converted).sum()
+                        )
+                    bad &= converted
+        else:
+            gap, bad = None, ~(u.eq_missing(v).to_numpy())
+        if bad.any():
+            row = int(np.flatnonzero(bad)[0])
+            size = f"{int(bad.sum())} rows"
+            if gap is not None:
+                size += f", the largest gap {float(gap[bad].max()):.1e} of 1 + |v|"
+            out.append(f"{c} at row {row}: {u[row]!r} against {against} {v[row]!r} ({size})")
+    return out
+
+
+@pytest.fixture(scope="module", params=RESUMED)
+def resumed(request, tmp_path_factory):
+    """A release's moved specs: its files, and what the release reports on
+    the second half of the stream from each, run under its own wheel."""
+    version = request.param
+    manifest, states = _saved(version, tmp_path_factory)
+    names = sorted(_moved(version) & set(manifest["saved"]))
+    out = tmp_path_factory.mktemp(f"resumed-{version}")
+    subprocess.run(
+        [
+            str(compare.released_python(version)),
+            "-I",
+            str(REPO / "scripts" / "release_probe.py"),
+            "--resume",
+            str(states),
+            str(out),
+            *names,
+        ],
+        check=True,
+    )
+    return version, names, states, out
+
+
+def _after_reset(rows: pl.DataFrame, second: pl.DataFrame, name: str, flag: str) -> np.ndarray:
+    """Each row after its group's first reset in ``rows``."""
+    fired = rows[name].struct.field(flag).fill_null(False).to_numpy().astype(bool)
+    groups = second["g"].to_numpy()
+    after = np.zeros(len(fired), dtype=bool)
+    for g in np.unique(groups):
+        at = np.flatnonzero((groups == g) & fired)
+        if at.size:
+            after |= (groups == g) & (np.arange(len(fired)) > at[0])
+    return after
+
+
+def _fresh(spec: list[dict], second: pl.DataFrame, after: np.ndarray, name: str) -> pl.DataFrame:
+    """A fresh bank's rows on each group's rows after its first reset, in
+    the stream's order."""
+    rows = second.with_row_index("_at").filter(pl.Series(after))
+    parts = [
+        rp.ModelBank(spec).fit_predict(rows.filter(pl.col("g") == g)).select("_at", name)
+        for g in rows["g"].unique(maintain_order=True)
+    ]
+    return pl.concat(parts).sort("_at").drop("_at")
+
+
+def test_a_moved_spec_goes_on_as_its_release_did(resumed):
+    """A spec a CHANGELOG entry moved since a release: this build loads the
+    release's file and goes on as the release itself goes on from it, every
+    field of every row and of the tables `probe.tables` reads, to the bit,
+    run under the release's own wheel (`WITHIN`, `ROUNDED`, `UPPER_READ`,
+    `YOUNG` and `RESETS` name the declared exceptions). `withheld_reason`
+    compares by value, since this build's Enum has categories the release's
+    has not."""
+    version, names, states, out = resumed
+    assert names, f"{version}: no spec of its moved since"
+    built = {name: probe.build(b, name, kw) for name, b, kw, _ in probe.WORKLOAD}
+    work = {name: reads for name, _, _, reads in probe.WORKLOAD}
+    second = probe.stream().slice(probe.HALF)
+    wrong: dict[str, list[str]] = {}
+    used: dict[str, int] = {
+        "young": 0,
+        "reset": 0,
+        "conformal": 0,
+        "converted": 0,
+        "prior": 0,
+        "restart": 0,
+        "new_statistics": 0,
+    }
+    for name in names:
+        specs = [built[r] for r in work[name]] + [built[name]]
+        bank = rp.ModelBank.load(states / f"{name}.state", specs=specs)
+        got = {"rows": bank.fit_predict(second).select(name), **probe.tables(bank, name)}
+        # The young sums moved after 1.3.0 (below): a later release's file
+        # reads them as this build does, and a diagnosed spec of it moved by
+        # another entry is held by that entry's bound alone.
+        young = (
+            (YOUNG if name in ABSORBS else YOUNG_SQ)
+            if name.startswith("full_") and _version(version) <= _version("1.3.0")
+            else None
+        )
+        rule = dict(within=_within(name, version), young=young)
+        if name in ZERO_WEIGHT_MOVED:
+            rule["within"] = max(rule["within"], ZERO_WEIGHT_WITHIN)
+        if (
+            _version(version) <= _version("1.4.0")
+            and (name, "1.4.0") in DECLARED
+            and DECLARED[(name, "1.4.0")].endswith("residual spread")
+        ):
+            # Each group's first row of the second half, where the saved
+            # radius is shown.
+            groups = second["g"].to_numpy()
+            first = np.zeros(len(groups), dtype=bool)
+            first[np.unique(groups, return_index=True)[1]] = True
+            rule["converted"] = first
+            used["conformal"] += 1
+        prior = _version(version) <= _version(UNDER_THE_PRIOR.get(name, "0.0.0"))
+        restart = _version(version) <= _version(RESTARTED_LEVEL.get(name, "0.0.0"))
+        for table in sorted(p.name.split(".")[-2] for p in out.glob(f"{name}.*.parquet")):
+            want = pl.read_parquet(out / f"{name}.{table}.parquet")
+            if table not in got:
+                wrong[f"{name}.{table}"] = ["not reported by this build"]
+                continue
+            mine = got[table]
+            if prior:
+                used["prior"] += 1
+                wrong[f"{name}.{table}"] = _under_the_prior(mine, want)
+                continue
+            if restart:
+                used["restart"] += 1
+                wrong[f"{name}.{table}"] = _restarted_level(mine, want, name, table)
+                continue
+            if table == "rows" and any(
+                n == name and _version(version) <= _version(since) for n, since in NEW_STATISTICS
+            ):
+                # Under the new statistic (`NEW_STATISTICS`): as this build
+                # goes on from both halves, `since_flag` aside.
+                used["new_statistics"] += 1
+                own = rp.ModelBank(specs)
+                own.fit_predict(probe.stream().head(probe.HALF))
+                ours = _plain(own.fit_predict(second).select(name))
+                wrong[f"{name}.rows"] = _differences(
+                    _plain(mine).drop(f"{name}.since_flag"),
+                    ours.drop(f"{name}.since_flag"),
+                    against="this build's own",
+                )
+                continue
+            left = np.ones(second.height, dtype=bool)
+            if table == "rows" and name in RESETS:
+                after = _after_reset(mine, second, name, RESETS[name])
+                assert after.any(), f"{name}: no reset fired in the second half"
+                used["reset"] += 1
+                fresh = _fresh(specs, second, after, name)
+                wrong[f"{name}.rows after its resets"] = _differences(
+                    mine.filter(pl.Series(after)), fresh, against="a fresh bank's"
+                )
+                mine, want = mine.filter(pl.Series(~after)), want.filter(pl.Series(~after))
+                left = ~after
+            if table == "rows" and name in ZERO_WEIGHT_MOVED:
+                counts = (second["w"].is_null() | (second["w"] != 0.0)).to_numpy()
+                if "converted" in rule:
+                    rule["converted"] = rule["converted"][counts]
+                counts = counts[left]
+                mine, want = mine.filter(pl.Series(counts)), want.filter(pl.Series(counts))
+                # Which row of a chunk carries `coef` follows the rows that
+                # count; the coefficients themselves are the `coef` table's.
+                mine = _plain(mine).drop(f"{name}.coef", strict=False)
+                want = _plain(want).drop(f"{name}.coef", strict=False)
+            if table == "rows":
+                mine, want = _learned_clock_kept(
+                    _plain(mine), _plain(want), name, built[name], second, wrong, used
+                )
+            held = rule if table == "rows" else {k: v for k, v in rule.items() if k != "converted"}
+            wrong[f"{name}.{table}"] = _differences(mine, want, counted=used, **held)
+        # The rows were compared: the release wrote them, all of them.
+        assert pl.read_parquet(out / f"{name}.rows.parquet").height == second.height, name
+    # The exceptions were used: the comparisons they excuse ran, and moved.
+    # The young sums moved after 1.3.0 (task 278, D-B5), so a later
+    # release's files read them as this build does and use no exception.
+    young_moved = _version(version) <= _version("1.3.0")
+    assert used["reset"] == len(set(RESETS) & set(names)), used
+    restated = {n for n, since in NEW_STATISTICS if _version(version) <= _version(since)}
+    assert used["new_statistics"] == len(restated & set(names)), used
+    # A file of 1.4.0 or older holds a radius, and its interval moved; one of
+    # 1.5.0 holds the multiplier, so the conformal entry covers none of its
+    # specs.
+    radius = sum(
+        DECLARED.get((n, "1.4.0"), "").endswith("residual spread")
+        and _version(version) <= _version("1.4.0")
+        for n in names
+    )
+    assert used["conformal"] == radius and (used["converted"] > 0) == (radius > 0), used
+    assert bool(used["young"]) == young_moved, used
+    under = [n for n in names if _version(version) <= _version(UNDER_THE_PRIOR.get(n, "0.0.0"))]
+    assert bool(used["prior"]) == bool(under), used
+    # `learned_clock`'s exception excused a row: the temporal spec's held
+    # rows include ones with no target, released under its `embargo`.
+    if "ridge_datetime" in names:
+        assert used.get("learned_clock", 0) > 0, used
+    restarted = [n for n in names if _version(version) <= _version(RESTARTED_LEVEL.get(n, "0.0.0"))]
+    assert bool(used["restart"]) == bool(restarted), used
+    wrong = {k: v for k, v in wrong.items() if v}
+    assert not wrong, "\n".join(f"{k}: {line}" for k, v in sorted(wrong.items()) for line in v)
+
+
+def _under_the_prior(got: pl.DataFrame, want: pl.DataFrame) -> list[str]:
+    """Where a file that goes on under a rule the release never ran
+    (`UNDER_THE_PRIOR`) parts from the release's continuation in what that
+    rule leaves alone: `weight_sum` to the bit, `withheld_reason` by value,
+    and every float a number, null or NaN where the release's is."""
+    got, want = _plain(got), _plain(want)
+    if got.height != want.height:
+        return [f"{got.height} rows against the release's {want.height}"]
+    out = []
+    for c in want.columns:
+        if c not in got.columns:
+            out.append(f"the release's field {c} is gone")
+            continue
+        u, v = got[c], want[c]
+        field = c.split(".", 1)[-1]
+        if field == "weight_sum":
+            gap, exact = _gaps(u, v)
+            bad = ~exact
+        elif u.dtype.is_float() and v.dtype.is_float():
+            a, b = u.to_numpy(), v.to_numpy()
+            bad = np.isnan(a) != np.isnan(b)
+        elif isinstance(u.dtype, pl.List) or isinstance(v.dtype, pl.List):
+            bad = (u.is_null() != v.is_null()).to_numpy()
+        else:
+            bad = ~(u.eq_missing(v).to_numpy())
+        if bad.any():
+            row = int(np.flatnonzero(bad)[0])
+            out.append(f"{c} at row {row}: {u[row]!r} against the release's {v[row]!r}")
+    return out
+
+
+def _restarted_level(got: pl.DataFrame, want: pl.DataFrame, name: str, table: str) -> list[str]:
+    """Where a file whose level restarts on load (`RESTARTED_LEVEL`) parts
+    from the release's continuation in what the restart leaves alone: `u`,
+    `weight_sum` and `settled_frac` to the bit; `rho` and `loglik` null on a
+    run of first rows and numbers after it, which ends inside the frame;
+    `withheld_reason` `below_warm_rows` on that run and the release's value
+    after; and in any other table, a number wherever the release has one."""
+    got, want = _plain(got), _plain(want)
+    if got.height != want.height:
+        return [f"{got.height} rows against the release's {want.height}"]
+    out = []
+    if table != "rows":
+        for c in want.columns:
+            u, v = got[c], want[c]
+            floats = u.dtype.is_float() or isinstance(u.dtype, pl.List)
+            if floats and not (u.is_null() == v.is_null()).all():
+                out.append(f"{c}: a null where the release has a number, or the reverse")
+        return out
+    rho = got[f"{name}.rho"].to_numpy().astype(float)
+    learned = np.isfinite(rho)
+    if not learned.any():
+        return [f"{name}.rho: the level never relearned"]
+    first = int(np.flatnonzero(learned)[0])
+    if not learned[first:].all():
+        out.append(f"{name}.rho: null after the level relearned at row {first}")
+    for field in ("u", "weight_sum", "settled_frac"):
+        c = f"{name}.{field}"
+        _, exact = _gaps(got[c], want[c])
+        if not exact.all():
+            row = int(np.flatnonzero(~exact)[0])
+            out.append(f"{c} at row {row}: {got[c][row]!r} against the release's {want[c][row]!r}")
+    loglik = got[f"{name}.loglik"].to_numpy().astype(float)
+    if np.isfinite(loglik[:first]).any():
+        out.append(f"{name}.loglik: a number before the level relearned")
+    reason = got[f"{name}.withheld_reason"]
+    if not (reason[:first] == "below_warm_rows").all():
+        out.append(f"{name}.withheld_reason: not below_warm_rows before the level relearned")
+    if not reason[first:].eq_missing(want[f"{name}.withheld_reason"][first:]).all():
+        out.append(f"{name}.withheld_reason: the release's differs after the level relearned")
+    return out
+
+
+def test_a_young_field_parts_only_as_the_same_sum_at_a_younger_share():
+    """`_young_rows` excuses a row only where this build's value is the
+    release's sum over the square root of a share above the filled one and
+    at most 1: the filled share itself, a value further from 0 than the
+    release's, a flipped sign and a null against a number are each refused."""
+    rel = pl.Series([1.0, -2.0, 3.0, 4.0, 5.0, None, 6.0, 7.0])
+    got = pl.Series(
+        [
+            1.0,  # the filled share: equal
+            -2.0 * np.sqrt(0.5 / 0.8),  # a share of 0.8
+            3.0 * np.sqrt(0.5),  # the plain sum, share 1
+            4.0 * np.sqrt(0.5 / 1.2),  # a share above 1
+            5.5,  # further from 0: a share below the filled one
+            1.0,  # a number where the release has none
+            -6.0,  # the sign flipped
+            None,  # none where the release has one
+        ]
+    )
+    explained, bad = _young_rows(got, rel, 0.5)
+    assert explained.tolist() == [False, True, True, False, False, False, False, False]
+    assert bad.tolist() == [False, False, False, True, True, True, True, True]
+
+
+def test_every_declared_move_names_a_spec_and_a_release():
+    names = {name for name, *_ in probe.WORKLOAD}
+    for (name, since), why in DECLARED.items():
+        # Offline the 1.x releases are not listed; a declared move is of one.
+        listed = since in RELEASES if PUBLISHED is not None else _major(since) >= 1
+        assert name in names and listed and why, (name, since, why)
+    # A tolerance excuses only a declared move, of the same releases' files,
+    # and only within rounding (1e-9), but rule 5's twenty-third exception's:
+    # a weighted `sgd` or `pa` file goes on by a new read, not within
+    # rounding of its release (`WITHIN`'s bounds of 0.06 and 0.25).
+    for (name, since), tol in WITHIN.items():
+        most = 0.25 if name in READ_ANEW and since == "2.0.0" else 1e-9
+        assert (name, since) in DECLARED and 0 < tol <= most, (name, since, tol)
+    assert set(RESETS) <= {n for n, _ in DECLARED}
+
+
+def test_a_release_is_listed_once_uploaded_unless_yanked():
+    """``pypi_releases`` reads PyPI's JSON as ``pip`` does: a final version
+    with at least one file, not every file yanked. A prerelease, a version
+    whose files are all yanked and one with no file are left out, and the
+    rest come oldest first by number, not by text."""
+    file, yanked = {"yanked": False}, {"yanked": True}
+    doc = {
+        "releases": {
+            "1.10.0": [file],
+            "1.9.0": [file, yanked],
+            "1.2.0": [yanked, yanked],
+            "1.3.0": [],
+            "2.0.0rc1": [file],
+            "0.13.0": [file],
+        }
+    }
+    assert pypi_releases(json.dumps(doc)) == ["0.13.0", "1.9.0", "1.10.0"]
+
+
+def test_every_1_x_release_on_pypi_is_held():
+    """The 1.x releases the test holds are the ones PyPI lists, read when the
+    suite is collected: the first is 1.0.0, each is a final version, and the
+    four before 1.0 stay literal beside them."""
+    if PUBLISHED is None:
+        pytest.skip("offline: PyPI's list of releases cannot be read")
+    assert PUBLISHED[0] == "1.0.0" and "1.4.0" in PUBLISHED, PUBLISHED
+    assert RELEASES == PRE_1_0 + PUBLISHED
+    assert [v for v in LOADED if v != THIS_BUILD] == PUBLISHED
+
+
+def test_the_policy_page_says_where_the_releases_come_from():
+    """``docs/VERSIONS.md``'s section on state files across releases says
+    the 1.x releases are read from PyPI and names no list to edit on release
+    day: a list of releases by name went stale there (task 269, review 8
+    F-2), and keeping one current was a commit after every release (task
+    317). It does not call every release's files refused. The section moved
+    from RELEASE-READINESS.md's *A released build's state files* in task 338
+    stage 9."""
+    page = (REPO / "docs" / "VERSIONS.md").read_text(encoding="utf-8")
+    section = page.split("### State files across releases", 1)[1].split("\n### ", 1)[0]
+    section = section.split("\n## ", 1)[0]
+    flat = " ".join(section.split())
+    assert "read from PyPI" in flat, "the section does not say the releases are read from PyPI"
+    assert "Add each release" not in flat and "joins the same way, on its release day" not in flat
+    assert "any release so far is refused" not in flat
+
+
+def _changelog_entries() -> list[str]:
+    """Each bullet of ``CHANGELOG.md``, its lines joined: an entry runs from
+    a line opening with ``- `` to the next such line, blank line or heading."""
+    entries: list[str] = []
+    current: list[str] | None = None
+    for line in (REPO / "CHANGELOG.md").read_text(encoding="utf-8").splitlines():
+        if line.startswith("- "):
+            if current:
+                entries.append(" ".join(current))
+            current = [line[2:].strip()]
+        elif current is not None and line.startswith("  ") and line.strip():
+            current.append(line.strip())
+        else:
+            if current:
+                entries.append(" ".join(current))
+            current = None
+    if current:
+        entries.append(" ".join(current))
+    return entries
+
+
+def test_a_change_against_the_policy_is_on_the_policy_page():
+    """A CHANGELOG entry that says a change went against the release policy
+    names a setting, as ``name="value"`` in backticks, that
+    ``docs/VERSIONS.md``'s *Defaults changed in a minor release* names too:
+    the page records each departure from its own table, with the reason
+    (task 270, review 9's R4-2: ``huber_scale``'s default moved in a minor
+    and the page did not say). The policy moved there from
+    RELEASE-READINESS.md's *The policy* in task 338 stage 9."""
+    import re
+
+    page = (REPO / "docs" / "VERSIONS.md").read_text(encoding="utf-8")
+    policy = page.split("### Defaults changed in a minor release", 1)[1].split("\n### ", 1)[0]
+    against = [e for e in _changelog_entries() if "against the policy" in " ".join(e.split())]
+    assert against, "no CHANGELOG entry says it went against the policy"
+    for entry in against:
+        settings = set(re.findall(r"`([a-z_][a-z0-9_]*)=", entry))
+        assert settings, f"names no setting: {entry[:120]}"
+        assert any(f"`{s}`" in policy or f"`{s}=" in policy for s in settings), (
+            f"the policy names none of {sorted(settings)}: {entry[:120]}"
+        )
+
+
+#: The last release without the Huber refit (task 277). A `huber` or
+#: `sgd(loss="huber")` state it saved goes on here to the bit; a fresh
+#: `huber_refit_rows = 0` is its `huber` to the bit only where no MAD sketch
+#: is kept (`huber_scale = "rms"`), since the next release anchors that
+#: sketch (task 278).
+BEFORE_REFIT = "1.3.0"
+
+_REFIT_SCRIPT = """
+import json, sys
+import polars as pl
+import importlib, importlib.util
+name = 'rheon.polars' if importlib.util.find_spec('rheon') else 'polars_online'
+po = importlib.import_module(name)
+specs, data, out = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3]
+frames = [po.ModelBank([s]).fit_predict(pl.read_parquet(data)).select(s["name"]) for s in specs]
+pl.concat(frames, how="horizontal").write_parquet(out)
+"""
+
+
+def test_no_refit_is_the_release_before_it_to_the_bit(tmp_path):
+    """``huber_refit_rows = 0`` turns off the refit 1.4.0 put on by default.
+    On 2,000 rows of two targets at a level of 1,000 with 12.5% one-sided
+    outliers, nulls and zero weights, where the default's refit runs on both
+    targets and moves each (the activation check below):
+
+    - **a state 1.3.0 saved goes on to the bit**, every ``huber`` spec:
+      under both scales and with feature sets, saved by 1.3.0 at row 1,000
+      and loaded here, it reports what 1.3.0's own run reports on the rows
+      after it; ``sgd``'s Huber loss under each schedule does within 3e-3,
+      since it reads each weighted row in the stream's own unit of weight
+      (rule 5's twenty-third exception). The file has no
+      ``huber_refit_rows`` and loads with the refit off, so it never refits
+      rows its stream has passed; it keeps 1.3.0's fixed sketch buckets and
+      the ``sgd`` steps it was fitted with.
+    - **a fresh ``huber_refit_rows = 0`` is 1.3.0's ``huber`` to the bit
+      under ``huber_scale = "rms"``**, which keeps no MAD sketch. Under the
+      MAD, the default, it parts from 1.3.0 by the sketch's anchor (task 278:
+      the sketch keeps each residual in units of the first one it takes,
+      where 1.3.0's buckets were fixed), by less than a sketch bucket moves a
+      prediction; 6.0e-5 of ``1 + |v|`` here at the level of 1,000, 1.6e-3
+      on the second target.
+    - ``sgd``'s Huber loss is held fresh to the activation check alone: task
+      278's sgd group (D1, D2, D-S: the clip, AdaGrad's epsilon and the
+      intercept in the target's own spread and level) moved its steps, so
+      with the refit off it does not give 1.3.0's numbers."""
+    if not _online():
+        pytest.skip("offline: the released wheel cannot be downloaded")
+    rng = np.random.default_rng(12)
+    n, half = 2000, 1000
+    x = rng.standard_normal(n)
+    z = rng.standard_normal(n)
+    y0 = 1000.0 + 2.0 * x - z + 0.5 * rng.standard_normal(n)
+    y0[(rng.random(n) < 0.25) & (x > 0)] += 50.0
+    y1 = np.where(np.arange(n) % 7 == 3, np.nan, -3.0 * x + rng.standard_t(3, n))
+    w = np.where(np.arange(n) % 11 == 5, 0.0, rng.uniform(0.5, 1.5, n))
+    df = pl.DataFrame({"x": x, "z": z, "y0": y0, "y1": y1, "w": w}).with_columns(
+        pl.col("y1").fill_nan(None)
+    )
+    data = tmp_path / "rows.parquet"
+    df.write_parquet(data)
+    head = tmp_path / "head.parquet"
+    df.head(half).write_parquet(head)
+    c = dict(targets=["y0", "y1"], features=["x", "z"], half_life=float("inf"), weight="w")
+    released = [
+        rp.spec.huber("h_mad", **c),
+        rp.spec.huber("h_rms", huber_scale="rms", **c),
+        rp.spec.huber("h_sets", feature_sets={"x": ["x"], "both": ["x", "z"]}, **c),
+        *[
+            rp.spec.sgd(f"s_{s}", loss="huber", schedule=s, learning_rate=0.05, **c)
+            for s in ("constant", "inv_scaling", "adagrad")
+        ],
+    ]
+    out = tmp_path / "released.parquet"
+    saved = tmp_path / "bank.state"
+    for script, rows, to in ((_REFIT_SCRIPT, data, out), (_SAVE_SCRIPT, head, saved)):
+        subprocess.run(
+            [
+                str(compare.released_python(BEFORE_REFIT)),
+                "-I",
+                "-c",
+                script,
+                json.dumps(released),
+                str(rows),
+                str(to),
+            ],
+            check=True,
+        )
+    then = pl.read_parquet(out)
+
+    def run(rows: int | None) -> pl.DataFrame:
+        frames = []
+        for s in released:
+            model = dict(s["model"])
+            if rows is not None:
+                model["huber_refit_rows"] = rows
+            spec = {**s, "model": model}
+            frames.append(rp.ModelBank([spec]).fit_predict(df).select(s["name"]))
+        return pl.concat(frames, how="horizontal")
+
+    def plain(frame: pl.DataFrame) -> pl.DataFrame:
+        # `withheld_reason`'s Enum gained categories after the release (task
+        # 278); its values are compared, as strings.
+        return frame.select(
+            pl.col(c).struct.unnest().name.prefix(f"{c}.") for c in frame.columns
+        ).with_columns(pl.col(pl.Enum).cast(pl.String))
+
+    # A state 1.3.0 saved goes on to the bit, every `huber` spec, past the
+    # 500 rows the default would refit at. The `sgd` specs read each weighted
+    # row in the stream's own unit of weight since review C1 (rule 5's
+    # twenty-third exception), so they go on by that read from 1.3.0's fit,
+    # not to the bit: their predictions within 3e-3 of `1 + |v|` of 1.3.0's
+    # own continuation (measured 2026-11-20: 8.1e-4 at most, `s_constant`'s
+    # second target; 5e-6 to 5e-5 elsewhere), with the same nulls.
+    huber = [s["name"] for s in released if s["name"].startswith("h_")]
+    resumed = rp.ModelBank.load(saved, specs=released).fit_predict(df.slice(half))
+    assert plain(resumed.select(huber)).equals(
+        plain(then.slice(half).select(huber)), null_equal=True
+    )
+    for name in (s["name"] for s in released if s["name"].startswith("s_")):
+        got, want = _floats(resumed.select(name)), _floats(then.slice(half).select(name))
+        for field in (f for f in want if ".pred_" in f):
+            u, v = got[field], want[field]
+            np.testing.assert_array_equal(np.isnan(u), np.isnan(v), err_msg=field)
+            ok = np.isfinite(v)
+            gap = (np.abs(u[ok] - v[ok]) / (1 + np.abs(v[ok]))).max()
+            assert gap < 3e-3, (field, gap)
+
+    off = run(0)
+    assert plain(off.select("h_rms")).equals(plain(then.select("h_rms")), null_equal=True)
+    for name in ("h_mad", "h_sets"):
+        # The anchor moved it (activation), and by no more than a bucket of
+        # the sketch moves a prediction.
+        assert not off[name].equals(then[name], null_equal=True), name
+        got, want = _floats(off.select(name)), _floats(then.select(name))
+        for field in (f for f in want if ".pred_" in f):
+            u, v = got[field], want[field]
+            np.testing.assert_array_equal(np.isnan(u), np.isnan(v), err_msg=field)
+            ok = np.isfinite(v)
+            assert (np.abs(u[ok] - v[ok]) / (1 + np.abs(v[ok]))).max() < 1e-2, field
+    moved = run(None)
+    for s in released:
+        assert not moved[s["name"]].equals(then[s["name"]], null_equal=True), s["name"]
+
+
+_SAVE_SCRIPT = """
+import json, sys
+import polars as pl
+import importlib, importlib.util
+name = 'rheon.polars' if importlib.util.find_spec('rheon') else 'polars_online'
+po = importlib.import_module(name)
+specs, data, out = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3]
+bank = po.ModelBank(specs)
+bank.fit_predict(pl.read_parquet(data))
+bank.save(out)
+"""
+
+
+def test_a_bank_of_the_release_before_the_refit_resumes_without_it_in_its_groups(tmp_path):
+    """A bank 1.3.0 saved holds `huber` groups fitted without the refit, and
+    its file has no `huber_refit_rows`: loaded here, each restored group goes
+    on as 1.3.0 did -- its state says the refit is off, so it never refits
+    rows its stream has passed, and it keeps 1.3.0's fixed sketch buckets --
+    to the bit against 1.3.0's own continuation, past 500 rows; a group the
+    bank first sees after the load is built from the spec, whose default
+    refits at 500 rows, as a fresh bank's does. One bank, two rules: the
+    restored groups' and the new one's. Before its refit the new group is a
+    bank's whose refit waits past the rows, its scale read from the same
+    buffered residuals (task 323)."""
+    if not _online():
+        pytest.skip("offline: the released wheel cannot be downloaded")
+    rng = np.random.default_rng(21)
+    first, second = 150, 600
+
+    def rows(groups: list[str], n: int, t0: float) -> pl.DataFrame:
+        k = len(groups) * n
+        x = rng.standard_normal(k)
+        y = 1000.0 + 2.0 * x + 0.5 * rng.standard_normal(k)
+        y[(rng.random(k) < 0.25) & (x > 0)] += 50.0
+        t = t0 + np.repeat(np.arange(n, dtype=float), len(groups))
+        return pl.DataFrame({"g": groups * n, "t": t, "x": x, "y": y})
+
+    head = rows(["a", "b"], first, 0.0)
+    tail = rows(["a", "b", "c"], second, float(first))
+    data = tmp_path / "head.parquet"
+    head.write_parquet(data)
+    c = dict(targets=["y"], features=["x"], group="g", clock="t", gap_cap=10.0)
+    spec = rp.spec.huber("m", half_life=float("inf"), **c)
+    saved = tmp_path / "bank.state"
+    whole = tmp_path / "whole.parquet"
+    pl.concat([head, tail]).write_parquet(whole)
+    went_on = tmp_path / "went_on.parquet"
+    for script, rows, to in ((_SAVE_SCRIPT, data, saved), (_REFIT_SCRIPT, whole, went_on)):
+        subprocess.run(
+            [
+                str(compare.released_python(BEFORE_REFIT)),
+                "-I",
+                "-c",
+                script,
+                json.dumps([spec]),
+                str(rows),
+                str(to),
+            ],
+            check=True,
+        )
+    # 1.3.0's own run over both parts, its rows after the save.
+    then = pl.read_parquet(went_on).with_columns(g=pl.concat([head, tail])["g"]).slice(head.height)
+    resumed = rp.ModelBank.load(saved, specs=[spec]).fit_predict(tail)
+    waits = {**spec, "model": {**spec["model"], "huber_refit_rows": 10_000}}
+    one_pass = rp.ModelBank([waits])
+    one_pass.fit_predict(head)
+    restored = one_pass.fit_predict(tail)
+    fresh_c = rp.ModelBank([spec]).fit_predict(tail.filter(pl.col("g") == "c"))
+
+    def plain(frame: pl.DataFrame) -> pl.DataFrame:
+        # `withheld_reason`'s Enum gained categories after the release (task
+        # 278); its values are compared, as strings.
+        return frame["m"].struct.unnest().with_columns(pl.col(pl.Enum).cast(pl.String))
+
+    for g in ("a", "b"):
+        mine = plain(resumed.filter(pl.col("g") == g))
+        assert mine.equals(plain(then.filter(pl.col("g") == g)), null_equal=True), g
+    new = resumed.filter(pl.col("g") == "c")["m"]
+    assert new.equals(fresh_c["m"], null_equal=True)
+    # The new group's refit ran: it parts from a refit that waits after its
+    # 500th row.
+    p = new.struct.field("pred_y").to_numpy()
+    q = restored.filter(pl.col("g") == "c")["m"].struct.field("pred_y").to_numpy()
+    differ = np.flatnonzero(~((p == q) | (np.isnan(p) & np.isnan(q))))
+    assert differ.size and differ[0] >= 500, differ[:3]

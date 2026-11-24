@@ -1,0 +1,507 @@
+"""`ModelBank.skip_learned`: resuming a saved bank on input that overlaps it
+(docs/PLAN.md task 120, decided by the user on 2026-09-28: "Resume should get
+a helper").
+
+A bank resumes at the next row. Input that starts before the save steps every
+group's clock back to rows the state has learned, which is refused unless
+`restart_after_step_back` reads it as a new start. The helper keeps each row after its
+group's last clock, in every spec with a clock, and every row of a group the
+bank has not seen, so the rerun learns each row once.
+"""
+
+from datetime import UTC, datetime, timedelta
+
+import numpy as np
+import polars as pl
+import pytest
+
+from rheon import polars as rp
+
+TIER = "essential"
+
+
+def frame(n=400, seed=0, groups=("a", "b", "c")):
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal(n)
+    return pl.DataFrame(
+        {
+            "g": [groups[i % len(groups)] for i in range(n)],
+            "t": np.arange(float(n)),
+            "x0": x,
+            "y": 2.0 * x + 0.1 * rng.standard_normal(n),
+        }
+    )
+
+
+def spec(name="m", **kw):
+    d = dict(targets=["y"], features=["x0"], clock="t", half_life=50.0, gap_cap=10.0)
+    d.update(kw)
+    return rp.spec.ewridge(name, **d)
+
+
+def test_a_rerun_learns_each_row_once():
+    df = frame()
+    specs = [spec(group="g")]
+    whole = rp.ModelBank(specs).fit_predict(df)
+    bank = rp.ModelBank(specs)
+    bank.fit_predict(df.head(250))
+    saved = bank.save_bytes()
+    # The rerun starts 100 rows before the save.
+    rerun = df.slice(150)
+    with pytest.raises(ValueError, match="skip_learned"):
+        rp.ModelBank.load_bytes(saved, specs).fit_predict(rerun)
+    resumed = rp.ModelBank.load_bytes(saved, specs)
+    kept = resumed.skip_learned(rerun)
+    assert kept.equals(df.slice(250))
+    out = resumed.fit_predict(kept)
+    assert out["m"].equals(whole["m"].slice(250))
+
+
+def test_a_lazy_frame_stays_lazy_and_keeps_its_order():
+    df = frame()
+    bank = rp.ModelBank([spec(group="g")])
+    bank.fit_predict(df.head(200))
+    lazy = bank.skip_learned(df.lazy())
+    assert isinstance(lazy, pl.LazyFrame)
+    assert lazy.collect().equals(df.slice(200))
+
+
+def test_a_group_the_bank_has_not_seen_keeps_every_row_and_a_null_group_is_one():
+    df = frame().with_columns(
+        g=pl.when(pl.col("g") == "c").then(None).otherwise(pl.col("g")).alias("g")
+    )
+    bank = rp.ModelBank([spec(group="g")])
+    bank.fit_predict(df.head(90))
+    later = pl.concat([df.slice(60, 60), frame(9, 1, ("new",)).with_columns(t=pl.lit(70.0))])
+    kept = bank.skip_learned(later)
+    last = dict(df.head(90).group_by("g").agg(pl.col("t").max()).iter_rows())
+    assert None in last
+    want = [r for r in later.iter_rows(named=True) if r["g"] == "new" or r["t"] > last[r["g"]]]
+    assert kept.to_dicts() == want
+    assert kept.filter(pl.col("g") == "new").height == 9
+    assert kept.filter(pl.col("g").is_null()).height > 0
+
+
+def test_a_row_at_the_last_clock_counts_as_learned_and_a_null_clock_is_kept():
+    df = frame(groups=("a",))
+    bank = rp.ModelBank([spec(group="g")])
+    bank.fit_predict(df.head(50))
+    last = df["t"][49]
+    probe = pl.DataFrame(
+        {
+            "g": ["a"] * 4,
+            "t": [last - 1.0, last, last + 1e-9, None],
+            "x0": [1.0] * 4,
+            "y": [1.0] * 4,
+        }
+    )
+    assert bank.skip_learned(probe)["t"].to_list() == [last + 1e-9, None]
+
+
+@pytest.mark.parametrize("tz", [None, "America/New_York"])
+def test_a_temporal_clock_is_compared_in_exact_nanoseconds(tz):
+    """A double of epoch seconds resolves about 0.24 us today; the state keeps
+    integer nanoseconds, and so does the comparison, whatever the zone."""
+    start = datetime(2024, 3, 10, 6, 59, 59, tzinfo=UTC)
+    ns = [int(start.timestamp()) * 10**9 + i for i in range(6)]
+    t = pl.Series("t", ns).cast(pl.Datetime("ns", "UTC"))
+    if tz is not None:
+        t = t.dt.convert_time_zone(tz)
+    df = pl.DataFrame({"t": t, "x0": np.arange(6.0), "y": np.arange(6.0)})
+    bank = rp.ModelBank([spec(half_life="1s", gap_cap="1s")])
+    bank.fit_predict(df.head(3))
+    assert bank.skip_learned(df).equals(df.slice(3))
+
+
+def test_a_date_clock():
+    days = pl.date_range(datetime(2024, 1, 1), datetime(2024, 1, 20), eager=True)
+    df = pl.DataFrame({"d": days, "x0": np.arange(20.0), "y": np.arange(20.0)})
+    bank = rp.ModelBank([spec(clock="d", half_life="5d", gap_cap="3d")])
+    bank.fit_predict(df.head(12))
+    assert bank.skip_learned(df.slice(5)).equals(df.slice(12))
+    shifted = df.with_columns(d=pl.col("d") - timedelta(days=1))
+    assert bank.skip_learned(shifted).equals(shifted.slice(13))
+
+
+def test_a_row_is_kept_only_where_every_spec_has_not_learned_it():
+    """Two specs, one grouped and one not: a row is new only after the last
+    clock of its group in the first and of the whole stream in the second."""
+    df = frame()
+    bank = rp.ModelBank([spec("grouped", group="g"), spec("whole")])
+    bank.fit_predict(df.head(100))
+    extra = pl.DataFrame({"g": ["a"], "t": [98.5], "x0": [0.0], "y": [0.0]})
+    # After group a's last clock (97) but before the stream's (99): not new.
+    assert bank.skip_learned(extra).height == 0
+    assert bank.skip_learned(df).equals(df.slice(100))
+
+
+def test_what_it_refuses():
+    counted = rp.ModelBank([rp.spec.ewridge("n", targets=["y"], features=["x0"], half_life=5.0)])
+    with pytest.raises(ValueError, match="no spec reads a clock"):
+        counted.skip_learned(frame())
+    bank = rp.ModelBank([spec(group="g")])
+    bank.fit_predict(frame().head(20))
+    with pytest.raises(ValueError, match="clock column 't' is not in the input"):
+        bank.skip_learned(frame().drop("t"))
+    with pytest.raises(ValueError, match="group column 'g' is not in the input"):
+        bank.skip_learned(frame().drop("g"))
+    temporal = frame().with_columns(t=pl.from_epoch(pl.col("t").cast(pl.Int64), time_unit="s"))
+    with pytest.raises(TypeError, match="temporal in the frame, but it was numeric in the bank"):
+        bank.skip_learned(temporal)
+    # The docstring's third refusal (task 239): a clock column that is
+    # neither numeric nor temporal.
+    text = frame().with_columns(t=pl.col("t").cast(pl.String))
+    with pytest.raises(TypeError, match="clock column 't' has dtype String, which is not a clock"):
+        bank.skip_learned(text)
+
+
+def test_an_empty_bank_keeps_everything():
+    df = frame()
+    assert rp.ModelBank([spec(group="g")]).skip_learned(df).equals(df)
+
+
+def test_an_instant_nanoseconds_cannot_hold_is_kept_for_the_bank_to_refuse():
+    """Review 2026-09-28: the frame's clock was scaled to nanoseconds in polars
+    integer arithmetic, which wraps, so a Datetime("ms") past 2262 fell below
+    every saved clock and was dropped silently, where fit_predict refuses it
+    by name. The comparison is in the column's own unit now."""
+    t = pl.Series("t", [1_700_000_000_000 + i for i in range(4)]).cast(pl.Datetime("ms"))
+    df = pl.DataFrame({"t": t, "x0": np.arange(4.0), "y": np.arange(4.0)})
+    bank = rp.ModelBank([spec(half_life="1s", gap_cap="1s")])
+    bank.fit_predict(df.head(2))
+    far = pl.DataFrame(
+        {
+            "t": pl.Series([datetime(3000, 1, 1, tzinfo=UTC)]).cast(pl.Datetime("ms")),
+            "x0": [0.0],
+            "y": [0.0],
+        }
+    )
+    kept = bank.skip_learned(pl.concat([df.slice(2), far]))
+    assert kept.height == 3
+    with pytest.raises(ValueError, match="nanoseconds cannot hold"):
+        bank.fit_predict(kept)
+
+
+def test_the_command_line_is_told_its_own_way_out(rheon_cli, tmp_path):
+    """The refusal names each surface's way out: `ModelBank.skip_learned` in
+    Python and `--skip-learned` on the command line (docs/PLAN.md task 196,
+    N26), where it said to filter the input by hand, the command line having
+    none. The message named the Python method alone until task 154. And the
+    flag keeps what the method keeps: the same rows, the same numbers."""
+    from conftest import run_online
+
+    df = frame()
+    df.head(250).write_parquet(tmp_path / "first.parquet")
+    df.slice(150).write_parquet(tmp_path / "rerun.parquet")
+    specs = [spec(group="g")]
+    state = tmp_path / "bank.state"
+    run_online(
+        rheon_cli,
+        tmp_path,
+        specs,
+        input=tmp_path / "first.parquet",
+        output=tmp_path / "first-out.parquet",
+        save_state=state,
+    )
+    res = run_online(
+        rheon_cli,
+        tmp_path,
+        specs,
+        input=tmp_path / "rerun.parquet",
+        output=tmp_path / "rerun-out.parquet",
+        args=["--load-state", str(state)],
+        check=False,
+    )
+    assert res.returncode != 0 and "steps back" in res.stderr, res.stderr
+    assert "skip_learned" in res.stderr
+    assert "(or --skip-learned)" in res.stderr, res.stderr
+    run_online(
+        rheon_cli,
+        tmp_path,
+        specs,
+        input=tmp_path / "rerun.parquet",
+        output=tmp_path / "skipped-out.parquet",
+        args=["--load-state", str(state), "--skip-learned"],
+    )
+    got = pl.read_parquet(tmp_path / "skipped-out.parquet")
+    bank = rp.ModelBank.load(state)
+    rerun = pl.read_parquet(tmp_path / "rerun.parquet")
+    want = bank.fit_predict(bank.skip_learned(rerun))
+    assert got.height == want.height == 150
+    name = specs[0]["name"]
+    for f in ("pred_y", "weight_sum"):
+        assert got[name].struct.field(f).equals(want[name].struct.field(f)), f
+
+
+def test_the_command_line_keeps_the_rows_the_method_keeps_across_specs_that_group_differently(
+    tmp_path, rheon_cli
+):
+    """PLAN 566: a row is dropped when some spec has it before its group's
+    last clock, kept when another has it after or in an unseen group, and a
+    weight-0 row at a last clock is kept: the command line's rule is the
+    method's."""
+    from conftest import run_online
+
+    first = pl.DataFrame(
+        {
+            "t": [0.0, 0.0, 1.0],
+            "comp": ["IRT", "IRT", "IRT"],
+            "seg": ["1_N", "2_N", "1_N"],
+            "x0": [1.0, 2.0, 3.0],
+            "y": [1.0, 2.0, 3.0],
+            "w": [1.0, 1.0, 1.0],
+        }
+    )
+    # tie in both; tie + after; tie + unseen; before + tie; weight 0 at a last
+    # clock in both; weight 0 before one; after in both.
+    rows = pl.DataFrame(
+        {
+            "t": [1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 2.0],
+            "comp": ["IRT"] * 7,
+            "seg": ["1_N", "2_N", "3_N", "2_N", "1_N", "1_N", "1_N"],
+            "x0": [0.0] * 7,
+            "y": [0.0] * 7,
+            "w": [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+        }
+    )
+    specs = [spec("by_comp", group="comp", weight="w"), spec("by_seg", group="seg", weight="w")]
+    first.write_parquet(tmp_path / "first.parquet")
+    rows.write_parquet(tmp_path / "rows.parquet")
+    state = tmp_path / "bank.state"
+    run_online(
+        rheon_cli,
+        tmp_path,
+        specs,
+        input=tmp_path / "first.parquet",
+        output=tmp_path / "first-out.parquet",
+        save_state=state,
+    )
+    want = rp.ModelBank.load(state).skip_learned(rows)
+    assert want["t"].to_list() == [1.0, 1.0, 1.0, 2.0]
+    run_online(
+        rheon_cli,
+        tmp_path,
+        specs,
+        input=tmp_path / "rows.parquet",
+        output=tmp_path / "rows-out.parquet",
+        args=["--load-state", str(state), "--skip-learned"],
+    )
+    got = pl.read_parquet(tmp_path / "rows-out.parquet")
+    assert got.height == want.height
+    assert got["t"].equals(want["t"])
+
+
+# --- a clock that may start again (review fable2, Y2; the user, 2026-11-20:
+# "Refuse unless declared") -----------------------------------------------------
+
+# Each setting under which a group's clock may legally start again lower: a
+# session change (closing the group or not) or a large enough step back.
+RESTARTS = {
+    "session_gap=reset": dict(session="d", session_gap="reset"),
+    "session_gap=1": dict(session="d", session_gap=1.0),
+    "group_close=session": dict(session="d", group_close="session", group="g"),
+    "restart_after_step_back": dict(restart_after_step_back=5.0),
+}
+
+
+def days(runs_on: bool) -> pl.DataFrame:
+    """Three days of 150 rows, one group `g`. The clock starts again each day, or
+    runs on across them (a timestamp with the day as the session)."""
+    rng = np.random.default_rng(0)
+    n = 150
+    base = pl.DataFrame({"t": np.arange(float(n)), "x0": rng.normal(size=n)}).with_columns(
+        y=pl.col.x0 * 2 + 0.1
+    )
+    out = pl.concat([base.with_columns(d=pl.lit(k), g=pl.lit("a")) for k in (1, 2, 3)])
+    if runs_on:
+        out = out.with_columns(t=pl.col.t + (pl.col.d - 1) * 1000.0)
+    return out
+
+
+@pytest.mark.parametrize("setting", list(RESTARTS))
+def test_a_clock_that_may_start_again_is_refused_unless_declared(setting, tmp_path):
+    """Where the clock starts again, the last clock is not a place in the
+    stream: the rule both dropped every unlearned row of the next day (0 of
+    300 kept) and passed learned ones, and the bank took them in silence. The
+    frame and the state cannot tell such a stream from one whose clock runs
+    on, so the call refuses, naming the spec and the setting, until the
+    caller declares the clock runs on. A lazy frame is refused as it is built."""
+    df = days(runs_on=False)
+    bank = rp.ModelBank([spec(**RESTARTS[setting])])
+    bank.fit(df.head(150))
+    for frame_ in (df, df.lazy()):
+        with pytest.raises(ValueError) as refused:
+            bank.skip_learned(frame_)
+        text = str(refused.value)
+        assert text.startswith('ModelBank.skip_learned: spec "m"'), text
+        key = "restart_after_step_back" if setting == "restart_after_step_back" else "session"
+        assert key in text, text
+        assert "clock_runs_on=True" in text, text
+        assert "never goes back" in text, text
+
+
+@pytest.mark.parametrize("setting", list(RESTARTS))
+@pytest.mark.parametrize("learned", [150, 225])
+def test_a_declared_clock_keeps_exactly_the_rows_the_bank_accepts(setting, learned):
+    """Declared, on a stream whose clock runs on across sessions: the rows
+    kept are exactly those after the save, the bank accepts them, and the
+    resumed numbers are those of the stream fed without a break."""
+    df = days(runs_on=True)
+    specs = [spec(**RESTARTS[setting])]
+    whole = rp.ModelBank(specs).fit_predict(df)
+    bank = rp.ModelBank(specs)
+    bank.fit(df.head(learned))
+    kept = bank.skip_learned(df, clock_runs_on=True)
+    assert kept.equals(df.slice(learned))
+    lazy = bank.skip_learned(df.lazy(), clock_runs_on=True)
+    assert lazy.collect().equals(kept)
+    out = bank.fit_predict(kept)
+    assert out["m"].equals(whole["m"].slice(learned))
+
+
+def test_clock_runs_on_is_checked_and_needs_no_session():
+    """A spec with neither setting needs no declaration, and accepts one: it
+    states what such a spec already requires. The flag is a bool."""
+    df = frame()
+    bank = rp.ModelBank([spec(group="g")])
+    bank.fit_predict(df.head(200))
+    assert bank.skip_learned(df, clock_runs_on=True).equals(df.slice(200))
+    with pytest.raises(TypeError, match="clock_runs_on must be a bool"):
+        bank.skip_learned(df, clock_runs_on=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("how", ["flag", "key"])
+def test_the_command_line_refuses_unless_declared(rheon_cli, tmp_path, how):
+    """`--skip-learned` applies the same rule in Rust, so it refuses the same
+    specs, `--dry-run` included, until `--clock-runs-on` (or the config's
+    `clock_runs_on = true`) declares the clock runs on; then it keeps the rows
+    the Python call keeps, to the bit."""
+    from conftest import run_online
+
+    df = days(runs_on=True)
+    df.head(225).write_parquet(tmp_path / "first.parquet")
+    df.write_parquet(tmp_path / "rerun.parquet")
+    specs = [spec(**RESTARTS["session_gap=1"])]
+    state = tmp_path / "bank.state"
+    run_online(
+        rheon_cli,
+        tmp_path,
+        specs,
+        input=tmp_path / "first.parquet",
+        output=tmp_path / "first-out.parquet",
+        save_state=state,
+    )
+    resume = dict(input=tmp_path / "rerun.parquet", output=tmp_path / "rerun-out.parquet")
+    for extra in ([], ["--dry-run"]):
+        res = run_online(
+            rheon_cli,
+            tmp_path,
+            specs,
+            args=["--load-state", str(state), "--skip-learned", *extra],
+            check=False,
+            **resume,
+        )
+        assert res.returncode != 0, res.stderr
+        assert 'spec "m"' in res.stderr and "session" in res.stderr, res.stderr
+        assert "--clock-runs-on" in res.stderr and "clock_runs_on" in res.stderr, res.stderr
+    declared = (
+        dict(args=["--load-state", str(state), "--skip-learned", "--clock-runs-on"])
+        if how == "flag"
+        else dict(args=["--load-state", str(state), "--skip-learned"], clock_runs_on=True)
+    )
+    run_online(rheon_cli, tmp_path, specs, **resume, **declared)
+    got = pl.read_parquet(tmp_path / "rerun-out.parquet")
+    bank = rp.ModelBank.load(state)
+    want = bank.fit_predict(bank.skip_learned(df, clock_runs_on=True))
+    assert got.height == want.height == 225
+    for f in ("pred_y", "weight_sum"):
+        assert got["m"].struct.field(f).equals(want["m"].struct.field(f)), f
+
+
+def test_the_command_line_refuses_clock_runs_on_without_skip_learned(rheon_cli, tmp_path):
+    """`clock_runs_on` says how to read a saved state's clocks for
+    `skip_learned`, and means nothing without it."""
+    from conftest import run_online
+
+    frame().write_parquet(tmp_path / "in.parquet")
+    res = run_online(
+        rheon_cli,
+        tmp_path,
+        [spec()],
+        input=tmp_path / "in.parquet",
+        output=tmp_path / "out.parquet",
+        clock_runs_on=True,
+        check=False,
+    )
+    assert res.returncode != 0
+    assert "clock_runs_on" in res.stderr and "skip_learned" in res.stderr, res.stderr
+
+
+@pytest.mark.parametrize("keys", [["A", "B", "C"], [1, 2, 10]])
+def test_a_monotone_close_drops_the_groups_it_closed(keys, rheon_cli, tmp_path):
+    """Review 2026-11-23, BANK-1: under ``group_close = "monotone"`` a group
+    a greater key closed is gone from the bank, and its last clock with it,
+    so ``skip_learned`` read it as a group the bank had not seen and kept
+    every row of it, which ``fit_predict`` then refused as a group below
+    the largest the bank has read. A group below that mark is one the bank
+    learned and closed: its rows are dropped, in key order (as numbers for
+    an integer column), on the command line too."""
+    from conftest import run_online
+
+    n = 4
+    df = pl.DataFrame(
+        {
+            "g": [k for k in keys for _ in range(n)],
+            "t": np.arange(3.0 * n),
+            "x0": np.arange(3.0 * n),
+            "y": 2.0 * np.arange(3.0 * n),
+        }
+    )
+    s = spec(group="g", group_close="monotone")
+    bank = rp.ModelBank([s])
+    bank.fit(df.head(2 * n + 2))
+    kept = bank.skip_learned(df)
+    assert kept["g"].to_list() == [keys[2]] * (n - 2)
+    out = bank.fit_predict(kept)
+    assert out.height == n - 2
+    # The command line's --skip-learned keeps the same rows.
+    df.head(2 * n + 2).write_parquet(tmp_path / "first.parquet")
+    df.write_parquet(tmp_path / "rerun.parquet")
+    state = tmp_path / "bank.state"
+    run_online(
+        rheon_cli,
+        tmp_path,
+        [s],
+        input=tmp_path / "first.parquet",
+        output=tmp_path / "first-out.parquet",
+        save_state=state,
+    )
+    run_online(
+        rheon_cli,
+        tmp_path,
+        [s],
+        input=tmp_path / "rerun.parquet",
+        output=tmp_path / "rerun-out.parquet",
+        args=["--load-state", str(state), "--skip-learned"],
+    )
+    assert pl.read_parquet(tmp_path / "rerun-out.parquet")["g"].to_list() == [keys[2]] * (n - 2)
+
+
+def test_a_clock_that_is_not_a_finite_number_is_kept_for_the_bank_to_refuse():
+    """Review 2026-11-23, BANK-2: ``-inf`` read as before the last clock and
+    its row was dropped in silence, where a NaN or a null is kept for
+    :meth:`fit_predict` to refuse by row."""
+    df = frame(groups=("a",))
+    bank = rp.ModelBank([spec(group="g")])
+    bank.fit_predict(df.head(50))
+    probe = pl.DataFrame(
+        {
+            "g": ["a"] * 4,
+            "t": [float("-inf"), float("inf"), float("nan"), 1.0],
+            "x0": [1.0] * 4,
+            "y": [1.0] * 4,
+        }
+    )
+    kept = bank.skip_learned(probe)["t"].to_list()
+    assert kept[0] == float("-inf") and kept[1] == float("inf") and np.isnan(kept[2])
+    assert len(kept) == 3

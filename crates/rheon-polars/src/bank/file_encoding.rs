@@ -1,0 +1,379 @@
+//! How a bank file is encoded and checked: the groups' states written lazily,
+//! and the JSON export read back.
+
+use super::*;
+
+/// The lines around a parse failure, so the error names the field rather than
+/// a line number nobody can look up: the export is thousands of lines and the
+/// enclosing keys are what identify the struct.
+pub(super) fn near(text: &str, line: usize) -> String {
+    if line == 0 {
+        return String::new();
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let lo = line.saturating_sub(4);
+    let hi = line.min(lines.len());
+    let mut out = String::from(", at:");
+    for (i, l) in lines[lo..hi].iter().enumerate() {
+        let n = lo + i + 1;
+        let mark = if n == line { ">" } else { " " };
+        out.push_str(&format!("\n  {mark} {}", l.trim_end()));
+    }
+    out
+}
+
+/// Is `text` the whole of `file`? The JSON is read back into a `BankFile`
+/// and re-encoded, and the msgpack must match the real state byte for byte.
+///
+/// This is the enforcement behind [`rheon_core::humanfloat`], not a
+/// belt-and-braces check. JSON has no literal for `NaN` or `±inf` and
+/// `serde_json` writes all three as `null` without a word, so every config
+/// float a caller may set to infinity needs annotating -- and the only way
+/// to know one was missed is to read the export back. A `null` where an
+/// `f64` belongs fails to parse, and the byte comparison catches anything
+/// subtler. `O(state)` twice over, paid once at the end of a run.
+///
+/// Note that the interception is in `serde_json`'s *serializer*, not its
+/// formatter: `serialize_f64` sends a non-finite value to `write_null`
+/// before any `Formatter` sees it, so a custom formatter cannot fix this
+/// and the annotation has to be on the field.
+pub(super) fn json_is_faithful(file: &BankFile, text: &str) -> Result<(), String> {
+    let want = rmp_serde::to_vec_named(file).map_err(|e| e.to_string())?;
+    let back: BankFile = serde_json::from_str(text).map_err(|e| {
+        format!(
+            // A field that writes NaN or ±inf as null, which needs
+            // `#[serde(with = "crate::humanfloat::f64_or_tag")]` in rheon-core.
+            "ModelBank.write_json: the export dropped a value the state holds ({e}), which is a \
+             defect in rheon. Open an issue at \
+             https://github.com/rheon-dev/rheon/issues with this message and the lines it \
+             shows{}",
+            near(text, e.line())
+        )
+    })?;
+    let got = rmp_serde::to_vec_named(&back).map_err(|e| e.to_string())?;
+    if got != want {
+        return Err(
+            "ModelBank.write_json: the export did not read back as the state it came from, \
+             which is a defect in rheon. Open an issue at \
+             https://github.com/rheon-dev/rheon/issues with this message."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// A bank file's decoding refused, past its header: the bytes are a bank
+/// file of a version this build reads, so the refusal is damage. A model's
+/// own refusal (a `try_from` of its saved form, which rmp-serde shows bare)
+/// already says what to do; any other is said with the remedy here, so the
+/// text has one.
+pub(super) fn damaged(e: rmp_serde::decode::Error) -> String {
+    use rmp_serde::decode::Error as De;
+    // The decoder's own failures in plain words: its text names
+    // MessagePack markers, a word of the code.
+    // serde's own refusals arrive as `Syntax` too, in its words.
+    const KIND: &str = "a value is not of the kind the file holds there";
+    const KNOWN: &str = "a value it must hold is missing, or it holds one this build \
+                             does not know";
+    let plain = match &e {
+        De::InvalidMarkerRead(_) | De::InvalidDataRead(_) => Some("it is cut short"),
+        De::TypeMismatch(_) | De::OutOfRange | De::LengthMismatch(_) | De::Uncategorized(_) => {
+            Some(KIND)
+        }
+        De::Utf8Error(_) => Some("a text value is not valid text"),
+        De::DepthLimitExceeded => Some("its values nest deeper than a state file's values ever do"),
+        De::Syntax(m)
+            if ["invalid type", "invalid value", "invalid length"]
+                .iter()
+                .any(|p| m.starts_with(p)) =>
+        {
+            Some(KIND)
+        }
+        De::Syntax(m)
+            if [
+                "missing field",
+                "unknown field",
+                "unknown variant",
+                "duplicate field",
+            ]
+            .iter()
+            .any(|p| m.starts_with(p)) =>
+        {
+            Some(KNOWN)
+        }
+        De::Syntax(_) => None,
+    };
+    if let Some(what) = plain {
+        return format!(
+            "state file: it is damaged ({what}). Load an undamaged copy of the state \
+                 file, or rebuild it from its input."
+        );
+    }
+    let body = e.to_string();
+    if body.ends_with("rebuild it from its input.") {
+        format!("state file: it is damaged: {body}")
+    } else {
+        // Its first sentence only: a refusal written for another
+        // reader, such as a formula's for the command line's TOML,
+        // ends with a remedy that cannot mend a state file.
+        let cut = [". ", "; "].iter().filter_map(|sep| body.find(sep)).min();
+        let what = cut.map_or_else(|| body.strip_suffix('.').unwrap_or(&body), |at| &body[..at]);
+        format!(
+            "state file: it is damaged ({what}). Load an undamaged copy of the state \
+                 file, or rebuild it from its input."
+        )
+    }
+}
+
+/// The groups' states, snapshotted one group at a time as they are encoded,
+/// rather than all at once beforehand: the file's bytes are the same, and a
+/// save holds one group's snapshot beside the bank instead of a copy of it.
+pub(super) struct LazyStates<'a>(pub(super) &'a Bank);
+
+impl Serialize for LazyStates<'_> {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        struct Spec<'a>(Vec<(&'a GroupKey, &'a Stream)>);
+        impl Serialize for Spec<'_> {
+            fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+                use serde::ser::SerializeSeq;
+                let mut seq = ser.serialize_seq(Some(self.0.len()))?;
+                for (k, st) in &self.0 {
+                    // A tuple of a reference and the snapshot writes the
+                    // same two-element array `(GroupKey, StreamState)` does.
+                    seq.serialize_element(&(*k, st.save()))?;
+                }
+                seq.end()
+            }
+        }
+        let mut seq = ser.serialize_seq(Some(self.0.states.len()))?;
+        for hm in &self.0.states {
+            let mut v: Vec<(&GroupKey, &Stream)> = hm.iter().collect();
+            v.sort_by(|a, b| a.0.cmp(b.0));
+            seq.serialize_element(&Spec(v))?;
+        }
+        seq.end()
+    }
+}
+
+/// A writer that keeps the last I/O error its target raised, with its kind
+/// and OS code, since the encoder reports a failed write as text. The encoder
+/// stops at the first error it is handed, so the last one kept is the one
+/// that ended the save; an `Interrupted` is not kept, since `write_all`
+/// retries it and the save goes on.
+pub(super) struct Stash<'a, W: std::io::Write> {
+    inner: &'a mut W,
+    error: Option<std::io::Error>,
+}
+
+impl<'a, W: std::io::Write> Stash<'a, W> {
+    pub(super) fn new(inner: &'a mut W) -> Self {
+        Self { inner, error: None }
+    }
+
+    pub(super) fn take_error(&mut self) -> Option<std::io::Error> {
+        self.error.take()
+    }
+
+    fn keep(&mut self, e: &std::io::Error) {
+        if e.kind() == std::io::ErrorKind::Interrupted {
+            return;
+        }
+        self.error = Some(match e.raw_os_error() {
+            Some(code) => std::io::Error::from_raw_os_error(code),
+            None => std::io::Error::new(e.kind(), e.to_string()),
+        });
+    }
+}
+
+impl<W: std::io::Write> std::io::Write for Stash<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf).inspect_err(|e| self.keep(e))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush().inspect_err(|e| self.keep(e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::Bank;
+    use std::io::{self, ErrorKind, Write};
+
+    struct Failing(ErrorKind, Option<i32>);
+    impl Write for Failing {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(match self.1 {
+                Some(c) => io::Error::from_raw_os_error(c),
+                None => io::Error::new(self.0, "no"),
+            })
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A write that fails mid-encode reaches the caller as the same kind
+    /// (and OS code), not as the encoder's text.
+    #[test]
+    fn a_failed_write_keeps_its_error_kind() {
+        let spec = serde_json::from_str(
+            r#"{"name": "m", "model": {"type": "ewridge"}, "targets": ["y"],
+                "features": ["x"], "half_life": 10.0}"#,
+        )
+        .unwrap();
+        let bank = Bank::new(vec![spec]).unwrap();
+        for kind in [
+            ErrorKind::PermissionDenied,
+            ErrorKind::StorageFull,
+            ErrorKind::NotFound,
+        ] {
+            let e = bank.write_msgpack_io(&mut Failing(kind, None)).unwrap_err();
+            assert_eq!(e.kind(), kind);
+        }
+        let e = bank
+            .write_msgpack_io(&mut Failing(ErrorKind::Other, Some(libc_enospc())))
+            .unwrap_err();
+        assert_eq!(e.raw_os_error(), Some(libc_enospc()));
+    }
+
+    /// A write that fails and is retried (`write_all` retries `Interrupted`)
+    /// is no error of the save: the one that ends it is. The first error
+    /// kept was the retried one, so a save that then met a full disk said
+    /// it was interrupted.
+    #[test]
+    fn a_retried_interruption_is_not_the_error_a_later_failure_is_reported_as() {
+        /// Writes three times, interrupted once before the first, then fails.
+        struct Interrupted {
+            fail_with: ErrorKind,
+            interrupts: u32,
+            writes: u32,
+        }
+        impl Write for Interrupted {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                if self.interrupts > 0 {
+                    self.interrupts -= 1;
+                    return Err(io::Error::new(ErrorKind::Interrupted, "signal"));
+                }
+                self.writes += 1;
+                if self.writes > 3 {
+                    return Err(io::Error::new(self.fail_with, "the disk"));
+                }
+                // A few bytes at a time, as a pipe takes them: the checksum's
+                // writer hands a small file on in one block, so `write_all`
+                // calls this again for the rest.
+                Ok(buf.len().min(16))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let spec = serde_json::from_str(
+            r#"{"name": "m", "model": {"type": "ewridge"}, "targets": ["y"],
+                "features": ["x"], "half_life": 10.0}"#,
+        )
+        .unwrap();
+        let bank = Bank::new(vec![spec]).unwrap();
+        let mut w = Interrupted {
+            fail_with: ErrorKind::StorageFull,
+            interrupts: 1,
+            writes: 0,
+        };
+        let e = bank.write_msgpack_io(&mut w).unwrap_err();
+        assert!(w.writes > 3, "the write that fails was reached");
+        assert_eq!(e.kind(), ErrorKind::StorageFull, "{e}");
+        // Interrupted twice in a row, and every other write after: the same.
+        let mut w = Interrupted {
+            fail_with: ErrorKind::PermissionDenied,
+            interrupts: 2,
+            writes: 0,
+        };
+        let e = bank.write_msgpack_io(&mut w).unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::PermissionDenied, "{e}");
+    }
+
+    /// Review 459, C10: a save whose write fails part way through the
+    /// encoding, through `Bank::save`'s own temporary and rename: the error
+    /// is the write's, the destination keeps the bytes it had, and no
+    /// temporary is left beside it. The writer passes the first `ok` bytes
+    /// to the file (past the buffer's 1 MiB for the largest, so the
+    /// temporary holds a partial encoding) and then fails.
+    #[test]
+    fn a_save_that_fails_mid_encode_leaves_the_destination_and_no_temporary() {
+        struct FailAfter<'a, W: Write> {
+            inner: &'a mut W,
+            left: usize,
+        }
+        impl<W: Write> Write for FailAfter<'_, W> {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                if self.left == 0 {
+                    return Err(io::Error::new(ErrorKind::StorageFull, "the disk"));
+                }
+                let n = buf.len().min(self.left);
+                self.left -= n;
+                self.inner.write(&buf[..n])
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                self.inner.flush()
+            }
+        }
+        let spec = serde_json::from_str(
+            r#"{"name": "m", "model": {"type": "ewridge"}, "targets": ["y"],
+                "features": ["x0", "x1", "x2"], "half_life": 10.0, "group": "g"}"#,
+        )
+        .unwrap();
+        let mut bank = Bank::new(vec![spec]).unwrap();
+        let n = 40_000usize;
+        let df = polars::df!(
+            "g" => (0..n as i64).map(|i| i % 5_000).collect::<Vec<_>>(),
+            "x0" => (0..n).map(|i| (i % 7) as f64).collect::<Vec<_>>(),
+            "x1" => (0..n).map(|i| (i % 11) as f64 * 0.5).collect::<Vec<_>>(),
+            "x2" => (0..n).map(|i| (i % 13) as f64 - 6.0).collect::<Vec<_>>(),
+            "y" => (0..n).map(|i| (i % 17) as f64).collect::<Vec<_>>()
+        )
+        .unwrap();
+        bank.fit_predict(&df).unwrap();
+        let full = bank.save_bytes().unwrap();
+        assert!(
+            full.len() > (1 << 20) + 1024,
+            "the encoding is {} bytes",
+            full.len()
+        );
+        let dir = std::env::temp_dir().join(format!("rheon-save-mid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("bank.msgpack");
+        std::fs::write(&dest, b"the good state").unwrap();
+        for ok in [0usize, 1, 100, (1 << 20) + 17, full.len() - 1] {
+            let e = bank
+                .save_through(&dest, |b, w| {
+                    b.write_msgpack_io(&mut FailAfter { inner: w, left: ok })
+                })
+                .unwrap_err();
+            assert_eq!(e.kind(), ErrorKind::StorageFull, "after {ok} bytes: {e}");
+            assert_eq!(
+                std::fs::read(&dest).unwrap(),
+                b"the good state",
+                "after {ok} bytes"
+            );
+            let names: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            assert_eq!(
+                names,
+                ["bank.msgpack"],
+                "after {ok} bytes: a temporary was left"
+            );
+        }
+        // And the save that does not fail replaces it whole.
+        bank.save(&dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), full);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn libc_enospc() -> i32 {
+        if cfg!(windows) { 112 } else { 28 }
+    }
+}
