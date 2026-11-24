@@ -27,7 +27,7 @@ def kalman(
     revert_half_life: float | Duration | list[float | Duration] | None = None,
     standardize: bool = True,
     covariance_form: Literal["covariance", "square_root"] = "covariance",
-    horizons: list[float | Duration] | dict[str, float | Duration] | None = None,
+    forecast_spans: list[float | Duration] | dict[str, float | Duration] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A regression whose coefficients drift, tracked by a Kalman filter.
@@ -161,7 +161,7 @@ def kalman(
         coefficients on arm64, since each row's drift then updates the
         factor once per coefficient. At ``p0 = 1`` the two agree to about
         1e-9 of a prediction.
-    ``horizons``
+    ``forecast_spans``
         The forecasts to report, each a span of the clock ``Δ`` past the
         row read: a number of clock units (rows without a clock), or a
         duration such as ``"30d"`` on a temporal clock. Each is the
@@ -498,12 +498,12 @@ def kalman(
     # Written only where it is not the default, as the Rust spec skips it there.
     if covariance_form == "covariance":
         del model["covariance_form"]
-    if horizons is not None:
+    if forecast_spans is not None:
         # A dict is `[name, span]` pairs, as the Rust spec reads them.
         who = f"spec {quoted(name)}"
-        model["horizons"] = (
-            [[k, duration_text(v, who, "horizons")] for k, v in horizons.items()]
-            if isinstance(horizons, dict)
-            else list(horizons)
+        model["forecast_spans"] = (
+            [[k, duration_text(v, who, "forecast_spans")] for k, v in forecast_spans.items()]
+            if isinstance(forecast_spans, dict)
+            else list(forecast_spans)
         )
     return _common(name, model, targets=targets, features=features, **common)

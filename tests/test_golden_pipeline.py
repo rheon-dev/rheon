@@ -313,7 +313,7 @@ def specs() -> list[dict]:
             dist="t",
             start_rows=50,
             max_state_bytes=2500,
-            horizons=[3],
+            forecast_rows=[3],
             clock="t",
             gap_cap=6.0,
             weight="w",

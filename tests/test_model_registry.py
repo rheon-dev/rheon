@@ -82,7 +82,7 @@ MINIMAL: dict[str, dict[str, object]] = {
     },
     "audit": {"targets": None, "features": None, "half_life": None, "columns": ["x0", "x1"]},
     "hawkes": {"features": None, "kernel_decays": [1.0, 5.0]},
-    "garch": {"features": None, "half_life": None, "start_rows": 50, "horizons": [5]},
+    "garch": {"features": None, "half_life": None, "start_rows": 50, "forecast_rows": [5]},
     # The parameters given and no margins: these frames hold no correlation
     # dynamics or variance process for a start to identify, and a learned
     # start would withhold every row (`not_identified`).

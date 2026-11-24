@@ -1972,7 +1972,10 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("garch_started", &["model", "Garch", "series", "0", "theta"]),
         // the forecasts' horizons (task 559): several, out of order, and a
         // work cap of the spec's own
-        ("garch_realistic", &["model", "Garch", "cfg", "horizons"]),
+        (
+            "garch_realistic",
+            &["model", "Garch", "cfg", "forecast_rows"],
+        ),
         (
             "garch_figarch_realistic",
             &["model", "Garch", "cfg", "max_horizon_work"],

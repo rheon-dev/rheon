@@ -893,7 +893,7 @@ standardization, and `coef_half_life` sets how fast a coefficient may
 drift.
 
 
-**Forecasts at horizons.** `horizons` asks for the prediction a row of
+**Forecasts at horizons.** `forecast_spans` asks for the prediction a row of
 this row's features would get a span `Δ` of the clock past the row, with no
 row between, as the filter would make it. `forecast_<h>_<t>` is that
 prediction and `forecast_sum_<h>_<t>` its integral over the span.
@@ -2070,7 +2070,7 @@ every spec takes are in [What every spec takes](#what-every-spec-takes),
 apart from `features`, which `holt` does not take.
 
 
-**Forecasts at horizons.** `horizons` asks for the forecast a span `Δ` of
+**Forecasts at horizons.** `forecast_spans` asks for the forecast a span `Δ` of
 the clock past the row and its integral over the span. Both read the level
 and trend before the row: `forecast_<h>_<t> = l + b (s + Δ)` and
 `forecast_sum_<h>_<t> = Δ (l + b (s + Δ/2))`. At `Δ = 0` the forecast is
@@ -3565,7 +3565,7 @@ time, when you want each row's variance forecast before the row arrives: a
 risk limit, a position size, a standardized residual for a detector
 downstream. Each target is its own series with its own parameters. The
 start's rows (2,000 by default) report nothing; after them every row
-reports its variance, its standardized residual and, at each of `horizons`,
+reports its variance, its standardized residual and, at each of `forecast_rows`,
 the variance further ahead and the variance of the return over the rows to
 it.
 
@@ -3719,7 +3719,7 @@ target.
 
 #### Forecasts at horizons
 
-`horizons` asks for the variance further ahead. Each horizon is a count of
+`forecast_rows` asks for the variance further ahead. Each horizon is a count of
 rows `h` from the row read, its own included. It gives the variance `h − 1`
 rows past this one, `variance_h<h>_<t>`, and the sum of the variances over
 those `h` rows, `variance_sum_h<h>_<t>`. That sum is the variance of the
@@ -3727,7 +3727,7 @@ those `h` rows, `variance_sum_h<h>_<t>`. That sum is the variance of the
 is set beside.
 Horizon 1 is `variance_<t>` itself, the same number. Both are read before the
 row is learned, from the rows before it, so a forecast never reads a row it
-forecasts. A dict names the horizons, `horizons={"week": 5, "month": 21}`
+forecasts. A dict names the horizons, `forecast_rows={"week": 5, "month": 21}`
 giving `variance_month_<t>`.
 
 The recursion runs ahead from the row's variance, each later row's `e²`

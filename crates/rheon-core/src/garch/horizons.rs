@@ -81,14 +81,14 @@ pub fn check(cfg: &GarchCfg) -> Result<(), String> {
     let hs = &cfg.horizons;
     if hs.len() > MAX_HORIZONS {
         return Err(format!(
-            "garch: horizons may hold at most {MAX_HORIZONS} horizons, but it holds {}. Each \
+            "garch: forecast_rows may hold at most {MAX_HORIZONS} horizons, but it holds {}. Each \
              adds two fields a target to every row. Ask for {MAX_HORIZONS} or fewer.",
             hs.len()
         ));
     }
     if hs.contains(&0) {
         return Err(
-            "garch: each of horizons must be at least 1, but one is 0. A horizon counts the \
+            "garch: each of forecast_rows must be at least 1, but one is 0. A horizon counts the \
              rows from the row read, its own included: 1 is the row's own variance, 2 the next \
              row's. Give 1 or more."
                 .into(),
@@ -97,7 +97,7 @@ pub fn check(cfg: &GarchCfg) -> Result<(), String> {
     for (i, h) in hs.iter().enumerate() {
         if hs[..i].contains(h) {
             return Err(format!(
-                "garch: horizons holds {h} twice. Each horizon's fields are named by it, so it \
+                "garch: forecast_rows holds {h} twice. Each horizon's fields are named by it, so it \
                  may be asked for once. Leave out the second."
             ));
         }

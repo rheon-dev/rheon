@@ -847,7 +847,7 @@ model that only the new build has is listed as an addition and passes.
   lags, 1,000 by default), with normal, Student-t or skewed-t innovations
   (`dist`; the t on `garch` and `gjr`, the skewed t on `garch`). Each row
   reports its variance before it is learned, its standardized residual and,
-  at each of `horizons`, the variance further ahead and its sum (below);
+  at each of `forecast_rows`, the variance further ahead and its sum (below);
   `coef` holds the parameters.
   The parameters are learned by a recursive Gauss-Newton step on each row's
   score, `θ ← Proj_H(θ + a H⁻¹ g)`, projected onto the process's set in
@@ -890,7 +890,7 @@ model that only the new build has is listed as an addition and passes.
   (1.4e-14 rad), and, for the stochastic two, their definitions and their
   convergence to `PCA`. No window: none of the three can remove a row.
 - **`garch`'s forecasts at several horizons, with their sums** (task 559,
-  in place of the single `horizon` and its `forecast_<t>`): `horizons`, a
+  in place of the single `horizon` and its `forecast_<t>`): `forecast_rows`, a
   list of row counts or a dict naming them, gives per target and horizon
   `h` the variance `h − 1` rows past the row, `variance_h<h>_<t>`, and the
   sum of the variances over the `h` rows, `variance_sum_h<h>_<t>`, the
@@ -907,9 +907,9 @@ model that only the new build has is listed as an addition and passes.
   a learned row, so a span of the clock has no forecast. No state is added.
   The forecast's arithmetic is the single horizon's, `ω + P f` with `P = α
   + γ/2 + β`, so its values are unchanged to the bit; a state saved with
-  `horizon = h` loads as `horizons = [h]` and goes on to the bit.
+  `horizon = h` loads as `forecast_rows = [h]` and goes on to the bit.
 - **`holt` and `kalman` forecast at horizons on the clock** (task 559):
-  `horizons`, spans of the clock past the row (numbers of clock units, rows
+  `forecast_spans`, spans of the clock past the row (numbers of clock units, rows
   without a clock, or durations such as `"30d"`; a dict names them), give per
   target and horizon the forecast `forecast_<h>_<t>` and its integral over
   the span `forecast_sum_<h>_<t>`, read before the row from the rows before

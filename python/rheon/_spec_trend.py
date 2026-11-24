@@ -20,7 +20,7 @@ def holt(
     targets: TargetList,
     trend_half_life: float | Duration | None = None,
     trend: bool = True,
-    horizons: list[float | Duration] | dict[str, float | Duration] | None = None,
+    forecast_spans: list[float | Duration] | dict[str, float | Duration] | None = None,
     seasonal: Literal["add", "mul"] | None = None,
     seasonal_periods: int | None = None,
     period: float | Duration | None = None,
@@ -80,7 +80,7 @@ def holt(
         times ``0.5 ** (age / half_life)``, which is pandas'
         ``ewm(adjust=True)`` for unit weights. ``trend_half_life`` is refused
         beside it. Default ``True``.
-    ``horizons``
+    ``forecast_spans``
         The forecasts to report, each a span of the clock ``Δ`` past the
         row read: a number of clock units (rows without a clock), or a
         duration such as ``"30d"`` on a temporal clock. Each gives the
@@ -88,7 +88,7 @@ def holt(
         before the row is learned, as ``pred_<t>`` is; at ``Δ = 0`` the
         forecast is ``pred_<t>`` itself. A list labels each horizon's fields
         ``h<Δ>`` for a number and by the duration as written
-        (``horizons=[5, 20]`` gives ``forecast_h5_<t>`` and
+        (``forecast_spans=[5, 20]`` gives ``forecast_h5_<t>`` and
         ``forecast_sum_h5_<t>``); a dict names them. They are spans of the
         clock, never counts of rows: the trend is per clock unit, and the
         clock of the rows to come is not known. There is no forecast
@@ -217,7 +217,7 @@ def holt(
         b' = b + h * e         h = h_f under trend_half_life = inf or at s = 0,
                                else max(h_f, h_t)
 
-    The forecasts at the horizons extrapolate the level and trend before the
+    The forecasts at the requested spans extrapolate the level and trend before the
     row, ``Δ`` clock units past it, and integrate them over the span; nothing
     decays across the span, since the half-lives weigh the evidence behind
     ``l`` and ``b``, not the extrapolation:
@@ -367,14 +367,14 @@ def holt(
         # Absent when on, as the Rust spec leaves it out, so a bank reports
         # the dict this made (`ModelBank.specs`).
         model["trend"] = False
-    if horizons is not None:
+    if forecast_spans is not None:
         # A dict is `[name, span]` pairs, each span a number or a duration's
         # text, as the Rust spec reads them.
         who = f"spec {name!r}"
-        model["horizons"] = (
-            [[k, duration_text(v, who, "horizons")] for k, v in horizons.items()]
-            if isinstance(horizons, dict)
-            else list(horizons)
+        model["forecast_spans"] = (
+            [[k, duration_text(v, who, "forecast_spans")] for k, v in forecast_spans.items()]
+            if isinstance(forecast_spans, dict)
+            else list(forecast_spans)
         )
     # The fixed forms' keys, each absent when not given, as the Rust spec
     # leaves them out.

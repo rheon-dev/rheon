@@ -56,7 +56,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ),
     (
         "kalman",
-        &["coef_half_life", "revert_half_life", "horizons"],
+        &["coef_half_life", "revert_half_life", "forecast_spans"],
     ),
     (
         "huber",
@@ -68,7 +68,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
         "holt",
         &[
             "trend_half_life",
-            "horizons",
+            "forecast_spans",
             "period",
             "seasonal_half_life",
             "damping_half_life",
@@ -401,7 +401,7 @@ impl Spec {
                 put_list(&mut out, "coef_half_life", coef_half_life.as_ref());
                 put_list(&mut out, "revert_half_life", revert_half_life.as_ref());
                 for h in horizons.iter().flatten() {
-                    put(&mut out, "horizons", Some(h.span()));
+                    put(&mut out, "forecast_spans", Some(h.span()));
                 }
             }
             ModelKind::Huber {
@@ -475,7 +475,7 @@ impl Spec {
             } => {
                 put(&mut out, "trend_half_life", trend_half_life.as_ref());
                 for h in horizons.iter().flatten() {
-                    put(&mut out, "horizons", Some(h.span()));
+                    put(&mut out, "forecast_spans", Some(h.span()));
                 }
                 put(&mut out, "period", period.as_ref());
                 put(&mut out, "seasonal_half_life", seasonal_half_life.as_ref());

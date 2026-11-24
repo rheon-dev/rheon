@@ -1,4 +1,4 @@
-"""`garch`'s forecasts at horizons against `arch`'s (task 559).
+"""`garch`'s forecasts at forecast_rows against `arch`'s (task 559).
 
 `arch` forecasts from the variance and the residual it has at an origin;
 here it is handed the bank's own, so the library computes the forecast from
@@ -53,7 +53,7 @@ def _bound(vol: str, h: int) -> float:
     """The gap allowed to `arch`'s forecast at horizon `h`, in units of the
     last place of `arch`'s value (and of the sum's). Measured 2026-11-23 on
     Linux x86-64, the largest over 79 rows (15 for FIGARCH) from row 2,050 to
-    2,599: GARCH 0, 1, 4, 15 and 37 at horizons 1, 2, 5, 22 and 100, GJR 0,
+    2,599: GARCH 0, 1, 4, 15 and 37 at forecast_rows 1, 2, 5, 22 and 100, GJR 0,
     2, 4, 13 and 32, their sums at most 30. The bank forms the persistence
     `P = α + γ/2 + β` once and steps `ω + P f`, as the single horizon did,
     where `arch` adds `ω`, `α f`, `γ f/2` and `β f` a step: `P`'s one
@@ -99,9 +99,9 @@ def _series(vol: str, n: int, seed: int) -> np.ndarray:
     return out[1000:]
 
 
-def _bank(vol: str, ys: np.ndarray, horizons: list[int] = HORIZONS, **kw) -> pl.DataFrame:
+def _bank(vol: str, ys: np.ndarray, forecast_rows: list[int] = HORIZONS, **kw) -> pl.DataFrame:
     spec = rp.spec.garch(
-        "m", targets=["y"], vol=vol, start_rows=N0, horizons=horizons, coef_every=0, **kw
+        "m", targets=["y"], vol=vol, start_rows=N0, forecast_rows=forecast_rows, coef_every=0, **kw
     )
     return rp.ModelBank([spec]).fit_predict(pl.DataFrame({"y": ys})).unnest("m")
 
@@ -153,7 +153,7 @@ def test_the_forecasts_are_archs_analytic_forecast(vol):
 def _egarch_against_simulation(draws: int, seed: int, resolve: bool) -> None:
     ys = _series("egarch", 2600, 560)
     hs = [1, 2, 3, 5, 10]
-    out = _bank("egarch", ys, horizons=hs)
+    out = _bank("egarch", ys, forecast_rows=hs)
     var = out["variance_y"].fill_null(1.0).to_numpy()
     coef = out["coef"].to_list()
     gen = np.random.default_rng(seed)

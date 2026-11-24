@@ -583,7 +583,11 @@ pub struct KalmanCfg {
     pub noise_units: bool,
     /// The forecasts' horizons, spans of the clock past the row
     /// (`kalman::horizons`); empty, and not written, for none.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "forecast_spans",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub horizons: Vec<f64>,
 }
 

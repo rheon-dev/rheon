@@ -1,4 +1,4 @@
-"""``holt``'s forecasts at horizons on the clock (task 559): the forecast a
+"""``holt``'s forecasts at forecast_spans on the clock (task 559): the forecast a
 span ``Δ`` past the row, ``l + b (s + Δ)``, and its integral over the span,
 ``Δ (l + b (s + Δ/2))``, read before the row from the level and trend the
 rows before it left.
@@ -58,7 +58,7 @@ def _spec(**kw) -> dict:
 def test_the_forecasts_are_statsmodels_holt_and_their_integral_scipys():
     y = _series(SETTLED + 200)
     spans = [0, 1, 4, 30, 2.5]
-    out = _out(_spec(horizons=spans), pl.DataFrame({"y": y}))
+    out = _out(_spec(forecast_spans=spans), pl.DataFrame({"y": y}))
     alpha = 1.0 - 0.5 ** (1.0 / H_LEVEL)
     beta = 1.0 - 0.5 ** (1.0 / H_TREND)
     for t in (SETTLED + 10, SETTLED + 120, SETTLED + 199):
@@ -95,7 +95,7 @@ def test_the_forecasts_are_the_definition_at_the_level_and_trend_before_the_row(
     t = np.cumsum(rng.exponential(1.0, n))
     df = pl.DataFrame({"t": t, "y": 1.0 + 0.3 * t + rng.normal(0, 0.4, n)})
     spans = [3.5, 0.25]
-    out = _out(_spec(clock="t", gap_cap=100.0, horizons=spans), df)
+    out = _out(_spec(clock="t", gap_cap=100.0, forecast_spans=spans), df)
     coef = out["coef"].to_list()
     for r in (50, 220, 399):
         level, trend = coef[r - 1]
@@ -121,7 +121,7 @@ def test_durations_on_a_temporal_clock_label_the_fields_as_written():
         clock="t",
         gap_cap="1d",
         half_life="6h",
-        horizons={"day": timedelta(days=1), "week": "7d"},
+        forecast_spans={"day": timedelta(days=1), "week": "7d"},
         min_weight=0.0,
         coef_every=0,
     )
@@ -132,7 +132,7 @@ def test_durations_on_a_temporal_clock_label_the_fields_as_written():
     s, d = 3600.0, 86_400.0
     assert out["forecast_day_y"][201] == level + trend * (s + d)
     week = rp.spec.holt(
-        "m", targets=["y"], clock="t", gap_cap="1d", half_life="6h", horizons=["7d"]
+        "m", targets=["y"], clock="t", gap_cap="1d", half_life="6h", forecast_spans=["7d"]
     )
     assert "forecast_7d_y" in rp.spec.output_fields(week)
 
@@ -140,7 +140,7 @@ def test_durations_on_a_temporal_clock_label_the_fields_as_written():
 def test_chunk_invariance_and_a_save_go_on_to_the_bit():
     y = _series(700, 6)
     df = pl.DataFrame({"y": y, "g": np.where(np.arange(700) % 3 == 0, "a", "b")})
-    spec = _spec(horizons=[1, 7.5], group="g")
+    spec = _spec(forecast_spans=[1, 7.5], group="g")
     one = rp.ModelBank([spec]).fit_predict(df)
     for size in (1, 13, 211):
         bank = rp.ModelBank([spec])
@@ -167,7 +167,7 @@ def test_a_row_of_weight_zero_is_as_if_absent_and_forecasts_from_its_own_clock()
     y = 1.0 + 0.2 * t + rng.normal(0, 0.3, n)
     w = np.where(rng.uniform(size=n) < 0.15, 0.0, 1.0)
     df = pl.DataFrame({"t": t, "y": y, "w": w})
-    spec = _spec(clock="t", gap_cap=100.0, weight="w", horizons=[2, 0.5])
+    spec = _spec(clock="t", gap_cap=100.0, weight="w", forecast_spans=[2, 0.5])
     full = _out(spec, df)
     keep = w > 0
     thin = _out(spec, df.filter(pl.Series(keep)))
@@ -184,7 +184,7 @@ def test_a_row_of_weight_zero_is_as_if_absent_and_forecasts_from_its_own_clock()
 
 def test_a_forecast_reads_no_row_it_forecasts():
     y = _series(500, 9)
-    spec = _spec(horizons=[0.5, 3, 40])
+    spec = _spec(forecast_spans=[0.5, 3, 40])
     a = _out(spec, pl.DataFrame({"y": y}))
     for r in (200, 450):
         moved = y.copy()
@@ -199,7 +199,7 @@ def test_a_forecast_reads_no_row_it_forecasts():
 def test_no_trend_is_a_flat_forecast():
     y = _series(300, 10)
     spec = rp.spec.holt(
-        "m", targets=["y"], half_life=H_LEVEL, trend=False, horizons=[5.0], min_weight=0.0
+        "m", targets=["y"], half_life=H_LEVEL, trend=False, forecast_spans=[5.0], min_weight=0.0
     )
     out = _out(spec, pl.DataFrame({"y": y}))
     for r in (100, 299):
@@ -209,7 +209,7 @@ def test_no_trend_is_a_flat_forecast():
 
 def test_names_and_a_half_life_grid():
     spec = rp.spec.holt(
-        "m", targets=["y", "z"], half_life=[5.0, 50.0], horizons={"near": 1, "far": 10}
+        "m", targets=["y", "z"], half_life=[5.0, 50.0], forecast_spans={"near": 1, "far": 10}
     )
     fields = rp.spec.output_fields(spec)
     assert "forecast_far_z@h50" in fields and "forecast_sum_near_y@h5" in fields
@@ -226,11 +226,11 @@ def test_names_and_a_half_life_grid():
 @pytest.mark.parametrize(
     ("kw", "says"),
     [
-        ({"horizons": [-1.0]}, "finite span of the clock of 0 or more"),
-        ({"horizons": [float("inf")]}, "finite"),
-        ({"horizons": [3, 3.0]}, 'two horizons are labeled "h3"'),
-        ({"horizons": list(range(65))}, "at most 64"),
-        ({"horizons": {"sum": 1}}, 'not begin with "sum"'),
+        ({"forecast_spans": [-1.0]}, "finite span of the clock of 0 or more"),
+        ({"forecast_spans": [float("inf")]}, "finite"),
+        ({"forecast_spans": [3, 3.0]}, 'two forecast_spans are labeled "h3"'),
+        ({"forecast_spans": list(range(65))}, "at most 64"),
+        ({"forecast_spans": {"sum": 1}}, 'not begin with "sum"'),
     ],
 )
 def test_refusals(kw, says):

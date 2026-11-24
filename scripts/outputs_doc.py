@@ -173,7 +173,7 @@ MEANING: dict[str, str] = {
         "same sketch: the lower tail at a level below 0.5, the upper above it"
     ),
     "variance_<h>_<t>": (
-        "the variance of `<t>` `h - 1` rows past this one, horizon `h` of `horizons`, from the "
+        "the variance of `<t>` `h - 1` rows past this one, horizon `h` of `forecast_rows`, from the "
         "same rows, each input past the row held at its weighted mean over the rows learned; "
         "horizon 1 is `variance_<t>`"
     ),
@@ -183,7 +183,7 @@ MEANING: dict[str, str] = {
     ),
     "forecast_<h>_<t>": (
         "the prediction of `<t>` a span `Δ` of the clock past this row, horizon `<h>` of "
-        "`horizons`, from the rows before it, a regression's at this row's features held; at "
+        "`forecast_spans`, from the rows before it, a regression's at this row's features held; at "
         "`Δ = 0` it is `pred_<t>`"
     ),
     "forecast_sum_<h>_<t>": "the integral of that prediction over the span from this row",

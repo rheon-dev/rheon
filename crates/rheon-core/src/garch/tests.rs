@@ -739,7 +739,7 @@ fn a_state_of_one_horizon_loads_as_its_horizons() {
         };
         let mut entries: Vec<(rmpv::Value, rmpv::Value)> = entries
             .into_iter()
-            .filter(|(k, _)| !matches!(k.as_str(), Some("horizons" | "max_horizon_work")))
+            .filter(|(k, _)| !matches!(k.as_str(), Some("forecast_rows" | "max_horizon_work")))
             .collect();
         entries.push(("horizon".into(), old.into()));
         let mut bytes = Vec::new();

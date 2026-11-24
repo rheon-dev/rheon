@@ -565,7 +565,7 @@ class TestEveryClockParameterTakesADuration:
         "coef_half_life": ("2m", {}),
         "revert_half_life": ("1h", {}),
         "trend_half_life": ("20m", {}),
-        "horizons": (["1h", "10m"], {}),
+        "forecast_spans": (["1h", "10m"], {}),
         "period": (
             "1d",
             {"seasonal": "add", "seasonal_periods": 4, "start": "heuristic"},

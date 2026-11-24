@@ -189,7 +189,11 @@ pub struct HoltCfg {
     /// over the span (see the module docs). Empty reports none; skipped
     /// then, so a configuration of before it is written as it was, and,
     /// being the last field, a state written as an array keeps its places.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "forecast_spans",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub horizons: Vec<f64>,
 }
 
@@ -288,7 +292,7 @@ impl HoltCfg {
         no.take(crate::model::check_min_weight("holt", self.min_weight));
         if self.horizons.len() > HOLT_MAX_HORIZONS {
             no.refuse(format!(
-                "holt: horizons may hold at most {HOLT_MAX_HORIZONS} spans, but it holds {}. Each \
+                "holt: forecast_spans may hold at most {HOLT_MAX_HORIZONS} spans, but it holds {}. Each \
                  adds two fields a target to every row. Ask for {HOLT_MAX_HORIZONS} or fewer.",
                 self.horizons.len()
             ));
@@ -299,7 +303,7 @@ impl HoltCfg {
             .find(|h| !(h.is_finite() && **h >= 0.0))
         {
             no.refuse(format!(
-                "holt: each of horizons must be a finite span of the clock of 0 or more, but one \
+                "holt: each of forecast_spans must be a finite span of the clock of 0 or more, but one \
                  is {h}. A horizon is the clock past the row read: 0 is the row's own forecast. \
                  Give a span of 0 or more."
             ));
@@ -307,7 +311,7 @@ impl HoltCfg {
         for (i, h) in self.horizons.iter().enumerate() {
             if self.horizons[..i].contains(h) {
                 no.refuse(format!(
-                    "holt: horizons holds {h} twice. Each horizon's fields are named by it, so it \
+                    "holt: forecast_spans holds {h} twice. Each horizon's fields are named by it, so it \
                      may be asked for once. Leave out the second."
                 ));
                 break;
@@ -315,9 +319,9 @@ impl HoltCfg {
         }
         if !self.horizons.is_empty() && self.fixed() {
             no.refuse(
-                "holt: horizons are forecasts of the plain level and trend, and a season, a \
+                "holt: forecast_spans are forecasts of the plain level and trend, and a season, a \
                  damped trend or a given or heuristic start has no such forecast to integrate. \
-                 Leave out horizons, or leave out the season, the damping and the start."
+                 Leave out forecast_spans, or leave out the season, the damping and the start."
                     .to_owned(),
             );
         }
@@ -2373,7 +2377,7 @@ mod tests {
         })
         .unwrap_err();
         assert!(
-            e.contains("horizons are forecasts of the plain level"),
+            e.contains("forecast_spans are forecasts of the plain level"),
             "{e}"
         );
     }

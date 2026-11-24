@@ -1,4 +1,4 @@
-"""``kalman``'s forecasts at horizons on the clock (task 559): the prediction a
+"""``kalman``'s forecasts at forecast_spans on the clock (task 559): the prediction a
 row of this row's features would get ``Δ`` past the row with no row between,
 its integral over the span and its variance, as the filter would make them.
 
@@ -62,7 +62,7 @@ def _spec(**kw) -> dict:
         standardize=False,
         min_weight=0.0,
         coef_every=0,
-        horizons=SPANS,
+        forecast_spans=SPANS,
     )
     base.update(kw)
     return rp.spec.kalman("m", **base)
@@ -187,7 +187,7 @@ def test_a_forecast_reads_no_row_it_forecasts():
 
 
 def test_names():
-    spec = _spec(horizons={"soon": 1.0, "later": 30.0})
+    spec = _spec(forecast_spans={"soon": 1.0, "later": 30.0})
     fields = rp.spec.output_fields(spec)
     for name in ("forecast_soon_y", "forecast_sum_later_y", "forecast_var_later_y"):
         assert name in fields
@@ -198,9 +198,9 @@ def test_names():
 @pytest.mark.parametrize(
     ("kw", "says"),
     [
-        ({"horizons": [-1.0]}, "finite span of the clock of 0 or more"),
-        ({"horizons": [2.0, 2]}, 'two horizons are labeled "h2"'),
-        ({"horizons": {"sumx": 1.0}}, 'not begin with "sum"'),
+        ({"forecast_spans": [-1.0]}, "finite span of the clock of 0 or more"),
+        ({"forecast_spans": [2.0, 2]}, 'two forecast_spans are labeled "h2"'),
+        ({"forecast_spans": {"sumx": 1.0}}, 'not begin with "sum"'),
     ],
 )
 def test_refusals(kw, says):
@@ -219,7 +219,7 @@ def test_a_short_delay_is_the_undelayed_run_with_horizons(kind):
 
     df = delay.short_frame(kind)
     kw: dict = {"clock": "t", "gap_cap": 1e9, **delay.DIAGNOSTICS, "coef_every": 0}
-    kw["horizons"] = [0.0, 5.0]
+    kw["forecast_spans"] = [0.0, 5.0]
     plain = delay.unnested(delay.kind_spec(kind, **kw), df)
     held = delay.unnested(delay.kind_spec(kind, embargo=delay.SHORT, **kw), df)
     assert held.columns == plain.columns

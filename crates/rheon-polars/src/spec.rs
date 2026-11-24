@@ -292,6 +292,7 @@ pub enum ModelKind {
         /// as `holt`'s are. Absent reports none.
         #[serde(
             default,
+            rename = "forecast_spans",
             skip_serializing_if = "Option::is_none",
             deserialize_with = "one_or_more_horizons"
         )]
@@ -724,6 +725,7 @@ pub enum ModelKind {
         /// span]` pair labelled by its name. Absent reports none.
         #[serde(
             default,
+            rename = "forecast_spans",
             skip_serializing_if = "Option::is_none",
             deserialize_with = "one_or_more_horizons"
         )]
@@ -1585,7 +1587,11 @@ pub enum ModelKind {
         /// labelled `h<n>`) or a `[name, count]` pair (labelled by the
         /// name): the variance `count − 1` rows past the row and the sum of
         /// the variances over those rows. Absent reports none.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            rename = "forecast_rows",
+            skip_serializing_if = "Option::is_none"
+        )]
         horizons: Option<Vec<Horizon>>,
         /// The multiply-adds a target's forecasts may take a row; absent is
         /// 2^20.

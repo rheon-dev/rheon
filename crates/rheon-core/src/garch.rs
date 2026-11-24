@@ -311,7 +311,12 @@ pub struct GarchCfg {
     /// variances over those `h` rows (`garch::horizons`). Empty reports
     /// none. A state of before it holds `horizon`, a count of rows ahead
     /// (1 for none), read as the one horizon it names.
-    #[serde(default, alias = "horizon", deserialize_with = "horizons::read")]
+    #[serde(
+        default,
+        rename = "forecast_rows",
+        alias = "horizon",
+        deserialize_with = "horizons::read"
+    )]
     pub horizons: Vec<usize>,
     /// The multiply-adds a target's forecasts may take a row: the largest
     /// horizon times one step's work ([`horizons::step_cost`]). `None` is

@@ -308,9 +308,9 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
         ),
         refused(
             Garch::new(garch_cfg()).unwrap(),
-            "horizons",
+            "forecast_rows",
             rmpv::Value::Array(vec![2.into(), 0.into()]),
-            "each of horizons must be at least 1",
+            "each of forecast_rows must be at least 1",
         ),
         refused(
             Dcc::new(dcc_cfg()).unwrap(),

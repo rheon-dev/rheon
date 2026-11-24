@@ -134,9 +134,9 @@ def test_a_rows_variance_is_read_before_the_row():
     "kw",
     [
         {},
-        {"vol": "egarch", "horizons": [3, 1, 12]},
-        {"vol": "gjr", "dist": "t", "horizons": {"week": 5, "now": 1}},
-        {"vol": "figarch", "truncation": 30, "start_rows": 2000, "horizons": [4]},
+        {"vol": "egarch", "forecast_rows": [3, 1, 12]},
+        {"vol": "gjr", "dist": "t", "forecast_rows": {"week": 5, "now": 1}},
+        {"vol": "figarch", "truncation": 30, "start_rows": 2000, "forecast_rows": [4]},
     ],
 )
 def test_chunk_invariance(kw):
@@ -154,9 +154,9 @@ def test_chunk_invariance(kw):
     "kw",
     [
         {},
-        {"dist": "skewt", "horizons": [2, 9]},
+        {"dist": "skewt", "forecast_rows": [2, 9]},
         {"variance_targeting": True},
-        {"vol": "egarch", "horizons": {"day": 1, "fortnight": 10}},
+        {"vol": "egarch", "forecast_rows": {"day": 1, "fortnight": 10}},
     ],
 )
 def test_a_save_goes_on_to_the_bit(kw):
@@ -175,9 +175,9 @@ def test_a_save_goes_on_to_the_bit(kw):
 @pytest.mark.parametrize(
     "kw",
     [
-        {"horizons": [1, 4]},
-        {"vol": "figarch", "truncation": 30, "start_rows": 2000, "horizons": [3]},
-        {"vol": "egarch", "horizons": [2, 6]},
+        {"forecast_rows": [1, 4]},
+        {"vol": "figarch", "truncation": 30, "start_rows": 2000, "forecast_rows": [3]},
+        {"vol": "egarch", "forecast_rows": [2, 6]},
     ],
 )
 def test_a_zero_weight_row_steps_no_recursion(kw):
@@ -195,7 +195,7 @@ def test_a_zero_weight_row_steps_no_recursion(kw):
     full = _out(s, df)
     keep = ((df["w"] > 0) & df["y"].is_not_null()).to_numpy()
     thin = _out(s, df.filter(pl.Series(keep)))
-    labels = [f"h{h}" for h in kw["horizons"]]
+    labels = [f"h{h}" for h in kw["forecast_rows"]]
     forecasts = [f"variance{p}_{h}_y" for h in labels for p in ("", "_sum")]
     for f in ("variance_y", "std_resid_y", "coef", *forecasts):
         assert full[f].filter(pl.Series(keep)).equals(thin[f], null_equal=True), f
@@ -240,7 +240,7 @@ def test_the_forecasts_are_the_recursion_run_ahead(vol):
     (``math.fsum``); horizon 1 is the row's variance itself."""
     df = pl.DataFrame({"y": _returns(600, 10, gamma=0.08 if vol == "gjr" else 0.0)})
     hs = [6, 1, 40]
-    out = _out(_spec(vol=vol, horizons=hs, coef_every=0), df)
+    out = _out(_spec(vol=vol, forecast_rows=hs, coef_every=0), df)
     s, coef = out["variance_y"], out["coef"].to_list()
     for t in (450, 520, 598):
         f = _definition(vol, coef[t], s[t + 1], max(hs))
@@ -261,7 +261,7 @@ def test_a_forecast_reads_no_row_it_forecasts():
     """Out of sample by construction: changing a row's return moves no
     forecast on that row or before it, at any horizon."""
     df = pl.DataFrame({"y": _returns(500, 12)})
-    spec = _spec(horizons=[1, 3, 25], vol="gjr")
+    spec = _spec(forecast_rows=[1, 3, 25], vol="gjr")
     a = _out(spec, df)
     for t in (300, 420):
         moved = df.with_columns(
@@ -278,8 +278,8 @@ def test_names_match_the_realized_struct():
     df = _frame(300, 11).with_columns(pl.col("y").alias("z"))
     for kw in (
         {},
-        {"horizons": [3]},
-        {"vol": "gjr", "dist": "t", "horizons": {"week": 5, "day": 1}},
+        {"forecast_rows": [3]},
+        {"vol": "gjr", "dist": "t", "forecast_rows": {"week": 5, "day": 1}},
     ):
         spec = rp.spec.garch("m", targets=["y", "z"], start_rows=100, **kw)
         out = rp.ModelBank([spec]).fit_predict(df)
@@ -298,13 +298,13 @@ def test_names_match_the_realized_struct():
         ({"dist": "ged"}, "dist"),
         ({"vol": "gjr", "dist": "skewt"}, 'does not take vol = "gjr"'),
         ({"vol": "egarch", "dist": "t"}, "takes vol"),
-        ({"horizons": [0]}, "each of horizons must be at least 1"),
-        ({"horizons": [3, 1, 3]}, "holds 3 twice"),
-        ({"horizons": list(range(1, 66))}, "at most 64"),
-        ({"horizons": {"sum5": 5}}, 'not begin with "sum"'),
-        ({"horizons": {"a": 2, "b": 2}}, "holds 2 twice"),
-        ({"horizons": [300_000]}, "would take 1200000 multiply-adds a target a row"),
-        ({"vol": "egarch", "horizons": [7000]}, "Lower the largest horizon to 6393"),
+        ({"forecast_rows": [0]}, "each of forecast_rows must be at least 1"),
+        ({"forecast_rows": [3, 1, 3]}, "holds 3 twice"),
+        ({"forecast_rows": list(range(1, 66))}, "at most 64"),
+        ({"forecast_rows": {"sum5": 5}}, 'not begin with "sum"'),
+        ({"forecast_rows": {"a": 2, "b": 2}}, "holds 2 twice"),
+        ({"forecast_rows": [300_000]}, "would take 1200000 multiply-adds a target a row"),
+        ({"vol": "egarch", "forecast_rows": [7000]}, "Lower the largest horizon to 6393"),
         ({"max_horizon_work": 0}, "max_horizon_work must be above 0"),
         ({"max_horizon_work": 2**30 + 1}, "at most 1073741824"),
         ({"vol": "gjr", "variance_targeting": True}, "variance_targeting"),

@@ -183,7 +183,7 @@ _INF_REFUSED_BY_RUST = frozenset({"gap_cap", "session_gap", "min_weight"})
 _HOLT_OPTIONAL = frozenset(
     {
         "trend",
-        "horizons",
+        "forecast_spans",
         "seasonal",
         "seasonal_periods",
         "period",
@@ -271,7 +271,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "variance_targeting",
             "start_rows",
             "start_span",
-            "horizons",
+            "forecast_rows",
             "max_horizon_work",
             "max_state_bytes",
         }
@@ -352,7 +352,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         }
     ),
     "audit": frozenset({"pairs", "distinct_cap"}),
-    "kalman": frozenset({"covariance_form", "horizons"}),
+    "kalman": frozenset({"covariance_form", "forecast_spans"}),
     "glm": frozenset({"refit_span", "max_state_bytes"}),
     "kmeans": frozenset({"warm_span", "update_every", "split_merge_every"}),
     "hmm": frozenset({"warm_span"}),

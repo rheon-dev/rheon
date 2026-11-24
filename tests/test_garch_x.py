@@ -147,7 +147,7 @@ def test_the_forecasts_hold_the_inputs_at_their_learned_mean(vol):
     mean."""
     df = _frame(vol, 1500, 5).drop("w")
     hs = [1, 3, 50]
-    out = _out(_spec(vol, horizons=hs, coef_every=0), df)
+    out = _out(_spec(vol, forecast_rows=hs, coef_every=0), df)
     s, coef = out["variance_y"], out["coef"].to_list()
     x = df.select("x1", "x2").to_numpy()
     k = 3 if vol == "garch" else 4
@@ -207,7 +207,7 @@ def test_a_negative_input_is_withheld_under_garch_and_gjr(vol):
 @pytest.mark.parametrize("vol", ["garch", "egarch"])
 def test_chunk_invariance(vol):
     df = _frame(vol, 1600, 9)
-    s = _spec(vol, group="g", weight="w", coef_every=0, horizons=[1, 4])
+    s = _spec(vol, group="g", weight="w", coef_every=0, forecast_rows=[1, 4])
     one = rp.ModelBank([s]).fit_predict(df)
     for size in (1, 37, 409):
         bank = rp.ModelBank([s])
@@ -219,7 +219,7 @@ def test_chunk_invariance(vol):
 def test_a_save_goes_on_to_the_bit(vol):
     """A save mid-start, holding the start's inputs, and after it."""
     df = _frame(vol, 1600, 11)
-    s = _spec(vol, group="g", weight="w", horizons=[2])
+    s = _spec(vol, group="g", weight="w", forecast_rows=[2])
     for cut in (1, 600, 1400):
         a = rp.ModelBank([s])
         a.fit_predict(df.slice(0, cut))

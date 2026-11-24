@@ -32,14 +32,14 @@ pub(super) fn check(cfg: &KalmanCfg, no: &mut crate::Refusals) {
     let hs = &cfg.horizons;
     if hs.len() > KALMAN_MAX_HORIZONS {
         no.refuse(format!(
-            "kalman: horizons may hold at most {KALMAN_MAX_HORIZONS} spans, but it holds {}. Each \
+            "kalman: forecast_spans may hold at most {KALMAN_MAX_HORIZONS} spans, but it holds {}. Each \
              adds three fields a target to every row. Ask for {KALMAN_MAX_HORIZONS} or fewer.",
             hs.len()
         ));
     }
     if let Some(h) = hs.iter().find(|h| !(h.is_finite() && **h >= 0.0)) {
         no.refuse(format!(
-            "kalman: each of horizons must be a finite span of the clock of 0 or more, but one \
+            "kalman: each of forecast_spans must be a finite span of the clock of 0 or more, but one \
              is {h}. A horizon is the clock past the row read: 0 is the row's own prediction. \
              Give a span of 0 or more."
         ));
@@ -47,7 +47,7 @@ pub(super) fn check(cfg: &KalmanCfg, no: &mut crate::Refusals) {
     for (i, h) in hs.iter().enumerate() {
         if hs[..i].contains(h) {
             no.refuse(format!(
-                "kalman: horizons holds {h} twice. Each horizon's fields are named by it, so it \
+                "kalman: forecast_spans holds {h} twice. Each horizon's fields are named by it, so it \
                  may be asked for once. Leave out the second."
             ));
             break;

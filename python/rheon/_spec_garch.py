@@ -24,7 +24,7 @@ def garch(
     variance_targeting: bool = False,
     start_rows: int | None = None,
     start_span: float | Duration | None = None,
-    horizons: list[int] | dict[str, int] | None = None,
+    forecast_rows: list[int] | dict[str, int] | None = None,
     max_horizon_work: int | None = None,
     max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
@@ -110,16 +110,16 @@ def garch(
         rows as it held. How many rows the span holds, the data decides, so
         its bytes are checked as the rows go in (see
         ``max_state_bytes``).
-    ``horizons``
+    ``forecast_rows``
         The variance forecasts to report, each a count of rows ``h`` from
         the row read, its own included: the variance of the return ``h - 1``
         rows past this one, and the sum of the variances over those ``h``
         rows, the variance of the ``h``-row return. Both are read before
         the row is learned, from the rows before it, as ``variance_<t>`` is,
         and horizon 1 is ``variance_<t>`` itself. A list labels each
-        horizon's fields ``h<h>`` (``horizons=[1, 5, 21]`` gives
+        horizon's fields ``h<h>`` (``forecast_rows=[1, 5, 21]`` gives
         ``variance_h5_<t>`` and ``variance_sum_h5_<t>``); a dict names them
-        (``horizons={"week": 5, "month": 21}`` gives ``variance_month_<t>``).
+        (``forecast_rows={"week": 5, "month": 21}`` gives ``variance_month_<t>``).
         Every process takes them, EGARCH included. They count rows, never a
         span of the clock: the recursion steps once a learned row, however
         far apart the rows are, so a span of the clock holds as many steps as
@@ -131,8 +131,8 @@ def garch(
         ``"gjr"``, ``truncation + 2`` for ``"figarch"`` and 164 for
         ``"egarch"`` (its step calls ``exp`` and ``erfc`` five times, each
         counted as 32). A spec past it is refused, naming the work it would
-        take. Default 2^20, ``1048576``, which holds ``"garch"`` to horizons
-        of 262,144 rows, ``"egarch"`` to 6,393 and ``"figarch"`` at its
+        take. Default 2^20, ``1048576``, which holds ``"garch"`` to forecasts of
+        262,144 rows, ``"egarch"`` to 6,393 and ``"figarch"`` at its
         default truncation to 1,046; at most 2^30.
     ``max_state_bytes``
         The bytes a group's state may hold, the start's buffer included (16
@@ -234,7 +234,7 @@ def garch(
         H  ← H + a_t (I_t - H)   I_t = ½ ∂ln s ∂ln sᵀ, or the score's outer product under a t
         θ  ← Proj_H(θ + a_t H⁻¹ g_t)
 
-    The forecasts at the horizons run the recursion ahead from the row's
+    The forecasts at the requested rows run the recursion ahead from the row's
     variance ``s_t``, each later row's ``e²`` read as its variance and GJR's
     asymmetric term as half of it, as ``arch``'s analytic forecast reads
     them, and sum the variances as they go:
@@ -380,9 +380,9 @@ def garch(
         model["start_rows"] = start_rows
     if start_span is not None:
         model["start_span"] = start_span
-    if horizons is not None:
-        model["horizons"] = (
-            [[k, h] for k, h in horizons.items()] if isinstance(horizons, dict) else list(horizons)
+    if forecast_rows is not None:
+        model["forecast_rows"] = (
+            [[k, h] for k, h in forecast_rows.items()] if isinstance(forecast_rows, dict) else list(forecast_rows)
         )
     if max_horizon_work is not None:
         model["max_horizon_work"] = max_horizon_work
