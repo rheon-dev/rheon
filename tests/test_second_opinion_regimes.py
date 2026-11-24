@@ -312,6 +312,20 @@ class TestHmmPriorIsQdasShrinkage:
     @pytest.mark.parametrize("cov", ["full", "diag"])
     @pytest.mark.parametrize("seed", [0, 1])
     def test_the_states_read_qdas_shrunk_covariances(self, cov: str, seed: int) -> None:
+        self.check(cov, seed, None)
+
+    @pytest.mark.parametrize("cov", ["full", "diag"])
+    @pytest.mark.parametrize("p0", [0.25, 7.5, 400.0])
+    def test_an_explicit_prior_rows_is_qdas_reg_param_at_it(self, cov: str, p0: float) -> None:
+        """``prior_rows = P0`` given: the same shrinkage at ``reg_param = P0
+        / (W + P0)``, from a prior worth a quarter of a row (``reg_param``
+        near 0) to one worth past three times the rows each state learned
+        (near 1). The control in :meth:`check` holds the shrinkage against
+        none; here it is also held against the default ``P0 = d``, whose
+        ``reg_param`` is another number."""
+        self.check(cov, 1, p0)
+
+    def check(self, cov: str, seed: int, prior_rows: float | None) -> None:
         x, state = self._stream(seed)
         features = [f"x{i}" for i in range(self.D)]
         frame = pl.DataFrame({f: x[:, i] for i, f in enumerate(features)})
@@ -324,6 +338,7 @@ class TestHmmPriorIsQdasShrinkage:
             half_life=float("inf"),
             warm_rows=self.WARM,
             init="first",
+            **({} if prior_rows is None else {"prior_rows": prior_rows}),
         )
         bank = rp.ModelBank([spec])
         bank.fit_predict(frame)
@@ -342,7 +357,7 @@ class TestHmmPriorIsQdasShrinkage:
         assert state[0] == 0
         psi = prior_scale(x, state, self.WARM)
         root = np.sqrt(psi)
-        p0 = float(self.D)
+        p0 = float(self.D) if prior_rows is None else prior_rows
         n = np.array([np.sum(state == c) for c in range(2)], dtype=float)
         assert n[0] == n[1]
         p1 = got.select("predicted_state0", "predicted_state1").to_numpy()
@@ -365,6 +380,10 @@ class TestHmmPriorIsQdasShrinkage:
         np.testing.assert_allclose(loglik, want, rtol=0.0, atol=1e-10 * scale)
         # The control: unshrunk, the states read another density.
         assert np.abs(loglik - mixture(0.0)).max() > 1e-4 * scale
+        if prior_rows is not None:
+            # And at the default prior's weight, another again.
+            default = mixture(self.D / (n[0] + self.D))
+            assert np.abs(loglik - default).max() > 1e-4 * scale
 
 
 # --- hmm's time-varying transitions against statsmodels' MarkovRegression ---------------
