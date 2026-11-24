@@ -2507,8 +2507,10 @@ impl Windows {
                 &self.scratch_row[..rw * m.len()],
                 &mut self.scratch_sum,
             );
-            let now = row.clock.unwrap_or(ClockValue::F64(tau));
-            learn_moments(k, ki, &self.ops, &self.moments, g, row.values, now);
+            if !self.moments.is_empty() {
+                let now = row.clock.unwrap_or(ClockValue::F64(tau));
+                learn_moments(k, ki, &self.ops, &self.moments, g, row.values, now);
+            }
             if let Some(limit) = self.derived.cap_rows[ki]
                 && g.queues[ki].len() > limit
             {
@@ -3197,7 +3199,11 @@ fn flush_in(p: &mut Parts<'_>, g: &mut Group) {
                 )
             );
         }
-        read_moments(ki, p.ops, m, p.moments, g, tau);
+        // A frame with no moments operator has nothing to read here, and
+        // pays no call a kernel a flush for it.
+        if !p.moments.is_empty() {
+            read_moments(ki, p.ops, m, p.moments, g, tau);
+        }
         let complete = extrema::complete(k, &g.queues[ki], tau, off, form);
         for &seq in &g.pending {
             let held = Held {
