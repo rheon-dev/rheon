@@ -74,6 +74,9 @@ impl AnyModel {
                 rheon_core::EwmMoments::restore(s)?,
             ))),
             ModelState::Ar(_) => Ok(AnyModel::Ar(Box::new(rheon_core::Ar::restore(s)?))),
+            ModelState::VectorAr(_) => Ok(AnyModel::VectorAr(Box::new(
+                rheon_core::VectorAr::restore(s)?,
+            ))),
             ModelState::Spectral(_) => Ok(AnyModel::Spectral(Box::new(
                 rheon_core::Spectral::restore(s)?,
             ))),

@@ -175,6 +175,17 @@ class ModelBank:
         table: str = "columns",
         pooled: bool = False,
     ) -> pl.DataFrame: ...
+    def vector_ar(
+        self,
+        spec: int,
+        group: list[str | None] | None = None,
+        table: str = "irf",
+        periods: int = 10,
+        stderr: bool = False,
+        caused: list[str] | None = None,
+        causing: list[str] | None = None,
+        kind: str | None = None,
+    ) -> pl.DataFrame: ...
     def closed_groups(self, spec: int | None = None, drop: bool = True) -> pl.DataFrame: ...
     def spec_names(self) -> list[str]: ...
     def specs_json(self) -> str: ...

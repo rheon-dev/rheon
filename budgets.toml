@@ -271,6 +271,9 @@ what = "ddsketch, one column at the default alpha, three levels: AnyModel::step_
 [instructions.ar]
 what = "ar, an AR(5) with no features: AnyModel::step_into, into one kept Step, the ring, a rank-one update of a 6 x 6 Gram and its Cholesky a row; its budget is CI's first count"
 
+[instructions.vector_ar]
+what = "vector_ar, a VAR(2) of three series with a Granger test, solving every row: AnyModel::step_into, into one kept Step, the ring, a rank-one update of a 10 x 10 Gram, the fit's solve and one Cholesky factor read for the test a row; its budget is CI's first count"
+
 [instructions.spectral]
 what = "spectral, sixteen periods on an even clock: AnyModel::step_into, into one kept Step, a rotation and an add a period a row; its budget is CI's first count"
 

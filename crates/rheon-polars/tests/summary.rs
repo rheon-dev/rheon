@@ -1194,6 +1194,14 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["x0"]"#,
             true,
         ),
+        // Its ring full, its fit solved and its test read.
+        (
+            "vector_ar",
+            r#"{"type": "vector_ar", "lags": 2, "causality": [{"caused": ["y"]}]}"#,
+            r#"["y", "x1"]"#,
+            r#"["x0"]"#,
+            true,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

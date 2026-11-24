@@ -34,6 +34,7 @@ MODELS = [
     ("expectile", {"expectile": 0.8}),
     ("holt", {"features": None}),  # no features keyword
     ("ar", {"lags": 1, "ridge": 1e-3}),
+    ("vector_ar", {"lags": 1, "ridge": 1e-3}),
 ]
 
 

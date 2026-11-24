@@ -106,6 +106,7 @@ MINIMAL: dict[str, dict[str, object]] = {
     "ewm_moments": {"targets": None, "terms": {"var": {"x0": 2}}},
     "ar": {"lags": 2},
     "spectral": {"features": None, "periods": [8.0, 3.0]},
+    "vector_ar": {"lags": 1},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -298,6 +299,8 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
     "quantile": {"support_coef"},
     # Its fits are ewridge's: their standard errors, no more.
     "ar": {"emit_se_coef"},
+    # statsmodels' standard errors of its least squares, no more.
+    "vector_ar": {"emit_se_coef"},
     **{
         name: set()
         for name in (

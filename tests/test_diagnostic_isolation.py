@@ -107,15 +107,18 @@ KINDS: dict[str, Builder] = {
     "sgd_huber": lambda **kw: rp.spec.sgd("m", loss="huber", learning_rate=0.02, **kw),
     # One lag of the target beside the features.
     "ar": lambda **kw: rp.spec.ar("m", lags=1, **kw),
+    # One lag of every target beside the features.
+    "vector_ar": lambda **kw: rp.spec.vector_ar("m", lags=1, **kw),
 }
 
 ESSENTIAL_KINDS = ("ewridge", "sgd", "holt")
 #: The kinds with no features: they take ``targets`` only.
 NO_FEATURES = frozenset({"holt"})
-#: The kinds that refuse ``embargo``: ``ar``'s lags are the target's last
-#: values, which a delay would make older for the rows predicted than for
-#: the rows learned. Their clocked variant runs without one.
-NO_EMBARGO = frozenset({"ar"})
+#: The kinds that refuse ``embargo``: ``ar``'s and ``vector_ar``'s lags are
+#: the targets' last values, which a delay would make older for the rows
+#: predicted than for the rows learned. Their clocked variant runs without
+#: one.
+NO_EMBARGO = frozenset({"ar", "vector_ar"})
 
 #: Where a switch is taken by fewer than every linear kind (the builders'
 #: refusals; docs/DIAGNOSTICS.md, "What each costs, and which models take it").
@@ -128,8 +131,8 @@ WITH_FEATURES = ALL - NO_FEATURES
 #: Each switch's kinds. A knob is taken where its switch is.
 TAKES: dict[str, frozenset[str]] = {
     "emit_error_inflation": LEVERAGE,
-    # And `ar`, whose fits are ewridge's.
-    "emit_se_coef": LEVERAGE | {"ar"},
+    # And `ar`, whose fits are ewridge's, and `vector_ar`, statsmodels'.
+    "emit_se_coef": LEVERAGE | {"ar", "vector_ar"},
     "emit_influence": LEVERAGE,
     "emit_robust_se": LEAST_SQUARES,
     "emit_feature_health": WITH_FEATURES,

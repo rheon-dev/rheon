@@ -88,7 +88,19 @@ FAMILIES: tuple[Family, ...] = (
         "spec",
         tuple(
             f"{_SPEC}.{m}"
-            for m in ("ewridge", "rls", "lasso", "kalman", "sgd", "pa", "ftrl", "glm", "holt", "ar")
+            for m in (
+                "ewridge",
+                "rls",
+                "lasso",
+                "kalman",
+                "sgd",
+                "pa",
+                "ftrl",
+                "glm",
+                "holt",
+                "ar",
+                "vector_ar",
+            )
         ),
     ),
     Family("robust", "spec", (f"{_SPEC}.huber", f"{_SPEC}.quantile", f"{_SPEC}.expectile")),

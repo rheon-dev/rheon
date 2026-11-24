@@ -1087,6 +1087,60 @@ fn ar_golden() {
     check("ar", &got, GOLDEN_AR);
 }
 
+/// `vector_ar` on the same stream: a VAR(2) of the target and the first
+/// feature under decay, the second feature exogenous, with a Granger test
+/// and the coefficients' variances: both predictions and the test's
+/// statistic and p-value at the three rows, then the
+/// coefficients and their variances at the end. The ring (the null target
+/// is an incomplete row, the gap ages it), the moments' Gram and the
+/// tails all move these.
+#[test]
+fn vector_ar_golden() {
+    let mut m = VectorAr::new(VectorArCfg {
+        n_targets: 2,
+        n_features: 1,
+        lags: 2,
+        fit_intercept: true,
+        decay: Decay::Halflife(15.0),
+        ridge: 0.0,
+        min_weight: 2.0,
+        solve_every: 0.0,
+        max_rows_between_solves: 1,
+        solve_share: None,
+        max_state_bytes: None,
+        select: None,
+        causality: vec![VectorArTest {
+            caused: vec![0],
+            causing: vec![1],
+        }],
+        causality_kind: CausalityKind::F,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    })
+    .unwrap();
+    m.set_keep_factor(true);
+    let mut got = Vec::new();
+    for (i, (x, y, d, w)) in stream().into_iter().enumerate() {
+        let step = m.step(&x[1..], &[y[0], Some(x[0])], d, w);
+        if matches!(i, 20 | 45 | 59) {
+            got.extend(&step.pred);
+            if let Some(Extra::VectorAr { values }) = &step.extra {
+                got.extend(values);
+            }
+        }
+    }
+    for c in m.coefficients().unwrap() {
+        got.extend(c);
+    }
+    if let Some(CoefVariance::Absolute(v)) = m.coef_variance() {
+        for c in v {
+            got.extend(c);
+        }
+    }
+    check("vector_ar", &got, GOLDEN_VECTOR_AR);
+}
+
 /// `spectral` on the same stream's target: its power at three frequencies
 /// under decay, its null target and its gap among the rows.
 #[test]
@@ -2537,6 +2591,44 @@ fn ewm_moments_golden() {
 }
 
 // --- generated; see the module docs ---
+const GOLDEN_VECTOR_AR: &[f64] = &[
+    -1.3624877009041483,
+    -0.9575397923672513,
+    4.019499860327604,
+    0.036369402723589045,
+    0.9687422818435274,
+    0.08427699341969125,
+    0.9564241304563953,
+    0.4050506123572182,
+    0.2886185659752348,
+    0.07171773421404884,
+    1.149538522967612,
+    0.3298855295951798,
+    0.3028569888145593,
+    -0.7970503019968946,
+    0.29853169370911875,
+    -0.9264161892058684,
+    -0.47459807771903295,
+    0.12083085452706616,
+    0.03000634382120534,
+    -0.012386755073765372,
+    0.21709604100211385,
+    -0.6487106982354279,
+    -0.3270051728436947,
+    0.10028670733886154,
+    0.044148855113590235,
+    0.11470926180842712,
+    0.16294745594249044,
+    0.47932882407435745,
+    0.16757931012775473,
+    0.47658459629346495,
+    0.018570353601847583,
+    0.04825021051414922,
+    0.06854066470326302,
+    0.2016203077456145,
+    0.0704889636983615,
+    0.20046600192898417,
+];
 const GOLDEN_REALIZED: &[f64] = &[
     20.301763088150093,
     14.524981482223351,

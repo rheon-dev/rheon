@@ -123,6 +123,7 @@ pub enum AnyModel {
     DdSketch(Box<rheon_core::DdSketchModel>),
     EwmMoments(Box<rheon_core::EwmMoments>),
     Ar(Box<rheon_core::Ar>),
+    VectorAr(Box<rheon_core::VectorAr>),
     Spectral(Box<rheon_core::Spectral>),
 }
 
@@ -182,6 +183,7 @@ macro_rules! dispatch {
             AnyModel::DdSketch($m) => $body,
             AnyModel::EwmMoments($m) => $body,
             AnyModel::Ar($m) => $body,
+            AnyModel::VectorAr($m) => $body,
             AnyModel::Spectral($m) => $body,
         }
     };
@@ -522,6 +524,7 @@ impl AnyModel {
                 | AnyModel::Deco(_)
                 | AnyModel::Garch(_)
                 | AnyModel::Dcc(_)
+                | AnyModel::VectorAr(_)
         )
     }
 
@@ -536,6 +539,7 @@ impl AnyModel {
             // `garch`'s start and `dcc`'s, its margins' and its own, wait two
             // ways: buffering, or buffering for want of an effect.
             AnyModel::Garch(m) => Self::start_wait(m.starting(), || m.no_effect()),
+            AnyModel::VectorAr(m) if m.not_identified() => OwnWait::NotIdentified,
             AnyModel::Dcc(m) => Self::start_wait(m.starting(), || m.no_effect()),
             _ => OwnWait::None,
         }
@@ -653,6 +657,7 @@ impl AnyModel {
             | AnyModel::Pca(_) => 0,
             // Each fit counts its own; none withholds a row as a failure.
             | AnyModel::Ar(_)
+            | AnyModel::VectorAr(_)
             | AnyModel::Spectral(_) => 0,
         }
     }
@@ -743,6 +748,7 @@ impl AnyModel {
             // The constant, the lags, then the features, one row per
             // target; absent until a target has a fit.
             AnyModel::Ar(m) => m.coefficients(),
+            AnyModel::VectorAr(m) => m.coefficients(),
             // Its value is the power it reports per row.
             AnyModel::Spectral(_) => None,
         }
@@ -767,6 +773,7 @@ pub(crate) use build::init_rule;
 use build::{build_one, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
+pub(crate) use model_cfgs::solve_every_of;
 pub use model_cfgs::{
     BOCPD_HAZARD_ROWS, ar_cfg, audit_cfg, bocpd_cfg, corrchange_cfg, dcc_cfg, ddsketch_cfg,
     deco_block_names, deco_cfg, expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg,
@@ -885,6 +892,7 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::DdSketch { .. }
         | ModelKind::EwmMoments { .. }
         | ModelKind::Ar { .. }
+        | ModelKind::VectorAr(_)
         | ModelKind::Spectral(_) => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
@@ -5194,7 +5202,8 @@ fn run_instance(
             }
             match &step.extra {
                 Some(rheon_core::Extra::Lasso { lam_selected: v })
-                | Some(rheon_core::Extra::Huber { scale: v }) => {
+                | Some(rheon_core::Extra::Huber { scale: v })
+                | Some(rheon_core::Extra::VectorAr { values: v }) => {
                     for (t_i, l) in v.iter().enumerate() {
                         inst.o_lam[t_i * n_rows + ri] = *l;
                     }

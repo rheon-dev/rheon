@@ -81,6 +81,9 @@ pub(super) enum Source {
     #[default]
     Unset,
     Pred(usize),
+    /// An integer a row reports beside its predictions, in the extras
+    /// buffer as `LamSelected` is: `vector_ar`'s order.
+    ExtraId(usize),
     Resid(usize),
     Sigma(usize),
     ResidZ(usize),
@@ -206,7 +209,7 @@ impl FieldMeta {
                 polars::prelude::FrozenCategories::new(crate::stream::WITHHELD_REASONS)
                     .expect("distinct names"),
             ),
-            Source::Id(_) => DataType::Int64,
+            Source::Id(_) | Source::ExtraId(_) => DataType::Int64,
             Source::Flag(_) => DataType::Boolean,
             Source::Unset => unreachable!("every field is given a source in output_index"),
             _ => DataType::Float64,
@@ -421,6 +424,18 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             .chain(cfg.dist.names())
             .map(|n| n.to_string())
             .collect()
+    } else if let crate::ModelKind::VectorAr(v) = &spec.model {
+        // The constant, the features, then each lag of every series:
+        // `VectorAr::coefficients`, statsmodels' `params` order.
+        let mut t = Vec::new();
+        if spec.fit_intercept {
+            t.push("intercept".to_string());
+        }
+        t.extend(spec.features.iter().cloned());
+        for l in 1..=v.lags {
+            t.extend(spec.targets.iter().map(|s| format!("lag{l}_{s}")));
+        }
+        t
     } else if let crate::ModelKind::Ar { lags, .. } = &spec.model {
         // The constant, each lag, then the features: `Ar::coefficients`.
         let mut t = Vec::with_capacity(spec.features.len() + 1);
@@ -1710,6 +1725,32 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 );
             }
         }
+        // `vector_ar`'s tests, a statistic and a p-value each, then the
+        // order under `select`, in the same buffer as lasso's penalty.
+        if let crate::ModelKind::VectorAr(v) = &spec.model {
+            let w = extra_width(spec);
+            let tests = v.causality.as_deref().unwrap_or_default();
+            for i in 0..tests.len() {
+                for (part, kind) in ["stat", "p"].into_iter().enumerate() {
+                    let mut f = FieldMeta::new(
+                        format!("causality{i}_{kind}{suffix}"),
+                        &format!("causality_{kind}"),
+                    )
+                    .decay(suffix, d)
+                    .src(Source::LamSelected(mi * w + 2 * i + part));
+                    // The test's place in `causality`.
+                    f.component = Some(i);
+                    fields.push(f);
+                }
+            }
+            if v.select.is_some() {
+                fields.push(
+                    FieldMeta::new(format!("order{suffix}"), "order")
+                        .decay(suffix, d)
+                        .src(Source::ExtraId(mi * w + w - 1)),
+                );
+            }
+        }
         // `huber`'s residual scale per target, in the same buffer as
         // lasso's selected penalty (docs/PLAN.md task 272 (a)).
         if matches!(
@@ -1773,4 +1814,21 @@ pub(super) fn slot_labels(spec: &Spec) -> Vec<String> {
         }
     }
     out
+}
+
+/// Values a row writes per instance into the extras buffer: one per target
+/// for `lasso`'s selected penalty and `huber`'s scale, and `vector_ar`'s
+/// statistic and p-value per test with its order under `select`.
+pub fn extra_width(spec: &Spec) -> usize {
+    match &spec.model {
+        crate::ModelKind::Lasso { .. }
+        | crate::ModelKind::Huber {
+            emit_huber_scale: true,
+            ..
+        } => spec.m(),
+        crate::ModelKind::VectorAr(v) => {
+            2 * v.causality.as_ref().map_or(0, Vec::len) + usize::from(v.select.is_some())
+        }
+        _ => 0,
+    }
 }

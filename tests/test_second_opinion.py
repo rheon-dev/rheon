@@ -327,6 +327,8 @@ class TestWindowedSpread:
         common |= dict(window_size=self.W, emit_sigma=True, emit_zscore=True)
         if kind == "ar":
             return rp.spec.ar("m", lags=1, **common)
+        if kind == "vector_ar":
+            return rp.spec.vector_ar("m", lags=1, max_rows_between_solves=1, **common)
         if kind == "lasso":
             return rp.spec.lasso("m", penalties=[0.01], solve_every=1e-9, **common)
         return rp.spec.ewridge("m", solve_every=1e-9, **common)
@@ -336,7 +338,7 @@ class TestWindowedSpread:
         name = next(n for n in rp.spec.output_fields(spec) if n.startswith(prefix))
         return out["m"].struct.field(name).to_numpy().astype(float)
 
-    @pytest.mark.parametrize("kind", ["ewridge", "lasso", "ar"])
+    @pytest.mark.parametrize("kind", ["ewridge", "lasso", "ar", "vector_ar"])
     def test_sigma_is_the_spread_of_the_residuals_inside_the_window(self, kind):
         df = self._frame()
         spec = self._spec(kind)

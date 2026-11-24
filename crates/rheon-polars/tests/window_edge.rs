@@ -36,9 +36,9 @@ fn left_by<T: PartialOrd>(closed: &str, age: T, w: T) -> bool {
     !inside_by(closed, age, w)
 }
 
-/// The six windowed models, each over the one feature `x`: the model's
+/// The seven windowed models, each over the one feature `x`: the model's
 /// JSON with `{window}` where its window settings go, and its targets.
-const MODELS: [(&str, &str, &str); 6] = [
+const MODELS: [(&str, &str, &str); 7] = [
     (
         "ewridge",
         r#"{"type": "ewridge", "ridge": 1e-6, {window}}"#,
@@ -67,6 +67,12 @@ const MODELS: [(&str, &str, &str); 6] = [
     (
         "ar",
         r#"{"type": "ar", "lags": 1, "ridge": 1e-6, {window}}"#,
+        r#""targets": ["y"],"#,
+    ),
+    // A VAR(1) of `y` alone with `x` exogenous: one equation.
+    (
+        "vector_ar",
+        r#"{"type": "vector_ar", "lags": 1, "ridge": 1e-6, {window}}"#,
         r#""targets": ["y"],"#,
     ),
 ];
@@ -814,9 +820,9 @@ fn an_embargoed_row_is_learned_at_its_own_stamp() {
     for (closed, (kind, _, _)) in EDGES
         .into_iter()
         .flat_map(|c| MODELS.into_iter().map(move |m| (c, m)))
-        // `ar` refuses an embargo: its lags would be older for the rows it
-        // predicts than for the rows it learns.
-        .filter(|(_, (kind, _, _))| *kind != "ar")
+        // `ar` and `vector_ar` refuse an embargo: their lags would be older
+        // for the rows they predict than for the rows they learn.
+        .filter(|(_, (kind, _, _))| *kind != "ar" && *kind != "vector_ar")
     {
         let s = spec(
             kind,

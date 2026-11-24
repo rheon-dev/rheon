@@ -125,6 +125,10 @@ pub const MODEL_CASES: &[&str] = &[
     "ar",
     // Sixteen periods on an even clock: a rotation and an add each a row.
     "spectral",
+    // A VAR(2) of three series with a Granger test, solving every row: a
+    // row's ring, the rank-one update of a 10 x 10 Gram, the fit's solve
+    // and the read of the test from one Cholesky factor.
+    "vector_ar",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -794,6 +798,16 @@ fn case_spec(id: &str) -> (Value, Shape) {
         }
         "ar" => {
             let mut s = fit(json!({"type": "ar", "lags": 5}), 0);
+            s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
+        "vector_ar" => {
+            let mut s = fit(
+                json!({"type": "vector_ar", "lags": 2, "max_rows_between_solves": 1,
+                       "causality": [{"caused": ["y0"]}]}),
+                0,
+            );
+            s["targets"] = json!(["y0", "y1", "y2"]);
             s.as_object_mut().expect("an object").remove("min_weight");
             (s, Shape::Linear)
         }

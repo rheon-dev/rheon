@@ -93,8 +93,8 @@ pub use polars::prelude::PlSmallStr;
 
 pub use bank::{
     AuditTable, Bank, Coef, CoefField, FieldMeta, Gram, GroupKey, Learned, MIN_BANK_SCHEMA_VERSION,
-    PAR_MIN_ROWS, coef_fields, coef_fields_frame, output_fields, output_index, output_index_frame,
-    vech,
+    PAR_MIN_ROWS, VectorArRead, coef_fields, coef_fields_frame, output_fields, output_index,
+    output_index_frame, vech,
 };
 pub use checkpoint::{
     CHECKPOINT_VERSION, Stage, checkpoint_bytes, load_checkpoint, save_checkpoint,

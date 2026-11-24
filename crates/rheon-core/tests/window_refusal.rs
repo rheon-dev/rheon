@@ -47,6 +47,33 @@ fn models() -> Vec<Make> {
             }),
         ),
         (
+            "vector_ar",
+            Box::new(|| {
+                Box::new(
+                    VectorAr::new(VectorArCfg {
+                        n_targets: 2,
+                        n_features: K,
+                        lags: 2,
+                        fit_intercept: true,
+                        decay: decay(),
+                        ridge: 1e-6,
+                        min_weight: 4.0,
+                        solve_every: 0.0,
+                        max_rows_between_solves: 1,
+                        solve_share: None,
+                        max_state_bytes: None,
+                        select: None,
+                        causality: vec![],
+                        causality_kind: CausalityKind::F,
+                        window: Some(WINDOW),
+                        window_every: None,
+                        max_rows_between_snapshots: None,
+                    })
+                    .unwrap(),
+                ) as Box<dyn Probe>
+            }),
+        ),
+        (
             "ewridge",
             Box::new(|| {
                 Box::new(

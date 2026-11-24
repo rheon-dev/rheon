@@ -406,8 +406,8 @@ def assert_rows_agree(base: pl.DataFrame, gated: pl.DataFrame, what: str) -> Non
 
 
 #: The rows before a target's first learned row: ``ar``'s ``max(lags)``,
-#: two in ``MINIMAL``.
-HOLD_BACK = {"ar": 2}
+#: two in ``MINIMAL``, and ``vector_ar``'s order, one.
+HOLD_BACK = {"ar": 2, "vector_ar": 1}
 #: The kinds whose own weight starts again at a break: ``spectral``'s
 #: transform empties at a capped gap, its phase across it unknown, so on the
 #: clocked stream its target's weight, which its floor reads, restarts after
@@ -789,9 +789,9 @@ EMBARGO: dict[str, Any] = dict(clock="t", gap_cap=5.0, embargo=3.0)
         )
         for k in sorted(REGRESSIONS)
         for name, _ in _gates(k)
-        # `ar` refuses an embargo: its lags would be older for the rows it
-        # predicts than for the rows it learns.
-        for held in ((False,) if k == "ar" else (False, True))
+        # `ar` and `vector_ar` refuse an embargo: their lags would be older
+        # for the rows they predict than for the rows they learn.
+        for held in ((False,) if k in ("ar", "vector_ar") else (False, True))
     ],
 )
 def test_the_residual_spread_never_moves_with_a_gate(kind: str, name: str, held: bool):

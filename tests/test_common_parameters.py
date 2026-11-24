@@ -115,9 +115,11 @@ NO_FEATURES = frozenset(
 #: temporal clock: ``hawkes``' ``kernel_decays`` is refused there, by name.
 RATES = frozenset({"hawkes"})
 #: A capped step is a break by design: ``corrchange`` abandons its span,
-#: ``rcov`` splits the block into stretches, ``ar`` empties its lags and
-#: ``spectral`` its transform.
-CAP_IS_A_BREAK = frozenset({"corrchange", "corrchange_scalar", "rcov", "ar", "spectral"})
+#: ``rcov`` splits the block into stretches, ``ar`` and ``vector_ar`` empty
+#: their lags and ``spectral`` its transform.
+CAP_IS_A_BREAK = frozenset(
+    {"corrchange", "corrchange_scalar", "rcov", "ar", "spectral", "vector_ar"}
+)
 #: The kinds that sum weight as a count, with what makes it exact: the
 #: ewridge readiness gate reads Kish's effective count, which copies change,
 #: and its default solve cadence counts rows; kalman's learned noise reads a

@@ -1053,6 +1053,7 @@ REFUSE_EMBARGO = {
     "audit": "embargo",
     "rcov": "group_close and embargo cannot both be set",
     "ar": "embargo does not apply to ar",
+    "vector_ar": "embargo does not apply to vector_ar",
 }
 
 #: A sweep name that is not a kind: `sgd`'s Huber loss, with the refit of

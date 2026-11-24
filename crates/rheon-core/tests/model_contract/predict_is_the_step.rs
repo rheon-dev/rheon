@@ -18,7 +18,14 @@ fn same_step(kind: &str, i: usize, p: &Step, s: &Step) {
         p.n_eff,
         s.n_eff
     );
-    assert_eq!(p.extra, s.extra, "{kind}: extra at row {i}");
+    // `vector_ar`'s tests are NaN where not defined: NaN equal to NaN.
+    match (&p.extra, &s.extra) {
+        (Some(Extra::VectorAr { values: u }), Some(Extra::VectorAr { values: v })) => {
+            let bits = |w: &[f64]| w.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(u), bits(v), "{kind}: extra at row {i}");
+        }
+        (u, v) => assert_eq!(u, v, "{kind}: extra at row {i}"),
+    }
 }
 
 /// Over a stream with missing targets, zero-weight rows, uneven weights and

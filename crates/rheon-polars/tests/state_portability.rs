@@ -49,6 +49,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["y", "x1"], "features": ["x0"], "half_life": 50.0"#,
     ),
     (
+        "vector_ar",
+        r#"{"type": "vector_ar", "lags": 3, "select": "aic", "causality": [{"caused": ["y"]}]}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"], "half_life": 50.0, "emit_se_coef": true"#,
+    ),
+    (
         "audit",
         r#"{"type": "audit", "pairs": true}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"]"#,

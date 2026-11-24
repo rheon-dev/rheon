@@ -27,6 +27,9 @@ pub enum Extra {
     /// own residual, NaN where there is none yet (`RobustCfg::emit_scale`;
     /// docs/PLAN.md task 272 (a)).
     Huber { scale: Vec<f64> },
+    /// `vector_ar`: each declared Granger test's statistic and p-value, then
+    /// the order in force under `select`, read from the fit before the row.
+    VectorAr { values: Vec<f64> },
 }
 
 /// The coefficients' sampling variances ([`OnlineModel::coef_variance`]),
@@ -99,6 +102,7 @@ pub enum ModelState {
     EwmMoments(Box<crate::EwmMoments>),
     Ar(Box<crate::Ar>),
     Spectral(Box<crate::Spectral>),
+    VectorAr(Box<crate::VectorAr>),
 }
 
 #[derive(Debug, Error)]
@@ -230,6 +234,7 @@ impl ModelState {
             ModelState::EwmMoments(_) => "ewm_moments",
             ModelState::Ar(_) => "ar",
             ModelState::Spectral(_) => "spectral",
+            ModelState::VectorAr(_) => "vector_ar",
         }
     }
 }
@@ -632,8 +637,10 @@ fn usable_targets(y: &[Option<f64>]) -> Vec<Option<f64>> {
 /// every slot and in every number of its `extra`, and its `n_eff`.
 fn reports_nothing(mut s: Step) -> Step {
     s.pred.fill(f64::NAN);
-    if let Some(Extra::Lasso { lam_selected }) = s.extra.as_mut() {
-        lam_selected.fill(f64::NAN);
+    match s.extra.as_mut() {
+        Some(Extra::Lasso { lam_selected }) => lam_selected.fill(f64::NAN),
+        Some(Extra::VectorAr { values }) => values.fill(f64::NAN),
+        _ => {}
     }
     s
 }

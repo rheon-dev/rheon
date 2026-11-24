@@ -185,6 +185,12 @@ pub const CELLS: &[Cell] = &[
     cell("ar.lags", 4, 8, Pow(3), Pow(2)),
     cell("ar.targets", 1, 8, Pow(1), Pow(1)),
     cell("ar.history", 1000, 8, Const, Const),
+    // One rank-one update of the shared Gram of `d + k + 1` slots a row and
+    // its solve on the schedule's rows, `d = kp`: `d³` a solve beside `d²`
+    // numbers, in the lags at a fixed `k` and in the targets at a fixed `p`.
+    cell("vector_ar.lags", 2, 8, Pow(3), Pow(2)),
+    cell("vector_ar.targets", 2, 8, Pow(3), Pow(2)),
+    cell("vector_ar.history", 1000, 8, Const, Const),
     // A rotation of each period's transform a row, `F` a row and `F` held;
     // each target its own.
     cell("spectral.periods", 4, 8, Pow(1), Pow(1)),
@@ -902,6 +908,15 @@ fn model_case(id: &str, n: usize) -> ModelCase {
         ("ar", "targets") => ModelCase::new(fit(json!({"type": "ar", "lags": 8}), 0, n), lin),
         ("ar", "history") => {
             ModelCase::new(fit(json!({"type": "ar", "lags": 8}), 0, 1), lin).warm(n)
+        }
+        ("vector_ar", "lags") => {
+            ModelCase::new(fit(json!({"type": "vector_ar", "lags": n}), 0, 2), lin)
+        }
+        ("vector_ar", "targets") => {
+            ModelCase::new(fit(json!({"type": "vector_ar", "lags": 2}), 0, n), lin)
+        }
+        ("vector_ar", "history") => {
+            ModelCase::new(fit(json!({"type": "vector_ar", "lags": 2}), 0, 2), lin).warm(n)
         }
         ("ftrl", "k") => ModelCase::new(fit(json!({"type": "ftrl"}), n, 1), lin),
         ("ftrl", "history") => ModelCase::new(fit(json!({"type": "ftrl"}), 8, 1), lin).warm(n),

@@ -191,6 +191,13 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         r#""targets": ["y"], "features": ["x0"], "half_life": @50"#,
         ALL,
     ),
+    // Likewise, every target's at once, its tests read at each solve.
+    (
+        "vector_ar",
+        r#"{"type": "vector_ar", "lags": 2, "causality": [{"caused": ["y"]}]}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"], "half_life": @50"#,
+        ALL,
+    ),
     // `hazard_rows`, a count of rows on every clock; `hazard`, the clock
     // time between changepoints on every clock, rows without one (task 547).
     (

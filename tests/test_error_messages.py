@@ -614,6 +614,7 @@ BUILDERS = {
     rp.spec.ddsketch: dict(features=None, half_life=None, quantiles=[0.25]),
     rp.spec.ewm_moments: dict(features=["x0", "y"], targets=None, terms={"var": {"x0": 2}}),
     rp.spec.ar: dict(lags=2),
+    rp.spec.vector_ar: dict(lags=2),
     rp.spec.spectral: dict(features=None, periods=[8.0]),
 }
 

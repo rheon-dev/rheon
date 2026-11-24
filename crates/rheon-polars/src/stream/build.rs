@@ -808,5 +808,11 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             m.set_keep_factor(spec.emit_se_coef);
             Ok(AnyModel::Ar(Box::new(m)))
         }
+        ModelKind::VectorAr(_) => {
+            let mut m = rheon_core::VectorAr::new(crate::spec::vector_ar_cfg(spec, decay)?)?;
+            // The coefficients' variances, which `se_coef` reports.
+            m.set_keep_factor(spec.emit_se_coef);
+            Ok(AnyModel::VectorAr(Box::new(m)))
+        }
     }
 }

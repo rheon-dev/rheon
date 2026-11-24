@@ -171,6 +171,8 @@ COEF_SPECS = [
     ),
     # Each target on its own lags, the features beside them.
     rp.spec.ar("m", targets=["y", "y2"], features=["x1", "x2"], lags=[1, 3], half_life=30),
+    # Every target's lags in every equation, the features first.
+    rp.spec.vector_ar("m", targets=["y", "y2"], features=["x1", "x2"], lags=2, half_life=30),
 ]
 
 

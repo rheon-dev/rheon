@@ -172,6 +172,7 @@ EXCEPT = {
     "expectile": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_calibration", "emit_breaks"},
     "holt": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_feature_health"},
     "ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
+    "vector_ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
 }
 
 
@@ -200,6 +201,18 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     ("expectile", "expectile", fullest("expectile", **FIT, expectile=0.8), []),
     ("holt", "holt", fullest("holt", targets=["y"], group="g", half_life=25.0, **CLOCK), []),
     ("ar", "ar", fullest("ar", **FIT, lags=[1, 3]), []),
+    (
+        "vector_ar",
+        "vector_ar",
+        fullest(
+            "vector_ar",
+            **FIT,
+            lags=2,
+            select="aic",
+            causality=[{"caused": "y", "causing": "z"}],
+        ),
+        [],
+    ),
     (
         "ew_cov",
         "ew_cov",

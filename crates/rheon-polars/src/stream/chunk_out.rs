@@ -83,9 +83,10 @@ pub(super) struct Buffers {
     pub(super) residuals: bool,
     pub(super) extras: bool,
     n_levels: usize,
-    /// One value per target and row from the model's step extras: lasso's
-    /// selected penalty, or `huber`'s scale under `emit_huber_scale`.
-    per_target: bool,
+    /// Values per row from the model's step extras: one per target for
+    /// lasso's selected penalty or `huber`'s scale under
+    /// `emit_huber_scale`, and `vector_ar`'s tests and order.
+    extra_width: usize,
 }
 
 impl Buffers {
@@ -102,14 +103,7 @@ impl Buffers {
             // not itself an output field.
             extras: spec.emit_sigma || spec.emit_zscore || spec.emit_selected || spec.emit_averaged,
             n_levels: spec.resid_quantiles.as_ref().map_or(0, Vec::len),
-            per_target: matches!(
-                spec.model,
-                crate::ModelKind::Lasso { .. }
-                    | crate::ModelKind::Huber {
-                        emit_huber_scale: true,
-                        ..
-                    }
-            ),
+            extra_width: crate::bank::extra_width(spec),
         }
     }
 
@@ -143,11 +137,7 @@ impl Buffers {
             + n_models
             + n_models
             + on(spec.emit_error_inflation)
-            + if self.per_target {
-                n_models * spec.m()
-            } else {
-                0
-            }
+            + n_models * self.extra_width
     }
 }
 
@@ -258,7 +248,7 @@ impl ChunkOut {
             residuals,
             extras,
             n_levels,
-            per_target,
+            extra_width,
         } = Buffers::of(spec);
         let n_checks = crate::checks::value_names(spec).len();
         self.rows.clear();
@@ -285,11 +275,7 @@ impl ChunkOut {
         fill(&mut self.resid_q, n_levels * per, f64::NAN);
         fill(&mut self.drift, on(spec.emit_drift), false);
         written(dense, &mut self.n_eff, n_models * n_rows, f64::NAN);
-        let lam = if per_target {
-            n_models * spec.m() * n_rows
-        } else {
-            0
-        };
+        let lam = n_models * extra_width * n_rows;
         fill(&mut self.lam_selected, lam, f64::NAN);
         lists(&mut self.coef, n_models, n_rows);
         written(dense, &mut self.settled, n_models * n_rows, f64::NAN);
