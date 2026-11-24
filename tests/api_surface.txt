@@ -362,6 +362,16 @@
     targets
     trend_half_life = None
     trend = True
+    seasonal = None
+    seasonal_periods = None
+    season_length = None
+    seasonal_half_life = None
+    damping_half_life = None
+    start = None
+    initial_level = None
+    initial_trend = None
+    initial_seasonal = None
+    max_state_bytes = None
     common
   huber:
     name
@@ -989,9 +999,19 @@
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
   holt(half_life=50.0, targets=['y']):
+    model.damping_half_life = "inf"
+    model.initial_level = []
+    model.initial_seasonal = []
+    model.initial_trend = []
     model.level_half_life = 50.0
+    model.max_state_bytes = null
     model.min_weight = 1.0
     model.n_targets = 1
+    model.season = "none"
+    model.season_length = 0.0
+    model.season_periods = 0
+    model.seasonal_half_life = "inf"
+    model.start = "warm"
     model.trend = true
     model.trend_half_life = 200.0
     stream.breaks_half_life = 50.0
@@ -3109,6 +3129,8 @@
   lasso.closed: both, right
   ddsketch.closed: both, right
   garch.vol: egarch, figarch, garch, gjr
+  holt.seasonal: add, mul
+  holt.start: heuristic, known, warm
   garch.dist: normal, skewt, t
   dcc.margins: garch, none
   dcc.vol: egarch, figarch, garch, gjr
@@ -3177,6 +3199,7 @@
   rp.ewm_sum(reverse=True).closed: both, left, none, right
   rp.ewm_sum(reverse=True).partial: drop, keep, null
   withheld_reason, in precedence order: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample
+  withheld_reason of a multiplicative holt season: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample, not_positive
   toml.input_format: csv, ipc, ndjson, parquet
   toml.output_format: csv, ipc, ndjson, parquet
   toml.output_layout: flat, struct
@@ -3281,7 +3304,7 @@
     glm: family, link, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, step_cap, var_power
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows, warm_span
-    holt: trend, trend_half_life
+    holt: damping_half_life, initial_level, initial_seasonal, initial_trend, max_state_bytes, season_length, seasonal, seasonal_half_life, seasonal_periods, start, trend, trend_half_life
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, max_rows_between_solves, max_state_bytes, refit_budget, ridge, ridge_scale, solve_every, standardize
     kalman: coef_half_life, covariance_form, obs_var, p0, q, revert_half_life, share_p, standardize
     kmeans: dead_frac, init, n_clusters, scale_floor, seed, split_merge, split_merge_every, split_merge_every_rows, standardize, update_every, update_every_rows, warm_rows, warm_span
