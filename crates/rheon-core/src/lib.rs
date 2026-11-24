@@ -136,6 +136,7 @@ mod spread;
 mod sqsum;
 mod stats;
 mod streampca;
+pub mod tagged;
 mod tails;
 mod tdigest;
 mod tdigest_model;

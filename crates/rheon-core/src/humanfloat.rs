@@ -8,37 +8,68 @@
 //! These helpers write the three as the strings `"inf"`, `"-inf"` and
 //! `"nan"` -- the spelling `rheon-polars`' `Num` already uses for the same
 //! reason, so a spec's `half_life` and a state's `decay` read alike -- and
-//! read them back. They key on [`serde::Serializer::is_human_readable`],
+//! read them back. A NaN other than [`f64::NAN`] keeps its bits as `"-nan"`
+//! (the sign bit set) or `"nan:0x"` and its 16 hex digits. They key on [`serde::Serializer::is_human_readable`],
 //! which **msgpack reports as `false`**, so the state file's bytes are
 //! exactly what they were: `crates/rheon-core/tests/state_encoding.rs`
 //! holds an annotated field to the same bytes as a bare `f64`.
 //!
 //! Apply with `#[serde(with = "crate::humanfloat::f64_or_tag")]` to any
-//! config float that a caller may legitimately set to infinity. Missing one
-//! is caught rather than shipped: `Bank::save_json_string` re-reads its own
-//! output and refuses if it does not match the state.
+//! config float that a caller may legitimately set to infinity: a spec's
+//! JSON goes through `serde_json` alone. A state's JSON export goes through
+//! [`crate::tagged`], which tags every float wherever it sits, so a state
+//! field needs an annotation only where serde buffers it before knowing
+//! its type (an untagged enum, a flattened field). Missing one is caught
+//! rather than shipped: `Bank::save_json_string` re-reads its own output
+//! and refuses if it does not match the state.
 
 use serde::{Deserializer, Serialize, Serializer};
 
-fn tag(v: f64) -> &'static str {
+/// The tag of a non-finite `v`, exact to the bit: `"inf"`, `"-inf"`, and
+/// for a NaN `"nan"` when it is the one [`f64::NAN`] is, `"-nan"` for the
+/// same with its sign bit set -- the NaN that `0.0 / 0.0` gives at run time
+/// on x86-64, where arm64 gives `f64::NAN` -- and `"nan:0x"` with the 16
+/// hex digits of its bits for any other. A NaN's bits are what msgpack
+/// writes, so a state read back from its JSON is the same state byte for
+/// byte on either machine.
+pub(crate) fn tag(v: f64) -> std::borrow::Cow<'static, str> {
     if v.is_nan() {
-        "nan"
+        match v.to_bits() {
+            NAN_BITS => "nan".into(),
+            NEG_NAN_BITS => "-nan".into(),
+            bits => format!("nan:0x{bits:016x}").into(),
+        }
     } else if v > 0.0 {
-        "inf"
+        "inf".into()
     } else {
-        "-inf"
+        "-inf".into()
     }
 }
 
-fn untag<E: serde::de::Error>(s: &str) -> Result<f64, E> {
+const NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
+const NEG_NAN_BITS: u64 = 0xfff8_0000_0000_0000;
+
+/// The value of a tag [`tag`] writes, or `None` for a string that is none.
+pub(crate) fn untagged(s: &str) -> Option<f64> {
     match s {
-        "inf" => Ok(f64::INFINITY),
-        "-inf" => Ok(f64::NEG_INFINITY),
-        "nan" => Ok(f64::NAN),
-        _ => Err(E::custom(format!(
-            "expected a number or \"inf\"/\"-inf\"/\"nan\", got {s:?}"
-        ))),
+        "inf" => Some(f64::INFINITY),
+        "-inf" => Some(f64::NEG_INFINITY),
+        "nan" => Some(f64::from_bits(NAN_BITS)),
+        "-nan" => Some(f64::from_bits(NEG_NAN_BITS)),
+        _ => {
+            let hex = s.strip_prefix("nan:0x").filter(|h| h.len() == 16)?;
+            let v = f64::from_bits(u64::from_str_radix(hex, 16).ok()?);
+            v.is_nan().then_some(v)
+        }
     }
+}
+
+pub(crate) fn untag<E: serde::de::Error>(s: &str) -> Result<f64, E> {
+    untagged(s).ok_or_else(|| {
+        E::custom(format!(
+            "expected a number or \"inf\"/\"-inf\"/\"nan\", got {s:?}"
+        ))
+    })
 }
 
 struct Visit;
@@ -73,7 +104,7 @@ pub mod f64_or_tag {
 
     pub fn serialize<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
         if s.is_human_readable() && !v.is_finite() {
-            s.serialize_str(tag(*v))
+            s.serialize_str(&tag(*v))
         } else {
             s.serialize_f64(*v)
         }
@@ -98,7 +129,7 @@ pub mod vec_f64_or_tag {
             if x.is_finite() {
                 seq.serialize_element(x)?;
             } else {
-                seq.serialize_element(tag(*x))?;
+                seq.serialize_element(&tag(*x))?;
             }
         }
         seq.end()
@@ -361,7 +392,7 @@ pub mod opt_f64_or_tag {
 
     pub fn serialize<S: Serializer>(v: &Option<f64>, s: S) -> Result<S::Ok, S::Error> {
         match v {
-            Some(x) if s.is_human_readable() && !x.is_finite() => s.serialize_some(tag(*x)),
+            Some(x) if s.is_human_readable() && !x.is_finite() => s.serialize_some(&tag(*x)),
             Some(x) => s.serialize_some(x),
             None => s.serialize_none(),
         }
