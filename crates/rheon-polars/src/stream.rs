@@ -592,7 +592,10 @@ impl AnyModel {
     /// Whether some level a `tdigest` reads is withheld because the rows
     /// before it do not identify it: past the plotting position of the
     /// smallest or largest row (`rheon_core::TDigestModel::beyond_sample`).
-    /// Read from the state, so it names the levels the next row reads.
+    /// Read from the state, so it names the levels the next row reads. A
+    /// bank row asks only of the two kinds here (`run_instance`'s
+    /// `has_levels`, decided once an instance): keep that in step with
+    /// this match.
     pub fn beyond_sample(&self) -> bool {
         match self {
             AnyModel::TDigest(m) => m.beyond_sample(),
@@ -4263,6 +4266,10 @@ fn run_instance(
     let is_dcc = matches!(inst.model.get(), AnyModel::Dcc(_));
     let is_corrchange = matches!(inst.model.get(), AnyModel::CorrChange(_));
     let is_pca = matches!(inst.spec.model, ModelKind::Pca { .. });
+    let has_levels = matches!(
+        inst.model.get(),
+        AnyModel::TDigest(_) | AnyModel::DdSketch(_)
+    );
     let hit_test = if poisson {
         HitTest::Undefined
     } else if binary_loss {
@@ -4485,7 +4492,7 @@ fn run_instance(
         let unstable = inst.model.get().unstable_targets();
         // And whether a quantile level is past what the rows before this one
         // identify (task 544): read before the step, as the levels are.
-        let beyond = inst.model.get().beyond_sample();
+        let beyond = has_levels && inst.model.get().beyond_sample();
 
         // The residual spread folds each slot's own prediction, whether or
         // not a readiness gate withholds it from the output
