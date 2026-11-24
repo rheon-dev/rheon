@@ -143,7 +143,9 @@ def expectile(
     ``pred_<t>``, ``resid_<t>``
         Per target: the fitted expectile at the row's features, from the
         rows before it, and ``y`` less it where the target is not null. Null
-        before the target's first fit, which needs a row per coefficient.
+        before the target's first fit: after its first row under a ridge
+        above 0, the default, and after a row per coefficient at
+        ``ridge=0``.
     ``weight_sum``
         The weight the model has accumulated before the row and before the
         row's own decay; under a window, the weight of the rows in it.

@@ -31,7 +31,18 @@ fn a_refit_buffers_shape_is_its_counts() {
     assert!(rows(5).fits(4, 6, false));
     assert!(!rows(6).fits(4, 6, false), "as many as its count: it ran");
     assert!(!rows(7).fits(4, 6, false));
-    assert!(rows(7).fits(4, 6, true), "a span holds what its span has");
+    let spanned = |learned: u32| Refit {
+        first: Some(Stamp::from(0.0)),
+        ..rows(learned)
+    };
+    assert!(
+        spanned(7).fits(4, 6, true),
+        "a span holds what its span has"
+    );
+    assert!(
+        !rows(7).fits(4, 6, true),
+        "a span's rows run from its first stamp"
+    );
     assert!(rows(0).fits(4, 0, false));
     assert!(!rows(1).fits(4, 0, false), "a count of 0 reads as 1");
     let done = Refit {

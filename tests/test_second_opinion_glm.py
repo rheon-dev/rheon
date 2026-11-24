@@ -266,3 +266,46 @@ def test_under_decay_the_target_is_the_decayed_likelihood(family):
         f = sm.GLM(y, X, family=sm_family(family), freq_weights=v).fit(tol=1e-12, maxiter=200)
     gap = float(np.max(np.abs(got - np.asarray(f.params)) / np.asarray(f.bse)))
     assert gap <= 0.15, gap
+
+
+def test_a_group_past_the_refit_budget_fits_under_the_inverse_link():
+    """A group past ``refit_budget`` gives its refit up before its first
+    row. Under the Gamma's inverse link every coefficient 0 gives no mean,
+    so such a group read null forever (review 2026-11-23, GLM-3); it now
+    starts from the intercept at the link of its first target, held to the
+    start's step cap, and fits statsmodels' ``GLM`` (``Gamma`` with the
+    ``InversePower`` link) of its own rows, the group whose refit ran as
+    closely. Measured: 0.20 and 0.15 standard errors, held at 0.6."""
+    rng = np.random.default_rng([578, 3])
+    n = 3000
+    frames, rows = [], {}
+    for g in range(3):
+        X = np.column_stack([np.ones(n), rng.uniform(-1.0, 1.0, (n, 2))])
+        mu = 1.0 / (X @ [0.5, 0.15, -0.1])
+        y = rng.gamma(2.0, mu / 2.0)
+        rows[g] = (X, y)
+        frames.append(pl.DataFrame({"g": f"g{g}", "x1": X[:, 1], "x2": X[:, 2], "y": y}))
+    s = rp.spec.glm(
+        "m",
+        targets=["y"],
+        features=["x1", "x2"],
+        family="gamma",
+        link="inverse",
+        group="g",
+        half_life=float("inf"),
+        refit_rows=200,
+        # 200 rows of 4 numbers: 6,400 bytes a group; room for one.
+        refit_budget=1.5 * 6400 / 2**20,
+    )
+    bank = rp.ModelBank([s])
+    with pytest.warns(rp.ReadinessWarning):
+        bank.fit(pl.concat(frames))
+    assert bank.summary()["refit_given_up"].sum() == 2
+    got = {r["g"]: np.array(r["coef"]) for r in bank.coef().iter_rows(named=True)}
+    for g, (X, y) in rows.items():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fam = sm.families.Gamma(sm.families.links.InversePower())
+            f = sm.GLM(y, X, family=fam).fit(tol=1e-12, maxiter=200)
+        gap = float(np.max(np.abs(got[f"g{g}"] - f.params) / f.bse))
+        assert gap <= 0.6, (g, gap, got[f"g{g}"], f.params)

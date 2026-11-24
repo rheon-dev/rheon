@@ -310,3 +310,39 @@ def test_the_mean_expectile_keeps_every_check_at_its_level():
                 assert (out[field] > c).mean() < 0.1, (tau, field)
         if "cusum_y" in out.columns:
             assert (out["cusum_y"].abs() > 1.96).mean() < 0.1, tau
+
+
+def test_a_clock_window_withholds_only_where_its_weight_says_so():
+    """A row's ``min_weight`` gate reads the weight it reports, the
+    window's before the rows that leave at the row (hard rule 8): five rows
+    at 0 to 4 under a window of 5 and a floor of 3, then a row at 8, by
+    which four have left. The gate read the one row left and withheld the
+    prediction while ``weight_sum`` said 5 and no reason was given (review
+    2026-11-23, EXP-4); it now reads the fit of the row left. A row at 20,
+    by which every row has left, has no fit at any level, rather than the
+    fit of the rows that left (EXP-1)."""
+    rng = np.random.default_rng(578)
+    for tau in (0.5, 0.9):
+        df = pl.DataFrame(
+            {
+                "t": [0.0, 1.0, 2.0, 3.0, 4.0, 8.0, 20.0],
+                "x0": rng.standard_normal(7),
+                "x1": rng.standard_normal(7),
+                "y": rng.standard_normal(7),
+            }
+        )
+        out = fields(
+            _spec(
+                expectile=tau,
+                half_life=INF,
+                window_size=5.0,
+                clock="t",
+                min_weight=3.0,
+                ridge=1e-6,
+            ),
+            df,
+        )
+        assert out["weight_sum"][5] == 5.0
+        assert out["pred_y"][5] is not None, out
+        assert out["withheld_reason"][5] is None
+        assert out["pred_y"][6] is None, out

@@ -16,23 +16,37 @@
 //!
 //! with `W = 1/(g'(μ)² V(μ))` and `z = η + (y − μ) g'(μ)`
 //! ([`crate::Family::working`]); `w W (z − η) x̃` is the row's score. This
-//! is one Fisher-scoring step a row on the objective
+//! is one Fisher-scoring step a row, each past row's curvature frozen at
+//! the fit that scored it. Without decay the sums form `β_t = (G_t + R
+//! I)⁻¹ h_t`, `h_t = h_{t−1} + w W z x̃`, step for step: the penalized
+//! objective
 //!
 //! ```text
-//! F_t(β) = Σ_i w_i λ^(age_i) d(y_i, μ_i(β))/2 + λ^(age_0) R/2 |β|²
+//! F_t(β) = Σ_i w_i d(y_i, μ_i(β))/2 + R/2 |β|²
 //! ```
 //!
-//! (`d` the family's unit deviance, `age_0` the stream's whole age), each
-//! past row's curvature frozen at the fit that scored it. Without decay
-//! that is the penalized batch fit, the sums form `β_t = (G_t + R I)⁻¹ h_t`,
-//! `h_t = h_{t−1} + w W z x̃`, step for step: statsmodels' `GLM` with
-//! `freq_weights` (a weight counts its row that many times) penalized by
-//! `R/2 |β|²`, or glum's with `alpha = R / Σ w`. Under decay the ridge
-//! ages as a row at the stream's start does, so a row of weight 0 decays
-//! `G` and moves no coefficient, and the fit's target tends to the decayed
-//! likelihood's own maximum, `GLM(freq_weights = λ^age)`. `R` keeps every
-//! solve's `G + R I` positive definite, the first row's included. The
-//! intercept is penalized with the slopes.
+//! (`d` the family's unit deviance) with each row's curvature frozen,
+//! statsmodels' `GLM` with `freq_weights` (a weight counts its row that
+//! many times) penalized by `R/2 |β|²`, or glum's with `alpha = R / Σ w`.
+//! Under decay `G` decays and the step's `R` does not, so the sums are
+//!
+//! ```text
+//! h_t = λ h_{t−1} + (1 − λ) R β_{t−1} + w W z x̃,    h_t = (G_t + R I) β_t
+//! ```
+//!
+//! that is, from `h_0 = 0`,
+//!
+//! ```text
+//! G_t β_t + λ^t R β_t + R Σ_{s<t} (1 − λ) λ^(t−1−s) (β_t − β_s) = Σ_{s≤t} λ^(t−s) w_s W_s z_s x̃_s
+//! ```
+//!
+//! a penalty toward 0 that ages as a row at the stream's start does, and
+//! pulls toward the fits before (`β_0 = 0` among them), whose weights sum
+//! to `1 − λ^t` and which vanish as the fit stops moving. So a row of
+//! weight 0 decays `G` and moves no coefficient, and the fit's target tends
+//! to the decayed likelihood's own maximum, `GLM(freq_weights = λ^age)`,
+//! unpenalized. `R` keeps every solve's `G + R I` positive definite, the
+//! first row's included. The intercept is penalized with the slopes.
 //!
 //! **The start.** Before about `k` rows the fit is underdetermined, and one
 //! row can move `η` by tens. Measured over 50 seeds at 20 coefficients and
@@ -47,14 +61,17 @@
 //!   `refit_rows` learned rows are kept, and on the row that fills the
 //!   buffer, after its prediction and update, they are fitted to
 //!   convergence by penalized IRLS with step halving from `β_0 = (g(ȳ),
-//!   0, …)`, at their decayed weights under the penalty `R/2 |β|²`, and `G`
-//!   rebuilt at that fit: `G = Σ v_i W_i(β*) x̃_i x̃_i'`, `β = β*`. The buffer is
+//!   0, …)`, at their decayed weights under the penalty `R/2 |β|²`, the
+//!   whole of `R` beside weights that have decayed, and `G` rebuilt at
+//!   that fit: `G = Σ v_i W_i(β*) x̃_i x̃_i'`, `β = β*`. The buffer is
 //!   then freed. Its largest gap to the batch fit at 100,000 rows was 0.20,
 //!   0.16 and 0.31 standard errors (Poisson, Gamma, Tweedie at `p = 1.5`).
 //!   While the buffer fills, the recursion runs held to a step cap of 1
 //!   ([`WAITING_CAP`]), so the predictions before the refit are the capped
 //!   recursion's rather than a runaway's; the refit then replaces all it
-//!   left. `refit_clock = D` is the same refit over a span of the clock
+//!   left. A refit given up past a spec's budget replaces nothing, so its
+//!   target keeps that cap for good, and under the inverse or power link
+//!   starts from the intercept at the link of its first value. `refit_clock = D` is the same refit over a span of the clock
 //!   (docs/PLAN.md task 538): a target's rows from its first learned row
 //!   through the first at least `D` clock units after it, once they hold a
 //!   row per coefficient, `D` read off the rows' exact stamps
@@ -99,6 +116,8 @@ use crate::{Decay, RefitStatus, Stamp};
 mod mutant_tests;
 #[cfg(test)]
 mod refit_clock_tests;
+#[cfg(test)]
+mod review_tests;
 #[cfg(test)]
 mod tests;
 
@@ -300,14 +319,14 @@ impl GlmCfg {
         }
         if !self.link.defined_at_zero() && (!self.refits() || !self.fit_intercept) {
             no.refuse(format!(
-                "glm: the {} link needs refit_rows above 0 and fit_intercept, but {}. Its \
-                 mean is positive only where η is above 0, so the \
+                "glm: the {} link needs refit_rows above 0 or refit_span, and fit_intercept, \
+                 but {}. Its mean is positive only where η is above 0, so the \
                  recursion's own start, every coefficient 0, gives none; the refit starts \
                  from the intercept at the link of the targets' mean. Keep the refit and \
                  the intercept, or use the log link.",
                 self.link.name(),
                 if !self.refits() {
-                    "refit_rows is 0"
+                    "refit_rows is 0 and refit_span is not set"
                 } else {
                     "fit_intercept is off"
                 }
@@ -363,9 +382,11 @@ impl GlmRefit {
     /// done (a span of the clock holds the rows its span has).
     fn fits(&self, width: usize, refit_rows: u32, clocked: bool) -> bool {
         let n = if self.done { 0 } else { self.learned as usize };
-        self.rows.len() == n * width
+        n.checked_mul(width) == Some(self.rows.len())
             && (self.done || clocked || self.learned < refit_rows.max(1))
             && (clocked || self.first.is_none())
+            // A span runs from the first row it holds.
+            && (!clocked || self.done || self.learned == 0 || self.first.is_some())
     }
 }
 
@@ -577,13 +598,24 @@ impl Glm {
     }
 
     /// Give every target's refit up before it begins, past a spec's refit
-    /// budget: its rows are freed and it keeps the one-pass fit.
+    /// budget: its rows are freed and it keeps the one-pass fit, held to
+    /// the start's cap ([`WAITING_CAP`]) for good, since no refit will
+    /// replace what the start leaves; under a link with no mean at 0, the
+    /// recursion starts from the intercept at the link of the target's
+    /// first value, where the refit would have started.
     pub fn refit_give_up(&mut self) {
         for r in self.refit.iter_mut().filter(|r| !r.done) {
             r.rows = Vec::new();
             r.done = true;
             r.over_budget = true;
         }
+    }
+
+    /// Whether target `j` gave its refit up past the budget before any row
+    /// moved its coefficients from 0: under a link with no mean at 0 its
+    /// recursion has no start.
+    fn unstarted(&self, j: usize) -> bool {
+        self.refit.get(j).is_some_and(|r| r.over_budget) && self.beta[j].iter().all(|&b| b == 0.0)
     }
 
     /// Target `j`'s mean at the fit as it stands, or NaN where the link
@@ -603,10 +635,10 @@ impl Glm {
         }
     }
 
-    /// Target `j`'s learned row: `G += c x̃x̃'` if the result is finite
-    /// (else the row teaches nothing and `false`), then the step `(G + R
-    /// I)⁻¹ s x̃`, `s = c (z − η)`, held to the cap. A solve that fails is
-    /// counted and moves no coefficient.
+    /// Target `j`'s learned row: `G += c x̃x̃'` if the result and the score
+    /// `s x̃` are finite (else the row teaches nothing and `false`), then
+    /// the step `(G + R I)⁻¹ s x̃`, `s = c (z − η)`, held to the cap. A
+    /// solve that fails is counted and moves no coefficient.
     fn learn(&mut self, j: usize, c: f64, s: f64) -> bool {
         let k = self.cfg.k_total();
         let Self {
@@ -627,12 +659,17 @@ impl Glm {
                 work.g[at(i, m)] += cx * xm;
             }
         }
-        if !work.g.iter().all(|v| v.is_finite()) {
+        work.s.clear();
+        work.s.extend(x.iter().map(|t| s * t));
+        // A row whose new `G` or score is not finite teaches nothing, its
+        // `x̃x̃'` included: kept without its step, one huge row's would
+        // freeze its direction for good. A solve that fails on a finite
+        // system keeps the row's `G`, as the rows before a definite `G`
+        // must under a vanishing ridge.
+        if !(work.g.iter().all(|v| v.is_finite()) && work.s.iter().all(|v| v.is_finite())) {
             return false;
         }
         std::mem::swap(&mut gram[j], &mut work.g);
-        work.s.clear();
-        work.s.extend(x.iter().map(|t| s * t));
         if !solve_ridged(&gram[j], cfg.ridge, &work.s, k, &mut work.l, &mut work.d) {
             *solve_failures += 1;
             return true;
@@ -640,8 +677,10 @@ impl Glm {
         let moved: f64 = x.iter().zip(&work.d).map(|(t, d)| t * d).sum();
         // While the target's refit waits, its rows are held to the start's
         // cap as well: the refit replaces what they leave, and the
-        // predictions made before it are then the capped recursion's.
-        let waiting = refit.get(j).is_some_and(|r| !r.done);
+        // predictions made before it are then the capped recursion's. A
+        // refit given up past the spec's budget never replaces them, so
+        // its rows keep that cap for good, as a spec without a refit has.
+        let waiting = refit.get(j).is_some_and(|r| !r.done || r.over_budget);
         let cap = if waiting {
             cfg.step_cap.min(WAITING_CAP)
         } else {
@@ -717,7 +756,8 @@ fn objective(cfg: &GlmCfg, fam: &Family, rows: &[f64], nf: usize, b: &[f64]) -> 
 
 /// `score(b)·d`, the score `Σ v W (z − η) x̃ − R b` at `b` read along
 /// `d`: the objective's slope along `−d`. `None` where a row's `η` gives
-/// no mean.
+/// no mean. A row whose `η` the link clips ([`crate::family::ETA_CLIP`])
+/// has no score: the objective reads its clipped mean, flat in `η` there.
 fn score_along(
     cfg: &GlmCfg,
     fam: &Family,
@@ -730,6 +770,9 @@ fn score_along(
     for row in rows.chunks_exact(nf + 2) {
         let eta = dot_aug(b, &row[..nf], cfg.fit_intercept);
         let wk = fam.working(eta, row[nf])?;
+        if wk.eta != eta {
+            continue;
+        }
         s += row[nf + 1] * wk.w * (wk.z - wk.eta) * dot_aug(d, &row[..nf], cfg.fit_intercept);
     }
     Some(s)
@@ -771,7 +814,14 @@ const UNSEEN: f64 = 1e-10;
 ///   It converges once the full step is at the fit's rounding, `4ε (1 +
 ///   max|b|)`; or under `1e-11 (1 + max|b|)` and no smaller than the pass
 ///   before's, which a contracting iteration reaches only at its rounding;
-///   or once no step does not raise `F`.
+///   or once no step does not raise `F` where the full step's predicted
+///   fall is below what `F` shows. No step lowering `F` where the full
+///   step should is no convergence: the fit stands, reported unconverged.
+///
+/// The log and logit links clip `η` ([`crate::family::ETA_CLIP`]), so `F`
+/// is flat in a row's `η` past the clip: there the row has no score, and
+/// the start is held inside the clip. A target whose mean is past the clip
+/// is then fitted at the clip's edge, the nearest mean the link gives.
 fn refit_fit(cfg: &GlmCfg, rows: &[f64], nf: usize) -> Option<(Vec<f64>, u32, bool)> {
     let fam = cfg.family();
     let k = cfg.k_total();
@@ -783,7 +833,14 @@ fn refit_fit(cfg: &GlmCfg, rows: &[f64], nf: usize) -> Option<(Vec<f64>, u32, bo
     }
     let mut b = vec![0.0; k];
     if off == 1 && sv > 0.0 {
-        b[0] = fam.start_eta(svy / sv);
+        // Held inside the clip of the log and logit links, where the
+        // objective has a slope: past it the mean is flat in `η`.
+        b[0] = match cfg.link {
+            GlmLink::Log | GlmLink::Logit => fam
+                .start_eta(svy / sv)
+                .clamp(-crate::family::ETA_CLIP, crate::family::ETA_CLIP),
+            GlmLink::Inverse | GlmLink::Power => fam.start_eta(svy / sv),
+        };
     }
     let mut f = objective(cfg, &fam, rows, nf, &b);
     if !f.is_finite() {
@@ -807,7 +864,14 @@ fn refit_fit(cfg: &GlmCfg, rows: &[f64], nf: usize) -> Option<(Vec<f64>, u32, bo
             x[off..].copy_from_slice(&row[..nf]);
             let eta = dot_aug(&b, &row[..nf], cfg.fit_intercept);
             let wk = fam.working(eta, row[nf])?;
-            let c = row[nf + 1] * wk.w;
+            // A row the link clips has no slope or curvature in `F`, flat
+            // in its `η` there: no score (`score_along`) and no weight, so
+            // the step past the clip is the penalty's, back to its edge.
+            let c = if wk.eta == eta {
+                row[nf + 1] * wk.w
+            } else {
+                0.0
+            };
             let s = c * (wk.z - wk.eta);
             for i in 0..k {
                 for m in 0..=i {
@@ -849,8 +913,12 @@ fn refit_fit(cfg: &GlmCfg, rows: &[f64], nf: usize) -> Option<(Vec<f64>, u32, bo
             }
             t *= 0.5;
         }
+        // No step along `d` lowers `F`: the fit is a minimiser only where
+        // the full step's predicted fall is itself too small for `F` to
+        // show. Otherwise the step left the link's domain or crossed a
+        // clip, and the fit stands unconverged, counted.
         if !fell {
-            return Some((b, pass, true));
+            return Some((b, pass, 0.5 * slope <= unseen));
         }
         b.copy_from_slice(&trial);
         f = fresh;
@@ -877,6 +945,9 @@ impl OnlineModel for Glm {
             *out = refused;
             return;
         }
+        // A weight below 0, which a caller may hand the model directly
+        // (the bank refuses one), is a weight of 0.
+        let weight = weight.max(0.0);
         self.ensure_work();
         let m = self.cfg.n_targets;
         let nf = self.cfg.n_features;
@@ -928,6 +999,17 @@ impl OnlineModel for Glm {
                 self.gram[j].iter_mut().for_each(|v| *v *= lam);
             }
             let teaching = yj.filter(|&t| weight > 0.0 && fam.takes(t));
+            // A link with no mean at 0 starts where the refit would have,
+            // at its first target, once that refit is given up before it
+            // ran: every coefficient 0 gives such a link no mean, and the
+            // recursion never starts from there.
+            let eta = match teaching {
+                Some(t) if !fam.link.defined_at_zero() && self.unstarted(j) => {
+                    self.beta[j][0] = fam.start_eta(t);
+                    self.beta[j][0]
+                }
+                _ => eta,
+            };
             if let Some(wk) = teaching.and_then(|t| fam.working(eta, t)) {
                 let c = weight * wk.w;
                 self.learn(j, c, c * (wk.z - wk.eta));
@@ -1045,7 +1127,9 @@ impl OnlineModel for Glm {
                     && m.refit.len() == if m.cfg.refits() { n } else { 0 }
                     && m.refit
                         .iter()
-                        .all(|r| r.fits(width, m.cfg.refit_rows, m.cfg.refit_clock.is_some()));
+                        .all(|r| r.fits(width, m.cfg.refit_rows, m.cfg.refit_clock.is_some()))
+                    // Only a span's buffers can be stopped at the cap.
+                    && (m.over.is_none() || m.cfg.refit_clock.is_some());
                 if !shaped {
                     return Err(crate::model::damaged(
                         "glm",
