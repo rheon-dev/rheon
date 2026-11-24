@@ -25,7 +25,7 @@
 //!             learned rows, whichever first: drop a potential summary with
 //!             n < beta_mu w̄, and an outlier one with n < ξ(age) w̄
 //!             ξ(a) = (2^(−(a + Tp)/h) − 1) / (2^(−Tp/h) − 1),
-//!             Tp = ⌈h log2(beta_mu / (beta_mu − 1))⌉      (DenStream eq. 4.1–4.2)
+//!             Tp = h log2(beta_mu / (beta_mu − 1))        (DenStream eq. 4.1–4.2)
 //!             then link potential summaries with ‖c_a − c_b‖_mw ≤ L,
 //!             label = the smallest id in the component
 //!             L = macro_link · eps √p, or, unset, derived from the spacing:
@@ -693,7 +693,11 @@ impl Micro {
         if !h.is_finite() || self.cfg.beta_mu <= 1.0 {
             return None;
         }
-        let tp = (h * (self.cfg.beta_mu / (self.cfg.beta_mu - 1.0)).log2()).ceil();
+        // DenStream rounds `Tp` up to a whole timestamp, its clock being
+        // integer; a clock here is any unit, and rounded up the horizon
+        // depended on it: a half-life of 1 at `beta_mu = 72` made `Tp` 1 and
+        // `ξ(∞)` 2 rows where it is 72 (review 2026-11-23, CLUST-1).
+        let tp = h * (self.cfg.beta_mu / (self.cfg.beta_mu - 1.0)).log2();
         let f_tp = self.cfg.decay.factor(tp);
         (f_tp < 1.0).then_some((tp, f_tp))
     }
@@ -1663,7 +1667,7 @@ mod tests {
                 gone_at = Some(i);
             }
         }
-        // xi(age) rises from 1 to beta_mu = 3 over a few Tp = 59 clock
+        // xi(age) rises from 1 to beta_mu = 3 over a few Tp = 58.5 clock
         // units; a weight-1 summary decays below it within the first
         // checkpoints.
         let gone = gone_at.expect("the stray summary was pruned");
@@ -2154,6 +2158,40 @@ mod tests {
         }
     }
 
+    /// The prune horizon is in the clock's own units: the same stream
+    /// stamped in seconds or in hundredths of one has the same horizon,
+    /// and an outlier summary of any age is held to `beta_mu` rows at most
+    /// (`ξ(∞) = 1 / (1 − 2^(−Tp/h)) = beta_mu`). Rounded up to a whole clock
+    /// unit, as DenStream's integer timestamps are, a half-life of 1 at
+    /// `beta_mu = 72` made `Tp` 1 and `ξ(∞)` 2, and one of 0.01 made it 1
+    /// (review 2026-11-23, CLUST-1).
+    #[test]
+    fn the_prune_horizon_is_in_the_clocks_own_units() {
+        for beta_mu in [1.5, 3.0, 72.0] {
+            let horizon = |h: f64| {
+                Micro::new(MicroCfg {
+                    decay: Decay::Halflife(h),
+                    beta_mu,
+                    ..cfg()
+                })
+                .unwrap()
+                .prune_horizon()
+                .unwrap()
+            };
+            let (tp1, f1) = horizon(1.0);
+            for h in [0.01, 1.0, 100.0, 3600.0] {
+                let (tp, f) = horizon(h);
+                assert!((tp / h - tp1).abs() <= 1e-12 * tp1, "h {h}: {tp} against {tp1}");
+                assert!((f - f1).abs() <= 1e-12, "h {h}: {f} against {f1}");
+                let xi_inf = 1.0 / (1.0 - f);
+                assert!(
+                    (xi_inf - beta_mu).abs() <= 1e-9 * beta_mu,
+                    "h {h}, beta_mu {beta_mu}: {xi_inf}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn lam_decay_gives_the_same_prune_horizon_as_its_halflife() {
         let h = Micro::new(MicroCfg {
@@ -2168,10 +2206,11 @@ mod tests {
         .unwrap();
         let (tp_h, f_h) = h.prune_horizon().unwrap();
         let (tp_l, f_l) = l.prune_horizon().unwrap();
-        assert_eq!(tp_h, 59.0);
-        assert_eq!(tp_h, tp_l);
+        // `100 · log2(3/2)`, to a rounding.
+        assert!((tp_h - 58.496_250_072_115_62).abs() < 1e-12, "{tp_h}");
         // Tolerance (task 252 (b)): libm. A factor reads as its half-life
         // through `ln`, and `0.5.powf(1/100)` is libm's too.
+        assert!((tp_h - tp_l).abs() < 1e-10, "{tp_h} against {tp_l}");
         assert!((f_h - f_l).abs() < 1e-12);
         assert!(
             Micro::new(MicroCfg {
