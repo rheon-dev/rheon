@@ -1974,6 +1974,13 @@ pub struct EwCovCfg {
     /// components read the shrunk matrix, and `"shrinkage"` in `stats`
     /// emits `s` ([`crate::Shrinkage`]). Absent for none, every output and
     /// every state byte as without it. Last, and skipped when absent.
+    ///
+    /// The state adds Kish's size, 8 bytes, and under Ledoit and Wolf's
+    /// intensity the rows' fourth moments, `8 (p + 1)` bytes; a given target
+    /// is `8 p (p + 1) / 2` bytes of the cfg. A row reads the shrunk matrix
+    /// from a kept copy. Measured on one thread of a Linux x86-64 VM
+    /// (release, `mean`, `std` and `corr`, the best of 8 alternating rounds):
+    /// at `p = 5`, 70.4 ns a row without shrinkage, 1.20 times that with a fixed intensity, 1.32 with OAS and 1.84 with Ledoit and Wolf's; at `p = 20`, 278.3 ns, and 1.28, 1.36 and 1.94 times it.
     #[serde(default)]
     pub shrinkage: Option<crate::Shrinkage>,
 }
@@ -3119,6 +3126,27 @@ impl EwCovModel {
         debug_assert!(rest.is_empty(), "every slot is written");
     }
 
+    /// The rows' fourth moments, for Ledoit and Wolf's intensity, stepped
+    /// before [`EwCov::update`] by its own mixing factors, from the
+    /// deviations and co-moments it is about to consume. Out of line, so a
+    /// model without shrinkage steps as it did before: the update's one
+    /// call site, inlined as it was.
+    #[inline(never)]
+    fn learn_fourth(&mut self, x: &[f64], lam: f64, weight: f64) {
+        if let Some(fourth) = self.shrink.as_mut().and_then(|st| st.fourth.as_mut())
+            && let Some((a, b)) = self.cov.mixing(lam, weight)
+        {
+            let work = self.shrunk.get();
+            work.d.clear();
+            work.d.extend(
+                x.iter()
+                    .enumerate()
+                    .map(|(i, &xi)| self.cov.deviation(i, xi)),
+            );
+            fourth.learn(self.cov.comoments().packed(), &work.d, a, b, &mut work.cu);
+        }
+    }
+
     /// [`crate::OnlineModel::predict`], into the caller's buffer: what
     /// `step` reports, read before the row (task 270, M-4).
     /// `kept` holds the window's view between rows ([`Self::view_kept`]).
@@ -3148,12 +3176,14 @@ impl EwCovModel {
             out.pred.clear();
         } else if n_eff >= self.cfg.min_weight {
             let view = self.view_kept(kept);
-            if self.cfg.shrinkage.is_some() {
-                let (cov, s) = self.shrunk(view, &mut shrunk.get().cov);
-                self.read_into(cov, x, &mut out.pred, std, s);
+            // One call of the read, so it is inlined as it was before
+            // shrinkage.
+            let (cov, s) = if self.cfg.shrinkage.is_some() {
+                self.shrunk(view, &mut shrunk.get().cov)
             } else {
-                self.read_into(view, x, &mut out.pred, std, 0.0);
-            }
+                (view, 0.0)
+            };
+            self.read_into(cov, x, &mut out.pred, std, s);
         } else {
             out.pred.clear();
             out.pred.resize(self.cfg.n_outputs(), f64::NAN);
@@ -3239,6 +3269,7 @@ impl crate::OnlineModel for EwCovModel {
         let mut kept = self.view.take();
         let mut shrunk = self.shrunk.take();
         self.predict_into(x, d_clock, out, &mut std, &mut kept, &mut shrunk);
+        self.shrunk.put(shrunk);
         self.std.0 = std;
         self.view.put(kept);
         let lam = self.cfg.decay.factor(d_clock);
@@ -3292,22 +3323,9 @@ impl crate::OnlineModel for EwCovModel {
                     }
                 });
         }
-        // The rows' fourth moments, for Ledoit and Wolf's intensity: in step
-        // with the update below, by its own mixing factors and from the
-        // deviations and co-moments it is about to consume.
-        if let Some(fourth) = self.shrink.as_mut().and_then(|st| st.fourth.as_mut())
-            && let Some((a, b)) = self.cov.mixing(lam, weight)
-        {
-            let work = shrunk.get();
-            work.d.clear();
-            work.d.extend(
-                x.iter()
-                    .enumerate()
-                    .map(|(i, &xi)| self.cov.deviation(i, xi)),
-            );
-            fourth.learn(self.cov.comoments().packed(), &work.d, a, b, &mut work.cu);
+        if self.shrink.is_some() {
+            self.learn_fourth(x, lam, weight);
         }
-        self.shrunk.put(shrunk);
         self.cov.update(x, lam, weight);
         // Kish's size as of this learned row: a row that only ages the
         // moments keeps it ([`crate::ShrinkState`]).

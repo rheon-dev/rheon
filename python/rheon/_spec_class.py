@@ -129,7 +129,11 @@ def ew_class(
         shrinkage alone leaves its matrix singular. Refused under
         ``covariance_type="diag"``, whose classes keep variances alone, and
         ``"ledoit_wolf"`` beside ``window_size``. Default ``None``: no
-        shrinkage, and the model as without it to the bit.
+        shrinkage, and the model as without it to the bit. Each class keeps
+        8 bytes more for its effective size, and ``8 * (p + 1)`` more for
+        its rows' fourth moments under ``"ledoit_wolf"``, ``p`` the
+        features; ``"full"`` refactorizes a class only when it learns a
+        row, as without shrinkage.
 
     .. rubric:: Output
 

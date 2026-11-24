@@ -194,6 +194,29 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **Shrinkage covariance on `ew_cov`, and as `ew_class`'s shrinkage** (task
+  511): `shrinkage="ledoit_wolf"` (Ledoit and Wolf 2004, §3.3), `"oas"`
+  (Chen, Wiesel, Eldar and Hero 2010, Eq. 23, in scikit-learn's form, which
+  drops the `2/p` terms) or a fixed intensity in `[0, 1]`, toward `μ I`
+  (`μ = tr C / p`) or, for a fixed intensity, toward a symmetric positive
+  semidefinite `shrinkage_target`. Every second moment `ew_cov` reports --
+  `var`, `std`, `cov`, `corr`, `partial_corr`, `mahal`, the components --
+  reads `(1 − s) C + s T`, and the new `shrinkage` statistic writes `s`.
+  `ew_class` shrinks each class's covariance at its own intensity before the
+  ridge, and `"tied"` pools the shrunk matrices by the priors
+  (scikit-learn's `LinearDiscriminantAnalysis(covariance_estimator=...)`);
+  `"diag"` refuses it. Both intensities read Kish's effective size `W² / Q`,
+  the row count at unit weights, kept as of the last learned row so a row of
+  weight 0 moves no shrunk output; `weight_sum` and `min_weight` are
+  unchanged. At unit weights and no decay the outputs are scikit-learn's
+  `LedoitWolf`, `OAS` and `ShrunkCovariance` on the rows read, unwindowed
+  and in a hard window. Off by default, and off is the model before it to
+  the bit (outputs and state bytes). `"ledoit_wolf"` under `window_size` is
+  refused for now: the window does not yet cut the rows' fourth moments.
+  The state adds 8 bytes (Kish's size), `8 (p + 1)` under `"ledoit_wolf"`,
+  per accumulator or class, and a target's `8 p (p + 1) / 2` bytes in the
+  configuration; nothing grows with the stream.
+
 - **`dcc`, dynamic conditional correlation fitted one row at a time** (task
   493, with task 514's recursion): the full correlation matrix of `k` return
   series, Engle's (2002) DCC or, with `asymmetric=True`, Cappiello, Engle
@@ -2014,6 +2037,20 @@ model that only the new build has is listed as an addition and passes.
   416 specs, against 1,296 of 74. Against 2.0.0 every field is identical.
 
 ### Performance
+
+- **`ew_cov` and `ew_class` with `shrinkage`** (task 511) cost per row, on
+  one thread of a Linux x86-64 VM (release, `ew_cov` with `mean`, `std`
+  and `corr`, the best of 8 alternating rounds, load about 1.5): at 5
+  features 70.4 ns a row without it, 1.20 times that with a fixed
+  intensity, 1.32 with `"oas"` and 1.84 with `"ledoit_wolf"`; at 20
+  features 278.3 ns, and 1.28, 1.36 and 1.94 times it. The fourth moments'
+  step is a pass over the packed co-moments beside the update's own; every
+  estimator then reads the shrunk matrix from a kept copy. Without
+  `shrinkage` the outputs and state bytes are those before it, to the bit,
+  and the time is level with 13f5ffe4's (5 features 68.8 against 68.0 ns,
+  20 features 274.7 against 274.9, 24 alternating runs of each; the
+  instructions 1.5% more, a check and an argument a row, which the bench's
+  control `ew_cov_k5` beside `ew_cov` counts in CI).
 
 - **`huber`'s and `quantile`'s scales from every row cost 0.3% to 2.7%
   a row and `8(3k + 2)` bytes a target under `standardize=True`** (review

@@ -3573,10 +3573,46 @@ def ew_cov(
     That size is free of the weights' units, where ``W`` is not (weights
     multiplied by 1,000 would divide ``s`` by about 1,000), and it is the row
     count at unit weights without decay. Under decay at unit weights one
-    clock unit apart it settles at about 2.885 half-lives, where ``W``
-    settles at 1.443. ``n`` is kept as of the last row that learned, so a
+    clock unit apart it tends to about 2.885 half-lives, where ``W`` tends
+    to 1.443. ``n`` is kept as of the last row that learned, so a
     row of weight 0 moves no shrunk output; under ``window_size`` it is the
     hard window's ``W`` and ``Q``.
+
+    What it costs. ``"ledoit_wolf"`` keeps ``F`` and ``E[|z|**2 z]`` beside
+    the moments, ``8 * (p + 1)`` bytes, and steps them with each learned row,
+    which about doubles the row's arithmetic; every estimator keeps ``n``,
+    8 bytes; a ``shrinkage_target`` is ``8 * p * (p + 1) / 2`` bytes of the
+    configuration. None of it grows with the stream. Each row then reads
+    the shrunk matrix from a copy, and the estimators read ``tr C`` and
+    ``|C|^2``. Measured on one thread of a Linux x86-64 virtual machine
+    (release build, ``stats=["mean", "std", "corr"]``, half-life 500,
+    400,000 rows at ``p = 5`` and 100,000 at ``p = 20``, the best of 8 rounds
+    taken in alternating order, the machine's load about 1.5):
+
+    .. list-table::
+       :header-rows: 1
+       :widths: 22 26 26
+
+       * - ``shrinkage``
+         - ``p = 5``: ns a row (ratio)
+         - ``p = 20``: ns a row (ratio)
+       * - ``None``
+         - 70.4 (1)
+         - 278.3 (1)
+       * - a number
+         - 84.4 (1.20)
+         - 357.0 (1.28)
+       * - ``"oas"``
+         - 92.8 (1.32)
+         - 378.9 (1.36)
+       * - ``"ledoit_wolf"``
+         - 129.8 (1.84)
+         - 540.8 (1.94)
+
+    ``None`` keeps the outputs and the state of the model without
+    shrinkage, to the bit, at the same time a row (68.8 against 68.0 ns at
+    ``p = 5``, 274.7 against 274.9 at ``p = 20``, measured the same way
+    against the build before shrinkage).
 
     **Bias.** The factor ``c`` is ``n / (n - 1)`` at Kish's effective size
     ``n = W**2 / Q``, the number of equally weighted rows the moments are

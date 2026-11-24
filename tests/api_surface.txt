@@ -224,6 +224,8 @@
     snapshot_every = None
     max_rows_between_snapshots = None
     window_budget = None
+    shrinkage = None
+    shrinkage_target = None
     common
   ew_cov:
     name
@@ -242,6 +244,8 @@
     snapshot_every = None
     max_rows_between_snapshots = None
     window_budget = None
+    shrinkage = None
+    shrinkage_target = None
     common
   ewm_moments:
     name
@@ -3127,8 +3131,10 @@
   ew_class.covariance_type: diag, full, tied
   ew_class.window_budget: refuse, thin
   ew_cov.gram_threads: auto
-  ew_cov.stats: corr, cov, lag_corr, mahal, mean, partial_corr, std, var
+  ew_cov.stats: corr, cov, lag_corr, mahal, mean, partial_corr, shrinkage, std, var
   ew_cov.window_budget: refuse, thin
+  ew_cov.shrinkage: ledoit_wolf, oas
+  ew_class.shrinkage: ledoit_wolf, oas
   ewridge.gram_threads: auto
   ewridge.ridge_scale: mean, sum
   ewridge.target_gaps: own_rows, pairwise
@@ -3271,8 +3277,8 @@
     dcc: a, asymmetric, b, dist, g, margin_start_rows, margin_start_span, margins, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     ddsketch: alpha, closed, max_state_bytes, quantiles, window_rows, window_size
     deco: alpha, beta, blocks, dynamics
-    ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size
-    ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size
+    ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, shrinkage, shrinkage_target, snapshot_every, window_budget, window_size
+    ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, shrinkage, shrinkage_target, snapshot_every, stats, window_budget, window_size
     ewm_moments: bias, kind, lag_tolerance, max_state_bytes, se, terms, window_rows, window_size
     ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
     expectile: closed, expectile, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, window_rows, window_size

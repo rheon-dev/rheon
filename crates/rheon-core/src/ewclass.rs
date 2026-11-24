@@ -3483,5 +3483,4 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "ewclass_shrink_tests.rs"]
 mod shrink_tests;

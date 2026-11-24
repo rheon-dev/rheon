@@ -132,18 +132,24 @@ fn is_psd(t: &[f64], k: usize) -> bool {
 /// `tr S` and `‖S‖²_F` of the symmetric matrix whose packed lower rows are
 /// `c`: each off-diagonal entry counted twice.
 pub(crate) fn trace_and_frobenius(c: &[f64], k: usize) -> (f64, f64) {
+    // Every packed entry's square in one pass over the rows, four sums
+    // apart so the pass vectorises, and the diagonal's beside it.
+    let mut acc = [0.0; 4];
+    let (chunks, rest) = c.as_chunks::<4>();
+    for ch in chunks {
+        for (a, v) in acc.iter_mut().zip(ch) {
+            *a += v * v;
+        }
+    }
+    let all = (acc[0] + acc[1]) + (acc[2] + acc[3]) + rest.iter().map(|v| v * v).sum::<f64>();
     let mut tr = 0.0;
     let mut diag = 0.0;
-    let mut off = 0.0;
     for i in 0..k {
-        let row = &c[row_at(i)..row_at(i) + i + 1];
-        let (below, d) = row.split_at(i);
-        let d = d[0];
+        let d = c[row_at(i) + i];
         tr += d;
         diag += d * d;
-        off += below.iter().map(|v| v * v).sum::<f64>();
     }
-    (tr, diag + 2.0 * off)
+    (tr, 2.0 * all - diag)
 }
 
 /// Ledoit and Wolf's intensity from `tr S`, `‖S‖²_F`, the rows' weighted
@@ -161,7 +167,8 @@ pub fn ledoit_wolf(p: usize, tr: f64, frob2: f64, fourth: f64, n: Option<f64>) -
     let pf = p as f64;
     let mu = tr / pf;
     let delta = (frob2 - pf * mu * mu) / pf;
-    if !(delta > 0.0) {
+    // Not above 0, a NaN included.
+    if delta.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return 0.0;
     }
     let beta = ((fourth - frob2) / (pf * n)).max(0.0).min(delta);
@@ -186,7 +193,7 @@ pub fn oas(p: usize, tr: f64, frob2: f64, n: Option<f64>) -> f64 {
     let mu2 = mu * mu;
     let num = alpha + mu2;
     let den = (n + 1.0) * (alpha - mu2 / pf);
-    if !(den > 0.0) {
+    if den.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         1.0
     } else {
         (num / den).min(1.0)
@@ -206,14 +213,14 @@ pub(crate) fn shrink_into(c: &[f64], k: usize, s: f64, target: Option<&[f64]>, d
             }
         }
         None => {
-            let (tr, _) = trace_and_frobenius(c, k);
+            let tr: f64 = (0..k).map(|i| c[row_at(i) + i]).sum();
             let toward = s * (tr / k as f64);
+            for (d, &v) in dst.iter_mut().zip(c) {
+                *d = keep * v;
+            }
             for i in 0..k {
-                let at = row_at(i);
-                for j in 0..i {
-                    dst[at + j] = keep * c[at + j];
-                }
-                dst[at + i] = keep * c[at + i] + toward;
+                let at = row_at(i) + i;
+                dst[at] = keep * c[at] + toward;
             }
         }
     }
@@ -266,35 +273,41 @@ impl Fourth {
 
     /// The row's step, `c` the co-moments' packed lower rows before it, `d`
     /// its deviation from the mean before it, `a` and `b` its mixing
-    /// factors. `cu` is scratch, `k` long.
+    /// factors. `cu` is scratch, `2k` long.
     pub(crate) fn learn(&mut self, c: &[f64], d: &[f64], a: f64, b: f64, cu: &mut Vec<f64>) {
         if b == 0.0 && a == 1.0 {
             return;
         }
         let k = d.len();
-        // `C u`, from the packed lower rows, each entry read once.
+        // `u = b d` in the first half of `cu`, and `C u` in the second,
+        // from the packed lower rows, each entry read once: row `i`'s
+        // entries below the diagonal are a dot product with `u` for
+        // `(C u)_i` and an update of `(C u)_j` by `c_ij u_i`.
         cu.clear();
-        cu.resize(k, 0.0);
+        cu.extend(d.iter().map(|di| b * di));
+        cu.resize(2 * k, 0.0);
+        let (u, cu) = cu.split_at_mut(k);
         let mut tr = 0.0;
         for i in 0..k {
             let at = row_at(i);
-            let ui = b * d[i];
+            let row = &c[at..at + i];
+            let ui = u[i];
+            let (head, rest) = cu.split_at_mut(i);
             let mut acc = 0.0;
-            for j in 0..i {
-                let cij = c[at + j];
-                acc += cij * (b * d[j]);
-                cu[j] += cij * ui;
+            for ((h, &cij), &uj) in head.iter_mut().zip(row).zip(&u[..i]) {
+                acc += cij * uj;
+                *h += cij * ui;
             }
             let cii = c[at + i];
             tr += cii;
-            cu[i] += acc + cii * ui;
+            rest[0] += acc + cii * ui;
         }
         let mut uu = 0.0;
         let mut ucu = 0.0;
         let mut tu = 0.0;
         let mut dd = 0.0;
         for i in 0..k {
-            let ui = b * d[i];
+            let ui = u[i];
             uu += ui * ui;
             ucu += ui * cu[i];
             tu += self.t[i] * ui;
@@ -304,7 +317,7 @@ impl Fourth {
         let nb2 = nb * nb;
         let row3 = b * nb2 * nb * dd;
         for i in 0..k {
-            let ui = b * d[i];
+            let ui = u[i];
             self.t[i] = a * (self.t[i] - tr * ui - 2.0 * cu[i] - uu * ui) + row3 * d[i];
         }
         self.f =

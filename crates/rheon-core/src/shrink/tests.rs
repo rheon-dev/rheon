@@ -178,8 +178,8 @@ fn the_fourth_moments_follow_the_two_pass_definition() {
                 let tr: f64 = (0..p).map(|i| tp.s[i * p + i]).sum();
                 let scale = (tp.f * tr).sqrt();
                 worst[0] = worst[0].max(rel(fourth.f(), tp.f));
-                for i in 0..p {
-                    worst[1] = worst[1].max((fourth.t()[i] - tp.t[i]).abs() / scale);
+                for (a, b) in fourth.t().iter().zip(&tp.t) {
+                    worst[1] = worst[1].max((a - b).abs() / scale);
                 }
                 worst[2] = worst[2].max(rel(kish.unwrap(), tp.kish));
                 // The co-moments the intensity reads, for scale.

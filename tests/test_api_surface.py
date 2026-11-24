@@ -813,9 +813,18 @@ ENUM_PROBES: list[
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),
     ("ew_cov.gram_threads", "ew_cov", {}, "model.gram_threads", "word"),
-    # `mahal` and `partial_corr` need the prior, `lag_corr` the lags.
-    ("ew_cov.stats", "ew_cov", {"precision_prior": 1e-6, "lags": [1]}, "model.stats", "list"),
+    # `mahal` and `partial_corr` need the prior, `lag_corr` the lags,
+    # `shrinkage` the shrinkage.
+    (
+        "ew_cov.stats",
+        "ew_cov",
+        {"precision_prior": 1e-6, "lags": [1], "shrinkage": "oas"},
+        "model.stats",
+        "list",
+    ),
     ("ew_cov.window_budget", "ew_cov", {"window_size": 100.0}, "model.window_budget", "key"),
+    ("ew_cov.shrinkage", "ew_cov", {}, "model.shrinkage", "word"),
+    ("ew_class.shrinkage", "ew_class", {}, "model.shrinkage", "word"),
     ("ewridge.gram_threads", "ewridge", {}, "model.gram_threads", "word"),
     ("ewridge.ridge_scale", "ewridge", {}, "model.ridge_scale", "word"),
     ("ewridge.target_gaps", "ewridge", {}, "model.target_gaps", "word"),

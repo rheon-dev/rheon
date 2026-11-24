@@ -1925,26 +1925,26 @@ pub enum ShrinkSpec {
 /// here; the model checks its range and that it is positive
 /// semidefinite), or a refusal naming the parameter.
 pub(crate) fn shrinkage_of(
+    name: &str,
     shrinkage: Option<&ShrinkSpec>,
     target: Option<&[Vec<f64>]>,
     k: usize,
 ) -> Result<Option<rheon_core::Shrinkage>, String> {
     let Some(sh) = shrinkage else {
         return match target {
-            Some(_) => Err(
-                "shrinkage_target needs a fixed shrinkage, but shrinkage is not \
-                            set. Set shrinkage to the target's share, such as 0.1, or leave \
-                            out shrinkage_target."
-                    .into(),
-            ),
+            Some(_) => Err(format!(
+                "spec {name:?}: shrinkage_target needs a fixed shrinkage, but shrinkage is not \
+                 set. Set shrinkage to the target's share, such as 0.1, or leave out \
+                 shrinkage_target."
+            )),
             None => Ok(None),
         };
     };
     let named = |s: rheon_core::Shrinkage| match target {
         Some(_) => Err(format!(
-            "shrinkage_target needs a fixed shrinkage, but shrinkage is {:?}: its intensity is \
-             derived for the target mu * I alone. Set shrinkage to a number, or leave out \
-             shrinkage_target.",
+            "spec {name:?}: shrinkage_target needs a fixed shrinkage, but shrinkage is {:?}: its \
+             intensity is derived for the identity scaled to the mean variance alone. Set \
+             shrinkage to a number, or leave out shrinkage_target.",
             s.name()
         )),
         None => Ok(Some(s)),
@@ -1953,8 +1953,8 @@ pub(crate) fn shrinkage_of(
         ShrinkSpec::Name(n) if n == "ledoit_wolf" => named(rheon_core::Shrinkage::LedoitWolf),
         ShrinkSpec::Name(n) if n == "oas" => named(rheon_core::Shrinkage::Oas),
         ShrinkSpec::Name(n) => Err(format!(
-            "shrinkage must be \"ledoit_wolf\", \"oas\" or a number from 0 to 1, but it is \
-             {n:?}. Use one of those."
+            "spec {name:?}: shrinkage must be a number, \"ledoit_wolf\" or \"oas\", but it \
+             is {n:?}. Use one of those."
         )),
         ShrinkSpec::Intensity(s) => {
             let target = match target {
@@ -1963,8 +1963,8 @@ pub(crate) fn shrinkage_of(
                     let square = rows.len() == k && rows.iter().all(|r| r.len() == k);
                     if !square {
                         return Err(format!(
-                            "shrinkage_target must be a {k} by {k} matrix, one row a feature, \
-                             but it has {} rows of {:?} numbers. Give one row for each feature, \
+                            "spec {name:?}: shrinkage_target must be a {k} by {k} matrix, one \
+                             row a feature, but it has {} rows of {:?} numbers. Give one row for each feature, \
                              each with one number for each feature.",
                             rows.len(),
                             rows.iter().map(Vec::len).collect::<Vec<_>>()
@@ -1975,8 +1975,8 @@ pub(crate) fn shrinkage_of(
                         for j in 0..=i {
                             if rows[i][j] != rows[j][i] {
                                 return Err(format!(
-                                    "shrinkage_target must be symmetric, but its entry ({i}, \
-                                     {j}) is {} and ({j}, {i}) is {}. Give a covariance \
+                                    "spec {name:?}: shrinkage_target must be symmetric, but its \
+                                     entry ({i}, {j}) is {} and ({j}, {i}) is {}. Give a covariance \
                                      matrix as the target.",
                                     rows[i][j], rows[j][i]
                                 ));
@@ -2008,7 +2008,7 @@ pub(crate) fn shrinkage_refusals(
     windowed: bool,
 ) -> Vec<String> {
     let mut out = Vec::new();
-    match shrinkage_of(shrinkage, target, k) {
+    match shrinkage_of(name, shrinkage, target, k) {
         Ok(Some(sh)) => {
             if let Err(e) = sh.validate(model, k) {
                 let e = e.trim_start_matches(model).trim_start_matches(": ");
@@ -2024,7 +2024,7 @@ pub(crate) fn shrinkage_refusals(
             }
         }
         Ok(None) => {}
-        Err(e) => out.push(format!("spec {name:?}: {e}")),
+        Err(e) => out.push(e),
     }
     out
 }

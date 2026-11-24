@@ -429,6 +429,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 window_every: snapshot_every.as_ref().map(Span::value),
                 max_rows_between_snapshots: max_rows_between_snapshots.map(|r| r as usize),
                 shrinkage: crate::spec::shrinkage_of(
+                    &spec.name,
                     shrinkage.as_ref(),
                     shrinkage_target.as_deref(),
                     spec.k(),
@@ -617,6 +618,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 window_every: snapshot_every.as_ref().map(Span::value),
                 max_rows_between_snapshots: max_rows_between_snapshots.map(|r| r as usize),
                 shrinkage: crate::spec::shrinkage_of(
+                    &spec.name,
                     shrinkage.as_ref(),
                     shrinkage_target.as_deref(),
                     spec.k(),
