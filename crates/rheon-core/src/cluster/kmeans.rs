@@ -174,11 +174,23 @@ pub struct KMeansCfg {
     /// A checkpoint every this many clock units as well as every
     /// `update_every_rows` learned rows, whichever comes first; `0` is
     /// every row.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // `inf` is a setting, so its JSON is a tag (review 2026-11-23, SPEC-4:
+    // written as `null`, the spec's defaults and the state's JSON refused).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::humanfloat::opt_f64_or_tag"
+    )]
     pub update_every: Option<f64>,
     /// A split-merge check every this many clock units as well as every
     /// `split_merge_every_rows` learned rows, at a checkpoint.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // `inf` is a setting, so its JSON is a tag (review 2026-11-23, SPEC-4:
+    // written as `null`, the spec's defaults and the state's JSON refused).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::humanfloat::opt_f64_or_tag"
+    )]
     pub split_merge_every: Option<f64>,
 }
 
@@ -270,15 +282,12 @@ impl KMeansCfg {
             ("update_every", self.update_every),
             ("split_merge_every", self.split_merge_every),
         ] {
-            // `inf` never comes round, and no JSON of the spec says it back
-            // (review 2026-11-23, SPEC-4); leaving the key out says "by the
-            // rows alone".
             if let Some(d) = v
-                && !(d.is_finite() && d >= 0.0)
+                && (d.is_nan() || d < 0.0)
             {
                 no.refuse(format!(
-                    "kmeans: {name} must be a finite number of clock units, at least 0, but it \
-                     is {d}. Set {name} to a span of the clock, 0 for every row, or leave it out."
+                    "kmeans: {name} must be at least 0 clock units, but it is {d}. Set {name} to \
+                     a span of the clock, 0 for every row, or leave it out."
                 ));
             }
         }

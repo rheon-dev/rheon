@@ -94,37 +94,42 @@ fn a_nul_in_any_name_a_spec_carries_is_refused() {
 }
 
 /// SPEC-4: `kmeans`' `update_every` and `split_merge_every` and
-/// `corrchange`'s `permute_every` took `inf`, which no JSON of the spec can
-/// say back (`resolved_defaults` refused the spec as a defect), where
-/// `pca_every` and `prune_every`, the same kind of cadence, refuse it.
+/// `corrchange`'s `permute_every` at `inf` are a setting (task 538: the
+/// clock never brings the cadence round, and its count alone fires it), so
+/// they are kept; what failed was their JSON, written as `null`, so that
+/// `resolved_defaults` refused the spec as a defect and the state's JSON
+/// export refused the bank. Both read `inf` back now; the state's msgpack
+/// bytes are what they were (`humanfloat` writes a bare double there).
 #[test]
-fn an_infinite_cadence_is_refused_by_name() {
-    for key in ["update_every", "split_merge_every"] {
-        let model = format!(r#"{{"type": "kmeans", "n_clusters": 2, "{key}": "inf"}}"#);
-        refused(
-            &unsup(
-                &model,
-                r#", "half_life": 10.0, "clock": "t", "gap_cap": 1000.0"#,
-            ),
-            &[key, "finite"],
-        );
-        let model = format!(r#"{{"type": "kmeans", "n_clusters": 2, "{key}": 5.0}}"#);
-        accepted(&unsup(
-            &model,
+fn an_infinite_cadence_reads_back_from_json() {
+    let df = df!(
+        "t" => (0..30).map(f64::from).collect::<Vec<_>>(),
+        "x0" => (0..30).map(|i| f64::from(i % 7)).collect::<Vec<_>>(),
+        "x1" => (0..30).map(|i| f64::from(i % 5)).collect::<Vec<_>>(),
+        "x2" => (0..30).map(|i| f64::from(i % 3)).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    for json in [
+        unsup(
+            r#"{"type": "kmeans", "n_clusters": 2, "update_every": "inf", "split_merge_every": "inf"}"#,
             r#", "half_life": 10.0, "clock": "t", "gap_cap": 1000.0"#,
-        ));
-    }
-    refused(
-        &unsup(
+        ),
+        unsup(
             r#"{"type": "corrchange", "kind": "window", "window_size": 20.0, "permute_every": "inf"}"#,
             r#", "clock": "t", "gap_cap": 1000.0"#,
         ),
-        &["permute_every", "finite"],
-    );
-    accepted(&unsup(
-        r#"{"type": "corrchange", "kind": "window", "window_size": 20.0, "permute_every": 5.0}"#,
-        r#", "clock": "t", "gap_cap": 1000.0"#,
-    ));
+    ] {
+        accepted(&json);
+        let mut spec: Spec = serde_json::from_str(&json).unwrap();
+        spec.check().unwrap();
+        rheon_polars::resolved_defaults(&spec).unwrap_or_else(|e| panic!("{e}\n{json}"));
+        let mut bank = Bank::new(vec![spec]).unwrap();
+        bank.fit_predict(&df).unwrap();
+        let text = bank
+            .save_json_string(false)
+            .unwrap_or_else(|e| panic!("{e}\n{json}"));
+        assert!(text.contains(r#""inf""#), "{json}");
+    }
 }
 
 /// SPEC-5: a refit's row count given beside its span is refused whatever

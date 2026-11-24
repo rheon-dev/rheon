@@ -316,7 +316,13 @@ pub struct CorrChangeCfg {
     /// clock units as well as every `permute_every_rows` reports, whichever
     /// comes first (docs/PLAN.md task 538); `0` is every report. Last, and
     /// written only when set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // `inf` is a setting, so its JSON is a tag (review 2026-11-23, SPEC-4:
+    // written as `null`, the spec's defaults and the state's JSON refused).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::humanfloat::opt_f64_or_tag"
+    )]
     pub permute_every: Option<f64>,
     /// `window_size`: the span (`monitor`), the history (`sequential`) or
     /// each of the two windows (`window`) as a span of the clock, in place
@@ -677,14 +683,13 @@ impl CorrChangeCfg {
                          permute_every_rows to 1 or more.",
                     );
                 }
-                // `inf` never comes round (review 2026-11-23, SPEC-4).
                 if let Some(d) = self.permute_every
-                    && !(d.is_finite() && d >= 0.0)
+                    && (d.is_nan() || d < 0.0)
                 {
                     no.refuse(format!(
-                        "corrchange: permute_every must be a finite number of clock units, at \
-                         least 0, but it is {d}. Set permute_every to a span of the clock, 0 for \
-                         every report, or leave it out."
+                        "corrchange: permute_every must be at least 0 clock units, but it is \
+                         {d}. Set permute_every to a span of the clock, 0 for every report, or \
+                         leave it out."
                     ));
                 }
                 if self.scalar {
