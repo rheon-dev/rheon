@@ -3637,9 +3637,9 @@ stepped from only when its likelihood-ratio statistic against a constant
 variance, `2 (l_fit − l_const)` with the weights at Kish's count, reaches
 χ² at 0.999 for the restrictions a constant variance puts on the process.
 That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
-`figarch` (three each: `figarch`'s `d = 0` and `φ = β` leave its four
-parameters one variance, `ω/(1 − β)`); each input adds one, `π = 0`, so `garch` with one
-input waits for 16.3. `π = 0` is where an input that explains nothing
+`figarch` (three each); each input adds one, `π = 0`, so `garch` with one
+input waits for 16.3. `figarch`'s `d = 0` and `φ = β` leave its four
+parameters one variance, `ω/(1 − β)`, so three are the process's. `π = 0` is where an input that explains nothing
 sits, so a fit with a `π` at 0 is no bound that makes a start wait. A
 start with inputs also waits while its rows do not tell the inputs apart:
 an input constant over them is `ω` again, and two that move together are

@@ -700,6 +700,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-polars/src/spec/drift.rs"]
 
+[messages."crates/rheon-polars/src/spec/horizons.rs"]
+
 [messages."crates/rheon-polars/src/spec/moments.rs"]
 
 [messages."crates/rheon-polars/src/stream/build.rs"]
@@ -838,6 +840,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-polars/src/merge/state.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/spec/drift.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/spec/horizons.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/spec/moments.rs#messages"]
 
