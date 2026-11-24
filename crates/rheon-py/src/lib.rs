@@ -895,6 +895,22 @@ impl PyModelBank {
             .map_err(PyValueError::new_err)
     }
 
+    /// A `kalman` spec's last observations, smoothed with every row so far
+    /// (`Bank::smoothed_tail`): one row per group, instance, target and
+    /// observation whose lag no row has yet completed.
+    #[pyo3(signature = (spec, group=None))]
+    fn smoothed_tail(
+        slf: &Bound<'_, Self>,
+        spec: usize,
+        group: Option<Vec<Option<String>>>,
+    ) -> PyResult<PyDataFrame> {
+        let this = slf.try_borrow().map_err(|_| busy("smoothed_tail"))?;
+        this.inner
+            .smoothed_tail(spec, keys(group).as_deref())
+            .map(PyDataFrame)
+            .map_err(PyValueError::new_err)
+    }
+
     /// An `audit` spec's counts (`Bank::audit`): `table` is `"columns"`,
     /// `"pairs"` or `"clock"`, and `pooled` merges the groups into one.
     #[pyo3(signature = (spec, group=None, table="columns", pooled=false))]

@@ -2768,6 +2768,105 @@ class ModelBank:
             self._spec_index(spec, "ModelBank.marginal"), _group_keys(group, "ModelBank.marginal")
         )
 
+    def smoothed_tail(
+        self, spec: str | int, group: str | Iterable[str | None] | None = None
+    ) -> pl.DataFrame:
+        """Return the smoother's last observations of a ``kalman`` spec, from the state.
+
+        A ``kalman`` spec with ``smooth_lag = L`` writes an observation's
+        smoothed coefficients on the row that completes ``L`` observations
+        after it. The last ``L`` observations of each target have no such row
+        yet, and the stream may have none to come. Use this to read them from
+        the bank, or from one loaded from a state file, at the end of a
+        stream.
+
+        .. rubric:: Parameters
+
+        ``spec``
+            The ``kalman`` spec to read, by name or by position.
+        ``group``
+            The group to read: one group key, as :meth:`groups` reports it, or a
+            list of keys, with ``None`` in the list for the null group. The
+            default, ``None``, reads every group. A key the bank has never seen
+            gives an empty frame.
+
+        .. rubric:: Returns
+
+        A ``DataFrame`` with one row per (group, instance, target,
+        observation), groups sorted, targets in the spec's order, and each
+        target's observations oldest first. The newest is the filter's own
+        value; each older one is smoothed with the observations after it. The
+        columns:
+
+        ``spec``, ``group``, ``instance``, ``half_life``, ``lam``
+            As :meth:`marginal` gives them.
+        ``target``
+            The target's name.
+        ``smoothed_for``
+            The observation's clock, in the clock column's own type, or its
+            row index in the group with no clock column.
+        ``withheld``
+            ``"below_min_weight"`` where the spec's ``min_weight`` withheld
+            that row's prediction, ``"not_observed"`` for a target its shared
+            covariance (``share_p``) had not yet seen, null where the value
+            stands.
+        ``smoothed_coef``
+            The coefficients, laid out like one target's ``coef``, null where
+            withheld and for a coefficient not yet sized.
+        ``smoothed_se_coef``
+            Under ``emit_smoothed_se``, their standard errors, laid out the
+            same way.
+
+        .. rubric:: Raises
+
+        ``KeyError``
+            ``spec`` is a name the bank does not have.
+        ``IndexError``
+            ``spec`` is a position the bank does not have.
+        ``TypeError``
+            ``group`` is not a str, a list of them with ``None`` allowed, or
+            ``None``.
+        ``ValueError``
+            ``spec`` is not a ``kalman`` spec with ``smooth_lag``.
+
+        .. rubric:: Examples
+
+        This code reads ``df`` from `Example data
+        <https://github.com/rheon-dev/rheon/blob/main/docs/EXAMPLE-DATA.md>`_:
+
+        .. code-block:: python
+
+            k = rp.spec.kalman(
+                "k", targets=["y"], features=["x0"], clock="t", gap_cap=300.0,
+                half_life=600.0, coef_half_life=50.0, smooth_lag=3,
+            )
+            bank = rp.ModelBank([k])
+            bank.fit(df)
+            tail = bank.smoothed_tail("k")
+            for row, coef in tail.select("smoothed_for", "smoothed_coef").iter_rows():
+                print(f"t = {row}: slope {coef[1]:.4f}")
+
+        .. code-block:: text
+
+            t = 397.0: slope 1.6773
+            t = 398.0: slope 1.6774
+            t = 399.0: slope 1.6773
+
+        .. rubric:: See also
+
+        - :func:`rheon.spec.kalman`, ``smooth_lag`` and the smoothed fields.
+
+        .. rubric:: Notes
+
+        The values are read from the state, so a bank loaded from a file
+        reports them as the bank that saved it would, and feeding the rows in
+        one chunk or a thousand gives the same numbers to the bit.
+        """
+        return self._native.smoothed_tail(
+            self._spec_index(spec, "ModelBank.smoothed_tail"),
+            _group_keys(group, "ModelBank.smoothed_tail"),
+        )
+
     def audit(
         self,
         spec: str | int | None = None,

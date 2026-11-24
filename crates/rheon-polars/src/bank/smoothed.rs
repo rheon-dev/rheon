@@ -71,11 +71,10 @@ impl Bank {
         let n = coef.len();
         let decay: Vec<(Option<f64>, Option<f64>)> =
             instance.iter().map(|i| instance_decay(s, i)).collect();
+        // As the output's `smoothed_for` is: with no clock column, the row's
+        // index in its group, an integer.
         let numeric = ClockDtype::Numeric;
-        let clock = self.clock_dtypes[spec]
-            .as_ref()
-            .filter(|d| **d != ClockDtype::Rows)
-            .unwrap_or(&numeric);
+        let clock = self.clock_dtypes[spec].as_ref().unwrap_or(&numeric);
         let labels = Series::from_arrow("smoothed_for".into(), clock.array(&label))
             .map_err(|e| e.to_string())?;
         let lists = |name: &str, v: &[Vec<f64>]| -> Column {
