@@ -4506,7 +4506,7 @@ mod tests {
         assert!(
             err.contains(
                 "the state's version is 2, but this version of rheon reads versions 9 \
-                 to 13"
+                 to 14"
             ),
             "{err}"
         );

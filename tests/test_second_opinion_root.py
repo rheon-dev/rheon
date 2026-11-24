@@ -100,7 +100,12 @@ def solve(exe: Path, lines: list[str]) -> list[tuple[float, float, float, int, i
     """The solver's answer to each line: root (NaN where withheld), the
     bracket, its evaluations, their bound and ``ok`` or the reason."""
     res = subprocess.run(
-        [str(exe)], input="\n".join(lines) + "\n", capture_output=True, text=True, check=True
+        [str(exe)],
+        input="\n".join(lines) + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
     )
     out = []
     for row in res.stdout.splitlines():

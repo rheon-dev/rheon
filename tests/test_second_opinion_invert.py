@@ -131,7 +131,12 @@ def test_the_node_agrees_with_brentq_wherever_it_certifies(invert_solver):
             t[i], expect[i] = None, "input_missing"
     payload = {"node": NODE, "columns": {"a": a.tolist(), "b": b.tolist(), "t": t}}
     res = subprocess.run(
-        [str(invert_solver)], input=json.dumps(payload), capture_output=True, text=True, check=True
+        [str(invert_solver)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
     )
     out = json.loads(res.stdout)
     eps = XTOL  # the bracket holds 0
