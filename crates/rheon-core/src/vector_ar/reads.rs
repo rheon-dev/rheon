@@ -174,7 +174,8 @@ pub(super) fn fit_now(model: &VectorAr) -> Result<VectorArFit, String> {
     });
     if !read {
         return Err(
-            "it has learned no row yet: a row teaches it once its ring holds the order's lags."
+            "it has learned no row yet: a row is learned once the order's lags before it are in. \
+             Read it after more rows."
                 .into(),
         );
     }
@@ -191,8 +192,8 @@ pub(super) fn fit_now(model: &VectorAr) -> Result<VectorArFit, String> {
     };
     let Some(q) = order else {
         return Err(format!(
-            "its rows do not identify the fit yet: the regressors' second moments are not \
-             positive definite at order {}, read by Cholesky with every pivot above 1e-10 of its \
+            "its rows do not identify the fit yet: the second moments of its lags and features \
+             are not positive definite at order {}, read by Cholesky with every pivot above 1e-10 of its \
              diagonal. Read it once more rows have spread the lags in every direction.",
             if cfg.select.is_some() { 1 } else { sh.p }
         ));
@@ -356,13 +357,13 @@ impl VectorArFit {
             for a in 0..k {
                 for b in 0..k {
                     let mut s = 0.0;
-                    for m in 0..i {
+                    for (m, pm) in phis.iter().enumerate().take(i) {
                         for m2 in 0..i {
                             let (x, y) = (i - 1 - m, i - 1 - m2);
                             let xa: f64 =
                                 (0..kq).map(|r| vs[x][a * kq + r] * v[y][a * kq + r]).sum();
                             let pb = &phi[m2 * k * k..(m2 + 1) * k * k];
-                            let yb: f64 = (0..k).map(|c| phis[m][b * k + c] * pb[b * k + c]).sum();
+                            let yb: f64 = (0..k).map(|c| pm[b * k + c] * pb[b * k + c]).sum();
                             s += xa * yb;
                         }
                     }
@@ -509,7 +510,11 @@ impl VectorArFit {
             return Ok(Vec::new());
         }
         if self.coefs.iter().any(|v| !v.is_finite()) {
-            return Err("its coefficients are not finite.".into());
+            return Err(
+                "its coefficients are not finite. Check the rows it learned for values past the \
+                 doubles' range."
+                    .into(),
+            );
         }
         let comp = faer::Mat::<f64>::from_fn(kq, kq, |r, c| {
             if r < k {
@@ -523,7 +528,12 @@ impl VectorArFit {
         });
         let ev = comp
             .eigenvalues()
-            .map_err(|e| format!("its companion matrix's eigenvalues did not converge: {e:?}."))?;
+            .map_err(|e| {
+                format!(
+                    "its companion matrix's eigenvalues did not converge ({e:?}). Read it again \
+                     after more rows."
+                )
+            })?;
         let mut out: Vec<(f64, f64)> = ev.iter().map(|z| (z.re, z.im)).collect();
         out.sort_by(|a, b| b.0.hypot(b.1).total_cmp(&a.0.hypot(a.1)));
         Ok(out)

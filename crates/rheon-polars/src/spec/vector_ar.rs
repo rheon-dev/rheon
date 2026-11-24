@@ -137,7 +137,8 @@ pub fn vector_ar_cfg(
 ) -> Result<rheon_core::VectorArCfg, String> {
     let ModelKind::VectorAr(v) = &spec.model else {
         return Err(format!(
-            "spec {:?}: vector_ar_cfg was asked of a {:?} spec.",
+            "vector_ar_cfg: spec {:?} is a {} spec, not a vector_ar spec. Pass vector_ar_cfg a \
+             vector_ar spec.",
             spec.name,
             spec.model.kind_name()
         ));

@@ -20,7 +20,9 @@ const K: usize = 2;
 const N: usize = 140;
 
 /// The three models with a solve cadence, as one type (`OnlineModel` is
-/// not object safe).
+/// not object safe). Built a few at a time in a test, so a variant's size
+/// is no cost to box away.
+#[allow(clippy::large_enum_variant)]
 enum Model {
     Ridge(EwRidge),
     Lasso(Lasso),

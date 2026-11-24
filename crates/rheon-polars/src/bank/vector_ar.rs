@@ -131,17 +131,20 @@ impl Bank {
                 read.kind.as_deref().or(v.causality_kind.as_deref()),
             )
             .map_err(|e| e.replace("vector_ar: causality_kind", "ModelBank.vector_ar: kind"))?;
-            let mut no = String::new();
             if t.causing.is_empty() || t.caused.iter().any(|j| t.causing.contains(j)) {
-                no = "the caused and causing series must be two sets, neither empty, with no \
-                      series in both."
-                    .into();
+                return Err(format!(
+                    "spec {:?}: the caused and causing series must be two sets, neither empty, \
+                     with no series in both. Name each series in one of the two.",
+                    s.name
+                ));
             }
             if kind.single_equation() && t.caused.len() != 1 {
-                no = format!("kind {kind:?} tests one caused equation, but caused names more.");
-            }
-            if !no.is_empty() {
-                return Err(format!("spec {:?}: {no} Name the two sets again.", s.name));
+                return Err(format!(
+                    "spec {:?}: kind {kind:?} tests one caused equation, but caused names {}. \
+                     Name one, or use kind \"f\" or \"wald\", which test a set.",
+                    s.name,
+                    t.caused.len()
+                ));
             }
             Some((t, kind))
         } else {

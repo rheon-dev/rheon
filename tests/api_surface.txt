@@ -601,6 +601,24 @@
     compression = 100.0
     max_state_bytes = None
     common
+  vector_ar:
+    name
+    targets
+    lags
+    features = None
+    ridge = None
+    max_state_bytes = None
+    select = None
+    causality = None
+    causality_kind = None
+    solve_every = None
+    max_rows_between_solves = None
+    window_size = None
+    closed = 'right'
+    snapshot_every = None
+    max_rows_between_snapshots = None
+    window_budget = None
+    common
 
 [resolved defaults]  # what a spec left out resolves to, read off the bank's own build of the spec shown (_rheon.resolved_defaults): a moved default is a diff here
   chunk_size = 100000
@@ -1369,6 +1387,33 @@
     stream.robust_se_half_life = "inf"
     stream.specification_half_life = "inf"
     stream.tails_half_life = "inf"
+  vector_ar(features=['x0'], half_life=50.0, lags=1, targets=['y']):
+    model.causality = []
+    model.causality_kind = "f"
+    model.decay.Halflife = 50.0
+    model.fit_intercept = true
+    model.lags = 1
+    model.max_rows_between_snapshots = null
+    model.max_rows_between_solves = 4294967295
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_features = 1
+    model.n_targets = 1
+    model.ridge = 0.0
+    model.select = null
+    model.solve_every = 1.0
+    model.solve_share = 0.0138629436112
+    model.window = null
+    model.window_every = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   ewridge(features=['x0'], lam=0.99, targets=['y']), the lines that differ from ewridge's:
     model.decay.Lam = 0.99
     model.solve_every = 0.0
@@ -1546,6 +1591,7 @@
   specs
   summary(self, spec: 'str | int | None' = None, group: 'str | Iterable[str | None] | None' = None) -> 'pl.DataFrame'
   threads
+  vector_ar(self, spec: 'str | int | None' = None, group: 'str | Iterable[str | None] | None' = None, *, table: "Literal['irf', 'orth_irf', 'fevd', 'stability', 'mean', 'order', 'causality']" = 'irf', periods: 'int' = 10, stderr: 'bool' = False, caused: 'str | Iterable[str] | None' = None, causing: 'str | Iterable[str] | None' = None, kind: "Literal['f', 'wald', 'ssr_f', 'ssr_chi2', 'lr'] | None" = None) -> 'pl.DataFrame'
   write_json(self, file: 'str | os.PathLike[str] | IO[str] | IO[bytes] | None' = None, *, pretty: 'bool' = True) -> 'str | None'
 
 [frame namespaces]  # lf.rheon.<method> -> LazyFrame; df.rheon.<method> -> DataFrame
@@ -2811,6 +2857,18 @@
     weight_sum: f64
     settled_frac: f64
     withheld_reason: enum
+  vector_ar minimal:
+    pred_y: f64
+    resid_y: f64
+    pred_z: f64
+    resid_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
+    causality0_stat: f64
+    causality0_p: f64
+    order: i64
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2992,6 +3050,7 @@
   sgd: the shared columns only
   spectral: the shared columns only
   tdigest: the shared columns only
+  vector_ar: the shared columns only
   ew_cov with pca:
     spec: String
     group: String
@@ -3122,6 +3181,10 @@
   spectral.closed: both, right
   spectral.window_budget: refuse, thin
   ar.closed: both, right
+  vector_ar.select: aic, bic, fpe, hqic
+  vector_ar.causality_kind: f, lr, ssr_chi2, ssr_f, wald
+  vector_ar.closed: both, right
+  vector_ar.window_budget: refuse, thin
   ar.window_budget: refuse, thin
   marginal.closed: both, right
   ew_class.covariance_type: diag, full, tied
@@ -3299,6 +3362,7 @@
     sgd: clip_gradient, coef_max, coef_min, coef_sum, eps, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, l2, learning_rate, loss, max_state_bytes, power, quantile, refit_budget, schedule, standardize, strict_binary
     spectral: closed, detrend, max_rows_between_snapshots, max_state_bytes, periods, scaling, snapshot_every, spacing, window_budget, window_size
     tdigest: compression, max_state_bytes, quantiles
+    vector_ar: causality, causality_kind, closed, lags, max_rows_between_snapshots, max_rows_between_solves, max_state_bytes, ridge, select, snapshot_every, solve_every, window_budget, window_size
 
 [cli flags]  # `rheon --help`: a flag added, renamed or removed, or one that starts or stops taking a value, is a diff here
   Usage: rheon [OPTIONS] --config <CONFIG>

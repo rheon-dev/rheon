@@ -241,7 +241,7 @@ pub(crate) fn cholesky(a: &mut [f64], n: usize) -> bool {
             let s: f64 = (0..j).map(|q| a[i * n + q] * a[j * n + q]).sum();
             let v = a[i * n + j] - s;
             if i == j {
-                if !(v > 0.0) {
+                if v.is_nan() || v <= 0.0 {
                     return false;
                 }
                 a[i * n + i] = v.sqrt();
@@ -373,7 +373,7 @@ pub(crate) fn criterion(
         VectorArSelect::Fpe => {
             let m = sh.params(q) as f64;
             let df = n - m;
-            if !(df > 0.0) {
+            if df.is_nan() || df <= 0.0 {
                 return None;
             }
             k * libm::log((n + m) / df) + ld
@@ -434,7 +434,7 @@ pub(crate) fn wald(
     s: &mut Scratch,
 ) -> f64 {
     let df = df_resid(sh, mom, q);
-    if q == 0 || !(df > 0.0) {
+    if q == 0 || df.is_nan() || df <= 0.0 {
         return f64::NAN;
     }
     let k = sh.k;
@@ -531,7 +531,7 @@ pub(crate) fn coef_variances(
     out.clear();
     out.resize(k * width, f64::NAN);
     let df = df_resid(sh, mom, q);
-    if !(df > 0.0) {
+    if df.is_nan() || df <= 0.0 {
         return;
     }
     f.inverse_factor(m, &mut s.linv);

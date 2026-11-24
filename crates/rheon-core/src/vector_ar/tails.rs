@@ -183,7 +183,7 @@ pub(crate) fn f_sf(f: f64, d1: f64, d2: f64) -> f64 {
 /// `P(X > s)` for `X ~ χ²(q)`: NaN where `q` is not positive or `s` is not
 /// a number, 1 at `s <= 0`.
 pub(crate) fn chi2_sf(s: f64, q: f64) -> f64 {
-    if !(q > 0.0) || s.is_nan() {
+    if q.is_nan() || q <= 0.0 || s.is_nan() {
         return f64::NAN;
     }
     if s <= 0.0 {

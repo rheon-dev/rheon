@@ -1,3 +1,6 @@
+// The oracles index rows and series by position, as the formulas do.
+#![allow(clippy::needless_range_loop)]
+
 use super::*;
 use crate::oracle;
 
@@ -279,15 +282,15 @@ fn zero_weight_rows_from_the_start_leave_no_nan() {
 fn a_break_empties_the_ring_and_keeps_the_fit() {
     let (x, y) = series(300, 17);
     let mut m = VectorAr::new(cfg(2, 2, 0, INF)).unwrap();
-    for t in 0..150 {
-        m.step(&[], &row(&y[t], 2), 1.0, 1.0);
+    for yt in &y[..150] {
+        m.step(&[], &row(yt, 2), 1.0, 1.0);
     }
     let (coef, n_eff) = (m.coefficients(), m.n_eff());
     m.clear_lags();
     assert!(m.ring().is_empty());
     assert_eq!((m.coefficients(), m.n_eff()), (coef.clone(), n_eff));
-    for t in 150..152 {
-        let s = m.step(&[], &row(&y[t], 2), 1.0, 1.0);
+    for (t, yt) in y.iter().enumerate().take(152).skip(150) {
+        let s = m.step(&[], &row(yt, 2), 1.0, 1.0);
         assert!(s.pred.iter().all(|p| p.is_nan()), "row {t} has no lags");
         assert_eq!(m.coefficients(), coef, "row {t} is not learned");
     }
@@ -1018,7 +1021,7 @@ fn the_orthogonal_response_covariance_differentiates_the_factor() {
     };
     let vech = [(0, 0), (1, 0), (1, 1)];
     let h = 1e-6;
-    let mut jac = vec![[0.0; 3]; 4];
+    let mut jac = [[0.0; 3]; 4];
     for (v, &(r, c)) in vech.iter().enumerate() {
         let mut up = s.clone();
         let mut dn = s.clone();

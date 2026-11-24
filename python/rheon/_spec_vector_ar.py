@@ -210,7 +210,7 @@ def vector_ar(
 
         y_t = c + B_x x_t + A_1 y_{t-1} + ... + A_p y_{t-p} + u_t
 
-    Every equation has the same regressors, so least squares equation by
+    Every equation has the same inputs, so least squares equation by
     equation is the system's estimate, and one set of moments serves them
     all. Per row, ``λ = 0.5 ** (Δclock / half_life)``, weight ``w``, ``W``
     the weight of every row and ``W_y`` that of the learned rows:

@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the thirty-five models a spec can name, by
+The reference entry of each of the thirty-six models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The thirty-five models fall into four families, and each family answers one
+The thirty-six models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -50,6 +50,7 @@ to start with for which question.
 | [`glm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.glm) · [entry](#glm--generalized-linear-models-poisson-gamma-binomial-tweedie) | step | Poisson, Gamma, binomial and Tweedie regression, a Newton step a row on the likelihood, for counts, positive amounts, proportions and amounts with an exact zero |
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
 | [`ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) · [entry](#ar--an-autoregression-on-the-targets-own-past) | solve | an autoregression for each target, AR(p), by least squares on lags the model keeps itself, with the features as further inputs, and `AutoReg`'s fit with no decay |
+| [`vector_ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.vector_ar) · [entry](#vector_ar--a-vector-autoregression-with-granger-tests) | solve | a vector autoregression of the targets together, VAR(p), with Granger causality tests on every row and impulse responses read from the bank; statsmodels' `VAR` with no decay |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
 | [`pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) · [entry](#pca--streaming-principal-components) | step | principal components learned a row at a time in state that grows with the components times the columns, not the columns squared: the incremental SVD, CCIPCA or Oja's rule, each component withheld until the data tells it apart from its neighbors |
@@ -275,7 +276,7 @@ per target, give `min_weight` a list. The default depends on the model:
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `vector_ar` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -466,16 +467,17 @@ first prediction at t = 30: weight_sum 27.18, settled_frac 0.182
 
 ## Linear models
 
-Thirteen models predict a numeric target. Eleven regress it on features,
-`holt`, a baseline, uses none, and `ar` regresses it on its own last
-values, and on features where they are given. Several of them take the same parameters:
+Fourteen models predict a numeric target. Eleven regress it on features,
+`holt`, a baseline, uses none, `ar` regresses it on its own last values,
+and `vector_ar` regresses every target on all of their last values, each
+on features where they are given. Several of them take the same parameters:
 
 | parameters | taken by | explained under |
 |---|---|---|
 | `ridge` | `ewridge`, where a list fits a grid; `huber` and `quantile`, as one number. `rls` refuses it and takes `delta` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) and [`rls`](#rls--recursive-least-squares) |
-| `solve_every`, `max_rows_between_solves` | `ewridge`, `lasso`, `huber`, `quantile` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) |
+| `solve_every`, `max_rows_between_solves` | `ewridge`, `lasso`, `huber`, `quantile`, `vector_ar` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) |
 | `target_gaps` | `ewridge`, `lasso` | [`ewridge`'s docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge) |
-| `window_size` | `ewridge`, `lasso`, `ar` | [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
+| `window_size` | `ewridge`, `lasso`, `ar`, `vector_ar` | [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
 | `standardize` | `ewridge`, `huber` and `quantile`, off by default; `kalman`, `sgd` and `pa`, on by default. `lasso` always standardizes. `ftrl`, `rls`, `expectile` and `glm` take no `standardize` and refuse it by name: `ftrl`'s `l1` zeroes a coefficient in the feature's own units, so a scale inside the model would move which it zeroes; `rls`'s prior (`delta`, `coef_prior`) is in the features' own units; and `expectile`'s and `glm`'s `ridge` is a penalty in the features' squared units. Scale such a feature before the bank | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), [`kalman`](#kalman--random-walk-β-dynamic-linear-model) and [`ftrl`](#ftrl--online-logistic-regression) |
 | `coef_min`, `coef_max`, `coef_sum` | `sgd`, `pa` | [`sgd`](#sgd--stochastic-gradient-descent) |
 | `weight` | every model, though `rls`, `kalman`, `sgd`, `pa` and `ftrl` read it differently from a weighted mean | [Weights](how-to/weight-rows.md) |
@@ -495,6 +497,7 @@ What `half_life` decays differs by model:
 | `glm` | each target's Gram `G`, and its ridge with the rows, so a row of weight 0 moves no coefficient |
 | `holt` | the level, and the trend at `trend_half_life`, four times `half_life` by default |
 | `ar` | each target's running sums, which its fit is solved from; not its lags, which count learned rows |
+| `vector_ar` | the running sums its fit, its tests and its reads are solved from; not its lags, which count learned rows |
 
 ### `ewridge` — exponentially weighted ridge regression
 
@@ -2299,6 +2302,151 @@ chose `ar_select_order`'s order on all twelve series of true orders 1 to 4
 it was checked on, by AIC and by BIC, with a feature and without. Under
 decay it chose the order that minimizes the criterion over statsmodels'
 `WLS` per order, on all six series checked.
+
+### `vector_ar` — a vector autoregression with Granger tests
+
+*API:* [`rheon.spec.vector_ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.vector_ar) — *Rust:* [`vector_ar.rs`](../crates/rheon-core/src/vector_ar.rs) — *Outputs:* [fields](OUTPUTS.md#vector_ar)
+
+A vector autoregression, VAR(p), of the targets together: each target
+regressed on the last values of every target, and on the features where
+they are given, by exponentially weighted least squares, with Granger
+causality tests reported on every row.
+
+Use `vector_ar` when one series' past predicts another's, or when the
+question is whether it does. Each row carries the declared tests'
+statistics and p-values, and the bank reads the impulse responses, their
+standard errors, the forecast-error variance decomposition, the roots, the
+long-run mean and every order's criteria from the fit
+([`ModelBank.vector_ar`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.vector_ar)).
+With no decay its coefficients, standard errors and tests are statsmodels'
+`VAR(y, exog).fit(p)`'s on the same rows.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.vector_ar),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#vector_ar). The
+parameters every spec takes are in [What every spec takes](#what-every-spec-takes);
+`features` is optional.
+
+#### The update
+
+Row `t`'s design is `z_t = (x_t, y_{t−1}, …, y_{t−p})`, `d = e + kp`
+numbers for `e` features and `k` targets, its lags read from the targets'
+last learned values. Every equation has the same inputs, so least squares
+equation by equation is the system's fit. One set of running means serves
+them all: `S_zz`, `S_zy` and `S_yy`, the means of `z zᵀ`, `z yᵀ` and
+`y yᵀ` over the learned rows, kept centered:
+
+```
+pred_t = c + Bᵀ z_t                       from the fit before the row
+W_y'   = λ·W_y + w                        a learned row only
+M'     = (λ·W_y·M + w·v vᵀ)/W_y'           v = (z_t, y_t), M holding the three
+B      = (S_zz + ridge·I)⁻¹ S_zy           c = ȳ − Bᵀ z̄     at each solve
+SSE    = S_yy − S_zyᵀ B                    the residual co-moments
+```
+
+A learned row has a weight above 0 and every target present. It joins the
+last values and enters `M` once `p` rows precede it. A row of weight 0, or
+with a target null, is not a lag; the row with a target null is still
+predicted, every target. A lag counts learned rows, not clock units, and a
+session change or a gap past `gap_cap` empties the lags, keeping the fit.
+The fit is read once `S_zz` plus the ridge is positive definite, every
+Cholesky pivot above `1e-10` of its diagonal; before that the predictions
+are withheld as `not_identified`. The solve runs on `ewridge`'s schedule,
+and at each solve one Cholesky factor `S_zz = L Lᵀ` gives the tests and
+the standard errors. With `n = W_y² / Σw²`, Kish's count, `df = n − (d+1)`
+and `Σ_u = SSE·n/df`, a test of the lags of the causing series `J` in the
+equations `E` is
+
+```
+λ = df · tr(SSE_E⁻¹ βᵀ G⁻¹ β)              G = (S_zz⁻¹)_RR,  β = B[R, E]
+```
+
+with `R` the lag columns of `J`: the Wald statistic of the restrictions,
+with no restricted fit run.
+
+#### Example
+
+**Which series leads.** Here `a` drives `b` one row later, and `b` does
+not drive `a`:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# a = 0.5 a[-1] + e, b = 0.3 b[-1] + 0.4 a[-1] + e.
+rng = np.random.default_rng(4)
+a, b = [0.0], [0.0]
+for _ in range(5_000):
+    a.append(0.5 * a[-1] + rng.standard_normal())
+    b.append(0.3 * b[-1] + 0.4 * a[-2] + rng.standard_normal())
+df = pl.DataFrame({"a": a, "b": b})
+
+spec = rp.spec.vector_ar(
+    "v", targets=["a", "b"], lags=2, half_life=float("inf"),
+    causality=[{"caused": "b", "causing": "a"}, {"caused": "a", "causing": "b"}],
+)
+bank = rp.ModelBank([spec])
+last = bank.fit_predict(df)["v"][-1]
+print(f"a -> b: p = {last['causality0_p']:.0e}")
+print(f"b -> a: p = {last['causality1_p']:.2f}")
+irf = bank.vector_ar(table="irf", periods=2).filter(response="b", impulse="a")
+print([(p, round(v, 2)) for p, v in irf.select("period", "value").rows()])
+```
+
+```text
+a -> b: p = 1e-190
+b -> a: p = 0.98
+[(0, 0.0), (1, 0.38), (2, 0.32)]
+```
+
+The test of `a` in `b`'s equation rejects at any level, and that of `b` in
+`a`'s does not. A unit shock to `a` moves `b` by about 0.4 a row later,
+and by `0.4 (0.5 + 0.3)` a row after that.
+
+#### See also
+
+When the targets do not move together, or the lags are not of the targets:
+
+- [`ar`](#ar--an-autoregression-on-the-targets-own-past), each target on
+  its own past alone.
+- [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), least
+  squares on lag columns made in the query.
+
+#### Notes
+
+**`ar` or `vector_ar`.** Use `ar` when each series is predicted from its
+own past, when the series are missing on different rows (each of `ar`'s
+targets keeps its own series), or when there are many series: its cost a
+row is `k (p + e)²`. Use `vector_ar` when one series' past predicts
+another's, when the question is Granger causality, the impulse responses
+or the variance decomposition, and when the series arrive together: its
+cost a row is `(kp + e + k)²` on one set of running means. A row missing
+any series teaches `vector_ar` nothing. With one target and no features
+the two are the same fit, to rounding.
+
+**With no decay, `vector_ar` is statsmodels' `VAR`.** On the test suite's
+streams the coefficients are within 1e-12 of `VAR(y, exog).fit(p).params`'s
+largest and the standard errors within 1e-11 of its `bse`. The statistics
+of `test_causality` and `grangercausalitytests` are within 1e-11 and their
+p-values within 1e-10, `select_order`'s criteria within 1e-13, and the
+impulse responses, their standard errors and `fevd` within 1e-10. Under a
+half-life the coefficients are statsmodels' `WLS` per equation, each row
+weighted `w·0.5^(age/half_life)` on the clock, within 1e-11.
+
+**The tests under decay.** Kish's count stands for the rows: the
+coefficients' covariance is `(S_zz⁻¹/n) ⊗ Σ_u`, statsmodels' at no decay.
+It was measured on a VAR(1) of two series with no causation, read at the
+end of 1,000 streams of 2,000 rows. The F test at 5% rejected 4.4% of the
+time at `λ = 0.99`, about 199 effective rows, and 3.6% at `λ = 0.95`, about
+39. So it holds its size once the memory spans a few hundred rows, and is
+conservative below that.
+
+**The state** is the lags (`8kp` bytes), the running means over `d + k + 1`
+slots and what the last solve read, set by the settings and never by the
+stream's length. It is checked against `max_state_bytes` when the spec is
+built: the default 256 KB takes up to 41 lags of 2 targets, 15 of 5 and 7
+of 10, and a spec past it is refused with the bytes it would need.
 
 ## Moments and correlation
 

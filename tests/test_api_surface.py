@@ -343,6 +343,17 @@ def describe_api(cli: Path | None = None) -> str:
         ("ar", dict(targets=["y", "z"], features=["x0"], lags=[1, 3], half_life=100.0)),
         ("spectral", dict(targets=["y", "z"], periods=[24.0, 8.0], half_life=100.0)),
         (
+            "vector_ar",
+            dict(
+                targets=["y", "z"],
+                features=["x0"],
+                lags=2,
+                select="aic",
+                causality=[{"caused": "y", "causing": "z"}],
+                half_life=100.0,
+            ),
+        ),
+        (
             "deco blocked",
             dict(
                 features=["x0", "x1", "x2", "x3"],
@@ -808,6 +819,28 @@ ENUM_PROBES: list[
         "key",
     ),
     ("ar.closed", "ar", {"lags": 2, "window_size": 100.0}, "model.closed", "word"),
+    ("vector_ar.select", "vector_ar", {"lags": 3}, "model.select", "word"),
+    (
+        "vector_ar.causality_kind",
+        "vector_ar",
+        {"lags": 2, "targets": ["y", "z"], "causality": [{"caused": "y"}]},
+        "model.causality_kind",
+        "word",
+    ),
+    (
+        "vector_ar.closed",
+        "vector_ar",
+        {"lags": 2, "window_size": 100.0},
+        "model.closed",
+        "word",
+    ),
+    (
+        "vector_ar.window_budget",
+        "vector_ar",
+        {"lags": 2, "window_size": 100.0},
+        "model.window_budget",
+        "key",
+    ),
     ("ar.window_budget", "ar", {"lags": 2, "window_size": 100.0}, "model.window_budget", "key"),
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),

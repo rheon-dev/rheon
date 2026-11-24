@@ -3144,7 +3144,7 @@ class ModelBank:
         else:
             idx = self._spec_index(spec, who)
 
-        def names(v: str | Iterable[str] | None) -> list[str] | None:
+        def as_list(v: str | Iterable[str] | None) -> list[str] | None:
             if v is None:
                 return None
             return [v] if isinstance(v, str) else list(v)
@@ -3155,8 +3155,8 @@ class ModelBank:
             table,
             periods,
             stderr,
-            names(caused),
-            names(causing),
+            as_list(caused),
+            as_list(causing),
             kind,
         )
 

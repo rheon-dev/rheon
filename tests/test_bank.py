@@ -353,7 +353,11 @@ class TestPerTargetMinPeriods:
         assert self._first(out, "pred_y0") == self._first(out, "pred_y1") == 21
 
     @pytest.mark.parametrize("late", [5.0, 30.0])
-    @pytest.mark.parametrize("kind", sorted(REGRESSIONS))
+    # `vector_ar` keeps no weight a target: it learns a row only where every
+    # target is present, so its targets share one, and on this stream the
+    # targets' lags are proportional (`y0 = 2 x`, `y1 = -x`), which no fit
+    # of the two together identifies.
+    @pytest.mark.parametrize("kind", sorted(REGRESSIONS - {"vector_ar"}))
     def test_a_sparse_target_warms_up_on_its_own_weight(self, kind, late):
         """Each target's threshold is checked against that target's own weight
         -- the rows it was present on -- and it was checked against the shared
