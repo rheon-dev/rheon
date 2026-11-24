@@ -257,6 +257,10 @@ pub enum OpKind {
     CrossRef,
     /// A periodic profile ([`ProfileDef`]): no kernel, a group's buckets.
     EwmProfile,
+    /// STL and MSTL behind an embargo ([`StlDef`]): no kernel, a group's
+    /// ring of learned rows.
+    Stl,
+    Mstl,
 }
 
 impl OpKind {
@@ -284,6 +288,8 @@ impl OpKind {
             OpKind::CrossQuantile => "cross_quantile",
             OpKind::CrossRef => "cross_ref",
             OpKind::EwmProfile => "ewm_profile",
+            OpKind::Stl => "stl",
+            OpKind::Mstl => "mstl",
         }
     }
 
@@ -311,6 +317,8 @@ impl OpKind {
             "cross_quantile" => Some(OpKind::CrossQuantile),
             "cross_ref" => Some(OpKind::CrossRef),
             "ewm_profile" => Some(OpKind::EwmProfile),
+            "stl" => Some(OpKind::Stl),
+            "mstl" => Some(OpKind::Mstl),
             _ => None,
         }
     }
@@ -345,7 +353,9 @@ impl OpKind {
             | OpKind::CrossRank
             | OpKind::CrossQuantile
             | OpKind::CrossRef
-            | OpKind::EwmProfile => None,
+            | OpKind::EwmProfile
+            | OpKind::Stl
+            | OpKind::Mstl => None,
         }
     }
 
@@ -2001,7 +2011,12 @@ impl Windows {
         if !self.derived.ready {
             // The plain loop has no moments (`moments.rs`), and a profile reads
             // a group's own state, which it knows none of.
-            let off = self.derived.off || !self.moments.is_empty() || !self.profiles.is_empty();
+            // An STL operator's ring takes every row in order, as a profile's
+            // buckets do: the plain loop has neither.
+            let off = self.derived.off
+                || !self.moments.is_empty()
+                || !self.profiles.is_empty()
+                || !self.seasonals.is_empty();
             self.derived = Derived::of(&self.kernels, &self.ops, &self.members, off);
             self.derived.n_wait |= u32::from(self.profiles.iter().any(ProfileDef::waits));
         }

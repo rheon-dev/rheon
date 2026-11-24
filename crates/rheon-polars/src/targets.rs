@@ -342,6 +342,19 @@ impl<'de> Deserialize<'de> for Targets {
                                  there"
                             )));
                         }
+                        if let Some(o) = tree.operators().iter().find(|o| {
+                            matches!(
+                                o.kind,
+                                crate::windows::OpKind::Stl | crate::windows::OpKind::Mstl
+                            )
+                        }) {
+                            return Err(serde::de::Error::custom(format!(
+                                "target {name:?}: a formula target holds {}, which \
+                                 decomposes the rows before each row and is a feature, not a \
+                                 target; make it a column with rp.stream.with_windows",
+                                o.kind.name()
+                            )));
+                        }
                         defs.push(TargetDef::formula(name, tree));
                         continue;
                     }

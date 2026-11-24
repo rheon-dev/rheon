@@ -31,13 +31,13 @@ use crate::stream::usable;
 use crate::windows::{ChunkKeys, session_hashes};
 use crate::windows::{
     Closed, CrossClosed, CrossDef, Direction, KernelDef, MomentsDef, OpDef, OpKind, Partial, Peek,
-    PhaseSpan, PlainRows, ProfileDef, Refusal, RowIn, Stat, StateOf, Windows,
+    PhaseSpan, PlainRows, ProfileDef, Refusal, RowIn, Stat, StateOf, StlDef, Windows,
 };
 use crate::wrong_type::{Refused, wrong_type};
 
 /// The plan's definitions of the operators that are not window operators.
 mod defs;
-use defs::{list_keys, moments_def, neighbor_list, profile_def};
+use defs::{list_keys, moments_def, neighbor_list, profile_def, stl_def};
 
 /// The spec behind `like=`: its name, for messages, and the columns whose
 /// values must all be usable for it to learn from a row -- its features and
@@ -512,6 +512,10 @@ struct Plan {
     /// and each one's hidden column.
     profiles: Vec<ProfileDef>,
     profile_columns: Vec<String>,
+    /// The STL and MSTL operators, after the profiles in output order, and
+    /// each one's hidden column.
+    seasonals: Vec<StlDef>,
+    seasonal_columns: Vec<String>,
 }
 
 fn dtype_of<'a>(input: &'a Schema, column: &str) -> &'a DataType {
@@ -626,6 +630,8 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         moments: Vec::new(),
         profiles: Vec::new(),
         profile_columns: Vec::new(),
+        seasonals: Vec::new(),
+        seasonal_columns: Vec::new(),
     };
     // Increments first: an operator's input may read them.
     for f in &config.formulas {
@@ -717,6 +723,7 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             if p.columns.iter().any(|(k, _)| *k == key)
                 || p.cross_columns.contains(&key)
                 || p.profile_columns.contains(&key)
+                || p.seasonal_columns.contains(&key)
             {
                 continue;
             }
@@ -766,6 +773,12 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                     pick,
                 });
                 p.cross_columns.push(key);
+                continue;
+            }
+            if let Some(params) = &op.stl {
+                let def = stl_def(&mut p, &f.name, op, params, &incr_schema)?;
+                p.seasonals.push(def);
+                p.seasonal_columns.push(key);
                 continue;
             }
             if let Some(params) = &op.profile {
@@ -878,11 +891,19 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
     {
         p.columns.push((key, p.ops.len() + p.cross.len() + pi));
     }
+    for (si, key) in std::mem::take(&mut p.seasonal_columns)
+        .into_iter()
+        .enumerate()
+    {
+        p.columns
+            .push((key, p.ops.len() + p.cross.len() + p.profiles.len() + si));
+    }
     debug_assert!(
         !(p.ops.is_empty()
             && p.increments.is_empty()
             && p.cross.is_empty()
-            && p.profiles.is_empty()),
+            && p.profiles.is_empty()
+            && p.seasonals.is_empty()),
         "checked per formula"
     );
     p.bare = config
@@ -1465,9 +1486,17 @@ impl WindowsRun {
             output.insert(f.name.as_str().into(), dtype);
         }
         let lists = std::mem::take(&mut p.lists);
-        let mut core = if !p.cross.is_empty() || !p.profiles.is_empty() {
-            Windows::with_all(p.kernels, p.ops, p.cross, p.moments, p.profiles, cfg)
-                .map_err(|e| format!("{WHO}: {e}"))?
+        let mut core = if !p.cross.is_empty() || !p.profiles.is_empty() || !p.seasonals.is_empty() {
+            Windows::with_seasonals(
+                p.kernels,
+                p.ops,
+                p.cross,
+                p.moments,
+                p.profiles,
+                p.seasonals,
+                cfg,
+            )
+            .map_err(|e| format!("{WHO}: {e}"))?
         } else if p.ops.is_empty() {
             // Increments alone: the core carries a kernel that reads nothing,
             // so rows pass straight through it. A sum over no window, read
@@ -3248,6 +3277,7 @@ impl WindowsRun {
             || file.core.cross_defs() != run.core.cross_defs()
             || file.core.moments() != run.core.moments()
             || file.core.profiles() != run.core.profiles()
+            || file.core.seasonals() != run.core.seasonals()
             || same_clock(file.core.clock_cfg()) != same_clock(run.core.clock_cfg())
         {
             return Err(format!(
