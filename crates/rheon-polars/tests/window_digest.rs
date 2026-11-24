@@ -69,7 +69,12 @@ const MASKS: u64 = 0x8ab94abb9163ebc2;
 /// five whose stream is refused at its first step back, and none of the 52
 /// without a window. [`MASKS`] did not move: no output is null where it
 /// had a value on these streams, or the reverse.
-const BITS: u64 = 0x9627f432c08e8214;
+///
+/// 0x9627f432c08e8214 until windows state 14 (PLAN 564) moved each state's
+/// version byte and its checksum; the same run with the version written as
+/// 13 gave 0x9627f432c08e8214 again (measured on the fold of 564 onto 562
+/// and 578d, W14), so no output bit and no other state byte moved.
+const BITS: u64 = 0x3d6a77c85a010425;
 /// Rows a case runs over.
 const ROWS: usize = 2000;
 
