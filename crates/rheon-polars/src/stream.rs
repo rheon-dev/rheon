@@ -3301,14 +3301,17 @@ impl Stream {
             // A row learned from has a target to learn: one whose every
             // target is null is only predicted, as the summary counts it,
             // and moved the clock of rows learned (review 2026-11-23,
-            // STRM-4). A model without targets learns every row.
-            let has_target = targets.is_empty()
-                || if plan.direct() {
-                    targets.iter().any(|t| usable(t[plan.i]))
-                } else {
-                    released[plan.pending].ys.iter().any(Option::is_some)
-                };
-            if plan.accept && plan.learn && plan.w > 0.0 && (has_target || restarted_here) {
+            // STRM-4). A model without targets learns every row. Read only
+            // where the rest of the test has not already decided it.
+            let has_target = || {
+                targets.is_empty()
+                    || if plan.direct() {
+                        targets.iter().any(|t| usable(t[plan.i]))
+                    } else {
+                        released[plan.pending].ys.iter().any(Option::is_some)
+                    }
+            };
+            if plan.accept && plan.learn && plan.w > 0.0 && (restarted_here || has_target()) {
                 self.persisted.last_learned = if restarted_here {
                     None
                 } else if plan.direct() {
