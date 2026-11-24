@@ -32,7 +32,8 @@ test fails, where ``cargo test`` would exit 0.
 
 The layouts, each a different code layout of the same source:
 
-``default``  as the release wheel is built;
+``default``  as the release wheel is built: on x86-64 with the release's
+             ``X86_FEATURES`` (AVX2 and FMA), as ``aligned`` is too;
 ``aligned``  every function on a 64-byte boundary
              (``-C llvm-args=-align-all-functions=6``);
 ``v3``       the x86-64-v3 instruction set (``-C target-cpu=x86-64-v3``).
@@ -48,6 +49,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -97,8 +99,25 @@ def parse_layouts(text: str, digests: bool = False) -> list[str]:
     return out
 
 
-def rustflags(layout: str) -> str:
-    return f"{LAYOUTS[layout]} {LINKER}".strip()
+def release_x86_features(workflow: Path = REPO / ".github" / "workflows" / "release.yml") -> str:
+    """The target features the release builds its x86-64 wheel with, read
+    from the release workflow's ``X86_FEATURES``, so the two cannot drift."""
+    text = workflow.read_text(encoding="utf-8")
+    found = re.search(r'^\s*X86_FEATURES:\s*"([^"]+)"', text, re.MULTILINE)
+    if not found:
+        raise RuntimeError(f"no X86_FEATURES in {workflow}")
+    return found.group(1)
+
+
+def rustflags(layout: str, machine: str | None = None) -> str:
+    """A layout's RUSTFLAGS. On x86-64, ``default`` and ``aligned`` carry the
+    release's ``X86_FEATURES`` as the shipped wheel does (AVX2 and FMA, not
+    the baseline SSE2 of the compat wheel); ``v3`` names its own CPU."""
+    machine = (machine or platform.machine()).lower()
+    flags = LAYOUTS[layout]
+    if machine in ("x86_64", "amd64") and layout != "v3":
+        flags = f"-C target-feature={release_x86_features()} {flags}"
+    return f"{flags} {LINKER}".replace("  ", " ").strip()
 
 
 # --- the commits ------------------------------------------------------------------

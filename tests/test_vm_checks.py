@@ -266,10 +266,26 @@ def test_digests_need_the_default_layout_and_get_it():
 
 
 def test_every_build_names_the_linker_and_only_the_layout_differs():
-    assert vm.rustflags("default") == vm.LINKER
-    for layout in ("aligned", "v3"):
-        flags = vm.rustflags(layout)
-        assert flags.endswith(vm.LINKER) and vm.LAYOUTS[layout] in flags
+    assert vm.rustflags("default", machine="arm64") == vm.LINKER
+    for machine in ("arm64", "x86_64"):
+        for layout in ("aligned", "v3"):
+            flags = vm.rustflags(layout, machine=machine)
+            assert flags.endswith(vm.LINKER) and vm.LAYOUTS[layout] in flags
+
+
+def test_an_x86_wheel_is_built_with_the_releases_features():
+    """The release builds its x86-64 wheel with `X86_FEATURES` (AVX2, FMA);
+    a VM check of `default` or `aligned` times that wheel, not the baseline
+    SSE2 build only the compat wheel ships. Before, both layouts had no
+    target features (PLAN 578j, CI-4)."""
+    release = yaml.safe_load((REPO / ".github" / "workflows" / "release.yml").read_text())
+    features = release["env"]["X86_FEATURES"]
+    assert "+avx2" in features and "+fma" in features
+    assert vm.release_x86_features() == features
+    for layout in ("default", "aligned"):
+        assert f"-C target-feature={features}" in vm.rustflags(layout, machine="x86_64")
+        assert "target-feature" not in vm.rustflags(layout, machine="arm64")
+    assert "target-feature" not in vm.rustflags("v3", machine="x86_64")
 
 
 def test_the_artifact_name_is_the_short_sha_and_the_layout():
