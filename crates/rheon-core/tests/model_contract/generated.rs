@@ -1809,7 +1809,12 @@ fn gmm() {
     // A mixture, not a fit: no targets, three slots and a responsibility a
     // component, and `n_eff` every learned row's weight, decayed (rule 8),
     // before the start as after it.
-    for cov in [GmmCovariance::Full, GmmCovariance::Diag] {
+    for cov in [
+        GmmCovariance::Full,
+        GmmCovariance::Diag,
+        GmmCovariance::Spherical,
+        GmmCovariance::Tied,
+    ] {
         let m = Gmm::new(GmmCfg {
             covariance: cov,
             ..gmm_cfg()

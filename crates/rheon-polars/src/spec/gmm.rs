@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 pub struct GmmSpec {
     /// The number of components, at least 1.
     pub n_components: usize,
-    /// `"full"` (the default: a whole covariance a component) or `"diag"`
-    /// (its diagonal alone).
+    /// `"full"` (the default: a whole covariance a component), `"diag"`
+    /// (its diagonal alone), `"spherical"` (one variance a component) or
+    /// `"tied"` (one covariance every component shares).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub covariance_type: Option<String>,
     /// Added to each covariance's diagonal; absent is 1e-6.

@@ -3161,7 +3161,7 @@
   dcc.dist: normal, skewt, t
   realized.closed: both, right
   pca.method: ccipca, oja, svd
-  gmm.covariance_type: diag, full
+  gmm.covariance_type: diag, full, spherical, tied
   power_variation.closed: both, right
   ewm_moments.kind: central, cumulant, raw, standardized
   ar.select: aic, bic

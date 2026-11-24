@@ -68,15 +68,38 @@ pub enum GmmCovariance {
     Full,
     /// Its diagonal alone: `k` variances a component.
     Diag,
+    /// One variance a component, the mean of its `k` variances.
+    Spherical,
+    /// One `k × k` matrix every component shares.
+    Tied,
 }
 
 impl GmmCovariance {
-    /// The free parameters of one component's covariance.
-    fn params(self, k: usize) -> usize {
+    /// The free parameters of `kk` components' covariances.
+    fn params(self, k: usize, kk: usize) -> usize {
         match self {
-            Self::Full => k * (k + 1) / 2,
-            Self::Diag => k,
+            Self::Full => kk * k * (k + 1) / 2,
+            Self::Diag => kk * k,
+            Self::Spherical => kk,
+            Self::Tied => k * (k + 1) / 2,
         }
+    }
+
+    /// The numbers a component's covariance takes in a [`Fit`]'s `covs`:
+    /// `k × k` row-major, `k` variances or one; `tied`'s one `k × k` is
+    /// shared, at the front.
+    fn per(self, k: usize) -> usize {
+        match self {
+            Self::Full => k * k,
+            Self::Diag => k,
+            Self::Spherical => 1,
+            Self::Tied => 0,
+        }
+    }
+
+    /// Where component `j`'s covariance starts in a [`Fit`]'s `covs`.
+    fn at(self, k: usize, j: usize) -> usize {
+        j * self.per(k)
     }
 }
 
@@ -185,7 +208,7 @@ impl GmmCfg {
     /// The free parameters of the mixture: weights, means and covariances.
     fn params(&self) -> usize {
         let (k, kk) = (self.n_features, self.n_components);
-        (kk - 1) + kk * k + kk * self.covariance.params(k)
+        (kk - 1) + kk * k + self.covariance.params(k, kk)
     }
 
     /// The bytes one buffered row holds: its features and its weight.
@@ -210,15 +233,141 @@ pub enum GmmWait {
     OverCap,
 }
 
-/// The components, each a mean-form accumulator.
+/// The components, each a mean-form accumulator. `spherical` keeps each
+/// component's `k` variances and reads their mean, which the step moves
+/// exactly as the M-step's mean of the diagonal; `tied` keeps each
+/// component's weight and mean, and every row's moments in `total`, from
+/// which the shared covariance is read as the total less the components'
+/// spread about the total mean.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 enum Comps {
     Full(Vec<EwCov>),
     Diag(Vec<EwCovDiag>),
+    Spherical(Vec<EwCovDiag>),
+    Tied {
+        comps: Vec<EwCovDiag>,
+        total: Box<EwCov>,
+    },
+}
+
+impl Comps {
+    fn mass(&self) -> Vec<f64> {
+        match self {
+            Comps::Full(c) => c.iter().map(EwCov::n_eff).collect(),
+            Comps::Diag(c) | Comps::Spherical(c) | Comps::Tied { comps: c, .. } => {
+                c.iter().map(EwCovDiag::n_eff).collect()
+            }
+        }
+    }
+
+    /// Learns a row at weight `w r_j` in each component (`tied`'s total at
+    /// `w`), or ages them all where `resp` is `None`.
+    fn update(&mut self, x: &[f64], lam: f64, w: f64, resp: Option<&[f64]>) {
+        let at = |j: usize| resp.map_or(0.0, |r| w * r[j]);
+        match self {
+            Comps::Full(c) => {
+                for (j, e) in c.iter_mut().enumerate() {
+                    e.update(x, lam, at(j));
+                }
+            }
+            Comps::Diag(c) | Comps::Spherical(c) => {
+                for (j, e) in c.iter_mut().enumerate() {
+                    e.update(x, lam, at(j));
+                }
+            }
+            Comps::Tied { comps, total } => {
+                for (j, e) in comps.iter_mut().enumerate() {
+                    e.update(x, lam, at(j));
+                }
+                total.update(x, lam, if resp.is_some() { w } else { 0.0 });
+            }
+        }
+    }
+}
+
+/// The read of one covariance with `reg_covar`: its factor, its variances
+/// or its one variance, and its log-determinant.
+enum Scorer {
+    Full(SpdFactor),
+    Diag(Vec<f64>, f64),
+    Spherical(f64, f64),
+    /// A component of no weight, never read.
+    None,
+}
+
+impl Scorer {
+    /// Component `j`'s scorer from `covs` (before `reg_covar`), laid out as
+    /// a [`Fit`]'s are; `None` where a full or tied covariance does not
+    /// factorize.
+    fn of(cfg: &GmmCfg, covs: &[f64], j: usize) -> Option<Self> {
+        let (k, reg) = (cfg.n_features, cfg.reg_covar);
+        let at = cfg.covariance.at(k, j);
+        Some(match cfg.covariance {
+            GmmCovariance::Full | GmmCovariance::Tied => {
+                let mut m = covs[at..at + k * k].to_vec();
+                for i in 0..k {
+                    m[i * k + i] += reg;
+                }
+                Scorer::Full(SpdFactor::of(&m, k)?)
+            }
+            GmmCovariance::Diag => {
+                let v: Vec<f64> = covs[at..at + k].iter().map(|c| c + reg).collect();
+                let ld = v.iter().map(|x| x.ln()).sum();
+                Scorer::Diag(v, ld)
+            }
+            GmmCovariance::Spherical => {
+                let v = covs[at] + reg;
+                Scorer::Spherical(v, k as f64 * v.ln())
+            }
+        })
+    }
+
+    /// Every component's scorer, `tied`'s factor computed once.
+    fn all(cfg: &GmmCfg, covs: &[f64], weights: &[f64]) -> Option<Vec<Self>> {
+        let mut out = Vec::with_capacity(weights.len());
+        for (j, &w) in weights.iter().enumerate() {
+            if !(w > 0.0) {
+                out.push(Scorer::None);
+            } else if cfg.covariance == GmmCovariance::Tied
+                && let Some(first) = out.iter().find(|s| matches!(s, Scorer::Full(_)))
+            {
+                let Scorer::Full(f) = first else {
+                    unreachable!()
+                };
+                out.push(Scorer::Full(f.clone()));
+            } else {
+                out.push(Scorer::of(cfg, covs, j)?);
+            }
+        }
+        Some(out)
+    }
+
+    fn log_det(&self) -> f64 {
+        match self {
+            Scorer::Full(f) => f.log_det(),
+            Scorer::Diag(_, ld) | Scorer::Spherical(_, ld) => *ld,
+            Scorer::None => f64::NAN,
+        }
+    }
+
+    /// The squared Mahalanobis distances of `n` deviations, `n × k`.
+    fn quads(&self, d: &[f64], k: usize, n: usize) -> Vec<f64> {
+        match self {
+            Scorer::Full(f) => f.quad_forms(d, k, n),
+            Scorer::Diag(v, _) => (0..n)
+                .map(|r| (0..k).map(|i| d[r * k + i].powi(2) / v[i]).sum())
+                .collect(),
+            Scorer::Spherical(v, _) => (0..n)
+                .map(|r| (0..k).map(|i| d[r * k + i].powi(2) / v).sum())
+                .collect(),
+            Scorer::None => vec![f64::NAN; n],
+        }
+    }
 }
 
 /// A batch fit: weights, means, and covariances before `reg_covar` (full:
-/// `k × k` row-major each; diag: `k` each), with each component's mass.
+/// `k × k` row-major each; diag: `k` each; spherical: one each; tied: one
+/// `k × k` for all), with each component's mass.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Fit {
     pub weights: Vec<f64>,
@@ -305,15 +454,31 @@ impl Gmm {
     /// Each component's weight `π_j`, mean and covariance with `reg_covar`
     /// (full `k × k` row-major, or the diagonal), in the fixed order.
     pub fn parameters(&self) -> Option<Fit> {
-        let (k, kk) = (self.cfg.n_features, self.cfg.n_components);
-        let reg = self.cfg.reg_covar;
-        let comps = self.comps.as_ref()?;
-        let mass: Vec<f64> = match comps {
-            Comps::Full(c) => c.iter().map(EwCov::n_eff).collect(),
-            Comps::Diag(c) => c.iter().map(EwCovDiag::n_eff).collect(),
+        let (k, reg) = (self.cfg.n_features, self.cfg.reg_covar);
+        let mut fit = self.moments()?;
+        let (per, n) = match self.cfg.covariance {
+            GmmCovariance::Tied => (k * k, 1),
+            c => (c.per(k), self.cfg.n_components),
         };
+        for j in 0..n {
+            let c = &mut fit.covs[j * per..(j + 1) * per];
+            match self.cfg.covariance {
+                GmmCovariance::Full | GmmCovariance::Tied => {
+                    (0..k).for_each(|i| c[i * k + i] += reg);
+                }
+                _ => c.iter_mut().for_each(|v| *v += reg),
+            }
+        }
+        Some(fit)
+    }
+
+    /// [`Self::parameters`] before `reg_covar`, laid out as a batch fit's.
+    fn moments(&self) -> Option<Fit> {
+        let (k, kk) = (self.cfg.n_features, self.cfg.n_components);
+        let comps = self.comps.as_ref()?;
+        let mass = comps.mass();
         let total: f64 = mass.iter().sum();
-        let weights = mass
+        let weights: Vec<f64> = mass
             .iter()
             .map(|m| if total > 0.0 { m / total } else { 0.0 })
             .collect();
@@ -325,7 +490,7 @@ impl Gmm {
                     means.extend_from_slice(e.means());
                     for i in 0..k {
                         for j in 0..k {
-                            covs.push(e.cov(i, j) + if i == j { reg } else { 0.0 });
+                            covs.push(e.cov(i, j));
                         }
                     }
                 }
@@ -333,7 +498,32 @@ impl Gmm {
             Comps::Diag(c) => {
                 for e in c {
                     means.extend_from_slice(e.means());
-                    covs.extend((0..k).map(|i| e.comoment(i) + reg));
+                    covs.extend((0..k).map(|i| e.comoment(i)));
+                }
+            }
+            Comps::Spherical(c) => {
+                for e in c {
+                    means.extend_from_slice(e.means());
+                    covs.push((0..k).map(|i| e.comoment(i)).sum::<f64>() / k as f64);
+                }
+            }
+            Comps::Tied { comps: c, total: t } => {
+                // The total less the components' spread about the total mean:
+                // `Σ_j π_j (μ_j − m)(μ_j − m)ᵀ`, never `m mᵀ`, which cancels.
+                for e in c {
+                    means.extend_from_slice(e.means());
+                }
+                let m = t.means();
+                covs = (0..k * k).map(|i| t.cov(i / k, i % k)).collect();
+                for (j, &p) in weights.iter().enumerate() {
+                    let mu = &means[j * k..(j + 1) * k];
+                    for a in 0..k {
+                        for b in a..k {
+                            let v = covs[a * k + b] - p * (mu[a] - m[a]) * (mu[b] - m[b]);
+                            covs[a * k + b] = v;
+                            covs[b * k + a] = v;
+                        }
+                    }
                 }
             }
         }
@@ -353,10 +543,7 @@ impl Gmm {
         let comps = self.comps.as_ref()?;
         let (k, kk) = (self.cfg.n_features, self.cfg.n_components);
         let reg = self.cfg.reg_covar;
-        let mass: Vec<f64> = match comps {
-            Comps::Full(c) => c.iter().map(EwCov::n_eff).collect(),
-            Comps::Diag(c) => c.iter().map(EwCovDiag::n_eff).collect(),
-        };
+        let mass = comps.mass();
         let total: f64 = mass.iter().sum();
         if total <= 0.0 {
             return None;
@@ -365,11 +552,28 @@ impl Gmm {
         let mut quad = vec![f64::NAN; kk];
         let mut delta = vec![0.0; k];
         let mut m = vec![0.0; k * k];
+        // `spherical` and `tied` read through the moments, `tied`'s factor
+        // once a row.
+        let shared = match comps {
+            Comps::Spherical(_) | Comps::Tied { .. } => {
+                let fit = self.moments()?;
+                Some(Scorer::all(&self.cfg, &fit.covs, &fit.weights)?)
+            }
+            _ => None,
+        };
         for j in 0..kk {
             if mass[j] <= 0.0 {
                 continue;
             }
             let (log_det, q) = match comps {
+                Comps::Spherical(c) | Comps::Tied { comps: c, .. } => {
+                    let e = &c[j];
+                    for (i, d) in delta.iter_mut().enumerate() {
+                        *d = e.deviation(i, x[i]);
+                    }
+                    let s = &shared.as_ref().expect("read above")[j];
+                    (s.log_det(), s.quads(&delta, k, 1)[0])
+                }
                 Comps::Full(c) => {
                     let e = &c[j];
                     for (i, d) in delta.iter_mut().enumerate() {
@@ -434,28 +638,10 @@ impl Gmm {
             return self.learn_read(x, w, 1.0, None);
         }
         self.n = lam * self.n + w;
-        if let Some(read) = read.filter(|_| self.comps.is_some()) {
-            let comps = self.comps.as_mut().expect("started");
-            match comps {
-                Comps::Full(c) => {
-                    for (e, r) in c.iter_mut().zip(&read.resp) {
-                        e.update(x, lam, w * r);
-                    }
-                }
-                Comps::Diag(c) => {
-                    for (e, r) in c.iter_mut().zip(&read.resp) {
-                        e.update(x, lam, w * r);
-                    }
-                }
-            }
-            return;
-        }
         if let Some(comps) = self.comps.as_mut() {
-            // Started, but no component could score the row: it ages them.
-            match comps {
-                Comps::Full(c) => c.iter_mut().for_each(|e| e.update(x, lam, 0.0)),
-                Comps::Diag(c) => c.iter_mut().for_each(|e| e.update(x, lam, 0.0)),
-            }
+            // Started: the online EM step, or, where no component could score
+            // the row, an ageing of them all.
+            comps.update(x, lam, w, read.map(|r| r.resp.as_slice()));
             return;
         }
         for v in &mut self.buf_w {
@@ -497,7 +683,7 @@ impl Gmm {
         if kk > 1 {
             let fewer = best_fit(cfg, &self.buf_x, &self.buf_w, kk - 1, None);
             let bic = |f: &Fit, c: usize| {
-                let p = (c - 1) + c * k + c * cfg.covariance.params(k);
+                let p = (c - 1) + c * k + cfg.covariance.params(k, c);
                 -2.0 * kish * mean_loglik(cfg, f, &self.buf_x, &self.buf_w) + p as f64 * kish.ln()
             };
             let separated = fewer.is_none_or(|f| bic(&f, kk - 1) - bic(&fit, kk) >= cfg.delta_bic);
@@ -550,6 +736,53 @@ impl Gmm {
                     })
                     .collect(),
             ),
+            // Each of the `k` variances at the component's one: their mean,
+            // which is what is read, moves as the M-step's mean does.
+            GmmCovariance::Spherical => Comps::Spherical(
+                order
+                    .iter()
+                    .map(|&j| {
+                        let v = vec![fit.covs[j]; k];
+                        EwCovDiag::at_moments(k, fit.mass[j], &fit.means[j * k..(j + 1) * k], &v)
+                            .without_runs()
+                    })
+                    .collect(),
+            ),
+            GmmCovariance::Tied => {
+                // The total's moments: the shared covariance plus the
+                // components' spread about their weighted mean.
+                let w: f64 = fit.mass.iter().sum();
+                let mut m = vec![0.0; k];
+                for j in 0..kk {
+                    for (v, mu) in m.iter_mut().zip(&fit.means[j * k..(j + 1) * k]) {
+                        *v += fit.mass[j] * mu;
+                    }
+                }
+                m.iter_mut().for_each(|v| *v /= w);
+                let mut c = fit.covs[..k * k].to_vec();
+                for j in 0..kk {
+                    let p = fit.mass[j] / w;
+                    let mu = &fit.means[j * k..(j + 1) * k];
+                    for a in 0..k {
+                        for b in a..k {
+                            let v = c[a * k + b] + p * (mu[a] - m[a]) * (mu[b] - m[b]);
+                            c[a * k + b] = v;
+                            c[b * k + a] = v;
+                        }
+                    }
+                }
+                let diag: Vec<f64> = (0..k).map(|i| fit.covs[i * k + i]).collect();
+                Comps::Tied {
+                    comps: order
+                        .iter()
+                        .map(|&j| {
+                            let mu = &fit.means[j * k..(j + 1) * k];
+                            EwCovDiag::at_moments(k, fit.mass[j], mu, &diag).without_runs()
+                        })
+                        .collect(),
+                    total: Box::new(EwCov::at_moments(k, w, &m, &c).without_runs()),
+                }
+            }
         };
         self.comps = Some(comps);
         self.buf_x = Vec::new();
@@ -597,43 +830,23 @@ fn log_terms(cfg: &GmmCfg, fit: &Fit, xs: &[f64], logp: &mut Vec<f64>) -> Option
     let n = xs.len() / k;
     logp.clear();
     logp.resize(n * kk, f64::NEG_INFINITY);
-    let reg = cfg.reg_covar;
-    for j in 0..kk {
+    let scorers = Scorer::all(cfg, &fit.covs, &fit.weights)?;
+    let mut d = vec![0.0; n * k];
+    for (j, s) in scorers.iter().enumerate() {
         if fit.weights[j] <= 0.0 {
             continue;
         }
         let mu = &fit.means[j * k..(j + 1) * k];
         let lw = fit.weights[j].ln();
-        match cfg.covariance {
-            GmmCovariance::Full => {
-                let mut m = fit.covs[j * k * k..(j + 1) * k * k].to_vec();
-                for i in 0..k {
-                    m[i * k + i] += reg;
-                }
-                let f = SpdFactor::of(&m, k)?;
-                let mut d = vec![0.0; n * k];
-                for r in 0..n {
-                    for i in 0..k {
-                        d[r * k + i] = xs[r * k + i] - mu[i];
-                    }
-                }
-                let q = f.quad_forms(&d, k, n);
-                let ld = f.log_det();
-                for r in 0..n {
-                    logp[r * kk + j] = lw - 0.5 * (k as f64 * LN_2PI + ld + q[r]);
-                }
+        for r in 0..n {
+            for i in 0..k {
+                d[r * k + i] = xs[r * k + i] - mu[i];
             }
-            GmmCovariance::Diag => {
-                let v: Vec<f64> = fit.covs[j * k..(j + 1) * k]
-                    .iter()
-                    .map(|c| c + reg)
-                    .collect();
-                let ld: f64 = v.iter().map(|x| x.ln()).sum();
-                for r in 0..n {
-                    let q: f64 = (0..k).map(|i| (xs[r * k + i] - mu[i]).powi(2) / v[i]).sum();
-                    logp[r * kk + j] = lw - 0.5 * (k as f64 * LN_2PI + ld + q);
-                }
-            }
+        }
+        let q = s.quads(&d, k, n);
+        let ld = s.log_det();
+        for r in 0..n {
+            logp[r * kk + j] = lw - 0.5 * (k as f64 * LN_2PI + ld + q[r]);
         }
     }
     Some(())
@@ -684,39 +897,52 @@ fn m_step(cfg: &GmmCfg, xs: &[f64], ws: &[f64], resp: &[f64], kk: usize) -> Opti
             means[j * k + i] /= mass[j];
         }
     }
-    let per = match cfg.covariance {
-        GmmCovariance::Full => k * k,
-        GmmCovariance::Diag => k,
-    };
+    // Each component's own covariance about its mean (`k × k` for `full`
+    // and `tied`, `k` variances for `diag` and `spherical`), over its mass;
+    // `spherical` then takes the variances' mean, and `tied` the components'
+    // sum over the total mass, as scikit-learn's M-steps do.
+    let whole = matches!(cfg.covariance, GmmCovariance::Full | GmmCovariance::Tied);
+    let per = if whole { k * k } else { k };
     let mut covs = vec![0.0; kk * per];
     for r in 0..n {
         for j in 0..kk {
             let v = ws[r] * resp[r * kk + j];
             let mu = &means[j * k..(j + 1) * k];
-            match cfg.covariance {
-                GmmCovariance::Full => {
-                    for a in 0..k {
-                        let da = xs[r * k + a] - mu[a];
-                        for b in 0..k {
-                            covs[j * per + a * k + b] += v * da * (xs[r * k + b] - mu[b]);
-                        }
+            if whole {
+                for a in 0..k {
+                    let da = xs[r * k + a] - mu[a];
+                    for b in 0..k {
+                        covs[j * per + a * k + b] += v * da * (xs[r * k + b] - mu[b]);
                     }
                 }
-                GmmCovariance::Diag => {
-                    for a in 0..k {
-                        let da = xs[r * k + a] - mu[a];
-                        covs[j * per + a] += v * da * da;
-                    }
+            } else {
+                for a in 0..k {
+                    let da = xs[r * k + a] - mu[a];
+                    covs[j * per + a] += v * da * da;
                 }
             }
         }
     }
-    for j in 0..kk {
-        for c in &mut covs[j * per..(j + 1) * per] {
-            *c /= mass[j];
+    let total: f64 = mass.iter().sum();
+    match cfg.covariance {
+        GmmCovariance::Full | GmmCovariance::Diag => {
+            for j in 0..kk {
+                for c in &mut covs[j * per..(j + 1) * per] {
+                    *c /= mass[j];
+                }
+            }
+        }
+        GmmCovariance::Spherical => {
+            covs = (0..kk)
+                .map(|j| covs[j * k..(j + 1) * k].iter().sum::<f64>() / (k as f64 * mass[j]))
+                .collect();
+        }
+        GmmCovariance::Tied => {
+            covs = (0..k * k)
+                .map(|i| (0..kk).map(|j| covs[j * per + i]).sum::<f64>() / total)
+                .collect();
         }
     }
-    let total: f64 = mass.iter().sum();
     let weights = mass.iter().map(|m| m / total).collect();
     let eff = mass.iter().zip(&sq).map(|(m, q)| m * m / q).collect();
     Some(Fit {
@@ -832,30 +1058,32 @@ fn em(cfg: &GmmCfg, xs: &[f64], ws: &[f64], mut fit: Fit) -> Option<Fit> {
 /// covariance stays positive definite less `reg_covar · I`.
 fn identified(cfg: &GmmCfg, fit: &Fit) -> bool {
     let k = cfg.n_features;
-    let need = (k + cfg.covariance.params(k)) as f64;
     let kk = fit.weights.len();
+    // A component's share of the covariance parameters: `tied`'s shared
+    // matrix counts once, split over the components.
+    let need = k as f64 + cfg.covariance.params(k, kk) as f64 / kk as f64;
+    let reg = cfg.reg_covar;
+    let pd = |c: &[f64]| {
+        let mut m = c.to_vec();
+        (0..k).for_each(|i| m[i * k + i] -= reg);
+        strictly_pd(&m, k)
+    };
+    if cfg.covariance == GmmCovariance::Tied && !pd(&fit.covs[..k * k]) {
+        return false;
+    }
     for j in 0..kk {
         if !(fit.eff[j] > need) {
             return false;
         }
-        match cfg.covariance {
-            GmmCovariance::Full => {
-                let mut m = fit.covs[j * k * k..(j + 1) * k * k].to_vec();
-                for i in 0..k {
-                    m[i * k + i] -= cfg.reg_covar;
-                }
-                if !strictly_pd(&m, k) {
-                    return false;
-                }
-            }
-            GmmCovariance::Diag => {
-                if fit.covs[j * k..(j + 1) * k]
-                    .iter()
-                    .any(|&v| !(v > cfg.reg_covar))
-                {
-                    return false;
-                }
-            }
+        let at = cfg.covariance.at(k, j);
+        let held = match cfg.covariance {
+            GmmCovariance::Full => pd(&fit.covs[at..at + k * k]),
+            GmmCovariance::Diag => fit.covs[at..at + k].iter().all(|&v| v > reg),
+            GmmCovariance::Spherical => fit.covs[at] > reg,
+            GmmCovariance::Tied => true,
+        };
+        if !held {
+            return false;
         }
     }
     true
@@ -898,27 +1126,25 @@ impl Gmm {
 
     /// One row a component, in the fixed order: its weight `π_j`, its mean,
     /// then its covariance with `reg_covar` (full: the upper triangle by
-    /// rows, `Σ_00, Σ_01, …, Σ_11, …`; diag: the variances). `None` before
-    /// the start.
+    /// rows, `Σ_00, Σ_01, …, Σ_11, …`; diag: the variances; spherical: its
+    /// one variance; tied: the shared upper triangle, on every row). `None`
+    /// before the start.
     pub fn coefficients(&self) -> Option<Vec<Vec<f64>>> {
         let fit = self.parameters()?;
-        let (k, full) = (
-            self.cfg.n_features,
-            self.cfg.covariance == GmmCovariance::Full,
-        );
-        let per = if full { k * k } else { k };
+        let (k, cov) = (self.cfg.n_features, self.cfg.covariance);
         Some(
             (0..self.cfg.n_components)
                 .map(|j| {
                     let mut row = vec![fit.weights[j]];
                     row.extend_from_slice(&fit.means[j * k..(j + 1) * k]);
-                    let c = &fit.covs[j * per..(j + 1) * per];
-                    if full {
-                        for a in 0..k {
-                            row.extend_from_slice(&c[a * k + a..(a + 1) * k]);
+                    let at = cov.at(k, j);
+                    match cov {
+                        GmmCovariance::Full | GmmCovariance::Tied => {
+                            for a in 0..k {
+                                row.extend_from_slice(&fit.covs[at + a * k + a..at + (a + 1) * k]);
+                            }
                         }
-                    } else {
-                        row.extend_from_slice(c);
+                        _ => row.extend_from_slice(&fit.covs[at..at + cov.per(k)]),
                     }
                     row
                 })
@@ -960,6 +1186,17 @@ impl Gmm {
                 self.cfg.covariance == GmmCovariance::Diag
                     && c.len() == kk
                     && c.iter().all(|e| e.has_shape(k))
+            }
+            Some(Comps::Spherical(c)) => {
+                self.cfg.covariance == GmmCovariance::Spherical
+                    && c.len() == kk
+                    && c.iter().all(|e| e.has_shape(k))
+            }
+            Some(Comps::Tied { comps, total }) => {
+                self.cfg.covariance == GmmCovariance::Tied
+                    && comps.len() == kk
+                    && comps.iter().all(|e| e.has_shape(k))
+                    && total.has_shape(k)
             }
         };
         comps

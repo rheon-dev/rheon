@@ -1659,7 +1659,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 201] = [
+    const FORMS: [(&str, &[&str]); 204] = [
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.
@@ -2120,6 +2120,18 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         // `gmm` (task 506): its started components, and before the start
         // its buffer and the last try's fit.
         ("gmm", &["model", "Gmm", "comps", "Full", "0", "w_sum"]),
+        (
+            "gmm_spherical",
+            &["model", "Gmm", "comps", "Spherical", "0", "w_sum"],
+        ),
+        (
+            "gmm_tied",
+            &["model", "Gmm", "comps", "Tied", "total", "w_sum"],
+        ),
+        (
+            "gmm_tied",
+            &["model", "Gmm", "comps", "Tied", "comps", "0", "w_sum"],
+        ),
         ("gmm_buffer", &["model", "Gmm", "buf_w"]),
         ("gmm_buffer", &["model", "Gmm", "last_fit"]),
     ];

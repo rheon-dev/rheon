@@ -441,16 +441,18 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
         t
     } else if let crate::ModelKind::Gmm(g) = &spec.model {
         // The weight, the mean, then the covariance packed as
-        // `Gmm::coefficients` packs it: the upper triangle by rows, or the
-        // variances.
+        // `Gmm::coefficients` packs it: the upper triangle by rows (tied's
+        // shared one on every component), the variances, or the one.
         let f = &spec.features;
         let mut t = vec!["weight".to_string()];
         t.extend(f.iter().cloned());
-        if g.covariance_type.as_deref() == Some("diag") {
-            t.extend(f.iter().map(|a| format!("var_{a}")));
-        } else {
-            for (i, a) in f.iter().enumerate() {
-                t.extend(f[i..].iter().map(|b| format!("cov_{a}_{b}")));
+        match g.covariance_type.as_deref() {
+            Some("diag") => t.extend(f.iter().map(|a| format!("var_{a}"))),
+            Some("spherical") => t.push("var".to_string()),
+            _ => {
+                for (i, a) in f.iter().enumerate() {
+                    t.extend(f[i..].iter().map(|b| format!("cov_{a}_{b}")));
+                }
             }
         }
         t

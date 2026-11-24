@@ -347,7 +347,7 @@ def gmm(
     *,
     features: list[str],
     n_components: int,
-    covariance_type: Literal["full", "diag"] = "full",
+    covariance_type: Literal["full", "diag", "spherical", "tied"] = "full",
     reg_covar: float | None = None,
     delta_bic: float | None = None,
     n_init: int | None = None,
@@ -382,8 +382,10 @@ def gmm(
     ``n_components``
         The number of components. Required, at least 1.
     ``covariance_type``
-        ``"full"`` (the default), a whole covariance matrix a component, or
-        ``"diag"``, its diagonal alone.
+        ``"full"`` (the default), a whole covariance matrix a component;
+        ``"diag"``, its diagonal alone; ``"spherical"``, one variance a
+        component; or ``"tied"``, one covariance matrix every component
+        shares.
     ``reg_covar``
         Added to the diagonal of each covariance, finite and above 0.
         Default 1e-6, scikit-learn's. It keeps a component whose rows lie
@@ -438,8 +440,9 @@ def gmm(
 
     ``coef`` holds one position a component, ``component<j>``: its weight,
     its mean (one term a feature), then its covariance with ``reg_covar``,
-    ``cov_<a>_<b>`` over the upper triangle by rows under ``"full"``, or
-    ``var_<a>`` under ``"diag"``.
+    ``cov_<a>_<b>`` over the upper triangle by rows under ``"full"``,
+    ``var_<a>`` under ``"diag"``, ``var`` under ``"spherical"``, and the
+    shared ``cov_<a>_<b>`` on every component under ``"tied"``.
 
     .. rubric:: Raises
 
@@ -448,7 +451,7 @@ def gmm(
     problem for:
 
     - an ``n_components`` of 0;
-    - a ``covariance_type`` other than the two;
+    - a ``covariance_type`` other than the four;
     - a ``reg_covar`` or ``tol`` not finite or not above 0, or a
       ``delta_bic`` not finite or below 0;
     - an ``n_init``, ``max_iter`` or ``max_state_bytes`` of 0;
@@ -474,7 +477,20 @@ def gmm(
         C_j'  = (λ W_j / W_j') (C_j + (w r_j / W_j') d d')
 
     ``C_j`` is the covariance about the component's own mean, the batch
-    M-step's ``Σ_i r_ij (x_i - μ_j)(x_i - μ_j)' / N_j``.
+    M-step's ``Σ_i r_ij (x_i - μ_j)(x_i - μ_j)' / N_j``. ``"diag"`` keeps
+    its diagonal. ``"spherical"`` keeps the diagonal too and reads one
+    variance, its mean, as scikit-learn's M-step does:
+    ``Σ_j = (tr C_j / k + reg_covar) I``. ``"tied"`` keeps each component's
+    weight and mean, and the moments of every row, ``W``, ``m`` and ``C``,
+    in the same recursion at weight ``w``; it reads the shared covariance
+    as the total less the components' spread about the total mean:
+
+    .. code-block:: text
+
+        Σ = C - Σ_j π_j (μ_j - m)(μ_j - m)' + reg_covar * I
+
+    which is the M-step's ``Σ_j Σ_i r_ij (x_i - μ_j)(x_i - μ_j)' / N``
+    without forming ``m m'``, whose cancellation it avoids.
 
     .. rubric:: Example
 
@@ -552,12 +568,14 @@ def gmm(
     the model starts over from an empty buffer.
 
     **Cost.** A row costs ``O(n_components * k**3)`` under ``"full"``, each
-    covariance factorized afresh from its moments, and
-    ``O(n_components * k)`` under ``"diag"``. After the start the state is
-    each component's mean and covariance, ``8 * n_components * (k + k (k +
-    1) / 2)`` bytes under ``"full"`` and ``8 * n_components * 2 k`` under
-    ``"diag"``, with a few numbers a component beside them; before it, the
-    buffer, at most ``max_state_bytes``.
+    covariance factorized afresh from its moments, ``O(k**3 + n_components
+    * k**2)`` under ``"tied"``, its one factor a row, and ``O(n_components
+    * k)`` under ``"diag"`` and ``"spherical"``. After the start the state
+    is each component's mean and covariance, ``8 * n_components * (k + k (k
+    + 1) / 2)`` bytes under ``"full"``, ``8 * n_components * 2 k`` under
+    ``"diag"`` and ``"spherical"``, and ``8 * (n_components * 2 k + k + k
+    (k + 1) / 2)`` under ``"tied"``, with a few numbers a component beside
+    them; before it, the buffer, at most ``max_state_bytes``.
     """
     model: dict[str, Any] = {
         "type": "gmm",

@@ -3677,6 +3677,35 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // One spherical component and one tied, started within the rows:
+        // the spherical's `k` variances, and tied's total beside each
+        // component's weight and mean.
+        case!(
+            "gmm_spherical",
+            "Gmm",
+            Gmm,
+            Gmm::new(GmmCfg {
+                decay: decay(),
+                ..GmmCfg::new(3, 1, GmmCovariance::Spherical)
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        case!(
+            "gmm_tied",
+            "Gmm",
+            Gmm,
+            Gmm::new(GmmCfg {
+                decay: decay(),
+                ..GmmCfg::new(3, 1, GmmCovariance::Tied)
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
         // Eight diagonal components over 40 rows, about five rows each,
         // below the six parameters each carries: not yet identified, so
         // the start's buffer and its last try's fit.

@@ -1809,10 +1809,12 @@ pub fn gmm_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::GmmCfg, String> 
     let covariance = match g.covariance_type.as_deref().unwrap_or("full") {
         "full" => GmmCovariance::Full,
         "diag" => GmmCovariance::Diag,
+        "spherical" => GmmCovariance::Spherical,
+        "tied" => GmmCovariance::Tied,
         other => {
             return Err(format!(
-                "gmm: covariance_type must be \"full\" or \"diag\", but it is {other:?}. \
-                 Use one of those words."
+                "gmm: covariance_type must be \"full\", \"diag\", \"spherical\" or \"tied\", \
+                 but it is {other:?}. Use one of those words."
             ));
         }
     };

@@ -82,7 +82,7 @@ def test_one_chunk_or_many_give_the_same_rows():
     ("kw", "says"),
     [
         ({"n_components": 0}, "n_components must be at least 1"),
-        ({"n_components": 2, "covariance_type": "tied"}, "covariance_type must be"),
+        ({"n_components": 2, "covariance_type": "box"}, "covariance_type"),
         ({"n_components": 2, "reg_covar": 0.0}, "reg_covar must be"),
         ({"n_components": 2, "delta_bic": -1.0}, "delta_bic must be"),
         ({"n_components": 2, "tol": 0.0}, "tol must be"),
