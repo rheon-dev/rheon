@@ -258,6 +258,15 @@ pub enum OpKind {
     /// A periodic profile ([`ProfileDef`]): no kernel, a group's buckets.
     EwmProfile,
     TickSign,
+    /// The run length of unchanged values (task 564): a row operator.
+    RunLength,
+    /// The decayed mean lag between two clocks (task 564): a row operator.
+    ClockLag,
+    /// The decayed slope of that lag on the arrival time (task 564): a row
+    /// operator.
+    ClockDrift,
+    /// A decayed statistic of a time's steps (task 564): a row operator.
+    ClockStep,
 }
 
 impl OpKind {
@@ -286,6 +295,10 @@ impl OpKind {
             OpKind::CrossRef => "cross_ref",
             OpKind::EwmProfile => "ewm_profile",
             OpKind::TickSign => "tick_sign",
+            OpKind::RunLength => "run_length",
+            OpKind::ClockLag => "clock_lag",
+            OpKind::ClockDrift => "clock_drift",
+            OpKind::ClockStep => "clock_step",
         }
     }
 
@@ -314,6 +327,10 @@ impl OpKind {
             "cross_ref" => Some(OpKind::CrossRef),
             "ewm_profile" => Some(OpKind::EwmProfile),
             "tick_sign" => Some(OpKind::TickSign),
+            "run_length" => Some(OpKind::RunLength),
+            "clock_lag" => Some(OpKind::ClockLag),
+            "clock_drift" => Some(OpKind::ClockDrift),
+            "clock_step" => Some(OpKind::ClockStep),
             _ => None,
         }
     }
@@ -335,7 +352,23 @@ impl OpKind {
         matches!(self, OpKind::Increment | OpKind::TickSign)
     }
 
-    /// The statistic of a window operator; `None` for a step.
+    /// Whether it is a row operator: computed one row at a time from the
+    /// group's own previous rows, before the window core, which never sees
+    /// it -- `increment`, `tick_sign`, `run_length`, `clock_lag`, `clock_drift`
+    /// and `clock_step`.
+    pub fn is_row(self) -> bool {
+        matches!(
+            self,
+            OpKind::Increment
+                | OpKind::TickSign
+                | OpKind::RunLength
+                | OpKind::ClockLag
+                | OpKind::ClockDrift
+                | OpKind::ClockStep
+        )
+    }
+
+    /// The statistic of a window operator; `None` for a row operator.
     pub fn stat(self) -> Option<Stat> {
         match self {
             OpKind::EwmMean | OpKind::RewmMean => Some(Stat::Mean),
@@ -349,6 +382,10 @@ impl OpKind {
             OpKind::RollingMin | OpKind::RrollingMin => Some(Stat::Min),
             OpKind::Increment
             | OpKind::TickSign
+            | OpKind::RunLength
+            | OpKind::ClockLag
+            | OpKind::ClockDrift
+            | OpKind::ClockStep
             | OpKind::CrossMean
             | OpKind::CrossStd
             | OpKind::CrossRank
@@ -1758,6 +1795,9 @@ mod clock_form;
 
 mod gap;
 use gap::*;
+// The row operators read a step of the clock as the window core does
+// (task 564).
+pub(crate) use gap::{elapsed, past_cap};
 
 /// Whether operator `o` can run on its kernel: a mean or a variance with
 /// no decay needs a window, and a variance looks back only (task 212).
@@ -6030,6 +6070,20 @@ mod tests {
         assert_eq!(OpKind::Increment.stat(), None);
         assert_eq!(OpKind::Increment.direction(), Direction::Backward);
         assert_eq!(OpKind::EwmStd.stat(), Some(Stat::Std));
+        // The row operators (task 564): no statistic, looking back, each
+        // named as it parses; no window operator is one.
+        for k in [
+            OpKind::Increment,
+            OpKind::RunLength,
+            OpKind::ClockLag,
+            OpKind::ClockDrift,
+            OpKind::ClockStep,
+        ] {
+            assert!(k.is_row() && k.stat().is_none(), "{k:?}");
+            assert_eq!(k.direction(), Direction::Backward);
+            assert_eq!(OpKind::parse(k.name()), Some(k));
+        }
+        assert!(!OpKind::EwmSum.is_row() && !OpKind::RewmQuantile.is_row());
     }
 
     /// Task 252: what the core reports of itself -- its outputs, one per

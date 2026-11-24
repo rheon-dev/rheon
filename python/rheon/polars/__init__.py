@@ -150,6 +150,9 @@ from rheon.polars._frame import (
 )
 from rheon.polars._warnings import UnstableWarning
 from rheon.polars.ops import (
+    clock_drift,
+    clock_lag,
+    clock_step,
     cross_mean,
     cross_quantile,
     cross_rank,
@@ -172,6 +175,7 @@ from rheon.polars.ops import (
     rolling_max,
     rolling_min,
     tick_sign,
+    run_length,
 )
 
 __all__ = [
@@ -191,6 +195,10 @@ __all__ = [
     "increment",
     "rolling_max",
     "rolling_min",
+    "run_length",
+    "clock_lag",
+    "clock_drift",
+    "clock_step",
     "ops",
     "tick_sign",
     "ArrowStruct",

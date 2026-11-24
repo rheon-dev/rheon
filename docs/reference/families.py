@@ -181,6 +181,10 @@ FAMILIES: tuple[Family, ...] = (
                 "cross_quantile",
                 "cross_ref",
                 "tick_sign",
+                "run_length",
+                "clock_lag",
+                "clock_drift",
+                "clock_step",
             )
         ),
     ),

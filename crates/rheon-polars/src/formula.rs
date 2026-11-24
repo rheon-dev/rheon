@@ -20,8 +20,13 @@
 //! `rewm_rate`, `ewm_var` and `ewm_std` (these two with a `bias` too),
 //! `ewm_quantile` and `rewm_quantile` (with a `quantile`, the level),
 //! `["ewm_moments", ["legs", leg, ...], {params}]` (a leg's power and lag
-//! among its parameters), `["increment", input]` and `["tick_sign", input]`.
-//! Nothing else is read, so a
+//! among its parameters), `["increment", input]` and `["tick_sign", input]`. The row
+//! operators of task 564 are
+//! `["run_length", input]` (with `{"tol": x}` after it where `tol` is above
+//! 0) and `["clock_lag", arrival, {"event": e, "half_life": h}]` and
+//! `["clock_drift", ...]` of the same form, and
+//! `["clock_step", time, {"half_life": h, "stat": s}]` (with a `bias`
+//! where `s` is `"var"` or `"std"`). Nothing else is read, so a
 //! `shift`, a `cum_sum`, a rolling window or an aggregation -- which would
 //! depend on the chunking (hard rule 3) -- is refused by name, at build time.
 
@@ -138,6 +143,15 @@ pub struct OpNode {
     /// boolean of the row, true where the window starts over at the row's
     /// stamp; `None` for every other operator.
     pub since: Option<Box<Node>>,
+    /// A run length's tolerance (`run_length`), at least 0; 0 for every
+    /// other operator.
+    pub tol: f64,
+    /// A clock drift's event time (`clock_lag`, `clock_drift`), whose
+    /// arrival time is `input`; `None` for every other operator.
+    pub event: Option<Box<Node>>,
+    /// What a clock step (`clock_step`) reads of its time's steps; `None`
+    /// for every other operator. A spread's `bias` is [`OpNode::bias`].
+    pub step: Option<rheon_core::StepStat>,
 }
 
 /// What an `ewm_profile` takes beside the window operators' parameters.
@@ -220,6 +234,32 @@ impl OpNode {
             .chain(self.profile.iter().filter_map(|p| p.weight.as_ref()))
     }
 
+    /// A row operator's node over `input`, its other parameters unset.
+    fn row(kind: OpKind, input: Node) -> Self {
+        OpNode {
+            kind,
+            input: Box::new(input),
+            half_life: None,
+            window_size: None,
+            closed: Closed::Right,
+            min_samples: 1,
+            partial: None,
+            bias: false,
+            quantile: None,
+            weight: None,
+            max_state_bytes: None,
+            order: Order::default(),
+            neighbors: None,
+            pick: None,
+            moments: None,
+            profile: None,
+            since: None,
+            tol: 0.0,
+            event: None,
+            step: None,
+        }
+    }
+
     /// Backward or forward; a step (`increment`, `tick_sign`) reads back one
     /// row and is backward.
     pub fn direction(&self) -> Direction {
@@ -234,6 +274,13 @@ impl OpNode {
 
     fn params_json(&self) -> Value {
         let mut m = Map::new();
+        if let Some(e) = &self.event {
+            m.insert("event".into(), e.to_json());
+        }
+        if self.kind == OpKind::RunLength {
+            m.insert("tol".into(), json!(self.tol));
+            return Value::Object(m);
+        }
         let ext = self.kind.stat().is_some_and(Stat::is_extremum);
         if let Some(h) = self.half_life.as_ref().filter(|_| !ext) {
             m.insert(
@@ -246,6 +293,15 @@ impl OpNode {
                 "window_size".into(),
                 serde_json::to_value(w).expect("a span is JSON"),
             );
+        }
+        if let Some(st) = self.step {
+            m.insert("stat".into(), json!(st.name()));
+            if st.is_spread() {
+                m.insert("bias".into(), json!(self.bias));
+            }
+        }
+        if self.kind.is_row() {
+            return Value::Object(m);
         }
         m.insert("closed".into(), json!(self.closed.name()));
         m.insert("min_samples".into(), json!(self.min_samples));
@@ -623,25 +679,184 @@ impl Node {
                 arity(1)?;
                 let input = Node::from_json(&args[0])?;
                 input.no_window_operator(head.as_str())?;
-                Ok(Node::Op(OpNode {
-                    kind: OpKind::parse(head.as_str()).expect("a step"),
-                    input: Box::new(input),
-                    half_life: None,
-                    window_size: None,
-                    closed: Closed::Right,
-                    min_samples: 1,
-                    partial: None,
-                    bias: false,
-                    quantile: None,
-                    weight: None,
-                    max_state_bytes: None,
-                    order: Order::default(),
-                    neighbors: None,
-                    pick: None,
-                    moments: None,
-                    profile: None,
-                    since: None,
-                }))
+                Ok(Node::Op(OpNode::row(
+                    OpKind::parse(head.as_str()).expect("a step"),
+                    input,
+                )))
+            }
+            "run_length" => {
+                // `["run_length", x]`, or with its tolerance after it.
+                if args.len() != 2 {
+                    arity(1)?;
+                }
+                let input = Node::from_json(&args[0])?;
+                input.no_operator("run_length")?;
+                let mut op = OpNode::row(OpKind::RunLength, input);
+                if let Some(p) = args.get(1) {
+                    let Value::Object(params) = p else {
+                        return Err(format!(
+                            "formula: \"run_length\" takes its parameters as an object, but it \
+                             has {}. Give them as an object, such as {{\"tol\": 0.5}}.",
+                            short(p)
+                        ));
+                    };
+                    for (k, v) in params {
+                        if k != "tol" {
+                            return Err(format!(
+                                "run_length: {k:?} is not one of its parameters, which is tol. \
+                                 Remove {k:?}, or correct its name."
+                            ));
+                        }
+                        op.tol = v
+                            .as_f64()
+                            .filter(|t| t.is_finite() && *t >= 0.0)
+                            .ok_or_else(|| {
+                                format!(
+                                    "run_length: tol must be a finite number of at least 0, but \
+                                     it is {}. Set tol to 0 for values exactly equal, or to the \
+                                     largest difference two adjacent rows of one run may have.",
+                                    short(v)
+                                )
+                            })?;
+                    }
+                }
+                Ok(Node::Op(op))
+            }
+            "clock_lag" | "clock_drift" => {
+                let kind = OpKind::parse(head).expect("named above");
+                let name = head.as_str();
+                arity(2)?;
+                let input = Node::from_json(&args[0])?;
+                input.no_operator(name)?;
+                let Value::Object(params) = &args[1] else {
+                    return Err(format!(
+                        "formula: {name:?} takes its parameters as an object, but it has {}. \
+                         Give them as an object, such as {{\"event\": [\"col\", \"e\"], \
+                         \"half_life\": 10}}.",
+                        short(&args[1])
+                    ));
+                };
+                let mut op = OpNode::row(kind, input);
+                for (k, v) in params {
+                    match k.as_str() {
+                        "event" => {
+                            let e = Node::from_json(v)?;
+                            e.no_operator(name)?;
+                            op.event = Some(Box::new(e));
+                        }
+                        "half_life" => op.half_life = Some(span_of(name, k, v)?),
+                        other => {
+                            return Err(format!(
+                                "{name}: {other:?} is not one of its parameters, which are event \
+                                 and half_life. Remove {other:?}, or correct its name."
+                            ));
+                        }
+                    }
+                }
+                if op.event.is_none() {
+                    return Err(format!(
+                        "{name}: event is not set, but the lag between two clocks needs the \
+                         time each row's event happened. Set event to a column or an \
+                         expression of the row."
+                    ));
+                }
+                match &op.half_life {
+                    None => {
+                        return Err(format!(
+                            "{name}: half_life is not set, but the lag's decayed sums need it. \
+                             Set half_life to a positive number of clock units or a duration, \
+                             or to inf for no decay."
+                        ));
+                    }
+                    Some(h) if h.value().is_nan() || h.value() <= 0.0 => {
+                        return Err(format!(
+                            "{name}: half_life must be above 0, but it is {h}. Set half_life to \
+                             a positive number of clock units or a duration, or to inf for no \
+                             decay."
+                        ));
+                    }
+                    Some(_) => {}
+                }
+                Ok(Node::Op(op))
+            }
+            "clock_step" => {
+                // `["clock_step", time, {"half_life": h, "stat": s}]`, and a
+                // spread's `bias` (task 564).
+                let name = "clock_step";
+                arity(2)?;
+                let input = Node::from_json(&args[0])?;
+                input.no_operator(name)?;
+                let Value::Object(params) = &args[1] else {
+                    return Err(format!(
+                        "formula: \"clock_step\" takes its parameters as an object, but it has \
+                         {}. Give them as an object, such as {{\"half_life\": 10, \"stat\": \
+                         \"mean\"}}.",
+                        short(&args[1])
+                    ));
+                };
+                let mut op = OpNode::row(OpKind::ClockStep, input);
+                let mut bias = None;
+                for (k, v) in params {
+                    match k.as_str() {
+                        "half_life" => op.half_life = Some(span_of(name, k, v)?),
+                        "stat" => {
+                            let st = v.as_str().and_then(rheon_core::StepStat::parse);
+                            op.step = Some(st.ok_or_else(|| {
+                                format!(
+                                    "{name}: stat must be \"mean\", \"var\", \"std\", \
+                                     \"zeros\" or \"backs\", but it is {}. Set stat to one \
+                                     of those words.",
+                                    short(v)
+                                )
+                            })?);
+                        }
+                        "bias" => {
+                            bias = Some(v.as_bool().ok_or_else(|| {
+                                format!(
+                                    "{name}: bias must be true or false, but it is {}. Set \
+                                     bias to true or false.",
+                                    short(v)
+                                )
+                            })?);
+                        }
+                        other => {
+                            return Err(format!(
+                                "{name}: {other:?} is not one of its parameters, which are \
+                                 half_life, stat and bias. Remove {other:?}, or correct its \
+                                 name."
+                            ));
+                        }
+                    }
+                }
+                let st = op.step.get_or_insert(rheon_core::StepStat::Mean);
+                match bias {
+                    Some(b) if st.is_spread() => op.bias = b,
+                    Some(_) => {
+                        return Err(format!(
+                            "{name}: bias is set, but only stat \"var\" or \"std\" takes it. \
+                             Remove bias, or set stat to \"var\" or \"std\"."
+                        ));
+                    }
+                    None => {}
+                }
+                match &op.half_life {
+                    None => {
+                        return Err(format!(
+                            "{name}: half_life is not set, but the steps' decayed statistics \
+                             need it. Set half_life to a positive number of clock units or a \
+                             duration, or to inf for no decay."
+                        ));
+                    }
+                    Some(h) if h.value().is_nan() || h.value() <= 0.0 => {
+                        return Err(format!(
+                            "{name}: half_life must be above 0, but it is {h}. Set half_life to \
+                             a positive number of clock units or a duration, or to inf for no \
+                             decay."
+                        ));
+                    }
+                    Some(_) => {}
+                }
+                Ok(Node::Op(op))
             }
             name if OpKind::parse(name).is_some_and(|k| k.cross().is_some()) => {
                 let kind = OpKind::parse(name).expect("checked");
@@ -673,6 +888,9 @@ impl Node {
                     moments: None,
                     profile: None,
                     since: None,
+                    tol: 0.0,
+                    event: None,
+                    step: None,
                 };
                 let std = kind == OpKind::CrossStd;
                 let stat = kind.cross().expect("checked");
@@ -898,6 +1116,9 @@ impl Node {
                     moments: None,
                     profile: None,
                     since: None,
+                    tol: 0.0,
+                    event: None,
+                    step: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);
@@ -1078,7 +1299,10 @@ impl Node {
             other => Err(format!(
                 "formula: {other:?} is not one of the operators a formula can hold. It can hold \
                  increment (the step from a column's previous value), tick_sign (the sign of \
-                 that step, the last nonzero one held over a step of 0), the window operators {}, \
+                 that step, the last nonzero one held over a step of 0), run_length (the rows a \
+                 value has held), clock_lag and clock_drift (the lag between two clocks and its \
+                 slope), clock_step (a decayed statistic of a time's steps), the window \
+                 operators {}, \
                  and these operators within one row: {}. If the operator is misspelled, correct it; \
                  otherwise, write the formula with the operators listed.",
                 {
@@ -1137,7 +1361,11 @@ impl Node {
             }
             Node::Op(op) => {
                 let mut items = vec![json!(op.kind.name()), op.input.to_json()];
-                if !op.kind.is_step() {
+                // An increment or a tick sign has no parameters, and a run length under the
+                // default tolerance writes none (task 564): its key, and so
+                // its hidden column, is the one form of the one operator.
+                let bare = op.kind.is_step() || (op.kind == OpKind::RunLength && op.tol == 0.0);
+                if !bare {
                     items.push(op.params_json());
                 }
                 Value::Array(items)
@@ -1161,6 +1389,9 @@ impl Node {
                 op.input.collect(out);
                 for w in op.trees() {
                     w.collect(out);
+                }
+                if let Some(e) = &op.event {
+                    e.collect(out);
                 }
             }
         }
@@ -1195,6 +1426,9 @@ impl Node {
                 if let Some(e) = &op.since {
                     e.collect_columns(out);
                 }
+                if let Some(e) = &op.event {
+                    e.collect_columns(out);
+                }
             }
         }
     }
@@ -1209,6 +1443,7 @@ impl Node {
                 op.input.contains_call(name)
                     || op.trees().any(|w| w.contains_call(name))
                     || op.since.as_ref().is_some_and(|e| e.contains_call(name))
+                    || op.event.as_ref().is_some_and(|e| e.contains_call(name))
             }
         }
     }
@@ -1242,14 +1477,34 @@ impl Node {
                 if let Some(e) = &op.since {
                     e.collect_columns_ref(out);
                 }
+                if let Some(e) = &op.event {
+                    e.collect_columns_ref(out);
+                }
             }
         }
     }
 
-    /// Whether the tree holds a window operator (an `increment` or a
-    /// `tick_sign` is not one).
+    /// Whether the tree holds an operator an operator's input may not: any
+    /// but a step (`increment`, `tick_sign`). A window operator, and the row
+    /// operators of task 564, whose values no operator reads in the run that
+    /// makes them.
     pub fn has_window_operator(&self) -> bool {
         self.operators().iter().any(|op| !op.kind.is_step())
+    }
+
+    /// Refuse an input that holds any operator at all: a row operator's
+    /// (task 564) reads the row's own columns, as an increment's does.
+    fn no_operator(&self, who: &str) -> Result<(), String> {
+        if let Some(inner) = self.operators().first() {
+            return Err(format!(
+                "{who}: its input holds the operator {}, but it may read only an expression (a \
+                 column computation, such as pl.col(\"x\") + 1) of the row's own columns. Add \
+                 the inner operator's result as a column of the input first, such as with one \
+                 rp.stream.with_windows call, and read that column in a second.",
+                inner.kind.name()
+            ));
+        }
+        Ok(())
     }
 
     /// Whether the tree holds a forward operator.
@@ -1445,6 +1700,9 @@ fn moments_from_json(args: &[Value]) -> Result<Node, String> {
         moments: None,
         profile: None,
         since: None,
+        tol: 0.0,
+        event: None,
+        step: None,
     };
     let mut powers: Option<Vec<u32>> = None;
     let mut lags: Option<Vec<Span>> = None;
@@ -1641,6 +1899,9 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
         moments: None,
         profile: None,
         since: None,
+        tol: 0.0,
+        event: None,
+        step: None,
     };
     let (mut period, mut offset, mut buckets, mut stat) = (None, None, None, ProfileStat::Mean);
     let mut harmonics: Option<u32> = None;
@@ -2082,12 +2343,12 @@ mod tests {
         read.sort_unstable();
         assert_eq!(listed, read);
         for head in WINDOW_HEADS {
-            assert!(OpKind::parse(head).is_some_and(|k| !k.is_step()), "{head}");
+            assert!(OpKind::parse(head).is_some_and(|k| !k.is_row()), "{head}");
         }
         assert_eq!(
             WINDOW_HEADS.len(),
             15,
-            "every window operator but the steps, increment and tick_sign"
+            "every window operator but the row operators"
         );
         let err = Node::from_json(&json!(["shift", ["col", "a"]])).unwrap_err();
         assert!(

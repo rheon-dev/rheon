@@ -909,7 +909,7 @@ fn trend_rows() -> Vec<Row> {
 #[test]
 fn holt_trend_golden() {
     let mut m = Holt::new(HoltCfg {
-            horizons: Vec::new(),
+        horizons: Vec::new(),
         n_targets: 1,
         level_half_life: 10.0,
         trend_half_life: 40.0,
