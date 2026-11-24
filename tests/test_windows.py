@@ -3590,7 +3590,9 @@ def test_a_clock_past_the_largest_double_from_its_windows_start_is_refused() -> 
     refused by name; from an origin at 0 the same clock runs on."""
     df = pl.DataFrame({"t": [-1e308, 0.0, 1e308], "x": [10.0, 20.0, 30.0]})
     y = {"m": rp.ewm_mean("x", half_life=10.0, window_size=50.0)}
-    with pytest.raises(_REFUSAL, match=r'clock column "t" has run from .* at row 2 .*largest float'):
+    with pytest.raises(
+        _REFUSAL, match=r'clock column "t" has run from .* at row 2 .*largest float'
+    ):
         rp.stream.with_windows(df, **y, clock="t", gap_cap=1e308)
     near = pl.DataFrame({"t": [0.0, 1e308, 1.5e308], "x": [10.0, 20.0, 30.0]})
     assert rp.stream.with_windows(near, **y, clock="t", gap_cap=1e308).height == 3
