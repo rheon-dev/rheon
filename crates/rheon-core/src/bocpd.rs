@@ -913,23 +913,58 @@ fn ln_gamma(x: f64) -> f64 {
 /// The product is read only where every partial product on the way to it
 /// is a normal number too: `1e-160 · 7.4e-164` passes through the
 /// subnormals, keeping a bit of its 53, and `· 1e160 · 1e164` brought it
-/// back into the range 0.4 off in its log (review 2026-11-23, BOCPD-2).
+/// back into the range 0.4 off in its log (review 2026-11-23, BOCPD-2). A
+/// partial product that overflows stays infinite, and the last one's range
+/// refuses it; one falls below the normal numbers only where some value of
+/// the block is below `2⁻¹²⁷` ([`PARTIAL_FLOOR`]: eight values from there up
+/// keep every product above `2⁻¹⁰¹⁶`), so only such a block has its partial
+/// products read.
 fn ln_sum_prod(v: &[f64]) -> f64 {
     let mut total = 0.0;
     for block in v.chunks(8) {
-        let mut p = 1.0f64;
-        let mut normal = true;
-        for x in block {
-            p *= x;
-            normal &= p.is_normal();
-        }
-        total += if normal && (1e-280..1e280).contains(&p) {
+        let p: f64 = block.iter().product();
+        let low = block.iter().fold(f64::INFINITY, |m, x| m.min(*x));
+        total += if (1e-280..1e280).contains(&p)
+            && (low >= PARTIAL_FLOOR || every_partial_normal(block))
+        {
             p.ln()
         } else {
             block.iter().map(|x| x.ln()).sum::<f64>()
         };
     }
     total
+}
+
+/// `2⁻¹²⁷`: the least value of a block whose partial products
+/// [`ln_sum_prod`] need not read.
+const PARTIAL_FLOOR: f64 = 5.877471754111438e-39;
+
+/// [`ln_sum_prod`] where no partial product can fall below the normal
+/// numbers: values each at least 1 (or NaN), whose partial products only
+/// grow, or each at least [`PARTIAL_FLOOR`]. No partial product is read,
+/// and the result is [`ln_sum_prod`]'s, to the bit.
+fn ln_sum_prod_from_floor(v: &[f64]) -> f64 {
+    let mut total = 0.0;
+    for block in v.chunks(8) {
+        let p: f64 = block.iter().product();
+        total += if (1e-280..1e280).contains(&p) {
+            p.ln()
+        } else {
+            block.iter().map(|x| x.ln()).sum::<f64>()
+        };
+    }
+    total
+}
+
+/// Whether every partial product of `block` is a normal number.
+#[cold]
+#[inline(never)]
+fn every_partial_normal(block: &[f64]) -> bool {
+    let mut q = 1.0f64;
+    block.iter().all(|x| {
+        q *= x;
+        q.is_normal()
+    })
 }
 
 /// The prior's pull on a run's scatter, `(κ₀n/κₙ) a b` with `a`, `b` the
@@ -947,20 +982,32 @@ fn pull(k0: f64, n: f64, kn: f64, a: f64, b: f64) -> f64 {
     }
 }
 
-/// A run's predictive variance per feature, `ψₙ(κₙ + 1)/(νₙκₙ)`: as it was
-/// formed, to the bit, where that is a normal number, and as `(ψₙ/νₙ)((κₙ +
-/// 1)/κₙ)` where `ψₙ(κₙ + 1)` overflowed first (`ψ₀ = 1e308`, whose
-/// variance is half that), or `νₙκₙ` did (`κ₀ = 1e307`); an infinite
-/// variance had passed the `≤ 0` check and read every row as impossible
-/// (review 2026-11-23, BOCPD-5).
+/// A run's `ψₙ` for one feature, from `ψ₀ + S` (`base`) and its mean less
+/// the prior's `dm`, and its predictive variance `ψₙ(κₙ + 1)/(νₙκₙ)`: as
+/// they were formed, to the bit, where the variance is a number above 0,
+/// and `None` where it is not. The forms overflowed where the numbers do
+/// not: `κ₀n` at `κ₀ = 1e307`, which met a mean at the prior's as `∞·0`,
+/// and `ψₙ(κₙ + 1)` at `ψ₀ = 1e308`, whose variance is half that; and an
+/// infinite variance passed the `≤ 0` check and read every row as
+/// impossible (review 2026-11-23, BOCPD-5). Those are taken again in the
+/// share forms, `(κ₀/κₙ) n dm²` and `(ψₙ/νₙ)((κₙ + 1)/κₙ)`.
 #[inline]
-fn variance(psin: f64, kn: f64, nun: f64) -> f64 {
+fn scatter(base: f64, k0: f64, n: f64, kn: f64, nun: f64, dm: f64) -> Option<(f64, f64)> {
+    let psin = base + k0 * n / kn * dm * dm;
     let var = psin * (kn + 1.0) / (nun * kn);
-    if var.is_normal() {
-        var
+    if var > 0.0 && var < f64::INFINITY && nun > 0.0 {
+        Some((psin, var))
     } else {
-        (psin / nun) * ((kn + 1.0) / kn)
+        scatter_shared(base, k0, n, kn, nun, dm)
     }
+}
+
+#[cold]
+#[inline(never)]
+fn scatter_shared(base: f64, k0: f64, n: f64, kn: f64, nun: f64, dm: f64) -> Option<(f64, f64)> {
+    let psin = base + pull(k0, n, kn, dm, dm);
+    let var = (psin / nun) * ((kn + 1.0) / kn);
+    (var > 0.0 && var < f64::INFINITY && nun > 0.0).then_some((psin, var))
 }
 
 /// A stack slot that puts the frame holding it at a multiple of 4096, so
@@ -1037,11 +1084,8 @@ fn grow_into(
         // where the run could not have produced the row (`ln π = −∞`, and
         // `0·(−∞)` NaN; review 2026-11-23, BOCPD-1): the run passes on as
         // it is.
-        let base = if weights[i] == 0.0 {
-            joint[i]
-        } else {
-            joint[i] + weights[i] * logpi[i]
-        };
+        let t = weights[i] * logpi[i];
+        let base = joint[i] + if weights[i] == 0.0 { 0.0 } else { t };
         new[i + 1] = base + next.ln_grow;
         cp.push(base + next.ln_break);
     }
@@ -1627,11 +1671,7 @@ impl Bocpd {
                     None => gamma_diff(nun, 1.0),
                 };
                 let dm = run.mean[0] - mu0[0];
-                let psin = psi0[0] + run.m2[0] + pull(k0, run.n, kn, dm, dm);
-                let var = variance(psin, kn, nun);
-                if !(var.is_finite() && var > 0.0 && nun > 0.0) {
-                    return None;
-                }
+                let (_, var) = scatter(psi0[0] + run.m2[0], k0, run.n, kn, nun, dm)?;
                 let z = (x[0] - self.run_mean_at(run, mu0, 0)) / var.sqrt();
                 // `ln(νπ var)`, as one log where the product is a number.
                 let spread = nun * std::f64::consts::PI * var;
@@ -1662,20 +1702,26 @@ impl Bocpd {
             } = work;
             psins.clear();
             qs.clear();
+            // The least `ψₙ`: from `2⁻¹²⁷` up no partial product of theirs
+            // falls below the normal numbers (`ln_sum_prod`), the usual
+            // case, read without a pass over them.
+            let mut low = f64::INFINITY;
             for i in 0..d {
                 let dm = run.mean[i] - mu0[i];
-                let psin = psi0[i * d + i] + run.m2[i] + pull(k0, run.n, kn, dm, dm);
-                let var = variance(psin, kn, nun);
-                if !(var.is_finite() && var > 0.0 && nun > 0.0) {
-                    return None;
-                }
+                let (psin, var) = scatter(psi0[i * d + i] + run.m2[i], k0, run.n, kn, nun, dm)?;
                 let z = (x[i] - self.run_mean_at(run, mu0, i)) / var.sqrt();
+                low = low.min(psin);
                 psins.push(psin);
                 qs.push(1.0 + z * z / nun);
             }
             let df = d as f64;
-            let mode = df * gammas - 0.5 * (ln_sum_prod(psins) + df * ln_c);
-            let lp = mode - 0.5 * (nun + 1.0) * ln_sum_prod(qs);
+            let ln_psi = if low >= PARTIAL_FLOOR {
+                ln_sum_prod_from_floor(psins)
+            } else {
+                ln_sum_prod(psins)
+            };
+            let mode = df * gammas - 0.5 * (ln_psi + df * ln_c);
+            let lp = mode - 0.5 * (nun + 1.0) * ln_sum_prod_from_floor(qs);
             Some((lp, mode))
         }
     }
@@ -1826,21 +1872,19 @@ impl Bocpd {
                 nan(out);
                 return None;
             };
-            // A predictive with no mode to weigh the row against has no
-            // weight to give it (`−∞ − (−∞)` is NaN, which `clamp` keeps;
-            // review 2026-11-23, BOCPD-1).
-            let robust = self.cfg.emission == BocpdEmission::Robust;
-            if robust && !mode.is_finite() {
-                nan(out);
-                return None;
-            }
+            debug_assert!(mode.is_finite(), "a predictive's mode is a number");
             logpi.push(lp);
-            weights.push(if robust {
+            weights.push(if self.cfg.emission == BocpdEmission::Robust {
                 (self.cfg.robust_beta * (lp - mode)).exp().clamp(0.0, 1.0)
             } else {
                 1.0
             });
         }
+        // A predictive with no mode to weigh the row against would have no
+        // weight to give it (`−∞ − (−∞)` is NaN, which `clamp` keeps;
+        // review 2026-11-23, BOCPD-1), but the mode is always a number: a
+        // run's variance is a finite number above 0, or the row is refused
+        // (`scatter`), so its log and the gamma functions' are finite.
         // The pre-row run posterior, which `run_mode`, `run_mean` and the
         // predictive mean are read from.
         // Where the joint is the one the last prune left as the recursion
