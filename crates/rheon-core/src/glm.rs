@@ -753,9 +753,9 @@ impl Glm {
     /// P x̃` (the move held to `step_cap`), and `G += w W x̃x̃'`, `W` the
     /// smaller of the row's Fisher weights at `η` and at `u`. `false` where
     /// the row teaches nothing: a solve that fails (counted), or a root,
-    /// weight or update that is not finite. `pred` is the mean at `η` the
-    /// row was predicted with, NaN where it was withheld.
-    fn prox_learn(&mut self, j: usize, weight: f64, y: f64, eta: f64, pred: f64) -> bool {
+    /// weight or update that is not finite. `mean` is the family's mean at
+    /// `η`, read once a row for its prediction too.
+    fn prox_learn(&mut self, j: usize, weight: f64, y: f64, eta: f64, mean: Option<f64>) -> bool {
         let k = self.cfg.k_total();
         let fam = self.cfg.family();
         // `p − 1`, and `m = 1/(p − 1)`: `μ = u^(−m)`.
@@ -775,10 +775,9 @@ impl Glm {
             *solve_failures += 1;
             return false;
         }
+        // `q > 0` and finite wherever `c` is ([`prox_root`] has no root
+        // otherwise): the row's weight is above 0.
         let q: f64 = work.x.iter().zip(&work.d).map(|(t, d)| t * d).sum();
-        if !(q > 0.0 && q.is_finite()) {
-            return false;
-        }
         let Some(r) = prox_root(eta, weight * q / p1, y, 1.0 / p1) else {
             return false;
         };
@@ -794,11 +793,9 @@ impl Glm {
         // gives none.
         let (eta_w, mu) = if eta <= u {
             (u, r.mu)
-        } else if pred.is_finite() {
-            (eta, pred)
         } else {
-            match fam.mean(eta) {
-                Some((_, mu)) => (eta, mu),
+            match mean {
+                Some(mu) => (eta, mu),
                 None => return false,
             }
         };
@@ -1235,8 +1232,9 @@ impl OnlineModel for Glm {
         let p = self.cfg.k_total();
         for (j, &yj) in y.iter().enumerate().take(m) {
             let eta = dot_aug(&self.beta[j], x, self.cfg.fit_intercept);
+            let mean = fam.mean(eta).map(|(_, mu)| mu);
             if self.w_target[j] >= self.cfg.min_weight {
-                out.pred[j] = fam.mean(eta).map_or(f64::NAN, |(_, mu)| mu);
+                out.pred[j] = mean.unwrap_or(f64::NAN);
             }
             // The clock first: `G` decays on every row.
             let decayed = lam != 1.0;
@@ -1251,7 +1249,7 @@ impl OnlineModel for Glm {
             let exact = !fam.link.defined_at_zero() && self.refit.get(j).is_none_or(|r| r.done);
             if exact {
                 if let Some(t) = teaching {
-                    self.prox_learn(j, weight, t, eta, out.pred[j]);
+                    self.prox_learn(j, weight, t, eta, mean);
                 }
             } else if let Some(wk) = teaching.and_then(|t| fam.working(eta, t)) {
                 let c = weight * wk.w;

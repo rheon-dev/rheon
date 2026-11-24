@@ -501,3 +501,48 @@ fn after_a_refit_one_far_target_leaves_no_run_of_nulls() {
         }
     }
 }
+
+/// **A root that runs to the pass cap stands, and is counted.** At `p =
+/// 1.001` (`m = 1000`), `η = 0`, `c = 1e-14` and `y = 0`, Newton's passes in
+/// the mean climb from a bound `3^1000` too loose and run to the cap
+/// (found by a search over `p` from 1.001 to 500 and thirty orders of `η`,
+/// `c` and `y`; nothing short of `p = 1.001` came near it). Each pass stays
+/// below the root, so the step toward it stands, and the model counts it
+/// in `solve_failures`, as a refit run to its cap is. The same row through
+/// a model: a given-up target, every coefficient 0, a ridge of `1e17` so
+/// that `c = w q/(p − 1) = 1e-14`.
+#[test]
+fn a_root_at_the_pass_cap_stands_and_is_counted() {
+    let r = prox_root(0.0, 1e-14, 0.0, 1000.0).unwrap();
+    assert_eq!(r.passes, PROX_PASSES);
+    let mut m = Glm::new(GlmCfg {
+        ridge: 1e17,
+        ..canonical_cfg(GlmFamily::Tweedie, GlmLink::Power, 1.001, 1, 10)
+    })
+    .unwrap();
+    m.refit_give_up();
+    m.step(&[0.0], &[Some(0.0)], 1.0, 1.0);
+    assert_eq!(m.solve_failures(), 1);
+    assert!(m.beta[0][0] > 0.0, "{:?}", m.beta[0]);
+}
+
+/// **A solve that fails is counted, and the row teaches nothing.** `G + R
+/// I` with a pivot of 0 is not positive definite: the step has no `P x̃`,
+/// so neither `β` nor `G` moves, and `solve_failures` counts it, as the
+/// Fisher step's failed solves are.
+#[test]
+fn a_failed_solve_is_counted_and_teaches_nothing() {
+    for (family, link, p) in CANONICAL {
+        let mut m = Glm::new(canonical_cfg(family, link, p, 2, 30)).unwrap();
+        let rows = canonical_stream(family, p, 2, 31, 0.5, 4);
+        for (x, y) in &rows[..30] {
+            m.step(x, &[Some(*y)], 1.0, 1.0);
+        }
+        assert!(m.refit[0].done && m.solve_failures() == 0);
+        m.gram[0][0] = -m.cfg.ridge;
+        let (b, g) = (m.beta[0].clone(), m.gram[0].clone());
+        m.step(&rows[30].0, &[Some(rows[30].1)], 1.0, 1.0);
+        assert_eq!(m.solve_failures(), 1, "{family:?} {p}");
+        assert_eq!((&m.beta[0], &m.gram[0]), (&b, &g), "{family:?} {p}");
+    }
+}
