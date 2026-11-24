@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 
 import polars as pl  # noqa: E402
+
 from rheon import polars as rp  # noqa: E402
 from test_model_registry import MINIMAL, _build  # noqa: E402
 
@@ -616,8 +617,24 @@ CLOCK_SPEC = {**SHARED_SPEC, "emit_clocks": True}
 #: Counts as the page spells them.
 WORDS = dict(
     enumerate(
-        "zero one two three four five six seven eight nine ten eleven twelve "
-        "thirteen fourteen fifteen".split()
+        [
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+            "thirteen",
+            "fourteen",
+            "fifteen",
+        ]
     )
 )
 

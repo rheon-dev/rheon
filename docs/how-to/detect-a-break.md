@@ -15,7 +15,7 @@ These steps need the library and a model to watch:
 
 - rheon installed with Polars, and numpy to make the examples' data.
 - For a break in a regression: a
-  [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the ten
+  [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the
   linear models, such as `ewridge`, which take `emit_breaks` and
   `emit_drift`. [What each costs, and which models take
   it](../DIAGNOSTICS.md#what-each-costs-and-which-models-take-it) lists

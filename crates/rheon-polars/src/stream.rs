@@ -1009,8 +1009,8 @@ impl CoefPlan {
 pub struct CoefCadence {
     /// `None` before the group's first row.
     pub from: Option<Stamp>,
-    /// Accepted rows since `from`, rows of weight zero and rows with a null
-    /// target included.
+    /// Accepted rows since `from`, rows with a null target included; a row
+    /// of weight 0 is in no clock and never steps it (hard rule 9).
     pub rows: u64,
 }
 

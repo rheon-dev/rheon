@@ -127,9 +127,10 @@ centers found: [[0.0, -0.1], [0.0, 6.0], [6.0, 0.0]]
 
 ## Detect changes and regimes
 
-**Four models watch a stream for change, and each answers its own
-question.** `seqtest`'s log wealth, `bocpd`'s `run_mode` and `hmm`'s
-probabilities are read before their row is learned from, as every
+**`seqtest`, `corrchange`, `bocpd`, `hmm` and `hawkes` watch a stream for
+change, and each answers its own question.** `seqtest`'s log wealth, `bocpd`'s `run_mode`,
+`hmm`'s probabilities and `hawkes`'s intensities are read before their row
+is learned from, as every
 prediction is, so they can drive a decision on that row. `bocpd`'s
 `p_change` and `corrchange`'s statistic include the row's own values, so
 they flag a change at that row rather than ahead of it.

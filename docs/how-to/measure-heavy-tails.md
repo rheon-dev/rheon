@@ -12,7 +12,7 @@ These steps need the library, a linear model and a stable stretch:
 
 - rheon installed with Polars, and numpy to make the example's data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the
-  ten linear models, such as `ewridge`, which take `emit_tails`,
+  linear models, such as `ewridge`, which take `emit_tails`,
   `emit_sigma` and `emit_drift`. [What each costs, and which models take
   it](../DIAGNOSTICS.md#what-each-costs-and-which-models-take-it) lists
   them.

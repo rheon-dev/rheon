@@ -14,8 +14,8 @@ symbols beside its rule:
 |---|---|---|
 | `z` | `[1, x]` when there is an intercept, and `x` when there is not | the linear models |
 | `w`, `W` | the row's weight, and the weight accumulated before the row | every model |
-| `λ` | the row's decay, `0.5 ** (Δclock / half_life)`, or `lam ** Δclock` when the spec gives `lam=`, with `Δclock` the clock's step since the last row the model did not skip, capped at `gap_cap` (or `session_gap` at a session change) ([Time and decay](explanation/time-and-decay.md)) | every model that decays |
-| `S_j`, `η_j` | target `j`'s running means of `z zᵀ` and of `z·y_j`, which the least-squares fits solve from | `ewridge`, `huber`, `quantile` |
+| `λ` | the row's decay, `0.5 ** (Δclock / half_life)`, or `lam ** Δclock` when the spec gives `lam=`, with `Δclock` the clock's step since the last row that counted, one the model did not skip and of a weight above 0, capped at `gap_cap` (or `session_gap` at a session change) ([Time and decay](explanation/time-and-decay.md)) | every model that decays |
+| `S_j`, `η_j` | target `j`'s running means of `z zᵀ` and of `z·y_j`, which the least-squares fits solve from | `ewridge`, `huber`, `quantile`, `ar` |
 | `e` | the row's residual: `y` less the prediction made before the row | `huber`, `quantile` |
 | `ω` | a ridge added to a covariance: `precision_prior`, fading as `ew_cov`'s prior does, so that a row's class or state can be predicted from the model's first row | `ew_class`, `hmm` under `"tied"` or `learn = False` |
 | `P₀`, `ψ` | a stabilized prior a covariance forgets toward: `prior_rows` rows of weight at the features' pooled within-state variance `ψ` (at each state's given covariance, where `covs` is given), which does not fade | `hmm` under `"full"` and `"diag"` with `learn = True` |
@@ -105,7 +105,7 @@ reference gives each one's units and default.
 | how far apart two rows are, and how fast the past fades | `clock`, `half_life`, `lam`, `gap_cap` | [The clock and its units](#the-clock-and-its-units), and [Time and decay](explanation/time-and-decay.md) for why |
 | what a session boundary, a gap and a step back do | `session`, `session_gap`, `gap_cap`, `restart_after_step_back` | [The clock's policy](#the-clocks-policy) |
 | what a fit becomes when nothing fades | `half_life=inf`, `lam=1.0` | [Without a decay](explanation/time-and-decay.md#without-a-decay) |
-| when an old row stops counting at all | `window_size`, in `ewridge`, `lasso`, `ew_cov`, `marginal` and `ew_class` | [A hard window](#a-hard-window), and [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
+| when an old row stops counting at all | `window_size`, in the models [A hard window](#a-hard-window) names | [A hard window](#a-hard-window), and [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
 | how to fit along a feature instead of time | `clock` | [Fit locally along a feature](how-to/fit-locally-along-a-feature.md) |
 | which row order a bank needs, and how it checks it | | [Put rows in clock order](how-to/put-rows-in-clock-order.md), and [why you set the order](explanation/chunk-invariance-and-streaming.md#why-you-set-the-row-order) |
 | which rows belong to which model | `group`, `group_close` | [Fit one model per group](how-to/fit-one-model-per-group.md) and [Close groups and read each one's row](how-to/close-groups.md) |
@@ -225,9 +225,14 @@ longer stands for the moment just before.
 
 `window_size` makes every row older than a span count for nothing ([Forget
 rows past a window](how-to/forget-rows-past-a-window.md) shows how, and
-what each model keeps inside the window). `ewridge`, `lasso`, `ew_cov`,
-`marginal` and `ew_class` take it, and no other model does. Five things to know before
-reading the numbers of a model under a hard window:
+what each model keeps inside the window). `ewridge`, `lasso`, `ar`,
+`ew_cov`, `ew_class`, `marginal` and `spectral` cut it from snapshots of
+their running sums, spaced by `snapshot_every` and
+`max_rows_between_snapshots` and held under `window_budget`. `expectile`,
+`hawkes`, `realized`, `power_variation`, `ddsketch`, `ewm_moments` and
+`corrchange` take a `window_size` of their own, without snapshots, and
+each one's entry says what it keeps and how its edge is read. Five things
+to know before reading the numbers of a model under a snapshot window:
 
 | | |
 |---|---|
@@ -472,13 +477,13 @@ values, and on features where they are given. Several of them take the same para
 
 | parameters | taken by | explained under |
 |---|---|---|
-| `ridge` | `ewridge`, where a list fits a grid; `huber` and `quantile`, as one number. `rls` refuses it and takes `delta` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) and [`rls`](#rls--recursive-least-squares) |
+| `ridge` | `ewridge`, where a list fits a grid; `huber`, `quantile`, `expectile`, `glm` and `ar`, as one number. `rls` refuses it and takes `delta` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) and [`rls`](#rls--recursive-least-squares) |
 | `solve_every`, `max_rows_between_solves` | `ewridge`, `lasso`, `huber`, `quantile` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) |
 | `target_gaps` | `ewridge`, `lasso` | [`ewridge`'s docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge) |
-| `window_size` | `ewridge`, `lasso`, `ar` | [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
+| `window_size` | `ewridge`, `lasso`, `ar`, `expectile` | [A hard window](#a-hard-window), and [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
 | `standardize` | `ewridge`, `huber` and `quantile`, off by default; `kalman`, `sgd` and `pa`, on by default. `lasso` always standardizes. `ftrl`, `rls`, `expectile` and `glm` take no `standardize` and refuse it by name: `ftrl`'s `l1` zeroes a coefficient in the feature's own units, so a scale inside the model would move which it zeroes; `rls`'s prior (`delta`, `coef_prior`) is in the features' own units; and `expectile`'s and `glm`'s `ridge` is a penalty in the features' squared units. Scale such a feature before the bank | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), [`kalman`](#kalman--random-walk-β-dynamic-linear-model) and [`ftrl`](#ftrl--online-logistic-regression) |
 | `coef_min`, `coef_max`, `coef_sum` | `sgd`, `pa` | [`sgd`](#sgd--stochastic-gradient-descent) |
-| `weight` | every model, though `rls`, `kalman`, `sgd`, `pa` and `ftrl` read it differently from a weighted mean | [Weights](how-to/weight-rows.md) |
+| `weight` | every model, though `rls`, `kalman`, `sgd`, `pa`, `ftrl` and `glm` read it differently from a weighted mean | [Weights](how-to/weight-rows.md) |
 
 What `half_life` decays differs by model:
 
@@ -493,6 +498,7 @@ What `half_life` decays differs by model:
 | `pa` | `weight_sum`, each target's own weight, the running moments `standardize` scales by and the spread its tube is drawn in, but not the coefficients |
 | `ftrl` | its per-coordinate sums, but not its penalties, so a shorter half-life shrinks the fit more |
 | `glm` | each target's Gram `G`, and its ridge with the rows, so a row of weight 0 moves no coefficient |
+| `expectile` | each target's running sums, which its asymmetric fit is solved from |
 | `holt` | the level, and the trend at `trend_half_life`, four times `half_life` by default |
 | `ar` | each target's running sums, which its fit is solved from; not its lags, which count learned rows |
 
@@ -1455,9 +1461,11 @@ Stochastic gradient descent under a choice of losses, with one gradient
 step a row.
 
 Use `sgd` when learning a row must take only O(k) time for `k` features:
-it takes one gradient step a row and never solves. It is the only model
-that takes count targets (`loss="poisson"`), and its coefficients can be
-bounded or summed to a constant, as portfolio weights are. Use
+it takes one gradient step a row and never solves. It fits count targets
+under `loss="poisson"` in O(k) time a row, where
+[`glm`](#glm--generalized-linear-models-poisson-gamma-binomial-tweedie)'s
+`family="poisson"` takes a Newton step in O(k³), and its coefficients can
+be bounded or summed to a constant, as portfolio weights are. Use
 [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) for an exact
 fit in O(k²) time a row, [`huber`](#huber--robust-regression) or
 [`quantile`](#quantile--robust-regression) for a robust or quantile fit

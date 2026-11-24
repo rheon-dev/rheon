@@ -208,10 +208,10 @@ def test_a_refit_past_the_groups_cap_is_refused_at_the_call():
 
 
 def test_a_half_life_and_a_gap_cap_in_durations_are_the_numbers_on_a_clock_in_the_same_unit():
-    """Every span a glm takes that has a clock form takes it: ``half_life``
-    and ``gap_cap``, in days on a date clock, are the run on that clock as a
-    number of days. ``refit_rows`` counts rows and has no clock form (the
-    docstring says why)."""
+    """``half_life`` and ``gap_cap``, in days on a date clock, are the run on
+    that clock as a number of days. ``refit_rows`` counts rows; its clock
+    form is ``refit_span``, which ``test_the_refit_budget_gives_the_later_groups_up``
+    runs on a number clock."""
     days = [d for d in pl.date_range(date(2024, 1, 1), date(2024, 12, 31), eager=True)]
     days = [d for d in days if d.weekday() < 5]
     rng = np.random.default_rng(5)

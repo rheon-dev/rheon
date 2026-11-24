@@ -51,8 +51,8 @@ spec and clock:
 | tolerated mutant | a mutant that differs from the original only at an exact tie or by less than the computation's own error, so no test a correct implementation passes can kill it; listed apart, not as equivalent ([Mutation survivors](#mutation-survivors)) |
 | IC | the correlation of prediction with target, `rp.eval`'s `ic` |
 | hard rule N | the numbered hard rules in `CLAUDE.md` |
-| a model kind | one of the 33 model types a spec can name; `MINIMAL` in `tests/test_model_registry.py` holds one spec of each |
-| the ten regression models | the models the per-model sweeps run: `ewridge`, `rls`, `lasso`, `kalman`, `huber`, `quantile`, `sgd`, `pa`, `ftrl` and `holt`, which `REGRESSIONS` in `tests/test_model_registry.py` lists |
+| a model kind | one of the model types a spec can name, one builder each in `rheon.spec`; `MINIMAL` in `tests/test_model_registry.py` holds one spec of each |
+| the regression models | the models the per-model sweeps run: `ewridge`, `rls`, `lasso`, `kalman`, `huber`, `quantile`, `sgd`, `pa`, `ftrl`, `glm`, `expectile`, `holt` and `ar`, which `REGRESSIONS` in `tests/test_model_registry.py` lists |
 | the window operators | exponentially weighted means, variances, sums, rates and quantiles of a column along the clock, with or without a hard window, which `rp.stream.with_windows` runs over a stream: `rp.ewm_mean`, `rp.ewm_sum`, `rp.ewm_rate`, `rp.ewm_quantile`, `rp.ewm_var` and `rp.ewm_std` look back, and the first four look ahead under `reverse=True` |
 | a formula target | a spec's target written as an expression over a window operator that looks ahead, such as `rp.ewm_mean("mid", ...) - pl.col("mid")`, which the bank resolves once the window has closed |
 | the column form | the same window expression written as a column by `with_windows(like=spec)` and fed back as a plain target under the same `embargo`: what a formula target is held to |
@@ -89,7 +89,7 @@ must have:
 | 2. Chunk invariance | bitwise at the bank (1/7/100 chunks) and command-line (`chunk_size` sweep) levels, in the window core at chunks of 1, 2, 3, 7, 50 and 499 rows, and for formula targets at 1, 7 and 600 chunks; save/load mid-stream identical. Which rows carry `coef`, and `support_coef` and `se_coef` beside it, is excluded: a reporting cadence, chunk-dependent by design |
 | 3. Out-of-sample by construction | IC ≈ 0 on pure-noise targets asserted for ewridge, kalman, huber, ftrl; lasso selection prefers the all-zero penalty on noise; robust reweighting proven to use the *prior* residual |
 | 4. Clock semantics | cap, a step back (refused, or a reset past `restart_after_step_back`), session gap and reset, first row, row-count clock, skipped-row decay folding, per-group independence |
-| 5. Null policy & warm-up | feature/target/weight nulls and `min_weight`, for all ten regression models |
+| 5. Null policy & warm-up | feature/target/weight nulls and `min_weight`, for every regression model |
 | 6. Arrow ≡ Polars output, retired and replaced | the Arrow path, after the table |
 | 6b. `predict` ≡ `fit_predict` of the next row | `tests/test_predict.py`; `crates/rheon-core/tests/model_contract.rs` |
 | 6c. Runner ≡ bank, every source and format | `crates/rheon-polars/tests/runner.rs`; `run_online` in `tests/conftest.py`; `tests/test_bank_ergonomics.py` |
@@ -109,7 +109,7 @@ holds it to the same output.
 **6b. `predict` ≡ `fit_predict` of the next row.**
 `tests/test_predict.py` holds row `i` of `predict(df)` to row 0 of
 `fit_predict(df.slice(i, 1))` on a fresh clone, field for field. It does so
-for all ten regression models with every diagnostic on, and across every
+for every regression model with every diagnostic on, and across every
 session and clock policy. `crates/rheon-core/tests/model_contract.rs` holds
 each model's `predict` to its `step`, row by row.
 
@@ -187,8 +187,20 @@ in `tests/test_second_opinion.py`, Vowpal Wabbit among them.
 | `rls` | padasip's `FilterRLS`, at unit weights on a row clock (`TestRlsIsPadasips`) | 1e-11 (1.6e-14 measured) |
 | `realized` | the papers' estimators in numpy (`tests/reference_realized.py`) on simulated days and Binance's data; `hfvol` on RV, BV and the jump variation; R's `highfrequency` (`rRVar`, `rBPCov`, `rMPVar`, `rTPQuar`, `BNSjumpTest`, `intradayJumpTest`) and `yuima` (`bns.test`) in `tests/r_oracle/`, their small-sample factors divided out | a few ulps (RV, BV, `lm`), 64 ulps (TV, TQ), 64 units of `cond · ε` (the ratio test) |
 | `power_variation` | the definitions in numpy (`tests/reference_power_variation.py`) on simulated returns with a bid-ask bounce and ETCUSDT's trades; `arch`'s kernel long-run covariances (plain and centered) and `hfhd`'s `krvm` (flat-top Parzen) and `tsrc` (two scales, composed in Polars); R's `yuima` (`mpv`, any powers), `highfrequency` (`rMPVar`, `rKernelCov`) and `sandwich` (`kernHAC`) in `tests/r_oracle/`, their conventions divided out | 16 ulps (one pass, windows), 256 under a decay; 9 ulps (`mpv`, `rMPVar`); 3 ulps (`krvm`, `tsrc`); 4 to 8 ε of a kernel sum's scale `(2H + 1) Σ r²` (`arch`, `rKernelCov`, `kernHAC`) |
+| `ar` | statsmodels' `AutoReg` on the same rows with no decay, and fitted on the rows before each prediction; `WLS` on `lagmat`'s design under decay (`tests/test_ar.py`) | 1e-9 |
+| `glm` | the recursion written longhand with statsmodels' own family objects, after every row; the converged fit against statsmodels' `GLM(freq_weights=)` and glum with the ridge matched (`tests/test_second_opinion_glm.py`) | row by row exact; 0.20 to 0.25 of the batch fit's standard error at 5 coefficients and 10,000 rows |
+| `expectile` | statsmodels' `RLM` with `MQuantileNorm` on the refit's rows and on every window's, `WLS` at `tau = 0.5`, and `scipy.stats.expectile` for a constant (`tests/test_second_opinion_expectile.py`) | 1e-12, relative; 4 ulps for the constant |
+| `garch` | `arch`'s batch maximum likelihood on the same rows: each parameter's gap in `arch`'s standard errors, the likelihood-ratio gap and the out-of-sample excess (`tests/test_second_opinion_garch.py`) | statistical |
+| `dcc` | Engle's (2002) second-stage quasi-likelihood written by hand, maximised by scipy's SLSQP and certified row by row by `multivariate_normal.logpdf` (`tests/test_second_opinion_dcc.py`) | statistical; the likelihood 1e-10 |
+| `hawkes` | tick's least-squares Hawkes contrast, its exact minimiser read from tick's own gradient (`tests/test_second_opinion_hawkes.py`) | 1e-12 to 1e-10 |
+| `pca` | scikit-learn's `IncrementalPCA` after every row and `PCA` on the decay-weighted rows; scipy's `eigh` of the weighted covariance; CCIPCA and Oja's rule by `subspace_angles` (`tests/test_second_opinion_pca.py`) | 1e-11; the two approximate rules statistical |
+| `spectral` | scipy's `periodogram` with the decay's amplitudes as the window, and `lombscargle` with them as weights, over every row or a window's (`tests/test_spectral.py`) | 1e-9 |
+| `tdigest` | the `tdigest` package and exact ranks, at compression 100 and 200 (`tests/test_tdigest.py`) | 3.8e-3 and 1.8e-3 in rank |
+| `ddsketch` | the `ddsketch` package's buckets and reads, `crick`, and the exact quantiles within the sketch's `alpha` (`tests/test_ddsketch.py`) | every bucket exactly; reads within 2 ulps |
+| `ewm_moments` | scipy, statsmodels and Polars' rolling moments, through the numpy reference the core is held to (`tests/test_reference_ewm_moments.py`) | 1e-13 |
 | `seqtest` | `reference.seqtest_ref`, the paper's betting recursion in scalar code, and its closed form where the clip never binds (`tests/test_seqtest.py`) | 1e-12, relative |
 | `emit_drift` | river's `PageHinkley` at `half_life = inf` (`TestAZeroWeightRowIsNotSeen`) | flag for flag |
+| `emit_drift` under `drift_kind` | river's `drift.ADWIN`, `drift.binary.DDM` and `drift.binary.EDDM`; `scipy.stats.ks_2samp(method="exact")` on the samples KSWIN compares; Page's (1954) recursion written out for the CUSUM (`tests/test_second_opinion_drift_kinds.py`) | flag for flag |
 | a prediction under `embargo` | river's progressive validation with `delay` (`TestLabelDelayFoldsWhatWasScored`) | 1e-12 |
 | `r2` and `coverage` under `embargo` | scikit-learn's `r2_score` over the matured rows; the share of matured rows inside their interval | 1e-9 |
 | `emit_metrics` and `emit_autocorr` | a row's own target moved across zero, which moves none of the row's own fields, to the bit; on a logistic fit, scikit-learn's `accuracy_score` and `brier_score_loss` and scipy's `pointbiserialr` (`TestStreamingMetrics`) | to the bit; 1e-9 |
@@ -293,6 +305,12 @@ see pyarrow.
 | hmmlearn | `hmm`'s filter at fixed parameters, row by row. It ships wheels up to CPython 3.13, so the 3.14 legs build its sdist, a small C++ extension | `TestHmmIsHmmlearns` |
 | padasip | `rls`, through its `FilterRLS`; pure Python | `TestRlsIsPadasips` |
 | filterpy | the `kalman` settings, through its `KalmanFilter` | `TestKalmanSettingsAreFilterpy` |
+| glum | `glm`'s converged fit against a ridge-penalized batch fit beside statsmodels' `GLM`, the ridge matched | `tests/test_second_opinion_glm.py` |
+| arch | `garch` against its batch maximum likelihood of every kind and error distribution; `dcc`'s margins; `power_variation`'s kernel long-run covariances | `tests/test_second_opinion_garch.py`, `tests/test_second_opinion_dcc.py`, `tests/test_second_opinion_power_variation.py` |
+| tick | `hawkes` against its least-squares Hawkes contrast, on tick's own simulated events | `tests/test_second_opinion_hawkes.py` |
+| tdigest | `tdigest` against Dunning's 2013 t-digest, in rank | `tests/test_tdigest.py` |
+| ddsketch, crick | `ddsketch`'s buckets and reads against Datadog's package, and the same streams through `crick` | `tests/test_ddsketch.py` |
+| hfhd | `rcov`'s realized kernel (with numba for its kernel weights), `refresh_time`'s grid, and `power_variation`'s flat-top realized kernel and two-scales estimator | `tests/test_rcov.py`, `tests/test_refresh_time.py`, `tests/test_second_opinion_power_variation.py` |
 | Pathway, parked | it would run the Pathway half of `examples/pathway_integration.py`, but it is under the Business Source License, which rule 1 parks | `test_pathway_is_not_a_dependency` keeps it out of `pyproject.toml` until the maintainer decides |
 
 None of the libraries checked forgets as a half-life does (river, VW, and

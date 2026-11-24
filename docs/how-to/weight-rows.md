@@ -82,17 +82,19 @@ no prediction, and makes `weight_sum` 10 times as large.
 
 ## Check how the model reads a weight
 
-**Ten models read a weight differently.** Every other model reads a
-weight as a count of rows, in its running sums:
+**The models below read a weight differently.** Every other model reads
+a weight as a count of rows, in its running sums:
 
 | model | a row's weight is |
 |---|---|
 | `rls` | on the sum scale, against a ridge of fixed size: a heavier stream outweighs it sooner |
+| `glm` | a count of rows in the likelihood, on the sum scale against a `ridge` of fixed size, as `rls`'s: a heavier stream outweighs it sooner |
 | `kalman` | a scale on the observation's precision: its update equation divides the observation noise `R_j` by `w`, so with a fixed `obs_var=` the observation's variance is `obs_var / w` |
 | `sgd` | a step size: the gradient carries it |
 | `ftrl` | an importance weight, as Vowpal Wabbit's, against penalties of fixed size |
 | `pa` | a step size below 1; a weight above 1 counts as 1 |
-| `hmm` | on the sum scale, against the transitions' prior count |
+| `hmm` | on the sum scale, against the transitions' prior count and, under `learn=True` with a `"full"` or `"diag"` covariance, against the covariance prior worth `prior_rows` rows of weight |
+| `hawkes` | whether a row's events are learned: any weight above 0 learns them at their marks, since an event's excitation is a fact of the process rather than evidence to scale |
 | `rcov` | 0 or 1, since a realized covariance is a sum over returns; any other weight is refused |
 | `seqtest` | refused, since every learned row is one trial: to skip a row, null its target |
 | `audit` | refused: it counts values, whatever their row weighs |

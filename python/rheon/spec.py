@@ -20,13 +20,16 @@ shows them at work.
 
 ``targets``, ``features``
     Column names. A target is what the model predicts. A feature is what it
-    reads from the same row. A model with no target (``ew_cov``, ``kmeans``,
-    ``micro``, ``deco``, ``bocpd``, ``corrchange``, ``hmm`` and ``rcov``) takes
-    ``features`` alone, and ``audit`` takes ``columns`` in their place.
-    ``ew_class`` takes a ``label`` column in the target's place. ``holt`` and
-    ``seqtest`` take no features. A target computed from its own row's columns,
-    such as a return against the mid, is a column: make it with Polars'
-    ``with_columns`` before the bank. A log ratio ``(pl.col("price_5m") /
+    reads from the same row. A model with no target (``ew_cov``, ``ewm_moments``,
+    ``kmeans``, ``micro``, ``pca``, ``deco``, ``bocpd``, ``corrchange``,
+    ``hmm`` and ``rcov``) takes ``features`` alone, and ``audit`` takes
+    ``columns`` in their place. ``ew_class`` takes a ``label`` column in the
+    target's place. ``holt``, ``seqtest``, ``garch``, ``hawkes``, ``dcc``,
+    ``realized``, ``power_variation``, ``tdigest``, ``ddsketch`` and
+    ``spectral`` take no features: each reads its targets alone. A target
+    computed from its own row's columns, such as a return against the mid,
+    is a column: make it with Polars' ``with_columns`` before the bank. A log
+    ratio ``(pl.col("price_5m") /
     pl.col("mid")).log()`` or a difference sits about zero, where ``hit_rate``
     takes its sign. A :func:`rheon.target` is a column under a name of
     its own. A target may also be a window expression looking ahead
@@ -96,11 +99,14 @@ shows them at work.
     converged, so it never reports a number it is not yet informed enough to
     give. What: the weight a model must have seen before its outputs stop being
     null; the model learns from every row either way. A list gives one
-    threshold per target. Thirteen models keep a weight per target: ``ewridge``,
-    ``lasso``, ``kalman``, ``huber``, ``quantile``, ``expectile``, ``holt``, ``sgd``,
-    ``pa``, ``ftrl``, ``rls``, ``glm`` and ``marginal``, whose table's ``corr``, ``beta`` and
-    ``t_stat`` are gated per target. Each checks a target's threshold against
-    that target's own weight: the rows it was present on, at their raw weights,
+    threshold per target. These models keep a weight per target: ``ewridge``,
+    ``lasso``, ``kalman``, ``huber``, ``quantile``, ``expectile``, ``glm``,
+    ``holt``, ``ar``, ``sgd``, ``pa``, ``ftrl``, ``rls``, ``garch``,
+    ``realized``, ``power_variation``, ``tdigest``, ``ddsketch`` and
+    ``spectral``; ``ew_class`` keeps the weight of its labeled rows; and
+    ``marginal``'s table has its ``corr``, ``beta`` and ``t_stat`` gated per
+    target. Each checks a target's threshold against that target's own
+    weight: the rows it was present on, at their raw weights,
     decayed, and inside the window under one. ``rls`` learns only from rows on
     which every target is present, so its targets' weights are equal. The other
     models check the shared ``weight_sum``. The ``weight_sum`` field is the
@@ -182,8 +188,9 @@ shows them at work.
     one, or since the group's first row before the first. It is a number of
     the clock's units, a duration on a temporal clock (``"5m"``), or ``0``
     for every row. ``max_rows_between_coefs`` writes one after that many
-    rows the group's stream accepts: a row whose features and weight are
-    usable, rows of weight zero and rows with a null target included. With
+    rows the group's stream learns: a row whose features and weight are
+    usable, a row with a null target included. A row of weight 0 counts in
+    no clock, so it is no row of this count either. With
     both, whichever comes first. The clock is the one the models are stepped
     on, so a gap capped at ``gap_cap`` counts as the cap. Without a clock
     column it is the row's number, the first row being 1: ``coef_every=10``
@@ -552,9 +559,10 @@ The diagnostics add, per slot:
      - ``sigma_<slot>``
      - The EW standard deviation of the slot's out-of-sample residuals.
        Its weight ages on every row the model sees, a row with no
-       prediction or with weight 0 included, so it forgets across a gap
-       as the clock says. Under a ``window_size`` it is the window's, as the
-       fit is, and so is everything below that reads it. The residuals
+       prediction included, so it forgets across a gap as the clock says.
+       A row of weight 0 counts in no clock, so it ages nothing. Under a
+       ``window_size`` it is the window's, as the fit is, and so is
+       everything below that reads it. The residuals
        of the predictions a readiness gate withholds are among them: a
        gate withholds output only, so ``sigma`` -- and ``zscore``, the
        drift detector's scale, the ranking of ``emit_selected`` and
@@ -719,8 +727,10 @@ The diagnostics add, per slot:
        model is missing something.
    * - ``emit_drift``
      - ``drift_<slot>``
-     - True on the row a Page-Hinkley detector on ``|resid|`` finds a
-       break. Each residual over ``sigma`` is compared with its EW mean at
+     - True on the row the drift detector finds a break: by default
+       (``drift_kind = "page_hinkley"``) a Page-Hinkley detector on
+       ``|resid|``, and under ``drift_kind`` one of the detectors listed
+       below. Under Page-Hinkley each residual over ``sigma`` is compared with its EW mean at
        the model's half-life, less ``drift_delta`` (default 0.5, in units
        of ``sigma``). The excess times each row's clock step is summed: a
        break when the sum climbs ``drift_threshold`` above its lowest

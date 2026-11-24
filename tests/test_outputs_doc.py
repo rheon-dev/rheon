@@ -114,6 +114,7 @@ def test_the_page_names_every_withheld_reason_the_bank_declares():
     page once said six over a list of nine, of the bank's ten, and had no
     `forecast_<t>` (PLAN 578j, DOC-5)."""
     import polars as pl
+
     from rheon import polars as rp
 
     sys.path.insert(0, str(REPO / "tests"))
@@ -127,7 +128,21 @@ def test_the_page_names_every_withheld_reason_the_bank_declares():
     row = next(line for line in shared.splitlines() if line.startswith("| `withheld_reason` |"))
     missing = [r for r in reasons if f"`{r}`" not in row]
     assert not missing, missing
-    words = "zero one two three four five six seven eight nine ten eleven twelve".split()
+    words = [
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+    ]
     assert f"`withheld_reason`'s {words[len(reasons)]}," in text
     garch = text.split("\n## `garch`\n", 1)[1].split("\n## ", 1)[0]
     assert "| `forecast_y` |" in garch

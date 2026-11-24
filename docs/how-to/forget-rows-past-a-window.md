@@ -9,8 +9,11 @@ A [half-life](../GLOSSARY.md#time) never forgets entirely: three
 half-lives back, a row still carries 12.5% of the weight. To make every
 row `w` [clock units](../GLOSSARY.md#time) old or older count for exactly
 nothing, give the [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads)
-`window_size=w`, a [hard window](../GLOSSARY.md#fitting-a-model). Five
-models take it: `ewridge`, `lasso`, `ew_cov`, `ew_class` and `marginal`.
+`window_size=w`, a [hard window](../GLOSSARY.md#fitting-a-model). This
+page is about the models that cut it from snapshots of their running
+sums: `ewridge`, `lasso`, `ar`, `ew_cov`, `ew_class`, `marginal` and
+`spectral`. [A hard window](../MODELS.md#a-hard-window) names the models
+that take a `window_size` of their own.
 [A hard window](../explanation/time-and-decay.md#a-hard-window) explains
 how the model cuts its running sums exactly, and shows a hard window forget
 a change that a half-life still holds. Before you read a model's numbers
@@ -20,13 +23,14 @@ the weight inside the window.
 
 ## Prerequisites
 
-These steps need the library and a spec of one of the five models:
+These steps need the library and a spec of one of those models:
 
 - rheon installed with Polars, and
   [Example data](../EXAMPLE-DATA.md) built. The examples read
   `ticks.parquet`, 400 rows a unit of the clock `t` apart, in which the
   coefficient of `ret` on `signal_a` flips from 0.8 to −0.8 at row 200.
-- A spec of `ewridge`, `lasso`, `ew_cov`, `ew_class` or `marginal`. With a
+- A spec of `ewridge`, `lasso`, `ar`, `ew_cov`, `ew_class`, `marginal` or
+  `spectral`. With a
   [clock](../GLOSSARY.md#time), `window_size` is in its units: a number, or
   a duration such as `"1h"` on a clock of times. Without one, it counts
   rows.
@@ -119,8 +123,10 @@ beside `window_size`:
 |---|---|---|
 | `ewridge` | the sums the fit is solved from, and `sigma` and `zscore` with them. The coefficients are the window's as of the last solve | `ridge_scale="sum"`, `session_shrink`, `gram_block_rows` |
 | `lasso` | the same, and the error that selects the penalty. A feature that stays constant inside the window has no evidence there, and goes to exactly zero | |
+| `ar` | each target's sums, its lags included: a row's lags are part of the row, so they may be older than the window. As rows leave, a fit can lose the spread it needs, so its predictions are withheld while it does not hold | |
 | `ew_cov` | every moment, and `mahal`, `partial_corr` and the principal components read from them | `lags`, `mahal_quantiles` |
 | `ew_class` | each class's moments, so the classifier follows class means that move | |
+| `spectral` | the transform of the rows less than `window_size` old. Its snapshots close blocks, and a block leaves whole once its first row is past the window, so the window never keeps an older row | |
 | `marginal` | every pair's weight, means and second moments, so `corr`, `beta` and `t_stat` describe the window. Its lag correlations, under `window_lags=True`, are the window's rows' own, about the window's means, the first `l` rows paired with the rows before the window | `bins` or `bin_edges`, `feature_moments="shared"`, and `lags` unless `window_lags=True` |
 
 **To bin a `marginal`'s features beside a hard window, bin them in a second

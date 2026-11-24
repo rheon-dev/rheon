@@ -1,5 +1,5 @@
 """`glm` against statsmodels and glum (docs/PLAN.md task 500; the numbers
-are docs/records/STUDY-500-GLM.md's).
+are docs/records/STUDY-500-GLM.md's, on the branch `vm/study-500`, not merged).
 
 Two kinds of check:
 

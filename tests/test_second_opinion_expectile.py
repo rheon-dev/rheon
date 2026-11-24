@@ -1,5 +1,5 @@
 """`expectile` against statsmodels and scipy (docs/PLAN.md task 501; the
-numbers are docs/records/STUDY-501-509.md's, Part A).
+numbers are docs/records/STUDY-501-509.md's, Part A, on the branch `vm/study-501`, not merged).
 
 The oracles:
 

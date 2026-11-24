@@ -3,8 +3,9 @@ behind (review 2026-11-23, STRM-2 and STRM-3).
 
 A row of weight 0 learns nothing and counts in no clock (hard rule 9): it
 is scored as ``predict`` scores a row, from the state the next row of
-positive weight would be scored by, and leaves nothing a later row, a
-summary or ``last_row`` reads. The Rust side, every kind on every clock to
+positive weight would be scored by, and leaves nothing a later row or a
+summary reads (``last_row`` is the last row predicted, such a row among
+them). The Rust side, every kind on every clock to
 the bit, is ``crates/rheon-polars/tests/zero_weight.rs``; these hold the
 bank's reports on the rows themselves.
 """
