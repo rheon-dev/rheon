@@ -311,6 +311,26 @@ per component at build time, about three fits, and an emission is `(m + 1)`
 dot products of `W`. The rows' memory is `3 × 8 W` = 56,472 B, as the
 state table has it.
 
+## Measured after the design: the exact method at `W = 2,353` (2026-11-24)
+
+`method="exact"` is one full fit per emission, bit-equal to statsmodels,
+so statsmodels' compiled fit on one window is its cost. Timed on the same
+VM, statsmodels 0.15.0, one window of 2,353 hourly values (two seasons, a
+trend, noise), each fit repeated for 8 s:
+
+| fit | one emission |
+|---|---|
+| MSTL, periods 24 and 168, spans 11 and 15, `iterate = 2` | 427 ms |
+| the same, `robust=True` (each STL's 15 outer passes) | 3.18 s |
+| STL alone, period 24, span 7 | 31 ms |
+| the same, `robust=True` | 208 ms |
+
+So the exact method at MSTL's hourly defaults costs 0.43 s a row, and 3.2 s
+a row robust: a day of hourly rows is 10 s, or 76 s robust, per group. The
+kernel's emission is three dot products of 2,353, microseconds. The design's
+"about a second" for the exact method held; the robust form is three times
+that.
+
 ## What the study left open, or got wrong
 
 1. **Its online form reads the row it emits on** (§5: the output on row
