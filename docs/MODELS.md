@@ -4322,12 +4322,14 @@ import numpy as np
 import polars as pl
 from rheon import polars as rp
 
+# Two round clusters, 65 and 35 percent of the rows.
 rng = np.random.default_rng(1)
 n = 4_000
 far = rng.random(n) < 0.65
 x = rng.standard_normal((n, 2)) * 0.5 + np.where(far[:, None], [4.0, 3.0], [0.0, 0.0])
 pl.DataFrame(x, schema=["a", "b"]).write_parquet("pair.parquet")
 
+# Learn every row, then print each component's weight and mean.
 gm = rp.spec.gmm("gm", features=["a", "b"], n_components=2, half_life=float("inf"))
 bank = rp.ModelBank([gm])
 bank.fit(pl.scan_parquet("pair.parquet"))
