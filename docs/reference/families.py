@@ -88,7 +88,7 @@ FAMILIES: tuple[Family, ...] = (
         "spec",
         tuple(
             f"{_SPEC}.{m}"
-            for m in ("ewridge", "rls", "lasso", "kalman", "sgd", "pa", "ftrl", "glm", "holt")
+            for m in ("ewridge", "rls", "lasso", "kalman", "sgd", "pa", "ftrl", "glm", "holt", "ar")
         ),
     ),
     Family("robust", "spec", (f"{_SPEC}.huber", f"{_SPEC}.quantile", f"{_SPEC}.expectile")),
@@ -96,7 +96,24 @@ FAMILIES: tuple[Family, ...] = (
         "covariance",
         "spec",
         tuple(
-            f"{_SPEC}.{m}" for m in ("ew_cov", "marginal", "deco", "rcov", "audit", "hmm", "garch")
+            f"{_SPEC}.{m}"
+            for m in (
+                "ew_cov",
+                "ewm_moments",
+                "pca",
+                "marginal",
+                "deco",
+                "rcov",
+                "audit",
+                "hmm",
+                "garch",
+                "dcc",
+                "realized",
+                "power_variation",
+                "tdigest",
+                "ddsketch",
+                "spectral",
+            )
         ),
     ),
     Family(
@@ -136,9 +153,18 @@ FAMILIES: tuple[Family, ...] = (
                 "ewm_sum",
                 "ewm_var",
                 "ewm_std",
+                "ewm_moments",
                 "ewm_quantile",
+                "ewm_profile",
                 "ewm_rate",
+                "rolling_max",
+                "rolling_min",
                 "increment",
+                "cross_mean",
+                "cross_std",
+                "cross_rank",
+                "cross_quantile",
+                "cross_ref",
             )
         ),
     ),

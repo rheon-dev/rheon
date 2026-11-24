@@ -68,7 +68,7 @@ impl<'de> Deserialize<'de> for Bin {
 
 /// A temporal value's unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) enum Unit {
+pub(crate) enum Unit {
     Ns,
     Us,
     Ms,
@@ -96,7 +96,7 @@ impl From<Unit> for TimeUnit {
 
 /// One value of the completing row. The variant names are the file's tags.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(super) enum Cell {
+pub(crate) enum Cell {
     Null,
     Bool(bool),
     /// Any signed integer up to 64 bits.
@@ -119,7 +119,7 @@ pub(super) enum Cell {
 
 impl Cell {
     /// The value of a one-row column.
-    pub(super) fn of(col: &Column) -> PolarsResult<Self> {
+    pub(crate) fn of(col: &Column) -> PolarsResult<Self> {
         let s = col.as_materialized_series();
         Ok(match s.get(0)? {
             AnyValue::Null => Self::Null,
@@ -165,7 +165,7 @@ impl Cell {
 
     /// The value as a one-row series named `name`, in the dtype it was
     /// read from (an integer as 64 bits, a float as a `Float64`).
-    pub(super) fn series(&self, name: &str) -> PolarsResult<Series> {
+    pub(crate) fn series(&self, name: &str) -> PolarsResult<Series> {
         let n: PlSmallStr = name.into();
         Ok(match self {
             Self::Null => Series::full_null(n, 1, &DataType::Null),
@@ -210,6 +210,11 @@ pub(super) struct Held {
     /// The group, clock and `keep` columns, by name, at the completing row.
     pub(super) row: Vec<(String, Cell)>,
     pub(super) points: Vec<HeldPoint>,
+    /// Under `age`, each point's clock of the tick each value came from
+    /// (PLAN 556), one list a point; absent without it, so a state without
+    /// ages is the bytes it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) ats: Option<Vec<Vec<super::Instant>>>,
 }
 
 impl Held {
@@ -227,7 +232,11 @@ impl Held {
                 Ok(((*n).to_owned(), Cell::of(&one)?))
             })
             .collect::<PolarsResult<_>>()?;
-        Ok(Self { row, points })
+        Ok(Self {
+            row,
+            points,
+            ats: None,
+        })
     }
 
     /// The held row as a one-row frame in `names`, each column in `df`'s
@@ -258,8 +267,10 @@ impl Held {
                         crate::arrow::dtype_name(want)
                     )
                 })?;
-                // A cast to a zoned `Datetime` can come back naive: the zone
-                // is the input's, set on the instant the cast kept.
+                // A cast to a zoned `Datetime` came back naive while Polars
+                // was built without its `timezones` feature, which the
+                // workspace now enables; the zone is set again all the same,
+                // the input's, on the instant the cast kept.
                 match want {
                     DataType::Datetime(u, tz) if cast.dtype() != want => {
                         cast.into_datetime(*u, tz.clone())

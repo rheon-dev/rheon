@@ -304,7 +304,7 @@ struct RefitBufFile {
 impl From<RefitBufFile> for RefitBuf {
     /// The buffer and its tree. A buffer whose rows are not `learned` rows
     /// of one width with an `|e|` each, or whose scale's factors are not
-    /// each in `(0, 1]`, holds no tree; the configuration's check refuses
+    /// each in `[0, 1]`, holds no tree; the configuration's check refuses
     /// it ([`RefitBuf::fits`]) before any row reads one.
     fn from(f: RefitBufFile) -> Self {
         let mut b = Self {
@@ -327,7 +327,7 @@ impl From<RefitBufFile> for RefitBuf {
             .flatten();
         let shaped =
             b.resid.as_ref().is_some_and(|r| r.len() == n) && b.ages.len().is_multiple_of(4);
-        let factor = |f: f64| f > 0.0 && f <= 1.0;
+        let factor = |f: f64| (0.0..=1.0).contains(&f);
         if let (Some(nf), true) = (width, shaped)
             && b.rows.chunks_exact(nf + 4).all(|r| factor(r[nf + 3]))
             && b.ages.as_chunks::<4>().0.iter().all(|a| factor(a[1]))
@@ -597,6 +597,25 @@ impl RefitBuf {
     /// up: the buffer freed, marked [`Self::abandoned`], and what it held
     /// handed back, for the target's sketch to be built from
     /// ([`one_pass_sketch`]).
+    /// The bytes [`Self::age`] would add at `lam` and `lam_s`: a run of 32
+    /// where the row does not join the last run, nothing where it does or
+    /// the buffer takes nothing. What a refit over a span of the clock
+    /// checks against its cap before the row ages it (review 2026-11-23,
+    /// REG-2).
+    pub(crate) fn age_bytes(&self, lam: f64, lam_s: f64) -> u64 {
+        if self.done || self.learned == 0 {
+            return 0;
+        }
+        let n = self.ages.len();
+        let joins = n >= 4 && {
+            let last = &self.ages[n - 4..];
+            last[3] == f64::from(self.learned)
+                && last[0].to_bits() == lam.to_bits()
+                && last[1].to_bits() == lam_s.to_bits()
+        };
+        if joins { 0 } else { 32 }
+    }
+
     pub(crate) fn age(&mut self, lam: f64, lam_s: f64, cap: u32) -> Option<Taken> {
         if self.done || self.learned == 0 {
             return None;
@@ -621,7 +640,7 @@ impl RefitBuf {
             self.median.begin_run();
             self.median.run(lam_s, 1);
         }
-        if self.ages.len() / 4 > REFIT_RUNS_PER_ROW as usize * cap as usize {
+        if self.ages.len() / 4 > (REFIT_RUNS_PER_ROW as usize).saturating_mul(cap as usize) {
             self.abandoned = true;
             return Some(self.take());
         }
@@ -668,13 +687,14 @@ impl RefitBuf {
 
     /// Whether a restored buffer is one this configuration writes: exactly
     /// `learned` rows of `nf` features, fewer than `cap`, each weight above 0
-    /// and each factor in (0, 1]; runs of whole counts, factors in (0, 1],
+    /// and each factor in [0, 1] (0 a gap past the decay's underflow); runs
+    /// of whole counts, factors in [0, 1],
     /// following learned rows in order, at most the cap's number; an `|e|`
     /// a learned row where it keeps them, which it may only under the MAD
     /// (`mad`), each finite and at least 0 or [`NOT_TAKEN`]; none once done, and
     /// neither mark while open.
     pub(crate) fn fits(&self, nf: usize, cap: u32, mad: bool) -> bool {
-        let factor = |f: f64| f > 0.0 && f <= 1.0;
+        let factor = |f: f64| (0.0..=1.0).contains(&f);
         let resid_fit = self.resid.as_ref().is_none_or(|r| {
             mad && r.len() == if self.done { 0 } else { self.learned as usize }
                 && r.iter()
@@ -1738,6 +1758,26 @@ mod tests {
     use super::*;
     use crate::oracle::CanonBits;
 
+    /// The buffer's bytes: 8 each for its rows and its runs, 48 for each
+    /// learned row's `|e|` and its place in the tree under the MAD, and its
+    /// first stamp.
+    #[test]
+    fn a_buffers_held_bytes_are_its_rows_runs_and_residuals() {
+        let stamp = std::mem::size_of::<Option<crate::Stamp>>() as u64;
+        let (mut plain, mut mad) = (RefitBuf::new(), RefitBuf::keeping_resid());
+        assert_eq!((plain.held_bytes(), mad.held_bytes()), (stamp, stamp));
+        for b in [&mut plain, &mut mad] {
+            for i in 0..3 {
+                b.learn_scored(&[1.0 + f64::from(i), 2.0], 3.0, 0.5, 1.0, 0.9, 0.9, OPEN);
+            }
+            b.age(0.9, 0.9, OPEN);
+            b.age(0.8, 0.8, OPEN);
+        }
+        // 3 rows of 2 + 4 numbers and 2 runs of 4.
+        assert_eq!(plain.held_bytes(), 8 * (18 + 8) + stamp);
+        assert_eq!(mad.held_bytes(), 8 * (18 + 8) + 48 * 3 + stamp);
+    }
+
     /// [`gram_lower`]'s scalar blocks as a function, the same loop, for the
     /// lanes to be held to (`the_blocked_gram_is_the_row_by_row_loop` holds
     /// `gram_lower`'s own, through whichever path it takes).
@@ -2048,7 +2088,15 @@ mod tests {
         assert!(bad(&|c| c.learned = 0), "rows held before any was learned");
         assert!(bad(&|c| c.rows[2] = 0.0), "a learned row of no weight");
         assert!(bad(&|c| c.rows[3] = 1.5), "a factor above 1");
-        assert!(bad(&|c| c.ages[1] = 0.0), "a run's scale factor of 0");
+        // A factor of 0 is a gap past the decay's underflow, which a buffer
+        // holds (REG-1); one below 0, or NaN, no stream writes.
+        assert!(!bad(&|c| c.ages[1] = 0.0), "a run's scale factor of 0");
+        assert!(!bad(&|c| c.rows[3] = 0.0), "a row's scale factor of 0");
+        assert!(bad(&|c| c.ages[1] = -0.5), "a run's scale factor below 0");
+        assert!(
+            bad(&|c| c.rows[3] = f64::NAN),
+            "a row's scale factor of NaN"
+        );
         assert!(bad(&|c| c.ages[2] = 1.5), "a run of no whole count");
         assert!(bad(&|c| c.ages[2] = 0.0), "a run of no rows");
         assert!(bad(&|c| c.ages[3] = 2.0), "a run after a row not learned");

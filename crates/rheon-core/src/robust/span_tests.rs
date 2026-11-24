@@ -231,3 +231,157 @@ fn the_span_is_checked() {
         "ridge_scale",
     );
 }
+
+// ---- mutants-w11: what a span's buffers are charged, and when ----
+
+fn held_of(m: &Robust) -> u64 {
+    m.refit.iter().map(RefitBuf::held_bytes).sum()
+}
+
+/// A row is charged `8 (n + 4)` bytes, and 48 more under the MAD: the row that
+/// would pass the cap is recorded as `held + row`, exactly, under each scale.
+#[test]
+fn a_row_is_charged_its_width_and_the_mads_extra_to_the_byte() {
+    for (scale, extra) in [(HuberScale::Mad, 48u64), (HuberScale::Rms, 0)] {
+        let c = RobustCfg {
+            refit_clock: Some(1e12),
+            ..base(HUBER, scale)
+        };
+        let mut m = Robust::new(c).unwrap();
+        let row = 8 * (2 + 4) + extra;
+        let cap = 100 * row;
+        m.set_cap_for_test(cap);
+        for (i, (x, y)) in rows(150, 5).iter().enumerate() {
+            m.stamp_next(Stamp::Ns(i as i128 * S));
+            m.step(x, y, 1.0, 1.0);
+        }
+        assert_eq!(
+            m.state_over_cap(),
+            Some((held_of(&m) + row, cap)),
+            "{scale:?}"
+        );
+    }
+}
+
+/// A buffer that has run asks the cap for nothing: its rows went to the fit.
+#[test]
+fn a_buffer_that_has_run_is_charged_nothing() {
+    let data = rows(12, 8);
+    let mut m = Robust::new(RobustCfg {
+        refit_clock: Some(3.0),
+        ..base(HUBER, HuberScale::Mad)
+    })
+    .unwrap();
+    for (i, (x, y)) in data[..8].iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, y, 1.0, 1.0);
+    }
+    assert!(m.refit_status().iter().all(|s| s.done));
+    m.set_cap_for_test(1);
+    m.stamp_next(Stamp::Ns(9 * S));
+    m.step(&data[8].0, &data[8].1, 1.0, 1.0);
+    assert_eq!(m.state_over_cap(), None);
+}
+
+/// The quantile loss's refit waits for three rows a coefficient, the rows
+/// its warm-up takes as least squares, however long its span has run.
+#[test]
+fn a_quantile_refit_waits_for_three_rows_a_coefficient() {
+    let c = RobustCfg {
+        refit_clock: Some(10.0),
+        ..base(QUANTILE, HuberScale::Mad)
+    };
+    let data = rows(12, 4);
+    let mut m = Robust::new(c).unwrap();
+    for (i, (x, y)) in data[..10].iter().enumerate() {
+        let t = if i == 0 { 0 } else { 20 * S + i as i128 * S };
+        m.stamp_next(Stamp::Ns(t));
+        m.step(x, y, 1.0, 1.0);
+        let done = m.refit_status().iter().all(|s| s.done);
+        assert_eq!(done, i >= 8, "row {i}");
+    }
+}
+
+/// The warning's flag is state: saved after the warning, it restores raised.
+#[test]
+fn a_warned_flag_survives_a_save() {
+    let mut m = Robust::new(RobustCfg {
+        refit_clock: Some(1e12),
+        ..base(HUBER, HuberScale::Mad)
+    })
+    .unwrap();
+    m.set_cap_for_test(100 * (8 * 6 + 48));
+    for (i, (x, y)) in rows(30, 5).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, y, 1.0, 1.0);
+    }
+    assert!(m.warned && m.over.is_none());
+    let bytes = rmp_serde::to_vec_named(&m.state()).unwrap();
+    let key = b"\xa6warned";
+    assert!(bytes.windows(key.len()).any(|w| w == key));
+    let back = Robust::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+    assert!(back.warned);
+}
+
+/// Review 2026-11-23, REG-2: a row whose target is null ages the open
+/// buffer, a run of 32 bytes wherever its decay is not the last run's, and
+/// that was checked against no cap: on an irregular clock a target that
+/// went quiet grew its buffer by a run a row, without a warning or a
+/// refusal, up to a bound of 512 GiB. An ageing row is held to the cap as
+/// a learned row is.
+#[test]
+fn an_ageing_row_is_held_to_the_spans_cap() {
+    for loss in [HUBER, QUANTILE] {
+        let c = RobustCfg {
+            refit_clock: Some(1e12),
+            ..base(loss, HuberScale::Mad)
+        };
+        let mut m = Robust::new(c).unwrap();
+        let cap = 4096;
+        m.set_cap_for_test(cap);
+        let data = rows(2000, 9);
+        for (i, (x, y)) in data.iter().enumerate() {
+            m.stamp_next(Stamp::Ns(i as i128 * S));
+            // Both targets quiet after the first rows, on a clock whose every
+            // step differs.
+            let y = if i < 4 { *y } else { [None, None] };
+            m.step(x, &y, 1.0 + i as f64 * 1e-6, 1.0);
+            assert!(held_of(&m) <= cap, "{loss:?} row {i}: {}", held_of(&m));
+        }
+        assert!(m.state_over_cap().is_some(), "{loss:?}");
+    }
+}
+
+/// A state whose place on the clock does not match its refit's span is
+/// refused (review 2026-11-23, REG-16), as `sgd`'s is: a span's state
+/// without its place never closed its span, and held rows until the byte
+/// cap stopped them; a place without a span is a state no configuration
+/// writes.
+#[test]
+fn a_state_whose_place_does_not_match_its_span_is_refused() {
+    let span = Robust::new(RobustCfg {
+        refit_clock: Some(40.0),
+        ..base(HUBER, HuberScale::Mad)
+    })
+    .unwrap();
+    let rows_ = Robust::new(RobustCfg {
+        refit_rows: 40,
+        ..base(HUBER, HuberScale::Mad)
+    })
+    .unwrap();
+    for (m, place) in [
+        (span, None),
+        (rows_, Some(crate::clock_span::Place::default())),
+    ] {
+        let mut s = m.state();
+        assert!(Robust::restore(&s).is_ok());
+        let crate::ModelState::Robust(inner) = &mut s.model else {
+            unreachable!()
+        };
+        inner.place = place;
+        match Robust::restore(&s) {
+            Err(crate::StateError::Invalid(e)) => assert!(e.contains("refit"), "{e}"),
+            other => panic!("{other:?}"),
+        }
+    }
+}

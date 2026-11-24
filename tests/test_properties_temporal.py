@@ -542,6 +542,44 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["refit_span"] = steps(1, 30)
         else:
             kw["refit_rows"] = draw(st.integers(0, 12))
+    elif model == "realized":
+        # Task 499: the measures over a window of the clock, with its edge,
+        # or under a decay beside Lee and Mykland's own window of returns.
+        kw |= dict(targets=["y"])
+        if draw(st.booleans()):
+            kw |= dict(half_life=float("inf"), window_size=steps(1, 60))
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
+        else:
+            kw |= dict(half_life=steps(1, 30), lm_window=draw(st.integers(3, 12)))
+    elif model == "power_variation":
+        # Task 555: the terms over a window of the clock, with its edge, or
+        # under a decay.
+        kw |= dict(
+            targets=["y"],
+            terms={
+                "rv": {"powers": [2]},
+                "rk": {"kernel": "bartlett", "bandwidth": 3, "flat_top": True, "scale": 2},
+            },
+        )
+        if draw(st.booleans()):
+            kw |= dict(half_life=float("inf"), window_size=steps(1, 60))
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
+        else:
+            kw |= dict(half_life=steps(1, 30))
+    elif model == "tdigest":
+        # Task 544: a digest a target, no decay, no clock parameter.
+        kw |= dict(targets=["y"], quantiles=[0.05, 0.25, 0.95])
+    elif model == "ddsketch":
+        # Task 544, part 7: a sketch a target; a decay on the clock, a
+        # window over a span of the clock or of rows, or none.
+        kw |= dict(targets=["y"], quantiles=[0.05, 0.25, 0.95])
+        form = draw(st.sampled_from(["plain", "decayed", "rows", "clock"]))
+        if form == "clock":
+            kw["window_size"] = steps(1, 30)
+        elif form == "rows":
+            kw["window_rows"] = draw(st.integers(1, 40))
+        elif form == "decayed":
+            kw["half_life"] = steps(1, 30)
     elif model == "garch":
         # Task 492: the start as a span of the clock, or of rows; no decay.
         kw |= dict(targets=["y"])
@@ -549,6 +587,54 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["start_span"] = steps(1, 30)
         else:
             kw["start_rows"] = draw(st.integers(50, 60))
+    elif model == "dcc":
+        # Task 493: each start a span of the clock, or of rows; a decay on
+        # the clock.
+        kw |= dict(targets=["y", "x0"], half_life=steps(1, 30))
+        if draw(st.booleans()):
+            kw["start_span"] = steps(1, 30)
+        else:
+            kw["start_rows"] = draw(st.integers(50, 60))
+        if draw(st.booleans()):
+            kw["margin_start_span"] = steps(1, 30)
+        else:
+            kw["margin_start_rows"] = draw(st.integers(50, 60))
+    elif model == "ewm_moments":
+        # Task 554: lags on the clock as durations, as-of within a drawn
+        # tolerance, a row lag beside them, a window of the clock or of
+        # rows, and the standard errors; zero-weight rows in no lag.
+        lag = steps(1, 6)
+        kw |= dict(
+            features=["x0", "x1"],
+            half_life=steps(1, 30),
+            terms={
+                "skew": {"x0": 3},
+                "co": {"x0": 1, "x1": 2},
+                "ac": {"x0": 1, f"x0@{lag}": 1},
+                "xc": {"x1": 1, f"x0@{steps(1, 6)}": 1},
+            },
+            kind={"skew": "standardized", "ac": "standardized"},
+            se=draw(st.booleans()),
+        )
+        kw |= maybe("lag_tolerance", 0, 6)
+        window = draw(st.sampled_from(["none", "rows", "clock"]))
+        if window == "rows":
+            kw["window_rows"] = draw(st.integers(1, 12))
+        elif window == "clock":
+            kw["window_size"] = steps(1, 60)
+    elif model == "spectral":
+        # Task 491: its periods as durations, and the zero-weight rows that
+        # count in no clock.
+        kw |= dict(targets=["y"], half_life=steps(1, 30), periods=[steps(2, 9), steps(10, 40)])
+        kw["spacing"] = steps(1, 1)
+    elif model == "ar":
+        # Task 486: its lags beside the features, a window of the clock with
+        # its edge, and the zero-weight rows that count in no clock. No
+        # embargo: `ar` refuses one.
+        kw |= xy | dict(lags=draw(st.integers(1, 3)), ridge=1e-6)
+        kw |= maybe("window_size", 1, 60)
+        if "window_size" in kw:
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)
@@ -667,8 +753,12 @@ DELAYED_ARGS: dict[str, dict] = {"kalman": {"coef_half_life": "1h"}}
 #: The models a delayed label is fitted with, and what each needs besides:
 #: every regression, since ``embargo`` is a parameter they all share. Built
 #: from `test_model_registry.REGRESSIONS`, so a new regression is swept
-#: without an edit here (a hand-kept list held five of the ten).
-DELAYED_MODELS = {name: MINIMAL[name] | DELAYED_ARGS.get(name, {}) for name in sorted(REGRESSIONS)}
+#: without an edit here (a hand-kept list held five of the ten), less
+#: ``ar``, which refuses ``embargo``: a delay would make its lags older for
+#: the rows it predicts than for the rows it learns.
+DELAYED_MODELS = {
+    name: MINIMAL[name] | DELAYED_ARGS.get(name, {}) for name in sorted(REGRESSIONS - {"ar"})
+}
 
 
 @st.composite
@@ -744,6 +834,7 @@ N_EFF_EXEMPT = {
         "whose variance recursion is per observation and whose estimate weighs every row it has "
         "learned"
     ),
+    "tdigest": "whose merging digest cannot take a row out again",
 }
 
 #: The kinds with a rate for a parameter (``hawkes``' ``kernel_decays``, per
@@ -761,6 +852,8 @@ N_EFF_ARGS: dict[str, dict] = {
     "ew_class": {"label": "lab"},
     "corrchange": {"scalar": True},
     "kalman": {"coef_half_life": float("inf")},
+    # Its periods as durations, as a temporal clock reads them.
+    "spectral": {"periods": ["8s", "3s"]},
 }
 
 #: Every kind -- each emits ``weight_sum`` -- with what it needs besides a

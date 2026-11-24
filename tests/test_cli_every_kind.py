@@ -204,6 +204,18 @@ def full2(**kw: Any) -> dict[str, Any]:
     }
 
 
+#: The checks of a constant, normal residual, which a glm refuses, and the
+#: mean's checks, which an expectile off the mean refuses, with their knobs.
+NOT_GLM = ("emit_specification", "specification_half_life", "ljung_box_lags")
+NOT_GLM += ("emit_tails", "tails_half_life")
+NOT_OFF_MEAN = ("emit_calibration", "calibration_half_life", "emit_breaks", "breaks_half_life")
+
+
+def without(kw: dict[str, Any], drop: tuple[str, ...]) -> dict[str, Any]:
+    """``kw`` less the keys ``drop`` names."""
+    return {k: v for k, v in kw.items() if k not in drop}
+
+
 def no_features(kw: dict[str, Any]) -> dict[str, Any]:
     """``holt`` reads the target alone, so it has no features to watch."""
     drop = ("features", "emit_feature_health", "feature_health_half_life")
@@ -401,7 +413,9 @@ CASES: list[Case] = [
         "glm",
         "glm",
         {
-            **full(**CLOSE, family="binomial", link="logit", ridge=2.0, refit_rows=30),
+            **without(
+                full(**CLOSE, family="binomial", link="logit", ridge=2.0, refit_rows=30), NOT_GLM
+            ),
             "targets": ["hit"],
         },
     ),
@@ -409,17 +423,37 @@ CASES: list[Case] = [
         "glm_tweedie",
         "glm",
         {
-            **full(family="tweedie", link="power", var_power=1.6, refit_rows=40, refit_budget=64.0),
+            **without(
+                full(
+                    family="tweedie", link="power", var_power=1.6, refit_rows=40, refit_budget=64.0
+                ),
+                NOT_GLM,
+            ),
             "targets": ["hit"],
         },
     ),
-    Case("glm2", "glm", {**full2(refit_rows=0, step_cap=0.5), "targets": ["hit"]}),
+    Case(
+        "glm2", "glm", {**without(full2(refit_rows=0, step_cap=0.5), NOT_GLM), "targets": ["hit"]}
+    ),
     # The first rows' refit over a span of the clock (task 538).
     Case(
-        "glm_span", "glm", {**full2(refit_span=40.0, max_state_bytes=200_000), "targets": ["hit"]}
+        "glm_span",
+        "glm",
+        {
+            **without(full2(refit_span=40.0, max_state_bytes=200_000), NOT_GLM),
+            "targets": ["hit"],
+        },
     ),
-    Case("expectile_span", "expectile", full2(expectile=0.7, refit_span=40.0)),
-    Case("expectile", "expectile", full(**CLOSE, expectile=0.8, refit_rows=30, refit_budget=64.0)),
+    Case(
+        "expectile_span",
+        "expectile",
+        without(full2(expectile=0.7, refit_span=40.0), NOT_OFF_MEAN),
+    ),
+    Case(
+        "expectile",
+        "expectile",
+        without(full(**CLOSE, expectile=0.8, refit_rows=30, refit_budget=64.0), NOT_OFF_MEAN),
+    ),
     # A window of clock units and one of rows, refit exactly on every row: a
     # window takes no decay.
     Case(
@@ -449,7 +483,7 @@ CASES: list[Case] = [
             "max_rows_between_coefs": 7,
         },
     ),
-    Case("expectile2", "expectile", full2(expectile=0.2, ridge=0.0)),
+    Case("expectile2", "expectile", without(full2(expectile=0.2, ridge=0.0), NOT_OFF_MEAN)),
     Case(
         "ftrl",
         "ftrl",
@@ -720,6 +754,174 @@ CASES: list[Case] = [
             "max_state_bytes": 1 << 20,
         },
     ),
+    # Each target a return series: decayed, with Lee and Mykland's own window
+    # and confidence, its groups run to a close; the other stream keys; a
+    # window of rows; and a window of clock units, its edge and its cap.
+    Case(
+        "realized",
+        "realized",
+        {**NOCOEF, **CLOSE, "targets": ["y", "x0"], "lm_window": 30, "lm_beta": 0.95},
+    ),
+    Case("realized2", "realized", {**NOCOEF2, "targets": ["y", "x0"]}),
+    Case(
+        "realized_window",
+        "realized",
+        {
+            "targets": ["y"],
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_rows": 40,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    Case(
+        "realized_clock_window",
+        "realized",
+        {
+            "targets": ["y", "x0"],
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_size": 12.0,
+            "closed": "both",
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # Each target a return series, a term of each kind: decayed, its groups
+    # run to a close; the other stream keys; a window of rows; and a window
+    # of clock units, its edge and its cap.
+    Case(
+        "power_variation",
+        "power_variation",
+        {
+            **NOCOEF,
+            **CLOSE,
+            "targets": ["y", "x0"],
+            "terms": {
+                "rv": {"powers": [2]},
+                "bv": {"powers": [1, 1], "normalize": True},
+                "lrv": {"kernel": "tukey_hanning", "bandwidth": 4, "center": True},
+                "rk": {"kernel": "rectangular", "bandwidth": 2, "flat_top": True, "scale": 2},
+            },
+        },
+    ),
+    Case(
+        "power_variation2",
+        "power_variation",
+        {**NOCOEF2, "targets": ["y", "x0"], "terms": {"rv": {"powers": [2]}}},
+    ),
+    Case(
+        "power_variation_window",
+        "power_variation",
+        {
+            "targets": ["y"],
+            "terms": {
+                "rv": {"powers": [2]},
+                "bv": {"powers": [1, 1], "normalize": True},
+                "lrv": {"kernel": "tukey_hanning", "bandwidth": 4, "center": True},
+                "rk": {"kernel": "rectangular", "bandwidth": 2, "flat_top": True, "scale": 2},
+            },
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_rows": 40,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    Case(
+        "power_variation_clock_window",
+        "power_variation",
+        {
+            "targets": ["y", "x0"],
+            "terms": {
+                "rv": {"powers": [2]},
+                "bv": {"powers": [1, 1], "normalize": True},
+                "lrv": {"kernel": "tukey_hanning", "bandwidth": 4, "center": True},
+                "rk": {"kernel": "rectangular", "bandwidth": 2, "flat_top": True, "scale": 2},
+            },
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": float("inf"),
+            "window_size": 12.0,
+            "closed": "both",
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # Two series, each on its own lags, with the features beside them and
+    # every diagnostic, its groups run to a close; and a pure AR on the other
+    # stream keys, drift resetting the fit.
+    Case(
+        "ar",
+        "ar",
+        full(**CLOSE, lags=[1, 3], ridge=0.01, max_state_bytes=1 << 20, emit_se_coef=True),
+    ),
+    # Under a hard window, its cadence, its edge and its budget.
+    Case(
+        "ar_window",
+        "ar",
+        full(
+            lags=2,
+            window_size=40.0,
+            closed="both",
+            snapshot_every=2.0,
+            max_rows_between_snapshots=3,
+            window_budget={"thin": 64.0},
+        ),
+    ),
+    # Without the embargo, which `ar` refuses.
+    Case(
+        "ar_pure",
+        "ar",
+        {
+            **{k: v for k, v in no_features(full2()).items() if k != "embargo"},
+            "targets": ["y"],
+            "lags": 2,
+            "select": "bic",
+        },
+    ),
+    # Each target's power at two periods, its groups run to a close; and the
+    # other stream keys with the spectrum's scaling.
+    Case(
+        "spectral",
+        "spectral",
+        {
+            # No coefficients, so no coefficient cadence.
+            **{k: v for k, v in STREAM.items() if k != "max_rows_between_coefs"},
+            **CLOSE,
+            "targets": ["y", "x0"],
+            "periods": [8.0, 3.0],
+            "spacing": 1.0,
+            "detrend": False,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    Case(
+        "spectral_spectrum",
+        "spectral",
+        {
+            **{k: v for k, v in STREAM2.items() if k != "coef_every"},
+            "targets": ["y"],
+            "periods": [6.0],
+            "scaling": "spectrum",
+        },
+    ),
+    # Lomb-Scargle under a hard window, its cadence, its edge and its budget.
+    Case(
+        "spectral_window",
+        "spectral",
+        {
+            **{k: v for k, v in STREAM.items() if k != "max_rows_between_coefs"},
+            "targets": ["y"],
+            "periods": [8.0, 1.5],
+            "scaling": "lomb_scargle",
+            "window_size": 40.0,
+            "closed": "both",
+            "snapshot_every": 2.0,
+            "max_rows_between_snapshots": 3,
+            "window_budget": {"thin": 64.0},
+        },
+    ),
     # Each target a return series; no half-life (the recursion is per
     # observation), so no gate on settling toward one either.
     Case(
@@ -733,6 +935,103 @@ CASES: list[Case] = [
             "start_rows": 50,
             "horizon": 3,
             "max_state_bytes": 1 << 20,
+        },
+    ),
+    # Three return series through GARCH margins, the asymmetric model
+    # estimated after both starts.
+    Case(
+        "dcc",
+        "dcc",
+        {
+            **STREAM,
+            "targets": ["y", "x0", "x1"],
+            "asymmetric": True,
+            "vol": "gjr",
+            "dist": "t",
+            "margin_start_rows": 50,
+            "start_rows": 50,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # The other stream keys; FIGARCH margins of 50 lags, their start a span
+    # of the clock.
+    Case(
+        "dcc_figarch",
+        "dcc",
+        {
+            **STREAM2,
+            "targets": ["y", "x0"],
+            "vol": "figarch",
+            "truncation": 50,
+            "margin_start_span": 40.0,
+            "start_rows": 50,
+        },
+    ),
+    # Variance-targeted margins.
+    Case(
+        "dcc_targeted",
+        "dcc",
+        {
+            "targets": ["y", "x0"],
+            "variance_targeting": True,
+            "margin_start_rows": 50,
+            "start_rows": 50,
+            "half_life": float("inf"),
+            "clock": "t",
+            "gap_cap": 6.0,
+            "max_rows_between_coefs": 7,
+        },
+    ),
+    # Given parameters on standardized residuals, the start a span of the
+    # clock, its groups run to a close.
+    Case(
+        "dcc_given_span",
+        "dcc",
+        {
+            **CLOSE,
+            "targets": ["y", "x0"],
+            "margins": "none",
+            "asymmetric": True,
+            "a": 0.03,
+            "b": 0.9,
+            "g": 0.04,
+            "start_span": 60.0,
+            "half_life": float("inf"),
+            "clock": "t",
+            "gap_cap": 6.0,
+            # A cadence: without one the `coef` rows are each chunk's last,
+            # which the case's chunk size (97 rows, by its place in the
+            # list) moves off the blocks' ends.
+            "max_rows_between_coefs": 50,
+        },
+    ),
+    # Streaming components, each method and every key.
+    Case(
+        "pca",
+        "pca",
+        {**NOCOEF, "features": F3, "n_components": 2, "max_state_bytes": 1 << 16},
+    ),
+    Case(
+        "pca_oja",
+        "pca",
+        {
+            **NOCOEF2,
+            "features": ["x1", "x2"],
+            "n_components": 1,
+            "method": "oja",
+            "learning_rate": 3.0,
+        },
+    ),
+    Case(
+        "pca_ccipca",
+        "pca",
+        {
+            **CLOSE,
+            "features": F3,
+            "method": "ccipca",
+            "clock": "t",
+            "gap_cap": 6.0,
+            "half_life": 25.0,
         },
     ),
     # The other stream keys, and variance targeting.
@@ -761,6 +1060,100 @@ CASES: list[Case] = [
             "gap_cap": 6.0,
             "max_rows_between_coefs": 7,
         },
+    ),
+    # A digest a target: no decay and no coefficients, every key it takes.
+    Case(
+        "tdigest",
+        "tdigest",
+        {
+            **NODECAY,
+            "targets": ["y", "x0"],
+            "quantiles": [0.05, 0.25, 0.95],
+            "compression": 200.0,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # The other stream keys.
+    Case(
+        "tdigest2",
+        "tdigest",
+        {**NODECAY2, "targets": ["y"], "quantiles": [0.01, 0.99]},
+    ),
+    # Its groups run to a close.
+    Case(
+        "tdigest_close",
+        "tdigest",
+        {**CLOSE, "targets": ["y"], "quantiles": [0.25, 0.75]},
+    ),
+    # A sketch a target: no decay and no coefficients, every key it takes.
+    Case(
+        "ddsketch",
+        "ddsketch",
+        {
+            **NODECAY,
+            "targets": ["y", "x0"],
+            "quantiles": [0.05, 0.25, 0.95],
+            "alpha": 0.01,
+            "window_rows": 60,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # A clock window, the other stream keys.
+    Case(
+        "ddsketch2",
+        "ddsketch",
+        {
+            **NODECAY2,
+            "targets": ["y"],
+            "quantiles": [0.1, 0.9],
+            "window_size": 30.0,
+            "closed": "both",
+        },
+    ),
+    # Its groups run to a close.
+    Case(
+        "ddsketch_close",
+        "ddsketch",
+        {**CLOSE, "targets": ["y"], "quantiles": [0.25, 0.75]},
+    ),
+    # Moments on the clock: a lag as-of within a tolerance, a window of the
+    # clock, each term's kind its own, the standard errors and a cap.
+    Case(
+        "ewm_moments",
+        "ewm_moments",
+        {
+            **NOCOEF,
+            "features": ["x0", "x1"],
+            "terms": {
+                "skew": {"x0": 3},
+                "k4": {"x1": 4},
+                "co": {"x0": 1, "x1": 2},
+                "ac": {"x0": 1, "x0@2": 1},
+            },
+            "kind": {"skew": "standardized", "k4": "cumulant", "ac": "standardized"},
+            "bias": False,
+            "se": True,
+            "lag_tolerance": 1.0,
+            "window_size": 40.0,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # The other stream keys, one kind for every term, and a window of rows.
+    Case(
+        "ewm_moments_rows",
+        "ewm_moments",
+        {
+            **NOCOEF2,
+            "terms": {"m3": {"x0": 3}, "xy": {"x1": 1, "x2@1.5": 1}},
+            "kind": "raw",
+            "window_rows": 50,
+        },
+    ),
+    # Its groups run to a close, with no clock: a lag of rows.
+    Case(
+        "ewm_moments_close",
+        "ewm_moments",
+        {**CLOSE, "terms": {"ac": {"x0": 1, "x0@1": 1}}, "half_life": 50.0},
     ),
     Case(
         "audit",
@@ -972,6 +1365,19 @@ CASES: list[Case] = [
             "window_rows": 20,
             "n_perm": 30,
             "permute_every": 8.0,
+        },
+    ),
+    # Task 553: each kind's span on the clock, the rows they hold capped.
+    Case(
+        "corrchange_seq_span",
+        "corrchange",
+        {
+            **NODECAY,
+            "features": F3,
+            "kind": "sequential",
+            "window_size": 29.0,
+            "monitor_span": 39.0,
+            "max_state_bytes": 1_000_000,
         },
     ),
     Case(

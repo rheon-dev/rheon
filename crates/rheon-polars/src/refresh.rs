@@ -60,11 +60,13 @@ use serde::{Deserialize, Serialize};
 use crate::bank::GroupKey;
 use crate::stream::usable;
 
+#[cfg(test)]
+mod age_tests;
 mod held;
 #[cfg(test)]
 mod held_tests;
-pub(crate) use held::Bin;
 use held::Held;
+pub(crate) use held::{Bin, Cell};
 
 /// One series' state within a group: its last value, whether it has ticked
 /// since the last grid point, and how many times.
@@ -81,19 +83,29 @@ struct GridState {
     series: Vec<SeriesState>,
     /// Series still to tick before the next grid point; `m` after a point.
     pending: usize,
+    /// Under `age` alone (PLAN 556), one a series: the clock of the tick
+    /// its last value came from, for each series seen since the last point.
+    /// Empty without it, so a run without ages keeps its per-series state
+    /// as it was and writes the bytes it did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ats: Vec<Option<Instant>>,
 }
 
 impl GridState {
-    fn new(m: usize) -> Self {
+    fn new(m: usize, age: bool) -> Self {
         Self {
             series: vec![SeriesState::default(); m],
             pending: m,
+            ats: if age { vec![None; m] } else { Vec::new() },
         }
     }
 
-    /// One tick. Returns true when it completed the set, i.e. this row is a
-    /// grid point.
-    fn tick(&mut self, si: usize, value: f64) -> bool {
+    /// One tick, and under `age` its clock. Returns true when it completed
+    /// the set, i.e. this row is a grid point.
+    fn tick(&mut self, si: usize, value: f64, at: Option<Instant>) -> bool {
+        if let Some(at) = at {
+            self.ats[si] = Some(at);
+        }
         let s = &mut self.series[si];
         s.last = value;
         // Saturating: a state file can carry a count at the top of its
@@ -113,9 +125,28 @@ impl GridState {
     /// a `pending` below the unseen count wrapped below zero, and one above
     /// it never reached zero, so the grid never completed again (task 160,
     /// PA5).
-    fn fits(&self, width: usize) -> bool {
+    ///
+    /// Under `age` the grid holds a clock for every series seen since the
+    /// last point and for no other (a point clears them); without it, none.
+    fn fits(&self, width: usize, age: bool) -> bool {
         let unseen = self.series.iter().filter(|s| !s.seen).count();
-        self.series.len() == width && self.pending >= 1 && self.pending == unseen
+        let stamped = if age {
+            self.ats.len() == width
+                && self
+                    .ats
+                    .iter()
+                    .zip(&self.series)
+                    .all(|(a, s)| a.is_some() == s.seen)
+        } else {
+            self.ats.is_empty()
+        };
+        self.series.len() == width && self.pending >= 1 && self.pending == unseen && stamped
+    }
+
+    /// The clock of each series' last tick, at a point under `age`; empty
+    /// without it.
+    fn ats(&self) -> Vec<Instant> {
+        self.ats.iter().flatten().copied().collect()
     }
 
     /// Start the next interval: every series unseen, every count back to
@@ -126,6 +157,7 @@ impl GridState {
             s.seen = false;
             s.ticks = 0;
         }
+        self.ats.fill(None);
         self.pending = m;
         ticks
     }
@@ -160,6 +192,10 @@ pub struct RefreshTime {
     /// The points of one row past a limited feed's limit, which the next
     /// feed returns first.
     held: Option<Held>,
+    /// Whether each point carries the age of each series' value: the
+    /// completing tick's clock less the clock of the tick the value came
+    /// from (PLAN 556).
+    age: bool,
 }
 
 /// A clock value as the order check compares it: a float as itself, an
@@ -252,6 +288,12 @@ struct RefreshFile {
     /// The points a limited feed held back: absent when there are none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     held: Option<Held>,
+    /// Whether the run gave each value's age (PLAN 556): absent when it did
+    /// not, so a state without ages is the bytes it was, and a load must
+    /// match it, since a state without the clocks of its series' last ticks
+    /// cannot give their ages.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    age: bool,
     /// The xxh3-64 of every byte before it (`checksum.rs`), last; read from
     /// the file's last bytes, never by serde.
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
@@ -312,9 +354,10 @@ const REFRESH_VERSION: u32 = 3;
 
 /// One completed grid point, as the scan collects it: the group it belongs
 /// to, which pair (0 for the joint grid), the row of the completing tick,
-/// the ticks each series contributed since the previous point, and each
-/// series' last value.
-type Point = (GroupKey, usize, usize, Vec<u64>, Vec<f64>);
+/// the ticks each series contributed since the previous point, each
+/// series' last value, and, under `age`, the clock of the tick each value
+/// came from (empty without it).
+type Point = (GroupKey, usize, usize, Vec<u64>, Vec<f64>, Vec<Instant>);
 
 /// A group column as the text its keys are, as the bank keys a group
 /// ([`crate::arrow::key_text`]: a zoned Datetime by its instant, task 160,
@@ -373,7 +416,17 @@ impl RefreshTime {
             kind: None,
             rows_fed: 0,
             held: None,
+            age: false,
         })
+    }
+
+    /// The sampler, giving each point the age of each series' value: the
+    /// completing tick's clock less the clock of the tick the value came
+    /// from, a column `<s>_age` beside `<s>_value` (PLAN 556).
+    #[must_use]
+    pub fn with_age(mut self, age: bool) -> Self {
+        self.age = age;
+        self
     }
 
     /// The sampler's state as bytes: every group's grid, part-way through
@@ -404,6 +457,7 @@ impl RefreshTime {
             states,
             last_time,
             held: self.held.clone(),
+            age: self.age,
             checksum: Some(crate::checksum::Trailer::Patched),
         };
         let mut out = rmp_serde::to_vec_named(&file).map_err(|e| e.to_string())?;
@@ -432,6 +486,24 @@ impl RefreshTime {
         names: Vec<String>,
         pairs: bool,
         grouped: bool,
+    ) -> Result<Self, String> {
+        Self::load_bytes_with_age(bytes, names, pairs, grouped, false)
+    }
+
+    /// [`Self::load_bytes`] for a run that gives each value's age (PLAN
+    /// 556): the state must have been saved by one that did too, since a
+    /// state without the clock of each series' last tick cannot give it.
+    ///
+    /// # Errors
+    ///
+    /// What [`Self::load_bytes`] refuses, and a state saved with ages
+    /// loaded without them, or the reverse.
+    pub fn load_bytes_with_age(
+        bytes: &[u8],
+        names: Vec<String>,
+        pairs: bool,
+        grouped: bool,
+        age: bool,
     ) -> Result<Self, String> {
         const WHO: &str = "rp.stream.refresh_time";
         const START_OVER: &str = "Load an undamaged copy of the state file, or leave out \
@@ -509,6 +581,7 @@ impl RefreshTime {
                     states: old.states,
                     last_time: old.last_time,
                     held: old.held,
+                    age: false,
                     checksum: None,
                 }
             }
@@ -537,7 +610,24 @@ impl RefreshTime {
                 }
             ));
         }
-        let mut rt = Self::new(names, pairs)?;
+        if file.age && !age {
+            return Err(
+                "rp.stream.refresh_time: the state was saved with age = True, but this call \
+                 gives age = False. Give age=True, as the state was saved, or leave out \
+                 load_state to start over."
+                    .to_string(),
+            );
+        }
+        if !file.age && age {
+            return Err(
+                "rp.stream.refresh_time: the state was saved with age = False, but this call \
+                 gives age = True, and the state does not hold the clock of each series' last \
+                 tick, which an age is read from. Give age=False, as the state was saved, or \
+                 leave out load_state to start over."
+                    .to_string(),
+            );
+        }
+        let mut rt = Self::new(names, pairs)?.with_age(age);
         // One joint grid of every series per group, or one two-series grid
         // per pair, each in a state the scan could have left it in.
         let (n_grids, width) = if rt.pairs.is_empty() {
@@ -548,7 +638,7 @@ impl RefreshTime {
         if let Some((key, _)) = file
             .states
             .iter()
-            .find(|(_, grids)| grids.len() != n_grids || !grids.iter().all(|g| g.fits(width)))
+            .find(|(_, grids)| grids.len() != n_grids || !grids.iter().all(|g| g.fits(width, age)))
         {
             let holder = match key.as_str() {
                 _ if !grouped => "the state".to_string(),
@@ -568,7 +658,15 @@ impl RefreshTime {
         if let Some(h) = &file.held {
             // At least one point, each of a grid this sampler runs, with a
             // count and a value per series of that grid.
-            if h.points.is_empty()
+            // Under `age`, the clock of each value of each point too.
+            let stamped = match &h.ats {
+                None => !age,
+                Some(ats) => {
+                    age && ats.len() == h.points.len() && ats.iter().all(|a| a.len() == width)
+                }
+            };
+            if !stamped
+                || h.points.is_empty()
                 || h.points
                     .iter()
                     .any(|(pi, t, l)| *pi >= n_grids || t.len() != width || l.len() != width)
@@ -597,10 +695,20 @@ impl RefreshTime {
         // The completing tick's clock, in the clock column's own dtype
         // (task 160, PA6).
         let time = input.get(cols.clock).cloned().unwrap_or(DataType::Float64);
+        let age = if self.age {
+            crate::age::dtype(&time).ok()
+        } else {
+            None
+        };
         if self.pairs.is_empty() {
             out.insert("time_refresh".into(), time);
             for n in &self.names {
                 out.insert(format!("{n}_value").into(), DataType::Float64);
+            }
+            if let Some(a) = &age {
+                for n in &self.names {
+                    out.insert(format!("{n}_age").into(), a.clone());
+                }
             }
             for n in &self.names {
                 out.insert(format!("n_obs_{n}").into(), DataType::Int64);
@@ -611,6 +719,10 @@ impl RefreshTime {
             out.insert("time_refresh".into(), time);
             out.insert("a_value".into(), DataType::Float64);
             out.insert("b_value".into(), DataType::Float64);
+            if let Some(a) = &age {
+                out.insert("a_age".into(), a.clone());
+                out.insert("b_age".into(), a.clone());
+            }
             out.insert("n_obs_a".into(), DataType::Int64);
             out.insert("n_obs_b".into(), DataType::Int64);
             out.insert("retained_fraction".into(), DataType::Float64);
@@ -662,12 +774,19 @@ impl RefreshTime {
         let row = held.frame(df, &names)?;
         let points: Vec<Point> = held.points[..take]
             .iter()
-            .map(|(pi, ticks, last)| (GroupKey(None), *pi, 0, ticks.clone(), last.clone()))
+            .enumerate()
+            .map(|(i, (pi, ticks, last))| {
+                let ats = held.ats.as_ref().map_or_else(Vec::new, |a| a[i].clone());
+                (GroupKey(None), *pi, 0, ticks.clone(), last.clone(), ats)
+            })
             .collect();
         let mut out = self.frame(&row, cols, points)?;
         let held = self.held.as_mut().expect("matched above");
         if take < held.points.len() {
             held.points.drain(..take);
+            if let Some(ats) = held.ats.as_mut() {
+                ats.drain(..take);
+            }
             return Ok(out);
         }
         self.held = None;
@@ -884,6 +1003,8 @@ impl RefreshTime {
             let Some(v) = value.get(row).filter(|v| usable(*v)) else {
                 continue;
             };
+            // The tick's clock, which its value's age is read from.
+            let at = self.age.then_some(t);
 
             let n_states = if self.pairs.is_empty() {
                 1
@@ -895,16 +1016,17 @@ impl RefreshTime {
             // row (review 2026-09-18, minor).
             if !self.states.contains_key(&*key) {
                 let init: Vec<GridState> = (0..n_states)
-                    .map(|_| GridState::new(if self.pairs.is_empty() { m } else { 2 }))
+                    .map(|_| GridState::new(if self.pairs.is_empty() { m } else { 2 }, self.age))
                     .collect();
                 self.states.insert(key.clone(), init);
             }
             let states = self.states.get_mut(&*key).expect("inserted above");
             if self.pairs.is_empty() {
-                if states[0].tick(si, v) {
+                if states[0].tick(si, v, at) {
                     let last: Vec<f64> = states[0].series.iter().map(|s| s.last).collect();
+                    let ats = states[0].ats();
                     let ticks = states[0].close(m);
-                    points.push((key.clone(), 0, row, ticks, last));
+                    points.push((key.clone(), 0, row, ticks, last, ats));
                 }
             } else {
                 for (pi, &(a, b)) in self.pairs.iter().enumerate() {
@@ -915,10 +1037,11 @@ impl RefreshTime {
                     } else {
                         continue;
                     };
-                    if states[pi].tick(slot, v) {
+                    if states[pi].tick(slot, v, at) {
                         let last: Vec<f64> = states[pi].series.iter().map(|s| s.last).collect();
+                        let ats = states[pi].ats();
                         let ticks = states[pi].close(2);
-                        points.push((key.clone(), pi, row, ticks, last));
+                        points.push((key.clone(), pi, row, ticks, last, ats));
                     }
                 }
             }
@@ -930,13 +1053,57 @@ impl RefreshTime {
             let rest = points.split_off(l);
             let at = rest[0].2;
             debug_assert!(rest.iter().all(|p| p.2 == at));
+            let mut ats = Vec::with_capacity(rest.len());
             let rest = rest
                 .into_iter()
-                .map(|(_, pi, _, ticks, last)| (pi, ticks, last))
+                .map(|(_, pi, _, ticks, last, a)| {
+                    ats.push(a);
+                    (pi, ticks, last)
+                })
                 .collect();
-            self.held = Some(Held::new(df, &Self::carried(cols), at, rest)?);
+            let mut held = Held::new(df, &Self::carried(cols), at, rest)?;
+            held.ats = self.age.then_some(ats);
+            self.held = Some(held);
         }
         self.frame(df, cols, points)
+    }
+
+    /// Clocks of `dtype` from instants: a temporal one's nanoseconds in the
+    /// column's own unit (floored, for a state resumed on a coarser unit),
+    /// a number as itself.
+    fn clock_of(dtype: &DataType, ats: impl Iterator<Item = Instant>) -> PolarsResult<Series> {
+        const DAY: i64 = 86_400 * 1_000_000_000;
+        let per = match dtype {
+            DataType::Datetime(u, _) | DataType::Duration(u) => match u {
+                TimeUnit::Nanoseconds => Some(1),
+                TimeUnit::Microseconds => Some(1_000),
+                TimeUnit::Milliseconds => Some(1_000_000),
+            },
+            DataType::Date => Some(DAY),
+            _ => None,
+        };
+        if per.is_none() && !dtype.is_integer() {
+            // A float clock (or a Boolean, read as numbers): an integer
+            // state's instant resumed on it is the same number.
+            let v = ats
+                .map(|a| match a {
+                    Instant::Number(x) => Some(x),
+                    Instant::Int(i) => Some(i as f64),
+                    Instant::Nanos(_) => None,
+                })
+                .collect();
+            return crate::age::clock_of_floats(dtype, v);
+        }
+        let v = ats
+            .map(|a| match (a, per) {
+                (Instant::Nanos(ns), Some(p)) => Some(ns.div_euclid(p)),
+                (Instant::Int(i), None) => Some(i),
+                // A float clock's state resumed on an integer clock.
+                (Instant::Number(x), None) => Some(x as i64),
+                _ => None,
+            })
+            .collect();
+        crate::age::clock_of_physical(dtype, v)
     }
 
     /// The grid points as a frame, in the order they were completed.
@@ -980,11 +1147,11 @@ impl RefreshTime {
         // The completing tick's clock as the input has it: a nanosecond clock
         // read as a Float64 lost its last digits, and a Datetime came out as
         // a bare number (task 160, PA6).
-        out.push(
-            df.column(cols.clock)?
-                .take_slice(&idx)?
-                .with_name("time_refresh".into()),
-        );
+        let time = df
+            .column(cols.clock)?
+            .take_slice(&idx)?
+            .with_name("time_refresh".into());
+        out.push(time.clone());
         let value_names: Vec<String> = if self.pairs.is_empty() {
             self.names.iter().map(|n| format!("{n}_value")).collect()
         } else {
@@ -995,9 +1162,19 @@ impl RefreshTime {
                 name.as_str().into(),
                 points
                     .iter()
-                    .map(|(_, _, _, _, last)| last[si])
+                    .map(|(_, _, _, _, last, _)| last[si])
                     .collect::<Vec<_>>(),
             ));
+        }
+        if self.age {
+            // Each value's age: the completing tick's clock less the clock
+            // of the tick the value came from, by Polars' subtraction.
+            let now = time.as_materialized_series();
+            for (si, name) in value_names.iter().enumerate() {
+                let then = Self::clock_of(now.dtype(), points.iter().map(|p| p.5[si]))?;
+                let name = format!("{}_age", name.strip_suffix("_value").unwrap_or(name));
+                out.push(crate::age::of(&name, now, &then)?.into_column());
+            }
         }
         let tick_names: Vec<String> = if self.pairs.is_empty() {
             self.names.iter().map(|n| format!("n_obs_{n}")).collect()
@@ -1009,7 +1186,7 @@ impl RefreshTime {
                 name.as_str().into(),
                 points
                     .iter()
-                    .map(|(_, _, _, ticks, _)| ticks[si] as i64)
+                    .map(|(_, _, _, ticks, ..)| ticks[si] as i64)
                     .collect::<Vec<_>>(),
             ));
         }
@@ -1019,7 +1196,7 @@ impl RefreshTime {
             "retained_fraction".into(),
             points
                 .iter()
-                .map(|(_, _, _, ticks, _)| {
+                .map(|(_, _, _, ticks, ..)| {
                     let total: u64 = ticks.iter().fold(0, |a, &t| a.saturating_add(t));
                     if total == 0 {
                         f64::NAN

@@ -213,7 +213,10 @@ const REGENERATE: &str = "PRINT_STATE_FIXTURES=1 cargo test -p rheon-polars --te
 /// `checkpoint`, a pipeline checkpoint of a `refresh_time` state, a window
 /// run's and that bank's, and, from PLAN 541, a merge's too. A merge's
 /// state is a kind of its own, version 1, new at 72 with `merge` and
-/// `merge_by`. The 71 set was written by the build that counts a
+/// `merge_by`; and, from PLAN 556, `merge_carry`, a merge carrying values
+/// forward, and `refresh_time_age` and `refresh_time_age_held`, grids that
+/// give each value's age, each new at 72 in a version that did not move,
+/// since a state without either writes the bytes it did. The 71 set was written by the build that counts a
 /// zero-weight row in no clock (PLAN 539), so [`ZERO_WEIGHT_CLOCK`] is for
 /// the sets before it.
 ///
@@ -502,6 +505,38 @@ fn windows_quantile_config() -> WindowsConfig {
     .unwrap()
 }
 
+/// The moments operator (task 554): a skew under a window, whose model keeps
+/// its ring of rows, and an autocorrelation at a lag of the clock, whose
+/// model keeps its lag buffer, each a group's model in the state.
+fn windows_moments_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "skew", "tree": ["ewm_moments", ["legs", ["col", "mid"]], {"half_life": 5.0, "window_size": 10.0, "powers": [3], "lags": [0.0], "kind": "standardized", "bias": true}]},
+               {"name": "ac", "tree": ["ewm_moments", ["legs", ["col", "mid"], ["col", "mid"]], {"half_life": 5.0, "powers": [1, 1], "lags": [0.0, 2.0], "kind": "standardized", "bias": true}]}
+             ],
+             "clock": "t", "gap_cap": 50.0}"#,
+    )
+    .unwrap()
+}
+
+/// The extrema (task 561, windows state 13): a windowed maximum and a
+/// minimum under `"left"`, a maximum looking ahead, so rows are held across
+/// the save, a running maximum since an event, and a windowed minimum since
+/// one with its own `max_state_bytes`.
+fn windows_extrema_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "hi", "tree": ["rolling_max", ["col", "mid"], {"window_size": 10.0}]},
+               {"name": "lo", "tree": ["rolling_min", ["col", "mid"], {"window_size": 10.0, "closed": "left"}]},
+               {"name": "ahead", "tree": ["rrolling_max", ["col", "mid"], {"window_size": 10.0}]},
+               {"name": "peak", "tree": ["-", ["col", "mid"], ["rolling_max", ["col", "mid"], {"since": [">", ["col", "mid"], ["lit", 100.3]]}]]},
+               {"name": "low", "tree": ["rolling_min", ["col", "mid"], {"window_size": 10.0, "since": [">", ["col", "mid"], ["lit", 100.3]], "max_state_bytes": 1000000}]}
+             ],
+             "clock": "t", "gap_cap": 50.0}"#,
+    )
+    .unwrap()
+}
+
 /// The same two means on the `Int64` clock, under a fractional `gap_cap`,
 /// and an `increment` of an integer input (task 200; review round 5, B1):
 /// the rows' `off` in the integer form, and the increment's previous value
@@ -514,6 +549,58 @@ fn windows_int_config() -> WindowsConfig {
                {"name": "step", "tree": ["increment", ["col", "cum"]]}
              ],
              "clock": "ti", "gap_cap": 200.5}"#,
+    )
+    .unwrap()
+}
+
+/// Two periodic profiles (PLAN 560) on a zoned clock: a weighted mean read
+/// with the stamp's rows, so rows are held across the save, and a biased
+/// variance read before them, from an offset; each group's buckets.
+fn windows_profile_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "weight": ["col", "w"]}]},
+               {"name": "spread", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "stat": "var", "bias": true, "closed": "left", "offset": "3s"}]},
+               {"name": "median", "tree": ["ewm_profile", ["col", "mid"], {"period": "4s", "buckets": 2, "half_life": "20s", "stat": "quantile", "quantile": 0.5, "window_size": "5s", "weight": ["col", "w"]}]},
+               {"name": "high", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "stat": "quantile", "quantile": 0.9}]}
+             ],
+             "clock": "ts", "gap_cap": "50s", "group": "g"}"#,
+    )
+    .unwrap()
+}
+
+/// The clock in Amsterdam's zone, the same instants.
+fn window_profile_input(df: &DataFrame) -> DataFrame {
+    let zone = TimeZone::opt_try_new(Some("Europe/Amsterdam")).unwrap();
+    let ts = df
+        .column("ts")
+        .unwrap()
+        .to_physical_repr()
+        .as_materialized_series()
+        .i64()
+        .unwrap()
+        .clone()
+        .into_datetime(TimeUnit::Nanoseconds, zone.clone())
+        .into_column();
+    assert_eq!(
+        ts.dtype(),
+        &DataType::Datetime(TimeUnit::Nanoseconds, zone),
+        "a zoned clock"
+    );
+    let mut out = df.select(["ts", "g", "mid", "w"]).unwrap();
+    out.with_column(ts).unwrap();
+    out
+}
+
+/// The same profiles' forms on a number clock: a period in clock units.
+fn windows_profile_units_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "weight": ["col", "w"], "stat": "std"}]},
+               {"name": "recent", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "window_size": 20.0, "closed": "both", "min_samples": 2}]},
+               {"name": "shape", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "harmonics": 1, "half_life": 12.0, "window_size": 4.0, "stat": "var", "weight": ["col", "w"]}]}
+             ],
+             "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
     )
     .unwrap()
 }
@@ -891,6 +978,31 @@ fn drift_kinds_first() -> (Vec<u8>, DataFrame) {
 
 fn drift_kinds_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&drift_kinds_specs(), bytes, input)
+}
+
+/// The specs of `bank_drift_ranges` (review 2026-11-23, DRIFT-1): ADWIN's
+/// two forms of range other than river's 1, a number given and the
+/// window's, whose state writes the range and each bucket's extent.
+fn drift_ranges_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "fixed", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "half_life": 100.0, "emit_drift": true, "drift_kind": "adwin", "drift_action": "reset", "drift_options": {"clock": 2, "max_buckets": 2, "max_width": 400, "range": 0.5}}"#,
+        r#"{"name": "window", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "half_life": 100.0, "emit_drift": true, "drift_kind": "adwin", "drift_options": {"clock": 2, "max_buckets": 2, "max_width": 400, "range": "window", "restart": false}}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+/// Saved at row 220, after the break; the next rows continue.
+fn drift_ranges_first() -> (Vec<u8>, DataFrame) {
+    let df = reset_frame();
+    let mut bank = Bank::new(drift_ranges_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, 220)).unwrap();
+    (bank.save_bytes().unwrap(), df.slice(220, RESET_N - 220))
+}
+
+fn drift_ranges_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&drift_ranges_specs(), bytes, input)
 }
 
 /// The specs of `bank_refit_span` (PLAN 538): `glm` and `expectile`, each
@@ -1410,12 +1522,45 @@ fn windows_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_config(), bytes, input)
 }
 
+fn windows_profile_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_profile_config(), window_profile_input(&frame()))
+}
+
+fn windows_profile_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_profile_config(), bytes, input)
+}
+
+fn windows_profile_units_first() -> (Vec<u8>, DataFrame) {
+    let df = frame().select(["t", "g", "mid", "w"]).unwrap();
+    windows_first_of(windows_profile_units_config(), df)
+}
+
+fn windows_profile_units_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_profile_units_config(), bytes, input)
+}
+
 fn windows_quantile_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_quantile_config(), window_input(&frame()))
 }
 
 fn windows_quantile_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_quantile_config(), bytes, input)
+}
+
+fn windows_moments_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_moments_config(), window_input(&frame()))
+}
+
+fn windows_moments_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_moments_config(), bytes, input)
+}
+
+fn windows_extrema_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_extrema_config(), window_input(&frame()))
+}
+
+fn windows_extrema_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_extrema_config(), bytes, input)
 }
 
 fn windows_int_first() -> (Vec<u8>, DataFrame) {
@@ -1693,6 +1838,7 @@ fn merge_cfg(by: bool) -> MergeConfig {
         by: by.then(|| "sym".into()),
         restart: by.then_some(600e9),
         restart_text: by.then(|| "10m".into()),
+        carry: Vec::new(),
     }
 }
 
@@ -1855,6 +2001,130 @@ fn merge_by_run(bytes: &[u8], input: &DataFrame) -> Ran {
     merge_run_of(true, bytes, input)
 }
 
+/// The `merge_by` streams with a column of text, null now and then, for
+/// `carry` (PLAN 556) to fill forward with the bids and asks.
+fn merge_carry_streams() -> Vec<(&'static str, DataFrame)> {
+    let mut streams = merge_by_streams();
+    streams[0]
+        .1
+        .with_column(Column::new(
+            "note".into(),
+            [
+                Some("open"),
+                None,
+                Some("odd"),
+                None,
+                None,
+                Some("late"),
+                None,
+            ],
+        ))
+        .unwrap();
+    streams
+}
+
+const MERGE_CARRY: [&str; 3] = ["bid", "ask", "note"];
+
+fn merge_carry_of(state: Option<&[u8]>) -> Result<Merge, String> {
+    let streams = merge_carry_streams();
+    let names = streams.iter().map(|(n, _)| (*n).to_owned()).collect();
+    let schemas = streams
+        .iter()
+        .map(|(_, d)| d.schema().as_ref().clone())
+        .collect();
+    let mut cfg = merge_cfg(true);
+    cfg.carry = MERGE_CARRY.iter().map(|c| (*c).to_owned()).collect();
+    match state {
+        None => Merge::new(names, schemas, cfg),
+        Some(b) => Merge::load_bytes(b, names, schemas, cfg),
+    }
+    .map_err(|e| e.to_string())
+}
+
+/// `merge_carry`: `merge_by`'s streams and cut, carrying the bid, the ask
+/// and the note (PLAN 556): every group carries a value of the second
+/// session, the null one included, and the note none in some.
+fn merge_carry_first() -> (Vec<u8>, DataFrame) {
+    let streams = merge_carry_streams();
+    let parts: Vec<DataFrame> = streams.iter().map(|(_, d)| d.clone()).collect();
+    let mut m = merge_carry_of(None).unwrap();
+    let head = merge_drive(&mut m, &parts, Some(9), false).unwrap();
+    let src = head.column("source").unwrap().str().unwrap();
+    let rest: Vec<DataFrame> = streams
+        .iter()
+        .map(|(n, d)| {
+            let took = src.iter().filter(|s| *s == Some(*n)).count();
+            d.slice(took as i64, d.height() - took)
+        })
+        .collect();
+    (m.save_bytes().unwrap(), merge_join(&rest))
+}
+
+fn merge_carry_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut m = merge_carry_of(Some(bytes))?;
+    let again = m.save_bytes()?;
+    let parts = merge_split(&merge_carry_streams(), input)?;
+    let out = merge_drive(&mut m, &parts, None, false)?;
+    Ok((again, vec![("merged".into(), out)]))
+}
+
+/// `refresh_time_age`: the `refresh_time` grid with each value's age (PLAN
+/// 556), part-way through an interval, so the series seen hold their last
+/// tick's clock.
+fn refresh_age_first() -> (Vec<u8>, DataFrame) {
+    let ticks = ticks();
+    let half = ticks.height() / 2;
+    let mut r = RefreshTime::new(refresh_names(), false)
+        .unwrap()
+        .with_age(true);
+    r.feed(&ticks.slice(0, half), &refresh_cols()).unwrap();
+    (
+        r.save_bytes().unwrap(),
+        ticks.slice(half as i64, ticks.height() - half),
+    )
+}
+
+fn refresh_age_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut r = RefreshTime::load_bytes_with_age(bytes, refresh_names(), false, false, true)?;
+    let again = r.save_bytes()?;
+    let fed = r.feed(input, &refresh_cols()).map_err(|e| e.to_string())?;
+    Ok((again, vec![("feed".into(), fed)]))
+}
+
+/// `refresh_time_age_held`: `refresh_time_held`'s pair grid and slice with
+/// each value's age (PLAN 556): the held points keep their values' clocks,
+/// on a zoned temporal clock.
+fn refresh_age_held_first() -> (Vec<u8>, DataFrame) {
+    let df = ticks_held();
+    let keep = held_keep();
+    let new = || {
+        RefreshTime::new(refresh_names(), true)
+            .unwrap()
+            .with_age(true)
+    };
+    let whole = new().feed(&df, &held_cols(&keep)).unwrap();
+    let i = whole.column("i").unwrap().i64().unwrap();
+    let half = (df.height() / 2) as i64;
+    let at = (1..i.len())
+        .find(|&r| i.get(r) == i.get(r - 1) && i.get(r).unwrap() > half)
+        .expect("a tick completing two pairs past the middle");
+    let mut r = new();
+    r.feed_limited(&df, &held_cols(&keep), Some(at)).unwrap();
+    let bytes = r.save_bytes().unwrap();
+    let fed = i.get(at).unwrap() as usize + 1;
+    (bytes, df.slice(fed as i64, df.height() - fed))
+}
+
+fn refresh_age_held_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let keep = held_keep();
+    let mut r = RefreshTime::load_bytes_with_age(bytes, refresh_names(), true, true, true)?;
+    let again = r.save_bytes()?;
+    let fed = r
+        .feed(input, &held_cols(&keep))
+        .map_err(|e| e.to_string())?;
+    Ok((again, vec![("feed".into(), fed)]))
+}
+
 /// The stages of the `checkpoint` fixture, in order: a `refresh_time`
 /// grid, a window run, a bank and a merge of streams (PLAN 541), each its
 /// kind's fixture's state, and each continued on that fixture's input. The
@@ -1989,6 +2259,11 @@ fn kinds() -> Vec<Kind> {
             run: drift_kinds_run,
         },
         Kind {
+            name: "bank_drift_ranges",
+            first: drift_ranges_first,
+            run: drift_ranges_run,
+        },
+        Kind {
             name: "bank_refit_span",
             first: refit_span_first,
             run: refit_span_run,
@@ -2012,6 +2287,26 @@ fn kinds() -> Vec<Kind> {
             name: "with_windows_quantile",
             first: windows_quantile_first,
             run: windows_quantile_run,
+        },
+        Kind {
+            name: "with_windows_moments",
+            first: windows_moments_first,
+            run: windows_moments_run,
+        },
+        Kind {
+            name: "with_windows_profile",
+            first: windows_profile_first,
+            run: windows_profile_run,
+        },
+        Kind {
+            name: "with_windows_profile_units",
+            first: windows_profile_units_first,
+            run: windows_profile_units_run,
+        },
+        Kind {
+            name: "with_windows_extrema",
+            first: windows_extrema_first,
+            run: windows_extrema_run,
         },
         Kind {
             name: "refresh_time",
@@ -2047,6 +2342,21 @@ fn kinds() -> Vec<Kind> {
             name: "checkpoint",
             first: checkpoint_first,
             run: checkpoint_run,
+        },
+        Kind {
+            name: "merge_carry",
+            first: merge_carry_first,
+            run: merge_carry_run,
+        },
+        Kind {
+            name: "refresh_time_age",
+            first: refresh_age_first,
+            run: refresh_age_run,
+        },
+        Kind {
+            name: "refresh_time_age_held",
+            first: refresh_age_held_first,
+            run: refresh_age_held_run,
         },
     ]
 }
@@ -2455,7 +2765,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
         } else if name.starts_with("merge") {
             ("merge", 1)
         } else if name.starts_with("with_windows") {
-            ("windows", 12)
+            ("windows", 13)
         } else {
             ("bank", u64::from(SCHEMA_VERSION))
         }
@@ -2476,11 +2786,11 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 16),
+            ("bank", 17),
             ("checkpoint", 1),
-            ("merge", 2),
-            ("refresh_time", 3),
-            ("windows", 3)
+            ("merge", 3),
+            ("refresh_time", 5),
+            ("windows", 7)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
@@ -2489,7 +2799,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     let stages = load_checkpoint(&unhex(f.state)).unwrap();
     for (s, (kind, version)) in stages.iter().zip([
         ("refresh_time", 3),
-        ("windows", 12),
+        ("windows", 13),
         ("bank", 72),
         ("merge", 1),
     ]) {
@@ -2524,7 +2834,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             };
             assert_eq!(
                 envelope_head(&bytes),
-                Some(("rheon-state".to_owned(), "windows".to_owned(), 12))
+                Some(("rheon-state".to_owned(), "windows".to_owned(), 13))
             );
             assert!(sealed(&bytes));
             cores += 1;
@@ -2606,7 +2916,10 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 && (sketches(&kept, "anchor") > 0 || holds_for_a_refit(&unhex(current.state)));
             if old_scale {
                 kept_scale_rule(&kind, &kept, &again, &from_ipc(f.input), &what);
-            } else if moved_by_the_held_mass(f.name) {
+            } else if moved_by_the_held_mass(f.name)
+                || started_fresh(f.name, schema)
+                || moved_by_the_mean_weight(schema, f.name)
+            {
                 // Rule 5's fifteenth exception: the queue's sums hold the old
                 // form's bits for the rows before the save, so the state this
                 // build saves after the continued rows is not the current
@@ -2627,6 +2940,14 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                      reaches from the same stream"
                 );
             }
+            if seeded_lag0(schema, f.name) {
+                // Rule 5's thirty-first exception: the kept state has no lag
+                // 0 of its own, so it is not the current fixture's; it saves
+                // bytes that load back the same.
+                let (resaved, _) = (kind.run)(&again, &from_ipc(f.input))
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(resaved == again, "{what}: saved, loaded, saved");
+            }
             let tol = if f.writer == writer() { 0.0 } else { TOL };
             assert_eq!(frames.len(), f.output.len(), "{what}");
             assert_eq!(current.output.len(), f.output.len(), "{what}");
@@ -2634,7 +2955,14 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 frames.iter().zip(f.output).zip(current.output)
             {
                 assert_eq!(name, frozen_name, "{what}");
-                let want = moved_since(&from_ipc(want), &from_ipc(now));
+                let kept_frame = from_ipc(want);
+                let want = moved_since(&kept_frame, &from_ipc(now));
+                let want = if seeded_lag0(schema, f.name) {
+                    fallback_cells(&kept_frame, &want, got)
+                } else {
+                    want
+                };
+                let want = whole_at_the_end_of_the_input(f.name, name, &want, &from_ipc(now));
                 let want = if old_scale {
                     new_after_load(f.name, name, &from_ipc(f.input), &want, &from_ipc(now))
                 } else {
@@ -2649,7 +2977,10 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                         CONTINUES_WITHIN,
                     );
                 }
-                let tol = if windowed || moved_by_the_held_mass(f.name) {
+                let tol = if windowed
+                    || moved_by_the_held_mass(f.name)
+                    || moved_by_the_mean_weight(schema, f.name)
+                {
                     tol.max(TOL)
                 } else {
                     tol
@@ -2682,15 +3013,28 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
 /// Measured 2026-11-21 on macOS arm64. The moves are those of the
 /// continued rows' own zero-weight rows as much as the saved clock's: the
 /// old build counted both. The current fixtures were regenerated.
+///
+/// Widened 2026-11-23 (rule 5's twenty-fifth exception, the user: "Widen
+/// exception 25"): a row of weight 0 under `embargo` or `label_clock` is now
+/// scored as `predict` scores it and releases no held row (review
+/// 2026-11-23, STRM-1), so a kept state whose saved rows wait on such a row
+/// continues further from its frozen frame. Each bound is the figure
+/// measured on macOS arm64 that day, rounded up, and `bank_gated` parts in
+/// two other cells of its `gated` frame. The schema-71 set, written by the build
+/// that counted such rows in no clock but released at them, still converts
+/// to the current bytes; its frozen frames were rewritten to what its
+/// unchanged state now continues to.
 const ZERO_WEIGHT_CLOCK: &[(&str, f64, usize)] = &[
     // 3.77e-2, `int_clock`'s `pred_y`; `dated` 2.28e-3.
     ("bank", 0.04, 0),
-    // 1.67e-1.
-    ("bank_gated", 0.17, 0),
-    // 2.86e-3 for `v67/` and `v68/`, 1.64e-1 for `v69/` and `v70/`.
+    // 1.67e-1, and 2 other cells (was 1.67e-1 and none).
+    ("bank_gated", 0.17, 2),
+    // 4.11e-2 for `v67/` and `v68/` (was 2.86e-3), 1.64e-1 for `v69/` and
+    // `v70/`.
     ("bank_label_clock", 0.17, 0),
-    // 2.86e-3 for `v67/` and `v68/`, 4.53e-2 for `v69/` and `v70/`.
-    ("bank_conformal_auto", 0.05, 0),
+    // 1.79e-2 for `v67/` and `v68/` (was 2.86e-3), 1.17e-1 for `v69/` and
+    // `v70/` (was 4.53e-2).
+    ("bank_conformal_auto", 0.12, 0),
 ];
 
 /// [`ZERO_WEIGHT_CLOCK`]'s hold on the kept fixture `f` of `kind`.
@@ -2799,8 +3143,111 @@ fn parted_by(got: &Series, want: &Series) -> (f64, usize) {
 /// hundredth of a half-life up, so a kept state continues, after its load,
 /// within about 1e-13 relative of the frames it was frozen with, not to the
 /// bit. The current set is held to the bit as ever.
+/// The kinds whose banks hold a `huber` or `quantile` under `standardize`
+/// (rule 5's twenty-ninth exception, the user's "Exception 29: start
+/// fresh", 2026-11-23; review 2026-11-23, REG-18). The model now keeps each
+/// target's features' moments over every row, which a state of 71 or
+/// earlier holds none of: it starts them at its first row after the load,
+/// its scales the band's until they give one. So the state it saves after
+/// its continuation is not the current fixture's: it is held to saving
+/// bytes that load back the same. Its frames go on to the bit of its frozen
+/// ones (measured 2026-11-23 on macOS arm64: the fresh start moves no cell
+/// of these frames over their rows). The current fixtures were
+/// regenerated.
+const STARTED_FRESH: &[&str] = &["bank_diagnosed", "bank_refit", "bank_refit_64"];
+
+fn started_fresh(name: &str, schema: u32) -> bool {
+    schema < 72 && STARTED_FRESH.contains(&name)
+}
+
 fn moved_by_the_held_mass(name: &str) -> bool {
     name.starts_with("with_windows")
+}
+
+/// The fixtures of schema 71 or earlier whose conformal band's mean weight
+/// a later change moved (rule 5's thirtieth exception, the user's,
+/// 2026-11-23: "Exception 30, full fix"): the band's mean weight is taken
+/// at the old mean's and the row's shares, `(R/R')·w̄ + (1/R')·w`, where the
+/// Welford step `w̄ + (w − w̄)/R'` cancelled, so a kept state's mean weight
+/// holds the old step's last bits. It saves bytes that load back the same,
+/// and its continuation is held within [`TOL`] (1e-12 relative) of the
+/// frames it was frozen with, not to the bit. The current set is held to
+/// the bit as ever. The kinds are [`MEAN_WEIGHT_MOVED`]'s, the kept ones
+/// whose band's rows have uneven weights.
+const MEAN_WEIGHT_MOVED: &[&str] = &["bank_conformal_auto", "bank_label_clock"];
+
+/// The fixtures of schema 71 or earlier whose breaks or coverage under a
+/// horizon read a long-run variance (rule 5's thirty-first exception, the
+/// user's, 2026-11-23): where the null's lag 0 left that variance at or below
+/// 0, the old build read `None`, and this build reads the fallback, the
+/// terms' own lag 0, which a kept state starts at the null's `Σ ω²` and then
+/// decays. Every row whose frozen value is a number reads it to the bit, as
+/// the null's form is unchanged; a row the old build left `None` in
+/// [`FALLBACK_FIELDS`] is held only to a finite number
+/// ([`fallback_cells`]).
+fn seeded_lag0(schema: u32, name: &str) -> bool {
+    schema <= 71 && name == "bank_diagnosed"
+}
+
+/// The fields a long-run variance divides: the CUSUM (not the CUSUM of
+/// squares, whose lag 0 is the measured fourth moment's), the break Wald
+/// distance, and a quantile fit's coverage Wald.
+const FALLBACK_FIELDS: &[&str] = &["cusum_", "break_wald_", "calibration_wald_"];
+
+/// `want` with each [`FALLBACK_FIELDS`] cell that `kept`, the kept fixture's
+/// own frozen frame, left null taken from `got` where that is a finite
+/// number: the rows where the old build read no variance.
+fn fallback_cells(kept: &DataFrame, want: &DataFrame, got: &DataFrame) -> DataFrame {
+    let falls_back =
+        |n: &str| FALLBACK_FIELDS.iter().any(|p| n.starts_with(p)) && !n.starts_with("cusum_sq_");
+    let columns: Vec<Column> = want
+        .columns()
+        .iter()
+        .map(|w| {
+            let ws = w.as_materialized_series();
+            let (DataType::Struct(_), Ok(k), Ok(g)) =
+                (ws.dtype(), kept.column(w.name()), got.column(w.name()))
+            else {
+                return w.clone();
+            };
+            let (wst, kst, gst) = (
+                ws.struct_().unwrap(),
+                k.as_materialized_series().struct_().unwrap().clone(),
+                g.as_materialized_series().struct_().unwrap().clone(),
+            );
+            let fields: Vec<Series> = wst
+                .fields_as_series()
+                .into_iter()
+                .map(|f| {
+                    let (Some(kf), Some(gf)) = (
+                        kst.field_by_name(f.name()).ok(),
+                        gst.field_by_name(f.name()).ok(),
+                    ) else {
+                        return f;
+                    };
+                    if !falls_back(f.name()) || kf.len() != f.len() || gf.len() != f.len() {
+                        return f;
+                    }
+                    let finite = gf
+                        .f64()
+                        .map(|c| c.is_not_nan() & c.is_not_null())
+                        .unwrap_or_else(|_| gf.is_not_null());
+                    let take = kf.is_null() & finite;
+                    gf.zip_with(&take, &f).unwrap()
+                })
+                .collect();
+            StructChunked::from_series(ws.name().clone(), ws.len(), fields.iter())
+                .unwrap()
+                .with_outer_validity(wst.rechunk_validity())
+                .into_series()
+                .into_column()
+        })
+        .collect();
+    DataFrame::new(want.height(), columns).unwrap()
+}
+
+fn moved_by_the_mean_weight(schema: u32, name: &str) -> bool {
+    schema <= 71 && MEAN_WEIGHT_MOVED.contains(&name)
 }
 
 /// The maps in `v`, at any depth, that hold the key `key`: the sketches a
@@ -3011,6 +3458,41 @@ fn added_since(kept: &DataFrame, now: &DataFrame) -> DataFrame {
         })
         .collect();
     DataFrame::new(kept.height(), columns).unwrap()
+}
+
+/// The window runs' `finish` frames, in which a window that looks ahead
+/// whose far edge is the input's last row is whole since PLAN 565 and was
+/// null before it. The windows' state is the same bytes, so a kept state
+/// continues to the same numbers but for those cells: `kept` (a kept
+/// fixture's frame `frame` of kind `kind`) takes `now`'s value, the
+/// current fixture's, in each cell it holds null where `now` holds a value,
+/// in the column `ahead`, and is the same everywhere else.
+fn whole_at_the_end_of_the_input(
+    kind: &str,
+    frame: &str,
+    kept: &DataFrame,
+    now: &DataFrame,
+) -> DataFrame {
+    if !kind.starts_with("with_windows") || frame != "finish" || kept.height() != now.height() {
+        return kept.clone();
+    }
+    let (Ok(k), Ok(n)) = (kept.column("ahead"), now.column("ahead")) else {
+        return kept.clone();
+    };
+    let (Ok(k), Ok(n)) = (
+        k.as_materialized_series().f64(),
+        n.as_materialized_series().f64(),
+    ) else {
+        return kept.clone();
+    };
+    let taken: Float64Chunked = k
+        .iter()
+        .zip(n.iter())
+        .map(|(k, n)| if k.is_none() { n } else { k })
+        .collect_ca(k.name().clone());
+    let mut out = kept.clone();
+    out.replace("ahead", taken.into_column()).unwrap();
+    out
 }
 
 /// The groups a kind's continuation first sees, after the load: each is a
@@ -3292,6 +3774,25 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         ("bank_drift_kinds", "an ADWIN's second level", |p, v| {
             p.contains(".Adwin.levels.1.") && v.as_f64().is_some()
         }),
+        // Rule 5's thirty-first exception: under a horizon the breaks' and
+        // a quantile fit's coverage's empirical lag 0.
+        ("bank_diagnosed", "a CUSUM's empirical lag 0", |p, v| {
+            p.ends_with(".g1") && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        (
+            "bank_diagnosed",
+            "a quantile fit's residuals' lag 0",
+            |p, v| p.ends_with(".gz") && v.as_f64().is_some_and(|f| f > 0.0),
+        ),
+        ("bank_diagnosed", "a coverage's empirical lag 0", |p, v| {
+            p.ends_with(".g") && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        ("bank_drift_ranges", "an ADWIN's fixed range", |p, v| {
+            p.contains(".Adwin.") && p.ends_with(".range") && v.as_f64() == Some(0.5)
+        }),
+        ("bank_drift_ranges", "an ADWIN bucket's extent", |p, v| {
+            p.contains(".Adwin.extents.1.") && v.as_f64().is_some()
+        }),
         ("bank_drift_kinds", "a DDM's least rate", |p, v| {
             p.contains(".Ddm.detector.")
                 && p.ends_with(".p_min")
@@ -3387,6 +3888,119 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
                 p.contains(".quant.") && p.contains(".prev.") && v.as_f64().is_some_and(|f| f > 0.0)
             },
         ),
+        // PLAN 560: a profile's definition with its zone and spans in
+        // nanoseconds or clock units, and a group's buckets, last moved at
+        // a temporal or a number clock.
+        ("with_windows_profile", "a profile's zone", |p, v| {
+            p.ends_with(".zone") && v.as_str() == Some("Europe/Amsterdam")
+        }),
+        ("with_windows_profile", "a period in nanoseconds", |p, _| {
+            p.ends_with(".period.ns")
+        }),
+        (
+            "with_windows_profile",
+            "a bucket moved at a temporal clock",
+            |p, _| p.contains(".profile.") && p.ends_with(".at.Ns"),
+        ),
+        (
+            "with_windows_profile",
+            "a left profile's stamp value",
+            |p, v| {
+                p.contains(".profile.")
+                    && p.ends_with(".left")
+                    && v.as_f64().is_some_and(f64::is_finite)
+            },
+        ),
+        (
+            "with_windows_profile",
+            "a windowed quantile's kept rows",
+            |p, _| p.contains(".win.") && p.ends_with(".rows.0.tau"),
+        ),
+        (
+            "with_windows_profile",
+            "a front row's kept sketch weights",
+            |p, v| {
+                p.contains(".win.")
+                    && p.contains(".q.prev.")
+                    && v.as_f64().is_some_and(f64::is_finite)
+            },
+        ),
+        (
+            "with_windows_profile",
+            "an unbounded sketch's row count",
+            |p, v| p.contains(".win.") && p.ends_with(".n") && v.as_u64().is_some_and(|n| n > 0),
+        ),
+        (
+            "with_windows_profile_units",
+            "a window's front moments",
+            |p, _| p.contains(".win.") && p.ends_with(".suffix.0.m2"),
+        ),
+        (
+            "with_windows_profile_units",
+            "a harmonic window's front Grams",
+            |p, v| {
+                p.contains(".harm.suffix.")
+                    && p.contains(".g.")
+                    && v.as_f64().is_some_and(|f| f != 0.0)
+            },
+        ),
+        (
+            "with_windows_profile_units",
+            "a harmonic profile's phase",
+            |p, v| p.ends_with(".phi") && v.as_f64().is_some_and(|f| (0.0..1.0).contains(&f)),
+        ),
+        (
+            "with_windows_profile_units",
+            "a profile's harmonics",
+            |p, v| p.ends_with(".harmonics") && v.as_u64() == Some(1),
+        ),
+        (
+            "with_windows_profile_units",
+            "a profile's min_samples",
+            |p, v| p.ends_with(".min_samples") && v.as_u64() == Some(2),
+        ),
+        (
+            "with_windows_profile_units",
+            "a period in clock units",
+            |p, _| p.ends_with(".period.units"),
+        ),
+        (
+            "with_windows_profile_units",
+            "a bucket moved at a number clock",
+            |p, _| p.contains(".profile.") && p.ends_with(".at.F64"),
+        ),
+        // Windows state 13 (task 561): an extremum's `front` rows, its
+        // running form's count, a kernel's `since` and its last event's
+        // stamp, and an operator's `max_state_bytes`.
+        (
+            "with_windows_extrema",
+            "an extremum's front rows",
+            |p, v| {
+                p.contains(".ext.")
+                    && p.contains(".front.")
+                    && v.as_f64().is_some_and(f64::is_finite)
+            },
+        ),
+        (
+            "with_windows_extrema",
+            "a running extremum's count",
+            |p, v| {
+                p.contains(".ext.")
+                    && (p.ends_with(".run_n") || p.ends_with(".cur_n"))
+                    && v.as_f64().is_some_and(|f| f > 0.0)
+            },
+        ),
+        ("with_windows_extrema", "a kernel's since", |p, v| {
+            p.ends_with(".since") && v.as_u64().is_some()
+        }),
+        ("with_windows_extrema", "a queue's last event", |p, v| {
+            p.ends_with(".since_off") && v.as_i64().is_some()
+        }),
+        (
+            "with_windows_extrema",
+            "an operator's max_state_bytes",
+            |p, v| p.ends_with(".max_state_bytes") && v.as_u64() == Some(1_000_000),
+        ),
         // PLAN 541: a merge's state, in each form it takes -- an input's
         // last clock as a float and as an integer (a temporal clock's
         // physical one) and none, the rows held at a tie, an input started
@@ -3417,6 +4031,74 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         }),
         ("merge_by", "a group's last clock", |p, _| {
             p.starts_with(".groups.") && p.ends_with(".1.Int")
+        }),
+        // PLAN 556: a merge's carried values -- each group's, the null
+        // one's too, of a day started again, a column with none yet in a
+        // group, and the value as a number and as text -- and a grid's ages:
+        // the clock of each seen series' last tick, a number and a temporal
+        // one, and each held point's.
+        ("merge_carry", "a carried value's clock", |p, _| {
+            p.starts_with(".carry.groups.") && p.ends_with(".at.Int")
+        }),
+        ("merge_carry", "a value of a day started again", |p, v| {
+            p.starts_with(".carry.groups.") && p.ends_with(".restarts") && v.as_u64() == Some(1)
+        }),
+        ("merge_carry", "the null group's values", |p, v| {
+            p.starts_with(".carry.groups.")
+                && p.ends_with(".0")
+                && p.split('.').count() == 5
+                && v.is_nil()
+        }),
+        ("merge_carry", "a column with no value yet", |p, v| {
+            let seg: Vec<&str> = p.split('.').collect();
+            seg.len() == 6 && seg[1] == "carry" && seg[4] == "1" && v.is_nil()
+        }),
+        ("merge_carry", "a carried Cell::Float", |p, _| {
+            p.starts_with(".carry.groups.") && p.ends_with(".value.Float")
+        }),
+        ("merge_carry", "a carried Cell::Str", |p, _| {
+            p.starts_with(".carry.groups.") && p.ends_with(".value.Str")
+        }),
+        ("refresh_time_age", "a run with ages", |p, v| {
+            p == ".age" && v.as_bool() == Some(true)
+        }),
+        (
+            "refresh_time_age",
+            "a series' last tick's Instant::Number",
+            |p, _| p.starts_with(".states.") && p.contains(".ats.") && p.ends_with(".Number"),
+        ),
+        (
+            "refresh_time_age",
+            "a series unseen since the point, without a clock",
+            |p, v| p.starts_with(".states.") && p.contains(".ats.") && v.is_nil(),
+        ),
+        (
+            "refresh_time_age_held",
+            "a series' last tick's Instant::Nanos",
+            |p, _| p.starts_with(".states.") && p.contains(".ats.") && p.ends_with(".Nanos"),
+        ),
+        ("refresh_time_age_held", "a held point's clocks", |p, _| {
+            p.starts_with(".held.ats.0.") && p.ends_with(".Nanos")
+        }),
+        // Task 554: a moments operator's term among the core's definitions,
+        // and each group's model of it, a window's ring and a lag's buffer.
+        (
+            "with_windows_moments",
+            "a moments operator's term",
+            |p, v| {
+                p.contains(".moments.")
+                    && p.ends_with(".kind")
+                    && v.as_str() == Some("standardized")
+            },
+        ),
+        ("with_windows_moments", "a group's moments model", |p, v| {
+            p.contains(".model.") && p.ends_with(".w_sum") && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        ("with_windows_moments", "a moments window's ring", |p, v| {
+            p.contains(".model.ring.vals.") && v.as_f64().is_some()
+        }),
+        ("with_windows_moments", "a moments lag's buffer", |p, v| {
+            p.contains(".model.bufs.") && p.contains(".vals.") && v.as_f64().is_some()
         }),
         ("refresh_time_int", "Instant::Int", |p, _| {
             p.contains(".last_time.") && p.ends_with(".Int")

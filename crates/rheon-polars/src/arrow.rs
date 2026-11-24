@@ -1109,12 +1109,14 @@ pub(crate) fn wide_integer_clock(who: &str, clock: &str, dtype: &DataType) -> St
 /// A key column as the text its keys are: each value's string form, which
 /// is what a group, a session and a label are read as. A zoned Datetime is
 /// its instant, written as the UTC wall time without the zone,
-/// `2024-10-27 00:30:00.000000`: this build formats no time zone, and the
-/// cast to text failed on one with polars' own message. So two zones
-/// showing one instant give one key, and two instants one zone shows at
-/// the same wall time, as a clock goes back an hour, give two (task 160,
-/// PA4 and PA4b). The same text as Polars' `cast(pl.Datetime(unit))` then
-/// `cast(pl.String)`, which keep the instant.
+/// `2024-10-27 00:30:00.000000`. Polars' own cast to text failed on one
+/// while it was built without `timezones` (task 160, PA4 and PA4b), and
+/// with it writes the local wall time and its zone, which would key two
+/// zones showing one instant apart. So two zones showing one instant give
+/// one key, and two instants one zone shows at the same wall time, as a
+/// clock goes back an hour, give two. The same text as Polars'
+/// `cast(pl.Datetime(unit))` then `cast(pl.String)`, which keep the
+/// instant.
 pub(crate) fn key_text(s: &Series) -> PolarsResult<Series> {
     match s.dtype() {
         DataType::Datetime(unit, Some(_)) => s
@@ -1735,7 +1737,9 @@ mod tests {
     /// Task 160, PA4b: a zoned Datetime is keyed by its instant, as the UTC
     /// wall time with no zone. Two zones showing one instant give one key,
     /// and the two instants Amsterdam shows at 02:30 as its clock goes back
-    /// give two. The cast to text failed: this build formats no zone.
+    /// give two. Polars' own cast to text, which failed before it was built
+    /// with `timezones` (PLAN 556), now writes each zone's wall time, so the
+    /// keys would differ by zone: the instant is the key all the same.
     #[test]
     fn a_zoned_datetime_key_is_its_instant() {
         // 2024-10-27 00:30 and 01:30 UTC, in microseconds.
@@ -1765,10 +1769,10 @@ mod tests {
                     TimeZone::opt_try_new(Some(tz)).unwrap(),
                 )
                 .into_series();
-            assert!(
-                zoned.cast(&DataType::String).is_err(),
-                "{tz}: still unformattable"
-            );
+            // Polars writes the zone's wall time and offset, such as
+            // `2024-10-27 02:30:00.000000+02:00` in Amsterdam.
+            let own = zoned.cast(&DataType::String).expect("a zone formats");
+            assert!(!own.equals(&want), "{tz}: Polars' text is the wall time");
             assert!(key_text(&zoned).unwrap().equals(&want), "{tz}");
         }
     }

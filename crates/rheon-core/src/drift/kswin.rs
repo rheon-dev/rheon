@@ -109,7 +109,11 @@ pub fn ks_equal_tail(r: usize, h: usize) -> f64 {
     if h == 0 {
         return 1.0;
     }
-    // ratio[m] = C(2r, r − m) / C(2r, r).
+    tail_of(&ratios(r), r, h)
+}
+
+/// `ratio[m] = C(2r, r − m) / C(2r, r)` for `m` in `0..=r`, by their product.
+fn ratios(r: usize) -> Vec<f64> {
     let mut ratio = Vec::with_capacity(r + 1);
     let mut t = 1.0f64;
     ratio.push(t);
@@ -117,6 +121,11 @@ pub fn ks_equal_tail(r: usize, h: usize) -> f64 {
         t *= (r - i) as f64 / (r + 1 + i) as f64;
         ratio.push(t);
     }
+    ratio
+}
+
+/// The tail at `h ≥ 1` from the ratios: the module doc's alternating sum.
+fn tail_of(ratio: &[f64], r: usize, h: usize) -> f64 {
     let mut sum = 0.0;
     let mut j = 1;
     while j * h <= r {
@@ -133,9 +142,15 @@ pub fn ks_equal_tail(r: usize, h: usize) -> f64 {
 
 /// `h*`: the least `h` in `1..=r` whose tail is at most `alpha`, or `r + 1`
 /// where none is.
+///
+/// The ratios are built once, so the search costs `Σ_h r/h`, about `r ln r`
+/// operations, where building them for each `h` cost `r` each: `r^{3/2}`
+/// and a vector of `r + 1` numbers a step (review 2026-11-23, DRIFT-8). The
+/// same numbers in the same order, so the same `h*`, to the bit.
 pub fn ks_critical_h(r: usize, alpha: f64) -> usize {
+    let ratio = ratios(r);
     (1..=r)
-        .find(|&h| ks_equal_tail(r, h) <= alpha)
+        .find(|&h| tail_of(&ratio, r, h) <= alpha)
         .unwrap_or(r + 1)
 }
 
@@ -145,14 +160,18 @@ pub fn ks_critical_h(r: usize, alpha: f64) -> usize {
 fn ks_h(a: &[f64], b: &[f64]) -> usize {
     let r = a.len();
     let (mut i, mut j, mut h) = (0, 0, 0);
-    while i < r && j < r {
+    // Each pass moves a cursor past at least one value, so `2r` passes end
+    // the scan: a bound a pass that moved nothing would meet, not pass.
+    for _ in 0..2 * r {
+        if i >= r || j >= r {
+            break;
+        }
         let v = if a[i] <= b[j] { a[i] } else { b[j] };
-        while i < r && a[i] == v {
-            i += 1;
-        }
-        while j < r && b[j] == v {
-            j += 1;
-        }
+        // The values equal to `v` at each cursor, counted and not looped
+        // over: a cursor that stayed would be a count that is wrong, not an
+        // endless loop.
+        i += a[i..].iter().take_while(|&&x| x == v).count();
+        j += b[j..].iter().take_while(|&&x| x == v).count();
         h = h.max(i.abs_diff(j));
     }
     h
@@ -175,9 +194,10 @@ impl Kswin {
     }
 
     /// The bytes a KSWIN's state holds: its ring, `8 W`, its generator and
-    /// its settings.
+    /// its settings. Past what a `u64` counts it reads `u64::MAX`, which no
+    /// cap takes.
     pub fn state_bytes(window_size: usize) -> u64 {
-        8 * window_size as u64 + 48
+        (window_size as u64).saturating_mul(8).saturating_add(48)
     }
 
     /// The values in the ring, oldest first.
@@ -187,11 +207,16 @@ impl Kswin {
 
     /// Whether a restored state keeps the shape every row relies on: samples
     /// of at least one row, a ring that holds twice that, no more values
-    /// than it holds, and a level in range.
+    /// than it holds, each of them finite (a NaN sorts to an end of a sample
+    /// and stops the scan short), and a level in range.
     pub fn sound(&self) -> bool {
         self.stat_size >= 1
-            && self.window_size >= 2 * self.stat_size
+            && self
+                .stat_size
+                .checked_mul(2)
+                .is_some_and(|two_r| self.window_size >= two_r)
             && self.window.len() <= self.window_size
+            && self.window.iter().all(|v| v.is_finite())
             && self.alpha > 0.0
             && self.alpha < 1.0
     }
@@ -223,8 +248,12 @@ impl Kswin {
     }
 
     /// Feed one value. Returns whether this row's test rejects; before the
-    /// ring is full there is no test.
+    /// ring is full there is no test. A value that is not finite is no row:
+    /// it enters no ring and draws nothing.
     pub fn update(&mut self, x: f64) -> bool {
+        if !x.is_finite() {
+            return false;
+        }
         if self.window.len() == self.window_size {
             self.window.pop_front();
         }

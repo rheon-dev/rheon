@@ -190,8 +190,12 @@ def replay(pred, resid, sigma, lam, w, accepted, *, coverage, rate=0.05):
             cov_w *= lam_i
             w_rows *= lam_i
             continue
-        w_rows = lam_i * w_rows + 1.0
-        w_mean += (w_i - w_mean) / w_rows
+        # The mean weight at the old mean's and the row's shares, which do
+        # not cancel as the Welford step `w̄ + (w − w̄)/R'` did.
+        prev = lam_i * w_rows
+        w_rows = prev + 1.0
+        if w_i != w_mean:
+            w_mean = (prev / w_rows) * w_mean + w_i / w_rows
         if not math.isfinite(m):
             # The start: the first row with a residual and a weight, unscored.
             m = norm_ppf(1.0 - 0.5 * alpha)

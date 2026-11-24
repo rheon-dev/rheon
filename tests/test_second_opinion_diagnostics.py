@@ -735,6 +735,95 @@ class TestUnderAHorizonTheTestsAreNeweyWest:
             checked += 1
         assert checked == 3
 
+    @pytest.mark.parametrize("level", [1e6, 1e8])
+    def test_the_calibration_at_a_large_level_is_statsmodels_in_the_centred_frame(self, level):
+        """A target at a level far above its spread: the covariance moved to
+        the predictions' own units grew its condition by the level's square
+        over the spread's, and at 1e8 did not factorize, so the Wald read
+        null (review 2026-11-23, DIAG-2). It is the same test read about
+        the predictions' mean, where statsmodels' HAC kernel is well
+        conditioned: ``y`` on ``(1, p - mean(p))`` against the intercept at
+        that mean and a slope of 1."""
+        import statsmodels.api as sm
+        from statsmodels.stats.sandwich_covariance import S_hac_simple
+
+        h, n = 3, 600
+        rng = np.random.default_rng(233)
+        x = rng.normal(size=(n, 2))
+        u = rng.normal(size=n + h)
+        fwd = np.convolve(u, np.ones(h), "valid")[1 : n + 1] / np.sqrt(h)
+        y = level + x @ np.array([1.2, -0.8]) + fwd
+        df = pl.DataFrame({"x0": x[:, 0], "x1": x[:, 1], "y": y})
+        spec = rp.spec.ewridge(
+            "m",
+            targets=["y"],
+            features=["x0", "x1"],
+            half_life=float("inf"),
+            embargo=float(h),
+            min_weight=10.0,
+            emit_calibration=True,
+        )
+        out = rp.ModelBank([spec]).fit_predict(df).unnest("m")
+        p = out["pred_y"].to_numpy()
+        for t in (200, 400, 599):
+            keep = np.isfinite(p[: t - h + 1])
+            ps, ys = p[: t - h + 1][keep], y[: t - h + 1][keep]
+            pc = ps - ps.mean()
+            Z = sm.add_constant(pc)
+            fit = sm.OLS(ys - ps.mean(), Z).fit()
+            d = fit.params - [0.0, 1.0]
+            bi = np.linalg.inv(Z.T @ Z)
+            V = bi @ S_hac_simple(Z * (ys - ps)[:, None], nlags=2 * h) @ bi
+            want = float(d @ np.linalg.solve(V, d))
+            got = out["calibration_wald_y"][t]
+            assert got is not None, f"row {t}"
+            np.testing.assert_allclose(got, want, rtol=1e-6)
+
+
+class TestTheCusumsLongRunVarianceFallsBackToNeweyWest:
+    """Under a horizon the CUSUM's long-run variance takes the null's lag 0,
+    ``S2``, where that leaves it above 0, and the studentized residuals'
+    own lag 0 where it does not: Newey and West's estimate, statsmodels'
+    ``S_hac_simple`` at the same lags. Residuals alternating at ±30 after a
+    quiet spell cancel the null's form, where the CUSUM read ``None``
+    (review 2026-11-23, DIAG-1)."""
+
+    def test_each_row_reads_the_null_form_or_statsmodels_hac(self):
+        from statsmodels.stats.sandwich_covariance import S_hac_simple
+
+        rng = np.random.default_rng(1)
+        n, lags = 200, 4
+        y = rng.normal(size=n)
+        y[120:] = np.where(np.arange(80) % 2 == 0, 30.0, -30.0)
+        df = pl.DataFrame({"x": np.zeros(n), "y": y})
+        spec = rp.spec.ewridge(
+            "m",
+            targets=["y"],
+            features=["x"],
+            half_life=float("inf"),
+            emit_breaks=True,
+            horizon_rows=2,
+            breaks_half_life=float("inf"),
+        )
+        out = rp.ModelBank([spec]).fit_predict(df)["m"].struct.unnest()
+        z, cusum = out["studentized_y"].to_numpy(), out["cusum_y"].to_numpy()
+        fell_back = 0
+        for t in range(30, n):
+            x = z[:t][np.isfinite(z[:t])]
+            s2 = len(x)
+            bart = sum(
+                (1 - lag / (lags + 1)) * np.dot(x[lag:], x[:-lag]) for lag in range(1, lags + 1)
+            )
+            null = 1.0 + 2.0 * bart / s2
+            if null > 0.0:
+                want = x.sum() / np.sqrt(s2 * null)
+            else:
+                fell_back += 1
+                want = x.sum() / np.sqrt(S_hac_simple(x[:, None], nlags=lags)[0, 0])
+            assert np.isfinite(cusum[t]), f"row {t}"
+            np.testing.assert_allclose(cusum[t], want, rtol=1e-9, err_msg=f"row {t}")
+        assert fell_back > 20, fell_back
+
 
 class TestTailsAreScipyAndJarqueBera:
     """Task 221 (e). Run once, the tails of the recursive residuals before

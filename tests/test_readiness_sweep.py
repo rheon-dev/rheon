@@ -100,13 +100,18 @@ KINDS = sorted(set(MINIMAL) - {"audit"})
 EXTRA: dict[str, dict[str, Any]] = {
     "hmm": {"warm_rows": 20},
     "kmeans": {"warm_rows": 20},
+    # `dcc` reports from its start, the registry's `start_rows=50` with the
+    # parameters given (no margins), and at a half-life of 25 rows its
+    # weight there is about 27, so a floor of 30 withholds rows past the
+    # start, until the weight passes it.
+    "dcc": {"margins": "none", "margin_start_rows": None, "half_life": 25.0},
 }
 #: The kinds that write no row of their own: they report through the state
 #: (``marginal``'s table, ``rcov``'s closed blocks).
 TABLE_KINDS = frozenset({"marginal", "rcov"})
 ROW_KINDS = [k for k in KINDS if k not in TABLE_KINDS]
 #: The kinds with no decay: ``min_settled_frac`` has nothing to settle.
-NO_DECAY = frozenset({"seqtest", "bocpd", "corrchange", "rcov", "garch"})
+NO_DECAY = frozenset({"seqtest", "bocpd", "corrchange", "rcov", "garch", "tdigest"})
 SETTLED_KINDS = [k for k in KINDS if k not in NO_DECAY]
 #: The kinds whose ridge system reads ``max_error_inflation``.
 INFLATION_KINDS = ["ewridge", "rls", "lasso", "kalman"]
@@ -183,7 +188,23 @@ def _frame(kind: str) -> pl.DataFrame:
 
 #: The kinds that report no coefficients, so take no ``coef_every``; the
 #: rest write ``coef`` on every row, so the fit is compared on every row.
-NO_COEF = frozenset({"seqtest", "bocpd", "corrchange", "ew_cov", "marginal", "rcov"})
+NO_COEF = frozenset(
+    {
+        "seqtest",
+        "bocpd",
+        "corrchange",
+        "ew_cov",
+        "marginal",
+        "rcov",
+        "realized",
+        "pca",
+        "power_variation",
+        "tdigest",
+        "ddsketch",
+        "ewm_moments",
+        "spectral",
+    }
+)
 
 
 def _weight_column(kind: str) -> str | None:
@@ -192,10 +213,30 @@ def _weight_column(kind: str) -> str | None:
     return "w01" if kind == "rcov" else "w"
 
 
+#: Per kind and gate, keywords beyond ``EXTRA`` so that gate shows past the
+#: model's own warm-up: ``dcc``'s start (the registry's ``start_rows=50``)
+#: is past half of a half-life of 25 rows, so its settling gate needs one of
+#: 100.
+GATE_EXTRA: dict[tuple[str, str], dict[str, Any]] = {
+    ("dcc", "min_settled_frac"): {"half_life": 100.0},
+}
+
+
+def _base(kind: str, gate: dict[str, Any]) -> dict[str, Any]:
+    """The run a gate is compared with: no gate, under the gate's
+    ``GATE_EXTRA``."""
+    out: dict[str, Any] = {}
+    for key in gate:
+        out |= GATE_EXTRA.get((kind, key), {})
+    return out
+
+
 def _spec(kind: str, variant: str, gate: dict[str, Any]) -> dict:
     kw: dict[str, Any] = dict(targets=["y"], features=["x0", "x1"], half_life=HALF_LIFE)
     kw |= MINIMAL[kind]
     kw |= EXTRA.get(kind, {})
+    for key in gate:
+        kw |= GATE_EXTRA.get((kind, key), {})
     kw["weight"] = _weight_column(kind)
     kw["coef_every"] = None if kind in NO_COEF else 0
     kw |= VARIANTS[variant]
@@ -364,6 +405,17 @@ def assert_rows_agree(base: pl.DataFrame, gated: pl.DataFrame, what: str) -> Non
 # min_weight: nesting, the boundary, and off
 
 
+#: The rows before a target's first learned row: ``ar``'s ``max(lags)``,
+#: two in ``MINIMAL``.
+HOLD_BACK = {"ar": 2}
+#: The kinds whose own weight starts again at a break: ``spectral``'s
+#: transform empties at a capped gap, its phase across it unknown, so on the
+#: clocked stream its target's weight, which its floor reads, restarts after
+#: each capped step while ``weight_sum`` runs on; and a high floor it cannot
+#: reach between the breaks is said once, in the notice the state keeps.
+RESTARTS_AT_A_BREAK = {"spectral"}
+
+
 @pytest.mark.parametrize(
     ("kind", "variant"),
     [
@@ -385,11 +437,19 @@ def test_min_weight_withholds_exactly_the_rows_below_it_and_they_nest(kind: str,
         ws = out["weight_sum"].to_list()
         bar = max(m, floor)
         below = {i for i, w in enumerate(ws) if w < bar}
+        # `ar`'s first `max(lags)` values of the target are only lags: its
+        # own weight, which the gate reads (hard rule 8), is `weight_sum`
+        # less theirs, decayed, so at most the weight before row `max(lags)`
+        # below it.
+        slack = ws[HOLD_BACK[kind]] if kind in HOLD_BACK else 0.0
+        if kind in RESTARTS_AT_A_BREAK and variant == "clocked":
+            slack = float("inf")
+        own_below = {i for i, w in enumerate(ws) if w < bar + slack}
         named, held = _named(out, "below_min_weight"), _withheld(out)
         what = f"{kind} on {variant}, min_weight={m}"
         print(f"{what}: {len(below)} rows below, {len(named)} named, {len(held)} withheld")
-        assert named <= below, (
-            f"{what}: named at or above the floor on rows {sorted(named - below)[:5]}"
+        assert named <= own_below, (
+            f"{what}: named at or above the floor on rows {sorted(named - own_below)[:5]}"
         )
         assert below <= held, f"{what}: rows below the floor reported: {sorted(below - held)[:5]}"
         values = [c for c in out.columns if c not in ("withheld_reason",) and not _learned(c)]
@@ -489,14 +549,14 @@ def _gate_of(kind: str, name: str) -> dict[str, Any]:
 def _evidence(kind: str, variant: str, gate: dict[str, Any], what: str) -> None:
     """The gate withheld something the ungated run reports."""
     if kind in TABLE_KINDS:
-        a, b = table(kind, variant, {}), table(kind, variant, gate)
+        a, b = table(kind, variant, _base(kind, gate)), table(kind, variant, gate)
         moved = [c for c in a.columns if _bits(a[c]) != _bits(b[c])]
         print(f"{what}: the table's columns the gate nulled: {moved}")
         assert moved, f"{what}: the gate nulled nothing, so the comparison proves nothing"
         for c in moved:
             assert b[c].null_count() > a[c].null_count(), f"{what}: {c} moved, and not to null"
         return
-    a, b = _withheld(run(kind, variant, {})), _withheld(run(kind, variant, gate))
+    a, b = _withheld(run(kind, variant, _base(kind, gate))), _withheld(run(kind, variant, gate))
     print(f"{what}: withheld {len(a)} rows without the gate, {len(b)} with it")
     assert a != b, f"{what}: the gate withheld the same rows, so the comparison proves nothing"
 
@@ -510,8 +570,11 @@ def test_a_gate_never_moves_the_state(kind: str, variant: str, name: str):
     gate = _gate_of(kind, name)
     what = f"{kind} on {variant}, {name}"
     _evidence(kind, variant, gate, what)
+    drop = OUTPUT_RECORDS
+    if kind in RESTARTS_AT_A_BREAK and variant == "clocked":
+        drop = drop | {"unreachable"}
     assert_the_state_is_the_same(
-        state(kind, variant, {}), state(kind, variant, gate), what, OUTPUT_RECORDS
+        state(kind, variant, _base(kind, gate)), state(kind, variant, gate), what, drop
     )
 
 
@@ -525,7 +588,7 @@ def test_a_gate_never_moves_the_rows(kind: str, variant: str, name: str):
     gate = _gate_of(kind, name)
     what = f"{kind} on {variant}, {name}"
     _evidence(kind, variant, gate, what)
-    assert_rows_agree(run(kind, variant, {}), run(kind, variant, gate), what)
+    assert_rows_agree(run(kind, variant, _base(kind, gate)), run(kind, variant, gate), what)
 
 
 # ---------------------------------------------------------------------------
@@ -726,7 +789,9 @@ EMBARGO: dict[str, Any] = dict(clock="t", gap_cap=5.0, embargo=3.0)
         )
         for k in sorted(REGRESSIONS)
         for name, _ in _gates(k)
-        for held in (False, True)
+        # `ar` refuses an embargo: its lags would be older for the rows it
+        # predicts than for the rows it learns.
+        for held in ((False,) if k == "ar" else (False, True))
     ],
 )
 def test_the_residual_spread_never_moves_with_a_gate(kind: str, name: str, held: bool):

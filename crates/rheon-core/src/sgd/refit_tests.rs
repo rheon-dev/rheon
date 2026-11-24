@@ -494,3 +494,97 @@ fn a_refit_given_up_mid_wait_keeps_its_scale_in_the_sketch() {
         }
     }
 }
+
+/// A gap past the decay's underflow while the refit buffer is open (review
+/// 2026-11-23, REG-1): an ageing row and a learned row across it each read
+/// a factor of 0; neither panics nor writes a buffer the next load refuses,
+/// and saved after the gap the model goes on to the bit.
+#[test]
+fn a_gap_past_the_decays_underflow_with_a_refit_open() {
+    let data = rows(150, false);
+    let c = cfg(120, true, LearningRate::AdaGrad, Decay::Halflife(1.0));
+    let step = |m: &mut Sgd, i: usize, (x, y, w): &Row| {
+        let d = if i == 40 || i == 60 { 2000.0 } else { 1.0 };
+        let y = if i == 40 { [None, y[1]] } else { *y };
+        m.step(x, &y, d, *w).pred
+    };
+    let whole: Vec<Vec<f64>> = {
+        let mut m = Sgd::new(c.clone()).unwrap();
+        data.iter()
+            .enumerate()
+            .map(|(i, r)| step(&mut m, i, r))
+            .collect()
+    };
+    for cut in [41, 61, 70] {
+        let mut m = Sgd::new(c.clone()).unwrap();
+        let mut parts: Vec<Vec<f64>> = data[..cut]
+            .iter()
+            .enumerate()
+            .map(|(i, r)| step(&mut m, i, r))
+            .collect();
+        assert!(m.refit.iter().all(RefitBuf::open), "cut {cut}");
+        let bytes = rmp_serde::to_vec(&m.state()).unwrap();
+        let mut back = Sgd::restore(&rmp_serde::from_slice(&bytes).unwrap())
+            .unwrap_or_else(|e| panic!("cut {cut}: {e}"));
+        parts.extend(
+            data[cut..]
+                .iter()
+                .enumerate()
+                .map(|(i, r)| step(&mut back, i + cut, r)),
+        );
+        assert_eq!(bits(&whole), bits(&parts), "cut {cut}");
+    }
+}
+
+/// A refit that fires on the row the scaler's warm-up completes is
+/// projected with the scaler's means (review 2026-11-23, REG-6): the row's
+/// map of means and scales is formed only on a row that starts held in the
+/// caller's units, so on the switching row it was still the `[0]`, `[1]`
+/// the buffers start at, and the intercept took none of the slopes' move
+/// from the projection. Against the same stream without the constraint,
+/// whose refit is the same fit (it reads only the rows buffered): the
+/// slopes are clipped to the box, and the intercept is the unconstrained
+/// one plus `Σ m_i (β_i − β'_i)`, at the scaler's means.
+#[test]
+fn a_refit_on_the_switching_row_is_projected_with_the_scalers_means() {
+    let data = rows(60, false);
+    let probe = cfg(10_000, true, LearningRate::Constant, Decay::Lam(1.0));
+    let mut m = Sgd::new(probe).unwrap();
+    let switch = data
+        .iter()
+        .position(|(x, y, w)| {
+            m.step(x, y, 1.0, *w);
+            m.warmup().switched()
+        })
+        .expect("the warm-up completes");
+    // Target 1 learns every row: its buffer fills on the switching row.
+    let at = switch as u32 + 1;
+    let free = cfg(at, true, LearningRate::Constant, Decay::Lam(1.0));
+    let mut boxed = free.clone();
+    boxed.constraint = Some(Constraint {
+        lo: vec![0.0, 0.0],
+        hi: vec![0.5, 0.5],
+        sum: None,
+    });
+    let (mut u, mut c) = (Sgd::new(free).unwrap(), Sgd::new(boxed).unwrap());
+    run(&mut u, &data[..=switch]);
+    run(&mut c, &data[..=switch]);
+    assert!(!u.refit[1].open() && !c.refit[1].open(), "the refit ran");
+    assert!(!u.scaler_warming() && !c.scaler_warming());
+    let (bu, bc) = (&u.coefficients()[1], &c.coefficients()[1]);
+    let sc = c.scaler.as_ref().unwrap();
+    let mut want0 = bu[0];
+    for i in 1..3 {
+        assert_eq!(bc[i], bu[i].clamp(0.0, 0.5), "slope {i}: {bu:?} {bc:?}");
+        want0 += sc.mean(i) * (bu[i] - bc[i]);
+    }
+    assert!(
+        bu[1..].iter().any(|v| !(0.0..=0.5).contains(v)),
+        "the box binds: {bu:?}"
+    );
+    assert!(
+        (bc[0] - want0).abs() <= 1e-9 * want0.abs(),
+        "intercept {} against {want0}",
+        bc[0]
+    );
+}

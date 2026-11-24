@@ -29,6 +29,7 @@ from rheon._rheon import validate_spec
 from rheon._spec_words import (
     _INF_OK,
     _INF_REFUSED_BY_RUST,
+    _SKIPPED_WHEN_ABSENT,
     _WORD_REASONS,
     _bad_word,
     _listed,
@@ -256,99 +257,6 @@ def _got(v: Any) -> str:
     return f"{type(v).__name__} {r if len(r) <= 60 else r[:57] + '...'}"
 
 
-#: The model keys the Rust spec skips when they are absent
-#: (``skip_serializing_if`` in ``crates/rheon-polars/src/spec.rs``): a key
-#: written as null there would move every spec's bytes and cost a schema
-#: bump. A builder writes each of these only when it is given, so the bank
-#: reports back the dict it made: a ``None`` the bank never writes made
-#: ``ModelBank([s]).specs[0] != s`` for every ``marginal`` (review
-#: 2026-10-05, the TB5 leg). ``holt``'s ``trend`` is written only when off.
-_SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
-    "holt": frozenset({"trend"}),
-    "hawkes": frozenset(
-        {"kernel_half_lives", "window_events", "window_size", "closed", "max_state_bytes"}
-    ),
-    "garch": frozenset(
-        {
-            "vol",
-            "dist",
-            "truncation",
-            "variance_targeting",
-            "start_rows",
-            "start_span",
-            "horizon",
-            "max_state_bytes",
-        }
-    ),
-    "ewridge": frozenset({"gram_threads"}),
-    "expectile": frozenset(
-        {
-            "ridge",
-            "refit_rows",
-            "refit_span",
-            "window_rows",
-            "window_size",
-            "closed",
-            "max_state_bytes",
-            "refit_budget",
-        }
-    ),
-    "huber": frozenset(
-        {
-            "huber_scale",
-            "huber_scale_half_life",
-            "feature_sets",
-            "ridge_scale",
-            "emit_huber_scale",
-            "huber_refit_rows",
-            "huber_refit_span",
-            "max_state_bytes",
-            "refit_budget",
-        }
-    ),
-    "sgd": frozenset(
-        {
-            "huber_scale",
-            "huber_scale_half_life",
-            "huber_refit_rows",
-            "huber_refit_span",
-            "max_state_bytes",
-            "refit_budget",
-        }
-    ),
-    "quantile": frozenset(
-        {"quantile_refit_rows", "quantile_refit_span", "max_state_bytes", "refit_budget"}
-    ),
-    "ew_cov": frozenset({"gram_threads"}),
-    "marginal": frozenset(
-        {
-            "lags",
-            "serial_rule",
-            "cross_lags",
-            "bins",
-            "bin_rule",
-            "bin_warm_rows",
-            "bin_edges",
-            "bin_budget",
-            "bin_stat",
-            "bin_huber_delta",
-            "bin_refit_rows",
-            "refit_budget",
-            "shards",
-            "window_lags",
-            "feature_moments",
-        }
-    ),
-    "audit": frozenset({"pairs", "distinct_cap"}),
-    "kalman": frozenset({"covariance_form"}),
-    "glm": frozenset({"refit_span", "max_state_bytes"}),
-    "kmeans": frozenset({"warm_span", "update_every", "split_merge_every"}),
-    "hmm": frozenset({"warm_span"}),
-    "bocpd": frozenset({"warm_span", "hazard_rows"}),
-    "corrchange": frozenset({"permute_every"}),
-}
-
-
 def _takes_duration(hint: Any) -> bool:
     """Whether a parameter's annotation admits a duration: the clock
     parameters, and nothing else."""
@@ -540,6 +448,12 @@ _NO_FEATURES = {
     "seqtest": "it reads only its targets, or the residuals of the specs a and b name",
     "hawkes": "each of its targets is a node, whose values above 0 are its events",
     "garch": "each of its targets is a return series whose variance it models",
+    "dcc": "its targets are the return series whose correlation it models",
+    "realized": "each of its targets is a return series it measures",
+    "power_variation": "each of its targets is a return series it measures",
+    "tdigest": "each of its targets is a column whose quantiles it reads",
+    "ddsketch": "each of its targets is a column whose quantiles it reads",
+    "spectral": "each of its targets is a series it transforms",
 }
 
 #: The parameters renamed in one builder, or whose old name another keeps
@@ -793,14 +707,17 @@ def _checked[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
 
 
 __all__ = [
+    "ar",
     "audit",
     "bocpd",
     "corrchange",
+    "dcc",
     "deco",
     "hmm",
     "rcov",
     "ew_class",
     "ew_cov",
+    "ewm_moments",
     "ewridge",
     "expectile",
     "ftrl",
@@ -816,10 +733,16 @@ __all__ = [
     "micro",
     "output_fields",
     "pa",
+    "pca",
+    "power_variation",
     "quantile",
+    "realized",
     "rls",
     "seqtest",
     "sgd",
+    "tdigest",
+    "ddsketch",
+    "spectral",
 ]
 
 
@@ -1119,7 +1042,7 @@ def _common(
     drift_threshold: float | Duration | None = None,
     drift_action: Literal["flag", "reset"] = "flag",
     drift_kind: Literal["page_hinkley", "cusum", "adwin", "ddm", "eddm", "kswin"] | None = None,
-    drift_options: Mapping[str, float | int | bool] | None = None,
+    drift_options: Mapping[str, float | int | bool | str] | None = None,
     emit_calibration: bool = False,
     calibration_half_life: float | Duration | None = None,
     emit_breaks: bool = False,
@@ -1802,7 +1725,7 @@ def ewridge(
     (``k`` without an intercept), where the schedule has not solved it
     sooner, whatever ``min_weight`` above that says. ``min_weight`` withholds
     the output alone, so the fit is the same at any ``min_weight`` from
-    ``k + 1`` up, on every schedule. A row of weight 0 is clock alone: it
+    ``k + 1`` up, on every schedule. A row of weight 0 counts in no clock: it
     never solves and is no row of the cap. A solve that comes due on one
     waits for the next row with weight, and the solves fall where they
     would without it.
@@ -3203,7 +3126,7 @@ def ftrl(
     weight 0, and a row whose squared gradient would overflow. Each
     leaves the sums as the last row the target was learned from left them.
     So the fit does not move, as :func:`ewridge`'s does not, and a row of
-    weight 0 moves the clock alone, as in every model. The next row the
+    weight 0 leaves the clock where it was, as in every model. The next row the
     target is learned from is predicted with that fit, then ages the sums by
     the whole clock since and learns. The gap ages the evidence and not the
     prior. The fit of a constant 5, at ``half_life = 100`` and at its steady
@@ -4875,267 +4798,50 @@ def marginal(
     return _common(name, model, targets=targets, features=features, **common)
 
 
-@_checked
-def deco(
-    name: str,
-    *,
-    features: list[str],
-    dynamics: Literal["ew", "linear"] = "ew",
-    alpha: float | None = None,
-    beta: float | None = None,
-    blocks: dict[str, list[str]] | None = None,
-    **common: Unpack[CommonKwargs],
-) -> dict[str, Any]:
-    """Engle and Kelly's dynamic equicorrelation, one number for the whole correlation
-    matrix of the features.
-
-    Use it to track how correlated many series are on average, at ``O(n)``
-    a row for ``n`` features, where keeping all ``n(n-1)/2`` correlations
-    moving takes ``O(n²)``. Use :func:`ew_cov` for each pair's correlation,
-    and this model's ``blocks`` for one number per block of features and per
-    pair of blocks.
-
-    .. rubric:: Parameters
-
-    The stream parameters every builder takes, such as ``clock``,
-    ``half_life``, ``gap_cap``, ``min_weight`` and ``group``, are in
-    :mod:`rheon.spec`. This model reads ``features``, at least two,
-    and takes no ``targets``. ``fit_intercept`` has nothing to act on, as
-    there is no regression, and each switch that reads residuals is
-    refused, as is ``emit_feature_health``.
-    ``half_life`` or ``lam`` is required: both the standardizer and the
-    level decay on it. This model's own:
-
-    ``dynamics``
-        How the level follows the rows' estimates: ``"ew"`` (the default,
-        since it runs on the clock and needs no parameters of its own), an
-        exponentially weighted mean of them on the clock, or
-        ``"linear"``, the linear dynamics of *The update*, which step once
-        per row. ``"linear"`` needs ``alpha`` and ``beta``, and ``"ew"``
-        refuses them.
-    ``alpha``, ``beta``
-        The linear dynamics' weights on the row's estimate and on the
-        previous level, each at least 0, with ``alpha + beta < 1``. Default
-        none: required under ``"linear"``, refused under ``"ew"``.
-    ``blocks``
-        A name to a subset of ``features``: the model then estimates one
-        number per block and one per pair of blocks, which is the useful
-        middle between one correlation and all of them. Every feature must
-        be in exactly one block, and a block needs at least two. Default
-        none: one block of every feature.
-
-    .. rubric:: Output
-
-    One output column, named after the spec, whose value in each row is a
-    record of these fields, all but ``coef`` read from the state before the
-    row, so they are safe as features for that same row.
-    `docs/OUTPUTS.md#deco
-    <https://github.com/rheon-dev/rheon/blob/main/docs/OUTPUTS.md#deco>`_
-    gives each field's type and when it is null:
-
-    ``u``
-        The row's own estimate of the equicorrelation. Null on a row where
-        fewer than two of its block's columns have a positive variance
-        before the row, or where every standardized value is 0.
-    ``rho``
-        The level as it stood before the row.
-    ``loglik``
-        The row's Gaussian log-density in standardized coordinates under
-        that level. Null on a row where any column has no positive variance
-        before the row, and where the levels hold no correlation matrix that
-        the density can be solved for (*Blocks* in Notes).
-    ``weight_sum``
-        The weight the model has accumulated before the row and before the
-        row's own decay.
-    ``settled_frac``
-        How far the model had come toward its steady state under decay
-        before the row, null where nothing decays.
-    ``withheld_reason``
-        Why the row's fields were withheld, null where they were not:
-        ``below_min_weight`` on the rows before ``weight_sum`` reaches
-        ``min_weight``. A field the model has no value for yet reads null
-        with no reason beside it: ``u`` until a block's columns have a
-        variance (the first two rows of a group), and ``rho`` until the row
-        after the first ``u``. The default ``min_weight`` withholds those
-        rows anyway.
-    ``coef``
-        The levels after the row, in the order of the ``rho`` fields:
-        ``coef`` on a row is ``rho`` on the next.
-
-    With ``K`` named blocks, ``u`` becomes ``u_<A>`` per block then
-    ``u_<A>_<B>`` per pair, and ``rho`` likewise, with one ``loglik`` over
-    all of them.
-
-    .. rubric:: Raises
-
-    As every builder does (:mod:`rheon.spec`), ``TypeError`` for
-    ``targets``, and ``ValueError`` naming the problem for:
-
-    - fewer than two features, or no ``half_life`` or ``lam``;
-    - a ``dynamics`` other than ``"ew"`` or ``"linear"``;
-    - ``alpha`` or ``beta`` under ``"ew"``, either missing under
-      ``"linear"``, either below 0 or not a number, and
-      ``alpha + beta`` of 1 or more;
-    - ``blocks`` that name no block, leave a feature out of every block,
-      put one in two, list one twice in a block, name a column not in
-      ``features``, or hold a block of fewer than two;
-    - a switch that reads residuals, such as ``emit_sigma``, and
-      ``emit_feature_health``.
-
-    .. rubric:: The update
-
-    The row is standardized against the means ``m_i`` and variances ``v_i``
-    that exponentially weighted running sums hold before the row,
-    ``zeta_i = (x_i - m_i) / sqrt(v_i)``. With ``S1 = sum(zeta)`` and
-    ``S2 = sum(zeta * zeta)`` over the ``n`` features, the row's estimate is
-    Engle and Kelly's Lemma 2.3:
-
-    .. code-block:: text
-
-        u = (S1**2 - S2) / ((n - 1) * S2)      = mean_{i != j} zeta_i zeta_j / mean_i zeta_i**2
-
-    which lies in ``[-1 / (n - 1), 1]``, both ends reached. Between two
-    blocks ``A`` and ``B`` the estimate is
-    ``u_AB = S1_A S1_B / sqrt(n_A n_B S2_A S2_B)``. The level then follows
-    one of two dynamics, with ``w`` the row's weight and
-    ``λ = 0.5 ** (Δclock / half_life)`` its decay (``lam ** Δclock`` under
-    ``lam``). ``Δclock`` is the clock's step since the last row the model
-    did not skip, capped at ``gap_cap``, or ``session_gap`` at a session
-    change:
-
-    .. code-block:: text
-
-        "ew":      W' = λ * W + w,  b = w / W'
-                   rho' = rho + b * (u - rho)                 (rho = u at W = 0)
-        "linear":  rho' = (1 - alpha - beta) * rho_bar' + alpha * u + beta * rho
-                   rho' = u                                    (on the first row)
-                   rho' = rho                                  (at w = 0)
-
-    where ``rho_bar`` is the ``"ew"`` recursion run alongside as the target
-    of the linear one.
-
-    .. rubric:: Example
-
-    This code plants eight series whose pairs are correlated 0.2 for 10,000
-    rows and 0.6 after, and prints the level before the last row of each
-    half. It moves with the correlation and stays below it, the estimate's
-    downward bias (*The estimate's downward bias* in Notes):
-
-    .. code-block:: python
-
-        import numpy as np
-
-        rng = np.random.default_rng(6)
-        c = np.repeat([0.2, 0.6], 10_000)               # the pairs' correlation, row by row
-        common = rng.standard_normal(20_000)
-        cols = {
-            f"r{i}": np.sqrt(c) * common + np.sqrt(1 - c) * rng.standard_normal(20_000)
-            for i in range(8)
-        }
-        pl.DataFrame(cols).write_parquet("returns.parquet")
-
-        eq = rp.spec.deco("eq", features=list(cols), half_life=500.0)
-        out = pl.scan_parquet("returns.parquet").rheon.fit_predict([eq]).collect().unnest("eq")
-        print(f"correlation 0.2: rho {out['rho'][9_999]:.2f}")
-        print(f"correlation 0.6: rho {out['rho'][-1]:.2f}")
-
-    .. code-block:: text
-
-        correlation 0.2: rho 0.15
-        correlation 0.6: rho 0.39
-
-    .. rubric:: See also
-
-    - :func:`ew_cov`, every pair's correlation, at ``O(n²)`` a row.
-    - :func:`corrchange`, a test for a change in a pair's correlation.
-
-    .. rubric:: Notes
-
-    **The clock.** The ``"ew"`` dynamics run on the clock. The linear one
-    steps once per row, as a DCC model's does (Engle's dynamic conditional
-    correlation, a GARCH-like recursion on the correlation matrix). So
-    across a gap capped at
-    ``gap_cap`` its own terms take one row's step, as across a millisecond,
-    and only ``rho_bar`` moves on the clock. A row of weight 0 moves neither:
-    it advances the clock and learns nothing, as everywhere. Otherwise the
-    linear recursion has no row weights, as the paper's has none: a positive
-    weight reaches ``rho`` only through ``rho_bar``, so rows of weight 0.5 and
-    2 move it by the same ``alpha * u``.
-
-    **Departures from the paper.** Two from Engle and Kelly (2012), on
-    purpose. Its eq. 21 has a free
-    intercept and applies correlation targeting to the DCC ``Q`` recursion,
-    not to the linear one. Writing the intercept as
-    ``(1 - alpha - beta) * rho_bar`` is this library's reparameterization,
-    chosen because a streaming model has no sample to fit a free intercept
-    on. And the paper permits ``alpha + beta`` slightly above 1 under
-    numerical bounds, where this model refuses it.
-
-    **The estimate's downward bias.** The paper notes that ``u`` is a
-    downward biased estimate of the equicorrelation (``E[u]`` is about 0.20
-    for a true 0.30 at ``n = 6`` series). It offers an alternative,
-    ``1 - (1 / (n - 1)) * sum((zeta_i - zeta_bar)**2)``, which this does not
-    compute. Use ``u`` as a signal that moves with the market's correlation,
-    not as the correlation. ``rho`` is not an ``ew_cov``'s ``corr`` over the
-    columns, since the mean of a ratio is not the ratio of means.
-
-    **A constant column.** A column whose variance is exactly zero, constant
-    from its first row (the only way an exponentially weighted variance is
-    exactly zero), has no standardized value. It is left out of its block's
-    sums, so ``n`` counts the columns that have one. Its block reads the
-    correlation among its other columns, and so does a pair it is in. A
-    block left with fewer than two has no ``u`` on the row, nor a pair with
-    an empty side. Nor does a row whose ``S2`` is 0. Each value keeps its own
-    weight ``W``: one with no ``u`` on a row learns nothing and does not
-    decay, while the others learn. ``loglik`` needs every column, and is
-    null on such a row.
-
-    **Blocks.** ``loglik`` is null where the levels hold no correlation
-    matrix, or hold one too close to singular for its density to keep a
-    digit: each level can be inside ``(-1, 1)`` while the blocks' levels
-    together are not. Then the factor of the ``K x K`` system the density
-    solves needs a shift on its diagonal, or its condition passes the point
-    where the solve's forward-error bound reaches 1. Such levels come from
-    the first rows of a warm-up, when they rest on one or two rows. One
-    block never reaches that point.
-    """
-    model: dict[str, Any] = {
-        "type": "deco",
-        "dynamics": dynamics,
-        "alpha": alpha,
-        "beta": beta,
-        # `{}` as `[]`, refused by name as `feature_sets={}` is (YA5).
-        "blocks": [[k, list(v)] for k, v in blocks.items()] if blocks is not None else None,
-    }
-    targets = _mirror_target(name, "deco", features, common, "its equicorrelation is over")
-    return _common(name, model, targets=targets, features=features, **common)
-
-
 #: The model types with no target column: their outputs are read from the
 #: state before each row, their ``targets`` mirror ``features[0]`` for the
 #: plumbing, and nothing residual-based applies to them. ``ew_class`` is
 #: not one -- its label column travels as the target -- though it predicts
 #: no number either, and refuses the residual switches the same way.
-# The changepoint detectors', the classifier's, the clustering models', the regimes', the realised
-# covariance's, the robust regressions', `sgd`'s and the trend's builders live in files of their own
-# (the 250 KB cap); read back here,
-# after everything they use, for `__all__`, the key tables below and
-# `rheon.spec`.
+# Most builders live in `_spec_<family>.py` files of their own (the 250 KB
+# cap); read back here, after everything they use, for `__all__`, the key
+# tables below and `rheon.spec`.
+from rheon._spec_ar import ar, spectral  # noqa: E402
 from rheon._spec_audit import audit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402
 from rheon._spec_cluster import kmeans, micro  # noqa: E402
+from rheon._spec_dcc import dcc  # noqa: E402
+from rheon._spec_ddsketch import ddsketch  # noqa: E402
+from rheon._spec_deco import deco  # noqa: E402
 from rheon._spec_expectile import expectile  # noqa: E402
 from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
+from rheon._spec_moments import ewm_moments  # noqa: E402
+from rheon._spec_pca import pca  # noqa: E402
 from rheon._spec_point import hawkes  # noqa: E402
+from rheon._spec_power_variation import power_variation  # noqa: E402
+from rheon._spec_realized import realized  # noqa: E402
 from rheon._spec_regimes import hmm, rcov  # noqa: E402
 from rheon._spec_robust import huber, quantile  # noqa: E402
+from rheon._spec_tdigest import tdigest  # noqa: E402
 from rheon._spec_trend import holt  # noqa: E402
 
 UNSUPERVISED = frozenset(
-    {"ew_cov", "kmeans", "micro", "deco", "rcov", "hmm", "corrchange", "bocpd", "audit"}
+    {
+        "ew_cov",
+        "kmeans",
+        "micro",
+        "deco",
+        "rcov",
+        "hmm",
+        "corrchange",
+        "bocpd",
+        "audit",
+        "pca",
+        "ewm_moments",
+    }
 )
 
 _NUMERIC_KEYS = _numeric_keys()

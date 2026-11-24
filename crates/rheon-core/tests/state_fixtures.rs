@@ -284,6 +284,14 @@ use rheon_core::{MIN_SCHEMA_VERSION, ModelState, SCHEMA_VERSION, State};
 /// current bytes exactly and continues to the bit, as every other kept case
 /// does.
 ///
+/// 71 kept since 72 (PLAN 542's envelope, then PLAN 551 before any release
+/// carried 72): `deco`'s level is the ratio of the means, in `ratio`, where
+/// `rho_bar` kept the EW mean of `u`. A `deco` state of 71 or earlier loads
+/// with its level restarted (rule 5's twenty-sixth exception,
+/// [`RESTARTED_LEVEL`]): every kept `deco` file is held to that, not to the
+/// current bytes. The ratio's forms are the cases `deco`, `deco_linear` and
+/// `deco_warming`.
+///
 /// The kept schemas, each a `v<N>/` directory found beside the current set.
 fn previous() -> Vec<u32> {
     frozen::PREVIOUS_SETS.iter().map(|(s, _)| *s).collect()
@@ -344,6 +352,12 @@ fn previous_sets() -> Vec<(u32, &'static [&'static Fixture])> {
 ///   no `flag` flipped. The bound, 0.25, is under the 0.5 a flipped flag
 ///   would be, so a flip fails the test. A schema-65 state is also
 ///   renumbered ([`RENUMBERED`]).
+/// - `micro`: the rows' mean weight is taken at the old mean's and the
+///   row's shares, where the Welford step cancelled (rule 5's thirtieth
+///   exception, the user's, 2026-11-23: "Exception 30, full fix"), so a
+///   kept state's `w_mean` holds the old step's last bits. On these rows it
+///   moved by one ulp (2.2e-16 relative), measured 2026-11-23 on every kept
+///   set; the bound is 45 times that.
 const MOVED: &[(&str, f64)] = &[
     ("lasso", 1e-9),
     ("lasso_window", 1e-9),
@@ -351,6 +365,7 @@ const MOVED: &[(&str, f64)] = &[
     ("bocpd", 1e-13),
     ("bocpd_warming", 1e-13),
     ("corrchange_window", 0.25),
+    ("micro", 1e-14),
 ];
 
 /// The [`MOVED`] cases whose bound covers only some numbers, each with the
@@ -454,6 +469,47 @@ const RENUMBERED: &[(&str, f64, std::ops::Range<usize>)] = &[("corrchange_window
 /// to the bit.
 const UNDER_THE_PRIOR: &[&str] = &["hmm_diag", "hmm_full", "hmm_full_narrow"];
 
+/// The `deco` cases a kept set holds, whose level restarts on load (PLAN
+/// 551; rule 5's twenty-sixth exception, the user's "Switch, restarting the
+/// level", 2026-11-22). A state of 71 or earlier keeps the EW mean of `u`
+/// (`rho_bar`), from which the ratio's sums cannot be had: it loads with its
+/// standardiser as saved and its level's sums empty ([`restarted_level_rule`]),
+/// so its continuation is neither the old build's nor this build's from the
+/// same rows. It is held to saving bytes that load back the same; to the
+/// frozen continuation's `weight_sum` and `u` (slot 0), which the
+/// standardiser alone gives, to the bit; and to `rho` and `loglik` null on
+/// the rows before the level relearns, a number on the rows after, the
+/// relearning reached within the continuation. `deco.rs`'s
+/// `a_state_from_before_the_ratio_restarts_its_level` holds the restarted
+/// level to a model emptied by hand, to the bit.
+const RESTARTED_LEVEL: &[&str] = &["deco"];
+
+/// The `huber` and `quantile` cases of schema 71 or earlier (rule 5's
+/// twenty-ninth exception, the user's "Exception 29: start fresh",
+/// 2026-11-23; review 2026-11-23, REG-18): under `standardize` the state
+/// keeps each target's features' moments over every row, which a state of
+/// 71 or earlier holds none of. It loads with them empty and starts them at
+/// its first row after the load, its scales the band's until they give one,
+/// so its continuation is neither the old build's nor this build's from the
+/// same rows. It is held to [`started_fresh_rule`] -- saving bytes that load
+/// back the same, its moments empty and in the current layout -- and to
+/// its frozen continuation's `weight_sum` to the bit, each prediction a
+/// number where the frozen one is, and within [`STARTED_FRESH_BOUND`] of it
+/// relatively; a case without `standardize` keeps none and goes on to the
+/// bit.
+fn started_fresh(name: &str, schema: u32) -> bool {
+    schema < 72 && (name.starts_with("huber") || name.starts_with("quantile"))
+}
+
+/// What a fresh start of the scales moves a kept `huber` or `quantile`
+/// state's predictions by, relative to the larger of each and 1, over the
+/// 16 rows after its load ([`started_fresh`]): the largest measured over
+/// `v61/` to `v71/` is 1.56e-5 (`huber`, its fourth row; 3,540 of 4,554
+/// predictions moved, every null kept). The scales move the ridge's
+/// weight on each slope, `1e-6` of its standardized square, and the
+/// columns kept, which no kept case drops.
+const STARTED_FRESH_BOUND: f64 = 2e-5;
+
 /// The weighted `sgd` and `pa` cases under `standardize` (rule 5's
 /// twenty-third exception, the user's, 2026-11-20; review C1), each with
 /// how far its continuation may part from a previous set's frozen one by
@@ -505,6 +561,52 @@ const READ_ANEW: &[(&str, f64)] = &[
 /// schema 70 and earlier; schema 71's was written by the build that counts
 /// none, and converts to the current bytes exactly.
 const COUNTED_ZERO_WEIGHT: &[&str] = &["audit", "audit_exact", "audit_scaled"];
+
+/// The `corrchange` cases whose statistics were replaced with no layout
+/// changed (rule 5's twenty-seventh exception, the user's, 2026-11-22:
+/// "Switch to the new statistics"; PLAN 553): `monitor` is the linear
+/// CUSUM against the grid-corrected critical value, `sequential` the
+/// Fisher-`z` detector. A kept state holds no number the old statistics
+/// computed -- the span's or the history's rows, the history's correlation
+/// and long-run deviation, the monitored rows' sums -- so it loads as it was
+/// and goes on under the new statistics, and its frozen continuation, the
+/// old statistics', is not what it is held to. What it keeps of the old
+/// ones is where they flagged. What is held:
+///
+/// - `corrchange_monitor`: no span of these rows flagged under either
+///   statistic before the save, so the kept state converts to the current
+///   fixture's bytes exactly, and goes on to the current fixture's frozen
+///   continuation to the bit: every output as this build computes it from
+///   the same rows.
+/// - `corrchange_sequential`: the old detector last flagged 8 learned rows
+///   before the save and the new one 19, so the kept state's cycle began
+///   at the old flag, and it is not the current fixture's. It is held to
+///   saving bytes that load back to the same, and to its frozen
+///   continuation's `weight_sum` to the bit; its reports are the new
+///   detector's over the cycle the old one began, which no build reaches
+///   from these rows, so no output of them is held to a number.
+const NEW_STATISTICS: &[&str] = &["corrchange_monitor", "corrchange_sequential"];
+
+/// The `garch` cases of schema 71 saved within a start that had cleared its
+/// buffer: the start's rule of that schema tried at one, two and four times
+/// `start_rows` and then let every row go and buffered afresh, which no
+/// count of tries ends now (Fable's W13 review, A2, for `garch`: a try that
+/// does not start keeps its rows). The rows let go are not in the state,
+/// so no build reaches the current fixture's state from it. It loads as it
+/// was, its buffer a first one (its next try at `start_rows`, at once where
+/// it holds them), and goes on under the current rule: held to saving bytes
+/// that load back to the same, to its frozen continuation's `weight_sum` to
+/// the bit, and to a null wherever that continuation has one, since the
+/// start is still waiting. No release wrote such a state: `garch` is new
+/// since 2.0.0, whose schema was 67. Proposed as rule 5's twenty-eighth
+/// exception (`docs/records/STATE-CONTINUATION.md`), for the user's word.
+const KEPT_START: &[&str] = &[
+    "garch_egarch",
+    "garch_figarch",
+    "garch_skewt",
+    "garch_started",
+    "garch_targeted",
+];
 
 /// How far a continuation may part from the one frozen, on a platform other
 /// than the writer's: the golden files' tolerance (`tests/golden.rs`).
@@ -878,6 +980,11 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             // A `full` or `diag` `hmm` of 69 or earlier goes on under the
             // prior ([`UNDER_THE_PRIOR`]).
             let under_prior = schema < 70 && UNDER_THE_PRIOR.contains(&f.name);
+            // A `deco` of 71 or earlier restarts its level ([`RESTARTED_LEVEL`]).
+            let restarted = schema < 72 && RESTARTED_LEVEL.contains(&f.name);
+            // A `garch` of 71 within a start that cleared its rows goes on
+            // under the current start rule ([`KEPT_START`]).
+            let kept_start = schema < 72 && KEPT_START.contains(&f.name);
             // A weighted `sgd` or `pa` under `standardize` of 68 or earlier
             // reads its rows in the stream's own unit of weight since review
             // C1 ([`READ_ANEW`]); a set of 69 was written by C1's read.
@@ -886,8 +993,9 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 .find(|(n, _)| *n == f.name && schema < 69)
                 .map(|&(_, b)| b);
             let kept = rmpv::decode::read_value(&mut &f.bytes()[..]).unwrap();
+            let fresh = started_fresh(f.name, schema);
             // A `holt` of 61-63 keeps no line fit (the doc above `previous`).
-            if under_prior {
+            if fresh {
                 let saved = named(&m.state());
                 let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
                 assert!(
@@ -895,7 +1003,20 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     "{what}: saved, loaded, saved"
                 );
                 let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
-                under_the_prior_rule(&kept, &decode(&saved), &what);
+                started_fresh_rule(&kept, &decode(&saved), &decode(&current.bytes()), &what);
+            } else if under_prior || restarted || kept_start {
+                let saved = named(&m.state());
+                let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    named(&again.state()) == saved,
+                    "{what}: saved, loaded, saved"
+                );
+                let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
+                if restarted {
+                    restarted_level_rule(&kept, &decode(&saved), &decode(&current.bytes()), &what);
+                } else if under_prior {
+                    under_the_prior_rule(&kept, &decode(&saved), &what);
+                }
             } else if f.name == "kmeans" || f.name == "holt" {
                 let saved = named(&m.state());
                 let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -951,6 +1072,16 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     "{what}: saved, loaded, saved"
                 );
                 counted_zero_weight_rule(&saved, &current.bytes(), &what);
+            } else if NEW_STATISTICS.contains(&f.name) && named(&m.state()) != current.bytes() {
+                // The old detector's cycle ([`NEW_STATISTICS`]): the
+                // sequential case alone, its state the kept one's.
+                assert_eq!(f.name, "corrchange_sequential", "{what}: converts exactly");
+                let saved = named(&m.state());
+                let again = load(&case, &saved).unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert!(
+                    named(&again.state()) == saved,
+                    "{what}: saved, loaded, saved"
+                );
             } else if renumbered.is_some() {
                 assert_eq!(schema, 65, "{what}: RENUMBERED is for schema 65's windows");
                 renumbered_rule(&case, &named(&m.state()), &current.bytes(), &|_| 0.0, &what);
@@ -964,7 +1095,26 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
             }
             let tol = if f.writer == writer() { 0.0 } else { TOL };
             let mut relabel: Vec<(u64, u64)> = Vec::new();
+            let mut relearned = false;
+            // Under the new statistics ([`NEW_STATISTICS`]): a state that
+            // converts to the current fixture's goes on as that fixture does,
+            // every output to the bit; one that does not, by its frozen
+            // `weight_sum`.
+            let new_statistics = NEW_STATISTICS.contains(&f.name);
+            let exact = new_statistics && named(&m.state()) == current.bytes();
+            let current_outs = current.outs();
             for (i, (row, want)) in f.rows().iter().zip(f.outs()).enumerate() {
+                if new_statistics {
+                    let got = m.step(row);
+                    let what = format!("{what}, row {i} after the save");
+                    if exact {
+                        let tol = if current.writer == writer() { 0.0 } else { TOL };
+                        same_out(&what, &got, &current_outs[i], tol);
+                    } else {
+                        assert!(agree(got.n_eff, want.n_eff, tol), "{what}: weight_sum");
+                    }
+                    continue;
+                }
                 if reseeded {
                     let got = m.step(row);
                     let (g, w) = (got.pred[0], want.pred[0]);
@@ -994,9 +1144,42 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                 let base = read_anew.map_or(tol, |b| tol.max(b));
                 let tol = moved.map_or(base, |b| base.max(b));
                 let got = m.step(row);
-                if under_prior {
+                if fresh {
+                    let what = format!("{what}, row {i} after the save");
+                    assert!(agree(got.n_eff, want.n_eff, tol), "{what}: weight_sum");
+                    assert_eq!(got.pred.len(), want.pred.len(), "{what}");
+                    for (g, w) in got.pred.iter().zip(&want.pred) {
+                        assert_eq!(g.is_nan(), w.is_nan(), "{what}: {g} against {w}");
+                        if w.is_finite() {
+                            let rel = (g - w).abs() / w.abs().max(1.0);
+                            assert!(rel <= STARTED_FRESH_BOUND, "{what}: {g} against {w}");
+                        }
+                    }
+                    continue;
+                }
+                if restarted {
+                    // `weight_sum` and `u` to the bit; `rho` and `loglik` null
+                    // until the level relearns, then numbers.
+                    let what = format!("{what}, row {i} after the save");
+                    assert!(agree(got.n_eff, want.n_eff, tol), "{what}: weight_sum");
+                    assert_eq!(got.pred.len(), 3, "{what}: an unblocked case");
+                    assert!(agree(got.pred[0], want.pred[0], tol), "{what}: u");
+                    relearned |= got.pred[1].is_finite();
+                    assert_eq!(
+                        got.pred[1].is_finite(),
+                        relearned,
+                        "{what}: rho {}",
+                        got.pred[1]
+                    );
+                    if got.pred[1].is_nan() {
+                        assert!(got.pred[2].is_nan(), "{what}: loglik without a level");
+                    }
+                    continue;
+                }
+                if under_prior || kept_start {
                     // `weight_sum` to the bit, and a number wherever the
-                    // frozen continuation has one.
+                    // frozen continuation has one (and, for a kept start,
+                    // nowhere else either: it still waits).
                     let what = format!("{what}, row {i} after the save");
                     assert!(agree(got.n_eff, want.n_eff, tol), "{what}: weight_sum");
                     assert_eq!(got.pred.len(), want.pred.len(), "{what}");
@@ -1026,6 +1209,7 @@ fn every_previous_fixture_loads_goes_on_and_converts_to_the_current_bytes() {
                     },
                 );
             }
+            assert!(!restarted || relearned, "{what}: the level never relearned");
         }
     }
 }
@@ -1318,7 +1502,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 26] = [
+    const FROZEN: [&str; 35] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1345,6 +1529,15 @@ fn the_variant_names_are_frozen() {
         "Hawkes",
         "Expectile",
         "Garch",
+        "Dcc",
+        "Realized",
+        "StreamPca",
+        "PowerVariation",
+        "TDigest",
+        "DdSketch",
+        "EwmMoments",
+        "Ar",
+        "Spectral",
     ];
     assert_eq!(
         variants(),
@@ -1465,7 +1658,113 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 117] = [
+    const FORMS: [(&str, &[&str]); 198] = [
+        // `power_variation` (task 555): the sums, the last raw returns, the
+        // scales' rings, a window's credits and rows, a clock window's
+        // stamps and clock, and a cap's overrun.
+        (
+            "power_variation",
+            &["model", "PowerVariation", "series", "1", "hi"],
+        ),
+        (
+            "power_variation",
+            &["model", "PowerVariation", "series", "1", "raw"],
+        ),
+        (
+            "power_variation",
+            &["model", "PowerVariation", "series", "1", "rings", "1"],
+        ),
+        (
+            "power_variation_window",
+            &["model", "PowerVariation", "series", "0", "held"],
+        ),
+        (
+            "power_variation_window",
+            &["model", "PowerVariation", "series", "1", "credits"],
+        ),
+        (
+            "power_variation_window",
+            &["model", "PowerVariation", "window", "rows"],
+        ),
+        (
+            "power_variation_clock_window",
+            &["model", "PowerVariation", "window", "rows", "0", "stamp"],
+        ),
+        (
+            "power_variation_clock_window",
+            &["model", "PowerVariation", "window", "place"],
+        ),
+        (
+            "power_variation_clock_capped",
+            &["model", "PowerVariation", "over"],
+        ),
+        // `realized` (task 499): the sums and the last returns, Lee and
+        // Mykland's ring of products, a window's terms and rows, a clock
+        // window's stamps and clock, and a cap's warning and overrun.
+        ("realized", &["model", "Realized", "series", "1", "hi"]),
+        (
+            "realized",
+            &["model", "Realized", "series", "1", "lm", "products"],
+        ),
+        (
+            "realized_window",
+            &["model", "Realized", "series", "0", "held"],
+        ),
+        (
+            "realized_window",
+            &["model", "Realized", "series", "1", "held"],
+        ),
+        ("realized_window", &["model", "Realized", "window", "rows"]),
+        (
+            "realized_clock_window",
+            &["model", "Realized", "window", "rows", "0", "stamp"],
+        ),
+        (
+            "realized_clock_window",
+            &["model", "Realized", "window", "place"],
+        ),
+        // PLAN 551, at schema 72: the ratio level's sums, the form a spec
+        // builds, under each dynamics, with a pair's second denominator, and
+        // the standardiser's share inside its warm-up.
+        ("deco", &["model", "Deco", "ratio", "num"]),
+        ("deco", &["model", "Deco", "ratio", "den"]),
+        ("deco", &["model", "Deco", "ratio", "w2_share"]),
+        ("deco_linear", &["model", "Deco", "ratio", "den_b"]),
+        ("deco_linear", &["model", "Deco", "ratio", "lin_num"]),
+        ("deco_linear", &["model", "Deco", "ratio", "lin_den"]),
+        ("deco_linear", &["model", "Deco", "ratio", "lin_den_b"]),
+        ("deco_warming", &["model", "Deco", "ratio", "w2_share"]),
+        // Schema 72 (task 554, parts 4 and 5): `ewm_moments`' summaries over
+        // legs, its lag buffers (and their stamps on a clock), the clock's
+        // place and a window's ring (and its stamps on a clock), and the
+        // boundary of the window's two stacks, `flip`.
+        ("ewm_moments_lags", &["model", "EwmMoments", "sums"]),
+        ("ewm_moments_lags", &["model", "EwmMoments", "bufs"]),
+        (
+            "ewm_moments_clock_lags",
+            &["model", "EwmMoments", "bufs", "0", "stamps"],
+        ),
+        ("ewm_moments_clock_lags", &["model", "EwmMoments", "place"]),
+        (
+            "ewm_moments_window",
+            &["model", "EwmMoments", "ring", "vals"],
+        ),
+        (
+            "ewm_moments_clock_window",
+            &["model", "EwmMoments", "ring", "vals"],
+        ),
+        (
+            "ewm_moments_clock_window",
+            &["model", "EwmMoments", "ring", "stamps"],
+        ),
+        (
+            "ewm_moments_window",
+            &["model", "EwmMoments", "ring", "flip"],
+        ),
+        (
+            "ewm_moments_clock_window",
+            &["model", "EwmMoments", "ring", "flip"],
+        ),
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1639,6 +1938,58 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             &["model", "Garch", "series", "0", "filter", "ring"],
         ),
         ("garch_span", &["model", "Garch", "series", "0", "buffer"]),
+        ("garch_bound", &["model", "Garch", "series", "0", "buffer"]),
+        // `dcc`'s stage (task 493): its start's buffer, then the targets,
+        // `Q`, its sensitivities and the information, the decay carried to
+        // the next row, given parameters, the margins, and a start of a
+        // clock span's stamp.
+        ("dcc", &["model", "Dcc", "stage", "buffer"]),
+        ("dcc_started", &["model", "Dcc", "stage", "qbar"]),
+        ("dcc_started", &["model", "Dcc", "stage", "nbar"]),
+        ("dcc_started", &["model", "Dcc", "stage", "q"]),
+        ("dcc_started", &["model", "Dcc", "stage", "dq"]),
+        ("dcc_started", &["model", "Dcc", "stage", "h"]),
+        ("dcc_started", &["model", "Dcc", "stage", "theta"]),
+        ("dcc_started", &["model", "Dcc", "stage", "lr"]),
+        ("dcc_withheld", &["model", "Dcc", "stage", "buffer"]),
+        ("dcc_bound", &["model", "Dcc", "stage", "buffer"]),
+        ("dcc_given", &["model", "Dcc", "cfg", "params"]),
+        ("dcc_margins", &["model", "Dcc", "margins", "series"]),
+        ("dcc_margins", &["model", "Dcc", "stage", "buffer"]),
+        ("dcc_span", &["model", "Dcc", "place"]),
+        // `tdigest`'s digests (PLAN 544): a buffer before the first
+        // merge, then the centroids beside it, and the weights.
+        ("tdigest", &["model", "TDigest", "digests", "1", "buffer"]),
+        ("tdigest", &["model", "TDigest", "target_w2"]),
+        (
+            "tdigest_merged",
+            &["model", "TDigest", "digests", "0", "centroids"],
+        ),
+        (
+            "tdigest_merged",
+            &["model", "TDigest", "digests", "0", "buffer"],
+        ),
+        // `ddsketch`'s sketches (PLAN 544, part 7): both stores, then a row
+        // window's ring and counts, then a clock window's stamps and clock.
+        (
+            "ddsketch",
+            &["model", "DdSketch", "sketches", "0", "pos", "w"],
+        ),
+        (
+            "ddsketch",
+            &["model", "DdSketch", "sketches", "1", "neg", "w"],
+        ),
+        ("ddsketch_rows", &["model", "DdSketch", "ring", "codes"]),
+        (
+            "ddsketch_rows",
+            &["model", "DdSketch", "sketches", "0", "pos", "n"],
+        ),
+        ("ddsketch_clock", &["model", "DdSketch", "ring", "stamp"]),
+        ("ddsketch_decayed", &["model", "DdSketch", "cfg", "decay"]),
+        (
+            "ddsketch_clock",
+            &["model", "DdSketch", "cfg", "window_clock"],
+        ),
         // A refit over a span of the clock (task 538): the span in each
         // cfg, glm's clock summed from the steps, and each buffer.
         ("glm_refit_clock", &["model", "Glm", "cfg", "refit_clock"]),
@@ -1677,6 +2028,40 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             "corrchange_permute_every",
             &["model", "CorrChange", "since_draw"],
         ),
+        // Task 553: each kind's span on the clock.
+        (
+            "corrchange_monitor_clock",
+            &["model", "CorrChange", "cfg", "span_clock"],
+        ),
+        (
+            "corrchange_monitor_clock",
+            &["model", "CorrChange", "cfg", "max_state_bytes"],
+        ),
+        (
+            "corrchange_monitor_clock",
+            &["model", "CorrChange", "clock"],
+        ),
+        (
+            "corrchange_monitor_clock",
+            &["model", "CorrChange", "first"],
+        ),
+        (
+            "corrchange_sequential_clock",
+            &["model", "CorrChange", "cfg", "monitor_clock"],
+        ),
+        (
+            "corrchange_sequential_clock",
+            &["model", "CorrChange", "monitoring", "history"],
+        ),
+        (
+            "corrchange_sequential_clock",
+            &["model", "CorrChange", "monitoring", "horizon"],
+        ),
+        ("corrchange_window_clock", &["model", "CorrChange", "keys"]),
+        (
+            "corrchange_window_clock",
+            &["model", "CorrChange", "perm_counts"],
+        ),
         (
             "huber_refit_span",
             &["model", "Robust", "cfg", "refit_clock"],
@@ -1712,6 +2097,25 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
             "sgd_huber_refit_span",
             &["model", "Sgd", "cfg", "max_state_bytes"],
         ),
+        // `ar` (task 486): each target's ring of lags, full and filling,
+        // and its fit, solved and not yet.
+        ("ar", &["model", "Ar", "rings", "1"]),
+        ("ar", &["model", "Ar", "fits", "1", "beta"]),
+        ("ar", &["model", "Ar", "cfg", "lags"]),
+        ("ar_select", &["model", "Ar", "chosen", "1"]),
+        ("ar_select", &["model", "Ar", "chosen", "0"]),
+        ("ar_window", &["model", "Ar", "fits", "0", "win"]),
+        // `spectral` (task 491): each target's transform and its weights'.
+        ("spectral", &["model", "Spectral", "sums", "1", "x"]),
+        ("spectral", &["model", "Spectral", "sums", "0", "u"]),
+        // Under Lomb-Scargle, the weights' transform at twice each
+        // frequency.
+        ("spectral_ls", &["model", "Spectral", "sums", "1", "v"]),
+        // Under a window, its blocks and the closed blocks' total.
+        ("spectral_window", &["model", "Spectral", "win", "blocks"]),
+        ("spectral_window", &["model", "Spectral", "win", "total"]),
+        ("ar_filling", &["model", "Ar", "rings", "0"]),
+        ("ar_filling", &["model", "Ar", "fits", "0", "acc"]),
     ];
     // Each refit's first stamp, written only under a span (task 538): in
     // glm on the summed clock, in expectile an integer stamp.
@@ -1744,6 +2148,94 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
     let first = at(&v, &["model", "Garch", "series", "0", "first"]).expect("a first stamp");
     assert!(!first.is_nil(), "garch_span: no first stamp");
+    // garch's start at its bound: a ring whose oldest row is not the first
+    // slot, rows let go, and the rows of its last try and since it, each
+    // an integer `held` does not count.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "garch_bound")
+        .expect("garch_bound");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    for j in ["0", "1"] {
+        let series = |key: &str| {
+            at(&v, &["model", "Garch", "series", j, key])
+                .and_then(rmpv::Value::as_u64)
+                .unwrap_or(0)
+        };
+        for key in ["head", "tried", "since", "dropped"] {
+            assert!(series(key) > 0, "garch_bound: series {j}'s {key} is 0");
+        }
+    }
+    // dcc's start over a span: its first stamp, the clock's 0 on this
+    // stream, so present and not nil rather than held.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "dcc_span")
+        .expect("dcc_span");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let first = at(&v, &["model", "Dcc", "stage", "first"]).expect("a first stamp");
+    assert!(!first.is_nil(), "dcc_span: no first stamp");
+    // dcc's withheld start: the flag set and a refit counted (a bool and an
+    // integer, which `held` does not count); its statistic is 0 where the
+    // fit sits at a = 0, so present rather than held.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "dcc_withheld")
+        .expect("dcc_withheld");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let stage = |key: &str| at(&v, &["model", "Dcc", "stage", key]).cloned();
+    assert_eq!(stage("withheld"), Some(rmpv::Value::Boolean(true)));
+    assert!(
+        stage("refits")
+            .and_then(|r| r.as_u64())
+            .is_some_and(|r| r >= 1)
+    );
+    assert!(stage("lr").is_some_and(|l| l.as_f64().is_some_and(f64::is_finite)));
+    // dcc's start at its bound: a ring whose oldest row is not the first
+    // slot, rows let go, and the rows of its last try and since it, each
+    // an integer `held` does not count.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "dcc_bound")
+        .expect("dcc_bound");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let stage = |key: &str| {
+        at(&v, &["model", "Dcc", "stage", key])
+            .and_then(rmpv::Value::as_u64)
+            .unwrap_or(0)
+    };
+    for key in ["head", "tried", "since", "dropped"] {
+        assert!(stage(key) > 0, "dcc_bound: {key} is 0");
+    }
+    // A clock window's cap (task 499): the bytes of the row that would have
+    // passed it, an integer, and the warning raised.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "realized_clock_capped")
+        .expect("realized_clock_capped");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let over = at(&v, &["model", "Realized", "over"]).expect("the overrun");
+    assert!(over.as_u64().is_some_and(|b| b > 1_500), "{over}");
+    let warned = at(&v, &["model", "Realized", "warned"]).and_then(rmpv::Value::as_bool);
+    assert_eq!(warned, Some(true));
+    // `deco_warming` is saved inside the standardiser's warm-up (PLAN 551):
+    // its share at a fifth or more, so Kish's size at 5 or less, and no level;
+    // `deco` past it.
+    for (name, warm) in [("deco_warming", false), ("deco", true)] {
+        let f = frozen::ALL
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name}: no fixture"));
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let share = at(&v, &["model", "Deco", "ratio", "w2_share"])
+            .and_then(rmpv::Value::as_f64)
+            .expect("a share");
+        let rho = at(&v, &["model", "Deco", "rho", "0"])
+            .and_then(rmpv::Value::as_f64)
+            .expect("a level");
+        assert_eq!(share < 0.2, warm, "{name}: share {share}");
+        assert_eq!(rho.is_finite(), warm, "{name}: level {rho}");
+    }
     for (name, path) in FORMS {
         let f = frozen::ALL
             .iter()
@@ -2999,10 +3491,19 @@ fn first_difference(got: &rmpv::Value, want: &rmpv::Value, bound: f64, at: &str)
 /// to the bit and its reports within the same tolerance. A decay or a
 /// log-likelihood runs through libm, whose last bit is the platform's.
 /// `garch` calls no platform library (its `ln`, `exp` and `ln_1p` are the
-/// `libm` crate's), so its cases are held to the bit: a start fitted on
-/// another platform's last bits once took another path, 28% away.
+/// `libm` crate's), nor does `tdigest` (its sine and cosine are series and
+/// its `sqrt` correctly rounded), nor `ddsketch` (its logarithm and power
+/// are series), so their cases are held to the bit: a
+/// start fitted on another platform's last bits once took another path, 28%
+/// away.
 fn differs_from_another_writer(case: &Case, f: &Fixture) -> Option<String> {
-    let tol = if f.variant == "Garch" { 0.0 } else { TOL };
+    // `ddsketch`'s decayed form multiplies by the platform's `exp2`.
+    let exact_ddsketch = f.variant == "DdSketch" && f.name != "ddsketch_decayed";
+    let tol = if matches!(f.variant, "Garch" | "TDigest") || exact_ddsketch {
+        0.0
+    } else {
+        TOL
+    };
     let (mut m, rows) = saved(case);
     let decode = |b: &[u8]| rmpv::decode::read_value(&mut &b[..]).unwrap();
     let state = first_difference(
@@ -3414,4 +3915,230 @@ fn under_the_prior_rule(kept: &rmpv::Value, saved: &rmpv::Value, what: &str) {
             "{what}: taken up again"
         );
     }
+}
+
+/// A `huber` or `quantile` state of 71 or earlier, loaded and saved
+/// ([`started_fresh`]): every key the kept state held, in the current
+/// fixture's layout key for key, with each target's moments over every row
+/// empty -- no weight, every moment 0 -- and its scales none under
+/// `standardize`, and neither without it.
+fn started_fresh_rule(kept: &rmpv::Value, saved: &rmpv::Value, current: &rmpv::Value, what: &str) {
+    let model = |v: &rmpv::Value| -> Vec<(String, rmpv::Value)> {
+        at(v, &["model", "Robust"])
+            .and_then(rmpv::Value::as_map)
+            .unwrap_or_else(|| panic!("{what}: no Robust"))
+            .iter()
+            .map(|(k, v)| (k.as_str().unwrap().to_owned(), v.clone()))
+            .collect()
+    };
+    let keys = |m: &[(String, rmpv::Value)]| m.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>();
+    let (s, c) = (model(saved), model(current));
+    assert_eq!(keys(&s), keys(&c), "{what}: the current layout");
+    let get = |m: &[(String, rmpv::Value)], k: &str| {
+        m.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone())
+    };
+    for (k, _) in model(kept) {
+        assert!(get(&s, &k).is_some(), "{what}: {k} dropped");
+    }
+    let standardize = at(saved, &["model", "Robust", "cfg", "standardize"])
+        .and_then(rmpv::Value::as_bool)
+        .unwrap();
+    let spread = get(&s, "spread").unwrap();
+    let scales = get(&s, "spread_scale").unwrap();
+    let (spread, scales) = (spread.as_array().unwrap(), scales.as_array().unwrap());
+    if standardize {
+        assert!(
+            !spread.is_empty() && spread.len() == scales.len(),
+            "{what}: one a target"
+        );
+        for d in spread {
+            assert_eq!(
+                held(d) - usize::from(at(d, &["k"]).is_some()),
+                0,
+                "{what}: {d}"
+            );
+        }
+        assert!(
+            scales
+                .iter()
+                .all(|v| v.as_array().is_some_and(Vec::is_empty)),
+            "{what}"
+        );
+    } else {
+        assert!(spread.is_empty() && scales.is_empty(), "{what}");
+    }
+}
+
+/// A `deco` state of 71 or earlier, loaded and saved ([`RESTARTED_LEVEL`]):
+/// the kept state held the older level (`rho_bar`, `rho_bar_lo`) and no
+/// sums; the saved one holds the kept standardiser, cfg and blocks as they
+/// were, every `rho` NaN, every weight 0, the sums empty with the share at 1,
+/// and the current fixture's layout, key for key.
+fn restarted_level_rule(
+    kept: &rmpv::Value,
+    saved: &rmpv::Value,
+    current: &rmpv::Value,
+    what: &str,
+) {
+    let path = |k: &str| ["model", "Deco", k].map(String::from);
+    let get = |v: &rmpv::Value, k: &str| at(v, &path(k).each_ref().map(String::as_str)).cloned();
+    assert!(
+        get(kept, "rho_bar").is_some() && get(kept, "ratio").is_none(),
+        "{what}: the kept layout"
+    );
+    assert!(
+        get(saved, "rho_bar").is_none() && get(saved, "rho_bar_lo").is_none(),
+        "{what}: rho_bar kept"
+    );
+    for key in ["cfg", "diag", "blocks"] {
+        assert_eq!(get(saved, key), get(kept, key), "{what}: {key} moved");
+    }
+    let floats = |v: Option<rmpv::Value>| -> Vec<f64> {
+        v.and_then(|v| v.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .map(|x| x.as_f64().unwrap())
+            .collect()
+    };
+    let rho = floats(get(saved, "rho"));
+    assert!(
+        !rho.is_empty() && rho.iter().all(|v| v.is_nan()),
+        "{what}: rho {rho:?}"
+    );
+    assert!(
+        floats(get(saved, "rho_w")).iter().all(|&w| w == 0.0),
+        "{what}: the weights"
+    );
+    let ratio = get(saved, "ratio").unwrap_or_else(|| panic!("{what}: no sums"));
+    assert_eq!(
+        at(&ratio, &["w2_share"]).and_then(rmpv::Value::as_f64),
+        Some(1.0),
+        "{what}"
+    );
+    for key in ["num", "den"] {
+        let v = floats(at(&ratio, &[key]).cloned());
+        assert!(
+            v.len() == rho.len() && v.iter().all(|x| x.is_nan()),
+            "{what}: {key} {v:?}"
+        );
+    }
+    let keys = |v: &rmpv::Value| -> Vec<String> {
+        at(v, &["model", "Deco"])
+            .and_then(rmpv::Value::as_map)
+            .unwrap()
+            .iter()
+            .map(|(k, _)| k.as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(keys(saved), keys(current), "{what}: the current layout");
+}
+
+/// The Kish sums' exponents (schema 72, review 2026-11-23, REG-12): each
+/// `*_tiny_weights` case is fed every weight times `2^-664`, so each sum of
+/// squared weights it keeps writes a non-zero exponent beside it -- the
+/// warm-up's and every level's `w2_scale` in `sgd`, `rls`'s `s2_scale`,
+/// and every Gram's `q_sum` in `ewridge`, written as `[q, s]` there -- and
+/// the cases at ordinary weights write none, the bytes they had.
+#[test]
+fn the_kish_sums_exponents_are_written() {
+    if regenerating() {
+        return;
+    }
+    fn found(v: &rmpv::Value, key: &str, out: &mut Vec<i64>) {
+        match v {
+            rmpv::Value::Map(m) => {
+                for (k, v) in m {
+                    if k.as_str() == Some(key) {
+                        // `q_sum` is a float, or `[q, s]` beside a power.
+                        match v {
+                            rmpv::Value::Array(a) => out.push(a[1].as_i64().unwrap()),
+                            v if key == "q_sum" => {
+                                assert!(v.is_f64() || v.is_nil(), "{v}");
+                            }
+                            v => out.push(v.as_i64().unwrap()),
+                        }
+                    }
+                    found(v, key, out);
+                }
+            }
+            rmpv::Value::Array(a) => a.iter().for_each(|v| found(v, key, out)),
+            _ => {}
+        }
+    }
+    let scales = |name: &str, key: &str| {
+        let f = frozen::ALL.iter().find(|f| f.name == name).unwrap();
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let mut out = Vec::new();
+        found(&v, key, &mut out);
+        out
+    };
+    for (name, key, at_least) in [
+        ("sgd_tiny_weights", "w2_scale", 3),
+        ("rls_tiny_weights", "s2_scale", 1),
+        ("ewridge_tiny_weights", "q_sum", 1),
+    ] {
+        let s = scales(name, key);
+        assert!(
+            s.len() >= at_least && s.iter().all(|&v| v != 0),
+            "{name}: {key} {s:?}"
+        );
+    }
+    for (name, key) in [
+        ("sgd_spread", "w2_scale"),
+        ("rls", "s2_scale"),
+        ("ewridge", "q_scale"),
+    ] {
+        assert_eq!(scales(name, key), Vec::<i64>::new(), "{name}: {key}");
+    }
+}
+
+/// The scales from every row (schema 72, review 2026-11-23, REG-18): each
+/// standardized `huber` and `quantile` case keeps, per target, its
+/// features' moments over every row it learned, holding weight, and the
+/// scales its band last moved at, one per feature; a case without
+/// `standardize` keeps neither.
+#[test]
+fn the_scales_from_every_row_are_written() {
+    if regenerating() {
+        return;
+    }
+    let mut kept = 0;
+    for f in frozen::ALL
+        .iter()
+        .filter(|f| f.name.starts_with("huber") || f.name.starts_with("quantile"))
+    {
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let get = |k: &str| at(&v, &["model", "Robust", k]).cloned().unwrap();
+        let standardize = get("cfg")
+            .as_map()
+            .unwrap()
+            .iter()
+            .find(|(k, _)| k.as_str() == Some("standardize"))
+            .and_then(|(_, v)| v.as_bool())
+            .unwrap();
+        let (spread, scales) = (get("spread"), get("spread_scale"));
+        let (spread, scales) = (spread.as_array().unwrap(), scales.as_array().unwrap());
+        if standardize {
+            assert!(
+                !spread.is_empty() && spread.len() == scales.len(),
+                "{}",
+                f.name
+            );
+            for d in spread {
+                let w = at(d, &["w_sum"]).and_then(rmpv::Value::as_f64).unwrap();
+                assert!(w > 0.0, "{}: {d}", f.name);
+            }
+            assert!(
+                scales
+                    .iter()
+                    .any(|s| s.as_array().is_some_and(|a| !a.is_empty())),
+                "{}: no scales",
+                f.name
+            );
+            kept += 1;
+        } else {
+            assert!(spread.is_empty() && scales.is_empty(), "{}", f.name);
+        }
+    }
+    assert!(kept >= 10, "{kept} standardized cases");
 }

@@ -70,13 +70,26 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ),
     ("hmm", &["warm_span"]),
     ("bocpd", &["hazard", "warm_span"]),
-    ("corrchange", &["permute_every"]),
+    (
+        "corrchange",
+        &["permute_every", "window_size", "monitor_span"],
+    ),
     ("ew_class", &["window_size", "snapshot_every"]),
     ("marginal", &["window_size", "snapshot_every"]),
     ("hawkes", &["window_size", "kernel_half_lives"]),
     ("expectile", &["window_size", "refit_span"]),
     ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
+    ("dcc", &["start_span", "margin_start_span"]),
+    ("realized", &["window_size"]),
+    ("power_variation", &["window_size"]),
+    ("ddsketch", &["window_size"]),
+    ("ewm_moments", &["lag_tolerance", "window_size"]),
+    ("ar", &["window_size", "snapshot_every"]),
+    (
+        "spectral",
+        &["periods", "spacing", "window_size", "snapshot_every"],
+    ),
 ];
 
 /// The parameters that are a rate *per* clock unit: a decay factor per unit
@@ -459,11 +472,22 @@ impl Spec {
             ModelKind::Glm { refit_span, .. } => {
                 put(&mut out, "refit_span", refit_span.as_ref());
             }
+            ModelKind::Realized { window_size, .. }
+            | ModelKind::PowerVariation { window_size, .. } => {
+                put(&mut out, "window_size", window_size.as_ref());
+            }
             ModelKind::Micro { prune_every, .. } => {
                 put(&mut out, "prune_every", prune_every.as_ref());
             }
-            ModelKind::CorrChange { permute_every, .. } => {
+            ModelKind::CorrChange {
+                permute_every,
+                window_size,
+                monitor_span,
+                ..
+            } => {
                 put(&mut out, "permute_every", permute_every.as_ref());
+                put(&mut out, "window_size", window_size.as_ref());
+                put(&mut out, "monitor_span", monitor_span.as_ref());
             }
             ModelKind::Hmm { warm_span, .. } => {
                 put(&mut out, "warm_span", warm_span.as_ref());
@@ -478,8 +502,46 @@ impl Spec {
                 put(&mut out, "update_every", update_every.as_ref());
                 put(&mut out, "split_merge_every", split_merge_every.as_ref());
             }
+            ModelKind::Spectral(s) => {
+                out.extend(s.periods.spans().iter().map(|p| ("periods", p.clone())));
+                put(&mut out, "spacing", s.spacing.as_ref());
+                put(&mut out, "window_size", s.window_size.as_ref());
+                put(&mut out, "snapshot_every", s.snapshot_every.as_ref());
+            }
+            ModelKind::Ar {
+                window_size,
+                snapshot_every,
+                ..
+            } => {
+                put(&mut out, "window_size", window_size.as_ref());
+                put(&mut out, "snapshot_every", snapshot_every.as_ref());
+            }
             ModelKind::Garch { start_span, .. } => {
                 put(&mut out, "start_span", start_span.as_ref());
+            }
+            ModelKind::Dcc {
+                start_span,
+                margin_start_span,
+                ..
+            } => {
+                put(&mut out, "start_span", start_span.as_ref());
+                put(&mut out, "margin_start_span", margin_start_span.as_ref());
+            }
+            ModelKind::DdSketch { window_size, .. } => {
+                put(&mut out, "window_size", window_size.as_ref());
+            }
+            // A lag written on a term's leg (`x@5m`) is a span of the clock
+            // too, named by the table it is written in.
+            ModelKind::EwmMoments {
+                lag_tolerance,
+                window_size,
+                ..
+            } => {
+                put(&mut out, "lag_tolerance", lag_tolerance.as_ref());
+                put(&mut out, "window_size", window_size.as_ref());
+                for lag in self.model.moment_lags(&self.features) {
+                    put(&mut out, "terms", Some(&lag));
+                }
             }
             // A number is clock units, rows without a clock, as every other
             // span's (task 547); the count of rows is `hazard_rows`.

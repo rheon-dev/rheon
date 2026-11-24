@@ -194,6 +194,35 @@ POLICIES = [
 ]
 
 
+@pytest.mark.parametrize(
+    ("model", "extra"),
+    [("ar", {"lags": 2}), ("spectral", {"periods": [8.0, 3.0]})],
+)
+@pytest.mark.parametrize("policy", POLICIES[:2])
+def test_a_break_clears_the_lags_a_row_is_scored_with(model, extra, policy):
+    """A row after a gap past ``gap_cap``, or in a new session, breaks the
+    rows behind it from it: ``fit_predict`` clears what is lagged by rows
+    (``ar``'s lags, ``spectral``'s transform) before it reads the row, and
+    ``predict`` scores the row with a copy cleared the same way."""
+    df = _frame(n=60, groups=("a",)).with_columns(s=pl.lit("one"))
+    if model == "spectral":  # no features, no residuals, no coefficients
+        common = dict(clock="t", gap_cap=8.0, group="g", weight="w", half_life=30.0)
+        specs = [rp.spec.spectral("m", targets=["y0"], **extra, **common, **policy)]
+    else:
+        specs = [_spec(model, extra, **policy)]
+    bank = rp.ModelBank(specs)
+    bank.fit_predict(df.head(40))
+    # Rows 3 and 11 come after a gap past the cap; rows 6..8 start a new
+    # session.
+    gap = pl.when(pl.arange(0, 20) >= 11).then(40.0).otherwise(0.0)
+    gap = gap + pl.when(pl.arange(0, 20) >= 3).then(20.0).otherwise(0.0)
+    later = df.tail(20).with_columns(
+        t=pl.col("t") + gap,
+        s=pl.when(pl.arange(0, 20).is_between(6, 8)).then(pl.lit("two")).otherwise(pl.col("s")),
+    )
+    assert_row_oracle(bank, specs, later)
+
+
 def _at_the_last_clock(bank, df: pl.DataFrame, rows) -> pl.DataFrame:
     """`df` with `rows` dated at the bank's last learned clock: what scoring
     reads a row before it as -- a step of 0 (task 120)."""

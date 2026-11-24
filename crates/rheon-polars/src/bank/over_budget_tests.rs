@@ -43,7 +43,7 @@ fn clock(spacing: f64) -> Cadence {
 #[test]
 fn the_refusal_says_how_to_raise_the_budget() {
     let key = GroupKey(Some("a".into()));
-    let default = over_budget_message(&grouped(""), &key, 300 << 20, clock(4.0), false);
+    let default = over_budget_message(&grouped(""), &key, 300 << 20, clock(4.0), Some(3));
     for want in [
         "the default window_budget of 256 MiB",
         "window_budget = {\"refuse\": MiB} to a larger number of MiB",
@@ -52,7 +52,9 @@ fn the_refusal_says_how_to_raise_the_budget() {
         "increase snapshot_every (4 now)",
         "window_budget = {\"thin\": MiB}",
         "group \"a\"",
-        "300 MiB",
+        // The bytes it would take, and the row that would take it there.
+        "would hold 300 MiB at the chunk's row 3, counted from 0",
+        "the bank refused the chunk and learned none of it",
     ] {
         assert!(default.contains(want), "{want:?} not in {default}");
     }
@@ -61,7 +63,7 @@ fn the_refusal_says_how_to_raise_the_budget() {
         &GroupKey(None),
         9 << 20,
         Cadence::EVERY_ROW,
-        false,
+        Some(3),
     );
     assert!(
         named.contains("above window_budget = {\"refuse\": 8}"),
@@ -70,7 +72,7 @@ fn the_refusal_says_how_to_raise_the_budget() {
     assert!(!named.contains("default"), "{named}");
     // Found as the rows went in, the bank has learned part of the chunk:
     // the way out starts from a saved state.
-    let learned = over_budget_message(&spec(""), &GroupKey(None), 9 << 20, clock(4.0), true);
+    let learned = over_budget_message(&spec(""), &GroupKey(None), 9 << 20, clock(4.0), None);
     assert!(
         learned.contains("so the bank stopped after learning part of the chunk")
             && learned
@@ -87,7 +89,7 @@ fn the_refusal_says_how_to_raise_the_budget() {
 #[test]
 fn the_refusal_names_the_cadence_in_force() {
     let key = GroupKey(None);
-    let say = |s: &Spec, c: Cadence| over_budget_message(s, &key, 9 << 20, c, false);
+    let say = |s: &Spec, c: Cadence| over_budget_message(s, &key, 9 << 20, c, Some(3));
     let both = Cadence {
         spacing: 90.0,
         rows: 25,

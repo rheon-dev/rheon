@@ -217,3 +217,116 @@ fn the_state_is_its_ring() {
     assert_eq!(Kswin::state_bytes(100), 848);
     assert_eq!(Kswin::state_bytes(1000), 8048);
 }
+
+/// `sound` takes the level just inside each end of `(0, 1)` and refuses
+/// both ends, and each other shape bound on its own.
+#[test]
+fn a_restored_levels_shape_is_checked_at_both_ends() {
+    let with = |f: &dyn Fn(&mut Kswin)| {
+        let mut k = Kswin::new(KswinCfg::default());
+        f(&mut k);
+        k.sound()
+    };
+    assert!(with(&|_| {}));
+    assert!(!with(&|k| k.alpha = 0.0));
+    assert!(with(&|k| k.alpha = 1e-300));
+    assert!(!with(&|k| k.alpha = 1.0));
+    assert!(with(&|k| k.alpha = 1.0 - f64::EPSILON));
+    assert!(!with(&|k| k.alpha = f64::NAN));
+    assert!(!with(&|k| k.stat_size = 0));
+    assert!(with(&|k| k.stat_size = 50) && !with(&|k| k.stat_size = 51));
+    assert!(with(&|k| k.window = (0..100).map(f64::from).collect()));
+    assert!(!with(&|k| k.window = (0..101).map(f64::from).collect()));
+    // Twice a sample past what a `usize` holds is no ring's size (review
+    // 2026-11-23, HAWKES-1).
+    assert!(!with(&|k| k.stat_size = usize::MAX / 2 + 1));
+}
+
+/// The largest gap can fall at the far end of the walk: the samples alternate
+/// through their first halves, and the second half of the older is all below the
+/// second half of the newer, so the gap is built only in the last `r / 2`
+/// passes and a walk stopped short of its end reads half of it.
+#[test]
+fn h_is_read_to_the_end_of_the_walk() {
+    for r in [10usize, 30, 60] {
+        let half = r / 2;
+        let a: Vec<f64> = (0..half)
+            .map(|i| (2 * i) as f64)
+            .chain((0..r - half).map(|i| (1000 + i) as f64))
+            .collect();
+        let b: Vec<f64> = (0..half)
+            .map(|i| (2 * i + 1) as f64)
+            .chain((0..r - half).map(|i| (2000 + i) as f64))
+            .collect();
+        let want = a
+            .iter()
+            .chain(&b)
+            .map(|v| {
+                let ca = a.iter().filter(|x| *x <= v).count();
+                let cb = b.iter().filter(|x| *x <= v).count();
+                ca.abs_diff(cb)
+            })
+            .max()
+            .unwrap();
+        assert_eq!(want, r - half);
+        assert_eq!(ks_h(&a, &b), want, "r = {r}");
+    }
+}
+
+/// A restored ring holding a value that is not finite is damaged, and
+/// refused: the sorted samples would put a NaN where the scan reads a gap
+/// between counts, and the statistic it read would be wrong (review
+/// 2026-11-23, DRIFT-4; before task 578e such a ring also spun the scan).
+#[test]
+fn a_restored_ring_holds_only_finite_values() {
+    let mut s = 3u64;
+    let k = full(KswinCfg::default(), &mut s);
+    assert!(k.sound());
+    for bad in [f64::NAN, -f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut d = k.clone();
+        d.window[40] = bad;
+        assert!(!d.sound(), "a ring holding {bad} is refused");
+    }
+}
+
+/// A value that is not finite is no row: it enters no ring, moves no
+/// generator and flags nothing, at every point of the ring's filling.
+#[test]
+fn a_non_finite_value_is_no_row() {
+    let mut s = 5u64;
+    for fed in [0usize, 1, 50, 99, 100, 350] {
+        let mut k = Kswin::new(KswinCfg::default());
+        for _ in 0..fed {
+            k.update(lcg(&mut s));
+        }
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let before = k.clone();
+            assert!(!k.update(bad));
+            assert_eq!(k, before, "{bad} after {fed} rows");
+            assert_eq!(k.rng, before.rng);
+        }
+    }
+}
+
+/// The scan ends on samples holding a NaN at either end, as `total_cmp`
+/// sorts them: a pass that moves neither cursor is counted, not spun.
+#[test]
+fn the_scan_ends_on_a_nan() {
+    let a = [-f64::NAN, 1.0, 2.0, 3.0];
+    let b = [0.0, 1.5, 2.5, f64::NAN];
+    assert!(ks_h(&a, &b) <= a.len());
+    assert!(ks_h(&b, &a) <= a.len());
+}
+
+/// At large samples `h*` is the least `h` whose tail is at most `alpha`,
+/// read from the ratios built once (review 2026-11-23, DRIFT-8: built per
+/// `h`, `r = 50,000` cost `r^{3/2}` and a vector of `r + 1` numbers a step).
+#[test]
+fn the_critical_h_of_a_large_sample_is_the_least_whose_tail_passes() {
+    for (r, alpha) in [(5_000usize, 0.005), (50_000, 0.005), (50_000, 0.05)] {
+        let h = ks_critical_h(r, alpha);
+        assert!(h > 1 && h <= r, "{r}: {h}");
+        assert!(ks_equal_tail(r, h) <= alpha, "{r}: the tail at {h}");
+        assert!(ks_equal_tail(r, h - 1) > alpha, "{r}: the tail below {h}");
+    }
+}

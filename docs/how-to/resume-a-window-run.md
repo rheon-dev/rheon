@@ -41,7 +41,11 @@ Use this when each part of the stream is a file of its own.
 
 1. **Give the first part's run `save_state=` a file name.** The run returns
    every row whose windows have closed, and saves the rest in the state,
-   with the windows' sums.
+   with the windows' sums. A window that looks back and waits for the next
+   stamp is read as it stands at the end of the input, so the last stamp's
+   rows leave in this run. A resumed run refuses an input that starts at that
+   stamp (below), so no row can join those windows later. Only the rows with
+   a window that looks ahead still open are saved.
 2. **Give the next part's run `load_state=` the same file.** It returns the
    rows the state held before its own.
 3. **To go on to a third part, give the second run `save_state=` too.**

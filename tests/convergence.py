@@ -799,7 +799,12 @@ REGISTRY: dict[str, Registration] = {r.key: r for r in _registrations()}
 PENDING: dict[str, str] = {}
 
 #: Models (or losses) that predict a target and have no registration, and why.
-NOT_REGISTERED: dict[str, str] = {}
+NOT_REGISTERED: dict[str, str] = {
+    "ar": "its design is the target's own lags beside the features, which the "
+    "harness's streams and oracles (`Stream.X`, the features' design) do not "
+    "carry; its exactness against statsmodels' AutoReg and WLS is held in "
+    "tests/test_ar.py meanwhile, and its grids and bounds are still to be measured",
+}
 
 
 def losses(builder: str) -> tuple[str, ...]:

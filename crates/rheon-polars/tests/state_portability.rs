@@ -39,6 +39,16 @@ use rheon_polars::{Bank, RefreshCols, RefreshTime, Spec, WindowsConfig, WindowsR
 /// the registry.
 const SPECS: &[(&str, &str, &str)] = &[
     (
+        "spectral",
+        r#"{"type": "spectral", "periods": [8.0, 3.0], "scaling": "spectrum"}"#,
+        r#""targets": ["y", "x1"], "features": [], "half_life": 50.0"#,
+    ),
+    (
+        "ar",
+        r#"{"type": "ar", "lags": [1, 2, 4]}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"], "half_life": 50.0"#,
+    ),
+    (
         "audit",
         r#"{"type": "audit", "pairs": true}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"]"#,
@@ -69,6 +79,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": 50.0"#,
     ),
     (
+        "ewm_moments",
+        r#"{"type": "ewm_moments", "terms": {"skew": {"x0": 3}, "ac": {"x0": 1, "x0@2": 1}, "co": {"x0": 1, "x1": 2}}, "kind": {"skew": "standardized", "ac": "standardized"}, "se": true, "window_size": 40.0}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "half_life": 50.0, "gap_cap": 50.0"#,
+    ),
+    (
         "ewridge",
         r#"{"type": "ewridge", "standardize": false, "ridge_scale": "mean", "target_gaps": "own_rows"}"#,
         r#""targets": ["y"], "features": ["x0"], "half_life": 50.0"#,
@@ -94,14 +109,44 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["y", "x0"], "features": []"#,
     ),
     (
+        "dcc",
+        r#"{"type": "dcc", "asymmetric": true, "margin_start_rows": 50, "start_rows": 50}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": 50.0"#,
+    ),
+    (
+        "tdigest",
+        r#"{"type": "tdigest", "compression": 10, "quantiles": [0.05, 0.25, 0.95]}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+    ),
+    (
+        "ddsketch",
+        r#"{"type": "ddsketch", "quantiles": [0.05, 0.25, 0.95], "window_rows": 50}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+    ),
+    (
         "hawkes",
         r#"{"type": "hawkes", "kernel_decays": [0.5, 2.0]}"#,
         r#""targets": ["y", "x0"], "features": [], "half_life": 50.0"#,
     ),
     (
+        "pca",
+        r#"{"type": "pca", "method": "ccipca", "n_components": 1}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": 50.0"#,
+    ),
+    (
         "hmm",
         r#"{"type": "hmm", "n_components": 2, "covariance_type": "full", "precision_prior": 0.1, "learn": true}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": 50.0"#,
+    ),
+    (
+        "realized",
+        r#"{"type": "realized", "window_rows": 30, "lm_window": 20}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+    ),
+    (
+        "power_variation",
+        r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}], "window_rows": 30}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
     ),
     (
         "holt",

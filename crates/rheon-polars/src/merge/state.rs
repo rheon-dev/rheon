@@ -14,6 +14,12 @@
 //!              held at a tie, as Arrow IPC; absent when none)
 //! groups       [(key, last clock)]: the merged rows' last clock in each group,
 //!              sorted by key; the one key "" without `by`
+//! carry        under `carry` alone (PLAN 556): columns (the columns carried,
+//!              which a load must match) and groups ([(key, per column: nil
+//!              or {restarts, at, value})], sorted by key: each group's last
+//!              non-null value of each column, the clock it was read at and
+//!              its input's restarts then; the value as `refresh_time`'s held
+//!              row keeps a value, a `Cell`)
 //! checksum     the xxh3-64 of every byte before it
 //! ```
 //!
@@ -25,9 +31,12 @@ use std::io::Cursor;
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::{Block, Merge, MergeConfig, Mode, WHO, dtype_text, float_key, float_of};
+use super::{
+    Block, Carried, Merge, MergeConfig, Mode, WHO, cell_as, cells_series, dtype_text, float_key,
+    float_of,
+};
 use crate::bank::GroupKey;
-use crate::refresh::Bin;
+use crate::refresh::{Bin, Cell};
 
 /// The layout's version.
 pub(crate) const MERGE_VERSION: u32 = 1;
@@ -49,6 +58,21 @@ struct InputState {
     held: Option<Bin>,
 }
 
+/// A carried column's last value in one group, as the state keeps it.
+#[derive(Debug, Serialize, Deserialize)]
+struct CarriedState {
+    restarts: u64,
+    at: Stamp,
+    value: Cell,
+}
+
+/// The values `carry` holds (PLAN 556): the columns, and each group's.
+#[derive(Debug, Serialize, Deserialize)]
+struct CarryState {
+    columns: Vec<String>,
+    groups: Vec<(GroupKey, Vec<Option<CarriedState>>)>,
+}
+
 #[derive(Serialize, Deserialize)]
 struct MergeFile {
     magic: String,
@@ -60,6 +84,9 @@ struct MergeFile {
     names: Vec<String>,
     inputs: Vec<InputState>,
     groups: Vec<(GroupKey, Stamp)>,
+    /// Under `carry` alone, so a merge without it writes the bytes it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    carry: Option<CarryState>,
     /// The xxh3-64 of every byte before it (`checksum.rs`), last; read from
     /// the file's last bytes, never by serde.
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
@@ -141,6 +168,33 @@ impl Merge {
             .filter_map(|(k, last)| last.map(|l| (GroupKey(k.clone()), self.stamp(l))))
             .collect();
         groups.sort_by(|a, b| a.0.cmp(&b.0));
+        let carry = if self.carry.is_empty() {
+            None
+        } else {
+            let mut held: Vec<(GroupKey, Vec<Option<CarriedState>>)> = Vec::new();
+            for (gid, key) in self.group_keys.iter().enumerate() {
+                let mut row: Vec<Option<CarriedState>> = Vec::with_capacity(self.carry.len());
+                for c in &self.carry {
+                    row.push(match c.slots[gid] {
+                        None => None,
+                        Some(v) => Some(CarriedState {
+                            restarts: v.restarts,
+                            at: self.stamp(v.key),
+                            value: Cell::of(&c.store.slice(i64::from(v.at), 1).into_column())
+                                .map_err(|e| e.to_string())?,
+                        }),
+                    });
+                }
+                if row.iter().any(Option::is_some) {
+                    held.push((GroupKey(key.clone()), row));
+                }
+            }
+            held.sort_by(|a, b| a.0.cmp(&b.0));
+            Some(CarryState {
+                columns: self.carry.iter().map(|c| c.name.clone()).collect(),
+                groups: held,
+            })
+        };
         let file = MergeFile {
             magic: crate::envelope::MAGIC.into(),
             kind: crate::envelope::Kind::Merge.tag().into(),
@@ -151,6 +205,7 @@ impl Merge {
             names: self.inputs.iter().map(|i| i.name.clone()).collect(),
             inputs,
             groups,
+            carry,
             checksum: Some(crate::checksum::Trailer::Patched),
         };
         let mut out = rmp_serde::to_vec_named(&file).map_err(|e| e.to_string())?;
@@ -262,6 +317,15 @@ impl Merge {
                 file.clock_dtype, self.cfg.clock
             ));
         }
+        let carried: Vec<String> = self.carry.iter().map(|c| c.name.clone()).collect();
+        let saved: &[String] = file.carry.as_ref().map_or(&[], |c| &c.columns);
+        if saved != carried.as_slice() {
+            return Err(format!(
+                "{WHO}: the state was saved carrying {saved:?}, but this call carries \
+                 {carried:?}. Give the carry the state was saved with, or leave out load_state \
+                 to start over."
+            ));
+        }
         if file.inputs.len() != self.inputs.len() {
             return Err(damaged("it holds another number of inputs than it names"));
         }
@@ -291,6 +355,9 @@ impl Merge {
                 }
             };
             self.group_last[gid as usize] = Some(k);
+        }
+        if let Some(carry) = file.carry {
+            self.restore_carry(carry)?;
         }
         for (i, st) in file.inputs.into_iter().enumerate() {
             let taken = match st.last {
@@ -350,5 +417,149 @@ impl Merge {
             self.max_read = self.max_read.max(Some((restarts, k)));
         }
         Ok(())
+    }
+}
+
+impl Merge {
+    /// The values a state carried, into each group's slots: every group a
+    /// value is carried in has merged rows, so is among the state's groups.
+    fn restore_carry(&mut self, carry: CarryState) -> Result<(), String> {
+        let mut prev: Option<&GroupKey> = None;
+        for (key, row) in &carry.groups {
+            if prev.is_some_and(|p| p >= key) {
+                return Err(damaged("its carried values are not one a group, in order"));
+            }
+            prev = Some(key);
+            let gid = match (&self.cfg.by, &key.0) {
+                (None, Some(s)) if s.is_empty() => Some(0),
+                (None, _) => None,
+                (Some(_), Some(s)) => self.gid_of.get(s).copied(),
+                (Some(_), None) => self.null_gid,
+            }
+            .filter(|&g| self.group_last[g as usize].is_some())
+            .ok_or_else(|| damaged("it carries a value in a group with no merged rows"))?;
+            if row.len() != self.carry.len() {
+                return Err(damaged(
+                    "a group carries values of another number of columns",
+                ));
+            }
+            for (ci, v) in row.iter().enumerate() {
+                let Some(v) = v else { continue };
+                let k = self.key_of(v.at).ok_or_else(|| {
+                    damaged("a carried value's clock is not of the state's clock")
+                })?;
+                let col = &self.carry[ci];
+                if matches!(v.value, Cell::Null) {
+                    return Err(damaged("it carries a null"));
+                }
+                // Read back as the column's dtype now, not on the row that needs it.
+                cell_as(&v.value, &col.name, &col.dtype).map(drop).map_err(|_| {
+                    format!(
+                        "{WHO}: the state carries a value of column {:?} that this call's {:?}, \
+                         of dtype {}, cannot hold. Give each input the columns it was saved \
+                         with, or leave out load_state to start over.",
+                        col.name,
+                        col.name,
+                        dtype_text(&col.dtype)
+                    )
+                })?;
+                let col = &mut self.carry[ci];
+                col.slots[gid as usize] = Some(Carried {
+                    restarts: v.restarts,
+                    key: k,
+                    at: col.store.len() as IdxSize,
+                });
+                let one = cells_series(std::slice::from_ref(&v.value), &col.name, &col.dtype)
+                    .map_err(|e| e.to_string())?;
+                col.store.append(&one).map_err(|e| e.to_string())?;
+            }
+        }
+        for c in &mut self.carry {
+            c.store = c.store.rechunk();
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod carry_state_tests {
+    //! A carried state that does not hold together is refused as damaged,
+    //! each way it can fail to (PLAN 556).
+
+    use super::super::tests::{cfg, drive, merge_of, names};
+    use super::*;
+
+    fn input() -> DataFrame {
+        df!("t" => [1.0, 2.0], "g" => ["a", "b"], "x" => [Some(5i64), None]).unwrap()
+    }
+
+    fn carry_cfg() -> MergeConfig {
+        let mut c = cfg("t");
+        c.by = Some("g".into());
+        c.carry = vec!["x".into()];
+        c
+    }
+
+    fn saved() -> MergeFile {
+        let a = input();
+        let mut m = merge_of(std::slice::from_ref(&a), carry_cfg());
+        let _ = drive(&mut m, &[vec![a]], None, false);
+        rmp_serde::from_slice(&m.save_bytes().unwrap()).unwrap()
+    }
+
+    fn load(mut f: MergeFile) -> String {
+        f.checksum = Some(crate::checksum::Trailer::Patched);
+        let mut bytes = rmp_serde::to_vec_named(&f).unwrap();
+        crate::checksum::seal(&mut bytes);
+        Merge::load_bytes(
+            &bytes,
+            names(1),
+            vec![input().schema().as_ref().clone()],
+            carry_cfg(),
+        )
+        .err()
+        .map_or_else(String::new, |e| e.to_string())
+    }
+
+    #[test]
+    fn the_saved_state_loads() {
+        let f = saved();
+        let carry = f.carry.as_ref().unwrap();
+        assert_eq!(carry.columns, ["x"]);
+        assert_eq!(carry.groups.len(), 1, "group b has no value yet");
+        assert_eq!(load(f), "");
+    }
+
+    #[test]
+    fn each_way_a_carried_state_falls_apart_is_damaged() {
+        let mut f = saved();
+        let row = f.carry.as_mut().unwrap().groups.pop().unwrap();
+        f.carry.as_mut().unwrap().groups = vec![
+            (GroupKey(Some("a".into())), vec![None]),
+            (GroupKey(Some("a".into())), vec![None]),
+        ];
+        assert!(load(f).contains("not one a group, in order"));
+        let mut f = saved();
+        f.carry.as_mut().unwrap().groups[0].0 = GroupKey(Some("zz".into()));
+        assert!(load(f).contains("a group with no merged rows"));
+        let mut f = saved();
+        f.carry.as_mut().unwrap().groups[0].1.push(None);
+        assert!(load(f).contains("another number of columns"));
+        let mut f = saved();
+        f.carry.as_mut().unwrap().groups[0].1[0]
+            .as_mut()
+            .unwrap()
+            .at = Stamp::Int(1);
+        assert!(load(f).contains("a carried value's clock is not of the state's clock"));
+        let mut f = saved();
+        f.carry.as_mut().unwrap().groups[0].1[0]
+            .as_mut()
+            .unwrap()
+            .value = Cell::Null;
+        assert!(load(f).contains("it carries a null"));
+        // A group without a value of any column is legal, and loads.
+        let mut f = saved();
+        f.carry.as_mut().unwrap().groups = vec![(row.0, vec![None])];
+        assert_eq!(load(f), "");
     }
 }

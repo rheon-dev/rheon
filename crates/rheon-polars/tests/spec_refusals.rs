@@ -1205,10 +1205,93 @@ fn a_hawkes_window_past_its_state_cap_is_refused() {
         &["max_state_bytes must be above 0"],
     );
     refused(&spec(r#"{"type": "hawkes"}"#), &["needs its kernels"]);
+    // A window whose bytes pass what a `u64` holds is refused, not wrapped
+    // into a few bytes that pass the cap (review 2026-11-23, HAWKES-1:
+    // `window_events = 2^59` read 72 bytes).
+    for w in [1u64 << 59, 1 << 60, u64::MAX >> 1] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "hawkes", "kernel_decays": [1.0, 5.0], "window_events": {w}}}"#
+            )),
+            &["max_state_bytes of 262144"],
+        );
+    }
+    assert_eq!(
+        rheon_core::Hawkes::state_bytes(1, 1, Some(usize::MAX)),
+        u64::MAX
+    );
     refused(
         r#"{"name": "m", "model": {"type": "hawkes", "kernel_decays": [1.0]},
             "targets": ["a"], "features": ["x"], "half_life": 10.0}"#,
         &["hawkes takes no features"],
+    );
+}
+
+/// `realized`'s window of rows and Lee and Mykland's window are the parts of
+/// its state its settings size, so their bytes are known at the call: past
+/// `max_state_bytes` (256 KB by default) the spec is refused naming the
+/// largest window that fits, which is taken; a window of clock units, a
+/// window beside a decay, features and a confidence out of range are
+/// refused by name.
+#[test]
+fn a_realized_window_past_its_state_cap_is_refused() {
+    let spec = |model: &str, half_life: &str| {
+        format!(
+            r#"{{"name": "m", "model": {model}, "targets": ["a", "b"], "features": [],
+                "half_life": {half_life}}}"#
+        )
+    };
+    let at = |w: usize| rheon_polars::rheon_core::Realized::state_bytes(2, None, Some(w), false);
+    let cap = 256 * 1024;
+    let fits = (1..).find(|&w| at(w + 1) > cap).unwrap();
+    accepted(&spec(
+        &format!(r#"{{"type": "realized", "window_rows": {fits}}}"#),
+        r#""inf""#,
+    ));
+    refused(
+        &spec(
+            &format!(r#"{{"type": "realized", "window_rows": {}}}"#, fits + 1),
+            r#""inf""#,
+        ),
+        &[
+            &format!("would hold {} bytes a group", at(fits + 1)),
+            "max_state_bytes of 262144",
+            &format!("The largest window_rows that fits is {fits}"),
+        ],
+    );
+    accepted(&spec(
+        r#"{"type": "realized", "window_rows": 100000, "max_state_bytes": 30000000}"#,
+        r#""inf""#,
+    ));
+    accepted(&spec(r#"{"type": "realized", "lm_window": 300}"#, "50.0"));
+    accepted(&spec(
+        r#"{"type": "realized", "window_size": 20.0, "closed": "both"}"#,
+        r#""inf""#,
+    ));
+    refused(
+        &spec(r#"{"type": "realized", "window_rows": 50}"#, "50.0"),
+        &["a window forgets by dropping the oldest rows, so it takes no decay"],
+    );
+    refused(
+        &spec(r#"{"type": "realized", "window_size": 0.0}"#, r#""inf""#),
+        &["window_size must be a finite span of the clock above 0"],
+    );
+    refused(
+        &spec(r#"{"type": "realized", "lm_window": 2}"#, "50.0"),
+        &["lm_window must be at least 3"],
+    );
+    refused(
+        &spec(r#"{"type": "realized", "lm_beta": 1.0}"#, "50.0"),
+        &["lm_beta must be above 0 and below 1"],
+    );
+    refused(
+        &spec(r#"{"type": "realized", "closed": "both"}"#, "50.0"),
+        &["there is no clock window"],
+    );
+    refused(
+        r#"{"name": "m", "model": {"type": "realized"},
+            "targets": ["a"], "features": ["x"], "half_life": 10.0}"#,
+        &["realized takes no features"],
     );
 }
 
@@ -1266,6 +1349,283 @@ fn a_garch_past_its_state_cap_or_its_forms_is_refused() {
     refused(
         r#"{"name": "m", "model": {"type": "garch"}, "targets": ["a"], "features": ["x"]}"#,
         &["garch takes no features"],
+    );
+}
+
+/// `dcc`'s starts are its state's size, known from its settings at the
+/// call: the margins' 2,000 rows a series hold eight series under the
+/// default 256 KB and not nine. Its parameters are given all together or
+/// not at all, its margins are a GARCH or none, and a start is given one
+/// way; each refused by name.
+#[test]
+fn a_dcc_past_its_state_cap_or_its_forms_is_refused() {
+    let spec = |model: &str, k: usize| {
+        let targets: Vec<String> = (0..k).map(|i| format!("\"s{i}\"")).collect();
+        format!(
+            r#"{{"name": "m", "model": {model}, "targets": [{}], "features": [],
+                "half_life": "inf"}}"#,
+            targets.join(", ")
+        )
+    };
+    accepted(&spec(r#"{"type": "dcc"}"#, 2));
+    accepted(&spec(r#"{"type": "dcc"}"#, 8));
+    refused(
+        &spec(r#"{"type": "dcc"}"#, 9),
+        &["past max_state_bytes of 262144", "margins' start_rows"],
+    );
+    accepted(&spec(r#"{"type": "dcc", "max_state_bytes": 400000}"#, 9));
+    accepted(&spec(r#"{"type": "dcc", "a": 0.05, "b": 0.9}"#, 3));
+    accepted(&spec(
+        r#"{"type": "dcc", "asymmetric": true, "a": 0.03, "b": 0.9, "g": 0.04}"#,
+        3,
+    ));
+    refused(
+        &spec(r#"{"type": "dcc", "a": 0.05}"#, 3),
+        &["Give a and b, or leave every one out"],
+    );
+    refused(
+        &spec(r#"{"type": "dcc", "a": 0.05, "b": 0.9, "g": 0.01}"#, 3),
+        &["set asymmetric to true"],
+    );
+    refused(
+        &spec(r#"{"type": "dcc", "a": 0.5, "b": 0.5}"#, 3),
+        &["a + b must be at most 1 - 1e-4"],
+    );
+    refused(
+        &spec(r#"{"type": "dcc", "margins": "arch"}"#, 2),
+        &["margins must be \"garch\" or \"none\""],
+    );
+    refused(
+        &spec(r#"{"type": "dcc", "margins": "none", "dist": "t"}"#, 2),
+        &["runs no GARCH margin"],
+    );
+    refused(
+        &spec(
+            r#"{"type": "dcc", "start_rows": 100, "start_span": 50.0}"#,
+            2,
+        ),
+        &["Leave one of them out"],
+    );
+    refused(
+        &spec(r#"{"type": "dcc", "start_rows": 0}"#, 2),
+        &["start_rows must be at least 1"],
+    );
+    accepted(&spec(r#"{"type": "dcc", "start_rows": 1}"#, 2));
+    refused(
+        &spec(r#"{"type": "dcc", "start_rows": 0}"#, 3),
+        &["start_rows must be at least 1"],
+    );
+    refused(&spec(r#"{"type": "dcc"}"#, 1), &["at least two targets"]);
+    refused(
+        r#"{"name": "m", "model": {"type": "dcc"}, "targets": ["a", "b"], "features": ["x"],
+            "half_life": "inf"}"#,
+        &["dcc takes no features"],
+    );
+}
+
+/// `tdigest` (task 544): the defaults build, compression 100 and 200 build,
+/// a level not strictly inside (0, 1) or listed twice is refused, a decay
+/// is refused naming the windowed DDSketch, and features, a compression
+/// under its floor of 10 and a state past `max_state_bytes` are refused by name.
+#[test]
+fn a_tdigest_spec_builds_or_is_refused_by_name() {
+    let spec = |model: &str| {
+        format!(r#"{{"name": "m", "model": {model}, "targets": ["a", "b"], "features": []}}"#)
+    };
+    accepted(&spec(r#"{"type": "tdigest", "quantiles": [0.25]}"#));
+    for c in ["100", "200"] {
+        accepted(&spec(&format!(
+            r#"{{"type": "tdigest", "compression": {c}, "quantiles": [0.01, 0.25, 0.99]}}"#
+        )));
+    }
+    let fields = output_fields(
+        &serde_json::from_str(&spec(r#"{"type": "tdigest", "quantiles": [0.05, 0.95]}"#)).unwrap(),
+    );
+    assert_eq!(
+        fields,
+        [
+            "q0.05_a",
+            "q0.95_a",
+            "es0.05_a",
+            "es0.95_a",
+            "q0.05_b",
+            "q0.95_b",
+            "es0.05_b",
+            "es0.95_b",
+            "weight_sum",
+            "settled_frac",
+            "withheld_reason"
+        ]
+    );
+    for bad in ["0.0", "1.0", "1.5", "-0.25"] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "tdigest", "quantiles": [0.25, {bad}]}}"#
+            )),
+            &["each of quantiles must be above 0 and below 1"],
+        );
+    }
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.25, 0.25]}"#),
+        &["lists 0.25 twice"],
+    );
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.05, 0.5]}"#),
+        &["quantiles lists 0.5", "neither the lower nor the upper"],
+    );
+    accepted(&spec(
+        r#"{"type": "tdigest", "quantiles": [0.4999, 0.5001]}"#,
+    ));
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": []}"#),
+        &["at least one level"],
+    );
+    for (decay, key) in [
+        (r#""half_life": 50.0"#, "half_life"),
+        (r#""lam": 0.99"#, "lam"),
+    ] {
+        refused(
+            &format!(
+                r#"{{"name": "m", "model": {{"type": "tdigest", "quantiles": [0.25]}},
+                    "targets": ["a"], "features": [], {decay}}}"#
+            ),
+            &[
+                &format!("{key} does not apply to tdigest, whose merging digest"),
+                "the windowed DDSketch (ewm_quantile with a window_size)",
+            ],
+        );
+    }
+    refused(
+        r#"{"name": "m", "model": {"type": "tdigest", "quantiles": [0.25]}, "targets": ["a"],
+            "features": ["x"]}"#,
+        &["tdigest takes no features"],
+    );
+    for c in ["10", "12.5", "200"] {
+        accepted(&spec(&format!(
+            r#"{{"type": "tdigest", "compression": {c}, "quantiles": [0.25]}}"#
+        )));
+    }
+    for c in ["0", "9.5", "-3"] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "tdigest", "compression": {c}, "quantiles": [0.25]}}"#
+            )),
+            &["compression must be at least 10"],
+        );
+    }
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.25], "max_state_bytes": 20000}"#),
+        &["past max_state_bytes 20000"],
+    );
+    refused(
+        &spec(r#"{"type": "tdigest", "quantiles": [0.25], "max_state_bytes": 67108865}"#),
+        &["at most 67108864"],
+    );
+}
+
+/// `ddsketch` (task 544, part 7): the defaults build, a coarse and a fine
+/// `alpha` build, each window builds, a decay builds; a level outside (0, 1),
+/// twice or 0.5, an `alpha` out of range, a decay beside a window, both
+/// windows, `closed = "both"` without `window_size`, features, and a row
+/// window past `max_state_bytes` are refused by name. The outputs are each
+/// level's quantile then its tail mean, a target at a time.
+#[test]
+fn a_ddsketch_spec_builds_or_is_refused_by_name() {
+    let spec = |model: &str| {
+        format!(r#"{{"name": "m", "model": {model}, "targets": ["a", "b"], "features": []}}"#)
+    };
+    accepted(&spec(r#"{"type": "ddsketch", "quantiles": [0.25]}"#));
+    for alpha in ["0.000001", "0.01", "0.5"] {
+        accepted(&spec(&format!(
+            r#"{{"type": "ddsketch", "alpha": {alpha}, "quantiles": [0.01, 0.99]}}"#
+        )));
+    }
+    for alpha in ["0", "0.0000009", "1", "-0.1"] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "ddsketch", "alpha": {alpha}, "quantiles": [0.25]}}"#
+            )),
+            &["alpha must be at least"],
+        );
+    }
+    accepted(&spec(
+        r#"{"type": "ddsketch", "quantiles": [0.25], "window_rows": 1}"#,
+    ));
+    accepted(&spec(
+        r#"{"type": "ddsketch", "quantiles": [0.25], "window_size": 10, "closed": "both"}"#,
+    ));
+    let fields = output_fields(
+        &serde_json::from_str(&spec(r#"{"type": "ddsketch", "quantiles": [0.05, 0.95]}"#)).unwrap(),
+    );
+    assert_eq!(
+        fields,
+        [
+            "q0.05_a",
+            "q0.95_a",
+            "es0.05_a",
+            "es0.95_a",
+            "q0.05_b",
+            "q0.95_b",
+            "es0.05_b",
+            "es0.95_b",
+            "weight_sum",
+            "settled_frac",
+            "withheld_reason"
+        ]
+    );
+    for (quantiles, says) in [
+        ("[0.25, 1.0]", "above 0 and below 1"),
+        ("[0.25, 0.25]", "lists 0.25 twice"),
+        ("[0.05, 0.5]", "quantiles lists 0.5"),
+        ("[]", "at least one level"),
+    ] {
+        refused(
+            &spec(&format!(
+                r#"{{"type": "ddsketch", "quantiles": {quantiles}}}"#
+            )),
+            &[says],
+        );
+    }
+    for decay in [r#""half_life": 50.0"#, r#""lam": 0.99"#] {
+        accepted(&format!(
+            r#"{{"name": "m", "model": {{"type": "ddsketch", "quantiles": [0.25]}},
+                "targets": ["a"], "features": [], {decay}}}"#
+        ));
+        refused(
+            &format!(
+                r#"{{"name": "m", "model": {{"type": "ddsketch", "quantiles": [0.25],
+                    "window_rows": 20}}, "targets": ["a"], "features": [], {decay}}}"#
+            ),
+            &["a window and a decay", "not both"],
+        );
+    }
+    accepted(
+        r#"{"name": "m", "model": {"type": "ddsketch", "quantiles": [0.25], "window_rows": 20},
+            "targets": ["a"], "features": [], "half_life": "inf"}"#,
+    );
+    refused(
+        &spec(r#"{"type": "ddsketch", "quantiles": [0.25], "window_rows": 5, "window_size": 5}"#),
+        &["not both"],
+    );
+    refused(
+        &spec(r#"{"type": "ddsketch", "quantiles": [0.25], "window_rows": 5, "closed": "both"}"#),
+        &["closed"],
+    );
+    refused(
+        &spec(r#"{"type": "ddsketch", "quantiles": [0.25], "window_rows": 0}"#),
+        &["window_rows must be at least 1"],
+    );
+    refused(
+        r#"{"name": "m", "model": {"type": "ddsketch", "quantiles": [0.25]}, "targets": ["a"],
+            "features": ["x"]}"#,
+        &["ddsketch takes no features"],
+    );
+    refused(
+        &spec(
+            r#"{"type": "ddsketch", "quantiles": [0.25], "window_rows": 100000,
+                "max_state_bytes": 100000}"#,
+        ),
+        &["max_state_bytes 100000"],
     );
 }
 
@@ -1353,4 +1713,41 @@ fn a_hawkes_clock_window_is_refused_where_it_conflicts() {
         ),
         &["with no event in its window", "max_state_bytes of 100"],
     );
+}
+
+/// `emit_feature_health` beside an `expectile` window reads the window's
+/// memory, as beside an `ewridge` window: refused as "half_life is inf, with
+/// no window_size" though the window was set (review 2026-11-23, SPEC-8
+/// (2)). A window of rows on a clock has no span of the clock to read, and
+/// says so. And `garch`, which refuses a finite `half_life`, is not told to
+/// set one for `min_settled_frac` (SPEC-8 (1)).
+#[test]
+fn an_expectile_window_is_feature_healths_memory_and_garch_is_told_it_does_not_decay() {
+    let expectile = |window: &str, clock: &str| {
+        format!(
+            r#"{{"name": "m", "model": {{"type": "expectile", "expectile": 0.8, {window}}},
+                "targets": ["y"], "features": ["x"], "half_life": "inf",
+                "emit_feature_health": true{clock}}}"#
+        )
+    };
+    accepted(&expectile(r#""window_size": 100"#, ""));
+    accepted(&expectile(r#""window_rows": 100"#, ""));
+    accepted(&expectile(
+        r#""window_size": 100"#,
+        r#", "clock": "t", "gap_cap": 10.0"#,
+    ));
+    refused(
+        &expectile(
+            r#""window_rows": 100"#,
+            r#", "clock": "t", "gap_cap": 10.0"#,
+        ),
+        &["window_rows counts rows"],
+    );
+    let e = check(
+        r#"{"name": "m", "model": {"type": "garch"}, "targets": ["y"], "features": [],
+            "min_settled_frac": 0.5}"#,
+    )
+    .unwrap_err();
+    assert!(!e.contains("Set half_life to a finite value"), "{e}");
+    assert!(e.contains("min_settled_frac"), "{e}");
 }

@@ -332,3 +332,66 @@ class TestAHalfLifeTooLongForADouble:
         df = _two_specs(*rng.normal(size=(2, 80)))
         got = rp.eval.diebold_mariano(df, a="a", b="b", half_life=longest, min_samples=1)
         assert got["diebold_mariano"].struct.field("dm_y")[40:].null_count() == 0
+
+
+@pytest.mark.parametrize("call", ["diebold_mariano", "clark_west"])
+@pytest.mark.parametrize("half_life", [None, 20.0])
+@pytest.mark.parametrize("bad", [-5, True, None, "30", 2.5])
+def test_min_samples_is_held_to_a_whole_number_of_rows(call, half_life, bad):
+    """``min_samples`` of -5, ``True``, ``None``, ``"30"`` or 2.5 scored, or
+    raised Python's own error, where the other scores refuse it by name
+    (review 2026-11-23, PY-6)."""
+    rng = np.random.default_rng(3)
+    df = _two_specs(rng.normal(size=60), rng.normal(size=60))
+    _, sides = CALLS[call]
+    with pytest.raises((ValueError, TypeError), match="min_samples must be a whole number"):
+        getattr(rp.eval, call)(df, **sides, half_life=half_life, min_samples=bad)
+
+
+@pytest.mark.parametrize("call", ["diebold_mariano", "clark_west"])
+def test_a_half_life_of_true_is_refused(call):
+    """``half_life=True`` read as one row (review 2026-11-23, PY-6)."""
+    rng = np.random.default_rng(4)
+    df = _two_specs(rng.normal(size=60), rng.normal(size=60))
+    _, sides = CALLS[call]
+    with pytest.raises((ValueError, TypeError), match="half_life"):
+        getattr(rp.eval, call)(df, **sides, half_life=True)
+
+
+@pytest.mark.parametrize("every", [True, None])
+def test_window_metrics_refuses_every_of_a_bool_or_none(every):
+    """``every=True`` read as one clock unit, and ``every=None`` raised
+    Python's own comparison error (review 2026-11-23, PY-6)."""
+    df = pl.DataFrame({"t": np.arange(20.0), "y": np.arange(20.0)}).with_columns(
+        m=pl.struct(pl.Series("pred_y", np.arange(20.0) + 0.5))
+    )
+    with pytest.raises((ValueError, TypeError), match="every"):
+        rp.eval.window_metrics(df, "m", clock="t", every=every)
+
+
+def test_seqtest_refuses_targets_given_as_one_string():
+    """``targets="ret"`` iterated its characters, ``'r'``, ``'e'``, ``'t'``
+    (review 2026-11-23, PY-6)."""
+    df = pl.DataFrame({"ret": np.linspace(-1.0, 1.0, 50)})
+    with pytest.raises((ValueError, TypeError), match="targets"):
+        rp.eval.seqtest(df, targets="ret")
+
+
+@pytest.mark.parametrize("bad", [float("nan"), -5.0, True, "1"])
+def test_seqtest_refuses_a_min_weight_that_is_no_weight(bad):
+    """``min_weight=nan`` nulled every output, and -5 or ``True`` were taken
+    (review 2026-11-23, PY-15 (2))."""
+    df = pl.DataFrame({"ret": np.linspace(-1.0, 1.0, 50)})
+    with pytest.raises((ValueError, TypeError), match="min_weight"):
+        rp.eval.seqtest(df, targets=["ret"], min_weight=bad)
+
+
+@pytest.mark.parametrize("call", ["metrics", "sums"])
+def test_binary_given_as_a_string_is_refused(call):
+    """``binary="false"`` is a non-empty string, which Python reads as true:
+    the scores were a classifier's (review 2026-11-23, PY-15 (3))."""
+    df = pl.DataFrame({"y": [0.0, 1.0, 1.0, 0.0]}).with_columns(
+        m=pl.struct(pl.Series("pred_y", [0.2, 0.7, 0.9, 0.4]))
+    )
+    with pytest.raises(TypeError, match="binary"):
+        getattr(rp.eval, call)(df, "m", binary="false")

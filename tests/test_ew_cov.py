@@ -371,6 +371,9 @@ class TestAccumulateOnly:
             "ill_conditioned",
             "unstable_rate",
             "not_identified",
+            "scale_ratio_moved",
+            "not_separated",
+            "level_beyond_sample",
         ]
         assert out.schema["c"] == pl.Struct(
             {

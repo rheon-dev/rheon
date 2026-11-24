@@ -18,8 +18,9 @@
 //! `["alias", x, name]`. An operator is `[name, input, {params}]` for
 //! `ewm_mean`, `rewm_mean`, `ewm_sum`, `rewm_sum`, `ewm_rate`,
 //! `rewm_rate`, `ewm_var` and `ewm_std` (these two with a `bias` too),
-//! `ewm_quantile` and `rewm_quantile` (with a `quantile`, the level), and
-//! `["increment", input]`. Nothing else is read, so a
+//! `ewm_quantile` and `rewm_quantile` (with a `quantile`, the level),
+//! `["ewm_moments", ["legs", leg, ...], {params}]` (a leg's power and lag
+//! among its parameters), and `["increment", input]`. Nothing else is read, so a
 //! `shift`, a `cum_sum`, a rolling window or an aggregation -- which would
 //! depend on the chunking (hard rule 3) -- is refused by name, at build time.
 
@@ -30,7 +31,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::span::Span;
-use crate::windows::{Closed, Direction, OpKind, Partial, Stat};
+use crate::windows::{
+    Closed, CrossStat, Direction, Interp, OpKind, PROFILE_STATE_BYTES_CEILING, Partial,
+    ProfileStat, RankMethod, Stat,
+};
 
 /// A literal, as JSON carries it.
 #[derive(Debug, Clone, PartialEq)]
@@ -108,9 +112,113 @@ pub struct OpNode {
     /// A quantile's level (`ewm_quantile`, `rewm_quantile`), in (0, 1);
     /// `None` for every other operator.
     pub quantile: Option<f64>,
+    /// A cross-group operator's weight, an element-wise formula of the row;
+    /// `None` weighs every row 1, and every window operator has none.
+    pub weight: Option<Box<Node>>,
+    /// A cross-group operator's cap on its state, or an extremum's on its
+    /// window's bytes a group, where the call sets one; `None` otherwise.
+    pub max_state_bytes: Option<u64>,
+    /// A cross rank's tie rule and direction, and a cross quantile's
+    /// interpolation; the defaults for every other operator.
+    pub order: Order,
+    /// A cross operator's list column of neighbor keys: it reads the rows
+    /// of those groups alone. `None` reads every group.
+    pub neighbors: Option<String>,
+    /// A reference read's predicate, an element-wise formula of the row:
+    /// the row where it holds is the stamp's reference row.
+    pub pick: Option<Box<Node>>,
+    /// The term of `ewm_moments`, whose input is `["legs", ...]`, a formula
+    /// a leg; `None` for every other operator.
+    pub moments: Option<Box<MomentsNode>>,
+    /// A profile's (`ewm_profile`) own parameters; `None` for every other
+    /// operator.
+    pub profile: Option<Box<ProfileParams>>,
+    /// An extremum's event (`rolling_max`, `rolling_min`): an element-wise
+    /// boolean of the row, true where the window starts over at the row's
+    /// stamp; `None` for every other operator.
+    pub since: Option<Box<Node>>,
+}
+
+/// What an `ewm_profile` takes beside the window operators' parameters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileParams {
+    pub period: Span,
+    pub offset: Option<Span>,
+    /// The bucketed form's buckets, or 0 for the harmonic form.
+    pub buckets: u32,
+    /// The harmonic form's harmonics, or 0 for the bucketed form.
+    pub harmonics: u32,
+    pub stat: ProfileStat,
+    pub weight: Option<Node>,
+    pub max_state_bytes: Option<u64>,
+}
+
+/// How a cross operator that reads values in order reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Order {
+    pub rank: RankMethod,
+    pub descending: bool,
+    pub interpolation: Interp,
+}
+
+/// The term an `ewm_moments` operator reads (task 554): each leg's power
+/// and lag, in the order of its input's legs, the statistic and its form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MomentsNode {
+    /// Each leg's power, a whole number from 1.
+    pub powers: Vec<u32>,
+    /// Each leg's lag: 0 for the row itself, else clock units, or a
+    /// duration on a temporal clock (rows on a row-count clock).
+    pub lags: Vec<Span>,
+    pub kind: rheon_core::MomentKind,
+    /// The plug-in form (`true`) or the unbiased one; `None` for the
+    /// statistic's default.
+    pub bias: Option<bool>,
+    /// How far before `t - lag` a lag's as-of row may sit; `None` for the
+    /// lag itself.
+    pub lag_tolerance: Option<Span>,
+}
+
+/// The words `kind` takes, the default first.
+const MOMENT_KINDS: [(&str, rheon_core::MomentKind); 4] = [
+    ("central", rheon_core::MomentKind::Central),
+    ("raw", rheon_core::MomentKind::Raw),
+    ("standardized", rheon_core::MomentKind::Standardized),
+    ("cumulant", rheon_core::MomentKind::Cumulant),
+];
+
+impl MomentsNode {
+    /// The term's order: the sum of its powers.
+    pub fn order(&self) -> u32 {
+        self.powers.iter().sum()
+    }
+
+    /// The form the term is read in: `bias` as given, else the statistic's
+    /// default (a variance unbiased, every other order the plug-in).
+    pub fn bias(&self) -> bool {
+        self.bias
+            .unwrap_or_else(|| rheon_core::MomentTerm::default_bias(self.kind, self.order()))
+    }
+
+    fn kind_name(&self) -> &'static str {
+        MOMENT_KINDS
+            .iter()
+            .find(|(_, k)| *k == self.kind)
+            .map_or("central", |(n, _)| n)
+    }
 }
 
 impl OpNode {
+    /// The trees beside the input an operator reads: a cross operator's
+    /// weight and a reference read's predicate, and a profile's weight.
+    pub fn trees(&self) -> impl Iterator<Item = &Node> {
+        self.weight
+            .iter()
+            .chain(self.pick.iter())
+            .map(|b| &**b)
+            .chain(self.profile.iter().filter_map(|p| p.weight.as_ref()))
+    }
+
     /// Backward or forward; `increment` reads back one row and is backward.
     pub fn direction(&self) -> Direction {
         self.kind.direction()
@@ -124,7 +232,8 @@ impl OpNode {
 
     fn params_json(&self) -> Value {
         let mut m = Map::new();
-        if let Some(h) = &self.half_life {
+        let ext = self.kind.stat().is_some_and(Stat::is_extremum);
+        if let Some(h) = self.half_life.as_ref().filter(|_| !ext) {
             m.insert(
                 "half_life".into(),
                 serde_json::to_value(h).expect("a span is JSON"),
@@ -146,6 +255,91 @@ impl OpNode {
         }
         if let Some(q) = self.quantile {
             m.insert("quantile".into(), json!(q));
+        }
+        if self.kind.cross().is_some() {
+            // A cross operator has no kernel: its stamp and its weight.
+            m.remove("min_samples");
+            if self.kind == OpKind::CrossStd {
+                m.insert("bias".into(), json!(self.bias));
+            }
+            if let Some(w) = &self.weight {
+                m.insert("weight".into(), w.to_json());
+            }
+            if let Some(n) = &self.neighbors {
+                m.insert("neighbors".into(), json!(n));
+            }
+            if let Some(p) = &self.pick {
+                m.insert("where".into(), p.to_json());
+            }
+            match self.kind.cross() {
+                Some(CrossStat::Rank) => {
+                    m.insert("method".into(), json!(self.order.rank.name()));
+                    m.insert("descending".into(), json!(self.order.descending));
+                }
+                Some(CrossStat::Quantile) => {
+                    m.insert(
+                        "interpolation".into(),
+                        json!(self.order.interpolation.name()),
+                    );
+                }
+                _ => {}
+            }
+        }
+        if let Some(t) = &self.moments {
+            m.remove("min_samples");
+            m.insert("powers".into(), json!(t.powers));
+            m.insert(
+                "lags".into(),
+                Value::Array(
+                    t.lags
+                        .iter()
+                        .map(|l| serde_json::to_value(l).expect("a span is JSON"))
+                        .collect(),
+                ),
+            );
+            m.insert("kind".into(), json!(t.kind_name()));
+            m.insert("bias".into(), json!(t.bias()));
+            if let Some(tol) = &t.lag_tolerance {
+                m.insert(
+                    "lag_tolerance".into(),
+                    serde_json::to_value(tol).expect("a span is JSON"),
+                );
+            }
+        }
+        if let Some(p) = &self.profile {
+            // A profile has no `partial`: its `min_samples` counts a
+            // bucket's rows.
+            m.insert(
+                "period".into(),
+                serde_json::to_value(&p.period).expect("a span is JSON"),
+            );
+            if let Some(o) = &p.offset {
+                m.insert(
+                    "offset".into(),
+                    serde_json::to_value(o).expect("a span is JSON"),
+                );
+            }
+            if p.harmonics > 0 {
+                m.insert("harmonics".into(), json!(p.harmonics));
+            } else {
+                m.insert("buckets".into(), json!(p.buckets));
+            }
+            m.insert("stat".into(), json!(p.stat.name()));
+            if p.harmonics == 0 && matches!(p.stat, ProfileStat::Var | ProfileStat::Std) {
+                m.insert("bias".into(), json!(self.bias));
+            }
+            if let Some(w) = &p.weight {
+                m.insert("weight".into(), w.to_json());
+            }
+            if let Some(b) = p.max_state_bytes {
+                m.insert("max_state_bytes".into(), json!(b));
+            }
+        }
+        if let Some(e) = &self.since {
+            m.insert("since".into(), e.to_json());
+        }
+        if let Some(b) = self.max_state_bytes {
+            m.insert("max_state_bytes".into(), json!(b));
         }
         Value::Object(m)
     }
@@ -201,10 +395,15 @@ const WINDOW_HEADS: &[&str] = &[
     "ewm_var",
     "ewm_std",
     "ewm_quantile",
+    "ewm_moments",
+    "rolling_max",
+    "rolling_min",
     "rewm_mean",
     "rewm_sum",
     "rewm_rate",
     "rewm_quantile",
+    "rrolling_max",
+    "rrolling_min",
 ];
 
 /// What a formula reads around the window operators, in the words a reader
@@ -419,7 +618,237 @@ impl Node {
                     partial: None,
                     bias: false,
                     quantile: None,
+                    weight: None,
+                    max_state_bytes: None,
+                    order: Order::default(),
+                    neighbors: None,
+                    pick: None,
+                    moments: None,
+                    profile: None,
+                    since: None,
                 }))
+            }
+            name if OpKind::parse(name).is_some_and(|k| k.cross().is_some()) => {
+                let kind = OpKind::parse(name).expect("checked");
+                arity(2)?;
+                let input = Node::from_json(&args[0])?;
+                input.no_window_operator(name)?;
+                let Value::Object(params) = &args[1] else {
+                    return Err(format!(
+                        "formula: {name:?} takes its parameters as an object, but it has {}. \
+                         Give them as an object, such as {{\"closed\": \"right\"}}.",
+                        short(&args[1])
+                    ));
+                };
+                let mut op = OpNode {
+                    kind,
+                    input: Box::new(input),
+                    half_life: None,
+                    window_size: None,
+                    closed: Closed::Right,
+                    min_samples: 2,
+                    partial: None,
+                    bias: false,
+                    quantile: None,
+                    weight: None,
+                    max_state_bytes: None,
+                    order: Order::default(),
+                    neighbors: None,
+                    pick: None,
+                    moments: None,
+                    profile: None,
+                    since: None,
+                };
+                let std = kind == OpKind::CrossStd;
+                let stat = kind.cross().expect("checked");
+                let mut interpolation = None;
+                for (k, v) in params {
+                    match k.as_str() {
+                        "closed" => {
+                            op.closed = match v.as_str() {
+                                Some("right") => Closed::Right,
+                                Some("left") => Closed::Left,
+                                _ => {
+                                    return Err(format!(
+                                        "{name}: closed must be \"right\" (the row's own stamp) \
+                                         or \"left\" (the stamp before it), but it is {}. Set \
+                                         closed to one of those words.",
+                                        short(v)
+                                    ));
+                                }
+                            };
+                        }
+                        "bias" if std => {
+                            op.bias = v.as_bool().ok_or_else(|| {
+                                format!(
+                                    "{name}: bias must be true or false, but it is {}. Set bias \
+                                     to true or false.",
+                                    short(v)
+                                )
+                            })?;
+                        }
+                        "where" if stat == CrossStat::Ref => {
+                            let w = Node::from_json(v)?;
+                            w.no_window_operator(name)?;
+                            op.pick = Some(Box::new(w));
+                        }
+                        "neighbors" if stat != CrossStat::Ref => {
+                            let col = v.as_str().filter(|c| !c.is_empty()).ok_or_else(|| {
+                                format!(
+                                    "{name}: neighbors must name a list column, but it is {}. \
+                                     Set neighbors to the name of a column whose rows list \
+                                     the group keys each row reads.",
+                                    short(v)
+                                )
+                            })?;
+                            op.neighbors = Some(col.to_string());
+                        }
+                        "weight" if stat == CrossStat::Ref => {
+                            return Err(format!(
+                                "{name}: a reference read takes no weight: it reads one row's \
+                                 value. Remove weight."
+                            ));
+                        }
+                        "weight" if stat == CrossStat::Rank => {
+                            return Err(format!(
+                                "{name}: a rank takes no weight: a row's rank counts the rows \
+                                 ranked before it, and a weight has no place in that count. \
+                                 Remove weight, or use cross_quantile with weight= for the \
+                                 weighted share of the cross-section below a level."
+                            ));
+                        }
+                        "weight" => {
+                            let w = Node::from_json(v)?;
+                            w.no_window_operator(name)?;
+                            op.weight = Some(Box::new(w));
+                        }
+                        "method" if stat == CrossStat::Rank => {
+                            op.order.rank =
+                                v.as_str().and_then(RankMethod::parse).ok_or_else(|| {
+                                    format!(
+                                        "{name}: method must be \"average\", \"min\", \
+                                         \"max\", \"dense\" or \"ordinal\", but it is {}. \
+                                         Set method to one of those words.",
+                                        short(v)
+                                    )
+                                })?;
+                        }
+                        "descending" if stat == CrossStat::Rank => {
+                            op.order.descending = v.as_bool().ok_or_else(|| {
+                                format!(
+                                    "{name}: descending must be true or false, but it is {}. \
+                                     Set descending to true or false.",
+                                    short(v)
+                                )
+                            })?;
+                        }
+                        "quantile" if stat == CrossStat::Quantile => {
+                            op.quantile =
+                                Some(v.as_f64().filter(|q| (0.0..=1.0).contains(q)).ok_or_else(
+                                    || {
+                                        format!(
+                                            "{name}: quantile must be a number from 0 to 1, but \
+                                             it is {}. Set quantile within that range, such as \
+                                             0.5 for the median.",
+                                            short(v)
+                                        )
+                                    },
+                                )?);
+                        }
+                        "interpolation" if stat == CrossStat::Quantile => {
+                            interpolation =
+                                Some(v.as_str().and_then(Interp::parse).ok_or_else(|| {
+                                    format!(
+                                        "{name}: interpolation must be \"nearest\", \
+                                         \"higher\", \"lower\", \"midpoint\", \"linear\" \
+                                         or \"equiprobable\", but it is {}. Set interpolation \
+                                         to one of those words.",
+                                        short(v)
+                                    )
+                                })?);
+                        }
+                        "max_state_bytes" => {
+                            let ceiling = crate::windows::CROSS_STATE_BYTES_CEILING;
+                            op.max_state_bytes =
+                                Some(v.as_u64().filter(|&b| b >= 1 && b <= ceiling).ok_or_else(
+                                    || {
+                                        format!(
+                                            "{name}: max_state_bytes must be a whole number from 1 \
+                                         to {ceiling} (64 MiB), but it is {}. Set it within \
+                                         that range, or leave it out for 262144 (256 KB).",
+                                            short(v)
+                                        )
+                                    },
+                                )?);
+                        }
+                        other => {
+                            return Err(format!(
+                                "{name}: {other:?} is not one of its parameters, which are \
+                                 {}. Remove {other:?}, or correct its name.",
+                                match stat {
+                                    CrossStat::Std =>
+                                        "closed, weight, neighbors, max_state_bytes and bias",
+                                    CrossStat::Rank =>
+                                        "closed, method, descending, neighbors and \
+                                         max_state_bytes",
+                                    CrossStat::Quantile =>
+                                        "quantile, closed, interpolation, weight, neighbors \
+                                         and max_state_bytes",
+                                    CrossStat::Mean =>
+                                        "closed, weight, neighbors and max_state_bytes",
+                                    CrossStat::Ref => "where, closed and max_state_bytes",
+                                }
+                            ));
+                        }
+                    }
+                }
+                if stat == CrossStat::Ref && op.pick.is_none() {
+                    return Err(format!(
+                        "{name}: where is required: the predicate that picks the stamp's \
+                         reference row. Set where, such as pl.col(\"symbol\") == \"SPY\"."
+                    ));
+                }
+                if stat == CrossStat::Quantile {
+                    if op.quantile.is_none() {
+                        return Err(format!(
+                            "{name}: quantile is required: the level to read, from 0 to 1. \
+                             Set quantile, such as 0.5 for the median."
+                        ));
+                    }
+                    // A weighted cross-section has one reading between two
+                    // values: the first whose cumulative weight share reaches
+                    // the level.
+                    op.order.interpolation = match (interpolation, op.weight.is_some()) {
+                        (None, false) => Interp::Nearest,
+                        (None, true) | (Some(Interp::Equiprobable), _) => Interp::Equiprobable,
+                        (Some(i), false) => i,
+                        (Some(i), true) => {
+                            return Err(format!(
+                                "{name}: interpolation {:?} has no weighted form: with weight= \
+                                 the quantile is the first value whose cumulative weight share \
+                                 reaches the level, \"equiprobable\". Set interpolation to \
+                                 \"equiprobable\" or leave it out, or remove weight.",
+                                i.name()
+                            ));
+                        }
+                    };
+                }
+                Ok(Node::Op(op))
+            }
+            "ewm_moments" => moments_from_json(args),
+            "ewm_profile" => {
+                let name = "ewm_profile";
+                arity(2)?;
+                let input = Node::from_json(&args[0])?;
+                input.no_window_operator(name)?;
+                let Value::Object(params) = &args[1] else {
+                    return Err(format!(
+                        "formula: {name:?} takes its parameters as an object, but it has {}. \
+                         Give them as an object, such as {{\"period\": \"1d\"}}.",
+                        short(&args[1])
+                    ));
+                };
+                profile_of(input, params).map(Node::Op)
             }
             name if OpKind::parse(name).is_some() => {
                 let kind = OpKind::parse(name).expect("checked");
@@ -446,13 +875,49 @@ impl Node {
                     partial: None,
                     bias: false,
                     quantile: None,
+                    weight: None,
+                    max_state_bytes: None,
+                    order: Order::default(),
+                    neighbors: None,
+                    pick: None,
+                    moments: None,
+                    profile: None,
+                    since: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
                 let quantile = kind.stat() == Some(Stat::Quantile);
+                let ext = kind.stat().is_some_and(Stat::is_extremum);
+                if ext {
+                    // An extremum weighs no row: its kernel is the even one.
+                    op.half_life = Some(Span::Units(f64::INFINITY));
+                }
                 for (k, v) in params {
                     match k.as_str() {
-                        "half_life" => {
+                        "half_life" if !ext => {
                             op.half_life = Some(span_of(name, k, v)?);
+                        }
+                        "since" if ext => {
+                            let e = Node::from_json(v)?;
+                            if !e.operators().is_empty() {
+                                return Err(format!(
+                                    "{name}: since holds a window operator or an increment, but \
+                                     it may read only an expression of the row itself, such as \
+                                     pl.col(\"new_period\"). Add the operator's result as a \
+                                     column of the input before the run, and read that column."
+                                ));
+                            }
+                            op.since = Some(Box::new(e));
+                        }
+                        "max_state_bytes" if ext => {
+                            op.max_state_bytes =
+                                Some(v.as_u64().filter(|&b| b > 0).ok_or_else(|| {
+                                    format!(
+                                        "{name}: max_state_bytes must be a whole number of \
+                                         bytes above 0, but it is {}. Set max_state_bytes to the \
+                                         bytes a group's window may hold.",
+                                        short(v)
+                                    )
+                                })?);
                         }
                         "window_size" => {
                             op.window_size = Some(span_of(name, k, v)?);
@@ -516,6 +981,18 @@ impl Node {
                                 })?,
                             );
                         }
+                        other if ext => {
+                            return Err(format!(
+                                "{name}: {other:?} is not one of its parameters, which are \
+                                 window_size, closed, min_samples, partial, since and \
+                                 max_state_bytes. Remove {other:?}, or correct its name.{}",
+                                if other == "half_life" {
+                                    " An extremum weighs no row, so it has no half_life."
+                                } else {
+                                    ""
+                                }
+                            ));
+                        }
                         other => {
                             return Err(format!(
                                 "{name}: {other:?} is not one of its parameters, which are \
@@ -531,6 +1008,9 @@ impl Node {
                             ));
                         }
                     }
+                }
+                if op.since.is_some() && kind.direction() == Direction::Forward {
+                    return Err(format!("{name}: {}.", crate::windows::SINCE_AHEAD));
                 }
                 if quantile && op.quantile.is_none() {
                     return Err(format!(
@@ -586,7 +1066,7 @@ impl Node {
                  and these operators within one row: {}. If the operator is misspelled, correct it; \
                  otherwise, write the formula with the operators listed.",
                 {
-                    let (last, rest) = WINDOW_HEADS.split_last().expect("ten heads");
+                    let (last, rest) = WINDOW_HEADS.split_last().expect("fifteen heads");
                     format!("{} and {last}", rest.join(", "))
                 },
                 accepted_heads()
@@ -663,6 +1143,9 @@ impl Node {
             Node::Op(op) => {
                 out.push(op);
                 op.input.collect(out);
+                for w in op.trees() {
+                    w.collect(out);
+                }
             }
         }
     }
@@ -683,7 +1166,20 @@ impl Node {
             }
             Node::Lit(_) => {}
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns(out)),
-            Node::Op(op) => op.input.collect_columns(out),
+            Node::Op(op) => {
+                op.input.collect_columns(out);
+                for w in op.trees() {
+                    w.collect_columns(out);
+                }
+                if let Some(n) = &op.neighbors
+                    && !out.contains(n)
+                {
+                    out.push(n.clone());
+                }
+                if let Some(e) = &op.since {
+                    e.collect_columns(out);
+                }
+            }
         }
     }
 
@@ -693,7 +1189,11 @@ impl Node {
         match self {
             Node::Col(_) | Node::Lit(_) => false,
             Node::Call(n, args) => n == name || args.iter().any(|a| a.contains_call(name)),
-            Node::Op(op) => op.input.contains_call(name),
+            Node::Op(op) => {
+                op.input.contains_call(name)
+                    || op.trees().any(|w| w.contains_call(name))
+                    || op.since.as_ref().is_some_and(|e| e.contains_call(name))
+            }
         }
     }
 
@@ -713,7 +1213,20 @@ impl Node {
             }
             Node::Lit(_) => {}
             Node::Call(_, args) => args.iter().for_each(|a| a.collect_columns_ref(out)),
-            Node::Op(op) => op.input.collect_columns_ref(out),
+            Node::Op(op) => {
+                op.input.collect_columns_ref(out);
+                for w in op.trees() {
+                    w.collect_columns_ref(out);
+                }
+                if let Some(n) = &op.neighbors
+                    && !out.contains(&n.as_str())
+                {
+                    out.push(n.as_str());
+                }
+                if let Some(e) = &op.since {
+                    e.collect_columns_ref(out);
+                }
+            }
         }
     }
 
@@ -856,6 +1369,483 @@ impl<'de> Deserialize<'de> for Node {
 pub struct Formula {
     pub name: String,
     pub tree: Node,
+}
+
+/// `["ewm_moments", ["legs", leg, ...], {params}]`: a term of moments of
+/// the legs, each an element-wise formula of the row, with each leg's power
+/// and lag among the parameters.
+fn moments_from_json(args: &[Value]) -> Result<Node, String> {
+    const NAME: &str = "ewm_moments";
+    if args.len() != 2 {
+        return Err(format!(
+            "formula: \"ewm_moments\" takes 2 arguments, its legs and its parameters, but it \
+             has {}. Give it [\"legs\", ...] and an object of parameters.",
+            args.len()
+        ));
+    }
+    let legs = match &args[0] {
+        Value::Array(items)
+            if items.len() > 1 && items.first() == Some(&Value::String("legs".into())) =>
+        {
+            items[1..]
+                .iter()
+                .map(|v| {
+                    let n = Node::from_json(v)?;
+                    n.no_window_operator(NAME)?;
+                    Ok(n)
+                })
+                .collect::<Result<Vec<_>, String>>()?
+        }
+        other => {
+            return Err(format!(
+                "{NAME}: its first argument is its legs, a list headed by \"legs\" with a \
+                 formula a leg, such as [\"legs\", [\"col\", \"x\"]], but it is {}. \
+                 Give the legs in that form.",
+                short(other)
+            ));
+        }
+    };
+    let Value::Object(params) = &args[1] else {
+        return Err(format!(
+            "{NAME}: it takes its parameters as an object, but it has {}. Give them as an \
+             object, such as {{\"half_life\": 10, \"powers\": [3]}}.",
+            short(&args[1])
+        ));
+    };
+    let mut op = OpNode {
+        kind: OpKind::EwmMoments,
+        input: Box::new(Node::Call("legs".into(), legs)),
+        half_life: None,
+        window_size: None,
+        closed: Closed::Right,
+        min_samples: 1,
+        partial: None,
+        bias: false,
+        quantile: None,
+        weight: None,
+        max_state_bytes: None,
+        order: Order::default(),
+        neighbors: None,
+        pick: None,
+        moments: None,
+        profile: None,
+        since: None,
+    };
+    let mut powers: Option<Vec<u32>> = None;
+    let mut lags: Option<Vec<Span>> = None;
+    let mut kind = rheon_core::MomentKind::Central;
+    let mut bias = None;
+    let mut lag_tolerance = None;
+    for (k, v) in params {
+        match k.as_str() {
+            "half_life" => op.half_life = Some(span_of(NAME, k, v)?),
+            "window_size" => op.window_size = Some(span_of(NAME, k, v)?),
+            "closed" => {
+                if v.as_str() != Some("right") {
+                    return Err(format!(
+                        "{NAME}: closed must be \"right\", but it is {}. The moments of a \
+                         window are read once its stamp's rows are all in. Set closed to \
+                         \"right\", or leave it out.",
+                        short(v)
+                    ));
+                }
+            }
+            "partial" => {
+                op.partial = Some(Partial::parse(v.as_str().unwrap_or("")).ok_or_else(|| {
+                    format!(
+                        "{NAME}: partial must be \"keep\", \"null\" or \"drop\", but it is \
+                         {}. Set partial to one of those words.",
+                        short(v)
+                    )
+                })?);
+            }
+            "powers" => {
+                let bad = || {
+                    format!(
+                        "{NAME}: powers must be a list of whole numbers from 1, one a leg, but \
+                         it is {}. Give each leg's power, such as [3].",
+                        short(v)
+                    )
+                };
+                let Value::Array(items) = v else {
+                    return Err(bad());
+                };
+                powers = Some(
+                    items
+                        .iter()
+                        .map(|p| {
+                            p.as_u64()
+                                .and_then(|p| u32::try_from(p).ok())
+                                .filter(|&p| p >= 1)
+                        })
+                        .collect::<Option<Vec<u32>>>()
+                        .ok_or_else(bad)?,
+                );
+            }
+            "lags" => {
+                let Value::Array(items) = v else {
+                    return Err(format!(
+                        "{NAME}: lags must be a list of spans of the clock, one a leg, 0 for \
+                         the row itself, but it is {}. Give each leg's lag, such as [0, 1].",
+                        short(v)
+                    ));
+                };
+                let mut out = Vec::with_capacity(items.len());
+                for l in items {
+                    let span = span_of(NAME, "a lag", l)?;
+                    if !(span.value() >= 0.0 && span.value().is_finite()) {
+                        return Err(format!(
+                            "{NAME}: a lag must be finite and at least 0, but it is {span}. \
+                             Give 0 for the row itself, or a span of the clock back."
+                        ));
+                    }
+                    out.push(span);
+                }
+                lags = Some(out);
+            }
+            "kind" => {
+                kind = MOMENT_KINDS
+                    .iter()
+                    .find(|(n, _)| v.as_str() == Some(n))
+                    .map(|(_, k)| *k)
+                    .ok_or_else(|| {
+                        format!(
+                            "{NAME}: kind must be \"central\", \"raw\", \"standardized\" or \
+                             \"cumulant\", but it is {}. Set kind to one of those words.",
+                            short(v)
+                        )
+                    })?;
+            }
+            "bias" => {
+                bias = Some(v.as_bool().ok_or_else(|| {
+                    format!(
+                        "{NAME}: bias must be true or false, but it is {}. Set bias to true or \
+                         false, or leave it out for the statistic's own default.",
+                        short(v)
+                    )
+                })?);
+            }
+            "lag_tolerance" => {
+                let span = span_of(NAME, k, v)?;
+                if !(span.value() >= 0.0 && span.value().is_finite()) {
+                    return Err(format!(
+                        "{NAME}: lag_tolerance must be finite and at least 0, but it is \
+                         {span}. Give how far before t - lag the row a lag pairs with may sit."
+                    ));
+                }
+                lag_tolerance = Some(span);
+            }
+            other => {
+                return Err(format!(
+                    "{NAME}: {other:?} is not one of its parameters, which are half_life, \
+                     window_size, closed, partial, powers, lags, kind, bias and lag_tolerance. \
+                     Remove {other:?}, or correct its name."
+                ));
+            }
+        }
+    }
+    let n = match &*op.input {
+        Node::Call(_, legs) => legs.len(),
+        _ => 0,
+    };
+    let powers = powers.ok_or_else(|| {
+        format!(
+            "{NAME}: powers is not set, but each leg needs its power. Give powers, a whole \
+             number from 1 a leg, such as [3]."
+        )
+    })?;
+    let lags = lags.unwrap_or_else(|| vec![Span::Units(0.0); n]);
+    if powers.len() != n || lags.len() != n {
+        return Err(format!(
+            "{NAME}: it has {n} legs, but {} powers and {} lags. Give one power and one lag a \
+             leg.",
+            powers.len(),
+            lags.len()
+        ));
+    }
+    let Some(h) = &op.half_life else {
+        return Err(format!(
+            "{NAME}: half_life is not set, but every window operator needs it. Set half_life to \
+             a positive number of clock units or a duration, or to inf for no decay."
+        ));
+    };
+    if h.value().is_nan() || h.value() <= 0.0 {
+        return Err(format!(
+            "{NAME}: half_life must be above 0, but it is {h}. Set half_life to a positive \
+             number of clock units or a duration, or to inf for no decay."
+        ));
+    }
+    match &op.window_size {
+        Some(w) if !(w.value().is_finite() && w.value() > 0.0) => {
+            return Err(format!(
+                "{NAME}: window_size must be finite and above 0, but it is {w}. Set window_size \
+                 to a finite positive number of clock units or a duration."
+            ));
+        }
+        None if h.value().is_infinite() => {
+            return Err(format!(
+                "{NAME}: half_life is inf and window_size is not set, so a value held from \
+                 before the first row would have no finite weight. Set window_size, or give \
+                 half_life a finite value."
+            ));
+        }
+        _ => {}
+    }
+    op.moments = Some(Box::new(MomentsNode {
+        powers,
+        lags,
+        kind,
+        bias,
+        lag_tolerance,
+    }));
+    Ok(Node::Op(op))
+}
+
+/// An `ewm_profile` node from its parameters, each checked by name.
+/// The most harmonics a profile takes: a period cut finer than this is
+/// what `buckets` is for.
+const MAX_HARMONICS: u32 = 64;
+
+fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String> {
+    let name = "ewm_profile";
+    let mut op = OpNode {
+        kind: OpKind::EwmProfile,
+        input: Box::new(input),
+        half_life: None,
+        window_size: None,
+        closed: Closed::Right,
+        min_samples: 1,
+        partial: None,
+        bias: false,
+        quantile: None,
+        weight: None,
+        max_state_bytes: None,
+        order: Order::default(),
+        neighbors: None,
+        pick: None,
+        moments: None,
+        profile: None,
+        since: None,
+    };
+    let (mut period, mut offset, mut buckets, mut stat) = (None, None, None, ProfileStat::Mean);
+    let mut harmonics: Option<u32> = None;
+    let (mut weight, mut max_state_bytes) = (None, None);
+    let mut bias = None;
+    for (k, v) in params {
+        match k.as_str() {
+            "half_life" => op.half_life = Some(span_of(name, k, v)?),
+            "window_size" => op.window_size = Some(span_of(name, k, v)?),
+            "quantile" => {
+                op.quantile =
+                    Some(v.as_f64().filter(|q| *q > 0.0 && *q < 1.0).ok_or_else(|| {
+                        format!(
+                            "{name}: quantile must be a number above 0 and below 1, but it is {}. \
+                         Set quantile within that range, such as 0.5 for the median.",
+                            short(v)
+                        )
+                    })?);
+            }
+            "closed" => {
+                op.closed = Closed::parse(v.as_str().unwrap_or("")).ok_or_else(|| {
+                    format!(
+                        "{name}: closed must be \"right\", \"left\", \"both\" or \"none\", \
+                         but it is {}. Set closed to one of those words.",
+                        short(v)
+                    )
+                })?;
+            }
+            "period" => period = Some(span_of(name, k, v)?),
+            "offset" => offset = Some(span_of(name, k, v)?),
+            "buckets" => {
+                buckets = Some(
+                    v.as_u64()
+                        .and_then(|b| u32::try_from(b).ok())
+                        .filter(|&b| b >= 1)
+                        .ok_or_else(|| {
+                            format!(
+                                "{name}: buckets must be a whole number from 1 to {}, but it \
+                                 is {}. Set buckets to the number of phases of the period, \
+                                 such as 24 for the hours of a day.",
+                                u32::MAX,
+                                short(v)
+                            )
+                        })?,
+                );
+            }
+            "harmonics" => {
+                harmonics = Some(
+                    v.as_u64()
+                        .and_then(|k| u32::try_from(k).ok())
+                        .filter(|&k| (1..=MAX_HARMONICS).contains(&k))
+                        .ok_or_else(|| {
+                            format!(
+                                "{name}: harmonics must be a whole number from 1 to \
+                                 {MAX_HARMONICS}, but it is {}. Set harmonics to the Fourier \
+                                 terms the profile takes, such as 3 for the daily shape of an \
+                                 hourly series.",
+                                short(v)
+                            )
+                        })?,
+                );
+            }
+            "stat" => {
+                stat = v.as_str().and_then(ProfileStat::parse).ok_or_else(|| {
+                    format!(
+                        "{name}: stat must be \"mean\", \"var\", \"std\" or \"quantile\", but \
+                         it is {}. Set stat to one of those words.",
+                        short(v)
+                    )
+                })?;
+            }
+            "bias" => {
+                bias = Some(v.as_bool().ok_or_else(|| {
+                    format!(
+                        "{name}: bias must be true or false, but it is {}. Set bias to true or \
+                         false.",
+                        short(v)
+                    )
+                })?);
+            }
+            "min_samples" => {
+                op.min_samples = v
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|&n| n >= 1)
+                    .ok_or_else(|| {
+                        format!(
+                            "{name}: min_samples must be a whole number from 1 to {}, but it is \
+                             {}. Set min_samples to the rows a phase needs before it is read.",
+                            u32::MAX,
+                            short(v)
+                        )
+                    })?;
+            }
+            "weight" => {
+                let w = Node::from_json(v)?;
+                w.no_window_operator(name)?;
+                weight = Some(w);
+            }
+            "max_state_bytes" => {
+                let ceiling = PROFILE_STATE_BYTES_CEILING;
+                max_state_bytes = Some(v.as_u64().filter(|&b| b >= 1 && b <= ceiling).ok_or_else(
+                    || {
+                        format!(
+                            "{name}: max_state_bytes must be a whole number from 1 to {ceiling} \
+                             (64 MiB), but it is {}. Set it within that range, or leave it out \
+                             for 262144 (256 KB).",
+                            short(v)
+                        )
+                    },
+                )?);
+            }
+            other => {
+                return Err(format!(
+                    "{name}: {other:?} is not one of its parameters, which are period, buckets, \
+                     harmonics, half_life, window_size, stat, quantile, closed, offset, weight, \
+                     min_samples, bias and max_state_bytes. Remove {other:?}, or correct its name."
+                ));
+            }
+        }
+    }
+    let Some(h) = &op.half_life else {
+        return Err(format!(
+            "{name}: half_life is not set, but a profile needs it. Set half_life to a positive \
+             number of clock units or a duration, or to inf for no decay."
+        ));
+    };
+    if h.value().is_nan() || h.value() <= 0.0 {
+        return Err(format!(
+            "{name}: half_life must be above 0, but it is {h}. Set half_life to a positive \
+             number of clock units or a duration, or to inf for no decay."
+        ));
+    }
+    let Some(period) = period else {
+        return Err(format!(
+            "{name}: period is not set, but a profile needs it: the span the phase repeats \
+             over. Set period, such as \"1d\" for the time of day."
+        ));
+    };
+    if !(period.value().is_finite() && period.value() > 0.0) {
+        return Err(format!(
+            "{name}: period must be finite and above 0, but it is {period}. Set period to a \
+             positive number of clock units or a duration, such as \"1d\"."
+        ));
+    }
+    if let Some(o) = &offset
+        && !o.value().is_finite()
+    {
+        return Err(format!(
+            "{name}: offset must be finite, but it is {o}. Set offset to where the period \
+             starts after its default start, such as \"9h30m\"."
+        ));
+    }
+    let (buckets, harmonics) = match (buckets, harmonics) {
+        (Some(b), None) => (b, 0),
+        (None, Some(k)) => {
+            if stat == ProfileStat::Quantile || bias.is_some() {
+                return Err(format!(
+                    "{name}: harmonics takes stat \"mean\", \"var\" or \"std\" and no bias: \
+                     a Fourier fit's variance is the fit of x² less the square of the fit of \
+                     x, and a quantile has no one-pass fit. Remove bias or quantile, or take \
+                     buckets."
+                ));
+            }
+            (0, k)
+        }
+        (None, None) => {
+            return Err(format!(
+                "{name}: buckets or harmonics is needed: how many equal phases the period is \
+                 cut into, or how many Fourier terms fit it. Set one, such as buckets=24 for \
+                 the hours of a day."
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "{name}: buckets and harmonics are both given, but a profile is one form or \
+                 the other. Remove one of them."
+            ));
+        }
+    };
+    if let Some(w) = &op.window_size
+        && !(w.value().is_finite() && w.value() > 0.0)
+    {
+        return Err(format!(
+            "{name}: window_size must be finite and above 0, but it is {w}. Set window_size to \
+             a finite positive number of clock units or a duration."
+        ));
+    }
+    match (stat, op.quantile) {
+        (ProfileStat::Quantile, None) => {
+            return Err(format!(
+                "{name}: quantile is not set, but stat=\"quantile\" needs it. Set quantile to a \
+                 number above 0 and below 1, such as 0.5 for the median."
+            ));
+        }
+        (s, Some(_)) if s != ProfileStat::Quantile => {
+            return Err(format!(
+                "{name}: quantile is given, but only stat=\"quantile\" takes it. Remove \
+                 quantile, or set stat to \"quantile\"."
+            ));
+        }
+        _ => {}
+    }
+    if bias.is_some() && matches!(stat, ProfileStat::Mean | ProfileStat::Quantile) {
+        return Err(format!(
+            "{name}: bias is given, but only a variance or a standard deviation takes it. \
+             Remove bias, or set stat to \"var\" or \"std\"."
+        ));
+    }
+    op.bias = bias.unwrap_or(false);
+    op.profile = Some(Box::new(ProfileParams {
+        period,
+        offset,
+        buckets,
+        harmonics,
+        stat,
+        weight,
+        max_state_bytes,
+    }));
+    Ok(op)
 }
 
 fn span_of(name: &str, key: &str, v: &Value) -> Result<Span, String> {
@@ -1086,7 +2076,7 @@ mod tests {
         }
         assert_eq!(
             WINDOW_HEADS.len(),
-            10,
+            15,
             "every window operator but increment"
         );
         let err = Node::from_json(&json!(["shift", ["col", "a"]])).unwrap_err();

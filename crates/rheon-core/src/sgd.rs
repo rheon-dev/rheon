@@ -620,20 +620,22 @@ const WAKE_SPREADS: f64 = 8.0;
 pub(crate) struct Level {
     w: f64,
     w2: f64,
+    /// `w2`'s power of two, `Σw² = w2 · 4^w2_scale` ([`crate::sqsum`]): 0,
+    /// and not written, while the weights square to doubles; at weights of
+    /// `1e-200` the squares were 0 and the level never warmed (review
+    /// 2026-11-23, REG-12). Schema 72; last, for the compact encoding.
+    #[serde(default, skip_serializing_if = "crate::sqsum::is_zero")]
+    w2_scale: i32,
 }
 
 impl Level {
     fn learn(&mut self, weight: f64) {
         self.w += weight;
-        self.w2 += weight * weight;
+        crate::sqsum::add(&mut self.w2, &mut self.w2_scale, 1.0, weight);
     }
 
     fn count(&self) -> f64 {
-        if self.w2 > 0.0 {
-            self.w * self.w / self.w2
-        } else {
-            0.0
-        }
+        crate::sqsum::count(self.w, self.w2, self.w2_scale).unwrap_or(0.0)
     }
 }
 
@@ -1130,7 +1132,9 @@ impl TryFrom<SgdV3> for Sgd {
                     .into(),
             );
         }
-        if level.len() != scales(keeps_level(&cfg)) {
+        if level.len() != scales(keeps_level(&cfg))
+            || !level.iter().all(|l| crate::sqsum::scale_fits(l.w2_scale))
+        {
             return Err(
                 "sgd: part of its saved fit does not match its settings. Load an \
                         undamaged copy of the state file, or rebuild it from its input."
@@ -1536,10 +1540,13 @@ impl Sgd {
             match lr_row {
                 Some(lr) => g.is_finite().then(|| -(lr * g)),
                 None => {
-                    if !(g * g).is_finite() {
+                    // The sum with the square in it, not the square alone:
+                    // a sum past the largest double is kept for good
+                    // (REG-9).
+                    let s = sums[i] + g * g;
+                    if !s.is_finite() {
                         return None;
                     }
-                    let s = sums[i] + g * g;
                     gbuf[i] = s;
                     Some(-adagrad_step(lr0, s, ada_eps, g))
                 }
@@ -1866,9 +1873,12 @@ pub(crate) fn unscaled(beta: &[Vec<f64>], sc: &EwDiag, fit_intercept: bool) -> V
 }
 
 /// Whether every slope's gradient `g_i = clip(d·z_i·w + l2·β_i)` is a
-/// finite number -- under AdaGrad (`squared`), whether `g_i²` is, which
-/// `g2` would keep for good. Every slot's verdict is folded without an
-/// early exit, so the check vectorizes as the update does; the verdict is a
+/// finite number -- under AdaGrad (`sums`, its sums of squared gradients
+/// for the slopes), whether `sums_i + g_i²` is, which `g2` would keep for
+/// good: a square inside the doubles whose sum is not (two gradients of
+/// `1.2e154`) left the sum infinite, and NaN at the next decay of 0 (review
+/// 2026-11-23, REG-9). Every slot's verdict is folded without an early
+/// exit, so the check vectorizes as the update does; the verdict is a
 /// short-circuiting `any`'s, which reached it a slot at a time at three
 /// times the update's cost (task 250).
 fn slopes_usable(
@@ -1878,13 +1888,16 @@ fn slopes_usable(
     weight: f64,
     l2: f64,
     clip: f64,
-    squared: bool,
+    sums: Option<&[f64]>,
 ) -> bool {
-    if squared {
-        beta.iter().zip(z).fold(true, |ok, (b, &zi)| {
-            let g = (d * zi * weight + l2 * *b).clamp(-clip, clip);
-            ok & (g * g).is_finite()
-        })
+    if let Some(sums) = sums {
+        beta.iter()
+            .zip(z)
+            .zip(sums)
+            .fold(true, |ok, ((b, &zi), s)| {
+                let g = (d * zi * weight + l2 * *b).clamp(-clip, clip);
+                ok & (s + g * g).is_finite()
+            })
     } else {
         beta.iter().zip(z).fold(true, |ok, (b, &zi)| {
             ok & (d * zi * weight + l2 * *b).clamp(-clip, clip).is_finite()
@@ -2718,7 +2731,8 @@ impl OnlineModel for Sgd {
                 if lr_row.is_some() {
                     g.is_finite()
                 } else {
-                    (g * g).is_finite()
+                    // The intercept's sum with its square in it (REG-9).
+                    (self.g2[j][0] + g * g).is_finite()
                 }
             };
             // At a shared rate the check and the step are one pass: each
@@ -2742,7 +2756,15 @@ impl OnlineModel for Sgd {
                     (l2, clip, lr),
                     &mut self.dbuf[..n],
                 ),
-                None => slopes_usable(&beta[off..], z, d, weight, l2, clip, true),
+                None => slopes_usable(
+                    &beta[off..],
+                    z,
+                    d,
+                    weight,
+                    l2,
+                    clip,
+                    Some(&self.g2[j][off..]),
+                ),
             };
             if (off == 1 && !usable((d * weight).clamp(-clip, clip))) || !slopes_ok {
                 self.refused_step(j, found);
@@ -2817,6 +2839,17 @@ impl OnlineModel for Sgd {
             && self.warmup.learn(weight)
         {
             self.beta = unscaled(&self.beta, sc, self.cfg.fit_intercept);
+            // The map a refit on this row projects with
+            // ([`Self::project_mapped`]): a row that starts held forms it
+            // as it standardizes, and this one did not, so it is the
+            // scaler's as it stands. It was the `[0]`, `[1]` the buffers
+            // start at, and the intercept took none of the slopes' move
+            // (review 2026-11-23, REG-6).
+            let scales = scales_of(sc, off);
+            for (i, &scale) in scales.iter().enumerate().skip(off) {
+                self.mbuf[i] = sc.mean(i);
+                self.sbuf[i] = scale;
+            }
         }
         // The refit's buffers take the row, a learned one or an ageing, and
         // a target whose buffer it fills is refit, after the row's own
@@ -2829,9 +2862,18 @@ impl OnlineModel for Sgd {
                 // Under a span of the clock the buffers grow with the data:
                 // a row that would take them past the cap is buffered by no
                 // target, nor any row after it (task 538).
-                if span.is_some() && t.is_some() && self.refit[j].open() {
+                // An ageing row adds a run where its decay is not the last
+                // run's, and is held to the cap as a learned row is (review
+                // 2026-11-23, REG-2).
+                let row = match (span, t) {
+                    (None, _) => 0,
+                    (Some(_), Some(_)) => {
+                        8 * (x.len() + 4) as u64 + 48 * u64::from(!self.mad.is_empty())
+                    }
+                    (Some(_), None) => self.refit[j].age_bytes(lam, lam_scale),
+                };
+                if row > 0 && self.refit[j].open() {
                     let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
-                    let row = 8 * (x.len() + 4) as u64 + 48 * u64::from(!self.mad.is_empty());
                     let limit = self.span_cap();
                     let mut guard = crate::clock_span::HeldCap {
                         over: &mut self.over,
@@ -3868,11 +3910,20 @@ mod tests {
         };
         let k = 5;
         let beta = vec![0.25; k];
+        let zeros = [0.0; 5];
         let mut refusals = 0;
         for squared in [false, true] {
             for clip in [f64::INFINITY, 1e300] {
                 let z = vec![1.0; k];
-                assert!(slopes_usable(&beta, &z, 2.0, 1.0, 0.1, clip, squared));
+                assert!(slopes_usable(
+                    &beta,
+                    &z,
+                    2.0,
+                    1.0,
+                    0.1,
+                    clip,
+                    squared.then_some(&zeros)
+                ));
                 assert!(any_form(&beta, &z, 2.0, 1.0, 0.1, clip, squared));
                 for pos in 0..k {
                     for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e200] {
@@ -3884,7 +3935,15 @@ mod tests {
                             // A clipped infinity or 2e200: finite, its square not.
                             !squared
                         };
-                        let got = slopes_usable(&beta, &z, 2.0, 1.0, 0.1, clip, squared);
+                        let got = slopes_usable(
+                            &beta,
+                            &z,
+                            2.0,
+                            1.0,
+                            0.1,
+                            clip,
+                            squared.then_some(&zeros),
+                        );
                         assert_eq!(
                             got, want,
                             "squared {squared}, clip {clip}, slot {pos}: {bad}"
@@ -3919,7 +3978,7 @@ mod tests {
                             z[pos] = v;
                         }
                         let (d, w, lr) = (1.5 * lcg(&mut s), 0.5 + lcg(&mut s).abs(), 0.01);
-                        let want_ok = slopes_usable(&beta, &z, d, w, l2, clip, false);
+                        let want_ok = slopes_usable(&beta, &z, d, w, l2, clip, None);
                         let mut want = beta.clone();
                         for (b, &zi) in want.iter_mut().zip(&z) {
                             let g = (d * zi * w + l2 * *b).clamp(-clip, clip);
@@ -4031,7 +4090,15 @@ mod tests {
             (1e154, 1.0, 1e154, 1.0, 1.0, 1e150, true, true),
         ];
         for (i, &(b, z, d, w, l2, clip, sq, want)) in cases.iter().enumerate() {
-            let got = slopes_usable(&[0.5, b], &[1.0, z], d, w, l2, clip, sq);
+            let got = slopes_usable(
+                &[0.5, b],
+                &[1.0, z],
+                d,
+                w,
+                l2,
+                clip,
+                sq.then_some(&[0.0; 2]),
+            );
             assert_eq!(got, want, "case {i}");
             assert_eq!(got, any_form(b, z, d, w, l2, clip, sq), "case {i}");
         }

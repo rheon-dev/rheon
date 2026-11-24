@@ -440,3 +440,135 @@ fn a_step_out_of_the_links_range_is_halved_to_the_fit() {
         "score {score:?} against terms of {terms}"
     );
 }
+
+// ---- mutants-w11: the refit over a span's cap, its bytes and its flag ----
+
+const S: i128 = 1_000_000_000;
+
+fn spanned(nf: usize, targets: usize) -> Glm {
+    let mut c = cfg_of(GlmFamily::Poisson, nf, 0);
+    c.n_targets = targets;
+    c.refit_clock = Some(1e12);
+    Glm::new(c).unwrap()
+}
+
+fn stamp_bytes() -> u64 {
+    std::mem::size_of::<Option<Stamp>>() as u64
+}
+
+/// The refit buffers' bytes: a stamp a target, and `n_features + 2` numbers
+/// of 8 bytes a row held and a row to come, each target's.
+#[test]
+fn the_refit_buffers_bytes_are_counted_by_target_row_and_width() {
+    let mut m = spanned(3, 2);
+    assert_eq!(m.refit_held_bytes(0), 2 * stamp_bytes());
+    assert_eq!(m.refit_held_bytes(5), 8 * 5 * (3 + 2) + 2 * stamp_bytes());
+    let data = stream_of(GlmFamily::Poisson, 4, 4, 7);
+    for (i, (x, y)) in data.iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, &[Some(*y), Some(*y)], 1.0, 1.0);
+    }
+    // Four rows in each of two buffers.
+    assert_eq!(
+        m.refit_held_bytes(1),
+        8 * (2 * 4 * (3 + 2) + (3 + 2)) + 2 * stamp_bytes()
+    );
+}
+
+/// The warning's flag is state: saved after the warning, it restores raised.
+#[test]
+fn a_warned_flag_survives_a_save() {
+    let mut c = cfg_of(GlmFamily::Poisson, 2, 0);
+    c.refit_clock = Some(1e12);
+    c.max_state_bytes = Some(2000);
+    let mut m = Glm::new(c).unwrap();
+    for (i, (x, y)) in stream_of(GlmFamily::Poisson, 3, 40, 5).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    assert!(m.warned && m.over.is_none());
+    let bytes = rmp_serde::to_vec_named(&m.state()).unwrap();
+    let key = b"\xa6warned";
+    assert!(bytes.windows(key.len()).any(|w| w == key));
+    let back = Glm::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+    assert!(back.warned);
+}
+
+/// The cap is asked of a row that would be learned into a refit still
+/// waiting, on a span, and of no other.
+#[test]
+fn the_refit_cap_is_asked_of_learned_rows_of_open_targets_on_a_span_only() {
+    let data = stream_of(GlmFamily::Poisson, 3, 30, 9);
+    let (x, y) = &data[0];
+    // A row of no weight takes no room: a cap of the stamps alone holds it.
+    let mut m = spanned(2, 1);
+    m.cfg.max_state_bytes = Some(stamp_bytes());
+    m.stamp_next(Stamp::Ns(0));
+    m.step(x, &[Some(*y)], 1.0, 0.0);
+    assert_eq!(m.state_over_cap(), None);
+    // A row for a target it does not carry takes none either.
+    let mut m = spanned(2, 1);
+    m.cfg.max_state_bytes = Some(stamp_bytes() + 16);
+    m.stamp_next(Stamp::Ns(0));
+    m.step(x, &[None], 1.0, 1.0);
+    assert_eq!(m.state_over_cap(), None);
+    // Nor does a row once the refit is done: its buffer is empty.
+    let mut m = spanned(2, 1);
+    m.cfg.refit_clock = Some(3.0);
+    for (i, (x, y)) in data[..8].iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    assert!(m.refit_status()[0].done);
+    m.cfg.max_state_bytes = Some(stamp_bytes() + 16);
+    m.stamp_next(Stamp::Ns(9 * S));
+    m.step(x, &[Some(*y)], 1.0, 1.0);
+    assert_eq!(m.state_over_cap(), None);
+    // And a model with no span checks no cap: it learns on as a free one.
+    let c = cfg_of(GlmFamily::Poisson, 2, 6);
+    let (mut capped, mut free) = (Glm::new(c.clone()).unwrap(), Glm::new(c.clone()).unwrap());
+    capped.cfg.max_state_bytes = Some(1);
+    for (x, y) in &data {
+        let (a, b) = (
+            capped.step(x, &[Some(*y)], 1.0, 1.0),
+            free.step(x, &[Some(*y)], 1.0, 1.0),
+        );
+        assert_eq!(
+            a.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            b.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(capped.state_over_cap(), None);
+}
+
+/// A row refused at the cap is predicted by the fit's mean where the
+/// target's weight has reached `min_weight`, and by nothing before.
+#[test]
+fn a_row_refused_at_the_cap_is_predicted_where_the_weight_has_reached_the_floor() {
+    let data = stream_of(GlmFamily::Poisson, 3, 30, 11);
+    let mut c = cfg_of(GlmFamily::Poisson, 2, 0);
+    c.refit_clock = Some(1e12);
+    c.min_weight = 2.0;
+    let mut m = Glm::new(c).unwrap();
+    // Room for five rows and the stamp.
+    m.cfg.max_state_bytes = Some(stamp_bytes() + 5 * 32);
+    for (i, (x, y)) in data[..5].iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    assert_eq!(m.state_over_cap(), None);
+    m.stamp_next(Stamp::Ns(5 * S));
+    let refused = m.step(&data[5].0, &[Some(data[5].1)], 1.0, 1.0);
+    assert!(m.state_over_cap().is_some());
+    assert!(refused.pred[0].is_finite(), "{:?}", refused.pred);
+    // Before the floor: nothing to say.
+    let mut c = cfg_of(GlmFamily::Poisson, 2, 0);
+    c.refit_clock = Some(1e12);
+    c.min_weight = 2.0;
+    let mut m = Glm::new(c).unwrap();
+    m.cfg.max_state_bytes = Some(stamp_bytes());
+    m.stamp_next(Stamp::Ns(0));
+    let first = m.step(&data[0].0, &[Some(data[0].1)], 1.0, 1.0);
+    assert!(m.state_over_cap().is_some());
+    assert!(first.pred[0].is_nan(), "{:?}", first.pred);
+}

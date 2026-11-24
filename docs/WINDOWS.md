@@ -46,7 +46,9 @@ temporal one. Each operator then reads the weighted rows its own way:
 | `rp.ewm_sum` | `Σ 0.5 ** (age / half_life) · x`, each row counted once at its own time. Every row at a repeated clock value carries that value's total. A window with no row with a value sums to 0.0 under the default `min_samples=0`, and is null under 1 or more | `ewm_sum_by` on distinct clock values, whose sum at a repeated one runs row by row; `rolling_sum_by`, empty windows included |
 | `rp.ewm_rate` | the sum divided by the decayed time the window covers: a quantity per unit of clock | the sum and the decayed time, each as above |
 | `rp.ewm_quantile` | each row weighed as `rp.ewm_sum` weighs it ([Quantiles and a robust scale](#quantiles-and-a-robust-scale)) | numpy's weighted quantile (`inverted_cdf`), within 0.78% |
+| `rp.rolling_max`, `rp.rolling_min` | every row of the window counts once, whatever its age, so there is no `half_life`; with no `window_size`, every row since the stretch began or since the last `since` event ([The largest and smallest value, and since an event](#the-largest-and-smallest-value-and-since-an-event)) | `rolling_max_by` and `rolling_min_by`, bit for bit, a NaN or an infinity read as missing where Polars lets a NaN make the window NaN and counts an infinity |
 | `rp.ewm_var`, `rp.ewm_std` | about `rp.ewm_mean`, each value weighed as the mean weighs it, and looking back only. With `bias=False`, the default, the variance is corrected for the weights' number and inequality, so a window that one row's weight fills is null. A window that holds one value gives 0 exactly | `ewm_var` and `ewm_std` with `adjust=False`, on a clock that steps by 1 a row with `half_life` in rows and an input with no nulls: a null row moves nothing here and the last value is held across the longer step to the next value, which no `ignore_nulls` setting of Polars' does. Polars before 1.44 gave the first row 0.0 under `bias=False`, where it now gives null, as these do |
+| `rp.ewm_moments` | one term of the moments of one or more columns, each perhaps lagged (`{"x": 3}`, `{"x": 1, "x@1": 1}`), each row weighed by its held interval's decayed time as `rp.ewm_var` weighs it, and looking back only. The moments are merged a row at a time by Pébay's rule, so a column far from zero keeps its higher moments. Under `window_size` a row is in the window by its clock value and weighs its whole interval, where `rp.ewm_var` counts only the oldest row's part inside the window. A lag pairs each row with the latest row at or before `t - k`, within `lag_tolerance` | numpy's weighted averages of the deviations' products over the window's rows; scipy's `moment`, `skew`, `kurtosis` and `kstat` at equal weights; `rp.spec.ewm_moments` fed the same weights, to the bit |
 
 `rp.increment`, which is not a window operator, gives an operator an
 input: `x_t − x_{t−1}`, back to the last row with a value in the group and
@@ -269,8 +271,10 @@ partial="drop": 2898 rows, 0 null
 
 **A window that looks ahead under `closed="right"` or `"both"` gives its
 value under any `partial` when its far edge falls on the last row before a
-gap or a reset.** That row is in the window and no later row can join it, so the
-window is whole. For a formula target, a reset still starts the model
+gap or a reset, or on its group's last row when the input ends.** That row is
+in the window and no later row can join it, so the window is whole. A window
+whose far edge lies past the last row of the input is null, since rows past
+the input would have joined it. For a formula target, a reset still starts the model
 over and drops every row waiting to be learned, a whole one with the rest.
 
 ## Quantiles and a robust scale
@@ -323,10 +327,285 @@ shared laptop at a load average of 8 to 12.
 shows how to make a MAD scale with `rp.ewm_quantile`, and weight each row
 by it without reading targets not yet known.
 
+## Across groups at one stamp
+
+**A cross operator reduces the rows of every group at one stamp of the
+clock and gives the result to each of those rows.** `rp.cross_mean`,
+`rp.cross_std`, `rp.cross_rank` and `rp.cross_quantile` read the stamp's
+cross-section: its weighted mean, its spread, a row's rank within it, or a
+level of it. Each gives the value Polars gives over the clock on the whole
+frame, such as `pl.col("r").mean().over("t")` for the mean, while the
+stream arrives in chunks of any size. A row less its stamp's mean is a
+*cross-sectional residual*: what a symbol did beyond what every symbol did.
+This code builds its own rows:
+
+```python
+# Three symbols' returns at three timestamps, the rows in clock order.
+panel = pl.DataFrame(
+    {
+        "t": [1, 1, 1, 2, 2, 2, 3, 3, 3],
+        "symbol": ["a", "b", "c"] * 3,
+        "r": [0.010, 0.030, -0.010, 0.020, 0.000, 0.040, 0.000, -0.030, 0.030],
+    }
+)
+out = rp.stream.with_windows(
+    panel,
+    resid=pl.col("r") - rp.cross_mean("r"),                         # less every symbol's mean at its stamp
+    rank=rp.cross_rank("r"),                                        # 1 for the smallest at its stamp
+    resid_before=pl.col("r") - rp.cross_mean("r", closed="left"),   # less the stamp before's mean
+    clock="t", gap_cap=10, group="symbol",
+)
+print(out.select("t", "symbol", pl.col("resid", "resid_before").round(3), "rank"))
+```
+
+```text
+shape: (9, 5)
+┌─────┬────────┬───────┬──────────────┬──────┐
+│ t   ┆ symbol ┆ resid ┆ resid_before ┆ rank │
+│ --- ┆ ---    ┆ ---   ┆ ---          ┆ ---  │
+│ i64 ┆ str    ┆ f64   ┆ f64          ┆ f64  │
+╞═════╪════════╪═══════╪══════════════╪══════╡
+│ 1   ┆ a      ┆ 0.0   ┆ null         ┆ 2.0  │
+│ 1   ┆ b      ┆ 0.02  ┆ null         ┆ 3.0  │
+│ 1   ┆ c      ┆ -0.02 ┆ null         ┆ 1.0  │
+│ 2   ┆ a      ┆ 0.0   ┆ 0.01         ┆ 2.0  │
+│ 2   ┆ b      ┆ -0.02 ┆ -0.01        ┆ 1.0  │
+│ 2   ┆ c      ┆ 0.02  ┆ 0.03         ┆ 3.0  │
+│ 3   ┆ a      ┆ 0.0   ┆ -0.02        ┆ 2.0  │
+│ 3   ┆ b      ┆ -0.03 ┆ -0.05        ┆ 1.0  │
+│ 3   ┆ c      ┆ 0.03  ┆ 0.01         ┆ 3.0  │
+└─────┴────────┴───────┴──────────────┴──────┘
+```
+
+**Under `closed="right"`, the default, a row reads its own stamp, so it
+waits until the stamp closes.** A run's rows are in clock order across its
+groups, so a stamp's rows arrive together, and the first row of a later
+stamp closes the stamp, or the end of the input does. A row whose stamp
+comes before the one already open is refused, naming the row. Under
+`closed="left"` a row reads the stamp before its own, which is known when
+the row arrives. That form is causal: a feature it makes reads no row at
+the row's own time, so a model can learn from it without the row's own
+cross-section. Above, `resid_before` at `t = 2` subtracts the mean at
+`t = 1`, 0.01, and the first stamp has none to subtract.
+
+**A row of weight 0, or with no value, counts in no stamp. A cross-section
+of fewer than two rows of weight is null.** One row has no spread, and
+there is nothing to rank it against. A stamp that holds only such rows is
+no stamp: under `"left"` the next row reads the stamp before it. A gap past
+`gap_cap`, a session change or a reset ends the stamp before, as it ends
+every window.
+
+**`neighbors=` names a list column of group keys: each row reads the rows
+of the groups its own list names, in place of every group's.** A transit
+stop can read the stops beside it, and a stock the other stocks in its
+sector. A row's own group counts only where its list names it. Each key
+counts once, and a key with no row at the stamp counts for nothing.
+`rp.cross_ref` reads one reference row's value at each stamp, the row its
+`where=` predicate picks, such as an index's return beside each symbol's.
+A stamp with two such rows is refused, naming the second row:
+
+```python
+# Four stops on a line, each reading the delay at the stops beside it, and the line's first stop.
+delays = pl.DataFrame(
+    {
+        "t": [0, 0, 0, 0, 1, 1, 1, 1],
+        "stop": ["s1", "s2", "s3", "s4"] * 2,
+        "delay": [2.0, 4.0, 6.0, 9.0, 3.0, 3.0, 7.0, 11.0],
+        "beside": [["s2"], ["s1", "s3"], ["s2", "s4"], ["s3"]] * 2,
+    }
+)
+out = rp.stream.with_windows(
+    delays,
+    beside_mean=rp.cross_mean("delay", neighbors="beside"),          # null where one stop is beside
+    first_stop=rp.cross_ref("delay", where=pl.col("stop") == "s1"),
+    clock="t", gap_cap=10, group="stop",
+)
+print(out.select("t", "stop", "beside_mean", "first_stop"))
+```
+
+```text
+shape: (8, 4)
+┌─────┬──────┬─────────────┬────────────┐
+│ t   ┆ stop ┆ beside_mean ┆ first_stop │
+│ --- ┆ ---  ┆ ---         ┆ ---        │
+│ i64 ┆ str  ┆ f64         ┆ f64        │
+╞═════╪══════╪═════════════╪════════════╡
+│ 0   ┆ s1   ┆ null        ┆ 2.0        │
+│ 0   ┆ s2   ┆ 4.0         ┆ 2.0        │
+│ 0   ┆ s3   ┆ 6.5         ┆ 2.0        │
+│ 0   ┆ s4   ┆ null        ┆ 2.0        │
+│ 1   ┆ s1   ┆ null        ┆ 3.0        │
+│ 1   ┆ s2   ┆ 5.0         ┆ 3.0        │
+│ 1   ┆ s3   ┆ 7.0         ┆ 3.0        │
+│ 1   ┆ s4   ┆ null        ┆ 3.0        │
+└─────┴──────┴─────────────┴────────────┘
+```
+
+`s1` and `s4` each list one stop, and one row is no cross-section, so each
+reads null. `s3` lists `s2` and `s4`: at `t = 0` it reads (4 + 9) / 2.
+
+**The state holds the rows of the open stamp, within `max_state_bytes`.**
+Under `"right"` a stamp's rows wait for it, so the state grows with the
+rows one stamp holds, never with the stream's length. The run warns once,
+as a `RheonWarning`, when a stamp takes it past half of the cap, and
+refuses the row that would take it past the cap. A rank, a quantile and a
+read over neighbors also keep each row's value, and under `"left"` the
+stamp before's; each operator's docstring gives its bytes a row.
+
+**A cross-section needs every group's rows in one place.** A stream
+partitioned by group, as a Kafka topic keyed by group is, keeps each
+group's rows in order but splits the stamp across partitions. A cross
+operator therefore runs in one consumer that reads every group's rows,
+such as from a topic with a single partition, after the per-group work.
+
+## A profile by the phase of a period
+
+**`rp.ewm_profile` reads a column's typical value at each row's phase of a
+period: its hour of the day, its day of the week.** It keeps a decayed
+mean, variance or quantile for each phase of each group, or one smooth
+Fourier curve over the whole period (`harmonics=`), and gives each row the
+value at its own phase. A seasonal adjustment is an expression around it:
+`x - profile` for an additive one, `x / profile` or `x / std_profile` for a
+multiplicative one. Under `closed="left"` a row's profile holds no row of
+its own time, so the adjustment reads only what was known before the row.
+This code builds its own rows:
+
+```python
+from datetime import datetime, timedelta
+
+# Delays every 6 hours for three days, worse at the morning rush (06:00),
+# with the clocks of Amsterdam.
+start = datetime(2026, 3, 27)
+delays = pl.DataFrame(
+    {
+        "t": [start + timedelta(hours=6 * i) for i in range(12)],
+        "delay": [1.0, 8.0, 3.0, 2.0, 2.0, 10.0, 4.0, 2.0, 1.0, 9.0, 3.0, 3.0],
+    }
+).with_columns(pl.col("t").dt.replace_time_zone("Europe/Amsterdam"))
+out = rp.stream.with_windows(
+    delays,
+    usual=rp.ewm_profile("delay", period="1d", buckets=4, half_life="7d", closed="left"),
+    clock="t", gap_cap="1d",
+)
+out = out.with_columns(excess=pl.col("delay") - pl.col("usual"))  # less what that time of day had shown
+print(out.tail(4).select(pl.col("t").dt.strftime("%m-%d %H:%M"), "delay", pl.col("usual", "excess").round(2)))
+```
+
+```text
+shape: (4, 4)
+┌─────────────┬───────┬───────┬────────┐
+│ t           ┆ delay ┆ usual ┆ excess │
+│ ---         ┆ ---   ┆ ---   ┆ ---    │
+│ str         ┆ f64   ┆ f64   ┆ f64    │
+╞═════════════╪═══════╪═══════╪════════╡
+│ 03-29 00:00 ┆ 1.0   ┆ 1.52  ┆ -0.52  │
+│ 03-29 06:00 ┆ 9.0   ┆ 9.05  ┆ -0.05  │
+│ 03-29 12:00 ┆ 3.0   ┆ 3.52  ┆ -0.52  │
+│ 03-29 18:00 ┆ 3.0   ┆ 2.0   ┆ 1.0    │
+└─────────────┴───────┴───────┴────────┘
+```
+
+The 06:00 rows read the rush hour's own level, about 9, so a delay of 9
+there is no excess, where the same delay at midnight would be one.
+
+**A row's phase is read on the wall clock in the clock column's own time
+zone, as Polars' `dt` namespace reads a zoned value.** The rows above are
+at 00:00, 06:00, 12:00 and 18:00 Amsterdam time on each day, and the third
+day is the one the clocks go forward: its 06:00 is five hours after its
+midnight, and still the rush hour's phase. A phase is `t − t.dt.truncate(period)`
+less an `offset`, so a week starts on Monday, as Polars truncates one. A
+calendar period (`"1mo"`) has no fixed length, and is refused.
+
+**A phase is read once it holds `min_samples` rows, 1 by default**, counted
+as `rolling_*_by` counts them, so a phase no row has reached is null.
+Each phase decays by the clock's age, seen or not, so a phase unseen for
+long weighs little against a fresh one. Under a `window_size` each phase
+keeps only its rows inside the window, in two stacks, so a row leaves
+without a subtraction, as it leaves `rp.ewm_mean`'s window. The harmonic
+form is null where its rows do not pin the curve down (fewer distinct
+phases than its `2 · harmonics + 1` terms), and its variance where the fit
+of `x²` falls below the square of the fit of `x`.
+
+**A group's state holds its phases, bounded by the period's shape and the
+window, never by the stream's length**, and held to `max_state_bytes`:
+56 bytes a bucket, and under a window each row inside it; the operator's
+docstring gives each form's bytes. A call whose buckets pass the cap is
+refused before it reads a row; a state the data grows (a window's rows, a
+quantile's sketches) warns once at half the cap and refuses the row that
+would pass it.
+
+## The largest and smallest value, and since an event
+
+**`rp.rolling_max` and `rp.rolling_min` are the largest and smallest value
+the window holds.** The window is the one `rolling_max_by` holds under each
+`closed`, and the value is Polars' to the bit. On equal values that differ
+only as `0.0` and `-0.0` the earliest row of the window wins, as in Polars.
+Looking ahead the latest wins, so a forward window is the backward one over
+the reversed stream. A NaN, an infinity or a value beyond 1e100 is read as
+missing, as every operator reads it, where Polars' `rolling_max_by` lets a
+NaN make the window NaN and counts an infinity.
+
+**`since` starts the window over at an event.** It is an element-wise
+boolean of the row, such as `pl.col("new_period")`. A stamp that holds a
+true row, at any of its rows, starts the window at that stamp: every row of
+the stamp is in, every earlier row is out, so the rows of one stamp never
+get two values. Under `closed="left"` or `"none"` the event's stamp is null,
+since its own rows are outside its window and the event emptied the rest.
+With a `window_size`, a window the event cut before its full span is
+partial, under `partial`. The event acts on its operator alone, and under
+`group` each group's events are its own. A gap past `gap_cap` or a session
+change starts the running form over too, as it does every operator; a
+`gap_cap` wide enough keeps a high-water mark across a long gap. `since`
+does not combine with `reverse=True` yet: a window looking ahead would end
+at the next event, and whether such a window is whole has no rule yet.
+
+**The drawdown subtracts the high-water mark from the value.** This code makes
+both from a column of equity:
+
+```python
+import polars as pl
+import rheon.polars as rp
+
+rows = pl.DataFrame({
+    "t": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+    "equity": [1.0, 3.0, 2.0, 4.0, 1.0, 2.0],
+    "new_period": [False, False, False, False, True, False],
+})
+peak = rp.rolling_max("equity", since="new_period")
+out = rp.stream.with_windows(
+    rows, peak=peak, drawdown=pl.col("equity") - peak, clock="t", gap_cap=10.0
+)
+print(out["drawdown"].to_list())
+```
+
+```text
+[0.0, 0.0, -1.0, 0.0, 0.0, 0.0]
+```
+
+Its running worst, the maximum drawdown so far, is `rp.rolling_min` of the
+`drawdown` column in a second call, since an operator's input holds no
+other operator.
+
+**What it holds.** With no `window_size`, one running extremum and its
+count a group: a few doubles, whatever the stream's length. With a
+`window_size`, the window's rows, as every windowed operator keeps them,
+and one double a row more for the extremum. A row costs 112 bytes for one
+extremum on its own window: 40 for the row, 64 for the operator's value
+and sums, 8 for the extremum. Each other operator sharing the window adds
+64 bytes a row, and another extremum 72. A window on a clock holds every
+row inside its span, so a burst of rows fills it. `max_state_bytes` bounds
+it, 256 KB a group by default and at most 64 MiB. Without a clock column
+the window's rows are known, and a window past the cap is refused when the
+query is built. On a clock, the row that takes a group's window past it is
+refused.
+
 ## Saving and resuming a window run
 
 **A window run's state holds the rows still waiting for their windows to
-close, so a run resumed from it returns those rows before its own.** Two
-runs then give what one run gives. [Resume a window
+close, so a run resumed from it returns those rows before its own.** A
+window that looks back and waits for the next stamp is not one of them. At
+the end of the input it is read as it stands. A resumed run refuses an input
+that starts at the last stamp, so no row can join it. Two runs then give what
+one run gives. [Resume a window
 run](how-to/resume-a-window-run.md) shows how to save and load the state,
 and which inputs a resumed run takes or refuses.

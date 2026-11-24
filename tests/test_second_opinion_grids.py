@@ -23,7 +23,10 @@ The single-seed tests stay where they are, the cheap check in the gate.
 - ``ewridge_gram_huber``: Huber's algorithm H on the bank's Gram against
   statsmodels' ``RLM`` (1e-6, measured 2.5e-7);
 - ``rls_kalman_influence``: ``rls``'s and ``kalman``'s ``influence``
-  against statsmodels' DFFITS (``tests/test_second_opinion_rls_errors.py``).
+  against statsmodels' DFFITS (``tests/test_second_opinion_rls_errors.py``);
+- ``realized_decay``: ``realized`` under a decay and unequal weights against
+  the papers' weighted measures written out in numpy, each sum ``fsum``'s
+  (``tests/test_realized.py``'s decay test, in ulps).
 
 Every grid is ``oracle_grid``: CI runs it on every push, no local run does,
 and the gate holds this library's outputs on the first seeds' inputs by a
@@ -44,6 +47,7 @@ from filterpy.kalman import KalmanFilter
 from statsmodels.stats.outliers_influence import OLSInfluence
 
 import ledger
+import reference_realized as ref
 from rheon import polars as rp
 
 TIER = "oracle_grid"
@@ -543,3 +547,83 @@ def test_influence_is_dffits_over_fifty_seeds(kind, rtol):
     ledger.record("rls_kalman_influence", f"{kind}_relative_gap", worst)
     print(f"{kind}: worst {max(worst):.3g}")
     assert max(worst) <= rtol, (max(worst), int(np.argmax(worst)))
+
+
+# --- realized under a decay against the weighted definitions -------------------
+
+#: Each field's distance from the definition the ledger counts as
+#: round-off, its floor: twice the worst measured over the 50 seeds and both
+#: half-lives on macOS arm64 (2026-11-23: 18, 24, 20 and 30 ulps, and 5.9
+#: for ``bns``), under the essentials' bound.
+REALIZED_FLOOR = {"rv": 36.0, "bv": 48.0, "tv": 40.0, "tq": 60.0, "bns": 12.0}
+#: The essentials' bounds (``tests/test_realized.py``), in ulps, ``bns`` in
+#: units of ``cond · ε``: its rounding is amplified by ``(RV + BV)/|RV − BV|``.
+REALIZED_BOUND = {"rv": 64, "bv": 64, "tv": 64, "tq": 128, "bns": 32}
+REALIZED_ROWS = 2_000
+
+
+def decayed_returns(seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, pl.DataFrame]:
+    """``tests/test_realized.py``'s decay design on one seed: a
+    stochastic-volatility day with jumps, an irregular clock in 64ths (so
+    the ages carry no rounding of their own) and weights in [0.5, 1.5], then
+    a row with no return, which reads the whole."""
+    rng = np.random.default_rng(499_000 + seed)
+    r = ref.sv_returns(REALIZED_ROWS, 499_000 + seed, True)
+    t = np.cumsum(1 + np.floor(rng.uniform(0, 256, REALIZED_ROWS))) / 64
+    w = rng.uniform(0.5, 1.5, REALIZED_ROWS)
+    frame = pl.DataFrame({"r": [*map(float, r), None], "t": [*t, t[-1] + 1], "w": [*w, 1.0]})
+    return r, t, w, frame
+
+
+def realized_decayed(frame: pl.DataFrame, half_life: float) -> pl.DataFrame:
+    spec = rp.spec.realized(
+        "v", targets=["r"], half_life=half_life, clock="t", gap_cap=1e9, weight="w"
+    )
+    return rp.ModelBank([spec]).fit_predict(frame).unnest("v")
+
+
+ledger.guard(
+    "realized_decay",
+    lambda: [
+        realized_decayed(decayed_returns(s)[3], h) for s in GUARD_SEEDS for h in (30.0, 300.0)
+    ],
+    oracles=["numpy", "scipy"],
+)
+
+
+def realized_gap(field: str, got: float, want: dict) -> float:
+    """A field's distance from its definition: ulps, and ``bns``'s in units
+    of ``cond · ε``."""
+    if field == "bns":
+        cond = (want["rv"] + want["bv"]) / abs(want["rv"] - want["bv"])
+        eps = float(np.finfo(float).eps)
+        return abs(got - want["bns"]) / (cond * eps * max(abs(want["bns"]), 1.0))
+    if np.isnan(got) and np.isnan(want[field]):
+        return 0.0
+    return abs(got - want[field]) / float(np.spacing(abs(want[field])))
+
+
+@pytest.mark.parametrize("half_life", [30.0, 300.0])
+def test_realized_under_a_decay_is_its_definition_over_fifty_seeds(half_life):
+    """Each seed's largest distance of each field from the weighted
+    definition, over every 97th row and the whole: each term weighted by its
+    row's weight and decayed by its age, ``n`` Kish's count and ``TQ``'s
+    factor the weight. The essentials hold one seed to these bounds."""
+    fields = ("rv", "bv", "tv", "tq", "bns")
+    worst: dict[str, list[float]] = {f: [] for f in fields}
+    for seed in SEEDS:
+        r, t, w, frame = decayed_returns(seed)
+        out = realized_decayed(frame, half_life)
+        gaps = dict.fromkeys(fields, 0.0)
+        for i in [*range(5, REALIZED_ROWS + 1, 97), REALIZED_ROWS]:
+            want = ref.weighted(t[:i], r[:i], w[:i], half_life)
+            row = out.row(i, named=True)
+            for f in fields:
+                gaps[f] = max(gaps[f], realized_gap(f, row[f"{f}_r"], want))
+        for f in fields:
+            worst[f].append(gaps[f])
+    tag = f"hl{half_life:g}"
+    for f in fields:
+        ledger.record("realized_decay", f"{f}_{tag}_ulps", worst[f], floor=REALIZED_FLOOR[f])
+        print(f"{f} {tag}: worst {max(worst[f]):.1f}")
+        assert max(worst[f]) <= REALIZED_BOUND[f], (f, max(worst[f]), int(np.argmax(worst[f])))

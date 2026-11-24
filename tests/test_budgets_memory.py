@@ -165,9 +165,13 @@ EXCEPT = {
     "ftrl": ONE_SLOT | NOT_LEAST_SQUARES,
     "sgd": ONE_SLOT | NOT_LEAST_SQUARES,
     "pa": ONE_SLOT | NOT_LEAST_SQUARES,
-    "glm": ONE_SLOT | NOT_LEAST_SQUARES,
-    "expectile": ONE_SLOT | NOT_LEAST_SQUARES,
+    # A glm's residuals are not of constant variance or normal, and an
+    # expectile off the mean (0.8 here) has no mean-zero residual: each
+    # refuses the checks whose null says so.
+    "glm": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_specification", "emit_tails"},
+    "expectile": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_calibration", "emit_breaks"},
     "holt": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_feature_health"},
+    "ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
 }
 
 
@@ -195,6 +199,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     ("glm", "glm", fullest("glm", **dict(FIT, targets=["hit"])), []),
     ("expectile", "expectile", fullest("expectile", **FIT, expectile=0.8), []),
     ("holt", "holt", fullest("holt", targets=["y"], group="g", half_life=25.0, **CLOCK), []),
+    ("ar", "ar", fullest("ar", **FIT, lags=[1, 3]), []),
     (
         "ew_cov",
         "ew_cov",
@@ -342,6 +347,66 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # Three return series through GARCH margins, the asymmetric model
+    # estimated after both starts of 50 rows: every field it has.
+    (
+        "dcc",
+        "dcc",
+        dict(
+            targets=["y", "z", "x0"],
+            asymmetric=True,
+            margin_start_rows=50,
+            start_rows=50,
+            half_life=50.0,
+            group="g",
+            coef_every=0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    # A digest a target, read at three levels, the tails withheld until the
+    # rows identify them: every field it has.
+    (
+        "tdigest",
+        "tdigest",
+        dict(
+            targets=["y", "z"],
+            quantiles=[0.05, 0.25, 0.95],
+            group="g",
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    # A sketch a target over a clock window, read at three levels with their
+    # tail means: every field it has.
+    (
+        "ddsketch",
+        "ddsketch",
+        dict(
+            targets=["y", "z"],
+            quantiles=[0.05, 0.25, 0.95],
+            window_size=50.0,
+            group="g",
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    (
+        "spectral",
+        "spectral",
+        dict(
+            targets=["y", "z"],
+            periods=[8.0, 3.0],
+            group="g",
+            half_life=25.0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",
@@ -351,6 +416,69 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
             group="g",
             half_life=25.0,
             coef_every=0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),  # Two components of three columns, every field they have.
+    (
+        "pca",
+        "pca",
+        dict(
+            features=["x0", "x1", "x2"],
+            n_components=2,
+            group="g",
+            half_life=25.0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    # Each target a series of returns, every field it has: the estimators,
+    # both tests and the flag.
+    (
+        "realized",
+        "realized",
+        dict(
+            targets=["y", "z"],
+            lm_window=30,
+            group="g",
+            half_life=25.0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    # Each target a series of returns, a term of each kind and the count.
+    (
+        "power_variation",
+        "power_variation",
+        dict(
+            targets=["y", "z"],
+            terms={
+                "rv": {"powers": [2]},
+                "bv": {"powers": [1, 1], "normalize": True},
+                "lrv": {"kernel": "parzen", "bandwidth": 5, "center": True},
+                "sub": {"powers": [2], "scale": 4},
+            },
+            group="g",
+            half_life=25.0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    # A moment, a standardized one and a lagged cross-moment, each with its
+    # standard error: every field it has.
+    (
+        "ewm_moments",
+        "ewm_moments",
+        dict(
+            terms={"m3": {"x0": 3}, "kurt": {"x0": 4}, "ac1": {"x0": 1, "x1@1": 1}},
+            kind={"kurt": "standardized"},
+            se=True,
+            group="g",
+            half_life=25.0,
             emit_clocks=True,
             **CLOCK,
         ),

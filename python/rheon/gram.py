@@ -723,12 +723,18 @@ def merge(grams: Sequence[Gram], *, within: bool = False) -> Gram:
         tmb, tvb = _opt(np, p["target_means"]), _opt(np, p["target_vars"])
         ttotal = tw + twb
         live = ttotal > 0.0
+        # A side with no weight on a target holds nothing of it, and may
+        # hold NaN there (a Gram from elsewhere): its moments read 0, so
+        # `0 * nan` poisons no pool (review 2026-11-23, MATH-3).
+        here, there = tw > 0.0, twb > 0.0
+        tmean, tvar, cross = _held(np, here, tmean), _held(np, here, tvar), _held(np, here, cross)
+        tmb, tvb, crossb = _held(np, there, tmb), _held(np, there, tvb), _held(np, there, crossb)
         if tmean is not None and tmb is not None and tvar is not None and tvb is not None:
-            d = np.where(live, tmb - tmean, 0.0)
+            d = np.where(here & there, tmb - tmean, 0.0)
             a = np.divide(tw, ttotal, out=np.zeros_like(ttotal), where=live)
             b = np.divide(twb, ttotal, out=np.zeros_like(ttotal), where=live)
             tvar = a * tvar + b * tvb + a * b * d * d
-            tmean = tmean + b * d
+            tmean = np.where(here, tmean + b * d, tmb)
         else:
             tmean = tvar = None
         tq = None if tq is None else _add_opt(tq, _target_q(np, p))
@@ -739,17 +745,20 @@ def merge(grams: Sequence[Gram], *, within: bool = False) -> Gram:
         # and its centred cross-moments as the co-moments do: each part's,
         # weighted, plus the product of the gaps between the parts' column
         # means and target means (review 2026-09-12, N4).
-        by_target_b = _opt(np, p.get("means_by_target"))
-        cc_b, ybar_b = _opt(np, p.get("cross_centered")), _ybar_of(np, p, icept)
+        by_target_b = _held(np, there, _opt(np, p.get("means_by_target")))
+        cc_b = _held(np, there, _opt(np, p.get("cross_centered")))
+        ybar_b = _held(np, there, _ybar_of(np, p, icept))
+        by_target, cc, ybar = _held(np, here, by_target), _held(np, here, cc), _held(np, here, ybar)
         if any(v is None for v in (cc, cc_b, ybar, ybar_b, by_target, by_target_b)):
             cc = ybar = None
         elif cc.size or cc_b.size:
             a = np.divide(tw, ttotal, out=np.zeros_like(ttotal), where=live)
             b = np.divide(twb, ttotal, out=np.zeros_like(ttotal), where=live)
-            dy = np.where(live, ybar_b - ybar, 0.0)
-            dm = np.where(live[:, None], by_target_b - by_target, 0.0)
+            both = here & there
+            dy = np.where(both, ybar_b - ybar, 0.0)
+            dm = np.where(both[:, None], by_target_b - by_target, 0.0)
             cc = a[:, None] * cc + b[:, None] * cc_b + (a * b * dy)[:, None] * dm
-            ybar = ybar + b * dy
+            ybar = np.where(here, ybar + b * dy, ybar_b)
         if by_target is None or by_target_b is None:
             by_target = None
         elif by_target.size or by_target_b.size:
@@ -783,6 +792,19 @@ def merge(grams: Sequence[Gram], *, within: bool = False) -> Gram:
         "lags": None,
         "lag_comoments": None,
     }
+
+
+def _held(np: Any, has: Any, v: Any) -> Any:
+    """``v``, one entry (or row) a target, with each target ``has`` is false
+    for read as 0: a side of a merge with no weight on a target holds none
+    of its moments, and a NaN there would poison the pool as ``0 * nan``."""
+    if v is None:
+        return None
+    v = np.asarray(v, dtype=float)
+    if v.size == 0 or v.shape[0] != has.shape[0]:
+        return v
+    mask = has.reshape((-1,) + (1,) * (v.ndim - 1))
+    return np.where(mask, v, 0.0)
 
 
 def _is_within(g: Gram) -> bool:
@@ -872,10 +894,14 @@ def _merge_within(np: Any, parts: list[Gram], cols: list[str], targets: list[str
         live = ttotal > 0.0
         a = np.divide(tw, ttotal, out=np.zeros_like(ttotal), where=live)
         b = np.divide(twb, ttotal, out=np.zeros_like(ttotal), where=live)
-        tvb = _opt(np, p["target_vars"])
+        here, there = tw > 0.0, twb > 0.0
+        tvb = _held(np, there, _opt(np, p["target_vars"]))
+        tvar = _held(np, here, tvar)
         tvar = None if tvar is None or tvb is None else a * tvar + b * tvb
         tq = None if tq is None else _add_opt(tq, _target_q(np, p))
-        cc = a[:, None] * cc + b[:, None] * _centred_rows(np, p, icept, m, k)
+        cc = a[:, None] * _held(np, here, cc) + b[:, None] * _held(
+            np, there, _centred_rows(np, p, icept, m, k)
+        )
         tw = ttotal
 
     # The demeaned rows' means: 0 for every feature, and the intercept's
@@ -1212,7 +1238,10 @@ def subset(g: Gram, columns: Sequence[str | int]) -> Gram:
         "comoments": como[np.ix_(idx, idx)][np.triu_indices(len(idx))]
         if _is_packed(np, g)
         else como[np.ix_(idx, idx)],
-        "cross_moments": cross[:, idx] if cross.size else cross,
+        # By shape, not size: with no targets it is `0 x k`, of size 0,
+        # and kept whole it was `k` wide beside the subset (review
+        # 2026-11-23, MATH-6).
+        "cross_moments": cross[:, idx] if cross.ndim == 2 else cross,
         "means_by_target": by_target[:, idx]
         if by_target is not None and by_target.ndim == 2
         else by_target,
@@ -2540,7 +2569,15 @@ def solve_subsets(
             raise ValueError(msg)
     picked: list[list[int]] = []
     for s in subsets:
-        idx = [int(i) for i in s]
+        # Whole numbers: `int` took `True` as 1 and `0.5` as 0 (review
+        # 2026-11-23, MATH-6).
+        if any(isinstance(i, bool) or not isinstance(i, numbers.Integral) for i in s):
+            msg = (
+                f"{who}: a subset's positions must be whole numbers, but subset {list(s)!r} "
+                "holds one that is not. Name Grams by their position in grams, such as 0 or 1."
+            )
+            raise WrongTypeError(msg)
+        idx = [operator.index(i) for i in s]
         if not idx:
             msg = (
                 f"{who}: each subset must name at least one Gram, but one is empty. Give each "
@@ -3060,16 +3097,20 @@ def coef_stats(
 
     .. code-block:: text
 
-        resid_var = Var[y] - 2 b' Cov[X, y] + b' C b
+        resid_var = Var[y] - 2 b' Cov[X, y] + b' C b + (b_0 + m . b - ybar)**2
         sigma2    = resid_var * n / (n - k)          # n = target_n_kish
         se        = sqrt(diag(inv(C)) * sigma2 / n)
         se_0      = sqrt((1 + m' inv(C) m) * sigma2 / n)   # the intercept's
         t         = b / se
         r2        = 1 - resid_var / Var[y]
 
-    ``b`` is the slopes, ``C`` the features' centered co-moments,
-    ``Cov[X, y]`` the target's centered cross-moments (``cross_centered``)
-    and ``m`` the column means over the target's rows. ``k`` counts the
+    ``b`` is the slopes, ``b_0`` the intercept, ``C`` the features'
+    centered co-moments, ``Cov[X, y]`` the target's centered cross-moments
+    (``cross_centered``), ``m`` the column means over the target's rows and
+    ``ybar`` the target's mean. The last term is the intercept's error
+    against least squares' ``ybar - m . b``, so ``resid_var`` is the
+    residuals' mean square for any coefficients: for those :func:`solve`
+    returns it is 0, to a rounding. ``k`` counts the
     features with variance and the intercept: a column of none, such as a
     constant that ``standardize`` drops at 0, has no coefficient to
     estimate and spends no degree of freedom. ``se_0`` is least squares'
@@ -3158,6 +3199,14 @@ def coef_stats(
 
     resid_var = s_yy - 2.0 * b @ rhs + b @ a @ b
     resid_var = max(resid_var, 0.0)
+    if icept >= 0 and not _is_within(g):
+        # The residuals' mean square, not their variance: an intercept off
+        # least squares' `ybar - m . b` adds its error squared, which is 0
+        # to a rounding for `solve`'s coefficients (review 2026-11-23,
+        # MATH-4: `[100, 2]` on `y = 2x` read r2 1 and sigma2 0).
+        # The target's mean is its cross-moment with the intercept column.
+        bias = float(beta[icept] + m[slots] @ b - cross[icept])
+        resid_var += bias * bias
     # The columns with variance: one of none, such as a constant that
     # standardize dropped, has a coefficient of 0 by construction, spends no
     # degree of freedom, and is a zero row no inverse of the whole takes, so

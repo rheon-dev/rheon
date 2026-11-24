@@ -57,12 +57,17 @@ impl Spec {
                  least-squares fit's uncertainty does not hold for it"
             }
             ModelKind::EwCov { .. }
+            | ModelKind::Pca { .. }
             | ModelKind::Marginal { .. }
             | ModelKind::Deco { .. }
             | ModelKind::Rcov { .. }
             | ModelKind::CorrChange { .. } => {
                 "its statistics are weighted means and covariances of the columns, not \
                  predictions of a target"
+            }
+            ModelKind::EwmMoments { .. } => {
+                "its statistics are weighted moments of the columns, not predictions of a \
+                 target"
             }
             _ => "it keeps no measure of a prediction's uncertainty",
         }
@@ -97,12 +102,16 @@ impl Spec {
 
     /// Whether this spec's model reports its coefficients' sampling
     /// variances ([`rheon_core::OnlineModel::coef_variance`]), the field
-    /// `emit_se_coef` writes: `ewridge`, `rls` and `kalman` (docs/PLAN.md
+    /// `emit_se_coef` writes: `ewridge`, `rls`, `kalman` and `ar`, whose
+    /// fits are `ewridge`'s (docs/PLAN.md
     /// task 116, F).
     pub fn has_se_coef(&self) -> bool {
         matches!(
             self.model,
-            ModelKind::EwRidge { .. } | ModelKind::Rls { .. } | ModelKind::Kalman { .. }
+            ModelKind::EwRidge { .. }
+                | ModelKind::Rls { .. }
+                | ModelKind::Kalman { .. }
+                | ModelKind::Ar { .. }
         )
     }
 

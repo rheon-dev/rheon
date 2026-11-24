@@ -14,6 +14,7 @@ fn sums(direction: Direction, closed: Closed, min_samples: u32, rows: &[(f64, f6
         window_size: Some(2.0),
         window_ns: Some(2_000_000_000),
         closed,
+        since: None,
     };
     let op = OpDef {
         kernel: 0,
@@ -23,6 +24,7 @@ fn sums(direction: Direction, closed: Closed, min_samples: u32, rows: &[(f64, f6
         partial: Partial::Keep,
         bias: false,
         quantile: None,
+        max_state_bytes: None,
     };
     let cfg = ClockCfg {
         gap_cap: 100.0,
@@ -40,6 +42,7 @@ fn sums(direction: Direction, closed: Closed, min_samples: u32, rows: &[(f64, f6
             session: None,
             values: &[x],
             accept: true,
+            lists: &[],
         })
         .unwrap();
         out.extend(core.drain().values.remove(0));

@@ -92,6 +92,55 @@ At 09:30:03 the two quotes come before the trade, since `quotes` is given
 first. A bank chained after `merged` with `merged.rheon.fit_predict(specs)`
 reads the merged stream in the same pass.
 
+## Carry each stream's last value forward
+
+Use this when a row of one stream needs another stream's latest value, such
+as the bid at the time of each trade, and how old that value is, so that a
+value too old to trust is set aside.
+
+1. **Give `carry` the columns to fill forward.** On a row where such a
+   column is null, the merge fills in its last value in the merged rows
+   before it, of the row's `by` group. A null in a stream is not a value,
+   so the last value before it is carried on, as Polars' `forward_fill`
+   carries it. Before a group has had a value, the column stays null.
+2. **Read the age beside each carried column.** The column `<c>_age` is the
+   row's clock less the clock of the row the value came from: 0 on a row
+   with a value of its own, a `Duration` on a temporal clock, and null
+   while the value is.
+3. **Write the threshold in Polars.** A value older than you trust is a
+   condition on its age, such as `pl.col("bid_age") <= pl.duration(seconds=1)`.
+
+This code carries the bid of each symbol to its trades, and keeps it only
+where it is at most a second old:
+
+```python
+carried = rp.stream.merge(streams, clock="ts", by="symbol", carry="bid")   # 1.
+trades = carried.filter(pl.col("source") == "trades").with_columns(
+    pl.when(pl.col("bid_age") <= pl.duration(seconds=1))                   # 2. and 3.
+    .then(pl.col("bid"))
+    .alias("fresh_bid"),
+)
+for ts, symbol, price, bid, age, fresh in trades.select(
+    "ts", "symbol", "price", "bid", "bid_age", "fresh_bid"
+).collect().rows():
+    print(ts.time(), symbol, price, bid, age, fresh)
+```
+
+```text
+09:30:02 AAA 10.01 10.0 0:00:02 None
+09:30:03 BBB 20.0 19.99 0:00:00 19.99
+09:30:05 AAA 10.02 10.01 0:00:02 None
+```
+
+The trades of AAA meet a bid two seconds old, and the threshold sets it
+aside. The BBB trade at 09:30:03 meets a bid of its own instant, since
+`quotes` is given first. Under `restart_after_step_back` a value is carried
+within its day: a stream that starts again carries nothing from before,
+since a clock that started again does not compare with the one before it.
+A state saved with `carry` keeps each group's last value of each column,
+one row a group however long the streams, so a resumed run carries what
+the last run left.
+
 ## Merge streams that arrive in parts
 
 Use this when each stream arrives in parts, such as a file a day, and the
@@ -144,6 +193,7 @@ carries the stream it came from, and the merged clock never steps back.
 | an error that a column is of two dtypes in two streams | a merged column holds one dtype | cast the column to one dtype in every stream, or rename it in one |
 | an error that the merged rows step back, naming a stream and its row | a resumed run's streams were cut at different clocks, or, under `restart_after_step_back`, a stream did not start again where the others did | cut every stream at the same clock, and start every stream again at the same places, such as each day's open |
 | fewer rows than the streams hold, from a run with `save_state` | the rows at the last clock read are held for the next part | load the state in the next part's run, which returns them first |
+| a carried column null on rows after the stream had a value | the row is of another `by` group, or of a day that started again, which has had no value yet | carry a column within the groups the bank reads; under `restart_after_step_back` the first rows of a day wait for that day's first value |
 
 Every parameter is in `merge`'s
 [docstring](https://rheon-dev.github.io/rheon/stream.html#rheon.polars.stream.merge).

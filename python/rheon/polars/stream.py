@@ -76,7 +76,7 @@ from rheon._duration import Duration, duration_text
 from rheon._errors import RefusedValueError, WrongTypeError
 from rheon._rheon import parse_duration
 from rheon._spec import _RENAMED, _RENAMED_KEYWORDS, _renamed_keywords
-from rheon._warnings import _user_stacklevel
+from rheon._warnings import RheonWarning, _user_stacklevel
 from rheon.polars import _formula
 from rheon.polars._bank import ModelBank, _refuse_uint128
 from rheon.polars._clock import clock_nanoseconds
@@ -309,7 +309,7 @@ def embargo(
     the future before predicting the rows in between, and every out-of-sample
     number after that is contaminated. With an autocorrelated feature, even a
     pure-noise column shows a correlation with its target. A row of weight 0 is
-    legal and means "advance the clock, learn nothing", so the doubled stream
+    legal and means "learn nothing, and leave the clock where it was", so the doubled stream
     says what is wanted: predict here, learn later.
 
     When each row's target becomes known at a time of its own, give the spec a
@@ -446,30 +446,36 @@ def embargo(
     # both, so the two schemas agree whatever the column's dtype; `w * 0.0`
     # beside an integer `w` died in the merge (review round 4, YB2).
     weight_value = pl.col(weight).cast(pl.Float64) if weight is not None else None
+    # The two helper columns take names the input does not hold: fixed
+    # names made a polars error of an input that held them (review
+    # 2026-11-23, PY-7).
+    taken = set(schema.names()) | {role, wcol}
+    order, key = "__embargo_order", "__embargo_key"
+    while order in taken or key in taken:
+        order, key = f"_{order}", f"_{key}"
     predict = lazy.with_columns(
         pl.lit("predict").alias(role),
         (weight_value * 0.0 if weight_value is not None else pl.lit(0.0)).alias(wcol),
-        pl.lit(1, pl.UInt8).alias("__embargo_order"),
+        pl.lit(1, pl.UInt8).alias(order),
     )
     learn = lazy.with_columns(
         pl.lit("learn").alias(role),
         (weight_value if weight_value is not None else pl.lit(1.0)).alias(wcol),
         later.alias(clock),
-        pl.lit(0, pl.UInt8).alias("__embargo_order"),
+        pl.lit(0, pl.UInt8).alias(order),
     )
     # One sort key, so the merge is by (clock, order): at a tie the lesson
     # lands before the prediction that may use it.
-    key = "__embargo_key"
     both = [
         f.with_columns(
-            pl.struct(pl.col(clock), pl.col("__embargo_order")).alias(key),
+            pl.struct(pl.col(clock), pl.col(order)).alias(key),
         )
         for f in (predict, learn)
     ]
     out = (
         both[0]
         .merge_sorted(both[1], key=key)
-        .drop(key, "__embargo_order")
+        .drop(key, order)
         .select(*schema.names(), *([] if weight is not None else [wcol]), role)
     )
     return out if isinstance(lf, pl.LazyFrame) else out.collect()
@@ -486,6 +492,7 @@ def refresh_time(
     group: str | None = None,
     pairs: bool = False,
     keep: Sequence[str] = (),
+    age: bool = False,
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
     save_state: State | None = None,
@@ -503,6 +510,7 @@ def refresh_time(
     group: str | None = None,
     pairs: bool = False,
     keep: Sequence[str] = (),
+    age: bool = False,
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
     save_state: State | None = None,
@@ -520,6 +528,7 @@ def refresh_time(
     group: str | None = None,
     pairs: bool = False,
     keep: Sequence[str] = (),
+    age: bool = False,
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
     save_state: State | None = None,
@@ -569,6 +578,9 @@ def refresh_time(
     ``keep``
         Columns to carry to the output, at their value on the tick that
         completes each grid point. Default: none.
+    ``age``
+        ``True`` adds each series' value's age (Returns), which says how stale
+        a point's values are. Default ``False``.
     ``chunk_size``
         The rows read at a time, at least 1. The default, ``None``, is the
         library's default chunk size. It changes no output.
@@ -576,8 +588,9 @@ def refresh_time(
         The path of a state :func:`refresh_time` saved, to go on from, or the
         state's bytes, such as a stage :func:`load_checkpoint` gives back. It is
         read when the query is built. It must have been saved with the same
-        ``names`` and ``pairs``, on the same kind of clock (a temporal state
-        resumes on any unit). Default ``None``: start with no state loaded.
+        ``names``, ``pairs`` and ``age``, on the same kind of clock (a
+        temporal state resumes on any unit). Default ``None``: start with no
+        state loaded.
     ``save_state``
         The path of a file to save the state to once the input is fed. Default
         ``None``: save nothing (Notes).
@@ -591,6 +604,11 @@ def refresh_time(
         series, of their last update (the paper's Definition 1).
     ``<s>_value``
         Each series' last value at that instant.
+    ``<s>_age``
+        With ``age=True``, the age of ``<s>_value``: ``time_refresh`` less the
+        clock of the tick it came from, as ``pl.col("time_refresh") -
+        pl.col(clock)`` gives it, in that dtype (a ``Duration`` on a temporal
+        clock). 0 for the series whose tick completed the point.
     ``n_obs_<s>``
         The ticks of ``s`` since the previous point. The grid keeps the last of
         them, the series' value at the refresh time.
@@ -602,9 +620,10 @@ def refresh_time(
     The ``group`` column comes first, in the dtype it came in as, and the
     ``keep`` columns last. Under ``pairs=True`` it is one long frame of the
     columns ``group`` (with a group), ``pair``, ``time_refresh``, ``a_value``,
-    ``b_value``, ``n_obs_a``, ``n_obs_b``, ``retained_fraction`` and the
-    ``keep`` columns, with ``pair = "a|b"`` and ``a`` the pair's series listed
-    first in ``names``. Each group runs its own pairs.
+    ``b_value``, ``a_age`` and ``b_age`` (with ``age=True``), ``n_obs_a``,
+    ``n_obs_b``, ``retained_fraction`` and the ``keep`` columns, with ``pair
+    = "a|b"`` and ``a`` the pair's series listed first in ``names``. Each
+    group runs its own pairs.
 
     .. rubric:: Raises
 
@@ -626,9 +645,10 @@ def refresh_time(
         - ``names`` lists fewer than two series, or one twice;
         - ``chunk_size`` is below 1, or is not a whole number, which raises
           :class:`~rheon.WrongTypeError`;
-        - ``load_state`` is not such a state, or was saved with other ``names``
-          or ``pairs``, or on the other kind of clock (numeric or temporal), or
-          with a ``group`` where this call has none, or the reverse;
+        - ``load_state`` is not such a state, or was saved with other
+          ``names``, ``pairs`` or ``age``, or on the other kind of clock
+          (numeric or temporal), or with a ``group`` where this call has none,
+          or the reverse;
         - when the query runs, a row's ``series`` is not in ``names``, or a
           clock steps below the previous row's in its group, the row named, as
           a spec refuses one with ``restart_after_step_back`` unset. A row
@@ -696,6 +716,9 @@ def refresh_time(
     The staleness caveat (their section 2.1): the output looks synchronous and
     is not. A refresh vector is treated as observed at ``time_refresh``, but
     each series' value is up to one of its own inter-tick intervals old.
+    ``age=True`` gives that age, ``<s>_age``, so a point whose values are too
+    old to treat as one instant is a filter on it, such as
+    ``grid.filter(pl.max_horizontal(pl.col("^.*_age$")) <= limit)``.
     ``n_obs_<s>`` counts the ticks of each series the point folded in, of which
     it kept one. A large count is ticks the grid dropped, and the series
     holding the grid up, the one whose tick completes each point, sits near 1.
@@ -722,7 +745,9 @@ def refresh_time(
     that tick returns them first. The slice and the resumed run together give
     the one run's grid, wherever the slice ends. ``load_state`` goes on from
     where its run stopped, so feeding a stream in two runs gives the grid one
-    run gives.
+    run gives. With ``age=True`` the state keeps the clock of each series'
+    last tick since the last point, one a series, so a resumed run gives the
+    ages of values it read before the save.
     """
     lazy = lf.lazy()
     in_schema = lazy.collect_schema()
@@ -782,9 +807,9 @@ def refresh_time(
     def build() -> _native.RefreshTime:
         if loaded is not None:
             return _native.RefreshTime.load_bytes(
-                loaded, names, series, clock, value, group, pairs, keep
+                loaded, names, series, clock, value, group, pairs, keep, age
             )
-        return _native.RefreshTime(names, series, clock, value, group, pairs, keep)
+        return _native.RefreshTime(names, series, clock, value, group, pairs, keep, age)
 
     # The schema is what the operator says it is, taken from a run over no
     # rows -- so a name that cannot be a column is reported while the plan is
@@ -849,6 +874,7 @@ def merge(
     clock: str,
     source: str = "source",
     by: str | None = None,
+    carry: str | Sequence[str] = (),
     restart_after_step_back: float | Duration | None = None,
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
@@ -862,6 +888,7 @@ def merge(
     clock: str,
     source: str = "source",
     by: str | None = None,
+    carry: str | Sequence[str] = (),
     restart_after_step_back: float | Duration | None = None,
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
@@ -874,6 +901,7 @@ def merge(
     clock: str,
     source: str = "source",
     by: str | None = None,
+    carry: str | Sequence[str] = (),
     restart_after_step_back: float | Duration | None = None,
     chunk_size: int | None = None,
     load_state: State | bytes | None = None,
@@ -908,8 +936,14 @@ def merge(
     ``by``
         The column a bank reading the merged stream groups by, in every
         stream. The merged rows of each of its groups are then checked as
-        that bank checks them (Notes). Default ``None``: the merged rows are
-        checked as one stream.
+        that bank checks them (Notes), and ``carry`` fills each group from
+        its own rows. Default ``None``: the merged rows are checked as one
+        stream.
+    ``carry``
+        A column, or a list of columns, to fill forward over the merged rows,
+        each with its age on the clock beside it (Returns and Notes), so
+        that a row of one stream reads another stream's latest value and how
+        old it is. Default: none.
     ``restart_after_step_back``
         By default a step back of a stream's clock is refused, as a spec
         refuses one. If it is set, a step back larger than it starts that
@@ -938,29 +972,41 @@ def merge(
     ``LazyFrame``, with every row of every stream in clock order. Its columns
     are the streams' columns, matched by name in the order they first appear,
     then ``source``. A column a stream does not have is null on that
-    stream's rows.
+    stream's rows, but a ``carry`` column, which is filled forward. Then,
+    for each ``carry`` column ``c`` in order:
+
+    ``<c>_age``
+        The age of the row's value of ``c``: the row's clock less the clock
+        of the row the value came from, as ``pl.col(clock) - clock_then``
+        gives it, in that dtype (a ``Duration`` on a temporal clock). 0 on a
+        row with a value of its own, and null where ``c`` is.
 
     .. rubric:: Raises
 
     :class:`~rheon.ColumnNotFoundError`
-        A stream has no ``clock`` or ``by`` column of that name. It is both
-        a ``ValueError`` and Polars' ``ColumnNotFoundError``.
+        A stream has no ``clock`` or ``by`` column of that name, or no stream
+        has a ``carry`` column. It is both a ``ValueError`` and Polars'
+        ``ColumnNotFoundError``.
     :class:`~rheon.WrongTypeError`
         The ``clock`` column is not an integer, a float or a temporal
         column, or its dtype, unit or time zone differ between two streams,
         which are named; a column of one name has two dtypes in two streams,
         which are named; or a column, read or not, is ``UInt128``, which
-        rheon cannot read. It is both a ``TypeError`` and a ``ValueError``.
+        rheon cannot read; or ``carry`` holds something other than text. It
+        is both a ``TypeError`` and a ``ValueError``.
     ``ValueError``
         When the query is built: no stream is given, or a name twice; a
-        stream already has a column named ``source``; ``chunk_size`` is
-        below 1; ``restart_after_step_back`` is below 0, or a duration on a
-        numeric clock, or a number on a temporal one; ``load_state`` is not
-        such a state, or was saved with other streams, ``clock``, ``by`` or
-        clock dtype. And when the query runs: a clock that is null, NaN or
-        infinite, or one that steps back where the rule above refuses it,
-        each naming the stream and its row, counted from 0 in that stream;
-        or a step back in the merged rows of a group (Notes). Under py-polars
+        stream already has a column named ``source``; ``carry`` names the
+        clock or ``by`` column, or a column twice, or one whose
+        ``<c>_age`` is already a stream's column or ``source``;
+        ``chunk_size`` is below 1; ``restart_after_step_back`` is below 0, or
+        a duration on a numeric clock, or a number on a temporal one;
+        ``load_state`` is not such a state, or was saved with other streams,
+        ``clock``, ``by``, ``carry`` or clock dtype. And when the query
+        runs: a clock that is null, NaN or infinite, or one that steps back
+        where the rule above refuses it, each naming the stream and its row,
+        counted from 0 in that stream; or a step back in the merged rows of
+        a group (Notes). Under py-polars
         1.x these arrive inside Polars' ``ComputeError``, since the merge
         runs as a Polars source, for a ``DataFrame`` too. Under 2.0 each is
         the ``ValueError`` itself.
@@ -1029,6 +1075,25 @@ def merge(
     others that should follow it, so the order is checked in each stream,
     across its groups, as it is read.
 
+    **Carrying a value forward.** Each ``carry`` column is filled as
+    Polars' ``forward_fill`` fills it, over each ``by`` group's merged rows:
+    a row where it is null takes its last value before it, and a null in a
+    stream is no value, so the value before it goes on. It is what a
+    backward ``join_asof`` of each merged row onto the rows with a value
+    gives, matched on the row's place in the merge, so a tie on the clock
+    goes as the merge orders it. Its age is a clock difference, so how stale
+    a value may be is a filter in Polars, such as ``pl.col("bid_age") <=
+    pl.duration(seconds=1)``. Before a group's first value the column and
+    its age are null. Under ``restart_after_step_back`` a value is carried
+    within its day: the rows of a stream started again, or of a group whose
+    merged rows started again, carry nothing from before, since a clock that
+    started again does not compare with the one before it. To carry a
+    column per stream where two streams share its name, rename it in each
+    first. To have a null end the value carried, fill the null with a value
+    of its own before the merge. A row of weight 0 is carried like any
+    other: the merge reads no weight, so drop such rows first if their
+    values should not be carried.
+
     **The merged rows.** With ``by``, the merged rows of each group are read
     as a bank grouped by ``by`` reads them, under the same
     ``restart_after_step_back``: a group whose rows step back where that bank
@@ -1044,7 +1109,10 @@ def merge(
     group. The state is written in full or not at all. A run resumed with
     ``load_state`` on the next part of every stream goes on where the last
     stopped, so feeding the streams in two runs gives the rows one run
-    gives, when every stream is cut at the same clock. A part may end inside
+    gives, when every stream is cut at the same clock. With ``carry`` the
+    state keeps each group's last value of each column, with its clock: one
+    value a column a group, however long the streams, so the resumed run
+    carries what the last left. A part may end inside
     a tie: a stream's next part can bring more rows at the clock the last
     part ended on, which belong before the rows of the streams after it. So
     a run that saves its state holds back the rows at the last clock it
@@ -1077,7 +1145,14 @@ def merge(
     loaded = _read_state(load_state) if load_state is not None else None
     save_path = _save_path(save_state, who)
     empties = [pl.DataFrame(schema=s) for s in schemas]
-    settings = (clock, source, by, restart, restart_text)
+    carried = [carry] if isinstance(carry, str) else list(carry)
+    for c in carried:
+        if not isinstance(c, str):
+            raise WrongTypeError(
+                f"{who}: carry must name columns, but it holds {c!r}, of type "
+                f"{type(c).__name__}. Name each column to carry as text, as in carry=['bid']."
+            )
+    settings = (clock, source, by, restart, restart_text, carried)
 
     def build() -> _native.Merge:
         if loaded is not None:
@@ -1131,6 +1206,11 @@ def merge(
             seen += out.height
             if out.height:
                 yield from _in_morsels(emit(out))
+            # A slice met reads no further: the stream the merge asks for
+            # next may hold a row past it, which the slice must not read
+            # (review 2026-11-23, MERGE-1).
+            if n_rows is not None and seen >= n_rows:
+                break
             if want is None and out.height < cap:
                 break
             if want is None:
@@ -1505,12 +1585,12 @@ def with_windows(
             clock="t", gap_cap=2.0,                    # the gap from 2 to 5 is a clock break
         )
         print(out["trend"].round(4).to_list())   # 0 at row 3: the windows start over
-        print(out["ahead"].to_list())            # next unit's sum: null if cut, or open at the end
+        print(out["ahead"].to_list())            # next unit's sum: null if cut, or past the end
 
     .. code-block:: text
 
         [0.0, 0.5, 0.75, 0.0, 0.5]
-        [2.0, 3.0, None, None, None]
+        [2.0, 3.0, None, 5.0, None]
 
     Over ``trades``, quotes with a ``mid`` and trades between them with a
     ``side``, a ``quantity`` and a ``price``, a trailing mean of the mid and
@@ -1572,8 +1652,10 @@ def with_windows(
     across one, and the number a spec takes there would change nothing. So a
     session needs no ``session_gap`` here. A window looking ahead under
     ``closed="right"`` or ``"both"`` whose far edge is the last row before a
-    cut or a reset holds every row it covers, so it is whole, and gives its
-    value under any ``partial``.
+    cut or a reset, or its group's last row when the input ends, holds every
+    row it covers, so it is whole, and gives its value under any ``partial``.
+    A window looking ahead whose far edge lies past the input's last row is
+    null.
 
     The clock is also read in input order, under the same settings. So a step
     back there is refused or, past ``restart_after_step_back``, resets every
@@ -1605,7 +1687,11 @@ def with_windows(
     that count in them.
 
     **It resumes.** ``save_state`` writes the kernels' sums and the rows still
-    waiting, which the next run, given ``load_state``, emits first. Feeding a
+    waiting, which the next run, given ``load_state``, emits first. When the
+    input ends, the windows looking back that wait on the last stamp are read
+    as they stand and their rows leave in this run, since no row can join them
+    later: a resumed run refuses an input that starts at that stamp. The rows
+    that wait are those with a window looking ahead still open. Feeding a
     stream in two runs gives what one run gives. Any resumed run refuses by
     name an input whose first row is at the last stamp the state read, unless
     that row starts a new session. A file boundary inside a tied stamp cannot
@@ -1784,6 +1870,7 @@ def with_windows(
         for chunk in plan.collect_batches(chunk_size=rows, maintain_order=True):
             read += chunk.height
             out = w.feed(chunk, None if n_rows is None else n_rows - seen)
+            _warn_state(w)
             seen += out.height
             yield from _in_morsels(done(out))
             if n_rows is not None and seen >= n_rows:
@@ -1794,6 +1881,15 @@ def with_windows(
             out = w.finish()
             if n_rows is not None:
                 out = out.head(n_rows - seen)
+            yield from _in_morsels(done(out))
+        elif not sliced and n_rows is None:
+            # The input's end under a saved state: a run resumed on this
+            # state is refused an input that starts at the last stamp, so no
+            # row can join the backward windows waiting on it. They are read
+            # as they stand, and the rows whose windows have all resolved
+            # leave now, not with a later call.
+            out = w.settle()
+            seen += out.height
             yield from _in_morsels(done(out))
         # Reached once the input is fed, or the slice is: not on a run the
         # caller abandons, nor one the windows ended with an error. Under a
@@ -1983,3 +2079,12 @@ def load_checkpoint(source: str | os.PathLike[str] | bytes) -> dict[str, bytes]:
         bytes(source) if isinstance(source, bytes | bytearray | memoryview) else _read_state(source)
     )
     return {name: state for name, _kind, state in _native.load_checkpoint(data)}
+
+
+def _warn_state(run: Any) -> None:
+    """The warning a cross-group operator or a profile raised on the chunk,
+    once a run: a stamp took a cross operator's state, or a row took a
+    group's profile, past half of its ``max_state_bytes``."""
+    message = run.take_warning()
+    if message is not None:
+        warnings.warn(message, RheonWarning, stacklevel=_user_stacklevel())

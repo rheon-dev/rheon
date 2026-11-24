@@ -1388,7 +1388,33 @@ def robust_ref(
             "w_raw": 0.0,
             "beta": None,
             "pending": 0.0,
+            # Under `standardize`, each target's features' weight, means and
+            # second moments about them over every row it is learned on,
+            # decayed as `wobs` (review 2026-11-23, REG-18), and the scales
+            # they gave at its last row inside the band.
+            "sw": np.zeros(m),
+            "smean": [np.zeros(X.shape[1]) for _ in range(m)],
+            "svar": [np.zeros(X.shape[1]) for _ in range(m)],
+            "over": [None for _ in range(m)],
         }
+
+    def spread_update(j, x, lam, wt):
+        w_new = lam * st["sw"][j] + wt
+        if w_new <= 0.0:
+            st["sw"][j] = w_new
+            return
+        a, b = lam * st["sw"][j] / w_new, wt / w_new
+        d = x - st["smean"][j]
+        st["svar"][j] = a * st["svar"][j] + a * b * d * d
+        st["smean"][j] = st["smean"][j] + b * d
+        st["sw"][j] = w_new
+
+    def spread_scales(j):
+        if fit_intercept:
+            v = st["svar"][j]
+            return np.where(v > 0.0, np.sqrt(np.maximum(v, 0.0)), 0.0)
+        raw = st["svar"][j] + st["smean"][j] ** 2
+        return np.where(raw > 0.0, np.sqrt(np.maximum(raw, 0.0)), 0.0)
 
     st = init()
     for i in range(n):
@@ -1433,8 +1459,12 @@ def robust_ref(
                 st["wj"][j] *= lam
                 st["wobs"][j] = present
                 st["nobs"][j] = rows
+                if standardize:
+                    spread_update(j, X[i], lam, 0.0)
                 continue
             st["wobs"][j] = present + (w[i] if w[i] > 0.0 else 0.0)
+            if standardize:
+                spread_update(j, X[i], lam, w[i] if w[i] > 0.0 else 0.0)
             st["nobs"][j] = rows + (1.0 if w[i] > 0.0 else 0.0)
             if w[i] > 0.0:
                 st["seen"][j] = min(st["seen"][j] + 1.0, kt)
@@ -1485,7 +1515,13 @@ def robust_ref(
                     # TC1b).
                     dev = z - st["mean"][j]
                     move = _band_movement(
-                        st["mean"][j], st["C"][j], z, ridge, fit_intercept, standardize
+                        st["mean"][j],
+                        st["C"][j],
+                        z,
+                        ridge,
+                        fit_intercept,
+                        standardize,
+                        st["over"][j],
                     )
                     most = abs(Y[i, j] - p_own[j]) / move if move > 0.0 else np.inf
                     step = value / aged_wj
@@ -1510,6 +1546,9 @@ def robust_ref(
                 st["ybar"][j] += b * dy
                 st["W"][j] = W_new
                 st["wj"][j] = aged_wj + ww
+                # The scales move with the band, at the rows that move it.
+                if standardize:
+                    st["over"][j] = spread_scales(j)
 
             # sigma2 moves on a row with a prediction and a weight, and a row
             # of weight 0 moves it by nothing (CC5); its weight is aged above.
@@ -1533,6 +1572,7 @@ def robust_ref(
                     ridge,
                     fit_intercept,
                     standardize,
+                    st["over"][j],
                 )
         st["beta"] = beta
         coef[i] = beta
@@ -1540,18 +1580,33 @@ def robust_ref(
     return {"pred": pred, "resid": resid, "weight_sum": weight_sum, "coef": coef}
 
 
-def _band_movement(mean, C, z, ridge, fit_intercept, standardize):
+def _scales(band_var, over, standardize):
+    """The scales a standardized solve divides by (review 2026-11-23,
+    REG-18): each feature's from its moments over every row the target was
+    learned on (``over``, as they stood at the target's last row inside the
+    band; 0 where they gave none), and the band's where they give none.
+    Unstandardized, 1. ``band_var`` is the band Gram's variance with an
+    intercept, its raw second moment without."""
+    if not standardize:
+        return np.ones(len(band_var))
+    band = np.sqrt(np.maximum(band_var, 0.0))
+    if over is None or len(over) == 0:
+        return band
+    over = np.asarray(over, dtype=float)
+    return np.where(over > 0.0, over, band)
+
+
+def _band_movement(mean, C, z, ridge, fit_intercept, standardize, over=None):
     """The row's prediction moved per unit nudge step at the next solve:
     `1 + u'A^-1 u` with an intercept (u the scaled centred deviations over
     the kept features), `u'A^-1 u` through the origin (u the scaled raw
     values), A the solve's own system, ridge included. A kept column with no
     spread on which the row deviates moves it without bound."""
-    kt = len(mean)
     if fit_intercept:
         Cf = C[1:, 1:]
         dev = (z - mean)[1:]
         var = np.diag(Cf)
-        s = np.sqrt(np.maximum(var, 0.0)) if standardize else np.ones(kt - 1)
+        s = _scales(var, over, standardize)
         keep = s > 1e-12
         if np.any(keep & (var <= 0.0) & (dev != 0.0)):
             return np.inf
@@ -1562,7 +1617,7 @@ def _band_movement(mean, C, z, ridge, fit_intercept, standardize):
         return 1.0 + float(u @ np.linalg.solve(A, u))
     raw = C + np.outer(mean, mean)
     var = np.diag(raw)
-    s = np.sqrt(np.maximum(var, 0.0)) if standardize else np.ones(kt)
+    s = _scales(var, over, standardize)
     keep = s > 0.0
     if np.any(keep & (var <= 0.0) & (z != 0.0)):
         return np.inf
@@ -1581,6 +1636,7 @@ def _solve_centred(
     ridge: float,
     fit_intercept: bool,
     standardize: bool,
+    over: np.ndarray | None = None,
 ) -> np.ndarray:
     """`Robust::solve` on centred moments (review 2026-09-18, S2).
 
@@ -1593,7 +1649,7 @@ def _solve_centred(
     kt = len(mean)
     if fit_intercept:
         Cf, cf, mf = C[1:, 1:], c[1:], mean[1:]
-        s = np.sqrt(np.maximum(np.diag(Cf), 0.0)) if standardize else np.ones(kt - 1)
+        s = _scales(np.diag(Cf), over, standardize)
         keep = s > 1e-12
         beta = np.zeros(kt)
         if keep.any():
@@ -1603,7 +1659,7 @@ def _solve_centred(
         return beta
     raw = C + np.outer(mean, mean)
     r = c + mean * ybar
-    s = np.sqrt(np.maximum(np.diag(raw), 0.0)) if standardize else np.ones(kt)
+    s = _scales(np.diag(raw), over, standardize)
     keep = s > 0.0
     beta = np.zeros(kt)
     if keep.any():

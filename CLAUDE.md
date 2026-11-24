@@ -40,7 +40,7 @@ docs/EXTENDING.md      every place a new model touches, with the test that catch
 ```
 uv sync                                  # Python env
 scripts/gate.sh                          # the essentials: each commit while a task is in progress
-scripts/gate.sh --extended               # everything: before EVERY push, always
+scripts/gate.sh --extended               # everything: before EVERY push to main, always
 cargo test --workspace --exclude rheon-py   # Rust essentials only (rheon-py has none; see ci.yml)
 cargo test --workspace --exclude rheon-py -- --include-ignored   # every Rust test
 maturin develop --release -m crates/rheon-py/Cargo.toml
@@ -59,9 +59,12 @@ uv run python scripts/oracles.py rerun   # the oracle grids whose hashes the gat
 
 Workflow (the detail and each rule's reason: `docs/records/AGENT-WORKFLOW.md`):
 - Workers iterate with `scripts/quick.sh` and finish with `scripts/quick.sh --extended`
-  plus the lints, never a full gate, never a merge of `main` unless asked.
+  plus the lints, never a full gate, never a merge of `main` unless asked. The same holds
+  for a cloud session's push of a `vm/*` branch: `quick.sh --extended` and the lints on
+  the pushed sha, never the full gate (the user, 2026-11-23: "Agents should test their
+  changes but not a full gate").
 - The coordinator merges a wave of 2+ branches onto `integration`; a wave of one merges onto
-  `main` directly. **The full tier runs before every push, on the exact sha**, and is the
+  `main` directly. **The full tier runs before every push to `main`, on the exact sha**, and is the
   only gate a wave pushed at once gets; the essentials gate runs on `integration` only when
   the wave will wait before its push (the user, 2026-11-14). Budget tightenings from CI ride
   with the next wave, never a gate of their own. A gated wave with no open bug is pushed
@@ -76,7 +79,7 @@ Workflow (the detail and each rule's reason: `docs/records/AGENT-WORKFLOW.md`):
 
 Two tiers of tests (docs/TESTING.md, "Two tiers"; PLAN task 210). The
 essentials gate each commit while a task is in progress, for speed of
-iteration; **the full suite runs before every push, always**
+iteration; **the full suite runs before every push to `main`, always**
 (`scripts/gate.sh --extended`), whatever the essentials said, and CI and a
 release run it too. The defaults are asymmetric: a plain `uv run pytest`
 runs both tiers, but a plain `cargo test` skips the extended Rust tests
@@ -109,7 +112,7 @@ runs both tiers, but a plain `cargo test` skips the extended Rust tests
    current sets to `v<N>/`, ships a loader and regenerates the current sets. The bank
    fixture carries the package version, so it is regenerated at every version bump.
    `ModelState`'s variant names are frozen: they are the file's tags.
-   Twenty-five exceptions, each the user's, are numbered and stated in full in
+   Thirty-one exceptions, each the user's, are numbered and stated in full in
    `docs/records/STATE-CONTINUATION.md` ("rule 5's Nth exception" means its Nth);
    a new one is added there and counted here.
 6. No `unsafe` in `rheon-core`. f64 everywhere.
@@ -151,6 +154,18 @@ runs both tiers, but a plain `cargo test` skips the extended Rust tests
   alone is compared within the smallest tolerance that passes, stated in ulps beside the
   test, and a tolerance that is not tiny goes to the user before it lands. Every other
   field stays bit-exact across OSes (`docs/TESTING.md`, "The math library's last bits").
+- **No row counts as solutions to early-data problems** (the user, 2026-11-22: "Each time
+  we need to have an answer that checks for lack of convergence or similar problem rather
+  than fixing row counts"). A fixed row count ("start at row N", "a minimum of N rows",
+  "first tested row N", a trimming fraction that is a row count in disguise) is tuned on
+  the test data, so the model comes to depend on it. When a fit, test or estimate
+  misbehaves on early, short or degenerate data, guard by the condition itself and
+  withhold with a reason while it fails: convergence (the Newton decrement, the gradient,
+  a step at the rounding floor), identifiability (the information matrix's conditioning,
+  a likelihood-ratio test against the null model), the estimate's own finite-sample
+  uncertainty at the rows in hand, a statistic valid at every sample size
+  (self-normalised, exact finite-sample), or calibration. `garch`'s start is the pattern:
+  it waits on a likelihood-ratio test and judges convergence by the decrement.
 - **Output-moving speed changes**: under 5 ulps and faster, take it; above 5 ulps, or a
   change not measured in ulps, is the user's call (`scripts/compare_outputs.py` reports ulps).
 

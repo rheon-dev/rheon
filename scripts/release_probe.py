@@ -205,8 +205,10 @@ def _fullest() -> dict[str, dict]:
         "ftrl": simple,
         "sgd": simple,
         "pa": simple,
-        "glm": simple,
-        "expectile": simple,
+        # A glm refuses the checks of a constant, normal residual, and an
+        # expectile off the mean (0.8 here) the mean's.
+        "glm": simple | {"emit_specification", "emit_tails"},
+        "expectile": simple | {"emit_calibration", "emit_breaks"},
         "holt": simple | {"emit_feature_health"},
     }
     fit = dict(FIT, targets=["y", "z"])
@@ -409,10 +411,115 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(targets=["y", "z"], start_rows=50, horizon=3, group="g", **CLOCK),
         [],
     ),
+    # Three series' correlations, through GARCH margins, after both starts
+    # of 50 rows: the asymmetric model, estimated.
+    (
+        "dcc",
+        "dcc",
+        dict(
+            targets=["y", "z", "x0"],
+            asymmetric=True,
+            margin_start_rows=50,
+            start_rows=50,
+            half_life=50.0,
+            group="g",
+            **CLOCK,
+        ),
+        [],
+    ),
+    # A digest a target: the tails withheld until the rows identify them.
+    (
+        "tdigest",
+        "tdigest",
+        dict(targets=["y", "z"], quantiles=[0.05, 0.25, 0.95], group="g", **CLOCK),
+        [],
+    ),
+    # A sketch a target over a row window, its tails withheld likewise.
+    (
+        "ddsketch",
+        "ddsketch",
+        dict(targets=["y", "z"], quantiles=[0.05, 0.25, 0.95], window_rows=200, group="g", **CLOCK),
+        [],
+    ),
+    # Each target's power at two periods.
+    (
+        "spectral",
+        "spectral",
+        dict(targets=["y", "z"], periods=[8.0, 3.0], group="g", half_life=25.0, **CLOCK),
+        [],
+    ),
+    # Each target on its own lags, the features beside them.
+    (
+        "ar",
+        "ar",
+        dict(
+            targets=["y", "z"],
+            features=["x0", "x1"],
+            lags=[1, 2],
+            group="g",
+            half_life=25.0,
+            **CLOCK,
+        ),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",
         dict(targets=["y", "z"], kernel_decays=[0.5, 2.0], group="g", half_life=25.0, **CLOCK),
+        [],
+    ),
+    # Each target a series of returns, decayed, with Lee and Mykland's own
+    # window.
+    (
+        "realized",
+        "realized",
+        dict(targets=["y", "z"], lm_window=30, group="g", half_life=25.0, **CLOCK),
+        [],
+    ),
+    # Two components of three columns by the incremental SVD.
+    (
+        "pca",
+        "pca",
+        dict(features=["x0", "x1", "x2"], n_components=2, group="g", half_life=25.0, **CLOCK),
+        [],
+    ),
+    # Each target a series of returns, decayed, a term of each kind.
+    (
+        "power_variation",
+        "power_variation",
+        dict(
+            targets=["y", "z"],
+            terms={
+                "rv": {"powers": [2]},
+                "bv": {"powers": [1, 1], "normalize": True},
+                "lrv": {"kernel": "parzen", "bandwidth": 5, "center": True},
+                "sub": {"powers": [2], "scale": 4},
+            },
+            group="g",
+            half_life=25.0,
+            **CLOCK,
+        ),
+        [],
+    ),
+    # A skew, a cross-moment and an autocorrelation one clock unit back, each
+    # with its standard error; the zero weights learn nothing.
+    (
+        "ewm_moments",
+        "ewm_moments",
+        dict(
+            terms={
+                "skew": {"x1": 3},
+                "co": {"x1": 1, "x2": 2},
+                "ac1": {"x1": 1, "x1@1": 1},
+                "m3": {"x2": 3},
+                "kurt": {"x2": 4},
+            },
+            kind={"skew": "standardized", "ac1": "standardized", "kurt": "standardized"},
+            se=True,
+            group="g",
+            half_life=25.0,
+            **CLOCK,
+        ),
         [],
     ),
 ]

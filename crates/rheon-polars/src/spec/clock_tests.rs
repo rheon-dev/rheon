@@ -139,6 +139,11 @@ fn with_duration(owner: &str, field: &str) -> Spec {
                 "kmeans" => r#", "n_clusters": 2"#,
                 "hmm" => r#", "n_components": 2, "precision_prior": 1.0"#,
                 "corrchange" => r#", "kind": "window", "window_rows": 20"#,
+                "power_variation" => r#", "terms": [{"name": "rv", "powers": [2.0]}]"#,
+                "ddsketch" => r#", "quantiles": [0.25]"#,
+                "ewm_moments" => r#", "terms": {"m2": {"x": 2}}"#,
+                "ar" => r#", "lags": 2"#,
+                "spectral" if field != "periods" => r#", "periods": "1h""#,
                 _ => "",
             };
             format!(r#"{{"type": "{kind}", "{field}": "10m"{required}}}"#)

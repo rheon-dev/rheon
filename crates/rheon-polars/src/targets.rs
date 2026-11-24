@@ -177,12 +177,13 @@ impl<'a> From<Vec<&'a str>> for Targets {
     }
 }
 
-/// A target as it is written: a column's name, or a table.
+/// A target as it is written: a column's name, or a table (boxed: a formula
+/// is a tree of window-operator nodes, which are large).
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Written {
     Name(String),
-    Table(Table),
+    Table(Box<Table>),
 }
 
 /// A string or a table, each read by its own rules, so a table with a
@@ -214,7 +215,7 @@ impl<'de> Deserialize<'de> for Written {
 
             fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Written, A::Error> {
                 Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))
-                    .map(Written::Table)
+                    .map(|t| Written::Table(Box::new(t)))
             }
         }
         d.deserialize_any(V)
@@ -248,13 +249,13 @@ impl Serialize for Targets {
                 if d.is_plain() {
                     Written::Name(d.column.clone())
                 } else {
-                    Written::Table(Table {
+                    Written::Table(Box::new(Table {
                         column: d.formula.is_none().then(|| d.column.clone()),
                         name: Some(d.name.clone()),
                         formula: d.formula.clone(),
                         relative_to: None,
                         relative: None,
-                    })
+                    }))
                 }
             })
             .collect();
@@ -305,6 +306,14 @@ impl<'de> Deserialize<'de> for Targets {
                                  the subtraction in the formula"
                             )));
                         }
+                        if tree.operators().iter().any(|op| op.kind.cross().is_some()) {
+                            return Err(serde::de::Error::custom(format!(
+                                "target {name:?}: a formula target holds a cross-group operator \
+                                 (cross_mean or cross_std), which reads every group's row at a \
+                                 stamp, and a spec learns each group apart; make the column with \
+                                 rp.stream.with_windows and name it as the target"
+                            )));
+                        }
                         if !tree.has_forward_operator() {
                             // Name the call that makes the column: with_windows
                             // for a formula over operators looking back, Polars'
@@ -319,6 +328,18 @@ impl<'de> Deserialize<'de> for Targets {
                                 "target {name:?}: a formula target holds at least one operator \
                                  looking ahead (rewm_mean, rewm_sum or rewm_rate); a formula \
                                  known at its own row is a column: make it with {make}"
+                            )));
+                        }
+                        if tree
+                            .operators()
+                            .iter()
+                            .any(|o| o.kind == crate::windows::OpKind::EwmProfile)
+                        {
+                            return Err(serde::de::Error::custom(format!(
+                                "target {name:?}: a formula target holds ewm_profile, which \
+                                 reads the rows before each row and is a feature, not a target; \
+                                 make it a column with rp.stream.with_windows and subtract it \
+                                 there"
                             )));
                         }
                         defs.push(TargetDef::formula(name, tree));

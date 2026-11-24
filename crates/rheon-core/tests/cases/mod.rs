@@ -99,6 +99,75 @@ fn restore_stamped_hawkes(s: &State) -> Result<Box<dyn Run>, String> {
     Ok(Box::new(StampedHawkes { model, ns }))
 }
 
+/// A `realized` over a window of clock units, each row handed its stamp in
+/// integer nanoseconds as a stream hands it: its window holds a stamp a row.
+struct StampedRealized {
+    model: Realized,
+    ns: i128,
+}
+
+impl Run for StampedRealized {
+    fn step(&mut self, r: &Row) -> Out {
+        self.ns += ns_of_seconds(r.d).unwrap();
+        self.model.stamp_next(Stamp::Ns(self.ns));
+        let s = self.model.step(&r.x, &r.y, r.d, r.w);
+        Out {
+            pred: s.pred,
+            n_eff: s.n_eff,
+            extra: Vec::new(),
+        }
+    }
+
+    fn state(&self) -> State {
+        self.model.state()
+    }
+}
+
+/// The run goes on from the newest stamp its window holds, which is the
+/// last row's where that row counted (the cases save after one that did).
+fn restore_stamped_realized(s: &State) -> Result<Box<dyn Run>, String> {
+    let model = Realized::restore(s).map_err(|e| e.to_string())?;
+    let ns = match model.last_stamp() {
+        Some(Stamp::Ns(ns)) => ns,
+        other => return Err(format!("expected a temporal stamp, found {other:?}")),
+    };
+    Ok(Box::new(StampedRealized { model, ns }))
+}
+
+/// A `power_variation` over a window of clock units, each row handed its
+/// stamp in integer nanoseconds as a stream hands it.
+struct StampedPowerVariation {
+    model: PowerVariation,
+    ns: i128,
+}
+
+impl Run for StampedPowerVariation {
+    fn step(&mut self, r: &Row) -> Out {
+        self.ns += ns_of_seconds(r.d).unwrap();
+        self.model.stamp_next(Stamp::Ns(self.ns));
+        let s = self.model.step(&r.x, &r.y, r.d, r.w);
+        Out {
+            pred: s.pred,
+            n_eff: s.n_eff,
+            extra: Vec::new(),
+        }
+    }
+
+    fn state(&self) -> State {
+        self.model.state()
+    }
+}
+
+/// The run goes on from the newest stamp its window holds.
+fn restore_stamped_power_variation(s: &State) -> Result<Box<dyn Run>, String> {
+    let model = PowerVariation::restore(s).map_err(|e| e.to_string())?;
+    let ns = match model.last_stamp() {
+        Some(Stamp::Ns(ns)) => ns,
+        other => return Err(format!("expected a temporal stamp, found {other:?}")),
+    };
+    Ok(Box::new(StampedPowerVariation { model, ns }))
+}
+
 /// An `expectile` handed each row's stamp in integer nanoseconds, as a
 /// stream hands it: its state holds the last stamp, the last counted row's,
 /// and under a clock window a stamp a row.
@@ -196,6 +265,36 @@ fn restore_scaled_audit(s: &State) -> Result<Box<dyn Run>, String> {
         .map_err(|e| e.to_string())
 }
 
+/// A model fed every weight times `2^-664`: weights whose squares are not
+/// doubles, so the Kish sums keep a power of two of their own (review
+/// 2026-11-23, REG-12; `sqsum`), and the fixture writes each exponent. A
+/// power of two, so the stream is the case's own at another scale.
+struct TinyWeights<M>(M);
+
+/// `2^-664`.
+const TINY_WEIGHT: f64 = 1.306_420_176_630_260_4e-200;
+
+impl<M: OnlineModel> Run for TinyWeights<M> {
+    fn step(&mut self, r: &Row) -> Out {
+        let s = self.0.step(&r.x, &r.y, r.d, r.w * TINY_WEIGHT);
+        Out {
+            pred: s.pred,
+            n_eff: s.n_eff,
+            extra: Vec::new(),
+        }
+    }
+
+    fn state(&self) -> State {
+        self.0.state()
+    }
+}
+
+fn restore_tiny<M: OnlineModel + 'static>(s: &State) -> Result<Box<dyn Run>, String> {
+    M::restore(s)
+        .map(|m| Box::new(TinyWeights(m)) as Box<dyn Run>)
+        .map_err(|e| e.to_string())
+}
+
 fn restore_accumulator(s: &State) -> Result<Box<dyn Run>, String> {
     check_schema(s).map_err(|e| e.to_string())?;
     match &s.model {
@@ -225,16 +324,47 @@ pub enum Targets {
     /// `n` positive targets: each linear target squared, plus 0.1 -- a
     /// Gamma or Tweedie amount for `glm`.
     Positive(usize),
+    /// `n` Gamma draws of shape 4 at a mean linear in the features
+    /// (`(2 + 0.8 x0 - 0.4 x1) (1 + j)`, positive on this stream): the
+    /// target `glm` is fitted to, drawn from its family. The draw is a sum
+    /// of eight squared normals over 8 times the mean, from the generator
+    /// alone.
+    GammaDraw(usize),
+    /// `n` series with a trend on the clock: `10 (1 + j) + (0.5 + 0.25 j) t`
+    /// plus noise of about 0.3, `t` the clock the row stands at (a gap
+    /// moves the line by its length), so a model with a trend has one to
+    /// find.
+    Trending(usize),
+    /// `n` nodes of a discrete-time self-exciting process: node `j` has an
+    /// event on a row with probability `0.1 + 0.25 R_j + 0.05 R_other`
+    /// (at most 0.9), `R` each node's events before the row decayed by 0.6 a
+    /// row, so an event makes the next few likelier. A value of 1 is an
+    /// event and of 0 none.
+    Excited(usize),
     /// One 0/1 target.
     Binary,
     /// One class label in `0..n`.
     Class(usize),
     /// None: the model reads only its features.
     None,
+    /// `n` series of an asymmetric DCC process (`(a, b, g) = (0.04, 0.92,
+    /// 0.03)`, every target correlation 0.5), each scaled by its own
+    /// GARCH(1,1) volatility where the flag is set: a realistic stream for
+    /// `dcc`, whose parameters it identifies. Arithmetic and `sqrt` alone,
+    /// so it is the same bits on every platform. With the last flag unset,
+    /// `(a, b, g) = 0`: one correlation, held, the null a start must not
+    /// mistake for a recursion.
+    Correlated(usize, bool, bool),
     /// `n` series of returns of a GARCH-family process at a truth `arch`
     /// is held to, each its own draw: a process a start of 2,000 rows
     /// identifies.
     Garch(usize, Process),
+    /// None, and the first two features a correlated pair in place of the
+    /// independent ones: correlation 0.3 before the row given and 0.85
+    /// from it, each feature an Irwin-Hall draw (twelve uniforms less 6,
+    /// near-Gaussian with arithmetic alone): a correlation to test, and a
+    /// change in it (PLAN 550's realistic case for `corrchange`).
+    CorrelatedPair(usize),
 }
 
 /// The process of a [`Targets::Garch`] stream.
@@ -247,6 +377,68 @@ pub enum Process {
     /// FIGARCH(1, d, 1) at `(0.03, 0.2, 0.4, 0.5)` cut at 20 lags, the
     /// truncation its fixture's model keeps.
     Figarch,
+}
+
+/// [`Targets::Correlated`]'s stream: `n` rows of `k` series after 200
+/// discarded, innovations by Irwin and Hall's sum of twelve uniforms.
+pub fn correlated(k: usize, n: usize, garch: bool, dynamic: bool, seed: u64) -> Vec<Vec<f64>> {
+    let mut s = seed;
+    let kk = k * k;
+    let mut qbar = vec![0.5_f64; kk];
+    for i in 0..k {
+        qbar[i * k + i] = 1.0;
+    }
+    let (a, b, g) = if dynamic {
+        (0.04, 0.92, 0.03)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+    let mut q = qbar.clone();
+    let mut v = vec![1.0_f64; k];
+    let mut e = vec![0.0_f64; k];
+    let mut out = Vec::with_capacity(n);
+    for t in 0..n + 200 {
+        // R and its Cholesky factor
+        let mut l = vec![0.0_f64; kk];
+        for i in 0..k {
+            for j in 0..=i {
+                let r: f64 = q[i * k + j] / (q[i * k + i] * q[j * k + j]).sqrt();
+                let mut acc: f64 = if i == j { 1.0 } else { r };
+                for m in 0..j {
+                    acc -= l[i * k + m] * l[j * k + m];
+                }
+                l[i * k + j] = if i == j {
+                    acc.sqrt()
+                } else {
+                    acc / l[j * k + j]
+                };
+            }
+        }
+        let x: Vec<f64> = (0..k)
+            .map(|_| (0..12).map(|_| 0.5 * (lcg(&mut s) + 1.0)).sum::<f64>() - 6.0)
+            .collect();
+        let z: Vec<f64> = (0..k)
+            .map(|i| (0..=i).map(|j| l[i * k + j] * x[j]).sum())
+            .collect();
+        for i in 0..k {
+            for j in 0..k {
+                let ij = i * k + j;
+                let (ni, nj) = (z[i].min(0.0), z[j].min(0.0));
+                q[ij] = (1.0 - a - b) * qbar[ij] - g * 0.5 * qbar[ij]
+                    + a * z[i] * z[j]
+                    + g * ni * nj
+                    + b * q[ij];
+            }
+        }
+        for i in 0..k {
+            v[i] = 0.05 + 0.08 * e[i] * e[i] + 0.9 * v[i];
+            e[i] = if garch { v[i].sqrt() * z[i] } else { z[i] };
+        }
+        if t >= 200 {
+            out.push(e.clone());
+        }
+    }
+    out
 }
 
 /// One case: a model, configured, and its stream.
@@ -273,6 +465,14 @@ fn lcg(s: &mut u64) -> f64 {
     ((*s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
 }
 
+/// A standard normal to within the central limit theorem's reach: the sum
+/// of six uniforms on [-1, 1] has variance 2, so it over the root of 2. Sums
+/// and one correctly rounded square root, so the same bits on every
+/// platform.
+fn gauss(s: &mut u64) -> f64 {
+    (0..6).map(|_| lcg(s)).sum::<f64>() / 2f64.sqrt()
+}
+
 impl Case {
     /// The case's whole stream: `before` rows, then the continuation. A clock
     /// gap, a null target, a zero weight and weights other than 1 among
@@ -284,6 +484,10 @@ impl Case {
             s = s.wrapping_mul(31).wrapping_add(u64::from(b));
         }
         let n = self.before + CONTINUATION;
+        let series = match self.targets {
+            Targets::Correlated(k, garch, dynamic) => correlated(k, n, garch, dynamic, s),
+            _ => Vec::new(),
+        };
         let returns: Vec<Vec<f64>> = match self.targets {
             Targets::Garch(t, process) => (0..t)
                 .map(|j| {
@@ -299,16 +503,64 @@ impl Case {
                 .collect(),
             _ => Vec::new(),
         };
+        let (mut clock, mut excitation) = (0.0, [0.0f64; 2]);
         (0..n)
             .map(|i| {
                 let shift = if (i / 12) % 2 == 1 { 2.0 } else { 0.0 };
-                let x: Vec<f64> = (0..self.n_features).map(|_| shift + lcg(&mut s)).collect();
+                let x: Vec<f64> = match self.targets {
+                    Targets::CorrelatedPair(at) => {
+                        let mut normal =
+                            || (0..12).map(|_| lcg(&mut s) / 2.0 + 0.5).sum::<f64>() - 6.0;
+                        let rho: f64 = if i < at { 0.3 } else { 0.85 };
+                        let (z1, z2) = (normal(), normal());
+                        let mut x = vec![z1, rho * z1 + (1.0 - rho * rho).sqrt() * z2];
+                        x.extend((2..self.n_features).map(|_| normal()));
+                        x
+                    }
+                    _ => (0..self.n_features).map(|_| shift + lcg(&mut s)).collect(),
+                };
                 let x0 = x.first().copied().unwrap_or(0.0);
                 let x1 = x.get(1).copied().unwrap_or(0.0);
                 let signal = 1.5 * x0 - 0.75 * x1 + 0.25;
                 let noise = 0.1 * lcg(&mut s);
                 let null = i % 11 == 7;
+                let d = match i {
+                    0 => 0.0,
+                    _ if i % 23 == 13 => 9.0,
+                    _ => 1.0,
+                };
+                clock += d;
                 let y = match self.targets {
+                    Targets::GammaDraw(t) => (0..t)
+                        .map(|j| {
+                            let mean = (2.0 + 0.8 * x0 - 0.4 * x1) * (1.0 + j as f64);
+                            let chi: f64 = (0..8).map(|_| gauss(&mut s).powi(2)).sum();
+                            (!null).then_some(mean * chi / 8.0)
+                        })
+                        .collect(),
+                    Targets::Trending(t) => (0..t)
+                        .map(|j| {
+                            let level = 10.0 * (1.0 + j as f64);
+                            let slope = 0.5 + 0.25 * j as f64;
+                            (!null).then_some(level + slope * clock + 5.0 * noise)
+                        })
+                        .collect(),
+                    Targets::Excited(t) => {
+                        let before = excitation;
+                        let events: Vec<bool> = (0..t)
+                            .map(|j| {
+                                let other = if t > 1 { before[(j + 1) % t] } else { 0.0 };
+                                let p = (0.1 + 0.25 * before[j] + 0.05 * other).min(0.9);
+                                (lcg(&mut s) + 1.0) / 2.0 < p && !null
+                            })
+                            .collect();
+                        for (j, e) in events.iter().enumerate() {
+                            excitation[j] = 0.6 * before[j] + f64::from(u8::from(*e));
+                        }
+                        (0..t)
+                            .map(|j| (!null).then_some(f64::from(u8::from(events[j]))))
+                            .collect()
+                    }
                     Targets::Linear(t) => (0..t)
                         .map(|j| (!null).then_some(signal * (1.0 + j as f64) + noise - j as f64))
                         .collect(),
@@ -337,13 +589,11 @@ impl Case {
                         let label = ((signal + noise + 2.0).max(0.0) as usize).min(c - 1);
                         vec![(!null).then_some(label as f64)]
                     }
-                    Targets::None => Vec::new(),
+                    Targets::None | Targets::CorrelatedPair(_) => Vec::new(),
+                    Targets::Correlated(..) => {
+                        series[i].iter().map(|v| (!null).then_some(*v)).collect()
+                    }
                     Targets::Garch(..) => returns.iter().map(|r| (!null).then_some(r[i])).collect(),
-                };
-                let d = match i {
-                    0 => 0.0,
-                    _ if i % 23 == 13 => 9.0,
-                    _ => 1.0,
                 };
                 let w = match i % 9 {
                     4 => 0.0,
@@ -672,6 +922,9 @@ fn corrchange_cfg(kind: CorrChangeKind) -> CorrChangeCfg {
         monitor_rows: 15,
         boundary_gamma: 0.0,
         permute_every: None,
+        span_clock: None,
+        monitor_clock: None,
+        max_state_bytes: None,
     }
 }
 
@@ -875,6 +1128,66 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             43
         ),
+        // Weights whose squares are not doubles (schema 72, review
+        // 2026-11-23, REG-12): each Kish sum's exponent, written.
+        Case {
+            name: "ewridge_tiny_weights",
+            variant: "EwRidge",
+            build: || {
+                Box::new(TinyWeights(
+                    EwRidge::new(EwRidgeCfg {
+                        min_weight: 0.0,
+                        ..ewridge_cfg()
+                    })
+                    .unwrap(),
+                ))
+            },
+            restore: restore_tiny::<EwRidge>,
+            n_features: K,
+            targets: Targets::Linear(2),
+            before: 40,
+        },
+        Case {
+            name: "rls_tiny_weights",
+            variant: "Rls",
+            build: || {
+                Box::new(TinyWeights(
+                    Rls::new(RlsCfg {
+                        n_features: K,
+                        n_targets: 2,
+                        fit_intercept: true,
+                        decay: decay(),
+                        delta: 1e-200,
+                        coef_prior: None,
+                        min_weight: 0.0,
+                    })
+                    .unwrap(),
+                ))
+            },
+            restore: restore_tiny::<Rls>,
+            n_features: K,
+            targets: Targets::Linear(2),
+            before: 40,
+        },
+        Case {
+            name: "sgd_tiny_weights",
+            variant: "Sgd",
+            build: || {
+                Box::new(TinyWeights(
+                    Sgd::new(SgdCfg {
+                        target_spread: true,
+                        min_weight_holds_learning: false,
+                        min_weight: 0.0,
+                        ..sgd_cfg(SgdLoss::Squared, 2)
+                    })
+                    .unwrap(),
+                ))
+            },
+            restore: restore_tiny::<Sgd>,
+            n_features: K,
+            targets: Targets::Linear(2),
+            before: 40,
+        },
         case!(
             "rls",
             "Rls",
@@ -1657,6 +1970,17 @@ pub fn all() -> Vec<Case> {
             Targets::Positive(2),
             40
         ),
+        // Gamma amounts drawn from the family at a log-linear mean, saved
+        // after each target's refit ran: a fit with a dispersion to learn.
+        case!(
+            "glm_gamma_draws",
+            "Glm",
+            Glm,
+            Glm::new(glm_cfg(15)).unwrap(),
+            K,
+            Targets::GammaDraw(2),
+            120
+        ),
         // No refit: a Tweedie fit at p = 1.5 held to the step cap.
         case!(
             "glm_cap",
@@ -1692,6 +2016,24 @@ pub fn all() -> Vec<Case> {
         ),
         // Without decay, the weighted line fit alone (schema 64, docs/PLAN.md
         // task 278, D-H): its weight, mean age and spread per target.
+        // A series with a trend, as `holt` is for: the level and the slope
+        // the clock carries, a gap moving the line by its length.
+        case!(
+            "holt_trending",
+            "Holt",
+            Holt,
+            Holt::new(HoltCfg {
+                n_targets: 2,
+                level_half_life: H,
+                trend_half_life: 4.0 * H,
+                min_weight: 3.0,
+                trend: true,
+            })
+            .unwrap(),
+            0,
+            Targets::Trending(2),
+            80
+        ),
         case!(
             "holt_inf",
             "Holt",
@@ -2090,6 +2432,46 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // The linear form over two blocks: `N`, `D` and each pair's own
+        // second denominator.
+        case!(
+            "deco_linear",
+            "Deco",
+            Deco,
+            Deco::new(DecoCfg {
+                n_features: 4,
+                decay: decay(),
+                dynamics: DecoDynamics::Linear,
+                alpha: Some(0.05),
+                beta: Some(0.9),
+                blocks: vec![vec![0, 1], vec![2, 3]],
+                min_weight: 0.0,
+            })
+            .unwrap(),
+            4,
+            Targets::None,
+            40
+        ),
+        // Saved inside the standardiser's warm-up: no level yet, the share
+        // above a fifth, and the continuation crosses it.
+        case!(
+            "deco_warming",
+            "Deco",
+            Deco,
+            Deco::new(DecoCfg {
+                n_features: 3,
+                decay: decay(),
+                dynamics: DecoDynamics::Ew,
+                alpha: None,
+                beta: None,
+                blocks: Vec::new(),
+                min_weight: 0.0,
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            4
+        ),
         case!(
             "rcov",
             "Rcov",
@@ -2293,6 +2675,88 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // PLAN 550 and 553: the monitor and the sequential detector on a
+        // correlated pair whose correlation moves from 0.3 to 0.85 at row
+        // 150, saved inside a span and inside a monitoring period.
+        case!(
+            "corrchange_monitor_realistic",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 60,
+                ..corrchange_cfg(CorrChangeKind::Monitor)
+            })
+            .unwrap(),
+            K,
+            Targets::CorrelatedPair(150),
+            200
+        ),
+        case!(
+            "corrchange_sequential_realistic",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 50,
+                monitor_rows: 60,
+                boundary_gamma: 0.25,
+                ..corrchange_cfg(CorrChangeKind::Sequential)
+            })
+            .unwrap(),
+            K,
+            Targets::CorrelatedPair(150),
+            200
+        ),
+        // Task 553: each kind's span on the clock (`window_size`), saved
+        // inside it: the clock, the span's first stamp, a window's keys and
+        // the counts its held value was drawn over, a cycle's own history
+        // and period, and a cap of the state's bytes.
+        case!(
+            "corrchange_monitor_clock",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 0,
+                span_clock: Some(7.0),
+                max_state_bytes: Some(1 << 20),
+                ..corrchange_cfg(CorrChangeKind::Monitor)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        case!(
+            "corrchange_sequential_clock",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 0,
+                monitor_rows: 0,
+                span_clock: Some(9.0),
+                monitor_clock: Some(14.0),
+                ..corrchange_cfg(CorrChangeKind::Sequential)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        case!(
+            "corrchange_window_clock",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                span_rows: 0,
+                span_clock: Some(8.0),
+                permute_every_rows: usize::MAX,
+                permute_every: Some(5.0),
+                ..corrchange_cfg(CorrChangeKind::Window)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
         // Task 538: a warm-up over a span of the clock, saved inside it.
         case!(
             "bocpd_warm_span",
@@ -2400,6 +2864,17 @@ pub fn all() -> Vec<Case> {
             K,
             Targets::Linear(2),
             40
+        ),
+        // Events that excite each other, as the process is for: sparse
+        // rows, runs of events after an event, both nodes.
+        case!(
+            "hawkes_excited",
+            "Hawkes",
+            Hawkes,
+            Hawkes::new(hawkes_cfg(None)).unwrap(),
+            K,
+            Targets::Excited(2),
+            120
         ),
         // In a window of six rows with an event, saved with rows in both
         // blocks: the older block's offsets, marks and forward sums, the
@@ -2575,6 +3050,194 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             2700
         ),
+        // `realized` under a decay, with Lee and Mykland's own window of
+        // ten returns, full (task 499): the sums, the last returns and the
+        // ring of products.
+        case!(
+            "realized",
+            "Realized",
+            Realized,
+            Realized::new(realized_cfg()).unwrap(),
+            0,
+            Targets::JoiningFrom(2, 20),
+            40
+        ),
+        // A window of twelve rows, full and turning over: each target's
+        // terms and how many of its products were taken, the rows' weights.
+        case!(
+            "realized_window",
+            "Realized",
+            Realized,
+            Realized::new(RealizedCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                window_rows: Some(12),
+                lm_window: None,
+                ..realized_cfg()
+            })
+            .unwrap(),
+            0,
+            Targets::JoiningFrom(2, 20),
+            40
+        ),
+        // A window of clock units over stamped rows, both edges' `closed`
+        // the `both` one: a stamp a row and the clock summed.
+        Case {
+            name: "realized_clock_window",
+            variant: "Realized",
+            build: || {
+                Box::new(StampedRealized {
+                    model: Realized::new(RealizedCfg {
+                        decay: Decay::Halflife(f64::INFINITY),
+                        window_clock: Some(20.0),
+                        closed: WindowClosed::Both,
+                        ..realized_cfg()
+                    })
+                    .unwrap(),
+                    ns: 0,
+                })
+            },
+            restore: restore_stamped_realized,
+            n_features: 0,
+            targets: Targets::Linear(2),
+            before: 45,
+        },
+        // A clock window whose rows passed its cap: warned past half of it,
+        // and the row that would pass it recorded; nothing learned since.
+        // Its rows are handed no stamps, so it reads the clock summed from
+        // the steps.
+        case!(
+            "realized_clock_capped",
+            "Realized",
+            Realized,
+            Realized::new(RealizedCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                window_clock: Some(20.0),
+                lm_window: None,
+                max_state_bytes: Some(1_500),
+                ..realized_cfg()
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            45
+        ),
+        // Principal components by the incremental SVD, three columns, two
+        // emitted and three kept: saved with every direction started.
+        case!(
+            "pca",
+            "StreamPca",
+            StreamPca,
+            StreamPca::new(pca_cfg(PcaMethod::Svd)).unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        // Saved on the third row: the directions not yet started, all
+        // zeros beside the started one, and a cap of the spec's own.
+        case!(
+            "pca_early",
+            "StreamPca",
+            StreamPca,
+            StreamPca::new(StreamPcaCfg {
+                max_state_bytes: Some(4096),
+                ..pca_cfg(PcaMethod::Svd)
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            3
+        ),
+        // CCIPCA: each direction its variance times its unit vector.
+        case!(
+            "pca_ccipca",
+            "StreamPca",
+            StreamPca,
+            StreamPca::new(pca_cfg(PcaMethod::Ccipca)).unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        // Oja's rule with a gain of its own.
+        case!(
+            "pca_oja",
+            "StreamPca",
+            StreamPca,
+            StreamPca::new(StreamPcaCfg {
+                learning_rate: Some(1.5),
+                ..pca_cfg(PcaMethod::Oja)
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        // `power_variation` (task 555) under a decay, a term of each form:
+        // the sums, the last raw return and both scales' rings.
+        case!(
+            "power_variation",
+            "PowerVariation",
+            PowerVariation,
+            PowerVariation::new(power_variation_cfg()).unwrap(),
+            0,
+            Targets::JoiningFrom(2, 20),
+            40
+        ),
+        // A window of twelve rows, full and turning over: each return's
+        // credits, the rows' weights.
+        case!(
+            "power_variation_window",
+            "PowerVariation",
+            PowerVariation,
+            PowerVariation::new(PowerVariationCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                window_rows: Some(12),
+                ..power_variation_cfg()
+            })
+            .unwrap(),
+            0,
+            Targets::JoiningFrom(2, 20),
+            40
+        ),
+        // A window of clock units over stamped rows, `closed` the `both`
+        // one: a stamp a row and the clock summed.
+        Case {
+            name: "power_variation_clock_window",
+            variant: "PowerVariation",
+            build: || {
+                Box::new(StampedPowerVariation {
+                    model: PowerVariation::new(PowerVariationCfg {
+                        decay: Decay::Halflife(f64::INFINITY),
+                        window_clock: Some(20.0),
+                        closed: WindowClosed::Both,
+                        ..power_variation_cfg()
+                    })
+                    .unwrap(),
+                    ns: 0,
+                })
+            },
+            restore: restore_stamped_power_variation,
+            n_features: 0,
+            targets: Targets::Linear(2),
+            before: 45,
+        },
+        // A clock window whose rows passed its cap (552 bytes fixed, 368 a
+        // row, so six rows under 3,000): warned past half of it, the row
+        // that would pass it recorded, nothing learned since.
+        case!(
+            "power_variation_clock_capped",
+            "PowerVariation",
+            PowerVariation,
+            PowerVariation::new(PowerVariationCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                window_clock: Some(20.0),
+                max_state_bytes: Some(3_000),
+                ..power_variation_cfg()
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            45
+        ),
         // A refit over a span of the clock (task 538), saved within the
         // span: each target's first stamp, on the clock summed from the
         // steps, which is state.
@@ -2683,6 +3346,26 @@ pub fn all() -> Vec<Case> {
             Targets::Garch(2, Process::Figarch),
             2800
         ),
+        // A start withheld at its bound: a cap that holds 80 of each
+        // target's rows, so after its tries at 50 and 100 rows the buffer is
+        // a ring of the latest 80, its oldest row at `head`, the rows it
+        // let go counted, and the rows of its last try and since it.
+        case!(
+            "garch_bound",
+            "Garch",
+            Garch,
+            Garch::new({
+                let c = garch_cfg(GarchVol::Garch, GarchDist::Normal);
+                GarchCfg {
+                    max_state_bytes: Some(Garch::state_bytes(&c, 80)),
+                    ..c
+                }
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            333
+        ),
         // A start of a clock span, saved within it: the first row's stamp
         // (the targets join at the fifth row, so it is not the clock's 0).
         case!(
@@ -2698,7 +3381,510 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // `dcc` (task 493) on a realistic ADCC stream, its parameters
+        // estimated: saved within the start, its buffer of residuals.
+        case!(
+            "dcc",
+            "Dcc",
+            Dcc,
+            Dcc::new(dcc_cfg(3, true, None)).unwrap(),
+            0,
+            Targets::Correlated(3, false, true),
+            40
+        ),
+        // Saved after the start: the targets Q̄ and N̄, Q, its sensitivities,
+        // the information and the estimate, under a decay; its start of 400
+        // rows identified its recursion (the likelihood-ratio statistic,
+        // kept).
+        case!(
+            "dcc_started",
+            "Dcc",
+            Dcc,
+            Dcc::new(DccCfg {
+                decay: Decay::Halflife(4000.0),
+                start_rows: 400,
+                ..dcc_cfg(3, true, None)
+            })
+            .unwrap(),
+            0,
+            Targets::Correlated(3, false, true),
+            1500
+        ),
+        // A start withheld: two series of one correlation, no recursion to
+        // find, waiting for twice its rows with the statistic it fell
+        // short with.
+        case!(
+            "dcc_withheld",
+            "Dcc",
+            Dcc,
+            Dcc::new(dcc_cfg(2, false, None)).unwrap(),
+            0,
+            Targets::Correlated(2, false, false),
+            120
+        ),
+        // A start withheld at its bound: a cap that holds 80 of its rows,
+        // so after its tries at 50 and 80 rows the buffer is a ring of the
+        // latest 80, its oldest row at `head`, the rows it let go counted.
+        case!(
+            "dcc_bound",
+            "Dcc",
+            Dcc,
+            Dcc::new({
+                let mut c = dcc_cfg(2, false, None);
+                c.max_state_bytes = Some(c.stage_bytes() + 32 + 80 * c.row_bytes());
+                c
+            })
+            .unwrap(),
+            0,
+            Targets::Correlated(2, false, false),
+            333
+        ),
+        // Given parameters, the symmetric model: no sensitivities.
+        case!(
+            "dcc_given",
+            "Dcc",
+            Dcc,
+            Dcc::new(dcc_cfg(2, false, Some(vec![0.05, 0.9]))).unwrap(),
+            0,
+            Targets::Correlated(2, false, true),
+            120
+        ),
+        // GARCH margins on returns: the margins started, the stage's own
+        // start buffering their residuals.
+        case!(
+            "dcc_margins",
+            "Dcc",
+            Dcc,
+            Dcc::new(DccCfg {
+                margins: Some(GarchCfg {
+                    horizon: 1,
+                    start_rows: 400,
+                    ..garch_cfg(GarchVol::Garch, GarchDist::Normal)
+                }),
+                start_rows: 2000,
+                ..dcc_cfg(2, false, None)
+            })
+            .unwrap(),
+            0,
+            Targets::Correlated(2, true, true),
+            // the margins' start waits for twice its rows while its fit
+            // does not identify a variance process, so it may take 800 rows
+            // of each series; the correlation's long start is still
+            // buffering
+            CASE_DCC_MARGINS_BEFORE
+        ),
+        // A start over a span of the clock, saved within it: its first
+        // stamp and the summed clock.
+        case!(
+            "dcc_span",
+            "Dcc",
+            Dcc,
+            Dcc::new(DccCfg {
+                start_span: Some(80.0),
+                ..dcc_cfg(2, true, None)
+            })
+            .unwrap(),
+            0,
+            Targets::Correlated(2, false, true),
+            40
+        ),
+        // A t-digest a target (PLAN 544), saved before its first merge:
+        // each digest's buffer, its extremes and the weights, no centroid.
+        case!(
+            "tdigest",
+            "TDigest",
+            TDigestModel,
+            TDigestModel::new(tdigest_cfg()).unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Saved past its merges, its buffer part-filled again: the
+        // centroids beside the buffer.
+        case!(
+            "tdigest_merged",
+            "TDigest",
+            TDigestModel,
+            TDigestModel::new(tdigest_cfg()).unwrap(),
+            0,
+            Targets::Linear(2),
+            300
+        ),
+        // A DDSketch a target (PLAN 544, part 7), never forgetting: both
+        // stores, the zero count stays empty on a linear target.
+        case!(
+            "ddsketch",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(ddsketch_cfg(None, None)).unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // A row window, full and turning over: the ring's codes and
+        // weights, and the stores' row counts.
+        case!(
+            "ddsketch_rows",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(ddsketch_cfg(Some(25), None)).unwrap(),
+            0,
+            Targets::Linear(2),
+            60
+        ),
+        // The decayed form: the decay in the cfg, the weights decayed.
+        case!(
+            "ddsketch_decayed",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(DdSketchModelCfg {
+                decay: Decay::Halflife(15.0),
+                ..ddsketch_cfg(None, None)
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            60
+        ),
+        // A clock window: the ring's stamps and the clock kept for them.
+        case!(
+            "ddsketch_clock",
+            "DdSketch",
+            DdSketchModel,
+            DdSketchModel::new(ddsketch_cfg(None, Some(12.0))).unwrap(),
+            0,
+            Targets::Linear(2),
+            60
+        ),
+        // Every kind of term to order 6, and the unbiased forms to order 4:
+        // the central moments of orders 2 to 6 and all three of `r_2`, `r_3`
+        // and `r_4`.
+        case!(
+            "ewm_moments",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_cfg(true)).unwrap(),
+            1,
+            Targets::None,
+            40
+        ),
+        // The plug-in terms alone: Kish's `r_2` and no other.
+        case!(
+            "ewm_moments_plugin",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_cfg(false)).unwrap(),
+            1,
+            Targets::None,
+            40
+        ),
+        // Row lags of two columns, an autocorrelation and lagged cross
+        // terms: a summary a set of legs, and one buffer a lagged column.
+        case!(
+            "ewm_moments_lags",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(false, None, None)).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
+        // The same lags on the clock, as-of within a tolerance: each
+        // buffer's stamps, and the clock's place.
+        case!(
+            "ewm_moments_clock_lags",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(true, None, None)).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
+        // A window of 12 rows: the ring of rows, no summary.
+        case!(
+            "ewm_moments_window",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(false, Some(12), None)).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
+        // A window of 7 clock units: the ring's stamps.
+        case!(
+            "ewm_moments_clock_window",
+            "EwmMoments",
+            EwmMoments,
+            EwmMoments::new(ewm_moments_lag_cfg(true, None, Some(7.0))).unwrap(),
+            2,
+            Targets::None,
+            40
+        ),
+        // An AR of lags 1 and 3 over two targets with the features as
+        // exogenous regressors: each target's full ring of lags and its fit.
+        case!(
+            "ar",
+            "Ar",
+            Ar,
+            Ar::new(ar_cfg()).unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Its order chosen by BIC after every learned row: the chosen
+        // coefficients beside the fit at the largest order.
+        case!(
+            "ar_select",
+            "Ar",
+            Ar,
+            Ar::new(ArCfg {
+                lags: vec![1, 2, 3],
+                ridge: 0.0,
+                select: Some(ArSelect::Bic),
+                ..ar_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Under a hard window of 15 clock units: each fit's snapshots.
+        case!(
+            "ar_window",
+            "Ar",
+            Ar,
+            Ar::new(ArCfg {
+                window: Some(15.0),
+                ..ar_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Two series' transforms at three frequencies.
+        case!(
+            "spectral",
+            "Spectral",
+            Spectral,
+            Spectral::new(SpectralCfg {
+                n_targets: 2,
+                frequencies: vec![0.0, 0.2, 0.5],
+                spacing: 1.0,
+                decay: decay(),
+                scaling: SpectralScaling::Density,
+                detrend: true,
+                min_weight: 0.0,
+                max_state_bytes: None,
+                window: None,
+                window_every: None,
+                max_rows_between_snapshots: None,
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Two series' Lomb-Scargle sums on an uneven clock: the weights'
+        // transform at twice each frequency and the squares beside the
+        // transform, one frequency past the even clock's Nyquist.
+        case!(
+            "spectral_ls",
+            "Spectral",
+            Spectral,
+            Spectral::new(SpectralCfg {
+                n_targets: 2,
+                frequencies: vec![0.2, 0.7],
+                spacing: 1.0,
+                decay: decay(),
+                scaling: SpectralScaling::LombScargle,
+                detrend: true,
+                min_weight: 0.0,
+                max_state_bytes: None,
+                window: None,
+                window_every: None,
+                max_rows_between_snapshots: None,
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Two series' transforms over a window of 15 clock units: its
+        // blocks, each at its own origin, and the closed blocks' total.
+        case!(
+            "spectral_window",
+            "Spectral",
+            Spectral,
+            Spectral::new(SpectralCfg {
+                n_targets: 2,
+                frequencies: vec![0.2, 0.5],
+                spacing: 1.0,
+                decay: decay(),
+                scaling: SpectralScaling::LombScargle,
+                detrend: true,
+                min_weight: 0.0,
+                max_state_bytes: None,
+                window: Some(15.0),
+                window_every: None,
+                max_rows_between_snapshots: Some(3),
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        // Saved two rows in: rings still filling, no fit yet.
+        case!(
+            "ar_filling",
+            "Ar",
+            Ar,
+            Ar::new(ar_cfg()).unwrap(),
+            K,
+            Targets::Linear(2),
+            2
+        ),
     ]
+}
+
+/// Rows before `dcc_margins`' save: past its margins' start, within the
+/// stage's.
+const CASE_DCC_MARGINS_BEFORE: usize = 1500;
+
+/// `dcc` of the case's series, the start 50 rows, no margins.
+fn dcc_cfg(k: usize, asymmetric: bool, params: Option<Vec<f64>>) -> DccCfg {
+    DccCfg {
+        n_targets: k,
+        asymmetric,
+        margins: None,
+        params,
+        decay: Decay::Halflife(f64::INFINITY),
+        start_rows: 50,
+        start_span: None,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    }
+}
+
+/// A `ddsketch` of two targets at a coarse accuracy, read at three levels,
+/// plain or under a window.
+fn ddsketch_cfg(window_rows: Option<usize>, window_clock: Option<f64>) -> DdSketchModelCfg {
+    DdSketchModelCfg {
+        n_targets: 2,
+        alpha: 0.02,
+        levels: vec![0.1, 0.4, 0.9],
+        window_rows,
+        window_clock,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(f64::INFINITY),
+        max_state_bytes: None,
+    }
+}
+
+/// A `tdigest` of two targets at the smallest compression, whose buffer
+/// merges every 80 rows, read at three levels.
+fn tdigest_cfg() -> TDigestModelCfg {
+    TDigestModelCfg {
+        n_targets: 2,
+        compression: 10.0,
+        levels: vec![0.1, 0.4, 0.9],
+        max_state_bytes: None,
+    }
+}
+
+/// `ewm_moments` of the first two features with lags: the first's
+/// autocorrelation at 2, a cross term of the first with the second a step
+/// back, the second's lagged skew and the first's unbiased fourth
+/// cumulant, each standard error; on the clock with `clocked`, under a
+/// window of `rows` or of `clock`.
+fn ewm_moments_lag_cfg(clocked: bool, rows: Option<usize>, clock: Option<f64>) -> EwmMomentsCfg {
+    let term = |name: &str, powers: Vec<(MomentLeg, u32)>, kind, bias| MomentTerm {
+        name: name.to_owned(),
+        powers,
+        kind,
+        bias,
+    };
+    let terms = vec![
+        term(
+            "acor2",
+            vec![(MomentLeg::of(0), 1), (MomentLeg::lagged(0, 2.0), 1)],
+            MomentKind::Standardized,
+            true,
+        ),
+        term(
+            "x2y1",
+            vec![(MomentLeg::of(0), 2), (MomentLeg::lagged(1, 1.0), 1)],
+            MomentKind::Central,
+            true,
+        ),
+        term(
+            "sk_y1",
+            vec![(MomentLeg::lagged(1, 1.0), 3)],
+            MomentKind::Standardized,
+            true,
+        ),
+        term(
+            "k4_u",
+            vec![(MomentLeg::of(0), 4)],
+            MomentKind::Cumulant,
+            false,
+        ),
+    ];
+    EwmMomentsCfg {
+        min_weight: 2.0,
+        clocked,
+        lag_tolerance: clocked.then_some(1.0),
+        se: true,
+        window_rows: rows,
+        window_clock: clock,
+        ..EwmMomentsCfg::new(decay(), terms)
+    }
+}
+
+/// `ewm_moments` of the first feature: plug-in central, standardized,
+/// cumulant and raw terms to order 6, and with `unbiased` the unbiased
+/// central moments, cumulants and skew and kurtosis to order 4.
+fn ewm_moments_cfg(unbiased: bool) -> EwmMomentsCfg {
+    let term = MomentTerm::of_column;
+    let mut terms = vec![
+        term("var", 2, MomentKind::Central, true),
+        term("skew", 3, MomentKind::Standardized, true),
+        term("kurt", 4, MomentKind::Standardized, true),
+        term("m6", 6, MomentKind::Central, true),
+        term("k5", 5, MomentKind::Cumulant, true),
+        term("raw3", 3, MomentKind::Raw, true),
+    ];
+    if unbiased {
+        terms.extend([
+            term("var_u", 2, MomentKind::Central, false),
+            term("skew_u", 3, MomentKind::Standardized, false),
+            term("kurt_u", 4, MomentKind::Standardized, false),
+            term("k4_u", 4, MomentKind::Cumulant, false),
+        ]);
+    }
+    EwmMomentsCfg {
+        min_weight: 2.0,
+        ..EwmMomentsCfg::new(decay(), terms)
+    }
+}
+
+/// An AR of lags 1 and 3 under decay, its two targets' fits with a small
+/// ridge.
+fn ar_cfg() -> ArCfg {
+    ArCfg {
+        n_targets: 2,
+        n_features: K,
+        lags: vec![1, 3],
+        fit_intercept: true,
+        decay: decay(),
+        ridge: 0.01,
+        min_weight: 2.0,
+        max_state_bytes: None,
+        select: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    }
 }
 
 /// An upper `expectile` of two targets under decay, its first rows' refit
@@ -2741,6 +3927,57 @@ fn realistic(vol: GarchVol, dist: GarchDist) -> GarchCfg {
     GarchCfg {
         start_rows: 2000,
         ..garch_cfg(vol, dist)
+    }
+}
+
+/// Two return series, a term of each form: a sum of squares, a normalized
+/// bipower term, a centered Parzen sum and a flat-top Bartlett sum of
+/// two-step returns.
+fn power_variation_cfg() -> PowerVariationCfg {
+    let mp = |powers: &[f64], normalize: bool| PvTerm {
+        kind: PvTermKind::Multipower {
+            powers: powers.to_vec(),
+            normalize,
+        },
+        scale: 1,
+    };
+    let ker = |kernel, bandwidth, flat_top, center, scale| PvTerm {
+        kind: PvTermKind::Kernel {
+            kernel,
+            bandwidth,
+            flat_top,
+            center,
+        },
+        scale,
+    };
+    PowerVariationCfg {
+        n_targets: 2,
+        terms: vec![
+            mp(&[2.0], false),
+            mp(&[1.0, 1.0], true),
+            ker(PvKernel::Parzen, 3, false, true, 1),
+            ker(PvKernel::Bartlett, 2, true, false, 2),
+        ],
+        decay: decay(),
+        min_weight: 2.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    }
+}
+
+fn realized_cfg() -> RealizedCfg {
+    RealizedCfg {
+        n_targets: 2,
+        decay: decay(),
+        min_weight: 2.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        lm_window: Some(10),
+        lm_beta: 0.95,
+        max_state_bytes: None,
     }
 }
 
@@ -2888,4 +4125,16 @@ pub fn agree(got: f64, want: f64, tol: f64) -> bool {
         && got.is_finite()
         && want.is_finite()
         && (got - want).abs() <= tol * (1.0 + want.abs())
+}
+
+fn pca_cfg(method: PcaMethod) -> StreamPcaCfg {
+    StreamPcaCfg {
+        n_features: 3,
+        n_components: 2,
+        method,
+        decay: decay(),
+        min_weight: 0.0,
+        learning_rate: None,
+        max_state_bytes: None,
+    }
 }

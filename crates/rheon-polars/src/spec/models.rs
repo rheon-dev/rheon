@@ -720,6 +720,84 @@ impl Spec {
             // Its features and its kernels are checked above; every value
             // is the model's own to check.
             ModelKind::Hawkes { .. } => {}
+            // Its features are checked above. Every value is the model's own
+            // to check, here at the call, among them the state's bytes
+            // against `max_state_bytes` where the settings fix them (a window
+            // of rows, `lm_window`). A decay refused is `decays`' to say.
+            ModelKind::Realized { window_size, .. } => {
+                let bad_window = window_size
+                    .as_ref()
+                    .is_some_and(|w| !(w.value().is_finite() && w.value() > 0.0));
+                if let Some(w) = window_size.as_ref().filter(|_| bad_window) {
+                    no.refuse(format!(
+                        "spec {:?}: window_size must be a finite span of the clock above \
+                         0, but it is {w}. Give the span the estimators are measured over, \
+                         or leave it out for no window.",
+                        self.name
+                    ));
+                }
+                if let Some((_, decay)) = self
+                    .decays()
+                    .ok()
+                    .and_then(|d| d.into_iter().next())
+                    .filter(|_| !bad_window)
+                {
+                    no.take(
+                        crate::stream::realized_cfg(self, decay)
+                            .and_then(|c| c.validate())
+                            .map_err(|e| {
+                                e.lines()
+                                    .map(|l| {
+                                        format!(
+                                            "spec {:?}: {}",
+                                            self.name,
+                                            l.trim_start_matches("realized: ")
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            }),
+                    );
+                }
+            }
+            // Its features are checked above; its terms' shapes by the
+            // builder of its configuration, every other value by the model.
+            ModelKind::PowerVariation { window_size, .. } => {
+                let bad_window = window_size
+                    .as_ref()
+                    .is_some_and(|w| !(w.value().is_finite() && w.value() > 0.0));
+                if let Some(w) = window_size.as_ref().filter(|_| bad_window) {
+                    no.refuse(format!(
+                        "spec {:?}: window_size must be a finite span of the clock above \
+                         0, but it is {w}. Give the span the terms are summed over, or \
+                         leave it out for no window.",
+                        self.name
+                    ));
+                }
+                if let Some((_, decay)) = self
+                    .decays()
+                    .ok()
+                    .and_then(|d| d.into_iter().next())
+                    .filter(|_| !bad_window)
+                {
+                    no.take(
+                        crate::stream::power_variation_cfg(self, decay)
+                            .and_then(|c| c.validate())
+                            .map_err(|e| {
+                                e.lines()
+                                    .map(|l| {
+                                        format!(
+                                            "spec {:?}: {}",
+                                            self.name,
+                                            l.trim_start_matches("power_variation: ")
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            }),
+                    );
+                }
+            }
             // Its features are checked above. No decay: the recursion is per
             // observation and the estimate weighs every row it learned. The
             // start is rows or a span of the clock, not both; every other
@@ -748,6 +826,147 @@ impl Spec {
                 no.take(crate::stream::garch_cfg(self).map(|_| ()).map_err(|e| {
                     format!("spec {:?}: {}", self.name, e.trim_start_matches("garch: "))
                 }));
+            }
+            // Its features are checked above. A decay is legal: it acts on
+            // the targets, the weight and the estimator's gain. Each start
+            // is rows or a span of the clock, not both; every other value is
+            // the model's own to check, at the call, where the state's size
+            // against its cap is known too.
+            ModelKind::Dcc {
+                start_rows,
+                start_span,
+                margin_start_rows,
+                margin_start_span,
+                ..
+            } => {
+                for (rows, span, r, sp) in [
+                    (
+                        start_rows.is_some(),
+                        start_span.is_some(),
+                        "start_rows",
+                        "start_span",
+                    ),
+                    (
+                        margin_start_rows.is_some(),
+                        margin_start_span.is_some(),
+                        "margin_start_rows",
+                        "margin_start_span",
+                    ),
+                ] {
+                    if rows && span {
+                        no.refuse(format!(
+                            "spec {:?}: {r} (a count of rows) and {sp} (a span of the clock) \
+                             both say where the start closes. Leave one of them out.",
+                            self.name
+                        ));
+                    }
+                }
+                no.take(
+                    crate::stream::dcc_cfg(self, Decay::Halflife(f64::INFINITY))
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!("spec {:?}: {}", self.name, e.trim_start_matches("dcc: "))
+                        }),
+                );
+            }
+
+            // Its features are checked with the shared checks; every value is
+            // the model's own to check, here at the call, where the state's
+            // size against its cap is known too.
+            ModelKind::Pca { .. } => {
+                let decay = self
+                    .decays()
+                    .ok()
+                    .and_then(|d| d.first().map(|(_, d)| *d))
+                    .unwrap_or(rheon_core::Decay::Halflife(f64::INFINITY));
+                no.take(
+                    crate::stream::pca_cfg(self, decay)
+                        .and_then(|cfg| cfg.validate())
+                        .map_err(|e| {
+                            format!("spec {:?}: {}", self.name, e.trim_start_matches("pca: "))
+                        }),
+                );
+            }
+            // Its features are checked above. No decay and no window: a
+            // merging digest folds each row into a centroid's mean and
+            // cannot take it out, so a half-life is refused naming the
+            // quantile that forgets. Every other value is the model's own to
+            // check, here at the call, where the state's size against its
+            // cap is known too.
+            ModelKind::TDigest { .. } => {
+                if self.half_life.is_some() || self.lam.is_some() {
+                    no.take(
+                        rheon_core::TDigest::check_no_span(Some(decay_key))
+                            .map_err(|e| format!("spec {:?}: {}", self.name, tdigest_words(&e))),
+                    );
+                }
+                no.take(crate::stream::tdigest_cfg(self).map(|_| ()).map_err(|e| {
+                    format!(
+                        "spec {:?}: {}",
+                        self.name,
+                        e.trim_start_matches("tdigest: ")
+                    )
+                }));
+            }
+            // Its features are checked above. A decay is its rounded form and
+            // a window its exact one, refused together by the model. Every
+            // value is the model's own to check, here at the call, under
+            // each decay the spec's grid gives.
+            ModelKind::DdSketch { .. } => {
+                let decays = self
+                    .decays()
+                    .unwrap_or_else(|_| vec![(String::new(), Decay::Halflife(f64::INFINITY))]);
+                if let Some((_, decay)) = decays.first() {
+                    no.take(
+                        crate::stream::ddsketch_cfg(self, *decay)
+                            .map(|_| ())
+                            .map_err(|e| {
+                                format!(
+                                    "spec {:?}: {}",
+                                    self.name,
+                                    e.trim_start_matches("ddsketch: ")
+                                )
+                            }),
+                    );
+                }
+            }
+            // Every value is the model's own to check, here at the call,
+            // where the state's size against its cap is known too; the
+            // decay is checked with the spec's others.
+            // Its features are checked above; every value is the model's own.
+            ModelKind::Spectral(_) => {
+                no.take(
+                    crate::stream::spectral_cfg(self, rheon_core::Decay::Halflife(f64::INFINITY))
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!(
+                                "spec {:?}: {}",
+                                self.name,
+                                e.trim_start_matches("spectral: ")
+                            )
+                        }),
+                );
+            }
+            ModelKind::Ar { .. } => {
+                // A late target joins the lags late: a row learned under an
+                // embargo reads lags one row back, but a row predicted reads
+                // the last values learned, the embargo's span back, so the
+                // fit and its predictions would not be the same regression.
+                if self.embargo.is_some() {
+                    no.refuse(format!(
+                        "spec {:?}: embargo does not apply to ar, whose lags are the target's \
+                     last values: under a delay the rows it predicts would read older lags \
+                     than the rows it learns from. Leave embargo out.",
+                        self.name
+                    ));
+                }
+                no.take(
+                    crate::stream::ar_cfg(self, rheon_core::Decay::Halflife(f64::INFINITY))
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!("spec {:?}: {}", self.name, e.trim_start_matches("ar: "))
+                        }),
+                );
             }
             // The shared checks (non-empty features and targets, no column on
             // both sides, a decay, `min_weight` per target, no residual
@@ -1161,6 +1380,15 @@ impl Spec {
                                     .join("\n")
                             }),
                     );
+                }
+            }
+            // The terms read against the features, and the model's own
+            // checks of them (a joint cumulant, `bias=False` past order 4, a
+            // lag of part of a row, the state's bytes where the settings fix
+            // them), here at the call. A decay refused is `decays`' to say.
+            ModelKind::EwmMoments { .. } => {
+                if let Some((_, decay)) = self.decays().ok().and_then(|d| d.into_iter().next()) {
+                    no.take(super::ewm_moments_cfg(self, decay).and_then(|c| c.validate()));
                 }
             }
             ModelKind::Audit { .. } => {
@@ -1677,5 +1905,19 @@ impl Spec {
                 ));
             }
         }
+    }
+}
+
+/// A `TDigest` refusal of a span in the spec's words, as every model that
+/// takes no decay words its own: "`<key>` does not apply to tdigest, whose
+/// ...", then the core's reason and the quantile that forgets.
+pub(crate) fn tdigest_words(e: &str) -> String {
+    let e = e.trim_start_matches("TDigest: ");
+    match e.split_once(" is not allowed. ") {
+        Some((key, why)) => format!(
+            "{key} does not apply to tdigest, whose merging digest cannot take a row out \
+             again. {why}"
+        ),
+        None => e.to_string(),
     }
 }

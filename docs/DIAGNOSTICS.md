@@ -337,6 +337,17 @@ The ten linear models are `ewridge`, `rls`, `lasso`, `kalman`, `huber`,
 residual switch by name, and a model outside a switch's list refuses that
 switch and names the models that take it.
 
+**`glm` and `expectile` take the residual switches too, except where a
+test's null fails by construction.** A `glm`'s residuals have its family's
+variance, which moves with the mean, and its family's shape. On a stream a
+Poisson fit fits exactly, Breusch-Pagan and Jarque-Bera rejected on every
+row, and RESET, read under a constant variance, on a quarter of them, so a
+`glm` refuses `emit_specification` and `emit_tails`. An expectile at a
+level other than 0.5 is not the mean, so its residuals' mean is not 0 where
+it fits exactly: at 0.9 on unit Gaussian noise the Mincer-Zarnowitz Wald
+and the CUSUM rejected on every row. An `expectile` off 0.5 refuses
+`emit_calibration` and `emit_breaks`.
+
 ## Is it scaled right?
 
 **A prediction can be correlated with the target and still be the wrong
@@ -665,6 +676,15 @@ residuals of the predictions a readiness gate withholds too, as `sigma`
 does, so a gate never hides a break: under `drift_action="reset"` the rows
 a `min_weight` withholds after a reset are the rows that show the next
 break.
+
+**On an irregular clock, `drift_kind="cusum"` false-alarms sooner.** Its
+sums grow by `d (z − k)`, `d` the row's clock step, so a step scales the
+noise as well as the drift. We simulated 2,000 runs on standard normal
+errors at `h = 5`, `k = 0.5` and a mean step of 1. They averaged 469 rows to
+a false alarm at steps of 1 and 79 at steps drawn from `Exp(1)`. At steps of
+0.1 nine times in ten and 9.1 otherwise, they averaged 30. Where a steady
+false-alarm rate matters, read the errors on a regular clock or a row
+clock.
 
 [Detect a break](how-to/detect-a-break.md) runs these tests on a stream
 that breaks in each of the three ways, dates a break with the run-once
@@ -1151,10 +1171,12 @@ prediction's `withheld_reason` names the gate that held it:
 | `min_settled_frac` | `below_min_settled_frac` |
 | `min_weight` | `below_min_weight` |
 | `max_error_inflation` | `above_max_error_inflation` |
-| `warm_rows` (`kmeans`, `hmm`, `bocpd`): the rows a model learns from before it has seeded its centers, states or prior; `kalman`'s rows before a target's prior is sized; the rows `garch` buffers for a target's start (`start_rows`, `start_span`) | `below_warm_rows` |
+| `warm_rows` (`kmeans`, `hmm`, `bocpd`): the rows a model learns from before it has seeded its centers, states or prior; `kalman`'s rows before a target's prior is sized; the rows `garch` buffers for a target's start (`start_rows`, `start_span`), and `dcc` for its margins' and its own; the rows before `deco`'s standardizer holds more than five effective rows, while it has no level | `below_warm_rows` |
 | none, the solve itself (`ewridge`): a fit whose normal equations are past the condition at which a solve keeps a digit, see [`ewridge`](MODELS.md#ewridge--exponentially-weighted-ridge-regression) | `ill_conditioned` |
 | none, the learning rate itself (`sgd`): a target whose recent steps' gains have a mean square above twice their mean, so each step grows its own row's residual and the fit diverges | `unstable_rate` |
-| none, the evidence itself (`garch`): a start whose likelihood-ratio statistic against a constant variance is under χ² at 0.999 for the restrictions that puts on the process, so its rows do not identify the process; it buffers more rows and refits, see [`garch`](MODELS.md#garch--how-large-will-the-next-return-be) | `not_identified` |
+| none, the evidence itself (`garch`): a start whose likelihood-ratio statistic against a constant variance is under χ² at 0.999 for the restrictions that puts on the process, so its rows do not identify the process; it buffers more rows and refits, see [`garch`](MODELS.md#garch--how-large-will-the-next-return-be); `dcc`'s start, whose statistic against constant correlation falls short the same way, see [`dcc`](MODELS.md#dcc--how-do-the-correlations-move-from-row-to-row) | `not_identified` |
+| none, the check beside the statistic (`corrchange`, `kind="monitor"`): a span whose correlation statistic passed its critical value while the same CUSUM of `x̃² − ỹ²` passed it too, so the two columns' scale ratio moved and the statistic is off its null law; its `flag` is null | `scale_ratio_moved` |
+| none, the sample itself (`tdigest`, `ddsketch`): a quantile level past the expected level of the smallest or largest of the `n` rows before it, `1/(n + 1)` or `n/(n + 1)`, see [`tdigest`](MODELS.md#tdigest--where-do-this-columns-quantiles-stand) | `level_beyond_sample` |
 
 The reasons are listed in their order of precedence, which is the order
 `withheld_reason` reports them in. `max_error_inflation` is on by default

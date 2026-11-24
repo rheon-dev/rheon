@@ -6291,3 +6291,84 @@ fn window_and_held_row_refusals_say_what_applies() {
         assert_eq!(e.contains(hint), offered, "{m} targets: {e}");
     }
 }
+
+/// A squared residual weighted past the largest double leaves `σ²` finite
+/// (review 2026-11-23, REG-10): at a weight of `1e100`, a residual of
+/// `2·10^104` (a slope of `2·10^199` learned on features near `1e-100`, read
+/// at `1e-95`) has a square of `4·10^208`, in range, but `w · r · r`
+/// overflowed, `σ²` was infinite, and the next gap's decay of 0 made it
+/// `0 · ∞`, NaN for good. Such a row ages `σ²`'s weight as a row with no
+/// prediction does, and the noise is read again from the rows after it.
+#[test]
+fn a_weighted_square_past_the_largest_double_leaves_sigma2_finite() {
+    let mut c = cfg(1, 1);
+    c.fit_intercept = true;
+    c.standardize = true;
+    c.decay = Decay::Halflife(1.0);
+    c.min_weight = 0.0;
+    let mut m = EwRidge::new(c).unwrap();
+    let mut s = 3u64;
+    let mut lcg = || {
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+    };
+    for _ in 0..30 {
+        let u = lcg();
+        m.step(&[1e-100 * (1.0 + 0.5 * u)], &[Some(1e99 * u)], 1.0, 1e100);
+    }
+    let far = m.step(&[1e-95], &[Some(0.0)], 1.0, 1e100);
+    assert!(far.pred[0].abs() > 1e104, "{:?}", far.pred);
+    // A gap past the decay's underflow, then rows of the old kind.
+    m.step(&[1e-100], &[Some(0.0)], 5000.0, 1e100);
+    for _ in 0..30 {
+        let u = lcg();
+        m.step(&[1e-100 * (1.0 + 0.5 * u)], &[Some(1e99 * u)], 1.0, 1e100);
+    }
+    let sig2 = m.sigma2();
+    assert!(sig2[0].is_finite() && sig2[0] > 0.0, "{sig2:?}");
+}
+
+/// Under `target_gaps="pairwise"` a target's coefficient variances are read
+/// at the Kish size of its own rows and its own column means (review
+/// 2026-11-23, REG-13): against the same target under `"own_rows"`, whose
+/// Gram is over exactly its rows, they agree to the sampling gap between
+/// the Gram of every row and the Gram of the target's (a few percent at
+/// 2,000 rows), where they read a quarter of it at the Gram's size.
+#[test]
+fn pairwise_errors_are_read_at_the_targets_own_rows() {
+    let mut s = 41u64;
+    let mut u = || {
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+    };
+    let rows: Vec<([f64; 2], [Option<f64>; 2])> = (0..8000)
+        .map(|_| {
+            let x = [1.5 + u(), -0.5 + u()];
+            let y = 0.5 + x[0] - 2.0 * x[1] + u();
+            let seen = u() < -0.5;
+            ([x[0], x[1]], [seen.then_some(y), Some(y + u())])
+        })
+        .collect();
+    let vars = |gaps: TargetGaps| {
+        let mut c = cfg(2, 2);
+        c.target_gaps = gaps;
+        c.min_weight = 5.0;
+        let mut m = EwRidge::new(c).unwrap();
+        m.set_keep_factor(true);
+        for (x, y) in &rows {
+            m.step(x, y, 1.0, 1.0);
+        }
+        match m.coef_variance() {
+            Some(crate::CoefVariance::PerNoise(v)) => v[0].clone(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let (pair, own) = (vars(TargetGaps::Pairwise), vars(TargetGaps::OwnRows));
+    for (p, o) in pair.iter().zip(&own) {
+        assert!((p / o - 1.0).abs() < 0.08, "{pair:?} against {own:?}");
+    }
+}

@@ -131,7 +131,9 @@ def output_index(spec: dict[str, Any]) -> pl.DataFrame:
     ``lag``
         The lag, in learned rows, of an ``ew_cov`` ``lag_corr`` field.
     ``component``
-        The principal component of an ``ew_cov`` ``pc<j>_*`` field.
+        The principal component of an ``ew_cov`` ``pc<j>_*`` field, or the
+        period of a ``spectral`` ``power_<t>_p<k>`` field, ``k``, its place
+        in ``periods``.
     ``state``
         The hidden state an ``hmm`` posterior is about (``filtered_state<s>``,
         ``predicted_state<s>``).

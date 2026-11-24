@@ -158,7 +158,7 @@ The columns of `summary()`, each count an `Int64`:
 | `rows_processed` | rows the model accepted: every feature and the weight usable |
 | `rows_skipped` | rows the model skipped, because a feature or the weight was null, NaN, infinite or beyond 1e100 |
 | `rows_learned` | rows that moved the fit: a weight above zero and a target present. Under an embargo a row is counted as it arrives; a formula target's row, when it is released |
-| `rows_zero_weight` | rows that advanced the clock and nothing else |
+| `rows_zero_weight` | rows of weight 0, which are scored, learn nothing and leave the clock where it was |
 | `weight_sum` | the sum of the accepted rows' weights, undecayed: 1 a row without a weight column |
 | `clock_min`, `clock_max`, `clock_last` | the clock's range and last value, in the clock column's own dtype |
 | `session_changes`, `clock_backwards`, `resets` | what the clock rules met |

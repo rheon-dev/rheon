@@ -284,8 +284,10 @@
 //! 30 half-lives, an error 3e9 times the same rows' with no gap, at a
 //! half-life of 20 rows). So on a row more than one half-life after a
 //! target was last learned, the moments read their history at no less than
-//! the row's own weight, `H = max(lam·W, w)`: shares `H/(H + w)` and
-//! `w/(H + w)`. The weight kept is `lam·W + w` as ever, so `n_eff` is the
+//! the row's own weight, up to the weight the history had, `H = max(lam·W,
+//! min(W, w))`: shares `H/(H + w)` and `w/(H + w)`. (Uncapped, a history
+//! of weight `1e-6` read against a row of weight 1 took half the share.)
+//! The weight kept is `lam·W + w` as ever, so `n_eff` is the
 //! plain recursion's, and a row within a half-life of the last learned one
 //! is the plain update, to the bit. The gap is the clock since the last
 //! learned row, which a zero-weight row adds to and does not clear.
@@ -2985,7 +2987,12 @@ impl Kalman {
         // *After a long gap*); the weight kept, `n_eff`, is the plain
         // recursion's (hard rule 8).
         if self.keeps_history(unobserved) {
-            self.stats.update_keeping(&self.zbuf, lam, weight, weight);
+            // The history's weight before the gap: what it holds now over
+            // the decay since the last row learned, zero-weight rows in it
+            // or not (`inf` past the doubles, where nothing caps the floor).
+            let had = lam * self.stats.n_eff() / self.cfg.decay.factor(unobserved);
+            self.stats
+                .update_keeping(&self.zbuf, lam, weight, weight, had);
         } else {
             self.stats.update(&self.zbuf, lam, weight);
         }

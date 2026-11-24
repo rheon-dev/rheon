@@ -541,3 +541,32 @@ def test_a_version_the_read_cannot_order_is_an_error():
     found, errors = compare.declarations(CHANGELOG.replace("[0.0.3]", "[0.0.3rc1]"), "0.0.2")
     assert any("'0.0.3rc1' is neither" in e for e in errors), errors
     assert compare.declarations(CHANGELOG, "0.0.2")[1] == []
+
+
+def test_the_new_withheld_reason_category_is_declared_by_this_changelog():
+    """``pca`` added ``"not_separated"`` to the shared ``withheld_reason``
+    enum, so every model's field changes dtype against the last release
+    with every value equal: a move the comparison fails on unless the
+    CHANGELOG declares it. Read from this checkout's CHANGELOG, the entry
+    covers that field of every kind, and no other field."""
+    text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+    declared, errors = compare.declarations(text, "2.0.0")
+    assert errors == []
+    reasons = (
+        "below_min_settled_frac",
+        "below_min_weight",
+        "above_max_error_inflation",
+        "below_warm_rows",
+        "ill_conditioned",
+        "unstable_rate",
+    )
+    old = pl.Series([None, "below_min_weight"], dtype=pl.Enum(list(reasons)))
+    new = pl.Series([None, "below_min_weight"], dtype=pl.Enum([*reasons, "not_separated"]))
+    assert not compare.same(old, new)
+    moved = compare.first_difference(old, new)
+    assert moved == "Enum categories: gone [], new ['not_separated'], every value equal", moved
+    ours = [d for d in declared if "not_separated" in d.reason]
+    assert len(ours) == 1, [d.line for d in ours]
+    for kind in ("ewridge", "kmeans", "pca", "garch"):
+        assert ours[0].covers(kind, "withheld_reason"), kind
+        assert not ours[0].covers(kind, "settled_frac"), kind

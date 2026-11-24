@@ -78,6 +78,9 @@ use serde::{Deserialize, Serialize};
 use crate::stream::usable;
 use crate::window_quantile::QSide;
 
+mod extrema;
+use extrema::XSide;
+
 /// Which way a window looks from its row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -190,6 +193,12 @@ pub enum Stat {
     /// The quantile at an operator's level of the values in the window, each
     /// weighed as a sum weighs it (task 272 (d), `window_quantile.rs`).
     Quantile,
+    /// A term of moments (task 554, `moments.rs`).
+    Moments,
+    /// The largest value in the window (task 561, `windows/extrema.rs`).
+    Max,
+    /// The smallest.
+    Min,
 }
 
 impl Stat {
@@ -203,6 +212,19 @@ impl Stat {
     #[inline]
     pub fn is_var(self) -> bool {
         matches!(self, Stat::Var | Stat::Std)
+    }
+
+    /// Whether it is a maximum or a minimum: read from the queue's extrema.
+    #[inline]
+    pub fn is_extremum(self) -> bool {
+        matches!(self, Stat::Max | Stat::Min)
+    }
+
+    /// Whether a queue row keeps the row's own value, not the held one: a
+    /// quantile's and an extremum's, which read the values themselves.
+    #[inline]
+    fn keeps_own(self) -> bool {
+        matches!(self, Stat::Quantile | Stat::Max | Stat::Min)
     }
 }
 
@@ -220,7 +242,21 @@ pub enum OpKind {
     EwmStd,
     EwmQuantile,
     RewmQuantile,
+    EwmMoments,
+    RollingMax,
+    RollingMin,
+    RrollingMax,
+    RrollingMin,
     Increment,
+    /// A cross-group operator ([`CrossStat::Mean`]): no kernel, the
+    /// stream's stamps.
+    CrossMean,
+    CrossStd,
+    CrossRank,
+    CrossQuantile,
+    CrossRef,
+    /// A periodic profile ([`ProfileDef`]): no kernel, a group's buckets.
+    EwmProfile,
 }
 
 impl OpKind {
@@ -236,7 +272,18 @@ impl OpKind {
             OpKind::EwmStd => "ewm_std",
             OpKind::EwmQuantile => "ewm_quantile",
             OpKind::RewmQuantile => "rewm_quantile",
+            OpKind::EwmMoments => "ewm_moments",
+            OpKind::RollingMax => "rolling_max",
+            OpKind::RollingMin => "rolling_min",
+            OpKind::RrollingMax => "rrolling_max",
+            OpKind::RrollingMin => "rrolling_min",
             OpKind::Increment => "increment",
+            OpKind::CrossMean => "cross_mean",
+            OpKind::CrossStd => "cross_std",
+            OpKind::CrossRank => "cross_rank",
+            OpKind::CrossQuantile => "cross_quantile",
+            OpKind::CrossRef => "cross_ref",
+            OpKind::EwmProfile => "ewm_profile",
         }
     }
 
@@ -252,16 +299,30 @@ impl OpKind {
             "ewm_std" => Some(OpKind::EwmStd),
             "ewm_quantile" => Some(OpKind::EwmQuantile),
             "rewm_quantile" => Some(OpKind::RewmQuantile),
+            "ewm_moments" => Some(OpKind::EwmMoments),
+            "rolling_max" => Some(OpKind::RollingMax),
+            "rolling_min" => Some(OpKind::RollingMin),
+            "rrolling_max" => Some(OpKind::RrollingMax),
+            "rrolling_min" => Some(OpKind::RrollingMin),
             "increment" => Some(OpKind::Increment),
+            "cross_mean" => Some(OpKind::CrossMean),
+            "cross_std" => Some(OpKind::CrossStd),
+            "cross_rank" => Some(OpKind::CrossRank),
+            "cross_quantile" => Some(OpKind::CrossQuantile),
+            "cross_ref" => Some(OpKind::CrossRef),
+            "ewm_profile" => Some(OpKind::EwmProfile),
             _ => None,
         }
     }
 
     pub fn direction(self) -> Direction {
         match self {
-            OpKind::RewmMean | OpKind::RewmSum | OpKind::RewmRate | OpKind::RewmQuantile => {
-                Direction::Forward
-            }
+            OpKind::RewmMean
+            | OpKind::RewmSum
+            | OpKind::RewmRate
+            | OpKind::RewmQuantile
+            | OpKind::RrollingMax
+            | OpKind::RrollingMin => Direction::Forward,
             _ => Direction::Backward,
         }
     }
@@ -275,7 +336,29 @@ impl OpKind {
             OpKind::EwmVar => Some(Stat::Var),
             OpKind::EwmStd => Some(Stat::Std),
             OpKind::EwmQuantile | OpKind::RewmQuantile => Some(Stat::Quantile),
-            OpKind::Increment => None,
+            OpKind::EwmMoments => Some(Stat::Moments),
+            OpKind::RollingMax | OpKind::RrollingMax => Some(Stat::Max),
+            OpKind::RollingMin | OpKind::RrollingMin => Some(Stat::Min),
+            OpKind::Increment
+            | OpKind::CrossMean
+            | OpKind::CrossStd
+            | OpKind::CrossRank
+            | OpKind::CrossQuantile
+            | OpKind::CrossRef
+            | OpKind::EwmProfile => None,
+        }
+    }
+
+    /// The cross-group statistic, for a cross operator; `None` for every
+    /// window operator and `increment`.
+    pub fn cross(self) -> Option<CrossStat> {
+        match self {
+            OpKind::CrossMean => Some(CrossStat::Mean),
+            OpKind::CrossStd => Some(CrossStat::Std),
+            OpKind::CrossRank => Some(CrossStat::Rank),
+            OpKind::CrossQuantile => Some(CrossStat::Quantile),
+            OpKind::CrossRef => Some(CrossStat::Ref),
+            _ => None,
         }
     }
 }
@@ -294,6 +377,11 @@ pub struct KernelDef {
     /// (review R2, W1), with no conversion to seconds on the way.
     pub window_ns: Option<i64>,
     pub closed: Closed,
+    /// An extremum's `since` event (task 561): the index of the row input
+    /// whose value 1.0 (true) starts the kernel's windows over at the row's
+    /// stamp. `None`, and then not written, for every other kernel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<usize>,
 }
 
 impl KernelDef {
@@ -339,6 +427,9 @@ impl KernelDef {
             }
             _ => {}
         }
+        if self.since.is_some() && self.direction == Direction::Forward {
+            return Err(SINCE_AHEAD.into());
+        }
         // The two forms of one window agree (review R4, A4): membership is
         // decided on the integer, the far edge and `complete` on the number.
         if let (Some(w), Some(ns)) = (self.window_size, self.window_ns)
@@ -349,6 +440,15 @@ impl KernelDef {
             ));
         }
         Ok(())
+    }
+
+    /// Whether a backward kernel's rows wait for the next distinct stamp:
+    /// under `"right"` and `"both"`, whose stamp's rows are in its windows,
+    /// and under a `since` event, which any row of a stamp may carry.
+    #[inline]
+    pub(crate) fn waits(&self) -> bool {
+        self.direction == Direction::Backward
+            && (self.closed.near(Direction::Backward) || self.since.is_some())
     }
 
     /// `λ^d`, the discount across `d` units of policy time.
@@ -497,6 +597,11 @@ impl KernelDef {
     }
 }
 
+/// Why `since` is refused looking ahead (task 561).
+pub const SINCE_AHEAD: &str = "since cannot be combined with reverse=True yet: a window \
+     looking ahead would end at the next event, and whether such a window is whole or partial \
+     has no rule yet. Leave out since, or read the rows at or before each row";
+
 /// A queue's last discount and last mass, each with the bits of the distance
 /// it is of. Never written to a state and never compared; a queue read back
 /// starts with none (0 bits is a distance no call reaches the memo with: a
@@ -564,6 +669,10 @@ pub struct OpDef {
     /// then not written, so a state without a quantile keeps its bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quantile: Option<f64>,
+    /// An extremum's bound on its queue's bytes a group (task 561); `None`,
+    /// and then not written, for every other operator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_state_bytes: Option<u64>,
 }
 
 /// One row as the core reads it: its group, clock and session, every
@@ -582,6 +691,9 @@ pub struct RowIn<'a> {
     /// target of a row it skips (docs/PLAN.md task 104). The row still
     /// steps the clocks and still counts in other rows' windows.
     pub accept: bool,
+    /// Per list a cross operator reads its neighbors from: the row's keys,
+    /// as text (`None` for a null list). Empty with no such operator.
+    pub lists: &'a [Option<&'a [Option<String>]>],
 }
 
 /// What the clocks make of a row before it is taken ([`Windows::peek`]).
@@ -595,6 +707,16 @@ pub enum Peek {
     Forward,
     /// The same stamp as the last row the stream read.
     SameStamp,
+}
+
+/// Which kind of operator a state cap or warning is about: its `op` is an
+/// index among the operators of that kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateOf {
+    /// A cross-group operator, holding the rows of its open stamp.
+    Cross,
+    /// A profile operator, holding a group's buckets.
+    Profile,
 }
 
 /// Why a row was refused. The caller names the row in the input.
@@ -611,187 +733,33 @@ pub enum Refusal {
         now: Option<ClockValue>,
         min_backwards_jump: Option<f64>,
     },
+    /// The cross-group operator or profile operator `op` (its index among
+    /// those of its kind) would hold `bytes` for its open stamp or its group
+    /// with this row, past its `cap`; the row is not taken.
+    StateCap {
+        seq: u64,
+        of: StateOf,
+        op: usize,
+        bytes: u64,
+        cap: u64,
+    },
+    /// The reference read `op` (its index among the cross operators) picks
+    /// this row at a stamp where it picked the row `first` already.
+    CrossRefTwice { seq: u64, op: usize, first: u64 },
+    /// A row took a window's queue past its extrema's `max_state_bytes` a
+    /// group (task 561): the row is taken, the run is refused, and the core
+    /// is not to be fed again. `rows` held at `row_bytes` each.
+    OverCap {
+        seq: u64,
+        rows: usize,
+        row_bytes: usize,
+        cap: u64,
+    },
 }
 
-/// Per operator, a segment's sums: the mass-weighted value, the mass and
-/// the rows with a value. For a sum or a rate `s` is the decayed sum and
-/// `w` unused. For a variance (task 212) `s` is the mean itself, `hi` of a
-/// compensated pair with `lo` (`rheon_core::comp`), `w` the mass `V1`,
-/// `q` the mass-weighted squared deviations from the mean `M2`, and `e`
-/// the masses' products in pairs, `Σ_{i<j} m_i m_j = (V1² − V2) / 2`, kept
-/// as a sum of its own so the count correction cancels nothing, and is 0,
-/// not a rounding of 0, while one row carries the window; the three are zero
-/// for every other statistic.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-struct Acc {
-    s: f64,
-    w: f64,
-    n: f64,
-    lo: f64,
-    q: f64,
-    e: f64,
-}
-
-impl Acc {
-    /// A held value `x` of mass `m`: its sums as one row.
-    #[inline]
-    fn held(x: f64, m: f64, var: bool) -> Acc {
-        if var {
-            Acc {
-                s: x,
-                w: m,
-                n: 1.0,
-                lo: 0.0,
-                q: 0.0,
-                e: 0.0,
-            }
-        } else {
-            Acc {
-                s: m * x,
-                w: m,
-                n: 1.0,
-                ..Acc::default()
-            }
-        }
-    }
-
-    /// The sums seen `f` of a discount later: a variance's mean stays where
-    /// it is, its masses scale, and their squares with `f²`.
-    #[inline]
-    fn scaled(self, f: f64, var: bool) -> Acc {
-        if var {
-            Acc {
-                s: self.s,
-                lo: self.lo,
-                w: f * self.w,
-                n: self.n,
-                q: f * self.q,
-                e: f * (f * self.e),
-            }
-        } else {
-            Acc {
-                s: f * self.s,
-                w: f * self.w,
-                n: self.n,
-                ..Acc::default()
-            }
-        }
-    }
-
-    /// Both segments' sums, seen from one time.
-    #[inline]
-    fn plus(self, o: Acc, var: bool) -> Acc {
-        if var {
-            return merge(self, o);
-        }
-        Acc {
-            s: self.s + o.s,
-            w: self.w + o.w,
-            n: self.n + o.n,
-            ..Acc::default()
-        }
-    }
-
-    /// Read from a stack's arena: three fields, or a variance-wide queue's
-    /// six.
-    #[inline]
-    fn read(v: &[f64], wide: bool) -> Acc {
-        if wide {
-            Acc {
-                s: v[0],
-                w: v[1],
-                n: v[2],
-                lo: v[3],
-                q: v[4],
-                e: v[5],
-            }
-        } else {
-            Acc {
-                s: v[0],
-                w: v[1],
-                n: v[2],
-                ..Acc::default()
-            }
-        }
-    }
-
-    /// Written to a stack's arena, as [`Acc::read`] reads it.
-    #[inline]
-    fn write(self, out: &mut [f64], wide: bool) {
-        out[0] = self.s;
-        out[1] = self.w;
-        out[2] = self.n;
-        if wide {
-            out[3] = self.lo;
-            out[4] = self.q;
-            out[5] = self.e;
-        }
-    }
-}
-
-/// Two variance segments' sums as one, about their pooled mean: Chan, Golub
-/// and LeVeque's pairwise update, `V1 = V1_a + V1_b`, `μ = μ_a + δ V1_b / V1`
-/// and `M2 = M2_a + M2_b + δ² V1_a V1_b / V1` with `δ = μ_b − μ_a`, and the
-/// pairs' products `e = e_a + e_b + V1_a V1_b`. No term
-/// is a difference of two large sums, so a window of one value has `M2 = 0`
-/// exactly at any level. The mean moves by its step as a compensated pair
-/// (`rheon_core::comp`): a plain one stops `1/(2 V1_b/V1)` rounding steps
-/// short of a value held row after row, and `M2` then settles on that gap's
-/// square instead of decaying with its history. A segment of no mass moves
-/// nothing but the row count, so it takes no step (`comp::add` says why);
-/// an empty one is `Acc::default()`.
-#[inline]
-fn merge(a: Acc, b: Acc) -> Acc {
-    let n = a.n + b.n;
-    let q = a.q + b.q;
-    let e = a.e + b.e;
-    if b.w <= 0.0 {
-        return Acc { n, q, e, ..a };
-    }
-    if a.w <= 0.0 {
-        return Acc { n, q, e, ..b };
-    }
-    let w = a.w + b.w;
-    let d = rheon_core::comp::dev(b.s, a.s, a.lo) + b.lo;
-    let (mut hi, mut lo) = (a.s, a.lo);
-    rheon_core::comp::add(&mut hi, &mut lo, d * (b.w / w));
-    Acc {
-        s: hi,
-        lo,
-        w,
-        n,
-        q: q + d * d * (a.w / w * b.w),
-        e: e + a.w * b.w,
-    }
-}
-
-/// `a` then `b`, `a` the earlier, each anchored at its own time: the sums
-/// over both, anchored at the newer looking back and at the older looking
-/// ahead, so a window's sums are always anchored at the row they are read
-/// from or discounted to it once.
-#[inline]
-fn then(
-    k: &KernelDef,
-    m: &mut DecayMemo,
-    a: Acc,
-    a_at: f64,
-    b: Acc,
-    b_at: f64,
-    var: bool,
-) -> (Acc, f64) {
-    then_by(k, k.discount_in(b_at - a_at, m), a, a_at, b, b_at, var)
-}
-
-/// [`then`] with the discount across the two anchors given: the operators
-/// of a queue are folded at the same two anchors on a row, so the caller
-/// takes it once.
-#[inline]
-fn then_by(k: &KernelDef, f: f64, a: Acc, a_at: f64, b: Acc, b_at: f64, var: bool) -> (Acc, f64) {
-    match k.direction {
-        Direction::Backward => (a.scaled(f, var).plus(b, var), b_at),
-        Direction::Forward => (a.plus(b.scaled(f, var), var), a_at),
-    }
-}
+/// A segment's sums and how two are joined, in a module of their own.
+mod acc;
+use acc::{Acc, then, then_by};
 
 /// Per row, per operator, in a stack's `vals`: where the held interval
 /// starts, the value held (NaN for none), and the row's own sums.
@@ -1054,6 +1022,14 @@ struct Queue {
     /// the bytes it had before there was one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     quant: Vec<Option<QSide>>,
+    /// Per operator, an extremum's part (`windows/extrema.rs`), `None` for
+    /// any other; empty, and then not written, for a kernel with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ext: Vec<Option<XSide>>,
+    /// A kernel with a `since` event: the raw clock of its last event's
+    /// stamp since the stretch began, for whether a window is whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    since_off: Option<i64>,
     #[serde(skip)]
     memo: Memo,
     #[serde(skip)]
@@ -1061,7 +1037,7 @@ struct Queue {
 }
 
 impl Queue {
-    fn new(var: Vec<bool>, quant: &[bool]) -> Self {
+    fn new(var: Vec<bool>, quant: &[bool], ext: &[Option<bool>], later: bool) -> Self {
         let (n, wide) = (var.len(), var.contains(&true));
         Queue {
             n,
@@ -1075,9 +1051,23 @@ impl Queue {
             } else {
                 Vec::new()
             },
+            ext: if ext.iter().any(Option::is_some) {
+                ext.iter()
+                    .map(|m| m.map(|max| XSide::new(max, later)))
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            since_off: None,
             memo: Memo::default(),
             decay: DecayMemo::default(),
         }
+    }
+
+    /// Operator `j`'s extremum part; every extremum has one (`has_width`).
+    #[inline]
+    fn ext(&self, j: usize) -> &XSide {
+        self.ext[j].as_ref().expect("an extremum keeps its part")
     }
 
     /// The quantile at `p` of operator `j`'s window, with `open`, a forward
@@ -1189,6 +1179,14 @@ impl Queue {
             }
             self.total_at = at;
         }
+        // An extremum's value joins its part: the row's `x`, its own value,
+        // as a quantile's; under a `since` event the current stamp's apart.
+        let (windowed, split) = (k.window_size.is_some(), k.since.is_some());
+        for (j, x) in self.ext.iter_mut().enumerate() {
+            if let Some(x) = x {
+                x.push(windowed, split, row[j * rw + 1]);
+            }
+        }
         // A quantile's value joins its sketch: the row's `x`, its own value
         // in either direction (`fill_forward`).
         for (j, q) in self.quant.iter_mut().enumerate() {
@@ -1212,6 +1210,11 @@ impl Queue {
             for (j, q) in self.quant.iter_mut().enumerate() {
                 if let Some(q) = q {
                     q.turn_over(k, &back.tau, |i| back.x::<W>(i, j));
+                }
+            }
+            for (j, x) in self.ext.iter_mut().enumerate() {
+                if let Some(x) = x {
+                    x.turn_over(back.len(), |i| back.x::<W>(i, j));
                 }
             }
         }
@@ -1292,6 +1295,7 @@ impl Queue {
                     q.pop(top, self.front.x::<W>(top, j));
                 }
             }
+            self.ext.iter_mut().flatten().for_each(XSide::pop);
             self.front.pop();
         }
     }
@@ -1466,6 +1470,8 @@ impl Queue {
         self.back.clear();
         self.total.clear();
         self.quant.iter_mut().flatten().for_each(QSide::clear);
+        self.ext.iter_mut().flatten().for_each(XSide::clear);
+        self.since_off = None;
     }
 
     fn len(&self) -> usize {
@@ -1475,9 +1481,19 @@ impl Queue {
     /// Whether both stacks and the running sums are at these operators:
     /// their count, which are variances, and the width that gives; and a
     /// sketch for each quantile, none for any other, each at `front`'s rows.
-    fn has_width(&self, var: &[bool], quant: &[bool]) -> bool {
+    fn has_width(&self, var: &[bool], quant: &[bool], ext: &[Option<bool>], later: bool) -> bool {
         let (n, wide) = (var.len(), var.contains(&true));
         let rows = self.front.len();
+        let ext_fits = if ext.iter().any(Option::is_some) {
+            self.ext.len() == n
+                && self.ext.iter().zip(ext).all(|(s, e)| match (s, e) {
+                    (Some(s), Some(max)) => s.has_shape(*max, later, rows),
+                    (None, None) => true,
+                    _ => false,
+                })
+        } else {
+            self.ext.is_empty()
+        };
         self.n == n
             && self.var == var
             && self.front.has_width(n, wide)
@@ -1492,6 +1508,7 @@ impl Queue {
             } else {
                 self.quant.is_empty()
             }
+            && ext_fits
     }
 }
 
@@ -1556,10 +1573,17 @@ struct Group {
     stamp_values: Vec<Vec<f64>>,
     /// Raw clock of the group's last row, while it is in the silent list.
     last_raw: Option<ClockValue>,
-    /// Neighbours in the silent list, the oldest `last_raw` at the head.
+    /// Neighbors in the silent list, the oldest `last_raw` at the head.
     prev_link: Option<usize>,
     next_link: Option<usize>,
     linked: bool,
+    /// Per moments operator, its model (`moments.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    moments: Vec<MomentsRun>,
+    /// Per profile operator, its state since the group's last restart;
+    /// empty before the group's first row after one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    profile: Vec<profile::ProfState>,
 }
 
 #[cfg(test)]
@@ -1579,6 +1603,10 @@ enum End {
     Cut,
     /// A reset discarded it: null, and never dropped.
     Discard,
+    /// The end of the input: a window whose far edge is the last row is
+    /// whole, as at a cut; every other forward window is unresolved (null,
+    /// never dropped), since rows past the input would have joined it.
+    Finish,
 }
 
 /// Per row not yet emitted.
@@ -1654,6 +1682,25 @@ pub struct Windows {
     /// row's wait count; derived by [`Windows::scratch`], never saved.
     #[serde(skip)]
     derived: Derived,
+    /// The cross-group operators, after the window operators in output
+    /// order, and where their stamps stand; absent, and not written, where
+    /// the call has none, so a state without them keeps its bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cross: Option<Box<Cross>>,
+    /// The moments operators' terms, in operator order (`moments.rs`).
+    #[serde(default, skip_serializing_if = "moments::none")]
+    moments: Arc<Vec<MomentsDef>>,
+    /// The profile operators (`ewm_profile`), after the window operators in
+    /// output order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    profiles: Arc<Vec<ProfileDef>>,
+    /// Whether a row has taken a profile's state past half of its cap:
+    /// said once a run, and kept with the state so a resumed run does not
+    /// say it again; and that warning, `(op, bytes, cap)`, not yet taken.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    state_warned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state_warning: Option<(usize, u64, u64)>,
 }
 
 /// A map as a sorted list, so the state's bytes do not depend on the
@@ -1665,312 +1712,10 @@ mod sorted_map;
 /// as `None`: a saved `session_gap = "reset"` would resume as no session
 /// gap at all. The bank never saves a `ClockCfg` -- it rebuilds one from
 /// its specs -- so this state is the first to need the form.
-mod clock_form {
-    use rheon_core::{ClockCfg, OnClockReset, SessionGap};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+mod clock_form;
 
-    #[derive(Serialize, Deserialize)]
-    struct Form {
-        gap_cap: f64,
-        on_clock_reset: OnClockReset,
-        session_gap: GapForm,
-        min_backwards_jump: f64,
-    }
-
-    #[derive(Serialize, Deserialize)]
-    enum GapForm {
-        Off,
-        Gap(f64),
-        Reset,
-    }
-
-    pub fn serialize<S: Serializer>(c: &ClockCfg, s: S) -> Result<S::Ok, S::Error> {
-        Form {
-            gap_cap: c.gap_cap,
-            on_clock_reset: c.on_clock_reset,
-            session_gap: match c.session_gap {
-                None => GapForm::Off,
-                Some(SessionGap::Gap(g)) => GapForm::Gap(g),
-                Some(SessionGap::Reset) => GapForm::Reset,
-            },
-            min_backwards_jump: c.min_backwards_jump,
-        }
-        .serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<ClockCfg, D::Error> {
-        let f = Form::deserialize(d)?;
-        Ok(ClockCfg {
-            gap_cap: f.gap_cap,
-            on_clock_reset: f.on_clock_reset,
-            session_gap: match f.session_gap {
-                GapForm::Off => None,
-                GapForm::Gap(g) => Some(SessionGap::Gap(g)),
-                GapForm::Reset => Some(SessionGap::Reset),
-            },
-            min_backwards_jump: f.min_backwards_jump,
-        })
-    }
-}
-
-/// `now` minus `last` in clock units: between two temporal values, taken in
-/// integer nanoseconds and rounded once, as the clock takes its steps.
-/// The clock between two rows of one stretch, for a window's edge: the
-/// exact difference of their raw clocks in integer nanoseconds on a
-/// temporal clock (`exact`), else of the clocks carried as bits in `off`
-/// (a number clock's own value; the policy time without a clock column),
-/// never of two origin-subtracted policy times (task 159, W3).
-/// Two rounded policy times differ by rounding, and a row exactly one
-/// window after another landed on either side of the edge (review R2, W1:
-/// 0.4 − 0.1 is not 0.3 in a double). Against a window given as a duration
-/// the comparison is between integers ([`KernelDef::window_ns`]); against
-/// one given as a number the gap is converted to seconds with the same two
-/// operations a duration's text is (`seconds_of_ns`), so a gap of exactly
-/// one window still compares equal to it.
-#[derive(Clone, Copy, Debug)]
-enum Gap {
-    Ns(i64),
-    Secs(f64),
-    /// An integer clock's gap in the column's own units, exact (task 200).
-    Int(i128),
-}
-
-/// What a row's `off` holds: a temporal clock's nanoseconds, an integer
-/// clock's value (docs/PLAN.md task 200), or the bits of a double -- a float
-/// clock's value, or the policy time without a clock column.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-enum OffForm {
-    Ns,
-    Int,
-    Bits,
-}
-
-#[inline]
-fn gap(form: OffForm, from_off: i64, to_off: i64) -> Gap {
-    match form {
-        OffForm::Ns => Gap::Ns(to_off.saturating_sub(from_off)),
-        OffForm::Int => Gap::Int(i128::from(to_off) - i128::from(from_off)),
-        OffForm::Bits => Gap::Secs(f64::from_bits(to_off as u64) - f64::from_bits(from_off as u64)),
-    }
-}
-
-impl Gap {
-    /// The gap against the kernel's window, by the comparison a model's
-    /// window decides its edge with ([`Stamp::cmp_span_ns`], task 175): in
-    /// integer nanoseconds against a window written as a duration, through
-    /// `seconds_of_ns` against one written as a number, and on a number
-    /// clock the one subtraction of the raw values. No answer (a NaN) is
-    /// `Equal`.
-    #[inline]
-    fn cmp_window(self, k: &KernelDef) -> Ordering {
-        let w = k.window_size.expect("a windowed kernel");
-        self.cmp_span(w, k.window_ns.map(i128::from))
-    }
-
-    /// The gap against zero, by the same comparison.
-    #[inline]
-    fn cmp_zero(self) -> Ordering {
-        self.cmp_span(0.0, Some(0))
-    }
-
-    /// The gap as the newer of two stamps, the older at zero.
-    #[inline]
-    fn cmp_span(self, span: f64, span_ns: Option<i128>) -> Ordering {
-        match self {
-            // `Stamp::cmp_span_ns`'s two arms for these pairs, written out
-            // where this is called a row at a time: integer nanoseconds
-            // against a span in nanoseconds, and a number clock's
-            // `(a - b) - (ra - rb)` of the pair `s, 0` with removed time 0.
-            Gap::Ns(n) => match span_ns {
-                Some(w) => i128::from(n).cmp(&w),
-                None => Stamp::Ns(i128::from(n)).cmp_span_ns(Stamp::Ns(0), span, None),
-            },
-            Gap::Secs(s) => ((s - 0.0) - 0.0)
-                .partial_cmp(&span)
-                .unwrap_or(Ordering::Equal),
-            // A gap below 2^53 is a double exactly, and compares with the
-            // span as the exact comparison does (a NaN span is `Equal`).
-            Gap::Int(n) if n.unsigned_abs() < 1 << 53 => {
-                (n as f64).partial_cmp(&span).unwrap_or(Ordering::Equal)
-            }
-            Gap::Int(n) => Stamp::Int(n, 0.0).cmp_span_ns(Stamp::Int(0, 0.0), span, None),
-        }
-    }
-}
-
-/// `now` minus `last` in clock units: between two temporal values, taken
-/// in integer nanoseconds and rounded once; between two integer ones, in
-/// integers and rounded once (task 200).
-fn elapsed(now: ClockValue, last: ClockValue) -> f64 {
-    match (now, last) {
-        (ClockValue::Ns(c), ClockValue::Ns(p)) => seconds_of_ns(i128::from(c) - i128::from(p)),
-        (ClockValue::I64(c), ClockValue::I64(p)) => int_step_f64(c, p),
-        (c, p) => match c.int_step(p) {
-            Some(step) => step as f64,
-            None => c.seconds() - p.seconds(),
-        },
-    }
-}
-
-/// An integer clock's step `c - p` as a double, rounded once: the 64-bit
-/// difference where it fits, which converts with one instruction, the 128-bit
-/// one where it does not, which is a library call. Both round the same
-/// integer to the nearest double, ties to even.
-#[inline(always)]
-fn int_step_f64(c: i64, p: i64) -> f64 {
-    match c.checked_sub(p) {
-        Some(d) => d as f64,
-        None => (i128::from(c) - i128::from(p)) as f64,
-    }
-}
-
-/// Whether `now` is after `last`: `elapsed(now, last) > 0.0`, the sign of the
-/// step, which between two temporal values, or two integer ones, is the
-/// integers' own.
-#[inline]
-fn is_after(now: ClockValue, last: ClockValue) -> bool {
-    match (now, last) {
-        (ClockValue::Ns(c), ClockValue::Ns(p)) | (ClockValue::I64(c), ClockValue::I64(p)) => c > p,
-        _ => elapsed(now, last) > 0.0,
-    }
-}
-
-/// Whether `now` is more than `cap` clock units after `last`: on an
-/// integer clock their difference in integers against the cap, exactly
-/// (task 200), and as [`elapsed`] gives it otherwise.
-#[inline]
-fn past_cap(now: ClockValue, last: ClockValue, cap: f64) -> bool {
-    match (now, last) {
-        // Between two temporal values, a step short of the cap's whole
-        // seconds is not past it, as the integers say, with no conversion to
-        // seconds: a step of fewer whole seconds than `floor(cap)` converts
-        // to at most `floor(cap)` (the conversion never rounds past the next
-        // whole second), which is not more than `cap`. Any other step is
-        // converted and compared, as `elapsed` gives it.
-        (ClockValue::Ns(c), ClockValue::Ns(p)) => {
-            let step = i128::from(c) - i128::from(p);
-            if (1.0..4.0e9).contains(&cap)
-                && step < i128::from(u32::try_from(cap as u64).unwrap_or(0)) * 1_000_000_000
-            {
-                return false;
-            }
-            seconds_of_ns(step) > cap
-        }
-        // Neither pair has an integer step: `elapsed` is the difference.
-        (ClockValue::F64(c), ClockValue::F64(p)) => c - p > cap,
-        // An integer clock's step below 2^53 is a double exactly, and a
-        // double compares with the cap as the exact comparison does
-        // (`cmp_int_f64`: a NaN cap is past by neither); a larger step takes
-        // the exact comparison, out of line.
-        (ClockValue::I64(c), ClockValue::I64(p)) => match c.checked_sub(p) {
-            Some(d) if d.unsigned_abs() < 1 << 53 => d as f64 > cap,
-            _ => past_cap_general(now, last, cap),
-        },
-        _ => past_cap_general(now, last, cap),
-    }
-}
-
-/// [`past_cap`] for any other pair, out of line: the exact comparison of an
-/// integer clock's step against the cap takes a conversion to 128 bits that
-/// the rows of a float or temporal clock, taking the arms above, would
-/// otherwise pay for on every row.
-#[inline(never)]
-fn past_cap_general(now: ClockValue, last: ClockValue, cap: f64) -> bool {
-    match now.int_step(last) {
-        Some(step) => rheon_core::cmp_int_f64(step, cap) == Some(Ordering::Greater),
-        None => elapsed(now, last) > cap,
-    }
-}
-
-fn refuse_backwards(
-    adv: &ClockAdvance,
-    seq: u64,
-    prev: Option<ClockValue>,
-    now: Option<ClockValue>,
-) -> Result<(), Refusal> {
-    match adv.backwards {
-        Some(raw) => Err(Refusal::Backwards {
-            seq,
-            back: -raw,
-            prev,
-            now,
-            min_backwards_jump: adv.disorder.map(|d| d.min_backwards_jump),
-        }),
-        None => Ok(()),
-    }
-}
-
-/// `∫_a^b λ^(T - s) ds` for a backward kernel, `∫_a^b λ^(s - T) ds` for a
-/// forward one: the decayed mass of `[a, b]` seen from `T`, `a <= b`.
-#[inline]
-fn mass_between(k: &KernelDef, t: f64, a: f64, b: f64) -> f64 {
-    if b <= a {
-        return 0.0;
-    }
-    match k.direction {
-        // ∫_a^b λ^(T - s) ds = M(T - a) - M(T - b)
-        Direction::Backward => k.mass(t - a) - k.mass(t - b),
-        // ∫_a^b λ^(s - T) ds = M(b - T) - M(a - T)
-        Direction::Forward => k.mass(b - t) - k.mass(a - t),
-    }
-}
-
-/// [`mass_between`] with both masses taken through `memo`: a window's cut
-/// reads the same two distances for each operator of a kernel.
-#[inline]
-fn mass_between_in(k: &KernelDef, memo: &mut DecayMemo, t: f64, a: f64, b: f64) -> f64 {
-    if b <= a {
-        return 0.0;
-    }
-    match k.direction {
-        Direction::Backward => k.mass_cut_in(t - a, memo) - k.mass_far_in(t - b, memo),
-        Direction::Forward => k.mass(b - t) - k.mass(a - t),
-    }
-}
-
-/// [`mass_between`] for a forward kernel's interval ending at the next row
-/// `b`, starting at its own row `a = t`: one mass, of the distance to the next
-/// row, through `memo`, which a regular clock asks again at the next row.
-#[inline]
-fn mass_between_fill(k: &KernelDef, memo: &mut DecayMemo, t: f64, a: f64, b: f64) -> f64 {
-    if b <= a {
-        return 0.0;
-    }
-    k.mass_in(b - t, memo) - k.mass(a - t)
-}
-
-/// [`mass_between`] for a forward kernel's close: the open row's interval
-/// `[a, b]` seen from the row `t` being closed, its two masses on slots of
-/// their own beside the one a row's interval to the next row takes
-/// ([`mass_between_in`]), so each repeats where the clock does.
-#[inline]
-fn mass_between_close(k: &KernelDef, memo: &mut DecayMemo, t: f64, a: f64, b: f64) -> f64 {
-    if b <= a {
-        return 0.0;
-    }
-    k.mass_slot(b - t, &mut memo.mass_far) - k.mass_slot(a - t, &mut memo.fwd().mass_open)
-}
-
-/// [`mass_between`] for a backward kernel's interval ending at `t` -- a
-/// value held from `a` to the row's own time -- with `memo` holding the mass
-/// of the distance back to `a` that the last ask was for: where operators of
-/// a kernel hold from the same time (they read one column, as a mean and a
-/// spread of it do), it is taken once, and where a clock steps by the same
-/// amount row after row, once for the stream. A forward kernel's is
-/// [`mass_between`]'s.
-#[inline]
-fn mass_held_to(k: &KernelDef, t: f64, a: f64, memo: &mut DecayMemo) -> f64 {
-    // The interval is `[a, b]` with `b` the row's own time `t`, as `mass_between`
-    // takes it, its far end's mass `M(t - b)` read where it is.
-    let b = t;
-    if b <= a {
-        return 0.0;
-    }
-    match k.direction {
-        Direction::Backward => k.mass_held_in(t - a, memo) - k.mass(t - b),
-        Direction::Forward => mass_between(k, t, a, b),
-    }
-}
+mod gap;
+use gap::*;
 
 /// Whether operator `o` can run on its kernel: a mean or a variance with
 /// no decay needs a window, and a variance looks back only (task 212).
@@ -1987,6 +1732,8 @@ fn check_op(o: usize, op: &OpDef, k: &KernelDef) -> Result<(), String> {
              the rows after it"
         ));
     }
+    moments::check_op(o, op, k)?;
+    extrema::check_op(o, op, k)?;
     match (op.stat, op.quantile) {
         (Stat::Quantile, Some(p)) if p > 0.0 && p < 1.0 => {}
         (Stat::Quantile, p) => {
@@ -2014,20 +1761,36 @@ macro_rules! by_width {
 }
 
 // After `by_width!`, which it uses.
+mod check;
+mod cross;
 #[cfg(test)]
 mod empty_sum_tests;
+#[cfg(test)]
+mod extrema_tests;
 mod held_mass;
 #[cfg(test)]
 mod int_clock_tests;
 mod keys;
 #[cfg(test)]
 mod memo_tests;
+mod moments;
 mod plain;
+mod profile;
 
+pub use cross::{
+    CROSS_STATE_BYTES, CROSS_STATE_BYTES_CEILING, Cross, CrossClosed, CrossDef, CrossStat, Interp,
+    RankMethod,
+};
 use keys::IntGroups;
 pub(crate) use keys::{ChunkKeys, session_hashes};
+pub use moments::MomentsDef;
+use moments::{MomentsRun, check_moments, learn_moments, read_moments};
 pub(crate) use plain::PlainRows;
 use plain::{Derived, Parts};
+pub use profile::{
+    BUCKET_BYTES as PROFILE_BUCKET_BYTES, PROFILE_STATE_BYTES, PROFILE_STATE_BYTES_CEILING,
+    PhaseSpan, ProfileDef, ProfileStat, canonical_zone,
+};
 
 /// Group keys, as text, to their groups: hashed with a fixed, fast hasher,
 /// which the saved state never sees ([`sorted_map`]).
@@ -2061,16 +1824,51 @@ impl Windows {
         ops: Vec<OpDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
-        Self::build(kernels, ops, clock_cfg).map_err(|e| defect(&e))
+        Self::with_moments(kernels, ops, Vec::new(), clock_cfg)
+    }
+
+    /// [`Self::new`] with cross-group operators beside the window
+    /// operators, after them in output order.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn with_cross(
+        kernels: Vec<KernelDef>,
+        ops: Vec<OpDef>,
+        cross: Vec<CrossDef>,
+        clock_cfg: ClockCfg,
+    ) -> Result<Self, String> {
+        Self::with_cross_moments(kernels, ops, cross, Vec::new(), clock_cfg)
+    }
+
+    /// [`Self::new`] with profile operators after the window operators and
+    /// the cross-group ones.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn with_profiles(
+        kernels: Vec<KernelDef>,
+        ops: Vec<OpDef>,
+        profiles: Vec<ProfileDef>,
+        clock_cfg: ClockCfg,
+    ) -> Result<Self, String> {
+        Self::with_all(kernels, ops, Vec::new(), Vec::new(), profiles, clock_cfg)
     }
 
     fn build(
         kernels: Vec<KernelDef>,
         ops: Vec<OpDef>,
+        cross: Vec<CrossDef>,
+        profiles: Vec<ProfileDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
-        if ops.is_empty() {
+        if ops.is_empty() && cross.is_empty() && profiles.is_empty() {
             return Err("at least one operator is needed".into());
+        }
+        for p in &profiles {
+            p.check()?;
         }
         for k in &kernels {
             k.check()?;
@@ -2098,8 +1896,14 @@ impl Windows {
             .iter()
             .filter(|k| k.direction == Direction::Forward)
             .count();
+        let n_cross = cross.len();
+        let first_out = ops.len();
         Ok(Self {
-            n_outputs: ops.len(),
+            cross: (n_cross > 0).then(|| Box::new(Cross::new(cross, first_out))),
+            n_outputs: ops.len() + n_cross + profiles.len(),
+            profiles: Arc::new(profiles),
+            state_warned: false,
+            state_warning: None,
             n_forward: u32::try_from(n_forward).map_err(|_| "too many kernels")?,
             kernels: Arc::new(kernels),
             ops: Arc::new(ops),
@@ -2122,7 +1926,13 @@ impl Windows {
             scratch_row: vec![0.0; ROW_VAR * widest],
             scratch_sum: vec![0.0; SUM_VAR * widest],
             derived: Derived::default(),
+            moments: Arc::new(Vec::new()),
         })
+    }
+
+    /// The profile operators, after [`Self::ops`] in output order.
+    pub fn profiles(&self) -> &[ProfileDef] {
+        &self.profiles
     }
 
     /// Per kernel, which of its operators are variances: what its queue is
@@ -2143,6 +1953,20 @@ impl Windows {
             .collect()
     }
 
+    /// Per kernel, which of its operators are extrema (`Some(true)` a
+    /// maximum), and whether ties go to the later row (looking ahead).
+    fn ext_of(&self, ki: usize) -> (Vec<Option<bool>>, bool) {
+        let ext = self.members[ki]
+            .iter()
+            .map(|&o| match self.ops[o].stat {
+                Stat::Max => Some(true),
+                Stat::Min => Some(false),
+                _ => None,
+            })
+            .collect();
+        (ext, self.kernels[ki].direction == Direction::Forward)
+    }
+
     /// Say whether the rows carry a group column (review R2, W3): with
     /// one, a session is each group's and the stream's clock takes none;
     /// without, the stream is the one group, and its session change ends
@@ -2151,185 +1975,15 @@ impl Windows {
         self.grouped = grouped;
     }
 
-    /// Whether a core read back from a state file holds what every method
-    /// here indexes by (review 2026-10-06, PD1): the loader compared the
-    /// kernels, the operators and the clock with its own call's and the
-    /// held rows' count with the frame's, and took the rest on trust, so a
-    /// damaged file that still decoded panicked at the next call. The rest:
-    /// each kernel's operators and the output count are the operators',
-    /// the held values `n_outputs` a held row, the rows ready among those
-    /// held, each group at its kernels' widths with its waiting rows held
-    /// and still open by exactly the windows left to close over them, the
-    /// silent list a list of the groups, and the keys the groups one to
-    /// one. `Err` names the first that fails.
-    ///
-    /// # Errors
-    ///
-    /// A core that is none this module could have built and fed.
-    pub fn check(&self) -> Result<(), String> {
-        for k in self.kernels.iter() {
-            k.check()?;
-        }
-        let (nk, no) = (self.kernels.len(), self.ops.len());
-        let mut members = vec![Vec::new(); nk];
-        for (o, op) in self.ops.iter().enumerate() {
-            match members.get_mut(op.kernel) {
-                Some(m) => m.push(o),
-                None => return Err(format!("operator {o} names kernel {}", op.kernel)),
-            }
-            check_op(o, op, &self.kernels[op.kernel])?;
-        }
-        if no == 0 || members != *self.members || members.iter().any(Vec::is_empty) {
-            return Err("its kernels' operators are not its operators".into());
-        }
-        if self.n_outputs != no {
-            return Err(format!("{} outputs for {no} operators", self.n_outputs));
-        }
-        let is_forward = |k: &KernelDef| k.direction == Direction::Forward;
-        let forward = self.kernels.iter().filter(|k| is_forward(k)).count();
-        if self.n_forward as usize != forward {
-            return Err(format!("{} forward kernels of {forward}", self.n_forward));
-        }
-        let held = self.held_meta.len();
-        if held.checked_mul(no) != Some(self.held_values.len()) {
-            return Err(format!(
-                "{} values held for {held} rows of {no} outputs",
-                self.held_values.len()
-            ));
-        }
-        let kept = self.held_meta.iter().take(self.ready).filter(|m| !m.drop);
-        if self.ready > held || self.ready_kept != kept.count() {
-            return Err(format!("{} rows ready of {held} held", self.ready));
-        }
-        if self.held_first.checked_add(held as u64) != Some(self.next_seq) {
-            return Err(format!(
-                "{held} rows held from row {} before row {}",
-                self.held_first, self.next_seq
-            ));
-        }
-        // Each group at its kernels' widths, and the windows still open over
-        // each held row, which `close` and `flush_group` count down.
-        let n_wait = u32::from(
-            self.kernels
-                .iter()
-                .any(|k| k.direction == Direction::Backward && k.closed.near(Direction::Backward)),
-        );
-        let is_held = |seq: u64| seq >= self.held_first && seq < self.next_seq;
-        let widths = |v: &[Vec<f64>]| {
-            v.len() == nk
-                && v.iter()
-                    .zip(self.members.iter())
-                    .all(|(x, m)| x.len() == m.len())
-        };
-        let mut open = vec![0u32; held];
-        let var: Vec<Vec<bool>> = (0..nk).map(|ki| self.var_of(ki)).collect();
-        let quant: Vec<Vec<bool>> = (0..nk).map(|ki| self.quant_of(ki)).collect();
-        for (gi, g) in self.groups.iter().enumerate() {
-            let fits = g.queues.len() == nk
-                && g.queues
-                    .iter()
-                    .zip(var.iter().zip(&quant))
-                    .all(|(q, (v, qu))| q.has_width(v, qu))
-                && g.open.len() == nk
-                && widths(&g.open_x)
-                && widths(&g.open_held)
-                && widths(&g.stamp_values)
-                && g.closed.len() == nk
-                && g.closed.iter().all(|&c| c <= g.waiting.len())
-                && g.last_valued.len() == no
-                && g.held.len() == no
-                && (forward > 0 || g.waiting.is_empty())
-                && (n_wait > 0 || g.pending.is_empty())
-                && g.waiting.iter().all(|w| is_held(w.seq))
-                && g.pending.iter().all(|&s| is_held(s))
-                && (!g.linked || g.last_raw.is_some());
-            if !fits {
-                return Err(format!("group {gi} does not fit its kernels and held rows"));
-            }
-            for (i, w) in g.waiting.iter().enumerate() {
-                let r = (w.seq - self.held_first) as usize;
-                let still = self.kernels.iter().zip(&g.closed);
-                open[r] += still.filter(|&(k, &c)| is_forward(k) && i >= c).count() as u32;
-            }
-            for &s in &g.pending {
-                open[(s - self.held_first) as usize] += n_wait;
-            }
-        }
-        if self.held_meta.iter().zip(&open).any(|(m, &o)| m.open != o) {
-            return Err("a held row's open windows are not the ones still open over it".into());
-        }
-        self.check_links()?;
-        // The keys name the groups one to one: `group` makes each group
-        // under its key, and `push` reads a group by the index a key gives.
-        let mut named = vec![false; self.groups.len()];
-        for &gi in self.index.values().chain(&self.null_group) {
-            match named.get_mut(gi) {
-                Some(seen) if !*seen => *seen = true,
-                _ => return Err("its keys do not name its groups one to one".into()),
-            }
-        }
-        if named.contains(&false) {
-            return Err("its keys do not name its groups one to one".into());
-        }
-        Ok(())
-    }
-
-    /// The silent list: links inside the groups, from the head through each
-    /// linked group once, back links that agree, the tail last, and no
-    /// unlinked group holding a link ([`Self::check`]).
-    fn check_links(&self) -> Result<(), String> {
-        let n = self.groups.len();
-        let bad = || Err("its silent list is not a list of its groups".to_string());
-        let inside = |l: Option<usize>| l.is_none_or(|i| i < n);
-        let mut links = self.groups.iter().flat_map(|g| [g.prev_link, g.next_link]);
-        if !inside(self.head) || !inside(self.tail) || !links.all(inside) {
-            return bad();
-        }
-        let (mut at, mut prev, mut walked) = (self.head, None, 0);
-        while let Some(i) = at {
-            let g = &self.groups[i];
-            if walked == n || !g.linked || g.prev_link != prev {
-                return bad();
-            }
-            (prev, at, walked) = (Some(i), g.next_link, walked + 1);
-        }
-        let linked = self.groups.iter().filter(|g| g.linked).count();
-        let stray = self
-            .groups
-            .iter()
-            .any(|g| !g.linked && (g.prev_link.is_some() || g.next_link.is_some()));
-        if prev != self.tail || walked != linked || stray {
-            return bad();
-        }
-        Ok(())
-    }
-
-    /// One named damage, as a bit flip or a truncated array in a state file
-    /// would leave the core: for the loader's test in `windows_frame.rs`,
-    /// the fields being this module's.
-    #[cfg(test)]
-    pub(crate) fn damage(&mut self, what: &str) {
-        match what {
-            "held_values" => {
-                self.held_values.pop_back();
-            }
-            "n_outputs" => self.n_outputs = 0,
-            "queue" => self.groups[0].queues[0].n += 1,
-            "link" => self.head = Some(self.groups.len()),
-            "ready" => self.ready = self.held_meta.len() + 1,
-            "waiting" => {
-                let past = self.held_first + self.held_meta.len() as u64;
-                self.groups[0].waiting[0].seq = past;
-            }
-            other => unreachable!("no damage {other:?}"),
-        }
-    }
-
     /// The scratch buffers, which a loaded state lacks.
     #[inline]
     fn scratch(&mut self) {
         if !self.derived.ready {
-            self.derived = Derived::of(&self.kernels, self.derived.off);
+            // The plain loop has no moments (`moments.rs`), and a profile reads
+            // a group's own state, which it knows none of.
+            let off = self.derived.off || !self.moments.is_empty() || !self.profiles.is_empty();
+            self.derived = Derived::of(&self.kernels, &self.ops, &self.members, off);
+            self.derived.n_wait |= u32::from(self.profiles.iter().any(ProfileDef::waits));
         }
         if self.scratch_sum.is_empty() {
             let widest = self.members.iter().map(Vec::len).max().unwrap_or(0);
@@ -2358,6 +2012,9 @@ impl Windows {
             self.ops = Arc::clone(&other.ops);
             self.members = Arc::clone(&other.members);
         }
+        if self.moments == other.moments {
+            self.moments = Arc::clone(&other.moments);
+        }
     }
 
     pub fn kernels(&self) -> &[KernelDef] {
@@ -2366,6 +2023,23 @@ impl Windows {
 
     pub fn ops(&self) -> &[OpDef] {
         &self.ops
+    }
+
+    /// The cross-group operators, after [`Self::ops`] in output order.
+    pub fn cross_defs(&self) -> &[CrossDef] {
+        self.cross.as_ref().map_or(&[], |c| c.defs())
+    }
+
+    /// The first row to take a cross-group operator's, or a profile's,
+    /// state past half of its cap, once a run, as `(of, op, bytes, cap)`,
+    /// taken by this call; `op` is the operator's index among those of its
+    /// kind.
+    pub fn take_state_warning(&mut self) -> Option<(StateOf, usize, u64, u64)> {
+        if let Some((op, bytes, cap)) = self.cross.as_mut().and_then(|c| c.take_warning()) {
+            return Some((StateOf::Cross, op, bytes, cap));
+        }
+        let (op, bytes, cap) = self.state_warning.take()?;
+        Some((StateOf::Profile, op, bytes, cap))
     }
 
     pub fn clock_cfg(&self) -> &ClockCfg {
@@ -2423,7 +2097,10 @@ impl Windows {
         }
         let gi = self.groups.len();
         let queues = (0..self.kernels.len())
-            .map(|ki| Queue::new(self.var_of(ki), &self.quant_of(ki)))
+            .map(|ki| {
+                let (ext, later) = self.ext_of(ki);
+                Queue::new(self.var_of(ki), &self.quant_of(ki), &ext, later)
+            })
             .collect();
         self.groups.push(Group {
             clock: ClockState::new(),
@@ -2459,6 +2136,8 @@ impl Windows {
             prev_link: None,
             next_link: None,
             linked: false,
+            moments: self.moments.iter().map(MomentsRun::new).collect(),
+            profile: Vec::new(),
         });
         match key {
             Some(k) => {
@@ -2542,6 +2221,19 @@ impl Windows {
         self.scratch();
         let seq = self.next_seq;
         let gi = row.group;
+        // The cross-group operators' state with this row, before anything
+        // moves: a row that would take an operator past its cap is refused.
+        let cross_held = match &self.cross {
+            Some(c) => Some(c.check_row(row, seq, self.n_outputs)?),
+            None => None,
+        };
+        // A profile's state with this row, before anything moves: a row
+        // that would take one past its cap is refused.
+        let said = if self.profiles.is_empty() {
+            None
+        } else {
+            profile::check_row(&self.profiles, &self.groups[gi], row.clock, row.values, seq)?
+        };
         // A plain step forward on both clocks is never refused: each steps
         // where it stands, with no copy of the state to keep or put back.
         // Any other row steps both on copies, kept only once neither
@@ -2600,6 +2292,27 @@ impl Windows {
             self.flush_stamps_before(now);
         }
 
+        // The cross-group operators' stamp: a later one closes the open
+        // stamp, whose rows are the ones before this; a reset discards it.
+        if let Some(c) = self.cross.as_mut() {
+            let index = &self.index;
+            let find = |k: &str| index.get(k).copied();
+            let mut rows = cross::Rows {
+                first: self.held_first,
+                n_outputs: self.n_outputs,
+                values: &mut self.held_values,
+                meta: &mut self.held_meta,
+                find: &find,
+            };
+            c.before_row(
+                row.clock,
+                adv.reset,
+                adv.session_changed || adv.capped,
+                &mut rows,
+                seq,
+            );
+        }
+
         // One push each: `extend(repeat_n(..))` was a call to a fill routine
         // for the one or two values a row holds.
         for _ in 0..self.n_outputs {
@@ -2611,11 +2324,27 @@ impl Windows {
         // own windows are read at the end of this push (review R1, C1: they
         // were never read without a clock, and every such output was null).
         let n_wait = self.derived.n_wait;
+        let cross_wait = self.cross.as_ref().map_or(0, |c| u32::from(c.waits()));
         self.held_meta.push_back(Meta {
-            open: self.n_forward + n_wait,
+            open: self.n_forward + n_wait + cross_wait,
             accept: row.accept,
             drop: false,
         });
+        if let Some(c) = self.cross.as_mut() {
+            let index = &self.index;
+            let find = |k: &str| index.get(k).copied();
+            let mut rows = cross::Rows {
+                first: self.held_first,
+                n_outputs: self.n_outputs,
+                values: &mut self.held_values,
+                meta: &mut self.held_meta,
+                find: &find,
+            };
+            c.row(row, seq, &mut rows);
+            if let Some(held) = cross_held {
+                c.note_held(&held);
+            }
+        }
 
         let g = &mut self.groups[gi];
         if let Some(clock) = clock {
@@ -2653,6 +2382,8 @@ impl Windows {
         };
         let (tau, off, form) = (g.tau, g.off, g.form);
         let new_stamp = g.stamp != row.clock || !has_clock;
+        // A queue past its extrema's cap: the row is taken and refused after.
+        let mut over: Option<(usize, usize)> = None;
 
         // Forward kernels: the windows this row reaches past close first --
         // it is not in them -- with the kernel's open row, the last one,
@@ -2684,6 +2415,11 @@ impl Windows {
                 |input| row.values[input],
                 &mut held,
             );
+            if let Some(limit) = self.derived.cap_rows[ki]
+                && g.queues[ki].len() > limit
+            {
+                over = Some((ki, g.queues[ki].len()));
+            }
         }
         if !self.derived.forward.is_empty() {
             retire(&self.kernels, g);
@@ -2696,6 +2432,13 @@ impl Windows {
             let ki = ki as usize;
             let k = &self.kernels[ki];
             let m = &self.members[ki];
+            if k.since.is_some() && new_stamp {
+                g.queues[ki]
+                    .ext
+                    .iter_mut()
+                    .flatten()
+                    .for_each(XSide::new_stamp);
+            }
             if !k.closed.near(Direction::Backward) && new_stamp {
                 by_width!(
                     g.queues[ki].wide(),
@@ -2712,13 +2455,20 @@ impl Windows {
                     )
                 );
             }
+            if k.since.is_some_and(|i| row.values[i] == 1.0) {
+                extrema::event(k, &self.ops, m, g, ki, &mut self.scratch_sum, off, form);
+            }
             // A value is held from the operator's last valued row; the first
             // of a stretch from before it: from `-inf`, or from a window
             // back where one bounds the mass.
             let (rw, wide) = (g.queues[ki].row_w(), g.queues[ki].wide());
             for (j, &o) in m.iter().enumerate() {
                 let v = row.values[self.ops[o].input];
-                let v = if usable(v) { v } else { f64::NAN };
+                let v = if usable(v) && self.ops[o].stat != Stat::Moments {
+                    v
+                } else {
+                    f64::NAN
+                };
                 let start = if g.last_valued[o].is_nan() {
                     k.window_size.map_or(f64::NEG_INFINITY, |w| tau - w)
                 } else {
@@ -2757,7 +2507,16 @@ impl Windows {
                 &self.scratch_row[..rw * m.len()],
                 &mut self.scratch_sum,
             );
-            if !k.closed.near(Direction::Backward) {
+            if !self.moments.is_empty() {
+                let now = row.clock.unwrap_or(ClockValue::F64(tau));
+                learn_moments(k, ki, &self.ops, &self.moments, g, row.values, now);
+            }
+            if let Some(limit) = self.derived.cap_rows[ki]
+                && g.queues[ki].len() > limit
+            {
+                over = Some((ki, g.queues[ki].len()));
+            }
+            if !k.waits() {
                 let complete = k.window_size.is_none_or(|w| tau >= w);
                 let held = Held {
                     first: self.held_first,
@@ -2768,10 +2527,27 @@ impl Windows {
                 write_backward(&self.ops, m, seq, &g.stamp_values[ki], complete, held);
             }
         }
+        if !self.profiles.is_empty() {
+            let out = profile::Out {
+                defs: &self.profiles,
+                first: self.ops.len() + self.cross.as_ref().map_or(0, |c| c.defs().len()),
+            };
+            let mut held = Held {
+                first: self.held_first,
+                n_outputs: self.n_outputs,
+                values: &mut self.held_values,
+                meta: &mut self.held_meta,
+            };
+            profile::row(&out, g, row.clock, row.values, new_stamp, seq, &mut held);
+        }
         if n_wait > 0 {
             g.pending.push(seq);
         }
         g.stamp = row.clock;
+        if let Some(w) = said.filter(|_| !self.state_warned) {
+            self.state_warned = true;
+            self.state_warning = Some(w);
+        }
 
         if self.n_forward > 0 {
             g.waiting.push_back(Wait { seq, tau, off });
@@ -2786,7 +2562,19 @@ impl Windows {
             self.flush_group(gi);
         }
         self.advance_ready();
-        Ok(())
+        match over {
+            Some((ki, rows)) => {
+                let q = &self.groups[gi].queues[ki];
+                let m = &self.members[ki];
+                Err(Refusal::OverCap {
+                    seq,
+                    rows,
+                    row_bytes: extrema::queue_bytes(q) / rows.max(1),
+                    cap: extrema::cap_of(&self.kernels[ki], &self.ops, m).unwrap_or(0),
+                })
+            }
+            None => Ok(()),
+        }
     }
 
     /// Resolve the backward windows of every group's stamp before `now`.
@@ -2837,6 +2625,8 @@ impl Windows {
             scratch_sum,
             n_forward,
             derived,
+            moments,
+            profiles,
             ..
         } = self;
         (
@@ -2852,6 +2642,8 @@ impl Windows {
                 scratch_sum,
                 n_wait: derived.n_wait,
                 n_forward: *n_forward,
+                moments: moments.as_slice(),
+                profiles: profiles.as_slice(),
             },
             groups,
         )
@@ -2988,14 +2780,37 @@ impl Windows {
         self.emit(rows)
     }
 
+    /// The end of an input whose state is saved to go on: every backward
+    /// window still waiting on the last stamp is read as it stands, and the
+    /// rows every kernel has now resolved are ready for [`Self::drain`]. No
+    /// forward window is touched, and the core takes rows as before: a row
+    /// at the stamp read would have joined those windows, which is why a
+    /// run resumed on such a row is refused, and one after it reads the same
+    /// windows as one that went on without this call.
+    pub fn settle(&mut self) {
+        self.scratch();
+        for gi in 0..self.groups.len() {
+            self.flush_group(gi);
+        }
+        self.advance_ready();
+    }
+
     /// The end of the input: every backward window still waiting is read
-    /// as it stands, every forward window still open is unresolved -- null
-    /// whatever `partial` says, never dropped -- and every row goes out.
-    /// The core takes no more rows after this.
+    /// as it stands, a forward window under "right" or "both" whose far edge
+    /// is its group's last row is whole (no later row could join it), every
+    /// other forward window still open is unresolved -- null whatever
+    /// `partial` says, never dropped -- and every row goes out. The core
+    /// takes no more rows after this.
     pub fn finish(&mut self) -> Emitted {
         self.scratch();
         for gi in 0..self.groups.len() {
             self.flush_group(gi);
+            let (mut p, groups) = self.split();
+            // The state a finished core saves is as it always was: the
+            // closing leaves the group's restart flag where it was.
+            let restart = groups[gi].restart;
+            end_in(&mut p, &mut groups[gi], End::Finish);
+            groups[gi].restart = restart;
             let g = &mut self.groups[gi];
             g.waiting.clear();
             g.closed.iter_mut().for_each(|c| *c = 0);
@@ -3006,6 +2821,18 @@ impl Windows {
             }
             g.open.iter_mut().for_each(|o| *o = None);
             self.unlink(gi);
+        }
+        if let Some(c) = self.cross.as_mut() {
+            let index = &self.index;
+            let find = |k: &str| index.get(k).copied();
+            let mut rows = cross::Rows {
+                first: self.held_first,
+                n_outputs: self.n_outputs,
+                values: &mut self.held_values,
+                meta: &mut self.held_meta,
+                find: &find,
+            };
+            c.finish(&mut rows, self.next_seq);
         }
         self.ready = self.held_meta.len();
         self.ready_kept = self.held_meta.iter().filter(|m| !m.drop).count();
@@ -3039,224 +2866,10 @@ impl Windows {
     }
 }
 
-/// A forward kernel's open row, once the next row at `end` has ended its
-/// interval, written as a queue row into `row`: a mean weighs the held
-/// value over `[tau, end)`, a sum counts the row's own value, and only a
-/// row with its own value counts toward `min_samples`.
-#[allow(clippy::too_many_arguments)]
-fn fill_forward<const W: bool>(
-    k: &KernelDef,
-    ops: &[OpDef],
-    members: &[usize],
-    tau: f64,
-    end: f64,
-    x: &[f64],
-    held: &[f64],
-    row: &mut [f64],
-    memo: &mut DecayMemo,
-) {
-    for (j, &o) in members.iter().enumerate() {
-        let (v, h) = (x[j], held[j]);
-        let n = f64::from(u8::from(!v.is_nan()));
-        let acc = match ops[o].stat {
-            Stat::Mean if !h.is_nan() => {
-                let mass = mass_between_fill(k, memo, tau, tau, end);
-                Acc {
-                    s: mass * h,
-                    w: mass,
-                    n,
-                    ..Acc::default()
-                }
-            }
-            // A variance has no forward kernel (`check_op`).
-            Stat::Mean | Stat::Var | Stat::Std => Acc::default(),
-            Stat::Sum | Stat::Rate | Stat::Quantile => Acc {
-                s: if v.is_nan() { 0.0 } else { v },
-                w: 0.0,
-                n,
-                ..Acc::default()
-            },
-        };
-        let b = j * row_w::<W>();
-        row[b] = tau;
-        // A quantile counts the row's own value, as a sum does, and its
-        // sketch reads it here (`Queue::push`).
-        row[b + 1] = if ops[o].stat == Stat::Quantile { v } else { h };
-        acc.write(&mut row[b + 2..], W);
-    }
-}
-
-/// Each operator's value of a backward window at stamp time `tau`, the
-/// queue evicted to the window first, into `out`; NaN where null.
-#[allow(clippy::too_many_arguments)]
-fn read_backward<const W: bool>(
-    k: &KernelDef,
-    ops: &[OpDef],
-    members: &[usize],
-    q: &mut Queue,
-    scratch: &mut [f64],
-    tau: f64,
-    off: i64,
-    form: OffForm,
-    out: &mut [f64],
-) {
-    if k.window_size.is_some() {
-        // The row at the far edge is in under "left" and "both". Ages are
-        // the exact gap from the row to this one (`gap`), one form
-        // everywhere, so a row exactly a window old lands on the same side
-        // every time.
-        let far = k.closed.far(Direction::Backward);
-        q.evict::<W>(k, scratch, |_, _, t_off| {
-            let age = gap(form, t_off, off).cmp_window(k);
-            if far {
-                age == Ordering::Greater
-            } else {
-                age != Ordering::Less
-            }
-        });
-    }
-    let span = k.window_size.map_or(tau, |w| w.min(tau));
-    let edge = k.window_size.map_or(f64::NEG_INFINITY, |w| tau - w);
-    for (j, &o) in members.iter().enumerate() {
-        let op = &ops[o];
-        let var = op.stat.is_var();
-        let Some((sum, at)) = q.sum_op::<W>(k, j) else {
-            out[j] = empty_value(op);
-            continue;
-        };
-        if op.stat == Stat::Quantile {
-            // The sums count the values; the sketches hold them.
-            out[j] = if sum.n < f64::from(op.min_samples) {
-                f64::NAN
-            } else {
-                let p = op.quantile.expect("a quantile has a level (`check_op`)");
-                q.quantile(k, j, p, None).unwrap_or(f64::NAN)
-            };
-            continue;
-        }
-        // The oldest held value's interval may start before the window:
-        // only the part inside counts, so a mean (and a variance) takes the
-        // window less the rows up to that one, then the row's mass inside,
-        // with no subtraction to cancel. Each operator's oldest valued row
-        // is its own.
-        let cut = match (k.window_size, op.stat.weighs_held()) {
-            (Some(_), true) => q
-                .find_oldest(j, |st, i| !st.x::<W>(i, j).is_nan())
-                .map(|(p, in_front, i)| {
-                    let st = q.stack(in_front);
-                    // A row exactly a window old (exact, from the raw
-                    // clocks, as its membership was decided) holds its
-                    // value up to the window's edge and no further: no mass
-                    // inside it, however `tau - w` rounds against its `tau`.
-                    let on_edge = gap(form, st.off[i], off).cmp_window(k) == Ordering::Equal;
-                    (p, st.start::<W>(i, j), st.end[i], st.x::<W>(i, j), on_edge)
-                })
-                .filter(|&(_, start, _, _, on_edge)| on_edge || start < edge),
-            _ => None,
-        };
-        let a = match cut {
-            Some((p, start, end, x, on_edge)) => {
-                let mut a = q
-                    .sum_after_op::<W>(k, p, j)
-                    .map_or(Acc::default(), |(r, r_at)| {
-                        r.scaled(k.discount_in(tau - r_at, &mut q.decay), var)
-                    });
-                let m = if on_edge {
-                    0.0
-                } else {
-                    mass_between_in(k, &mut q.decay, tau, start.max(edge), end)
-                };
-                a = a.plus(Acc::held(x, m, var), var);
-                a
-            }
-            // The sums are anchored at the newest row; seen from `tau`.
-            None => sum.scaled(k.discount_in(tau - at, &mut q.decay), var),
-        };
-        out[j] = value_of(k, op, a, span);
-    }
-}
-
-/// A window with no row: 0.0 for a sum with `min_samples` 0 (Polars'
-/// default), null (NaN) for the rest.
-fn empty_value(op: &OpDef) -> f64 {
-    if op.stat == Stat::Sum && op.min_samples == 0 {
-        0.0
-    } else {
-        f64::NAN
-    }
-}
-
-/// An operator's value from its accumulator and the window's span `t`.
-fn value_of(k: &KernelDef, op: &OpDef, a: Acc, t: f64) -> f64 {
-    if a.n < f64::from(op.min_samples) {
-        return f64::NAN;
-    }
-    match op.stat {
-        Stat::Mean => {
-            if a.w > 0.0 {
-                a.s / a.w
-            } else {
-                f64::NAN
-            }
-        }
-        // `min_samples` 0 only: no value sums to 0.0, whatever the dust.
-        Stat::Sum if a.n == 0.0 => 0.0,
-        Stat::Sum => a.s,
-        // Read from the queue's sketches (`read_backward`, `close`).
-        Stat::Quantile => f64::NAN,
-        Stat::Rate => rate_of(a, k.mass(t)),
-        Stat::Var | Stat::Std => {
-            if a.w <= 0.0 {
-                return f64::NAN;
-            }
-            let biased = a.q / a.w;
-            // Polars' correction for unequal weights, `V1² / (V1² − V2)`
-            // times the biased variance, its denominator as `2 e`; none where
-            // one row carries the window's weight (`e = 0`).
-            let var = if op.bias {
-                biased
-            } else if a.e > 0.0 {
-                a.w * a.w / (2.0 * a.e) * biased
-            } else {
-                f64::NAN
-            };
-            if op.stat == Stat::Std {
-                var.sqrt()
-            } else {
-                var
-            }
-        }
-    }
-}
-
-/// A rate: the decayed sum over the mass `m` of the window's span, null
-/// where there is none.
-#[inline]
-fn rate_of(a: Acc, m: f64) -> f64 {
-    if m > 0.0 { a.s / m } else { f64::NAN }
-}
-
-/// Write a backward kernel's values for row `seq`, under each operator's
-/// `partial` where the window reached before the stretch.
-fn write_backward(
-    ops: &[OpDef],
-    members: &[usize],
-    seq: u64,
-    vals: &[f64],
-    complete: bool,
-    held: Held<'_>,
-) {
-    let r = usize::try_from(seq - held.first).expect("a row is held");
-    for (j, &o) in members.iter().enumerate() {
-        let op = &ops[o];
-        if !complete && op.partial == Partial::Drop {
-            held.meta[r].drop = true;
-        }
-        if complete || op.partial == Partial::Keep {
-            held.values[r * held.n_outputs + o] = vals[j];
-        }
-    }
-}
+/// A forward row filled into the queue, a backward window read, and the
+/// values written: in a module of their own.
+mod read;
+use read::{empty_value, fill_forward, rate_of, read_backward, value_of, write_backward};
 
 /// Close forward kernel `k` over waiting row `t`: the rows its queue holds
 /// after `t` are its window, every one of them held until a row inside it,
@@ -3329,7 +2942,7 @@ fn close<const W: bool>(
         let keep = match how {
             End::Complete => true,
             End::Cut => op.partial == Partial::Keep,
-            End::Discard => false,
+            End::Discard | End::Finish => false,
         };
         // A variance has no forward kernel (`check_op`).
         if !(keep && meta.accept) || op.stat.is_var() {
@@ -3361,12 +2974,12 @@ fn close<const W: bool>(
                     a = scaled(&mut q.decay, b);
                 }
             }
-            Stat::Sum | Stat::Rate | Stat::Quantile => {
+            Stat::Sum | Stat::Rate | Stat::Quantile | Stat::Max | Stat::Min => {
                 if let Some(s) = seg {
                     a = scaled(&mut q.decay, s);
                 }
             }
-            Stat::Var | Stat::Std => {}
+            Stat::Var | Stat::Std | Stat::Moments => {}
         }
         let mut open_value = None;
         if let Some((_, otau, _)) = open {
@@ -3391,7 +3004,7 @@ fn close<const W: bool>(
                     );
                     any = true;
                 }
-                Stat::Sum | Stat::Rate | Stat::Quantile if own => {
+                Stat::Sum | Stat::Rate | Stat::Quantile | Stat::Max | Stat::Min if own => {
                     a = a.plus(
                         Acc {
                             s: k.discount_slot(otau - t.tau, &mut q.decay.fwd().disc_open) * x,
@@ -3412,7 +3025,13 @@ fn close<const W: bool>(
             held.values[r * held.n_outputs + o] = empty_value(op);
             continue;
         }
-        held.values[r * held.n_outputs + o] = if op.stat == Stat::Quantile {
+        held.values[r * held.n_outputs + o] = if op.stat.is_extremum() {
+            if a.n < f64::from(op.min_samples) {
+                f64::NAN
+            } else {
+                q.ext(j).windowed(open_value.map(|(_, x)| x))
+            }
+        } else if op.stat == Stat::Quantile {
             if a.n < f64::from(op.min_samples) {
                 f64::NAN
             } else {
@@ -3558,25 +3177,34 @@ fn flush_in(p: &mut Parts<'_>, g: &mut Group) {
     }
     let (tau, off, form) = (g.tau, g.off, g.form);
     for (ki, k) in p.kernels.iter().enumerate() {
-        if k.direction != Direction::Backward || !k.closed.near(Direction::Backward) {
+        if !k.waits() {
             continue;
         }
         let m = &p.members[ki];
-        by_width!(
-            g.queues[ki].wide(),
-            read_backward(
-                k,
-                p.ops,
-                m,
-                &mut g.queues[ki],
-                p.scratch_sum,
-                tau,
-                off,
-                form,
-                &mut g.stamp_values[ki],
-            )
-        );
-        let complete = k.window_size.is_none_or(|w| tau >= w);
+        // Under "left" and "none" the stamp's values were read as it began
+        // (a `since` kernel's, which waits for an event at any of its rows).
+        if k.closed.near(Direction::Backward) {
+            by_width!(
+                g.queues[ki].wide(),
+                read_backward(
+                    k,
+                    p.ops,
+                    m,
+                    &mut g.queues[ki],
+                    p.scratch_sum,
+                    tau,
+                    off,
+                    form,
+                    &mut g.stamp_values[ki],
+                )
+            );
+        }
+        // A frame with no moments operator has nothing to read here, and
+        // pays no call a kernel a flush for it.
+        if !p.moments.is_empty() {
+            read_moments(ki, p.ops, m, p.moments, g, tau);
+        }
+        let complete = extrema::complete(k, &g.queues[ki], tau, off, form);
         for &seq in &g.pending {
             let held = Held {
                 first: p.held_first,
@@ -3586,6 +3214,21 @@ fn flush_in(p: &mut Parts<'_>, g: &mut Group) {
             };
             write_backward(p.ops, m, seq, &g.stamp_values[ki], complete, held);
         }
+    }
+    if !p.profiles.is_empty() {
+        let out = profile::Out {
+            defs: p.profiles,
+            first: p.ops.len(),
+        };
+        let mut held = Held {
+            first: p.held_first,
+            n_outputs: p.n_out,
+            values: &mut *p.held_values,
+            meta: &mut *p.held_meta,
+        };
+        let pending = std::mem::take(&mut g.pending);
+        profile::flush(&out, g, &pending, &mut held);
+        g.pending = pending;
     }
     for &seq in &g.pending {
         let r = usize::try_from(seq - p.held_first).expect("a pending row is held");
@@ -3620,9 +3263,13 @@ fn end_in(p: &mut Parts<'_>, g: &mut Group, how: End) {
             // dropped (task 160, PC2) -- and a reset discarded it (task
             // 173, PC2). Under "left" and "none" a row on the edge closed
             // it already. A reset discards every other window.
-            let whole = matches!(how, End::Cut | End::Discard)
+            let whole = matches!(how, End::Cut | End::Discard | End::Finish)
                 && k.closed.far(Direction::Forward)
                 && gap(g.form, t.off, g.off).cmp_window(k) == Ordering::Equal;
+            // At the end of the input every other window stays unresolved.
+            if how == End::Finish && !whole {
+                continue;
+            }
             let (how, far) = if whole {
                 (End::Complete, t.tau + w)
             } else {
@@ -3671,11 +3318,13 @@ fn restart_in(g: &mut Group, origin: Option<ClockValue>) {
     g.open.iter_mut().for_each(|o| *o = None);
     g.last_valued.iter_mut().for_each(|v| *v = f64::NAN);
     g.held.iter_mut().for_each(|v| *v = f64::NAN);
+    g.moments.iter_mut().for_each(MomentsRun::restart);
     g.tau = 0.0;
     g.origin = origin;
     g.restart = false;
     g.stamp = None;
     g.pending.clear();
+    g.profile.clear();
 }
 
 /// Drop the waiting rows every forward kernel has closed.
@@ -3792,8 +3441,10 @@ mod tests {
     }
 
     /// [`long_windows_keep_their_bits`]'s digest, computed on the code
-    /// before task 270 (M-2).
-    const LONG_WINDOWS_DIGEST: u64 = 0x8b76_0af8_32d7_e069;
+    /// before task 270 (M-2), and moved once since: a window looking
+    /// ahead whose far edge is the input's last row is whole at the end of
+    /// the input where it was null.
+    const LONG_WINDOWS_DIGEST: u64 = 0x9224_8a97_1fbc_e295;
 
     #[derive(Debug, Clone)]
     struct Row {
@@ -3871,6 +3522,7 @@ mod tests {
             session: r.session,
             values: &r.values,
             accept: r.accept,
+            lists: &[],
         })
     }
 
@@ -4029,6 +3681,7 @@ mod tests {
             window_size: Some(5.0),
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         };
         let ln2 = std::f64::consts::LN_2;
         for h in [1e9, 1e12, 1e17, 1e300] {
@@ -4070,6 +3723,7 @@ mod tests {
                 window_size: Some(2.0),
                 window_ns: None,
                 closed: Closed::Right,
+                since: None,
             };
             let err = k.check().expect_err("refused");
             assert!(err.contains("half_life must be at least"), "{err}");
@@ -4326,7 +3980,10 @@ mod tests {
                             // edge where the window holds it ("right",
                             // "both"), at it or past where it does not; a
                             // window it has not shown whole is unresolved,
-                            // and null.
+                            // and null -- except that, under "right" and
+                            // "both", a window whose far edge is the last
+                            // row of the input holds every timestamp it
+                            // can, as at a cut, and is whole.
                             let reaches_edge =
                                 gap_bf(rows, s, a, n - 1).cmp_window(k) != Ordering::Less;
                             let shown_whole = (a + 1..n).any(|b| {
@@ -4350,7 +4007,13 @@ mod tests {
                                     }
                                     (later, false, (ta + w).min(end_tau) - ta)
                                 }
-                                _ if shown_whole => (later, true, w),
+                                _ if shown_whole
+                                    || (k.closed.far(Direction::Forward)
+                                        && gap_bf(rows, s, a, n - 1).cmp_window(k)
+                                            == Ordering::Equal) =>
+                                {
+                                    (later, true, w)
+                                }
                                 _ => continue,
                             }
                         }
@@ -4432,7 +4095,8 @@ mod tests {
                                 mass += m;
                                 held.push((m, x));
                             }
-                            Stat::Sum | Stat::Rate | Stat::Quantile => {
+                            Stat::Moments => unreachable!(),
+                            Stat::Sum | Stat::Rate | Stat::Quantile | Stat::Max | Stat::Min => {
                                 let d = (tb - ta).abs();
                                 let f = if k.half_life.is_infinite() {
                                     1.0
@@ -4458,6 +4122,17 @@ mod tests {
                         Stat::Sum => sum,
                         Stat::Var | Stat::Std => var_bf(&held, op.bias, op.stat == Stat::Std),
                         Stat::Quantile => quantile_bf(&weighed, op.quantile.unwrap()),
+                        Stat::Moments => unreachable!(),
+                        // Folded oldest first, ties to the earliest looking
+                        // back and to the latest looking ahead.
+                        Stat::Max | Stat::Min => weighed.iter().fold(f64::NAN, |a, &(x, _)| {
+                            extrema::pick(
+                                op.stat == Stat::Max,
+                                k.direction == Direction::Forward,
+                                a,
+                                x,
+                            )
+                        }),
                         Stat::Rate => {
                             let m = mass_bf(k, 0.0, 0.0, span).abs();
                             let m = if k.direction == Direction::Backward {
@@ -4666,6 +4341,7 @@ mod tests {
                 window_size: window,
                 window_ns: window.map(ns_of),
                 closed,
+                since: None,
             });
             for (stat, partial, min) in [
                 (Stat::Mean, Partial::Keep, 1),
@@ -4685,6 +4361,7 @@ mod tests {
                     partial,
                     bias: false,
                     quantile: None,
+                    max_state_bytes: None,
                 });
             }
             // A quantile on every kernel, low and high, so its walk runs up
@@ -4705,6 +4382,7 @@ mod tests {
                     partial,
                     bias: false,
                     quantile: Some(level),
+                    max_state_bytes: None,
                 });
             }
             // A variance and a standard deviation on every backward kernel,
@@ -4722,11 +4400,58 @@ mod tests {
                         partial,
                         bias,
                         quantile: None,
+                        max_state_bytes: None,
                     });
                 }
             }
+            // A maximum on the two even kernels, beside every other
+            // operator, a variance's wide queue among them (task 561).
+            if half_life.is_infinite() {
+                ops.push(extremum(ki, Stat::Max, Partial::Keep, 1));
+            }
+        }
+        // The extrema's own kernels, every `closed` each way and the running
+        // form; a maximum and a minimum on each.
+        for (direction, window, closed) in [
+            (Direction::Backward, None, Closed::Right),
+            (Direction::Backward, Some(5.0), Closed::Right),
+            (Direction::Backward, Some(4.0), Closed::Left),
+            (Direction::Backward, Some(7.0), Closed::Neither),
+            (Direction::Forward, Some(5.0), Closed::Right),
+            (Direction::Forward, Some(4.0), Closed::Left),
+            (Direction::Forward, Some(3.0), Closed::Neither),
+        ] {
+            let ki = kernels.len();
+            kernels.push(KernelDef {
+                direction,
+                half_life: f64::INFINITY,
+                window_size: window,
+                window_ns: window.map(ns_of),
+                closed,
+                since: None,
+            });
+            let partial = if window.is_some() {
+                Partial::Null
+            } else {
+                Partial::Keep
+            };
+            ops.push(extremum(ki, Stat::Max, Partial::Keep, 1));
+            ops.push(extremum(ki, Stat::Min, partial, 2));
         }
         (kernels, ops)
+    }
+
+    fn extremum(kernel: usize, stat: Stat, partial: Partial, min_samples: u32) -> OpDef {
+        OpDef {
+            kernel,
+            stat,
+            input: usize::from(stat == Stat::Min),
+            min_samples,
+            partial,
+            bias: false,
+            quantile: None,
+            max_state_bytes: None,
+        }
     }
 
     /// Every operator on every kernel against the definition, on streams
@@ -4880,6 +4605,7 @@ mod tests {
                 window_size: None,
                 window_ns: None,
                 closed: Closed::Right,
+                since: None,
             }],
             vec![OpDef {
                 kernel: 0,
@@ -4889,6 +4615,7 @@ mod tests {
                 partial: Partial::Keep,
                 bias: false,
                 quantile: None,
+                max_state_bytes: None,
             }],
             ClockCfg::default(),
         )
@@ -4989,6 +4716,7 @@ mod tests {
                 window_size: Some(5.0),
                 window_ns: Some(ns_of(5.0)),
                 closed,
+                since: None,
             };
             let ops: Vec<OpDef> = [
                 Stat::Mean,
@@ -5007,6 +4735,7 @@ mod tests {
                 partial: Partial::Null,
                 bias: false,
                 quantile: (stat == Stat::Quantile).then_some(if i == 3 { 0.2 } else { 0.7 }),
+                max_state_bytes: None,
             })
             .collect();
             let fwd = run(std::slice::from_ref(&k), &ops, c, rows, 1).unwrap();
@@ -5114,6 +4843,7 @@ mod tests {
             window_size: None,
             window_ns: None,
             closed,
+            since: None,
         };
         let op = OpDef {
             kernel: 0,
@@ -5123,6 +4853,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         };
         (vec![k], vec![op])
     }
@@ -5234,6 +4965,7 @@ mod tests {
                 window_size: Some(2.0),
                 window_ns: Some(ns_of(2.0)),
                 closed,
+                since: None,
             };
             let op = OpDef {
                 kernel: 0,
@@ -5243,6 +4975,7 @@ mod tests {
                 partial: Partial::Keep,
                 bias: false,
                 quantile: None,
+                max_state_bytes: None,
             };
             run(&[k], &[op], c, &rows, 1).unwrap().values[0].clone()
         };
@@ -5286,6 +5019,7 @@ mod tests {
             window_size: None,
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         };
         let op = OpDef {
             kernel: 0,
@@ -5295,6 +5029,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         };
         let got = run(&[k], &[op], cfg(100.0, None, None), &rows, 1)
             .unwrap()
@@ -5387,6 +5122,7 @@ mod tests {
                 window_size: None,
                 window_ns: None,
                 closed: Closed::Right,
+                since: None,
             };
             let op = |stat| OpDef {
                 kernel: 0,
@@ -5396,6 +5132,7 @@ mod tests {
                 partial: Partial::Keep,
                 bias,
                 quantile: None,
+                max_state_bytes: None,
             };
             let got = run(
                 &[k],
@@ -5492,6 +5229,7 @@ mod tests {
             window_size: None,
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         };
         let op = OpDef {
             kernel: 0,
@@ -5501,6 +5239,7 @@ mod tests {
             partial: Partial::Keep,
             bias: true,
             quantile: None,
+            max_state_bytes: None,
         };
         let v = run(&[k], &[op], cfg(100.0, None, None), &rows, 1)
             .unwrap()
@@ -5528,6 +5267,7 @@ mod tests {
             window_size: Some(4.0),
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         };
         let op = |kernel, stat| OpDef {
             kernel,
@@ -5537,6 +5277,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         };
         let err = Windows::new(
             vec![k(Direction::Forward)],
@@ -5585,6 +5326,7 @@ mod tests {
             window_size: Some(5.0),
             window_ns: Some(ns_of(5.0)),
             closed: Closed::Right,
+            since: None,
         };
         let ops = vec![
             OpDef {
@@ -5595,6 +5337,7 @@ mod tests {
                 partial: Partial::Keep,
                 bias: false,
                 quantile: None,
+                max_state_bytes: None,
             },
             OpDef {
                 kernel: 0,
@@ -5604,6 +5347,7 @@ mod tests {
                 partial: Partial::Null,
                 bias: false,
                 quantile: None,
+                max_state_bytes: None,
             },
             OpDef {
                 kernel: 0,
@@ -5613,6 +5357,7 @@ mod tests {
                 partial: Partial::Drop,
                 bias: false,
                 quantile: None,
+                max_state_bytes: None,
             },
         ];
         let mk = |ts: &[f64]| -> Vec<Row> {
@@ -5699,6 +5444,7 @@ mod tests {
             window_size: Some(3.0),
             window_ns: Some(ns_of(3.0)),
             closed: Closed::Right,
+            since: None,
         };
         let op = OpDef {
             kernel: 0,
@@ -5708,6 +5454,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         };
         let got = run(&[k], &[op], cfg(100.0, None, None), &rows, 1)
             .unwrap()
@@ -5764,6 +5511,7 @@ mod tests {
             window_size: None,
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         };
         let op = OpDef {
             kernel: 0,
@@ -5773,6 +5521,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         };
         let mut core = Windows::new(vec![k], vec![op], cfg(10.0, None, None)).unwrap();
         let row = |t: f64| Row {
@@ -5804,6 +5553,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         };
         let same = |got: &[f64], want: &[f64]| {
             got.len() == want.len()
@@ -5846,6 +5596,7 @@ mod tests {
                     window_size: Some(0.3),
                     window_ns: Some(ns_of(0.3)),
                     closed,
+                    since: None,
                 };
                 let rows: Vec<Row> = ms
                     .iter()
@@ -5896,6 +5647,7 @@ mod tests {
             window_size: None,
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         };
         let op = OpDef {
             kernel: 0,
@@ -5905,6 +5657,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         };
         let row = |t: f64, g: Option<&str>, s: u64, x: f64| Row {
             group: g.map(str::to_string),
@@ -5965,6 +5718,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         };
         let rows: Vec<Row> = [0, 100, 400, 800]
             .iter()
@@ -5988,6 +5742,7 @@ mod tests {
                 window_size: Some(0.3),
                 window_ns: Some(300_000_000),
                 closed,
+                since: None,
             };
             let seconds = KernelDef {
                 window_ns: None,
@@ -6036,6 +5791,7 @@ mod tests {
             window_size: Some(10.0),
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         };
         let op = OpDef {
             kernel: 0,
@@ -6045,6 +5801,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         };
         let row = |t: f64, g: Option<&str>, s: u64, x: f64| Row {
             group: g.map(str::to_string),
@@ -6110,6 +5867,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         };
         let k = KernelDef {
             direction: Direction::Backward,
@@ -6117,6 +5875,7 @@ mod tests {
             window_size: Some(0.3),
             window_ns: Some(300_000_001),
             closed: Closed::Right,
+            since: None,
         };
         let err = Windows::new(vec![k], vec![op], cfg(10.0, None, None)).expect_err("refused");
         assert!(
@@ -6138,6 +5897,7 @@ mod tests {
             window_size,
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         };
         for h in [0.0, -1.0, f64::NAN] {
             let err = kernel(Direction::Backward, h, Some(2.0))
@@ -6174,6 +5934,7 @@ mod tests {
             partial: Partial::Keep,
             bias: false,
             quantile: None,
+            max_state_bytes: None,
         };
         let back = || kernel(Direction::Backward, 1.0, Some(2.0));
         let refused = |kernels: Vec<KernelDef>, ops: Vec<OpDef>| {
@@ -6236,6 +5997,7 @@ mod tests {
             window_size: Some(5.0),
             window_ns: None,
             closed: Closed::Right,
+            since: None,
         };
         let ops: Vec<OpDef> = [Stat::Sum, Stat::Mean, Stat::Var]
             .into_iter()
@@ -6247,6 +6009,7 @@ mod tests {
                 partial: Partial::Keep,
                 bias: false,
                 quantile: None,
+                max_state_bytes: None,
             })
             .collect();
         let mut core = Windows::new(vec![k], ops, cfg(10.0, None, None)).unwrap();
@@ -6340,6 +6103,7 @@ mod tests {
                     window_size: Some(window),
                     window_ns: Some(ns_of(window)),
                     closed,
+                    since: None,
                 });
                 let stats: &[(Stat, u32, bool)] = if direction == Direction::Backward {
                     &[
@@ -6360,6 +6124,7 @@ mod tests {
                         partial: Partial::Keep,
                         bias,
                         quantile: None,
+                        max_state_bytes: None,
                     });
                 }
             }

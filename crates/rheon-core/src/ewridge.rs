@@ -648,6 +648,44 @@ impl RidgeMoments {
     }
 }
 
+/// One target's system as its fit reads it, borrowed: the Gram it is
+/// solved against, its centred cross-moments and their means, its weight
+/// and the target's own moments. What [`EwRidge::gram_parts`] reports for
+/// the target, read in place rather than copied.
+pub(crate) struct FitSystem<'a> {
+    pub(crate) cov: &'a EwCov,
+    pub(crate) cross_c: &'a [f64],
+    pub(crate) mj: &'a [f64],
+    pub(crate) my: f64,
+    pub(crate) wj: f64,
+    pub(crate) tm: Option<&'a TargetMoments>,
+}
+
+/// The working space [`EwRidge::system`] writes a window's view into, kept
+/// by the caller so a row allocates none: not state.
+#[derive(Default)]
+pub(crate) struct SystemKept(RidgeView);
+
+impl std::fmt::Debug for SystemKept {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SystemKept")
+    }
+}
+
+impl Clone for SystemKept {
+    /// Working space: a copy starts empty.
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for SystemKept {
+    /// Working space holds nothing of the model's.
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 /// The accumulators a windowed fit reads, with everything older than the
 /// window subtracted off.
 #[derive(Default)]
@@ -836,6 +874,43 @@ impl EwRidge {
                 )
             }
         }
+    }
+
+    /// Target `j`'s system, read where it is kept: the live accumulators,
+    /// or under a window its view, written over `kept` in place. `None`
+    /// where a held Gram block would need merging first (a model built with `gram_block_rows`, which
+    /// [`crate::Ar`]'s fits are not).
+    pub(crate) fn system<'a>(
+        &'a self,
+        j: usize,
+        kept: &'a mut SystemKept,
+    ) -> Option<FitSystem<'a>> {
+        let g = self.acc.grams.of[j];
+        // A window with no cut yet holds every row: its system is the live
+        // accumulators', as in [`Self::gram_parts`].
+        if self.cfg.window.is_some() && self.view_into(&mut kept.0) {
+            let v = &kept.0.acc;
+            return Some(FitSystem {
+                cov: &v.grams[g],
+                cross_c: &v.cross.c[j],
+                mj: &v.cross.mj[j],
+                my: v.cross.my[j],
+                wj: v.wj[j],
+                tm: v.tm.as_ref(),
+            });
+        }
+        let cov = &self.acc.grams.grams[g];
+        if cov.has_pending() {
+            return None;
+        }
+        Some(FitSystem {
+            cov,
+            cross_c: &self.acc.cross.c[j],
+            mj: &self.acc.cross.mj[j],
+            my: self.acc.cross.my[j],
+            wj: self.acc.wj[j],
+            tm: Some(&self.acc.tm),
+        })
     }
 
     /// The accumulated weight over every row, whatever the targets (hard rule
@@ -1951,6 +2026,35 @@ impl EwRidge {
         }
     }
 
+    /// Per target, Kish's size its errors are read at and, under
+    /// `target_gaps="pairwise"`, the column means its intercept is centred
+    /// at (`None` otherwise: the kept system's, the Gram's). Under pairwise
+    /// the slopes solve the Gram of every row against the target's
+    /// cross-moments over the rows it is present on, so their variance is
+    /// the noise over those rows' size, and the intercept is centred at
+    /// their column means: the Gram's size and means read a target present
+    /// on a quarter of the rows at errors half the size of least squares'
+    /// on its rows (review 2026-11-23, REG-13). The window's where there is
+    /// one, the live accumulator's otherwise.
+    fn error_sizes(&self) -> (Vec<Option<f64>>, Option<Vec<Vec<f64>>>) {
+        let m = self.cfg.n_targets;
+        if self.cfg.target_gaps != TargetGaps::Pairwise {
+            let kish = self.gram_kish();
+            return (
+                (0..m).map(|j| kish.of(self.acc.grams.of[j])).collect(),
+                None,
+            );
+        }
+        let own = |tm: Option<&crate::ewcov::TargetMoments>, wj: &[f64], mj: &[Vec<f64>]| {
+            let sizes = tm.map_or_else(|| vec![None; m], |tm| tm.n_kish(wj));
+            (sizes, Some(mj.to_vec()))
+        };
+        match self.view() {
+            Some(v) => own(v.acc.tm.as_ref(), &v.acc.wj, &v.acc.cross.mj),
+            None => own(Some(&self.acc.tm), &self.acc.wj, &self.acc.cross.mj),
+        }
+    }
+
     /// `sqrt(1 + edf / n_kish)` per slot, as it stands before the row
     /// ([`OnlineModel::error_inflation_into`]): exact wherever the ratio
     /// could reach `limit`. Where a solve's shares have not been taken and
@@ -1972,9 +2076,22 @@ impl EwRidge {
         {
             return true;
         }
-        let kish = self.gram_kish();
+        // Under pairwise gaps the sizes are each target's own, a list made
+        // per read; otherwise each is the Gram's, read in place, so a row's
+        // gate allocates nothing.
+        let pairwise = self.cfg.target_gaps == TargetGaps::Pairwise;
+        let own = if pairwise {
+            self.error_sizes().0
+        } else {
+            Vec::new()
+        };
+        let live = (!pairwise).then(|| self.gram_kish());
         for j in 0..m {
-            let Some(n) = kish.of(self.acc.grams.of[j]) else {
+            let size = match &live {
+                Some(kish) => kish.of(self.acc.grams.of[j]),
+                None => own.get(j).copied().flatten(),
+            };
+            let Some(n) = size else {
                 continue;
             };
             for c in 0..nc {
@@ -2809,12 +2926,13 @@ impl OnlineModel for EwRidge {
         {
             return true;
         }
-        let kish = self.gram_kish();
+        let (sizes, means) = self.error_sizes();
         let mut v = Vec::new();
         for j in 0..m {
-            let Some(n) = kish.of(self.acc.grams.of[j]) else {
+            let Some(n) = sizes[j] else {
                 continue;
             };
+            let own = means.as_ref().map(|mj| &mj[j]);
             if n <= 0.0 {
                 continue;
             }
@@ -2827,17 +2945,17 @@ impl OnlineModel for EwRidge {
                 let Some((sys, factor)) = self.kept_system(slot) else {
                     continue;
                 };
-                let q = factor.map_or(0.0, |factor| {
-                    v.clear();
-                    v.extend(
-                        sys.z
-                            .iter()
-                            .zip(&sys.s)
-                            .zip(&sys.mean)
-                            .map(|((&zi, &s), &mu)| (self.z_at(x, zi) - mu) / s),
-                    );
-                    factor.quad_forms(&v, sys.z.len(), 1)[0] * sys.scale
-                });
+                let q =
+                    factor.map_or(0.0, |factor| {
+                        v.clear();
+                        v.extend(sys.z.iter().zip(&sys.s).zip(&sys.mean).map(
+                            |((&zi, &s), &mu)| {
+                                let mu = own.map_or(mu, |mj| mj[zi]);
+                                (self.z_at(x, zi) - mu) / s
+                            },
+                        ));
+                        factor.quad_forms(&v, sys.z.len(), 1)[0] * sys.scale
+                    });
                 let h = (q + if sys.centred { 1.0 } else { 0.0 }) / n;
                 out[slot] = (1.0 + h).sqrt();
             }
@@ -2869,12 +2987,13 @@ impl OnlineModel for EwRidge {
         if self.ready.system_of.len() != m * nc {
             return None;
         }
-        let kish = self.gram_kish();
+        let (sizes, means) = self.error_sizes();
         let mut out = vec![vec![f64::NAN; k]; m * nc];
         for j in 0..m {
-            let Some(n) = kish.of(self.acc.grams.of[j]) else {
+            let Some(n) = sizes[j] else {
                 continue;
             };
+            let own = means.as_ref().map(|mj| &mj[j]);
             if n.is_nan() || n <= 0.0 {
                 continue;
             }
@@ -2892,7 +3011,13 @@ impl OnlineModel for EwRidge {
                     }
                 }
                 if sys.centred {
-                    let u: Vec<f64> = sys.mean.iter().zip(&sys.s).map(|(mu, s)| mu / s).collect();
+                    let u: Vec<f64> = sys
+                        .mean
+                        .iter()
+                        .zip(&sys.s)
+                        .zip(&sys.z)
+                        .map(|((&mu, s), &zi)| own.map_or(mu, |mj| mj[zi]) / s)
+                        .collect();
                     let q =
                         factor.map_or(0.0, |factor| factor.quad_forms(&u, kk, 1)[0] * sys.scale);
                     v[0] = (1.0 + q) / n;
@@ -3020,8 +3145,24 @@ impl OnlineModel for EwRidge {
                 Some(yj) if weight > 0.0 && pred[j * nc].is_finite() => {
                     let resid = yj - pred[j * nc];
                     let ws_new = aged + weight;
-                    self.sig2[j] = (aged * self.sig2[j] + weight * resid * resid) / ws_new;
-                    self.wsig[j] = ws_new;
+                    let next = (aged * self.sig2[j] + weight * resid * resid) / ws_new;
+                    // `w·r²` or `W·σ²` past the largest double, where the
+                    // mean is in range: the mean of shares, each in [0, 1].
+                    // A square past it too ages `σ²`'s weight as a row with
+                    // no prediction does: an infinite `σ²` was NaN for good
+                    // at the next decay of 0 (review 2026-11-23, REG-10). A
+                    // finite mean takes neither branch, its bits as before.
+                    let next = if next.is_finite() {
+                        next
+                    } else {
+                        (aged / ws_new) * self.sig2[j] + (weight / ws_new) * (resid * resid)
+                    };
+                    if next.is_finite() {
+                        self.sig2[j] = next;
+                        self.wsig[j] = ws_new;
+                    } else {
+                        self.wsig[j] = aged;
+                    }
                 }
                 _ => self.wsig[j] = aged,
             }

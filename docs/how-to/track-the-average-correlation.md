@@ -23,12 +23,12 @@ These steps need the library and the series:
 ## Read the level, and one per block
 
 `deco` reads each row's own estimate of the average correlation, `u`, and
-reports `rho`, the level that follows it. Use both as a number that moves
-with the correlation, and read an
-[`ew_cov`](../MODELS.md#ew_cov--exponentially-weighted-moments)'s `corr`
-for the correlation itself. `u` and `rho` both read below the truth, since `u` is
-biased downward and `rho` averages it: about two-thirds of the truth at
-the higher correlations of the recipe.
+reports `rho`, the level, which reads the average correlation itself. Read
+`rho`: `u` is a ratio over one row, and reads below the truth by a third
+and more at the higher correlations, however many rows it is averaged
+over, so `rho` averages its numerator and its denominator and divides
+once. An [`ew_cov`](../MODELS.md#ew_cov--exponentially-weighted-moments)'s
+`corr` gives each pair's correlation, at O(m²) a row.
 
 1. **List the series in `features`, and leave out a column that is
    constant from its first row.** It has no standardized value, so it is
@@ -85,27 +85,28 @@ for row in (1_999, 3_999):
 ```
 
 ```text
-row 1999: banks truth 0.2, rho 0.17, mean corr 0.25; miners truth 0.4, rho 0.24; between truth 0.0, rho -0.01
-row 3999: banks truth 0.6, rho 0.39, mean corr 0.60; miners truth 0.4, rho 0.26; between truth 0.0, rho -0.00
+row 1999: banks truth 0.2, rho 0.25, mean corr 0.25; miners truth 0.4, rho 0.38; between truth 0.0, rho -0.01
+row 3999: banks truth 0.6, rho 0.61, mean corr 0.61; miners truth 0.4, rho 0.42; between truth 0.0, rho +0.00
 ```
 
 The banks' `rho` rises with their correlation, and the miners' holds.
-Each reads below the truth, where the mean of `ew_cov`'s `corr` reads
-near it.
+Each reads what the mean of `ew_cov`'s `corr` reads, near the truth.
 
 ## Check that it worked
 
-**A level that moves when the series' correlation moves, and holds when
-it holds, is working, whatever its size.** Compare it with an `ew_cov`'s
-`corr` over the same series, as the recipe does, on a stretch you know.
+**A level that reads the mean of an `ew_cov`'s `corr` over the same
+series, and moves when it moves, is working.** Compare the two, as the
+recipe does, on a stretch you know.
 [Regimes §7](../REGIMES.md#7-deco-an-equicorrelation-that-moves)
-measures how far `rho` reads below the truth.
+measures how close `rho` comes to the truth, and how fast it follows a
+switch.
 
 | what you see | what it means | what to do |
 |---|---|---|
-| `u` and `rho` null on a group's first rows | the model is in its [warm-up](../GLOSSARY.md#warm-up-and-readiness): `u` needs a variance for each column, from the first two rows, and `rho` starts on the row after the first `u` | read the rows after it |
+| `u` and `rho` null on a group's first rows | the model is in its [warm-up](../GLOSSARY.md#warm-up-and-readiness): `u` needs a variance for each column, from the first two rows, and `rho` learns once the means and variances it standardizes by rest on more than five effective rows, where a standardized row's spread is finite; `withheld_reason` reads `below_warm_rows` until then | read the rows after it |
 | `loglik` null on every row | a column has had no positive variance, such as a constant one | leave the constant column out of `features` |
-| `rho` about two-thirds of an `ew_cov`'s mean `corr` | the estimate's downward bias, which Engle and Kelly note: `E[u]` is about 0.20 for a true 0.30 at six series | expected: read `rho` for how the correlation moves, and `corr` for its size |
+| `u` about two-thirds of an `ew_cov`'s mean `corr`, and `rho` near it | `u`'s bias toward 0, which Engle and Kelly note: a ratio over one row, whose mean is not the ratio of the means | expected: read `rho` |
+| `rho` null on every row | the means and variances never rest on more than five effective rows: a half-life under 1.71 rows | lengthen the half-life |
 
 Every parameter is in `deco`'s
 [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco),

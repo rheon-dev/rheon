@@ -31,7 +31,9 @@
 use std::collections::HashMap;
 
 use polars::prelude::*;
-use rheon_polars::{AnyModel, Bank, RefreshCols, RefreshTime, Spec, WindowsConfig, WindowsRun};
+use rheon_polars::{
+    AnyModel, Bank, Merge, MergeConfig, RefreshCols, RefreshTime, Spec, WindowsConfig, WindowsRun,
+};
 use serde_json::{Value, json};
 
 use crate::{Lcg, Rows, Shape, names};
@@ -177,10 +179,33 @@ pub const CELLS: &[Cell] = &[
     cell("ftrl.history", 1000, 8, Const, Const),
     cell("holt.targets", 1, 8, Pow(1), Pow(1)),
     cell("holt.history", 1000, 8, Const, Const),
+    // A rank-one update of each target's Gram and its Cholesky a learned
+    // row, `k³` a row beside `k²` numbers, `k` the lags and the features;
+    // each target is its own fit; its lags are a ring of `max(lags)`.
+    cell("ar.lags", 4, 8, Pow(3), Pow(2)),
+    cell("ar.targets", 1, 8, Pow(1), Pow(1)),
+    cell("ar.history", 1000, 8, Const, Const),
+    // A rotation of each period's transform a row, `F` a row and `F` held;
+    // each target its own.
+    cell("spectral.periods", 4, 8, Pow(1), Pow(1)),
+    cell("spectral.targets", 1, 8, Pow(1), Pow(1)),
+    cell("spectral.history", 1000, 8, Const, Const),
     cell("ew_cov.k", 4, 8, Pow(2), Pow(2)),
     cell("ew_cov.lags", 1, 8, Pow(1), Pow(1)),
     cell("ew_cov.window", 500, 8, Const, Pow(1)),
     cell("ew_cov.history", 1000, 8, Const, Const),
+    // A row of the incremental SVD rotates `q = n_components + 1` rows of
+    // `k` in pairs, a few sweeps of `O(q^2 k)`, and keeps them: in the
+    // features at a fixed `q`, `O(k)` work and state; in the components at a
+    // fixed `k`, `O(q^2)` work and `O(q)` state.
+    cell("pca.k", 4, 8, Pow(1), Pow(1)),
+    cell("pca.components", 1, 8, Pow(2), Pow(1)),
+    cell("pca.history", 1000, 8, Const, Const),
+    // A row merges into each summary once and, under a window, a read is
+    // one merge of two stacks whatever the window's length, which keeps its
+    // rows.
+    cell("ewm_moments.window", 100, 8, Const, Pow(1)),
+    cell("ewm_moments.history", 1000, 8, Const, Const),
     cell("marginal.k", 4, 8, Pow(1), Pow(1)),
     cell("marginal.targets", 1, 8, Pow(1), Pow(1)),
     cell("marginal.lags", 1, 8, Pow(1), Pow(1)),
@@ -231,6 +256,41 @@ pub const CELLS: &[Cell] = &[
     cell("garch.targets", 1, 8, Pow(1), Pow(1)),
     cell("garch.truncation", 100, 8, Pow(1), Pow(1)),
     cell("garch.history", 1000, 8, Const, Const),
+    // A row of `dcc` factors and inverts `R` and forms `R⁻¹ ∂R` for each
+    // parameter, `O(k³)`, and keeps `Q`, its targets and sensitivities,
+    // `O(k²)`.
+    cell("dcc.series", 2, 8, Pow(3), Pow(2)),
+    cell("dcc.history", 1000, 8, Const, Const),
+    // A row adds each target's terms to its sums, `O(1)` each; a window's
+    // leaving row takes back its terms, `O(1)`, and the window keeps its
+    // rows; Lee and Mykland's ring takes one product in and one out a row.
+    cell("realized.targets", 1, 8, Pow(1), Pow(1)),
+    cell("realized.window", 100, 8, Const, Pow(1)),
+    cell("realized.lm_window", 100, 8, Const, Pow(1)),
+    cell("realized.history", 1000, 8, Const, Const),
+    // A row adds each target's terms, `O(1)` a multipower term and `O(H)` a
+    // kernel term, its rings `O(HK)`; a window's leaving row takes back its
+    // credits, `O(1)`, and the window keeps its rows.
+    cell("power_variation.targets", 1, 8, Pow(1), Pow(1)),
+    cell("power_variation.bandwidth", 10, 8, Pow(1), Pow(1)),
+    cell("power_variation.window", 100, 8, Const, Pow(1)),
+    cell("power_variation.history", 1000, 8, Const, Const),
+    // A row reads each target's digest from a merged copy of its centroids
+    // and its buffer of up to `8 delta` rows, sorted: `O(delta log delta)`
+    // a target, and the state holds `delta + 1` centroids and the buffer a
+    // target, whatever the stream's length (task 544).
+    cell("tdigest.targets", 1, 8, Pow(1), Pow(1)),
+    cell("tdigest.compression", 50, 8, Frac(5, 4), Pow(1)),
+    cell("tdigest.history", 1000, 8, Const, Const),
+    // A row walks each target's live buckets, which the values' range bounds,
+    // not the stream's length: a stream that keeps widening its range (as an
+    // unbounded distribution's extremes do, about 300 buckets a decade of
+    // rows for a normal) adds buckets as the log of its rows. A row window's
+    // ring holds its rows, the walk over the window's buckets alone (task
+    // 544, part 7).
+    cell("ddsketch.targets", 1, 8, Pow(1), Pow(1)),
+    cell("ddsketch.window", 100, 8, Log, Pow(1)),
+    cell("ddsketch.history", 1000, 8, Log, Log),
     // --- the bank, `Bank::fit_predict` on a pool of one thread --------------
     cell("bank.groups_seen", 250, 8, Const, Pow(1)),
     // The same in calls of four rows, each to one group: what a call costs
@@ -292,6 +352,15 @@ pub const CELLS: &[Cell] = &[
     cell("refresh.pairs", 8, 8, Pow(1), Pow(2)),
     cell("refresh.groups", 100, 8, Const, Pow(1)),
     cell("refresh.history", 1000, 8, Const, Const),
+    // Each value's age (PLAN 556): the clock of each series' last tick, one
+    // a series a group, beside its value.
+    cell("refresh.age_groups", 100, 8, Const, Pow(1)),
+    cell("refresh.age_history", 1000, 8, Const, Const),
+    // --- rp.stream.merge's `carry`, `Merge::pull` ----------------------------
+    // Two columns filled forward over groups (PLAN 556): one value a column
+    // a group, whatever the rows already merged.
+    cell("merge.carry_groups", 100, 8, Const, Pow(1)),
+    cell("merge.carry_history", 1000, 8, Const, Const),
     // --- rheon.polars._gbdt's sample of the rows, `Sampler::push_frame` ----------------
     cell("gbdt.history", 10_000, 8, Const, Const),
     cell("gbdt.sample", 1000, 8, Log, Pow(1)),
@@ -386,6 +455,10 @@ enum Work {
         frames: Vec<DataFrame>,
         grouped: bool,
     },
+    Merge {
+        merge: Box<Merge>,
+        frames: Vec<DataFrame>,
+    },
     Gbdt {
         sampler: Box<rheon_polars::gbdt::Sampler>,
         layout: rheon_polars::gbdt::Layout,
@@ -421,6 +494,7 @@ impl ScaleRun {
             }
             Work::Windows { run, .. } => run.save_bytes().expect("a window core saves").len(),
             Work::Refresh { rt, .. } => rt.save_bytes().expect("a sampler saves").len(),
+            Work::Merge { merge, .. } => merge.save_bytes().expect("a merge saves").len(),
             // The sampler is never saved: its state is its kept rows,
             // `rows_kept` of them, each a float a feature.
             Work::Gbdt {
@@ -480,6 +554,7 @@ impl ScaleRun {
             }
             Work::Windows { frames, .. }
             | Work::Refresh { frames, .. }
+            | Work::Merge { frames, .. }
             | Work::Gbdt { frames, .. } => *frames = Vec::new(),
         }
     }
@@ -554,6 +629,7 @@ pub fn rheon_budget_scale_rows(run: &mut ScaleRun) -> f64 {
             let out = rt.feed(&frames[b], &cols).unwrap_or_else(|e| panic!("{e}"));
             out.height() as f64
         }
+        Work::Merge { merge, frames } => merge_block(merge, frames[b].clone()),
         Work::Gbdt {
             sampler,
             layout,
@@ -813,6 +889,20 @@ fn model_case(id: &str, n: usize) -> ModelCase {
             s["half_life"] = json!("inf");
             ModelCase::new(s, lin)
         }
+        ("spectral", "periods" | "targets" | "history") => {
+            let f = if dim == "periods" { n } else { 8 };
+            let periods: Vec<f64> = (0..f).map(|k| 2.0 + k as f64).collect();
+            let t = if dim == "targets" { n } else { 1 };
+            let mut s = fit(json!({"type": "spectral", "periods": periods}), 0, t);
+            s["features"] = json!([]);
+            let c = ModelCase::new(s, lin);
+            if dim == "history" { c.warm(n) } else { c }
+        }
+        ("ar", "lags") => ModelCase::new(fit(json!({"type": "ar", "lags": n}), 0, 1), lin),
+        ("ar", "targets") => ModelCase::new(fit(json!({"type": "ar", "lags": 8}), 0, n), lin),
+        ("ar", "history") => {
+            ModelCase::new(fit(json!({"type": "ar", "lags": 8}), 0, 1), lin).warm(n)
+        }
         ("ftrl", "k") => ModelCase::new(fit(json!({"type": "ftrl"}), n, 1), lin),
         ("ftrl", "history") => ModelCase::new(fit(json!({"type": "ftrl"}), 8, 1), lin).warm(n),
         ("holt", "targets" | "history") => {
@@ -836,6 +926,34 @@ fn model_case(id: &str, n: usize) -> ModelCase {
         }
         ("ew_cov", "history") => {
             ModelCase::new(untargeted(json!({"type": "ew_cov"}), 8, true), lin).warm(n)
+        }
+        ("pca", "k") => ModelCase::new(
+            untargeted(json!({"type": "pca", "n_components": 2}), n, true),
+            lin,
+        ),
+        ("pca", "components") => ModelCase::new(
+            untargeted(json!({"type": "pca", "n_components": n}), 16, true),
+            lin,
+        ),
+        ("pca", "history") => ModelCase::new(
+            untargeted(json!({"type": "pca", "n_components": 2}), 8, true),
+            lin,
+        )
+        .warm(n),
+        ("ewm_moments", "window" | "history") => {
+            let mut model = json!({
+                "type": "ewm_moments",
+                "terms": {"skew": {"x0": 3}, "kurt": {"x0": 4}, "ac": {"x1": 1, "x1@1": 1}},
+                "kind": "standardized",
+            });
+            if dim == "window" {
+                model["window_rows"] = json!(n);
+            }
+            let c = ModelCase::new(untargeted(model, 2, true), lin);
+            match dim {
+                "history" => c.warm(n),
+                _ => c.warm(4 * n + 2_000).block(200),
+            }
         }
         ("marginal", "k") => ModelCase::new(fit(json!({"type": "marginal"}), n, 1), lin),
         ("marginal", "targets") => ModelCase::new(fit(json!({"type": "marginal"}), 8, n), lin),
@@ -1127,6 +1245,121 @@ fn model_case(id: &str, n: usize) -> ModelCase {
                 "history" => c.warm(n.max(1000)),
                 "truncation" => c.warm(9_000),
                 _ => c.warm(1_000),
+            }
+        }
+        ("dcc", "series" | "history") => {
+            let s = json!({
+                "name": "m",
+                "model": {"type": "dcc", "margins": "none", "asymmetric": true, "start_rows": 200},
+                "targets": names("y", if dim == "series" { n } else { 2 }),
+                "features": [],
+                "half_life": "inf",
+            });
+            let c = ModelCase::new(s, Shape::Dcc(false));
+            match dim {
+                // the start, 200 rows, or twice or four times that where its
+                // fit waited on its evidence, done before the rows timed
+                "history" => c.warm(n.max(1000)),
+                _ => c.warm(2_000),
+            }
+        }
+        ("realized", "targets" | "window" | "lm_window" | "history") => {
+            let mut model = json!({"type": "realized"});
+            let mut half_life = json!(1000.0);
+            match dim {
+                "window" => {
+                    model["window_rows"] = json!(n);
+                    half_life = json!("inf");
+                }
+                "lm_window" => model["lm_window"] = json!(n),
+                _ => {}
+            }
+            let s = json!({
+                "name": "m",
+                "model": model,
+                "targets": names("y", if dim == "targets" { n } else { 1 }),
+                "features": [],
+                "clock": "t",
+                "half_life": half_life,
+                "gap_cap": 100.0,
+            });
+            let c = ModelCase::new(s, lin);
+            match dim {
+                "history" => c.warm(n),
+                "window" | "lm_window" => c.warm(2 * n + 1_000),
+                _ => c,
+            }
+        }
+        ("power_variation", "targets" | "bandwidth" | "window" | "history") => {
+            let h = if dim == "bandwidth" { n } else { 10 };
+            let mut model = json!({
+                "type": "power_variation",
+                "terms": [
+                    {"name": "rv", "powers": [2.0]},
+                    {"name": "bv", "powers": [1.0, 1.0], "normalize": true},
+                    {"name": "lrv", "kernel": "parzen", "bandwidth": h, "center": true},
+                ],
+            });
+            let mut half_life = json!(1000.0);
+            if dim == "window" {
+                model["window_rows"] = json!(n);
+                half_life = json!("inf");
+            }
+            let s = json!({
+                "name": "m",
+                "model": model,
+                "targets": names("y", if dim == "targets" { n } else { 1 }),
+                "features": [],
+                "clock": "t",
+                "half_life": half_life,
+                "gap_cap": 100.0,
+            });
+            let c = ModelCase::new(s, lin);
+            match dim {
+                "history" => c.warm(n),
+                "window" => c.warm(2 * n + 1_000),
+                _ => c.warm(1_000),
+            }
+        }
+        ("tdigest", "targets" | "compression" | "history") => {
+            // The smallest compression but where it is the dimension: its
+            // buffer of 80 rows merges many times in each block, so a block
+            // reads every fill of it.
+            let compression = if dim == "compression" { n } else { 10 };
+            let s = json!({
+                "name": "m",
+                "model": {"type": "tdigest", "compression": compression,
+                          "quantiles": [0.05, 0.25, 0.95]},
+                "targets": names("y", if dim == "targets" { n } else { 1 }),
+                "features": [],
+            });
+            let c = ModelCase::new(s, lin);
+            match dim {
+                // whole buffers of 80 rows, so both sizes save a buffer
+                // filled alike
+                "history" => c.warm(n.max(1000) / 80 * 80),
+                // a block of two buffers' rows, so each reads every fill
+                "compression" => c.warm(16 * n).block(16 * n),
+                _ => c,
+            }
+        }
+        ("ddsketch", "targets" | "window" | "history") => {
+            let mut model = json!({"type": "ddsketch", "quantiles": [0.05, 0.25, 0.95]});
+            if dim == "window" {
+                model["window_rows"] = json!(n);
+            }
+            let s = json!({
+                "name": "m",
+                "model": model,
+                "targets": names("y", if dim == "targets" { n } else { 1 }),
+                "features": [],
+            });
+            let c = ModelCase::new(s, lin);
+            match dim {
+                "history" => c.warm(n.max(1000)),
+                // a window filled before the block
+                "window" => c.warm(2 * n),
+                _ => c,
             }
         }
         _ => panic!("no model cell {id:?}"),
@@ -1586,12 +1819,14 @@ fn refresh_setup(id: &'static str, n: usize, blocks: usize) -> ScaleRun {
     let (m, groups, pairs, warm) = match dim {
         "series" => (n, 0, false, 2_000),
         "pairs" => (n, 0, true, 2_000),
-        "groups" => (4, n, false, 8 * n),
-        "history" => (4, 0, false, n),
+        "groups" | "age_groups" => (4, n, false, 8 * n),
+        "history" | "age_history" => (4, 0, false, n),
         other => panic!("no refresh cell {other:?}"),
     };
     let names: Vec<String> = (0..m).map(|i| format!("s{i}")).collect();
-    let mut rt = RefreshTime::new(names, pairs).unwrap_or_else(|e| panic!("{id}: {e}"));
+    let mut rt = RefreshTime::new(names, pairs)
+        .unwrap_or_else(|e| panic!("{id}: {e}"))
+        .with_age(dim.starts_with("age_"));
     let cols = refresh_cols(groups > 0);
     rt.feed(&ticks(m, warm, groups, 0), &cols)
         .unwrap_or_else(|e| panic!("{id}: {e}"));
@@ -1605,6 +1840,76 @@ fn refresh_setup(id: &'static str, n: usize, blocks: usize) -> ScaleRun {
             rt: Box::new(rt),
             frames,
             grouped: groups > 0,
+        },
+        block_rows: block,
+        blocks,
+        next: 0,
+    }
+}
+
+/// One input's rows: over `groups` groups in turn, a clock unit apart, a
+/// float `x` null every third row and a text `s` null every other.
+fn merge_rows(n: usize, groups: usize, from: usize) -> DataFrame {
+    let mut g = Lcg(9 + from as u64);
+    let rows = from..from + n;
+    df!(
+        "t" => rows.clone().map(|i| i as f64).collect::<Vec<_>>(),
+        "g" => rows.clone().map(|i| (i % groups) as i64).collect::<Vec<_>>(),
+        "x" => rows.clone().map(|i| (i % 3 != 0).then(|| g.signed())).collect::<Vec<_>>(),
+        "s" => rows.map(|i| (i % 2 == 0).then(|| format!("v{}", i % 7))).collect::<Vec<_>>(),
+    )
+    .expect("columns of one length")
+}
+
+/// One block of a merge: its input's chunk pushed and every row pulled, up
+/// to the merge's call for the next chunk.
+fn merge_block(m: &mut Merge, chunk: DataFrame) -> f64 {
+    m.push(0, chunk).unwrap_or_else(|e| panic!("{e}"));
+    let mut rows = 0;
+    loop {
+        let (out, want) = m.pull(None, false).unwrap_or_else(|e| panic!("{e}"));
+        rows += out.height();
+        if want.is_some() {
+            return rows as f64;
+        }
+    }
+}
+
+fn merge_setup(id: &'static str, n: usize, blocks: usize) -> ScaleRun {
+    let dim = id.split_once('.').expect("merge.<dimension>").1;
+    let block = 1_000;
+    let (groups, warm) = match dim {
+        "carry_groups" => (n, 8 * n),
+        "carry_history" => (16, n),
+        other => panic!("no merge cell {other:?}"),
+    };
+    let first = merge_rows(warm, groups, 0);
+    let cfg = MergeConfig {
+        clock: "t".into(),
+        source: "source".into(),
+        by: Some("g".into()),
+        restart: None,
+        restart_text: None,
+        carry: vec!["x".into(), "s".into()],
+    };
+    let mut merge = Merge::new(
+        vec!["in".into()],
+        vec![first.schema().as_ref().clone()],
+        cfg,
+    )
+    .unwrap_or_else(|e| panic!("{id}: {e}"));
+    // Asked for its first chunk, then fed the warm-up.
+    let _ = merge.pull(None, false);
+    merge_block(&mut merge, first);
+    let frames = (0..blocks)
+        .map(|b| merge_rows(block, groups, warm + b * block))
+        .collect();
+    ScaleRun {
+        id,
+        size: n,
+        work: Work::Merge {
+            merge: Box::new(merge),
+            frames,
         },
         block_rows: block,
         blocks,
@@ -1711,6 +2016,7 @@ pub fn scale_setup_blocks(id: &'static str, n: usize, blocks: usize) -> ScaleRun
         "runner" => runner_setup(id, n, blocks),
         "windows" => windows_setup(id, n, blocks),
         "refresh" => refresh_setup(id, n, blocks),
+        "merge" => merge_setup(id, n, blocks),
         "gbdt" => gbdt_setup(id, n, blocks),
         _ => model_setup(id, n, blocks),
     }

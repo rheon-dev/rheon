@@ -30,10 +30,14 @@ use crate::spec::{ClockPolicy, SessionGapSpec, clock_cfg_of};
 use crate::stream::usable;
 use crate::windows::{ChunkKeys, session_hashes};
 use crate::windows::{
-    Closed, Direction, KernelDef, OpDef, OpKind, Partial, Peek, PlainRows, Refusal, RowIn, Stat,
-    Windows,
+    Closed, CrossClosed, CrossDef, Direction, KernelDef, MomentsDef, OpDef, OpKind, Partial, Peek,
+    PhaseSpan, PlainRows, ProfileDef, Refusal, RowIn, Stat, StateOf, Windows,
 };
 use crate::wrong_type::{Refused, wrong_type};
+
+/// The plan's definitions of the operators that are not window operators.
+mod defs;
+use defs::{list_keys, moments_def, neighbor_list, profile_def};
 
 /// The spec behind `like=`: its name, for messages, and the columns whose
 /// values must all be usable for it to learn from a row -- its features and
@@ -101,6 +105,12 @@ const WINDOWS_KIND: &str = crate::envelope::Kind::Windows.tag();
 /// The magic a state began with before the envelope, version 11 and
 /// earlier.
 const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
+/// 13 since task 561: a kernel may keep a `since` event (`since`), a queue
+/// its extrema (`ext`) and its last event's stamp (`since_off`), and an
+/// operator its `max_state_bytes`, each written only where there is an
+/// extremum, so a version-12 state is a version-13 state without one and
+/// loads as one; an older build refuses a 13 by its number rather than at
+/// an extremum's name;
 /// 12 since PLAN 542: the state is written in the envelope every state
 /// file of this library shares (`envelope.rs`): its first entries are the
 /// envelope's `magic`, `kind` (`"windows"`) and `version`, and the body is
@@ -133,7 +143,7 @@ const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
 /// task 143: formulas over operators, where 1 held descriptions. An older
 /// state would load with defaults and misbehave. The bank's schema moves
 /// with this number (review R4, A2; R6, D5).
-const WINDOWS_VERSION: u32 = 12;
+const WINDOWS_VERSION: u32 = 13;
 
 /// The last version written before the envelope.
 const LAST_LEGACY_VERSION: u32 = 11;
@@ -489,6 +499,19 @@ struct Plan {
     /// Every span a kernel reads, with its parameter's name, for the scale
     /// check.
     spans: Vec<(&'static str, Span)>,
+    /// The cross-group operators, after the window operators in output
+    /// order, and each one's hidden column.
+    cross: Vec<CrossDef>,
+    cross_columns: Vec<String>,
+    /// The list columns cross operators read their neighbors from, by the
+    /// index `CrossDef::neighbors` names.
+    lists: Vec<String>,
+    /// The moments operators' terms, in operator order.
+    moments: Vec<MomentsDef>,
+    /// The profile operators, after the window operators in output order,
+    /// and each one's hidden column.
+    profiles: Vec<ProfileDef>,
+    profile_columns: Vec<String>,
 }
 
 fn dtype_of<'a>(input: &'a Schema, column: &str) -> &'a DataType {
@@ -597,6 +620,12 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         bare: None,
         increments: Vec::new(),
         spans: Vec::new(),
+        cross: Vec::new(),
+        cross_columns: Vec::new(),
+        lists: Vec::new(),
+        moments: Vec::new(),
+        profiles: Vec::new(),
+        profile_columns: Vec::new(),
     };
     // Increments first: an operator's input may read them.
     for f in &config.formulas {
@@ -655,19 +684,102 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         s
     };
     let resolve_incr = |op: &OpNode| col(hidden(op).as_str());
+    // An input of a cross operator, its value or its weight: a number,
+    // each distinct formula read once.
+    let cross_input = |p: &mut Plan, f: &str, name: &str, what: &str, node: &Node| {
+        if let Some(i) = p.inputs.iter().position(|n| n == node) {
+            return Ok(i);
+        }
+        let dtype = dtypes_of(&incr_schema, vec![node.to_expr(&resolve_incr).alias("@t")])
+            .map_err(|e| {
+                format!(
+                    "{WHO}: {f}: Polars cannot compute {name}'s {what} ({e}). Check that the \
+                     {what} reads columns of the right type."
+                )
+            })?;
+        let dtype = dtype.get("@t").expect("aliased").clone();
+        if !numeric(&dtype) {
+            return Err(Refused::wrong_type(format!(
+                "{WHO}: {f}: {name}'s {what} must be a number, but it is {}. Cast it to a \
+                 number, such as with .cast(pl.Float64).",
+                crate::arrow::dtype_name(&dtype)
+            )));
+        }
+        p.inputs.push(node.clone());
+        Ok(p.inputs.len() - 1)
+    };
     for f in &config.formulas {
         for op in f.tree.operators() {
             if op.kind == OpKind::Increment {
                 continue;
             }
             let key = hidden(op);
-            if p.columns.iter().any(|(k, _)| *k == key) {
+            if p.columns.iter().any(|(k, _)| *k == key)
+                || p.cross_columns.contains(&key)
+                || p.profile_columns.contains(&key)
+            {
+                continue;
+            }
+            if let Some(stat) = op.kind.cross() {
+                let name = op.kind.name();
+                if config.clock.is_none() {
+                    return Err(format!(
+                        "{WHO}: {}: {name} reduces every group's row at one stamp of the clock, \
+                         but the call names no clock column, and a row count gives each row a \
+                         stamp of its own. Name the clock column with clock=.",
+                        f.name
+                    )
+                    .into());
+                }
+                let neighbors = match &op.neighbors {
+                    Some(c) => Some(neighbor_list(&mut p, config, input, &f.name, name, c)?),
+                    None => None,
+                };
+                let input = cross_input(&mut p, &f.name, name, "input", &op.input)?;
+                let weight = match &op.weight {
+                    Some(w) => Some(cross_input(&mut p, &f.name, name, "weight", w)?),
+                    None => None,
+                };
+                let pick = match &op.pick {
+                    Some(w) => Some(cross_input(&mut p, &f.name, name, "where", w)?),
+                    None => None,
+                };
+
+                p.cross.push(CrossDef {
+                    stat,
+                    closed: if op.closed == Closed::Left {
+                        CrossClosed::Left
+                    } else {
+                        CrossClosed::Right
+                    },
+                    input,
+                    weight,
+                    bias: op.bias,
+                    cap: op
+                        .max_state_bytes
+                        .unwrap_or(crate::windows::CROSS_STATE_BYTES),
+                    rank: op.order.rank,
+                    descending: op.order.descending,
+                    quantile: op.quantile.unwrap_or(0.5),
+                    interpolation: op.order.interpolation,
+                    neighbors,
+                    pick,
+                });
+                p.cross_columns.push(key);
+                continue;
+            }
+            if let Some(params) = &op.profile {
+                let def = profile_def(config, input, &mut p, &f.name, op, params, &incr_schema)?;
+                p.profiles.push(def);
+                p.profile_columns.push(key);
                 continue;
             }
             let direction = op.direction();
             let stat = op.kind.stat().expect("a window operator");
             let half_life = op.half_life.clone().expect("checked when read");
-            p.spans.push(("half_life", half_life.clone()));
+            if !stat.is_extremum() {
+                p.spans.push(("half_life", half_life.clone()));
+            }
             if let Some(w) = &op.window_size {
                 p.spans.push(("window_size", w.clone()));
             }
@@ -680,6 +792,10 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                     _ => None,
                 },
                 closed: op.closed,
+                since: match &op.since {
+                    Some(e) => Some(since_input(&mut p, e, &incr_schema, &f.name, op)?),
+                    None => None,
+                },
             };
             kernel
                 .check()
@@ -687,38 +803,53 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
             let ki = match p.kernels.iter().position(|k| *k == kernel) {
                 Some(i) => i,
                 None => {
-                    p.kernels.push(kernel);
+                    p.kernels.push(kernel.clone());
                     p.kernels.len() - 1
                 }
             };
-            let input_i = match p.inputs.iter().position(|n| *n == *op.input) {
-                Some(i) => i,
-                None => {
-                    let dtype = dtypes_of(
-                        &incr_schema,
-                        vec![op.input.to_expr(&resolve_incr).alias("@t")],
-                    )
+            let mut input_of = |node: &Node| -> Result<usize, Refused> {
+                if let Some(i) = p.inputs.iter().position(|n| n == node) {
+                    return Ok(i);
+                }
+                let dtype = dtypes_of(&incr_schema, vec![node.to_expr(&resolve_incr).alias("@t")])
                     .map_err(|e| {
                         format!(
                             "{WHO}: {}: Polars cannot compute {}'s input ({e}). Check that the \
-                             input reads columns of the right type.",
+                         input reads columns of the right type.",
                             f.name,
                             op.kind.name()
                         )
                     })?;
-                    let dtype = dtype.get("@t").expect("aliased").clone();
-                    if !numeric(&dtype) {
-                        return Err(Refused::wrong_type(format!(
-                            "{WHO}: {}: {}'s input must be a number, but it is {}. Cast \
-                             the input to a number, such as with .cast(pl.Float64).",
-                            f.name,
-                            op.kind.name(),
-                            crate::arrow::dtype_name(&dtype)
-                        )));
-                    }
-                    p.inputs.push((*op.input).clone());
-                    p.inputs.len() - 1
+                let dtype = dtype.get("@t").expect("aliased").clone();
+                if !numeric(&dtype) {
+                    return Err(Refused::wrong_type(format!(
+                        "{WHO}: {}: {}'s input must be a number, but it is {}. Cast \
+                         the input to a number, such as with .cast(pl.Float64).",
+                        f.name,
+                        op.kind.name(),
+                        crate::arrow::dtype_name(&dtype)
+                    )));
                 }
+                p.inputs.push(node.clone());
+                Ok(p.inputs.len() - 1)
+            };
+            let input_i = match (&op.moments, &*op.input) {
+                (Some(t), Node::Call(_, legs)) => {
+                    let def = moments_def(f.name.as_str(), &kernel, t, legs, &mut input_of)?;
+                    for lag in t.lags.iter().filter(|l| l.value() != 0.0) {
+                        p.spans.push(("lag", lag.clone()));
+                    }
+                    if let Some(tol) = &t.lag_tolerance {
+                        p.spans.push(("lag_tolerance", tol.clone()));
+                    }
+                    let first = def.inputs[0];
+                    p.moments.push(MomentsDef {
+                        op: p.ops.len(),
+                        ..def
+                    });
+                    first
+                }
+                _ => input_of(&op.input)?,
             };
             p.ops.push(OpDef {
                 kernel: ki,
@@ -731,12 +862,27 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                 }),
                 bias: op.bias,
                 quantile: op.quantile,
+                max_state_bytes: op.max_state_bytes,
             });
             p.columns.push((key, p.ops.len() - 1));
         }
     }
+    // The cross operators' outputs follow the window operators', and the
+    // profile operators' follow the cross operators'.
+    for (ci, key) in std::mem::take(&mut p.cross_columns).into_iter().enumerate() {
+        p.columns.push((key, p.ops.len() + ci));
+    }
+    for (pi, key) in std::mem::take(&mut p.profile_columns)
+        .into_iter()
+        .enumerate()
+    {
+        p.columns.push((key, p.ops.len() + p.cross.len() + pi));
+    }
     debug_assert!(
-        !(p.ops.is_empty() && p.increments.is_empty()),
+        !(p.ops.is_empty()
+            && p.increments.is_empty()
+            && p.cross.is_empty()
+            && p.profiles.is_empty()),
         "checked per formula"
     );
     p.bare = config
@@ -745,6 +891,40 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
         .map(|f| f.tree.bare_operator().map(hidden))
         .collect();
     Ok(p)
+}
+
+/// The row input an extremum's `since` reads (task 561): an element-wise
+/// boolean, read as 1.0 where true, among the plan's inputs.
+fn since_input(
+    p: &mut Plan,
+    e: &Node,
+    schema: &Schema,
+    name: &str,
+    op: &OpNode,
+) -> Result<usize, Refused> {
+    if let Some(i) = p.inputs.iter().position(|n| n == e) {
+        return Ok(i);
+    }
+    let dtype =
+        dtypes_of(schema, vec![e.to_expr(&|_| unreachable!()).alias("@t")]).map_err(|err| {
+            format!(
+                "{WHO}: {name}: Polars cannot compute {}'s since ({err}). Check that since reads \
+             columns of the right type.",
+                op.kind.name()
+            )
+        })?;
+    let dtype = dtype.get("@t").expect("aliased").clone();
+    if dtype != DataType::Boolean {
+        return Err(Refused::wrong_type(format!(
+            "{WHO}: {name}: {}'s since must be a boolean, true at a row that starts the window \
+             over, but it is {}. Compare the column to a value, such as pl.col(\"period\") != \
+             pl.col(\"period\").shift() computed before the call.",
+            op.kind.name(),
+            crate::arrow::dtype_name(&dtype)
+        )));
+    }
+    p.inputs.push(e.clone());
+    Ok(p.inputs.len() - 1)
 }
 
 /// The kind of clock a run is fed. A state resumes only on the kind that
@@ -1041,6 +1221,8 @@ struct Constants {
     bare: Option<Vec<String>>,
     increments: Vec<(String, Node, bool)>,
     accept: Vec<String>,
+    /// [`Plan::lists`].
+    lists: Vec<String>,
     /// The input's schema, as the call was built against it.
     input: Schema,
     /// The group and session columns' dtypes, by role: a key is its value's
@@ -1236,7 +1418,7 @@ impl WindowsRun {
                 .iter()
                 .any(|f| f.tree.has_forward_operator()),
         })?;
-        let p = plan(&config, input)?;
+        let mut p = plan(&config, input)?;
         check_scale(&config, &p.spans, input)?;
         let accept = config
             .like
@@ -1282,7 +1464,11 @@ impl WindowsRun {
             let dtype = evaluated.get(&f.name).expect("aliased").clone();
             output.insert(f.name.as_str().into(), dtype);
         }
-        let mut core = if p.ops.is_empty() {
+        let lists = std::mem::take(&mut p.lists);
+        let mut core = if !p.cross.is_empty() || !p.profiles.is_empty() {
+            Windows::with_all(p.kernels, p.ops, p.cross, p.moments, p.profiles, cfg)
+                .map_err(|e| format!("{WHO}: {e}"))?
+        } else if p.ops.is_empty() {
             // Increments alone: the core carries a kernel that reads nothing,
             // so rows pass straight through it. A sum over no window, read
             // at every row.
@@ -1295,6 +1481,7 @@ impl WindowsRun {
                     // integer window converts nothing (review R4).
                     window_ns: Some(1_000_000_000),
                     closed: Closed::Left,
+                    since: None,
                 }],
                 vec![OpDef {
                     kernel: 0,
@@ -1304,13 +1491,35 @@ impl WindowsRun {
                     partial: Partial::Keep,
                     bias: false,
                     quantile: None,
+                    max_state_bytes: None,
                 }],
                 cfg,
             )
             .map_err(|e| format!("{WHO}: {e}"))?
         } else {
-            Windows::new(p.kernels, p.ops, cfg).map_err(|e| format!("{WHO}: {e}"))?
+            Windows::with_moments(p.kernels, p.ops, p.moments, cfg)
+                .map_err(|e| format!("{WHO}: {e}"))?
         };
+        if config.clock.is_none() {
+            // On the row clock a window of `w` holds at most `w + 1` rows
+            // read, and the row that joins before the oldest leaves.
+            for (ki, row, cap) in core.extremum_caps() {
+                let w = core.kernels()[ki]
+                    .window_size
+                    .expect("a capped kernel has a window");
+                let rows = w.floor() + 2.0;
+                let bytes = rows * row as f64;
+                if bytes > cap as f64 {
+                    return Err(format!(
+                        "{WHO}: a rolling_max or rolling_min window of {w} rows holds up to \
+                         {rows} rows of {row} bytes each a group, {bytes} bytes, past \
+                         max_state_bytes of {cap}. Shorten window_size, or raise \
+                         max_state_bytes (at most 64 MiB)."
+                    )
+                    .into());
+                }
+            }
+        }
         core.set_grouped(config.group.is_some());
         let inputs = if p.inputs.is_empty() {
             vec![Node::Lit(crate::formula::Literal::Float(0.0))]
@@ -1334,6 +1543,7 @@ impl WindowsRun {
                 bare: p.bare,
                 increments: p.increments,
                 accept,
+                lists,
                 input: input.clone(),
                 key_dtypes,
                 output,
@@ -1823,6 +2033,15 @@ impl WindowsRun {
             })
             .collect::<PolarsResult<_>>()?;
 
+        // The neighbor lists cross operators read, as text.
+        let lists = self
+            .k
+            .lists
+            .iter()
+            .map(|c| list_keys(df, c))
+            .collect::<PolarsResult<Vec<_>>>()?;
+        let mut row_lists: Vec<Option<&[Option<String>]>> = vec![None; lists.len()];
+
         // Pass three: the core.
         let chunk_base = self.core.next_seq();
         let mut row_values = vec![0.0; self.k.inputs.len()];
@@ -1869,12 +2088,16 @@ impl WindowsRun {
             for (k, col) in slices.iter().enumerate() {
                 row_values[k] = col[i];
             }
+            for (l, (flat, ranges)) in lists.iter().enumerate() {
+                row_lists[l] = ranges[i].map(|(a, b)| &flat[a..b]);
+            }
             let row = RowIn {
                 group,
                 clock: clock.as_ref().map(|c| c[i]),
                 session: session.as_ref().map(|s| s[i]),
                 values: &row_values,
                 accept: accepts.iter().all(|col| usable(col[i])),
+                lists: &row_lists,
             };
             if let Err(r) = self.core.push(&row) {
                 // The rows before it are in the core: hold them, and put the
@@ -2074,6 +2297,26 @@ impl WindowsRun {
             polars_bail!(ComputeError: "{}", msg);
         }
         let e = self.core.finish();
+        self.assemble(e)
+    }
+
+    /// The whole input is fed and its state is about to be saved to go on
+    /// ([`Self::save_bytes`]): the rows whose backward windows were waiting
+    /// on the last stamp, and every row after them whose forward windows
+    /// have closed, with the windows read as they stand. A run resumed on
+    /// this state is refused an input that starts at that stamp, so no row
+    /// can join them later, and the next run reads the same values one run
+    /// over the whole stream gives.
+    ///
+    /// # Errors
+    ///
+    /// An input the state was to skip that ended first, as [`Self::finish`].
+    pub fn settle(&mut self) -> PolarsResult<DataFrame> {
+        if let Some(msg) = self.resumed_input_ended_early() {
+            polars_bail!(ComputeError: "{}", msg);
+        }
+        self.core.settle();
+        let e = self.core.drain();
         self.assemble(e)
     }
 
@@ -2456,10 +2699,126 @@ impl WindowsRun {
         Ok(Some(values))
     }
 
+    /// The cross-group operator `op` (its index among them) in the reader's
+    /// words: its name and the expressions that read it.
+    fn cross_name(&self, op: usize) -> String {
+        let at = self.core.ops().len() + op;
+        let Some((key, _)) = self.k.columns.iter().find(|(_, o)| *o == at) else {
+            return "a cross-group operator".to_owned();
+        };
+        let mut kind = "a cross-group operator";
+        let mut names = Vec::new();
+        for f in &self.k.config.formulas {
+            for o in f.tree.operators() {
+                if hidden(o) == *key {
+                    kind = o.kind.name();
+                    if !names.contains(&f.name.as_str()) {
+                        names.push(f.name.as_str());
+                    }
+                }
+            }
+        }
+        format!("{kind} (in {})", names.join(", "))
+    }
+
+    /// A profile operator by the formulas it is in, as an error names it.
+    fn profile_name(&self, op: usize) -> String {
+        let out = self.core.ops().len() + self.core.cross_defs().len() + op;
+        let key = self
+            .k
+            .columns
+            .iter()
+            .find(|(_, i)| *i == out)
+            .map(|(k, _)| k);
+        let names: Vec<&str> = self
+            .k
+            .config
+            .formulas
+            .iter()
+            .filter(|f| key.is_some_and(|k| f.tree.operators().iter().any(|o| hidden(o) == *k)))
+            .map(|f| f.name.as_str())
+            .collect();
+        format!("ewm_profile (in {})", names.join(", "))
+    }
+
+    /// The operator a state cap or warning is about, in the reader's words.
+    fn state_name(&self, of: StateOf, op: usize) -> String {
+        match of {
+            StateOf::Cross => self.cross_name(op),
+            StateOf::Profile => self.profile_name(op),
+        }
+    }
+
+    /// The first row to take a cross-group operator or a profile past half
+    /// of its `max_state_bytes`, once a run, as the warning a caller raises.
+    pub fn take_warning(&mut self) -> Option<String> {
+        let (of, op, bytes, cap) = self.core.take_state_warning()?;
+        let (held, then, fix) = match of {
+            StateOf::Cross => (
+                "the rows of one stamp of the clock",
+                "a stamp that holds twice as many rows will be refused",
+                "Raise max_state_bytes, or use closed=\"left\", which holds no row for its \
+                 output.",
+            ),
+            StateOf::Profile => (
+                "one group",
+                "a group whose state grows to twice that will be refused",
+                "Raise max_state_bytes, or shorten window_size.",
+            ),
+        };
+        Some(format!(
+            "{WHO}: {} holds {bytes} bytes for {held}, past half of its max_state_bytes of \
+             {cap}; {then}. {fix}",
+            self.state_name(of, op)
+        ))
+    }
+
     /// A row the core refused, as the error naming it.
     fn refusal(&self, r: Refusal, _chunk_base: u64) -> PolarsError {
         let row = |seq: u64| seq - self.run_base + self.skipped;
         match r {
+            Refusal::StateCap {
+                seq,
+                of,
+                op,
+                bytes,
+                cap,
+            } => {
+                let name = self.state_name(of, op);
+                match of {
+                    StateOf::Cross => {
+                        polars_err!(ComputeError:
+                            "{WHO}: {name} would hold {bytes} bytes for the rows of one stamp of the clock \
+                             at row {} (counting from 0), past its max_state_bytes of {cap}. Under \
+                             closed=\"right\" each row of a stamp is held until the stamp closes; a \
+                             rank, a quantile or a read over neighbors also keeps each row's value. \
+                             Raise max_state_bytes, or use closed=\"left\", which holds no row for its \
+                             output.",
+                            row(seq)
+                        )
+                    }
+                    StateOf::Profile => {
+                        polars_err!(ComputeError:
+                            "{WHO}: {name} would hold {bytes} bytes for one group at row {} (counting \
+                             from 0), past its max_state_bytes of {cap}: its buckets, and under a \
+                             window_size the rows each keeps, or a quantile's sketches. Raise \
+                             max_state_bytes, or shorten window_size, or take fewer buckets.",
+                            row(seq)
+                        )
+                    }
+                }
+            }
+            Refusal::CrossRefTwice { seq, op, first } => {
+                let name = self.cross_name(op);
+                polars_err!(ComputeError:
+                    "{WHO}: {name} picks row {} (counting from 0) as the reference row of its \
+                     stamp, but it picked row {} at the same stamp already, and a stamp has one \
+                     reference row. Change where= to pick one row a stamp, such as by naming \
+                     one group's key.",
+                    row(seq),
+                    row(first)
+                )
+            }
             Refusal::Backwards {
                 seq,
                 back,
@@ -2518,6 +2877,19 @@ impl WindowsRun {
                     ),
                 }
             }
+            Refusal::OverCap {
+                seq,
+                rows,
+                row_bytes,
+                cap,
+            } => polars_err!(ComputeError:
+                "{WHO}: at row {} (counting from 0) a group's rolling_max or rolling_min window \
+                 holds {rows} rows of {row_bytes} bytes each, {} bytes, past max_state_bytes of \
+                 {cap}. A window on a clock holds every row inside its span, so a burst of rows \
+                 fills it. Shorten window_size, or raise max_state_bytes (at most 64 MiB).",
+                row(seq),
+                rows * row_bytes
+            ),
         }
     }
 
@@ -2873,6 +3245,9 @@ impl WindowsRun {
         }
         if file.core.kernels() != run.core.kernels()
             || file.core.ops() != run.core.ops()
+            || file.core.cross_defs() != run.core.cross_defs()
+            || file.core.moments() != run.core.moments()
+            || file.core.profiles() != run.core.profiles()
             || same_clock(file.core.clock_cfg()) != same_clock(run.core.clock_cfg())
         {
             return Err(format!(
@@ -3908,14 +4283,10 @@ mod tests {
         assert_eq!(run.held(), 3);
         let rest = run.finish().unwrap();
         assert_eq!(rest.height(), 3);
-        assert!(
-            rest.column("f")
-                .unwrap()
-                .f64()
-                .unwrap()
-                .iter()
-                .all(|v| v.is_none())
-        );
+        // Row 3's window (3, 5] has its far edge on the last row: whole.
+        // The windows of rows 4 and 5 reach past the input: null.
+        let f: Vec<Option<f64>> = rest.column("f").unwrap().f64().unwrap().iter().collect();
+        assert_eq!(f, [Some(40.0), None, None]);
     }
 
     /// The schema is the input's columns then the formulas, typed by what
@@ -4118,7 +4489,7 @@ mod tests {
         assert!(
             err.contains(
                 "the state's version is 2, but this version of rheon reads versions 9 \
-                 to 12"
+                 to 13"
             ),
             "{err}"
         );
@@ -4280,7 +4651,11 @@ mod tests {
         // a 70 bank's 10 cores have none and load as they did. 72 with
         // windows state 12 (PLAN 542): both written in the envelope every
         // state file shares; a 71 bank's 11 cores load as they did.
-        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (12, 72));
+        // Windows state 13 (task 561, the extrema) within schema 72, which
+        // no release has written: this build reads a 12 core as a 13
+        // without an extremum, so a 72 bank holding window targets resumes
+        // here, and a released build refuses a 72 bank by number.
+        assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (13, 72));
         assert_eq!(MIN_WINDOWS_VERSION, 9);
     }
 
@@ -4546,6 +4921,57 @@ mod tests {
         // A fresh run has read no stamp.
         let mut run = WindowsRun::new(config(LEFT), again.schema()).unwrap();
         assert_eq!(run.feed(&again, None).unwrap().height(), 3);
+    }
+
+    /// PLAN 567: `settle` reads the backward windows waiting on the last
+    /// stamp as they stand, and the rows ready go out; saved after it, the
+    /// state continues to the bit at every split point, with the first run's
+    /// rows, then the second's, one run's rows exactly. A forward window
+    /// beside them keeps the rows it still holds.
+    #[test]
+    fn a_settled_state_continues_to_the_bit_at_every_split() {
+        const MIXED: &str = r#"{"formulas": [
+            {"name": "b", "tree": ["ewm_mean", ["col", "x"], {"half_life": 2, "window_size": 3}]},
+            {"name": "l", "tree": ["ewm_sum", ["col", "x"], {"half_life": 2, "closed": "left"}]},
+            {"name": "a", "tree": ["rewm_sum", ["col", "x"], {"half_life": 2, "window_size": 2}]}],
+            "clock": "t", "gap_cap": 100}"#;
+        let stamps = [0.0, 1.0, 2.0, 2.0, 3.0, 5.0, 6.0, 6.0, 7.0, 9.0];
+        let df = frame(&stamps);
+        let mut whole = WindowsRun::new(config(MIXED), df.schema()).unwrap();
+        let mut one = whole.feed(&df, None).unwrap();
+        one.vstack_mut(&whole.finish().unwrap()).unwrap();
+        for k in 1..stamps.len() {
+            if stamps[k] == stamps[k - 1] {
+                continue;
+            }
+            let head = df.slice(0, k);
+            let mut run = WindowsRun::new(config(MIXED), df.schema()).unwrap();
+            let mut got = run.feed(&head, None).unwrap();
+            let settled = run.settle().unwrap();
+            // The backward windows of every row so far have their values: a
+            // row is held only for the window looking ahead.
+            let (b, l) = (settled.column("b").unwrap(), settled.column("l").unwrap());
+            assert_eq!(b.null_count() + l.null_count(), 0, "k={k}");
+            got.vstack_mut(&settled).unwrap();
+            let state = run.save_bytes().unwrap();
+            let rest = df.slice(k as i64, df.height() - k);
+            let mut run = WindowsRun::load_bytes(&state, config(MIXED), rest.schema()).unwrap();
+            assert_eq!(run.save_bytes().unwrap(), state, "k={k}: loaded, saved");
+            got.vstack_mut(&run.feed(&rest, None).unwrap()).unwrap();
+            got.vstack_mut(&run.finish().unwrap()).unwrap();
+            assert_eq!(got.height(), one.height(), "k={k}");
+            for name in ["b", "l", "a"] {
+                let (g, w) = (got.column(name).unwrap(), one.column(name).unwrap());
+                let bits = |c: &Column| -> Vec<Option<u64>> {
+                    c.f64()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.map(f64::to_bits))
+                        .collect()
+                };
+                assert_eq!(bits(g), bits(w), "k={k} {name}");
+            }
+        }
     }
 
     /// Task 159 (F1): a run marked itself started, and kept its input's

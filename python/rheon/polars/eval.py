@@ -249,17 +249,29 @@ def _takes_spec[R](
 
 def _logistic(spec: dict | None) -> bool:
     """Whether ``spec`` names a fit with ``loss = "logistic"``, whose
-    ``pred`` is a probability and its target a 0/1 label: ``ftrl``'s default
-    and one of ``sgd``'s losses."""
+    ``pred`` is a probability and its target a 0/1 label: ``ftrl``'s default,
+    one of ``sgd``'s losses, and a binomial ``glm``."""
     model = (spec or {}).get("model") or {}
+    if model.get("type") == "glm":
+        return model.get("family") == "binomial"
     loss = model.get("loss", "logistic" if model.get("type") == "ftrl" else None)
     return loss == "logistic"
 
 
 def _binary(binary: bool | None, spec: dict | None) -> bool:
     """``binary`` as given, or read from the spec when ``None``: on for a
-    logistic fit, off without a spec, where the loss cannot be known."""
-    return _logistic(spec) if binary is None else binary
+    logistic fit, off without a spec, where the loss cannot be known. A
+    string is refused: ``"false"`` is a non-empty string, which Python reads
+    as true, and scored a regression as a classifier."""
+    numpy_bool = type(binary).__name__ == "bool_"
+    if binary is not None and not isinstance(binary, (bool, numbers.Integral)) and not numpy_bool:
+        msg = (
+            f"rp.eval: binary must be True, False or None, but it is {binary!r}. Give "
+            "True for a 0/1 target scored as a probability, False for a regression, or "
+            "None to read it from the spec."
+        )
+        raise WrongTypeError(msg)
+    return _logistic(spec) if binary is None else bool(binary)
 
 
 def _pred_fields(who: str, df: pl.DataFrame, spec_name: str) -> list[str]:
@@ -701,9 +713,12 @@ def _no_hit(spec: dict | None) -> bool:
     the bank's ``emit_metrics`` nulls: a Poisson ``sgd`` (``loss =
     "poisson"``), where a rate is positive and a count never negative, so
     the sign test about zero agrees on every row and reads 1.0 whatever the
-    fit. Without ``spec``
+    fit; and a ``glm`` of every family but the binomial, whose mean is
+    positive against a target never negative. Without ``spec``
     the loss cannot be known, and the sign test is read."""
     model = (spec or {}).get("model") or {}
+    if model.get("type") == "glm":
+        return (model.get("family") or "poisson") != "binomial"
     return model.get("type") == "sgd" and model.get("loss") == "poisson"
 
 
@@ -1203,6 +1218,14 @@ def window_metrics(
     who = "rp.eval.window_metrics"
     spec_name, written = _spec_of(who, spec)
     _check_min_samples(who, min_samples)
+    if every is None or isinstance(every, bool):
+        # `True` read as one clock unit, and `None` raised Python's own
+        # comparison error.
+        msg = (
+            f"rp.eval.window_metrics: every must be a number of clock units or a duration, "
+            f'but it is {every!r}. Give the windows\' length, such as 10 or "1d".'
+        )
+        raise WrongTypeError(msg)
     probe = _probe(df)
     dtype = probe.schema.get(clock)
     if dtype is None:
@@ -1223,6 +1246,7 @@ def window_metrics(
         raise WrongTypeError(msg)
     ns: int | None
     narrow: pl.DataType | None = None
+    below: pl.Expr | None = None
     if isinstance(dtype, (pl.Datetime, pl.Date)) and isinstance(every, str) and _is_calendar(every):
         ns = _calendar_every(every, dtype, clock)
     else:
@@ -1264,20 +1288,36 @@ def window_metrics(
                 "the clock to Int64, or give a smaller every."
             )
             raise ValueError(msg)
-        if -(2**63) < low < 0:
+        if low < 0:
             # In Int64, and back to the clock's dtype only where the edge
             # fits: the window of 100 that holds -120 starts at -200, which
-            # Int8 wrapped to 56 (task 382a, A13).
-            start = pl.col(clock).cast(pl.Int64) // whole * whole
-            narrow = dtype
+            # Int8 wrapped to 56 (task 382a, A13). The edge is the clock less
+            # its floor remainder, which never passes the clock's greatest
+            # value; below the least value of an Int64 clock it is refused,
+            # where `// whole * whole` wrapped to near the greatest (review
+            # 2026-11-23, PY-1).
+            c64 = pl.col(clock).cast(pl.Int64)
+            start, below = _floor_edge(c64, whole)
+            narrow = dtype if low > -(2**63) else None
         else:
             start = (pl.col(clock) // whole * whole).cast(dtype)
     elif ns is None:
         start = (pl.col(clock) / every).floor() * every
     elif isinstance(dtype, pl.Duration):
-        start = (
-            (pl.col(clock).dt.total_nanoseconds() // ns * ns).cast(pl.Duration("ns")).cast(dtype)
-        )
+        # In the clock's own units where `every` is a whole number of them:
+        # through its nanoseconds, a clock of milliseconds past 292 years
+        # wrapped (review 2026-11-23, PY-1).
+        per = {"ns": 1, "us": 10**3, "ms": 10**6}[dtype.time_unit]
+        if ns % per == 0:
+            start, below = _floor_edge(pl.col(clock).to_physical(), ns // per)
+            start = start.cast(pl.Duration(dtype.time_unit))
+        else:
+            most = (2**63 - 1) // per
+            physical = pl.col(clock).to_physical()
+            unheld = (physical > most) | (physical < -most)
+            start, below = _floor_edge(pl.when(unheld).then(None).otherwise(physical) * per, ns)
+            start = start.cast(pl.Duration("ns")).cast(dtype)
+            below = unheld | below
     else:
         start = None
     keys = ["slot", "target", *_group_keys(group), "window_start"]
@@ -1286,14 +1326,14 @@ def window_metrics(
     if isinstance(df, pl.LazyFrame):
         job = _job(df, written or spec_name, targets, group, None, binary, who, log_loss=True,
                    also=[clock])  # fmt: skip
-        windows = _windowing(clock, start, every_text, keys[:-1], every, narrow)
+        windows = _windowing(clock, start, every_text, keys[:-1], every, narrow, below)
         merged = _query_sums(df, [job], keys=keys, weight=None, prepare=windows)[0]
         if merged is not None:
             return _thin(_scores(merged, keys, binary=binary), min_samples, keys)
         df = probe
     job = _job(df, written or spec_name, targets, group, None, binary, who, log_loss=True,
                also=[clock])  # fmt: skip
-    windows = _windowing(clock, start, every_text, keys[:-1], every, narrow)
+    windows = _windowing(clock, start, every_text, keys[:-1], every, narrow, below)
     s = _frame_sums(df, job, keys, None, windows)
     return _thin(_scores(s, keys, binary=binary), min_samples, keys)
 
@@ -1305,6 +1345,7 @@ def _windowing(
     keys: list[str],
     given: object,
     narrow: pl.DataType | None = None,
+    below: pl.Expr | None = None,
 ) -> Callable[[pl.DataFrame], pl.DataFrame]:
     """What puts each scored row of a long form in its window: the rows with
     a clock, each with its ``window_start``, by ``start`` or by Polars'
@@ -1314,7 +1355,9 @@ def _windowing(
     that does not divide a day from a key's first row, so each chunk is
     windowed after a row at that first clock, which is then dropped.
     ``narrow`` is a signed integer clock's dtype narrower than ``Int64``,
-    whose ``start`` is computed in ``Int64`` and cast back where it fits."""
+    whose ``start`` is computed in ``Int64`` and cast back where it fits.
+    ``below`` is true on a row whose window starts before the least value
+    its clock's dtype holds, which is refused."""
     anchors: pl.DataFrame | None = None
     mark = "__po_anchor"
 
@@ -1330,6 +1373,17 @@ def _windowing(
             has = has & pl.col(clock).is_finite()
         long = long.filter(has)
         if start is not None:
+            if below is not None:
+                unheld = long.filter(below)
+                if unheld.height:
+                    dtype = long.schema[clock]
+                    msg = (
+                        f"rp.eval.window_metrics: the window of every={given!r} that holds "
+                        f"clock {unheld[clock][0]} starts before the least value clock column "
+                        f"{clock!r}, {dtype}, can hold. Give a smaller every, or move the "
+                        "clock's origin."
+                    )
+                    raise ValueError(msg)
             out = long.with_columns(start.alias("window_start"))
             if narrow is not None:
                 edge = out.select(pl.col("window_start").arg_min()).item()
@@ -1371,6 +1425,15 @@ def _windowing(
         return _dynamic_windows(both, clock, every, keys).filter(~pl.col(mark)).drop(mark)
 
     return windowed
+
+
+def _floor_edge(value: pl.Expr, whole: int) -> tuple[pl.Expr, pl.Expr]:
+    """The left edge of the window of ``whole`` that holds an ``Int64``
+    ``value``, as the value less its floor remainder (Polars' ``%`` is the
+    floor's, so the edge is ``value // whole * whole`` where that fits), and
+    whether it is before the least ``Int64``."""
+    rest = value % whole
+    return value - rest, value < pl.lit(-(2**63), pl.Int64) + rest
 
 
 def _check_step_back(
@@ -2638,6 +2701,14 @@ def seqtest(
     """
     who = "rp.eval.seqtest"
     _frame(who, df, lazy=True)
+    if isinstance(targets, str):
+        # A string is a sequence of its characters: `"ret"` read `r`, `e`
+        # and `t`.
+        msg = (
+            f"{who}: targets must be a list of column names, but it is the string "
+            f"{targets!r}. Give the names in a list, such as [{targets!r}]."
+        )
+        raise WrongTypeError(msg)
     probe = _probe(df)
     _check_name("rp.eval.seqtest", probe, name)
     _check_columns(probe, who, group=group)
@@ -2688,6 +2759,18 @@ def seqtest(
             raise ValueError(msg)
         signs = {t: pl.col(t) for t in targets}
         names = ("log_e_pos", "log_e_neg", "n_pos", "n_neg")
+    if (
+        isinstance(min_weight, bool)
+        or not isinstance(min_weight, numbers.Real)
+        or not (math.isfinite(min_weight) and min_weight >= 0.0)
+    ):
+        # NaN nulled every output, and -5 and `True` were taken.
+        msg = (
+            f"{who}: min_weight must be a finite number of at least 0, but it is "
+            f"{min_weight!r}. Give the weight a key's sums must reach before its test reads, "
+            "such as the default 0."
+        )
+        raise ValueError(msg)
     test = _SeqTest(signs, names, keys, min_weight, name)
     if isinstance(df, pl.LazyFrame):
         # A column-mode target the query lacks is Polars' own refusal, here
@@ -4280,6 +4363,14 @@ def _check_half_life(who: str, half_life: float) -> None:
     1.25e16 rows. An infinite one, or a longer one, reached polars'
     ``ewm_mean`` as ``alpha = 0``, which it refuses with no word of the
     parameter."""
+    if isinstance(half_life, bool) or not isinstance(half_life, numbers.Real):
+        # `True` read as a half-life of one row.
+        msg = (
+            f"{who}: half_life must be a number of rows, but it is {half_life!r}. Give "
+            f"half_life a positive number of rows, or leave it None for one statistic over "
+            f"every row."
+        )
+        raise WrongTypeError(msg)
     finite = 0 < half_life < math.inf
     if not finite or 0.5 ** (1.0 / half_life) == 1.0:
         why = (
@@ -4647,6 +4738,7 @@ def diebold_mariano(
     p-value of 0 either way.
     """
     _frame("rp.eval.diebold_mariano", df, lazy=True)
+    _check_min_samples("rp.eval.diebold_mariano", min_samples)
     probe = _probe(df)
     _check_columns(probe, "rp.eval.diebold_mariano", group=group)
     keys = _group_keys(group)
@@ -4847,6 +4939,7 @@ def clark_west(
     measured as :func:`diebold_mariano`'s Notes say.
     """
     _frame("rp.eval.clark_west", df, lazy=True)
+    _check_min_samples("rp.eval.clark_west", min_samples)
     probe = _probe(df)
     _check_columns(probe, "rp.eval.clark_west", group=group)
     keys = _group_keys(group)

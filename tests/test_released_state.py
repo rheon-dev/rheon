@@ -95,6 +95,15 @@ INTRODUCED = {
     "hawkes": "2.1.0",
     "expectile": "2.1.0",
     "garch": "2.1.0",
+    "dcc": "2.1.0",
+    "realized": "2.1.0",
+    "pca": "2.1.0",
+    "power_variation": "2.1.0",
+    "tdigest": "2.1.0",
+    "ddsketch": "2.1.0",
+    "ewm_moments": "2.1.0",
+    "ar": "2.1.0",
+    "spectral": "2.1.0",
 }
 
 #: The workload's specs that need a parameter newer than a release, by the
@@ -377,6 +386,12 @@ DECLARED: dict[tuple[str, str], str] = {
     # (`UNDER_THE_PRIOR`).
     ("hmm", "2.0.0"): 'the next release, Changed: `hmm` under `"full"` and `"diag"` '
     "forgets each state's covariance toward a prior",
+    # PLAN 551 (the next release's Changed, and rule 5's twenty-sixth
+    # exception, the user's "Switch, restarting the level", 2026-11-22):
+    # `deco`'s level is the ratio of the means, which a release's file does
+    # not hold, so it loads with its level restarted (`RESTARTED_LEVEL`).
+    ("deco", "2.0.0"): "the next release, Changed: `deco`'s `rho` is the ratio of the "
+    "weighted means",
 }
 
 #: The moved specs a release's file goes on in under a rule of this build's
@@ -387,6 +402,16 @@ DECLARED: dict[tuple[str, str], str] = {
 #: where each float is a number; the posteriors, `state`, `loglik` and
 #: `coef` go on under the prior.
 UNDER_THE_PRIOR: dict[str, str] = {"hmm": "2.0.0"}
+
+#: The moved specs whose level restarts on load, by the newest release whose
+#: files it covers: `deco` (rule 5's twenty-sixth exception). Its standardizer
+#: goes on as the release's, so `u`, `weight_sum` and `settled_frac` are held
+#: to the release's own continuation to the bit; `rho` and `loglik` are null
+#: on the rows before the level relearns and numbers after, the relearning
+#: reached in the second half, and `withheld_reason` reads `below_warm_rows`
+#: on the null rows and the release's value on the rest; the last `coef` is
+#: a number where the release's is.
+RESTARTED_LEVEL: dict[str, str] = {"deco": "2.0.0"}
 
 #: The fields of the conformal interval, which a release's file goes on in
 #: under this build's multiplier (`DECLARED`'s task 368 entry): each group's
@@ -450,6 +475,17 @@ DECLARED.update(
         for name in ZERO_WEIGHT_MOVED
     }
 )
+
+#: Rule 5's twenty-seventh exception (the user's, 2026-11-22: "Switch to
+#: the new statistics"; PLAN 553): `corrchange`'s monitor is the linear
+#: CUSUM against the grid-corrected critical value and its sequential
+#: detector the Fisher-`z` one, with no layout changed. A file of any
+#: release holds no number the old statistic computed (the span's rows), so
+#: it goes on under the new statistic, not the release's: its rows are held
+#: to this build's own continuation from both halves, every field to the
+#: bit but ``since_flag``, which counts from the last flag the release's
+#: statistic made in the first half. Keyed as `DECLARED` is.
+NEW_STATISTICS = {("corrchange", "2.0.0")}
 
 
 def _online() -> bool:
@@ -802,6 +838,43 @@ UPPER_READ = (("calibration_", "ramsey_reset_", "break_wald_", "breusch_pagan_",
 RESETS = {"ridge_reset": "drift_y"}
 
 
+def _learned_clock_kept(
+    mine: pl.DataFrame,
+    want: pl.DataFrame,
+    name: str,
+    spec: dict,
+    second: pl.DataFrame,
+    wrong: dict[str, list[str]],
+    used: dict[str, int],
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """``learned_clock`` moves only on a row with a target to learn (review
+    2026-11-23, STRM-4): where the release's names the clock of a row whose
+    every target is null, this build's names an earlier row's; everywhere
+    else the two are equal. Checked here, and the column left out of the
+    general comparison."""
+    field = f"{name}.learned_clock"
+    if field not in mine.columns:
+        return mine, want
+    clock = spec.get("clock")
+    targets = [t for t in spec.get("targets", []) if isinstance(t, str)]
+    if clock is None or not targets or len(targets) != len(spec.get("targets", [])):
+        return mine, want
+    only_predicted = set(
+        second.filter(pl.all_horizontal(pl.col(t).is_null() for t in targets))[clock].to_list()
+    )
+    bad = []
+    for i, (g, w) in enumerate(zip(mine[field].to_list(), want[field].to_list(), strict=True)):
+        if g == w:
+            continue
+        if w in only_predicted and (g is None or g < w):
+            used["learned_clock"] = used.get("learned_clock", 0) + 1
+            continue
+        bad.append(f"{field} at row {i}: {g!r} against the release's {w!r}")
+    if bad:
+        wrong[f"{name}.learned_clock"] = bad[:3]
+    return mine.drop(field), want.drop(field)
+
+
 def _plain(frame: pl.DataFrame) -> pl.DataFrame:
     """A frame's struct columns opened, an Enum as its values: a release's
     `withheld_reason` has fewer categories, and its rows compare by value."""
@@ -967,7 +1040,15 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
     work = {name: reads for name, _, _, reads in probe.WORKLOAD}
     second = probe.stream().slice(probe.HALF)
     wrong: dict[str, list[str]] = {}
-    used: dict[str, int] = {"young": 0, "reset": 0, "conformal": 0, "converted": 0, "prior": 0}
+    used: dict[str, int] = {
+        "young": 0,
+        "reset": 0,
+        "conformal": 0,
+        "converted": 0,
+        "prior": 0,
+        "restart": 0,
+        "new_statistics": 0,
+    }
     for name in names:
         specs = [built[r] for r in work[name]] + [built[name]]
         bank = rp.ModelBank.load(states / f"{name}.state", specs=specs)
@@ -996,6 +1077,7 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
             rule["converted"] = first
             used["conformal"] += 1
         prior = _version(version) <= _version(UNDER_THE_PRIOR.get(name, "0.0.0"))
+        restart = _version(version) <= _version(RESTARTED_LEVEL.get(name, "0.0.0"))
         for table in sorted(p.name.split(".")[-2] for p in out.glob(f"{name}.*.parquet")):
             want = pl.read_parquet(out / f"{name}.{table}.parquet")
             if table not in got:
@@ -1005,6 +1087,25 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
             if prior:
                 used["prior"] += 1
                 wrong[f"{name}.{table}"] = _under_the_prior(mine, want)
+                continue
+            if restart:
+                used["restart"] += 1
+                wrong[f"{name}.{table}"] = _restarted_level(mine, want, name, table)
+                continue
+            if table == "rows" and any(
+                n == name and _version(version) <= _version(since) for n, since in NEW_STATISTICS
+            ):
+                # Under the new statistic (`NEW_STATISTICS`): as this build
+                # goes on from both halves, `since_flag` aside.
+                used["new_statistics"] += 1
+                own = rp.ModelBank(specs)
+                own.fit_predict(probe.stream().head(probe.HALF))
+                ours = _plain(own.fit_predict(second).select(name))
+                wrong[f"{name}.rows"] = _differences(
+                    _plain(mine).drop(f"{name}.since_flag"),
+                    ours.drop(f"{name}.since_flag"),
+                    against="this build's own",
+                )
                 continue
             left = np.ones(second.height, dtype=bool)
             if table == "rows" and name in RESETS:
@@ -1027,6 +1128,10 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
                 # count; the coefficients themselves are the `coef` table's.
                 mine = _plain(mine).drop(f"{name}.coef", strict=False)
                 want = _plain(want).drop(f"{name}.coef", strict=False)
+            if table == "rows":
+                mine, want = _learned_clock_kept(
+                    _plain(mine), _plain(want), name, built[name], second, wrong, used
+                )
             held = rule if table == "rows" else {k: v for k, v in rule.items() if k != "converted"}
             wrong[f"{name}.{table}"] = _differences(mine, want, counted=used, **held)
         # The rows were compared: the release wrote them, all of them.
@@ -1036,6 +1141,8 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
     # release's files read them as this build does and use no exception.
     young_moved = _version(version) <= _version("1.3.0")
     assert used["reset"] == len(set(RESETS) & set(names)), used
+    restated = {n for n, since in NEW_STATISTICS if _version(version) <= _version(since)}
+    assert used["new_statistics"] == len(restated & set(names)), used
     # A file of 1.4.0 or older holds a radius, and its interval moved; one of
     # 1.5.0 holds the multiplier, so the conformal entry covers none of its
     # specs.
@@ -1048,6 +1155,12 @@ def test_a_moved_spec_goes_on_as_its_release_did(resumed):
     assert bool(used["young"]) == young_moved, used
     under = [n for n in names if _version(version) <= _version(UNDER_THE_PRIOR.get(n, "0.0.0"))]
     assert bool(used["prior"]) == bool(under), used
+    # `learned_clock`'s exception excused a row: the temporal spec's held
+    # rows include ones with no target, released under its `embargo`.
+    if "ridge_datetime" in names:
+        assert used.get("learned_clock", 0) > 0, used
+    restarted = [n for n in names if _version(version) <= _version(RESTARTED_LEVEL.get(n, "0.0.0"))]
+    assert bool(used["restart"]) == bool(restarted), used
     wrong = {k: v for k, v in wrong.items() if v}
     assert not wrong, "\n".join(f"{k}: {line}" for k, v in sorted(wrong.items()) for line in v)
 
@@ -1080,6 +1193,48 @@ def _under_the_prior(got: pl.DataFrame, want: pl.DataFrame) -> list[str]:
         if bad.any():
             row = int(np.flatnonzero(bad)[0])
             out.append(f"{c} at row {row}: {u[row]!r} against the release's {v[row]!r}")
+    return out
+
+
+def _restarted_level(got: pl.DataFrame, want: pl.DataFrame, name: str, table: str) -> list[str]:
+    """Where a file whose level restarts on load (`RESTARTED_LEVEL`) parts
+    from the release's continuation in what the restart leaves alone: `u`,
+    `weight_sum` and `settled_frac` to the bit; `rho` and `loglik` null on a
+    run of first rows and numbers after it, which ends inside the frame;
+    `withheld_reason` `below_warm_rows` on that run and the release's value
+    after; and in any other table, a number wherever the release has one."""
+    got, want = _plain(got), _plain(want)
+    if got.height != want.height:
+        return [f"{got.height} rows against the release's {want.height}"]
+    out = []
+    if table != "rows":
+        for c in want.columns:
+            u, v = got[c], want[c]
+            floats = u.dtype.is_float() or isinstance(u.dtype, pl.List)
+            if floats and not (u.is_null() == v.is_null()).all():
+                out.append(f"{c}: a null where the release has a number, or the reverse")
+        return out
+    rho = got[f"{name}.rho"].to_numpy().astype(float)
+    learned = np.isfinite(rho)
+    if not learned.any():
+        return [f"{name}.rho: the level never relearned"]
+    first = int(np.flatnonzero(learned)[0])
+    if not learned[first:].all():
+        out.append(f"{name}.rho: null after the level relearned at row {first}")
+    for field in ("u", "weight_sum", "settled_frac"):
+        c = f"{name}.{field}"
+        _, exact = _gaps(got[c], want[c])
+        if not exact.all():
+            row = int(np.flatnonzero(~exact)[0])
+            out.append(f"{c} at row {row}: {got[c][row]!r} against the release's {want[c][row]!r}")
+    loglik = got[f"{name}.loglik"].to_numpy().astype(float)
+    if np.isfinite(loglik[:first]).any():
+        out.append(f"{name}.loglik: a number before the level relearned")
+    reason = got[f"{name}.withheld_reason"]
+    if not (reason[:first] == "below_warm_rows").all():
+        out.append(f"{name}.withheld_reason: not below_warm_rows before the level relearned")
+    if not reason[first:].eq_missing(want[f"{name}.withheld_reason"][first:]).all():
+        out.append(f"{name}.withheld_reason: the release's differs after the level relearned")
     return out
 
 

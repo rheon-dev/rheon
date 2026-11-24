@@ -245,8 +245,34 @@ what = "hawkes, one node, three kernels: AnyModel::step_into, into one kept Step
 [instructions.garch]
 what = "garch, one series after its start: AnyModel::step_into, into one kept Step, a 3 x 3 step a row; its budget is CI's first count"
 
+[instructions.pca]
+what = "pca, one component of 20 features by the incremental SVD: AnyModel::step_into, into one kept Step, a few Jacobi sweeps over 3 rows of 20 a row; its budget is CI's first count"
+
 [instructions.garch_figarch]
 what = "garch, FIGARCH of 1,000 lags after its start: AnyModel::step_into, its O(M) pass of the weights and their derivatives a row; its budget is CI's first count"
+
+[instructions.dcc]
+what = "dcc, three series, the asymmetric model learned after its start, no margins: AnyModel::step_into, into one kept Step, R's 3 x 3 factor and inverse and three R⁻¹ ∂R a row; its budget is CI's first count"
+
+[instructions.dcc_margins]
+what = "dcc, three series through GARCH margins, the asymmetric model learned after both starts: AnyModel::step_into, three GARCH steps and the correlation's a row; its budget is CI's first count"
+
+[instructions.realized]
+what = "realized, two series under a decay with Lee and Mykland's window of 100: AnyModel::step_into, into one kept Step, seven compensated sums and a ring a series a row; its budget is CI's first count"
+
+[instructions.power_variation]
+what = "power_variation, two series under a decay, a sum of squares, normalized bipower variation, a centered Parzen sum of 20 lags, a flat-top Bartlett sum of 10 and squares of ten-step returns: AnyModel::step_into, into one kept Step, eleven compensated sums, a ring of 10 raw returns and of 201 ten-step returns a series a row; its budget is CI's first count"
+
+[instructions.tdigest]
+what = "tdigest, one column at compression 100, three levels: AnyModel::step_into, a merge of a copy of its buffer a row; its budget is CI's first count"
+
+[instructions.ddsketch]
+what = "ddsketch, one column at the default alpha, three levels: AnyModel::step_into, a walk of its live buckets a row for the levels and tail means; its budget is CI's first count"
+[instructions.ar]
+what = "ar, an AR(5) with no features: AnyModel::step_into, into one kept Step, the ring, a rank-one update of a 6 x 6 Gram and its Cholesky a row; its budget is CI's first count"
+
+[instructions.spectral]
+what = "spectral, sixteen periods on an even clock: AnyModel::step_into, into one kept Step, a rotation and an add a period a row; its budget is CI's first count"
 
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
@@ -1403,7 +1429,7 @@ windows = { budget = 73.1016 }
 # read passed: five million, the allocator's pages given back at once, and a
 # whole read the test's negative control.
 [rss.streaming_5m]
-windows = { budget = 128.461 }
+windows = { budget = 116.4766 }
 darwin = { budget = 117.8438 }
 linux = { budget = 128.9688 }
 
@@ -1427,7 +1453,6 @@ linux = { budget = 25.1485 }
 "abs_resid_q0.9_hit" = { budget = 8.125 }
 autocorr_hit = { budget = 8.125 }
 break_wald_hit = { budget = 8.125 }
-breusch_pagan_hit = { budget = 8.125 }
 calibration_intercept_hit = { budget = 8.125 }
 calibration_slope_hit = { budget = 8.125 }
 calibration_wald_hit = { budget = 8.125 }
@@ -1439,22 +1464,17 @@ drift_hit = { budget = 0.25 }
 hi_hit = { budget = 8.125 }
 hit_rate_hit = { budget = 8.125 }
 ic_hit = { budget = 8.125 }
-jarque_bera_hit = { budget = 8.125 }
-kurtosis_hit = { budget = 8.125 }
 learned_clock = { budget = 8.125 }
-ljung_box_hit = { budget = 8.125 }
 lo_hit = { budget = 8.125 }
 mean_shift_x0 = { budget = 8.125 }
 mean_shift_x1 = { budget = 8.125 }
 mean_shift_x2 = { budget = 8.125 }
 pred_hit = { budget = 8.125 }
 r2_hit = { budget = 8.125 }
-ramsey_reset_hit = { budget = 8.125 }
 resid_hit = { budget = 8.125 }
 scored_clock = { budget = 8.125 }
 settled_frac = { budget = 8.125 }
 sigma_hit = { budget = 8.125 }
-skew_hit = { budget = 8.125 }
 spread_ratio_x0 = { budget = 8.125 }
 spread_ratio_x1 = { budget = 8.125 }
 spread_ratio_x2 = { budget = 8.125 }
@@ -1480,6 +1500,193 @@ withheld_reason = { budget = 1.125 }
 "abs_resid_q0.9_z" = { budget = 8.125 }
 autocorr_y = { budget = 8.125 }
 autocorr_z = { budget = 8.125 }
+breusch_pagan_y = { budget = 8.125 }
+breusch_pagan_z = { budget = 8.125 }
+coef = { budget = 68.9538 }
+coverage_y = { budget = 8.125 }
+coverage_z = { budget = 8.125 }
+drift_y = { budget = 0.25 }
+drift_z = { budget = 0.25 }
+hi_y = { budget = 8.125 }
+hi_z = { budget = 8.125 }
+hit_rate_y = { budget = 8.125 }
+hit_rate_z = { budget = 8.125 }
+ic_y = { budget = 8.125 }
+ic_z = { budget = 8.125 }
+jarque_bera_y = { budget = 8.125 }
+jarque_bera_z = { budget = 8.125 }
+kurtosis_y = { budget = 8.125 }
+kurtosis_z = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+ljung_box_y = { budget = 8.125 }
+ljung_box_z = { budget = 8.125 }
+lo_y = { budget = 8.125 }
+lo_z = { budget = 8.125 }
+mean_shift_x0 = { budget = 8.125 }
+mean_shift_x1 = { budget = 8.125 }
+mean_shift_x2 = { budget = 8.125 }
+pred_y = { budget = 8.125 }
+pred_z = { budget = 8.125 }
+r2_y = { budget = 8.125 }
+r2_z = { budget = 8.125 }
+ramsey_reset_y = { budget = 8.125 }
+ramsey_reset_z = { budget = 8.125 }
+resid_y = { budget = 8.125 }
+resid_z = { budget = 8.125 }
+scored_clock = { budget = 8.125 }
+settled_frac = { budget = 8.125 }
+sigma_y = { budget = 8.125 }
+sigma_z = { budget = 8.125 }
+skew_y = { budget = 8.125 }
+skew_z = { budget = 8.125 }
+spread_ratio_x0 = { budget = 8.125 }
+spread_ratio_x1 = { budget = 8.125 }
+spread_ratio_x2 = { budget = 8.125 }
+weight_sum = { budget = 8.125 }
+withheld_reason = { budget = 1.125 }
+zscore_y = { budget = 8.125 }
+zscore_z = { budget = 8.125 }
+[memory.garch]
+coef = { budget = 86.125 }
+forecast_y = { budget = 8.125 }
+forecast_z = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.125 }
+std_resid_y = { budget = 8.125 }
+std_resid_z = { budget = 8.125 }
+variance_y = { budget = 8.125 }
+variance_z = { budget = 8.125 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
+
+[memory.dcc]
+coef = { budget = 31.525 }
+corr_y_x0 = { budget = 8.125 }
+corr_y_z = { budget = 8.125 }
+corr_z_x0 = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+loglik = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+variance_x0 = { budget = 8.125 }
+variance_y = { budget = 8.125 }
+variance_z = { budget = 8.125 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.0 }
+
+[memory.realized]
+bns_y = { budget = 8.125 }
+bns_z = { budget = 8.125 }
+bv_y = { budget = 8.0 }
+bv_z = { budget = 8.0 }
+learned_clock = { budget = 8.125 }
+lm_jump_y = { budget = 0.25 }
+lm_jump_z = { budget = 0.25 }
+lm_y = { budget = 8.125 }
+lm_z = { budget = 8.125 }
+rv_y = { budget = 8.0 }
+rv_z = { budget = 8.0 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+tq_y = { budget = 8.0 }
+tq_z = { budget = 8.0 }
+tv_y = { budget = 8.0 }
+tv_z = { budget = 8.0 }
+weight_sum = { budget = 8.0 }
+
+[memory.pca]
+learned_clock = { budget = 8.125 }
+pc0_loading_x0 = { budget = 8.125 }
+pc0_loading_x1 = { budget = 8.125 }
+pc0_loading_x2 = { budget = 8.125 }
+pc0_score = { budget = 8.125 }
+pc0_share = { budget = 8.125 }
+pc0_var = { budget = 8.125 }
+pc1_loading_x0 = { budget = 8.125 }
+pc1_loading_x1 = { budget = 8.125 }
+pc1_loading_x2 = { budget = 8.125 }
+pc1_score = { budget = 8.125 }
+pc1_share = { budget = 8.125 }
+pc1_var = { budget = 8.125 }
+scored_clock = { budget = 8.125 }
+settled_frac = { budget = 8.125 }
+weight_sum = { budget = 8.125 }
+withheld_reason = { budget = 1.125 }
+
+[memory.power_variation]
+bv_y = { budget = 8.125 }
+bv_z = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+lrv_y = { budget = 8.0 }
+lrv_z = { budget = 8.0 }
+n_y = { budget = 8.0 }
+n_z = { budget = 8.0 }
+rv_y = { budget = 8.0 }
+rv_z = { budget = 8.0 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+sub_y = { budget = 8.0 }
+sub_z = { budget = 8.0 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
+
+[memory.ddsketch]
+"es0.05_y" = { budget = 8.125 }
+"es0.05_z" = { budget = 8.125 }
+"es0.25_y" = { budget = 8.125 }
+"es0.25_z" = { budget = 8.125 }
+"es0.95_y" = { budget = 8.125 }
+"es0.95_z" = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+"q0.05_y" = { budget = 8.125 }
+"q0.05_z" = { budget = 8.125 }
+"q0.25_y" = { budget = 8.125 }
+"q0.25_z" = { budget = 8.125 }
+"q0.95_y" = { budget = 8.125 }
+"q0.95_z" = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.125 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.0 }
+
+[memory.tdigest]
+"es0.05_y" = { budget = 8.125 }
+"es0.05_z" = { budget = 8.125 }
+"es0.25_y" = { budget = 8.125 }
+"es0.25_z" = { budget = 8.125 }
+"es0.95_y" = { budget = 8.125 }
+"es0.95_z" = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+"q0.05_y" = { budget = 8.125 }
+"q0.05_z" = { budget = 8.125 }
+"q0.25_y" = { budget = 8.125 }
+"q0.25_z" = { budget = 8.125 }
+"q0.95_y" = { budget = 8.125 }
+"q0.95_z" = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.125 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
+
+[memory.ewm_moments]
+ac1 = { budget = 8.125 }
+kurt = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+m3 = { budget = 8.125 }
+scored_clock = { budget = 8.125 }
+se_ac1 = { budget = 8.125 }
+se_kurt = { budget = 8.125 }
+se_m3 = { budget = 8.125 }
+settled_frac = { budget = 8.125 }
+weight_sum = { budget = 8.125 }
+[memory.ar]
+"abs_resid_q0.1_y" = { budget = 8.125 }
+"abs_resid_q0.1_z" = { budget = 8.125 }
+"abs_resid_q0.9_y" = { budget = 8.125 }
+"abs_resid_q0.9_z" = { budget = 8.125 }
+autocorr_y = { budget = 8.125 }
+autocorr_z = { budget = 8.125 }
 break_wald_y = { budget = 8.125 }
 break_wald_z = { budget = 8.125 }
 breusch_pagan_y = { budget = 8.125 }
@@ -1490,7 +1697,7 @@ calibration_slope_y = { budget = 8.125 }
 calibration_slope_z = { budget = 8.125 }
 calibration_wald_y = { budget = 8.125 }
 calibration_wald_z = { budget = 8.125 }
-coef = { budget = 68.9538 }
+coef = { budget = 100.7939 }
 coverage_y = { budget = 8.125 }
 coverage_z = { budget = 8.125 }
 cusum_sq_y = { budget = 8.125 }
@@ -1540,21 +1747,21 @@ weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 zscore_y = { budget = 8.125 }
 zscore_z = { budget = 8.125 }
-[memory.garch]
-coef = { budget = 86.125 }
-forecast_y = { budget = 8.125 }
-forecast_z = { budget = 8.125 }
+se_coef = { budget = 100.6623 }
+
+[memory.spectral]
 learned_clock = { budget = 8.125 }
+power_y_p0 = { budget = 8.125 }
+power_y_p1 = { budget = 8.125 }
+power_z_p0 = { budget = 8.125 }
+power_z_p1 = { budget = 8.125 }
 scored_clock = { budget = 8.0 }
-settled_frac = { budget = 8.125 }
-std_resid_y = { budget = 8.125 }
-std_resid_z = { budget = 8.125 }
-variance_y = { budget = 8.125 }
-variance_z = { budget = 8.125 }
+settled_frac = { budget = 8.0 }
 weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.125 }
 
 # --- raises and sign-offs -------------------------------------------------------
+
 [[raised]]
 key = "tolerance.rss"
 from = 0.15
@@ -1711,6 +1918,100 @@ to = 9901589
 date = 2026-11-21
 reason = "PLAN 539, hard rule 9: a row of weight 0 counts in no clock, so the stream's planning pass tests each row's weight and plans such a row on copies of the clock, a model kept aside for a fresh or blended scoring is put back after the row, and each group's step and clock checks take the weights and refuse at the first row in the input. CI's count on 1819e678 (W9): 9,608,553 to 9,901,589, +3.05%. Traced natively on arm64 (retired instructions of the block, median of 15) at the commits of the change, and ablated: the planning pass's branch and the kept model carry the whole of the first case's +2.4% (the branch out of line and the kept model boxed return about 1% of it), the groups' +2.2% lies in the bank's per-group path and was not attributed to one piece (the step and clock checks, the first-refused-row reduction and the planning pass each ablated to no change). Set to CI's count"
 changelog = "A row of weight 0 counting in no clock costs the bank's cheapest case"
+
+
+# TODO(coordinator): the raises below wait for CI's Valgrind counts on the
+# wave's sha. Uncomment each that is still over its budget, set `to` to the
+# count, drop the TODO from its reason, and keep `from` as the budget the
+# case had before the raise.
+#
+# [[raised]]
+# key = "instructions.deco"
+# from = 3006026
+# to = TODO
+# date = 2026-11-24
+# reason = "PLAN 551, rule 5's twenty-sixth exception (the user, 2026-11-22): `deco`'s `rho` is the ratio of the weighted means EW(A)/EW(V), the equicorrelation's weighted maximum-likelihood estimate, where the EW mean of `u` read two-thirds of it; each value keeps the EW means of the row's numerator and denominator, and the level learns once the standardizer's Kish size is above 5. +5.9% in the Linux bisect at bebd2336. TODO(coordinator): `to` from CI's count"
+# changelog = "`deco`'s ratio level costs 3-4% a row unblocked"
+#
+# [[raised]]
+# key = "instructions.corrchange_monitor_w2500"
+# from = 4375320
+# to = TODO
+# date = 2026-11-24
+# reason = "PLAN 553: the monitor holds its level at every span (the CUSUM of the delta-method series, against the Kolmogorov quantile) and keeps the CUSUM of the squared standardized difference beside each pair's, to withhold a flag where the scale ratio moved; +4.7% in the Linux bisect at ebe72622. TODO(coordinator): `to` from CI's count"
+# changelog = "`corrchange`'s monitor and window kinds cost 4.7% and 2.3% more"
+#
+# [[raised]]
+# key = "instructions.corrchange_window_w100"
+# from = 15037429
+# to = TODO
+# date = 2026-11-24
+# reason = "PLAN 553: the window kind carries the clock's spans and the state's bound that `window_size` on the clock needs; +2.3% in the Linux bisect at ebe72622. TODO(coordinator): `to` from CI's count"
+# changelog = "`corrchange`'s monitor and window kinds cost 4.7% and 2.3% more"
+#
+# [[raised]]
+# key = "instructions.ftrl"
+# from = 3512553
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-9: a row whose gradient would take a target's sum of squares past the largest double is skipped, on a bound read from the target's largest feature and largest sum, a pass over its slots a row; +3.4% in the Linux bisect. TODO(coordinator): `to` from CI's count"
+# changelog = "`ftrl` bounds each target's sum of squared gradients before its"
+#
+# [[raised]]
+# key = "instructions.holt"
+# from = 535026
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-4 and REG-5: a trend and a line fit formed in range at the ends of the doubles, each product tested as a normal double before use; +5.6% in the Linux bisect. TODO(coordinator): `to` from CI's count"
+# changelog = "`holt` forms its trend and line fit in range at the ends of the"
+#
+# [[raised]]
+# key = "instructions.huber_k20_sum"
+# from = 5926403
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-18 (rule 5's twenty-ninth exception): huber standardizes from every row's moments, a second EwDiag a target; +1.0% in the Linux bisect at 0c6b9975. TODO(coordinator): `to` from CI's count, net of the REG-12 fast path"
+# changelog = "`huber`'s and `quantile`'s scales from every row cost 0.3% to 2.7%"
+#
+# [[raised]]
+# key = "instructions.ewridge_k5"
+# from = 2119477
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
+# changelog = "A sum of squared weights kept at its own power of two costs a test a"
+#
+# [[raised]]
+# key = "instructions.sgd"
+# from = 2537026
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
+# changelog = "A sum of squared weights kept at its own power of two costs a test a"
+#
+# [[raised]]
+# key = "instructions.sgd_huber"
+# from = 2881700
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
+# changelog = "A sum of squared weights kept at its own power of two costs a test a"
+#
+# [[raised]]
+# key = "instructions.bank_ewridge_k5"
+# from = 5201744
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
+# changelog = "A sum of squared weights kept at its own power of two costs a test a"
+#
+# [[raised]]
+# key = "instructions.bank_ewridge_k5_groups"
+# from = 14662027
+# to = TODO
+# date = 2026-11-24
+# reason = "review 2026-11-23, REG-12: Kish's sums of squared weights kept at a power of two of their own, so weights whose squares are below the doubles still count; what remains after the inlined scale-0 path (one test of the power and the weight's range a sum a row; on arm64 ewridge_k5 +0.51%, sgd +1.24% against the build before the review). TODO(coordinator): `to` from CI's count on the fast path's commit, only if the case is still over"
+# changelog = "A sum of squared weights kept at its own power of two costs a test a"
 
 [[signoff]]
 key = "instructions.clock_temporal"

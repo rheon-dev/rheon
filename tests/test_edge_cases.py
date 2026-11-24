@@ -16,7 +16,7 @@ INF = float("inf")
 
 
 #: Models with no solve schedule (they update every row by construction).
-_NO_SOLVE_SCHEDULE = {"rls", "kalman", "ftrl", "sgd", "pa", "holt", "glm", "expectile"}
+_NO_SOLVE_SCHEDULE = {"rls", "kalman", "ftrl", "sgd", "pa", "holt", "glm", "expectile", "ar"}
 
 #: Every regression model, with the least it needs to be constructible.
 #: `tests/test_model_registry.py` holds this list complete.
@@ -33,6 +33,7 @@ MODELS = [
     ("glm", {}),
     ("expectile", {"expectile": 0.8}),
     ("holt", {"features": None}),  # no features keyword
+    ("ar", {"lags": 1, "ridge": 1e-3}),
 ]
 
 

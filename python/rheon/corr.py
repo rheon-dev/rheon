@@ -721,8 +721,10 @@ def equicorr_row(row: Any) -> float:
     """Estimate the common correlation from one standardized row, by Engle and Kelly's closed form.
 
     Use it to compute, offline, the per-row estimate a ``deco`` model reads:
-    Engle and Kelly's Lemma 2.3. For the mean correlation of a whole matrix,
-    use :func:`equicorr`.
+    Engle and Kelly's eq. 20, which their Lemma 2.3 bounds. It is a ratio
+    over one row, so its mean over many rows reads toward 0; ``deco``'s
+    ``rho`` averages its numerator and denominator before it divides. For
+    the mean correlation of a whole matrix, use :func:`equicorr`.
 
     .. rubric:: Parameters
 
@@ -883,7 +885,11 @@ def absorption(r: Any, k: int) -> float:
         )
         raise WrongTypeError(msg)
     k = operator.index(k)
-    vals = np.linalg.eigvalsh(_matrix(r, "rheon.corr.absorption"))[::-1]
+    # `eigvalsh` reads the lower triangle alone: the symmetric part, as
+    # `nearest` reads it, so the upper half counts (review 2026-11-23,
+    # MATH-6).
+    m = _matrix(r, "rheon.corr.absorption")
+    vals = np.linalg.eigvalsh(0.5 * (m + m.T))[::-1]
     total = float(vals.sum())
     if not 1 <= k <= vals.size:
         msg = (
@@ -1029,7 +1035,9 @@ def spectral(r: Any, k: int) -> tuple[Any, Any]:
         raise WrongTypeError(msg) if wrong_type else ValueError(msg)
     k = operator.index(k)
     m = _matrix(r, "rheon.corr.spectral")
-    vals, vecs = np.linalg.eigh(m)
+    # The symmetric part, as `absorption` reads it: `eigh` reads the lower
+    # triangle alone.
+    vals, vecs = np.linalg.eigh(0.5 * (m + m.T))
     order = np.argsort(vals)[::-1][:k]
     out_vals = vals[order]
     out_vecs = vecs[:, order].T.copy()
@@ -1265,7 +1273,11 @@ def from_blocks(b: Any, labels: Sequence[Any]) -> Any:
         )
         raise ValueError(msg)
     if not np.allclose(bm, bm.T, rtol=0.0, atol=1e-12, equal_nan=True):
-        i, j = np.unravel_index(int(np.nanargmax(np.abs(bm - bm.T))), bm.shape)
+        # The first pair that fails the check: a NaN against a number is
+        # one, which `nanargmax` skipped for the largest of the others
+        # (review 2026-11-23, MATH-6).
+        bad = ~np.isclose(bm, bm.T, rtol=0.0, atol=1e-12, equal_nan=True)
+        i, j = (int(v) for v in np.argwhere(bad)[0])
         msg = (
             f"rheon.corr.from_blocks: b must be symmetric, but b[{i}, {j}] is {bm[i, j]:.3g} and "
             f"b[{j}, {i}] is {bm[j, i]:.3g}. Pass a symmetric table, such as (b + b.T) / 2."
@@ -1334,9 +1346,11 @@ def mp_edge(n: int, m: int, sigma2: float = 1.0) -> tuple[float, float]:
 
 def _mp_edge(n: int, m: int, sigma2: float, who: str) -> tuple[float, float]:
     """:func:`mp_edge`, its refusal naming ``who``, the call the reader made."""
-    if n <= 0 or m <= 0:
+    # NaN passed `n <= 0` and made NaN edges; an infinite count, edges that
+    # bound nothing (review 2026-11-23, MATH-6).
+    if not (0 < n < float("inf") and 0 < m < float("inf")):
         msg = (
-            f"{who}: n and m must be above 0, but they are {n} and {m}. "
+            f"{who}: n and m must be finite numbers above 0, but they are {n} and {m}. "
             "Set n to the number of rows and m to the number of columns."
         )
         raise ValueError(msg)

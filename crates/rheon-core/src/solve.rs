@@ -113,10 +113,10 @@ fn factorize_ridged_into(
     debug_assert_eq!(c.len(), crate::ewcov::row_at(k));
     let diag = |i: usize| c[crate::ewcov::row_at(i) + i] + ridge;
     let trace: f64 = (0..k).map(diag).sum();
-    let base = if trace > 0.0 { trace / k as f64 } else { 1.0 };
+    let base = jitter_base(trace, k, diag);
     let threads = crate::pieces::degree();
     for (attempts, &eps) in JITTER.iter().enumerate() {
-        let jitter = base * eps;
+        let jitter = jitter_of(base, eps);
         if l.nrows() == k && l.ncols() == k {
             for j in 0..k {
                 let col = l.col_as_slice_mut(j);
@@ -163,13 +163,13 @@ fn factorize_shrunk_into(
     debug_assert_eq!(add.len(), k);
     let diag = |i: usize| m * c[crate::ewcov::row_at(i) + i] + add[i];
     let trace: f64 = (0..k).map(diag).sum();
-    let base = if trace > 0.0 { trace / k as f64 } else { 1.0 };
+    let base = jitter_base(trace, k, diag);
     let threads = crate::pieces::degree();
     if !(l.nrows() == k && l.ncols() == k) {
         *l = Mat::zeros(k, k);
     }
     for (attempts, &eps) in JITTER.iter().enumerate() {
-        let jitter = base * eps;
+        let jitter = jitter_of(base, eps);
         for j in 0..k {
             let col = l.col_as_slice_mut(j);
             let (above, rest) = col.split_at_mut(j);
@@ -211,13 +211,13 @@ fn factorize_shrunk_toward_into(
         m * c[at] + (r[i] * r[j]) * g[at]
     };
     let trace: f64 = (0..k).map(|i| entry(i, i)).sum();
-    let base = if trace > 0.0 { trace / k as f64 } else { 1.0 };
+    let base = jitter_base(trace, k, |i| entry(i, i));
     let threads = crate::pieces::degree();
     if !(l.nrows() == k && l.ncols() == k) {
         *l = Mat::zeros(k, k);
     }
     for (attempts, &eps) in JITTER.iter().enumerate() {
-        let jitter = base * eps;
+        let jitter = jitter_of(base, eps);
         for j in 0..k {
             let col = l.col_as_slice_mut(j);
             let (above, rest) = col.split_at_mut(j);
@@ -233,6 +233,30 @@ fn factorize_shrunk_toward_into(
         }
     }
     None
+}
+
+/// The jitters' base, the mean diagonal `trace/k`, from the diagonal's
+/// sum `trace`: read as 1 where the trace is not positive, and as the sum
+/// of each entry over `k` where the trace is past the largest double
+/// (`diag(1e308, 1e308)`), whose infinite base made the first rung's `0 ·
+/// ∞` NaN and failed every rung (review 2026-11-23, SOLVE-1). A finite
+/// trace keeps its bits.
+#[inline(always)]
+fn jitter_base(trace: f64, k: usize, diag: impl Fn(usize) -> f64) -> f64 {
+    if trace > 0.0 && trace.is_finite() {
+        trace / k as f64
+    } else if trace > 0.0 {
+        (0..k).map(|i| diag(i) / k as f64).sum()
+    } else {
+        1.0
+    }
+}
+
+/// Rung `eps`'s jitter on `base`: none on the first rung, whatever the
+/// base.
+#[inline(always)]
+fn jitter_of(base: f64, eps: f64) -> f64 {
+    if eps == 0.0 { 0.0 } else { base * eps }
 }
 
 /// The ladder [`factorize`] and [`factorize_into`] climb: the attempts so
@@ -253,11 +277,11 @@ fn factorize_shrunk_toward_into(
 fn rungs(a: &[f64], k: usize) -> impl Iterator<Item = (u32, f64)> {
     debug_assert_eq!(a.len(), k * k);
     let trace: f64 = (0..k).map(|i| a[i * k + i]).sum();
-    let base = if trace > 0.0 { trace / k as f64 } else { 1.0 };
+    let base = jitter_base(trace, k, |i| a[i * k + i]);
     JITTER
         .iter()
         .enumerate()
-        .map(move |(attempts, &eps)| (attempts as u32, base * eps))
+        .map(move |(attempts, &eps)| (attempts as u32, jitter_of(base, eps)))
 }
 
 /// Entry `(i, j)` of a rung's matrix: `A`'s lower triangle, `jitter` added
@@ -1443,10 +1467,10 @@ pub(crate) fn solve_spd_ridged(
     debug_assert_eq!(c.len(), crate::ewcov::row_at(k));
     let diag = |i: usize| c[crate::ewcov::row_at(i) + i] + ridge;
     let trace: f64 = (0..k).map(diag).sum();
-    let base = if trace > 0.0 { trace / k as f64 } else { 1.0 };
+    let base = jitter_base(trace, k, diag);
     let threads = crate::pieces::degree();
     for (attempts, &eps) in JITTER.iter().enumerate() {
-        let jitter = base * eps;
+        let jitter = jitter_of(base, eps);
         let mut l = Mat::from_fn(k, k, |i, j| match i.cmp(&j) {
             Ordering::Less => 0.0,
             Ordering::Equal => diag(i) + jitter,
@@ -2408,6 +2432,29 @@ mod small_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A positive definite matrix whose trace is past the largest double
+    /// factorizes (review 2026-11-23, SOLVE-1): at `diag(1e308, 1e308)` the
+    /// trace was infinite, the first rung's jitter `0 · ∞` NaN, and every
+    /// rung's factor failed, the solve with them. The mean diagonal is read
+    /// as the mean of the entries over `k` there, and the first rung adds
+    /// nothing, as it does everywhere.
+    #[test]
+    fn a_trace_past_the_largest_double_factorizes() {
+        let a = [1e308, 0.0, 0.0, 1e308];
+        let (x, attempts) = solve_spd(&a, &[1e308, 2e307], 2, 1).expect("a solve");
+        assert_eq!(attempts, 0);
+        // Through the Cholesky factor's square roots: to a rounding.
+        assert!(
+            (x[0] - 1.0).abs() < 1e-15 && (x[1] - 0.2).abs() < 1e-15,
+            "{x:?}"
+        );
+        let f = SpdFactor::of(&a, 2).expect("a factor");
+        assert_eq!(f.jitter(), 0.0);
+        let c = [1e308, 0.0, 1e308];
+        let mut sc = FactorWork::default();
+        assert!(sc.factor_ridged(&c, 0.0, 2).is_some(), "the ridged form");
+    }
     use crate::oracle::CanonBits;
 
     /// [`FactorWork::refactor_shifted`] leaves the factor of the matrix

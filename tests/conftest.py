@@ -1,5 +1,6 @@
 import contextlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,23 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if oracle_marks.is_oracle_test(item.path, getattr(item, "fixturenames", ())):
             item.add_marker(pytest.mark.oracle)
+
+
+def r_oracles_selected(markexpr: str) -> bool:
+    """Whether a run's ``-m`` asks for the R oracles: it names ``r_oracle``
+    and does not negate it. Only then are ``tests/r_oracle/``'s modules
+    collected, since they import rpy2, which needs R and the ``r-oracles``
+    group that one Linux job installs (pyproject.toml)."""
+    expr = " ".join(markexpr.split())
+    return "r_oracle" in expr and "not r_oracle" not in expr
+
+
+def pytest_ignore_collect(collection_path, config):
+    if "r_oracle" in collection_path.parts and not r_oracles_selected(
+        config.getoption("markexpr") or ""
+    ):
+        return True
+    return None
 
 
 def pytest_addoption(parser):
@@ -179,8 +197,14 @@ def _toml_value(v: object) -> str:
     if isinstance(v, (list, tuple)):
         return "[" + ", ".join(_toml_value(x) for x in v) + "]"
     if isinstance(v, dict):
-        return "{" + ", ".join(f"{k} = {_toml_value(x)}" for k, x in v.items()) + "}"
+        return "{" + ", ".join(f"{_toml_key(k)} = {_toml_value(x)}" for k, x in v.items()) + "}"
     raise TypeError(f"no TOML form for {type(v).__name__}")
+
+
+def _toml_key(k: str) -> str:
+    """A key bare where TOML takes it bare, quoted otherwise: an
+    ``ewm_moments`` leg lagged on its column (``"x@1"``) holds an ``@``."""
+    return k if re.fullmatch(r"[A-Za-z0-9_-]+", k) else json.dumps(k)
 
 
 def spec_toml(spec: dict) -> str:

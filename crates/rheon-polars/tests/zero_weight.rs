@@ -177,6 +177,20 @@ impl Clock {
 /// `v` clock units ([`Clock::span`]), `#clock` the clock entry on `t` /
 /// `ts`, and `#back` the one on the clock that steps back.
 const SPECS: &[(&str, &str, &str, &[Clock])] = &[
+    // Its transform takes no row of weight 0, and its rotation no step of one.
+    (
+        "spectral",
+        r#"{"type": "spectral", "periods": [@8, @3]}"#,
+        r#""targets": ["y"], "features": [], "half_life": @50"#,
+        ALL,
+    ),
+    // Its lags count learned rows: a row of weight 0 is none of them.
+    (
+        "ar",
+        r#"{"type": "ar", "lags": [1, 3], "ridge": 0.01}"#,
+        r#""targets": ["y"], "features": ["x0"], "half_life": @50"#,
+        ALL,
+    ),
     // `hazard_rows`, a count of rows on every clock; `hazard`, the clock
     // time between changepoints on every clock, rows without one (task 547).
     (
@@ -226,6 +240,36 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         r#"{"type": "ew_cov", "window_size": @30, "pca": 1}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": @20, "gap_cap": @50"#,
         ALL,
+    ),
+    // A lag is written on its leg, `x0@1`, whose `@` the span rule above
+    // would read: `\u0040` is the same key to JSON.
+    (
+        "ewm_moments",
+        r#"{"type": "ewm_moments", "se": true, "kind": {"kurt": "standardized"},
+            "terms": {"m3": {"x0": 3}, "kurt": {"x0": 4}, "ac": {"x0": 1, "x1\u00401": 1}}}"#,
+        r#""targets": [], "features": ["x0", "x1"], "half_life": @50"#,
+        UNTIMED,
+    ),
+    (
+        "ewm_moments_timed",
+        r#"{"type": "ewm_moments", "kind": "standardized",
+            "terms": {"rho": {"x0": 1, "x1\u00401500ms": 1}}}"#,
+        r#""targets": [], "features": ["x0", "x1"], "half_life": @50"#,
+        &[Clock::Temporal],
+    ),
+    (
+        "ewm_moments_rows",
+        r#"{"type": "ewm_moments", "window_rows": 40,
+            "terms": {"m2": {"x0": 2}, "ac2": {"x0": 1, "x0\u00402": 1}}}"#,
+        r#""targets": [], "features": ["x0", "x1"], "half_life": "inf""#,
+        UNTIMED,
+    ),
+    (
+        "ewm_moments_clock",
+        r#"{"type": "ewm_moments", "window_size": @20, "bias": false,
+            "terms": {"m2": {"x0": 2}, "m4": {"x1": 4}}}"#,
+        r#""targets": [], "features": ["x0", "x1"], "half_life": @50"#,
+        CLOCKED,
     ),
     (
         "ewridge",
@@ -288,7 +332,7 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         r#"{"type": "ewridge"}"#,
         r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40,
            "emit_drift": true, "drift_kind": "ddm", "drift_action": "reset",
-           "drift_options": {"error_above": 0.04, "warm_start": 10, "drift_threshold": 1.0}"#,
+           "drift_options": {"error_above": 0.04, "warm_start": 10, "drift_threshold": 1.5}"#,
         ALL,
     ),
     (
@@ -394,6 +438,66 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "dcc",
+        r#"{"type": "dcc", "asymmetric": true, "margins": "none", "start_rows": 50}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "dcc_margins",
+        r#"{"type": "dcc", "margin_start_rows": 50, "start_rows": 50}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        ALL,
+    ),
+    (
+        "dcc_span",
+        r#"{"type": "dcc", "margins": "none", "start_span": @20}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": @80"#,
+        ALL,
+    ),
+    (
+        "pca",
+        r#"{"type": "pca", "n_components": 1}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "pca_oja",
+        r#"{"type": "pca", "method": "oja", "n_components": 2}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "tdigest",
+        r#"{"type": "tdigest", "compression": 10, "quantiles": [0.05, 0.25, 0.95]}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+        ALL,
+    ),
+    (
+        "ddsketch",
+        r#"{"type": "ddsketch", "alpha": 0.02, "quantiles": [0.05, 0.25, 0.95]}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+        ALL,
+    ),
+    (
+        "ddsketch_decayed",
+        r#"{"type": "ddsketch", "quantiles": [0.25, 0.75]}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "ddsketch_rows",
+        r#"{"type": "ddsketch", "quantiles": [0.25, 0.75], "window_rows": 30}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+        UNTIMED,
+    ),
+    (
+        "ddsketch_clock",
+        r#"{"type": "ddsketch", "quantiles": [0.25, 0.75], "window_size": @30, "closed": "both"}"#,
+        r#""targets": ["y", "x0"], "features": []"#,
+        ALL,
+    ),
+    (
         "glm",
         r#"{"type": "glm", "refit_rows": 60}"#,
         r#""targets": ["yb"], "features": ["x0", "x1"], "half_life": @50"#,
@@ -427,6 +531,54 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         "hmm",
         r#"{"type": "hmm", "n_components": 2, "covariance_type": "full", "precision_prior": 0.1, "learn": true}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "realized",
+        r#"{"type": "realized", "lm_window": 30}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "realized_rows",
+        r#"{"type": "realized", "window_rows": 40}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        UNTIMED,
+    ),
+    (
+        "realized_clock",
+        r#"{"type": "realized", "window_size": @20, "lm_window": 12}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        ALL,
+    ),
+    (
+        "realized_clock_both",
+        r#"{"type": "realized", "window_size": @20, "closed": "both"}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        ALL,
+    ),
+    (
+        "power_variation",
+        r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}]}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "power_variation_rows",
+        r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}], "window_rows": 40}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        UNTIMED,
+    ),
+    (
+        "power_variation_clock",
+        r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}], "window_size": @20}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
+        ALL,
+    ),
+    (
+        "power_variation_clock_both",
+        r#"{"type": "power_variation", "terms": [{"name": "rv", "powers": [2.0]}, {"name": "bv", "powers": [1.0, 1.0], "normalize": true}, {"name": "lrv", "kernel": "parzen", "bandwidth": 4, "center": true}, {"name": "sub", "powers": [2.0], "scale": 3}], "window_size": @20, "closed": "both"}"#,
+        r#""targets": ["y", "x0"], "features": [], "half_life": "inf""#,
         ALL,
     ),
     (
@@ -924,16 +1076,27 @@ fn clock_fields(df: &DataFrame) -> Vec<String> {
 /// A row of weight 0 is scored as `predict` scores the row against the
 /// state the rows before it left: on each clock, at every zero row of the
 /// stream, the prediction the bank wrote is the one a bank fed the rows
-/// before it gives the row by `predict`.
+/// before it gives the row by `predict`. Under an `embargo` and under
+/// `label_clock` too, where such a row released the held rows its clock had
+/// seen out into the live models before it was scored (the user,
+/// 2026-11-23: "Score as predict"; review 2026-11-23, STRM-1): it releases
+/// none, as `predict` releases none.
 #[test]
 fn a_zero_weight_row_is_scored_as_predict_scores_it() {
     let (df, _, weights) = streams();
-    for clock in ALL {
+    let cases: [(&str, &[Clock]); 3] =
+        [("", ALL), (r#", "embargo": @3"#, ALL), (" #label", CLOCKED)];
+    for (clock, extra) in cases
+        .iter()
+        .flat_map(|(extra, clocks)| clocks.iter().map(move |c| (c, *extra)))
+    {
         let spec = spec_of(&spec_text(
             "m",
             r#"{"type": "ewridge"}"#,
-            r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40, "gap_cap": @20,
-               "emit_sigma": true"#,
+            &format!(
+                r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40, "gap_cap": @20,
+               "emit_sigma": true{extra}"#
+            ),
             *clock,
         ));
         let (out, _) = run(&spec, &df);
@@ -956,12 +1119,12 @@ fn a_zero_weight_row_is_scored_as_predict_scores_it() {
             assert_eq!(
                 cells(scored.column("pred_y").unwrap())[0],
                 pred[i],
-                "{clock:?}: row {i}"
+                "{clock:?}{extra}: row {i}"
             );
             assert_eq!(
                 cells(scored.column("sigma_y").unwrap())[0],
                 sigma[i],
-                "{clock:?}: row {i}: sigma"
+                "{clock:?}{extra}: row {i}: sigma"
             );
             checked += 1;
         }
@@ -1150,5 +1313,65 @@ fn a_zero_weight_row_of_another_session_closes_no_span() {
     assert_eq!(one.height(), 1, "{one}");
     for lens in cuttings(df.height()) {
         assert!(closed(&lens).equals_missing(&one), "{lens:?}");
+    }
+}
+
+/// A stream that ends on rows of weight 0 under an `embargo` or
+/// `label_clock` saves the state the stream without them saves, the counts
+/// of rows fed aside (hard rule 9): such a row released the held rows its
+/// clock had seen out into the live models, so the saved state had learned
+/// what the stream without it still held (review 2026-11-23, STRM-1; the
+/// user, 2026-11-23: "Score as predict"). On every clock that takes each,
+/// ending on the run of four rows of weight 0 at 63-66 and on the one at
+/// 100-103.
+#[test]
+fn a_stream_ending_on_zero_weight_rows_saves_what_it_would_without_them() {
+    let (df, _, weights) = streams();
+    let cases: [(&str, &[Clock]); 2] = [(r#", "embargo": @3"#, ALL), (" #label", CLOCKED)];
+    for (clock, extra) in cases
+        .iter()
+        .flat_map(|(extra, clocks)| clocks.iter().map(move |c| (c, *extra)))
+    {
+        let spec = spec_of(&spec_text(
+            "m",
+            r#"{"type": "ewridge"}"#,
+            &format!(
+                r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @40, "gap_cap": @20,
+               "emit_sigma": true{extra}"#
+            ),
+            *clock,
+        ));
+        for end in [67usize, 104] {
+            assert!(weights[end - 4..end].iter().all(|&w| w == 0.0), "{end}");
+            let head = df.slice(0, end);
+            let mask = BooleanChunked::from_iter_values(
+                "m".into(),
+                weights[..end].iter().map(|&v| v != 0.0),
+            );
+            let (_, with) = run(&spec, &head);
+            let (_, without) = run(&spec, &head.filter(&mask).unwrap());
+            // `last_row` is the last row the model predicted, a row of weight
+            // 0 among them (`ModelBank.last_row`'s rule), and is left out.
+            let strip = |v: &Value| without_key(&without_counts(v), "last_row");
+            let diff = first_difference(&strip(&with), &strip(&without), "");
+            assert!(
+                diff.is_none(),
+                "{clock:?}{extra}, ending at {end}: {diff:?}"
+            );
+        }
+    }
+}
+
+/// `v` with every map entry under `key` taken out, wherever it sits.
+fn without_key(v: &Value, key: &str) -> Value {
+    match v {
+        Value::Map(m) => Value::Map(
+            m.iter()
+                .filter(|(k, _)| k.as_str() != Some(key))
+                .map(|(k, v)| (k.clone(), without_key(v, key)))
+                .collect(),
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(|v| without_key(v, key)).collect()),
+        other => other.clone(),
     }
 }

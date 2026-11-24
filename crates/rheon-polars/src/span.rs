@@ -144,7 +144,13 @@ pub fn parse_duration(text: &str) -> Result<i64, String> {
 /// The text polars would write for a duration of `ns` nanoseconds, largest
 /// unit first and zero parts left out: `600e9` is `"10m"`, `5400e9` is
 /// `"1h30m"`, and zero is `"0s"`.
-pub fn format_duration(ns: i64) -> String {
+///
+/// Any `i128` of nanoseconds, an `i64` among them: a difference of two
+/// clocks or a span read from seconds can pass `i64`'s 292 years, and a
+/// cast to `i64` saturated there, so a 400-year step back was said as 292
+/// years (review 2026-11-23, BANK-9).
+pub fn format_duration(ns: impl Into<i128>) -> String {
+    let ns: i128 = ns.into();
     if ns == 0 {
         return "0s".into();
     }
@@ -154,7 +160,7 @@ pub fn format_duration(ns: i64) -> String {
     }
     let mut left = ns.unsigned_abs();
     for (name, per) in UNITS.iter().skip(1) {
-        let per = per.unsigned_abs();
+        let per = u128::from(per.unsigned_abs());
         if left >= per {
             out.push_str(&format!("{}{name}", left / per));
             left %= per;

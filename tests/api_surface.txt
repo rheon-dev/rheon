@@ -26,8 +26,15 @@
   ConsumedSourceWarning
   ModelBank
   OrderNotGuaranteedWarning
+  cross_mean(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+  cross_quantile(input: 'str | pl.Expr', quantile: 'float', *, interpolation: "Literal['nearest', 'higher', 'lower', 'midpoint', 'linear', 'equiprobable'] | None" = None, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+  cross_rank(input: 'str | pl.Expr', *, method: "Literal['average', 'min', 'max', 'dense', 'ordinal']" = 'average', descending: 'bool' = False, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+  cross_ref(input: 'str | pl.Expr', where: 'pl.Expr', *, closed: "Literal['right', 'left']" = 'right', max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+  cross_std(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', bias: 'bool' = False, neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   eval
   ewm_mean(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
+  ewm_moments(legs: 'dict[str, int]', *, half_life: 'float | Duration', kind: "Literal['central', 'raw', 'standardized', 'cumulant']" = 'central', bias: 'bool | None' = None, window_size: 'float | Duration | None' = None, lag_tolerance: 'float | Duration | None' = None, partial: "Literal['keep', 'null', 'drop'] | None" = None) -> 'pl.Expr'
+  ewm_profile(input: 'str | pl.Expr', *, period: 'float | Duration', half_life: 'float | Duration', buckets: 'int | None' = None, harmonics: 'int | None' = None, stat: "Literal['mean', 'var', 'std', 'quantile']" = 'mean', quantile: 'float | None' = None, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', offset: 'float | Duration | None' = None, weight: 'str | pl.Expr | None' = None, min_samples: 'int' = 1, bias: 'bool | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   ewm_quantile(input: 'str | pl.Expr', *, quantile: 'float', half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
   ewm_rate(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
   ewm_std(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, bias: 'bool' = False) -> 'pl.Expr'
@@ -37,6 +44,8 @@
   increment(input: 'str | pl.Expr') -> 'pl.Expr'
   ops
   predict(frame: 'pl.LazyFrame | pl.DataFrame', bank: 'ModelBank | State', *, chunk_size: 'int | None' = None, threads: 'int | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
+  rolling_max(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+  rolling_min(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   sim  # unstable
   stream
   unnest(frame: 'pl.LazyFrame | pl.DataFrame', specs: 'Specs | ModelBank | State', *, separator: 'str | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
@@ -103,6 +112,20 @@
   group_close = None
 
 [spec constructors]  # keyword names AND defaults are API
+  ar:
+    name
+    targets
+    lags
+    features = None
+    ridge = None
+    max_state_bytes = None
+    select = None
+    window_size = None
+    closed = 'right'
+    snapshot_every = None
+    max_rows_between_snapshots = None
+    window_budget = None
+    common
   audit:
     name
     columns
@@ -149,6 +172,37 @@
     monitor_rows = None
     boundary_gamma = None
     permute_every = None
+    window_size = None
+    monitor_span = None
+    max_state_bytes = None
+    common
+  dcc:
+    name
+    targets
+    asymmetric = False
+    margins = 'garch'
+    vol = 'garch'
+    dist = 'normal'
+    truncation = None
+    variance_targeting = False
+    margin_start_rows = None
+    margin_start_span = None
+    a = None
+    b = None
+    g = None
+    start_rows = None
+    start_span = None
+    max_state_bytes = None
+    common
+  ddsketch:
+    name
+    targets
+    quantiles
+    alpha = 0.007812341058161014
+    window_rows = None
+    window_size = None
+    closed = 'right'
+    max_state_bytes = None
     common
   deco:
     name
@@ -188,6 +242,18 @@
     snapshot_every = None
     max_rows_between_snapshots = None
     window_budget = None
+    common
+  ewm_moments:
+    name
+    terms
+    features = None
+    kind = None
+    bias = None
+    se = False
+    lag_tolerance = None
+    window_rows = None
+    window_size = None
+    max_state_bytes = None
     common
   ewridge:
     name
@@ -417,6 +483,23 @@
     coef_sum = None
     standardize = True
     common
+  pca:
+    name
+    features
+    n_components = None
+    method = 'svd'
+    learning_rate = None
+    max_state_bytes = None
+    common
+  power_variation:
+    name
+    targets
+    terms
+    window_rows = None
+    window_size = None
+    closed = 'right'
+    max_state_bytes = None
+    common
   quantile:
     name
     targets
@@ -446,6 +529,16 @@
     preavg_rows = None
     noise_stride = None
     iv_stride = None
+    common
+  realized:
+    name
+    targets
+    window_rows = None
+    window_size = None
+    closed = 'right'
+    lm_window = None
+    lm_beta = 0.99
+    max_state_bytes = None
     common
   rls:
     name
@@ -487,6 +580,27 @@
     coef_sum = None
     strict_binary = False
     common
+  spectral:
+    name
+    targets
+    periods
+    spacing = None
+    scaling = 'density'
+    detrend = True
+    max_state_bytes = None
+    window_size = None
+    closed = 'right'
+    snapshot_every = None
+    max_rows_between_snapshots = None
+    window_budget = None
+    common
+  tdigest:
+    name
+    targets
+    quantiles
+    compression = 100.0
+    max_state_bytes = None
+    common
 
 [resolved defaults]  # what a spec left out resolves to, read off the bank's own build of the spec shown (_rheon.resolved_defaults): a moved default is a diff here
   chunk_size = 100000
@@ -506,6 +620,28 @@
     stream.resid_autocorr_lag = 1
     stream.robust_se_lags = 0
     stream.window_budget = null
+  ar(features=['x0'], half_life=50.0, lags=2, targets=['y']):
+    model.decay.Halflife = 50.0
+    model.fit_intercept = true
+    model.lags = [1, 2]
+    model.max_rows_between_snapshots = null
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_features = 1
+    model.n_targets = 1
+    model.ridge = 0.0
+    model.select = null
+    model.window = null
+    model.window_every = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   audit(columns=['x0', 'x1']):
     model.distinct_cap = 256
     model.gap_cap = null
@@ -575,6 +711,52 @@
     stream.robust_se_half_life = "inf"
     stream.specification_half_life = "inf"
     stream.tails_half_life = "inf"
+  dcc(a=0.05, b=0.9, half_life=50.0, targets=['y', 'x0']):
+    model.asymmetric = false
+    model.decay.Halflife = 50.0
+    model.margins.dist = "normal"
+    model.margins.horizon = 1
+    model.margins.max_state_bytes = null
+    model.margins.min_weight = 0.0
+    model.margins.n_targets = 2
+    model.margins.start_rows = 2000
+    model.margins.start_span = null
+    model.margins.truncation = null
+    model.margins.variance_targeting = false
+    model.margins.vol = "garch"
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_targets = 2
+    model.params = [0.05, 0.9]
+    model.start_rows = 500
+    model.start_span = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0, 0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
+  ddsketch(half_life=50.0, quantiles=[0.05, 0.25, 0.95], targets=['y']):
+    model.alpha = 0.00781234105816
+    model.closed = "right"
+    model.decay.Halflife = 50.0
+    model.levels = [0.05, 0.25, 0.95]
+    model.max_state_bytes = null
+    model.n_targets = 1
+    model.window_clock = null
+    model.window_rows = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   deco(features=['x0', 'x1'], half_life=50.0):
     model.alpha = null
     model.beta = null
@@ -631,6 +813,20 @@
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
     stream.min_weight = [3.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
+  ewm_moments(features=['x0'], half_life=50.0, terms={'var': {'x0': 2}}):
+    model.decay.Halflife = 50.0
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.terms = [{"bias": false, "kind": "central", "name": "var", "powers": [[{"col": 0, "lag": 0.0}, 2]]}]
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
@@ -975,6 +1171,41 @@
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
+  pca(features=['x0', 'y'], half_life=50.0):
+    model.decay.Halflife = 50.0
+    model.learning_rate = null
+    model.max_state_bytes = null
+    model.method = "svd"
+    model.min_weight = 0.0
+    model.n_components = 2
+    model.n_features = 2
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
+  power_variation(half_life=50.0, targets=['y'], terms={'rv': {'powers': [2]}, 'lrv': {'kernel': 'parzen', 'bandwidth': 3}}):
+    model.closed = "right"
+    model.decay.Halflife = 50.0
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_targets = 1
+    model.terms = [{"kind": {"multipower": {"normalize": false, "powers": [2.0]}}, "scale": 1}, {"kind": {"kernel": {"bandwidth": 3, "center": false, "flat_top": false, "kernel": "parzen"}}, "scale": 1}]
+    model.window_clock = null
+    model.window_rows = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   quantile(features=['x0'], half_life=50.0, quantile=0.5, targets=['y']):
     model.decay.Halflife = 50.0
     model.emit_scale = false
@@ -1029,6 +1260,25 @@
     stream.robust_se_half_life = "inf"
     stream.specification_half_life = "inf"
     stream.tails_half_life = "inf"
+  realized(half_life=50.0, targets=['y']):
+    model.closed = "right"
+    model.decay.Halflife = 50.0
+    model.lm_beta = 0.99
+    model.lm_window = null
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_targets = 1
+    model.window_clock = null
+    model.window_rows = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   rls(features=['x0'], half_life=50.0, targets=['y']):
     model.coef_prior = null
     model.decay.Halflife = 50.0
@@ -1087,6 +1337,38 @@
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
+  spectral(half_life=50.0, periods=[8.0, 3.0], targets=['y']):
+    model.decay.Halflife = 50.0
+    model.detrend = true
+    model.frequencies = [0.125, 0.333333333333]
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_targets = 1
+    model.scaling = "density"
+    model.spacing = 1.0
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
+  tdigest(quantiles=[0.05, 0.25, 0.95], targets=['y']):
+    model.compression = 100.0
+    model.levels = [0.05, 0.25, 0.95]
+    model.max_state_bytes = null
+    model.n_targets = 1
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
   ewridge(features=['x0'], lam=0.99, targets=['y']), the lines that differ from ewridge's:
     model.decay.Lam = 0.99
     model.solve_every = 0.0
@@ -1150,25 +1432,25 @@
     model.decay.Halflife = "inf"
     model.refit_rows = 0
     model.window_rows = 50
-    stream.breaks_half_life = "inf"
-    stream.calibration_half_life = "inf"
-    stream.feature_health_half_life = "inf"
-    stream.influence_half_life = "inf"
-    stream.robust_se_half_life = "inf"
-    stream.specification_half_life = "inf"
-    stream.tails_half_life = "inf"
+    stream.breaks_half_life = 17.3263687769
+    stream.calibration_half_life = 69.3054751076
+    stream.feature_health_half_life = 17.3263687769
+    stream.influence_half_life = 17.3263687769
+    stream.robust_se_half_life = 17.3263687769
+    stream.specification_half_life = 17.3263687769
+    stream.tails_half_life = 17.3263687769
   expectile(closed='both', expectile=0.8, features=['x0'], half_life=inf, targets=['y'], window_size=30.0), the lines that differ from expectile's:
     model.closed = "both"
     model.decay.Halflife = "inf"
     model.refit_rows = 0
     model.window_clock = 30.0
-    stream.breaks_half_life = "inf"
-    stream.calibration_half_life = "inf"
-    stream.feature_health_half_life = "inf"
-    stream.influence_half_life = "inf"
-    stream.robust_se_half_life = "inf"
-    stream.specification_half_life = "inf"
-    stream.tails_half_life = "inf"
+    stream.breaks_half_life = 10.3933557491
+    stream.calibration_half_life = 41.5734229963
+    stream.feature_health_half_life = 10.3933557491
+    stream.influence_half_life = 10.3933557491
+    stream.robust_se_half_life = 10.3933557491
+    stream.specification_half_life = 10.3933557491
+    stream.tails_half_life = 10.3933557491
   hawkes(half_life=inf, kernel_decays=[1.0, 5.0], targets=['y'], window_events=20), the lines that differ from hawkes's:
     model.decay.Halflife = "inf"
     model.window_events = 20
@@ -1199,6 +1481,40 @@
     model.variance_targeting = true
   garch(start_span=500.0, targets=['y']), the lines that differ from garch's:
     model.start_span = 500.0
+  dcc(a=0.03, asymmetric=True, b=0.9, g=0.04, half_life=50.0, targets=['y', 'x0']), the lines that differ from dcc's:
+    model.asymmetric = true
+    model.params = [0.03, 0.9, 0.04]
+  dcc(a=0.05, b=0.9, half_life=50.0, margins='none', start_span=500.0, targets=['y', 'x0']), the lines that differ from dcc's:
+    model.margins = null
+    model.start_span = 500.0
+  dcc(a=0.05, b=0.9, dist='t', half_life=50.0, margin_start_span=900.0, margins='garch', targets=['y', 'x0'], vol='gjr'), the lines that differ from dcc's:
+    model.margins.dist = "t"
+    model.margins.start_span = 900.0
+    model.margins.vol = "gjr"
+  realized(half_life=inf, targets=['y'], window_rows=50), the lines that differ from realized's:
+    model.decay.Halflife = "inf"
+    model.window_rows = 50
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
+  realized(closed='both', half_life=inf, targets=['y'], window_size=30.0), the lines that differ from realized's:
+    model.closed = "both"
+    model.decay.Halflife = "inf"
+    model.window_clock = 30.0
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
+  ewm_moments(features=['x0'], half_life=50.0, se=True, terms={'var': {'x0': 2}}, window_rows=50), the lines that differ from ewm_moments's:
+    model.se = true
+    model.window_rows = 50
 
 [ModelBank]  # name and signature: a parameter added or a default moved is a diff here
   __init__(self, specs: 'Iterable[dict[str, Any]]', *, threads: 'int | None' = None) -> 'None'
@@ -1308,7 +1624,7 @@
     resid_y: Float64
     weight_sum: Float64
     settled_frac: Float64
-    withheld_reason: Enum[below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified]
+    withheld_reason: Enum[below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample]
     coef: List[Float64]
     support_coef: List[Float64]
   ModelBank.marginal():
@@ -1572,21 +1888,30 @@
     subset(g: 'Gram', columns: 'Sequence[str | int]') -> 'Gram'
     vif(g: 'Gram', *, features: 'Sequence[str | int] | None' = None) -> 'Any'
   ops:
+    cross_mean(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+    cross_quantile(input: 'str | pl.Expr', quantile: 'float', *, interpolation: "Literal['nearest', 'higher', 'lower', 'midpoint', 'linear', 'equiprobable'] | None" = None, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+    cross_rank(input: 'str | pl.Expr', *, method: "Literal['average', 'min', 'max', 'dense', 'ordinal']" = 'average', descending: 'bool' = False, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+    cross_ref(input: 'str | pl.Expr', where: 'pl.Expr', *, closed: "Literal['right', 'left']" = 'right', max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+    cross_std(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', bias: 'bool' = False, neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     ewm_mean(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
+    ewm_moments(legs: 'dict[str, int]', *, half_life: 'float | Duration', kind: "Literal['central', 'raw', 'standardized', 'cumulant']" = 'central', bias: 'bool | None' = None, window_size: 'float | Duration | None' = None, lag_tolerance: 'float | Duration | None' = None, partial: "Literal['keep', 'null', 'drop'] | None" = None) -> 'pl.Expr'
+    ewm_profile(input: 'str | pl.Expr', *, period: 'float | Duration', half_life: 'float | Duration', buckets: 'int | None' = None, harmonics: 'int | None' = None, stat: "Literal['mean', 'var', 'std', 'quantile']" = 'mean', quantile: 'float | None' = None, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', offset: 'float | Duration | None' = None, weight: 'str | pl.Expr | None' = None, min_samples: 'int' = 1, bias: 'bool | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     ewm_quantile(input: 'str | pl.Expr', *, quantile: 'float', half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
     ewm_rate(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
     ewm_std(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, bias: 'bool' = False) -> 'pl.Expr'
     ewm_sum(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 0, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
     ewm_var(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, bias: 'bool' = False) -> 'pl.Expr'
     increment(input: 'str | pl.Expr') -> 'pl.Expr'
+    rolling_max(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+    rolling_min(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
   sim:  # unstable
     regimes(m: 'int', *, states: 'Sequence[Any]', transition: 'Any', n_blocks: 'int', rows_per_block: 'int', durations: 'Sequence[int] | None' = None, design: 'str' = 'step', smooth_rows: 'int' = 0, phi: 'float | Sequence[float]' = 0.0, scale_state: 'float | Sequence[float]' = 0.0, async_rates: 'Sequence[float] | None' = None, noise: 'float' = 0.0, cycle_profile: 'Sequence[float] | None' = None, cycle_rows: 'int | None' = None, activity: 'tuple[float, float] | None' = None, seed: 'int' = 0) -> 'dict[str, pl.DataFrame]'
   stream:
     ROLE
     embargo(lf: 'pl.LazyFrame | pl.DataFrame', *, clock: 'str', delay: 'float | Duration', weight: 'str | None' = None, role: 'str' = '_online_role') -> 'pl.LazyFrame | pl.DataFrame'
     load_checkpoint(source: 'str | os.PathLike[str] | bytes') -> 'dict[str, bytes]'
-    merge(*frames: 'pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame]', clock: 'str', source: 'str' = 'source', by: 'str | None' = None, restart_after_step_back: 'float | Duration | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
-    refresh_time(lf: 'pl.LazyFrame | pl.DataFrame', *, series: 'str', names: 'Sequence[str]', clock: 'str', value: 'str', group: 'str | None' = None, pairs: 'bool' = False, keep: 'Sequence[str]' = (), chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
+    merge(*frames: 'pl.LazyFrame | pl.DataFrame | Mapping[str, pl.LazyFrame | pl.DataFrame]', clock: 'str', source: 'str' = 'source', by: 'str | None' = None, carry: 'str | Sequence[str]' = (), restart_after_step_back: 'float | Duration | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
+    refresh_time(lf: 'pl.LazyFrame | pl.DataFrame', *, series: 'str', names: 'Sequence[str]', clock: 'str', value: 'str', group: 'str | None' = None, pairs: 'bool' = False, keep: 'Sequence[str]' = (), age: 'bool' = False, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None) -> 'pl.LazyFrame | pl.DataFrame'
     save_checkpoint(path: 'str | os.PathLike[str]', stages: 'Mapping[str, ModelBank | bytes | str | os.PathLike[str]]') -> 'None'
     with_windows(lf: 'pl.LazyFrame | pl.DataFrame', *exprs: 'pl.Expr', clock: 'str | None' = None, gap_cap: 'float | Duration | None' = None, restart_after_step_back: 'float | Duration | None' = None, session: 'str | None' = None, session_gap: 'float | Duration | None' = None, group: 'str | None' = None, like: 'dict[str, Any] | None' = None, chunk_size: 'int | None' = None, load_state: 'State | bytes | None' = None, save_state: 'State | None' = None, **named: 'pl.Expr') -> 'pl.LazyFrame | pl.DataFrame'
 
@@ -2361,6 +2686,131 @@
     settled_frac: f64
     withheld_reason: enum
     coef: list[f64]
+  dcc minimal:
+    variance_y: f64
+    variance_z: f64
+    variance_w: f64
+    corr_y_z: f64
+    corr_y_w: f64
+    corr_z_w: f64
+    loglik: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
+  realized minimal:
+    rv_y: f64
+    bv_y: f64
+    tv_y: f64
+    tq_y: f64
+    bns_y: f64
+    lm_y: f64
+    lm_jump_y: bool
+    rv_z: f64
+    bv_z: f64
+    tv_z: f64
+    tq_z: f64
+    bns_z: f64
+    lm_z: f64
+    lm_jump_z: bool
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  pca minimal:
+    pc0_var: f64
+    pc0_share: f64
+    pc0_loading_x0: f64
+    pc0_loading_x1: f64
+    pc0_loading_x2: f64
+    pc0_score: f64
+    pc1_var: f64
+    pc1_share: f64
+    pc1_loading_x0: f64
+    pc1_loading_x1: f64
+    pc1_loading_x2: f64
+    pc1_score: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  power_variation minimal:
+    rv_y: f64
+    bv_y: f64
+    lrv_y: f64
+    n_y: f64
+    rv_z: f64
+    bv_z: f64
+    lrv_z: f64
+    n_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  tdigest minimal:
+    q0.05_y: f64
+    q0.25_y: f64
+    q0.95_y: f64
+    es0.05_y: f64
+    es0.25_y: f64
+    es0.95_y: f64
+    q0.05_z: f64
+    q0.25_z: f64
+    q0.95_z: f64
+    es0.05_z: f64
+    es0.25_z: f64
+    es0.95_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  ddsketch minimal:
+    q0.05_y: f64
+    q0.25_y: f64
+    q0.95_y: f64
+    es0.05_y: f64
+    es0.25_y: f64
+    es0.95_y: f64
+    q0.05_z: f64
+    q0.25_z: f64
+    q0.95_z: f64
+    es0.05_z: f64
+    es0.25_z: f64
+    es0.95_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  ddsketch windowed:
+    q0.25_y: f64
+    q0.75_y: f64
+    es0.25_y: f64
+    es0.75_y: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  ewm_moments minimal:
+    skew: f64
+    co: f64
+    ac1: f64
+    se_skew: f64
+    se_co: f64
+    se_ac1: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  ar minimal:
+    pred_y: f64
+    resid_y: f64
+    pred_z: f64
+    resid_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
+  spectral minimal:
+    power_y_p0: f64
+    power_y_p1: f64
+    power_z_p0: f64
+    power_z_p1: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
   deco blocked:
     u_a: f64
     u_b: f64
@@ -2389,8 +2839,11 @@
     clock_min: Float64
     clock_max: Float64
     coef: List[Float64]
+  ar: the shared columns only
   bocpd: the shared columns only
   corrchange: the shared columns only
+  dcc: the shared columns only
+  ddsketch: the shared columns only
   deco: the shared columns only
   ew_class: the shared columns only
   ew_cov:
@@ -2418,6 +2871,7 @@
     means_by_target: List[Float64]
     cross_centered: List[Float64]
     coef: List[Float64]
+  ewm_moments: the shared columns only
   ewridge:
     spec: String
     group: String
@@ -2506,6 +2960,8 @@
     pair_t_stat: List[Float64]
   micro: the shared columns only
   pa: the shared columns only
+  pca: the shared columns only
+  power_variation: the shared columns only
   quantile: the shared columns only
   rcov:
     spec: String
@@ -2530,9 +2986,12 @@
     rcov_iv_sparse: List[Float64]
     rcov_iq: List[Float64]
     rcov_psd_repaired: Boolean
+  realized: the shared columns only
   rls: the shared columns only
   seqtest: the shared columns only
   sgd: the shared columns only
+  spectral: the shared columns only
+  tdigest: the shared columns only
   ew_cov with pca:
     spec: String
     group: String
@@ -2648,8 +3107,22 @@
   expectile.closed: both, right
   hawkes.closed: both, right
   lasso.closed: both, right
+  ddsketch.closed: both, right
   garch.vol: egarch, figarch, garch, gjr
   garch.dist: normal, skewt, t
+  dcc.margins: garch, none
+  dcc.vol: egarch, figarch, garch, gjr
+  dcc.dist: normal, skewt, t
+  realized.closed: both, right
+  pca.method: ccipca, oja, svd
+  power_variation.closed: both, right
+  ewm_moments.kind: central, cumulant, raw, standardized
+  ar.select: aic, bic
+  spectral.scaling: density, lomb_scargle, spectrum
+  spectral.closed: both, right
+  spectral.window_budget: refuse, thin
+  ar.closed: both, right
+  ar.window_budget: refuse, thin
   marginal.closed: both, right
   ew_class.covariance_type: diag, full, tied
   ew_class.window_budget: refuse, thin
@@ -2703,7 +3176,7 @@
   rp.ewm_rate(reverse=True).partial: drop, keep, null
   rp.ewm_sum(reverse=True).closed: both, left, none, right
   rp.ewm_sum(reverse=True).partial: drop, keep, null
-  withheld_reason, in precedence order: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified
+  withheld_reason, in precedence order: below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample
   toml.input_format: csv, ipc, ndjson, parquet
   toml.output_format: csv, ipc, ndjson, parquet
   toml.output_layout: flat, struct
@@ -2791,12 +3264,16 @@
     targets
     weight
   [specs.model], by type:
+    ar: closed, lags, max_rows_between_snapshots, max_state_bytes, ridge, select, snapshot_every, window_budget, window_size
     audit: distinct_cap, pairs
     bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, hazard_rows, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
-    corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, monitor_rows, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows
+    corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, max_state_bytes, monitor_rows, monitor_span, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows, window_size
+    dcc: a, asymmetric, b, dist, g, margin_start_rows, margin_start_span, margins, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
+    ddsketch: alpha, closed, max_state_bytes, quantiles, window_rows, window_size
     deco: alpha, beta, blocks, dynamics
     ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size
+    ewm_moments: bias, kind, lag_tolerance, max_state_bytes, se, terms, window_rows, window_size
     ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
     expectile: closed, expectile, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, window_rows, window_size
     ftrl: alpha, beta, l1, l2, loss, strict_binary
@@ -2812,11 +3289,16 @@
     marginal: bin_budget, bin_edges, bin_huber_delta, bin_refit_rows, bin_rule, bin_stat, bin_warm_rows, bins, closed, cross_lags, feature_moments, lags, max_rows_between_snapshots, refit_budget, serial_rule, shards, snapshot_every, window_budget, window_lags, window_size
     micro: beta_mu, eps, macro_link, max_clusters, max_rows_between_prunes, prune_every, scale_floor, standardize
     pa: c, coef_max, coef_min, coef_sum, eps, mode, standardize
+    pca: learning_rate, max_state_bytes, method, n_components
+    power_variation: closed, max_state_bytes, terms, window_rows, window_size
     quantile: max_rows_between_solves, max_state_bytes, quantile, quantile_eps, quantile_refit_rows, quantile_refit_span, refit_budget, ridge, solve_every, standardize
     rcov: bandwidth, block_rows, iv_stride, jitter, kernel, kind, max_bandwidth, noise_stride, preavg_rows, psd, theta
+    realized: closed, lm_beta, lm_window, max_state_bytes, window_rows, window_size
     rls: coef_prior, delta
     seqtest: a, a_suffix, b, b_suffix
     sgd: clip_gradient, coef_max, coef_min, coef_sum, eps, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, l2, learning_rate, loss, max_state_bytes, power, quantile, refit_budget, schedule, standardize, strict_binary
+    spectral: closed, detrend, max_rows_between_snapshots, max_state_bytes, periods, scaling, snapshot_every, spacing, window_budget, window_size
+    tdigest: compression, max_state_bytes, quantiles
 
 [cli flags]  # `rheon --help`: a flag added, renamed or removed, or one that starts or stops taking a value, is a diff here
   Usage: rheon [OPTIONS] --config <CONFIG>

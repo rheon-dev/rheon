@@ -28,7 +28,12 @@ rheon-polars = { path = "crates/rheon-polars", version = "2.0.0" }
 # needs no change on this side: the wheel's copy and the user's never meet.
 # "object" is required because pyo3-polars/derive pulls polars-plan, which turns on
 # polars-core/object; without it polars-ops fails to compile (non-exhaustive DataType match).
-polars = { version = "=0.55.2", default-features = false, features = ["object", "dtype-i8", "dtype-u8", "dtype-i16", "dtype-u16", "dtype-i128", "dtype-decimal", "dtype-array"] }
+# "timezones" (the user, 2026-11-23): without it polars-core casts a column to
+# Datetime(unit, zone) and returns it naive, and the cast of a zoned clock to its
+# own dtype then fails to subtract from a column of nulls, which keeps the zone
+# (docs/records/LINKING.md). chrono-tz was already linked, through polars-arrow.
+# "timezones" alone does not compile polars-io, which then needs "dtype-date".
+polars = { version = "=0.55.2", default-features = false, features = ["object", "dtype-i8", "dtype-u8", "dtype-i16", "dtype-u16", "dtype-i128", "dtype-decimal", "dtype-array", "dtype-date", "timezones"] }
 pyo3 = "0.29"
 pyo3-polars = "0.28"
 
@@ -82,7 +87,11 @@ rmpv = "1"
 # C library, and a dev-dependency, so nothing ships with it (rule 12).
 dashu-float = { version = "0.6", default-features = false, features = ["std"] }
 clap = { version = "4.6", features = ["derive"] }
-toml = "1.1"
+# `preserve_order`: a table's keys in the order the file writes them, which
+# `ewm_moments`' `terms` names its outputs in (docs/PLAN.md task 554).
+# indexmap, the map it keeps them in, is already linked (rheon-polars'
+# streams, polars' tree); nothing new is linked.
+toml = { version = "1.1", features = ["preserve_order"] }
 # The command line's global allocator, as py-polars' own on each OS: jemalloc
 # off Windows, mimalloc on it (review 9, M-5; the user's decision D5 under
 # rule 12, 2026-10-23). The binary alone: the wheel keeps `PolarsAllocator`.

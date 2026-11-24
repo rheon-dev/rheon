@@ -223,3 +223,145 @@ fn the_span_is_checked() {
         "huber_refit_span",
     );
 }
+
+// ---- mutants-w11: what a span's buffers are charged, and when ----
+
+/// The held bytes of every target's buffer together.
+fn held_of(m: &Sgd) -> u64 {
+    m.refit.iter().map(RefitBuf::held_bytes).sum()
+}
+
+/// A row is charged `8 (n + 4)` bytes, and 48 more under the MAD, which keeps
+/// each row's `|e|` and its place in a tree: the row that would pass the cap is
+/// recorded as `held + row`, exactly, under each scale.
+#[test]
+fn a_row_is_charged_its_width_and_the_mads_extra_to_the_byte() {
+    for (scale, extra) in [(crate::HuberScale::Mad, 48u64), (crate::HuberScale::Rms, 0)] {
+        let c = SgdCfg {
+            refit_clock: Some(1e12),
+            huber_scale: scale,
+            ..cfg(false)
+        };
+        let mut m = Sgd::new(c).unwrap();
+        let row = 8 * (2 + 4) + extra;
+        let cap = 100 * row;
+        m.set_cap_for_test(cap);
+        for (i, (x, y)) in rows(150, 5).iter().enumerate() {
+            m.stamp_next(Stamp::Ns(i as i128 * S));
+            m.step(x, y, 1.0, 1.0);
+        }
+        assert_eq!(
+            m.state_over_cap(),
+            Some((held_of(&m) + row, cap)),
+            "{scale:?}"
+        );
+    }
+}
+
+/// Once a buffer is over its cap, no row touches any buffer, a row that
+/// carries one target only (which ages the other's runs) included; and the
+/// cap is asked of the rows that would be learned into a waiting buffer, on a
+/// span, and of no other.
+#[test]
+fn the_cap_stops_every_buffer_and_is_asked_only_where_a_row_is_added() {
+    let data = rows(80, 7);
+    let spanned = || {
+        Sgd::new(SgdCfg {
+            refit_clock: Some(1e12),
+            ..cfg(false)
+        })
+        .unwrap()
+    };
+    // Past the cap: a row with one target leaves every buffer as it was.
+    let mut m = spanned();
+    m.set_cap_for_test(40 * (8 * 6 + 48));
+    for (i, (x, y)) in data[..70].iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, y, 1.0, 1.0);
+    }
+    assert!(m.state_over_cap().is_some());
+    let before = rmp_serde::to_vec_named(&m.refit).unwrap();
+    m.stamp_next(Stamp::Ns(71 * S));
+    m.step(&data[70].0, &[None, data[70].1[1]], 1.0, 1.0);
+    assert_eq!(rmp_serde::to_vec_named(&m.refit).unwrap(), before);
+    // A row with no target asks for no room: a cap of nothing holds it.
+    let mut m = spanned();
+    m.set_cap_for_test(1);
+    m.stamp_next(Stamp::Ns(0));
+    m.step(&data[0].0, &[None, None], 1.0, 1.0);
+    assert_eq!(m.state_over_cap(), None);
+    // Nor does a buffer that has run: its rows went to the fit.
+    let mut m = Sgd::new(SgdCfg {
+        refit_clock: Some(3.0),
+        ..cfg(false)
+    })
+    .unwrap();
+    for (i, (x, y)) in data[..8].iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, y, 1.0, 1.0);
+    }
+    assert!(m.refit_status().iter().all(|s| s.done));
+    m.set_cap_for_test(1);
+    m.stamp_next(Stamp::Ns(9 * S));
+    m.step(&data[8].0, &data[8].1, 1.0, 1.0);
+    assert_eq!(m.state_over_cap(), None);
+    // A refit on a count has no span to hold: a cap of nothing changes no bit.
+    let counted = || {
+        Sgd::new(SgdCfg {
+            refit_rows: 30,
+            ..cfg(true)
+        })
+        .unwrap()
+    };
+    let (mut capped, mut free) = (counted(), counted());
+    capped.set_cap_for_test(1);
+    for (i, (x, y)) in data.iter().enumerate() {
+        let (a, b) = (capped.step(x, y, 1.0, 1.0), free.step(x, y, 1.0, 1.0));
+        let bits = |s: &Step| s.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&a), bits(&b), "row {i}");
+    }
+    assert_eq!(capped.state_over_cap(), None);
+}
+
+/// The warning's flag is state: saved after the warning, it restores raised.
+#[test]
+fn a_warned_flag_survives_a_save() {
+    let mut m = Sgd::new(SgdCfg {
+        refit_clock: Some(1e12),
+        ..cfg(false)
+    })
+    .unwrap();
+    m.set_cap_for_test(100 * (8 * 6 + 48));
+    for (i, (x, y)) in rows(30, 5).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, y, 1.0, 1.0);
+    }
+    assert!(m.warned && m.over.is_none());
+    let bytes = rmp_serde::to_vec_named(&m.state()).unwrap();
+    let key = b"\xa6warned";
+    assert!(bytes.windows(key.len()).any(|w| w == key));
+    let back = Sgd::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+    assert!(back.warned);
+}
+
+/// Review 2026-11-23, REG-2: an ageing row -- a target null -- adds a run
+/// to the open buffer wherever its decay differs from the last run's, and
+/// was checked against no cap ([`crate::robust`]'s test of the same).
+#[test]
+fn an_ageing_row_is_held_to_the_spans_cap() {
+    let c = SgdCfg {
+        refit_clock: Some(1e12),
+        ..cfg(false)
+    };
+    let mut m = Sgd::new(c).unwrap();
+    let cap = 4096;
+    m.set_cap_for_test(cap);
+    for (i, (x, y)) in rows(2000, 9).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        let y = if i < 4 { *y } else { [None, None] };
+        m.step(x, &y, 1.0 + i as f64 * 1e-6, 1.0);
+        let held: u64 = m.refit.iter().map(RefitBuf::held_bytes).sum();
+        assert!(held <= cap, "row {i}: {held}");
+    }
+    assert!(m.state_over_cap().is_some());
+}

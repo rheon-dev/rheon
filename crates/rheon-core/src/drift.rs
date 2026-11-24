@@ -40,7 +40,7 @@ mod detector;
 mod eddm;
 mod kswin;
 
-pub use adwin::{Adwin, AdwinCfg};
+pub use adwin::{Adwin, AdwinCfg, AdwinRange};
 pub use cusum::Cusum;
 pub use ddm::Ddm;
 pub use detector::{DriftDetector, ErrorRate};
@@ -108,12 +108,40 @@ impl PageHinkley {
         if self.cum < self.min_cum {
             self.min_cum = self.cum;
         }
+        // An excess past the doubles below (a mean of `1e305` and a long
+        // step at an error of 0) left both at `−∞` and the statistic NaN
+        // for good. At a low the statistic is 0, so both start again there.
+        if self.cum == f64::NEG_INFINITY {
+            self.cum = 0.0;
+            self.min_cum = 0.0;
+        }
         if self.statistic() > self.threshold {
             self.reset();
             true
         } else {
             false
         }
+    }
+
+    /// Whether a restored state keeps the shape every row relies on: the
+    /// settings a spec takes (`delta` finite and at least 0, `threshold`
+    /// finite and above 0), counts and a weight that are finite and at
+    /// least 0, a finite mean, and a low-water mark at or below both 0 and
+    /// the excess it marks.
+    pub fn sound(&self) -> bool {
+        self.delta.is_finite()
+            && self.delta >= 0.0
+            && self.threshold.is_finite()
+            && self.threshold > 0.0
+            && self.n.is_finite()
+            && self.n >= 0.0
+            && self.w.is_finite()
+            && self.w >= 0.0
+            && self.mean.is_finite()
+            && self.cum.is_finite()
+            && self.min_cum.is_finite()
+            && self.min_cum <= 0.0
+            && self.min_cum <= self.cum
     }
 
     pub fn reset(&mut self) {
@@ -128,6 +156,32 @@ impl PageHinkley {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A restored detector whose numbers are not finite is refused, each on
+    /// its own (review 2026-11-23, DRIFT-5).
+    #[test]
+    fn a_restored_detectors_numbers_are_finite() {
+        let mut a = PageHinkley::new(0.5, 20.0);
+        for e in [1.0, 3.0, 0.5, 2.0] {
+            a.update(e, 1.0, 0.9);
+        }
+        assert!(a.sound());
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for edit in [
+                &(|p: &mut PageHinkley, v: f64| p.n = v) as &dyn Fn(&mut PageHinkley, f64),
+                &|p, v| p.w = v,
+                &|p, v| p.mean = v,
+                &|p, v| p.cum = v,
+                &|p, v| p.min_cum = v,
+                &|p, v| p.delta = v,
+                &|p, v| p.threshold = v,
+            ] {
+                let mut d = a.clone();
+                edit(&mut d, bad);
+                assert!(!d.sound(), "{d:?}");
+            }
+        }
+    }
 
     fn lcg(state: &mut u64) -> f64 {
         *state = state

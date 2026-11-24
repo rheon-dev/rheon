@@ -3,50 +3,74 @@
 //!
 //! Two tests, because there are two questions.
 //!
-//! # `monitor`: the constancy test of Wied, Krämer & Dehling (2012)
+//! # `monitor`: the constancy test of Wied, Krämer & Dehling (2012), linear
 //!
 //! A **closed-sample** fluctuation test, run span by span. Over a span of
-//! `T` rows, per pair:
+//! `T` rows, per pair (docs/PLAN.md task 553, after the review of
+//! 2026-11-22):
 //!
 //! ```text
-//! Q = max_{2≤j≤T} (j/√T)·|ρ̂ⱼ − ρ̂_T| / D̂
+//! ξₜ   = x̃ₜỹₜ − (ρ̂/2)(x̃ₜ² + ỹₜ²)
+//! Q    = max_{1≤j≤T} |Σ_{t≤j} ξₜ| / (√T·D̂)
+//! crit = q(1 − α) − 0.5826/√T
 //! ```
 //!
-//! `ρ̂ⱼ` is the sample correlation of the span's first `j` rows and `D̂` is
-//! the delta-method long-run standard deviation of `ρ̂`: the five raw
-//! moments `Uₜ = (x², y², x, y, xy)` centred at their span means, their
-//! Bartlett long-run covariance `Σ̂` at bandwidth `γ_T = ⌊ln T⌋`, mapped to
-//! `(σ_x², σ_y², σ_xy)` by `D₂` and to `ρ` by `D₃`, so `D̂² = D₃D₂Σ̂D₂'D₃'`.
-//! It is computed on the span centred at its means and scaled by its
-//! standard deviations, which leaves `ρ̂` and `D̂` where they were (the
-//! shifted moments are an affine image of the raw ones, and the Jacobians
-//! cancel) and puts the arithmetic at the spread's scale rather than the
-//! level's: there `m_x = m_y = 0` and both variances are 1, so `D₃D₂ =
-//! (−ρ̂/2, −ρ̂/2, 0, 0, 1)` and `D̂²` is the Bartlett long-run variance of
-//! the one series `ξₜ = x̃ₜỹₜ − (ρ̂/2)(x̃ₜ² + ỹₜ²)`. Formed from the raw
-//! moments, `σ_x² = E[x²] − E[x]²` lost the level's digits: 1.2e-5 of `D̂`
-//! at a level of 1e5, and NaN at 1e8 (docs/PLAN.md task 103).
+//! `x̃`, `ỹ` are the span's rows centred at its means and scaled by its
+//! standard deviations, `ρ̂` their correlation, and `D̂` the delta-method
+//! long-run standard deviation of `ρ̂`: the five raw moments `Uₜ = (x², y²,
+//! x, y, xy)` centred at their span means, their Bartlett long-run
+//! covariance `Σ̂` at bandwidth `γ_T = ⌊ln T⌋`, mapped to `(σ_x², σ_y², σ_xy)`
+//! by `D₂` and to `ρ` by `D₃`, so `D̂² = D₃D₂Σ̂D₂'D₃'`. On the standardised
+//! span `m_x = m_y = 0` and both variances are 1, so `D₃D₂ = (−ρ̂/2, −ρ̂/2,
+//! 0, 0, 1)` and `D̂²` is the Bartlett long-run variance of the one series
+//! `ξ`, exactly. Formed from the raw moments, `σ_x² = E[x²] − E[x]²` lost the
+//! level's digits: 1.2e-5 of `D̂` at a level of 1e5, and NaN at 1e8
+//! (docs/PLAN.md task 103).
+//!
+//! WKD's statistic is `max_{2≤j≤T} (j/√T)·|ρ̂ⱼ − ρ̂_T| / D̂`; their proof
+//! reduces `j(ρ̂ⱼ − ρ̂_T)` to `Σ_{t≤j} ξₜ` plus a delta-method remainder, and
+//! the limit `sup|B|` is the law of the sum. The remainder over-rejected:
+//! `ρ̂ⱼ` of a few rows is `±1` at two rows whatever the data, so at `ρ =
+//! 0.9` and `T = 100` a quarter of stable spans flagged, most on their first
+//! rows. The sum has no remainder, so its level holds at every `T` and `ρ`
+//! (0.008 to 0.049 measured, every cell). `crit` is the Kolmogorov
+//! quantile less `GRID_SHIFT/√T`, the shift between a bridge's maximum over
+//! `T` points and its supremum.
 //!
 //! The kernel is WKD's: `D̂₁ = ΣₜΣᵤ k((t−u)/γ_T)VₜVᵤ'` with `k(x) = 1 − |x|`
 //! (their Appendix A.1), so lag `l` is weighted `1 − l/γ` and lag `γ` not at
 //! all. Until docs/PLAN.md task 114 (the user's decision, 2026-09-28) it
-//! was Newey–West's `1 − l/(γ+1)` over lags `0..=γ`; measured at WKD's Table
-//! 1 and 2 settings, the change moved the size by at most 0.0008 and the
-//! power by 0.003. At `bandwidth = 1` only lag 0 is left.
+//! was Newey–West's `1 − l/(γ+1)` over lags `0..=γ`. At `bandwidth = 1` only
+//! lag 0 is left, and `Q` is statsmodels' `breaks_cusumolsresid(ξ)`.
 //!
-//! Under the null `Q →_d sup|B|`, a Brownian bridge, whose quantiles are
-//! the Kolmogorov distribution -- computed from the series here rather than
-//! pinned, so a test can check it reproduces 1.3581 at 5 %.
+//! The one condition the sum does not remove: with the correlation constant
+//! and the columns' scales at `r_x`, `r_y` times their span values, `E[ξ] =
+//! −(ρ/2)(r_x − r_y)²`. So the same CUSUM of `x̃² − ỹ²`, which has the same
+//! limit while the scale ratio holds, is read beside it, and a pair whose
+//! ratio CUSUM passes `crit` withholds its flag ([`CorrChange::monitor_pair`]).
 //!
-//! The paper's own form is *sequential*, with a boundary function, in Wied
-//! & Galeano (2013), read from their SFB 823 preprint (Discussion Paper
-//! 12/2012) on 2026-09-28, docs/PLAN.md task 114: the detector
-//! `V_k = D̂·(k/√m)·(ρ̂^{m+k}_{m+1} − ρ̂^m_1)` against `c·w(k/m)`, `w(b) =
-//! (1 + b)(b/(1 + b))^γ`, with `D̂` from the `m` historical rows and `c`
-//! simulated. What ships is the closed test run over consecutive spans of
-//! `horizon` rows. The cost is a delay of at most `horizon` rows and the
-//! benefit is a null with published tables -- which is the whole point of
-//! the exercise.
+//! # `sequential`: Wied & Galeano (2013), on Fisher's scale
+//!
+//! The paper's own form of the monitor, with a boundary function, read from
+//! their SFB 823 preprint (Discussion Paper 12/2012) on 2026-09-28,
+//! docs/PLAN.md task 114: a history of `m` rows taken as stable, then each
+//! monitored row tested against it, against `c·w(b)`, `w(b) = (1 + b)(b/(1 +
+//! b))^γ`, `c` solved (`crate::boundary`). The detector compares the
+//! monitored rows' correlation with the history's on Fisher's scale, each at
+//! its own finite-sample variance (task 553): `V_k = ((k − 3)/√(m − 3))·
+//! |atanh ρ̂_k − atanh ρ̂_h|·(1 − ρ̂_h²)/σ̂` at `b = (k − 3)/(m − 3)`, whose
+//! variance is `b + b²` exactly ([`CorrChange::sequential_stat`]).
+//!
+//! # On the clock
+//!
+//! `span_clock` (`window_size`) puts each kind's span on the clock: a
+//! `monitor` span and a `sequential` history from their first row through
+//! the first at least `window_size` after it ([`crate::clock_span`]); a
+//! period through `monitor_clock` or `⌊m·monitor_span/window_size⌋` rows,
+//! the first of the two; the two windows `(t − 2D, t − D]` and `(t − D, t]`,
+//! the held permutation value rescaled to each report's `(n₁, n₂)`. Each is
+//! tested at the rows it holds, with no least count; their bytes are held
+//! to `max_state_bytes` as they come.
 //!
 //! # `window`: two adjacent windows
 //!
@@ -93,7 +117,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::since::Since;
 use crate::window_moments::WindowSums;
-use crate::{Decay, EwDiag, SplitMix64};
+use crate::{Decay, EwDiag, SplitMix64, Stamp};
 
 /// Which test; see the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,7 +318,32 @@ pub struct CorrChangeCfg {
     /// written only when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permute_every: Option<f64>,
+    /// `window_size`: the span (`monitor`), the history (`sequential`) or
+    /// each of the two windows (`window`) as a span of the clock, in place
+    /// of `span_rows` (docs/PLAN.md task 553). Written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span_clock: Option<f64>,
+    /// `sequential` under `span_clock`: the monitoring period as a span of
+    /// the clock, `monitor_span`, in place of `monitor_rows`. Written only
+    /// when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor_clock: Option<f64>,
+    /// The bytes a clock form's held rows may take the state to: 256 KB
+    /// unset ([`crate::clock_span::DEFAULT_STATE_BYTES`]). Written only when
+    /// set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_state_bytes: Option<u64>,
 }
+
+/// `−ζ(1/2)/√(2π)`: how far, in units of `1/√T`, the maximum of a Brownian
+/// bridge read at `T` equally spaced points falls short of its supremum over
+/// the continuum, to first order (Siegmund 1985, "Sequential Analysis",
+/// §10.5; Broadie, Glasserman and Kou 1997, "A continuity correction for
+/// discrete barrier options", Theorem 1). The `monitor` statistic is such a
+/// maximum and its critical value the supremum's quantile, so the critical
+/// value is read `GRID_SHIFT/√T` lower: a constant of the limit law, not of
+/// any data.
+pub const GRID_SHIFT: f64 = 0.582_597_157_939_010_7;
 
 /// The largest `boundary_gamma` a configuration may give. W&G's boundary
 /// takes `γ < 1/2`, but the critical value is solved for, and the solve's
@@ -408,9 +457,59 @@ impl CorrChangeCfg {
             "corrchange: bandwidth must be at least 1, but it is 0. Set bandwidth to 1 or more, \
              or leave it out for the automatic choice."
         };
+        // A span of the clock in place of a count of rows (docs/PLAN.md task
+        // 553): above 0 and finite, and not beside the count.
+        let on_clock = self.span_clock.is_some();
+        for (name, span) in [
+            ("window_size", self.span_clock),
+            ("monitor_span", self.monitor_clock),
+        ] {
+            if let Some(s) = span
+                && !(s > 0.0 && s.is_finite())
+            {
+                no.refuse(format!(
+                    "corrchange: {name} must be a span of the clock above 0, but it is {s}. Set \
+                     {name} to the clock units the span runs for."
+                ));
+            }
+        }
+        if on_clock && self.span_rows != 0 {
+            no.refuse(format!(
+                "corrchange: window_rows and window_size are both set ({} rows and {} clock \
+                 units). Give one: window_rows counts rows, window_size spans the clock.",
+                self.span_rows,
+                self.span_clock.unwrap_or(f64::NAN)
+            ));
+        }
+        if self.monitor_clock.is_some() {
+            if self.kind != CorrChangeKind::Sequential {
+                no.refuse(
+                    "corrchange: monitor_span applies only under kind=\"sequential\". Leave \
+                     monitor_span out, or set kind=\"sequential\".",
+                );
+            } else if !on_clock {
+                no.refuse(
+                    "corrchange: monitor_span needs window_size: the critical value plans the \
+                     monitored rows as the history's rows times monitor_span over window_size. \
+                     Give window_size in place of window_rows, or give monitor_rows in place of \
+                     monitor_span.",
+                );
+            } else if self.monitor_rows != 0 {
+                no.refuse(format!(
+                    "corrchange: monitor_rows and monitor_span are both set ({} rows and {} \
+                     clock units). Give one.",
+                    self.monitor_rows,
+                    self.monitor_clock.unwrap_or(f64::NAN)
+                ));
+            }
+        }
+        no.take(crate::clock_span::check_max_state_bytes(
+            "corrchange",
+            self.max_state_bytes,
+        ));
         match self.kind {
             CorrChangeKind::Monitor => {
-                if self.span_rows < 8 {
+                if !on_clock && self.span_rows < 8 {
                     no.refuse(format!(
                         "corrchange: kind=\"monitor\" needs window_rows of at least 8, but it is \
                          {}: the statistic is a maximum over those rows. Set window_rows to 8 or \
@@ -423,7 +522,7 @@ impl CorrChangeCfg {
                 }
             }
             CorrChangeKind::Sequential => {
-                if self.span_rows < 8 {
+                if !on_clock && self.span_rows < 8 {
                     no.refuse(format!(
                         "corrchange: kind=\"sequential\" needs window_rows of at least 8, but it \
                          is {}: the long-run variance is estimated from those rows. Set \
@@ -431,10 +530,24 @@ impl CorrChangeCfg {
                         self.span_rows
                     ));
                 }
-                if self.monitor_rows < 2 {
+                // A period with no row the detector can read reports nothing,
+                // ever: a pair's Fisher `z` carries the information `k − 3`,
+                // none before the fourth monitored row; `scalar`'s mean needs
+                // a second row to differ from the first.
+                if self.monitor_clock.is_none() && !self.scalar && self.monitor_rows < 4 {
+                    no.refuse(format!(
+                        "corrchange: kind=\"sequential\" needs monitor_rows of at least 4, but it \
+                         is {}: each pair's monitored correlation is compared on Fisher's scale, \
+                         where k rows carry the information k - 3, so a period of fewer than four \
+                         rows reports nothing. Set monitor_rows to 4 or more.",
+                        self.monitor_rows
+                    ));
+                }
+                if self.monitor_clock.is_none() && self.scalar && self.monitor_rows < 2 {
                     no.refuse(format!(
                         "corrchange: kind=\"sequential\" needs monitor_rows of at least 2, but it \
-                         is {}: a correlation needs two rows. Set monitor_rows to 2 or more.",
+                         is {}: the monitored mean is compared from its second row. Set \
+                         monitor_rows to 2 or more.",
                         self.monitor_rows
                     ));
                 }
@@ -522,7 +635,7 @@ impl CorrChangeCfg {
                 }
             }
             CorrChangeKind::Window => {
-                if self.span_rows < 3 {
+                if !on_clock && self.span_rows < 3 {
                     no.refuse(format!(
                         "corrchange: kind=\"window\" needs window_rows of at least 3, but it is \
                          {}. Set window_rows to 3 or more.",
@@ -544,7 +657,14 @@ impl CorrChangeCfg {
                         self.n_perm
                     ));
                 }
-                if self.perm_block == 0 || self.perm_block > self.span_rows {
+                // Under a clock window the pool's rows are the data's, so
+                // the block is bounded below alone.
+                if on_clock && self.perm_block == 0 {
+                    no.refuse(
+                        "corrchange: perm_block must be at least 1, but it is 0. Set perm_block \
+                         to the rows a block of the permutation holds.",
+                    );
+                } else if self.perm_block == 0 || (!on_clock && self.perm_block > self.span_rows) {
                     no.refuse(format!(
                         "corrchange: perm_block must be from 1 to window_rows ({}), but it is {}. \
                          Set perm_block within that range.",
@@ -597,21 +717,53 @@ impl CorrChangeCfg {
         }
     }
 
-    /// The critical value: the Kolmogorov quantile under `monitor`, the
-    /// configured one under `window`, and under `sequential` the configured
-    /// one or Wied & Galeano's (`crate::boundary::sequential_crit`).
+    /// The critical value at the configured rows: the Kolmogorov quantile
+    /// under `monitor` (before the grid correction, [`Self::monitor_crit`]),
+    /// the configured one under `window`, and under `sequential` the
+    /// configured one or Wied & Galeano's for a history of `span_rows` and a
+    /// period of `monitor_rows` ([`Self::sequential_crit`]); under a clock
+    /// span, whose rows each cycle counts, the boundary's quantile alone.
     fn fixed_crit(&self) -> Option<f64> {
         match self.kind {
             CorrChangeKind::Monitor => Some(kolmogorov_quantile(self.pair_alpha())),
             CorrChangeKind::Window => self.crit,
-            CorrChangeKind::Sequential => self.crit.or_else(|| {
-                Some(crate::boundary::sequential_crit(
-                    self.pair_alpha(),
+            CorrChangeKind::Sequential if self.span_clock.is_some() => self.crit.or_else(|| {
+                Some(crate::boundary::boundary_quantile(
+                    1.0 - self.pair_alpha(),
                     self.boundary_gamma,
-                    self.monitor_rows as f64 / self.span_rows as f64,
                 ))
             }),
+            CorrChangeKind::Sequential => {
+                Some(self.sequential_crit(self.span_rows, self.monitor_rows))
+            }
         }
+    }
+
+    /// `monitor`'s critical value for a span of `t` rows: the Kolmogorov
+    /// quantile at the pair's level less the grid correction
+    /// [`GRID_SHIFT`]`/√t`, since the statistic is a maximum over the span's
+    /// `t` rows and the quantile is of a supremum over a continuum.
+    fn monitor_crit(&self, t: usize) -> f64 {
+        kolmogorov_quantile(self.pair_alpha()) - GRID_SHIFT / (t as f64).sqrt()
+    }
+
+    /// `sequential`'s critical value for a history of `m` rows and a period
+    /// of `k`: the configured one, or Wied & Galeano's `c` at the period's
+    /// length in the detector's own time. That is `k/m` for `scalar`'s
+    /// mean, and for a pair's Fisher `z` the information `(k − 3)/(m − 3)`,
+    /// at which the detector's variance is `b + b²` exactly
+    /// ([`Self::sequential_stat`]). NaN where the history or the period
+    /// holds no information (a ratio not above 0): no verdict.
+    fn sequential_crit(&self, m: usize, k: usize) -> f64 {
+        if let Some(c) = self.crit {
+            return c;
+        }
+        let ratio = if self.scalar {
+            k as f64 / m as f64
+        } else {
+            (k as f64 - 3.0) / (m as f64 - 3.0)
+        };
+        crate::boundary::sequential_crit(self.pair_alpha(), self.boundary_gamma, ratio)
     }
 
     /// Output slots per statistic: one per pair, or one for `scalar`.
@@ -639,6 +791,105 @@ struct Monitoring {
     mean: Vec<f64>,
     m2: Vec<f64>,
     cross: Vec<f64>,
+    /// The history's rows, `m`, under a clock span (docs/PLAN.md task 553),
+    /// where each cycle counts its own; 0 on the row clock's count, which
+    /// is `span_rows`. Written only where it is not 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    history: u64,
+    /// The period's rows, `K`, planned when it began under a clock span:
+    /// `⌊m·monitor_span/window_size⌋`, or `monitor_rows`; 0 on the row
+    /// clock's count, which is `monitor_rows`. Written only where it is
+    /// not 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    horizon: u64,
+    /// `atanh` of each pair's `level`: Fisher's `z` of the history's
+    /// correlation, which the detector compares with the period's. Not
+    /// state: a function of `level`, rebuilt on load.
+    #[serde(skip)]
+    z_level: Vec<f64>,
+    /// The critical value for this cycle's `m` and `K`
+    /// ([`CorrChangeCfg::sequential_crit`]). Not state: it calls `powf`,
+    /// whose last bits are the platform's, so it is computed when the
+    /// period begins and on load.
+    #[serde(skip)]
+    crit: f64,
+}
+
+impl Monitoring {
+    /// The history's rows and the period's, `(m, K)`: the cycle's own under
+    /// a clock span, else the configured counts.
+    fn rows_of(&self, cfg: &CorrChangeCfg) -> (usize, usize) {
+        let pick = |own: u64, set: usize| if own > 0 { own as usize } else { set };
+        (
+            pick(self.history, cfg.span_rows),
+            pick(self.horizon, cfg.monitor_rows),
+        )
+    }
+
+    /// The parts that are not state, from the parts that are.
+    fn rebuild(&mut self, cfg: &CorrChangeCfg) {
+        self.z_level = if cfg.scalar {
+            Vec::new()
+        } else {
+            self.level.iter().map(|&r| libm::atanh(r)).collect()
+        };
+        let (m, k) = self.rows_of(cfg);
+        self.crit = cfg.sequential_crit(m, k);
+    }
+}
+
+/// The clock a clock form's spans are read on (docs/PLAN.md task 553):
+/// where the stream stands, and the stamp handed for the next row. Kept only
+/// under `window_size`. A row's key is its stamp where the caller hands one,
+/// the count of the rows that counted on the row clock, and the clock summed
+/// from the steps for a caller that hands none; a row of weight 0 counts in
+/// no clock (hard rule 9), so on the row clock it is no step.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct SpanClock {
+    /// The clock summed from every step.
+    #[serde(with = "crate::humanfloat::f64_or_tag")]
+    own: f64,
+    /// The rows that counted: the key on the row clock.
+    counted: u64,
+    /// The stamp of the last row stepped, where one was handed: what a read
+    /// ahead is taken from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    read: Option<Stamp>,
+    /// The last stamp handed was the row clock's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    on_rows: bool,
+    /// The next row's stamp, and whether it is the row clock's. Never state.
+    #[serde(skip)]
+    next: Option<(Stamp, bool)>,
+}
+
+impl SpanClock {
+    /// The key of a row `d_clock` after the last, read as a row that counts:
+    /// the stamp handed for it, or a read ahead of the last.
+    fn key(&self, d_clock: f64) -> Stamp {
+        match self.next {
+            Some((_, true)) => Stamp::from((self.counted + 1) as f64),
+            Some((s, false)) => s,
+            None if self.on_rows => Stamp::from((self.counted + 1) as f64),
+            None => match self.read {
+                Some(last) => crate::since::back_by(last, -d_clock),
+                None => Stamp::from(self.own + d_clock),
+            },
+        }
+    }
+
+    /// A row stepped, `d_clock` after the last; it counts where `counts`.
+    fn step(&mut self, d_clock: f64, counts: bool) {
+        let handed = self.next.take();
+        self.own += d_clock;
+        if counts {
+            self.counted += 1;
+        }
+        if let Some((s, rows)) = handed {
+            self.read = Some(s);
+            self.on_rows = rows;
+        }
+    }
 }
 
 /// The constancy monitor; see the module docs.
@@ -684,9 +935,35 @@ pub struct CorrChange {
     #[serde(skip)]
     work: Work,
     /// `window` under `permute_every` (task 538): the clock since the
-    /// critical value was drawn. Written only where it is kept, last.
+    /// critical value was drawn. Written only where it is kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     since_draw: Option<Since>,
+    /// Under `window_size` (docs/PLAN.md task 553), and written only there:
+    /// the clock the spans are read on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clock: Option<SpanClock>,
+    /// The key of the first row of the span, history or period in
+    /// progress, or of the ring since it last started (`window`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first: Option<Stamp>,
+    /// `window` under `window_size`: each ring row's key, oldest first.
+    #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
+    keys: VecDeque<Stamp>,
+    /// `window` under `window_size`: the rows in the two windows the
+    /// critical value in force was drawn over, `(n₁, n₂)`, by which it is
+    /// rescaled to each report's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    perm_counts: Option<[u64; 2]>,
+    /// The bytes a clock form's next row would have taken the state to,
+    /// past `max_state_bytes`: from then on no row is learned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    over: Option<u64>,
+    /// The half-of-the-cap warning has been raised (once a group).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    warned: bool,
+    /// The warning raised and not yet taken. Never state.
+    #[serde(skip)]
+    warning: Option<u64>,
 }
 
 /// `window`'s buffers between rows, so a row allocates nothing (task 335,
@@ -758,6 +1035,25 @@ impl std::fmt::Debug for Work {
 
 fn is_zero(n: &u64) -> bool {
     *n == 0
+}
+
+/// One pair's `monitor` report ([`CorrChange::monitor_pair`]): the
+/// correlation's CUSUM, the row its maximum is at, and the scale ratio's
+/// CUSUM.
+#[derive(Debug, Clone, Copy)]
+struct PairStat {
+    stat: f64,
+    at: usize,
+    ratio: f64,
+}
+
+impl PairStat {
+    /// No verdict: a column without spread, or a collinear pair.
+    const NONE: Self = Self {
+        stat: f64::NAN,
+        at: 0,
+        ratio: f64::NAN,
+    };
 }
 
 /// A uniform draw below `n` (Lemire 2019, "Fast random integer generation in
@@ -834,8 +1130,47 @@ impl CorrChange {
             sums,
             work: Work::default(),
             since_draw: cfg.permute_every.map(|_| Since::default()),
+            clock: cfg.span_clock.map(|_| SpanClock::default()),
+            first: None,
+            keys: VecDeque::new(),
+            perm_counts: None,
+            over: None,
+            warned: false,
+            warning: None,
             cfg,
         })
+    }
+
+    /// The run-time check of a state the data sizes, over this model's
+    /// fields ([`crate::clock_span::HeldCap`]).
+    fn held_cap(&mut self) -> crate::clock_span::HeldCap<'_> {
+        crate::clock_span::HeldCap {
+            over: &mut self.over,
+            warned: &mut self.warned,
+            warning: &mut self.warning,
+        }
+    }
+
+    /// `max_state_bytes`, or its default.
+    fn cap(&self) -> u64 {
+        self.cfg
+            .max_state_bytes
+            .unwrap_or(crate::clock_span::DEFAULT_STATE_BYTES)
+    }
+
+    /// The bytes a clock form's state takes with `extra` more rows held: the
+    /// rows of the ring and of the period in progress, `8` bytes a number,
+    /// each `window` row's key beside it, and the model's fixed part.
+    fn held_bytes(&self, extra: usize) -> u64 {
+        let rows = self.ring.len() + self.monitoring.as_ref().map_or(0, |m| m.rows.len()) + extra;
+        let key = if self.cfg.kind == CorrChangeKind::Window {
+            std::mem::size_of::<Stamp>()
+        } else {
+            0
+        };
+        let d = self.cfg.n_features;
+        let fixed = std::mem::size_of::<Self>() + 8 * (d * d + 4 * d);
+        (fixed + rows * (8 * self.cfg.width() + key)) as u64
     }
 
     /// Whether the critical value in force is due to be drawn again: every
@@ -854,7 +1189,11 @@ impl CorrChange {
     /// merging to cost less.
     fn sums_of(cfg: &CorrChangeCfg) -> Option<WindowSums> {
         match cfg.kind {
-            CorrChangeKind::Window => WindowSums::new(cfg.n_features, cfg.span_rows),
+            // A clock window's rows leave by their stamps, not by the row
+            // numbers the merged blocks are cut by: read whole.
+            CorrChangeKind::Window if cfg.span_clock.is_none() => {
+                WindowSums::new(cfg.n_features, cfg.span_rows)
+            }
             _ => None,
         }
     }
@@ -951,6 +1290,19 @@ impl CorrChange {
         5
     }
 
+    /// Whether a report withheld its flag: a `monitor` report whose
+    /// statistic and critical value are numbers and whose flag is not, the
+    /// one report that is, because every pair over the critical value is one
+    /// whose two columns' scale ratio moved inside the span
+    /// ([`Self::monitor_pair`]). Every other report flags 0 or 1 wherever its
+    /// statistic and critical value are numbers.
+    pub fn flag_withheld(pred: &[f64]) -> bool {
+        pred.len() == Self::n_outputs_for()
+            && pred[0].is_finite()
+            && pred[1].is_finite()
+            && pred[2].is_nan()
+    }
+
     /// The sample correlation of `rows[..n]` for the pair `(a, b)`.
     fn corr_of<R: AsRef<[f64]>>(rows: &[R], n: usize, a: usize, b: usize) -> f64 {
         if n < 2 {
@@ -982,10 +1334,55 @@ impl CorrChange {
     /// span's means and scaled by its standard deviations (the module docs
     /// derive it from the five raw moments).
     fn long_run_sd<R: AsRef<[f64]>>(rows: &[R], a: usize, b: usize, gamma: usize) -> f64 {
-        let t = rows.len();
-        if t < 4 {
-            return f64::NAN;
+        let mut buf = Vec::new();
+        if Self::influence_into(rows, a, b, false, &mut buf) {
+            Self::bartlett_sd(&buf, gamma)
+        } else {
+            f64::NAN
         }
+    }
+
+    /// [`Self::influence_into`] into vectors of their own.
+    #[cfg(test)]
+    fn influence<R: AsRef<[f64]>>(
+        rows: &[R],
+        a: usize,
+        b: usize,
+        ratio: bool,
+    ) -> Option<(Vec<f64>, Vec<f64>)> {
+        let mut buf = Vec::new();
+        Self::influence_into(rows, a, b, ratio, &mut buf).then(|| {
+            let d = buf.split_off(rows.len());
+            (buf, d)
+        })
+    }
+
+    /// The span's pair `(a, b)` as the two series the `monitor` kind sums:
+    /// `ξ_t = x̃_t ỹ_t − (ρ̂/2)(x̃_t² + ỹ_t²)`, the influence of row `t` on
+    /// `ρ̂`, and, where `ratio`, `d_t = x̃_t² − ỹ_t²`, the influence of row
+    /// `t` on the log of the two columns' scale ratio (to a factor of two);
+    /// `x̃`, `ỹ` the rows centred at the span's means and scaled by its
+    /// standard deviations. Both sum to 0 over the span by construction
+    /// (`E[x̃ỹ] = ρ̂`, `E[x̃²] = E[ỹ²] = 1` over the same rows), so neither is
+    /// centred again. Written over `buf`, `ξ` then `d`, one buffer for the
+    /// pairs of a span: `false`, and `buf` not read, where the pair has no
+    /// correlation to test: a column without spread, or `|ρ̂|` within
+    /// rounding of 1, where the delta method's variance `(1 − ρ²)²·(…)` is
+    /// 0.
+    fn influence_into<R: AsRef<[f64]>>(
+        rows: &[R],
+        a: usize,
+        b: usize,
+        ratio: bool,
+        buf: &mut Vec<f64>,
+    ) -> bool {
+        // No count of rows is asked for: a span too short to carry a
+        // correlation is one whose column has no spread, or whose two rows
+        // are collinear, and both are refused below; and a short span that
+        // passes cannot flag, since `ξ` sums to 0 and so its CUSUM is at
+        // most `√(j(T − j)/T)` times its lag-0 deviation (Cauchy–Schwarz),
+        // `√T/2` of it (docs/PLAN.md task 553; CLAUDE.md, no row counts).
+        let t = rows.len();
         let tf = t as f64;
         // The span's means as pairs (`crate::comp`): a second pass over the
         // exact differences from the first pass's mean picks up what its
@@ -1022,7 +1419,7 @@ impl CorrChange {
         }
         let (sx2, sy2, sxy) = (sx2 / tf, sy2 / tf, sxy / tf);
         if !(sx2 > 0.0 && sy2 > 0.0) {
-            return f64::NAN;
+            return false;
         }
         let (sx, sy) = (sx2.sqrt(), sy2.sqrt());
         let rho = sxy / (sx * sy);
@@ -1034,33 +1431,58 @@ impl CorrChange {
         // 3` (review 2026-09-25). NaN is no verdict, as for a constant
         // column.
         if 1.0 - rho * rho <= 64.0 * f64::EPSILON {
-            return f64::NAN;
+            return false;
         }
-        // `ξ`, whose span mean is 0 to rounding by construction: `E[x̃ỹ] =
-        // ρ̂` and `E[x̃²] = E[ỹ²] = 1` over the same rows, so there is
-        // nothing to centre.
-        let xi: Vec<f64> = rows
-            .iter()
-            .map(|r| {
-                let (dx, dy) = dev(r);
-                let (u, v) = (dx / sx, dy / sy);
-                u * v - 0.5 * rho * (u * u + v * v)
-            })
-            .collect();
-        // Its Bartlett long-run variance: the lag-0 term once, each other
-        // lag's autocovariance twice, at WKD's `k(l/γ)` (their Appendix A.1),
-        // which puts lag `γ` at 0; Newey–West's `1 − l/(γ+1)` stood here
-        // until docs/PLAN.md task 114.
+        buf.clear();
+        buf.resize(if ratio { 2 * t } else { t }, 0.0);
+        let (xi, d) = buf.split_at_mut(t);
+        for (i, r) in rows.iter().enumerate() {
+            let (dx, dy) = dev(r);
+            let (u, v) = (dx / sx, dy / sy);
+            xi[i] = u * v - 0.5 * rho * (u * u + v * v);
+            if ratio {
+                d[i] = u * u - v * v;
+            }
+        }
+        true
+    }
+
+    /// The Bartlett long-run standard deviation of a series whose mean is 0
+    /// by construction: the lag-0 term once, each other lag's
+    /// autocovariance twice, at WKD's `k(l/γ)` (their Appendix A.1), which
+    /// puts lag `γ` at 0; Newey–West's `1 − l/(γ+1)` stood here until
+    /// docs/PLAN.md task 114. NaN where it is not positive.
+    fn bartlett_sd(s: &[f64], gamma: usize) -> f64 {
+        let t = s.len();
+        let tf = t as f64;
         let mut v = 0.0;
         for lag in 0..t.min(gamma) {
             let w = bartlett(lag as f64 / gamma as f64);
             let mut acf = 0.0;
-            for s in lag..t {
-                acf += xi[s] * xi[s - lag];
+            for i in lag..t {
+                acf += s[i] * s[i - lag];
             }
             v += w * acf / tf * if lag > 0 { 2.0 } else { 1.0 };
         }
         if v > 0.0 { v.sqrt() } else { f64::NAN }
+    }
+
+    /// The CUSUM of a series that sums to 0 over the span, against its
+    /// long-run standard deviation `sd`: `max_j |Σ_{t≤j} s_t| / (√T·sd)`,
+    /// and the first `j` it is attained at. NaN where `sd` is not a positive
+    /// number.
+    fn cusum(s: &[f64], sd: f64) -> (f64, usize) {
+        if sd.is_nan() || sd <= 0.0 {
+            return (f64::NAN, 0);
+        }
+        let (mut run, mut best, mut at) = (0.0f64, 0.0f64, 0);
+        for (i, v) in s.iter().enumerate() {
+            run += v;
+            if run.abs() > best {
+                (best, at) = (run.abs(), i + 1);
+            }
+        }
+        (best / ((s.len() as f64).sqrt() * sd), at)
     }
 
     /// `Q` for the **mean** of a one-column span: `max_j (j/√T)·|ūⱼ − ū_T|
@@ -1075,10 +1497,9 @@ impl CorrChange {
 
     /// [`Self::scalar_stat`], and the `j` its maximum is attained at.
     fn scalar_stat_at<R: AsRef<[f64]>>(&self, rows: &[R]) -> (f64, usize) {
+        // No count of rows: a span whose `u` has no spread has no long-run
+        // deviation, and a short one cannot flag (`Self::influence`).
         let t = rows.len();
-        if t < 4 {
-            return (f64::NAN, 0);
-        }
         let tf = t as f64;
         let u: Vec<f64> = rows.iter().map(|r| r.as_ref()[0]).collect();
         let mean = u.iter().sum::<f64>() / tf;
@@ -1128,83 +1549,67 @@ impl CorrChange {
         }
     }
 
-    /// `Q` for one pair over the span in the ring.
+    /// The `monitor` statistic for one pair over the span in the ring.
     #[cfg(test)]
     fn monitor_stat(&self, rows: &[Vec<f64>], a: usize, b: usize) -> f64 {
-        self.monitor_stat_at(rows, a, b).0
+        self.monitor_pair(rows, a, b, &mut Vec::new()).stat
     }
 
-    /// [`Self::monitor_stat`], and the `j` its maximum is attained at: the
-    /// last row before the change, as Wied & Galeano (2013, Eq. 8) date a
-    /// change from the same CUSUM.
+    /// [`Self::monitor_stat`], and the `j` its maximum is attained at.
+    #[cfg(test)]
     fn monitor_stat_at<R: AsRef<[f64]>>(&self, rows: &[R], a: usize, b: usize) -> (f64, usize) {
+        let p = self.monitor_pair(rows, a, b, &mut Vec::new());
+        (p.stat, p.at)
+    }
+
+    /// The `monitor` kind's two CUSUMs for the pair `(a, b)` over a span of
+    /// `T` rows (docs/PLAN.md task 553, after the review of 2026-11-22):
+    ///
+    /// ```text
+    /// stat  = max_j |Σ_{t≤j} ξ_t| / (√T·D̂),    D̂ the Bartlett long-run sd of ξ
+    /// ratio = max_j |Σ_{t≤j} d_t| / (√T·D̂_d),  D̂_d that of d
+    /// ```
+    ///
+    /// ([`Self::influence`] has `ξ` and `d`). `stat` is the linearised form
+    /// of Wied, Krämer & Dehling's `max_j (j/√T)|ρ̂ⱼ − ρ̂_T|/D̂`: their proof
+    /// reduces `j(ρ̂ⱼ − ρ̂_T)` to `Σ_{t≤j} ξ_t` plus a remainder, and the limit
+    /// `sup|B|` is the law of the sum. The remainder is what over-rejected:
+    /// `ρ̂ⱼ` of a handful of rows lives in `[−1, 1]` and is `±1` at two rows
+    /// whatever the data, so at `|ρ| = 0.9` one span in seven flagged on its
+    /// second row (26% of stable 100-row spans at the 5% level; the paper's
+    /// own Table 1 has 0.142 at `T = 200`). The sum forms no prefix
+    /// correlation, so it has no remainder to wait for, at any `T` and any
+    /// `ρ`. `at` is the first `j` of the maximum: the last row before the
+    /// change, as Wied & Galeano (2013, Eq. 8) date one from a CUSUM.
+    ///
+    /// `ratio` is the check on the one condition the sum does not remove.
+    /// With the correlation constant and the columns' scales at `r_x`,
+    /// `r_y` times their span values, `E[ξ] = −(ρ/2)(r_x − r_y)²`: `ξ` keeps
+    /// its zero mean, and the limit law holds, exactly when the ratio of the
+    /// two scales does not move (or `ρ = 0`). `d`'s CUSUM has the same limit
+    /// when that ratio is constant, and grows with `√T` when it moves.
+    /// `buf` is the span's working space, one buffer for its pairs.
+    fn monitor_pair<R: AsRef<[f64]>>(
+        &self,
+        rows: &[R],
+        a: usize,
+        b: usize,
+        buf: &mut Vec<f64>,
+    ) -> PairStat {
         let t = rows.len();
         let gamma = self
             .cfg
             .bandwidth
             .unwrap_or_else(|| ((t as f64).ln().floor() as usize).max(1));
-        let sd = Self::long_run_sd(rows, a, b, gamma);
-        // NaN or non-positive: no scale to divide by.
-        if sd.is_nan() || sd <= 0.0 {
-            return (f64::NAN, 0);
+        if !Self::influence_into(rows, a, b, true, buf) {
+            return PairStat::NONE;
         }
-        let rho_t = Self::corr_of(rows, t, a, b);
-        if !rho_t.is_finite() {
-            return (f64::NAN, 0);
-        }
-        let tf = t as f64;
-        let (mut best, mut at) = (0.0f64, 0);
-        // Every prefix's `ρ̂ⱼ` from one pass of the mean-form (Welford) sums,
-        // a row at a time, as `sequential_since_change` keeps them: O(T) a
-        // pair, where a two-pass correlation of each prefix afresh was
-        // O(T²) (docs/PLAN.md task 270, D-1). The rows are taken about the
-        // span's means first, so the sums run at the spread's scale and not
-        // the level's: a row and its span's mean within a factor of two
-        // subtract exactly (Sterbenz), and a correlation does not see the
-        // shift.
-        let (ca, cb) = Self::span_means(rows, a, b);
-        let (mut ma, mut mb, mut saa, mut sbb, mut sab) = (0.0, 0.0, 0.0, 0.0, 0.0);
-        for (i, r) in rows.iter().enumerate() {
-            let r = r.as_ref();
-            let j = i + 1;
-            let jf = j as f64;
-            let (xa, xb) = (r[a] - ca, r[b] - cb);
-            let (da, db) = (xa - ma, xb - mb);
-            ma += da / jf;
-            mb += db / jf;
-            saa += da * (xa - ma);
-            sbb += db * (xb - mb);
-            sab += da * (xb - mb);
-            if j < 2 {
-                continue;
-            }
-            let den = (saa * sbb).sqrt();
-            if den.is_nan() || den <= 0.0 {
-                continue;
-            }
-            let rj = sab / den;
-            if !rj.is_finite() {
-                continue;
-            }
-            let v = (jf / tf.sqrt()) * (rj - rho_t).abs() / sd;
-            if v > best {
-                (best, at) = (v, j);
-            }
-        }
-        (best, at)
-    }
-
-    /// The span's means of columns `a` and `b`: what [`Self::monitor_stat_at`]
-    /// takes its rows about.
-    fn span_means<R: AsRef<[f64]>>(rows: &[R], a: usize, b: usize) -> (f64, f64) {
-        let tf = rows.len() as f64;
-        let (mut sa, mut sb) = (0.0, 0.0);
-        for r in rows {
-            let r = r.as_ref();
-            sa += r[a];
-            sb += r[b];
-        }
-        (sa / tf, sb / tf)
+        let (xi, d) = buf.split_at(t);
+        let (stat, at) = Self::cusum(xi, Self::bartlett_sd(xi, gamma));
+        // A ratio with no long-run spread is one that cannot have moved:
+        // `|x̃| = |ỹ|` on every row (NaN, which never withholds).
+        let (ratio, _) = Self::cusum(d, Self::bartlett_sd(d, gamma));
+        PairStat { stat, at, ratio }
     }
 
     /// The pair `(a, b)`, `a < b`, at position `idx` in the order the pairs
@@ -1248,40 +1653,80 @@ impl CorrChange {
         }
         let width = self.cfg.width();
         let pairs = if self.cfg.scalar { 0 } else { level.len() };
-        Monitoring {
+        // Under a clock span each cycle has its own `m`, and its own `K`:
+        // `monitor_rows`, or the period planned at the history's rate, `K =
+        // ⌊m·monitor_span/window_size⌋` (the crossing probability over a
+        // shorter period is smaller, so a period the clock ends sooner keeps
+        // the size at most `alpha`, however its rows arrive).
+        let (history, horizon) = match (self.cfg.span_clock, self.cfg.monitor_clock) {
+            (None, _) => (0, 0),
+            (Some(d), Some(span)) => (m as u64, ((m as f64 * span / d).floor() as u64).max(1)),
+            (Some(_), None) => (m as u64, self.cfg.monitor_rows as u64),
+        };
+        let mut mon = Monitoring {
             level,
             scale,
             rows: Vec::new(),
             mean: vec![0.0; width],
             m2: vec![0.0; width],
             cross: vec![0.0; pairs],
-        }
+            history,
+            horizon,
+            z_level: Vec::new(),
+            crit: f64::NAN,
+        };
+        mon.rebuild(&self.cfg);
+        mon
     }
 
     /// `sequential`'s detector on the row that would be the `k`-th
-    /// monitored one: `max |V_k|/w(k/m)` over the pairs, `V_k = (k/√m)·
-    /// (ρ̂^{m+k}_{m+1} − ρ̂^m_1)/σ̂` (W&G's Eq. 1, their `D̂` being `1/σ̂`),
-    /// `w(b) = (1 + b)(b/(1 + b))^γ` (their Eq. 5), and the pair it is
-    /// attained at. `ρ̂^{m+k}_{m+1}` is the correlation of the monitored
-    /// rows with this one, from the mean-form sums a step on; NaN below two
-    /// rows, where a correlation is not defined.
+    /// monitored one, over the pairs, and the pair it is largest at
+    /// (docs/PLAN.md task 553, after the review of 2026-11-22): Wied &
+    /// Galeano's comparison of the monitored rows' correlation with the
+    /// history's, each on Fisher's scale at its own finite-sample variance,
+    ///
+    /// ```text
+    /// V_k = ((k − 3)⁺/√(m − 3))·|z_k − z_h|·(1 − ρ̂_h²)/σ̂,   z = atanh ρ̂
+    /// ```
+    ///
+    /// against their boundary `c·w(b)`, `w(b) = (1 + b)(b/(1 + b))^γ` (their
+    /// Eq. 5) at the information `b = (k − 3)/(m − 3)`. `z_k` is the
+    /// correlation of the monitored rows with this one, from the mean-form
+    /// sums a step on; `z_h` and `ρ̂_h` the history's, `σ̂` the history's
+    /// long-run standard deviation of `ρ̂` (the inverse of their `D̂`), so
+    /// `σ̂/(1 − ρ̂_h²)` is that of `z_h`. With `Var z_k = σ_z²/(k − 3)` and
+    /// `Var z_h = σ_z²/(m − 3)` the detector's variance is `b + b²`, W&G's
+    /// `G(b)` exactly and not only as `m → ∞`. Their own detector, `(k/√m)
+    /// |ρ̂_k − ρ̂_h|/σ̂` from `k = 2`, compared a correlation of two rows,
+    /// `±1` whatever the data, with the history's: at `γ = 0.45` and
+    /// `ρ = 0.6` a quarter to a third of the cycles flagged on their first
+    /// rows with nothing changed, at every history up to 1000. A row of no
+    /// information, `k ≤ 3`, has weight 0 and no verdict: NaN, as the first
+    /// monitored row was; so is a history of `m ≤ 3`.
+    ///
+    /// `scalar`'s is the mean's: `(k/√m)·|ū_k − ū_h|/σ̂_u / w(k/m)`, which
+    /// forms no correlation to converge.
     fn sequential_stat(&self, mon: &Monitoring, row: &[f64]) -> (f64, usize) {
-        let k = mon.rows.len() + 1;
-        if k < 2 {
+        if !self.informed(mon) {
             return (f64::NAN, 0);
         }
+        let k = mon.rows.len() + 1;
         let kf = k as f64;
-        let m = self.cfg.span_rows as f64;
-        let b = kf / m;
-        let w = (1.0 + b) * (b / (1.0 + b)).powf(self.cfg.boundary_gamma);
-        let factor = kf / m.sqrt();
+        let (m, _) = mon.rows_of(&self.cfg);
+        let m = m as f64;
+        let gamma = self.cfg.boundary_gamma;
+        let boundary = |b: f64| (1.0 + b) * (b / (1.0 + b)).powf(gamma);
         let width = mon.mean.len();
         let dev: Vec<f64> = (0..width).map(|i| row[i] - mon.mean[i]).collect();
         let mean: Vec<f64> = (0..width).map(|i| mon.mean[i] + dev[i] / kf).collect();
         if self.cfg.scalar {
-            let v = factor * (mean[0] - mon.level[0]) / mon.scale[0];
-            return (v.abs() / w, 0);
+            let v = (kf / m.sqrt()) * (mean[0] - mon.level[0]) / mon.scale[0];
+            return (v.abs() / boundary(kf / m), 0);
         }
+        // The information each side holds, `n − 3` on Fisher's scale.
+        let (info, info_h) = (kf - 3.0, m - 3.0);
+        let w = boundary(info / info_h);
+        let factor = info / info_h.sqrt();
         let d = self.cfg.n_features;
         let (mut best, mut at) = (f64::NAN, 0);
         let mut idx = 0;
@@ -1291,15 +1736,38 @@ impl CorrChange {
                 let m2b = mon.m2[bb] + dev[bb] * (row[bb] - mean[bb]);
                 let c = mon.cross[idx] + dev[a] * (row[bb] - mean[bb]);
                 let den = (m2a * m2b).sqrt();
-                let rho = if den > 0.0 { c / den } else { f64::NAN };
-                let ratio = (factor * (rho - mon.level[idx]) / mon.scale[idx]).abs() / w;
-                if ratio.is_finite() && (best.is_nan() || ratio > best) {
+                // A correlation's rounding can put it a hair past `±1`, where
+                // `atanh` has no value: it is `±1` there, `z` infinite, and a
+                // period whose rows are collinear where the history's were
+                // not has changed.
+                let rho = if den > 0.0 {
+                    (c / den).clamp(-1.0, 1.0)
+                } else {
+                    f64::NAN
+                };
+                let level = mon.level[idx];
+                let z = libm::atanh(rho) - mon.z_level[idx];
+                let ratio = (factor * z.abs() * (1.0 - level * level) / mon.scale[idx]) / w;
+                if !ratio.is_nan() && (best.is_nan() || ratio > best) {
                     (best, at) = (ratio, idx);
                 }
                 idx += 1;
             }
         }
         (best, at)
+    }
+
+    /// Whether the row that would be the next monitored one carries
+    /// information for the detector: for a pair's Fisher `z`, `k − 3 > 0`
+    /// and `m − 3 > 0` (its variance `1/(n − 3)` is defined); for
+    /// `scalar`'s mean, a second row.
+    fn informed(&self, mon: &Monitoring) -> bool {
+        let k = mon.rows.len() + 1;
+        if self.cfg.scalar {
+            return k >= 2;
+        }
+        let (m, _) = mon.rows_of(&self.cfg);
+        k > 3 && m > 3
     }
 
     /// W&G's Eq. 8: on a flag at the `τ`-th monitored row, the change is
@@ -1359,15 +1827,34 @@ impl CorrChange {
     /// `sequential`: a learned row enters the history, or the monitoring
     /// period. A full history starts the monitoring; a flag or the
     /// period's last row ends it, and the next learned row starts a history.
-    fn advance_sequential(&mut self, row: Vec<f64>, flagged: bool) {
-        let (limit, scalar) = (self.cfg.monitor_rows, self.cfg.scalar);
+    fn advance_sequential(&mut self, row: Vec<f64>, flagged: bool, key: Option<Stamp>) {
+        let scalar = self.cfg.scalar;
         let Some(mon) = self.monitoring.as_mut() else {
             self.ring.push_back(row);
-            if self.ring.len() >= self.cfg.span_rows {
+            // The history's last row: its count, or under a clock span the
+            // row that reaches `window_size` from its first.
+            let full = match (self.cfg.span_clock, key) {
+                (Some(span), Some(now)) => {
+                    let first = *self.first.get_or_insert(now);
+                    crate::clock_span::span_reached(now, first, span)
+                }
+                _ => self.ring.len() >= self.cfg.span_rows,
+            };
+            if full {
                 let history: Vec<Vec<f64>> = self.ring.drain(..).collect();
                 self.monitoring = Some(self.begin_monitoring(&history));
+                self.first = None;
             }
             return;
+        };
+        let (_, limit) = mon.rows_of(&self.cfg);
+        // The period's own span of the clock, from its first row.
+        let spanned = match (self.cfg.monitor_clock, key) {
+            (Some(span), Some(now)) => {
+                let first = *self.first.get_or_insert(now);
+                crate::clock_span::span_reached(now, first, span)
+            }
+            _ => false,
         };
         // The same arithmetic as `sequential_stat`'s step, now kept.
         let kf = (mon.rows.len() + 1) as f64;
@@ -1388,8 +1875,9 @@ impl CorrChange {
             }
         }
         mon.rows.push(row);
-        if flagged || mon.rows.len() >= limit {
+        if flagged || mon.rows.len() >= limit || spanned {
             self.monitoring = None;
+            self.first = None;
         }
     }
 
@@ -1417,7 +1905,11 @@ impl CorrChange {
     /// `‖vech(R̂_pre − R̂_post)‖` over the two windows in `rows`.
     #[cfg(test)]
     fn window_stat(&self, rows: &[Vec<f64>]) -> f64 {
-        self.window_stat_by(rows.len(), |i| &rows[i], &mut Vec::new())
+        let w = self.cfg.span_rows;
+        if rows.len() < 2 * w {
+            return f64::NAN;
+        }
+        self.window_stat_by(w, w, |i| &rows[i], &mut Vec::new())
     }
 
     /// [`Self::window_corr_into`] into a buffer of its own.
@@ -1472,18 +1964,21 @@ impl CorrChange {
         Self::normalise_pairs(d, ss, corr);
     }
 
-    /// `‖vech(R̂_pre − R̂_post)‖` over the two windows of the `n` rows
-    /// `row(0)..row(n)`, read where they are: the ring was copied whole on
-    /// every row, and every pooled row on every permutation draw
-    /// (docs/PLAN.md task 270, D-2).
+    /// `‖vech(R̂_pre − R̂_post)‖` over two windows of `n1` and `n2` rows,
+    /// `row(0)..row(n1)` and `row(n1)..row(n1 + n2)`, read where they are:
+    /// the ring was copied whole on every row, and every pooled row on every
+    /// permutation draw (docs/PLAN.md task 270, D-2). Two windows of
+    /// `window_rows` each, or under `window_size` the rows each window of
+    /// the clock holds (task 553); a window without two rows has no
+    /// correlation, and so no statistic.
     fn window_stat_by<'a>(
         &self,
-        n: usize,
+        n1: usize,
+        n2: usize,
         row: impl Fn(usize) -> &'a [f64],
         buf: &mut Vec<f64>,
     ) -> f64 {
-        let w = self.cfg.span_rows;
-        if n < 2 * w || w < 2 {
+        if n1 == 0 || n2 == 0 {
             return f64::NAN;
         }
         let d = self.cfg.n_features;
@@ -1493,8 +1988,8 @@ impl CorrChange {
         buf.clear();
         buf.resize(2 * len, 0.0);
         let (pre, post) = buf.split_at_mut(len);
-        self.window_corr_into(w, &row, pre);
-        self.window_corr_into(w, |i| row(w + i), post);
+        self.window_corr_into(n1, &row, pre);
+        self.window_corr_into(n2, |i| row(n1 + i), post);
         self.change_between(pre, post)
     }
 
@@ -1516,21 +2011,20 @@ impl CorrChange {
         acc
     }
 
-    /// [`Self::window_stat_by`] over the `2 w` rows `pool` holds at the
-    /// places `at` gives, `d` numbers to a row in `pool`: the pooled rows of
-    /// a permutation draw, copied from the ring once for every draw and not
-    /// once for each.
-    fn window_stat_flat(&self, pool: &[f64], at: &[usize], buf: &mut Vec<f64>) -> f64 {
-        let w = self.cfg.span_rows;
+    /// [`Self::window_stat_by`] over the rows `pool` holds at the places
+    /// `at` gives, the first `n1` of them one window and the rest the other,
+    /// `d` numbers to a row in `pool`: the pooled rows of a permutation
+    /// draw, copied from the ring once for every draw and not once for each.
+    fn window_stat_flat(&self, pool: &[f64], at: &[usize], n1: usize, buf: &mut Vec<f64>) -> f64 {
         let d = self.cfg.n_features;
-        if w < 2 {
+        if n1 == 0 || n1 >= at.len() {
             return f64::NAN;
         }
         let len = 2 * d + d * d.saturating_sub(1) / 2;
         buf.clear();
         buf.resize(2 * len, 0.0);
         let (pre, post) = buf.split_at_mut(len);
-        let (head, tail) = at.split_at(w);
+        let (head, tail) = at.split_at(n1);
         Self::window_corr_flat(d, pool, head, pre);
         Self::window_corr_flat(d, pool, tail, post);
         self.change_between(pre, post)
@@ -1655,13 +2149,19 @@ impl CorrChange {
     /// under a permutation of the pooled rows between the two windows, in
     /// blocks, with `m` = [`perm_rejections`], so that its size is at most
     /// `alpha`. `None` where `m` is 0: no statistic could flag.
-    fn permutation_crit(&mut self) -> Option<f64> {
-        let w = self.cfg.span_rows;
-        if self.ring.len() < 2 * w {
+    ///
+    /// The pool is the ring, the first `n1` of its rows the first window:
+    /// two windows of `window_rows`, or under `window_size` the rows each
+    /// window of the clock holds. A permutation test needs no equal
+    /// windows: on exchangeable rows every assignment of the `n1 + n2`
+    /// pooled rows to windows of `n1` and `n2` is equally likely.
+    fn permutation_crit(&mut self, n1: usize) -> Option<f64> {
+        let n = self.ring.len();
+        if n1 == 0 || n1 >= n {
             return None;
         }
         let block = self.cfg.perm_block;
-        let nblocks = (2 * w).div_ceil(block);
+        let nblocks = n.div_ceil(block);
         // The draws' buffers, kept between redraws.
         let mut work = std::mem::take(&mut self.work);
         let Work {
@@ -1680,12 +2180,12 @@ impl CorrChange {
         // from the ring, permuted in blocks.
         let d = self.cfg.n_features;
         pool.clear();
-        pool.reserve_exact(2 * w * d);
+        pool.reserve_exact(n * d);
         for r in &self.ring {
             pool.extend_from_slice(&r[..d]);
         }
         shuffled.clear();
-        shuffled.reserve_exact(2 * w);
+        shuffled.reserve_exact(n);
         for _ in 0..self.cfg.n_perm {
             // Fisher-Yates over the blocks, from the state's own generator
             // so the draws are a function of the data alone.
@@ -1696,9 +2196,9 @@ impl CorrChange {
             shuffled.clear();
             for &bi in order.iter() {
                 let start = bi * block;
-                shuffled.extend(start..(start + block).min(2 * w));
+                shuffled.extend(start..(start + block).min(n));
             }
-            let s = self.window_stat_flat(pool, shuffled, buf);
+            let s = self.window_stat_flat(pool, shuffled, n1, buf);
             if s.is_finite() {
                 stats.push(s);
             }
@@ -1748,15 +2248,89 @@ impl CorrChange {
     /// not advance `since` for the rows after it and does not reset it if
     /// it flags. That is the reading `predict` has to give too, since
     /// `predict` does not know the weight (docs/REVIEW-E54-E64.md CC2).
-    fn read(&self, x: &[f64]) -> Vec<f64> {
+    /// Under a clock form `key` is the row's place on the clock, read as a
+    /// row that counts.
+    fn read(&self, x: &[f64], key: Option<Stamp>) -> Vec<f64> {
         let mut pred = Vec::new();
-        self.read_into(x, &mut pred, &mut Vec::new());
+        self.read_into(x, key, &mut pred, &mut Vec::new());
         pred
+    }
+
+    /// Whether the row keyed `key` closes the `monitor` span in progress:
+    /// the span's last row by its count, or under a clock span the row that
+    /// reaches `window_size` from the span's first (that row is the span's
+    /// last, as every span of the clock that holds rows reads it).
+    fn monitor_closes(&self, key: Option<Stamp>) -> bool {
+        match (self.cfg.span_clock, key) {
+            (Some(span), Some(now)) => self
+                .first
+                .is_some_and(|first| crate::clock_span::span_reached(now, first, span)),
+            _ => self.ring.len() + 1 >= self.cfg.span_rows,
+        }
+    }
+
+    /// The two windows a `window` report on the row keyed `key` reads, as
+    /// `(skip, n1, n2)`: the ring's rows from `skip` on, the first `n1` the
+    /// earlier window and the rest with the row the later, `n2` counting
+    /// the row. `None` until both windows have run: `2·window_rows` rows
+    /// with this one, or under `window_size` (docs/PLAN.md task 553) `2D`
+    /// of the clock since the ring's first row, the windows then the rows
+    /// of `(now − 2D, now − D]` and `(now − D, now]` (a row exactly `D` old
+    /// is in the earlier window, one exactly `2D` old in neither, as Polars'
+    /// `rolling_*_by` with `closed = "right"` reads a window).
+    fn windows_at(&self, key: Option<Stamp>) -> Option<(usize, usize, usize)> {
+        let held = self.ring.len();
+        match (self.cfg.span_clock, key) {
+            (Some(span), Some(now)) => {
+                let first = self.first?;
+                if !crate::clock_span::span_reached(now, first, 2.0 * span) {
+                    return None;
+                }
+                let right = crate::WindowClosed::Right;
+                let skip = self
+                    .keys
+                    .iter()
+                    .take_while(|&&k| right.has_left(now, k, 2.0 * span))
+                    .count();
+                let split = skip
+                    + self
+                        .keys
+                        .iter()
+                        .skip(skip)
+                        .take_while(|&&k| right.has_left(now, k, span))
+                        .count();
+                Some((skip, split - skip, held - split + 1))
+            }
+            _ => {
+                let w = self.cfg.span_rows;
+                (held + 1 >= 2 * w).then(|| (held + 1 - 2 * w, w, w))
+            }
+        }
+    }
+
+    /// The permutation critical value in force, for a report over windows
+    /// of `n1` and `n2` rows: as drawn, or under `window_size` rescaled from
+    /// the windows it was drawn over, `(n₁⁰, n₂⁰)`, by `√((1/n1 + 1/n2)/
+    /// (1/n₁⁰ + 1/n₂⁰))`. A difference of two windows' correlations has a
+    /// null spread of `(1 − ρ²)·√(1/n1 + 1/n2)` a pair, so the norm of the
+    /// differences scales with that root: a value drawn at 100 rows a
+    /// window and held while the rows come at half the rate is too small
+    /// by `√2`, which turns 5% into 17%. On the row clock's windows the two
+    /// are the same counts and the value is as drawn, to the bit.
+    fn perm_crit_for(&self, n1: usize, n2: usize) -> Option<f64> {
+        let c = self.perm_crit?;
+        Some(match self.perm_counts {
+            Some([a, b]) if (a, b) != (n1 as u64, n2 as u64) => {
+                let spread = |p: f64, q: f64| 1.0 / p + 1.0 / q;
+                c * (spread(n1 as f64, n2 as f64) / spread(a as f64, b as f64)).sqrt()
+            }
+            _ => c,
+        })
     }
 
     /// [`Self::read`], written over `pred`, `buf` the window statistic's
     /// working space.
-    fn read_into(&self, x: &[f64], pred: &mut Vec<f64>, buf: &mut Vec<f64>) {
+    fn read_into(&self, x: &[f64], key: Option<Stamp>, pred: &mut Vec<f64>, buf: &mut Vec<f64>) {
         pred.clear();
         pred.resize(Self::n_outputs_for(), f64::NAN);
         let mut one = [0.0];
@@ -1766,7 +2340,7 @@ impl CorrChange {
         let since = self.since_flag.unwrap_or(0) + 1;
         match self.cfg.kind {
             CorrChangeKind::Monitor => {
-                if self.ring.len() + 1 < self.cfg.span_rows {
+                if !self.monitor_closes(key) {
                     return;
                 }
                 // The span's rows read where they are, the ring's and this
@@ -1777,24 +2351,45 @@ impl CorrChange {
                     .map(Vec::as_slice)
                     .chain(std::iter::once(row))
                     .collect();
-                let (mut stat, mut at) = (f64::NAN, 0);
+                let crit = self.cfg.monitor_crit(rows.len());
+                // The largest statistic over the pairs; the flag from the
+                // largest pair over the critical value whose scale ratio
+                // held; and the flag withheld (NaN) where every pair over it
+                // is one whose ratio moved, since there the correlation's
+                // CUSUM is not on its null law ([`Self::monitor_pair`]).
+                let (mut stat, mut flagged, mut at, mut held) = (f64::NAN, f64::NAN, 0, false);
+                let mut work = Vec::new();
                 if self.cfg.scalar {
-                    (stat, at) = self.scalar_stat_at(&rows);
+                    let (q, j) = self.scalar_stat_at(&rows);
+                    stat = q;
+                    if q > crit {
+                        (flagged, at) = (q, j);
+                    }
                 } else {
                     for a in 0..self.cfg.n_features {
                         for b in (a + 1)..self.cfg.n_features {
-                            let (q, j) = self.monitor_stat_at(&rows, a, b);
-                            if q.is_finite() && (stat.is_nan() || q > stat) {
-                                (stat, at) = (q, j);
+                            let p = self.monitor_pair(&rows, a, b, &mut work);
+                            if p.stat.is_finite() && (stat.is_nan() || p.stat > stat) {
+                                stat = p.stat;
+                            }
+                            if p.stat > crit {
+                                if p.ratio > crit {
+                                    held = true;
+                                } else if flagged.is_nan() || p.stat > flagged {
+                                    (flagged, at) = (p.stat, p.at);
+                                }
                             }
                         }
                     }
                 }
-                let crit = self.cfg.fixed_crit().unwrap_or(f64::NAN);
-                let flag = stat.is_finite() && crit.is_finite() && stat > crit;
+                let flag = flagged.is_finite() && crit.is_finite();
                 pred[0] = stat;
                 pred[1] = crit;
-                pred[2] = f64::from(flag);
+                pred[2] = if flag || !held {
+                    f64::from(flag)
+                } else {
+                    f64::NAN
+                };
                 pred[3] = since as f64;
                 if flag && at > 0 {
                     // The rows after the CUSUM's argmax, through this one.
@@ -1804,17 +2399,16 @@ impl CorrChange {
             CorrChangeKind::Window => {
                 // The ring and the row, less what is past the two windows,
                 // read where they are.
-                let w = self.cfg.span_rows;
-                let held = self.ring.len();
-                if held + 1 < 2 * w {
+                let Some((skip, n1, n2)) = self.windows_at(key) else {
                     return;
-                }
-                let skip = held + 1 - 2 * w;
+                };
+                let held = self.ring.len();
                 let ring = &self.ring;
                 let stat = match &self.sums {
                     Some(sums) => self.window_stat_merged(sums, row, buf),
                     None => self.window_stat_by(
-                        2 * w,
+                        n1,
+                        n2,
                         |i| {
                             let i = skip + i;
                             if i < held { &ring[i] } else { row }
@@ -1824,7 +2418,7 @@ impl CorrChange {
                 };
                 // The value **in force**: a redraw happens after the row is
                 // reported, so `predict` and `step` see the same one.
-                let crit = self.cfg.crit.or(self.perm_crit);
+                let crit = self.cfg.crit.or_else(|| self.perm_crit_for(n1, n2));
                 let flag = matches!((stat.is_finite(), crit), (true, Some(c)) if stat > c);
                 pred[0] = stat;
                 pred[1] = crit.unwrap_or(f64::NAN);
@@ -1832,19 +2426,22 @@ impl CorrChange {
                 pred[3] = since as f64;
                 if flag {
                     // The second window, by construction.
-                    pred[4] = w as f64;
+                    pred[4] = n2 as f64;
                 }
             }
             CorrChangeKind::Sequential => {
                 let Some(mon) = &self.monitoring else {
                     return;
                 };
-                if mon.rows.is_empty() {
+                // A row the detector has no information at reports nothing,
+                // as the first monitored row always has: `k ≤ 3` for a
+                // pair's Fisher `z`, `k = 1` for `scalar`'s mean.
+                if !self.informed(mon) {
                     return;
                 }
                 let (stat, at) = self.sequential_stat(mon, row);
-                let crit = self.seq_crit;
-                let flag = stat.is_finite() && crit.is_finite() && stat > crit;
+                let crit = mon.crit;
+                let flag = !stat.is_nan() && crit.is_finite() && stat > crit;
                 pred[0] = stat;
                 pred[1] = crit;
                 pred[2] = f64::from(flag);
@@ -1854,6 +2451,36 @@ impl CorrChange {
                 }
             }
         }
+    }
+
+    /// Under `window_size`, the `window` kind's rows that have left both
+    /// windows at the row keyed `now`, dropped: those `2D` or more old.
+    fn trim_windows(&mut self, now: Stamp) {
+        let Some(span) = self.cfg.span_clock else {
+            return;
+        };
+        while self
+            .keys
+            .front()
+            .is_some_and(|&k| crate::WindowClosed::Right.has_left(now, k, 2.0 * span))
+        {
+            self.keys.pop_front();
+            if let Some(old) = self.ring.pop_front() {
+                self.work.spare = old;
+            }
+        }
+    }
+
+    /// Forget every row held: a `window` ring, its keys and the critical
+    /// value drawn from it.
+    fn restart_windows(&mut self) {
+        self.ring.clear();
+        self.keys.clear();
+        self.first = None;
+        self.ring_rows = 0;
+        self.perm_crit = None;
+        self.perm_counts = None;
+        self.since_perm = 0;
     }
 }
 
@@ -1874,22 +2501,30 @@ impl crate::OnlineModel for CorrChange {
             *out = refused;
             return;
         }
+        // The row's place on a clock form's clock, read as a row that
+        // counts: a row of weight 0 is reported as one would be.
+        let key = self.clock.as_ref().map(|c| c.key(d_clock));
         // `predict`'s answer, read before the row: `x` is usable here. Only
         // the window kind's report reads the working space; the others are
         // given an empty one, which allocates nothing, rather than pay to
         // take the kept one and put it back on every row (task 345).
         if matches!(self.cfg.kind, CorrChangeKind::Window) {
             let mut buf = std::mem::take(&mut self.work.report);
-            self.read_into(x, &mut out.pred, &mut buf);
+            self.read_into(x, key, &mut out.pred, &mut buf);
             self.work.report = buf;
         } else {
-            self.read_into(x, &mut out.pred, &mut Vec::new());
+            self.read_into(x, key, &mut out.pred, &mut Vec::new());
         }
         out.n_eff = self.n_eff;
         out.extra = None;
         let lam = self.cfg.decay.factor(d_clock);
         if let Some(s) = self.since_draw.as_mut() {
             s.step(d_clock);
+        }
+        // A row of weight 0 counts in no clock (hard rule 9): on the row
+        // clock it is no step, and it is in no span or window.
+        if let Some(c) = self.clock.as_mut() {
+            c.step(d_clock, weight > 0.0);
         }
         if weight <= 0.0 {
             // Hard rule 8: `n_eff` is the accumulated weight before the
@@ -1900,6 +2535,20 @@ impl crate::OnlineModel for CorrChange {
                 self.diag.update(x, lam, 0.0);
             }
             return;
+        }
+        // Under a clock form the rows held are the data's to number: a row
+        // that would take the state past `max_state_bytes` is not learned,
+        // nor any after it, and the caller refuses the run
+        // (`clock_span::HeldCap`). The window's rows that have aged out
+        // leave first.
+        if let Some(now) = key {
+            if self.cfg.kind == CorrChangeKind::Window {
+                self.trim_windows(now);
+            }
+            let (bytes, cap) = (self.held_bytes(1), self.cap());
+            if !self.held_cap().admit(bytes, cap) {
+                return;
+            }
         }
         // The row as the ring holds it, copied into the row the window's
         // ring let go last, so the copy allocates nothing.
@@ -1916,31 +2565,49 @@ impl crate::OnlineModel for CorrChange {
             self.since_flag = Some(0);
         }
         match self.cfg.kind {
-            CorrChangeKind::Sequential => self.advance_sequential(row, flagged),
+            CorrChangeKind::Sequential => self.advance_sequential(row, flagged, key),
             CorrChangeKind::Monitor => {
+                let closes = self.monitor_closes(key);
+                if self.ring.is_empty() {
+                    self.first = key;
+                }
                 self.ring.push_back(row);
-                if self.ring.len() >= self.cfg.span_rows {
+                if closes {
                     // Spans are disjoint by construction: the next row
                     // starts a new one, so `reset` has nothing to add here.
                     // The span's rows are kept for the next span's.
                     self.work.rows.extend(self.ring.drain(..));
+                    self.first = None;
                 }
             }
             CorrChangeKind::Window => {
+                if self.ring.is_empty() {
+                    self.first = key;
+                }
                 self.ring.push_back(row);
+                if let Some(now) = key {
+                    self.keys.push_back(now);
+                }
                 self.ring_rows += 1;
-                let w = self.cfg.span_rows;
-                while self.ring.len() > 2 * w {
-                    if let Some(old) = self.ring.pop_front() {
-                        self.work.spare = old;
+                if key.is_none() {
+                    let w = self.cfg.span_rows;
+                    while self.ring.len() > 2 * w {
+                        if let Some(old) = self.ring.pop_front() {
+                            self.work.spare = old;
+                        }
                     }
                 }
+                // The windows a draw is taken over: both full, as a report
+                // reads them at this row's place.
+                let drawn = match (key, self.cfg.span_clock) {
+                    (Some(now), Some(span)) => self.first.is_some_and(|first| {
+                        crate::clock_span::span_reached(now, first, 2.0 * span)
+                    }),
+                    _ => self.ring.len() >= 2 * self.cfg.span_rows,
+                };
                 if flagged && self.cfg.reset {
-                    self.ring.clear();
-                    self.ring_rows = 0;
-                    self.perm_crit = None;
-                    self.since_perm = 0;
-                } else if self.cfg.crit.is_none() && self.ring.len() >= 2 * w {
+                    self.restart_windows();
+                } else if self.cfg.crit.is_none() && drawn {
                     // The critical value is refreshed **after** the row is
                     // reported, so `predict` and `step` see the one in
                     // force and cannot disagree. Counted before it is
@@ -1950,7 +2617,20 @@ impl crate::OnlineModel for CorrChange {
                     // 2026-10-06, CD11; docs/PLAN.md task 196, S1).
                     self.since_perm = self.since_perm.saturating_add(1);
                     if self.perm_crit.is_none() || self.redraw_due() {
-                        self.perm_crit = self.permutation_crit();
+                        // The earlier window's rows at this row's place: the
+                        // ring holds both windows, its aged rows gone.
+                        let n1 = match (key, self.cfg.span_clock) {
+                            (Some(now), Some(span)) => self
+                                .keys
+                                .iter()
+                                .take_while(|&&k| crate::WindowClosed::Right.has_left(now, k, span))
+                                .count(),
+                            _ => self.cfg.span_rows,
+                        };
+                        self.perm_crit = self.permutation_crit(n1);
+                        self.perm_counts = key
+                            .map(|_| [n1 as u64, (self.ring.len() - n1) as u64])
+                            .filter(|_| self.perm_crit.is_some());
                         self.since_perm = 0;
                         if let Some(s) = self.since_draw.as_mut() {
                             s.restart();
@@ -1960,29 +2640,50 @@ impl crate::OnlineModel for CorrChange {
                 self.ready_sums();
             }
         }
+        if key.is_some() {
+            let (bytes, cap) = (self.held_bytes(0), self.cap());
+            self.held_cap().note(bytes, cap);
+        }
     }
 
-    /// The redraw's clock reads the row's stamp (task 538).
+    /// The redraw's clock reads the row's stamp (task 538), and a clock
+    /// form's spans (task 553).
     fn stamp_next(&mut self, stamp: crate::Stamp) {
         if let Some(s) = self.since_draw.as_mut() {
             s.stamp_next(stamp);
         }
+        if let Some(c) = self.clock.as_mut() {
+            c.next = Some((stamp, false));
+        }
     }
 
     /// On the row clock the redraw's clock counts from a row before the
-    /// first, as every cadence does.
+    /// first, as every cadence does; a clock form's span counts the rows
+    /// that counted.
     fn stamp_next_on_rows(&mut self, stamp: crate::Stamp) {
         if let Some(s) = self.since_draw.as_mut() {
             s.stamp_next_on_rows(stamp);
         }
+        if let Some(c) = self.clock.as_mut() {
+            c.next = Some((stamp, true));
+        }
+    }
+
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        self.warning.take().map(|bytes| (bytes, self.cap()))
+    }
+
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
+        self.over.map(|bytes| (bytes, self.cap()))
     }
 
     fn predict(&self, x: &[f64], d_clock: f64) -> crate::Step {
         if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
             return refused;
         }
+        let key = self.clock.as_ref().map(|c| c.key(d_clock));
         crate::Step {
-            pred: self.read(x),
+            pred: self.read(x, key),
             n_eff: self.n_eff,
             extra: None,
         }
@@ -1991,11 +2692,8 @@ impl crate::OnlineModel for CorrChange {
     fn clear_lags(&mut self) {
         // The rings pair rows the clock says are no longer adjacent; a
         // `monitor` span that spans a break is not a span.
-        self.ring.clear();
-        self.ring_rows = 0;
+        self.restart_windows();
         self.ready_sums();
-        self.perm_crit = None;
-        self.since_perm = 0;
         // And a `sequential` cycle across a break is not one cycle.
         self.monitoring = None;
     }
@@ -2016,6 +2714,7 @@ impl crate::OnlineModel for CorrChange {
                 // (review 2026-09-18, B3); a `scalar` ring holds `u`.
                 let d = m.cfg.n_features;
                 let width = m.cfg.width();
+                let on_clock = m.cfg.span_clock.is_some();
                 let wrong_mon = m.monitoring.as_ref().is_some_and(|mon| {
                     let values = if m.cfg.scalar { 1 } else { m.cfg.npairs() };
                     let pairs = if m.cfg.scalar { 0 } else { values };
@@ -2025,6 +2724,7 @@ impl crate::OnlineModel for CorrChange {
                         || mon.m2.len() != width
                         || mon.cross.len() != pairs
                         || mon.rows.iter().any(|r| r.len() != width)
+                        || (mon.history == 0) == on_clock
                 });
                 // A window's ring was numbered from 66 on; before, it is
                 // numbered from its oldest row, a numbering as good as any
@@ -2038,10 +2738,17 @@ impl crate::OnlineModel for CorrChange {
                 } else {
                     m.ring_rows != 0
                 };
+                // A clock form's clock is kept with it, and only there; a
+                // clock window keys every ring row; the counts a value was
+                // drawn over, only there.
+                let wrong_clock = m.clock.is_some() != on_clock
+                    || m.keys.len() != if window && on_clock { m.ring.len() } else { 0 }
+                    || (m.perm_counts.is_some() && !(window && on_clock && m.perm_crit.is_some()));
                 if m.diag.k() != d
                     || m.ring.iter().any(|r| r.len() != width)
                     || wrong_mon
                     || wrong_rows
+                    || wrong_clock
                 {
                     return Err(crate::model::damaged(
                         "corrchange",
@@ -2050,6 +2757,9 @@ impl crate::OnlineModel for CorrChange {
                 }
                 // Configuration, not state: recomputed on load.
                 m.seq_crit = Self::sequential_crit_of(&m.cfg);
+                if let Some(mon) = m.monitoring.as_mut() {
+                    mon.rebuild(&m.cfg);
+                }
                 // A cache of the ring: rebuilt from it.
                 m.sums = Self::sums_of(&m.cfg);
                 m.ready_sums();
@@ -2080,3915 +2790,9 @@ impl crate::OnlineModel for CorrChange {
 mod span_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::oracle::CanonBits;
-
-    /// `window_corr_flat`'s fixed-width paths (one to eight columns, the
-    /// pool read as rows of `D`) against the sums as the any-width path
-    /// takes them, to the bit: the means over the places in order, then the
-    /// deviations about them; places repeated and out of order, and a pool
-    /// with values of every size.
-    #[test]
-    fn window_corr_flat_is_the_any_width_sums_to_the_bit() {
-        let mut g = SplitMix64::new(451);
-        for d in 1..=10usize {
-            let n = 37;
-            let pool: Vec<f64> = (0..n * d)
-                .map(|_| {
-                    let u = g.uniform() - 0.5;
-                    match g.next_u64() % 4 {
-                        0 => u * 1e8,
-                        1 => u * 1e-8,
-                        _ => u * 3.0,
-                    }
-                })
-                .collect();
-            for w in [1usize, 2, 5, 40] {
-                let at: Vec<usize> = (0..w).map(|_| (g.next_u64() % n as u64) as usize).collect();
-                let len = 2 * d + d * (d - 1) / 2;
-                let mut got = vec![f64::NAN; len];
-                CorrChange::window_corr_flat(d, &pool, &at, &mut got);
-                let mut want = vec![0.0; len];
-                let (mean, rest) = want.split_at_mut(d);
-                let (ss, corr) = rest.split_at_mut(d);
-                for &i in &at {
-                    for (m, x) in mean.iter_mut().zip(&pool[i * d..(i + 1) * d]) {
-                        *m += x;
-                    }
-                }
-                mean.iter_mut().for_each(|m| *m /= w as f64);
-                CorrChange::co_moments_rows(d, &pool, &at, mean, ss, corr);
-                CorrChange::normalise_pairs(d, ss, corr);
-                let bits = |v: &[f64]| v.iter().map(|x| x.canon_bits()).collect::<Vec<_>>();
-                assert_eq!(bits(&got), bits(&want), "d {d}, {w} places");
-            }
-        }
-    }
-
-    /// The `monitor` kind's span closes into `rows`, and the next span's
-    /// rows are copied from there (the allocation test in `rheon-bench`
-    /// holds the count; mutation testing does not run it, so the buffers'
-    /// identity is held here): a row takes the last one in the list when the
-    /// spare is short, keeping the list's others, and allocates a row of its
-    /// own only where the list is empty.
-    #[test]
-    fn ring_row_takes_a_row_a_closed_span_let_go_when_the_spare_is_short() {
-        let r = [1.0, 2.0, 3.0];
-        let (first, second) = (vec![9.0; 3], vec![8.0; 5]);
-        let at = second.as_ptr();
-        let mut work = Work {
-            rows: vec![first, second],
-            ..Work::default()
-        };
-        let row = work.ring_row(&r);
-        assert_eq!(row, r);
-        assert_eq!(row.as_ptr(), at, "the list's last row is the row");
-        assert_eq!(work.rows.len(), 1, "one row taken");
-        let row = work.ring_row(&r);
-        assert_eq!(row, r);
-        assert!(work.rows.is_empty());
-        // Nothing to take: a row of its own, of the row's length.
-        let row = work.ring_row(&r);
-        assert_eq!((row.as_slice(), row.capacity()), (&r[..], r.len()));
-        // The spare is taken before the list.
-        let mut work = Work {
-            spare: Vec::with_capacity(3),
-            rows: vec![vec![0.0; 3]],
-            ..Work::default()
-        };
-        let at = work.spare.as_ptr();
-        let row = work.ring_row(&r);
-        assert_eq!(row.as_ptr(), at);
-        assert_eq!(work.rows.len(), 1);
-    }
-
-    /// A `monitor` span's close puts its rows in the list, whole, and a
-    /// model that keeps them is the model that does not, row by row: its
-    /// state (which holds no spare), its reports and its saved bytes.
-    #[test]
-    fn a_monitor_that_keeps_its_spans_rows_is_one_that_does_not() {
-        for (d, span, scalar) in [(2usize, 17usize, false), (4, 30, false), (3, 25, true)] {
-            let mut c = CorrChangeCfg {
-                span_rows: span,
-                ..cfg(d, CorrChangeKind::Monitor)
-            };
-            c.scalar = scalar;
-            let (mut kept, mut fresh) = (
-                CorrChange::new(c.clone()).unwrap(),
-                CorrChange::new(c).unwrap(),
-            );
-            let mut seed = 11u64;
-            let mut step = crate::Step::default();
-            let mut other = crate::Step::default();
-            let mut closed = false;
-            for i in 0..5 * span + 3 {
-                let x: Vec<f64> = (0..d)
-                    .map(|j| {
-                        seed = seed
-                            .wrapping_mul(6364136223846793005)
-                            .wrapping_add(1442695040888963407);
-                        ((seed >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0 + j as f64 * 0.1
-                    })
-                    .collect();
-                // Every second row of zero weight and every seventh of a gap.
-                let (dt, w) = (
-                    if i % 7 == 6 { 3.0 } else { 1.0 },
-                    if i % 2 == 1 { 0.0 } else { 1.0 },
-                );
-                fresh.work.rows.clear();
-                fresh.work.spare = Vec::new();
-                kept.step_into(&x, &[], dt, w, &mut step);
-                fresh.step_into(&x, &[], dt, w, &mut other);
-                let bits = |s: &crate::Step| s.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
-                assert_eq!(bits(&step), bits(&other), "d {d} row {i}");
-                // Bytes, not `==`: a NaN is not itself.
-                assert_eq!(
-                    rmp_serde::to_vec(&kept.state()).unwrap(),
-                    rmp_serde::to_vec(&fresh.state()).unwrap(),
-                    "d {d} row {i}"
-                );
-                closed |= !kept.work.rows.is_empty();
-            }
-            assert!(closed, "d {d}: a span closed, its rows kept");
-            assert_eq!(
-                rmp_serde::to_vec(&kept.state()).unwrap(),
-                rmp_serde::to_vec(&fresh.state()).unwrap()
-            );
-        }
-    }
-
-    /// The window kind's spare row is a ring row the window let go, so its
-    /// room is exactly the next row's length: `ring_row` reuses it there,
-    /// keeping its buffer, and allocates a row of its own only where the
-    /// spare is shorter, leaving the spare as it was. The zero-allocation
-    /// test that holds this lives in `rheon-bench`, which mutation testing
-    /// of `rheon-core` does not run (task 344: `<` as `<=` allocated on
-    /// every row of the window kind and survived).
-    #[test]
-    fn ring_row_reuses_a_spare_of_exactly_the_rows_length() {
-        let r = [1.0, 2.0, 3.0];
-        let mut work = Work {
-            spare: Vec::with_capacity(r.len()),
-            ..Work::default()
-        };
-        assert_eq!(work.spare.capacity(), r.len());
-        let at = work.spare.as_ptr();
-        let row = work.ring_row(&r);
-        assert_eq!(row, r);
-        assert_eq!(row.as_ptr(), at, "the spare's buffer is the row's");
-        assert_eq!(work.spare.capacity(), 0, "the spare was taken");
-
-        // A spare of more room is taken too.
-        work.spare = Vec::with_capacity(8);
-        let at = work.spare.as_ptr();
-        let row = work.ring_row(&r);
-        assert_eq!(row.as_ptr(), at);
-
-        // A spare one short is left alone, and the row is a new one of its
-        // own length.
-        work.spare = Vec::with_capacity(r.len() - 1);
-        let (at, room) = (work.spare.as_ptr(), work.spare.capacity());
-        let row = work.ring_row(&r);
-        assert_eq!(row, r);
-        assert_ne!(row.as_ptr(), at);
-        assert_eq!(row.capacity(), r.len());
-        assert_eq!((work.spare.as_ptr(), work.spare.capacity()), (at, room));
-    }
-
-    /// A ring row narrower than the cfg is refused, where it loaded and
-    /// panicked on the first `step` (review 2026-09-18, B3).
-    #[test]
-    fn a_state_of_the_wrong_shape_is_refused() {
-        use crate::{ModelState, OnlineModel, StateError};
-        let m = CorrChange::new(cfg(2, CorrChangeKind::Monitor)).unwrap();
-        let mut s = m.state();
-        let ModelState::CorrChange(inner) = &mut s.model else {
-            unreachable!()
-        };
-        inner.ring.push_back(vec![0.0]);
-        match CorrChange::restore(&s) {
-            Err(StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{e}"),
-            other => panic!("{other:?}"),
-        }
-    }
-
-    /// A state's configuration is held to what `new` holds a fresh one to:
-    /// a `window` state whose `perm_block` is 0 passed the shape checks,
-    /// which read the ring and the monitoring period alone, and the first
-    /// row that filled both windows divided by it in `permutation_crit`
-    /// (review 2026-10-06, CD14). The cfg is checked before the sequential
-    /// critical value is solved from it, which a damaged `boundary_gamma`
-    /// would have kept busy for hours.
-    #[test]
-    fn a_restored_corrchange_whose_cfg_new_refuses_is_refused() {
-        use crate::{ModelState, StateError};
-        let m = CorrChange::new(CorrChangeCfg {
-            span_rows: 5,
-            n_perm: 20,
-            ..cfg(2, CorrChangeKind::Window)
-        })
-        .unwrap();
-        let mut v = serde_json::to_value(&m).unwrap();
-        v["cfg"]["perm_block"] = serde_json::json!(0);
-        let edited: CorrChange = serde_json::from_value(v).unwrap();
-        assert!(
-            edited.cfg.validate().is_err(),
-            "`new` refuses perm_block = 0"
-        );
-        let s = crate::State::new(ModelState::CorrChange(Box::new(edited)));
-        match CorrChange::restore(&s) {
-            Err(StateError::Invalid(e)) => {
-                assert!(
-                    e.contains("corrchange refuses:") && e.contains("perm_block"),
-                    "{e}"
-                );
-            }
-            Ok(mut back) => {
-                let mut n = Normals::new(7);
-                for _ in 0..10 {
-                    back.step(&n.pair(0.3), &[], 1.0, 1.0);
-                }
-                panic!("perm_block = 0 loaded and ran");
-            }
-            Err(e) => panic!("{e}"),
-        }
-    }
-    use crate::OnlineModel;
-
-    fn cfg(d: usize, kind: CorrChangeKind) -> CorrChangeCfg {
-        CorrChangeCfg {
-            n_features: d,
-            kind,
-            span_rows: 200,
-            alpha: 0.05,
-            alpha_adjust: "bonferroni".into(),
-            bandwidth: None,
-            scalar: false,
-            decay: Decay::Halflife(f64::INFINITY),
-            crit: None,
-            n_perm: 50,
-            permute_every_rows: 25,
-            perm_block: 1,
-            norm: ChangeNorm::L1,
-            seed: 3,
-            reset: false,
-            monitor_rows: 0,
-            boundary_gamma: 0.0,
-            permute_every: None,
-        }
-    }
-
-    /// A `sequential` cfg: `m` rows of history, `k` monitored.
-    fn seq_cfg(d: usize, m: usize, k: usize, gamma: f64) -> CorrChangeCfg {
-        CorrChangeCfg {
-            span_rows: m,
-            monitor_rows: k,
-            boundary_gamma: gamma,
-            ..cfg(d, CorrChangeKind::Sequential)
-        }
-    }
-
-    /// `d` columns with correlation `rho` between every two.
-    fn equicorrelated(n: &mut Normals, d: usize, rho: f64) -> Vec<f64> {
-        let f = n.normal();
-        (0..d)
-            .map(|_| rho.sqrt() * f + (1.0 - rho).sqrt() * n.normal())
-            .collect()
-    }
-
-    fn same(a: f64, b: f64) -> bool {
-        a == b || (a.is_nan() && b.is_nan())
-    }
-
-    /// A correlated Gaussian pair, by Box-Muller from a `SplitMix64`.
-    struct Normals(SplitMix64);
-
-    impl Normals {
-        fn new(seed: u64) -> Self {
-            Self(SplitMix64::new(seed))
-        }
-
-        fn unit(&mut self) -> f64 {
-            // `(0, 1)`, never exactly 0, so `ln` is finite.
-            ((self.0.next_u64() >> 11) as f64 + 0.5) / (1u64 << 53) as f64
-        }
-
-        fn normal(&mut self) -> f64 {
-            let (u, v) = (self.unit(), self.unit());
-            (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
-        }
-
-        fn pair(&mut self, rho: f64) -> Vec<f64> {
-            let a = self.normal();
-            let b = rho * a + (1.0 - rho * rho).sqrt() * self.normal();
-            vec![a, b]
-        }
-    }
-
-    /// Under `"sequential"` an `alpha` whose share per pair is below 5e-11
-    /// is refused, by name. Below `2^-52`, `1 − alpha/npairs` rounds to 1,
-    /// the boundary's quantile of 1 is NaN, and the detector ran, reported
-    /// its statistic and could never flag, saying nothing (review round 4,
-    /// CD12); and below 5e-11 the solve's quantile is off by more than the
-    /// paper's 0.03, and stopped rising with `γ` near `2^-52` (10.42 at
-    /// 0.25, 9.15 at 0.45; docs/PLAN.md task 195,
-    /// `boundary::MIN_SEQUENTIAL_TAIL`). A share at the limit runs, and its
-    /// critical value is a number that rises with `γ`. A configured `crit`
-    /// reads no `alpha`, and `"monitor"`'s quantile is solved on the
-    /// survival series at any level (18.59 at 1e-300), so neither refuses
-    /// one.
-    #[test]
-    #[ignore = "extended: a second or more: the boundary law solved to refuse (2.1 s)"]
-    fn an_alpha_too_small_for_its_quantile_is_refused_under_sequential() {
-        let limit = crate::boundary::MIN_SEQUENTIAL_TAIL;
-        // Three columns: three pairs under Bonferroni.
-        let with = |alpha: f64, adjust: &str| CorrChangeCfg {
-            alpha,
-            alpha_adjust: adjust.into(),
-            ..seq_cfg(3, 50, 50, 0.0)
-        };
-        for (alpha, adjust) in [
-            (1e-17, "bonferroni"),
-            (2.9 * limit, "bonferroni"),
-            (1e-17, "none"),
-            (1e-12, "none"),
-            (0.9 * limit, "none"),
-        ] {
-            let err = with(alpha, adjust).validate().unwrap_err();
-            assert!(
-                err.contains("alpha")
-                    && err.contains("5e-11")
-                    && err.contains("cannot be computed accurately"),
-                "{alpha:e} {adjust}: {err}"
-            );
-        }
-        // The remedy gives the least alpha that clears the floor: 5e-11 for
-        // each of the three pairs, or a plain alpha of 5e-11. Testing each
-        // pair at alpha itself is offered only where alpha clears the floor.
-        let err = with(1e-17, "bonferroni").validate().unwrap_err();
-        assert!(
-            err.contains("Set alpha to 1.50e-10 or more, or give crit."),
-            "{err}"
-        );
-        let err = with(2.9 * limit, "bonferroni").validate().unwrap_err();
-        assert!(
-            err.contains("Set alpha to 1.50e-10 or more, set alpha_adjust=\"none\", or give crit."),
-            "{err}"
-        );
-        let err = with(1e-17, "none").validate().unwrap_err();
-        assert!(
-            err.contains("Set alpha to 5e-11 or more, or give crit."),
-            "{err}"
-        );
-        assert_eq!(up_to_three(1.0 / (MAX_PERM as f64 + 1.0)), "9.54e-7");
-        assert!(perm_rejections(9.54e-7, MAX_PERM) >= 1);
-        for (alpha, adjust) in [
-            (3.0 * limit, "bonferroni"),
-            (limit, "none"),
-            (0.05, "bonferroni"),
-        ] {
-            let c = with(alpha, adjust);
-            c.validate().unwrap();
-            let crit = c.fixed_crit().expect("sequential has one");
-            assert!(crit.is_finite(), "{alpha:e} {adjust}: {crit}");
-        }
-        let crits: Vec<f64> = [0.05, 0.25, 0.45]
-            .iter()
-            .map(|&g| {
-                let c = CorrChangeCfg {
-                    boundary_gamma: g,
-                    ..with(limit, "none")
-                };
-                c.validate().unwrap();
-                c.fixed_crit().expect("sequential has one")
-            })
-            .collect();
-        assert!(
-            crits.windows(2).all(|w| w[0] < w[1]),
-            "the critical value rises with gamma at the floor: {crits:?}"
-        );
-        CorrChangeCfg {
-            crit: Some(2.0),
-            ..with(1e-300, "none")
-        }
-        .validate()
-        .unwrap();
-        CorrChangeCfg {
-            alpha: 1e-300,
-            ..cfg(3, CorrChangeKind::Monitor)
-        }
-        .validate()
-        .unwrap();
-    }
-
-    /// An `alpha` outside `(0, 1)` is refused once, by the range check,
-    /// and not again as a share too small for the sequential quantile; one
-    /// pair under Bonferroni is tested at `alpha` itself, and is told so
-    /// (task 358). Checked without solving any critical value.
-    #[test]
-    fn an_alpha_out_of_range_is_refused_once_and_one_pair_takes_alpha_whole() {
-        let with = |d: usize, alpha: f64| CorrChangeCfg {
-            alpha,
-            ..seq_cfg(d, 50, 50, 0.0)
-        };
-        // 0 and below, and 1 where the pairs are so many that 1 over them
-        // is below 5e-11: 300,000 features give 44,999,850,000 pairs.
-        for (d, alpha) in [(3, 0.0), (3, -1.0), (300_000, 1.0)] {
-            let e = with(d, alpha).validate().unwrap_err();
-            assert_eq!(
-                e,
-                format!(
-                    "corrchange: alpha must be above 0 and below 1, but it is {alpha}. Set alpha \
-                     to the rate of false alarms to test at, such as 0.05."
-                ),
-                "{d} features at alpha {alpha}"
-            );
-        }
-        let e = with(2, 1e-12).validate().unwrap_err();
-        assert_eq!(
-            e,
-            "corrchange: kind=\"sequential\" tests each pair at alpha = 0.000000000001, below \
-             5e-11, where the critical value cannot be computed accurately. Set alpha to 5e-11 or \
-             more, or give crit."
-        );
-    }
-
-    /// The Kolmogorov quantiles the paper's tables are read at.
-    #[test]
-    fn the_kolmogorov_quantiles_are_the_published_ones() {
-        assert!((kolmogorov_quantile(0.05) - 1.3581).abs() < 1e-3);
-        assert!((kolmogorov_quantile(0.01) - 1.6276).abs() < 1e-3);
-        assert!((kolmogorov_quantile(0.10) - 1.2239).abs() < 1e-3);
-        // And the series is a distribution function.
-        assert!(kolmogorov_cdf(0.0) == 0.0);
-        assert!(kolmogorov_cdf(10.0) == 1.0);
-        for x in [0.5, 1.0, 1.5, 2.0] {
-            assert!(kolmogorov_cdf(x) < kolmogorov_cdf(x + 0.1));
-        }
-        assert!(kolmogorov_quantile(0.0).is_nan() && kolmogorov_quantile(1.0).is_nan());
-    }
-
-    /// Task 278 (kq): the quantile against the series summed to 50 digits,
-    /// at every level into either tail. `1 − alpha` keeps only the absolute
-    /// precision of a double, so solving `F(x) = 1 − alpha` lost the tail:
-    /// relative 5.9e-7 at 1e-12, 0.097 at 1e-20, 3.3e-12 at `1 − 1e-6`.
-    ///
-    /// The reference: mpmath (not a dependency here; a scratch script) at
-    /// `mp.dps = 50`, the root by `findroot` to 1e-45 of `2·Σ(−1)^{k−1}
-    /// e^{−2k²x²} = alpha` below `alpha = 1/2` and of the theta series
-    /// `√(2π)/x·Σ e^{−(2k−1)²π²/(8x²)} = 1 − alpha` above, each summed by
-    /// `nsum` to infinity, at the double `alpha` exactly, then rounded to the
-    /// nearest double. Scipy's `kstwobign.isf` agrees with it to 1.4e-16 at
-    /// each of these levels but 0.5, where it is 2.1e-15 off.
-    ///
-    /// Each tail's path is within `2·ε` relative (measured 1.7e-16 at most,
-    /// 1.2 ulps); between them the bisection on `1 − alpha` is kept to the
-    /// bit, so a saved state at 5 % continues where it was, and is within
-    /// `2e-15` (measured 6.2e-16 at most from 0.01 to 0.99).
-    #[test]
-    fn the_kolmogorov_quantile_keeps_both_tails() {
-        // The bisection on `1 − alpha` as it was before task 278.
-        let on_one_minus = |alpha: f64| {
-            let target = 1.0 - alpha;
-            let (mut lo, mut hi) = (0.0f64, 10.0f64);
-            for _ in 0..200 {
-                let mid = 0.5 * (lo + hi);
-                if kolmogorov_cdf(mid) < target {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            0.5 * (lo + hi)
-        };
-        let reference = [
-            (1e-300, 18.593932815286465),
-            (1e-100, 10.745967999207064),
-            (1e-20, 4.8345035443383875),
-            (1e-16, 4.332118919678029),
-            (1e-12, 3.7632544623296798),
-            (1e-10, 3.4437623401231106),
-            (1e-8, 3.0914258784994595),
-            (1e-6, 2.6933861344527097),
-            (1e-4, 2.225251396195046),
-            (0.0099, 1.6291665938623514),
-            (0.01, 1.6276236115189504),
-            (0.05, 1.3580986393225507),
-            (0.1, 1.2238478702170823),
-            (0.5, 0.8275735551899077),
-            (0.9, 0.5711732651063401),
-            (0.99, 0.4410276985179294),
-            (0.995, 0.4170896319324851),
-            (0.999, 0.37421969027827845),
-            (1.0 - 1e-6, 0.27753935399887275),
-            (1.0 - 1e-12, 0.20229045531080908),
-        ];
-        for (alpha, want) in reference {
-            let got = kolmogorov_quantile(alpha);
-            let rel = (got - want).abs() / want;
-            let old = on_one_minus(alpha);
-            if (KOLMOGOROV_TAIL..=1.0 - KOLMOGOROV_TAIL).contains(&alpha) {
-                assert_eq!(got.to_bits(), old.to_bits(), "alpha = {alpha:e}");
-                assert!(rel < 2e-15, "alpha = {alpha:e}: {got} against {want}");
-            } else {
-                assert!(
-                    rel <= 2.0 * f64::EPSILON,
-                    "alpha = {alpha:e}: {got} against {want}, relative {rel:e}"
-                );
-            }
-        }
-        // Each tail's path is the one that moved: where the old one lost
-        // the tail, by more than 1e-9 relative.
-        for alpha in [1e-12, 1e-20, 1.0 - 1e-12] {
-            let off = (on_one_minus(alpha) - kolmogorov_quantile(alpha)).abs();
-            assert!(off > 1e-9 * kolmogorov_quantile(alpha), "alpha = {alpha:e}");
-        }
-        // The two tail series are the distribution: each agrees with
-        // `kolmogorov_cdf` where that one is good to its own precision.
-        for x in [1.0, 1.2, 1.5] {
-            assert!((kolmogorov_sf(x) - (1.0 - kolmogorov_cdf(x))).abs() < 1e-15);
-        }
-        for x in [0.5, 0.8, 1.0] {
-            assert!((kolmogorov_cdf_theta(x) - kolmogorov_cdf(x)).abs() < 1e-15);
-        }
-        // At the smallest double the quantile is finite and in its bracket.
-        let tiniest = kolmogorov_quantile(f64::from_bits(1));
-        assert!(tiniest > 19.0 && tiniest < 20.0, "{tiniest}");
-    }
-
-    /// A correlation is free of its columns' units, so `D̂` -- the delta
-    /// method's long-run standard deviation of `ρ̂` -- must be too: the same
-    /// rows with one column multiplied by 100, or the other by 0.01, give the
-    /// same number. The gradient carried the wrong powers of `σ_x` and `σ_y`,
-    /// which cancelled only at unit variance, so on any other scale `D̂` was
-    /// off by up to `σ²` and the monitor flagged nothing or everything
-    /// (review 2026-09-18, S3).
-    #[test]
-    fn the_long_run_sd_is_free_of_the_columns_units() {
-        let t = 80usize;
-        let mut n = Normals::new(17);
-        let rows: Vec<Vec<f64>> = (0..t).map(|_| n.pair(0.4)).collect();
-        let gamma = ((t as f64).ln().floor() as usize).max(1);
-        let base = CorrChange::long_run_sd(&rows, 0, 1, gamma);
-        assert!(base.is_finite() && base > 0.0, "{base}");
-        for (cx, cy) in [(1.0, 100.0), (0.01, 1.0), (3.0, 0.2)] {
-            let scaled: Vec<Vec<f64>> = rows.iter().map(|r| vec![cx * r[0], cy * r[1]]).collect();
-            let got = CorrChange::long_run_sd(&scaled, 0, 1, gamma);
-            assert!(
-                (got - base).abs() <= 1e-9 * base,
-                "x × {cx}, y × {cy}: {got} vs {base}"
-            );
-        }
-        // And against a central difference of `ρ` in each moment, which is
-        // what the gradient claims to be.
-        let rho = |sx2: f64, sy2: f64, sxy: f64| sxy / (sx2 * sy2).sqrt();
-        let (sx2, sy2, sxy): (f64, f64, f64) = (2.0, 0.5, 0.4);
-        let (sx, sy) = (sx2.sqrt(), sy2.sqrt());
-        let d3 = [
-            -0.5 * sxy / (sx * sx * sx * sy),
-            -0.5 * sxy / (sx * sy * sy * sy),
-            1.0 / (sx * sy),
-        ];
-        let h = 1e-6;
-        let fd = [
-            (rho(sx2 + h, sy2, sxy) - rho(sx2 - h, sy2, sxy)) / (2.0 * h),
-            (rho(sx2, sy2 + h, sxy) - rho(sx2, sy2 - h, sxy)) / (2.0 * h),
-            (rho(sx2, sy2, sxy + h) - rho(sx2, sy2, sxy - h)) / (2.0 * h),
-        ];
-        for i in 0..3 {
-            assert!(
-                (d3[i] - fd[i]).abs() < 1e-7,
-                "entry {i}: {} vs {}",
-                d3[i],
-                fd[i]
-            );
-        }
-    }
-
-    /// `D̂` does not depend on the level the columns sit at: `ρ̂` is
-    /// shift-invariant and so is the delta-method variance of it (the
-    /// shifted moments are an affine image of the raw ones, and the
-    /// Jacobians cancel). The deviations are put on a grid so that adding a
-    /// level is exact and every level sees the same rows: 2⁻²⁰ is exact
-    /// below 2³³ (8.6e9), 2⁻¹² below 2⁴¹. Formed from `E[x²] − E[x]²` this
-    /// failed at every level (docs/PLAN.md task 103); computed on the span
-    /// centred at a compensated mean it is the same double at every level,
-    /// held here to 1e-14. The span is 79 rows, a prime, so that neither
-    /// mean's division lands on the level's grid by chance (one in five did
-    /// at 80, and the x side's second pass went untested), and the pair is
-    /// taken both ways round, so each column is `x` once.
-    #[test]
-    fn the_long_run_sd_is_free_of_the_columns_level() {
-        let t = 79usize;
-        let mut n = Normals::new(17);
-        let raw: Vec<Vec<f64>> = (0..t).map(|_| n.pair(0.4)).collect();
-        let gamma = ((t as f64).ln().floor() as usize).max(1);
-        let mut off = Vec::new();
-        for (level, bits) in [(1e3, 20), (1e5, 20), (1e8, 20), (4e9, 20), (1e12, 12)] {
-            let grid = (1u64 << bits) as f64;
-            let rows: Vec<Vec<f64>> = raw
-                .iter()
-                .map(|r| r.iter().map(|v| (v * grid).round() / grid).collect())
-                .collect();
-            let base = CorrChange::long_run_sd(&rows, 0, 1, gamma);
-            assert!(base.is_finite() && base > 0.0, "{base}");
-            let shifted: Vec<Vec<f64>> = rows
-                .iter()
-                .map(|r| vec![level + r[0], level + r[1]])
-                .collect();
-            for (s, r) in shifted.iter().zip(&rows) {
-                assert_eq!(s[0] - level, r[0], "the shift is exact at {level:e}");
-                assert_eq!(s[1] - level, r[1], "the shift is exact at {level:e}");
-            }
-            for (a, b) in [(0, 1), (1, 0)] {
-                let got = CorrChange::long_run_sd(&shifted, a, b, gamma);
-                let off_by = (got - base).abs();
-                if off_by.is_nan() || off_by > 1e-14 * base {
-                    off.push(format!(
-                        "at {level:e}, pair ({a}, {b}): {got} against {base} ({:e} of it)",
-                        off_by / base
-                    ));
-                }
-            }
-        }
-        assert!(off.is_empty(), "{}", off.join("; "));
-    }
-
-    /// The statistic itself at a level: `Q` reads `corr_of` too, whose
-    /// one-pass mean is second order in the level's rounding.
-    #[test]
-    fn the_statistic_is_free_of_the_columns_level() {
-        let t = 60usize;
-        let mut n = Normals::new(11);
-        let grid = (1u64 << 20) as f64;
-        let rows: Vec<Vec<f64>> = (0..t)
-            .map(|_| {
-                n.pair(0.4)
-                    .iter()
-                    .map(|v| (v * grid).round() / grid)
-                    .collect()
-            })
-            .collect();
-        let m = CorrChange::new(CorrChangeCfg {
-            span_rows: t,
-            ..cfg(2, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        let base = m.monitor_stat(&rows, 0, 1);
-        assert!(base.is_finite() && base > 0.0, "{base}");
-        for level in [1e5, 1e8] {
-            let shifted: Vec<Vec<f64>> = rows
-                .iter()
-                .map(|r| vec![level + r[0], level + r[1]])
-                .collect();
-            let got = m.monitor_stat(&shifted, 0, 1);
-            assert!(
-                (got - base).abs() <= 1e-10 * base,
-                "at {level:e}: {got} against {base}"
-            );
-        }
-    }
-
-    /// Too few rows for a long-run variance: three give none, four give one.
-    #[test]
-    fn a_span_of_four_rows_is_the_first_with_a_long_run_sd() {
-        let mut n = Normals::new(5);
-        let rows: Vec<Vec<f64>> = (0..4).map(|_| n.pair(0.3)).collect();
-        assert!(CorrChange::long_run_sd(&rows[..3], 0, 1, 1).is_nan());
-        let four = CorrChange::long_run_sd(&rows, 0, 1, 1);
-        assert!(four.is_finite() && four > 0.0, "{four}");
-    }
-
-    /// `bandwidth` overrides `⌊ln T⌋`: the statistic is the one `long_run_sd`
-    /// gives at that bandwidth, and two bandwidths give two statistics.
-    ///
-    /// Over thirty streams, because the one that stood here alone passed on
-    /// macOS and failed on Linux and Windows (found by CI on the 0.11.0 tag):
-    /// at `usize::MAX` every Bartlett weight is about 1, so the long-run
-    /// variance is about `(Σξ)²/T`, which is 0 but for rounding -- `ξ` has
-    /// span mean 0 by construction -- and its sign is that rounding's. The
-    /// streams come from Box–Muller, whose `ln` and `cos` differ in their last
-    /// bits between Apple's libm and the others, so a variance that rounded
-    /// positive here rounded to 0 or below there, where the model says NaN,
-    /// no verdict. The longhand folded its NaNs away with `f64::max` and said
-    /// 0.0. It takes the model's rule now (a long-run sd that is NaN or not
-    /// positive is no statistic), and NaN equals NaN.
-    #[test]
-    fn the_bandwidth_override_reaches_the_kernel() {
-        let same = |a: f64, b: f64| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
-        let t = 60usize;
-        for seed in 11..=40 {
-            let mut n = Normals::new(seed);
-            let rows: Vec<Vec<f64>> = (0..t).map(|_| n.pair(0.4)).collect();
-            let stat_at = |bandwidth: usize| {
-                let m = CorrChange::new(CorrChangeCfg {
-                    span_rows: t,
-                    bandwidth: Some(bandwidth),
-                    ..cfg(2, CorrChangeKind::Monitor)
-                })
-                .unwrap();
-                m.monitor_stat(&rows, 0, 1)
-            };
-            let longhand = |gamma: usize| {
-                let sd = CorrChange::long_run_sd(&rows, 0, 1, gamma);
-                if sd.is_nan() || sd <= 0.0 {
-                    return f64::NAN;
-                }
-                let rho_t = CorrChange::corr_of(&rows, t, 0, 1);
-                (2..=t)
-                    .map(|j| {
-                        (j as f64 / (t as f64).sqrt())
-                            * (CorrChange::corr_of(&rows, j, 0, 1) - rho_t).abs()
-                            / sd
-                    })
-                    .fold(0.0f64, f64::max)
-            };
-            // The statistic's prefixes are one pass of mean-form sums and
-            // the longhand's two passes each (task 270, D-1): equal to
-            // rounding, not to the bit.
-            for gamma in [1, 20, usize::MAX] {
-                let (got, want) = (stat_at(gamma), longhand(gamma));
-                assert!(
-                    same(got, want) || (got - want).abs() <= 1e-12 * want.abs(),
-                    "seed {seed}, bandwidth {gamma}: {got} vs {want}"
-                );
-            }
-            // At the two bandwidths a span of 60 can support, a statistic,
-            // and not the same one.
-            assert!(
-                stat_at(1).is_finite() && stat_at(20).is_finite(),
-                "seed {seed}"
-            );
-            assert_ne!(stat_at(1), stat_at(20), "seed {seed}");
-            // A bandwidth past the span is the kernel's answer, not an
-            // overflow (`gamma.saturating_add(1)`): a number or no verdict.
-            assert!(!stat_at(usize::MAX).is_infinite(), "seed {seed}");
-        }
-    }
-
-    /// A pair within rounding of `|ρ̂| = 1` has no verdict: the delta
-    /// method's variance is 0 on a collinear pair, and this `D̂` reaches it,
-    /// where dividing the numerator's rounding by it flagged every span of a
-    /// derived column (review 2026-09-25). A pair off collinear by 1e-6 of
-    /// the spread still has its verdict.
-    #[test]
-    fn a_collinear_pair_has_no_verdict() {
-        let t = 79usize;
-        let mut n = Normals::new(23);
-        let x: Vec<f64> = (0..t).map(|_| n.pair(0.0)[0]).collect();
-        let m = CorrChange::new(CorrChangeCfg {
-            span_rows: t,
-            ..cfg(2, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        let gamma = ((t as f64).ln().floor() as usize).max(1);
-        for (slope, offset) in [
-            (2.0, 3.0),
-            (1.8, 32.0),
-            (-2.5, 1e3),
-            (1.0, 0.0),
-            (-1.0, 0.0),
-        ] {
-            let rows: Vec<Vec<f64>> = x.iter().map(|&v| vec![v, slope * v + offset]).collect();
-            for (a, b) in [(0, 1), (1, 0)] {
-                assert!(
-                    CorrChange::long_run_sd(&rows, a, b, gamma).is_nan(),
-                    "y = {slope}x + {offset}, pair ({a}, {b})"
-                );
-            }
-            assert!(
-                m.monitor_stat(&rows, 0, 1).is_nan(),
-                "y = {slope}x + {offset}"
-            );
-        }
-        let mut z = Normals::new(29);
-        let rows: Vec<Vec<f64>> = x
-            .iter()
-            .map(|&v| vec![v, v + 1e-6 * z.pair(0.0)[0]])
-            .collect();
-        let q = m.monitor_stat(&rows, 0, 1);
-        assert!(
-            q.is_finite() && q < 3.0,
-            "a verdict off collinear by 1e-6: {q}"
-        );
-    }
-
-    /// A column without spread has no correlation to test: `D̂` is NaN, and
-    /// so is the statistic, which the bank reads as "no verdict". The
-    /// constant is held at values whose mean the first pass rounds (1/3, a
-    /// level of 1e8), where the raw-moment form gave a finite `D̂` from the
-    /// rounding alone; centred at the compensated mean every deviation is
-    /// exactly 0.
-    #[test]
-    fn a_constant_column_has_no_long_run_sd() {
-        let t = 40usize;
-        let mut n = Normals::new(5);
-        let rows: Vec<Vec<f64>> = (0..t).map(|_| n.pair(0.3)).collect();
-        let gamma = ((t as f64).ln().floor() as usize).max(1);
-        assert!(CorrChange::long_run_sd(&rows, 0, 1, gamma).is_finite());
-        for c in [2.5, 1.0 / 3.0, 1e8 + 0.1] {
-            let mut held = rows.clone();
-            for r in &mut held {
-                r[0] = c;
-            }
-            assert!(CorrChange::long_run_sd(&held, 0, 1, gamma).is_nan(), "{c}");
-            assert!(CorrChange::long_run_sd(&held, 1, 0, gamma).is_nan(), "{c}");
-            let m = CorrChange::new(CorrChangeCfg {
-                span_rows: t,
-                ..cfg(2, CorrChangeKind::Monitor)
-            })
-            .unwrap();
-            assert!(m.monitor_stat(&held, 0, 1).is_nan(), "{c}");
-        }
-    }
-
-    /// `scalar = true`'s statistic against its definition written out: the
-    /// Bartlett long-run variance of the one column, the lag-0 term once and
-    /// every other lag twice at weight `k(l/γ) = 1 − l/γ`, WKD's Appendix
-    /// A.1 (lag `γ` at 0; docs/PLAN.md task 114), then the CUSUM of its
-    /// running mean; at a bandwidth given and at the default `⌊ln T⌋`.
-    #[test]
-    fn the_scalar_statistic_is_its_definition() {
-        let t = 60usize;
-        let mut n = Normals::new(13);
-        let rows: Vec<Vec<f64>> = (0..t).map(|_| n.pair(0.0)).collect();
-        for bandwidth in [Some(3), None] {
-            let m = CorrChange::new(CorrChangeCfg {
-                span_rows: t,
-                scalar: true,
-                bandwidth,
-                ..cfg(2, CorrChangeKind::Monitor)
-            })
-            .unwrap();
-            let gamma = bandwidth.unwrap_or(((t as f64).ln().floor() as usize).max(1));
-            let tf = t as f64;
-            let u: Vec<f64> = rows.iter().map(|r| r[0]).collect();
-            let mean = u.iter().sum::<f64>() / tf;
-            let v: Vec<f64> = u.iter().map(|x| x - mean).collect();
-            let mut var = 0.0;
-            for lag in 0..=gamma.min(t - 1) {
-                let w = 1.0 - lag as f64 / gamma as f64;
-                let mut acf = 0.0;
-                for s in lag..t {
-                    acf += w * v[s] * v[s - lag] / tf;
-                }
-                var += if lag == 0 { acf } else { 2.0 * acf };
-            }
-            let sd = var.sqrt();
-            let mut want = 0.0f64;
-            for j in 1..=t {
-                let mean_j = u[..j].iter().sum::<f64>() / j as f64;
-                want = want.max((j as f64 / tf.sqrt()) * (mean_j - mean).abs() / sd);
-            }
-            let got = m.scalar_stat(&rows);
-            assert!(
-                (got - want).abs() <= 1e-12 * (1.0 + want),
-                "bandwidth {bandwidth:?}: {got} against {want}"
-            );
-        }
-    }
-
-    /// Every row a ring holds is its row's length and no longer: copied at
-    /// its exact length where the ring has let no row go (`monitor` and
-    /// `sequential` hand their rows on; the window's first rows), and into
-    /// a let-go row of the same length after. Grown from an empty vector
-    /// instead, a one-column ring's row took four numbers' room for one,
-    /// and each row cost about 100 instructions more (task 345).
-    #[test]
-    fn a_ring_holds_each_row_at_its_own_length() {
-        // Each kind, and `scalar`'s one-column ring where the kind takes it
-        // (the window statistic is one number already).
-        let cases = [
-            (CorrChangeKind::Monitor, false),
-            (CorrChangeKind::Monitor, true),
-            (CorrChangeKind::Sequential, false),
-            (CorrChangeKind::Sequential, true),
-            (CorrChangeKind::Window, false),
-        ];
-        for (kind, scalar) in cases {
-            let c = match kind {
-                CorrChangeKind::Sequential => seq_cfg(3, 40, 20, 0.0),
-                _ => CorrChangeCfg {
-                    span_rows: 40,
-                    ..cfg(3, kind)
-                },
-            };
-            let mut m = CorrChange::new(CorrChangeCfg { scalar, ..c }).unwrap();
-            let mut n = Normals::new(5);
-            for i in 0..130 {
-                let (a, b) = (n.pair(0.5)[0], n.pair(0.5)[1]);
-                crate::OnlineModel::step(&mut m, &[a, b, a - b], &[], 1.0, 1.0);
-                assert!(
-                    m.ring.iter().all(|r| r.capacity() == r.len()),
-                    "{kind:?} scalar {scalar}, row {i}"
-                );
-            }
-            assert!(!m.ring.is_empty(), "{kind:?} scalar {scalar}");
-        }
-    }
-
-    /// `scalarise` against its definition: each feature standardized by the
-    /// diag's pair and standard deviation, then the equicorrelation
-    /// `(s1² − s2) / ((n − 1) s2)` of the standardized row.
-    #[test]
-    fn the_scalar_row_is_its_definition() {
-        let mut m = CorrChange::new(CorrChangeCfg {
-            span_rows: 20,
-            scalar: true,
-            ..cfg(3, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        let mut n = Normals::new(7);
-        for _ in 0..30 {
-            let (a, b) = (n.pair(0.5)[0], n.pair(0.5)[1]);
-            crate::OnlineModel::step(&mut m, &[a, b, a - b], &[], 1.0, 1.0);
-        }
-        let x = [0.4, -1.1, 0.7];
-        let (mut s1, mut s2) = (0.0, 0.0);
-        for (i, &xi) in x.iter().enumerate() {
-            let r = m.diag.deviation(i, xi) / m.diag.var(i).sqrt();
-            s1 += r;
-            s2 += r * r;
-        }
-        let want = (s1 * s1 - s2) / (2.0 * s2);
-        assert_eq!(m.scalarise(&x), want);
-    }
-
-    /// `D̂` and `Q` against the same arithmetic written out, `D̂₁` as WKD's
-    /// Appendix A.1 writes it: `ΣₜΣᵤ k((t−u)/γ_T)VₜVᵤ'`, `k(x) = 1 − |x|`.
-    #[test]
-    fn the_statistic_is_its_definition() {
-        let t = 60usize;
-        let mut n = Normals::new(11);
-        let rows: Vec<Vec<f64>> = (0..t).map(|_| n.pair(0.4)).collect();
-        let gamma = ((t as f64).ln().floor() as usize).max(1);
-
-        // Longhand `D̂`.
-        let u: Vec<[f64; 5]> = rows
-            .iter()
-            .map(|r| [r[0] * r[0], r[1] * r[1], r[0], r[1], r[0] * r[1]])
-            .collect();
-        let mut mean = [0.0; 5];
-        for row in &u {
-            for (j, m) in mean.iter_mut().enumerate() {
-                *m += row[j] / t as f64;
-            }
-        }
-        let v: Vec<[f64; 5]> = u
-            .iter()
-            .map(|row| std::array::from_fn(|j| row[j] - mean[j]))
-            .collect();
-        let mut sigma = [[0.0f64; 5]; 5];
-        for s in 0..t {
-            for q in 0..t {
-                let w = bartlett((s as f64 - q as f64) / gamma as f64);
-                if w == 0.0 {
-                    continue;
-                }
-                for i in 0..5 {
-                    for j in 0..5 {
-                        sigma[i][j] += w * v[s][i] * v[q][j] / t as f64;
-                    }
-                }
-            }
-        }
-        let (mx, my) = (mean[2], mean[3]);
-        let (sx2, sy2) = (mean[0] - mx * mx, mean[1] - my * my);
-        let sxy = mean[4] - mx * my;
-        let (sx, sy) = (sx2.sqrt(), sy2.sqrt());
-        let d3 = [
-            -0.5 * sxy / (sx.powi(3) * sy),
-            -0.5 * sxy / (sx * sy.powi(3)),
-            1.0 / (sx * sy),
-        ];
-        let d2 = [
-            [1.0, 0.0, -2.0 * mx, 0.0, 0.0],
-            [0.0, 1.0, 0.0, -2.0 * my, 0.0],
-            [0.0, 0.0, -my, -mx, 1.0],
-        ];
-        let f: [f64; 5] = std::array::from_fn(|j| (0..3).map(|i| d3[i] * d2[i][j]).sum());
-        let mut var = 0.0;
-        for i in 0..5 {
-            for j in 0..5 {
-                var += f[i] * sigma[i][j] * f[j];
-            }
-        }
-        let want_sd = var.sqrt();
-        let got_sd = CorrChange::long_run_sd(&rows, 0, 1, gamma);
-        assert!(
-            (got_sd - want_sd).abs() <= 1e-12 * (1.0 + want_sd),
-            "{got_sd} vs {want_sd}"
-        );
-
-        // Longhand `Q`.
-        let corr = |n: usize| {
-            let nf = n as f64;
-            let (mut sa, mut sb) = (0.0, 0.0);
-            for r in &rows[..n] {
-                sa += r[0];
-                sb += r[1];
-            }
-            let (ma, mb) = (sa / nf, sb / nf);
-            let (mut vaa, mut vbb, mut vab) = (0.0, 0.0, 0.0);
-            for r in &rows[..n] {
-                vaa += (r[0] - ma) * (r[0] - ma);
-                vbb += (r[1] - mb) * (r[1] - mb);
-                vab += (r[0] - ma) * (r[1] - mb);
-            }
-            vab / (vaa * vbb).sqrt()
-        };
-        let rho_t = corr(t);
-        let want_q = (2..=t)
-            .map(|j| (j as f64 / (t as f64).sqrt()) * (corr(j) - rho_t).abs() / want_sd)
-            .fold(0.0f64, f64::max);
-        let m = CorrChange::new(CorrChangeCfg {
-            span_rows: t,
-            ..cfg(2, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        let got_q = m.monitor_stat(&rows, 0, 1);
-        assert!(
-            (got_q - want_q).abs() <= 1e-12 * (1.0 + want_q),
-            "{got_q} vs {want_q}"
-        );
-    }
-
-    /// [`CorrChange::monitor_stat_at`] as the code before task 270 (D-1)
-    /// computed it: each prefix's correlation by two passes over it afresh.
-    fn monitor_stat_two_pass(
-        m: &CorrChange,
-        rows: &[Vec<f64>],
-        a: usize,
-        b: usize,
-    ) -> (f64, usize) {
-        let t = rows.len();
-        let gamma = m
-            .cfg
-            .bandwidth
-            .unwrap_or_else(|| ((t as f64).ln().floor() as usize).max(1));
-        let sd = CorrChange::long_run_sd(rows, a, b, gamma);
-        if sd.is_nan() || sd <= 0.0 {
-            return (f64::NAN, 0);
-        }
-        let rho_t = CorrChange::corr_of(rows, t, a, b);
-        if !rho_t.is_finite() {
-            return (f64::NAN, 0);
-        }
-        let tf = t as f64;
-        let (mut best, mut at) = (0.0f64, 0);
-        for j in 2..=t {
-            let rj = CorrChange::corr_of(rows, j, a, b);
-            if !rj.is_finite() {
-                continue;
-            }
-            let v = (j as f64 / tf.sqrt()) * (rj - rho_t).abs() / sd;
-            if v > best {
-                (best, at) = (v, j);
-            }
-        }
-        (best, at)
-    }
-
-    /// The one-pass statistic against the two-pass one it replaced (task
-    /// 270, D-1), on spans with and without a break, at a level of 0 and
-    /// of 1e4: within 1e-12 relative, the same row as its argmax.
-    #[test]
-    fn the_one_pass_statistic_is_the_two_pass_one() {
-        let mut worst = 0.0f64;
-        for (seed, t, brk) in [
-            (3, 60, false),
-            (4, 500, true),
-            (5, 2000, true),
-            (6, 2000, false),
-        ] {
-            let mut n = Normals::new(seed);
-            let base: Vec<Vec<f64>> = (0..t)
-                .map(|i| {
-                    let mut r = n.pair(if brk && i > t / 3 { 0.8 } else { 0.2 });
-                    r.push(n.normal());
-                    r
-                })
-                .collect();
-            let m = CorrChange::new(CorrChangeCfg {
-                span_rows: t,
-                ..cfg(3, CorrChangeKind::Monitor)
-            })
-            .unwrap();
-            for level in [0.0, 1e4] {
-                let rows: Vec<Vec<f64>> = base
-                    .iter()
-                    .map(|r| r.iter().map(|v| v + level).collect())
-                    .collect();
-                for (a, b) in [(0, 1), (0, 2), (1, 2)] {
-                    let (want, want_at) = monitor_stat_two_pass(&m, &rows, a, b);
-                    let (got, got_at) = m.monitor_stat_at(&rows, a, b);
-                    assert!(want.is_finite() && want > 0.0, "{want}");
-                    let rel = (got - want).abs() / want;
-                    worst = worst.max(rel);
-                    assert!(
-                        rel <= 1e-12,
-                        "t {t} level {level} ({a}, {b}): {got} vs {want}"
-                    );
-                    assert_eq!(got_at, want_at, "t {t} level {level} ({a}, {b})");
-                }
-            }
-        }
-        eprintln!("the one-pass statistic's largest move: {worst:e} relative");
-    }
-
-    /// The window statistic as the code before task 270 (D-2) computed it,
-    /// each pair's correlation by [`CorrChange::corr_of`] over copies of
-    /// the two windows' rows.
-    fn window_stat_copied(m: &CorrChange, rows: &[Vec<f64>]) -> f64 {
-        let w = m.cfg.span_rows;
-        if rows.len() < 2 * w {
-            return f64::NAN;
-        }
-        let (pre, post) = rows.split_at(w);
-        let d = m.cfg.n_features;
-        let mut acc = 0.0f64;
-        for a in 0..d {
-            for b in (a + 1)..d {
-                let x = CorrChange::corr_of(pre, w, a, b);
-                let y = CorrChange::corr_of(post, w, a, b);
-                if !(x.is_finite() && y.is_finite()) {
-                    return f64::NAN;
-                }
-                let diff = (x - y).abs();
-                match m.cfg.norm {
-                    ChangeNorm::L1 => acc += diff,
-                    ChangeNorm::LInf => acc = acc.max(diff),
-                }
-            }
-        }
-        acc
-    }
-
-    /// And its permutation critical value, from a copy of the model: every
-    /// pooled row copied again on each draw.
-    fn permutation_crit_copied(m: &mut CorrChange) -> Option<f64> {
-        let w = m.cfg.span_rows;
-        if m.ring.len() < 2 * w {
-            return None;
-        }
-        let rows: Vec<Vec<f64>> = m.ring.iter().cloned().collect();
-        let block = m.cfg.perm_block;
-        let nblocks = (2 * w).div_ceil(block);
-        let mut stats = Vec::new();
-        let mut order: Vec<usize> = (0..nblocks).collect();
-        for _ in 0..m.cfg.n_perm {
-            for i in (1..nblocks).rev() {
-                let j = below(&mut m.rng, i as u64 + 1) as usize;
-                order.swap(i, j);
-            }
-            let mut shuffled: Vec<Vec<f64>> = Vec::new();
-            for &bi in order.iter() {
-                let start = bi * block;
-                for r in rows.iter().take((start + block).min(2 * w)).skip(start) {
-                    shuffled.push(r.clone());
-                }
-            }
-            let s = window_stat_copied(m, &shuffled);
-            if s.is_finite() {
-                stats.push(s);
-            }
-        }
-        if stats.is_empty() {
-            return None;
-        }
-        stats.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
-        // The standard rule's critical rank, `⌈(1 − alpha)(B + 1)⌉`, spelled
-        // apart from `perm_rejections`.
-        let q = ((1.0 - m.cfg.alpha) * (stats.len() + 1) as f64).ceil() as usize;
-        (q <= stats.len()).then(|| stats[q - 1])
-    }
-
-    /// The window kind read where its rows are (task 270, D-2) reports the
-    /// bits it reported over copies of them: on every row of a stream with
-    /// a break, at a level of 0 and of 1e4, under both norms and with a
-    /// block size that does not divide the pool, the statistic against
-    /// the copied windows' and each redrawn critical value against the
-    /// copied draws' from the same generator state. The windows are 19
-    /// rows, one short of the four blocks of five rows at which four
-    /// columns' sums are merged (task 328), so they are read whole; the
-    /// merged statistic is held to the exact one instead
-    /// (`the_merged_statistic_is_the_exact_one_within_its_bound`).
-    #[test]
-    fn the_window_kind_read_in_place_is_the_copied_one_to_the_bit() {
-        for (level, norm, block) in [(0.0, ChangeNorm::L1, 7), (1e4, ChangeNorm::LInf, 1)] {
-            let mut n = Normals::new(31);
-            let w = 19;
-            let mut m = CorrChange::new(CorrChangeCfg {
-                span_rows: w,
-                crit: None,
-                n_perm: 40,
-                permute_every_rows: 9,
-                perm_block: block,
-                norm,
-                ..cfg(4, CorrChangeKind::Window)
-            })
-            .unwrap();
-            assert!(m.sums.is_none(), "read whole");
-            let mut rows: Vec<Vec<f64>> = Vec::new();
-            let (mut stats, mut crits) = (0, 0);
-            for i in 0..400 {
-                let mut r = n.pair(if i % 150 < 75 { 0.1 } else { 0.8 });
-                r.push(n.normal());
-                r.push(n.normal());
-                let r: Vec<f64> = r.iter().map(|v| v + level).collect();
-                rows.push(r.clone());
-                let tail = &rows[rows.len().saturating_sub(2 * w)..];
-                let want = window_stat_copied(&m, tail);
-                let got = m.predict(&r, 1.0).pred[0];
-                assert!(
-                    got.to_bits() == want.to_bits() || got.is_nan() && want.is_nan(),
-                    "row {i}: {got} vs {want}"
-                );
-                stats += usize::from(got.is_finite());
-                let mut copy = m.clone();
-                m.step(&r, &[], 1.0, 1.0);
-                if m.ring.len() >= 2 * w {
-                    copy.ring.push_back(r.clone());
-                    while copy.ring.len() > 2 * w {
-                        copy.ring.pop_front();
-                    }
-                    let (mut a, mut b) = (copy.clone(), copy);
-                    let (x, y) = (a.permutation_crit(), permutation_crit_copied(&mut b));
-                    assert_eq!(x.map(f64::to_bits), y.map(f64::to_bits), "row {i}");
-                    crits += usize::from(x.is_some());
-                }
-            }
-            assert!(
-                stats > 300 && crits > 300,
-                "{stats} statistics, {crits} draws"
-            );
-        }
-    }
-
-    /// The empirical size against Wied, Krämer & Dehling's Table 1. Theirs
-    /// is 5000 replications of i.i.d. bivariate innovations at the 5 %
-    /// level and reads `.040 / .035 / .041` at `T = 500` for `ρ = −0.5 / 0
-    /// / 0.5`. This runs fewer draws and a Gaussian pair, so the band is
-    /// the binomial one around those numbers; **`|ρ| ≤ 0.5` only**, because
-    /// the test over-rejects badly at `|ρ| = 0.9` for `T ≤ 500` (`.142` in
-    /// their own table) and that is the paper's finding, not a bug here.
-    #[test]
-    #[ignore = "extended: a paper's simulation (2.0 s)"]
-    fn the_size_is_the_papers() {
-        let t = 500usize;
-        let reps = 300usize;
-        for (rho, want) in [(-0.5, 0.040), (0.0, 0.035), (0.5, 0.041)] {
-            let mut rejects = 0;
-            for rep in 0..reps {
-                let mut n = Normals::new(1000 + rep as u64);
-                let mut m = CorrChange::new(CorrChangeCfg {
-                    span_rows: t,
-                    alpha_adjust: "none".into(),
-                    ..cfg(2, CorrChangeKind::Monitor)
-                })
-                .unwrap();
-                let mut last = f64::NAN;
-                for _ in 0..t {
-                    last = m.step(&n.pair(rho), &[], 1.0, 1.0).pred[2];
-                }
-                rejects += usize::from(last == 1.0);
-            }
-            let size = rejects as f64 / reps as f64;
-            // A binomial band at `reps` draws around the paper's number,
-            // widened for the smaller sample and the different innovation.
-            let se = (want * (1.0 - want) / reps as f64).sqrt();
-            assert!(
-                (size - want).abs() < 4.0 * se + 0.02,
-                "rho {rho}: size {size} against the paper's {want} (se {se:.4})"
-            );
-        }
-    }
-
-    /// Power against their Table 2: a `0.5 → 0.7` break at `T/2` rejects
-    /// `.587` of the time at `T = 500` and `.830` at `T = 1000`. The break
-    /// is what the test exists to find, so the assertion is one-sided --
-    /// power at least the paper's, less the sampling band.
-    #[test]
-    #[ignore = "extended: a paper's simulation (2.1 s)"]
-    fn the_power_is_at_least_the_papers() {
-        for (t, want) in [(500usize, 0.587), (1000usize, 0.830)] {
-            let reps = 200usize;
-            let mut rejects = 0;
-            for rep in 0..reps {
-                let mut n = Normals::new(7000 + rep as u64);
-                let mut m = CorrChange::new(CorrChangeCfg {
-                    span_rows: t,
-                    alpha_adjust: "none".into(),
-                    ..cfg(2, CorrChangeKind::Monitor)
-                })
-                .unwrap();
-                let mut last = f64::NAN;
-                for i in 0..t {
-                    let rho = if i < t / 2 { 0.5 } else { 0.7 };
-                    last = m.step(&n.pair(rho), &[], 1.0, 1.0).pred[2];
-                }
-                rejects += usize::from(last == 1.0);
-            }
-            let power = rejects as f64 / reps as f64;
-            let se = (want * (1.0 - want) / reps as f64).sqrt();
-            assert!(
-                power > want - 4.0 * se - 0.05,
-                "T {t}: power {power} against the paper's {want} (se {se:.4})"
-            );
-        }
-    }
-
-    #[test]
-    fn nothing_is_reported_except_on_a_spans_last_row() {
-        let mut n = Normals::new(5);
-        let mut m = CorrChange::new(CorrChangeCfg {
-            span_rows: 40,
-            ..cfg(2, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        for i in 1..=120 {
-            let step = m.step(&n.pair(0.3), &[], 1.0, 1.0);
-            let due = i % 40 == 0;
-            assert_eq!(step.pred[0].is_finite(), due, "row {i}");
-            assert_eq!(step.pred[1].is_finite(), due, "row {i}");
-            if due {
-                assert_eq!(m.depth(), 0, "the span is closed at its last row");
-            }
-        }
-    }
-
-    #[test]
-    fn the_window_statistic_is_the_norm_of_the_difference() {
-        let mut n = Normals::new(9);
-        let w = 40usize;
-        let mut m = CorrChange::new(CorrChangeCfg {
-            kind: CorrChangeKind::Window,
-            span_rows: w,
-            crit: Some(0.5),
-            ..cfg(3, CorrChangeKind::Window)
-        })
-        .unwrap();
-        let mut rows: Vec<Vec<f64>> = Vec::new();
-        let mut last = f64::NAN;
-        for i in 0..2 * w {
-            let rho = if i < w { 0.1 } else { 0.9 };
-            let mut r = n.pair(rho);
-            r.push(n.normal());
-            rows.push(r.clone());
-            last = m.step(&r, &[], 1.0, 1.0).pred[0];
-        }
-        // Longhand: the L1 norm over the strict upper triangle.
-        let corr = |rs: &[Vec<f64>], a: usize, b: usize| CorrChange::corr_of(rs, rs.len(), a, b);
-        let (pre, post) = rows.split_at(w);
-        let mut want = 0.0;
-        for a in 0..3 {
-            for b in (a + 1)..3 {
-                want += (corr(pre, a, b) - corr(post, a, b)).abs();
-            }
-        }
-        assert!((last - want).abs() < 1e-12, "{last} vs {want}");
-        assert!(last > 0.5, "a 0.1 -> 0.9 break is a big change");
-    }
-
-    #[test]
-    fn a_sign_flip_null_would_have_no_spread() {
-        // The reason the permutation null is a permutation: negating a
-        // whole row leaves every correlation exactly where it was.
-        let mut n = Normals::new(13);
-        let rows: Vec<Vec<f64>> = (0..40).map(|_| n.pair(0.6)).collect();
-        let flipped: Vec<Vec<f64>> = rows
-            .iter()
-            .enumerate()
-            .map(|(i, r)| {
-                if i % 3 == 0 {
-                    vec![-r[0], -r[1]]
-                } else {
-                    r.clone()
-                }
-            })
-            .collect();
-        let a = CorrChange::corr_of(&rows, rows.len(), 0, 1);
-        let b = CorrChange::corr_of(&flipped, flipped.len(), 0, 1);
-        // Not exactly equal -- the means move -- but the *statistic* a
-        // sign-flip null would produce is the same to three digits, which
-        // is no null at all.
-        assert!((a - b).abs() < 5e-2, "{a} vs {b}");
-    }
-
-    #[test]
-    fn the_permutation_critical_value_flags_a_real_break_and_not_noise() {
-        let w = 40usize;
-        let build = || {
-            CorrChange::new(CorrChangeCfg {
-                kind: CorrChangeKind::Window,
-                span_rows: w,
-                crit: None,
-                n_perm: 100,
-                permute_every_rows: 1000,
-                ..cfg(2, CorrChangeKind::Window)
-            })
-            .unwrap()
-        };
-        // Stationary: the statistic sits under the permutation quantile.
-        let mut n = Normals::new(17);
-        let mut m = build();
-        let mut flags = 0;
-        for _ in 0..400 {
-            flags += usize::from(m.step(&n.pair(0.4), &[], 1.0, 1.0).pred[2] == 1.0);
-        }
-        assert!(flags < 40, "{flags} flags on a stationary stream");
-        // A break: it is found.
-        let mut n = Normals::new(19);
-        let mut m = build();
-        let mut found = false;
-        for i in 0..400 {
-            let rho = if i < 200 { 0.0 } else { 0.9 };
-            found |= m.step(&n.pair(rho), &[], 1.0, 1.0).pred[2] == 1.0;
-        }
-        assert!(found, "a 0 -> 0.9 break went unflagged");
-    }
-
-    /// The scalar CUSUM is a **mean** test, not a correlation one: the
-    /// equicorrelation is already one number. A break in its level is what
-    /// it finds.
-    #[test]
-    fn the_scalar_form_finds_a_break_in_the_equicorrelation() {
-        let run = |rho_a: f64, rho_b: f64, seed: u64| {
-            let mut n = Normals::new(seed);
-            let mut m = CorrChange::new(CorrChangeCfg {
-                // Fewer than the rows fed: the first rows have no
-                // standardiser yet and never enter the span.
-                span_rows: 300,
-                scalar: true,
-                alpha_adjust: "none".into(),
-                decay: Decay::Halflife(100.0),
-                ..cfg(5, CorrChangeKind::Monitor)
-            })
-            .unwrap();
-            let mut out = (f64::NAN, false);
-            for i in 0..500 {
-                let rho: f64 = if i < 250 { rho_a } else { rho_b };
-                let a = n.normal();
-                let x: Vec<f64> = (0..5)
-                    .map(|_| rho.sqrt() * a + (1.0 - rho).sqrt() * n.normal())
-                    .collect();
-                let step = m.step(&x, &[], 1.0, 1.0);
-                if step.pred[0].is_finite() {
-                    out = (step.pred[0], step.pred[2] == 1.0);
-                }
-            }
-            out
-        };
-        let (steady, flagged) = run(0.4, 0.4, 41);
-        assert!(steady.is_finite() && !flagged, "steady stat {steady}");
-        let (broken, flagged) = run(0.1, 0.9, 43);
-        assert!(
-            flagged,
-            "a 0.1 -> 0.9 break in the equicorrelation: {broken}"
-        );
-        assert!(broken > steady);
-    }
-
-    #[test]
-    fn the_scalar_form_runs_on_the_equicorrelation() {
-        let mut n = Normals::new(23);
-        let mut m = CorrChange::new(CorrChangeCfg {
-            span_rows: 100,
-            scalar: true,
-            decay: Decay::Halflife(200.0),
-            ..cfg(4, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        let mut last = f64::NAN;
-        for i in 0..400 {
-            let rho: f64 = if i < 200 { 0.1 } else { 0.9 };
-            let a = n.normal();
-            let x: Vec<f64> = (0..4)
-                .map(|_| rho.sqrt() * a + (1.0 - rho).sqrt() * n.normal())
-                .collect();
-            let step = m.step(&x, &[], 1.0, 1.0);
-            if step.pred[0].is_finite() {
-                last = step.pred[0];
-            }
-        }
-        assert!(last.is_finite() && last >= 0.0, "{last}");
-    }
-
-    #[test]
-    fn a_zero_weight_row_is_not_a_row_of_the_span() {
-        let mut n = Normals::new(29);
-        let mut a = CorrChange::new(cfg(2, CorrChangeKind::Monitor)).unwrap();
-        let mut b = a.clone();
-        for i in 0..300 {
-            let r = n.pair(0.3);
-            a.step(&r, &[], 1.0, 1.0);
-            if i == 150 {
-                a.step(&[1e6, -1e6], &[], 1.0, 0.0);
-            }
-            b.step(&r, &[], 1.0, 1.0);
-        }
-        assert_eq!(a.depth(), b.depth());
-        assert_eq!(a.n_eff(), b.n_eff());
-    }
-
-    /// What a zero-weight row *reports*: the span it would close if it were
-    /// learned -- the row is always part of its own report, which is what
-    /// makes the flag out of sample -- and then it leaves nothing behind.
-    /// `since` does not advance across it and a flag on it does not reset
-    /// the count (docs/REVIEW-E54-E64.md CC2).
-    #[test]
-    fn a_zero_weight_row_reports_the_span_it_would_have_closed() {
-        let mut n = Normals::new(41);
-        let mut m = CorrChange::new(CorrChangeCfg {
-            span_rows: 20,
-            ..cfg(2, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        // Nineteen rows: the twentieth closes the span, so the row under
-        // test is one that actually reports.
-        for _ in 0..19 {
-            m.step(&n.pair(0.3), &[], 1.0, 1.0);
-        }
-        let before = (m.depth(), m.since_flag);
-        // The same row twice, once weightless and once not: the report is
-        // the same both times, and only the second one moves the model.
-        let row = n.pair(0.3);
-        let zero = m.step(&row, &[], 1.0, 0.0);
-        assert_eq!(
-            (m.depth(), m.since_flag),
-            before,
-            "a zero-weight row entered the span"
-        );
-        assert!(zero.pred[0].is_finite(), "the span still closes here");
-        let learned = m.step(&row, &[], 1.0, 1.0);
-        for (slot, (a, b)) in zero.pred.iter().zip(&learned.pred).enumerate() {
-            assert!(
-                a == b || (a.is_nan() && b.is_nan()),
-                "slot {slot}: weightless said {a}, learned said {b}"
-            );
-        }
-        // The learned row closed the span, so the ring starts over; the
-        // weightless one before it left no trace at all.
-        assert_eq!(m.depth(), 0, "the span did not close on the learned row");
-    }
-
-    #[test]
-    fn clear_lags_abandons_the_span() {
-        let mut n = Normals::new(31);
-        let mut m = CorrChange::new(cfg(2, CorrChangeKind::Monitor)).unwrap();
-        for _ in 0..50 {
-            m.step(&n.pair(0.3), &[], 1.0, 1.0);
-        }
-        assert_eq!(m.depth(), 50);
-        let w = m.n_eff();
-        m.clear_lags();
-        assert_eq!(m.depth(), 0);
-        assert_eq!(m.n_eff(), w, "clear_lags is not a reset");
-    }
-
-    #[test]
-    fn predict_is_the_step_without_the_step() {
-        let mut n = Normals::new(37);
-        let mut m = CorrChange::new(cfg(2, CorrChangeKind::Monitor)).unwrap();
-        for _ in 0..250 {
-            let x = n.pair(0.3);
-            let want = m.predict(&x, 1.0);
-            let before = m.clone();
-            let got = m.step(&x, &[], 1.0, 1.0);
-            assert_eq!(want.n_eff, before.n_eff());
-            // The step's answer without the step, on the span-closing row
-            // as much as on any other.
-            assert!(
-                want.pred
-                    .iter()
-                    .zip(&got.pred)
-                    .all(|(a, b)| a == b || (a.is_nan() && b.is_nan())),
-                "{:?} vs {:?}",
-                want.pred,
-                got.pred
-            );
-        }
-    }
-
-    /// The permutation draws are held to take the quantile, and each is a
-    /// pass over both blocks, so `n_perm` has a ceiling, 2^20, refused by
-    /// name with the value: `2^62` panicked "capacity overflow" at the first
-    /// full window and `10^11` never returned (review 2026-10-06, CD10).
-    #[test]
-    fn n_perm_past_the_ceiling_is_refused_by_name() {
-        for n in [(1usize << 20) + 1, 100_000_000_000, 1 << 62] {
-            let Err(e) = CorrChange::new(CorrChangeCfg {
-                n_perm: n,
-                ..cfg(2, CorrChangeKind::Window)
-            }) else {
-                panic!("accepted")
-            };
-            assert!(
-                e.contains("corrchange: n_perm must be at most 1048576")
-                    && e.contains(&format!("but it is {n}")),
-                "{e}"
-            );
-        }
-        assert!(
-            CorrChange::new(CorrChangeCfg {
-                n_perm: 1 << 20,
-                ..cfg(2, CorrChangeKind::Window)
-            })
-            .is_ok()
-        );
-    }
-
-    /// The window test's size is `m / (B + 1)`, `m = ⌊alpha (B + 1)⌋`: at
-    /// most `alpha` at every draw count, and alpha itself where `alpha (B +
-    /// 1)` is whole (task 278, ff: the old `⌈(1 − alpha) B⌉`-th draw gave
-    /// 0.0952 at 20 draws and alpha 0.05). The fewest draws that can flag
-    /// is `⌈1/alpha⌉ − 1`.
-    #[test]
-    fn the_permutation_size_is_at_most_alpha_and_the_fewest_draws_can_flag() {
-        for alpha in [
-            0.001, 0.01, 0.03, 0.05, 0.1, 0.145, 0.2, 0.285, 0.29, 0.5, 0.9,
-        ] {
-            for b in 1..=3000 {
-                let m = perm_rejections(alpha, b);
-                assert!(m <= b, "{alpha} {b}");
-                let size = m as f64 / (b + 1) as f64;
-                assert!(size <= alpha * (1.0 + 1e-15), "{alpha} {b}: {size}");
-                // And the largest such: one more rejection would pass alpha.
-                assert!((m + 1) as f64 / (b + 1) as f64 > alpha, "{alpha} {b}");
-            }
-        }
-        assert_eq!(perm_rejections(0.05, 19), 1);
-        assert_eq!(perm_rejections(0.05, 20), 1);
-        assert_eq!(perm_rejections(0.05, 199), 10);
-        assert_eq!(perm_rejections(0.01, 98), 0);
-        assert_eq!(perm_rejections(0.01, 99), 1);
-        // Levels whose product rounds under the whole number it stands for
-        // land on it (review round 10, S6-2): each read one fewer.
-        assert_eq!(0.29 * 100.0, 28.999999999999996, "the fixture");
-        assert_eq!(perm_rejections(0.29, 99), 29);
-        assert_eq!(perm_rejections(0.145, 199), 29);
-        assert_eq!(perm_rejections(0.285, 199), 57);
-        // The nudge is four units of rounding, `4·2⁻⁵³`, and no wider: at
-        // a power-of-two `B + 1` the product is exact, so a level three
-        // units under a multiple reads as it, and one five under does not.
-        let u = PERM_ROUNDING;
-        assert_eq!(u, 2f64.powi(-53));
-        for k in 0..=10 {
-            let b = (1usize << k) - 1;
-            let over = (b + 1) as f64;
-            assert_eq!(perm_rejections((1.0 - 3.0 * u) / over, b), 1, "{b}");
-            assert_eq!(perm_rejections((1.0 - 5.0 * u) / over, b), 0, "{b}");
-        }
-        // At every whole count of hundredths and thousandths, a level that
-        // is a multiple of `1/(B + 1)` is its size.
-        for b in [99usize, 199, 999] {
-            for i in 1..=b {
-                let alpha: f64 = format!("{}", i as f64 / (b + 1) as f64).parse().unwrap();
-                if alpha < 1.0 && ((alpha * (b + 1) as f64) - i as f64).abs() < 1e-9 {
-                    assert_eq!(perm_rejections(alpha, b), i, "{alpha} at {b}");
-                }
-            }
-        }
-        for (alpha, want) in [
-            (0.05, 19),
-            (0.01, 99),
-            (0.03, 33),
-            (0.2, 4),
-            (0.5, 1),
-            (0.001, 999),
-        ] {
-            assert_eq!(min_perm(alpha), Some(want), "{alpha}");
-            assert_eq!(perm_rejections(alpha, want - 1), 0, "{alpha}");
-        }
-        assert_eq!(min_perm(1e-7), None);
-        assert_eq!(min_perm(1.0 / (MAX_PERM as f64 + 1.0)), Some(MAX_PERM));
-        // Within a few units of rounding of `1/k`, `1/alpha` rounds to `k`
-        // or past it while `alpha·k` lands on 1 or not by the nudge, so the
-        // closed form can start a draw off the fewest, either way: settled
-        // on the predicate itself.
-        let mut settled = 0;
-        for k in 2..2000usize {
-            for ulps in -8i64..=8 {
-                let bits = (1.0 / k as f64).to_bits() as i64 + ulps;
-                let alpha = f64::from_bits(bits as u64);
-                let b = min_perm(alpha).unwrap();
-                assert!(perm_rejections(alpha, b) >= 1, "{alpha}");
-                assert_eq!(perm_rejections(alpha, b - 1), 0, "{alpha}");
-                if b != ((1.0 / alpha).ceil() as usize).saturating_sub(1) {
-                    settled += 1;
-                }
-            }
-        }
-        // That the closed form fell short is what was tested, not assumed.
-        assert!(settled > 100, "{settled}");
-    }
-
-    /// At a level that is exactly the tail at `x0`, the critical value is
-    /// not past `x0`: the bisection's predicate is strict (`P(sup|B| > x) >
-    /// alpha` below the quantile), so the bracket closes on `[prev(x0),
-    /// x0]` and its midpoint rounds to one of them, `prev(x0)` when `x0`'s
-    /// last bit is odd. Taken on the survival series (a level below 1 %)
-    /// and on the theta series (above 99 %); each `x0` is the first
-    /// odd double from a start where the series falls strictly over its
-    /// neighbours, and on the theta series where `1 − alpha` is the
-    /// series' value exactly.
-    #[test]
-    fn a_level_met_exactly_at_x0_puts_the_quantile_at_or_below_it() {
-        let next = |x: f64| f64::from_bits(x.to_bits() + 1);
-        let prev = |x: f64| f64::from_bits(x.to_bits() - 1);
-        let odd = |x: f64| x.to_bits() & 1 == 1;
-        // Searched over a bounded run of doubles, so a series that fails
-        // the condition fails the test rather than hang it.
-        let from = |start: f64| (1..100_000u64).map(move |k| f64::from_bits(start.to_bits() + k));
-        let x0 = from(2.0)
-            .find(|&x| {
-                odd(x)
-                    && kolmogorov_sf(prev(x)) > kolmogorov_sf(x)
-                    && kolmogorov_sf(x) > kolmogorov_sf(next(x))
-            })
-            .expect("no odd double near 2 where the survival series falls strictly");
-        let alpha = kolmogorov_sf(x0);
-        assert!(alpha < KOLMOGOROV_TAIL);
-        let q = kolmogorov_quantile(alpha);
-        assert!(q <= x0 && q >= prev(x0), "{q} against {x0}");
-
-        let exact = |f: f64| 1.0 - (1.0 - f) == f;
-        let theta = kolmogorov_cdf_theta;
-        let x0 = from(0.4)
-            .find(|&x| {
-                odd(x) && exact(theta(x)) && theta(prev(x)) < theta(x) && theta(x) < theta(next(x))
-            })
-            .expect("no odd double near 0.4 where the theta series rises strictly to a 1 - alpha");
-        let alpha = 1.0 - theta(x0);
-        assert!(alpha > 1.0 - KOLMOGOROV_TAIL && 1.0 - alpha == theta(x0));
-        let q = kolmogorov_quantile(alpha);
-        assert!(q <= x0 && q >= prev(x0), "{q} against {x0}");
-    }
-
-    /// An `n_perm` too small for `alpha` can never flag, and is refused by
-    /// name with the fewest draws that can; a fixed `crit` reads no draws,
-    /// and a state saved with such a pair still loads (`restore` runs
-    /// `validate`, not `new`'s refusal), reporting no critical value.
-    #[test]
-    fn an_n_perm_too_small_to_flag_at_alpha_is_refused_by_name() {
-        use crate::{ModelState, OnlineModel};
-        let window = |n_perm, alpha, crit| CorrChangeCfg {
-            n_perm,
-            alpha,
-            crit,
-            ..cfg(2, CorrChangeKind::Window)
-        };
-        let e = CorrChange::new(window(20, 0.01, None)).unwrap_err();
-        assert!(
-            e.contains("corrchange: n_perm = 20 draws are too few for the permutation test to flag at alpha = 0.01")
-                && e.contains("Set n_perm to 99 or more, or give crit."),
-            "{e}"
-        );
-        let e = CorrChange::new(window(98, 0.01, None)).unwrap_err();
-        assert!(e.contains("Set n_perm to 99 or more"), "{e}");
-        let e = CorrChange::new(window(MAX_PERM, 1e-7, None)).unwrap_err();
-        assert!(e.contains("no n_perm up to 1048576 lets"), "{e}");
-        assert!(CorrChange::new(window(99, 0.01, None)).is_ok());
-        assert!(CorrChange::new(window(20, 0.01, Some(0.5))).is_ok());
-        // Another kind reads no draws.
-        assert!(
-            CorrChange::new(CorrChangeCfg {
-                n_perm: 20,
-                alpha: 0.01,
-                ..cfg(2, CorrChangeKind::Monitor)
-            })
-            .is_ok()
-        );
-        let mut s = CorrChange::new(window(99, 0.01, None)).unwrap().state();
-        let ModelState::CorrChange(inner) = &mut s.model else {
-            unreachable!()
-        };
-        inner.cfg.n_perm = 20;
-        let mut back = CorrChange::restore(&s).unwrap();
-        let mut n = Normals::new(5);
-        let mut crits = Vec::new();
-        for _ in 0..(4 * back.cfg.span_rows) {
-            let x = [n.normal(), n.normal()];
-            crits.push(back.step(&x, &[], 1.0, 1.0).pred[1]);
-        }
-        assert!(crits.iter().all(|c| c.is_nan()), "{crits:?}");
-    }
-
-    /// Every problem at once: two bad settings are both named, one to a
-    /// line.
-    #[test]
-    fn a_configuration_with_two_problems_reports_both() {
-        let e = CorrChange::new(CorrChangeCfg {
-            alpha: 1.5,
-            span_rows: 4,
-            ..cfg(2, CorrChangeKind::Monitor)
-        })
-        .unwrap_err();
-        let lines: Vec<&str> = e.lines().collect();
-        assert_eq!(lines.len(), 2, "{e}");
-        assert!(
-            lines[0].starts_with("corrchange: alpha must be above 0"),
-            "{e}"
-        );
-        assert!(lines[1].contains("needs window_rows of at least 8"), "{e}");
-    }
-
-    #[test]
-    fn a_bad_configuration_is_refused_by_name() {
-        let bad = |c: CorrChangeCfg, msg: &str| {
-            let e = CorrChange::new(c).unwrap_err();
-            assert!(e.contains(msg), "{e}");
-        };
-        bad(
-            cfg(1, CorrChangeKind::Monitor),
-            "needs at least two features",
-        );
-        bad(
-            CorrChangeCfg {
-                span_rows: 4,
-                ..cfg(2, CorrChangeKind::Monitor)
-            },
-            "window_rows of at least 8",
-        );
-        bad(
-            CorrChangeCfg {
-                alpha: 1.5,
-                ..cfg(2, CorrChangeKind::Monitor)
-            },
-            "alpha must be above 0 and below 1",
-        );
-        bad(
-            CorrChangeCfg {
-                alpha_adjust: "nope".into(),
-                ..cfg(2, CorrChangeKind::Monitor)
-            },
-            "alpha_adjust must be \"bonferroni\" or \"none\", but it is \"nope\"",
-        );
-        bad(
-            CorrChangeCfg {
-                kind: CorrChangeKind::Window,
-                span_rows: 2,
-                ..cfg(2, CorrChangeKind::Window)
-            },
-            "window_rows of at least 3",
-        );
-        bad(
-            CorrChangeCfg {
-                kind: CorrChangeKind::Window,
-                n_perm: 2,
-                ..cfg(2, CorrChangeKind::Window)
-            },
-            "n_perm must be at least 20",
-        );
-        bad(
-            CorrChangeCfg {
-                kind: CorrChangeKind::Window,
-                scalar: true,
-                ..cfg(2, CorrChangeKind::Window)
-            },
-            "scalar applies only under kind=\"monitor\" or \"sequential\", but kind is \"window\"",
-        );
-        // docs/REVIEW-E54-E64.md CC1 and CC3: the cases `validate` refuses
-        // and nothing exercised.
-        for c in [f64::NAN, 0.0, -1.0, f64::INFINITY] {
-            bad(
-                CorrChangeCfg {
-                    crit: Some(c),
-                    ..cfg(2, CorrChangeKind::Monitor)
-                },
-                "crit must be finite and above 0",
-            );
-        }
-        for b in [0usize, 51] {
-            bad(
-                CorrChangeCfg {
-                    kind: CorrChangeKind::Window,
-                    span_rows: 50,
-                    perm_block: b,
-                    ..cfg(2, CorrChangeKind::Window)
-                },
-                "perm_block must be from 1 to window_rows (50)",
-            );
-        }
-        bad(
-            CorrChangeCfg {
-                kind: CorrChangeKind::Window,
-                permute_every_rows: 0,
-                ..cfg(2, CorrChangeKind::Window)
-            },
-            "permute_every_rows must be at least 1, but it is 0",
-        );
-        bad(
-            CorrChangeCfg {
-                bandwidth: Some(0),
-                ..cfg(2, CorrChangeKind::Monitor)
-            },
-            "bandwidth must be at least 1, but it is 0",
-        );
-    }
-
-    // --- sequential (Wied & Galeano 2013; docs/PLAN.md task 114) ---------
-
-    /// The detector against its definition, written out on the rows
-    /// themselves: the history's correlation and long-run sd per pair
-    /// (`corr_of`, `long_run_sd` at `⌊ln m⌋`), the monitored rows'
-    /// correlation from scratch, `V_k = (k/√m)(ρ̂_k − ρ̂_h)/σ̂`, the ratio to
-    /// `w(k/m) = (1 + k/m)((k/m)/(1 + k/m))^γ`, the maximum over the three
-    /// pairs, W&G's Eq. 8 on a flag, and the cycle: a history of `m`
-    /// learned rows, then at most `monitor_rows`, a new history after a flag
-    /// or the last of them. A break in the middle of the stream makes flags.
-    #[test]
-    #[ignore = "extended: a second or more (1.9 s)"]
-    fn the_sequential_detector_is_its_definition() {
-        let (d, m, limit, gamma) = (3usize, 40usize, 60usize, 0.25);
-        let mut model = CorrChange::new(seq_cfg(d, m, limit, gamma)).unwrap();
-        let crit = crate::boundary::sequential_crit(0.05 / 3.0, gamma, 1.5);
-        let bw = ((m as f64).ln().floor() as usize).max(1);
-        let mut n = Normals::new(41);
-        let (mut hist, mut mon): (Vec<Vec<f64>>, Vec<Vec<f64>>) = (vec![], vec![]);
-        let mut monitoring = false;
-        let (mut flags, mut stats) = (0, 0);
-        for i in 0..400 {
-            let x = equicorrelated(&mut n, d, if i < 200 { 0.2 } else { 0.85 });
-            let got = model.step(&x, &[], 1.0, 1.0).pred;
-            let mut want = [f64::NAN; 5];
-            if monitoring && !mon.is_empty() {
-                let mut rows = mon.clone();
-                rows.push(x.clone());
-                let k = rows.len() as f64;
-                let b = k / m as f64;
-                let w = (1.0 + b) * (b / (1.0 + b)).powf(gamma);
-                let (mut best, mut at) = (f64::NAN, (0, 0));
-                for a in 0..d {
-                    for bb in (a + 1)..d {
-                        let level = CorrChange::corr_of(&hist, m, a, bb);
-                        let sd = CorrChange::long_run_sd(&hist, a, bb, bw);
-                        let rho = CorrChange::corr_of(&rows, rows.len(), a, bb);
-                        let r = ((k / (m as f64).sqrt()) * (rho - level) / sd).abs() / w;
-                        if r.is_finite() && (best.is_nan() || r > best) {
-                            (best, at) = (r, (a, bb));
-                        }
-                    }
-                }
-                want[0] = best;
-                want[1] = crit;
-                want[2] = f64::from(best > crit);
-                if best > crit {
-                    let last = CorrChange::corr_of(&mon, mon.len(), at.0, at.1);
-                    let (mut top, mut k_hat) = (f64::NEG_INFINITY, 0);
-                    for j in 1..=mon.len() {
-                        let s = j as f64 * (CorrChange::corr_of(&mon, j, at.0, at.1) - last).abs();
-                        if s.is_finite() && s > top {
-                            (top, k_hat) = (s, j);
-                        }
-                    }
-                    // No finite score below two rows: no date.
-                    want[4] = if k_hat == 0 {
-                        f64::NAN
-                    } else {
-                        (mon.len() + 1 - k_hat) as f64
-                    };
-                }
-            }
-            for s in [0, 2, 4] {
-                assert!(
-                    (got[s] - want[s]).abs() <= 1e-9 * (1.0 + want[s].abs())
-                        || same(got[s], want[s]),
-                    "row {i}, slot {s}: {} against {}",
-                    got[s],
-                    want[s]
-                );
-            }
-            assert!(
-                same(got[1], want[1]) || (got[1] - want[1]).abs() < 1e-12,
-                "row {i}"
-            );
-            if got[0].is_finite() {
-                stats += 1;
-            }
-            let flagged = got[2] == 1.0;
-            flags += usize::from(flagged);
-            if !monitoring {
-                hist.push(x);
-                monitoring = hist.len() == m;
-            } else {
-                mon.push(x);
-                if flagged || mon.len() == limit {
-                    (monitoring, hist, mon) = (false, vec![], vec![]);
-                }
-            }
-        }
-        assert!(
-            flags >= 1 && stats > 100,
-            "{flags} flags, {stats} statistics"
-        );
-    }
-
-    /// A break in the correlation is flagged in the monitoring period, and
-    /// dated near where it happened: Eq. 8's estimate over the monitored
-    /// rows, `τ − k̂` rows from the first changed one through the flag.
-    #[test]
-    fn a_break_is_flagged_and_dated() {
-        let (m, limit, change) = (200usize, 400usize, 150usize);
-        let mut model = CorrChange::new(seq_cfg(2, m, limit, 0.0)).unwrap();
-        let mut n = Normals::new(5);
-        let mut found = None;
-        for i in 0..(m + limit) {
-            let rho = if i < m + change { 0.1 } else { 0.8 };
-            let out = model.step(&n.pair(rho), &[], 1.0, 1.0).pred;
-            if out[2] == 1.0 {
-                found = Some((i - m + 1, out[4]));
-                break;
-            }
-        }
-        let (tau, since) = found.expect("the break is flagged");
-        assert!(
-            tau > change,
-            "flagged at monitored row {tau}, before the break"
-        );
-        let dated = tau as f64 - since;
-        assert!(
-            (dated - change as f64).abs() <= 40.0,
-            "dated after monitored row {dated}, the change after {change}"
-        );
-    }
-
-    /// The cycle: `m` rows of history report nothing, the first monitored
-    /// row reports nothing (a correlation needs two rows), rows 2..=limit
-    /// report, and the next learned row starts a history. With a critical
-    /// value nothing crosses, cycles run back to back; with one everything
-    /// crosses, each flag ends its cycle at once.
-    #[test]
-    fn the_cycle_restarts_after_its_period_and_after_a_flag() {
-        let (m, limit) = (10usize, 5usize);
-        let pattern = |crit: f64| {
-            let mut model = CorrChange::new(CorrChangeCfg {
-                crit: Some(crit),
-                ..seq_cfg(2, m, limit, 0.0)
-            })
-            .unwrap();
-            let mut n = Normals::new(9);
-            (0..40)
-                .map(|_| model.step(&n.pair(0.3), &[], 1.0, 1.0).pred[0].is_finite())
-                .collect::<Vec<bool>>()
-        };
-        // 10 history, 1 silent, 4 reporting: a period of 15.
-        let never = pattern(1e9);
-        for (i, &live) in never.iter().enumerate() {
-            let at = i % 15;
-            assert_eq!(live, (11..15).contains(&at), "row {i}");
-        }
-        // Every statistic flags, so each cycle is 10 + 2 rows.
-        let always = pattern(1e-12);
-        for (i, &live) in always.iter().enumerate() {
-            assert_eq!(live, i % 12 == 11, "row {i}");
-        }
-    }
-
-    /// `scalar = true`: the same detector on the mean of `u`, the
-    /// equicorrelation of the standardized row, with the history's mean and
-    /// Bartlett long-run sd of `u` written out.
-    #[test]
-    #[ignore = "extended: a second or more (1.4 s)"]
-    fn the_scalar_sequential_detector_is_its_definition() {
-        let (d, m, limit) = (4usize, 30usize, 45usize);
-        let mut model = CorrChange::new(CorrChangeCfg {
-            scalar: true,
-            ..seq_cfg(d, m, limit, 0.1)
-        })
-        .unwrap();
-        let crit = crate::boundary::sequential_crit(0.05, 0.1, 1.5);
-        let bw = ((m as f64).ln().floor() as usize).max(1);
-        let mut n = Normals::new(3);
-        let (mut hist, mut mon): (Vec<f64>, Vec<f64>) = (vec![], vec![]);
-        let (mut monitoring, mut stats) = (false, 0);
-        for i in 0..300 {
-            let x = equicorrelated(&mut n, d, if i < 150 { 0.2 } else { 0.7 });
-            let u = model.scalarise(&x);
-            let got = model.step(&x, &[], 1.0, 1.0).pred;
-            if !u.is_finite() {
-                continue;
-            }
-            if monitoring && !mon.is_empty() {
-                let k = (mon.len() + 1) as f64;
-                let mean = (mon.iter().sum::<f64>() + u) / k;
-                let level = hist.iter().sum::<f64>() / m as f64;
-                let tf = m as f64;
-                let v: Vec<f64> = hist.iter().map(|h| h - level).collect();
-                let mut var = 0.0;
-                for lag in 0..bw.min(m) {
-                    let w = 1.0 - lag as f64 / bw as f64;
-                    let acf: f64 = (lag..m).map(|s| v[s] * v[s - lag]).sum::<f64>() / tf;
-                    var += w * acf * if lag == 0 { 1.0 } else { 2.0 };
-                }
-                let b = k / tf;
-                let w = (1.0 + b) * (b / (1.0 + b)).powf(0.1);
-                let want = ((k / tf.sqrt()) * (mean - level) / var.sqrt()).abs() / w;
-                assert!(
-                    (got[0] - want).abs() <= 1e-9 * (1.0 + want),
-                    "row {i}: {} against {want}",
-                    got[0]
-                );
-                assert!((got[1] - crit).abs() < 1e-12);
-                stats += 1;
-            } else {
-                assert!(got[0].is_nan(), "row {i}");
-            }
-            if !monitoring {
-                hist.push(u);
-                monitoring = hist.len() == m;
-            } else {
-                mon.push(u);
-                if got[2] == 1.0 || mon.len() == limit {
-                    (monitoring, hist, mon) = (false, vec![], vec![]);
-                }
-            }
-        }
-        assert!(stats > 50, "{stats}");
-    }
-
-    /// A zero-weight row is reported as the next monitored row would be and
-    /// then not learned: the stream around it is the stream without it.
-    #[test]
-    #[ignore = "extended: a second or more (1.7 s); model_contract's corrchange() keeps hard rule 9"]
-    fn a_zero_weight_row_is_not_a_monitored_row() {
-        let mut n = Normals::new(21);
-        let rows: Vec<Vec<f64>> = (0..120).map(|_| n.pair(0.4)).collect();
-        let mut with = CorrChange::new(seq_cfg(2, 40, 60, 0.2)).unwrap();
-        let mut without = with.clone();
-        for (i, x) in rows.iter().enumerate() {
-            if i == 70 {
-                let ghost = with.step(&[3.0, -3.0], &[], 1.0, 0.0).pred;
-                let as_if = without.predict(&[3.0, -3.0], 1.0).pred;
-                assert!(ghost.iter().zip(&as_if).all(|(a, b)| same(*a, *b)));
-            }
-            let (a, b) = (
-                with.step(x, &[], 1.0, 1.0).pred,
-                without.step(x, &[], 1.0, 1.0).pred,
-            );
-            assert!(a.iter().zip(&b).all(|(p, q)| same(*p, *q)), "row {i}");
-        }
-    }
-
-    /// `predict` is the step's answer without the step, on every row of a
-    /// cycle; a break (`clear_lags`) starts a new history.
-    #[test]
-    #[ignore = "extended: a second or more (2.4 s); model_contract's corrchange() keeps the clause"]
-    fn sequential_predict_is_the_step_and_a_break_restarts_the_cycle() {
-        let mut n = Normals::new(8);
-        let mut m = CorrChange::new(seq_cfg(2, 20, 30, 0.3)).unwrap();
-        for _ in 0..120 {
-            let x = n.pair(0.5);
-            let want = m.predict(&x, 1.0).pred;
-            let got = m.step(&x, &[], 1.0, 1.0).pred;
-            assert!(want.iter().zip(&got).all(|(a, b)| same(*a, *b)));
-        }
-        m.clear_lags();
-        assert!(m.monitoring.is_none() && m.ring.is_empty());
-        for _ in 0..20 {
-            assert!(m.step(&n.pair(0.5), &[], 1.0, 1.0).pred[0].is_nan());
-        }
-        assert!(m.monitoring.is_some(), "twenty rows are a history");
-    }
-
-    /// A state saved in the history, in the monitoring period, and -- for
-    /// `scalar`, whose ring holds `u` -- in a `monitor` span, loads and goes
-    /// on to the bit. A `scalar` monitor saved mid-span was refused on load:
-    /// the shape check held its one-value rows to the feature count.
-    #[test]
-    #[ignore = "extended: a second or more (1.6 s)"]
-    fn a_state_saved_mid_cycle_goes_on_to_the_bit() {
-        let cases = [
-            seq_cfg(3, 30, 50, 0.2),
-            CorrChangeCfg {
-                scalar: true,
-                ..seq_cfg(3, 30, 50, 0.0)
-            },
-            CorrChangeCfg {
-                scalar: true,
-                span_rows: 30,
-                ..cfg(3, CorrChangeKind::Monitor)
-            },
-        ];
-        for c in cases {
-            for cut in [10usize, 45, 70] {
-                let mut n = Normals::new(cut as u64);
-                let rows: Vec<Vec<f64>> =
-                    (0..130).map(|_| equicorrelated(&mut n, 3, 0.3)).collect();
-                let mut whole = CorrChange::new(c.clone()).unwrap();
-                let mut first = CorrChange::new(c.clone()).unwrap();
-                for x in &rows[..cut] {
-                    whole.step(x, &[], 1.0, 1.0);
-                    first.step(x, &[], 1.0, 1.0);
-                }
-                let bytes = rmp_serde::to_vec_named(&first.state()).unwrap();
-                let mut back = CorrChange::restore(&rmp_serde::from_slice(&bytes).unwrap())
-                    .unwrap_or_else(|e| panic!("{:?} at {cut}: {e}", c.kind));
-                for (i, x) in rows[cut..].iter().enumerate() {
-                    let (a, b) = (
-                        whole.step(x, &[], 1.0, 1.0).pred,
-                        back.step(x, &[], 1.0, 1.0).pred,
-                    );
-                    assert!(
-                        a.iter().zip(&b).all(|(p, q)| p.to_bits() == q.to_bits()),
-                        "{:?} cut {cut}, row {i}: {a:?} vs {b:?}",
-                        c.kind
-                    );
-                }
-            }
-        }
-    }
-
-    /// `since_change` on the older kinds: a `monitor` flag dates the change
-    /// after the CUSUM's argmax, `T − j*` rows through the span's last; a
-    /// `window` flag says the second window. Null where nothing flags.
-    #[test]
-    fn the_older_kinds_date_their_flags_too() {
-        let t = 200usize;
-        let mut m = CorrChange::new(CorrChangeCfg {
-            span_rows: t,
-            ..cfg(2, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        let mut n = Normals::new(2);
-        let rows: Vec<Vec<f64>> = (0..t)
-            .map(|i| n.pair(if i < 120 { 0.0 } else { 0.9 }))
-            .collect();
-        let mut last = vec![];
-        for x in &rows {
-            last = m.step(x, &[], 1.0, 1.0).pred;
-        }
-        assert_eq!(last[2], 1.0, "a break of 0 to 0.9 is flagged");
-        let fresh = CorrChange::new(CorrChangeCfg {
-            span_rows: t,
-            ..cfg(2, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        let (_, j) = fresh.monitor_stat_at(&rows, 0, 1);
-        assert_eq!(last[4], (t - j) as f64);
-        assert!((last[4] - 80.0).abs() <= 25.0, "{}", last[4]);
-
-        let mut w = CorrChange::new(CorrChangeCfg {
-            span_rows: 50,
-            crit: Some(1e-9),
-            ..cfg(2, CorrChangeKind::Window)
-        })
-        .unwrap();
-        let outs: Vec<Vec<f64>> = (0..120)
-            .map(|_| w.step(&n.pair(0.3), &[], 1.0, 1.0).pred)
-            .collect();
-        for o in &outs {
-            if o[2] == 1.0 {
-                assert_eq!(o[4], 50.0);
-            } else {
-                assert!(o[4].is_nan());
-            }
-        }
-    }
-
-    /// The configurations `sequential` refuses, by name.
-    #[test]
-    fn a_bad_sequential_configuration_is_refused_by_name() {
-        let bad = |c: CorrChangeCfg, msg: &str| {
-            let e = CorrChange::new(c).unwrap_err();
-            assert!(e.contains(msg), "{e}");
-        };
-        bad(seq_cfg(2, 7, 10, 0.0), "window_rows of at least 8");
-        bad(seq_cfg(2, 20, 1, 0.0), "monitor_rows of at least 2");
-        for g in [0.5, -0.1, f64::NAN, f64::INFINITY] {
-            bad(
-                seq_cfg(2, 20, 10, g),
-                "boundary_gamma must be from 0 to 0.49",
-            );
-        }
-        // Past 0.49 the critical value's solve, whose work grows as 1/(1/2 −
-        // γ), runs for minutes to hours in every process and on every load
-        // (review 2026-10-05, CD1): refused by `validate`, before it runs,
-        // and 0.49 itself kept. Read through `validate` alone, since the
-        // model a configuration builds solves for its critical value.
-        for g in [0.4999, 0.491, 0.49f64.next_up()] {
-            let e = seq_cfg(2, 20, 10, g).validate().unwrap_err();
-            assert!(
-                e.contains("boundary_gamma must be from 0 to 0.49"),
-                "{g}: {e}"
-            );
-            assert!(
-                e.contains("hours just under 0.5"),
-                "{g}: the message says why: {e}"
-            );
-        }
-        seq_cfg(2, 20, 10, 0.49).validate().unwrap();
-        bad(
-            CorrChangeCfg {
-                bandwidth: Some(0),
-                ..seq_cfg(2, 20, 10, 0.0)
-            },
-            "bandwidth must be at least 1, but it is 0",
-        );
-        // And a given critical value replaces the computed one.
-        let m = CorrChange::new(CorrChangeCfg {
-            crit: Some(2.5),
-            ..seq_cfg(2, 20, 10, 0.2)
-        })
-        .unwrap();
-        assert_eq!(m.seq_crit, 2.5);
-    }
-
-    // --- task 158: the mutation survivors --------------------------------
-
-    /// Each bound `validate` draws sits where its message puts it: `alpha`
-    /// strictly inside (0, 1), and every "at least" inclusive -- `span_rows`
-    /// 8 for `monitor` and `sequential` and 3 for `window`, `monitor_rows`
-    /// 2, `n_perm` 20, and a `perm_block` of the whole span.
-    #[test]
-    fn each_configuration_bound_is_where_its_message_puts_it() {
-        for alpha in [0.0, 1.0] {
-            let e = CorrChange::new(CorrChangeCfg {
-                alpha,
-                ..cfg(2, CorrChangeKind::Monitor)
-            })
-            .unwrap_err();
-            assert!(
-                e.contains("alpha must be above 0 and below 1"),
-                "{alpha}: {e}"
-            );
-        }
-        for ok in [
-            CorrChangeCfg {
-                span_rows: 8,
-                ..cfg(2, CorrChangeKind::Monitor)
-            },
-            seq_cfg(2, 8, 10, 0.0),
-            seq_cfg(2, 20, 2, 0.0),
-            CorrChangeCfg {
-                span_rows: 3,
-                ..cfg(2, CorrChangeKind::Window)
-            },
-            CorrChangeCfg {
-                n_perm: 20,
-                ..cfg(2, CorrChangeKind::Window)
-            },
-            CorrChangeCfg {
-                span_rows: 50,
-                perm_block: 50,
-                ..cfg(2, CorrChangeKind::Window)
-            },
-        ] {
-            let shown = format!("{ok:?}");
-            assert!(CorrChange::new(ok).is_ok(), "{shown}");
-        }
-    }
-
-    /// The output slots, named in the order they are emitted.
-    #[test]
-    fn the_labels_name_the_five_outputs_in_order() {
-        assert_eq!(
-            CorrChange::labels(),
-            ["stat", "crit", "flag", "since_flag", "since_change"]
-        );
-        assert_eq!(CorrChange::labels().len(), CorrChange::n_outputs_for());
-    }
-
-    /// The Kolmogorov distribution has a second series, the theta-function
-    /// form `√(2π)/x · Σ_{k≥1} exp(−(2k−1)²π²/(8x²))`, fast where the first is
-    /// slow (Feller 1948, eq. 1.4; Marsaglia, Tsang & Wang 2003). The two
-    /// agree at every `x`: below the quantiles, where the first series needs
-    /// many terms, as much as at them.
-    #[test]
-    fn the_kolmogorov_series_is_the_theta_series() {
-        use std::f64::consts::PI;
-        for x in [0.3, 0.5, 0.7, 1.0, 1.3581, 2.0] {
-            let theta = (2.0 * PI).sqrt() / x
-                * (1..60)
-                    .map(|k| {
-                        let n = f64::from(2 * k - 1);
-                        (-(n * n) * PI * PI / (8.0 * x * x)).exp()
-                    })
-                    .sum::<f64>();
-            let got = kolmogorov_cdf(x);
-            assert!(
-                (got - theta).abs() < 1e-12,
-                "x = {x}: {got} against {theta}"
-            );
-        }
-    }
-
-    /// `since_flag` is the learned rows since the last flag, this row
-    /// included: the row's ordinal before any flag, counted again from the
-    /// row after one. A span that does not flag dates nothing.
-    #[test]
-    fn since_flag_counts_the_rows_since_the_last_flag() {
-        let t = 40usize;
-        let mut m = CorrChange::new(CorrChangeCfg {
-            span_rows: t,
-            ..cfg(2, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        let mut n = Normals::new(2);
-        let (mut last_flag, mut flags) = (0usize, Vec::new());
-        for i in 1..=4 * t {
-            // A break of 0 to 0.95 halfway through the second span.
-            let rho = if (t + t / 2..=2 * t).contains(&i) {
-                0.95
-            } else {
-                0.0
-            };
-            let out = m.step(&n.pair(rho), &[], 1.0, 1.0).pred;
-            if i % t != 0 {
-                assert!(out[3].is_nan(), "row {i}: nothing off a span's last row");
-                continue;
-            }
-            assert_eq!(out[3], (i - last_flag) as f64, "row {i}");
-            if out[2] == 1.0 {
-                (last_flag, flags) = (i, [flags, vec![i]].concat());
-            } else {
-                assert!(out[4].is_nan(), "row {i}: no flag, no date");
-            }
-        }
-        assert_eq!(flags, [2 * t], "the break's span flags, and only it");
-    }
-
-    /// The window kind reports nothing until both windows are full, not even
-    /// its critical value. With `reset` a flag empties both, and the next
-    /// report waits for both again; without it a flag empties nothing.
-    #[test]
-    fn the_window_kind_waits_for_both_windows() {
-        let w = 10usize;
-        let reports = |crit: f64, reset: bool| {
-            let mut m = CorrChange::new(CorrChangeCfg {
-                span_rows: w,
-                crit: Some(crit),
-                reset,
-                ..cfg(2, CorrChangeKind::Window)
-            })
-            .unwrap();
-            let mut n = Normals::new(4);
-            (1..=6 * w)
-                .filter(|_| m.step(&n.pair(0.3), &[], 1.0, 1.0).pred[1].is_finite())
-                .collect::<Vec<usize>>()
-        };
-        let every: Vec<usize> = (2 * w..=6 * w).collect();
-        assert_eq!(reports(1e9, true), every, "nothing flags");
-        assert_eq!(reports(1e-9, false), every, "every report flags");
-        assert_eq!(reports(1e-9, true), [2 * w, 4 * w, 6 * w], "and resets");
-    }
-
-    /// With a fixed critical value no permutation is drawn: the generator
-    /// is where the seed put it, and no permutation value is held.
-    #[test]
-    fn a_fixed_critical_value_draws_no_permutations() {
-        let mut m = CorrChange::new(CorrChangeCfg {
-            span_rows: 10,
-            crit: Some(0.5),
-            ..cfg(2, CorrChangeKind::Window)
-        })
-        .unwrap();
-        let mut n = Normals::new(6);
-        for _ in 0..60 {
-            m.step(&n.pair(0.3), &[], 1.0, 1.0);
-        }
-        assert!(m.perm_crit.is_none());
-        assert_eq!(m.rng, SplitMix64::new(m.cfg.seed));
-    }
-
-    /// The permutation critical value is redrawn on its cadence: drawn after
-    /// the first row that fills both windows reports, then redrawn after
-    /// every `permute_every_rows`-th report, so each value is in force for
-    /// `permute_every_rows` reports, as the builder's docstring says. It was
-    /// in force for one more, so `1` redrew every other row (review
-    /// 2026-10-06, CD11; docs/PLAN.md task 196, S1).
-    #[test]
-    fn the_permutation_critical_value_is_redrawn_on_its_cadence() {
-        for (w, every) in [(10usize, 4usize), (10, 1), (6, 2)] {
-            let mut m = CorrChange::new(CorrChangeCfg {
-                span_rows: w,
-                crit: None,
-                permute_every_rows: every,
-                ..cfg(2, CorrChangeKind::Window)
-            })
-            .unwrap();
-            let mut n = Normals::new(8);
-            let crits: Vec<f64> = (0..2 * w + 5 * every)
-                .map(|_| m.step(&n.pair(0.3), &[], 1.0, 1.0).pred[1])
-                .collect();
-            assert!(crits[..2 * w].iter().all(|c| c.is_nan()), "{crits:?}");
-            let blocks: Vec<&[f64]> = crits[2 * w..].chunks(every).collect();
-            assert_eq!(blocks.len(), 5);
-            for (b, block) in blocks.iter().enumerate() {
-                assert!(
-                    block.iter().all(|c| *c == block[0]),
-                    "{every}: block {b}: {block:?}"
-                );
-                if b > 0 {
-                    assert_ne!(
-                        block[0],
-                        blocks[b - 1][0],
-                        "{every}: block {b} was not redrawn"
-                    );
-                }
-            }
-        }
-    }
-
-    /// A `sequential` state saved in its monitoring period is held to the
-    /// cfg's shape on load, each of the period's vectors on its own.
-    #[test]
-    fn each_monitoring_vector_is_held_to_its_shape_on_load() {
-        let mut m = CorrChange::new(seq_cfg(3, 20, 40, 0.0)).unwrap();
-        let mut n = Normals::new(12);
-        for _ in 0..25 {
-            m.step(&equicorrelated(&mut n, 3, 0.3), &[], 1.0, 1.0);
-        }
-        assert!(m.monitoring.as_ref().is_some_and(|mon| mon.rows.len() == 5));
-        type Spoil = (&'static str, fn(&mut Monitoring));
-        let cases: [Spoil; 6] = [
-            ("level", |mon| mon.level.push(0.0)),
-            ("scale", |mon| mon.scale.push(1.0)),
-            ("mean", |mon| mon.mean.push(0.0)),
-            ("m2", |mon| mon.m2.push(0.0)),
-            ("cross", |mon| mon.cross.push(0.0)),
-            ("a row", |mon| mon.rows[0].push(0.0)),
-        ];
-        for (what, spoil) in cases {
-            let mut bad = m.clone();
-            spoil(bad.monitoring.as_mut().unwrap());
-            match CorrChange::restore(&bad.state()) {
-                Err(crate::StateError::Invalid(e)) => {
-                    assert!(e.contains("wrong shape"), "{what}: {e}");
-                }
-                other => panic!("{what}: {other:?}"),
-            }
-        }
-        assert!(CorrChange::restore(&m.state()).is_ok());
-    }
-
-    /// `pair_at` walks the pairs `a < b`, `a` outer and `b` inner: the order
-    /// `level` holds them in.
-    #[test]
-    fn pair_at_walks_the_upper_triangle_in_order() {
-        for d in 2..=6usize {
-            let want: Vec<(usize, usize)> = (0..d)
-                .flat_map(|a| ((a + 1)..d).map(move |b| (a, b)))
-                .collect();
-            let got: Vec<(usize, usize)> =
-                (0..want.len()).map(|i| CorrChange::pair_at(d, i)).collect();
-            assert_eq!(got, want, "d = {d}");
-        }
-    }
-
-    fn scalar_monitor() -> CorrChange {
-        CorrChange::new(CorrChangeCfg {
-            span_rows: 8,
-            scalar: true,
-            ..cfg(3, CorrChangeKind::Monitor)
-        })
-        .unwrap()
-    }
-
-    fn column(us: &[f64]) -> Vec<Vec<f64>> {
-        us.iter().map(|&u| vec![u]).collect()
-    }
-
-    /// The scalar statistic needs four rows, as the pair one does
-    /// (`a_span_of_four_rows_is_the_first_with_a_long_run_sd`): three give
-    /// none, four give one.
-    #[test]
-    fn a_scalar_span_of_four_rows_is_the_first_with_a_statistic() {
-        let m = scalar_monitor();
-        let u = column(&[0.3, -0.2, 0.5, 0.1]);
-        assert!(m.scalar_stat(&u[..3]).is_nan());
-        let four = m.scalar_stat(&u);
-        assert!(four.is_finite() && four > 0.0, "{four}");
-    }
-
-    /// A series without spread has no long-run standard deviation and so no
-    /// statistic: eight values of 0.25, whose mean is exact, so every
-    /// deviation is exactly 0.
-    #[test]
-    fn a_constant_scalar_series_has_no_statistic() {
-        assert!(CorrChange::scalar_long_run_sd(&[0.25; 8], 2).is_nan());
-        assert!(scalar_monitor().scalar_stat(&column(&[0.25; 8])).is_nan());
-    }
-
-    /// The scalar CUSUM's argmax is the row, counted from 1, at which its
-    /// maximum is first reached. Here `(j/√T)·|ūⱼ − ū|` is the same double at
-    /// rows 1 and 2 (the steps between them are powers of two) and smaller
-    /// after, so the change is dated after row 1.
-    #[test]
-    fn the_scalar_cusum_dates_at_the_first_maximum() {
-        let (stat, at) =
-            scalar_monitor().scalar_stat_at(&column(&[1.0, 0.0, -0.5, 0.0, -0.5, 0.0, 0.0, 0.0]));
-        assert!(stat.is_finite() && stat > 0.0, "{stat}");
-        assert_eq!(at, 1);
-    }
-
-    /// The pair CUSUM's argmax is the first `j` at which its maximum is
-    /// reached. These ten integer rows (found by a search) have `ρ̂_T = 0`
-    /// exactly and `(j/√T)·|ρ̂ⱼ − ρ̂_T|` the same double at `j = 2` and `j = 4`
-    /// (`ρ̂₂ = −1`, `ρ̂₄ = −1/2`, and the steps between are powers of two),
-    /// the largest over the span, so the change is dated after row 2.
-    #[test]
-    fn the_pair_cusum_dates_at_the_first_maximum() {
-        let rows: Vec<Vec<f64>> = [
-            (3, -3),
-            (1, -2),
-            (0, -3),
-            (0, 0),
-            (2, 2),
-            (1, 2),
-            (3, -3),
-            (-1, -2),
-            (-1, -3),
-            (2, -3),
-        ]
-        .iter()
-        .map(|&(x, y)| vec![f64::from(x), f64::from(y)])
-        .collect();
-        let t = rows.len();
-        assert_eq!(CorrChange::corr_of(&rows, t, 0, 1), 0.0);
-        assert_eq!(CorrChange::corr_of(&rows, 2, 0, 1), -1.0);
-        assert_eq!(CorrChange::corr_of(&rows, 4, 0, 1), -0.5);
-        let m = CorrChange::new(CorrChangeCfg {
-            span_rows: t,
-            ..cfg(2, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        let (stat, at) = m.monitor_stat_at(&rows, 0, 1);
-        assert!(stat.is_finite() && stat > 0.0, "{stat}");
-        assert_eq!(at, 2);
-    }
-
-    /// `sequential`'s detector reports the first pair, in the walk order,
-    /// at which its largest ratio is reached: that pair dates the change. A
-    /// monitoring period built by hand, and a row at its means, so that
-    /// each pair's correlation is its co-moment over the root of its
-    /// second moments exactly: `±2/√(4·4) = ±1/2`, against levels 0 and
-    /// −1, ties the first two pairs at `|ρ − level| = 1/2`.
-    #[test]
-    fn the_sequential_detector_reports_the_first_pair_on_a_tie() {
-        let m = CorrChange::new(seq_cfg(3, 20, 40, 0.0)).unwrap();
-        let mon = Monitoring {
-            level: vec![0.0, -1.0, 0.0],
-            scale: vec![1.0; 3],
-            rows: vec![vec![0.0; 3]; 4],
-            mean: vec![0.0; 3],
-            m2: vec![4.0; 3],
-            cross: vec![2.0, -2.0, 0.0],
-        };
-        let (ratio, at) = m.sequential_stat(&mon, &[0.0, 0.0, 0.0]);
-        assert!(ratio.is_finite() && ratio > 0.0, "{ratio}");
-        assert_eq!(at, 0);
-    }
-
-    /// A `scalar` monitoring period of the given values of `u`.
-    fn scalar_period(us: &[f64]) -> Monitoring {
-        Monitoring {
-            level: vec![0.0],
-            scale: vec![1.0],
-            rows: column(us),
-            mean: vec![0.0],
-            m2: vec![0.0],
-            cross: vec![],
-        }
-    }
-
-    /// W&G's Eq. 8 for `scalar`, written out on the monitored values: `k̂`
-    /// maximises `j·|ūⱼ − ūₙ|` over the prefix means, the earliest `j` on a
-    /// tie, and the output is `n + 1 − k̂`. The first period's scores are 1,
-    /// 1, 0, 0; the others are shifted Gaussian series of several lengths.
-    #[test]
-    fn the_scalar_change_is_dated_by_eq_8() {
-        let m = CorrChange::new(CorrChangeCfg {
-            scalar: true,
-            ..seq_cfg(3, 20, 40, 0.0)
-        })
-        .unwrap();
-        let tie = scalar_period(&[1.0, 0.0, -1.0, 0.0]);
-        assert_eq!(m.sequential_since_change(&tie, 0), 4.0);
-        let mut n = Normals::new(31);
-        for trial in 0..20usize {
-            let (len, shift) = (10 + trial, 3 + trial % 6);
-            let us: Vec<f64> = (0..len)
-                .map(|i| n.normal() + if i >= shift { 2.0 } else { 0.0 })
-                .collect();
-            let mean = |j: usize| us[..j].iter().sum::<f64>() / j as f64;
-            let last = mean(len);
-            let (mut best, mut k_hat) = (f64::NEG_INFINITY, 0);
-            for j in 1..=len {
-                let score = j as f64 * (mean(j) - last).abs();
-                if score > best {
-                    (best, k_hat) = (score, j);
-                }
-            }
-            assert_eq!(
-                m.sequential_since_change(&scalar_period(&us), 0),
-                (len + 1 - k_hat) as f64,
-                "trial {trial}"
-            );
-        }
-    }
-
-    /// A window's correlations, as [`CorrChange::window_corr`] lays them out
-    /// after the means and the squared deviations, are [`CorrChange::corr_of`]'s
-    /// for each pair in the pairs' order, to the bit: on correlated columns,
-    /// one pair of them negatively; on two columns whose spreads are each a
-    /// number but whose product underflows to 0, where there is no
-    /// correlation to read, NaN and not the `±inf` of a sum over 0; and on
-    /// a column that is exactly `3 − 2x` of another, whose correlation is
-    /// `−1` by the definition.
-    #[test]
-    fn a_windows_correlations_are_each_pairs_own() {
-        let w = 20usize;
-        let mut n = Normals::new(31);
-        let windows: [Vec<Vec<f64>>; 3] = [
-            (0..w)
-                .map(|_| {
-                    let mut r = n.pair(-0.6);
-                    r.push(n.normal() + 0.4 * r[0]);
-                    r
-                })
-                .collect(),
-            (0..w)
-                .map(|_| {
-                    let mut r: Vec<f64> = n.pair(0.5).iter().map(|v| 1e-90 * v).collect();
-                    r.push(n.normal());
-                    r
-                })
-                .collect(),
-            (0..w)
-                .map(|_| {
-                    let x = n.normal();
-                    vec![x, 3.0 - 2.0 * x, n.normal()]
-                })
-                .collect(),
-        ];
-        let m = CorrChange::new(CorrChangeCfg {
-            span_rows: w,
-            crit: Some(0.5),
-            ..cfg(3, CorrChangeKind::Window)
-        })
-        .unwrap();
-        for (k, rows) in windows.iter().enumerate() {
-            let got = m.window_corr(w, |i| &rows[i]);
-            let pairs = [(0, 1), (0, 2), (1, 2)];
-            assert_eq!(got.len(), 6 + pairs.len());
-            for (p, &(a, b)) in pairs.iter().enumerate() {
-                let want = CorrChange::corr_of(rows, w, a, b);
-                assert!(
-                    same(got[6 + p], want),
-                    "window {k}, pair ({a}, {b}): {} vs {want}",
-                    got[6 + p]
-                );
-            }
-        }
-        // The cases: a negative correlation, a spread whose product
-        // underflows, and an exact line.
-        assert!(m.window_corr(w, |i| &windows[0][i])[6] < -0.3);
-        let tiny = m.window_corr(w, |i| &windows[1][i]);
-        assert!(tiny[3] > 0.0 && tiny[4] > 0.0 && tiny[3] * tiny[4] == 0.0);
-        assert!(tiny[6].is_nan() && tiny[7].is_finite());
-        let line = m.window_corr(w, |i| &windows[2][i])[6];
-        assert!((line + 1.0).abs() < 1e-12, "{line}");
-    }
-
-    /// The pairs run over slices of each row, the means and the sums (the
-    /// VM's P16, task 306): at widths from 2 to 40, every pair's correlation
-    /// is still [`CorrChange::corr_of`]'s to the bit, and each mean and sum
-    /// of squared deviations is the plain sum's.
-    #[test]
-    fn a_windows_correlations_are_each_pairs_own_at_every_width() {
-        let w = 30usize;
-        let mut n = Normals::new(306);
-        for d in [2usize, 3, 5, 16, 17, 40] {
-            let rows: Vec<Vec<f64>> = (0..w)
-                .map(|_| {
-                    let base = n.normal();
-                    (0..d)
-                        .map(|j| 2.0 + 0.3 * base + n.normal() * (1.0 + j as f64))
-                        .collect()
-                })
-                .collect();
-            let m = CorrChange::new(CorrChangeCfg {
-                span_rows: w,
-                crit: Some(0.5),
-                ..cfg(d, CorrChangeKind::Window)
-            })
-            .unwrap();
-            let got = m.window_corr(w, |i| &rows[i]);
-            assert_eq!(got.len(), 2 * d + d * (d - 1) / 2, "d {d}");
-            let mut p = 2 * d;
-            for a in 0..d {
-                let mean = rows.iter().fold(0.0, |s, r| s + r[a]) / w as f64;
-                assert_eq!(got[a].to_bits(), mean.to_bits(), "d {d}: mean {a}");
-                let ss = rows
-                    .iter()
-                    .fold(0.0, |s, r| s + (r[a] - mean) * (r[a] - mean));
-                assert_eq!(got[d + a].to_bits(), ss.to_bits(), "d {d}: squares {a}");
-                for b in a + 1..d {
-                    let want = CorrChange::corr_of(&rows, w, a, b);
-                    assert!(
-                        same(got[p], want),
-                        "d {d}, ({a}, {b}): {} vs {want}",
-                        got[p]
-                    );
-                    p += 1;
-                }
-            }
-        }
-    }
-
-    /// A window in which one pair has no correlation (a column constant in
-    /// the first window) gives no statistic under either norm: the L∞
-    /// norm's running maximum would otherwise pass over the NaN (`f64::max`
-    /// ignores one) and report the other pairs' largest.
-    #[test]
-    fn a_pair_without_a_correlation_leaves_no_window_statistic() {
-        let w = 20usize;
-        let mut n = Normals::new(14);
-        let rows: Vec<Vec<f64>> = (0..2 * w)
-            .map(|i| {
-                let mut r = n.pair(0.4);
-                r.push(if i < w { 1.5 } else { n.normal() });
-                r
-            })
-            .collect();
-        for norm in [ChangeNorm::L1, ChangeNorm::LInf] {
-            let m = |d: usize| {
-                CorrChange::new(CorrChangeCfg {
-                    span_rows: w,
-                    crit: Some(0.5),
-                    norm,
-                    ..cfg(d, CorrChangeKind::Window)
-                })
-                .unwrap()
-            };
-            assert!(m(3).window_stat(&rows).is_nan(), "{norm:?}");
-            assert!(
-                m(2).window_stat(&rows).is_finite(),
-                "{norm:?}: the first pair"
-            );
-        }
-    }
-
-    /// The window statistic is free of the columns' units: one column scaled
-    /// by a power of two gives the same statistic, to the bit. At `2^-270`
-    /// the column's sums of squares (`~2^-540`) are normal and their squares
-    /// are not, so no correlation of the column with itself could be formed
-    /// there; the statistic is over the pairs `a < b` alone.
-    #[test]
-    fn the_window_statistic_is_free_of_a_columns_units() {
-        let w = 20usize;
-        let mut n = Normals::new(15);
-        let rows: Vec<Vec<f64>> = (0..2 * w)
-            .map(|i| equicorrelated(&mut n, 3, if i < w { 0.2 } else { 0.6 }))
-            .collect();
-        for norm in [ChangeNorm::L1, ChangeNorm::LInf] {
-            let m = CorrChange::new(CorrChangeCfg {
-                span_rows: w,
-                crit: Some(0.5),
-                norm,
-                ..cfg(3, CorrChangeKind::Window)
-            })
-            .unwrap();
-            let base = m.window_stat(&rows);
-            assert!(base.is_finite() && base > 0.0, "{base}");
-            for e in [-270, 300] {
-                let s = 2f64.powi(e);
-                let scaled: Vec<Vec<f64>> =
-                    rows.iter().map(|r| vec![r[0], s * r[1], r[2]]).collect();
-                assert_eq!(m.window_stat(&scaled), base, "{norm:?} at 2^{e}");
-            }
-        }
-    }
-
-    /// The permutation null in blocks: three blocks have six orders, and two
-    /// hundred Fisher–Yates draws visit every one, so at a level that reads
-    /// the largest draw the critical value is the largest statistic over the
-    /// six orders, written out here, and at 50 % it is one of them below
-    /// that. The largest is at an odd order only, which a shuffle that only
-    /// ever composes 3-cycles would never reach.
-    #[test]
-    fn the_permutation_null_visits_every_block_order() {
-        let (w, block) = (3usize, 2usize);
-        let mut n = Normals::new(21);
-        let rows: Vec<Vec<f64>> = (0..2 * w).map(|_| n.pair(0.3)).collect();
-        let base = CorrChange::new(CorrChangeCfg {
-            span_rows: w,
-            crit: None,
-            n_perm: 200,
-            perm_block: block,
-            ..cfg(2, CorrChangeKind::Window)
-        })
-        .unwrap();
-        let orders = [
-            [0, 1, 2],
-            [0, 2, 1],
-            [1, 0, 2],
-            [1, 2, 0],
-            [2, 0, 1],
-            [2, 1, 0],
-        ];
-        let odd = [false, true, true, false, false, true];
-        let all: Vec<f64> = orders
-            .iter()
-            .map(|order| {
-                let shuffled: Vec<Vec<f64>> = order
-                    .iter()
-                    .flat_map(|&b| rows[b * block..(b + 1) * block].to_vec())
-                    .collect();
-                base.window_stat(&shuffled)
-            })
-            .collect();
-        let top = all.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        assert!(
-            all.iter().zip(odd).all(|(&s, o)| s < top || o),
-            "the largest must be at an odd order only: {all:?}"
-        );
-        // 0.005 over 200 draws: one may reach the observed statistic, so the
-        // critical value is the largest draw (0.001 is refused now: 200
-        // draws cannot flag at it).
-        for (alpha, at_top) in [(0.005, true), (0.5, false)] {
-            let mut m = CorrChange::new(CorrChangeCfg {
-                alpha,
-                ..base.cfg.clone()
-            })
-            .unwrap();
-            m.ring = rows.iter().cloned().collect();
-            let crit = m.permutation_crit().expect("both windows are full");
-            assert!(all.contains(&crit), "alpha {alpha}: {crit} not in {all:?}");
-            if at_top {
-                assert_eq!(crit, top, "alpha {alpha}");
-            } else {
-                assert!(crit < top, "alpha {alpha}: {crit} against {top}");
-            }
-        }
-    }
-
-    /// The monitor's statistic is the largest of its pairs': with three
-    /// columns and a break in the correlation of the first and the third
-    /// alone, it is that pair's -- not the first pair's, not the last's, not
-    /// the smallest.
-    #[test]
-    fn the_monitor_statistic_is_the_largest_pair() {
-        let t = 80usize;
-        let fresh = CorrChange::new(CorrChangeCfg {
-            span_rows: t,
-            ..cfg(3, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        let mut m = fresh.clone();
-        let mut n = Normals::new(16);
-        let rows: Vec<Vec<f64>> = (0..t)
-            .map(|i| {
-                let p = n.pair(if i < t / 2 { 0.0 } else { 0.9 });
-                vec![p[0], n.normal(), p[1]]
-            })
-            .collect();
-        let mut last = vec![];
-        for x in &rows {
-            last = m.step(x, &[], 1.0, 1.0).pred;
-        }
-        let q: Vec<f64> = [(0, 1), (0, 2), (1, 2)]
-            .iter()
-            .map(|&(a, b)| fresh.monitor_stat(&rows, a, b))
-            .collect();
-        assert!(q[1] > q[0] && q[1] > q[2], "{q:?}");
-        assert_eq!(last[0], q[1]);
-    }
-
-    /// The detector flags where it exceeds the critical value, not where it
-    /// meets it (W&G stop at `|V_k| > c·w(k/m)`): set to the largest
-    /// statistic of a cycle, the critical value lets that row pass, and
-    /// every row before it.
-    #[test]
-    fn a_statistic_at_the_critical_value_does_not_flag() {
-        let make = |crit: f64| {
-            CorrChange::new(CorrChangeCfg {
-                crit: Some(crit),
-                ..seq_cfg(2, 20, 30, 0.0)
-            })
-            .unwrap()
-        };
-        let mut n = Normals::new(18);
-        let rows: Vec<Vec<f64>> = (0..50).map(|_| n.pair(0.3)).collect();
-        let mut free = make(1e9);
-        let (mut at, mut top) = (0, f64::NEG_INFINITY);
-        for (i, x) in rows.iter().enumerate() {
-            let s = free.step(x, &[], 1.0, 1.0).pred[0];
-            if s > top {
-                (at, top) = (i, s);
-            }
-        }
-        assert!(top.is_finite() && at > 20, "{at}: {top}");
-        let mut held = make(top);
-        for (i, x) in rows.iter().enumerate().take(at + 1) {
-            let out = held.step(x, &[], 1.0, 1.0).pred;
-            assert_ne!(out[2], 1.0, "row {i}: {} against {top}", out[0]);
-            if i == at {
-                assert_eq!(out[0], top);
-            }
-        }
-    }
-
-    /// A row with a value that is not usable takes no place in a span
-    /// (`OnlineModel`, task 183), as a row of weight 0 takes none: with no
-    /// decay the test is exactly as it was, so the stream with the row is
-    /// the stream without it, and every span closes on the same learned row.
-    /// A row with a weight was counted in `n_eff` whatever its features
-    /// held, and fed to the scalar statistic's moments, where a NaN never
-    /// leaves. Under both readings of the row; for a feature that is not a
-    /// number, one past the input bound and a weight that is not usable.
-    #[test]
-    fn a_refused_row_takes_no_place_in_a_span() {
-        // Bytes, not `==`: a state holds a NaN where a statistic is not set.
-        let bytes = |m: &CorrChange| rmp_serde::to_vec(&m.state()).unwrap();
-        let mut s = 17u64;
-        let mut u = move || {
-            s = s
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
-        };
-        let rows: Vec<[f64; 3]> = (0..50).map(|_| [u(), u(), u()]).collect();
-        for scalar in [false, true] {
-            for (bad, w) in [
-                ([f64::NAN, 0.5, 0.1], 1.0),
-                ([0.5, -2.0 * crate::INPUT_BOUND, 0.1], 1.0),
-                ([0.5, 0.25, 0.1], f64::INFINITY),
-            ] {
-                let case = format!("scalar {scalar}, {bad:?} at weight {w}");
-                let c = CorrChangeCfg {
-                    span_rows: 20,
-                    scalar,
-                    ..cfg(3, CorrChangeKind::Monitor)
-                };
-                let mut with = CorrChange::new(c.clone()).unwrap();
-                let mut without = CorrChange::new(c).unwrap();
-                let mut closed = 0;
-                for (i, x) in rows.iter().enumerate() {
-                    if i == 30 {
-                        let ring = with.ring.clone();
-                        let out = with.step(&bad, &[], 1.0, w);
-                        assert_eq!(with.ring, ring, "{case}: the span took the row");
-                        assert!(
-                            !w.is_finite() || out.pred.iter().all(|v| v.is_nan()),
-                            "{case}: {out:?}"
-                        );
-                        assert_eq!(bytes(&with), bytes(&without), "{case}");
-                    }
-                    let d = if i == 0 { 0.0 } else { 1.0 };
-                    let a = with.step(x, &[], d, 1.0);
-                    let b = without.step(x, &[], d, 1.0);
-                    assert!(
-                        a.pred.len() == b.pred.len()
-                            && a.pred.iter().zip(&b.pred).all(|(p, q)| {
-                                p.to_bits() == q.to_bits() || (p.is_nan() && q.is_nan())
-                            }),
-                        "{case}, row {i}: {a:?} against {b:?}"
-                    );
-                    closed += usize::from(a.pred[0].is_finite());
-                }
-                assert_eq!(bytes(&with), bytes(&without), "{case}");
-                assert!(closed >= 2, "{case}: spans closed {closed}");
-            }
-        }
-    }
-
-    /// Task 252: under `scalar`, a row on every column's mean has no
-    /// standardised spread to read an equicorrelation from (`Σ r² = 0`), so
-    /// it has no scalar and reports nothing. With no decay the means of
-    /// `(1, 1)` and `(−1, −1)` are exactly 0.
-    #[test]
-    fn a_row_on_every_mean_has_no_scalar_and_reports_nothing() {
-        let mut m = CorrChange::new(CorrChangeCfg {
-            scalar: true,
-            ..cfg(2, CorrChangeKind::Monitor)
-        })
-        .unwrap();
-        m.step(&[1.0, 1.0], &[], 0.0, 1.0);
-        m.step(&[-1.0, -1.0], &[], 1.0, 1.0);
-        assert!(m.scalarise(&[0.5, -0.25]).is_finite());
-        assert!(m.scalarise(&[0.0, 0.0]).is_nan());
-        assert!(m.ring_row(&[0.0, 0.0], &mut [0.0]).is_none());
-        let out = m.predict(&[0.0, 0.0], 1.0);
-        assert!(out.pred.iter().all(|v| v.is_nan()), "{out:?}");
-    }
-
-    /// Task 252: a window whose every permuted statistic is undefined -- a
-    /// column that never moves has no correlation in any arrangement --
-    /// draws no critical value, and its rows report the statistic and the
-    /// critical value as NaN and no flag.
-    #[test]
-    fn a_permutation_with_no_defined_statistic_draws_no_critical_value() {
-        let w = 10;
-        let mut m = CorrChange::new(CorrChangeCfg {
-            span_rows: w,
-            n_perm: 20,
-            permute_every_rows: 1,
-            ..cfg(2, CorrChangeKind::Window)
-        })
-        .unwrap();
-        let mut n = Normals::new(5);
-        let mut reported = 0;
-        for i in 0..3 * w {
-            let full = m.ring.len() + 1 >= 2 * w;
-            let out = m.step(&[n.normal(), 1.0], &[], f64::from(u8::from(i > 0)), 1.0);
-            if full {
-                assert!(
-                    out.pred[0].is_nan() && out.pred[1].is_nan(),
-                    "row {i}: {out:?}"
-                );
-                assert_eq!(out.pred[2], 0.0, "row {i}: no flag");
-                reported += 1;
-            }
-            assert!(m.perm_crit.is_none(), "row {i}");
-        }
-        assert!(reported > w, "the windows filled: {reported}");
-        assert!(m.ring.len() >= 2 * w);
-    }
-
-    // --- task 278 (b09): the permutation quantile's knobs ----------------
-
-    /// Bonferroni at `alpha` is `"none"` at `alpha / npairs`, to the bit:
-    /// the critical value is a function of the one level each pair is
-    /// tested at, under `monitor` and under `sequential`, at three and at
-    /// ten pairs; and `"none"` at `alpha` itself is a smaller value, so the
-    /// equality is not the adjustment doing nothing.
-    #[test]
-    fn bonferroni_at_alpha_is_none_at_alpha_over_the_pairs() {
-        for d in [3usize, 5] {
-            let npairs = (d * (d - 1) / 2) as f64;
-            for kind in [CorrChangeKind::Monitor, CorrChangeKind::Sequential] {
-                let base = CorrChangeCfg {
-                    monitor_rows: 200,
-                    ..cfg(d, kind)
-                };
-                let split = CorrChangeCfg {
-                    alpha: 0.05 / npairs,
-                    alpha_adjust: "none".into(),
-                    ..base.clone()
-                };
-                let whole = CorrChangeCfg {
-                    alpha_adjust: "none".into(),
-                    ..base.clone()
-                };
-                let (b, s, w) = (
-                    base.fixed_crit().unwrap(),
-                    split.fixed_crit().unwrap(),
-                    whole.fixed_crit().unwrap(),
-                );
-                assert!(b.is_finite(), "{d} {kind:?}");
-                assert_eq!(b.to_bits(), s.to_bits(), "{d} {kind:?}: {b} vs {s}");
-                assert!(w < b, "{d} {kind:?}: {w} against {b}");
-                let m = CorrChange::new(base).unwrap();
-                assert_eq!(m.seq_crit.is_nan(), kind == CorrChangeKind::Monitor);
-            }
-        }
-    }
-
-    /// With `perm_block = window_rows` the pool is two blocks, so a draw is
-    /// the two windows as they are or swapped, and both give the observed
-    /// statistic (`|pre - post|` is symmetric): the critical value is that
-    /// statistic exactly, whatever the seed and the level. The generator
-    /// still moved, one swap draw per permutation.
-    #[test]
-    fn a_block_of_the_whole_window_leaves_only_the_observed_statistic() {
-        let w = 12usize;
-        let mut n = Normals::new(278);
-        let rows: Vec<Vec<f64>> = (0..2 * w).map(|_| n.pair(0.4)).collect();
-        for (seed, alpha) in [(0u64, 0.05), (7, 0.5), (11, 0.025)] {
-            let mut m = CorrChange::new(CorrChangeCfg {
-                span_rows: w,
-                perm_block: w,
-                n_perm: 40,
-                seed,
-                alpha,
-                ..cfg(2, CorrChangeKind::Window)
-            })
-            .unwrap();
-            m.ring = rows.iter().cloned().collect();
-            let observed = m.window_stat(&rows);
-            assert!(observed.is_finite() && observed > 0.0, "{observed}");
-            let crit = m.permutation_crit().expect("both windows are full");
-            assert_eq!(crit.to_bits(), observed.to_bits(), "seed {seed}");
-            let mut fresh = SplitMix64::new(seed);
-            for _ in 0..40 {
-                fresh.next_u64();
-            }
-            assert_eq!(m.rng, fresh, "seed {seed}: one draw per permutation");
-        }
-    }
-
-    /// The seed sets the draws and nothing else: on one pool, one seed
-    /// gives one critical value however often it is drawn from a fresh
-    /// model, two seeds give two, and at either seed the value falls as the
-    /// level rises (the same draws, a lower order statistic).
-    #[test]
-    fn the_seed_sets_the_draws_and_the_level_their_order_statistic() {
-        let w = 20usize;
-        let mut n = Normals::new(2780);
-        let rows: Vec<Vec<f64>> = (0..2 * w).map(|_| n.pair(0.3)).collect();
-        let crit_at = |seed: u64, alpha: f64| {
-            let mut m = CorrChange::new(CorrChangeCfg {
-                span_rows: w,
-                n_perm: 200,
-                seed,
-                alpha,
-                ..cfg(2, CorrChangeKind::Window)
-            })
-            .unwrap();
-            m.ring = rows.iter().cloned().collect();
-            m.permutation_crit().expect("both windows are full")
-        };
-        assert_eq!(crit_at(0, 0.05).to_bits(), crit_at(0, 0.05).to_bits());
-        assert_ne!(crit_at(0, 0.05), crit_at(7, 0.05));
-        for seed in [0u64, 7] {
-            let at: Vec<f64> = [0.01, 0.05, 0.2, 0.5]
-                .iter()
-                .map(|&a| crit_at(seed, a))
-                .collect();
-            assert!(at.windows(2).all(|p| p[1] < p[0]), "seed {seed}: {at:?}");
-        }
-    }
-
-    // --- Lemire's bounded draw (task 457, rule 5's seventeenth exception) ----
-
-    /// The draw's source as a script: each value in turn, and the count taken.
-    fn scripted(
-        values: &[u64],
-    ) -> (
-        impl FnMut() -> u64 + use<>,
-        std::rc::Rc<std::cell::Cell<usize>>,
-    ) {
-        let values = values.to_vec();
-        let taken = std::rc::Rc::new(std::cell::Cell::new(0usize));
-        let t = taken.clone();
-        (
-            move || {
-                let i = t.get();
-                t.set(i + 1);
-                values[i]
-            },
-            taken,
-        )
-    }
-
-    /// The low word of `x·n`, which the draw compares with `n` and then with
-    /// the threshold `2^64 mod n`.
-    fn low(x: u64, n: u64) -> u64 {
-        (u128::from(x) * u128::from(n)) as u64
-    }
-
-    /// A draw whose low word is at or above `n` is taken as it comes, and the
-    /// result is the high word of `x·n`, `⌊x·n / 2^64⌋`: the definition spelled
-    /// out for 64 values of `x` spread over the whole range and several `n`.
-    /// A low word of exactly `n` is not below the threshold `2^64 mod n < n`,
-    /// so it is kept whether the guard is `<` or `<=`: the guard's boundary
-    /// is the one place the two agree (`x = 1` gives low word `n` for every n
-    /// that is a unit mod 2^64's odd part: `x·n = n`).
-    #[test]
-    fn a_low_word_of_exactly_n_is_kept() {
-        for n in [1u64, 2, 3, 5, 7, 100, 1 << 20, (1 << 32) + 1, u64::MAX] {
-            assert_eq!(low(1, n), n);
-            let (next, taken) = scripted(&[1]);
-            assert_eq!(below_by(n, next), 0, "n {n}");
-            assert_eq!(taken.get(), 1, "n {n}: one value");
-        }
-    }
-
-    #[test]
-    fn a_draw_past_the_sliver_is_the_high_word_and_takes_one_value() {
-        for n in [1u64, 2, 3, 5, 7, 100, 1 << 20, (1 << 32) + 1, u64::MAX] {
-            for i in 0..64u64 {
-                let x = i.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(i << 58);
-                if low(x, n) < n {
-                    continue;
-                }
-                let (next, taken) = scripted(&[x]);
-                let want = ((u128::from(x) * u128::from(n)) >> 64) as u64;
-                assert_eq!(below_by(n, next), want, "n {n}, x {x}");
-                assert_eq!(taken.get(), 1, "n {n}, x {x}: one value");
-                assert!(want < n);
-            }
-        }
-    }
-
-    /// Both sides of the redraw threshold, exactly. For `n = 5` the threshold
-    /// is `2^64 mod 5 = 1`: the one `x` whose low word is 0 (`x = 0`) is
-    /// redrawn, and the `x` whose low word is 1 -- `x = 5⁻¹ mod 2^64`, at the
-    /// threshold, inside the `n` zone that triggers the division -- is not.
-    /// For `n = 3·2^62` (threshold `2^62`) low words are 0, `2^62`, `2^63`
-    /// and `n` itself by `x mod 4`: 0 is redrawn, `2^62` (at the threshold)
-    /// and `2^63` are kept, `n` (at the `n` bound, not under it) is kept
-    /// without the division.
-    #[test]
-    fn the_redraw_threshold_is_held_on_both_sides() {
-        // n = 5.
-        let n = 5u64;
-        assert_eq!(n.wrapping_neg() % n, 1);
-        let mut inv = 1u64; // Newton: 5⁻¹ mod 2^64
-        for _ in 0..7 {
-            inv = inv.wrapping_mul(2u64.wrapping_sub(n.wrapping_mul(inv)));
-        }
-        assert_eq!(low(inv, n), 1, "x at the threshold");
-        assert_eq!(low(0, n), 0, "x one under it");
-        let kept = 0x1234_5678_9abc_def0u64;
-        assert!(low(kept, n) >= n);
-        // Under the threshold: redrawn, the second value answers.
-        let (next, taken) = scripted(&[0, kept]);
-        assert_eq!(below_by(n, next), ((u128::from(kept) * 5) >> 64) as u64);
-        assert_eq!(taken.get(), 2, "a low word of 0 is under the threshold 1");
-        // At the threshold: kept, and its high word answers.
-        let (next, taken) = scripted(&[inv, kept]);
-        assert_eq!(below_by(n, next), ((u128::from(inv) * 5) >> 64) as u64);
-        assert_eq!(taken.get(), 1, "a low word of 1 is at the threshold 1");
-        // Two redraws in a row.
-        let (next, taken) = scripted(&[0, 0, kept]);
-        assert_eq!(below_by(n, next), ((u128::from(kept) * 5) >> 64) as u64);
-        assert_eq!(taken.get(), 3);
-
-        // n = 3·2^62: x mod 4 = 0, 3, 2, 1 give low words 0, 2^62, 2^63, n.
-        let n = 3u64 << 62;
-        assert_eq!(n.wrapping_neg() % n, 1 << 62);
-        let hi = |x: u64| ((u128::from(x) * u128::from(n)) >> 64) as u64;
-        let (x0, x3, x2, x1) = (4u64, 7, 6, 5);
-        assert_eq!(
-            [low(x0, n), low(x3, n), low(x2, n), low(x1, n)],
-            [0, 1 << 62, 1 << 63, n]
-        );
-        let (next, taken) = scripted(&[x0, x3]);
-        assert_eq!(below_by(n, next), hi(x3));
-        assert_eq!(taken.get(), 2, "0 is under the threshold 2^62");
-        for x in [x3, x2, x1] {
-            let (next, taken) = scripted(&[x]);
-            assert_eq!(below_by(n, next), hi(x), "x {x}");
-            assert_eq!(taken.get(), 1, "x {x}: at or past the threshold");
-        }
-    }
-
-    /// Over the model's generator: every draw is below `n`, `n = 1` is always
-    /// 0 and takes one value, and counts over `n` outcomes are as even as a
-    /// uniform draw gives (a chi-square statistic under its 99.99th
-    /// percentile, so the seeds are fixed and the test does not flake).
-    #[test]
-    fn a_draw_over_the_generator_is_uniform_and_below_n() {
-        let mut rng = SplitMix64::new(457);
-        for _ in 0..100 {
-            assert_eq!(below(&mut rng, 1), 0);
-        }
-        let mut fresh = SplitMix64::new(457);
-        for _ in 0..100 {
-            fresh.next_u64();
-        }
-        assert_eq!(rng, fresh, "n = 1 draws one value each");
-        // 0.9999 quantile of chi-square with 2, 6 and 99 degrees of freedom.
-        for (n, limit) in [(3u64, 18.43), (7, 27.86), (100, 156.0)] {
-            let draws = 200_000usize;
-            let mut counts = vec![0usize; n as usize];
-            for _ in 0..draws {
-                let j = below(&mut rng, n);
-                assert!(j < n);
-                counts[j as usize] += 1;
-            }
-            let expect = draws as f64 / n as f64;
-            let chi: f64 = counts
-                .iter()
-                .map(|&c| (c as f64 - expect).powi(2) / expect)
-                .sum();
-            assert!(chi < limit, "n {n}: chi-square {chi} past {limit}");
-        }
-    }
-
-    // --- the merged window statistic (task 328) ---------------------------
-
-    use crate::oracle::{U, centred_comoment, gamma, up};
-    use crate::window_moments::block_rows;
-
-    /// The rounding of the merged sums, as a multiple of `u`: a window's
-    /// co-moment `M_ab` is off the exact one by at most `γ_K·n·ρ_a·ρ_b`,
-    /// `ρ` a column's range over the window, `K = 8b + 29G + 123`, `b` the
-    /// block's rows and `G = ⌊w/b⌋`. Derived to first order in `u`
-    /// (Higham's model, every operation within `u` of its exact result):
-    ///
-    /// - every anchor is a row of the window and every mean lies in its
-    ///   range, so `|x − α|`, `|o|` and `|δ|` are at most `ρ`, and `|M_ab|`
-    ///   at most `n·ρ_a·ρ_b`;
-    /// - a block or a window's end read from its `r ≤ b` rows (two passes
-    ///   about its first row): the offset is off by `(r + 1)u·ρ`, a common
-    ///   shift whose first-order term in `M` vanishes, as `Σ(x − m) = 0`;
-    ///   each deviation is off by `2u·ρ` besides, and the products and
-    ///   their sum by `γ_r`: `|E| ≤ (r + 4)u·r·ρ_a·ρ_b`;
-    /// - a merge of `A` and `B`: `δ` is off by `e_A + e_B + 4uρ` (`e` an
-    ///   offset's error); the offset, kept against the larger part's anchor
-    ///   and moved by the smaller part's share `f ≤ 1/2`, is a convex
-    ///   combination of the parts' errors plus `(6f + 1)u·ρ ≤ 4u·ρ`; `M`
-    ///   adds `c·(ρ_a·Δδ_b + Δδ_a·ρ_b)`, `c = n_A n_B / n`, the rounding
-    ///   of `c·δ_a·δ_b` (`3u·c·ρρ`) and of the two sums, at most
-    ///   `u·(n_small + c + n)·ρρ`;
-    /// - the window's tree: a suffix fold and a prefix fold of `G` blocks
-    ///   at most, each merge's `c < b`, so `Σ c < n` over the folds, and
-    ///   three merges of the parts, `c ≤ n/4` each: `Σ c ≤ 1.75·n`; the
-    ///   depth is at most `G + 3`, so every offset is off by at most `(b +
-    ///   1 + 4(G + 3))u·ρ`; the sums' roundings total `(G + 6.5)·n·u·ρρ`.
-    ///
-    /// Adding up: `(b + 4) + 1.75·(4(b + 4G + 13) + 8) + 7 + (G + 6.5) ≤
-    /// 8b + 29G + 123`. The two-pass form over the `w` rows has `K = w + 2`
-    /// for the products and sums, and its mean, formed whole, is off by
-    /// `γ_{w+1}·max|x|`: a common shift whose square, `w·γ²_{w+1}·L_a·L_b`,
-    /// is the level's share of its error.
-    fn merged_k(b: usize, g: usize) -> usize {
-        8 * b + 29 * g + 123
-    }
-
-    /// One window's exact moments: `n·M` rounded once, entry `a·d + b`,
-    /// each column's range and largest magnitude.
-    struct Exact {
-        n: f64,
-        nm: Vec<f64>,
-        range: Vec<f64>,
-        level: Vec<f64>,
-    }
-
-    fn exact_window(rows: &[Vec<f64>]) -> Exact {
-        let d = rows[0].len();
-        let cols: Vec<Vec<f64>> = (0..d)
-            .map(|a| rows.iter().map(|r| r[a]).collect())
-            .collect();
-        let mut nm = vec![0.0; d * d];
-        for a in 0..d {
-            for b in 0..=a {
-                let v = centred_comoment(&cols[a], &cols[b]);
-                nm[a * d + b] = v;
-                nm[b * d + a] = v;
-            }
-        }
-        let range = cols
-            .iter()
-            .map(|c| {
-                let (lo, hi) = c
-                    .iter()
-                    .fold((f64::MAX, f64::MIN), |(l, h), &x| (l.min(x), h.max(x)));
-                (hi - lo) * up(1)
-            })
-            .collect();
-        let level = cols
-            .iter()
-            .map(|c| c.iter().fold(0.0f64, |m, x| m.max(x.abs())))
-            .collect();
-        Exact {
-            n: rows.len() as f64,
-            nm,
-            range,
-            level,
-        }
-    }
-
-    impl Exact {
-        fn corr(&self, a: usize, b: usize) -> f64 {
-            let d = self.range.len();
-            self.nm[a * d + b] / (self.nm[a * d + a] * self.nm[b * d + b]).sqrt()
-        }
-
-        /// `κ_a² = n·ρ_a²/M_aa`, rounded up.
-        fn kappa2(&self, a: usize) -> f64 {
-            let d = self.range.len();
-            self.n * self.n * self.range[a] * self.range[a] / self.nm[a * d + a] * up(4)
-        }
-
-        /// The most a correlation computed with co-moments off by
-        /// `e_ab·√(M_aa M_bb)` and `ε_a·M_aa` can be off the exact one,
-        /// three roundings beside: `(|r| + e)((1 + γ₃)/√((1 − ε_a)(1 −
-        /// ε_b)) − 1) + e`.
-        fn corr_bound(&self, a: usize, b: usize, e: f64, ea: f64, eb: f64) -> f64 {
-            assert!(ea < 0.5 && eb < 0.5, "no bound: {ea}, {eb}");
-            let r = self.corr(a, b).abs().min(1.0) * up(1);
-            ((r + e) * ((1.0 + gamma(3)) / ((1.0 - ea) * (1.0 - eb)).sqrt() - 1.0) + e) * up(8)
-        }
-
-        /// The merged form's bound on pair `(a, b)`.
-        fn merged(&self, a: usize, b: usize, k: usize) -> f64 {
-            let g = gamma(k);
-            let (ka, kb) = (self.kappa2(a), self.kappa2(b));
-            self.corr_bound(a, b, g * (ka * kb).sqrt(), g * ka, g * kb)
-        }
-
-        /// The two-pass form's.
-        fn two_pass(&self, a: usize, b: usize) -> f64 {
-            let d = self.range.len();
-            let w = self.n as usize;
-            let (g, s) = (gamma(w + 2), gamma(w + 1));
-            let (ka, kb) = (self.kappa2(a), self.kappa2(b));
-            let shift = |i: usize| {
-                self.n * self.n * s * s * self.level[i] * self.level[i] / self.nm[i * d + i]
-            };
-            let (sa, sb) = (shift(a) * up(6), shift(b) * up(6));
-            self.corr_bound(
-                a,
-                b,
-                g * (ka * kb).sqrt() + (sa * sb).sqrt(),
-                g * ka + sa,
-                g * kb + sb,
-            )
-        }
-    }
-
-    /// The exact statistic of two windows and how far a computed one may be
-    /// from it: each pair's correlations within `bound(window, a, b)`, the
-    /// norm's own rounding beside, and the oracle's (`γ₅` of each exact
-    /// correlation, four roundings and a square root's half of three).
-    fn exact_stat(
-        pre: &Exact,
-        post: &Exact,
-        norm: ChangeNorm,
-        bound: impl Fn(&Exact, usize, usize) -> f64,
-    ) -> (f64, f64) {
-        let d = pre.range.len();
-        let pairs = d * (d - 1) / 2;
-        let (mut s, mut sum, mut most) = (0.0f64, 0.0f64, 0.0f64);
-        for a in 0..d {
-            for b in (a + 1)..d {
-                let (x, y) = (pre.corr(a, b), post.corr(a, b));
-                let diff = (x - y).abs();
-                let beta = bound(pre, a, b) + bound(post, a, b) + gamma(5) * (x.abs() + y.abs());
-                match norm {
-                    ChangeNorm::L1 => {
-                        s += diff;
-                        sum += beta;
-                    }
-                    ChangeNorm::LInf => {
-                        s = s.max(diff);
-                        most = most.max(beta);
-                    }
-                }
-            }
-        }
-        let b = match norm {
-            ChangeNorm::L1 => (sum + 2.0 * gamma(pairs + 1) * (s + sum)) * up(4),
-            ChangeNorm::LInf => (most + 2.0 * U * (s + most)) * up(4),
-        };
-        (s, b)
-    }
-
-    /// `m` stepped over `rows[from..]`, `rows[..from]` its history, each
-    /// report held to the exact statistic within the merged form's bound,
-    /// and the two-pass form's over the same windows to its own; the worst
-    /// error of each and its share of its bound.
-    fn held_to_the_exact_statistic(
-        m: &mut CorrChange,
-        rows: &[Vec<f64>],
-        from: usize,
-    ) -> ([f64; 2], [f64; 2], usize) {
-        let w = m.cfg.span_rows;
-        let k = {
-            let sums = m.sums.as_ref().expect("merged");
-            let b = sums.block() as usize;
-            merged_k(b, w / b)
-        };
-        let (mut err, mut share, mut reports) = ([0.0f64; 2], [0.0f64; 2], 0);
-        for i in from..rows.len() {
-            let got = m.predict(&rows[i], 1.0).pred[0];
-            if i + 1 >= 2 * w {
-                let tail = &rows[i + 1 - 2 * w..=i];
-                let (pre, post) = (exact_window(&tail[..w]), exact_window(&tail[w..]));
-                let norm = m.cfg.norm;
-                let (want, bound) = exact_stat(&pre, &post, norm, |e, a, b| e.merged(a, b, k));
-                let (_, old_bound) = exact_stat(&pre, &post, norm, |e, a, b| e.two_pass(a, b));
-                let old = m.window_stat(tail);
-                for (j, (v, bd)) in [(got, bound), (old, old_bound)].into_iter().enumerate() {
-                    let e = (v - want).abs();
-                    assert!(
-                        e <= bd,
-                        "row {i}, form {j}: {v} vs exact {want}, off {e:e} past {bd:e}"
-                    );
-                    err[j] = err[j].max(e);
-                    share[j] = share[j].max(e / bd);
-                }
-                reports += 1;
-            } else {
-                assert!(got.is_nan(), "row {i}");
-            }
-            m.step(&rows[i], &[], 1.0, 1.0);
-        }
-        (err, share, reports)
-    }
-
-    /// A stream of `d` columns of scales 1 to 4 about `level`, with a
-    /// correlation break and, under `drift`, a level that walks a tenth of
-    /// a spread a row.
-    fn level_rows(seed: u64, d: usize, n: usize, level: f64, drift: bool) -> Vec<Vec<f64>> {
-        let mut g = Normals::new(seed);
-        (0..n)
-            .map(|i| {
-                let rho = if (i / 97) % 2 == 0 { 0.2 } else { 0.7 };
-                let walk = if drift { 0.1 * i as f64 } else { 0.0 };
-                equicorrelated(&mut g, d, rho)
-                    .iter()
-                    .enumerate()
-                    .map(|(j, v)| level + walk + (1.0 + j as f64 % 4.0) * v)
-                    .collect()
-            })
-            .collect()
-    }
-
-    /// The merged statistic is the exact one within its derived bound
-    /// ([`merged_k`]) on every report: at three widths, at the shortest
-    /// window that merges and two longer ones, at a level of 0, of 1e8 with
-    /// a spread of 1 (the case the two-pass form exists for: a mean formed
-    /// whole is off by the level's spacing, 1.5e-8), and of 1e8 drifting;
-    /// under both norms. The exact statistic is `oracle::centred_comoment`'s,
-    /// each window's `n·M` rounded once; the two-pass form over the same
-    /// windows is held to its own bound beside it. Measured 2026-11-05
-    /// (arm64): the merged form's worst error and share of its bound, then
-    /// the two-pass form's, are printed per case.
-    #[test]
-    fn the_merged_statistic_is_the_exact_one_within_its_bound() {
-        let mut worst = [0.0f64; 2];
-        for (d, seed) in [(2usize, 1u64), (4, 2), (7, 3)] {
-            let b = block_rows(d);
-            for w in [4 * b, 57, 160] {
-                for (level, drift) in [(0.0, false), (1e8, false), (1e8, true)] {
-                    let norm = if w == 57 {
-                        ChangeNorm::LInf
-                    } else {
-                        ChangeNorm::L1
-                    };
-                    let mut m = CorrChange::new(CorrChangeCfg {
-                        span_rows: w,
-                        crit: Some(0.5),
-                        norm,
-                        ..cfg(d, CorrChangeKind::Window)
-                    })
-                    .unwrap();
-                    assert!(m.sums.is_some(), "d {d}, w {w}: read whole");
-                    let rows = level_rows(seed, d, 2 * w + 3 * b * (w / b), level, drift);
-                    let (err, share, reports) = held_to_the_exact_statistic(&mut m, &rows, 0);
-                    assert!(reports > 2 * b, "{reports}");
-                    eprintln!(
-                        "d {d} w {w} level {level:e} drift {drift}: merged {:.2e} ({:.1e} of its bound), \
-                         two-pass {:.2e} ({:.1e})",
-                        err[0], share[0], err[1], share[1]
-                    );
-                    for j in 0..2 {
-                        worst[j] = worst[j].max(err[j]);
-                    }
-                }
-            }
-        }
-        eprintln!("worst: merged {:.2e}, two-pass {:.2e}", worst[0], worst[1]);
-    }
-
-    /// The sums are a function of the ring and the rows' numbers alone: a
-    /// state saved and loaded at every row reports the next row's statistic
-    /// to the bit, under a permutation critical value and under `reset`,
-    /// whose flags renumber the rows from 0; and its bytes hold the count.
-    #[test]
-    fn a_state_loaded_at_any_row_reports_the_merged_statistic_to_the_bit() {
-        let rows = level_rows(9, 3, 900, 5.0, false);
-        for reset in [false, true] {
-            let mut m = CorrChange::new(CorrChangeCfg {
-                span_rows: 30,
-                crit: if reset { Some(1.0) } else { None },
-                n_perm: 20,
-                permute_every_rows: 30,
-                reset,
-                ..cfg(3, CorrChangeKind::Window)
-            })
-            .unwrap();
-            assert!(m.sums.is_some());
-            let (mut flags, mut reports) = (0, 0);
-            for (i, r) in rows.iter().enumerate() {
-                let loaded = CorrChange::restore(&m.state()).unwrap();
-                assert_eq!(loaded.ring_rows, m.ring_rows, "row {i}");
-                let (a, b) = (m.predict(r, 1.0), loaded.predict(r, 1.0));
-                for (p, q) in a.pred.iter().zip(&b.pred) {
-                    assert!(
-                        same(*p, *q) && p.to_bits() == q.to_bits() || p.is_nan() && q.is_nan(),
-                        "row {i}: {p} vs {q}"
-                    );
-                }
-                let out = m.step(r, &[], 1.0, 1.0);
-                flags += usize::from(out.pred[2] == 1.0);
-                reports += usize::from(out.pred[0].is_finite());
-                if reset && out.pred[2] == 1.0 {
-                    assert_eq!((m.ring_rows, m.depth()), (0, 0), "row {i}");
-                }
-            }
-            assert!(reports > if reset { 200 } else { 800 }, "{reports}");
-            if reset {
-                assert!(flags >= 3, "reset {reset}: {flags} flags");
-            }
-            let bytes = rmp_serde::to_vec_named(&m.state()).unwrap();
-            let v = rmpv::decode::read_value(&mut bytes.as_slice()).unwrap();
-            let held = v
-                .as_map()
-                .unwrap()
-                .iter()
-                .find(|(k, _)| k.as_str() == Some("model"))
-                .unwrap()
-                .1
-                .clone();
-            let inner = &held.as_map().unwrap()[0].1;
-            let count = inner
-                .as_map()
-                .unwrap()
-                .iter()
-                .find(|(k, _)| k.as_str() == Some("ring_rows"));
-            assert_eq!(
-                count.and_then(|(_, v)| v.as_u64()),
-                Some(m.ring_rows),
-                "reset {reset}"
-            );
-        }
-    }
-
-    /// A window's state from before schema 66 holds no count: it is
-    /// numbered from its ring's oldest row, and goes on within the merged
-    /// form's bound of the exact statistic. A count below the ring's length
-    /// is refused, and the other kinds write none.
-    #[test]
-    fn a_window_state_before_66_is_numbered_from_its_oldest_row() {
-        let rows = level_rows(4, 4, 700, 1e8, false);
-        let mut m = CorrChange::new(CorrChangeCfg {
-            span_rows: 45,
-            crit: Some(0.5),
-            ..cfg(4, CorrChangeKind::Window)
-        })
-        .unwrap();
-        for r in &rows[..333] {
-            m.step(r, &[], 1.0, 1.0);
-        }
-        assert_eq!(m.ring_rows, 333);
-        let mut old = m.state();
-        old.schema_version = 65;
-        if let crate::ModelState::CorrChange(c) = &mut old.model {
-            c.ring_rows = 0;
-        }
-        let mut loaded = CorrChange::restore(&old).unwrap();
-        assert_eq!(loaded.ring_rows, 90, "numbered from the ring's oldest row");
-        let differ = rows[333..]
-            .iter()
-            .filter(|r| {
-                m.predict(r, 1.0).pred[0].to_bits() != loaded.predict(r, 1.0).pred[0].to_bits()
-            })
-            .count();
-        eprintln!("{differ} reports of the first row's numbering differ in their bits");
-        let (_, share, reports) = held_to_the_exact_statistic(&mut loaded, &rows, 333);
-        assert!(reports > 300 && share[0] <= 1.0);
-        let mut bad = m.state();
-        if let crate::ModelState::CorrChange(c) = &mut bad.model {
-            c.ring_rows = 89;
-        }
-        assert!(CorrChange::restore(&bad).is_err());
-        let monitor = CorrChange::new(cfg(2, CorrChangeKind::Monitor)).unwrap();
-        let bytes = rmp_serde::to_vec_named(&monitor.state()).unwrap();
-        assert!(
-            !bytes.windows(9).any(|w| w == b"ring_rows"),
-            "the monitor writes no count"
-        );
-    }
-
-    /// The merged sums hold no more numbers than the ring does, at every
-    /// width from 2 to 20 and three window lengths, on every row of three
-    /// passes of the windows; and below [`MIN_BLOCKS`] blocks a window is
-    /// read whole, to the bit of the two-pass form.
-    ///
-    /// [`MIN_BLOCKS`]: crate::window_moments::MIN_BLOCKS
-    #[test]
-    fn the_merged_sums_hold_no_more_than_the_ring() {
-        for d in 2..=20usize {
-            let b = block_rows(d);
-            for w in [4 * b, 100, 333] {
-                let mut m = CorrChange::new(CorrChangeCfg {
-                    span_rows: w,
-                    crit: Some(0.5),
-                    ..cfg(d, CorrChangeKind::Window)
-                })
-                .unwrap();
-                let rows = level_rows(d as u64, d, 6 * w, 0.0, false);
-                let mut most = 0usize;
-                for r in &rows {
-                    m.step(r, &[], 1.0, 1.0);
-                    most = most.max(m.sums.as_ref().unwrap().held());
-                }
-                // The suffixes, `2G` summaries at most, each no larger than
-                // its block's rows; and the two running prefixes.
-                let ring = 2 * w * d;
-                let prefixes = 2 * crate::window_moments::Layout::new(d).stride();
-                assert!(
-                    most <= ring + prefixes,
-                    "d {d}, w {w}: {most} numbers against the ring's {ring}"
-                );
-            }
-            let mut direct = CorrChange::new(CorrChangeCfg {
-                span_rows: 4 * b - 1,
-                crit: Some(0.5),
-                ..cfg(d, CorrChangeKind::Window)
-            })
-            .unwrap();
-            assert!(direct.sums.is_none());
-            let rows = level_rows(7, d, 20 * b, 3.0, false);
-            for (i, r) in rows.iter().enumerate() {
-                let got = direct.predict(r, 1.0).pred[0];
-                let w = 4 * b - 1;
-                let want = if i + 1 >= 2 * w {
-                    direct.window_stat(&rows[i + 1 - 2 * w..=i])
-                } else {
-                    f64::NAN
-                };
-                assert!(
-                    same(got, want) && got.to_bits() == want.to_bits()
-                        || got.is_nan() && want.is_nan(),
-                    "d {d}, row {i}"
-                );
-                direct.step(r, &[], 1.0, 1.0);
-            }
-        }
-    }
-
-    /// Under the merged sums, as when the windows are read whole: a column
-    /// constant over a window leaves no statistic under either norm (the
-    /// largest change of the pairs that have one is no change of every
-    /// pair), a column scaled by a power of two leaves it to the bit, and a
-    /// zero-weight or refused row takes no place in the windows, its own
-    /// report the one it would have made.
-    #[test]
-    fn the_merged_windows_keep_the_window_kinds_rules() {
-        let w = 40usize;
-        let c = CorrChangeCfg {
-            span_rows: w,
-            crit: Some(0.5),
-            ..cfg(3, CorrChangeKind::Window)
-        };
-        let mut g = Normals::new(17);
-        let rows: Vec<Vec<f64>> = (0..5 * w)
-            .map(|i| {
-                let mut r = equicorrelated(&mut g, 3, if i < 2 * w { 0.2 } else { 0.6 });
-                if (60..110).contains(&i) {
-                    r[2] = 0.1;
-                }
-                r
-            })
-            .collect();
-        for norm in [ChangeNorm::L1, ChangeNorm::LInf] {
-            let mut m = CorrChange::new(CorrChangeCfg { norm, ..c.clone() }).unwrap();
-            assert!(m.sums.is_some());
-            let mut scaled = [(-270, m.clone()), (300, m.clone())];
-            let (mut nan, mut finite) = (0, 0);
-            for (i, r) in rows.iter().enumerate() {
-                let got = m.step(r, &[], 1.0, 1.0).pred[0];
-                // Rows 60..110 hold the constant: a window of 40 inside them
-                // starts at rows 60..=70, the newer window of the reports on
-                // rows 99..=109 and the older of those on rows 139..=149.
-                if (99..=109).contains(&i) || (139..=149).contains(&i) {
-                    assert!(got.is_nan(), "{norm:?}, row {i}: {got}");
-                    nan += 1;
-                } else if i + 1 >= 2 * w {
-                    assert!(got.is_finite(), "{norm:?}, row {i}");
-                    finite += 1;
-                }
-                for (e, s) in &mut scaled {
-                    let f = 2f64.powi(*e);
-                    let x = [r[0], f * r[1], r[2]];
-                    let v = s.step(&x, &[], 1.0, 1.0).pred[0];
-                    assert!(
-                        v.to_bits() == got.to_bits() || v.is_nan() && got.is_nan(),
-                        "{norm:?}, row {i} at 2^{e}"
-                    );
-                }
-            }
-            assert!(nan == 22 && finite == 99, "{norm:?}: {nan} {finite}");
-        }
-        // A zero-weight and a refused row in a stream, against the stream
-        // without them: the same bytes and reports throughout.
-        let bytes = |m: &CorrChange| rmp_serde::to_vec(&m.state()).unwrap();
-        for (bad, weight) in [
-            (vec![1e6, -1e6, 0.0], 0.0),
-            (vec![f64::NAN, 0.5, 0.1], 1.0),
-            (vec![0.5, 0.25, 0.1], f64::INFINITY),
-        ] {
-            let mut with = CorrChange::new(c.clone()).unwrap();
-            let mut without = with.clone();
-            for (i, r) in rows.iter().enumerate() {
-                if i == 150 {
-                    let would = with.predict(&bad, 1.0);
-                    let out = with.step(&bad, &[], 1.0, weight);
-                    if weight == 0.0 {
-                        assert_eq!(out.pred[0].to_bits(), would.pred[0].to_bits(), "{bad:?}");
-                        assert!(out.pred[0].is_finite());
-                    }
-                    assert_eq!(bytes(&with), bytes(&without), "{bad:?}");
-                }
-                let (a, b) = (with.step(r, &[], 1.0, 1.0), without.step(r, &[], 1.0, 1.0));
-                assert!(
-                    a.pred
-                        .iter()
-                        .zip(&b.pred)
-                        .all(|(p, q)| p.to_bits() == q.to_bits() || p.is_nan() && q.is_nan()),
-                    "{bad:?} row {i}"
-                );
-            }
-            assert_eq!(with.ring_rows, rows.len() as u64);
-        }
-    }
-}
+#[path = "corrchange_clock_tests.rs"]
+mod clock_tests;
+
+#[cfg(test)]
+#[path = "corrchange_tests.rs"]
+mod tests;

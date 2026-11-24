@@ -16,9 +16,9 @@ pub(super) fn over_budget(
     key: &GroupKey,
     bytes: usize,
     cadence: rheon_core::Cadence,
-    learned: bool,
+    refused_at: Option<usize>,
 ) -> PolarsError {
-    polars_err!(ComputeError: "{}", over_budget_message(spec, key, bytes, cadence, learned))
+    polars_err!(ComputeError: "{}", over_budget_message(spec, key, bytes, cadence, refused_at))
 }
 
 /// The error for a state the data sizes (`hawkes`' window of clock units)
@@ -27,11 +27,7 @@ pub(super) fn over_budget(
 /// bank that raises it has learned part of the chunk, learning no event
 /// after the one before the cap, and marks itself `broken`.
 pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) -> PolarsError {
-    let group = key
-        .0
-        .as_deref()
-        .filter(|_| spec.group.is_some())
-        .map_or(String::new(), |g| format!(" group {g:?}"));
+    let group = super::group_label(spec, key);
     let fixed = crate::stream::fixed_span(spec);
     let given = match &spec.model {
         _ if fixed.is_some() => format!("{cap} bytes, {}", fixed.as_ref().map_or("", |f| f.cap)),
@@ -43,7 +39,27 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         }
+        | ModelKind::CorrChange {
+            max_state_bytes: Some(_),
+            ..
+        }
         | ModelKind::Garch {
+            max_state_bytes: Some(_),
+            ..
+        }
+        | ModelKind::Dcc {
+            max_state_bytes: Some(_),
+            ..
+        }
+        | ModelKind::Realized {
+            max_state_bytes: Some(_),
+            ..
+        }
+        | ModelKind::PowerVariation {
+            max_state_bytes: Some(_),
+            ..
+        }
+        | ModelKind::DdSketch {
             max_state_bytes: Some(_),
             ..
         }
@@ -62,6 +78,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
         | ModelKind::Sgd {
             max_state_bytes: Some(_),
             ..
+        }
+        | ModelKind::EwmMoments {
+            max_state_bytes: Some(_),
+            ..
         } => format!("max_state_bytes of {cap}"),
         _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
     };
@@ -78,16 +98,46 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             ModelKind::Expectile {
                 window_size: Some(w),
                 ..
+            }
+            | ModelKind::Realized {
+                window_size: Some(w),
+                ..
+            }
+            | ModelKind::PowerVariation {
+                window_size: Some(w),
+                ..
+            }
+            | ModelKind::EwmMoments {
+                window_size: Some(w),
+                ..
             } => (
                 format!("the rows inside window_size = {w}"),
                 "Shorten window_size",
             ),
+            ModelKind::CorrChange {
+                window_size: Some(w),
+                ..
+            } => (
+                format!("the rows inside window_size = {w}"),
+                "Shorten window_size, or give window_rows",
+            ),
             ModelKind::Garch {
+                start_span: Some(s),
+                ..
+            }
+            | ModelKind::Dcc {
                 start_span: Some(s),
                 ..
             } => (
                 format!("the rows of its start inside start_span = {s}"),
                 "Shorten start_span",
+            ),
+            ModelKind::Dcc {
+                margin_start_span: Some(s),
+                ..
+            } => (
+                format!("the rows of its margins' start inside margin_start_span = {s}"),
+                "Shorten margin_start_span",
             ),
             ModelKind::Expectile {
                 refit_span: Some(s),
@@ -118,6 +168,22 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
                 format!("the rows of its refit inside quantile_refit_span = {s}"),
                 "Shorten quantile_refit_span, or give quantile_refit_rows",
             ),
+            ModelKind::DdSketch {
+                window_size: Some(w),
+                ..
+            } => (
+                format!("the rows and buckets inside window_size = {w}"),
+                "Shorten window_size, or raise alpha",
+            ),
+            ModelKind::DdSketch { .. } => (
+                "the buckets the range of its values spans".to_string(),
+                "Raise alpha",
+            ),
+            // No window on the clock: the lag buffers are what the data sizes.
+            ModelKind::EwmMoments { .. } => (
+                "the rows its lags on the clock hold".to_string(),
+                "Shorten the lags or lag_tolerance",
+            ),
             _ => ("its window".to_string(), "Shorten the window"),
         },
     };
@@ -139,7 +205,7 @@ fn spacing_label(spec: &Spec, spacing: f64) -> String {
     match spec.model.window_cadence().and_then(|(every, _)| every) {
         Some(every) if every.value() == spacing => every.label(),
         Some(crate::span::Span::Duration(_)) => {
-            crate::span::format_duration((spacing * 1e9).round() as i64)
+            crate::span::format_duration((spacing * 1e9).round() as i128)
         }
         _ => crate::spec::num_label(spacing),
     }
@@ -184,14 +250,10 @@ pub(super) fn over_budget_message(
     key: &GroupKey,
     bytes: usize,
     cadence: rheon_core::Cadence,
-    learned: bool,
+    refused_at: Option<usize>,
 ) -> String {
     let mib = spec.model.window_budget().map_or(0.0, |b| b.mib());
-    let group = key
-        .0
-        .as_deref()
-        .filter(|_| spec.group.is_some())
-        .map_or(String::new(), |g| format!(" group {g:?}"));
+    let group = super::group_label(spec, key);
     let named = spec.model.window_parts().and_then(|(_, b)| b).is_some();
     let which = if named {
         format!("window_budget = {{\"refuse\": {mib}}}")
@@ -204,16 +266,22 @@ pub(super) fn over_budget_message(
     // Past the budget mid-chunk, the bank learned part of it: the setting
     // is the spec's, which a load compares, so the way out is a new bank
     // fitted from the start.
-    let (did, then) = if learned {
-        (
-            "the bank stopped after learning part of the chunk",
+    // Refused before any row was learned, the row that would take it past
+    // is named, counted from 0 in the chunk, and the bank is as it was.
+    let (hold, did, then) = match refused_at {
+        None => (
+            format!("hold {held} MiB"),
+            "the bank stopped after learning part of the chunk".to_string(),
             ", then build the bank again and fit it from the start of its input",
-        )
-    } else {
-        ("the bank refused the chunk", "")
+        ),
+        Some(row) => (
+            format!("would hold {held} MiB at the chunk's row {row}, counted from 0"),
+            "the bank refused the chunk and learned none of it".to_string(),
+            "",
+        ),
     };
     format!(
-        "spec {:?}{group}: the snapshots its hard window keeps hold {held} MiB, above {which}, \
+        "spec {:?}{group}: the snapshots its hard window keeps {hold}, above {which}, \
          so {did}. Set window_budget = {{\"refuse\": MiB}} to a larger number of MiB (inf, or \
          float(\"inf\") in Python, for no bound), {} to keep fewer snapshots, or set \
          window_budget = {{\"thin\": MiB}} to thin the snapshots in place of refusing{then}.",
@@ -250,10 +318,7 @@ pub(super) fn backwards_clock(
     // The step exactly: in integer nanoseconds on a temporal clock, where the
     // double of seconds resolves more than a nanosecond above about 104 days;
     // in integers on an integer clock (task 200).
-    let (step, below) = match (
-        refusal.back_ns.and_then(|ns| i64::try_from(ns).ok()),
-        refusal.back_int,
-    ) {
+    let (step, below) = match (refusal.back_ns, refusal.back_int) {
         (Some(ns), _) => {
             let s = crate::span::format_duration(ns);
             (s.clone(), s)
@@ -314,6 +379,19 @@ pub(super) fn non_finite_step(
     refusal: StepRefusal,
     rows: &crate::arrow::InputRows,
 ) -> PolarsError {
+    if refusal.removed {
+        return polars_err!(ComputeError:
+            "spec {:?}: clock column {:?} steps from {} to {} at row {} (counting from 0), \
+             and the time its gap_cap and session steps take out of the clock since its first \
+             row would pass the largest float, so the bank refused the chunk. Shift or rescale \
+             the clock column so that its values span less than the largest float.",
+            spec.name,
+            spec.clock.as_deref().unwrap_or("<row count>"),
+            crate::spec::num_label(refusal.prev),
+            crate::spec::num_label(refusal.now),
+            rows.at(refusal.row)
+        );
+    }
     polars_err!(ComputeError:
         "spec {:?}: clock column {:?} steps from {} to {} at row {} (counting from 0), a \
          difference too large for a float, so the bank refused the chunk. Shift or rescale the \
@@ -336,7 +414,7 @@ pub(crate) fn clock_amount(spec: &Spec, v: f64) -> String {
         .as_ref()
         .is_some_and(crate::span::Span::is_duration)
     {
-        crate::span::format_duration((v * 1e9).round() as i64)
+        crate::span::format_duration((v * 1e9).round() as i128)
     } else {
         crate::spec::num_label(v)
     }

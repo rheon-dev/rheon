@@ -36,6 +36,7 @@ ORACLE_MODULES = frozenset(
         "reference",
         "reference_paths",
         "reference_cluster",
+        "reference_ewm_moments",
         "convergence",
     }
 )

@@ -90,6 +90,15 @@ pub enum ModelState {
     Hawkes(Box<crate::Hawkes>),
     Expectile(Box<crate::Expectile>),
     Garch(Box<crate::Garch>),
+    Dcc(Box<crate::Dcc>),
+    Realized(Box<crate::Realized>),
+    StreamPca(Box<crate::StreamPca>),
+    PowerVariation(Box<crate::PowerVariation>),
+    TDigest(Box<crate::TDigestModel>),
+    DdSketch(Box<crate::DdSketchModel>),
+    EwmMoments(Box<crate::EwmMoments>),
+    Ar(Box<crate::Ar>),
+    Spectral(Box<crate::Spectral>),
 }
 
 #[derive(Debug, Error)]
@@ -212,6 +221,15 @@ impl ModelState {
             ModelState::Hawkes(_) => "hawkes",
             ModelState::Expectile(_) => "expectile",
             ModelState::Garch(_) => "garch",
+            ModelState::Dcc(_) => "dcc",
+            ModelState::Realized(_) => "realized",
+            ModelState::StreamPca(_) => "pca",
+            ModelState::PowerVariation(_) => "power_variation",
+            ModelState::TDigest(_) => "tdigest",
+            ModelState::DdSketch(_) => "ddsketch",
+            ModelState::EwmMoments(_) => "ewm_moments",
+            ModelState::Ar(_) => "ar",
+            ModelState::Spectral(_) => "spectral",
         }
     }
 }

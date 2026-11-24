@@ -19,6 +19,18 @@
 //! library's Page-Hinkley detector does, makes the same shift held for the
 //! same time count the same however many rows fall in it. The target mean is
 //! 0: the errors of a model that is right on average.
+//!
+//! **The false-alarm run depends on the clock's steps.** A step `d` scales
+//! the row's noise as well as its drift, so `d (z − k)` has variance `d²`,
+//! and the sums are reflected at 0 and tested against `h` only at the rows.
+//! At `h = 5`, `k = 0.5` and a mean step of 1, the average run on standard
+//! normal errors (2,000 simulated runs each) is 469 rows at steps of 1, 79
+//! at steps drawn from `Exp(1)`, and 30 at steps of 0.1 nine times in ten
+//! and 9.1 otherwise. Scaling the noise by `√d` instead, as a Brownian
+//! increment's, does not hold it either (472, 577 and 1,840 rows), since
+//! the reflection and the test at the rows alone still depend on the steps.
+//! Where a steady false-alarm rate matters, read the errors on a regular
+//! clock or a row clock.
 
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +62,20 @@ impl Cusum {
         (self.up, self.down)
     }
 
+    /// Whether a restored state keeps the shape every row relies on: `k`
+    /// finite and at least 0 and `h` finite and above 0, as a spec takes
+    /// them, and both sums finite and at least 0.
+    pub fn sound(&self) -> bool {
+        self.k.is_finite()
+            && self.k >= 0.0
+            && self.h.is_finite()
+            && self.h > 0.0
+            && self.up.is_finite()
+            && self.up >= 0.0
+            && self.down.is_finite()
+            && self.down >= 0.0
+    }
+
     pub fn reset(&mut self) {
         self.up = 0.0;
         self.down = 0.0;
@@ -57,7 +83,13 @@ impl Cusum {
 
     /// Feed one standardized error `z`, `d` clock units after the one before.
     /// Returns whether either sum passed `h`, and then starts both again.
+    ///
+    /// A step of 0 adds nothing to either sum, whatever `z`: `0 · ∞` would
+    /// be NaN, which `max(0, ·)` read as 0 and so wiped both.
     pub fn update(&mut self, z: f64, d: f64) -> bool {
+        if d == 0.0 {
+            return false;
+        }
         self.up = (self.up + d * (z - self.k)).max(0.0);
         self.down = (self.down + d * (-z - self.k)).max(0.0);
         if self.up > self.h || self.down > self.h {
@@ -73,6 +105,59 @@ impl Cusum {
 mod tests {
     use super::*;
     use crate::SplitMix64;
+
+    /// The false-alarm run depends on the clock's steps: on standard normal
+    /// errors, irregular steps of mean 1 (`Exp(1)`, and 0.1 or 9.1) run
+    /// shorter than steps of 1, which the module doc measures. Direction
+    /// alone is held (review 2026-11-23, DRIFT-3; the user, 2026-11-23:
+    /// keep `d (z − k)` and say so).
+    #[test]
+    fn irregular_steps_run_to_a_false_alarm_sooner_than_regular_ones() {
+        let run = |step: &dyn Fn(&mut SplitMix64) -> f64, seed: u64| -> f64 {
+            let mut g = SplitMix64::new(seed);
+            let mut total = 0u64;
+            let runs = 300;
+            for _ in 0..runs {
+                let mut c = Cusum::new(0.5, 5.0);
+                let mut n = 0u64;
+                loop {
+                    n += 1;
+                    let d = step(&mut g);
+                    if c.update(normal(&mut g), d) {
+                        break;
+                    }
+                }
+                total += n;
+            }
+            total as f64 / f64::from(runs)
+        };
+        let unit = run(&|_| 1.0, 11);
+        let exp = run(&|g| -(1.0 - g.uniform()).ln(), 11);
+        let bursty = run(&|g| if g.uniform() < 0.9 { 0.1 } else { 9.1 }, 11);
+        assert!(exp < unit, "Exp(1) {exp} against unit {unit}");
+        assert!(bursty < unit, "bursty {bursty} against unit {unit}");
+    }
+
+    /// A restored CUSUM whose numbers are not finite is refused, each on its
+    /// own (review 2026-11-23, DRIFT-5).
+    #[test]
+    fn a_restored_cusums_numbers_are_finite() {
+        let mut a = Cusum::new(0.5, 5.0);
+        a.update(1.5, 1.0);
+        assert!(a.sound());
+        for bad in [f64::NAN, f64::INFINITY] {
+            for edit in [
+                &(|c: &mut Cusum, v: f64| c.k = v) as &dyn Fn(&mut Cusum, f64),
+                &|c, v| c.h = v,
+                &|c, v| c.up = v,
+                &|c, v| c.down = v,
+            ] {
+                let mut d = a.clone();
+                edit(&mut d, bad);
+                assert!(!d.sound(), "{d:?}");
+            }
+        }
+    }
 
     /// A standard normal by Box-Muller from a seeded `SplitMix64`.
     fn normal(g: &mut SplitMix64) -> f64 {
@@ -140,6 +225,10 @@ mod tests {
                 let mut n = 0u64;
                 loop {
                     n += 1;
+                    // A run is geometric-like: 100,000 rows is hundreds of
+                    // times its mean, so a detector that never flags fails
+                    // here and does not hang.
+                    assert!(n <= 100_000, "h = {h}: no flag in {n} rows");
                     if c.update(normal(&mut g), 1.0) {
                         break;
                     }
@@ -167,6 +256,7 @@ mod tests {
             let mut n = 0u64;
             while !c.update(normal(&mut g) + 1.0, 1.0) {
                 n += 1;
+                assert!(n <= 100_000, "no flag in {n} rows of a shift");
             }
             total += n + 1;
         }

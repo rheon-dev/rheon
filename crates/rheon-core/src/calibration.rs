@@ -204,6 +204,13 @@ pub struct Coverage {
     p: Vec<f64>,
     #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
     ring: VecDeque<f64>,
+    /// Under a horizon, the indicators' empirical lag 0, `Σ (ω d)²`: the
+    /// variance's fallback where the null's lag 0 leaves it at or below 0
+    /// ([`Self::wald`]). `None` without a horizon, and in a state saved
+    /// before it, which starts it at the null's `q (1 − q) Σ ω²` at its next
+    /// row (rule 5's thirty-first exception).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    g: Option<f64>,
 }
 
 impl Coverage {
@@ -217,6 +224,7 @@ impl Coverage {
             lags,
             p: vec![0.0; lags],
             ring: VecDeque::with_capacity(lags),
+            g: (lags > 0).then_some(0.0),
         }
     }
 
@@ -233,11 +241,23 @@ impl Coverage {
                 .all(|v| v.is_finite())
             && self.w >= 0.0
             && self.w2 >= 0.0
+            && self
+                .g
+                .is_none_or(|g| g.is_finite() && g >= 0.0 && self.lags > 0)
     }
 
     /// The clock moves on by a step whose decay is `lam`, with nothing
     /// scored.
     pub fn age(&mut self, lam: f64) {
+        // A state saved before the lag 0 was kept starts it at the null's,
+        // as it is read until then; it then decays as `Σ ω²` does, so the
+        // seed's share fades with the horizon's weight.
+        if self.lags > 0 && self.g.is_none() {
+            self.g = Some(self.q * (1.0 - self.q) * self.w2);
+        }
+        if let Some(g) = self.g.as_mut() {
+            *g *= lam * lam;
+        }
         self.w *= lam;
         self.w2 *= lam * lam;
         self.d *= lam;
@@ -265,6 +285,9 @@ impl Coverage {
         self.d += w * d;
         if self.lags > 0 {
             let u = w * d;
+            if let Some(g) = self.g.as_mut() {
+                *g += u * u;
+            }
             for (l, back) in self.ring.iter().enumerate() {
                 self.p[l] += u * back;
             }
@@ -280,8 +303,12 @@ impl Coverage {
     }
 
     /// The binomial Wald statistic of `coverage = q` at Kish's size, over
-    /// the long-run variance under a horizon: `None` before the first scored
-    /// row, and where the lag products leave no variance.
+    /// the long-run variance under a horizon: its lag 0 the null's `q (1 −
+    /// q) Σ ω²` where that leaves the variance above 0, and the indicators'
+    /// own `Σ (ω d)²` where it does not, which Bartlett's weights keep at or
+    /// above 0 (review 2026-11-23, DIAG-1: `[hit, miss, hit]` at `q = 0.9`
+    /// under 10 lags read a variance of −0.04 and no statistic). `None`
+    /// before the first scored row, and where the variance is 0.
     pub fn wald(&self) -> Option<f64> {
         if self.w2 <= 0.0 {
             return None;
@@ -293,7 +320,12 @@ impl Coverage {
             .enumerate()
             .map(|(l, v)| (1.0 - (l + 1) as f64 / l1) * v)
             .sum();
-        let var = self.q * (1.0 - self.q) * self.w2 + 2.0 * lagged;
+        let null = self.q * (1.0 - self.q) * self.w2 + 2.0 * lagged;
+        let var = if null > 0.0 {
+            null
+        } else {
+            self.g.unwrap_or(self.q * (1.0 - self.q) * self.w2) + 2.0 * lagged
+        };
         (var > 0.0).then(|| self.d * self.d / var)
     }
 }
@@ -301,6 +333,42 @@ impl Coverage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The review's case, `[hit, miss, hit]` at `q = 0.9` under 10 lags: the
+    /// null's lag 0 leaves the variance at −0.04, where the indicators' own
+    /// lag 0 is read; a stream whose null variance is positive reads it to
+    /// the bit (review 2026-11-23, DIAG-1).
+    #[test]
+    fn a_coverage_variance_the_lags_cancel_reads_the_indicators_own_lag_0() {
+        let mut c = Coverage::new(0.9, 10);
+        for y in [0.0, 2.0, 0.0] {
+            c.update(1.0, y, 1.0, 1.0);
+        }
+        let lagged: f64 =
+            c.p.iter()
+                .enumerate()
+                .map(|(l, v)| (1.0 - (l + 1) as f64 / 11.0) * v)
+                .sum();
+        let null = 0.09 * c.w2 + 2.0 * lagged;
+        assert!(null <= 0.0, "{null}");
+        let want = c.d * c.d / (c.g.unwrap() + 2.0 * lagged);
+        assert_eq!(c.wald(), Some(want));
+        let mut c = Coverage::new(0.9, 3);
+        for i in 0..50 {
+            c.update(1.0, if i % 7 == 0 { 2.0 } else { 0.0 }, 0.99, 1.0);
+        }
+        let lagged: f64 =
+            c.p.iter()
+                .enumerate()
+                .map(|(l, v)| (1.0 - (l + 1) as f64 / 4.0) * v)
+                .sum();
+        let null = 0.9 * (1.0 - 0.9) * c.w2 + 2.0 * lagged;
+        assert!(null > 0.0);
+        assert_eq!(
+            c.wald().map(f64::to_bits),
+            Some((c.d * c.d / null).to_bits())
+        );
+    }
 
     fn lcg(state: &mut u64) -> f64 {
         *state = state

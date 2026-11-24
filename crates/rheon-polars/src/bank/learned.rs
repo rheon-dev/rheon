@@ -20,6 +20,11 @@ use crate::spec::Spec;
 pub struct Learned {
     specs: Vec<Spec>,
     lasts: Vec<Option<HashMap<GroupKey, ClockValue>>>,
+    /// Per spec under `group_close = "monotone"`, the largest group key the
+    /// bank has read and whether its keys order as numbers: a group below
+    /// it was learned and closed, and is gone from `lasts` (review
+    /// 2026-11-23, BANK-1).
+    marks: Vec<Option<(GroupKey, bool)>>,
 }
 
 impl Bank {
@@ -59,9 +64,11 @@ impl Bank {
                     .into(),
             );
         }
+        let marks = self.group_marks();
         Ok(Learned {
             specs: self.specs().to_vec(),
             lasts,
+            marks,
         })
     }
 }
@@ -95,13 +102,34 @@ fn refuse_a_clock_that_may_start_again(specs: &[Spec]) -> Result<(), String> {
     Ok(())
 }
 
+/// What one spec says of a row, from its group's last clock.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    /// Strictly before the last clock: the bank learned past it.
+    Before,
+    /// At the last clock, with a weight the spec learns from.
+    Tied,
+    /// At the last clock, with weight 0: it learns nothing and counts in no
+    /// clock, so replaying it is harmless.
+    TiedAtZero,
+    /// After the last clock, or in a group the spec has not seen, or on a
+    /// null clock or one that does not compare (a NaN): kept for the bank to
+    /// judge.
+    New,
+}
+
 impl Learned {
-    /// True on the rows of `df` the bank has not learned: in every spec that
-    /// reads a clock, a clock after its group's last one, a group the bank
-    /// has not seen, or a null clock, which is kept for the bank to judge. A
-    /// row at its group's last clock counts as learned. A temporal clock is
-    /// compared in the integer nanoseconds the bank keeps, and an integer
-    /// clock in integers (task 200).
+    /// True on the rows of `df` the bank has not learned. A row that some
+    /// spec reads strictly before that spec's group's last clock is dropped:
+    /// the bank is past it. Of the rest, a row is kept when at least one spec
+    /// has it after its group's last clock, in a group the spec has not seen,
+    /// or on a null clock (which is kept for the bank to judge), so that one
+    /// spec's tie at its last clock does not hide a row another spec has not
+    /// learned; and when no spec has it so, kept too if it is a row of weight
+    /// 0 at a last clock and no spec learned it at a positive weight. A row
+    /// at its group's last clock otherwise counts as learned. A temporal
+    /// clock is compared in the integer nanoseconds the bank keeps, and an
+    /// integer clock in integers (task 200).
     ///
     /// # Errors
     ///
@@ -109,18 +137,37 @@ impl Learned {
     /// [`Bank::fit_predict`] says it; and a clock temporal in the frame and
     /// numeric in the bank, or the other way round.
     pub fn unlearned(&self, df: &DataFrame) -> PolarsResult<BooleanChunked> {
-        let mut keep = vec![true; df.height()];
+        let n = df.height();
+        let (mut before, mut new) = (vec![false; n], vec![false; n]);
+        let (mut tied, mut tied_zero) = (vec![false; n], vec![false; n]);
         let chunk = chunk_from_frame(df, &self.specs)?;
-        for (spec, lasts) in self.specs.iter().zip(&self.lasts) {
+        for ((spec, lasts), mark) in self.specs.iter().zip(&self.lasts).zip(&self.marks) {
             let (Some(name), Some(lasts)) = (&spec.clock, lasts) else {
                 continue;
             };
             let clocks = chunk.clock(spec, name)?;
+            let weights = match &spec.weight {
+                Some(w) => Some(chunk.f64(spec, "weight", w)?),
+                None => None,
+            };
+            let mut seen = vec![false; n];
             for (key, rows) in group_indices(&chunk, spec)?.iter() {
-                let Some(last) = lasts.get(&key.to_key()) else {
+                let key = key.to_key();
+                let Some(last) = lasts.get(&key) else {
+                    // A group below the largest key a monotone close has
+                    // read was learned and closed, whatever its clock.
+                    if let Some((top, integer)) = mark
+                        && super::key_cmp(&key, top, *integer) == std::cmp::Ordering::Less
+                    {
+                        for &i in rows {
+                            seen[i] = true;
+                            before[i] = true;
+                        }
+                    }
                     continue;
                 };
                 for &i in rows {
+                    seen[i] = true;
                     let now = match clocks {
                         ClockArray::F64(a) => a.get(i).map(ClockValue::F64),
                         ClockArray::Nanos(a) => a.get(i).map(ClockValue::Ns),
@@ -132,37 +179,38 @@ impl Learned {
                         ClockArray::U64(a) => match a.get(i).map(i64::try_from) {
                             None => None,
                             Some(Ok(v)) => Some(ClockValue::I64(v)),
-                            Some(Err(_)) => continue,
+                            Some(Err(_)) => {
+                                new[i] = true;
+                                continue;
+                            }
                         },
                     };
-                    // At or before the last learned clock. A comparison
-                    // that is undefined -- a NaN clock -- is neither, and
-                    // keeps the row for the bank to refuse by row, as a
-                    // null is kept and as `ModelBank.skip_learned` keeps
-                    // it; read as "not after", it dropped the row in
-                    // silence (review round 5, C3).
-                    let not_after = |o: Option<std::cmp::Ordering>| {
-                        matches!(
-                            o,
-                            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
-                        )
-                    };
-                    let learned = match (now, last) {
-                        (None, _) => false,
+                    // A comparison that is undefined -- a NaN clock -- is
+                    // neither before nor at the last clock, and keeps the row
+                    // for the bank to refuse by row, as a null is kept and as
+                    // `ModelBank.skip_learned` keeps it; read as "not after",
+                    // it dropped the row in silence (review round 5, C3).
+                    let order = match (now, last) {
+                        (None, _) => None,
+                        // An infinite clock is no place on the clock either,
+                        // and is kept for the bank to refuse by row, as a NaN
+                        // is: read as before the last clock, `-inf` was
+                        // dropped in silence (review 2026-11-23, BANK-2).
+                        (Some(ClockValue::F64(now)), _) if !now.is_finite() => None,
                         (Some(ClockValue::F64(now)), ClockValue::F64(last)) => {
-                            not_after(now.partial_cmp(last))
+                            now.partial_cmp(last)
                         }
-                        (Some(ClockValue::Ns(now)), ClockValue::Ns(last)) => now <= *last,
-                        (Some(ClockValue::I64(now)), ClockValue::I64(last)) => now <= *last,
+                        (Some(ClockValue::Ns(now)), ClockValue::Ns(last)) => Some(now.cmp(last)),
+                        (Some(ClockValue::I64(now)), ClockValue::I64(last)) => Some(now.cmp(last)),
                         // An integer and a float clock are both numbers,
                         // compared as doubles, as `ModelBank.skip_learned`
                         // compares them; the bank refuses the chunk by its
                         // dtype (task 200).
                         (Some(ClockValue::I64(now)), ClockValue::F64(last)) => {
-                            not_after((now as f64).partial_cmp(last))
+                            (now as f64).partial_cmp(last)
                         }
                         (Some(ClockValue::F64(now)), ClockValue::I64(last)) => {
-                            not_after(now.partial_cmp(&(*last as f64)))
+                            now.partial_cmp(&(*last as f64))
                         }
                         (Some(now), _) => {
                             let (is, was) = match now {
@@ -178,12 +226,33 @@ impl Learned {
                             );
                         }
                     };
-                    if learned {
-                        keep[i] = false;
+                    let verdict = match order {
+                        Some(std::cmp::Ordering::Less) => Verdict::Before,
+                        Some(std::cmp::Ordering::Equal) => {
+                            if weights.is_some_and(|w| w.get(i) == Some(0.0)) {
+                                Verdict::TiedAtZero
+                            } else {
+                                Verdict::Tied
+                            }
+                        }
+                        _ => Verdict::New,
+                    };
+                    match verdict {
+                        Verdict::Before => before[i] = true,
+                        Verdict::Tied => tied[i] = true,
+                        Verdict::TiedAtZero => tied_zero[i] = true,
+                        Verdict::New => new[i] = true,
                     }
                 }
             }
+            // A group the spec has not seen is new to it.
+            for (i, seen) in seen.iter().enumerate() {
+                new[i] |= !seen;
+            }
         }
+        let keep: Vec<bool> = (0..n)
+            .map(|i| !before[i] && (new[i] || (tied_zero[i] && !tied[i])))
+            .collect();
         Ok(BooleanChunked::from_slice("unlearned".into(), &keep))
     }
 }
