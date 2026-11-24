@@ -191,6 +191,91 @@ model that only the new build has is listed as an addition and passes.
   The declared range `>=1.37.0,<3` is unchanged: rust `polars` 0.55.2 and
   `pyo3-polars` 0.28.0 are still the newest crates, and the wheel's own copy
   of Polars never meets the user's. `docs/VALIDATION.md` is regenerated on it.
+- **A row of weight 0 counts in no clock, on every model** (hard rule 9;
+  the user, 2026-11-21: "the next row should decay as if they were not
+  present"). Such a row is still predicted, as `predict` predicts it from
+  the rows before it, but no model sees it: the next row steps from the
+  last row that weighed more than 0, so it is one step on a row clock, one
+  gap under `gap_cap`, and one session change or step back for the session
+  and step-back rules; no model, window, diagnostic, readiness wait, `coef`
+  cadence or row held under `embargo` or `label_clock` counts it, and
+  `weight_sum` does not decay over it. Before, the row was stepped at
+  weight 0 and every memory decayed over its step, which moved every later
+  row of every model that decays: on a row clock by a step of its own, on
+  a time clock by the rounding of `λ^a·λ^b` against `λ^(a+b)` where no cap,
+  session or window intervened, and by a whole capped step where one did.
+  A zero-weight row that steps back is no longer refused or restarted on,
+  and one at a session change takes no session's rule. Under `embargo` and
+  `label_clock` it releases the held rows whose wait it has seen out before
+  it is scored, and is held for nothing and counts in no `max_held_rows` or
+  `labels_missing`, where it was held and learned as a step. Without
+  `coef_every`, `coef` sits on the chunk's last row of positive weight. The
+  data summary still counts the row (`rows_processed`, `rows_zero_weight`,
+  the clock's range), and the window formula kinds, which take no weights,
+  read every row as Polars' `ewm_mean_by` and `rolling_*_by` do. `audit`
+  counts nothing of such a row, its clock step included, and `hawkes`
+  keeps no carry of its own (its state is 8 bytes shorter). Measured by
+  `scripts/compare_outputs.py` against the build before (arm64, polars
+  2.0.0; 20 kinds, 8,000 rows, 3 groups, chunks of 700, gaps past the cap,
+  a save and load): a stream with no row of weight 0 moves 0 ulps on every
+  field; with 0.5% of the rows at weight 0, each fit field moves where it
+  moves by a median 2 to 8 ulps and at most 5.8e-11 relative (`huber`), and
+  `weight_sum` and `settled_frac` by up to 0.15 relative where a zero-weight
+  row sat in a gap past the cap; `ewridge` and `rls` on the smoke stream by
+  up to 1.1e-2 and 7.8e-2. On a row clock the moves are of the order of the
+  weights themselves. A state saved by an earlier build after rows of
+  weight 0 loads and goes on under the new rule, from the clock those rows
+  left (rule 5's twenty-fifth exception: on a time clock its fits within
+  3.4e-15 of a fresh run and `weight_sum` within 0.30, on a row clock its
+  fits within 0.31). `seqtest` moves only through the residuals it
+  compares: where two models' absolute residuals nearly tie, the moved
+  residuals can change which is smaller, and the win then counts on the
+  other side, so both win counts move by one and the leading side's
+  e-value moves from that row on (in the release workload, `kalman`
+  against `ridge`, whose residuals move from the zero-weight row 51 on:
+  row 158's `|resid_b| - |resid_a|` was 8.5e-4 and is now -1.2e-3, and
+  row 248's flips too). Moves: `bocpd.*`, `corrchange.*`, `deco.*`,
+  `ew_class.*`, `ew_cov.*`, `ewridge.*`, `ftrl.*`, `glm.*`, `hawkes.*`,
+  `hmm.*`, `holt.*`, `huber.*`, `kalman.*`, `kmeans.*`, `lasso.*`,
+  `marginal.*`, `micro.*`, `pa.*`, `quantile.*`, `rcov.*`, `rls.*`,
+  `seqtest.log_e_*`, `seqtest.wins_*`, `sgd.*`.
+- **`hmm` under `covariance_type` `"full"` and `"diag"`, in a model that
+  learns, forgets each state's covariance toward a prior,** where it kept a
+  ridge that decayed with the state's data (stabilized forgetting, Kulhavý
+  and Zarrop, 1993): a state reads `(W·M + P₀·diag(ψ))/(W + P₀)` after the
+  row's decay, with `ψ` the features' pooled within-state variance and
+  `P₀` the new spec option `prior_rows`, the number of features by default.
+  A state that wins no rows for a while reads a broad density near
+  `diag(ψ)`, where it collapsed onto its first row back: on simulated
+  streams a regime absent 20 to 500 half-lives was recovered in 136 of 144
+  `full` runs where 60 were (`diag`: 136 where 108), and three ways the
+  ridge went NaN are gone (a constant feature, a feature that sticks, long
+  gaps at 13 features or more). With no decay it is scikit-learn QDA's
+  `reg_param = P₀/(W + P₀)` toward `diag(ψ)`. From 13 features the factor
+  form moves its prior back by one factorization when it drifts 1/16 from
+  its target (a posterior within 0.009 of the exact recursion). With
+  `means` and `covs` given, each state's prior is the covariance it was
+  given, rescaled as the rows' variances move: where the regimes differ in
+  correlation alone a learning filter's share in the true state is 0.976,
+  where it was 0.948.
+  `precision_prior` stays required: the ridge under `"tied"` and with
+  `learn = False`, and elsewhere only where every `ψ` is 0. Schema 70: a
+  state saved earlier loads with a prior seeded from its moments and goes
+  on under it, not as the old build would. Moves: `hmm.filtered_state*`,
+  `hmm.predicted_state*`, `hmm.state`, `hmm.loglik`, `hmm.coef`.
+- **`ModelBank.skip_learned` and the command line's `--skip-learned` refuse a
+  spec with `session` or `restart_after_step_back` unless the caller
+  declares that the clock runs on,** by `skip_learned(frame,
+  clock_runs_on=True)`, `--clock-runs-on`, or the config key
+  `clock_runs_on = true`. They keep a row whose clock is after its group's
+  last one, which is right only where, within a group, the clock never goes
+  back. Those two settings let it start again lower, at a session change or
+  a large step back. On such a stream the rule dropped the next session's
+  unlearned rows (0 kept of 300 on three days whose clock restarts daily)
+  and kept learned ones, and the bank took them without a word. The input
+  and the state cannot tell that stream from one whose clock runs on across
+  sessions, where the rule is exactly right, so the caller says which. A
+  call that was right before, under those settings, now needs the argument.
 
 ### Added
 
@@ -830,94 +915,6 @@ model that only the new build has is listed as an addition and passes.
   1e80) and underflowed from one near 1e-154 (every prediction withheld);
   where that product is not a normal double the two roots are taken apart,
   and the filter is 4.1e-15 off statsmodels at every scale.
-
-### Changed
-
-- **A row of weight 0 counts in no clock, on every model** (hard rule 9;
-  the user, 2026-11-21: "the next row should decay as if they were not
-  present"). Such a row is still predicted, as `predict` predicts it from
-  the rows before it, but no model sees it: the next row steps from the
-  last row that weighed more than 0, so it is one step on a row clock, one
-  gap under `gap_cap`, and one session change or step back for the session
-  and step-back rules; no model, window, diagnostic, readiness wait, `coef`
-  cadence or row held under `embargo` or `label_clock` counts it, and
-  `weight_sum` does not decay over it. Before, the row was stepped at
-  weight 0 and every memory decayed over its step, which moved every later
-  row of every model that decays: on a row clock by a step of its own, on
-  a time clock by the rounding of `λ^a·λ^b` against `λ^(a+b)` where no cap,
-  session or window intervened, and by a whole capped step where one did.
-  A zero-weight row that steps back is no longer refused or restarted on,
-  and one at a session change takes no session's rule. Under `embargo` and
-  `label_clock` it releases the held rows whose wait it has seen out before
-  it is scored, and is held for nothing and counts in no `max_held_rows` or
-  `labels_missing`, where it was held and learned as a step. Without
-  `coef_every`, `coef` sits on the chunk's last row of positive weight. The
-  data summary still counts the row (`rows_processed`, `rows_zero_weight`,
-  the clock's range), and the window formula kinds, which take no weights,
-  read every row as Polars' `ewm_mean_by` and `rolling_*_by` do. `audit`
-  counts nothing of such a row, its clock step included, and `hawkes`
-  keeps no carry of its own (its state is 8 bytes shorter). Measured by
-  `scripts/compare_outputs.py` against the build before (arm64, polars
-  2.0.0; 20 kinds, 8,000 rows, 3 groups, chunks of 700, gaps past the cap,
-  a save and load): a stream with no row of weight 0 moves 0 ulps on every
-  field; with 0.5% of the rows at weight 0, each fit field moves where it
-  moves by a median 2 to 8 ulps and at most 5.8e-11 relative (`huber`), and
-  `weight_sum` and `settled_frac` by up to 0.15 relative where a zero-weight
-  row sat in a gap past the cap; `ewridge` and `rls` on the smoke stream by
-  up to 1.1e-2 and 7.8e-2. On a row clock the moves are of the order of the
-  weights themselves. A state saved by an earlier build after rows of
-  weight 0 loads and goes on under the new rule, from the clock those rows
-  left (rule 5's twenty-fifth exception: on a time clock its fits within
-  3.4e-15 of a fresh run and `weight_sum` within 0.30, on a row clock its
-  fits within 0.31). `seqtest` moves only through the residuals it
-  compares: where two models' absolute residuals nearly tie, the moved
-  residuals can change which is smaller, and the win then counts on the
-  other side, so both win counts move by one and the leading side's
-  e-value moves from that row on (in the release workload, `kalman`
-  against `ridge`, whose residuals move from the zero-weight row 51 on:
-  row 158's `|resid_b| - |resid_a|` was 8.5e-4 and is now -1.2e-3, and
-  row 248's flips too). Moves: `bocpd.*`, `corrchange.*`, `deco.*`,
-  `ew_class.*`, `ew_cov.*`, `ewridge.*`, `ftrl.*`, `glm.*`, `hawkes.*`,
-  `hmm.*`, `holt.*`, `huber.*`, `kalman.*`, `kmeans.*`, `lasso.*`,
-  `marginal.*`, `micro.*`, `pa.*`, `quantile.*`, `rcov.*`, `rls.*`,
-  `seqtest.log_e_*`, `seqtest.wins_*`, `sgd.*`.
-- **`hmm` under `covariance_type` `"full"` and `"diag"`, in a model that
-  learns, forgets each state's covariance toward a prior,** where it kept a
-  ridge that decayed with the state's data (stabilized forgetting, Kulhavý
-  and Zarrop, 1993): a state reads `(W·M + P₀·diag(ψ))/(W + P₀)` after the
-  row's decay, with `ψ` the features' pooled within-state variance and
-  `P₀` the new spec option `prior_rows`, the number of features by default.
-  A state that wins no rows for a while reads a broad density near
-  `diag(ψ)`, where it collapsed onto its first row back: on simulated
-  streams a regime absent 20 to 500 half-lives was recovered in 136 of 144
-  `full` runs where 60 were (`diag`: 136 where 108), and three ways the
-  ridge went NaN are gone (a constant feature, a feature that sticks, long
-  gaps at 13 features or more). With no decay it is scikit-learn QDA's
-  `reg_param = P₀/(W + P₀)` toward `diag(ψ)`. From 13 features the factor
-  form moves its prior back by one factorization when it drifts 1/16 from
-  its target (a posterior within 0.009 of the exact recursion). With
-  `means` and `covs` given, each state's prior is the covariance it was
-  given, rescaled as the rows' variances move: where the regimes differ in
-  correlation alone a learning filter's share in the true state is 0.976,
-  where it was 0.948.
-  `precision_prior` stays required: the ridge under `"tied"` and with
-  `learn = False`, and elsewhere only where every `ψ` is 0. Schema 70: a
-  state saved earlier loads with a prior seeded from its moments and goes
-  on under it, not as the old build would. Moves: `hmm.filtered_state*`,
-  `hmm.predicted_state*`, `hmm.state`, `hmm.loglik`, `hmm.coef`.
-- **`ModelBank.skip_learned` and the command line's `--skip-learned` refuse a
-  spec with `session` or `restart_after_step_back` unless the caller
-  declares that the clock runs on,** by `skip_learned(frame,
-  clock_runs_on=True)`, `--clock-runs-on`, or the config key
-  `clock_runs_on = true`. They keep a row whose clock is after its group's
-  last one, which is right only where, within a group, the clock never goes
-  back. Those two settings let it start again lower, at a session change or
-  a large step back. On such a stream the rule dropped the next session's
-  unlearned rows (0 kept of 300 on three days whose clock restarts daily)
-  and kept learned ones, and the bank took them without a word. The input
-  and the state cannot tell that stream from one whose clock runs on across
-  sessions, where the rule is exactly right, so the caller says which. A
-  call that was right before, under those settings, now needs the argument.
 
 ### Fixed
 
@@ -2314,19 +2311,6 @@ model that only the new build has is listed as an addition and passes.
   unmeasured here. Up to 12 features nothing changes, and an x86-64 CPU
   with AVX2 keeps faer's call from 9 to 12. Every output is unchanged to
   the bit.
-
-  our own, a column at a time with eight rows held in registers, where it
-  went through faer's call: the same products in the same order, so every
-  factor is faer's to the bit, without faer's dispatch and scratch. On
-  arm64 (Apple M4 Pro, both function layouts, each against the previous
-  build) a row takes 0.87 to 0.88 of the time at 20 features in `hmm` (two
-  states, full covariance) and `ew_cov`'s `mahal`, 0.90 to 0.91 in
-  `ew_class` (full and tied), 0.92 to 0.96 at 13 and 16, and 0.94 to 0.96 at
-  32; `bocpd` with a full covariance 0.96 at 16. Every other model that
-  factorizes a matrix of that size (`ewridge`, `deco` and the rest) takes
-  the same loop, unmeasured here. Up to 12 features nothing changes, and an
-  x86-64 CPU with AVX2 keeps faer's call from 9 to 12. Every output is
-  unchanged to the bit.
 - `ew_cov`'s `mahal` factorizes and solves in a working space its thread
   keeps, written over from row to row, where each row made a new matrix
   for the factor, another for the solve and two lists. On arm64 (Apple M4
@@ -2337,11 +2321,6 @@ model that only the new build has is listed as an addition and passes.
   features and 0.70 at 16. The space is one factor a thread, of the order
   it last read, not one a model, so a bank of many groups holds no more
   memory. Every output is unchanged to the bit.
-
-  same time at 10 to 16, where the factorization is most of a row. The
-  space is one factor a thread, of the order it last read, not one a model,
-  so a bank of many groups holds no more memory. Every output is unchanged
-  to the bit.
 
 ## [2.0.0] — 2026-11-19
 
