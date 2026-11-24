@@ -70,14 +70,16 @@ def test_the_hard_window_names_every_model_that_takes_one():
     snapshots = _taking("snapshot_every")
     assert snapshots <= windowed
     assert len(snapshots) > 1 and windowed - snapshots, "the split this test reads has changed"
-    section = _section(MODELS.read_text(), "#### A hard window\n")
+    section = _section(MODELS.read_text(encoding="utf-8"), "#### A hard window\n")
     assert windowed <= _named(section), sorted(windowed - _named(section))
     row = next(
-        line for line in FEATURES.read_text().splitlines() if line.startswith("| a hard window")
+        line
+        for line in FEATURES.read_text(encoding="utf-8").splitlines()
+        if line.startswith("| a hard window")
     )
     assert windowed <= _named(row), sorted(windowed - _named(row))
     for page in (FORGET, TIME_AND_DECAY):
-        text = page.read_text()
+        text = page.read_text(encoding="utf-8")
         assert snapshots <= _named(text), (page.name, sorted(snapshots - _named(text)))
 
 
@@ -110,7 +112,7 @@ def test_the_linear_models_of_the_diagnostics_are_those_that_take_the_residual_s
         except ValueError:
             continue
         takes.add(name)
-    text = DIAGNOSTICS.read_text()
+    text = DIAGNOSTICS.read_text(encoding="utf-8")
     sentence = text[text.index("The linear models are") :]
     sentence = sentence[: sentence.index(". ")]
     assert takes == _named(sentence), (

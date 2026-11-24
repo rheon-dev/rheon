@@ -975,7 +975,8 @@ def test_every_switch_moves_an_output(model, extra):
             assert not moved, f"{name} is pinned inert on {model} and moved {moved}"
             continue
         assert values, f"{name} moved no value {model} reports on its own"
-        if "window_size" in SWITCHES[name] and name != "window":
+        # A window of its own (`window, no decay`) is a window, not a ring switch.
+        if "window_size" in SWITCHES[name] and name not in ("window", "window, no decay"):
             # Against the window alone: the switch itself moves the ring.
             window = build(model, extra, **SWITCHES["window"])
             alone = unnested(rp.ModelBank([window]).fit_predict(df))

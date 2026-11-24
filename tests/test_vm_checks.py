@@ -278,7 +278,9 @@ def test_an_x86_wheel_is_built_with_the_releases_features():
     a VM check of `default` or `aligned` times that wheel, not the baseline
     SSE2 build only the compat wheel ships. Before, both layouts had no
     target features (PLAN 578j, CI-4)."""
-    release = yaml.safe_load((REPO / ".github" / "workflows" / "release.yml").read_text())
+    release = yaml.safe_load(
+        (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    )
     features = release["env"]["X86_FEATURES"]
     assert "+avx2" in features and "+fma" in features
     assert vm.release_x86_features() == features
