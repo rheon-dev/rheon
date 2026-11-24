@@ -207,6 +207,9 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         "isotonic",
         "isotonic",
         fullest("isotonic", **dict(FIT, features=["x0"]), window_size=50.0),
+        [],
+    ),
+    (
         "vector_ar",
         "vector_ar",
         fullest(
