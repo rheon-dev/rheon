@@ -1205,6 +1205,9 @@ STATE_READS: dict[str, frozenset[str]] = {
     "seqtest": frozenset({"log_e_pos_y", "log_e_neg_y", "n_pos_y", "n_neg_y"}),
 }
 ALWAYS_STATE = frozenset({"weight_sum", "withheld_reason"})
+#: The kinds whose `withheld_reason` reads the row as well as the state:
+#: `isotonic`'s fit is identified at the row's feature or not.
+REASON_READS_THE_ROW = frozenset({"isotonic"})
 #: The state reads that also read the clock from the last learned row to
 #: the row (task 278, D11): a held row sits ``E`` rows after it, where the
 #: undelayed run's row sits one, so these part from the shift by
@@ -1255,7 +1258,8 @@ class TestTheShiftOnARowClock:
         n = df.height
         # `marginal` writes `weight_sum` alone; its table is read from the
         # state.
-        state = (ALWAYS_STATE & set(held.columns)) | STATE_READS.get(kind, frozenset())
+        always = ALWAYS_STATE - ({"withheld_reason"} if kind in REASON_READS_THE_ROW else set())
+        state = (always & set(held.columns)) | STATE_READS.get(kind, frozenset())
         assert "weight_sum" in state and state <= set(held.columns), state - set(held.columns)
         for c in held.columns:
             if c in AFTER_THE_UPDATE:
@@ -1541,6 +1545,8 @@ DOUBLED: dict[str, dict] = {
     "tdigest": {},
     # A sketch of the same rows' buckets.
     "ddsketch": {},
+    # The same rows pooled in the same order, refit in full on each.
+    "isotonic": {},
     "spectral": {},
     "glm": {},
     # Its sums take each return in the order of the rows learned: a lesson
@@ -1723,8 +1729,10 @@ DRIFT = "drift_"
 #: The kinds the level shift halfway does not trip the detector on: `holt`
 #: follows a level, `ftrl` scores a probability against a 0/1 label, and
 #: `glm` scores a count whose spread grows with its level: the shift trips
-#: none of its flags on this stream (measured 2026-11-21).
-QUIET = frozenset({"holt", "ftrl", "glm"})
+#: none of its flags on this stream (measured 2026-11-21). `isotonic` fits
+#: the target on one of its two features, so its residuals carry the
+#: other's spread, and the shift trips no flag either (2026-11-24).
+QUIET = frozenset({"holt", "ftrl", "glm", "isotonic"})
 
 
 def scores_a_target(kind: str) -> bool:

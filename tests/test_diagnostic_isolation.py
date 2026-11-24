@@ -107,6 +107,13 @@ KINDS: dict[str, Builder] = {
     "sgd_huber": lambda **kw: rp.spec.sgd("m", loss="huber", learning_rate=0.02, **kw),
     # One lag of the target beside the features.
     "ar": lambda **kw: rp.spec.ar("m", lags=1, **kw),
+    # A monotone fit on the first feature alone, read at the nearer end
+    # beyond its rows; a curve, so no coefficients and no cadence for them.
+    "isotonic": lambda **kw: rp.spec.isotonic(
+        "m",
+        **{k: v for k, v in kw.items() if k != "coef_every"} | {"features": ["x0"]},
+        out_of_bounds="clip",
+    ),
 }
 
 ESSENTIAL_KINDS = ("ewridge", "sgd", "holt")

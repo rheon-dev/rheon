@@ -48,6 +48,9 @@ IDS = [m for m, _ in MODELS]
 
 #: The regressions this stream is not for, and why.
 LEFT_OUT = {
+    "isotonic": "its feature's level drifts with the target's, so every row's feature lies "
+    "past the rows before it, where a monotone fit has no value but its end's: no row "
+    "is read inside the fit, which is what it is for",
     "glm": "takes counts, never negative: its target cannot cross zero, and a "
     "negative one is refused by name",
 }

@@ -396,6 +396,9 @@ class TestPerTargetMinPeriods:
             "glm": lambda: rp.spec.glm("m", features=["x0"], family="gamma", **common),
             "expectile": lambda: rp.spec.expectile("m", features=["x0"], expectile=0.8, **common),
             "ar": lambda: rp.spec.ar("m", features=["x0"], lags=1, ridge=1e-6, **common),
+            "isotonic": lambda: rp.spec.isotonic(
+                "m", features=["x0"], out_of_bounds="clip", **common
+            ),
         }[kind]()
         if kind == "glm":
             # A Gamma amount is above 0.

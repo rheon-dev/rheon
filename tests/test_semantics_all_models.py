@@ -43,6 +43,9 @@ MODELS = [
     ("isotonic", {"features": ["x0"], "out_of_bounds": "clip"}),
 ]
 
+#: The regressions with no `coef`: `isotonic`'s fit is a curve.
+NO_COEF = frozenset({"isotonic"})
+
 #: A second configuration of a model above, swept through the same
 #: invariants: `ewridge` with the Gram update blocked (E51). The block is an
 #: implementation of the same model, so everything here has to hold for it
@@ -258,6 +261,12 @@ class TestWarmup:
         delay = dict(weight="w") if scheduled else {}
         if scheduled:
             df = df.with_columns(w=pl.Series([0.0] * 3 + [1.0] * (df.height - 3)))
+        if model in NO_COEF:
+            # A curve, not coefficients: no field to be empty, and no cadence
+            # for one.
+            out = run(model, extra, df, min_weight=5.0, **delay)
+            assert not [f for f in out.schema["m"].fields if f.name.startswith("coef")]
+            return
         out = run(model, extra, df, min_weight=5.0, coef_every=1, **delay)
         fields = [f.name for f in out.schema["m"].fields if f.name.startswith("coef")]
         assert fields, f"{model}: no coef field"

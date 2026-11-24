@@ -517,8 +517,7 @@ pub fn isotonic_cfg(
         Some(other) => {
             return Err(format!(
                 "isotonic: out_of_bounds must be \"nan\" or \"clip\", but it is {other:?}. \
-                 Use \"nan\" to withhold a feature beyond the rows learned, or \"clip\" to \
-                 read the nearer end of the fit."
+                 Use one of those words."
             ));
         }
     };

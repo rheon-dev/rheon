@@ -919,7 +919,9 @@ def _moved(a: pl.DataFrame, b: pl.DataFrame) -> list[str]:
 #: A switch a model takes that moves nothing by design: `holt` has no
 #: intercept to drop, and `test_spec_validation.py` pins `fit_intercept` as
 #: inert on it.
-INERT = frozenset({("holt", "no intercept")})
+#: `holt` fits a level and a trend, `isotonic` a curve: neither has an
+#: intercept for `fit_intercept` to act on.
+INERT = frozenset({("holt", "no intercept"), ("isotonic", "no intercept")})
 
 
 def _new_value(c: str, plain: pl.DataFrame, got: pl.DataFrame) -> bool:

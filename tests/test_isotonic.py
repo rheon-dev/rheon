@@ -46,7 +46,7 @@ from sklearn.isotonic import IsotonicRegression
 
 from rheon import polars as rp
 
-TIER = "mixed"
+TIER = "essential"
 
 #: The most a prediction parts from scikit-learn's where the bank computes
 #: scikit-learn's order but unfused, on targets of order 1: measured on

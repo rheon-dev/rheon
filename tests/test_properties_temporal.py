@@ -635,6 +635,17 @@ def clock_specs(draw, model: str, step: int, cap: int):
         kw |= maybe("window_size", 1, 60)
         if "window_size" in kw:
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
+    elif model == "isotonic":
+        # Task 573: one feature, a decay on the clock, a window of the clock
+        # with its edge or of rows, or both, read at the nearer end.
+        kw |= dict(targets=["y"], features=["x0"], out_of_bounds="clip")
+        kw["half_life"] = draw(st.sampled_from([float("inf"), steps(1, 30)]))
+        window = draw(st.sampled_from(["none", "rows", "clock"]))
+        if window == "rows":
+            kw["window_rows"] = draw(st.integers(1, 40))
+        elif window == "clock":
+            kw["window_size"] = steps(1, 60)
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)
