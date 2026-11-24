@@ -59,7 +59,7 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import ledger
 from rheon import polars as rp
 
-TIER = "essential"
+TIER = "mixed"
 
 M = 12
 H_LEVEL, H_TREND, H_SEASON, H_DAMP = 3.0, 20.0, 40.0, 30.0
@@ -513,6 +513,7 @@ OTHER_REASONS = [
     "scale_ratio_moved",
     "not_separated",
     "level_beyond_sample",
+    "negative_input",
 ]
 
 

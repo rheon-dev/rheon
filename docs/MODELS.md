@@ -2077,7 +2077,7 @@ and trend before the row: `forecast_<h>_<t> = l + b (s + Δ)` and
 `pred_<t>`. A span is a number of clock units, rows without a clock, or a
 duration such as `"30d"`, never a count of rows: the trend is per clock unit
 and the clock of rows to come is not known. No forecast variance is given.
-The variance of exponential smoothing's forecast (ETS with additive errors
+The variance of exponential smoothing's forecast (with additive errors
 and trend, `statsmodels`' `ETSModel`) counts the innovations of the rows
 within the span and assumes fixed gains. Here that holds only on evenly
 spaced rows of equal weight once the gains have stopped moving. There it

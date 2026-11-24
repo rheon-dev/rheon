@@ -92,8 +92,8 @@ def holt(
         ``forecast_sum_h5_<t>``); a dict names them. They are spans of the
         clock, never counts of rows: the trend is per clock unit, and the
         clock of the rows to come is not known. There is no forecast
-        variance: the variance of exponential smoothing's forecast (ETS
-        with additive errors and trend) counts the innovations of the rows
+        variance: the variance of exponential smoothing's forecast (with
+        additive errors and trend) counts the innovations of the rows
         within the span and assumes fixed gains, which holds here only on a
         clock of evenly spaced rows of equal weight, once the gains have
         stopped moving, and the model keeps no noise variance of its own. At most

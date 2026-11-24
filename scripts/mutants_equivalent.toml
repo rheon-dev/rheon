@@ -428,17 +428,6 @@ so `>= 0` admits nothing more; the first `>` is caught \
 
 [[equivalent]]
 file = "crates/rheon-core/src/bocpd.rs"
-function = "Bocpd::log_predictive"
-mutation = "replace || with &&"
-line_has = "if var.is_nan() || var <= 0.0 || nun <= 0.0 {"
-why = """both mutants let a NaN or non-positive variance through (`ν > 1` \
-keeps `nun` positive): its log density is then NaN (`z` or the constant is \
-infinite, and `∞ − ∞`), and a NaN in any run's term makes the row's \
-normaliser NaN, so `read` returns the same nulls and no update as the \
-early `None`"""
-
-[[equivalent]]
-file = "crates/rheon-core/src/bocpd.rs"
 function = "Bocpd::read"
 mutation = "replace > with >="
 line_has = "if pre[i] > 0.0 {"
