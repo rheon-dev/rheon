@@ -1306,9 +1306,14 @@ impl Queue {
                     q.pop(top, x);
                     // Looking ahead, the rows left are seen from the one that
                     // went: made again from the oldest of them once that is
-                    // too far back to read them (WIN-2).
-                    if !x.is_nan() && k.direction == Direction::Forward && q.faded() {
-                        let front = &self.front;
+                    // too far back to read them (WIN-2). Rows with no value
+                    // weigh nothing either way, and are not made again.
+                    let front = &self.front;
+                    if !x.is_nan()
+                        && k.direction == Direction::Forward
+                        && q.faded()
+                        && (0..top).any(|i| !front.x::<W>(i, j).is_nan())
+                    {
                         let tau: Vec<f64> = (0..top).rev().map(|i| front.tau[i]).collect();
                         q.rebuild_front(k, &tau, |i| front.x::<W>(top - 1 - i, j));
                     }

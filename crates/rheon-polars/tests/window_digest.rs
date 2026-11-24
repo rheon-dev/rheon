@@ -53,7 +53,14 @@ const MASKS: u64 = 0x8ab94abb9163ebc2;
 /// version byte and its checksum; the same run with the version written as
 /// 12 gave 0x1f2f972d03cf8ccc again (measured on the fold of 561 onto 565,
 /// W13), so no output bit and no other state byte moved.
-const BITS: u64 = 0x1faf5a77965e578a;
+/// 0x1faf5a77965e578a until PLAN 578d (review 2026-11-23, WIN-2): a
+/// quantile's sketch is anchored at the nearest row with a value, not the
+/// end row, so its stored weights move where that row is null. The CASE
+/// lines that move are grouped short windows, in a chunking that saves a
+/// state mid-stream; with the state bytes left out of the digest the run
+/// gives the build before's total (0xdc922818f4c86233 both), so no output
+/// bit moved.
+const BITS: u64 = 0x35af61ac52ba13af;
 /// Rows a case runs over.
 const ROWS: usize = 2000;
 
