@@ -102,12 +102,21 @@ pub(super) fn carlson(l: &mut [f64], f: &[f64], r: f64, e: &mut [f64]) {
     for j in 0..k {
         let fj = f[j];
         let next = alpha + fj * fj;
-        let a = (alpha / next).sqrt();
-        let both = alpha * next;
-        let b = if both.is_normal() {
-            fj / both.sqrt()
+        // An exact observation, `r = 0` (a noise of `1e-250` at a weight of
+        // `1e100`; review 2026-11-23, KAL-3): while `α` is 0 every `f` so far
+        // is 0 and so is `e`, and the update's limit as `r → 0` leaves a
+        // column with `f_j = 0` as it is and zeroes the first with `f_j ≠ 0`,
+        // where the formula reads `0/0`.
+        let (a, b) = if alpha == 0.0 {
+            (if fj == 0.0 { 1.0 } else { 0.0 }, 0.0)
         } else {
-            fj / next.sqrt() / alpha.sqrt()
+            let both = alpha * next;
+            let b = if both.is_normal() {
+                fj / both.sqrt()
+            } else {
+                fj / next.sqrt() / alpha.sqrt()
+            };
+            ((alpha / next).sqrt(), b)
         };
         for (lji, ei) in l[j * k..j * k + j + 1].iter_mut().zip(e.iter_mut()) {
             let c = *lji;
@@ -131,14 +140,32 @@ pub(super) fn factor_add(l: &mut [f64], x: &mut [f64]) {
         if xj == 0.0 {
             continue;
         }
-        let h = (ljj * ljj + xj * xj).sqrt();
-        let (cs, sn) = (ljj / h, xj / h);
+        let (cs, sn) = rotation(ljj, xj);
         for (lji, xi) in l[j * k..j * k + j + 1].iter_mut().zip(x.iter_mut()) {
             let (c, v) = (*lji, *xi);
             *lji = cs * c + sn * v;
             *xi = cs * v - sn * c;
         }
     }
+}
+
+/// The Givens rotation taking `(a, b)` to `(h, 0)`, `h = sqrt(a² + b²)`:
+/// `(a / h, b / h)`. The squares leave the doubles below `1.5e-154` (the
+/// rotation `0/0`, NaN) and above `1.3e154` (`(0, 0)`, which wrote zeros
+/// over the factor's row, a finite factor no check refuses; review
+/// 2026-11-23, KAL-2), so where their sum is not a normal number the pair
+/// is first scaled by its larger; elsewhere it is formed as it was, to the
+/// bit.
+fn rotation(a: f64, b: f64) -> (f64, f64) {
+    let h2 = a * a + b * b;
+    if h2.is_normal() {
+        let h = h2.sqrt();
+        return (a / h, b / h);
+    }
+    let big = a.abs().max(b.abs());
+    let (a, b) = (a / big, b / big);
+    let h = (a * a + b * b).sqrt();
+    (a / h, b / h)
 }
 
 /// `P = C Cᵀ = Lᵀ L`.
@@ -175,10 +202,16 @@ impl Kalman {
                     .into(),
             );
         }
-        if form == CovarianceForm::SquareRoot && self.form != CovarianceForm::SquareRoot {
+        // A diagonal `P`'s factor is its roots, and back again its squares
+        // (review 2026-11-23, KAL-4: the way back kept the roots).
+        let root = |v: f64| match form {
+            CovarianceForm::SquareRoot => v.sqrt(),
+            CovarianceForm::Covariance => v * v,
+        };
+        if form != self.form {
             for p in &mut self.p {
                 for i in 0..k {
-                    p[i * k + i] = p[i * k + i].sqrt();
+                    p[i * k + i] = root(p[i * k + i]);
                 }
             }
         }

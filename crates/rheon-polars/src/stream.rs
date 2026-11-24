@@ -331,6 +331,7 @@ impl AnyModel {
     ) {
         match (self, stamp) {
             (AnyModel::EwmMoments(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
+            (AnyModel::Hawkes(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
             _ => self.predict_into(x, y, d_clock, out),
         }
     }

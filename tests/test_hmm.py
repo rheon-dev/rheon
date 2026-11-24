@@ -377,6 +377,12 @@ def test_a_missing_exogenous_value_is_the_base_transition():
         ),
         ({"tvtp_coef": [[0.0] * 4, [0.0] * 4]}, "tvtp_coef needs exog_tvtp"),
         ({"exog_tvtp": "z"}, "needs tvtp_coef"),
+        # Review 2026-11-23, SPEC-2: a softmax of a value that is not finite
+        # (refused here by the builder; the Rust spec and TOML by the core).
+        (
+            {"exog_tvtp": "z", "tvtp_coef": [[0.0, float("inf"), 0.0, 0.0], [0.0] * 4]},
+            "tvtp_coef must hold finite numbers, but one of its values is infinite",
+        ),
         ({"emit_sigma": True}, "does not apply to hmm"),
         # docs/REVIEW-E54-E64.md H4: given states that cannot be filtered
         # with. Every row would be a solve failure and every output a null.

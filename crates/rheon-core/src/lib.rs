@@ -218,7 +218,10 @@ pub use glm::{
     default_glm_refit_rows, default_glm_refit_rows_within, default_glm_step_cap,
 };
 pub use hasher::{FixedHasher, FixedState};
-pub use hawkes::{Hawkes, HawkesCfg, MAX_STATE_BYTES as HAWKES_MAX_STATE_BYTES};
+pub use hawkes::{
+    Hawkes, HawkesCfg, MAX_STATE_BYTES as HAWKES_MAX_STATE_BYTES,
+    STATE_BYTES_CEILING as HAWKES_STATE_BYTES_CEILING,
+};
 pub use health::FeatureHealth;
 pub use hmm::{EwFactor, Hmm, HmmCfg, Stabilized};
 pub use holt::{

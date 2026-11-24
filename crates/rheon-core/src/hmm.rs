@@ -339,6 +339,15 @@ impl HmmCfg {
                         ));
                     }
                 }
+                // Given states are not seeded, so there is no warm-up to
+                // span, as the spec says (review 2026-11-23, HMM-5).
+                if self.warm_clock.is_some() {
+                    no.refuse(
+                        "hmm: warm_span does not apply when means and covs are given, since \
+                         the states are then not seeded from the first rows. Leave warm_span \
+                         out, or leave out means and covs.",
+                    );
+                }
                 if bad_m.is_none() && bad_c.is_none() && shaped {
                     // A state covariance that will not factorize has no
                     // density, so every row would be a solve failure and
@@ -400,16 +409,25 @@ impl HmmCfg {
                 if m.is_some() { "means" } else { "covs" }
             )),
         }
-        if let Some((a, b)) = &self.tvtp
-            && (a.len() != k * k || b.len() != k * k)
-        {
-            no.refuse(format!(
-                "hmm: tvtp_coef must hold two {k} by {k} matrices, but they have {} and {} \
-                 values. Give {} values for each, in row order.",
-                a.len(),
-                b.len(),
-                k * k
-            ));
+        if let Some((a, b)) = &self.tvtp {
+            if a.len() != k * k || b.len() != k * k {
+                no.refuse(format!(
+                    "hmm: tvtp_coef must hold two {k} by {k} matrices, but they have {} and {} \
+                     values. Give {} values for each, in row order.",
+                    a.len(),
+                    b.len(),
+                    k * k
+                ));
+            }
+            // Every row's transitions are a softmax of `A + B z`: one value
+            // that is not finite makes each of them NaN (review 2026-11-23,
+            // SPEC-2).
+            if let Some(v) = a.iter().chain(b).find(|v| !v.is_finite()) {
+                no.refuse(format!(
+                    "hmm: tvtp_coef must be finite, but it holds {v}. Replace {v} with a \
+                     finite value."
+                ));
+            }
         }
         // Under `tvtp` the counts are not learned, so the prior they would
         // be spread over is read by nothing (review 2026-10-06, CE4).
@@ -1517,12 +1535,15 @@ impl Hmm {
                 }
                 None => self.buffer.len() >= self.cfg.warm_rows,
             };
-            if due {
-                self.seed();
-            }
+            // The buffer's bytes with the row in, read before a seeding
+            // empties it: the row that seeds may be the one that passed half
+            // the cap (review 2026-11-23, HMM-5).
             if span.is_some() {
                 let (bytes, cap) = (self.warm_bytes(self.buffer.len()), self.warm_cap());
                 self.held_cap().note(bytes, cap);
+            }
+            if due {
+                self.seed();
             }
             return;
         }
@@ -1730,7 +1751,12 @@ impl Hmm {
             None => v,
         };
         for s in 0..self.cfg.k {
+            // A state of no weight adds nothing to the pool, where `0·∞`
+            // would add a NaN (review 2026-11-23, HMM-1).
             let w = match (self.states.get(s), comoments.get(s)) {
+                (Some(c), _) if c.n_eff() == 0.0 => 0.0,
+                (None, Some(_)) if self.factor_states[s].n_eff() == 0.0 => 0.0,
+                (None, None) if self.diag_states[s].n_eff() == 0.0 => 0.0,
                 (Some(c), _) => {
                     for (p, i) in pooled.iter_mut().zip(0..d) {
                         *p += c.n_eff() * unit(s, i, c.var(i));
@@ -1887,7 +1913,12 @@ impl Hmm {
                 };
                 if !moved {
                     f.restart_at_prior(&st.held, 1.0 / (f.n_eff() + p0), shape);
-                    self.solve_failures += 1;
+                    // Counted where the restart is kept: moves handed back
+                    // are made again by the next learned row, which counts
+                    // its own failure (review 2026-11-23, HMM-4).
+                    if saved.is_none() {
+                        self.solve_failures += 1;
+                    }
                 }
             }
         }
@@ -2032,7 +2063,13 @@ impl Hmm {
         let mut e = std::mem::take(&mut st.e);
         e.clear();
         e.resize(x.len(), 0.0);
+        // A state the row is not in adds nothing, where `0·∞` would add a
+        // NaN (review 2026-11-23, HMM-1); a sum past the doubles is refused
+        // by `observe`.
         fn add(e: &mut [f64], x: &[f64], p: f64, dev: impl Fn(usize, f64) -> f64) {
+            if p == 0.0 {
+                return;
+            }
             for (i, (ei, &xi)) in e.iter_mut().zip(x).enumerate() {
                 let dv = dev(i, xi);
                 *ei += p * dv * dv;
@@ -2061,6 +2098,9 @@ impl Hmm {
                     g: &[f64],
                     dev: impl Fn(usize, f64) -> f64,
                 ) {
+                    if p == 0.0 {
+                        return;
+                    }
                     for (i, ((ei, &xi), &gi)) in e.iter_mut().zip(x).zip(g).enumerate() {
                         let dv = dev(i, xi);
                         *ei += p * (dv * dv / gi);
@@ -2241,6 +2281,7 @@ impl crate::OnlineModel for Hmm {
                     || m.p.len() != k
                     || m.a.len() != k * k
                     || m.buffer.iter().any(|(x, _)| x.len() != d)
+                    || m.place.is_some() != m.cfg.warm_clock.is_some()
                 {
                     return Err(crate::model::damaged(
                         "hmm",
@@ -2327,6 +2368,9 @@ mod tests_shape;
 
 #[cfg(test)]
 mod tests_span;
+
+#[cfg(test)]
+mod review_tests;
 
 #[cfg(test)]
 mod tests {

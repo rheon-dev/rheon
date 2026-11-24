@@ -139,6 +139,103 @@ GLM-METRICS is batch c's.
 | DIAG-10 | (1) confirmed by reading, fixed: the twin fits' scratch threshold counts the intercept. (4) confirmed, fixed: a restored conformal band is held to its shape. (2), (3) not reached | `crates/rheon-core/src/conformal.rs::tests::a_restored_trackers_shape_is_checked` | 17c56d8e |
 | PY-10 | not reached | | |
 
+## Batch f: the state-space models: `hawkes`, `hmm`, `kalman`, `bocpd` (PLAN 578f)
+
+On `review-578f`, cut from `main` at 13f5ffe4. "Confirmed" means the
+named test failed on 13f5ffe4 for the review's reason. A test marked
+`should_panic` holds a confirmed defect whose fix is the user's call; it
+fails once the fix lands, and is then turned into a plain test. Test
+paths are under `crates/rheon-core/src/` unless they start with
+`crates/rheon-polars/` or `tests/`. HAWKES-1 is batch e's and HAWKES-7
+batch d's.
+
+| ID | verdict | test | commit |
+|---|---|---|---|
+| HAWKES-2 | confirmed (marks `1e8` and 1 dropped from the older block left `Q = -1`; a window emptied by the older block's rows kept its clock, and a quiet stretch of `1e16` put the next rows' times at `1e16` each, their gaps of 0.25 lost), fixed: an empty window's `R`, `b`, `Q` and `B` are 0 and its clock is 0, and the clock runs only while the window holds a row. The fit after the window empties is the definition's (`oracle::hawkes_system`) to `1e-12` | `hawkes/review_tests.rs::a_clock_window_that_empties_keeps_nothing_of_the_rows_that_left`, `::an_empty_clock_window_counts_no_clock` | 9ac7dbc0 |
+| HAWKES-3 | confirmed, all three, fixed: `max_state_bytes` is held to the 64 MiB ceiling in the core (`clock_span::check_max_state_bytes`) and in the spec; the core checks the default cap of 256 KB as a given one; a restored window of clock units past its cap is refused as damaged. `hawkes` is not in 2.0.0, so no released state meets the ceiling | `hawkes/review_tests.rs::the_state_cap_is_held_to_the_ceiling_and_the_default_is_checked`, `::a_restored_clock_window_past_its_cap_is_refused`; `crates/rheon-polars/tests/spec_refusals.rs::a_hawkes_window_past_its_state_cap_is_refused`; `tests/test_hawkes.py::test_the_window_is_held_to_the_groups_state_cap` | 9ac7dbc0 |
+| HAWKES-4 | confirmed (`half_life = 1e-310` built, and `G₀₀` was NaN from row 0), fixed by refusal: a rate `ln 2 / half_life` past the doubles, and decays two of which sum or multiply past them (`[1e160, 1e150]`); `1e-300` and `[1e150, 1e140]` are taken | `hawkes/review_tests.rs::a_rate_or_a_kernel_past_the_doubles_is_refused` | 9ac7dbc0 |
+| HAWKES-5 | confirmed (on a clock in tenths a row of weight 0 read the window at the last stamp moved on by its step; at a span of 0.9 the bank gave null where the step reads 50.94), fixed: `Hawkes::predict_at` reads the window at the row's own stamp, and the bank routes a scored row of a `hawkes` under `window_size` to it, as `ewm_moments`' | `hawkes/review_tests.rs::a_scored_row_reads_the_window_at_its_own_stamp`; `crates/rheon-polars/tests/hawkes_clock_window.rs::a_zero_weight_row_reads_the_window_at_its_own_stamp` | 9ac7dbc0 |
+| HAWKES-6 | confirmed, fixed: 64 and 200 bytes, 6,551 and 3,273 rows (each recomputed from `Hawkes::state_bytes`) | -- (docs/MODELS.md) | 9ac7dbc0 |
+| SPEC-2 | confirmed in Rust (a Rust or TOML spec took it; Python's builder refused it already, by its check of every list of numbers), fixed: `HmmCfg::validate` refuses a `tvtp_coef` value that is not finite | `hmm/review_tests.rs::a_tvtp_coefficient_that_is_not_finite_is_refused`; `tests/test_hmm.py::test_a_bad_spec_is_refused_by_name` (the builder's refusal) | 4e422563 |
+| HMM-1 | confirmed (`ŝ` NaN after a row `1e80` from a state given `1e-150` at a posterior of 0; infinite at a posterior of 0.5), fixed: a state the row is not in adds nothing, a row whose deviations leave the doubles ages `V` as a row of no weight does, and the seeding pools no state of no weight. The share forms the review gives for `take_up_factors` and `shrink` were not taken: `P₀ψ` overflows only at `prior_rows` past `1e108`, since `ψ` is at most `INPUT_BOUND²`, and the share form moves every prior by rounding | `hmm/review_tests.rs::a_deviation_past_the_doubles_leaves_the_prior_loadable` | 4e422563 |
+| HMM-2 | confirmed (`ψ` fell back to `precision_prior`, `1e-3`, a variance, under a shape), fixed: the fallback is 1 under a shape, the covariances as given; unserialized, so no state moves | `hmm/review_tests.rs::with_given_states_no_scale_falls_back_to_the_given_covariances` | 4e422563 |
+| HMM-3 | **confirmed; left for the user** (below): `diag(1e-20, 1e20)` in both states reads `7.9e-11` on the first row, where the same one ulp apart reads `1e-20` | `hmm/review_tests.rs::the_same_anisotropic_diagonal_in_every_state_reads_as_given_on_the_first_row` (`should_panic`) | 4e422563 |
+| HMM-4 | (2) confirmed (a failed move on a row of weight 0 counted two failures), fixed: counted only where the restart is kept. (1) the rule kept: a row that starts a state again keeps every move (the docstring says so), and the same gap on the next learned row would age that state out too | `hmm/review_tests.rs::a_failed_move_on_a_row_of_weight_0_is_not_counted` | 4e422563 |
+| HMM-5 | (1) confirmed in the core (the spec refused it), fixed: `warm_span` beside given states is refused. (2) confirmed, fixed: a place that does not match `warm_span` is damaged. (3) confirmed, fixed: the seeding row's bytes are read before the seeding empties the buffer. (4) confirmed for the compact encoding, **left for the user** with BOCPD-4 | `hmm/review_tests.rs::a_warm_span_beside_given_states_is_refused`, `::a_restored_place_matches_the_warm_span`, `::the_seeding_row_raises_the_half_cap_warning`, `::a_compact_state_with_a_skipped_middle_field_round_trips` (`should_panic`) | 4e422563 |
+| KAL-1 | not taken: core only (the bank never hands a model a row of weight 0), and past about 1,075 half-lives every weight underflows to 0 under any rule; `kalman/tests/gap_moments.rs::a_gap_split_by_zero_weight_rows_is_one_gap` states the boundary | -- | -- |
+| KAL-2 | confirmed (at `2^-530` the factor's update was off in the fifth digit; at `1.3e154` the row is zeroed), fixed: the rotation scales the pair by its larger where `l² + x²` is not a normal double, to the bit elsewhere | `kalman/tests/review.rs::the_factors_rank_one_update_holds_at_every_scale` | 6dd64679 |
+| KAL-3 | confirmed (`R/w = 1e-250/1e100 = 0`: the factor's `P` after the row was `1.3e-250` where the covariance form's is `2.0e-251`), fixed: Carlson's update at `α = 0` is its limit, a column with `f_j = 0` kept and the first other zeroed, as the covariance form's exact observation. The review's gate (`r > 0`) was not taken: it would refuse a row the covariance form learns | `kalman/tests/review.rs::an_exact_observation_is_the_same_in_both_forms` | 6dd64679 |
+| KAL-4 | confirmed (back from the square root, `P`'s diagonal held its roots), fixed: squared again, within an ulp of the start | `kalman/tests/review.rs::a_form_given_and_given_back_leaves_the_covariance_as_it_was` | 6dd64679 |
+| KAL-5 | confirmed on a state set by hand (the review's note: unreachable from the bank), fixed: the readout's gap noise stays off an open intercept | `kalman/tests/review.rs::a_diffuse_intercepts_readout_takes_no_noise_of_the_gap` | 6dd64679 |
+| KAL-6 | (2) **confirmed; left for the user** (below): rows that learn the features and observe no target opened the moments' floor on 16 of 20 such rows at a half-life of 5. (1) the documented rule: on a grid coarser than the half-life every row is "more than one half-life after a target was last learned" | `kalman/tests/review.rs::rows_with_no_target_leave_the_moments_floor_shut` (`should_panic`) | 6dd64679 |
+| KAL-7 | confirmed on a state set by hand (`c = 2000`, `P = v vᵀ` with `v ⊥ (1, c)`: `-9.3e-10`; a stream that shifted a feature by `1e5` of its scale did not reproduce it), fixed: `current_diagonal`'s intercept and `prior_quad` clamp a rounding below 0, as `coef_variance_of` does | `kalman/tests/review.rs::the_intercepts_variance_in_the_current_coordinates_is_never_below_0` | 6dd64679 |
+| BOCPD-1 | confirmed, both (a row of no share left the joint NaN; under `robust` the empty run's weight of 0 made every row after the first a failure), fixed: a weight of 0 passes its run on as it is, and a second pass whose joint is not a number refuses the row. The review's mode check is a `debug_assert`: once BOCPD-5's variance is a finite number above 0 the mode is too | `bocpd/review_tests.rs::a_row_of_no_share_leaves_the_joint_a_number`, `::a_robust_run_of_weight_0_passes_on_as_it_is` | 6d073513, 2a70fcc7 |
+| BOCPD-2 | confirmed (0.404 nats off on the review's values), fixed: a block's partial products are read where its least value is below `2^-127`, the only way one falls below the normal numbers (an overflowing partial stays infinite and the last one's range refuses it). The review's `[1e-35, 1e35]` was not taken: it moves every block outside it | `bocpd/review_tests.rs::a_sum_of_logs_holds_through_a_product_that_passes_the_subnormals` | 6d073513, 2a70fcc7 |
+| BOCPD-3 | confirmed (four failures at `d/τ = ∞`), fixed: a certain break, `ln H = 0`, `ln(1 − H) = −∞`; to the bit the reads of a step of `d/τ = 1e290` | `bocpd/review_tests.rs::a_clock_step_past_the_doubles_is_a_certain_break` | 6d073513 |
+| BOCPD-4 | confirmed for the compact encoding, which no file of the library is written in; **left for the user** (below) | `bocpd/review_tests.rs::a_compact_state_with_a_skipped_middle_field_round_trips` (`should_panic`) | 6d073513 |
+| BOCPD-5 | confirmed (12 failures in 12 rows at `ψ₀ = 1e308`; NaN from row 16 at `κ₀ = 1e307`), fixed in the share forms where the first forms leave the doubles, to the bit elsewhere: the variance, its log, the prior's pull, and the full scatter's scale. The oracle is the model's own scale equivariance: at `ψ₀ = 1e308` the run posterior is the one at `1e308 · 2^-1000`, to the rounding of a log, in every emission | `bocpd/review_tests.rs::a_large_prior_scale_reads_as_the_same_prior_at_a_smaller_scale`, `::a_heavy_prior_on_data_at_its_mean_reads_a_number` | 6d073513, 2a70fcc7 |
+
+**What moved.** `hawkes` alone: a window whose rows have all left now
+holds exactly nothing, a window's clock starts at its first event, and
+a row of weight 0 reads a window of clock units at its own stamp
+(`Moves: hawkes.intensity_*`). Every other fix leaves the bits of every
+row within the doubles as they were: each takes its new form only where
+the old one left them (a sum of squares, a variance, a product, a pull
+not a normal double; a weight of exactly 0; `α = 0`). Every state
+fixture loads, continues to the bit and re-saves byte for byte, v71 and
+older included; no fixture was regenerated.
+
+**Per-row cost** (arm64, release, the case's binary built from 13f5ffe4
+and from this branch, minimum of 6 to 12 interleaved runs of 4,000 rows,
+load 6 to 13, both code layouts): `bocpd` with 4 features, `max_run`
+200, prune `1e-6`: diag 1.02 to 1.03 (the identical binary's spread
+1.02 to 1.05), full 1.01 to 1.03 (1.04), robust 1.03 to 1.04 (1.02 to
+1.03). A first build that read every block's partial products cost
+diag 1.13; the guards now ride on the `ψₙ` the read already forms.
+`hmm`, `hawkes` and `kalman` (both forms): level, within the control's
+spread. Not measured on x86.
+
+### Left for the user (batch f)
+
+- **HMM-3**: given covariances that are the same anisotropic diagonal in
+  every state take no shape, so `ψ` is a variance and its floor (`2^-100`
+  of the largest) lifts the small one: `diag(1e-20, 1e20)` reads
+  `7.9e-11` on the first row, where a state one ulp apart reads `1e-20`.
+  `Saved` does not say which form `ŝ` is in (a variance without a shape,
+  a multiple of each given one with one), so changing `Shape::of` alone
+  would read a saved variance as a multiple: a schema-70-to-72 state of
+  that form would load with its variances squared. Options: (a) `Shape::of`
+  returns `None` only for the same multiple of the identity in every
+  state, with a `shaped` flag written in `Saved` where a shape is kept
+  (`serde(default)`: a state without it loads as today's form and keeps
+  it); the current fixtures of given states regenerate, and outputs move
+  from the first row for the configurations this reaches; (b) keep the
+  form and say in `covs`' docstring that features whose given variances
+  differ by more than `2^100` are floored. **Recommendation: (a)**: the
+  shape is what `covs` says, and the flag keeps every saved state.
+- **KAL-6 (2)**: under `standardize`, rows that learn the features but
+  observe no target leave the moments without a gap, yet the floor on
+  their history reads the clock since a target was observed, so it opens
+  on such rows from a half-life on (16 of 20 at a half-life of 5) and
+  holds the moments' memory to the row's own weight. The fix keeps the
+  moments' own gap, a new `f64` in the state (schema 72 unreleased; a
+  state of 71 or older loads it as the clock since a target was observed,
+  today's reading), and moves the outputs of streams with missing targets
+  under `standardize` from the first such run longer than a half-life.
+  Options: (a) the moments' own gap; (b) keep the rule and say in the
+  module doc that a row with no target does not close the gap.
+  **Recommendation: (a).** Claim (1), on a grid coarser than the
+  half-life, is the documented rule; keeping it is recommended.
+- **BOCPD-4 and HMM-5 (4)**: a struct whose skipped field is not its last
+  does not round-trip the compact (positional) msgpack encoding: `bocpd`
+  with no failures and a warm span, `hmm` under `tied` with a warm span.
+  Every file the library writes is named msgpack, which round-trips, and
+  the compact form is used only to count bytes (`rheon-bench`). Options:
+  (a) keep, and say in the two structs' comments that their states are
+  named msgpack only; (b) write every field always, which adds a few
+  bytes to every such state and regenerates the current fixtures.
+  **Recommendation: (a).**
+
 ## Batch g: the regressions: `ewridge`, `sgd`, `ftrl`, `huber`/`quantile` and their refits, `holt`, `lasso` and LARS, `constraint`, the Gram merge (PLAN 578g)
 
 On `review-578g`, cut from `integration` at 1e0e0945. "Confirmed" means

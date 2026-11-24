@@ -1939,10 +1939,17 @@ impl Kalman {
         let live: Vec<bool> = (0..k).map(|i| self.is_live(i)).collect();
         let (mut a, mut c) = (vec![1.0; k], vec![0.0; k]);
         self.map_into(&live, &mut a, &mut c);
+        // A diffuse intercept waiting for its first row takes no noise, as
+        // `add_process_noise` keeps it off (review 2026-11-23, KAL-5).
+        let open = if self.factor() {
+            self.open::<true>(pi)
+        } else {
+            self.open::<false>(pi)
+        };
         let mut p = self.cov(pi).into_owned();
         for i in 0..k {
             let qd = q[i] * self.cfg.gap_noise(i, d);
-            if qd == 0.0 || (self.cfg.standardize && p[i * k + i] == 0.0) {
+            if qd == 0.0 || (self.cfg.standardize && p[i * k + i] == 0.0) || (open && i < off) {
                 continue;
             }
             if !self.cfg.standardize || i < off {
@@ -2161,7 +2168,8 @@ impl Kalman {
             .filter(|i| !walking(i))
             .map(|i| q[i] * self.cfg.gap_noise(i, gap) * z[i] * z[i])
             .sum();
-        quad + dd * noise + reverting
+        // A rounding below 0 is 0, as in `current_diagonal` (KAL-7).
+        crate::solve::clamp_rounding(quad) + dd * noise + reverting
     }
 
     /// `sqrt(1 + z' P⁻ z / R)` per target for the row `x` at `d_clock`
@@ -2226,7 +2234,9 @@ impl Kalman {
                     *uj += c[l] * plj;
                 }
             }
-            out[0] = u[0] + (1..k).map(|j| c[j] * u[j]).sum::<f64>();
+            // `eᵀ P e`, `e = (1, c)`, cancels where `c` is past the re-map's
+            // limit: a rounding below 0 is 0 (review 2026-11-23, KAL-7).
+            out[0] = crate::solve::clamp_rounding(u[0] + (1..k).map(|j| c[j] * u[j]).sum::<f64>());
         }
         out
     }
@@ -5709,4 +5719,6 @@ mod tests {
     // after a gap of more than a half-life.
     mod gap_moments;
     mod horizons;
+    // The 2026-11-23 review's findings (PLAN 578f).
+    mod review;
 }

@@ -2504,12 +2504,15 @@ impl ModelKind {
 
     /// Whether a read of the model, and not only a step, decides a window's
     /// edge on the clock, so that a row only scored is read at its own
-    /// stamp ([`crate::AnyModel::predict_at_into`]): `ewm_moments` under
-    /// `window_size`.
+    /// stamp ([`crate::AnyModel::predict_at_into`]): `ewm_moments` and
+    /// `hawkes` under `window_size`.
     pub fn reads_at_stamp(&self) -> bool {
         matches!(
             self,
             ModelKind::EwmMoments {
+                window_size: Some(_),
+                ..
+            } | ModelKind::Hawkes {
                 window_size: Some(_),
                 ..
             }
@@ -4105,6 +4108,13 @@ impl Spec {
                 no.refuse(format!(
                     "spec {name:?}: max_state_bytes must be above 0, but it is 0. Give the \
                      bytes a group's state may hold, or leave it out for 256 KB."
+                ));
+            } else if cap > rheon_core::HAWKES_STATE_BYTES_CEILING {
+                no.refuse(format!(
+                    "spec {name:?}: max_state_bytes may be at most {} (64 MiB) a group, but \
+                     it is {cap}. Lower it: a group's state is held in memory beside every \
+                     other group's.",
+                    rheon_core::HAWKES_STATE_BYTES_CEILING
                 ));
             } else if let Some(u) = Some(self.model.hawkes_kernels().len()).filter(|&u| u > 0) {
                 let (nodes, row) = (self.targets.len(), 8 * (2 + self.targets.len() * (1 + u)));

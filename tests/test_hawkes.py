@@ -431,6 +431,11 @@ def test_the_window_is_held_to_the_groups_state_cap():
         rp.ModelBank([_spec(half_life=INF, window_events=10, max_state_bytes=500)])
     with pytest.raises(ValueError, match="max_state_bytes must be above 0"):
         rp.ModelBank([_spec(max_state_bytes=0)])
+    # Held to every model's ceiling, 64 MiB a group (review 2026-11-23,
+    # HAWKES-3).
+    rp.ModelBank([_spec(max_state_bytes=64 << 20)])
+    with pytest.raises(ValueError, match="max_state_bytes may be at most 67108864"):
+        rp.ModelBank([_spec(max_state_bytes=(64 << 20) + 1)])
     # Driven far past its window, the state holds what the settings say.
     w = 30
     bank = rp.ModelBank([_spec(group="g", half_life=INF, window_events=w)])

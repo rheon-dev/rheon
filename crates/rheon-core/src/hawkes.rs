@@ -165,6 +165,10 @@ const PIVOT_FLOOR: f64 = 1e-10;
 /// `max_state_bytes`: 256 KB.
 pub const MAX_STATE_BYTES: u64 = 256 * 1024;
 
+/// The most `max_state_bytes` may be set to: 64 MiB a group, as every
+/// model's.
+pub const STATE_BYTES_CEILING: u64 = crate::clock_span::STATE_BYTES_CEILING;
+
 /// How near the forgetting rate may come to a kernel decay, or to a sum of
 /// two, relative to it: the read divides by `β − γ` and `β_u + β_v − γ`.
 const RATE_MARGIN: f64 = 1e-3;
@@ -250,8 +254,40 @@ impl HawkesCfg {
                 crate::model::listed(&betas.iter().map(f64::to_string).collect::<Vec<_>>()),
             ));
         }
+        // `G`'s entries divide by `β_u + β_v − γ` and hold `β_u β_v Q`: a
+        // pair of decays whose sum or product leaves the doubles has no
+        // finite system (review 2026-11-23, HAWKES-4).
+        if bad.is_empty() {
+            let past: Vec<String> = betas
+                .iter()
+                .enumerate()
+                .flat_map(|(u, &bu)| betas[u..].iter().map(move |&bv| (bu, bv)))
+                .filter(|(bu, bv)| !((bu + bv).is_finite() && (bu * bv).is_finite()))
+                .map(|(bu, bv)| format!("{bu} and {bv}"))
+                .collect();
+            if !past.is_empty() {
+                no.refuse(format!(
+                    "hawkes: kernel_decays are too large: the fit adds and multiplies each \
+                     pair of decays, and {} leave the range of a double. Use a smaller unit \
+                     for the clock, so that the decays are smaller numbers.",
+                    crate::model::listed(&past),
+                ));
+            }
+        }
         if let Err(e) = self.decay.check() {
             no.refuse(format!("hawkes: {e}"));
+        } else if !rate(self.decay).is_finite() {
+            // Only a half-life reaches here: `−ln λ` of a `λ` above 0 is
+            // at most 745.
+            let h = match self.decay {
+                Decay::Halflife(h) => h,
+                Decay::Lam(l) => l,
+            };
+            no.refuse(format!(
+                "hawkes: half_life is {h}, so small that its forgetting rate, ln 2 / \
+                 half_life, is past the range of a double. Set half_life to a larger number \
+                 of clock units.",
+            ));
         } else if bad.is_empty() {
             let gamma = rate(self.decay);
             let near = |s: f64| gamma > 0.0 && (s - gamma).abs() <= RATE_MARGIN * s;
@@ -314,25 +350,23 @@ impl HawkesCfg {
                  window.",
             );
         }
-        if let Some(cap) = self.max_state_bytes {
-            if cap == 0 {
-                no.refuse(
-                    "hawkes: max_state_bytes must be above 0, but it is 0. Give the bytes a \
-                     group's state may hold, or leave it out for 256 KB.",
-                );
-            } else if self.n_targets > 0 && !betas.is_empty() {
-                let (n, u) = (self.n_targets, betas.len());
-                let bytes = match (self.window_events, self.window_clock) {
-                    (Some(w), _) => Hawkes::state_bytes(n, u, Some(w)),
-                    (None, Some(_)) => Hawkes::clock_state_bytes(n, u, 0),
-                    (None, None) => Hawkes::state_bytes(n, u, None),
-                };
-                if bytes > cap {
-                    no.refuse(format!(
-                        "hawkes: its state would hold {bytes} bytes, past max_state_bytes of \
-                         {cap}. Lower window_events, or raise max_state_bytes.",
-                    ));
-                }
+        // Held to every model's ceiling, and the default cap checked as a
+        // given one is (review 2026-11-23, HAWKES-3).
+        let given = crate::clock_span::check_max_state_bytes("hawkes", self.max_state_bytes);
+        if let Err(e) = given {
+            no.refuse(e);
+        } else if self.n_targets > 0 && !betas.is_empty() {
+            let (n, u, cap) = (self.n_targets, betas.len(), self.cap());
+            let bytes = match (self.window_events, self.window_clock) {
+                (Some(w), _) => Hawkes::state_bytes(n, u, Some(w)),
+                (None, Some(_)) => Hawkes::clock_state_bytes(n, u, 0),
+                (None, None) => Hawkes::state_bytes(n, u, None),
+            };
+            if bytes > cap {
+                no.refuse(format!(
+                    "hawkes: its state would hold {bytes} bytes, past max_state_bytes of \
+                     {cap}. Lower window_events, or raise max_state_bytes.",
+                ));
             }
         }
         no.finish()
@@ -855,13 +889,22 @@ impl Hawkes {
         self.g0 = w.since + off;
         w.time.pop_front();
         w.w_in = (w.w_in - w.weight.pop_front().unwrap_or(0.0)).max(0.0);
-        if w.weight.is_empty() {
-            w.w_in = 0.0;
-        }
         w.stamp.pop_front();
         w.marks.drain(..n);
         w.fwd.drain(..k);
         w.old -= 1;
+        // A window that every row has left holds nothing: its sums are 0
+        // exactly, not what the subtractions rounded to (marks of `1e8` and
+        // 1 left `Q = −1`, which the next burst fitted from), and its clock
+        // starts again at the next row (review 2026-11-23, HAWKES-2).
+        if w.time.is_empty() {
+            w.w_in = 0.0;
+            w.since = 0.0;
+            w.new_sum.fill(0.0);
+            self.r.fill(0.0);
+            self.b.fill(0.0);
+            self.q.fill(0.0);
+        }
     }
 
     /// The older block has run out: the newer becomes it, less its oldest
@@ -951,7 +994,10 @@ impl Hawkes {
             *v *= f;
         }
         self.g0 = f * self.g0 + Self::g0_step(gamma, d_clock);
-        if let Some(w) = self.window.as_mut() {
+        // The clock since the newer block's start runs only while the
+        // window holds a row: an empty one's next row starts it at 0, where
+        // a quiet stretch of `1e16` before it rounded its gaps away.
+        if let Some(w) = self.window.as_mut().filter(|w| !w.time.is_empty()) {
             w.since += d_clock;
         }
         if let (Some(now), Some(span)) = (now, self.cfg.window_clock) {
@@ -1086,6 +1132,20 @@ impl Hawkes {
             n_eff: self.n_eff(),
             extra: None,
         }
+    }
+
+    /// [`OnlineModel::predict`] for a row whose place on the clock the
+    /// caller knows, `stamp`, as [`OnlineModel::stamp_next`] hands a
+    /// step's: a window of clock units drops the rows that have left at
+    /// that stamp, exactly as the row's step would. `predict` reads the
+    /// window at the last stamp handed moved on by `d_clock`, a sum of two
+    /// doubles, which puts a row exactly a span old on the other side of
+    /// the edge on a number clock in tenths (`0.2 + 0.7` is not `0.9`), so
+    /// a caller that stamps its steps reads its rows of weight 0 here.
+    /// Without a clock window the stamp is not read.
+    pub fn predict_at(&self, _x: &[f64], d_clock: f64, stamp: Stamp) -> Step {
+        let now = self.cfg.window_clock.map(|_| stamp);
+        self.read_ahead(d_clock, now)
     }
 
     /// Bytes a clock window holds with its newest row in, and whether the
@@ -1241,6 +1301,15 @@ impl OnlineModel for Hawkes {
                         "its running sums have the wrong shape",
                     ));
                 }
+                // A window of clock units never holds more than its cap
+                // takes: a row that would pass it is not learned (review
+                // 2026-11-23, HAWKES-3).
+                if m.cfg.window_clock.is_some() && m.clock_bytes_with(0) > m.cfg.cap() {
+                    return Err(crate::model::damaged(
+                        "hawkes",
+                        "its window holds more bytes than its max_state_bytes takes",
+                    ));
+                }
                 Ok(m)
             }
             other => Err(StateError::WrongModel {
@@ -1266,5 +1335,7 @@ impl OnlineModel for Hawkes {
 
 #[cfg(test)]
 mod mutant_tests;
+#[cfg(test)]
+mod review_tests;
 #[cfg(test)]
 mod tests;
