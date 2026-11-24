@@ -12,7 +12,7 @@ use super::*;
 /// EGARCH's variance is held within a factor of 10⁶ of the 0.94-weighted mean
 /// of `e²` below, and above it only logarithmically: `s` inside is itself,
 /// below it is the lower bound with no slope, above it the upper bound plus
-/// the log of the excess.
+/// the log of the excess, with the excess's slope.
 #[test]
 fn the_egarch_variance_is_bounded_below_and_grows_only_logarithmically_above() {
     let f = Filter::new(GarchVol::Egarch, 4, 0, 1.0);
@@ -36,14 +36,20 @@ fn the_egarch_variance_is_bounded_below_and_grows_only_logarithmically_above() {
     let low = f.predict(GarchVol::Egarch, &[-20.0, 0.0, 0.0, 0.0], &mut dl);
     assert_eq!(low, 1e-6);
     assert_eq!(dl, [0.0; 4]);
-    // Above: the ceiling and the log of the excess over it, flat.
+    // Above: the ceiling and the log of the excess over it, moving as `ln
+    // s` does (`∂ ln s/∂ω` is 1 here, over the bounded `s`); flat past the
+    // exponent's cap of 700.
     for t in [13.9, 20.0, 40.0] {
         dl = [1.0; 4];
         let s = f.predict(GarchVol::Egarch, &[t, 0.0, 0.0, 0.0], &mut dl);
         let want = 1e6 + (t - 1e6f64.ln());
         assert!((s - want).abs() < 1e-9 * want, "{t}: {s} against {want}");
-        assert_eq!(dl, [0.0; 4]);
+        assert_eq!(dl, [1.0 / s, 0.0, 0.0, 0.0]);
     }
+    dl = [1.0; 4];
+    let s = f.predict(GarchVol::Egarch, &[800.0, 0.0, 0.0, 0.0], &mut dl);
+    assert!((s - (1e6 + 700.0 - 1e6f64.ln())).abs() < 1e-6, "{s}");
+    assert_eq!(dl, [0.0; 4]);
     // The bounds follow the mean of `e²`, not a constant.
     let wide = Filter::new(GarchVol::Egarch, 4, 0, 1e4);
     let s = wide.predict(GarchVol::Egarch, &[-20.0, 0.0, 0.0, 0.0], &mut dl);

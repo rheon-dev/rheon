@@ -82,6 +82,74 @@ pub(crate) fn quad_form(a: &[f64], u: &[f64]) -> f64 {
     u.iter().zip(solve(a, u)).map(|(ui, xi)| ui * xi).sum()
 }
 
+/// `argmin (y − x)ᵀ M (y − x)` over `{y : A y ≥ b}` (`A` row-major with
+/// `x.len()` columns, `M` positive definite), by its optimality conditions
+/// alone: every set `S` of at most `n` constraints is tried as the active
+/// one, its KKT system `[M −A_Sᵀ; A_S 0] [y; λ] = [M x; b_S]` solved by
+/// [`solve`] (faer's LU), and the point kept that is in the set and has
+/// every multiplier `λ ≥ 0` (to `tol` of each side's size, a coordinate
+/// read at no less than 1, so a problem is posed in its parameters' units).
+/// The objective is
+/// strictly convex, so that point is the projection; among several within
+/// the tolerance the one of least objective. `None` when no set gives one.
+/// No Dykstra, no Cholesky: the projections `garch` runs share no
+/// arithmetic with it (PLAN 578a, review 2026-11-23 GARCH-10).
+pub(crate) fn project_qp(m: &[f64], x: &[f64], a: &[f64], b: &[f64], tol: f64) -> Option<Vec<f64>> {
+    let n = x.len();
+    let r = b.len();
+    let mx: Vec<f64> = (0..n)
+        .map(|i| (0..n).map(|j| m[i * n + j] * x[j]).sum())
+        .collect();
+    let mut best: Option<(f64, Vec<f64>)> = None;
+    for mask in 0u32..(1 << r) {
+        let s: Vec<usize> = (0..r).filter(|i| mask >> i & 1 == 1).collect();
+        if s.len() > n {
+            continue;
+        }
+        let q = n + s.len();
+        let mut k = vec![0.0; q * q];
+        let mut rhs = vec![0.0; q];
+        for i in 0..n {
+            for j in 0..n {
+                k[i * q + j] = m[i * n + j];
+            }
+            for (c, &row) in s.iter().enumerate() {
+                k[i * q + n + c] = -a[row * n + i];
+                k[(n + c) * q + i] = a[row * n + i];
+            }
+            rhs[i] = mx[i];
+        }
+        for (c, &row) in s.iter().enumerate() {
+            rhs[n + c] = b[row];
+        }
+        let sol = solve(&k, &rhs);
+        if !sol.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let y = &sol[..n];
+        let feasible = (0..r).all(|i| {
+            let ax: f64 = (0..n).map(|j| a[i * n + j] * y[j]).sum();
+            let size: f64 = (0..n)
+                .map(|j| a[i * n + j].abs() * y[j].abs().max(1.0))
+                .sum::<f64>()
+                + b[i].abs();
+            ax - b[i] >= -tol * size
+        });
+        let scale = sol[n..].iter().fold(1.0_f64, |s, l| s.max(l.abs()));
+        let dual = sol[n..].iter().all(|l| *l >= -tol * scale);
+        if feasible && dual {
+            let d: Vec<f64> = y.iter().zip(x).map(|(y, x)| y - x).collect();
+            let obj: f64 = (0..n)
+                .map(|i| d[i] * (0..n).map(|j| m[i * n + j] * d[j]).sum::<f64>())
+                .sum();
+            if best.as_ref().is_none_or(|(o, _)| obj < *o) {
+                best = Some((obj, y.to_vec()));
+            }
+        }
+    }
+    best.map(|(_, y)| y)
+}
+
 /// The eigenvalues of a symmetric `A`, ascending, and a unit eigenvector
 /// for each (`vectors[j]` belongs to `values[j]`): faer's self-adjoint
 /// eigensolver on the lower triangle, which no Cholesky shares. A vector's

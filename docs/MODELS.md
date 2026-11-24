@@ -3483,8 +3483,10 @@ stepped from only when its likelihood-ratio statistic against a constant
 variance, `2 (l_fit − l_const)` with the weights at Kish's count, reaches
 χ² at 0.999 for the restrictions a constant variance puts on the process.
 That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
-`figarch` (three each). Until one does, its rows are withheld as
-`not_identified`. A fit that passes but is not at its optimum is never
+`figarch` (three each: `figarch`'s `d = 0` and `φ = β` leave its four
+parameters one variance, `ω/(1 − β)`). Until one does, its rows are
+withheld as `not_identified`, as are the rows of a start that holds only
+zeros. A fit that passes but is not at its optimum is never
 stepped from either; its wait is the start's own, `below_warm_rows`. A try
 that does not start keeps its rows and fits again once as many new rows
 have come as it held. That is twice its rows while `max_state_bytes` holds
@@ -3505,9 +3507,12 @@ The state is `8 (2k + m + n(n + 1)/2 + 9)` bytes a target for `k` process
 parameters, `m` shape parameters and `n` stepped coordinates. EGARCH keeps
 64 bins of residuals beside them, 512 bytes. That is 168 bytes for `garch`,
 216 for `gjr`, 728 for `egarch`, 208 for `garch` with a t, and `216 + 8 M`
-for `figarch` (8,216 at 1,000 lags). The start's buffer adds 16 bytes a
+for `figarch` (8,216 at 1,000 lags). The start's buffer takes 16 bytes a
 row until it is fitted, 32,000 at the default, and after a try that does
-not start up to the target's share of `max_state_bytes`.
+not start up to the target's share of `max_state_bytes`. For `figarch` the
+buffer and the ring are never held together, so the target takes the
+larger of the two, `216 + max(16 rows, 8 M)`: a buffer of up to 500 rows
+at 1,000 lags adds nothing.
 
 #### Rows and the clock
 

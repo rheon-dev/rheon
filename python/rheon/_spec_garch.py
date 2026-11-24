@@ -264,10 +264,11 @@ def garch(
     shape fitted), ``2 (l_fit - l_const)``, reaches χ² at 0.999 for the
     restrictions a constant variance puts on the process: 13.8 for
     ``garch`` and the variance-targeted GARCH (``α = β = 0``), 16.3 for
-    ``gjr`` and ``egarch`` (``α = γ = β = 0``) and ``figarch`` (``d = 0``,
-    ``φ = β``). The weights enter at Kish's count, the statistic read as
-    ``2 (l_fit - l_const) Σw / Σw²``, so scaling every weight changes
-    nothing. On simulated series of persistence 0.97 to 0.985, and of
+    ``gjr`` and ``egarch`` (``α = γ = β = 0``) and ``figarch`` (``d = 0``
+    and ``φ = β`` leave its four parameters one variance, ``ω/(1 − β)``,
+    so three are the process's). The weights enter at Kish's count, the
+    statistic read as ``2 (l_fit - l_const) Σw / Σw²``, so scaling every
+    weight changes nothing. On simulated series of persistence 0.97 to 0.985, and of
     0.90, it passed every 2,000-row start; on returns with no conditional
     variance it passed none, at starts of 500 to 2,000 rows.
     """

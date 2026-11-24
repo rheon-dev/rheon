@@ -27,9 +27,14 @@
 //!
 //! - **a change too small for `f` to show is read from the slopes.** Where
 //!   the quadratic model's gain `gᵀΔ − ½ ΔᵀMΔ` of a step `Δ` is under
-//!   `10⁻¹⁰ (1 + |f|)`, the step stands when the trapezoid rule on the
-//!   slopes at its two ends, exact for a quadratic, says `f` did not fall:
-//!   `g(θ)ᵀΔ + g(θ')ᵀΔ ≥ 0`.
+//!   `u = 10⁻¹⁰ (1 + |f|)`, and each of its two terms is at most `2u` (so
+//!   the step itself is under `f`'s rounding, not a long step whose
+//!   curvature outweighs its slope), the step stands when the trapezoid
+//!   rule on the slopes at its two ends, exact for a quadratic, says `f`
+//!   did not fall: `g(θ)ᵀΔ + g(θ')ᵀΔ ≥ 0`. Any other step is read from
+//!   `f`, and stands only uphill: `gᵀΔ > 0` and the Armijo condition. An
+//!   unprojected Newton step's terms are equal, `gᵀΔ = ΔᵀMΔ`, so its gain
+//!   under `u` is always read from the slopes.
 //! - **it stops at the rounding floor:** once the full Newton step, or a
 //!   step taken, moves every parameter by at most `4ε (1 + max |θ|)` in
 //!   their units; or a step taken moves them by at most `10⁻¹¹ (1 + max
@@ -226,9 +231,16 @@ pub(super) fn maximize(
                 }
                 let delta: Vec<f64> = cand.iter().zip(&theta).map(|(c, t)| c - t).collect();
                 let slope = dot(&e.g, &delta);
-                if slope - 0.5 * quad(&m, &delta) > unseen {
+                let curve = 0.5 * quad(&m, &delta);
+                // The slopes decide only a step too small for `f` to show:
+                // both terms of the model's gain under its rounding. A step
+                // whose model predicts a loss larger than that (a projected
+                // step that overshoots) is read from `f` itself, and taken
+                // only uphill (review 2026-11-23, GARCH-1).
+                let small = slope.abs() <= 2.0 * unseen && curve <= 2.0 * unseen;
+                if slope - curve > unseen || !small {
                     let fc = obj(&cand, false).f;
-                    if fc.is_finite() && fc >= e.f + ARMIJO * slope {
+                    if slope > 0.0 && fc.is_finite() && fc >= e.f + ARMIJO * slope {
                         accepted = Some((cand, None));
                         break 'dirs;
                     }
@@ -438,6 +450,75 @@ mod tests {
         // no finite value, no step
         let bad = |_: &[f64], _: bool| Eval::bad(2);
         assert_eq!(decrement_in(&bad, &at, &units, &free), f64::INFINITY);
+    }
+
+    /// An objective known only at the points `at` lists (`x`, then `f`,
+    /// `g` and `h` there); not a number anywhere else, so every probe of the
+    /// curvature fails and the iteration reads the `h` given. What the line
+    /// search decides at each listed point is then the rule's alone.
+    fn listed(at: Vec<(Vec<f64>, f64, Vec<f64>, Vec<f64>)>) -> impl Fn(&[f64], bool) -> Eval {
+        move |x: &[f64], _grad: bool| {
+            for (p, f, g, h) in &at {
+                if p.iter()
+                    .zip(x)
+                    .all(|(p, x)| (p - x).abs() <= 1e-9 * (1.0 + p.abs()))
+                {
+                    return Eval {
+                        f: *f,
+                        g: g.clone(),
+                        h: h.clone(),
+                    };
+                }
+            }
+            Eval {
+                f: f64::NAN,
+                g: vec![0.0; x.len()],
+                h: vec![0.0; x.len() * x.len()],
+            }
+        }
+    }
+
+    /// A step along which `f` falls is never taken, whatever the slopes at
+    /// its far end say: its slope is −1 (the matrix read is not positive
+    /// definite there), the model's gain −0.5, and at the far end the slope
+    /// is 5, so a trapezoid there would call it a rise. It is read from `f`,
+    /// which fell, and refused for its slope (review 2026-11-23, GARCH-1).
+    #[test]
+    fn a_step_along_which_f_falls_is_never_taken() {
+        let obj = listed(vec![
+            (vec![0.0], 0.0, vec![-1.0], vec![-1.0]),
+            (vec![1.0], -1e-5, vec![5.0], vec![-1.0]),
+        ]);
+        let free = |x: &[f64]| x.to_vec();
+        let fit = maximize(&obj, &free, &[vec![0.0]], &[1.0]).unwrap();
+        assert_eq!(fit.theta, vec![0.0]);
+        assert_eq!(fit.stop, Stop::NoAscent);
+        // a step of slope 0 whose curvature puts it far past f's rounding
+        // (a projection sideways): read from f, which shows no rise
+        let obj = listed(vec![
+            (
+                vec![0.0, 0.0],
+                0.0,
+                vec![1.0, 0.0],
+                vec![1.0, 0.0, 0.0, 1.0],
+            ),
+            (
+                vec![0.0, 2f64.sqrt()],
+                0.0,
+                vec![0.0, 1.0],
+                vec![1.0, 0.0, 0.0, 1.0],
+            ),
+        ]);
+        let sideways = |x: &[f64]| {
+            if x == [0.0, 0.0] {
+                vec![0.0, 0.0]
+            } else {
+                vec![0.0, 2f64.sqrt()]
+            }
+        };
+        let fit = maximize(&obj, &sideways, &[vec![0.0, 0.0]], &[1.0, 1.0]).unwrap();
+        assert_eq!(fit.theta, vec![0.0, 0.0]);
+        assert_eq!(fit.stop, Stop::NoAscent);
     }
 
     /// On an objective whose value is far larger than the climb left (here

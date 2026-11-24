@@ -41,8 +41,12 @@ pub(super) const LAM_LIM: f64 = 0.99;
 
 const LN_SQRT_2PI: f64 = 0.918_938_533_204_672_7;
 
-/// `ln Γ(x)` for `x > 0`.
+/// `ln Γ(x)` for `x > 0`; not a number for any other `x`, at once (a shift
+/// by ones never moves `x = −10¹⁷`, so the loop below would not end).
 pub(super) fn ln_gamma(mut x: f64) -> f64 {
+    if !(x > 0.0 && x.is_finite()) {
+        return f64::NAN;
+    }
     let mut shift = 0.0;
     while x < 20.0 {
         shift += math::ln(x);
@@ -57,8 +61,12 @@ pub(super) fn ln_gamma(mut x: f64) -> f64 {
     (x - 0.5) * math::ln(x) - x + LN_SQRT_2PI + series - shift
 }
 
-/// The digamma function `ψ(x) = d ln Γ(x)/dx` for `x > 0`.
+/// The digamma function `ψ(x) = d ln Γ(x)/dx` for `x > 0`; not a number
+/// for any other `x`, at once, as [`ln_gamma`].
 pub(super) fn digamma(mut x: f64) -> f64 {
+    if !(x > 0.0 && x.is_finite()) {
+        return f64::NAN;
+    }
     let mut shift = 0.0;
     while x < 20.0 {
         shift += 1.0 / x;
@@ -81,12 +89,26 @@ fn consts(nu: f64, lam: f64) -> (f64, f64, f64) {
     (a, b, c)
 }
 
+/// `ln(1 + m²/n2)`, read as `2 ln |m| − ln n2 + ln(1 + n2/m²)` where `m²`
+/// overflows (`|m|` past `1.34·10¹⁵⁴`, which a return within the inputs'
+/// bound of `10¹⁰⁰` reaches on a series whose variance is `10⁻¹¹⁰`): the
+/// plain form there is infinite, and the score's `∞/∞` not a number.
+fn ln_1p_sq(m: f64, n2: f64) -> f64 {
+    let q = m * m;
+    if q.is_finite() {
+        math::ln_1p(q / n2)
+    } else {
+        let r = 1.0 / m;
+        2.0 * math::ln(m.abs()) - math::ln(n2) + math::ln_1p(n2 * r * r)
+    }
+}
+
 /// `log f(z)` of the skewed t at `(ν, λ)`; `λ = 0` is Student's t.
 pub(super) fn log_density(z: f64, nu: f64, lam: f64) -> f64 {
     let (a, b, c) = consts(nu, lam);
     let sg = if z > -a / b { 1.0 } else { -1.0 };
     let m = (b * z + a) / (1.0 + sg * lam);
-    math::ln(b) + math::ln(c) - 0.5 * (nu + 1.0) * math::ln_1p(m * m / (nu - 2.0))
+    math::ln(b) + math::ln(c) - 0.5 * (nu + 1.0) * ln_1p_sq(m, nu - 2.0)
 }
 
 /// The scores of one row's `z`: `w`, the factor of the variance
@@ -97,6 +119,14 @@ pub(super) fn scores(z: f64, nu: f64, lam: f64, skew: bool) -> (f64, f64, f64) {
     let dlnc = 0.5 * (digamma((nu + 1.0) / 2.0) - digamma(nu / 2.0) - 1.0 / n2);
     if !skew {
         let q = z * z;
+        if !q.is_finite() {
+            // `z²` past the largest double: each ratio in `r = 1/z`
+            let r = 1.0 / z;
+            let d = n2 * r * r + 1.0;
+            let w = (nu + 1.0) / d - 1.0;
+            let s_nu = dlnc - 0.5 * ln_1p_sq(z, n2) + (nu + 1.0) / (2.0 * n2 * d);
+            return (w, s_nu, 0.0);
+        }
         let w = (nu + 1.0) * q / (n2 + q) - 1.0;
         let s_nu = dlnc - 0.5 * math::ln_1p(q / n2) + (nu + 1.0) * q / (2.0 * n2 * (n2 + q));
         return (w, s_nu, 0.0);
@@ -105,14 +135,26 @@ pub(super) fn scores(z: f64, nu: f64, lam: f64, skew: bool) -> (f64, f64, f64) {
     let sg = if z > -a / b { 1.0 } else { -1.0 };
     let q = 1.0 + sg * lam;
     let m = (b * z + a) / q;
-    let dd = n2 + m * m;
-    let w = (nu + 1.0) * m * b * z / (q * dd) - 1.0;
     let a_nu = a * dlnc + 4.0 * lam * c / ((nu - 1.0) * (nu - 1.0));
     let a_lam = 4.0 * c * n2 / (nu - 1.0);
     let b_nu = -a * a_nu / b;
     let b_lam = (3.0 * lam - a * a_lam) / b;
     let m_nu = (b_nu * z + a_nu) / q;
     let m_lam = (b_lam * z + a_lam) / q - sg * m / q;
+    if !(m * m).is_finite() {
+        // `m²` past the largest double: `D = m² d` with `d = n2/m² + 1`,
+        // each ratio in `r = 1/m`
+        let r = 1.0 / m;
+        let d = n2 * r * r + 1.0;
+        let w = (nu + 1.0) * (b * z / q) * r / d - 1.0;
+        let s_nu = b_nu / b + dlnc
+            - 0.5 * ln_1p_sq(m, n2)
+            - (nu + 1.0) * (2.0 * m_nu * n2 * r - 1.0) / (2.0 * n2 * d);
+        let s_lam = b_lam / b - (nu + 1.0) * m_lam * r / d;
+        return (w, s_nu, s_lam);
+    }
+    let dd = n2 + m * m;
+    let w = (nu + 1.0) * m * b * z / (q * dd) - 1.0;
     let s_nu = b_nu / b + dlnc
         - 0.5 * math::ln_1p(m * m / n2)
         - (nu + 1.0) * (2.0 * m * m_nu * n2 - m * m) / (2.0 * n2 * dd);

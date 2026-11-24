@@ -161,12 +161,24 @@ impl HalfSpaces {
 
     /// The Euclidean projection of `x` onto the set by Dykstra's algorithm:
     /// at most 2,000 sweeps, stopped when a sweep moves no coordinate by
-    /// `1e-14`, then each constraint still broken by rounding pushed back
+    /// `10⁻¹⁴` of the point's largest coordinate (or of 1, whichever is
+    /// larger: a variance level of `10⁸` moves by its own rounding, `10⁻⁸`,
+    /// at every sweep, so an unscaled stop never came; review 2026-11-23,
+    /// GARCH-10), then each constraint still broken by rounding pushed back
     /// across its plane. `x` itself where it is in the set, to `1e-15`.
     pub fn project(&self, x: &[f64]) -> Vec<f64> {
         if self.holds(x, 1e-15) {
             return x.to_vec();
         }
+        self.dykstra(x, true).0
+    }
+
+    /// Dykstra's sweeps from `x` and the cleanup [`Self::project`]
+    /// describes, and whether a sweep reached the stop before the 2,000th.
+    /// `scaled`: the stop is `10⁻¹⁴` of the point's largest coordinate (at
+    /// least 1), as [`Self::project`] reads it; otherwise `10⁻¹⁴` itself, as
+    /// [`Self::project_metric`] reads its coordinates, in the metric's units.
+    fn dykstra(&self, x: &[f64], scaled: bool) -> (Vec<f64>, bool) {
         let (r, n) = (self.rows(), self.n);
         let nrm: Vec<f64> = (0..r)
             .map(|i| self.row(i).iter().map(|a| a * a).sum())
@@ -174,6 +186,7 @@ impl HalfSpaces {
         let mut y = x.to_vec();
         let mut inc = vec![0.0; r * n];
         let mut w = vec![0.0; n];
+        let mut stopped = false;
         for _ in 0..2000 {
             let prev = y.clone();
             for i in 0..r {
@@ -195,7 +208,13 @@ impl HalfSpaces {
                 .iter()
                 .zip(&prev)
                 .fold(0.0f64, |m, (a, b)| m.max((a - b).abs()));
-            if moved < 1e-14 {
+            let size = if scaled {
+                y.iter().fold(1.0f64, |m, v| m.max(v.abs()))
+            } else {
+                1.0
+            };
+            if moved < 1e-14 * size {
+                stopped = true;
                 break;
             }
         }
@@ -207,15 +226,28 @@ impl HalfSpaces {
                 }
             }
         }
-        y
+        (y, stopped)
     }
 
     /// `argmin (y − x)ᵀ M (y − x)` over the set, `M` row-major positive
     /// definite: with `M = L Lᵀ` and `u = Lᵀ y`, the Euclidean projection of
-    /// `Lᵀ x` onto `{A L⁻ᵀ u ≥ b}`. A Newton step projected in the
+    /// `Lᵀ x` onto `{A L⁻ᵀ u ≥ b}` by Dykstra's sweeps, stopped when a sweep
+    /// moves no coordinate of `u` by `10⁻¹⁴`. A Newton step projected in the
     /// Euclidean metric is no ascent direction of the likelihood when the
     /// constraints bind on parameters it barely tells apart; in the step's
-    /// own metric it is. `None` where `M` is not positive definite.
+    /// own metric it is. Where `M` is ill-conditioned the planes in `u` meet
+    /// at narrow angles the sweeps crawl along: where they do not reach
+    /// their stop in 2,000 sweeps, the projection is solved exactly instead
+    /// ([`Self::project_exact`]). At a condition of `10⁸` the unfinished
+    /// sweeps' point was up to 1 off the minimizer in the parameters' units
+    /// and outside the set, and the caller took its Euclidean projection
+    /// (review 2026-11-23, GARCH-10); in the tests' runs, against the
+    /// minimizer in exact rational arithmetic, such a point was up to 1.5
+    /// off in the metric where the exact solve was within `5·10⁻¹²`. A
+    /// point whose sweeps did stop is kept: it was within `10⁻¹⁰` of the
+    /// minimizer there, as close as the exact solve's rounding, and a
+    /// caller pushes its rounding's slack back into the set. `None` where
+    /// `M` is not positive definite.
     pub fn project_metric(&self, x: &[f64], m: &[f64]) -> Option<Vec<f64>> {
         if self.holds(x, 1e-15) {
             return Some(x.to_vec());
@@ -236,10 +268,82 @@ impl HalfSpaces {
             a,
             b: self.b.clone(),
             n,
+        };
+        let (z, stopped) = if moved.holds(&u, 1e-15) {
+            (u, true)
+        } else {
+            moved.dykstra(&u, false)
+        };
+        let y = backward(&l, n, &z);
+        let finite = y.iter().all(|v| v.is_finite());
+        if stopped && finite {
+            return Some(y);
         }
-        .project(&u);
-        let y = backward(&l, n, &moved);
-        y.iter().all(|v| v.is_finite()).then_some(y)
+        self.project_exact(x, m).or_else(|| finite.then_some(y))
+    }
+
+    /// The projection in the metric `M` by its optimality conditions: each
+    /// set `S` of at most `n` constraints, fewest first, taken as the active
+    /// one, `[M −A_Sᵀ; A_S 0] [y; λ] = [M x; b_S]` solved by LU, and of the
+    /// points in the set (each other constraint's slack at least `−10⁻¹²` of
+    /// its size) whose multipliers are all at least `−10⁻¹²` of the largest,
+    /// the one nearest `x` in the metric. The objective is strictly convex,
+    /// so that point is the minimizer. At most `Σ_{s ≤ n} C(r, s)` solves of
+    /// order `n + s` (99 at FIGARCH's 7 constraints on 4 parameters), run
+    /// only where Dykstra's sweeps fall short in [`Self::project_metric`].
+    /// `None` where no set gives one.
+    pub fn project_exact(&self, x: &[f64], m: &[f64]) -> Option<Vec<f64>> {
+        let (n, r) = (self.n, self.rows());
+        let mx: Vec<f64> = (0..n)
+            .map(|i| (0..n).map(|j| m[i * n + j] * x[j]).sum())
+            .collect();
+        let mut best: Option<(f64, Vec<f64>)> = None;
+        for mask in 0u32..(1 << r) {
+            let s: Vec<usize> = (0..r).filter(|i| mask >> i & 1 == 1).collect();
+            if s.len() > n {
+                continue;
+            }
+            let q = n + s.len();
+            let mut k = vec![0.0; q * q];
+            let mut rhs = vec![0.0; q];
+            for i in 0..n {
+                k[i * q..i * q + n].copy_from_slice(&m[i * n..(i + 1) * n]);
+                for (c, &row) in s.iter().enumerate() {
+                    k[i * q + n + c] = -self.a[row * n + i];
+                    k[(n + c) * q + i] = self.a[row * n + i];
+                }
+                rhs[i] = mx[i];
+            }
+            for (c, &row) in s.iter().enumerate() {
+                rhs[n + c] = self.b[row];
+            }
+            let Some(sol) = lu_solve(&k, q, &rhs) else {
+                continue;
+            };
+            let y = &sol[..n];
+            let inside = (0..r).filter(|i| !s.contains(i)).all(|i| {
+                let size: f64 = self
+                    .row(i)
+                    .iter()
+                    .zip(y.iter().zip(x))
+                    .map(|(a, (y, x))| a.abs() * (y.abs() + x.abs()))
+                    .sum::<f64>()
+                    + self.b[i].abs();
+                self.slack(i, y) >= -1e-12 * size
+            });
+            let top = sol[n..].iter().fold(1.0f64, |t, l| t.max(l.abs()));
+            if !inside || sol[n..].iter().any(|l| *l < -1e-12 * top) {
+                continue;
+            }
+            let d: Vec<f64> = y.iter().zip(x).map(|(y, x)| y - x).collect();
+            let obj: f64 = (0..n)
+                .map(|i| d[i] * (0..n).map(|j| m[i * n + j] * d[j]).sum::<f64>())
+                .sum();
+            if best.as_ref().is_none_or(|(o, _)| obj < *o) {
+                best = Some((obj, y.to_vec()));
+            }
+        }
+        best.map(|(_, y)| y)
     }
 }
 

@@ -755,6 +755,50 @@ def test_the_savers_refuse_a_state_that_will_not_encode_as_a_value_error_not_an_
     assert type(caught_os.value) is FileNotFoundError
 
 
+def test_a_broken_bank_refuses_every_entry_point_before_it_reads_the_chunk() -> None:
+    """A bank a refused chunk broke says so first on every call, whatever is
+    wrong with the next chunk: ``fit_predict_arrow`` and ``predict_arrow``
+    as ``fit_predict`` and ``predict`` do, before a clock of another number
+    type than the bank's is named (review 2026-11-23, BANK-10 (1))."""
+    rng = np.random.default_rng(3)
+    x = rng.standard_normal(300)
+    df = pl.DataFrame(
+        {
+            "t": np.arange(300, dtype=np.float64),
+            "x0": x,
+            "y": 2 * x + 0.1 * rng.standard_normal(300),
+        }
+    )
+    spec = rp.spec.ewridge(
+        "m",
+        targets=["y"],
+        features=["x0"],
+        clock="t",
+        gap_cap=10.0,
+        half_life=1e9,
+        window_size=50.0,
+        snapshot_every=1,
+        min_weight=0.0,
+        window_budget={"refuse": 0.001},
+        emit_drift=True,
+        drift_threshold=5.0,
+        drift_action="reset",
+    )
+    bank = rp.ModelBank([spec])
+    bank.fit_predict(df.head(1))
+    with pytest.raises(ValueError, match="window_budget"):
+        bank.fit_predict(df.slice(1))
+    ints = df.head(4).with_columns(pl.Series("t", [1000, 1001, 1002, 1003]))
+    for call in (
+        bank.fit_predict,
+        bank.predict,
+        bank.fit_predict_arrow,
+        bank.predict_arrow,
+    ):
+        with pytest.raises(ValueError, match="cannot go on"):
+            call(ints)
+
+
 # --- The classes this library defines -----------------------------------------
 
 
