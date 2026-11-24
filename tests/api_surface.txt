@@ -739,7 +739,8 @@
     model.asymmetric = false
     model.decay.Halflife = 50.0
     model.margins.dist = "normal"
-    model.margins.horizon = 1
+    model.margins.horizons = []
+    model.margins.max_horizon_work = null
     model.margins.max_state_bytes = null
     model.margins.min_weight = 0.0
     model.margins.n_targets = 2
@@ -1682,7 +1683,7 @@
     resid_y: Float64
     weight_sum: Float64
     settled_frac: Float64
-    withheld_reason: Enum[below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample], negative_input
+    withheld_reason: Enum[below_min_settled_frac, below_min_weight, above_max_error_inflation, below_warm_rows, ill_conditioned, unstable_rate, not_identified, scale_ratio_moved, not_separated, level_beyond_sample, negative_input]
     coef: List[Float64]
     support_coef: List[Float64]
   ModelBank.marginal():
