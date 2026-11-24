@@ -106,6 +106,8 @@ MINIMAL: dict[str, dict[str, object]] = {
     "ewm_moments": {"targets": None, "terms": {"var": {"x0": 2}}},
     "ar": {"lags": 2},
     "spectral": {"features": None, "periods": [8.0, 3.0]},
+    # One feature, the score it is monotone in.
+    "isotonic": {"features": ["x0"]},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -330,6 +332,7 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "ddsketch",
             "ewm_moments",
             "spectral",
+            "isotonic",
         )
     },
 }

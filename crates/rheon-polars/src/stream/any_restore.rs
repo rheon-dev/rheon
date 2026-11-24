@@ -67,6 +67,9 @@ impl AnyModel {
             ModelState::TDigest(_) => Ok(AnyModel::TDigest(Box::new(
                 rheon_core::TDigestModel::restore(s)?,
             ))),
+            ModelState::Isotonic(_) => Ok(AnyModel::Isotonic(Box::new(
+                rheon_core::Isotonic::restore(s)?,
+            ))),
             ModelState::DdSketch(_) => Ok(AnyModel::DdSketch(Box::new(
                 rheon_core::DdSketchModel::restore(s)?,
             ))),

@@ -462,6 +462,21 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # Each target a monotone function of one feature, decayed, read at the
+    # nearer end beyond its rows.
+    (
+        "isotonic",
+        "isotonic",
+        dict(
+            targets=["y", "z"],
+            features=["x0"],
+            out_of_bounds="clip",
+            group="g",
+            half_life=25.0,
+            **CLOCK,
+        ),
+        [],
+    ),
     (
         "hawkes",
         "hawkes",

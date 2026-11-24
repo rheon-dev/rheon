@@ -129,6 +129,10 @@ pub const MODEL_CASES: &[&str] = &[
     "ar",
     // Sixteen periods on an even clock: a rotation and an add each a row.
     "spectral",
+    // One target on one feature over a window of 200 rows under a decay: a
+    // row's insert into the sorted rows, the pooling of its ties and a
+    // whole pool-adjacent-violators pass over the window (task 573).
+    "isotonic",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -807,6 +811,14 @@ fn case_spec(id: &str) -> (Value, Shape) {
         "spectral" => {
             let periods: Vec<f64> = (0..16).map(|k| 2.0 + k as f64).collect();
             let mut s = fit(json!({"type": "spectral", "periods": periods}), 0);
+            s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
+        "isotonic" => {
+            let mut s = fit(
+                json!({"type": "isotonic", "window_rows": 200, "out_of_bounds": "clip"}),
+                1,
+            );
             s.as_object_mut().expect("an object").remove("min_weight");
             (s, Shape::Linear)
         }

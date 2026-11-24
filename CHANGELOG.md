@@ -222,6 +222,32 @@ model that only the new build has is listed as an addition and passes.
   (one thread, the model alone, min of 9, squared loss, half-life 100):
   off 53/112/488 ns at k = 5/20/100 against the base's 51-56/111-113/487;
   on 78/182/775 ns, 1.5-1.6 times off.
+- **`isotonic`, isotonic regression kept online: the monotone calibrator**
+  (PLAN 573; the user, 2026-11-23). Each target is fitted as the best
+  non-decreasing (or, with `increasing=False`, non-increasing) function of
+  one feature, on the rows before each row, and read at the row's feature:
+  scikit-learn's `IsotonicRegression(increasing, y_min, y_max,
+  out_of_bounds)` with the rows' weights. Ties in the feature are pooled,
+  then scipy's pool-adjacent-violators (Busing 2022) runs over the distinct
+  values line for line, and the fit is read as `numpy.interp` reads it;
+  beyond the rows' range it is null (`out_of_bounds="nan"`, withheld as
+  `not_identified`) or the nearer end (`"clip"`). Over every row, a
+  `window_rows` or `window_size` window (with `closed`), or a decay, the
+  last two together if wished: a decay keeps each row's weight scaled from
+  an origin on the clock, so no weight is touched on a row. Its state, the
+  distinct feature values without a window or a clock window's rows, is
+  held to `max_state_bytes` as the rows go in (said past half, refused past
+  it); round a continuous score in the query to bound it. Against
+  scikit-learn: with no decay and no repeated value outside a window, and
+  under every window, each prediction is a longhand transcription of what
+  scikit-learn runs to the bit, and scikit-learn is that transcription to
+  the bit, fused or not, so the only gap is the multiply-add the arm64
+  wheels of scipy and numpy fuse (8.3e-16 at worst on targets of order 1);
+  ties without a window and a decay agree within 2.1e-15. Each learned row
+  refits in full: about 2 ns a distinct value held on arm64 (2.0 µs a row
+  at 1,000 values, 16 µs at 8,000), 3.4 ns a row under a window, and no
+  allocation a row. The design and its open questions are in
+  `docs/records/ISOTONIC-DESIGN.md`.
 
 - **`dcc`, dynamic conditional correlation fitted one row at a time** (task
   493, with task 514's recursion): the full correlation matrix of `k` return

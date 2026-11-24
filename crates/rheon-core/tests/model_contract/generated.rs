@@ -1791,3 +1791,103 @@ fn spectral_predict_is_the_step() {
         false,
     );
 }
+
+/// Two targets on the first feature, decayed at the probes' half-life,
+/// predicting at the nearer end beyond the rows (so every row past the
+/// first reports), no window: the contract's recursion is rule 8's.
+fn isotonic_cfg() -> IsotonicCfg {
+    IsotonicCfg {
+        n_targets: 2,
+        increasing: true,
+        y_min: None,
+        y_max: None,
+        out_of_bounds: IsotonicOutOfBounds::Clip,
+        min_weight: 0.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(HALFLIFE),
+        max_state_bytes: None,
+    }
+}
+
+/// The windowed forms whose weight the accessor reads as the step will: a
+/// window of rows, with and without the decay. A clock window's rows leave
+/// at the first row on or past their age, before its read, so its accessor
+/// is the weight held, and the next row's may be less ([`isotonic_clock`]).
+fn isotonic_windows() -> Vec<(&'static str, IsotonicCfg)> {
+    vec![
+        (
+            "isotonic, window_rows",
+            IsotonicCfg {
+                window_rows: Some(9),
+                decay: Decay::Halflife(f64::INFINITY),
+                ..isotonic_cfg()
+            },
+        ),
+        (
+            "isotonic, window_rows and a decay",
+            IsotonicCfg {
+                window_rows: Some(9),
+                ..isotonic_cfg()
+            },
+        ),
+    ]
+}
+
+/// A clock window under a decay, decreasing, clipped below, its edge
+/// holding a row exactly its span old.
+fn isotonic_clock() -> IsotonicCfg {
+    IsotonicCfg {
+        window_clock: Some(12.0),
+        closed: WindowClosed::Both,
+        increasing: false,
+        y_min: Some(-0.5),
+        ..isotonic_cfg()
+    }
+}
+
+#[test]
+fn isotonic() {
+    // One feature, the probe's first; a prediction a target.
+    let m = Isotonic::new(isotonic_cfg()).unwrap();
+    assert_eq!(m.n_features(), 1, "isotonic reads one feature");
+    let r = probe_with(m, 2, Some(&Isotonic::n_eff));
+    assert_eq!(r.kind, "isotonic");
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 2);
+    assert_eq!(r.pred_len, 2);
+    assert!(r.roundtrips);
+    for (what, c) in isotonic_windows() {
+        let r = probe_windowed(Isotonic::new(c).unwrap(), 2, Some(&Isotonic::n_eff));
+        assert!(r.roundtrips, "{what}");
+        assert_eq!(r.pred_len, 2, "{what}");
+    }
+}
+
+#[test]
+fn isotonic_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Isotonic::new(isotonic_cfg()).unwrap(), 2, false);
+    for (_, c) in isotonic_windows() {
+        predict_is_the_step_without_the_step(|| Isotonic::new(c.clone()).unwrap(), 2, false);
+    }
+    predict_is_the_step_without_the_step(|| Isotonic::new(isotonic_clock()).unwrap(), 2, false);
+}
+
+/// The clock window's weight is the rows it reads: a row 13 units after the
+/// first, past a span of 12, reads without it.
+#[test]
+fn isotonic_clock_window_reads_the_rows_inside_it() {
+    let mut m = Isotonic::new(isotonic_clock()).unwrap();
+    let lam = 0.5f64.powf(1.0 / HALFLIFE);
+    for i in 0..13 {
+        m.step(&[i as f64], &[Some(1.0), Some(2.0)], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+    }
+    // Rows 0..=12 held: row 0 is exactly 12 old, kept under `Both`.
+    let all: f64 = (0..13).map(|k| lam.powi(k)).sum();
+    assert!((m.n_eff() - all).abs() < 1e-12);
+    let s = m.step(&[0.5], &[Some(1.0), Some(2.0)], 1.0, 1.0);
+    let held: f64 = (0..12).map(|k| lam.powi(k)).sum();
+    assert!((s.n_eff - held).abs() < 1e-12, "{} against {held}", s.n_eff);
+    assert_eq!(m.window_len(), 13);
+}

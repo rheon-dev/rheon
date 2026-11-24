@@ -203,6 +203,7 @@ NO_COEF = frozenset(
         "ddsketch",
         "ewm_moments",
         "spectral",
+        "isotonic",
     }
 )
 

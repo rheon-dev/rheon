@@ -807,6 +807,9 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             rheon_core::TDigestModel::new(tdigest_cfg(spec)?)?,
         ))),
         // A decay (rounded) or a window (exact), not both.
+        ModelKind::Isotonic { .. } => Ok(AnyModel::Isotonic(Box::new(rheon_core::Isotonic::new(
+            isotonic_cfg(spec, decay)?,
+        )?))),
         ModelKind::DdSketch { .. } => Ok(AnyModel::DdSketch(Box::new(
             rheon_core::DdSketchModel::new(ddsketch_cfg(spec, decay)?)?,
         ))),

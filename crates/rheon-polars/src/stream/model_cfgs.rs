@@ -503,6 +503,54 @@ pub fn ddsketch_cfg(
     Ok(cfg)
 }
 
+/// An `isotonic` spec's [`rheon_core::IsotonicCfg`] under `decay`: one fit
+/// a target on the spec's one feature, scikit-learn's defaults where the
+/// spec gives none (increasing, no clip, `out_of_bounds = "nan"`). Every
+/// value is the model's own to check.
+pub fn isotonic_cfg(
+    spec: &Spec,
+    decay: rheon_core::Decay,
+) -> Result<rheon_core::IsotonicCfg, String> {
+    let ModelKind::Isotonic {
+        increasing,
+        y_min,
+        y_max,
+        out_of_bounds,
+        window_rows,
+        window_size,
+        closed,
+        max_state_bytes,
+    } = &spec.model
+    else {
+        return Err(not_a(spec, "isotonic_cfg", "isotonic"));
+    };
+    let out_of_bounds = match out_of_bounds.as_deref() {
+        None | Some("nan") => rheon_core::IsotonicOutOfBounds::Nan,
+        Some("clip") => rheon_core::IsotonicOutOfBounds::Clip,
+        Some(other) => {
+            return Err(format!(
+                "isotonic: out_of_bounds must be \"nan\" or \"clip\", but it is {other:?}. \
+                 Use one of those words."
+            ));
+        }
+    };
+    let cfg = rheon_core::IsotonicCfg {
+        n_targets: spec.m(),
+        increasing: increasing.unwrap_or(true),
+        y_min: *y_min,
+        y_max: *y_max,
+        out_of_bounds,
+        min_weight: spec.min_periods_or_default(),
+        window_rows: *window_rows,
+        window_clock: window_size.as_ref().map(Span::value),
+        closed: closed.edge(),
+        decay,
+        max_state_bytes: *max_state_bytes,
+    };
+    cfg.validate()?;
+    Ok(cfg)
+}
+
 /// A `garch` spec's start, in rows, when it gives neither rows nor a span.
 pub const GARCH_START_ROWS: usize = 2000;
 

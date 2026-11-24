@@ -1853,6 +1853,46 @@ pub enum ModelKind {
     /// per target and period, the power before the row. No features.
     #[serde(rename = "spectral")]
     Spectral(SpectralSpec),
+    /// Isotonic regression of each target on the one feature
+    /// (`rheon_core::Isotonic`, whose docs state the fit): scikit-learn's
+    /// `IsotonicRegression` on the rows learned before the row, read at the
+    /// row's feature. A `half_life` or `lam` weighs the rows by their decay,
+    /// and `window_rows` or `window_size` keeps a window's rows alone; both
+    /// may be given. No `coef`.
+    #[serde(rename = "isotonic")]
+    Isotonic {
+        /// Non-decreasing (`true`, absent) or non-increasing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        increasing: Option<bool>,
+        /// The fit is clipped below at this value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y_min: Option<f64>,
+        /// The fit is clipped above at this value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y_max: Option<f64>,
+        /// `"nan"` (absent) or `"clip"`: what a feature beyond the learned
+        /// range reads.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        out_of_bounds: Option<String>,
+        /// Keep the last this many rows of positive weight alone. Skipped
+        /// when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_rows: Option<usize>,
+        /// Keep the rows of the last this long on the clock alone: a number
+        /// of the clock column's units (rows when the spec has no clock), or
+        /// a duration on a temporal clock. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_size: Option<Span>,
+        /// Which edge of `window_size` holds the row exactly that old:
+        /// `"right"`, the default, or `"both"`. Skipped when `"right"`.
+        #[serde(default, skip_serializing_if = "ModelClosed::is_right")]
+        closed: ModelClosed,
+        /// The bytes a group's state may hold: checked at the call for what
+        /// the settings fix, and as the rows go in for the distinct features
+        /// and a clock window's rows. Default 256 KB, at most 64 MiB.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+    },
 }
 
 /// One term of a `power_variation` spec: its name, which names its fields
@@ -2198,6 +2238,7 @@ impl ModelKind {
         "ewm_moments",
         "ar",
         "spectral",
+        "isotonic",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -2237,6 +2278,7 @@ impl ModelKind {
             ModelKind::EwmMoments { .. } => "ewm_moments",
             ModelKind::Ar { .. } => "ar",
             ModelKind::Spectral(_) => "spectral",
+            ModelKind::Isotonic { .. } => "isotonic",
         }
     }
 
@@ -2262,7 +2304,8 @@ impl ModelKind {
 
     /// False for the models that report no coefficients -- no `coef` field
     /// in their output: `ew_cov`, `seqtest`, `marginal`, `rcov`, `corrchange`,
-    /// `bocpd`, `audit`, `realized`, `tdigest`, `ewm_moments` and `spectral`.
+    /// `bocpd`, `audit`, `realized`, `tdigest`, `ewm_moments`, `spectral` and
+    /// `isotonic`.
     /// `tests/test_model_registry.py` holds this to the field names, which are
     /// rendered elsewhere.
     pub fn has_coef(&self) -> bool {
@@ -2282,6 +2325,7 @@ impl ModelKind {
                 | ModelKind::DdSketch { .. }
                 | ModelKind::EwmMoments { .. }
                 | ModelKind::Spectral(_)
+                | ModelKind::Isotonic { .. }
         )
     }
 
@@ -3400,8 +3444,9 @@ impl Spec {
                     Ok(vec![(String::new(), Decay::Halflife(f64::INFINITY))])
                 }
                 // A sketch with no half-life never forgets, or forgets by
-                // its window: no decay is the plain form.
-                ModelKind::DdSketch { .. } => {
+                // its window: no decay is the plain form. So is an isotonic
+                // fit, scikit-learn's on every row learned.
+                ModelKind::DdSketch { .. } | ModelKind::Isotonic { .. } => {
                     Ok(vec![(String::new(), Decay::Halflife(f64::INFINITY))])
                 }
                 // A window with no half-life is the common case of a flat
@@ -3594,6 +3639,10 @@ impl Spec {
             // Each level is withheld until its rows identify it, the
             // model's own rule: no count of rows is the gate.
             ModelKind::TDigest { .. } | ModelKind::DdSketch { .. } => 0.0,
+            // The fit is identified at a feature once rows lie at or on
+            // both sides of it, the model's own rule (`out_of_bounds`): no
+            // count of rows is the gate.
+            ModelKind::Isotonic { .. } => 0.0,
             // Each term is withheld by its own condition -- no weight, no
             // lagged pair, no spread to standardize by, an unbiased form's
             // denominator that keeps no digit -- not by a count of rows.
@@ -4157,6 +4206,16 @@ impl Spec {
             }
         } else if matches!(self.model, ModelKind::Ar { .. }) {
             // Features are optional: a pure autoregression has none.
+        } else if matches!(self.model, ModelKind::Isotonic { .. }) {
+            if self.features.len() != 1 {
+                columns_missing = self.features.is_empty();
+                no.refuse(format!(
+                    "spec {name:?}: isotonic fits each target as a monotone function of one \
+                     feature, but features lists {}. Name the one column to fit on, such as \
+                     the score to calibrate, in features.",
+                    columns_counted(self.features.len())
+                ));
+            }
         } else if self.features.is_empty() && !(columns_missing && self.model.is_unsupervised()) {
             columns_missing = true;
             no.refuse(format!(

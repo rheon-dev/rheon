@@ -278,6 +278,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::DdSketch { .. }
             | crate::ModelKind::EwmMoments { .. }
             | crate::ModelKind::Spectral(_)
+            | crate::ModelKind::Isotonic { .. }
     ) {
         return Vec::new();
     }
@@ -1741,11 +1742,15 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 .decay(suffix, d)
                 .src(Source::NEff(mi)),
         );
-        fields.push(
-            FieldMeta::new(format!("coef{suffix}"), "coef")
-                .decay(suffix, d)
-                .src(Source::Coef(mi)),
-        );
+        // `isotonic` predicts a target from a curve, not coefficients: no
+        // `coef`.
+        if spec.model.has_coef() {
+            fields.push(
+                FieldMeta::new(format!("coef{suffix}"), "coef")
+                    .decay(suffix, d)
+                    .src(Source::Coef(mi)),
+            );
+        }
         if matches!(spec.model, crate::ModelKind::Lasso { .. }) {
             for (t_i, t) in spec.targets.iter().enumerate() {
                 fields.push(

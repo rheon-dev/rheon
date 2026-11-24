@@ -332,6 +332,11 @@ def describe_api(cli: Path | None = None) -> str:
         ("tdigest", dict(targets=["y", "z"], quantiles=[0.05, 0.25, 0.95])),
         ("ddsketch", dict(targets=["y", "z"], quantiles=[0.05, 0.25, 0.95])),
         ("ddsketch windowed", dict(targets=["y"], quantiles=[0.25, 0.75], window_rows=50)),
+        ("isotonic minimal", dict(targets=["y"], features=["x0"])),
+        (
+            "isotonic windowed",
+            dict(targets=["y", "z"], features=["x0"], window_size=30.0, closed="both"),
+        ),
         (
             "ewm_moments",
             dict(
@@ -440,6 +445,8 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("expectile", {"half_life": float("inf"), "window_rows": 50}),
     ("expectile", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
     ("hawkes", {"half_life": float("inf"), "window_events": 20}),
+    ("isotonic", {"window_rows": 50, "out_of_bounds": "clip"}),
+    ("isotonic", {"window_size": 30.0, "closed": "both", "increasing": False}),
     ("hawkes", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
     ("hawkes", {"kernel_decays": None, "kernel_half_lives": [0.5, 4.0]}),
     ("garch", {"vol": "figarch", "start_rows": 2000}),
@@ -749,6 +756,14 @@ ENUM_PROBES: list[
         "word",
     ),
     ("lasso.closed", "lasso", {"window_size": 100.0}, "model.closed", "word"),
+    (
+        "isotonic.closed",
+        "isotonic",
+        {"window_size": 100.0},
+        "model.closed",
+        "word",
+    ),
+    ("isotonic.out_of_bounds", "isotonic", {}, "model.out_of_bounds", "word"),
     (
         "ddsketch.closed",
         "ddsketch",

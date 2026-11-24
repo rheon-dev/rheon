@@ -63,6 +63,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         }
+        | ModelKind::Isotonic {
+            max_state_bytes: Some(_),
+            ..
+        }
         | ModelKind::Glm {
             max_state_bytes: Some(_),
             ..
@@ -178,6 +182,17 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             ModelKind::DdSketch { .. } => (
                 "the buckets the range of its values spans".to_string(),
                 "Raise alpha",
+            ),
+            ModelKind::Isotonic {
+                window_size: Some(w),
+                ..
+            } => (
+                format!("the rows inside window_size = {w}"),
+                "Shorten window_size",
+            ),
+            ModelKind::Isotonic { .. } => (
+                "the distinct values of its feature".to_string(),
+                "Round the feature to fewer values in the query, or give window_rows",
             ),
             // No window on the clock: the lag buffers are what the data sizes.
             ModelKind::EwmMoments { .. } => (

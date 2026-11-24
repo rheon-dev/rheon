@@ -190,6 +190,13 @@ pub const CELLS: &[Cell] = &[
     cell("spectral.periods", 4, 8, Pow(1), Pow(1)),
     cell("spectral.targets", 1, 8, Pow(1), Pow(1)),
     cell("spectral.history", 1000, 8, Const, Const),
+    // Each learned row refits its targets in full over the rows a window
+    // holds (or the distinct feature values with none), so a row's work and
+    // the state are the window's; a fixed window costs the same at any age
+    // (task 573).
+    cell("isotonic.window", 100, 8, Pow(1), Pow(1)),
+    cell("isotonic.targets", 1, 8, Pow(1), Pow(1)),
+    cell("isotonic.history", 1000, 8, Const, Const),
     cell("ew_cov.k", 4, 8, Pow(2), Pow(2)),
     cell("ew_cov.lags", 1, 8, Pow(1), Pow(1)),
     cell("ew_cov.window", 500, 8, Const, Pow(1)),
@@ -897,6 +904,18 @@ fn model_case(id: &str, n: usize) -> ModelCase {
             s["features"] = json!([]);
             let c = ModelCase::new(s, lin);
             if dim == "history" { c.warm(n) } else { c }
+        }
+        ("isotonic", "window" | "targets" | "history") => {
+            let w = if dim == "window" { n } else { 100 };
+            let t = if dim == "targets" { n } else { 1 };
+            let mut s = fit(json!({"type": "isotonic", "window_rows": w}), 1, t);
+            s["min_weight"] = json!(0.0);
+            let c = ModelCase::new(s, lin);
+            match dim {
+                "history" => c.warm(n.max(1000)),
+                // a window filled before the block
+                _ => c.warm(2 * w),
+            }
         }
         ("ar", "lags") => ModelCase::new(fit(json!({"type": "ar", "lags": n}), 0, 1), lin),
         ("ar", "targets") => ModelCase::new(fit(json!({"type": "ar", "lags": 8}), 0, n), lin),

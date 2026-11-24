@@ -127,6 +127,15 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
             "Raise alpha",
             "buckets",
         ),
+        ModelKind::Isotonic {
+            window_size: Some(w),
+            ..
+        } => (format!("window_size = {w}"), "Shorten window_size", "rows"),
+        ModelKind::Isotonic { .. } => (
+            "the feature column".to_string(),
+            "Round the feature to fewer values in the query, or give window_rows",
+            "distinct values",
+        ),
         ModelKind::Expectile {
             refit_span: Some(s),
             ..

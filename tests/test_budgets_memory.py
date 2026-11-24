@@ -172,6 +172,8 @@ EXCEPT = {
     "expectile": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_calibration", "emit_breaks"},
     "holt": ONE_SLOT | NOT_LEAST_SQUARES | {"emit_feature_health"},
     "ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
+    # A curve, not coefficients: no `coef` and no cadence for it.
+    "isotonic": ONE_SLOT | NOT_LEAST_SQUARES | {"coef_every"},
 }
 
 
@@ -200,6 +202,12 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     ("expectile", "expectile", fullest("expectile", **FIT, expectile=0.8), []),
     ("holt", "holt", fullest("holt", targets=["y"], group="g", half_life=25.0, **CLOCK), []),
     ("ar", "ar", fullest("ar", **FIT, lags=[1, 3]), []),
+    (
+        "isotonic",
+        "isotonic",
+        fullest("isotonic", **dict(FIT, features=["x0"]), window_size=50.0),
+        [],
+    ),
     (
         "ew_cov",
         "ew_cov",

@@ -339,6 +339,12 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
         ),
         refused(Ar::new(ar_cfg()).unwrap(), "decay", zero(), h),
         refused(Spectral::new(spectral_cfg()).unwrap(), "decay", zero(), h),
+        refused(
+            Isotonic::new(isotonic_cfg()).unwrap(),
+            "min_weight",
+            (-1.0).into(),
+            "min_weight must be at least 0",
+        ),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -769,6 +775,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ),
         ("ar", share(Ar::new(ar_cfg()).unwrap())),
         ("spectral", share(Spectral::new(spectral_cfg()).unwrap())),
+        ("isotonic", share(Isotonic::new(isotonic_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -826,6 +833,7 @@ const PROBED: &[(&str, &str)] = &[
     ("EwmMoments", "ewm_moments"),
     ("Ar", "ar"),
     ("Spectral", "spectral"),
+    ("Isotonic", "isotonic"),
 ];
 
 #[test]

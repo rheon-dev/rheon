@@ -3795,6 +3795,68 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // The pooled form, decreasing and clipped: two targets' distinct
+        // `x`, each with its weight and sum.
+        case!(
+            "isotonic",
+            "Isotonic",
+            Isotonic,
+            Isotonic::new(IsotonicCfg {
+                increasing: false,
+                y_min: Some(-1.0),
+                ..isotonic_cfg()
+            })
+            .unwrap(),
+            1,
+            Targets::Linear(2),
+            40
+        ),
+        // Under a decay, past an origin's move: the clock, its origin and
+        // the scaled weights.
+        case!(
+            "isotonic_decayed",
+            "Isotonic",
+            Isotonic,
+            Isotonic::new(IsotonicCfg {
+                decay: Decay::Halflife(0.4),
+                ..isotonic_cfg()
+            })
+            .unwrap(),
+            1,
+            Targets::Linear(2),
+            60
+        ),
+        // A row window, full and turning over: the ring and each target's
+        // rows sorted by `(x, y)`.
+        case!(
+            "isotonic_rows",
+            "Isotonic",
+            Isotonic,
+            Isotonic::new(IsotonicCfg {
+                window_rows: Some(25),
+                ..isotonic_cfg()
+            })
+            .unwrap(),
+            1,
+            Targets::Linear(2),
+            60
+        ),
+        // A clock window under a decay: the ring's stamps.
+        case!(
+            "isotonic_clock",
+            "Isotonic",
+            Isotonic,
+            Isotonic::new(IsotonicCfg {
+                window_clock: Some(12.0),
+                decay: Decay::Halflife(20.0),
+                out_of_bounds: IsotonicOutOfBounds::Clip,
+                ..isotonic_cfg()
+            })
+            .unwrap(),
+            1,
+            Targets::Linear(2),
+            60
+        ),
         // Saved two rows in: rings still filling, no fit yet.
         case!(
             "ar_filling",
@@ -3860,6 +3922,23 @@ fn dcc_cfg(k: usize, asymmetric: bool, params: Option<Vec<f64>>) -> DccCfg {
 
 /// A `ddsketch` of two targets at a coarse accuracy, read at three levels,
 /// plain or under a window.
+/// `isotonic` of two targets on the one feature, scikit-learn's defaults.
+fn isotonic_cfg() -> IsotonicCfg {
+    IsotonicCfg {
+        n_targets: 2,
+        increasing: true,
+        y_min: None,
+        y_max: None,
+        out_of_bounds: IsotonicOutOfBounds::Nan,
+        min_weight: 0.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(f64::INFINITY),
+        max_state_bytes: None,
+    }
+}
+
 fn ddsketch_cfg(window_rows: Option<usize>, window_clock: Option<f64>) -> DdSketchModelCfg {
     DdSketchModelCfg {
         n_targets: 2,

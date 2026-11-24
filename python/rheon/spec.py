@@ -133,7 +133,7 @@ shows them at work.
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
            ``audit``, ``hawkes``, ``garch``, ``dcc``, ``realized``, ``pca``,
            ``power_variation``, ``tdigest``, ``ddsketch``, ``ewm_moments``,
-           ``ar``, ``spectral``
+           ``ar``, ``spectral``, ``isotonic``
 ``emit_target_weight``
     Why: a row whose target is null teaches that target nothing but still
     adds to the shared ``weight_sum``, so a row can show ``weight_sum`` above
@@ -147,6 +147,7 @@ shows them at work.
     ``marginal``, which writes no prediction to withhold. To keep a row out
     of the learning without dropping it, give it weight 0 in the ``weight``
     column: it is still scored.
+``min_settled_frac``
     Why: a history shorter than the half-life may not represent the process,
     such as regimes or seasons the half-life was chosen to average across.
     What: predictions are withheld while ``settled_frac``, how far the decay
@@ -482,7 +483,10 @@ releases none. A regression writes, with ``<t>`` a target:
     start whose rows do not yet tell its variance process from a constant
     variance, or a ``dcc`` start whose rows do not tell its correlation's
     recursion from constant correlation, so it buffers more rows before it
-    reports; each builder's docstring has the test. ``scale_ratio_moved`` is a
+    reports; each builder's docstring has the test. It is also an
+    ``isotonic`` row whose feature lies outside the range of the rows learned
+    before it, or comes before any, where the fit is not identified and
+    ``out_of_bounds`` is ``"nan"``. ``scale_ratio_moved`` is a
     ``corrchange`` span whose correlation statistic passed its critical
     value while the two columns' scale ratio moved inside it, where the
     statistic is off its null law: its ``flag`` is null; the
@@ -1183,6 +1187,7 @@ from rheon._spec import (
     hmm,
     holt,
     huber,
+    isotonic,
     kalman,
     kmeans,
     lasso,
@@ -1243,4 +1248,5 @@ __all__ = [
     "tdigest",
     "ddsketch",
     "spectral",
+    "isotonic",
 ]

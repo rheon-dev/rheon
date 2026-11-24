@@ -3,7 +3,7 @@
 
 This how-to is for anyone about to write a
 [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) (the description
-of a model) who wants to know which of the thirty-five models to name in
+of a model) who wants to know which of the thirty-six models to name in
 it, and, for watching a stream for change, which model answers which
 question.
 
@@ -39,7 +39,7 @@ checked against. That page opens with the notation the update equations share.
 
 | your question | the family | start with | change to another when |
 |---|---|---|---|
-| what will the target be? | [Linear models](../MODELS.md#linear-models) | `ewridge` | the coefficients drift (`kalman`); some targets are wild (`huber`, `quantile`); a tail should weigh how far its rows lie (`expectile`); few features matter (`lasso`, `ftrl`); learning a row must take O(k) time for `k` features (`sgd`, `pa`); the target is a count, a positive amount or a proportion (`glm`, or `sgd` in O(k) time) or 0/1 (`ftrl`); you want a baseline with no features (`holt`); the target follows its own recent values (`ar`) |
+| what will the target be? | [Linear models](../MODELS.md#linear-models) | `ewridge` | the coefficients drift (`kalman`); some targets are wild (`huber`, `quantile`); a tail should weigh how far its rows lie (`expectile`); few features matter (`lasso`, `ftrl`); learning a row must take O(k) time for `k` features (`sgd`, `pa`); the target is a count, a positive amount or a proportion (`glm`, or `sgd` in O(k) time) or 0/1 (`ftrl`); you want a baseline with no features (`holt`); the target follows its own recent values (`ar`); the target only rises, or only falls, with one feature, as a calibrated probability does with its score (`isotonic`) |
 | how do these columns vary and move together? | [Moments and correlation](../MODELS.md#moments-and-correlation) | `ew_cov` | there are thousands of columns (`marginal`); one correlation must stand for a whole matrix (`deco`); the prices are noisy ticks (`rcov`); you want to know what the columns hold (`audit`); you want each return's variance forecast before it arrives (`garch`); you want the full correlation matrix of a few return series, moving every row (`dcc`); you want how much a series moved and whether it jumped (`realized`); you want the principal components of more columns than a covariance can be kept for (`pca`); you want a sum of powers of returns or of their kernel-weighted autocovariances, such as a realized kernel or a long-run variance, to compose a measure of your own (`power_variation`); you want a column's quantiles, uniform in rank, where its values sit near 0 (`tdigest`); you want a column's quantiles and tail means within 1% of the value, over a window or all rows (`ddsketch`) |
 | which group does this row belong to? | [Clustering and classification](../MODELS.md#clustering-and-classification) | `kmeans` | the clusters have any shape (`micro`); each row's class is known, to learn from (`ew_class`, its `label=` column) |
 | has something held, or changed? | [Sequential tests and regimes](../MODELS.md#sequential-tests-and-regimes) | `seqtest` | the correlations may have changed (`corrchange`); you want the regime's age (`bocpd`) or which regime it is (`hmm`); the rows are events that come in bursts (`hawkes`) |

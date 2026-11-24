@@ -201,6 +201,20 @@ fn the_n_eff_accessor_is_the_steps_under_a_window() {
         ),
         whole,
     );
+    // `isotonic` keeps a window of rows and one of clock units, each with
+    // or without a decay.
+    let whole = accessor_is_the_step(
+        Isotonic::new(isotonic_cfg()).unwrap(),
+        2,
+        &Isotonic::n_eff,
+    );
+    for (what, c) in isotonic_windows() {
+        pair(
+            what,
+            accessor_is_the_step(Isotonic::new(c).unwrap(), 2, &Isotonic::n_eff),
+            whole,
+        );
+    }
 }
 
 /// 40 rows, the second target absent on every third row: each target's
@@ -301,6 +315,10 @@ fn every_per_target_weight_is_the_rows_that_carried_that_target() {
             "holt",
             each_target_weight_is_its_own(Holt::new(holt_cfg()).unwrap(), false),
         ),
+        (
+            "isotonic",
+            each_target_weight_is_its_own(Isotonic::new(isotonic_cfg()).unwrap(), false),
+        ),
     ]
     .into_iter()
     .filter_map(|(k, kept)| kept.then_some(k))
@@ -308,7 +326,8 @@ fn every_per_target_weight_is_the_rows_that_carried_that_target() {
     assert_eq!(
         kept,
         [
-            "ewridge", "rls", "lasso", "kalman", "robust", "ftrl", "sgd", "pa", "holt"
+            "ewridge", "rls", "lasso", "kalman", "robust", "ftrl", "sgd", "pa", "holt",
+            "isotonic"
         ],
         "the models that keep a weight per target"
     );

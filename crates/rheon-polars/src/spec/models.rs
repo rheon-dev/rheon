@@ -941,6 +941,27 @@ impl Spec {
                     );
                 }
             }
+            // Its one feature is checked above. Every value is the model's
+            // own to check, here at the call, where the state's size against
+            // its cap is known too, under the spec's first decay.
+            ModelKind::Isotonic { .. } => {
+                let decays = self
+                    .decays()
+                    .unwrap_or_else(|_| vec![(String::new(), Decay::Halflife(f64::INFINITY))]);
+                if let Some((_, decay)) = decays.first() {
+                    no.take(
+                        crate::stream::isotonic_cfg(self, *decay)
+                            .map(|_| ())
+                            .map_err(|e| {
+                                format!(
+                                    "spec {:?}: {}",
+                                    self.name,
+                                    e.trim_start_matches("isotonic: ")
+                                )
+                            }),
+                    );
+                }
+            }
             // Every value is the model's own to check, here at the call,
             // where the state's size against its cap is known too; the
             // decay is checked with the spec's others.

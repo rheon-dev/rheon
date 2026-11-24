@@ -106,6 +106,7 @@ mod holt;
 mod huber_refit;
 pub mod humanfloat;
 mod influence;
+mod isotonic;
 mod kalman;
 mod lasso;
 mod margbins;
@@ -221,6 +222,10 @@ pub use huber_refit::{
     refit_reservation,
 };
 pub use influence::Influence;
+pub use isotonic::{
+    ISOTONIC_POINT_BYTES, ISOTONIC_ROW_BYTES, Isotonic, IsotonicCfg,
+    OutOfBounds as IsotonicOutOfBounds,
+};
 pub use kalman::{CovarianceForm, KALMAN_MAX_HORIZONS, Kalman, KalmanCfg};
 pub use lasso::{Lasso, LassoCfg};
 pub use margbins::{BinCfg, BinRule, BinStat};
