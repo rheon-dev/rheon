@@ -1743,6 +1743,109 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // Shrinkage (schema 72, docs/PLAN.md task 511): each estimator's
+        // form -- Ledoit and Wolf's fourth moments and kept Kish size, OAS's
+        // kept size alone, a fixed intensity's target in the cfg -- and each
+        // under a window but Ledoit and Wolf's, which a window refuses.
+        case!(
+            "ew_cov_lw",
+            "EwCovModel",
+            EwCovModel,
+            EwCovModel::new(EwCovCfg {
+                stats: vec![EwCovStat::Var, EwCovStat::Corr, EwCovStat::Shrinkage],
+                mahal_quantiles: Vec::new(),
+                shrinkage: Some(rheon_core::Shrinkage::LedoitWolf),
+                ..ew_cov_cfg()
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        case!(
+            "ew_cov_oas",
+            "EwCovModel",
+            EwCovModel,
+            EwCovModel::new(EwCovCfg {
+                stats: vec![EwCovStat::Var, EwCovStat::Mahal, EwCovStat::Shrinkage],
+                mahal_quantiles: Vec::new(),
+                lags: Vec::new(),
+                shrinkage: Some(rheon_core::Shrinkage::Oas),
+                ..ew_cov_cfg()
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        case!(
+            "ew_cov_oas_window",
+            "EwCovModel",
+            EwCovModel,
+            EwCovModel::new(EwCovCfg {
+                bias: true,
+                stats: vec![EwCovStat::Var, EwCovStat::Corr, EwCovStat::Shrinkage],
+                mahal_quantiles: Vec::new(),
+                pca: 0,
+                pca_every: 0.0,
+                max_rows_between_pca: u32::MAX,
+                lags: Vec::new(),
+                window: WINDOW.0,
+                window_every: WINDOW.1,
+                max_rows_between_snapshots: WINDOW.2,
+                shrinkage: Some(rheon_core::Shrinkage::Oas),
+                ..ew_cov_cfg()
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        case!(
+            "ew_cov_fixed",
+            "EwCovModel",
+            EwCovModel,
+            EwCovModel::new(EwCovCfg {
+                stats: vec![EwCovStat::Var, EwCovStat::PartialCorr, EwCovStat::Shrinkage],
+                mahal_quantiles: Vec::new(),
+                lags: Vec::new(),
+                shrinkage: Some(rheon_core::Shrinkage::Fixed {
+                    intensity: 0.2,
+                    target: Some(vec![2.0, 0.5, 1.5, 0.0, 0.25, 1.0]),
+                }),
+                ..ew_cov_cfg()
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        case!(
+            "ew_cov_fixed_window",
+            "EwCovModel",
+            EwCovModel,
+            EwCovModel::new(EwCovCfg {
+                bias: true,
+                stats: vec![EwCovStat::Var, EwCovStat::Cov, EwCovStat::Shrinkage],
+                mahal_quantiles: Vec::new(),
+                pca: 0,
+                pca_every: 0.0,
+                max_rows_between_pca: u32::MAX,
+                lags: Vec::new(),
+                window: WINDOW.0,
+                window_every: WINDOW.1,
+                max_rows_between_snapshots: None,
+                shrinkage: Some(rheon_core::Shrinkage::Fixed {
+                    intensity: 0.35,
+                    target: None,
+                }),
+                ..ew_cov_cfg()
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
         case!(
             "sgd",
             "Sgd",

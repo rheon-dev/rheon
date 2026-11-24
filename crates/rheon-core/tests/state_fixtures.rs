@@ -3321,6 +3321,77 @@ fn ew_covs_bias_is_written_in_both_values() {
     }
 }
 
+/// Shrinkage's forms (schema 72, docs/PLAN.md task 511), each frozen
+/// non-empty: Ledoit and Wolf's fourth moments `t`, `f` and the kept Kish
+/// size; OAS's kept size, unwindowed and windowed; a fixed intensity with a
+/// given target, and toward `μ I` under a window. The cfg's tail is written
+/// in each, the row cap as nil before a shrinkage that follows it.
+#[test]
+fn ew_covs_shrinkage_is_written_in_every_form() {
+    if regenerating() {
+        return;
+    }
+    let model = |name: &str| {
+        let f = frozen::ALL
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name}: no fixture; add the case and regenerate"));
+        rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap()
+    };
+    for (name, estimator, fourth, window) in [
+        ("ew_cov_lw", "ledoit_wolf", true, false),
+        ("ew_cov_oas", "oas", false, false),
+        ("ew_cov_oas_window", "oas", false, true),
+        ("ew_cov_fixed", "fixed", false, false),
+        ("ew_cov_fixed_window", "fixed", false, true),
+    ] {
+        let v = model(name);
+        let m = at(&v, &["model", "EwCovModel"]).unwrap_or_else(|| panic!("{name}"));
+        let sh = at(m, &["cfg", "shrinkage"]).unwrap_or_else(|| panic!("{name}: no shrinkage"));
+        let tag = match sh {
+            rmpv::Value::String(s) => s.as_str().map(str::to_string),
+            rmpv::Value::Map(kv) => kv.first().and_then(|(k, _)| k.as_str()).map(str::to_string),
+            _ => None,
+        };
+        assert_eq!(tag.as_deref(), Some(estimator), "{name}");
+        if estimator == "fixed" {
+            let fixed = at(sh, &["fixed", "intensity"]).and_then(rmpv::Value::as_f64);
+            assert!(
+                fixed.is_some_and(|s| s > 0.0 && s < 1.0),
+                "{name}: {fixed:?}"
+            );
+        }
+        let st = at(m, &["shrink"]).unwrap_or_else(|| panic!("{name}: no shrink state"));
+        let kish = at(st, &["kish"]).and_then(rmpv::Value::as_f64);
+        assert!(kish.is_some_and(|n| n > 1.0), "{name}: kish {kish:?}");
+        let f = at(st, &["fourth"]).unwrap_or_else(|| panic!("{name}: no fourth"));
+        if fourth {
+            assert!(held(f) >= 4, "{name}: the fourth moments are empty");
+        } else {
+            assert!(f.is_nil(), "{name}: fourth moments it does not read");
+        }
+        assert_eq!(
+            at(m, &["win"]).is_some_and(|w| !w.is_nil()),
+            window,
+            "{name}"
+        );
+    }
+    let fixed = model("ew_cov_fixed");
+    let target = at(
+        &fixed,
+        &["model", "EwCovModel", "cfg", "shrinkage", "fixed", "target"],
+    )
+    .expect("the given target");
+    assert!(held(target) >= 5, "the target is empty");
+    // A model without shrinkage writes neither field.
+    for name in ["ew_cov", "ew_cov_window"] {
+        let v = model(name);
+        let m = at(&v, &["model", "EwCovModel"]).unwrap();
+        assert!(at(m, &["shrink"]).is_none(), "{name}");
+        assert!(at(m, &["cfg", "shrinkage"]).is_none(), "{name}");
+    }
+}
+
 // --- regeneration -----------------------------------------------------------
 
 fn dir() -> PathBuf {
