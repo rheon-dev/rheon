@@ -127,9 +127,9 @@ def test_each_reason_a_row_can_give():
         increasing=True,
         detail=True,
     )
-    assert detail(frame.with_columns(lo=pl.lit(-5.0), hi=pl.lit(5.0)), flat)["withheld_reason"][0] == (
-        "not_determined"
-    )
+    assert detail(frame.with_columns(lo=pl.lit(-5.0), hi=pl.lit(5.0)), flat)["withheld_reason"][
+        0
+    ] == ("not_determined")
 
 
 def test_a_decreasing_function_is_solved_where_declared():

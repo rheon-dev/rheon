@@ -583,8 +583,8 @@ def _input_tree(who: str, value: Any) -> list[Any]:
             raise ValueError(
                 f"{who}: the input holds another window operator, but an operator's input may "
                 f"hold only columns and Polars expressions of the same row (a column "
-                f'computation, such as pl.col("x") + 1), rp.increment or rp.ops.tick_sign. To apply '
-                f"an operator to another's output, add the inner one as a column with "
+                f'computation, such as pl.col("x") + 1), rp.increment or rp.ops.tick_sign. To '
+                f"apply an operator to another's output, add the inner one as a column with "
                 f"rp.stream.with_windows first, and pass that column."
             )
         return tree
@@ -1329,16 +1329,16 @@ def row_operator(
         tree = _row_input(who, "input", input)
         if isinstance(abs_tol, bool) or not isinstance(abs_tol, numbers.Real):
             raise TypeError(
-                f"{who}: abs_tol must be a number, but it is of type {type(abs_tol).__name__}. Set abs_tol "
-                f"to 0 for values exactly equal, or to the largest difference two adjacent rows "
-                f"of one run may have."
+                f"{who}: abs_tol must be a number, but it is of type "
+                f"{type(abs_tol).__name__}. Set abs_tol to 0 for values exactly equal, or to the "
+                f"largest difference two adjacent rows of one run may have."
             )
         t = float(abs_tol)
         if not (math.isfinite(t) and t >= 0.0):
             raise ValueError(
-                f"{who}: abs_tol must be finite and at least 0, but it is {abs_tol!r}. Set abs_tol to 0 for "
-                f"values exactly equal, or to the largest difference two adjacent rows of one "
-                f"run may have."
+                f"{who}: abs_tol must be finite and at least 0, but it is {abs_tol!r}. Set "
+                f"abs_tol to 0 for values exactly equal, or to the largest difference two adjacent "
+                f"rows of one run may have."
             )
         # A run under the default tolerance carries no parameters, so one
         # run asked for twice is one column whichever way it was written.

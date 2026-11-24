@@ -465,11 +465,7 @@ def test_a_row_of_weight_zero_is_as_if_absent(clock):
     df = pl.DataFrame(
         {"t": np.arange(n) * 2, "y": y, "w": np.where(np.arange(n) % 17 == 9, 0.0, 1.0)}
     )
-    kw = (
-        dict(weight="w", clock="t", gap_cap=1000.0, period=2.0 * M)
-        if clock
-        else dict(weight="w")
-    )
+    kw = dict(weight="w", clock="t", gap_cap=1000.0, period=2.0 * M) if clock else dict(weight="w")
     spec = _spec("add", True, True, **kw)
     full = _fit(spec, df)
     keep = (df["w"] > 0).to_numpy()

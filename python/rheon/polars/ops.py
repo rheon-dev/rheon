@@ -3005,7 +3005,10 @@ def clock_drift(
 
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "e": [-0.5, 0.0, 0.5, 1.0]})
         out = rp.stream.with_windows(
-            rows, drift=rp.ops.clock_drift("t", "e", half_life=float("inf")), clock="t", gap_cap=10.0
+            rows,
+            drift=rp.ops.clock_drift("t", "e", half_life=float("inf")),
+            clock="t",
+            gap_cap=10.0,
         )
         print(out["drift"].to_list())   # the lag grows half a unit a unit of arrival
 
