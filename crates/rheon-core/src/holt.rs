@@ -2372,6 +2372,9 @@ mod tests {
             ..cfg(5.0, 20.0)
         })
         .unwrap_err();
-        assert!(e.contains("horizons are forecasts of the plain level"), "{e}");
+        assert!(
+            e.contains("horizons are forecasts of the plain level"),
+            "{e}"
+        );
     }
 }

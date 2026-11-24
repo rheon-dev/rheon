@@ -521,7 +521,7 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "eigenvalues does not pass. "
         "`negative_input` is a `garch` row under GARCH or GJR with an input below 0, which its "
         "variance equation cannot read: the row reports nothing and is learned as a row of "
-        "weight 0". "
+        "weight 0. "
         "`not_positive` alone names a row whose prediction stands: a multiplicative `holt` "
         "season's row whose target, or the level or seasonal factor its update would make, is 0 "
         "or below, which is predicted and not learned. Only that form's `enum` holds "
