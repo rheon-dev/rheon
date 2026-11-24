@@ -110,6 +110,15 @@ MINIMAL: dict[str, dict[str, object]] = {
     "sarima": {"order": (1, 0, 0), "half_life": None},
 }
 
+
+def decays(kind: str) -> bool:
+    """Whether ``kind`` takes a decay: the capability the sweeps that
+    presume one read. A kind that decays nothing gives ``half_life=None`` in
+    ``MINIMAL``, with its reason beside that entry (``sarima``'s estimate
+    weighs every row it has learned)."""
+    return MINIMAL[kind].get("half_life", 1.0) is not None
+
+
 #: The sweeps fit a numeric target, so the models that predict none --
 #: ``ew_cov`` (moments), ``kmeans`` and ``micro`` (assignments, no target),
 #: ``ew_class`` (a label), ``seqtest`` (evidence), ``marginal`` (pairwise

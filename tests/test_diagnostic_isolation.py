@@ -73,7 +73,7 @@ import polars as pl
 import pytest
 
 from rheon import polars as rp
-from test_model_registry import REGRESSIONS
+from test_model_registry import REGRESSIONS, decays
 
 TIER = "mixed"
 
@@ -107,6 +107,10 @@ KINDS: dict[str, Builder] = {
     "sgd_huber": lambda **kw: rp.spec.sgd("m", loss="huber", learning_rate=0.02, **kw),
     # One lag of the target beside the features.
     "ar": lambda **kw: rp.spec.ar("m", lags=1, **kw),
+    # The features as regressors of an AR(1). The bound loose: this checks
+    # the plumbing, not the accuracy, which the oracle tests hold at the
+    # default se_bound.
+    "sarima": lambda **kw: rp.spec.sarima("m", order=(1, 0, 0), se_bound=1e3, **kw),
 }
 
 ESSENTIAL_KINDS = ("ewridge", "sgd", "holt")
@@ -115,7 +119,12 @@ NO_FEATURES = frozenset({"holt"})
 #: The kinds that refuse ``embargo``: ``ar``'s lags are the target's last
 #: values, which a delay would make older for the rows predicted than for
 #: the rows learned. Their clocked variant runs without one.
-NO_EMBARGO = frozenset({"ar"})
+NO_EMBARGO = frozenset({"ar", "sarima"})
+#: The kinds that decay nothing (`test_model_registry.decays`): the spec
+#: gives them no half-life, so no grid of slots to choose or average across
+#: and no settling to gate on, and each diagnostic's memory is the fit's,
+#: unbounded, so a memory of ``inf`` is their default, not a knob.
+UNDECAYED = frozenset(k for k in KINDS if k in REGRESSIONS and not decays(k))
 
 #: Where a switch is taken by fewer than every linear kind (the builders'
 #: refusals; docs/DIAGNOSTICS.md, "What each costs, and which models take it").
@@ -164,6 +173,8 @@ class Case:
 
     def taken_by(self, kind: str) -> bool:
         key = self.needs or next(iter(self.kw))
+        if kind in UNDECAYED and (self.grid or key == "min_settled_frac"):
+            return False
         return kind in TAKES.get(key, ALL)
 
     def swept_on(self, kind: str) -> bool:
@@ -224,6 +235,8 @@ def _cases() -> list[Case]:
         knob(f"{memory}=30", parent, **{memory: 30.0})
         if legal_inf:
             knob(f"{memory}=inf", parent, **{memory: math.inf})
+            # Where the fit decays nothing, a memory of inf is the default.
+            c[-1] = Case(**{**c[-1].__dict__, "only": ALL - UNDECAYED})
     # 0, which writes no `se_coef_hac`, is the default with no horizon.
     knob("robust_se_lags=1", "emit_robust_se", robust_se_lags=1)
     knob("robust_se_lags=3", "emit_robust_se", robust_se_lags=3)
@@ -319,17 +332,23 @@ VARIANTS: dict[str, dict[str, Any]] = {
 
 
 def _spec(build: Builder, kind: str, variant: str, kw: dict[str, Any], grid: bool) -> dict:
-    full: dict[str, Any] = dict(
-        targets=["y", "y2"],
-        half_life=[60.0, 240.0] if grid else 120.0,
-        coef_every=0,
-        **VARIANTS[variant],
-    )
+    full: dict[str, Any] = dict(targets=["y", "y2"], coef_every=0, **VARIANTS[variant])
+    if kind not in UNDECAYED:
+        full["half_life"] = [60.0, 240.0] if grid else 120.0
     if kind not in NO_FEATURES:
         full["features"] = ["x0", "x1"]
     if kind in NO_EMBARGO:
         full.pop("embargo", None)
     full |= kw
+    if kind in UNDECAYED:
+        # A diagnostic that compares its memory with a longer one reads
+        # nothing where its memory is the fit's, unbounded: the feature
+        # health (refused) and the break test (null throughout) are given
+        # the base half-life's span.
+        if full.get("emit_feature_health"):
+            full.setdefault("feature_health_half_life", 120.0)
+        if full.get("emit_breaks"):
+            full.setdefault("breaks_half_life", 120.0)
     if variant == "clocked" and full.get("emit_drift") and "drift_threshold" not in full:
         # On a clock, the threshold is in sigma x clock units and has no
         # default; 20 is the row default's value.

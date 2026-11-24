@@ -85,9 +85,26 @@ def slot(out, prefix, model):
     return out["m"].struct.field(fields[0]).to_list()
 
 
-def frame(n=40, seed=0, binary=False, noise=0.0):
+def decays(model: str) -> bool:
+    """The registry's capability (`test_model_registry.decays`), imported
+    here, since that module imports this one's ``MODELS``."""
+    from test_model_registry import decays as registered
+
+    return registered(model)
+
+
+#: The kinds that read a noisy target where the others read the line: an
+#: estimated `sarima` on a target its features give exactly has innovations
+#: of variance 0, whose likelihood has no maximum, so its start is withheld
+#: on every row (held in its own tests); with noise it opens.
+NOISY_TARGET = {"sarima": 0.3}
+
+
+def frame(n=40, seed=0, binary=False, noise=0.0, model=None):
     """``y0 = 2 x0 - x1`` plus ``noise`` times a standard normal (none by
-    default: the line every sweep above reads at a spread of zero)."""
+    default: the line every sweep above reads at a spread of zero; the
+    kind's ``NOISY_TARGET`` where it has one)."""
+    noise = noise or NOISY_TARGET.get(model, 0.0)
     rng = np.random.default_rng(seed)
     x0, x1 = rng.standard_normal(n), rng.standard_normal(n)
     y = (rng.random(n) < 0.5).astype(float) if binary else x0 * 2.0 - x1
@@ -112,11 +129,17 @@ WITH_FEATURES_IDS = [i for (m, _), i in zip(SWEEP, IDS, strict=True) if m != "ho
 #: ``min_weight`` reads (hard rule 8), starts that many rows later than
 #: ``weight_sum``.
 HOLD_BACK = {"ar": 1}
+#: The rows past its own first rows a kind's start waits for before it
+#: predicts: ``sarima``'s estimated start fits once Kish's count of the
+#: target's own rows passes its structural minimum, four parameters here
+#: (two features, ``phi`` and ``sigma2``), so five rows, two past the three
+#: a ``min_weight`` of 2.5 waits for.
+START_WAIT = {"sarima": 2}
 
 
 @pytest.mark.parametrize(("model", "extra"), WITH_FEATURES, ids=WITH_FEATURES_IDS)
 def test_feature_null_skips_the_row_entirely(model, extra):
-    df = frame(binary=model in BINARY)
+    df = frame(binary=model in BINARY, model=model)
     x = df["x0"].to_list()
     x[10] = None
     df = df.with_columns(x0=pl.Series(x, dtype=pl.Float64))
@@ -158,7 +181,7 @@ class TestNullPolicy:
         task 195)."""
         if model in ("kalman", "sgd", "pa"):
             extra = {**extra, "standardize": False}
-        df = frame(binary=model in BINARY)
+        df = frame(binary=model in BINARY, model=model)
         # Row 21: off the blocked variant's solves (rows 4, 8, ... since its
         # first period ran on the default schedule, task 278), where a row
         # of weight 0 would wait a row to solve and a null target would not.
@@ -189,7 +212,7 @@ class TestNullPolicy:
     def test_null_weight_skips_the_row(self, model, extra):
         """A null weight skips the row: every field of it is null, and every
         other row is what it is with the row deleted, ``coef`` included."""
-        df = frame(binary=model in BINARY)
+        df = frame(binary=model in BINARY, model=model)
         w = df["w"].to_list()
         w[15] = None
         out = _fields(run(model, extra, df.with_columns(w=pl.Series(w)), **CLOCKED))
@@ -200,7 +223,7 @@ class TestNullPolicy:
         )
 
     def test_negative_weight_is_rejected(self, model, extra):
-        df = frame(binary=model in BINARY)
+        df = frame(binary=model in BINARY, model=model)
         w = df["w"].to_list()
         w[5] = -1.0
         df = df.with_columns(w=pl.Series(w, dtype=pl.Float64))
@@ -211,7 +234,7 @@ class TestNullPolicy:
 @pytest.mark.parametrize(("model", "extra"), SWEEP, ids=IDS)
 class TestWarmup:
     def test_outputs_are_null_until_min_periods(self, model, extra):
-        df = frame(binary=model in BINARY)
+        df = frame(binary=model in BINARY, model=model)
         out = run(model, extra, df, min_weight=5.0)
         preds = slot(out, "pred_", model)
         neff = slot(out, "weight_sum", model)
@@ -231,7 +254,7 @@ class TestWarmup:
         row 11, after one. `ewridge`'s noise gate is off here: three rows
         for three coefficients leave no residual degrees of freedom, so it
         withholds row 13 on its own account (`above_max_error_inflation`)."""
-        df = frame(binary=model in BINARY)
+        df = frame(binary=model in BINARY, model=model)
         y = df["y0"].to_list()
         y[:10] = [None] * 10
         df = df.with_columns(y0=pl.Series(y, dtype=pl.Float64))
@@ -240,7 +263,8 @@ class TestWarmup:
         preds = slot(out, "pred_", model)
         neff = slot(out, "weight_sum", model)
         first = next((i for i, p in enumerate(preds) if p is not None), None)
-        assert first == 13 + HOLD_BACK.get(model, 0), f"{model}: first prediction on row {first}"
+        want = 13 + HOLD_BACK.get(model, 0) + START_WAIT.get(model, 0)
+        assert first == want, f"{model}: first prediction on row {first}"
         assert neff[first] > 12.0, "weight_sum counts every row, the null-target ones too"
 
     def test_coef_is_null_or_complete_never_empty(self, model, extra):
@@ -249,7 +273,7 @@ class TestWarmup:
         list on the warmup rows, which made the documented way to read one
         coefficient -- `coef.list.get(position)` -- raise "index out of
         bounds" instead of returning null (IMPROVEMENTS U7)."""
-        df = frame(binary=model in BINARY)
+        df = frame(binary=model in BINARY, model=model)
         # The models that solve on a schedule report nothing until the first
         # solve, which is the state this is about; delay it a few rows, with
         # rows of weight 0, which never solve. (A clock schedule did it until
@@ -278,7 +302,7 @@ class TestWarmup:
                 assert c[0] is None, f"{model}.{name}: unsolved row is not null"
 
     def test_n_eff_is_reported_before_the_update(self, model, extra):
-        df = frame(binary=model in BINARY)
+        df = frame(binary=model in BINARY, model=model)
         out = run(model, extra, df, min_weight=0.0)
         assert slot(out, "weight_sum", model)[0] == 0.0
 
@@ -295,11 +319,14 @@ class TestWarmup:
         `min_weight = 0` too); where a model predicts on row 2, the
         prediction is checked as well. `ewridge`'s noise gate is off: two
         rows for three coefficients leave no residual degrees of freedom."""
-        df = frame(binary=model in BINARY)
+        df = frame(binary=model in BINARY, model=model)
         gate = {"max_error_inflation": float("inf")} if model == "ewridge" else {}
-        out = run(model, extra, df, half_life=2.0, min_weight=1.5, **gate)
+        # A kind that decays nothing (`decays`) is held to the same gate on
+        # its undecayed weight, 0, 1, 2 and 3 before rows 0 to 3.
+        decay = {"half_life": 2.0} if decays(model) else {}
+        out = run(model, extra, df, min_weight=1.5, **decay, **gate)
         neff = slot(out, "weight_sum", model)
-        lam = 0.5**0.5
+        lam = 0.5**0.5 if decays(model) else 1.0
         np.testing.assert_allclose(neff[:4], [0.0, 1.0, 1.0 + lam, 1.0 + lam + lam**2], rtol=1e-12)
         why = slot(out, "withheld_reason", model)
         below = [r == "below_min_weight" for r in why[:4]]
@@ -307,7 +334,7 @@ class TestWarmup:
         want = [i < opens for i in range(4)]
         assert below == want, f"{model}: {why[:4]}, weight_sum {neff[:4]}"
         preds = slot(out, "pred_", model)
-        if model not in ("huber", "quantile"):
+        if model not in ("huber", "quantile") and model not in START_WAIT:
             assert preds[opens] is not None, f"{model}: no prediction on row {opens}"
 
 
@@ -334,7 +361,10 @@ class TestClockSemantics:
         # after two rows W = 0.5**(1/200) + 1; the huge gap decays it by
         # 0.5**(4/200), not to nothing
         w2 = neff[2]
-        assert neff[3] == pytest.approx(w2 * 0.5 ** (4 / 200) + 1.0, rel=1e-9)
+        # A kind that decays nothing (`decays`) counts the row whatever the
+        # gap.
+        lam = 0.5 ** (4 / 200) if decays(model) else 1.0
+        assert neff[3] == pytest.approx(w2 * lam + 1.0, rel=1e-9)
 
     def test_a_backwards_clock_is_refused_by_default(self, model, extra):
         with pytest.raises(ValueError, match="steps back by 50 at row 2"):
@@ -374,7 +404,7 @@ class TestClockSemantics:
 @pytest.mark.parametrize(("model", "extra"), SWEEP, ids=IDS)
 class TestUniversalInvariants:
     def test_chunk_invariance(self, model, extra):
-        df = frame(n=120, seed=3, binary=model in BINARY)
+        df = frame(n=120, seed=3, binary=model in BINARY, model=model)
         spec = build(model, extra, group=None)
         one = rp.ModelBank([spec]).fit_predict(df).select("m").unnest("m")
         bank = rp.ModelBank([spec])
@@ -387,7 +417,7 @@ class TestUniversalInvariants:
         assert one.select(keep).equals(many.select(keep), null_equal=True)
 
     def test_save_load_mid_stream(self, model, extra, tmp_path):
-        df = frame(n=120, seed=4, binary=model in BINARY)
+        df = frame(n=120, seed=4, binary=model in BINARY, model=model)
         spec = build(model, extra)
         a = rp.ModelBank([spec])
         a.fit_predict(df.slice(0, 60))
@@ -400,7 +430,9 @@ class TestUniversalInvariants:
         assert ra.equals(rb, null_equal=True)
 
     def test_groups_are_independent(self, model, extra):
-        df = frame(n=120, seed=5, binary=model in BINARY).with_columns(g=pl.Series(["a", "b"] * 60))
+        df = frame(n=120, seed=5, binary=model in BINARY, model=model).with_columns(
+            g=pl.Series(["a", "b"] * 60)
+        )
         spec = build(model, extra, group="g")
         both = rp.ModelBank([spec]).fit_predict(df)
         solo_df = df.filter(pl.col("g") == "a")
@@ -453,7 +485,7 @@ class TestANoisyLine:
         return build(model, extra, emit_sigma=True, **kw)
 
     def test_chunk_invariance(self, model, extra):
-        df = frame(n=240, seed=13, binary=model in BINARY, noise=self.NOISE)
+        df = frame(n=240, seed=13, binary=model in BINARY, noise=self.NOISE, model=model)
         spec = self._spec(model, extra, group=None)
         one = rp.ModelBank([spec]).fit_predict(df).select("m").unnest("m")
         bank = rp.ModelBank([spec])
@@ -466,7 +498,7 @@ class TestANoisyLine:
         assert one.select(keep).equals(many.select(keep), null_equal=True)
 
     def test_save_load_mid_stream(self, model, extra, tmp_path):
-        df = frame(n=240, seed=14, binary=model in BINARY, noise=self.NOISE)
+        df = frame(n=240, seed=14, binary=model in BINARY, noise=self.NOISE, model=model)
         spec = self._spec(model, extra)
         a = rp.ModelBank([spec])
         a.fit_predict(df.slice(0, 120))
@@ -481,7 +513,7 @@ class TestANoisyLine:
     def test_the_spread_is_a_positive_number_once_ready(self, model, extra):
         if model in BINARY:
             pytest.skip("a 0/1 target has no line to put noise on")
-        df = frame(n=240, seed=15, noise=self.NOISE)
+        df = frame(n=240, seed=15, noise=self.NOISE, model=model)
         out = run(model, extra, df, emit_sigma=True).select("m").unnest("m")
         sigma = [c for c in out.columns if c.startswith("sigma")]
         assert sigma, f"{model}: emit_sigma emits no sigma field"
