@@ -3,7 +3,7 @@ quantiles over a stream's clock, looking back or ahead, a variance and a
 standard deviation looking back, and the largest and smallest value of a
 window, or since an event. ``increment``, the step of a running total,
 gives a window operator an input. :func:`invert` solves an equation of the
-row for an unknown, in the same run: a root a row, never a window.
+row for :func:`unknown`, in the same run: a root a row, never a window.
 
 Each operator returns a ``pl.Expr`` that composes with Polars' own
 expressions, in which ``pl.col`` reads the current row.
@@ -245,7 +245,13 @@ import polars as pl
 
 from rheon._errors import RefusedValueError
 from rheon._renamed import renamed_function
-from rheon.polars._formula import invert_node, moments_operator, operator, profile
+from rheon.polars._formula import (
+    UNKNOWN_COLUMN,
+    invert_node,
+    moments_operator,
+    operator,
+    profile,
+)
 
 if TYPE_CHECKING:
     from rheon._duration import Duration
@@ -268,6 +274,7 @@ __all__ = [
     "invert",
     "rolling_max",
     "rolling_min",
+    "unknown",
 ]
 
 
@@ -2670,7 +2677,7 @@ def ewm_profile(
 
 
 def invert(
-    f: Callable[[pl.Expr], pl.Expr],
+    f: pl.Expr | Callable[[pl.Expr], pl.Expr],
     equals: str | float | pl.Expr,
     lo: str | float | pl.Expr,
     hi: str | float | pl.Expr,
@@ -2686,19 +2693,20 @@ def invert(
     Use it to invert a closed-form function of the row's columns, such as a
     pricing formula for the volatility that gives a quoted price, where the
     function rises or falls with the unknown over the bracket. The solve
-    never calls Python a row: ``f`` is called once, to write the equation,
-    and the library evaluates it in Rust on each row. A root is given only
+    never calls Python a row: the equation is read once, when the call is
+    made, and the library evaluates it in Rust on each row. A root is given only
     where the function's own rounding fixes it to the tolerance, and is
     withheld as null otherwise, never clipped to the bracket.
 
     .. rubric:: Parameters
 
     ``f``
-        A function of one argument, the unknown, that returns a ``pl.Expr``,
-        such as ``lambda x: x ** 3 + pl.col("a") * x``. It is called once,
-        with an expression that stands in for the unknown. The expression may
-        hold the unknown, columns, numbers, ``+ - * /``, ``**``, negation,
-        ``abs``, ``exp``, ``log``, ``sqrt`` and a cast to ``pl.Float64``.
+        The equation's left side: a ``pl.Expr`` in :func:`unknown`, such as
+        ``x ** 3 + pl.col("a") * x`` with ``x = rp.ops.unknown()``, or a
+        function of one argument that returns one, called once with
+        :func:`unknown`. The expression may hold the unknown, columns,
+        numbers, ``+ - * /``, ``**``, negation, ``abs``, ``exp``, ``log``,
+        ``sqrt`` and a cast to ``pl.Float64``.
     ``equals``
         The value ``f`` must take: a column name, a number, or an expression
         of the row in the nodes ``f`` may hold, without the unknown.
@@ -2737,13 +2745,13 @@ def invert(
     .. rubric:: Raises
 
     ``TypeError``
-        ``f`` is not a function, or returns no ``pl.Expr``; ``equals``,
+        ``f`` is neither a ``pl.Expr`` nor a function returning one; ``equals``,
         ``lo`` or ``hi`` is neither a column name, a number nor a
         ``pl.Expr``; ``increasing`` or ``detail`` is not a bool; ``xtol``
         or ``rtol`` is not a number.
     ``ValueError``
-        ``f`` does not use the unknown; ``equals``, ``lo`` or ``hi`` holds
-        it; a part holds a window operator or a node the solve does not
+        ``f`` does not hold the unknown; ``equals``, ``lo`` or ``hi``
+        holds it; a part holds a window operator or a node the solve does not
         evaluate; the equation reads no column; ``lo`` and ``hi`` are
         numbers with ``lo`` not below ``hi``; a number is not finite;
         ``xtol`` or ``rtol`` is out of its range.
@@ -2754,11 +2762,12 @@ def invert(
 
         rows = pl.DataFrame({"t": [0.0, 1.0, 2.0, 3.0], "a": [1.0, 2.0, 0.5, 1.0],
                              "y": [2.0, 3.0, None, 500.0]})
-        cubic = lambda x: x ** 3 + pl.col("a") * x   # rises with x where a >= 0
+        x = rp.ops.unknown()
+        cubic = x ** 3 + pl.col("a") * x   # rises with x where a >= 0
         out = rp.stream.with_windows(
             rows,
-            x=rp.invert(cubic, "y", -5.0, 5.0, increasing=True),
-            d=rp.invert(cubic, "y", -5.0, 5.0, increasing=True, detail=True),
+            x=rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True),
+            d=rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True, detail=True),
             level=rp.ewm_mean("y", half_life=1.0),   # a run computes a window operator
             clock="t", gap_cap=10.0,
         )
@@ -2772,6 +2781,7 @@ def invert(
 
     .. rubric:: See also
 
+    - :func:`unknown`, the quantity solved for.
     - :func:`rheon.polars.stream.with_windows`, which computes it.
     - ``scipy.optimize.brentq``, the oracle it is held to.
 
@@ -2865,3 +2875,45 @@ def invert(
         rtol=rtol,
         detail=detail,
     )
+
+
+def unknown() -> pl.Expr:
+    """The quantity :func:`invert` solves for, in the expression of its
+    equation.
+
+    Use it to write an equation's left side as a Polars expression, such as
+    ``x ** 3 + pl.col("a") * x`` with ``x = rp.ops.unknown()``, and hand that
+    expression to :func:`invert`. It composes with Polars' operators and
+    the element-wise functions :func:`invert` evaluates, as a column does.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that stands for the unknown: a column under the prefix
+    ``@po:``, which the window operators' own columns carry. Only the
+    function :func:`invert` solves may hold it. Polars cannot compute it,
+    and a formula of :func:`rheon.polars.stream.with_windows`, an invert's
+    target or bracket, or a spec's target that holds it is refused when the
+    query or the spec is built.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        x = rp.ops.unknown()
+        rows = pl.DataFrame({"k": [1.0, 4.0, 9.0]})
+        out = rp.stream.with_windows(
+            rows,
+            root=rp.ops.invert(x * x, "k", 0.0, 10.0, increasing=True),   # the square root
+            level=rp.ewm_mean("k", half_life=1.0),
+        )
+        print(out["root"].round(9).to_list())
+
+    .. code-block:: text
+
+        [1.0, 2.0, 3.0]
+
+    .. rubric:: See also
+
+    - :func:`invert`, which solves for it.
+    """
+    return pl.col(UNKNOWN_COLUMN)

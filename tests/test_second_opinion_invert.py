@@ -3,7 +3,7 @@ against scipy's ``brentq``, on a seeded monotone closed form.
 
 Two ways in. The example ``crates/rheon-polars/examples/invert_rows``
 reads the node in its list form, with the columns, from stdin, and runs it
-as a Polars expression over the frame; and ``rp.invert``, the Python name,
+as a Polars expression over the frame; and ``rp.ops.invert``, the Python name,
 writes the same node from a Python function of the unknown and runs it in
 ``rp.stream.with_windows``. Either way the same function is written in
 NumPy and solved by ``scipy.optimize.brentq`` at the same ``xtol`` and
@@ -178,19 +178,19 @@ def test_the_node_agrees_with_brentq_wherever_it_certifies(invert_solver):
 
 
 def _python_f(x: pl.Expr) -> pl.Expr:
-    """``x^3 + a x + exp(b x)`` in Polars, for ``rp.invert``."""
+    """``x^3 + a x + exp(b x)`` in Polars, for ``rp.ops.invert``."""
     return x**3 + pl.col("a") * x + (pl.col("b") * x).exp()
 
 
 def test_rp_invert_agrees_with_brentq_wherever_it_certifies():
-    """``rp.invert`` over the same 1,000 seeded rows, through
+    """``rp.ops.invert`` over the same 1,000 seeded rows, through
     ``rp.stream.with_windows`` beside a window operator, under ``detail``:
     it writes the example's node from a Python function of the unknown, and
     its roots are held to ``brentq`` as the example's are, within
     ``2 eps + xtol + rtol |x| + 5 eps_mach |x|`` on every certified row
     (about ``6e-12`` here, the roots in ``[-4.9, 4.9]``). The largest gap
     measured is far inside it."""
-    expr = rp.invert(_python_f, "t", LO, HI, increasing=True, xtol=XTOL, rtol=RTOL, detail=True)
+    expr = rp.ops.invert(_python_f, "t", LO, HI, increasing=True, xtol=XTOL, rtol=RTOL, detail=True)
     (column,) = expr.meta.root_names()
     assert json.loads(column[len(_formula.PREFIX) :]) == NODE
     a, b, roots, t, expect = _rows()
@@ -204,7 +204,7 @@ def test_rp_invert_agrees_with_brentq_wherever_it_certifies():
     # The plain form gives the detail's roots, to the bit.
     plain = rp.stream.with_windows(
         frame,
-        x=rp.invert(_python_f, "t", LO, HI, increasing=True, xtol=XTOL, rtol=RTOL),
+        x=rp.ops.invert(_python_f, "t", LO, HI, increasing=True, xtol=XTOL, rtol=RTOL),
         level=rp.ewm_mean("a", half_life=4.0),
     )
     assert plain["x"].to_list() == out["root"]

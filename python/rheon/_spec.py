@@ -893,7 +893,7 @@ def formula_target(who: str, expr: pl.Expr) -> Target | FormulaTarget:
         )
     if _formula.holds_invert(tree):
         raise ValueError(
-            f"{who}: target {quoted(name)} holds rp.invert, which a formula target does not "
+            f"{who}: target {quoted(name)} holds rp.ops.invert, which a formula target does not "
             "read. Compute the root as a column with rp.stream.with_windows in the query before "
             "the bank, and read that column in the formula."
         )

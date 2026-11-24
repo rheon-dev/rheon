@@ -1397,7 +1397,7 @@ def _formulas(who: str, exprs: tuple[Any, ...], named: dict[str, Any]) -> list[d
         # An invert counts as a formula's node, but reads the row alone: a
         # run of inverts alone would compute no window.
         raise ValueError(
-            f"{who}: no expression holds a window operator, and rp.invert reads the row alone, "
+            f"{who}: no expression holds a window operator, and rp.ops.invert reads the row alone, "
             "so the run has no window to compute. Add the inverts to a run that computes a "
             "window operator, such as a running mean of a column the run reads."
         )

@@ -1,4 +1,4 @@
-"""``rp.invert``: the root of an equation of the row, through
+"""``rp.ops.invert``: the root of an equation of the row, through
 ``rp.stream.with_windows``. What a row gives (a root, or null with its
 reason under ``detail``), the struct's fields, the inputs it reads as
 missing, and what the call refuses when it is made or the query is built.
@@ -38,7 +38,7 @@ def detail(frame: pl.DataFrame, expr: pl.Expr) -> pl.DataFrame:
 
 def test_a_root_a_row_and_null_where_it_is_withheld():
     frame = pl.DataFrame({"a": [1.0, 2.0, 0.0, 1.0], "y": [2.0, 3.0, 8.0, 500.0]})
-    got = run(frame, x=rp.invert(cubic, "y", -5.0, 5.0, increasing=True))
+    got = run(frame, x=rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True))
     assert got.schema["x"] == pl.Float64
     x = got["x"].to_list()
     assert x[3] is None, "500 is past f(5) = 130"
@@ -49,7 +49,7 @@ def test_a_root_a_row_and_null_where_it_is_withheld():
 
 def test_the_detail_struct_names_its_fields_and_types():
     frame = pl.DataFrame({"a": [1.0, 1.0, 1.0], "y": [2.0, -500.0, 500.0]})
-    d = run(frame, d=rp.invert(cubic, "y", -5.0, 5.0, increasing=True, detail=True))
+    d = run(frame, d=rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True, detail=True))
     assert d.schema["d"] == pl.Struct(
         {
             "root": pl.Float64,
@@ -81,7 +81,7 @@ def test_a_null_nan_or_unusable_input_is_input_missing(bad, where):
     col = {"function": "a", "equals": "y", "lo": "lo", "hi": "hi"}[where]
     cols[col][1] = bad
     frame = pl.DataFrame(cols, schema=dict.fromkeys(cols, pl.Float64))
-    rows = detail(frame, rp.invert(cubic, "y", "lo", "hi", increasing=True, detail=True))
+    rows = detail(frame, rp.ops.invert(cubic, "y", "lo", "hi", increasing=True, detail=True))
     assert rows["reason"].to_list() == [None, "input_missing"]
     assert rows["root"][1] is None and rows["lo"][1] is None and rows["hi"][1] is None
     assert rows["evaluations"][1] == 0
@@ -102,7 +102,7 @@ def test_each_reason_a_row_can_give():
     )
     # Row 1's bracket is upside down, and s flips the function on row 2,
     # against the declared direction.
-    expr = rp.invert(
+    expr = rp.ops.invert(
         lambda x: pl.col("s") * cubic(x),
         "y",
         "lo",
@@ -112,12 +112,14 @@ def test_each_reason_a_row_can_give():
     )
     rows = detail(frame, expr)
     assert rows["reason"].to_list()[:3] == [None, "bracket_invalid", "wrong_direction"]
-    domain = rp.invert(lambda x: (x + 6.0).log() + x, "y", "lo", "hi", increasing=True, detail=True)
+    domain = rp.ops.invert(
+        lambda x: (x + 6.0).log() + x, "y", "lo", "hi", increasing=True, detail=True
+    )
     lows = frame.with_columns(lo=pl.lit(-7.0))
     assert detail(lows, domain)["reason"][0] == "not_finite"
     # A function flat to the last bit near its root: its sign there is
     # rounding, so the root is not fixed to the tolerance.
-    flat = rp.invert(
+    flat = rp.ops.invert(
         lambda x: pl.col("a") + (x - 1.0) ** 21 * 1e-300,
         "a",
         "lo",
@@ -132,10 +134,10 @@ def test_each_reason_a_row_can_give():
 
 def test_a_decreasing_function_is_solved_where_declared():
     frame = pl.DataFrame({"a": [1.0], "y": [-2.0]})
-    x = run(frame, x=rp.invert(lambda x: -cubic(x), "y", -5.0, 5.0, increasing=False))["x"]
+    x = run(frame, x=rp.ops.invert(lambda x: -cubic(x), "y", -5.0, 5.0, increasing=False))["x"]
     assert round(x[0], 9) == 1.0
     wrong = run(
-        frame, d=rp.invert(lambda x: -cubic(x), "y", -5.0, 5.0, increasing=True, detail=True)
+        frame, d=rp.ops.invert(lambda x: -cubic(x), "y", -5.0, 5.0, increasing=True, detail=True)
     )
     assert wrong["d"].struct.field("reason")[0] == "wrong_direction"
 
@@ -143,55 +145,62 @@ def test_a_decreasing_function_is_solved_where_declared():
 def test_a_bracket_of_numbers_not_in_order_is_refused_when_the_call_is_made():
     for lo, hi in ((5.0, -5.0), (1.0, 1.0)):
         with pytest.raises(ValueError, match="lo must be below hi"):
-            rp.invert(cubic, "y", lo, hi, increasing=True)
+            rp.ops.invert(cubic, "y", lo, hi, increasing=True)
     for bad in (math.nan, math.inf):
         with pytest.raises(ValueError, match="lo must be finite"):
-            rp.invert(cubic, "y", bad, 5.0, increasing=True)
+            rp.ops.invert(cubic, "y", bad, 5.0, increasing=True)
     with pytest.raises(TypeError, match="lo must be a column name, a number or a pl.Expr"):
-        rp.invert(cubic, "y", True, 5.0, increasing=True)
+        rp.ops.invert(cubic, "y", True, 5.0, increasing=True)
 
 
 def test_the_call_refuses_what_the_solve_cannot_read():
-    with pytest.raises(TypeError, match="f must be a function of the unknown"):
-        rp.invert(pl.col("a"), "y", 0.0, 1.0, increasing=True)
+    with pytest.raises(TypeError, match="f must be a pl.Expr in rp.ops.unknown"):
+        rp.ops.invert(2.0, "y", 0.0, 1.0, increasing=True)
     with pytest.raises(TypeError, match="f must return a pl.Expr"):
-        rp.invert(lambda x: 1.0, "y", 0.0, 1.0, increasing=True)
-    with pytest.raises(ValueError, match="f does not use its argument"):
-        rp.invert(lambda x: pl.col("a"), "y", 0.0, 1.0, increasing=True)
+        rp.ops.invert(lambda x: 1.0, "y", 0.0, 1.0, increasing=True)
+    for no_unknown in (pl.col("a"), lambda x: pl.col("a")):
+        with pytest.raises(ValueError, match="f does not hold the unknown"):
+            rp.ops.invert(no_unknown, "y", 0.0, 1.0, increasing=True)
     with pytest.raises(ValueError, match="holds the window operator ewm_mean"):
-        rp.invert(lambda x: x - rp.ewm_mean("a", half_life=1.0), "y", 0.0, 1.0, increasing=True)
+        rp.ops.invert(lambda x: x - rp.ewm_mean("a", half_life=1.0), "y", 0.0, 1.0, increasing=True)
     with pytest.raises(ValueError, match="'when', which the solve does not evaluate"):
-        rp.invert(lambda x: pl.when(x > 0).then(x).otherwise(-x), "y", 0.0, 1.0, increasing=True)
+        rp.ops.invert(
+            lambda x: pl.when(x > 0).then(x).otherwise(-x), "y", 0.0, 1.0, increasing=True
+        )
     with pytest.raises(ValueError, match="cast to 'Int64'"):
-        rp.invert(lambda x: x.cast(pl.Int64), "y", 0.0, 1.0, increasing=True)
+        rp.ops.invert(lambda x: x.cast(pl.Int64), "y", 0.0, 1.0, increasing=True)
     held: list[pl.Expr] = []
 
     def keep(x: pl.Expr) -> pl.Expr:
         held.append(x)
         return x
 
-    rp.invert(keep, "y", 0.0, 1.0, increasing=True)
-    with pytest.raises(ValueError, match="outside that function"):
-        rp.invert(cubic, held[0], 0.0, 1.0, increasing=True)
+    rp.ops.invert(keep, "y", 0.0, 1.0, increasing=True)
+    for unknown in (held[0], rp.ops.unknown() * 2):
+        with pytest.raises(ValueError, match="outside the function f"):
+            rp.ops.invert(cubic, unknown, 0.0, 1.0, increasing=True)
+    frame = pl.DataFrame({"a": [1.0], "y": [2.0]})
+    with pytest.raises(ValueError, match="outside the function f"):
+        run(frame, z=rp.ops.unknown() + pl.col("a"))
     with pytest.raises(ValueError, match="reads no column"):
-        rp.invert(lambda x: x**3, 2.0, 0.0, 5.0, increasing=True)
+        rp.ops.invert(lambda x: x**3, 2.0, 0.0, 5.0, increasing=True)
     with pytest.raises(TypeError, match="increasing"):
-        rp.invert(cubic, "y", 0.0, 1.0)
+        rp.ops.invert(cubic, "y", 0.0, 1.0)
     with pytest.raises(TypeError, match="increasing must be True or False"):
-        rp.invert(cubic, "y", 0.0, 1.0, increasing=1)
+        rp.ops.invert(cubic, "y", 0.0, 1.0, increasing=1)
     with pytest.raises(TypeError, match="detail must be True or False"):
-        rp.invert(cubic, "y", 0.0, 1.0, increasing=True, detail="yes")
+        rp.ops.invert(cubic, "y", 0.0, 1.0, increasing=True, detail="yes")
     for xtol in (0.0, -1.0, math.inf, math.nan):
         with pytest.raises(ValueError, match="xtol must be finite and above 0"):
-            rp.invert(cubic, "y", 0.0, 1.0, increasing=True, xtol=xtol)
+            rp.ops.invert(cubic, "y", 0.0, 1.0, increasing=True, xtol=xtol)
     with pytest.raises(ValueError, match="rtol must be finite and at least"):
-        rp.invert(cubic, "y", 0.0, 1.0, increasing=True, rtol=1e-16)
+        rp.ops.invert(cubic, "y", 0.0, 1.0, increasing=True, rtol=1e-16)
     with pytest.raises(TypeError, match="xtol must be a number"):
-        rp.invert(cubic, "y", 0.0, 1.0, increasing=True, xtol="small")
+        rp.ops.invert(cubic, "y", 0.0, 1.0, increasing=True, xtol="small")
 
 
 def test_the_node_carries_every_parameter_and_reads_back():
-    expr = rp.invert(cubic, "y", -5.0, pl.col("hi") * 2, increasing=True)
+    expr = rp.ops.invert(cubic, "y", -5.0, pl.col("hi") * 2, increasing=True)
     (column,) = expr.meta.root_names()
     node = json.loads(column[len(_formula.PREFIX) :])
     assert node == [
@@ -210,12 +219,12 @@ def test_the_node_carries_every_parameter_and_reads_back():
 def test_a_run_of_inverts_alone_is_refused_and_a_target_does_not_take_one():
     frame = pl.DataFrame({"a": [1.0], "y": [2.0]})
     with pytest.raises(ValueError, match="no window to compute"):
-        rp.stream.with_windows(frame, x=rp.invert(cubic, "y", -5.0, 5.0, increasing=True))
+        rp.stream.with_windows(frame, x=rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True))
     with pytest.raises(ValueError, match="holds no window operator"):
         rp.stream.with_windows(frame, x=pl.col("y") + 1, **LEVEL)
     ahead = rp.ewm_mean("y", half_life=1.0, window_size=2.0, reverse=True)
-    target = (ahead - rp.invert(cubic, "y", -5.0, 5.0, increasing=True)).alias("t")
-    with pytest.raises(ValueError, match="holds rp.invert, which a formula target"):
+    target = (ahead - rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True)).alias("t")
+    with pytest.raises(ValueError, match="holds rp.ops.invert, which a formula target"):
         rp.spec.ewridge(
             "m",
             features=["a"],
@@ -229,7 +238,7 @@ def test_a_run_of_inverts_alone_is_refused_and_a_target_does_not_take_one():
 
 def test_the_roots_feed_an_operator_and_sit_under_arithmetic():
     frame = pl.DataFrame({"a": [1.0, 2.0, 1.0, 2.0], "y": [2.0, 3.0, 2.0, 3.0]})
-    root = rp.invert(cubic, "y", -5.0, 5.0, increasing=True)
+    root = rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True)
     got = rp.stream.with_windows(
         frame, x=root, smooth=rp.ewm_mean(root, half_life=1.0), gap=root - pl.col("a")
     )
@@ -246,8 +255,24 @@ def test_the_roots_are_the_same_bits_however_the_stream_is_chunked():
             "y": [((i * 37) % 101) - 50.0 if i % 13 else None for i in range(n)],
         }
     )
-    exprs = {"x": rp.invert(cubic, "y", -5.0, 5.0, increasing=True)}
+    exprs = {"x": rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True)}
     one = rp.stream.with_windows(frame, **exprs, **LEVEL, chunk_size=n)
     for size in (1, 7, 333):
         other = rp.stream.with_windows(frame, **exprs, **LEVEL, chunk_size=size)
         assert one["x"].to_list() == other["x"].to_list(), size
+
+
+def test_an_expression_in_the_unknown_is_the_same_node_as_a_function_of_it():
+    """``f`` given as an expression in ``rp.ops.unknown()`` writes the node
+    a function of the unknown writes, so the two are one column; and the
+    invert is ``rp.ops``' alone, with no name at the root."""
+    x = rp.ops.unknown()
+    as_expr = rp.ops.invert(x**3 + pl.col("a") * x, "y", -5.0, 5.0, increasing=True)
+    as_function = rp.ops.invert(cubic, "y", -5.0, 5.0, increasing=True)
+    assert as_expr.meta.root_names() == as_function.meta.root_names()
+    frame = pl.DataFrame({"a": [1.0, 2.0], "y": [2.0, 3.0]})
+    got = run(frame, x=as_expr)
+    assert [round(v, 9) for v in got["x"]] == [1.0, 1.0]
+    assert "invert" in rp.ops.__all__ and "unknown" in rp.ops.__all__
+    assert not hasattr(rp, "invert") and not hasattr(rp, "unknown")
+    assert "invert" not in rp.__all__ and "unknown" not in rp.__all__

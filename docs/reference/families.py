@@ -168,7 +168,7 @@ FAMILIES: tuple[Family, ...] = (
             )
         ),
     ),
-    Family("ops-solve", "ops", (f"{_RP}.ops.invert",)),
+    Family("ops-solve", "ops", (f"{_RP}.ops.invert", f"{_RP}.ops.unknown")),
     Family(
         "eval-scores",
         "eval",

@@ -284,10 +284,9 @@ def _walk(node: Any, who: str, unknown: bool = False) -> Any:
             if unknown:
                 return ["unknown"]
             raise FormulaError(
-                f"{who}: an expression holds the unknown that rp.invert hands its function, "
-                f"outside that function. The unknown stands only in the function rp.invert "
-                f"solves, which reads it as the argument it is called with. Write the target "
-                f"and the bracket, and every other formula, without it."
+                f"{who}: an expression holds rp.ops.unknown() outside the function f of "
+                f"rp.ops.invert. The unknown stands only in the function an invert solves. Write "
+                f"the target and the bracket, and every other formula, without it."
             )
         if isinstance(body, str) and body.startswith(PREFIX):
             reserved = _reserved(who, body)
@@ -301,7 +300,7 @@ def _walk(node: Any, who: str, unknown: bool = False) -> Any:
             # is walked, and a number was refused as holding no operator
             # (review round 4, PD3).
             # An invert's node: its four parts and its parameters, checked
-            # where rp.invert wrote it and again where the run reads it.
+            # where rp.ops.invert wrote it and again where the run reads it.
             if isinstance(op, list) and len(op) == INVERT_ARITY and op[0] == "invert":
                 return op
             if not (isinstance(op, list) and len(op) in (2, 3) and op[0] in OPERATORS):
@@ -1396,25 +1395,28 @@ def invert_node(
     with the unknown as a leaf, its target and bracket as trees, its
     parameters checked here so a wrong one is named, and the node written
     with every parameter, as the native reader writes it back."""
-    who = "rp.invert"
-    if not callable(f) or isinstance(f, pl.Expr):
+    who = "rp.ops.invert"
+    if isinstance(f, pl.Expr):
+        expr = f
+    elif callable(f):
+        expr = f(pl.col(UNKNOWN_COLUMN))
+        if not isinstance(expr, pl.Expr):
+            raise TypeError(
+                f"{who}: f must return a pl.Expr of the unknown, but it returns a value of type "
+                f"{type(expr).__name__}. Write f with Polars' operators on its argument, and "
+                f"return the expression."
+            )
+    else:
         raise TypeError(
-            f"{who}: f must be a function of the unknown that returns a pl.Expr, but it is of "
-            f"type {type(f).__name__}. Give a function of one argument, the unknown, that "
-            f"writes the equation's left side with Polars' operators."
-        )
-    expr = f(pl.col(UNKNOWN_COLUMN))
-    if not isinstance(expr, pl.Expr):
-        raise TypeError(
-            f"{who}: f must return a pl.Expr of the unknown, but it returns a value of type "
-            f"{type(expr).__name__}. Write f with Polars' operators on its argument, and "
-            f"return the expression."
+            f"{who}: f must be a pl.Expr in rp.ops.unknown(), or a function of the unknown that "
+            f"returns one, but it is of type {type(f).__name__}. Give the equation's left side "
+            f"as such an expression."
         )
     trees = {"function": to_tree(expr, f"{who}: f", unknown=True)}
     if not _holds_unknown(trees["function"]):
         raise ValueError(
-            f"{who}: f does not use its argument, the unknown, so there is nothing to solve for. "
-            f"Write f in terms of its argument."
+            f"{who}: f does not hold the unknown, so there is nothing to solve for. Write f in "
+            f"terms of rp.ops.unknown(), or of its argument where f is a function."
         )
     for key, value in (("equals", equals), ("lo", lo), ("hi", hi)):
         trees[key] = _invert_value(who, key, value)
