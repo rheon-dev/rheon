@@ -2035,6 +2035,22 @@ model that only the new build has is listed as an addition and passes.
   from a `warm_span` raises the half-cap warning when it is the row that
   passed half the cap (HMM-5). Rows within the doubles read as before, to
   the bit.
+- **`hmm` reads given covariances that are the same diagonal in every
+  state, with variances that differ, as given** (review 2026-11-23,
+  HMM-3). Such covariances kept no shape, so the stabilized prior's scale
+  `psi` was the variances themselves, and its floor, `2^-100` of the
+  largest, lifted one more than `2^100` below another: `diag(1e-20, 1e20)`
+  read `7.9e-11` on the first row, where the same covariances one ulp
+  apart read `1e-20`. They now keep their shape, as covariances that
+  differ between states do, and only the same multiple of the identity in
+  every state keeps none. Under `"full"` and `"diag"` in a model that
+  learns, with such covariances, every output moves: to the given
+  variances where the floor bound, and elsewhere by rounding, at most
+  5.7e-14 relative over 2,000 rows at `diag(1e-6, 1e6)` (`diag(0.25, 4)`:
+  2.9e-14). A state saved before this change by such a model holds its
+  scale as variances, and loads and goes on as it was saved, to the bit;
+  a state saved now says it keeps the shape. Moves: `hmm.filtered_state*`,
+  `hmm.predicted_state*`, `hmm.state`, `hmm.loglik`, `hmm.coef`.
 - **`kalman`'s square-root form holds at every scale** (review 2026-11-23,
   KAL-2 and KAL-3). Its rank-one update rotated by `sqrt(l² + x²)`, which
   was NaN below `1.5e-154` and zeroed the factor's row above `1.3e154`, a

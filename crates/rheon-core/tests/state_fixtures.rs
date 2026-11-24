@@ -1658,7 +1658,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 198] = [
+    const FORMS: [(&str, &[&str]); 200] = [
         // `power_variation` (task 555): the sums, the last raw returns, the
         // scales' rings, a window's credits and rows, a clock window's
         // stamps and clock, and a cap's overrun.
@@ -1778,6 +1778,10 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("hmm_diag", &["model", "Hmm", "stabilized", "scale"]),
         ("hmm_diag", &["model", "Hmm", "stabilized", "scale_weight"]),
         ("hmm_full_warming", &["model", "Hmm", "cfg", "prior_rows"]),
+        // Schema 72 (review 2026-11-23, HMM-3): given states of the same
+        // diagonal with variances that differ, `ŝ` in units of them.
+        ("hmm_given", &["model", "Hmm", "stabilized", "scale"]),
+        ("hmm_given", &["model", "Hmm", "stabilized", "scale_weight"]),
         // Schema 69 (task 479): a wide `full` state's factor.
         ("hmm_full", &["model", "Hmm", "factor_states"]),
         // Schema 66 (task 327): a diagonal shape's variances alone.
@@ -4089,6 +4093,38 @@ fn the_kish_sums_exponents_are_written() {
         ("ewridge", "q_scale"),
     ] {
         assert_eq!(scales(name, key), Vec::<i64>::new(), "{name}: {key}");
+    }
+}
+
+/// The prior's shape flag (schema 72, review 2026-11-23, HMM-3): given
+/// states of the same diagonal with variances that differ keep their shape
+/// and write `shaped`, `true`; the cases with no shape write none, the bytes
+/// they had, and a state without it loads as the build before read it.
+#[test]
+fn the_priors_shape_flag_is_written_where_a_shape_is_kept() {
+    if regenerating() {
+        return;
+    }
+    let shaped = |name: &str| {
+        let f = frozen::ALL
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name}: no fixture"));
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        assert!(
+            at(&v, &["model", "Hmm", "stabilized", "scale"]).is_some(),
+            "{name}: no prior"
+        );
+        at(&v, &["model", "Hmm", "stabilized", "shaped"]).cloned()
+    };
+    assert_eq!(shaped("hmm_given"), Some(rmpv::Value::Boolean(true)));
+    for name in [
+        "hmm_diag",
+        "hmm_full",
+        "hmm_full_narrow",
+        "hmm_full_warming",
+    ] {
+        assert_eq!(shaped(name), None, "{name}");
     }
 }
 

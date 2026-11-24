@@ -130,46 +130,136 @@ fn with_given_states_no_scale_falls_back_to_the_given_covariances() {
 }
 
 /// HMM-3: covariances given as the same anisotropic diagonal in every
-/// state, `diag(1e-20, 1e20)`, take no shape, so `ψ` is a variance and its
-/// floor, `2⁻¹⁰⁰` of the largest, lifted `1e-20` to `7.9e-11` on the first
-/// row; the same covariances one ulp apart in one state take the shape and
-/// read `1e-20` as given. Confirmed: the fix changes what a saved `ŝ`
-/// means for such states (a variance becomes a multiple of the given one),
-/// which a state saved before it would load as the other, so it is the
-/// user's call (rule 5).
+/// state, `diag(1e-20, 1e20)`, took no shape, so `ψ` was the variances
+/// themselves and its floor, `2⁻¹⁰⁰` of the largest, lifted `1e-20` to
+/// `7.9e-11` on the first row. By the definition a state reads the
+/// covariance it was given on the first row, `Ψ_s = G_s`: they keep the
+/// shape, read `1e-20` and `1e20`, as the same covariances one ulp apart in
+/// one state did.
 #[test]
-#[should_panic(expected = "the first row reads")]
 fn the_same_anisotropic_diagonal_in_every_state_reads_as_given_on_the_first_row() {
     let read = |covs: Vec<f64>| {
-        let m = Hmm::new(HmmCfg {
-            covariance: Covariance::Diagonal,
-            means: Some(vec![0.0, 0.0, 1e-10, 1e10]),
-            covs: Some(covs),
-            ..cfg(2)
-        })
-        .unwrap();
+        let m = Hmm::new(anisotropic(covs, Covariance::Diagonal)).unwrap();
         let st = m.stabilized().unwrap();
-        let psi0 = st.psi()[0];
-        match st.shape() {
-            Some(g) => psi0 * g.diag(0)[0],
-            None => psi0,
-        }
+        let g = st.shape().expect("a shape is kept");
+        [st.psi()[0] * g.diag(0)[0], st.psi()[1] * g.diag(0)[1]]
     };
-    let same = read(vec![1e-20, 0.0, 0.0, 1e20, 1e-20, 0.0, 0.0, 1e20]);
-    let nudged = read(vec![
-        1e-20,
-        0.0,
-        0.0,
-        1e20,
-        1e-20,
-        0.0,
-        0.0,
-        f64::from_bits(1e20f64.to_bits() + 1),
-    ]);
-    assert!(
-        (same / nudged - 1.0).abs() < 1e-9,
-        "the first row reads {same:e} where the covariances one ulp apart read {nudged:e}"
-    );
+    let same = read(same_diagonal());
+    let mut covs = same_diagonal();
+    covs[7] = f64::from_bits(1e20f64.to_bits() + 1);
+    let nudged = read(covs);
+    assert_eq!(same, [1e-20, 1e20], "the first row reads {same:?}");
+    assert_eq!(same, nudged);
+}
+
+/// `diag(1e-20, 1e20)` in both states of two features, means `(0, 0)` and
+/// `(1e-10, 1e10)`.
+fn same_diagonal() -> Vec<f64> {
+    vec![1e-20, 0.0, 0.0, 1e20, 1e-20, 0.0, 0.0, 1e20]
+}
+
+fn anisotropic(covs: Vec<f64>, covariance: Covariance) -> HmmCfg {
+    HmmCfg {
+        covariance,
+        means: Some(vec![0.0, 0.0, 1e-10, 1e10]),
+        covs: Some(covs),
+        ..cfg(2)
+    }
+}
+
+/// HMM-3's flag: a state of the same anisotropic diagonal written by a
+/// build that kept no shape for it holds `ŝ` as variances and no `shaped`;
+/// it loads without the shape and continues as that build would, to the
+/// bit, and saves without the flag again. A state this build writes keeps
+/// the shape, says so, and loads with it.
+#[test]
+fn a_state_saved_without_the_shape_reads_on_as_it_was_saved() {
+    use super::tests_shape::NO_SHAPE;
+    let mut s = 23u64;
+    let rows: Vec<[f64; 2]> = (0..60)
+        .map(|i| {
+            let (u, v) = (lcg(&mut s), lcg(&mut s));
+            if (i / 15) % 2 == 0 {
+                [1e-10 * u, 1e10 * v]
+            } else {
+                [1e-10 * (1.0 + u), 1e10 * (1.0 + v)]
+            }
+        })
+        .collect();
+    for covariance in [Covariance::Diagonal, Covariance::Full] {
+        let c = anisotropic(same_diagonal(), covariance);
+        // The build before: no shape, `ŝ` the given variances pooled.
+        NO_SHAPE.with(|f| f.set(true));
+        let mut before = Hmm::new(c.clone()).unwrap();
+        for x in &rows[..30] {
+            before.step(x, &[], 1.0, 1.0);
+        }
+        let saved = before.state();
+        let mut want = Vec::new();
+        for x in &rows[30..] {
+            want.push(before.step(x, &[], 1.0, 1.0).pred);
+        }
+        NO_SHAPE.with(|f| f.set(false));
+        let written = |st: &crate::State| rmp_serde::to_vec_named(st).unwrap();
+        assert!(!written(&saved).windows(6).any(|w| w == b"shaped"));
+        let mut back = Hmm::restore(&saved).unwrap();
+        assert!(
+            back.stabilized().unwrap().shape().is_none(),
+            "{covariance:?}"
+        );
+        assert_eq!(
+            written(&back.state()),
+            written(&saved),
+            "{covariance:?}: re-saved"
+        );
+        for (t, x) in rows[30..].iter().enumerate() {
+            let got = back.step(x, &[], 1.0, 1.0).pred;
+            assert_eq!(
+                got.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                want[t].iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                "{covariance:?}, row {t}"
+            );
+        }
+        // This build's state keeps the shape, and loads with it.
+        let mut now = Hmm::new(c).unwrap();
+        for x in &rows[..30] {
+            now.step(x, &[], 1.0, 1.0);
+        }
+        assert!(
+            written(&now.state()).windows(6).any(|w| w == b"shaped"),
+            "{covariance:?}"
+        );
+        let mut again = Hmm::restore(&now.state()).unwrap();
+        assert!(again.stabilized().unwrap().shape().is_some());
+        for x in &rows[30..] {
+            let (a, b) = (again.step(x, &[], 1.0, 1.0), now.step(x, &[], 1.0, 1.0));
+            assert_eq!(
+                a.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                b.pred.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+/// A state written under a shape is refused by a configuration that gives
+/// none (the same multiple of the identity in every state): its `ŝ` is in
+/// units of covariances the configuration does not hold.
+#[test]
+fn a_shaped_state_under_a_configuration_with_no_shape_is_refused() {
+    let mut m = Hmm::new(anisotropic(same_diagonal(), Covariance::Diagonal)).unwrap();
+    m.step(&[0.0, 0.0], &[], 1.0, 1.0);
+    m.cfg.covs = Some(vec![2.0, 0.0, 0.0, 2.0, 2.0, 0.0, 0.0, 2.0]);
+    match Hmm::restore(&m.state()) {
+        Err(crate::StateError::Invalid(e)) => assert!(e.contains("prior"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+fn lcg(state: &mut u64) -> f64 {
+    *state = state
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    ((*state >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
 }
 
 /// HMM-4: a row of weight 0 handed to the model directly moves the prior

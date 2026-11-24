@@ -5049,8 +5049,11 @@ the wrong shape cost. With the two regimes' matrices given the wrong way
 round, a regime back from an absence kept the label it was given in 14 of
 24 simulated returns, against 24 under the diagonal prior. A steady
 stream's posteriors were 9% further from the exact filter's. Given
-covariances that are one diagonal matrix for every state are the diagonal
-prior exactly.
+covariances that are the same multiple of the identity for every state are
+the diagonal prior exactly. The same diagonal with variances that differ
+keeps its shape: as plain variances, the floor on `psi` (`2^-100` of the
+largest) would lift a variance more than `2^100` below the largest, which
+in units of the given variances reads as given.
 
 The study behind it simulated two-state streams and scored each against
 the exact forward pass with the true parameters (hmmlearn). A regime absent
