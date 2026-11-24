@@ -1177,9 +1177,9 @@ fn a_hawkes_window_past_its_state_cap_is_refused() {
         )
     };
     // Two nodes, two decays: 8 * 8 = 64 bytes a row (its clock, its weight,
-    // two marks, four sums), 152 for the sums and 48 beside the window.
+    // two marks, four sums), 152 for the sums and 56 beside the window.
     let at = |w: usize| rheon_polars::rheon_core::Hawkes::state_bytes(2, 2, Some(w));
-    assert_eq!(at(4_000), 8 * (19 + 4_000 * 8 + 6));
+    assert_eq!(at(4_000), 8 * (19 + 4_000 * 8 + 7));
     let cap = 256 * 1024;
     let fits = ((cap - at(0)) / 64) as usize;
     assert!(at(fits) <= cap && at(fits + 1) > cap);

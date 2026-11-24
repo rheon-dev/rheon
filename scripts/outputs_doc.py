@@ -294,8 +294,9 @@ ALSO_NULL: dict[str, str] = {
     "n_pos_<t>": WITHHELD,
     "n_neg_<t>": WITHHELD,
     "intensity_<t>": (
-        "while withheld, and while the fit is not determined: before every node has had an "
-        "event, and while two of its terms cannot be told apart"
+        "while withheld, and while the events do not identify the fit (`not_identified`): "
+        "before every node has had an event, under a window while it holds no event of a node "
+        "before the row, and while two of its terms cannot be told apart"
     ),
     "variance_<t>": "while withheld, and before the target's start is fitted",
     "std_resid_<t>": "where the variance is null, and where `<t>` is",
@@ -514,7 +515,8 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "`unstable_rate` is an `sgd` target whose learning rate is past its stability bound: its "
         "recent steps' gains have a mean square above twice their mean, so each step grows its "
         "own row's residual and the fit diverges. `not_identified` is a `garch` start whose rows "
-        "do not yet tell its variance process from a constant variance, so it buffers more. "
+        "do not yet tell its variance process from a constant variance, so it buffers more, or "
+        "a `hawkes` fit its events do not identify. "
         "`scale_ratio_moved` is a `corrchange` span past its critical value whose two columns' "
         "scale ratio moved inside it, so its `flag` is null. `not_separated` is a `pca` component "
         "the data does not yet tell apart from a neighbor: the test of the equality of their two "

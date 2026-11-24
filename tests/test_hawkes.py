@@ -329,9 +329,47 @@ def test_two_nodes_on_the_same_rows_report_nothing():
     df = pl.DataFrame({"t": t, "n0": np.ones(n), "n1": np.ones(n)})
     out = rp.ModelBank([_spec()]).fit_predict(df).unnest("h")
     assert out["intensity_n0"].is_null().all()
+    assert (out["withheld_reason"] == "not_identified").all()
     apart = df.with_columns(pl.Series("n1", (np.arange(n) % 2).astype(float)))
     out = rp.ModelBank([_spec()]).fit_predict(apart).unnest("h")
     assert out["intensity_n0"].drop_nulls().len() > 250
+    assert out.filter(pl.col("intensity_n0").is_not_null())["withheld_reason"].is_null().all()
+
+
+def test_a_window_without_a_nodes_events_is_not_identified():
+    """A window that holds no event of a node before the row has no
+    excitation of it to fit: its kernels' coefficients are not identified,
+    so the row's intensities are null and ``withheld_reason`` says
+    ``not_identified``. Where the window holds an event of every node before
+    the row, the fit is reported. The second node falls silent for longer
+    than the window's three rows with an event, and its last event leaves
+    by the subtraction that once left rounding in its sums, which passed for
+    a fit."""
+    n = 600
+    rng = np.random.default_rng(11)
+    t = np.cumsum(rng.exponential(0.4, n))
+    quiet = (np.arange(n) // 9) % 3 == 1
+    n0 = np.where(rng.uniform(size=n) < 0.7, 0.3 + 1.7 * rng.uniform(size=n), 0.0)
+    n1 = np.where(~quiet & (rng.uniform(size=n) < 0.5), 0.2 + 2.3 * rng.uniform(size=n), 0.0)
+    df = pl.DataFrame({"t": t, "n0": n0, "n1": n1})
+    w = 3
+    out = rp.ModelBank([_spec(half_life=INF, window_events=w)]).fit_predict(df).unnest("h")
+    marks = _marks(df, 2)
+    events = np.flatnonzero(marks.sum(axis=1) > 0)
+    silent = np.zeros(n, dtype=bool)
+    for row in range(n):
+        held = events[events < row][-w:]
+        silent[row] = not all(
+            any(marks[r, j] > 0 and t[r] < t[row] for r in held) for j in range(2)
+        )
+    reason = out["withheld_reason"].cast(pl.String).to_numpy()
+    intensity = out["intensity_n1"].to_numpy()
+    assert silent.sum() > 100
+    assert np.isnan(intensity[silent]).all()
+    assert (reason[silent] == "not_identified").all()
+    reported = ~silent & ~np.isnan(intensity)
+    assert reported.sum() > 200
+    assert (reason[reported] == None).all()  # noqa: E711
 
 
 @pytest.mark.parametrize(
@@ -426,7 +464,7 @@ def test_the_window_is_held_to_the_groups_state_cap():
         _spec(half_life=INF, window_events=2_000)
         _spec(half_life=INF, window_events=4_700, max_state_bytes=1 << 20)
     with pytest.raises(
-        ValueError, match="hold 840 bytes in each group, past max_state_bytes of 500"
+        ValueError, match="hold 848 bytes in each group, past max_state_bytes of 500"
     ):
         rp.ModelBank([_spec(half_life=INF, window_events=10, max_state_bytes=500)])
     with pytest.raises(ValueError, match="max_state_bytes must be above 0"):

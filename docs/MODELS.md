@@ -5553,7 +5553,15 @@ events.
 **A fit the events cannot identify is withheld.** Two nodes whose events
 fall on the same rows give `G` a condition number near `1e14`, and an exact
 solution of digits of rounding. Where a pivot of `G` scaled to a unit
-diagonal falls below `1e-10`, the row reports no intensity.
+diagonal falls below `1e-10`, the row reports no intensity. So it is where
+a node has no excitation over the observation: before its first event, or
+under a window that holds no event of it before the row. Its column of `G`
+is then 0, and its kernels' coefficients mean nothing. Under a window this
+is decided from the count of each node's events the window holds, not from
+`G`. Taking a node's events back leaves rounding in its sums, which the
+scaling to a unit diagonal would pass as a fit, so its sums are set to 0
+as its last event leaves. `withheld_reason` names such a row
+`not_identified`.
 
 **The window keeps its rows, counted in events or in clock units.**
 `window_events = W` fits the last `W` rows that carried an event, alone.
@@ -5562,7 +5570,9 @@ observes the interval `(T − D, T]` (from the first row, until there are `D`
 units of it), so a stretch with no event in it is observed as one. Either
 way dropping a row takes back exactly what it added, through the sums of its
 excitation of the later rows, which are kept in two blocks so that no sum is
-rescaled by a growing exponential. A fit with `window_size` agrees with
+rescaled by a growing exponential. No row's time is held as the clock's
+sum: a row holds its gap to the row before it, so a gap of 0.25 after a
+quiet stretch of `1e16` is kept, where `1e16 + 0.25` would round to `1e16`. A fit with `window_size` agrees with
 tick refit on the events inside the span to 1e-14 of the largest
 coefficient. Give one of the two: they are two windows, and the fit holds
 one. The span is a number of the clock's units, or of rows where the spec

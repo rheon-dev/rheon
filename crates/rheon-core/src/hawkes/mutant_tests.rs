@@ -84,7 +84,7 @@ fn the_state_cap_is_a_byte_count_a_model_may_reach() {
 
 /// `n` rows' worth of a clock window's bytes, written from its parts: the
 /// sums `8 (k + D (1 + k) + D (D + 1)/2 + 2)`, the rows `8 (rows (2 + D +
-/// k) + k + 2)`, a stamp for each row and the one the clock tracks, and the
+/// k) + k + 3)`, a stamp for each row and the one the clock tracks, and the
 /// clock summed.
 #[test]
 fn a_clock_windows_bytes_are_its_parts() {
@@ -92,7 +92,7 @@ fn a_clock_windows_bytes_are_its_parts() {
     for (n, u, rows) in [(2u64, 3u64, 5u64), (1, 2, 0), (3, 1, 11)] {
         let k = n * u;
         let sums = 8 * (k + n * (1 + k) + n * (n + 1) / 2 + 2);
-        let held = 8 * (rows * (2 + n + k) + k + 2);
+        let held = 8 * (rows * (2 + n + k) + k + 3);
         let want = sums + held + (rows + 1) * stamp + 8;
         assert_eq!(
             Hawkes::clock_state_bytes(n as usize, u as usize, rows as usize),
@@ -174,9 +174,11 @@ fn every_read_keeps_a_small_models_scratch_and_drops_a_large_ones() {
             m.stamp_next(Stamp::from(at));
             m.step(&[], y, *d, 1.0);
         }
-        assert!(m.oldest_has_left(Stamp::from(10.0)));
+        // At 2.5 the row at 1.0 has left, and the row at 2.0, of both
+        // nodes, is in the window: the read solves.
+        assert!(m.oldest_has_left(Stamp::from(2.5)));
         let _ = READ.take();
-        m.predict(&[], 8.0);
+        m.predict(&[], 0.5);
         assert_eq!(kept(), want, "predict past the window, {u} decays");
     }
 }
@@ -251,7 +253,7 @@ fn a_window_the_settings_do_not_ask_for_is_refused() {
         let ModelState::Hawkes(inner) = &mut s.model else {
             unreachable!()
         };
-        inner.window = Some(EventWindow::new(k, clocked));
+        inner.window = Some(EventWindow::new(2, k, clocked));
         match Hawkes::restore(&s) {
             Err(StateError::Invalid(e)) => assert!(e.contains("wrong shape"), "{e}"),
             other => panic!("clocked {clocked}: {other:?}"),
@@ -293,11 +295,9 @@ fn a_clock_window_trims_every_row_that_has_left() {
 /// reference: once the window's dropped row is past the stretch (from row
 /// 6), its fit over the last two events is the one after `1e16`.
 ///
-/// Confirmed; the fix (the older block's times moved to the newer block's
-/// first row) moves ordinary windowed fits past 5 ulps, so it waits on the
-/// user, and this test fails until it lands.
+/// Fixed by the gaps: a newer row holds its gap to the row before it, so a
+/// stretch adds nothing to a gap after it.
 #[test]
-#[should_panic(expected = "against")]
 fn a_window_of_events_after_a_long_quiet_stretch_keeps_their_gaps() {
     let run = |quiet: f64| {
         let mut m = Hawkes::new(HawkesCfg {
@@ -336,14 +336,16 @@ fn a_window_of_events_after_a_long_quiet_stretch_keeps_their_gaps() {
 /// integer clock and `window_events = 8`, the fit after a stretch of `1e16`
 /// is 1.6e-2 of its largest coefficient off the fit of the window's events
 /// at 60 digits, and 2.5 times it after `1e18`, with the review's fix and
-/// without it. From row 8 the row dropped last is past the stretch, and the
-/// fit is that of the same rows after a stretch of 100.
+/// without it. From row 9 the row dropped last is past the stretch, and the
+/// fit is that of the same rows after a stretch of 100. Row 8 is observed
+/// from row 4's clock, before the stretch, so its `G₀₀` holds the stretch
+/// and its fit is not the near run's: it is held to the definition's
+/// system over its three rows, on the clock moved to row 5.
 ///
-/// Confirmed and held: the fix keeps each newer row's gap to the row before
-/// it, which the state has no field for, so it waits on the user, and this
-/// test fails until it lands.
+/// Fixed by the same gaps, and the clock since the newest row beside the
+/// clock since the block's start: a newer row's time is its gap to the row
+/// before it, whichever row the stretch falls after.
 #[test]
-#[should_panic(expected = "against")]
 fn a_quiet_stretch_inside_the_newer_block_keeps_the_later_gaps() {
     let run = |quiet: f64| {
         let mut m = Hawkes::new(HawkesCfg {
@@ -362,7 +364,22 @@ fn a_quiet_stretch_inside_the_newer_block_keeps_the_later_gaps() {
         near[8..].iter().flatten().all(|x| x.is_finite()),
         "{near:?}"
     );
-    for (i, (a, b)) in far.iter().zip(&near).enumerate().skip(8) {
+    // Row 8: rows 5, 6 and 7 at 0, 0.25 and 0.75, read at 1.0, observed
+    // from row 4 at `−1e16`.
+    let window: Vec<(f64, Vec<f64>)> = [0.0, 0.25, 0.75].iter().map(|t| (*t, vec![1.0])).collect();
+    let (g, b) = crate::oracle::hawkes_system(&window, &[2.0], 0.0, -1e16, 1.0);
+    let theta = crate::oracle::solve_columns(&g, &b, 1);
+    let excite: f64 = [0.0f64, 0.25, 0.75]
+        .iter()
+        .map(|t| 2.0 * (-2.0 * (1.0 - t)).exp())
+        .sum();
+    let want = theta[0] + theta[1] * excite;
+    assert!(
+        (far[8][0] - want).abs() <= 1e-9 * want.abs(),
+        "row 8: {} against the definition's {want}",
+        far[8][0]
+    );
+    for (i, (a, b)) in far.iter().zip(&near).enumerate().skip(9) {
         for (x, y) in a.iter().zip(b) {
             assert!(
                 x.is_nan() == y.is_nan()

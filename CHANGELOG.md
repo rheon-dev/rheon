@@ -1377,6 +1377,48 @@ model that only the new build has is listed as an addition and passes.
   that the bank cannot go on. `garch`'s next row's stamp and its pending
   warning are no longer written to its state, as no other model's are.
 
+- **A `hawkes` window keeps the gaps after a long quiet stretch** (review
+  2026-11-23, HAWKES-7, both of its paths). The window held a newer row's
+  time from its block's start, so after a quiet stretch of `1e16` a gap of
+  0.25 was held in `1e16 + 0.25`, which a double rounds to `1e16`. Whether
+  the stretch fell before the newer block's first row or after it, the
+  block formed from those times read the events after the stretch as at
+  one clock: the observation `G₀₀` read 0 and every intensity was null, or
+  the fit was off. Each newer row now holds its gap to the row before it,
+  read from the clock since the newest row, which the window keeps beside
+  the clock since the block's start (8 bytes a group, none a row). Held to
+  the windowed least-squares fit of the window's events at 60 digits
+  (Python `decimal`, on tick's simulated streams of one node and one decay
+  and of two nodes and two decays, every row): on an integer clock under
+  `window_events=8`, the worst coefficient error after a stretch of `1e16`
+  went from 1.6e-2 of the largest coefficient to 1.2e-15 (one node) and
+  from 1.3e-2 to 2.2e-13 (two), and after `1e18` from 2.5 to 1.2e-15 and
+  from 0.81 to 2.2e-13. On ordinary streams, `window_events` 3 to 150 and
+  `window_size` 3 to 80, the fits move by rounding alone, at most 1.1e-11
+  of the largest coefficient (`window_size=3`, two nodes, where the system
+  is near singular), and neither build is the nearer: the moved rows split
+  between them, and each case's worst error against the 60-digit fit is
+  the same to two digits, smaller in eleven cases, larger in the five of
+  one stream (1.3e-14 to 1.4e-14). On a clock whose sums are exact nothing
+  moves. A saved window loads into the new form, exactly
+  where the clock's sums were exact, as in the kept fixtures. Moves:
+  `hawkes.intensity_*`, `hawkes.coef`.
+- **`hawkes` reports no fit where a node has no excitation over the
+  observation, and names the reason.** A window that held no event of a
+  node before the read still reported a fit: taking the node's events back
+  left rounding in its sums, and the scaling to a unit diagonal hid that
+  column from the pivot test, so the coefficients were a fit of the
+  rounding. Against the 60-digit fit, 52 rows of the streams above whose
+  system is singular reported one (18 of 158 under `window_size=3` with
+  one node; 1 to 4 a case elsewhere); none does now, and no row whose fit
+  exists lost it. The window counts each node's rows with an event and
+  withholds the fit while a node has none before the read's clock, and a
+  node's sums are set to 0 as its last event leaves. Every `hawkes` row
+  whose intensities are null with its weight at `min_weight` now names
+  `not_identified` in `withheld_reason`, where it named nothing: before
+  every node's first event, a window without a node's events, and two
+  nodes whose events fall on the same rows. The `Enum` is unchanged.
+  Moves: `hawkes.intensity_*`, `hawkes.coef`, `hawkes.withheld_reason`.
 - **`power_variation`'s normalized terms scale by the returns' weight, and
   `n` is Kish's count under a window too** (Fable's W13 review, B1 and B2,
   as `realized` was fixed). `normalize` multiplied a term of powers `p` by
@@ -2557,6 +2599,15 @@ model that only the new build has is listed as an addition and passes.
   ahead, which takes one `exp2` fewer at its close. No state grows: the two
   new memo slots (16 bytes a queue each) are not written to a state. Not
   timed on x86-64.
+- **A `hawkes` window's step costs about 1% to 3% more a row** for keeping
+  its gaps and counting each node's events (the two fixes above), 8 bytes
+  a group in the saved state and 4 bytes a node in memory. Measured on
+  macOS arm64 (release, load 3.5, best of 15 passes over 20,000 rows, the
+  median of 12 runs, beside a second copy of the old binary): two nodes and
+  two decays under `window_events=10` 1.031 of the old build's time (the
+  copy 1.009), under `window_events=100` 1.006 (0.991), under a clock
+  window 1.011 (0.993); without a window 1.006 and 1.019 (1.001 and
+  1.012), within the copy's spread.
 
 - **`huber`'s and `quantile`'s scales from every row cost 0.3% to 2.7%
   a row and `8(3k + 2)` bytes a target under `standardize=True`** (review

@@ -22,11 +22,11 @@ MAX_STATE_BYTES = 256 * 1024
 
 def _state_bytes(d: int, u: int, window_events: int | None) -> int:
     """The bytes a group's state holds at most, as the model counts them:
-    its running sums, and a full window's rows with its sum, clock and
+    its running sums, and a full window's rows with its sum, two clocks and
     weight."""
     k = d * u
     sums = k + d * (1 + k) + d * (d + 1) // 2 + 2
-    window = 0 if window_events is None else window_events * (2 + d + k) + k + 2
+    window = 0 if window_events is None else window_events * (2 + d + k) + k + 3
     return 8 * (sums + window)
 
 
@@ -134,8 +134,9 @@ def hawkes(
         Per target: the node's intensity just before the row's events, in
         events per unit of the clock (per second on a temporal clock), from
         the fit on the rows before. Null
-        below ``min_weight``, and while the fit is not determined: before
-        every node has had an event, or while two of its terms cannot be
+        below ``min_weight``, and while the events do not identify the fit:
+        before every node has had an event, under a window while it holds no
+        event of a node before the row, or while two of its terms cannot be
         told apart, as when two nodes' events fall on the same rows.
     ``weight_sum``
         The weight the model has accumulated before the row and before the
@@ -149,8 +150,9 @@ def hawkes(
     ``withheld_reason``
         Why the row's intensities were withheld, null where they were not:
         a reason of the shared gates (:mod:`rheon.spec`), such as
-        ``below_min_weight``. A fit not yet determined (``intensity_<t>``
-        null with ``weight_sum`` past ``min_weight``) gives none.
+        ``below_min_weight``, or ``not_identified`` where the events do not
+        identify the fit (``intensity_<t>`` null with ``weight_sum`` past
+        ``min_weight``).
     ``coef``
         The fit after the row, per target ``i``: ``mu``, the base rate (per
         unit of the clock, per second on a temporal clock), then
