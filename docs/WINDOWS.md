@@ -534,6 +534,78 @@ refused before it reads a row; a state the data grows (a window's rows, a
 quantile's sketches) warns once at half the cap and refuses the row that
 would pass it.
 
+## Seasonal terms, and STL and MSTL read late
+
+**`rp.ops.fourier` and `rp.ops.calendar_fourier` give each row the sine
+and cosine of its phase**, in a fixed period (`"1d"`, `"1w"`) or a
+calendar one (`"1mo"`, `"1y"`), as features a regression weighs with its
+other inputs. They are plain Polars expressions with no state, so they
+need no `with_windows`, and they match statsmodels' `Fourier` and
+`CalendarFourier` terms to the last bit. A zoned clock is read on its wall
+clock, as a profile's phase is.
+
+**`rp.ops.stl` and `rp.ops.mstl` split a regular series into its trend,
+its seasons and the rest, exactly as statsmodels' `STL` and `MSTL` split
+it, from each group's last `W` learned rows.** A decomposition revises its
+last rows as new ones arrive, so each value is read `lag` rows back, where
+it no longer moves: the value of row `t - lag` arrives on row `t`. By
+default `W = 2h + 1` and the lag is `h + 1`, with `h = max p (s - 1) / 2` the
+seasonal smoother's reach. That is 145 rows and a lag of 73 for a daily
+season of hourly rows, and 2,353 and 1,177 for a daily and a weekly one
+under MSTL. This code builds its own rows:
+
+```python
+# Three weeks of hourly load: a daily shape, a slow rise and one surprise.
+hours = 21 * 24
+load = pl.DataFrame({"t": range(hours)}).with_columns(
+    load=100 + 0.05 * pl.col("t") + 10 * ((pl.col("t") % 24 - 12).abs() < 4).cast(pl.Float64)
+    + pl.when(pl.col("t") == 300).then(25.0).otherwise(0.0)
+)
+out = rp.stream.with_windows(
+    load,
+    rp.ops.stl("load", period=24, component="trend").alias("level"),
+    rp.ops.stl("load", period=24, component="resid").alias("surprise"),
+    clock="t", gap_cap=1.0,
+)
+# Each value is the row 73 hours back: row 373's is row 300's.
+print(out.filter(pl.col("t").is_in([372, 373, 374])).select("t", pl.col("level", "surprise").round(2)))
+```
+
+```text
+shape: (3, 3)
+┌─────┬────────┬──────────┐
+│ t   ┆ level  ┆ surprise │
+│ --- ┆ ---    ┆ ---      │
+│ i64 ┆ f64    ┆ f64      │
+╞═════╪════════╪══════════╡
+│ 372 ┆ 118.83 ┆ -0.67    │
+│ 373 ┆ 118.87 ┆ 17.15    │
+│ 374 ┆ 118.93 ┆ -0.67    │
+└─────┴────────┴──────────┘
+```
+
+**Under `closed="left"`, the default, a row's value reads no row at or
+after its own.** Under `closed="right"` the window ends at the row, so a
+column decomposed that way and used as a feature to predict itself leaks
+its own target into the prediction. A remainder is for review after the
+lag, not a feature for the next row.
+
+**A row is learned when its input is present**: a null learns nothing and
+counts in no lag. A clock break, a session change or a reset empties the
+group's ring, since STL reads rows by position and a gap would shift
+every phase after it. A group's state is its ring, `8 W + 24` bytes,
+bounded by the window and never by the stream's length. It is held to
+`max_state_bytes` (256 KB by default) when the run is built: MSTL's daily
+and weekly seasons on minute rows ask for 1,128,992 bytes, and are refused.
+
+**Which to use**:
+
+| you want | use | because |
+|---|---|---|
+| seasonality as inputs to a regression | `rp.ops.fourier`, `rp.ops.calendar_fourier` | no state, no delay; the model weighs the terms with everything else; month, quarter and year periods |
+| a series adjusted by its usual value, spread or quantile at this hour or weekday, now | `rp.ewm_profile` | an online estimate per phase, read on the row itself with no delay; any shape, and a variance or quantile profile |
+| the trend, the seasons and the remainder as statsmodels computes them | `rp.ops.stl`, `rp.ops.mstl` | the standard decomposition, exact, but each value arrives `lag` rows late and needs a regular step |
+
 ## The largest and smallest value, and since an event
 
 **`rp.rolling_max` and `rp.rolling_min` are the largest and smallest value

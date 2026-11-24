@@ -1,6 +1,27 @@
 <!-- kind: record -->
 # Fourier terms, and STL and MSTL behind an embargo: the design
 
+**Status, 2026-11-24, as built on this branch:** `rp.ops.fourier`,
+`rp.ops.calendar_fourier`, `rp.ops.stl` and `rp.ops.mstl`, in
+`rheon.polars.ops` alone (the user's namespace rule), with the method
+`exact` only: each emission is a full fit, bit-equal to statsmodels. What
+differs from the design below:
+
+- The `kernel` method (Q6, Q11) is not built; its adjoint is measured
+  below, and is the next step if the exact method's cost (0.43 s a row at
+  MSTL's hourly defaults) is too high.
+- The Fourier terms divide by the period as a column: Polars divides a
+  column by a scalar through its reciprocal, which is not the correctly
+  rounded quotient. A clock of the wrong type is refused by name through a
+  selector arm that holds a Python function only when it raises.
+- The calendar terms are named `{clock}_cal_sin{i}_{freq}`, apart from
+  `fourier`'s, whose `"1d"` would otherwise collide.
+- Each operator keeps a ring of its own, not one per `(input, W)` pair.
+- `step=` (Q8) is not built: a clock break, session change or reset
+  empties the ring, as every window operator restarts.
+- Windows state 14 within bank schema 72; the nine committed fixtures that
+  carry 13 are regenerated on the Mac at the merge.
+
 A design for PLAN 489 and 490, written 2026-11-23 on branch
 `vm/task-489-490-seasonal` off main `555b45e`, before any code. It is
 checked against the study `docs/records/STUDY-490-489.md` and its script
