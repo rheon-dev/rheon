@@ -4,7 +4,7 @@ pub const FIXTURE: crate::cases::Fixture = crate::cases::Fixture {
     name: "ewm_moments",
     variant: "EwmMoments",
     schema: 72,
-    writer: "linux-x86_64",
+    writer: "macos-aarch64",
     state: "\
         82ae736368656d615f76657273696f6e48a56d6f64656c81aa45776d4d6f6d656e747383a363666784a5646563617981\
         a848616c666c696665cb4024000000000000a57465726d739a84a46e616d65a3766172a6706f77657273919282a3636f\

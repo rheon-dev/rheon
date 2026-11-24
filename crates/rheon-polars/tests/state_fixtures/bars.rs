@@ -2,7 +2,7 @@
 pub const FIXTURE: crate::Fixture = crate::Fixture {
     name: "bars",
     schema: 72,
-    writer: "linux-x86_64",
+    writer: "macos-aarch64",
     state: "\
         88a56d61676963ab7268656f6e2d7374617465a46b696e64a462617273a776657273696f6e01a6636f6e666967de0010\
         a46b696e64a373756da5636c6f636ba174a97468726573686f6c6481a576616c7565cb4024000000000000a87175616e\

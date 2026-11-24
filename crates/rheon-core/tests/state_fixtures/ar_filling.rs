@@ -4,7 +4,7 @@ pub const FIXTURE: crate::cases::Fixture = crate::cases::Fixture {
     name: "ar_filling",
     variant: "Ar",
     schema: 72,
-    writer: "linux-x86_64",
+    writer: "macos-aarch64",
     state: "\
         82ae736368656d615f76657273696f6e48a56d6f64656c81a2417285a36366678ca96e5f7461726765747302aa6e5f66\
         6561747572657302a46c616773920103ad6669745f696e74657263657074c3a5646563617981a848616c666c696665cb\

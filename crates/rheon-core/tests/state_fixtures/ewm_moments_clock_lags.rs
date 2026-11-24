@@ -4,7 +4,7 @@ pub const FIXTURE: crate::cases::Fixture = crate::cases::Fixture {
     name: "ewm_moments_clock_lags",
     variant: "EwmMoments",
     schema: 72,
-    writer: "linux-x86_64",
+    writer: "macos-aarch64",
     state: "\
         82ae736368656d615f76657273696f6e48a56d6f64656c81aa45776d4d6f6d656e747385a363666787a5646563617981\
         a848616c666c696665cb4024000000000000a57465726d739484a46e616d65a561636f7232a6706f77657273929282a3\

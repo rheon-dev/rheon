@@ -4,7 +4,7 @@ pub const FIXTURE: crate::cases::Fixture = crate::cases::Fixture {
     name: "power_variation",
     variant: "PowerVariation",
     schema: 72,
-    writer: "linux-x86_64",
+    writer: "macos-aarch64",
     state: "\
         82ae736368656d615f76657273696f6e48a56d6f64656c81ae506f776572566172696174696f6e86a363666788a96e5f\
         7461726765747302a57465726d739482a46b696e6481aa6d756c7469706f77657282a6706f7765727391cb4000000000\

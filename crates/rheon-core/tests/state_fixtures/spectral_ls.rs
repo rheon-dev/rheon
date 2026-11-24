@@ -4,7 +4,7 @@ pub const FIXTURE: crate::cases::Fixture = crate::cases::Fixture {
     name: "spectral_ls",
     variant: "Spectral",
     schema: 72,
-    writer: "linux-x86_64",
+    writer: "macos-aarch64",
     state: "\
         82ae736368656d615f76657273696f6e48a56d6f64656c81a8537065637472616c83a363666788a96e5f746172676574\
         7302ab6672657175656e6369657392cb3fc999999999999acb3fe6666666666666a773706163696e67cb3ff000000000\
