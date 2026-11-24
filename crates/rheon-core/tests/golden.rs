@@ -1675,6 +1675,7 @@ fn ew_cov_golden() {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     })
     .unwrap();
     check("ew_cov", &signature(&mut m, 4), GOLDEN_EW_COV);
@@ -2295,6 +2296,7 @@ fn ew_cov_paths_golden() {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     };
     // Slots: corr, then lag_corr per lag and ordered pair; slot 3 is lag 1's
     // (x0, x1).

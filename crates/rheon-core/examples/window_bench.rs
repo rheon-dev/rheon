@@ -58,6 +58,7 @@ fn cov(k: usize, window: Option<f64>) -> EwCovCfg {
         window,
         window_every: None,
         max_rows_between_snapshots: window.map(|_| 25),
+        shrinkage: None,
     }
 }
 

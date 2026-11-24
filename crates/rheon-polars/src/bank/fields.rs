@@ -833,6 +833,7 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 "partial_corr" => rheon_core::EwCovStat::PartialCorr,
                 "mahal" => rheon_core::EwCovStat::Mahal,
                 "lag_corr" => rheon_core::EwCovStat::LagCorr,
+                "shrinkage" => rheon_core::EwCovStat::Shrinkage,
                 _ => rheon_core::EwCovStat::Corr,
             })
             .collect();
@@ -864,7 +865,7 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                         meta.push((name.clone(), vec![col.clone()], None, None, None));
                     }
                 }
-                rheon_core::EwCovStat::Mahal => {
+                rheon_core::EwCovStat::Mahal | rheon_core::EwCovStat::Shrinkage => {
                     meta.push((name.clone(), all.clone(), None, None, None));
                 }
                 // One entry per (lag, ordered pair), the auto terms

@@ -131,38 +131,61 @@ fn marginal_round_trips_with_every_optional_part_present_or_absent() {
 /// named and never broke; the compact form is the rule's tripwire.
 #[test]
 fn ew_cov_round_trips_with_every_optional_part_present_or_absent() {
-    for lags in [vec![], vec![1usize]] {
-        for (window, every, rows) in WINDOWS {
-            // A window and lags are refused together (the lag ring keeps no
-            // snapshot; review 2026-09-12, C18).
-            if window.is_some() && !lags.is_empty() {
-                continue;
+    // Shrinkage (task 511) each way: none, and each estimator, the tail's
+    // two skipped fields with and without the window and the row cap
+    // before them.
+    let shrinks = [
+        None,
+        Some(rheon_core::Shrinkage::LedoitWolf),
+        Some(rheon_core::Shrinkage::Oas),
+        Some(rheon_core::Shrinkage::Fixed {
+            intensity: 0.25,
+            target: Some(vec![2.0, 0.5, 1.0]),
+        }),
+    ];
+    for shrinkage in shrinks {
+        for lags in [vec![], vec![1usize]] {
+            for (window, every, rows) in WINDOWS {
+                // A window and lags are refused together (the lag ring keeps no
+                // snapshot; review 2026-09-12, C18).
+                if window.is_some() && !lags.is_empty() {
+                    continue;
+                }
+                // Ledoit and Wolf's intensity is refused under a window.
+                if window.is_some() && shrinkage.as_ref().is_some_and(|s| s.needs_fourth()) {
+                    continue;
+                }
+                let cfg = rheon_core::EwCovCfg {
+                    bias: true,
+                    n_features: 2,
+                    decay: Decay::Halflife(10.0),
+                    stats: vec![rheon_core::EwCovStat::Mean, rheon_core::EwCovStat::Corr],
+                    min_weight: 0.0,
+                    precision_prior: None,
+                    mahal_quantiles: vec![],
+                    pca: 0,
+                    pca_every: 0.0,
+                    max_rows_between_pca: u32::MAX,
+                    lags: lags.clone(),
+                    window,
+                    window_every: every,
+                    max_rows_between_snapshots: rows,
+                    shrinkage: shrinkage.clone(),
+                };
+                roundtrip(&cfg, &format!("ew_cov cfg {shrinkage:?} rows={rows:?}"));
+                let mut m = rheon_core::EwCovModel::new(cfg).unwrap();
+                for i in 0..10 {
+                    let v = i as f64;
+                    OnlineModel::step(&mut m, &[v, -0.5 * v + 1.0], &[], v, 1.0);
+                }
+                roundtrip(
+                    &m,
+                    &format!(
+                        "ew_cov lags={lags:?} window={window:?} every={every:?} rows={rows:?} \
+                     shrinkage={shrinkage:?}"
+                    ),
+                );
             }
-            let cfg = rheon_core::EwCovCfg {
-                bias: true,
-                n_features: 2,
-                decay: Decay::Halflife(10.0),
-                stats: vec![rheon_core::EwCovStat::Mean, rheon_core::EwCovStat::Corr],
-                min_weight: 0.0,
-                precision_prior: None,
-                mahal_quantiles: vec![],
-                pca: 0,
-                pca_every: 0.0,
-                max_rows_between_pca: u32::MAX,
-                lags: lags.clone(),
-                window,
-                window_every: every,
-                max_rows_between_snapshots: rows,
-            };
-            let mut m = rheon_core::EwCovModel::new(cfg).unwrap();
-            for i in 0..10 {
-                let v = i as f64;
-                OnlineModel::step(&mut m, &[v, -0.5 * v + 1.0], &[], v, 1.0);
-            }
-            roundtrip(
-                &m,
-                &format!("ew_cov lags={lags:?} window={window:?} every={every:?} rows={rows:?}"),
-            );
         }
     }
 }

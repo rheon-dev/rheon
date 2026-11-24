@@ -380,6 +380,8 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             max_rows_between_snapshots,
             window_budget: _,
             closed: _,
+            shrinkage,
+            shrinkage_target,
         } => {
             let names = stats
                 .clone()
@@ -395,10 +397,11 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                     "partial_corr" => Ok(EwCovStat::PartialCorr),
                     "mahal" => Ok(EwCovStat::Mahal),
                     "lag_corr" => Ok(EwCovStat::LagCorr),
+                    "shrinkage" => Ok(EwCovStat::Shrinkage),
                     other => Err(format!(
                         "stats lists {other:?}, which is not an ew_cov statistic. Use \
                          \"mean\", \"var\", \"std\", \"cov\", \"corr\", \"partial_corr\", \
-                         \"mahal\" or \"lag_corr\"."
+                         \"mahal\", \"lag_corr\" or \"shrinkage\"."
                     )),
                 })
                 .collect::<Result<Vec<_>, String>>()?;
@@ -425,6 +428,11 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 window: window.as_ref().map(Span::value),
                 window_every: snapshot_every.as_ref().map(Span::value),
                 max_rows_between_snapshots: max_rows_between_snapshots.map(|r| r as usize),
+                shrinkage: crate::spec::shrinkage_of(
+                    shrinkage.as_ref(),
+                    shrinkage_target.as_deref(),
+                    spec.k(),
+                )?,
             };
             Ok(AnyModel::EwCov(Box::new(EwCovModel::new(cfg)?)))
         }

@@ -515,6 +515,7 @@ fn ew_cov_reports_a_stopped_feature_as_it_is() {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            shrinkage: None,
         })
         .unwrap();
         let mut at_stop = 0.0;
@@ -1254,6 +1255,7 @@ fn a_row_of_no_weight_moves_no_mean() {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            shrinkage: None,
         })
         .unwrap()
     });

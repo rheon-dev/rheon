@@ -80,6 +80,7 @@ fn model_cfg(k: usize, stats: Vec<EwCovStat>) -> EwCovCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     }
 }
 
@@ -2499,6 +2500,7 @@ fn ew_covs_window_reads_a_held_feature_as_no_spread() {
         window: Some(30.0),
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     })
     .unwrap();
     let mut s = 9u64;
@@ -2549,6 +2551,7 @@ fn a_window_the_live_state_cannot_resolve_reads_as_no_spread() {
         window: Some(7.0),
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     })
     .unwrap();
     // `(x, clock step, weight)`; the step of 12.9 puts every row at

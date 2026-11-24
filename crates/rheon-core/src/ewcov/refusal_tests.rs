@@ -35,6 +35,7 @@ fn a_refused_row_takes_no_slot_in_the_lag_ring() {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     };
     let ring =
         |m: &EwCovModel| serde_json::to_value(m.lag.as_ref().unwrap()).unwrap()["ring"].clone();
@@ -103,6 +104,7 @@ fn quantiles_out_of_range_are_named_as_a_list() {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            shrinkage: None,
         }
         .validate()
         .unwrap_err()

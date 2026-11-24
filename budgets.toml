@@ -150,6 +150,15 @@ budget = 11552994
 what = "ew_cov, 20 features, mean, std and corr: AnyModel::step_into, into one kept Step"
 budget = 8374026
 
+[instructions.ew_cov_k5]
+what = "ew_cov, 5 features, mean, std and corr, no shrinkage (the shrinkage's control): AnyModel::step_into, into one kept Step"
+
+[instructions.ew_cov_lw_k5]
+what = "ew_cov, 5 features, mean, std and corr, shrinkage ledoit_wolf: AnyModel::step_into, into one kept Step"
+
+[instructions.ew_cov_lw]
+what = "ew_cov, 20 features, mean, std and corr, shrinkage ledoit_wolf: AnyModel::step_into, into one kept Step"
+
 [instructions.lasso_k20]
 what = "lasso, 20 features, 1 target, half-life 1000, penalties 0.1, 0.01 and 0, the default cadence: AnyModel::step_into, into one kept Step"
 budget = 12605148

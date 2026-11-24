@@ -426,7 +426,7 @@ pub enum ModelKind {
     /// `targets` is ignored; every column of interest goes in `features`.
     EwCov {
         /// Any of "mean", "var", "std", "cov", "corr", "partial_corr", "mahal",
-        /// "lag_corr" (the last with `lags`).
+        /// "lag_corr" (with `lags`), "shrinkage" (with `shrinkage`).
         /// Default: mean + std + corr.
         #[serde(default)]
         stats: Option<Vec<String>>,
@@ -502,6 +502,17 @@ pub enum ModelKind {
         /// MiB (review 2026-09-12, P4).
         #[serde(default)]
         window_budget: Option<WindowBudgetSpec>,
+        /// Shrink every second moment toward `μ I` or a given target
+        /// ([`rheon_core::EwCovCfg::shrinkage`], docs/PLAN.md task 511):
+        /// `"ledoit_wolf"`, `"oas"`, or a fixed intensity in `[0, 1]`.
+        /// Skipped when absent, so a spec without it writes its old bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shrinkage: Option<ShrinkSpec>,
+        /// The target of a fixed intensity, a symmetric positive
+        /// semidefinite `k × k` matrix in the features' units, row by row;
+        /// absent for `μ I`. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shrinkage_target: Option<Vec<Vec<f64>>>,
     },
     /// Stochastic gradient descent with pluggable losses (ENHANCEMENTS E16).
     /// O(k) per row, no solves, and the only model here that takes count
@@ -1890,6 +1901,90 @@ pub struct SpectralSpec {
     /// Past this many MiB the group's snapshots thin or refuse.
     #[serde(default)]
     pub window_budget: Option<WindowBudgetSpec>,
+}
+
+/// `ew_cov`'s and `ew_class`'s `shrinkage`: an estimator's name, or a
+/// fixed intensity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ShrinkSpec {
+    Intensity(f64),
+    Name(String),
+}
+
+/// The model's [`rheon_core::Shrinkage`] from a spec's `shrinkage` and
+/// `shrinkage_target` (a full `k × k` matrix, row by row, held symmetric
+/// here; the model checks its range and that it is positive
+/// semidefinite), or a refusal naming the parameter.
+pub(crate) fn shrinkage_of(
+    shrinkage: Option<&ShrinkSpec>,
+    target: Option<&[Vec<f64>]>,
+    k: usize,
+) -> Result<Option<rheon_core::Shrinkage>, String> {
+    let Some(sh) = shrinkage else {
+        return match target {
+            Some(_) => Err(
+                "shrinkage_target needs a fixed shrinkage, but shrinkage is not \
+                            set. Set shrinkage to the target's share, such as 0.1, or leave \
+                            out shrinkage_target."
+                    .into(),
+            ),
+            None => Ok(None),
+        };
+    };
+    let named = |s: rheon_core::Shrinkage| match target {
+        Some(_) => Err(format!(
+            "shrinkage_target needs a fixed shrinkage, but shrinkage is {:?}: its intensity is \
+             derived for the target mu * I alone. Set shrinkage to a number, or leave out \
+             shrinkage_target.",
+            s.name()
+        )),
+        None => Ok(Some(s)),
+    };
+    match sh {
+        ShrinkSpec::Name(n) if n == "ledoit_wolf" => named(rheon_core::Shrinkage::LedoitWolf),
+        ShrinkSpec::Name(n) if n == "oas" => named(rheon_core::Shrinkage::Oas),
+        ShrinkSpec::Name(n) => Err(format!(
+            "shrinkage must be \"ledoit_wolf\", \"oas\" or a number from 0 to 1, but it is \
+             {n:?}. Use one of those."
+        )),
+        ShrinkSpec::Intensity(s) => {
+            let target = match target {
+                None => None,
+                Some(rows) => {
+                    let square = rows.len() == k && rows.iter().all(|r| r.len() == k);
+                    if !square {
+                        return Err(format!(
+                            "shrinkage_target must be a {k} by {k} matrix, one row a feature, \
+                             but it has {} rows of {:?} numbers. Give one row for each feature, \
+                             each with one number for each feature.",
+                            rows.len(),
+                            rows.iter().map(Vec::len).collect::<Vec<_>>()
+                        ));
+                    }
+                    let mut packed = Vec::with_capacity(k * (k + 1) / 2);
+                    for i in 0..k {
+                        for j in 0..=i {
+                            if rows[i][j] != rows[j][i] {
+                                return Err(format!(
+                                    "shrinkage_target must be symmetric, but its entry ({i}, \
+                                     {j}) is {} and ({j}, {i}) is {}. Give a covariance \
+                                     matrix as the target.",
+                                    rows[i][j], rows[j][i]
+                                ));
+                            }
+                            packed.push(rows[i][j]);
+                        }
+                    }
+                    Some(packed)
+                }
+            };
+            Ok(Some(rheon_core::Shrinkage::Fixed {
+                intensity: *s,
+                target,
+            }))
+        }
+    }
 }
 
 /// `ar`'s lags: the order `p`, for `1..=p`, or the lags themselves.

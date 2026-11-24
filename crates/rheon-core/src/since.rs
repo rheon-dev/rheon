@@ -314,6 +314,7 @@ mod tests {
                 window: None,
                 window_every: None,
                 max_rows_between_snapshots: None,
+                shrinkage: None,
             })
             .unwrap();
             // Per row, the component's variance, share and two loadings,

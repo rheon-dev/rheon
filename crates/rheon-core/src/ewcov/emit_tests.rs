@@ -241,6 +241,7 @@ fn the_slots_of_a_row_are_the_stored_moments_read_the_long_way_to_the_bit() {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            shrinkage: None,
         })
         .unwrap();
         let mut state = 5 + k as u64;

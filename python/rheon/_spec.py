@@ -3183,7 +3183,11 @@ def ew_cov(
     name: str,
     *,
     features: list[str],
-    stats: list[Literal["mean", "var", "std", "cov", "corr", "partial_corr", "mahal", "lag_corr"]]
+    stats: list[
+        Literal[
+            "mean", "var", "std", "cov", "corr", "partial_corr", "mahal", "lag_corr", "shrinkage"
+        ]
+    ]
     | None = None,
     bias: bool = False,
     precision_prior: float | None = None,
@@ -3198,6 +3202,8 @@ def ew_cov(
     snapshot_every: float | Duration | None = None,
     max_rows_between_snapshots: int | None = None,
     window_budget: dict[Literal["thin", "refuse"], float] | None = None,
+    shrinkage: Literal["ledoit_wolf", "oas"] | float | None = None,
+    shrinkage_target: list[list[float]] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Exponentially weighted moments of the feature columns, and the statistics read off them.
@@ -3222,11 +3228,13 @@ def ew_cov(
 
     ``stats``
         Which statistics to write, from ``mean``, ``var``, ``std``, ``cov``,
-        ``corr``, ``partial_corr``, ``mahal`` and ``lag_corr``. Default
+        ``corr``, ``partial_corr``, ``mahal``, ``lag_corr`` and
+        ``shrinkage``. Default
         ``["mean", "std", "corr"]``, so a single feature needs ``stats``
         without ``cov``, ``corr`` and ``partial_corr``, which need two
         columns. ``partial_corr`` and ``mahal`` need ``precision_prior``,
-        ``lag_corr`` needs ``lags``, and ``mahal_quantiles`` needs ``mahal``.
+        ``lag_corr`` needs ``lags``, ``shrinkage`` needs ``shrinkage``, and
+        ``mahal_quantiles`` needs ``mahal``.
         ``[]`` writes no statistic, only ``weight_sum``, ``settled_frac`` and
         ``withheld_reason``, and learns all the same. The spec's value is
         then its state, read back with :meth:`rheon.polars.ModelBank.gram`
@@ -3334,6 +3342,19 @@ def ew_cov(
         ring in MiB and thins or refuses past the bound. By default a
         snapshot on every row, and no budget. ``closed="both"`` and these
         three are refused without ``window_size``.
+    ``shrinkage``, ``shrinkage_target``
+        Shrink every second moment toward a target, ``(1 - s) S + s T``
+        (*Shrinkage* in Notes): ``"ledoit_wolf"`` or ``"oas"`` for an
+        intensity ``s`` estimated from the moments on each row, toward
+        ``T = mu * I`` with ``mu`` the mean variance; or a number from 0 to 1
+        for a fixed ``s``, toward ``mu * I`` or toward ``shrinkage_target``, a
+        symmetric positive semidefinite ``k x k`` matrix in the features'
+        units, row by row. ``var``, ``std``, ``cov``, ``corr``,
+        ``partial_corr``, ``mahal`` and the components read the shrunk
+        matrix, and ``mean`` is unchanged. Add ``"shrinkage"`` to ``stats``
+        to write ``s``. Default ``None``: no shrinkage, and the model as
+        without it to the bit. ``"ledoit_wolf"`` is refused beside
+        ``window_size``.
 
     .. rubric:: Output
 
@@ -3353,6 +3374,9 @@ def ew_cov(
     ``mahal``, ``mahal_q<p>``
         The row's Mahalanobis distance from the mean, and the quantiles of
         its past values ``mahal_quantiles`` asks for.
+    ``shrinkage``
+        The intensity ``s`` the second moments were shrunk by, under
+        ``shrinkage``.
     ``pc<j>_var``, ``pc<j>_share``, ``pc<j>_loading_<feature>``, ``pc<j>_score``
         Under ``pca``, as the table under ``pca`` says.
     ``weight_sum``
@@ -3402,6 +3426,11 @@ def ew_cov(
       and ``closed="both"``,
       ``snapshot_every``, ``max_rows_between_snapshots`` or
       ``window_budget`` without ``window_size``;
+    - a ``shrinkage`` that is neither ``"ledoit_wolf"``, ``"oas"`` nor a
+      number from 0 to 1, a ``shrinkage_target`` beside an estimator's name
+      or without ``shrinkage``, one not ``k x k``, not symmetric, not finite
+      or not positive semidefinite, ``"shrinkage"`` in ``stats`` without
+      ``shrinkage``, and ``"ledoit_wolf"`` beside ``window_size``;
     - a switch that reads residuals, such as ``emit_sigma``, and
       ``coef_every``.
 
@@ -3447,6 +3476,20 @@ def ew_cov(
     .. code-block:: text
 
         C_l' = a * C_l + a * b * (x_t - m) (x_{t-l} - m)'
+
+    Under ``shrinkage``, every second moment above reads ``C`` shrunk,
+    with ``p`` the features, ``mu = tr C / p``, ``|C|^2`` the sum of its
+    squared entries, ``n = W**2 / Q`` and ``F`` the weighted mean of
+    ``|x - m|**4``, kept beside ``C`` by its own step:
+
+    .. code-block:: text
+
+        C_s     = (1 - s) * C + s * T             T = mu * I, or shrinkage_target
+        delta_s = (|C|^2 - p * mu**2) / p
+        beta    = min(max((F - |C|^2) / (p * n), 0), delta_s)
+        s_lw    = beta / delta_s                   (0 where beta or delta_s is 0)
+        alpha   = |C|^2 / p**2
+        s_oas   = min((alpha + mu**2) / ((n + 1) * (alpha - mu**2 / p)), 1)
 
     .. rubric:: Example
 
@@ -3505,6 +3548,35 @@ def ew_cov(
     spec is a stream, a saved state, or the work: Polars recomputes each window,
     so its work grows with ``n`` rows times the rows of a window, where this
     model's grows with ``n``.
+
+    **Shrinkage.** A covariance of ``p`` features estimated from few rows
+    spreads its eigenvalues: the largest too large, the smallest too small,
+    and its inverse unstable. Pulling it toward ``mu * I`` with the same
+    trace trades that variance for a bias. ``"ledoit_wolf"`` is the
+    intensity of Ledoit and Wolf (2004), "A well-conditioned estimator for
+    large-dimensional covariance matrices", J. Multivariate Analysis 88,
+    section 3.3: it estimates the squared error the moments carry from the
+    rows' fourth moments. ``"oas"`` is the oracle-approximating shrinkage of
+    Chen, Wiesel, Eldar and Hero (2010), IEEE Trans. Signal Processing 58,
+    Eq. 23, in scikit-learn's form, which drops the paper's ``2/p`` terms:
+    ``s`` moves by ``O(1/p)`` against the paper, and scikit-learn's ``OAS``
+    gives the same number. With one feature both are 0. At unit weights and
+    no decay, the moments of the rows so far are scikit-learn's
+    ``LedoitWolf``, ``OAS`` and ``ShrunkCovariance`` on those rows, under
+    ``bias=True``, whose divisor is theirs; under ``bias=False`` the shrunk
+    matrix is multiplied by ``c``, which moves no ``s``.
+
+    Both intensities read Kish's effective size ``n = W**2 / Q``, not the
+    weight ``W`` that ``weight_sum`` and ``min_weight`` read. Each estimates
+    the variance of ``C`` as a weighted mean of the rows' ``z z'``, and a
+    weighted mean of independent terms has their variance over ``W**2 / Q``.
+    That size is free of the weights' units, where ``W`` is not (weights
+    multiplied by 1,000 would divide ``s`` by about 1,000), and it is the row
+    count at unit weights without decay. Under decay at unit weights one
+    clock unit apart it settles at about 2.885 half-lives, where ``W``
+    settles at 1.443. ``n`` is kept as of the last row that learned, so a
+    row of weight 0 moves no shrunk output; under ``window_size`` it is the
+    hard window's ``W`` and ``Q``.
 
     **Bias.** The factor ``c`` is ``n / (n - 1)`` at Kish's effective size
     ``n = W**2 / Q``, the number of equally weighted rows the moments are
@@ -3611,10 +3683,16 @@ def ew_cov(
         "snapshot_every": snapshot_every,
         "max_rows_between_snapshots": max_rows_between_snapshots,
         "window_budget": window_budget,
+        "shrinkage": shrinkage,
+        "shrinkage_target": shrinkage_target,
     }
-    # Written only when given, as the Rust spec skips it when absent.
+    # Written only when given, as the Rust spec skips them when absent.
     if gram_threads is None:
         del model["gram_threads"]
+    if shrinkage is None:
+        del model["shrinkage"]
+    if shrinkage_target is None:
+        del model["shrinkage_target"]
     targets = _mirror_target(name, "ew_cov", features, common, "its statistics are over")
     return _common(name, model, targets=targets, features=features, **common)
 

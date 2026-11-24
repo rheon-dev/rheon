@@ -70,6 +70,13 @@ pub const MODEL_CASES: &[&str] = &[
     "micro",
     "kalman",
     "ew_cov",
+    // The shrinkage's control (task 511): `ew_cov` at 5 features, the
+    // statistics `ew_cov`'s, no shrinkage, the count main has; and the
+    // same with Ledoit and Wolf's intensity at 5 and at 20 features, the
+    // fourth moments' step and the shrunk copy a row.
+    "ew_cov_k5",
+    "ew_cov_lw_k5",
+    "ew_cov_lw",
     "lasso_k20",
     // One case per model kind that had none, and the paths the review of
     // 2026-10-23 found costly (task 270 (e): J-3, slice M's table, F-2).
@@ -728,6 +735,19 @@ fn case_spec(id: &str) -> (Value, Shape) {
         }
         "ew_cov" | "bank_ew_cov_wide_t1" | "bank_ew_cov_wide_t4" => {
             let mut s = fit(json!({"type": "ew_cov"}), 20);
+            let s = s.as_object_mut().expect("an object");
+            s.remove("targets");
+            s.remove("min_weight");
+            (Value::Object(s.clone()), Shape::Linear)
+        }
+        "ew_cov_k5" | "ew_cov_lw_k5" | "ew_cov_lw" => {
+            let k = if id == "ew_cov_lw" { 20 } else { 5 };
+            let model = if id == "ew_cov_k5" {
+                json!({"type": "ew_cov"})
+            } else {
+                json!({"type": "ew_cov", "shrinkage": "ledoit_wolf"})
+            };
+            let mut s = fit(model, k);
             let s = s.as_object_mut().expect("an object");
             s.remove("targets");
             s.remove("min_weight");

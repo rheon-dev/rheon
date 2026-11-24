@@ -228,6 +228,7 @@ fn ew_cov(k: usize) -> EwCovModel {
         window: Some(WINDOW),
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     })
     .unwrap()
 }

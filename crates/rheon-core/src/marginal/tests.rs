@@ -538,6 +538,7 @@ fn the_windowed_kish_size_is_ew_covs() {
         window: Some(window),
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     })
     .unwrap();
     let mut s = 5u64;
@@ -858,6 +859,7 @@ fn lagged_pair_moments_are_ew_covs_to_the_bit() {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     })
     .unwrap();
 
@@ -926,6 +928,7 @@ fn lagged_pair_moments_are_ew_covs_for_every_feature_and_target() {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     })
     .unwrap();
     let mut seed = 23u64;
@@ -1943,6 +1946,7 @@ fn a_pair_is_the_ew_cov_of_the_two_columns() {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        shrinkage: None,
     })
     .unwrap();
     let mut s = 99u64;
@@ -2130,6 +2134,7 @@ fn state_round_trips_and_continues_identically() {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            shrinkage: None,
         })
         .unwrap()
         .state(),

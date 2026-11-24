@@ -1434,6 +1434,65 @@ impl EwCov {
         self.q_sum = crate::sqsum::KishSum::of(q_sum);
     }
 
+    /// `self` with its co-moments shrunk, `(1 − s) C + s T`
+    /// ([`crate::shrink`]), into `dst`, written over rather than allocated
+    /// where `dst` is of `self`'s shape: every other number the reads take
+    /// -- the means, the weights, the ridge -- is `self`'s. The runs are not
+    /// copied: a window's truncation, their one reader, is done by then.
+    pub(crate) fn shrunk_into(&self, dst: &mut Option<EwCov>, s: f64, target: Option<&[f64]>) {
+        let fits = dst
+            .as_ref()
+            .is_some_and(|d| d.has_shape(self.k) && d.c.packed().len() == self.c.packed().len());
+        let held = self.has_pending() || !self.pending.x.is_empty() || !self.pending.w.is_empty();
+        if !fits || held {
+            *dst = Some(self.flushed().into_owned());
+        }
+        let Some(out) = dst.as_mut() else {
+            return;
+        };
+        if fits && !held {
+            {
+                let d = &mut *out;
+                // Every field named, so a field added to `EwCov` is a
+                // compile error here until it is copied.
+                let EwCov {
+                    k,
+                    w_sum,
+                    q_sum,
+                    prior_scale,
+                    m,
+                    c: _,
+                    precision_prior,
+                    dev: _,
+                    square: _,
+                    merged: _,
+                    precision_scale,
+                    threads,
+                    runs,
+                    rows_learned,
+                    m_lo,
+                    pending,
+                } = self;
+                d.k = *k;
+                d.w_sum = *w_sum;
+                d.q_sum = *q_sum;
+                d.prior_scale = *prior_scale;
+                d.m.copy_from_slice(m);
+                d.precision_prior = *precision_prior;
+                d.precision_scale = *precision_scale;
+                d.threads = *threads;
+                d.runs.forget_as(runs);
+                d.rows_learned = *rows_learned;
+                d.m_lo.copy_from_slice(m_lo);
+                d.pending.clear_rows();
+                d.pending.block_rows = pending.block_rows;
+                d.pending.w_open = pending.w_open;
+            }
+        }
+        crate::shrink::shrink_into(self.c.packed(), self.k, s, target, out.c.packed_mut());
+        out.merged.forget();
+    }
+
     /// Age the accumulator without adding data (pure decay: means unchanged,
     /// only the effective count shrinks).
     pub fn decay(&mut self, lam: f64) {
@@ -1804,9 +1863,13 @@ pub enum EwCovStat {
     /// -- `a` leading `b` is not `b` leading `a` -- which is why both
     /// orientations are emitted. Needs `lags`.
     LagCorr,
+    /// The shrinkage intensity `s` the second moments were shrunk by this
+    /// row, in `[0, 1]` ([`EwCovCfg::shrinkage`]). One slot. Needs
+    /// `shrinkage`.
+    Shrinkage,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct EwCovCfg {
     pub n_features: usize,
     pub decay: crate::Decay,
@@ -1900,8 +1963,90 @@ pub struct EwCovCfg {
     /// At most this many rows between the window's snapshots, counted on
     /// every row the model is stepped with, rows of weight zero included;
     /// `1` is every row, and `0` is refused (docs/PLAN.md task 196).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Skipped when absent and nothing follows it, as before shrinkage
+    /// existed; written as nil when `shrinkage` follows it, so the compact
+    /// encoding's positions hold ([`EwCovCfg`]'s `Serialize`).
+    #[serde(default)]
     pub max_rows_between_snapshots: Option<usize>,
+    /// Shrink every second moment toward a target, `(1 − s) S + s T`:
+    /// `var`, `std`, `cov`, `corr`, `partial_corr`, `mahal` and the
+    /// components read the shrunk matrix, and `"shrinkage"` in `stats`
+    /// emits `s` ([`crate::Shrinkage`]). Absent for none, every output and
+    /// every state byte as without it. Last, and skipped when absent.
+    #[serde(default)]
+    pub shrinkage: Option<crate::Shrinkage>,
+}
+
+impl Serialize for EwCovCfg {
+    /// The derived layout, field for field, except at the tail: the row cap
+    /// and the shrinkage each skip when absent, and the row cap is written
+    /// as nil when the shrinkage follows it. A state file is a map read by
+    /// name, where a skip moves nothing; the compact encoding some
+    /// round-trip tests use is positional, where only a trailing field may
+    /// skip (`crates/rheon-core/tests/state_encoding.rs`). Without
+    /// shrinkage the bytes are the ones the derive wrote before it.
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename = "EwCovCfg")]
+        struct Out<'a> {
+            n_features: usize,
+            decay: &'a crate::Decay,
+            stats: &'a [EwCovStat],
+            min_weight: f64,
+            bias: bool,
+            precision_prior: Option<f64>,
+            mahal_quantiles: &'a [f64],
+            pca: usize,
+            #[serde(with = "crate::humanfloat::f64_or_tag")]
+            pca_every: f64,
+            max_rows_between_pca: u32,
+            lags: &'a [usize],
+            window: Option<f64>,
+            window_every: Option<f64>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            max_rows_between_snapshots: Option<Option<usize>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            shrinkage: Option<&'a crate::Shrinkage>,
+        }
+        let EwCovCfg {
+            n_features,
+            decay,
+            stats,
+            min_weight,
+            bias,
+            precision_prior,
+            mahal_quantiles,
+            pca,
+            pca_every,
+            max_rows_between_pca,
+            lags,
+            window,
+            window_every,
+            max_rows_between_snapshots,
+            shrinkage,
+        } = self;
+        Out {
+            n_features: *n_features,
+            decay,
+            stats,
+            min_weight: *min_weight,
+            bias: *bias,
+            precision_prior: *precision_prior,
+            mahal_quantiles,
+            pca: *pca,
+            pca_every: *pca_every,
+            max_rows_between_pca: *max_rows_between_pca,
+            lags,
+            window: *window,
+            window_every: *window_every,
+            max_rows_between_snapshots: (max_rows_between_snapshots.is_some()
+                || shrinkage.is_some())
+            .then_some(*max_rows_between_snapshots),
+            shrinkage: shrinkage.as_ref(),
+        }
+        .serialize(ser)
+    }
 }
 
 /// No row cap on the components' refreshes (`max_rows_between_pca`).
@@ -2052,6 +2197,23 @@ impl EwCovCfg {
         }
         // With `pca` or without: a cadence below 0 is no cadence, and the
         // spec refuses one either way.
+        if let Some(sh) = &self.shrinkage {
+            no.take(sh.validate("ew_cov", self.n_features));
+            if self.window.is_some() && sh.needs_fourth() {
+                no.refuse(
+                    "ew_cov: window_size and shrinkage \"ledoit_wolf\" cannot both be set yet: \
+                     the window does not cut the rows' fourth moments the intensity reads. Use \
+                     shrinkage \"oas\" or a fixed intensity under a window, or leave out \
+                     window_size.",
+                );
+            }
+        } else if self.stats.contains(&EwCovStat::Shrinkage) {
+            no.refuse(
+                "ew_cov: \"shrinkage\" in stats needs shrinkage, but it is not set. Set \
+                 shrinkage to \"ledoit_wolf\", \"oas\" or a fixed intensity, or leave \
+                 \"shrinkage\" out of stats.",
+            );
+        }
         if self.pca_every.is_nan() || self.pca_every < 0.0 {
             no.refuse(format!(
                 "ew_cov: pca_every must be at least 0 clock units, but it is {}. Set pca_every to \
@@ -2082,7 +2244,7 @@ impl EwCovCfg {
         match stat {
             EwCovStat::Mean | EwCovStat::Var | EwCovStat::Std => k,
             EwCovStat::Cov | EwCovStat::Corr | EwCovStat::PartialCorr => k * (k - 1) / 2,
-            EwCovStat::Mahal => 1,
+            EwCovStat::Mahal | EwCovStat::Shrinkage => 1,
             // Both orientations and the auto terms: the lagged matrix is
             // not symmetric.
             EwCovStat::LagCorr => self.lags.len() * k * k,
@@ -2192,7 +2354,7 @@ impl Pca {
 ///
 /// It has no targets: every column is a "feature", and the statistics are
 /// reported from the state *before* each row, like every prediction here.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct EwCovModel {
     cfg: EwCovCfg,
     cov: EwCov,
@@ -2221,8 +2383,16 @@ pub struct EwCovModel {
     /// The hard-cutoff window, when the spec asks for one (docs/PLAN.md §13).
     /// Absent otherwise, so an ordinary accumulator writes the bytes it
     /// always did and a state written before task 63 loads unchanged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Written as nil when absent and `shrink` follows it (the
+    /// `Serialize` below).
+    #[serde(default)]
     win: Option<Windowed>,
+    /// What the shrinkage reads beside the moments ([`crate::ShrinkState`]),
+    /// when the spec asks for shrinkage (docs/PLAN.md task 511). Absent
+    /// otherwise and skipped, so a model without it writes the bytes it
+    /// did before shrinkage existed. Last.
+    #[serde(default)]
+    shrink: Option<crate::ShrinkState>,
     /// The features' standard deviations a row's correlations divide by,
     /// kept so a step allocates nothing (task 270, M-4): not state, and
     /// written nowhere, so neither encoding changes.
@@ -2235,6 +2405,70 @@ pub struct EwCovModel {
     /// state, as `std`.
     #[serde(skip)]
     view: crate::window::Kept<crate::window::KeptView>,
+    /// The shrunk moments a row's statistics are read from, written over
+    /// from row to row, and the fourth moments' scratch. Not state.
+    #[serde(skip)]
+    shrunk: crate::window::Kept<ShrunkWork>,
+}
+
+/// [`EwCovModel`]'s working space for shrinkage: the shrunk copy of the
+/// moments the statistics read, and `C u` for the fourth moments' step.
+#[derive(Default)]
+struct ShrunkWork {
+    cov: Option<EwCov>,
+    cu: Vec<f64>,
+    d: Vec<f64>,
+}
+
+impl Serialize for EwCovModel {
+    /// The derived layout, except at the tail: `win` and `shrink` each skip
+    /// when absent, and `win` is written as nil when `shrink` follows it,
+    /// so the compact encoding's positions hold ([`EwCovCfg`]'s
+    /// `Serialize` says why). Without shrinkage the bytes are the ones the
+    /// derive wrote before it.
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename = "EwCovModel")]
+        struct Out<'a> {
+            cfg: &'a EwCovCfg,
+            cov: &'a EwCov,
+            mahal_q: &'a Option<crate::EwQuantile>,
+            pca: &'a Option<Pca>,
+            rows_since_pca: usize,
+            since_pca: &'a Since,
+            lag: &'a Option<crate::EwLagCov>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            win: Option<&'a Option<Windowed>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            shrink: Option<&'a crate::ShrinkState>,
+        }
+        let EwCovModel {
+            cfg,
+            cov,
+            mahal_q,
+            pca,
+            rows_since_pca,
+            since_pca,
+            lag,
+            win,
+            shrink,
+            std: _,
+            view: _,
+            shrunk: _,
+        } = self;
+        Out {
+            cfg,
+            cov,
+            mahal_q,
+            pca,
+            rows_since_pca: *rows_since_pca,
+            since_pca,
+            lag,
+            win: (win.is_some() || shrink.is_some()).then_some(win),
+            shrink: shrink.as_ref(),
+        }
+        .serialize(ser)
+    }
 }
 
 thread_local! {
@@ -2317,6 +2551,10 @@ impl EwCovModel {
         } else {
             Some(crate::EwLagCov::new(cfg.n_features, cfg.lags.clone())?)
         };
+        let shrink_state = cfg
+            .shrinkage
+            .as_ref()
+            .map(|sh| crate::ShrinkState::new(sh, cfg.n_features));
         Ok(Self {
             cfg,
             cov,
@@ -2332,8 +2570,10 @@ impl EwCovModel {
                 }),
                 None => None,
             },
+            shrink: shrink_state,
             std: Scratch::default(),
             view: crate::window::Kept::default(),
+            shrunk: crate::window::Kept::default(),
         })
     }
 
@@ -2421,7 +2661,49 @@ impl EwCovModel {
     /// a windowed mean and variance (review 2026-09-12, C14).
     pub fn mahal(&self, x: &[f64]) -> f64 {
         let view = self.view();
-        Self::mahal_of(&view, x, self.second_moment_scale(&view))
+        let mut work = None;
+        let (view, _) = self.shrunk(&view, &mut work);
+        Self::mahal_of(view, x, self.second_moment_scale(view))
+    }
+
+    /// The shrinkage intensity of the moments `cov` a row reads (the live
+    /// accumulator, or the window's): Kish's size the kept one, moved only
+    /// by a learned row, for the live accumulator, and the window's own
+    /// under a window, whose cut moves every row. 0 without shrinkage; NaN
+    /// where Ledoit and Wolf's or OAS's cannot be said (`Q` unknown, or no
+    /// weight).
+    fn intensity_of(&self, cov: &EwCov) -> f64 {
+        let (Some(sh), Some(st)) = (self.cfg.shrinkage.as_ref(), self.shrink.as_ref()) else {
+            return 0.0;
+        };
+        let n = if self.win.is_some() {
+            cov.n_kish()
+        } else {
+            st.kish()
+        };
+        crate::shrink::intensity(
+            sh,
+            cov.comoments().packed(),
+            cov.k(),
+            n,
+            st.fourth().map(crate::Fourth::f),
+        )
+    }
+
+    /// `cov` with its co-moments shrunk ([`EwCovCfg::shrinkage`]), written
+    /// into `work`, and the intensity; `cov` itself and 0 without
+    /// shrinkage, so a model without it reads what it always read.
+    fn shrunk<'a>(&self, cov: &'a EwCov, work: &'a mut Option<EwCov>) -> (&'a EwCov, f64) {
+        let Some(sh) = self.cfg.shrinkage.as_ref() else {
+            return (cov, 0.0);
+        };
+        let s = self.intensity_of(cov);
+        let target = match sh {
+            crate::Shrinkage::Fixed { target, .. } => target.as_deref(),
+            _ => None,
+        };
+        cov.shrunk_into(work, s, target);
+        (work.as_ref().unwrap_or(cov), s)
     }
 
     /// What the second moments read from `cov` are multiplied by
@@ -2552,7 +2834,9 @@ impl EwCovModel {
         // loading.
         let fresh = {
             let view = self.view();
-            let scale = self.second_moment_scale(&view);
+            let mut work = None;
+            let (view, _) = self.shrunk(&view, &mut work);
+            let scale = self.second_moment_scale(view);
             Pca::of(
                 &view.comoments().to_full(),
                 self.cfg.n_features,
@@ -2661,6 +2945,7 @@ impl EwCovModel {
                     }
                 }
                 EwCovStat::Mahal => out.push("mahal".to_string()),
+                EwCovStat::Shrinkage => out.push("shrinkage".to_string()),
                 EwCovStat::LagCorr => {
                     for l in lags {
                         for a in names {
@@ -2687,13 +2972,14 @@ impl EwCovModel {
     #[cfg(test)]
     fn read(&self, cov: &EwCov, x: &[f64]) -> Vec<f64> {
         let mut out = Vec::new();
-        self.read_into(cov, x, &mut out, &mut Vec::new());
+        self.read_into(cov, x, &mut out, &mut Vec::new(), 0.0);
         out
     }
 
     /// The row's statistics, into `out`, whatever it held; `std` is scratch
-    /// for the standard deviations the correlations divide by.
-    fn read_into(&self, cov: &EwCov, x: &[f64], out: &mut Vec<f64>, std: &mut Vec<f64>) {
+    /// for the standard deviations the correlations divide by, and `s` the
+    /// shrinkage intensity `cov` was shrunk by, for its slot.
+    fn read_into(&self, cov: &EwCov, x: &[f64], out: &mut Vec<f64>, std: &mut Vec<f64>, s: f64) {
         let k = self.cfg.n_features;
         // Sized to the row's slots, which a stream keeps from row to row, so
         // from the second row on this moves nothing; every slot is then
@@ -2769,6 +3055,7 @@ impl EwCovModel {
                         None => Self::mahal_of(cov, x, scale),
                     }
                 }
+                EwCovStat::Shrinkage => slots(&mut rest, 1)[0] = s,
                 EwCovStat::LagCorr => {
                     // `C_l[a,b] / sqrt(C_0[a,a] * C_0[b,b])`: the lagged
                     // covariance over the contemporaneous standard
@@ -2842,6 +3129,7 @@ impl EwCovModel {
         out: &mut crate::Step,
         std: &mut Vec<f64>,
         kept: &mut crate::window::Kept<crate::window::KeptView>,
+        shrunk: &mut crate::window::Kept<ShrunkWork>,
     ) {
         if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
             *out = refused;
@@ -2859,7 +3147,13 @@ impl EwCovModel {
         if self.cfg.n_outputs() == 0 {
             out.pred.clear();
         } else if n_eff >= self.cfg.min_weight {
-            self.read_into(self.view_kept(kept), x, &mut out.pred, std);
+            let view = self.view_kept(kept);
+            if self.cfg.shrinkage.is_some() {
+                let (cov, s) = self.shrunk(view, &mut shrunk.get().cov);
+                self.read_into(cov, x, &mut out.pred, std, s);
+            } else {
+                self.read_into(view, x, &mut out.pred, std, 0.0);
+            }
         } else {
             out.pred.clear();
             out.pred.resize(self.cfg.n_outputs(), f64::NAN);
@@ -2943,7 +3237,8 @@ impl crate::OnlineModel for EwCovModel {
         // column is usable as a feature for the same row without leaking it.
         let mut std = std::mem::take(&mut self.std.0);
         let mut kept = self.view.take();
-        self.predict_into(x, d_clock, out, &mut std, &mut kept);
+        let mut shrunk = self.shrunk.take();
+        self.predict_into(x, d_clock, out, &mut std, &mut kept, &mut shrunk);
         self.std.0 = std;
         self.view.put(kept);
         let lam = self.cfg.decay.factor(d_clock);
@@ -2997,7 +3292,30 @@ impl crate::OnlineModel for EwCovModel {
                     }
                 });
         }
+        // The rows' fourth moments, for Ledoit and Wolf's intensity: in step
+        // with the update below, by its own mixing factors and from the
+        // deviations and co-moments it is about to consume.
+        if let Some(fourth) = self.shrink.as_mut().and_then(|st| st.fourth.as_mut())
+            && let Some((a, b)) = self.cov.mixing(lam, weight)
+        {
+            let work = shrunk.get();
+            work.d.clear();
+            work.d.extend(
+                x.iter()
+                    .enumerate()
+                    .map(|(i, &xi)| self.cov.deviation(i, xi)),
+            );
+            fourth.learn(self.cov.comoments().packed(), &work.d, a, b, &mut work.cu);
+        }
+        self.shrunk.put(shrunk);
         self.cov.update(x, lam, weight);
+        // Kish's size as of this learned row: a row that only ages the
+        // moments keeps it ([`crate::ShrinkState`]).
+        if weight > 0.0
+            && let Some(st) = self.shrink.as_mut()
+        {
+            st.kish = self.cov.n_kish();
+        }
         if self.cfg.pca > 0 {
             // A checkpoint after the update, on the clock or the rows,
             // whichever comes first, as the regressions' solves (task 161).
@@ -3024,6 +3342,7 @@ impl crate::OnlineModel for EwCovModel {
             d_clock,
             &mut out,
             &mut Vec::new(),
+            &mut crate::window::Kept::default(),
             &mut crate::window::Kept::default(),
         );
         out
@@ -3077,6 +3396,12 @@ impl crate::OnlineModel for EwCovModel {
                 let pca_ok = m.pca.as_ref().is_none_or(|p| {
                     p.eig.len() <= m.cfg.pca && p.loadings.len() == p.eig.len() * k
                 });
+                // What the shrinkage reads, where the cfg asks for it.
+                let shrink_ok = match (&m.cfg.shrinkage, &m.shrink) {
+                    (Some(sh), Some(st)) => st.fits(sh, k),
+                    (None, None) => true,
+                    _ => false,
+                };
                 // And inside the sketch and the window's snapshots, which
                 // a row indexes (review 2026-10-06, CB2).
                 let parts = m.mahal_q.as_ref().is_none_or(crate::EwQuantile::has_shape)
@@ -3090,6 +3415,7 @@ impl crate::OnlineModel for EwCovModel {
                     || !lag_ok
                     || !pca_ok
                     || m.win.is_some() != m.cfg.window.is_some()
+                    || !shrink_ok
                 {
                     return Err(crate::StateError::Invalid(
                         "ew_cov: it is damaged, since its running sums have the wrong shape. Load an undamaged copy of the state file, or rebuild it from its input."
@@ -3169,3 +3495,6 @@ mod symmetry_tests;
 
 #[cfg(test)]
 mod emit_tests;
+
+#[cfg(test)]
+mod shrink_tests;
