@@ -650,12 +650,17 @@ fn window_profile_input(df: &DataFrame) -> DataFrame {
 }
 
 /// The same profiles' forms on a number clock: a period in clock units.
+/// `shape` reads at least four rows, one more than its three terms: with
+/// three, the fit passes through every row, so at the row's own phase the
+/// variance is 0 in exact arithmetic and its rounding's sign decides
+/// between a withheld read and one of `1e-19`. Apple's and Windows Server
+/// 2022's `exp2` (in the decay) put that sign on either side.
 fn windows_profile_units_config() -> WindowsConfig {
     serde_json::from_str(
         r#"{"formulas": [
                {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "weight": ["col", "w"], "stat": "std"}]},
                {"name": "recent", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "window_size": 20.0, "closed": "both", "min_samples": 2}]},
-               {"name": "shape", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "harmonics": 1, "half_life": 12.0, "window_size": 4.0, "stat": "var", "weight": ["col", "w"]}]}
+               {"name": "shape", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "harmonics": 1, "half_life": 12.0, "window_size": 4.0, "stat": "var", "weight": ["col", "w"], "min_samples": 4}]}
              ],
              "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
     )
