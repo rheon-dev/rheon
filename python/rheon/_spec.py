@@ -1869,9 +1869,9 @@ def ewridge(
     ``snapshot_every`` spaces the snapshots on the clock, as
     ``solve_every`` spaces solves, and ``max_rows_between_snapshots`` caps
     the rows between them, as ``max_rows_between_solves`` caps the rows
-    between solves. A row of weight zero counts, a gap capped at
-    ``gap_cap`` counts as the cap, and without a clock column the clock is
-    the row's number. Under a clock spacing, every row at most
+    between solves. A row of weight 0 counts in no clock, so it is no row
+    of the cap; a gap capped at ``gap_cap`` counts as the cap, and without
+    a clock column the clock is the row's number. Under a clock spacing, every row at most
     ``window_size - snapshot_every`` old is kept and none older than
     ``window_size``. So the hard window kept is in
     ``[window_size - snapshot_every, window_size]`` in clock units, exactly,
@@ -3157,9 +3157,10 @@ def ew_cov(
 
     **Principal components.** The components are the same to the bit
     whatever the bank's thread count (``RHEON_MAX_THREADS``): the
-    eigensolver runs at a fixed parallel degree of eight. A row of weight
-    zero advances both refresh schedules, as the hard window's snapshot
-    cadence counts it, and a gap capped at ``gap_cap`` counts as the cap.
+    eigensolver runs at a fixed parallel degree of eight. A row of weight 0
+    counts in no clock, so it brings neither refresh nearer, as it brings
+    no snapshot of the hard window nearer, and a gap capped at ``gap_cap``
+    counts as the cap.
     Without a clock column the clock is the row's number.
 
     **Lags.** ``C_l`` uses the same ``a`` and ``b`` the co-moments use, so
@@ -3169,8 +3170,8 @@ def ew_cov(
     frame in memory would compute. The ring of past rows is emptied on a
     clock break: a row whose clock step ``gap_cap`` shortened, whether the
     step follows one row or a run of skipped rows, or a session change.
-    After a clock break, "the row ``l`` back" is not a row ``l`` ago. A zero-weight row ages
-    the matrices and does not enter the ring. A group's first rows read
+    After a clock break, "the row ``l`` back" is not a row ``l`` ago. A zero-weight row counts
+    in no clock: it ages no matrix and does not enter the ring. A group's first rows read
     ``lag_corr`` null until ``min_weight``, at least two rows of weight,
     since one row has no variance to divide by.
     ``C_l`` starts at 0 and takes its first product when a learned row has
@@ -4276,9 +4277,9 @@ def marginal(
     **The warm-up of the bins.** The rows of the bins' warm-up are held, not
     spent. The moment the edges exist every one of them is replayed with its
     own decay, so the histogram is what it would have been had the edges
-    been known before the first row. That holds to the bit, or to about
-    1e-15 of the data's scale where rows of weight zero fall inside the
-    warm-up, whose decays are carried to the next held row as one product.
+    been known before the first row. That holds to the bit: a row of
+    weight 0 counts in no clock, so no decay of its own falls between two
+    held rows.
     Decay reaches the histogram as it reaches the pair moments, so a clock
     step capped at ``gap_cap`` decays it by the same factor as them. The bins take
     ``O(bins)`` of state per pair, one search of the edges per feature per

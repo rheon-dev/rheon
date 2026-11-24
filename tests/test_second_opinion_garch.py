@@ -76,8 +76,9 @@ from arch.univariate.distribution import SkewStudent, StudentsT
 from arch.univariate.recursions import figarch_weights
 from scipy.optimize import minimize
 from scipy.signal import lfilter
-from scipy.stats import chi2
+from scipy.stats import chi2, norm
 
+import ledger
 from rheon import polars as rp
 
 TIER = "mixed"
@@ -262,7 +263,27 @@ def test_two_seeds_a_form_are_arch_to_first_order(form):
         assert c["excess"] <= 4.0 * c["T"], (form, seed, c["excess"], c["T"])
 
 
-# --- the extended grids: 50 seeds a form ------------------------------------
+# --- the grids: 50 seeds a form ----------------------------------------------
+#
+# Each grid runs thousands of `arch` fits, minutes a case, so they are the
+# oracle tier (`oracle_grid`), which CI shards and the ledger holds
+# (`oracles.toml`): marked `extended`, they ran in every leg of every
+# workflow that runs the full tier, and under Intel SDE's emulation, and no
+# ledger ratcheted their numbers (PLAN 578j, CI-1).
+
+
+def _guard_outputs() -> list:
+    """The bank's variances, two seeds a form at 2,000 rows, and a targeted
+    form's: the library's outputs on the grids' inputs, with no `arch` in
+    them (`tests/ledger.py`)."""
+    out = [
+        bank_run(form, simulate(form, 2_000, seed))[0] for form in sorted(FORMS) for seed in (0, 1)
+    ]
+    out.append(bank_run("garch", simulate("garch", 2_000, 0), targeting=True)[0])
+    return out
+
+
+ledger.guard("arch_grids", _guard_outputs, oracles=["arch"])
 
 SEEDS = range(50)
 #: Within 2 SE on every parameter: measured 50 of 50 on every form (both
@@ -270,7 +291,7 @@ SEEDS = range(50)
 FLOOR = 46
 
 
-@pytest.mark.extended(reason="50 seeds a form at 10,000 rows, an arch fit each")
+@pytest.mark.oracle_grid(reason="50 seeds a form at 10,000 rows, an arch fit each")
 @pytest.mark.parametrize("form", sorted(FORMS))
 def test_fifty_seeds_a_form_against_arch(form):
     cs = [compare(form, simulate(form, 10_000, s)) for s in SEEDS]
@@ -278,6 +299,9 @@ def test_fifty_seeds_a_form_against_arch(form):
     within = sum(c["within2"] for c in cs)
     ratio = np.array([c["excess"] / c["T"] for c in cs])
     d = np.array([c["D"] for c in cs])
+    ledger.record("arch_grids", f"{form}_excess_over_t", ratio)
+    ledger.record("arch_grids", f"{form}_d", d)
+    ledger.record("arch_grids", f"{form}_gap_se", [np.max(np.abs(c["gap"])) for c in cs])
     assert within >= FLOOR, (form, within)
     assert np.median(ratio) <= 1.5, (form, np.median(ratio))
     assert ratio.max() <= 4.0, (form, ratio.max())
@@ -288,7 +312,7 @@ def test_fifty_seeds_a_form_against_arch(form):
 FREE = sorted(f for f in FORMS if f != "egarch_985")
 
 
-@pytest.mark.extended(reason="50 seeds a form at 100,000 rows, two arch fits each")
+@pytest.mark.oracle_grid(reason="50 seeds a form at 100,000 rows, two arch fits each")
 @pytest.mark.parametrize("form", FREE)
 def test_at_100k_rows_the_free_forms_are_the_batch_fit(form):
     """At 100,000 rows: median D at most k/32, its 90th percentile at most
@@ -304,6 +328,8 @@ def test_at_100k_rows_the_free_forms_are_the_batch_fit(form):
     g = np.median(np.abs(np.array([c["gap"] for c in big])))
     g10 = np.median(np.abs(np.array([c["gap"] for c in small])))
     print(f"{form}: median |gap| {g10:.3f} at 10k, {g:.3f} at 100k, ratio {g / g10:.2f}")
+    ledger.record("arch_grids", f"{form}_d_100k", d)
+    ledger.record("arch_grids", f"{form}_gap_se_100k", [np.median(np.abs(c["gap"])) for c in big])
     assert np.median(d) <= k / 32.0, (form, np.median(d))
     assert np.percentile(d, 90) <= k / 8.0, (form, np.percentile(d, 90))
     assert g <= 0.25, (form, g)
@@ -451,13 +477,16 @@ def test_the_targeted_form_is_arch_targeted_fit_on_two_seeds():
         assert c["excess_over_refit"] <= 6.0, (seed, c["excess_over_refit"])
 
 
-@pytest.mark.extended(reason="50 seeds at 10,000 rows, an arch fit and 80 prefix refits each")
+@pytest.mark.oracle_grid(reason="50 seeds at 10,000 rows, an arch fit and 80 prefix refits each")
 def test_fifty_seeds_of_the_targeted_form():
     cs = [vt_compare(s) for s in SEEDS]
     within = sum(bool(np.all(np.abs(c["gap"]) <= 2.0)) for c in cs)
     gaps = np.abs(np.array([c["gap"] for c in cs]))
     d = np.array([c["D"] for c in cs])
     over = np.array([c["excess_over_refit"] for c in cs])
+    ledger.record("arch_grids", "targeted_gap_se", gaps.max(axis=1))
+    ledger.record("arch_grids", "targeted_d", d)
+    ledger.record("arch_grids", "targeted_excess_over_refit", over)
     assert within >= FLOOR, within
     assert np.median(gaps) <= 0.5, np.median(gaps)
     assert np.percentile(d, 90) <= 3.0, np.percentile(d, 90)
@@ -661,7 +690,7 @@ START_CELLS = [
 ]
 
 
-@pytest.mark.extended(reason="50 seeds a truth and a start, a bank and two arch fits each")
+@pytest.mark.oracle_grid(reason="50 seeds a truth and a start, a bank and two arch fits each")
 @pytest.mark.parametrize(("truth", "form", "start"), START_CELLS)
 def test_no_start_is_short_of_arch(truth, form, start):
     """Fifty seeds a truth and a start: from 1,000 rows no start is short of
@@ -673,6 +702,7 @@ def test_no_start_is_short_of_arch(truth, form, start):
     gots = [start_of(truth, form, series_of(truth, form, 10_000, s), start) for s in SEEDS]
     shorts = np.array([g["short_in_set"] for g in gots if g["short"] is not None])
     assert len(shorts) == len(gots), "every realistic series starts within 10,000 rows"
+    ledger.record("arch_grids", f"start_{truth}_{form}_{start}_short_in_set", shorts)
     outside = [g for g in gots if g["short"] > SHORT_IN_SET and g["arch_in_set"]]
     if start >= 1000:
         assert shorts.max() <= SHORT_IN_SET, (truth, form, start, shorts.max())
@@ -749,7 +779,94 @@ def test_the_wait_is_arch_likelihood_ratio_test():
     assert clear >= n // 2 and not differ, (clear, n, differ)
 
 
-@pytest.mark.extended(reason="20 seeds of 19 truths at 500 rows, two arch fits each")
+@pytest.mark.oracle_grid(reason="20 seeds of 19 truths at 500 rows, two arch fits each")
 def test_the_wait_is_arch_likelihood_ratio_test_on_twenty_seeds():
     clear, n, differ = lr_agreement(lr_cases(range(20)))
+    ledger.record("arch_grids", "wait_differs_from_arch", [len(differ)], exact=True)
+    ledger.record("arch_grids", "wait_clear_share", [clear / n], ideal=1.0)
     assert clear >= n * 3 // 4 and not differ, (clear, n, differ)
+
+
+def figarch_lr(r: np.ndarray) -> tuple[float, np.ndarray]:
+    """`arch`'s statistic for FIGARCH: its FIGARCH fit, truncated at 1,000
+    lags as the bank's default is, against its `ConstantVariance` fit, both
+    normal; and the fit's parameters."""
+    res = arch_model_of("figarch", r).fit(disp="off", options={"maxiter": 1000})
+    const = arch_model(r, mean="Zero", vol="Constant", rescale=False).fit(disp="off")
+    return 2.0 * float(res.loglikelihood - const.loglikelihood), np.asarray(res.params)
+
+
+@pytest.mark.extended(reason="four arch FIGARCH fits of 2,000 rows at 1,000 lags, 20 s")
+def test_figarchs_wait_is_arch_likelihood_ratio_test():
+    """FIGARCH's start, which is 2,000 rows at least, is held to `arch`'s
+    statistic as the other forms' are at 500 (`lr_cases` leaves it out for
+    that): two seeds of its truth and two of returns with no conditional
+    variance. The bank's first fit waits (`not_identified`) exactly where
+    `arch`'s statistic, clear of the cut and its fit inside the bank's set,
+    is under the cut."""
+    cases = [("figarch", series_of("hi", "figarch", 2100, s)) for s in range(2)]
+    cases += [("iid", np.random.default_rng([5490, 99, s]).standard_normal(2100)) for s in range(2)]
+    clear, differ = [], []
+    for truth, r in cases:
+        lr, theta = figarch_lr(r[:2000])
+        a, b = set_rows("figarch", "normal", r[:2000])
+        if abs(lr - LR_CUT["figarch"]) < 0.5 or not np.all(a @ theta - b >= 0.0):
+            continue
+        clear.append((truth, lr))
+        spec = rp.spec.garch("g", targets=["r"], vol="figarch", start_rows=2000)
+        out = rp.ModelBank([spec]).fit_predict(pl.DataFrame({"r": r})).unnest("g")
+        waits = out["withheld_reason"].cast(pl.String)[2000] == "not_identified"
+        if waits != (lr < LR_CUT["figarch"]):
+            differ.append((truth, lr, waits))
+    truths = {t for t, _ in clear}
+    assert truths == {"figarch", "iid"} and not differ, (clear, differ)
+
+
+def weighted_loglik(am, r: np.ndarray, w: np.ndarray, theta: np.ndarray) -> float:  # noqa: ANN001
+    """`Σ w_t l_t`: each row's normal log-density at `arch`'s variance for
+    it under `theta` (scipy's density), weighted by its row's weight."""
+    s2 = np.asarray(am.fix(theta).conditional_volatility) ** 2
+    ll = norm.logpdf(r, scale=np.sqrt(s2))
+    v = float(np.sum(w * ll))
+    return v if math.isfinite(v) else -1e300
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_a_weighted_start_is_the_weighted_likelihoods_optimum(seed):
+    """Rows of unequal weight: the start maximizes `Σ w_t l_t` over the
+    bank's set, each row's log-likelihood `arch`'s variance and scipy's
+    normal density, the best found by scipy's SLSQP from the start's fit
+    and from `arch`'s own unweighted fit. The start is short of it by at
+    most `SHORT_IN_SET` at Kish's count of the weights, the scale its
+    gain is cut at, and the unweighted fit is short of it by far more:
+    the weights are read."""
+    r = series_of("hi", "garch", 2001, seed)
+    w = np.random.default_rng([578, seed]).choice([0.5, 1.0, 2.0, 4.0], len(r))
+    spec = rp.spec.garch("g", targets=["r"], weight="w", start_rows=2000, coef_every=0)
+    out = rp.ModelBank([spec]).fit_predict(pl.DataFrame({"r": r, "w": w})).unnest("g")
+    var = out["variance_r"].to_numpy().astype(float)
+    assert np.isfinite(var[2000]) and not np.isfinite(var[:2000]).any()
+    theta = np.asarray(out["coef"].to_list()[1999], dtype=float)
+    rows, ws = r[:2000], w[:2000]
+    am = arch_model(rows, mean="Zero", vol="GARCH", p=1, q=1, rescale=False)
+    unweighted = np.asarray(am.fit(disp="off", options={"maxiter": 1000}).params)
+    a, b = set_rows("garch", "normal", rows)
+
+    def nll(x: np.ndarray) -> float:
+        return -weighted_loglik(am, rows, ws, x)
+
+    best = -math.inf
+    for x0 in (theta, unweighted):
+        res = minimize(
+            nll,
+            x0,
+            method="SLSQP",
+            constraints=[{"type": "ineq", "fun": lambda x: a @ x - b, "jac": lambda x: a}],
+            options={"ftol": 1e-14, "maxiter": 1000},
+        )
+        if np.all(a @ res.x - b >= -1e-10 * (1.0 + np.abs(b))):
+            best = max(best, -float(res.fun))
+    kish = float(ws.sum() / np.sum(ws * ws))
+    ours = weighted_loglik(am, rows, ws, theta)
+    assert (best - ours) * kish <= SHORT_IN_SET, (best - ours) * kish
+    assert (best - weighted_loglik(am, rows, ws, unweighted)) * kish > 1e-4

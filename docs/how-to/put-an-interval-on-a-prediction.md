@@ -13,7 +13,7 @@ These steps need the library and a model whose error to measure:
 
 - rheon installed with Polars, and numpy to make the examples' data.
 - A [spec](../GLOSSARY.md#the-model-bank-and-what-it-reads) of one of the
-  ten linear models, such as `ewridge`, which take `emit_sigma`,
+  linear models, such as `ewridge`, which take `emit_sigma`,
   `resid_quantiles` and `conformal`. [What each costs, and which models
   take it](../DIAGNOSTICS.md#what-each-costs-and-which-models-take-it)
   lists them.

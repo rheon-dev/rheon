@@ -253,3 +253,38 @@ fn a_product_allocates_a_bounded_amount_on_each_thread() {
     });
     check("Pca k=300, pool of 8", &got);
 }
+
+/// The models since 2.0 run no matrix product, so no case here is theirs
+/// (review 2026-11-23, CI-5, asked for `glm`, `expectile`, `hawkes` and
+/// `garch`): `glm` and `hawkes` solve with the library's own Cholesky
+/// (`solve.rs`), `expectile` with its own, and `garch`'s parameters are a
+/// handful, solved by hand. faer's product is called in `pieces.rs` and
+/// `ewcov/par.rs`, the Gram's pieces the case above runs, and in
+/// `breaks.rs`, at the shapes of its features. A model that comes to call
+/// it is named here, and needs a case.
+#[test]
+fn the_models_since_2_0_run_no_product() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../rheon-core/src");
+    let mut calls = Vec::new();
+    let mut stack = vec![src.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("the core's sources") {
+            let path = entry.expect("an entry").path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if path.is_dir() {
+                stack.push(path);
+            } else if name.ends_with(".rs")
+                && !name.ends_with("tests.rs")
+                && name != "oracle.rs"
+                && std::fs::read_to_string(&path)
+                    .expect("a source")
+                    .contains("matmul")
+            {
+                let rel = path.strip_prefix(&src).unwrap().to_string_lossy();
+                calls.push(rel.replace('\\', "/"));
+            }
+        }
+    }
+    calls.sort();
+    assert_eq!(calls, ["breaks.rs", "ewcov/par.rs", "pieces.rs"]);
+}

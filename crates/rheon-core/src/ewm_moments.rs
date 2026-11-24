@@ -72,6 +72,39 @@
 //! it. A row of weight 0 decays by the clock step it is handed, as
 //! `ew_cov`'s does: on a clock its time passes.
 //!
+//! # Moments past a double's range
+//!
+//! A moment of order `p` is of the size of `d^p`: of a deviation at the
+//! input bound (`1e100`) a fourth moment is `1e400`, past the largest
+//! double, and a moment that overflows to `inf` stays there through every
+//! later row (`a · inf` is `inf`, and `inf − inf` NaN), so no decay would
+//! ever wash it out. Each summary keeps a scale `e` and holds `c_a
+//! 2^(−e |a|)`, the moments of the deviations measured in units of `2^e`.
+//! The update is homogeneous -- each term of `c'_a` is of degree `|a|` in
+//! the deviations and the moments together -- so it runs on `d 2^(−e)` as
+//! written, and a power of two moves no digit. The scale is 0, and the
+//! arithmetic the update above to the bit, while a bound on the update's
+//! intermediates keeps them below the largest double (a moment of order
+//! `p` is at most `2^p` terms, each a binomial coefficient of at most `2^p`
+//! times a moment and at most `p` deviations, in shares of at most 1). Past
+//! the bound the row is formed again from a copy, at the scale its
+//! deviations and moments ask for, and the scale falls back as soon as the
+//! moments fit again; two summaries merge at the larger of their scales.
+//! Where no scale holds a row's moments (an order of several hundred,
+//! whose binomial coefficients alone pass the largest double) the row is
+//! learned as a row with no value is, the decay alone.
+//!
+//! So a moment is kept exactly however large, and washes out as the
+//! stream's own does: a row at the bound of weight at the bound leaves a
+//! fifth moment of `1e600` on the sum scale, which takes about 2,000
+//! half-lives to fall below `1e-6`, where its square takes 1,000. A term is
+//! read at its degree in the deviations: a standardized moment, of degree
+//! 0, as it is, so a skew or a kurtosis is read while its moments are past
+//! a double's range; a central moment or a cumulant of order `p` times
+//! `2^(e p)`, withheld as past a double's range where that overflows; a raw
+//! moment and the mean, which mix the means in, from the moments at scale
+//! 0.
+//!
 //! # Lags
 //!
 //! A lagged leg `x@k` reads `x` at `k` learned rows back, or, on a clock,
@@ -179,7 +212,8 @@
 //!
 //! ```text
 //! the weight           1
-//! a summary            1 + 2d + |kept| + |r_k|
+//! a summary            1 + 2d + |kept| + |r_k|  (and its scale, a whole number
+//!                      written only where its moments pass a double's range)
 //! the summaries        their sum            (none under a window)
 //! a lag buffer         1 + K_c              (rows)
 //!                      1 + 3 per row held   (clock: a stamp is two)
@@ -1100,7 +1134,8 @@ impl EwmMoments {
     pub fn central(&self, p: u32) -> f64 {
         let g = &self.derived.groups[0];
         let a = unit(g.legs.len(), 0, p);
-        self.first().cv(g, &a)
+        let s = self.first();
+        s.unscale(s.cv(g, &a), p)
     }
 
     /// The first group's Kish ratio `r_2 = Σ ω² / W²`, `1 / n_eff_kish`.
@@ -1744,7 +1779,11 @@ impl EwmMoments {
         let gi = self.derived.terms[i].0;
         let s = &sums[gi];
         self.gate(i, s)?;
-        let v = self.evaluate(i, s)?;
+        let v = match self.degree(i, false) {
+            _ if s.e == 0 => self.evaluate(i, s)?,
+            Some(p) => s.unscale(self.evaluate(i, s)?, p),
+            None => self.evaluate(i, &s.unscaled(&self.derived.groups[gi]))?,
+        };
         if v.is_finite() {
             Ok(v)
         } else {
@@ -1782,11 +1821,47 @@ impl EwmMoments {
         }
     }
 
+    /// The degree of term `i` (its standard error's under `se`) in the
+    /// deviations, which a summary's scale ([`Summary`]'s `e`) multiplies
+    /// it by `2^(e p)`: 0 for a standardized moment, the order for a
+    /// central moment and a cumulant. `None` for a statistic that is not
+    /// homogeneous in them, a raw moment and the mean (a cumulant of order
+    /// 1, whose standard error is of degree 1), read from the summary at
+    /// scale 0.
+    fn degree(&self, i: usize, se: bool) -> Option<u32> {
+        let t = &self.cfg.terms[i];
+        let p = order(&self.derived.terms[i].1);
+        match t.kind {
+            MomentKind::Raw => None,
+            MomentKind::Standardized => Some(0),
+            MomentKind::Cumulant if p == 1 && !se => None,
+            MomentKind::Central | MomentKind::Cumulant => Some(p),
+        }
+    }
+
     /// Term `i`'s standard error, or why it has none.
     fn se_in(&self, i: usize, sums: &[Summary]) -> Result<f64, Withheld> {
         let (gi, _) = &self.derived.terms[i];
         let g = &self.derived.groups[*gi];
         let s = &sums[*gi];
+        if s.e != 0 {
+            return match self.degree(i, true) {
+                Some(p) => self.se_of(i, g, s).map(|v| s.unscale(v, p)),
+                None => self.se_of(i, g, &s.unscaled(g)),
+            }
+            .and_then(|v| {
+                if v.is_finite() {
+                    Ok(v)
+                } else {
+                    Err(Withheld::Overflow)
+                }
+            });
+        }
+        self.se_of(i, g, s)
+    }
+
+    /// Term `i`'s standard error read from `s` at its scale.
+    fn se_of(&self, i: usize, g: &Group, s: &Summary) -> Result<f64, Withheld> {
         if s.w == 0.0 {
             return Err(Withheld::NoWeight);
         }

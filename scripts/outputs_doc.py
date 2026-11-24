@@ -1,6 +1,6 @@
 """Generate `docs/OUTPUTS.md`: what each model writes into its output column.
 
-The *field lists* and their *dtypes* come from `po.spec.output_index` on a
+The *field lists* and their *dtypes* come from `rp.spec.output_index` on a
 canonical spec per model, `MINIMAL` in `tests/test_model_registry.py`, so they
 cannot drift from the code. The *meanings* and the rules for where a field is
 null are written here, once per field stem, and reviewed like any other
@@ -24,6 +24,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
+
+import polars as pl  # noqa: E402
 
 from rheon import polars as rp  # noqa: E402
 from test_model_registry import MINIMAL, _build  # noqa: E402
@@ -447,7 +449,7 @@ one section per model, for a reader who wants to know what a field holds, its
 type, and when it is null. Every spec adds one column to the output, named after
 the spec, and its value in each row is a record of these fields. The tables are
 generated from the code, and a test fails when they differ from it.
-`po.spec.output_fields(spec)` answers the same question at runtime, for the
+`rp.spec.output_fields(spec)` answers the same question at runtime, for the
 exact spec you built.
 """
 
@@ -499,11 +501,8 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
     ),
     (
         "withheld_reason",
-        "why the row's predictions are null: `below_min_settled_frac`, `below_min_weight`, "
-        "`above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, "
-        "`not_identified`, `scale_ratio_moved`, `not_separated`, `input_negative` or "
-        "`target_not_positive`. That order "
-        "is their precedence, so the first that applies is the one named. `below_warm_rows` is the "
+        "why the row's predictions are null: {reasons}. That order is their "
+        "precedence, so the first that applies is the one named. `below_warm_rows` is the "
         "model's own warm-up, the rows "
         "`kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for "
         "a target's start, the rows a `holt` heuristic start holds, in a `kalman` fit "
@@ -520,7 +519,8 @@ SHARED_FIELDS: list[tuple[str, str, str]] = [
         "`scale_ratio_moved` is a `corrchange` span past its critical value whose two columns' "
         "scale ratio moved inside it, so its `flag` is null. `not_separated` is a `pca` component "
         "the data does not yet tell apart from a neighbor: the test of the equality of their two "
-        "eigenvalues does not pass. "
+        "eigenvalues does not pass. `level_beyond_sample` is a `tdigest` or `ddsketch` level "
+        "past what the rows before it identify, `1/(n + 1)` or `n/(n + 1)` of `n` rows. "
         "`input_negative` is a `garch` row under GARCH or GJR with an input below 0, which its "
         "variance equation cannot read: the row reports nothing and is learned as a row of "
         "weight 0. "
@@ -651,6 +651,65 @@ SHARED_SPEC = _build("ewridge")
 CLOCK_SPEC = {**SHARED_SPEC, "emit_clocks": True}
 
 
+#: Counts as the page spells them.
+WORDS = dict(
+    enumerate(
+        [
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+            "thirteen",
+            "fourteen",
+            "fifteen",
+        ]
+    )
+)
+
+
+def withheld_reasons() -> list[str]:
+    """`withheld_reason`'s values, in their order of precedence, as the bank
+    declares the field's `Enum` to polars."""
+    out = rp.ModelBank([SHARED_SPEC]).fit_predict(pl.DataFrame({"y": [1.0], "x0": [0.0]}))
+    dtype = out.schema[SHARED_SPEC["name"]].to_schema()["withheld_reason"]
+    return list(dtype.categories)
+
+
+def with_reasons(rows: list[tuple[str, ...]]) -> list[tuple[str, ...]]:
+    """`rows` with `{reasons}` and `{n_reasons}` filled in from the bank, and
+    every reason named in the prose, so a new one cannot go unexplained."""
+    reasons = withheld_reasons()
+    listed = ", ".join(f"`{r}`" for r in reasons[:-1]) + f" or `{reasons[-1]}`"
+    out = [
+        tuple(
+            c.replace("{reasons}", listed).replace("{n_reasons}", WORDS[len(reasons)]) for c in row
+        )
+        for row in rows
+    ]
+    rows_of_it = [" ".join(row) for row in out if "withheld_reason" in row[0]]
+    prose = " ".join(rows_of_it)
+    unexplained = [r for r in reasons if prose.count(f"`{r}`") < 2 and r not in EXPLAINED]
+    if rows_of_it and unexplained:
+        raise SystemExit(
+            f"withheld_reason values the page names but does not explain: {unexplained}"
+        )
+    return out
+
+
+#: The reasons the page names without a sentence of their own: the gates a
+#: spec sets by name.
+EXPLAINED = {"below_min_settled_frac", "below_min_weight", "above_max_error_inflation"}
+
+
 #: Each dtype `output_index` names, and the polars type a field of it has.
 DTYPES: list[tuple[str, str]] = [
     ("`f64`", "`Float64`"),
@@ -660,14 +719,14 @@ DTYPES: list[tuple[str, str]] = [
         "`list[f64]`",
         "`List(Float64)`: `coef` and the fields laid out like it. A list stores nothing for a "
         "null row, and `coef` is null on most rows. For an `(n, k)` matrix, `k` the height of "
-        "`po.spec.coef_index(spec)`, keep the rows that carry it and fix their width. For the "
+        "`rp.spec.coef_index(spec)`, keep the rows that carry it and fix their width. For the "
         "output `out` of a spec named `m`: "
         '`out.select(pl.col("m").struct.field("coef")).filter(pl.col("coef").is_not_null())'
         '.select(pl.col("coef").list.to_array(k)).to_series().to_numpy()`',
     ),
     (
         "`enum`",
-        "an `Enum` of its values, in their order: `withheld_reason`'s six, an `ew_class` "
+        "an `Enum` of its values, in their order: `withheld_reason`'s {n_reasons}, an `ew_class` "
         "spec's `classes` for `class`, a grid's slots for `selected_<t>`",
     ),
     (
@@ -680,14 +739,14 @@ DTYPES: list[tuple[str, str]] = [
 
 #: The recipe in *The fields of your own spec*: run here, so the page shows what it prints.
 RECIPE = """\
-from rheon import polars as po
+from rheon import polars as rp
 
-grid = po.spec.ewridge(
+grid = rp.spec.ewridge(
     "ridge", targets=["y"], features=["x0", "x1"],
     half_life=[100.0, 500.0], ridge=[1e-6, 0.5],  # a grid: one fit per pair of values
 )
-print(po.spec.output_fields(grid))  # every field, by name
-index = po.spec.output_index(grid)  # every field, with the values its name encodes
+print(rp.spec.output_fields(grid))  # every field, by name
+index = rp.spec.output_index(grid)  # every field, with the values its name encodes
 for row in index.filter(kind="pred").select("field", "target", "ridge", "half_life").iter_rows():
     print(*row)
 """
@@ -705,7 +764,7 @@ def call(name: str) -> str:
     """The builder call `_build` makes for `name`, as a reader would type it."""
     kw = {**BASE_KWARGS, **MINIMAL[name]}
     args = ", ".join(f"{k}={v!r}" for k, v in kw.items() if v is not None)
-    return f'po.spec.{name}("m", {args})'.replace("'", '"')
+    return f'rp.spec.{name}("m", {args})'.replace("'", '"')
 
 
 READING = f"""\
@@ -713,8 +772,8 @@ READING = f"""\
 
 A spec of your own can carry a grid, several targets or another name, and
 each changes its fields' names. Ask the spec itself:
-`po.spec.output_fields` lists every field it writes, and
-`po.spec.output_index` gives each field with the target, ridge and
+`rp.spec.output_fields` lists every field it writes, and
+`rp.spec.output_index` gives each field with the target, ridge and
 half-life its name encodes, and its dtype. Here a spec with two half-lives
 and two ridge values has four predictions of `y`, one per pair:
 
@@ -754,12 +813,12 @@ EW, in a *what it holds* cell, is short for exponentially weighted.
 ## Field types
 
 A field's dtype is the type the bank declares to Polars before it reads a
-row, as `po.spec.output_index(spec)` lists it:
+row, as `rp.spec.output_index(spec)` lists it:
 
-{table(("dtype", "the Polars type"), DTYPES)}
+{table(("dtype", "the Polars type"), with_reasons(DTYPES))}
 
 **Every integer is an `Int64`**, in a field and in every frame the bank and
-`po.spec` return: a count, a state, a cluster label, a position, a row's
+`rp.spec` return: a count, a state, a cluster label, a position, a row's
 index. It is Polars' own default integer, so a join, a concatenation or a
 comparison between two frames never meets two widths. Only the clock values
 differ, in a field or in a frame such as `groups()`' `clock_last`: an
@@ -783,7 +842,7 @@ skipped row, and *withheld* there means such a row.
 
 Four fields appear in nearly every model's table, and are defined here once:
 
-{table(FIELD_HEAD, field_rows(SHARED_FIELDS, SHARED_SPEC))}
+{table(FIELD_HEAD, with_reasons(field_rows(SHARED_FIELDS, SHARED_SPEC)))}
 
 ## What is not listed
 

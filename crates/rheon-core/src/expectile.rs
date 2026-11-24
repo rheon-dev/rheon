@@ -1,5 +1,6 @@
 //! Expectile regression by recursive reweighted least squares (docs/PLAN.md
-//! task 501; the study: docs/records/STUDY-501-509.md, Part A).
+//! task 501; the study: docs/records/STUDY-501-509.md, Part A, on the
+//! branch `vm/study-501`, not merged).
 //!
 //! **The quantity.** At level `τ` in `(0, 1)` the expectile regression
 //! minimises the asymmetric squared loss

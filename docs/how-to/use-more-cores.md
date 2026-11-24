@@ -29,7 +29,7 @@ specs, more half-lives, or a wide spec split across threads.**
 1. **Set `group=` on each spec** whose rows fall into groups, such as
    `group="stock_id"`. Each group is a piece of its own.
 2. **Pass every spec you need to one bank, or to one query's
-   `online.fit_predict`,** in place of one bank per spec. Each spec is a
+   `rheon.fit_predict`,** in place of one bank per spec. Each spec is a
    piece of its own, and the query reads its file once.
 3. **Give a spec several half-lives as a list,** as
    `half_life=[100.0, 1000.0]`, in place of a spec per half-life.

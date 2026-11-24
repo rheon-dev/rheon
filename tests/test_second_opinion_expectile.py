@@ -1,5 +1,5 @@
 """`expectile` against statsmodels and scipy (docs/PLAN.md task 501; the
-numbers are docs/records/STUDY-501-509.md's, Part A).
+numbers are docs/records/STUDY-501-509.md's, Part A, on the branch `vm/study-501`, not merged).
 
 The oracles:
 
@@ -235,3 +235,81 @@ def test_a_wide_window_grid(tau):
     for t in range(w, n, 10):
         want = X[t] @ rlm(X[t - w : t], y[t - w : t], np.ones(w), tau)
         assert abs(pred[t] - want) <= EXACT * max(1.0, abs(want)) * 10, (t, pred[t], want)
+
+
+# --- the ridge, and the one pass after a refit (PLAN 578j, TEST-4) ------------
+#
+# Every test above sets ``ridge=0``: the default ``1e-6``, a ridge that
+# binds, and the one pass that goes on from a refit under a decay had no
+# oracle.
+
+
+def penalized(X: np.ndarray, y: np.ndarray, v: np.ndarray, tau: float, ridge: float) -> np.ndarray:
+    """The exact minimiser of ``Σ v a(r) r² + ridge V |slopes|²``, ``a(r)``
+    ``tau`` above the fit and ``1 - tau`` below, ``V = Σ v``, the intercept
+    (the first column) unpenalized: the definition written here, scipy's
+    trust-region Newton computing it from statsmodels' unpenalized fit."""
+    from scipy.optimize import minimize
+
+    d = np.ones(X.shape[1])
+    d[0] = 0.0
+    big_v = v.sum()
+
+    def f(b: np.ndarray) -> tuple[float, np.ndarray]:
+        r = y - X @ b
+        a = np.where(r > 0, tau, 1.0 - tau)
+        g = -2.0 * X.T @ (v * a * r) + 2.0 * ridge * big_v * d * b
+        return float(np.sum(v * a * r * r) + ridge * big_v * np.sum(d * b * b)), g
+
+    def hess(b: np.ndarray) -> np.ndarray:
+        a = np.where(y - X @ b > 0, tau, 1.0 - tau)
+        return 2.0 * (X.T * (v * a)) @ X + 2.0 * ridge * big_v * np.diag(d)
+
+    start = rlm(X, y, v, tau)
+    res = minimize(f, start, jac=True, hess=hess, method="trust-exact", options={"gtol": 1e-13})
+    return np.asarray(res.x)
+
+
+@pytest.mark.parametrize("ridge", [1e-6, 0.05, 1.0])
+@pytest.mark.parametrize("tau", [0.2, 0.9])
+def test_a_ridged_window_is_the_penalized_minimiser_of_its_rows(tau, ridge):
+    """A window's fit at ``ridge`` (the default ``1e-6`` among them) is the
+    penalized expectile regression of the rows it holds, at their weights:
+    the slopes shrunk by ``ridge`` times the window's weight, the intercept
+    not at all (the targets sit about 25, far from 0, where a penalized
+    intercept would move every prediction)."""
+    k, n, w = 3, 200, 50
+    X, y = design(k, n, 4)
+    y = y + 25.0
+    rng = np.random.default_rng(5784)
+    wt = rng.uniform(0.2, 2.0, n)
+    out = bank_rows(spec(k, tau, window_rows=w, weight="w", ridge=ridge), frame(X, y, w=wt))
+    pred = out["pred_y"].to_numpy()
+    for t in range(w, n, 7):
+        rows = np.arange(t - w, t)
+        want = X[t] @ penalized(X[rows], y[rows], wt[rows], tau, ridge)
+        assert abs(pred[t] - want) <= 1e-9 * max(1.0, abs(want)), (t, pred[t], want)
+    unpenalized = X[n - 1] @ rlm(
+        X[n - 1 - w : n - 1], y[n - 1 - w : n - 1], wt[n - 1 - w : n - 1], tau
+    )
+    if ridge >= 0.05:
+        assert abs(pred[n - 1] - unpenalized) > 1e-6, "the ridge binds"
+
+
+@pytest.mark.parametrize("tau", [0.1, 0.9])
+def test_the_one_pass_after_a_refit_under_decay_stands_within_the_batch_fits_sampling_error(tau):
+    """The first rows fitted exactly, at the default ridge, then the one
+    pass under a half-life of 200 rows: at the last row the fit's gap to the
+    exact decayed fit (statsmodels) is within twice the batch fit's sampling
+    error, as the one pass with no refit is."""
+    k, n, h = 3, 3000, 200.0
+    X, y = design(k, n, 7)
+    b = coef_after(spec(k, tau, half_life=h, refit_rows=300, ridge=1e-6), frame(X, y))
+    v = 0.5 ** ((n - 1 - np.arange(n)) / h)
+    exact = rlm(X, y, v, tau)
+    r = y - X @ exact
+    scale = np.sqrt(np.sum(v * r * r) / np.sum(v))
+    gap = (X @ (b - exact)) / scale
+    rms = float(np.sqrt(np.sum(v * gap * gap) / np.sum(v)))
+    kish = np.sum(v) ** 2 / np.sum(v * v)
+    assert rms <= 2.0 * np.sqrt(k / kish), (rms, np.sqrt(k / kish))

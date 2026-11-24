@@ -305,9 +305,10 @@ def holt(
     row's clock is a second observation the level takes in. The textbook
     trend holds, since a move over no clock has no slope, and the line
     fit's slope moves by its own gain, as a least-squares slope does. A row
-    with a null target or a zero weight leaves ``l`` and ``b`` where the
-    last observation put them and carries its clock to the next one. So it
-    gives the same level, trend and predictions as if it were absent. A row
+    with a null target leaves ``l`` and ``b`` where the last observation
+    put them and carries its clock to the next one, and a row of weight 0
+    counts in no clock at all. So either gives the same level, trend and
+    predictions as if it were absent. A row
     with a null target still adds its weight to ``weight_sum``.
 
     **Seasons and damping.** Under ``start = "known"`` or

@@ -51,7 +51,7 @@ shows it on `ew_class`.
    clock of the newest row the model had learned from when it predicted
    the row, both in the clock column's own type. With no clock they are
    the row's index in its group.
-3. **Fit the bank** with `fit_predict` or a query's `online.fit_predict`.
+3. **Fit the bank** with `fit_predict` or a query's `rheon.fit_predict`.
 
 This code fits `df`'s minute-apart rows under `embargo="5m"`, and prints
 the clocks of five rows, counting from 0. Each row is predicted from the

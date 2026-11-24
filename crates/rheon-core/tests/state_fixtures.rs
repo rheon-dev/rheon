@@ -1782,7 +1782,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 219] = [
+    const FORMS: [(&str, &[&str]); 220] = [
         // PLAN 569, at schema 72: `ftrl`'s scaler and warm-up under
         // `standardize`, past the warm-up's count and inside it.
         ("ftrl_standardized", &["model", "Ftrl", "scaler", "m"]),
@@ -1892,6 +1892,12 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         // place and a window's ring (and its stamps on a clock), and the
         // boundary of the window's two stacks, `flip`.
         ("ewm_moments_lags", &["model", "EwmMoments", "sums"]),
+        // PLAN 578j, at schema 72 before any release: a summary's scale, the
+        // form a stream whose moments pass the largest double leaves.
+        (
+            "ewm_moments_scaled",
+            &["model", "EwmMoments", "sums", "0", "e"],
+        ),
         ("ewm_moments_lags", &["model", "EwmMoments", "bufs"]),
         (
             "ewm_moments_clock_lags",

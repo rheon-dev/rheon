@@ -1,6 +1,7 @@
 //! Generalized linear models by recursive IRLS: Poisson, Gamma, binomial
 //! and Tweedie regressions fitted one row at a time (docs/PLAN.md task 500;
-//! the study: docs/records/STUDY-500-GLM.md).
+//! the study: docs/records/STUDY-500-GLM.md on the branch `vm/study-500`,
+//! not merged).
 //!
 //! **The recursion.** Each target `j` keeps a Gram `G` and its
 //! coefficients `β`, `x̃ = [1, x]` (`x` without an intercept). Row `t`, of

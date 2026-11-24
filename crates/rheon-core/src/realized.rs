@@ -82,6 +82,26 @@
 //! roundings (40 to 130 units in the last place, measured, against 0 to 5).
 //! The cube roots are the `libm` crate's, the same bits on every platform.
 //!
+//! **Past the largest double.** A term of returns near the input bound can
+//! pass the largest double: `w t⁴` of three returns of `1e100` is
+//! `1e400` (`t` the product of their cube roots). Such a term, and a sum it
+//! takes past the largest double, is held at it, the largest a double
+//! holds: a bound on the term, where `inf` would never decay (`f · inf` is
+//! `inf`) and a window's next take-back of it, `inf − inf`, would be NaN.
+//! The weight goes into such a term first, so one that fits is kept. Each
+//! output reads its own sum, so a sum held at the bound moves no other:
+//! while its sum is held, `tq` reads `inf` or a lower bound on itself, and
+//! `Z`, which divides by it, near 0, as the quarticity's true size would
+//! make it. Below the largest double nothing moves, to the bit.
+//!
+//! A window takes a term back from a sum held at the bound by summing the
+//! terms it still holds again, and does the same where a term leaving is
+//! more than `1/ε` times what it leaves (a return near the bound leaving a
+//! window of ordinary ones): the compensated pair keeps a sum to about
+//! `ε²` of the largest term it has held, so what it leaves is otherwise
+//! the rounding of that term, which no row would ever take away. Lee and
+//! Mykland's window of products does the same.
+//!
 //! **Lee and Mykland's flag.** With `c = √(2/π)`, `c L_i` is N(0, 1) under
 //! no jump, so `c · lm` is read as a z-score. The paper tests the largest
 //! `|L_i|` of `n` returns against the Gumbel law of its maximum,

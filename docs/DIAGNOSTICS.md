@@ -319,21 +319,23 @@ took 191 ns a row at 5 features and 326 ns at 20.
 
 | switch | added per row, 5 features | 20 features | grows with | models |
 |---|---:|---:|---|---|
-| `emit_sigma`, `emit_zscore`, `emit_autocorr`, `conformal`, `emit_drift` | under 10 ns | under 10 ns | nothing | the ten linear models |
-| `emit_metrics` | 8 ns | 15 ns | nothing | the ten linear models |
-| `resid_quantiles` (two levels) | 14 ns | 24 ns | nothing | the ten linear models |
+| `emit_sigma`, `emit_zscore`, `emit_autocorr`, `conformal`, `emit_drift` | under 10 ns | under 10 ns | nothing | the linear models |
+| `emit_metrics` | 8 ns | 15 ns | nothing | the linear models |
+| `resid_quantiles` (two levels) | 14 ns | 24 ns | nothing | the linear models |
 | `emit_se_coef` | 10 ns | 19 ns | `k²`, on `coef`'s rows only | `ewridge`, `rls`, `kalman` |
-| `emit_calibration` | 20 ns | 26 ns | nothing | the ten linear models |
-| `emit_feature_health` | 31 ns | 75 ns | `k` | the nine linear models with features |
+| `emit_calibration` | 20 ns | 26 ns | nothing | the linear models |
+| `emit_feature_health` | 31 ns | 75 ns | `k` | the linear models with features |
 | `emit_error_inflation` | 125 ns | 334 ns | `k²`: a triangular solve | `ewridge`, `rls`, `kalman` |
 | `emit_influence` | 145 ns | 349 ns | `k²`, the same solve | `ewridge`, `rls`, `kalman` |
-| `emit_tails` | 157 ns | 355 ns | `k²`, the same solve | the ten linear models |
+| `emit_tails` | 157 ns | 355 ns | `k²`, the same solve | the linear models |
 | `emit_robust_se` (10 lags) | 350 ns | 3,266 ns | `L × k²` for `L` lags | `ewridge`, `rls` |
-| `emit_specification` | 737 ns | 1,898 ns | `k²`, and the lags | the ten linear models |
-| `emit_breaks` | 903 ns | 4,567 ns | `k²`: two fits and their distance | the ten linear models |
+| `emit_specification` | 737 ns | 1,898 ns | `k²`, and the lags | the linear models |
+| `emit_breaks` | 903 ns | 4,567 ns | `k²`: two fits and their distance | the linear models |
 
-The ten linear models are `ewridge`, `rls`, `lasso`, `kalman`, `huber`,
-`quantile`, `sgd`, `pa`, `ftrl` and `holt`. Any other model refuses a
+The linear models are the family [Models](MODELS.md#linear-models) lists:
+`ewridge`, `rls`, `lasso`, `kalman`, `huber`, `quantile`, `sgd`, `pa`,
+`ftrl`, `glm`, `expectile`, `holt` and `ar`. Those with features are all
+but `holt`, and `ar` where it is given features. Any other model refuses a
 residual switch by name, and a model outside a switch's list refuses that
 switch and names the models that take it.
 
@@ -365,7 +367,7 @@ coefficients for its memory follows its own noise.
 | statistic | `wald = (n_kish − 2) · ((ȳ − p̄)² + (b − 1)² · var(pred)) / s²`, with `s²` the regression's residual mean square: `chi2(2)` when `a = 0` and `b = 1` |
 | memory | four times the fit's memory; `inf` runs it once, where `wald / 2` is the least-squares F statistic, `F(2, n − 2)` |
 | threshold | `wald > 5.99`, `chi2(2)`'s 5% value. Run once on calibrated fits it passed on 5.0% to 7.0% of 400 streams; at the default memory, on 0% to 0.3% of rows |
-| cost, models | 20 ns a row; the ten linear models |
+| cost, models | 20 ns a row; the linear models |
 
 [Check the scale of a model's predictions](how-to/check-the-scale.md) reads
 the calibration, rescales a prediction by it, and fixes a fit of the wrong
@@ -420,7 +422,7 @@ widens their spread only until the fit catches up.
 | `cusum_<t>` | the weighted sum of the studentized residuals before the row, standardized: `Σωz / sqrt(r Σω²)` | a mean in the residuals: an intercept shift | `N(0, 1)` |
 | `cusum_sq_<t>` | the weighted sum of `z² − 1`, standardized by its measured spread: `Σω(z² − 1) / sqrt(r₂ (m₄ − 1) Σω²)`, `m₄` the mean of `z⁴` at four times the memory | a change in the residuals' spread | `N(0, 1)`, whatever the tails |
 | `break_wald_<t>` | the Wald distance between two least-squares fits of the target on the slot's features, one at the memory and one at four times it, over the exact variance of their difference; null run once | a coefficient that moved, the slope's or the intercept's | `chi2(k)`, with `k` the coefficients |
-| `drift_<t>` | true on the row a Page-Hinkley detector (Page 1954; Hinkley 1971) on `\|resid\| / sigma` climbs `drift_threshold` above its lowest point; or, under `drift_kind`, Page's two-sided CUSUM on `resid / sigma`, ADWIN or KSWIN on `\|resid\|`, or DDM or EDDM on the rate of residuals past `error_above` | a rise in the residuals' level, beyond `drift_delta` sigmas; under the others, a shift either way (CUSUM), a change in the errors' mean (ADWIN) or distribution (KSWIN), or a rise in the error rate (DDM, EDDM) | false |
+| `drift_<t>` | true on the row a Page-Hinkley detector (Page 1954; Hinkley 1971) on `\|resid\| / sigma` climbs `drift_threshold` above its lowest point; or, under `drift_kind`, Page's two-sided CUSUM on `resid / sigma`, ADWIN (Bifet and Gavaldà 2007) or KSWIN (Raab et al. 2020) on `\|resid\|`, or DDM (Gama et al. 2004) or EDDM (Baena-García et al. 2006) on the rate of residuals past `error_above`, each set by `drift_options` | a rise in the residuals' level, beyond `drift_delta` sigmas; under the others, a shift either way (CUSUM), a change in the errors' mean (ADWIN) or distribution (KSWIN), or a rise in the error rate (DDM, EDDM) | false |
 
 `ω` is each row's weight times its decay at `breaks_half_life`, the
 fit's memory by default. `r` and `r₂` are 1 run once, and windowed they
@@ -686,6 +688,20 @@ a false alarm at steps of 1 and 79 at steps drawn from `Exp(1)`. At steps of
 false-alarm rate matters, read the errors on a regular clock or a row
 clock.
 
+**ADWIN, DDM, EDDM and KSWIN take their settings in `drift_options`, by
+river's names, and count rows, not clock.** Each statistic is defined on a
+number of observations: ADWIN's bound on the rows of its window's two
+parts, DDM's binomial deviation of an error rate, EDDM's mean distance
+between errors and KSWIN's exact Kolmogorov-Smirnov null on two samples of
+`stat_size` rows. So a span of the clock has no meaning for them, and any
+weight above 0 is one row. DDM and EDDM require `error_above`, the
+`|resid|` past which a row is an error, in the target's units. A key the
+kind does not read is refused, and so are `drift_delta` and
+`drift_threshold` beside a kind that does not read them. Each key, its
+default and the detector's update are in the
+[`rheon.spec`](https://rheon-dev.github.io/rheon/spec.html) reference,
+under `emit_drift`.
+
 [Detect a break](how-to/detect-a-break.md) runs these tests on a stream
 that breaks in each of the three ways, dates a break with the run-once
 CUSUM, and says what to do at each. Read together, the flags tell the
@@ -892,7 +908,7 @@ are more common there, and nothing has broken.
 | statistic | Jarque and Bera's (1980) `n / 6 · (skew² + kurtosis² / 4)` at Kish's `n`: `chi2(2)` for Gaussian residuals |
 | memory | `tails_half_life`, the model's by default; run once they are `scipy.stats`' `skew` and `kurtosis` and statsmodels' `jarque_bera` |
 | threshold | `jarque_bera > 5.99`: 4.7% to 5.0% of the rows of Gaussian residuals on 200 streams, and every row of Student's t with 5 degrees of freedom |
-| cost, models | 157 ns a row at 5 features; the ten linear models |
+| cost, models | 157 ns a row at 5 features; the linear models |
 
 **`drift_threshold` is set against the residuals' kurtosis.** On 200
 streams of 25,000 rows at a half-life of 200, `y = 0.5 + x0 − x1` plus
@@ -998,7 +1014,7 @@ themselves, and flags a frozen feed long before a coefficient runs away.
 | statistic | `spread_ratio` is the fast standard deviation over the slow one; `mean_shift` the two means' difference in units of the slow standard deviation. A steady feature reads about 1 and 0 |
 | memory | the fit's memory by default; refused where that is `inf` (run once, with no window), since both memories would be the whole stream |
 | threshold | `spread_ratio` outside 0.5 to 2: no row of a clean feature at a half-life of 200, independent or AR(1) at 0.95. `\|mean_shift\| > 0.3`: every move of one spread, within 190 rows; 6% of rows of an AR(1) feature at 0.95, and 0.03% above 0.5 |
-| cost, models | 31 ns a row at 5 features; the nine linear models with features |
+| cost, models | 31 ns a row at 5 features; the linear models with features |
 
 Under `embargo` the features fold when their row is released, with the
 row's target, so the fields lag the feed by the embargo. On a feed frozen
@@ -1210,7 +1226,6 @@ gate, and the target where the model predicts one. Its forms:
 | a target the model has not learned from every row, where rows that each carried it would reach the floor | no figure: the target's weight falls on each row without it, toward 0 if the rows have stopped carrying it | check that rows reach the model with the target's value (`rls` learns a row only where every target has a value) |
 | a target the model has not learned from every row, where rows that each carried it would not reach the floor either | the ceiling of rows that each carry the target, rounded down, and the `half_life` (or `lam`) above which it passes the floor | lower `min_weight` below that ceiling, or increase `half_life` (or `lam`) above the value given, and check that rows carry the target's value |
 | no row the model learned has the target's value and a positive weight (for a model that predicts no target, a positive weight alone) | no figure: there is no weight to project from | check that rows reach the model with the target's value and a positive weight |
-| the warning comes on a row of weight 0, which adds nothing to the weight | no figure: no stream of rows like it reads a positive weight | check that rows reach the model with a positive weight, lower `min_weight`, or increase `half_life` (or `lam`) |
 | rows too uneven to project, such as one row far heavier than the rest | no figure | lower `min_weight`, or increase `half_life` (or `lam`) |
 | a hard window, which limits the weight in addition to the decay | no figure | lower `min_weight`, or increase `half_life` (or `lam`) or `window_size` |
 
@@ -1225,8 +1240,9 @@ which no `max_error_inflation` opens. It comes at the same point as the
 `min_weight` warning. It gives where `weight_sum` tops out at the rows so
 far, rounded down. It also gives the `half_life` (or `lam`) above which the
 model fits and Kish's effective sample size carries its coefficients,
-rounded up. On a row of
-weight 0, or on rows too uneven to project, it gives no figure. A target's
+rounded up. On rows too uneven to project it gives no figure. A row of
+weight 0 counts in no clock, so it neither starts nor ends the wait and
+never carries the warning. A target's
 nulls do not move `weight_sum`, so this warning has no form for a target
 the rows stopped carrying.
 
@@ -1250,8 +1266,8 @@ from each and reads its coverage.
 | `lo_<t>`, `hi_<t>`, `coverage_<t>` (`conformal`) | an interval tracked to cover the share asked for, and the coverage it has delivered | no distribution |
 
 `sigma`'s weight ages on every row the model sees, a row with no
-prediction or with weight 0 included, so it forgets across a gap as the
-clock says. Under a `window_size` it is the window's, as the fit is. It
+prediction included, so it forgets across a gap as the clock says. A row
+of weight 0 counts in no clock, so it ages nothing. Under a `window_size` it is the window's, as the fit is. It
 folds the residuals of the predictions a readiness gate withholds too. A
 gate withholds output only, so `sigma` is the same whatever `min_weight`,
 `min_settled_frac` or `max_error_inflation` says, and it can be a number
@@ -1361,8 +1377,10 @@ Each claim on this page that is not measured here rests on one of these.
 |---|---|
 | Angelopoulos, A. N., Candès, E. J. and Tibshirani, R. J. (2023). Conformal PID control for time series prediction. *Advances in Neural Information Processing Systems* 36. | the quantile-tracking step of `conformal` |
 | Åström, K. J. and Wittenmark, B. (1995). *Adaptive Control*, 2nd ed. Addison-Wesley. | estimator windup under exponential forgetting |
+| Baena-García, M., del Campo-Ávila, J., Fidalgo, R., Bifet, A., Gavaldà, R. and Morales-Bueno, R. (2006). Early drift detection method. *Fourth International Workshop on Knowledge Discovery from Data Streams*, 77–86. | `drift_kind="eddm"` |
 | Bartlett, M. S. (1935). Some aspects of the time-correlation problem in regard to tests of significance. *Journal of the Royal Statistical Society* 98(3), 536–543. | the count correction behind `marginal`'s `t_stat_serial` |
 | Belsley, D. A., Kuh, E. and Welsch, R. E. (1980). *Regression Diagnostics*. Wiley. | DFFITS, the basis of `influence` |
+| Bifet, A. and Gavaldà, R. (2007). Learning from time-changing data with adaptive windowing. *Proceedings of the 2007 SIAM International Conference on Data Mining*, 443–448. | `drift_kind="adwin"` |
 | Box, G. E. P. and Pierce, D. A. (1970). Distribution of residual autocorrelations in autoregressive-integrated moving average time series models. *Journal of the American Statistical Association* 65(332), 1509–1526. | the windowed form of `ljung_box` |
 | Breusch, T. S. and Pagan, A. R. (1979). A simple test for heteroscedasticity and random coefficient variation. *Econometrica* 47(5), 1287–1294. | `breusch_pagan` |
 | Brown, R. L., Durbin, J. and Evans, J. M. (1975). Techniques for testing the constancy of regression relationships over time. *Journal of the Royal Statistical Society, Series B* 37(2), 149–192. | recursive residuals, the CUSUM and the CUSUM of squares, and their boundaries |
@@ -1371,6 +1389,7 @@ Each claim on this page that is not measured here rests on one of these.
 | Clark, T. E. and West, K. D. (2007). Approximately normal tests for equal predictive accuracy in nested models. *Journal of Econometrics* 138(1), 291–311. | `rp.eval.clark_west` |
 | Dawid, A. P. (1984). Statistical theory: the prequential approach. *Journal of the Royal Statistical Society, Series A* 147(2), 278–292. | judging predictions made before each row is learned |
 | Diebold, F. X. and Mariano, R. S. (1995). Comparing predictive accuracy. *Journal of Business and Economic Statistics* 13(3), 253–263. | `rp.eval.diebold_mariano` |
+| Gama, J., Medas, P., Castillo, G. and Rodrigues, P. (2004). Learning with drift detection. *Advances in Artificial Intelligence – SBIA 2004*, Lecture Notes in Computer Science 3171, 286–295. Springer. | `drift_kind="ddm"` |
 | Hinkley, D. V. (1971). Inference about the change-point from cumulative sum tests. *Biometrika* 58(3), 509–523. | the Page-Hinkley detector behind `drift` |
 | Jarque, C. M. and Bera, A. K. (1980). Efficient tests for normality, homoscedasticity and serial independence of regression residuals. *Economics Letters* 6(3), 255–259. | `jarque_bera` |
 | Kish, L. (1965). *Survey Sampling*. Wiley. | the effective sample size of unequal weights |
@@ -1379,6 +1398,7 @@ Each claim on this page that is not measured here rests on one of these.
 | Mincer, J. A. and Zarnowitz, V. (1969). The evaluation of economic forecasts. In *Economic Forecasts and Expectations*, ed. J. A. Mincer, 3–46. NBER. | the calibration regression |
 | Newey, W. K. and West, K. D. (1987). A simple, positive semi-definite, heteroskedasticity and autocorrelation consistent covariance matrix. *Econometrica* 55(3), 703–708. | `se_coef_hac`, and the variance in `diebold_mariano` and `clark_west` |
 | Page, E. S. (1954). Continuous inspection schemes. *Biometrika* 41(1/2), 100–115. | the CUSUM detector behind `drift` |
+| Raab, C., Heusinger, M. and Schleif, F.-M. (2020). Reactive soft prototype computing for concept drift streams. *Neurocomputing* 416, 340–351. | `drift_kind="kswin"` |
 | Ramsey, J. B. (1969). Tests for specification errors in classical linear least-squares regression analysis. *Journal of the Royal Statistical Society, Series B* 31(2), 350–371. | `ramsey_reset` |
 | Vovk, V., Gammerman, A. and Shafer, G. (2005). *Algorithmic Learning in a Random World*. Springer. | conformal prediction |
 | White, H. (1980). A heteroskedasticity-consistent covariance matrix estimator and a direct test for heteroskedasticity. *Econometrica* 48(4), 817–838. | `se_coef_hc0` |

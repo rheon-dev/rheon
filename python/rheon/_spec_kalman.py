@@ -309,16 +309,18 @@ def kalman(
 
     .. rubric:: Notes
 
-    **The noise.** ``R_j`` is per target, and its weight ages on every row,
-    a row with no prediction or with weight 0 included. It learns from the
+    **The noise.** ``R_j`` is per target, and its weight ages on every row
+    the filter sees, a row with no prediction included. It learns from the
     filter's own prediction on every row the filter predicts, whether or not
     ``min_weight`` lets that prediction out. ``min_weight`` withholds the
     output alone, so the fit, the variance and a ``q`` read against it are
     the same at any ``min_weight``. A row with no prediction, before the
     filter has sized the target's coefficients, still moves them and adds
     to the target's weight. Only the residual variance learns nothing from
-    it. A row of weight 0, or one whose target is null, ages the target's
-    weight and learns nothing for it.
+    it. A row whose target is null ages the target's weight and learns
+    nothing for it. A row of weight 0 counts in no clock: it ages nothing
+    and adds no process noise, and the next row decays as if it were not
+    there.
 
     Under ``coef_half_life`` the noise is a scale, not a weight: the gain
     never reads the noise estimate. The model's noise is one constant per
@@ -347,8 +349,8 @@ def kalman(
     **The drift.** The drift is charged once, on the row that next observes
     the target, for the whole clock since the last one (``D_j``, or under
     ``share_p`` since any target's row), because ``Q * D ** 2`` is not additive
-    over a split gap. Charged per row, a row of weight 0 inside a gap would
-    shrink the gap's noise and move every later prediction, by 0.197 in the
+    over a split gap. Charged per row, a row inside a gap that does not
+    observe the target would shrink the gap's noise and move every later prediction, by 0.197 in the
     target's units at ``coef_half_life = 20``. And a target seen on one row
     in 10 would forget 3.6 times slower on the clock than one seen on every
     row: 270 clock units against 75, measured at the same

@@ -439,7 +439,7 @@ def huber(
     **The refit's memory.** A target's rows are held until its refit:
     ``(features + 10) * 8`` bytes a learned row under the MAD
     (``(features + 4) * 8`` under ``"rms"``). A run of rows that only aged
-    it (its value null or its weight 0) takes 32 bytes, and consecutive
+    it (its value null) takes 32 bytes, and consecutive
     such rows at the same clock step are one run. Once its runs number more
     than 4 for each row of the count, as on a target present on fewer than
     about one row in five under an irregular clock, the target gives its

@@ -600,7 +600,7 @@ def ewm_sum(
           such as ``"abc"``;
         - ``closed`` or ``partial`` is a word it does not know, or ``partial``
           is given without ``window_size``;
-        - ``min_samples`` is below 1 or above ``2**32 - 1``;
+        - ``min_samples`` is below 0 or above ``2**32 - 1``;
         - ``input`` holds another window operator, a part that is not
           element-wise, or a column whose name starts with ``@po:``, the prefix
           the operators' own columns carry.

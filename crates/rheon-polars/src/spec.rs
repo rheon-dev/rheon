@@ -2753,9 +2753,10 @@ pub struct Spec {
     /// every other field, and `coef` under a cadence, is chunk-invariant.
     #[serde(default)]
     pub coef_every: Option<Span>,
-    /// At most this many accepted rows between `coef` rows, rows of weight
-    /// zero and rows with a null target included, as `coef_every` counted
-    /// them before it read the clock; at least 1 (task 178).
+    /// At most this many accepted rows between `coef` rows, rows with a
+    /// null target included and rows of weight 0 not (they count in no
+    /// clock, hard rule 9), as `coef_every` counted them before it read the
+    /// clock; at least 1 (task 178).
     #[serde(default)]
     pub max_rows_between_coefs: Option<u32>,
     /// Emit `sigma_<slot>`: the EW standard deviation of this slot's

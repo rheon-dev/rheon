@@ -374,6 +374,30 @@ growth = "1"
 small = 1000
 large = 8000
 
+[scaling.cells."glm.history"]
+what = "glm, 8 features: a row after 1,000 rows of stream, then after 8,000: no row's work may grow with the rows before it"
+growth = "1"
+small = 1000
+large = 8000
+
+[scaling.cells."expectile.history"]
+what = "expectile, 8 features, its one pass: a row after 1,000 rows, then after 8,000"
+growth = "1"
+small = 1000
+large = 8000
+
+[scaling.cells."hawkes.history"]
+what = "hawkes, two nodes over two kernels: a row after 1,000 rows, then after 8,000"
+growth = "1"
+small = 1000
+large = 8000
+
+[scaling.cells."garch.history"]
+what = "garch, one series past its start of 50 rows, its refits included: a row after 1,000 rows, then after 8,000"
+growth = "1"
+small = 1000
+large = 8000
+
 [scaling.cells."sgd.k"]
 what = "sgd's gradient step, 4 then 32 features, O(k)"
 growth = "n"

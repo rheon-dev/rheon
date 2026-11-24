@@ -18,7 +18,12 @@ fn spec(top: &str, model: &str) -> Spec {
     } else {
         "features = [\"x0\"]\nhalf_life = 10.0\n"
     };
-    let text = format!("name = \"m\"\ntargets = [\"y\"]\n{base}{top}\n[model]\n{model}\n");
+    let targets = if top.contains("targets") {
+        ""
+    } else {
+        "targets = [\"y\"]\n"
+    };
+    let text = format!("name = \"m\"\n{targets}{base}{top}\n[model]\n{model}\n");
     toml::from_str(&text).unwrap_or_else(|e| panic!("did not parse: {e}\n{text}"))
 }
 
@@ -216,4 +221,147 @@ fn nan_is_refused_where_inf_means_something() {
         .map(|(_, model)| model)
         .collect();
     assert!(accepted.is_empty(), "nan accepted: {accepted:#?}");
+}
+
+/// The numbers of the kinds and settings added since 2.0, each `nan` and
+/// each `inf` where `inf` names nothing: `(top, model, the field's name)`.
+/// `{}` in the text is the value. Only `hmm`'s `prior_rows` was here
+/// (PLAN 578j, TEST-7).
+const SINCE_2_0: [(&str, &str, &str); 22] = [
+    (
+        "",
+        "type = \"glm\"\nfamily = \"tweedie\"\nvar_power = {}",
+        "var_power",
+    ),
+    ("", "type = \"glm\"\nridge = {}", "ridge"),
+    ("", "type = \"glm\"\nstep_cap = {}", "step_cap"),
+    ("", "type = \"glm\"\nrefit_budget = {}", "refit_budget"),
+    ("", "type = \"glm\"\nrefit_span = {}", "refit_span"),
+    ("", "type = \"expectile\"\nexpectile = {}", "expectile"),
+    (
+        "",
+        "type = \"expectile\"\nexpectile = 0.8\nridge = {}",
+        "ridge",
+    ),
+    (
+        "",
+        "type = \"expectile\"\nexpectile = 0.8\nrefit_span = {}",
+        "refit_span",
+    ),
+    (
+        "features = [\"x0\"]\nhalf_life = inf",
+        "type = \"expectile\"\nexpectile = 0.8\nwindow_size = {}",
+        "window_size",
+    ),
+    (
+        "features = []\nhalf_life = 10.0",
+        "type = \"hawkes\"\nkernel_decays = [{}]",
+        "kernel_decays",
+    ),
+    (
+        "features = []\nhalf_life = 10.0",
+        "type = \"hawkes\"\nkernel_half_lives = [{}]",
+        "kernel_half_lives",
+    ),
+    (
+        "features = []\nhalf_life = inf",
+        "type = \"hawkes\"\nkernel_decays = [1.0]\nwindow_size = {}",
+        "window_size",
+    ),
+    (
+        "features = []",
+        "type = \"garch\"\nstart_span = {}",
+        "start_span",
+    ),
+    (
+        "targets = [\"y\", \"x0\"]\nfeatures = []\nhalf_life = 50.0",
+        "type = \"dcc\"\nmargin_start_span = {}",
+        "margin_start_span",
+    ),
+    (
+        "targets = [\"y\", \"x0\"]\nfeatures = []\nhalf_life = 50.0",
+        "type = \"dcc\"\nstart_span = {}",
+        "start_span",
+    ),
+    (
+        "features = [\"x0\"]\nclock = \"t\"\ngap_cap = 10.0",
+        "type = \"bocpd\"\ncovariance_prior = [1.0]\nhazard = {}",
+        "hazard",
+    ),
+    (
+        "",
+        "type = \"huber\"\nhuber_refit_span = {}",
+        "huber_refit_span",
+    ),
+    (
+        "",
+        "type = \"quantile\"\nquantile = 0.5\nquantile_refit_span = {}",
+        "quantile_refit_span",
+    ),
+    (
+        "emit_drift = true\ndrift_kind = \"adwin\"\ndrift_options = { delta = {} }",
+        "type = \"ewridge\"",
+        "delta",
+    ),
+    (
+        "emit_drift = true\ndrift_kind = \"ddm\"\ndrift_options = { error_above = {} }",
+        "type = \"ewridge\"",
+        "error_above",
+    ),
+    (
+        "emit_drift = true\ndrift_kind = \"cusum\"\ndrift_threshold = {}",
+        "type = \"ewridge\"",
+        "drift_threshold",
+    ),
+    (
+        "emit_drift = true\ndrift_kind = \"kswin\"\ndrift_options = { alpha = {} }",
+        "type = \"ewridge\"",
+        "alpha",
+    ),
+];
+
+/// What each case gives at `value`: `Ok` where the spec and the bank take
+/// it, else the refusal.
+fn outcome(top: &str, model: &str, value: &str) -> Result<(), String> {
+    let mut s = spec(&top.replace("{}", value), &model.replace("{}", value));
+    s.check().and_then(|()| Bank::new(vec![s]).map(|_| ()))
+}
+
+#[test]
+fn nan_is_refused_by_name_in_every_setting_added_since_2_0() {
+    let wrong: Vec<String> = SINCE_2_0
+        .iter()
+        .filter_map(|(top, model, name)| match outcome(top, model, "nan") {
+            Ok(()) => Some(format!("{name} = nan was accepted ({model})")),
+            Err(e) if !e.contains(name) => Some(format!("{name} = nan: {e}")),
+            Err(_) => None,
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Where `inf` names a limit among them: no cap on `glm`'s step, no bound
+/// on its refits' rows.
+const SINCE_2_0_INF_TAKEN: [&str; 2] = ["step_cap", "refit_budget"];
+
+#[test]
+fn inf_is_refused_by_name_in_every_setting_added_since_2_0_that_it_names_nothing() {
+    let wrong: Vec<String> = SINCE_2_0
+        .iter()
+        .filter_map(|(top, model, name)| {
+            let taken = SINCE_2_0_INF_TAKEN.contains(name);
+            match (outcome(top, model, "inf"), taken) {
+                (Ok(()), true) => None,
+                (Ok(()), false) => Some(format!("{name} = inf was accepted ({model})")),
+                (Err(e), true) => Some(format!("{name} = inf, a limit, was refused: {e}")),
+                (Err(e), false)
+                    if !(e.contains(name) && (e.contains("finite") || e.contains(" below "))) =>
+                {
+                    Some(format!("{name} = inf: {e}"))
+                }
+                (Err(_), false) => None,
+            }
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }

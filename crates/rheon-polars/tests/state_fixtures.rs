@@ -1112,6 +1112,98 @@ fn refit_span_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&refit_span_specs(), bytes, input)
 }
 
+/// The specs of `bank_since_2_0` (review 2026-11-23, CI-5): the kinds and
+/// forms since 2.0 whose states no bank file held. `garch`, GJR with t
+/// innovations, grouped: `a` has started before the save (its fit, its
+/// curvature, its lags and its forecast) and `b`, on every eighth row, is
+/// still in its start, holding its rows. `hawkes`, two nodes over two
+/// kernels in a window of the clock. `kalman` holding its covariance's
+/// square-root factor.
+fn since_2_0_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "vol", "model": {"type": "garch", "vol": "gjr", "dist": "t", "start_rows": 50, "forecast_rows": [3]}, "targets": ["r"], "features": [], "group": "g"}"#,
+        r#"{"name": "events", "model": {"type": "hawkes", "kernel_decays": [0.8, 4.0], "window_size": 40.0}, "targets": ["e0", "e1"], "features": [], "clock": "t", "half_life": "inf", "gap_cap": 1e9, "min_weight": 0.0}"#,
+        r#"{"name": "state", "model": {"type": "kalman", "q": [0.01, 0.01, 0.01], "obs_var": 0.25, "covariance_form": "square_root"}, "targets": ["y"], "features": ["x0", "x1"], "half_life": "inf"}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+const SINCE_N: usize = 400;
+const SINCE_SPLIT: usize = 280;
+
+/// A GJR series with t(8) innovations at `(0.01, 0.10, 0.15, 0.82)`, whose
+/// start of 50 rows tells it from a constant variance; group `b` on every
+/// eighth row; two event columns on a clock in quarters of a unit; a linear
+/// target of two features whose coefficients drift.
+fn since_2_0_frame() -> DataFrame {
+    let mut r = lcg(23);
+    let mut normal = {
+        let mut r = lcg(29);
+        move || {
+            let (u, v) = ((r() + 1.0) / 2.0, (r() + 1.0) / 2.0);
+            (-2.0 * (1.0 - u).ln()).sqrt() * (std::f64::consts::TAU * v).cos()
+        }
+    };
+    let (omega, alpha, gamma, beta, nu) = (0.01, 0.10, 0.15, 0.82, 8.0);
+    let (mut var, mut prev, mut clock) = (omega / (1.0 - alpha - gamma / 2.0 - beta), 0.0f64, 0.0);
+    let mut cols: [Vec<f64>; 7] = Default::default();
+    let mut g = Vec::new();
+    for i in 0..SINCE_N {
+        var = omega + (alpha + if prev < 0.0 { gamma } else { 0.0 }) * prev * prev + beta * var;
+        let chi2: f64 = (0..nu as usize).map(|_| normal().powi(2)).sum();
+        prev = var.sqrt() * normal() / (chi2 / nu).sqrt() * ((nu - 2.0) / nu).sqrt();
+        clock += ((r() + 1.0) * 3.0).floor() * 0.25;
+        let (x0, x1) = (r(), r());
+        let drift = i as f64 / SINCE_N as f64;
+        let row = [
+            clock,
+            prev,
+            f64::from(u8::from(r() < 0.0)),
+            f64::from(u8::from(r() < -0.3)),
+            x0,
+            x1,
+            (1.0 + drift) * x0 - 0.5 * x1 + 0.2 * r(),
+        ];
+        for (c, v) in cols.iter_mut().zip(row) {
+            c.push(v);
+        }
+        g.push(if i % 8 == 5 { "b" } else { "a" });
+    }
+    let [t, r_, e0, e1, x0, x1, y] = cols;
+    df!("t" => t, "g" => g, "r" => r_, "e0" => e0, "e1" => e1, "x0" => x0, "x1" => x1, "y" => y)
+        .unwrap()
+}
+
+/// Saved at row 280: `a` has started and steps its fit, `b` (35 rows) is
+/// in its start; the next 120 rows start `b` too.
+fn since_2_0_first() -> (Vec<u8>, DataFrame) {
+    let df = since_2_0_frame();
+    let mut bank = Bank::new(since_2_0_specs()).unwrap();
+    let cols = bank.fit_predict(&df.slice(0, SINCE_SPLIT)).unwrap();
+    let vol = cols[0].as_materialized_series().struct_().unwrap().clone();
+    let reported = vol.field_by_name("variance_r").unwrap();
+    let reported = reported.f64().unwrap();
+    let g = df.column("g").unwrap().str().unwrap();
+    let started = |group: &str| {
+        reported
+            .iter()
+            .zip(g.iter())
+            .take(SINCE_SPLIT)
+            .any(|(v, k)| k == Some(group) && v.is_some_and(f64::is_finite))
+    };
+    assert!(started("a") && !started("b"), "a has started and b has not");
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SINCE_SPLIT as i64, SINCE_N - SINCE_SPLIT),
+    )
+}
+
+fn since_2_0_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&since_2_0_specs(), bytes, input)
+}
+
 /// The specs of `bank_bocpd_hazard` (PLAN 547): `bocpd`'s two hazards,
 /// grouped on `bank_refit`'s stream and number clock, the per-row count
 /// `hazard_rows` and a number `hazard`, clock units, which a number clock
@@ -2675,6 +2767,11 @@ fn kinds() -> Vec<Kind> {
             run: target_weight_run,
         },
         Kind {
+            name: "bank_since_2_0",
+            first: since_2_0_first,
+            run: since_2_0_run,
+        },
+        Kind {
             name: "with_windows",
             first: windows_first,
             run: windows_run,
@@ -3221,7 +3318,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 18),
+            ("bank", 19),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),
@@ -4944,6 +5041,21 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             p.contains(".checks.")
                 && p.contains(".calibration.")
                 && v.as_f64().is_some_and(|f| f != 0.0)
+        }),
+        // The kinds since 2.0 no bank file held (review 2026-11-23, CI-5):
+        // a started `garch`'s fit beside a start still buffering its rows,
+        // a `hawkes` window's stamps, and `kalman`'s square-root factor.
+        ("bank_since_2_0", "a started garch", |p, v| {
+            p.ends_with(".Garch.series.0.started") && v.as_bool() == Some(true)
+        }),
+        ("bank_since_2_0", "a garch start's rows", |p, _| {
+            p.contains(".Garch.series.0.buffer.")
+        }),
+        ("bank_since_2_0", "a hawkes window's stamps", |p, _| {
+            p.contains(".Hawkes.window.stamp.")
+        }),
+        ("bank_since_2_0", "kalman's square-root form", |p, v| {
+            p.ends_with(".Kalman.covariance_form") && v.as_str() == Some("square_root")
         }),
     ];
     for (kind, form, holds) in FORMS {

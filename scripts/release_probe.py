@@ -114,6 +114,10 @@ def stream(n: int = 400, seed: int = 7) -> pl.DataFrame:
             # parameters, on the same steps.
             ts=pl.datetime(2024, 1, 2, 9, 30) + pl.duration(milliseconds=(pl.col("t") * 1000)),
             x1b=pl.col("x1") + pl.when(pl.int_range(pl.len()) >= BREAK_AT).then(4.0).otherwise(0.0),
+            # A positive amount for `glm`'s gamma and Tweedie families.
+            amount=(0.3 * pl.col("x1") - 0.2 * pl.col("x2")).exp(),
+            **{f"r{c}": pl.Series(v) for c, v in zip("abc", _returns(n).T, strict=True)},
+            **{f"v{j}": pl.Series(v) for j, v in enumerate(_wide(n).T)},
         )
         .with_columns(
             # Each group's first row that counts in a clock (a row of
@@ -122,6 +126,43 @@ def stream(n: int = 400, seed: int = 7) -> pl.DataFrame:
             - pl.when(pl.Series(_first_counted(w, n))).then(DECADE).otherwise(pl.duration(days=0)),
         )
     )
+
+
+def _returns(n: int) -> np.ndarray:
+    """Three series of returns, `ra`, `rb` and `rc`, for `garch` and `dcc`,
+    from a generator of their own (no other column's draws move): each a
+    GJR-GARCH(1,1), `σ² = 0.01 + (0.10 + 0.15·1[r < 0]) r² + 0.82 σ²` on
+    the previous row, whose innovations are a DCC(1,1) of `a = 0.12`, `b =
+    0.85` about a correlation of 0.3. On the linear `y` and `z` neither
+    model ever starts: each waits until a likelihood-ratio test tells its
+    process from a constant, so every output was null (PLAN 578j, CI-2).
+    The seed is one whose `garch` starts both targets before `RESUME_AT`
+    and whose `dcc` reports a correlation in the second half."""
+    rng = np.random.default_rng([9, 578])
+    qbar = np.full((3, 3), 0.3) + 0.7 * np.eye(3)
+    q, e = qbar.copy(), np.zeros(3)
+    var, prev = np.full(3, 0.01 / (1 - 0.10 - 0.075 - 0.82)), np.zeros(3)
+    out = np.empty((n, 3))
+    for i in range(n):
+        q = 0.03 * qbar + 0.12 * np.outer(e, e) + 0.85 * q
+        d = np.sqrt(np.diag(q))
+        e = np.linalg.cholesky(q / np.outer(d, d)) @ rng.standard_normal(3)
+        var = 0.01 + (0.10 + 0.15 * (prev < 0)) * prev**2 + 0.82 * var
+        prev = np.sqrt(var) * e
+        out[i] = prev
+    return out
+
+
+#: The wide block's columns: `lasso`'s sweep in parts from 40 features, and
+#: `hmm`'s factor form from 13.
+WIDE = [f"v{j}" for j in range(40)]
+
+
+def _wide(n: int) -> np.ndarray:
+    """Forty correlated features, from a generator of their own."""
+    rng = np.random.default_rng([40, 578])
+    common = rng.standard_normal((n, 1))
+    return 0.5 * common + rng.standard_normal((n, len(WIDE)))
 
 
 def _first_counted(w: np.ndarray, n: int) -> np.ndarray:
@@ -406,13 +447,12 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(columns=["x0", "x1", "y"], group="g", pairs=True, clock="t", gap_cap=6.0),
         [],
     ),
-    # Each row where `y` or `z` is above 0 an event of that node; the zero weights
-    # learn none of theirs.
-    # Each target a series of returns, after a start of 50 rows.
+    # Each target a series of returns, after a start of 50 rows: one group,
+    # so each start has the rows its test needs.
     (
         "garch",
         "garch",
-        dict(targets=["y", "z"], start_rows=50, forecast_rows=[3, 1], group="g", **CLOCK),
+        dict(targets=["ra", "rb"], start_rows=50, forecast_rows=[3, 1], group="g", **CLOCK),
         [],
     ),
     # Three series' correlations, through GARCH margins, after both starts
@@ -421,12 +461,11 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         "dcc",
         "dcc",
         dict(
-            targets=["y", "z", "x0"],
+            targets=["ra", "rb", "rc"],
             asymmetric=True,
             margin_start_rows=50,
             start_rows=50,
             half_life=50.0,
-            group="g",
             **CLOCK,
         ),
         [],
@@ -481,6 +520,8 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # Each row where `y` or `z` is above 0 an event of that node; the zero weights
+    # learn none of theirs.
     (
         "hawkes",
         "hawkes",
@@ -729,7 +770,82 @@ REACH: list[tuple[str, str, dict, list[str]]] = [
     ),
 ]
 
-WORKLOAD += REACH
+#: The paths added since 2.0.0, each a spec a release before refuses (an
+#: addition) and this build runs: every drift detector, `kalman`'s square
+#: root, `hmm`'s factor form and its prior's rows, `lasso`'s sweep in parts,
+#: `glm`'s other families and canonical links, `expectile` and `hawkes` on
+#: a window, `hawkes`' half-lives, and the cadences given as spans.
+SINCE_2_0: list[tuple[str, str, dict, list[str]]] = [
+    *[
+        (f"ridge_drift_{kind}", "ewridge", dict(FIT, emit_drift=True, drift_kind=kind, **extra), [])
+        for kind, extra in (
+            ("cusum", dict(drift_threshold=20.0)),
+            ("adwin", {}),
+            ("ddm", dict(drift_options={"error_above": 0.5})),
+            ("eddm", dict(drift_options={"error_above": 0.5})),
+            ("kswin", {}),
+        )
+    ],
+    (
+        "kalman_square_root",
+        "kalman",
+        dict(FIT, coef_half_life=50.0, covariance_form="square_root"),
+        [],
+    ),
+    (
+        "hmm_factor",
+        "hmm",
+        dict(
+            features=WIDE[:13],
+            n_components=2,
+            precision_prior=0.1,
+            prior_rows=30.0,
+            half_life=50.0,
+            warm_rows=50,
+            **CLOCK,
+        ),
+        [],
+    ),
+    ("lasso_split", "lasso", dict(FIT, features=WIDE, group=None, penalties=[0.1, 0.0]), []),
+    ("glm_binomial", "glm", dict(FIT, targets=["hit"], family="binomial", refit_rows=40), []),
+    (
+        "glm_gamma_inverse",
+        "glm",
+        dict(FIT, targets=["amount"], family="gamma", link="inverse", refit_rows=40),
+        [],
+    ),
+    (
+        "glm_tweedie_power",
+        "glm",
+        dict(FIT, targets=["amount"], family="tweedie", link="power", refit_rows=40),
+        [],
+    ),
+    ("glm_refit_span", "glm", dict(FIT, targets=["hit"], refit_span=60.0), []),
+    (
+        "expectile_window",
+        "expectile",
+        dict(FIT, expectile=0.8, half_life=INF, window_size=60.0),
+        [],
+    ),
+    ("expectile_refit_span", "expectile", dict(FIT, expectile=0.8, refit_span=60.0), []),
+    ("huber_refit_span", "huber", dict(FIT, huber_refit_span=90.0), []),
+    (
+        "hawkes_window",
+        "hawkes",
+        dict(
+            targets=["y", "z"],
+            kernel_half_lives=[1.5, 0.4],
+            half_life=INF,
+            window_size=80.0,
+            group="g",
+            **CLOCK,
+        ),
+        [],
+    ),
+    ("garch_span", "garch", dict(targets=["ra", "rb"], start_span=60.0, **CLOCK), []),
+]
+
+WORKLOAD += REACH + SINCE_2_0
 
 
 def _clocked(name: str) -> tuple[str, dict]:
@@ -745,6 +861,7 @@ CLOCKED = [
     "rls", "lasso", "kalman", "huber", "quantile", "ftrl", "sgd", "pa", "glm", "expectile",
     "holt", "ew_cov",
     "kmeans", "micro", "ew_class", "marginal", "deco", "corrchange", "bocpd", "hmm",
+    "garch", "hawkes",
 ]  # fmt: skip
 
 #: The paths that can change numbers without a tolerance-held test seeing
@@ -1029,6 +1146,8 @@ PATHS = [
     "zero-weight first rows",
     "null first rows",
     "a state saved mid-stream, loaded and continued",
+    "garch predicts a variance",
+    "dcc predicts a correlation",
 ]
 
 
@@ -1127,6 +1246,12 @@ def activations(
             # fold made, carries the most mass.
             mode = out[name].struct.field("run_mode")
             counts["bocpd folds the runs at max_run"] += int((mode == kw["max_run"] - 1).sum())
+    if builder in ("garch", "dcc"):
+        # A started fit: the rows with a variance (or a correlation) to read.
+        stem = "variance_" if builder == "garch" else "corr_"
+        path = "garch predicts a variance" if builder == "garch" else "dcc predicts a correlation"
+        fields = [f for f in out[name].struct.fields if f.startswith(stem)]
+        counts[path] += sum(int(out[name].struct.field(f).is_not_null().sum()) for f in fields)
     if builder in ("kmeans", "micro"):
         path = f"{builder} carries a compensated mean's low part"
         counts[path] += sum(_low_parts(group["models"]) for group in _states(bank))

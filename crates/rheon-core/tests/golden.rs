@@ -4740,3 +4740,225 @@ const GOLDEN_DDSKETCH_DECAYED: &[f64] = &[
     1.988277768204018,
     20.212303545600623,
 ];
+
+/// FNV-1a over a run: every output's bits (NaN folded to one pattern), the
+/// weight's, and the state's encoding after each row.
+struct Fnv(u64);
+
+impl Fnv {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn bytes(&mut self, b: &[u8]) {
+        for &byte in b {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn step<M: OnlineModel>(&mut self, m: &M, out: &Step) {
+        for p in out.pred.iter().copied().chain([out.n_eff]) {
+            let b = if p.is_nan() {
+                f64::NAN.to_bits()
+            } else {
+                p.to_bits()
+            };
+            self.bytes(&b.to_le_bytes());
+        }
+        self.bytes(&rmp_serde::to_vec_named(&m.state()).unwrap());
+    }
+}
+
+/// Two series of GJR-GARCH returns with Student-t(6) innovations, 3,000
+/// rows: heavy tails and volatility clusters, the stream these models are
+/// for, with a level that wanders far from 0 (a price) and irregular
+/// weights, a zero weight every 31 rows and a missing value every 47.
+fn heavy_tailed_rows() -> Vec<(Vec<f64>, f64)> {
+    let n = 3000;
+    let a = garch_series::gjr([0.05, 0.08, 0.04, 0.88], Innovations::T6, n, 71);
+    let b = garch_series::gjr([0.02, 0.1, 0.0, 0.85], Innovations::T6, n, 72);
+    let mut level = 4000.0;
+    (0..n)
+        .map(|i| {
+            level += a[i];
+            let x1 = if i % 47 == 11 { f64::NAN } else { b[i] };
+            let w = match i % 31 {
+                5 => 0.0,
+                k => 0.5 + f64::from(k as u32 % 4) * 0.25,
+            };
+            (vec![a[i], x1, level], w)
+        })
+        .collect()
+}
+
+/// Below the largest double the scale `ewm_moments` holds its moments at,
+/// and the bound `realized` and `power_variation` hold a term and a sum at,
+/// move nothing: on heavy-tailed returns every output and every state, row
+/// by row, are the build's before them, to the bit (digests taken on
+/// `2366c9ff`). Under a literal decay at unit steps, and in windows, so no
+/// platform's `exp` is on the path; `ewm_moments`' terms are those whose
+/// reads take no `powf` (a standardized or raw term's does), its states
+/// every term's (PLAN 578j, TEST-10's two defects and `power_variation`'s).
+#[test]
+fn moments_and_variations_below_the_bound_did_not_move() {
+    let rows = heavy_tailed_rows();
+    let lam = Decay::Lam(0.97);
+    let col = |c, p| (MomentLeg::of(c), p);
+    let term = |name: &str, powers, kind, bias| MomentTerm {
+        name: name.into(),
+        powers,
+        kind,
+        bias,
+    };
+    let terms = vec![
+        term("var", vec![col(0, 2)], MomentKind::Central, false),
+        term("m3", vec![col(0, 3)], MomentKind::Central, false),
+        term("m4", vec![col(0, 4)], MomentKind::Central, false),
+        term("m6", vec![col(0, 6)], MomentKind::Central, true),
+        term("k4", vec![col(0, 4)], MomentKind::Cumulant, false),
+        term("k5", vec![col(0, 5)], MomentKind::Cumulant, true),
+        term("co", vec![col(0, 2), col(1, 1)], MomentKind::Central, true),
+        term("lv", vec![col(2, 4)], MomentKind::Central, true),
+        term(
+            "ac",
+            vec![col(0, 1), (MomentLeg::lagged(0, 2.0), 1)],
+            MomentKind::Central,
+            true,
+        ),
+    ];
+    let mut ewm = EwmMomentsCfg::new(lam, terms);
+    ewm.se = true;
+    let ewm_forms = [
+        ewm.clone(),
+        EwmMomentsCfg {
+            decay: Decay::Halflife(f64::INFINITY),
+            window_rows: Some(50),
+            ..ewm.clone()
+        },
+        EwmMomentsCfg {
+            decay: Decay::Halflife(f64::INFINITY),
+            clocked: true,
+            window_clock: Some(64.5),
+            ..ewm
+        },
+    ];
+    let mut got = Vec::new();
+    for cfg in ewm_forms {
+        let mut m = EwmMoments::new(cfg).unwrap();
+        let mut h = Fnv::new();
+        for (i, (x, w)) in rows.iter().enumerate() {
+            let out = m.step(x, &[], if i == 0 { 0.0 } else { 1.0 }, *w);
+            h.step(&m, &out);
+        }
+        got.push(h.0);
+    }
+    let realized = RealizedCfg {
+        n_targets: 2,
+        decay: lam,
+        min_weight: 3.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        lm_window: Some(30),
+        lm_beta: 0.99,
+        max_state_bytes: None,
+    };
+    let realized_forms = [
+        realized.clone(),
+        RealizedCfg {
+            decay: Decay::Halflife(f64::INFINITY),
+            window_rows: Some(40),
+            ..realized.clone()
+        },
+        RealizedCfg {
+            decay: Decay::Halflife(f64::INFINITY),
+            window_clock: Some(40.5),
+            lm_window: None,
+            ..realized
+        },
+    ];
+    for cfg in realized_forms {
+        let mut m = Realized::new(cfg).unwrap();
+        let mut h = Fnv::new();
+        for (i, (x, w)) in rows.iter().enumerate() {
+            let y = [Some(x[0]), x[1].is_finite().then_some(x[1])];
+            let out = m.step(&[], &y, if i == 0 { 0.0 } else { 1.0 }, *w);
+            h.step(&m, &out);
+        }
+        got.push(h.0);
+    }
+    let mp = |powers: &[f64], normalize: bool, scale: usize| PvTerm {
+        kind: PvTermKind::Multipower {
+            powers: powers.to_vec(),
+            normalize,
+        },
+        scale,
+    };
+    let ker = |kernel, bandwidth, center, scale| PvTerm {
+        kind: PvTermKind::Kernel {
+            kernel,
+            bandwidth,
+            flat_top: false,
+            center,
+        },
+        scale,
+    };
+    let q = 4.0 / 3.0;
+    let pv = PowerVariationCfg {
+        n_targets: 2,
+        terms: vec![
+            mp(&[2.0], false, 1),
+            mp(&[4.0], false, 1),
+            mp(&[q, q, q], true, 1),
+            mp(&[2.0, 2.0], false, 2),
+            ker(PvKernel::Parzen, 4, true, 1),
+            ker(PvKernel::Bartlett, 3, false, 20),
+        ],
+        decay: lam,
+        min_weight: 3.0,
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        max_state_bytes: None,
+    };
+    let pv_forms = [
+        pv.clone(),
+        PowerVariationCfg {
+            decay: Decay::Halflife(f64::INFINITY),
+            window_rows: Some(60),
+            ..pv.clone()
+        },
+        PowerVariationCfg {
+            decay: Decay::Halflife(f64::INFINITY),
+            window_clock: Some(60.5),
+            ..pv
+        },
+    ];
+    for cfg in pv_forms {
+        let mut m = PowerVariation::new(cfg).unwrap();
+        let mut h = Fnv::new();
+        for (i, (x, w)) in rows.iter().enumerate() {
+            let y = [Some(x[0]), x[1].is_finite().then_some(x[1])];
+            let out = m.step(&[], &y, if i == 0 { 0.0 } else { 1.0 }, *w);
+            h.step(&m, &out);
+        }
+        got.push(h.0);
+    }
+    let want: [u64; 9] = [
+        0x62f0_eab2_5bab_1187,
+        0x0f93_9c18_e254_b24a,
+        0xe08f_e403_c71f_2c53,
+        0xac68_c577_5987_60f7,
+        0xef03_3e6a_44a7_624d,
+        0x3844_21b3_8431_d32c,
+        0x6429_c0a1_3949_df3a,
+        0xeffe_4f4a_b3e4_ecbc,
+        0x4690_528a_0a6d_8c28,
+    ];
+    assert_eq!(
+        got.iter().map(|h| format!("{h:#018x}")).collect::<Vec<_>>(),
+        want.iter()
+            .map(|h| format!("{h:#018x}"))
+            .collect::<Vec<_>>(),
+    );
+}

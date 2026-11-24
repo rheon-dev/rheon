@@ -245,8 +245,10 @@ weight. So a fit
 forgets a change in the process completely once the hard window has
 passed it. A row's age is measured on the clock the model decays by, each
 step after `gap_cap` and any `session_gap`, so a capped weekend ages the
-rows before it by the cap. Five models take a hard window: `ewridge`,
-`lasso`, `ew_cov`, `ew_class` and `marginal`, each described in MODELS.md's [model table](../MODELS.md#the-models-at-a-glance). Inside it the weights still
+rows before it by the cap. `ewridge`, `lasso`, `ar`, `ew_cov`,
+`ew_class`, `marginal` and `spectral` cut a hard window from snapshots of
+their running sums, and [A hard window](../MODELS.md#a-hard-window) names
+the models that take a `window_size` of their own. Inside it the weights still
 halve every `half_life`, and `half_life=float("inf")` makes them equal.
 [Forget rows past a window](../how-to/forget-rows-past-a-window.md) gives its
 settings and what each model truncates.

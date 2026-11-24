@@ -105,3 +105,44 @@ def test_every_field_gives_its_dtype_and_where_else_it_is_null():
             assert len(row) == 4 and all(row), (name, row)
             field, dtype = row[0].strip("`"), row[1].strip("`")
             assert dtypes[field] == dtype, (name, field, dtype, dtypes[field])
+
+
+def test_the_page_names_every_withheld_reason_the_bank_declares():
+    """`withheld_reason` is an `Enum` whose values the bank declares: the page
+    lists each one, explains it, and counts them as the bank does, and it
+    shows `garch`'s `forecast_<t>`, which only a `horizon` past 1 writes. The
+    page once said six over a list of nine, of the bank's ten, and had no
+    `forecast_<t>` (PLAN 578j, DOC-5)."""
+    import polars as pl
+
+    from rheon import polars as rp
+
+    sys.path.insert(0, str(REPO / "tests"))
+    from test_model_registry import _build
+
+    spec = _build("ewridge")
+    out = rp.ModelBank([spec]).fit_predict(pl.DataFrame({"y": [1.0], "x0": [0.0]}))
+    reasons = list(out.schema[spec["name"]].to_schema()["withheld_reason"].categories)
+    text = DOC.read_text(encoding="utf-8")
+    shared = text.split("\n## Fields most models write\n", 1)[1].split("\n## ", 1)[0]
+    row = next(line for line in shared.splitlines() if line.startswith("| `withheld_reason` |"))
+    missing = [r for r in reasons if f"`{r}`" not in row]
+    assert not missing, missing
+    words = [
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+    ]
+    assert f"`withheld_reason`'s {words[len(reasons)]}," in text
+    garch = text.split("\n## `garch`\n", 1)[1].split("\n## ", 1)[0]
+    assert "| `forecast_y` |" in garch

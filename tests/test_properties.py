@@ -742,6 +742,25 @@ SWITCHES: dict[str, dict] = {
 # The RMS Huber scale, swept now that task 277's refit rebuilds the scale.
 SWITCHES["huber rms"] = {"huber_scale": "rms"}
 
+# The switches added since 2.0, none of which the sweep reached (PLAN 578j,
+# TEST-11): each drift detector, `kalman`'s square root, `glm`'s binomial
+# family and Tweedie's canonical link, a window with no decay (the form
+# `expectile` takes), and the refits' cadences as spans of the clock.
+SWITCHES |= {
+    "drift cusum": {"emit_drift": True, "drift_kind": "cusum", "drift_threshold": 5.0},
+    "drift adwin": {"emit_drift": True, "drift_kind": "adwin"},
+    "drift ddm": {"emit_drift": True, "drift_kind": "ddm", "drift_options": {"error_above": 1.0}},
+    "drift eddm": {"emit_drift": True, "drift_kind": "eddm", "drift_options": {"error_above": 1.0}},
+    "drift kswin": {"emit_drift": True, "drift_kind": "kswin"},
+    "square root": {"covariance_form": "square_root"},
+    "binomial": {"family": "binomial"},
+    "tweedie power": {"family": "tweedie", "link": "power"},
+    "window, no decay": {"window_size": 15.0, "half_life": float("inf")},
+    "refit span": {"refit_span": 10.0},
+    "huber refit span": {"huber_refit_span": 10.0},
+    "quantile refit span": {"quantile_refit_span": 10.0},
+}
+
 #: The second target a switch may name (`share_p`): the first target's
 #: values in reverse, so its nulls, zeros and values past the bound fall on
 #: other rows.
@@ -959,7 +978,8 @@ def test_every_switch_moves_an_output(model, extra):
             assert not moved, f"{name} is pinned inert on {model} and moved {moved}"
             continue
         assert values, f"{name} moved no value {model} reports on its own"
-        if "window_size" in SWITCHES[name] and name != "window":
+        # A window of its own (`window, no decay`) is a window, not a ring switch.
+        if "window_size" in SWITCHES[name] and name not in ("window", "window, no decay"):
             # Against the window alone: the switch itself moves the ring.
             window = build(model, extra, **SWITCHES["window"])
             alone = unnested(rp.ModelBank([window]).fit_predict(df))
@@ -1594,3 +1614,68 @@ def test_a_weight_past_the_bound_is_missing(kind, value):
     w[8] = value
     got = rp.ModelBank([spec]).fit_predict(df.with_columns(w=pl.Series(w, dtype=pl.Float64)))
     assert got["m"].equals(null["m"], null_equal=True)
+
+
+def _gjr_returns(n: int) -> np.ndarray:
+    """``n`` GJR-GARCH(1,1) returns, ``σ² = 0.01 + (0.10 + 0.15·1[r < 0])
+    r² + 0.82 σ²`` on the row before, innovations a correlated normal's
+    first margin, as ``scripts/release_probe.py``'s ``ra``: a series whose
+    ``garch`` start comes at its 51st row, where its likelihood-ratio test
+    against a constant variance first passes."""
+    rng = np.random.default_rng([9, 578])
+    qbar = np.full((3, 3), 0.3) + 0.7 * np.eye(3)
+    q, e = qbar.copy(), np.zeros(3)
+    var, prev = 0.01 / (1 - 0.10 - 0.075 - 0.82), 0.0
+    out = np.empty(n)
+    for i in range(n):
+        q = 0.03 * qbar + 0.12 * np.outer(e, e) + 0.85 * q
+        d = np.sqrt(np.diag(q))
+        e = np.linalg.cholesky(q / np.outer(d, d)) @ rng.standard_normal(3)
+        var = 0.01 + (0.10 + 0.15 * (prev < 0)) * prev**2 + 0.82 * var
+        prev = float(np.sqrt(var) * e[0])
+        out[i] = prev
+    return out
+
+
+#: The rows the start reads, left as they are, so every stream starts.
+GARCH_START = 51
+
+
+class TestGarchOnReturns:
+    """`garch` in `TestEveryOtherKind` reads streams of at most 60 rows of
+    arbitrary values, where its start, which waits for a likelihood-ratio
+    test against a constant variance, never comes: every output it held was
+    null (PLAN 578j, TEST-11). Here it reads returns whose start comes, and
+    after the start the stream is as adversarial as the others: nulls,
+    values at and past the bound, weights of 0. The same properties hold:
+    one chunk or many, a save and load at any row, every number finite or
+    null, and a started fit throughout."""
+
+    def test_the_properties_hold_once_started(self):
+        def prop(data, chunk):
+            n = data.draw(st.integers(GARCH_START + 10, 160), label="rows")
+            y = _gjr_returns(n).tolist()
+            w = [1.0] * n
+            for i in range(GARCH_START + 1, n):
+                y[i] = data.draw(st.one_of(st.just(y[i]), _values), label=f"y{i}")
+                w[i] = data.draw(st.sampled_from([1.0, 1.0, 1.0, 0.0, 2.5]), label=f"w{i}")
+            df = pl.DataFrame({"y": y, "w": w}, schema_overrides={"y": pl.Float64})
+            split = data.draw(st.integers(1, n - 1), label="split")
+            spec = rp.spec.garch("m", targets=["y"], start_rows=50, forecast_rows=[2], weight="w")
+            one = rp.ModelBank([spec]).fit_predict(df)
+            bank = rp.ModelBank([spec])
+            many = pl.concat([bank.fit_predict(df.slice(i, chunk)) for i in range(0, n, chunk)])
+            assert unnested(one).equals(unnested(many), null_equal=True), "chunking moved a number"
+            a = rp.ModelBank([spec])
+            a.fit_predict(df.slice(0, split))
+            b = rp.ModelBank.load_bytes(a.save_bytes(), specs=[spec])
+            rest = df.slice(split)
+            assert unnested(a.fit_predict(rest)).equals(
+                unnested(b.fit_predict(rest)), null_equal=True
+            )
+            fields = one.select("m").unnest("m")
+            _finite_or_null(fields)
+            started = fields["variance_y"].slice(GARCH_START).is_not_null().sum()
+            assert started > 0, "the start never came"
+
+        _given("mixed", prop, data=st.data(), chunk=CHUNKS)

@@ -46,10 +46,10 @@ def sgd(
 ) -> dict[str, Any]:
     """Stochastic gradient descent under a choice of losses, with one gradient step a row.
 
-    Use it for a cheap fit, O(k) a row for ``k`` features. It is also the
-    model for count targets (``loss = "poisson"``, which no other model
-    takes), and for coefficients that must be bounded, sum to a constant or
-    lie on the simplex, as portfolio and mixing weights do. Use
+    Use it for a cheap fit, O(k) a row for ``k`` features, count targets
+    (``loss = "poisson"``, where :func:`glm` takes a Newton step in O(k³))
+    included, and for coefficients that must be bounded, sum to a constant
+    or lie on the simplex, as portfolio and mixing weights do. Use
     :func:`ewridge` for an exact fit in O(k²) a row, :func:`huber` or
     :func:`quantile` for a robust or quantile fit solved on running sums,
     and :func:`pa` for steps with no learning rate to tune.
@@ -527,8 +527,8 @@ def sgd(
     **The refit's memory.** A target's rows are held until its refit, at
     ``(features + 10) * 8`` bytes a learned row under the MAD, whose scale
     is read exactly from their residuals until then. Under ``"rms"`` it is
-    ``(features + 4) * 8``. Rows that only aged the target (its value null
-    or its weight 0) are held as runs of 32 bytes, and consecutive such
+    ``(features + 4) * 8``. Rows that only aged the target (its value
+    null) are held as runs of 32 bytes, and consecutive such
     rows at one clock step share one run. Where the runs pass 4 for each
     learned row of the count, as on a target present on fewer than about
     one row in five under an irregular clock, the target gives its refit up

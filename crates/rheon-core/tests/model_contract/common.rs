@@ -13,6 +13,7 @@ fn contract_source() -> String {
         include_str!("unusable_values.rs"),
         include_str!("lower_floor.rs"),
         include_str!("generated.rs"),
+        include_str!("recovery_since_2_0.rs"),
     ]
     .join("\n")
 }

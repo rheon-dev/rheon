@@ -1,6 +1,6 @@
 //! `EwCov`: exponentially weighted first/second moments of a vector stream
 //! (docs/PLAN.md §4.7). The shared accumulator behind EW-ridge, RLS and Kalman,
-//! and exposed on its own as `online.ew_cov()`.
+//! and exposed on its own as `rp.spec.ew_cov()`.
 //!
 //! All statistics are stored as weighted *means* (not sums), which keeps them
 //! bounded under arbitrarily long runs (docs/PLAN.md §7), and the second

@@ -113,7 +113,8 @@ def test_the_docs_say_what_each_unit_is():
 
 def test_only_the_documented_exceptions_move_with_the_weights_scale():
     a, b = _fit(1.0), _fit(SCALE)
-    reach = {name for name, *_ in probe.REACH}
+    # The paths since 2.0 are each a builder's path, held as `REACH` is.
+    reach = {name for name, *_ in probe.REACH + probe.SINCE_2_0}
     moved = {
         name: f for name, *_ in probe.WORKLOAD if name not in reach and (f := _moved(a, b, name))
     }
@@ -123,6 +124,6 @@ def test_only_the_documented_exceptions_move_with_the_weights_scale():
     # for the `2k` rows its variance needs (task 270 (g)): read sooner, the
     # rounding decided whether it factorized.
     builders = {b for name, b, *_ in probe.WORKLOAD if name in EXCEPTIONS}
-    for name, builder, *_ in probe.REACH:
+    for name, builder, *_ in probe.REACH + probe.SINCE_2_0:
         fields = _moved(a, b, name)
         assert not fields or builder in builders, (name, fields[:4])

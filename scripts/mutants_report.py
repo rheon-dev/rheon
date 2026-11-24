@@ -175,13 +175,16 @@ def report(
             kept[t["kind"]].append(f"- {where} {what}: {' '.join(t['why'].split())}")
         else:
             survivors[m["file"]].append(f"- {where} {what}")
-    missed = sum(len(v) for v in survivors.values())
-    n_kept = sum(len(v) for k, v in kept.items() if k != "loop")
+    # A timeout no `loop` entry names fails as a survivor does: a mutant that
+    # hangs every test, or slows it tenfold, is one no test caught.
+    missed = sum(len(v) for v in survivors.values()) + len(hung)
+    n_kept = sum(len(v) for v in kept.values())
     lines = [
         "## Mutation testing",
         "",
-        f"{len(results)} mutants: {counts['CaughtMutant']} caught, {missed} survived, "
-        f"{len(excused)} equivalent, {n_kept} tolerated, {counts['Timeout']} timed out, "
+        f"{len(results)} mutants: {counts['CaughtMutant']} caught, "
+        f"{missed - len(hung)} survived, {len(excused)} equivalent, {n_kept} tolerated, "
+        f"{counts['Timeout']} timed out ({len(hung)} untolerated), "
         f"{counts['Unviable']} unviable.",
     ]
     if not results and not short:
@@ -198,7 +201,12 @@ def report(
         for file in sorted(survivors):
             lines += [f"**{file}** ({len(survivors[file])})", *sorted(survivors[file]), ""]
     if hung:
-        lines += ["", "### Timed out: a test hung at the time limit", "", *sorted(hung)]
+        lines += [
+            "",
+            "### Timed out: a test hung at the time limit, counted as a survivor",
+            "",
+            *sorted(hung),
+        ]
     if kept:
         lines += ["", "### Tolerated, not counted (scripts/mutants_tolerated.toml)", ""]
         for kind in sorted(kept):

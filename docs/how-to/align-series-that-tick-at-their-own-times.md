@@ -81,7 +81,7 @@ its own.
 2. **Give each spec the refresh grid's clock, `time_refresh`,** with a `gap_cap`,
    the largest clock step the model decays by. The recipe's refresh times
    fall about two clock units apart, and it gives 10.0.
-3. **Chain `online.fit_predict(specs)` after the refresh grid.** Given a query,
+3. **Chain `rheon.fit_predict(specs)` after the refresh grid.** Given a query,
    `refresh_time` returns one, so the refresh grid and the models run in one pass.
    The first refresh time has no change, so the models skip it.
 

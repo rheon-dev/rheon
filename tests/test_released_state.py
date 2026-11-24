@@ -123,6 +123,15 @@ PARAMETER_INTRODUCED = {
     "sgd_huber_mad": "1.3.0",
     "huber_refit": "1.4.0",
     "sgd_huber_refit": "1.4.0",
+    # The paths added since 2.0.0 on a builder 2.0.0 has (PLAN 578j, CI-2).
+    "ridge_drift_cusum": "2.1.0",
+    "ridge_drift_adwin": "2.1.0",
+    "ridge_drift_ddm": "2.1.0",
+    "ridge_drift_eddm": "2.1.0",
+    "ridge_drift_kswin": "2.1.0",
+    "kalman_square_root": "2.1.0",
+    "hmm_factor": "2.1.0",
+    "huber_refit_span": "2.1.0",
 }
 
 

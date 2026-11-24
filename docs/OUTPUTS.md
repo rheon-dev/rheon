@@ -13,7 +13,7 @@ one section per model, for a reader who wants to know what a field holds, its
 type, and when it is null. Every spec adds one column to the output, named after
 the spec, and its value in each row is a record of these fields. The tables are
 generated from the code, and a test fails when they differ from it.
-`po.spec.output_fields(spec)` answers the same question at runtime, for the
+`rp.spec.output_fields(spec)` answers the same question at runtime, for the
 exact spec you built.
 
 | family | models |
@@ -27,20 +27,20 @@ exact spec you built.
 
 A spec of your own can carry a grid, several targets or another name, and
 each changes its fields' names. Ask the spec itself:
-`po.spec.output_fields` lists every field it writes, and
-`po.spec.output_index` gives each field with the target, ridge and
+`rp.spec.output_fields` lists every field it writes, and
+`rp.spec.output_index` gives each field with the target, ridge and
 half-life its name encodes, and its dtype. Here a spec with two half-lives
 and two ridge values has four predictions of `y`, one per pair:
 
 ```python
-from rheon import polars as po
+from rheon import polars as rp
 
-grid = po.spec.ewridge(
+grid = rp.spec.ewridge(
     "ridge", targets=["y"], features=["x0", "x1"],
     half_life=[100.0, 500.0], ridge=[1e-6, 0.5],  # a grid: one fit per pair of values
 )
-print(po.spec.output_fields(grid))  # every field, by name
-index = po.spec.output_index(grid)  # every field, with the values its name encodes
+print(rp.spec.output_fields(grid))  # every field, by name
+index = rp.spec.output_index(grid)  # every field, with the values its name encodes
 for row in index.filter(kind="pred").select("field", "target", "ridge", "half_life").iter_rows():
     print(*row)
 ```
@@ -93,19 +93,19 @@ EW, in a *what it holds* cell, is short for exponentially weighted.
 ## Field types
 
 A field's dtype is the type the bank declares to Polars before it reads a
-row, as `po.spec.output_index(spec)` lists it:
+row, as `rp.spec.output_index(spec)` lists it:
 
 | dtype | the Polars type |
 |---|---|
 | `f64` | `Float64` |
 | `i64` | `Int64` |
 | `bool` | `Boolean` |
-| `list[f64]` | `List(Float64)`: `coef` and the fields laid out like it. A list stores nothing for a null row, and `coef` is null on most rows. For an `(n, k)` matrix, `k` the height of `po.spec.coef_index(spec)`, keep the rows that carry it and fix their width. For the output `out` of a spec named `m`: `out.select(pl.col("m").struct.field("coef")).filter(pl.col("coef").is_not_null()).select(pl.col("coef").list.to_array(k)).to_series().to_numpy()` |
-| `enum` | an `Enum` of its values, in their order: `withheld_reason`'s six, an `ew_class` spec's `classes` for `class`, a grid's slots for `selected_<t>` |
+| `list[f64]` | `List(Float64)`: `coef` and the fields laid out like it. A list stores nothing for a null row, and `coef` is null on most rows. For an `(n, k)` matrix, `k` the height of `rp.spec.coef_index(spec)`, keep the rows that carry it and fix their width. For the output `out` of a spec named `m`: `out.select(pl.col("m").struct.field("coef")).filter(pl.col("coef").is_not_null()).select(pl.col("coef").list.to_array(k)).to_series().to_numpy()` |
+| `enum` | an `Enum` of its values, in their order: `withheld_reason`'s ten, an `ew_class` spec's `classes` for `class`, a grid's slots for `selected_<t>` |
 | `clock` | the clock column's own type, an integer clock in its own width; with no clock, `Int64`, the group's row index |
 
 **Every integer is an `Int64`**, in a field and in every frame the bank and
-`po.spec` return: a count, a state, a cluster label, a position, a row's
+`rp.spec` return: a count, a state, a cluster label, a position, a row's
 index. It is Polars' own default integer, so a join, a concatenation or a
 comparison between two frames never meets two widths. Only the clock values
 differ, in a field or in a frame such as `groups()`' `clock_last`: an
@@ -166,7 +166,7 @@ the docs set it:
 
 ## `ewridge`
 
-The fields of `po.spec.ewridge("m", targets=["y"], features=["x0"], half_life=50.0)`:
+The fields of `rp.spec.ewridge("m", targets=["y"], features=["x0"], half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -180,7 +180,7 @@ The fields of `po.spec.ewridge("m", targets=["y"], features=["x0"], half_life=50
 
 ## `rls`
 
-The fields of `po.spec.rls("m", targets=["y"], features=["x0"], half_life=50.0)`:
+The fields of `rp.spec.rls("m", targets=["y"], features=["x0"], half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -193,7 +193,7 @@ The fields of `po.spec.rls("m", targets=["y"], features=["x0"], half_life=50.0)`
 
 ## `lasso`
 
-The fields of `po.spec.lasso("m", targets=["y"], features=["x0"], half_life=50.0, penalties=[0.1, 0.0])`:
+The fields of `rp.spec.lasso("m", targets=["y"], features=["x0"], half_life=50.0, penalties=[0.1, 0.0])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -209,7 +209,7 @@ The fields of `po.spec.lasso("m", targets=["y"], features=["x0"], half_life=50.0
 
 ## `kalman`
 
-The fields of `po.spec.kalman("m", targets=["y"], features=["x0"], half_life=50.0, coef_half_life=50.0)`:
+The fields of `rp.spec.kalman("m", targets=["y"], features=["x0"], half_life=50.0, coef_half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -222,7 +222,7 @@ The fields of `po.spec.kalman("m", targets=["y"], features=["x0"], half_life=50.
 
 ## `huber`
 
-The fields of `po.spec.huber("m", targets=["y"], features=["x0"], half_life=50.0)`:
+The fields of `rp.spec.huber("m", targets=["y"], features=["x0"], half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -242,7 +242,7 @@ Under `emit_huber_scale=True`, it also writes:
 
 ## `quantile`
 
-The fields of `po.spec.quantile("m", targets=["y"], features=["x0"], half_life=50.0, quantile=0.5)`:
+The fields of `rp.spec.quantile("m", targets=["y"], features=["x0"], half_life=50.0, quantile=0.5)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -256,7 +256,7 @@ The fields of `po.spec.quantile("m", targets=["y"], features=["x0"], half_life=5
 
 ## `sgd`
 
-The fields of `po.spec.sgd("m", targets=["y"], features=["x0"], half_life=50.0, learning_rate=0.01)`:
+The fields of `rp.spec.sgd("m", targets=["y"], features=["x0"], half_life=50.0, learning_rate=0.01)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -269,7 +269,7 @@ The fields of `po.spec.sgd("m", targets=["y"], features=["x0"], half_life=50.0, 
 
 ## `pa`
 
-The fields of `po.spec.pa("m", targets=["y"], features=["x0"], half_life=50.0)`:
+The fields of `rp.spec.pa("m", targets=["y"], features=["x0"], half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -282,7 +282,7 @@ The fields of `po.spec.pa("m", targets=["y"], features=["x0"], half_life=50.0)`:
 
 ## `ftrl`
 
-The fields of `po.spec.ftrl("m", targets=["y"], features=["x0"], half_life=50.0)`:
+The fields of `rp.spec.ftrl("m", targets=["y"], features=["x0"], half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -295,7 +295,7 @@ The fields of `po.spec.ftrl("m", targets=["y"], features=["x0"], half_life=50.0)
 
 ## `glm`
 
-The fields of `po.spec.glm("m", targets=["y"], features=["x0"], half_life=50.0)`:
+The fields of `rp.spec.glm("m", targets=["y"], features=["x0"], half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -308,7 +308,7 @@ The fields of `po.spec.glm("m", targets=["y"], features=["x0"], half_life=50.0)`
 
 ## `expectile`
 
-The fields of `po.spec.expectile("m", targets=["y"], features=["x0"], half_life=50.0, expectile=0.8)`:
+The fields of `rp.spec.expectile("m", targets=["y"], features=["x0"], half_life=50.0, expectile=0.8)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -321,7 +321,7 @@ The fields of `po.spec.expectile("m", targets=["y"], features=["x0"], half_life=
 
 ## `holt`
 
-The fields of `po.spec.holt("m", targets=["y"], half_life=50.0)`:
+The fields of `rp.spec.holt("m", targets=["y"], half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -334,7 +334,7 @@ The fields of `po.spec.holt("m", targets=["y"], half_life=50.0)`:
 
 ## `ar`
 
-The fields of `po.spec.ar("m", targets=["y"], features=["x0"], half_life=50.0, lags=2)`:
+The fields of `rp.spec.ar("m", targets=["y"], features=["x0"], half_life=50.0, lags=2)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -359,7 +359,7 @@ The fields of `po.spec.isotonic("m", targets=["y"], features=["x0"], half_life=5
 
 ## `ew_cov`
 
-The fields of `po.spec.ew_cov("m", features=["x0", "x1"], half_life=50.0)`:
+The fields of `rp.spec.ew_cov("m", features=["x0", "x1"], half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -374,7 +374,7 @@ The fields of `po.spec.ew_cov("m", features=["x0", "x1"], half_life=50.0)`:
 
 ## `ewm_moments`
 
-The fields of `po.spec.ewm_moments("m", features=["x0"], half_life=50.0, terms={"var": {"x0": 2}})`:
+The fields of `rp.spec.ewm_moments("m", features=["x0"], half_life=50.0, terms={"var": {"x0": 2}})`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -391,7 +391,7 @@ Under `se=True`, it also writes:
 
 ## `pca`
 
-The fields of `po.spec.pca("m", features=["x0", "y"], half_life=50.0, n_components=1)`:
+The fields of `rp.spec.pca("m", features=["x0", "y"], half_life=50.0, n_components=1)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -408,7 +408,7 @@ The fields of `po.spec.pca("m", features=["x0", "y"], half_life=50.0, n_componen
 
 `marginal` writes nothing per row but `weight_sum`. Its product is the state, and `ModelBank.marginal()` reads the pairs from it.
 
-The fields of `po.spec.marginal("m", targets=["y"], features=["x0"], half_life=50.0)`:
+The fields of `rp.spec.marginal("m", targets=["y"], features=["x0"], half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -416,7 +416,7 @@ The fields of `po.spec.marginal("m", targets=["y"], features=["x0"], half_life=5
 
 ## `deco`
 
-The fields of `po.spec.deco("m", features=["x0", "x1"], half_life=50.0)`:
+The fields of `rp.spec.deco("m", features=["x0", "x1"], half_life=50.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -432,7 +432,7 @@ The fields of `po.spec.deco("m", features=["x0", "x1"], half_life=50.0)`:
 
 `rcov` writes nothing per row but `weight_sum`. Its product is the closed block, in the row `ModelBank.closed_groups()` gives when a group closes (`group_close`). That row's `rcov_psd_repaired` is null where the repair could not run: on an estimate with an entry that is not finite, or where its eigendecomposition failed.
 
-The fields of `po.spec.rcov("m", features=["x0", "x1"], group="g", group_close="monotone", block_rows=100)`:
+The fields of `rp.spec.rcov("m", features=["x0", "x1"], group="g", group_close="monotone", block_rows=100)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -442,7 +442,7 @@ The fields of `po.spec.rcov("m", features=["x0", "x1"], group="g", group_close="
 
 `audit` writes nothing per row but `weight_sum`, the rows before this one. Its product is the state, and `ModelBank.audit()` reads what it counted from it.
 
-The fields of `po.spec.audit("m", columns=["x0", "x1"])`:
+The fields of `rp.spec.audit("m", columns=["x0", "x1"])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -463,9 +463,15 @@ The fields of `po.spec.garch("m", targets=["y"], start_rows=50, forecast_rows=[5
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
 
+Under `horizon=5`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `forecast_y` | `f64` | the variance of `<t>` `horizon - 1` rows past this one, from the same rows | where the variance is null |
+
 ## `dcc`
 
-The fields of `po.spec.dcc("m", targets=["y", "x0"], half_life=50.0, margins="none", a=0.05, b=0.9, start_rows=50)`:
+The fields of `rp.spec.dcc("m", targets=["y", "x0"], half_life=50.0, margins="none", a=0.05, b=0.9, start_rows=50)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -485,7 +491,7 @@ Under `margins="garch"`, it also writes:
 
 ## `realized`
 
-The fields of `po.spec.realized("m", targets=["y"], half_life=50.0, lm_window=30)`:
+The fields of `rp.spec.realized("m", targets=["y"], half_life=50.0, lm_window=30)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -502,7 +508,7 @@ The fields of `po.spec.realized("m", targets=["y"], half_life=50.0, lm_window=30
 
 ## `power_variation`
 
-The fields of `po.spec.power_variation("m", targets=["y"], half_life=50.0, terms={"rv": {"powers": [2]}, "lrv": {"kernel": "parzen", "bandwidth": 3}})`:
+The fields of `rp.spec.power_variation("m", targets=["y"], half_life=50.0, terms={"rv": {"powers": [2]}, "lrv": {"kernel": "parzen", "bandwidth": 3}})`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -515,7 +521,7 @@ The fields of `po.spec.power_variation("m", targets=["y"], half_life=50.0, terms
 
 ## `tdigest`
 
-The fields of `po.spec.tdigest("m", targets=["y"], quantiles=[0.05, 0.25, 0.95])`:
+The fields of `rp.spec.tdigest("m", targets=["y"], quantiles=[0.05, 0.25, 0.95])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -531,7 +537,7 @@ The fields of `po.spec.tdigest("m", targets=["y"], quantiles=[0.05, 0.25, 0.95])
 
 ## `ddsketch`
 
-The fields of `po.spec.ddsketch("m", targets=["y"], half_life=50.0, quantiles=[0.05, 0.25, 0.95])`:
+The fields of `rp.spec.ddsketch("m", targets=["y"], half_life=50.0, quantiles=[0.05, 0.25, 0.95])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -547,7 +553,7 @@ The fields of `po.spec.ddsketch("m", targets=["y"], half_life=50.0, quantiles=[0
 
 ## `spectral`
 
-The fields of `po.spec.spectral("m", targets=["y"], half_life=50.0, periods=[8.0, 3.0])`:
+The fields of `rp.spec.spectral("m", targets=["y"], half_life=50.0, periods=[8.0, 3.0])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -559,7 +565,7 @@ The fields of `po.spec.spectral("m", targets=["y"], half_life=50.0, periods=[8.0
 
 ## `kmeans`
 
-The fields of `po.spec.kmeans("m", features=["x0", "x1"], half_life=50.0, n_clusters=2)`:
+The fields of `rp.spec.kmeans("m", features=["x0", "x1"], half_life=50.0, n_clusters=2)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -573,7 +579,7 @@ The fields of `po.spec.kmeans("m", features=["x0", "x1"], half_life=50.0, n_clus
 
 ## `micro`
 
-The fields of `po.spec.micro("m", features=["x0", "x1"], half_life=50.0, eps=0.3)`:
+The fields of `rp.spec.micro("m", features=["x0", "x1"], half_life=50.0, eps=0.3)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -590,7 +596,7 @@ The fields of `po.spec.micro("m", features=["x0", "x1"], half_life=50.0, eps=0.3
 
 ## `ew_class`
 
-The fields of `po.spec.ew_class("m", features=["x0"], half_life=50.0, label="y", classes=["a", "b"], precision_prior=1.0)`:
+The fields of `rp.spec.ew_class("m", features=["x0"], half_life=50.0, label="y", classes=["a", "b"], precision_prior=1.0)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -604,7 +610,7 @@ The fields of `po.spec.ew_class("m", features=["x0"], half_life=50.0, label="y",
 
 ## `seqtest`
 
-The fields of `po.spec.seqtest("m", targets=["y"])`:
+The fields of `rp.spec.seqtest("m", targets=["y"])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -618,7 +624,7 @@ The fields of `po.spec.seqtest("m", targets=["y"])`:
 
 ## `corrchange`
 
-The fields of `po.spec.corrchange("m", features=["x0", "x1"], window_rows=20)`:
+The fields of `rp.spec.corrchange("m", features=["x0", "x1"], window_rows=20)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -633,7 +639,7 @@ The fields of `po.spec.corrchange("m", features=["x0", "x1"], window_rows=20)`:
 
 ## `bocpd`
 
-The fields of `po.spec.bocpd("m", features=["x0", "x1"])`:
+The fields of `rp.spec.bocpd("m", features=["x0", "x1"])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -649,7 +655,7 @@ The fields of `po.spec.bocpd("m", features=["x0", "x1"])`:
 
 ## `hmm`
 
-The fields of `po.spec.hmm("m", features=["x0", "x1"], half_life=50.0, n_components=2, precision_prior=0.1)`:
+The fields of `rp.spec.hmm("m", features=["x0", "x1"], half_life=50.0, n_components=2, precision_prior=0.1)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -666,7 +672,7 @@ The fields of `po.spec.hmm("m", features=["x0", "x1"], half_life=50.0, n_compone
 
 ## `hawkes`
 
-The fields of `po.spec.hawkes("m", targets=["y"], half_life=50.0, kernel_decays=[1.0, 5.0])`:
+The fields of `rp.spec.hawkes("m", targets=["y"], half_life=50.0, kernel_decays=[1.0, 5.0])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|

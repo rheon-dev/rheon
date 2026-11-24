@@ -39,6 +39,24 @@ fn extreme(rows: &mut Vec<Row>, s: &mut u64, targets: usize, edit: impl FnOnce(&
 /// scale followed by the bound again (a standardized regressor is then
 /// `(1e100 - mean) / 1e-100`), and a long well-behaved tail.
 fn bounded_script(targets: usize) -> Vec<Row> {
+    bounded_script_with_tail(targets, 30_000)
+}
+
+/// The script with a tail long enough for a moment of order `p` of the
+/// bound to wash out. A row at the bound of weight at the bound leaves
+/// `w |x|^p = 1e(100 + 100 p)` on the sum scale, which needs `(100 (p + 1)
+/// + 6) log₂ 10` half-lives to fall below `1e-6` (1016 at `p = 2`, the
+/// 1000 of [`bounded_script`]'s tail; 2012 at `p = 5`), then the same 500
+/// of margin. A model that keeps such a moment exactly, past the largest
+/// double, keeps it that long: a moment of order 5 is still `1e151` after
+/// [`bounded_script`]'s 1500 half-lives, as the stream's own is.
+fn bounded_script_for_order(targets: usize, p: u32) -> Vec<Row> {
+    let need = ((100.0 * f64::from(p + 1) + 6.0) * 10f64.log2()).ceil();
+    let tail = (HALFLIFE * (need + 500.0)) as usize;
+    bounded_script_with_tail(targets, tail.max(30_000))
+}
+
+fn bounded_script_with_tail(targets: usize, tail: usize) -> Vec<Row> {
     let mut s = 20260901u64;
     let mut rows = Vec::new();
     // At the bound before anything else: the first observation is the `a = 0`
@@ -88,7 +106,7 @@ fn bounded_script(targets: usize) -> Vec<Row> {
     // moment of 1e300 on the sum scale, which needs 1000 half-lives to fall
     // below 1e-6; the rest is margin (measured: ewridge agrees with its twin
     // to 3e-5 after 1000 half-lives and to rounding after 1100).
-    for _ in 0..30_000 {
+    for _ in 0..tail {
         rows.push(nice(&mut s, targets, 1.0));
     }
     rows
@@ -114,6 +132,9 @@ enum Recovery {
     /// on two labelings of the same data, so neither the label nor the
     /// distance of one row is a property two copies share, but the fit is.
     Fit(f64),
+    /// `Twin`, where a slot both withhold (NaN) agrees as well: a model
+    /// whose fit can decline to predict on clean data too.
+    TwinWithheld(f64),
 }
 
 /// The stream layer accepts any finite value with `|v| <= BOUND`, so a model
@@ -160,13 +181,16 @@ fn recovers_over<M: OnlineModel>(rows: &[Row], build: impl Fn() -> M, how: Recov
             continue;
         }
         for (slot, (pa, pb)) in a.pred.iter().zip(&b.pred).enumerate() {
+            if matches!(how, Recovery::TwinWithheld(_)) && pa.is_nan() && pb.is_nan() {
+                continue;
+            }
             assert!(
                 pa.is_finite(),
                 "{kind}: slot {slot} predicts {pa} at row {i} (twin: {pb})"
             );
             let rel = |a: f64, b: f64| (a - b).abs() / (1.0 + b.abs());
             match how {
-                Recovery::Twin(tol) => {
+                Recovery::Twin(tol) | Recovery::TwinWithheld(tol) => {
                     let err = rel(*pa, *pb);
                     assert!(
                         err <= tol,
@@ -199,7 +223,7 @@ fn recovers_over<M: OnlineModel>(rows: &[Row], build: impl Fn() -> M, how: Recov
         }
     }
     match how {
-        Recovery::Twin(_) => {
+        Recovery::Twin(_) | Recovery::TwinWithheld(_) => {
             eprintln!("{kind}: worst relative disagreement with the twin {worst:.2e}")
         }
         Recovery::Tube(_) => eprintln!("{kind}: worst relative error of model or twin {worst:.2e}"),

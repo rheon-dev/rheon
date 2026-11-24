@@ -347,11 +347,12 @@ class ReadinessWarning(RheonWarning, UserWarning):
     rows' spacing ``d`` and weight so far, the ``min_weight`` ceiling is
     ``1 / (1 - 2 ** (-d / half_life))`` times that weight. With a clock,
     ``d`` is known only from the rows, so the ceiling cannot be read from the spec before
-    the rows arrive. A warning on a row of
-    weight 0, or on rows too uneven to project (one row far heavier than the
-    rest, or a stream whose weight is still its first row's), gives no
-    figure. A target the rows stopped carrying gets no figure where rows
-    that each carried it would meet the floor, since its weight falls
+    the rows arrive. A warning on rows too uneven to project (one row far
+    heavier than the rest, or a stream whose weight is still its first
+    row's) gives no figure. A row of weight 0 counts in no clock, so it
+    neither starts nor ends the wait and never carries a warning. A target
+    the rows stopped carrying gets no figure where rows that each carried it
+    would meet the floor, since its weight falls
     toward 0 once the rows stop carrying it.
     """
 

@@ -384,3 +384,62 @@ def test_condition_is_numpys_svd_of_the_scaled_rows(seed, eps, half_life, fit_in
     # of the variance of the first and third features.
     j0 = got["columns"].index("x0")
     assert proportions[-1, j0] > 0.5 and proportions[-1, j0 + 2] > 0.5
+
+
+# --- the streaming lasso's sweep in parts, against scikit-learn --------------
+
+#: Features past the floor at which the lasso's descent sweeps in parts (40,
+#: `lasso/split.rs`), where no oracle reached: every Python test of the
+#: streaming lasso had at most 8 (PLAN 578j, TEST-5).
+WIDE_K = 50
+
+
+def wide_rows(seed: int, n: int = 1500) -> tuple[np.ndarray, np.ndarray]:
+    """``n`` rows of ``WIDE_K`` features correlated through a common factor,
+    and a target on eight of them."""
+    rng = np.random.default_rng([578, 5, seed])
+    x = 0.6 * rng.standard_normal((n, 1)) + rng.standard_normal((n, WIDE_K))
+    beta = np.zeros(WIDE_K)
+    beta[rng.choice(WIDE_K, 8, replace=False)] = rng.uniform(-2.0, 2.0, 8)
+    return x, 1.0 + x @ beta + 0.5 * rng.standard_normal(n)
+
+
+@pytest.mark.parametrize("l1_ratio", [1.0, 0.5])
+@pytest.mark.parametrize("seed", [0, 1])
+def test_the_wide_lasso_is_scikit_learns_on_the_standardized_rows(seed, l1_ratio):
+    """The lasso over 50 features is scikit-learn's ``ElasticNet`` of the
+    same rows: centred, each feature over its population standard deviation,
+    the objective ``1/(2n) |y - Zb|² + α ρ |b|₁ + α (1 - ρ)/2 |b|²`` with no
+    intercept, at each penalty of the path. With no decay (a half-life of
+    1e9 rows) the bank's moments are the rows' plain ones. The coefficients,
+    on the standardized scale, agree to 1e-7 at every penalty."""
+    from sklearn.linear_model import ElasticNet
+
+    x, y = wide_rows(seed)
+    names = [f"x{j}" for j in range(WIDE_K)]
+    path = [0.2, 0.05, 0.01]
+    spec = rp.spec.lasso(
+        "m",
+        targets=["y"],
+        features=names,
+        penalties=path,
+        l1_ratio=l1_ratio,
+        half_life=1e9,
+        min_weight=10.0,
+        max_rows_between_solves=1,
+        max_iter=100_000,
+        tol=1e-14,
+    )
+    df = pl.DataFrame({**{c: x[:, j] for j, c in enumerate(names)}, "y": y})
+    flat = rp.ModelBank([spec]).fit_predict(df)["m"].struct.field("coef").to_list()[-1]
+    s = x.std(axis=0)
+    z = (x - x.mean(axis=0)) / s
+    yc = y - y.mean()
+    kt = WIDE_K + 1
+    for i, alpha in enumerate(path):
+        ours = np.asarray(flat[i * kt + 1 : (i + 1) * kt]) * s
+        sk = ElasticNet(
+            alpha=alpha, l1_ratio=l1_ratio, fit_intercept=False, tol=1e-14, max_iter=1_000_000
+        ).fit(z, yc)
+        assert np.max(np.abs(ours - sk.coef_)) < 1e-7, (alpha, np.max(np.abs(ours - sk.coef_)))
+        assert (ours == 0).sum() == (sk.coef_ == 0).sum(), alpha

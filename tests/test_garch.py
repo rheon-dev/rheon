@@ -22,6 +22,7 @@ import warnings
 import numpy as np
 import polars as pl
 import pytest
+from arch import arch_model
 from arch.univariate.recursions import figarch_weights
 
 import rheon
@@ -30,10 +31,13 @@ from rheon import polars as rp
 TIER = "essential"
 
 
-def _returns(n: int, seed: int, gamma: float = 0.0) -> np.ndarray:
-    """A GJR series at ``(0.05, 0.08, γ, 0.9 - γ/2)``, normal innovations."""
+def _returns(
+    n: int, seed: int, gamma: float = 0.0, alpha: float = 0.08, beta: float = 0.9
+) -> np.ndarray:
+    """A GJR series at ``(0.05, α, γ, β - γ/2)``, normal innovations: by
+    default ``(0.05, 0.08, γ, 0.9 - γ/2)``."""
     rng = np.random.default_rng(seed)
-    w, a, b = 0.05, 0.08, 0.9 - gamma / 2
+    w, a, b = 0.05, alpha, beta - gamma / 2
     s, e, out = 1.0, 0.0, np.empty(n)
     for t, z in enumerate(rng.standard_normal(n + 300)):
         s = w + (a + (gamma if e < 0 else 0.0)) * e * e + b * s
@@ -43,9 +47,9 @@ def _returns(n: int, seed: int, gamma: float = 0.0) -> np.ndarray:
     return out
 
 
-def _frame(n: int, seed: int, gamma: float = 0.0) -> pl.DataFrame:
+def _frame(n: int, seed: int, gamma: float = 0.0, **process) -> pl.DataFrame:
     rng = np.random.default_rng(seed + 1)
-    y = _returns(n, seed, gamma)
+    y = _returns(n, seed, gamma, **process)
     return pl.DataFrame(
         {
             "t": np.arange(n, dtype=float),
@@ -64,27 +68,74 @@ def _out(spec: dict, df: pl.DataFrame) -> pl.DataFrame:
     return rp.ModelBank([spec]).fit_predict(df).unnest("m")
 
 
-@pytest.mark.parametrize("kw", [{}, {"vol": "gjr"}, {"vol": "gjr", "dist": "t"}])
+#: A process whose variance clusters strongly, ``α = 0.2``, ``β = 0.78``: a
+#: start of 100 rows, doubled, identifies it in each group of a stream of
+#: 1,200 rows. At ``(0.08, 0.9)`` the groups of 700 and 600 rows never
+#: started, and the tests over them compared nulls with nulls.
+CLUSTERED = {"alpha": 0.2, "beta": 0.78}
+
+
+def _reports_in_every_group(out: pl.DataFrame, df: pl.DataFrame) -> None:
+    """Each group's variance is a number on some row: the comparisons over
+    it are of numbers, not of the nulls of a start that never came."""
+    m = out.unnest("m") if "m" in out.columns else out
+    counts = (
+        m.select("variance_y")
+        .with_columns(df["g"])
+        .group_by("g")
+        .agg(pl.col("variance_y").is_not_null().sum())
+    )
+    assert counts["variance_y"].min() > 0, counts.sort("g").rows()
+
+
+def _next_variance(vol: str, th: list[float], y: float, s: float) -> float:
+    """The process's variance for the row after one of return ``y`` and
+    variance ``s``, at its parameters ``th`` (a t's shape after them)."""
+    if vol == "garch":
+        return th[0] + th[1] * y * y + th[2] * s
+    if vol == "gjr":
+        return th[0] + (th[1] + (th[2] if y < 0 else 0.0)) * y * y + th[3] * s
+    z = y / math.sqrt(s)
+    return math.exp(
+        th[0] + th[1] * (abs(z) - math.sqrt(2.0 / math.pi)) + th[2] * z + th[3] * math.log(s)
+    )
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {},
+        {"dist": "t"},
+        {"dist": "skewt"},
+        {"variance_targeting": True},
+        {"vol": "gjr"},
+        {"vol": "gjr", "dist": "t"},
+        {"vol": "egarch"},
+    ],
+    ids=["garch", "garch_t", "garch_skewt", "targeted", "gjr", "gjr_t", "egarch"],
+)
 def test_the_variance_is_the_recursion_at_the_reported_parameters(kw):
     """Each row's variance is the recursion from the row before, at the
-    parameters the bank reported after that row, to rounding."""
-    gamma = 0.1 if "vol" in kw else 0.0
+    parameters the bank reported after that row, to rounding: each process,
+    each innovation it takes (a t's and a skewed t's shape follow the
+    process's parameters, and move no variance), and the targeted form,
+    whose reported ``ω`` is ``v̄ (1 − α − β)`` at that row."""
+    vol = kw.get("vol", "garch")
+    gamma = 0.1 if vol != "garch" else 0.0
     # a series whose start of 100 rows, doubled at most twice, tells its
     # process from a constant variance (a start that does not waits)
     df = pl.DataFrame({"y": _returns(1200, 9, gamma)})
     out = _out(_spec(coef_every=0, **kw), df)
     y, s = df["y"].to_numpy(), out["variance_y"].to_numpy()
     coef = out["coef"].to_list()
+    width = {"garch": 3, "gjr": 4, "egarch": 4}[vol] + {"t": 1, "skewt": 2}.get(kw.get("dist"), 0)
     checked = 0
     for t in range(200, 1199):
         th = coef[t]
         if th is None or not np.isfinite(s[t]):
             continue
-        e2 = y[t] * y[t]
-        if len(th) == 3 or "dist" in kw and len(th) == 4 and "vol" not in kw:
-            want = th[0] + th[1] * e2 + th[2] * s[t]
-        else:
-            want = th[0] + (th[1] + (th[2] if y[t] < 0 else 0.0)) * e2 + th[3] * s[t]
+        assert len(th) == width, th
+        want = _next_variance(vol, th, y[t], s[t])
         assert abs(s[t + 1] - want) <= 1e-13 * want, (t, s[t + 1], want)
         checked += 1
     assert checked > 700
@@ -131,20 +182,21 @@ def test_a_rows_variance_is_read_before_the_row():
 
 
 @pytest.mark.parametrize(
-    "kw",
+    ("kw", "seed"),
     [
-        {},
-        {"vol": "egarch", "forecast_rows": [3, 1, 12]},
-        {"vol": "gjr", "dist": "t", "forecast_rows": {"week": 5, "now": 1}},
-        {"vol": "figarch", "truncation": 30, "start_rows": 2000, "forecast_rows": [4]},
+        ({}, 6),
+        ({"vol": "egarch", "forecast_rows": [3, 1, 12]}, 6),
+        ({"vol": "gjr", "dist": "t", "forecast_rows": {"week": 5, "now": 1}}, 7),
+        ({"vol": "figarch", "truncation": 30, "start_rows": 2000, "forecast_rows": [4]}, 6),
     ],
 )
-def test_chunk_invariance(kw):
-    n = 4400 if kw.get("vol") == "figarch" else 700
-    df = _frame(n, 6)
+def test_chunk_invariance(kw, seed):
+    n = 4400 if kw.get("vol") == "figarch" else 1200
+    df = _frame(n, seed, 0.1 if "vol" in kw else 0.0, **CLUSTERED)
     s = _spec(group="g", weight="w", coef_every=0, **kw)
     one = rp.ModelBank([s]).fit_predict(df)
-    for size in (1, 13, 211) if n == 700 else (211, 997):
+    _reports_in_every_group(one, df)
+    for size in (1, 13, 211) if n == 1200 else (211, 997):
         bank = rp.ModelBank([s])
         many = pl.concat([bank.fit_predict(df.slice(i, size)) for i in range(0, n, size)])
         assert one.equals(many, null_equal=True), size
@@ -160,9 +212,12 @@ def test_chunk_invariance(kw):
     ],
 )
 def test_a_save_goes_on_to_the_bit(kw):
-    df = _frame(600, 7)
+    df = _frame(1200, 6, **CLUSTERED)
     s = _spec(group="g", weight="w", **kw)
-    for cut in (1, 150, 330, 599):
+    _reports_in_every_group(rp.ModelBank([s]).fit_predict(df), df)
+    # a save before either group's start, after one's, after both, and on
+    # the last row
+    for cut in (1, 330, 700, 1100, 1199):
         a = rp.ModelBank([s])
         a.fit_predict(df.slice(0, cut))
         buf = io.BytesIO()
@@ -216,6 +271,10 @@ def test_a_weight_scales_nothing_but_the_weight():
     s = _spec(weight="w", coef_every=0)
     a = _out(s, df)
     b = _out(s, df.with_columns(pl.col("w") * 2.0))
+    # the same rows report, and they are numbers: `assert_allclose` passes
+    # NaN against NaN, so a start that never came would pass it too
+    assert a["variance_y"].is_null().equals(b["variance_y"].is_null())
+    assert a["variance_y"].is_not_null().sum() > 300
     np.testing.assert_allclose(a["variance_y"].to_numpy(), b["variance_y"].to_numpy(), rtol=1e-9)
     np.testing.assert_allclose(b["weight_sum"].to_numpy(), 2 * a["weight_sum"].to_numpy())
 
@@ -394,9 +453,15 @@ def test_a_realistic_series_at_the_default_start():
         return c is not None and all(v is not None for v in c)
 
     assert not any(numbers(c) for c in coef[:1999]) and all(numbers(c) for c in coef[1999:])
-    for t in range(1999, 2599):
+    # The first variance reported is the start's filter run over its 2,000
+    # rows at its fit, from `arch`'s backcast: `arch`'s own recursion at
+    # those parameters.
+    fixed = arch_model(y[:2001], mean="Zero", vol="GARCH", p=1, q=1, rescale=False)
+    first = float(fixed.fix(coef[1999]).conditional_volatility[2000] ** 2)
+    assert abs(s[2000] - first) <= 1e-12 * first, (s[2000], first)
+    for t in range(2000, 2599):
         om, a, b = coef[t]
-        want = om + a * y[t] ** 2 + b * s[t] if t >= 2000 else s[t + 1]
+        want = om + a * y[t] ** 2 + b * s[t]
         assert abs(s[t + 1] - want) <= 1e-13 * want, t
     om, a, b = coef[-1]
     assert 0.0 < a < 0.3 and 0.6 < b < 1.0 and a + b < 1.0, coef[-1]

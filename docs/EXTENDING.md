@@ -150,7 +150,7 @@ handle. Each such case overrides a method, and each has its check:
 | emits a `Step` (every model) | **`step_into`**, which the trait requires: every slot of the `Step`'s predictions, its weight and its `extra` written into the caller's `Step` whatever it held -- `pred` by `clear` and `resize` (or the model's own fill), and an `extra`'s vector reused where the buffer already holds that variant (`lasso`'s `lam_selected`, `huber`'s `scale`). A helper that builds the row's answer writes into a `&mut Vec<f64>` too, with a wrapper that returns a new one for `predict`. The bank steps every model through `step_into`, into one `Step` kept per model instance, so a row allocates no answer: a new `Step` a row would be a heap allocation and a free, on Linux a third of the cheapest model's row | `predict_is_the_step_without_the_step` in `tests/model_contract.rs`, which steps a twin through `step_into` on a buffer left with another row's answer (either `extra` variant, of the wrong length) and holds its answer and state to `step`'s bits, and `refuses_unusable_values`; `crates/rheon-bench/tests/allocations.rs` for the count a row |
 | counts a value that is not usable, as `audit` does, where other models refuse it | no `refused_step`; its kind in `model_contract.rs`'s `COUNTS_UNUSABLE`, which `refuses_unusable_values` passes by; an arm in `ModelKind::reads_every_row` (`spec.rs`), so the stream hands it every row, and one in `Instance::reset` (`stream.rs`) if a reset must not rebuild it | the model's own tests of each kind of value; `crates/rheon-polars/tests/audit.rs` for the rows the stream hands it |
 | solves on a schedule, as `ewridge`, `lasso`, `huber` and `quantile` do | **`set_solve_share`** and **`solve_share`**, reaching the cfg's `solve_share`. The spec's default share goes into the cfg when the model is built, and the stream calls `set_solve_share` with the spec's share on every model it restores (`crates/rheon-polars/src/stream.rs`), so a state saved before the rule runs at the spec's cadence | `exactly_the_scheduled_solvers_report_a_solve_share` in `tests/model_contract.rs`, which names the four, and to which it is added |
-| refits its first rows to convergence, as `huber`, `sgd`'s Huber loss, `quantile` and `marginal(bin_stat="huber")` do | a buffer of its first learned rows and a `RefitStatus` a target ([`huber_refit.rs`](../crates/rheon-core/src/huber_refit.rs)), and: a default count beside **`default_refit_rows`** and `default_bin_refit_rows`, with `0` for off; its buffer's bytes through **`refit_reservation`**, against which an arm in **`ModelKind::refit_budget_mib`** (`spec.rs`) bounds a spec's groups under `refit_budget`; arms in `AnyModel::refit_status` and `refit_give_up` (`stream.rs`), which `summary()`'s `refit_given_up` and the budget's notice read; a refit at its pass cap counted in `solve_failures`, and named by `ModelBank.check`'s wording for its kind (`python/rheon/_check.py`, the `solve_failures` finding); a state saved before the refit loading with it off | **no check**: `refit_status`, `refit_give_up` and `refit_budget_mib` end in a catch-all, so a model left out never refits under the budget and reports nothing. Its own test file holds it, as `tests/test_huber_refit.py` and `tests/test_quantile_refit.py` do: the converged fit against a third-party one on the buffer, one chunk or many, a bank saved before, at and after the refit, the activation (the fit moves only after the buffer fills), and the budget giving up the later groups, which `tests/test_summary.py`'s column list pins |
+| refits its first rows to convergence, as `huber`, `sgd`'s Huber loss, `quantile`, `glm`, `expectile` and `marginal(bin_stat="huber")` do | a buffer of its first learned rows and a `RefitStatus` a target ([`huber_refit.rs`](../crates/rheon-core/src/huber_refit.rs)), and: a default count beside **`default_refit_rows`** and `default_bin_refit_rows`, with `0` for off; its buffer's bytes through **`refit_reservation`**, against which an arm in **`ModelKind::refit_budget_mib`** (`spec.rs`) bounds a spec's groups under `refit_budget`; arms in `AnyModel::refit_status` and `refit_give_up` (`stream.rs`), which `summary()`'s `refit_given_up` and the budget's notice read; a refit at its pass cap counted in `solve_failures`, and named by `ModelBank.check`'s wording for its kind (`python/rheon/_check.py`, the `solve_failures` finding); a state saved before the refit loading with it off | **no check**: `refit_status`, `refit_give_up` and `refit_budget_mib` end in a catch-all, so a model left out never refits under the budget and reports nothing. Its own test file holds it, as `tests/test_huber_refit.py` and `tests/test_quantile_refit.py` do: the converged fit against a third-party one on the buffer, one chunk or many, a bank saved before, at and after the refit, the activation (the fit moves only after the buffer fills), and the budget giving up the later groups, which `tests/test_summary.py`'s column list pins |
 | reports the readiness statistics: effective degrees of freedom, each coefficient's data share, a row's leverage | **`error_inflation_into`**, **`error_inflation_gate_into`** (where a bound may stand in below the gate's limit), **`row_error_inflation_into`** and **`support_coef`** (MODELS.md's [Warm-up gates](MODELS.md#warm-up-gates) says what each gates). Which models report them is the table of predicates under [What a model reads for the diagnostics](#what-a-model-reads-for-the-diagnostics), and `Spec::validate` refuses the parameters that read them for every other model, so a new one that reports them is added there | `a_model_without_the_optional_statistics_reports_none_of_them` (`model.rs`) for the defaults; `tests/readiness.rs` for `ewridge` |
 
 **Clear a lag ring on the two events that break it.** The stream calls
@@ -183,8 +183,10 @@ builder that takes `window_budget` is in that test's table.
 in its parametrization.
 
 **Override `target_n_eff_into` in a model that keeps a weight per
-target.** `ewridge`, `lasso`, `kalman`, `huber`, `quantile`, `holt`, `sgd`, `pa`,
-`ftrl` and `rls` keep one. With `target_n_eff_into` overridden, each
+target.** `ewridge`, `lasso`, `kalman`, `huber`, `quantile`, `expectile`,
+`glm`, `holt`, `ar`, `sgd`, `pa`, `ftrl`, `rls`, `garch`, `realized`,
+`power_variation`, `tdigest`, `ddsketch` and `spectral` keep one, and
+`ew_class` keeps the weight of its labeled rows. With `target_n_eff_into` overridden, each
 target's `min_weight` is checked against that target's own weight. The default leaves every target on the shared one, and
 `test_a_sparse_target_warms_up_on_its_own_weight` fails for a model that
 keeps the default. The case that tells is a list of unequal thresholds.
@@ -523,13 +525,27 @@ grid point, and are the cases in `output_index`:
 | `hmm` | a state and its posteriors, `ew_class`'s shape without the labels |
 | `corrchange` | a statistic, a critical value, a flag and a counter, on the rows where a span closes |
 | `bocpd` | a changepoint probability, two run lengths, a predictive mean per feature and a log-likelihood, `loglik` |
+| `hawkes` | each node's intensity before the row's events |
+| `garch` | a variance and a standardized residual per target |
+| `dcc` | a correlation per pair of targets and a `loglik`, with no target of its own |
+| `realized` | the realized measures and the jump test per target, no `coef` |
+| `power_variation` | each term per target, and the count of returns it holds, no `coef` |
+| `tdigest`, `ddsketch` | a quantile and an expected shortfall per level per target, no `coef` |
+| `spectral` | a power per period per target, no `coef` |
+| `pca` | each component's variance, share, loadings and score, no target and no `coef` |
+| `ewm_moments` | one field per term, named by the term, no target and no `coef` |
 
 `coef_fields` names the positions in `coef`, and these are its special cases:
 
 | model | its positions in `coef` |
 |---|---|
 | `holt` | `level`, `trend` |
-| `ew_cov`, `seqtest`, `marginal` and `audit` | none |
+| `ew_cov`, `seqtest`, `marginal`, `rcov`, `corrchange`, `bocpd`, `audit`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ewm_moments` and `spectral` | none |
+| `ar` | its lags, `lag{l}`, between the intercept and the features |
+| `garch` | per target, the process's parameters (`omega`, `alpha`, `beta` for a GARCH(1,1), and the terms another `kind` adds), then the error distribution's shape parameters |
+| `hawkes` | `mu` per node, then an `alpha_<source>_<decay>` per source node and kernel decay |
+| `dcc` | `a`, `b` (and `g` where asymmetric), with no target |
+| `deco` | `rho`, with no target |
 | `kmeans` | `k` positions `cluster{j}` in place of the targets, one coordinate per feature; the center in `coef_index`'s `cluster` column, and no target |
 | `hmm` | `k` positions `state{j}`, one mean per feature; the state in `coef_index`'s `state` column, and no target |
 | `ew_class` | one position per class, named by the class, one coordinate per feature; the class in `coef_index`'s `class` column, and the label column as its target |
@@ -864,20 +880,19 @@ until `docs/FEATURES.md` has the builder's line.
 `test_every_model_has_a_section` and `test_no_field_is_left_undocumented`.
 
 **Bump the model count wherever it is spelled out.** Grep for
-`twenty-two`, `22 model` and `all 22`; on 2026-11-08 the count stood in
-these places:
+`thirty-five`, `35 model` and `all 35` (the count in words and in figures,
+whatever it has become); on 2026-11-24 the count stood in these places:
 
 | file | where | check |
 |---|---|---|
-| `llms.txt` | the *Models* line, "all 22" | `test_llms_txt::test_it_says_how_many_models_there_are` |
-| `README.md` | the models section, "twenty-two models in four families" | **no check** |
+| `llms.txt` | the *Models* line, "all 35" | `test_llms_txt::test_it_says_how_many_models_there_are` |
+| `README.md` | the models section, "thirty-five models in four families" | **no check** |
 | `docs/FEATURES.md` | the contents table's *Models* row | **no check** |
 | `docs/MODELS.md` | the first sentence, and the opener of *The models at a glance* | **no check** |
 | `docs/VERSIONS.md` | the row for the spec constructors | **no check** |
-| `docs/TESTING.md` | the *Terms* table's `a model kind` row, "one of the 22 model types" | **no check** |
-| `docs/TESTING.md` | the `instructions` budget row, "the 22 models" | **no check** |
+| `docs/TESTING.md` | the `instructions` budget row, "a step of each of the 29 models", the models `crates/rheon-bench/src/lib.rs` steps | **no check** |
 | `docs/WRITING.md` | *Plan the map*, on the families | **no check** |
-| `docs/PERFORMANCE.md` | *The table*'s count, "76 over the 22 model kinds' rows", with the cells step 17 adds | **no check** |
+| `docs/PERFORMANCE.md` | *The table*'s count, "106 over the 31 model kinds' rows", with the cells step 17 adds | **no check** |
 | `docs/how-to/choose-a-model.md` | the first sentence | **no check** |
 
 **Add the model to `docs/how-to/choose-a-model.md`** too, where a reader

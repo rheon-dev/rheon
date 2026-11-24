@@ -45,7 +45,7 @@ mechanism.
 | [how-to/fit-hundreds-of-features.md](how-to/fit-hundreds-of-features.md) | your `ewridge` or `ew_cov` reads hundreds or thousands of features — how to add rows to the Gram in blocks with `gram_block_rows` and run that work on idle threads with `gram_threads` |
 | [how-to/bound-memory.md](how-to/bound-memory.md) | your run holds more memory than you can give it, and you want Polars' settings and the robust models' refit budget that bound it |
 | **How-tos: choosing a model and what it reads** | |
-| [how-to/choose-a-model.md](how-to/choose-a-model.md) | you are about to write a spec and do not know which model to name — how to choose the family by your question and the model by your data, and which of the four models that watch for change answers which question |
+| [how-to/choose-a-model.md](how-to/choose-a-model.md) | you are about to write a spec and do not know which model to name — how to choose the family by your question and the model by your data, and which of the models that watch for change answers which question |
 | [how-to/fit-one-model-per-group.md](how-to/fit-one-model-per-group.md) | you want a separate model for each value of a column, such as one per stock, fitted in one pass |
 | [how-to/close-groups.md](how-to/close-groups.md) | your stream keeps bringing new group values — how to set `group_close`, read `closed_groups()`, and write closed rows to a file as the run goes |
 | [how-to/weight-rows.md](how-to/weight-rows.md) | you want some rows to count more than others — how to name a weight column, scale `min_weight` with it, and which models read a weight differently |

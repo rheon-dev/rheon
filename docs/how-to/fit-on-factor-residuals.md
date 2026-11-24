@@ -161,7 +161,7 @@ To check each stage with the diagnostics it asks for (calibration, and
 Newey and West's standard error), see [Check a two-stage
 fit](check-a-two-stage-fit.md).
 
-## If `online.unnest` refuses the output
+## If `rheon.unnest` refuses the output
 
 **`.rheon.unnest` raises Polars' `DuplicateError` while the query is built
 when two columns would get the same name.** That happens where specs write

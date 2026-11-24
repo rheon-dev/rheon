@@ -39,7 +39,7 @@ each row against those before it.
    prior counts as `transition_prior × n_components` transitions, so
    `500.0` at two states counts as 1,000. The matrix learned from the rows
    starts at the given one and moves from it as the counts grow.
-3. **Add the specs to the query with `online.fit_predict(specs)`.**
+3. **Add the specs to the query with `rheon.fit_predict(specs)`.**
 4. **Run the query with `collect()`.**
 5. **Read each row's `state`.** The states are numbered as they were
    seeded, so match them to your regimes on rows you know.
@@ -98,7 +98,7 @@ that mean, so the model is left one state short.
    | give the states with `means` and `covs`, and freeze them with `learn=False` | you know the regimes in advance | the states no longer follow the stream |
    | give a larger `prior_rows` (`precision_prior` under `"tied"`) | you cannot clip the rows | each state's covariance is pulled harder toward the features' pooled variance (toward the covariance it was given, with `covs`); keep `precision_prior` well below the data's variance: with the states held, a ridge of 1.0 on data of variance 1.0 halves every correlation |
 
-2. **Add the spec to the query with `online.fit_predict([hidden])`.**
+2. **Add the spec to the query with `rheon.fit_predict([hidden])`.**
 3. **Run the query with `collect()`.**
 4. **Count the rows each state holds** over a stretch after the extreme
    row.

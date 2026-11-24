@@ -45,7 +45,7 @@ scores from the last loadings.
 3. **Give `max_rows_between_pcas` to cap the rows between refreshes,**
    where a burst of rows can arrive within one `pca_every`. Whichever of the
    two comes first refreshes.
-4. **Add the spec to the query with `online.fit_predict([mv])`.** The
+4. **Add the spec to the query with `rheon.fit_predict([mv])`.** The
    rows gain the spec's output column, `mv`, which holds its fields.
 5. **Unnest `mv` with Polars' `unnest("mv")`.** Its fields become columns.
 6. **Run the query with `collect()`.** Each row then has the `pc0_*`

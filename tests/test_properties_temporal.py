@@ -963,3 +963,45 @@ class TestNanosecondsAreExact:
         assert np.all(np.abs(got - want) <= 1e-12 * want), np.max(
             np.abs(got - want) / np.maximum(want, 1)
         )
+
+
+class TestGarchOnATemporalClock:
+    """`garch` in `TestTemporalClockStreams` reads streams of at most 40
+    rows, short of every start it draws (50 rows or a span), so its every
+    output was null and the suite held nothing of a started fit on a
+    temporal clock (PLAN 578j, TEST-11). Here it reads returns whose start
+    comes, on each kind of temporal clock, with ties and gaps, its start as
+    rows or as a span: one chunk or many, and a save and load at any row,
+    give the same numbers, and the fit has started."""
+
+    @pytest.mark.filterwarnings("ignore::rheon.ReadinessWarning")
+    @STREAMS
+    @given(data=st.data())
+    def test_chunking_and_a_save_change_nothing_once_started(self, data):
+        from test_properties import GARCH_START, _gjr_returns
+
+        dtype = data.draw(clock_dtypes(), label="dtype")
+        step = _step(dtype)
+        n = data.draw(st.integers(GARCH_START + 30, 140), label="rows")
+        gaps = data.draw(st.lists(st.sampled_from([0, 1, 1, 1, 2, 5]), min_size=n, max_size=n))
+        start = data.draw(_instants(step), label="start")
+        instants = np.cumsum([start + gaps[0] * step, *[g * step for g in gaps[1:]]])
+        df = pl.DataFrame(
+            {"t": _column(dtype, np.asarray(instants, dtype=np.int64)), "y": _gjr_returns(n)}
+        )
+        if data.draw(st.booleans(), label="a span"):
+            kw = {"start_span": format_duration(GARCH_START * step)}
+        else:
+            kw = {"start_rows": 50}
+        spec = rp.spec.garch("m", targets=["y"], clock="t", gap_cap=format_duration(8 * step), **kw)
+        one = rp.ModelBank([spec]).fit_predict(df)["m"]
+        bank = rp.ModelBank([spec])
+        edges = _edges(data.draw, df.height)
+        many = pl.concat([bank.fit_predict(df.slice(a, b - a))["m"] for a, b in pairwise(edges)])
+        _assert_same_numbers(one, many)
+        split = data.draw(st.integers(1, n - 1), label="split")
+        kept = rp.ModelBank([spec])
+        head = kept.fit_predict(df.slice(0, split))["m"]
+        tail = rp.ModelBank.load_bytes(kept.save_bytes()).fit_predict(df.slice(split))["m"]
+        _assert_same_numbers(one, pl.concat([head, tail]))
+        assert one.struct.field("variance_y").is_not_null().any(), "the start never came"

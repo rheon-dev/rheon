@@ -106,7 +106,7 @@ const SPECS: &[(&str, &str, &str)] = &[
     (
         "garch",
         r#"{"type": "garch", "vol": "gjr", "dist": "t", "start_rows": 50, "forecast_rows": [3, ["week", 5]]}"#,
-        r#""targets": ["y", "x0"], "features": []"#,
+        r#""targets": ["yg", "x0"], "features": []"#,
     ),
     (
         "dcc",
@@ -373,8 +373,35 @@ fn frame() -> DataFrame {
         .cast(&DataType::Datetime(TimeUnit::Nanoseconds, None))
         .unwrap();
     df!("t" => t, "ts" => ts, "g" => g, "x0" => x0, "x1" => x1, "y" => y, "yb" => yb,
-        "lab" => lab, "w" => w, "mid" => mid, "ti" => ti, "tu" => tu, "s" => s, "xi" => xi)
+        "lab" => lab, "w" => w, "mid" => mid, "ti" => ti, "tu" => tu, "s" => s, "xi" => xi,
+        "yg" => gjr_returns(N))
     .unwrap()
+}
+
+/// `n` returns of a GJR-GARCH(1,1) with Student-t(8) innovations scaled to
+/// unit variance, from a generator of their own: `σ²ₜ = ω + (α + γ·1[rₜ₋₁ <
+/// 0]) r²ₜ₋₁ + β σ²ₜ₋₁`, persistence `α + γ/2 + β = 0.995`. A linear target
+/// such as `y` has no conditional variance, so `garch`'s start, which waits
+/// until a likelihood-ratio test tells the process from a constant variance,
+/// never comes and its state holds no fit to carry across the save.
+fn gjr_returns(n: usize) -> Vec<f64> {
+    let mut r = lcg(31);
+    let mut normal = move || {
+        // Box-Muller from two uniforms in (0, 1].
+        let (u, v) = ((r() + 1.0) / 2.0, (r() + 1.0) / 2.0);
+        (-2.0 * (1.0 - u).ln()).sqrt() * (std::f64::consts::TAU * v).cos()
+    };
+    let (omega, alpha, gamma, beta, nu) = (0.01, 0.10, 0.15, 0.82, 8.0);
+    let (mut var, mut prev) = (omega / (1.0 - alpha - gamma / 2.0 - beta), 0.0f64);
+    (0..n)
+        .map(|_| {
+            var = omega + (alpha + if prev < 0.0 { gamma } else { 0.0 }) * prev * prev + beta * var;
+            let chi2: f64 = (0..nu as usize).map(|_| normal().powi(2)).sum();
+            let z = normal() / (chi2 / nu).sqrt() * ((nu - 2.0) / nu).sqrt();
+            prev = var.sqrt() * z;
+            prev
+        })
+        .collect()
 }
 
 /// The `refresh_time` stream: three series ticking at their own pace on a
@@ -689,6 +716,34 @@ fn loads_a_state_written_on_another_os() {
         &the_rest(first_part()),
         TOL,
     );
+}
+
+/// The `garch` spec has started before the save and goes on after it, so
+/// the hand-off carries a fitted state (the parameters, their curvature,
+/// the lags and the forecast), not the rows of one still waiting. On `y`,
+/// a linear target, it never started (PLAN 578j, TEST-2).
+#[test]
+fn garch_carries_a_started_fit_across_the_save() {
+    let df = frame();
+    let mut bank = Bank::new(specs()).unwrap();
+    let at = SPECS.iter().position(|(n, _, _)| *n == "garch").unwrap();
+    let variance = |cols: &[Column]| {
+        let s = cols[at].as_materialized_series().struct_().unwrap().clone();
+        let v = s.field_by_name("variance_yg").unwrap();
+        let v = v.f64().unwrap();
+        v.iter()
+            .flatten()
+            .filter(|x| x.is_finite() && *x > 0.0)
+            .count()
+    };
+    let before = variance(&bank.fit_predict(&df.slice(0, SPLIT)).unwrap());
+    let after = variance(
+        &bank
+            .fit_predict(&df.slice(SPLIT as i64, N - SPLIT))
+            .unwrap(),
+    );
+    assert!(before > 0, "garch starts before the save");
+    assert_eq!(after, N - SPLIT, "garch predicts every row after the save");
 }
 
 /// Writes the file CI hands to the other OS. Run with

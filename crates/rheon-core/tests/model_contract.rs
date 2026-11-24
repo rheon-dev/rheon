@@ -27,3 +27,4 @@ include!("model_contract/predict_is_the_step.rs");
 include!("model_contract/unusable_values.rs");
 include!("model_contract/lower_floor.rs");
 include!("model_contract/generated.rs");
+include!("model_contract/recovery_since_2_0.rs");

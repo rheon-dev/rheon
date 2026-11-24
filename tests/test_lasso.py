@@ -404,3 +404,36 @@ def test_select_half_life_given_as_the_half_life_is_the_default():
     assert default.equals(named, null_equal=True)
     other, _ = _rel_run(rp.spec.lasso, df, penalties=path, select_half_life=20.0)
     assert not other["penalty_selected_y"].equals(default["penalty_selected_y"])
+
+
+def test_a_wide_lasso_is_the_same_in_chunks_after_a_save_and_in_a_window():
+    """Fifty features, past the floor of the descent's sweep in parts (40):
+    one chunk or many, and a save and load at any row, give the same
+    numbers, coefficients included, decayed and in a window (PLAN 578j,
+    TEST-5: no Python test of the lasso had more than eight features)."""
+    rng = np.random.default_rng(5785)
+    n, k = 260, 50
+    x = 0.5 * rng.standard_normal((n, 1)) + rng.standard_normal((n, k))
+    y = x[:, :6] @ np.array([2.0, -1.0, 0.5, 0.0, 1.5, -0.7]) + 0.3 * rng.standard_normal(n)
+    names = [f"x{j}" for j in range(k)]
+    df = pl.DataFrame({**{c: x[:, j] for j, c in enumerate(names)}, "y": y})
+    for kw in ({"half_life": 100.0}, {"half_life": float("inf"), "window_size": 80.0}):
+        spec = _spec([0.2, 0.02], targets=["y"], features=names, min_weight=60.0, **kw)
+        one = rp.ModelBank([spec]).fit_predict(df)["m"]
+        assert one.struct.field("pred_y__p0.02").is_not_null().sum() > 100, kw
+        bank = rp.ModelBank([spec])
+        many = pl.concat([bank.fit_predict(df.slice(i, 37))["m"] for i in range(0, n, 37)])
+        coef = one.struct.field("coef")
+        keep = coef.is_not_null()
+        assert many.struct.field("coef").filter(keep).equals(coef.filter(keep)), kw
+        assert (
+            one.struct.unnest()
+            .drop("coef")
+            .equals(many.struct.unnest().drop("coef"), null_equal=True)
+        ), kw
+        for split in (61, 199):
+            a = rp.ModelBank([spec])
+            a.fit_predict(df.slice(0, split))
+            b = rp.ModelBank.load_bytes(a.save_bytes(), specs=[spec])
+            rest = df.slice(split)
+            assert a.fit_predict(rest)["m"].equals(b.fit_predict(rest)["m"]), (kw, split)

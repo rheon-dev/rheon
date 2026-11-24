@@ -210,7 +210,7 @@ than a stable sort's. Sorted by one key, none did. For a join with
 `maintain_order="left"`, the check reads only its left input. A query
 Polars cannot write out in its serialized form passes without a warning.
 The check reads the query that `fit`, `fit_predict_batches` and a query's
-`online` calls are given, so the frames your own loop passes are not
+`rheon` calls are given, so the frames your own loop passes are not
 checked. For a query whose order you know, silence the warning with
 `warnings.simplefilter("ignore", rp.OrderNotGuaranteedWarning)`.
 

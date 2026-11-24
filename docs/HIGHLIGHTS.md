@@ -304,7 +304,7 @@ thousand is followed by a jump of 50.
 9. **In a fresh Python process, load the state, and drop the rows it has
    read** (learned, or held for their embargo) with `bank.skip_learned`.
 10. **Resume from the state on the rows that remain,** with the query's
-    `online.fit_predict(load_state=..., save_state=...)`, which saves the
+    `rheon.fit_predict(load_state=..., save_state=...)`, which saves the
     state again when the run ends, and write the predictions with
     `sink_parquet`.
 11. **Run one unbroken query over every row with the same specs, and

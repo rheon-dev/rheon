@@ -319,7 +319,7 @@ outweigh them, as they would with no refit.
 **A target's rows are held until its refit, and a
 [group](../GLOSSARY.md#the-model-bank-and-what-it-reads) too short to
 reach the count holds them to its end.** Rows that only age a target
-(its value null or its weight 0) are held as runs, one run for
+(its value null) are held as runs, one run for
 consecutive such rows at the same [clock](../GLOSSARY.md#time) step. A target with more than 4
 runs for each row of its count gives its refit up and keeps its one-pass
 fit. Under a regular clock that never happens, since a gap of any length

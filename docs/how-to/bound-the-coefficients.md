@@ -47,7 +47,7 @@ their total:**
 2. **Give `coef_sum` for the slopes' total,** where they must add up to a
    constant.
 3. **Fit with `bank.fit_predict(...)`, or with a query's
-   `online.fit_predict(...)`.** Each row's `coef` field holds the bounded
+   `rheon.fit_predict(...)`.** Each row's `coef` field holds the bounded
    coefficients, the intercept first.
 
 This code uses `df` from [Example data](../EXAMPLE-DATA.md):
