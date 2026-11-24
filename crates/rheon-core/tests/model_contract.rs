@@ -3096,6 +3096,14 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
         // `predict_with`, not `predict`: two models read a number out of
         // the targets slot, and the parity that matters is against the
         // answer the step gives for the same row (C1).
+        // The targets a skewed t withholds before this row (its reason is
+        // read from the state the row is predicted from).
+        let withheld: Vec<bool> = match &m.state().model {
+            ModelState::DistFit(f) if skewt => {
+                (0..targets).map(|j| f.withheld(j).is_some()).collect()
+            }
+            _ => Vec::new(),
+        };
         let p = m.predict_with(&x, &y, d);
         let step = m.step(&x, &y, d, w);
         same_step(kind, i, &p, &step);
@@ -3112,29 +3120,33 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
             "{kind}: row {i}: step_into left another state than step"
         );
         let flagged_only = |slot: usize| ONLY_ON_A_FLAG.contains(&(kind, slot));
-        if step
-            .pred
-            .iter()
-            .enumerate()
-            .all(|(slot, v)| v.is_finite() || flagged_only(slot))
-        {
+        let all_ready = step.pred.iter().enumerate().all(|(slot, v)| {
+            v.is_finite()
+                    || flagged_only(slot)
+                    // A skewed t whose skew the data call normal reports an
+                    // infinite `df`: the tail is the normal's, by design.
+                    || (skewt && slot == 2 && *v == f64::INFINITY)
+        });
+        if all_ready {
             ready += 1;
+        } else if skewt {
+            // A row a skewed t does not report on must have a reason, per
+            // target: the target is withheld, or its own value is missing
+            // (`pit` and `log_score` score it and need it).
+            let explained = (0..targets).any(|j| {
+                withheld.get(j).copied().unwrap_or(false) || y.get(j).copied().flatten().is_none()
+            });
+            assert!(
+                explained,
+                "{kind}: row {i}: not every slot ready, with no withheld target and no missing value"
+            );
         }
     }
     // The stream must actually have exercised the ready path, or the test
     // would pass on NaN == NaN alone. A model that reports only where a
     // span closes has far fewer such rows, and that is the point of it:
     // `SPARSE_OUTPUT` says how many are enough.
-    // `dist_fit`'s skewed t starts once its moments pin the scale and the
-    // skew to a standard error of 1/4, about 35 rows of equal weight: the
-    // half-life of 20 holds that on this stream's missing targets, uneven
-    // weights and gaps only now and then (5 and 6 rows of 400 report every
-    // slot, its location fitted and fixed, and about 40 more `loc` and
-    // `scale`). Its own tests hold the parity on a longer half-life
-    // (`dist_fit::skewt_fit`).
-    let want = if skewt {
-        3
-    } else if SPARSE_OUTPUT.contains(&kind) {
+    let want = if SPARSE_OUTPUT.contains(&kind) {
         10
     } else {
         300

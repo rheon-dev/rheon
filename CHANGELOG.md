@@ -91,6 +91,22 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`dist_fit`: a distribution fitted to each target, exponentially weighted**
+  (PLAN 558). `family` is `"normal"`, `"t"` or `"skewt"`. The normal is the
+  weighted mean and variance. The t is Student's t, fitted a row at a time by
+  Newton steps on its weighted likelihood, with a convergence guard and a
+  tail test that withholds `df` as `shape_unidentified` while the data cannot
+  tell it from the normal. The skewed t is Hansen's (as in `arch`), learning
+  the skew `lambda` as well and withholding on a joint test of `(df, lambda)`
+  against the normal. Each row gets `loc`, `scale`, the shape, quantiles,
+  lower-tail expected shortfall, `pit` and `log_score`, all from the fit
+  before the row. A withheld row reports `withheld_reason`, and under
+  `shape_unidentified` its location and scale; the rest is empty. The fit is checked against `statsmodels` (normal) and
+  `scipy`/`arch` (t and skewed t) on the weighted window. Its limit: a
+  skewed t whose skew is near its bound (`|lambda|` near 0.99) withholds
+  26% to 36% of rows as `not_converged`, against 6% at 0.9 (see the
+  `dist_fit` section of `docs/MODELS.md`).
+
 - **`rp.stream.merge`: streams that each run in clock order, merged into one
   stream in clock order** (PLAN 541). It takes any number of frames or
   queries, by position or in a dict of name to frame, and gives every row

@@ -268,6 +268,12 @@ def dist_fit(
     ``κ = √(1 - 2η)`` and ``t_df`` the standard t's density, ``P(m) = -κ
     (1 + η τ²) / (1 - η) t_df(τ)`` at ``τ = m / κ``.
 
+    Near the bound of the skew the fit converges slowly, and the rows it has
+    not converged on are withheld as ``not_converged``. On Hansen streams with
+    ``df = 5``, over 10 streams of 6,000 rows at a half-life of 1,500, that was
+    10% of rows at ``lambda = 0.95``, 26% at 0.98 and 32% at 0.99. At 0 it was
+    under 1%. Those rows report no fit; ``withheld_reason_<t>`` says so.
+
     .. rubric:: Example
 
     This code fits a normal to a series of mean 5 and standard deviation 2,

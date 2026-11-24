@@ -3213,6 +3213,15 @@ streams). The fit then spends half-lives walking back, and the convergence
 check withholds it all that time: 3,544 rows in 60 normal streams of 3,000,
 against none from `λ₀ = 0`.
 
+**Where the skew nears its bound.** The convergence check is strictest where
+`λ` is near ±0.99, and the rows it withholds report no fit. On Hansen
+streams with `η = 0.2` (`df = 5`), the share of rows withheld as
+`not_converged` was measured over 10 streams of 6,000 rows each, at a
+half-life of 1,500. It was 0.6% at `λ = 0`, 2.5% at 0.5 and 6.1% at 0.9.
+It was 10.3% at 0.95, 26.0% at 0.98 and 31.8% at 0.99. At `λ = 0.99` it was
+36.0% for `η = 0.1` and 32.7% for `η = 0.3`. Such a series is withheld for
+those rows rather than reported with a fit that has not converged.
+
 The quantiles, shortfall, `pit` and `log_score` are the t's on each half
 of `x`, rescaled. `not_converged` withholds as under the t. The shape is
 withheld with `shape_unidentified` while a joint Wald test cannot tell `(η,
