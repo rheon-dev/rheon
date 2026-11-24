@@ -243,9 +243,12 @@ const COUNTS_UNUSABLE: &[&str] = &["audit"];
 /// test writes its statistic where the span closes, and `garch`'s start of 50
 /// rows (a cap too small to double it) waits until a buffer's rows tell its
 /// variance process from a constant one (PLAN 548), so it reports from some
-/// buffer after the first -- so the predict-parity helper cannot ask for 300
-/// rows with every slot ready.
-const SPARSE_OUTPUT: &[&str] = &["corrchange", "garch"];
+/// buffer after the first; `dist_fit`'s t withholds its tail's slots until
+/// the rows tell the tail from the normal's (PLAN 558, part 5), which the
+/// few rows a half-life of 20 holds do on about half of the stream's rows
+/// -- so the predict-parity helper cannot ask for 300 rows with every slot
+/// ready.
+const SPARSE_OUTPUT: &[&str] = &["corrchange", "garch", "dist_fit"];
 
 /// The models whose `n_eff` is every row's weight summed, with no decay:
 /// `audit`, a record of the rows; `bocpd`, whose recursion over run lengths
@@ -3053,6 +3056,15 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
                     return Some(*e);
                 }
                 let lin = 0.5 * (j as f64 + 1.0) + x[0] - 0.5 * x[1] + 0.1 * lcg(&mut s);
+                // `dist_fit`'s t reports its tail once the data tell it from
+                // the normal's, which the few rows a half-life of 20 holds
+                // do only for a heavy one: a normal over an exponential to
+                // the power ¾, of tail index 4/3.
+                if kind == "dist_fit" {
+                    let z = (0..12).map(|_| 0.5 * lcg(&mut s)).sum::<f64>();
+                    let e = -lcg(&mut s).abs().max(1e-300).ln();
+                    return Some(lin + z / e);
+                }
                 Some(if binary { f64::from(lin > 0.5) } else { lin })
             })
             .collect();
@@ -6411,6 +6423,52 @@ fn dist_fit() {
     };
     let r = probe_with(DistFit::new(c).unwrap(), 2, Some(&DistFit::n_eff));
     assert!(r.roundtrips);
+}
+
+#[test]
+fn dist_fit_t() {
+    // Student's t: loc, scale, df, two quantiles, one shortfall, the PIT and
+    // the log score a target; `n_eff` the decayed weight of every row.
+    let t = |n_targets, floc| DistFitCfg {
+        n_targets,
+        family: DistFamily::StudentT,
+        floc,
+        ..dist_fit_cfg()
+    };
+    let r = probe_with(DistFit::new(t(1, None)).unwrap(), 1, Some(&DistFit::n_eff));
+    assert_eq!(r.kind, "dist_fit");
+    assert_eq!(r.n_outputs, 8);
+    assert_eq!(r.pred_len, 8);
+    assert!(r.roundtrips);
+    let r = probe_with(
+        DistFit::new(t(2, Some(0.5))).unwrap(),
+        2,
+        Some(&DistFit::n_eff),
+    );
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn dist_fit_t_predict_is_the_step() {
+    for floc in [None, Some(-1.0)] {
+        predict_is_the_step_without_the_step(
+            || {
+                // No shortfall: on the stream's heavy tail the fit's `ν`
+                // meets its bound of 1 on some rows, where the mean, and so
+                // the shortfall, is −∞, never ready.
+                DistFit::new(DistFitCfg {
+                    n_targets: 1,
+                    family: DistFamily::StudentT,
+                    es_levels: vec![],
+                    floc,
+                    ..dist_fit_cfg()
+                })
+                .unwrap()
+            },
+            1,
+            false,
+        );
+    }
 }
 
 #[test]

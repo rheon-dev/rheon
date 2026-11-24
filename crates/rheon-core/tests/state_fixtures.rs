@@ -1466,7 +1466,21 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 117] = [
+    const FORMS: [(&str, &[&str]); 122] = [
+        // Schema 72, PLAN 558 part 5: `dist_fit`'s t, a target's started
+        // fit (its parameters, the surrogate's gradient and curvature) and a
+        // target still on its moments, under a fitted and a fixed location.
+        (
+            "dist_fit_t",
+            &["model", "DistFit", "t", "0", "fit", "theta"],
+        ),
+        ("dist_fit_t", &["model", "DistFit", "t", "0", "fit", "grad"]),
+        ("dist_fit_t", &["model", "DistFit", "t", "0", "fit", "curv"]),
+        ("dist_fit_t", &["model", "DistFit", "t", "1", "c4"]),
+        (
+            "dist_fit_t_floc",
+            &["model", "DistFit", "t", "1", "fit", "theta"],
+        ),
         // Schema 70 (rule 5's twenty-second exception): the stabilized
         // prior's `ŝ` and `V` under `full` in each form and under `diag`,
         // the factor form's `f`, and a spec's own `prior_rows`.
@@ -1728,6 +1742,14 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         let first = at(&v, &["model", variant, "refit", "0", "first"]).expect("a first stamp");
         assert!(!first.is_nil(), "{name}: no first stamp");
     }
+    // `dist_fit_t`'s second target joined late: its moments without a fit.
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "dist_fit_t")
+        .expect("dist_fit_t");
+    let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let fit = at(&v, &["model", "DistFit", "t", "1", "fit"]).expect("the second target's fit");
+    assert!(fit.is_nil(), "dist_fit_t: the second target has started");
     // kmeans' warm-up's first stamp (task 538, part 2), the first row's.
     let f = frozen::ALL
         .iter()

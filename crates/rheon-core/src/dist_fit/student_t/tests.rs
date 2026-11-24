@@ -179,3 +179,83 @@ fn the_density_and_shortfall_integrate() {
     }
     assert_eq!(lower_es(0.05, 1.0), f64::NEG_INFINITY);
 }
+
+/// `A′` against a central difference of `A`, either side of the series'
+/// switch.
+#[test]
+fn the_score_constants_derivative_is_its_slope() {
+    for eta in [1e-4, 0.01, 0.031, 0.0315, 0.033, 0.1, 0.5, 1.0] {
+        // A's closed form cancels to about 1e-13 near the switch: a step of
+        // 1e-4 η keeps that below the tolerance.
+        let h = 1e-4 * eta;
+        let num = (score_const(eta + h) - score_const(eta - h)) / (2.0 * h);
+        let got = score_const_deriv(eta);
+        assert!(
+            (got - num).abs() < 1e-6 * num.abs().max(1.0),
+            "{eta}: {got} {num}"
+        );
+    }
+    assert_eq!(score_const_deriv(0.0), 0.0);
+}
+
+/// The observed information against central differences of the scores, in
+/// every coordinate, across both branches of `H` and the series' switch.
+#[test]
+fn the_observed_information_is_the_scores_slope() {
+    for eta in [0.0, 1e-7, 1e-3, 0.02, 0.0315, 0.033, 0.1, 0.4, 1.0] {
+        for z in [-30.0, -4.0, -1.3, -0.2, 0.05, 0.9, 2.5, 7.0] {
+            let j = observed_info(z, eta);
+            let h = 1e-6;
+            // ∂/∂loc = −∂/∂z / scale, ∂/∂ln s = −z ∂/∂z (scale 1)
+            let sp = scores(z + h, eta);
+            let sm = scores(z - h, eta);
+            let dz: Vec<f64> = (0..3).map(|k| (sp[k] - sm[k]) / (2.0 * h)).collect();
+            let s = scores(z, eta);
+            // the loc score is in units of 1/scale: ∂(s_loc/scale)/∂ln s
+            // = −s_loc − z ∂s_loc/∂z
+            let tol = |v: f64| 1e-5 * v.abs().max(1.0);
+            assert!((j[0] - dz[0]).abs() < tol(j[0]), "mm {eta} {z}");
+            assert!(
+                (j[1] - (s[0] + z * dz[0])).abs() < tol(j[1]),
+                "ms {eta} {z}"
+            );
+            assert!((j[3] - z * dz[1]).abs() < tol(j[3]), "ss {eta} {z}");
+            let he = 1e-6 * eta.max(1e-3);
+            let lo = (eta - he).max(0.0);
+            let (ep, em) = (scores(z, eta + he), scores(z, lo));
+            let de: Vec<f64> = (0..3).map(|k| (ep[k] - em[k]) / (eta + he - lo)).collect();
+            assert!((j[2] + de[0]).abs() < tol(j[2]), "me {eta} {z}");
+            assert!((j[4] + de[1]).abs() < tol(j[4]), "se {eta} {z}");
+            assert!(
+                (j[5] + de[2]).abs() < 1e-4 * j[5].abs().max(1.0),
+                "ee {eta} {z}: {} {}",
+                j[5],
+                -de[2]
+            );
+        }
+    }
+}
+
+/// The observed information's mean under the density is the expected one.
+#[test]
+fn the_observed_informations_mean_is_the_expected() {
+    for eta in [0.0, 1e-3, 0.03, 0.05, 0.1, 0.2] {
+        let (h, lim) = (2e-3, 400.0);
+        let mut acc = [0.0f64; 6];
+        let mut z = -lim + 0.5 * h;
+        while z < lim {
+            let f = libm::exp(log_density(z, eta)) * h;
+            for (a, v) in acc.iter_mut().zip(observed_info(z, eta)) {
+                *a += f * v;
+            }
+            z += h;
+        }
+        let [mm, ss, se, ee] = expected_info(eta);
+        for (got, want) in [(acc[0], mm), (acc[3], ss), (acc[4], se), (acc[5], ee)] {
+            assert!((got - want).abs() < 1e-4 * want, "{eta}: {got} {want}");
+        }
+        for k in [1, 2] {
+            assert!(acc[k].abs() < 1e-6, "{eta} {k}: {}", acc[k]);
+        }
+    }
+}

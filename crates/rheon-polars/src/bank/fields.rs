@@ -1208,11 +1208,12 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
         return fields;
     }
     // dist_fit predicts no target's value: per target, the fit's `loc` and
-    // `scale`, a quantile `q_<level>` per level, a lower-tail shortfall
-    // `es_<level>` per level, the row's `pit` and `log_score`, then why the
-    // target reports nothing, all read before the row is learned
-    // (`DistFitRows`); then `n_eff`. No `coef`.
+    // `scale`, the t's `df`, a quantile `q_<level>` per level, a lower-tail
+    // shortfall `es_<level>` per level, the row's `pit` and `log_score`,
+    // then why the target reports nothing, all read before the row is
+    // learned (`DistFitRows`); then `n_eff`. No `coef`.
     if let crate::ModelKind::DistFit {
+        family,
         quantiles,
         es_levels,
         ..
@@ -1222,11 +1223,18 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
             quantiles.as_deref().unwrap_or_default(),
             es_levels.as_deref().unwrap_or_default(),
         );
-        let reasons: Vec<String> = crate::stream::DIST_WITHHELD
+        let is_t = family.as_deref() == Some("t");
+        let core_family = if is_t {
+            rheon_core::DistFamily::StudentT
+        } else {
+            rheon_core::DistFamily::Normal
+        };
+        let reasons: Vec<String> = crate::stream::dist_withheld(core_family)
             .iter()
             .map(|r| r.to_string())
             .collect();
-        let n_slots = 5 + qs.len() + es.len();
+        let shape = usize::from(is_t);
+        let n_slots = 5 + shape + qs.len() + es.len();
         let mut fields = Vec::new();
         for (mi, (suffix, d)) in decays.iter().enumerate() {
             let base = mi * spec.targets.len() * n_slots;
@@ -1240,16 +1248,23 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 };
                 fields.push(stat("loc", "loc", 0));
                 fields.push(stat("scale", "scale", 1));
+                if is_t {
+                    fields.push(stat("df", "df", 2));
+                }
                 let levels = qs
                     .iter()
                     .map(|p| ("q", *p))
                     .chain(es.iter().map(|p| ("es", *p)));
                 for (i, (kind, p)) in levels.enumerate() {
-                    let mut f = stat(&format!("{kind}{}", crate::spec::num_label(p)), kind, 2 + i);
+                    let mut f = stat(
+                        &format!("{kind}{}", crate::spec::num_label(p)),
+                        kind,
+                        2 + shape + i,
+                    );
                     f.quantile = Some(p);
                     fields.push(f);
                 }
-                let tail = 2 + qs.len() + es.len();
+                let tail = 2 + shape + qs.len() + es.len();
                 fields.push(stat("pit", "pit", tail));
                 fields.push(stat("log_score", "log_score", tail + 1));
                 fields.push(

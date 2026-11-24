@@ -8,8 +8,24 @@
 use rheon_core::{DistFit, DistFitCfg, DistWithheld, OnlineModel, State, StateError, Step};
 
 /// The reasons a `withheld_reason_<t>` field takes, in the order of the
-/// codes the slot carries.
-pub const DIST_WITHHELD: [&str; 3] = ["no_weight", "min_weight", "degenerate_variance"];
+/// codes the slot carries: the normal's are the first three, and the t adds
+/// the last two.
+pub const DIST_WITHHELD: [&str; 5] = [
+    "no_weight",
+    "min_weight",
+    "degenerate_variance",
+    "not_converged",
+    "shape_unidentified",
+];
+
+/// The reasons a family's `withheld_reason_<t>` takes: [`DIST_WITHHELD`]'s
+/// first three under the normal, all five under the t.
+pub fn dist_withheld(family: rheon_core::DistFamily) -> &'static [&'static str] {
+    match family {
+        rheon_core::DistFamily::StudentT => &DIST_WITHHELD,
+        _ => &DIST_WITHHELD[..3],
+    }
+}
 
 /// The reason's code in [`DIST_WITHHELD`], as the slot carries it; NaN, a
 /// null, while the target reports its fit.
@@ -153,6 +169,8 @@ mod tests {
             DistWithheld::NoWeight,
             DistWithheld::MinWeight,
             DistWithheld::DegenerateVariance,
+            DistWithheld::NotConverged,
+            DistWithheld::ShapeUnidentified,
         ]
         .into_iter()
         .enumerate()

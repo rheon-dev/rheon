@@ -116,7 +116,11 @@ MEANING: dict[str, str] = {
     "std_resid_<t>": "`<t>` over the square root of its variance on this row",
     "forecast_<t>": "the variance of `<t>` `horizon - 1` rows past this one, from the same rows",
     "loc_<t>": "the location of the distribution fitted to `<t>`, from the rows before this one",
-    "scale_<t>": "the scale of that fit: the normal's standard deviation",
+    "scale_<t>": (
+        "the scale of that fit: the normal's standard deviation, or the t's scale as "
+        "`scipy.stats.t` has it"
+    ),
+    "df_<t>": 'the degrees of freedom of the t fitted to `<t>` (`family="t"` only)',
     "q<level>_<t>": "the fit's quantile of `<t>` at `<level>`, one of `quantiles`",
     "es<level>_<t>": (
         "the fit's lower-tail expected shortfall of `<t>` at `<level>`, one of `es_levels`: the "
@@ -126,7 +130,8 @@ MEANING: dict[str, str] = {
     "log_score_<t>": "the log of the fit's density at the row's own `<t>`",
     "withheld_reason_<t>": (
         "why `<t>`'s fit reports nothing on this row: `no_weight`, `min_weight` or "
-        "`degenerate_variance` (a scale of 0)"
+        '`degenerate_variance` (a scale of 0); under `family="t"`, `not_converged`, or '
+        "`shape_unidentified`, which leaves `loc_<t>` and `scale_<t>`"
     ),
     "u": (
         "the equicorrelation this row alone implies"
@@ -218,10 +223,11 @@ ALSO_NULL: dict[str, str] = {
     "forecast_<t>": "where the variance is null",
     "loc_<t>": "while withheld, and where `withheld_reason_<t>` names a reason",
     "scale_<t>": "where `loc_<t>` is",
-    "q<level>_<t>": "where `loc_<t>` is",
-    "es<level>_<t>": "where `loc_<t>` is",
-    "pit_<t>": "where `loc_<t>` is, and where `<t>` is",
-    "log_score_<t>": "where `loc_<t>` is, and where `<t>` is",
+    "df_<t>": "where `q<level>_<t>` is",
+    "q<level>_<t>": "where `loc_<t>` is, and under `shape_unidentified`",
+    "es<level>_<t>": "where `q<level>_<t>` is",
+    "pit_<t>": "where `q<level>_<t>` is, and where `<t>` is",
+    "log_score_<t>": "where `q<level>_<t>` is, and where `<t>` is",
     "withheld_reason_<t>": "where `<t>`'s fit reports, and while withheld",
     "u": (
         "while withheld, where fewer than two of the block's columns have a positive variance "
@@ -679,6 +685,7 @@ def stem(field: str, targets: tuple[str, ...], features: tuple[str, ...]) -> str
             "scale",
             "pit",
             "log_score",
+            "df",
             "withheld_reason",
         ):
             if base == f"{pre}_{t}":

@@ -234,6 +234,110 @@ def test_refusals(kw, says):
 
 def test_family_and_features_are_refused():
     with pytest.raises(ValueError, match="family"):
-        rp.spec.dist_fit("m", targets=["y"], half_life=10.0, family="t")  # type: ignore[arg-type]
+        rp.spec.dist_fit("m", targets=["y"], half_life=10.0, family="skewt")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="features"):
         rp.spec.dist_fit("m", targets=["y"], features=["x"])  # type: ignore[call-arg]
+
+
+# Student's t: what the bank owes it, as the normal's tests above hold the
+# normal. Its fit against scipy's weighted maximum is in
+# ``tests/test_second_opinion_t.py``.
+
+
+def _t_frame(n: int, seed: int) -> pl.DataFrame:
+    rng = np.random.default_rng(seed)
+    return pl.DataFrame(
+        {
+            "t": np.cumsum(rng.exponential(1.0, n)),
+            "g": np.where(np.arange(n) % 3 == 0, "a", "b"),
+            "y": 3.0 + 1.5 * rng.standard_t(3, n),
+            "z": np.where(rng.uniform(size=n) < 0.1, np.nan, -2.0 + 0.5 * rng.standard_t(5, n)),
+            "w": np.where(rng.uniform(size=n) < 0.1, 0.0, rng.uniform(0.5, 2.0, n)),
+        }
+    ).with_columns(pl.col("z").fill_nan(None))
+
+
+def _t_spec(**kw) -> dict:
+    return _spec(family="t", half_life=kw.pop("half_life", 300.0), **kw)
+
+
+def test_t_chunk_invariance_and_a_save_to_the_bit():
+    df = _t_frame(1500, 11)
+    s = _t_spec(targets=["y", "z"], group="g", weight="w", clock="t", gap_cap=5.0)
+    one = rp.ModelBank([s]).fit_predict(df)
+    reasons = one.unnest("m")["withheld_reason_y"].cast(pl.String).to_list()
+    assert {None, "not_converged", "shape_unidentified"} <= set(reasons)
+    for size in (1, 37, 500):
+        bank = rp.ModelBank([s])
+        many = pl.concat([bank.fit_predict(df.slice(i, size)) for i in range(0, 1500, size)])
+        assert one.equals(many, null_equal=True), size
+    for floc in (None, 3.0):
+        s = _t_spec(targets=["y", "z"], group="g", weight="w", floc=floc)
+        for cut in (1, 40, 700):
+            a = rp.ModelBank([s])
+            a.fit_predict(df.slice(0, cut))
+            buf = io.BytesIO()
+            a.save(buf)
+            b = rp.ModelBank.load_bytes(buf.getvalue(), specs=[s])
+            rest = df.slice(cut)
+            assert a.fit_predict(rest).equals(b.fit_predict(rest), null_equal=True), cut
+
+
+def test_t_zero_weight_rows_learn_nothing_and_move_no_clock():
+    df = _t_frame(1200, 12).drop("g", "z")
+    s = _t_spec(weight="w", clock="t", gap_cap=1e6)
+    full = _out(s, df)
+    keep = pl.Series((df["w"] > 0).to_numpy())
+    thin = _out(s, df.filter(keep))
+    for f in ("loc_y", "scale_y", "df_y", "q0.99_y", "es0.025_y", "pit_y", "log_score_y"):
+        assert full[f].filter(keep).equals(thin[f], null_equal=True), f
+    assert full.filter(~keep)["pit_y"].drop_nulls().len() > 20, "such a row is still read"
+
+
+def test_t_a_rows_fit_is_read_before_the_row():
+    df = _t_frame(800, 13).drop("g")
+    s = _t_spec()
+    a = _out(s, df)
+    b = _out(
+        s,
+        df.with_columns(
+            pl.when(pl.int_range(800) == 600).then(400.0).otherwise(pl.col("y")).alias("y")
+        ),
+    )
+    for f in ("loc_y", "scale_y", "df_y", "q0.05_y", "es0.1_y"):
+        assert a[f][:601].equals(b[f][:601]), f
+        assert a[f][601] != b[f][601], f
+    assert a["pit_y"][600] != b["pit_y"][600]
+
+
+def test_t_withholds_the_tail_until_it_is_told_from_the_normals():
+    """A normal stream: ``loc`` and ``scale`` report, and the tail's fields
+    are null with ``shape_unidentified`` on most rows; a heavy-tailed one
+    reports them."""
+    rng = np.random.default_rng(14)
+    df = pl.DataFrame({"y": rng.standard_normal(3000), "z": rng.standard_t(2, 3000)})
+    out = _out(_t_spec(targets=["y", "z"], half_life=1000.0), df)[1000:]
+    late = out["withheld_reason_y"].cast(pl.String)
+    assert (late == "shape_unidentified").mean() > 0.8
+    unidentified = out.filter(pl.col("withheld_reason_y") == "shape_unidentified")
+    assert unidentified["loc_y"].is_not_null().all() and unidentified["scale_y"].is_not_null().all()
+    for f in ("df_y", "q0.05_y", "es0.1_y", "pit_y", "log_score_y"):
+        assert unidentified[f].is_null().all(), f
+    assert out["withheld_reason_z"].is_null().all()
+    assert out["df_z"].median() < 3.0
+
+
+def test_t_names_match_the_realized_struct():
+    df = _t_frame(100, 15)
+    for kw in ({}, {"quantiles": [], "es_levels": []}, {"floc": 0.0, "es_levels": [0.01]}):
+        spec = _t_spec(targets=["y", "z"], **kw)
+        out = rp.ModelBank([spec]).fit_predict(df)
+        assert [f.name for f in out.schema["m"].fields] == rp.spec.output_fields(spec)
+    reasons = out.schema["m"].to_schema()["withheld_reason_y"]
+    assert list(reasons.categories) == [
+        "no_weight",
+        "min_weight",
+        "degenerate_variance",
+        "not_converged",
+        "shape_unidentified",
+    ]

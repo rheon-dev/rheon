@@ -649,7 +649,7 @@ use build::{build_one, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
 mod dist_fit_rows;
-pub use dist_fit_rows::{DIST_WITHHELD, DistFitRows};
+pub use dist_fit_rows::{DistFitRows, dist_withheld};
 pub use model_cfgs::{
     BOCPD_HAZARD_ROWS, audit_cfg, bocpd_cfg, corrchange_cfg, deco_block_names, deco_cfg,
     dist_fit_cfg, expectile_cfg, garch_cfg, glm_cfg, hawkes_cfg, hmm_cfg, huber_model,

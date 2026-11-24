@@ -2719,6 +2719,29 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             40
         ),
+        // Student's t (PLAN 558, part 5): the first target's fit started
+        // (its parameters, the surrogate's gradient and curvature, the
+        // moments and squared weights), the second, joined late, still on
+        // its moments with no fit.
+        case!(
+            "dist_fit_t",
+            "DistFit",
+            DistFit,
+            DistFit::new(dist_fit_t_cfg(None)).unwrap(),
+            0,
+            Targets::JoiningFrom(2, 50),
+            60
+        ),
+        // Its location fixed: the fit steps the scale and the tail alone.
+        case!(
+            "dist_fit_t_floc",
+            "DistFit",
+            DistFit,
+            DistFit::new(dist_fit_t_cfg(Some(0.5))).unwrap(),
+            0,
+            Targets::Linear(2),
+            60
+        ),
     ]
 }
 
@@ -2731,6 +2754,14 @@ fn dist_fit_cfg(floc: Option<f64>) -> DistFitCfg {
         quantiles: vec![0.05, 0.95],
         es_levels: vec![0.05],
         floc,
+    }
+}
+
+fn dist_fit_t_cfg(floc: Option<f64>) -> DistFitCfg {
+    DistFitCfg {
+        family: DistFamily::StudentT,
+        decay: Decay::Halflife(200.0),
+        ..dist_fit_cfg(floc)
     }
 }
 

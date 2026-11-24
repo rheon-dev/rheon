@@ -645,6 +645,25 @@ fn dist_fit_log_score_golden() {
     );
 }
 
+#[test]
+fn dist_fit_t_golden() {
+    // Student's t: slot 1 is the scale, which reads the moment start and
+    // each row's Newton step on its log density; it reports from the row the
+    // fit is converged (the tail's slots wait for the tail to be told from
+    // the normal's, which 60 rows do not).
+    let mut m = DistFit::new(DistFitCfg {
+        family: DistFamily::StudentT,
+        min_weight: 0.0,
+        ..dist_fit_model().cfg().clone()
+    })
+    .unwrap();
+    check(
+        "dist_fit_t",
+        &signature_of(&mut m, 1, false),
+        GOLDEN_DIST_FIT_T,
+    );
+}
+
 fn dist_fit_model() -> DistFit {
     {
         DistFit::new(DistFitCfg {
@@ -1962,6 +1981,7 @@ fn ew_class_windowed_golden() {
 const GOLDEN_DIST_FIT: &[f64] = &[0.36222178080062084, 0.9761973474842893, 0.3801994266194362];
 const GOLDEN_DIST_FIT_LOG_SCORE: &[f64] =
     &[-1.042467858404618, -2.9111721140088753, -0.9865599151673602];
+const GOLDEN_DIST_FIT_T: &[f64] = &[f64::NAN, 0.9991329273243061, 0.9231340361574715];
 const GOLDEN_GLM: &[f64] = &[0.8190287945803094, 1.5909174696403168, 1.3226756022889994];
 const GOLDEN_GLM_CAP: &[f64] = &[0.8059966005129862, 2.2639186345702202, 1.0964813502655293];
 const GOLDEN_EXPECTILE: &[f64] = &[

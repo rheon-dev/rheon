@@ -201,6 +201,66 @@ pub(crate) fn scores(z: f64, eta: f64) -> [f64; 3] {
     [s_loc, s_ln, s_eta]
 }
 
+/// `A′(η)`, the derivative of [`score_const`]: with `Δψ = ψ((ν+1)/2) −
+/// ψ(ν/2)`, `ν³ Δψ + ¼ ν⁴ (ψ′((ν+1)/2) − ψ′(ν/2)) − ½ ν²`, or the
+/// derivative of `A`'s series below the switch.
+fn score_const_deriv(eta: f64) -> f64 {
+    if eta < ETA_SERIES {
+        let mut acc = 0.0;
+        for (k, c) in A_SERIES.iter().enumerate().skip(1).rev() {
+            acc = acc * eta + k as f64 * c;
+        }
+        acc
+    } else {
+        let nu = 1.0 / eta;
+        let nu2 = nu * nu;
+        let dpsi = digamma(0.5 * (nu + 1.0)) - digamma(0.5 * nu);
+        let dtri = trigamma(0.5 * (nu + 1.0)) - trigamma(0.5 * nu);
+        nu2 * (nu * dpsi + 0.25 * nu2 * dtri - 0.5)
+    }
+}
+
+/// The observed information `−∂² log f` of one row's `z` per unit weight at
+/// scale 1, packed `[loc·loc, loc·ln s, loc·η, ln s·ln s, ln s·η, η·η]`
+/// (the `loc` entries times `scale²`, `scale`, `scale` at another scale).
+/// With `q = z²`, `u = η q`, `r = 1/(1+u)`:
+///
+/// ```text
+/// J_loc,loc = (1+η) r² (1 − u)        J_loc,ln s = 2 (1+η) z r²
+/// J_loc,η   = z r² (q − 1)            J_ln s,ln s = 2 (1+η) q r²
+/// J_ln s,η  = q r² (q − 1)
+/// J_η,η     = −A′(η) − q³ H(u) − ½ q² r²,   H(u) = (½ u² r² + u r − ln(1+u))/u³
+/// ```
+///
+/// whose expectation is [`expected_info`]. `q³ H(u)` below `u = 1/100` is
+/// read from `H`'s series `Σ_{k≥3} (−1)ᵏ (k−1)(k−2)/(2k) u^(k−3)`.
+pub(crate) fn observed_info(z: f64, eta: f64) -> [f64; 6] {
+    let q = z * z;
+    let u = eta * q;
+    let r = 1.0 / (1.0 + u);
+    let r2 = r * r;
+    let e1 = 1.0 + eta;
+    let cube = if u < U_SERIES {
+        let mut h = 0.0;
+        for k in (3..19).rev() {
+            let kf = k as f64;
+            let c = (kf - 1.0) * (kf - 2.0) / (2.0 * kf);
+            h = h * u + if k % 2 == 0 { c } else { -c };
+        }
+        q * q * q * h
+    } else {
+        (0.5 * u * u * r2 + u * r - libm::log1p(u)) / (eta * eta * eta)
+    };
+    [
+        e1 * r2 * (1.0 - u),
+        2.0 * e1 * z * r2,
+        z * r2 * (q - 1.0),
+        2.0 * e1 * q * r2,
+        q * r2 * (q - 1.0),
+        -score_const_deriv(eta) - cube - 0.5 * q * q * r2,
+    ]
+}
+
 /// The expected information per unit weight at scale 1, `[I_loc,loc,
 /// I_lnσ,lnσ, I_lnσ,η, I_η,η]` (`I_loc,loc` divides by `scale²` at
 /// another scale; loc's cross terms are 0).

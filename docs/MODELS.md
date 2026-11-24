@@ -3072,9 +3072,9 @@ forecast past one row has no closed form.
 
 *API:* [`rheon.spec.dist_fit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dist_fit) — *Rust:* [`dist_fit.rs`](../crates/rheon-core/src/dist_fit.rs) — *Outputs:* [fields](OUTPUTS.md#dist_fit)
 
-A normal distribution fitted to each target by weighted maximum likelihood,
-the older rows weighing less by the decay, and what the fit says of each
-row before the row is learned.
+A normal or a Student's t distribution fitted to each target by weighted
+maximum likelihood, the older rows weighing less by the decay, and what the
+fit says of each row before the row is learned.
 
 Use `dist_fit` when the question is what values a series is likely to take,
 not what its mean will be. It gives a band to hold a reading to, a value at
@@ -3134,6 +3134,50 @@ The state is four numbers a target, its weight, its mean, the part of the
 mean that rounding leaves out and its second moment, beside the shared
 weight and clock: 32 bytes a target, whatever the stream's length or the
 levels asked for.
+
+#### Student's t
+
+`family="t"` fits Student's t in `scipy.stats.t`'s form: `loc`, `scale` and
+`df`, the degrees of freedom, which it writes as `df_<t>` after `scale_<t>`.
+Its `scale` is not the standard deviation, which is `scale √(df/(df − 2))`
+where `df > 2`. The tail is stepped on `η = 1/df`, between 0 (the normal)
+and 1 (Cauchy's tail). With `z = (y − loc)/scale` and `u = η z²`:
+
+```
+log f(y) = −ln B(df/2, ½) − ½ ln df − ln scale − ((1 + η)/(2η)) ln(1 + u)
+```
+
+There is no exact one-pass fit of the t, so the fit is recursive. It starts
+from the method of moments, with `κ` the weighted excess kurtosis: `η₀ =
+κ/(4κ + 6)` where `κ > 0` (else 0), `loc₀` the weighted mean and `scale₀ =
+√(c (1 − 2η₀))`. The start waits for the first row whose moments pin
+`ln scale` to a standard error of 1/4 by the t's own information, about 19
+rows of equal weight. Each row after it, of weight `w`, moves the fit
+`θ = (loc, ln scale, η)` to
+
+```
+θ' = argmax  w log f(y; θ) − ½ W (θ − θ_prev)ᵀ I(θ_prev) (θ − θ_prev)
+```
+
+with `W` the decayed weight of the rows before it and `I` the t's expected
+information per unit weight. That is the maximum of the rows before it, as
+the quadratic their information makes, together with the row's own exact
+log density, found by Newton's method. A row far out moves the tail only as
+far as its own density says. One step along its score would move it much
+further, since the score in `η` grows as `z⁴`. Against scipy's maximum of
+the same weighted likelihood, the fit was measured within 0.2% in `loc` and
+`scale` and 0.01 in `η`.
+
+The quantiles, shortfall, `pit` and `log_score` are the t's, by the
+regularized incomplete beta function. Two more reasons withhold. While the
+fit is further from the likelihood's maximum than sampling noise alone
+would put it, every field is null with `not_converged`. While a Wald test
+cannot tell the tail from the normal's (`η = 0` is on the boundary, where
+the statistic's law is `½χ²₀ + ½χ²₁`), `loc` and `scale` report and every
+field that reads the tail is null with `shape_unidentified`. On a normal
+stream that is most rows (18 streams of 20 at their end, in a test of
+3,000 rows each), and `family="normal"` is the fit to read. Each target
+keeps 120 bytes more under the t.
 
 #### Example
 

@@ -2700,7 +2700,7 @@
   lasso.closed: both, right
   garch.vol: egarch, figarch, garch, gjr
   garch.dist: normal, skewt, t
-  dist_fit.family: normal
+  dist_fit.family: normal, t
   marginal.closed: both, right
   ew_class.covariance_type: diag, full, tied
   ew_class.window_budget: refuse, thin

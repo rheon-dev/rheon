@@ -1,6 +1,8 @@
 //! `dist_fit`: an online fit of a distribution to each target, exponentially
-//! weighted on the clock. The family is the normal, in scipy's `loc`/`scale`
-//! parameterization (the scale is the standard deviation).
+//! weighted on the clock. The family is the normal (below) or Student's t
+//! (`t_fit`), each in scipy's `loc`/`scale` parameterization (the normal's
+//! scale is the standard deviation, the t's scipy's `scale`, with `df` its
+//! degrees of freedom).
 //!
 //! **The estimand.** Per target, the rows `i` learned so far with weights
 //! `w_i` and `λ_i` the product of the decay factors since row `i`:
@@ -37,6 +39,14 @@
 //! [`DistFit::withheld`] says which: a degenerate fit is withheld, never
 //! divided by.
 //!
+//! **Under the t family** a row reports `df` after `scale`, and its
+//! quantiles `loc + scale t_ν⁻¹(p)`, shortfalls `loc + scale E[Z | Z ≤
+//! t_α]`, `pit` and `log_score` are the t's (`student_t`). Two more reasons
+//! withhold (`t_fit` has the tests): `not_converged`, every slot, while the
+//! fit has not started or is further from its likelihood's maximum than
+//! noise; and `shape_unidentified`, every slot but `loc` and `scale`, while
+//! the tail cannot be told from the normal's.
+//!
 //! **Weights and the clock.** `weight_sum` is the weight learned before the
 //! row and before its own decay; each target's `min_weight` is read against
 //! its own weight, the rows it was present on. A row of weight 0 handed to
@@ -49,12 +59,17 @@ use serde::{Deserialize, Serialize};
 use crate::model::{OnlineModel, State, StateError, Step, check_schema};
 use crate::{Decay, EwDiag, ModelState};
 
-/// The family a [`DistFit`] fits. Only the normal so far.
+use t_fit::{TFit, TStatus};
+
+/// The family a [`DistFit`] fits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum DistFamily {
     /// The normal, `loc` the mean and `scale` the standard deviation.
     Normal,
+    /// Student's t, scipy's `loc`, `scale` and `df`, fitted by weighted
+    /// maximum likelihood one row at a time (`t_fit`).
+    StudentT,
 }
 
 /// Why a target reports nothing on a row ([`DistFit::withheld`]).
@@ -68,6 +83,13 @@ pub enum DistWithheld {
     /// The fitted variance is 0: every learned value was the same (or, with
     /// a fixed location, equal to it).
     DegenerateVariance,
+    /// The t's fit has not started, or is further from the maximum of its
+    /// weighted likelihood than sampling noise alone would put it: nothing
+    /// reports.
+    NotConverged,
+    /// The t's tail cannot yet be told from the normal's: `loc` and `scale`
+    /// report, and every value that reads the tail does not.
+    ShapeUnidentified,
 }
 
 impl DistWithheld {
@@ -77,6 +99,8 @@ impl DistWithheld {
             DistWithheld::NoWeight => "no_weight",
             DistWithheld::MinWeight => "min_weight",
             DistWithheld::DegenerateVariance => "degenerate_variance",
+            DistWithheld::NotConverged => "not_converged",
+            DistWithheld::ShapeUnidentified => "shape_unidentified",
         }
     }
 }
@@ -99,10 +123,19 @@ pub struct DistFitCfg {
 }
 
 impl DistFitCfg {
-    /// The output slots per target: `loc`, `scale`, the quantiles, the
-    /// shortfalls, `pit`, `log_score`.
+    /// The output slots per target: `loc`, `scale`, the t's `df`, the
+    /// quantiles, the shortfalls, `pit`, `log_score`.
     pub fn slots(&self) -> usize {
-        4 + self.quantiles.len() + self.es_levels.len()
+        4 + self.shape_slots() + self.quantiles.len() + self.es_levels.len()
+    }
+
+    /// The family's shape slots after `scale`: the t's `df`, none for the
+    /// normal.
+    pub fn shape_slots(&self) -> usize {
+        match self.family {
+            DistFamily::Normal => 0,
+            DistFamily::StudentT => 1,
+        }
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -145,15 +178,20 @@ impl DistFitCfg {
     }
 }
 
-/// An online normal fit to each target. See the module docs.
+/// An online distribution fit to each target. See the module docs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DistFit {
     cfg: DistFitCfg,
     /// The weight learned by every row, before the next row's decay.
     w_sum: f64,
     /// Each target's weighted Welford moments, of `y − floc` with a fixed
-    /// location and of `y` without.
+    /// location and of `y` without: the normal's fit, and the t's start and
+    /// weight.
     fit: Vec<EwDiag>,
+    /// Each target's t fit under the t family; empty, and not written, under
+    /// the normal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    t: Vec<TFit>,
 }
 
 const HALF_LN_TAU: f64 = 0.918_938_533_204_672_8; // ½ ln 2π
@@ -162,9 +200,14 @@ const INV_SQRT_TAU: f64 = 0.398_942_280_401_432_7; // 1/√(2π)
 impl DistFit {
     pub fn new(cfg: DistFitCfg) -> Result<Self, String> {
         cfg.validate()?;
+        let t = match cfg.family {
+            DistFamily::Normal => Vec::new(),
+            DistFamily::StudentT => (0..cfg.n_targets).map(|_| TFit::new()).collect(),
+        };
         Ok(Self {
             fit: (0..cfg.n_targets).map(|_| EwDiag::new(1)).collect(),
             w_sum: 0.0,
+            t,
             cfg,
         })
     }
@@ -179,8 +222,11 @@ impl DistFit {
     }
 
     /// Target `j`'s fit as it stands, `(loc, scale)`, whether or not it
-    /// would be withheld.
+    /// would be withheld; the t's before its start is the normal's.
     pub fn params(&self, j: usize) -> (f64, f64) {
+        if let Some((loc, scale, _)) = self.t.get(j).and_then(TFit::params) {
+            return (loc, scale);
+        }
         let f = &self.fit[j];
         let (hi, lo) = f.mean_pair(0);
         match self.cfg.floc {
@@ -201,11 +247,34 @@ impl DistFit {
         if w < self.cfg.min_weight {
             return Some(DistWithheld::MinWeight);
         }
-        let (_, scale) = self.params(j);
+        let (_, scale) = self.normal_params(j);
         if scale.is_nan() || scale <= 0.0 {
             return Some(DistWithheld::DegenerateVariance);
         }
-        None
+        match self.t.get(j).map(|t| t.status(w, self.cfg.floc.is_some())) {
+            None | Some(TStatus::Identified) => None,
+            Some(TStatus::NotConverged) => Some(DistWithheld::NotConverged),
+            Some(TStatus::ShapeUnidentified) => Some(DistWithheld::ShapeUnidentified),
+        }
+    }
+
+    /// Target `j`'s t tail `df = 1/η` as it stands, once its fit has
+    /// started; `None` under the normal.
+    pub fn df(&self, j: usize) -> Option<f64> {
+        self.t
+            .get(j)
+            .and_then(TFit::params)
+            .map(|(_, _, eta)| 1.0 / eta)
+    }
+
+    /// The normal's `(loc, scale)` from the moments.
+    fn normal_params(&self, j: usize) -> (f64, f64) {
+        let f = &self.fit[j];
+        let (hi, lo) = f.mean_pair(0);
+        match self.cfg.floc {
+            Some(floc) => (floc, crate::solve::clamp_rounding(f.raw(0)).sqrt()),
+            None => (hi + lo, f.var(0).sqrt()),
+        }
     }
 
     /// The row's report, before it is learned, into `out.pred`.
@@ -214,30 +283,58 @@ impl DistFit {
         let pred = &mut out.pred;
         pred.clear();
         pred.resize(self.cfg.n_targets * per, f64::NAN);
+        let first = 2 + self.cfg.shape_slots();
+        let nq = self.cfg.quantiles.len();
         for (j, slots) in pred.chunks_exact_mut(per).enumerate() {
-            if self.withheld(j).is_some() {
-                continue;
+            match self.withheld(j) {
+                None => {}
+                Some(DistWithheld::ShapeUnidentified) => {
+                    let (loc, scale) = self.params(j);
+                    slots[0] = loc;
+                    slots[1] = scale;
+                    continue;
+                }
+                Some(_) => continue,
             }
             let (loc, scale) = self.params(j);
             slots[0] = loc;
             slots[1] = scale;
-            let nq = self.cfg.quantiles.len();
-            for (s, &p) in slots[2..2 + nq].iter_mut().zip(&self.cfg.quantiles) {
-                *s = loc + scale * crate::special::ndtri(p);
-            }
-            for (s, &a) in slots[2 + nq..per - 2].iter_mut().zip(&self.cfg.es_levels) {
-                let z = crate::special::ndtri(a);
-                *s = loc - scale * INV_SQRT_TAU * libm::exp(-0.5 * z * z) / a;
-            }
-            if let Some(v) = y
+            let v = y
                 .get(j)
                 .copied()
                 .flatten()
-                .filter(|v| crate::model::usable(*v))
-            {
-                let z = (v - loc) / scale;
-                slots[per - 2] = crate::special::norm_cdf(z);
-                slots[per - 1] = -libm::log(scale) - HALF_LN_TAU - 0.5 * z * z;
+                .filter(|v| crate::model::usable(*v));
+            let (qs, rest) = slots[first..].split_at_mut(nq);
+            let es = &mut rest[..self.cfg.es_levels.len()];
+            match self.t.get(j).and_then(TFit::params) {
+                None => {
+                    for (s, &p) in qs.iter_mut().zip(&self.cfg.quantiles) {
+                        *s = loc + scale * crate::special::ndtri(p);
+                    }
+                    for (s, &a) in es.iter_mut().zip(&self.cfg.es_levels) {
+                        let z = crate::special::ndtri(a);
+                        *s = loc - scale * INV_SQRT_TAU * libm::exp(-0.5 * z * z) / a;
+                    }
+                    if let Some(v) = v {
+                        let z = (v - loc) / scale;
+                        slots[per - 2] = crate::special::norm_cdf(z);
+                        slots[per - 1] = -libm::log(scale) - HALF_LN_TAU - 0.5 * z * z;
+                    }
+                }
+                Some((_, _, eta)) => {
+                    for (s, &p) in qs.iter_mut().zip(&self.cfg.quantiles) {
+                        *s = loc + scale * student_t::ppf(p, eta);
+                    }
+                    for (s, &a) in es.iter_mut().zip(&self.cfg.es_levels) {
+                        *s = loc + scale * student_t::lower_es(a, eta);
+                    }
+                    slots[2] = 1.0 / eta;
+                    if let Some(v) = v {
+                        let z = (v - loc) / scale;
+                        slots[per - 2] = student_t::cdf(z, eta);
+                        slots[per - 1] = student_t::log_density(z, eta) - libm::log(scale);
+                    }
+                }
             }
         }
         out.n_eff = self.w_sum;
@@ -276,15 +373,36 @@ impl OnlineModel for DistFit {
         let lam = self.cfg.decay.factor(d_clock);
         self.w_sum = lam * self.w_sum + weight;
         let shift = self.cfg.floc.unwrap_or(0.0);
+        let fixed_loc = self.cfg.floc.is_some();
         for (j, f) in self.fit.iter_mut().enumerate() {
+            let mut t = self.t.get_mut(j);
             // A history the decay ages into the subnormal range is
             // forgotten, as one it ages to exactly 0 is: what is left of it
             // is below a double's resolution beside any row it meets.
             if f.n_eff() != 0.0 && lam * f.n_eff() < f64::MIN_POSITIVE {
                 *f = EwDiag::new(1);
+                if let Some(t) = t.as_deref_mut() {
+                    *t = TFit::new();
+                }
+            }
+            if let Some(t) = t.as_deref_mut() {
+                t.decay(lam);
             }
             match y.get(j).copied().flatten() {
-                Some(v) if weight > 0.0 => f.update_one(v - shift, lam, weight),
+                Some(v) if weight > 0.0 => {
+                    let w_before = lam * f.n_eff();
+                    if let Some(t) = t.as_deref_mut() {
+                        t.learn_moments(f, v - shift, lam, weight);
+                    }
+                    f.update_one(v - shift, lam, weight);
+                    if let Some(t) = t {
+                        if t.started() {
+                            t.learn(v, weight, w_before, fixed_loc);
+                        } else {
+                            t.try_start(f, self.cfg.floc);
+                        }
+                    }
+                }
                 _ => f.update_one(0.0, lam, 0.0),
             }
         }
@@ -312,7 +430,15 @@ impl OnlineModel for DistFit {
             ModelState::DistFit(m) => {
                 let m = (**m).clone();
                 crate::model::check_cfg("dist_fit", m.cfg.validate())?;
-                if m.fit.len() != m.cfg.n_targets || m.fit.iter().any(|f| f.k() != 1) {
+                let n_t = match m.cfg.family {
+                    DistFamily::Normal => 0,
+                    DistFamily::StudentT => m.cfg.n_targets,
+                };
+                if m.fit.len() != m.cfg.n_targets
+                    || m.fit.iter().any(|f| f.k() != 1)
+                    || m.t.len() != n_t
+                    || !m.t.iter().all(TFit::sound)
+                {
                     return Err(crate::model::damaged(
                         "dist_fit",
                         "its moments have the wrong shape",
@@ -341,9 +467,7 @@ impl OnlineModel for DistFit {
     }
 }
 
-// Student's t, compiled for its tests until the estimator that steps it
-// lands (PLAN 558, part 5).
-#[cfg(test)]
 mod student_t;
+mod t_fit;
 #[cfg(test)]
 mod tests;
