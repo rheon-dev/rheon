@@ -167,12 +167,10 @@ impl Gram {
     /// first term is 1).
     fn shift(&mut self, m: f64) {
         let delta = self.c - m;
-        if delta != 0.0 {
-            for i in 0..self.p() {
-                let g0 = self.g[i];
-                self.r2[i] += delta * (2.0 * self.r1[i] + delta * g0);
-                self.r1[i] += delta * g0;
-            }
+        for i in 0..self.p() {
+            let g0 = self.g[i];
+            self.r2[i] += delta * (2.0 * self.r1[i] + delta * g0);
+            self.r1[i] += delta * g0;
         }
         self.c = m;
     }
@@ -183,16 +181,9 @@ impl Gram {
         self.n += 1.0;
         // The shift moves to the weighted mean with the row in it, `c +
         // (r1₀ + w (x − c)) / W'`, `r1₀ = Σ w d (x − c)` and `W' = Σ w d +
-        // w`; at no weight before (the first row, or a decay to 0), to `x`.
-        let (before, total) = (self.g[0], self.g[0] + w);
-        if total > 0.0 {
-            let m = if before > 0.0 {
-                self.c + (self.r1[0] + w * (x - self.c)) / total
-            } else {
-                x
-            };
-            self.shift(m);
-        }
+        // w`, above 0: a row is added only at a weight above 0. On the
+        // first row it is `x`, to the rounding of `w x / w`.
+        self.shift(self.c + (self.r1[0] + w * (x - self.c)) / (self.g[0] + w));
         let e = x - self.c;
         let mut at = 0;
         for i in 0..p {
