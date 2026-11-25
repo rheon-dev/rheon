@@ -2356,6 +2356,14 @@ completion criteria; 552 the audit of existing row-count guards.
    - **garch's fallback projection stop** at 1e-14 of the largest value.
    - **Libm values held in look-ahead window rows**, allowed by CLAUDE.md's tolerance rule but a state that carries a platform's libm.
    - **E's seed 11** (506): a local optimum 0.78 off, with a likelihood below sklearn's, for judgment.
+   - **holt's decays and the platform's `exp2`** (the Windows worker's report). holt's gains, `phi` and `phi^s` use the
+     platform's `exp2`, so its state carries the platform's last bits. CLAUDE.md allows this where the cross-OS tests
+     compare within a stated tolerance, and holt's fixtures pass on every OS. Moving it to `Decay::portable_factor` (the
+     `libm` crate) would make its state bit-identical across OSes, at about 1.4x on `exp2`.
+   - **`ewm_profile`'s harmonic variance with no residual degrees of freedom** (the same report): a fit through every
+     row, 3 rows at one harmonic. The state fixture now needs 4 rows. Whether to withhold the variance when the fit
+     has no residual degrees of freedom is a design choice; on 3 rows, 13 of 40 reads were withheld or read 1e-19,
+     depending on the platform.
 3. **F's question (558).** Whether to continue with GED's fit, Johnson SU and NIG, each several hours.
 4. **The big review (584)** is the user's trigger, and **the release (585)** the user's word.
 5. **Upstream.** Nothing was ever filed upstream. Two findings are the user's to report if wanted: py-polars 2.1.0's lazy
