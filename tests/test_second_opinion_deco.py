@@ -92,13 +92,39 @@ def ml_rho(r, weight):
         cov = var * ((1 - rho) * np.eye(k) + rho * np.ones((k, k)))
         return -(wt @ stats.multivariate_normal(np.zeros(k), cov).logpdf(rows)) / wt.sum()
 
+    # Nelder-Mead stops on the simplex's width alone (``fatol=inf`` drops its
+    # test on the spread of the objective): the objective is scipy's
+    # ``logpdf``, whose last bits follow the LAPACK and BLAS kernels under it,
+    # so on another CPU path its noise (a few 1e-15 of its value) is above any
+    # ``fatol`` worth setting and the simplex never reports having converged.
     best = optimize.minimize(
         nll,
         [0.1, 1.0],
         method="Nelder-Mead",
-        options=dict(xatol=1e-11, fatol=1e-14, maxiter=20_000),
+        options=dict(xatol=1e-11, fatol=np.inf, maxiter=20_000),
     )
     assert best.success, best
+    # Converged, checked apart from the optimiser's own flag: the objective's
+    # gradient at the optimum is small, as the Newton step it implies (the
+    # gradient over the Hessian, by central differences), which is the
+    # optimum's distance from the true one, taken in ``rho`` (the variance is
+    # a nuisance parameter) and held inside half of ``ML_TOL``.
+    x0 = best.x
+    step = 1e-5
+    eye = step * np.eye(2)
+    grad = np.array([(nll(x0 + e) - nll(x0 - e)) / (2 * step) for e in eye])
+    hess = np.empty((2, 2))
+    for i in range(2):
+        for j in range(2):
+            hess[i, j] = (
+                nll(x0 + eye[i] + eye[j])
+                - nll(x0 + eye[i] - eye[j])
+                - nll(x0 - eye[i] + eye[j])
+                + nll(x0 - eye[i] - eye[j])
+            ) / (4 * step * step)
+    newton = np.linalg.solve(hess, grad)
+    assert np.all(np.linalg.eigvalsh(hess) > 0), hess
+    assert abs(newton[0]) < ML_TOL / 2, (grad, hess, newton)
     return best.x[0]
 
 
@@ -118,7 +144,9 @@ def last_level(spec, x, clock=None, weight=None):
 
 #: Where scipy's optimum and the closed form part: the optimiser's own
 #: stopping rule. Measured at most 6.6e-9 over the cases below (scipy 1.x,
-#: Nelder-Mead to `xatol` 1e-11), so the two agree to 8 places.
+#: Nelder-Mead to `xatol` 1e-11), so the two agree to 8 places; with
+#: noise of 1e-14 of its value put in the objective, as an unlucky BLAS path
+#: gives, at most 2.3e-8.
 ML_TOL = 1e-7
 
 
