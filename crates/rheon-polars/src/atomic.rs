@@ -403,19 +403,24 @@ mod tests {
         let dest = dir.join("state.msgpack");
         fs::write(&dest, b"the good state").unwrap();
 
-        // Make creating the temporary fail, by putting a directory where it
+        // Make creating the temporary fail, by putting a file where it
         // goes. That is the same shape as a full disk: the failure happens
         // on the temporary, before the destination is touched. A taken name
         // is passed over for the next, up to `TEMP_TRIES` of them, and the
         // name carries a process-wide sequence number, so block that many
         // and a few hundred more: other tests in this binary take some in
-        // between.
+        // between. A file, not a directory: Windows refuses to create a
+        // file where a directory stands with ERROR_ACCESS_DENIED
+        // (`PermissionDenied`), not as a name taken, so a directory there
+        // ends the search at once, and on Windows the names passed over
+        // went untested (CI's Windows legs, 2026-11-24). A file there is
+        // `AlreadyExists` on every OS.
         let first = NEXT_TEMP.load(Ordering::Relaxed);
         let blockers: Vec<PathBuf> = (first..first + u64::from(TEMP_TRIES) + 512)
             .map(|n| temp_name(&dest, n).unwrap())
             .collect();
         for b in &blockers {
-            fs::create_dir(b).unwrap();
+            fs::write(b, b"taken").unwrap();
         }
 
         let err = write(&dest, b"the new state").unwrap_err();
@@ -423,7 +428,7 @@ mod tests {
         assert_eq!(fs::read(&dest).unwrap(), b"the good state", "{err}");
 
         for b in &blockers {
-            fs::remove_dir(b).unwrap();
+            fs::remove_file(b).unwrap();
         }
         write(&dest, b"the new state").unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"the new state");

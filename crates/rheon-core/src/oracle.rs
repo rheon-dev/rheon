@@ -424,6 +424,32 @@ pub(crate) fn running_dot(pairs: impl IntoIterator<Item = (f64, f64)>) -> (f64, 
     (s, e * U * (1.0 + 4.0 * U) * up(2 * n + 2))
 }
 
+/// The most the decay of a sum kept online, `S ← f·S + x` a row, can have
+/// moved it, read off the run (Higham §3.3's running error bound, for a
+/// recursion). Each row hands `(S, f, κ)`: the sum as read before the row,
+/// the factor the row decays it by, and how far `f·S` may be off the exact
+/// decay of the exact `S`, relative: the factor's own error against the
+/// exact one (a call to the math library, its argument's rounding) and the
+/// product's rounding. An error `B` before the row is then at most
+/// `f (B (1 + κ) + κ |S|)` after its decay, and the row's term, which the
+/// caller counts, enters on top. Entry `i` of the result bounds the sum read at
+/// row `i` (entry 0 is 0) and the last bounds it after the last row, each
+/// lifted by [`up`] for the roundings of its own evaluation. To first order
+/// in `u` in that `|S|` is the computed sum's, as [`running_dot`]'s partial
+/// sums are. A sum of terms of one sign kept this way is off by the
+/// `κ`-weighted mean of the decays each term has been through, a share of
+/// its size that grows with the rows a half-life holds.
+pub(crate) fn decayed_error(rows: impl IntoIterator<Item = (f64, f64, f64)>) -> Vec<f64> {
+    let mut out = vec![0.0];
+    let mut b = 0.0f64;
+    for (i, (s, f, kappa)) in rows.into_iter().enumerate() {
+        b = f * (b * (1.0 + kappa) + kappa * s.abs());
+        // Four roundings a row, every value nonnegative.
+        out.push(b * up(4 * (i + 1)));
+    }
+    out
+}
+
 /// The 2-norm condition number `κ₂(A) = λ_max / λ_min` of a symmetric
 /// positive definite `A`, from [`sym_eigen`]; each eigenvalue moved by its
 /// [`eigen_error`] the way that makes `κ` larger, so the computed `κ` is no

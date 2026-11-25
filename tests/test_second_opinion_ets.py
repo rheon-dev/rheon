@@ -11,8 +11,11 @@ clock.
   of the nine forms (no season, an additive or a multiplicative one, by no
   trend, an additive and a damped one). ``holt`` follows its operation order
   (``model.py``'s ``_predict``), so the two agree to the bit on Linux x86-64
-  (measured: 0 ulps at every row of every form); held at 5 ulps, the room the
-  platforms' ``exp2`` and ``pow`` leave in the gains.
+  and macOS (measured: 0 ulps at every row of every form). ``holt`` is held
+  to the exact recursion at 50 digits (mpmath) within a bound scaled by its
+  condition in the decays; statsmodels to the same exact value at its own
+  looser bound, since Windows Server 2022 read its damped forms up to 63
+  ulps from ``holt``.
 - ``ExponentialSmoothing`` with the heuristic start, from the row after the
   rows it reads. The start is the same definition in another order (a least
   squares line by its normal equations, where statsmodels takes NumPy's
@@ -50,6 +53,7 @@ import io
 import warnings
 from datetime import datetime, timedelta
 
+import mpmath
 import numpy as np
 import polars as pl
 import pytest
@@ -149,20 +153,109 @@ def _holtwinters(y, season, trend, damped, start="known"):
         )
 
 
+#: The unit roundoff, ``2**-53``.
+U = 2.0**-53
+
+#: The exact decays the parameters are read from: the level's, the trend's,
+#: the season's over its 12 rows, and the damping, each ``2^(-s/h)``.
+EXACT_DECAYS = (
+    mpmath.power(2, -mpmath.mpf(1) / H_LEVEL),
+    mpmath.power(2, -mpmath.mpf(1) / H_TREND),
+    mpmath.power(2, -mpmath.mpf(M) / H_SEASON),
+    mpmath.power(2, -mpmath.mpf(1) / H_DAMP),
+)
+
+
+def _exact_recursion(y, season, trend, damped, decays):
+    """The known-start recursion on a unit row clock, in mpmath: each
+    update the weighted mean ``λ·old + (1 − λ)·new``, the season's ``new``
+    read against the level carried to the row. Returns each row's
+    prediction, and the last level and slope."""
+    lam_l, lam_b, lam_s, phi = decays
+    level, slope = mpmath.mpf(50.0), mpmath.mpf(0.2) if trend else mpmath.mpf(0)
+    seas = [mpmath.mpf(v) for v in _initial(season)] if season else []
+    mul = season == "mul"
+    preds = []
+    for i, yi in enumerate(y):
+        yi, p = mpmath.mpf(float(yi)), i % M
+        big = level + (phi * slope if damped else slope) if trend else level
+        preds.append(big * seas[p] if mul else big + (seas[p] if season else 0))
+        obs = yi / seas[p] if mul else yi - (seas[p] if season else 0)
+        new_level = lam_l * big + (1 - lam_l) * obs
+        if trend:
+            carried = slope * (phi if damped else 1)
+            slope = lam_b * carried + (1 - lam_b) * (new_level - level)
+        if season:
+            seas[p] = lam_s * seas[p] + (1 - lam_s) * (yi / big if mul else yi - big)
+        level = new_level
+    return preds, level, slope
+
+
+@functools.cache
+def _exact(season, trend, damped, seed: int):
+    """The exact predictions, last level and last slope at 50 digits, and
+    beside each its condition ``Σ_k |∂v/∂λ_k|·λ_k`` over the four decays,
+    by a difference at a step of ``1e-30`` of each."""
+    y = _series(600, season, seed)
+    with mpmath.workdps(50):
+        base = _exact_recursion(y, season, trend, damped, EXACT_DECAYS)
+        flat = [*base[0], base[1], base[2]]
+        cond = [mpmath.mpf(0)] * len(flat)
+        eps = mpmath.mpf(10) ** -30
+        for k in range(4):
+            decays = list(EXACT_DECAYS)
+            decays[k] *= 1 + eps
+            moved = _exact_recursion(y, season, trend, damped, decays)
+            for i, (a, b) in enumerate(zip([*moved[0], moved[1], moved[2]], flat, strict=True)):
+                cond[i] += abs(a - b) / eps
+        value = np.array([float(v) for v in flat])
+        return value, np.array([float(c) for c in cond])
+
+
+def _within(got: np.ndarray, value: np.ndarray, cond: np.ndarray) -> float:
+    """The largest gap from the exact value, in units of ``u·(|v| + c)``."""
+    return float(np.max(np.abs(got - value) / (U * (np.abs(value) + cond))))
+
+
 @pytest.mark.parametrize("seed", [0, 1, 2])
 @pytest.mark.parametrize(("season", "trend", "damped"), FORMS)
 def test_every_form_is_statsmodels_exponential_smoothing(season, trend, damped, seed):
+    """``holt`` is held to the exact recursion: each prediction, and the
+    last level and slope, within ``12·u·(|v| + c)`` of the value ``v`` at
+    50 digits, ``c`` its condition in the four decays. The decays are the
+    platform's ``exp2``, each within ``LIBM + 1 = 7`` units of ``u`` of the
+    exact one (the call and its argument's rounding), which moves ``v`` by
+    at most ``7·u·c``; the rest is the recursion's rounding, which it
+    contracts. The slope is learned from differences of levels, so it is
+    read in units of ``u·(|l| + c)``, ``l`` the level. Measured on macOS
+    arm64 over the 27 cases: at most 5.8 units (the multiplicative
+    season's), the slope 0.083; ``c`` is at most half of ``|v|``.
+
+    statsmodels' ``ExponentialSmoothing`` is a second opinion, held to the
+    same exact value at its own bound: it agreed with ``holt`` to the bit on
+    macOS and Linux x86-64, but on Windows Server 2022 under Python 3.14 it
+    read the damped forms 6 to 63 ulps from ``holt``, while the forms
+    without damping agreed. Its parameters are Python's ``0.5 ** x``, the
+    platform's ``pow``. So it is held at 128 ulps of the exact value (6 on
+    macOS), and ``holt`` alone to the exact recursion's bound."""
     y = _series(600, season, seed)
     out = _fit(_spec(season, trend, damped), pl.DataFrame({"y": y}))
-    res = _holtwinters(y, season, trend, damped)
     pred = out["pred_y"].to_numpy()
-    assert _ulps(pred, np.asarray(res.fittedvalues)) <= 5.0
     level, slope = out["coef"][-1][0], out["coef"][-1][1]
-    assert _ulps(np.array([level]), np.asarray(res.level)[-1:]) <= 5.0
+    value, cond = _exact(season, trend, damped, seed)
+    assert _within(np.append(pred, level), value[:-1], cond[:-1]) <= 12.0
     if trend:
-        assert _ulps(np.array([slope]), np.asarray(res.trend)[-1:]) <= 5.0
+        # The slope is learned from differences of levels, so its rounding
+        # is of the level's size, not its own.
+        gap = abs(slope - value[-1]) / (U * (abs(value[-2]) + cond[-1]))
+        assert gap <= 12.0, gap
     else:
         assert slope == 0.0
+    res = _holtwinters(y, season, trend, damped)
+    assert _ulps(np.asarray(res.fittedvalues), value[:-2]) <= 128.0
+    assert _ulps(np.asarray(res.level)[-1:], value[-2:-1]) <= 128.0
+    if trend:
+        assert _ulps(np.asarray(res.trend)[-1:], value[-1:]) <= 128.0
 
 
 @pytest.mark.parametrize(("season", "trend", "damped"), FORMS)

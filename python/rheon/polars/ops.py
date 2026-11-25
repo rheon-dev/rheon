@@ -2676,9 +2676,9 @@ def ewm_profile(
         bytes. Under a ``window_size`` each row in a phase's window adds 80
         bytes (104 for a quantile), and a quantile's sketches 8 bytes a
         sketch bucket. The harmonic form's fit holds ``8 · (p(p + 1)/2 + 2p
-        + 2)`` bytes, ``p = 2 · harmonics + 1`` (216 at two harmonics), and
+        + 3)`` bytes, ``p = 2 · harmonics + 1`` (224 at two harmonics), and
         under a ``window_size`` each row in the window adds that and 40 more
-        (256 at two harmonics), its share of the Grams the window keeps. The
+        (264 at two harmonics), its share of the Grams the window keeps. The
         run warns once, as a :class:`~rheon.RheonWarning`, when a row takes
         a group past half of the cap, and refuses the row that would take it
         past the cap, naming the row.

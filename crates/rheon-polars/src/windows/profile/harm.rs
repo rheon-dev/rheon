@@ -100,8 +100,20 @@ pub(super) fn basis(k: u32, phi: f64, z: &mut Vec<f64>) {
 }
 
 /// The weighted Gram of `n` rows and their moments, seen from `tau`: `g`
-/// the upper triangle of `G` by rows, `r1` and `r2` the moments of `x` and
-/// `x²`.
+/// the upper triangle of `G` by rows, and `r1` and `r2` the moments of `x −
+/// c` and `(x − c)²`, `c` a shift near the rows' weighted mean.
+///
+/// The moments are taken about `c` because the variance is a difference:
+/// the fit of `x²` less the square of the fit of `x`. Of a level near 100
+/// that moves by `1e-3` about its curve, the two are `1e4` and agree to ten
+/// digits, so the moments of `x` itself kept six of the variance's digits,
+/// and one ulp of a decay factor (another platform's `exp2`) moved it by
+/// `5e-9` of itself. Of `x − c` they are of the spread's size. The fit is
+/// the same: the basis holds the constant, so the fit of `x − c` is the fit
+/// of `x` less `c`, and the fit of `(x − c)²` less the square of the fit
+/// of `x − c` is the variance, whatever `c` is. Each row moves `c` to the
+/// rows' weighted mean, a step of Welford's, and the moments with it
+/// ([`Gram::shift`]); a merge takes the other's moments to this one's `c`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct Gram {
     n: f64,
@@ -109,6 +121,9 @@ pub(super) struct Gram {
     r1: Vec<f64>,
     r2: Vec<f64>,
     tau: f64,
+    /// The shift the moments are taken about; 0 takes them of `x` itself.
+    #[serde(default)]
+    c: f64,
 }
 
 impl Gram {
@@ -119,6 +134,7 @@ impl Gram {
             r1: vec![0.0; p],
             r2: vec![0.0; p],
             tau: f64::NAN,
+            c: 0.0,
         }
     }
 
@@ -141,13 +157,34 @@ impl Gram {
             r1: self.r1.iter().map(|v| v * d).collect(),
             r2: self.r2.iter().map(|v| v * d).collect(),
             tau,
+            c: self.c,
         }
+    }
+
+    /// The moments taken about `m` where they were about `c`: with `δ = c −
+    /// m`, `Σ w d zᵢ (x − m) = r1ᵢ + δ G₀ᵢ` and `Σ w d zᵢ (x − m)² = r2ᵢ +
+    /// 2δ r1ᵢ + δ² G₀ᵢ`, `G₀ᵢ = Σ w d zᵢ` the first row of `G` (the basis's
+    /// first term is 1).
+    fn shift(&mut self, m: f64) {
+        let delta = self.c - m;
+        for i in 0..self.p() {
+            let g0 = self.g[i];
+            self.r2[i] += delta * (2.0 * self.r1[i] + delta * g0);
+            self.r1[i] += delta * g0;
+        }
+        self.c = m;
     }
 
     /// Add a row of basis `z`, value `x` and weight `w`, seen from `self.tau`.
     fn add(&mut self, z: &[f64], x: f64, w: f64) {
         let p = self.p();
         self.n += 1.0;
+        // The shift moves to the weighted mean with the row in it, `c +
+        // (r1₀ + w (x − c)) / W'`, `r1₀ = Σ w d (x − c)` and `W' = Σ w d +
+        // w`, above 0: a row is added only at a weight above 0. On the
+        // first row it is `x`, to the rounding of `w x / w`.
+        self.shift(self.c + (self.r1[0] + w * (x - self.c)) / (self.g[0] + w));
+        let e = x - self.c;
         let mut at = 0;
         for i in 0..p {
             let wz = w * z[i];
@@ -155,12 +192,13 @@ impl Gram {
                 self.g[at] += wz * zj;
                 at += 1;
             }
-            self.r1[i] += wz * x;
-            self.r2[i] += wz * x * x;
+            self.r1[i] += wz * e;
+            self.r2[i] += wz * e * e;
         }
     }
 
-    /// The sum of two seen from one time.
+    /// The sum of two seen from one time, the other's moments taken to this
+    /// one's shift.
     fn merge(mut self, o: &Gram) -> Gram {
         if o.n == 0.0 {
             return self;
@@ -171,6 +209,8 @@ impl Gram {
                 ..o.clone()
             };
         }
+        let mut o = o.clone();
+        o.shift(self.c);
         self.n += o.n;
         for (a, b) in self.g.iter_mut().zip(&o.g) {
             *a += b;
@@ -201,8 +241,8 @@ impl Gram {
             }
         }
         let var = def.stat != ProfileStat::Mean;
-        // The right-hand sides: `r₁`, `r₂` where a variance reads it, and
-        // `z` for the weight at `φ`.
+        // The right-hand sides: the moments of `x − c`, of `(x − c)²` where
+        // a variance reads it, and `z` for the weight at `φ`.
         let mut b = self.r1.clone();
         if var {
             b.extend_from_slice(&self.r2);
@@ -217,11 +257,12 @@ impl Gram {
         if !(n_eff.is_finite() && n_eff > 0.0) {
             return f64::NAN;
         }
-        let mean = dot(&beta[..p]);
+        // The fit of `x − c` at `φ`: the mean less `c`.
+        let dev = dot(&beta[..p]);
         if !var {
-            return mean;
+            return self.c + dev;
         }
-        let v = dot(&beta[p..]) - mean * mean;
+        let v = dot(&beta[p..2 * p]) - dev * dev;
         if v.is_nan() || v < 0.0 {
             return f64::NAN;
         }
@@ -393,14 +434,121 @@ impl Harm {
     }
 }
 
-/// The bytes of one Gram and its moments: `p(p+1)/2 + 2p + 2` numbers.
+/// The bytes of one Gram and its moments: `p(p+1)/2 + 2p + 3` numbers,
+/// the Gram's upper triangle, the two moments, and the row count, time and
+/// shift.
 pub(super) fn gram_bytes(p: usize) -> u64 {
-    8 * (p * (p + 1) / 2 + 2 * p + 2) as u64
+    8 * (p * (p + 1) / 2 + 2 * p + 3) as u64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::windows::profile::{PROFILE_STATE_BYTES, PhaseSpan};
+    use crate::windows::{Closed, Direction};
+
+    fn var_def() -> ProfileDef {
+        ProfileDef {
+            stat: ProfileStat::Var,
+            buckets: 0,
+            period: PhaseSpan::Units(6.0),
+            offset: PhaseSpan::Units(0.0),
+            zone: None,
+            half_life: 12.0,
+            closed: Closed::Right,
+            input: 0,
+            weight: None,
+            min_samples: 1,
+            bias: false,
+            cap: PROFILE_STATE_BYTES,
+            window: None,
+            quantile: None,
+            harmonics: 1,
+        }
+    }
+
+    /// A level of 100 with a cycle and noise of `1e-3` about it, as a
+    /// price's: `x²` is about `1e10` times the variance about the curve.
+    /// With the moments taken of `x` itself, the fit of `x²` less the square
+    /// of the fit of `x` kept five of the variance's digits (`2.6e-5`
+    /// relative here, measured on the build before), and one ulp of a decay
+    /// factor (another platform's `exp2`) moved the variance by `5e-9` of
+    /// itself in the state fixture's stream. The variance does not move
+    /// under a shift of `x` by a constant, and each `y = x − 100` is exact
+    /// here (`y` on a grid of `2⁻³⁰`, `|y| < 2⁻⁸`), so the fit of `y` is the
+    /// reference: the same fit with no cancellation worth the name, `y`'s
+    /// mean being near 0 against its spread. The gap is read against the
+    /// larger of the variance and the rows' mean square about their mean,
+    /// the two terms the reference's variance is the difference of. Rows
+    /// join under a decay and are read through merges, as a window's two
+    /// stacks are, so Grams of different shifts are merged; where the fit
+    /// of the squares falls below the square of the fit both withhold
+    /// (122 of the 400 reads). Measured on aarch64 (macOS): at most 1.6e-15.
+    /// The bound, `1e-12`, is what the state fixtures hold a continuation
+    /// to across platforms.
+    #[test]
+    fn the_variance_keeps_its_digits_at_a_large_level() {
+        let def = var_def();
+        let k = KernelDef {
+            direction: Direction::Backward,
+            half_life: 12.0,
+            window_size: None,
+            window_ns: None,
+            closed: Closed::Right,
+            since: None,
+        };
+        let mut s = 198u64;
+        let mut r = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+        };
+        let grid = 2f64.powi(30);
+        let mut tau = 0.0f64;
+        let (mut front, mut back) = (Gram::empty(3), Gram::empty(3));
+        let (mut front0, mut back0) = (Gram::empty(3), Gram::empty(3));
+        let mut z = Vec::new();
+        let (mut worst, mut compared) = (0.0f64, 0);
+        for i in 0..400 {
+            tau += 0.25 * (1.0 + (4.0 * (r() + 1.0)).floor());
+            let w = 1.0 + 0.5 * r();
+            let phi = (tau / 6.0).fract();
+            basis(1, phi, &mut z);
+            let y = ((1e-3 * z[1] + 1e-3 * r()) * grid).round() / grid;
+            let x = 100.0 + y;
+            assert_eq!(x - 100.0, y);
+            // Every 50 rows the back stack is merged into the front, as a
+            // window's turn makes a front, so reads merge Grams whose means
+            // differ.
+            if i % 50 == 49 {
+                front = back.at(&k, tau).merge(&front.at(&k, tau));
+                front0 = back0.at(&k, tau).merge(&front0.at(&k, tau));
+                (back, back0) = (Gram::empty(3), Gram::empty(3));
+            }
+            let all = |f: &Gram, b: &Gram| f.at(&k, tau).merge(&b.at(&k, tau));
+            let (mine, reference) = (all(&front, &back), all(&front0, &back0));
+            let (got, want) = (mine.read(&def, &z), reference.read(&def, &z));
+            // Where a fit is withheld (fewer phases than terms, or a fit
+            // of the squares below the square of the fit) both are; else the
+            // gap is read against the larger of the variance and the
+            // rows' mean square about their mean, the size of the two terms
+            // the variance is the difference of in the reference.
+            assert_eq!(got.is_nan(), want.is_nan(), "row {i}: {got} {want}");
+            if !want.is_nan() {
+                let scale = want.max(reference.r2[0] / reference.g[0]);
+                worst = worst.max((got - want).abs() / scale);
+                compared += 1;
+            }
+            back = back.at(&k, tau);
+            back.add(&z, x, w);
+            back0 = back0.at(&k, tau);
+            back0.add(&z, y, w);
+        }
+        eprintln!("worst relative gap {worst:e} over {compared} reads");
+        assert!(compared > 250, "{compared}");
+        assert!(worst < 1e-12, "{worst:e}");
+    }
 
     /// On `N` evenly spaced phases at equal weights `w`, `ZᵀWZ` is
     /// `w · diag(N, N/2, …, N/2)` (the discrete orthogonality of the

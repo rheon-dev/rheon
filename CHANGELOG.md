@@ -582,6 +582,14 @@ model that only the new build has is listed as an addition and passes.
   quantile; `harmonics=` fits a Fourier series of `x` and `x²` by EW least
   squares, its variance the fit of `x²` less the fit of `x` squared,
   withheld where negative or where the rows do not pin the curve down.
+  The harmonic fit keeps its moments about the rows' weighted mean, which
+  each row moves by Welford's step: of a level near 100 that moves by
+  `1e-3` about its curve, moments of `x` itself kept six of the variance's
+  digits (5e-9 relative against an mpmath fit at 60 digits), and Windows
+  Server 2022's `exp2`, one ulp from Apple's in a decay, moved a state
+  fixture's variance by as much; about the mean it is within 1.6e-15 of a
+  fit on the level removed exactly. The shift is one number more in a
+  Gram, so the fit holds `8 (p(p + 1)/2 + 2p + 3)` bytes.
   Each phase decays by the clock's age; `window_size` keeps each phase's
   rows in two stacks, so a row leaves without a subtraction. A phase is
   read once it holds `min_samples` rows. `closed="right"` by default, as

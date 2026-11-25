@@ -1,5 +1,6 @@
 use super::paper::{self, Dd};
 use super::*;
+use crate::oracle;
 
 fn lcg(state: &mut u64) -> f64 {
     *state = state
@@ -325,8 +326,17 @@ fn irregular(r: &[f64], seed: u64) -> Vec<Row> {
 /// of consecutive returns, each at the weight of its later row; `n`, which
 /// `TQ` and `Z` read, is Kish's effective count of the decayed weights
 /// (`(Σ λw)² / Σ (λw)²`). The online form multiplies a factor a row, so its gap
-/// grows with the rows a half-life holds. Measured (ulps): RV 21, BV 17, TV
-/// 14, TQ 32, `Z` 6.6 in units of `cond · ε`, `L` 7, the weight 11.
+/// grows with the rows a half-life holds.
+///
+/// Each output is held to a bound derived from both computations' rounding
+/// ([`Bounds`]), not to a measured gap: the factors are the platform's
+/// `exp2`, and Windows Server 2022's is up to 2 ulps off in 40% of calls
+/// where Apple's and glibc's are within one, so a fixed bound measured on
+/// one platform failed on that one (56 ulps against 32 on `RV`, 112
+/// against 64 on `TQ`). Measured on aarch64 (macOS), the largest share of
+/// its bound each output reached: RV 0.049, BV 0.018, TV 0.14, TQ 0.13,
+/// `Z` 0.023, `L` 0.018, the weight 0.11. Server 2022's largest gaps in
+/// ulps were 2.7 to 3.8 times the Mac's, on its own run.
 #[test]
 fn decay_is_the_weighted_definition() {
     let r = sv_day(5_000, 11, true);
@@ -335,6 +345,7 @@ fn decay_is_the_weighted_definition() {
     for h in [50.0, 500.0] {
         let mut m = Realized::new(cfg(1, h)).unwrap();
         let steps = run(&mut m, &rows);
+        let bounds = Bounds::of(&rows, &steps, h);
         let mut t = 0.0;
         let learned: Vec<(f64, f64, f64)> = rows
             .iter()
@@ -347,33 +358,155 @@ fn decay_is_the_weighted_definition() {
             let (p, _, s2) = paper::weighted(&learned[..i], h);
             let o = &steps[i].pred;
             let l = learned[i].1 / s2.sqrt();
-            let g = [
-                ulps(o[0], p.rv),
-                ulps(o[1], p.bv),
-                ulps(o[2], p.tv),
-                ulps(o[3], p.tq),
-                z_gap(o[4], p.z, p.rv, p.bv),
-                ulps(o[5], l),
-                ulps(steps[i].n_eff, sum_of_weights(&rows[..i], h)),
+            let rho = bounds.at(i, p.rv, p.bv, p.tq);
+            let want = [
+                p.rv,
+                p.bv,
+                p.tv,
+                p.tq,
+                p.z,
+                l,
+                sum_of_weights(&rows[..i], h),
             ];
-            for (w, v) in worst.iter_mut().zip(g) {
-                *w = w.max(v);
+            let got = [o[0], o[1], o[2], o[3], o[4], o[5], steps[i].n_eff];
+            for k in 0..7 {
+                if got[k] == want[k] {
+                    continue;
+                }
+                let share = (got[k] - want[k]).abs() / (rho[k] * want[k].abs());
+                assert!(
+                    share <= 1.0,
+                    "h {h}, row {i}, output {k}: {} against {}, past its bound {}",
+                    got[k],
+                    want[k],
+                    rho[k]
+                );
+                worst[k] = worst[k].max(share);
             }
         }
         let (_, nw, _) = paper::weighted(&learned, h);
         let mut own = Vec::new();
         m.target_n_eff_into(&mut own);
+        let rho = bounds.nw[rows.len()] / own[0] + (oracle::LIBM + 3.0) * oracle::U;
         assert!(
-            ulps(own[0], nw) <= 64.0,
-            "h {h}: {} {nw} w_sum {} all {} worst {worst:?}",
-            own[0],
-            m.n_eff(),
-            sum_of_weights(&rows, h)
+            (own[0] - nw).abs() <= rho * nw,
+            "h {h}: {} {nw}, past {rho} of it",
+            own[0]
         );
     }
-    let bound = [32.0, 32.0, 32.0, 64.0, 16.0, 16.0, 32.0];
-    for (k, (w, b)) in worst.iter().zip(bound).enumerate() {
-        assert!(w <= &b, "output {k}: {w} ulps, bound {b} ({worst:?})");
+    eprintln!("shares of the bounds: {worst:?}");
+}
+
+/// The bounds [`decay_is_the_weighted_definition`] holds each output to,
+/// relative, from the rounding of both computations to first order in `u`
+/// (`U`), each call to `exp2`, `powf` or `cbrt` within `LIBM` units of it.
+///
+/// - **The decay.** The online sums multiply a factor a row, `exp2(−d/h)`,
+///   off the exact one by `LIBM` and by `ln 2 · d/h` from its argument's
+///   rounding, and round the product (`κ = (LIBM + 1 + 2 ln 2 · d/h) u` a
+///   row, [`oracle::decayed_error`]); the definition takes one power a
+///   term, off by `LIBM` and by `ln 2 · age/h`, the sum of that term's
+///   `ln 2 · d/h`, whence the 2. The weight `n_eff` rounds its sum too, and
+///   `Σw²` decays by `f` twice, so twice the factor's errors.
+/// - **The terms**, both sides' roundings in units of `u`: `RV` 2 and 3
+///   and `BV` with its scale 3 and 4; `TV` `6 LIBM + 7` (three cube roots,
+///   the triple, its square, the weight and the scale) and `3 LIBM + 6`
+///   (three powers, five products and the scale); `TQ` `12 LIBM + 14` and
+///   `3 LIBM + 7`, and the error of the weight it is multiplied by; the
+///   weight's own 2, a product and an addition. Each read rounds once more
+///   on each side.
+/// - **The ratios.** `Z = √n (1 − BV/RV) / √(ϑ max(1, TQ/BV²))`: `n =
+///   (Σw)²/Σw²` within `2ρ_W + ρ_{W2}`, `1 − BV/RV` within `(BV/RV)(ρ_BV +
+///   ρ_RV)` of itself over `|1 − BV/RV|`, `TQ/BV²` within `ρ_TQ + 2ρ_BV`,
+///   and the square roots halve their arguments' errors. `L = r / √(Σ
+///   a a' / Σ w)` within half the errors of its two sums.
+struct Bounds {
+    rv: Vec<f64>,
+    bv: Vec<f64>,
+    tv: Vec<f64>,
+    tq: Vec<f64>,
+    nw: Vec<f64>,
+    w: Vec<f64>,
+    w2: Vec<f64>,
+    /// The values the bounds are of, read off the run.
+    vals: Vec<[f64; 7]>,
+}
+
+impl Bounds {
+    fn of(rows: &[Row], steps: &[Step], h: f64) -> Self {
+        use oracle::{LIBM, U, decayed_error};
+        let dec = Decay::Halflife(h);
+        let ln2 = std::f64::consts::LN_2;
+        let kappa = |d: f64, roundings: f64| (LIBM + roundings + 2.0 * ln2 * d / h) * U;
+        let finite = |v: f64| if v.is_finite() { v.abs() } else { 0.0 };
+        // The sums' sizes as read at each row, and `Σw²` replayed.
+        let mut w2 = 0.0;
+        let vals: Vec<[f64; 7]> = steps
+            .iter()
+            .zip(rows)
+            .map(|(s, (d, _, w))| {
+                let n = finite(s.n_eff);
+                let o = &s.pred;
+                let tq = if n > 0.0 { finite(o[3]) / n } else { 0.0 };
+                let v = [finite(o[0]), finite(o[1]), finite(o[2]), tq, n, n, w2];
+                let f = dec.factor(*d);
+                w2 = f * f * w2 + w * w;
+                v
+            })
+            .collect();
+        let run = |k: usize, roundings: f64, twice: bool| {
+            decayed_error(rows.iter().zip(&vals).map(|((d, _, _), v)| {
+                let f = dec.factor(*d);
+                if twice {
+                    (v[k], f * f, 2.0 * kappa(*d, roundings))
+                } else {
+                    (v[k], f, kappa(*d, roundings))
+                }
+            }))
+        };
+        Self {
+            rv: run(0, 1.0, false),
+            bv: run(1, 1.0, false),
+            tv: run(2, 1.0, false),
+            tq: run(3, 1.0, false),
+            nw: run(4, 1.0, false),
+            w: run(5, 2.0, false),
+            w2: run(6, 1.0, true),
+            vals,
+        }
+    }
+
+    /// Each output's bound at row `i`, relative to the definition's value,
+    /// `rv`, `bv` and `tq` the definition's measures there.
+    fn at(&self, i: usize, rv: f64, bv: f64, tq: f64) -> [f64; 7] {
+        use oracle::{LIBM, U, up};
+        let v = &self.vals[i];
+        // A sum's decay error over its size, its terms' roundings, the
+        // definition's one power a term and each side's read.
+        let rho = |b: &[f64], k: usize, terms: f64| {
+            let decay = if v[k] > 0.0 { b[i] / v[k] } else { 0.0 };
+            decay + (LIBM + terms + 2.0) * U
+        };
+        let r_nw = rho(&self.nw, 4, 1.0);
+        let r_w2 = rho(&self.w2, 6, 2.0 * LIBM + 3.0);
+        let r_rv = rho(&self.rv, 0, 5.0);
+        let r_bv = rho(&self.bv, 1, 7.0);
+        let r_tv = rho(&self.tv, 2, 9.0 * LIBM + 13.0);
+        let r_tq = rho(&self.tq, 3, 15.0 * LIBM + 21.0) + r_nw + 2.0 * U;
+        let r_w = rho(&self.w, 5, 2.0);
+        let r_n = 2.0 * r_nw + r_w2 + 4.0 * U;
+        let ratio = bv / rv;
+        let r_diff = ratio * (r_bv + r_rv + U) / (1.0 - ratio).abs() + U;
+        let r_tq_bv = if tq / (bv * bv) > 1.0 {
+            r_tq + 2.0 * r_bv + 3.0 * U
+        } else {
+            0.0
+        };
+        let r_z = 0.5 * r_n + r_diff + 0.5 * r_tq_bv + 8.0 * U;
+        // `L` against the products' sum and `Σ w`, which the weight's sum
+        // bounds (its first row the one it has more).
+        let r_l = 0.5 * (r_bv + r_nw) + 4.0 * U;
+        [r_rv, r_bv, r_tv, r_tq, r_z, r_l, r_w].map(|r| r * up(16))
     }
 }
 

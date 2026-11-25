@@ -748,7 +748,7 @@ def test_the_harmonic_refusals():
 
 
 def test_a_harmonic_window_past_half_its_cap_warns_once_and_past_it_is_refused():
-    """One harmonic: the fit is 112 bytes and each row in the window 152,
+    """One harmonic: the fit is 120 bytes and each row in the window 160,
     so a cap of 600 holds three rows; the second takes it past half, which
     warns once, and a fourth row inside the window is refused by row."""
     from rheon import RheonWarning
@@ -773,11 +773,11 @@ def test_a_harmonic_window_past_half_its_cap_warns_once_and_past_it_is_refused()
         run(rows(3), m=rp.ops.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})
     assert len([w for w in caught if issubclass(w.category, RheonWarning)]) == 1
     with pytest.raises(
-        Exception, match=r"would hold 720 bytes for one group at row 3 .*max_state_bytes of 600"
+        Exception, match=r"would hold 760 bytes for one group at row 3 .*max_state_bytes of 600"
     ):
         run(rows(4), m=rp.ops.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})
     run(rows(20, step=20.0), m=rp.ops.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})
-    with pytest.raises(Exception, match=r"holds 216 bytes a group, its fit of 2 harmonics"):
+    with pytest.raises(Exception, match=r"holds 224 bytes a group, its fit of 2 harmonics"):
         run(rows(1), m=rp.ops.ewm_profile("x", **{**kw, "harmonics": 2, "max_state_bytes": 200}))
 
 
