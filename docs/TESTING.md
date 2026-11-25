@@ -197,6 +197,7 @@ in `tests/test_second_opinion.py`, Vowpal Wabbit among them.
 | `spectral` | scipy's `periodogram` with the decay's amplitudes as the window, and `lombscargle` with them as weights, over every row or a window's (`tests/test_spectral.py`) | 1e-9 |
 | `tdigest` | the `tdigest` package and exact ranks, at compression 100 and 200 (`tests/test_tdigest.py`) | 3.8e-3 and 1.8e-3 in rank |
 | `ddsketch` | the `ddsketch` package's buckets and reads, `crick`, and the exact quantiles within the sketch's `alpha` (`tests/test_ddsketch.py`) | every bucket exactly; reads within 2 ulps |
+| `rp.ops.stl`, `rp.ops.mstl` | the method in 50-digit arithmetic (`tests/reference_stl.py`), with `B`, the first-order bound of a double evaluation's rounding, read off the run by reverse differentiation; statsmodels' `STL` and `MSTL` as a second opinion, whose build for arm64 fuses some multiply-adds (`tests/test_stl.py`) | `B` (0.12 of it measured); statsmodels within `2B` |
 | `ewm_moments` | scipy, statsmodels and Polars' rolling moments, through the numpy reference the core is held to (`tests/test_reference_ewm_moments.py`) | 1e-13 |
 | `seqtest` | `reference.seqtest_ref`, the paper's betting recursion in scalar code, and its closed form where the clip never binds (`tests/test_seqtest.py`) | 1e-12, relative |
 | `emit_drift` | river's `PageHinkley` at `half_life = inf` (`TestAZeroWeightRowIsNotSeen`) | flag for flag |
