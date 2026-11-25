@@ -575,6 +575,52 @@ fn the_early_rows_are_guarded_by_identification() {
     assert!(collinear.fit_now().unwrap_err().contains("do not identify"));
 }
 
+/// The fit's residual variance reads only the predictions the model
+/// reports from it: nothing before the fit is identified, whose solves at
+/// `ridge = 0` are a singular system's rounding (their residuals once
+/// differed by a part in 10^4 between platforms, and stayed in the variance
+/// for many half-lives), then the mean of the reported predictions' squared
+/// residuals; under `select`, which reports the chosen order's prediction,
+/// nothing at all.
+#[test]
+fn the_fits_residual_variance_reads_only_the_reported_predictions() {
+    let (x, y) = series(60, 43);
+    let mut m = VectorAr::new(cfg(2, 2, 1, INF)).unwrap();
+    let (mut sums, mut n) = ([0.0f64; 2], 0.0);
+    for t in 0..y.len() {
+        let s = m.step(&x[t..=t], &row(&y[t], 2), 1.0, 1.0);
+        if s.pred.iter().all(|v| v.is_finite()) {
+            for j in 0..2 {
+                sums[j] += (y[t][j] - s.pred[j]).powi(2);
+            }
+            n += 1.0;
+        }
+        let got = m.fit.sigma2();
+        for j in 0..2 {
+            if n == 0.0 {
+                assert_eq!(got[j], 0.0, "row {t}: before the fit is identified");
+            } else {
+                let want = sums[j] / n;
+                assert!(
+                    (got[j] - want).abs() <= 1e-12 * want,
+                    "row {t}: {} against {want}",
+                    got[j]
+                );
+            }
+        }
+    }
+    assert!(n > 40.0);
+    let mut chosen = VectorAr::new(VectorArCfg {
+        select: Some(VectorArSelect::Aic),
+        ..cfg(2, 2, 1, INF)
+    })
+    .unwrap();
+    for t in 0..y.len() {
+        chosen.step(&x[t..=t], &row(&y[t], 2), 1.0, 1.0);
+        assert!(chosen.fit.sigma2().iter().all(|&v| v == 0.0), "row {t}");
+    }
+}
+
 /// The weighted least squares of one series' equation at order `q` over
 /// the rows `pmax..`: its coefficients and residual sum of squares.
 fn order_rss(y: &[[f64; 3]], k: usize, q: usize, pmax: usize) -> Vec<Vec<f64>> {

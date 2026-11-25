@@ -562,6 +562,14 @@ def set_rows(vol: str, dist: str, r: np.ndarray) -> tuple[np.ndarray, np.ndarray
     return np.array(a, dtype=float), np.array(b)
 
 
+def within_set(a: np.ndarray, b: np.ndarray, x: np.ndarray) -> bool:
+    """Whether an optimizer's `x` is in the set `A θ ≥ b`, a face included:
+    a fit on a face lands on either side of it by its optimizer's last
+    steps, `1e-10` of the bound at most (SLSQP's, and `arch`'s, which is
+    SLSQP), and which side differs by platform."""
+    return bool(np.all(a @ x - b >= -1e-10 * (1.0 + np.abs(b))))
+
+
 def best_in_set(am, a: np.ndarray, b: np.ndarray, starts: list[np.ndarray]) -> float:  # noqa: ANN001
     """The largest of `arch`'s likelihood over the bank's set, `A θ ≥ b`, by
     scipy's SLSQP from each start: `arch` computes the likelihood, scipy
@@ -582,7 +590,7 @@ def best_in_set(am, a: np.ndarray, b: np.ndarray, starts: list[np.ndarray]) -> f
             constraints=[{"type": "ineq", "fun": lambda x: a @ x - b, "jac": lambda x: a}],
             options={"ftol": 1e-14, "maxiter": 1000},
         )
-        if np.all(a @ res.x - b >= -1e-10 * (1.0 + np.abs(b))):
+        if within_set(a, b, res.x):
             best = max(best, -float(res.fun))
     return best
 
@@ -802,15 +810,15 @@ def test_figarchs_wait_is_arch_likelihood_ratio_test():
     statistic as the other forms' are at 500 (`lr_cases` leaves it out for
     that): two seeds of its truth and two of returns with no conditional
     variance. The bank's first fit waits (`not_identified`) exactly where
-    `arch`'s statistic, clear of the cut and its fit inside the bank's set,
-    is under the cut."""
+    `arch`'s statistic, clear of the cut and its fit in the bank's set (a
+    face included, `within_set`), is under the cut."""
     cases = [("figarch", series_of("hi", "figarch", 2100, s)) for s in range(2)]
     cases += [("iid", np.random.default_rng([5490, 99, s]).standard_normal(2100)) for s in range(2)]
     clear, differ = [], []
     for truth, r in cases:
         lr, theta = figarch_lr(r[:2000])
         a, b = set_rows("figarch", "normal", r[:2000])
-        if abs(lr - LR_CUT["figarch"]) < 0.5 or not np.all(a @ theta - b >= 0.0):
+        if abs(lr - LR_CUT["figarch"]) < 0.5 or not within_set(a, b, theta):
             continue
         clear.append((truth, lr))
         spec = rp.spec.garch("g", targets=["r"], vol="figarch", start_rows=2000)
@@ -864,7 +872,7 @@ def test_a_weighted_start_is_the_weighted_likelihoods_optimum(seed):
             constraints=[{"type": "ineq", "fun": lambda x: a @ x - b, "jac": lambda x: a}],
             options={"ftol": 1e-14, "maxiter": 1000},
         )
-        if np.all(a @ res.x - b >= -1e-10 * (1.0 + np.abs(b))):
+        if within_set(a, b, res.x):
             best = max(best, -float(res.fun))
     kish = float(ws.sum() / np.sum(ws * ws))
     ours = weighted_loglik(am, rows, ws, theta)

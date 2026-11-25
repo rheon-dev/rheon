@@ -579,6 +579,11 @@ pub struct EwRidge {
     /// ([`EwRidge::solves`]). Not state.
     #[serde(skip)]
     solves: SolveCount,
+    /// The next step's prediction teaches `sig2` nothing
+    /// ([`EwRidge::hold_residual`]). Not state: the caller sets it before
+    /// each step it applies to, and the step clears it.
+    #[serde(skip)]
+    residual_held: ResidualHeld,
 }
 
 /// A count of solves that is not state: a load starts it at 0, and two
@@ -589,6 +594,17 @@ pub struct EwRidge {
 struct SolveCount(u64);
 
 impl PartialEq for SolveCount {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// [`EwRidge::hold_residual`]'s flag for the next step: not state, so two
+/// models compare equal whatever it holds.
+#[derive(Debug, Default, Clone, Copy)]
+struct ResidualHeld(bool);
+
+impl PartialEq for ResidualHeld {
     fn eq(&self, _: &Self) -> bool {
         true
     }
@@ -764,6 +780,7 @@ impl EwRidge {
             view: crate::window::Kept::default(),
             spare_fit: crate::window::Kept::default(),
             solves: SolveCount::default(),
+            residual_held: ResidualHeld::default(),
             cfg,
         })
     }
@@ -772,6 +789,17 @@ impl EwRidge {
     /// moves it solved. Not state, so only a difference means anything.
     pub(crate) fn solves(&self) -> u64 {
         self.solves.0
+    }
+
+    /// Whether the next step's prediction teaches the residual variance
+    /// `sig2`: where `held`, that step ages `sig2`'s weight as a row with no
+    /// prediction does, and the step clears the flag. For a model built on
+    /// this fit that reports a prediction of its own only once its fit is
+    /// identified ([`crate::VectorAr`]): before that the fit's prediction is
+    /// the rounding of a singular system's solve, which no residual should
+    /// be read from.
+    pub(crate) fn hold_residual(&mut self, held: bool) {
+        self.residual_held.0 = held;
     }
 
     pub fn cfg(&self) -> &EwRidgeCfg {
@@ -3163,11 +3191,13 @@ impl OnlineModel for EwRidge {
         // prediction adds its squared residual. A row with a target and no
         // prediction -- `min_weight` unmet after a clock gap, say -- ages it
         // as a null row does; it aged nothing, so `σ²` forgot less across
-        // such rows than the clock says (N6).
+        // such rows than the clock says (N6). So does a row whose caller
+        // holds the residual ([`Self::hold_residual`]).
+        let held = std::mem::take(&mut self.residual_held.0);
         for j in 0..m {
             let aged = lam * self.wsig[j];
             match y[j] {
-                Some(yj) if weight > 0.0 && pred[j * nc].is_finite() => {
+                Some(yj) if !held && weight > 0.0 && pred[j * nc].is_finite() => {
                     let resid = yj - pred[j * nc];
                     let ws_new = aged + weight;
                     let next = (aged * self.sig2[j] + weight * resid * resid) / ws_new;

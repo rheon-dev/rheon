@@ -1144,11 +1144,15 @@ const SINCE_SPLIT: usize = 280;
 /// target of two features whose coefficients drift.
 fn since_2_0_frame() -> DataFrame {
     let mut r = lcg(23);
+    // The `libm` crate's `log` and `cos`, not the platform's: the frame must
+    // be the same bits on every OS, since the input is compared exactly and
+    // `garch` continues to the bit from it. The platform's last bits once
+    // moved the series, and with it `garch`'s fit, on Linux and Windows.
     let mut normal = {
         let mut r = lcg(29);
         move || {
             let (u, v) = ((r() + 1.0) / 2.0, (r() + 1.0) / 2.0);
-            (-2.0 * (1.0 - u).ln()).sqrt() * (std::f64::consts::TAU * v).cos()
+            (-2.0 * libm::log(1.0 - u)).sqrt() * libm::cos(std::f64::consts::TAU * v)
         }
     };
     let (omega, alpha, gamma, beta, nu) = (0.01, 0.10, 0.15, 0.82, 8.0);

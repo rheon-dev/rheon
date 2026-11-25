@@ -795,9 +795,19 @@ impl OnlineModel for VectorAr {
         taught.clear();
         taught.extend(y.iter().map(|v| if learns && full { *v } else { None }));
         let before = self.fit.solves();
+        // The fit's residual variance reads only the rows whose prediction
+        // this model reports from the fit: none under `select`, which
+        // reports the chosen order's, and none before the fit is
+        // identified. At `ridge = 0` the first rows' system is singular and
+        // the solve's jitter decides the fit, so its predictions were the
+        // rounding of that solve, a part in 10^4 apart from one platform to
+        // another, and their residuals stayed in the variance for many
+        // half-lives.
+        let from_fit = predicts && self.cfg.select.is_none();
+        self.fit.hold_residual(!from_fit);
         self.fit.step_into(&z, &taught, d_clock, weight, &mut one);
         out.n_eff = one.n_eff;
-        if predicts && self.cfg.select.is_none() {
+        if from_fit {
             out.pred.copy_from_slice(&one.pred[..k]);
         }
         if self.fit.solves() != before {
