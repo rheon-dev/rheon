@@ -723,32 +723,58 @@ fn loads_a_state_written_on_another_os() {
     );
 }
 
-/// The `garch` spec has started before the save and goes on after it, so
-/// the hand-off carries a fitted state (the parameters, their curvature,
-/// the lags and the forecast), not the rows of one still waiting. On `y`,
-/// a linear target, it never started (PLAN 578j, TEST-2).
+/// A `garch` fit that has started carries across a save to the bit: the
+/// parameters, their curvature, the lags and the forecast, not the rows of
+/// a start still waiting. The save point is found by the condition, not by
+/// a row count: the start waits on a likelihood-ratio test against a
+/// constant variance and its Newton decrement, so the row it comes at is
+/// the data's to say. The stream is run once to find the first row with a
+/// variance; the save comes halfway from there to the end, so the saved
+/// fit has stepped on rows of its own. Saved there, loaded, and fed the
+/// rest, the loaded bank gives what the bank that was never saved gives,
+/// bit for bit, and a variance on every row. On `y`, a linear target, the
+/// start never came (PLAN 578j, TEST-2); on `yg` it came at row 200 after
+/// the start was redesigned, the save's row in the shared hand-off, so a
+/// test tied to that row tested a fit that had not yet read a row
+/// (W14-15).
 #[test]
 fn garch_carries_a_started_fit_across_the_save() {
     let df = frame();
-    let mut bank = Bank::new(specs()).unwrap();
     let at = SPECS.iter().position(|(n, _, _)| *n == "garch").unwrap();
-    let variance = |cols: &[Column]| {
-        let s = cols[at].as_materialized_series().struct_().unwrap().clone();
+    let spec = vec![specs().swap_remove(at)];
+    let variances = |cols: &[Column]| -> Vec<Option<f64>> {
+        let s = cols[0].as_materialized_series().struct_().unwrap().clone();
         let v = s.field_by_name("variance_yg").unwrap();
-        let v = v.f64().unwrap();
-        v.iter()
-            .flatten()
-            .filter(|x| x.is_finite() && *x > 0.0)
-            .count()
+        v.f64().unwrap().iter().collect()
     };
-    let before = variance(&bank.fit_predict(&df.slice(0, SPLIT)).unwrap());
-    let after = variance(
-        &bank
-            .fit_predict(&df.slice(SPLIT as i64, N - SPLIT))
-            .unwrap(),
+    let started = |v: &Option<f64>| v.is_some_and(|x| x.is_finite() && x > 0.0);
+    let whole = variances(&Bank::new(spec.clone()).unwrap().fit_predict(&df).unwrap());
+    let first = whole
+        .iter()
+        .position(started)
+        .expect("garch starts on the GJR returns");
+    let cut = first + (N - first) / 2;
+    assert!(first < cut && cut < N, "a row on each side: {first}, {cut}");
+    let (head, tail) = (df.slice(0, cut), df.slice(cut as i64, N - cut));
+    let mut kept = Bank::new(spec.clone()).unwrap();
+    let before = variances(&kept.fit_predict(&head).unwrap());
+    assert!(
+        before[first..].iter().all(started),
+        "garch predicts every row from its start to the save"
     );
-    assert!(before > 0, "garch starts before the save");
-    assert_eq!(after, N - SPLIT, "garch predicts every row after the save");
+    let bytes = kept.save_bytes().unwrap();
+    let mut loaded = Bank::load_bytes(&bytes, Some(&spec)).unwrap();
+    assert!(
+        loaded.save_bytes().unwrap() == bytes,
+        "a loaded state re-saves other bytes"
+    );
+    let want = DataFrame::new(tail.height(), kept.fit_predict(&tail).unwrap()).unwrap();
+    let got = DataFrame::new(tail.height(), loaded.fit_predict(&tail).unwrap()).unwrap();
+    same("garch across the save", &got, &want, 0.0);
+    assert!(
+        variances(got.columns()).iter().all(started),
+        "garch predicts every row after the save"
+    );
 }
 
 /// Writes the file CI hands to the other OS. Run with
