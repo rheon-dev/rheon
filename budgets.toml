@@ -68,11 +68,11 @@ rss = 0.30
 
 [instructions.ewridge_k5]
 what = "ewridge, 5 features, 1 target, half-life 1000: AnyModel::step_into, into one kept Step"
-budget = 2119477
+budget = 2223991
 
 [instructions.ewridge_k20]
 what = "ewridge, 20 features, 1 target, half-life 1000: AnyModel::step_into, into one kept Step"
-budget = 6331811
+budget = 6484088
 
 [instructions.ewridge_k200]
 what = "ewridge, 200 features, 1 target, half-life 1000, min_weight 200, the default schedule: AnyModel::step_into, into one kept Step"
@@ -84,15 +84,15 @@ budget = 13525796
 
 [instructions.huber_k20]
 what = "huber, 20 features, 1 target, half-life 1000, the MAD scale: AnyModel::step_into, into one kept Step"
-budget = 5818665
+budget = 5959650
 
 [instructions.huber_k20_sets]
 what = "huber, 20 features, 1 target, half-life 1000, the MAD scale, feature sets of 5, 10 and 20 features: AnyModel::step_into, into one kept Step"
-budget = 7589200
+budget = 7741639
 
 [instructions.huber_k20_sum]
 what = "huber, 20 features, 1 target, half-life 1000, the MAD scale, ridge_scale sum: AnyModel::step_into, into one kept Step"
-budget = 5926403
+budget = 6094848
 
 [instructions.huber_k20_refit]
 what = "huber, 20 features, 1 target, half-life 1000, the MAD scale, the refit of the first 2,500 rows on the block's 500th row: AnyModel::step_into, into one kept Step"
@@ -100,11 +100,11 @@ budget = 48112220
 
 [instructions.sgd]
 what = "sgd, 20 features, squared loss, learning rate 0.01, standardized: AnyModel::step_into, into one kept Step"
-budget = 2537026
+budget = 2647026
 
 [instructions.sgd_huber]
 what = "sgd, 20 features, Huber loss in the MAD scale, learning rate 0.01, standardized: AnyModel::step_into, into one kept Step"
-budget = 2881700
+budget = 2970772
 
 [instructions.sgd_huber_refit]
 what = "sgd, 20 features, Huber loss in the MAD scale, learning rate 0.01, standardized, the refit of the first 2,500 rows on the block's 500th row: AnyModel::step_into, into one kept Step"
@@ -112,19 +112,22 @@ budget = 31454774
 
 [instructions.pa]
 what = "pa, 20 features, standardized: AnyModel::step_into, into one kept Step"
-budget = 2254570
+budget = 2302944
 
 # No budget yet: CI's Valgrind count of the first run sets it (`scripts/budgets.py apply`).
 [instructions.glm_k20]
 what = "glm, Poisson, 20 features, ridge 1, the default refit of the first 210 rows in the warm-up: AnyModel::step_into, into one kept Step"
 
 # No budget yet: CI's Valgrind count of the first run sets it (`scripts/budgets.py apply`).
+budget = 38942226
 [instructions.expectile_k20]
 what = "expectile at 0.9, 20 features, half-life 1000, the default refit of the first 210 rows in the warm-up: AnyModel::step_into, into one kept Step"
 
 # No budget yet: CI's Valgrind count of the first run sets it (`scripts/budgets.py apply`).
+budget = 37868026
 [instructions.expectile_window]
 what = "expectile at 0.9, 5 features, a window of 500 rows refit exactly on every row, warm-started: AnyModel::step_into, into one kept Step"
+budget = 790066058
 
 [instructions.seqtest]
 what = "seqtest on one column's sign: AnyModel::step_into, into one kept Step"
@@ -132,7 +135,7 @@ budget = 395356
 
 [instructions.bocpd]
 what = "bocpd, 4 features, diagonal, max_run 200, prune below 1e-6: AnyModel::step_into, into one kept Step"
-budget = 10838815
+budget = 11426722
 
 [instructions.kmeans]
 what = "kmeans, 4 features, 8 clusters, standardized: AnyModel::step_into, into one kept Step"
@@ -148,11 +151,11 @@ budget = 11552994
 
 [instructions.kalman_smooth_k5]
 what = "kalman, 5 features, coef half-life 2000, smooth_lag 10 with emit_smoothed_se: AnyModel::step_into, into one kept Step"
-budget = 61295698
+budget = 59799502
 
 [instructions.kalman_smooth_k20]
 what = "kalman, 20 features, coef half-life 2000, smooth_lag 10 with emit_smoothed_se: AnyModel::step_into, into one kept Step"
-budget = 1098321360
+budget = 983344388
 
 [instructions.ew_cov]
 what = "ew_cov, 20 features, mean, std and corr: AnyModel::step_into, into one kept Step"
@@ -160,7 +163,7 @@ budget = 8374026
 
 [instructions.lasso_k20]
 what = "lasso, 20 features, 1 target, half-life 1000, penalties 0.1, 0.01 and 0, the default cadence: AnyModel::step_into, into one kept Step"
-budget = 12605148
+budget = 12909598
 
 [instructions.corrchange_monitor_w2500]
 what = "corrchange monitor, 4 features (6 pairs), a span of 2,500 rows closing once in the block: AnyModel::step"
@@ -180,23 +183,23 @@ budget = 218029
 
 [instructions.bank_seqtest]
 what = "Bank::fit_predict of one frame, seqtest: every per-row step of the bank around the cheapest model"
-budget = 2185915
+budget = 2255740
 
 [instructions.bank_ewridge_k5]
 what = "Bank::fit_predict of one frame, ewridge with 5 features"
-budget = 5346405
+budget = 5514913
 
 [instructions.bank_seqtest_groups]
 what = "Bank::fit_predict of one frame of 1,000 groups, one row each, seqtest, on a pool of one thread: what a (spec, group) task costs whatever its rows"
-budget = 9901589
+budget = 10494412
 
 [instructions.bank_ewridge_k5_groups]
 what = "Bank::fit_predict of one frame of 1,000 groups, one row each, ewridge with 5 features and a solve every 4 rows, on a pool of one thread"
-budget = 15105407
+budget = 15680772
 
 [instructions.bank_ew_cov_wide_t1]
 what = "Bank::fit_predict of one frame of 8,192 rows, ew_cov's 230 statistics, on a pool of one thread: each run copied into the output as it ends, after the next is learned"
-budget = 92396795
+budget = 94836157
 
 # Added with the review of 2026-10-23 (task 270 (e)): no budget until CI's
 # first count, which `scripts/budgets.py apply` writes.
@@ -219,7 +222,7 @@ budget = 3630540
 
 [instructions.holt]
 what = "holt, level and trend of one column, half-life 1000: AnyModel::step_into, into one kept Step"
-budget = 564024
+budget = 627026
 
 [instructions.marginal]
 what = "marginal, 20 features against one target, half-life 1000: AnyModel::step_into, into one kept Step"
@@ -237,11 +240,11 @@ budget = 36955252
 
 [instructions.deco]
 what = "deco, 20 features, ew dynamics: AnyModel::step_into, into one kept Step"
-budget = 3192279
+budget = 3265278
 
 [instructions.hmm]
 what = "hmm, 4 features, 2 states, full covariance, precision prior 1: AnyModel::step_into, into one kept Step"
-budget = 7787422
+budget = 8001333
 
 [instructions.rcov]
 what = "rcov, 4 features, kernel, the rows a block takes in: AnyModel::step_into, into one kept Step"
@@ -249,44 +252,58 @@ budget = 24375035
 
 [instructions.hawkes]
 what = "hawkes, one node, three kernels: AnyModel::step_into, into one kept Step, a 4 x 4 solve a row; its budget is CI's first count (locally 1,735,679)"
+budget = 3224700
 
 [instructions.garch]
 what = "garch, one series after its start: AnyModel::step_into, into one kept Step, a 3 x 3 step a row; its budget is CI's first count (locally 1,735,679)"
+budget = 4445008
 
 [instructions.pca]
 what = "pca, one component of 20 features by the incremental SVD: AnyModel::step_into, into one kept Step, a few Jacobi sweeps over 3 rows of 20 a row; its budget is CI's first count"
+budget = 7250929
 
 [instructions.garch_figarch]
 what = "garch, FIGARCH of 1,000 lags after its start: AnyModel::step_into, its O(M) pass of the weights and their derivatives a row; its budget is CI's first count (locally 1,735,679)"
+budget = 64557955
 
 [instructions.dcc]
 what = "dcc, three series, the asymmetric model learned after its start, no margins: AnyModel::step_into, into one kept Step, R's 3 x 3 factor and inverse and three R⁻¹ ∂R a row; its budget is CI's first count"
+budget = 13984078
 
 [instructions.dcc_margins]
 what = "dcc, three series through GARCH margins, the asymmetric model learned after both starts: AnyModel::step_into, three GARCH steps and the correlation's a row; its budget is CI's first count"
+budget = 26919702
 
 [instructions.realized]
 what = "realized, two series under a decay with Lee and Mykland's window of 100: AnyModel::step_into, into one kept Step, seven compensated sums and a ring a series a row; its budget is CI's first count"
+budget = 2615026
 
 [instructions.power_variation]
 what = "power_variation, two series under a decay, a sum of squares, normalized bipower variation, a centered Parzen sum of 20 lags, a flat-top Bartlett sum of 10 and squares of ten-step returns: AnyModel::step_into, into one kept Step, eleven compensated sums, a ring of 10 raw returns and of 201 ten-step returns a series a row; its budget is CI's first count"
+budget = 15058050
 
 [instructions.tdigest]
 what = "tdigest, one column at compression 100, three levels: AnyModel::step_into, a merge of a copy of its buffer a row; its budget is CI's first count"
+budget = 125997385
 
 [instructions.isotonic]
 what = "isotonic, one target on one feature over a window of 200 rows under a decay, read at the nearer end beyond them: AnyModel::step_into, a sorted insert and a whole pool-adjacent-violators pass over the window a row; its budget is CI's first count"
+budget = 18257837
 
 [instructions.ddsketch]
 what = "ddsketch, one column at the default alpha, three levels: AnyModel::step_into, a walk of its live buckets a row for the levels and tail means; its budget is CI's first count"
+budget = 16534463
 [instructions.ar]
 what = "ar, an AR(5) with no features: AnyModel::step_into, into one kept Step, the ring, a rank-one update of a 6 x 6 Gram and its Cholesky a row; its budget is CI's first count"
+budget = 10206026
 
 [instructions.vector_ar]
 what = "vector_ar, a VAR(2) of three series with a Granger test, solving every row: AnyModel::step_into, into one kept Step, the ring, a rank-one update of a 10 x 10 Gram, the fit's solve and one Cholesky factor read for the test a row; its budget is CI's first count"
+budget = 26482569
 
 [instructions.spectral]
 what = "spectral, sixteen periods on an even clock: AnyModel::step_into, into one kept Step, a rotation and an add a period a row; its budget is CI's first count"
+budget = 3196883
 
 [instructions.audit_continuous]
 what = "audit, one continuous column, 256 counters: AnyModel::step_into, into one kept Step, past the cap on nearly every row"
@@ -294,7 +311,7 @@ budget = 847018
 
 [instructions.bocpd_full]
 what = "bocpd, 4 features, full covariance, max_run 200, prune below 1e-6: AnyModel::step_into, into one kept Step"
-budget = 16362446
+budget = 16875863
 
 [instructions.ew_cov_lags]
 what = "ew_cov, 20 features, mean and cov, lags 1-5: AnyModel::step_into, into one kept Step"
@@ -327,19 +344,24 @@ budget = 2221103
 # No budget yet: CI's Valgrind count of the first run sets it (`scripts/budgets.py apply`).
 [instructions.window_invert_cubic]
 what = "WindowsRun::feed of one frame, the root in u of u^3 + u + exp(u / 2) = x0 on [-10, 10] a row by the formula's own interpreter, beside a running sum of x0 with no window and half-life 1000: every row a solve, none held; its budget is CI's first count"
+budget = 9027503
 
 [instructions.bars_volume]
 what = "Bars::feed of one frame, volume bars of 1,000 over sizes of 1 to 100 (about 20 rows a bar), with the open, high, low and close of the price, the volume and the rows: the exact running total, the crossing test and six aggregates a row, about 50 bars closed into the output; its budget is CI's first count (locally 1,735,679)"
+budget = 1730052
 
 [instructions.bars_volume_groups100]
 what = "Bars::feed of one frame, as bars_volume, grouped over 100 groups, one row of each in turn after a warm-up of 20 rows a group: a row finds its group's open bar, about half the groups close one; its budget is CI's first count (locally 2,276,447)"
 # No budget yet: CI's Valgrind count of the first run sets it (`scripts/budgets.py apply`).
+budget = 2275530
 [instructions.window_ewm_mean_running]
 what = "WindowsRun::feed of one frame, ewm_mean of x0 with no window, half-life 1000: the running mean, the baseline of window_clock_step_running"
 
 # No budget yet: CI's Valgrind count of the first run sets it (`scripts/budgets.py apply`).
+budget = 599156
 [instructions.window_clock_step_running]
 what = "WindowsRun::feed of one frame, clock_step of the clock t with stat mean, half-life 1000, ungrouped: the decayed mean of the clock's steps, a row operator run before the window core (which carries a one-row stand-in kernel); its difference from window_ewm_mean_running is a row of the clock step above a running mean"
+budget = 3107954
 
 # --- scaling ---------------------------------------------------------------------
 # How a cost grows, not what it is (docs/PERFORMANCE.md, "How cost grows";
@@ -2197,6 +2219,158 @@ to = 2226254
 date = 2026-11-24
 reason = "PLAN 578d, WIN-1: the oldest held value's mass inside the window is its own mass discounted from its near end, where it was the difference of two masses from the reading row, which lost a bit a half-life and all of it from 54; the discount and the mass are of distances that change with every row of an irregular clock, where one of the two masses was of the window's length and kept between rows, so a row takes one more exp2. Set from arm64's count, not CI's: 54 instructions a row more on winbench's windowed mean (2,471 to 2,525, instructions retired, the difference of runs of one and two million rows at both builds), times this case's 1,000 rows, added to the budget; CI's first count on the change is the one to hold it to"
 changelog = "A windowed mean costs one more `exp2` a row on an irregular clock"
+
+[[raised]]
+key = "instructions.holt"
+from = 564024
+to = 627026
+date = 2026-11-25
+reason = "PLAN 559 (16200192): holt's forecasts at horizons, the prediction buffer sized m*(1 + 2h) and the horizon branch each row even with none asked for, +15.07%; then 488 (cc4c8b74) -3.39%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "`holt`'s forecasts at horizons cost 11% of its small step"
+
+[[raised]]
+key = "instructions.bocpd"
+from = 10838815
+to = 11426722
+date = 2026-11-25
+reason = "PLAN 578f (e62dad72): BOCPD-1, 2, 5's overflow and underflow guards on the per-row path (the log-product's range test per block of 8, the scatter's finiteness test, the zero-weight term), +5.32%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "`bocpd`'s guards against overflow cost 3% to 5% a row"
+
+[[raised]]
+key = "instructions.bocpd_full"
+from = 16362446
+to = 16875863
+date = 2026-11-25
+reason = "PLAN 578f (e62dad72): BOCPD-1, 2, 5's overflow and underflow guards on the per-row path (the log-product's range test per block of 8, the scatter's finiteness test, the zero-weight term), +2.87%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "`bocpd`'s guards against overflow cost 3% to 5% a row"
+
+[[raised]]
+key = "instructions.ewridge_k5"
+from = 2119477
+to = 2223991
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, +4.27%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.sgd"
+from = 2537026
+to = 2647026
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, +3.76%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.sgd_huber"
+from = 2881700
+to = 2970772
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, +2.70%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.pa"
+from = 2254570
+to = 2302944
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, +1.48%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.deco"
+from = 3192279
+to = 3265278
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, with COV-5's finiteness tests on each block's sums (deco.rs), +2.29%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.hmm"
+from = 7787422
+to = 8001333
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap (hmm/factor.rs), +1.70%; 578f +0.52%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.ewridge_k20"
+from = 6331811
+to = 6484088
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, +1.51%; the merges 49-61 of 9dc4d2ec's first-parent line (489/490 seasonal, 495 vector_ar, 496 the fixed-lag smoother, JSON-NaN), measured together because the merges between them do not compile until 38daeca8: the bank's per-row smoother checks (inst.o_smoothed) and VectorAr's arms in AnyModel, ModelState and Extra, and ewridge's solve counter, +0.65%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.lasso_k20"
+from = 12605148
+to = 12909598
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, +0.79%; the merges 49-61 of 9dc4d2ec's first-parent line (489/490 seasonal, 495 vector_ar, 496 the fixed-lag smoother, JSON-NaN), measured together because the merges between them do not compile until 38daeca8: the bank's per-row smoother checks (inst.o_smoothed) and VectorAr's arms in AnyModel, ModelState and Extra, and ewridge's solve counter, +0.34%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.huber_k20"
+from = 5818665
+to = 5959650
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, +0.34%; the merges 49-61 of 9dc4d2ec's first-parent line (489/490 seasonal, 495 vector_ar, 496 the fixed-lag smoother, JSON-NaN), measured together because the merges between them do not compile until 38daeca8: the bank's per-row smoother checks (inst.o_smoothed) and VectorAr's arms in AnyModel, ModelState and Extra, and ewridge's solve counter, +0.71%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.huber_k20_sum"
+from = 5926403
+to = 6094848
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, +0.33%; the merges 49-61 of 9dc4d2ec's first-parent line (489/490 seasonal, 495 vector_ar, 496 the fixed-lag smoother, JSON-NaN), measured together because the merges between them do not compile until 38daeca8: the bank's per-row smoother checks (inst.o_smoothed) and VectorAr's arms in AnyModel, ModelState and Extra, and ewridge's solve counter, +0.70%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.huber_k20_sets"
+from = 7589200
+to = 7741639
+date = 2026-11-25
+reason = "the merges 49-61 of 9dc4d2ec's first-parent line (489/490 seasonal, 495 vector_ar, 496 the fixed-lag smoother, JSON-NaN), measured together because the merges between them do not compile until 38daeca8: the bank's per-row smoother checks (inst.o_smoothed) and VectorAr's arms in AnyModel, ModelState and Extra, and ewridge's solve counter, +0.55%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The bank pays under 1% a row for each of the target-weight field, `ets`, the `hawkes` window fix, `vector_ar` and the fixed-lag smoother"
+
+[[raised]]
+key = "instructions.bank_ew_cov_wide_t1"
+from = 92396795
+to = 94836157
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, +0.60%; the merges 49-61 of 9dc4d2ec's first-parent line (489/490 seasonal, 495 vector_ar, 496 the fixed-lag smoother, JSON-NaN), measured together because the merges between them do not compile until 38daeca8: the bank's per-row smoother checks (inst.o_smoothed) and VectorAr's arms in AnyModel, ModelState and Extra, and ewridge's solve counter, +0.48%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.bank_ewridge_k5"
+from = 5346405
+to = 5514913
+date = 2026-11-25
+reason = "PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, +1.83%; PLAN 568 (73665942, emit_target_weight) on the bank's per-row path, +0.30%; 488 (cc4c8b74) +0.43%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The review's guards for a history the decay all but forgot cost 1% to 5% a row"
+
+[[raised]]
+key = "instructions.bank_ewridge_k5_groups"
+from = 15105407
+to = 15680772
+date = 2026-11-25
+reason = "the merges 49-61 of 9dc4d2ec's first-parent line (489/490 seasonal, 495 vector_ar, 496 the fixed-lag smoother, JSON-NaN), measured together because the merges between them do not compile until 38daeca8: the bank's per-row smoother checks (inst.o_smoothed) and VectorAr's arms in AnyModel, ModelState and Extra, and ewridge's solve counter, +2.24%; PLAN 578h (a287dd58): REG-7's mean step taken from the row back below comp::FORGOTTEN, a branch in each mean's step (comp::step_toward, inline in Including::moments_of and the other loops), and COV-4's held-value test in sqsum::add and subnormal-weight branch in sqsum::count; each fixes a wrong answer after a long gap, +0.65%; PLAN 568 (73665942, emit_target_weight) on the bank's per-row path, +0.48%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The bank pays under 1% a row for each of the target-weight field, `ets`, the `hawkes` window fix, `vector_ar` and the fixed-lag smoother"
+
+[[raised]]
+key = "instructions.bank_seqtest_groups"
+from = 9901589
+to = 10494412
+date = 2026-11-25
+reason = "the merges 49-61 of 9dc4d2ec's first-parent line (489/490 seasonal, 495 vector_ar, 496 the fixed-lag smoother, JSON-NaN), measured together because the merges between them do not compile until 38daeca8: the bank's per-row smoother checks (inst.o_smoothed) and VectorAr's arms in AnyModel, ModelState and Extra, and ewridge's solve counter, +3.43%; PLAN 568 (73665942, emit_target_weight) on the bank's per-row path, +0.75%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The bank pays under 1% a row for each of the target-weight field, `ets`, the `hawkes` window fix, `vector_ar` and the fixed-lag smoother"
+
+[[raised]]
+key = "instructions.bank_seqtest"
+from = 2185915
+to = 2255740
+date = 2026-11-25
+reason = "PLAN 568 (73665942, emit_target_weight) on the bank's per-row path, +0.81%; the merges 49-61 of 9dc4d2ec's first-parent line (489/490 seasonal, 495 vector_ar, 496 the fixed-lag smoother, JSON-NaN), measured together because the merges between them do not compile until 38daeca8: the bank's per-row smoother checks (inst.o_smoothed) and VectorAr's arms in AnyModel, ModelState and Extra, and ewridge's solve counter, +0.69%; 488 (cc4c8b74) +0.67%; HAWKES-7 (beb638f5) +0.47%; 559 (16200192) +0.43%; traced by CI's Linux Valgrind counts (measuring Budgets runs on vm/budgets-bisect-*) at each first-parent merge from 13f5ffe4, the last passing Budgets run on main, to 9dc4d2ec. A recovery (the branch hoisted out of the loops, the rare path cold) is left for the profiling pass (task 586)"
+changelog = "The bank pays under 1% a row for each of the target-weight field, `ets`, the `hawkes` window fix, `vector_ar` and the fixed-lag smoother"
 
 [[signoff]]
 key = "instructions.clock_temporal"

@@ -2998,6 +2998,17 @@ model that only the new build has is listed as an addition and passes.
 
 ### Performance
 
+- **Wave W14-15's per-row costs, each the price of a fix or a feature, in
+  CI's Linux instruction counts against 13f5ffe4.** The review's guards for
+  a history the decay all but forgot cost 1% to 5% a row (`ewridge` +4.3%
+  at 5 features, `sgd` +3.8%, `deco` +2.3%, `hmm` +1.7%): each mean's step
+  tests the history's share and a Kish sum tests its held value, so a long
+  gap no longer loses the row or the sum. `bocpd`'s guards against overflow
+  cost 3% to 5% a row. `holt`'s forecasts at horizons cost 11% of its small
+  step, with none asked for. The bank pays under 1% a row for each of the
+  target-weight field, `ets`, the `hawkes` window fix, `vector_ar` and the
+  fixed-lag smoother (3.4% together on 10 groups of `seqtest`).
+
 - **`glm`'s exact row step under the inverse and power links costs 1% to
   4% a row at 20 features, and 8% (Gamma) to 34% (Tweedie) at 2** (PLAN
   581), for a fit that a target far from its mean no longer pushes out of

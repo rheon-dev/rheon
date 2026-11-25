@@ -85,8 +85,9 @@ MAX_SOURCE_BYTES = 260_000
 #: `ar` and `spectral` models, the diagnostics and regressions batches).
 #: Raised to 850 KB on 2026-11-24: it reached 805 KB with wave W14's nine
 #: branches (the horizons, the bars, the isotonic fit, the clock health, the
-#: inversion and the review batches).
-MAX_DOC_BYTES = 850_000
+#: inversion and the review batches). Raised to 870 KB on 2026-11-25: it
+#: reached 850 KB with wave W14-15's budget raises.
+MAX_DOC_BYTES = 870_000
 
 #: Lockfiles are generated but must be tracked, and grow with every wheel a
 #: dependency publishes (mypy alone added 65 KB); their size says nothing
