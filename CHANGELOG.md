@@ -1231,6 +1231,17 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **`emit_breaks` no longer keeps a residual whose square overflows**
+  (W14-15, found by a sweep of every kind with a row at the input bound
+  and a save after it). A residual is not bounded by the inputs' bound: an
+  `ar` or `vector_ar` fit whose lag was `1e100` predicted the row after it
+  past `1e154`, and the recursive residuals' spread, `Σ ω v²`, became
+  `inf` for good. Every later residual was then studentized to 0, and the
+  state was refused at its load as "shaped for other features, lags or
+  levels". Such a residual now only ages the sums, as one that is not a
+  number does. Only the rows after such a residual move. Moves:
+  `*.studentized_*`, `*.cusum_*`, `*.break_wald_*`.
+
 - **A `garch` state saved after a row at the input bound loads again**
   (W14-15, from TEST-11's property test: 133 returns, `1e100` at row 123,
   saved after it). After a squared return of `1e200` the step's `ω` is near

@@ -328,7 +328,12 @@ impl Breaks {
     /// On a quantile fit (`with_indicator`) the CUSUM sums `c`, the row's
     /// standardized indicator `(1{y < pred} − q) / sqrt(q (1 − q))`, in
     /// place of the studentized residual. A `v` that is not finite, or a
-    /// weight of 0, only ages (CLAUDE.md hard rule 9).
+    /// weight of 0, only ages (CLAUDE.md hard rule 9), and so does a `v`
+    /// whose square the spread cannot hold: a residual is not bounded by
+    /// the inputs' bound (an `ar` fit's prediction past a lag at `1e100`
+    /// left one past `1e154`), and its `ω v²` of `∞` was the spread for
+    /// good, every later residual studentized to 0 and the state refused at
+    /// its load (W14-15).
     pub fn update(&mut self, v: f64, lam: f64, w: f64, c: Option<f64>) {
         // A step that forgets every row (a decay of 0) leaves no spread to
         // studentize by: read before it, the row was scaled by the rows it
@@ -342,7 +347,7 @@ impl Breaks {
                 .filter(|z| (w * z * z * z * z).is_finite())
         };
         self.age(lam);
-        if !(v.is_finite() && w > 0.0) {
+        if !(v.is_finite() && w > 0.0 && (self.vq + w * v * v).is_finite()) {
             return;
         }
         // The CUSUM's term: the indicator on a quantile fit, else `z`.
@@ -3274,6 +3279,39 @@ mod tests {
         assert!(bad(|c| c.vq = f64::INFINITY));
         assert!(bad(|c| c.c2 = -1.0));
         assert!(bad(|c| c.p2[1] = f64::NAN));
+    }
+
+    /// W14-15: a recursive residual whose square the spread cannot hold
+    /// only ages the sums, as one that is not finite does, so the state
+    /// still loads and the rows after it are studentized against the spread
+    /// before it, to the bit.
+    #[test]
+    fn a_residual_past_the_spreads_range_only_ages() {
+        let rows = [
+            1.0, -0.5, 0.7, -1.2, 0.3, 0.9, -0.1, 0.4, -0.8, 1.1, 0.2, -0.6,
+        ];
+        for lags in [0, 2] {
+            let mut b = Breaks::with_lags(lags);
+            for v in rows {
+                b.update(v, 0.9, 1.0, None);
+            }
+            let (mut huge, mut aged) = (b.clone(), b.clone());
+            // `1e155² = 1e310`: past `f64`'s range alone
+            huge.update(1e155, 0.9, 1.0, None);
+            aged.update(f64::NAN, 0.9, 1.0, None);
+            assert!(huge.has_shape(lags), "{lags}: {huge:?}");
+            assert_eq!(huge, aged, "{lags}");
+            // a residual whose square fits is learned
+            let mut big = b.clone();
+            big.update(1e150, 0.9, 1.0, None);
+            assert!(big.has_shape(lags) && big.vq > 1e299, "{lags}: {big:?}");
+            for v in rows {
+                huge.update(v, 0.9, 1.0, None);
+                aged.update(v, 0.9, 1.0, None);
+            }
+            assert_eq!(huge, aged, "{lags}");
+            assert!(huge.studentized(1.0).is_some_and(|z| z > 0.1), "{lags}");
+        }
     }
 
     /// A horizon-free accumulator writes none of the horizon's fields, so
