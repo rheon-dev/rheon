@@ -556,8 +556,13 @@ model that only the new build has is listed as an addition and passes.
 - **`rp.ops.stl` and `rp.ops.mstl`: STL and MSTL read behind an embargo**
   (PLAN 490), in `rp.stream.with_windows`: on each row, the trend, a season
   or the remainder of statsmodels' `STL` or `MSTL` of the group's last `W`
-  learned rows, read `lag` rows back, bit-equal to statsmodels on the same
-  platform (a port of its compiled STL, the authors' Fortran). By default
+  learned rows, read `lag` rows back. It runs the operations of
+  statsmodels' compiled STL (the authors' Fortran) in their order, so each
+  value is within the rounding of those operations of the exact
+  decomposition, as statsmodels' is: the two agree to the bit on Linux
+  x86-64, and in the last bits on macOS arm64, where statsmodels' build
+  fuses some multiply-adds (W14-15: either side within 0.13 of the
+  operations' rounding bound on the tests' windows). By default
   `W = 2h + 1` and the lag `h + 1`, `h = max p (s - 1) / 2` the seasonal
   smoother's reach; `closed="left"` by default, so a value reads no row at
   or after its own, where `"right"` reads the row's own value and leaks it

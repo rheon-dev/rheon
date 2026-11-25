@@ -3420,7 +3420,7 @@ def stl(
 
     Use it to split a regular series into its trend, its season and the rest,
     such as an hourly load into its level, its daily shape and its surprise,
-    exactly as statsmodels' ``STL`` splits it. A decomposition revises its
+    as statsmodels' ``STL`` splits it. A decomposition revises its
     last rows as new ones arrive, so each value is read ``lag`` rows back,
     from a window of the group's last ``W`` learned rows, where the
     decomposition has stopped moving: the value of row ``t - lag`` arrives on row ``t``.
@@ -3434,9 +3434,13 @@ def stl(
         L = loess (span low_pass) of the moving averages of p, p and 3 rows of C
         S = C - L,    T = loess (span trend) of y - S
 
-    each value bit-equal to statsmodels' on the same platform. A row is
-    learned when its input is present; a null learns nothing and counts in no
-    lag. A clock break, a session change or a reset empties the group's ring.
+    in the operations and the order of statsmodels' ``STL``, so each value is
+    within the rounding of those operations of the exact decomposition, as
+    statsmodels' is. The two agree to the bit where neither fuses a multiply
+    and an add, and in the last bits elsewhere: statsmodels' build for macOS
+    on arm64 fuses some. A row is learned when its input is present; a null
+    learns nothing and counts in no lag. A clock break, a session change or a
+    reset empties the group's ring.
 
     .. rubric:: Parameters
 

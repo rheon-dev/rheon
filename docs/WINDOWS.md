@@ -562,7 +562,7 @@ need no `with_windows`, and they match statsmodels' `Fourier` and
 clock, as a profile's phase is.
 
 **`rp.ops.stl` and `rp.ops.mstl` split a regular series into its trend,
-its seasons and the rest, exactly as statsmodels' `STL` and `MSTL` split
+its seasons and the rest, as statsmodels' `STL` and `MSTL` split
 it, from each group's last `W` learned rows.** A decomposition revises its
 last rows as new ones arrive, so each value is read `lag` rows back, where
 it no longer moves: the value of row `t - lag` arrives on row `t`. By

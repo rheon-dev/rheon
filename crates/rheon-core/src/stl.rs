@@ -2,8 +2,14 @@
 //! Cleveland, McRae and Terpenning (1990), and its composition over several
 //! seasons of Bandara, Hyndman and Bergmeir (2021), as statsmodels computes
 //! them (`statsmodels.tsa.stl._stl.STL`, a translation of the authors'
-//! Fortran, and `statsmodels.tsa.seasonal.MSTL`), so that a fit is bit-equal
-//! to statsmodels' on the same platform.
+//! Fortran, and `statsmodels.tsa.seasonal.MSTL`): the same operations in the
+//! same order, never a multiply and an add fused. A fit is bit-equal to
+//! statsmodels' where its compiler fuses none either (Linux on x86-64, whose
+//! baseline has no FMA). statsmodels' build for macOS on arm64 fuses `b (j -
+//! abar) + 1` and the jump's interpolation always, and the loess's three sums
+//! in each vectorized loop's scalar remainder, so its last bits there are its
+//! compiler's; the tests hold both to the decomposition computed exactly,
+//! within the bound of the operations' rounding (`tests/reference_stl.py`).
 //!
 //! **The loess** at position `x_s` over rows `[l, r]` of a series of `n`
 //! rows (positions `j = 1..n`), span `q`:
@@ -19,7 +25,9 @@
 //! ```
 //!
 //! Each cube is `powf(3.0)`, the platform's `pow`, as statsmodels' compiled
-//! code has it; each square is `x * x`. Sums run in row order.
+//! code has it; each square is `x * x`. Sums run in row order. No value of a
+//! `pow` is kept: a group's state is its ring of learned inputs
+//! ([`crate::StlRing`]), and each fit is made afresh from it.
 //!
 //! **One inner pass**, the trend `T` (0 at first), `p` the period:
 //!
