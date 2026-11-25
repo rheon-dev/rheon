@@ -370,6 +370,13 @@ pub enum Targets {
     /// a value whose higher moments pass the largest double, so a model
     /// that keeps moments holds them at a scale (`ewm_moments`).
     BoundAt(usize),
+    /// `n` targets each its own line of the features with its own noise
+    /// draw, so that no two are collinear: the series a VAR is fitted to.
+    /// [`Targets::Linear`]'s share one noise draw, so two of them are
+    /// collinear but for it (`y1 = 2 y0 - 1 - noise`), and a VAR's lags of
+    /// them are a near-singular design, whose fit moved by more than the
+    /// golden tolerance from one platform's last bits to another's.
+    Separate(usize),
 }
 
 /// The process of a [`Targets::Garch`] stream.
@@ -574,6 +581,14 @@ impl Case {
                     }
                     Targets::Linear(t) => (0..t)
                         .map(|j| (!null).then_some(signal * (1.0 + j as f64) + noise - j as f64))
+                        .collect(),
+                    Targets::Separate(t) => (0..t)
+                        .map(|j| {
+                            let own = 0.1 * lcg(&mut s);
+                            let odd = (j % 2) as f64;
+                            let line = (1.5 - 2.0 * odd) * x0 + (-0.75 + 2.0 * odd) * x1;
+                            (!null).then_some(line + 0.25 - 1.25 * j as f64 + own)
+                        })
                         .collect(),
                     Targets::LinearFrom(t, first) => (0..t)
                         .map(|j| {
@@ -4173,7 +4188,7 @@ pub fn all() -> Vec<Case> {
                 m
             },
             K,
-            Targets::Linear(2),
+            Targets::Separate(2),
             40
         ),
         // Its order chosen by AIC at every solve: the chosen coefficients.
@@ -4187,7 +4202,7 @@ pub fn all() -> Vec<Case> {
             })
             .unwrap(),
             K,
-            Targets::Linear(2),
+            Targets::Separate(2),
             40
         ),
         // Under a hard window of 15 clock units: the fit's snapshots.
@@ -4201,7 +4216,7 @@ pub fn all() -> Vec<Case> {
             })
             .unwrap(),
             K,
-            Targets::Linear(2),
+            Targets::Separate(2),
             40
         ),
         // Through the origin, on a solve schedule.
@@ -4218,7 +4233,7 @@ pub fn all() -> Vec<Case> {
             })
             .unwrap(),
             K,
-            Targets::Linear(2),
+            Targets::Separate(2),
             40
         ),
         // Saved two rows into an order of 3: the ring partly filled, no fit.
@@ -4232,7 +4247,7 @@ pub fn all() -> Vec<Case> {
             })
             .unwrap(),
             K,
-            Targets::Linear(2),
+            Targets::Separate(2),
             2
         ),
     ]
