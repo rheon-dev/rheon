@@ -37,6 +37,7 @@ from __future__ import annotations
 import io
 import math
 import warnings
+from fractions import Fraction
 from typing import Any
 
 import numpy as np
@@ -63,8 +64,17 @@ def _same(a: float | None, b: float) -> bool:
     )
 
 
+def _fma(a: float, b: float, c: float) -> float:
+    """``a * b + c`` with one rounding: ``math.fma`` where Python has it (3.13
+    on), else the exact rational result rounded once, which is the same
+    correctly rounded value."""
+    if hasattr(math, "fma"):
+        return math.fma(a, b, c)
+    return float(Fraction(a) * Fraction(b) + Fraction(c))
+
+
 def _mul_add(a: float, b: float, c: float, fused: bool) -> float:
-    return math.fma(a, b, c) if fused else a * b + c
+    return _fma(a, b, c) if fused else a * b + c
 
 
 def _pava(x: list[float], w: list[float], fused: bool) -> list[float]:
