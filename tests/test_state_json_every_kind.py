@@ -150,3 +150,66 @@ def test_the_sweep_meets_every_stress_somewhere():
     for stress in ("weight", "min_weight", "embargo"):
         n = sum(stress in t for t in taken.values())
         assert n > len(MINIMAL) // 2, (stress, n)
+
+
+#: The bank's bound on a value it learns from (``rheon_core::INPUT_BOUND``).
+INPUT_BOUND = 1e100
+
+
+def _with(df: pl.DataFrame, col: str, at: int, values: tuple[float, ...]) -> pl.DataFrame:
+    idx = pl.int_range(pl.len())
+    e = pl.col(col)
+    for i, v in enumerate(values):
+        e = pl.when(idx == at + i).then(v).otherwise(e)
+    return df.with_columns(e.alias(col))
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        pytest.param(
+            k,
+            marks=()
+            if k in ("ar", "ewridge")
+            else pytest.mark.extended(
+                reason="a state saved after rows at the input bound, a kind each"
+            ),
+        )
+        for k in sorted(MINIMAL)
+    ],
+)
+def test_every_kind_loads_after_a_row_at_the_input_bound(kind):
+    """A row at the input bound is a legal row, so a state saved after it
+    is one the model reached, and it must load and go on exactly as the
+    bank that was never saved. Two cases a load once refused: `garch`'s
+    projected step left its parameters at the rounding of an `ω` near
+    `1e195`, and `emit_breaks` kept the square of an `ar` residual past
+    `1e154` as an infinite spread (W14-15). Each kind with every stress
+    its builder takes, a target and a feature at `±1e100`, alone and
+    twice in a row, in the start and once fitting, saved after the bound
+    row and after the row past it; a row the kind refuses is skipped, as
+    its own refusal is tested beside its domain."""
+    spec, _ = stressed(kind)
+    base = frame(kind)
+    loaded = 0
+    for col in ("y", "x0"):
+        for at in (10, 125, 235):
+            for values in ((INPUT_BOUND,), (-INPUT_BOUND,), (INPUT_BOUND, -INPUT_BOUND)):
+                df = _with(base, col, at, values)
+                for cut in (at + len(values), at + len(values) + 1):
+                    kept = rp.ModelBank([spec], threads=1)
+                    try:
+                        kept.fit_predict(df[:cut])
+                        want = kept.fit_predict(df[cut:])
+                    except ValueError as e:
+                        # a value outside the kind's domain: a label, a
+                        # count, a probability
+                        assert "column" in str(e), (kind, col, at, values, e)
+                        continue
+                    again = rp.ModelBank([spec], threads=1)
+                    again.fit_predict(df[:cut])
+                    resumed = rp.ModelBank.load(again.save_bytes(), specs=[spec], threads=1)
+                    got = resumed.fit_predict(df[cut:])
+                    assert got.equals(want, null_equal=True), (kind, col, at, values, cut)
+                    loaded += 1
+    assert loaded > 0, kind
