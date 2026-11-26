@@ -1043,6 +1043,112 @@ fn null_targets_decay_the_residual_variance_weight_without_adding_to_it() {
     assert!((m.acc.wj[0] - wj * lam).abs() < 1e-12);
 }
 
+/// A row of weight 0 with a target and a prediction teaches the residual
+/// variance nothing, to the bit, and ages its weight (hard rule 9): it is
+/// not folded in at weight 0, whose `(W·σ² + 0)/W` rounds `σ²` away from
+/// itself. Each row's clock step is one at which that fold would round.
+#[test]
+fn a_row_of_weight_0_leaves_the_residual_variance_to_the_bit() {
+    let mut c = cfg(1, 1);
+    c.decay = Decay::Halflife(100.0);
+    let mut m = EwRidge::new(c).unwrap();
+    let mut s = 61u64;
+    for i in 0..80 {
+        let x = [lcg(&mut s)];
+        let y = 2.0 * x[0] + 0.3 * lcg(&mut s);
+        m.step(&x, &[Some(y)], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+    }
+    let mut probed = 0;
+    for i in 0..400 {
+        // A learned row moves the variance and its weight, then a row of
+        // weight 0 at the first clock step under 3 at which the fold would
+        // round, where there is one.
+        let x = [lcg(&mut s)];
+        let y = 2.0 * x[0] + 0.3 * lcg(&mut s);
+        m.step(&x, &[Some(y)], 1.0, 1.0);
+        let (sig, w) = (m.sigma2()[0], m.wsig[0]);
+        let rounds = |d: f64| {
+            let aged = Decay::Halflife(100.0).factor(d) * w;
+            ((aged * sig + 0.0) / (aged + 0.0)).to_bits() != sig.to_bits()
+        };
+        let Some(d) = (1..2000)
+            .map(|k| f64::from(k) * 0.0015)
+            .find(|&d| rounds(d))
+        else {
+            continue;
+        };
+        let x = [lcg(&mut s)];
+        let out = m.step(&x, &[Some(1.0 + x[0])], d, 0.0);
+        assert!(out.pred[0].is_finite(), "row {i}: a prediction to fold");
+        assert_eq!(m.sigma2()[0].to_bits(), sig.to_bits(), "row {i}");
+        assert_eq!(
+            m.wsig[0].to_bits(),
+            (Decay::Halflife(100.0).factor(d) * w).to_bits(),
+            "row {i}: its weight ages"
+        );
+        probed += 1;
+        if probed == 20 {
+            break;
+        }
+    }
+    assert_eq!(probed, 20, "rows at which the fold would round");
+}
+
+/// Each target's residual variance reads its own first combo's prediction,
+/// `pred[j · n_combos]`, under more than one feature set: a row where the
+/// first target's prediction is withheld (its own weight below
+/// `min_weight`, its target null so far) and the second's is not folds the
+/// second's residual.
+#[test]
+fn each_targets_residual_variance_reads_its_own_prediction_under_feature_sets() {
+    let mut c = cfg(3, 2);
+    c.decay = Decay::Halflife(25.0);
+    c.feature_sets = vec![("a".into(), vec![0, 1]), ("b".into(), vec![2])];
+    let mut m = EwRidge::new(c).unwrap();
+    let nc = m.cfg.n_combos();
+    assert!(nc > 1);
+    let (mut want, mut wsig) = ([0.0f64; 2], [0.0f64; 2]);
+    let mut s = 67u64;
+    let mut only_second = 0;
+    for i in 0..120 {
+        let x = [lcg(&mut s), lcg(&mut s), lcg(&mut s)];
+        let y0 = 2.0 * x[0] - x[2] + 0.2 * lcg(&mut s);
+        let y1 = -3.0 * x[1] + 4.0 * x[2] + 5.0 + 0.2 * lcg(&mut s);
+        let y = [(i >= 40).then_some(y0), Some(y1)];
+        let d = if i == 0 { 0.0 } else { 1.0 };
+        let lam = Decay::Halflife(25.0).factor(d);
+        let out = m.step(&x, &y, d, 1.0);
+        if !out.pred[0].is_finite() && out.pred[nc].is_finite() {
+            only_second += 1;
+        }
+        for j in 0..2 {
+            let p = out.pred[j * nc];
+            match y[j] {
+                Some(yj) if p.is_finite() => {
+                    let resid = yj - p;
+                    let ws_new = lam * wsig[j] + 1.0;
+                    want[j] = (lam * wsig[j] * want[j] + resid * resid) / ws_new;
+                    wsig[j] = ws_new;
+                }
+                _ => wsig[j] *= lam,
+            }
+        }
+        let got = m.sigma2();
+        for (j, &w) in want.iter().enumerate() {
+            let tol = 1e-12 * (1.0 + w);
+            assert!(
+                (got[j] - w).abs() <= tol,
+                "row {i} target {j}: {} vs {w}",
+                got[j]
+            );
+        }
+    }
+    assert!(
+        only_second > 10,
+        "{only_second} rows with the second prediction alone"
+    );
+}
+
 /// `σ²` is the EW mean of the squared out-of-sample errors: every row
 /// ages its weight by the row's `lam`, and a row with a target, a
 /// weight and a prediction adds `w·r²`. A row with a target and no
