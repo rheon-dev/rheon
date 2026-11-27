@@ -36,6 +36,8 @@ fn op(stat: Stat, partial: Partial, cap: Option<u64>) -> OpDef {
         bias: false,
         quantile: None,
         max_state_bytes: cap,
+        interpolation: None,
+        rank_method: None,
     }
 }
 

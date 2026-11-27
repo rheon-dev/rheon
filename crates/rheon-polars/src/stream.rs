@@ -3365,6 +3365,9 @@ pub struct Scratch {
     /// has one, and the row's own (docs/WARMUP-AND-CONVERGENCE.md §2.1).
     infl: Vec<f64>,
     row_infl: Vec<f64>,
+    gram_h: Vec<f64>,
+    gram_g_inv_x: Vec<f64>,
+    gram_diag: Vec<f64>,
     /// Each slot's recursive residual, `resid / error_inflation`, under
     /// `emit_breaks` (docs/PLAN.md task 221 (b)).
     z: Vec<f64>,
@@ -3453,6 +3456,7 @@ struct Instance<'a> {
     o_se_hc2: Option<&'a mut Vec<Option<Vec<f64>>>>,
     o_se_hc3: Option<&'a mut Vec<Option<Vec<f64>>>>,
     o_se_hac: &'a mut Vec<Option<Vec<f64>>>,
+    o_dfbetas: Option<&'a mut Vec<Option<Vec<f64>>>>,
     /// `kalman`'s fixed-lag smoother's outputs (`smoothed_coef`,
     /// `smoothed_se_coef`, and each target's `smoothed_for`, a target's
     /// `n_rows` after another), where the spec has one.
@@ -4005,6 +4009,16 @@ fn run_instance(
                 .model
                 .get()
                 .row_error_inflation_into(xs, score_d, &mut sc.row_infl);
+        let has_gram_lev = inst.spec.reads_gram_leverage()
+            && plan.direct()
+            && inst.model.get().row_gram_leverage_into(
+                xs,
+                score_d,
+                emit && inst.spec.emit_dfbetas,
+                &mut sc.gram_h,
+                &mut sc.gram_g_inv_x,
+                &mut sc.gram_diag,
+            );
         // Whether the instance is ready for task 221's diagnostics to fold
         // its residuals (task 232 (1); review round 6, F-1), read before the
         // step as the gates are: the model past its own warm-up, and the
@@ -4823,6 +4837,13 @@ fn run_instance(
                 preds: &step.pred,
                 resid: &sc.r,
                 inflation: has_row_infl.then_some(sc.row_infl.as_slice()),
+                gram_h: has_gram_lev.then_some(sc.gram_h.as_slice()),
+                gram_g_inv_x: (has_gram_lev && inst.spec.emit_dfbetas)
+                    .then_some(sc.gram_g_inv_x.as_slice()),
+                gram_diag: (has_gram_lev && inst.spec.emit_dfbetas)
+                    .then_some(sc.gram_diag.as_slice()),
+                w,
+                score_d,
                 ys: &sc.ys,
                 xs,
                 nc,
@@ -4839,6 +4860,9 @@ fn run_instance(
                     inst.o_checks,
                 );
                 c.read_health(xs.len(), n_rows, ri, inst.o_health);
+                if let Some(o) = inst.o_dfbetas.as_deref_mut() {
+                    o[ri] = c.dfbetas(inst.check_cfg, &row, inst.n_slots);
+                }
             }
             if learn {
                 c.learn(inst.check_cfg, d_clock, &row, &sc.z, w, diag_ready);

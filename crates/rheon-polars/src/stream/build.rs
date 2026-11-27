@@ -453,14 +453,16 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                     "var" => Ok(EwCovStat::Var),
                     "std" => Ok(EwCovStat::Std),
                     "cov" => Ok(EwCovStat::Cov),
+                    "raw_cov" => Ok(EwCovStat::RawCov),
                     "corr" => Ok(EwCovStat::Corr),
                     "partial_corr" => Ok(EwCovStat::PartialCorr),
                     "mahal" => Ok(EwCovStat::Mahal),
+                    "loglik" => Ok(EwCovStat::Loglik),
                     "lag_corr" => Ok(EwCovStat::LagCorr),
                     other => Err(format!(
                         "stats lists {other:?}, which is not an ew_cov statistic. Use \
-                         \"mean\", \"var\", \"std\", \"cov\", \"corr\", \"partial_corr\", \
-                         \"mahal\" or \"lag_corr\"."
+                         \"mean\", \"var\", \"std\", \"cov\", \"raw_cov\", \"corr\", \
+                         \"partial_corr\", \"mahal\", \"loglik\" or \"lag_corr\"."
                     )),
                 })
                 .collect::<Result<Vec<_>, String>>()?;

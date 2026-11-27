@@ -30,6 +30,8 @@ fn op(kernel: usize, stat: Stat) -> OpDef {
         bias: false,
         quantile: (stat == Stat::Quantile).then_some(0.5),
         max_state_bytes: None,
+        interpolation: None,
+        rank_method: None,
     }
 }
 

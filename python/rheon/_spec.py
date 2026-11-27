@@ -1186,6 +1186,7 @@ def _common(
     drift_kind: Literal["page_hinkley", "cusum", "adwin", "ddm", "eddm", "kswin"] | None = None,
     drift_options: Mapping[str, float | int | bool | str] | None = None,
     emit_calibration: bool = False,
+    emit_spiegelhalter: bool = False,
     calibration_half_life: float | Duration | None = None,
     emit_breaks: bool = False,
     breaks_half_life: float | Duration | None = None,
@@ -1194,12 +1195,18 @@ def _common(
     robust_se_lags: int | None = None,
     robust_se_types: list[Literal["hc0", "hc1", "hc2", "hc3"]] | None = None,
     emit_specification: bool = False,
+    emit_arch_lm: bool = False,
+    arch_lm_lags: int | None = None,
+    emit_white: bool = False,
+    white_interaction_terms: bool | None = None,
     specification_half_life: float | Duration | None = None,
     ljung_box_lags: int | None = None,
     horizon_rows: int | None = None,
     emit_tails: bool = False,
     tails_half_life: float | Duration | None = None,
     emit_influence: bool = False,
+    emit_cooks_distance: bool = False,
+    emit_dfbetas: bool = False,
     influence_half_life: float | Duration | None = None,
     emit_feature_health: bool = False,
     feature_health_half_life: float | Duration | None = None,
@@ -1288,6 +1295,20 @@ def _common(
     # is refused as `emit_clocks=1` is.
     if emit_target_weight is not False:
         spec["emit_target_weight"] = emit_target_weight
+    if emit_arch_lm is not False:
+        spec["emit_arch_lm"] = emit_arch_lm
+    if arch_lm_lags is not None:
+        spec["arch_lm_lags"] = arch_lm_lags
+    if emit_white is not False:
+        spec["emit_white"] = emit_white
+    if white_interaction_terms is not None:
+        spec["white_interaction_terms"] = white_interaction_terms
+    if emit_spiegelhalter is not False:
+        spec["emit_spiegelhalter"] = emit_spiegelhalter
+    if emit_cooks_distance is not False:
+        spec["emit_cooks_distance"] = emit_cooks_distance
+    if emit_dfbetas is not False:
+        spec["emit_dfbetas"] = emit_dfbetas
     if drift_options is not None:
         spec["drift_options"] = dict(drift_options)
     if robust_se_types is not None:
@@ -2938,7 +2959,20 @@ def ew_cov(
     name: str,
     *,
     features: list[str],
-    stats: list[Literal["mean", "var", "std", "cov", "corr", "partial_corr", "mahal", "lag_corr"]]
+    stats: list[
+        Literal[
+            "mean",
+            "var",
+            "std",
+            "cov",
+            "raw_cov",
+            "corr",
+            "partial_corr",
+            "mahal",
+            "loglik",
+            "lag_corr",
+        ]
+    ]
     | None = None,
     bias: bool = False,
     precision_prior: float | None = None,
@@ -2977,17 +3011,21 @@ def ew_cov(
 
     ``stats``
         Which statistics to write, from ``mean``, ``var``, ``std``, ``cov``,
-        ``corr``, ``partial_corr``, ``mahal`` and ``lag_corr``. Default
-        ``["mean", "std", "corr"]``, so a single feature needs ``stats``
-        without ``cov``, ``corr`` and ``partial_corr``, which need two
-        columns. ``partial_corr`` and ``mahal`` need ``precision_prior``,
-        ``lag_corr`` needs ``lags``, and ``mahal_quantiles`` needs ``mahal``.
-        ``[]`` writes no statistic, only ``weight_sum``, ``settled_frac`` and
-        ``withheld_reason``, and learns all the same. The spec's value is
-        then its state, read back with :meth:`rheon.polars.ModelBank.gram`
-        and :meth:`rheon.polars.ModelBank.describe`. That is the form for a
-        wide set of columns, where even the means are ``k`` values a row
-        (``k`` the number of features) that nobody reads.
+        ``raw_cov``, ``corr``, ``partial_corr``, ``mahal``, ``loglik`` and
+        ``lag_corr``. Default ``["mean", "std", "corr"]``, so a single feature
+        needs ``stats`` without ``cov``, ``corr`` and ``partial_corr``, which
+        need two columns. ``raw_cov`` writes the uncentered second moment
+        ``E_w[x_i x_j] = C_ij + m_i m_j`` (divisor ``W`` regardless of
+        ``bias``) for every pair ``i <= j`` including diagonals, so it works
+        from one feature up. ``partial_corr``, ``mahal`` and ``loglik`` need
+        ``precision_prior``, ``lag_corr`` needs ``lags``, and
+        ``mahal_quantiles`` needs ``mahal``. ``[]`` writes no statistic, only
+        ``weight_sum``, ``settled_frac`` and ``withheld_reason``, and learns
+        all the same. The spec's value is then its state, read back with
+        :meth:`rheon.polars.ModelBank.gram` and
+        :meth:`rheon.polars.ModelBank.describe`. That is the form for a wide
+        set of columns, where even the means are ``k`` values a row (``k`` the
+        number of features) that nobody reads.
     ``bias``
         Polars' ``bias``, with its default ``False``: ``var``, ``std`` and
         ``cov`` are then Polars' ``ewm_var`` and ``ewm_std`` and the
@@ -3004,9 +3042,9 @@ def ew_cov(
         and above 0: it makes the precision matrix ``P`` of *The update*
         solvable on each row it is read (O(k³), only when asked for). Like
         :func:`rls`'s prior it fades as rows arrive. Default ``None``, no
-        ridge. Needed by ``partial_corr`` and
-        ``mahal`` alone: the other statistics read the co-moments themselves,
-        which need no inverse, so ``None`` adds no ridge to them.
+        ridge. Needed by ``partial_corr``, ``mahal`` and ``loglik`` alone: the
+        other statistics read the co-moments themselves, which need no inverse,
+        so ``None`` adds no ridge to them.
         :func:`ew_class` and :func:`hmm` require it, since every row they
         predict reads an inverse.
     ``mahal_quantiles``
@@ -3103,11 +3141,15 @@ def ew_cov(
         standard deviation, as ``mean_x0``.
     ``cov_<column>_<column>``, ``corr_<column>_<column>``, ``partial_corr_<column>_<column>``
         Per pair, unordered, ``i < j``, as ``corr_x0_x1``.
+    ``raw_cov_<column>_<column>``
+        Uncentered second moment ``E_w[x_i x_j]`` for every pair ``i <= j``,
+        diagonal included, as ``raw_cov_x0_x0`` and ``raw_cov_x0_x1``.
     ``lag_corr_l<l>_<a>_<b>``
         Per lag and ordered pair, under ``lags``.
-    ``mahal``, ``mahal_q<p>``
-        The row's Mahalanobis distance from the mean, and the quantiles of
-        its past values ``mahal_quantiles`` asks for.
+    ``mahal``, ``mahal_q<p>``, ``loglik``
+        The row's Mahalanobis distance from the mean, the quantiles of its past
+        values ``mahal_quantiles`` asks for, and the row's out-of-sample
+        Gaussian log-density under the regularized covariance.
     ``pc<j>_var``, ``pc<j>_share``, ``pc<j>_loading_<feature>``, ``pc<j>_score``
         Under ``pca``, as the table under ``pca`` says.
     ``weight_sum``
@@ -3137,7 +3179,7 @@ def ew_cov(
     problem for:
 
     - a statistic not in the list, ``cov``, ``corr`` or ``partial_corr``
-      over one column, ``partial_corr`` or ``mahal`` without
+      over one column, ``partial_corr``, ``mahal`` or ``loglik`` without
       ``precision_prior``, and ``lag_corr`` without ``lags``;
     - a ``precision_prior`` not finite or not above 0;
     - an empty ``lags``, one that does not increase, or a lag below 1 or
@@ -3195,6 +3237,8 @@ def ew_cov(
 
         partial_corr_ij = -P_ij / sqrt(P_ii P_jj)
         mahal           = sqrt((x - m)' P (x - m))
+        loglik          = -0.5 * (k * ln(2 pi) + ln|S| + (x - m)' P (x - m))
+        raw_cov_ij      = C_ij + m_i * m_j            (i <= j, divisor W)
 
     With ``W`` and ``m`` the weight and mean before the row, and both
     deviations against that mean, each lag ``l`` of ``lags`` keeps:

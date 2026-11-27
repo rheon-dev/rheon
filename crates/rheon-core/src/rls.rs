@@ -702,6 +702,47 @@ impl Rls {
         v.iter().map(|vi| vi * vi).sum()
     }
 
+    /// Solve `A u = z` (`A = Rᵀ R`) via forward substitution `Rᵀ v = z` and
+    /// backward substitution `R u = v`, returning `(z' A⁻¹ z, u)`. Returns
+    /// `None` if a pivot is missing where `z` has weight or entries are non-finite.
+    fn solve_gram(&self, z: &[f64]) -> Option<(f64, Vec<f64>)> {
+        let k = self.cfg.k_total();
+        let mut v = vec![0.0; k];
+        for i in 0..k {
+            let mut acc = z[i];
+            let mut at = i;
+            for (m, vm) in v.iter().enumerate().take(i) {
+                acc -= self.r[at] * vm;
+                at += k - m - 1;
+            }
+            let d = self.r[at];
+            if d > 0.0 {
+                v[i] = acc / d;
+            } else if acc != 0.0 {
+                return None;
+            }
+        }
+        let h: f64 = v.iter().map(|vi| vi * vi).sum();
+        if !h.is_finite() {
+            return None;
+        }
+        let mut u = vec![0.0; k];
+        for i in (0..k).rev() {
+            let row = base(k, i);
+            let mut acc = v[i];
+            for (j, &uj) in u.iter().enumerate().take(k).skip(i + 1) {
+                acc -= self.r[row + j] * uj;
+            }
+            let d = self.r[row + i];
+            if d > 0.0 {
+                u[i] = acc / d;
+            } else if acc != 0.0 {
+                return None;
+            }
+        }
+        u.iter().all(|v| v.is_finite()).then_some((h, u))
+    }
+
     /// `s₂ / s₁`, the Kish ratio of the rows the fit learned (the module
     /// doc): `None` before it has learned one.
     fn kish_ratio(&self) -> Option<f64> {
@@ -773,6 +814,67 @@ impl OnlineModel for Rls {
         };
         out.clear();
         out.resize(self.cfg.n_targets, ratio);
+        true
+    }
+
+    fn row_gram_leverage_into(
+        &self,
+        x: &[f64],
+        d_clock: f64,
+        need_vec: bool,
+        h_unit: &mut Vec<f64>,
+        g_inv_x: &mut Vec<f64>,
+        diag_g_inv: &mut Vec<f64>,
+    ) -> bool {
+        let m = self.cfg.n_targets;
+        let k = self.cfg.k_total();
+        h_unit.clear();
+        h_unit.resize(m, f64::NAN);
+        if need_vec {
+            g_inv_x.clear();
+            g_inv_x.resize(m * k, f64::NAN);
+            diag_g_inv.clear();
+            diag_g_inv.resize(m * k, f64::NAN);
+        }
+        let lam = self.cfg.decay.factor(d_clock);
+        let s1 = self.w_target.first().copied().unwrap_or(0.0);
+        if !(lam > 0.0 && lam.is_finite() && s1 > 0.0) {
+            return true;
+        }
+        let mut z = Vec::with_capacity(k);
+        if self.cfg.fit_intercept {
+            z.push(1.0);
+        }
+        z.extend_from_slice(x);
+        if !need_vec {
+            let h = self.leverage(&z) / lam;
+            if h.is_finite() {
+                h_unit.fill(h);
+            }
+            return true;
+        }
+        let Some((h_raw, u)) = self.solve_gram(&z) else {
+            return true;
+        };
+        let h = h_raw / lam;
+        if h.is_finite() {
+            h_unit.fill(h);
+        }
+        let mut e = vec![0.0; k];
+        let diag: Vec<f64> = (0..k)
+            .map(|i| {
+                e.fill(0.0);
+                e[i] = 1.0;
+                self.leverage(&e) / lam
+            })
+            .collect();
+        for t in 0..m {
+            let off = t * k;
+            for i in 0..k {
+                g_inv_x[off + i] = u[i] / lam;
+                diag_g_inv[off + i] = diag[i];
+            }
+        }
         true
     }
 

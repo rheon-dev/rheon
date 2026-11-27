@@ -2101,6 +2101,87 @@ impl PyBars {
     }
 }
 
+/// Regularized incomplete beta function ``I_x(a, b)``.
+#[pyfunction]
+fn special_betainc(a: f64, b: f64, x: f64) -> f64 {
+    rheon_polars::rheon_core::special::betainc(a, b, x)
+}
+
+/// Regularized lower incomplete gamma function ``P(a, x)``.
+#[pyfunction]
+fn special_gammainc(a: f64, x: f64) -> f64 {
+    rheon_polars::rheon_core::special::gammainc(a, x)
+}
+
+/// Regularized upper incomplete gamma function ``Q(a, x)``.
+#[pyfunction]
+fn special_gammaincc(a: f64, x: f64) -> f64 {
+    rheon_polars::rheon_core::special::gammaincc(a, x)
+}
+
+/// Upper tail survival function ``P(T_df > t)`` of Student's t distribution.
+#[pyfunction]
+fn special_student_t_sf(t: f64, df: f64) -> f64 {
+    rheon_polars::rheon_core::special::student_t_sf(t, df)
+}
+
+/// Upper tail survival function ``P(X > x)`` of the chi-squared distribution.
+#[pyfunction]
+fn special_chi2_sf(x: f64, df: f64) -> f64 {
+    rheon_polars::rheon_core::special::chi2_sf(x, df)
+}
+
+/// Conjugate-mixture empirical Bernstein uniform half-width at variance proxy ``v``.
+#[pyfunction]
+fn special_cm_eb_bound(v: f64, v_opt: f64, alpha: f64) -> f64 {
+    rheon_polars::rheon_core::special::cm_eb_bound(v, v_opt, alpha)
+}
+
+type CmEbChunkOut = (Vec<f64>, Vec<f64>, u64, f64, f64, f64, f64, f64);
+
+/// Advance a streaming conjugate-mixture empirical Bernstein confidence sequence
+/// over one chunk of observations in ``[0, 1]``.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn special_cm_eb_chunk(
+    rs: Vec<f64>,
+    v_opt: f64,
+    alpha: f64,
+    running_intersection: bool,
+    t: u64,
+    s: f64,
+    v: f64,
+    mu_prev: f64,
+    lower: f64,
+    upper: f64,
+) -> CmEbChunkOut {
+    let mut state = rheon_polars::rheon_core::special::CmEbState {
+        t,
+        s,
+        v,
+        mu_prev,
+        lower,
+        upper,
+    };
+    let (lowers, uppers) = rheon_polars::rheon_core::special::cm_eb_chunk(
+        &rs,
+        v_opt,
+        alpha,
+        running_intersection,
+        &mut state,
+    );
+    (
+        lowers,
+        uppers,
+        state.t,
+        state.s,
+        state.v,
+        state.mu_prev,
+        state.lower,
+        state.upper,
+    )
+}
+
 #[pymodule]
 fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyModelBank>()?;
@@ -2145,5 +2226,12 @@ fn _rheon(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(resolved_defaults, m)?)?;
     m.add_function(wrap_pyfunction!(save_checkpoint, m)?)?;
     m.add_function(wrap_pyfunction!(load_checkpoint, m)?)?;
+    m.add_function(wrap_pyfunction!(special_betainc, m)?)?;
+    m.add_function(wrap_pyfunction!(special_gammainc, m)?)?;
+    m.add_function(wrap_pyfunction!(special_gammaincc, m)?)?;
+    m.add_function(wrap_pyfunction!(special_student_t_sf, m)?)?;
+    m.add_function(wrap_pyfunction!(special_chi2_sf, m)?)?;
+    m.add_function(wrap_pyfunction!(special_cm_eb_bound, m)?)?;
+    m.add_function(wrap_pyfunction!(special_cm_eb_chunk, m)?)?;
     Ok(())
 }

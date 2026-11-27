@@ -1312,6 +1312,29 @@ pub fn solve_spd(a: &[f64], b: &[f64], k: usize, m: usize) -> Option<(Vec<f64>, 
     Some((out, attempts))
 }
 
+/// [`solve_spd`] together with `ln det(A)` from the same Cholesky factor
+/// (jitter included), avoiding a second `O(k³)` factorization when both
+/// the inverse and the log-determinant are read on the same row.
+pub(crate) fn solve_spd_with_log_det(
+    a: &[f64],
+    b: &[f64],
+    k: usize,
+    m: usize,
+) -> Option<(Vec<f64>, f64)> {
+    debug_assert_eq!(b.len(), k * m);
+    let (l, _, _) = factorize(a, k)?;
+    let log_det = 2.0 * (0..k).map(|i| l[(i, i)].ln()).sum::<f64>();
+    let mut x = Mat::from_fn(k, m, |i, j| b[j * k + i]);
+    solve_in_place(&l, x.as_mut());
+    let mut out = vec![0.0; k * m];
+    for j in 0..m {
+        for i in 0..k {
+            out[j * k + i] = x[(i, j)];
+        }
+    }
+    Some((out, log_det))
+}
+
 /// The working space of a caller that solves a system of one shape on every
 /// row ([`solve_spd_in`]): the factor's matrix, faer's scratch and the
 /// right-hand sides' matrix, each kept between calls and written over, so a

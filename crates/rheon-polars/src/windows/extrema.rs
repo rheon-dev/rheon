@@ -55,10 +55,10 @@ pub(super) fn check_op(o: usize, op: &OpDef, k: &KernelDef) -> Result<(), String
             op.stat
         ));
     }
-    match (op.stat.is_extremum(), op.max_state_bytes) {
+    match (op.stat.is_capped(), op.max_state_bytes) {
         (false, Some(_)) => Err(format!(
-            "operator {o}: max_state_bytes is given, but only rolling_max and rolling_min take it. \
-             Leave out max_state_bytes."
+            "operator {o}: max_state_bytes is given, but only rolling_max, rolling_min, \
+             rolling_quantile and rolling_rank take it. Leave out max_state_bytes."
         )),
         (true, Some(0)) => Err(format!(
             "operator {o}: max_state_bytes must be above 0, but it is 0. Give the bytes a \
@@ -72,39 +72,49 @@ pub(super) fn check_op(o: usize, op: &OpDef, k: &KernelDef) -> Result<(), String
     }
 }
 
-/// A row's bytes in a queue of `n` operators, `ext` of them extrema: its
+/// A row's bytes in a queue of `n` operators, `ext` of them extrema and `ord`
+/// of them exact-order operators (`rolling_quantile` / `rolling_rank`): its
 /// place, policy time, raw clock, interval end and anchor, then each
-/// operator's value and sums at the queue's width, and a double an
-/// extremum keeps beside them.
-pub fn row_bytes(n: usize, wide: bool, ext: usize) -> usize {
+/// operator's value and sums at the queue's width, a double per extremum, and
+/// an order-tree node per exact-order operator.
+pub fn row_bytes_with_ord(n: usize, wide: bool, ext: usize, ord: usize) -> usize {
     let per = if wide { ROW_VAR + SUM_VAR } else { ROW + SUM };
-    8 * (5 + per * n + ext)
+    8 * (5 + per * n + ext) + super::exact_order::ORD_ROW_BYTES * ord
 }
 
-/// The bytes a queue holds in its rows, as [`row_bytes`] counts them.
+/// A row's bytes in a queue of `n` operators, `ext` of them extrema (no
+/// exact-order operators).
+#[cfg(test)]
+pub fn row_bytes(n: usize, wide: bool, ext: usize) -> usize {
+    row_bytes_with_ord(n, wide, ext, 0)
+}
+
+/// The bytes a queue holds in its rows, as [`row_bytes_with_ord`] counts them.
 pub(super) fn queue_bytes(q: &Queue) -> usize {
     let ext = q.ext.iter().flatten().count();
-    q.len() * row_bytes(q.n, q.wide(), ext)
+    let ord = q.ord.iter().flatten().count();
+    q.len() * row_bytes_with_ord(q.n, q.wide(), ext, ord)
 }
 
-/// Kernel `k`'s cap on its queue's bytes a group: the least its extrema
-/// give, where it holds one under a window; `None` for any other.
+/// Kernel `k`'s cap on its queue's bytes a group: the least its extrema or
+/// exact-order operators give, where it holds one under a window; `None` for
+/// any other.
 pub(super) fn cap_of(k: &KernelDef, ops: &[OpDef], members: &[usize]) -> Option<u64> {
     k.window_size?;
     members
         .iter()
-        .filter(|&&o| ops[o].stat.is_extremum())
+        .filter(|&&o| ops[o].stat.is_capped())
         .map(|&o| ops[o].max_state_bytes.unwrap_or(DEFAULT_STATE_BYTES))
         .min()
 }
 
 impl super::Windows {
-    /// Per kernel whose queue an extremum bounds: its index, a row's bytes
-    /// in its queue and the cap on a group's queue (task 561). On the row
-    /// clock the rows a window holds are known from its size, so a caller
-    /// refuses a window past its cap before the run; on a clock they are
-    /// the data's, and [`super::Windows::push`] refuses the row that takes a
-    /// queue past it.
+    /// Per kernel whose queue an extremum or exact-order operator bounds: its
+    /// index, a row's bytes in its queue and the cap on a group's queue. On the
+    /// row clock the rows a window holds are known from its size, so a caller
+    /// refuses a window past its cap before the run; on a clock they are the
+    /// data's, and [`super::Windows::push`] refuses the row that takes a queue
+    /// past it.
     pub fn extremum_caps(&self) -> Vec<(usize, usize, u64)> {
         (0..self.kernels.len())
             .filter_map(|ki| {
@@ -115,7 +125,11 @@ impl super::Windows {
                     .iter()
                     .filter(|&&o| self.ops[o].stat.is_extremum())
                     .count();
-                Some((ki, row_bytes(m.len(), wide, ext), cap))
+                let ord = m
+                    .iter()
+                    .filter(|&&o| self.ops[o].stat.is_exact_order())
+                    .count();
+                Some((ki, row_bytes_with_ord(m.len(), wide, ext, ord), cap))
             })
             .collect()
     }

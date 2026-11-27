@@ -137,6 +137,8 @@ pub(super) enum Source {
     SeCoefHc2(usize),
     SeCoefHc3(usize),
     SeCoefHac(usize),
+    /// `dfbetas`, per instance, laid out like `Coef` on every scored row.
+    Dfbetas(usize),
     /// `scored_clock` and `learned_clock`, one pair per spec, in the clock
     /// column's own type (docs/PLAN.md task 152).
     ScoredClock,
@@ -244,6 +246,7 @@ impl FieldMeta {
             | Source::SeCoefHc2(_)
             | Source::SeCoefHc3(_)
             | Source::SeCoefHac(_)
+            | Source::Dfbetas(_)
             | Source::SmoothedCoef(_)
             | Source::SmoothedSe(_) => DataType::List(Box::new(DataType::Float64)),
             // The reasons the spec can name, set from
@@ -867,6 +870,12 @@ pub fn output_index(spec: &Spec) -> Vec<FieldMeta> {
                         ));
                     }
                 }
+                if spec.emit_dfbetas && spec.has_row_error_inflation() {
+                    fields.push(like(
+                        FieldMeta::new(format!("dfbetas{suffix}"), "dfbetas")
+                            .src(Source::Dfbetas(mi)),
+                    ));
+                }
             }
             _ => {}
         }
@@ -989,8 +998,10 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 "var" => rheon_core::EwCovStat::Var,
                 "std" => rheon_core::EwCovStat::Std,
                 "cov" => rheon_core::EwCovStat::Cov,
+                "raw_cov" => rheon_core::EwCovStat::RawCov,
                 "partial_corr" => rheon_core::EwCovStat::PartialCorr,
                 "mahal" => rheon_core::EwCovStat::Mahal,
+                "loglik" => rheon_core::EwCovStat::Loglik,
                 "lag_corr" => rheon_core::EwCovStat::LagCorr,
                 _ => rheon_core::EwCovStat::Corr,
             })
@@ -1023,8 +1034,21 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                         meta.push((name.clone(), vec![col.clone()], None, None, None));
                     }
                 }
-                rheon_core::EwCovStat::Mahal => {
+                rheon_core::EwCovStat::Mahal | rheon_core::EwCovStat::Loglik => {
                     meta.push((name.clone(), all.clone(), None, None, None));
+                }
+                rheon_core::EwCovStat::RawCov => {
+                    for i in 0..spec.features.len() {
+                        for j in i..spec.features.len() {
+                            meta.push((
+                                name.clone(),
+                                vec![spec.features[i].clone(), spec.features[j].clone()],
+                                None,
+                                None,
+                                None,
+                            ));
+                        }
+                    }
                 }
                 // One entry per (lag, ordered pair), the auto terms
                 // included: both orientations, since the lagged matrix is

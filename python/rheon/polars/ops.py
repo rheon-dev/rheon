@@ -36,15 +36,14 @@ half_life)``:
      - defined as
      - held to
    * - :func:`ewm_mean`
-     - the *time-weighted* mean: row *i*'s value is held over ``(t_{i-1},
-       t_i]``, a stretch's first value is held from before the stretch
-       begins, and the mean
-       over ``(tau_t - w, tau_t]`` weighs each held value by ``integral
-       lam**(tau_t - s) ds`` over its interval inside the window
-     - Polars' ``ewm_mean_by``. A burst of rows does not outweigh a quiet
-       stretch, and a row at a repeated stamp holds no interval, so it moves
-       no mean. No operator offers a mean that weighs each row by its count,
-       the form pandas' ``ewm(times=)`` computes
+     - the *time-weighted* mean by default (``adjust=None``): row *i*'s value
+       is held over ``(t_{i-1}, t_i]``, a stretch's first value is held from
+       before the stretch begins, and the mean over ``(tau_t - w, tau_t]``
+       weighs each held value by ``integral lam**(tau_t - s) ds`` over its
+       interval inside the window. With ``adjust=True``, each observation
+       carries point weight ``lam**(tau_t - t_j)``
+     - Polars' ``ewm_mean_by`` (default) and ``ewm_mean(adjust=True)`` (under
+       ``adjust=True`` on a row-count clock)
    * - :func:`ewm_mean` with ``reverse=True``
      - the mirror: value *j* is held over ``[t_j, t_{j+1})``, until the next
        row, and weighed by ``integral lam**(s - tau_t) ds`` inside ``(tau_t,
@@ -94,6 +93,15 @@ half_life)``:
        earliest row winning a tie of ``0.0`` and ``-0.0``. A NaN or an
        infinity is missing here, where Polars lets a NaN make the window NaN
        and counts an infinity
+   * - :func:`rolling_quantile`
+     - exact order-statistic quantile of the values in the window under any of
+       Polars' six ``interpolation`` rules, with bounded state
+     - Polars' ``rolling_quantile_by``, bit for bit
+   * - :func:`rolling_rank`
+     - exact rank of the row's own value inside its window under Polars' four
+       deterministic tie methods (``"average"``, ``"min"``, ``"max"``,
+       ``"dense"``), with bounded state
+     - Polars' ``rolling_rank_by``, bit for bit (as ``Float64``)
    * - :func:`increment`
      - ``x_i - x_{i-1}`` within the group and session, null on a session's
        first row, and in seconds on a temporal column
@@ -310,6 +318,8 @@ __all__ = [
     "mstl",
     "rolling_max",
     "rolling_min",
+    "rolling_quantile",
+    "rolling_rank",
     "stl",
     "tick_sign",
     "run_length",
@@ -331,6 +341,7 @@ def _window(
     partial: Literal["keep", "null", "drop"] | None,
     reverse: bool,
     quantile: float | None = None,
+    adjust: bool | None = None,
 ) -> pl.Expr:
     """The mean, sum, rate or quantile ``name`` names, looking back, or ahead
     under ``reverse``: the operator over the rows after each row, which the
@@ -355,6 +366,7 @@ def _window(
         min_samples=min_samples,
         partial=partial,
         quantile=quantile,
+        adjust=adjust,
         who=f"rp.ops.{name}(reverse=True)" if reverse else None,
     )
 
@@ -368,6 +380,7 @@ def ewm_mean(
     min_samples: int = 1,
     partial: Literal["keep", "null", "drop"] | None = None,
     reverse: bool = False,
+    adjust: bool | None = None,
 ) -> pl.Expr:
     """The time-weighted EW mean of a column over each row's window.
 
@@ -420,6 +433,16 @@ def ewm_mean(
         window looking ahead is known only once it has closed, so the bank
         learns it under an ``embargo`` of at least ``window_size``. Default
         ``False``.
+    ``adjust``
+        ``None`` (the default) computes the time-weighted mean (Polars'
+        ``ewm_mean_by``). ``True`` computes the point-mass EW mean, weighing
+        each observation by ``lam ** |tau_t - t_j|``: on a row-count clock
+        (no ``clock`` column) this matches Polars' ``ewm_mean(adjust=True,
+        ignore_nulls=False)`` on every non-null row, and on a clock column it
+        also supports durations, ``window_size``, ``closed``, ``partial``,
+        ``reverse=True``, ``gap_cap``, ``session`` and ``half_life=float("inf")``
+        without ``window_size``. ``False`` is refused (leave ``adjust=None``
+        for the time-weighted form).
 
     .. rubric:: Returns
 
@@ -513,6 +536,7 @@ def ewm_mean(
         min_samples=min_samples,
         partial=partial,
         reverse=reverse,
+        adjust=adjust,
     )
 
 
@@ -1383,6 +1407,214 @@ def rolling_min(
         reverse=reverse,
         since=since,
         max_state_bytes=max_state_bytes,
+    )
+
+
+def rolling_quantile(
+    input: str | pl.Expr,
+    *,
+    quantile: float,
+    window_size: float | Duration,
+    interpolation: Literal[
+        "nearest", "higher", "lower", "midpoint", "linear", "equiprobable"
+    ] = "nearest",
+    closed: Literal["right", "left", "both", "none"] = "right",
+    min_samples: int = 1,
+    partial: Literal["keep", "null", "drop"] | None = None,
+    reverse: bool = False,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """Exact quantile of a column over each row's window.
+
+    Use it when you need the exact rolling quantile matching Polars'
+    ``rolling_quantile_by`` under any of its six ``interpolation`` rules, over
+    a bounded window. For a decayed quantile with constant memory and no
+    window cap, use :func:`ewm_quantile`.
+
+    .. rubric:: Parameters
+
+    ``input``
+        The values the window reads: a column name, or an element-wise
+        expression of the row. It may hold no other window operator.
+    ``quantile``
+        The quantile level in ``[0.0, 1.0]`` (0.5 is the median).
+    ``window_size``
+        The span of clock time a window covers (a positive finite number or
+        duration, or rows without a clock column). Required so state stays
+        bounded.
+    ``interpolation``
+        How a level between two sorted values is read, matching Polars:
+        ``"nearest"`` (the default), ``"higher"``, ``"lower"``, ``"midpoint"``,
+        ``"linear"`` or ``"equiprobable"``.
+    ``closed``
+        Which ends of the window are in: ``"right"`` (the default), ``"left"``,
+        ``"both"`` or ``"none"``.
+    ``min_samples``
+        The fewest rows with a value a window must hold to give a value.
+        Default 1.
+    ``partial``
+        What a window cut short gives: ``"keep"``, ``"null"``, ``"drop"`` or
+        ``None`` (``"keep"`` looking back, ``"null"`` looking ahead).
+    ``reverse``
+        ``True`` reads the rows after each row, at most ``window_size`` later.
+        Default ``False``.
+    ``max_state_bytes``
+        Per-group memory cap in bytes for the window's queue and order tree.
+        Default ``None`` (256 KB); at most 64 MiB.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as a
+    ``Float64`` column, or that a spec takes as its target.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        When ``input``, ``window_size``, ``reverse``, ``quantile``,
+        ``min_samples`` or ``max_state_bytes`` has the wrong type.
+    ``ValueError``
+        When ``quantile`` is outside ``[0.0, 1.0]``, ``window_size`` is not
+        finite and positive, ``interpolation``, ``closed`` or ``partial`` is
+        unknown, or ``max_state_bytes`` is outside ``[1, 64 MiB]``.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        rows = pl.DataFrame({"t": [0, 1, 2, 3, 4], "x": [1.0, 4.0, 2.0, 5.0, 3.0]})
+        q = rp.ops.rolling_quantile("x", quantile=0.5, window_size=3, interpolation="linear")
+        out = rp.stream.with_windows(rows, med=q, clock="t", gap_cap=10)
+        print(out["med"].to_list())
+
+    .. code-block:: text
+
+        [1.0, 2.5, 2.0, 4.0, 3.0]
+
+    .. rubric:: See also
+
+    - :func:`ewm_quantile`, decayed constant-memory quantile.
+    - :func:`rolling_rank`, exact rank of each row inside its window.
+    - :func:`rolling_max`, :func:`rolling_min`, rolling extrema.
+    """
+    who = "rp.ops.rolling_quantile"
+    if not isinstance(reverse, bool):
+        raise TypeError(
+            f"{who}: reverse must be True or False, but it is {reverse!r}. "
+            "Pass reverse=True to read the rows after each row, or reverse=False."
+        )
+    return operator(
+        "rrolling_quantile" if reverse else "rolling_quantile",
+        input,
+        window_size=window_size,
+        quantile=quantile,
+        interpolation=interpolation,
+        closed=closed,
+        min_samples=min_samples,
+        partial=partial,
+        max_state_bytes=max_state_bytes,
+        who=f"{who}(reverse=True)" if reverse else None,
+    )
+
+
+def rolling_rank(
+    input: str | pl.Expr,
+    *,
+    window_size: float | Duration,
+    method: Literal["average", "min", "max", "dense"] = "average",
+    closed: Literal["right", "left", "both"] | None = None,
+    min_samples: int = 1,
+    partial: Literal["keep", "null", "drop"] | None = None,
+    reverse: bool = False,
+    max_state_bytes: int | None = None,
+) -> pl.Expr:
+    """Exact rank of each row's own value inside its window.
+
+    Matches Polars' ``rolling_rank_by`` under its four deterministic tie
+    methods (``"average"``, ``"min"``, ``"max"``, ``"dense"``), returned as
+    ``Float64``.
+
+    .. rubric:: Parameters
+
+    ``input``
+        The values the window reads: a column name, or an element-wise
+        expression of the row. It may hold no other window operator.
+    ``window_size``
+        The span of clock time a window covers (a positive finite number or
+        duration, or rows without a clock column). Required so state stays
+        bounded.
+    ``method``
+        How ties rank: ``"average"`` (the default), ``"min"``, ``"max"`` or
+        ``"dense"``. ``"random"`` and ``"ordinal"`` are refused.
+    ``closed``
+        Which ends of the window are in. The row's own stamp must be in the
+        window: ``"right"`` or ``"both"`` looking back, ``"left"`` or
+        ``"both"`` looking ahead. ``None`` (the default) selects ``"right"``
+        looking back and ``"left"`` looking ahead.
+    ``min_samples``
+        The fewest rows with a value a window must hold to give a value.
+        Default 1.
+    ``partial``
+        What a window cut short gives: ``"keep"``, ``"null"``, ``"drop"`` or
+        ``None`` (``"keep"`` looking back, ``"null"`` looking ahead).
+    ``reverse``
+        ``True`` reads the rows after each row, at most ``window_size`` later.
+        Default ``False``.
+    ``max_state_bytes``
+        Per-group memory cap in bytes for the window's queue and order tree.
+        Default ``None`` (256 KB); at most 64 MiB.
+
+    .. rubric:: Returns
+
+    A ``pl.Expr`` that :func:`rheon.polars.stream.with_windows` computes as a
+    ``Float64`` column, or that a spec takes as its target. At a row whose own
+    input value is missing, the rank is null. At a shared timestamp, each row
+    ranks its own value against the stamp's full window.
+
+    .. rubric:: Raises
+
+    ``TypeError``
+        When ``input``, ``window_size``, ``reverse``, ``min_samples`` or
+        ``max_state_bytes`` has the wrong type.
+    ``ValueError``
+        When ``window_size`` is not finite and positive, ``method``,
+        ``closed`` or ``partial`` is refused, or ``max_state_bytes`` is
+        outside ``[1, 64 MiB]``.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        rows = pl.DataFrame({"t": [0, 1, 2, 3, 4], "x": [1.0, 3.0, 2.0, 2.0, 5.0]})
+        rk = rp.ops.rolling_rank("x", window_size=3, method="average")
+        out = rp.stream.with_windows(rows, rk=rk, clock="t", gap_cap=10)
+        print(out["rk"].to_list())
+
+    .. code-block:: text
+
+        [1.0, 2.0, 2.0, 1.5, 3.0]
+
+    .. rubric:: See also
+
+    - :func:`rolling_quantile`, exact rolling quantile.
+    - :func:`cross_rank`, cross-sectional rank across groups at one stamp.
+    """
+    who = "rp.ops.rolling_rank"
+    if not isinstance(reverse, bool):
+        raise TypeError(
+            f"{who}: reverse must be True or False, but it is {reverse!r}. "
+            "Pass reverse=True to read the rows after each row, or reverse=False."
+        )
+    resolved_closed = ("left" if reverse else "right") if closed is None else closed
+    return operator(
+        "rrolling_rank" if reverse else "rolling_rank",
+        input,
+        window_size=window_size,
+        method=method,
+        closed=resolved_closed,
+        min_samples=min_samples,
+        partial=partial,
+        max_state_bytes=max_state_bytes,
+        who=f"{who}(reverse=True)" if reverse else None,
     )
 
 

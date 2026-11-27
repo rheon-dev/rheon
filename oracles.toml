@@ -7789,6 +7789,104 @@ n = 50
 ideal = 0.0
 n = 50
 
+[group."features_2a_grids.ew_cov_raw_loglik"]
+tests = [
+    "tests/test_features_2a_grids.py::test_ew_cov_raw_cov_and_loglik_fifty_seeds",
+]
+oracles = { "scikit-learn" = "1.9.1", "scipy" = "1.18.1" }
+dataset = ""
+
+[group."features_2a_grids.forecast_comparison"]
+tests = [
+    "tests/test_features_2a_grids.py::test_forecast_comparison_and_special_fifty_seeds",
+]
+oracles = { "dieboldmariano" = "1.1.0", "mapie" = "1.6.0", "mpmath" = "1.4.1", "scipy" = "1.18.1", "statsmodels" = "0.15.0" }
+dataset = ""
+
+[group."features_2a_grids.spec_influence_ext"]
+tests = [
+    "tests/test_features_2a_grids.py::test_specification_and_influence_fifty_seeds",
+]
+oracles = { "mapie" = "1.6.0", "statsmodels" = "0.15.0" }
+dataset = ""
+
+[group."features_2a_grids.window_ops_exact"]
+tests = [
+    "tests/test_features_2a_grids.py::test_window_ops_exact_match_polars_fifty_seeds",
+]
+oracles = { "polars" = "2.1.0" }
+dataset = ""
+
+[case."features_2a_grids.ew_cov_raw_loglik.loglik_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."features_2a_grids.ew_cov_raw_loglik.raw_cov_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."features_2a_grids.forecast_comparison.cm_eb_abs_err"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
+[case."features_2a_grids.forecast_comparison.dm_max_err"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."features_2a_grids.forecast_comparison.gw_max_err"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."features_2a_grids.forecast_comparison.special_abs_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."features_2a_grids.spec_influence_ext.arch_lm_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
+[case."features_2a_grids.spec_influence_ext.cooks_distance_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-09
+
+[case."features_2a_grids.spec_influence_ext.dfbetas_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-09
+
+[case."features_2a_grids.spec_influence_ext.spiegelhalter_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
+[case."features_2a_grids.spec_influence_ext.white_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
+[case."features_2a_grids.window_ops_exact.ewm_mean_adjust_abs_err"]
+ideal = 0.0
+n = 50
+floor = 1e-14
+
+[case."features_2a_grids.window_ops_exact.rolling_quantile_abs_err"]
+ideal = 0.0
+n = 50
+floor = 1e-15
+
+[case."features_2a_grids.window_ops_exact.rolling_rank_abs_err"]
+ideal = 0.0
+n = 50
+floor = 1e-15
+
 # --- raises
 
 [[raised]]

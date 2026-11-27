@@ -475,6 +475,18 @@ impl AnyModel {
         dispatch!(self, m => m.row_error_inflation_into(x, d_clock, out))
     }
 
+    pub fn row_gram_leverage_into(
+        &self,
+        x: &[f64],
+        d_clock: f64,
+        need_vec: bool,
+        h_unit: &mut Vec<f64>,
+        g_inv_x: &mut Vec<f64>,
+        diag_g_inv: &mut Vec<f64>,
+    ) -> bool {
+        dispatch!(self, m => m.row_gram_leverage_into(x, d_clock, need_vec, h_unit, g_inv_x, diag_g_inv))
+    }
+
     /// The coefficients' sampling variances
     /// ([`OnlineModel::coef_variance`]).
     pub fn coef_variance(&self) -> Option<rheon_core::CoefVariance> {

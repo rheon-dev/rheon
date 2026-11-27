@@ -141,12 +141,14 @@ impl Derived {
                 let m = &members[ki];
                 let wide = m.iter().any(|&o| ops[o].stat.is_var());
                 let ext = m.iter().filter(|&&o| ops[o].stat.is_extremum()).count();
-                let row = extrema::row_bytes(m.len(), wide, ext) as u64;
+                let ord = m.iter().filter(|&&o| ops[o].stat.is_exact_order()).count();
+                let row = extrema::row_bytes_with_ord(m.len(), wide, ext, ord) as u64;
                 Some(usize::try_from(cap / row).unwrap_or(usize::MAX))
             })
             .collect();
-        let push_only =
-            kernels.iter().any(|k| k.since.is_some()) || cap_rows.iter().any(Option::is_some);
+        let push_only = kernels.iter().any(|k| k.since.is_some())
+            || cap_rows.iter().any(Option::is_some)
+            || ops.iter().any(|o| o.stat == Stat::PointMean);
         let fast = (0..kernels.len())
             .map(|ki| fast_kernel(&kernels[ki], &members[ki], ops))
             .collect();
@@ -342,9 +344,17 @@ impl Rows<'_> {
 /// are the running total, with no window to evict from and no sketch to feed.
 fn fast_kernel(k: &KernelDef, members: &[usize], ops: &[OpDef]) -> bool {
     k.window_size.is_none()
-        && members
-            .iter()
-            .all(|&o| ops[o].stat != Stat::Quantile && !ops[o].stat.is_extremum())
+        && members.iter().all(|&o| {
+            !matches!(
+                ops[o].stat,
+                Stat::Quantile
+                    | Stat::Max
+                    | Stat::Min
+                    | Stat::ExactQuantile
+                    | Stat::ExactRank
+                    | Stat::PointMean
+            )
+        })
 }
 
 /// Whether a row at `now` is a step forward from `last` within `cap`, or no

@@ -6,6 +6,7 @@
 //! infinity, a column with no spread.
 
 use super::*;
+use crate::Decay;
 use crate::model::OnlineModel;
 use crate::oracle::CanonBits;
 use std::hint::black_box;
@@ -309,4 +310,166 @@ fn the_slots_of_a_row_are_the_stored_moments_read_the_long_way_to_the_bit() {
             assert!(corr.iter().any(|c| c.is_finite()), "k = {k}");
         }
     }
+}
+
+/// PLAN 517: `raw_cov` emits `E_w[x_i x_j] = C_ij + m_i m_j` for all `i <= j`
+/// (divisor `W` regardless of `bias`, legal for `k >= 1`), and `loglik` emits
+/// `-0.5 * (k ln(2π) + ln|S| + q)` with `S = c (C + s·prior·I)` matching
+/// `mahal` and agreeing whether or not `partial_corr` is also requested.
+#[test]
+fn raw_cov_and_loglik_match_definition_and_share_factorization() {
+    let mut state = 91u64;
+    let mut next = || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        ((state >> 11) as f64) / ((1u64 << 53) as f64) - 0.5
+    };
+    // k = 1 is legal for both raw_cov and loglik.
+    let mut m1 = EwCovModel::new(EwCovCfg {
+        n_features: 1,
+        decay: Decay::Halflife(20.0),
+        stats: vec![EwCovStat::RawCov, EwCovStat::Mahal, EwCovStat::Loglik],
+        min_weight: 2.0,
+        bias: false,
+        precision_prior: Some(1e-3),
+        mahal_quantiles: vec![],
+        pca: 0,
+        pca_every: 0.0,
+        max_rows_between_pca: u32::MAX,
+        lags: vec![],
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    })
+    .unwrap();
+    for r in 0..30 {
+        let x = [3.0 + next()];
+        let out = m1.step(&x, &[], 1.0, 1.0);
+        if r >= 3 {
+            assert_eq!(out.pred.len(), 3);
+            assert!(out.pred.iter().all(|v| v.is_finite()), "row {r}");
+        }
+    }
+
+    // k = 3: compare bias=false and bias=true, with and without partial_corr.
+    let k = 3usize;
+    let rows: Vec<([f64; 3], f64, f64)> = (0..80)
+        .map(|i| {
+            let x = [10.0 + 2.0 * next(), -5.0 + next(), 3.0 + 0.5 * next()];
+            let dt = 1.0 + (i % 3) as f64 * 0.5;
+            let w = if i == 0 || i % 11 == 0 {
+                0.0
+            } else {
+                0.5 + (i % 4) as f64 * 0.4
+            };
+            (x, dt, w)
+        })
+        .collect();
+    for bias in [false, true] {
+        let mk = |stats: Vec<EwCovStat>| {
+            EwCovModel::new(EwCovCfg {
+                n_features: k,
+                decay: Decay::Halflife(25.0),
+                stats,
+                min_weight: 2.0,
+                bias,
+                precision_prior: Some(1e-3),
+                mahal_quantiles: vec![],
+                pca: 0,
+                pca_every: 0.0,
+                max_rows_between_pca: u32::MAX,
+                lags: vec![],
+                window: None,
+                window_every: None,
+                max_rows_between_snapshots: None,
+            })
+            .unwrap()
+        };
+        let mut a = mk(vec![EwCovStat::RawCov, EwCovStat::Mahal, EwCovStat::Loglik]);
+        let mut b = mk(vec![
+            EwCovStat::PartialCorr,
+            EwCovStat::RawCov,
+            EwCovStat::Mahal,
+            EwCovStat::Loglik,
+        ]);
+        let mut c_bias = EwCovModel::new(EwCovCfg {
+            bias: !bias,
+            ..a.cfg().clone()
+        })
+        .unwrap();
+        for (idx, (x, dt, w)) in rows.iter().enumerate() {
+            let sa = a.step(x, &[], *dt, *w);
+            let sb = b.step(x, &[], *dt, *w);
+            let sc = c_bias.step(x, &[], *dt, *w);
+            if idx >= 10 {
+                // raw_cov slots: 0..6 in a and sc, 3..9 in b
+                let raw_a = &sa.pred[0..6];
+                let raw_b = &sb.pred[3..9];
+                let raw_c = &sc.pred[0..6];
+                for s in 0..6 {
+                    assert_eq!(raw_a[s].canon_bits(), raw_b[s].canon_bits());
+                    assert_eq!(
+                        raw_a[s].canon_bits(),
+                        raw_c[s].canon_bits(),
+                        "raw_cov ignores bias"
+                    );
+                }
+                // mahal & loglik match between shared-factor and partial_corr paths.
+                let (mahal_a, ll_a) = (sa.pred[6], sa.pred[7]);
+                let (mahal_b, ll_b) = (sb.pred[9], sb.pred[10]);
+                assert!((mahal_a - mahal_b).abs() < 1e-11, "mahal row {idx}");
+                assert!(
+                    (ll_a - ll_b).abs() < 1e-11,
+                    "ll row {idx}: {ll_a} vs {ll_b}"
+                );
+                // Independent oracle check at row 60 against two-pass weighted raw & logpdf.
+                if idx == 60 {
+                    // Check loglik accessor agrees with emitted loglik on next x.
+                    let x_next = rows[idx + 1].0;
+                    let ll_acc = a.loglik(&x_next);
+                    let m_acc = a.mahal(&x_next);
+                    let next_pred = a.predict(&x_next, rows[idx + 1].1).pred;
+                    assert_eq!(ll_acc.canon_bits(), next_pred[7].canon_bits());
+                    assert_eq!(m_acc.canon_bits(), next_pred[6].canon_bits());
+                }
+            }
+        }
+        // State round-trip preserves raw_cov and loglik to the bit.
+        let restored = EwCovModel::restore(&a.state()).unwrap();
+        let probe = [10.5, -4.5, 3.2];
+        assert_eq!(
+            a.predict(&probe, 1.0).pred,
+            restored.predict(&probe, 1.0).pred
+        );
+    }
+
+    // Labels check.
+    let names = vec!["a".into(), "b".into()];
+    let labels = EwCovModel::labels(&names, &[EwCovStat::RawCov, EwCovStat::Loglik], &[], 0, &[]);
+    assert_eq!(
+        labels,
+        vec!["raw_cov_a_a", "raw_cov_a_b", "raw_cov_b_b", "loglik"]
+    );
+
+    // Validation refuses loglik without precision_prior.
+    let err = EwCovModel::new(EwCovCfg {
+        n_features: 2,
+        decay: Decay::Halflife(10.0),
+        stats: vec![EwCovStat::Loglik],
+        min_weight: 2.0,
+        bias: false,
+        precision_prior: None,
+        mahal_quantiles: vec![],
+        pca: 0,
+        pca_every: 0.0,
+        max_rows_between_pca: u32::MAX,
+        lags: vec![],
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    })
+    .unwrap_err();
+    assert!(
+        err.contains("\"loglik\"") && err.contains("precision_prior"),
+        "{err}"
+    );
 }

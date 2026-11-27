@@ -1186,6 +1186,24 @@ pub trait OnlineModel: Sized {
         false
     }
 
+    /// Per output slot, the row's unscaled Gram leverage `x' Gd⁻¹ x` against
+    /// the decayed Gram `Gd = lam * G` before this row (`h_unit`, length
+    /// `n_slots`), and when `need_vec` is true the caller-unit vectors `Gd⁻¹ x`
+    /// and `diag(Gd⁻¹)` (each length `n_slots * k_total`, laid out like
+    /// `coefficients`). Implemented by `ewridge`, `rls`, and `kalman` for
+    /// Cook's distance and DFBETAS.
+    fn row_gram_leverage_into(
+        &self,
+        _x: &[f64],
+        _d_clock: f64,
+        _need_vec: bool,
+        _h_unit: &mut Vec<f64>,
+        _g_inv_x: &mut Vec<f64>,
+        _diag_g_inv: &mut Vec<f64>,
+    ) -> bool {
+        false
+    }
+
     /// Per output slot, the sampling variance of each coefficient in
     /// `coefficients`' own units and layout (`k_total` per slot), as the
     /// state stands after the last row: `T Cov Tᵀ`'s diagonal, `T` the map

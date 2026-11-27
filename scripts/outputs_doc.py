@@ -719,8 +719,9 @@ OPTIONAL: list[tuple[str, str]] = [
         "`emit_averaged`, `emit_drift`, `emit_metrics` (boolean or list of score names, with "
         "`metric_quantiles`), `emit_autocorr`, `resid_quantiles`, "
         "`conformal` (scalar or list of levels, with `conformal_symmetric`), `emit_conformal_p`, "
-        "`emit_calibration`, `emit_breaks`, `emit_specification`, "
-        "`emit_tails`, `emit_influence` (`ewridge`'s, `rls`'s and `kalman`'s), "
+        "`emit_calibration`, `emit_spiegelhalter` (logistic models), `emit_breaks`, "
+        "`emit_specification`, `emit_arch_lm`, `emit_white`, `emit_tails`, `emit_influence`, "
+        "`emit_cooks_distance` and `emit_dfbetas` (`ewridge`'s, `rls`'s and `kalman`'s), "
         "`emit_feature_health` (not `holt`'s, which has no features)",
         "[Is the model working?](DIAGNOSTICS.md), for the models that "
         "predict a target. `emit_metrics`' `hit_rate_<t>` is null throughout on an `sgd` "

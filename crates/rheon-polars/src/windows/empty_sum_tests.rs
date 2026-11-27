@@ -25,6 +25,8 @@ fn sums(direction: Direction, closed: Closed, min_samples: u32, rows: &[(f64, f6
         bias: false,
         quantile: None,
         max_state_bytes: None,
+        interpolation: None,
+        rank_method: None,
     };
     let cfg = ClockCfg {
         gap_cap: 100.0,

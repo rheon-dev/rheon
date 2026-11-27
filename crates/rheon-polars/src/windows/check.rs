@@ -94,14 +94,22 @@ impl Windows {
         };
         let mut open = vec![0u32; held];
         let var: Vec<Vec<bool>> = (0..nk).map(|ki| self.var_of(ki)).collect();
+        let point: Vec<Vec<bool>> = (0..nk).map(|ki| self.point_of(ki)).collect();
         let quant: Vec<Vec<bool>> = (0..nk).map(|ki| self.quant_of(ki)).collect();
         let ext: Vec<_> = (0..nk).map(|ki| self.ext_of(ki)).collect();
+        let ord: Vec<Vec<bool>> = (0..nk).map(|ki| self.ord_of(ki)).collect();
         for (gi, g) in self.groups.iter().enumerate() {
             let fits = g.queues.len() == nk
-                && g.queues
-                    .iter()
-                    .zip(var.iter().zip(&quant).zip(&ext))
-                    .all(|(q, ((v, qu), (e, later)))| q.has_width(v, qu, e, *later))
+                && (0..nk).all(|ki| {
+                    g.queues[ki].has_width(
+                        &var[ki],
+                        &point[ki],
+                        &quant[ki],
+                        &ext[ki].0,
+                        ext[ki].1,
+                        &ord[ki],
+                    )
+                })
                 && g.open.len() == nk
                 && widths(&g.open_x)
                 && widths(&g.open_held)
@@ -232,6 +240,8 @@ impl Windows {
                     bias: false,
                     quantile: None,
                     max_state_bytes: None,
+                    interpolation: None,
+                    rank_method: None,
                 }]
             && self.cross.is_none()
             && self.moments.is_empty()

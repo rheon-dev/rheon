@@ -2704,6 +2704,171 @@ impl OnlineModel for Kalman {
         true
     }
 
+    fn row_gram_leverage_into(
+        &self,
+        x: &[f64],
+        d_clock: f64,
+        need_vec: bool,
+        h_unit: &mut Vec<f64>,
+        g_inv_x: &mut Vec<f64>,
+        diag_g_inv: &mut Vec<f64>,
+    ) -> bool {
+        let m = self.cfg.n_targets;
+        let k = self.cfg.k_total();
+        h_unit.clear();
+        h_unit.resize(m, f64::NAN);
+        if need_vec {
+            g_inv_x.clear();
+            g_inv_x.resize(m * k, f64::NAN);
+            diag_g_inv.clear();
+            diag_g_inv.resize(m * k, f64::NAN);
+        }
+        let off = usize::from(self.cfg.fit_intercept);
+        for (j, h_slot) in h_unit.iter_mut().enumerate().take(m) {
+            let pi = if self.cfg.share_p { 0 } else { j };
+            let r = self.readiness_noise(j);
+            if self.is_unsized(pi) || r.is_nan() {
+                continue;
+            }
+            let h = self.per_noise(self.prior_quad(pi, x, d_clock, r), r);
+            if h.is_finite() {
+                *h_slot = h;
+            }
+            if !need_vec {
+                continue;
+            }
+            let p_raw = self.cov(pi);
+            let p_raw = &p_raw[..];
+            let za = self.anchored(x);
+            // Prior covariance P_a = Phi_a P Phi_a^T in anchored coords, and
+            // u_a = P_a * za.
+            let (mut pa, w_vec) = if self.cfg.reverts() {
+                let phi: Vec<f64> = (0..k).map(|i| self.cfg.phi(i, d_clock)).collect();
+                let live: Vec<bool> = (0..k).map(|i| self.is_live(i)).collect();
+                let (mut a_m, mut c_m, mut g_m) = (vec![1.0; k], vec![0.0; k], vec![0.0; k]);
+                self.map_into(&live, &mut a_m, &mut c_m);
+                let coupled = self.coupling(&phi, &c_m, &live, &mut g_m);
+                // Apply Phi_a from left and right to P: Phi_a has diagonal `phi`
+                // and optional row-0 coupling `g_m[1..k]`.
+                let mut tmp = vec![0.0; k * k];
+                for r_i in 0..k {
+                    for c_i in 0..k {
+                        let mut v = phi[r_i] * p_raw[r_i * k + c_i];
+                        if coupled && r_i == 0 {
+                            for l in 1..k {
+                                v += g_m[l] * p_raw[l * k + c_i];
+                            }
+                        }
+                        tmp[r_i * k + c_i] = v;
+                    }
+                }
+                let mut out_p = vec![0.0; k * k];
+                for r_i in 0..k {
+                    for c_i in 0..k {
+                        let mut v = tmp[r_i * k + c_i] * phi[c_i];
+                        if coupled && c_i == 0 {
+                            for l in 1..k {
+                                v += tmp[r_i * k + l] * g_m[l];
+                            }
+                        }
+                        out_p[r_i * k + c_i] = v;
+                    }
+                }
+                (out_p, za)
+            } else {
+                (p_raw.to_vec(), za)
+            };
+            let _ = &mut pa;
+            let mut u_a = vec![0.0; k];
+            for i in 0..k {
+                let mut acc = 0.0;
+                for c_i in 0..k {
+                    acc += pa[i * k + c_i] * w_vec[c_i];
+                }
+                u_a[i] = acc;
+            }
+            // Process noise effective diagonal in current standardized coords.
+            let z_cur = self.standardized(x);
+            let mut q_h = vec![0.0; k];
+            self.q_held_into(r, &mut q_h);
+            let gap = self.elapsed[pi] + d_clock;
+            let dd = gap * gap;
+            let mut q_eff = vec![0.0; k];
+            for i in 0..k {
+                if p_raw[i * k + i] != 0.0 {
+                    q_eff[i] = if self.cfg.revert_of(i).is_infinite() {
+                        dd * q_h[i]
+                    } else {
+                        q_h[i] * self.cfg.gap_noise(i, gap)
+                    };
+                }
+            }
+            // Map both anchored P_a and current Q_eff to original caller units.
+            let slot_off = j * k;
+            if !self.cfg.standardize {
+                for i in 0..k {
+                    g_inv_x[slot_off + i] = self.per_noise(u_a[i] + q_eff[i] * z_cur[i], r);
+                    diag_g_inv[slot_off + i] = self.per_noise(pa[i * k + i] + q_eff[i], r);
+                }
+            } else {
+                let s_a = &self.anchor_scale;
+                let s_cur = self.scales();
+                let (m_cur, m_cur_lo, _) = self.stats.parts();
+                // T_a * u_a + T_cur * (q_eff .* z_cur)
+                for i in 0..k {
+                    if i < off {
+                        let mut v_a = u_a[0];
+                        let mut v_q = q_eff[0] * z_cur[0];
+                        for l in 1..k {
+                            let ma = self.anchor_hi[l] + self.anchor_lo[l];
+                            v_a -= (ma / s_a[l]) * u_a[l];
+                            let mc = m_cur[l] + m_cur_lo[l];
+                            v_q -= (mc / s_cur[l]) * q_eff[l] * z_cur[l];
+                        }
+                        g_inv_x[slot_off] = self.per_noise(v_a + v_q, r);
+                    } else {
+                        g_inv_x[slot_off + i] =
+                            self.per_noise(u_a[i] / s_a[i] + q_eff[i] * z_cur[i] / s_cur[i], r);
+                    }
+                }
+                // diag(T_a P_a T_a^T + T_cur diag(q_eff) T_cur^T)
+                for i in off..k {
+                    let da = pa[i * k + i] / (s_a[i] * s_a[i]);
+                    let dq = q_eff[i] / (s_cur[i] * s_cur[i]);
+                    diag_g_inv[slot_off + i] = self.per_noise(da + dq, r);
+                }
+                if off == 1 {
+                    let va: Vec<f64> = (0..k)
+                        .map(|i| {
+                            if i == 0 {
+                                1.0
+                            } else {
+                                -(self.anchor_hi[i] + self.anchor_lo[i]) / s_a[i]
+                            }
+                        })
+                        .collect();
+                    let mut quad_a = 0.0;
+                    for r_i in 0..k {
+                        let mut acc = 0.0;
+                        for c_i in 0..k {
+                            acc += pa[r_i * k + c_i] * va[c_i];
+                        }
+                        quad_a += va[r_i] * acc;
+                    }
+                    let mut quad_q = q_eff[0];
+                    for l in 1..k {
+                        let mc = m_cur[l] + m_cur_lo[l];
+                        let ratio = mc / s_cur[l];
+                        quad_q += q_eff[l] * ratio * ratio;
+                    }
+                    diag_g_inv[slot_off] =
+                        self.per_noise(crate::solve::clamp_rounding(quad_a) + quad_q, r);
+                }
+            }
+        }
+        true
+    }
+
     /// `T P Tᵀ`'s diagonal per target, absolute: `P` carries the noise, and
     /// under `share_p` target `j`'s is the shared one times `σ²_j / σ̄²`
     /// (the module doc). NaN for a target whose `P` is unsized.

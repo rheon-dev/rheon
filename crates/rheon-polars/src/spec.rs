@@ -20,6 +20,7 @@ mod checks;
 mod conformal;
 pub use conformal::*;
 pub(crate) mod diagnostics;
+mod diagnostics_ext;
 mod kalman;
 mod limits;
 mod metrics;
@@ -533,8 +534,8 @@ pub enum ModelKind {
     /// EW moments of the feature columns, no regression (docs/PLAN.md §4.7).
     /// `targets` is ignored; every column of interest goes in `features`.
     EwCov {
-        /// Any of "mean", "var", "std", "cov", "corr", "partial_corr", "mahal",
-        /// "lag_corr" (the last with `lags`).
+        /// Any of "mean", "var", "std", "cov", "raw_cov", "corr",
+        /// "partial_corr", "mahal", "loglik", "lag_corr" (the last with `lags`).
         /// Default: mean + std + corr.
         #[serde(default)]
         stats: Option<Vec<String>>,
@@ -544,7 +545,8 @@ pub enum ModelKind {
         /// as kept ([`rheon_core::EwCovCfg::bias`]).
         #[serde(default)]
         bias: bool,
-        /// Prior for the precision matrix, required by "partial_corr" and "mahal".
+        /// Prior for the precision matrix, required by "partial_corr", "mahal",
+        /// and "loglik".
         #[serde(default)]
         precision_prior: Option<f64>,
         /// Quantile levels of the past Mahalanobis scores, exponentially
@@ -2544,6 +2546,36 @@ pub struct Spec {
     /// `specification_half_life` and Kish's size.
     #[serde(default)]
     pub emit_specification: bool,
+    /// Emit `arch_lm_<slot>`: Engle's ARCH LM statistic on squared residuals,
+    /// sharing `specification_half_life`. Skipped when false so existing specs
+    /// serialize identically.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub emit_arch_lm: bool,
+    /// Lag order for Engle's ARCH LM test (default 10). Skipped when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch_lm_lags: Option<usize>,
+    /// Emit `white_<slot>`: White's heteroskedasticity LM statistic on squared
+    /// residuals, sharing `specification_half_life`. Skipped when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub emit_white: bool,
+    /// Whether White's test includes linear and cross-product terms (`true` by
+    /// default) or squared features alone (`false`). Skipped when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub white_interaction_terms: Option<bool>,
+    /// Emit `spiegelhalter_<slot>`: Spiegelhalter's z-statistic for binary
+    /// probability calibration, sharing `calibration_half_life`. Skipped when
+    /// false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub emit_spiegelhalter: bool,
+    /// Emit `cooks_distance_<slot>`: per-row weighted Cook's distance, sharing
+    /// `influence_half_life`. Skipped when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub emit_cooks_distance: bool,
+    /// Emit `dfbetas` (`List(Float64)` laid out like `coef`): per-coefficient
+    /// DFBETAS in original caller units on every scored row, sharing
+    /// `influence_half_life`. Skipped when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub emit_dfbetas: bool,
     /// The specification tests' memory, in clock units (the default is
     /// [`Spec::memory_multiple`]'s), `inf` the run-once form.
     #[serde(default)]
@@ -4068,88 +4100,7 @@ impl Spec {
         // A model that predicts no target is refused these below, once, with
         // every residual switch it was given.
         let predicts = !self.model.predicts_no_target();
-        if self.emit_influence && predicts && !self.has_row_error_inflation() {
-            no.refuse(format!(
-                "spec {name:?}: emit_influence needs a model that reads one row's leverage, as \
-                 ewridge, rls and kalman do, but {} does not: {}. Leave out emit_influence, or \
-                 use one of those models.",
-                self.model.kind_name(),
-                self.no_leverage()
-            ));
-        }
-        self.check_robust_se(no, predicts);
-        self.check_max_state_bytes(no);
-        // The residual checks whose null a fit fails by construction. An
-        // expectile at a level other than one half is not the mean: its
-        // residuals' mean is not 0 on a stream it fits exactly (-1.0 at 0.9
-        // on unit Gaussian noise), so the Mincer-Zarnowitz Wald and the
-        // CUSUM rejected on every row of such a stream. A generalized linear
-        // fit's residuals have its family's variance, a function of the
-        // mean, and its family's shape: on an exact Poisson fit
-        // Breusch-Pagan and Jarque-Bera rejected on every row, and RESET,
-        // read without a heteroskedasticity correction, on a quarter of
-        // them (review 2026-11-23, DIAG-11).
-        if predicts {
-            self.check_residual_assumptions(no);
-        }
-        if self.ljung_box_lags.is_some() && !self.emit_specification {
-            no.refuse(needs("ljung_box_lags", "emit_specification"));
-        }
-        if let Some(l) = self.ljung_box_lags {
-            // The test reads its lags past the ones a horizon skips, and the
-            // rows of them all are set aside before the first row: the
-            // bound on the reader's own number is what is left of the
-            // ceiling (the check `rheon_core::check_lag_ceiling` makes).
-            let skip = self.ljung_box_skip();
-            let most = rheon_core::MAX_LAG.saturating_sub(skip);
-            if l == 0 {
-                no.refuse(format!(
-                    "spec {name:?}: ljung_box_lags must be at least 1, but it is 0. Set \
-                     ljung_box_lags to 1 or more, such as the default 10, or leave it out."
-                ));
-            } else if l > most {
-                no.refuse(if skip == 0 {
-                    format!(
-                        "spec {name:?}: ljung_box_lags must be at most {most}, but it is {l}: \
-                         memory for every lag is set aside before the first row. Lower \
-                         ljung_box_lags to {most} or below."
-                    )
-                } else {
-                    format!(
-                        "spec {name:?}: ljung_box_lags must be at most {most}, since \
-                         horizon_rows={} skips the first {skip} lags and memory for every lag \
-                         is set aside before the first row, but it is {l}. Lower \
-                         ljung_box_lags to {most} or below, or lower horizon_rows.",
-                        self.horizon()
-                    )
-                });
-            }
-        }
-        if self.horizon_rows.is_some() && self.horizon_readers().is_empty() {
-            no.refuse(format!(
-                "spec {name:?}: horizon_rows applies only when emit_calibration, emit_breaks, \
-                 emit_specification or emit_robust_se is on, but none is. Turn on the \
-                 diagnostic that should read it, or leave out horizon_rows."
-            ));
-        }
-        if let Some(h) = self.horizon_rows.filter(|h| *h > rheon_core::MAX_LAG / 2) {
-            no.refuse(format!(
-                "spec {name:?}: horizon_rows must be at most {}, but it is {h}: the diagnostics \
-                 read twice as many lags, and memory for every lag is set aside before the \
-                 first row. Lower horizon_rows to {} or below.",
-                rheon_core::MAX_LAG / 2,
-                rheon_core::MAX_LAG / 2
-            ));
-        }
-        if self.emit_error_inflation && !self.has_row_error_inflation() {
-            no.refuse(format!(
-                "spec {name:?}: emit_error_inflation needs a model that reads one row's \
-                 leverage, as ewridge, rls and kalman do, but {} does not: {}. Leave out \
-                 emit_error_inflation, or use one of those models.",
-                self.model.kind_name(),
-                self.no_leverage()
-            ));
-        }
+        self.validate_diagnostics(name, predicts, &needs, no);
         const DRIFT_ACTION: [&str; 2] = ["flag", "reset"];
         if let Some(a) = &self.drift_action
             && !DRIFT_ACTION.contains(&a.as_str())
@@ -4470,11 +4421,16 @@ impl Spec {
                 ("emit_autocorr", self.emit_autocorr),
                 ("emit_drift", self.emit_drift),
                 ("emit_calibration", self.emit_calibration),
+                ("emit_spiegelhalter", self.emit_spiegelhalter),
                 ("emit_breaks", self.emit_breaks),
                 ("emit_robust_se", self.emit_robust_se),
                 ("emit_specification", self.emit_specification),
+                ("emit_arch_lm", self.emit_arch_lm),
+                ("emit_white", self.emit_white),
                 ("emit_tails", self.emit_tails),
                 ("emit_influence", self.emit_influence),
+                ("emit_cooks_distance", self.emit_cooks_distance),
+                ("emit_dfbetas", self.emit_dfbetas),
                 ("emit_averaged", self.emit_averaged),
                 ("emit_selected", self.emit_selected),
             ];

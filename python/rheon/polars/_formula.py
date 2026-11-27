@@ -63,6 +63,10 @@ OPERATORS = (
     "rolling_min",
     "rrolling_max",
     "rrolling_min",
+    "rolling_quantile",
+    "rrolling_quantile",
+    "rolling_rank",
+    "rrolling_rank",
     "increment",
     "cross_mean",
     "cross_std",
@@ -118,6 +122,14 @@ MAX_UNBIASED_ORDER = 4
 
 #: The extrema (task 561): no ``half_life``, and a ``since`` event.
 EXTREMA = ("rolling_max", "rolling_min", "rrolling_max", "rrolling_min")
+
+#: Exact windowed quantiles and ranks: no ``half_life``, bounded state.
+EXACT_QUANTILES = ("rolling_quantile", "rrolling_quantile")
+EXACT_RANKS = ("rolling_rank", "rrolling_rank")
+EXACT_ORDER = EXACT_QUANTILES + EXACT_RANKS
+
+#: Rolling rank tie rules: Polars' ``rolling_rank_by`` deterministic methods.
+ROLLING_RANK_METHODS = ("average", "min", "max", "dense")
 
 _BINARY = {
     "Plus": "+",
@@ -447,7 +459,16 @@ def operators(tree: Any) -> list[list[Any]]:
 
 #: The operators that look ahead: a formula with one is a target of the
 #: row's future (docs/PLAN.md task 104).
-FORWARD = ("rewm_mean", "rewm_sum", "rewm_rate", "rewm_quantile", "rrolling_max", "rrolling_min")
+FORWARD = (
+    "rewm_mean",
+    "rewm_sum",
+    "rewm_rate",
+    "rewm_quantile",
+    "rrolling_max",
+    "rrolling_min",
+    "rrolling_quantile",
+    "rrolling_rank",
+)
 
 
 def columns(tree: Any) -> list[str]:
@@ -671,6 +692,7 @@ def operator(
     min_samples: int = 1,
     partial: str | None = None,
     bias: Any = None,
+    adjust: Any = None,
     quantile: Any = None,
     weight: Any = None,
     since: Any = None,
@@ -708,12 +730,10 @@ def operator(
             where=where,
         )
     params: dict[str, Any] = {}
-    if name in EXTREMA:
-        # An extremum weighs no row, so it has no half_life.
+    if name in EXTREMA or name in EXACT_ORDER:
+        # Extrema and exact rolling quantile/rank weigh no row, so no half_life.
         if half_life is not None:
-            raise TypeError(
-                f"{who}: half_life is given, but an extremum weighs no row. Leave it out."
-            )
+            raise TypeError(f"{who}: half_life is given, but {name} weighs no row. Leave it out.")
     elif half_life is None:
         raise TypeError(
             f"{who}: half_life is required, but it is not given. Give half_life in clock units, "
@@ -723,6 +743,11 @@ def operator(
         params["half_life"] = _span(who, "half_life", half_life, inf_ok=True)
     if window_size is not None:
         params["window_size"] = _span(who, "window_size", window_size, inf_ok=False)
+    elif name in EXACT_ORDER:
+        raise RefusedValueError(
+            f"{who}: window_size is required for {name} so state stays bounded, but it is not "
+            f"given. Give window_size in clock units or as a duration."
+        )
     elif name.startswith("rewm") or name.startswith("rrolling"):
         raise RefusedValueError(
             f"{who}: window_size is required when the operator looks ahead, since the rows "
@@ -734,6 +759,14 @@ def operator(
             f'{who}: closed must be "right", "left", "both" or "none", but it is {closed!r}. '
             f"Set closed to one of those words."
         )
+    if name in EXACT_RANKS:
+        allowed = ("left", "both") if name.startswith("rrolling") else ("right", "both")
+        if closed not in allowed:
+            names = " or ".join(f'"{c}"' for c in allowed)
+            raise RefusedValueError(
+                f"{who}: rolling_rank requires the row's own stamp to be inside the window, so "
+                f"closed must be {names}, but it is {closed!r}. Set closed to {names}."
+            )
     params["closed"] = closed
     # Any integer Polars' `rolling_*_by` takes, a numpy one included, up to
     # the core's ceiling, named; past it the refusal came later and said "at
@@ -780,6 +813,24 @@ def operator(
             f"{who}: bias is given, but only a variance (ewm_var, ewm_std) takes it. "
             f"Leave out bias."
         )
+    if name in ("ewm_mean", "rewm_mean"):
+        if adjust is not None:
+            if not isinstance(adjust, bool):
+                raise TypeError(
+                    f"{who}: adjust must be True or None, but it is of type "
+                    f"{type(adjust).__name__}. Leave adjust as None for the time-weighted mean, "
+                    f"or pass adjust=True for the point-mass EW mean."
+                )
+            if not adjust:
+                raise ValueError(
+                    f"{who}: adjust must be True or None, but it is False. Leave adjust as None "
+                    f"for the time-weighted mean (Polars' ewm_mean_by, which equals Polars' "
+                    f"ewm_mean(adjust=False) on a unit-step clock without nulls), or set "
+                    f"adjust=True for the point-mass EW mean."
+                )
+            params["adjust"] = True
+    elif adjust is not None:
+        raise TypeError(f"{who}: adjust is given, but only ewm_mean takes it. Leave out adjust.")
     if name in QUANTILES:
         # A number in (0, 1), as Polars' `quantile` takes it; NaN and the
         # ends refused by name.
@@ -794,10 +845,35 @@ def operator(
                 f"Set quantile to a number above 0 and below 1, such as 0.5 for the median."
             )
         params["quantile"] = float(quantile)
+    elif name in EXACT_QUANTILES:
+        wrong = isinstance(quantile, bool) or not isinstance(quantile, numbers.Real)
+        if wrong or not 0.0 <= float(quantile) <= 1.0:
+            msg = (
+                f"{who}: quantile must be a number from 0 to 1, but it is {quantile!r}. "
+                f"Set quantile within that range, such as 0.5 for the median."
+            )
+            raise WrongTypeError(msg) if wrong else ValueError(msg)
+        params["quantile"] = float(quantile)
+        interp = "nearest" if interpolation is None else interpolation
+        if interp not in INTERPOLATIONS:
+            raise ValueError(
+                f"{who}: interpolation must be one of "
+                f"{', '.join(map(repr, INTERPOLATIONS))}, but it is {interp!r}. "
+                f"Set interpolation to one of those words."
+            )
+        params["interpolation"] = interp
     elif quantile is not None:
         raise TypeError(
-            f"{who}: quantile is given, but only ewm_quantile takes it. Leave out quantile."
+            f"{who}: quantile is given, but only ewm_quantile and rolling_quantile take it. "
+            f"Leave out quantile."
         )
+    if name in EXACT_RANKS:
+        if method not in ROLLING_RANK_METHODS:
+            raise ValueError(
+                f"{who}: method must be one of {', '.join(map(repr, ROLLING_RANK_METHODS))}, "
+                f"but it is {method!r}. Set method to one of those four deterministic methods."
+            )
+        params["method"] = method
     if since is not None:
         if name not in EXTREMA:
             raise TypeError(
@@ -819,10 +895,10 @@ def operator(
             )
         params["since"] = since_tree
     if max_state_bytes is not None:
-        if name not in EXTREMA:
+        if name not in EXTREMA and name not in EXACT_ORDER:
             raise TypeError(
-                f"{who}: max_state_bytes is given, but only rolling_max and rolling_min take "
-                f"it. Leave out max_state_bytes."
+                f"{who}: max_state_bytes is given, but only rolling_max, rolling_min, "
+                f"rolling_quantile and rolling_rank take it. Leave out max_state_bytes."
             )
         wrong = isinstance(max_state_bytes, bool) or not isinstance(
             max_state_bytes, numbers.Integral

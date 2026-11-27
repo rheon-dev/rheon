@@ -3068,8 +3068,10 @@ zero. `c` is Bessel's correction at Kish's effective number of rows,
 `n = W² / Q`, as Polars' `ewm_var` applies it under its default,
 `bias=False`. Give `bias=True` for `C` itself, Polars' `bias=True` and
 `ddof=0`. No correlation moves, since `c` cancels from each. `P`, read
-before the row, serves `partial_corr` and `mahal` alone, with `s` a scale
-on `precision_prior` that decays with the co-moments. Each lag `ℓ` of
+before the row, serves `partial_corr`, `mahal` and `loglik` alone, with `s` a scale
+on `precision_prior` that decays with the co-moments. `raw_cov` reads the
+uncentered second moment `C + m mᵀ` (divided by `W`, whatever `bias` says),
+and both `raw_cov` and `loglik` accept one or more columns. Each lag `ℓ` of
 `lags` keeps `C_ℓ`, with both deviations taken against the mean before the
 row:
 
@@ -3077,9 +3079,9 @@ row:
 W' = λW + w      Q' = λ²Q + w²      a = λW / W'      b = w / W'      δ = x − m      (a + b = 1)
 m' = m + b·δ     C'ᵢⱼ = a·Cᵢⱼ + a·b·δᵢδⱼ
 c = W² / (W² − Q)       (1 under bias=True)
-varᵢ = c·Cᵢᵢ     covᵢⱼ = c·Cᵢⱼ     corrᵢⱼ = Cᵢⱼ / √(CᵢᵢCⱼⱼ)
-P = (c·(C + s·precision_prior·I))⁻¹      s = 1 on the first row, s' = a·s on each row after
-partial_corrᵢⱼ = −Pᵢⱼ / √(PᵢᵢPⱼⱼ)      mahal = √(δᵀ P δ)
+varᵢ = c·Cᵢᵢ     covᵢⱼ = c·Cᵢⱼ     raw_covᵢⱼ = Cᵢⱼ + mᵢmⱼ     corrᵢⱼ = Cᵢⱼ / √(CᵢᵢCⱼⱼ)
+Σ_reg = c·(C + s·precision_prior·I)      P = Σ_reg⁻¹      s = 1 on the first row, s' = a·s on each row after
+partial_corrᵢⱼ = −Pᵢⱼ / √(PᵢᵢPⱼⱼ)      mahal = √(δᵀ P δ)      loglik = −½(k ln 2π + ln|Σ_reg| + δᵀ P δ)
 C_ℓ' = a·C_ℓ + a·b·(x_t − m)(x_{t−ℓ} − m)ᵀ      the co-moments' a and b, so lag 0 would be C exactly
 ```
 

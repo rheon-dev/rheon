@@ -810,9 +810,13 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                 continue;
             }
             let direction = op.direction();
-            let stat = op.kind.stat().expect("a window operator");
+            let stat = if op.adjust {
+                crate::windows::Stat::PointMean
+            } else {
+                op.kind.stat().expect("a window operator")
+            };
             let half_life = op.half_life.clone().expect("checked when read");
-            if !stat.is_extremum() {
+            if !stat.is_capped() {
                 p.spans.push(("half_life", half_life.clone()));
             }
             if let Some(w) = &op.window_size {
@@ -898,6 +902,9 @@ fn plan(config: &WindowsConfig, input: &Schema) -> Result<Plan, Refused> {
                 bias: op.bias,
                 quantile: op.quantile,
                 max_state_bytes: op.max_state_bytes,
+                interpolation: (stat == crate::windows::Stat::ExactQuantile)
+                    .then_some(op.order.interpolation),
+                rank_method: (stat == crate::windows::Stat::ExactRank).then_some(op.order.rank),
             });
             p.columns.push((key, p.ops.len() - 1));
         }
@@ -1536,7 +1543,7 @@ impl WindowsRun {
                 let bytes = rows * row as f64;
                 if bytes > cap as f64 {
                     return Err(format!(
-                        "{WHO}: a rolling_max or rolling_min window of {w} rows holds up to \
+                        "{WHO}: a rolling window of {w} rows holds up to \
                          {rows} rows of {row} bytes each a group, {bytes} bytes, past \
                          max_state_bytes of {cap}. Shorten window_size, or raise \
                          max_state_bytes (at most 64 MiB)."
@@ -2906,7 +2913,7 @@ impl WindowsRun {
                 row_bytes,
                 cap,
             } => polars_err!(ComputeError:
-                "{WHO}: at row {} (counting from 0) a group's rolling_max or rolling_min window \
+                "{WHO}: at row {} (counting from 0) a group's rolling window \
                  holds {rows} rows of {row_bytes} bytes each, {} bytes, past max_state_bytes of \
                  {cap}. A window on a clock holds every row inside its span, so a burst of rows \
                  fills it. Shorten window_size, or raise max_state_bytes (at most 64 MiB).",

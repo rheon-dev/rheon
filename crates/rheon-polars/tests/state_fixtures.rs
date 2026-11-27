@@ -1924,6 +1924,71 @@ fn windows_extrema_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_extrema_config(), bytes, input)
 }
 
+fn windows_exact_order_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "q_lin", "tree": ["rolling_quantile", ["col", "mid"], {"quantile": 0.4, "window_size": 10.0, "interpolation": "linear"}]},
+               {"name": "q_fwd", "tree": ["rrolling_quantile", ["col", "mid"], {"quantile": 0.5, "window_size": 8.0, "interpolation": "midpoint"}]},
+               {"name": "rk", "tree": ["rolling_rank", ["col", "mid"], {"window_size": 10.0, "method": "average"}]},
+               {"name": "pt", "tree": ["ewm_mean", ["col", "mid"], {"half_life": 5.0, "window_size": 10.0, "adjust": true}]}
+             ],
+             "clock": "t", "gap_cap": 50.0}"#,
+    )
+    .unwrap()
+}
+
+fn windows_exact_order_first() -> (Vec<u8>, DataFrame) {
+    windows_first_of(windows_exact_order_config(), window_input(&frame()))
+}
+
+fn windows_exact_order_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    windows_run_of(windows_exact_order_config(), bytes, input)
+}
+
+fn diagnostics_ext_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "ext_reg", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 12.0, "gap_cap": 50.0, "weight": "w", "emit_arch_lm": true, "arch_lm_lags": 4, "emit_white": true, "emit_cooks_distance": true, "emit_dfbetas": true}"#,
+        r#"{"name": "ext_sq", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 12.0, "gap_cap": 50.0, "emit_white": true, "white_interaction_terms": false}"#,
+        r#"{"name": "ext_clf", "model": {"type": "ftrl"}, "targets": ["yb"], "features": ["x0", "x1"], "clock": "t", "half_life": 12.0, "gap_cap": 50.0, "emit_spiegelhalter": true}"#,
+        r#"{"name": "ext_cov", "model": {"type": "ew_cov", "stats": ["raw_cov", "loglik"], "precision_prior": 0.05}, "targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "half_life": 12.0, "gap_cap": 50.0}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn diagnostics_ext_frame() -> DataFrame {
+    let mut df = frame();
+    let yb: Vec<f64> = df
+        .column("y")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .iter()
+        .map(|v| if v.unwrap_or(0.0) > 0.0 { 1.0 } else { 0.0 })
+        .collect();
+    df.with_column(Series::new("yb".into(), yb).into()).unwrap();
+    df
+}
+
+fn diagnostics_ext_first() -> (Vec<u8>, DataFrame) {
+    let df = diagnostics_ext_frame();
+    let mut bank = Bank::new(diagnostics_ext_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn diagnostics_ext_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut bank = Bank::load_bytes(bytes, Some(&diagnostics_ext_specs()))?;
+    let again = bank.save_bytes()?;
+    let cols = bank.fit_predict(input).map_err(|e| e.to_string())?;
+    let out = DataFrame::new(input.height(), cols).map_err(|e| e.to_string())?;
+    Ok((again, vec![("fit_predict".into(), out)]))
+}
+
 fn windows_tick_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_tick_config(), window_tick_input(&frame()))
 }
@@ -3037,6 +3102,16 @@ fn kinds() -> Vec<Kind> {
             run: windows_extrema_run,
         },
         Kind {
+            name: "with_windows_exact_order",
+            first: windows_exact_order_first,
+            run: windows_exact_order_run,
+        },
+        Kind {
+            name: "bank_diagnostics_ext",
+            first: diagnostics_ext_first,
+            run: diagnostics_ext_run,
+        },
+        Kind {
             name: "with_windows_tick",
             first: windows_tick_first,
             run: windows_tick_run,
@@ -4063,12 +4138,12 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 30),
+            ("bank", 31),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),
             ("refresh_time", 5),
-            ("windows", 12)
+            ("windows", 13)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's

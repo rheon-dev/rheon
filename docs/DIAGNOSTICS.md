@@ -112,12 +112,12 @@ Each question, the diagnostic that answers it, and its fields:
 
 | question | switch or call | fields, per slot `<t>` | section |
 |---|---|---|---|
-| is it scaled right? | `emit_calibration` | `calibration_slope_<t>`, `calibration_intercept_<t>`, `calibration_wald_<t>` | [Is it scaled right?](#is-it-scaled-right) |
+| is it scaled right? | `emit_calibration`, `emit_spiegelhalter` | `calibration_slope_<t>`, `calibration_intercept_<t>`, `calibration_wald_<t>`, `spiegelhalter_<t>` | [Is it scaled right?](#is-it-scaled-right) |
 | has it broken? | `emit_breaks`, `emit_drift` | `studentized_<t>`, `cusum_<t>`, `cusum_sq_<t>`, `break_wald_<t>`, `drift_<t>` | [Has it broken?](#has-it-broken) |
 | can its t be trusted? | `emit_se_coef`, `emit_robust_se` | `se_coef`, `se_coef_hc0`, `se_coef_hac`, beside `coef` | [Can its t be trusted?](#can-its-t-be-trusted) |
-| what is it missing? | `emit_specification`, `emit_autocorr` | `ljung_box_<t>`, `breusch_pagan_<t>`, `ramsey_reset_<t>`, `autocorr_<t>` | [What is it missing?](#what-is-it-missing) |
+| what is it missing? | `emit_specification`, `emit_arch_lm`, `emit_white`, `emit_autocorr` | `ljung_box_<t>`, `breusch_pagan_<t>`, `ramsey_reset_<t>`, `arch_lm_<t>`, `white_<t>`, `autocorr_<t>` | [What is it missing?](#what-is-it-missing) |
 | are its tails heavy? | `emit_tails` | `skew_<t>`, `kurtosis_<t>`, `jarque_bera_<t>` | [Are its tails heavy?](#are-its-tails-heavy) |
-| which row moved it? | `emit_influence` | `influence_<t>` | [Which row moved it?](#which-row-moved-it) |
+| which row moved it? | `emit_influence`, `emit_cooks_distance`, `emit_dfbetas` | `influence_<t>`, `cooks_distance_<t>`, `dfbetas` | [Which row moved it?](#which-row-moved-it) |
 | are its features healthy? | `emit_feature_health` | `spread_ratio_<feature>`, `mean_shift_<feature>` | [Are its features healthy?](#are-its-features-healthy) |
 | is another model better? | `emit_metrics`, `metric_quantiles`, `emit_selected`, `emit_averaged`; `rp.eval` | `ic_<t>`, `r2_<t>`, `hit_rate_<t>`, `mae_<t>`, `pinball_<t>`, `pinball_q<τ>_<t>`, `log_loss_<t>`, `width_<t>`, `winkler_<t>`, `selected_<t>`, `pred_<t>__selected`, `pred_<t>__averaged` | [Is another model better?](#is-another-model-better) |
 | is it ready? | `min_weight`, `min_settled_frac`, `max_error_inflation`, `emit_error_inflation`, `emit_target_weight` | `weight_sum`, `settled_frac`, `withheld_reason`, `error_inflation_<t>`, `weight_<t>` | [Is it ready?](#is-it-ready) |
@@ -397,7 +397,15 @@ row. So on `quantile`, and on `sgd` under `loss="quantile"`,
 | `calibration_wald_<t>` | the binomial test of that share at Kish's size, `(Σω d)² / (q (1 − q) Σω²)` with `d = 1{y < pred} − q`: `chi2(1)` at a calibrated quantile, with Newey and West's lag products under a horizon |
 
 On 30 clean streams the coverage's median read 0.499 to 0.500 at
-`q = 0.5`, and 0.895 to 0.900 at `q = 0.9`. At the default memory the test
+`q = 0.5`, and 0.895 to 0.900 at `q = 0.9`.
+
+**For binary probability predictions, `emit_spiegelhalter` adds Spiegelhalter's
+(1986) calibration z-statistic (`spiegelhalter_<t>`).** Sharing
+`calibration_half_life`, it compares the sum of `(y − p)(1 − 2p)` against its
+null standard deviation `sqrt(Σ (1 − 2p)² p (1 − p))`, which is approximately
+`N(0, 1)` when the probabilities are calibrated. Run once (`inf`), it matches
+MAPIE's `spiegelhalter_statistic`. It is accepted by logistic models (`ftrl`,
+`sgd(loss="logistic")` and `glm(family="binomial")`) and refused on others. At the default memory the test
 passed 3.84 on 0% to 1.7% of rows. It is conservative, as the slope's test
 is beside a fit that absorbs what it reads. `cusum` sums
 `d / sqrt(q (1 − q))` there in place of the studentized residual. The
@@ -858,6 +866,8 @@ correlation look for what is left.
 | `ljung_box_<t>` | Box and Pierce's (1970) `Q = n Σ_{l=1..L} ρ̂_l²` over `ljung_box_lags` lags (default 10), at Kish's `n`; run once, Ljung and Box's (1978) `n(n + 2) Σ ρ̂_l² / (n − l)` | `chi2(L)`: 18.3 at 5% for 10 lags | a lag the fit is missing, or a half-life too long |
 | `breusch_pagan_<t>` | Koenker's (1981) form of Breusch and Pagan's (1979) test: `n R²` of `resid²` regressed on the slot's features | `chi2(k)` for `k` features | a spread that moves with a feature, linearly |
 | `ramsey_reset_<t>` | Ramsey's (1969) RESET as a Lagrange multiplier: `n R²` of `resid` on `pred²` and `pred³` beside `pred` | `chi2(2)`: 5.99 at 5% | a curvature the fit is missing |
+| `arch_lm_<t>` (`emit_arch_lm`) | Engle's (1982) ARCH LM test: `n R²` of `resid²` regressed on its `arch_lm_lags` lags (default 10), sharing `specification_half_life`; capped at 256 KB per group across slots | `chi2(L)`: 18.3 at 5% for 10 lags | volatility clustering in the residuals |
+| `white_<t>` (`emit_white`) | White's (1980) heteroskedasticity test: `n R²` of `resid²` regressed on constant, features, squares and pairwise products (`white_interaction_terms=True`, default), or constant and squares alone (`False`), sharing `specification_half_life`; capped at 256 KB per group across slots (up to 21 features with interactions, 253 without) | `chi2(d − 1)` | general heteroskedasticity, including symmetric or cross-feature spread |
 | `autocorr_<t>` (`emit_autocorr`) | the EW correlation of each residual with the one `resid_autocorr_lag` predicted rows back (default 1) | near 0 | one lag, read as a correlation |
 
 `emit_specification` writes the first three at `specification_half_life`,
@@ -997,6 +1007,19 @@ predicted it.
 bad prints, ranks the rows by influence, and decides what to do with the
 rows past the cutoff.
 
+**Two opt-in companions share `influence_half_life` on `ewridge`, `rls` and
+`kalman`:**
+
+- **`emit_cooks_distance`** writes `cooks_distance_<t>`: online Cook's (1977)
+  distance `(v² / (p · s²)) · (h / (1 + h))` with `p` parameters, adding zero
+  bytes to state. Run once with no ridge, it matches statsmodels'
+  `OLSInfluence.cooks_distance` at the last row of the prefix.
+- **`emit_dfbetas`** writes `dfbetas` as a `List(Float64)` laid out like `coef`
+  (unnested as `dfbetas_<t>_<term>`): each coefficient's standardized shift
+  from the row, in the caller's original units even under `standardize=True`.
+  Run once with no ridge, it matches statsmodels' `OLSInfluence.dfbetas` at the
+  last row of the prefix.
+
 **A cutoff scales with the fit: `4 · sqrt((k + 1) / weight_sum)` for `k`
 features.** A clean row's influence is about its leverage's square root,
 and a leverage is about `(k + 1) / weight_sum`. So a fit with more
@@ -1050,7 +1073,7 @@ after the run.
 |---|---|---|---|
 | running accuracy | `emit_metrics`, `metric_quantiles` | `emit_metrics=True` writes `ic_<t>`, `r2_<t>` and `hit_rate_<t>`; a list of names picks any subset of `ic`, `r2`, `hit_rate`, `mae`, `pinball`, `log_loss`, `coverage`, `width` and `winkler` | |
 | a choice as the stream runs | `emit_selected`, `emit_averaged` | the grid point with the lowest EW error so far, and every slot's prediction weighted by its error | [Choose among a grid's settings as the stream runs](how-to/choose-among-a-grid-online.md) |
-| a test of two models | `rp.eval.diebold_mariano`, `rp.eval.clark_west`, `rp.eval.seqtest`, the `seqtest` model | a t statistic, or evidence that can be read at any row | [Compare two models](how-to/compare-two-models.md) |
+| a test of two models | `rp.eval.diebold_mariano`, `rp.eval.clark_west`, `rp.eval.giacomini_white`, `rp.eval.seqtest`, `rp.eval.mean_seqtest`, the `seqtest` model | unconditional or conditional accuracy tests, or anytime-valid evidence that can be read at any row | [Compare two models](how-to/compare-two-models.md) |
 | metrics after the run | `rp.eval.metrics`, `window_metrics`, `interval_metrics`, `compare_specs`, over the output or a query of it for an output too large to hold; `rp.eval.sums` for scores that add up across runs | R², IC, hit rate, MSE, opt-in MAE, pinball and D² pinball; interval coverage, mean width, Winkler score and size-stratified coverage (SSC) | [Evaluate an output frame](how-to/evaluate-an-output-frame.md) |
 
 **`hit_rate` asks whether prediction and target fall on the same side of
@@ -1170,6 +1193,25 @@ than the errors' memory there.
 [Compare two models](how-to/compare-two-models.md) runs both tests on 200
 pairs of nested models, and reads a `seqtest` of two models as the stream
 runs.
+
+**Additional forecast comparison tools in `rp.eval`:**
+
+- **`rp.eval.diebold_mariano`** also supports `loss="squared"|"absolute"|"pinball"|"linex"`
+  (with `quantile` or `linex_a`), Harvey, Leybourne and Newbold's (1997)
+  small-sample scaling (`hln=True`), Student-t p-values (`reference="t"`), and
+  one-sided tests (`alternative="greater"|"less"`), while keeping the original
+  `hln=False`, `reference="normal"`, `alternative="two-sided"` defaults.
+- **`rp.eval.giacomini_white`** tests equal *conditional* predictive ability
+  (Giacomini and White 2006) by testing `E[h_t · d_{t+1}] = 0` against
+  instruments `h_t` (a constant, `instrument_lags` lags, and optional extra
+  `instruments` columns). It streams a Wald chi-squared statistic and p-value in
+  one pass within a 256 KB per-group state cap, with optional `half_life` for
+  rolling values.
+- **`rp.eval.mean_seqtest`** gives an anytime-valid sequential test and
+  confidence sequence for the mean loss differential of bounded differences
+  (`|d_t| <= bound`) using either the conjugate-mixture empirical Bernstein
+  bound (`method="cm_eb"`, Howard et al. 2021) or predictable plug-in betting
+  (`method="betting"`, Waudby-Smith and Ramdas 2024).
 
 ### Evaluating an output frame
 
@@ -1433,10 +1475,15 @@ Each claim on this page that is not measured here rests on one of these.
 | Chu, C.-S. J., Hornik, K. and Kuan, C.-M. (1995). MOSUM tests for parameter constancy. *Biometrika* 82(3), 603–617. | the moving-sum form of the CUSUM |
 | Clark, T. E. and McCracken, M. W. (2001). Tests of equal forecast accuracy and encompassing for nested models. *Journal of Econometrics* 105(1), 85–110. | why equal-accuracy tests lean toward the smaller of two nested models |
 | Clark, T. E. and West, K. D. (2007). Approximately normal tests for equal predictive accuracy in nested models. *Journal of Econometrics* 138(1), 291–311. | `rp.eval.clark_west` |
+| Cook, R. D. (1977). Detection of influential observation in linear regression. *Technometrics* 19(1), 15–18. | `cooks_distance` |
 | Dawid, A. P. (1984). Statistical theory: the prequential approach. *Journal of the Royal Statistical Society, Series A* 147(2), 278–292. | judging predictions made before each row is learned |
 | Diebold, F. X. and Mariano, R. S. (1995). Comparing predictive accuracy. *Journal of Business and Economic Statistics* 13(3), 253–263. | `rp.eval.diebold_mariano` |
+| Engle, R. F. (1982). Autoregressive conditional heteroscedasticity with estimates of the variance of United Kingdom inflation. *Econometrica* 50(4), 987–1007. | `arch_lm` |
 | Gama, J., Medas, P., Castillo, G. and Rodrigues, P. (2004). Learning with drift detection. *Advances in Artificial Intelligence – SBIA 2004*, Lecture Notes in Computer Science 3171, 286–295. Springer. | `drift_kind="ddm"` |
+| Giacomini, R. and White, H. (2006). Tests of conditional predictive ability. *Econometrica* 74(6), 1545–1578. | `rp.eval.giacomini_white` |
+| Harvey, D., Leybourne, S. and Newbold, P. (1997). Testing the equality of prediction mean squared errors. *International Journal of Forecasting* 13(2), 281–291. | `hln=True` in `rp.eval.diebold_mariano` |
 | Hinkley, D. V. (1971). Inference about the change-point from cumulative sum tests. *Biometrika* 58(3), 509–523. | the Page-Hinkley detector behind `drift` |
+| Howard, S. R., Ramdas, A., McAuliffe, J. and Sekhon, J. (2021). Time-uniform, nonparametric, nonasymptotic confidence sequences. *Annals of Statistics* 49(2), 1055–1080. | `method="cm_eb"` in `rp.eval.mean_seqtest` |
 | Jarque, C. M. and Bera, A. K. (1980). Efficient tests for normality, homoscedasticity and serial independence of regression residuals. *Economics Letters* 6(3), 255–259. | `jarque_bera` |
 | Kish, L. (1965). *Survey Sampling*. Wiley. | the effective sample size of unequal weights |
 | Koenker, R. (1981). A note on studentizing a test for heteroscedasticity. *Journal of Econometrics* 17(1), 107–112. | the `n R²` form of `breusch_pagan` |
@@ -1446,6 +1493,8 @@ Each claim on this page that is not measured here rests on one of these.
 | Page, E. S. (1954). Continuous inspection schemes. *Biometrika* 41(1/2), 100–115. | the CUSUM detector behind `drift` |
 | Raab, C., Heusinger, M. and Schleif, F.-M. (2020). Reactive soft prototype computing for concept drift streams. *Neurocomputing* 416, 340–351. | `drift_kind="kswin"` |
 | Ramsey, J. B. (1969). Tests for specification errors in classical linear least-squares regression analysis. *Journal of the Royal Statistical Society, Series B* 31(2), 350–371. | `ramsey_reset` |
+| Spiegelhalter, D. J. (1986). Probabilistic prediction in patient management and clinical trials. *Statistics in Medicine* 5(5), 421–433. | `spiegelhalter` |
 | Vovk, V., Gammerman, A. and Shafer, G. (2005). *Algorithmic Learning in a Random World*. Springer. | conformal prediction and conformal p-values |
+| Waudby-Smith, I. and Ramdas, A. (2024). Estimating means of bounded random variables by betting. *Journal of the Royal Statistical Society, Series B* 86(1), 1–27. | `method="betting"` in `rp.eval.mean_seqtest` |
 | Winkler, R. L. (1972). A decision-theoretic approach to interval estimation. *Journal of the American Statistical Association* 67(337), 187–191. | the Winkler interval score (`winkler`) |
-| White, H. (1980). A heteroskedasticity-consistent covariance matrix estimator and a direct test for heteroskedasticity. *Econometrica* 48(4), 817–838. | `se_coef_hc0` |
+| White, H. (1980). A heteroskedasticity-consistent covariance matrix estimator and a direct test for heteroskedasticity. *Econometrica* 48(4), 817–838. | `se_coef_hc0`, `white` |

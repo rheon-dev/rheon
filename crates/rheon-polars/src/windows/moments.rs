@@ -356,6 +356,8 @@ mod tests {
             bias: false,
             quantile: None,
             max_state_bytes: None,
+            interpolation: None,
+            rank_method: None,
         }
     }
 

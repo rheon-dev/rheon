@@ -270,13 +270,17 @@ dev = [
     # pure Python over numpy, scipy and scikit-learn. The floor is the version
     # measured.
     "mabwiser>=2.7.4",
-    # tests/test_conformal_variants.py and tests/test_scores.py: MAPIE's
-    # regression interval metrics (coverage, mean width, Winkler/MWI, SSC) and
-    # SplitConformalRegressor with AbsoluteConformityScore(sym=False) and
-    # multi-level confidence_level, and crepes' ConformalRegressor
-    # predict_p_online / predict_p (smoothing=False). Both BSD-3-Clause.
+    # tests/test_conformal_variants.py, tests/test_scores.py,
+    # tests/test_specification_influence_520.py and tests/test_forecast_comparison_521.py:
+    # MAPIE's interval metrics, SplitConformalRegressor, Spiegelhalter test and
+    # CM-EB bound, plus crepes' ConformalRegressor predict_p_online. Both BSD-3-Clause.
     "mapie>=1.6.0",
     "crepes>=0.9.1",
+    # tests/test_forecast_comparison_521.py: `dieboldmariano.dm_test` is the
+    # third-party oracle for `rp.eval.diebold_mariano`'s Harvey-Leybourne-Newbold
+    # correction, Student-t reference, custom losses and one-sided p-values.
+    # MIT, pure Python, zero runtime dependencies. The floor is the version measured.
+    "dieboldmariano>=1.1.0",
 ]
 # The R oracles (tests/r_oracle/): R's `highfrequency` and `yuima`, the
 # reference implementations of the realized measures and the jump tests,

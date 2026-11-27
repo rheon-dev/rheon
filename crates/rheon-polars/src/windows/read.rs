@@ -35,9 +35,21 @@ pub(super) fn fill_forward<const W: bool>(
                     ..Acc::default()
                 }
             }
+            Stat::PointMean if !v.is_nan() => Acc {
+                s: v,
+                w: 1.0,
+                n,
+                ..Acc::default()
+            },
             // A variance and moments have no forward kernel (`check_op`).
-            Stat::Mean | Stat::Var | Stat::Std | Stat::Moments => Acc::default(),
-            Stat::Sum | Stat::Rate | Stat::Quantile | Stat::Max | Stat::Min => Acc {
+            Stat::Mean | Stat::PointMean | Stat::Var | Stat::Std | Stat::Moments => Acc::default(),
+            Stat::Sum
+            | Stat::Rate
+            | Stat::Quantile
+            | Stat::Max
+            | Stat::Min
+            | Stat::ExactQuantile
+            | Stat::ExactRank => Acc {
                 s: if v.is_nan() { 0.0 } else { v },
                 w: 0.0,
                 n,
@@ -103,10 +115,31 @@ pub(super) fn read_backward<const W: bool>(
             };
             continue;
         }
+        if op.stat == Stat::ExactQuantile {
+            out[j] = if q.ord(j).len() < op.min_samples {
+                f64::NAN
+            } else {
+                let p = op
+                    .quantile
+                    .expect("an exact quantile has a level (`check_op`)");
+                let interp = op.interpolation.unwrap_or(Interp::Nearest);
+                q.ord(j).quantile(p, interp, None)
+            };
+            continue;
+        }
+        if op.stat == Stat::ExactRank {
+            // Each pending row at the stamp ranks its own value (`write_backward_ranks`).
+            out[j] = f64::NAN;
+            continue;
+        }
         let Some((sum, at)) = q.sum_op::<W>(k, j) else {
             out[j] = empty_value(op);
             continue;
         };
+        if op.stat == Stat::PointMean {
+            out[j] = value_of(k, op, sum, span);
+            continue;
+        }
         if op.stat == Stat::Quantile {
             // The sums count the values; the sketches hold them.
             out[j] = if sum.n < f64::from(op.min_samples) {
@@ -182,12 +215,24 @@ pub(super) fn value_of(k: &KernelDef, op: &OpDef, a: Acc, t: f64) -> f64 {
                 f64::NAN
             }
         }
+        Stat::PointMean => {
+            if a.n > 0.0 {
+                a.s
+            } else {
+                f64::NAN
+            }
+        }
         // `min_samples` 0 only: no value sums to 0.0, whatever the dust.
         Stat::Sum if a.n == 0.0 => 0.0,
         Stat::Sum => a.s,
-        // Read from the queue's sketches (`read_backward`, `close`), and
+        // Read from the queue's sketches/trees (`read_backward`, `close`), and
         // from the group's moments (`flush_in`).
-        Stat::Quantile | Stat::Max | Stat::Min | Stat::Moments => f64::NAN,
+        Stat::Quantile
+        | Stat::Max
+        | Stat::Min
+        | Stat::Moments
+        | Stat::ExactQuantile
+        | Stat::ExactRank => f64::NAN,
         Stat::Rate => rate_of(a, k.clock_mass(t)),
         Stat::Var | Stat::Std => {
             if a.w <= 0.0 {
@@ -238,6 +283,40 @@ pub(super) fn write_backward(
         }
         if complete || op.partial == Partial::Keep {
             held.values[r * held.n_outputs + o] = vals[j];
+        }
+    }
+}
+
+/// Write backward exact-rank operators per pending row: at a shared stamp each
+/// row ranks its own value against the stamp's full window (matching Polars'
+/// `rolling_rank_by`).
+pub(super) fn write_backward_ranks<const W: bool>(
+    ops: &[OpDef],
+    members: &[usize],
+    q: &Queue,
+    pending: &[u64],
+    complete: bool,
+    held: Held<'_>,
+) {
+    let m = pending.len();
+    for (p_idx, &seq) in pending.iter().enumerate() {
+        let r = usize::try_from(seq - held.first).expect("a row is held");
+        let k_from_newest = m - 1 - p_idx;
+        for (j, &o) in members.iter().enumerate() {
+            let op = &ops[o];
+            if op.stat != Stat::ExactRank {
+                continue;
+            }
+            if complete || op.partial == Partial::Keep {
+                let ord = q.ord(j);
+                let val = if ord.len() < op.min_samples {
+                    f64::NAN
+                } else {
+                    let x = q.newest_x::<W>(k_from_newest, j);
+                    ord.rank(x, op.rank_method.unwrap_or(RankMethod::Average), None)
+                };
+                held.values[r * held.n_outputs + o] = val;
+            }
         }
     }
 }
