@@ -112,7 +112,7 @@ impl ArrowCol {
     pub fn is(&self, form: Form) -> bool {
         matches!(
             (self, form),
-            (Self::F64(_), Form::Number)
+            (Self::F64(_) | Self::Num(_), Form::Number)
                 | (Self::Str(_), Form::Text)
                 | (Self::I64(_) | Self::U64(_), Form::Key)
                 | (Self::Nanos(_), Form::Clock)
@@ -393,6 +393,11 @@ pub struct ArrowChunk {
     /// caller's chunk has none: its form is its array's
     /// ([`Self::key_form`]).
     key_dtypes: Vec<(PlSmallStr, DataType)>,
+    /// Columns whose source Polars dtype was `DataType::Null`: untyped
+    /// all-null or 0-row columns that say nothing of their clock dtype
+    /// (review P10, BANK-4). A typed 0-row column is not in this set and
+    /// still checks for clock-dtype conflicts.
+    null_cols: PlHashSet<PlSmallStr>,
 }
 
 impl ArrowChunk {
@@ -461,7 +466,16 @@ impl ArrowChunk {
             clock_dtypes: Vec::new(),
             integer_text: PlHashSet::default(),
             key_dtypes: Vec::new(),
+            null_cols: PlHashSet::default(),
         })
+    }
+
+    /// The chunk, with the columns whose source dtype was `DataType::Null`
+    /// (review 2026-11-23, BANK-4).
+    #[must_use]
+    pub fn with_null_cols(mut self, names: impl IntoIterator<Item = PlSmallStr>) -> Self {
+        self.null_cols.extend(names);
+        self
     }
 
     /// The chunk, with these text columns marked as integer group keys:
@@ -562,19 +576,24 @@ impl ArrowChunk {
         self.name_set.contains(name)
     }
 
-    /// Whether the chunk holds no value of column `name`: no rows, or only
-    /// nulls in every form it holds the column in -- what a frame built with
-    /// no dtypes, every column `Null`, holds. Such a column says nothing of
-    /// its type (review P10). `false` for a column the chunk has not got.
+    /// Whether the chunk holds no value of column `name`: for a 0-row chunk,
+    /// only when the column's source dtype was `DataType::Null` (so typed
+    /// 0-row schemas, such as `rheon --dry-run`'s, still catch clock-dtype
+    /// conflicts; review 2026-11-23, BANK-4); for a non-empty chunk, when
+    /// every form it holds the column in is all null (review P10). `false`
+    /// for a column the chunk has not got.
     pub fn holds_no_value(&self, name: &str) -> bool {
         self.has(name)
-            && (self.height == 0
-                || self.index.get(name).is_some_and(|at| {
+            && if self.height == 0 {
+                self.null_cols.contains(name)
+            } else {
+                self.index.get(name).is_some_and(|at| {
                     at.iter().all(|&i| {
                         let c = &self.cols[i].1;
                         c.null_count() == c.len()
                     })
-                }))
+                })
+            }
     }
 
     /// A column as a polars `Series`, in the first of the given forms the
@@ -1084,10 +1103,31 @@ pub(crate) fn dtype_name(dtype: &DataType) -> String {
         DataType::Datetime(tu, Some(tz)) => format!("Datetime(\"{}\", \"{tz}\")", unit(tu)),
         DataType::Duration(tu) => format!("Duration(\"{}\")", unit(tu)),
         DataType::List(inner) => format!("List({})", dtype_name(inner)),
-        DataType::Categorical(..) => "Categorical".into(),
-        DataType::Enum(..) => "Enum".into(),
-        DataType::Struct(_) => "Struct".into(),
-        DataType::Decimal(..) => "Decimal".into(),
+        DataType::Array(inner, width) => format!("Array({}, {width})", dtype_name(inner)),
+        DataType::Categorical(cats, _) => {
+            let name = cats.name();
+            if name.is_empty() {
+                "Categorical".into()
+            } else {
+                format!("Categorical({name:?})")
+            }
+        }
+        DataType::Enum(fc, _) => {
+            let cats: Vec<String> = fc
+                .categories()
+                .values_iter()
+                .map(|s| format!("{s:?}"))
+                .collect();
+            format!("Enum([{}])", cats.join(", "))
+        }
+        DataType::Struct(fields) => {
+            let body: Vec<String> = fields
+                .iter()
+                .map(|f| format!("{}: {}", f.name(), dtype_name(f.dtype())))
+                .collect();
+            format!("Struct([{}])", body.join(", "))
+        }
+        DataType::Decimal(precision, scale) => format!("Decimal({precision}, {scale})"),
         other => other.to_string(),
     }
 }
@@ -1321,11 +1361,18 @@ pub fn chunk_from_frame_rows(
         have.insert((name.clone(), col.form()));
         cols.push((name.clone(), col));
     }
+    let null_cols: Vec<PlSmallStr> = df
+        .columns()
+        .iter()
+        .filter(|c| *c.dtype() == DataType::Null)
+        .map(|c| c.name().clone())
+        .collect();
     Ok(ArrowChunk::new(df.height(), cols, names)?
         .with_input_rows(rows)
         .with_clock_dtypes(clock_dtypes)
         .with_integer_text_keys(integer_text)
-        .with_key_dtypes(key_dtypes))
+        .with_key_dtypes(key_dtypes)
+        .with_null_cols(null_cols))
 }
 
 /// A column's first reader, for the errors a cast can raise: the first

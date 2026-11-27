@@ -2239,7 +2239,7 @@ fn merge_cfg(by: bool) -> MergeConfig {
         clock: "t".into(),
         source: "source".into(),
         by: by.then(|| "sym".into()),
-        restart: by.then_some(600e9),
+        restart: by.then_some(rheon_polars::Restart::Int(600_000_000_000)),
         restart_text: by.then(|| "10m".into()),
         carry: Vec::new(),
     }

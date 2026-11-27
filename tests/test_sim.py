@@ -410,3 +410,39 @@ def test_the_byte_identity_promise_names_its_numpy_version():
     for doc in (sim.__doc__, sim.regimes.__doc__):
         text = " ".join((doc or "").split())
         assert "byte-identical frames under one numpy version" in text, text[:400]
+
+
+def test_empty_states_and_boundary_psd_matrices():
+    """Review 2026-11-23, PY-10: `states=[]` raises `ValueError` instead of
+    `IndexError`, and any correlation matrix accepted by the `-1e-10` PSD
+    tolerance factors cleanly without crashing in Cholesky."""
+    with pytest.raises(ValueError, match="states must hold at least one"):
+        sim.regimes(2, states=[], transition=np.empty((0, 0)), n_blocks=1, rows_per_block=5)
+
+    # Exact symmetric matrix with unit diagonal and min_eig = -5e-11 (inside
+    # [-1e-10, -1e-12), accepted by _states but crashing cholesky(r + 1e-12*I)).
+    r = np.array([[1.0, 1.0 + 5e-11], [1.0 + 5e-11, 1.0]])
+    assert -1e-10 < np.linalg.eigvalsh(r).min() < -1e-12
+    out = sim.regimes(2, states=[r], transition=[[1.0]], n_blocks=1, rows_per_block=20, seed=0)
+    assert out["rows"].height == 20
+    assert out["rows"]["x_1"].is_finite().all()
+
+
+@pytest.mark.parametrize(
+    "kw,exc,match",
+    [
+        ({"noise": -1.0}, ValueError, "noise must be finite and at least 0"),
+        ({"noise": float("nan")}, ValueError, "noise must be finite and at least 0"),
+        ({"noise": float("inf")}, ValueError, "noise must be finite and at least 0"),
+        ({"noise": True}, TypeError, "noise must be a number"),
+        ({"durations": [1.5, 2.5]}, TypeError, "durations must hold whole numbers"),
+        ({"durations": [True, 2]}, TypeError, "durations must hold whole numbers"),
+        ({"phi": float("nan")}, ValueError, "each phi must be"),
+        ({"scale_state": float("nan")}, ValueError, "scale_state must be finite"),
+    ],
+)
+def test_noise_durations_and_non_finite_params_are_refused(kw, exc, match):
+    """Review 2026-11-23, PY-15 (6): `sim.regimes` refuses negative/non-finite
+    `noise`, non-integer `durations`, and NaN `phi`/`scale_state`."""
+    with pytest.raises(exc, match=match):
+        two_state(n_blocks=2, rows_per_block=10, **kw)

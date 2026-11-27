@@ -310,7 +310,7 @@ fn a_step_back_is_refused_with_the_banks_rule() {
         "{e}"
     );
     let mut c = cfg("t");
-    c.restart = Some(0.5);
+    c.restart = Some(Restart::Float(0.5));
     c.restart_text = Some("0.5".into());
     let mut m = merge_of(std::slice::from_ref(&d), c);
     let e = m.push(0, d.clone()).unwrap_err().to_string();
@@ -320,7 +320,7 @@ fn a_step_back_is_refused_with_the_banks_rule() {
     );
     // Past the setting it starts the input again.
     let mut c = cfg("t");
-    c.restart = Some(0.4);
+    c.restart = Some(Restart::Float(0.4));
     c.restart_text = Some("0.4".into());
     let mut m = merge_of(std::slice::from_ref(&d), c);
     let out = drive(&mut m, &[vec![d]], None, false);
@@ -341,7 +341,7 @@ fn a_temporal_step_back_is_measured_exactly() {
         .unwrap();
     let d = DataFrame::new(2, vec![t.into_column()]).unwrap();
     let mut c = cfg("t");
-    c.restart = Some(2.0 * 86_400e9);
+    c.restart = Some(Restart::Int(2 * 86_400 * 1_000_000_000));
     c.restart_text = Some("2d".into());
     let mut m = merge_of(std::slice::from_ref(&d), c);
     let e = m.push(0, d).unwrap_err().to_string();
@@ -357,7 +357,7 @@ fn an_input_started_again_merges_after_every_row_before_it() {
     let a = f64_input(&[1.0, 5.0, 9.0, 0.5, 4.0], 0);
     let b = f64_input(&[2.0, 8.0, 1.0, 6.0], 1);
     let mut c = cfg("t");
-    c.restart = Some(1.0);
+    c.restart = Some(Restart::Float(1.0));
     c.restart_text = Some("1".into());
     let inputs = [a, b];
     for sizes in [vec![1], vec![2, 3], vec![10]] {
@@ -728,4 +728,105 @@ fn a_long_tie_is_read_on_and_held_whole() {
         rest.column("x").unwrap().i64().unwrap().to_vec(),
         [1, 2, 3, 4, 5, 1000, 1001, 1002].map(Some)
     );
+}
+
+/// Review 2026-11-23, MERGE-4 (1, 4): `Merge::new` refuses an unreadable `by`
+/// dtype upfront as a wrong type, and dtype conflict messages print parameters
+/// for `Decimal`, `Struct`, `Enum`, and `Array` rather than printing identical
+/// bare names on both sides.
+#[test]
+fn merge_new_refuses_unreadable_by_dtype_and_names_compound_dtypes() {
+    for bad_dtype in [
+        DataType::List(Box::new(DataType::Int64)),
+        DataType::Array(Box::new(DataType::Float64), 2),
+        DataType::Binary,
+        DataType::Struct(vec![Field::new("a".into(), DataType::Int64)]),
+    ] {
+        let mut s = Schema::default();
+        s.insert("t".into(), DataType::Float64);
+        s.insert("g".into(), bad_dtype.clone());
+        let mut c = cfg("t");
+        c.by = Some("g".into());
+        let err = Merge::new(vec!["a".into()], vec![s], c)
+            .err()
+            .expect("unreadable by dtype must be refused at build");
+        assert!(crate::is_wrong_type(&err), "{bad_dtype:?}: {err}");
+        let msg = err.to_string();
+        assert!(msg.contains("by column \"g\""), "{bad_dtype:?}: {msg}");
+    }
+
+    // Compound dtype conflicts must not print the same bare name on both sides.
+    let pairs: Vec<(DataType, DataType, &str, &str)> = vec![
+        (
+            DataType::Decimal(10, 2),
+            DataType::Decimal(10, 4),
+            "Decimal(10, 2)",
+            "Decimal(10, 4)",
+        ),
+        (
+            DataType::Struct(vec![Field::new("a".into(), DataType::Int64)]),
+            DataType::Struct(vec![Field::new("b".into(), DataType::Float64)]),
+            "Struct([a: Int64])",
+            "Struct([b: Float64])",
+        ),
+        (
+            DataType::Array(Box::new(DataType::Float64), 2),
+            DataType::Array(Box::new(DataType::Float64), 3),
+            "Array(Float64, 2)",
+            "Array(Float64, 3)",
+        ),
+    ];
+    for (da, db, want_a, want_b) in pairs {
+        let mut sa = Schema::default();
+        sa.insert("t".into(), DataType::Float64);
+        sa.insert("v".into(), da);
+        let mut sb = Schema::default();
+        sb.insert("t".into(), DataType::Float64);
+        sb.insert("v".into(), db);
+        let err = Merge::new(vec!["a".into(), "b".into()], vec![sa, sb], cfg("t"))
+            .err()
+            .expect("conflicting compound dtypes must be refused")
+            .to_string();
+        assert!(
+            err.contains(want_a) && err.contains(want_b),
+            "expected {want_a} and {want_b} in: {err}"
+        );
+    }
+}
+
+/// Review 2026-11-23, MERGE-2: `Restart::Int` compares exact nanoseconds past
+/// 104.25 days (`2^53` ns) and exact integer steps past `2^53`.
+#[test]
+fn restart_int_is_exact_past_104_days_and_2_to_53() {
+    let ns_105d: i128 = 105 * 86_400 * 1_000_000_000;
+    let t0: i64 = 1_700_000_000_000_000_000;
+    let mk_ns = |step: i128| {
+        let s = Series::new("t".into(), [t0, t0 - step as i64])
+            .cast(&DataType::Datetime(TimeUnit::Nanoseconds, None))
+            .unwrap();
+        DataFrame::new(2, vec![s.into_column()]).unwrap()
+    };
+    let mut c = cfg("t");
+    c.restart = Some(Restart::Int(ns_105d + 1));
+    c.restart_text = Some("105d1ns".into());
+    let d_eq = mk_ns(ns_105d + 1);
+    let mut m = merge_of(std::slice::from_ref(&d_eq), c.clone());
+    assert!(m.push(0, d_eq).is_err(), "exact boundary must be refused");
+    let d_gt = mk_ns(ns_105d + 2);
+    let mut m = merge_of(std::slice::from_ref(&d_gt), c);
+    m.push(0, d_gt).unwrap();
+
+    let big: i64 = (1i64 << 53) + 1;
+    let di_eq = df!("t" => [big + 10, 10i64]).unwrap();
+    let di_gt = df!("t" => [big + 10, 9i64]).unwrap();
+    let mut ci = cfg("t");
+    ci.restart = Some(Restart::Int(i128::from(big)));
+    ci.restart_text = Some(big.to_string());
+    let mut mi = merge_of(std::slice::from_ref(&di_eq), ci.clone());
+    assert!(
+        mi.push(0, di_eq).is_err(),
+        "exact 2^53+1 boundary must be refused"
+    );
+    let mut mi = merge_of(std::slice::from_ref(&di_gt), ci);
+    mi.push(0, di_gt).unwrap();
 }

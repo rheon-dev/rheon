@@ -1436,3 +1436,44 @@ fn a_list_of_zoned_instants_is_written_in_utc_in_ndjson() {
     );
     cleanup(&[input, output]);
 }
+
+/// Review 2026-11-23, BANK-4: `rheon --dry-run` feeds an empty frame of the
+/// input's typed schema; resuming a state saved on an `Int64` clock against a
+/// parquet file with a `Float64` clock must fail in `dry_run` rather than
+/// passing as silent.
+#[test]
+fn a_dry_run_refuses_a_conflicting_clock_dtype() {
+    let first = tmp("bank4-int-clock.parquet");
+    let second = tmp("bank4-f64-clock.parquet");
+    let output = tmp("bank4-out.parquet");
+    let state = tmp("bank4.state");
+    let df_int = df!(
+        "group" => ["g0", "g0", "g0"],
+        "t" => [1i64, 2, 3],
+        "x0" => [1.0, 2.0, 3.0],
+        "x1" => [0.5, 1.5, 2.5],
+        "y" => [2.0, 4.0, 6.0],
+    )
+    .unwrap();
+    let df_f64 = df!(
+        "group" => ["g0", "g0"],
+        "t" => [4.0f64, 5.0],
+        "x0" => [1.0, 2.0],
+        "x1" => [0.5, 1.5],
+        "y" => [2.0, 4.0],
+    )
+    .unwrap();
+    write(&first, Format::Parquet, &df_int);
+    write(&second, Format::Parquet, &df_f64);
+    let mut learn = config(&first, &output);
+    learn.save_state = Some(state.clone());
+    run_config(&learn, no_progress).unwrap();
+    let mut resumed = config(&second, &output);
+    resumed.load_state = Some(state.clone());
+    let err = resumed
+        .dry_run()
+        .expect_err("dry_run must catch Int64 -> Float64 clock dtype conflict")
+        .to_string();
+    assert!(err.contains("was Int64 and is now Float64"), "{err}");
+    cleanup(&[first, second, output, state]);
+}

@@ -41,11 +41,14 @@ needs numpy, an optional extra of this package
 from __future__ import annotations
 
 import math
+import numbers
+import operator
 from collections.abc import Sequence
 from typing import Any
 
 import polars as pl
 
+from rheon._errors import WrongTypeError
 from rheon._warnings import unstable
 
 __all__ = ["regimes"]
@@ -65,6 +68,12 @@ def _np() -> Any:
 
 def _states(np: Any, states: Sequence[Any], m: int) -> list[Any]:
     """The `K` correlation matrices, from matrices or equicorrelations."""
+    if len(states) == 0:
+        msg = (
+            "rp.sim.regimes: states must hold at least one correlation matrix, but it is empty. "
+            "Give one or more correlation matrices or equicorrelations."
+        )
+        raise ValueError(msg)
     out = []
     for i, s in enumerate(states):
         arr = np.asarray(s, dtype=float)
@@ -90,6 +99,12 @@ def _states(np: Any, states: Sequence[Any], m: int) -> list[Any]:
                 msg = (
                     f"rp.sim.regimes: states[{i}] must be a {m} by {m} matrix, one row and column "
                     f"per series, but its shape is {r.shape}. Give a {m} by {m} matrix."
+                )
+                raise ValueError(msg)
+            if not np.all(np.isfinite(r)):
+                msg = (
+                    f"rp.sim.regimes: states[{i}] must be a correlation matrix of finite numbers, "
+                    "but it holds a NaN or infinity. Give finite entries."
                 )
                 raise ValueError(msg)
             if not np.allclose(np.diag(r), 1.0):
@@ -131,8 +146,12 @@ def _chain(
             f"states, but its shape is {p.shape}. Give one row and one column per state."
         )
         raise ValueError(msg)
-    if (p < 0).any() or not np.allclose(p.sum(axis=1), 1.0):
-        bad = next(j for j in range(k) if (p[j] < 0).any() or not np.isclose(p[j].sum(), 1.0))
+    if not np.all(np.isfinite(p)) or (p < 0).any() or not np.allclose(p.sum(axis=1), 1.0):
+        bad = next(
+            j
+            for j in range(k)
+            if not np.all(np.isfinite(p[j])) or (p[j] < 0).any() or not np.isclose(p[j].sum(), 1.0)
+        )
         msg = (
             f"rp.sim.regimes: each row of transition must be probabilities, at least 0 and "
             f"summing to 1, but row {bad} is {p[bad].tolist()}. Give rows of probabilities "
@@ -149,7 +168,14 @@ def _chain(
         for _ in range(1, n_blocks):
             out.append(int(rng.choice(k, p=p[out[-1]])))
         return out
-    d = list(durations)
+    raw_d = list(durations)
+    if any(isinstance(v, bool) or not isinstance(v, numbers.Integral) for v in raw_d):
+        msg = (
+            f"rp.sim.regimes: durations must hold whole numbers of blocks, but it is {raw_d!r}. "
+            f"Give {k} integer counts of 1 or more."
+        )
+        raise WrongTypeError(msg)
+    d = [operator.index(v) for v in raw_d]
     if len(d) != k or any(v < 1 for v in d):
         msg = (
             f"rp.sim.regimes: durations must hold one block count of at least 1 for each of "
@@ -390,6 +416,19 @@ def regimes(
         )
         raise ValueError(msg)
 
+    if isinstance(noise, bool) or not isinstance(noise, numbers.Real):
+        msg = (
+            f"rp.sim.regimes: noise must be a number, but its type is {type(noise).__name__}. "
+            "Set noise to a finite number of at least 0."
+        )
+        raise WrongTypeError(msg)
+    noise_val = float(noise)
+    if not (math.isfinite(noise_val) and noise_val >= 0.0):
+        msg = (
+            f"rp.sim.regimes: noise must be finite and at least 0, but it is {noise!r}. "
+            "Set noise to 0 for no observation noise, or a finite positive standard deviation."
+        )
+        raise ValueError(msg)
     phis = np.asarray(phi, dtype=float)
     if phis.ndim == 0:
         phis = np.full(m, phis)
@@ -399,8 +438,8 @@ def regimes(
             f"shape is {phis.shape}. Give one number or {m}."
         )
         raise ValueError(msg)
-    if (np.abs(phis) >= 1.0).any():
-        bad = int(np.argmax(np.abs(phis) >= 1.0))
+    if not np.all(np.isfinite(phis) & (np.abs(phis) < 1.0)):
+        bad = int(np.argmax(~(np.isfinite(phis) & (np.abs(phis) < 1.0))))
         msg = (
             f"rp.sim.regimes: each phi must be above -1 and below 1 for a stationary series, "
             f"but series {bad}'s is {phis[bad]}. Give values in that range."
@@ -413,6 +452,12 @@ def regimes(
         msg = (
             f"rp.sim.regimes: scale_state must be one number or {k} values, one per state, but "
             f"its shape is {vol_exp.shape}. Give one number or {k}."
+        )
+        raise ValueError(msg)
+    if not np.all(np.isfinite(vol_exp)):
+        msg = (
+            f"rp.sim.regimes: scale_state must be finite, but it is {scale_state!r}. "
+            "Give finite log-volatility multipliers."
         )
         raise ValueError(msg)
 
@@ -459,11 +504,16 @@ def regimes(
             scale = float(cycle_profile[d])
             r = scale * r + (1.0 - scale) * np.eye(m)
         # A correlation matrix on the boundary of the cone needs a nudge for
-        # Cholesky; the jitter is at rounding scale.
+        # Cholesky; the jitter clears any rounding-scale negative eigenvalue
+        # accepted by `_states` (`>= -1e-10`) while keeping exact boundary
+        # matrices at `1e-12` (review 2026-11-23, PY-10).
         try:
             f = np.linalg.cholesky(r)
         except np.linalg.LinAlgError:
-            f = np.linalg.cholesky(r + 1e-12 * np.eye(m))
+            r_sym = 0.5 * (r + r.T)
+            min_eig = float(np.linalg.eigvalsh(r_sym).min())
+            jitter = max(1e-12, 2.0 * max(-min_eig, 0.0) + 1e-12)
+            f = np.linalg.cholesky(r_sym + jitter * np.eye(m))
         chol[key] = f
         return f
 
@@ -478,14 +528,14 @@ def regimes(
         prev_row = phis * prev_row + eps[t]
         y[t] = prev_row * vol[t]
     levels = np.cumsum(y, axis=0)
-    if noise > 0.0:
-        levels = levels + noise * rng.standard_normal((n, m))
+    if noise_val > 0.0:
+        levels = levels + noise_val * rng.standard_normal((n, m))
 
     activity_col = None
     clock = np.arange(n, dtype=float)
     if activity is not None:
         mean, shape = activity
-        if mean <= 0.0 or shape <= 0.0:
+        if not (math.isfinite(mean) and mean > 0.0 and math.isfinite(shape) and shape > 0.0):
             msg = (
                 f"rp.sim.regimes: activity must be (mean, shape), both above 0, but it is "
                 f"{activity!r}. Give two positive numbers."

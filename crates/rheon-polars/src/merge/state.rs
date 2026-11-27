@@ -396,13 +396,17 @@ impl Merge {
             }
             let (k, restarts) = taken.expect("checked above");
             // Every held row is at the input's last clock: a tie.
-            let (keys, _) = self.keys(i, &df).map_err(|e| e.to_string())?;
+            let (keys, _) = self
+                .keys(i, &df)
+                .map_err(|e| damaged(&format!("the rows it holds have invalid clocks ({e})")))?;
             if df.height() == 0 || keys.iter().any(|&x| x != k) {
                 return Err(damaged(
                     "the rows it holds are not at their input's last clock",
                 ));
             }
-            let gids = self.gids(&df).map_err(|e| e.to_string())?;
+            let gids = self
+                .gids(&df)
+                .map_err(|e| damaged(&format!("the rows it holds have unreadable groups ({e})")))?;
             self.inputs[i].queue.push_back(Block {
                 df,
                 keys,
@@ -561,5 +565,63 @@ mod carry_state_tests {
         let mut f = saved();
         f.carry.as_mut().unwrap().groups = vec![(row.0, vec![None])];
         assert_eq!(load(f), "");
+    }
+
+    /// Review 2026-11-23, MERGE-4 (2, 3): a crafted state with `restarts` at
+    /// `u64::MAX` must not wrap/panic on the next restart, and corrupted held
+    /// rows whose clocks are null or out of order must report `"the state is
+    /// damaged"`, not an input-order error.
+    #[test]
+    fn crafted_restarts_overflow_and_corrupted_held_rows_are_refused_cleanly() {
+        let a = df!("t" => [1.0, 2.0], "x" => [10i64, 20]).unwrap();
+        let b = df!("t" => [2.0], "x" => [30i64]).unwrap();
+        let mut c = cfg("t");
+        c.restart = Some(super::super::Restart::Float(0.0));
+        c.restart_text = Some("0".into());
+        let mut m = merge_of(&[a.clone(), b.clone()], c.clone());
+        let _ = drive(&mut m, &[vec![a.clone()], vec![b.clone()]], None, true);
+        let mut file: MergeFile = rmp_serde::from_slice(&m.save_bytes().unwrap()).unwrap();
+        // (2) restarts at u64::MAX must refuse on a step back, not panic/wrap.
+        file.inputs[0].restarts = u64::MAX;
+        file.inputs[0].held = None;
+        file.inputs[1].held = None;
+        file.checksum = Some(crate::checksum::Trailer::Patched);
+        let mut bytes = rmp_serde::to_vec_named(&file).unwrap();
+        crate::checksum::seal(&mut bytes);
+        let mut loaded = Merge::load_bytes(
+            &bytes,
+            names(2),
+            vec![a.schema().as_ref().clone(), b.schema().as_ref().clone()],
+            c.clone(),
+        )
+        .unwrap();
+        let step_back = df!("t" => [1.0], "x" => [99i64]).unwrap();
+        let err = loaded.push(0, step_back).unwrap_err().to_string();
+        assert!(err.contains("overflowing"), "{err}");
+
+        // (3) corrupted held rows with a null clock or step back report damaged state.
+        for bad_df in [
+            df!("t" => [None::<f64>], "x" => [1i64]).unwrap(),
+            df!("t" => [1.0], "x" => [1i64]).unwrap(),
+        ] {
+            let mut f: MergeFile = rmp_serde::from_slice(&m.save_bytes().unwrap()).unwrap();
+            let mut ipc = Vec::new();
+            let mut copy = bad_df;
+            IpcWriter::new(&mut ipc).finish(&mut copy).unwrap();
+            f.inputs[0].held = Some(Bin(ipc));
+            f.checksum = Some(crate::checksum::Trailer::Patched);
+            let mut raw = rmp_serde::to_vec_named(&f).unwrap();
+            crate::checksum::seal(&mut raw);
+            let err = Merge::load_bytes(
+                &raw,
+                names(2),
+                vec![a.schema().as_ref().clone(), b.schema().as_ref().clone()],
+                cfg("t"),
+            )
+            .err()
+            .expect("corrupted held rows must be refused")
+            .to_string();
+            assert!(err.contains("the state is damaged"), "{err}");
+        }
     }
 }

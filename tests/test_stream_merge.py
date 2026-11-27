@@ -429,3 +429,56 @@ def test_a_slice_reads_no_chunk_past_its_last_row(dirty):
     b = pl.DataFrame({"t": [10.0, 20.0]})
     got = rp.stream.merge(a.lazy(), b.lazy(), clock="t", chunk_size=2).head(2).collect()
     assert got["t"].to_list() == [1.0, 2.0]
+
+
+def test_restart_after_step_back_is_exact_past_104_days_and_2_to_53():
+    """Review 2026-11-23, MERGE-2: `restart_after_step_back` stays exact in
+    nanoseconds past 104.25 days (`2^53` ns) and exact in integers past `2^53`,
+    and huge integers like `10**400` do not raise `OverflowError`."""
+    ns_105d = 105 * 86_400 * 1_000_000_000
+    t0 = 1_700_000_000_000_000_000
+    # Step back of exactly 105d1ns with threshold "105d1ns": must be REFUSED
+    # (inclusive), not restarted because float(105d1ns) rounded down to 105d.
+    a = pl.DataFrame({"t": pl.Series([t0, t0 - (ns_105d + 1)], dtype=pl.Datetime("ns"))})
+    b = pl.DataFrame({"t": pl.Series([t0], dtype=pl.Datetime("ns"))})
+    with pytest.raises(ValueError, match="steps back"):
+        rp.stream.merge(a, b, clock="t", restart_after_step_back="105d1ns")
+    # Step back of 105d2ns with threshold "105d1ns": strictly past -> restarts.
+    a_restart = pl.DataFrame({"t": pl.Series([t0, t0 - (ns_105d + 2)], dtype=pl.Datetime("ns"))})
+    got = rp.stream.merge(a_restart, b, clock="t", restart_after_step_back="105d1ns")
+    assert got.height == 3
+
+    # Step back of 105d4ns with threshold "105d3ns": strictly past -> restarts
+    # (previously float(105d3ns) rounded up to 105d4ns and falsely refused).
+    a_4 = pl.DataFrame({"t": pl.Series([t0, t0 - (ns_105d + 4)], dtype=pl.Datetime("ns"))})
+    got4 = rp.stream.merge(a_4, b, clock="t", restart_after_step_back="105d3ns")
+    assert got4.height == 3
+
+    # Int64 clock past 2^53: step back of (1<<53)+1 with threshold (1<<53)+1 is refused,
+    # while (1<<53)+2 restarts cleanly.
+    big = (1 << 53) + 1
+    ai_eq = pl.DataFrame({"t": pl.Series([big + 10, 10], dtype=pl.Int64)})
+    ai_gt = pl.DataFrame({"t": pl.Series([big + 10, 9], dtype=pl.Int64)})
+    bi = pl.DataFrame({"t": pl.Series([big + 10], dtype=pl.Int64)})
+    with pytest.raises(ValueError, match="steps back"):
+        rp.stream.merge(ai_eq, bi, clock="t", restart_after_step_back=big)
+    assert rp.stream.merge(ai_gt, bi, clock="t", restart_after_step_back=big).height == 3
+    # Huge integer (10**400): refuses any finite step back instead of OverflowError.
+    with pytest.raises(ValueError, match="steps back"):
+        rp.stream.merge(ai_gt, bi, clock="t", restart_after_step_back=10**400)
+    # And succeeds on sorted inputs with 10**400.
+    ok_i = pl.DataFrame({"t": pl.Series([1, 2], dtype=pl.Int64)})
+    assert rp.stream.merge(ok_i, ok_i, clock="t", restart_after_step_back=10**400).height == 4
+
+
+def test_merge_refuses_unreadable_by_dtype_at_build():
+    """Review 2026-11-23, MERGE-4 (1): an unreadable `by` dtype is refused when
+    the merge is built, not mid-stream with a raw Polars error."""
+    for s in [
+        pl.Series("g", [[1, 2], [3]]),
+        pl.Series("g", [b"a", b"b"]),
+        pl.Series("g", [{"a": 1}, {"a": 2}]),
+    ]:
+        df = pl.DataFrame({"t": [1.0, 2.0]}).with_columns(s)
+        with pytest.raises(TypeError, match='by column "g"'):
+            rp.stream.merge(df.lazy(), df.lazy(), clock="t", by="g")

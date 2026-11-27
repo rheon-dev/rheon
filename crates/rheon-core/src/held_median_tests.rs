@@ -600,3 +600,28 @@ fn a_run_of_decays_of_zero_forgets_every_row() {
     let back = read_back(&b);
     assert_eq!(back.warm_scale(), Some(Some(want)), "rebuilt");
 }
+
+/// Review 2026-11-23, DIAG-10 (3): rescaling weights by `2^-512` can underflow
+/// every leaf's `n.w` to `0.0` while multiplying `n.sum` directly keeps a
+/// non-zero subnormal `subtree.sum`. Recomputing `sum` bottom-up preserves the
+/// treap sum invariant `n.sum == n.w + sum(l) + sum(r)` and leaves `median`
+/// equal to `by_definition` (`None`).
+#[test]
+fn a_rescale_that_underflows_every_leaf_leaves_no_phantom_sum() {
+    let mut t = Tree::new();
+    // 2^-563 * 2^-512 = 2^-1075 -> 0.0 for each leaf, while
+    // 4 * 2^-563 * 2^-512 = 2^-1073 -> non-zero subnormal if `sum` is scaled
+    // directly instead of recomputed from the rescaled leaf weights.
+    let w = f64::from_bits(((1023 - 563) as u64) << 52);
+    assert_eq!(w * RESCALE, 0.0);
+    assert!((4.0 * w) * RESCALE > 0.0);
+    for seq in 0..4u32 {
+        t.insert((seq + 1) as f64, w, seq);
+    }
+    t.rescale();
+    assert!(t.nodes.iter().all(|n| n.w == 0.0));
+    assert_eq!(t.sum(t.root), 0.0, "phantom subnormal root sum");
+    assert!(t.nodes.iter().all(|n| n.sum == 0.0));
+    assert_eq!(t.median(), None);
+    assert_eq!(t.median(), t.by_definition());
+}

@@ -184,6 +184,12 @@ def _np() -> Any:
 
 
 def _columns(g: Gram, who: str = "rheon.gram") -> list[str]:
+    if not isinstance(g, Mapping):
+        msg = (
+            f"{who}: a Gram must be a mapping, but its type is {type(g).__name__}. "
+            "Pass a Gram that ModelBank.gram() or rheon.gram.from_row returns."
+        )
+        raise WrongTypeError(msg)
     cols = g.get("columns")
     if cols is None:
         msg = (
@@ -1738,6 +1744,7 @@ def lasso_path(
     sum over the other columns runs in a different order.
     """
     np = _np()
+    _check_shapes(np, g, "rheon.gram.lasso_path")
     # Each was taken as given: `max_iter=0` returned the intercept with every
     # slope 0, a fully penalised fit to look at, and `tol=nan` never stopped
     # early (review round 4, YB12).
@@ -2230,6 +2237,8 @@ def _lars_paths(
     parts = list(grams)
     if not parts:
         return []
+    for p in parts:
+        _check_shapes(np, p, who)
     cols = _columns(parts[0], who)
     for i, p in enumerate(parts[1:], 1):
         if _columns(p, who) != cols:
@@ -2550,6 +2559,8 @@ def solve_subsets(
     if not parts:
         msg = f"{who}: grams must hold at least one Gram, but it is empty. Pass the Grams to fit."
         raise ValueError(msg)
+    for p in parts:
+        _check_shapes(np, p, who)
     cols = _columns(parts[0], who)
     names = list(parts[0].get("targets") or [])
     for i, p in enumerate(parts[1:], 1):

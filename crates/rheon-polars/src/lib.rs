@@ -105,7 +105,7 @@ pub use defaults::resolved_defaults;
 pub use envelope::Kind as StateKind;
 pub use formula::scalar::{INVERT_DETAIL_FIELDS, Invert};
 pub use formula::{Formula, Literal, Node, OpNode};
-pub use merge::{Merge, MergeConfig};
+pub use merge::{Merge, MergeConfig, Restart};
 /// The Rust Polars this crate is built against, which the command line's
 /// `--version` names.
 pub use polars::VERSION as POLARS_VERSION;
