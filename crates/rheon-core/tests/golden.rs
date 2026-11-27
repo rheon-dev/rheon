@@ -266,6 +266,9 @@ fn kalman_plain_golden() {
         revert_half_life: vec![f64::INFINITY],
         standardize: false,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     })
     .unwrap();
     check("kalman_plain", &signature(&mut m, 0), GOLDEN_KALMAN_PLAIN);
@@ -309,6 +312,9 @@ fn kalman_golden() {
         revert_half_life: vec![f64::INFINITY],
         standardize: true,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     })
     .unwrap();
     check("kalman", &signature(&mut m, 0), GOLDEN_KALMAN);
@@ -338,6 +344,9 @@ fn kalman_revert_golden() {
         revert_half_life: vec![f64::INFINITY, 40.0, 8.0],
         standardize: true,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     })
     .unwrap();
     check("kalman_revert", &signature(&mut m, 0), GOLDEN_KALMAN_REVERT);
@@ -2574,6 +2583,9 @@ fn kalman_noise_golden() {
         revert_half_life: vec![f64::INFINITY],
         standardize: false,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     };
     let mut m = Kalman::new(KalmanCfg {
         q: Some(vec![0.0, 0.01, 0.02]),

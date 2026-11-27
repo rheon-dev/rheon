@@ -1034,6 +1034,40 @@ scale `φ > 0` for non-Gaussian families, where `obs_var` is refused.
   and `filter = "ukf"`, running the RTS backward pass on the linear transition
   over the filter's stored steps.
 
+#### Prior mean (`coef_prior`) and innovation diagnostics (`emit_loglik`, `emit_mahal`)
+
+Both the linear and nonlinear filters accept a prior coefficient mean via
+`coef_prior`, and the linear Gaussian filter can also emit per-row out-of-sample
+innovation diagnostics via `emit_loglik` and `emit_mahal`.
+
+- **`coef_prior`:** sets the prior coefficient mean `β_0` per target, shaped
+  `(n_targets, k_total)` in the original feature units (intercept first when
+  `fit_intercept = True`), every entry finite. Works on both the linear filter
+  and nonlinear `filter = "ekf"` / `"ukf"` (replacing the default `β_0 = 1`
+  intercept start for `"inverse"` and `"power"` links when provided). Under
+  `standardize = True`, each slope's prior is mapped into anchor coordinates on
+  the first observed row where that feature's scale becomes usable. On the
+  linear filter without `obs_var` (where the intercept prior is diffuse), the
+  intercept entry is not read because the target's first observation sets the
+  level directly. `revert_half_life` continues to pull coefficients toward 0
+  (`β ← Φβ`), not toward `coef_prior`.
+- **`emit_loglik` and `emit_mahal`:** linear Gaussian filter only (refused
+  under `filter = "ekf"`, `filter = "ukf"`, or any non-Gaussian family or
+  non-identity link). Computed strictly before the row's update from the
+  one-step-ahead innovation `ν = y − z̃ᵀβ⁻` and innovation variance
+  `S = z̃ᵀP⁻z̃ + R / w`:
+  - `loglik_<t> = −½ (ln(2π) + ln(S) + ν² / S)` (Gaussian innovation
+    log-likelihood)
+  - `mahal_<t> = |ν| / √S` (innovation Mahalanobis distance, in standard
+    deviations, not squared)
+
+  Without `obs_var`, `R` is the target's pre-row residual variance `σ²_j`
+  (never the row's own squared innovation), so both fields are null until the
+  target has a positive pre-row residual variance. Both are also null while
+  withheld by a gate, on zero-weight rows, when the target is null or a
+  formula target, on a diffuse intercept's first observation, or while `P` is
+  unsized.
+
 #### The fixed-lag smoother
 
 `smooth_lag = L` adds, on the row that completes `L` observations of a

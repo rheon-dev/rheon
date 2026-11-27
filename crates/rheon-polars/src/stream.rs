@@ -1604,6 +1604,10 @@ impl Stream {
                     (AnyModel::Robust(a), AnyModel::Robust(b)) => {
                         a.cfg().emit_scale != b.cfg().emit_scale
                     }
+                    (AnyModel::Kalman(a), AnyModel::Kalman(b)) => {
+                        a.cfg().emit_loglik != b.cfg().emit_loglik
+                            || a.cfg().emit_mahal != b.cfg().emit_mahal
+                    }
                     _ => false,
                 };
                 if m.n_features() != fresh.n_features()
@@ -4138,7 +4142,9 @@ fn run_instance(
             // A row only scored, of weight 0 or held for its label, read at
             // its stamp where the model's read decides a window's edge, or
             // at its raw clock where a seasonal `holt` reads its phase.
-            if raw_clock.is_some() {
+            if let AnyModel::Kalman(k) = inst.model.get() {
+                k.predict_with_weight_into(xs, &sc.ys, score_d, w, step);
+            } else if raw_clock.is_some() {
                 inst.model
                     .get()
                     .predict_at_clock_into(xs, &sc.ys, score_d, raw_clock, step);
@@ -4187,6 +4193,7 @@ fn run_instance(
         if min_settled > 0.0 && settled.is_finite() && settled < min_settled {
             keep_ungated(keep, &mut kept, &mut sc.ungated, &step.pred);
             step.pred.fill(f64::NAN);
+            run_parts::withhold_kalman_all(&mut step.extra);
             reason = REASON_SETTLED;
         }
         // Whether a "not met" notice may judge the stream yet, and the wait
@@ -4225,6 +4232,7 @@ fn run_instance(
             let below = step_n_eff_below(weight, min_weight, tj);
             if below {
                 group.fill(f64::NAN);
+                run_parts::withhold_kalman_target(&mut step.extra, m_targets, tj);
                 if reason == 0 {
                     reason = REASON_MIN_PERIODS;
                 }
@@ -4304,6 +4312,9 @@ fn run_instance(
             for (slot, p) in step.pred.iter_mut().enumerate() {
                 if sc.infl.get(slot).is_some_and(|&r| r >= max_infl) {
                     *p = f64::NAN;
+                    if slot < m_targets {
+                        run_parts::withhold_kalman_target(&mut step.extra, m_targets, slot);
+                    }
                     gate_withheld = true;
                     if reason == 0 {
                         reason = REASON_INFLATION;
@@ -4860,7 +4871,8 @@ fn run_instance(
             match &step.extra {
                 Some(rheon_core::Extra::Lasso { lam_selected: v })
                 | Some(rheon_core::Extra::Huber { scale: v })
-                | Some(rheon_core::Extra::VectorAr { values: v }) => {
+                | Some(rheon_core::Extra::VectorAr { values: v })
+                | Some(rheon_core::Extra::Kalman { values: v }) => {
                     for (t_i, l) in v.iter().enumerate() {
                         inst.o_lam[t_i * n_rows + ri] = *l;
                     }

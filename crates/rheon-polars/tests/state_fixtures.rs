@@ -3137,6 +3137,11 @@ fn kinds() -> Vec<Kind> {
             run: kalman_nonlinear_run,
         },
         Kind {
+            name: "bank_kalman_extras",
+            first: kalman_extras_first,
+            run: kalman_extras_run,
+        },
+        Kind {
             name: "bank_dependence",
             first: dependence_first,
             run: dependence_run,
@@ -3551,6 +3556,38 @@ fn kalman_nonlinear_first() -> (Vec<u8>, DataFrame) {
 
 fn kalman_nonlinear_run(bytes: &[u8], input: &DataFrame) -> Ran {
     let mut bank = Bank::load_bytes(bytes, Some(&kalman_nonlinear_specs()))?;
+    let again = bank.save_bytes()?;
+    let cols = bank.fit_predict(input).map_err(|e| e.to_string())?;
+    let out = DataFrame::new(input.height(), cols).map_err(|e| e.to_string())?;
+    Ok((again, vec![("fit_predict".into(), out)]))
+}
+
+/// The specs of `bank_kalman_extras`: linear `kalman` with `coef_prior`,
+/// `emit_loglik` and `emit_mahal`; EKF Poisson with `coef_prior`; and UKF
+/// Gamma inverse with `coef_prior`.
+fn kalman_extras_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "lin_extras", "model": {"type": "kalman", "coef_half_life": 40.0, "obs_var": 0.25, "standardize": false, "coef_prior": [[0.5, 1.0, -0.5]], "emit_loglik": true, "emit_mahal": true}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w", "min_weight": 2.0}"#,
+        r#"{"name": "ekf_prior", "model": {"type": "kalman", "family": "poisson", "filter": "ekf", "q": [0.0001, 0.0001, 0.0001], "coef_prior": [[0.3, 0.2, -0.1]]}, "targets": ["mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w", "min_weight": 2.0}"#,
+        r#"{"name": "ukf_prior", "model": {"type": "kalman", "family": "gamma", "link": "inverse", "dispersion": 0.5, "filter": "ukf", "ukf_rule": "scalar_index", "p0": 0.05, "q": [0.0001, 0.0001, 0.0001], "coef_prior": [[1.5, 0.1, -0.1]]}, "targets": ["mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w", "min_weight": 2.0}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn kalman_extras_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(kalman_extras_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn kalman_extras_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut bank = Bank::load_bytes(bytes, Some(&kalman_extras_specs()))?;
     let again = bank.save_bytes()?;
     let cols = bank.fit_predict(input).map_err(|e| e.to_string())?;
     let out = DataFrame::new(input.height(), cols).map_err(|e| e.to_string())?;
@@ -4026,7 +4063,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 29),
+            ("bank", 30),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),

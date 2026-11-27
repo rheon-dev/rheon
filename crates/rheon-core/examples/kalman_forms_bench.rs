@@ -61,6 +61,9 @@ fn main() {
                         min_weight_holds_learning: false,
                         noise_units: true,
                         obs: Default::default(),
+                        coef_prior: None,
+                        emit_loglik: false,
+                        emit_mahal: false,
                     })
                     .unwrap()
                     .with_covariance_form(*f)

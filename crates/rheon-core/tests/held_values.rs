@@ -442,6 +442,9 @@ fn kalman_predicts_the_same_at_every_level() {
         revert_half_life: vec![f64::INFINITY],
         standardize: true,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     };
     holds(
         "kalman",
@@ -965,6 +968,9 @@ fn a_state_saved_mid_hold_resumes_to_the_bit() {
             revert_half_life: vec![f64::INFINITY],
             standardize: true,
             obs: Default::default(),
+            coef_prior: None,
+            emit_loglik: false,
+            emit_mahal: false,
         })
         .unwrap()
     });
@@ -1199,6 +1205,9 @@ fn a_row_of_no_weight_moves_no_mean() {
             revert_half_life: vec![f64::INFINITY],
             standardize: true,
             obs: Default::default(),
+            coef_prior: None,
+            emit_loglik: false,
+            emit_mahal: false,
         })
         .unwrap()
     });

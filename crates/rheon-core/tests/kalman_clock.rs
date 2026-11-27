@@ -40,6 +40,9 @@ fn kalman() -> Kalman {
         revert_half_life: vec![f64::INFINITY],
         standardize: true,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     })
     .unwrap()
 }
@@ -154,6 +157,9 @@ fn a_gap_adds_q_times_the_square_of_the_clock_step() {
         revert_half_life: vec![f64::INFINITY],
         standardize: false,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     })
     .unwrap();
     let mut s = 3u64;
@@ -255,6 +261,9 @@ fn kalman_with(standardize: bool, share_p: bool, revert: f64) -> Kalman {
         revert_half_life: vec![f64::INFINITY, revert, f64::INFINITY],
         standardize,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     })
     .unwrap()
 }
@@ -383,6 +392,9 @@ fn crossing(n: usize, standardize: bool) -> f64 {
             revert_half_life: vec![f64::INFINITY],
             standardize,
             obs: Default::default(),
+            coef_prior: None,
+            emit_loglik: false,
+            emit_mahal: false,
         })
         .unwrap();
         let mut s = 1000 + seed;

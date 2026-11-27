@@ -28,6 +28,9 @@ fn cfg(revert: Vec<f64>, standardize: bool, share_p: bool) -> KalmanCfg {
         revert_half_life: revert,
         standardize,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     }
 }
 

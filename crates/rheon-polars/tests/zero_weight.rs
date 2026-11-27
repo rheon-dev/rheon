@@ -713,6 +713,12 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "kalman_extras",
+        r#"{"type": "kalman", "coef_half_life": @50, "obs_var": 0.25, "standardize": false, "coef_prior": [[0.2, 1.5]], "emit_loglik": true, "emit_mahal": true}"#,
+        r#""targets": ["y"], "features": ["x0"], "half_life": @50"#,
+        ALL,
+    ),
+    (
         "kmeans",
         r#"{"type": "kmeans", "n_clusters": 2}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": @50"#,

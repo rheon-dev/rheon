@@ -262,6 +262,13 @@ MEANING: dict[str, str] = {
     ),
     "run_mean": "posterior mean run length",
     "loglik": "log predictive density of the row, under the model as it stood before the row",
+    "loglik_<t>": (
+        "out-of-sample Gaussian innovation log-likelihood of `<t>`, read before this row's update"
+    ),
+    "mahal_<t>": (
+        "out-of-sample innovation Mahalanobis distance `abs(nu) / sqrt(S)` of `<t>`, read before "
+        "this row's update"
+    ),
     "filtered_state<j>": "posterior probability of state `<j>` before this row",
     "predicted_state<j>": "one-step-ahead probability of state `<j>`",
     "state": "the most likely state for this row: the one with the largest `predicted_state<j>`",
@@ -424,6 +431,12 @@ ALSO_NULL: dict[str, str] = {
     "run_mode": WITHHELD,
     "run_mean": WITHHELD,
     "loglik": WITHHELD,
+    "loglik_<t>": (
+        "while withheld; on a zero-weight row; where `<t>` is null or a formula target; on a "
+        "diffuse intercept's first observation; while `P` is unsized; and before `<t>` has a "
+        "positive pre-row noise variance (without `obs_var`)"
+    ),
+    "mahal_<t>": "where `loglik_<t>` is",
     "filtered_state<j>": UNTIL_SEEDED,
     "predicted_state<j>": UNTIL_SEEDED,
     "state": UNTIL_SEEDED,
@@ -546,8 +559,8 @@ SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
     "dcc": ('margins="garch"', {"margins": "garch"}),
     "ewm_moments": ("se=True", {"se": True}),
     "kalman": (
-        "smooth_lag=5, emit_smoothed_se=True",
-        {"smooth_lag": 5, "emit_smoothed_se": True},
+        "smooth_lag=5, emit_smoothed_se=True, emit_loglik=True, emit_mahal=True",
+        {"smooth_lag": 5, "emit_smoothed_se": True, "emit_loglik": True, "emit_mahal": True},
     ),
     "krls": ("emit_n_atoms=True", {"emit_n_atoms": True}),
     "dependence": (
@@ -735,6 +748,12 @@ OPTIONAL: list[tuple[str, str]] = [
     (
         "`emit_huber_scale`, `huber`'s: `huber_scale_<t>`, the scale each row's cut is drawn in",
         "[`huber`'s table](#huber), and its [entry](MODELS.md#huber--robust-regression)",
+    ),
+    (
+        "`emit_loglik` and `emit_mahal`, `kalman`'s: `loglik_<t>` and `mahal_<t>`, each target's "
+        "out-of-sample Gaussian innovation log-likelihood and Mahalanobis distance",
+        "[`kalman`'s table](#kalman), and its "
+        "[entry](MODELS.md#kalman--random-walk-β-dynamic-linear-model)",
     ),
     (
         "`emit_n_atoms`, `krls`'s: `n_atoms`, the dictionary or window size before the row",
@@ -1049,6 +1068,8 @@ def stem(
             "lrv",
             "n",
             "smoothed_for",
+            "loglik",
+            "mahal",
         ):
             if base == f"{pre}_{t}":
                 return f"{pre}_<t>"

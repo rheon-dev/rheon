@@ -441,6 +441,9 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "beta",
             "kappa",
             "ukf_noise",
+            "coef_prior",
+            "emit_loglik",
+            "emit_mahal",
         }
     ),
     "glm": frozenset({"refit_span", "max_state_bytes"}),

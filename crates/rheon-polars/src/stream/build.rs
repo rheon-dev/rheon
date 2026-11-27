@@ -341,6 +341,9 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
             standardize,
             covariance_form,
             horizons,
+            coef_prior,
+            emit_loglik,
+            emit_mahal,
             ..
         } => {
             let obs = crate::spec::kalman_obs(spec)?;
@@ -376,6 +379,9 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                 // (docs/PLAN.md task 278); a state saved before keeps its own.
                 noise_units: true,
                 obs,
+                coef_prior: coef_prior.clone(),
+                emit_loglik: *emit_loglik,
+                emit_mahal: *emit_mahal,
             };
             let mut model = Kalman::new(cfg)?.with_covariance_form(*covariance_form)?;
             if let Some(lag) = spec.smooth_lag() {

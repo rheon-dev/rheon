@@ -995,6 +995,15 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             "kalman's UKF plugin noise",
             |p, v| p.ends_with(".Kalman.cfg.obs.ukf_noise") && v.as_str() == Some("plugin"),
         ),
+        ("bank_kalman_extras", "kalman's coef_prior", |p, v| {
+            p.contains(".Kalman.cfg.coef_prior.") && v.as_f64().is_some()
+        }),
+        ("bank_kalman_extras", "kalman's emit_loglik", |p, v| {
+            p.ends_with(".Kalman.cfg.emit_loglik") && v.as_bool() == Some(true)
+        }),
+        ("bank_kalman_extras", "kalman's emit_mahal", |p, v| {
+            p.ends_with(".Kalman.cfg.emit_mahal") && v.as_bool() == Some(true)
+        }),
         ("bank_krls", "krls ALD dictionary atoms", |p, v| {
             p.contains(".Krls.mode.Ald.atoms.") && v.as_f64().is_some()
         }),

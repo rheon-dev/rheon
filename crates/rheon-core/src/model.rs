@@ -33,6 +33,11 @@ pub enum Extra {
     /// `krls`: number of dictionary atoms (ALD) or rows held (window) before
     /// the row's update (`emit_n_atoms = true`); `NaN` on a refused row.
     Krls { n_atoms: f64 },
+    /// `kalman`: out-of-sample Gaussian innovation log-likelihood per target
+    /// (`emit_loglik`) followed by innovation Mahalanobis distance per target
+    /// (`emit_mahal`); `NaN` where withheld, missing, zero-weight, diffuse, or
+    /// before the target has a noise estimate.
+    Kalman { values: Vec<f64> },
 }
 
 /// The coefficients' sampling variances ([`OnlineModel::coef_variance`]),
@@ -658,7 +663,7 @@ fn reports_nothing(mut s: Step) -> Step {
     s.pred.fill(f64::NAN);
     match s.extra.as_mut() {
         Some(Extra::Lasso { lam_selected }) => lam_selected.fill(f64::NAN),
-        Some(Extra::VectorAr { values }) => values.fill(f64::NAN),
+        Some(Extra::VectorAr { values }) | Some(Extra::Kalman { values }) => values.fill(f64::NAN),
         Some(Extra::Krls { n_atoms }) => *n_atoms = f64::NAN,
         _ => {}
     }

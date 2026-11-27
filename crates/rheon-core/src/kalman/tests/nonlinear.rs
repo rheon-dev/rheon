@@ -22,6 +22,9 @@ fn nl_cfg(k: usize, obs: KalmanObs, q: Vec<f64>) -> KalmanCfg {
         noise_units: true,
         horizons: Vec::new(),
         obs,
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     }
 }
 
@@ -125,6 +128,9 @@ fn gaussian_identity_ekf_and_ukf_match_linear() {
             noise_units: true,
             horizons: Vec::new(),
             obs: KalmanObs::default(),
+            coef_prior: None,
+            emit_loglik: false,
+            emit_mahal: false,
         };
 
         for obs in &filters {
