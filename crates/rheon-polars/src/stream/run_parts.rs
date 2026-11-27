@@ -68,6 +68,9 @@ pub(super) fn build_instances<'a>(
     let mut o_support_coef = out.support_coef.iter_mut();
     let mut o_se_coef = out.se_coef.iter_mut();
     let mut o_se_hc0 = out.se_coef_hc0.iter_mut();
+    let mut o_se_hc1 = out.se_coef_hc1.iter_mut();
+    let mut o_se_hc2 = out.se_coef_hc2.iter_mut();
+    let mut o_se_hc3 = out.se_coef_hc3.iter_mut();
     let mut o_se_hac = out.se_coef_hac.iter_mut();
     let mut o_smoothed = out.smoothed_coef.iter_mut();
     let mut o_smoothed_se = out.smoothed_se.iter_mut();
@@ -131,6 +134,9 @@ pub(super) fn build_instances<'a>(
             o_support_coef: o_support_coef.next().expect("one per instance"),
             o_se_coef: o_se_coef.next().expect("one per instance"),
             o_se_hc0: o_se_hc0.next().expect("one per instance"),
+            o_se_hc1: o_se_hc1.next(),
+            o_se_hc2: o_se_hc2.next(),
+            o_se_hc3: o_se_hc3.next(),
             o_se_hac: o_se_hac.next().expect("one per instance"),
             o_smoothed: o_smoothed.next(),
             o_smoothed_se: o_smoothed_se.next(),

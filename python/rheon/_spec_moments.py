@@ -51,7 +51,6 @@ def ewm_moments(
     lag_tolerance: float | Duration | None = None,
     window_rows: int | None = None,
     window_size: float | Duration | None = None,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Exponentially weighted, or windowed, moments and cross-moments of
@@ -294,8 +293,6 @@ def ewm_moments(
         model["window_rows"] = window_rows
     if window_size is not None:
         model["window_size"] = window_size
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     if features is None:
         features = _term_columns(terms)
         if not features and "targets" not in common:

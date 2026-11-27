@@ -64,12 +64,13 @@ use std::sync::{Arc, OnceLock};
 use serde::{Deserialize, Serialize};
 
 use crate::gaps::{Acc, AccSnap, AccView, Cross, gram_parts};
+use crate::lincon::{ConstraintProj, LinearConstraints, system_constraint_matrix};
 use crate::model::{Fit, ModelState, OnlineModel, State, StateError, Step, check_schema};
 use crate::since::Since;
 use crate::solve::{FactorWork, OverMoments, QuadWork, SpdFactor, dot_aug};
 use crate::{Decay, EwCov, GramPart, TargetGaps, TargetMoments};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct EwRidgeCfg {
     pub n_features: usize,
     pub n_targets: usize,
@@ -220,8 +221,67 @@ pub struct EwRidgeCfg {
     /// `max_rows_between_solves` is between solves, counted on every row the
     /// model is stepped with, rows of weight zero included; `1` is every
     /// row, and `0` is refused (docs/PLAN.md tasks 162 and 196).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub max_rows_between_snapshots: Option<usize>,
+    /// Linear equality constraints `R β = r` on the slope coefficients
+    /// (never the intercept). Refused beside `feature_sets`.
+    ///
+    /// **Serialization rule:** Custom `Serialize` skips `constraints` when
+    /// `None` and skips `max_rows_between_snapshots` when *both* trailing
+    /// options are `None`, so pre-existing states keep bit-identical bytes
+    /// while compact (positional-array) msgpack never shifts `constraints`
+    /// into `max_rows_between_snapshots`'s slot.
+    #[serde(default)]
+    pub constraints: Option<LinearConstraints>,
+}
+
+impl Serialize for EwRidgeCfg {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        struct HumanF64(f64);
+        impl Serialize for HumanF64 {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                crate::humanfloat::f64_or_tag::serialize(&self.0, s)
+            }
+        }
+        let len = if self.constraints.is_some() {
+            21
+        } else if self.max_rows_between_snapshots.is_some() {
+            20
+        } else {
+            19
+        };
+        let mut st = serializer.serialize_struct("EwRidgeCfg", len)?;
+        st.serialize_field("n_features", &self.n_features)?;
+        st.serialize_field("n_targets", &self.n_targets)?;
+        st.serialize_field("fit_intercept", &self.fit_intercept)?;
+        st.serialize_field("decay", &self.decay)?;
+        st.serialize_field("ridge", &self.ridge)?;
+        st.serialize_field("feature_sets", &self.feature_sets)?;
+        st.serialize_field("standardize", &self.standardize)?;
+        st.serialize_field("ridge_scale", &self.ridge_scale)?;
+        st.serialize_field("coef_prior", &self.coef_prior)?;
+        st.serialize_field("session_shrink", &self.session_shrink)?;
+        st.serialize_field("long_half_life", &self.long_half_life)?;
+        st.serialize_field("min_weight", &self.min_weight)?;
+        st.serialize_field("solve_every", &HumanF64(self.solve_every))?;
+        st.serialize_field("max_rows_between_solves", &self.max_rows_between_solves)?;
+        st.serialize_field("solve_share", &self.solve_share)?;
+        st.serialize_field("gram_block_rows", &self.gram_block_rows)?;
+        st.serialize_field("target_gaps", &self.target_gaps)?;
+        st.serialize_field("window", &self.window)?;
+        st.serialize_field("window_every", &self.window_every)?;
+        if len >= 20 {
+            st.serialize_field(
+                "max_rows_between_snapshots",
+                &self.max_rows_between_snapshots,
+            )?;
+        }
+        if len >= 21 {
+            st.serialize_field("constraints", &self.constraints)?;
+        }
+        st.end()
+    }
 }
 
 /// The most a held Gram block may take before the model refuses to build,
@@ -473,6 +533,16 @@ impl EwRidgeCfg {
                 self.n_features,
                 false,
             ));
+        }
+        if let Some(lc) = &self.constraints {
+            no.take(lc.validate("ewridge", self.n_features));
+            if !self.feature_sets.is_empty() {
+                no.refuse(
+                    "ewridge: constraints cannot be combined with feature_sets: constraints \
+                     specify one column per entry of features, while feature_sets fit subsets \
+                     of them. Fit on the desired features directly, or leave out feature_sets.",
+                );
+            }
         }
         no.finish()
     }
@@ -1201,6 +1271,7 @@ impl EwRidge {
         ready.pending.resize(m * nc, None);
         let Factors {
             kept: mut factors,
+            projs: mut factor_projs,
             work,
         } = std::mem::take(&mut self.factors);
         let mut work = work.unwrap_or_default();
@@ -1230,6 +1301,7 @@ impl EwRidge {
             self.ready = ready;
             self.factors = Factors {
                 kept: factors,
+                projs: factor_projs,
                 work: Some(work),
             };
             self.restart_schedule();
@@ -1243,6 +1315,7 @@ impl EwRidge {
         let n_systems = grams.len() * nc;
         ready.systems.resize(n_systems, None);
         factors.resize(n_systems, None);
+        factor_projs.resize(n_systems, None);
         // With an intercept the slopes are solved on the centred system (see
         // the module docs). The rest read the raw normal equations and need
         // the uncentred cross-moments: `ridge_scale`, whose intercept is
@@ -1347,7 +1420,17 @@ impl EwRidge {
                         }
                         // The system is on the sum scale, so a row form
                         // against it is scaled back by `W` (see `System`).
-                        Self::solve_raw(&mut failures, &mut work, parts, kc, mr, ps * ridge, w)
+                        Self::solve_raw(
+                            &mut failures,
+                            &mut work,
+                            parts,
+                            kc,
+                            mr,
+                            ps * ridge,
+                            w,
+                            self.cfg.constraints.as_ref(),
+                            self.cfg.fit_intercept,
+                        )
                     } else if !self.cfg.standardize {
                         // Through the origin every slot is a slope, and every
                         // slot is penalized.
@@ -1364,7 +1447,17 @@ impl EwRidge {
                                 }
                             }
                         }
-                        Self::solve_raw(&mut failures, &mut work, parts, kc, mr, ridge, 1.0)
+                        Self::solve_raw(
+                            &mut failures,
+                            &mut work,
+                            parts,
+                            kc,
+                            mr,
+                            ridge,
+                            1.0,
+                            self.cfg.constraints.as_ref(),
+                            false,
+                        )
                     } else {
                         Self::solve_scaled_through_origin(
                             cov,
@@ -1374,6 +1467,7 @@ impl EwRidge {
                             zidx,
                             readers,
                             self.cfg.coef_prior.as_deref(),
+                            self.cfg.constraints.as_ref(),
                             ridge,
                         )
                     }
@@ -1396,6 +1490,7 @@ impl EwRidge {
                     }
                     if keep_factor {
                         ready.systems[at] = None;
+                        factor_projs[at] = None;
                         if let Some(old) = factors[at].take() {
                             work.give(old);
                         }
@@ -1436,6 +1531,7 @@ impl EwRidge {
                     }
                     let edf0 = if solved.centred { 1.0 } else { 0.0 };
                     let factor = solved.factor.take();
+                    let proj = solved.proj.take().map(Arc::new);
                     let kept = if keep_factor {
                         factor.as_ref().map(|f| work.copy(f))
                     } else {
@@ -1452,6 +1548,7 @@ impl EwRidge {
                                 .map(|&pos| (!is_intercept(pos)).then(|| zidx[pos])),
                             edf0,
                             sup0.as_slice(),
+                            proj.clone(),
                             cert,
                         )
                     });
@@ -1492,6 +1589,7 @@ impl EwRidge {
                                 });
                             }
                         }
+                        factor_projs[at] = proj;
                         if let Some(old) = std::mem::replace(&mut factors[at], kept) {
                             work.give(old);
                         }
@@ -1549,6 +1647,7 @@ impl EwRidge {
         if !keep_factor {
             ready.systems.clear();
             factors.clear();
+            factor_projs.clear();
         }
         // Nothing pending: the next settle will not look at the spares.
         if !ready.has_pending() {
@@ -1565,6 +1664,7 @@ impl EwRidge {
         self.ready = ready;
         self.factors = Factors {
             kept: factors,
+            projs: factor_projs,
             work: Some(work),
         };
         self.restart_schedule();
@@ -1632,6 +1732,7 @@ impl EwRidge {
     /// The solve of the raw system in `parts.a` and `parts.b` (`kc` columns,
     /// `mr` right-hand sides): [`Self::run_solve`] on them, as the solve
     /// through the origin and the sum scale pose it.
+    #[allow(clippy::too_many_arguments)]
     fn solve_raw(
         failures: &mut u64,
         work: &mut FactorWork,
@@ -1640,12 +1741,38 @@ impl EwRidge {
         mr: usize,
         shift: f64,
         scale: f64,
+        constraints: Option<&LinearConstraints>,
+        fit_intercept: bool,
     ) -> Option<Solved> {
         let Parts {
             a, b, out, quads, ..
         } = &mut *parts;
-        let (factor, ill) = Self::run_solve(failures, work, quads, a, b, kc, mr, None, out)?;
-        Some(parts.raw(factor, kc, shift, scale, ill))
+        let (factor, mut ill) = Self::run_solve(failures, work, quads, a, b, kc, mr, None, out)?;
+        let mut proj = None;
+        if !ill && let Some(lc) = constraints {
+            let off = usize::from(fit_intercept);
+            let q = lc.n_constraints();
+            let mut c_mat = vec![0.0; q * kc];
+            for (row_i, row) in lc.matrix.iter().enumerate() {
+                for (f, &w) in row.iter().enumerate() {
+                    c_mat[row_i * kc + off + f] = w;
+                }
+            }
+            match ConstraintProj::from_spd_factor(&factor, c_mat, lc.rhs.clone(), kc, q) {
+                Some(p) => {
+                    for jj in 0..mr {
+                        p.project_solution(&mut out[jj * kc..(jj + 1) * kc]);
+                    }
+                    proj = Some(p);
+                }
+                None => {
+                    *failures += 1;
+                    ill = true;
+                    out.fill(f64::NAN);
+                }
+            }
+        }
+        Some(parts.raw(factor, kc, shift, scale, ill, proj))
     }
 
     /// The standardized solve through the origin, on one combo's raw
@@ -1668,6 +1795,7 @@ impl EwRidge {
         zidx: &[usize],
         readers: &[usize],
         coef_prior: Option<&[Vec<f64>]>,
+        constraints: Option<&LinearConstraints>,
         ridge: f64,
     ) -> Option<Solved> {
         let kc = zidx.len();
@@ -1696,11 +1824,16 @@ impl EwRidge {
         cols.extend((0..kc).filter(|&i| scale[i] > 0.0));
         let kk = cols.len();
         if kk == 0 {
+            let ill = constraints.is_some();
+            if ill {
+                *failures += 1;
+            }
             out.clear();
-            out.resize(kc * m, 0.0);
+            out.resize(kc * m, if ill { f64::NAN } else { 0.0 });
             return Some(Solved {
                 sol: std::mem::take(out),
                 factor: None,
+                proj: None,
                 a: Vec::new(),
                 keep: Vec::new(),
                 s: Vec::new(),
@@ -1708,7 +1841,7 @@ impl EwRidge {
                 centred: false,
                 shift: ridge,
                 scale: 1.0,
-                ill: false,
+                ill,
             });
         }
         // The lower triangle alone, each entry once; the upper stays 0
@@ -1733,12 +1866,36 @@ impl EwRidge {
                 }
             }
         }
-        let (factor, ill) = Self::run_solve(failures, work, quads, a, bs, kk, m, None, sol)?;
+        let (factor, mut ill) = Self::run_solve(failures, work, quads, a, bs, kk, m, None, sol)?;
+        let mut proj = None;
+        if !ill && let Some(lc) = constraints {
+            let q = lc.n_constraints();
+            let mut c_mat = vec![0.0; q * kk];
+            for (row_i, row) in lc.matrix.iter().enumerate() {
+                for (i2, &i) in cols.iter().enumerate() {
+                    c_mat[row_i * kk + i2] = row[i] / scale[i];
+                }
+            }
+            match ConstraintProj::from_spd_factor(&factor, c_mat, lc.rhs.clone(), kk, q) {
+                Some(p) => {
+                    for jj in 0..m {
+                        p.project_solution(&mut sol[jj * kk..(jj + 1) * kk]);
+                    }
+                    proj = Some(p);
+                }
+                None => {
+                    *failures += 1;
+                    ill = true;
+                }
+            }
+        }
         out.clear();
-        out.resize(kc * m, 0.0);
-        for j in 0..m {
-            for (i2, &i) in cols.iter().enumerate() {
-                out[j * kc + i] = sol[j * kk + i2] / scale[i];
+        out.resize(kc * m, if ill { f64::NAN } else { 0.0 });
+        if !ill {
+            for j in 0..m {
+                for (i2, &i) in cols.iter().enumerate() {
+                    out[j * kc + i] = sol[j * kk + i2] / scale[i];
+                }
             }
         }
         kept_s.clear();
@@ -1750,6 +1907,7 @@ impl EwRidge {
         Some(Solved {
             sol: std::mem::take(out),
             factor: Some(factor),
+            proj,
             a: std::mem::take(a),
             keep: std::mem::take(pos),
             s: std::mem::take(kept_s),
@@ -1835,8 +1993,13 @@ impl EwRidge {
         out.clear();
         out.resize(kc * mr, 0.0);
         let mut factor = None;
+        let mut proj = None;
         let mut ill = false;
-        if kk > 0 {
+        if kk == 0 && self.cfg.constraints.is_some() {
+            *failures += 1;
+            ill = true;
+            out.fill(f64::NAN);
+        } else if kk > 0 {
             // The lower triangle alone, each entry once; the upper stays 0.
             // Nothing reads it: the factorization's rungs read the lower
             // triangle and the readiness check the diagonal, and a kept
@@ -1911,10 +2074,34 @@ impl EwRidge {
             };
             let (f, past) = Self::run_solve(failures, work, quads, asub, bsub, kk, mr, over, sol)?;
             ill = past;
-            for jj in 0..mr {
-                for (i2, &i) in keep.iter().enumerate() {
-                    let v = sol[jj * kk + i2];
-                    out[jj * kc + i + 1] = if standardize { v / s[i] } else { v };
+            if !ill && let Some(lc) = &self.cfg.constraints {
+                let q = lc.n_constraints();
+                let mut c_mat = vec![0.0; q * kk];
+                for (row_i, row) in lc.matrix.iter().enumerate() {
+                    for (i2, &i) in keep.iter().enumerate() {
+                        c_mat[row_i * kk + i2] = if standardize { row[i] / s[i] } else { row[i] };
+                    }
+                }
+                match ConstraintProj::from_spd_factor(&f, c_mat, lc.rhs.clone(), kk, q) {
+                    Some(p) => {
+                        for jj in 0..mr {
+                            p.project_solution(&mut sol[jj * kk..(jj + 1) * kk]);
+                        }
+                        proj = Some(p);
+                    }
+                    None => {
+                        *failures += 1;
+                        ill = true;
+                        out.fill(f64::NAN);
+                    }
+                }
+            }
+            if !ill {
+                for jj in 0..mr {
+                    for (i2, &i) in keep.iter().enumerate() {
+                        let v = sol[jj * kk + i2];
+                        out[jj * kc + i + 1] = if standardize { v / s[i] } else { v };
+                    }
                 }
             }
             factor = Some(f);
@@ -1923,19 +2110,21 @@ impl EwRidge {
         // target's rows (and the cross-moments' own copy of it to the bit),
         // and the target's own mean under `pairwise`, where the Gram is over
         // every row (`crate::gaps::Cross`).
-        let pairwise = self.cfg.target_gaps == TargetGaps::Pairwise;
-        for (jj, &j) in readers.iter().enumerate() {
-            let mut b0 = cross.my[j];
-            for i in 0..kf {
-                let z = zidx[i + 1];
-                let m_j = if pairwise {
-                    cross.mj[j][z]
-                } else {
-                    cov.mean(z)
-                };
-                b0 -= m_j * out[jj * kc + i + 1];
+        if !ill {
+            let pairwise = self.cfg.target_gaps == TargetGaps::Pairwise;
+            for (jj, &j) in readers.iter().enumerate() {
+                let mut b0 = cross.my[j];
+                for i in 0..kf {
+                    let z = zidx[i + 1];
+                    let m_j = if pairwise {
+                        cross.mj[j][z]
+                    } else {
+                        cov.mean(z)
+                    };
+                    b0 -= m_j * out[jj * kc + i + 1];
+                }
+                out[jj * kc] = b0;
             }
-            out[jj * kc] = b0;
         }
         // The kept columns as positions in `zidx`, the centred system's
         // scale and the mean it subtracted, for the row form.
@@ -1953,6 +2142,7 @@ impl EwRidge {
         Some(Solved {
             sol: std::mem::take(out),
             factor,
+            proj,
             a,
             keep: std::mem::take(pos),
             s: std::mem::take(kept_s),
@@ -1974,6 +2164,7 @@ impl EwRidge {
         if !on {
             self.ready.systems.clear();
             self.factors.kept.clear();
+            self.factors.projs.clear();
         }
     }
 
@@ -2024,11 +2215,13 @@ impl EwRidge {
     /// factorization is deterministic, so a loaded model reads the same
     /// leverage the saved one did.
     fn refactor(&mut self) {
-        let Factors { kept, work } = &mut self.factors;
+        let Factors { kept, projs, work } = &mut self.factors;
         let work = work.get_or_insert_with(Box::default);
         for old in std::mem::take(kept).into_iter().flatten() {
             work.give(old);
         }
+        let off = usize::from(self.cfg.fit_intercept);
+        let constraints = self.cfg.constraints.as_ref();
         *kept = self
             .ready
             .systems
@@ -2042,6 +2235,26 @@ impl EwRidge {
                 })
             })
             .collect();
+        *projs = self
+            .ready
+            .systems
+            .iter()
+            .zip(kept.iter())
+            .map(|(sys, factor)| {
+                let (Some(lc), Some(sys), Some(factor)) = (constraints, sys, factor) else {
+                    return None;
+                };
+                let c_mat = system_constraint_matrix(lc, &sys.z, &sys.s, off)?;
+                ConstraintProj::from_spd_factor(
+                    factor,
+                    c_mat,
+                    lc.rhs.clone(),
+                    sys.z.len(),
+                    lc.n_constraints(),
+                )
+                .map(Arc::new)
+            })
+            .collect();
     }
 
     /// Output slot `slot`'s kept system and, where it has a column, the
@@ -2053,14 +2266,18 @@ impl EwRidge {
     /// keeps none for it and a load factors its 0×0 matrix, so neither is
     /// read, and a resumed stream reads what the uninterrupted one does
     /// (docs/PLAN.md task 218).
-    fn kept_system(&self, slot: usize) -> Option<(&System, Option<&SpdFactor>)> {
+    fn kept_system(
+        &self,
+        slot: usize,
+    ) -> Option<(&System, Option<&SpdFactor>, Option<&ConstraintProj>)> {
         let at = self.ready.system_of[slot];
         let sys = self.ready.systems.get(at)?.as_ref()?;
         if sys.z.is_empty() {
-            return Some((sys, None));
+            return Some((sys, None, None));
         }
         let factor = self.factors.kept.get(at)?.as_ref()?;
-        Some((sys, Some(factor)))
+        let proj = self.factors.projs.get(at).and_then(|p| p.as_deref());
+        Some((sys, Some(factor), proj))
     }
 
     /// Kish's effective sample size behind each Gram, as it stands before
@@ -2258,6 +2475,8 @@ struct Solved {
     /// The factor of `a`; `None` when nothing was factorized (every column
     /// dropped).
     factor: Option<SpdFactor>,
+    /// Linear-constraint projection for this solve, when `constraints` is set.
+    proj: Option<ConstraintProj>,
     /// The ridged, normalised system as factorized, row-major over the kept
     /// columns, the jitter excluded (the factor knows it). Its lower
     /// triangle is the system; the upper is whatever the solve left there
@@ -2337,7 +2556,15 @@ struct Parts {
 impl Parts {
     /// A raw, uncentred system over every column of the combo: the matrix
     /// in `a`, the solution in `out`.
-    fn raw(&mut self, factor: SpdFactor, kc: usize, shift: f64, scale: f64, ill: bool) -> Solved {
+    fn raw(
+        &mut self,
+        factor: SpdFactor,
+        kc: usize,
+        shift: f64,
+        scale: f64,
+        ill: bool,
+        proj: Option<ConstraintProj>,
+    ) -> Solved {
         self.pos.clear();
         self.pos.extend(0..kc);
         self.kept_s.clear();
@@ -2347,6 +2574,7 @@ impl Parts {
         Solved {
             sol: std::mem::take(&mut self.out),
             factor: Some(factor),
+            proj,
             a: std::mem::take(&mut self.a),
             keep: std::mem::take(&mut self.pos),
             s: std::mem::take(&mut self.kept_s),
@@ -2515,6 +2743,7 @@ impl Spare {
     fn take_factor(&mut self, mut old: Arc<Pending>) -> Option<SpdFactor> {
         let p = Arc::get_mut(&mut old)?;
         let factor = std::mem::replace(&mut p.factor, SpdFactor::hollow());
+        p.proj = None;
         p.shares = OnceLock::new();
         if self.0.len() < Self::KEPT {
             self.0.push(old);
@@ -2524,6 +2753,7 @@ impl Spare {
 
     /// A pending solve of these parts, written over a kept one where there
     /// is one: [`Pending`] as the solve built it, to the bit.
+    #[allow(clippy::too_many_arguments)]
     fn pending(
         &mut self,
         factor: SpdFactor,
@@ -2531,6 +2761,7 @@ impl Spare {
         to: impl Iterator<Item = Option<usize>>,
         edf0: f64,
         sup0: &[f64],
+        proj: Option<Arc<ConstraintProj>>,
         cert: &mut Vec<f64>,
     ) -> Arc<Pending> {
         let numbers = lam.is_finite() && factor.inverse_is_finite_in(cert);
@@ -2544,6 +2775,7 @@ impl Spare {
                 p.edf0 = edf0;
                 p.sup0.clear();
                 p.sup0.extend_from_slice(sup0);
+                p.proj = proj;
                 p.numbers = numbers;
                 p.shares = OnceLock::new();
                 arc
@@ -2555,6 +2787,7 @@ impl Spare {
                 to: to.collect(),
                 edf0,
                 sup0: sup0.to_vec(),
+                proj,
                 numbers,
                 shares: OnceLock::new(),
             }),
@@ -2584,6 +2817,8 @@ struct Pending {
     /// `support` before any share: NaN outside the combo and in the
     /// intercept, 0 for a column the standardiser dropped.
     sup0: Vec<f64>,
+    /// Linear-constraint projection for constrained `edf` and `support_coef`.
+    proj: Option<Arc<ConstraintProj>>,
     /// Every share is sure to be a number: `lam` is finite and so is `A⁻¹`'s
     /// diagonal ([`SpdFactor::inverse_is_finite`]). A share can be NaN --
     /// no ridge and an inverse that overflowed make `1 − 0·∞` -- and then
@@ -2602,6 +2837,7 @@ impl Pending {
             to: Vec::new(),
             edf0: 0.0,
             sup0: Vec::new(),
+            proj: None,
             numbers: false,
             shares: OnceLock::new(),
         }
@@ -2611,6 +2847,23 @@ impl Pending {
     /// computed on the first read.
     fn shares(&self) -> &(f64, Vec<f64>) {
         self.shares.get_or_init(|| {
+            if let Some(proj) = &self.proj {
+                let d = self.to.len();
+                let q = proj.n_constraints();
+                let inv_c = proj.projected_inverse_diagonal_spd(&self.factor);
+                let p_diag = proj.oblique_proj_diag();
+                let mut sup = self.sup0.clone();
+                for (i2, to) in self.to.iter().enumerate() {
+                    let share = (1.0 - p_diag[i2] - self.lam * inv_c[i2]).clamp(0.0, 1.0);
+                    if let Some(zi) = *to {
+                        sup[zi] = share;
+                    }
+                }
+                let free = d.saturating_sub(q) as f64;
+                let trace_inv_c: f64 = inv_c.iter().sum();
+                let edf = self.edf0 + (free - self.lam * trace_inv_c).clamp(0.0, free);
+                return (edf, sup);
+            }
             let inv = self.factor.inverse_diagonal(self.to.len());
             let mut edf = self.edf0;
             let mut sup = self.sup0.clone();
@@ -2630,7 +2883,9 @@ impl Pending {
     /// adding numbers no larger rounds to nothing larger, so `edf0 + k`
     /// bounds the computed sum too. `None` where a share might be NaN.
     fn edf_bound(&self) -> Option<f64> {
-        self.numbers.then_some(self.edf0 + self.to.len() as f64)
+        let q = self.proj.as_ref().map_or(0, |p| p.n_constraints());
+        self.numbers
+            .then_some(self.edf0 + self.to.len().saturating_sub(q) as f64)
     }
 }
 
@@ -2770,6 +3025,7 @@ fn settled_view(r: &Readiness) -> Cow<'_, Readiness> {
 #[derive(Default)]
 struct Factors {
     kept: Vec<Option<SpdFactor>>,
+    projs: Vec<Option<Arc<ConstraintProj>>>,
     work: Option<Box<FactorWork>>,
 }
 
@@ -2778,6 +3034,7 @@ impl Clone for Factors {
     fn clone(&self) -> Self {
         Self {
             kept: self.kept.clone(),
+            projs: self.projs.clone(),
             work: None,
         }
     }
@@ -2995,7 +3252,7 @@ impl OnlineModel for EwRidge {
                     out[slot] = f64::NAN;
                     continue;
                 }
-                let Some((sys, factor)) = self.kept_system(slot) else {
+                let Some((sys, factor, proj)) = self.kept_system(slot) else {
                     continue;
                 };
                 let q =
@@ -3007,7 +3264,11 @@ impl OnlineModel for EwRidge {
                                 (self.z_at(x, zi) - mu) / s
                             },
                         ));
-                        factor.quad_forms(&v, sys.z.len(), 1)[0] * sys.scale
+                        let form = match proj {
+                            Some(p) => p.projected_quad_spd(factor, &v),
+                            None => factor.quad_forms(&v, sys.z.len(), 1)[0],
+                        };
+                        form * sys.scale
                     });
                 let h = (q + if sys.centred { 1.0 } else { 0.0 }) / n;
                 out[slot] = (1.0 + h).sqrt();
@@ -3052,13 +3313,16 @@ impl OnlineModel for EwRidge {
             }
             for c in 0..nc {
                 let slot = j * nc + c;
-                let Some((sys, factor)) = self.kept_system(slot) else {
+                let Some((sys, factor, proj)) = self.kept_system(slot) else {
                     continue;
                 };
                 let kk = sys.z.len();
                 let v = &mut out[slot];
                 if let Some(factor) = factor {
-                    let inv = factor.inverse_diagonal(kk);
+                    let inv = match proj {
+                        Some(p) => p.projected_inverse_diagonal_spd(factor),
+                        None => factor.inverse_diagonal(kk),
+                    };
                     for (i2, &zi) in sys.z.iter().enumerate() {
                         v[zi] = sys.scale * inv[i2] / (n * sys.s[i2] * sys.s[i2]);
                     }
@@ -3071,8 +3335,13 @@ impl OnlineModel for EwRidge {
                         .zip(&sys.z)
                         .map(|((&mu, s), &zi)| own.map_or(mu, |mj| mj[zi]) / s)
                         .collect();
-                    let q =
-                        factor.map_or(0.0, |factor| factor.quad_forms(&u, kk, 1)[0] * sys.scale);
+                    let q = factor.map_or(0.0, |factor| {
+                        let form = match proj {
+                            Some(p) => p.projected_quad_spd(factor, &u),
+                            None => factor.quad_forms(&u, kk, 1)[0],
+                        };
+                        form * sys.scale
+                    });
                     v[0] = (1.0 + q) / n;
                 }
             }

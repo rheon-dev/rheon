@@ -235,7 +235,8 @@ impl Spec {
                     ),
                     (
                         "max_state_bytes",
-                        max_state_bytes.is_some(),
+                        max_state_bytes.is_some()
+                            || (self.max_state_bytes.is_some() && !self.has_diagnostic_state_cap()),
                         "loss",
                         "huber",
                         loss,
@@ -1922,7 +1923,11 @@ impl Spec {
                     ));
                 }
             }
-            ModelKind::Rls { delta, coef_prior } => {
+            ModelKind::Rls {
+                delta,
+                coef_prior,
+                constraints,
+            } => {
                 if let Some(r) = delta.filter(|r| !positive(*r) || !r.is_finite()) {
                     no.refuse(format!(
                         "spec {:?}: delta must be finite and above 0, but it is {}. Set delta to \
@@ -1938,6 +1943,11 @@ impl Spec {
                 {
                     no.refuse(coef_prior_refusal(c, k_total));
                 }
+                if let Some(con) = constraints {
+                    no.take(con.validate("rls", self.k()).map_err(|e| {
+                        format!("spec {:?}: {}", self.name, e.trim_start_matches("rls: "))
+                    }));
+                }
             }
             ModelKind::EwRidge {
                 ridge,
@@ -1946,6 +1956,7 @@ impl Spec {
                 session_shrink,
                 long_half_life,
                 solve_every,
+                constraints,
                 ..
             } => {
                 if let Some(r) = ridge {
@@ -2056,6 +2067,25 @@ impl Spec {
                     &self.features,
                     feature_sets.as_deref(),
                 ));
+                if let Some(con) = constraints {
+                    if feature_sets.as_ref().is_some_and(|s| !s.is_empty()) {
+                        no.refuse(format!(
+                            "spec {:?}: constraints cannot be used with feature_sets: each \
+                             feature set drops a different subset of columns, so one slope \
+                             constraint matrix cannot apply to every set. Leave out feature_sets \
+                             or constraints.",
+                            self.name
+                        ));
+                    } else {
+                        no.take(con.validate("ewridge", self.k()).map_err(|e| {
+                            format!(
+                                "spec {:?}: {}",
+                                self.name,
+                                e.trim_start_matches("ewridge: ")
+                            )
+                        }));
+                    }
+                }
             }
             ModelKind::Bandit(b) => {
                 super::bandit::validate_bandit(self, b, no);

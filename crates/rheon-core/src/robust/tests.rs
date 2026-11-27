@@ -498,6 +498,7 @@ fn huber_resists_outliers_that_break_least_squares() {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        constraints: None,
     })
     .unwrap();
     let mut s = 77u64;

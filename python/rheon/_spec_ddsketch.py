@@ -26,7 +26,6 @@ def ddsketch(
     window_rows: int | None = None,
     window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Quantiles and expected shortfalls of each target column, from a
@@ -221,7 +220,6 @@ def ddsketch(
         "window_rows": window_rows,
         "window_size": window_size,
         "closed": None if closed == "right" else closed,
-        "max_state_bytes": max_state_bytes,
     }
     # Each absent when not given, as the Rust spec leaves it out, so a bank
     # reports the dict this made (`ModelBank.specs`).

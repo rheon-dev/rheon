@@ -232,6 +232,9 @@ fn lists_of<'c>(src: &Source, ch: &'c mut ChunkOut) -> &'c mut [Vec<Option<Vec<f
         Source::SupportCoef(_) => &mut ch.support_coef,
         Source::SeCoef(_) => &mut ch.se_coef,
         Source::SeCoefHc0(_) => &mut ch.se_coef_hc0,
+        Source::SeCoefHc1(_) => &mut ch.se_coef_hc1,
+        Source::SeCoefHc2(_) => &mut ch.se_coef_hc2,
+        Source::SeCoefHc3(_) => &mut ch.se_coef_hc3,
         Source::SeCoefHac(_) => &mut ch.se_coef_hac,
         Source::SmoothedCoef(_) => &mut ch.smoothed_coef,
         Source::SmoothedSe(_) => &mut ch.smoothed_se,
@@ -286,6 +289,9 @@ impl<'a> Sink<'a> {
                 | Source::SupportCoef(_)
                 | Source::SeCoef(_)
                 | Source::SeCoefHc0(_)
+                | Source::SeCoefHc1(_)
+                | Source::SeCoefHc2(_)
+                | Source::SeCoefHc3(_)
                 | Source::SeCoefHac(_)
                 | Source::SmoothedCoef(_)
                 | Source::SmoothedSe(_) => Acc::Lists(Vec::new()),
@@ -643,6 +649,9 @@ fn take_lists(list: &mut Vec<(usize, Vec<f64>)>, src: &Source, ch: &mut ChunkOut
         | Source::SupportCoef(mi)
         | Source::SeCoef(mi)
         | Source::SeCoefHc0(mi)
+        | Source::SeCoefHc1(mi)
+        | Source::SeCoefHc2(mi)
+        | Source::SeCoefHc3(mi)
         | Source::SeCoefHac(mi)
         | Source::SmoothedCoef(mi)
         | Source::SmoothedSe(mi) => mi,

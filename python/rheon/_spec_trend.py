@@ -30,7 +30,6 @@ def holt(
     initial_level: float | list[float] | None = None,
     initial_trend: float | list[float] | None = None,
     initial_seasonal: list[float] | list[list[float]] | None = None,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Holt's linear trend, which extrapolates the target's own level and slope.
@@ -389,7 +388,6 @@ def holt(
         ("initial_level", initial_level),
         ("initial_trend", initial_trend),
         ("initial_seasonal", initial_seasonal),
-        ("max_state_bytes", max_state_bytes),
     ):
         if value is not None:
             model[key] = value

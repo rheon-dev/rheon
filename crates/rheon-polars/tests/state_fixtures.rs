@@ -3146,6 +3146,16 @@ fn kinds() -> Vec<Kind> {
             first: hoeffding_tree_first,
             run: hoeffding_tree_run,
         },
+        Kind {
+            name: "bank_robust_se_types",
+            first: robust_se_types_first,
+            run: robust_se_types_run,
+        },
+        Kind {
+            name: "bank_constrained",
+            first: constrained_first,
+            run: constrained_run,
+        },
     ]
 }
 
@@ -3190,6 +3200,18 @@ fn hoeffding_tree_specs() -> Vec<Spec> {
     .collect()
 }
 
+/// The spec of `bank_robust_se_types`: HC0–HC3 row-time leverage-adjusted
+/// standard errors with HAC lags and a top-level `max_state_bytes` budget
+/// (schema 72, PLAN 512).
+fn robust_se_types_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "robust_se_hc", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 10.0, "gap_cap": 50.0, "weight": "w", "min_weight": 0.0, "max_error_inflation": "inf", "coef_every": 0.0, "emit_robust_se": true, "robust_se_types": ["hc0", "hc1", "hc2", "hc3"], "robust_se_lags": 2, "max_state_bytes": 131072}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
 fn hoeffding_tree_first() -> (Vec<u8>, DataFrame) {
     let df = hoeffding_tree_frame();
     let split = 180usize;
@@ -3207,6 +3229,116 @@ fn hoeffding_tree_run(bytes: &[u8], input: &DataFrame) -> Ran {
     let cols = bank.fit_predict(input).map_err(|e| e.to_string())?;
     let out = DataFrame::new(input.height(), cols).map_err(|e| e.to_string())?;
     Ok((again, vec![("fit_predict".into(), out)]))
+}
+
+fn robust_se_types_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(robust_se_types_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn robust_se_types_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&robust_se_types_specs(), bytes, input)
+}
+
+/// The `bank_robust_se_types` fixture freezes `robust_se_types`,
+/// `max_state_bytes`, the HC0–HC3 `variants` meat accumulators, and `LastRow`'s
+/// `se_coef_hc1..hc3` fields (hard rule 5: new forms held non-empty).
+#[test]
+fn the_robust_se_types_fixture_freezes_its_forms() {
+    if regenerating() {
+        return;
+    }
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "bank_robust_se_types")
+        .expect("the robust_se_types fixture");
+    let v = rmpv::decode::read_value(&mut unhex(f.state).as_slice()).unwrap();
+    let mut all = Vec::new();
+    leaves(&v, "", &mut all);
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.contains(".robust_se_types.") && v.as_str() == Some("hc3")),
+        "robust_se_types is not in the file"
+    );
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.ends_with(".max_state_bytes") && v.as_u64() == Some(131072)),
+        "max_state_bytes is not in the file"
+    );
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.contains(".variants.") && v.as_f64().is_some_and(|x| x != 0.0)),
+        "Sandwich variants are empty in the file"
+    );
+    for col in [
+        ".last_row.se_coef_hc1.",
+        ".last_row.se_coef_hc2.",
+        ".last_row.se_coef_hc3.",
+    ] {
+        assert!(
+            all.iter()
+                .any(|(p, v)| p.contains(col) && v.as_f64().is_some_and(f64::is_finite)),
+            "{col} is empty in the file"
+        );
+    }
+}
+
+/// The specs of `bank_constrained`: linear equality constraints `R beta = r` on
+/// both `ewridge` and `rls` with `emit_se_coef` and `emit_error_inflation`
+/// (schema 72, PLAN 516).
+fn constrained_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "ew_con", "model": {"type": "ewridge", "constraints": {"matrix": [[1.0, 1.0]], "rhs": [1.0]}, "solve_every": 0.0, "max_rows_between_solves": 1}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "weight": "w", "min_weight": 0.0, "coef_every": 0.0, "emit_se_coef": true, "emit_error_inflation": true}"#,
+        r#"{"name": "rls_con", "model": {"type": "rls", "delta": 0.5, "constraints": {"matrix": [[1.0, 1.0]], "rhs": [1.0]}}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "weight": "w", "min_weight": 0.0, "coef_every": 0.0, "emit_se_coef": true, "emit_error_inflation": true}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn constrained_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(constrained_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn constrained_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&constrained_specs(), bytes, input)
+}
+
+/// The `bank_constrained` fixture freezes `constraints` on both `ewridge` and
+/// `rls` specs and model states (hard rule 5: new forms held non-empty).
+#[test]
+fn the_constrained_fixture_freezes_its_forms() {
+    if regenerating() {
+        return;
+    }
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "bank_constrained")
+        .expect("the constrained fixture");
+    let v = rmpv::decode::read_value(&mut unhex(f.state).as_slice()).unwrap();
+    let mut all = Vec::new();
+    leaves(&v, "", &mut all);
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.contains(".constraints.matrix.") && v.as_f64() == Some(1.0)),
+        "constraints.matrix is not in the file"
+    );
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.contains(".constraints.rhs.") && v.as_f64() == Some(1.0)),
+        "constraints.rhs is not in the file"
+    );
 }
 
 /// The spec of `bank_smoothed`: `kalman`'s fixed-lag smoother with its
@@ -3784,7 +3916,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 26),
+            ("bank", 28),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),

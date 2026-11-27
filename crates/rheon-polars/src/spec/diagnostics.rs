@@ -1,10 +1,120 @@
 //! The diagnostics with a memory of their own (docs/PLAN.md task 221):
 //! each switch's memory key, and the decay it resolves to.
 
-use rheon_core::Decay;
+use rheon_core::{Decay, RobustSeType};
 
-use super::Spec;
+use super::{ModelKind, Spec};
 use crate::span::Span;
+
+/// The heteroskedasticity-consistent standard-error variants accepted by
+/// `robust_se_types`.
+pub const ROBUST_SE_TYPES: [&str; 4] = ["hc0", "hc1", "hc2", "hc3"];
+
+/// Default group state cap for robust standard-error accumulators (256 KB).
+pub const ROBUST_SE_MAX_STATE_BYTES: u64 = 256 * 1024;
+
+/// Ceiling on `max_state_bytes` for robust standard-error accumulators (64 MiB).
+pub const ROBUST_SE_STATE_BYTES_CEILING: u64 = 64 * 1024 * 1024;
+
+impl ModelKind {
+    /// Any `max_state_bytes` set directly inside the `model` block.
+    pub fn model_max_state_bytes(&self) -> Option<u64> {
+        match self {
+            ModelKind::Kalman {
+                max_state_bytes, ..
+            }
+            | ModelKind::Huber {
+                max_state_bytes, ..
+            }
+            | ModelKind::Quantile {
+                max_state_bytes, ..
+            }
+            | ModelKind::Sgd {
+                max_state_bytes, ..
+            }
+            | ModelKind::Holt {
+                max_state_bytes, ..
+            }
+            | ModelKind::CorrChange {
+                max_state_bytes, ..
+            }
+            | ModelKind::Audit {
+                max_state_bytes, ..
+            }
+            | ModelKind::Glm {
+                max_state_bytes, ..
+            }
+            | ModelKind::Hawkes {
+                max_state_bytes, ..
+            }
+            | ModelKind::Expectile {
+                max_state_bytes, ..
+            }
+            | ModelKind::Garch {
+                max_state_bytes, ..
+            }
+            | ModelKind::Dcc {
+                max_state_bytes, ..
+            }
+            | ModelKind::Realized {
+                max_state_bytes, ..
+            }
+            | ModelKind::Pca {
+                max_state_bytes, ..
+            }
+            | ModelKind::PowerVariation {
+                max_state_bytes, ..
+            }
+            | ModelKind::TDigest {
+                max_state_bytes, ..
+            }
+            | ModelKind::DdSketch {
+                max_state_bytes, ..
+            }
+            | ModelKind::EwmMoments {
+                max_state_bytes, ..
+            }
+            | ModelKind::Ar {
+                max_state_bytes, ..
+            }
+            | ModelKind::Isotonic {
+                max_state_bytes, ..
+            } => *max_state_bytes,
+            ModelKind::Spectral(s) => s.max_state_bytes,
+            ModelKind::VectorAr(v) => v.max_state_bytes,
+            _ => None,
+        }
+    }
+
+    /// Whether this model kind has its own bounded-state `max_state_bytes` setting.
+    pub fn takes_model_max_state_bytes(&self) -> bool {
+        matches!(
+            self,
+            ModelKind::Kalman { .. }
+                | ModelKind::Huber { .. }
+                | ModelKind::Quantile { .. }
+                | ModelKind::Sgd { .. }
+                | ModelKind::Holt { .. }
+                | ModelKind::CorrChange { .. }
+                | ModelKind::Audit { .. }
+                | ModelKind::Glm { .. }
+                | ModelKind::Hawkes { .. }
+                | ModelKind::Expectile { .. }
+                | ModelKind::Garch { .. }
+                | ModelKind::Dcc { .. }
+                | ModelKind::Realized { .. }
+                | ModelKind::Pca { .. }
+                | ModelKind::PowerVariation { .. }
+                | ModelKind::TDigest { .. }
+                | ModelKind::DdSketch { .. }
+                | ModelKind::EwmMoments { .. }
+                | ModelKind::Ar { .. }
+                | ModelKind::Spectral(_)
+                | ModelKind::Isotonic { .. }
+                | ModelKind::VectorAr(_)
+        )
+    }
+}
 
 impl Spec {
     /// The diagnostics with a memory of their own (docs/PLAN.md task 221):
@@ -231,6 +341,272 @@ impl Spec {
     /// of the coefficients' true spread at `L = h` and 90-104% at `2h`.
     pub fn robust_se_lags_or_default(&self) -> usize {
         self.robust_se_lags.unwrap_or_else(|| self.nw_lags())
+    }
+
+    /// Whether this spec carries a bounded diagnostic state that reads the
+    /// top-level `max_state_bytes` cap.
+    pub fn has_diagnostic_state_cap(&self) -> bool {
+        self.emit_robust_se && self.has_robust_se()
+    }
+
+    /// Effective `max_state_bytes` for a model configuration: model-block value
+    /// if present (for backwards compatibility with saved states), else the
+    /// top-level `Spec::max_state_bytes`.
+    pub fn model_max_state_bytes(&self, model_cap: Option<u64>) -> Option<u64> {
+        model_cap.or(self.max_state_bytes)
+    }
+
+    /// Per-combo active feature indices for `ewridge`/`huber` feature sets, or
+    /// all features for every other model.
+    pub fn combo_features(&self) -> Vec<Vec<usize>> {
+        let all: Vec<usize> = (0..self.k()).collect();
+        match &self.model {
+            ModelKind::EwRidge {
+                feature_sets: Some(sets),
+                ridge,
+                ..
+            } => {
+                let nr = ridge.as_ref().map_or(1, |r| r.to_vec().len());
+                sets.iter()
+                    .flat_map(|(_, cols)| {
+                        let idx: Vec<usize> = cols
+                            .iter()
+                            .filter_map(|c| self.features.iter().position(|f| f == c))
+                            .collect();
+                        std::iter::repeat_n(idx, nr)
+                    })
+                    .collect()
+            }
+            ModelKind::Huber {
+                feature_sets: Some(sets),
+                ..
+            } => sets
+                .iter()
+                .map(|(_, cols)| {
+                    cols.iter()
+                        .filter_map(|c| self.features.iter().position(|f| f == c))
+                        .collect()
+                })
+                .collect(),
+            _ => vec![all; crate::stream::combos(self).len().max(1)],
+        }
+    }
+
+    /// Parsed `robust_se_types` when explicitly requested, `None` when absent
+    /// (legacy `emit_robust_se` emits `se_coef_hc0` alone).
+    pub fn robust_se_types_parsed(&self) -> Option<Vec<RobustSeType>> {
+        let words = self.robust_se_types.as_ref()?;
+        let parsed: Vec<RobustSeType> = words
+            .iter()
+            .filter_map(|w| RobustSeType::from_name(w))
+            .collect();
+        Some(parsed)
+    }
+
+    /// Whether this spec emits the field for heteroskedasticity-consistent
+    /// variant `kind`.
+    pub fn emits_robust_se_type(&self, kind: RobustSeType) -> bool {
+        if !self.emit_robust_se || !self.has_robust_se() {
+            return false;
+        }
+        match self.robust_se_types_parsed() {
+            None => kind == RobustSeType::Hc0,
+            Some(ts) => ts.contains(&kind),
+        }
+    }
+
+    /// Total bytes held in one group by the robust-SE sandwiches across all
+    /// instances and slots.
+    pub fn robust_se_bytes(&self) -> u64 {
+        if !self.emit_robust_se || !self.has_robust_se() {
+            return 0;
+        }
+        let k = self.k();
+        let intercept = self.fit_intercept;
+        let lags = self.robust_se_lags_or_default();
+        let types = self.robust_se_types_parsed();
+        let combos = self.combo_features();
+        let m = self.m() as u64;
+        let mut per_instance = 0u64;
+        for idx in &combos {
+            let active_k = (idx.len() < k).then_some(idx.len());
+            let slot_bytes =
+                rheon_core::Sandwich::state_bytes(k, intercept, lags, types.as_deref(), active_k);
+            per_instance = per_instance.saturating_add(slot_bytes.saturating_mul(m));
+        }
+        let instances = self.decays().map_or(1, |d| d.len()) as u64;
+        per_instance.saturating_mul(instances)
+    }
+
+    /// Whether the robust-SE `max_state_bytes` budget is enforced for this spec.
+    fn enforces_robust_se_cap(&self) -> bool {
+        self.emit_robust_se
+            && self.has_robust_se()
+            && (self.robust_se_types.is_some() || self.max_state_bytes.is_some())
+    }
+
+    /// Warning raised when the robust-SE state exceeds half of `max_state_bytes`.
+    pub fn robust_se_cap_notices(&self) -> Vec<String> {
+        if !self.enforces_robust_se_cap() {
+            return Vec::new();
+        }
+        let cap = self.max_state_bytes.unwrap_or(ROBUST_SE_MAX_STATE_BYTES);
+        if cap == 0 || cap > ROBUST_SE_STATE_BYTES_CEILING {
+            return Vec::new();
+        }
+        let bytes = self.robust_se_bytes();
+        if bytes > cap / 2 && bytes <= cap {
+            vec![format!(
+                "emit_robust_se holds {bytes} bytes in each group, past half of max_state_bytes \
+                 of {cap}. Raise max_state_bytes (at most 64 MiB) if you add features, lags or \
+                 robust_se_types."
+            )]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Validate `emit_robust_se`, `robust_se_lags`, `robust_se_types`, and
+    /// their `max_state_bytes` budget.
+    pub(super) fn check_robust_se(&self, no: &mut rheon_core::Refusals, predicts: bool) {
+        let name = &self.name;
+        if self.emit_robust_se && predicts && !self.has_robust_se() {
+            let why = match self.model {
+                ModelKind::Kalman { .. } => {
+                    "its coefficients' covariance is its own posterior, which emit_se_coef \
+                     reports"
+                }
+                ModelKind::Lasso { .. } => {
+                    "it chooses its coefficients from the same rows, and a covariance that \
+                     ignores the choice understates their error"
+                }
+                ModelKind::Huber { .. } | ModelKind::Quantile { .. } => {
+                    "a robust fit weighs each row by its loss, not as least squares does"
+                }
+                ModelKind::Glm { .. } => {
+                    "a generalized linear fit weighs each row by its family's variance, not as \
+                     least squares does"
+                }
+                ModelKind::Expectile { .. } => {
+                    "an expectile fit weighs each row by the side its residual falls on, not as \
+                     least squares does"
+                }
+                ModelKind::Sgd { .. } | ModelKind::Pa { .. } | ModelKind::Ftrl { .. } => {
+                    "a gradient fit is not a weighted least-squares fit"
+                }
+                _ => "it has no least-squares coefficients",
+            };
+            no.refuse(format!(
+                "spec {name:?}: emit_robust_se needs a least-squares fit, as ewridge and rls \
+                 have, but {} has none: {why}. Leave out emit_robust_se, or use one of those \
+                 models.",
+                self.model.kind_name()
+            ));
+        }
+        if self.robust_se_lags.is_some() && !self.emit_robust_se {
+            no.refuse(format!(
+                "spec {name:?}: robust_se_lags applies only when emit_robust_se is on, but \
+                 emit_robust_se is false. Turn on emit_robust_se, or leave out robust_se_lags."
+            ));
+        }
+        if let Some(l) = self.robust_se_lags {
+            no.take(
+                rheon_core::check_lag_ceiling("robust_se_lags", l)
+                    .map_err(|e| format!("spec {name:?}: {e}")),
+            );
+        }
+        let mut types_ok = true;
+        if let Some(words) = &self.robust_se_types {
+            if !self.emit_robust_se {
+                types_ok = false;
+                no.refuse(format!(
+                    "spec {name:?}: robust_se_types applies only when emit_robust_se is on, but \
+                     emit_robust_se is false. Turn on emit_robust_se, or leave out \
+                     robust_se_types."
+                ));
+            }
+            if words.is_empty() {
+                types_ok = false;
+                no.refuse(format!(
+                    "spec {name:?}: robust_se_types must list at least one type from \"hc0\", \
+                     \"hc1\", \"hc2\" and \"hc3\", but it is empty. List the types to report, or \
+                     leave out robust_se_types."
+                ));
+            }
+            let mut seen = std::collections::HashSet::new();
+            for w in words {
+                if RobustSeType::from_name(w).is_none() {
+                    types_ok = false;
+                    no.refuse(super::spec_words_refusal(
+                        name,
+                        "robust_se_types",
+                        &ROBUST_SE_TYPES,
+                        w,
+                    ));
+                } else if !seen.insert(w.as_str()) {
+                    types_ok = false;
+                    no.refuse(format!(
+                        "spec {name:?}: robust_se_types must list each type once, but it lists \
+                         {w:?} more than once. Remove the repeats from robust_se_types."
+                    ));
+                }
+            }
+        }
+        if self.enforces_robust_se_cap() {
+            let cap = self.max_state_bytes.unwrap_or(ROBUST_SE_MAX_STATE_BYTES);
+            if cap == 0 || cap > ROBUST_SE_STATE_BYTES_CEILING {
+                no.refuse(format!(
+                    "spec {name:?}: max_state_bytes must be above 0 and at most \
+                     {ROBUST_SE_STATE_BYTES_CEILING} (64 MiB), but it is {cap}. Give the bytes a \
+                     group's robust standard errors may hold, or leave it out for 262144 (256 KB)."
+                ));
+            } else if types_ok {
+                let lags = self.robust_se_lags_or_default();
+                if lags <= rheon_core::MAX_LAG {
+                    let bytes = self.robust_se_bytes();
+                    if bytes > cap {
+                        no.refuse(format!(
+                            "spec {name:?}: emit_robust_se holds {bytes} bytes in each group, \
+                             past max_state_bytes of {cap} (with {} features and {lags} lags). \
+                             Lower robust_se_lags, request fewer robust_se_types, or raise \
+                             max_state_bytes (at most 64 MiB).",
+                            self.k()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Validate top-level `Spec::max_state_bytes` placement across all model kinds.
+    pub(super) fn check_max_state_bytes(&self, no: &mut rheon_core::Refusals) {
+        let Some(_) = self.max_state_bytes else {
+            return;
+        };
+        let name = &self.name;
+        if self.model.model_max_state_bytes().is_some() {
+            no.refuse(format!(
+                "spec {name:?}: max_state_bytes is set both on the spec and inside model. Set \
+                 max_state_bytes once."
+            ));
+            return;
+        }
+        if !self.model.takes_model_max_state_bytes() && !self.has_diagnostic_state_cap() {
+            if self.has_robust_se() {
+                no.refuse(format!(
+                    "spec {name:?}: max_state_bytes applies on {} only when emit_robust_se is \
+                     on, but emit_robust_se is false. Turn on emit_robust_se, or leave out \
+                     max_state_bytes.",
+                    self.model.kind_name()
+                ));
+            } else {
+                no.refuse(format!(
+                    "spec {name:?}: max_state_bytes does not apply to {}, whose state has a fixed \
+                     size for its parameters. Leave out max_state_bytes.",
+                    self.model.kind_name()
+                ));
+            }
+        }
     }
 
     /// How many of the fit's memories ([`Self::fit_memory`]: the instance's

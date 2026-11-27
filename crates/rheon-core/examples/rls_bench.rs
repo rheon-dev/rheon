@@ -25,6 +25,7 @@ fn main() {
                 delta: 1.0,
                 coef_prior: None,
                 min_weight: 25.0,
+                constraints: None,
             })
             .unwrap();
             let mut s = 12345u64;

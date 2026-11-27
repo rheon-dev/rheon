@@ -29,77 +29,12 @@ pub(super) fn over_budget(
 pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) -> PolarsError {
     let group = super::group_label(spec, key);
     let fixed = crate::stream::fixed_span(spec);
-    let given = match &spec.model {
-        _ if fixed.is_some() => format!("{cap} bytes, {}", fixed.as_ref().map_or("", |f| f.cap)),
-        ModelKind::Hawkes {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Expectile {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::CorrChange {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Garch {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Dcc {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Realized {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::PowerVariation {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::DdSketch {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Isotonic {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Krls(crate::spec::KrlsSpec {
-            max_state_bytes: Some(_),
-            ..
-        })
-        | ModelKind::Glm {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Huber {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Quantile {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Sgd {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::EwmMoments {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Audit {
-            max_state_bytes: Some(_),
-            ..
-        } => format!("max_state_bytes of {cap}"),
-        ModelKind::Dependence(crate::spec::DependenceSpec {
-            max_state_bytes: Some(_),
-            ..
-        }) => format!("max_state_bytes of {cap}"),
-        _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
+    let given = if let Some(f) = fixed.as_ref() {
+        format!("{cap} bytes, {}", f.cap)
+    } else if spec.max_state_bytes.is_some() || spec.model.model_max_state_bytes().is_some() {
+        format!("max_state_bytes of {cap}")
+    } else {
+        format!("the default max_state_bytes of {cap}, which a spec gets when it sets none")
     };
     let (window, shorten) = match (&spec.model, fixed) {
         (_, Some(f)) => (format!("the {} inside {}", f.holds, f.span), f.shorten),

@@ -267,6 +267,7 @@ impl ArCfg {
             window: self.window,
             window_every: self.window_every,
             max_rows_between_snapshots: self.max_rows_between_snapshots,
+            constraints: None,
         }
     }
 }

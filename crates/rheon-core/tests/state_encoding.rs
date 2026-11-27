@@ -488,6 +488,170 @@ fn kalman_round_trips_with_every_optional_part_present_or_absent() {
                 );
                 assert_eq!(bits(&pn), bits(&p0), "{what}: named continuation diverged");
             }
+}
+
+#[test]
+fn ewridge_rls_and_sandwich_round_trip_with_constraints_and_variants() {
+    let lc = rheon_core::LinearConstraints {
+        matrix: vec![vec![1.0, 1.0]],
+        rhs: vec![1.0],
+    };
+    // All four combinations of trailing optional fields on `EwRidgeCfg`:
+    // `(max_rows_between_snapshots, constraints)` must round-trip in BOTH
+    // compact and named msgpack!
+    for (window, rows) in [(None, None), (Some(50.0), Some(3usize))] {
+        for constraints in [None, Some(lc.clone())] {
+            let cfg = rheon_core::EwRidgeCfg {
+                n_features: 2,
+                n_targets: 1,
+                fit_intercept: true,
+                decay: Decay::Halflife(15.0),
+                ridge: vec![1e-3],
+                feature_sets: vec![],
+                standardize: false,
+                ridge_scale: false,
+                coef_prior: None,
+                session_shrink: None,
+                long_half_life: None,
+                min_weight: 0.0,
+                solve_every: 0.0,
+                max_rows_between_solves: 1,
+                solve_share: None,
+                gram_block_rows: 0,
+                target_gaps: rheon_core::TargetGaps::OwnRows,
+                window,
+                window_every: None,
+                max_rows_between_snapshots: rows,
+                constraints: constraints.clone(),
+            };
+            let mut m = rheon_core::EwRidge::new(cfg).unwrap();
+            m.set_keep_factor(true);
+            for i in 0..12 {
+                let x0 = (i as f64 + 1.0) * 0.3;
+                let x1 = ((i * 7 % 11) as f64 - 5.0) * 0.2;
+                let y = 0.5 + 0.6 * x0 + 0.4 * x1;
+                OnlineModel::step(&mut m, &[x0, x1], &[Some(y)], i as f64, 1.0);
+            }
+            m.settle_readiness();
+            let what = format!(
+                "ewridge rows={rows:?} constraints={}",
+                constraints.is_some()
+            );
+            let compact = rmp_serde::to_vec(&m).unwrap();
+            let named = rmp_serde::to_vec_named(&m).unwrap();
+            let from_compact: rheon_core::EwRidge = rmp_serde::from_slice(&compact)
+                .unwrap_or_else(|e| panic!("{what}: compact decode failed: {e}"));
+            let from_named: rheon_core::EwRidge = rmp_serde::from_slice(&named)
+                .unwrap_or_else(|e| panic!("{what}: named decode failed: {e}"));
+            assert_eq!(from_compact.cfg(), m.cfg(), "{what}: compact cfg");
+            assert_eq!(from_named.cfg(), m.cfg(), "{what}: named cfg");
+            assert_eq!(
+                rmp_serde::to_vec_named(&from_compact).unwrap(),
+                named,
+                "{what}: compact re-encode"
+            );
+            assert_eq!(
+                rmp_serde::to_vec_named(&from_named).unwrap(),
+                named,
+                "{what}: named re-encode"
+            );
+            let mut r_compact = rheon_core::EwRidge::restore(&rheon_core::State::new(
+                rheon_core::ModelState::EwRidge(Box::new(from_compact)),
+            ))
+            .unwrap();
+            let mut r_named = rheon_core::EwRidge::restore(&rheon_core::State::new(
+                rheon_core::ModelState::EwRidge(Box::new(from_named)),
+            ))
+            .unwrap();
+            let s0 = OnlineModel::step(&mut m, &[0.7, -0.4], &[Some(0.8)], 12.0, 1.0);
+            let s1 = OnlineModel::step(&mut r_compact, &[0.7, -0.4], &[Some(0.8)], 12.0, 1.0);
+            let s2 = OnlineModel::step(&mut r_named, &[0.7, -0.4], &[Some(0.8)], 12.0, 1.0);
+            assert_eq!(s1.pred, s0.pred, "{what}: compact step");
+            assert_eq!(s2.pred, s0.pred, "{what}: named step");
+        }
+    }
+    // `Rls` unconstrained and constrained.
+    for constraints in [None, Some(lc)] {
+        let cfg = rheon_core::RlsCfg {
+            n_features: 2,
+            n_targets: 1,
+            fit_intercept: true,
+            decay: Decay::Halflife(15.0),
+            delta: 0.5,
+            coef_prior: None,
+            min_weight: 0.0,
+            constraints: constraints.clone(),
+        };
+        let mut m = rheon_core::Rls::new(cfg).unwrap();
+        for i in 0..12 {
+            let x0 = (i as f64 + 1.0) * 0.3;
+            let x1 = ((i * 7 % 11) as f64 - 5.0) * 0.2;
+            let y = 0.5 + 0.6 * x0 + 0.4 * x1;
+            OnlineModel::step(&mut m, &[x0, x1], &[Some(y)], i as f64, 1.0);
+        }
+        let what = format!("rls constraints={}", constraints.is_some());
+        let compact = rmp_serde::to_vec(&m).unwrap();
+        let named = rmp_serde::to_vec_named(&m).unwrap();
+        let from_compact: rheon_core::Rls = rmp_serde::from_slice(&compact)
+            .unwrap_or_else(|e| panic!("{what}: compact decode failed: {e}"));
+        let from_named: rheon_core::Rls = rmp_serde::from_slice(&named)
+            .unwrap_or_else(|e| panic!("{what}: named decode failed: {e}"));
+        assert_eq!(from_compact.cfg(), m.cfg(), "{what}: compact cfg");
+        assert_eq!(from_named.cfg(), m.cfg(), "{what}: named cfg");
+        assert_eq!(
+            rmp_serde::to_vec_named(&from_compact).unwrap(),
+            named,
+            "{what}: compact re-encode"
+        );
+        assert_eq!(
+            rmp_serde::to_vec_named(&from_named).unwrap(),
+            named,
+            "{what}: named re-encode"
+        );
+        let mut r_compact = rheon_core::Rls::restore(&rheon_core::State::new(
+            rheon_core::ModelState::Rls(Box::new(from_compact)),
+        ))
+        .unwrap();
+        let mut r_named = rheon_core::Rls::restore(&rheon_core::State::new(
+            rheon_core::ModelState::Rls(Box::new(from_named)),
+        ))
+        .unwrap();
+        let s0 = OnlineModel::step(&mut m, &[0.7, -0.4], &[Some(0.8)], 12.0, 1.0);
+        let s1 = OnlineModel::step(&mut r_compact, &[0.7, -0.4], &[Some(0.8)], 12.0, 1.0);
+        let s2 = OnlineModel::step(&mut r_named, &[0.7, -0.4], &[Some(0.8)], 12.0, 1.0);
+        assert_eq!(s1.pred, s0.pred, "{what}: compact step");
+        assert_eq!(s2.pred, s0.pred, "{what}: named step");
+    }
+    // `Sandwich` plain and with HC0-HC3 variants (full & subset active).
+    let subsets: &[&[rheon_core::RobustSeType]] = &[
+        &[rheon_core::RobustSeType::Hc0],
+        &[rheon_core::RobustSeType::Hc1],
+        &[rheon_core::RobustSeType::Hc2],
+        &[rheon_core::RobustSeType::Hc3],
+        &rheon_core::RobustSeType::ALL,
+    ];
+    let mut plain = rheon_core::Sandwich::new(3, true, 2);
+    for i in 0..20 {
+        let x = [
+            (i as f64 + 1.0) * 0.2,
+            ((i * 5 % 13) as f64 - 6.0) * 0.15,
+            ((i * 3 % 7) as f64 - 3.0) * 0.3,
+        ];
+        plain.update(&x, (i as f64 * 0.37).sin(), 0.95, 1.0);
+    }
+    roundtrip(&plain, "sandwich plain");
+    for &types in subsets {
+        for active in [None, Some(vec![0usize, 2usize])] {
+            let mut s = rheon_core::Sandwich::with_types(3, true, 1, types, active.clone());
+            for i in 0..20 {
+                let x = [
+                    (i as f64 + 1.0) * 0.2,
+                    ((i * 5 % 13) as f64 - 6.0) * 0.15,
+                    ((i * 3 % 7) as f64 - 3.0) * 0.3,
+                ];
+                s.update(&x, (i as f64 * 0.37).sin(), 0.95, 1.0);
+            }
+            roundtrip(&s, &format!("sandwich types={types:?} active={active:?}"));
         }
     }
 }

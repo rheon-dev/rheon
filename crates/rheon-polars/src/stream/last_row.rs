@@ -90,6 +90,24 @@ pub struct LastRow {
     /// row that was not a `coef` row and where none is switched on.
     #[serde(default, with = "rheon_core::humanfloat::vec_opt_vec_f64_or_tag")]
     pub se_coef_hc0: Vec<Option<Vec<f64>>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_opt_vec_f64_or_tag"
+    )]
+    pub se_coef_hc1: Vec<Option<Vec<f64>>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_opt_vec_f64_or_tag"
+    )]
+    pub se_coef_hc2: Vec<Option<Vec<f64>>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_opt_vec_f64_or_tag"
+    )]
+    pub se_coef_hc3: Vec<Option<Vec<f64>>>,
     #[serde(default, with = "rheon_core::humanfloat::vec_opt_vec_f64_or_tag")]
     pub se_coef_hac: Vec<Option<Vec<f64>>>,
     /// `kalman`'s fixed-lag smoother under `smooth_lag`; empty, and not
@@ -159,6 +177,9 @@ impl LastRow {
         take_list_row(&mut self.support_coef, &out.support_coef, ri);
         take_list_row(&mut self.se_coef, &out.se_coef, ri);
         take_list_row(&mut self.se_coef_hc0, &out.se_coef_hc0, ri);
+        take_list_row(&mut self.se_coef_hc1, &out.se_coef_hc1, ri);
+        take_list_row(&mut self.se_coef_hc2, &out.se_coef_hc2, ri);
+        take_list_row(&mut self.se_coef_hc3, &out.se_coef_hc3, ri);
         take_list_row(&mut self.se_coef_hac, &out.se_coef_hac, ri);
         take_list_row(&mut self.smoothed_coef, &out.smoothed_coef, ri);
         take_list_row(&mut self.smoothed_se, &out.smoothed_se, ri);
@@ -199,6 +220,9 @@ impl LastRow {
             out.support_coef.len() == self.support_coef.len(),
             out.se_coef.len() == self.se_coef.len(),
             out.se_coef_hc0.len() == self.se_coef_hc0.len(),
+            out.se_coef_hc1.len() == self.se_coef_hc1.len(),
+            out.se_coef_hc2.len() == self.se_coef_hc2.len(),
+            out.se_coef_hc3.len() == self.se_coef_hc3.len(),
             out.se_coef_hac.len() == self.se_coef_hac.len(),
             out.scored_clock.len() == self.scored_clock.len(),
             out.learned_clock.len() == self.learned_clock.len(),
@@ -244,6 +268,15 @@ impl LastRow {
             dst[0].clone_from(src);
         }
         for (dst, src) in out.se_coef_hc0.iter_mut().zip(&self.se_coef_hc0) {
+            dst[0].clone_from(src);
+        }
+        for (dst, src) in out.se_coef_hc1.iter_mut().zip(&self.se_coef_hc1) {
+            dst[0].clone_from(src);
+        }
+        for (dst, src) in out.se_coef_hc2.iter_mut().zip(&self.se_coef_hc2) {
+            dst[0].clone_from(src);
+        }
+        for (dst, src) in out.se_coef_hc3.iter_mut().zip(&self.se_coef_hc3) {
             dst[0].clone_from(src);
         }
         for (dst, src) in out.se_coef_hac.iter_mut().zip(&self.se_coef_hac) {

@@ -220,6 +220,9 @@ pub enum ModelKind {
         /// MiB (review 2026-09-12, P4).
         #[serde(default)]
         window_budget: Option<WindowBudgetSpec>,
+        /// Linear equality constraints `R β_slopes = r` on the slopes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        constraints: Option<rheon_core::LinearConstraints>,
     },
     Lasso {
         /// Decreasing penalties on standardized stats; required.
@@ -806,6 +809,9 @@ pub enum ModelKind {
         delta: Option<f64>,
         #[serde(default)]
         coef_prior: Option<Vec<Vec<f64>>>,
+        /// Linear equality constraints `R β_slopes = r` on the slopes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        constraints: Option<rheon_core::LinearConstraints>,
     },
     /// Exponentially weighted k-means (docs/CLUSTERING.md §6.2; PLAN §11a,
     /// task 23). No targets: every column of interest goes in `features`, and
@@ -2498,6 +2504,11 @@ pub struct Spec {
     /// measurement behind twice).
     #[serde(default)]
     pub robust_se_lags: Option<usize>,
+    /// Which heteroskedasticity-consistent standard-error variants to emit
+    /// under `emit_robust_se`: any distinct non-empty subset of `"hc0"`,
+    /// `"hc1"`, `"hc2"`, `"hc3"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub robust_se_types: Option<Vec<String>>,
     /// Emit `ljung_box_<slot>`, `breusch_pagan_<slot>` and `reset_<slot>`
     /// (docs/PLAN.md task 221 (d); [`rheon_core::Specification`] has the
     /// update): Ljung and Box's `Q` over the residuals' lags past the
@@ -2662,6 +2673,10 @@ pub struct Spec {
     /// at the same point -- which is the one thing the closed row promises.
     #[serde(default)]
     pub group_close: Option<String>,
+    /// The bytes a group's bounded model or diagnostic state may hold:
+    /// default 256 KB, ceiling 64 MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_state_bytes: Option<u64>,
 }
 
 impl Spec {
@@ -3581,7 +3596,9 @@ impl Spec {
             // whole state is known here. A `window_size` window holds the
             // events the span has, which the data decides: only its fixed
             // part is known, and the rest is checked as the rows go in.
-            let cap = max_state_bytes.unwrap_or(rheon_core::HAWKES_MAX_STATE_BYTES);
+            let cap = self
+                .model_max_state_bytes(*max_state_bytes)
+                .unwrap_or(rheon_core::HAWKES_MAX_STATE_BYTES);
             if cap == 0 {
                 no.refuse(format!(
                     "spec {name:?}: max_state_bytes must be above 0, but it is 0. Give the \
@@ -4037,39 +4054,18 @@ impl Spec {
                 self.no_leverage()
             ));
         }
-        if self.emit_robust_se && predicts && !self.has_robust_se() {
-            let why = match self.model {
-                ModelKind::Kalman { .. } => {
-                    "its coefficients' covariance is its own posterior, which emit_se_coef \
-                     reports"
-                }
-                ModelKind::Lasso { .. } => {
-                    "it chooses its coefficients from the same rows, and a covariance that \
-                     ignores the choice understates their error"
-                }
-                ModelKind::Huber { .. } | ModelKind::Quantile { .. } => {
-                    "a robust fit weighs each row by its loss, not as least squares does"
-                }
-                ModelKind::Glm { .. } => {
-                    "a generalized linear fit weighs each row by its family's variance, not as \
-                     least squares does"
-                }
-                ModelKind::Expectile { .. } => {
-                    "an expectile fit weighs each row by the side its residual falls on, not as \
-                     least squares does"
-                }
-                ModelKind::Sgd { .. } | ModelKind::Pa { .. } | ModelKind::Ftrl { .. } => {
-                    "a gradient fit is not a weighted least-squares fit"
-                }
-                _ => "it has no least-squares coefficients",
-            };
-            no.refuse(format!(
-                "spec {name:?}: emit_robust_se needs a least-squares fit, as ewridge and rls \
-                 have, but {} has none: {why}. Leave out emit_robust_se, or use one of those \
-                 models.",
-                self.model.kind_name()
-            ));
-        }
+        self.check_robust_se(no, predicts);
+        self.check_max_state_bytes(no);
+        // The residual checks whose null a fit fails by construction. An
+        // expectile at a level other than one half is not the mean: its
+        // residuals' mean is not 0 on a stream it fits exactly (-1.0 at 0.9
+        // on unit Gaussian noise), so the Mincer-Zarnowitz Wald and the
+        // CUSUM rejected on every row of such a stream. A generalized linear
+        // fit's residuals have its family's variance, a function of the
+        // mean, and its family's shape: on an exact Poisson fit
+        // Breusch-Pagan and Jarque-Bera rejected on every row, and RESET,
+        // read without a heteroskedasticity correction, on a quarter of
+        // them (review 2026-11-23, DIAG-11).
         if predicts {
             self.check_residual_assumptions(no);
         }
@@ -4121,15 +4117,6 @@ impl Spec {
                 rheon_core::MAX_LAG / 2,
                 rheon_core::MAX_LAG / 2
             ));
-        }
-        if self.robust_se_lags.is_some() && !self.emit_robust_se {
-            no.refuse(needs("robust_se_lags", "emit_robust_se"));
-        }
-        if let Some(l) = self.robust_se_lags {
-            no.take(
-                rheon_core::check_lag_ceiling("robust_se_lags", l)
-                    .map_err(|e| format!("spec {name:?}: {e}")),
-            );
         }
         if self.emit_error_inflation && !self.has_row_error_inflation() {
             no.refuse(format!(

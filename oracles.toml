@@ -7319,6 +7319,51 @@ floor = 0.01
 ideal = 1.0
 n = 50
 
+[group."linear_constraints.linear_constraints_oracle"]
+tests = [
+    "tests/test_linear_constraints.py::test_linear_constraints_match_statsmodels_over_50_seeds",
+]
+oracles = { "statsmodels" = "0.15.0" }
+dataset = ""
+
+[group."robust_se_types.robust_se_hc0_hc3_oracle"]
+tests = [
+    "tests/test_robust_se_types.py::test_robust_se_hc0_hc3_matches_statsmodels_over_50_seeds",
+]
+oracles = { "statsmodels" = "0.15.0" }
+dataset = ""
+
+[case."linear_constraints.linear_constraints_oracle.ewridge_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."linear_constraints.linear_constraints_oracle.gram_solve_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."linear_constraints.linear_constraints_oracle.rls_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-08
+
+[case."robust_se_types.robust_se_hc0_hc3_oracle.hc0_rel_gap"]
+ideal = 0.0
+n = 50
+
+[case."robust_se_types.robust_se_hc0_hc3_oracle.hc1_rel_gap"]
+ideal = 0.0
+n = 50
+
+[case."robust_se_types.robust_se_hc0_hc3_oracle.hc2_rel_gap"]
+ideal = 0.0
+n = 50
+
+[case."robust_se_types.robust_se_hc0_hc3_oracle.hc3_rel_gap"]
+ideal = 0.0
+n = 50
+
 # --- raises
 
 [[raised]]

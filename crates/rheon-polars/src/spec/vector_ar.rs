@@ -163,7 +163,7 @@ pub fn vector_ar_cfg(
         ),
         max_rows_between_solves: v.max_rows_between_solves.unwrap_or(u32::MAX),
         solve_share: spec.solve_share_default(v.solve_every.as_ref(), decay),
-        max_state_bytes: v.max_state_bytes,
+        max_state_bytes: spec.model_max_state_bytes(v.max_state_bytes),
         select: select_of(v.select.as_deref())?,
         causality,
         causality_kind: causality_kind_of(v.causality_kind.as_deref())?,

@@ -19,8 +19,8 @@
 //! [`crate::ChunkOut::checks`], [`value_names`]' count of them per slot.
 
 use rheon_core::{
-    Breaks, Calibration, Coverage, Decay, FeatureHealth, Influence, Sandwich, Specification, Tails,
-    TwinFit,
+    Breaks, Calibration, Coverage, Decay, FeatureHealth, Influence, RobustSeType, Sandwich,
+    Specification, Tails, TwinFit,
 };
 use serde::{Deserialize, Serialize};
 
@@ -106,38 +106,7 @@ pub struct CheckCfg {
 
 impl CheckCfg {
     pub fn of(spec: &Spec, model: Decay) -> Self {
-        let all: Vec<usize> = (0..spec.k()).collect();
-        let combo_features = match &spec.model {
-            ModelKind::EwRidge {
-                feature_sets: Some(sets),
-                ridge,
-                ..
-            } => {
-                let nr = ridge.as_ref().map_or(1, |r| r.to_vec().len());
-                sets.iter()
-                    .flat_map(|(_, cols)| {
-                        let idx: Vec<usize> = cols
-                            .iter()
-                            .filter_map(|c| spec.features.iter().position(|f| f == c))
-                            .collect();
-                        std::iter::repeat_n(idx, nr)
-                    })
-                    .collect()
-            }
-            // One combo per set, a single ridge (task 272 (a)).
-            ModelKind::Huber {
-                feature_sets: Some(sets),
-                ..
-            } => sets
-                .iter()
-                .map(|(_, cols)| {
-                    cols.iter()
-                        .filter_map(|c| spec.features.iter().position(|f| f == c))
-                        .collect()
-                })
-                .collect(),
-            _ => vec![all; crate::stream::combos(spec).len()],
-        };
+        let combo_features = spec.combo_features();
         let mut cfg = Self {
             ready: spec.ready_memory(model),
             calibration: spec.diagnostic_decay_of(
@@ -320,14 +289,31 @@ impl Checks {
                 on(spec.emit_breaks, n_slots)
             ],
             twin: vec![TwinFit::new(spec.k()); on(spec.emit_breaks, spec.m())],
-            sandwich: vec![
-                Sandwich::new(
-                    spec.k(),
-                    spec.fit_intercept,
-                    spec.robust_se_lags_or_default()
-                );
-                on(spec.emit_robust_se, n_slots)
-            ],
+            sandwich: if spec.emit_robust_se {
+                if let Some(types) = spec.robust_se_types_parsed() {
+                    let combos = spec.combo_features();
+                    let nc = combos.len().max(1);
+                    let lags = spec.robust_se_lags_or_default();
+                    (0..n_slots)
+                        .map(|slot| {
+                            let idx = &combos[slot % nc];
+                            let active = (idx.len() < spec.k()).then(|| idx.clone());
+                            Sandwich::with_types(spec.k(), spec.fit_intercept, lags, &types, active)
+                        })
+                        .collect()
+                } else {
+                    vec![
+                        Sandwich::new(
+                            spec.k(),
+                            spec.fit_intercept,
+                            spec.robust_se_lags_or_default()
+                        );
+                        n_slots
+                    ]
+                }
+            } else {
+                Vec::new()
+            },
             specification: vec![
                 Specification::new(
                     spec.k(),
@@ -387,10 +373,22 @@ impl Checks {
             && self.calibration.iter().all(|c| c.has_shape(nw))
             && self.breaks.iter().all(|b| b.has_shape(nw))
             && self.twin.iter().all(|t| t.has_shape(k))
-            && self
-                .sandwich
-                .iter()
-                .all(|s| s.has_shape(k, spec.fit_intercept, lags))
+            && {
+                let types = spec.robust_se_types_parsed();
+                let combos = spec.combo_features();
+                let nc = combos.len().max(1);
+                self.sandwich
+                    .iter()
+                    .enumerate()
+                    .all(|(slot, s)| match &types {
+                        None => s.has_shape(k, spec.fit_intercept, lags),
+                        Some(ts) => {
+                            let idx = &combos[slot % nc];
+                            let active = (idx.len() < k).then_some(idx.as_slice());
+                            s.has_shape_with_types(k, spec.fit_intercept, lags, Some(ts), active)
+                        }
+                    })
+            }
     }
 
     /// The rows behind this one are no longer adjacent to it -- a capped gap
@@ -405,6 +403,32 @@ impl Checks {
             .for_each(Calibration::clear_lags);
         self.coverage.iter_mut().for_each(Coverage::clear_lags);
         self.breaks.iter_mut().for_each(Breaks::clear_lags);
+    }
+
+    /// Every slot's robust standard errors for a specific HC variant
+    /// (`hc0`..`hc3`), flattened in `coef`'s layout: `None` until any slot has one.
+    pub fn robust_se_type(&self, cfg: &CheckCfg, kind: RobustSeType) -> Option<Vec<f64>> {
+        if self.sandwich.is_empty() {
+            return None;
+        }
+        let nc = cfg.combo_features.len().max(1);
+        let width = cfg.width;
+        let mut any = false;
+        let mut out = Vec::with_capacity(self.sandwich.len() * width);
+        for (slot, s) in self.sandwich.iter().enumerate() {
+            match cfg
+                .combo_features
+                .get(slot % nc)
+                .and_then(|idx| s.standard_errors_of(idx, kind))
+            {
+                Some(v) => {
+                    any = true;
+                    out.extend(v);
+                }
+                None => out.extend(std::iter::repeat_n(f64::NAN, width)),
+            }
+        }
+        any.then_some(out)
     }
 
     /// Every slot's robust standard errors, flattened in `coef`'s layout,

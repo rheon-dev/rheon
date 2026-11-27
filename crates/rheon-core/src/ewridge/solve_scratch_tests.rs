@@ -48,6 +48,7 @@ fn cfg(k: usize, shape: (bool, bool, bool), sets: bool, window: Option<f64>) -> 
         window,
         window_every: None,
         max_rows_between_snapshots: None,
+        constraints: None,
     }
 }
 
@@ -252,6 +253,7 @@ fn parts_with(back: usize) -> Solved {
     Solved {
         sol: Vec::with_capacity(back),
         factor: None,
+        proj: None,
         a: Vec::with_capacity(back),
         keep: Vec::with_capacity(back),
         s: Vec::with_capacity(back),

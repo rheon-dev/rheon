@@ -89,6 +89,7 @@ fn ewridge_cfg(ridge: f64) -> EwRidgeCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        constraints: None,
     }
 }
 

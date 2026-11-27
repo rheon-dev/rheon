@@ -221,6 +221,7 @@ fn ridge(standardize: bool) -> EwRidgeCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        constraints: None,
     }
 }
 
@@ -1799,6 +1800,7 @@ fn rls_cfg() -> RlsCfg {
         delta: 1.0,
         coef_prior: None,
         min_weight: 10.0,
+        constraints: None,
     }
 }
 

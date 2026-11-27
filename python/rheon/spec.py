@@ -291,9 +291,10 @@ the diagnostics
     ``drift_delta``, ``drift_threshold``, ``drift_action``, ``drift_kind``
     and ``drift_options``,
     ``emit_calibration`` with ``calibration_half_life``, ``emit_breaks`` with
-    ``breaks_half_life``, ``emit_robust_se`` with ``robust_se_half_life`` and
-    ``robust_se_lags``, ``emit_specification`` with ``specification_half_life``
-    and ``ljung_box_lags``, ``horizon_rows`` beside any of those four,
+    ``breaks_half_life``, ``emit_robust_se`` with ``robust_se_half_life``,
+    ``robust_se_lags`` and ``robust_se_types``, ``emit_specification`` with
+    ``specification_half_life`` and ``ljung_box_lags``, ``horizon_rows`` beside
+    any of those four,
     ``emit_tails`` with ``tails_half_life``, ``emit_influence`` with
     ``influence_half_life``, ``emit_feature_health`` with
     ``feature_health_half_life``, and ``emit_clocks``. Each adds fields to the
@@ -340,6 +341,13 @@ the diagnostics
     <https://github.com/rheon-dev/rheon/blob/main/docs/DIAGNOSTICS.md>`_
     orders them by the question each answers, with their thresholds,
     false-alarm rates, costs and the theory behind them, and a recipe for each.
+``max_state_bytes``
+    A ceiling in bytes on bounded per-group state kept by a model or
+    diagnostic that accepts one (such as ``robust_se_types`` and bounded-state
+    models like ``hawkes``, ``corrchange`` and ``audit``). When a model or
+    diagnostic exceeds half its budget, a :class:`rheon.ReadinessWarning`
+    notes the footprint; past the budget, the spec is refused. Refused on
+    models and specs without a bounded state cap.
 
 ``standardize``, which nine models take, defaults to ``False`` in ``ewridge``,
 ``huber``, ``quantile`` and ``ftrl``, and to ``True`` in ``kalman``, ``sgd``, ``pa``,
@@ -561,7 +569,7 @@ target, so their fields take no suffix:
     coef{instance}                     instance = ""             single half-life
     support_coef{instance}                      | @h{half-life}    half-life grid (@h600, @h10m)
     se_coef{instance}                           emit_se_coef
-    se_coef_hc0{instance}, se_coef_hac{instance}  emit_robust_se
+    se_coef_hc0{instance}..se_coef_hc3{instance}, se_coef_hac{instance}  emit_robust_se
     penalty_selected_{target}{instance}         lasso: the path point in force
     weight_{target}{instance}                   emit_target_weight: its min_weight's weight
     selected_{target}                           emit_selected: the chosen slot
@@ -645,14 +653,23 @@ The diagnostics add, per slot:
        (an M-estimator's covariance is a sandwich), ``holt`` (no covariance
        of its coefficients) and the gradient models (no second moment).
    * - ``emit_robust_se``
-     - ``se_coef_hc0``, ``se_coef_hac``
+     - ``se_coef_hc0``..``se_coef_hc3``, ``se_coef_hac``
      - Beside ``se_coef``, on ``coef``'s rows and laid out like it, the
        standard errors of the least-squares sandwich ``B^-1 M B^-1`` at
        ``robust_se_half_life``: ``B`` the EW Gram of ``(1, x)``, and ``M``
-       White's ``sum(w**2 * e**2 * z z')`` for ``se_coef_hc0``, with Newey
+       White's ``sum(w**2 * e**2 * z z')`` for ``se_coef_hc0`` when
+       ``robust_se_types`` is unset, with Newey
        and West's lag products to ``robust_se_lags`` at Bartlett's weights
        ``1 - l / (L + 1)`` for ``se_coef_hac``, written when there is a
-       lag. ``e`` is the row's out-of-sample residual, which carries its
+       lag. Setting ``robust_se_types`` to a non-empty list from ``"hc0"``,
+       ``"hc1"``, ``"hc2"`` and ``"hc3"`` emits only those ``se_coef_hc*``
+       fields using row-time leverage adjustments (``hc0`` scales each
+       residual by ``1 / (1 + g)``, ``hc1`` applies the Kish ``n / (n - p)``
+       degrees-of-freedom factor, ``hc2`` divides ``e**2`` by ``1 + g``, and
+       ``hc3`` uses ``e**2`` directly, where ``g = w z' B_prev^-1 z``) and
+       enforces ``max_state_bytes`` (256 KB per group by default, ceiling
+       64 MiB; warns past half, refuses past the cap). ``e`` is the row's
+       out-of-sample residual, which carries its
        estimation error where the classical sandwich's in-sample residual
        does not, so it tends to read above statsmodels' ``cov_type="HC0"``
        and ``"HAC"``, though not always: run once on 1,500 rows over 50

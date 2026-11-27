@@ -276,7 +276,8 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "max_state_bytes",
         }
     ),
-    "ewridge": frozenset({"gram_threads"}),
+    "ewridge": frozenset({"gram_threads", "constraints"}),
+    "rls": frozenset({"constraints"}),
     "ar": frozenset({"ridge", "max_state_bytes", "select"}),
     "vector_ar": frozenset(
         {

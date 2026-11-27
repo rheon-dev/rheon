@@ -1998,6 +1998,44 @@ impl SpdFactor {
         }
     }
 
+    /// Solve `L X = B` for column-major `B` (`k × m`), returning column-major
+    /// `X` (`k × m`).
+    pub(crate) fn solve_lower_cols(&self, b: &[f64], k: usize, m: usize) -> Vec<f64> {
+        debug_assert_eq!(b.len(), k * m);
+        let mut x = Mat::from_fn(k, m, |i, j| b[j * k + i]);
+        faer::linalg::triangular_solve::solve_lower_triangular_in_place(
+            self.l.as_ref(),
+            x.as_mut(),
+            Par::Seq,
+        );
+        let mut out = vec![0.0; k * m];
+        for j in 0..m {
+            for i in 0..k {
+                out[j * k + i] = x[(i, j)];
+            }
+        }
+        out
+    }
+
+    /// Solve `Lᵀ X = B` for column-major `B` (`k × m`), returning column-major
+    /// `X` (`k × m`).
+    pub(crate) fn solve_upper_transpose_cols(&self, b: &[f64], k: usize, m: usize) -> Vec<f64> {
+        debug_assert_eq!(b.len(), k * m);
+        let mut x = Mat::from_fn(k, m, |i, j| b[j * k + i]);
+        faer::linalg::triangular_solve::solve_upper_triangular_in_place(
+            self.l.as_ref().transpose(),
+            x.as_mut(),
+            Par::Seq,
+        );
+        let mut out = vec![0.0; k * m];
+        for j in 0..m {
+            for i in 0..k {
+                out[j * k + i] = x[(i, j)];
+            }
+        }
+        out
+    }
+
     /// A factor of no order and no entries, which holds no memory: what a
     /// holder that moves a real one out of a place leaves there.
     pub(crate) fn hollow() -> Self {

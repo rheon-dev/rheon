@@ -31,7 +31,6 @@ def huber(
     emit_huber_scale: bool = False,
     huber_refit_rows: int | None = None,
     huber_refit_span: float | Duration | None = None,
-    max_state_bytes: int | None = None,
     refit_budget: float | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
@@ -494,7 +493,6 @@ def huber(
         "emit_huber_scale": True if emit_huber_scale else None,
         "huber_refit_rows": huber_refit_rows,
         "huber_refit_span": huber_refit_span,
-        "max_state_bytes": max_state_bytes,
         "refit_budget": refit_budget,
     }
     # Written only when given: the Rust spec skips them when absent.
@@ -517,7 +515,6 @@ def quantile(
     quantile_eps: float | None = None,
     quantile_refit_rows: int | None = None,
     quantile_refit_span: float | Duration | None = None,
-    max_state_bytes: int | None = None,
     refit_budget: float | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
@@ -853,7 +850,6 @@ def quantile(
         "quantile_eps": quantile_eps,
         "quantile_refit_rows": quantile_refit_rows,
         "quantile_refit_span": quantile_refit_span,
-        "max_state_bytes": max_state_bytes,
         "refit_budget": refit_budget,
     }
     # Written only when given: the Rust spec skips them when absent.

@@ -52,7 +52,6 @@ def dcc(
     g: float | None = None,
     start_rows: int | None = None,
     start_span: float | Duration | None = None,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """The full correlation matrix of several return series, moving every
@@ -280,6 +279,4 @@ def dcc(
         model["start_rows"] = start_rows
     if start_span is not None:
         model["start_span"] = start_span
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     return _common(name, model, targets=targets, features=[], **common)

@@ -29,6 +29,7 @@
 //!     window: None,
 //!     window_every: None,
 //!     max_rows_between_snapshots: None,
+//!     constraints: None,
 //! })?;
 //!
 //! let mut pred = f64::NAN;
@@ -117,6 +118,7 @@ mod isotonic;
 mod kalman;
 mod krls;
 mod lasso;
+mod lincon;
 mod margbins;
 mod marginal;
 mod marglag;
@@ -278,6 +280,7 @@ pub use krls::{
     KernelKind, Krls, KrlsCfg,
 };
 pub use lasso::{Lasso, LassoCfg};
+pub use lincon::LinearConstraints;
 pub use margbins::{BinCfg, BinRule, BinStat};
 pub(crate) use margbins::{MarginalBins, edges_from};
 pub use marginal::{
@@ -317,7 +320,7 @@ pub use root::{
 };
 pub use run_length::{RunLength, RunValue};
 pub use runs::Runs;
-pub use sandwich::Sandwich;
+pub use sandwich::{RobustSeType, Sandwich};
 pub use seqtest::{SLOTS as SEQTEST_SLOTS, SeqTest, SeqTestCfg};
 pub use sgd::{LearningRate, Sgd, SgdCfg, SgdLoss};
 pub use solve::{SpdFactor, quad_forms_logdet, solve_spd};

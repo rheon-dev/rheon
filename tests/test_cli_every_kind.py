@@ -267,6 +267,9 @@ CASES: list[Case] = [
             session_shrink=0.5,
             session_gap=30.0,
             max_rows_between_solves=4,
+            constraints=([[1.0, 1.0, 1.0]], [1.0]),
+            robust_se_types=["hc0", "hc1", "hc2", "hc3"],
+            max_state_bytes=512 * 1024,
         ),
     ),
     Case("ewridge_window", "ewridge", full(**CLOSE, **LS, **WINDOW)),
@@ -320,7 +323,16 @@ CASES: list[Case] = [
             coef_prior=[[0.0, 1.0, -0.5, 0.0], [0.0, 0.0, 0.0, 0.0]],
         ),
     ),
-    Case("rls2", "rls", full2(**LS)),
+    Case(
+        "rls2",
+        "rls",
+        full2(
+            **LS,
+            constraints=([[1.0, 1.0, 1.0]], [1.0]),
+            robust_se_types=["hc0", "hc1", "hc2", "hc3"],
+            max_state_bytes=512 * 1024,
+        ),
+    ),
     Case(
         "kalman",
         "kalman",
@@ -2182,6 +2194,7 @@ NEEDS: dict[str, list[str]] = {
     "resid_autocorr_lag": ["emit_autocorr"],
     "robust_se_half_life": ["emit_robust_se"],
     "robust_se_lags": ["emit_robust_se"],
+    "robust_se_types": ["emit_robust_se"],
     "session_gap": ["session"],
     "specification_half_life": ["emit_specification"],
     "tails_half_life": ["emit_tails"],
@@ -2199,6 +2212,8 @@ SAMPLE: dict[str, Any] = {
     "coef_every": 5.0,
     "targets": ["y"],
     "features": ["x1", "x2"],
+    "robust_se_types": ["hc0", "hc1", "hc2", "hc3"],
+    "max_state_bytes": 512 * 1024,
     **CLOSE,
 }
 

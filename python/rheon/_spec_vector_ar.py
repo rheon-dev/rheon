@@ -24,7 +24,6 @@ def vector_ar(
     lags: int,
     features: list[str] | None = None,
     ridge: float | None = None,
-    max_state_bytes: int | None = None,
     select: Literal["aic", "bic", "hqic", "fpe"] | None = None,
     causality: list[dict[str, Any]] | None = None,
     causality_kind: Literal["f", "wald", "ssr_f", "ssr_chi2", "lr"] | None = None,
@@ -354,8 +353,6 @@ def vector_ar(
     # reports the dict this made (`ModelBank.specs`).
     if ridge is not None:
         model["ridge"] = ridge
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     if select is not None:
         model["select"] = select
     if causality is not None:

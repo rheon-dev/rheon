@@ -79,6 +79,7 @@
   emit_robust_se = False
   robust_se_half_life = None
   robust_se_lags = None
+  robust_se_types = None
   emit_specification = False
   specification_half_life = None
   ljung_box_lags = None
@@ -95,6 +96,7 @@
   held_overflow = None
   group = None
   group_close = None
+  max_state_bytes = None
 
 [spec constructors]  # keyword names AND defaults are API
   ar:
@@ -103,7 +105,6 @@
     lags
     features = None
     ridge = None
-    max_state_bytes = None
     select = None
     window_size = None
     closed = 'right'
@@ -120,7 +121,6 @@
     distinct_window_rows = None
     distinct_window_size = None
     closed = 'right'
-    max_state_bytes = None
     common
   bandit:
     name
@@ -177,7 +177,6 @@
     permute_every = None
     window_size = None
     monitor_span = None
-    max_state_bytes = None
     common
   dcc:
     name
@@ -195,7 +194,6 @@
     g = None
     start_rows = None
     start_span = None
-    max_state_bytes = None
     common
   ddsketch:
     name
@@ -205,7 +203,6 @@
     window_rows = None
     window_size = None
     closed = 'right'
-    max_state_bytes = None
     common
   deco:
     name
@@ -275,7 +272,6 @@
     lag_tolerance = None
     window_rows = None
     window_size = None
-    max_state_bytes = None
     common
   ewridge:
     name
@@ -298,6 +294,7 @@
     snapshot_every = None
     max_rows_between_snapshots = None
     window_budget = None
+    constraints = None
     common
   expectile:
     name
@@ -310,7 +307,6 @@
     window_rows = None
     window_size = None
     closed = 'right'
-    max_state_bytes = None
     refit_budget = None
     common
   ftrl:
@@ -337,7 +333,6 @@
     start_span = None
     forecast_rows = None
     max_horizon_work = None
-    max_state_bytes = None
     common
   glm:
     name
@@ -349,7 +344,6 @@
     ridge = None
     refit_rows = None
     refit_span = None
-    max_state_bytes = None
     step_cap = None
     refit_budget = None
     common
@@ -371,7 +365,6 @@
     window_events = None
     window_size = None
     closed = 'right'
-    max_state_bytes = None
     common
   hmm:
     name
@@ -439,7 +432,6 @@
     initial_level = None
     initial_trend = None
     initial_seasonal = None
-    max_state_bytes = None
     common
   huber:
     name
@@ -457,7 +449,6 @@
     emit_huber_scale = False
     huber_refit_rows = None
     huber_refit_span = None
-    max_state_bytes = None
     refit_budget = None
     common
   isotonic:
@@ -471,7 +462,6 @@
     window_rows = None
     window_size = None
     closed = 'right'
-    max_state_bytes = None
     common
   kalman:
     name
@@ -611,7 +601,6 @@
     n_components = None
     method = 'svd'
     learning_rate = None
-    max_state_bytes = None
     common
   power_variation:
     name
@@ -620,7 +609,6 @@
     window_rows = None
     window_size = None
     closed = 'right'
-    max_state_bytes = None
     common
   quantile:
     name
@@ -634,7 +622,6 @@
     quantile_eps = None
     quantile_refit_rows = None
     quantile_refit_span = None
-    max_state_bytes = None
     refit_budget = None
     common
   random_cut_forest:
@@ -669,7 +656,6 @@
     closed = 'right'
     lm_window = None
     lm_beta = 0.99
-    max_state_bytes = None
     common
   rls:
     name
@@ -677,6 +663,7 @@
     features
     delta = None
     coef_prior = None
+    constraints = None
     common
   seqtest:
     name
@@ -696,7 +683,6 @@
     huber_scale_half_life = None
     huber_refit_rows = None
     huber_refit_span = None
-    max_state_bytes = None
     refit_budget = None
     quantile = None
     eps = None
@@ -718,7 +704,6 @@
     spacing = None
     scaling = 'density'
     detrend = True
-    max_state_bytes = None
     window_size = None
     closed = 'right'
     snapshot_every = None
@@ -730,7 +715,6 @@
     targets
     quantiles
     compression = 100.0
-    max_state_bytes = None
     common
   vector_ar:
     name
@@ -738,7 +722,6 @@
     lags
     features = None
     ridge = None
-    max_state_bytes = None
     select = None
     causality = None
     causality_kind = None
@@ -2345,7 +2328,7 @@
     lars_paths(grams: 'Sequence[Gram]', *, targets: 'Sequence[str | int] | None' = None, features: 'Sequence[str | int] | None' = None, max_iter: 'int | None' = None, max_active: 'int | None' = None, penalty_weights: 'Sequence[float] | None' = None, threads: 'int | None' = None) -> 'list[list[dict[str, Any]]]'
     lasso_path(g: 'Gram', penalties: 'Sequence[float]', *, l1_ratio: 'float' = 1.0, penalty_weights: 'Sequence[float] | None' = None, target: 'str | int' = 0, features: 'Sequence[str | int] | None' = None, max_iter: 'int' = 1000, tol: 'float' = 1e-10) -> 'Any'
     merge(grams: 'Sequence[Gram]', *, within: 'bool' = False) -> 'Gram'
-    solve(g: 'Gram', *, ridge: 'float | Sequence[float]' = 0.0, target: 'str | int' = 0, features: 'Sequence[str | int] | None' = None, standardize: 'bool' = False) -> 'Any'
+    solve(g: 'Gram', *, ridge: 'float | Sequence[float]' = 0.0, target: 'str | int' = 0, features: 'Sequence[str | int] | None' = None, standardize: 'bool' = False, constraints: 'tuple[Sequence[Sequence[float]], Sequence[float]] | None' = None) -> 'Any'
     solve_subsets(grams: 'Sequence[Gram]', subsets: 'Sequence[Sequence[int]]', *, targets: 'Sequence[str | int] | None' = None, features: 'Sequence[str | int] | None' = None, ridge: 'float | Sequence[float]' = 0.0, standardize: 'bool' = False, path: 'dict[str, Any] | None' = None, within: 'bool' = False, target_signs: 'Any' = None, threads: 'int | None' = None, jobs: 'Sequence[Mapping[str, Any]] | pl.DataFrame | None' = None) -> 'list[Any]'
     subset(g: 'Gram', columns: 'Sequence[str | int]') -> 'Gram'
     vif(g: 'Gram', *, features: 'Sequence[str | int] | None' = None) -> 'Any'
@@ -2644,6 +2627,9 @@
     support_coef@h100: list[f64]
     se_coef@h100: list[f64]
     se_coef_hc0@h100: list[f64]
+    se_coef_hc1@h100: list[f64]
+    se_coef_hc2@h100: list[f64]
+    se_coef_hc3@h100: list[f64]
     se_coef_hac@h100: list[f64]
     pred_y__a_r0.000001@h500: f64
     resid_y__a_r0.000001@h500: f64
@@ -2890,6 +2876,9 @@
     support_coef@h500: list[f64]
     se_coef@h500: list[f64]
     se_coef_hc0@h500: list[f64]
+    se_coef_hc1@h500: list[f64]
+    se_coef_hc2@h500: list[f64]
+    se_coef_hc3@h500: list[f64]
     se_coef_hac@h500: list[f64]
     pred_y__selected: f64
     selected_y: enum
@@ -3704,6 +3693,7 @@
   spec.drift_kind: adwin, cusum, ddm, eddm, kswin, page_hinkley
   spec.group_close: monotone, session
   spec.held_overflow: drop_oldest, refuse
+  spec.robust_se_types: hc0, hc1, hc2, hc3
   spec.session_gap: reset
   bocpd.covariance_type: diag, full
   corrchange.alpha_adjust: bonferroni, none
@@ -3882,6 +3872,7 @@
     max_error_inflation
     max_held_rows
     max_rows_between_coefs
+    max_state_bytes
     min_settled_frac
     min_weight
     model
@@ -3891,6 +3882,7 @@
     restart_after_step_back
     robust_se_half_life
     robust_se_lags
+    robust_se_types
     session
     session_gap
     specification_half_life
@@ -3910,7 +3902,7 @@
     ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size
     ewm_moments: bias, kind, lag_tolerance, max_state_bytes, se, terms, window_rows, window_size
-    ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
+    ewridge: closed, coef_prior, constraints, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
     expectile: closed, expectile, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, window_rows, window_size
     ftrl: alpha, beta, l1, l2, loss, standardize, strict_binary
     garch: dist, forecast_rows, max_horizon_work, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
@@ -3936,7 +3928,7 @@
     random_cut_forest: max_state_bytes, n_trees, seed, shingle_size, tree_size
     rcov: bandwidth, block_rows, iv_stride, jitter, kernel, kind, max_bandwidth, noise_stride, preavg_rows, psd, theta
     realized: closed, lm_beta, lm_window, max_state_bytes, window_rows, window_size
-    rls: coef_prior, delta
+    rls: coef_prior, constraints, delta
     seqtest: a, a_suffix, b, b_suffix
     sgd: clip_gradient, coef_max, coef_min, coef_sum, eps, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, l2, learning_rate, loss, max_state_bytes, power, quantile, refit_budget, schedule, standardize, strict_binary
     spectral: closed, detrend, max_rows_between_snapshots, max_state_bytes, periods, scaling, snapshot_every, spacing, window_budget, window_size

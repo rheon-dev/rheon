@@ -30,7 +30,6 @@ def kalman(
     forecast_spans: list[float | Duration] | dict[str, float | Duration] | None = None,
     smooth_lag: int | None = None,
     emit_smoothed_se: bool = False,
-    max_state_bytes: int | None = None,
     family: Literal["gaussian", "poisson", "binomial", "gamma", "tweedie"] = "gaussian",
     link: Literal["identity", "log", "logit", "inverse", "power"] | None = None,
     var_power: float | None = None,
@@ -728,8 +727,6 @@ def kalman(
         model["smooth_lag"] = smooth_lag
     if emit_smoothed_se:
         model["emit_smoothed_se"] = True
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     if forecast_spans is not None:
         # A dict is `[name, span]` pairs, as the Rust spec reads them.
         who = f"spec {quoted(name)}"

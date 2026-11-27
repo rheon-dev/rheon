@@ -740,19 +740,31 @@ back, at Bartlett weights that keep the estimate positive.
 | field | standard error | robust to |
 |---|---|---|
 | `se_coef` (`emit_se_coef`) | `sigma · sqrt(diag(M))`, `M` the inverse Gram over `n_kish`; `kalman`'s posterior | nothing: it assumes independent residuals of one spread |
-| `se_coef_hc0` (`emit_robust_se`) | White's (1980) sandwich `B⁻¹ (Σ w² e² z z') B⁻¹`, `B` the weighted Gram of `(1, x)` | a spread that moves with the features |
-| `se_coef_hac` (`emit_robust_se`) | the same sandwich with Newey and West's lag products to `robust_se_lags`, weighted `1 − l / (L + 1)` | that, and residuals correlated up to `L` rows apart |
+| `se_coef_hc0` (`emit_robust_se`) | White's (1980) sandwich `B⁻¹ M B⁻¹`, `B` the weighted Gram of `(1, x)` | a spread that moves with the features |
+| `se_coef_hc1`, `se_coef_hc2`, `se_coef_hc3` (`emit_robust_se`, `robust_se_types`) | row-time leverage-adjusted HC0–HC3 variants (`hc0` uses `(e / (1 + g))²`, `hc1` scales `hc0` by `n / (n − p)` with Kish `n`, `hc2` uses `e² / (1 + g)`, `hc3` uses `e²`, where `g = w z' B_prev⁻¹ z` is the pre-fold leverage) | heteroskedasticity and finite-sample leverage distortion |
+| `se_coef_hac` (`emit_robust_se`) | the primary sandwich with Newey and West's lag products to `robust_se_lags`, weighted `1 − l / (L + 1)` | heteroskedasticity and residuals correlated up to `L` rows apart |
 
-All three sit on `coef`'s rows, laid out like `coef`, the intercept first.
-`e` is the row's out-of-sample residual, so the sandwich carries the
-estimation error that a sandwich over in-sample residuals leaves out, and
-it tends to read above statsmodels' `cov_type="HC0"` and `"HAC"`, though
-not always. Run once on 1,500 rows, over 50 seeds, the ratio to
-statsmodels' ran from 0.990 to 1.034 for HC0 and from 0.985 to 1.059 for
-HAC, and was below 1 for some coefficient on 5 and 8 of the seeds. The lags default to twice the target's
-horizon in rows. The memory is `robust_se_half_life`, the fit's by default.
-It costs 350 ns a row at 5 features and 10 lags, and only `ewridge` and
-`rls` take it, the least-squares fits.
+All sit on `coef`'s rows, laid out like `coef`, the intercept first.
+Without `robust_se_types`, `emit_robust_se=True` emits `se_coef_hc0` using
+the raw out-of-sample residual `e²` (matching `robust_se_types=["hc3"]`),
+plus `se_coef_hac` when `robust_se_lags` or the horizon gives a lag.
+When `robust_se_types` is set to a non-empty list from `"hc0"`, `"hc1"`,
+`"hc2"`, `"hc3"`, the bank emits only the requested `se_coef_hc*` columns
+using the row-time leverage adjustments above (`se_coef_hac`, when lags are
+present, stays on the primary meat). Each variant and lag keeps `(k + 1)²`
+sums per slot. Setting `robust_se_types` or `max_state_bytes` therefore
+enforces `max_state_bytes` (256 KB per group by default, ceiling 64 MiB):
+a spec past the cap is refused at build time, and one past half raises a
+`ReadinessWarning`. `e` is the row's out-of-sample
+residual, so the sandwich carries the estimation error that a sandwich over
+in-sample residuals leaves out, and it tends to read above statsmodels'
+`cov_type="HC0"` and `"HAC"`, though not always. Run once on 1,500 rows,
+over 50 seeds, the ratio to statsmodels' ran from 0.990 to 1.034 for HC0
+and from 0.985 to 1.059 for HAC, and was below 1 for some coefficient on 5
+and 8 of the seeds. The lags default to twice the target's horizon in rows.
+The memory is `robust_se_half_life`, the fit's by default. It costs 350 ns
+a row at 5 features and 10 lags, and only `ewridge` and `rls` take it, the
+least-squares fits.
 
 **Every diagnostic that needs the horizon reads the same number of
 rows.** On a spec with no clock column it is `embargo`, rounded up,
