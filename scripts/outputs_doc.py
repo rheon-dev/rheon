@@ -604,8 +604,9 @@ OPTIONAL: list[tuple[str, str]] = [
     (
         "the diagnostics: `emit_sigma`, `emit_zscore`, `emit_selected`, "
         "`emit_averaged`, `emit_drift`, `emit_metrics`, `emit_autocorr`, `resid_quantiles`, "
-        "`conformal`, `emit_calibration`, `emit_breaks`, `emit_specification`, "
-        "`emit_tails`, `emit_influence` (`ewridge`'s, `rls`'s and `kalman`'s), "
+        "`conformal`, `emit_calibration`, `emit_spiegelhalter` (logistic models), `emit_breaks`, "
+        "`emit_specification`, `emit_arch_lm`, `emit_white`, `emit_tails`, `emit_influence`, "
+        "`emit_cooks_distance` and `emit_dfbetas` (`ewridge`'s, `rls`'s and `kalman`'s), "
         "`emit_feature_health` (not `holt`'s, which has no features)",
         "[Is the model working?](DIAGNOSTICS.md), for the models that "
         "predict a target. `emit_metrics`' `hit_rate_<t>` is null throughout on an `sgd` "

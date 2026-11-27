@@ -73,6 +73,7 @@
   drift_kind = None
   drift_options = None
   emit_calibration = False
+  emit_spiegelhalter = False
   calibration_half_life = None
   emit_breaks = False
   breaks_half_life = None
@@ -80,12 +81,18 @@
   robust_se_half_life = None
   robust_se_lags = None
   emit_specification = False
+  emit_arch_lm = False
+  arch_lm_lags = None
+  emit_white = False
+  white_interaction_terms = None
   specification_half_life = None
   ljung_box_lags = None
   horizon_rows = None
   emit_tails = False
   tails_half_life = None
   emit_influence = False
+  emit_cooks_distance = False
+  emit_dfbetas = False
   influence_half_life = None
   emit_feature_health = False
   feature_health_half_life = None
@@ -1976,9 +1983,11 @@
     SUM_FIELDS
     clark_west(df: 'pl.DataFrame | pl.LazyFrame', *, big: 'str', small: 'str', targets: 'Sequence[str] | None' = None, big_suffix: 'str' = '', small_suffix: 'str' = '', lags: 'int' = 0, group: 'str | Iterable[str] | None' = None, half_life: 'float | None' = None, min_samples: 'int' = 30, name: 'str' = 'clark_west') -> 'pl.DataFrame | pl.LazyFrame'
     compare_specs(df: 'pl.DataFrame | pl.LazyFrame', specs: 'Iterable[str | dict]', *, group: 'str | Iterable[str] | None' = None, targets: 'Sequence[str] | None' = None, min_samples: 'int' = 30, binary: 'bool | None' = None) -> 'pl.DataFrame'
-    diebold_mariano(df: 'pl.DataFrame | pl.LazyFrame', *, a: 'str', b: 'str', targets: 'Sequence[str] | None' = None, a_suffix: 'str' = '', b_suffix: 'str' = '', lags: 'int' = 0, group: 'str | Iterable[str] | None' = None, half_life: 'float | None' = None, min_samples: 'int' = 30, name: 'str' = 'diebold_mariano') -> 'pl.DataFrame | pl.LazyFrame'
+    diebold_mariano(df: 'pl.DataFrame | pl.LazyFrame', *, a: 'str', b: 'str', targets: 'Sequence[str] | None' = None, a_suffix: 'str' = '', b_suffix: 'str' = '', loss: 'LossSpec' = 'squared', quantile: 'float | None' = None, linex_a: 'float | None' = None, lags: 'int' = 0, hln: 'bool' = False, reference: "Literal['normal', 't']" = 'normal', alternative: "Literal['two-sided', 'greater', 'less']" = 'two-sided', group: 'str | Iterable[str] | None' = None, half_life: 'float | None' = None, min_samples: 'int' = 30, name: 'str' = 'diebold_mariano') -> 'pl.DataFrame | pl.LazyFrame'
     from_sums(s: 'pl.DataFrame', *, min_samples: 'int' = 30, binary: 'bool' = False) -> 'pl.DataFrame'
+    giacomini_white(df: 'pl.DataFrame | pl.LazyFrame', *, a: 'str', b: 'str', targets: 'Sequence[str] | None' = None, a_suffix: 'str' = '', b_suffix: 'str' = '', loss: 'LossSpec' = 'squared', quantile: 'float | None' = None, linex_a: 'float | None' = None, lags: 'int' = 0, instrument_lags: 'int' = 1, instruments: 'Sequence[str] | None' = None, group: 'str | Iterable[str] | None' = None, half_life: 'float | None' = None, min_samples: 'int' = 30, name: 'str' = 'giacomini_white') -> 'pl.DataFrame | pl.LazyFrame'
     grid_search(source: 'pl.LazyFrame | pl.DataFrame', specs: 'dict[str, Any] | Sequence[dict[str, Any]] | Callable[..., dict[str, Any]]', param_grid: 'Mapping[str, Sequence[Any]] | None' = None, *, n_splits: 'int' = 5, gap: 'int' = 0, scoring: "Literal['mse', 'loglik']" = 'mse', chunk_size: 'int | None' = None, threads: 'int | None' = None) -> 'pl.DataFrame'
+    mean_seqtest(df: 'pl.DataFrame | pl.LazyFrame', *, bound: 'float', targets: 'Sequence[str] | None' = None, a: 'str | None' = None, b: 'str | None' = None, a_suffix: 'str' = '', b_suffix: 'str' = '', loss: 'LossSpec' = 'squared', quantile: 'float | None' = None, linex_a: 'float | None' = None, method: "Literal['cm_eb', 'betting']" = 'cm_eb', alpha: 'float' = 0.05, v_opt: 'float' = 1.0, running_intersection: 'bool' = False, clip: 'bool' = False, group: 'str | Iterable[str] | None' = None, min_samples: 'int' = 1, name: 'str' = 'mean_seqtest') -> 'pl.DataFrame | pl.LazyFrame'
     merge_sums(first: 'pl.DataFrame', *rest: 'pl.DataFrame') -> 'pl.DataFrame'
     metrics(df: 'pl.DataFrame | pl.LazyFrame', spec: 'str | dict', *, group: 'str | Iterable[str] | None' = None, targets: 'Sequence[str] | None' = None, min_samples: 'int' = 30, binary: 'bool | None' = None) -> 'pl.DataFrame'
     seqtest(df: 'pl.DataFrame | pl.LazyFrame', *, targets: 'Sequence[str] | None' = None, a: 'str | None' = None, b: 'str | None' = None, a_suffix: 'str' = '', b_suffix: 'str' = '', group: 'str | Iterable[str] | None' = None, min_weight: 'float' = 0.0, name: 'str' = 'seqtest') -> 'pl.DataFrame | pl.LazyFrame'
@@ -2010,7 +2019,7 @@
     cross_rank(input: 'str | pl.Expr', *, method: "Literal['average', 'min', 'max', 'dense', 'ordinal']" = 'average', descending: 'bool' = False, closed: "Literal['right', 'left']" = 'right', neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     cross_ref(input: 'str | pl.Expr', where: 'pl.Expr', *, closed: "Literal['right', 'left']" = 'right', max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     cross_std(input: 'str | pl.Expr', *, weight: 'str | pl.Expr | None' = None, closed: "Literal['right', 'left']" = 'right', bias: 'bool' = False, neighbors: 'str | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
-    ewm_mean(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
+    ewm_mean(input: 'str | pl.Expr', *, half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, adjust: 'bool | None' = None) -> 'pl.Expr'
     ewm_moments(legs: 'dict[str, int]', *, half_life: 'float | Duration', kind: "Literal['central', 'raw', 'standardized', 'cumulant']" = 'central', bias: 'bool | None' = None, window_size: 'float | Duration | None' = None, lag_tolerance: 'float | Duration | None' = None, partial: "Literal['keep', 'null', 'drop'] | None" = None) -> 'pl.Expr'
     ewm_profile(input: 'str | pl.Expr', *, period: 'float | Duration', half_life: 'float | Duration', buckets: 'int | None' = None, harmonics: 'int | None' = None, stat: "Literal['mean', 'var', 'std', 'quantile']" = 'mean', quantile: 'float | None' = None, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', offset: 'float | Duration | None' = None, weight: 'str | pl.Expr | None' = None, min_samples: 'int' = 1, bias: 'bool | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     ewm_quantile(input: 'str | pl.Expr', *, quantile: 'float', half_life: 'float | Duration', window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False) -> 'pl.Expr'
@@ -2024,6 +2033,8 @@
     mstl(input: 'str | pl.Expr', *, periods: 'list[int]', windows: 'list[int] | None' = None, iterate: 'int' = 2, component: "Literal['trend', 'seasonal', 'resid']" = 'trend', season: 'int | None' = None, window: 'int | None' = None, lag: 'int | None' = None, closed: "Literal['left', 'right']" = 'left', trend: 'int | None' = None, low_pass: 'int | None' = None, seasonal_deg: 'int' = 1, trend_deg: 'int' = 1, low_pass_deg: 'int' = 1, seasonal_jump: 'int' = 1, trend_jump: 'int' = 1, low_pass_jump: 'int' = 1, robust: 'bool' = False, inner_iter: 'int | None' = None, outer_iter: 'int | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     rolling_max(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     rolling_min(input: 'str | pl.Expr', *, window_size: 'float | Duration | None' = None, closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, since: 'str | pl.Expr | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+    rolling_quantile(input: 'str | pl.Expr', *, quantile: 'float', window_size: 'float | Duration', interpolation: "Literal['nearest', 'higher', 'lower', 'midpoint', 'linear', 'equiprobable']" = 'nearest', closed: "Literal['right', 'left', 'both', 'none']" = 'right', min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
+    rolling_rank(input: 'str | pl.Expr', *, window_size: 'float | Duration', method: "Literal['average', 'min', 'max', 'dense']" = 'average', closed: "Literal['right', 'left', 'both'] | None" = None, min_samples: 'int' = 1, partial: "Literal['keep', 'null', 'drop'] | None" = None, reverse: 'bool' = False, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     run_length(input: 'str | pl.Expr', *, abs_tol: 'float' = 0.0) -> 'pl.Expr'
     stl(input: 'str | pl.Expr', *, period: 'int', seasonal: 'int' = 7, component: "Literal['trend', 'seasonal', 'resid']" = 'trend', window: 'int | None' = None, lag: 'int | None' = None, closed: "Literal['left', 'right']" = 'left', trend: 'int | None' = None, low_pass: 'int | None' = None, seasonal_deg: 'int' = 1, trend_deg: 'int' = 1, low_pass_deg: 'int' = 1, seasonal_jump: 'int' = 1, trend_jump: 'int' = 1, low_pass_jump: 'int' = 1, robust: 'bool' = False, inner_iter: 'int | None' = None, outer_iter: 'int | None' = None, max_state_bytes: 'int | None' = None) -> 'pl.Expr'
     tick_sign(input: 'str | pl.Expr') -> 'pl.Expr'
@@ -2250,6 +2261,22 @@
     ramsey_reset_z__a_r0.5@h100: f64
     ramsey_reset_z__b_r0.000001@h100: f64
     ramsey_reset_z__b_r0.5@h100: f64
+    arch_lm_y__a_r0.000001@h100: f64
+    arch_lm_y__a_r0.5@h100: f64
+    arch_lm_y__b_r0.000001@h100: f64
+    arch_lm_y__b_r0.5@h100: f64
+    arch_lm_z__a_r0.000001@h100: f64
+    arch_lm_z__a_r0.5@h100: f64
+    arch_lm_z__b_r0.000001@h100: f64
+    arch_lm_z__b_r0.5@h100: f64
+    white_y__a_r0.000001@h100: f64
+    white_y__a_r0.5@h100: f64
+    white_y__b_r0.000001@h100: f64
+    white_y__b_r0.5@h100: f64
+    white_z__a_r0.000001@h100: f64
+    white_z__a_r0.5@h100: f64
+    white_z__b_r0.000001@h100: f64
+    white_z__b_r0.5@h100: f64
     skew_y__a_r0.000001@h100: f64
     skew_y__a_r0.5@h100: f64
     skew_y__b_r0.000001@h100: f64
@@ -2282,6 +2309,14 @@
     influence_z__a_r0.5@h100: f64
     influence_z__b_r0.000001@h100: f64
     influence_z__b_r0.5@h100: f64
+    cooks_distance_y__a_r0.000001@h100: f64
+    cooks_distance_y__a_r0.5@h100: f64
+    cooks_distance_y__b_r0.000001@h100: f64
+    cooks_distance_y__b_r0.5@h100: f64
+    cooks_distance_z__a_r0.000001@h100: f64
+    cooks_distance_z__a_r0.5@h100: f64
+    cooks_distance_z__b_r0.000001@h100: f64
+    cooks_distance_z__b_r0.5@h100: f64
     spread_ratio_x0@h100: f64
     spread_ratio_x1@h100: f64
     mean_shift_x0@h100: f64
@@ -2296,6 +2331,7 @@
     se_coef@h100: list[f64]
     se_coef_hc0@h100: list[f64]
     se_coef_hac@h100: list[f64]
+    dfbetas@h100: list[f64]
     pred_y__a_r0.000001@h500: f64
     resid_y__a_r0.000001@h500: f64
     pred_y__a_r0.5@h500: f64
@@ -2496,6 +2532,22 @@
     ramsey_reset_z__a_r0.5@h500: f64
     ramsey_reset_z__b_r0.000001@h500: f64
     ramsey_reset_z__b_r0.5@h500: f64
+    arch_lm_y__a_r0.000001@h500: f64
+    arch_lm_y__a_r0.5@h500: f64
+    arch_lm_y__b_r0.000001@h500: f64
+    arch_lm_y__b_r0.5@h500: f64
+    arch_lm_z__a_r0.000001@h500: f64
+    arch_lm_z__a_r0.5@h500: f64
+    arch_lm_z__b_r0.000001@h500: f64
+    arch_lm_z__b_r0.5@h500: f64
+    white_y__a_r0.000001@h500: f64
+    white_y__a_r0.5@h500: f64
+    white_y__b_r0.000001@h500: f64
+    white_y__b_r0.5@h500: f64
+    white_z__a_r0.000001@h500: f64
+    white_z__a_r0.5@h500: f64
+    white_z__b_r0.000001@h500: f64
+    white_z__b_r0.5@h500: f64
     skew_y__a_r0.000001@h500: f64
     skew_y__a_r0.5@h500: f64
     skew_y__b_r0.000001@h500: f64
@@ -2528,6 +2580,14 @@
     influence_z__a_r0.5@h500: f64
     influence_z__b_r0.000001@h500: f64
     influence_z__b_r0.5@h500: f64
+    cooks_distance_y__a_r0.000001@h500: f64
+    cooks_distance_y__a_r0.5@h500: f64
+    cooks_distance_y__b_r0.000001@h500: f64
+    cooks_distance_y__b_r0.5@h500: f64
+    cooks_distance_z__a_r0.000001@h500: f64
+    cooks_distance_z__a_r0.5@h500: f64
+    cooks_distance_z__b_r0.000001@h500: f64
+    cooks_distance_z__b_r0.5@h500: f64
     spread_ratio_x0@h500: f64
     spread_ratio_x1@h500: f64
     mean_shift_x0@h500: f64
@@ -2542,6 +2602,7 @@
     se_coef@h500: list[f64]
     se_coef_hc0@h500: list[f64]
     se_coef_hac@h500: list[f64]
+    dfbetas@h500: list[f64]
     pred_y__selected: f64
     selected_y: enum
     pred_z__selected: f64
@@ -2674,8 +2735,12 @@
     settled_frac: f64
     withheld_reason: enum
   ew_cov every score:
+    raw_cov_x0_x0: f64
+    raw_cov_x0_x1: f64
+    raw_cov_x1_x1: f64
     partial_corr_x0_x1: f64
     mahal: f64
+    loglik: f64
     mahal_q0.5: f64
     mahal_q0.99: f64
     pc0_var: f64
@@ -3295,7 +3360,7 @@
   ew_class.covariance_type: diag, full, tied
   ew_class.window_budget: refuse, thin
   ew_cov.gram_threads: auto
-  ew_cov.stats: corr, cov, lag_corr, mahal, mean, partial_corr, std, var
+  ew_cov.stats: corr, cov, lag_corr, loglik, mahal, mean, partial_corr, raw_cov, std, var
   ew_cov.window_budget: refuse, thin
   ewridge.gram_threads: auto
   ewridge.ridge_scale: mean, sum
@@ -3371,6 +3436,7 @@
     specs
     threads
   [[specs]]:
+    arch_lm_lags
     average_eta
     breaks_half_life
     calibration_half_life
@@ -3384,11 +3450,14 @@
     drift_options
     drift_threshold
     embargo
+    emit_arch_lm
     emit_autocorr
     emit_averaged
     emit_breaks
     emit_calibration
     emit_clocks
+    emit_cooks_distance
+    emit_dfbetas
     emit_drift
     emit_error_inflation
     emit_feature_health
@@ -3399,8 +3468,10 @@
     emit_selected
     emit_sigma
     emit_specification
+    emit_spiegelhalter
     emit_tails
     emit_target_weight
+    emit_white
     emit_zscore
     feature_health_half_life
     features
@@ -3433,6 +3504,7 @@
     tails_half_life
     targets
     weight
+    white_interaction_terms
   [specs.model], by type:
     ar: closed, lags, max_rows_between_snapshots, max_state_bytes, ridge, select, snapshot_every, window_budget, window_size
     audit: closed, distinct_cap, distinct_precision, distinct_window_rows, distinct_window_size, max_state_bytes, pairs

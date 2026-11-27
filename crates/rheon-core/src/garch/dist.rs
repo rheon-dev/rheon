@@ -39,45 +39,17 @@ pub(super) const NU_HI: f64 = 300.0;
 /// `|λ| ≤ 0.99`.
 pub(super) const LAM_LIM: f64 = 0.99;
 
-const LN_SQRT_2PI: f64 = 0.918_938_533_204_672_7;
-
-/// `ln Γ(x)` for `x > 0`; not a number for any other `x`, at once (a shift
-/// by ones never moves `x = −10¹⁷`, so the loop below would not end).
-pub(super) fn ln_gamma(mut x: f64) -> f64 {
-    if !(x > 0.0 && x.is_finite()) {
-        return f64::NAN;
-    }
-    let mut shift = 0.0;
-    while x < 20.0 {
-        shift += math::ln(x);
-        x += 1.0;
-    }
-    let r = 1.0 / x;
-    let r2 = r * r;
-    let series = r
-        * (1.0 / 12.0
-            + r2 * (-1.0 / 360.0
-                + r2 * (1.0 / 1260.0 + r2 * (-1.0 / 1680.0 + r2 * (1.0 / 1188.0)))));
-    (x - 0.5) * math::ln(x) - x + LN_SQRT_2PI + series - shift
+/// `ln Γ(x)` for `x > 0`, unified with [`crate::special::ln_gamma`].
+#[inline]
+pub(super) fn ln_gamma(x: f64) -> f64 {
+    crate::special::ln_gamma(x)
 }
 
-/// The digamma function `ψ(x) = d ln Γ(x)/dx` for `x > 0`; not a number
-/// for any other `x`, at once, as [`ln_gamma`].
-pub(super) fn digamma(mut x: f64) -> f64 {
-    if !(x > 0.0 && x.is_finite()) {
-        return f64::NAN;
-    }
-    let mut shift = 0.0;
-    while x < 20.0 {
-        shift += 1.0 / x;
-        x += 1.0;
-    }
-    let r = 1.0 / x;
-    let r2 = r * r;
-    let series = r2
-        * (1.0 / 12.0
-            - r2 * (1.0 / 120.0 - r2 * (1.0 / 252.0 - r2 * (1.0 / 240.0 - r2 * (1.0 / 132.0)))));
-    math::ln(x) - 0.5 * r - series - shift
+/// The digamma function `ψ(x) = d ln Γ(x)/dx` for `x > 0`, unified with
+/// [`crate::special::digamma`].
+#[inline]
+pub(super) fn digamma(x: f64) -> f64 {
+    crate::special::digamma(x)
 }
 
 /// `(a, b, c)` of the density at `(ν, λ)`.

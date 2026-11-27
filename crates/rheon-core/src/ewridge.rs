@@ -1480,6 +1480,7 @@ impl EwRidge {
                                 sys.mean.clone_from(&solved.mean);
                                 sys.centred = solved.centred;
                                 sys.scale = solved.scale;
+                                sys.inv_diag = CachedInvDiag::default();
                             }
                             none => {
                                 *none = Some(System {
@@ -1489,6 +1490,7 @@ impl EwRidge {
                                     mean: solved.mean.clone(),
                                     centred: solved.centred,
                                     scale: solved.scale,
+                                    inv_diag: CachedInvDiag::default(),
                                 });
                             }
                         }
@@ -2434,6 +2436,24 @@ struct SolveBufs {
     parts: Parts,
 }
 
+/// Cached `factor.inverse_diagonal(kk)` on a solved [`System`]: populated
+/// lazily on the first DFBETAS read after each solve, never saved and ignored
+/// by equality.
+#[derive(Debug, Default)]
+struct CachedInvDiag(OnceLock<Vec<f64>>);
+
+impl Clone for CachedInvDiag {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for CachedInvDiag {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 /// One solved system, kept so a row's leverage can be read against the
 /// factor its fit came from (docs/WARMUP-AND-CONVERGENCE.md §2.1): the
 /// ridged, normalised sub-block the solve factorized, and how a feature row
@@ -2459,6 +2479,8 @@ struct System {
     /// field here, written at every solve and read nowhere; it left the
     /// state at schema 38 (review round 4, CA11).
     scale: f64,
+    #[serde(skip)]
+    inv_diag: CachedInvDiag,
 }
 
 /// What the last solve left for the readiness statistics
@@ -3011,6 +3033,111 @@ impl OnlineModel for EwRidge {
                     });
                 let h = (q + if sys.centred { 1.0 } else { 0.0 }) / n;
                 out[slot] = (1.0 + h).sqrt();
+            }
+        }
+        true
+    }
+
+    fn row_gram_leverage_into(
+        &self,
+        x: &[f64],
+        d_clock: f64,
+        need_vec: bool,
+        h_unit: &mut Vec<f64>,
+        g_inv_x: &mut Vec<f64>,
+        diag_g_inv: &mut Vec<f64>,
+    ) -> bool {
+        let (m, nc, k) = (self.cfg.n_targets, self.cfg.n_combos(), self.cfg.k_total());
+        let n_slots = m * nc;
+        h_unit.clear();
+        h_unit.resize(n_slots, f64::NAN);
+        if need_vec {
+            g_inv_x.clear();
+            g_inv_x.resize(n_slots * k, f64::NAN);
+            diag_g_inv.clear();
+            diag_g_inv.resize(n_slots * k, f64::NAN);
+        }
+        let lam = self.cfg.decay.factor(d_clock);
+        if self.beta.is_none()
+            || self.ready.system_of.len() != n_slots
+            || self.n_eff() < self.cfg.min_weight
+            || !(lam > 0.0 && lam.is_finite())
+        {
+            return true;
+        }
+        let mut wj = Vec::new();
+        self.target_n_eff_into(&mut wj);
+        let (_, means) = self.error_sizes();
+        let mut v = Vec::new();
+        for j in 0..m {
+            let w_j = wj.get(j).copied().unwrap_or(0.0);
+            let w_dec = lam * w_j;
+            if !(w_dec > 0.0 && w_dec.is_finite()) {
+                continue;
+            }
+            let own = means.as_ref().map(|mj| &mj[j]);
+            for c in 0..nc {
+                let slot = j * nc + c;
+                if self.slot_ill(slot) {
+                    continue;
+                }
+                let Some((sys, factor)) = self.kept_system(slot) else {
+                    continue;
+                };
+                let kk = sys.z.len();
+                v.clear();
+                v.extend(
+                    sys.z
+                        .iter()
+                        .zip(&sys.s)
+                        .zip(&sys.mean)
+                        .map(|((&zi, &s), &mu)| {
+                            let mu = own.map_or(mu, |mj| mj[zi]);
+                            (self.z_at(x, zi) - mu) / s
+                        }),
+                );
+                if !need_vec {
+                    let q = factor.map_or(0.0, |f| f.quad_forms(&v, kk, 1)[0] * sys.scale);
+                    h_unit[slot] = (q + if sys.centred { 1.0 } else { 0.0 }) / w_dec;
+                    continue;
+                }
+                let slot_off = slot * k;
+                let q_vec = factor.map(|f| f.solve(&v, kk, 1));
+                let q = q_vec.as_ref().map_or(0.0, |qv| {
+                    v.iter().zip(qv).map(|(a, b)| a * b).sum::<f64>() * sys.scale
+                });
+                h_unit[slot] = (q + if sys.centred { 1.0 } else { 0.0 }) / w_dec;
+                if let Some(qv) = &q_vec {
+                    for (i2, &zi) in sys.z.iter().enumerate() {
+                        g_inv_x[slot_off + zi] = sys.scale * qv[i2] / (w_dec * sys.s[i2]);
+                    }
+                }
+                if let Some(factor) = factor {
+                    let inv = sys.inv_diag.0.get_or_init(|| factor.inverse_diagonal(kk));
+                    for (i2, &zi) in sys.z.iter().enumerate() {
+                        diag_g_inv[slot_off + zi] =
+                            sys.scale * inv[i2] / (w_dec * sys.s[i2] * sys.s[i2]);
+                    }
+                }
+                if sys.centred {
+                    let mut sum_mu = 0.0;
+                    if let Some(qv) = &q_vec {
+                        for (i2, &zi) in sys.z.iter().enumerate() {
+                            let mu = own.map_or(sys.mean[i2], |mj| mj[zi]);
+                            sum_mu += (mu / sys.s[i2]) * sys.scale * qv[i2];
+                        }
+                    }
+                    g_inv_x[slot_off] = (1.0 - sum_mu) / w_dec;
+                    let u: Vec<f64> = sys
+                        .mean
+                        .iter()
+                        .zip(&sys.s)
+                        .zip(&sys.z)
+                        .map(|((&mu, s), &zi)| own.map_or(mu, |mj| mj[zi]) / s)
+                        .collect();
+                    let qu = factor.map_or(0.0, |f| f.quad_forms(&u, kk, 1)[0] * sys.scale);
+                    diag_g_inv[slot_off] = (1.0 + qu) / w_dec;
+                }
             }
         }
         true

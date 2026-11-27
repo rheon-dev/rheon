@@ -126,6 +126,15 @@ from rheon._errors import RefusedValueError, WrongTypeError
 from rheon._renamed import renamed_function, renamed_keywords
 from rheon.polars._clock import clock_nanoseconds
 from rheon.polars._errors import ColumnNotFoundError, OutputColumnNotFoundError
+from rheon.polars._eval_compare import (
+    LossSpec,
+    apply_hln_and_pvalue,
+    build_loss_diffs,
+    check_dm_options,
+    giacomini_white,
+    hln_ew_factor_expr,
+    mean_seqtest,
+)
 
 __all__ = [
     "metrics",
@@ -134,7 +143,9 @@ __all__ = [
     "grid_search",
     "unpack",
     "seqtest",
+    "mean_seqtest",
     "diebold_mariano",
+    "giacomini_white",
     "clark_west",
     "sums",
     "merge_sums",
@@ -4023,6 +4034,7 @@ def _ew_test(
     stat: str,
     name: str,
     min_samples: int,
+    hln: bool = False,
 ) -> pl.DataFrame: ...
 
 
@@ -4036,6 +4048,7 @@ def _ew_test(
     stat: str,
     name: str,
     min_samples: int,
+    hln: bool = False,
 ) -> pl.LazyFrame: ...
 
 
@@ -4048,6 +4061,7 @@ def _ew_test(
     stat: str,
     name: str,
     min_samples: int,
+    hln: bool = False,
 ) -> pl.DataFrame | pl.LazyFrame:
     """Per row, the same t statistic with each row before it weighed by
     ``λ^age``, ``λ = 0.5 ** (1 / half_life)``, one step per row that has a
@@ -4070,8 +4084,8 @@ def _ew_test(
     :func:`_few_rows`.
     """
     if isinstance(df, pl.LazyFrame):
-        return _ew_query(df, values, keys, lags, half_life, stat, name, min_samples)
-    return _ew_chunk(df, values, keys, lags, half_life, stat, name, min_samples, {})
+        return _ew_query(df, values, keys, lags, half_life, stat, name, min_samples, hln)
+    return _ew_chunk(df, values, keys, lags, half_life, stat, name, min_samples, {}, hln)
 
 
 def _ew_rounding(
@@ -4139,6 +4153,7 @@ def _ew_query(
     stat: str,
     name: str,
     min_samples: int,
+    hln: bool = False,
 ) -> pl.LazyFrame:
     """:func:`_ew_test` over a query: a query of its rows with the record
     column added, read in one pass a chunk at a time when it runs.
@@ -4153,14 +4168,18 @@ def _ew_query(
     each key, which the chunk's first rows read as the rows ``l`` before
     them. What it holds is one chunk, and per key and target ``lags``
     values and ``3 + 4 lags`` means and variances, not the query's rows."""
-    schema = _ew_test(_probe(lf), values, keys, lags, half_life, stat, name, min_samples).schema
+    schema = _ew_test(
+        _probe(lf), values, keys, lags, half_life, stat, name, min_samples, hln
+    ).schema
     needed = set(keys).union(*(d.meta.root_names() for d in values.values()))
 
     def step() -> Callable[[pl.DataFrame], pl.DataFrame]:
         carry: dict[str, tuple[pl.DataFrame, pl.DataFrame]] = {}
 
         def one(chunk: pl.DataFrame) -> pl.DataFrame:
-            return _ew_chunk(chunk, values, keys, lags, half_life, stat, name, min_samples, carry)
+            return _ew_chunk(
+                chunk, values, keys, lags, half_life, stat, name, min_samples, carry, hln
+            )
 
         return one
 
@@ -4177,6 +4196,7 @@ def _ew_chunk(
     name: str,
     min_samples: int,
     carry: dict[str, tuple[pl.DataFrame, pl.DataFrame]],
+    hln: bool = False,
 ) -> pl.DataFrame:
     """One chunk of :func:`_ew_query`, after the chunks whose counts, means,
     variances and last values ``carry`` holds per target; ``carry`` is
@@ -4329,7 +4349,10 @@ def _ew_chunk(
         # `n`, the key's rows with a value up to this one, is a whole number
         # held in a float, so the comparisons are exact.
         live = (s > cut) & (n >= float(min_samples)) & (n > float(_few_rows(lags)))
-        got = got.with_columns(pl.when(live).then(m * w1 / s.sqrt()).alias(out_col))
+        raw_stat = m * w1 / s.sqrt()
+        if hln:
+            raw_stat = raw_stat * hln_ew_factor_expr(w1, w2, lags)
+        got = got.with_columns(pl.when(live).then(raw_stat).alias(out_col))
         base = base.join(got.select(idx, out_col), on=idx, how="left", maintain_order="left")
         fields.append(pl.col(out_col).alias(f"{stat}_{t}"))
         temps.append(out_col)
@@ -4410,7 +4433,13 @@ def diebold_mariano(
     targets: Sequence[str] | None = None,
     a_suffix: str = "",
     b_suffix: str = "",
+    loss: LossSpec = "squared",
+    quantile: float | None = None,
+    linex_a: float | None = None,
     lags: int = 0,
+    hln: bool = False,
+    reference: Literal["normal", "t"] = "normal",
+    alternative: Literal["two-sided", "greater", "less"] = "two-sided",
     group: str | Iterable[str] | None = None,
     half_life: float | None = None,
     min_samples: int = 30,
@@ -4427,7 +4456,13 @@ def diebold_mariano(
     targets: Sequence[str] | None = None,
     a_suffix: str = "",
     b_suffix: str = "",
+    loss: LossSpec = "squared",
+    quantile: float | None = None,
+    linex_a: float | None = None,
     lags: int = 0,
+    hln: bool = False,
+    reference: Literal["normal", "t"] = "normal",
+    alternative: Literal["two-sided", "greater", "less"] = "two-sided",
     group: str | Iterable[str] | None = None,
     half_life: None = None,
     min_samples: int = 30,
@@ -4444,7 +4479,13 @@ def diebold_mariano(
     targets: Sequence[str] | None = None,
     a_suffix: str = "",
     b_suffix: str = "",
+    loss: LossSpec = "squared",
+    quantile: float | None = None,
+    linex_a: float | None = None,
     lags: int = 0,
+    hln: bool = False,
+    reference: Literal["normal", "t"] = "normal",
+    alternative: Literal["two-sided", "greater", "less"] = "two-sided",
     group: str | Iterable[str] | None = None,
     half_life: float,
     min_samples: int = 30,
@@ -4461,7 +4502,13 @@ def diebold_mariano(
     targets: Sequence[str] | None = None,
     a_suffix: str = "",
     b_suffix: str = "",
+    loss: LossSpec = "squared",
+    quantile: float | None = None,
+    linex_a: float | None = None,
     lags: int = 0,
+    hln: bool = False,
+    reference: Literal["normal", "t"] = "normal",
+    alternative: Literal["two-sided", "greater", "less"] = "two-sided",
     group: str | Iterable[str] | None = None,
     half_life: float | None = None,
     min_samples: int = 30,
@@ -4735,24 +4782,24 @@ def diebold_mariano(
     spread, 1e16 or more and not the same in a frame and a query, with a
     p-value of 0 either way.
     """
-    _frame("rp.eval.diebold_mariano", df, lazy=True)
-    _check_min_samples("rp.eval.diebold_mariano", min_samples)
+    who = "rp.eval.diebold_mariano"
+    _frame(who, df, lazy=True)
+    _check_min_samples(who, min_samples)
+    hln_b, ref, alt = check_dm_options(
+        who, hln=hln, reference=reference, alternative=alternative, half_life=half_life
+    )
     probe = _probe(df)
-    _check_columns(probe, "rp.eval.diebold_mariano", group=group)
+    _check_columns(probe, who, group=group)
     keys = _group_keys(group)
-    pairs = _paired_residuals(probe, a, b, targets, a_suffix, b_suffix, "rp.eval.diebold_mariano")
-    values = {t: rb * rb - ra * ra for t, (ra, rb) in pairs.items()}
-    lags = _lags("rp.eval.diebold_mariano", lags)
+    pairs = _paired_residuals(probe, a, b, targets, a_suffix, b_suffix, who)
+    values = build_loss_diffs(who, pairs, loss, quantile, linex_a)
+    lags = _lags(who, lags)
     if half_life is not None:
-        _check_half_life("rp.eval.diebold_mariano", half_life)
-        _check_name("rp.eval.diebold_mariano", probe, name)
-        return _ew_test(df, values, keys, lags, half_life, "dm", name, min_samples)
+        _check_half_life(who, half_life)
+        _check_name(who, probe, name)
+        return _ew_test(df, values, keys, lags, half_life, "dm", name, min_samples, hln_b)
     out = _hac_test(df, values, keys, lags, "dm", min_samples)
-    p = [
-        None if z is None or math.isnan(z) else math.erfc(abs(z) / math.sqrt(2.0))
-        for z in out["dm"].to_list()
-    ]
-    return out.with_columns(pl.Series("p_value", p, dtype=pl.Float64))
+    return apply_hln_and_pvalue(out, lags=lags, hln=hln_b, reference=ref, alternative=alt)
 
 
 @overload

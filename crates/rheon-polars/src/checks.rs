@@ -19,8 +19,8 @@
 //! [`crate::ChunkOut::checks`], [`value_names`]' count of them per slot.
 
 use rheon_core::{
-    Breaks, Calibration, Coverage, Decay, FeatureHealth, Influence, Sandwich, Specification, Tails,
-    TwinFit,
+    ArchLm, Breaks, Calibration, Coverage, Decay, FeatureHealth, Influence, Sandwich,
+    Specification, Spiegelhalter, Tails, TwinFit, WhiteTest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +43,9 @@ pub fn value_names(spec: &Spec) -> Vec<&'static str> {
             ]);
         }
     }
+    if spec.emit_spiegelhalter {
+        out.push("spiegelhalter");
+    }
     if spec.emit_breaks {
         out.extend(["studentized", "cusum", "cusum_sq", "break_wald"]);
     }
@@ -51,11 +54,20 @@ pub fn value_names(spec: &Spec) -> Vec<&'static str> {
         // clock rules' `resets` and `drift_action = "reset"` (task 244).
         out.extend(["ljung_box", "breusch_pagan", "ramsey_reset"]);
     }
+    if spec.emit_arch_lm {
+        out.push("arch_lm");
+    }
+    if spec.emit_white {
+        out.push("white");
+    }
     if spec.emit_tails {
         out.extend(["skew", "kurtosis", "jarque_bera"]);
     }
     if spec.emit_influence {
         out.push("influence");
+    }
+    if spec.emit_cooks_distance {
+        out.push("cooks_distance");
     }
     out
 }
@@ -102,6 +114,9 @@ pub struct CheckCfg {
     /// The coefficients per slot, as `coef` lays them out: the features and
     /// the spec's intercept.
     width: usize,
+    /// Whether `cooks_distance_<slot>` is in the checks buffer (since
+    /// `influence_w` is shared with `emit_dfbetas`).
+    emit_cooks_distance: bool,
 }
 
 impl CheckCfg {
@@ -183,6 +198,7 @@ impl CheckCfg {
             combo_features,
             intercept: spec.fit_intercept || spec.k() == 0,
             width: spec.k() + usize::from(spec.fit_intercept),
+            emit_cooks_distance: spec.emit_cooks_distance,
         };
         // A least-squares fit with an intercept absorbs a level as an EW
         // mean at its own memory, and takes that part of every mean the
@@ -245,6 +261,15 @@ pub struct RowView<'a> {
     /// Each slot's error inflation for the row's features, where the model
     /// reads one (`ewridge`, `rls`, `kalman`); `None` stands in 1.
     pub inflation: Option<&'a [f64]>,
+    /// Each slot's unscaled Gram leverage `x' Gd⁻¹ x`, `Gd⁻¹ x` and
+    /// `diag(Gd⁻¹)` in original caller units when `emit_cooks_distance` or
+    /// `emit_dfbetas` is active.
+    pub gram_h: Option<&'a [f64]>,
+    pub gram_g_inv_x: Option<&'a [f64]>,
+    pub gram_diag: Option<&'a [f64]>,
+    /// Row weight (`0.0` on weightless rows) and scoring clock step.
+    pub w: f64,
+    pub score_d: f64,
     /// The targets and the features.
     pub ys: &'a [Option<f64>],
     pub xs: &'a [f64],
@@ -299,6 +324,20 @@ pub struct Checks {
     /// one per instance, not per slot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<FeatureHealth>,
+    /// Engle's ARCH LM accumulator per slot, under `emit_arch_lm`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arch_lm: Vec<ArchLm>,
+    /// White's heteroskedasticity accumulator per slot, under `emit_white`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub white: Vec<WhiteTest>,
+    /// Spiegelhalter's binary calibration z-test per slot, under
+    /// `emit_spiegelhalter`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spiegelhalter: Vec<Spiegelhalter>,
+    /// Weighted recursive residual spread per slot, under
+    /// `emit_cooks_distance` or `emit_dfbetas`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub influence_w: Vec<Influence>,
 }
 
 impl Checks {
@@ -342,17 +381,35 @@ impl Checks {
             health: spec
                 .emit_feature_health
                 .then(|| FeatureHealth::new(spec.k())),
+            arch_lm: vec![
+                ArchLm::new(spec.arch_lm_lags_or_default());
+                on(spec.emit_arch_lm, n_slots)
+            ],
+            white: vec![
+                WhiteTest::new(spec.k(), spec.white_interaction_terms_or_default());
+                on(spec.emit_white, n_slots)
+            ],
+            spiegelhalter: vec![Spiegelhalter::new(); on(spec.emit_spiegelhalter, n_slots)],
+            influence_w: vec![
+                Influence::new();
+                on(spec.emit_cooks_distance || spec.emit_dfbetas, n_slots)
+            ],
         }
     }
 
     /// Whether any switch is on: a spec with none keeps no `Checks`.
     pub fn any(spec: &Spec) -> bool {
         spec.emit_calibration
+            || spec.emit_spiegelhalter
             || spec.emit_breaks
             || spec.emit_robust_se
             || spec.emit_specification
+            || spec.emit_arch_lm
+            || spec.emit_white
             || spec.emit_tails
             || spec.emit_influence
+            || spec.emit_cooks_distance
+            || spec.emit_dfbetas
             || spec.emit_feature_health
     }
 
@@ -376,6 +433,20 @@ impl Checks {
             && self.influence.iter().all(Influence::has_shape)
             && self.health.is_some() == fresh.health.is_some()
             && self.health.as_ref().is_none_or(|h| h.has_shape(k))
+            && self.arch_lm.len() == fresh.arch_lm.len()
+            && self
+                .arch_lm
+                .iter()
+                .all(|a| a.has_shape(spec.arch_lm_lags_or_default()))
+            && self.white.len() == fresh.white.len()
+            && self
+                .white
+                .iter()
+                .all(|w| w.has_shape(k, spec.white_interaction_terms_or_default()))
+            && self.spiegelhalter.len() == fresh.spiegelhalter.len()
+            && self.spiegelhalter.iter().all(Spiegelhalter::has_shape)
+            && self.influence_w.len() == fresh.influence_w.len()
+            && self.influence_w.iter().all(Influence::has_shape)
             && self.specification.iter().all(|s| {
                 s.has_shape(
                     k,
@@ -400,6 +471,7 @@ impl Checks {
         self.specification
             .iter_mut()
             .for_each(Specification::clear_lags);
+        self.arch_lm.iter_mut().for_each(ArchLm::clear_lags);
         self.calibration
             .iter_mut()
             .for_each(Calibration::clear_lags);
@@ -489,6 +561,12 @@ impl Checks {
             }
             v += 2;
         }
+        if !self.spiegelhalter.is_empty() {
+            for (slot, s) in self.spiegelhalter.iter().enumerate() {
+                put(v, slot, s.z());
+            }
+            v += 1;
+        }
         if !self.breaks.is_empty() {
             let nc = cfg.combo_features.len().max(1);
             for (slot, b) in self.breaks.iter().enumerate() {
@@ -534,6 +612,20 @@ impl Checks {
             }
             v += 3;
         }
+        if !self.arch_lm.is_empty() {
+            for (slot, a) in self.arch_lm.iter().enumerate() {
+                put(v, slot, a.lm());
+            }
+            v += 1;
+        }
+        if !self.white.is_empty() {
+            let nc = cfg.combo_features.len().max(1);
+            for (slot, wt) in self.white.iter().enumerate() {
+                let idx = cfg.combo_features.get(slot % nc);
+                put(v, slot, idx.and_then(|idx| wt.lm(idx)));
+            }
+            v += 1;
+        }
         if !self.tails.is_empty() {
             for (slot, t) in self.tails.iter().enumerate() {
                 put(v, slot, t.skew());
@@ -549,7 +641,59 @@ impl Checks {
             }
             v += 1;
         }
+        if cfg.emit_cooks_distance && !self.influence_w.is_empty() {
+            let nc = cfg.combo_features.len().max(1);
+            let w_score = if row.w > 0.0 { row.w } else { 1.0 };
+            let lam = cfg.influence.factor(row.score_d);
+            for (slot, i) in self.influence_w.iter().enumerate() {
+                let e = row.resid.get(slot).copied().unwrap_or(f64::NAN);
+                let h_unit = row
+                    .gram_h
+                    .and_then(|g| g.get(slot).copied())
+                    .unwrap_or(f64::NAN);
+                let k_slot = cfg
+                    .combo_features
+                    .get(slot % nc)
+                    .map_or(cfg.width, |idx| idx.len() + usize::from(cfg.intercept));
+                put(v, slot, i.cooks_distance(e, h_unit, w_score, lam, k_slot));
+            }
+            v += 1;
+        }
         let _ = v;
+    }
+
+    /// Every slot's per-coefficient DFBETAS for this row, flattened in `coef`'s
+    /// layout: `None` until any slot has a finite entry.
+    pub fn dfbetas(&self, cfg: &CheckCfg, row: &RowView<'_>, n_slots: usize) -> Option<Vec<f64>> {
+        if self.influence_w.is_empty() {
+            return None;
+        }
+        let (Some(gram_h), Some(g_inv_x), Some(diag)) =
+            (row.gram_h, row.gram_g_inv_x, row.gram_diag)
+        else {
+            return None;
+        };
+        let width = cfg.width;
+        let w_score = if row.w > 0.0 { row.w } else { 1.0 };
+        let mut out = vec![f64::NAN; n_slots * width];
+        let mut any = false;
+        for (slot, i) in self.influence_w.iter().enumerate().take(n_slots) {
+            let base = slot * width;
+            if base + width > g_inv_x.len() || base + width > diag.len() {
+                continue;
+            }
+            let e = row.resid.get(slot).copied().unwrap_or(f64::NAN);
+            let h_unit = gram_h.get(slot).copied().unwrap_or(f64::NAN);
+            any |= i.dfbetas_into(
+                e,
+                h_unit,
+                w_score,
+                &g_inv_x[base..base + width],
+                &diag[base..base + width],
+                &mut out[base..base + width],
+            );
+        }
+        any.then_some(out)
     }
 
     /// Write each feature's health before the row, under
@@ -597,6 +741,13 @@ impl Checks {
                 c.update(row.preds[slot], y, lam, wd);
             }
         }
+        if !self.spiegelhalter.is_empty() {
+            let lam = cfg.calibration.factor(d_clock);
+            for (slot, s) in self.spiegelhalter.iter_mut().enumerate() {
+                let y = row.ys.get(slot / nc).copied().flatten().unwrap_or(f64::NAN);
+                s.update(row.preds[slot], y, lam, wd);
+            }
+        }
         if !self.breaks.is_empty() {
             let lam = cfg.breaks.factor(d_clock);
             for (slot, b) in self.breaks.iter_mut().enumerate() {
@@ -624,6 +775,27 @@ impl Checks {
                 i.update(e, infl, lam, wd);
             }
         }
+        if !self.influence_w.is_empty() {
+            let lam = cfg.influence.factor(d_clock);
+            for (slot, i) in self.influence_w.iter_mut().enumerate() {
+                let e = row.resid.get(slot).copied().unwrap_or(f64::NAN);
+                let h_unit = row
+                    .gram_h
+                    .and_then(|g| g.get(slot).copied())
+                    .unwrap_or_else(|| {
+                        let infl = row
+                            .inflation
+                            .and_then(|v| v.get(slot).copied())
+                            .unwrap_or(f64::NAN);
+                        if infl.is_finite() && infl >= 1.0 {
+                            (infl * infl - 1.0).max(0.0)
+                        } else {
+                            f64::NAN
+                        }
+                    });
+                i.update_weighted(e, h_unit, lam, wd);
+            }
+        }
         if !self.tails.is_empty() {
             let lam = cfg.tails.factor(d_clock);
             for (slot, t) in self.tails.iter_mut().enumerate() {
@@ -635,6 +807,20 @@ impl Checks {
             for (slot, s) in self.specification.iter_mut().enumerate() {
                 let e = row.resid.get(slot).copied().unwrap_or(f64::NAN);
                 s.update(row.xs, row.preds[slot], e, lam, wd);
+            }
+        }
+        if !self.arch_lm.is_empty() {
+            let lam = cfg.specification.factor(d_clock);
+            for (slot, a) in self.arch_lm.iter_mut().enumerate() {
+                let e = row.resid.get(slot).copied().unwrap_or(f64::NAN);
+                a.update(e, lam, wd);
+            }
+        }
+        if !self.white.is_empty() {
+            let lam = cfg.specification.factor(d_clock);
+            for (slot, wt) in self.white.iter_mut().enumerate() {
+                let e = row.resid.get(slot).copied().unwrap_or(f64::NAN);
+                wt.update(row.xs, e, lam, wd);
             }
         }
         if !self.sandwich.is_empty() {

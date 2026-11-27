@@ -70,6 +70,9 @@ pub struct ChunkOut {
     /// and West's, laid out like `se_coef` (docs/PLAN.md task 221 (c)).
     pub se_coef_hc0: Vec<Vec<Option<Vec<f64>>>>,
     pub se_coef_hac: Vec<Vec<Option<Vec<f64>>>>,
+    /// Per-coefficient DFBETAS under `emit_dfbetas`, laid out like `coef`,
+    /// written on every scored row (empty when `emit_dfbetas` is false).
+    pub dfbetas: Vec<Vec<Option<Vec<f64>>>>,
     /// `n_rows` each under `emit_clocks`, else empty: the row's own clock,
     /// and the newest learned row's when it was scored (task 152).
     pub scored_clock: Vec<Option<ClockValue>>,
@@ -193,6 +196,7 @@ impl ChunkOut {
             se_coef: Vec::new(),
             se_coef_hc0: Vec::new(),
             se_coef_hac: Vec::new(),
+            dfbetas: Vec::new(),
             scored_clock: Vec::new(),
             learned_clock: Vec::new(),
             smoothed_coef: Vec::new(),
@@ -312,6 +316,12 @@ impl ChunkOut {
         lists(&mut self.se_coef, n_models, n_rows);
         lists(&mut self.se_coef_hc0, n_models, n_rows);
         lists(&mut self.se_coef_hac, n_models, n_rows);
+        let dfb = if spec.emit_dfbetas && spec.has_row_error_inflation() {
+            n_models
+        } else {
+            0
+        };
+        lists(&mut self.dfbetas, dfb, n_rows);
         let clocks = if spec.emit_clocks { n_rows } else { 0 };
         fill(&mut self.scored_clock, clocks, None);
         fill(&mut self.learned_clock, clocks, None);
@@ -394,6 +404,7 @@ impl ChunkOut {
             &self.se_coef,
             &self.se_coef_hc0,
             &self.se_coef_hac,
+            &self.dfbetas,
             &self.smoothed_coef,
             &self.smoothed_se,
         ]

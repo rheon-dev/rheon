@@ -175,6 +175,8 @@ FAMILIES: tuple[Family, ...] = (
                 "ewm_rate",
                 "rolling_max",
                 "rolling_min",
+                "rolling_quantile",
+                "rolling_rank",
                 "increment",
                 "cross_mean",
                 "cross_std",
@@ -208,7 +210,15 @@ FAMILIES: tuple[Family, ...] = (
         "eval",
         tuple(
             f"{_RP}.eval.{m}"
-            for m in ("compare_specs", "grid_search", "diebold_mariano", "clark_west", "seqtest")
+            for m in (
+                "compare_specs",
+                "grid_search",
+                "diebold_mariano",
+                "clark_west",
+                "giacomini_white",
+                "seqtest",
+                "mean_seqtest",
+            )
         ),
     ),
     Family(

@@ -83,6 +83,45 @@ impl Acc {
         }
     }
 
+    /// The sums of a point-mass mean seen `f` of a discount later: the mean
+    /// stays where it is and its weight scales by `f`.
+    #[inline]
+    pub(super) fn scaled_point(self, f: f64) -> Acc {
+        Acc {
+            s: self.s,
+            w: f * self.w,
+            n: self.n,
+            ..Acc::default()
+        }
+    }
+
+    /// Both point-mass mean segments joined at one anchor: `W = W_a + W_b`,
+    /// `m = m_a + (m_b - m_a) * (W_b / W)`, using `(m_b - m_a) / W` for a
+    /// single row (`W_b == 1.0`) so unwindowed streaming matches Polars'
+    /// `ewm_mean(adjust=True)` to the bit.
+    #[inline]
+    pub(super) fn plus_point(self, o: Acc) -> Acc {
+        let n = self.n + o.n;
+        if o.w <= 0.0 {
+            return Acc { n, ..self };
+        }
+        if self.w <= 0.0 {
+            return Acc { n, ..o };
+        }
+        let w = self.w + o.w;
+        let s = if o.w == 1.0 {
+            self.s + (o.s - self.s) / w
+        } else {
+            self.s + (o.s - self.s) * (o.w / w)
+        };
+        Acc {
+            s,
+            w,
+            n,
+            ..Acc::default()
+        }
+    }
+
     /// Read from a stack's arena: three fields, or a variance-wide queue's
     /// six.
     #[inline]
@@ -190,4 +229,33 @@ pub(super) fn then_by(
         Direction::Backward => (a.scaled(f, var).plus(b, var), b_at),
         Direction::Forward => (a.plus(b.scaled(f, var), var), a_at),
     }
+}
+
+/// [`then_by`] for a point-mass mean (`Stat::PointMean`).
+#[inline]
+pub(super) fn then_by_point(
+    k: &KernelDef,
+    f: f64,
+    a: Acc,
+    a_at: f64,
+    b: Acc,
+    b_at: f64,
+) -> (Acc, f64) {
+    match k.direction {
+        Direction::Backward => (a.scaled_point(f).plus_point(b), b_at),
+        Direction::Forward => (a.plus_point(b.scaled_point(f)), a_at),
+    }
+}
+
+/// [`then`] for a point-mass mean (`Stat::PointMean`).
+#[inline]
+pub(super) fn then_point(
+    k: &KernelDef,
+    m: &mut DecayMemo,
+    a: Acc,
+    a_at: f64,
+    b: Acc,
+    b_at: f64,
+) -> (Acc, f64) {
+    then_by_point(k, k.discount_in(b_at - a_at, m), a, a_at, b, b_at)
 }

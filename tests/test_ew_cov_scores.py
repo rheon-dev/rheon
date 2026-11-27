@@ -772,7 +772,10 @@ class TestValidation:
 
     def test_mahal_is_listed_as_a_statistic(self):
         with pytest.raises(
-            ValueError, match='"mean", "var", "std", "cov", "corr", "partial_corr", "mahal"'
+            ValueError,
+            match=(
+                '"mean", "var", "std", "cov", "raw_cov", "corr", "partial_corr", "mahal", "loglik"'
+            ),
         ):
             spec(2, stats=["nonsense"])
 

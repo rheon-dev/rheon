@@ -42,10 +42,12 @@ temporal one. Each operator then reads the weighted rows its own way:
 
 | operator | how it weighs the window's rows | what it is held to |
 |---|---|---|
-| `rp.ops.ewm_mean` | each value is held over the interval ending at its row and weighed by that interval's decayed time, so a burst of rows does not outweigh a quiet period, and a row at a repeated clock value moves no mean. Looking ahead, each value is held until the next row | `ewm_mean_by` |
+| `rp.ops.ewm_mean` | by default (`adjust=None`), each value is held over the interval ending at its row and weighed by that interval's decayed time, so a burst of rows does not outweigh a quiet period, and a row at a repeated clock value moves no mean. Looking ahead, each value is held until the next row. With `adjust=True`, each row is a point mass weighed by `0.5 ** (age / half_life)` | `ewm_mean_by` (`adjust=None`); Polars' `ewm_mean(adjust=True)` on a row clock (`adjust=True`) |
 | `rp.ops.ewm_sum` | `Σ 0.5 ** (age / half_life) · x`, each row counted once at its own time. Every row at a repeated clock value carries that value's total. A window with no row with a value sums to 0.0 under the default `min_samples=0`, and is null under 1 or more | `ewm_sum_by` on distinct clock values, whose sum at a repeated one runs row by row; `rolling_sum_by`, empty windows included |
 | `rp.ops.ewm_rate` | the sum divided by the decayed time the window covers: a quantity per unit of clock | the sum and the decayed time, each as above |
 | `rp.ops.ewm_quantile` | each row weighed as `rp.ops.ewm_sum` weighs it ([Quantiles and a robust scale](#quantiles-and-a-robust-scale)) | numpy's weighted quantile (`inverted_cdf`), within 0.78% |
+| `rp.ops.rolling_quantile` | exact quantile of the unweighted values in the window (`window_size` required), kept in an order-statistic tree, with Polars' six `interpolation` rules (`"nearest"`, `"higher"`, `"lower"`, `"midpoint"`, `"linear"`, `"equiprobable"`) | Polars' `rolling_quantile_by`, bit for bit (missing NaN/infinity excluded) |
+| `rp.ops.rolling_rank` | exact rank of each row's value among the window's unweighted values (`window_size` required, `closed="right"` or `"both"`), under `"average"`, `"min"`, `"max"` or `"dense"` | Polars' `rolling_rank_by`, bit for bit (missing NaN/infinity excluded) |
 | `rp.ops.rolling_max`, `rp.ops.rolling_min` | every row of the window counts once, whatever its age, so there is no `half_life`; with no `window_size`, every row since the stretch began or since the last `since` event ([The largest and smallest value, and since an event](#the-largest-and-smallest-value-and-since-an-event)) | `rolling_max_by` and `rolling_min_by`, bit for bit, a NaN or an infinity read as missing where Polars lets a NaN make the window NaN and counts an infinity |
 | `rp.ops.ewm_var`, `rp.ops.ewm_std` | about `rp.ops.ewm_mean`, each value weighed as the mean weighs it, and looking back only. With `bias=False`, the default, the variance is corrected for the weights' number and inequality, so a window that one row's weight fills is null. A window that holds one value gives 0 exactly | `ewm_var` and `ewm_std` with `adjust=False`, on a clock that steps by 1 a row with `half_life` in rows and an input with no nulls: a null row moves nothing here and the last value is held across the longer step to the next value, which no `ignore_nulls` setting of Polars' does. Polars before 1.44 gave the first row 0.0 under `bias=False`, where it now gives null, as these do |
 | `rp.ops.ewm_moments` | one term of the moments of one or more columns, each perhaps lagged (`{"x": 3}`, `{"x": 1, "x@1": 1}`), each row weighed by its held interval's decayed time as `rp.ops.ewm_var` weighs it, and looking back only. The moments are merged a row at a time by Pébay's rule, so a column far from zero keeps its higher moments. Under `window_size` a row is in the window by its clock value and weighs its whole interval, where `rp.ops.ewm_var` counts only the oldest row's part inside the window. A lag pairs each row with the latest row at or before `t - k`, within `lag_tolerance` | numpy's weighted averages of the deviations' products over the window's rows; scipy's `moment`, `skew`, `kurtosis` and `kstat` at equal weights; `rp.spec.ewm_moments` fed the same weights, to the bit |
@@ -343,6 +345,19 @@ shared laptop at a load average of 8 to 12.
 [Weight rows by a robust scale of the target](how-to/weight-rows-by-a-robust-scale.md)
 shows how to make a MAD scale with `rp.ops.ewm_quantile`, and weight each row
 by it without reading targets not yet known.
+
+**For an exact unweighted quantile or rank over a bounded window, use
+`rp.ops.rolling_quantile` and `rp.ops.rolling_rank`.** Both require a
+`window_size` and keep each group's active window in an order-statistic tree,
+so insertions, deletions and order queries run in `O(log W)` time per row.
+`rp.ops.rolling_quantile` supports all six Polars `interpolation` rules
+(`"nearest"`, `"higher"`, `"lower"`, `"midpoint"`, `"linear"` and
+`"equiprobable"`) and matches `rolling_quantile_by` bit for bit (treating NaN,
+infinity and values beyond `1e100` as missing). `rp.ops.rolling_rank` returns
+each row's rank within its window (`closed="right"` or `"both"`, under
+`"average"`, `"min"`, `"max"` or `"dense"`), matching `rolling_rank_by` bit
+for bit. Both bound each group's window state by `max_state_bytes` (256 KB
+by default, at most 64 MiB).
 
 ## Across groups at one stamp
 

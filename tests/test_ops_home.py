@@ -51,6 +51,8 @@ NEVER_AT_ROOT = (
     "ewm_profile",
     "rolling_max",
     "rolling_min",
+    "rolling_quantile",
+    "rolling_rank",
     "tick_sign",
     "run_length",
     "clock_lag",

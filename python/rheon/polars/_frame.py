@@ -798,6 +798,7 @@ _ORDER_FREE_ONLY_WHEN: dict[str, tuple[Any, ...]] = {
     # Task 221's diagnostics keep a state of their own, whose order-freeness
     # is unmeasured: denied until it is.
     "emit_calibration": (False,),
+    "emit_spiegelhalter": (False,),
     "calibration_half_life": (None,),
     "emit_breaks": (False,),
     "breaks_half_life": (None,),
@@ -805,12 +806,18 @@ _ORDER_FREE_ONLY_WHEN: dict[str, tuple[Any, ...]] = {
     "robust_se_half_life": (None,),
     "robust_se_lags": (None,),
     "emit_specification": (False,),
+    "emit_arch_lm": (False,),
+    "arch_lm_lags": (None,),
+    "emit_white": (False,),
+    "white_interaction_terms": (None,),
     "specification_half_life": (None,),
     "ljung_box_lags": (None,),
     "horizon_rows": (None,),
     "emit_tails": (False,),
     "tails_half_life": (None,),
     "emit_influence": (False,),
+    "emit_cooks_distance": (False,),
+    "emit_dfbetas": (False,),
     "influence_half_life": (None,),
     "emit_feature_health": (False,),
     "feature_health_half_life": (None,),
@@ -1192,7 +1199,7 @@ def _specs_of(specs: Specs | ModelBank | State, what: str) -> list[dict[str, Any
 
 #: The fields laid out like ``coef``, one value per coefficient, longest
 #: prefix first.
-_BESIDE_COEF = ("support_coef", "se_coef_hc0", "se_coef_hac", "se_coef")
+_BESIDE_COEF = ("support_coef", "se_coef_hc0", "se_coef_hac", "se_coef", "dfbetas")
 
 
 def _unnest_exprs(

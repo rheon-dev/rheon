@@ -83,6 +83,101 @@ impl Influence {
             }
         }
     }
+
+    /// Fold the weighted recursive residual `v² = w e² / (1 + w h_unit)` into
+    /// the spread used by Cook's distance and DFBETAS, where `h_unit = x' Gd⁻¹ x`
+    /// is the unscaled leverage against the decayed Gram `Gd = lam * G`.
+    pub fn update_weighted(&mut self, e: f64, h_unit: f64, lam: f64, w: f64) {
+        self.w *= lam;
+        self.q *= lam;
+        if e.is_finite() && h_unit.is_finite() && h_unit >= 0.0 && w > 0.0 {
+            let h = w * h_unit;
+            let v2 = w * e * e / (1.0 + h);
+            let q = self.q + v2;
+            if q.is_finite() {
+                self.w += w;
+                self.q = q;
+            }
+        }
+    }
+
+    /// Cook's distance of this row against the fit before it:
+    /// `D = (w e² h / (1 + h)) / (k_total * s²)` where `h = w * h_unit` and
+    /// `s² = (lam * Q_c + v²) / (lam * W_c + w)` is the full weighted mean
+    /// square including this row. `None` before any prior spread or on missing
+    /// / zero-weight inputs.
+    pub fn cooks_distance(
+        &self,
+        e: f64,
+        h_unit: f64,
+        w: f64,
+        lam: f64,
+        k_total: usize,
+    ) -> Option<f64> {
+        if !(e.is_finite() && h_unit.is_finite() && h_unit >= 0.0 && w > 0.0 && lam > 0.0)
+            || k_total == 0
+            || self.w <= 0.0
+            || self.q <= 0.0
+        {
+            return None;
+        }
+        let h = w * h_unit;
+        let v2 = w * e * e / (1.0 + h);
+        let w_full = lam * self.w + w;
+        let q_full = lam * self.q + v2;
+        if !(w_full > 0.0 && q_full > 0.0 && q_full.is_finite()) {
+            return None;
+        }
+        let s2_full = q_full / w_full;
+        Some((v2 * h) / (k_total as f64 * s2_full))
+    }
+
+    /// Per-coefficient DFBETAS in original caller units into `out` (length
+    /// `k_total`), returning `true` if at least one entry is finite:
+    /// `DFBETAS_j = (g_inv_x[j] * w * e / (1 + h)) / (s_(i) * sqrt(diag_g_inv[j] - w * g_inv_x[j]² / (1 + h)))`
+    /// where `s_(i)² = Q_c / W_c` is the external spread before this row.
+    pub fn dfbetas_into(
+        &self,
+        e: f64,
+        h_unit: f64,
+        w: f64,
+        g_inv_x: &[f64],
+        diag_g_inv: &[f64],
+        out: &mut [f64],
+    ) -> bool {
+        out.fill(f64::NAN);
+        if !(e.is_finite() && h_unit.is_finite() && h_unit >= 0.0 && w > 0.0)
+            || self.w <= 0.0
+            || self.q <= 0.0
+            || g_inv_x.len() != out.len()
+            || diag_g_inv.len() != out.len()
+        {
+            return false;
+        }
+        let h = w * h_unit;
+        let s_ext = (self.q / self.w).sqrt();
+        if !(s_ext > 0.0 && s_ext.is_finite()) {
+            return false;
+        }
+        let scale = w * e / (1.0 + h);
+        let mut any = false;
+        for j in 0..out.len() {
+            let uj = g_inv_x[j];
+            let dj = diag_g_inv[j];
+            if !(uj.is_finite() && dj.is_finite()) {
+                continue;
+            }
+            let post_var = dj - w * uj * uj / (1.0 + h);
+            if post_var > 0.0 && post_var.is_finite() {
+                let val = (uj * scale) / (s_ext * post_var.sqrt());
+                if val.is_finite() {
+                    out[j] = val;
+                    any = true;
+                }
+            }
+        }
+        any
+    }
 }
 
 #[cfg(test)]

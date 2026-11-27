@@ -644,6 +644,12 @@ impl EwCov {
     /// numerically indefinite `M` gets the same jitter the regressions use).
     /// `None` when no prior was configured or the solve fails.
     pub fn precision(&self) -> Option<Vec<f64>> {
+        self.precision_with_log_det().map(|(p, _)| p)
+    }
+
+    /// [`Self::precision`] together with `ln det(C + s·prior·I)` from the
+    /// same Cholesky factorization.
+    pub(crate) fn precision_with_log_det(&self) -> Option<(Vec<f64>, f64)> {
         debug_assert!(
             !self.has_pending(),
             "EwCov: read the moments with a block still pending; call `flush()` first"
@@ -660,7 +666,7 @@ impl EwCov {
         }
         // Columns of the solution are columns of the inverse; the identity is
         // symmetric, so its column-major layout is the same array.
-        let (x, _) = crate::solve::solve_spd(&m, &eye, k, k)?;
+        let (x, log_det) = crate::solve::solve_spd_with_log_det(&m, &eye, k, k)?;
         let mut p = vec![0.0; k * k];
         for i in 0..k {
             for j in i..k {
@@ -669,7 +675,7 @@ impl EwCov {
                 p[j * k + i] = v;
             }
         }
-        p.iter().all(|v| v.is_finite()).then_some(p)
+        (p.iter().all(|v| v.is_finite()) && log_det.is_finite()).then_some((p, log_det))
     }
 
     #[inline]
@@ -1851,6 +1857,10 @@ pub enum EwCovStat {
     Std,
     /// Centered covariance for each unordered pair `i < j`.
     Cov,
+    /// Uncentered second moment `E_w[x_i x_j] = C_ij + m_i m_j` (divisor `W`,
+    /// regardless of `bias`) for every upper-triangle pair `i <= j`, including
+    /// the diagonal `i == j`: `k(k + 1)/2` slots (docs/PLAN.md task 517).
+    RawCov,
     /// Pearson correlation for each unordered pair `i < j`.
     Corr,
     /// Partial correlation for each unordered pair, controlling for every other
@@ -1860,6 +1870,11 @@ pub enum EwCovStat {
     /// `sqrt((x − μ)ᵀ (C + s·prior·I)⁻¹ (x − μ))`, read before the row is
     /// learned (docs/ENHANCEMENTS.md E37). One slot. Needs `precision_prior`.
     Mahal,
+    /// Out-of-sample Gaussian log-density
+    /// `-0.5 * (k ln(2π) + ln|S| + (x − μ)ᵀ S⁻¹ (x − μ))` with
+    /// `S = c (C + s·prior·I)`, read before the row is learned
+    /// (docs/PLAN.md task 517). One slot. Needs `precision_prior`.
+    Loglik,
     /// Lagged cross-correlation `C_ℓ[a,b] / √(C₀[a,a]·C₀[b,b])` for every
     /// lag and **ordered** pair, the auto terms included: `k²` slots a lag
     /// (docs/ENHANCEMENTS.md E56). The matrix is not symmetric for `ℓ > 0`
@@ -2034,6 +2049,13 @@ impl EwCovCfg {
                  learned. Set precision_prior, such as 1e-6, or leave \"mahal\" out of stats.",
             );
         }
+        if self.stats.contains(&EwCovStat::Loglik) && self.precision_prior.is_none() {
+            no.refuse(
+                "ew_cov: \"loglik\" in stats needs precision_prior, but it is not set: the \
+                 Gaussian log-likelihood inverts the regularized covariance matrix. Set \
+                 precision_prior, such as 1e-6, or leave \"loglik\" out of stats.",
+            );
+        }
         if !self.mahal_quantiles.is_empty() && !self.stats.contains(&EwCovStat::Mahal) {
             no.refuse(
                 "ew_cov: mahal_quantiles needs \"mahal\" in stats, but stats does not list it. \
@@ -2144,7 +2166,8 @@ impl EwCovCfg {
         match stat {
             EwCovStat::Mean | EwCovStat::Var | EwCovStat::Std => k,
             EwCovStat::Cov | EwCovStat::Corr | EwCovStat::PartialCorr => k * (k - 1) / 2,
-            EwCovStat::Mahal => 1,
+            EwCovStat::RawCov => k * (k + 1) / 2,
+            EwCovStat::Mahal | EwCovStat::Loglik => 1,
             // Both orientations and the auto terms: the lagged matrix is
             // not symmetric.
             EwCovStat::LagCorr => self.lags.len() * k * k,
@@ -2486,6 +2509,16 @@ impl EwCovModel {
         Self::mahal_of(&view, x, self.second_moment_scale(&view))
     }
 
+    /// Out-of-sample Gaussian log-density of `x` under the moments kept (or
+    /// the window's moments under a `window`), in the metric of
+    /// `scale·(C + s·prior·I)`: `-0.5 * (k ln(2π) + ln|S| + (x − μ)ᵀ S⁻¹ (x − μ))`.
+    /// NaN when `precision_prior` is not set, `scale` is not finite/positive,
+    /// or the matrix fails to factorize.
+    pub fn loglik(&self, x: &[f64]) -> f64 {
+        let view = self.view();
+        Self::mahal_and_loglik_of(&view, x, self.second_moment_scale(&view)).1
+    }
+
     /// What the second moments read from `cov` are multiplied by
     /// ([`EwCovCfg::bias`]): 1 under `bias`, and otherwise
     /// [`EwCov::unbiased_factor`], NaN while the read holds fewer than two
@@ -2526,6 +2559,17 @@ impl EwCovModel {
     /// the same factorization, its inverse formed and read where `mahal_of`
     /// solves against the row; the two agree to rounding.
     fn mahal_by(cov: &EwCov, x: &[f64], p: &[f64], scale: f64) -> f64 {
+        let d2 = Self::quad_by(cov, x, p, scale);
+        if d2.is_finite() {
+            d2.max(0.0).sqrt()
+        } else {
+            f64::NAN
+        }
+    }
+
+    /// Squared Mahalanobis form `(x − μ)ᵀ (scale·(C + s·prior·I))⁻¹ (x − μ)`
+    /// from the unscaled precision `p = (C + s·prior·I)⁻¹`.
+    fn quad_by(cov: &EwCov, x: &[f64], p: &[f64], scale: f64) -> f64 {
         let k = cov.k();
         let delta: Vec<f64> = x
             .iter()
@@ -2543,11 +2587,62 @@ impl EwCovModel {
                     .sum::<f64>()
             })
             .sum();
-        let d2 = quad / scale;
-        if d2.is_finite() {
-            d2.max(0.0).sqrt()
-        } else {
-            f64::NAN
+        quad / scale
+    }
+
+    /// Gaussian log-density from squared Mahalanobis form `d2`, dimension `k`,
+    /// `log_det_base = ln det(C + s·prior·I)`, and `scale`.
+    fn loglik_from_quad(k: usize, scale: f64, log_det_base: f64, d2: f64) -> f64 {
+        if !(scale.is_finite() && scale > 0.0 && log_det_base.is_finite() && d2.is_finite()) {
+            return f64::NAN;
+        }
+        let kf = k as f64;
+        let q = d2.max(0.0);
+        let log_det = log_det_base + kf * scale.ln();
+        -0.5 * (kf * std::f64::consts::TAU.ln() + log_det + q)
+    }
+
+    /// Both Mahalanobis distance and Gaussian log-density of `x` from one
+    /// Cholesky factorization in this thread's [`MAHAL_WORK`].
+    fn mahal_and_loglik_of(cov: &EwCov, x: &[f64], scale: f64) -> (f64, f64) {
+        let mut work = MAHAL_WORK.take().unwrap_or_default();
+        let pair = Self::mahal_and_loglik_in(cov, x, scale, &mut work);
+        MAHAL_WORK.set(Some(work));
+        pair
+    }
+
+    fn mahal_and_loglik_in(cov: &EwCov, x: &[f64], scale: f64, work: &mut MahalWork) -> (f64, f64) {
+        if !cov.has_precision_prior() {
+            return (f64::NAN, f64::NAN);
+        }
+        let k = cov.k();
+        let MahalWork {
+            factor,
+            order,
+            quad,
+            delta,
+        } = work;
+        if *order != k {
+            factor.drop_spares();
+            *order = k;
+        }
+        delta.clear();
+        delta.extend(x.iter().enumerate().map(|(i, &xi)| cov.deviation(i, xi)));
+        let ridge = cov.precision_prior * cov.precision_scale;
+        match factor.factor_ridged(cov.comoments().packed(), ridge, k) {
+            Some(f) => {
+                let d2 = f.solve_dot(delta, quad) / scale;
+                let log_det_base = f.log_det();
+                factor.give(f);
+                let mahal = if d2.is_finite() {
+                    d2.max(0.0).sqrt()
+                } else {
+                    f64::NAN
+                };
+                let ll = Self::loglik_from_quad(k, scale, log_det_base, d2);
+                (mahal, ll)
+            }
+            None => (f64::NAN, f64::NAN),
         }
     }
 
@@ -2708,6 +2803,13 @@ impl EwCovModel {
                         }
                     }
                 }
+                EwCovStat::RawCov => {
+                    for i in 0..names.len() {
+                        for j in i..names.len() {
+                            out.push(format!("raw_cov_{}_{}", names[i], names[j]));
+                        }
+                    }
+                }
                 EwCovStat::Corr => {
                     for i in 0..names.len() {
                         for j in (i + 1)..names.len() {
@@ -2723,6 +2825,7 @@ impl EwCovModel {
                     }
                 }
                 EwCovStat::Mahal => out.push("mahal".to_string()),
+                EwCovStat::Loglik => out.push("loglik".to_string()),
                 EwCovStat::LagCorr => {
                     for l in lags {
                         for a in names {
@@ -2769,13 +2872,26 @@ impl EwCovModel {
         // multiplication is exact. The correlations read the co-moments as
         // kept: the factor cancels from them.
         let scale = self.second_moment_scale(cov);
-        // One O(k³) solve per row, only when partial correlations are wanted.
-        let precision = self
-            .cfg
-            .stats
-            .contains(&EwCovStat::PartialCorr)
-            .then(|| cov.precision())
-            .flatten();
+        // One O(k³) factorization per row across `partial_corr`, `mahal` and
+        // `loglik`: when `partial_corr` is absent and `loglik` is asked, a
+        // single Cholesky factor computes both `mahal` and `loglik`; when
+        // `partial_corr` is asked too, `precision_with_log_det` yields both
+        // the inverse and `ln|C + s·prior·I|` from one factorization.
+        let want_partial = self.cfg.stats.contains(&EwCovStat::PartialCorr);
+        let want_loglik = self.cfg.stats.contains(&EwCovStat::Loglik);
+        let (precision, log_det_base) = if want_partial {
+            match cov.precision_with_log_det() {
+                Some((p, ld)) => (Some(p), Some(ld)),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+        let mahal_loglik = if !want_partial && want_loglik {
+            Some(Self::mahal_and_loglik_of(cov, x, scale))
+        } else {
+            None
+        };
         for stat in &self.cfg.stats {
             match stat {
                 EwCovStat::Mean => {
@@ -2799,6 +2915,16 @@ impl EwCovModel {
                     // `w` any `k` numbers: this `f` reads none.
                     cov.comoments()
                         .upper_rows_map(k, dst, cov.means(), |v, _, _| scale * v);
+                }
+                EwCovStat::RawCov => {
+                    let dst = slots(&mut rest, k * (k + 1) / 2);
+                    let mut idx = 0;
+                    for i in 0..k {
+                        for j in i..k {
+                            dst[idx] = cov.raw(i, j);
+                            idx += 1;
+                        }
+                    }
                 }
                 EwCovStat::Corr => {
                     // `k` square roots, not `k(k-1)`: at k = 20 the pairwise
@@ -2826,9 +2952,20 @@ impl EwCovModel {
                 // asked for it: the same matrix factorized again was a
                 // second `k³` a row (task 270, A-2).
                 EwCovStat::Mahal => {
-                    slots(&mut rest, 1)[0] = match &precision {
-                        Some(p) => Self::mahal_by(cov, x, p, scale),
-                        None => Self::mahal_of(cov, x, scale),
+                    slots(&mut rest, 1)[0] = match (&precision, mahal_loglik) {
+                        (Some(p), _) => Self::mahal_by(cov, x, p, scale),
+                        (None, Some((m, _))) => m,
+                        (None, None) => Self::mahal_of(cov, x, scale),
+                    }
+                }
+                EwCovStat::Loglik => {
+                    slots(&mut rest, 1)[0] = match (&precision, log_det_base, mahal_loglik) {
+                        (Some(p), Some(ld), _) => {
+                            let d2 = Self::quad_by(cov, x, p, scale);
+                            Self::loglik_from_quad(k, scale, ld, d2)
+                        }
+                        (_, _, Some((_, ll))) => ll,
+                        _ => f64::NAN,
                     }
                 }
                 EwCovStat::LagCorr => {

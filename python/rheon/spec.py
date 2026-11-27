@@ -286,11 +286,14 @@ the diagnostics
     ``emit_autocorr`` with ``resid_autocorr_lag``, ``emit_drift`` with
     ``drift_delta``, ``drift_threshold``, ``drift_action``, ``drift_kind``
     and ``drift_options``,
-    ``emit_calibration`` with ``calibration_half_life``, ``emit_breaks`` with
-    ``breaks_half_life``, ``emit_robust_se`` with ``robust_se_half_life`` and
-    ``robust_se_lags``, ``emit_specification`` with ``specification_half_life``
-    and ``ljung_box_lags``, ``horizon_rows`` beside any of those four,
-    ``emit_tails`` with ``tails_half_life``, ``emit_influence`` with
+    ``emit_calibration`` and ``emit_spiegelhalter`` with
+    ``calibration_half_life``, ``emit_breaks`` with ``breaks_half_life``,
+    ``emit_robust_se`` with ``robust_se_half_life`` and ``robust_se_lags``,
+    ``emit_specification``, ``emit_arch_lm`` with ``arch_lm_lags``, and
+    ``emit_white`` with ``white_interaction_terms`` (all sharing
+    ``specification_half_life`` and ``ljung_box_lags``), ``horizon_rows``
+    beside any of those four, ``emit_tails`` with ``tails_half_life``,
+    ``emit_influence``, ``emit_cooks_distance`` and ``emit_dfbetas`` with
     ``influence_half_life``, ``emit_feature_health`` with
     ``feature_health_half_life``, and ``emit_clocks``. Each adds fields to the
     output, listed below. A model with no residual refuses them by name, all
@@ -556,6 +559,7 @@ target, so their fields take no suffix:
     support_coef{instance}                      | @h{half-life}    half-life grid (@h600, @h10m)
     se_coef{instance}                           emit_se_coef
     se_coef_hc0{instance}, se_coef_hac{instance}  emit_robust_se
+    dfbetas{instance}                           emit_dfbetas
     penalty_selected_{target}{instance}         lasso: the path point in force
     weight_{target}{instance}                   emit_target_weight: its min_weight's weight
     selected_{target}                           emit_selected: the chosen slot
@@ -909,6 +913,13 @@ The diagnostics add, per slot:
        - q) / sqrt(q (1 - q))``. Read as a mean's, a stable fit at ``q =
        0.9`` flagged both on every row; as a quantile's, on 0-1.7% and
        0.4-6.7% of rows at their 5% values.
+   * - ``emit_spiegelhalter``
+     - ``spiegelhalter_<slot>``
+     - Spiegelhalter's (1986) z-statistic testing calibration of binary
+       probability predictions against a 0/1 target, sharing
+       ``calibration_half_life``. Run once (``inf``) it matches MAPIE's
+       ``spiegelhalter_statistic``. Refused on non-logistic models (accepted
+       by ``ftrl``, ``sgd(loss="logistic")`` and ``glm(family="binomial")``).
    * - ``emit_breaks``
      - ``studentized_<slot>``, ``cusum_<slot>``, ``cusum_sq_<slot>``,
        ``break_wald_<slot>``
@@ -1033,6 +1044,24 @@ The diagnostics add, per slot:
        West's variance at twice it in lags: beside a five-row look-ahead
        target and AR(1) features at 0.5-0.95 their ``n R2`` forms passed
        their 5% values on 10-39% of rows, the Wald forms on 3.1-5.2%.
+   * - ``emit_arch_lm``
+     - ``arch_lm_<slot>``
+     - Engle's (1982) ARCH LM statistic: ``n R2`` of squared recursive
+       residuals regressed on their ``arch_lm_lags`` lags (default 10),
+       asymptotically ``chi2(L)`` under no volatility clustering, sharing
+       ``specification_half_life``. Run once (``inf``) it matches statsmodels'
+       ``het_arch``. Capped at 256 KB per group across all slots.
+   * - ``emit_white``
+     - ``white_<slot>``
+     - White's (1980) general heteroskedasticity test: ``n R2`` of squared
+       recursive residuals regressed on a constant, the features, their
+       squares and their pairwise products (when
+       ``white_interaction_terms=True``, the default), or on a constant and
+       the squares alone (when ``white_interaction_terms=False``), sharing
+       ``specification_half_life``. Run once (``inf``) it matches statsmodels'
+       ``het_white``. Capped at 256 KB per group across all slots (up to 21
+       features for one slot with interaction terms, or 253 without); refused
+       on ``glm`` and models with no features.
    * - ``emit_tails``
      - ``skew_<slot>``, ``kurtosis_<slot>``, ``jarque_bera_<slot>``
      - The EW skewness and excess kurtosis of the recursive residuals,
@@ -1069,6 +1098,21 @@ The diagnostics add, per slot:
        row planted at six spreads out and six off the line, one in 200. At
        a half-life of 200 with 2 features that cutoff is 0.41, and the
        clean rows' 99.9th percentile was 0.29.
+   * - ``emit_cooks_distance``
+     - ``cooks_distance_<slot>``
+     - Online Cook's (1977) distance for the row against the fit before it,
+       ``(v**2 / (p * s**2)) * (h / (1 + h))`` where ``p`` is the parameter
+       count, sharing ``influence_half_life`` and adding zero bytes to state.
+       Run once with no ridge it matches statsmodels' ``OLSInfluence.cooks_distance``
+       at the last row of the prefix. ``ewridge``, ``rls`` and ``kalman`` only.
+   * - ``emit_dfbetas``
+     - ``dfbetas``
+     - Per-coefficient DFBETAS on every row, laid out as a ``List(Float64)``
+       matching ``coef`` (and unnested as ``dfbetas_<slot>_<term>``), in the
+       caller's original feature units even under ``standardize=True``,
+       sharing ``influence_half_life``. Run once with no ridge it matches
+       statsmodels' ``OLSInfluence.dfbetas`` at the last row of the prefix.
+       ``ewridge``, ``rls`` and ``kalman`` only.
    * - ``emit_feature_health``
      - ``spread_ratio_<feature>``, ``mean_shift_<feature>``, once per
        instance and feature
@@ -1143,8 +1187,9 @@ A parameter whose switch is off is refused rather than ignored:
   or ``drift_action = "reset"`` without ``emit_drift``;
 - ``average_eta`` without ``emit_averaged``;
 - ``resid_autocorr_lag`` without ``emit_autocorr``;
-- a diagnostic's ``*_half_life``, or its lags (``robust_se_lags``,
-  ``ljung_box_lags``), without its switch;
+- a diagnostic's ``*_half_life``, its lags (``robust_se_lags``,
+  ``ljung_box_lags``, ``arch_lm_lags``), or ``white_interaction_terms``,
+  without its switch;
 - ``long_half_life`` without ``session_shrink``;
 - ``session_gap`` without ``session``;
 - ``gap_cap`` or ``restart_after_step_back`` without ``clock``;

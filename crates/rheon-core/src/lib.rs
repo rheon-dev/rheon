@@ -137,6 +137,8 @@ mod seqtest;
 mod sgd;
 mod since;
 mod solve;
+mod spec_ext;
+pub mod special;
 mod specification;
 mod spectral;
 mod spread;
@@ -288,6 +290,10 @@ pub use sandwich::Sandwich;
 pub use seqtest::{SLOTS as SEQTEST_SLOTS, SeqTest, SeqTestCfg};
 pub use sgd::{LearningRate, Sgd, SgdCfg, SgdLoss};
 pub use solve::{SpdFactor, quad_forms_logdet, solve_spd};
+pub use spec_ext::{
+    ArchLm, DEFAULT_ARCH_LM_LAGS, MAX_WHITE_FULL_K, MAX_WHITE_SQUARES_K, SPEC_DIAG_CAP_BYTES,
+    Spiegelhalter, WhiteTest,
+};
 pub use specification::Specification;
 pub use spectral::{MAX_FREQUENCIES, Spectral, SpectralCfg, SpectralScaling};
 pub use stats::{

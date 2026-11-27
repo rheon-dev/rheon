@@ -1908,6 +1908,25 @@ pub fn all() -> Vec<Case> {
             40
         ),
         case!(
+            "ew_cov_raw_loglik",
+            "EwCovModel",
+            EwCovModel,
+            EwCovModel::new(EwCovCfg {
+                stats: vec![EwCovStat::RawCov, EwCovStat::Loglik, EwCovStat::Mahal],
+                precision_prior: Some(0.05),
+                mahal_quantiles: Vec::new(),
+                pca: 0,
+                pca_every: 0.0,
+                max_rows_between_pca: u32::MAX,
+                lags: Vec::new(),
+                ..ew_cov_cfg()
+            })
+            .unwrap(),
+            3,
+            Targets::None,
+            40
+        ),
+        case!(
             "sgd",
             "Sgd",
             Sgd,

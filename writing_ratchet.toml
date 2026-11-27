@@ -714,6 +714,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-polars/src/merge/state.rs"]
 
+[messages."crates/rheon-polars/src/spec/diagnostics_ext.rs"]
+
 [messages."crates/rheon-polars/src/spec/drift.rs"]
 
 [messages."crates/rheon-polars/src/spec/horizons.rs"]
@@ -734,6 +736,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."crates/rheon-polars/src/windows/cross.rs"]
 "remedy" = 2
 "where" = 2
+
+[messages."crates/rheon-polars/src/windows/exact_order.rs"]
 
 [messages."crates/rheon-polars/src/windows/extrema.rs"]
 
@@ -762,6 +766,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."python/rheon/polars/__init__.py"]
 
 [messages."python/rheon/polars/_clock.py"]
+
+[messages."python/rheon/polars/_eval_compare.py"]
 
 [messages."python/rheon/polars/_fourier.py"]
 
@@ -796,6 +802,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [docstrings."python/rheon/_spec_vector_ar.py"]
 
 [docstrings."python/rheon/polars/_errors.py"]
+
+[docstrings."python/rheon/polars/_eval_compare.py"]
 
 [docstrings."python/rheon/polars/_fourier.py"]
 
@@ -885,6 +893,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-polars/src/merge/state.rs#messages"]
 
+[vocabulary."crates/rheon-polars/src/spec/diagnostics_ext.rs#messages"]
+
 [vocabulary."crates/rheon-polars/src/spec/drift.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/spec/horizons.rs#messages"]
@@ -900,6 +910,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-polars/src/windows/check.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/windows/cross.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/windows/exact_order.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/windows/extrema.rs#messages"]
 
@@ -959,6 +971,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/polars/_clock.py#messages"]
 
 [vocabulary."python/rheon/polars/_errors.py#docstrings"]
+
+[vocabulary."python/rheon/polars/_eval_compare.py#docstrings"]
+
+[vocabulary."python/rheon/polars/_eval_compare.py#messages"]
 
 [vocabulary."python/rheon/polars/_fourier.py#docstrings"]
 

@@ -302,14 +302,16 @@ impl Spec {
                         self.name
                     ));
                 }
-                const OK: [&str; 8] = [
+                const OK: [&str; 10] = [
                     "mean",
                     "var",
                     "std",
                     "cov",
+                    "raw_cov",
                     "corr",
                     "partial_corr",
                     "mahal",
+                    "loglik",
                     "lag_corr",
                 ];
                 if let Some(stats) = stats {
@@ -373,6 +375,15 @@ impl Spec {
                          set: the covariances cannot be inverted until more rows than \
                          features have been learned. Set precision_prior, such as 1e-6, or \
                          leave \"mahal\" out of stats.",
+                            self.name
+                        ));
+                    }
+                    if stats.iter().any(|st| st == "loglik") && precision_prior.is_none() {
+                        no.refuse(format!(
+                            "spec {:?}: \"loglik\" in stats needs precision_prior, but it is not \
+                         set: the Gaussian log-likelihood inverts the regularized covariance \
+                         matrix. Set precision_prior, such as 1e-6, or leave \"loglik\" out of \
+                         stats.",
                             self.name
                         ));
                     }

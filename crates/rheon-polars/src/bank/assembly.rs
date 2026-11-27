@@ -233,6 +233,7 @@ fn lists_of<'c>(src: &Source, ch: &'c mut ChunkOut) -> &'c mut [Vec<Option<Vec<f
         Source::SeCoef(_) => &mut ch.se_coef,
         Source::SeCoefHc0(_) => &mut ch.se_coef_hc0,
         Source::SeCoefHac(_) => &mut ch.se_coef_hac,
+        Source::Dfbetas(_) => &mut ch.dfbetas,
         Source::SmoothedCoef(_) => &mut ch.smoothed_coef,
         Source::SmoothedSe(_) => &mut ch.smoothed_se,
         _ => unreachable!("only a list field reads a coef-like buffer"),
@@ -287,6 +288,7 @@ impl<'a> Sink<'a> {
                 | Source::SeCoef(_)
                 | Source::SeCoefHc0(_)
                 | Source::SeCoefHac(_)
+                | Source::Dfbetas(_)
                 | Source::SmoothedCoef(_)
                 | Source::SmoothedSe(_) => Acc::Lists(Vec::new()),
                 Source::ScoredClock | Source::LearnedClock | Source::SmoothedFor(_) => {
@@ -642,6 +644,7 @@ fn take_lists(list: &mut Vec<(usize, Vec<f64>)>, src: &Source, ch: &mut ChunkOut
         | Source::SeCoef(mi)
         | Source::SeCoefHc0(mi)
         | Source::SeCoefHac(mi)
+        | Source::Dfbetas(mi)
         | Source::SmoothedCoef(mi)
         | Source::SmoothedSe(mi) => mi,
         _ => unreachable!("only a list field takes lists"),

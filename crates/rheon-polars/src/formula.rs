@@ -115,6 +115,9 @@ pub struct OpNode {
     /// A variance's (`ewm_var`, `ewm_std`): uncorrected for the weights'
     /// count, Polars' `bias`; false for every other operator.
     pub bias: bool,
+    /// A point-mass EW mean (`ewm_mean(..., adjust=True)`): each observation
+    /// weighs `lam^|T - t_j|` instead of its held interval's time mass.
+    pub adjust: bool,
     /// A quantile's level (`ewm_quantile`, `rewm_quantile`), in (0, 1);
     /// `None` for every other operator.
     pub quantile: Option<f64>,
@@ -275,6 +278,7 @@ impl OpNode {
             min_samples: 1,
             partial: None,
             bias: false,
+            adjust: false,
             quantile: None,
             weight: None,
             max_state_bytes: None,
@@ -315,12 +319,15 @@ impl OpNode {
             m.insert("abs_tol".into(), json!(self.tol));
             return Value::Object(m);
         }
-        let ext = self.kind.stat().is_some_and(Stat::is_extremum);
-        if let Some(h) = self.half_life.as_ref().filter(|_| !ext) {
+        let no_hl = self.kind.stat().is_some_and(Stat::is_capped);
+        if let Some(h) = self.half_life.as_ref().filter(|_| !no_hl) {
             m.insert(
                 "half_life".into(),
                 serde_json::to_value(h).expect("a span is JSON"),
             );
+        }
+        if self.adjust {
+            m.insert("adjust".into(), json!(true));
         }
         if let Some(w) = &self.window_size {
             m.insert(
@@ -347,6 +354,15 @@ impl OpNode {
         }
         if let Some(q) = self.quantile {
             m.insert("quantile".into(), json!(q));
+        }
+        if self.kind.stat() == Some(Stat::ExactQuantile) {
+            m.insert(
+                "interpolation".into(),
+                json!(self.order.interpolation.name()),
+            );
+        }
+        if self.kind.stat() == Some(Stat::ExactRank) {
+            m.insert("method".into(), json!(self.order.rank.name()));
         }
         if self.kind.cross().is_some() {
             // A cross operator has no kernel: its stamp and its weight.
@@ -494,12 +510,16 @@ const WINDOW_HEADS: &[&str] = &[
     "ewm_moments",
     "rolling_max",
     "rolling_min",
+    "rolling_quantile",
+    "rolling_rank",
     "rewm_mean",
     "rewm_sum",
     "rewm_rate",
     "rewm_quantile",
     "rrolling_max",
     "rrolling_min",
+    "rrolling_quantile",
+    "rrolling_rank",
 ];
 
 /// The window operators looking ahead, as a formula writes them: "a, b or
@@ -918,6 +938,7 @@ impl Node {
                     min_samples: 2,
                     partial: None,
                     bias: false,
+                    adjust: false,
                     quantile: None,
                     weight: None,
                     max_state_bytes: None,
@@ -1160,6 +1181,7 @@ impl Node {
                     min_samples: u32::from(!sum),
                     partial: None,
                     bias: false,
+                    adjust: false,
                     quantile: None,
                     weight: None,
                     max_state_bytes: None,
@@ -1175,17 +1197,40 @@ impl Node {
                     stl: None,
                 };
                 let var = kind.stat().is_some_and(Stat::is_var);
+                let mean = matches!(kind, OpKind::EwmMean | OpKind::RewmMean);
                 let quantile = kind.stat() == Some(Stat::Quantile);
+                let exact_q = kind.stat() == Some(Stat::ExactQuantile);
+                let exact_r = kind.stat() == Some(Stat::ExactRank);
+                let exact_ord = exact_q || exact_r;
                 let ext = kind.stat().is_some_and(Stat::is_extremum);
-                if ext {
-                    // An extremum weighs no row: its kernel is the even one.
+                let no_hl = ext || exact_ord;
+                if no_hl {
+                    // An extremum or exact rolling quantile/rank weighs no row.
                     op.half_life = Some(Span::Units(f64::INFINITY));
                 }
                 for (k, v) in params {
                     match k.as_str() {
-                        "half_life" if !ext => {
+                        "half_life" if !no_hl => {
                             op.half_life = Some(span_of(name, k, v)?);
                         }
+                        "adjust" if mean => match v.as_bool() {
+                            Some(true) => op.adjust = true,
+                            Some(false) => {
+                                return Err(format!(
+                                    "{name}: adjust must be true when set, but it is false. Leave \
+                                     out adjust for the time-weighted mean, or set adjust to true \
+                                     for the point-mass EW mean."
+                                ));
+                            }
+                            None => {
+                                return Err(format!(
+                                    "{name}: adjust must be true, but it is {}. Leave out adjust \
+                                     for the time-weighted mean, or set adjust to true for the \
+                                     point-mass EW mean.",
+                                    short(v)
+                                ));
+                            }
+                        },
                         "since" if ext => {
                             let e = Node::from_json(v)?;
                             if !e.operators().is_empty() {
@@ -1198,7 +1243,7 @@ impl Node {
                             }
                             op.since = Some(Box::new(e));
                         }
-                        "max_state_bytes" if ext => {
+                        "max_state_bytes" if ext || exact_ord => {
                             op.max_state_bytes =
                                 Some(v.as_u64().filter(|&b| b > 0).ok_or_else(|| {
                                     format!(
@@ -1271,6 +1316,44 @@ impl Node {
                                 })?,
                             );
                         }
+                        "quantile" if exact_q => {
+                            op.quantile =
+                                Some(v.as_f64().filter(|q| (0.0..=1.0).contains(q)).ok_or_else(
+                                    || {
+                                        format!(
+                                            "{name}: quantile must be a number from 0 to 1, but \
+                                             it is {}. Set quantile within that range, such as \
+                                             0.5 for the median.",
+                                            short(v)
+                                        )
+                                    },
+                                )?);
+                        }
+                        "interpolation" if exact_q => {
+                            op.order.interpolation =
+                                v.as_str().and_then(Interp::parse).ok_or_else(|| {
+                                    format!(
+                                        "{name}: interpolation must be \"nearest\", \"higher\", \
+                                         \"lower\", \"midpoint\", \"linear\" or \"equiprobable\", \
+                                         but it is {}. Set interpolation to one of those words.",
+                                        short(v)
+                                    )
+                                })?;
+                        }
+                        "method" if exact_r => {
+                            op.order.rank = v
+                                .as_str()
+                                .and_then(RankMethod::parse)
+                                .filter(|m| *m != RankMethod::Ordinal)
+                                .ok_or_else(|| {
+                                    format!(
+                                        "{name}: method must be \"average\", \"min\", \"max\" or \
+                                         \"dense\", but it is {}. Set method to one of those four \
+                                         words.",
+                                        short(v)
+                                    )
+                                })?;
+                        }
                         other if ext => {
                             return Err(format!(
                                 "{name}: {other:?} is not one of its parameters, which are \
@@ -1283,6 +1366,21 @@ impl Node {
                                 }
                             ));
                         }
+                        other if exact_q => {
+                            return Err(format!(
+                                "{name}: {other:?} is not one of its parameters, which are \
+                                 quantile, window_size, interpolation, closed, min_samples, \
+                                 partial and max_state_bytes. Remove {other:?}, or correct its \
+                                 name."
+                            ));
+                        }
+                        other if exact_r => {
+                            return Err(format!(
+                                "{name}: {other:?} is not one of its parameters, which are \
+                                 window_size, method, closed, min_samples, partial and \
+                                 max_state_bytes. Remove {other:?}, or correct its name."
+                            ));
+                        }
                         other => {
                             return Err(format!(
                                 "{name}: {other:?} is not one of its parameters, which are \
@@ -1292,6 +1390,8 @@ impl Node {
                                     ", partial and bias"
                                 } else if quantile {
                                     ", partial and quantile"
+                                } else if mean {
+                                    ", partial and adjust"
                                 } else {
                                     " and partial"
                                 }
@@ -1302,10 +1402,40 @@ impl Node {
                 if op.since.is_some() && kind.direction() == Direction::Forward {
                     return Err(format!("{name}: {}.", crate::windows::SINCE_AHEAD));
                 }
-                if quantile && op.quantile.is_none() {
+                if (quantile || exact_q) && op.quantile.is_none() {
+                    let range = if exact_q {
+                        "from 0 to 1"
+                    } else {
+                        "above 0 and below 1"
+                    };
                     return Err(format!(
                         "{name}: quantile is not set, but a quantile operator needs it. Set \
-                         quantile to a number above 0 and below 1, such as 0.5 for the median."
+                         quantile to a number {range}, such as 0.5 for the median."
+                    ));
+                }
+                if exact_ord && op.window_size.is_none() {
+                    return Err(format!(
+                        "{name}: window_size is not set, but {name} requires a window_size so \
+                         state stays bounded. Set window_size to a finite positive number of \
+                         clock units or a duration."
+                    ));
+                }
+                if exact_r
+                    && !matches!(
+                        (kind.direction(), op.closed),
+                        (Direction::Backward, Closed::Right | Closed::Both)
+                            | (Direction::Forward, Closed::Left | Closed::Both)
+                    )
+                {
+                    let allowed = match kind.direction() {
+                        Direction::Backward => "\"right\" or \"both\"",
+                        Direction::Forward => "\"left\" or \"both\"",
+                    };
+                    return Err(format!(
+                        "{name}: rolling_rank requires the row's own stamp to be inside the \
+                         window, so closed must be {allowed}, but it is {:?}. Set closed to \
+                         {allowed}.",
+                        op.closed.name()
                     ));
                 }
                 let Some(h) = &op.half_life else {
@@ -1338,7 +1468,8 @@ impl Node {
                         ));
                     }
                     None if h.value().is_infinite()
-                        && kind.stat().is_some_and(Stat::weighs_held) =>
+                        && kind.stat().is_some_and(Stat::weighs_held)
+                        && !op.adjust =>
                     {
                         return Err(format!(
                             "{name}: half_life is inf and window_size is not set, so a value \
@@ -1762,6 +1893,7 @@ fn moments_from_json(args: &[Value]) -> Result<Node, String> {
         min_samples: 1,
         partial: None,
         bias: false,
+        adjust: false,
         quantile: None,
         weight: None,
         max_state_bytes: None,
@@ -2218,6 +2350,7 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
         min_samples: 1,
         partial: None,
         bias: false,
+        adjust: false,
         quantile: None,
         weight: None,
         max_state_bytes: None,
@@ -2678,7 +2811,7 @@ mod tests {
         }
         assert_eq!(
             WINDOW_HEADS.len(),
-            15,
+            19,
             "every window operator but the row operators"
         );
         let err = Node::from_json(&json!(["shift", ["col", "a"]])).unwrap_err();

@@ -246,6 +246,8 @@ fn build_legacy_placeholder_core(cfg: &WindowsConfig, df: &DataFrame) -> Windows
             bias: false,
             quantile: None,
             max_state_bytes: None,
+            interpolation: None,
+            rank_method: None,
         }],
         clock_cfg,
     )

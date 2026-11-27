@@ -15,7 +15,7 @@ impl Spec {
             (
                 "calibration_half_life",
                 "emit_calibration",
-                self.emit_calibration,
+                self.emit_calibration || self.emit_spiegelhalter,
                 self.calibration_half_life.as_ref(),
             ),
             (
@@ -33,7 +33,7 @@ impl Spec {
             (
                 "specification_half_life",
                 "emit_specification",
-                self.emit_specification,
+                self.emit_specification || self.emit_arch_lm || self.emit_white,
                 self.specification_half_life.as_ref(),
             ),
             (
@@ -45,7 +45,7 @@ impl Spec {
             (
                 "influence_half_life",
                 "emit_influence",
-                self.emit_influence,
+                self.emit_influence || self.emit_cooks_distance || self.emit_dfbetas,
                 self.influence_half_life.as_ref(),
             ),
             (
@@ -60,7 +60,43 @@ impl Spec {
     /// Whether a switch reads the row's own error inflation (task 221):
     /// its field, and the recursive residual of the breaks and the tails.
     pub fn reads_row_inflation(&self) -> bool {
-        self.emit_error_inflation || self.emit_breaks || self.emit_tails || self.emit_influence
+        self.emit_error_inflation
+            || self.emit_breaks
+            || self.emit_tails
+            || self.emit_influence
+            || self.emit_cooks_distance
+            || self.emit_dfbetas
+    }
+
+    /// Whether a switch reads the row's unscaled Gram leverage (`emit_cooks_distance`
+    /// or `emit_dfbetas`).
+    pub fn reads_gram_leverage(&self) -> bool {
+        self.emit_cooks_distance || self.emit_dfbetas
+    }
+
+    /// Whether this spec's model produces binary probabilities against a 0/1
+    /// target (`ftrl` logistic, `sgd(loss="logistic")`, or `glm(family="binomial")`).
+    pub fn is_logistic(&self) -> bool {
+        match &self.model {
+            super::ModelKind::Ftrl { loss, .. } => {
+                loss.as_deref().unwrap_or("logistic") == "logistic"
+            }
+            super::ModelKind::Sgd { loss, .. } => loss.as_deref() == Some("logistic"),
+            super::ModelKind::Glm { family, .. } => family.as_deref() == Some("binomial"),
+            _ => false,
+        }
+    }
+
+    /// Engle's ARCH LM lag order: `arch_lm_lags` when set, else 10.
+    pub fn arch_lm_lags_or_default(&self) -> usize {
+        self.arch_lm_lags
+            .unwrap_or(rheon_core::DEFAULT_ARCH_LM_LAGS)
+    }
+
+    /// Whether White's test includes linear and cross-product terms alongside
+    /// squared features (`true` by default).
+    pub fn white_interaction_terms_or_default(&self) -> bool {
+        self.white_interaction_terms.unwrap_or(true)
     }
 
     /// The target's horizon in rows, `h`: the rows a look-ahead target's

@@ -80,6 +80,7 @@ class CommonKwargs(TypedDict, total=False):
     drift_kind: Literal["page_hinkley", "cusum", "adwin", "ddm", "eddm", "kswin"] | None
     drift_options: Mapping[str, float | int | bool | str] | None
     emit_calibration: bool
+    emit_spiegelhalter: bool
     calibration_half_life: float | Duration | None
     emit_breaks: bool
     breaks_half_life: float | Duration | None
@@ -87,12 +88,18 @@ class CommonKwargs(TypedDict, total=False):
     robust_se_half_life: float | Duration | None
     robust_se_lags: int | None
     emit_specification: bool
+    emit_arch_lm: bool
+    arch_lm_lags: int | None
+    emit_white: bool
+    white_interaction_terms: bool | None
     specification_half_life: float | Duration | None
     ljung_box_lags: int | None
     horizon_rows: int | None
     emit_tails: bool
     tails_half_life: float | Duration | None
     emit_influence: bool
+    emit_cooks_distance: bool
+    emit_dfbetas: bool
     influence_half_life: float | Duration | None
     emit_feature_health: bool
     feature_health_half_life: float | Duration | None

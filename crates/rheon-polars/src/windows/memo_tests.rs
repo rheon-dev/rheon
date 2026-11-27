@@ -243,7 +243,14 @@ fn a_turn_over_moves_every_row_into_room_made_for_them() {
         closed: Closed::Right,
         since: None,
     };
-    let mut q = Queue::new(vec![false, false], &[false, false], &[None, None], false);
+    let mut q = Queue::new(
+        vec![false, false],
+        &[false, false],
+        &[false, false],
+        &[None, None],
+        false,
+        &[false, false],
+    );
     let mut scratch = vec![0.0; ROW * 2];
     let rows = 50usize;
     for i in 0..rows {

@@ -153,6 +153,10 @@ OUTPUTS: dict[str, Any] = dict(
     emit_breaks=True,
     breaks_half_life=40.0,
     emit_specification=True,
+    emit_arch_lm=True,
+    arch_lm_lags=3,
+    emit_white=True,
+    white_interaction_terms=True,
     specification_half_life=40.0,
     ljung_box_lags=3,
     horizon_rows=2,
@@ -171,6 +175,8 @@ LS: dict[str, Any] = dict(
     robust_se_half_life=40.0,
     robust_se_lags=2,
     emit_influence=True,
+    emit_cooks_distance=True,
+    emit_dfbetas=True,
     influence_half_life=40.0,
 )
 #: What a grid of slots adds.
@@ -207,8 +213,14 @@ def full2(**kw: Any) -> dict[str, Any]:
 
 #: The checks of a constant, normal residual, which a glm refuses, and the
 #: mean's checks, which an expectile off the mean refuses, with their knobs.
-NOT_GLM = ("emit_specification", "specification_half_life", "ljung_box_lags")
-NOT_GLM += ("emit_tails", "tails_half_life")
+NOT_GLM = (
+    "emit_specification",
+    "emit_white",
+    "white_interaction_terms",
+    "ljung_box_lags",
+    "emit_tails",
+    "tails_half_life",
+)
 NOT_OFF_MEAN = ("emit_calibration", "calibration_half_life", "emit_breaks", "breaks_half_life")
 
 
@@ -219,7 +231,13 @@ def without(kw: dict[str, Any], drop: tuple[str, ...]) -> dict[str, Any]:
 
 def no_features(kw: dict[str, Any]) -> dict[str, Any]:
     """``holt`` reads the target alone, so it has no features to watch."""
-    drop = ("features", "emit_feature_health", "feature_health_half_life")
+    drop = (
+        "features",
+        "emit_feature_health",
+        "feature_health_half_life",
+        "emit_white",
+        "white_interaction_terms",
+    )
     return {k: v for k, v in kw.items() if k not in drop}
 
 
@@ -419,7 +437,15 @@ CASES: list[Case] = [
     Case(
         "sgd_logistic",
         "sgd",
-        {**full(loss="logistic", learning_rate=0.05, strict_binary=True), "targets": ["hit"]},
+        {
+            **full(
+                loss="logistic",
+                learning_rate=0.05,
+                strict_binary=True,
+                emit_spiegelhalter=True,
+            ),
+            "targets": ["hit"],
+        },
     ),
     Case("sgd_span", "sgd", full(loss="huber", huber_refit_span=40.0, max_state_bytes=200_000)),
     Case("sgd_poisson", "sgd", {**full(loss="poisson", learning_rate=0.01), "targets": ["hit"]}),
@@ -443,7 +469,15 @@ CASES: list[Case] = [
         "glm",
         {
             **without(
-                full(**CLOSE, family="binomial", link="logit", ridge=2.0, refit_rows=30), NOT_GLM
+                full(
+                    **CLOSE,
+                    family="binomial",
+                    link="logit",
+                    ridge=2.0,
+                    refit_rows=30,
+                    emit_spiegelhalter=True,
+                ),
+                NOT_GLM,
             ),
             "targets": ["hit"],
         },
@@ -517,7 +551,15 @@ CASES: list[Case] = [
         "ftrl",
         "ftrl",
         {
-            **full(**CLOSE, alpha=0.2, beta=2.0, l1=0.01, l2=0.1, strict_binary=True),
+            **full(
+                **CLOSE,
+                alpha=0.2,
+                beta=2.0,
+                l1=0.01,
+                l2=0.1,
+                strict_binary=True,
+                emit_spiegelhalter=True,
+            ),
             "targets": ["hit"],
         },
     ),
@@ -1844,6 +1886,7 @@ def toml_keys() -> tuple[list[str], dict[str, list[str]]]:
 #: The companions a key needs before a kind can be asked whether it takes
 #: the key at all: a memory needs its diagnostic, and so on.
 NEEDS: dict[str, list[str]] = {
+    "arch_lm_lags": ["emit_arch_lm"],
     "average_eta": ["emit_averaged"],
     "breaks_half_life": ["emit_breaks"],
     "calibration_half_life": ["emit_calibration"],
@@ -1861,6 +1904,7 @@ NEEDS: dict[str, list[str]] = {
     "session_gap": ["session"],
     "specification_half_life": ["emit_specification"],
     "tails_half_life": ["emit_tails"],
+    "white_interaction_terms": ["emit_white"],
 }
 SAMPLE: dict[str, Any] = {
     **STREAM,
