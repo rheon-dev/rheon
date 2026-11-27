@@ -369,7 +369,7 @@ def test_names_match_the_realized_struct():
         ({"max_horizon_work": 2**30 + 1}, "at most 1073741824"),
         ({"vol": "gjr", "variance_targeting": True}, "variance_targeting"),
         ({"truncation": 100}, "truncation is FIGARCH's"),
-        ({"vol": "figarch", "start_rows": 500}, "at least 2000"),
+        ({"vol": "figarch", "start_rows": 0}, "at least 1"),
         ({"start_rows": 10}, "at least 50"),
         ({"start_span": 50.0}, "Leave one of them out"),
         ({"max_state_bytes": 0}, "above 0"),
@@ -482,3 +482,37 @@ def test_returns_with_no_variance_process_wait_and_say_so(kw):
     assert out["coef"].explode().is_null().all(), "a withheld fit is no coefficient"
     assert reason[:500] == ["below_warm_rows"] * 500
     assert reason[500:] == ["not_identified"] * 4500
+
+
+def test_figarch_short_start_waits_as_not_identified_without_row_floor():
+    """FIGARCH accepts ``start_rows`` down to 1 and closes ``start_span`` on
+    the span itself (no 50-row or 2,000-row floor), withholding short starts
+    as ``not_identified`` while the standard error of ``d`` exceeds
+    ``1 / (2 z_{0.9995})``."""
+    y = _returns(300, 6, alpha=0.2, beta=0.78)
+    df = pl.DataFrame({"t": np.arange(len(y), dtype=float), "y": y})
+    # `start_rows` below 50 is accepted and withheld as `not_identified`
+    out_rows = _out(
+        rp.spec.garch("m", targets=["y"], vol="figarch", truncation=30, start_rows=10), df
+    )
+    reason_rows = out_rows["withheld_reason"].cast(pl.String).to_list()
+    assert out_rows["variance_y"].is_null().all()
+    assert reason_rows[:10] == ["below_warm_rows"] * 10
+    assert "not_identified" in reason_rows[10:]
+    # `start_span` closing at 21 rows tries on the span (not at 50 rows)
+    out_span = _out(
+        rp.spec.garch(
+            "m",
+            targets=["y"],
+            vol="figarch",
+            truncation=30,
+            clock="t",
+            gap_cap=1e9,
+            start_span=20.0,
+        ),
+        df,
+    )
+    reason_span = out_span["withheld_reason"].cast(pl.String).to_list()
+    assert out_span["variance_y"].is_null().all()
+    assert reason_span[:21] == ["below_warm_rows"] * 21
+    assert reason_span[21] == "not_identified"

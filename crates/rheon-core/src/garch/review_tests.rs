@@ -464,28 +464,93 @@ fn garch_8_a_figarch_span_start_at_its_exact_cap_buffers() {
     }
 }
 
-/// GARCH-8 (2): a FIGARCH start of a span fits on as few rows as any
-/// form's span start, 50, where a start of rows is refused under 2,000
-/// for FIGARCH. Left for the user: a span start holding FIGARCH to 2,000
-/// rows is a fixed row count.
+/// GARCH-8 (2): FIGARCH has no fixed row-count floor on `start_rows` (`>= 1`)
+/// or `start_span` (closes on the span, without the 50-row wait); instead it
+/// gates its start on the asymptotic standard error of `d` from the start's
+/// expected Fisher information at Kish's count, withholding as
+/// `not_identified` while `SE(d)` exceeds `1 / (2 z_{0.9995}) ≈ 0.152`.
 #[test]
-#[should_panic(expected = "a FIGARCH start of a span tried on")]
-fn garch_8_a_figarch_span_start_tries_on_no_fewer_rows_than_a_start_of_rows() {
+fn garch_8_figarch_short_starts_wait_on_d_se_with_no_row_floor() {
+    // 1. `start_span` closes at the span (21 rows), not at 50 rows, and
+    // withholds as `not_identified`.
     let c = GarchCfg {
-        start_span: Some(60.0),
+        start_span: Some(20.0),
         ..cfg(GarchVol::Figarch, GarchDist::Normal)
     };
-    let ys = figarch_series(200, 6);
+    let ys = figarch_series(60, 6);
     let mut m = Garch::new(c).unwrap();
+    for (t, y) in ys.iter().enumerate().take(25) {
+        m.stamp_next(crate::Stamp::from(t as f64));
+        m.step(&[], &[Some(*y)], 1.0, 1.0);
+        if t == 20 {
+            assert_eq!(m.series[0].tried, 21, "tried on the span's 21 rows");
+            assert!(!m.started()[0] && m.no_effect());
+        }
+    }
+    // 2. `start_rows` accepts values below 2,000 and below 50 (down to 1),
+    // and withholds a short fit that passes both LR and soundness when
+    // `SE(d)` is above the cut: on seed 6 at 244 rows (and 488 rows), both
+    // LR and soundness pass (`SE(d)` 0.200 and 0.154 > 0.152), so without
+    // the SE gate the model started prematurely; with it, both wait as
+    // `not_identified`.
+    for n in [1usize, 10, 244, 488] {
+        let mut c = cfg(GarchVol::Figarch, GarchDist::Normal);
+        c.start_rows = n;
+        c.max_state_bytes = Some(Garch::state_bytes(&c, n));
+        let mut m = Garch::new(c).expect("FIGARCH accepts start_rows >= 1");
+        let ys = figarch_series(n + 5, 6);
+        let out = run(&mut m, &ys, 1.0);
+        assert!(!m.started()[0], "n={n}: should withhold on SE(d)");
+        assert!(m.no_effect(), "n={n}: should name not_identified");
+        assert!(out.iter().all(|r| r[0].is_nan()), "n={n}");
+    }
+    // 3. A short `start_span` that buffers 244 rows (where LR and soundness
+    // both pass on seed 6) is withheld as `not_identified` rather than
+    // starting prematurely, and a `start_span` over a series with enough
+    // rows eventually starts once `SE(d)` falls within the cut.
+    let c = GarchCfg {
+        start_span: Some(243.0),
+        max_state_bytes: Some(128 * 1024),
+        ..cfg(GarchVol::Figarch, GarchDist::Normal)
+    };
+    let ys = figarch_series(2600, 7);
+    let mut m = Garch::new(c).unwrap();
+    let mut withheld_on_short = false;
     for (t, y) in ys.iter().enumerate() {
         m.stamp_next(crate::Stamp::from(t as f64));
         m.step(&[], &[Some(*y)], 1.0, 1.0);
-        let tried = m.series[0].tried;
-        assert!(
-            m.start_report()[0].0 == 0 && !m.started()[0] || tried >= FIGARCH_MIN_START_ROWS as u64,
-            "a FIGARCH start of a span tried on {tried} rows at row {t}"
-        );
+        if t == 243 {
+            assert!(!m.started()[0], "244 rows must not start");
+            withheld_on_short = m.no_effect();
+        }
     }
+    assert!(withheld_on_short || m.start_report()[0].0 >= 1);
+    assert!(
+        m.started()[0] && !m.no_effect(),
+        "starts once enough rows arrive: {:?}",
+        m.start_report()
+    );
+    // 4. Strongly clustered 61-row span starts that pass LR and soundness
+    // (e.g. clustered GARCH) are also withheld as `not_identified` because
+    // `SE(d)` is ~0.5–0.7.
+    let mut caught = 0;
+    for seed in 1..=20u64 {
+        let ys = gjr_series([0.05, 0.2, 0.0, 0.78], 65, seed, 1.0);
+        let c = GarchCfg {
+            start_span: Some(60.0),
+            ..cfg(GarchVol::Figarch, GarchDist::Normal)
+        };
+        let mut m = Garch::new(c).unwrap();
+        for (t, y) in ys.iter().enumerate() {
+            m.stamp_next(crate::Stamp::from(t as f64));
+            m.step(&[], &[Some(*y)], 1.0, 1.0);
+            assert!(!m.started()[0], "seed={seed} t={t}: started on <=65 rows");
+        }
+        if m.no_effect() {
+            caught += 1;
+        }
+    }
+    assert!(caught > 0);
 }
 
 /// GARCH-9: every weight scaled by a power of two (`2⁻³⁴`, `2⁻⁶⁰`, `2⁴⁰`),
