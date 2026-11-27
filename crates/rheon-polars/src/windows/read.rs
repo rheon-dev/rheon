@@ -188,7 +188,7 @@ pub(super) fn value_of(k: &KernelDef, op: &OpDef, a: Acc, t: f64) -> f64 {
         // Read from the queue's sketches (`read_backward`, `close`), and
         // from the group's moments (`flush_in`).
         Stat::Quantile | Stat::Max | Stat::Min | Stat::Moments => f64::NAN,
-        Stat::Rate => rate_of(a, k.mass(t)),
+        Stat::Rate => rate_of(a, k.clock_mass(t)),
         Stat::Var | Stat::Std => {
             if a.w <= 0.0 {
                 return f64::NAN;

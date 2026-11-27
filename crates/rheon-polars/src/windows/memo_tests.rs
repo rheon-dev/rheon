@@ -31,7 +31,7 @@ fn a_memoed_discount_and_mass_are_the_unmemoed_ones() {
         0.1 + 0.2,
         0.3,
     ];
-    for half_life in [0.5, 5.0, 1e12, f64::INFINITY] {
+    for half_life in [0.5, 5.0, 1e12, 1e200, 1.5e308, f64::MAX, f64::INFINITY] {
         let k = KernelDef {
             direction: Direction::Backward,
             half_life,
@@ -72,9 +72,9 @@ fn a_memoed_discount_and_mass_are_the_unmemoed_ones() {
                 );
                 // The held mass is the cut's from the lower cut on (a
                 // hundredth of a half-life), and `c (1 - d)` of the
-                // discount from it up.
+                // discount from it up, in the kernel's mass unit.
                 let held = if d > 0.0 && half_life.is_finite() && d / half_life >= HELD_MASS_FROM {
-                    (half_life / std::f64::consts::LN_2) * (1.0 - k.discount(d))
+                    (half_life * k.mass_scale() / std::f64::consts::LN_2) * (1.0 - k.discount(d))
                 } else {
                     k.mass(d)
                 };
@@ -84,14 +84,18 @@ fn a_memoed_discount_and_mass_are_the_unmemoed_ones() {
                     "held mass of {d} at {half_life}, pass {pass}"
                 );
                 // A forward kernel's close takes each of these on a slot of
-                // its own (task 441).
-                for slot in [&mut fwd.mass_open, &mut fwd.mass_span] {
-                    assert_eq!(
-                        k.mass_slot(d, slot).to_bits(),
-                        k.mass(d).to_bits(),
-                        "slot mass of {d} at {half_life}, pass {pass}"
-                    );
-                }
+                // its own (task 441): `mass_open` in kernel units, `mass_span`
+                // in clock units for `Stat::Rate`.
+                assert_eq!(
+                    k.mass_slot(d, &mut fwd.mass_open).to_bits(),
+                    k.mass(d).to_bits(),
+                    "slot mass of {d} at {half_life}, pass {pass}"
+                );
+                assert_eq!(
+                    k.clock_mass_slot(d, &mut fwd.mass_span).to_bits(),
+                    k.clock_mass(d).to_bits(),
+                    "slot clock_mass of {d} at {half_life}, pass {pass}"
+                );
                 for slot in [&mut fwd.disc_seg, &mut fwd.disc_open, &mut fwd.disc_mean] {
                     assert_eq!(
                         k.discount_slot(d, slot).to_bits(),
@@ -139,6 +143,16 @@ fn a_queues_memo_answers_the_distance_it_holds_and_keeps_the_last() {
     assert_eq!(k.mass_in(2.0, &mut memo), 456.0);
     assert_eq!(k.mass_far_in(2.0, &mut memo), 789.0);
     assert_eq!(k.mass_held_in(2.0, &mut memo), 321.0);
+    let mut span_slot = (2.0f64.to_bits(), 987.0);
+    assert_eq!(k.clock_mass_slot(2.0, &mut span_slot), 987.0);
+    assert_eq!(k.clock_mass_slot(3.0, &mut span_slot), k.clock_mass(3.0));
+    assert_eq!(span_slot, (3.0f64.to_bits(), k.clock_mass(3.0)));
+    assert_eq!(k.clock_mass_slot(0.0, &mut span_slot), 0.0);
+    assert_eq!(
+        kernel(f64::INFINITY).clock_mass_slot(4.0, &mut span_slot),
+        4.0
+    );
+    assert_eq!(span_slot, (3.0f64.to_bits(), k.clock_mass(3.0)));
     // Another distance is taken, and replaces the one held.
     assert_eq!(k.discount_in(3.0, &mut memo), k.discount(3.0));
     assert_eq!(k.mass_in(3.0, &mut memo), k.mass(3.0));
@@ -294,7 +308,7 @@ fn append_copies_every_length_as_extend_from_slice_does() {
 /// agree to `2 / (1 - d)` ulps wherever they are both taken.
 #[test]
 fn the_held_mass_changes_form_at_a_hundredth_of_a_half_life() {
-    for half_life in [0.25, 5.0, 3600.0, 1e9] {
+    for half_life in [0.25, 5.0, 3600.0, 1e9, 1e200, 1.5e308, f64::MAX] {
         let k = KernelDef {
             direction: Direction::Backward,
             half_life,
@@ -303,7 +317,8 @@ fn the_held_mass_changes_form_at_a_hundredth_of_a_half_life() {
             closed: Closed::Right,
             since: None,
         };
-        let new_form = |d: f64| (half_life / std::f64::consts::LN_2) * (1.0 - k.discount(d));
+        let new_form =
+            |d: f64| (half_life * k.mass_scale() / std::f64::consts::LN_2) * (1.0 - k.discount(d));
         // The first distance at the edge, and the one before it.
         let mut at = HELD_MASS_FROM * half_life;
         while at / half_life >= HELD_MASS_FROM {
@@ -325,10 +340,11 @@ fn the_held_mass_changes_form_at_a_hundredth_of_a_half_life() {
             new_form(at).to_bits(),
             "at the edge at {half_life}"
         );
-        // From just under the edge to far above it, the forms agree to
-        // rounding: the mass's `2^-53 / (1 - d)` and the discount's own.
+        // From just under the edge to far above it (staying finite), the forms
+        // agree to rounding: the mass's `2^-53 / (1 - d)` and the discount's own.
+        let cap = (200.0 * half_life).min(f64::MAX / 2.0);
         let mut d = below;
-        while d < 200.0 * half_life {
+        while d < cap {
             let (held, old) = (k.mass_held_in(d, &mut memo), k.mass(d));
             let bound = 2.0 * f64::EPSILON / (1.0 - k.discount(d));
             assert!(
@@ -337,5 +353,11 @@ fn the_held_mass_changes_form_at_a_hundredth_of_a_half_life() {
             );
             d *= 1.37;
         }
+        // Infinite distance (the first row of an unbounded stream): identical.
+        assert_eq!(
+            k.mass_held_in(f64::INFINITY, &mut memo).to_bits(),
+            k.mass(f64::INFINITY).to_bits(),
+            "inf at {half_life}"
+        );
     }
 }

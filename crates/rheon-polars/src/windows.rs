@@ -649,7 +649,14 @@ impl KernelDef {
         // W2). `exp_m1` keeps the small difference whole; `discount`
         // itself has nothing to lose.
         let h = self.half_life;
-        -(h / std::f64::consts::LN_2) * (-(t * std::f64::consts::LN_2 / h)).exp_m1()
+        if h >= held_mass::MASS_SCALE_FROM {
+            return self.mass_huge(t);
+        }
+        let arg = t * std::f64::consts::LN_2 / h;
+        if arg < held_mass::MASS_LINEAR_BELOW {
+            return t;
+        }
+        -(h / std::f64::consts::LN_2) * (-arg).exp_m1()
     }
 }
 
@@ -3194,7 +3201,7 @@ fn close<const W: bool>(
             if a.n < f64::from(op.min_samples) {
                 f64::NAN
             } else {
-                rate_of(a, k.mass_slot(len, &mut q.decay.fwd().mass_span))
+                rate_of(a, k.clock_mass_slot(len, &mut q.decay.fwd().mass_span))
             }
         } else {
             value_of(k, op, a, len)
@@ -3852,12 +3859,19 @@ mod tests {
             since: None,
         };
         let ln2 = std::f64::consts::LN_2;
-        for h in [1e9, 1e12, 1e17, 1e300] {
-            let got = kernel(h).mass(5.0);
+        for h in [1e9, 1e12, 1e17, 1e300, 1.5e308, f64::MAX] {
+            let k = kernel(h);
             let want = 5.0 - 12.5 * ln2 / h;
+            let got = k.clock_mass(5.0);
             assert!(
                 (got - want).abs() <= 1e-12 * 5.0,
-                "h = {h}: {got} vs {want}"
+                "h = {h}: clock_mass {got} vs {want}"
+            );
+            let scaled = k.mass(5.0);
+            let want_scaled = want * k.mass_scale();
+            assert!(
+                (scaled - want_scaled).abs() <= 1e-12 * want_scaled,
+                "h = {h}: mass {scaled} vs {want_scaled}"
             );
         }
         let got = kernel(2.0).mass(3.0);
