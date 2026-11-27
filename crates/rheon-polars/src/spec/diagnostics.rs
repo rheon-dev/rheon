@@ -323,7 +323,12 @@ impl Spec {
                 window_size,
                 window_rows,
                 ..
-            } => window_size.as_ref().map(Span::value).or_else(|| {
+            }
+            | super::ModelKind::Krls(super::KrlsSpec {
+                window_size,
+                window_rows,
+                ..
+            }) => window_size.as_ref().map(Span::value).or_else(|| {
                 window_rows
                     .filter(|_| self.clock.is_none())
                     .map(|n| n as f64)

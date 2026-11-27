@@ -174,6 +174,7 @@ EXCEPT = {
     "ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
     # A curve, not coefficients: no `coef` and no cadence for it.
     "isotonic": ONE_SLOT | NOT_LEAST_SQUARES | {"coef_every"},
+    "krls": ONE_SLOT | NOT_LEAST_SQUARES | {"coef_every"},
     "vector_ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
 }
 
@@ -207,6 +208,12 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         "isotonic",
         "isotonic",
         fullest("isotonic", **dict(FIT, features=["x0"]), window_size=50.0),
+        [],
+    ),
+    (
+        "krls",
+        "krls",
+        fullest("krls", **FIT, max_atoms=30, emit_n_atoms=True),
         [],
     ),
     (

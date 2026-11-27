@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the thirty-seven models a spec can name, by
+The reference entry of each of the thirty-eight models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The thirty-seven models fall into four families, and each family answers one
+The thirty-eight models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -51,6 +51,7 @@ to start with for which question.
 | [`holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) · [entry](#holt--holts-linear-trend) | step | Holt's linear trend, the baseline that uses no features |
 | [`ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) · [entry](#ar--an-autoregression-on-the-targets-own-past) | solve | an autoregression for each target, AR(p), by least squares on lags the model keeps itself, with the features as further inputs, and `AutoReg`'s fit with no decay |
 | [`isotonic`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.isotonic) · [entry](#isotonic--a-monotone-function-of-one-feature) | solve | isotonic regression of each target on one feature, the best non-decreasing (or non-increasing) function, refit by pool-adjacent-violators on every row: the monotone calibrator, scikit-learn's `IsotonicRegression` on the same rows |
+| [`krls`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.krls) · [entry](#krls--online-kernel-regression) | solve | online kernel ridge regression, RBF, Laplacian, polynomial or linear, with ALD sparsification or an exact sliding window matching scikit-learn's `KernelRidge` |
 | [`vector_ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.vector_ar) · [entry](#vector_ar--a-vector-autoregression-with-granger-tests) | solve | a vector autoregression of the targets together, VAR(p), with Granger causality tests on every row and impulse responses read from the bank; statsmodels' `VAR` with no decay |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
@@ -231,7 +232,7 @@ what each model keeps inside the window). `ewridge`, `lasso`, `ar`,
 `vector_ar`, `ew_cov`, `ew_class`, `marginal` and `spectral` cut it from snapshots of
 their running sums, spaced by `snapshot_every` and
 `max_rows_between_snapshots` and held under `window_budget`. `expectile`,
-`isotonic`, `hawkes`, `realized`, `power_variation`, `ddsketch`, `ewm_moments` and
+`isotonic`, `krls`, `hawkes`, `realized`, `power_variation`, `ddsketch`, `ewm_moments` and
 `corrchange` take a `window_size` of their own, without snapshots, and
 each one's entry says what it keeps and how its edge is read. Five things
 to know before reading the numbers of a model under a snapshot window:
@@ -296,7 +297,7 @@ library's learn mask: the row is scored and teaches nothing. The default depends
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `isotonic`, `vector_ar` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `isotonic`, `krls`, `vector_ar` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -327,7 +328,7 @@ readiness fields:
 | field | on | what it holds |
 |---|---|---|
 | `settled_frac` | every model but `marginal`, `rcov` and `audit` | how far the model has come toward its steady state under decay |
-| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows a `holt` heuristic start holds, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance, or an `isotonic` fit read at a feature beyond the rows before it), `scale_ratio_moved` (a `corrchange` flag withheld on a span whose two columns' scale ratio moved), `not_separated` (a `pca` component the data does not yet tell apart from a neighbor), `level_beyond_sample` (a `tdigest` or `ddsketch` level past what the rows before it identify) `input_negative` (a `garch` row under GARCH or GJR whose input is below 0) or `target_not_positive` (a multiplicative `holt` season's row predicted and not learned, its target or its update 0 or below: the one reason beside a prediction, and in that form's `enum` alone), in that order of precedence |
+| `withheld_reason` | every model but `marginal`, `rcov` and `audit` | why `pred_y` is null, or null when it is not: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows` (the rows `kmeans`, `hmm` and `bocpd` hold to seed themselves from, the rows `garch` buffers for a target's start, the rows a `holt` heuristic start holds, the rows before `kalman` has sized any of a target's coefficients, standardized with no intercept, and the rows before `deco`'s standardizer holds more than five effective rows, while it has no level), `ill_conditioned` (an `ewridge` fit whose normal equations are too nearly singular to keep a digit), `unstable_rate` (an `sgd` target whose learning rate is past its stability bound, so the fit diverges), `not_identified` (a `garch` start whose rows do not tell its variance process from a constant variance, an `isotonic` fit read at a feature beyond the rows before it, or a `krls` fit before its first learned row or after a clock window empties), `scale_ratio_moved` (a `corrchange` flag withheld on a span whose two columns' scale ratio moved), `not_separated` (a `pca` component the data does not yet tell apart from a neighbor), `level_beyond_sample` (a `tdigest` or `ddsketch` level past what the rows before it identify) `input_negative` (a `garch` row under GARCH or GJR whose input is below 0) or `target_not_positive` (a multiplicative `holt` season's row predicted and not learned, its target or its update 0 or below: the one reason beside a prediction, and in that form's `enum` alone), in that order of precedence |
 | `error_inflation_y` | `ewridge`, `rls`, `kalman`, under `emit_error_inflation` | the row's own estimation variance over the noise: high on a row leaning on a direction the data never showed, at one triangular solve a row |
 | `support_coef` | `ewridge`, `huber`, `quantile`, beside `coef` | each coefficient's data share, `1 - ridge * (S^-1)_jj` on the system the solve inverts. A duplicated pair of features reads 0.5 each |
 | `se_coef` | `ewridge`, `rls`, `kalman`, under `emit_se_coef`, beside `coef` | each coefficient's standard error in its own units: `sigma` times the fit's own covariance, `kalman`'s posterior exactly. A report, not a gate; it errs large in warm-up and under a ridge |
@@ -2630,6 +2631,93 @@ directions, both bounds, a row window and a clock window under either
 edge). A feature value repeated without a window is pooled as its rows
 arrive, and a decayed weight is one `exp2` of the clock, where scikit-learn
 is handed the decay factor: 2.1e-15 at worst on the same targets.
+
+### `krls` — online kernel regression
+
+*API:* [`rheon.spec.krls`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.krls) — *Rust:* [`krls.rs`](../crates/rheon-core/src/krls.rs) — *Outputs:* [fields](OUTPUTS.md#krls)
+
+Online kernel ridge regression (KRLS): a nonlinear regression of one or more
+numeric targets in a reproducing kernel Hilbert space, fitted one row at a
+time.
+
+Use `krls` when the target is a smooth nonlinear function of several features
+(interactions, curves, radial patterns) and a linear regression leaves
+structure in the residuals. Four kernels are supported: `"rbf"` (the default,
+`exp(-gamma * ||x - y||²)`), `"laplacian"` (`exp(-gamma * ||x - y||_1)`),
+`"poly"` (`(gamma * x'y + coef0) ** degree`) and `"linear"` (`x'y`). Every
+target in `targets` shares one dictionary and one kernel factor, so a row with
+any target null is predicted and not learned. `ridge` is on the sum scale,
+matching scikit-learn's `KernelRidge(alpha=ridge)`.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.krls),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#krls). The parameters
+every spec takes are in [What every spec takes](#what-every-spec-takes).
+
+#### The update
+
+`krls` runs in two modes:
+
+**ALD dictionary mode** (the default, with neither `window_rows` nor
+`window_size`) keeps a dictionary `D = {d_1, ..., d_m}` of at most
+`max_atoms` rows (100 by default) and the exact lower Cholesky factor
+`L_D L_Dᵀ = K_DD` of their kernel matrix. Each row `x` maps to whitened
+Nyström coordinates `z = L_D⁻¹ k(D, x)` with squared RKHS projection residual
+`δ = k(x, x) − ||z||²`. Before learning, the prediction reads the existing
+fit. Then, if `m < max_atoms` and `δ > max(ald_threshold, 1e-12) · k(x, x)`,
+`x` joins `D`: `L_D` grows by row `[zᵀ, √δ]` with no division by `δ`, and
+`ψ = [z; √δ]`. Otherwise `ψ = z`:
+
+```text
+pred = b + zᵀ θ                                     before the row is learned
+S'   = λ S + w ψ ψᵀ        c' = λ c + w ψ yᵀ        (centered when fit_intercept)
+(S' + ridge·I) θ' = c'     b' = ȳ' − θ'ᵀ ψ̄'
+```
+
+When there is no decay (`half_life=inf`, the default), the upper Cholesky
+factor of `S + ridge·I` (and its weighted centered form when
+`fit_intercept=True`) updates in `O(m²)` per row by orthogonal Givens
+rotations. Under finite decay (`half_life` or `lam < 1`), `S` and `c` decay
+multiplicatively and refactor in `O(m³/3)`.
+
+**Sliding-window mode** (`window_rows` or `window_size`, with no decay) keeps
+every positive-weight learned row inside the window. It maintains the exact
+lower Cholesky factor `L_W L_Wᵀ = K_WW + ridge · diag(1 / w)` in `O(W²)` per
+row. Dropping the oldest row performs an orthogonal Givens positive rank-1
+update with no subtraction drift, and appending the new row extends `L_W` by
+one row. When `fit_intercept=True`, the unpenalized intercept is eliminated
+exactly by Schur complement on the ones vector (`b = (1ᵀ v_y) / (1ᵀ v_1)`,
+`α = v_y − v_1 bᵀ`). Under `window_size`, rows leave when they reach
+`window_size` old on the clock under `closed` (`"right"` or `"both"`), and a
+`predict` call checks the query row's stamp against the window without
+mutating the state.
+
+**State and speed.** ALD mode holds `m(m + 1) + m·k + 2m·T` floats (plus
+`2m + 3T` when `fit_intercept=True`), fixed by `max_atoms` and checked against
+`max_state_bytes` (256 KB by default, 64 MiB ceiling) when the spec is built.
+`window_rows` holds `W(W + 1)/2 + W·(k + 2T + 1) + 2T` floats, checked at build
+time. `window_size` adds 32 bytes per row for exact stamps and checks the cap
+before admitting each row, warning once past half the cap and stopping before
+exceeding it. Measured on an Apple M4 Pro (arm64 release build, one target,
+load average 6–7, 2026-11-27):
+
+| mode | settings | µs a row | state |
+|---|---|---:|---:|
+| ALD, no decay | `k=5`, `max_atoms=50` | 2.12 | 24.3 KB |
+| ALD, no decay | `k=5`, `max_atoms=100` | 6.67 | 86.8 KB |
+| ALD, no decay | `k=20`, `max_atoms=100` | 6.91 | 98.5 KB |
+| ALD, decayed (`λ=0.99`) | `k=5`, `max_atoms=50` | 12.0 | 24.3 KB |
+| ALD, decayed (`λ=0.99`) | `k=5`, `max_atoms=100` | 83.3 | 86.8 KB |
+| `window_rows=50` | `k=5` | 3.94 | 13.9 KB |
+| `window_rows=100` | `k=5` | 12.6 | 46.6 KB |
+
+**Against scikit-learn.** Evaluated over a 50-seed grid covering all four
+kernels, varying row weights and both intercept settings: uncapped ALD matches
+`KernelRidge(alpha=ridge)` to 1.3e-15 at worst, and decayed ALD matches
+arrival-whitened `Ridge` to 8.7e-16. Sliding-window mode matches `KernelRidge`
+to 6.4e-16 (`fit_intercept=False`) and Nyström + `Ridge` to 2.3e-14
+(`fit_intercept=True`). Capped ALD (`max_atoms=50`) sits within 1.7% of batch
+`KernelRidge`'s held-out MSE at worst.
 
 ### `vector_ar` — a vector autoregression with Granger tests
 

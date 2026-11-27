@@ -519,7 +519,7 @@ in the table.
 
 ### The table
 
-**150 cells: 109 over the 32 model kinds' rows, 19 over the
+**154 cells: 113 over the 33 model kinds' rows, 19 over the
 bank, 3 over the command line, 9 over the window operators, 6 over
 `refresh_time`, 2 over `merge`'s `carry` and 2 over the sample of an
 internal helper for gradient-boosted trees.** Each row is one cell: the
@@ -539,7 +539,8 @@ load of 0.5 and the four `power_variation` cells on 2026-11-23 the same way, at 
 2026-11-22 the same way, at a load of 3. The three
 `tdigest` cells were measured on 2026-11-22 the same way, at a load of 3, and the three
 `ddsketch` cells on 2026-11-23 the same way, at a load of 2. The three
-`isotonic` cells were measured on 2026-11-24 the same way, at a load of 12. The two `.window` cells were
+`isotonic` cells were measured on 2026-11-24 the same way, at a load of 12, and
+the four `krls` cells on 2026-11-27 the same way, at a load of 7. The two `.window` cells were
 measured again on 2026-11-06, once a window's snapshots were laid out
 flat. A row's time and allocations are per
 row; the saved state and the heap are the state's. `(CI)` marks the 25 cells
@@ -661,6 +662,10 @@ largest buffer at the smaller.
 | `isotonic.window` | a row window W | 100 → 800 | O(n) | O(n) | each learned row refits in full over the window's distinct feature values, which a continuous feature makes its rows; the ring and the sorted rows hold W rows | 6.04 · 1.00 · 7.85 · 6.98 |
 | `isotonic.targets` | targets T, a fit each | 1 → 8 | O(n) | O(n) | each target keeps its own sorted rows and refits them in full | 7.57 · 1.00 · 5.59 · 4.68 |
 | `isotonic.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | a window of 100 rows holds the same rows at any age | 1.01 · 1.00 · 1.00 · 1.00 |
+| `krls.atoms` | dictionary cap M (`max_atoms`), no decay | 8 → 64 | O(n^2) | O(n^2) | a row solves `L_D` and rotates the whitened Cholesky factor, M²; both triangles hold M² | 15.39 · 1.00 · 32.00 · 19.63 |
+| `krls.k` | features k, M = 25 | 4 → 32 | O(n) | O(n) | kernel evaluations against M atoms read M·k; the dictionary holds M·k | 1.21 · 1.00 · 1.97 · 1.81 |
+| `krls.window` | sliding window W rows | 16 → 128 | O(n^2) | O(n^2) | dropping the oldest row rotates `L_W` by Givens and adding the new extends it, W²; `L_W` holds W² | 26.60 · 1.00 · 36.76 · 26.29 |
+| `krls.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | dictionary capped at M = 32: nothing grows with the stream | 1.00 · 1.00 · 1.00 · 1.00 |
 | `bank.groups_seen` (CI) | groups seen G (a block over 50 of them) | 250 → 2,000 | O(1) | O(n) | a row touches its group's state alone; a state a group | 1.03 · 1.00 · 7.99 · 7.14 |
 | `bank.groups_seen_per_call` (CI) | groups seen G, calls of four rows to one group each | 1,000 → 8,000 | O(1) | O(n) | a call finds each of its groups' state by key and takes only their notices; a state a group | 1.00 · 1.00 · 7.98 · 7.33 |
 | `bank.specs` (CI) | specs S, one set of columns | 1 → 8 | O(n) | O(n) | each spec steps its model, S | 8.28 · 7.67 · 7.80 · 7.23 |

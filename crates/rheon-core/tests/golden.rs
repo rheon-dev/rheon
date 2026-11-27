@@ -1418,6 +1418,121 @@ fn isotonic_decayed_golden() {
     check("isotonic_decayed", &got, GOLDEN_ISOTONIC_DECAYED);
 }
 
+/// `krls` over the 60-row stream: ALD (RBF, intercept, `emit_n_atoms`),
+/// row window (Poly) and clock window (Laplacian). Uses `libm::exp` alone, so
+/// bit-exact across platforms.
+#[test]
+fn krls_golden() {
+    let mut got = Vec::new();
+    let cfgs = [
+        KrlsCfg {
+            n_features: 2,
+            n_targets: 1,
+            fit_intercept: true,
+            kernel: KernelKind::Rbf,
+            gamma: None,
+            degree: None,
+            coef0: None,
+            ridge: 0.5,
+            max_atoms: Some(20),
+            ald_threshold: Some(1e-3),
+            window_rows: None,
+            window_clock: None,
+            closed: WindowClosed::Right,
+            decay: Decay::Halflife(f64::INFINITY),
+            min_weight: 0.0,
+            emit_n_atoms: true,
+            max_state_bytes: None,
+        },
+        KrlsCfg {
+            n_features: 2,
+            n_targets: 1,
+            fit_intercept: false,
+            kernel: KernelKind::Poly,
+            gamma: None,
+            degree: Some(2),
+            coef0: Some(1.0),
+            ridge: 1.0,
+            max_atoms: None,
+            ald_threshold: None,
+            window_rows: Some(15),
+            window_clock: None,
+            closed: WindowClosed::Right,
+            decay: Decay::Halflife(f64::INFINITY),
+            min_weight: 0.0,
+            emit_n_atoms: false,
+            max_state_bytes: None,
+        },
+        KrlsCfg {
+            n_features: 2,
+            n_targets: 1,
+            fit_intercept: true,
+            kernel: KernelKind::Laplacian,
+            gamma: None,
+            degree: None,
+            coef0: None,
+            ridge: 0.5,
+            max_atoms: None,
+            ald_threshold: None,
+            window_rows: None,
+            window_clock: Some(15.0),
+            closed: WindowClosed::Both,
+            decay: Decay::Halflife(f64::INFINITY),
+            min_weight: 0.0,
+            emit_n_atoms: true,
+            max_state_bytes: None,
+        },
+    ];
+    let stream = stream();
+    for cfg in cfgs {
+        let mut m = Krls::new(cfg).unwrap();
+        for (i, (x, y, d, w)) in stream.iter().enumerate() {
+            let step = m.step(&x[..2], y, *d, *w);
+            if matches!(i, 10 | 30 | 59) {
+                got.extend(&step.pred);
+                if let Some(Extra::Krls { n_atoms }) = step.extra {
+                    got.push(n_atoms);
+                }
+            }
+        }
+    }
+    check_bits("krls", &got, GOLDEN_KRLS);
+}
+
+/// `krls` under a decay of 20 rows (platform `exp2` in `Decay`).
+#[test]
+fn krls_decayed_golden() {
+    let mut m = Krls::new(KrlsCfg {
+        n_features: 2,
+        n_targets: 1,
+        fit_intercept: true,
+        kernel: KernelKind::Rbf,
+        gamma: None,
+        degree: None,
+        coef0: None,
+        ridge: 0.5,
+        max_atoms: Some(20),
+        ald_threshold: Some(1e-3),
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(20.0),
+        min_weight: 0.0,
+        emit_n_atoms: true,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut got = Vec::new();
+    for (i, (x, y, d, w)) in stream().into_iter().enumerate() {
+        let step = m.step(&x[..2], &y, d, w);
+        if matches!(i, 10 | 30 | 59) {
+            got.extend(&step.pred);
+            got.push(step.n_eff);
+        }
+    }
+    check("krls_decayed", &got, GOLDEN_KRLS_DECAYED);
+}
+
 /// `ddsketch`'s decayed form, a half-life of 20 rows: the factor is the
 /// platform's `exp2`, so it is held to the golden files' tolerance, not to
 /// the bit.
@@ -2726,6 +2841,31 @@ const GOLDEN_ISOTONIC_DECAYED: &[f64] = &[
     16.92073916656056,
     -0.18039268640178485,
     20.212303545600623,
+];
+const GOLDEN_KRLS: &[f64] = &[
+    -0.46165572600355265,
+    10.0,
+    -0.6253749583958156,
+    15.0,
+    -0.12996024879564588,
+    19.0,
+    -0.4366939401633355,
+    -0.6205755187028339,
+    -0.036576778121862163,
+    -0.44643390571134856,
+    10.0,
+    -0.5353209579385729,
+    15.0,
+    -0.015921320833547664,
+    15.0,
+];
+const GOLDEN_KRLS_DECAYED: &[f64] = &[
+    -0.44607306028888305,
+    8.186167028692243,
+    -0.611127977922333,
+    19.19679054593763,
+    -0.11897200792284321,
+    18.98632160451895,
 ];
 const GOLDEN_VECTOR_AR: &[f64] = &[
     -1.3624877009041483,

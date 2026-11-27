@@ -130,7 +130,11 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
         ModelKind::Isotonic {
             window_size: Some(w),
             ..
-        } => (format!("window_size = {w}"), "Shorten window_size", "rows"),
+        }
+        | ModelKind::Krls(crate::spec::KrlsSpec {
+            window_size: Some(w),
+            ..
+        }) => (format!("window_size = {w}"), "Shorten window_size", "rows"),
         ModelKind::Isotonic { .. } => (
             "the feature column".to_string(),
             "Round the feature to fewer values in the query, or give window_rows",

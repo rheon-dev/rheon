@@ -40,8 +40,10 @@ pub use horizons::{Horizon, SpanHorizon, check_horizon_labels};
 #[allow(unused_imports)]
 pub use renamed::RENAMED_WHERE_EXPECTED;
 pub use renamed::{RENAMED, RENAMED_VALUES, name_renamed};
+mod krls;
 mod moments;
 mod vector_ar;
+pub use krls::{KrlsSpec, krls_cfg};
 pub(crate) use moments::moment_leg_column;
 pub use moments::{MOMENT_KINDS, MomentKinds, MomentLegs, MomentTerms, ewm_moments_cfg};
 pub use vector_ar::{CausalitySpec, VectorArSpec, causality_kind_of, test_of, vector_ar_cfg};
@@ -2020,6 +2022,9 @@ pub enum ModelKind {
     /// (`rheon_core::VectorAr`).
     #[serde(rename = "vector_ar")]
     VectorAr(VectorArSpec),
+    /// Online kernel recursive least squares (`rheon_core::Krls`).
+    #[serde(rename = "krls")]
+    Krls(KrlsSpec),
 }
 
 /// One term of a `power_variation` spec: its name, which names its fields
@@ -2209,6 +2214,7 @@ impl ModelKind {
         "spectral",
         "isotonic",
         "vector_ar",
+        "krls",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -2250,6 +2256,7 @@ impl ModelKind {
             ModelKind::Spectral(_) => "spectral",
             ModelKind::Isotonic { .. } => "isotonic",
             ModelKind::VectorAr(_) => "vector_ar",
+            ModelKind::Krls(_) => "krls",
         }
     }
 
@@ -2323,6 +2330,7 @@ impl ModelKind {
                 | ModelKind::EwmMoments { .. }
                 | ModelKind::Spectral(_)
                 | ModelKind::Isotonic { .. }
+                | ModelKind::Krls(_)
         )
     }
 
@@ -3309,7 +3317,7 @@ impl Spec {
                 // A sketch with no half-life never forgets, or forgets by
                 // its window: no decay is the plain form. So is an isotonic
                 // fit, scikit-learn's on every row learned.
-                ModelKind::DdSketch { .. } | ModelKind::Isotonic { .. } => {
+                ModelKind::DdSketch { .. } | ModelKind::Isotonic { .. } | ModelKind::Krls(_) => {
                     Ok(vec![(String::new(), Decay::Halflife(f64::INFINITY))])
                 }
                 // A window with no half-life is the common case of a flat
@@ -3505,7 +3513,7 @@ impl Spec {
             // The fit is identified at a feature once rows lie at or on
             // both sides of it, the model's own rule (`out_of_bounds`): no
             // count of rows is the gate.
-            ModelKind::Isotonic { .. } => 0.0,
+            ModelKind::Isotonic { .. } | ModelKind::Krls(_) => 0.0,
             // Each term is withheld by its own condition -- no weight, no
             // lagged pair, no spread to standardize by, an unbiased form's
             // denominator that keeps no digit -- not by a count of rows.
@@ -5038,7 +5046,10 @@ impl Spec {
                     ModelKind::Expectile {
                         window_rows: Some(_),
                         ..
-                    }
+                    } | ModelKind::Krls(KrlsSpec {
+                        window_rows: Some(_),
+                        ..
+                    })
                 ) && self.clock.is_some();
                 let why = if memory.is_some() {
                     "feature_health_half_life is inf"

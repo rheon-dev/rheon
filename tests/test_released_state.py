@@ -105,6 +105,7 @@ INTRODUCED = {
     "ar": "2.1.0",
     "spectral": "2.1.0",
     "isotonic": "2.1.0",
+    "krls": "2.1.0",
     "vector_ar": "2.1.0",
 }
 

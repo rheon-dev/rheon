@@ -1548,6 +1548,7 @@ DOUBLED: dict[str, dict] = {
     "ddsketch": {},
     # The same rows pooled in the same order, refit in full on each.
     "isotonic": {},
+    "krls": {},
     "spectral": {},
     "glm": {},
     # Its sums take each return in the order of the rows learned: a lesson

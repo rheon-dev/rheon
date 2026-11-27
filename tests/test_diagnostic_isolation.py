@@ -114,6 +114,12 @@ KINDS: dict[str, Builder] = {
         **{k: v for k, v in kw.items() if k != "coef_every"} | {"features": ["x0"]},
         out_of_bounds="clip",
     ),
+    # Nonlinear RKHS fit: no coefficients and no cadence for them.
+    "krls": lambda **kw: rp.spec.krls(
+        "m",
+        **{k: v for k, v in kw.items() if k != "coef_every"},
+        max_atoms=25,
+    ),
     # One lag of every target beside the features.
     "vector_ar": lambda **kw: rp.spec.vector_ar("m", lags=1, **kw),
 }

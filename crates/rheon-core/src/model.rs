@@ -30,6 +30,9 @@ pub enum Extra {
     /// `vector_ar`: each declared Granger test's statistic and p-value, then
     /// the order in force under `select`, read from the fit before the row.
     VectorAr { values: Vec<f64> },
+    /// `krls`: number of dictionary atoms (ALD) or rows held (window) before
+    /// the row's update (`emit_n_atoms = true`); `NaN` on a refused row.
+    Krls { n_atoms: f64 },
 }
 
 /// The coefficients' sampling variances ([`OnlineModel::coef_variance`]),
@@ -104,6 +107,7 @@ pub enum ModelState {
     Spectral(Box<crate::Spectral>),
     Isotonic(Box<crate::Isotonic>),
     VectorAr(Box<crate::VectorAr>),
+    Krls(Box<crate::Krls>),
 }
 
 #[derive(Debug, Error)]
@@ -237,6 +241,7 @@ impl ModelState {
             ModelState::Spectral(_) => "spectral",
             ModelState::Isotonic(_) => "isotonic",
             ModelState::VectorAr(_) => "vector_ar",
+            ModelState::Krls(_) => "krls",
         }
     }
 }
@@ -642,6 +647,7 @@ fn reports_nothing(mut s: Step) -> Step {
     match s.extra.as_mut() {
         Some(Extra::Lasso { lam_selected }) => lam_selected.fill(f64::NAN),
         Some(Extra::VectorAr { values }) => values.fill(f64::NAN),
+        Some(Extra::Krls { n_atoms }) => *n_atoms = f64::NAN,
         _ => {}
     }
     s

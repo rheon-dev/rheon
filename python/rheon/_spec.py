@@ -413,6 +413,7 @@ _U32 = frozenset(
         "bin_refit_rows",
         "quantile_refit_rows",
         "refit_rows",
+        "degree",
     }
 )
 
@@ -808,6 +809,7 @@ __all__ = [
     "ddsketch",
     "spectral",
     "isotonic",
+    "krls",
     "vector_ar",
 ]
 
@@ -4466,6 +4468,7 @@ from rheon._spec_glm import glm  # noqa: E402
 from rheon._spec_gradient import sgd  # noqa: E402
 from rheon._spec_isotonic import isotonic  # noqa: E402
 from rheon._spec_kalman import kalman  # noqa: E402
+from rheon._spec_krls import krls  # noqa: E402
 from rheon._spec_moments import ewm_moments  # noqa: E402
 from rheon._spec_pca import pca  # noqa: E402
 from rheon._spec_point import hawkes  # noqa: E402

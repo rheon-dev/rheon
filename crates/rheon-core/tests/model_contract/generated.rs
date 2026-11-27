@@ -203,6 +203,10 @@ fn every_model_refuses_a_state_without_the_low_parts() {
             "pca",
             refuses_without_low_parts(|| StreamPca::new(pca_cfg()).unwrap(), &none),
         ),
+        (
+            "krls",
+            refuses_without_low_parts(|| Krls::new(krls_cfg()).unwrap(), &two),
+        ),
     ];
     // Each model that keeps a mean had parts to drop, so its refusal is of
     // a real state: a model that lost its means, or a renamed field, shows
@@ -226,6 +230,7 @@ fn every_model_refuses_a_state_without_the_low_parts() {
         "bocpd",
         "audit",
         "pca",
+        "krls",
     ];
     for (name, (stripped, refused)) in &results {
         if keeps_means.contains(name) {
@@ -2616,4 +2621,82 @@ fn isotonic_clock_window_reads_the_rows_inside_it() {
     let held: f64 = (0..12).map(|k| lam.powi(k)).sum();
     assert!((s.n_eff - held).abs() < 1e-12, "{} against {held}", s.n_eff);
     assert_eq!(m.window_len(), 13);
+}
+
+/// Decayed ALD-KRLS on two features and two targets with intercept.
+fn krls_cfg() -> KrlsCfg {
+    KrlsCfg {
+        n_features: K,
+        n_targets: 2,
+        fit_intercept: true,
+        kernel: KernelKind::Rbf,
+        gamma: None,
+        degree: None,
+        coef0: None,
+        ridge: 0.5,
+        max_atoms: Some(25),
+        ald_threshold: Some(1e-3),
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(HALFLIFE),
+        min_weight: 0.0,
+        emit_n_atoms: true,
+        max_state_bytes: None,
+    }
+}
+
+fn krls_window_rows_cfg() -> KrlsCfg {
+    KrlsCfg {
+        max_atoms: None,
+        ald_threshold: None,
+        window_rows: Some(9),
+        decay: Decay::Halflife(f64::INFINITY),
+        ..krls_cfg()
+    }
+}
+
+fn krls_window_clock_cfg() -> KrlsCfg {
+    KrlsCfg {
+        max_atoms: None,
+        ald_threshold: None,
+        window_clock: Some(12.0),
+        closed: WindowClosed::Both,
+        decay: Decay::Halflife(f64::INFINITY),
+        ..krls_cfg()
+    }
+}
+
+#[test]
+fn krls() {
+    let m = Krls::new(krls_cfg()).unwrap();
+    let r = probe_with(m, 2, Some(&Krls::n_eff));
+    assert_eq!(r.kind, "krls");
+    assert_eq!(r.n_features, K);
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 2);
+    assert_eq!(r.pred_len, 2);
+    assert!(r.roundtrips);
+    let rw = probe_windowed(Krls::new(krls_window_rows_cfg()).unwrap(), 2, Some(&Krls::n_eff));
+    assert!(rw.roundtrips);
+    assert_eq!(rw.pred_len, 2);
+}
+
+#[test]
+fn krls_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Krls::new(krls_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(
+        || {
+            Krls::new(KrlsCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                fit_intercept: false,
+                ..krls_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
+    predict_is_the_step_without_the_step(|| Krls::new(krls_window_rows_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(|| Krls::new(krls_window_clock_cfg()).unwrap(), 2, false);
 }

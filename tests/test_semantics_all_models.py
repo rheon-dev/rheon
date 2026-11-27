@@ -43,10 +43,11 @@ MODELS = [
     ("isotonic", {"features": ["x0"], "out_of_bounds": "clip"}),
     # Every target's lags in every target's equation, the features beside.
     ("vector_ar", {"lags": 1, "ridge": 1e-3}),
+    ("krls", {"max_atoms": 30}),
 ]
 
-#: The regressions with no `coef`: `isotonic`'s fit is a curve.
-NO_COEF = frozenset({"isotonic"})
+#: The regressions with no `coef`: `isotonic`'s fit is a curve, `krls`'s is in an RKHS.
+NO_COEF = frozenset({"isotonic", "krls"})
 
 #: A second configuration of a model above, swept through the same
 #: invariants: `ewridge` with the Gram update blocked (E51). The block is an

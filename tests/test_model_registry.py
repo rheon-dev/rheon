@@ -108,6 +108,7 @@ MINIMAL: dict[str, dict[str, object]] = {
     "spectral": {"features": None, "periods": [8.0, 3.0]},
     # One feature, the score it is monotone in.
     "isotonic": {"features": ["x0"]},
+    "krls": {},
     "vector_ar": {"lags": 1},
 }
 
@@ -366,6 +367,7 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "ewm_moments",
             "spectral",
             "isotonic",
+            "krls",
         )
     },
 }

@@ -51,6 +51,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "holt",
         "ar",
         "isotonic",
+        "krls",
         "vector_ar",
     ),
     "Moments and correlation": (
@@ -248,6 +249,9 @@ MEANING: dict[str, str] = {
     "predicted_state<j>": "one-step-ahead probability of state `<j>`",
     "state": "the most likely state for this row: the one with the largest `predicted_state<j>`",
     "huber_scale_<t>": "the scale the row's cut for `<t>` is drawn in",
+    "n_atoms": (
+        "number of dictionary atoms (or window rows, under a window) in the fit before this row"
+    ),
     "pc<j>_var": (
         "the variance along component `<j>`, from 0: its eigenvalue, times Bessel's correction at "
         "Kish's effective size"
@@ -385,6 +389,7 @@ ALSO_NULL: dict[str, str] = {
     "predicted_state<j>": UNTIL_SEEDED,
     "state": UNTIL_SEEDED,
     "huber_scale_<t>": "until the target has a scale above 0",
+    "n_atoms": "never",
     **{
         f"pc<j>_{s}": (
             "while withheld, and while the component is not told apart from the one above it "
@@ -451,6 +456,10 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
         "the levels hold no correlation matrix the density can be solved for"
     ),
     ("micro", "cluster"): "while withheld, and while no summary is established",
+    ("krls", "pred_<t>"): (
+        "while withheld, before the first learned row, and under `window_size` when every "
+        "learned row has aged out of the window (`not_identified`)"
+    ),
     ("hmm", "loglik"): UNTIL_SEEDED,
     **{("bocpd", stem): BOCPD_WARM for stem in BOCPD_STEMS},
 }
@@ -466,6 +475,7 @@ SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
         "smooth_lag=5, emit_smoothed_se=True",
         {"smooth_lag": 5, "emit_smoothed_se": True},
     ),
+    "krls": ("emit_n_atoms=True", {"emit_n_atoms": True}),
 }
 
 #: What a model writes when it writes nothing per row.
@@ -638,6 +648,10 @@ OPTIONAL: list[tuple[str, str]] = [
     (
         "`emit_huber_scale`, `huber`'s: `huber_scale_<t>`, the scale each row's cut is drawn in",
         "[`huber`'s table](#huber), and its [entry](MODELS.md#huber--robust-regression)",
+    ),
+    (
+        "`emit_n_atoms`, `krls`'s: `n_atoms`, the dictionary or window size before the row",
+        "[`krls`'s table](#krls), and its [entry](MODELS.md#krls--online-kernel-regression)",
     ),
     (
         "`ew_cov`'s extra `stats`, its `lags` (`lag_corr_l<l>_<a>_<b>`), `pca` (`pc<j>_*`) and "

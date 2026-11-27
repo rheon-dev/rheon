@@ -1273,6 +1273,54 @@ CASES: list[Case] = [
         "isotonic",
         {**CLOSE, "targets": ["y"], "features": ["x0"]},
     ),
+    # Online kernel regression: ALD mode with polynomial kernel (covers kernel,
+    # gamma, degree, coef0, ridge, max_atoms, ald_threshold, emit_n_atoms,
+    # max_state_bytes).
+    Case(
+        "krls",
+        "krls",
+        {
+            **without(full(), ("max_rows_between_coefs",)),
+            "kernel": "poly",
+            "gamma": 0.5,
+            "degree": 2,
+            "coef0": 1.5,
+            "ridge": 0.5,
+            "max_atoms": 30,
+            "ald_threshold": 1e-2,
+            "emit_n_atoms": True,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    # Row sliding window (no decay).
+    Case(
+        "krls_rows",
+        "krls",
+        {
+            **without(full2(), ("coef_every", "half_life", "lam")),
+            "half_life": float("inf"),
+            "kernel": "laplacian",
+            "window_rows": 30,
+        },
+    ),
+    # Clock sliding window with closed="both" (no decay).
+    Case(
+        "krls_clock",
+        "krls",
+        {
+            **without(full2(), ("coef_every", "half_life", "lam")),
+            "half_life": float("inf"),
+            "kernel": "linear",
+            "window_size": 30.0,
+            "closed": "both",
+        },
+    ),
+    # Its groups run to a close, with per-step decay `lam`.
+    Case(
+        "krls_close",
+        "krls",
+        {**CLOSE, "targets": ["y"], "features": ["x0", "x1"], "lam": 0.97},
+    ),
     # A sketch a target: no decay and no coefficients, every key it takes.
     Case(
         "ddsketch",

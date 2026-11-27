@@ -67,6 +67,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         }
+        | ModelKind::Krls(crate::spec::KrlsSpec {
+            max_state_bytes: Some(_),
+            ..
+        })
         | ModelKind::Glm {
             max_state_bytes: Some(_),
             ..
@@ -190,7 +194,11 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             ModelKind::Isotonic {
                 window_size: Some(w),
                 ..
-            } => (
+            }
+            | ModelKind::Krls(crate::spec::KrlsSpec {
+                window_size: Some(w),
+                ..
+            }) => (
                 format!("the rows inside window_size = {w}"),
                 "Shorten window_size",
             ),

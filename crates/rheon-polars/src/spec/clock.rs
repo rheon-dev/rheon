@@ -108,6 +108,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
         "spectral",
         &["periods", "spacing", "window_size", "snapshot_every"],
     ),
+    ("krls", &["window_size"]),
 ];
 
 /// The parameters that are a rate *per* clock unit: a decay factor per unit
@@ -565,7 +566,9 @@ impl Spec {
                 put(&mut out, "start_span", start_span.as_ref());
                 put(&mut out, "margin_start_span", margin_start_span.as_ref());
             }
-            ModelKind::DdSketch { window_size, .. } | ModelKind::Isotonic { window_size, .. } => {
+            ModelKind::DdSketch { window_size, .. }
+            | ModelKind::Isotonic { window_size, .. }
+            | ModelKind::Krls(super::KrlsSpec { window_size, .. }) => {
                 put(&mut out, "window_size", window_size.as_ref());
             }
             // A lag written on a term's leg (`x@5m`) is a span of the clock
@@ -737,7 +740,7 @@ impl ModelKind {
             } | ModelKind::Audit {
                 distinct_window_size: Some(_),
                 ..
-            }
+            } | ModelKind::Krls(k) if k.window_size.is_some()
         )
     }
 

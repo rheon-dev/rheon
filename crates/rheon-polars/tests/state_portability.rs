@@ -129,6 +129,11 @@ const SPECS: &[(&str, &str, &str)] = &[
         r#""targets": ["y", "x1"], "features": ["x0"], "half_life": 50.0"#,
     ),
     (
+        "krls",
+        r#"{"type": "krls", "max_atoms": 20, "emit_n_atoms": true}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": 50.0"#,
+    ),
+    (
         "ddsketch",
         r#"{"type": "ddsketch", "quantiles": [0.05, 0.25, 0.95], "window_rows": 50}"#,
         r#""targets": ["y", "x0"], "features": []"#,

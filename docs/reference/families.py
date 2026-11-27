@@ -100,6 +100,7 @@ FAMILIES: tuple[Family, ...] = (
                 "holt",
                 "ar",
                 "isotonic",
+                "krls",
                 "vector_ar",
             )
         ),

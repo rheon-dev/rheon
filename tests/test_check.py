@@ -623,7 +623,7 @@ def test_check_places_every_regression():
     reports itself."""
     from test_model_registry import REGRESSIONS
 
-    assert REGRESSIONS - {"holt", "ar", "isotonic", "vector_ar"} == _check._REGRESSIONS
+    assert REGRESSIONS - {"holt", "ar", "isotonic", "krls", "vector_ar"} == _check._REGRESSIONS
     assert set(_check._UNCENTRED_LIMITS) <= _check._REGRESSIONS
     assert _check._RIDGED <= _check._REGRESSIONS
     assert set(_native.model_kinds()) >= _check._GRAMMED

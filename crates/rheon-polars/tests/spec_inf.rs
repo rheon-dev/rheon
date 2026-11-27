@@ -227,7 +227,7 @@ fn nan_is_refused_where_inf_means_something() {
 /// each `inf` where `inf` names nothing: `(top, model, the field's name)`.
 /// `{}` in the text is the value. Only `hmm`'s `prior_rows` was here
 /// (PLAN 578j, TEST-7).
-const SINCE_2_0: [(&str, &str, &str); 22] = [
+const SINCE_2_0: [(&str, &str, &str); 27] = [
     (
         "",
         "type = \"glm\"\nfamily = \"tweedie\"\nvar_power = {}",
@@ -317,6 +317,19 @@ const SINCE_2_0: [(&str, &str, &str); 22] = [
         "emit_drift = true\ndrift_kind = \"kswin\"\ndrift_options = { alpha = {} }",
         "type = \"ewridge\"",
         "alpha",
+    ),
+    ("", "type = \"krls\"\nridge = {}", "ridge"),
+    ("", "type = \"krls\"\ngamma = {}", "gamma"),
+    (
+        "",
+        "type = \"krls\"\nkernel = \"poly\"\ncoef0 = {}",
+        "coef0",
+    ),
+    ("", "type = \"krls\"\nald_threshold = {}", "ald_threshold"),
+    (
+        "features = [\"x0\"]\nhalf_life = inf",
+        "type = \"krls\"\nwindow_size = {}",
+        "window_size",
     ),
 ];
 

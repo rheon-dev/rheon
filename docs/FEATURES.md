@@ -14,7 +14,7 @@ pages by the task you have in hand.
 
 | family | its features |
 |---|---|
-| [Models](#models) | the thirty-seven models a spec can name |
+| [Models](#models) | the thirty-eight models a spec can name |
 | [Running a bank](#running-a-bank) | a bank in a query, in a Python loop, and its output as Arrow |
 | [Saving, loading and serving](#saving-loading-and-serving) | a bank's state, written and read back |
 | [Reading a bank](#reading-a-bank) | what a bank holds, and the names of its output |
@@ -51,6 +51,7 @@ to start with.
 | [`rheon.spec.holt`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.holt) | Holt's linear trend, a baseline that extrapolates the target's own level and slope | [entry](MODELS.md#holt--holts-linear-trend) · [choose Holt's smoothing](how-to/choose-holts-smoothing.md) |
 | [`rheon.spec.ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ar) | an autoregression for each target, AR(p), on lags the model keeps itself, with exogenous features | [entry](MODELS.md#ar--an-autoregression-on-the-targets-own-past) |
 | [`rheon.spec.isotonic`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.isotonic) | isotonic regression of each target on one feature, the monotone calibrator, over every row, a window or a decay; scikit-learn's fit | [entry](MODELS.md#isotonic--a-monotone-function-of-one-feature) |
+| [`rheon.spec.krls`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.krls) | kernel ridge regression, RBF, Laplacian, polynomial or linear, with ALD sparsification or an exact sliding window | [entry](MODELS.md#krls--online-kernel-regression) |
 | [`rheon.spec.vector_ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.vector_ar) | a vector autoregression of the targets together, VAR(p), with Granger tests on every row and its impulse responses, variance decomposition and roots read with `ModelBank.vector_ar` | [entry](MODELS.md#vector_ar--a-vector-autoregression-with-granger-tests) |
 | [`rheon.spec.ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) | running means, variances, covariances, correlations, partial correlations, Mahalanobis distances and principal components | [entry](MODELS.md#ew_cov--exponentially-weighted-moments) · [flag joint outliers](how-to/flag-joint-outliers.md) · [track principal components](how-to/track-principal-components.md) · [find which series leads](how-to/find-which-series-leads.md) |
 | [`rheon.spec.pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) | principal components learned a row at a time, in state of the components times the columns: the incremental SVD, CCIPCA or Oja's rule | [entry](MODELS.md#pca--streaming-principal-components) · [track principal components](how-to/track-principal-components.md) |
@@ -227,7 +228,7 @@ parameters are on its builder's reference page.
 |---|---|---|---|
 | the columns | `targets`, `features`, `fit_intercept` | what the model reads, and whether the fit has a level of its own | [What a spec names](MODELS.md#what-a-spec-names) |
 | the clock and its decay | `clock`, `half_life`, `lam`, `gap_cap` | how far apart two rows are, how fast the past fades, and the longest step a gap counts as | [The clock and its units](MODELS.md#the-clock-and-its-units) · [Time and decay](explanation/time-and-decay.md) |
-| a hard window, in `ewridge`, `lasso`, `ar`, `vector_ar`, `ew_cov`, `ew_class`, `marginal` and `spectral`, cut from snapshots; `expectile`, `isotonic`, `hawkes`, `realized`, `power_variation`, `ddsketch`, `ewm_moments` and `corrchange` take a `window_size` of their own | `window_size`, `closed`, `snapshot_every`, `max_rows_between_snapshots`, `window_budget` | the span past which a row counts for nothing | [A hard window](MODELS.md#a-hard-window) · [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
+| a hard window, in `ewridge`, `lasso`, `ar`, `vector_ar`, `ew_cov`, `ew_class`, `marginal` and `spectral`, cut from snapshots; `expectile`, `isotonic`, `krls`, `hawkes`, `realized`, `power_variation`, `ddsketch`, `ewm_moments` and `corrchange` take a `window_size` of their own | `window_size`, `closed`, `snapshot_every`, `max_rows_between_snapshots`, `window_budget` | the span past which a row counts for nothing | [A hard window](MODELS.md#a-hard-window) · [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
 | the clock's policy | `session`, `session_gap`, `restart_after_step_back` | what a session boundary and a step back do | [Handle sessions, gaps and steps back](how-to/handle-sessions-gaps-and-steps-back.md) |
 | groups | `group`, `group_close` | one model per value of a column, and when a group closes | [Fit one model per group](how-to/fit-one-model-per-group.md) · [Close groups](how-to/close-groups.md) |
 | weights | `weight` | how much each row counts | [Weight rows](how-to/weight-rows.md) |

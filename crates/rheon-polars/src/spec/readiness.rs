@@ -55,6 +55,10 @@ impl Spec {
                 "an expectile fit weighs each row by the side its residual falls on, so a \
                  least-squares fit's uncertainty does not hold for it"
             }
+            ModelKind::Krls(_) => {
+                "a kernel fit operates in a reproducing kernel Hilbert space over a dynamic \
+                 dictionary, so a linear least-squares uncertainty does not hold for it"
+            }
             ModelKind::EwCov { .. }
             | ModelKind::Pca { .. }
             | ModelKind::Marginal { .. }
@@ -94,6 +98,9 @@ impl Spec {
             ModelKind::Expectile { .. } => {
                 "an expectile fit's leverage is on its rows weighed by their sides, which \
                  change with the fit"
+            }
+            ModelKind::Krls(_) => {
+                "a kernel fit keeps no linear feature Gram to read one row's leverage from"
             }
             ModelKind::Sgd { .. } | ModelKind::Pa { .. } | ModelKind::Ftrl { .. } => {
                 "a gradient fit keeps no second moments of the features to read one row's \

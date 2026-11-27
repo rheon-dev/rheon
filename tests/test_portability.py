@@ -384,6 +384,7 @@ class TestOutputSchemaStability:
         ("holt", {}),
         ("ar", {"features": ["x0", "x1"], "lags": 2}),
         ("isotonic", {"features": ["x0"]}),
+        ("krls", {"features": ["x0", "x1"], "max_atoms": 20}),
         ("vector_ar", {"features": ["x0", "x1"], "lags": 2}),
     ]
 

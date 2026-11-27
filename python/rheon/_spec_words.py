@@ -304,6 +304,22 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "max_state_bytes",
         }
     ),
+    "krls": frozenset(
+        {
+            "kernel",
+            "gamma",
+            "degree",
+            "coef0",
+            "ridge",
+            "max_atoms",
+            "ald_threshold",
+            "window_rows",
+            "window_size",
+            "closed",
+            "emit_n_atoms",
+            "max_state_bytes",
+        }
+    ),
     "expectile": frozenset(
         {
             "ridge",

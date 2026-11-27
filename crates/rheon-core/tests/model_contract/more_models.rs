@@ -215,6 +215,12 @@ fn the_n_eff_accessor_is_the_steps_under_a_window() {
             whole,
         );
     }
+    let whole = accessor_is_the_step(Krls::new(krls_cfg()).unwrap(), 2, &Krls::n_eff);
+    pair(
+        "krls, window_rows",
+        accessor_is_the_step(Krls::new(krls_window_rows_cfg()).unwrap(), 2, &Krls::n_eff),
+        whole,
+    );
 }
 
 /// 40 rows, the second target absent on every third row: each target's
@@ -319,6 +325,10 @@ fn every_per_target_weight_is_the_rows_that_carried_that_target() {
             "isotonic",
             each_target_weight_is_its_own(Isotonic::new(isotonic_cfg()).unwrap(), false),
         ),
+        (
+            "krls",
+            each_target_weight_is_its_own(Krls::new(krls_cfg()).unwrap(), true),
+        ),
     ]
     .into_iter()
     .filter_map(|(k, kept)| kept.then_some(k))
@@ -327,7 +337,7 @@ fn every_per_target_weight_is_the_rows_that_carried_that_target() {
         kept,
         [
             "ewridge", "rls", "lasso", "kalman", "robust", "ftrl", "sgd", "pa", "holt",
-            "isotonic"
+            "isotonic", "krls"
         ],
         "the models that keep a weight per target"
     );
