@@ -633,6 +633,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/clock_span.rs"]
 
+[messages."crates/rheon-core/src/conformal_variants.rs"]
+
 [messages."crates/rheon-core/src/dcc.rs"]
 
 [messages."crates/rheon-core/src/ddsketch.rs"]
@@ -740,6 +742,7 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-polars/src/spec/bandit.rs"]
 [messages."crates/rheon-polars/src/spec/diagnostics.rs"]
+[messages."crates/rheon-polars/src/spec/conformal.rs"]
 
 [messages."crates/rheon-polars/src/spec/drift.rs"]
 
@@ -748,6 +751,7 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."crates/rheon-polars/src/spec/kalman.rs"]
 
 [messages."crates/rheon-polars/src/spec/krls.rs"]
+[messages."crates/rheon-polars/src/spec/metrics.rs"]
 
 [messages."crates/rheon-polars/src/spec/moments.rs"]
 
@@ -804,6 +808,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."python/rheon/polars/__init__.py"]
 
 [messages."python/rheon/polars/_clock.py"]
+
+[messages."python/rheon/polars/_eval_intervals.py"]
 
 [messages."python/rheon/polars/_fourier.py"]
 
@@ -862,6 +868,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/bocpd/span.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/clock_span.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/conformal_variants.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/dcc.rs#messages"]
 
@@ -963,6 +971,7 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-polars/src/spec/bandit.rs#messages"]
 [vocabulary."crates/rheon-polars/src/spec/diagnostics.rs#messages"]
+[vocabulary."crates/rheon-polars/src/spec/conformal.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/spec/drift.rs#messages"]
 
@@ -971,6 +980,7 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-polars/src/spec/kalman.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/spec/krls.rs#messages"]
+[vocabulary."crates/rheon-polars/src/spec/metrics.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/spec/moments.rs#messages"]
 
@@ -1064,6 +1074,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/polars/_clock.py#messages"]
 
 [vocabulary."python/rheon/polars/_errors.py#docstrings"]
+
+[vocabulary."python/rheon/polars/_eval_intervals.py#messages"]
 
 [vocabulary."python/rheon/polars/_fourier.py#docstrings"]
 

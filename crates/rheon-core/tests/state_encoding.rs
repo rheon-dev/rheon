@@ -488,6 +488,8 @@ fn kalman_round_trips_with_every_optional_part_present_or_absent() {
                 );
                 assert_eq!(bits(&pn), bits(&p0), "{what}: named continuation diverged");
             }
+        }
+    }
 }
 
 #[test]

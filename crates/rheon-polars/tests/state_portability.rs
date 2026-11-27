@@ -87,6 +87,8 @@ const SPECS: &[(&str, &str, &str)] = &[
         "hoeffding_tree_regressor",
         r#"{"type": "hoeffding_tree_regressor", "grace_period": 20.0, "delta": 0.01}"#,
         r#""targets": ["y", "x1"], "features": ["x0"]"#,
+    ),
+    (
         "bandit",
         r#"{"type": "bandit", "arms": ["a", "b"], "policy": "linucb", "alpha": 1.0, "l2": 1.0, "seed": 7}"#,
         r#""targets": ["y", "lab"], "features": ["x0", "x1"], "half_life": 50.0"#,

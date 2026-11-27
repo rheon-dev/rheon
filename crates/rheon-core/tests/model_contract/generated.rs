@@ -2966,6 +2966,7 @@ fn hoeffding_tree_classifier_predict_is_the_step() {
             1,
             true,
         );
+    }
 }
 
 #[test]
@@ -3080,6 +3081,7 @@ fn hoeffding_tree_regressor_predict_is_the_step() {
     );
 }
 
+#[test]
 fn half_space_trees_predict_is_the_step() {
     predict_is_the_step_without_the_step(
         || HalfSpaceTrees::new(half_space_trees_cfg()).unwrap(),

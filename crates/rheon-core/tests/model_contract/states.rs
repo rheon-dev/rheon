@@ -365,6 +365,7 @@ fn every_model_hands_back_its_configuration() {
         HoeffdingTreeRegressor::new(c.clone()).unwrap(),
         &c,
         HoeffdingTreeRegressor::cfg,
+    );
     let c = bandit_cfg();
     same(Bandit::new(c.clone()).unwrap(), &c, Bandit::cfg);
     let c = half_space_trees_cfg();

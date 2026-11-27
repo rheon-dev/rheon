@@ -61,6 +61,13 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
     if let Some(f) = fixed_span(spec) {
         return (f.span, f.shorten, "rows");
     }
+    if let Some(w) = &spec.conformal_p_window_size {
+        return (
+            format!("conformal_p_window_size = {w}"),
+            "Shorten conformal_p_window_size, or give conformal_p_window_rows",
+            "rows",
+        );
+    }
     match &spec.model {
         ModelKind::Hawkes {
             window_size: Some(w),

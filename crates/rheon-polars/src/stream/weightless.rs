@@ -58,7 +58,6 @@ impl Stream {
         };
         // Its own stamp, for a model whose read decides a window's edge.
         let stamp = spec
-            .model
             .reads_at_stamp()
             .then(|| read_stamp(clock_state, cfg, &self.exact_caps, c, session))
             .flatten();

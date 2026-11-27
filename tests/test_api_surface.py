@@ -233,6 +233,29 @@ def describe_api(cli: Path | None = None) -> str:
             "lasso path",
             dict(targets=["y"], features=["x0"], penalties=[0.1, 0.0], half_life=100.0),
         ),
+        (
+            "multi-level asymmetric conformal, conformal p-value and extended metrics",
+            dict(
+                targets=["y"],
+                features=["x0"],
+                half_life=100.0,
+                conformal=[0.8, 0.9],
+                conformal_symmetric=False,
+                emit_conformal_p=True,
+                emit_metrics=["ic", "mae", "pinball", "coverage", "width", "winkler"],
+                metric_quantiles=[0.1, 0.9],
+            ),
+        ),
+        (
+            "logistic log_loss",
+            dict(
+                _model="ftrl",
+                targets=["y"],
+                features=["x0"],
+                half_life=100.0,
+                emit_metrics=["r2", "hit_rate", "log_loss"],
+            ),
+        ),
     ]
     for label, kw in cases:
         model = (
@@ -776,6 +799,14 @@ ENUM_PROBES: list[
     tuple[str, str, dict[str, object], str, str, *tuple[dict[str, dict[str, object]], ...]]
 ] = [
     ("spec.conformal_rate", "ewridge", {"conformal": 0.9}, "conformal_rate", "word"),
+    (
+        "spec.emit_metrics",
+        "sgd",
+        {"loss": "logistic", "conformal": 0.9},
+        "emit_metrics",
+        "list",
+        {"pinball": {"metric_quantiles": [0.5]}},
+    ),
     ("spec.drift_action", "ewridge", {"emit_drift": True}, "drift_action", "word"),
     # `"ddm"` and `"eddm"` count errors, and need what an error is.
     (

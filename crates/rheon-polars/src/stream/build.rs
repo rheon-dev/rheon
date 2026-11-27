@@ -162,7 +162,10 @@ pub(super) fn resid_window(spec: &Spec) -> Result<Option<ResidWindow>, String> {
     let Some((window, cadence)) = spec.model.window_and_cadence() else {
         return Ok(None);
     };
-    let read = Buffers::of(spec).extras || spec.emit_drift || spec.conformal.is_some();
+    let read = Buffers::of(spec).extras
+        || spec.emit_drift
+        || spec.conformal.is_some()
+        || spec.emit_conformal_p;
     if spec.model.predicts_no_target() || !read {
         return Ok(None);
     }

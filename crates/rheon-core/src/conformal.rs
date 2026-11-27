@@ -445,6 +445,82 @@ impl Conformal {
     pub fn held_mean(&self) -> f64 {
         self.held_mean
     }
+
+    /// Like [`Self::update_against`], for multi-level symmetric conformal:
+    /// steps `m` against the tracker's own `shown` (or current `m · σ`) radius
+    /// while recording realized coverage against the sorted `emitted` offsets
+    /// `(lo_off, hi_off)` shown to the caller.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn update_against_emitted(
+        &mut self,
+        resid: f64,
+        sigma: f64,
+        lam: f64,
+        w: f64,
+        shown: Option<f64>,
+        emitted: Option<(f64, f64)>,
+        held: usize,
+    ) {
+        let Some((eq_lo, eq_hi)) = emitted else {
+            self.update_against(resid, sigma, lam, w, shown, held);
+            return;
+        };
+        if !(resid.is_finite() && w > 0.0 && w.is_finite()) {
+            self.cov_w *= lam;
+            self.w_rows *= lam;
+            return;
+        }
+        self.w_rows *= lam;
+        self.w_mean = crate::cluster::mean_weight(&mut self.w_rows, self.w_mean, w);
+        if held > 0 || self.held_mean != 0.0 {
+            self.held_mean += (held as f64 - self.held_mean) / self.w_rows;
+        }
+        if !self.m.is_finite() {
+            if self.q.is_finite() {
+                self.update_kept(resid, sigma, lam, w, shown);
+                return;
+            }
+            self.released += 1.0;
+            if self.released >= 1.0 + self.held_mean {
+                self.m = self.z;
+                self.released = 0.0;
+            }
+            self.cov_w *= lam;
+            return;
+        }
+        let against = match shown {
+            Some(a) => a,
+            None if sigma.is_finite() && sigma > 0.0 => self.m * sigma,
+            None => f64::NAN,
+        };
+        if !against.is_finite() {
+            self.cov_w *= lam;
+            return;
+        }
+        // Realized coverage against the un-crossed emitted interval.
+        if eq_lo.is_finite() && eq_hi.is_finite() {
+            let l_off = (-eq_lo).min(eq_hi);
+            let u_off = (-eq_lo).max(eq_hi);
+            let hit = resid >= l_off && resid <= u_off;
+            let cw = lam * self.cov_w + w;
+            self.cov = (lam * self.cov_w * self.cov + w * f64::from(hit)) / cw;
+            self.cov_w = cw;
+        } else {
+            self.cov_w *= lam;
+        }
+        // Independent tracker step against its own radius `against`.
+        let miss = resid.abs() > against;
+        let mut eta = self.rate;
+        if self.held_mean > 0.0 {
+            eta /= 1.0 + self.rate * self.gain * self.held_mean / HELD_GAIN_BOUND;
+        }
+        let rel = if self.w_mean > 0.0 {
+            w / self.w_mean
+        } else {
+            1.0
+        };
+        self.m = (self.m + eta * rel * (f64::from(miss) - self.alpha)).max(0.0);
+    }
 }
 
 /// `g(α) = 2φ(Φ⁻¹(1 − α/2))`: the density of `|Z|`, `Z` standard normal,
@@ -469,7 +545,7 @@ pub fn gauss_gain(alpha: f64) -> f64 {
 /// takes) it is read from the lower tail, `−Φ⁻¹(α/2)`: `Φ⁻¹(1)` is no
 /// number, and made the tracker's start and gain NaN for good. Elsewhere it
 /// is the form it always was, to the bit.
-fn upper_z(alpha: f64) -> f64 {
+pub(crate) fn upper_z(alpha: f64) -> f64 {
     let p = 1.0 - 0.5 * alpha;
     if p < 1.0 {
         norm_ppf(p)

@@ -211,7 +211,15 @@ FAMILIES: tuple[Family, ...] = (
         "eval",
         tuple(
             f"{_RP}.eval.{m}"
-            for m in ("unpack", "metrics", "window_metrics", "sums", "merge_sums", "from_sums")
+            for m in (
+                "unpack",
+                "metrics",
+                "window_metrics",
+                "interval_metrics",
+                "sums",
+                "merge_sums",
+                "from_sums",
+            )
         ),
     ),
     Family(

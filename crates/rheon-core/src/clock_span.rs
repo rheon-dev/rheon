@@ -38,7 +38,7 @@ pub const STATE_BYTES_CEILING: u64 = 64 << 20;
 
 /// `kind`'s `max_state_bytes`, as every model words it: above 0 and at most
 /// [`STATE_BYTES_CEILING`].
-pub(crate) fn check_max_state_bytes(kind: &str, cap: Option<u64>) -> Result<(), String> {
+pub fn check_max_state_bytes(kind: &str, cap: Option<u64>) -> Result<(), String> {
     match cap {
         Some(0) => Err(format!(
             "{kind}: max_state_bytes must be above 0, but it is 0. Give the bytes a group's \

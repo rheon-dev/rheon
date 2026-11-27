@@ -36,9 +36,15 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
     } else {
         format!("the default max_state_bytes of {cap}, which a spec gets when it sets none")
     };
-    let (window, shorten) = match (&spec.model, fixed) {
-        (_, Some(f)) => (format!("the {} inside {}", f.holds, f.span), f.shorten),
-        (model, None) => match model {
+    let (window, shorten) = if let Some(f) = fixed {
+        (format!("the {} inside {}", f.holds, f.span), f.shorten)
+    } else if let Some(w) = &spec.conformal_p_window_size {
+        (
+            format!("the rows inside conformal_p_window_size = {w}"),
+            "Shorten conformal_p_window_size, or give conformal_p_window_rows",
+        )
+    } else {
+        match &spec.model {
             ModelKind::Hawkes {
                 window_size: Some(w),
                 ..
@@ -179,7 +185,7 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
                 "Shorten the lags or lag_tolerance",
             ),
             _ => ("its window".to_string(), "Shorten the window"),
-        },
+        }
     };
     let (_, raise) = crate::stream::cap_words(spec);
     let text = format!(

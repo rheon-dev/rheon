@@ -33,8 +33,11 @@ pub struct FieldMeta {
     pub feature_set: Option<String>,
     /// Lasso path point.
     pub penalty: Option<f64>,
-    /// Quantile level (`abs_resid_q*` fields).
+    /// Quantile level (`abs_resid_q*`, `pinball*`, `q*`, `es*` fields).
     pub quantile: Option<f64>,
+    /// Nominal conformal coverage level (`lo*`, `hi*`, `coverage*`, `width*`,
+    /// `winkler*` fields); `None` for every other field.
+    pub coverage: Option<f64>,
     /// Lag, in learned rows, of an `ew_cov` `lag_corr_*` field
     /// (docs/ENHANCEMENTS.md E56); `None` for every other field.
     pub lag: Option<usize>,
@@ -94,8 +97,17 @@ pub(super) enum Source {
     Drift(usize),
     /// `(which of ic/r2/hit_rate, index)`.
     Metric(usize, usize),
-    /// `(which of lo/hi/coverage, index)`, laid out like `Metric`.
+    /// `(block index inside ChunkOut::scores, index)` for `mae`, `pinball`,
+    /// `log_loss`.
+    Score(usize, usize),
+    /// `(block = 2 * level_idx + part [0=width, 1=winkler], index)` inside
+    /// `ChunkOut::interval_scores`.
+    IntervalScore(usize, usize),
+    /// `(block = 3 * level_idx + part [0=lo, 1=hi, 2=coverage], index)` inside
+    /// `ChunkOut::conformal`.
     Conformal(usize, usize),
+    /// Standalone per-row conformal p-value (`conformal_p_<slot>`).
+    ConformalP(usize),
     /// `(which of task 221's values, index)`, laid out like `Metric` with
     /// `n_checks` blocks per instance ([`crate::checks::value_names`]).
     Check(usize, usize),
@@ -174,6 +186,7 @@ impl FieldMeta {
             feature_set: None,
             penalty: None,
             quantile: None,
+            coverage: None,
             lag: None,
             component: None,
             state: None,
@@ -665,6 +678,7 @@ pub fn output_index_frame(spec: &Spec) -> PolarsResult<DataFrame> {
             str_col("feature_set", &|m| m.feature_set.as_deref()),
             f64_col("penalty", &|m| m.penalty),
             f64_col("quantile", &|m| m.quantile),
+            f64_col("coverage", &|m| m.coverage),
             ints("lag", idx.iter().map(|m| m.lag)),
             ints("component", idx.iter().map(|m| m.component)),
             ints("state", idx.iter().map(|m| m.state)),
@@ -1933,22 +1947,121 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 }
             }
         }
-        if spec.conformal.is_some() {
+        let conf_levels = spec.conformal_levels();
+        let conf_multi = spec.conformal_is_multi();
+        if !conf_levels.is_empty() {
             // Not `pred_lo`: `pred_` is the prefix that marks a prediction,
             // for `eval.unpack` and for the README's grammar alike.
-            for (k, name) in ["lo", "hi", "coverage"].into_iter().enumerate() {
-                for (t_i, t) in spec.targets.iter().enumerate() {
-                    for (c_i, c) in combos.iter().enumerate() {
-                        fields.push(mk(name, t, c, Source::Conformal(k, dst(t_i, c_i))));
+            for (li, &level) in conf_levels.iter().enumerate() {
+                let lvl_tag = if conf_multi {
+                    format!("_c{}", crate::spec::num_label(level))
+                } else {
+                    String::new()
+                };
+                for (part, kind) in ["lo", "hi", "coverage"].into_iter().enumerate() {
+                    for (t_i, t) in spec.targets.iter().enumerate() {
+                        for (c_i, c) in combos.iter().enumerate() {
+                            let name = format!("{kind}{lvl_tag}_{t}{}{suffix}", c.label);
+                            let mut f = FieldMeta::new(name, kind)
+                                .decay(suffix, d)
+                                .target(t)
+                                .combo(c)
+                                .src(Source::Conformal(3 * li + part, dst(t_i, c_i)));
+                            f.coverage = Some(level);
+                            fields.push(f);
+                        }
                     }
                 }
             }
         }
-        if spec.emit_metrics {
-            for (k, name) in ["ic", "r2", "hit_rate"].into_iter().enumerate() {
+        if spec.emit_conformal_p {
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                for (c_i, c) in combos.iter().enumerate() {
+                    fields.push(mk("conformal_p", t, c, Source::ConformalP(dst(t_i, c_i))));
+                }
+            }
+        }
+        if spec.emit_metrics.is_any() {
+            use crate::spec::MetricKind;
+            for (k, kind, name) in [
+                (0, MetricKind::Ic, "ic"),
+                (1, MetricKind::R2, "r2"),
+                (2, MetricKind::HitRate, "hit_rate"),
+            ] {
+                if spec.emit_metrics.has(kind) {
+                    for (t_i, t) in spec.targets.iter().enumerate() {
+                        for (c_i, c) in combos.iter().enumerate() {
+                            fields.push(mk(name, t, c, Source::Metric(k, dst(t_i, c_i))));
+                        }
+                    }
+                }
+            }
+            let mut score_b = 0usize;
+            if spec.emit_metrics.has(MetricKind::Mae) {
                 for (t_i, t) in spec.targets.iter().enumerate() {
                     for (c_i, c) in combos.iter().enumerate() {
-                        fields.push(mk(name, t, c, Source::Metric(k, dst(t_i, c_i))));
+                        fields.push(mk("mae", t, c, Source::Score(score_b, dst(t_i, c_i))));
+                    }
+                }
+                score_b += 1;
+            }
+            let pinball_qs = spec.pinball_levels();
+            let pinball_explicit = spec.pinball_is_explicit();
+            for &q in &pinball_qs {
+                for (t_i, t) in spec.targets.iter().enumerate() {
+                    for (c_i, c) in combos.iter().enumerate() {
+                        let name = if pinball_explicit {
+                            format!(
+                                "pinball_q{}_{t}{}{suffix}",
+                                crate::spec::num_label(q),
+                                c.label
+                            )
+                        } else {
+                            format!("pinball_{t}{}{suffix}", c.label)
+                        };
+                        let mut f = FieldMeta::new(name, "pinball")
+                            .decay(suffix, d)
+                            .target(t)
+                            .combo(c)
+                            .src(Source::Score(score_b, dst(t_i, c_i)));
+                        f.quantile = Some(q);
+                        fields.push(f);
+                    }
+                }
+                score_b += 1;
+            }
+            if spec.emit_metrics.has(MetricKind::LogLoss) {
+                for (t_i, t) in spec.targets.iter().enumerate() {
+                    for (c_i, c) in combos.iter().enumerate() {
+                        fields.push(mk("log_loss", t, c, Source::Score(score_b, dst(t_i, c_i))));
+                    }
+                }
+            }
+            if spec.emit_metrics.has_interval_scores() {
+                for (li, &level) in conf_levels.iter().enumerate() {
+                    let lvl_tag = if conf_multi {
+                        format!("_c{}", crate::spec::num_label(level))
+                    } else {
+                        String::new()
+                    };
+                    for (part, kind, name) in [
+                        (0, MetricKind::Width, "width"),
+                        (1, MetricKind::Winkler, "winkler"),
+                    ] {
+                        if spec.emit_metrics.has(kind) {
+                            for (t_i, t) in spec.targets.iter().enumerate() {
+                                for (c_i, c) in combos.iter().enumerate() {
+                                    let fname = format!("{name}{lvl_tag}_{t}{}{suffix}", c.label);
+                                    let mut f = FieldMeta::new(fname, name)
+                                        .decay(suffix, d)
+                                        .target(t)
+                                        .combo(c)
+                                        .src(Source::IntervalScore(2 * li + part, dst(t_i, c_i)));
+                                    f.coverage = Some(level);
+                                    fields.push(f);
+                                }
+                            }
+                        }
                     }
                 }
             }

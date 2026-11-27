@@ -126,10 +126,26 @@ from rheon._errors import RefusedValueError, WrongTypeError
 from rheon._renamed import renamed_function, renamed_keywords
 from rheon.polars._clock import clock_nanoseconds
 from rheon.polars._errors import ColumnNotFoundError, OutputColumnNotFoundError
+from rheon.polars._eval_intervals import (
+    check_bool_flag as _check_bool_flag,
+)
+from rheon.polars._eval_intervals import (
+    check_quantiles as _check_quantiles,
+)
+from rheon.polars._eval_intervals import (
+    compute_interval_metrics as _compute_interval_metrics,
+)
+from rheon.polars._eval_intervals import (
+    pinball_and_d2_frame as _pinball_and_d2_frame,
+)
+from rheon.polars._eval_intervals import (
+    quantile_col_names as _quantile_col_names,
+)
 
 __all__ = [
     "metrics",
     "window_metrics",
+    "interval_metrics",
     "compare_specs",
     "grid_search",
     "unpack",
@@ -760,6 +776,8 @@ def metrics(
     targets: Sequence[str] | None = None,
     min_samples: int = 30,
     binary: bool | None = None,
+    mae: bool = False,
+    quantiles: Sequence[float] | None = None,
 ) -> pl.DataFrame:
     """Score a spec's out-of-sample predictions over a whole frame.
 
@@ -799,6 +817,17 @@ def metrics(
         dict's loss, and is off given the name alone, since nothing here
         reads the target's values to decide. A target other than 0 or 1 on
         a scored row is refused under it.
+    ``mae``
+        When ``True``, add ``mae``, the mean absolute error
+        :math:`\\frac{1}{n} \\sum_i |y_i - \\hat{y}_i|`. ``False`` by default.
+    ``quantiles``
+        Optional sequence of quantile levels :math:`\\tau \\in (0, 1)`. For each
+        level, adds ``pinball_q<τ>``, the mean pinball loss
+        :math:`\\frac{1}{n} \\sum_i \\max(\\tau (y_i - \\hat{y}_i), (\\tau - 1)(y_i - \\hat{y}_i))`,
+        and ``d2_pinball_q<τ>``, the fraction of pinball deviance explained
+        relative to the empirical :math:`\\tau`-quantile of ``y`` over the
+        group (null when fewer than 2 rows or constant ``y``). ``None`` by
+        default.
 
     .. rubric:: Returns
 
@@ -953,7 +982,7 @@ def metrics(
     """
     return _metrics(
         df, spec, group=group, targets=targets, min_samples=min_samples, binary=binary,
-        who="rp.eval.metrics",
+        mae=mae, quantiles=quantiles, who="rp.eval.metrics",
     )  # fmt: skip
 
 
@@ -966,23 +995,52 @@ def _metrics(
     min_samples: int,
     binary: bool | None,
     who: str,
+    mae: bool = False,
+    quantiles: Sequence[float] | None = None,
 ) -> pl.DataFrame:
     """:func:`metrics`, refusing in the name of ``who``: the call made,
     :func:`compare_specs`' own where it scores each of its specs."""
     spec_name, written = _spec_of(who, spec)
     _check_min_samples(who, min_samples)
-    _check_columns(_probe(df), who, group=group, produced=_PRODUCED)
+    mae = _check_bool_flag(who, "mae", mae)
+    qs = _check_quantiles(who, quantiles)
+    extra_produced = [*(("mae",) if mae else ()), *_quantile_col_names(qs)]
+    _check_columns(_probe(df), who, group=group, produced=(*_PRODUCED, *extra_produced))
     binary = _binary(binary, written)
     keys = _keys(group)
     if isinstance(df, pl.LazyFrame):
-        job = _job(df, written or spec_name, targets, group, None, binary, who, log_loss=True)
+        job = _job(
+            df, written or spec_name, targets, group, None, binary, who, log_loss=True, mae=mae
+        )
         merged = _query_sums(df, [job], keys=keys, weight=None)[0]
         if merged is not None:
-            return _thin(_scores(merged, keys, binary=binary), min_samples, keys)
-        df = _probe(df)
-    job = _job(df, written or spec_name, targets, group, None, binary, who, log_loss=True)
-    s = _frame_sums(df, job, keys, None)
-    return _thin(_scores(s, keys, binary=binary), min_samples, keys)
+            res = _thin(_scores(merged, keys, binary=binary), min_samples, keys)
+        else:
+            res = _thin(
+                _scores(_frame_sums(_probe(df), job, keys, None), keys, binary=binary),
+                min_samples,
+                keys,
+            )
+    else:
+        job = _job(
+            df, written or spec_name, targets, group, None, binary, who, log_loss=True, mae=mae
+        )
+        s = _frame_sums(df, job, keys, None)
+        res = _thin(_scores(s, keys, binary=binary), min_samples, keys)
+    if qs:
+        qdf = _pinball_and_d2_frame(
+            df,
+            job.spec_name,
+            job.slots,
+            job.keep,
+            keys,
+            qs,
+            min_samples,
+            scored_fn=_scored,
+            weighed_fn=_weighed,
+        )
+        res = res.join(qdf, on=keys, how="left", maintain_order="left")
+    return res
 
 
 #: Polars' duration text, every unit it takes: ``mo``, ``q`` and ``y`` are
@@ -1063,6 +1121,8 @@ def window_metrics(
     targets: Sequence[str] | None = None,
     min_samples: int = 30,
     binary: bool | None = None,
+    mae: bool = False,
+    quantiles: Sequence[float] | None = None,
 ) -> pl.DataFrame:
     """Score a spec's out-of-sample predictions in windows of the clock.
 
@@ -1096,7 +1156,7 @@ def window_metrics(
         expression. On a ``Duration`` clock it is a length of time with no
         months, quarters or years. Notes say where each kind of window
         starts.
-    ``group``, ``targets``, ``min_samples``, ``binary``
+    ``group``, ``targets``, ``min_samples``, ``binary``, ``mae``, ``quantiles``
         :func:`metrics`' own. A window with fewer than ``min_samples`` rows
         keeps its row, with ``n`` filled and the scores null.
 
@@ -1217,6 +1277,9 @@ def window_metrics(
     who = "rp.eval.window_metrics"
     spec_name, written = _spec_of(who, spec)
     _check_min_samples(who, min_samples)
+    mae = _check_bool_flag(who, "mae", mae)
+    qs = _check_quantiles(who, quantiles)
+    extra_produced = [*(("mae",) if mae else ()), *_quantile_col_names(qs)]
     if every is None or isinstance(every, bool):
         # `True` read as one clock unit, and `None` raised Python's own
         # comparison error.
@@ -1234,7 +1297,7 @@ def window_metrics(
             f"columns are {probe.columns}. Name a column of the frame as clock."
         )
         raise ColumnNotFoundError(msg)
-    _check_columns(probe, who, group=group, clock=clock, produced=_PRODUCED)
+    _check_columns(probe, who, group=group, clock=clock, produced=(*_PRODUCED, *extra_produced))
     # The clock's dtype before `every` is read against it: a String clock was
     # refused for the window, not for itself (task 352).
     if not (dtype.is_numeric() or dtype.is_temporal()):
@@ -1324,17 +1387,167 @@ def window_metrics(
     every_text = None if start is not None else _polars_every(every, ns)
     if isinstance(df, pl.LazyFrame):
         job = _job(df, written or spec_name, targets, group, None, binary, who, log_loss=True,
-                   also=[clock])  # fmt: skip
+                   mae=mae, also=[clock])  # fmt: skip
         windows = _windowing(clock, start, every_text, keys[:-1], every, narrow, below)
         merged = _query_sums(df, [job], keys=keys, weight=None, prepare=windows)[0]
         if merged is not None:
-            return _thin(_scores(merged, keys, binary=binary), min_samples, keys)
-        df = probe
-    job = _job(df, written or spec_name, targets, group, None, binary, who, log_loss=True,
-               also=[clock])  # fmt: skip
-    windows = _windowing(clock, start, every_text, keys[:-1], every, narrow, below)
-    s = _frame_sums(df, job, keys, None, windows)
-    return _thin(_scores(s, keys, binary=binary), min_samples, keys)
+            res = _thin(_scores(merged, keys, binary=binary), min_samples, keys)
+        else:
+            s = _frame_sums(probe, job, keys, None, windows)
+            res = _thin(_scores(s, keys, binary=binary), min_samples, keys)
+    else:
+        job = _job(df, written or spec_name, targets, group, None, binary, who, log_loss=True,
+                   mae=mae, also=[clock])  # fmt: skip
+        windows = _windowing(clock, start, every_text, keys[:-1], every, narrow, below)
+        s = _frame_sums(df, job, keys, None, windows)
+        res = _thin(_scores(s, keys, binary=binary), min_samples, keys)
+    if qs:
+        q_windows = _windowing(clock, start, every_text, keys[:-1], every, narrow, below)
+        qdf = _pinball_and_d2_frame(
+            df,
+            job.spec_name,
+            job.slots,
+            job.keep,
+            keys,
+            qs,
+            min_samples,
+            prepare=q_windows,
+            scored_fn=_scored,
+            weighed_fn=_weighed,
+        )
+        res = res.join(qdf, on=keys, how="left", maintain_order="left")
+    return res
+
+
+@renamed_keywords("rp.eval.interval_metrics", _BOTH)
+@_takes_spec("rp.eval.interval_metrics", lazy=True)
+def interval_metrics(
+    df: pl.DataFrame | pl.LazyFrame,
+    spec: str | dict,
+    *,
+    group: str | Iterable[str] | None = None,
+    targets: Sequence[str] | None = None,
+    weight: str | None = None,
+    window_rows: int | None = None,
+    ssc_bins: int = 3,
+    min_samples: int = 30,
+    coverage: float | Sequence[float] | None = None,
+) -> pl.DataFrame:
+    r"""Evaluate prediction intervals emitted by a conformal spec.
+
+    Unpacks single-level (``lo_*``, ``hi_*``) or multi-level (``lo_c<lvl>_*``,
+    ``hi_c<lvl>_*``) conformal intervals directly from the spec's output column
+    and scores realized coverage, mean width, Winkler interval score, and
+    size-stratified coverage (SSC).
+
+    .. rubric:: Parameters
+
+    ``df``
+        A frame a bank returned, holding the spec's output column, or a
+        ``LazyFrame`` query of one.
+    ``spec``
+        The spec dict (recommended, so nominal coverage levels and target
+        mappings are read directly) or the spec's name. When passing a bare
+        name for a single-level conformal spec, pass ``coverage`` as well.
+    ``group``
+        One key column, or a sequence of key columns, to score each key apart.
+        ``None``, the default, scores all rows together.
+    ``targets``
+        :func:`unpack`'s: columns the name-based rule may read as targets when
+        ``spec`` is a bare name.
+    ``weight``
+        Optional non-negative weight column. Rows with null, non-finite, or
+        negative weight are skipped.
+    ``window_rows``
+        Optional positive integer window size. When set, splits each key's
+        scored rows in order into non-overlapping consecutive windows of
+        ``window_rows`` rows, adding ``window_start`` (0, ``window_rows``, …).
+    ``ssc_bins``
+        Number of equal-count width strata for size-stratified coverage
+        (default 3). Must be at least 1.
+    ``min_samples``
+        Minimum scored rows per key (or window) to report metrics (default 30).
+        Keys with fewer rows keep their row with ``n`` filled and metric
+        columns null.
+    ``coverage``
+        Optional nominal coverage level (or sequence of levels) in ``(0, 1)``
+        to filter multi-level specs or specify the level when passing a
+        single-level spec by name.
+
+    .. rubric:: Returns
+
+    A ``DataFrame`` sorted by ``slot``, ``target``, ``nominal_coverage`` (and
+    ``group`` / ``window_start`` when set) with columns:
+
+    ``n``
+        Number of scored rows with finite ``y``, ``lo``, and ``hi``.
+    ``coverage``
+        Realized empirical coverage over un-crossed intervals
+        :math:`[l_i, u_i] = [\min(\text{lo}_i, \text{hi}_i), \max(\text{lo}_i, \text{hi}_i)]`.
+    ``mean_width``
+        Mean interval width :math:`\frac{1}{W} \sum_i w_i (u_i - l_i)`.
+    ``winkler``
+        Mean Winkler interval score at :math:`\alpha = 1 - \text{nominal\_coverage}`:
+        :math:`(u_i - l_i) + \frac{2}{\alpha}\bigl(\max(0, l_i - y_i) + \max(0, y_i - u_i)\bigr)`.
+    ``ssc``
+        Size-stratified coverage: minimum coverage across ``ssc_bins``
+        equal-count bins sorted by interval width ascending (null when
+        ``n < ssc_bins`` or any bin has zero weight).
+
+    .. rubric:: Raises
+
+    ``ValueError``
+        The spec has no conformal interval fields, ``ssc_bins < 1``,
+        ``window_rows < 1``, ``min_samples < 0``, ``coverage`` is outside
+        ``(0, 1)`` or missing from the spec, or a ``group`` / ``weight``
+        column collides with an output column name.
+    :class:`~rheon.WrongTypeError`
+        An argument has the wrong type (for example a non-integer ``ssc_bins``
+        or an ``Object`` ``group`` column).
+    :class:`~rheon.ColumnNotFoundError`
+        A ``group``, ``weight``, or target column is missing from ``df``.
+
+    .. rubric:: Examples
+
+    .. code-block:: python
+
+        spec = rp.spec.ewridge(
+            "m", targets=["y"], features=["x0"], half_life=50.0, conformal=[0.8, 0.9]
+        )
+        out = rp.ModelBank([spec]).fit_predict(df)
+        iv = rp.eval.interval_metrics(out, spec, ssc_bins=3)
+
+    .. rubric:: See also
+
+    - :func:`metrics`, point-prediction scores (R², IC, hit rate, MAE, pinball,
+      and D² pinball).
+    - :func:`window_metrics`, point-prediction scores over clock windows.
+
+    .. rubric:: Notes
+
+    Intervals are un-crossed with :math:`l = \min(\text{lo}, \text{hi})` and
+    :math:`u = \max(\text{lo}, \text{hi})` before evaluating coverage, width,
+    Winkler score, and SSC.
+    """
+    return _compute_interval_metrics(
+        df,
+        spec,
+        group=group,
+        targets=targets,
+        weight=weight,
+        window_rows=window_rows,
+        ssc_bins=ssc_bins,
+        min_samples=min_samples,
+        coverage=coverage,
+        spec_of_fn=_spec_of,
+        probe_fn=_probe,
+        check_min_samples_fn=_check_min_samples,
+        check_columns_fn=_check_columns,
+        group_keys_fn=_group_keys,
+        kept_fn=_kept,
+        slots_fn=_slots,
+        weighed_fn=_weighed,
+    )
 
 
 def _windowing(
@@ -3243,6 +3456,10 @@ def _sum_aggs(binary: bool, no_hit: bool, *, weighted: bool = True) -> list[pl.E
 #: :func:`metrics`' ``log_loss``: the sum of each row's log loss.
 _LOG_LOSS = "__po_log_loss"
 
+#: The column a query's sums carry beside :data:`SUM_FIELDS` for
+#: :func:`metrics`' ``mae``: the weighted sum of ``|y - pred|``.
+_MAE = "__po_mae"
+
 #: How many chunks' sums a query's reading keeps before it merges them into
 #: one, so what it holds is bounded by the keys, not by the query's length.
 _MERGE_EVERY = 64
@@ -3266,10 +3483,16 @@ def _log_loss_sum() -> pl.Expr:
     return (-(y * p.log() + (1.0 - y) * (1.0 - p).log())).sum().alias(_LOG_LOSS)
 
 
+def _mae_sum(*, weighted: bool) -> pl.Expr:
+    """Weighted sum of ``|y - pred|`` carried alongside :data:`SUM_FIELDS`."""
+    err = (pl.col("y") - pl.col("pred")).abs()
+    return ((pl.col("__w") * err) if weighted else err).sum().alias(_MAE)
+
+
 class _Job:
     """One spec's sums to read from a query: its output column, its slots
     (each field, its target and the target's value), what to count as a hit,
-    and whether to keep the log loss."""
+    and whether to keep the log loss or MAE."""
 
     def __init__(
         self,
@@ -3280,14 +3503,21 @@ class _Job:
         no_hit: bool,
         log_loss: bool,
         who: str,
+        *,
+        mae: bool = False,
     ) -> None:
         self.spec_name, self.slots, self.keep = spec_name, slots, keep
-        self.binary, self.no_hit, self.log_loss = binary, no_hit, log_loss
+        self.binary, self.no_hit, self.log_loss, self.mae = binary, no_hit, log_loss, mae
         self.who = who
 
     def extra(self) -> list[str]:
         """The columns its sums carry beside :data:`SUM_FIELDS`."""
-        return [_LOG_LOSS] if self.log_loss else []
+        out: list[str] = []
+        if self.log_loss:
+            out.append(_LOG_LOSS)
+        if self.mae:
+            out.append(_MAE)
+        return out
 
     def columns(self) -> set[str]:
         """The query's columns this job reads."""
@@ -3305,6 +3535,7 @@ def _job(
     who: str,
     *,
     log_loss: bool = False,
+    mae: bool = False,
     also: Sequence[str] = (),
 ) -> _Job:
     """``spec``'s :class:`_Job` over ``lf``, checked against the query's
@@ -3315,7 +3546,7 @@ def _job(
     spec_name, slots = _slots(probe, spec, targets, who)
     keep = _kept(probe, [*_group_keys(group), *([] if weight is None else [weight]), *also])
     _, written = _spec_of(who, spec)
-    return _Job(spec_name, slots, keep, binary, _no_hit(written), log_loss and binary, who)
+    return _Job(spec_name, slots, keep, binary, _no_hit(written), log_loss and binary, who, mae=mae)
 
 
 def _query_sums(
@@ -3367,6 +3598,8 @@ def _chunk_sums(
     aggs = _sum_aggs(job.binary, job.no_hit, weighted=weight is not None)
     if job.log_loss:
         aggs.append(_log_loss_sum())
+    if job.mae:
+        aggs.append(_mae_sum(weighted=weight is not None))
     got = []
     long = None
     for slot, target, y in job.slots:
@@ -3718,6 +3951,7 @@ def _scores(s: pl.DataFrame, keys: list[str], *, binary: bool) -> pl.DataFrame:
     # A3 and A16).
     ic = (pl.col("cov") / (m2_y.sqrt() * m2_pred.sqrt())).clip(-1.0, 1.0)
     log_loss = [(pl.col(_LOG_LOSS) / pl.col("n")).alias("log_loss")] if _LOG_LOSS in s else []
+    mae_col = [pl.when(weighed).then(pl.col(_MAE) / pl.col("w")).alias("mae")] if _MAE in s else []
     return s.select(
         *keys,
         pl.col("n"),
@@ -3733,6 +3967,7 @@ def _scores(s: pl.DataFrame, keys: list[str], *, binary: bool) -> pl.DataFrame:
         *log_loss,
         mse.alias("mse"),
         mse.sqrt().alias("rmse"),
+        *mae_col,
     ).sort(keys)
 
 

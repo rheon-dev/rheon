@@ -703,8 +703,10 @@ def table(head: tuple[str, ...], rows: Sequence[tuple[str, ...]]) -> str:
 OPTIONAL: list[tuple[str, str]] = [
     (
         "the diagnostics: `emit_sigma`, `emit_zscore`, `emit_selected`, "
-        "`emit_averaged`, `emit_drift`, `emit_metrics`, `emit_autocorr`, `resid_quantiles`, "
-        "`conformal`, `emit_calibration`, `emit_breaks`, `emit_specification`, "
+        "`emit_averaged`, `emit_drift`, `emit_metrics` (boolean or list of score names, with "
+        "`metric_quantiles`), `emit_autocorr`, `resid_quantiles`, "
+        "`conformal` (scalar or list of levels, with `conformal_symmetric`), `emit_conformal_p`, "
+        "`emit_calibration`, `emit_breaks`, `emit_specification`, "
         "`emit_tails`, `emit_influence` (`ewridge`'s, `rls`'s and `kalman`'s), "
         "`emit_feature_health` (not `holt`'s, which has no features)",
         "[Is the model working?](DIAGNOSTICS.md), for the models that "
@@ -939,8 +941,9 @@ name is the kind (`pred`, `abs_resid`, `lag_corr`), then its qualifier, then
 the target or the columns it is about (`_<t>`, `_<f>`, `_<a>_<b>`), then the
 grid point after `__` and the instance after `@`. An instance is the part of
 the model that fits one half-life of a grid. A qualifier is a number
-glued to the letter that says what it is: `q` a quantile level, `l` a lag
-(`abs_resid_q0.05_y`, `mahal_q0.99`, `lag_corr_l1_x0_x1`). The grid point
+glued to the letter that says what it is: `q` a quantile level, `c` a
+conformal coverage level, `l` a lag (`abs_resid_q0.05_y`, `pinball_q0.9_y`,
+`lo_c0.9_y`, `mahal_q0.99`, `lag_corr_l1_x0_x1`). The grid point
 uses letters too, `r` a ridge and `p` a lasso penalty, and the instance `h`,
 a half-life. A thing the spec has several of is numbered where it is named,
 glued to its word: a principal component `pc0` (`pc0_var`), an `hmm` state

@@ -4,14 +4,14 @@
 use std::collections::VecDeque;
 
 use rheon_core::{
-    Bocpd, BocpdCfg, BocpdEmission, ChangeNorm, ClockState, Conformal, Constraint, CorrChange,
-    CorrChangeCfg, CorrChangeKind, Covariance, Decay, Deco, DecoCfg, DecoDynamics, Disorder,
-    DriftDetector, EwAutoCorr, EwClass, EwClassCfg, EwCovCfg, EwCovModel, EwCovStat, EwQuantile,
-    EwRidge, EwRidgeCfg, Ftrl, FtrlCfg, FtrlLoss, HitTest, Hmm, HmmCfg, Holt, HoltCfg, HuberScale,
-    KMeans, KMeansCfg, Kalman, KalmanCfg, Lasso, LassoCfg, LearningRate, Marginal, MarginalCfg,
-    Micro, MicroCfg, OnlineModel, Pa, PaCfg, PaMode, Rcov, RcovCfg, RcovKind, Rls, RlsCfg, Robust,
-    RobustCfg, RobustLoss, SeedRule, SeqTest, SeqTestCfg, Sgd, SgdCfg, SgdLoss, SlotMetrics, State,
-    WindowShadow,
+    Bocpd, BocpdCfg, BocpdEmission, ChangeNorm, ClockState, Conformal, ConformalPRing,
+    ConformalSlot, Constraint, CorrChange, CorrChangeCfg, CorrChangeKind, Covariance, Decay, Deco,
+    DecoCfg, DecoDynamics, Disorder, DriftDetector, EwAutoCorr, EwClass, EwClassCfg, EwCovCfg,
+    EwCovModel, EwCovStat, EwQuantile, EwRidge, EwRidgeCfg, Ftrl, FtrlCfg, FtrlLoss, HitTest, Hmm,
+    HmmCfg, Holt, HoltCfg, HuberScale, KMeans, KMeansCfg, Kalman, KalmanCfg, Lasso, LassoCfg,
+    LearningRate, Marginal, MarginalCfg, Micro, MicroCfg, OnlineModel, Pa, PaCfg, PaMode, Rcov,
+    RcovCfg, RcovKind, Rls, RlsCfg, Robust, RobustCfg, RobustLoss, SeedRule, SeqTest, SeqTestCfg,
+    Sgd, SgdCfg, SgdLoss, SlotIntervalScores, SlotMetrics, SlotScores, State, WindowShadow,
 };
 use rheon_core::{ClockValue, CoefVariance, ExactCaps, Stamp};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use crate::checks::{CheckCfg, Checks, RowView};
 use crate::resid_window::ResidWindow;
 use crate::rows::{FeatureCols, FeatureRows};
 use crate::span::{Span, SpanList};
-use crate::spec::{FloatOrList, ModelKind, ShardSpec, Spec};
+use crate::spec::{FloatOrList, MetricKind, ModelKind, ShardSpec, Spec};
 use crate::summary::{DataSummary, Fed};
 
 /// A refused backwards clock, for the bank to turn into the error naming it.
@@ -87,836 +87,8 @@ pub struct StepRefusal {
     pub removed: bool,
 }
 
-/// Enum dispatch over the models the bank can run (serde-friendly).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum AnyModel {
-    EwRidge(Box<EwRidge>),
-    Rls(Box<Rls>),
-    Lasso(Box<Lasso>),
-    Kalman(Box<Kalman>),
-    Robust(Box<Robust>),
-    Ftrl(Box<Ftrl>),
-    EwCov(Box<EwCovModel>),
-    Sgd(Box<Sgd>),
-    Pa(Box<Pa>),
-    Holt(Box<Holt>),
-    KMeans(Box<KMeans>),
-    Micro(Box<Micro>),
-    EwClass(Box<EwClass>),
-    SeqTest(Box<SeqTest>),
-    Marginal(Box<Marginal>),
-    Deco(Box<Deco>),
-    Rcov(Box<Rcov>),
-    Hmm(Box<Hmm>),
-    CorrChange(Box<CorrChange>),
-    Bocpd(Box<Bocpd>),
-    Audit(Box<rheon_core::Audit>),
-    Glm(Box<rheon_core::Glm>),
-    Expectile(Box<rheon_core::Expectile>),
-    Hawkes(Box<rheon_core::Hawkes>),
-    Garch(Box<rheon_core::Garch>),
-    Dcc(Box<rheon_core::Dcc>),
-    Realized(Box<rheon_core::Realized>),
-    Pca(Box<rheon_core::StreamPca>),
-    PowerVariation(Box<rheon_core::PowerVariation>),
-    TDigest(Box<rheon_core::TDigestModel>),
-    DdSketch(Box<rheon_core::DdSketchModel>),
-    EwmMoments(Box<rheon_core::EwmMoments>),
-    Ar(Box<rheon_core::Ar>),
-    VectorAr(Box<rheon_core::VectorAr>),
-    Spectral(Box<rheon_core::Spectral>),
-    Isotonic(Box<rheon_core::Isotonic>),
-    Krls(Box<rheon_core::Krls>),
-    Dependence(Box<rheon_core::Dependence>),
-    HoeffdingTreeClassifier(Box<rheon_core::HoeffdingTreeClassifier>),
-    HoeffdingTreeRegressor(Box<rheon_core::HoeffdingTreeRegressor>),
-    Bandit(Box<rheon_core::Bandit>),
-    HalfSpaceTrees(Box<rheon_core::HalfSpaceTrees>),
-    RandomCutForest(Box<rheon_core::RandomCutForest>),
-}
-
-/// A flush's shards, run on whichever pool the caller is in: the bank's
-/// own (pool.rs), since every learning path runs inside it.
-fn on_the_pool(count: usize) -> rheon_core::Shards<'static> {
-    fn run(shards: &mut [rheon_core::MarginalShard<'_>]) {
-        use rayon::prelude::*;
-        shards
-            .par_iter_mut()
-            .for_each(rheon_core::MarginalShard::run);
-    }
-    rheon_core::Shards { count, run: &run }
-}
-
-/// Bind the boxed model of whichever variant `$self` is, then run `$body`.
-///
-/// Only for the methods that are the *same* call on every variant. Three of
-/// `AnyModel`'s six are not — `solve_failures` groups the models that never
-/// factorize, `coefficients` reshapes per model, and `restore` matches on
-/// `ModelState` rather than on `Self` — and those stay written out, because a
-/// macro that needed a per-variant escape hatch would be harder to read than
-/// the match it replaced (docs/SIMPLIFICATION.md S3).
-macro_rules! dispatch {
-    ($self:expr, $m:ident => $body:expr) => {
-        match $self {
-            AnyModel::EwRidge($m) => $body,
-            AnyModel::Rls($m) => $body,
-            AnyModel::Lasso($m) => $body,
-            AnyModel::Kalman($m) => $body,
-            AnyModel::Robust($m) => $body,
-            AnyModel::Ftrl($m) => $body,
-            AnyModel::EwCov($m) => $body,
-            AnyModel::Sgd($m) => $body,
-            AnyModel::Pa($m) => $body,
-            AnyModel::Holt($m) => $body,
-            AnyModel::KMeans($m) => $body,
-            AnyModel::Micro($m) => $body,
-            AnyModel::EwClass($m) => $body,
-            AnyModel::SeqTest($m) => $body,
-            AnyModel::Marginal($m) => $body,
-            AnyModel::Deco($m) => $body,
-            AnyModel::Rcov($m) => $body,
-            AnyModel::Hmm($m) => $body,
-            AnyModel::CorrChange($m) => $body,
-            AnyModel::Bocpd($m) => $body,
-            AnyModel::Audit($m) => $body,
-            AnyModel::Glm($m) => $body,
-            AnyModel::Expectile($m) => $body,
-            AnyModel::Hawkes($m) => $body,
-            AnyModel::Garch($m) => $body,
-            AnyModel::Dcc($m) => $body,
-            AnyModel::Realized($m) => $body,
-            AnyModel::Pca($m) => $body,
-            AnyModel::PowerVariation($m) => $body,
-            AnyModel::TDigest($m) => $body,
-            AnyModel::DdSketch($m) => $body,
-            AnyModel::EwmMoments($m) => $body,
-            AnyModel::Ar($m) => $body,
-            AnyModel::VectorAr($m) => $body,
-            AnyModel::Spectral($m) => $body,
-            AnyModel::Isotonic($m) => $body,
-            AnyModel::Krls($m) => $body,
-            AnyModel::Dependence($m) => $body,
-            AnyModel::HoeffdingTreeClassifier($m) => $body,
-            AnyModel::HoeffdingTreeRegressor($m) => $body,
-            AnyModel::Bandit($m) => $body,
-            AnyModel::HalfSpaceTrees($m) => $body,
-            AnyModel::RandomCutForest($m) => $body,
-        }
-    };
-}
-
-impl AnyModel {
-    /// Mix the main accumulators toward a long-run twin, where the model has
-    /// one (`session_shrink`). A no-op elsewhere.
-    pub fn blend_toward_long_run(&mut self) {
-        if let AnyModel::EwRidge(m) = self {
-            m.blend_toward_long_run();
-        }
-    }
-
-    pub fn step(
-        &mut self,
-        x: &[f64],
-        y: &[Option<f64>],
-        d_clock: f64,
-        weight: f64,
-    ) -> rheon_core::Step {
-        dispatch!(self, m => m.step(x, y, d_clock, weight))
-    }
-
-    /// [`Self::step`], into `out` ([`OnlineModel::step_into`]): the same
-    /// numbers, with `out`'s buffers reused where the model writes in place
-    /// (docs/PLAN.md task 270, M-4).
-    pub fn step_into(
-        &mut self,
-        x: &[f64],
-        y: &[Option<f64>],
-        d_clock: f64,
-        weight: f64,
-        out: &mut rheon_core::Step,
-    ) {
-        dispatch!(self, m => m.step_into(x, y, d_clock, weight, out))
-    }
-
-    /// [`Self::step_into`], with a `marginal`'s pair work split into
-    /// `shards` ranges of features and run on the pool a batch of rows at a
-    /// time ([`rheon_core::Marginal::step_sharded`], docs/PLAN.md task
-    /// 126). Every other model, and one shard, steps as `step_into` does.
-    /// The rows a sharded step holds are learned by [`Self::flush`], which
-    /// every run of rows ends with; the numbers are `step`'s to the bit.
-    pub fn step_sharded_into(
-        &mut self,
-        x: &[f64],
-        y: &[Option<f64>],
-        d_clock: f64,
-        weight: f64,
-        shards: usize,
-        out: &mut rheon_core::Step,
-    ) {
-        match self {
-            AnyModel::Marginal(m) if shards > 1 => {
-                *out = m.step_sharded(x, y, d_clock, weight, &on_the_pool(shards));
-            }
-            _ => self.step_into(x, y, d_clock, weight, out),
-        }
-    }
-
-    /// End a run of rows: learn every row a sharded step holds
-    /// ([`Self::step_sharded_into`]).
-    pub fn flush(&mut self, shards: usize) {
-        if let AnyModel::Marginal(m) = self {
-            m.flush(&on_the_pool(shards));
-        }
-    }
-
-    /// Take the readiness shares of every solve an `ewridge`, `huber` or
-    /// `quantile` left unread, dropping the factors they wait on
-    /// ([`rheon_core::EwRidge::settle_readiness`], docs/PLAN.md tasks 140
-    /// and 116). Once a stream's chunk is done, not once a run: a share
-    /// costs a solve against the identity, about `k³`, and a chunk of a
-    /// wide spec is many cache-sized runs (task 265).
-    pub fn settle_readiness(&mut self) {
-        match self {
-            AnyModel::EwRidge(m) => m.settle_readiness(),
-            AnyModel::Robust(m) => m.settle_readiness(),
-            _ => {}
-        }
-    }
-
-    /// The bytes the model's Huber refit buffers can hold at most
-    /// (`refit_reservation`, docs/PLAN.md task 277): 0 for a model without
-    /// the refit.
-    pub fn refit_reservation(&self) -> usize {
-        match self {
-            AnyModel::Robust(m) => m.refit_reservation(),
-            AnyModel::Sgd(m) => m.refit_reservation(),
-            AnyModel::Marginal(m) => m.refit_reservation(),
-            AnyModel::Glm(m) => m.refit_reservation(),
-            AnyModel::Expectile(m) => m.refit_reservation(),
-            _ => 0,
-        }
-    }
-
-    /// Give the model's refits up, past its spec's `refit_budget`; a no-op
-    /// for a model without the refit.
-    pub fn refit_give_up(&mut self) {
-        match self {
-            AnyModel::Robust(m) => m.refit_give_up(),
-            AnyModel::Sgd(m) => m.refit_give_up(),
-            AnyModel::Marginal(m) => m.refit_give_up(),
-            AnyModel::Glm(m) => m.refit_give_up(),
-            AnyModel::Expectile(m) => m.refit_give_up(),
-            _ => {}
-        }
-    }
-
-    /// How each target's refit stands; empty for a model without it.
-    pub fn refit_status(&self) -> Vec<rheon_core::RefitStatus> {
-        match self {
-            AnyModel::Robust(m) => m.refit_status(),
-            AnyModel::Sgd(m) => m.refit_status(),
-            AnyModel::Marginal(m) => m.refit_status(),
-            AnyModel::Glm(m) => m.refit_status(),
-            AnyModel::Expectile(m) => m.refit_status(),
-            _ => Vec::new(),
-        }
-    }
-
-    /// The step's answer without the step
-    /// ([`OnlineModel::predict_with`]). `y` is passed because two models
-    /// read a number out of the targets slot -- `bocpd`'s hazard column and
-    /// `hmm`'s exogenous column -- and their answer depends on it; every
-    /// other model ignores it, which is what makes `predict` out of sample
-    /// (docs/REVIEW-E54-E64.md C1).
-    pub fn predict(&self, x: &[f64], y: &[Option<f64>], d_clock: f64) -> rheon_core::Step {
-        dispatch!(self, m => m.predict_with(x, y, d_clock))
-    }
-
-    /// [`Self::predict_into`] for a row whose stamp the stream knows: a
-    /// model whose read decides a window's edge on the clock
-    /// ([`ModelKind::reads_at_stamp`]) reads it at `stamp`, as a step would
-    /// be handed it; every other model, and a row with no stamp, as
-    /// `predict_into`.
-    pub fn predict_at_into(
-        &self,
-        x: &[f64],
-        y: &[Option<f64>],
-        d_clock: f64,
-        stamp: Option<Stamp>,
-        out: &mut rheon_core::Step,
-    ) {
-        match (self, stamp) {
-            (AnyModel::EwmMoments(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
-            (AnyModel::Hawkes(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
-            (AnyModel::Expectile(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
-            (AnyModel::Isotonic(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
-            (AnyModel::DdSketch(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
-            (AnyModel::CorrChange(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
-            (AnyModel::Audit(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
-            (AnyModel::Krls(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
-            (AnyModel::Dependence(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
-            _ => self.predict_into(x, y, d_clock, out),
-        }
-    }
-
-    /// [`Self::predict`] into the caller's step, which it overwrites in
-    /// full ([`OnlineModel::predict_with_into`]).
-    pub fn predict_into(
-        &self,
-        x: &[f64],
-        y: &[Option<f64>],
-        d_clock: f64,
-        out: &mut rheon_core::Step,
-    ) {
-        dispatch!(self, m => m.predict_with_into(x, y, d_clock, out))
-    }
-
-    /// [`Self::predict`] at another `min_weight` floor, set for the read and
-    /// put back ([`OnlineModel::predict_with_floor`]): the prediction a
-    /// floor withholds from the output, which the residual spread folds.
-    pub fn predict_with_floor(
-        &mut self,
-        x: &[f64],
-        y: &[Option<f64>],
-        d_clock: f64,
-        floor: f64,
-    ) -> rheon_core::Step {
-        dispatch!(self, m => m.predict_with_floor(x, y, d_clock, floor))
-    }
-
-    /// [`Self::predict_with_floor`] at `stamp` for models whose read decides
-    /// a window's edge on the clock ([`ModelKind::reads_at_stamp`]).
-    pub fn predict_with_floor_at(
-        &mut self,
-        x: &[f64],
-        y: &[Option<f64>],
-        d_clock: f64,
-        stamp: Option<Stamp>,
-        floor: f64,
-    ) -> rheon_core::Step {
-        let Some(s) = stamp else {
-            return self.predict_with_floor(x, y, d_clock, floor);
-        };
-        match self {
-            AnyModel::EwmMoments(m) => m.predict_with_floor_at(x, d_clock, s, floor),
-            AnyModel::Hawkes(m) => m.predict_with_floor_at(x, d_clock, s, floor),
-            AnyModel::Expectile(m) => m.predict_with_floor_at(x, d_clock, s, floor),
-            AnyModel::Isotonic(m) => m.predict_with_floor_at(x, d_clock, s, floor),
-            AnyModel::DdSketch(m) => m.predict_at(x, d_clock, s),
-            AnyModel::CorrChange(m) => m.predict_at(x, d_clock, s),
-            AnyModel::Audit(m) => m.predict_at(x, d_clock, s),
-            AnyModel::Krls(m) => m.predict_with_floor_at(x, y, d_clock, floor, s),
-            AnyModel::Dependence(m) => m.predict_at(x, d_clock, s),
-            _ => self.predict_with_floor(x, y, d_clock, floor),
-        }
-    }
-
-    /// [`Self::predict_into`] for a row at raw clock `clock`
-    /// ([`OnlineModel::predict_at_into`]), which a seasonal `holt` reads
-    /// its phase from.
-    pub fn predict_at_clock_into(
-        &self,
-        x: &[f64],
-        y: &[Option<f64>],
-        d_clock: f64,
-        clock: Option<ClockValue>,
-        out: &mut rheon_core::Step,
-    ) {
-        dispatch!(self, m => m.predict_at_into(x, y, d_clock, clock, out))
-    }
-
-    /// Hand the model the row's raw clock ([`OnlineModel::clock_next`]); a
-    /// no-op for every model but a seasonal `holt`.
-    pub fn clock_next(&mut self, clock: ClockValue) {
-        dispatch!(self, m => m.clock_next(clock))
-    }
-
-    /// Drop the row-lagged state ([`OnlineModel::clear_lags`]); a no-op for
-    /// a model that keeps none.
-    pub fn clear_lags(&mut self) {
-        dispatch!(self, m => m.clear_lags())
-    }
-
-    /// Hand the model the next learned row's stamp, its decayed clock held
-    /// exactly ([`OnlineModel::stamp_next`], docs/PLAN.md task 175); a no-op
-    /// for a model without a window.
-    pub fn stamp_next(&mut self, stamp: Stamp) {
-        dispatch!(self, m => m.stamp_next(stamp))
-    }
-
-    /// [`Self::stamp_next`] on a stream with no clock column
-    /// ([`OnlineModel::stamp_next_on_rows`], task 278, D13).
-    pub fn stamp_next_on_rows(&mut self, stamp: Stamp) {
-        dispatch!(self, m => m.stamp_next_on_rows(stamp))
-    }
-
-    /// The next stepped row's clock label for a fixed-lag smoother
-    /// ([`OnlineModel::label_next`]).
-    pub fn label_next(&mut self, label: ClockValue) {
-        dispatch!(self, m => m.label_next(label))
-    }
-
-    /// The gate withheld `target` on the row just stepped
-    /// ([`OnlineModel::hold_smoothed`]).
-    pub fn hold_smoothed(&mut self, target: usize) {
-        dispatch!(self, m => m.hold_smoothed(target))
-    }
-
-    /// What the row's fixed-lag smoother emitted
-    /// ([`OnlineModel::smoothed_into`]).
-    pub fn smoothed_into(&self, out: &mut rheon_core::Smoothed) -> bool {
-        dispatch!(self, m => m.smoothed_into(out))
-    }
-
-    /// Bound the model's window ([`OnlineModel::set_window_budget`]).
-    pub fn set_window_budget(&mut self, budget: Option<rheon_core::WindowBudget>) {
-        dispatch!(self, m => m.set_window_budget(budget))
-    }
-
-    /// Run the model's Gram work on `threads` threads
-    /// ([`OnlineModel::set_gram_threads`]).
-    pub fn set_gram_threads(&mut self, threads: usize) {
-        dispatch!(self, m => m.set_gram_threads(threads))
-    }
-
-    /// Set the model's window edge ([`OnlineModel::set_window_closed`]).
-    pub fn set_window_closed(&mut self, closed: rheon_core::WindowClosed) {
-        dispatch!(self, m => m.set_window_closed(closed))
-    }
-
-    /// The model's window ring as a shadow ([`OnlineModel::window_shadow`]).
-    pub fn window_shadow(&self) -> Option<WindowShadow> {
-        dispatch!(self, m => m.window_shadow())
-    }
-
-    /// [`OnlineModel::window_could_refuse`].
-    pub fn window_could_refuse(&self, rows: usize) -> bool {
-        dispatch!(self, m => m.window_could_refuse(rows))
-    }
-
-    /// The default schedule in an explicit cadence's first period
-    /// ([`OnlineModel::set_first_period_by_share`]).
-    pub fn set_first_period_by_share(&mut self, on: bool) {
-        dispatch!(self, m => m.set_first_period_by_share(on))
-    }
-
-    /// The weight-share cadence ([`OnlineModel::set_solve_share`]).
-    pub fn set_solve_share(&mut self, share: Option<f64>) {
-        dispatch!(self, m => m.set_solve_share(share))
-    }
-
-    /// The weight-share cadence the model runs by ([`OnlineModel::solve_share`]).
-    pub fn solve_share(&self) -> Option<f64> {
-        dispatch!(self, m => m.solve_share())
-    }
-
-    /// A refusing budget's overrun ([`OnlineModel::window_over_budget`]).
-    pub fn window_over_budget(&self) -> Option<(usize, rheon_core::Cadence)> {
-        dispatch!(self, m => m.window_over_budget())
-    }
-
-    /// The state's bytes past half of the cap, taken
-    /// ([`OnlineModel::take_state_warning`]).
-    pub fn take_state_warning(&mut self) -> Option<(u64, u64)> {
-        dispatch!(self, m => m.take_state_warning())
-    }
-
-    /// The bytes a row would have taken the state to, past the cap
-    /// ([`OnlineModel::state_over_cap`]).
-    pub fn state_over_cap(&self) -> Option<(u64, u64)> {
-        dispatch!(self, m => m.state_over_cap())
-    }
-
-    /// Each target's own weight, for the per-target warmup
-    /// ([`OnlineModel::target_n_eff_into`]).
-    pub fn target_n_eff_into(&self, out: &mut Vec<f64>) -> bool {
-        dispatch!(self, m => m.target_n_eff_into(out))
-    }
-
-    /// The noise gate's statistic per slot
-    /// ([`OnlineModel::error_inflation_into`]); `false` for a model
-    /// without one.
-    pub fn error_inflation_into(&self, out: &mut Vec<f64>) -> bool {
-        dispatch!(self, m => m.error_inflation_into(out))
-    }
-
-    /// The same for the noise gate at `limit` on the row `x`, `d_clock`
-    /// after the last, where a bound may stand in below it
-    /// ([`OnlineModel::error_inflation_gate_into`]).
-    pub fn error_inflation_gate_into(
-        &self,
-        x: &[f64],
-        d_clock: f64,
-        out: &mut Vec<f64>,
-        limit: f64,
-    ) -> bool {
-        dispatch!(self, m => m.error_inflation_gate_into(x, d_clock, out, limit))
-    }
-
-    /// The same for one row's features
-    /// ([`OnlineModel::row_error_inflation_into`]).
-    pub fn row_error_inflation_into(&self, x: &[f64], d_clock: f64, out: &mut Vec<f64>) -> bool {
-        dispatch!(self, m => m.row_error_inflation_into(x, d_clock, out))
-    }
-
-    /// The coefficients' sampling variances
-    /// ([`OnlineModel::coef_variance`]).
-    pub fn coef_variance(&self) -> Option<rheon_core::CoefVariance> {
-        dispatch!(self, m => m.coef_variance())
-    }
-
-    /// Each coefficient's data share ([`OnlineModel::support_coef`]), laid
-    /// out like [`Self::coefficients`].
-    pub fn support_coef(&self) -> Option<Vec<Vec<f64>>> {
-        dispatch!(self, m => m.support_coef())
-    }
-
-    /// Each coefficient's data share as one list, slot after slot, written
-    /// over `out` ([`OnlineModel::support_coef_into`]); `false` where there
-    /// is none.
-    pub fn support_coef_into(&self, out: &mut Vec<f64>) -> bool {
-        dispatch!(self, m => m.support_coef_into(out))
-    }
-
-    /// Whether the model is still in its own warm-up: a standardizing `sgd`
-    /// or `pa` whose scaler has not switched the fit to the caller's units
-    /// ([`rheon_core::Warmup`]). Every other model has none.
-    pub fn scaler_warming(&self) -> bool {
-        match self {
-            AnyModel::Sgd(m) => m.scaler_warming(),
-            AnyModel::Pa(m) => m.scaler_warming(),
-            _ => false,
-        }
-    }
-
-    /// The model's own wait, if it is in one, and so reports nothing:
-    /// [`OwnWait::Seeding`] while it holds its first rows to seed itself
-    /// from, its `warm_rows` -- `kmeans`' centres, `hmm`'s states, `bocpd`'s
-    /// prior, `kalman`'s unsized priors, the rows `garch`'s start
-    /// buffers for a target, and the rows before `deco`'s standardiser is
-    /// warm enough for its level to learn; [`OwnWait::NotIdentified`] while a fit is
-    /// withheld because its rows do not identify the model -- `garch`'s
-    /// start, whose likelihood did not tell the variance process from a
-    /// constant variance, and `dcc`'s, whose did not tell the correlation's
-    /// recursion from constant correlation, so they buffer more rows. One
-    /// dispatch a row answers both.
-    /// Whether the model is one of the kinds [`Self::own_wait`] can answer
-    /// for, so a row of every other kind is spared the dispatch. Keep it in
-    /// step with that match: a kind missing here never reports its wait.
-    pub fn waits(&self) -> bool {
-        matches!(
-            self,
-            AnyModel::KMeans(_)
-                | AnyModel::Hmm(_)
-                | AnyModel::Bocpd(_)
-                | AnyModel::Kalman(_)
-                | AnyModel::Deco(_)
-                | AnyModel::Garch(_)
-                | AnyModel::Dcc(_)
-                | AnyModel::VectorAr(_)
-                | AnyModel::Dependence(_)
-                | AnyModel::HalfSpaceTrees(_)
-                | AnyModel::RandomCutForest(_)
-        ) || matches!(self, AnyModel::Holt(m) if m.heuristic_start())
-    }
-
-    #[inline]
-    pub fn own_wait(&self) -> OwnWait {
-        match self {
-            AnyModel::KMeans(m) if !m.seeded() => OwnWait::Seeding,
-            AnyModel::Hmm(m) if !m.seeded() => OwnWait::Seeding,
-            AnyModel::Bocpd(m) if m.warming() => OwnWait::Seeding,
-            AnyModel::Kalman(m) if m.sizing() => OwnWait::Seeding,
-            AnyModel::Deco(m) if m.warming() => OwnWait::Seeding,
-            // A `holt` heuristic start holding a target's first rows.
-            AnyModel::Holt(m) if m.starting() => OwnWait::Seeding,
-            // `garch`'s start and `dcc`'s, its margins' and its own, wait two
-            // ways: buffering, or buffering for want of an effect.
-            AnyModel::Garch(m) => Self::start_wait(m.starting(), || m.no_effect()),
-            AnyModel::VectorAr(m) if m.not_identified() => OwnWait::NotIdentified,
-            AnyModel::Dependence(m) if m.warming() => OwnWait::Seeding,
-            AnyModel::Dcc(m) => Self::start_wait(m.starting(), || m.no_effect()),
-            AnyModel::HalfSpaceTrees(m) if m.warming() => OwnWait::Seeding,
-            AnyModel::RandomCutForest(m) if m.warming() => OwnWait::Seeding,
-            _ => OwnWait::None,
-        }
-    }
-
-    #[inline]
-    fn start_wait(starting: bool, no_effect: impl FnOnce() -> bool) -> OwnWait {
-        if starting {
-            OwnWait::Seeding
-        } else if no_effect() {
-            OwnWait::NotIdentified
-        } else {
-            OwnWait::None
-        }
-    }
-
-    /// Whether the row's own report withheld part of what it reports, read
-    /// from the step's predictions: `corrchange`'s flag, withheld where
-    /// every pair over the critical value is one whose two columns' scale
-    /// ratio moved inside the span (`rheon_core::CorrChange::flag_withheld`).
-    /// Every other model withholds no part of a report by the row itself.
-    pub fn withheld_by_its_row(&self, pred: &[f64]) -> bool {
-        match self {
-            AnyModel::CorrChange(_) => rheon_core::CorrChange::flag_withheld(pred),
-            _ => false,
-        }
-    }
-
-    /// Whether the model refuses the row's inputs `xs`, and so reports
-    /// nothing for it: `garch`'s, an input below 0 under GARCH or GJR
-    /// ([`rheon_core::GarchCfg::refuses_inputs`]). Every other model reads
-    /// any finite feature.
-    pub fn refuses_inputs(&self, xs: &[f64]) -> bool {
-        match self {
-            AnyModel::Garch(m) => m.cfg().refuses_inputs(xs),
-            _ => false,
-        }
-    }
-
-    /// Whether the row's report was withheld because its events do not
-    /// identify the fit, read from the step's own report: `hawkes`'
-    /// intensities, not numbers with its weight at `min_weight`, where its
-    /// least-squares system was singular or too near it -- a node with no
-    /// excitation over the observation, as before its first event or in a
-    /// window that holds none of its events, or two terms the events cannot
-    /// tell apart (`rheon_core::Hawkes::not_identified`). Every other model
-    /// that waits so names its wait before the step ([`Self::own_wait`]).
-    pub fn not_identified_by_its_row(&self, step: &rheon_core::Step) -> bool {
-        match self {
-            AnyModel::Hawkes(m) => m.not_identified(step),
-            _ => false,
-        }
-    }
-
-    /// Whether a slot's fit is withheld because the system it was solved
-    /// from is past the condition at which a solve keeps a digit:
-    /// `ewridge`'s, whose normal equations can factorize past it
-    /// (`rheon_core::SpdFactor::carries_no_digit`). Every other model
-    /// solves nothing of the kind.
-    pub fn ill_conditioned(&self) -> bool {
-        match self {
-            AnyModel::EwRidge(m) => m.ill_conditioned(),
-            _ => false,
-        }
-    }
-
-    /// Per target, whether its predictions are withheld because its recent
-    /// steps say the learning rate is past its stability bound: `sgd`'s
-    /// gate (`rheon_core::Sgd::unstable_targets`), read from the state, so
-    /// it names the prediction the next row makes; empty for every other
-    /// model, which takes no gradient step of a rate the caller sets (task
-    /// 278, D8).
-    pub fn unstable_targets(&self) -> Vec<bool> {
-        match self {
-            AnyModel::Sgd(m) if m.unstable() => m.unstable_targets(),
-            _ => Vec::new(),
-        }
-    }
-
-    /// Whether some level a `tdigest` reads is withheld because the rows
-    /// before it do not identify it: past the plotting position of the
-    /// smallest or largest row (`rheon_core::TDigestModel::beyond_sample`).
-    /// Read from the state, so it names the levels the next row reads. A
-    /// bank row asks only of the two kinds here (`run_instance`'s
-    /// `has_levels`, decided once an instance): keep that in step with
-    /// this match.
-    pub fn beyond_sample(&self) -> bool {
-        match self {
-            AnyModel::TDigest(m) => m.beyond_sample(),
-            AnyModel::DdSketch(m) => m.beyond_sample(),
-            _ => false,
-        }
-    }
-
-    /// What went wrong in a model's solves, counted (docs/PLAN.md §7):
-    /// `ewridge` and `robust` count their jittered or failed factorizations,
-    /// `lasso` its coordinate descents that ran out of sweeps, `ew_class` the
-    /// rows whose scoring met a failed factorization, `hmm` the rows its
-    /// filter could not evaluate, `bocpd` the rows whose predictive could
-    /// not be, `kmeans` and `hmm` the seeding's Lloyd runs that stopped at
-    /// their cap short of a fixed point (task 278, D7), and `robust`'s Huber
-    /// and `sgd(loss="huber")` the targets whose refit of their first rows
-    /// took every IRLS pass (task 278). Every other model reports 0 because
-    /// it counts nothing, not because nothing can fail: `kalman` inverts an
-    /// innovation variance, and `ew_cov` solves for `mahal` and
-    /// `partial_corr` (review 2026-09-12, S8).
-    pub fn solve_failures(&self) -> u64 {
-        match self {
-            AnyModel::EwRidge(m) => m.solve_failures,
-            AnyModel::Lasso(m) => m.solve_failures,
-            AnyModel::Robust(m) => m.solve_failures,
-            AnyModel::EwClass(m) => m.solve_failures,
-            AnyModel::Hmm(m) => m.solve_failures,
-            AnyModel::Bocpd(m) => m.solve_failures,
-            AnyModel::Glm(m) => m.solve_failures(),
-            AnyModel::Expectile(m) => m.solve_failures(),
-            AnyModel::KMeans(m) => m.solve_failures,
-            AnyModel::Sgd(m) => m.solve_failures(),
-            AnyModel::Marginal(m) => m.solve_failures(),
-            AnyModel::Rls(_)
-            | AnyModel::Kalman(_)
-            | AnyModel::Ftrl(_)
-            | AnyModel::EwCov(_)
-            | AnyModel::Pa(_)
-            | AnyModel::Holt(_)
-            | AnyModel::Micro(_)
-            | AnyModel::SeqTest(_)
-            | AnyModel::Deco(_)
-            | AnyModel::Rcov(_)
-            | AnyModel::CorrChange(_)
-            | AnyModel::Audit(_)
-            // Every read it withholds is a row's, not a failure.
-            | AnyModel::Hawkes(_)
-            | AnyModel::Garch(_)
-            | AnyModel::Dcc(_)
-            | AnyModel::Realized(_)
-            | AnyModel::PowerVariation(_)
-            | AnyModel::TDigest(_)
-            | AnyModel::DdSketch(_)
-            | AnyModel::Isotonic(_)
-            | AnyModel::Krls(_)
-            | AnyModel::Dependence(_)
-            // A term it withholds is withheld by its condition, no failure.
-            | AnyModel::EwmMoments(_) => 0,
-            // The components are withheld, never failed: the rotation has no
-            // factorization to fail.
-            | AnyModel::Pca(_) => 0,
-            // Each fit counts its own; none withholds a row as a failure.
-            | AnyModel::Ar(_)
-            | AnyModel::VectorAr(_)
-            | AnyModel::Spectral(_)
-            | AnyModel::HoeffdingTreeClassifier(_)
-            | AnyModel::HoeffdingTreeRegressor(_)
-            | AnyModel::Bandit(_)
-            | AnyModel::HalfSpaceTrees(_)
-            | AnyModel::RandomCutForest(_) => 0,
-        }
-    }
-
-    pub fn n_outputs(&self) -> usize {
-        dispatch!(self, m => m.n_outputs())
-    }
-
-    pub fn n_features(&self) -> usize {
-        dispatch!(self, m => m.n_features())
-    }
-
-    pub fn n_targets(&self) -> usize {
-        dispatch!(self, m => m.n_targets())
-    }
-
-    /// The accumulated weight behind the model as it stands: what the next
-    /// row's `n_eff` field reports (before that row's update).
-    pub fn n_eff(&self) -> f64 {
-        dispatch!(self, m => m.n_eff())
-    }
-
-    pub fn coefficients(&self) -> Option<Vec<Vec<f64>>> {
-        match self {
-            AnyModel::EwRidge(m) => m.coefficients().map(|b| b.to_vec()),
-            AnyModel::Rls(m) => Some(m.coefficients().to_vec()),
-            // Flattened to (target x path point) rows, matching the pred slots.
-            AnyModel::Lasso(m) => m
-                .coefficients()
-                .map(|b| b.iter().flat_map(|per_t| per_t.iter().cloned()).collect()),
-            AnyModel::Kalman(m) => Some(m.coefficients()),
-            AnyModel::Robust(m) => m.coefficients().map(|b| b.to_vec()),
-            AnyModel::Ftrl(m) => Some(m.coefficients()),
-            // ew_cov has no coefficients: its outputs are the statistics.
-            AnyModel::EwCov(_) => None,
-            AnyModel::Sgd(m) => Some(m.coefficients()),
-            AnyModel::Pa(m) => Some(m.coefficients().to_vec()),
-            AnyModel::Glm(m) => Some(m.coefficients()),
-            // Absent until a target has a fit.
-            AnyModel::Expectile(m) => m.has_fit().then(|| m.coefficients()),
-            AnyModel::Holt(m) => Some(m.coefficients()),
-            // The centres, k rows of p; absent until seeded.
-            AnyModel::KMeans(m) => m.coefficients(),
-            // micro: one row per potential summary -- ragged, and absent
-            // until there is one.
-            AnyModel::Micro(m) => m.coefficients(),
-            // The class means, one row per class (NaN for a class not seen).
-            AnyModel::EwClass(m) => Some(m.coefficients()),
-            // seqtest has no coefficients: its outputs are the e-values and
-            // the counts they are staked on.
-            AnyModel::SeqTest(_) => None,
-            // marginal has no coefficients and no outputs: its pairs are
-            // read from the state by `Bank::marginal`.
-            AnyModel::Marginal(_) => None,
-            // The levels themselves, one row: `coef_fields` names one slot
-            // per correlation value, term `rho`.
-            AnyModel::Deco(m) => Some(vec![m.rho().to_vec()]),
-            // rcov has no coefficients: its value is the block it emits at
-            // the group's close.
-            AnyModel::Rcov(_) => None,
-            // The state means, one row per state, as `ew_class` reports its
-            // class means.
-            AnyModel::Hmm(m) => Some((0..m.cfg().k).map(|s| m.state_means(s).to_vec()).collect()),
-            // corrchange has no coefficients: its outputs are the test.
-            AnyModel::CorrChange(_) => None,
-            // bocpd has none either: its value is the run-length posterior.
-            AnyModel::Bocpd(_) => None,
-            // audit has none: its value is what it counted, read by
-            // `Bank::audit`.
-            AnyModel::Audit(_) => None,
-            // `μ` and the `α`s, one row per node: `coef_fields` names them.
-            AnyModel::Hawkes(m) => Some(m.coefficients()),
-            // Each target's process parameters, then its shape.
-            AnyModel::Garch(m) => Some(m.coefficients()),
-            // `a`, `b` and the asymmetric model's `g`, one row; not a number
-            // before a learned model's start.
-            AnyModel::Dcc(m) => Some(vec![m.coefficients()]),
-            // realized has none: its outputs are the estimators.
-            AnyModel::Realized(_) => None,
-            // pca has none: its components are its output fields.
-            AnyModel::Pca(_) => None,
-            // power_variation has none: its outputs are the terms.
-            AnyModel::PowerVariation(_) => None,
-            // tdigest has none: its value is the levels it reads.
-            AnyModel::TDigest(_) | AnyModel::DdSketch(_) => None,
-            // ewm_moments has none: its outputs are the terms.
-            AnyModel::EwmMoments(_) => None,
-            // The constant, the lags, then the features, one row per
-            // target; absent until a target has a fit.
-            AnyModel::Ar(m) => m.coefficients(),
-            AnyModel::VectorAr(m) => m.coefficients(),
-            // Its value is the power it reports per row.
-            AnyModel::Spectral(_) => None,
-            // Its fit is a curve, read at each row's feature.
-            AnyModel::Isotonic(_) => None,
-            // Its dual weights grow with the dictionary and have no fixed term layout.
-            AnyModel::Krls(_) => None,
-            AnyModel::Dependence(_) => None,
-            // Trees have no linear coefficients.
-            AnyModel::HoeffdingTreeClassifier(_) | AnyModel::HoeffdingTreeRegressor(_) => None,
-            AnyModel::Bandit(m) => Some(m.coefficients()),
-            AnyModel::HalfSpaceTrees(_) | AnyModel::RandomCutForest(_) => None,
-        }
-    }
-
-    pub fn state(&self) -> State {
-        dispatch!(self, m => m.state())
-    }
-
-    /// The model's configuration as built, as JSON: what
-    /// [`crate::resolved_defaults`] reads every model default from. Refused
-    /// where the JSON would not read back as the configuration, so an
-    /// infinity written as `null` cannot be pinned as one (`faithful_json`).
-    pub fn cfg_json(&self) -> Result<serde_json::Value, String> {
-        let mut v = dispatch!(self, m => crate::defaults::faithful_json(m.cfg()))?;
-        // `ftrl`'s state writes `standardize` only when on, so that a state
-        // without it keeps its bytes (PLAN 569); the resolved settings name
-        // the default all the same.
-        if let (AnyModel::Ftrl(m), Some(o)) = (self, v.as_object_mut()) {
-            o.entry("standardize")
-                .or_insert(serde_json::Value::Bool(m.cfg().standardize));
-        }
-        Ok(v)
-    }
-}
+mod any_model;
+pub use any_model::AnyModel;
 
 mod build;
 pub(crate) use build::init_rule;
@@ -1315,8 +487,16 @@ pub struct Persisted {
     pub autocorr: Vec<Vec<EwAutoCorr>>,
     #[serde(default)]
     pub metrics: Vec<Vec<SlotMetrics>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scores: Vec<Vec<SlotScores>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interval_scores: Vec<Vec<SlotIntervalScores>>,
     #[serde(default)]
     pub conformal: Vec<Vec<Conformal>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conformal_multi: Vec<Vec<ConformalSlot>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conformal_p: Vec<Vec<ConformalPRing>>,
     /// Per model instance, the diagnostics with a memory of their own
     /// (docs/PLAN.md task 221): empty, and not written, for a spec that
     /// switches none of them on, so no other spec's bytes move.
@@ -1895,7 +1075,24 @@ impl Stream {
     /// The first of this stream's models whose state a row would have taken
     /// past its cap: the bytes and the cap ([`OnlineModel::state_over_cap`]).
     pub fn state_over_cap(&self) -> Option<(u64, u64)> {
-        self.models.iter().find_map(|(_, m)| m.state_over_cap())
+        self.models
+            .iter()
+            .find_map(|(_, m)| m.state_over_cap())
+            .or_else(|| {
+                let n_rings = (self
+                    .persisted
+                    .conformal_p
+                    .iter()
+                    .map(Vec::len)
+                    .sum::<usize>() as u64)
+                    .max(1);
+                self.persisted
+                    .conformal_p
+                    .iter()
+                    .flatten()
+                    .find_map(ConformalPRing::state_over_cap)
+                    .map(|(b, c)| (b.saturating_mul(n_rings), c.saturating_mul(n_rings)))
+            })
     }
 
     /// Whether `min_settled_frac` withholds what instance `i` reports from its
@@ -2220,6 +1417,7 @@ mod conformal_rows;
 mod heavy_tail;
 mod notified;
 mod pre_row_sigma;
+mod score_rows;
 mod stack_line;
 mod state_cap;
 mod unmet_floor;
@@ -2257,6 +1455,8 @@ impl Stream {
             .collect::<Result<Vec<_>, String>>()?;
         let instances = slots.len();
         let embargo = spec.embargo.as_ref().map(Embargo::of);
+        let (scores, interval_scores, conformal, conformal_multi, conformal_p) =
+            score_rows::init_score_diags(spec, &slots)?;
         Ok(Self {
             persisted: Persisted {
                 clock: ClockState::new(),
@@ -2278,18 +1478,16 @@ impl Stream {
                 } else {
                     Vec::new()
                 },
-                metrics: if spec.emit_metrics {
+                metrics: if spec.emit_metrics.has_legacy() {
                     slots.iter().map(|&n| vec![SlotMetrics::new(); n]).collect()
                 } else {
                     Vec::new()
                 },
-                conformal: match spec.conformal {
-                    Some(level) => {
-                        let proto = Conformal::new(level, spec.conformal_rate_or_default())?;
-                        slots.iter().map(|&n| vec![proto.clone(); n]).collect()
-                    }
-                    None => Vec::new(),
-                },
+                scores,
+                interval_scores,
+                conformal,
+                conformal_multi,
+                conformal_p,
                 checks: if Checks::any(spec) {
                     slots.iter().map(|&n| Checks::new(spec, n)).collect()
                 } else {
@@ -2584,11 +1782,32 @@ impl Stream {
         take_diag("metrics", &mut p.metrics, &fresh.metrics, |s, _| {
             s.has_shape()
         })?;
+        take_diag("scores", &mut p.scores, &fresh.scores, |s, l| {
+            s.matches_shape(l)
+        })?;
+        take_diag(
+            "interval scores",
+            &mut p.interval_scores,
+            &fresh.interval_scores,
+            |s, l| s.matches_shape(l),
+        )?;
         take_diag(
             "conformal intervals",
             &mut p.conformal,
             &fresh.conformal,
             |s, _| s.has_shape(),
+        )?;
+        take_diag(
+            "conformal intervals",
+            &mut p.conformal_multi,
+            &fresh.conformal_multi,
+            |s, l| s.matches_shape(l),
+        )?;
+        take_diag(
+            "conformal p-value rings",
+            &mut p.conformal_p,
+            &fresh.conformal_p,
+            |s, l| s.matches_shape(l),
         )?;
         // Task 221's accumulators, by the same rule: absent, or kept for
         // another set of switches, they start over; this spec's count but
@@ -3388,7 +2607,11 @@ impl Stream {
             resid_q: &mut self.persisted.resid_q,
             autocorr: &mut self.persisted.autocorr,
             metrics: &mut self.persisted.metrics,
+            scores: &mut self.persisted.scores,
+            interval_scores: &mut self.persisted.interval_scores,
             conformal: &mut self.persisted.conformal,
+            conformal_multi: &mut self.persisted.conformal_multi,
+            conformal_p: &mut self.persisted.conformal_p,
             checks: &mut self.persisted.checks,
             scratch: &mut self.scratch,
             score_pred: &mut self.persisted.score_pred,
@@ -3631,7 +2854,6 @@ impl Stream {
                 // model whose read decides a window's edge reads it at the
                 // row's stamp, on a copy of the clock.
                 stamp: spec
-                    .model
                     .reads_at_stamp()
                     .then(|| {
                         let base = self
@@ -3794,7 +3016,11 @@ impl Stream {
             self.persisted.autocorr.clone(),
             self.persisted.metrics.clone(),
         );
+        let mut scores = self.persisted.scores.clone();
+        let mut interval_scores = self.persisted.interval_scores.clone();
         let mut conformal = self.persisted.conformal.clone();
+        let mut conformal_multi = self.persisted.conformal_multi.clone();
+        let mut conformal_p = self.persisted.conformal_p.clone();
         let mut checks = self.persisted.checks.clone();
         let mut scratch: Vec<Scratch> = (0..n).map(|_| Scratch::default()).collect();
         // Scoring buffers nothing and replays nothing, so its queues stay empty.
@@ -3813,7 +3039,11 @@ impl Stream {
             resid_q: &mut resid_q,
             autocorr: &mut autocorr,
             metrics: &mut metrics,
+            scores: &mut scores,
+            interval_scores: &mut interval_scores,
             conformal: &mut conformal,
+            conformal_multi: &mut conformal_multi,
+            conformal_p: &mut conformal_p,
             checks: &mut checks,
             scratch: &mut scratch,
             score_pred: &mut score_pred,
@@ -3962,7 +3192,11 @@ struct Diagnostics<'a> {
     resid_q: &'a mut [Vec<EwQuantile>],
     autocorr: &'a mut [Vec<EwAutoCorr>],
     metrics: &'a mut [Vec<SlotMetrics>],
+    scores: &'a mut [Vec<SlotScores>],
+    interval_scores: &'a mut [Vec<SlotIntervalScores>],
     conformal: &'a mut [Vec<Conformal>],
+    conformal_multi: &'a mut [Vec<ConformalSlot>],
+    conformal_p: &'a mut [Vec<ConformalPRing>],
     checks: &'a mut [Checks],
     scratch: &'a mut [Scratch],
     score_pred: &'a mut [std::collections::VecDeque<Vec<f64>>],
@@ -4170,7 +3404,11 @@ struct Instance<'a> {
     resid_q: Option<&'a mut Vec<EwQuantile>>,
     autocorr: Option<&'a mut Vec<EwAutoCorr>>,
     metrics: Option<&'a mut Vec<SlotMetrics>>,
+    scores: Option<&'a mut Vec<SlotScores>>,
+    interval_scores: Option<&'a mut Vec<SlotIntervalScores>>,
     conformal: Option<&'a mut Vec<Conformal>>,
+    conformal_multi: Option<&'a mut Vec<ConformalSlot>>,
+    conformal_p: Option<&'a mut Vec<ConformalPRing>>,
     /// Task 221's accumulators, and what they decay by: `None` when the
     /// spec switches none on.
     checks: Option<&'a mut Checks>,
@@ -4187,7 +3425,10 @@ struct Instance<'a> {
     o_resid_z: &'a mut [f64],
     o_autocorr: &'a mut [f64],
     o_metrics: &'a mut [f64],
+    o_scores: &'a mut [f64],
+    o_interval_scores: &'a mut [f64],
     o_conformal: &'a mut [f64],
+    o_conformal_p: &'a mut [f64],
     o_checks: &'a mut [f64],
     o_health: &'a mut [f64],
     o_resid_q: &'a mut [f64],
@@ -4270,7 +3511,11 @@ struct KeptFresh {
     resid_q: Option<Vec<EwQuantile>>,
     autocorr: Option<Vec<EwAutoCorr>>,
     metrics: Option<Vec<SlotMetrics>>,
+    scores: Option<Vec<SlotScores>>,
+    interval_scores: Option<Vec<SlotIntervalScores>>,
     conformal: Option<Vec<Conformal>>,
+    conformal_multi: Option<Vec<ConformalSlot>>,
+    conformal_p: Option<Vec<ConformalPRing>>,
     checks: Option<Checks>,
     pending_clock: Option<f64>,
 }
@@ -4297,7 +3542,11 @@ impl Instance<'_> {
             resid_q: self.resid_q.as_deref().cloned(),
             autocorr: self.autocorr.as_deref().cloned(),
             metrics: self.metrics.as_deref().cloned(),
+            scores: self.scores.as_deref().cloned(),
+            interval_scores: self.interval_scores.as_deref().cloned(),
             conformal: self.conformal.as_deref().cloned(),
+            conformal_multi: self.conformal_multi.as_deref().cloned(),
+            conformal_p: self.conformal_p.as_deref().cloned(),
             checks: self.checks.as_deref().cloned(),
             pending_clock: self.pending_clock.as_deref().copied(),
         };
@@ -4331,7 +3580,19 @@ impl Instance<'_> {
         if let (Some(d), Some(k)) = (self.metrics.as_deref_mut(), kept.metrics) {
             *d = k;
         }
+        if let (Some(d), Some(k)) = (self.scores.as_deref_mut(), kept.scores) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.interval_scores.as_deref_mut(), kept.interval_scores) {
+            *d = k;
+        }
         if let (Some(d), Some(k)) = (self.conformal.as_deref_mut(), kept.conformal) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.conformal_multi.as_deref_mut(), kept.conformal_multi) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.conformal_p.as_deref_mut(), kept.conformal_p) {
             *d = k;
         }
         if let (Some(d), Some(k)) = (self.checks.as_deref_mut(), kept.checks) {
@@ -4414,10 +3675,27 @@ impl Instance<'_> {
         if let Some(m) = self.metrics.as_deref_mut() {
             m.iter_mut().for_each(|s| *s = SlotMetrics::new());
         }
-        if let (Some(c), Some(level)) = (self.conformal.as_deref_mut(), spec.conformal) {
+        if let Some(s) = self.scores.as_deref_mut() {
+            s.iter_mut().for_each(SlotScores::reset);
+        }
+        if let Some(s) = self.interval_scores.as_deref_mut() {
+            s.iter_mut().for_each(SlotIntervalScores::reset);
+        }
+        if let Some(c) = self.conformal.as_deref_mut() {
+            let level = spec.conformal_levels()[0];
             let rate = spec.conformal_rate_or_default();
             c.iter_mut()
                 .for_each(|e| *e = Conformal::new(level, rate).expect("validated"));
+        }
+        if let Some(c) = self.conformal_multi.as_deref_mut() {
+            let levels = spec.conformal_levels();
+            let rate = spec.conformal_rate_or_default();
+            let sym = spec.conformal_symmetric;
+            c.iter_mut()
+                .for_each(|e| *e = ConformalSlot::new(&levels, rate, sym).expect("validated"));
+        }
+        if let Some(cp) = self.conformal_p.as_deref_mut() {
+            cp.iter_mut().for_each(ConformalPRing::reset);
         }
         if let Some(c) = self.checks.as_deref_mut() {
             *c = Checks::new(spec, self.n_slots);
@@ -5171,75 +4449,47 @@ fn run_instance(
         // too small, and the CUSUM of squares sat at −0.70 on iid labels
         // under an embargo of 50 (review round 6, A-6; schema 57).
         let mut shown_radius: Option<Vec<f64>> = None;
+        let mut shown_multi: Option<Vec<f64>> = None;
+        let mut shown_sigma: Option<Vec<f64>> = None;
         if plan.buffered {
-            // The record is sized once, for every part it will hold, so a
-            // held row allocates once rather than growing by a reallocation
-            // per part (P34; the VM measured about 430 instructions a held
-            // row on x86 in the growth, R-V41).
-            let len = step.pred.len()
-                + inst.conformal.as_deref().map_or(0, |cs| cs.len())
-                + if has_row_infl { sc.row_infl.len() } else { 0 }
-                + if kept { sc.ungated.len() } else { 0 };
-            let mut record = Vec::with_capacity(len);
-            record.extend_from_slice(&step.pred);
-            if let Some(cs) = inst.conformal.as_deref() {
-                let ring = inst.resid_win.as_ref().map(SpreadRef::get);
-                let spread = inst
-                    .residuals
-                    .then_some((&inst.resid_w[..], &inst.resid_var[..]));
-                conformal_rows::shown_radii(&mut record, cs, ring, inst.decay, spread);
-            }
-            if has_row_infl {
-                record.extend_from_slice(&sc.row_infl);
-            }
-            // And, where a gate withheld the score, each slot's own
-            // prediction, last, which the spread folds at the release
-            // ([`Persisted::ungated_spread`]): a record a gate withheld
-            // nothing from is the length it always was.
-            if kept {
-                record.extend_from_slice(&sc.ungated);
-            }
-            // Under `label_clock` the buffer is ordered by label time, and
-            // the records keep its order (task 341).
-            // `places`, by the row, says where (task 341): kept beside the
-            // plans, as `front_cuts` is, so no other spec's plan grows.
-            match places.get(ri) {
-                Some(&(at, drop)) => {
-                    inst.score_pred.insert(at as usize, record);
-                    if drop != u32::MAX {
-                        inst.score_pred.remove(drop as usize);
-                    }
-                }
-                None => inst.score_pred.push_back(record),
-            }
+            score_rows::pack_score_pred(
+                inst.score_pred,
+                inst.conformal.as_deref().map(Vec::as_slice),
+                inst.conformal_multi.as_deref().map(Vec::as_slice),
+                inst.conformal_p.is_some(),
+                inst.resid_win.as_ref().map(SpreadRef::get),
+                inst.decay,
+                inst.residuals
+                    .then_some((&inst.resid_w[..], &inst.resid_var[..])),
+                &step.pred,
+                &sc.row_infl,
+                &sc.ungated,
+                has_row_infl,
+                kept,
+                places.get(ri).copied(),
+            );
         } else if !plan.direct() {
-            let n = step.pred.len();
-            let conformal = inst.conformal.is_some();
-            let parts = 1 + usize::from(conformal) + usize::from(has_row_infl);
-            match inst.score_pred.pop_front() {
-                Some(p)
-                    if p.len() == parts * n
-                        || ((inst.ungated_spread || inst.ungated_drift)
-                            && p.len() == (parts + 1) * n) =>
-                {
-                    step.pred.copy_from_slice(&p[..n]);
-                    if conformal {
-                        shown_radius = Some(p[n..2 * n].to_vec());
-                    }
-                    if has_row_infl {
-                        sc.row_infl.clear();
-                        sc.row_infl
-                            .extend_from_slice(&p[(parts - 1) * n..parts * n]);
-                    }
-                    if p.len() > parts * n {
-                        sc.ungated.clear();
-                        sc.ungated.extend_from_slice(&p[parts * n..]);
-                        kept = true;
-                    }
-                }
-                // No record of the score: fold nothing rather than the
-                // prediction that peeks.
-                _ => step.pred.fill(f64::NAN),
+            let mp = inst
+                .conformal_multi
+                .as_deref()
+                .and_then(|cs| cs.first())
+                .map_or(0, |c| 2 * c.len());
+            let u = score_rows::unpack_score_pred(
+                inst.score_pred,
+                inst.conformal.is_some(),
+                mp,
+                inst.conformal_p.is_some(),
+                inst.ungated_spread || inst.ungated_drift,
+                &mut step.pred,
+                &mut sc.row_infl,
+                &mut sc.ungated,
+                has_row_infl,
+            );
+            shown_radius = u.shown_radius;
+            shown_multi = u.shown_multi;
+            shown_sigma = u.shown_sigma;
+            if u.kept {
+                kept = true;
             }
         }
 
@@ -5473,13 +4723,36 @@ fn run_instance(
             }
         }
 
-        // The conformal interval is `pred ± q`, `q = m·sigma` read before the
-        // row, then the row's own score moves `m` (ENHANCEMENTS E36; the
-        // multiplier, task 368). `sigma` is the pre-row value, the one the
-        // row's `sigma` field shows.
-        // Under `conformal_rate = "auto"` the step reads the rows waiting,
-        // the released one's record already off the front (task 342b).
+        if let Some(scs) = inst.scores.as_deref_mut() {
+            let has_mae = inst.spec.emit_metrics.has(MetricKind::Mae);
+            let n_pin = inst.spec.pinball_levels().len();
+            let has_ll = inst.spec.emit_metrics.has(MetricKind::LogLoss);
+            score_rows::step_scores(
+                scs,
+                inst.o_scores,
+                conformal_rows::At { ri, n_rows, block },
+                (has_mae, n_pin, has_ll),
+                (&step.pred, &sc.ys),
+                nc,
+                (emit, learn),
+                (lam, w),
+            );
+        }
+
         if let Some(cs) = inst.conformal.as_deref_mut() {
+            if let Some(isc) = inst.interval_scores.as_deref_mut() {
+                score_rows::step_interval_scores_legacy(
+                    cs,
+                    isc,
+                    inst.o_interval_scores,
+                    conformal_rows::At { ri, n_rows, block },
+                    (&step.pred, &sc.sig, &sc.ys),
+                    nc,
+                    (emit, learn),
+                    shown_radius.as_deref(),
+                    (lam, w),
+                );
+            }
             let held = if inst.spec.conformal_rate_auto() {
                 inst.score_pred.len()
             } else {
@@ -5494,6 +4767,40 @@ fn run_instance(
                 shown_radius.as_deref(),
                 (lam, w),
                 held,
+            );
+        }
+        if let Some(cs) = inst.conformal_multi.as_deref_mut() {
+            let held = if inst.spec.conformal_rate_auto() {
+                inst.score_pred.len()
+            } else {
+                0
+            };
+            score_rows::step_conformal_multi(
+                cs,
+                inst.interval_scores.as_deref_mut().map(Vec::as_mut_slice),
+                inst.o_conformal,
+                inst.o_interval_scores,
+                conformal_rows::At { ri, n_rows, block },
+                (&step.pred, &sc.r, &sc.sig, &sc.ys),
+                nc,
+                (emit, learn),
+                shown_multi.as_deref(),
+                (lam, w),
+                held,
+            );
+        }
+        if let Some(rings) = inst.conformal_p.as_deref_mut() {
+            score_rows::step_conformal_p(
+                rings,
+                inst.o_conformal_p,
+                conformal_rows::At { ri, n_rows, block },
+                inst.spec,
+                inst.decay,
+                (&sc.r, &sc.sig),
+                shown_sigma.as_deref(),
+                (emit, learn),
+                (d_clock, score_d, plan.stamp, w),
+                inst.notified,
             );
         }
 

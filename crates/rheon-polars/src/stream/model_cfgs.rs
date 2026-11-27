@@ -1832,7 +1832,11 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         // `huber`'s anchored MAD sketch under the Huber loss.
         mad_anchor: true,
         refit_clock: huber_refit_span.as_ref().map(Span::value),
-        max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
+        max_state_bytes: if matches!(loss, SgdLoss::Huber { .. }) || !spec.emit_conformal_p {
+            spec.model_max_state_bytes(*max_state_bytes)
+        } else {
+            None
+        },
     };
     Ok(AnyModel::Sgd(Box::new(Sgd::new(cfg)?)))
 }

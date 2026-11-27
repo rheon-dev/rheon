@@ -9,7 +9,7 @@
 #[test]
 fn every_model_refuses_a_decay_it_cannot_run_on() {
     type Build<'a> = (&'a str, &'a dyn Fn(Decay) -> Result<(), String>);
-    let builds: [Build; 22] = [
+    let builds: [Build; 23] = [
         ("ewridge", &|decay| {
             EwRidge::new(EwRidgeCfg {
                 decay,
@@ -834,6 +834,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         (
             "hoeffding_tree_regressor",
             share(HoeffdingTreeRegressor::new(hoeffding_tree_regressor_cfg()).unwrap()),
+        ),
         ("bandit", share(Bandit::new(bandit_cfg()).unwrap())),
         (
             "half_space_trees",

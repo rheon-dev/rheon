@@ -3156,6 +3156,11 @@ fn kinds() -> Vec<Kind> {
             first: constrained_first,
             run: constrained_run,
         },
+        Kind {
+            name: "bank_conformal_scores",
+            first: conformal_scores_first,
+            run: conformal_scores_run,
+        },
     ]
 }
 
@@ -3200,6 +3205,24 @@ fn hoeffding_tree_specs() -> Vec<Spec> {
     .collect()
 }
 
+/// The specs of `bank_conformal_scores` (schema 72, before any release):
+/// multi-level asymmetric conformal with `conformal_rate = "auto"` and
+/// `embargo`, paired with `emit_metrics` (`ic`, `mae`, `pinball`, `coverage`,
+/// `width`, `winkler`) and `metric_quantiles`; a binary logistic `ftrl` with
+/// `log_loss`; and standalone `emit_conformal_p` under both a row window and a
+/// clock-span window with `max_state_bytes`.
+fn conformal_scores_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "multi_asym", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "half_life": 30.0, "weight": "w", "embargo": 2.0, "conformal": [0.8, 0.9], "conformal_symmetric": false, "conformal_rate": "auto", "emit_metrics": ["ic", "mae", "pinball", "coverage", "width", "winkler"], "metric_quantiles": [0.1, 0.9], "emit_sigma": true}"#,
+        r#"{"name": "binary_ll", "model": {"type": "ftrl", "loss": "logistic"}, "targets": ["b"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "half_life": 30.0, "emit_metrics": ["r2", "hit_rate", "log_loss"]}"#,
+        r#"{"name": "p_rows", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "half_life": 30.0, "weight": "w", "emit_conformal_p": true, "conformal_p_window_rows": 20, "max_state_bytes": 131072}"#,
+        r#"{"name": "p_clock", "model": {"type": "rls"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "half_life": 30.0, "embargo": 2.0, "emit_conformal_p": true, "conformal_p_window_size": 15.0, "max_state_bytes": 131072}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
 /// The spec of `bank_robust_se_types`: HC0–HC3 row-time leverage-adjusted
 /// standard errors with HAC lags and a top-level `max_state_bytes` budget
 /// (schema 72, PLAN 512).
@@ -3234,6 +3257,31 @@ fn hoeffding_tree_run(bytes: &[u8], input: &DataFrame) -> Ran {
 fn robust_se_types_first() -> (Vec<u8>, DataFrame) {
     let df = frame();
     let mut bank = Bank::new(robust_se_types_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+/// [`frame`] with a binary target `b` (`1.0` where `y > 0`, else `0.0`).
+fn conformal_scores_frame() -> DataFrame {
+    let mut df = frame();
+    let b: Vec<Option<f64>> = df
+        .column("y")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .iter()
+        .map(|v| v.map(|y| if y > 0.0 { 1.0 } else { 0.0 }))
+        .collect();
+    df.with_column(Column::new("b".into(), b)).unwrap();
+    df
+}
+
+fn conformal_scores_first() -> (Vec<u8>, DataFrame) {
+    let df = conformal_scores_frame();
+    let mut bank = Bank::new(conformal_scores_specs()).unwrap();
     bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
     (
         bank.save_bytes().unwrap(),
@@ -3339,6 +3387,68 @@ fn the_constrained_fixture_freezes_its_forms() {
             .any(|(p, v)| p.contains(".constraints.rhs.") && v.as_f64() == Some(1.0)),
         "constraints.rhs is not in the file"
     );
+}
+
+fn conformal_scores_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&conformal_scores_specs(), bytes, input)
+}
+
+/// The `bank_conformal_scores` fixture freezes every state form added for
+/// streaming loss/interval scores, multi-level asymmetric conformal intervals,
+/// and standalone conformal p-value rings (hard rule 5: non-empty forms).
+#[test]
+fn the_conformal_scores_fixture_freezes_its_forms() {
+    if regenerating() {
+        return;
+    }
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "bank_conformal_scores")
+        .expect("the bank_conformal_scores fixture");
+    let v = rmpv::decode::read_value(&mut unhex(f.state).as_slice()).unwrap();
+    let mut all = Vec::new();
+    leaves(&v, "", &mut all);
+    for (form, holds) in [
+        (
+            "multi-level asymmetric conformal trackers",
+            (|p: &str, v: &rmpv::Value| {
+                p.contains(".conformal_multi.")
+                    && p.contains(".Asymmetric.")
+                    && p.ends_with(".m_lo")
+                    && v.as_f64().is_some_and(f64::is_finite)
+            }) as fn(&str, &rmpv::Value) -> bool,
+        ),
+        ("streaming point scores (mae/pinball)", |p, v| {
+            p.contains(".scores.") && p.ends_with(".mae") && v.as_f64().is_some_and(|x| x > 0.0)
+        }),
+        ("streaming pinball scores", |p, v| {
+            p.contains(".scores.") && p.contains(".pinball.") && v.as_f64().is_some_and(|x| x > 0.0)
+        }),
+        ("streaming log_loss", |p, v| {
+            p.contains(".scores.")
+                && p.ends_with(".log_loss")
+                && v.as_f64().is_some_and(|x| x > 0.0)
+        }),
+        ("streaming interval scores (width/winkler)", |p, v| {
+            p.contains(".interval_scores.")
+                && p.contains(".winkler.")
+                && v.as_f64().is_some_and(|x| x > 0.0)
+        }),
+        ("row-window conformal p-value ring", |p, v| {
+            p.contains(".conformal_p.") && p.ends_with(".window.Rows") && v.as_u64() == Some(20)
+        }),
+        ("clock-window conformal p-value ring", |p, v| {
+            p.contains(".conformal_p.")
+                && p.contains(".entries.")
+                && p.ends_with(".score")
+                && v.as_f64().is_some_and(|x| x >= 0.0)
+        }),
+        ("top-level max_state_bytes", |p, v| {
+            p.ends_with(".max_state_bytes") && v.as_u64() == Some(131_072)
+        }),
+    ] {
+        assert!(all.iter().any(|(p, v)| holds(p, v)), "no leaf holds {form}");
+    }
 }
 
 /// The spec of `bank_smoothed`: `kalman`'s fixed-lag smoother with its
@@ -3916,7 +4026,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 28),
+            ("bank", 29),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),

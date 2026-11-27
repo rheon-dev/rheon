@@ -82,6 +82,12 @@ impl ModelKind {
             } => *max_state_bytes,
             ModelKind::Spectral(s) => s.max_state_bytes,
             ModelKind::VectorAr(v) => v.max_state_bytes,
+            ModelKind::Krls(k) => k.max_state_bytes,
+            ModelKind::Dependence(d) => d.max_state_bytes,
+            ModelKind::HoeffdingTreeClassifier(t) => t.max_state_bytes,
+            ModelKind::HoeffdingTreeRegressor(t) => t.max_state_bytes,
+            ModelKind::HalfSpaceTrees(h) => h.max_state_bytes,
+            ModelKind::RandomCutForest(r) => r.max_state_bytes,
             _ => None,
         }
     }
@@ -112,6 +118,12 @@ impl ModelKind {
                 | ModelKind::Spectral(_)
                 | ModelKind::Isotonic { .. }
                 | ModelKind::VectorAr(_)
+                | ModelKind::Krls(_)
+                | ModelKind::Dependence(_)
+                | ModelKind::HoeffdingTreeClassifier(_)
+                | ModelKind::HoeffdingTreeRegressor(_)
+                | ModelKind::HalfSpaceTrees(_)
+                | ModelKind::RandomCutForest(_)
         )
     }
 }
@@ -346,7 +358,7 @@ impl Spec {
     /// Whether this spec carries a bounded diagnostic state that reads the
     /// top-level `max_state_bytes` cap.
     pub fn has_diagnostic_state_cap(&self) -> bool {
-        self.emit_robust_se && self.has_robust_se()
+        self.emit_conformal_p || (self.emit_robust_se && self.has_robust_se())
     }
 
     /// Effective `max_state_bytes` for a model configuration: model-block value

@@ -7364,6 +7364,68 @@ n = 50
 ideal = 0.0
 n = 50
 
+[group."conformal_variants.conformal_variants_oracles"]
+tests = [
+    "tests/test_conformal_variants.py::test_fifty_seeds_conformal_variants_vs_crepes_and_mapie",
+]
+oracles = { "crepes" = "0.9.1", "mapie" = "1.6.0" }
+dataset = ""
+
+[group."scores.scores_oracles"]
+tests = [
+    "tests/test_scores.py::test_fifty_seeds_scores_match_sklearn_river_and_mapie",
+]
+oracles = { "mapie" = "1.6.0", "river" = "0.26.1", "scikit-learn" = "1.9.1" }
+dataset = ""
+
+[case."conformal_variants.conformal_variants_oracles.asym_cov_err_at_0p9"]
+ideal = 0.0
+n = 50
+
+[case."conformal_variants.conformal_variants_oracles.asym_width_ratio_vs_mapie"]
+ideal = 1.0
+n = 50
+
+[case."conformal_variants.conformal_variants_oracles.conformal_p_vs_crepes"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."scores.scores_oracles.d2_pinball_eval_vs_sklearn"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."scores.scores_oracles.log_loss_stream_vs_sklearn"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."scores.scores_oracles.mae_stream_vs_river"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."scores.scores_oracles.pinball_stream_vs_sklearn"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."scores.scores_oracles.ssc_eval_vs_mapie"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."scores.scores_oracles.winkler_eval_vs_mapie"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."scores.scores_oracles.winkler_stream_exact"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
 # --- raises
 
 [[raised]]

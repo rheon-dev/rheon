@@ -746,9 +746,10 @@ def test_the_inf_table_matches_the_rust_side(builder):
     kwargs = {k: v for k, v in {**BASE, **BUILDERS[builder]}.items() if v is not None}
     for key, inf in _float_parameters(builder).items():
         spec = builder("m", **{**kwargs, **COMPANIONS.get(key, {})})
-        where = spec if key in spec else spec["model"]
+        top = key in spec or key in _spec._SKIPPED_WHEN_ABSENT.get("*", ())
+        where = spec if top else spec["model"]
         # A key the Rust spec skips when absent is written only when given.
-        assert key in where or key in _spec._SKIPPED_WHEN_ABSENT.get(builder.__name__, ()), (
+        assert top or key in where or key in _spec._SKIPPED_WHEN_ABSENT.get(builder.__name__, ()), (
             f"{builder.__name__}.{key} is not a key of the spec dict"
         )
         if key == "q":
@@ -794,9 +795,10 @@ def test_nan_is_no_setting_for_any_float_parameter(builder):
         if "inf" not in repr(inf):
             continue  # a list of names or lags: no float to make a NaN of
         spec = builder("m", **kwargs)
-        where = spec if key in spec else spec["model"]
+        top = key in spec or key in _spec._SKIPPED_WHEN_ABSENT.get("*", ())
+        where = spec if top else spec["model"]
         # A key the Rust spec skips when absent is written only when given.
-        assert key in where or key in _spec._SKIPPED_WHEN_ABSENT.get(builder.__name__, ()), (
+        assert top or key in where or key in _spec._SKIPPED_WHEN_ABSENT.get(builder.__name__, ()), (
             f"{builder.__name__}.{key} is not a key of the spec dict"
         )
         where[key] = _nan_shaped_like(inf)

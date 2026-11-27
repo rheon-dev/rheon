@@ -878,7 +878,9 @@ fn spec_reads(s: &Spec) -> Vec<(&str, Want, &'static str)> {
                 continue;
             }
             let (target_want, target_role) = match &s.model {
-                ModelKind::EwClass { .. } | ModelKind::HoeffdingTreeClassifier(_) => (Want::Text, "label"),
+                ModelKind::EwClass { .. } | ModelKind::HoeffdingTreeClassifier(_) => {
+                    (Want::Text, "label")
+                }
                 ModelKind::Bandit(_) if ti == 0 => (Want::Number, "reward"),
                 ModelKind::Bandit(_) => (Want::Text, "arm"),
                 // `bocpd`'s hazard column rides in the targets slot, and is not a
