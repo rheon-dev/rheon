@@ -7008,6 +7008,54 @@ ideal = 0.0
 n = 100
 tolerance = 0.0
 
+[group."isotonic.isotonic"]
+tests = [
+    "tests/test_isotonic.py::TestFiftySeeds::test_fifty_seeds_against_scikit_learn[bounded]",
+    "tests/test_isotonic.py::TestFiftySeeds::test_fifty_seeds_against_scikit_learn[decayed_window]",
+    "tests/test_isotonic.py::TestFiftySeeds::test_fifty_seeds_against_scikit_learn[decreasing_clip]",
+    "tests/test_isotonic.py::TestFiftySeeds::test_fifty_seeds_against_scikit_learn[half_life_ties]",
+    "tests/test_isotonic.py::TestFiftySeeds::test_fifty_seeds_against_scikit_learn[plain]",
+    "tests/test_isotonic.py::TestFiftySeeds::test_fifty_seeds_against_scikit_learn[window_rows]",
+    "tests/test_isotonic.py::TestFiftySeeds::test_fifty_seeds_against_scikit_learn[window_size]",
+]
+oracles = { "scikit-learn" = "1.9.1" }
+dataset = ""
+
+[case."isotonic.isotonic.bounded"]
+ideal = 0.0
+n = 50
+floor = 5e-15
+
+[case."isotonic.isotonic.decayed_window"]
+ideal = 0.0
+n = 50
+floor = 1e-14
+
+[case."isotonic.isotonic.decreasing_clip"]
+ideal = 0.0
+n = 50
+floor = 5e-15
+
+[case."isotonic.isotonic.half_life_ties"]
+ideal = 0.0
+n = 50
+floor = 1e-14
+
+[case."isotonic.isotonic.plain"]
+ideal = 0.0
+n = 50
+floor = 5e-15
+
+[case."isotonic.isotonic.window_rows"]
+ideal = 0.0
+n = 50
+floor = 5e-15
+
+[case."isotonic.isotonic.window_size"]
+ideal = 0.0
+n = 50
+floor = 5e-15
+
 # --- raises
 
 [[raised]]

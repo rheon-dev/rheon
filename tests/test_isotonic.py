@@ -45,9 +45,10 @@ import polars as pl
 import pytest
 from sklearn.isotonic import IsotonicRegression
 
+import ledger
 from rheon import polars as rp
 
-TIER = "essential"
+TIER = "mixed"
 
 #: The most a prediction parts from scikit-learn's where the bank computes
 #: scikit-learn's order but unfused, on targets of order 1: measured on
@@ -511,3 +512,75 @@ class TestTheCap:
         # The calibrated probability tracks the score it was drawn from.
         tail = out.tail(10_000).with_columns(x=pl.Series(x[-10_000:]))
         assert (tail["pred_y"] - tail["x"]).abs().mean() < 0.05
+
+
+# --- fifty-seed oracle grid (oracles.toml: isotonic.isotonic) ----------------
+
+GRID_SEEDS = range(50)
+GRID_ROWS = 160
+
+#: The core forms held against ``sklearn.isotonic.IsotonicRegression`` across
+#: 50 seeds: ``(spec kwargs, feature levels [0 = continuous], half_life,
+#: round-off floor)``. Every form agrees with scikit-learn to rounding
+#: (FMA vs unfused on non-decay forms; plus ``exp2`` and tie-pooling order
+#: under a decay). The round-off floors absorb platform/FMA differences while
+#: catching any real drift.
+GRID_FORMS: dict[str, tuple[dict[str, Any], int, float | None, float]] = {
+    "plain": ({}, 0, None, 5e-15),
+    "decreasing_clip": ({"increasing": False, "out_of_bounds": "clip"}, 0, None, 5e-15),
+    "bounded": ({"y_min": -0.6, "y_max": 0.5, "out_of_bounds": "clip"}, 0, None, 5e-15),
+    "window_rows": ({"window_rows": 40}, 17, None, 5e-15),
+    "window_size": ({"window_size": 30.0}, 17, None, 5e-15),
+    "half_life_ties": ({"half_life": 25.0}, 11, 25.0, 1e-14),
+    "decayed_window": (
+        {"window_size": 25.0, "closed": "both", "half_life": 10.0},
+        13,
+        10.0,
+        1e-14,
+    ),
+}
+
+
+def _grid_outputs(form: str, seed: int) -> tuple[pl.DataFrame, pl.Series]:
+    cfg, levels, _, _ = GRID_FORMS[form]
+    df = _frame(GRID_ROWS, 100 + seed, levels=levels)
+    s = rp.spec.isotonic(
+        "i", targets=["y"], features=["x"], weight="w", clock="t", gap_cap=10.0, **cfg
+    )
+    return df, _out(s, df)["pred_y"]
+
+
+ledger.guard(
+    "isotonic",
+    lambda: [_grid_outputs(form, seed)[1] for form in GRID_FORMS for seed in GRID_SEEDS],
+    oracles=["scikit-learn"],
+    bits=52,
+)
+
+
+class TestFiftySeeds:
+    """Each core form over seeds 0-49 of 160 rows against
+    ``sklearn.isotonic.IsotonicRegression``, recorded in ``oracles.toml`` as
+    ``isotonic.isotonic.*``."""
+
+    @pytest.mark.oracle_grid(
+        reason="50 seeds x 7 core isotonic forms held row by row against scikit-learn"
+    )
+    @pytest.mark.parametrize("form", list(GRID_FORMS))
+    def test_fifty_seeds_against_scikit_learn(self, form: str) -> None:
+        cfg, _, half_life, floor = GRID_FORMS[form]
+        errs: list[float] = []
+        for seed in GRID_SEEDS:
+            df, pred = _grid_outputs(form, seed)
+            x = df["x"].to_list()
+            worst = 0.0
+            for i, p in enumerate(pred.to_list()):
+                sk = _sklearn(_past(df, i, cfg, half_life), cfg, x[i])
+                if math.isnan(sk):
+                    assert p is None, (form, seed, i)
+                else:
+                    assert p is not None, (form, seed, i)
+                    worst = max(worst, abs(p - sk))
+            errs.append(worst)
+        ledger.record("isotonic", form, errs, floor=floor)
+        assert max(errs) <= floor, (form, max(errs))
