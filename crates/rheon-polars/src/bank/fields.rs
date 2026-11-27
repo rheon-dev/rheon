@@ -1648,6 +1648,34 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
         ));
         return fields;
     }
+    // audit with HLL++ enabled (`distinct_precision` set) emits each audited
+    // column's out-of-sample estimated distinct count (`approx_n_unique_<col>`)
+    // followed by `weight_sum`. Without `distinct_precision` it stays
+    // state-only below (`weight_sum` alone).
+    if let crate::ModelKind::Audit {
+        distinct_precision: Some(_),
+        ..
+    } = &spec.model
+    {
+        let mut fields = Vec::with_capacity(spec.features.len() + 1);
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let base = mi * spec.features.len();
+            for (ci, col) in spec.features.iter().enumerate() {
+                let mut m =
+                    FieldMeta::new(format!("approx_n_unique_{col}{suffix}"), "approx_n_unique")
+                        .decay(suffix, d)
+                        .src(Source::Stat(base + ci));
+                m.columns = Some(vec![col.clone()]);
+                fields.push(m);
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+        }
+        return fields;
+    }
     // rcov, marginal and audit emit nothing per row but `n_eff`, one per
     // instance: rcov's value is the block it emits at the group's close,
     // marginal's the pairs `Bank::marginal` reads from the state, audit's

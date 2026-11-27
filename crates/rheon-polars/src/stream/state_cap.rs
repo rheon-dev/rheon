@@ -174,6 +174,22 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
             "Shorten the lags or lag_tolerance",
             "rows",
         ),
+        ModelKind::Audit {
+            distinct_window_size: Some(w),
+            ..
+        } => (
+            format!("distinct_window_size = {w}"),
+            "Shorten distinct_window_size or lower distinct_precision",
+            "distinct-sketch entries",
+        ),
+        ModelKind::Audit {
+            distinct_window_rows: Some(n),
+            ..
+        } => (
+            format!("distinct_window_rows = {n}"),
+            "Shorten distinct_window_rows or lower distinct_precision",
+            "distinct-sketch entries",
+        ),
         _ => ("its window".to_string(), "Shorten the window", "events"),
     }
 }

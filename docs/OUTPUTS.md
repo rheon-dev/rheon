@@ -461,13 +461,20 @@ The fields of `rp.spec.rcov("m", features=["x0", "x1"], group="g", group_close="
 
 ## `audit`
 
-`audit` writes nothing per row but `weight_sum`, the rows before this one. Its product is the state, and `ModelBank.audit()` reads what it counted from it.
+`audit` writes nothing per row by default but `weight_sum`, the rows before this one (setting `distinct_precision` adds one `approx_n_unique_<col>` field per audited column). Its main product is the state, and `ModelBank.audit()` reads what it counted from it.
 
 The fields of `rp.spec.audit("m", columns=["x0", "x1"])`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+
+Under `distinct_precision=12`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `approx_n_unique_x0` | `f64` | estimated number of distinct usable values of `<f>` before this row (over the window under `distinct_window_rows` or `distinct_window_size`), from its HyperLogLog++ sketch | never: 0.0 before the first usable value |
+| `approx_n_unique_x1` | `f64` | estimated number of distinct usable values of `<f>` before this row (over the window under `distinct_window_rows` or `distinct_window_size`), from its HyperLogLog++ sketch | never: 0.0 before the first usable value |
 
 ## `garch`
 

@@ -74,6 +74,7 @@ fn cfg(k: usize) -> AuditCfg {
         distinct_cap: DISTINCT_CAP,
         gap_cap: None,
         has_clock: true,
+        distinct: None,
     }
 }
 

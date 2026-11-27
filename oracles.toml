@@ -7008,6 +7008,37 @@ ideal = 0.0
 n = 100
 tolerance = 0.0
 
+[group."audit_hll.audit_hll_oracle"]
+tests = [
+    "tests/test_audit_hll.py::test_audit_hll_matches_datasketch_over_50_seeds",
+]
+oracles = { "datasketch" = "2.0.0" }
+dataset = ""
+
+[case."audit_hll.audit_hll_oracle.plain_p12_rel_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."audit_hll.audit_hll_oracle.plain_p12_truth_rel_err"]
+ideal = 0.0
+n = 50
+
+[case."audit_hll.audit_hll_oracle.plain_p8_rel_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."audit_hll.audit_hll_oracle.sliding_clock_p12_rel_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."audit_hll.audit_hll_oracle.sliding_rows_p12_rel_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
 # --- raises
 
 [[raised]]

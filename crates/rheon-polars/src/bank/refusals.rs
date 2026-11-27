@@ -86,6 +86,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
         | ModelKind::EwmMoments {
             max_state_bytes: Some(_),
             ..
+        }
+        | ModelKind::Audit {
+            max_state_bytes: Some(_),
+            ..
         } => format!("max_state_bytes of {cap}"),
         _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
     };
@@ -193,6 +197,20 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             ModelKind::Isotonic { .. } => (
                 "the distinct values of its feature".to_string(),
                 "Round the feature to fewer values in the query, or give window_rows",
+            ),
+            ModelKind::Audit {
+                distinct_window_size: Some(w),
+                ..
+            } => (
+                format!("the distinct-sketch entries inside distinct_window_size = {w}"),
+                "Shorten distinct_window_size or lower distinct_precision",
+            ),
+            ModelKind::Audit {
+                distinct_window_rows: Some(n),
+                ..
+            } => (
+                format!("the distinct-sketch entries inside distinct_window_rows = {n}"),
+                "Shorten distinct_window_rows or lower distinct_precision",
             ),
             // No window on the clock: the lag buffers are what the data sizes.
             ModelKind::EwmMoments { .. } => (

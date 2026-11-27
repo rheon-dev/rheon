@@ -259,6 +259,11 @@ dev = [
     # (no small-sample factor, as the papers). MIT, pure Python over numpy.
     # The floor is the version measured.
     "hfvol>=0.1.0",
+    # tests/test_audit_hll.py: datasketch's HyperLogLogPlusPlus is the oracle
+    # for `audit`'s HyperLogLog++ distinct-count sketch (both plain and
+    # sliding-window, rerun over each window's rows). MIT, pure Python over
+    # numpy and scipy. The floor is the version measured.
+    "datasketch>=2.0.0",
 ]
 # The R oracles (tests/r_oracle/): R's `highfrequency` and `yuima`, the
 # reference implementations of the realized measures and the jump tests,

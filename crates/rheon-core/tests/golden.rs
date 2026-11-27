@@ -892,6 +892,7 @@ fn audit_golden() {
         // Past the stream's one long step, so it is a regular step.
         gap_cap: Some(30.0),
         has_clock: true,
+        distinct: None,
     })
     .unwrap();
     for (i, (mut x, y, d, w)) in stream().into_iter().enumerate() {

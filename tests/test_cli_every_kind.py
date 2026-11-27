@@ -1320,6 +1320,31 @@ CASES: list[Case] = [
     ),
     Case("audit2", "audit", {"columns": ["x0", "y"], "group": "block", "fit_intercept": False}),
     Case(
+        "audit_hll_rows",
+        "audit",
+        {
+            "columns": ["x0", "x1", "y"],
+            "distinct_precision": 10,
+            "distinct_window_rows": 25,
+            "max_state_bytes": 512 * 1024,
+            "group": "g",
+        },
+    ),
+    Case(
+        "audit_hll_clock",
+        "audit",
+        {
+            "columns": ["x0", "x1"],
+            "distinct_precision": 10,
+            "distinct_window_size": 15.0,
+            "closed": "both",
+            "clock": "t",
+            "gap_cap": 6.0,
+            "group": "g",
+            "emit_clocks": True,
+        },
+    ),
+    Case(
         "kmeans",
         "kmeans",
         {

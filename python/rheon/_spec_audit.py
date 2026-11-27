@@ -6,8 +6,9 @@ rest.
 
 from __future__ import annotations
 
-from typing import Any, Unpack
+from typing import Any, Literal, Unpack
 
+from rheon._duration import Duration
 from rheon._kwargs import CommonKwargs
 from rheon._spec import _checked, _common, _mirror_target
 from rheon._spec_words import _listed, quoted, refusal
@@ -20,6 +21,11 @@ def audit(
     columns: list[str],
     pairs: bool = False,
     distinct_cap: int | None = None,
+    distinct_precision: int | None = None,
+    distinct_window_rows: int | None = None,
+    distinct_window_size: float | Duration | None = None,
+    closed: Literal["right", "both"] = "right",
+    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A count of what a stream's columns hold, read in one pass by a spec that fits
@@ -81,16 +87,49 @@ def audit(
         where a value on 3% of a continuous column's rows was found on ten
         seeds of ten as a sentinel; at 1,024 one on 2% was. At least 1 and at
         most 65,536.
+    ``distinct_precision``
+        Precision ``p`` (from 8 to 16) for a HyperLogLog++ distinct-count
+        sketch per column, with ``m = 2^p`` registers (relative standard error
+        about ``1.04 / sqrt(m)``: ~1.6% at ``p = 12``, 4 KiB per column).
+        When set, :meth:`~rheon.polars.ModelBank.audit` adds an
+        ``approx_n_unique`` column beside ``n_unique`` (which stays defined
+        past ``distinct_cap``), and ``fit_predict`` emits per-row out-of-sample
+        ``approx_n_unique_<col>`` fields. Default ``None`` (off).
+    ``distinct_window_rows``
+        Window the HyperLogLog++ distinct-count sketch to the last this many
+        rows of positive weight (at least 1). Requires ``distinct_precision``;
+        mutually exclusive with ``distinct_window_size``. Other audit
+        statistics stay whole-stream. Default ``None``.
+    ``distinct_window_size``
+        Window the HyperLogLog++ distinct-count sketch to the last this many
+        clock units (a number of rows without a clock, a number of clock units
+        on a numeric clock, or a duration such as ``"5m"`` on a temporal
+        clock). Requires ``distinct_precision``; mutually exclusive with
+        ``distinct_window_rows``. Other audit statistics stay whole-stream.
+        Default ``None``.
+    ``closed``
+        Which edge of ``distinct_window_size`` keeps a row exactly one window
+        old: ``"right"`` (the default, drops a row exactly one window old) or
+        ``"both"`` (keeps it). Applies only when ``distinct_window_size`` is
+        set.
+    ``max_state_bytes``
+        Maximum state bytes per group (default 256 KB, ceiling 64 MiB).
+        Checked against the audit's state whenever ``distinct_precision`` or
+        ``max_state_bytes`` is set: at spec creation for fixed state, and at
+        run time as sliding-window entries grow (warning once past half of the
+        cap and refusing atomically before exceeding it). Default ``None``.
 
     .. rubric:: Output
 
-    One output column, named after the spec, whose value in each row is a
-    record holding ``weight_sum`` alone, the count of rows before this one.
-    `docs/OUTPUTS.md#audit
+    One output column, named after the spec. Without ``distinct_precision``,
+    its value in each row is a record holding ``weight_sum`` alone, the count
+    of rows before this one. With ``distinct_precision`` set, each row also
+    holds ``approx_n_unique_<col>`` per audited column, read before that row
+    updates the sketch. `docs/OUTPUTS.md#audit
     <https://github.com/rheon-dev/rheon/blob/main/docs/OUTPUTS.md#audit>`_
-    gives its type. An audit predicts nothing, so what it counted is read
-    back with :meth:`rheon.polars.ModelBank.audit`, one row per column (and
-    with ``table="pairs"`` and ``table="clock"``), and judged by
+    gives its type. What the audit counted is read back with
+    :meth:`rheon.polars.ModelBank.audit`, one row per column (and with
+    ``table="pairs"`` and ``table="clock"``), and judged by
     :meth:`rheon.polars.ModelBank.check`. *What it counts* in Notes defines
     each measurement.
 
@@ -103,7 +142,13 @@ def audit(
     - an empty ``columns``, or one that names a column twice;
     - ``half_life``, ``lam``, ``weight``, ``embargo``, ``label_clock``,
       ``min_weight`` or ``group_close``;
-    - a ``distinct_cap`` outside 1 to 65,536.
+    - a ``distinct_cap`` outside 1 to 65,536;
+    - a ``distinct_precision`` outside 8 to 16;
+    - ``distinct_window_rows`` or ``distinct_window_size`` without
+      ``distinct_precision``, both set together, ``distinct_window_rows``
+      below 1, or ``distinct_window_size`` non-positive or non-finite;
+    - ``closed="both"`` without ``distinct_window_size``;
+    - ``max_state_bytes`` of 0, above 64 MiB, or smaller than the fixed state.
 
     .. rubric:: The update
 
@@ -123,8 +168,17 @@ def audit(
 
     and to its counter: a held value's count adds one, a new value takes a
     counter while fewer than ``distinct_cap`` are held, and otherwise takes
-    one from every counter and drops those at 0 (a Misra-Gries summary). A
-    usable row whose row before was usable adds the pair to the lag-1
+    one from every counter and drops those at 0 (a Misra-Gries summary). When
+    ``distinct_precision`` is set, each usable value (with ``-0.0`` mapped to
+    ``0.0``) is hashed with SplitMix64 into a register index ``j`` (low ``p``
+    bits) and leading-zero rank ``rho`` (remaining ``64 - p`` bits plus one):
+    plain HLL++ keeps ``max(rho)`` per register and estimates cardinality via
+    HyperLogLog++ linear counting and empirical bias correction; under
+    ``distinct_window_rows`` or ``distinct_window_size`` each register keeps
+    its Pareto-optimal frontier of ``(rho, stamp)`` pairs (strictly decreasing
+    ranks, strictly increasing stamps) and trims expired fronts before reading.
+    A zero-weight row reaches no HLL++ register and advances no window clock.
+    A usable row whose row before was usable adds the pair to the lag-1
     regression and counts whether the two are equal. Nothing decays.
 
     .. rubric:: Example
@@ -328,5 +382,15 @@ def audit(
         model["pairs"] = True
     if distinct_cap is not None:
         model["distinct_cap"] = distinct_cap
+    if distinct_precision is not None:
+        model["distinct_precision"] = distinct_precision
+    if distinct_window_rows is not None:
+        model["distinct_window_rows"] = distinct_window_rows
+    if distinct_window_size is not None:
+        model["distinct_window_size"] = distinct_window_size
+    if closed != "right":
+        model["closed"] = closed
+    if max_state_bytes is not None:
+        model["max_state_bytes"] = max_state_bytes
     targets = _mirror_target(name, "audit", columns, common, "it counts what is in", "columns")
     return _common(name, model, targets=targets, features=columns, **common)

@@ -3611,8 +3611,18 @@ statistics of the columns a model has already been fed.
 
 Its parameters, their defaults and what each refuses are in its
 [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit).
-Each row writes only `weight_sum` ([OUTPUTS.md](OUTPUTS.md#audit)), and
-`bank.audit()` reads the counts from the state as a table after the run.
+Without `distinct_precision`, each row writes only `weight_sum`
+([OUTPUTS.md](OUTPUTS.md#audit)), and `bank.audit()` reads the counts from the
+state as a table after the run. With `distinct_precision` set (8 to 16), each
+column also maintains a HyperLogLog++ distinct-count sketch (SplitMix64 hash
+with HLL++ linear-counting thresholds and empirical bias tables), adding
+`approx_n_unique` beside `n_unique` in `bank.audit()` and emitting per-row
+out-of-sample `approx_n_unique_<col>` fields in `fit_predict`. Optional `distinct_window_rows` or `distinct_window_size` (with
+`closed="right"` or `"both"`) windows the HLL++ sketch alone via
+per-register Pareto frontiers of `(rank, stamp)` pairs, while the remaining
+audit statistics stay whole-stream. `max_state_bytes` (default 256 KB,
+ceiling 64 MiB) bounds the group state at validation and, for sliding
+windows, at run time.
 [Its
 docstring](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.audit)
 defines each column. The parameters every spec takes are in [What every spec

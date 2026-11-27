@@ -749,6 +749,13 @@ ENUM_PROBES: list[
     # A windowed model's `closed` (docs/PLAN.md task 196): two of Polars' four
     # words; `"left"` and `"none"` are refused by name with their reason, and
     # are not taken (review round 5, E2).
+    (
+        "audit.closed",
+        "audit",
+        {"distinct_precision": 12, "distinct_window_size": 100.0},
+        "model.closed",
+        "word",
+    ),
     ("ew_class.closed", "ew_class", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_cov.closed", "ew_cov", {"window_size": 100.0}, "model.closed", "word"),
     ("ewridge.closed", "ewridge", {"window_size": 100.0}, "model.closed", "word"),

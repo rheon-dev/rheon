@@ -547,6 +547,7 @@ class TestEveryClockParameterTakesADuration:
         # `corrchange`'s takes no `window_rows` beside it; another
         # builder's has none to drop.
         "window_size": ("30m", {"window_rows": None}),
+        "distinct_window_size": ("30m", {"distinct_precision": 10}),
         "monitor_span": ("45m", {"kind": "sequential", "window_rows": None, "window_size": "30m"}),
         "kernel_half_lives": (["20s", "10m"], {}),
         "start_span": ("30m", {"start_rows": None}),
@@ -618,6 +619,7 @@ class TestEveryClockParameterTakesADuration:
         "select_half_life": float("inf"),
         "revert_half_life": float("inf"),
         "window_size": None,
+        "distinct_window_size": None,
         "monitor_span": None,
         "start_span": None,
         "margin_start_span": None,

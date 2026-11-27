@@ -362,7 +362,17 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "feature_moments",
         }
     ),
-    "audit": frozenset({"pairs", "distinct_cap"}),
+    "audit": frozenset(
+        {
+            "pairs",
+            "distinct_cap",
+            "distinct_precision",
+            "distinct_window_rows",
+            "distinct_window_size",
+            "closed",
+            "max_state_bytes",
+        }
+    ),
     "kalman": frozenset(
         {"covariance_form", "forecast_spans", "smooth_lag", "emit_smoothed_se", "max_state_bytes"}
     ),

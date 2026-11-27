@@ -160,8 +160,10 @@ mod window_moments;
 
 pub use ar::{Ar, ArCfg, ArSelect, check_lags as check_ar_lags};
 pub use audit::{
-    Audit, AuditCfg, ClockReport as AuditClock, ColumnReport as AuditColumn, DISTINCT_CAP,
-    MAX_DISTINCT_CAP, NULL, PairReport as AuditPair, is_null,
+    AUDIT_COL_BASE_BYTES, AUDIT_PAIR_BYTES, Audit, AuditCfg, AuditDistinctCfg,
+    ClockReport as AuditClock, ColumnReport as AuditColumn, DISTINCT_CAP, HLL_CLOCK_ENTRY_BYTES,
+    HLL_ROW_ENTRY_BYTES, Hll, MAX_DISTINCT_CAP, MAX_DISTINCT_PRECISION, MIN_DISTINCT_PRECISION,
+    NULL, PairReport as AuditPair, is_null, splitmix64,
 };
 pub use bocpd::{Bocpd, BocpdCfg, BocpdEmission};
 pub use breaks::{Breaks, TwinFit, cusum_null, cusum_null_at, cusum_null_window, cusum_sq_null_at};

@@ -7,6 +7,7 @@
 platform = "darwin-arm64"
 
 [hashes]
+"audit_hll.audit_hll_oracle" = "ffbb5de04497e19b168759c89769c54b684252aa3ac4fb6ad3e289d7866b1b0a"
 "conformal.coverage_rates" = "6a0a61bb25fb83e9ef63fb45020c7bbc1a5980988b8d373952f4a0764e868dbf"
 "convergence.ewridge" = "ddbc4f8f711477e27e82540f54a5c57e1c0b0302a576ba3c05d9e3413e11edc9"
 "convergence.expectile" = "9680a2d3f03658a6ed0344217aa9aab2d7ef1c8c62d2600cdc9be358a44fbe3f"
