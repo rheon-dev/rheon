@@ -402,7 +402,7 @@ impl GarchCfg {
         2 + 2 * self.horizons.len()
     }
 
-    fn cap(&self) -> u64 {
+    pub(crate) fn cap(&self) -> u64 {
         self.max_state_bytes.unwrap_or(GARCH_MAX_STATE_BYTES)
     }
 
@@ -671,6 +671,40 @@ impl Garch {
         }
     }
 
+    /// The bytes the state would hold after buffering a row of weight `weight`
+    /// and targets `y`, if any target in its first `start_span` (`tried == 0`)
+    /// is buffering this row; `None` otherwise. Read-only, so both [`Garch`]
+    /// and [`crate::Dcc`] can check the whole row against the cap before
+    /// mutating any target or clock field.
+    pub(crate) fn span_cap_check(&self, x: &[f64], y: &[Option<f64>], weight: f64) -> Option<u64> {
+        if !(weight > 0.0 && self.cfg.start_span.is_some()) || self.cfg.refuses_inputs(x) {
+            return None;
+        }
+        let mut total = self.bytes();
+        let mut checks = false;
+        let cap = self.cfg.cap();
+        let b = bound(&self.cfg);
+        for (j, series) in self.series.iter().enumerate() {
+            if y.get(j).copied().flatten().is_none() || series.started {
+                continue;
+            }
+            let rows = series.buffer.len();
+            let delta = Self::series_bytes(&self.cfg, rows + 1) - series.bytes(&self.cfg);
+            if series.tried == 0 {
+                total += delta;
+                checks = true;
+            } else if total + delta <= cap && (rows as u64) < b {
+                total += delta;
+            }
+        }
+        checks.then_some(total)
+    }
+
+    /// Drop any handed stamp for a row that was not admitted.
+    pub(crate) fn discard_next(&mut self) {
+        self.next = None;
+    }
+
     /// The bytes the state holds as it stands.
     pub fn bytes(&self) -> u64 {
         self.series.iter().map(|s| s.bytes(&self.cfg)).sum::<u64>() + 16
@@ -818,6 +852,12 @@ impl OnlineModel for Garch {
             *out = refused;
             return;
         }
+        // Once past the cap no row mutates `own`, `w_sum`, or any series.
+        if self.over.is_some() {
+            self.next = None;
+            self.read_into(x, Some(y), out);
+            return;
+        }
         // An input below 0 under GARCH or GJR is refused the same way: its
         // term could take the variance below 0, so the row reports nothing
         // and is learned as a row of weight 0, every input 0.
@@ -828,6 +868,18 @@ impl OnlineModel for Garch {
             return;
         }
         let handed = self.next.take();
+        // Check total post-row bytes across all targets before advancing `own`,
+        // `w_sum`, or mutating any target's series.
+        let span_total = self.span_cap_check(x, y, weight);
+        if let Some(total) = span_total {
+            let cap = self.cfg.cap();
+            let mut held = self.held_cap();
+            if !held.admit(total, cap) {
+                self.read_into(x, Some(y), out);
+                return;
+            }
+            held.note(total, cap);
+        }
         let now = self.cfg.start_span.map(|_| {
             self.own += d_clock;
             handed.unwrap_or(Stamp::from(self.own))
@@ -849,7 +901,7 @@ impl OnlineModel for Garch {
             // A row of weight 0, or with no residual for this target, is
             // not learned: the recursion does not step, so the next row
             // reads this target's lags as the last learned row left them.
-            let Some(e) = e.filter(|_| learns && self.over.is_none()) else {
+            let Some(e) = e.filter(|_| learns) else {
                 continue;
             };
             let series = &mut self.series[j];
@@ -863,23 +915,13 @@ impl OnlineModel for Garch {
                 }
                 continue;
             }
-            // The start's buffer. A first span's rows are checked against
-            // the cap as they come, the warning at half of it once, and a
-            // row past it refused, as every span the data sizes is. After a
-            // try the buffer grows to its share of the cap ([`bound`]) while
-            // the state holds a row more, and then keeps its latest rows.
-            let tried = self.series[j].tried > 0;
+            // The start's buffer. After a try the buffer grows to its share of
+            // the cap ([`bound`]) while the state holds a row more, and then
+            // keeps its latest rows.
             let mine = self.series[j].bytes(&self.cfg);
             let rows = self.series[j].buffer.len();
             let with = self.bytes() - mine + Self::series_bytes(&self.cfg, rows + 1);
             let cap = self.cfg.cap();
-            if self.cfg.start_span.is_some() && !tried {
-                let mut held = self.held_cap();
-                if !held.admit(with, cap) {
-                    continue;
-                }
-                held.note(with, cap);
-            }
             let grows = with <= cap && (rows as u64) < bound(&self.cfg);
             if self.series[j].buffer_row(&self.cfg, e, x, weight, now, grows) {
                 self.series[j].start(&self.cfg);

@@ -1357,6 +1357,27 @@ impl Hawkes {
         self.read_ahead(d_clock, now)
     }
 
+    /// A row's stamp read without moving the clock.
+    fn peek_stamp(&self, d_clock: f64, handed: Option<Stamp>) -> Option<Stamp> {
+        let track = self.window.as_ref()?.track.as_ref()?;
+        Some(handed.unwrap_or(Stamp::from(track.own + d_clock)))
+    }
+
+    /// Bytes a clock window would hold after trimming rows out at `now` and
+    /// adding `extra` more.
+    fn clock_bytes_at(&self, now: Stamp, extra: usize) -> u64 {
+        let dropped = match (&self.window, self.cfg.window_clock) {
+            (Some(w), Some(span)) => w
+                .stamp
+                .iter()
+                .take_while(|&&s| self.cfg.closed.has_left(now, s, span))
+                .count(),
+            _ => 0,
+        };
+        let (n, u, _) = self.cfg.dims();
+        Self::clock_state_bytes(n, u, self.window_rows() - dropped + extra)
+    }
+
     /// Bytes a clock window holds with its newest row in, and whether the
     /// row that would add one more passes the cap.
     fn clock_bytes_with(&self, extra: usize) -> u64 {
@@ -1383,6 +1404,21 @@ impl OnlineModel for Hawkes {
         }
         let n = self.cfg.n_targets;
         let handed = self.next.take();
+        let peek_now = self.peek_stamp(d_clock, handed);
+        let has_mark = weight > 0.0 && y.iter().take(n).any(|v| Self::mark(*v) > 0.0);
+        // Check the clock window cap atomically before advancing clocks,
+        // decaying state, or trimming expired rows.
+        if self.over.is_some() {
+            *out = self.read_ahead(d_clock, peek_now);
+            return;
+        }
+        if has_mark && let Some(now) = peek_now {
+            let (bytes, cap) = (self.clock_bytes_at(now, 1), self.cfg.cap());
+            if !self.held_cap().admit(bytes, cap) {
+                *out = self.read_ahead(d_clock, peek_now);
+                return;
+            }
+        }
         let now = self.stamp_row(d_clock, handed);
         // Read before the row's own clock step, as every `n_eff` is (hard
         // rule 8): a row a clock window drops at this row still counts, as
@@ -1416,19 +1452,8 @@ impl OnlineModel for Hawkes {
         // never hands one over, since such a row counts in no clock (hard
         // rule 9): it scores it with `predict` and steps the next row from
         // the last that counted.
-        if weight <= 0.0 || !y.iter().take(n).any(|v| Self::mark(*v) > 0.0) {
+        if !has_mark {
             return;
-        }
-        // A clock window's next row that would take the state past its cap
-        // is not learned, nor any after it: the overrun is reported.
-        if self.over.is_some() {
-            return;
-        }
-        if now.is_some() {
-            let (bytes, cap) = (self.clock_bytes_with(1), self.cfg.cap());
-            if !self.held_cap().admit(bytes, cap) {
-                return;
-            }
         }
         // Each event from `R` before the row's events (the left limit).
         let k = self.r.len();

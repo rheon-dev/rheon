@@ -1755,35 +1755,73 @@ impl Robust {
         self.resolve_target(j, fitted_before);
     }
 
+    /// Target `j`'s residual scale as the row reads it after `mad.age(lam_scale)`:
+    /// while a refit buffer holds the one-pass residuals, `mad` is not read;
+    /// otherwise only `lam_scale == 0.0` clears it.
+    fn scale_after_age(&self, j: usize, lam_scale: f64) -> Option<f64> {
+        if lam_scale == 0.0
+            && self.mad.get(j).is_some()
+            && !self.refit.get(j).is_some_and(RefitBuf::reads_resid)
+        {
+            return None;
+        }
+        self.residual_scale(j)
+    }
+
+    /// Bytes this row adds across every open span refit buffer, read before
+    /// any state moves so a breaching row can be refused atomically.
+    #[allow(clippy::too_many_arguments)]
+    fn span_row_delta(
+        &self,
+        x: &[f64],
+        y: &[Option<f64>],
+        pred: &[f64],
+        nc: usize,
+        weighing: usize,
+        weight: f64,
+        lam: f64,
+        lam_scale: f64,
+    ) -> u64 {
+        let per =
+            8 * (x.len() + 4) as u64 + 48 * u64::from(self.cfg.huber_scale == HuberScale::Mad);
+        let counts = weight > 0.0 && weight.is_finite();
+        let mut delta = 0u64;
+        for (j, b) in self.refit.iter().enumerate() {
+            if !b.open() {
+                continue;
+            }
+            let Some(yj) = y[j] else {
+                delta += b.age_bytes(lam, lam_scale);
+                continue;
+            };
+            if !counts {
+                delta += b.age_bytes(lam, lam_scale);
+                continue;
+            }
+            let buffers = match self.cfg.loss {
+                RobustLoss::Quantile { .. } => true,
+                RobustLoss::Huber { .. } => {
+                    let pj = pred[j * nc + weighing];
+                    let scale = self.scale_after_age(j, lam_scale);
+                    !matches!(
+                        self.row_update(yj, pj, scale, weight, 0.0, 0.0),
+                        RowUpdate::Fit { w, .. } if w.is_nan() || w <= 0.0
+                    )
+                }
+            };
+            delta += if buffers {
+                per
+            } else {
+                b.age_bytes(lam, lam_scale)
+            };
+        }
+        delta
+    }
+
     /// A row that only aged target `j`'s sums, into its refit's buffer; a
     /// buffer it gives up hands its rows to the target's sketch
     /// ([`Self::scale_from_held`]).
     fn age_refit(&mut self, j: usize, lam: f64, lam_scale: f64) {
-        // Past a span's cap the buffers take nothing more.
-        if self.over.is_some() {
-            return;
-        }
-        // Under a span the run the row adds is held to the cap as a
-        // learned row is (review 2026-11-23, REG-2).
-        if self.cfg.refit_clock.is_some() {
-            let Some(b) = self.refit.get(j) else {
-                return;
-            };
-            let row = b.age_bytes(lam, lam_scale);
-            if row > 0 {
-                let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
-                let limit = self.span_cap();
-                let mut guard = crate::clock_span::HeldCap {
-                    over: &mut self.over,
-                    warned: &mut self.warned,
-                    warning: &mut self.warning,
-                };
-                if !guard.admit(held + row, limit) {
-                    return;
-                }
-                guard.note(held + row, limit);
-            }
-        }
         let cap = self.refit_cap();
         if let Some(t) = self
             .refit
@@ -1818,8 +1856,8 @@ impl Robust {
     }
 
     /// Target `j`'s buffer takes the learned row, under a refit over a span
-    /// of the clock checked against the cap first: true where its refit is
-    /// due ([`RefitBuf::learn_scored`], [`RefitBuf::span_due`]).
+    /// of the clock checked atomically before the row moved any state: true
+    /// where its refit is due ([`RefitBuf::learn_scored`], [`RefitBuf::span_due`]).
     #[allow(clippy::too_many_arguments)]
     fn buffer_row(
         &mut self,
@@ -1833,23 +1871,8 @@ impl Robust {
         now: Option<crate::Stamp>,
     ) -> bool {
         let (span, cap) = (self.cfg.refit_clock, self.refit_cap());
-        if span.is_some() {
-            if self.over.is_some() || !self.refit.get(j).is_some_and(RefitBuf::open) {
-                return false;
-            }
-            let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
-            let row =
-                8 * (x.len() + 4) as u64 + 48 * u64::from(self.cfg.huber_scale == HuberScale::Mad);
-            let limit = self.span_cap();
-            let mut guard = crate::clock_span::HeldCap {
-                over: &mut self.over,
-                warned: &mut self.warned,
-                warning: &mut self.warning,
-            };
-            if !guard.admit(held + row, limit) {
-                return false;
-            }
-            guard.note(held + row, limit);
+        if span.is_some() && !self.refit.get(j).is_some_and(RefitBuf::open) {
+            return false;
         }
         let least = self.span_refit_least();
         let Some(b) = self.refit.get_mut(j) else {
@@ -2806,9 +2829,6 @@ impl OnlineModel for Robust {
         }
         let m = self.cfg.n_targets;
         let k = self.cfg.k_total();
-        if self.zbuf.len() != k {
-            self.zbuf = RowBuf(vec![0.0; k]);
-        }
         let lam = self.cfg.decay.factor(d_clock);
         // The scale's own clock (`huber_scale_decay`), the model's unless
         // given: the same factor, to the bit, where it is not.
@@ -2816,12 +2836,6 @@ impl OnlineModel for Robust {
             .cfg
             .huber_scale_decay
             .map_or(lam, |d| d.factor(d_clock));
-        if self.cfg.fit_intercept {
-            self.zbuf[0] = 1.0;
-            self.zbuf[1..].copy_from_slice(x);
-        } else {
-            self.zbuf.copy_from_slice(x);
-        }
 
         // The slot whose prediction weighs the row, per target: under
         // feature sets the largest set's, since the sets share the target's
@@ -2851,6 +2865,58 @@ impl OnlineModel for Robust {
         if emit {
             seen.clear();
             seen.resize(m, f64::NAN);
+        }
+
+        // Under a span refit, check the whole row's buffer growth atomically
+        // before moving any clock, weight, moment, or target buffer.
+        if self.over.is_some() {
+            self.since_solve.discard_next();
+            if let Some(p) = &mut self.place {
+                p.discard_next();
+            }
+            if emit {
+                for (j, s) in seen.iter_mut().enumerate() {
+                    *s = self.scale_after_age(j, lam_scale).unwrap_or(f64::NAN);
+                }
+                out.extra = Some(crate::Extra::Huber { scale: seen });
+            }
+            return;
+        }
+        if self.cfg.refit_clock.is_some() && self.refit.iter().any(RefitBuf::open) {
+            let delta = self.span_row_delta(x, y, pred, nc, weighing, weight, lam, lam_scale);
+            if delta > 0 {
+                let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
+                let limit = self.span_cap();
+                let mut guard = crate::clock_span::HeldCap {
+                    over: &mut self.over,
+                    warned: &mut self.warned,
+                    warning: &mut self.warning,
+                };
+                if !guard.admit(held + delta, limit) {
+                    self.since_solve.discard_next();
+                    if let Some(p) = &mut self.place {
+                        p.discard_next();
+                    }
+                    if emit {
+                        for (j, s) in seen.iter_mut().enumerate() {
+                            *s = self.scale_after_age(j, lam_scale).unwrap_or(f64::NAN);
+                        }
+                        out.extra = Some(crate::Extra::Huber { scale: seen });
+                    }
+                    return;
+                }
+                guard.note(held + delta, limit);
+            }
+        }
+
+        if self.zbuf.len() != k {
+            self.zbuf = RowBuf(vec![0.0; k]);
+        }
+        if self.cfg.fit_intercept {
+            self.zbuf[0] = 1.0;
+            self.zbuf[1..].copy_from_slice(x);
+        } else {
+            self.zbuf.copy_from_slice(x);
         }
 
         // ---- the solve schedule, decided before the targets learn the row:

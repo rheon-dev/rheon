@@ -738,17 +738,6 @@ impl Dcc {
             self.step_stage(z, w, fr);
             return;
         }
-        // A first span whose rows the cap cannot hold is refused, as every
-        // span the data sizes is; after a try the buffer is held at its
-        // bound instead, below.
-        if self.cfg.start_span.is_some() && self.stage.tried == 0 {
-            let with = self.bytes() + self.cfg.row_bytes();
-            let cap = self.cfg.cap();
-            let mut held = self.held_cap();
-            if !held.admit(with, cap) {
-                return;
-            }
-        }
         let stride = self.cfg.n_targets + 2;
         let rows = self.stage.rows(&self.cfg);
         let bound = self.bound();
@@ -1018,10 +1007,57 @@ impl OnlineModel for Dcc {
             *out = refused;
             return;
         }
-        let f = self.cfg.decay.factor(d_clock);
-        let now = self.place.as_mut().map(|p| p.step(d_clock));
         let learns = weight > 0.0;
         let k = self.cfg.n_targets;
+        // Once past the cap, or if either the margins' or stage's first
+        // `start_span` would pass the cap on this row, refuse atomically before
+        // advancing `place`, `margins`, `w_sum`, or `stage.pending`.
+        let reject = |this: &mut Self, out: &mut Step| {
+            if let Some(p) = this.place.as_mut() {
+                p.discard_next();
+            }
+            if let Some(g) = this.margins.as_mut() {
+                g.discard_next();
+            }
+            this.read_into(Some(y), out);
+        };
+        if self.over.is_some() {
+            reject(self, out);
+            return;
+        }
+        if learns
+            && let Some(g) = &self.margins
+            && let Some(g_total) = g.span_cap_check(&[], y, weight)
+            && g_total > g.cfg().cap()
+        {
+            let with = g_total + self.cfg.stage_bytes() + 32 + 8 * self.stage.buffer.len() as u64;
+            let cap = self.cfg.cap();
+            // Record the overrun even if the margin's own cap bound it first.
+            if self.held_cap().admit(with, cap) {
+                self.over = Some(with);
+            }
+            reject(self, out);
+            return;
+        }
+        if learns && !self.stage.started && self.cfg.start_span.is_some() && self.stage.tried == 0 {
+            let with = self.bytes() + self.cfg.row_bytes();
+            let cap = self.cfg.cap();
+            if with > cap {
+                let usable = match &self.margins {
+                    None => y.len() >= k && y[..k].iter().all(|v| v.is_some_and(f64::is_finite)),
+                    Some(g) => {
+                        let m = g.predict_with(&[], y, 0.0);
+                        (0..k).all(|j| m.pred.get(2 * j + 1).is_some_and(|v| v.is_finite()))
+                    }
+                };
+                if usable && !self.held_cap().admit(with, cap) {
+                    reject(self, out);
+                    return;
+                }
+            }
+        }
+        let f = self.cfg.decay.factor(d_clock);
+        let now = self.place.as_mut().map(|p| p.step(d_clock));
         crate::scratch::with_borrow_mut(&ROW, |(m, vars, zs)| {
             if let Some(g) = self.margins.as_mut() {
                 g.step_into(&[], y, d_clock, weight, m);
@@ -1033,15 +1069,8 @@ impl OnlineModel for Dcc {
             self.report(vars, zs, out);
             out.n_eff = self.w_sum;
             self.w_sum = f * self.w_sum + if learns { weight } else { 0.0 };
-            if let Some(g) = self.margins.as_ref()
-                && let Some((bytes, _)) = g.state_over_cap()
-                && self.over.is_none()
-            {
-                self.over =
-                    Some(bytes + self.cfg.stage_bytes() + 32 + 8 * self.stage.buffer.len() as u64);
-            }
             let usable = zs.len() == k && zs.iter().all(|v| v.is_finite());
-            if learns && usable && self.over.is_none() {
+            if learns && usable {
                 self.learn(zs, weight, f, now);
             } else {
                 self.stage.pending *= f;

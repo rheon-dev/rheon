@@ -1416,16 +1416,7 @@ impl Bocpd {
             self.warm_gap += d_clock;
             return;
         }
-        // A warm-up over a span of the clock holds the rows the data puts
-        // in it (task 538): a row that would take it past its cap is not
-        // learned, nor any after it.
         let span = self.cfg.warm_clock.zip(self.row_stamp);
-        if span.is_some() {
-            let (with, cap) = (self.warm_bytes(self.warm.len() + 1), self.warm_cap());
-            if !self.held_cap().admit(with, cap) {
-                return;
-            }
-        }
         self.warm.push(WarmRow {
             x: x.to_vec(),
             hazard: if self.cfg.hazard_from_row {
@@ -2121,6 +2112,28 @@ impl crate::OnlineModel for Bocpd {
         // (the module docs; docs/PLAN.md task 183).
         if let Some(refused) = crate::model::refused_step(self, x, y, d_clock, weight) {
             *out = refused;
+            return;
+        }
+        // Check the warm-up span's cap atomically before advancing `place` or
+        // `warm_gap`; once over the cap, no later row mutates any field either.
+        let rejected = self.over.is_some()
+            || (self.warming() && self.cfg.warm_clock.is_some() && weight > 0.0 && {
+                let (with, cap) = (self.warm_bytes(self.warm.len() + 1), self.warm_cap());
+                !self.held_cap().admit(with, cap)
+            });
+        if rejected {
+            if let Some(p) = self.place.as_mut() {
+                p.discard_next();
+            }
+            if self.warming() {
+                out.pred.clear();
+                out.pred
+                    .resize(Self::n_outputs_for(self.cfg.n_features), f64::NAN);
+                out.n_eff = self.n_eff;
+                out.extra = None;
+            } else {
+                *out = self.predict_with(x, y, d_clock);
+            }
             return;
         }
         // The row's place, for a warm-up over a span of the clock.

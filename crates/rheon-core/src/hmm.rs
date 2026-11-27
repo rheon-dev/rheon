@@ -1511,18 +1511,9 @@ impl Hmm {
             }
             return;
         }
-        // A warm-up over a span of the clock holds the rows the data puts
-        // in it (task 538): a row that would take it past its cap is not
-        // learned, nor any after it, and ages the model as a row of no
-        // weight does.
+        // A warm-up over a span of the clock: its cap was checked atomically
+        // in `step_into` before any state mutated.
         let span = self.cfg.warm_clock.zip(self.row_stamp);
-        if !self.seeded && span.is_some() {
-            let (with, cap) = (self.warm_bytes(self.buffer.len() + 1), self.warm_cap());
-            if !self.held_cap().admit(with, cap) {
-                self.n_eff *= lam;
-                return;
-            }
-        }
         let before = self.n_eff;
         self.n_eff = lam * before + weight;
         // Every row buffered here is usable: one holding a NaN was replayed
@@ -2172,6 +2163,31 @@ impl crate::OnlineModel for Hmm {
         // that is not usable is absent (docs/PLAN.md task 183).
         if let Some(refused) = crate::model::refused_step(self, x, y, d_clock, weight) {
             *out = refused;
+            return;
+        }
+        // Check the warm-up span's cap atomically before stepping `place` or
+        // aging `a`, `buffer`, or `n_eff`; once over the cap, no later row
+        // mutates any field either.
+        let rejected = self.over.is_some()
+            || (!self.seeded && self.cfg.warm_clock.is_some() && weight > 0.0 && {
+                let (with, cap) = (self.warm_bytes(self.buffer.len() + 1), self.warm_cap());
+                !self.held_cap().admit(with, cap)
+            });
+        if rejected {
+            if let Some(p) = self.place.as_mut() {
+                p.discard_next();
+            }
+            if self.stabilized().is_some() {
+                *out = self.predict_stabilized(x, self.exog_of(y), d_clock);
+            } else {
+                self.ensure_factors();
+                let mut work = self.factors.row.take().unwrap_or_default();
+                let lam = self.counts_lam(d_clock);
+                self.read_into::<false>(x, self.exog_of(y), lam, &mut out.pred, &mut work);
+                out.n_eff = self.n_eff;
+                out.extra = None;
+                self.factors.row = Some(work);
+            }
             return;
         }
         // The row's place, for a warm-up over a span of the clock.

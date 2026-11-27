@@ -585,6 +585,11 @@ impl OnlineModel for DdSketchModel {
             return;
         }
         let handed = self.next.take();
+        if self.over.is_some() {
+            let key = self.window_key(handed, d_clock, weight > 0.0);
+            self.read_ahead(key, out);
+            return;
+        }
         if weight <= 0.0 {
             // Counts in no clock (hard rule 9): read from the window as it
             // would stand at the row, and nothing kept but where it stood.
@@ -597,21 +602,33 @@ impl OnlineModel for DdSketchModel {
             return;
         }
         let key = self.window_key(handed, d_clock, true);
+        let slots: Vec<Option<Slot>> = (0..self.cfg.n_targets)
+            .map(|j| y.get(j).copied().flatten().map(|v| Slot::of(&self.map, v)))
+            .collect();
+        let cap = self.cfg.cap();
+        let pre_bytes = self.bytes_with(&slots);
+        if pre_bytes > cap {
+            // Trimming only removes rows and shrinks sketch buckets, so
+            // `post_trim_bytes <= pre_bytes`. Only check a trimmed copy when
+            // rows actually expire and the pre-trim estimate exceeds `cap`.
+            if self.oldest_has_left(key) {
+                let mut trial = self.clone();
+                trial.trim(key);
+                let bytes = trial.bytes_with(&slots);
+                if !self.held_cap().admit(bytes, cap) {
+                    trial.read_into(out);
+                    return;
+                }
+            } else if !self.held_cap().admit(pre_bytes, cap) {
+                self.read_into(out);
+                return;
+            }
+        }
         self.note_clock(d_clock, handed, true);
         // The rows out of a clock window by now leave before the row is
         // read, and `n_eff` is the weight of the rows it reads (hard rule 8).
         self.trim(key);
         self.read_into(out);
-        if self.over.is_some() {
-            return;
-        }
-        let slots: Vec<Option<Slot>> = (0..self.cfg.n_targets)
-            .map(|j| y.get(j).copied().flatten().map(|v| Slot::of(&self.map, v)))
-            .collect();
-        let (bytes, cap) = (self.bytes_with(&slots), self.cfg.cap());
-        if !self.held_cap().admit(bytes, cap) {
-            return;
-        }
         // The row's own decay, after its read (hard rule 8: `n_eff` before
         // it), then the row.
         self.decay_by(d_clock);

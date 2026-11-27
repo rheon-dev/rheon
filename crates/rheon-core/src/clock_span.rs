@@ -109,6 +109,12 @@ impl Place {
         self.own += d_clock;
         self.next.take().unwrap_or(Stamp::from(self.own))
     }
+
+    /// Drop any handed stamp for a row that was not admitted, leaving `own`
+    /// where it was.
+    pub fn discard_next(&mut self) {
+        self.next = None;
+    }
 }
 
 /// The run-time check of a state whose size the data decides (the module
@@ -147,6 +153,9 @@ impl HeldCap<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod atomic_tests;
 
 #[cfg(test)]
 mod tests {

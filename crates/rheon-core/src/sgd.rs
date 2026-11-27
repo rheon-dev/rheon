@@ -1616,6 +1616,216 @@ impl Sgd {
         }
     }
 
+    /// Predict into `out` without mutating state, at `weight`'s warm-up read.
+    fn predict_step_into(&self, x: &[f64], d_clock: f64, weight: f64, out: &mut Step) {
+        out.n_eff = self.w_sum;
+        out.extra = None;
+        out.pred.clear();
+        out.pred.resize(self.cfg.n_targets, f64::NAN);
+        if self.w_target.iter().any(|w| *w >= self.cfg.min_weight) {
+            let off = usize::from(self.cfg.fit_intercept);
+            let lam = self.cfg.decay.factor(d_clock);
+            let predict_with = |z: &[f64], pred: &mut [f64]| {
+                for (j, p) in pred.iter_mut().enumerate() {
+                    if self.w_target[j] >= self.cfg.min_weight
+                        && !self.gain.get(j).is_some_and(StepGain::unstable)
+                    {
+                        *p = self.link(dot(&self.beta[j], off, z));
+                    }
+                }
+            };
+            match &self.scaler {
+                None => predict_with(x, &mut out.pred),
+                Some(_) if self.warmup.switched() => predict_with(x, &mut out.pred),
+                Some(sc) => crate::scratch::with_borrow_mut(&PREDICT_Z, |z| {
+                    let (admit, floor) = self.warmup.read(weight);
+                    z.clear();
+                    z.extend(standardized(sc, off, x, lam, admit, floor));
+                    predict_with(z, &mut out.pred);
+                }),
+            }
+        }
+    }
+
+    /// Exact span refit bytes added by this row, computed read-only only when
+    /// the fast upper bound exceeds the cap.
+    #[cold]
+    #[allow(clippy::too_many_arguments)]
+    fn span_row_delta(
+        &self,
+        x: &[f64],
+        y: &[Option<f64>],
+        weight: f64,
+        lam: f64,
+        lam_scale: f64,
+        per: u64,
+    ) -> u64 {
+        let m = self.cfg.n_targets;
+        let off = usize::from(self.cfg.fit_intercept);
+        let held = self.warmup.switched();
+        let (admit, floor) = self.warmup.read(weight);
+        let n = self.cfg.n_features;
+        let mut zbuf = Vec::new();
+        let mut mbuf = Vec::new();
+        let mut sbuf = Vec::new();
+        if let Some(sc) = &self.scaler {
+            zbuf.resize(off + n, 0.0);
+            if off == 1 {
+                zbuf[0] = 1.0;
+            }
+            if held {
+                mbuf.resize(off + n, 0.0);
+                sbuf.resize(off + n, 1.0);
+                standardize_row(
+                    sc,
+                    off,
+                    x,
+                    lam,
+                    admit,
+                    floor,
+                    &mut zbuf[off..],
+                    &mut mbuf[off..],
+                    &mut sbuf[off..],
+                );
+            } else {
+                for (z, v) in zbuf[off..]
+                    .iter_mut()
+                    .zip(standardized(sc, off, x, lam, admit, floor))
+                {
+                    *z = v;
+                }
+            }
+        }
+        let reads_z = self.scaler.is_some() && !held;
+        let z: &[f64] = if self.scaler.is_some() {
+            &zbuf[off..]
+        } else {
+            x
+        };
+        let lr_row = match self.cfg.schedule {
+            LearningRate::Constant => Some(self.cfg.learning_rate),
+            LearningRate::InvScaling { power } => {
+                Some(self.cfg.learning_rate / (1.0 + lam * self.w_sum).powf(power))
+            }
+            LearningRate::AdaGrad => None,
+        };
+        let (lr0, l2, clip0) = (self.cfg.learning_rate, self.cfg.l2, self.cfg.clip_gradient);
+        let dec = |s: f64| if lam != 1.0 { lam * s } else { s };
+        let mut delta = 0u64;
+        for (j, &yj_opt) in y.iter().enumerate().take(m) {
+            if !self.refit[j].open() {
+                continue;
+            }
+            let step_ok = (|| {
+                let yj = yj_opt?;
+                if weight <= 0.0 || !yj.is_finite() {
+                    return None;
+                }
+                let yj = self.label(yj)?;
+                let p = self.link(dot(&self.beta[j], off, if reads_z { z } else { x }));
+                let scale = self.scale(j);
+                let unit = self.unit(j);
+                let clip = if unit > 0.0 {
+                    clip0 * unit
+                } else {
+                    f64::INFINITY
+                };
+                let ada_eps = 1e-8 * unit;
+                let d = self.dloss(p, yj, scale);
+                let mut level_step = None;
+                if let Some(&lv) = self.level.get(j) {
+                    let first = lv.w == 0.0;
+                    let mut lv = lv;
+                    lv.learn(weight);
+                    let gain = weight / lv.w;
+                    let (step, warm) =
+                        if matches!(self.cfg.loss, SgdLoss::Squared | SgdLoss::Huber { .. }) {
+                            let above = lr_row.is_some_and(|lr| gain > lr);
+                            (-gain * d, above || lv.count() <= crate::WARMUP_ROWS)
+                        } else {
+                            (gain * (yj - p), lv.count() <= crate::WARMUP_ROWS)
+                        };
+                    if first {
+                        return (self.beta[j][0] + step).is_finite().then_some(());
+                    }
+                    if warm && step.is_finite() {
+                        level_step = Some(step);
+                    }
+                }
+                let b = &self.beta[j];
+                let sums: &[f64] = self.g2.get(j).map_or(&[], Vec::as_slice);
+                if held {
+                    let mut shift = 0.0;
+                    for i in off..b.len() {
+                        let g = (d * zbuf[i] * weight + l2 * (sbuf[i] * b[i])).clamp(-clip, clip);
+                        let step = match lr_row {
+                            Some(lr) => -(lr * g),
+                            None => {
+                                let s = dec(sums[i]) + g * g;
+                                if !s.is_finite() {
+                                    return None;
+                                }
+                                -adagrad_step(lr0, s, ada_eps, g)
+                            }
+                        };
+                        let db = step / sbuf[i];
+                        if !(b[i] + db).is_finite() {
+                            return None;
+                        }
+                        shift += mbuf[i] * db;
+                    }
+                    if off == 1 {
+                        let g = (d * weight).clamp(-clip, clip);
+                        let step = match lr_row {
+                            Some(lr) => g.is_finite().then(|| -(lr * g))?,
+                            None => {
+                                let s = dec(sums[0]) + g * g;
+                                if !s.is_finite() {
+                                    return None;
+                                }
+                                -adagrad_step(lr0, s, ada_eps, g)
+                            }
+                        };
+                        if !(b[0] + level_step.unwrap_or(step) - shift).is_finite() {
+                            return None;
+                        }
+                    }
+                    return Some(());
+                }
+                if off == 1 {
+                    let g = (d * weight).clamp(-clip, clip);
+                    let ok = if lr_row.is_some() {
+                        g.is_finite()
+                    } else {
+                        (dec(sums[0]) + g * g).is_finite()
+                    };
+                    if !ok {
+                        return None;
+                    }
+                }
+                let slopes_ok = if lr_row.is_some() {
+                    slopes_usable(&b[off..], z, d, weight, l2, clip, None)
+                } else {
+                    b[off..]
+                        .iter()
+                        .zip(z)
+                        .zip(&sums[off..])
+                        .all(|((bi, &zi), &s)| {
+                            let g = (d * zi * weight + l2 * *bi).clamp(-clip, clip);
+                            (dec(s) + g * g).is_finite()
+                        })
+                };
+                slopes_ok.then_some(())
+            })();
+            delta += if step_ok.is_some() {
+                per
+            } else {
+                self.refit[j].age_bytes(lam, lam_scale)
+            };
+        }
+        delta
+    }
+
     /// Target `j`'s step was refused: a gate that rested as the row found
     /// it (`found`, its rest count then) rests again with that count, so a
     /// refused row neither counts toward a probe nor wakes the gate. The
@@ -2377,14 +2587,57 @@ impl OnlineModel for Sgd {
         let m = self.cfg.n_targets;
         let off = usize::from(self.cfg.fit_intercept);
         let lam = self.cfg.decay.factor(d_clock);
-        // The row's place, for a refit over a span of the clock (task 538).
-        let now = self.place.as_mut().map(|p| p.step(d_clock));
         // The Huber scale's own clock (`huber_scale_decay`), the model's
         // unless given: the same factor, to the bit, where it is not.
         let lam_scale = self
             .cfg
             .huber_scale_decay
             .map_or(lam, |d| d.factor(d_clock));
+        // Under a span refit, check the whole row's buffer growth atomically
+        // before moving any clock, weight, coefficient, scaler, or buffer.
+        if self.over.is_some() {
+            if let Some(p) = &mut self.place {
+                p.discard_next();
+            }
+            self.predict_step_into(x, d_clock, weight, out);
+            return;
+        }
+        let per_refit = 8 * (x.len() + 4) as u64 + 48 * u64::from(!self.mad.is_empty());
+        if self.cfg.refit_clock.is_some() && self.refit.iter().any(RefitBuf::open) {
+            let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
+            let limit = self.span_cap();
+            let upper: u64 = (0..m)
+                .filter(|&j| self.refit[j].open())
+                .map(|j| {
+                    let cand = weight > 0.0
+                        && y[j].is_some_and(|v| v.is_finite() && self.label(v).is_some());
+                    if cand {
+                        per_refit
+                    } else {
+                        self.refit[j].age_bytes(lam, lam_scale)
+                    }
+                })
+                .sum();
+            if held + upper > limit {
+                let delta = self.span_row_delta(x, y, weight, lam, lam_scale, per_refit);
+                if delta > 0 {
+                    let mut guard = crate::clock_span::HeldCap {
+                        over: &mut self.over,
+                        warned: &mut self.warned,
+                        warning: &mut self.warning,
+                    };
+                    if !guard.admit(held + delta, limit) {
+                        if let Some(p) = &mut self.place {
+                            p.discard_next();
+                        }
+                        self.predict_step_into(x, d_clock, weight, out);
+                        return;
+                    }
+                }
+            }
+        }
+        // The row's place, for a refit over a span of the clock (task 538).
+        let now = self.place.as_mut().map(|p| p.step(d_clock));
 
         // The row the model sees. Without a scaler it is `x` itself, the
         // intercept's constant 1 folded into `dot` and the update below:
@@ -2863,37 +3116,32 @@ impl OnlineModel for Sgd {
         // The refit's buffers take the row, a learned one or an ageing, and
         // a target whose buffer it fills is refit, after the row's own
         // prediction, step and scale (hard rule 2).
-        if !taught.is_empty() && self.over.is_none() {
+        if !taught.is_empty() {
             let cap = self.cfg.refit_cap();
             let span = self.cfg.refit_clock.zip(now);
             let least = self.cfg.k_total().max(1);
-            for (j, t) in taught.iter().enumerate() {
-                // Under a span of the clock the buffers grow with the data:
-                // a row that would take them past the cap is buffered by no
-                // target, nor any row after it (task 538).
-                // An ageing row adds a run where its decay is not the last
-                // run's, and is held to the cap as a learned row is (review
-                // 2026-11-23, REG-2).
-                let row = match (span, t) {
-                    (None, _) => 0,
-                    (Some(_), Some(_)) => {
-                        8 * (x.len() + 4) as u64 + 48 * u64::from(!self.mad.is_empty())
-                    }
-                    (Some(_), None) => self.refit[j].age_bytes(lam, lam_scale),
-                };
-                if row > 0 && self.refit[j].open() {
-                    let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
+            if span.is_some() {
+                let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
+                let delta: u64 = taught
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, _)| self.refit[j].open())
+                    .map(|(j, t)| match t {
+                        Some(_) => per_refit,
+                        None => self.refit[j].age_bytes(lam, lam_scale),
+                    })
+                    .sum();
+                if delta > 0 {
                     let limit = self.span_cap();
                     let mut guard = crate::clock_span::HeldCap {
                         over: &mut self.over,
                         warned: &mut self.warned,
                         warning: &mut self.warning,
                     };
-                    if !guard.admit(held + row, limit) {
-                        break;
-                    }
-                    guard.note(held + row, limit);
+                    guard.note(held + delta, limit);
                 }
+            }
+            for (j, t) in taught.iter().enumerate() {
                 let b = &mut self.refit[j];
                 let full = match t {
                     Some((yj, e)) => {
@@ -2949,45 +3197,9 @@ impl OnlineModel for Sgd {
         if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
             return refused;
         }
-        let n_eff = self.w_sum;
-        let mut pred = vec![f64::NAN; self.cfg.n_targets];
-        if self.w_target.iter().any(|w| *w >= self.cfg.min_weight) {
-            let off = usize::from(self.cfg.fit_intercept);
-            let lam = self.cfg.decay.factor(d_clock);
-            // The step's gates (`step_into`): the target's weight, and
-            // whether its recent steps say the rate is past its bound.
-            let predict_with = |z: &[f64], pred: &mut [f64]| {
-                for (j, p) in pred.iter_mut().enumerate() {
-                    if self.w_target[j] >= self.cfg.min_weight
-                        && !self.gain.get(j).is_some_and(StepGain::unstable)
-                    {
-                        *p = self.link(dot(&self.beta[j], off, z));
-                    }
-                }
-            };
-            match &self.scaler {
-                // Without a scaler, or once the fit is held in the
-                // caller's units: `x̃ᵀb`, which reads no moment, so it is
-                // the next step's number whatever the clock.
-                None => predict_with(x, &mut pred),
-                Some(_) if self.warmup.switched() => predict_with(x, &mut pred),
-                // `&self`, so the standardized row goes into a buffer of
-                // the thread's rather than one of the model's, and not a
-                // fresh vector per row.
-                Some(sc) => crate::scratch::with_borrow_mut(&PREDICT_Z, |z| {
-                    // The warm-up's read: at one row's weight, the step's.
-                    let (admit, floor) = self.warmup.read(f64::INFINITY);
-                    z.clear();
-                    z.extend(standardized(sc, off, x, lam, admit, floor));
-                    predict_with(z, &mut pred);
-                }),
-            }
-        }
-        Step {
-            pred,
-            n_eff,
-            extra: None,
-        }
+        let mut out = Step::default();
+        self.predict_step_into(x, d_clock, f64::INFINITY, &mut out);
+        out
     }
 
     fn state(&self) -> State {

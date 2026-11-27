@@ -1354,7 +1354,32 @@ impl OnlineModel for KMeans {
         let (lam, lam_long) = self.factors.of(self.cfg.decay, d_clock);
         let n_before = self.moments.w;
         let valid = x.iter().all(|v| v.is_finite());
-        let mut learn = weight > 0.0 && weight.is_finite() && valid;
+        let learn = weight > 0.0 && weight.is_finite() && valid;
+        // A warm-up over a span of the clock holds the rows the data puts in
+        // it: check the cap atomically before stepping clocks or decaying any
+        // state, and once over the cap leave every field untouched on later rows.
+        let rejected = self.over.is_some()
+            || (learn && self.clusters.is_empty() && self.place.is_some() && {
+                let (with, cap) = (self.warm_bytes(self.buf.len() + 1), self.warm_cap());
+                !self.held_cap().admit(with, cap)
+            });
+        if rejected {
+            if let Some(p) = self.place.as_mut() {
+                p.discard_next();
+            }
+            for s in self
+                .since_update
+                .iter_mut()
+                .chain(self.since_split.iter_mut())
+            {
+                s.discard_next();
+            }
+            let near = self.near(x, valid);
+            self.score_into(x, near, n_before, &mut out.pred);
+            out.n_eff = n_before;
+            out.extra = None;
+            return;
+        }
         // The spans' clocks (task 538): the row's place, and each cadence's.
         let now = self.place.as_mut().map(|p| p.step(d_clock));
         for s in self
@@ -1363,15 +1388,6 @@ impl OnlineModel for KMeans {
             .chain(self.since_split.iter_mut())
         {
             s.step(d_clock);
-        }
-        // A warm-up over a span of the clock holds the rows the data puts in
-        // it: a row that would take it past its cap is not learned, nor any
-        // after it.
-        if learn && self.clusters.is_empty() && now.is_some() {
-            let (with, cap) = (self.warm_bytes(self.buf.len() + 1), self.warm_cap());
-            if !self.held_cap().admit(with, cap) {
-                learn = false;
-            }
         }
 
         // The clock passes for everything the model holds.
