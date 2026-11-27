@@ -22,12 +22,15 @@ def ew_class(
     label: str,
     classes: list[str],
     covariance_type: Literal["full", "tied", "diag"] = "full",
-    precision_prior: float,
+    precision_prior: float | None = None,
     window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
     snapshot_every: float | Duration | None = None,
     max_rows_between_snapshots: int | None = None,
     window_budget: dict[Literal["thin", "refuse"], float] | None = None,
+    priors: dict[str, float] | list[float] | None = None,
+    reg_param: float | None = None,
+    var_smoothing: float | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A Gaussian classifier on exponentially weighted moments, one set per class.
@@ -93,10 +96,26 @@ def ew_class(
         A ridge on every class covariance, in the features' squared units,
         so that the first rows of a class, whose sample covariance is
         singular, are predicted with a finite covariance the same in every
-        direction. Required, and finite and above 0: every row is predicted
-        through each class's inverse covariance, where :func:`ew_cov` inverts
-        only for ``partial_corr`` and ``mahal``. It washes out as the class
-        fills in (*The prior scale* in Notes).
+        direction. Required (finite and above 0) unless ``reg_param`` or
+        ``var_smoothing`` is set, in which case ``precision_prior`` defaults to
+        ``0.0`` and may be ``0`` or positive. It washes out as the class fills
+        in (*The prior scale* in Notes).
+    ``priors``
+        Fixed class priors replacing the empirical class weights ``n_c / sum n``:
+        a list of positive probabilities aligned with ``classes``, or a dict
+        mapping each class name in ``classes`` to its probability, summing to 1.
+        Default ``None`` (use empirical priors).
+    ``reg_param``
+        Non-fading covariance regularizer in ``[0, 1]`` shrinking each
+        covariance toward the identity as ``(1 - reg_param) * S + reg_param * I``,
+        matching scikit-learn's ``QuadraticDiscriminantAnalysis(reg_param=...)``.
+        Refused beside ``var_smoothing``. Default ``None``.
+    ``var_smoothing``
+        Non-fading variance floor for ``covariance_type="diag"``, finite and at
+        least 0: adds ``var_smoothing * max_i total_var_i`` (pooled across
+        classes via the law of total variance) to every class variance, matching
+        scikit-learn's ``GaussianNB(var_smoothing=...)``. Refused on ``"full"``
+        or ``"tied"`` and beside ``reg_param``. Default ``None``.
     ``window_size``, ``closed``
         A hard window on the rows each class's moments are computed from, in clock
         units, as for :func:`ewridge`: a row ``window_size`` old or older counts
@@ -261,6 +280,36 @@ def ew_class(
     ridge washes out as the class fills in, exactly as :func:`ew_cov`'s
     ``precision_prior`` does.
     """
+    if precision_prior is None:
+        if reg_param is not None or var_smoothing is not None:
+            precision_prior = 0.0
+        else:
+            msg = (
+                f"spec {quoted(name)}: precision_prior is required unless reg_param or "
+                "var_smoothing is set. Set precision_prior to the positive ridge each class's "
+                "covariance starts with, or set reg_param or var_smoothing."
+            )
+            raise ValueError(msg)
+    priors_list: list[float] | None
+    if isinstance(priors, dict):
+        expected = set(classes)
+        given_keys = set(priors)
+        missing = [c for c in classes if c not in priors]
+        extra = sorted(given_keys - expected)
+        if missing or extra:
+            parts = []
+            if missing:
+                parts.append(f"missing {', '.join(quoted(c) for c in missing)}")
+            if extra:
+                parts.append(f"unknown {', '.join(quoted(c) for c in extra)}")
+            msg = (
+                f"spec {quoted(name)}: priors keys must match classes ({'; '.join(parts)}). "
+                "Pass one positive prior per class in classes."
+            )
+            raise ValueError(msg)
+        priors_list = [priors[c] for c in classes]
+    else:
+        priors_list = priors
     model: dict[str, Any] = {
         "type": "ew_class",
         "classes": classes,
@@ -272,6 +321,13 @@ def ew_class(
         "max_rows_between_snapshots": max_rows_between_snapshots,
         "window_budget": window_budget,
     }
+    for key, value in (
+        ("priors", priors_list),
+        ("reg_param", reg_param),
+        ("var_smoothing", var_smoothing),
+    ):
+        if value is not None:
+            model[key] = value
     if "targets" in common:
         msg = (
             f"spec {quoted(name)}: ew_class() takes no targets, since label names the "

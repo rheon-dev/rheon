@@ -587,6 +587,7 @@ impl Spec {
             ModelKind::KMeans {
                 k,
                 init,
+                seed,
                 update_every_rows,
                 split_merge,
                 split_merge_every_rows,
@@ -595,7 +596,12 @@ impl Spec {
                 scale_floor,
                 warm_rows,
                 warm_span,
-                ..
+                update_every,
+                split_merge_every,
+                centers,
+                learn,
+                emit_distances: _,
+                emit_inertia: _,
             } => {
                 if warm_rows.is_some() && warm_span.is_some() {
                     no.refuse(format!(
@@ -608,6 +614,65 @@ impl Spec {
                     no.refuse(format!(
                         "spec {:?}: n_clusters must be at least 1, but it is 0. Set n_clusters \
                      to the number of clusters to fit.",
+                        self.name
+                    ));
+                }
+                if let Some(cs) = centers {
+                    if *learn == Some(true) {
+                        no.refuse(format!(
+                            "spec {:?}: learn=True cannot be set with centers: given centers are \
+                             frozen. Leave out learn or set learn=False.",
+                            self.name
+                        ));
+                    }
+                    if *k > 0 && cs.len() != *k {
+                        no.refuse(format!(
+                            "spec {:?}: centers has {} rows, expected n_clusters ({}). Pass one \
+                             center per cluster.",
+                            self.name,
+                            cs.len(),
+                            k
+                        ));
+                    }
+                    if cs.iter().any(|c| c.len() != self.k()) {
+                        no.refuse(format!(
+                            "spec {:?}: every center in centers must have one coordinate per \
+                             feature ({}). Pass one coordinate per feature for every center.",
+                            self.name,
+                            self.k()
+                        ));
+                    }
+                    if cs.iter().flatten().any(|v| !v.is_finite()) {
+                        no.refuse(format!(
+                            "spec {:?}: centers must hold finite numbers. Pass finite coordinates \
+                             in every center.",
+                            self.name
+                        ));
+                    }
+                    for (param, set) in [
+                        ("warm_rows", warm_rows.is_some()),
+                        ("warm_span", warm_span.is_some()),
+                        ("init", init.is_some()),
+                        ("seed", seed.is_some()),
+                        ("update_every_rows", update_every_rows.is_some()),
+                        ("update_every", update_every.is_some()),
+                        ("split_merge", split_merge.is_some()),
+                        ("split_merge_every_rows", split_merge_every_rows.is_some()),
+                        ("split_merge_every", split_merge_every.is_some()),
+                        ("dead_frac", dead_frac.is_some()),
+                    ] {
+                        if set {
+                            no.refuse(format!(
+                                "spec {:?}: {param} applies only when fitting centers from the \
+                                 stream, not with fixed centers. Leave {param} out.",
+                                self.name
+                            ));
+                        }
+                    }
+                } else if *learn == Some(false) {
+                    no.refuse(format!(
+                        "spec {:?}: learn=False requires centers to score against. Pass centers, \
+                         or leave out learn.",
                         self.name
                     ));
                 }
@@ -663,7 +728,8 @@ impl Spec {
                     None,
                 ));
                 }
-                if *standardize == Some(false) && scale_floor.is_some() {
+                let std_on = standardize.unwrap_or(centers.is_none());
+                if !std_on && scale_floor.is_some() {
                     no.refuse(format!(
                         "spec {:?}: scale_floor floors the variances that distances are measured \
                      in under standardize=True, but standardize is False, which measures in \
@@ -765,6 +831,9 @@ impl Spec {
                 max_rows_between_snapshots: _,
                 window_budget: _,
                 closed: _,
+                priors,
+                reg_param,
+                var_smoothing,
             } => {
                 if let Some(w) = window
                     && (!w.value().is_finite() || w.value() <= 0.0)
@@ -807,14 +876,28 @@ impl Spec {
                         self.name
                     ));
                 }
-                if let Some(c) = covariance_type {
-                    no.take(
-                        rheon_core::Covariance::parse(c)
-                            .map(|_| ())
-                            .map_err(|e| format!("spec {:?}: {e}", self.name)),
-                    );
-                }
-                if !(precision_prior.is_finite() && *precision_prior > 0.0) {
+                let cov_parsed = match covariance_type {
+                    Some(c) => match rheon_core::Covariance::parse(c) {
+                        Ok(cv) => Some(cv),
+                        Err(e) => {
+                            no.refuse(format!("spec {:?}: {e}", self.name));
+                            None
+                        }
+                    },
+                    None => Some(rheon_core::Covariance::Full),
+                };
+                let has_reg = reg_param.is_some() || var_smoothing.is_some();
+                if has_reg {
+                    if !(precision_prior.is_finite() && *precision_prior >= 0.0) {
+                        no.refuse(format!(
+                            "spec {:?}: precision_prior must be finite and at least 0 when \
+                             reg_param or var_smoothing is set, but it is {}. Set \
+                             precision_prior to 0 or a positive ridge.",
+                            self.name,
+                            num_label(*precision_prior)
+                        ));
+                    }
+                } else if !(precision_prior.is_finite() && *precision_prior > 0.0) {
                     no.refuse(format!(
                         "spec {:?}: precision_prior must be finite and above 0, but it is {}. \
                      Set precision_prior to the positive ridge each class's covariance \
@@ -822,6 +905,70 @@ impl Spec {
                         self.name,
                         num_label(*precision_prior)
                     ));
+                }
+                if let Some(r) = reg_param
+                    && !(r.is_finite() && (0.0..=1.0).contains(r))
+                {
+                    no.refuse(format!(
+                        "spec {:?}: reg_param must be finite and between 0 and 1, but it is {}. \
+                         Set reg_param to a fraction in [0, 1], such as 0.1.",
+                        self.name,
+                        num_label(*r)
+                    ));
+                }
+                if let Some(v) = var_smoothing {
+                    if !(v.is_finite() && *v >= 0.0) {
+                        no.refuse(format!(
+                            "spec {:?}: var_smoothing must be finite and at least 0, but it is \
+                             {}. Set var_smoothing to a non-negative fraction such as 1e-9.",
+                            self.name,
+                            num_label(*v)
+                        ));
+                    }
+                    if let Some(cv) = cov_parsed
+                        && cv != rheon_core::Covariance::Diagonal
+                    {
+                        no.refuse(format!(
+                            "spec {:?}: var_smoothing applies only under covariance_type=\"diag\", \
+                             but covariance_type is {:?}. Set covariance_type=\"diag\", or leave \
+                             var_smoothing out.",
+                            self.name,
+                            cv.name()
+                        ));
+                    }
+                    if reg_param.is_some() {
+                        no.refuse(format!(
+                            "spec {:?}: var_smoothing and reg_param cannot both be set: each sets \
+                             a different non-fading diagonal regularizer. Leave one of them out.",
+                            self.name
+                        ));
+                    }
+                }
+                if let Some(ps) = priors {
+                    if ps.len() != classes.len() {
+                        no.refuse(format!(
+                            "spec {:?}: priors must list one probability per class ({}), but it \
+                             lists {}. Give one positive probability per class, summing to 1.",
+                            self.name,
+                            classes.len(),
+                            ps.len()
+                        ));
+                    } else if ps.iter().any(|p| !(p.is_finite() && *p > 0.0)) {
+                        no.refuse(format!(
+                            "spec {:?}: priors must each be finite and above 0. Set every class \
+                             prior to a positive probability summing to 1.",
+                            self.name
+                        ));
+                    } else {
+                        let sum: f64 = ps.iter().sum();
+                        if (sum - 1.0).abs() > 1e-6 {
+                            no.refuse(format!(
+                                "spec {:?}: priors must sum to 1, but they sum to {sum}. Set \
+                                 priors so their sum is 1.",
+                                self.name
+                            ));
+                        }
+                    }
                 }
             }
             // Checked above, with the features: its refusals come before the
@@ -2368,6 +2515,7 @@ impl Spec {
         // Refused rather than ignored: a flag that silently emits nothing
         // looks like a bug in the output, not in the spec.
         let mut health_refused = false;
+        let mut ks_refused = false;
         if self.model.predicts_no_target() {
             let asked = [
                 ("emit_sigma", self.emit_sigma),
@@ -2420,6 +2568,15 @@ impl Spec {
                      coefficients of its features: it watches the features a fit's coefficients \
                      lean on. Leave out emit_feature_health, and use ModelBank.check() or \
                      rheon.spec.audit to watch the features themselves.",
+                    self.model.kind_name()
+                ));
+            }
+            if self.feature_ks_window.is_some() || self.feature_ks_recent.is_some() {
+                ks_refused = true;
+                no.refuse(format!(
+                    "spec {name:?}: feature_ks_window and feature_ks_recent do not apply to {}, \
+                     which fits no coefficients of its features: they watch the features a fit's \
+                     coefficients lean on. Leave out feature_ks_window and feature_ks_recent.",
                     self.model.kind_name()
                 ));
             }
@@ -2496,6 +2653,59 @@ impl Spec {
                      four times that memory, but {why}, so both read the whole stream and every \
                      field would be null. Set feature_health_half_life to a finite value."
                 ));
+            }
+        }
+        if !ks_refused {
+            match (self.feature_ks_window, self.feature_ks_recent) {
+                (Some(_), None) => no.refuse(format!(
+                    "spec {name:?}: feature_ks_window requires feature_ks_recent to set how many \
+                     recent rows are tested against the older part of the window. Set \
+                     feature_ks_recent, or leave out feature_ks_window."
+                )),
+                (None, Some(_)) => no.refuse(format!(
+                    "spec {name:?}: feature_ks_recent requires feature_ks_window to set the total \
+                     window size. Set feature_ks_window, or leave out feature_ks_recent."
+                )),
+                (Some(w), Some(r)) => {
+                    if self.k() == 0 {
+                        no.refuse(format!(
+                            "spec {name:?}: feature_ks_window and feature_ks_recent watch each \
+                             feature's rolling distribution, but {} has no features. Leave out \
+                             feature_ks_window and feature_ks_recent.",
+                            self.model.kind_name()
+                        ));
+                    } else {
+                        if r == 0 {
+                            no.refuse(format!(
+                                "spec {name:?}: feature_ks_recent must be at least 1, but it is \
+                                 0. Set feature_ks_recent to a positive row count below \
+                                 feature_ks_window."
+                            ));
+                        }
+                        if w <= r {
+                            no.refuse(format!(
+                                "spec {name:?}: feature_ks_window ({w}) must be greater than \
+                                 feature_ks_recent ({r}), leaving at least 1 reference row. \
+                                 Raise feature_ks_window or lower feature_ks_recent."
+                            ));
+                        }
+                        let cap = self
+                            .max_state_bytes
+                            .unwrap_or(rheon_core::FEATURE_KS_MAX_STATE_BYTES);
+                        let bytes = rheon_core::feature_ks_state_bytes(self.k(), w);
+                        if bytes > cap {
+                            let max_w =
+                                cap / (std::mem::size_of::<f64>() as u64 * self.k() as u64);
+                            no.refuse(format!(
+                                "spec {name:?}: feature_ks_window ({w}) across {} features holds \
+                                 {bytes} bytes per group, above the {cap} byte per-group cap. \
+                                 Lower feature_ks_window to {max_w} or below.",
+                                self.k(),
+                            ));
+                        }
+                    }
+                }
+                (None, None) => {}
             }
         }
         // Both choose across a target's slots, and one slot leaves nothing to

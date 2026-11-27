@@ -924,6 +924,21 @@ pub enum ModelKind {
         /// `split_merge_every_rows`. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         split_merge_every: Option<Span>,
+        /// Fixed cluster centers (`n_clusters` rows of `len(features)`). Frozen
+        /// only (`learn=False`); skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        centers: Option<Vec<Vec<f64>>>,
+        /// Whether to update centers from the stream. Defaults to `false` when
+        /// `centers` is given (and `true` is refused there) and `true` otherwise
+        /// (`false` without `centers` is refused). Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        learn: Option<bool>,
+        /// Emit distances `dist_0..dist_{k-1}` to every center. Skipped when false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        emit_distances: bool,
+        /// Emit exponentially weighted inertia (`inertia = m * W`). Skipped when false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        emit_inertia: bool,
     },
     /// DenStream-style micro-clusters with a linkage macro step
     /// (docs/CLUSTERING.md §6.5; PLAN §11a, task 24). No targets: the
@@ -984,8 +999,10 @@ pub enum ModelKind {
         /// `GaussianMixture` words (task 244, P-2).
         #[serde(default)]
         covariance_type: Option<String>,
-        /// Ridge on every class covariance, finite and `> 0`; it decays as
-        /// the class accumulates data, like `ew_cov`'s `precision_prior`.
+        /// Ridge on every class covariance, finite and `> 0` (or `>= 0` when
+        /// `reg_param` or `var_smoothing` is set); it decays as the class
+        /// accumulates data, like `ew_cov`'s `precision_prior`.
+        #[serde(default)]
         precision_prior: f64,
         /// Clock units of history each class's moments are computed from,
         /// with a **hard** cutoff (docs/PLAN.md §13). `covariance_type = "full"`
@@ -1012,6 +1029,18 @@ pub enum ModelKind {
         /// MiB (review 2026-09-12, P4).
         #[serde(default)]
         window_budget: Option<WindowBudgetSpec>,
+        /// Fixed class priors aligned with `classes`, finite and `> 0`, summing
+        /// to 1. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        priors: Option<Vec<f64>>,
+        /// Non-fading covariance regularizer in `[0, 1]`: `(1 - r) S + r I`.
+        /// Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reg_param: Option<f64>,
+        /// Non-fading variance floor for `covariance_type = "diag"`:
+        /// `var_smoothing * max_i total_var_i`. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        var_smoothing: Option<f64>,
     },
     /// Sequential test of a sign by betting (docs/ENHANCEMENTS.md E42;
     /// PLAN §11a, task 30): per target, two e-processes, one for "positive"
@@ -1368,7 +1397,7 @@ pub enum ModelKind {
         /// Nominal level; default 0.05.
         #[serde(default)]
         alpha: Option<f64>,
-        /// `"bonferroni"` (default) over the pairs, or `"none"`.
+        /// `"bonferroni"` (default), `"holm"`, or `"none"` over the pairs.
         #[serde(default)]
         alpha_adjust: Option<String>,
         /// `"monitor"` and `"sequential"`: the Bartlett bandwidth, `⌊ln T⌋`
@@ -1435,6 +1464,10 @@ pub enum ModelKind {
         /// KB, at most 64 MiB. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
+        /// Emit `n_flagged`, the count of pairs flagged at the adjusted level.
+        /// Skipped when false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        emit_n_flagged: bool,
     },
     /// Bayesian online changepoint detection (docs/ENHANCEMENTS.md E61): a
     /// posterior over how long the current run has lasted, updated one row
@@ -2642,6 +2675,15 @@ pub struct Spec {
     /// [`Spec::memory_multiple`]'s); its slow memory is four times it.
     #[serde(default)]
     pub feature_health_half_life: Option<Span>,
+    /// Total positive-weight window size for standalone per-feature two-sample
+    /// KS health (`ks_stat_<feature>`, `ks_p_<feature>`). Paired with
+    /// `feature_ks_recent`; skipped when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_ks_window: Option<usize>,
+    /// Recent sub-window size for standalone per-feature two-sample KS health.
+    /// Paired with `feature_ks_window`; skipped when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_ks_recent: Option<usize>,
     /// Emit `pred_<target>__averaged`: an exponentially weighted average of
     /// every slot's prediction, with weights `softmax(−eta · σ²/σ²_best)`,
     /// each slot's EW squared error as a ratio to the best slot's
@@ -2825,6 +2867,11 @@ impl Spec {
 
     pub fn m(&self) -> usize {
         self.targets.len()
+    }
+
+    /// Whether standalone windowed two-sample KS feature health is enabled.
+    pub fn has_feature_ks(&self) -> bool {
+        self.feature_ks_window.is_some() && self.feature_ks_recent.is_some()
     }
 
     /// The labels of a regression's forecasts at horizons (`holt`,
@@ -3127,11 +3174,15 @@ impl Spec {
             // `k + 1` rows its first solve needs are the model's own floor
             // (`build_one`), not a setting. An explicit value still floors.
             ModelKind::EwRidge { .. } => 0.0,
+            // Fixed centers are ready from the first row.
+            ModelKind::KMeans {
+                centers: Some(_), ..
+            } => 0.0,
             // No intercept to count: `fit_intercept` has nothing to act on in
             // these, and counted, it moved the first reported row (review
             // 2026-09-12, S22). `k + 1` is what the builders' default gave.
             ModelKind::EwCov { .. }
-            | ModelKind::KMeans { .. }
+            | ModelKind::KMeans { centers: None, .. }
             | ModelKind::Micro { .. }
             | ModelKind::EwClass { .. }
             | ModelKind::Holt { .. } => (self.k() + 1) as f64,
@@ -3329,14 +3380,6 @@ impl Spec {
     /// it refuses.
     fn validate_each(&self, no: &mut rheon_core::Refusals) -> Result<(), String> {
         let name = &self.name;
-        // A parameter that applies only with a switch on, given with it off,
-        // does nothing: refused rather than ignored (review 2026-09-12, S22).
-        let needs = |key: &str, switch: &str| {
-            format!(
-                "spec {name:?}: {key} applies only when {switch} is on, but {switch} is off. \
-                 Turn on {switch}, or leave out {key}."
-            )
-        };
         // Clock parameters given as durations and as numbers at once, or
         // durations with no clock to measure them (task 88). Every check
         // after this reads a clock parameter's value, which means nothing

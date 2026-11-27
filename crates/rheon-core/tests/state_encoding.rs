@@ -1246,3 +1246,177 @@ fn regression_variants_round_trip_in_both_encodings() {
         }
     }
 }
+
+#[test]
+fn plan_525_models_round_trip_in_both_encodings() {
+    // 1. KMeans: every combination of centers/learn, emit_distances, emit_inertia,
+    //    and clock spans must round-trip in both compact and named msgpack.
+    for (centers, learn) in [
+        (None, true),
+        (Some(vec![vec![-1.0, 0.0], vec![1.0, 0.0]]), false),
+    ] {
+        for emit_distances in [false, true] {
+            for emit_inertia in [false, true] {
+                for warm_clock in [None, Some(5.0)] {
+                    if centers.is_some() && warm_clock.is_some() {
+                        continue;
+                    }
+                    let cfg = rheon_core::KMeansCfg {
+                        n_features: 2,
+                        k: 2,
+                        decay: Decay::Halflife(20.0),
+                        min_weight: 0.0,
+                        warm_rows: 4,
+                        seed_rule: rheon_core::SeedRule::First,
+                        seed: 0,
+                        update_every_rows: 1,
+                        split_merge: 0.0,
+                        split_merge_every_rows: 1,
+                        dead_frac: 0.0,
+                        standardize: centers.is_none(),
+                        scale_floor: 0.1,
+                        warm_clock,
+                        update_every: None,
+                        split_merge_every: None,
+                        centers: centers.clone(),
+                        learn,
+                        emit_distances,
+                        emit_inertia,
+                    };
+                    let mut m = rheon_core::KMeans::new(cfg).unwrap();
+                    for i in 0..8 {
+                        let x = [(i as f64) * 0.3 - 1.0, (i as f64) * 0.2];
+                        m.step(&x, &[], 1.0, 1.0);
+                    }
+                    let what = format!(
+                        "kmeans centers={} dist={emit_distances} inertia={emit_inertia} warm_clock={warm_clock:?}",
+                        centers.is_some()
+                    );
+                    if warm_clock.is_some() && !emit_inertia {
+                        let named = rmp_serde::to_vec_named(&m).unwrap();
+                        let from_named: rheon_core::KMeans = rmp_serde::from_slice(&named)
+                            .unwrap_or_else(|e| panic!("{what}: named encoding failed: {e}"));
+                        assert_eq!(&from_named, &m, "{what}: named round-trip changed state");
+                    } else {
+                        roundtrip(&m, &what);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. EwClass: EwClassOpts (priors, reg_param, var_smoothing) with and without window.
+    for window in [None, Some(10.0)] {
+        for (cov, prior, opts) in [
+            (
+                rheon_core::Covariance::Full,
+                0.1,
+                rheon_core::EwClassOpts::default(),
+            ),
+            (
+                rheon_core::Covariance::Full,
+                0.0,
+                rheon_core::EwClassOpts {
+                    priors: Some(vec![0.3, 0.7]),
+                    reg_param: Some(0.15),
+                    var_smoothing: None,
+                },
+            ),
+            (
+                rheon_core::Covariance::Diagonal,
+                0.0,
+                rheon_core::EwClassOpts {
+                    priors: Some(vec![0.4, 0.6]),
+                    reg_param: None,
+                    var_smoothing: Some(1e-2),
+                },
+            ),
+        ] {
+            let cfg = rheon_core::EwClassCfg {
+                n_features: 2,
+                n_classes: 2,
+                decay: Decay::Halflife(20.0),
+                min_weight: 0.0,
+                covariance: cov,
+                precision_prior: prior,
+                window,
+                window_every: window.map(|_| 3.0),
+                max_rows_between_snapshots: window.map(|_| 2),
+            };
+            let mut m = rheon_core::EwClass::with_opts(cfg, opts.clone()).unwrap();
+            for i in 0..10 {
+                let c = (i % 2) as f64;
+                m.step(&[c * 2.0 + 0.1 * i as f64, -c], &[Some(c)], 1.0, 1.0);
+            }
+            roundtrip(&m, &format!("ew_class window={window:?} opts={opts:?}"));
+        }
+    }
+
+    // 3. CorrChange: holm + emit_n_flagged across Monitor and Sequential.
+    for kind in [
+        rheon_core::CorrChangeKind::Monitor,
+        rheon_core::CorrChangeKind::Sequential,
+    ] {
+        for emit_n_flagged in [false, true] {
+            let cfg = rheon_core::CorrChangeCfg {
+                n_features: 3,
+                kind,
+                span_rows: 10,
+                alpha: 0.05,
+                alpha_adjust: "holm".into(),
+                bandwidth: None,
+                scalar: false,
+                decay: Decay::Halflife(f64::INFINITY),
+                crit: None,
+                n_perm: 20,
+                permute_every_rows: 10,
+                perm_block: 1,
+                norm: rheon_core::ChangeNorm::L1,
+                seed: 0,
+                reset: false,
+                monitor_rows: if kind == rheon_core::CorrChangeKind::Sequential {
+                    10
+                } else {
+                    0
+                },
+                boundary_gamma: 0.0,
+                permute_every: None,
+                span_clock: None,
+                monitor_clock: None,
+                max_state_bytes: None,
+                emit_n_flagged,
+            };
+            let mut m = rheon_core::CorrChange::new(cfg.clone()).unwrap();
+            for i in 0..15 {
+                let a = (i as f64 * 0.7).sin();
+                let b = (i as f64 * 1.1).cos();
+                m.step(&[a, b, a + b], &[], 1.0, 1.0);
+            }
+            let what = format!("corrchange {kind:?} emit_n_flagged={emit_n_flagged}");
+            roundtrip(&cfg, &format!("{what} cfg"));
+            let compact = rmp_serde::to_vec(&m).unwrap();
+            let named = rmp_serde::to_vec_named(&m).unwrap();
+            let from_compact: rheon_core::CorrChange = rmp_serde::from_slice(&compact)
+                .unwrap_or_else(|e| panic!("{what}: compact encoding failed: {e}"));
+            let from_named: rheon_core::CorrChange = rmp_serde::from_slice(&named)
+                .unwrap_or_else(|e| panic!("{what}: named encoding failed: {e}"));
+            assert_eq!(
+                rmp_serde::to_vec_named(&from_compact).unwrap(),
+                named,
+                "{what}: compact round-trip changed serialized state"
+            );
+            assert_eq!(
+                rmp_serde::to_vec_named(&from_named).unwrap(),
+                named,
+                "{what}: named round-trip changed serialized state"
+            );
+        }
+    }
+
+    // 4. FeatureHealthKs: compact and named msgpack round-trip.
+    let mut ks = rheon_core::FeatureHealthKs::new(2, 12, 4);
+    for i in 0..15 {
+        ks.update(&[i as f64, -(i as f64)], 1.0);
+    }
+    roundtrip(&ks, "feature_health_ks");
+}

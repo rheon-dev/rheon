@@ -259,6 +259,7 @@ fn cfg(d: usize, kind: CorrChangeKind) -> CorrChangeCfg {
         span_clock: None,
         monitor_clock: None,
         max_state_bytes: None,
+        emit_n_flagged: false,
     }
 }
 
@@ -1900,7 +1901,7 @@ fn a_bad_configuration_is_refused_by_name() {
             alpha_adjust: "nope".into(),
             ..cfg(2, CorrChangeKind::Monitor)
         },
-        "alpha_adjust must be \"bonferroni\" or \"none\", but it is \"nope\"",
+        "alpha_adjust must be \"bonferroni\", \"holm\" or \"none\", but it is \"nope\"",
     );
     bad(
         CorrChangeCfg {

@@ -477,10 +477,17 @@ impl Holt {
 
     /// The fixed forms' prediction at step `d`, each seen target's forecast.
     pub(super) fn fixed_predict(&self, d: f64, clock: Option<ClockValue>, pred: &mut [f64]) {
+        let m = self.cfg.n_targets;
+        let per = 2 * self.cfg.horizons.len();
         let p = self.phase(clock.unwrap_or_else(|| self.row_clock(d)));
-        for (j, out) in pred.iter_mut().enumerate() {
+        for j in 0..m {
             if self.seen[j] {
-                *out = self.forecast(j, self.since[j] + d, p);
+                let s = self.since[j] + d;
+                pred[j] = self.forecast(j, s, p);
+                if per > 0 {
+                    let at = m + j * per;
+                    self.forecasts_into(j, s, &mut pred[at..at + per]);
+                }
             }
         }
     }
@@ -491,6 +498,8 @@ impl Holt {
         let c = self.row_clock(d);
         self.next_clock = None;
         self.not_positive = false;
+        let m = self.cfg.n_targets;
+        let per = 2 * self.cfg.horizons.len();
         let ready = self.w_sum >= self.cfg.min_weight;
         // The phase origin: the first row of positive weight is phase 0.
         if self.origin.is_none() && weight > 0.0 {
@@ -500,10 +509,14 @@ impl Holt {
         self.clock += d;
         let at = self.clock;
         let mul = self.cfg.season == HoltSeason::Mul;
-        for (j, yj) in y.iter().enumerate() {
+        for (j, yj) in y.iter().enumerate().take(m) {
             let s = self.since[j] + d;
             if self.seen[j] && ready {
                 pred[j] = self.forecast(j, s, p);
+                if per > 0 {
+                    let slot = m + j * per;
+                    self.forecasts_into(j, s, &mut pred[slot..slot + per]);
+                }
             }
             let yj = yj.filter(|v| v.is_finite() && weight > 0.0);
             let Some(yj) = yj else {

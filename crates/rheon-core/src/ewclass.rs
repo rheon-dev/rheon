@@ -46,7 +46,8 @@
 //! shape pools the ridges with the co-moments, `Σ_c π_c r_c`, so it is the
 //! same regularization the `full` shape would apply, averaged.
 
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::clock::Decay;
 use crate::ewcov::{EwCov, EwCovDiag};
@@ -97,6 +98,35 @@ impl Covariance {
     }
 }
 
+/// Optional fixed priors and non-fading regularizers for [`EwClass`].
+///
+/// Kept beside [`EwClassCfg`] on [`EwClass`] (serialized as one trailing field
+/// when any option is set) so existing configurations and saved states remain
+/// unchanged byte for byte.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EwClassOpts {
+    /// Fixed class priors aligned with the class indices (`0..n_classes`),
+    /// each finite and `> 0`, summing to `1`. When absent, empirical priors
+    /// `n_c / sum n` are used.
+    #[serde(default)]
+    pub priors: Option<Vec<f64>>,
+    /// Non-fading covariance regularizer in `[0, 1]`: `M_c = (1 - r) * S_c + r * I`
+    /// (matching scikit-learn's `QuadraticDiscriminantAnalysis(reg_param=...)`).
+    #[serde(default)]
+    pub reg_param: Option<f64>,
+    /// Non-fading variance floor for `Covariance::Diagonal`: adds
+    /// `var_smoothing * max_i total_var_i` to each class variance (matching
+    /// scikit-learn's `GaussianNB(var_smoothing=...)`).
+    #[serde(default)]
+    pub var_smoothing: Option<f64>,
+}
+
+impl EwClassOpts {
+    pub fn is_empty(&self) -> bool {
+        self.priors.is_none() && self.reg_param.is_none() && self.var_smoothing.is_none()
+    }
+}
+
 /// Configuration for [`EwClass`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EwClassCfg {
@@ -107,8 +137,9 @@ pub struct EwClassCfg {
     /// Outputs are null while `n_eff < min_weight`.
     pub min_weight: f64,
     pub covariance: Covariance,
-    /// Ridge on every class covariance, finite and `> 0`; decays as the
-    /// class accumulates data (see the [module docs](self)).
+    /// Ridge on every class covariance, finite and `> 0` (or `>= 0` when
+    /// `reg_param` or `var_smoothing` is set); decays as the class accumulates
+    /// data (see the [module docs](self)).
     pub precision_prior: f64,
     /// Clock units of history each class's moments are computed from, with a
     /// **hard** cutoff (docs/PLAN.md §13). Inside the window the weights are
@@ -143,6 +174,10 @@ pub struct EwClassCfg {
 
 impl EwClassCfg {
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_with_opts(None)
+    }
+
+    pub fn validate_with_opts(&self, opts: Option<&EwClassOpts>) -> Result<(), String> {
         // The decay first: every model checks it in its own `new`, where only
         // the bank's spec did (review 2026-10-05, CF5).
         let mut no = crate::Refusals::new();
@@ -160,12 +195,78 @@ impl EwClassCfg {
                 self.n_classes
             ));
         }
-        if !(self.precision_prior.is_finite() && self.precision_prior > 0.0) {
+        let reg_param = opts.and_then(|o| o.reg_param);
+        let var_smoothing = opts.and_then(|o| o.var_smoothing);
+        let priors = opts.and_then(|o| o.priors.as_deref());
+        let has_reg = reg_param.is_some() || var_smoothing.is_some();
+        if has_reg {
+            if !(self.precision_prior.is_finite() && self.precision_prior >= 0.0) {
+                no.refuse(format!(
+                    "ew_class: precision_prior must be finite and at least 0 when reg_param or \
+                     var_smoothing is set, but it is {}. Set precision_prior to 0 or a positive \
+                     ridge.",
+                    self.precision_prior
+                ));
+            }
+        } else if !(self.precision_prior.is_finite() && self.precision_prior > 0.0) {
             no.refuse(format!(
                 "ew_class: precision_prior must be finite and above 0, but it is {}. Set \
                  precision_prior to the positive ridge each class's covariance starts with.",
                 self.precision_prior
             ));
+        }
+        if let Some(r) = reg_param
+            && !(r.is_finite() && (0.0..=1.0).contains(&r))
+        {
+            no.refuse(format!(
+                "ew_class: reg_param must be finite and between 0 and 1, but it is {r}. Set \
+                 reg_param to a fraction in [0, 1], such as 0.1."
+            ));
+        }
+        if let Some(v) = var_smoothing {
+            if !(v.is_finite() && v >= 0.0) {
+                no.refuse(format!(
+                    "ew_class: var_smoothing must be finite and at least 0, but it is {v}. Set \
+                     var_smoothing to a non-negative fraction such as 1e-9."
+                ));
+            }
+            if self.covariance != Covariance::Diagonal {
+                no.refuse(format!(
+                    "ew_class: var_smoothing applies only under covariance_type=\"diag\", but \
+                     covariance_type is {:?}. Set covariance_type=\"diag\", or leave \
+                     var_smoothing out.",
+                    self.covariance.name()
+                ));
+            }
+            if reg_param.is_some() {
+                no.refuse(
+                    "ew_class: var_smoothing and reg_param cannot both be set: each sets a \
+                     different non-fading diagonal regularizer. Leave one of them out.",
+                );
+            }
+        }
+        if let Some(ps) = priors {
+            if ps.len() != self.n_classes {
+                no.refuse(format!(
+                    "ew_class: priors must list one probability per class ({}), but it lists {}. \
+                     Give one positive probability per class, summing to 1.",
+                    self.n_classes,
+                    ps.len()
+                ));
+            } else if ps.iter().any(|p| !(p.is_finite() && *p > 0.0)) {
+                no.refuse(
+                    "ew_class: priors must each be finite and above 0. Set every class prior to a \
+                     positive probability summing to 1.",
+                );
+            } else {
+                let sum: f64 = ps.iter().sum();
+                if (sum - 1.0).abs() > 1e-6 {
+                    no.refuse(format!(
+                        "ew_class: priors must sum to 1, but they sum to {sum}. Set priors so \
+                         their sum is 1."
+                    ));
+                }
+            }
         }
         no.take(crate::model::check_min_weight("ew_class", self.min_weight));
         no.take(crate::window::check_cadence(
@@ -208,6 +309,7 @@ struct Factors {
     slots: Vec<Cached>,
     work: FactorWork,
     logs: Vec<DiagLog>,
+    add: Vec<f64>,
 }
 
 /// A diagonal class's `Σ ln(v_i + r)` as of the state it was read at: a
@@ -251,6 +353,33 @@ impl Factors {
         }
         if matches!(self.slots[c], Cached::Stale) {
             self.slots[c] = match self.work.factor_ridged(packed, ridge, k) {
+                Some(f) => Cached::Ready(f),
+                None => Cached::Failed,
+            };
+        }
+        match &self.slots[c] {
+            Cached::Ready(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// The factor for class `c` of `(1 - reg) * C + (reg + ridge) * I`.
+    fn get_shrunk(
+        &mut self,
+        c: usize,
+        n_classes: usize,
+        packed: &[f64],
+        reg: f64,
+        ridge: f64,
+        k: usize,
+    ) -> Option<&SpdFactor> {
+        if self.slots.len() != n_classes {
+            self.slots = vec![Cached::Stale; n_classes];
+        }
+        if matches!(self.slots[c], Cached::Stale) {
+            self.add.clear();
+            self.add.resize(k, reg + ridge);
+            self.slots[c] = match self.work.factor_shrunk(packed, 1.0 - reg, &self.add, k) {
                 Some(f) => Cached::Ready(f),
                 None => Cached::Failed,
             };
@@ -331,6 +460,8 @@ struct ScoreWork {
     quad: QuadWork,
     view: crate::window::Kept<View>,
     shared: crate::window::Kept<SharedWork>,
+    shrunk_add: Vec<f64>,
+    shrunk_factor: crate::window::Kept<FactorWork>,
 }
 
 /// The `shared` shape's buffers, kept between rows as [`ScoreWork`]'s
@@ -355,7 +486,7 @@ impl PartialEq for ScoreWork {
 }
 
 /// Class-conditional Gaussian classifier; see the [module docs](self).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct EwClass {
     cfg: EwClassCfg,
     /// One accumulator per class, in label order, under `full` and `tied`;
@@ -373,17 +504,41 @@ pub struct EwClass {
     /// alone may skip.
     #[serde(default)]
     diag_classes: Vec<EwCovDiag>,
-    /// The hard-cutoff window, when the spec asks for one. Last among the
-    /// serialized fields, for the reason `EwClassCfg::window` gives;
-    /// `factors` is skipped, so it does not count.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The hard-cutoff window, when the spec asks for one.
+    #[serde(default)]
     win: Option<Windowed>,
+    /// Fixed class priors and non-fading regularizers when any is set.
+    #[serde(default)]
+    opts: Option<EwClassOpts>,
     /// The `full` shape's per-class factors between rows; see [`Factors`].
     #[serde(skip)]
     factors: Factors,
     /// The step's buffers between rows; see [`ScoreWork`].
     #[serde(skip)]
     work: ScoreWork,
+}
+
+impl Serialize for EwClass {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let len = if self.opts.is_some() {
+            7
+        } else {
+            5 + usize::from(self.win.is_some())
+        };
+        let mut s = serializer.serialize_struct("EwClass", len)?;
+        s.serialize_field("cfg", &self.cfg)?;
+        s.serialize_field("classes", &self.classes)?;
+        s.serialize_field("n_eff", &self.n_eff)?;
+        s.serialize_field("solve_failures", &self.solve_failures)?;
+        s.serialize_field("diag_classes", &self.diag_classes)?;
+        if self.opts.is_some() {
+            s.serialize_field("win", &self.win)?;
+            s.serialize_field("opts", &self.opts)?;
+        } else if self.win.is_some() {
+            s.serialize_field("win", &self.win)?;
+        }
+        s.end()
+    }
 }
 
 /// The window's clock and the snapshots it subtracts.
@@ -509,19 +664,34 @@ impl EwClass {
     }
 
     pub fn new(cfg: EwClassCfg) -> Result<Self, String> {
-        cfg.validate()?;
+        Self::with_opts(cfg, EwClassOpts::default())
+    }
+
+    pub fn with_opts(cfg: EwClassCfg, opts: EwClassOpts) -> Result<Self, String> {
+        let opts = (!opts.is_empty()).then_some(opts);
+        cfg.validate_with_opts(opts.as_ref())?;
         // Runs are a window's (docs/PLAN.md task 128).
         let windowed = cfg.window.is_some();
         let diagonal = matches!(cfg.covariance, Covariance::Diagonal);
+        // `EwCov` / `EwCovDiag` require a positive construction prior, while
+        // `EwClass` computes the ridge as `cfg.precision_prior * precision_scale()`
+        // itself; when `cfg.precision_prior == 0.0` (under `reg_param` or
+        // `var_smoothing`), passing `1.0` keeps the accumulators valid while
+        // the effective fading ridge is identically `0.0`.
+        let cov_prior = if cfg.precision_prior > 0.0 {
+            cfg.precision_prior
+        } else {
+            1.0
+        };
         let classes = (0..if diagonal { 0 } else { cfg.n_classes })
             .map(|_| {
-                EwCov::with_precision_prior(cfg.n_features, cfg.precision_prior)
+                EwCov::with_precision_prior(cfg.n_features, cov_prior)
                     .map(|c| if windowed { c } else { c.without_runs() })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let diag_classes = (0..if diagonal { cfg.n_classes } else { 0 })
             .map(|_| {
-                EwCovDiag::with_precision_prior(cfg.n_features, cfg.precision_prior)
+                EwCovDiag::with_precision_prior(cfg.n_features, cov_prior)
                     .map(|c| if windowed { c } else { c.without_runs() })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -540,6 +710,7 @@ impl EwClass {
             solve_failures: 0,
             diag_classes,
             win,
+            opts,
             factors: Factors::default(),
             work: ScoreWork::default(),
         })
@@ -547,6 +718,10 @@ impl EwClass {
 
     pub fn cfg(&self) -> &EwClassCfg {
         &self.cfg
+    }
+
+    pub fn opts(&self) -> Option<&EwClassOpts> {
+        self.opts.as_ref()
     }
 
     /// EW weight of every accepted row so far: the `n_eff` the next row
@@ -755,6 +930,8 @@ impl EwClass {
             quad,
             view,
             shared,
+            shrunk_add,
+            shrunk_factor,
         } = work;
         let nc = self.cfg.n_classes;
         let k = self.cfg.n_features;
@@ -782,6 +959,15 @@ impl EwClass {
         if total <= 0.0 || total.is_nan() {
             return nan(out);
         }
+        let fixed_priors = self.opts.as_ref().and_then(|o| o.priors.as_deref());
+        let reg_param = self.opts.as_ref().and_then(|o| o.reg_param);
+        let var_smoothing = self.opts.as_ref().and_then(|o| o.var_smoothing);
+        let log_prior = |c: usize| -> f64 {
+            match fixed_priors {
+                Some(ps) => ps[c].ln(),
+                None => (weights[c] / total).ln(),
+            }
+        };
         // ln π_c − ½ ln det M_c − ½ q_c per class; −∞ where n_c = 0.
         ell.clear();
         ell.resize(nc, f64::NEG_INFINITY);
@@ -799,12 +985,27 @@ impl EwClass {
                     }
                     let fresh;
                     let (packed, ridge) = (cov.comoments().packed(), self.class_ridge(cov));
-                    let factor = match factors.as_deref_mut() {
-                        Some(cache) => cache.get(c, nc, packed, ridge, k),
-                        None => match self.factors.peek(c) {
+                    let factor = match (reg_param, factors.as_deref_mut()) {
+                        (None, Some(cache)) => cache.get(c, nc, packed, ridge, k),
+                        (None, None) => match self.factors.peek(c) {
                             Some(f) => Some(f),
                             None => {
                                 fresh = SpdFactor::of_ridged_in(packed, ridge, k, None, chol);
+                                fresh.as_ref()
+                            }
+                        },
+                        (Some(r), Some(cache)) => cache.get_shrunk(c, nc, packed, r, ridge, k),
+                        (Some(r), None) => match self.factors.peek(c) {
+                            Some(f) => Some(f),
+                            None => {
+                                shrunk_add.clear();
+                                shrunk_add.resize(k, r + ridge);
+                                fresh = shrunk_factor.get().factor_shrunk(
+                                    packed,
+                                    1.0 - r,
+                                    shrunk_add,
+                                    k,
+                                );
                                 fresh.as_ref()
                             }
                         },
@@ -814,7 +1015,7 @@ impl EwClass {
                             // `quad_forms(delta, k, 1)[0]` to the bit, in
                             // the kept column.
                             let q = f.quad_form(delta, quad);
-                            ell[c] = (weights[c] / total).ln() - 0.5 * f.log_det() - 0.5 * q;
+                            ell[c] = log_prior(c) - 0.5 * f.log_det() - 0.5 * q;
                         }
                         None => {
                             *solve_failed = true;
@@ -824,10 +1025,10 @@ impl EwClass {
                 }
             }
             Covariance::Shared => {
-                // M = Σ_c π_c (C_c + r_c I), then every class's quadratic
-                // form against it from one factorization: the factor
-                // `quad_forms_logdet` makes, its forms and its `ln det`, to
-                // the bit, in the kept buffers ([`SharedWork`]).
+                // M = Σ_c π_c (C_c + r_c I) (or `(1 - r) * S + r * I + Σ_c π_c r_c I`
+                // under `reg_param`), then every class's quadratic form against it
+                // from one factorization: the factor `quad_forms_logdet` makes, its
+                // forms and its `ln det`, to the bit, in the kept buffers ([`SharedWork`]).
                 let SharedWork {
                     m,
                     seen,
@@ -857,8 +1058,24 @@ impl EwClass {
                             *mij += pi * cij;
                         }
                     }
+                    if reg_param.is_none() {
+                        for i in 0..k {
+                            m[i * k + i] += pi * ridge;
+                        }
+                    }
+                }
+                if let Some(r) = reg_param {
+                    let keep = 1.0 - r;
+                    let ridge_pool: f64 = seen
+                        .iter()
+                        .map(|&c| (weights[c] / total) * self.class_ridge(&classes[c]))
+                        .sum();
                     for i in 0..k {
-                        m[i * k + i] += pi * ridge;
+                        let run = i * k..i * k + i + 1;
+                        for mij in &mut m[run] {
+                            *mij *= keep;
+                        }
+                        m[i * k + i] += r + ridge_pool;
                     }
                 }
                 deltas.clear();
@@ -874,7 +1091,7 @@ impl EwClass {
                         let log_det = f.log_det();
                         factor.give(f);
                         for (j, &c) in seen.iter().enumerate() {
-                            ell[c] = (weights[c] / total).ln() - 0.5 * log_det - 0.5 * q[j];
+                            ell[c] = log_prior(c) - 0.5 * log_det - 0.5 * q[j];
                         }
                     }
                     None => {
@@ -884,6 +1101,33 @@ impl EwClass {
                 }
             }
             Covariance::Diagonal => {
+                // Non-fading `var_smoothing` floor pooled from the class moments
+                // via the law of total variance: no new state.
+                let eps = match var_smoothing {
+                    Some(vs) if vs > 0.0 => {
+                        let mut max_var = 0.0f64;
+                        for i in 0..k {
+                            let mut mean_i = 0.0;
+                            for (c, cov) in diag.iter().enumerate() {
+                                if weights[c] > 0.0 {
+                                    mean_i += (weights[c] / total) * cov.means()[i];
+                                }
+                            }
+                            let mut var_i = 0.0;
+                            for (c, cov) in diag.iter().enumerate() {
+                                if weights[c] > 0.0 {
+                                    let diff = cov.means()[i] - mean_i;
+                                    var_i += (weights[c] / total) * (cov.var(i) + diff * diff);
+                                }
+                            }
+                            if var_i > max_var {
+                                max_var = var_i;
+                            }
+                        }
+                        vs * max_var
+                    }
+                    _ => 0.0,
+                };
                 for (c, cov) in diag.iter().enumerate() {
                     if weights[c] <= 0.0 {
                         continue;
@@ -891,35 +1135,63 @@ impl EwClass {
                     // The view's: under a window, the window's ridge
                     // (review 2026-11-23, COV-3).
                     let ridge = self.cfg.precision_prior * cov.precision_scale();
+                    if let Some(r) = reg_param {
+                        let keep = 1.0 - r;
+                        let add = r + ridge;
+                        let var_of = |i: usize| keep * cov.var(i) + add;
+                        let jitter = if (0..k).all(|i| var_of(i) > 0.0) {
+                            0.0
+                        } else {
+                            let Some(j) = crate::solve::diagonal_jitter(k, var_of) else {
+                                *solve_failed = true;
+                                return nan(out);
+                            };
+                            j
+                        };
+                        let (mut log_det, mut q) = (0.0, 0.0);
+                        for (i, xi) in x.iter().enumerate() {
+                            let v = var_of(i) + jitter;
+                            let d = cov.deviation(i, *xi);
+                            log_det += v.ln();
+                            q += d * d / v;
+                        }
+                        ell[c] = log_prior(c) - 0.5 * log_det - 0.5 * q;
+                        continue;
+                    }
+                    let add = if var_smoothing.is_some() {
+                        ridge + eps
+                    } else {
+                        ridge
+                    };
                     // A variance of 0 where the ridge has faded to 0 (past
                     // about 1,075 half-lives) read `0/0` on every row after:
                     // such a class takes the jitter the factorization of
                     // `"full"` and `"tied"` takes, and a row of no variance
                     // with none reads nothing (`crate::solve`).
-                    if !(0..k).all(|i| cov.var(i) + ridge > 0.0) {
-                        let Some(jitter) = crate::solve::diagonal_jitter(k, |i| cov.var(i) + ridge)
+                    if !(0..k).all(|i| cov.var(i) + add > 0.0) {
+                        let Some(jitter) = crate::solve::diagonal_jitter(k, |i| cov.var(i) + add)
                         else {
                             *solve_failed = true;
                             return nan(out);
                         };
                         let (mut log_det, mut q) = (0.0, 0.0);
                         for (i, xi) in x.iter().enumerate() {
-                            let v = (cov.var(i) + ridge) + jitter;
+                            let v = (cov.var(i) + add) + jitter;
                             let d = cov.deviation(i, *xi);
                             log_det += v.ln();
                             q += d * d / v;
                         }
-                        ell[c] = (weights[c] / total).ln() - 0.5 * log_det - 0.5 * q;
+                        ell[c] = log_prior(c) - 0.5 * log_det - 0.5 * q;
                         continue;
                     }
                     let kept = match (factors.as_deref_mut(), view.is_none()) {
-                        (Some(f), true) => Some(f.diag_log_det(c, nc, cov, ridge, k)),
+                        (Some(f), true) => Some(f.diag_log_det(c, nc, cov, add, k)),
                         _ => None,
                     };
                     let mut log_det = 0.0;
                     let mut q = 0.0;
                     for (i, xi) in x.iter().enumerate() {
-                        let v = cov.var(i) + ridge;
+                        let v = cov.var(i) + add;
                         let d = cov.deviation(i, *xi);
                         if kept.is_none() {
                             log_det += v.ln();
@@ -929,7 +1201,7 @@ impl EwClass {
                     if let Some(l) = kept {
                         log_det = l;
                     }
-                    ell[c] = (weights[c] / total).ln() - 0.5 * log_det - 0.5 * q;
+                    ell[c] = log_prior(c) - 0.5 * log_det - 0.5 * q;
                 }
             }
         }
@@ -1134,7 +1406,10 @@ impl OnlineModel for EwClass {
         match &s.model {
             ModelState::EwClass(m) => {
                 let mut m = (**m).clone();
-                crate::model::check_cfg("ew_class", m.cfg.validate())?;
+                if m.opts.as_ref().is_some_and(EwClassOpts::is_empty) {
+                    m.opts = None;
+                }
+                crate::model::check_cfg("ew_class", m.cfg.validate_with_opts(m.opts.as_ref()))?;
                 let (k, nc) = (m.cfg.n_features, m.cfg.n_classes);
                 let diagonal = matches!(m.cfg.covariance, Covariance::Diagonal);
                 // A `diagonal` state saved before schema 66 kept every

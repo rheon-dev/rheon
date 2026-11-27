@@ -768,6 +768,7 @@ fn corrchange_golden() {
         span_clock: None,
         monitor_clock: None,
         max_state_bytes: None,
+        emit_n_flagged: false,
     })
     .unwrap();
     let mut out = Vec::new();
@@ -825,6 +826,7 @@ fn corrchange_realistic_golden() {
         span_clock: None,
         monitor_clock: None,
         max_state_bytes: None,
+        emit_n_flagged: false,
     };
     for (name, cfg, want) in [
         (
@@ -2209,6 +2211,10 @@ fn kmeans_cfg(rule: SeedRule) -> KMeansCfg {
         warm_clock: None,
         update_every: None,
         split_merge_every: None,
+        centers: None,
+        learn: true,
+        emit_distances: false,
+        emit_inertia: false,
     }
 }
 
@@ -2711,6 +2717,7 @@ fn corrchange_sequential_golden() {
         span_clock: None,
         monitor_clock: None,
         max_state_bytes: None,
+        emit_n_flagged: false,
     })
     .unwrap();
     let mut out = Vec::new();

@@ -959,6 +959,10 @@ fn kmeans_start_span_is_atomic() {
         warm_clock: Some(1e9),
         update_every: Some(10.0),
         split_merge_every: Some(20.0),
+        centers: None,
+        learn: true,
+        emit_distances: false,
+        emit_inertia: false,
     };
     let mut m = KMeans::new(cfg).unwrap();
     for i in 0..3 {
@@ -1018,6 +1022,7 @@ fn corrchange_clock_span_is_atomic() {
             span_clock: Some(10.0),
             monitor_clock: (kind == CorrChangeKind::Sequential).then_some(10.0),
             max_state_bytes: None,
+            emit_n_flagged: false,
         };
         let mut probe = CorrChange::new(CorrChangeCfg {
             max_state_bytes: Some(1),

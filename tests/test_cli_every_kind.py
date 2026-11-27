@@ -166,6 +166,8 @@ OUTPUTS: dict[str, Any] = dict(
     tails_half_life=40.0,
     emit_feature_health=True,
     feature_health_half_life=40.0,
+    feature_ks_window=30,
+    feature_ks_recent=10,
     emit_target_weight=True,
 )
 #: What a least-squares fit adds.
@@ -244,6 +246,8 @@ def no_features(kw: dict[str, Any]) -> dict[str, Any]:
         "feature_health_half_life",
         "emit_white",
         "white_interaction_terms",
+        "feature_ks_window",
+        "feature_ks_recent",
     )
     return {k: v for k, v in kw.items() if k not in drop}
 
@@ -490,6 +494,18 @@ CASES: list[Case] = [
             "initial_trend": 0.0,
             "initial_seasonal": [0.0, 0.1, -0.1, 0.0],
             "max_state_bytes": 100_000,
+        },
+    ),
+    Case(
+        "holt_known_horizons",
+        "holt",
+        {
+            **no_features(full2()),
+            "targets": ["y"],
+            "start": "known",
+            "initial_level": 0.0,
+            "initial_trend": 0.0,
+            "forecast_spans": [2.0, 5.0],
         },
     ),
     Case(
@@ -829,6 +845,31 @@ CASES: list[Case] = [
             "label": "lab",
             "classes": ["down", "up"],
             "precision_prior": 1.0,
+        },
+    ),
+    Case(
+        "ew_class_reg",
+        "ew_class",
+        {
+            **STREAM,
+            "features": F3,
+            "label": "lab",
+            "classes": ["down", "up"],
+            "priors": [0.4, 0.6],
+            "reg_param": 0.1,
+        },
+    ),
+    Case(
+        "ew_class_vs",
+        "ew_class",
+        {
+            **STREAM2,
+            "features": F3,
+            "label": "lab",
+            "classes": ["down", "up"],
+            "covariance_type": "diag",
+            "priors": [0.4, 0.6],
+            "var_smoothing": 1e-2,
         },
     ),
     Case(
@@ -1706,6 +1747,19 @@ CASES: list[Case] = [
         },
     ),
     Case(
+        "kmeans_centers",
+        "kmeans",
+        {
+            **STREAM,
+            "features": ["x1", "x2"],
+            "n_clusters": 2,
+            "centers": [[-1.0, 0.0], [1.0, 0.0]],
+            "learn": False,
+            "emit_distances": True,
+            "emit_inertia": True,
+        },
+    ),
+    Case(
         "micro",
         "micro",
         {
@@ -1877,6 +1931,19 @@ CASES: list[Case] = [
             "alpha": 0.01,
             "alpha_adjust": "none",
             "bandwidth": 3,
+        },
+    ),
+    Case(
+        "corrchange_holm",
+        "corrchange",
+        {
+            **NODECAY,
+            "features": F3,
+            "kind": "monitor",
+            "window_rows": 30,
+            "alpha": 0.05,
+            "alpha_adjust": "holm",
+            "emit_n_flagged": True,
         },
     ),
     # Task 538: the window's redraw on the clock.
@@ -2316,6 +2383,8 @@ NEEDS: dict[str, list[str]] = {
     "drift_delta": ["emit_drift"],
     "drift_threshold": ["emit_drift"],
     "feature_health_half_life": ["emit_feature_health"],
+    "feature_ks_window": ["feature_ks_recent"],
+    "feature_ks_recent": ["feature_ks_window"],
     "horizon_rows": ["emit_calibration"],
     "influence_half_life": ["emit_influence"],
     "ljung_box_lags": ["emit_specification"],

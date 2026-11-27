@@ -19,8 +19,8 @@
 //! [`crate::ChunkOut::checks`], [`value_names`]' count of them per slot.
 
 use rheon_core::{
-    ArchLm, Breaks, Calibration, Coverage, Decay, FeatureHealth, Influence, RobustSeType, Sandwich,
-    Specification, Spiegelhalter, Tails, TwinFit, WhiteTest,
+    ArchLm, Breaks, Calibration, Coverage, Decay, FeatureHealth, FeatureHealthKs, Influence,
+    RobustSeType, Sandwich, Specification, Spiegelhalter, Tails, TwinFit, WhiteTest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -307,6 +307,10 @@ pub struct Checks {
     /// `emit_cooks_distance` or `emit_dfbetas`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub influence_w: Vec<Influence>,
+    /// Each feature's rolling window for two-sample KS feature health, under
+    /// `feature_ks_window` / `feature_ks_recent`: one per instance, not per slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_ks: Option<FeatureHealthKs>,
 }
 
 impl Checks {
@@ -380,6 +384,10 @@ impl Checks {
                 Influence::new();
                 on(spec.emit_cooks_distance || spec.emit_dfbetas, n_slots)
             ],
+            health_ks: spec
+                .feature_ks_window
+                .zip(spec.feature_ks_recent)
+                .map(|(w, r)| FeatureHealthKs::new(spec.k(), w, r)),
         }
     }
 
@@ -397,6 +405,7 @@ impl Checks {
             || spec.emit_cooks_distance
             || spec.emit_dfbetas
             || spec.emit_feature_health
+            || spec.has_feature_ks()
     }
 
     /// Whether a restored set is shaped as `fresh`, this spec's: the same
@@ -433,6 +442,12 @@ impl Checks {
             && self.spiegelhalter.iter().all(Spiegelhalter::has_shape)
             && self.influence_w.len() == fresh.influence_w.len()
             && self.influence_w.iter().all(Influence::has_shape)
+            && self.health_ks.is_some() == fresh.health_ks.is_some()
+            && self.health_ks.as_ref().is_none_or(|h| {
+                spec.feature_ks_window
+                    .zip(spec.feature_ks_recent)
+                    .is_some_and(|(w, r)| h.has_shape(k, w, r))
+            })
             && self.specification.iter().all(|s| {
                 s.has_shape(
                     k,
@@ -732,6 +747,20 @@ impl Checks {
         }
     }
 
+    /// Write each feature's two-sample KS statistic and p-value before the row,
+    /// under `feature_ks_window` / `feature_ks_recent`: `ks_stat` at `(i·n_rows
+    /// + ri)` of `out`, `ks_p` `k` blocks on.
+    pub fn read_health_ks(&mut self, k: usize, n_rows: usize, ri: usize, out: &mut [f64]) {
+        let Some(h) = self.health_ks.as_mut() else {
+            return;
+        };
+        for i in 0..k {
+            let (stat, p) = h.read(i).unzip();
+            out[i * n_rows + ri] = stat.unwrap_or(f64::NAN);
+            out[(k + i) * n_rows + ri] = p.unwrap_or(f64::NAN);
+        }
+    }
+
     /// Fold one learned row: `row` and its recursive residuals `rec`, the
     /// row's clock step and weight. A slot with no prediction or no target,
     /// and a row of weight 0, only age (CLAUDE.md hard rule 9). Until the
@@ -791,6 +820,9 @@ impl Checks {
         }
         if let Some(h) = self.health.as_mut() {
             h.update(row.xs, cfg.health.factor(d_clock), w);
+        }
+        if let Some(h) = self.health_ks.as_mut() {
+            h.update(row.xs, w);
         }
         if !self.influence.is_empty() {
             let lam = cfg.influence.factor(d_clock);

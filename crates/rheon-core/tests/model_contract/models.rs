@@ -502,6 +502,10 @@ fn kmeans_cfg() -> KMeansCfg {
         warm_clock: None,
         update_every: None,
         split_merge_every: None,
+        centers: None,
+        learn: true,
+        emit_distances: false,
+        emit_inertia: false,
     }
 }
 

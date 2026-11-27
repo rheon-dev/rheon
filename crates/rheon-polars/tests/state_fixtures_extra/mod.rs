@@ -1032,6 +1032,27 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         ("bank_krls", "krls clock window stamps", |p, _| {
             p.contains(".Krls.mode.Window.stamp.")
         }),
+        // PLAN 525: kmeans fixed centers + inertia, ew_class opts, holt known +
+        // horizons, corrchange holm + n_flagged, and standalone feature KS.
+        ("bank_plan525", "kmeans EW inertia state", |p, v| {
+            p.ends_with(".KMeans.inertia.w") && v.as_f64().is_some_and(|w| w > 0.0)
+        }),
+        (
+            "bank_plan525",
+            "ew_class fixed priors and reg_param",
+            |p, v| p.ends_with(".EwClass.opts.reg_param") && v.as_f64() == Some(0.15),
+        ),
+        ("bank_plan525", "ew_class var_smoothing", |p, v| {
+            p.ends_with(".EwClass.opts.var_smoothing") && v.as_f64() == Some(0.01)
+        }),
+        (
+            "bank_plan525",
+            "corrchange holm + emit_n_flagged",
+            |p, v| p.ends_with(".CorrChange.cfg.emit_n_flagged") && v.as_bool() == Some(true),
+        ),
+        ("bank_plan525", "standalone feature KS window", |p, v| {
+            p.ends_with(".checks.0.health_ks.window") && v.as_u64() == Some(16)
+        }),
     ];
     for (kind, form, holds) in FORMS {
         let f = frozen::ALL

@@ -576,6 +576,7 @@ fn corrchange_cfg() -> CorrChangeCfg {
         span_clock: None,
         monitor_clock: None,
         max_state_bytes: None,
+        emit_n_flagged: false,
     }
 }
 

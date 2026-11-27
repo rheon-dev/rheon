@@ -998,6 +998,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
         window_size,
         monitor_span,
         max_state_bytes,
+        emit_n_flagged,
     } = &spec.model
     else {
         return Err(not_a(spec, "corrchange_cfg", "corrchange"));
@@ -1206,6 +1207,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
             (_, _, s) => s.as_ref().map(Span::value),
         },
         max_state_bytes: eff_cap,
+        emit_n_flagged: *emit_n_flagged,
     })
 }
 

@@ -2359,7 +2359,8 @@ what each gain is and when each wins.
 `seasonal="add"` or `"mul"` adds a season of `seasonal_periods` values `S`
 over `period` clock units, and `damping_half_life` damps the trend.
 `start` says where the fit starts. `"known"` starts from the initial states
-given. `"heuristic"` fits them to a target's first rows (10, or 5 seasons)
+given (and accepts `forecast_spans` on plain level/trend fits without
+`seasonal` or `damping_half_life`). `"heuristic"` fits them to a target's first rows (10, or 5 seasons)
 as statsmodels' heuristic does, then learns those rows from them, and
 withholds them as `below_warm_rows`. A season or a damped trend needs one of these two
 starts; `"warm"` is the start above. Under them every gain is the fixed
@@ -5165,6 +5166,13 @@ whose cluster vanished. A row far outside its cluster moves neither `n_j`
 nor `c_j`, and waits for the split-merge move. The docstring's Notes give
 each rule, under *Seeding*, *Far rows, split and merge* and *Dead centers*.
 
+Pass `centers` to score against fixed centers without fitting (`learn=False`,
+with `standardize` defaulting to `False` and `min_weight` to `0`). Set
+`emit_distances=True` to emit distances `dist_0..dist_{k-1}` to every center,
+and `emit_inertia=True` to emit the exponentially weighted inertia `inertia`
+(weighted sum of squared distances to the nearest center, read before the row
+folds in).
+
 #### Example
 
 **The split-merge move gives a cluster born after seeding a center of its
@@ -5396,6 +5404,14 @@ p_c = exp(ℓ_c − max ℓ) / Σ exp(ℓ − max ℓ)                  class = 
 n_c ← λ n_c + w·[y = c]        μ_c, C_c ← weighted Welford on the row's own class
 s_c ← s_c · λn_c / (λn_c + w)  on the row's own class, and 1 on its first row
 ```
+
+Pass `priors` (a list aligned with `classes`, or a dict keyed by class name)
+to replace the empirical weights `π_c` with fixed class priors. For a
+non-fading regularizer, pass `reg_param` in `[0, 1]` to shrink each covariance
+as `(1 - reg_param) · C_c + reg_param · I`. Under `covariance_type="diag"`,
+you can instead pass `var_smoothing` to add `var_smoothing · max_i total_var_i`
+pooled across classes via the law of total variance. When either regularizer
+is set, `precision_prior` defaults to `0.0`.
 
 #### Example
 
@@ -5683,8 +5699,10 @@ Each kind answers its own question:
 | `"window"` | how big is the change? | on every row once both windows are full, `2·window_rows` rows in | the window before | as soon as the two windows differ |
 
 Under `"monitor"` and `"sequential"`, the statistic is the largest over the
-pairs, and the level `alpha` (0.05 by default) is spread over the pairs as
-`alpha / npairs` unless `alpha_adjust="none"`.
+pairs, and the level `alpha` (0.05 by default) is spread over the pairs by
+`"bonferroni"` (`alpha / npairs`), `"holm"` (Holm–Bonferroni step-down), or
+`"none"`. Set `emit_n_flagged=True` to emit `n_flagged`, the count of pairs
+flagged at the adjusted level.
 
 `kind="monitor"` is the closed-sample constancy test of Wied, Krämer and
 Dehling (2012) in its linear form. Its span is `T = window_rows` rows,

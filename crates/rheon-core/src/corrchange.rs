@@ -113,7 +113,8 @@
 
 use std::collections::VecDeque;
 
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::since::Since;
 use crate::window_moments::WindowSums;
@@ -266,7 +267,16 @@ fn bartlett(x: f64) -> f64 {
     if a < 1.0 { 1.0 - a } else { 0.0 }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Helper for serializing an `Option<f64>` with [`crate::humanfloat::opt_f64_or_tag`].
+struct OptF64Tag(Option<f64>);
+
+impl Serialize for OptF64Tag {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::humanfloat::opt_f64_or_tag::serialize(&self.0, serializer)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct CorrChangeCfg {
     pub n_features: usize,
     pub kind: CorrChangeKind,
@@ -276,13 +286,13 @@ pub struct CorrChangeCfg {
     /// kinds only differ in what they do with the block.
     pub span_rows: usize,
     /// Nominal level; under `monitor` and `sequential` the critical value is
-    /// the quantile at `1 − alpha/npairs` under Bonferroni. Under
+    /// the quantile at `1 − alpha/npairs` under Bonferroni or Holm. Under
     /// `sequential`, a share below 5e-11
     /// ([`crate::boundary::MIN_SEQUENTIAL_TAIL`]) with no `crit` is refused
     /// ([`Self::validate`]).
     pub alpha: f64,
-    /// `"bonferroni"` (default) or `"none"`: whether `monitor` and
-    /// `sequential` split `alpha` over the pairs. Under `window` it changes
+    /// `"bonferroni"` (default), `"holm"` or `"none"`: how `monitor` and
+    /// `sequential` adjust `alpha` over the pairs. Under `window` it changes
     /// nothing, since there is one statistic over all the pairs: the
     /// permutation critical value is taken at `alpha`.
     pub alpha_adjust: String,
@@ -339,6 +349,62 @@ pub struct CorrChangeCfg {
     /// set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_state_bytes: Option<u64>,
+    /// Emit `n_flagged`, the number of pairs flagged on each report (`false` by
+    /// default so existing outputs and state bytes do not move).
+    #[serde(default)]
+    pub emit_n_flagged: bool,
+}
+
+impl Serialize for CorrChangeCfg {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let len = if self.emit_n_flagged {
+            22
+        } else {
+            17 + usize::from(self.permute_every.is_some())
+                + usize::from(self.span_clock.is_some())
+                + usize::from(self.monitor_clock.is_some())
+                + usize::from(self.max_state_bytes.is_some())
+        };
+        let mut s = serializer.serialize_struct("CorrChangeCfg", len)?;
+        s.serialize_field("n_features", &self.n_features)?;
+        s.serialize_field("kind", &self.kind)?;
+        s.serialize_field("span_rows", &self.span_rows)?;
+        s.serialize_field("alpha", &self.alpha)?;
+        s.serialize_field("alpha_adjust", &self.alpha_adjust)?;
+        s.serialize_field("bandwidth", &self.bandwidth)?;
+        s.serialize_field("scalar", &self.scalar)?;
+        s.serialize_field("decay", &self.decay)?;
+        s.serialize_field("crit", &self.crit)?;
+        s.serialize_field("n_perm", &self.n_perm)?;
+        s.serialize_field("permute_every_rows", &self.permute_every_rows)?;
+        s.serialize_field("perm_block", &self.perm_block)?;
+        s.serialize_field("norm", &self.norm)?;
+        s.serialize_field("seed", &self.seed)?;
+        s.serialize_field("reset", &self.reset)?;
+        s.serialize_field("monitor_rows", &self.monitor_rows)?;
+        s.serialize_field("boundary_gamma", &self.boundary_gamma)?;
+        if self.emit_n_flagged {
+            s.serialize_field("permute_every", &OptF64Tag(self.permute_every))?;
+            s.serialize_field("span_clock", &self.span_clock)?;
+            s.serialize_field("monitor_clock", &self.monitor_clock)?;
+            s.serialize_field("max_state_bytes", &self.max_state_bytes)?;
+            s.serialize_field("emit_n_flagged", &self.emit_n_flagged)?;
+        } else {
+            if self.permute_every.is_some() {
+                s.serialize_field("permute_every", &OptF64Tag(self.permute_every))?;
+            }
+            if self.span_clock.is_some() {
+                s.serialize_field("span_clock", &self.span_clock)?;
+            }
+            if self.monitor_clock.is_some() {
+                s.serialize_field("monitor_clock", &self.monitor_clock)?;
+            }
+            if self.max_state_bytes.is_some() {
+                s.serialize_field("max_state_bytes", &self.max_state_bytes)?;
+            }
+        }
+        s.end()
+    }
 }
 
 /// `−ζ(1/2)/√(2π)`: how far, in units of `1/√T`, the maximum of a Brownian
@@ -452,10 +518,10 @@ impl CorrChangeCfg {
                 self.alpha
             ));
         }
-        if !["bonferroni", "none"].contains(&self.alpha_adjust.as_str()) {
+        if !["bonferroni", "holm", "none"].contains(&self.alpha_adjust.as_str()) {
             no.refuse(format!(
-                "corrchange: alpha_adjust must be \"bonferroni\" or \"none\", but it is {:?}. Use \
-                 one of those words.",
+                "corrchange: alpha_adjust must be \"bonferroni\", \"holm\" or \"none\", but it is \
+                 {:?}. Use one of those words.",
                 self.alpha_adjust
             ));
         }
@@ -592,9 +658,10 @@ impl CorrChangeCfg {
                 // An alpha out of its range is the range check's to refuse.
                 let in_range = self.alpha > 0.0 && self.alpha < 1.0;
                 if in_range && self.crit.is_none() && self.pair_alpha() < floor {
-                    // Under Bonferroni with several pairs each is tested at
-                    // a share of alpha; with one pair the share is alpha.
-                    let shared = self.alpha_adjust == "bonferroni" && self.npairs() > 1;
+                    // Under Bonferroni or Holm with several pairs, the entry
+                    // threshold tests at a share of alpha; with one pair the share is alpha.
+                    let shared = (self.alpha_adjust == "bonferroni" || self.alpha_adjust == "holm")
+                        && self.npairs() > 1;
                     // The least alpha whose share clears the floor, rounded
                     // up so the remedy holds; none below 1 where the pairs
                     // are too many.
@@ -728,10 +795,10 @@ impl CorrChangeCfg {
         }
     }
 
-    /// The level each pair is tested at: `alpha`, over the pairs under
-    /// Bonferroni.
+    /// The entry level each pair is tested at: `alpha / npairs` under
+    /// Bonferroni or Holm, and `alpha` under none.
     fn pair_alpha(&self) -> f64 {
-        if self.alpha_adjust == "bonferroni" {
+        if self.alpha_adjust == "bonferroni" || self.alpha_adjust == "holm" {
             self.alpha / self.npairs() as f64
         } else {
             self.alpha
@@ -776,6 +843,12 @@ impl CorrChangeCfg {
     /// ([`Self::sequential_stat`]). NaN where the history or the period
     /// holds no information (a ratio not above 0): no verdict.
     fn sequential_crit(&self, m: usize, k: usize) -> f64 {
+        self.sequential_crit_at(m, k, self.pair_alpha())
+    }
+
+    /// [`Self::sequential_crit`] evaluated at an explicit tail level `alpha`
+    /// (used for Holm step-down ranks `alpha / (npairs - rank)`).
+    fn sequential_crit_at(&self, m: usize, k: usize, alpha: f64) -> f64 {
         if let Some(c) = self.crit {
             return c;
         }
@@ -784,7 +857,7 @@ impl CorrChangeCfg {
         } else {
             (k as f64 - 3.0) / (m as f64 - 3.0)
         };
-        crate::boundary::sequential_crit(self.pair_alpha(), self.boundary_gamma, ratio)
+        crate::boundary::sequential_crit(alpha, self.boundary_gamma, ratio)
     }
 
     /// Output slots per statistic: one per pair, or one for `scalar`.
@@ -1313,15 +1386,25 @@ impl CorrChange {
         self.ring.len()
     }
 
-    /// Output slot labels in emission order.
+    /// Output slot labels in emission order (without `n_flagged`).
     pub fn labels() -> Vec<String> {
-        vec![
+        Self::labels_for(false)
+    }
+
+    /// Output slot labels in emission order, with `n_flagged` appended when
+    /// `emit_n_flagged` is true.
+    pub fn labels_for(emit_n_flagged: bool) -> Vec<String> {
+        let mut out = vec![
             "stat".into(),
             "crit".into(),
             "flag".into(),
             "since_flag".into(),
             "since_change".into(),
-        ]
+        ];
+        if emit_n_flagged {
+            out.push("n_flagged".into());
+        }
+        out
     }
 
     pub fn n_outputs_for() -> usize {
@@ -1335,10 +1418,7 @@ impl CorrChange {
     /// ([`Self::monitor_pair`]). Every other report flags 0 or 1 wherever its
     /// statistic and critical value are numbers.
     pub fn flag_withheld(pred: &[f64]) -> bool {
-        pred.len() == Self::n_outputs_for()
-            && pred[0].is_finite()
-            && pred[1].is_finite()
-            && pred[2].is_nan()
+        pred.len() >= 3 && pred[0].is_finite() && pred[1].is_finite() && pred[2].is_nan()
     }
 
     /// The sample correlation of `rows[..n]` for the pair `(a, b)`.
@@ -1744,6 +1824,17 @@ impl CorrChange {
     /// `scalar`'s is the mean's: `(k/√m)·|ū_k − ū_h|/σ̂_u / w(k/m)`, which
     /// forms no correlation to converge.
     fn sequential_stat(&self, mon: &Monitoring, row: &[f64]) -> (f64, usize) {
+        self.sequential_stats(mon, row, None)
+    }
+
+    /// [`Self::sequential_stat`], optionally recording each pair's ratio into
+    /// `pair_ratios` when `Some` (used for Holm step-down and `emit_n_flagged`).
+    fn sequential_stats(
+        &self,
+        mon: &Monitoring,
+        row: &[f64],
+        mut pair_ratios: Option<&mut Vec<f64>>,
+    ) -> (f64, usize) {
         if !self.informed(mon) {
             return (f64::NAN, 0);
         }
@@ -1780,6 +1871,9 @@ impl CorrChange {
                 let level = mon.level[idx];
                 let z = libm::atanh(rho) - mon.z_level[idx];
                 let ratio = (factor * z.abs() * (1.0 - level * level) / mon.scale[idx]) / w;
+                if let Some(out) = pair_ratios.as_deref_mut() {
+                    out.push(ratio);
+                }
                 if !ratio.is_nan() && (best.is_nan() || ratio > best) {
                     (best, at) = (ratio, idx);
                 }
@@ -2386,8 +2480,9 @@ impl CorrChange {
     /// [`Self::read`], written over `pred`, `buf` the window statistic's
     /// working space.
     fn read_into(&self, x: &[f64], key: Option<Stamp>, pred: &mut Vec<f64>, buf: &mut Vec<f64>) {
+        let n_out = 5 + usize::from(self.cfg.emit_n_flagged);
         pred.clear();
-        pred.resize(Self::n_outputs_for(), f64::NAN);
+        pred.resize(n_out, f64::NAN);
         let mut one = [0.0];
         let Some(row) = self.ring_row(x, &mut one) else {
             return;
@@ -2413,12 +2508,53 @@ impl CorrChange {
                 // is one whose ratio moved, since there the correlation's
                 // CUSUM is not on its null law ([`Self::monitor_pair`]).
                 let (mut stat, mut flagged, mut at, mut held) = (f64::NAN, f64::NAN, 0, false);
+                let mut n_flagged: usize = 0;
                 let mut work = Vec::new();
                 if self.cfg.scalar {
                     let (q, j) = self.scalar_stat_at(&rows);
                     stat = q;
                     if q > crit {
                         (flagged, at) = (q, j);
+                        n_flagged = 1;
+                    }
+                } else if self.cfg.alpha_adjust == "holm" {
+                    let m = self.cfg.npairs();
+                    let shift = GRID_SHIFT / (rows.len() as f64).sqrt();
+                    let mut pairs: Vec<(f64, f64, usize, usize)> = Vec::with_capacity(m);
+                    let mut idx = 0usize;
+                    for a in 0..self.cfg.n_features {
+                        for b in (a + 1)..self.cfg.n_features {
+                            let p = self.monitor_pair(&rows, a, b, &mut work);
+                            if p.stat.is_finite() {
+                                if stat.is_nan() || p.stat > stat {
+                                    stat = p.stat;
+                                }
+                                pairs.push((p.stat, p.ratio, p.at, idx));
+                            }
+                            idx += 1;
+                        }
+                    }
+                    // Sort descending by statistic, deterministic tie-break by pair index.
+                    pairs.sort_unstable_by(|x, y| y.0.total_cmp(&x.0).then_with(|| x.3.cmp(&y.3)));
+                    for (rank, &(p_stat, p_ratio, p_at, _)) in pairs.iter().enumerate() {
+                        let crit_r = if rank == 0 {
+                            crit
+                        } else {
+                            kolmogorov_quantile(self.cfg.alpha / (m - rank) as f64) - shift
+                        };
+                        if p_stat > crit_r {
+                            if p_ratio > crit_r {
+                                held = true;
+                            } else {
+                                n_flagged += 1;
+                                if flagged.is_nan() || p_stat > flagged {
+                                    (flagged, at) = (p_stat, p_at);
+                                }
+                            }
+                        } else {
+                            // Holm step-down stops at the first non-rejection.
+                            break;
+                        }
                     }
                 } else {
                     for a in 0..self.cfg.n_features {
@@ -2430,8 +2566,11 @@ impl CorrChange {
                             if p.stat > crit {
                                 if p.ratio > crit {
                                     held = true;
-                                } else if flagged.is_nan() || p.stat > flagged {
-                                    (flagged, at) = (p.stat, p.at);
+                                } else {
+                                    n_flagged += 1;
+                                    if flagged.is_nan() || p.stat > flagged {
+                                        (flagged, at) = (p.stat, p.at);
+                                    }
                                 }
                             }
                         }
@@ -2449,6 +2588,13 @@ impl CorrChange {
                 if flag && at > 0 {
                     // The rows after the CUSUM's argmax, through this one.
                     pred[4] = (rows.len() - at) as f64;
+                }
+                if self.cfg.emit_n_flagged {
+                    pred[5] = if flag || !held {
+                        n_flagged as f64
+                    } else {
+                        f64::NAN
+                    };
                 }
             }
             CorrChangeKind::Window => {
@@ -2483,6 +2629,9 @@ impl CorrChange {
                     // The second window, by construction.
                     pred[4] = n2 as f64;
                 }
+                if self.cfg.emit_n_flagged {
+                    pred[5] = f64::from(flag);
+                }
             }
             CorrChangeKind::Sequential => {
                 let Some(mon) = &self.monitoring else {
@@ -2494,7 +2643,15 @@ impl CorrChange {
                 if !self.informed(mon) {
                     return;
                 }
-                let (stat, at) = self.sequential_stat(mon, row);
+                let mut pair_ratios = Vec::new();
+                let need_pairs = !self.cfg.scalar
+                    && (self.cfg.emit_n_flagged || self.cfg.alpha_adjust == "holm");
+                let (stat, at) = if need_pairs {
+                    pair_ratios.reserve(self.cfg.npairs());
+                    self.sequential_stats(mon, row, Some(&mut pair_ratios))
+                } else {
+                    self.sequential_stat(mon, row)
+                };
                 let crit = mon.crit;
                 let flag = !stat.is_nan() && crit.is_finite() && stat > crit;
                 pred[0] = stat;
@@ -2503,6 +2660,42 @@ impl CorrChange {
                 pred[3] = since as f64;
                 if flag {
                     pred[4] = self.sequential_since_change(mon, at);
+                }
+                if self.cfg.emit_n_flagged {
+                    let n_flagged = if !flag {
+                        0
+                    } else if self.cfg.scalar {
+                        1
+                    } else if self.cfg.alpha_adjust == "holm" && self.cfg.crit.is_none() {
+                        let m = self.cfg.npairs();
+                        let (m_rows, k_rows) = mon.rows_of(&self.cfg);
+                        pair_ratios.retain(|r| !r.is_nan());
+                        pair_ratios.sort_unstable_by(|a, b| b.total_cmp(a));
+                        let mut count = 0usize;
+                        for (rank, &r) in pair_ratios.iter().enumerate() {
+                            let crit_r = if rank == 0 {
+                                crit
+                            } else {
+                                self.cfg.sequential_crit_at(
+                                    m_rows,
+                                    k_rows,
+                                    self.cfg.alpha / (m - rank) as f64,
+                                )
+                            };
+                            if crit_r.is_finite() && r > crit_r {
+                                count += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        count
+                    } else {
+                        pair_ratios
+                            .iter()
+                            .filter(|&&r| !r.is_nan() && crit.is_finite() && r > crit)
+                            .count()
+                    };
+                    pred[5] = n_flagged as f64;
                 }
             }
         }
@@ -2877,7 +3070,7 @@ impl crate::OnlineModel for CorrChange {
     }
 
     fn n_outputs(&self) -> usize {
-        Self::n_outputs_for()
+        5 + usize::from(self.cfg.emit_n_flagged)
     }
 }
 

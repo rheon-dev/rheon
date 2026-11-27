@@ -82,7 +82,8 @@
 //! coordinates (docs/CLUSTERING.md §10), so the centres stay in the features'
 //! own units and `coef` reads as `k` rows of `p` feature values.
 
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 
 use super::summary::{ClusterSummary, FeatureMoments, SplitMix64, StepFactors, dist2};
 use crate::Stamp;
@@ -119,8 +120,31 @@ pub enum SeedRule {
     Lloyd,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+/// Helper for serializing an `Option<f64>` with [`crate::humanfloat::opt_f64_or_tag`]
+/// inside a custom [`Serialize`] implementation.
+struct OptF64Tag(Option<f64>);
+
+impl Serialize for OptF64Tag {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::humanfloat::opt_f64_or_tag::serialize(&self.0, serializer)
+    }
+}
+
+/// Helper for serializing an `f64` with [`crate::humanfloat::f64_or_tag`].
+struct F64Tag(f64);
+
+impl Serialize for F64Tag {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::humanfloat::f64_or_tag::serialize(&self.0, serializer)
+    }
+}
+
 /// Configuration for [`KMeans`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct KMeansCfg {
     pub n_features: usize,
     /// Number of clusters, `1 ..= MAX_K`.
@@ -192,6 +216,69 @@ pub struct KMeansCfg {
         with = "crate::humanfloat::opt_f64_or_tag"
     )]
     pub split_merge_every: Option<f64>,
+    /// Given cluster centers, shape `(k, n_features)`: frozen-only (`learn = false`),
+    /// immediately seeded from row 0 with no warm-up.
+    #[serde(default)]
+    pub centers: Option<Vec<Vec<f64>>>,
+    /// Whether centers update as rows arrive (`true` by default; must be `false`
+    /// when `centers` is given, and `true` otherwise).
+    #[serde(default = "default_true")]
+    pub learn: bool,
+    /// Emit Euclidean (or standardized) distances to all `k` centers (`dist_0..dist_{k-1}`).
+    #[serde(default)]
+    pub emit_distances: bool,
+    /// Emit exponentially weighted inertia (`inertia = m * W`, weighted sum of
+    /// squared distances to the nearest center, read before the row folds in).
+    #[serde(default)]
+    pub emit_inertia: bool,
+}
+
+impl Serialize for KMeansCfg {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let has_new =
+            self.centers.is_some() || !self.learn || self.emit_distances || self.emit_inertia;
+        let len = if has_new {
+            20
+        } else {
+            13 + usize::from(self.warm_clock.is_some())
+                + usize::from(self.update_every.is_some())
+                + usize::from(self.split_merge_every.is_some())
+        };
+        let mut s = serializer.serialize_struct("KMeansCfg", len)?;
+        s.serialize_field("n_features", &self.n_features)?;
+        s.serialize_field("k", &self.k)?;
+        s.serialize_field("decay", &self.decay)?;
+        s.serialize_field("min_weight", &self.min_weight)?;
+        s.serialize_field("warm_rows", &self.warm_rows)?;
+        s.serialize_field("seed_rule", &self.seed_rule)?;
+        s.serialize_field("seed", &self.seed)?;
+        s.serialize_field("update_every_rows", &self.update_every_rows)?;
+        s.serialize_field("split_merge", &self.split_merge)?;
+        s.serialize_field("split_merge_every_rows", &self.split_merge_every_rows)?;
+        s.serialize_field("dead_frac", &self.dead_frac)?;
+        s.serialize_field("standardize", &self.standardize)?;
+        s.serialize_field("scale_floor", &self.scale_floor)?;
+        if has_new {
+            s.serialize_field("warm_clock", &self.warm_clock)?;
+            s.serialize_field("update_every", &OptF64Tag(self.update_every))?;
+            s.serialize_field("split_merge_every", &OptF64Tag(self.split_merge_every))?;
+            s.serialize_field("centers", &self.centers)?;
+            s.serialize_field("learn", &self.learn)?;
+            s.serialize_field("emit_distances", &self.emit_distances)?;
+            s.serialize_field("emit_inertia", &self.emit_inertia)?;
+        } else {
+            if self.warm_clock.is_some() {
+                s.serialize_field("warm_clock", &self.warm_clock)?;
+            }
+            if self.update_every.is_some() {
+                s.serialize_field("update_every", &OptF64Tag(self.update_every))?;
+            }
+            if self.split_merge_every.is_some() {
+                s.serialize_field("split_merge_every", &OptF64Tag(self.split_merge_every))?;
+            }
+        }
+        s.end()
+    }
 }
 
 impl KMeansCfg {
@@ -226,41 +313,82 @@ impl KMeansCfg {
         }
         // The warm-up is sized by the features and the centers.
         no.stop_here()?;
-        // The buffer seeds `k` centres from `warm_rows` rows; fewer rows
-        // were floored to `k` in silence, where `hmm` refuses them (review
-        // 2026-10-06, PC8).
-        if self.warm_rows < self.k {
-            no.refuse(format!(
-                "kmeans: warm_rows must be at least n_clusters ({}) to seed that many centers, but \
-                 it is {}. Set warm_rows to {} or more.",
-                self.k, self.warm_rows, self.k
-            ));
-        }
-        let mib = KMeans::warm_mib(self.warm_rows, self.n_features);
-        if mib > KMeans::WARM_BUDGET_MIB {
-            let row = KMeans::warm_mib(1, self.n_features);
-            let most = (KMeans::WARM_BUDGET_MIB / row).floor();
-            // Where the rows that fit are fewer than the centers, warm_rows
-            // cannot be lowered enough: only the features or the clusters can.
-            let (rows, over, p, limit) = (
-                self.warm_rows,
-                crate::budget::mib_over(mib, KMeans::WARM_BUDGET_MIB),
-                self.n_features,
-                KMeans::WARM_BUDGET_MIB,
+        if self.centers.is_some() && self.learn {
+            no.refuse(
+                "kmeans: centers fixes the cluster centers (learn=false), so learn=true cannot be \
+                 set beside centers. Set learn=false, or leave out centers.",
             );
-            no.refuse(if most >= self.k as f64 {
-                format!(
-                    "kmeans: the first {rows} rows, which seed the centers, would take {over} MiB \
-                     at {p} features, over the {limit} MiB limit. Set warm_rows to {most} or \
-                     below, and at least n_clusters, or use fewer features."
-                )
-            } else {
-                format!(
-                    "kmeans: the first {rows} rows, which seed the centers, would take {over} MiB \
-                     at {p} features, over the {limit} MiB limit. Use fewer features, or lower \
-                     n_clusters and warm_rows to {most} or below."
-                )
-            });
+        }
+        if self.centers.is_none() && !self.learn {
+            no.refuse(
+                "kmeans: learn=false freezes the centers, which requires given centers. Pass \
+                 centers, or set learn=true.",
+            );
+        }
+        if let Some(centers) = &self.centers {
+            if centers.len() != self.k {
+                no.refuse(format!(
+                    "kmeans: centers must hold n_clusters ({}) centers, but it holds {}. Pass \
+                     one center per cluster.",
+                    self.k,
+                    centers.len()
+                ));
+            }
+            for (j, c) in centers.iter().enumerate() {
+                if c.len() != self.n_features {
+                    no.refuse(format!(
+                        "kmeans: centers[{j}] must hold one coordinate per feature ({}), but it \
+                         holds {}. Pass one coordinate per feature for every center.",
+                        self.n_features,
+                        c.len()
+                    ));
+                    break;
+                }
+                if c.iter().any(|v| !v.is_finite()) {
+                    no.refuse(format!(
+                        "kmeans: centers[{j}] holds a non-finite coordinate. Pass finite \
+                         coordinates in every center."
+                    ));
+                    break;
+                }
+            }
+        } else {
+            // The buffer seeds `k` centres from `warm_rows` rows; fewer rows
+            // were floored to `k` in silence, where `hmm` refuses them (review
+            // 2026-10-06, PC8).
+            if self.warm_rows < self.k {
+                no.refuse(format!(
+                    "kmeans: warm_rows must be at least n_clusters ({}) to seed that many centers, \
+                     but it is {}. Set warm_rows to {} or more.",
+                    self.k, self.warm_rows, self.k
+                ));
+            }
+            let mib = KMeans::warm_mib(self.warm_rows, self.n_features);
+            if mib > KMeans::WARM_BUDGET_MIB {
+                let row = KMeans::warm_mib(1, self.n_features);
+                let most = (KMeans::WARM_BUDGET_MIB / row).floor();
+                // Where the rows that fit are fewer than the centers, warm_rows
+                // cannot be lowered enough: only the features or the clusters can.
+                let (rows, over, p, limit) = (
+                    self.warm_rows,
+                    crate::budget::mib_over(mib, KMeans::WARM_BUDGET_MIB),
+                    self.n_features,
+                    KMeans::WARM_BUDGET_MIB,
+                );
+                no.refuse(if most >= self.k as f64 {
+                    format!(
+                        "kmeans: the first {rows} rows, which seed the centers, would take {over} \
+                         MiB at {p} features, over the {limit} MiB limit. Set warm_rows to {most} \
+                         or below, and at least n_clusters, or use fewer features."
+                    )
+                } else {
+                    format!(
+                        "kmeans: the first {rows} rows, which seed the centers, would take {over} \
+                         MiB at {p} features, over the {limit} MiB limit. Use fewer features, or \
+                         lower n_clusters and warm_rows to {most} or below."
+                    )
+                });
+            }
         }
         if self.min_weight.is_nan() || self.min_weight < 0.0 {
             no.refuse(format!(
@@ -378,8 +506,17 @@ impl PartialEq for Clean {
     }
 }
 
+/// Exponentially weighted inertia state, tracked in mean form (`m * W` is the
+/// weighted sum of squared distances to the nearest center, matching
+/// `-KMeans.score(X, sample_weight=w)`). Present only when `emit_inertia` is on.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+struct KMeansInertia {
+    mean: f64,
+    w: f64,
+}
+
 /// Exponentially weighted k-means; see the [module docs](self).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct KMeans {
     cfg: KMeansCfg,
     /// EW mean/variance per feature; its weight is `n_eff`.
@@ -445,6 +582,9 @@ pub struct KMeans {
     over: Option<u64>,
     #[serde(default, skip_serializing_if = "is_false")]
     warned: bool,
+    /// Exponentially weighted inertia tracker (`Some` iff `cfg.emit_inertia`).
+    #[serde(default)]
+    inertia: Option<KMeansInertia>,
     #[serde(skip)]
     warning: Option<u64>,
     /// A smaller warm-up cap than [`Self::WARM_BUDGET_MIB`], for a test to
@@ -453,13 +593,73 @@ pub struct KMeans {
     cap_for_test: Option<u64>,
 }
 
-fn is_false(b: &bool) -> bool {
-    !*b
-}
-
-/// Whether a count is zero: what `solve_failures` is left out of a state at.
-fn is_zero(n: &u64) -> bool {
-    *n == 0
+impl Serialize for KMeans {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let has_inertia = self.inertia.is_some();
+        let len = if has_inertia {
+            26
+        } else {
+            18 + usize::from(self.solve_failures != 0)
+                + usize::from(self.place.is_some())
+                + usize::from(self.warm_first.is_some())
+                + usize::from(self.since_update.is_some())
+                + usize::from(self.since_split.is_some())
+                + usize::from(self.over.is_some())
+                + usize::from(self.warned)
+        };
+        let mut s = serializer.serialize_struct("KMeans", len)?;
+        s.serialize_field("cfg", &self.cfg)?;
+        s.serialize_field("moments", &self.moments)?;
+        s.serialize_field("mw", &self.mw)?;
+        s.serialize_field("clusters", &self.clusters)?;
+        s.serialize_field("rows", &self.rows)?;
+        s.serialize_field("batch", &self.batch)?;
+        s.serialize_field("buf", &self.buf)?;
+        s.serialize_field("buf_w", &self.buf_w)?;
+        s.serialize_field("far", &self.far)?;
+        s.serialize_field("far_rows", &self.far_rows)?;
+        s.serialize_field("far_factor", &self.far_factor)?;
+        s.serialize_field("r2_typical", &self.r2_typical)?;
+        s.serialize_field("far_cut", &F64Tag(self.far_cut))?;
+        s.serialize_field("window_w", &self.window_w)?;
+        s.serialize_field("since", &self.since)?;
+        s.serialize_field("since_sm", &self.since_sm)?;
+        s.serialize_field("n_merges", &self.n_merges)?;
+        s.serialize_field("n_dead", &self.n_dead)?;
+        if has_inertia {
+            s.serialize_field("solve_failures", &self.solve_failures)?;
+            s.serialize_field("place", &self.place)?;
+            s.serialize_field("warm_first", &self.warm_first)?;
+            s.serialize_field("since_update", &self.since_update)?;
+            s.serialize_field("since_split", &self.since_split)?;
+            s.serialize_field("over", &self.over)?;
+            s.serialize_field("warned", &self.warned)?;
+            s.serialize_field("inertia", &self.inertia)?;
+        } else {
+            if self.solve_failures != 0 {
+                s.serialize_field("solve_failures", &self.solve_failures)?;
+            }
+            if self.place.is_some() {
+                s.serialize_field("place", &self.place)?;
+            }
+            if self.warm_first.is_some() {
+                s.serialize_field("warm_first", &self.warm_first)?;
+            }
+            if self.since_update.is_some() {
+                s.serialize_field("since_update", &self.since_update)?;
+            }
+            if self.since_split.is_some() {
+                s.serialize_field("since_split", &self.since_split)?;
+            }
+            if self.over.is_some() {
+                s.serialize_field("over", &self.over)?;
+            }
+            if self.warned {
+                s.serialize_field("warned", &self.warned)?;
+            }
+        }
+        s.end()
+    }
 }
 
 impl KMeans {
@@ -516,18 +716,35 @@ impl KMeans {
         }
         no.finish()?;
         let p = cfg.n_features;
+        let k = cfg.k;
+        let (clusters, rows, batch, far, far_rows) = match &cfg.centers {
+            Some(centers) => (
+                centers
+                    .iter()
+                    .map(|c| ClusterSummary::at(c.clone(), 0.0, 0.0))
+                    .collect(),
+                vec![0; k],
+                vec![ClusterSummary::empty(p); k],
+                vec![ClusterSummary::empty(p); k],
+                vec![0; k],
+            ),
+            None => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+        };
+        let inertia = cfg
+            .emit_inertia
+            .then_some(KMeansInertia { mean: 0.0, w: 0.0 });
         Ok(Self {
             moments: FeatureMoments::new(p),
             mw: vec![1.0; p],
-            clusters: Vec::new(),
-            rows: Vec::new(),
-            batch: Vec::new(),
+            clusters,
+            rows,
+            batch,
             clean: Clean::default(),
             factors: StepFactors::default(),
             buf: Vec::new(),
             buf_w: Vec::new(),
-            far: Vec::new(),
-            far_rows: Vec::new(),
+            far,
+            far_rows,
             far_factor: 1.0 + FAR_SIGMAS * (2.0 / p as f64).sqrt(),
             r2_typical: 0.0,
             far_cut: f64::INFINITY,
@@ -543,6 +760,7 @@ impl KMeans {
             since_split: cfg.split_merge_every.map(|_| Since::default()),
             over: None,
             warned: false,
+            inertia,
             warning: None,
             cap_for_test: None,
             cfg,
@@ -699,10 +917,11 @@ impl KMeans {
         (valid && self.seeded()).then(|| self.nearest2(x))
     }
 
-    /// The assignment and the two distances, from the search `near` made.
+    /// The assignment, the nearest and runner-up distances, and (when enabled)
+    /// distances to all `k` centers and exponentially weighted inertia.
     fn score_into(&self, x: &[f64], near: Option<Near>, n_eff: f64, pred: &mut Vec<f64>) {
         pred.clear();
-        pred.resize(3, f64::NAN);
+        pred.resize(self.n_outputs(), f64::NAN);
         if let Some((j, d2, d2_second, second_j)) = near
             && n_eff >= self.cfg.min_weight
         {
@@ -712,6 +931,17 @@ impl KMeans {
                 Some(sj) => self.reported(d2_second, sj, x),
                 None => f64::NAN,
             };
+            let mut at = 3;
+            if self.cfg.emit_distances {
+                for (cj, c) in self.clusters.iter().enumerate() {
+                    let cd2 = c.dist2(x, &self.mw);
+                    pred[at + cj] = self.reported(cd2, cj, x);
+                }
+                at += self.clusters.len();
+            }
+            if let Some(inrt) = self.inertia {
+                pred[at] = inrt.mean * inrt.w;
+            }
         }
     }
 
@@ -1407,22 +1637,54 @@ impl OnlineModel for KMeans {
         }
 
         // Decay moves no centre and the metric is refreshed only below, so
-        // this is exactly what `predict` reads.
+        // this is exactly what `predict` reads. Inertia is read before its
+        // own decay and before this row folds in.
         let near = self.near(x, valid);
         self.score_into(x, near, n_before, &mut out.pred);
 
+        // Update EW inertia in mean form after reading the out-of-sample value.
+        let seeded = self.seeded();
+        let d2_for_inertia = if self.inertia.is_some() && seeded && learn {
+            near.map(|(j, d2, _, _)| {
+                if d2.is_finite() {
+                    d2
+                } else {
+                    let d = self.reported(d2, j, x);
+                    d * d
+                }
+            })
+        } else {
+            None
+        };
+        if let Some(inrt) = self.inertia.as_mut()
+            && seeded
+        {
+            let wo = lam * inrt.w;
+            if let Some(d2_val) = d2_for_inertia {
+                let w2 = wo + weight;
+                inrt.w = w2;
+                if w2 > 0.0 && d2_val.is_finite() {
+                    inrt.mean += (weight / w2) * (d2_val - inrt.mean);
+                }
+            } else {
+                inrt.w = wo;
+            }
+        }
+
         if learn {
             self.moments.absorb(x, weight);
-            // `learn` implies a usable row, so a seeded model searched.
-            if let Some(near) = near {
-                self.learn_row(x, weight, near);
-            } else {
-                self.buf.push(x.to_vec());
-                self.buf_w.push(weight);
-                self.try_seed(now);
-                if now.is_some() {
-                    let (bytes, cap) = (self.warm_bytes(self.buf.len()), self.warm_cap());
-                    self.held_cap().note(bytes, cap);
+            if self.cfg.learn {
+                // `learn` implies a usable row, so a seeded model searched.
+                if let Some(near) = near {
+                    self.learn_row(x, weight, near);
+                } else {
+                    self.buf.push(x.to_vec());
+                    self.buf_w.push(weight);
+                    self.try_seed(now);
+                    if now.is_some() {
+                        let (bytes, cap) = (self.warm_bytes(self.buf.len()), self.warm_cap());
+                        self.held_cap().note(bytes, cap);
+                    }
                 }
             }
         }
@@ -1513,6 +1775,10 @@ impl OnlineModel for KMeans {
                     || m.place.is_some() != m.cfg.warm_clock.is_some()
                     || m.since_update.is_some() != m.cfg.update_every.is_some()
                     || m.since_split.is_some() != m.cfg.split_merge_every.is_some()
+                    || (m.cfg.centers.is_some() && m.clusters.len() != k)
+                    || m.inertia.is_some() != m.cfg.emit_inertia
+                    || m.inertia
+                        .is_some_and(|i| !i.mean.is_finite() || !i.w.is_finite() || i.w < 0.0)
                 {
                     return Err(crate::model::damaged(
                         "kmeans",
@@ -1537,9 +1803,13 @@ impl OnlineModel for KMeans {
         self.cfg.n_features
     }
 
-    /// `cluster`, `dist`, `dist_second`.
+    /// `cluster`, `dist`, `dist_second`, plus optional `dist_0..dist_{k-1}` and `inertia`.
     fn n_outputs(&self) -> usize {
-        3
+        3 + if self.cfg.emit_distances {
+            self.cfg.k
+        } else {
+            0
+        } + usize::from(self.cfg.emit_inertia)
     }
 }
 
@@ -1741,6 +2011,10 @@ mod tests {
             warm_clock: None,
             update_every: None,
             split_merge_every: None,
+            centers: None,
+            learn: true,
+            emit_distances: false,
+            emit_inertia: false,
         }
     }
 

@@ -317,11 +317,14 @@ impl HoltCfg {
                 break;
             }
         }
-        if !self.horizons.is_empty() && self.fixed() {
+        let plain_known = self.start == HoltStart::Known
+            && self.season == HoltSeason::None
+            && self.damping_half_life.is_infinite();
+        if !self.horizons.is_empty() && self.fixed() && !plain_known {
             no.refuse(
                 "holt: forecast_spans are forecasts of the plain level and trend, and a season, a \
-                 damped trend or a given or heuristic start has no such forecast to integrate. \
-                 Leave out forecast_spans, or leave out the season, the damping and the start."
+                 damped trend or a heuristic start has no such forecast to integrate. Leave out \
+                 forecast_spans, or leave out the season, the damping and the heuristic start."
                     .to_owned(),
             );
         }
@@ -579,9 +582,10 @@ impl OnlineModel for Holt {
             weight
         };
         if self.cfg.fixed() {
+            let per = 2 * self.cfg.horizons.len();
             let pred = &mut out.pred;
             pred.clear();
-            pred.resize(m, f64::NAN);
+            pred.resize(m * (1 + per), f64::NAN);
             let n_eff = self.w_sum;
             self.fixed_step(y, d_clock, weight, pred);
             out.n_eff = n_eff;
@@ -815,7 +819,7 @@ impl OnlineModel for Holt {
             return;
         }
         out.pred.clear();
-        out.pred.resize(self.cfg.n_targets, f64::NAN);
+        out.pred.resize(self.n_outputs(), f64::NAN);
         out.n_eff = self.w_sum;
         out.extra = None;
         if self.w_sum >= self.cfg.min_weight {

@@ -453,7 +453,18 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         }
     ),
     "glm": frozenset({"refit_span", "max_state_bytes"}),
-    "kmeans": frozenset({"warm_span", "update_every", "split_merge_every"}),
+    "kmeans": frozenset(
+        {
+            "warm_span",
+            "update_every",
+            "split_merge_every",
+            "centers",
+            "learn",
+            "emit_distances",
+            "emit_inertia",
+        }
+    ),
+    "ew_class": frozenset({"priors", "reg_param", "var_smoothing"}),
     "hmm": frozenset(
         {
             "warm_span",
@@ -476,7 +487,9 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "max_state_bytes",
         }
     ),
-    "corrchange": frozenset({"permute_every", "window_size", "monitor_span", "max_state_bytes"}),
+    "corrchange": frozenset(
+        {"permute_every", "window_size", "monitor_span", "max_state_bytes", "emit_n_flagged"}
+    ),
     "realized": frozenset(
         {"window_rows", "window_size", "closed", "lm_window", "lm_beta", "max_state_bytes"}
     ),

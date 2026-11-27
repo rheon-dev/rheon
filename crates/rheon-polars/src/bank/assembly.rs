@@ -71,6 +71,7 @@ enum Buf {
     Conformal,
     ConformalP,
     Health,
+    HealthKs,
     Checks,
     ResidQ,
     NEff,
@@ -150,6 +151,9 @@ impl FlatLoc {
             Source::Health(which, mi, fi) => {
                 place(Buf::Health, 0, mi * 2 * shape.k + which * shape.k + fi)
             }
+            Source::HealthKs(which, mi, fi) => {
+                place(Buf::HealthKs, 0, mi * 2 * shape.k + which * shape.k + fi)
+            }
             Source::Check(k, i) => Self {
                 k,
                 ..at(Buf::Checks, i)
@@ -203,6 +207,7 @@ impl FlatLoc {
                 (self.row * ch.n_checks + self.k) * ch.n_slots + self.col,
             ),
             Buf::Health => (&ch.health, self.col),
+            Buf::HealthKs => (&ch.health_ks, self.col),
             Buf::NEff => (&ch.n_eff, self.col),
             Buf::Settled => (&ch.settled, self.col),
             Buf::LamSelected => (&ch.lam_selected, self.col),

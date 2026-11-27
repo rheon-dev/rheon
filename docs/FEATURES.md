@@ -257,7 +257,7 @@ parameters are on its builder's reference page.
 | a target's horizon | `horizon_rows` | the rows a target looks ahead, which the diagnostics allow for | [Can its t be trusted?](DIAGNOSTICS.md#can-its-t-be-trusted) |
 | tails | `emit_tails`, `tails_half_life` | how heavy the residuals' tails are | [Measure heavy tails](how-to/measure-heavy-tails.md) · [Are its tails heavy?](DIAGNOSTICS.md#are-its-tails-heavy) |
 | influence | `emit_influence`, `emit_cooks_distance`, `emit_dfbetas`, `influence_half_life` | how far each row moved the fit (DFFITS, Cook's distance and per-coefficient DFBETAS) | [Find an influential row](how-to/find-an-influential-row.md) · [Which row moved it?](DIAGNOSTICS.md#which-row-moved-it) |
-| feature health | `emit_feature_health`, `feature_health_half_life` | whether a feature has frozen or moved | [Check feature health](how-to/check-feature-health.md) |
+| feature health | `emit_feature_health`, `feature_health_half_life`, `feature_ks_window`, `feature_ks_recent` | whether a feature has frozen, moved, or shifted in distribution | [Check feature health](how-to/check-feature-health.md) · [Are its features healthy?](DIAGNOSTICS.md#are-its-features-healthy) |
 
 ## Errors and warnings
 

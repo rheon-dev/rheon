@@ -3439,6 +3439,7 @@ struct Instance<'a> {
     o_conformal_p: &'a mut [f64],
     o_checks: &'a mut [f64],
     o_health: &'a mut [f64],
+    o_health_ks: &'a mut [f64],
     o_resid_q: &'a mut [f64],
     o_drift: &'a mut [bool],
     o_n_eff: &'a mut [f64],
@@ -4875,6 +4876,7 @@ fn run_instance(
                 if let Some(o) = inst.o_dfbetas.as_deref_mut() {
                     o[ri] = c.dfbetas(inst.check_cfg, &row, inst.n_slots);
                 }
+                c.read_health_ks(xs.len(), n_rows, ri, inst.o_health_ks);
             }
             if learn {
                 c.learn(inst.check_cfg, d_clock, &row, &sc.z, w, diag_ready);

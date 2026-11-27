@@ -633,8 +633,14 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
             warm_span,
             update_every,
             split_merge_every,
+            centers,
+            learn,
+            emit_distances,
+            emit_inertia,
         } => {
             let seed_rule = crate::stream::init_rule(init.as_deref())?;
+            let learn_on = learn.unwrap_or(centers.is_none());
+            let std_on = standardize.unwrap_or(centers.is_none());
             let cfg = KMeansCfg {
                 n_features: spec.k(),
                 k: *k,
@@ -673,11 +679,15 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                 // The dead rule runs at a split-merge check, so with none it
                 // is 0, where a value above 0 is refused (CF6).
                 dead_frac: dead_frac.unwrap_or(if *split_merge == Some(0.0) { 0.0 } else { 0.05 }),
-                standardize: standardize.unwrap_or(true),
+                standardize: std_on,
                 scale_floor: scale_floor.unwrap_or(0.1),
                 warm_clock: warm_span.as_ref().map(Span::value),
                 update_every: update_every.as_ref().map(Span::value),
                 split_merge_every: split_merge_every.as_ref().map(Span::value),
+                centers: centers.clone(),
+                learn: learn_on,
+                emit_distances: *emit_distances,
+                emit_inertia: *emit_inertia,
             };
             Ok(AnyModel::KMeans(Box::new(KMeans::new(cfg)?)))
         }
@@ -721,6 +731,9 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
             max_rows_between_snapshots,
             window_budget: _,
             closed: _,
+            priors,
+            reg_param,
+            var_smoothing,
         } => {
             let cfg = EwClassCfg {
                 n_features: spec.k(),
@@ -736,7 +749,12 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                 window_every: snapshot_every.as_ref().map(Span::value),
                 max_rows_between_snapshots: max_rows_between_snapshots.map(|r| r as usize),
             };
-            Ok(AnyModel::EwClass(Box::new(EwClass::new(cfg)?)))
+            let opts = rheon_core::EwClassOpts {
+                priors: priors.clone(),
+                reg_param: *reg_param,
+                var_smoothing: *var_smoothing,
+            };
+            Ok(AnyModel::EwClass(Box::new(EwClass::with_opts(cfg, opts)?)))
         }
         // No decay to build with: `decays()` gives one undecayed instance.
         ModelKind::SeqTest { .. } => {
