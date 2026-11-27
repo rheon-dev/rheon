@@ -1388,6 +1388,8 @@ def ewridge(
     max_rows_between_snapshots: int | None = None,
     window_budget: dict[Literal["thin", "refuse"], float] | None = None,
     constraints: tuple[Sequence[Sequence[float]], Sequence[float]] | None = None,
+    evidence: bool = False,
+    evidence_prior: float | list[float] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Exponentially weighted ridge regression on running sums.
@@ -1615,8 +1617,25 @@ def ewridge(
         intercept, when ``fit_intercept=True``, is never constrained. ``R``
         must have finite entries and full row rank. Standard errors,
         ``error_inflation`` and ``support_coef`` use the constrained
-        covariance and ``edf - q``. Refused beside ``feature_sets``.
+        covariance and ``edf - q``. Refused beside ``feature_sets`` or
+        ``evidence = True``.
         Serialized as ``{"matrix": R, "rhs": r}`` in JSON and TOML specs.
+    ``evidence``
+        Choose the ridge and noise precision automatically at solve time by
+        MacKay empirical-Bayes evidence maximization (matching
+        scikit-learn's ``BayesianRidge``). Default ``False``. When ``True``,
+        emits ``pred_std_<t>`` (per target and feature set), the predictive
+        standard deviation ``sqrt(1 / alpha + z' Sigma z)``, and refuses
+        explicit ``ridge``, ``ridge_scale = "sum"``, ``coef_prior`` and
+        ``constraints``.
+    ``evidence_prior``
+        Gamma hyperprior parameters for ``evidence = True``: either a single
+        non-negative finite value applied to all four parameters
+        ``(alpha_1, alpha_2, lambda_1, lambda_2)`` or a list of four
+        non-negative finite values ``[alpha_1, alpha_2, lambda_1, lambda_2]``.
+        Default ``1e-6`` (matching scikit-learn's ``BayesianRidge``); ``0.0``
+        gives pure maximum marginal likelihood. Refused when
+        ``evidence = False``.
 
     .. rubric:: Output
 
@@ -1628,6 +1647,10 @@ def ewridge(
     ``pred_<t>``, ``resid_<t>``
         Per target: the prediction, and ``y - pred`` where the target is not
         null.
+    ``pred_std_<t>``
+        Under ``evidence = True``, per target (and feature set): the
+        out-of-sample predictive standard deviation from the empirical-Bayes
+        posterior, null wherever ``pred_<t>`` is null.
     ``weight_sum``
         The weight the model has accumulated before the row and before the
         row's own decay.
@@ -1687,7 +1710,11 @@ def ewridge(
       ``window_budget`` without ``window_size``;
     - a ``constraints`` pair ``(R, r)`` whose ``R`` is empty, not full row
       rank, has more rows than features, has the wrong width, has non-finite
-      values, or is given beside ``feature_sets``.
+      values, or is given beside ``feature_sets`` or ``evidence = True``;
+    - ``evidence = True`` beside ``ridge``, ``ridge_scale = "sum"``,
+      ``coef_prior`` or ``constraints``; ``evidence_prior`` when
+      ``evidence = False``, or with a length other than 1 or 4, or with any
+      negative or non-finite value.
 
     .. rubric:: The update
 
@@ -2048,10 +2075,12 @@ def ewridge(
         "snapshot_every": snapshot_every,
         "max_rows_between_snapshots": max_rows_between_snapshots,
         "window_budget": window_budget,
+        "evidence": True if evidence else None,
+        "evidence_prior": evidence_prior,
     }
-    # Written only when given, as the Rust spec skips it when absent.
-    if gram_threads is None:
-        del model["gram_threads"]
+    # Written only when given, as the Rust spec skips them when absent.
+    skipped = _SKIPPED_WHEN_ABSENT["ewridge"]
+    model = {k: v for k, v in model.items() if v is not None or k not in skipped}
     if constraints is not None:
         model["constraints"] = _constraints_table(constraints)
     if ridge_scale not in ("mean", "sum"):
@@ -2334,6 +2363,7 @@ def lasso(
     max_iter: int | None = None,
     tol: float | None = None,
     target_gaps: Literal["own_rows", "pairwise"] = "own_rows",
+    positive: bool = False,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A lasso or elastic-net path on running sums, with the penalty chosen as the stream runs.
@@ -2413,6 +2443,10 @@ def lasso(
         target is null on some: ``"own_rows"``, the default, or
         ``"pairwise"``, as for :func:`ewridge`. The cross-correlations are
         centered at the target's own means either way.
+    ``positive``
+        Constrain every slope to be non-negative (the intercept stays free),
+        matching scikit-learn's ``Lasso(positive=True)`` and
+        ``ElasticNet(positive=True)``. Default ``False``.
 
     .. rubric:: Output
 
@@ -2610,7 +2644,10 @@ def lasso(
         "snapshot_every": snapshot_every,
         "max_rows_between_snapshots": max_rows_between_snapshots,
         "window_budget": window_budget,
+        "positive": True if positive else None,
     }
+    skipped = _SKIPPED_WHEN_ABSENT["lasso"]
+    model = {k: v for k, v in model.items() if v is not None or k not in skipped}
     return _common(name, model, targets=targets, features=features, **common)
 
 
@@ -3432,6 +3469,7 @@ def pa(
     coef_max: float | list[float] | None = None,
     coef_sum: float | None = None,
     standardize: bool = True,
+    average: bool = False,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Passive-aggressive regression, which moves the fit by the smallest step that
@@ -3490,6 +3528,11 @@ def pa(
         thousandths makes the cap bind on most steps. Once the scaler has
         warmed up, a change in the moments moves no prediction
         (*Standardizing* in Notes).
+    ``average``
+        Serve a decay-weighted Polyak-Ruppert running average of the live
+        iterates instead of the latest iterate (matching scikit-learn's
+        ``SGDRegressor(average=True)`` under ``half_life = inf``). Default
+        ``False``.
 
     ``min_weight`` counts the rows the target was present on, at their
     weights, decayed, where ``weight_sum`` counts every row, so rows with a
@@ -3792,7 +3835,10 @@ def pa(
         "coef_max": coef_max,
         "coef_sum": coef_sum,
         "standardize": standardize,
+        "average": True if average else None,
     }
+    skipped = _SKIPPED_WHEN_ABSENT["pa"]
+    model = {k: v for k, v in model.items() if v is not None or k not in skipped}
     return _common(name, model, targets=targets, features=features, **common)
 
 

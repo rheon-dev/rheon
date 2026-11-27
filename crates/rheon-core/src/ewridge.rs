@@ -224,15 +224,19 @@ pub struct EwRidgeCfg {
     #[serde(default)]
     pub max_rows_between_snapshots: Option<usize>,
     /// Linear equality constraints `R β = r` on the slope coefficients
-    /// (never the intercept). Refused beside `feature_sets`.
+    /// (never the intercept). Refused beside `feature_sets` and `evidence`.
     ///
-    /// **Serialization rule:** Custom `Serialize` skips `constraints` when
-    /// `None` and skips `max_rows_between_snapshots` when *both* trailing
-    /// options are `None`, so pre-existing states keep bit-identical bytes
-    /// while compact (positional-array) msgpack never shifts `constraints`
-    /// into `max_rows_between_snapshots`'s slot.
+    /// **Serialization rule:** Custom `Serialize` uses a monotonic trailing
+    /// field chain (`max_rows_between_snapshots` -> `constraints` -> `evidence`),
+    /// skipping trailing `None` fields so pre-existing states keep bit-identical
+    /// bytes while positional compact msgpack never shifts a later field into an
+    /// earlier slot.
     #[serde(default)]
     pub constraints: Option<LinearConstraints>,
+    /// Empirical-Bayes (MacKay) evidence maximization at solve time, with
+    /// posterior predictive uncertainty `pred_std`. `None` fits plain ridge.
+    #[serde(default)]
+    pub evidence: Option<EvidenceCfg>,
 }
 
 impl Serialize for EwRidgeCfg {
@@ -244,7 +248,9 @@ impl Serialize for EwRidgeCfg {
                 crate::humanfloat::f64_or_tag::serialize(&self.0, s)
             }
         }
-        let len = if self.constraints.is_some() {
+        let len = if self.evidence.is_some() {
+            22
+        } else if self.constraints.is_some() {
             21
         } else if self.max_rows_between_snapshots.is_some() {
             20
@@ -279,6 +285,9 @@ impl Serialize for EwRidgeCfg {
         }
         if len >= 21 {
             st.serialize_field("constraints", &self.constraints)?;
+        }
+        if len >= 22 {
+            st.serialize_field("evidence", &self.evidence)?;
         }
         st.end()
     }
@@ -544,11 +553,41 @@ impl EwRidgeCfg {
                 );
             }
         }
+        if let Some(ev) = self.evidence {
+            no.take(ev.validate());
+            if self.constraints.is_some() {
+                no.refuse(
+                    "ewridge: evidence=True cannot be combined with linear constraints. Leave \
+                     constraints out, or set evidence=False.",
+                );
+            }
+            if self.ridge_scale {
+                no.refuse(
+                    "ewridge: evidence=True chooses the regularization from the data, so \
+                     ridge_scale=\"sum\" cannot also be set. Leave out ridge_scale, or set \
+                     evidence=False.",
+                );
+            }
+            if self.coef_prior.is_some() {
+                no.refuse(
+                    "ewridge: evidence=True shrinks toward zero with an inferred prior precision, \
+                     so coef_prior cannot also be set. Leave out coef_prior, or set \
+                     evidence=False.",
+                );
+            }
+            if self.ridge.len() > 1 || self.ridge.iter().any(|&r| r != 0.0) {
+                no.refuse(
+                    "ewridge: evidence=True estimates the ridge penalty from the data, so an \
+                     explicit ridge cannot also be set. Leave ridge out when evidence=True, or \
+                     set evidence=False.",
+                );
+            }
+        }
         no.finish()
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct EwRidge {
     cfg: EwRidgeCfg,
     /// The Grams, and per target its weight, centred cross-moments and
@@ -627,8 +666,13 @@ pub struct EwRidge {
     /// here (`state_roundtrip_continues_identically`) use it, where a field
     /// that skips anywhere but the end shifts the fields after it -- "invalid
     /// type: boolean, expected f64" is what that looks like.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     win: Option<Windowed>,
+    /// Posterior precision and covariance kept from the last evidence solve
+    /// when `cfg.evidence.is_some()`; `None` otherwise (zero bytes serialized
+    /// when off).
+    #[serde(default)]
+    evidence: Option<evidence::EvidenceState>,
     // scratch buffers (serialized for simplicity; tiny)
     #[serde(skip)]
     zbuf: Vec<f64>,
@@ -654,6 +698,48 @@ pub struct EwRidge {
     /// each step it applies to, and the step clears it.
     #[serde(skip)]
     residual_held: ResidualHeld,
+}
+
+impl Serialize for EwRidge {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        struct SettledReady<'a>(&'a Readiness);
+        impl Serialize for SettledReady<'_> {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                serialize_settled(self.0, s)
+            }
+        }
+        let len = if self.evidence.is_some() {
+            17
+        } else if self.win.is_some() {
+            16
+        } else {
+            15
+        };
+        let mut st = serializer.serialize_struct("EwRidge", len)?;
+        st.serialize_field("cfg", &self.cfg)?;
+        st.serialize_field("acc", &self.acc)?;
+        st.serialize_field("wsig", &self.wsig)?;
+        st.serialize_field("sig2", &self.sig2)?;
+        st.serialize_field("beta", &self.beta)?;
+        st.serialize_field("slow", &self.slow)?;
+        st.serialize_field("since_solve", &self.since_solve)?;
+        st.serialize_field("rows_since_solve", &self.rows_since_solve)?;
+        st.serialize_field("weight_since_solve", &self.weight_since_solve)?;
+        st.serialize_field("solve_failures", &self.solve_failures)?;
+        st.serialize_field("ready", &SettledReady(&self.ready))?;
+        st.serialize_field("keep_factor", &self.keep_factor)?;
+        st.serialize_field("target_min_weight", &self.target_min_weight)?;
+        st.serialize_field("min_weight_output_only", &self.min_weight_output_only)?;
+        st.serialize_field("first_period_by_share", &self.first_period_by_share)?;
+        if self.evidence.is_some() || self.win.is_some() {
+            st.serialize_field("win", &self.win)?;
+        }
+        if self.evidence.is_some() {
+            st.serialize_field("evidence", &self.evidence)?;
+        }
+        st.end()
+    }
 }
 
 /// A count of solves that is not state: a load starts it at 0, and two
@@ -840,6 +926,7 @@ impl EwRidge {
             weight_since_solve: 0.0,
             solve_failures: 0,
             win,
+            evidence: cfg.evidence.map(|_| evidence::EvidenceState::default()),
             zbuf: vec![0.0; k_total],
             ready: Readiness::default(),
             keep_factor: false,
@@ -1074,6 +1161,40 @@ impl EwRidge {
         self.beta.as_deref().map(Vec::as_slice)
     }
 
+    /// Posterior noise precision `alpha` per output slot under `evidence`,
+    /// `NaN` for unsolved slots, or `None` when `evidence` is off.
+    pub fn evidence_alpha(&self) -> Option<Vec<f64>> {
+        let ev = self.evidence.as_ref()?;
+        let slots = self.cfg.n_targets * self.cfg.n_combos();
+        Some(
+            (0..slots)
+                .map(|s| {
+                    ev.slots
+                        .get(s)
+                        .and_then(Option::as_ref)
+                        .map_or(f64::NAN, |es| es.alpha)
+                })
+                .collect(),
+        )
+    }
+
+    /// Posterior weight precision `lambda` per output slot under `evidence`,
+    /// `NaN` for unsolved slots, or `None` when `evidence` is off.
+    pub fn evidence_lambda(&self) -> Option<Vec<f64>> {
+        let ev = self.evidence.as_ref()?;
+        let slots = self.cfg.n_targets * self.cfg.n_combos();
+        Some(
+            (0..slots)
+                .map(|s| {
+                    ev.slots
+                        .get(s)
+                        .and_then(Option::as_ref)
+                        .map_or(f64::NAN, |es| es.lambda)
+                })
+                .collect(),
+        )
+    }
+
     /// Gram `g` of the live accumulators. Test helper.
     #[cfg(test)]
     pub(crate) fn gram(&self, g: usize) -> &EwCov {
@@ -1269,6 +1390,10 @@ impl EwRidge {
         }
         ready.system_of.resize(m * nc, usize::MAX);
         ready.pending.resize(m * nc, None);
+        let mut ev_state = self.evidence.take();
+        if let Some(ev) = ev_state.as_mut() {
+            ev.slots.resize(m * nc, None);
+        }
         let Factors {
             kept: mut factors,
             projs: mut factor_projs,
@@ -1296,6 +1421,10 @@ impl EwRidge {
             for slot in 0..m * nc {
                 ready.clear(slot, &mut work);
             }
+            if let Some(ev) = ev_state.as_mut() {
+                ev.slots.fill(None);
+            }
+            self.evidence = ev_state;
             // Nothing pending: the next settle will not look at the spares.
             work.drop_spares();
             self.ready = ready;
@@ -1308,9 +1437,19 @@ impl EwRidge {
             return;
         }
         let mut failures = 0u64;
-        let (grams, cross) = match view.as_ref() {
-            Some(v) => (v.acc.grams.as_slice(), &v.acc.cross),
-            None => (self.acc.grams.grams.as_slice(), &self.acc.cross),
+        let (grams, cross, tm_opt, wj_slice) = match view.as_ref() {
+            Some(v) => (
+                v.acc.grams.as_slice(),
+                &v.acc.cross,
+                v.acc.tm.as_ref(),
+                v.acc.wj.as_slice(),
+            ),
+            None => (
+                self.acc.grams.grams.as_slice(),
+                &self.acc.cross,
+                Some(&self.acc.tm),
+                self.acc.wj.as_slice(),
+            ),
         };
         let n_systems = grams.len() * nc;
         ready.systems.resize(n_systems, None);
@@ -1335,13 +1474,46 @@ impl EwRidge {
             let over_moments = view.is_none() && self.slow.is_none();
             let mr = readers.len();
             // The uncentred right-hand sides, formed only where they are read.
-            if !centred {
+            if !centred && self.cfg.evidence.is_none() {
                 r.resize_with(mr, Vec::new);
                 for (rj, &j) in r.iter_mut().zip(readers.iter()) {
                     cross.raw_into(j, rj);
                 }
             }
             for (ci, &(fs_idx, r_idx)) in combos.iter().enumerate() {
+                if let Some(ev_cfg) = self.cfg.evidence {
+                    self.combo_z_indices_into(fs_idx, zidx);
+                    let solved = evidence::solve_evidence_combo(
+                        cov,
+                        cross,
+                        tm_opt,
+                        wj_slice,
+                        readers,
+                        zidx,
+                        self.cfg.fit_intercept,
+                        self.cfg.standardize,
+                        self.cfg.target_gaps == TargetGaps::Pairwise,
+                        ev_cfg,
+                        k_total,
+                    );
+                    let ev_slots = &mut ev_state.as_mut().expect("evidence state").slots;
+                    for (&j, res) in readers.iter().zip(solved) {
+                        let slot = j * nc + ci;
+                        if let Some(res) = res {
+                            beta[slot] = res.beta;
+                            ready.edf[slot] = res.edf;
+                            ready.support[slot] = res.support;
+                            ready.set_pending(slot, None, &mut work);
+                            ready.system_of[slot] = usize::MAX;
+                            ev_slots[slot] = Some(res.slot);
+                        } else {
+                            beta[slot].fill(f64::NAN);
+                            ready.clear(slot, &mut work);
+                            ev_slots[slot] = None;
+                        }
+                    }
+                    continue;
+                }
                 let ridge = self.cfg.ridge[r_idx];
                 // A Gram with no weight and no penalty has no system to
                 // solve: under `own_rows` a target not seen yet is alone in
@@ -1644,8 +1816,12 @@ impl EwRidge {
                 }
                 beta[slot].fill(f64::NAN);
                 ready.clear(slot, &mut work);
+                if let Some(ev) = ev_state.as_mut() {
+                    ev.slots[slot] = None;
+                }
             }
         }
+        self.evidence = ev_state;
         if !keep_factor {
             ready.systems.clear();
             factors.clear();
@@ -2190,6 +2366,19 @@ impl EwRidge {
         let systems = r.systems.iter().flatten().all(|s| {
             s.z.iter().all(|&zi| zi < k) && s.s.len() == s.z.len() && s.mean.len() == s.z.len()
         });
+        let evidence_ok = match (&self.cfg.evidence, &self.evidence) {
+            (None, None) => true,
+            (Some(_), Some(ev)) => match &self.beta {
+                None => ev.slots.is_empty(),
+                Some(_) => {
+                    ev.slots.len() == slots && ev.slots.iter().flatten().all(|es| es.has_shape(k))
+                }
+            },
+            _ => false,
+        };
+        if !evidence_ok {
+            return false;
+        }
         match &self.beta {
             None => {
                 r.edf.is_empty()
@@ -3127,7 +3316,26 @@ impl EwRidge {
             }
         }
         out.n_eff = n_eff;
-        out.extra = None;
+        if let Some(ev) = &self.evidence {
+            let mut pred_std = vec![f64::NAN; m * nc];
+            if n_eff >= self.cfg.min_weight && self.beta.is_some() {
+                for (j, &w_j) in wj.iter().enumerate().take(m) {
+                    if w_j > 0.0 {
+                        for c in 0..nc {
+                            let slot = j * nc + c;
+                            if pred[slot].is_finite()
+                                && let Some(es) = ev.slots.get(slot).and_then(Option::as_ref)
+                            {
+                                pred_std[slot] = es.pred_std(|zi| self.z_at(x, zi));
+                            }
+                        }
+                    }
+                }
+            }
+            out.extra = Some(crate::Extra::EwRidge { pred_std });
+        } else {
+            out.extra = None;
+        }
     }
 }
 
@@ -3259,6 +3467,26 @@ impl OnlineModel for EwRidge {
             return true;
         }
         let (sizes, means) = self.error_sizes();
+        if let Some(ev) = &self.evidence {
+            for (j, size) in sizes.iter().enumerate().take(m) {
+                let Some(n) = *size else {
+                    continue;
+                };
+                if n <= 0.0 {
+                    continue;
+                }
+                for c in 0..nc {
+                    let slot = j * nc + c;
+                    let Some(es) = ev.slots.get(slot).and_then(Option::as_ref) else {
+                        continue;
+                    };
+                    let q = es.quad_form(|zi| self.z_at(x, zi));
+                    let h = es.alpha * q + if es.centred { 1.0 / n } else { 0.0 };
+                    out[slot] = (1.0 + h).sqrt();
+                }
+            }
+            return true;
+        }
         let mut v = Vec::new();
         for j in 0..m {
             let Some(n) = sizes[j] else {
@@ -3420,6 +3648,38 @@ impl OnlineModel for EwRidge {
     /// systems are kept ([`EwRidge::set_keep_factor`]), and before the first
     /// solve.
     fn coef_variance(&self) -> Option<crate::CoefVariance> {
+        if let Some(ev) = &self.evidence {
+            self.beta.as_ref()?;
+            let (m, nc, k) = (self.cfg.n_targets, self.cfg.n_combos(), self.cfg.k_total());
+            let (sizes, _) = self.error_sizes();
+            let mut out = vec![vec![f64::NAN; k]; m * nc];
+            for (j, size) in sizes.iter().enumerate().take(m) {
+                let Some(n) = *size else {
+                    continue;
+                };
+                if n.is_nan() || n <= 0.0 {
+                    continue;
+                }
+                for c in 0..nc {
+                    let slot = j * nc + c;
+                    let Some(es) = ev.slots.get(slot).and_then(Option::as_ref) else {
+                        continue;
+                    };
+                    let kk = es.z.len();
+                    let v = &mut out[slot];
+                    for (a, (&zi, &s)) in es.z.iter().zip(&es.s).enumerate() {
+                        v[zi] = es.sigma.get(kk, a, a) / (s * s);
+                    }
+                    if es.centred {
+                        let u0: Vec<f64> =
+                            es.mean.iter().zip(&es.s).map(|(&mu, &s)| mu / s).collect();
+                        let q = es.quad_vec(&u0);
+                        v[0] = 1.0 / (es.alpha * n) + q;
+                    }
+                }
+            }
+            return Some(crate::CoefVariance::Absolute(out));
+        }
         if !self.keep_factor {
             return None;
         }
@@ -3814,6 +4074,9 @@ impl OnlineModel for EwRidge {
         self.cfg.n_targets * self.cfg.n_combos()
     }
 }
+
+mod evidence;
+pub use evidence::EvidenceCfg;
 
 mod unread;
 

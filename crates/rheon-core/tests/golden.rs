@@ -150,6 +150,7 @@ fn ewridge_cfg(standardize: bool, ridge: f64) -> EwRidgeCfg {
         window_every: None,
         max_rows_between_snapshots: None,
         constraints: None,
+        evidence: None,
     }
 }
 
@@ -177,6 +178,7 @@ fn robust_cfg(loss: RobustLoss, standardize: bool) -> RobustCfg {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
+        huber_norm: rheon_core::HuberNorm::Huber,
     }
 }
 
@@ -374,6 +376,7 @@ fn lasso_golden() {
         max_iter: 200,
         tol: 1e-12,
         target_gaps: rheon_core::TargetGaps::OwnRows,
+        positive: false,
     })
     .unwrap();
     check("lasso", &signature(&mut m, 1), GOLDEN_LASSO);
@@ -457,6 +460,9 @@ fn sgd_golden() {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     })
     .unwrap();
     check("sgd", &signature(&mut m, 0), GOLDEN_SGD);
@@ -487,6 +493,9 @@ fn sgd_squared_golden() {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     })
     .unwrap();
     check("sgd_squared", &signature(&mut m, 0), GOLDEN_SGD_SQUARED);
@@ -505,6 +514,7 @@ fn pa_golden() {
         min_weight: 3.0,
         constraint: None,
         standardize: false,
+        average: false,
     })
     .unwrap();
     check("pa", &signature(&mut m, 0), GOLDEN_PA);
@@ -601,6 +611,9 @@ fn sgd_simplex_golden() {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     })
     .unwrap();
     check("sgd_simplex", &signature(&mut m, 0), GOLDEN_SGD_SIMPLEX);
@@ -625,6 +638,7 @@ fn pa_box_golden() {
             sum: Some(0.5),
         }),
         standardize: false,
+        average: false,
     })
     .unwrap();
     check("pa_box", &signature(&mut m, 0), GOLDEN_PA_BOX);
@@ -2521,6 +2535,7 @@ fn lasso_windowed_golden() {
         max_iter: 200,
         tol: 1e-12,
         target_gaps: rheon_core::TargetGaps::OwnRows,
+        positive: false,
     };
     let mut m = Lasso::new(LassoCfg {
         window: Some(30.0),

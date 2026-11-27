@@ -1089,6 +1089,7 @@ ENUM_PROBES: list[
     ("ftrl.loss", "ftrl", {}, "model.loss", "word"),
     ("hmm.covariance_type", "hmm", {}, "model.covariance_type", "word"),
     ("hmm.init", "hmm", {}, "model.init", "word"),
+    ("huber.huber_norm", "huber", {}, "model.huber_norm", "word"),
     ("huber.huber_scale", "huber", {}, "model.huber_scale", "word"),
     ("huber.ridge_scale", "huber", {}, "model.ridge_scale", "word"),
     ("kalman.covariance_form", "kalman", {}, "model.covariance_form", "word"),
@@ -1160,7 +1161,15 @@ ENUM_PROBES: list[
     ("sgd.huber_scale", "sgd", {"loss": "huber"}, "model.huber_scale", "word"),
     # `"quantile"` needs its level.
     ("sgd.loss", "sgd", {}, "model.loss", "word", {"quantile": {"quantile": 0.5}}),
-    ("sgd.schedule", "sgd", {}, "model.schedule", "word"),
+    # `"optimal"` derives its rate from `l1 + l2` and refuses an explicit `learning_rate`.
+    (
+        "sgd.schedule",
+        "sgd",
+        {},
+        "model.schedule",
+        "word",
+        {"optimal": {"l2": 0.01, "learning_rate": None}},
+    ),
     ("bandit.policy", "bandit", {}, "model.policy", "word"),
 ]
 

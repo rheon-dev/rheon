@@ -322,6 +322,15 @@ CASES: list[Case] = [
         ),
     ),
     Case(
+        "ewridge_evidence",
+        "ewridge",
+        full(
+            evidence=True,
+            evidence_prior=[1e-6, 1e-6, 1e-6, 1e-6],
+            solve_every=3.0,
+        ),
+    ),
+    Case(
         "quantile",
         "quantile",
         full(
@@ -449,6 +458,11 @@ CASES: list[Case] = [
     ),
     Case("lasso_window", "lasso", full(**CLOSE, penalties=[0.1, 0.0], **WINDOW)),
     Case(
+        "lasso_positive",
+        "lasso",
+        full(penalties=[0.2, 0.05], positive=True, solve_every=3.0),
+    ),
+    Case(
         "holt",
         "holt",
         {
@@ -520,6 +534,18 @@ CASES: list[Case] = [
     Case("sgd_span", "sgd", full(loss="huber", huber_refit_span=40.0, max_state_bytes=200_000)),
     Case("sgd_poisson", "sgd", {**full(loss="poisson", learning_rate=0.01), "targets": ["hit"]}),
     Case(
+        "sgd_variants",
+        "sgd",
+        full(
+            loss="squared",
+            schedule="optimal",
+            l1=0.005,
+            l2=0.05,
+            average=True,
+            invariant=True,
+        ),
+    ),
+    Case(
         "pa",
         "pa",
         full(
@@ -534,6 +560,7 @@ CASES: list[Case] = [
         ),
     ),
     Case("pa2", "pa", full2(mode="pa", max_state_bytes=512 * 1024)),
+    Case("pa_average", "pa", full(mode="pa1", c=0.5, eps=0.1, average=True)),
     Case(
         "glm",
         "glm",
@@ -1940,6 +1967,11 @@ CASES += [
     Case("huber_span", "huber", full(huber_refit_span=40.0, max_state_bytes=200_000)),
     # A budget below one group's buffer: every refit is given up.
     Case("huber4", "huber", full2(huber_refit_rows=50, refit_budget=0.001)),
+    Case(
+        "huber_tukey",
+        "huber",
+        full(huber_norm="tukey", huber_delta=4.685, solve_every=3.0),
+    ),
     Case(
         "sgd_huber",
         "sgd",

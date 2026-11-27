@@ -35,6 +35,7 @@ fn base(tau: f64, decay: Decay, refit_rows: u32) -> RobustCfg {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
+        huber_norm: crate::HuberNorm::Huber,
     }
 }
 

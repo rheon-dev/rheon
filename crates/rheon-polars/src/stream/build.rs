@@ -199,6 +199,8 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
             window_budget: _,
             closed: _,
             constraints,
+            evidence,
+            evidence_prior,
         } => {
             let fs = feature_sets
                 .as_ref()
@@ -214,15 +216,39 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                         .collect()
                 })
                 .unwrap_or_default();
+            let evidence_cfg = if *evidence {
+                Some(match evidence_prior {
+                    None => rheon_core::EvidenceCfg::default(),
+                    Some(ep) => {
+                        let vals = ep.to_vec();
+                        if vals.len() == 1 {
+                            rheon_core::EvidenceCfg::uniform(vals[0])
+                        } else {
+                            rheon_core::EvidenceCfg {
+                                alpha_1: vals[0],
+                                alpha_2: vals[1],
+                                lambda_1: vals[2],
+                                lambda_2: vals[3],
+                            }
+                        }
+                    }
+                })
+            } else {
+                None
+            };
             let cfg = EwRidgeCfg {
                 n_features: spec.k(),
                 n_targets: spec.m(),
                 fit_intercept: spec.fit_intercept,
                 decay,
-                ridge: ridge
-                    .as_ref()
-                    .map(FloatOrList::to_vec)
-                    .unwrap_or_else(|| vec![1e-6]),
+                ridge: if *evidence {
+                    vec![0.0]
+                } else {
+                    ridge
+                        .as_ref()
+                        .map(FloatOrList::to_vec)
+                        .unwrap_or_else(|| vec![1e-6])
+                },
                 feature_sets: fs,
                 standardize: *standardize,
                 ridge_scale: *ridge_scale == crate::spec::RidgeScale::Sum,
@@ -250,6 +276,7 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                 window_every: snapshot_every.as_ref().map(Span::value),
                 max_rows_between_snapshots: max_rows_between_snapshots.map(|r| r as usize),
                 constraints: constraints.clone(),
+                evidence: evidence_cfg,
             };
             let mut m = EwRidge::new(cfg)?;
             // The per-row leverage needs the factors kept (§2.1), and so do
@@ -297,6 +324,7 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
             max_rows_between_snapshots,
             window_budget: _,
             closed: _,
+            positive,
         } => {
             let cfg = LassoCfg {
                 n_features: spec.k(),
@@ -328,6 +356,7 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                 max_iter: max_iter.unwrap_or(100),
                 tol: tol.unwrap_or(1e-10),
                 target_gaps: *target_gaps,
+                positive: *positive,
             };
             Ok(AnyModel::Lasso(Box::new(Lasso::new(cfg)?)))
         }
@@ -501,6 +530,7 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
             coef_max,
             coef_sum,
             standardize,
+            average,
         } => {
             let mode = match mode.as_deref().unwrap_or("pa1") {
                 "pa" => PaMode::Pa,
@@ -527,6 +557,7 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                 min_weight: spec.min_periods_or_default(),
                 constraint: constraint(spec.k(), coef_min, coef_max, *coef_sum),
                 standardize: *standardize,
+                average: *average,
             };
             Ok(AnyModel::Pa(Box::new(Pa::new(cfg)?)))
         }

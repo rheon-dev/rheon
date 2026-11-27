@@ -292,8 +292,10 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "max_state_bytes",
         }
     ),
-    "ewridge": frozenset({"gram_threads", "constraints"}),
+    "ewridge": frozenset({"gram_threads", "constraints", "evidence", "evidence_prior"}),
     "rls": frozenset({"constraints"}),
+    "lasso": frozenset({"positive"}),
+    "pa": frozenset({"average"}),
     "ar": frozenset({"ridge", "max_state_bytes", "select"}),
     "vector_ar": frozenset(
         {
@@ -378,6 +380,7 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "huber_refit_span",
             "max_state_bytes",
             "refit_budget",
+            "huber_norm",
         }
     ),
     "sgd": frozenset(
@@ -388,6 +391,9 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "huber_refit_span",
             "max_state_bytes",
             "refit_budget",
+            "l1",
+            "average",
+            "invariant",
         }
     ),
     "quantile": frozenset(

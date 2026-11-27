@@ -573,6 +573,8 @@ S_j' = (λW_j·S_j + w·z zᵀ) / W_j'   η_j' = (λW_j·η_j + w·z·y_j) / W_j
 solve, ridge_scale="mean":  (S_j + ridge·D) β_j = η_j + ridge·D·β₀      D = I with a 0 at the intercept
 solve, ridge_scale="sum":   (W_j·S_j + p·ridge·I) β_j = W_j·η_j + p·ridge·β₀
                             p the product of every decay so far, β₀ = coef_prior (0 by default)
+solve, evidence=True:       maximize log marginal likelihood over (α, λ) on S_j's eigenvalues;
+                            pred_std = sqrt(1/α + zᵀ Σ z)
 ```
 
 #### Example
@@ -651,6 +653,11 @@ bank:
   offline.
 
 #### Notes
+
+**With decay off and `evidence=True`, `ewridge` matches scikit-learn's
+`BayesianRidge` on the same rows**, both its fitted coefficients and its
+predictive standard deviation `pred_std_<t>`, under the default `1e-6`
+Gamma hyperpriors and under `evidence_prior=0.0`.
 
 **With decay off and `ridge=0`, `ewridge` fits ordinary least squares over
 every row seen, in any row order.** Its coefficients match
@@ -821,7 +828,9 @@ stop after a sweep that moves no b_i by tol·max(s_y, maxᵢ |c_i|) or more, or 
 ```
 
 Without an intercept, the sums are raw moments, each feature is scaled by
-its root mean square, and no intercept is recovered.
+its root mean square, and no intercept is recovered. Under `positive=True`,
+each slope's coordinate update clamps at zero (`max(ρ_i − l·l1_ratio, 0)`),
+leaving the intercept unconstrained.
 
 #### Example
 
@@ -1266,8 +1275,12 @@ the weight behind `S_j` and `η_j`, as in `ewridge`'s update, and `p` the
 product of every decay the stream has applied.
 
 The weights are per target, so `huber` keeps one set of sums per target,
-where `ewridge` shares one set across targets. `weight_sum`, and each
-target's weight that `min_weight` reads, count the raw weights `w`. When a
+where `ewridge` shares one set across targets. `huber_norm` switches the
+weight function from Huber's monotone cut (`"huber"`) to one of four
+redescending norms matching `statsmodels.robust.norms`: `"tukey"`
+(biweight, default `huber_delta=4.685`), `"andrews"` (wave, `1.339`),
+`"hampel"` (three-part, `2.0`), or `"ramsay"` (exponential, `0.3`).
+`weight_sum`, and each target's weight that `min_weight` reads, count the raw weights `w`. When a
 target's count of learned rows reaches `huber_refit_rows`, its first rows
 are refit once, to convergence, and the stream goes on online from that
 fit. The docstring's Notes give the refit, under *The refit of the first
@@ -1672,7 +1685,15 @@ g₀ = d·w         gᵢ = d·zᵢ·w + l2·βᵢ     each clipped to ±clip_gra
 βᵢ -= lrᵢ·gᵢ     lrᵢ = learning_rate                           schedule="constant"
                      = learning_rate/(1 + λ·W)^power           schedule="inv_scaling"
                      = learning_rate/(√Gᵢ + 1e-8·u)            schedule="adagrad"
+                     = 1 / (α·(t₀ + t))                        schedule="optimal" (α = l1 + l2 > 0)
 ```
+
+With `l1 > 0`, `sgd` applies Tsuruoka et al.'s cumulative L1 penalty beside
+`l2` (matching scikit-learn's `SGDRegressor(penalty="l1"/"elasticnet")`).
+With `invariant=True` (squared loss, non-AdaGrad schedules), each row uses
+Karampatziakis and Langford's importance-weight-invariant step
+`−expm1(−lr·w·‖z‖²) / ‖z‖²`. With `average=True`, the model serves a
+decay-weighted Polyak-Ruppert running average of the live iterates.
 
 `λ·W` is the weight before the row, decayed to it, and `Gᵢ` decays by `λ`
 too. So a row of weight 0 in between leaves the next row's rate where it
@@ -1900,7 +1921,9 @@ step  = min(w, 1)·τ·sign(y − p)
 
 The docstring's Notes, under *The margin's scale*, *c and the target's
 units* and *The margin*, give why the margin is drawn in `s_y`, what `c`
-is in, and how wide the margin is in units of the noise.
+is in, and how wide the margin is in units of the noise. With
+`average=True`, `pa` serves a decay-weighted Polyak-Ruppert running average
+of the live iterates.
 
 #### Example
 

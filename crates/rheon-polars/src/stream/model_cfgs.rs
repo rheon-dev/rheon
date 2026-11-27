@@ -1655,9 +1655,23 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         huber_refit_span,
         max_state_bytes,
         refit_budget: _,
+        huber_norm,
     } = &spec.model
     else {
         return Err(not_a(spec, "huber_model", "huber"));
+    };
+    let norm = match huber_norm.as_deref() {
+        None => rheon_core::HuberNorm::Huber,
+        Some(w) => rheon_core::HuberNorm::from_word(w).ok_or_else(|| {
+            format!(
+                "huber: {}",
+                crate::words_refusal(
+                    "huber_norm",
+                    &["huber", "tukey", "andrews", "hampel", "ramsay"],
+                    w
+                )
+            )
+        })?,
     };
     one_refit(
         spec,
@@ -1671,10 +1685,10 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         n_targets: spec.m(),
         fit_intercept: spec.fit_intercept,
         decay,
-        // The 95%-efficiency constant (Huber 1981; statsmodels'
-        // `HuberT`, scikit-learn's 1.35): task 195, U3.
+        // Each norm's standard 95%-efficiency default constant (Huber 1.345,
+        // Tukey 4.685, Andrews 1.339, Hampel 2.0, Ramsay 0.3).
         loss: RobustLoss::Huber {
-            delta: huber_delta.map_or(1.345, |n| n.0),
+            delta: huber_delta.map_or(norm.default_delta(), |n| n.0),
         },
         ridge: ridge.unwrap_or(1e-6),
         standardize: *standardize,
@@ -1713,6 +1727,7 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         min_weight_holds_learning: false,
         refit_clock: huber_refit_span.as_ref().map(Span::value),
         max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
+        huber_norm: norm,
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).
@@ -1815,6 +1830,7 @@ pub fn quantile_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         min_weight_holds_learning: false,
         refit_clock: quantile_refit_span.as_ref().map(Span::value),
         max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
+        huber_norm: rheon_core::HuberNorm::Huber,
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).
@@ -1845,6 +1861,9 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         coef_max,
         strict_binary,
         coef_sum,
+        l1,
+        average,
+        invariant,
     } = &spec.model
     else {
         return Err(not_a(spec, "sgd_model", "sgd"));
@@ -1905,9 +1924,14 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             power: power.unwrap_or(0.5),
         }),
         "adagrad" => Ok(LearningRate::AdaGrad),
+        "optimal" => Ok(LearningRate::Optimal),
         other => Err(format!(
             "sgd: {}",
-            crate::words_refusal("schedule", &["constant", "inv_scaling", "adagrad"], other)
+            crate::words_refusal(
+                "schedule",
+                &["constant", "inv_scaling", "adagrad", "optimal"],
+                other
+            )
         )),
     };
     let loss = no.value(loss);
@@ -1972,6 +1996,9 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         } else {
             None
         },
+        l1: l1.unwrap_or(0.0),
+        average: *average,
+        invariant: *invariant,
     };
     Ok(AnyModel::Sgd(Box::new(Sgd::new(cfg)?)))
 }

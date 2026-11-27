@@ -7946,6 +7946,141 @@ ideal = 0.0
 n = 50
 floor = 1e-10
 
+[group."regression_variants.averaged_sgd_pa"]
+tests = [
+    "tests/test_regression_variants.py::test_averaged_sgd_and_pa_match_sklearn_50_seeds",
+]
+oracles = { "scikit-learn" = "1.9.1" }
+dataset = ""
+
+[group."regression_variants.ewridge_evidence"]
+tests = [
+    "tests/test_regression_variants.py::test_ewridge_evidence_matches_sklearn_bayesian_ridge_50_seeds",
+]
+oracles = { "scikit-learn" = "1.9.1" }
+dataset = ""
+
+[group."regression_variants.huber_redescending"]
+tests = [
+    "tests/test_regression_variants.py::test_huber_redescending_matches_statsmodels_rlm_50_seeds",
+]
+oracles = { "statsmodels" = "0.15.0" }
+dataset = ""
+
+[group."regression_variants.lasso_positive"]
+tests = [
+    "tests/test_regression_variants.py::test_lasso_positive_matches_sklearn_50_seeds",
+]
+oracles = { "scikit-learn" = "1.9.1" }
+dataset = ""
+
+[group."regression_variants.sgd_variants"]
+tests = [
+    "tests/test_regression_variants.py::test_sgd_elastic_optimal_invariant_50_seeds",
+]
+oracles = { "scikit-learn" = "1.9.1" }
+dataset = ""
+
+[case."regression_variants.averaged_sgd_pa.pa1_avg_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
+[case."regression_variants.averaged_sgd_pa.pa2_avg_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
+[case."regression_variants.averaged_sgd_pa.sgd_avg_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
+[case."regression_variants.ewridge_evidence.decayed_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."regression_variants.ewridge_evidence.decayed_pred_std_err"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."regression_variants.ewridge_evidence.default_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."regression_variants.ewridge_evidence.default_pred_std_err"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."regression_variants.ewridge_evidence.ml2_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."regression_variants.ewridge_evidence.ml2_pred_std_err"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."regression_variants.huber_redescending.andrews_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-07
+
+[case."regression_variants.huber_redescending.hampel_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-07
+
+[case."regression_variants.huber_redescending.ramsay_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-07
+
+[case."regression_variants.huber_redescending.tukey_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-07
+
+[case."regression_variants.lasso_positive.enet_pos_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
+[case."regression_variants.lasso_positive.lasso_small_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
+[case."regression_variants.lasso_positive.lasso_split_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
+[case."regression_variants.sgd_variants.elastic_optimal_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."regression_variants.sgd_variants.invariant_exact_err"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
+[case."regression_variants.sgd_variants.l1_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
+[case."regression_variants.sgd_variants.optimal_avg_coef_err"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
 # --- raises
 
 [[raised]]

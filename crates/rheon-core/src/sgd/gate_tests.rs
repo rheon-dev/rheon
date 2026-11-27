@@ -40,6 +40,9 @@ fn cfg(scale: crate::HuberScale, refit_rows: u32, holds: bool) -> SgdCfg {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     }
 }
 

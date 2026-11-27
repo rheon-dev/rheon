@@ -56,6 +56,9 @@ fn sgd(loss: SgdLoss, fit_intercept: bool, constraint: Option<Constraint>) -> Sg
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     }
 }
 
@@ -71,6 +74,7 @@ fn pa(mode: PaMode, fit_intercept: bool, constraint: Option<Constraint>) -> PaCf
         min_weight: 3.0,
         constraint,
         standardize: true,
+        average: false,
     }
 }
 

@@ -43,6 +43,7 @@ fn cfg(loss: RobustLoss, scale: HuberScale, refit_rows: u32) -> RobustCfg {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        huber_norm: crate::HuberNorm::Huber,
     }
 }
 

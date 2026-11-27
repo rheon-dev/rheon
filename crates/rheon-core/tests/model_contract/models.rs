@@ -25,6 +25,7 @@ fn ewridge_cfg() -> EwRidgeCfg {
         window_every: None,
         max_rows_between_snapshots: None,
         constraints: None,
+        evidence: None,
     }
 }
 
@@ -76,6 +77,7 @@ fn lasso_cfg() -> LassoCfg {
         max_iter: 100,
         tol: 1e-10,
         target_gaps: rheon_core::TargetGaps::OwnRows,
+        positive: false,
     }
 }
 
@@ -223,6 +225,7 @@ fn robust_cfg(loss: RobustLoss) -> RobustCfg {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
+        huber_norm: rheon_core::HuberNorm::Huber,
     }
 }
 
@@ -306,6 +309,9 @@ fn sgd_cfg() -> SgdCfg {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     }
 }
 
@@ -346,6 +352,7 @@ fn pa_cfg() -> PaCfg {
         min_weight: 3.0,
         constraint: None,
         standardize: false,
+        average: false,
     }
 }
 

@@ -106,6 +106,7 @@ fn cfg(k: usize, m: usize, loss: RobustLoss) -> RobustCfg {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        huber_norm: crate::HuberNorm::Huber,
     }
 }
 
@@ -499,6 +500,7 @@ fn huber_resists_outliers_that_break_least_squares() {
         window_every: None,
         max_rows_between_snapshots: None,
         constraints: None,
+        evidence: None,
     })
     .unwrap();
     let mut s = 77u64;

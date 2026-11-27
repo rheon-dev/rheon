@@ -50,7 +50,7 @@ pub(super) const SPLIT_MIN_K: usize = 40;
 /// says whether every entry of `c` is finite, `None` until a sweep over
 /// this `c` first needed to know, when it is read ([`all_finite`]) and kept.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn cd_sweep_split(
+pub(super) fn cd_sweep_split<const POSITIVE: bool>(
     c: &[f64],
     k: usize,
     d: &[f64],
@@ -105,7 +105,7 @@ pub(super) fn cd_sweep_split(
             let newb = if s[i] <= 0.0 {
                 0.0
             } else {
-                super::soft_over(acc[i], l1, c[i * k + i] + l2)
+                super::soft_over::<POSITIVE>(acc[i], l1, c[i * k + i] + l2)
             };
             if s[i] > 0.0 {
                 max_delta = max_delta.max((newb - b[i]).abs());
@@ -195,7 +195,7 @@ pub(super) fn cd_sweep_split_plain(
         let newb = if s[i] <= 0.0 {
             0.0
         } else {
-            super::soft_over(a[i], l1, c[i * k + i] + l2)
+            super::soft_over::<false>(a[i], l1, c[i * k + i] + l2)
         };
         if s[i] > 0.0 {
             delta = delta.max((newb - b[i]).abs());
@@ -254,8 +254,17 @@ mod tests {
                     let mut acc = Vec::new();
                     let mut finite = known;
                     for sweep in 0..4 {
-                        let got =
-                            cd_sweep_split(&c, k, &d, &s, l1, l2, &mut b, &mut acc, &mut finite);
+                        let got = cd_sweep_split::<false>(
+                            &c,
+                            k,
+                            &d,
+                            &s,
+                            l1,
+                            l2,
+                            &mut b,
+                            &mut acc,
+                            &mut finite,
+                        );
                         let exp = plain(&c, k, &d, &s, (l1, l2), &mut want);
                         assert_eq!(got.to_bits(), exp.to_bits(), "k={k} sweep {sweep}");
                         for (x, y) in b.iter().zip(&want) {
@@ -282,18 +291,18 @@ mod tests {
         let (mut b, mut want) = (b0.clone(), b0);
         let (mut acc, mut finite) = (Vec::new(), None);
         // No penalty: no coefficient thresholds to zero.
-        let got = cd_sweep_split(&c, k, &d, &s, 0.0, 0.0, &mut b, &mut acc, &mut finite);
+        let got = cd_sweep_split::<false>(&c, k, &d, &s, 0.0, 0.0, &mut b, &mut acc, &mut finite);
         let exp = plain(&c, k, &d, &s, (0.0, 0.0), &mut want);
         assert_eq!(got.to_bits(), exp.to_bits());
         assert!(b.iter().all(|v| *v != 0.0), "the fit is dense");
         assert_eq!(finite, None, "read with no zero coefficient");
         // A penalty past every |rho|: the first coefficient set is zero.
-        cd_sweep_split(&c, k, &d, &s, 1e9, 0.0, &mut b, &mut acc, &mut finite);
+        cd_sweep_split::<false>(&c, k, &d, &s, 1e9, 0.0, &mut b, &mut acc, &mut finite);
         assert_eq!(finite, Some(true));
         // Kept for the next sweep: a `c` with a NaN is not read again.
         let mut nan = c.clone();
         nan[3] = f64::NAN;
-        cd_sweep_split(&nan, k, &d, &s, 1e9, 0.0, &mut b, &mut acc, &mut finite);
+        cd_sweep_split::<false>(&nan, k, &d, &s, 1e9, 0.0, &mut b, &mut acc, &mut finite);
         assert_eq!(finite, Some(true));
     }
 
@@ -331,7 +340,7 @@ mod tests {
         for known in [Some(false), None] {
             let (mut b, mut want) = (b0.clone(), b0.clone());
             let (mut acc, mut finite) = (Vec::new(), known);
-            cd_sweep_split(&c, k, &d, &s, 0.01, 0.0, &mut b, &mut acc, &mut finite);
+            cd_sweep_split::<false>(&c, k, &d, &s, 0.01, 0.0, &mut b, &mut acc, &mut finite);
             assert_eq!(finite, Some(false));
             plain(&c, k, &d, &s, (0.01, 0.0), &mut want);
             for (x, y) in b.iter().zip(&want) {
@@ -382,8 +391,17 @@ mod tests {
                 let (mut b, mut want) = (start.clone(), start.clone());
                 let mut acc = Vec::new();
                 for sweep in 0..12 {
-                    let got =
-                        cd_sweep_split(&c, k, &d, &s, l1, l2, &mut b, &mut acc, &mut Some(true));
+                    let got = cd_sweep_split::<false>(
+                        &c,
+                        k,
+                        &d,
+                        &s,
+                        l1,
+                        l2,
+                        &mut b,
+                        &mut acc,
+                        &mut Some(true),
+                    );
                     let exp = plain(&c, k, &d, &s, (l1, l2), &mut want);
                     assert_eq!(got.to_bits(), exp.to_bits(), "k={k} sweep {sweep}");
                     for (x, y) in b.iter().zip(&want) {
@@ -403,8 +421,18 @@ mod tests {
             let (mut b, mut chained) = (b0.clone(), b0);
             let (mut acc, mut acc2) = (Vec::new(), Vec::new());
             for _ in 0..3 {
-                cd_sweep_split(&c, k, &d, &s, 0.02, 0.0, &mut b, &mut acc, &mut Some(true));
-                super::super::cd_sweep(&c, k, &d, &s, 0.02, 0.0, &mut chained, &mut acc2);
+                cd_sweep_split::<false>(
+                    &c,
+                    k,
+                    &d,
+                    &s,
+                    0.02,
+                    0.0,
+                    &mut b,
+                    &mut acc,
+                    &mut Some(true),
+                );
+                super::super::cd_sweep::<false>(&c, k, &d, &s, 0.02, 0.0, &mut chained, &mut acc2);
                 for (x, y) in b.iter().zip(&chained) {
                     assert!((x - y).abs() <= 1e-12 * (1.0 + y.abs()), "{x} vs {y}");
                 }

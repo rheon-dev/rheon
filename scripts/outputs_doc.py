@@ -100,6 +100,10 @@ MEANING: dict[str, str] = {
         "with no clock, the row's index in its group"
     ),
     "pred_<t>": "the prediction for `<t>`, computed from the state **before** this row",
+    "pred_std_<t>": (
+        "the predictive standard deviation for `<t>` from empirical-Bayes evidence maximization, "
+        "computed from the state **before** this row"
+    ),
     "pred_<f>": "the predictive mean for feature `<f>` under the fitted model",
     "resid_<t>": "`y - pred` for `<t>`",
     "weight_sum": (
@@ -334,6 +338,7 @@ ALSO_NULL: dict[str, str] = {
     "smoothed_se_coef": "where `smoothed_coef` is",
     "smoothed_for_<t>": "on every row that completes no lag of `<t>`",
     "pred_<t>": WITHHELD,
+    "pred_std_<t>": "where `pred_<t>` is",
     "pred_<f>": WITHHELD,
     "resid_<t>": (
         "while withheld; where the target is null; and on every row of a target that is a "
@@ -567,6 +572,7 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
 #: The fields a model's own switch adds, shown under its table: the model, the
 #: switch, and the spec keywords that turn it on.
 SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
+    "ewridge": ("evidence=True", {"evidence": True}),
     "audit": ("distinct_precision=12", {"distinct_precision": 12}),
     "huber": ("emit_huber_scale=True", {"emit_huber_scale": True}),
     "dcc": ('margins="garch"', {"margins": "garch"}),
@@ -1062,6 +1068,7 @@ def stem(
                 return f"{pre}_<f>"
     for t in targets:
         for pre in (
+            "pred_std",
             "pred",
             "resid",
             "huber_scale",

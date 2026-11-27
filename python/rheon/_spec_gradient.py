@@ -32,8 +32,9 @@ def sgd(
     quantile: float | None = None,
     eps: float | None = None,
     learning_rate: float | None = None,
-    schedule: Literal["constant", "inv_scaling", "adagrad"] = "constant",
+    schedule: Literal["constant", "inv_scaling", "adagrad", "optimal"] = "constant",
     power: float | None = None,
+    l1: float | None = None,
     l2: float | None = None,
     clip_gradient: float | None = None,
     standardize: bool = True,
@@ -41,6 +42,8 @@ def sgd(
     coef_max: float | list[float] | None = None,
     coef_sum: float | None = None,
     strict_binary: bool = False,
+    average: bool = False,
+    invariant: bool = False,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Stochastic gradient descent under a choice of losses, with one gradient step a row.
@@ -180,12 +183,22 @@ def sgd(
                Huber losses and ``lr / (sqrt(G_i) + 1e-8)`` under the
                others, ``G_i`` the coefficient's sum of squared gradients.
                The step is 0 where the denominator is.
+           * - ``"optimal"``
+             - Bottou's schedule ``1 / (alpha * (t0 + t))`` with
+               ``alpha = l1 + l2 > 0`` and ``t0 = 1 / (alpha * sqrt(1 / sqrt(alpha)))``,
+               matching scikit-learn's ``SGDRegressor(learning_rate="optimal")``.
+               Refuses an explicit ``learning_rate``.
 
         Past a
         stability bound a constant rate diverges, and the predictions are
         withheld (*A rate past its stability bound* in Notes). The
         coefficients themselves do not decay (*Decay and the rate* in
         Notes).
+    ``l1``
+        Cumulative L1 penalty on the slopes (intercept unconstrained), using
+        Tsuruoka et al.'s lazy clipping matching scikit-learn's
+        ``SGDRegressor(penalty="l1"/"elasticnet")``. Default 0.0, finite and
+        at least 0.
     ``l2``
         A ridge on every step, on the slopes only: the intercept is not
         penalized. Under ``standardize`` it is on the slope in the row's
@@ -239,6 +252,17 @@ def sgd(
         clamped into ``[0, 1]``, since a target of 5 taken as it stands
         would push the linear prediction ``eta`` up on every row forever.
         Refused beside another loss.
+    ``average``
+        Serve a decay-weighted Polyak-Ruppert running average of the live
+        iterates instead of the latest iterate (matching scikit-learn's
+        ``SGDRegressor(average=True)`` under ``half_life = inf``). Default
+        ``False``.
+    ``invariant``
+        Use Karampatziakis and Langford's importance-weight-invariant step
+        ``-expm1(-eta * w * ||z||**2) / ||z||**2`` (matching Vowpal Wabbit's
+        ``--invariant``), which never overshoots regardless of weight ``w`` or
+        step size. Squared loss and non-AdaGrad schedules only; default
+        ``False``.
 
     .. rubric:: Output
 
@@ -283,7 +307,10 @@ def sgd(
 
     - a ``loss`` or ``schedule`` not one of its words;
     - a ``learning_rate`` or ``clip_gradient`` not above 0, a
-      ``learning_rate`` of ``inf``, an ``l2``, ``eps`` or ``power`` below 0,
+      ``learning_rate`` of ``inf`` or given beside ``schedule = "optimal"``,
+      an ``l1``, ``l2``, ``eps`` or ``power`` below 0, a non-finite ``l1``,
+      ``schedule = "optimal"`` without ``l1 + l2 > 0``, ``invariant = True``
+      beside a loss other than ``"squared"`` or ``schedule = "adagrad"``,
       a ``huber_delta`` or ``huber_scale_half_life`` not above 0, and a
       ``quantile`` outside ``(0, 1)``;
     - no ``quantile`` under ``loss = "quantile"``;
@@ -795,6 +822,7 @@ def sgd(
         "learning_rate": learning_rate,
         "schedule": schedule,
         "power": power,
+        "l1": l1,
         "l2": l2,
         "clip_gradient": clip_gradient,
         "standardize": standardize,
@@ -802,6 +830,8 @@ def sgd(
         "coef_max": coef_max,
         "coef_sum": coef_sum,
         "strict_binary": strict_binary,
+        "average": True if average else None,
+        "invariant": True if invariant else None,
     }
     skipped = _SKIPPED_WHEN_ABSENT["sgd"]
     model = {k: v for k, v in model.items() if v is not None or k not in skipped}

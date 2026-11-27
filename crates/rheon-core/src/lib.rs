@@ -30,6 +30,7 @@
 //!     window_every: None,
 //!     max_rows_between_snapshots: None,
 //!     constraints: None,
+//!     evidence: None,
 //! })?;
 //!
 //! let mut pred = f64::NAN;
@@ -231,7 +232,7 @@ pub use ewm_moments::{
     EWM_MOMENTS_CLOCK_BLOCK_ROWS, EWM_MOMENTS_MAX_STATE_BYTES, EwmMoments, EwmMomentsCfg,
     Leg as MomentLeg, MAX_UNBIASED_MOMENT_ORDER, MomentKind, MomentTerm, Withheld,
 };
-pub use ewridge::{EwRidge, EwRidgeCfg};
+pub use ewridge::{EvidenceCfg, EwRidge, EwRidgeCfg};
 pub use expectile::{
     DEFAULT_EXPECTILE_REFIT_ROWS, EXPECTILE_MAX_STATE_BYTES, EXPECTILE_REFIT_PASSES,
     EXPECTILE_STATE_BYTES_CEILING, Expectile, ExpectileCfg, default_expectile_refit_rows,
@@ -325,7 +326,9 @@ pub use realized::{
 };
 pub use refusals::{Refusals, STOPPED, STOPPED_MANY};
 pub use rls::{Rls, RlsCfg};
-pub use robust::{HuberScale, MAD_BAND_OCTAVES, NORMAL_Q3, Robust, RobustCfg, RobustLoss};
+pub use robust::{
+    HuberNorm, HuberScale, MAD_BAND_OCTAVES, NORMAL_Q3, Robust, RobustCfg, RobustLoss,
+};
 pub use root::{
     Bounded, DEFAULT_XTOL, MIN_RTOL, RootReport, RootTolerance, Withheld as RootWithheld,
     find_root, itp_steps,

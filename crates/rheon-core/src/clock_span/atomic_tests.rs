@@ -403,6 +403,9 @@ fn sgd_huber_refit_span_is_atomic() {
         mad_anchor: false,
         refit_clock: Some(1e9),
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     };
     let row = 8 * (2 + 4) as u64 + 48;
     let stamps = (2 * std::mem::size_of::<Option<Stamp>>()) as u64;
@@ -517,6 +520,7 @@ fn robust_refit_span_is_atomic() {
             min_weight_holds_learning: false,
             refit_clock: Some(1e9),
             max_state_bytes: None,
+            huber_norm: crate::HuberNorm::Huber,
         };
         let row = 8 * (2 + 4) as u64 + extra;
         let stamps = (2 * std::mem::size_of::<Option<Stamp>>()) as u64;

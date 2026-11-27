@@ -203,6 +203,16 @@ pub struct PaCfg {
     /// 206).
     #[serde(default)]
     pub standardize: bool,
+    /// Decay-weighted Polyak–Ruppert averaging of the live iterates.
+    /// When true, predictions and [`Pa::coefficients`] serve the running
+    /// decay-weighted average while the live iterate continues updating from
+    /// its own predictions.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub average: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl PaCfg {
@@ -264,6 +274,11 @@ pub struct Pa {
     /// Per target, the EW mean and variance of the target itself: the unit
     /// `eps` is in (the module docs; docs/PLAN.md task 202).
     spread: TargetSpread,
+    /// Decay-weighted Polyak–Ruppert average of the live iterates when
+    /// [`PaCfg::average`] is true; `None` otherwise. Last, so compact msgpack
+    /// skips nothing before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    avg: Option<crate::sgd::variants::AvgState>,
     /// The row the model sees, `[1, z]`: the features as they stand, or
     /// standardized under a scaler.
     #[serde(skip)]
@@ -307,6 +322,9 @@ impl Pa {
                 c.project(&mut b[off..], None, &mut scratch);
             }
         }
+        let avg = cfg
+            .average
+            .then(|| crate::sgd::variants::AvgState::new(&beta));
         Ok(Self {
             scaler: cfg.standardize.then(|| EwDiag::new(k)),
             warmup: Warmup::default(),
@@ -314,6 +332,7 @@ impl Pa {
             w_sum: 0.0,
             w_target: vec![0.0; m],
             spread: TargetSpread::new(m),
+            avg,
             zbuf: vec![0.0; k],
             mbuf: vec![0.0; k],
             sbuf: vec![1.0; k],
@@ -332,11 +351,13 @@ impl Pa {
     /// Coefficients in the caller's units: while a scaler warms up, the
     /// slopes over each feature's scale as it stands, the intercept
     /// absorbing the means, as `sgd`'s are read out; without one, or once
-    /// it has, the state itself (the module docs).
+    /// it has, the state itself (the module docs). When [`PaCfg::average`]
+    /// is true, returns the averaged coefficients.
     pub fn coefficients(&self) -> Vec<Vec<f64>> {
+        let coef = self.avg.as_ref().map_or(&self.beta, |a| &a.beta);
         match &self.scaler {
-            Some(sc) if !self.warmup.switched() => unscaled(&self.beta, sc, self.cfg.fit_intercept),
-            _ => self.beta.clone(),
+            Some(sc) if !self.warmup.switched() => unscaled(coef, sc, self.cfg.fit_intercept),
+            _ => coef.clone(),
         }
     }
 
@@ -543,10 +564,16 @@ impl OnlineModel for Pa {
         out.pred.clear();
         out.pred.resize(m, f64::NAN);
         let pred = &mut out.pred;
-        if self.cfg.constraint.is_some() {
+        let track_avg = self.avg.is_some();
+        if self.cfg.constraint.is_some() || track_avg {
             self.learned.clear();
             self.learned.resize(m, false);
         }
+        let mut avg_taught = if track_avg {
+            vec![false; m]
+        } else {
+            Vec::new()
+        };
         for j in 0..m {
             let p: f64 = if held {
                 // `x̃ᵀb`, in the caller's units: no moment is read.
@@ -563,7 +590,21 @@ impl OnlineModel for Pa {
                     .sum()
             };
             if self.w_target[j] >= self.cfg.min_weight {
-                pred[j] = p;
+                pred[j] = if let Some(avg) = &self.avg {
+                    if held {
+                        dot_aug(&avg.beta[j], x, self.cfg.fit_intercept)
+                    } else {
+                        let (b0, slopes) = avg.beta[j].split_at(off);
+                        let (head, tail) = row_parts(direct, off, x, &self.zbuf);
+                        head.iter()
+                            .zip(b0)
+                            .map(|(z, b)| z * b)
+                            .chain(tail.iter().zip(slopes).map(|(z, b)| z * b))
+                            .sum()
+                    }
+                } else {
+                    p
+                };
             }
             // The tube is drawn in the target's spread as the row arrives;
             // the row's own `y` joins it afterwards, whatever the fit, and
@@ -579,11 +620,19 @@ impl OnlineModel for Pa {
             }
             let err = yj - p;
             if sq_norm <= 0.0 {
+                if track_avg {
+                    avg_taught[j] = true;
+                }
                 continue;
             }
             let loss = (err.abs() - tube).max(0.0);
             if loss == 0.0 {
-                continue; // passive: the constraint already holds
+                // Passive: the live iterate stays where it is, and still
+                // enters the running average for this labeled row.
+                if track_avg {
+                    avg_taught[j] = true;
+                }
+                continue;
             }
             // A weight below 1 scales the step, so a half-weight row moves the
             // fit half as far. A weight above 1 counts as 1: the update is a
@@ -602,8 +651,13 @@ impl OnlineModel for Pa {
             if held {
                 // Mapped into the caller's units by the row's map, and
                 // projected there.
-                if self.step_mapped(j, off, step) && self.cfg.constraint.is_some() {
-                    self.project_mapped(j, off);
+                if self.step_mapped(j, off, step) {
+                    if self.cfg.constraint.is_some() {
+                        self.project_mapped(j, off);
+                    }
+                    if track_avg {
+                        avg_taught[j] = true;
+                    }
                 }
                 continue;
             }
@@ -617,6 +671,9 @@ impl OnlineModel for Pa {
             }
             if let Some(l) = self.learned.get_mut(j) {
                 *l = true;
+            }
+            if track_avg {
+                avg_taught[j] = true;
             }
         }
         if let Some(sc) = &mut self.scaler {
@@ -642,6 +699,26 @@ impl OnlineModel for Pa {
                     );
                 }
             }
+            if rescaled && let Some(avg) = self.avg.as_mut() {
+                for b in avg.beta.iter_mut() {
+                    c.project(
+                        &mut b[off..],
+                        scales.as_deref().map(|s| &s[off..]),
+                        &mut self.pbuf,
+                    );
+                }
+            }
+        }
+        // Fold each target's post-projection live iterate into the running
+        // decay-weighted average; targets that did not learn only age.
+        if let Some(avg) = self.avg.as_mut() {
+            for (j, &taught) in avg_taught.iter().enumerate().take(m) {
+                if taught {
+                    avg.learn(j, lam, weight, &self.beta[j]);
+                } else {
+                    avg.age(j, lam);
+                }
+            }
         }
         // The warm-up: the scaler has learned the row. On the row that
         // completes it the coefficients are read out once, with the moments
@@ -652,6 +729,9 @@ impl OnlineModel for Pa {
             && self.warmup.learn(weight)
         {
             self.beta = unscaled(&self.beta, sc, self.cfg.fit_intercept);
+            if let Some(avg) = self.avg.as_mut() {
+                avg.beta = unscaled(&avg.beta, sc, self.cfg.fit_intercept);
+            }
         }
         self.w_sum = lam * self.w_sum + weight;
         crate::model::age_target_weights(
@@ -686,8 +766,9 @@ impl OnlineModel for Pa {
         let n_eff = self.w_sum;
         let mut pred = vec![f64::NAN; self.cfg.n_targets];
         let fit_intercept = self.cfg.fit_intercept;
+        let coef = self.avg.as_ref().map_or(&self.beta, |a| &a.beta);
         let predict_with = |z: &[f64], pred: &mut [f64]| {
-            for ((p, beta), w) in pred.iter_mut().zip(&self.beta).zip(&self.w_target) {
+            for ((p, beta), w) in pred.iter_mut().zip(coef).zip(&self.w_target) {
                 if *w >= self.cfg.min_weight {
                     *p = dot_aug(beta, z, fit_intercept);
                 }
@@ -764,6 +845,15 @@ impl OnlineModel for Pa {
                     return Err(StateError::Invalid(
                         "pa: its saved warm-up does not match its standardize setting. Load an \
                          undamaged copy of the state file, or rebuild it from its input."
+                            .into(),
+                    ));
+                }
+                if m.cfg.average != m.avg.is_some()
+                    || m.avg.as_ref().is_some_and(|a| !a.has_shape(n, k))
+                {
+                    return Err(StateError::Invalid(
+                        "pa: its saved averaged coefficients do not match its average setting. \
+                         Load an undamaged copy of the state file, or rebuild it from its input."
                             .into(),
                     ));
                 }
@@ -874,6 +964,7 @@ mod tests {
             min_weight: 5.0,
             constraint: None,
             standardize: false,
+            average: false,
         }
     }
 
@@ -1608,6 +1699,7 @@ mod tests {
                     min_weight: 2.0,
                     constraint: None,
                     standardize: true,
+                    average: false,
                 })
                 .unwrap();
                 let rows = level_stream(level, 20_000, 2);
