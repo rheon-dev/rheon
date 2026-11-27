@@ -421,7 +421,8 @@ impl KalmanObs {
             } else if cfg.obs_var.is_some() {
                 no.refuse(format!(
                     "kalman: obs_var cannot be set with family={:?}: the observation variance is \
-                     dispersion * V(μ) / w. Leave obs_var out and set dispersion instead.",
+                     the family's variance scaled by dispersion. Leave obs_var out and set \
+                     dispersion instead.",
                     self.family.name()
                 ));
             }
@@ -485,9 +486,9 @@ impl KalmanObs {
             let c = self.alpha * self.alpha * (k + self.kappa);
             if !(k + self.kappa > 0.0 && c > 0.0 && c.is_finite()) {
                 no.refuse(format!(
-                    "kalman: alpha^2 * (k + kappa) must be finite and above 0 for Merwe sigma \
-                     points, but with k = {}, alpha = {} and kappa = {} it is {c}. Raise kappa \
-                     above -{} or adjust alpha.",
+                    "kalman: the Merwe sigma-point scale must be finite and above 0, but with \
+                     k = {}, alpha = {} and kappa = {} it is {c}. Raise kappa above -{} or adjust \
+                     alpha.",
                     cfg.k_total(),
                     self.alpha,
                     self.kappa,

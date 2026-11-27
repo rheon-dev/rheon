@@ -4387,7 +4387,9 @@ fn run_instance(
         ModelKind::Ftrl { loss, .. } => loss.as_deref().unwrap_or("logistic") == "logistic",
         // A binomial `glm`'s mean is a probability against a 0/1 label
         // (review 2026-11-23, GLM-METRICS).
-        ModelKind::Glm { family, .. } => family.as_deref() == Some("binomial"),
+        ModelKind::Glm { family, .. } | ModelKind::Kalman { family, .. } => {
+            family.as_deref() == Some("binomial")
+        }
         _ => false,
     };
     // A Poisson fit has no sign to hit: a rate is positive and a count is
@@ -4402,6 +4404,9 @@ fn run_instance(
     let poisson = match &inst.spec.model {
         ModelKind::Sgd { loss, .. } => loss.as_deref() == Some("poisson"),
         ModelKind::Glm { family, .. } => family.as_deref() != Some("binomial"),
+        ModelKind::Kalman { family, .. } => {
+            matches!(family.as_deref(), Some("poisson" | "gamma" | "tweedie"))
+        }
         _ => false,
     };
     // What a model's kind adds to a row, decided once an instance: a row of

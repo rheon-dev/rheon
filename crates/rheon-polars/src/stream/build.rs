@@ -301,6 +301,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             horizons,
             ..
         } => {
+            let obs = crate::spec::kalman_obs(spec)?;
             let cfg = KalmanCfg {
                 horizons: horizons
                     .iter()
@@ -332,7 +333,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 // `P` in units of the noise, the intercept's prior diffuse
                 // (docs/PLAN.md task 278); a state saved before keeps its own.
                 noise_units: true,
-                obs: Default::default(),
+                obs,
             };
             let mut model = Kalman::new(cfg)?.with_covariance_form(*covariance_form)?;
             if let Some(lag) = spec.smooth_lag() {

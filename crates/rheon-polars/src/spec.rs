@@ -14,9 +14,11 @@ fn default_true() -> bool {
 
 mod checks;
 pub(crate) mod diagnostics;
+mod kalman;
 mod limits;
 pub(crate) use checks::render_refusal;
 use checks::*;
+pub(crate) use kalman::kalman_obs;
 mod names;
 mod readiness;
 mod smooth;
@@ -314,6 +316,37 @@ pub enum ModelKind {
         /// most 64 MiB, held to before a row is read.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
+        /// Observation distribution (`"gaussian"` default, `"poisson"`,
+        /// `"binomial"`, `"gamma"`, `"tweedie"`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        family: Option<String>,
+        /// Link function (`"identity"`, `"log"`, `"logit"`, `"inverse"`, `"power"`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link: Option<String>,
+        /// Tweedie variance power `p` (`> 1`, finite, `!= 2`; default `1.5`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        var_power: Option<f64>,
+        /// Fixed dispersion `φ > 0` for non-Gaussian families (default `1.0`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dispersion: Option<f64>,
+        /// Filtering recursion (`"linear"` default, `"ekf"`, `"ukf"`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<String>,
+        /// UKF quadrature rule (`"scalar_index"` default, `"merwe"`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ukf_rule: Option<String>,
+        /// Merwe UKF spread `α > 0` (default `1.0`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alpha: Option<f64>,
+        /// Merwe UKF distribution parameter `β` (default `2.0`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        beta: Option<f64>,
+        /// Merwe UKF secondary scaling `κ` (default `0.0`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kappa: Option<f64>,
+        /// UKF observation noise rule (`"expected"` default, `"plugin"`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ukf_noise: Option<String>,
     },
     /// Huber regression (docs/PLAN.md §4.5).
     Huber {
@@ -4519,70 +4552,8 @@ impl Spec {
                 self.model.kind_name()
             ));
         }
-        // The residual checks whose null a fit fails by construction. An
-        // expectile at a level other than one half is not the mean: its
-        // residuals' mean is not 0 on a stream it fits exactly (-1.0 at 0.9
-        // on unit Gaussian noise), so the Mincer-Zarnowitz Wald and the
-        // CUSUM rejected on every row of such a stream. A generalized linear
-        // fit's residuals have its family's variance, a function of the
-        // mean, and its family's shape: on an exact Poisson fit
-        // Breusch-Pagan and Jarque-Bera rejected on every row, and RESET,
-        // read without a heteroskedasticity correction, on a quarter of
-        // them (review 2026-11-23, DIAG-11).
         if predicts {
-            let off_mean = match self.model {
-                ModelKind::Expectile { expectile, .. } if expectile != 0.5 => Some(expectile),
-                _ => None,
-            };
-            if let Some(tau) = off_mean {
-                for (on, key, what) in [
-                    (
-                        self.emit_calibration,
-                        "emit_calibration",
-                        "its Wald test asks whether the target's mean is the prediction",
-                    ),
-                    (
-                        self.emit_breaks,
-                        "emit_breaks",
-                        "its CUSUM sums residuals whose mean is 0 under no break",
-                    ),
-                ] {
-                    if on {
-                        no.refuse(format!(
-                            "spec {name:?}: {key} tests a fit of the mean, but expectile {} \
-                             is not the mean, so its residuals' mean is not 0 even where it \
-                             fits exactly, and the test rejects on every row: {what}. Leave \
-                             out {key}, or fit expectile 0.5, the mean.",
-                            num_label(tau)
-                        ));
-                    }
-                }
-            }
-            if matches!(self.model, ModelKind::Glm { .. }) {
-                for (on, key, what) in [
-                    (
-                        self.emit_specification,
-                        "emit_specification",
-                        "Breusch-Pagan's null is a constant variance, and RESET's is read \
-                         under one",
-                    ),
-                    (
-                        self.emit_tails,
-                        "emit_tails",
-                        "Jarque-Bera's null is a normal residual",
-                    ),
-                ] {
-                    if on {
-                        no.refuse(format!(
-                            "spec {name:?}: {key} tests residuals of constant variance and a \
-                             normal shape, but a glm's residuals have its family's variance, \
-                             which moves with the mean, and its family's shape, so the test \
-                             rejects on every row of a stream it fits exactly: {what}. Leave \
-                             out {key}; emit_calibration and emit_breaks read a glm's mean."
-                        ));
-                    }
-                }
-            }
+            self.check_residual_assumptions(no);
         }
         if self.ljung_box_lags.is_some() && !self.emit_specification {
             no.refuse(needs("ljung_box_lags", "emit_specification"));

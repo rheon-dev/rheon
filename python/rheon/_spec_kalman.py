@@ -31,6 +31,16 @@ def kalman(
     smooth_lag: int | None = None,
     emit_smoothed_se: bool = False,
     max_state_bytes: int | None = None,
+    family: Literal["gaussian", "poisson", "binomial", "gamma", "tweedie"] = "gaussian",
+    link: Literal["identity", "log", "logit", "inverse", "power"] | None = None,
+    var_power: float | None = None,
+    dispersion: float | None = None,
+    filter: Literal["linear", "ekf", "ukf"] = "linear",
+    ukf_rule: Literal["scalar_index", "merwe"] | None = None,
+    alpha: float | None = None,
+    beta: float | None = None,
+    kappa: float | None = None,
+    ukf_noise: Literal["expected", "plugin"] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A regression whose coefficients drift, tracked by a Kalman filter.
@@ -205,6 +215,82 @@ def kalman(
         naming the bytes. One target with 21 coefficients and ``L = 100``
         takes about 600 KB with the standard errors. Only with
         ``smooth_lag``.
+    ``family``
+        The observation distribution: ``"gaussian"`` (the default),
+        ``"poisson"`` (counts, ``y >= 0``), ``"binomial"`` (proportions or
+        0/1 outcomes, ``0 <= y <= 1``), ``"gamma"`` (positive amounts,
+        ``y > 0``), or ``"tweedie"`` (power variance ``mu ** p``, with
+        ``var_power``). Non-Gaussian families require ``filter="ekf"`` or
+        ``filter="ukf"`` and an explicit ``q``; ``coef_half_life``,
+        ``obs_var``, ``share_p`` and ``forecast_spans`` are refused there.
+        Target values outside the family's support are refused with the row
+        named.
+    ``link``
+        How the observation mean ``mu`` is read from the linear index
+        ``eta = z' b``: ``"identity"`` (``mu = eta``), ``"log"``
+        (``mu = exp(eta)``), ``"logit"`` (``mu = 1 / (1 + exp(-eta))``),
+        ``"inverse"`` (``mu = 1 / eta``, Gamma only, requires ``eta > 0``)
+        or ``"power"`` (``mu = eta ** (1 / (1 - p))``, Tweedie only,
+        requires ``eta > 0``). Default is the family's own: ``"identity"``
+        for Gaussian, ``"logit"`` for binomial, and ``"log"`` for Poisson,
+        Gamma and Tweedie. Gaussian accepts ``"identity"``, ``"log"`` or
+        ``"logit"``; ``"log"`` and ``"logit"`` with Gaussian require a fixed
+        ``obs_var`` and ``filter="ekf"`` or ``filter="ukf"``. Under
+        ``"inverse"`` and ``"power"``, ``fit_intercept=True`` is required
+        (starting the intercept at 1 so ``eta > 0``), and rows where
+        ``eta <= 0`` withhold their prediction and learn nothing.
+    ``var_power``
+        The Tweedie family's variance power ``p``, finite, above 1 and not 2.
+        Default 1.5 when ``family="tweedie"``. Refused for other families.
+    ``dispersion``
+        The fixed observation dispersion ``phi > 0`` for non-Gaussian
+        families, so ``Var(y | mu) = phi * V(mu) / w``. Default 1.0. Refused
+        under ``family="gaussian"`` (use ``obs_var`` instead).
+    ``filter``
+        The filtering recursion: ``"linear"`` (the default, exact Kalman
+        filter for ``family="gaussian"`` with ``link="identity"``),
+        ``"ekf"`` (extended Kalman filter using the closed-form link
+        Jacobian at the clipped prior mean, ``O(k ** 2)`` per row), or
+        ``"ukf"`` (unscented Kalman filter using sigma points). Both
+        ``"ekf"`` and ``"ukf"`` also accept ``family="gaussian"`` with
+        ``link="identity"``, where they agree with ``"linear"`` to rounding.
+        Refused under ``covariance_form="square_root"``.
+    ``ukf_rule``
+        The sigma-point quadrature rule for ``filter="ukf"``:
+        ``"scalar_index"`` (the default) or ``"merwe"``. Refused when
+        ``filter != "ukf"``.
+
+        ``"scalar_index"`` applies the 3-point Gauss-Hermite rule
+        (``0, +-sqrt(3) * s``, weights ``2/3, 1/6, 1/6``) directly along the
+        scalar linear index ``eta ~ N(z' b⁻, z' P⁻ z)`` in ``O(k ** 2)``
+        time with 3 link calls per row. ``"merwe"`` draws the full
+        ``2k + 1`` Wan and van der Merwe scaled sigma points via Cholesky in
+        ``O(k ** 3)`` time with ``2k + 1`` link calls per row. Measured
+        against the exact filtering posterior (a ``k = 2`` grid filter across
+        9 Poisson, binomial and Gamma streams, a 50,000-particle filter at
+        ``k = 5``, and statsmodels' static MAP at ``k = 2, 5, 20``),
+        ``"scalar_index"`` is closer on 8 of 9 grid settings (up to 2.4x
+        closer on binomial), 7 of 9 static MAP settings and the ``k = 5``
+        Poisson particle filter; it is also invariant to feature ordering
+        (maximum prediction shift ``1.7e-15`` when reversing 20 features,
+        against ``7.6%`` for Poisson, ``4.9%`` for Gamma and ``1.8%`` for
+        binomial under ``"merwe"``).
+    ``alpha``, ``beta``, ``kappa``
+        Sigma-point parameters for ``filter="ukf"`` with ``ukf_rule="merwe"``
+        (refused otherwise). Defaults ``alpha=1.0``, ``beta=2.0``,
+        ``kappa=0.0`` (``alpha > 0``, all finite, and ``k + kappa > 0``).
+        ``beta = 2`` is Wan and van der Merwe's Gaussian optimum.
+        ``alpha = 1`` is used instead of their small ``1e-3`` because at
+        ``alpha = 1e-3`` the center weight ``1 - 1 / alpha ** 2`` is roughly
+        ``-1e6`` at every ``k``, costing about six digits to cancellation and
+        collapsing the sigma points onto the mean; at ``alpha = 1, kappa = 0``
+        the center weight is 0 with no negative weights.
+    ``ukf_noise``
+        How ``filter="ukf"`` forms the observation variance ``R``:
+        ``"expected"`` (the default, the sigma-point expectation
+        ``phi * sum(Wm_i * V(zeta_i)) / w``) or ``"plugin"``
+        (``phi * V(g^-1(eta)) / w`` at the prior mean, as in the EKF).
+        Refused when ``filter != "ukf"``.
 
     .. rubric:: Output
 
@@ -286,7 +372,16 @@ def kalman(
       without ``smooth_lag``, ``smooth_lag`` under
       ``covariance_form="square_root"`` or beside ``embargo`` or
       ``label_clock``, a ``max_state_bytes`` not above 0 or above 64 MiB, and
-      a smoother whose bytes pass ``max_state_bytes``.
+      a smoother whose bytes pass ``max_state_bytes``;
+    - an unsupported ``(family, link)`` pair, ``filter="linear"`` on a
+      nonlinear observation, ``coef_half_life``, ``share_p`` or
+      ``forecast_spans`` on a nonlinear observation, missing ``obs_var`` on
+      Gaussian with a log or logit link, ``obs_var`` on a non-Gaussian
+      family, ``dispersion`` on Gaussian or not above 0, ``var_power`` off
+      Tweedie or not above 1 or equal to 2, ``fit_intercept=False`` on an
+      inverse or power link, ``covariance_form="square_root"`` with
+      ``filter != "linear"``, UKF options with ``filter != "ukf"``, or
+      ``alpha`` / ``beta`` / ``kappa`` without ``ukf_rule="merwe"``.
 
     .. rubric:: The update
 
@@ -319,6 +414,28 @@ def kalman(
     over a gap ``D`` is ``Q_i * r_i(D) ** 2`` in place of ``Q_i * D ** 2``,
     with ``r_i(D) = (1 - 2 ** (-D / kappa_i)) / theta_i`` and
     ``theta_i = ln 2 / kappa_i``.
+
+    Under ``filter="ekf"`` or ``filter="ukf"`` the transition is the same
+    linear step above, with ``P`` held on the absolute ``eta`` scale (prior
+    ``p0 * I`` on sized slots, proper intercept prior) and explicit ``q``.
+    The EKF linearizes at the clipped prior index ``eta = clip(z' b⁻)``
+    (clipped to ``+-30`` for log and logit) with closed-form slope
+    ``m = d mu / d eta`` and ``R = phi * V(mu) / w``:
+
+    .. code-block:: text
+
+        s = m ** 2 * (z' P⁻ z) + R
+        K = (m / s) * (P⁻ z)
+        b <- b⁻ + K * (y - mu)
+        P <- P⁻ - s * K K'
+
+    The UKF propagates sigma points through ``g^-1(clip(.))`` to form the
+    predicted mean ``zeta_bar``, innovation variance ``s``, and
+    cross-covariance ``C``, then updates ``b <- b⁻ + K * (y - zeta_bar)``
+    and ``P <- P⁻ - s * K K'`` with ``K = C / s``. If Cholesky fails on
+    ``P⁻`` or a sigma point crosses ``eta <= 0`` under the inverse or power
+    link, that row falls back to the EKF step on the same state without
+    adding jitter.
 
     With ``smooth_lag = L``, on the row of observation ``t`` of a target,
     after its update, the Rauch-Tung-Striebel recursion runs back over the
@@ -621,4 +738,26 @@ def kalman(
             if isinstance(forecast_spans, dict)
             else list(forecast_spans)
         )
+    # Nonlinear observation and filter settings: written only when given /
+    # non-default so linear Gaussian specs keep their exact wire shape.
+    if family != "gaussian":
+        model["family"] = family
+    if link is not None:
+        model["link"] = link
+    if var_power is not None:
+        model["var_power"] = var_power
+    if dispersion is not None:
+        model["dispersion"] = dispersion
+    if filter != "linear":
+        model["filter"] = filter
+    if ukf_rule is not None:
+        model["ukf_rule"] = ukf_rule
+    if alpha is not None:
+        model["alpha"] = alpha
+    if beta is not None:
+        model["beta"] = beta
+    if kappa is not None:
+        model["kappa"] = kappa
+    if ukf_noise is not None:
+        model["ukf_noise"] = ukf_noise
     return _common(name, model, targets=targets, features=features, **common)

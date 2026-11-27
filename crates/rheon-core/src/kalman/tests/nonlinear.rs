@@ -1141,7 +1141,7 @@ fn nonlinear_config_and_damaged_state_refusals() {
                 },
                 ..base_pois.clone()
             },
-            "alpha^2 * (k + kappa) must be finite and above 0",
+            "Merwe sigma-point scale must be finite and above 0",
         ),
     ];
 

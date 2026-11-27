@@ -462,6 +462,15 @@ pub(crate) fn outside_support(spec: &Spec, v: &[f64]) -> Option<(usize, String, 
                 "family",
             ))
         }
+        ModelKind::Kalman { .. } => {
+            let fam = spec.kalman_glm_family()?;
+            let j = v.iter().position(|&f| usable(f) && !fam.takes(f))?;
+            Some((
+                j,
+                format!("family={:?} takes {}", fam.family.name(), fam.support()),
+                "family",
+            ))
+        }
         _ => None,
     }
 }
