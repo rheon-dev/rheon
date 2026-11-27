@@ -80,6 +80,15 @@ pub const MODEL_CASES: &[&str] = &[
     // covariance.
     "kalman_smooth_k5",
     "kalman_smooth_k20",
+    // Nonlinear observation filters (Poisson log): EKF, scalar-index UKF
+    // (3-point Gauss-Hermite, O(k^2)) and full Merwe UKF (2k + 1 sigma points,
+    // O(k^3)), at 6 and 21 coefficients.
+    "kalman_ekf_k5",
+    "kalman_ekf_k20",
+    "kalman_ukf_scalar_k5",
+    "kalman_ukf_scalar_k20",
+    "kalman_ukf_merwe_k5",
+    "kalman_ukf_merwe_k20",
     "ew_cov",
     "lasso_k20",
     // One case per model kind that had none, and the paths the review of
@@ -663,6 +672,53 @@ fn case_spec(id: &str) -> (Value, Shape) {
             ),
             Shape::Linear,
         ),
+        "kalman_ekf_k5" | "kalman_ekf_k20" => {
+            let k = if id == "kalman_ekf_k5" { 5 } else { 20 };
+            (
+                fit(
+                    json!({
+                        "type": "kalman",
+                        "family": "poisson",
+                        "filter": "ekf",
+                        "q": vec![1e-4; k + 1],
+                    }),
+                    k,
+                ),
+                Shape::Labelled,
+            )
+        }
+        "kalman_ukf_scalar_k5" | "kalman_ukf_scalar_k20" => {
+            let k = if id == "kalman_ukf_scalar_k5" { 5 } else { 20 };
+            (
+                fit(
+                    json!({
+                        "type": "kalman",
+                        "family": "poisson",
+                        "filter": "ukf",
+                        "ukf_rule": "scalar_index",
+                        "q": vec![1e-4; k + 1],
+                    }),
+                    k,
+                ),
+                Shape::Labelled,
+            )
+        }
+        "kalman_ukf_merwe_k5" | "kalman_ukf_merwe_k20" => {
+            let k = if id == "kalman_ukf_merwe_k5" { 5 } else { 20 };
+            (
+                fit(
+                    json!({
+                        "type": "kalman",
+                        "family": "poisson",
+                        "filter": "ukf",
+                        "ukf_rule": "merwe",
+                        "q": vec![1e-4; k + 1],
+                    }),
+                    k,
+                ),
+                Shape::Labelled,
+            )
+        }
         "bank_seqtest_groups" => {
             let (mut s, shape) = case_spec("seqtest");
             s["group"] = json!("g");

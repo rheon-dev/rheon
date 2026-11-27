@@ -1686,24 +1686,28 @@ impl Spec {
                 };
                 // One way of giving the process noise: `coef_half_life` was
                 // required, and ignored beside `q` (review 2026-10-06, PC6).
-                match (coef_half_life, q) {
-                    (Some(_), Some(_)) => {
-                        no.refuse(format!(
-                            "spec {:?}: coef_half_life and q cannot both be set: q gives the \
-                         drift of each coefficient outright, and coef_half_life derives it. \
-                         Leave out coef_half_life, or q.",
-                            self.name
-                        ));
+                // Nonlinear observation families require explicit `q` and are
+                // checked in `check_kalman_obs`.
+                if self.kalman_is_gaussian_identity() {
+                    match (coef_half_life, q) {
+                        (Some(_), Some(_)) => {
+                            no.refuse(format!(
+                                "spec {:?}: coef_half_life and q cannot both be set: q gives the \
+                             drift of each coefficient outright, and coef_half_life derives it. \
+                             Leave out coef_half_life, or q.",
+                                self.name
+                            ));
+                        }
+                        (None, None) => {
+                            no.refuse(format!(
+                                "spec {:?}: kalman needs coef_half_life or q, but neither is set. \
+                             Set coef_half_life to how fast a coefficient may drift, or q to its \
+                             drift outright.",
+                                self.name
+                            ));
+                        }
+                        _ => {}
                     }
-                    (None, None) => {
-                        no.refuse(format!(
-                            "spec {:?}: kalman needs coef_half_life or q, but neither is set. Set \
-                         coef_half_life to how fast a coefficient may drift, or q to its \
-                         drift outright.",
-                            self.name
-                        ));
-                    }
-                    _ => {}
                 }
                 // A list one value or one per coefficient long; each value
                 // above 0, `inf` meaning `what_inf`.
@@ -1795,6 +1799,7 @@ impl Spec {
                         num_label(v)
                     ));
                 }
+                self.check_kalman_obs(no);
                 no.take(self.check_smoother());
             }
             ModelKind::Lasso {

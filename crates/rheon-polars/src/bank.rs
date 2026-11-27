@@ -3729,9 +3729,10 @@ impl Bank {
             && (formula_specs.len() > 1
                 // A `glm`'s resolved targets are held to its family's
                 // support (review 2026-11-23, GLM-6).
-                || formula_specs
-                    .iter()
-                    .any(|&si| matches!(specs[si].model, ModelKind::Glm { .. }))
+                || formula_specs.iter().any(|&si| {
+                    matches!(specs[si].model, ModelKind::Glm { .. })
+                        || specs[si].kalman_is_non_gaussian()
+                })
                 || formula_specs.iter().any(|&si| {
                     specs[si]
                         .targets

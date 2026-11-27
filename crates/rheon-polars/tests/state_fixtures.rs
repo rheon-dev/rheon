@@ -3052,6 +3052,11 @@ fn kinds() -> Vec<Kind> {
             first: smoothed_first,
             run: smoothed_run,
         },
+        Kind {
+            name: "bank_kalman_nonlinear",
+            first: kalman_nonlinear_first,
+            run: kalman_nonlinear_run,
+        },
     ]
 }
 
@@ -3127,6 +3132,38 @@ fn smoothed_run(bytes: &[u8], input: &DataFrame) -> Ran {
             ("fit_predict".into(), out),
         ],
     ))
+}
+
+/// The specs of `bank_kalman_nonlinear`: EKF Poisson, UKF scalar_index Gamma
+/// inverse, and UKF merwe Gaussian log (plugin noise), all on the strictly
+/// positive `mid` column of `frame()`.
+fn kalman_nonlinear_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "ekf_pois", "model": {"type": "kalman", "family": "poisson", "filter": "ekf", "q": [0.0001, 0.0001, 0.0001]}, "targets": ["mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w", "min_weight": 2.0}"#,
+        r#"{"name": "ukf_gamma", "model": {"type": "kalman", "family": "gamma", "link": "inverse", "dispersion": 0.5, "filter": "ukf", "ukf_rule": "scalar_index", "p0": 0.05, "q": [0.0001, 0.0001, 0.0001]}, "targets": ["mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w", "min_weight": 2.0}"#,
+        r#"{"name": "ukf_merwe", "model": {"type": "kalman", "family": "gaussian", "link": "log", "obs_var": 1.0, "filter": "ukf", "ukf_rule": "merwe", "alpha": 0.8, "ukf_noise": "plugin", "q": [0.0001, 0.0001, 0.0001]}, "targets": ["mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w", "min_weight": 2.0}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn kalman_nonlinear_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(kalman_nonlinear_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn kalman_nonlinear_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut bank = Bank::load_bytes(bytes, Some(&kalman_nonlinear_specs()))?;
+    let again = bank.save_bytes()?;
+    let cols = bank.fit_predict(input).map_err(|e| e.to_string())?;
+    let out = DataFrame::new(input.height(), cols).map_err(|e| e.to_string())?;
+    Ok((again, vec![("fit_predict".into(), out)]))
 }
 
 fn kind_of(f: &Fixture) -> Kind {
@@ -5352,6 +5389,24 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             "bank_audit_hll",
             "a clock-windowed sliding HLL++",
             |p, _| p.contains(".Audit.hll.sketches.SlidingClock.cols.0.entries."),
+        ),
+        (
+            "bank_kalman_nonlinear",
+            "kalman's EKF Poisson obs",
+            |p, v| p.ends_with(".Kalman.cfg.obs.filter") && v.as_str() == Some("ekf"),
+        ),
+        (
+            "bank_kalman_nonlinear",
+            "kalman's UKF scalar_index obs",
+            |p, v| p.ends_with(".Kalman.cfg.obs.ukf_rule") && v.as_str() == Some("scalar_index"),
+        ),
+        ("bank_kalman_nonlinear", "kalman's UKF merwe obs", |p, v| {
+            p.ends_with(".Kalman.cfg.obs.ukf_rule") && v.as_str() == Some("merwe")
+        }),
+        (
+            "bank_kalman_nonlinear",
+            "kalman's UKF plugin noise",
+            |p, v| p.ends_with(".Kalman.cfg.obs.ukf_noise") && v.as_str() == Some("plugin"),
         ),
     ];
     for (kind, form, holds) in FORMS {

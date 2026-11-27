@@ -965,6 +965,54 @@ statsmodels' Kalman filter under its exact diffuse initialization, its
 predictions agree to 3.3e-13 where the covariance form's are up to 0.78
 off.
 
+#### Nonlinear observations (EKF and UKF)
+
+Set `filter = "ekf"` (extended Kalman filter) or `filter = "ukf"` (unscented
+Kalman filter) to filter a drifting linear index `η = z̃ᵀβ` through a nonlinear
+observation mean `μ = g⁻¹(η)` with variance `φ V(μ) / w`:
+
+| `family` | `link` (default first) | variance `V(μ)` | target support |
+|---|---|---|---|
+| `"gaussian"` | `"identity"`, `"log"`, `"logit"` | `1` (fixed `obs_var` required for `"log"` / `"logit"`) | any finite value |
+| `"poisson"` | `"log"` | `μ` | `y ≥ 0` |
+| `"binomial"` | `"logit"` | `μ(1 − μ)` | `0 ≤ y ≤ 1` |
+| `"gamma"` | `"log"`, `"inverse"` | `μ²` | `y > 0` |
+| `"tweedie"` (`var_power = p`) | `"log"`, `"power"` | `μᵖ` (`p > 1`, `p ≠ 2`, default `1.5`) | `y ≥ 0` (`1 < p < 2`) or `y > 0` (`p > 2`) |
+
+Under a nonlinear observation, the transition `β⁻ = Φβ`, `P⁻ = ΦPΦ + Q·g(D)²`
+is unchanged. `P` is held on the absolute `η` scale with a proper intercept
+prior `p0` and explicit `q`. `coef_half_life`, `share_p`, `forecast_spans`
+and `covariance_form = "square_root"` are refused. `dispersion` sets the fixed
+scale `φ > 0` for non-Gaussian families, where `obs_var` is refused.
+
+- **EKF (`filter = "ekf"`):** linearizes at the clipped prior index
+  `η̃ = clip(z̃ᵀβ⁻)`, clipped to `±30` for `"log"` and `"logit"`. Using the
+  closed-form derivative `m = dμ/dη`, it computes
+  `s = m² z̃ᵀP⁻z̃ + φ V(μ̃) / w` and `K = (m / s) P⁻z̃`. It then updates
+  `β ← β⁻ + K(y − μ̃)` and `P ← P⁻ − s K Kᵀ` in `O(k²)` per row.
+- **UKF (`filter = "ukf"`):** propagates sigma points through `g⁻¹(clip(·))`
+  to compute the predicted mean `ζ̄`, innovation variance `s`, and
+  cross-covariance `C`, then updates `β ← β⁻ + K(y − ζ̄)` and
+  `P ← P⁻ − s K Kᵀ` with `K = C / s`. `ukf_noise = "expected"` (default) uses
+  `φ Σ Wm_i V(ζ_i) / w` and `"plugin"` uses `φ V(g⁻¹(η̃)) / w`.
+  - `ukf_rule = "scalar_index"` (default) runs the 3-point Gauss-Hermite rule
+    (`0, ±√3·s`, weights `2/3, 1/6, 1/6`) along `η ~ N(z̃ᵀβ⁻, z̃ᵀP⁻z̃)` in
+    `O(k²)` with 3 link calls per row. It is invariant to feature ordering
+    and closer to the exact filtering posterior than the full rule on 8 of 9
+    `k = 2` grid settings and 7 of 9 static MAP settings.
+  - `ukf_rule = "merwe"` draws `2k + 1` Wan and van der Merwe scaled sigma
+    points via Cholesky in `O(k³)` with defaults `alpha = 1`, `beta = 2`,
+    `kappa = 0`. Using `alpha = 1` keeps the center weight at 0 rather than
+    `−10⁶` at `alpha = 1e-3`.
+- **Guards:** if Cholesky fails on `P⁻`, or if a UKF sigma point crosses
+  `η ≤ 0` under `"inverse"` or `"power"`, that row falls back to the EKF step
+  on the same state with no jitter. Under `"inverse"` or `"power"`,
+  `fit_intercept = True` is required (starting `β_0 = 1`), and rows with
+  `η ≤ 0` withhold their prediction and learn nothing.
+- **Fixed-lag smoothing:** `smooth_lag` composes directly with `filter = "ekf"`
+  and `filter = "ukf"`, running the RTS backward pass on the linear transition
+  over the filter's stored steps.
+
 #### The fixed-lag smoother
 
 `smooth_lag = L` adds, on the row that completes `L` observations of a

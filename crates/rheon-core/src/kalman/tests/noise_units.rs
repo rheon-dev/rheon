@@ -43,6 +43,7 @@ fn unstandardized(units: bool) -> KalmanCfg {
         min_weight: 0.0,
         revert_half_life: vec![f64::INFINITY],
         standardize: false,
+        obs: Default::default(),
     }
 }
 
@@ -158,6 +159,7 @@ fn drifting(units: bool, share: bool, m: usize) -> KalmanCfg {
         min_weight: 0.0,
         revert_half_life: vec![f64::INFINITY],
         standardize: true,
+        obs: Default::default(),
     }
 }
 

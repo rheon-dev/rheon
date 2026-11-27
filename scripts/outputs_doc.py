@@ -412,6 +412,10 @@ MEANING_BY_MODEL: dict[tuple[str, str], str] = {
     ("dcc", "loglik"): (
         "the Gaussian log-density of the row's standardized residuals under that correlation"
     ),
+    ("kalman", "pred_<t>"): (
+        "the prediction for `<t>`, computed from the state **before** this row (on the target's "
+        "scale under EKF or UKF)"
+    ),
 }
 
 #: A model whose rule for a stem differs from `ALSO_NULL`'s.
@@ -436,8 +440,10 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
         "before the model has anything to report"
     ),
     ("kmeans", "dist_second"): "where `cluster` is, and throughout when `n_clusters` is 1",
-    ("kalman", "pred_<t>"): "while withheld, and on a target's first row, which has nothing to "
-    "predict from",
+    ("kalman", "pred_<t>"): (
+        "while withheld, on a target's first row (which has nothing to predict from), and under "
+        '`"inverse"` or `"power"` link where the prior index is not positive'
+    ),
     ("holt", "pred_<t>"): "while withheld, and on a target's first observation, which has "
     "nothing to predict from",
     ("deco", "loglik"): (

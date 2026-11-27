@@ -7087,6 +7087,93 @@ ideal = 0.0
 n = 50
 floor = 1e-12
 
+[group."kalman_nonlinear.filterpy_grid"]
+tests = [
+    "tests/test_kalman_nonlinear.py::test_nonlinear_kalman_50_seed_filterpy_grid[binomial-logit-ekf-None]",
+    "tests/test_kalman_nonlinear.py::test_nonlinear_kalman_50_seed_filterpy_grid[binomial-logit-ukf-merwe]",
+    "tests/test_kalman_nonlinear.py::test_nonlinear_kalman_50_seed_filterpy_grid[binomial-logit-ukf-scalar_index]",
+    "tests/test_kalman_nonlinear.py::test_nonlinear_kalman_50_seed_filterpy_grid[gamma-log-ekf-None]",
+    "tests/test_kalman_nonlinear.py::test_nonlinear_kalman_50_seed_filterpy_grid[gamma-log-ukf-merwe]",
+    "tests/test_kalman_nonlinear.py::test_nonlinear_kalman_50_seed_filterpy_grid[gamma-log-ukf-scalar_index]",
+    "tests/test_kalman_nonlinear.py::test_nonlinear_kalman_50_seed_filterpy_grid[poisson-log-ekf-None]",
+    "tests/test_kalman_nonlinear.py::test_nonlinear_kalman_50_seed_filterpy_grid[poisson-log-ukf-merwe]",
+    "tests/test_kalman_nonlinear.py::test_nonlinear_kalman_50_seed_filterpy_grid[poisson-log-ukf-scalar_index]",
+]
+oracles = { "filterpy" = "1.4.5" }
+dataset = ""
+
+[case."kalman_nonlinear.filterpy_grid.binomial_ekf_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.binomial_ekf_pred"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.binomial_ukf_merwe_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.binomial_ukf_merwe_pred"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.binomial_ukf_scalar_index_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.binomial_ukf_scalar_index_pred"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.gamma_ekf_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.gamma_ekf_pred"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.gamma_ukf_merwe_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.gamma_ukf_merwe_pred"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.gamma_ukf_scalar_index_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.gamma_ukf_scalar_index_pred"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.poisson_ekf_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.poisson_ekf_pred"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.poisson_ukf_merwe_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.poisson_ukf_merwe_pred"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.poisson_ukf_scalar_index_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_nonlinear.filterpy_grid.poisson_ukf_scalar_index_pred"]
+ideal = 0.0
+n = 50
+
 # --- raises
 
 [[raised]]

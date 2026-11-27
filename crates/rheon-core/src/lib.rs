@@ -210,7 +210,7 @@ pub use expectile::{
     DEFAULT_EXPECTILE_REFIT_ROWS, EXPECTILE_MAX_STATE_BYTES, EXPECTILE_REFIT_PASSES,
     EXPECTILE_STATE_BYTES_CEILING, Expectile, ExpectileCfg, default_expectile_refit_rows,
 };
-pub use family::{ETA_CLIP, Family, GlmFamily, GlmLink, Working};
+pub use family::{ETA_CLIP, Family, FamilyMath, GlmFamily, GlmLink, LibmMath, StdMath, Working};
 pub use ftrl::{Ftrl, FtrlCfg, FtrlLoss};
 pub use gaps::{GramPart, TargetGaps};
 pub use garch::{
@@ -245,8 +245,9 @@ pub use isotonic::{
     OutOfBounds as IsotonicOutOfBounds,
 };
 pub use kalman::{
-    CovarianceForm, KALMAN_MAX_HORIZONS, Kalman, KalmanCfg, SMOOTH_MIN_WEIGHT, SMOOTH_STOOD,
-    SMOOTH_UNSEEN, Smoothed, SmoothedRow,
+    CovarianceForm, KALMAN_MAX_HORIZONS, Kalman, KalmanCfg, KalmanFamily, KalmanFilter, KalmanLink,
+    KalmanObs, SMOOTH_MIN_WEIGHT, SMOOTH_STOOD, SMOOTH_UNSEEN, Smoothed, SmoothedRow, UkfNoise,
+    UkfRule,
 };
 pub use lasso::{Lasso, LassoCfg};
 pub use margbins::{BinCfg, BinRule, BinStat};

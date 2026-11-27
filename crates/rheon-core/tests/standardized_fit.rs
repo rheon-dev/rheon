@@ -91,6 +91,7 @@ fn kalman(fit_intercept: bool, share_p: bool) -> KalmanCfg {
         min_weight: 3.0,
         revert_half_life: vec![f64::INFINITY],
         standardize: true,
+        obs: Default::default(),
     }
 }
 

@@ -676,29 +676,36 @@ impl Kalman {
     #[cold]
     #[inline(never)]
     pub(super) fn smooth_link(&mut self, y: &[Option<f64>], weight: f64) {
+        for pi in 0..self.p.len() {
+            if self.smooth_informs(pi, y, weight) {
+                self.smooth_link_one(pi);
+            }
+        }
+    }
+
+    /// Link covariance `pi`'s pending pair to its current prior `(b⁻, P⁻)`.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn smooth_link_one(&mut self, pi: usize) {
         let k = self.cfg.k_total();
         let Some(mut s) = self.smoother.take() else {
             return;
         };
         let mut b_prior = std::mem::take(&mut s.row.tmp);
-        for pi in 0..self.p.len() {
-            if self.smooth_informs(pi, y, weight) {
-                b_prior.clear();
-                for j in self.smooth_targets(pi) {
-                    b_prior.extend_from_slice(&self.beta[j]);
-                }
-                #[cfg(test)]
-                s.row.log.push(Logged {
-                    pi,
-                    prior: true,
-                    p: self.p[pi].clone(),
-                    b: b_prior.clone(),
-                    anchor: self.smooth_anchor(),
-                    label: s.row.label.expect("a row's label"),
-                });
-                s.link(pi, &self.p[pi], &b_prior, k);
-            }
+        b_prior.clear();
+        for j in self.smooth_targets(pi) {
+            b_prior.extend_from_slice(&self.beta[j]);
         }
+        #[cfg(test)]
+        s.row.log.push(Logged {
+            pi,
+            prior: true,
+            p: self.p[pi].clone(),
+            b: b_prior.clone(),
+            anchor: self.smooth_anchor(),
+            label: s.row.label.expect("a row's label"),
+        });
+        s.link(pi, &self.p[pi], &b_prior, k);
         s.row.tmp = b_prior;
         self.smoother = Some(s);
     }
@@ -710,80 +717,86 @@ impl Kalman {
     #[cold]
     #[inline(never)]
     pub(super) fn smooth_observe(&mut self, y: &[Option<f64>], weight: f64, ready: bool) {
+        for pi in 0..self.p.len() {
+            if self.smooth_informs(pi, y, weight) {
+                self.smooth_observe_one(pi, ready);
+            }
+        }
+    }
+
+    /// Record covariance `pi`'s filtered `(b, P)` after its update and emit
+    /// its oldest smoothed observation if its ring reached lag `L`.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn smooth_observe_one(&mut self, pi: usize, ready: bool) {
         let k = self.cfg.k_total();
         let Some(mut s) = self.smoother.take() else {
             return;
         };
         let se = s.se;
-        for pi in 0..self.p.len() {
-            if !self.smooth_informs(pi, y, weight) {
-                continue;
-            }
-            let targets = self.smooth_targets(pi);
-            if s.rings[pi].slots.len() == s.lag {
-                let w = &mut s.row;
-                w.m.clear();
-                for j in targets.clone() {
-                    w.m.extend_from_slice(&self.beta[j]);
-                }
-                let start = se.then_some(&self.p[pi][..]);
-                Smoother::pass(w, s.rings[pi].slots.iter().rev(), k, se, start);
-                let oldest = s.rings[pi].slots.pop_front().expect("a full ring");
-                let rows =
-                    self.smooth_rows(&oldest.of, &w.m, se.then_some(&w.v[..]), targets.clone());
-                let out = &mut w.out;
-                for r in rows {
-                    let j = r.target;
-                    out.emitted[j] = true;
-                    out.label[j] = Some(r.label);
-                    out.held[j] = r.held;
-                    out.coef[j * k..(j + 1) * k].copy_from_slice(&r.coef);
-                    if se {
-                        out.var[j * k..(j + 1) * k].copy_from_slice(&r.var);
-                    }
-                }
-            }
-            let p = &self.p[pi];
-            let mut b = Vec::with_capacity(targets.len() * k);
+        let targets = self.smooth_targets(pi);
+        if s.rings[pi].slots.len() == s.lag {
+            let w = &mut s.row;
+            w.m.clear();
             for j in targets.clone() {
-                b.extend_from_slice(&self.beta[j]);
+                w.m.extend_from_slice(&self.beta[j]);
             }
-            let held = targets
-                .map(|j| {
-                    if self.wj[j] <= 0.0 {
-                        SMOOTH_UNSEEN
-                    } else if !ready {
-                        SMOOTH_MIN_WEIGHT
-                    } else {
-                        SMOOTH_STOOD
-                    }
-                })
-                .collect();
-            let anchor = self.smooth_anchor();
-            #[cfg(test)]
-            s.row.log.push(Logged {
-                pi,
-                prior: false,
-                p: p.clone(),
-                b: b.clone(),
-                anchor: anchor.clone(),
-                label: s.row.label.expect("a row's label"),
-            });
-            let of = Described {
-                label: s.row.label.unwrap_or(ClockValue::F64(s.clock)),
-                sized: (0..k).map(|i| p[i * k + i] != 0.0).collect(),
-                held,
-                anchor,
-            };
-            s.row.fresh[pi] = true;
-            s.rings[pi].pending = Some(Pending {
-                of,
-                b,
-                a: p.clone(),
-                p: if se { lower_of(p, k) } else { vec![] },
-                broken: false,
-            });
+            let start = se.then_some(&self.p[pi][..]);
+            Smoother::pass(w, s.rings[pi].slots.iter().rev(), k, se, start);
+            let oldest = s.rings[pi].slots.pop_front().expect("a full ring");
+            let rows = self.smooth_rows(&oldest.of, &w.m, se.then_some(&w.v[..]), targets.clone());
+            let out = &mut w.out;
+            for r in rows {
+                let j = r.target;
+                out.emitted[j] = true;
+                out.label[j] = Some(r.label);
+                out.held[j] = r.held;
+                out.coef[j * k..(j + 1) * k].copy_from_slice(&r.coef);
+                if se {
+                    out.var[j * k..(j + 1) * k].copy_from_slice(&r.var);
+                }
+            }
         }
+        let p = &self.p[pi];
+        let mut b = Vec::with_capacity(targets.len() * k);
+        for j in targets.clone() {
+            b.extend_from_slice(&self.beta[j]);
+        }
+        let held = targets
+            .map(|j| {
+                if self.wj[j] <= 0.0 {
+                    SMOOTH_UNSEEN
+                } else if !ready {
+                    SMOOTH_MIN_WEIGHT
+                } else {
+                    SMOOTH_STOOD
+                }
+            })
+            .collect();
+        let anchor = self.smooth_anchor();
+        #[cfg(test)]
+        s.row.log.push(Logged {
+            pi,
+            prior: false,
+            p: p.clone(),
+            b: b.clone(),
+            anchor: anchor.clone(),
+            label: s.row.label.expect("a row's label"),
+        });
+        let of = Described {
+            label: s.row.label.unwrap_or(ClockValue::F64(s.clock)),
+            sized: (0..k).map(|i| p[i * k + i] != 0.0).collect(),
+            held,
+            anchor,
+        };
+        s.row.fresh[pi] = true;
+        s.rings[pi].pending = Some(Pending {
+            of,
+            b,
+            a: p.clone(),
+            p: if se { lower_of(p, k) } else { vec![] },
+            broken: false,
+        });
         self.smoother = Some(s);
     }
 

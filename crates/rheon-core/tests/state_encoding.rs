@@ -369,3 +369,125 @@ fn a_bins_budget_round_trips_in_both_encodings() {
         "seven fields: the statistic, the refit's count, the anchor, and no budget"
     );
 }
+
+/// `KalmanCfg` skips its trailing optional fields (`noise_units`, `forecast_spans`,
+/// `obs`) when at their defaults, while writing every earlier optional field
+/// whenever a later one is written so both compact positional and named
+/// msgpack encodings round-trip cleanly in every combination.
+#[test]
+fn kalman_round_trips_with_every_optional_part_present_or_absent() {
+    use rheon_core::{
+        Kalman, KalmanCfg, KalmanFamily, KalmanFilter, KalmanLink, KalmanObs, UkfNoise, UkfRule,
+    };
+    let obs_cases = [
+        KalmanObs::default(),
+        KalmanObs {
+            family: KalmanFamily::Poisson,
+            link: KalmanLink::Log,
+            filter: KalmanFilter::Ekf,
+            ..KalmanObs::default()
+        },
+        KalmanObs {
+            family: KalmanFamily::Gamma,
+            link: KalmanLink::Inverse,
+            dispersion: 0.5,
+            filter: KalmanFilter::Ukf,
+            ukf_rule: UkfRule::ScalarIndex,
+            ukf_noise: UkfNoise::Expected,
+            ..KalmanObs::default()
+        },
+        KalmanObs {
+            family: KalmanFamily::Gaussian,
+            link: KalmanLink::Logit,
+            filter: KalmanFilter::Ukf,
+            ukf_rule: UkfRule::Merwe,
+            alpha: 0.8,
+            beta: 2.0,
+            kappa: 0.0,
+            ukf_noise: UkfNoise::Plugin,
+            ..KalmanObs::default()
+        },
+    ];
+    for noise_units in [false, true] {
+        for horizons in [vec![], vec![2.0, 5.0]] {
+            for obs in &obs_cases {
+                if !obs.is_gaussian_identity() && !horizons.is_empty() {
+                    continue;
+                }
+                let is_nl = !obs.is_gaussian_identity();
+                let cfg = KalmanCfg {
+                    n_features: 2,
+                    n_targets: 1,
+                    fit_intercept: true,
+                    decay: Decay::Halflife(50.0),
+                    half_life: if is_nl { vec![] } else { vec![25.0] },
+                    q: if is_nl { Some(vec![1e-4; 3]) } else { None },
+                    obs_var: if is_nl && obs.family == KalmanFamily::Gaussian {
+                        Some(0.25)
+                    } else {
+                        None
+                    },
+                    p0: if obs.link.defined_at_zero() {
+                        1.0
+                    } else {
+                        0.05
+                    },
+                    share_p: false,
+                    min_weight: 0.0,
+                    revert_half_life: vec![f64::INFINITY],
+                    standardize: true,
+                    min_weight_holds_learning: false,
+                    noise_units,
+                    horizons: horizons.clone(),
+                    obs: obs.clone(),
+                };
+                let mut m = Kalman::new(cfg).unwrap();
+                for i in 0..8 {
+                    let x = [(i as f64) * 0.1, -(i as f64) * 0.05];
+                    let y = match obs.family {
+                        KalmanFamily::Gaussian => 0.4 + 0.05 * i as f64,
+                        KalmanFamily::Poisson => (i % 4) as f64,
+                        KalmanFamily::Binomial => (i % 2) as f64,
+                        KalmanFamily::Gamma | KalmanFamily::Tweedie => 0.5 + 0.1 * i as f64,
+                    };
+                    OnlineModel::step(&mut m, &x, &[Some(y)], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+                }
+                let what = format!(
+                    "kalman noise_units={noise_units} horizons={horizons:?} obs={:?}/{:?}",
+                    obs.filter, obs.family
+                );
+                roundtrip(m.cfg(), &format!("{what} cfg"));
+                let compact = rmp_serde::to_vec(&m).unwrap();
+                let named = rmp_serde::to_vec_named(&m).unwrap();
+                let mut from_compact: Kalman =
+                    rmp_serde::from_slice(&compact).unwrap_or_else(|e| {
+                        panic!("{what}: compact encoding does not round-trip: {e}")
+                    });
+                let mut from_named: Kalman = rmp_serde::from_slice(&named)
+                    .unwrap_or_else(|e| panic!("{what}: named encoding does not round-trip: {e}"));
+                assert_eq!(
+                    rmp_serde::to_vec(&from_compact).unwrap(),
+                    compact,
+                    "{what}: compact bytes changed"
+                );
+                assert_eq!(
+                    rmp_serde::to_vec_named(&from_named).unwrap(),
+                    named,
+                    "{what}: named bytes changed"
+                );
+                let x = [0.25, -0.15];
+                let y = [Some(0.6)];
+                let p0 = OnlineModel::step(&mut m, &x, &y, 1.0, 1.0).pred;
+                let pc = OnlineModel::step(&mut from_compact, &x, &y, 1.0, 1.0).pred;
+                let pn = OnlineModel::step(&mut from_named, &x, &y, 1.0, 1.0).pred;
+                let bits = |v: &[f64]| v.iter().map(|z| z.to_bits()).collect::<Vec<_>>();
+                assert_eq!(
+                    bits(&pc),
+                    bits(&p0),
+                    "{what}: compact continuation diverged"
+                );
+                assert_eq!(bits(&pn), bits(&p0), "{what}: named continuation diverged");
+            }
+        }
+    }
+}

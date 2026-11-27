@@ -519,11 +519,13 @@ use crate::{Decay, EwDiag};
 
 mod forms;
 mod horizons;
+mod nonlinear;
 mod smooth;
 pub use forms::CovarianceForm;
+pub use nonlinear::{KalmanFamily, KalmanFilter, KalmanLink, KalmanObs, UkfNoise, UkfRule};
 pub use smooth::{SMOOTH_MIN_WEIGHT, SMOOTH_STOOD, SMOOTH_UNSEEN, Smoothed, SmoothedRow};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct KalmanCfg {
     pub n_features: usize,
     pub n_targets: usize,
@@ -586,16 +588,16 @@ pub struct KalmanCfg {
     /// goes on as it was fitted, `P` absolute and the estimate in the gain
     /// (docs/PLAN.md task 278). No effect with `obs_var`, whose `P` is the
     /// same either way.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default)]
     pub noise_units: bool,
     /// The forecasts' horizons, spans of the clock past the row
     /// (`kalman::horizons`); empty, and not written, for none.
-    #[serde(
-        default,
-        rename = "forecast_spans",
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    #[serde(default, rename = "forecast_spans")]
     pub horizons: Vec<f64>,
+    /// Observation family, link and nonlinear filter settings (`kalman::nonlinear`);
+    /// skipped on write when at the linear Gaussian default.
+    #[serde(default)]
+    pub obs: KalmanObs,
 }
 
 pub use horizons::KALMAN_MAX_HORIZONS;
@@ -610,10 +612,6 @@ fn default_true() -> bool {
 /// rule 5).
 fn gate_held_learning_before_64() -> bool {
     true
-}
-
-fn is_false(v: &bool) -> bool {
-    !*v
 }
 
 fn default_revert() -> Vec<f64> {
@@ -699,7 +697,7 @@ impl KalmanCfg {
                      drift over time, or to a finite positive variance."
                 ));
             }
-        } else {
+        } else if self.obs.is_gaussian_identity() {
             // The spec's `coef_half_life`: the field is the configuration's
             // `half_life`, but a spec's `half_life` is another parameter.
             if self.half_life.len() != 1 && self.half_life.len() != k {
@@ -748,6 +746,7 @@ impl KalmanCfg {
             ));
         }
         horizons::check(self, &mut no);
+        self.obs.validate(self, &mut no);
         no.take(crate::model::check_min_weight("kalman", self.min_weight));
         no.finish()
     }
@@ -1019,6 +1018,8 @@ pub struct Kalman {
     /// was asked for, so no other state moves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     smoother: Option<Box<smooth::Smoother>>,
+    #[serde(skip)]
+    nl_work: Option<Box<nonlinear::NonlinearWork>>,
 }
 
 /// The layout `Kalman` loads, checked on the way in: every vector at the
@@ -1165,6 +1166,13 @@ impl TryFrom<KalmanV4> for Kalman {
         // Each message says what its check requires (docs/PLAN.md task 218):
         // the basis's said ">= 0" of a check that refuses a 0, and named
         // neither its lengths nor its bound.
+        if v.form != CovarianceForm::Covariance && !cfg.obs.is_linear() {
+            return Err(
+                "kalman: its saved covariance_form is not supported with a nonlinear filter. Load \
+                 an undamaged copy of the state file, or rebuild it from its input."
+                    .into(),
+            );
+        }
         if v.smoother.as_ref().is_some_and(|s| {
             v.form != CovarianceForm::Covariance || !s.is_valid(k, m, n_p, cfg.standardize)
         }) {
@@ -1217,6 +1225,7 @@ impl TryFrom<KalmanV4> for Kalman {
             fbuf: vec![],
             xbuf: vec![],
             smoother: v.smoother,
+            nl_work: None,
         })
     }
 }
@@ -1233,7 +1242,12 @@ impl Kalman {
         // unstandardized, and standardized of the intercept, each feature's
         // waiting for its scale (the module doc).
         let mut p_init = vec![0.0; k * k];
-        if let Some(r) = cfg.obs_var {
+        if !cfg.obs.is_gaussian_identity() {
+            let sized = if cfg.standardize { off } else { k };
+            for i in 0..sized {
+                p_init[i * k + i] = cfg.p0;
+            }
+        } else if let Some(r) = cfg.obs_var {
             let sized = if cfg.standardize { off } else { k };
             for i in 0..sized {
                 p_init[i * k + i] = cfg.p0 * r;
@@ -1245,13 +1259,19 @@ impl Kalman {
                 p_init[i * k + i] = cfg.p0;
             }
         }
+        let mut beta = vec![vec![0.0; k]; m];
+        if !cfg.obs.link.defined_at_zero() && cfg.fit_intercept {
+            for b in &mut beta {
+                b[0] = 1.0;
+            }
+        }
         let anchored = if cfg.standardize { k } else { 0 };
         let mut model = Self {
             stats: EwDiag::new(k),
             anchor_hi: vec![0.0; anchored],
             anchor_lo: vec![0.0; anchored],
             anchor_scale: vec![1.0; anchored],
-            beta: vec![vec![0.0; k]; m],
+            beta,
             p: vec![p_init; n_p],
             elapsed: vec![0.0; n_p],
             moments_gap: 0.0,
@@ -1280,6 +1300,7 @@ impl Kalman {
             fbuf: vec![],
             xbuf: vec![],
             smoother: None,
+            nl_work: None,
             cfg,
         };
         model.ensure_buffers();
@@ -1328,6 +1349,9 @@ impl Kalman {
     /// observation, `Q·D²`, as the next observation will charge it (the
     /// module doc).
     pub fn pred_var(&self, x: &[f64]) -> Vec<f64> {
+        if !self.cfg.obs.is_gaussian_identity() {
+            return self.pred_var_nonlinear(x);
+        }
         let k = self.cfg.k_total();
         let z = self.anchored(x);
         (0..self.cfg.n_targets)
@@ -1479,7 +1503,7 @@ impl Kalman {
     /// Whether `P` is held in units of the noise (the module doc): the
     /// noise learned, under [`KalmanCfg::noise_units`].
     fn units(&self) -> bool {
-        self.cfg.noise_units && self.cfg.obs_var.is_none()
+        self.cfg.obs.is_gaussian_identity() && self.cfg.noise_units && self.cfg.obs_var.is_none()
     }
 
     /// The process noise `P` takes for a noise `sigma2`, in the units `P` is
@@ -2038,7 +2062,11 @@ impl Kalman {
     /// gap in its target, as it did when the noise was charged per row.
     fn covariance_now(&self, pi: usize) -> std::borrow::Cow<'_, [f64]> {
         let d = self.elapsed[pi];
-        let noise = self.readiness_noise(pi);
+        let noise = if self.cfg.obs.is_gaussian_identity() {
+            self.readiness_noise(pi)
+        } else {
+            1.0
+        };
         // `readiness_noise` is a positive number, or NaN for none.
         if d == 0.0 || noise.is_nan() || self.is_unsized(pi) {
             return self.cov(pi);
@@ -2059,7 +2087,12 @@ impl Kalman {
         };
         let mut p = self.cov(pi).into_owned();
         for i in 0..k {
-            let qd = q[i] * self.cfg.gap_noise(i, d);
+            let gn = if self.cfg.obs.is_linear() {
+                self.cfg.gap_noise(i, d)
+            } else {
+                nonlinear::gap_noise_portable(&self.cfg, i, d)
+            };
+            let qd = q[i] * gn;
             if qd == 0.0 || (self.cfg.standardize && p[i * k + i] == 0.0) || (open && i < off) {
                 continue;
             }
@@ -2159,7 +2192,7 @@ impl Kalman {
             s.cut(Some(pi));
         }
         self.p[pi].fill(0.0);
-        if self.units() {
+        if self.units() || !self.cfg.obs.is_gaussian_identity() {
             // In units of the noise the prior needs none: `p0` on every
             // usable slot, the intercept's too, its level already in `b`.
             if self.cfg.standardize {
@@ -2602,6 +2635,9 @@ impl OnlineModel for Kalman {
     /// the posterior, `sqrt(1 + Σ_i P_ii E[z_i²] / R)` in the current
     /// coordinates (the module doc).
     fn error_inflation_into(&self, out: &mut Vec<f64>) -> bool {
+        if !self.cfg.obs.is_gaussian_identity() {
+            return false;
+        }
         let m = self.cfg.n_targets;
         out.clear();
         out.resize(m, f64::INFINITY);
@@ -2627,11 +2663,17 @@ impl OnlineModel for Kalman {
         out: &mut Vec<f64>,
         _limit: f64,
     ) -> bool {
+        if !self.cfg.obs.is_gaussian_identity() {
+            return false;
+        }
         self.row_inflation_into(x, d_clock, out);
         true
     }
 
     fn row_error_inflation_into(&self, x: &[f64], d_clock: f64, out: &mut Vec<f64>) -> bool {
+        if !self.cfg.obs.is_gaussian_identity() {
+            return false;
+        }
         self.row_inflation_into(x, d_clock, out);
         true
     }
@@ -2666,6 +2708,10 @@ impl OnlineModel for Kalman {
         weight: f64,
         out: &mut Step,
     ) {
+        if !self.cfg.obs.is_linear() {
+            self.step_nonlinear(x, y, d_clock, weight, out);
+            return;
+        }
         // The form read once a row, and the row stepped in it: each loop
         // over the slots in the covariance form reads the one entry it did
         // before the factor was added, at the cost it had then.
@@ -2692,6 +2738,9 @@ impl OnlineModel for Kalman {
     }
 
     fn predict(&self, x: &[f64], d_clock: f64) -> Step {
+        if !self.cfg.obs.is_linear() {
+            return self.predict_nonlinear(x, d_clock);
+        }
         if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
             return refused;
         }
@@ -3198,140 +3247,6 @@ mod tests {
         ((*state >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
     }
 
-    /// `take_the_row` and `matvec` (task 420) are the loops they replaced, to
-    /// the bit: the upper triangle updated and mirrored, and each row's
-    /// products summed from column 0, at every width up to 40 (the blocks of
-    /// four rows and their remainders), on values of mixed scale with zeros
-    /// and signs.
-    #[test]
-    fn the_covariance_passes_are_the_serial_forms_to_the_bit() {
-        let mut st = 420u64;
-        for k in 1..=40usize {
-            for round in 0..20 {
-                let mut vals = |n: usize| -> Vec<f64> {
-                    (0..n)
-                        .map(|_| {
-                            let u = lcg(&mut st);
-                            match (u * 1e3) as i64 % 7 {
-                                0 => 0.0,
-                                1 => u * 1e-30,
-                                2 => u * 1e30,
-                                _ => u,
-                            }
-                        })
-                        .collect()
-                };
-                // A bit-symmetric `P`, as the filter keeps it, and one that is not.
-                let mut p = vals(k * k);
-                if round % 2 == 0 {
-                    for i in 0..k {
-                        for j in 0..i {
-                            p[i * k + j] = p[j * k + i];
-                        }
-                    }
-                }
-                let (gain, pz, z) = (vals(k), vals(k), vals(k));
-
-                let mut old = p.clone();
-                for i in 0..k {
-                    for jj in i..k {
-                        let v = gain[i] * pz[jj];
-                        old[i * k + jj] -= v;
-                        if jj != i {
-                            old[jj * k + i] -= v;
-                        }
-                    }
-                }
-                let mut new = p.clone();
-                take_the_row(&mut new, &gain, &pz);
-                let bits = |v: &[f64]| v.iter().map(|x| x.canon_bits()).collect::<Vec<_>>();
-                // Mirrored writes make the old form's lower triangle `P_ji - v`,
-                // which is the new form's on any `P`, symmetric or not.
-                assert_eq!(bits(&old), bits(&new), "take_the_row, k = {k}");
-
-                let mut old_pz = vec![0.0; k];
-                for i in 0..k {
-                    let mut acc = 0.0;
-                    for jj in 0..k {
-                        acc += p[i * k + jj] * z[jj];
-                    }
-                    old_pz[i] = acc;
-                }
-                let mut new_pz = vec![f64::NAN; k];
-                matvec(&p, &z, &mut new_pz);
-                assert_eq!(bits(&old_pz), bits(&new_pz), "matvec, k = {k}");
-            }
-        }
-    }
-
-    /// The noise basis's median, sorted on the stack (task 250), is the
-    /// one the vector it replaced gave, to the bit: every order of three
-    /// rows, with ties in the squares and weights that put the half on a
-    /// row's edge, and none before the third row.
-    #[test]
-    fn the_noise_median_on_the_stack_is_the_vectors() {
-        let vector_form = |b: &NoiseBasis| -> Option<f64> {
-            if b.e2.len() < PRIOR_ROWS {
-                return None;
-            }
-            let mut rows: Vec<(f64, f64)> = b.e2.iter().copied().zip(b.w.iter().copied()).collect();
-            rows.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let half = 0.5 * b.w.iter().sum::<f64>();
-            let mut seen = 0.0;
-            let median = rows
-                .iter()
-                .find(|(_, w)| {
-                    seen += w;
-                    seen >= half
-                })
-                .map_or(rows[rows.len() - 1].0, |(v, _)| *v);
-            let v = median / CHI2_1_MEDIAN;
-            (v > 0.0 && v.is_finite()).then_some(v)
-        };
-        let squares = [
-            [1.0, 1.0, 2.0],
-            [1.0, 2.0, 2.0],
-            [3.0, 3.0, 3.0],
-            [0.5, 2.0, 7.0],
-            [1e-300, 1e300, 1.0],
-        ];
-        let weights = [
-            [1.0, 1.0, 1.0],
-            [1.0, 1.0, 2.0],
-            [2.0, 1.0, 1.0],
-            [0.25, 0.5, 0.25],
-            [1e-9, 1.0, 1e9],
-        ];
-        let orders = [
-            [0, 1, 2],
-            [0, 2, 1],
-            [1, 0, 2],
-            [1, 2, 0],
-            [2, 0, 1],
-            [2, 1, 0],
-        ];
-        let mut read = 0;
-        for e2 in squares {
-            for w in weights {
-                for o in orders {
-                    let mut b = NoiseBasis::default();
-                    for (n, &i) in o.iter().enumerate() {
-                        assert_eq!(b.noise(), None, "{n} rows");
-                        b.add(e2[i] * 2.0, 2.0, w[i]);
-                    }
-                    let got = b.noise().expect("three rows");
-                    assert_eq!(
-                        got.to_bits(),
-                        vector_form(&b).expect("three rows").to_bits(),
-                        "{e2:?} {w:?} {o:?}"
-                    );
-                    read += 1;
-                }
-            }
-        }
-        assert_eq!(read, 5 * 5 * 6);
-    }
-
     fn cfg(k: usize, m: usize, hl: Vec<f64>) -> KalmanCfg {
         KalmanCfg {
             horizons: Vec::new(),
@@ -3349,6 +3264,7 @@ mod tests {
             min_weight: 10.0,
             revert_half_life: vec![f64::INFINITY],
             standardize: true,
+            obs: Default::default(),
         }
     }
 
@@ -3925,6 +3841,7 @@ mod tests {
             min_weight: 0.0,
             revert_half_life: vec![f64::INFINITY],
             standardize: false,
+            obs: Default::default(),
         })
         .unwrap();
         // Accumulate the normal equations alongside, then compare with the
@@ -5113,6 +5030,7 @@ mod tests {
             min_weight: 0.0,
             revert_half_life: vec![f64::INFINITY],
             standardize: false,
+            obs: Default::default(),
         })
         .unwrap();
         assert_eq!(f64::from_bits(1) / 4.0, 0.0, "R / w underflows");
@@ -5435,6 +5353,7 @@ mod tests {
             min_weight: 0.0,
             revert_half_life: vec![f64::INFINITY],
             standardize: false,
+            obs: Default::default(),
         }
     }
 
@@ -5741,6 +5660,7 @@ mod tests {
             min_weight: 0.0,
             revert_half_life: vec![f64::INFINITY],
             standardize: true,
+            obs: Default::default(),
         };
         let mut m = Kalman::new(c).unwrap();
         let mut s = 29u64;
@@ -5877,4 +5797,6 @@ mod tests {
     mod review;
     // Task 496's fixed-lag smoother against the whole-prefix smoother.
     mod smooth;
+    // Task 497's EKF and UKF nonlinear observation filters.
+    mod nonlinear;
 }

@@ -103,6 +103,7 @@ fn kalman_cfg() -> KalmanCfg {
         min_weight: 3.0,
         revert_half_life: vec![f64::INFINITY],
         standardize: true,
+        obs: Default::default(),
     }
 }
 
@@ -141,6 +142,56 @@ fn kalman_reverting() {
         Some(&Kalman::n_eff),
     );
     check(&r, "kalman", 2, 1);
+}
+
+#[test]
+fn kalman_ekf_and_ukf() {
+    use rheon_core::{KalmanFamily, KalmanFilter, KalmanLink, KalmanObs, UkfNoise, UkfRule};
+    let cases = [
+        (
+            KalmanObs {
+                family: KalmanFamily::Poisson,
+                link: KalmanLink::Log,
+                filter: KalmanFilter::Ekf,
+                ..KalmanObs::default()
+            },
+            None,
+        ),
+        (
+            KalmanObs {
+                family: KalmanFamily::Poisson,
+                link: KalmanLink::Log,
+                filter: KalmanFilter::Ukf,
+                ukf_rule: UkfRule::ScalarIndex,
+                ukf_noise: UkfNoise::Expected,
+                ..KalmanObs::default()
+            },
+            None,
+        ),
+        (
+            KalmanObs {
+                family: KalmanFamily::Gaussian,
+                link: KalmanLink::Log,
+                filter: KalmanFilter::Ukf,
+                ukf_rule: UkfRule::Merwe,
+                ukf_noise: UkfNoise::Plugin,
+                ..KalmanObs::default()
+            },
+            Some(0.5),
+        ),
+    ];
+    for (obs, obs_var) in cases {
+        let cfg = KalmanCfg {
+            half_life: Vec::new(),
+            q: Some(vec![1e-4; K + 1]),
+            obs_var,
+            obs,
+            ..kalman_cfg()
+        };
+        let r = probe_with(Kalman::new(cfg.clone()).unwrap(), 2, Some(&Kalman::n_eff));
+        check(&r, "kalman", 2, 1);
+        predict_is_the_step_without_the_step(|| Kalman::new(cfg.clone()).unwrap(), 2, false);
+    }
 }
 
 fn robust_cfg(loss: RobustLoss) -> RobustCfg {
