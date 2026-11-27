@@ -149,6 +149,7 @@ fn ewridge_cfg(standardize: bool, ridge: f64) -> EwRidgeCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        constraints: None,
     }
 }
 
@@ -279,6 +280,7 @@ fn rls_golden() {
         delta: 0.5,
         coef_prior: None,
         min_weight: 3.0,
+        constraints: None,
     })
     .unwrap();
     check("rls", &signature(&mut m, 0), GOLDEN_RLS);

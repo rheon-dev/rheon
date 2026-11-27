@@ -1332,6 +1332,7 @@ def solve(
     target: str | int = 0,
     features: Sequence[str | int] | None = None,
     standardize: bool = False,
+    constraints: tuple[Sequence[Sequence[float]], Sequence[float]] | None = None,
 ) -> Any:
     """Compute ridge coefficients from a Gram, in the features' original units.
 
@@ -1369,6 +1370,17 @@ def solve(
         where it would make the system singular. Pass the ``standardize``
         the spec used, or the numbers will not match its ``coef()``.
         Default ``False``.
+    ``constraints``
+        Optional linear equality constraints ``(R, r)`` on the slope
+        coefficients (never the intercept), enforcing ``R @ beta_slopes = r``
+        in the features' original units. ``R`` has shape ``(q, k)`` for ``q``
+        linearly independent constraints over the ``k`` active slope columns
+        (``features`` if given, else every non-intercept column of ``g``),
+        and ``r`` has length ``q``. Solved in closed form via
+        ``beta_c = beta - A R' (R A R')^-1 (R beta - r)``. Default ``None``.
+        Refused if ``R`` or ``r`` has wrong shape, non-finite values, a zero
+        row, or linearly dependent rows; returns ``nan`` if ``R A R'`` is
+        singular for a given ridge.
 
     .. rubric:: Returns
 
@@ -1488,6 +1500,11 @@ def solve(
         raise ValueError(msg)
     t = _target_index(g, target, "rheon.gram.solve")
     slots, icept = _feature_slots(g, features, "rheon.gram.solve")
+    parsed_constraints = (
+        None
+        if constraints is None
+        else _parse_constraints(np, constraints, len(slots), "rheon.gram.solve")
+    )
     scalar = np.ndim(ridge) == 0
     k = len(_columns(g, "rheon.gram.solve"))
 
@@ -1514,11 +1531,189 @@ def solve(
     if keep:
         kk = np.ix_(keep, keep)
         cols = [slots[i] for i in keep]
-        rows = _ridge_solves(np, a[kk] / np.outer(s[keep], s[keep]), b[keep] / s[keep], ridges)
-        out[:, cols] = rows / s[keep]
+        if parsed_constraints is None:
+            rows = _ridge_solves(np, a[kk] / np.outer(s[keep], s[keep]), b[keep] / s[keep], ridges)
+            out[:, cols] = rows / s[keep]
+        else:
+            r_mat, r_rhs = parsed_constraints
+            c_mat = r_mat[:, keep] / s[keep]
+            rows = _ridge_solves_constrained(
+                np,
+                a[kk] / np.outer(s[keep], s[keep]),
+                b[keep] / s[keep],
+                ridges,
+                c_mat,
+                r_rhs,
+            )
+            bad = ~np.all(np.isfinite(rows), axis=1)
+            out[:, cols] = rows / s[keep]
+            if np.any(bad):
+                out[bad, :] = np.nan
+    elif parsed_constraints is not None:
+        out[:, :] = np.nan
     if icept >= 0:
-        out[:, icept] = np.nan if _is_within(g) else ybar - out[:, slots] @ m[slots]
+        if _is_within(g):
+            out[:, icept] = np.nan
+        else:
+            good = np.all(np.isfinite(out[:, slots]), axis=1)
+            out[good, icept] = ybar - out[good][:, slots] @ m[slots]
+            out[~good, icept] = np.nan
     return out[0] if scalar else out
+
+
+def _parse_constraints(
+    np: Any,
+    constraints: Any,
+    k_slopes: int,
+    who: str,
+) -> tuple[Any, Any]:
+    """Validate ``constraints=(R, r)`` for ``k_slopes`` slope columns."""
+    if (
+        isinstance(constraints, (str, bytes, Mapping))
+        or not isinstance(constraints, Sequence)
+        or len(constraints) != 2
+    ):
+        msg = (
+            f"{who}: constraints must be a (R, r) pair of a 2-d matrix and a 1-d right-hand side, "
+            f"but it is {type(constraints).__name__}. Pass a pair (R, r) with R of shape "
+            f"(q, {k_slopes}) and r of length q."
+        )
+        raise TypeError(msg)
+    raw_r, raw_rhs = constraints
+    try:
+        r_mat = np.asarray(raw_r, dtype=float)
+        r_rhs = np.asarray(raw_rhs, dtype=float)
+    except (TypeError, ValueError) as exc:
+        msg = (
+            f"{who}: constraints must hold numeric arrays (R, r), but conversion failed: {exc}. "
+            "Pass finite floats for R and r."
+        )
+        raise ValueError(msg) from exc
+    if r_mat.ndim != 2:
+        msg = (
+            f"{who}: constraints matrix R must be 2-d with shape (q, {k_slopes}), "
+            f"but it has shape {r_mat.shape}. Pass a list of constraint rows."
+        )
+        raise ValueError(msg)
+    if r_rhs.ndim != 1:
+        msg = (
+            f"{who}: constraints rhs r must be 1-d, but it has shape {r_rhs.shape}. "
+            "Pass one right-hand side value per constraint row."
+        )
+        raise ValueError(msg)
+    q, cols = r_mat.shape
+    if q == 0:
+        msg = (
+            f"{who}: constraints matrix must have at least 1 row, but it is empty. "
+            "Pass at least one constraint row, or leave constraints out."
+        )
+        raise ValueError(msg)
+    if cols != k_slopes:
+        msg = (
+            f"{who}: constraints matrix R must have {k_slopes} columns (one per active slope "
+            f"feature), but it has {cols}. Provide one column per active slope feature."
+        )
+        raise ValueError(msg)
+    if r_rhs.shape[0] != q:
+        msg = (
+            f"{who}: constraints rhs must have {q} entries (one per row of R), "
+            f"but it has {r_rhs.shape[0]}. Provide one right-hand side value per row of R."
+        )
+        raise ValueError(msg)
+    if q > k_slopes:
+        msg = (
+            f"{who}: constraints has {q} rows for {k_slopes} features, but at most "
+            f"{k_slopes} linearly independent equality constraints can hold on the slopes. "
+            f"Remove redundant constraints so there are at most {k_slopes}."
+        )
+        raise ValueError(msg)
+    if not (np.all(np.isfinite(r_mat)) and np.all(np.isfinite(r_rhs))):
+        msg = (
+            f"{who}: constraints matrix and rhs must hold finite values. "
+            "Replace any NaN or infinite entry."
+        )
+        raise ValueError(msg)
+    norms = np.linalg.norm(r_mat, axis=1)
+    if not np.all((norms > 0.0) & np.isfinite(norms)):
+        zero_row = int(np.flatnonzero(~((norms > 0.0) & np.isfinite(norms)))[0])
+        msg = (
+            f"{who}: constraints matrix row {zero_row} is all zeros (or overflows its norm). "
+            "Replace that row with at least one non-zero finite entry."
+        )
+        raise ValueError(msg)
+    if q > 1:
+        unit = r_mat / norms[:, None]
+        s = np.linalg.svd(unit, compute_uv=False)
+        tol = max(q, k_slopes) * np.finfo(float).eps * s[0]
+        rank = int(np.sum(s > tol))
+        if rank < q:
+            msg = (
+                f"{who}: constraints matrix rows are linearly dependent (rank {rank} for {q} "
+                "rows). Remove redundant or conflicting rows so R has full row rank."
+            )
+            raise ValueError(msg)
+    return r_mat, r_rhs
+
+
+def _ridge_solves_constrained(
+    np: Any,
+    a: Any,
+    b: Any,
+    ridges: Any,
+    c_mat: Any,
+    rhs: Any,
+) -> Any:
+    """Constrained ``min 0.5 x'(a + r I)x - b'x s.t. c_mat x = rhs`` per ridge."""
+    k = len(b)
+    q = c_mat.shape[0]
+    out = np.full((len(ridges), k), np.nan)
+    diag = np.clip(np.diag(a), 0.0, None)
+    b_all = np.column_stack([b, c_mat.T])
+
+    def solve_one(r: float) -> Any:
+        e = np.sqrt(diag + r)
+        e = np.where(e > 0.0, e, 1.0)
+        h = (a + r * np.eye(k)) / np.outer(e, e)
+        rhs_e = b_all / e[:, None]
+        x_all = None
+        if r > 0.0:
+            try:
+                x_all = np.linalg.solve(h, rhs_e) / e[:, None]
+            except np.linalg.LinAlgError:
+                x_all = None
+        if x_all is None:
+            d, v = np.linalg.eigh(h)
+            if not np.all(d > 0.0):
+                return np.full(k, np.nan)
+            x_all = (v @ ((v.T @ rhs_e) / d[:, None])) / e[:, None]
+        if not np.all(np.isfinite(x_all)):
+            return np.full(k, np.nan)
+        x_u = x_all[:, 0]
+        u = x_all[:, 1:]
+        m_mat = c_mat @ u
+        m_mat = 0.5 * (m_mat + m_mat.T)
+        dm = np.sqrt(np.clip(np.diag(m_mat), 0.0, None))
+        if not np.all((dm > 0.0) & np.isfinite(dm)):
+            return np.full(k, np.nan)
+        m_hat = m_mat / np.outer(dm, dm)
+        try:
+            l_m = np.linalg.cholesky(m_hat)
+        except np.linalg.LinAlgError:
+            return np.full(k, np.nan)
+        if not np.all(np.diag(l_m) ** 2 > 1e-12):
+            return np.full(k, np.nan)
+        if q > 1 and np.linalg.cond(m_hat) > 1e14:
+            return np.full(k, np.nan)
+        res = (c_mat @ x_u - rhs) / dm
+        # Solve L_m L_m' lam_hat = res via forward/back solve.
+        y_m = np.linalg.solve(l_m, res)
+        lam_hat = np.linalg.solve(l_m.T, y_m)
+        x_c = x_u - u @ (lam_hat / dm)
+        return x_c if np.all(np.isfinite(x_c)) else np.full(k, np.nan)
+
+    for i, r in enumerate(ridges):
+        out[i] = solve_one(float(r))
+    return out
 
 
 #: How far apart a system's diagonal may be, largest over smallest, for a

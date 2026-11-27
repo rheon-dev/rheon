@@ -32,6 +32,7 @@ fn cfg(k: usize, half_life: f64) -> EwRidgeCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        constraints: None,
     }
 }
 
@@ -350,6 +351,7 @@ fn rls(k: usize, half_life: f64, delta: f64) -> Rls {
         delta,
         coef_prior: None,
         min_weight: 0.0,
+        constraints: None,
     })
     .unwrap()
 }

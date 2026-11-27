@@ -86,6 +86,7 @@ class CommonKwargs(TypedDict, total=False):
     emit_robust_se: bool
     robust_se_half_life: float | Duration | None
     robust_se_lags: int | None
+    robust_se_types: list[Literal["hc0", "hc1", "hc2", "hc3"]] | None
     emit_specification: bool
     specification_half_life: float | Duration | None
     ljung_box_lags: int | None
@@ -102,3 +103,4 @@ class CommonKwargs(TypedDict, total=False):
     held_overflow: Literal["refuse", "drop_oldest"] | None
     group: str | None
     group_close: Literal["monotone", "session"] | None
+    max_state_bytes: int | None

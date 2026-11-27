@@ -115,9 +115,12 @@ pub(super) enum Source {
     SupportCoef(usize),
     /// `se_coef`, per instance, laid out like `Coef` (task 116).
     SeCoef(usize),
-    /// `se_coef_hc0` and `se_coef_hac`, per instance, laid out like `Coef`
-    /// (task 221 (c)).
+    /// `se_coef_hc0`..`se_coef_hc3` and `se_coef_hac`, per instance, laid out
+    /// like `Coef`.
     SeCoefHc0(usize),
+    SeCoefHc1(usize),
+    SeCoefHc2(usize),
+    SeCoefHc3(usize),
     SeCoefHac(usize),
     /// `scored_clock` and `learned_clock`, one pair per spec, in the clock
     /// column's own type (docs/PLAN.md task 152).
@@ -220,6 +223,9 @@ impl FieldMeta {
             | Source::SupportCoef(_)
             | Source::SeCoef(_)
             | Source::SeCoefHc0(_)
+            | Source::SeCoefHc1(_)
+            | Source::SeCoefHc2(_)
+            | Source::SeCoefHc3(_)
             | Source::SeCoefHac(_)
             | Source::SmoothedCoef(_)
             | Source::SmoothedSe(_) => DataType::List(Box::new(DataType::Float64)),
@@ -788,10 +794,32 @@ pub fn output_index(spec: &Spec) -> Vec<FieldMeta> {
                 }
                 // The robust ones beside it, opt-in (task 221 (c)).
                 if spec.emit_robust_se && spec.has_robust_se() {
-                    fields.push(like(
-                        FieldMeta::new(format!("se_coef_hc0{suffix}"), "se_coef_hc0")
-                            .src(Source::SeCoefHc0(mi)),
-                    ));
+                    if let Some(types) = spec.robust_se_types_parsed() {
+                        for kind in types {
+                            let (base, src) = match kind {
+                                rheon_core::RobustSeType::Hc0 => {
+                                    ("se_coef_hc0", Source::SeCoefHc0(mi))
+                                }
+                                rheon_core::RobustSeType::Hc1 => {
+                                    ("se_coef_hc1", Source::SeCoefHc1(mi))
+                                }
+                                rheon_core::RobustSeType::Hc2 => {
+                                    ("se_coef_hc2", Source::SeCoefHc2(mi))
+                                }
+                                rheon_core::RobustSeType::Hc3 => {
+                                    ("se_coef_hc3", Source::SeCoefHc3(mi))
+                                }
+                            };
+                            fields.push(like(
+                                FieldMeta::new(format!("{base}{suffix}"), base).src(src),
+                            ));
+                        }
+                    } else {
+                        fields.push(like(
+                            FieldMeta::new(format!("se_coef_hc0{suffix}"), "se_coef_hc0")
+                                .src(Source::SeCoefHc0(mi)),
+                        ));
+                    }
                     if spec.robust_se_lags_or_default() > 0 {
                         fields.push(like(
                             FieldMeta::new(format!("se_coef_hac{suffix}"), "se_coef_hac")

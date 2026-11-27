@@ -18,7 +18,6 @@ def tdigest(
     targets: TargetList,
     quantiles: list[float],
     compression: float = 100.0,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Quantiles and expected shortfalls of each target column, from a
@@ -177,6 +176,4 @@ def tdigest(
     # reports the dict this made (`ModelBank.specs`).
     if compression != 100.0:
         model["compression"] = compression
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     return _common(name, model, targets=targets, features=[], **common)

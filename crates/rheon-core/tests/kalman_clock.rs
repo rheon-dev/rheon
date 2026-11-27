@@ -65,6 +65,7 @@ fn ewridge() -> EwRidge {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        constraints: None,
     })
     .unwrap()
 }

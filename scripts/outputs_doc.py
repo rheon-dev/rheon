@@ -616,7 +616,8 @@ OPTIONAL: list[tuple[str, str]] = [
         "[Warm-up gates](MODELS.md#warm-up-gates)",
     ),
     (
-        "`emit_robust_se`, `ewridge`'s and `rls`'s",
+        "`emit_robust_se` (with optional `robust_se_types` for `hc0` to `hc3`), "
+        "`ewridge`'s and `rls`'s",
         "[Can its t be trusted?](DIAGNOSTICS.md#can-its-t-be-trusted)",
     ),
     (

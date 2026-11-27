@@ -25,7 +25,6 @@ def audit(
     distinct_window_rows: int | None = None,
     distinct_window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A count of what a stream's columns hold, read in one pass by a spec that fits
@@ -390,7 +389,5 @@ def audit(
         model["distinct_window_size"] = distinct_window_size
     if closed != "right":
         model["closed"] = closed
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     targets = _mirror_target(name, "audit", columns, common, "it counts what is in", "columns")
     return _common(name, model, targets=targets, features=columns, **common)

@@ -2755,6 +2755,7 @@ mod tests {
                     window: Some(window),
                     window_every: None,
                     max_rows_between_snapshots: None,
+                    constraints: None,
                 })
                 .unwrap();
                 // The inclusive edge, which `inside` below is gathered by:
@@ -2842,6 +2843,7 @@ mod tests {
                 window: Some(1999.0),
                 window_every: None,
                 max_rows_between_snapshots: None,
+                constraints: None,
             })
             .unwrap();
             m.set_window_closed(crate::WindowClosed::Both);
@@ -2943,6 +2945,7 @@ mod tests {
                 window: None,
                 window_every: None,
                 max_rows_between_snapshots: None,
+                constraints: None,
             })
             .unwrap()
         };
@@ -3051,6 +3054,7 @@ mod tests {
             window: Some(5.0),
             window_every: None,
             max_rows_between_snapshots: None,
+            constraints: None,
         })
         .unwrap();
         let lasso = crate::Lasso::new(crate::LassoCfg {

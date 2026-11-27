@@ -97,6 +97,241 @@ fn with_cov<T>(order: usize, f: impl FnOnce(&mut CovScratch) -> T) -> T {
     out
 }
 
+/// Which heteroskedasticity-consistent (HC) covariance estimator a [`Sandwich`]
+/// reads.
+///
+/// At row time, with out-of-sample residual `e` and pre-fold leverage
+/// `g = w z' (λ B)⁻¹ z` (`h = g / (1 + g)`, `e_in = e / (1 + g)`):
+///
+/// - [`Self::Hc0`]: `e_in² = e² / (1 + g)²`
+/// - [`Self::Hc1`]: `Hc0` scaled by `n / (n − p)` at Kish effective sample size `n = W² / Q`
+/// - [`Self::Hc2`]: `e_in² / (1 − h) = e² / (1 + g)`
+/// - [`Self::Hc3`]: `(e_in / (1 − h))² = e²` (the raw out-of-sample meat)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RobustSeType {
+    Hc0,
+    Hc1,
+    Hc2,
+    Hc3,
+}
+
+impl RobustSeType {
+    /// Every HC variant in canonical order.
+    pub const ALL: [Self; 4] = [Self::Hc0, Self::Hc1, Self::Hc2, Self::Hc3];
+
+    /// The word a spec spells for this variant.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Hc0 => "hc0",
+            Self::Hc1 => "hc1",
+            Self::Hc2 => "hc2",
+            Self::Hc3 => "hc3",
+        }
+    }
+
+    /// Parse a spec word into a variant.
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "hc0" => Some(Self::Hc0),
+            "hc1" => Some(Self::Hc1),
+            "hc2" => Some(Self::Hc2),
+            "hc3" => Some(Self::Hc3),
+            _ => None,
+        }
+    }
+}
+
+/// Optional row-time HC0–HC2 state kept beside [`Sandwich`]'s shared bread and
+/// raw out-of-sample meat (`HC3*`). Absent when `robust_se_types` is unset so
+/// existing states serialize to identical bytes and pay zero overhead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct SandwichVariants {
+    /// Active feature indices for this slot (`None` = all `0..k`).
+    active: Option<Vec<usize>>,
+    /// Keep `meat_hc0` (shared by `hc0` and `hc1`).
+    need_hc0_meat: bool,
+    /// Track `w_sum`, `q_sum`, `q_scale` for `hc1`'s Kish `n / (n - p)` factor.
+    need_hc1_scale: bool,
+    /// Keep `meat_hc2`.
+    need_hc2_meat: bool,
+    /// Packed upper-triangular Cholesky factor `R_b` of the active bread
+    /// (`B_act = R_bᵀ R_b`), maintained in `O(p²)` via Givens rotations when
+    /// `need_hc0_meat || need_hc2_meat`.
+    bread_r: Vec<f64>,
+    /// `Σ (ω e / (1 + g))² z z'`, row-major `d × d`.
+    meat_hc0: Vec<f64>,
+    /// `Σ ω² (e² / (1 + g)) z z'`, row-major `d × d`.
+    meat_hc2: Vec<f64>,
+    /// Decayed weight sum `W = Σ ω`.
+    w_sum: f64,
+    /// Decayed squared-weight sum `Q = Σ ω²` (`sqsum` scaled).
+    q_sum: f64,
+    q_scale: i32,
+    /// Positive-weight rows folded into the bread.
+    folded: u64,
+    /// Positive-weight rows folded into the leverage-adjusted meats.
+    meat_folded: u64,
+}
+
+impl SandwichVariants {
+    fn new(k: usize, intercept: bool, types: &[RobustSeType], active: Option<Vec<usize>>) -> Self {
+        let d = k + usize::from(intercept);
+        let p = active.as_ref().map_or(k, Vec::len) + usize::from(intercept);
+        let need_hc0_meat =
+            types.contains(&RobustSeType::Hc0) || types.contains(&RobustSeType::Hc1);
+        let need_hc1_scale = types.contains(&RobustSeType::Hc1);
+        let need_hc2_meat = types.contains(&RobustSeType::Hc2);
+        let need_chol = need_hc0_meat || need_hc2_meat;
+        Self {
+            active,
+            need_hc0_meat,
+            need_hc1_scale,
+            need_hc2_meat,
+            bread_r: if need_chol {
+                vec![0.0; p * (p + 1) / 2]
+            } else {
+                Vec::new()
+            },
+            meat_hc0: if need_hc0_meat {
+                vec![0.0; d * d]
+            } else {
+                Vec::new()
+            },
+            meat_hc2: if need_hc2_meat {
+                vec![0.0; d * d]
+            } else {
+                Vec::new()
+            },
+            w_sum: 0.0,
+            q_sum: 0.0,
+            q_scale: 0,
+            folded: 0,
+            meat_folded: 0,
+        }
+    }
+
+    fn active_dim(&self, k: usize, intercept: bool) -> usize {
+        self.active.as_ref().map_or(k, Vec::len) + usize::from(intercept)
+    }
+
+    fn has_shape(
+        &self,
+        k: usize,
+        intercept: bool,
+        types: &[RobustSeType],
+        active: Option<&[usize]>,
+    ) -> bool {
+        let d = k + usize::from(intercept);
+        let need_hc0_meat =
+            types.contains(&RobustSeType::Hc0) || types.contains(&RobustSeType::Hc1);
+        let need_hc1_scale = types.contains(&RobustSeType::Hc1);
+        let need_hc2_meat = types.contains(&RobustSeType::Hc2);
+        let need_chol = need_hc0_meat || need_hc2_meat;
+        let p = active.map_or(k, <[usize]>::len) + usize::from(intercept);
+        self.active.as_deref() == active
+            && self.need_hc0_meat == need_hc0_meat
+            && self.need_hc1_scale == need_hc1_scale
+            && self.need_hc2_meat == need_hc2_meat
+            && self.bread_r.len() == if need_chol { p * (p + 1) / 2 } else { 0 }
+            && self.meat_hc0.len() == if need_hc0_meat { d * d } else { 0 }
+            && self.meat_hc2.len() == if need_hc2_meat { d * d } else { 0 }
+            && self.w_sum.is_finite()
+            && self.w_sum >= 0.0
+            && self.q_sum.is_finite()
+            && self.q_sum >= 0.0
+            && crate::sqsum::scale_fits(self.q_scale)
+            && self
+                .bread_r
+                .iter()
+                .chain(&self.meat_hc0)
+                .chain(&self.meat_hc2)
+                .all(|v| v.is_finite())
+    }
+}
+
+/// Packed upper-triangular Givens rank-1 update: `R'ᵀ R' = root² Rᵀ R + z zᵀ`.
+/// Mirrors `rls::fold` for `O(p²)` orthogonal updates with `hypot` overflow/subnormal safety.
+fn givens_fold_upper(r: &mut [f64], z: &mut [f64], root: f64, decays: bool) {
+    let p = z.len();
+    let mut rest = r;
+    for i in 0..p {
+        let (row, tail) = std::mem::take(&mut rest).split_at_mut(p - i);
+        rest = tail;
+        let zi = z[i];
+        if zi == 0.0 {
+            if decays {
+                for v in row.iter_mut() {
+                    *v *= root;
+                }
+            }
+            continue;
+        }
+        let mut rii = row[0];
+        if decays {
+            rii *= root;
+        }
+        let sq = rii * rii + zi * zi;
+        let mut rho = sq.sqrt();
+        if !(sq >= f64::MIN_POSITIVE && sq.is_finite()) {
+            rho = rii.hypot(zi);
+            if !(rho > 0.0 && rho.is_finite()) {
+                if decays {
+                    for v in row.iter_mut() {
+                        *v *= root;
+                    }
+                }
+                continue;
+            }
+        }
+        let c = rii / rho;
+        let s = zi / rho;
+        row[0] = rho;
+        z[i] = 0.0;
+        for (rij, zj) in row[1..].iter_mut().zip(z[i + 1..].iter_mut()) {
+            let mut a = *rij;
+            if decays {
+                a *= root;
+            }
+            let b = *zj;
+            *rij = c * a + s * b;
+            *zj = c * b - s * a;
+        }
+    }
+}
+
+/// Pre-fold leverage `g = (w / lam) ‖R_b⁻ᵀ z_act‖²` against the packed upper
+/// factor `bread_r`, or `None` if `bread_r` is rank-deficient or ill-conditioned.
+fn prefold_leverage(bread_r: &[f64], z_act: &[f64], lam: f64, w: f64) -> Option<f64> {
+    let p = z_act.len();
+    if p == 0 || !(lam > 0.0 && lam.is_finite()) {
+        return None;
+    }
+    // Check that every diagonal pivot of `R_b` is positive and non-degenerate.
+    let mut max_diag = 0.0f64;
+    let mut min_diag = f64::INFINITY;
+    let mut at = 0usize;
+    for i in 0..p {
+        let d = bread_r[at];
+        if !(d > 0.0 && d.is_finite()) {
+            return None;
+        }
+        max_diag = max_diag.max(d);
+        min_diag = min_diag.min(d);
+        at += p - i;
+    }
+    if min_diag <= 1e-12 * max_diag || !min_diag.is_finite() {
+        return None;
+    }
+    let mut tmp = vec![0.0; p];
+    if !crate::lincon::solve_upper_t_packed(bread_r, p, z_act, &mut tmp) {
+        return None;
+    }
+    let norm2: f64 = tmp.iter().map(|v| v * v).sum();
+    let g = (w / lam) * norm2;
+    (g.is_finite() && g >= 0.0).then_some(g)
+}
+
 /// The sandwich of one slot's fit. See the module docs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sandwich {
@@ -116,11 +351,16 @@ pub struct Sandwich {
     /// The last `lags` scores `u = ω e z`, newest first, at their present
     /// weights.
     ring: VecDeque<Vec<f64>>,
+    /// Optional row-time HC0–HC2 state; last and the sole skipping field on
+    /// `Sandwich` so compact and named msgpack both round-trip cleanly and
+    /// pre-existing states keep identical bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    variants: Option<SandwichVariants>,
 }
 
 impl Sandwich {
     /// An empty sandwich over `k` features, with or without an intercept,
-    /// keeping `lags` lags.
+    /// keeping `lags` lags (legacy out-of-sample HC0 / HAC only).
     pub fn new(k: usize, intercept: bool, lags: usize) -> Self {
         let d = k + usize::from(intercept);
         Self {
@@ -132,7 +372,57 @@ impl Sandwich {
             meat: vec![0.0; d * d],
             gammas: vec![vec![0.0; d * d]; lags],
             ring: VecDeque::with_capacity(lags),
+            variants: None,
         }
+    }
+
+    /// An empty sandwich tracking the requested row-time HC variants (`types`).
+    /// `active` names the subset of `0..k` this slot's fit uses (`None` = all).
+    pub fn with_types(
+        k: usize,
+        intercept: bool,
+        lags: usize,
+        types: &[RobustSeType],
+        active: Option<Vec<usize>>,
+    ) -> Self {
+        let mut s = Self::new(k, intercept, lags);
+        s.variants = Some(SandwichVariants::new(k, intercept, types, active));
+        s
+    }
+
+    /// Heap bytes one `Sandwich` reserves for `(k, intercept, lags, types, active_k)`.
+    pub fn state_bytes(
+        k: usize,
+        intercept: bool,
+        lags: usize,
+        types: Option<&[RobustSeType]>,
+        active_k: Option<usize>,
+    ) -> u64 {
+        let d = (k + usize::from(intercept)) as u64;
+        let d2 = d.saturating_mul(d);
+        let l = lags as u64;
+        // Base: bread + meat + L * (gamma_l + ring score).
+        let base_f64 = 2u64
+            .saturating_mul(d2)
+            .saturating_add(l.saturating_mul(d2.saturating_add(d)));
+        let extra_f64 = match types {
+            None => 0u64,
+            Some(ts) => {
+                let need_hc0 = ts.contains(&RobustSeType::Hc0) || ts.contains(&RobustSeType::Hc1);
+                let need_hc2 = ts.contains(&RobustSeType::Hc2);
+                let p = (active_k.unwrap_or(k) + usize::from(intercept)) as u64;
+                let chol = if need_hc0 || need_hc2 {
+                    p.saturating_mul(p.saturating_add(1)) / 2
+                } else {
+                    0
+                };
+                let meats = u64::from(need_hc0)
+                    .saturating_add(u64::from(need_hc2))
+                    .saturating_mul(d2);
+                meats.saturating_add(chol)
+            }
+        };
+        base_f64.saturating_add(extra_f64).saturating_mul(8)
     }
 
     fn dim(&self) -> usize {
@@ -143,8 +433,26 @@ impl Sandwich {
     /// sums sized for `z`, its lags and ring within them, every number
     /// finite.
     pub fn has_shape(&self, k: usize, intercept: bool, lags: usize) -> bool {
+        self.has_shape_with_types(k, intercept, lags, None, None)
+    }
+
+    /// [`Self::has_shape`] checking optional `types` and `active` feature indices too.
+    pub fn has_shape_with_types(
+        &self,
+        k: usize,
+        intercept: bool,
+        lags: usize,
+        types: Option<&[RobustSeType]>,
+        active: Option<&[usize]>,
+    ) -> bool {
         let d = k + usize::from(intercept);
-        self.k == k
+        let variants_ok = match (&self.variants, types) {
+            (None, None) => true,
+            (Some(v), Some(ts)) => v.has_shape(k, intercept, ts, active),
+            _ => false,
+        };
+        variants_ok
+            && self.k == k
             && self.intercept == intercept
             && self.lags == lags
             && (self.origin.is_empty() || self.origin.len() == k)
@@ -172,6 +480,18 @@ impl Sandwich {
         self.meat.iter_mut().for_each(|v| *v *= lam2);
         self.gammas.iter_mut().flatten().for_each(|v| *v *= lam2);
         self.ring.iter_mut().flatten().for_each(|v| *v *= lam);
+        if let Some(v) = &mut self.variants {
+            v.meat_hc0.iter_mut().for_each(|m| *m *= lam2);
+            v.meat_hc2.iter_mut().for_each(|m| *m *= lam2);
+            if !v.bread_r.is_empty() && lam != 1.0 {
+                let root = lam.sqrt();
+                v.bread_r.iter_mut().for_each(|r| *r *= root);
+            }
+            if v.need_hc1_scale {
+                v.w_sum *= lam;
+                crate::sqsum::add(&mut v.q_sum, &mut v.q_scale, lam, 0.0);
+            }
+        }
     }
 
     /// The rows behind this one are no longer adjacent to it -- a capped gap
@@ -218,12 +538,81 @@ impl Sandwich {
             // keeps every sum finite (docs/PLAN.md task 270, review round 9
             // B-2). The diagonals are read as the decay leaves them.
             let lam2 = lam * lam;
-            let fits = (0..d).all(|i| {
+            let base_fits = (0..d).all(|i| {
                 (self.bread[i * d + i] * lam + w * z[i] * z[i]).is_finite()
                     && (self.meat[i * d + i] * lam2 + u[i] * u[i]).is_finite()
             });
-            if !fits {
+            let extra_fits = self.variants.as_ref().is_none_or(|v| {
+                (!v.need_hc1_scale || (v.w_sum * lam + w).is_finite())
+                    && (!v.need_hc0_meat
+                        || (0..d).all(|i| (v.meat_hc0[i * d + i] * lam2 + u[i] * u[i]).is_finite()))
+                    && (!v.need_hc2_meat
+                        || (0..d).all(|i| (v.meat_hc2[i * d + i] * lam2 + u[i] * u[i]).is_finite()))
+            });
+            if !(base_fits && extra_fits) {
                 return self.age(lam);
+            }
+            if let Some(v) = &mut self.variants {
+                if !v.bread_r.is_empty() {
+                    let off = usize::from(self.intercept);
+                    let p = v.active_dim(self.k, self.intercept);
+                    let mut z_act = Vec::with_capacity(p);
+                    match &v.active {
+                        None => z_act.extend_from_slice(&z[..d]),
+                        Some(idx) => {
+                            if self.intercept {
+                                z_act.push(1.0);
+                            }
+                            for &fi in idx {
+                                z_act.push(z[off + fi]);
+                            }
+                        }
+                    }
+                    let g = if v.folded >= p as u64 {
+                        prefold_leverage(&v.bread_r, &z_act, lam, w)
+                    } else {
+                        None
+                    };
+                    if let Some(g) = g {
+                        let inv_1pg = 1.0 / (1.0 + g);
+                        if v.need_hc0_meat {
+                            let c = inv_1pg;
+                            for i in 0..d {
+                                let u0i = c * u[i];
+                                let at = i * d..(i + 1) * d;
+                                for (m, &uj) in v.meat_hc0[at].iter_mut().zip(u.iter()) {
+                                    *m = *m * lam2 + u0i * (c * uj);
+                                }
+                            }
+                        }
+                        if v.need_hc2_meat {
+                            let c2 = inv_1pg;
+                            for i in 0..d {
+                                let u2i = c2 * u[i];
+                                let at = i * d..(i + 1) * d;
+                                for (m, &uj) in v.meat_hc2[at].iter_mut().zip(u.iter()) {
+                                    *m = *m * lam2 + u2i * uj;
+                                }
+                            }
+                        }
+                        v.meat_folded = v.meat_folded.saturating_add(1);
+                    } else {
+                        v.meat_hc0.iter_mut().for_each(|m| *m *= lam2);
+                        v.meat_hc2.iter_mut().for_each(|m| *m *= lam2);
+                    }
+                    let sw = w.sqrt();
+                    for val in &mut z_act {
+                        *val *= sw;
+                    }
+                    let decays = lam != 1.0;
+                    let root = if decays { lam.sqrt() } else { 1.0 };
+                    givens_fold_upper(&mut v.bread_r, &mut z_act, root, decays);
+                }
+                v.folded = v.folded.saturating_add(1);
+                if v.need_hc1_scale {
+                    v.w_sum = lam * v.w_sum + w;
+                    crate::sqsum::add(&mut v.q_sum, &mut v.q_scale, lam, w);
+                }
             }
             for i in 0..d {
                 let (wz, ui) = (w * z[i], u[i]);
@@ -270,9 +659,52 @@ impl Sandwich {
     /// factorize: fewer rows than coefficients, or a feature with no spread.
     pub fn covariance(&self, idx: &[usize], hac: bool) -> Option<Vec<f64>> {
         with_cov(idx.len() + usize::from(self.intercept), |sc| {
-            self.covariance_in(sc, idx, hac, false)?;
+            self.covariance_with_meat(sc, idx, &self.meat, hac, false)?;
             Some(sc.out.clone())
         })
+    }
+
+    /// Covariance of the coefficients over `idx` for a specific row-time HC
+    /// variant (`HC0*`–`HC3*`), in the features' own units (`p × p` row-major).
+    pub fn covariance_of(&self, idx: &[usize], kind: RobustSeType) -> Option<Vec<f64>> {
+        let p = idx.len() + usize::from(self.intercept);
+        let (meat, scale) = self.variant_meat_and_scale(kind, p)?;
+        with_cov(p, |sc| {
+            self.covariance_with_meat(sc, idx, meat, false, false)?;
+            if scale != 1.0 {
+                for v in &mut sc.out {
+                    *v *= scale;
+                }
+            }
+            Some(sc.out.clone())
+        })
+    }
+
+    /// Resolve the meat slice and scalar multiplier for a row-time HC variant.
+    fn variant_meat_and_scale(&self, kind: RobustSeType, p: usize) -> Option<(&[f64], f64)> {
+        match kind {
+            RobustSeType::Hc3 => Some((&self.meat, 1.0)),
+            RobustSeType::Hc0 => {
+                let v = self.variants.as_ref()?;
+                (v.need_hc0_meat && v.meat_folded > 0).then_some((v.meat_hc0.as_slice(), 1.0))
+            }
+            RobustSeType::Hc1 => {
+                let v = self.variants.as_ref()?;
+                if !(v.need_hc0_meat && v.need_hc1_scale && v.meat_folded > 0) {
+                    return None;
+                }
+                let n = crate::sqsum::count(v.w_sum, v.q_sum, v.q_scale)?;
+                let pf = p as f64;
+                if !(n.is_finite() && n > pf) {
+                    return None;
+                }
+                Some((v.meat_hc0.as_slice(), n / (n - pf)))
+            }
+            RobustSeType::Hc2 => {
+                let v = self.variants.as_ref()?;
+                (v.need_hc2_meat && v.meat_folded > 0).then_some((v.meat_hc2.as_slice(), 1.0))
+            }
+        }
     }
 
     /// [`Self::covariance`] into `sc.out`, in `sc`'s buffers: each matrix
@@ -286,6 +718,17 @@ impl Sandwich {
         &self,
         sc: &mut CovScratch,
         idx: &[usize],
+        hac: bool,
+        centred: bool,
+    ) -> Option<()> {
+        self.covariance_with_meat(sc, idx, &self.meat, hac, centred)
+    }
+
+    fn covariance_with_meat(
+        &self,
+        sc: &mut CovScratch,
+        idx: &[usize],
+        meat_src: &[f64],
         hac: bool,
         centred: bool,
     ) -> Option<()> {
@@ -319,7 +762,7 @@ impl Sandwich {
             );
         };
         pick(&self.bread, bread);
-        pick(&self.meat, meat);
+        pick(meat_src, meat);
         if hac {
             let lags = self.lags as f64;
             for (l, g) in self.gammas.iter().enumerate() {
@@ -388,20 +831,37 @@ impl Sandwich {
         let off = usize::from(self.intercept);
         let p = idx.len() + off;
         with_cov(p, |sc| {
-            self.covariance_in(sc, idx, hac, false)?;
-            let v = &sc.out;
-            let mut out = vec![f64::NAN; self.k + off];
-            // A rounding below 0 is 0, but a NaN variance stays NaN:
-            // `f64::max` read it as 0.0, a standard error that says the
-            // coefficient is exact (review round 9, B-2).
-            for (a, &i) in idx.iter().enumerate() {
-                out[off + i] = crate::solve::clamp_rounding(v[(a + off) * p + a + off]).sqrt();
-            }
-            if self.intercept {
-                out[0] = crate::solve::clamp_rounding(v[0]).sqrt();
-            }
-            out.iter().any(|v| v.is_finite()).then_some(out)
+            self.covariance_with_meat(sc, idx, &self.meat, hac, false)?;
+            self.diag_se(&sc.out, idx, 1.0)
         })
+    }
+
+    /// Standard errors over `idx` for a specific row-time HC variant
+    /// (`HC0*`–`HC3*`), laid out like `coef`.
+    pub fn standard_errors_of(&self, idx: &[usize], kind: RobustSeType) -> Option<Vec<f64>> {
+        let off = usize::from(self.intercept);
+        let p = idx.len() + off;
+        let (meat, scale) = self.variant_meat_and_scale(kind, p)?;
+        with_cov(p, |sc| {
+            self.covariance_with_meat(sc, idx, meat, false, false)?;
+            self.diag_se(&sc.out, idx, scale)
+        })
+    }
+
+    fn diag_se(&self, v: &[f64], idx: &[usize], scale: f64) -> Option<Vec<f64>> {
+        let off = usize::from(self.intercept);
+        let p = idx.len() + off;
+        let mut out = vec![f64::NAN; self.k + off];
+        // A rounding below 0 is 0, but a NaN variance stays NaN:
+        // `f64::max` read it as 0.0, a standard error that says the
+        // coefficient is exact (review round 9, B-2).
+        for (a, &i) in idx.iter().enumerate() {
+            out[off + i] = crate::solve::clamp_rounding(v[(a + off) * p + a + off] * scale).sqrt();
+        }
+        if self.intercept {
+            out[0] = crate::solve::clamp_rounding(v[0] * scale).sqrt();
+        }
+        out.iter().any(|v| v.is_finite()).then_some(out)
     }
 
     /// Wald's statistic `d' V⁻¹ d` for the coefficients at `pick` --
@@ -1151,5 +1611,158 @@ mod tests {
         assert!(s.standard_errors(&[], true).is_none());
         assert!(s.wald(&[], true, &[0], &[1.0]).is_none());
         assert!(s.covariance(&[0], true).is_some(), "the control");
+    }
+
+    #[test]
+    fn hc0_to_hc3_match_exact_row_time_definitions_and_order() {
+        let mut s_all = Sandwich::with_types(2, true, 0, &RobustSeType::ALL, None);
+        let mut s_legacy = Sandwich::new(2, true, 0);
+        let mut s_hc3_only = Sandwich::with_types(2, true, 0, &[RobustSeType::Hc3], None);
+        let mut st = 42u64;
+        let lam = 0.98f64;
+        let p = 3usize;
+        // Brute-force reference maintaining B, M_hc0, M_hc2, M_hc3, W, Q.
+        let mut b = vec![0.0; p * p];
+        let mut m0 = vec![0.0; p * p];
+        let mut m2 = vec![0.0; p * p];
+        let mut m3 = vec![0.0; p * p];
+        let (mut w_sum, mut q_sum) = (0.0f64, 0.0f64);
+        let mut folded = 0u64;
+        for row in 0..120 {
+            let x = [lcg(&mut st) * 2.0, lcg(&mut st) * 1.5 + 0.5];
+            let z = [1.0, x[0], x[1]];
+            let e = (0.5 + x[0].abs()) * lcg(&mut st);
+            let w = if row % 19 == 7 {
+                0.0
+            } else {
+                0.5 + (lcg(&mut st) + 1.0)
+            };
+            s_all.update(&x, e, lam, w);
+            s_legacy.update(&x, e, lam, w);
+            s_hc3_only.update(&x, e, lam, w);
+
+            // Reference update.
+            for v in &mut b {
+                *v *= lam;
+            }
+            for v in &mut m0 {
+                *v *= lam * lam;
+            }
+            for v in &mut m2 {
+                *v *= lam * lam;
+            }
+            for v in &mut m3 {
+                *v *= lam * lam;
+            }
+            w_sum *= lam;
+            q_sum *= lam * lam;
+            if w > 0.0 {
+                // Pre-fold leverage g = w z' B_prev^-1 z (after aging B by lam).
+                if folded >= p as u64 {
+                    let fac = crate::SpdFactor::of(&b, p).unwrap();
+                    let inv_z = fac.solve_lower_cols(&z, p, 1);
+                    let g: f64 = w * inv_z.iter().map(|v| v * v).sum::<f64>();
+                    let denom = 1.0 + g;
+                    let c0 = (w * e / denom).powi(2);
+                    let c2 = (w * e).powi(2) / denom;
+                    for i in 0..p {
+                        for j in 0..p {
+                            m0[i * p + j] += c0 * z[i] * z[j];
+                            m2[i * p + j] += c2 * z[i] * z[j];
+                        }
+                    }
+                }
+                w_sum += w;
+                q_sum += w * w;
+                let c3 = (w * e).powi(2);
+                for i in 0..p {
+                    for j in 0..p {
+                        b[i * p + j] += w * z[i] * z[j];
+                        m3[i * p + j] += c3 * z[i] * z[j];
+                    }
+                }
+                folded += 1;
+            }
+        }
+        let idx = [0, 1];
+        // Legacy HC0 and HC3-only must agree to the bit.
+        let legacy = s_legacy.standard_errors(&idx, false).unwrap();
+        let hc3_only = s_hc3_only
+            .standard_errors_of(&idx, RobustSeType::Hc3)
+            .unwrap();
+        let hc3 = s_all.standard_errors_of(&idx, RobustSeType::Hc3).unwrap();
+        for j in 0..p {
+            assert_eq!(legacy[j].to_bits(), hc3_only[j].to_bits());
+            assert_eq!(legacy[j].to_bits(), hc3[j].to_bits());
+        }
+        let hc0 = s_all.standard_errors_of(&idx, RobustSeType::Hc0).unwrap();
+        let hc1 = s_all.standard_errors_of(&idx, RobustSeType::Hc1).unwrap();
+        let hc2 = s_all.standard_errors_of(&idx, RobustSeType::Hc2).unwrap();
+        // Verify against brute-force B^-1 M B^-1.
+        let fac = crate::SpdFactor::of(&b, p).unwrap();
+        let ref_se = |m: &[f64]| -> Vec<f64> {
+            let mut binv = vec![0.0; p * p];
+            for col in 0..p {
+                let mut e_col = vec![0.0; p];
+                e_col[col] = 1.0;
+                let tmp = fac.solve_lower_cols(&e_col, p, 1);
+                let sol = fac.solve_upper_transpose_cols(&tmp, p, 1);
+                for row in 0..p {
+                    binv[row * p + col] = sol[row];
+                }
+            }
+            (0..p)
+                .map(|j| {
+                    let mut acc = 0.0;
+                    for r in 0..p {
+                        for c in 0..p {
+                            acc += binv[j * p + r] * m[r * p + c] * binv[j * p + c];
+                        }
+                    }
+                    acc.sqrt()
+                })
+                .collect()
+        };
+        let r0 = ref_se(&m0);
+        let r2 = ref_se(&m2);
+        let r3 = ref_se(&m3);
+        let n_kish = w_sum * w_sum / q_sum;
+        let hc1_mult = (n_kish / (n_kish - p as f64)).sqrt();
+        for j in 0..p {
+            assert!((hc0[j] - r0[j]).abs() < 1e-12 * (1.0 + r0[j]), "hc0[{j}]");
+            assert!(
+                (hc1[j] - r0[j] * hc1_mult).abs() < 1e-12 * (1.0 + r0[j]),
+                "hc1[{j}]"
+            );
+            assert!((hc2[j] - r2[j]).abs() < 1e-12 * (1.0 + r2[j]), "hc2[{j}]");
+            assert!((hc3[j] - r3[j]).abs() < 1e-12 * (1.0 + r3[j]), "hc3[{j}]");
+            assert!(
+                hc0[j] < hc1[j] && hc0[j] < hc2[j] && hc2[j] < hc3[j],
+                "ordering failed at {j}: hc0={} hc1={} hc2={} hc3={}",
+                hc0[j],
+                hc1[j],
+                hc2[j],
+                hc3[j]
+            );
+        }
+
+        // Active subset [0, 2] on a 3-feature sandwich must match a standalone 2-feature sandwich.
+        let mut s_sub = Sandwich::with_types(3, true, 0, &RobustSeType::ALL, Some(vec![0, 2]));
+        let mut s_2 = Sandwich::with_types(2, true, 0, &RobustSeType::ALL, None);
+        let mut st2 = 91u64;
+        for _ in 0..50 {
+            let x3 = [lcg(&mut st2), lcg(&mut st2) * 5.0, lcg(&mut st2) - 0.3];
+            let e = lcg(&mut st2);
+            s_sub.update(&x3, e, 0.96, 1.0);
+            s_2.update(&[x3[0], x3[2]], e, 0.96, 1.0);
+        }
+        for kind in RobustSeType::ALL {
+            let v_sub = s_sub.standard_errors_of(&[0, 2], kind).unwrap();
+            let v_2 = s_2.standard_errors_of(&[0, 1], kind).unwrap();
+            assert!((v_sub[0] - v_2[0]).abs() < 1e-13);
+            assert!((v_sub[1] - v_2[1]).abs() < 1e-13);
+            assert!(v_sub[2].is_nan());
+            assert!((v_sub[3] - v_2[2]).abs() < 1e-13);
+        }
     }
 }

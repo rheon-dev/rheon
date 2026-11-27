@@ -279,6 +279,13 @@ its diagonal first, as a Cholesky solve in effect does, and the features'
 units then cost no digits. A uniform `λ` is not uniform on the scaled
 matrix, so there each penalty takes a solve of its own.
 
+**Linear equality constraints (`constraints=(R, r)`).** `rheon.gram.solve`
+takes the same slope constraint pair `(R, r)` as `ewridge` and `rls` (`R` is
+`q × k` of full row rank, `r` has length `q`, and the intercept stays free).
+Each penalty in a grid solves the constrained problem `R β_slopes = r` via
+the exact KKT projection and returns `NaN` slopes if `R A Rᵀ` is singular
+(for example, when a constrained column is constant).
+
 **`coef_stats` computes least squares' standard errors from the Gram:**
 
 ```text

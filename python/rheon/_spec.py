@@ -172,9 +172,21 @@ def _matches(v: Any, hint: Any) -> bool:
         return v is None
     if origin in (list, Sequence):
         # A list or a tuple: a str is a sequence of strs too, and never what
-        # a list parameter means.
+        # a list parameter means. For `Sequence` of numbers (or nested
+        # sequences of numbers), also accept array-like objects (e.g. numpy).
         (inner,) = typing.get_args(hint)
+        if origin is Sequence and hasattr(v, "tolist") and hasattr(v, "ndim"):
+            v = v.tolist()
         return isinstance(v, (list, tuple)) and all(_matches(x, inner) for x in v)
+    if origin is tuple:
+        args = typing.get_args(hint)
+        if len(args) == 2 and args[1] is Ellipsis:
+            return isinstance(v, tuple) and all(_matches(x, args[0]) for x in v)
+        return (
+            isinstance(v, tuple)
+            and len(v) == len(args)
+            and all(_matches(x, a) for x, a in zip(v, args, strict=True))
+        )
     if origin in (dict, Mapping):
         # A `Mapping` parameter takes any mapping, a read-only one too; it
         # fell through to "not read" (review 2026-11-23, PY-3).
@@ -245,6 +257,12 @@ def _describe(hint: Any, plural: bool = False) -> str:
     if origin in (list, Sequence):
         (inner,) = typing.get_args(hint)
         return ("lists of " if plural else "a list of ") + _describe(inner, plural=True)
+    if origin is tuple:
+        targs = typing.get_args(hint)
+        if len(targs) == 2 and targs[1] is Ellipsis:
+            return ("tuples of " if plural else "a tuple of ") + _describe(targs[0], plural=True)
+        joined = ", ".join(_describe(a) for a in targs)
+        return f"tuples of ({joined})" if plural else f"a ({joined}) tuple"
     if origin in (dict, Mapping):
         key, val = typing.get_args(hint)
         noun = "a dict" if origin is dict else "a mapping"
@@ -269,6 +287,8 @@ def _takes_duration(hint: Any) -> bool:
 
 
 def _finite(value: Any) -> bool:
+    if hasattr(value, "tolist") and hasattr(value, "ndim") and not isinstance(value, (str, bytes)):
+        value = value.tolist()
     if isinstance(value, (list, tuple)):
         return all(_finite(x) for x in value)
     if isinstance(value, Mapping):
@@ -276,6 +296,21 @@ def _finite(value: Any) -> bool:
     if isinstance(value, numbers.Real) and not isinstance(value, bool):
         return not math.isinf(value)
     return True
+
+
+def _constraints_table(
+    constraints: tuple[Sequence[Sequence[float]], Sequence[float]],
+) -> dict[str, Any]:
+    """Encode ``constraints=(R, r)`` as the ``{"matrix": ..., "rhs": ...}`` table."""
+    mat, rhs = constraints
+    if hasattr(mat, "tolist") and hasattr(mat, "ndim"):
+        mat = mat.tolist()
+    if hasattr(rhs, "tolist") and hasattr(rhs, "ndim"):
+        rhs = rhs.tolist()
+    return {
+        "matrix": [[float(x) for x in row] for row in mat],
+        "rhs": [float(x) for x in rhs],
+    }
 
 
 #: The int parameters whose Rust floor is 1, not 0 (review 2026-09-12, D8);
@@ -1123,6 +1158,7 @@ def _common(
     emit_robust_se: bool = False,
     robust_se_half_life: float | Duration | None = None,
     robust_se_lags: int | None = None,
+    robust_se_types: list[Literal["hc0", "hc1", "hc2", "hc3"]] | None = None,
     emit_specification: bool = False,
     specification_half_life: float | Duration | None = None,
     ljung_box_lags: int | None = None,
@@ -1139,6 +1175,7 @@ def _common(
     held_overflow: Literal["refuse", "drop_oldest"] | None = None,
     group: str | None = None,
     group_close: Literal["monotone", "session"] | None = None,
+    max_state_bytes: int | None = None,
 ) -> dict[str, Any]:
     written: list[str | Target | FormulaTarget] = [
         formula_target(f"spec {quoted(name)}", t)
@@ -1220,6 +1257,10 @@ def _common(
         spec["emit_target_weight"] = emit_target_weight
     if drift_options is not None:
         spec["drift_options"] = dict(drift_options)
+    if robust_se_types is not None:
+        spec["robust_se_types"] = list(robust_se_types)
+    if max_state_bytes is not None:
+        spec["max_state_bytes"] = max_state_bytes
     validate_spec(_json(spec))
     return spec
 
@@ -1282,6 +1323,7 @@ def ewridge(
     snapshot_every: float | Duration | None = None,
     max_rows_between_snapshots: int | None = None,
     window_budget: dict[Literal["thin", "refuse"], float] | None = None,
+    constraints: tuple[Sequence[Sequence[float]], Sequence[float]] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Exponentially weighted ridge regression on running sums.
@@ -1502,6 +1544,15 @@ def ewridge(
                no bound
 
         Refused without ``window_size``.
+    ``constraints``
+        Linear equality constraints on the slopes, ``R beta_slopes = r``, given
+        as ``(R, r)`` with ``R`` of shape ``q x k`` (one column per feature in
+        ``features``) and ``r`` of length ``q`` (``1 <= q <= k``). The
+        intercept, when ``fit_intercept=True``, is never constrained. ``R``
+        must have finite entries and full row rank. Standard errors,
+        ``error_inflation`` and ``support_coef`` use the constrained
+        covariance and ``edf - q``. Refused beside ``feature_sets``.
+        Serialized as ``{"matrix": R, "rhs": r}`` in JSON and TOML specs.
 
     .. rubric:: Output
 
@@ -1569,7 +1620,10 @@ def ewridge(
       ``"left"`` or ``"none"``; a ``snapshot_every`` below 0 or not finite;
       a ``window_budget`` not above 0; and ``closed="both"``,
       ``snapshot_every``, ``max_rows_between_snapshots`` or
-      ``window_budget`` without ``window_size``.
+      ``window_budget`` without ``window_size``;
+    - a ``constraints`` pair ``(R, r)`` whose ``R`` is empty, not full row
+      rank, has more rows than features, has the wrong width, has non-finite
+      values, or is given beside ``feature_sets``.
 
     .. rubric:: The update
 
@@ -1934,6 +1988,8 @@ def ewridge(
     # Written only when given, as the Rust spec skips it when absent.
     if gram_threads is None:
         del model["gram_threads"]
+    if constraints is not None:
+        model["constraints"] = _constraints_table(constraints)
     if ridge_scale not in ("mean", "sum"):
         raise ValueError(
             words_refusal(f"spec {quoted(name)}", "ridge_scale", ridge_scale, ("mean", "sum"))
@@ -1983,6 +2039,7 @@ def rls(
     features: list[str],
     delta: float | None = None,
     coef_prior: list[list[float]] | None = None,
+    constraints: tuple[Sequence[Sequence[float]], Sequence[float]] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Recursive least squares, which solves the ridge fit exactly on every row.
@@ -2014,6 +2071,15 @@ def rls(
         long when there is an intercept. Default none, which starts from
         zeros. Refused with the wrong number of vectors, a vector of the
         wrong length, or a value that is not finite.
+    ``constraints``
+        Linear equality constraints ``(R, r)`` on the slopes, enforcing
+        ``R @ beta_slopes = r`` while leaving the intercept unconstrained.
+        ``R`` has shape ``(q, len(features))`` with ``1 <= q <= len(features)``
+        and full row rank; ``r`` has length ``q``; all entries must be finite.
+        Default none. Refused when ``R`` is rank-deficient or has the wrong
+        shape; if ``R A R'`` is singular at solve time, the constrained fit
+        is withheld. ``se_coef``, ``error_inflation``, and ``support_coef``
+        use the exact projected covariance ``A - A R' (R A R')^-1 R A``.
 
     ``min_weight`` is checked against the weight of the rows the model
     learned (those with every target present), decayed, so rows with a null
@@ -2180,6 +2246,8 @@ def rls(
          - 0.19 to 0.20 / 0.37 to 0.74
     """
     model: dict[str, Any] = {"type": "rls", "delta": delta, "coef_prior": coef_prior}
+    if constraints is not None:
+        model["constraints"] = _constraints_table(constraints)
     return _common(name, model, targets=targets, features=features, **common)
 
 

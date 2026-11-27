@@ -163,6 +163,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             max_rows_between_snapshots,
             window_budget: _,
             closed: _,
+            constraints,
         } => {
             let fs = feature_sets
                 .as_ref()
@@ -213,6 +214,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 window: window.as_ref().map(Span::value),
                 window_every: snapshot_every.as_ref().map(Span::value),
                 max_rows_between_snapshots: max_rows_between_snapshots.map(|r| r as usize),
+                constraints: constraints.clone(),
             };
             let mut m = EwRidge::new(cfg)?;
             // The per-row leverage needs the factors kept (§2.1), and so do
@@ -229,7 +231,11 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             }
             Ok(AnyModel::EwRidge(Box::new(m)))
         }
-        ModelKind::Rls { delta, coef_prior } => {
+        ModelKind::Rls {
+            delta,
+            coef_prior,
+            constraints,
+        } => {
             let cfg = RlsCfg {
                 n_features: spec.k(),
                 n_targets: spec.m(),
@@ -238,6 +244,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 delta: delta.unwrap_or(1.0),
                 coef_prior: coef_prior.clone(),
                 min_weight: spec.min_periods_or_default(),
+                constraints: constraints.clone(),
             };
             Ok(AnyModel::Rls(Box::new(Rls::new(cfg)?)))
         }
@@ -532,7 +539,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                     .as_ref()
                     .map_or_else(Vec::new, FloatOrList::to_vec),
                 initial_seasonal: holt_seasonal(initial_seasonal.as_deref()),
-                max_state_bytes: *max_state_bytes,
+                max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
             };
             Ok(AnyModel::Holt(Box::new(Holt::new(cfg)?)))
         }

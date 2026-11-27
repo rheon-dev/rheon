@@ -116,6 +116,7 @@ reference gives each one's units and default.
 | when a target may be learned | `embargo`, `label_clock`, `max_held_rows`, `held_overflow` | [Learn targets known late](how-to/learn-targets-known-late.md) |
 | what a null does, and how to keep a model from learning a row | a null, a weight of 0, `predict` | [Hold a row back](how-to/hold-a-row-back.md) |
 | which coefficients and diagnostics each row writes | `coef_every`, `max_rows_between_coefs`, the `emit_*` switches and their half-lives | [OUTPUTS.md](OUTPUTS.md) and [DIAGNOSTICS.md](DIAGNOSTICS.md) |
+| how much memory a group's bounded state may hold | `max_state_bytes` | [DIAGNOSTICS.md](DIAGNOSTICS.md#can-its-t-be-trusted) and the bounded-state model sections below |
 
 #### What a spec names
 
@@ -500,6 +501,7 @@ on features where they are given. Several of them take the same parameters:
 | `window_size` | `ewridge`, `lasso`, `ar`, `expectile`, `vector_ar` | [A hard window](#a-hard-window), and [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
 | `standardize` | `ewridge`, `huber`, `quantile` and `ftrl`, off by default; `kalman`, `sgd` and `pa`, on by default. `lasso` always standardizes. `rls`, `expectile` and `glm` take no `standardize` and refuse it by name: `rls`'s prior (`delta`, `coef_prior`) is in the features' own units; and `expectile`'s and `glm`'s `ridge` is a penalty in the features' squared units. Scale such a feature before the bank | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), [`kalman`](#kalman--random-walk-β-dynamic-linear-model) and [`ftrl`](#ftrl--online-logistic-regression) |
 | `coef_min`, `coef_max`, `coef_sum` | `sgd`, `pa` | [`sgd`](#sgd--stochastic-gradient-descent) |
+| `constraints` | `ewridge`, `rls` (and `rheon.gram.solve`) | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) and [`rls`](#rls--recursive-least-squares) |
 | `weight` | every model, though `rls`, `kalman`, `sgd`, `pa`, `ftrl` and `glm` read it differently from a weighted mean | [Weights](how-to/weight-rows.md) |
 
 What `half_life` decays differs by model:
@@ -647,6 +649,17 @@ every row seen, in any row order.** Its coefficients match
 `numpy.linalg.lstsq` to 2e-13, fed forwards or backwards. On 6M rows × 20
 features from a parquet stream, memory peaked at 1.4 GB, against 3.97 GB
 for `lstsq` on the same rows.
+
+**Linear equality constraints (`constraints=(R, r)`).** Passing a full-row-rank
+`q × k` matrix `R` and right-hand side `r` of length `q` constrains the `k`
+slopes to satisfy `R β_slopes = r` (the intercept stays unconstrained). Both
+`ewridge` and `rls` solve the constrained quadratic program by exact
+null-space projection `β_c = β_u − A Rᵀ (R A Rᵀ)⁻¹ (R β_u − r)`. Both also
+project `se_coef`, `error_inflation`, and `support_coef` through
+`A_c = A − A Rᵀ (R A Rᵀ)⁻¹ R A`, preserving `rls` and
+`ewridge(ridge_scale="sum")` parity. In TOML or JSON, write
+`constraints = { matrix = [[...]], rhs = [...] }`. Refused beside
+`feature_sets`, when `R` is rank-deficient, or when `q < 1` or `q > k`.
 
 **NIST's statistical reference datasets show where the solve stops
 promising a digit.** Their hardest designs that double precision can solve

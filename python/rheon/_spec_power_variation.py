@@ -52,7 +52,6 @@ def power_variation(
     window_rows: int | None = None,
     window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Power variation and kernel-weighted autocovariance sums of each
@@ -258,6 +257,4 @@ def power_variation(
         model["window_size"] = window_size
     if closed != "right":
         model["closed"] = closed
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     return _common(name, model, targets=targets, features=[], **common)

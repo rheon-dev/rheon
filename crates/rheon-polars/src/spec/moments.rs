@@ -344,7 +344,7 @@ pub fn ewm_moments_cfg(
         decay,
         terms: out,
         min_weight: spec.min_periods_or_default(),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
         clocked,
         lag_tolerance: lag_tolerance.as_ref().map(Span::value),
         se: se.unwrap_or(false),

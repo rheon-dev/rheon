@@ -20,7 +20,6 @@ def ar(
     lags: int | list[int],
     features: list[str] | None = None,
     ridge: float | None = None,
-    max_state_bytes: int | None = None,
     select: Literal["aic", "bic"] | None = None,
     window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
@@ -244,8 +243,6 @@ def ar(
     # reports the dict this made (`ModelBank.specs`).
     if ridge is not None:
         model["ridge"] = ridge
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     if select is not None:
         model["select"] = select
     return _common(name, model, targets=targets, features=features or [], **common)
@@ -260,7 +257,6 @@ def spectral(
     spacing: float | Duration | None = None,
     scaling: Literal["density", "spectrum", "lomb_scargle"] = "density",
     detrend: bool = True,
-    max_state_bytes: int | None = None,
     window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
     snapshot_every: float | Duration | None = None,
@@ -437,7 +433,7 @@ def spectral(
         "spacing": spacing,
         "scaling": scaling,
         "detrend": detrend,
-        "max_state_bytes": max_state_bytes,
+        "max_state_bytes": None,
         "window_size": window_size,
         "closed": closed,
         "snapshot_every": snapshot_every,

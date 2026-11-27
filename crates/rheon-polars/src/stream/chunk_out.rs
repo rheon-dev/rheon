@@ -66,9 +66,12 @@ pub struct ChunkOut {
     /// Each coefficient's standard error under `emit_se_coef`, on `coef`'s
     /// cadence: `[model][row]` (docs/PLAN.md task 116, F).
     pub se_coef: Vec<Vec<Option<Vec<f64>>>>,
-    /// The robust standard errors under `emit_robust_se`, HC0's and Newey
-    /// and West's, laid out like `se_coef` (docs/PLAN.md task 221 (c)).
+    /// The robust standard errors under `emit_robust_se`, HC0..HC3 and Newey
+    /// and West's, laid out like `se_coef`.
     pub se_coef_hc0: Vec<Vec<Option<Vec<f64>>>>,
+    pub se_coef_hc1: Vec<Vec<Option<Vec<f64>>>>,
+    pub se_coef_hc2: Vec<Vec<Option<Vec<f64>>>>,
+    pub se_coef_hc3: Vec<Vec<Option<Vec<f64>>>>,
     pub se_coef_hac: Vec<Vec<Option<Vec<f64>>>>,
     /// `n_rows` each under `emit_clocks`, else empty: the row's own clock,
     /// and the newest learned row's when it was scored (task 152).
@@ -192,6 +195,9 @@ impl ChunkOut {
             support_coef: Vec::new(),
             se_coef: Vec::new(),
             se_coef_hc0: Vec::new(),
+            se_coef_hc1: Vec::new(),
+            se_coef_hc2: Vec::new(),
+            se_coef_hc3: Vec::new(),
             se_coef_hac: Vec::new(),
             scored_clock: Vec::new(),
             learned_clock: Vec::new(),
@@ -311,6 +317,33 @@ impl ChunkOut {
         lists(&mut self.support_coef, n_models, n_rows);
         lists(&mut self.se_coef, n_models, n_rows);
         lists(&mut self.se_coef_hc0, n_models, n_rows);
+        lists(
+            &mut self.se_coef_hc1,
+            if spec.emits_robust_se_type(rheon_core::RobustSeType::Hc1) {
+                n_models
+            } else {
+                0
+            },
+            n_rows,
+        );
+        lists(
+            &mut self.se_coef_hc2,
+            if spec.emits_robust_se_type(rheon_core::RobustSeType::Hc2) {
+                n_models
+            } else {
+                0
+            },
+            n_rows,
+        );
+        lists(
+            &mut self.se_coef_hc3,
+            if spec.emits_robust_se_type(rheon_core::RobustSeType::Hc3) {
+                n_models
+            } else {
+                0
+            },
+            n_rows,
+        );
         lists(&mut self.se_coef_hac, n_models, n_rows);
         let clocks = if spec.emit_clocks { n_rows } else { 0 };
         fill(&mut self.scored_clock, clocks, None);
@@ -393,6 +426,9 @@ impl ChunkOut {
             &self.support_coef,
             &self.se_coef,
             &self.se_coef_hc0,
+            &self.se_coef_hc1,
+            &self.se_coef_hc2,
+            &self.se_coef_hc3,
             &self.se_coef_hac,
             &self.smoothed_coef,
             &self.smoothed_se,

@@ -148,7 +148,7 @@ the docs set it:
 |---|---|
 | the diagnostics: `emit_sigma`, `emit_zscore`, `emit_selected`, `emit_averaged`, `emit_drift`, `emit_metrics`, `emit_autocorr`, `resid_quantiles`, `conformal`, `emit_calibration`, `emit_breaks`, `emit_specification`, `emit_tails`, `emit_influence` (`ewridge`'s, `rls`'s and `kalman`'s), `emit_feature_health` (not `holt`'s, which has no features) | [Is the model working?](DIAGNOSTICS.md), for the models that predict a target. `emit_metrics`' `hit_rate_<t>` is null throughout on an `sgd` fit with `loss="poisson"`, whose rate and count have no sign to hit |
 | `emit_error_inflation` and `emit_se_coef`, `ewridge`'s, `rls`'s and `kalman`'s | [Warm-up gates](MODELS.md#warm-up-gates) |
-| `emit_robust_se`, `ewridge`'s and `rls`'s | [Can its t be trusted?](DIAGNOSTICS.md#can-its-t-be-trusted) |
+| `emit_robust_se` (with optional `robust_se_types` for `hc0` to `hc3`), `ewridge`'s and `rls`'s | [Can its t be trusted?](DIAGNOSTICS.md#can-its-t-be-trusted) |
 | `emit_clocks`, every model's | [Learn targets known late](how-to/learn-targets-known-late.md#check-that-it-worked), and the table of its two fields after this one |
 | `emit_target_weight`, every model's with a target: `weight_<t>`, the weight `<t>`'s `min_weight` reads, beside `weight_sum` | [Warm-up gates](MODELS.md#warm-up-gates) |
 | `emit_huber_scale`, `huber`'s: `huber_scale_<t>`, the scale each row's cut is drawn in | [`huber`'s table](#huber), and its [entry](MODELS.md#huber--robust-regression) |

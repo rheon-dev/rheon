@@ -98,6 +98,7 @@ fn models() -> Vec<Make> {
                         window: Some(WINDOW),
                         window_every: None,
                         max_rows_between_snapshots: None,
+                        constraints: None,
                     })
                     .unwrap(),
                 ) as Box<dyn Probe>

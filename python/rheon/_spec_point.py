@@ -40,7 +40,6 @@ def hawkes(
     window_events: int | None = None,
     window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A self-exciting point process, fitted exactly by least squares.
@@ -291,12 +290,11 @@ def hawkes(
         model["window_size"] = window_size
     if closed != "right":
         model["closed"] = closed
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     # The spec's own checks first, so a spec refused for another reason is
     # not warned of first (review 2026-11-23, PY-4).
     spec = _common(name, model, targets=targets, features=[], **common)
-    cap = MAX_STATE_BYTES if max_state_bytes is None else max_state_bytes
+    _msb = common.get("max_state_bytes")
+    cap = MAX_STATE_BYTES if _msb is None else _msb
     kernels = kernel_decays if kernel_decays is not None else kernel_half_lives
     if isinstance(kernels, list) and isinstance(window_events, int) and cap > 0:
         need = _state_bytes(len(targets), len(kernels), window_events)

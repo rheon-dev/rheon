@@ -691,6 +691,7 @@ fn ewridge_cfg() -> EwRidgeCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        constraints: None,
     }
 }
 
@@ -1187,6 +1188,7 @@ pub fn all() -> Vec<Case> {
                         delta: 1e-200,
                         coef_prior: None,
                         min_weight: 0.0,
+                        constraints: None,
                     })
                     .unwrap(),
                 ))
@@ -1227,6 +1229,55 @@ pub fn all() -> Vec<Case> {
                 delta: 1.0,
                 coef_prior: None,
                 min_weight: 3.0,
+                constraints: None,
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Constrained EwRidge and Rls (schema 72, PLAN 516): `constraints`
+        // serialized on the model cfg and projected across save/load.
+        case!(
+            "ewridge_constrained",
+            "EwRidge",
+            EwRidge,
+            {
+                let mut m = EwRidge::new(EwRidgeCfg {
+                    feature_sets: Vec::new(),
+                    min_weight: 0.0,
+                    solve_every: 0.0,
+                    max_rows_between_solves: 1,
+                    constraints: Some(LinearConstraints {
+                        matrix: vec![vec![1.0, 1.0]],
+                        rhs: vec![1.0],
+                    }),
+                    ..ewridge_cfg()
+                })
+                .unwrap();
+                m.set_keep_factor(true);
+                m
+            },
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        case!(
+            "rls_constrained",
+            "Rls",
+            Rls,
+            Rls::new(RlsCfg {
+                n_features: K,
+                n_targets: 2,
+                fit_intercept: true,
+                decay: decay(),
+                delta: 1.0,
+                coef_prior: None,
+                min_weight: 0.0,
+                constraints: Some(LinearConstraints {
+                    matrix: vec![vec![1.0, 1.0]],
+                    rhs: vec![1.0],
+                }),
             })
             .unwrap(),
             K,

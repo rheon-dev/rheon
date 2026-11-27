@@ -117,6 +117,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Decay;
+use crate::lincon::{
+    ConstraintProj, LinearConstraints, solve_upper_t_packed, system_constraint_matrix,
+};
 use crate::model::{ModelState, OnlineModel, State, StateError, Step, check_schema};
 use crate::solve::dot_aug;
 
@@ -132,6 +135,12 @@ pub struct RlsCfg {
     /// Initial coefficients per target (length `k_total`), default zeros.
     pub coef_prior: Option<Vec<Vec<f64>>>,
     pub min_weight: f64,
+    /// Linear equality constraints `R β = r` on the slope coefficients
+    /// (never the intercept). Last, and the sole skipping field on `RlsCfg`,
+    /// so compact and named msgpack both round-trip cleanly and pre-existing
+    /// states keep bit-identical bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<LinearConstraints>,
 }
 
 impl RlsCfg {
@@ -171,6 +180,9 @@ impl RlsCfg {
                 self.k_total(),
                 self.fit_intercept,
             ));
+        }
+        if let Some(lc) = &self.constraints {
+            no.take(lc.validate("rls", self.n_features));
         }
         no.finish()
     }
@@ -606,7 +618,20 @@ impl Rls {
         );
     }
 
-    /// `beta_j = R^-1 u_j` by back-substitution. A zero pivot is a direction
+    /// Build the equality-constraint projector against the current upper-triangular
+    /// Cholesky factor `R`, or `None` if no constraints are set or `R A⁻¹ Rᵀ` is singular.
+    fn constraint_proj(&self) -> Option<ConstraintProj> {
+        let lc = self.cfg.constraints.as_ref()?;
+        let k = self.cfg.k_total();
+        let off = usize::from(self.cfg.fit_intercept);
+        let z: Vec<usize> = (0..k).collect();
+        let s = vec![1.0; k];
+        let c_mat = system_constraint_matrix(lc, &z, &s, off)?;
+        ConstraintProj::from_upper_packed(&self.r, k, c_mat, lc.rhs.clone(), lc.n_constraints())
+    }
+
+    /// `beta_j = R^-1 u_j` by back-substitution, projected onto `R_c beta = r`
+    /// when constraints are configured. A zero pivot is a direction
     /// no row has ever excited after the prior has decayed away entirely
     /// (`sqrt(delta) lam_acc^(1/2)` underflows after ~2000 half-lives without
     /// data): the coefficient there is set to zero rather than to `0/0`.
@@ -634,6 +659,20 @@ impl Rls {
             }
             betas = brest;
             us = urest;
+        }
+        if self.cfg.constraints.is_some() {
+            match self.constraint_proj() {
+                Some(proj) => {
+                    for b in &mut self.beta {
+                        proj.project_solution(b);
+                    }
+                }
+                None => {
+                    for b in &mut self.beta {
+                        b.fill(f64::NAN);
+                    }
+                }
+            }
         }
     }
 
@@ -686,7 +725,12 @@ impl OnlineModel for Rls {
     /// the fit learns every target on the same rows. Infinite before the
     /// fit has learned a row.
     fn error_inflation_into(&self, out: &mut Vec<f64>) -> bool {
-        let k = self.cfg.k_total() as f64;
+        let q = self
+            .cfg
+            .constraints
+            .as_ref()
+            .map_or(0, LinearConstraints::n_constraints);
+        let k = self.cfg.k_total().saturating_sub(q) as f64;
         let s1 = self.w_target.first().copied().unwrap_or(0.0);
         let ratio = match self.kish_ratio() {
             Some(r) => (1.0 + k * r / s1).sqrt(),
@@ -698,16 +742,32 @@ impl OnlineModel for Rls {
     }
 
     /// `sqrt(1 + ‖R⁻ᵀ z‖² s₂ / s₁)`, the row's leverage against the kept
-    /// factor (the module doc). Infinite before the fit has learned a row.
+    /// factor (the module doc), projected onto the constraint nullspace when
+    /// constraints are set. Infinite before the fit has learned a row.
     fn row_error_inflation_into(&self, x: &[f64], _d_clock: f64, out: &mut Vec<f64>) -> bool {
         let ratio = match self.kish_ratio() {
             Some(r) => {
-                let mut z = Vec::with_capacity(self.cfg.k_total());
+                let k = self.cfg.k_total();
+                let mut z = Vec::with_capacity(k);
                 if self.cfg.fit_intercept {
                     z.push(1.0);
                 }
                 z.extend_from_slice(x);
-                (1.0 + self.leverage(&z) * r).sqrt()
+                if self.cfg.constraints.is_some() {
+                    match self.constraint_proj() {
+                        Some(proj) => {
+                            let mut a = vec![0.0; k];
+                            if solve_upper_t_packed(&self.r, k, &z, &mut a) {
+                                (1.0 + proj.projected_quad_from_whitened(&a) * r).sqrt()
+                            } else {
+                                f64::INFINITY
+                            }
+                        }
+                        None => f64::NAN,
+                    }
+                } else {
+                    (1.0 + self.leverage(&z) * r).sqrt()
+                }
             }
             None => f64::INFINITY,
         };
@@ -716,19 +776,27 @@ impl OnlineModel for Rls {
         true
     }
 
-    /// `(s₂ / s₁) diag(A⁻¹)` per target, over the noise variance (the
-    /// module doc): `None` before the fit has learned a row.
+    /// `(s₂ / s₁) diag(A⁻¹)` (or `diag(A_c⁻¹)` under constraints) per target,
+    /// over the noise variance (the module doc): `None` before the fit has learned a row.
     fn coef_variance(&self) -> Option<crate::CoefVariance> {
         let r = self.kish_ratio()?;
         let k = self.cfg.k_total();
-        let mut e = vec![0.0; k];
-        let diag: Vec<f64> = (0..k)
-            .map(|i| {
-                e.fill(0.0);
-                e[i] = 1.0;
-                self.leverage(&e) * r
-            })
-            .collect();
+        let diag: Vec<f64> = if self.cfg.constraints.is_some() {
+            let proj = self.constraint_proj()?;
+            proj.projected_inverse_diagonal_upper(&self.r)
+                .into_iter()
+                .map(|v| v * r)
+                .collect()
+        } else {
+            let mut e = vec![0.0; k];
+            (0..k)
+                .map(|i| {
+                    e.fill(0.0);
+                    e[i] = 1.0;
+                    self.leverage(&e) * r
+                })
+                .collect()
+        };
         Some(crate::CoefVariance::PerNoise(vec![
             diag;
             self.cfg.n_targets
@@ -888,9 +956,16 @@ impl OnlineModel for Rls {
                     let d = m.r[base(k, i) + i];
                     d.is_finite() && if decays { d >= 0.0 } else { d > 0.0 }
                 });
+                let beta_ok = if m.cfg.constraints.is_some() {
+                    m.beta.iter().all(|row| {
+                        row.iter().all(|v| v.is_finite()) || row.iter().all(|v| v.is_nan())
+                    })
+                } else {
+                    m.beta.iter().flatten().all(|v| v.is_finite())
+                };
                 let entries_ok = m.r.iter().all(|v| v.is_finite())
                     && m.u.iter().flatten().all(|v| v.is_finite())
-                    && m.beta.iter().flatten().all(|v| v.is_finite());
+                    && beta_ok;
                 if !pivots_ok || !entries_ok {
                     return Err(crate::model::damaged(
                         "rls",
@@ -937,6 +1012,7 @@ mod tests {
                 delta: 1e-3,
                 coef_prior: None,
                 min_weight: 0.0,
+                constraints: None,
             })
             .unwrap();
             for i in 0..50 {
@@ -1070,6 +1146,7 @@ mod tests {
             delta: ridge,
             coef_prior: None,
             min_weight: 0.0,
+            constraints: None,
         }
     }
 
@@ -1084,6 +1161,7 @@ mod tests {
             delta: 1.0,
             coef_prior: None,
             min_weight: 0.0,
+            constraints: None,
         })
         .unwrap()
     }
@@ -1498,6 +1576,7 @@ mod tests {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            constraints: None,
         })
         .unwrap();
 
@@ -1551,6 +1630,7 @@ mod tests {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            constraints: None,
         };
         let mut own = EwRidge::new(cfg.clone()).unwrap();
         let mut pairwise = EwRidge::new(EwRidgeCfg {
@@ -1622,6 +1702,7 @@ mod tests {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            constraints: None,
         })
         .unwrap();
 

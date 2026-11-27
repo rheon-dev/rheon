@@ -93,10 +93,15 @@ impl Spec {
                  for no smoother."
             ));
         }
+        let cap_opt = self.model_max_state_bytes(*max_state_bytes);
         if smooth_lag.is_none() {
             for (key, set) in [
                 ("emit_smoothed_se", *emit_smoothed_se),
-                ("max_state_bytes", max_state_bytes.is_some()),
+                (
+                    "max_state_bytes",
+                    max_state_bytes.is_some()
+                        || (self.max_state_bytes.is_some() && !self.has_diagnostic_state_cap()),
+                ),
             ] {
                 if set {
                     no.refuse(format!(
@@ -132,7 +137,7 @@ impl Spec {
                  or leave out smooth_lag."
             ));
         }
-        let cap = max_state_bytes.unwrap_or(SMOOTH_MAX_STATE_BYTES);
+        let cap = cap_opt.unwrap_or(SMOOTH_MAX_STATE_BYTES);
         if cap == 0 || cap > SMOOTH_STATE_BYTES_CEILING {
             no.refuse(format!(
                 "spec {name:?}: max_state_bytes must be above 0 and at most \

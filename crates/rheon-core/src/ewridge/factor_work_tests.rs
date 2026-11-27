@@ -50,6 +50,7 @@ fn cfg(
         window,
         window_every: None,
         max_rows_between_snapshots: None,
+        constraints: None,
     }
 }
 

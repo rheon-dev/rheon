@@ -218,6 +218,7 @@ def describe_api(cli: Path | None = None) -> str:
                 emit_breaks=True,
                 emit_robust_se=True,
                 robust_se_lags=2,
+                robust_se_types=["hc0", "hc1", "hc2", "hc3"],
                 emit_specification=True,
                 emit_tails=True,
                 emit_influence=True,
@@ -718,6 +719,13 @@ ENUM_PROBES: list[
         {"clock": "t", "gap_cap": 10.0, "label_clock": "avail", "max_held_rows": 5},
         "held_overflow",
         "word",
+    ),
+    (
+        "spec.robust_se_types",
+        "ewridge",
+        {"emit_robust_se": True},
+        "robust_se_types",
+        "list",
     ),
     (
         "spec.session_gap",

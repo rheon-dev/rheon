@@ -2375,6 +2375,7 @@ impl Bank {
                 s.horizon_notices()
                     .into_iter()
                     .chain(s.lag_cap_notices())
+                    .chain(s.robust_se_cap_notices())
                     .map(move |n| format!("spec {:?}: {n}", s.name))
             })
             .collect();

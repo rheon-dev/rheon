@@ -63,6 +63,7 @@ fn ridge_on(k: usize, decay: Decay, ridge: f64) -> EwRidge {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        constraints: None,
     })
     .unwrap()
 }
@@ -314,6 +315,7 @@ fn the_sum_scale_huber_at_an_infinite_cut_is_rls() {
                 delta: ridge,
                 coef_prior: None,
                 min_weight: 0.0,
+                constraints: None,
             })
             .unwrap()
         })
@@ -560,6 +562,7 @@ fn a_feature_set_under_the_sum_scale_is_rls_on_its_columns() {
                 delta: ridge,
                 coef_prior: None,
                 min_weight: 0.0,
+                constraints: None,
             })
             .unwrap()
         })

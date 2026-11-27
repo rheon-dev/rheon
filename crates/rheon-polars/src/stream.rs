@@ -4139,6 +4139,9 @@ struct Instance<'a> {
     o_support_coef: &'a mut Vec<Option<Vec<f64>>>,
     o_se_coef: &'a mut Vec<Option<Vec<f64>>>,
     o_se_hc0: &'a mut Vec<Option<Vec<f64>>>,
+    o_se_hc1: Option<&'a mut Vec<Option<Vec<f64>>>>,
+    o_se_hc2: Option<&'a mut Vec<Option<Vec<f64>>>>,
+    o_se_hc3: Option<&'a mut Vec<Option<Vec<f64>>>>,
     o_se_hac: &'a mut Vec<Option<Vec<f64>>>,
     /// `kalman`'s fixed-lag smoother's outputs (`smoothed_coef`,
     /// `smoothed_se_coef`, and each target's `smoothed_for`, a target's
@@ -5587,7 +5590,24 @@ fn run_instance(
             // The robust standard errors of the fit after the row, as
             // `se_coef`'s (task 221 (c)).
             if let Some(c) = inst.checks.as_deref() {
-                if let Some(hc0) = c.robust_se(inst.check_cfg, false) {
+                if inst.spec.robust_se_types.is_some() {
+                    if inst
+                        .spec
+                        .emits_robust_se_type(rheon_core::RobustSeType::Hc0)
+                    {
+                        inst.o_se_hc0[ri] =
+                            c.robust_se_type(inst.check_cfg, rheon_core::RobustSeType::Hc0);
+                    }
+                    if let Some(dst) = inst.o_se_hc1.as_deref_mut() {
+                        dst[ri] = c.robust_se_type(inst.check_cfg, rheon_core::RobustSeType::Hc1);
+                    }
+                    if let Some(dst) = inst.o_se_hc2.as_deref_mut() {
+                        dst[ri] = c.robust_se_type(inst.check_cfg, rheon_core::RobustSeType::Hc2);
+                    }
+                    if let Some(dst) = inst.o_se_hc3.as_deref_mut() {
+                        dst[ri] = c.robust_se_type(inst.check_cfg, rheon_core::RobustSeType::Hc3);
+                    }
+                } else if let Some(hc0) = c.robust_se(inst.check_cfg, false) {
                     inst.o_se_hc0[ri] = Some(hc0);
                 }
                 if inst.check_cfg.hac() {
