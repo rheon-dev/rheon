@@ -1244,6 +1244,27 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **Window operators hold finite means, variances and rates at extreme
+  half-lives up to `f64::MAX`** (WIN-4, WIN-5, WIN-10 option (b)). Each
+  kernel with finite `half_life >= 2^511` now scales its masses into a
+  power-of-two unit `2^k` so `half_life * scale` stays in `[2^510, 2^511)`,
+  preventing overflow in `h / ln 2`, `m * x`, and `V1^2` without adding
+  state bytes or bumping `WINDOWS_VERSION`. Where `t * ln 2 / h < 2^-53`,
+  mass reads the linear scaled interval `t * scale` directly, and
+  `Stat::Rate` uses clock-unit `clock_mass` with an overflow guard. Below
+  `half_life = 2^511` no bit moves.
+
+- **Remaining core state-file load checks** (STATE-3). State restoration
+  now verifies span/window byte caps on load (`glm`, `expectile`, `sgd`,
+  `robust`, `bocpd`, `hmm`), `rls` factor pivots and finiteness, `sgd`
+  `StepGain` invariants on both serde and `State::restore`, and weight
+  invariants in `glm`, `expectile`, `bocpd`, `hmm`, and `lasso`, with no
+  schema bump and no change to valid saved states.
+
+- **Resolved five RUSTSEC advisories in `Cargo.lock`** by updating `url`
+  (2.5.8 to 2.5.9), `form_urlencoded` (1.2.2 to 1.2.3), and `zstd` /
+  `zstd-safe` / `zstd-sys` (0.13.6 / 7.4.2 / 2.2.0) under MSRV 1.95.
+
 - **`emit_breaks` no longer keeps a residual whose square overflows**
   (W14-15, found by a sweep of every kind with a row at the input bound
   and a save after it). A residual is not bounded by the inputs' bound: an
