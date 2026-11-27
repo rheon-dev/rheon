@@ -49,7 +49,51 @@ impl KernelDef {
         }
     }
 
-    /// [`Self::mass_finite`] for a finite half-life at least `2^511`: the
+    /// [`Self::mass`] for `half_life >= 2^511` (both `inf` and huge finite).
+    #[cold]
+    #[inline(never)]
+    pub(super) fn mass_extreme(&self, t: f64) -> f64 {
+        if self.half_life.is_infinite() {
+            t
+        } else {
+            self.mass_huge(t)
+        }
+    }
+
+    /// [`Self::mass_extreme`] through one slot of a [`DecayMemo`].
+    #[cold]
+    #[inline(never)]
+    pub(super) fn mass_extreme_in(&self, t: f64, slot: &mut (u64, f64)) -> f64 {
+        if self.half_life.is_infinite() {
+            return t;
+        }
+        let bits = t.to_bits();
+        if slot.0 == bits {
+            return slot.1;
+        }
+        let v = self.mass_huge(t);
+        *slot = (bits, v);
+        v
+    }
+
+    /// [`Self::mass_extreme`] through `memo.cut`.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn mass_extreme_cut(&self, t: f64, memo: &mut DecayMemo) -> f64 {
+        if self.half_life.is_infinite() {
+            return t;
+        }
+        let bits = t.to_bits();
+        let slot = &mut memo.cut.get_or_insert_with(Default::default)[(bits & 3) as usize];
+        if slot.0 == bits {
+            return slot.1;
+        }
+        let v = self.mass_huge(t);
+        *slot = (bits, v);
+        v
+    }
+
+    /// [`Self::mass_normal`] for a finite half-life at least `2^511`: the
     /// decayed mass in this kernel's power-of-two unit, or `t * scale` where
     /// `t * ln 2 / h < 2^-53`.
     #[cold]
@@ -128,6 +172,40 @@ impl KernelDef {
         if d <= 0.0 {
             return 0.0;
         }
+        if self.half_life >= MASS_SCALE_FROM {
+            return self.mass_held_extreme(d, memo);
+        }
+        let (bits, v) = memo.held;
+        if bits == d.to_bits() {
+            return v;
+        }
+        let v = self.mass_held_normal(d, memo);
+        memo.held = (d.to_bits(), v);
+        v
+    }
+
+    /// [`Self::mass_normal`] of the distance a row holds its value over (for a
+    /// finite half-life below `2^511`). From `HELD_MASS_FROM` half-lives up it
+    /// is `c (1 - d)` from the very `d = 2^(-x)` the row's discount is, taken
+    /// through the discount's own slot, so a row's step and its mass cost one
+    /// `exp2` between them where they ask for the same distance; the two forms
+    /// agree to a few ulps there (`1 - d` loses at most `2^-52 / (1 - d)` of
+    /// the mass, 1.6e-14 at the cut). Below it `1 - d` is too coarse (doubles
+    /// next to 1 are 1.1e-16 apart) and `exp_m1` is kept. The choice is on `x`
+    /// (an IEEE division and a compare), never on a library result, so every
+    /// platform takes the same form for the same row.
+    #[inline]
+    fn mass_held_normal(&self, d: f64, memo: &mut DecayMemo) -> f64 {
+        let h = self.half_life;
+        if d / h >= HELD_MASS_FROM {
+            return (h / std::f64::consts::LN_2) * (1.0 - self.discount_in(d, memo));
+        }
+        self.mass_normal(d)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn mass_held_extreme(&self, d: f64, memo: &mut DecayMemo) -> f64 {
         if self.half_life.is_infinite() {
             return d;
         }
@@ -135,41 +213,14 @@ impl KernelDef {
         if bits == d.to_bits() {
             return v;
         }
-        let v = self.mass_held_finite(d, memo);
+        let h = self.half_life;
+        let v = if d / h >= HELD_MASS_FROM {
+            let scale = self.mass_scale_huge();
+            (h * scale / std::f64::consts::LN_2) * (1.0 - self.discount_in(d, memo))
+        } else {
+            self.mass_huge(d)
+        };
         memo.held = (d.to_bits(), v);
         v
-    }
-
-    /// [`Self::mass_finite`] of the distance a row holds its value over. From
-    /// `HELD_MASS_FROM` half-lives up it is `c (1 - d)` from the very
-    /// `d = 2^(-x)` the row's discount is, taken through the discount's own
-    /// slot, so a row's step and its mass cost one `exp2` between them
-    /// where they ask for the same distance; the two forms agree to a few
-    /// ulps there (`1 - d` loses at most `2^-52 / (1 - d)` of the mass, 1.6e-14
-    /// at the cut). Below it `1 - d` is too coarse (doubles next to 1 are
-    /// 1.1e-16 apart) and `exp_m1` is kept. The choice is on `x` (an IEEE
-    /// division and a compare), never on a library result, so every platform
-    /// takes the same form for the same row.
-    #[inline]
-    fn mass_held_finite(&self, d: f64, memo: &mut DecayMemo) -> f64 {
-        let h = self.half_life;
-        if h >= MASS_SCALE_FROM {
-            return self.mass_held_huge(d, memo);
-        }
-        if d / h >= HELD_MASS_FROM {
-            return (h / std::f64::consts::LN_2) * (1.0 - self.discount_in(d, memo));
-        }
-        self.mass_finite(d)
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn mass_held_huge(&self, d: f64, memo: &mut DecayMemo) -> f64 {
-        let h = self.half_life;
-        if d / h >= HELD_MASS_FROM {
-            let scale = self.mass_scale_huge();
-            return (h * scale / std::f64::consts::LN_2) * (1.0 - self.discount_in(d, memo));
-        }
-        self.mass_huge(d)
     }
 }

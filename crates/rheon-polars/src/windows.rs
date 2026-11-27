@@ -545,14 +545,14 @@ impl KernelDef {
         if t <= 0.0 {
             return 0.0;
         }
-        if self.half_life.is_infinite() {
-            return t;
+        if self.half_life >= held_mass::MASS_SCALE_FROM {
+            return self.mass_extreme_in(t, &mut memo.mass);
         }
         let (bits, v) = memo.mass;
         if bits == t.to_bits() {
             return v;
         }
-        let v = self.mass_finite(t);
+        let v = self.mass_normal(t);
         memo.mass = (t.to_bits(), v);
         v
     }
@@ -566,15 +566,15 @@ impl KernelDef {
         if t <= 0.0 {
             return 0.0;
         }
-        if self.half_life.is_infinite() {
-            return t;
+        if self.half_life >= held_mass::MASS_SCALE_FROM {
+            return self.mass_extreme_cut(t, memo);
         }
         let bits = t.to_bits();
         let slot = &mut memo.cut.get_or_insert_with(Default::default)[(bits & 3) as usize];
         if slot.0 == bits {
             return slot.1;
         }
-        let v = self.mass_finite(t);
+        let v = self.mass_normal(t);
         *slot = (bits, v);
         v
     }
@@ -586,14 +586,14 @@ impl KernelDef {
         if t <= 0.0 {
             return 0.0;
         }
-        if self.half_life.is_infinite() {
-            return t;
+        if self.half_life >= held_mass::MASS_SCALE_FROM {
+            return self.mass_extreme_in(t, &mut memo.mass_far);
         }
         let (bits, v) = memo.mass_far;
         if bits == t.to_bits() {
             return v;
         }
-        let v = self.mass_finite(t);
+        let v = self.mass_normal(t);
         memo.mass_far = (t.to_bits(), v);
         v
     }
@@ -618,13 +618,13 @@ impl KernelDef {
         if t <= 0.0 {
             return 0.0;
         }
-        if self.half_life.is_infinite() {
-            return t;
+        if self.half_life >= held_mass::MASS_SCALE_FROM {
+            return self.mass_extreme_in(t, slot);
         }
         if slot.0 == t.to_bits() {
             return slot.1;
         }
-        let v = self.mass_finite(t);
+        let v = self.mass_normal(t);
         *slot = (t.to_bits(), v);
         v
     }
@@ -634,29 +634,27 @@ impl KernelDef {
     fn mass(&self, t: f64) -> f64 {
         if t <= 0.0 {
             0.0
-        } else if self.half_life.is_infinite() {
-            t
+        } else if self.half_life >= held_mass::MASS_SCALE_FROM {
+            self.mass_extreme(t)
         } else {
-            self.mass_finite(t)
+            self.mass_normal(t)
         }
     }
 
-    /// [`Self::mass`] of a distance above 0 under a finite half-life.
+    /// [`Self::mass`] of a distance above 0 under a finite half-life below `2^511`.
     #[inline]
-    fn mass_finite(&self, t: f64) -> f64 {
+    fn mass_normal(&self, t: f64) -> f64 {
         // `1 − 2^(−t/h)` cancels where `t ≪ h`: 6e-5 of the mass at
         // `h/t = 1e12`, all of it from 1e17, every mean null (task 159,
         // W2). `exp_m1` keeps the small difference whole; `discount`
         // itself has nothing to lose.
         let h = self.half_life;
-        if h >= held_mass::MASS_SCALE_FROM {
-            return self.mass_huge(t);
-        }
         let arg = t * std::f64::consts::LN_2 / h;
-        if arg < held_mass::MASS_LINEAR_BELOW {
-            return t;
+        if arg >= held_mass::MASS_LINEAR_BELOW {
+            -(h / std::f64::consts::LN_2) * (-arg).exp_m1()
+        } else {
+            t
         }
-        -(h / std::f64::consts::LN_2) * (-arg).exp_m1()
     }
 }
 
