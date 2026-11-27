@@ -551,7 +551,7 @@ ESSENTIAL_KIND = "kmeans"
 #: The kinds that refuse a weight by name: a count, and a test whose every
 #: learned row is one trial. ``rcov`` takes a weight of 0 or 1 only.
 NO_WEIGHT = frozenset({"audit", "seqtest"})
-WEIGHT = {"rcov": "w01"}
+WEIGHT = {"rcov": "w01", "random_cut_forest": "w01"}
 #: The kinds whose rows hold little beyond ``weight_sum``: what they learned
 #: is read from the bank, and compared too.
 READERS = {
@@ -596,6 +596,8 @@ def kind_frame(case: str) -> pl.DataFrame:
         df = df.with_columns(pl.col("y", "z").abs().round())
     if builder in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if builder == "bandit":
+        df = df.with_columns(arm=pl.when(pl.col("x0") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
     return df
 
 

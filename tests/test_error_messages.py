@@ -623,6 +623,9 @@ BUILDERS = {
         targets=None, half_life=None, label="y", classes=["a", "b"]
     ),
     rp.spec.hoeffding_tree_regressor: dict(half_life=None),
+    rp.spec.bandit: dict(targets=None, arm="arm", arms=["a", "b"], reward="y"),
+    rp.spec.half_space_trees: dict(features=["x0", "y"], targets=None, half_life=None),
+    rp.spec.random_cut_forest: dict(features=["x0", "y"], targets=None, half_life=None),
 }
 
 

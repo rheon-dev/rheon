@@ -418,7 +418,12 @@ CASES: list[Case] = [
     Case(
         "lasso2",
         "lasso",
-        full2(penalties=[0.1], max_rows_between_solves=4, max_error_inflation=3.0),
+        full2(
+            penalties=[0.1],
+            max_rows_between_solves=4,
+            max_error_inflation=3.0,
+            max_state_bytes=512 * 1024,
+        ),
     ),
     Case("lasso_window", "lasso", full(**CLOSE, penalties=[0.1, 0.0], **WINDOW)),
     Case(
@@ -498,7 +503,7 @@ CASES: list[Case] = [
             standardize=False,
         ),
     ),
-    Case("pa2", "pa", full2(mode="pa")),
+    Case("pa2", "pa", full2(mode="pa", max_state_bytes=512 * 1024)),
     Case(
         "glm",
         "glm",
@@ -582,7 +587,7 @@ CASES: list[Case] = [
             "targets": ["hit"],
         },
     ),
-    Case("ftrl2", "ftrl", full2(loss="squared", standardize=True)),
+    Case("ftrl2", "ftrl", full2(loss="squared", standardize=True, max_state_bytes=512 * 1024)),
     Case(
         "seqtest",
         "seqtest",

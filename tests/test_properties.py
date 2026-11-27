@@ -1399,8 +1399,8 @@ def test_each_kind_takes_every_stream_parameter_but_those_it_refuses():
     assert UNCLOCKED_KINDS == [
         "bandit",
         "deco",
-        "hoeffding_tree_classifier",
         "half_space_trees",
+        "hoeffding_tree_classifier",
         "pca",
         "random_cut_forest",
         "rcov",

@@ -141,8 +141,12 @@ def test_summary_is_the_frame_s_count_per_group(fitted):
         if spec["model"]["type"] == "audit":
             needed = []  # an audit reads every row: what the others skip, it counts
         accept = pl.all_horizontal(needed) if needed else pl.lit(True)
-        if spec["model"]["type"] == "ew_class":
+        if spec["model"]["type"] in ("ew_class", "hoeffding_tree_classifier"):
             has_target = pl.col(spec["targets"][0]).is_not_null()
+        elif spec["model"]["type"] == "bandit":
+            has_target = usable(spec["targets"][0]) | pl.col(spec["targets"][1]).is_in(
+                spec["model"]["arms"]
+            )
         elif spec["model"]["type"] == "seqtest" and spec["model"].get("a"):
             # The comparison's target is the difference of the two sides'
             # residuals, null where either side did not predict.
@@ -208,9 +212,16 @@ def test_describe_is_the_frame_s_statistics_per_column(fitted):
                 a = out["ridge"].struct.field("resid_y0__r0.5")
                 b = out["kalman"].struct.field("resid_y0")
                 frame = df.with_columns((b.abs() - a.abs()).alias(column))
-            elif name == "ew_class" and role == "target":
-                # A label is its class index to the model, and NaN otherwise:
-                # any finite stand-in gives the same counts.
+            elif (
+                spec["model"]["type"] in ("ew_class", "hoeffding_tree_classifier")
+                and role == "target"
+            ) or (
+                spec["model"]["type"] == "bandit"
+                and role == "target"
+                and column == spec["targets"][1]
+            ):
+                # A label or arm column is its index to the model, and NaN
+                # otherwise: any finite stand-in gives the same counts.
                 frame = df.with_columns(
                     pl.when(pl.col(column).is_in(["lo", "hi"])).then(0.0).alias(column)
                 )
@@ -235,8 +246,15 @@ def test_describe_is_the_frame_s_statistics_per_column(fitted):
             assert got["unusable_count"].to_list() == want["unusable_count"].to_list(), (
                 f"{name}/{column}"
             )
-            if name == "ew_class" and role == "target":
-                # A label column: counts only.
+            if (
+                spec["model"]["type"] in ("ew_class", "hoeffding_tree_classifier")
+                and role == "target"
+            ) or (
+                spec["model"]["type"] == "bandit"
+                and role == "target"
+                and column == spec["targets"][1]
+            ):
+                # A label or arm column: counts only.
                 assert got.select("mean", "std", "min", "max").null_count().sum_horizontal()[0] == 8
                 continue
             for c in ("mean", "std", "min", "max"):

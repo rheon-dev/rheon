@@ -87,8 +87,8 @@ def test_the_builder_writes_what_is_given_and_reads_the_features_off_the_terms()
         "bias": False,
         "se": True,
         "window_rows": 100,
-        "max_state_bytes": 1 << 20,
     }
+    assert given["max_state_bytes"] == 1 << 20
     assert given["features"] == ["g", "ar"]
     clocked = rp.spec.ewm_moments(
         "mom",

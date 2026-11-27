@@ -1094,6 +1094,11 @@ def kind_frame(kind: str, *, n: int = 400, steps=None, seed: int = 5) -> pl.Data
         df = df.with_columns(y=pl.col("y").abs().round())
     if kind in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if kind == "bandit":
+        df = df.with_columns(arm=pl.when(pl.col("x0") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if kind == "random_cut_forest":
+        # `random_cut_forest` takes a weight of 0 or 1 only.
+        df = df.with_columns(w=pl.lit(1.0))
     if kind == "garch":
         # returns with a conditional variance, a GARCH(1,1) at (0.05, 0.5,
         # 0.45): on the linear target `garch`'s start waits on every row
@@ -1529,6 +1534,7 @@ class TestScoredAsTheMaturedRowsWouldScoreIt:
 #: clock past the last learned row; the doubled stream's lessons sit `delay`
 #: after their rows, all by the same amount, which such a model cannot see.
 DOUBLED: dict[str, dict] = {
+    "bandit": {},
     "bocpd": {},
     "corrchange": {},
     "deco": {},
@@ -1551,8 +1557,10 @@ DOUBLED: dict[str, dict] = {
     # The same rows pooled in the same order, refit in full on each.
     "isotonic": {},
     "krls": {},
+    "half_space_trees": {},
     "hoeffding_tree_classifier": {},
     "hoeffding_tree_regressor": {},
+    "random_cut_forest": {},
     "spectral": {},
     "dependence": {},
     "glm": {},

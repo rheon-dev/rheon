@@ -52,6 +52,7 @@ def test_coef_is_the_output_s_last_coef_per_group_and_instance():
         "cluster",
         "state",
         "class",
+        "arm",
         "term",
         "coef",
     ]
@@ -113,7 +114,7 @@ def test_mistakes_and_edges_are_named():
     bank = rp.ModelBank([GRID])
     bank.fit_predict(_grouped())
     empty = bank.coef("ols", group="never")
-    assert empty.shape == (0, 16) and empty.schema == bank.coef("ols").schema
+    assert empty.shape == (0, 17) and empty.schema == bank.coef("ols").schema
     with pytest.raises(KeyError, match="no spec named 'nope'"):
         bank.coef("nope")
     with pytest.raises(IndexError, match="spec index 3 is out of range"):
@@ -173,6 +174,7 @@ COEF_SPECS = [
     rp.spec.ar("m", targets=["y", "y2"], features=["x1", "x2"], lags=[1, 3], half_life=30),
     # Every target's lags in every equation, the features first.
     rp.spec.vector_ar("m", targets=["y", "y2"], features=["x1", "x2"], lags=2, half_life=30),
+    rp.spec.bandit("m", features=["x1", "x2"], arm="c", arms=["a", "b"], reward="y", half_life=30),
 ]
 
 

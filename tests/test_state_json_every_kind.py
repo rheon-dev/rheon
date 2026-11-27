@@ -51,9 +51,9 @@ def frame(kind: str) -> pl.DataFrame:
     zero_w = idx.is_in([0, 5, 6, 90, 91, 200])
     null_y = idx.is_in([3, 40, 41, 150])
     null_x = idx.is_in([4, 60, 61, 180])
-    # `rcov` takes a weight of 0 or 1 only; `g` is its group, closed as it
-    # grows.
-    w = pl.lit(1.0) if kind == "rcov" else pl.col("w")
+    # `rcov` and `random_cut_forest` take a weight of 0 or 1 only; `g` is
+    # `rcov`'s group, closed as it grows.
+    w = pl.lit(1.0) if kind in ("rcov", "random_cut_forest") else pl.col("w")
     return df.with_columns(
         g=idx // 60,
         w=pl.when(zero_w).then(0.0).otherwise(w),

@@ -311,6 +311,10 @@ def _each_kind_fitted():
             df = df.with_columns(
                 y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b"))
             )
+        if name == "bandit":
+            df = df.with_columns(
+                arm=pl.when(pl.col("x0") > 0).then(pl.lit("a")).otherwise(pl.lit("b"))
+            )
         bank = rp.ModelBank([spec])
         out = bank.fit_predict(df)
         yield name, spec, bank, out

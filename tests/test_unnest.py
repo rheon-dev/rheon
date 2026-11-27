@@ -70,6 +70,7 @@ class TestCoefFields:
             "cluster",
             "state",
             "class",
+            "arm",
             "term",
         ]
         # Per instance: targets x combos slots, each the full term vector.
@@ -148,6 +149,7 @@ class TestCoefFields:
             "cluster",
             "state",
             "class",
+            "arm",
             "term",
         )
         assert ci.equals(want)

@@ -122,6 +122,7 @@ KINDS = [
     "ew_class",
     "hmm",
     "deco",
+    "bandit",
 ]
 
 #: The kinds with a coefficient whose rate parameters have no unit on a
@@ -153,6 +154,7 @@ def kind(name: str, h: float | str, **common) -> dict:
         "ew_class": dict(label="c", classes=["a", "b"], features=two, precision_prior=1.0),
         "hmm": dict(features=two, n_components=2, precision_prior=0.1),
         "deco": dict(features=two),
+        "bandit": dict(features=two, arm="c", arms=["a", "b"], reward="y"),
         # No half-life: the recursion is per observation.
         "garch": dict(targets=["y"], start_rows=50),
         "dcc": dict(targets=["y", "x1"], margin_start_rows=50, start_rows=50),
