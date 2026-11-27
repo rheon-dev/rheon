@@ -87,6 +87,19 @@ const SPECS: &[(&str, &str, &str)] = &[
         "hoeffding_tree_regressor",
         r#"{"type": "hoeffding_tree_regressor", "grace_period": 20.0, "delta": 0.01}"#,
         r#""targets": ["y", "x1"], "features": ["x0"]"#,
+        "bandit",
+        r#"{"type": "bandit", "arms": ["a", "b"], "policy": "linucb", "alpha": 1.0, "l2": 1.0, "seed": 7}"#,
+        r#""targets": ["y", "lab"], "features": ["x0", "x1"], "half_life": 50.0"#,
+    ),
+    (
+        "half_space_trees",
+        r#"{"type": "half_space_trees", "n_trees": 8, "height": 4, "window_rows": 40, "seed": 7}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"]"#,
+    ),
+    (
+        "random_cut_forest",
+        r#"{"type": "random_cut_forest", "n_trees": 8, "tree_size": 32, "shingle_size": 2, "seed": 7}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"]"#,
     ),
     (
         "ew_cov",

@@ -61,6 +61,7 @@
 
 mod ar;
 mod audit;
+mod bandit;
 pub mod bars;
 mod bocpd;
 mod boundary;
@@ -108,6 +109,7 @@ mod hmm;
 mod hoeffding_tree_classifier;
 mod hoeffding_tree_regressor;
 mod holt;
+mod hst;
 mod huber_refit;
 pub mod humanfloat;
 mod influence;
@@ -124,9 +126,11 @@ mod model;
 #[cfg(test)]
 mod oracle;
 mod pa;
+pub mod philox;
 mod pieces;
 mod power_variation;
 mod psquared;
+mod rcf;
 mod rcov;
 mod realized;
 mod refusals;
@@ -169,6 +173,7 @@ pub use audit::{
     HLL_ROW_ENTRY_BYTES, Hll, MAX_DISTINCT_CAP, MAX_DISTINCT_PRECISION, MIN_DISTINCT_PRECISION,
     NULL, PairReport as AuditPair, is_null, splitmix64,
 };
+pub use bandit::{BANDIT_MAX_STATE_BYTES, Bandit, BanditCfg, BanditPolicy};
 pub use bocpd::{Bocpd, BocpdCfg, BocpdEmission};
 pub use breaks::{Breaks, TwinFit, cusum_null, cusum_null_at, cusum_null_window, cusum_sq_null_at};
 pub use calibration::{Calibration, Coverage};
@@ -250,6 +255,7 @@ pub use holt::{
     HOLT_MAX_HORIZONS, HOLT_MAX_STATE_BYTES, HOLT_STATE_BYTES_CEILING, Holt, HoltCfg, HoltSeason,
     HoltStart,
 };
+pub use hst::{HST_MAX_HEIGHT, HST_MAX_STATE_BYTES, HalfSpaceTrees, HalfSpaceTreesCfg};
 pub use huber_refit::{
     BIN_REFIT_ROWS_PER_BIN, DEFAULT_REFIT_MAX_FEATURES, DEFAULT_REFIT_ROWS, MAX_REFIT_ROWS,
     REFIT_PASSES, REFIT_RUNS_PER_ROW, RefitStatus, default_bin_refit_rows, default_refit_rows,
@@ -284,12 +290,16 @@ pub use model::{
     all_usable, check_schema, usable,
 };
 pub use pa::{Pa, PaCfg, PaMode};
+pub use philox::{
+    DrawStream, LANE_HST_BUILD, LANE_POLICY_NORMAL, LANE_POLICY_UNIFORM, LANE_RCF_CUT, LaneReader,
+};
 pub use pieces::Sequential;
 pub use power_variation::{
     PowerVariation, PowerVariationCfg, PvKernel, PvTerm, PvTermKind,
     outputs_per_target as power_variation_outputs,
 };
 pub use psquared::PSquared;
+pub use rcf::{RCF_MAX_STATE_BYTES, RandomCutForest, RandomCutForestCfg};
 pub use rcov::{
     Rcov, RcovCfg, RcovEstimate, RcovKind, parzen, parzen_c_star, phi_11, phi_12, phi_22, preavg_g,
     psi1, psi2,

@@ -111,6 +111,9 @@ pub enum ModelState {
     Dependence(Box<crate::Dependence>),
     HoeffdingTreeClassifier(Box<crate::HoeffdingTreeClassifier>),
     HoeffdingTreeRegressor(Box<crate::HoeffdingTreeRegressor>),
+    Bandit(Box<crate::Bandit>),
+    HalfSpaceTrees(Box<crate::HalfSpaceTrees>),
+    RandomCutForest(Box<crate::RandomCutForest>),
 }
 
 #[derive(Debug, Error)]
@@ -248,6 +251,9 @@ impl ModelState {
             ModelState::Dependence(_) => "dependence",
             ModelState::HoeffdingTreeClassifier(_) => "hoeffding_tree_classifier",
             ModelState::HoeffdingTreeRegressor(_) => "hoeffding_tree_regressor",
+            ModelState::Bandit(_) => "bandit",
+            ModelState::HalfSpaceTrees(_) => "half_space_trees",
+            ModelState::RandomCutForest(_) => "random_cut_forest",
         }
     }
 }

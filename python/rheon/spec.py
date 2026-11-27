@@ -22,10 +22,11 @@ shows them at work.
     Column names. A target is what the model predicts. A feature is what it
     reads from the same row. A model with no target (``ew_cov``, ``ewm_moments``,
     ``kmeans``, ``micro``, ``pca``, ``deco``, ``bocpd``, ``corrchange``,
-    ``hmm`` and ``rcov``) takes ``features`` alone, and ``audit`` takes
-    ``columns`` in their place. ``ew_class`` and ``hoeffding_tree_classifier``
-    take a ``label`` column in the target's place. ``holt``, ``seqtest``,
-    ``garch``, ``hawkes``, ``dcc``, ``realized``, ``power_variation``, ``tdigest``, ``ddsketch`` and
+    ``hmm``, ``rcov``, ``half_space_trees`` and ``random_cut_forest``) takes
+    ``features`` alone, ``bandit`` takes ``features``, ``reward`` and ``arm``,
+    ``audit`` takes ``columns`` alone, and ``holt``, ``seqtest``, ``ar``,
+    ``vector_ar``, ``garch``, ``hawkes``, ``dcc``, ``realized``,
+    ``power_variation``, ``tdigest``, ``ddsketch`` and
     ``spectral`` take no features: each reads its targets alone. A target
     computed from its own row's columns, such as a return against the mid,
     is a column: make it with Polars' ``with_columns`` before the bank. A log
@@ -141,7 +142,8 @@ shows them at work.
            ``audit``, ``hawkes``, ``garch``, ``dcc``, ``realized``, ``pca``,
            ``power_variation``, ``tdigest``, ``ddsketch``, ``ewm_moments``,
            ``ar``, ``spectral``, ``isotonic``, ``krls``, ``vector_ar``, ``dependence``,
-           ``hoeffding_tree_classifier``, ``hoeffding_tree_regressor``
+           ``hoeffding_tree_classifier``, ``hoeffding_tree_regressor``,
+           ``bandit``, ``half_space_trees``, ``random_cut_forest``
 ``emit_target_weight``
     Why: a row whose target is null teaches that target nothing but still
     adds to the shared ``weight_sum``, so a row can show ``weight_sum`` above
@@ -1193,6 +1195,7 @@ config each fill its defaults and build its models.
 from rheon._spec import (
     ar,
     audit,
+    bandit,
     bocpd,
     coef_fields,
     coef_index,
@@ -1209,6 +1212,7 @@ from rheon._spec import (
     ftrl,
     garch,
     glm,
+    half_space_trees,
     hawkes,
     hmm,
     hoeffding_tree_classifier,
@@ -1228,6 +1232,7 @@ from rheon._spec import (
     pca,
     power_variation,
     quantile,
+    random_cut_forest,
     rcov,
     realized,
     rls,
@@ -1284,4 +1289,7 @@ __all__ = [
     "vector_ar",
     "hoeffding_tree_classifier",
     "hoeffding_tree_regressor",
+    "bandit",
+    "half_space_trees",
+    "random_cut_forest",
 ]

@@ -326,6 +326,7 @@ _INDEX_COLUMNS = (
     "cluster",
     "state",
     "class",
+    "arm",
     "term",
 )
 

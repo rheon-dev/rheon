@@ -122,6 +122,19 @@
     closed = 'right'
     max_state_bytes = None
     common
+  bandit:
+    name
+    features
+    arm
+    arms
+    reward
+    policy = 'linucb'
+    alpha = None
+    epsilon = None
+    l2 = 1.0
+    seed = 0
+    max_state_bytes = None
+    common
   bocpd:
     name
     features
@@ -339,6 +352,16 @@
     max_state_bytes = None
     step_cap = None
     refit_budget = None
+    common
+  half_space_trees:
+    name
+    features
+    n_trees = 10
+    height = 8
+    window_rows = 250
+    limits = None
+    seed = 0
+    max_state_bytes = None
     common
   hawkes:
     name
@@ -614,6 +637,15 @@
     max_state_bytes = None
     refit_budget = None
     common
+  random_cut_forest:
+    name
+    features
+    n_trees = 40
+    tree_size = 256
+    shingle_size = 1
+    seed = 0
+    max_state_bytes = None
+    common
   rcov:
     name
     features
@@ -774,6 +806,28 @@
     stream.robust_se_half_life = "inf"
     stream.specification_half_life = "inf"
     stream.tails_half_life = "inf"
+  bandit(arm='arm', arms=['a', 'b'], features=['x0'], half_life=50.0, reward='y'):
+    model.alpha = 1.0
+    model.decay.Halflife = 50.0
+    model.epsilon = 0.1
+    model.fit_intercept = true
+    model.group_hash = 0
+    model.l2 = 1.0
+    model.min_weight = 0.0
+    model.n_arms = 2
+    model.n_features = 1
+    model.policy = "linucb"
+    model.seed = 0
+    model.slot = 16520866656637732840
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0, 0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   bocpd(features=['x0', 'x1']):
     derived.covariance_prior = "data"
     derived.degrees_of_freedom_prior = 3.0
@@ -1092,6 +1146,25 @@
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
+  half_space_trees(features=['x0']):
+    model.group_hash = 0
+    model.height = 8
+    model.limits = [[0.0, 1.0]]
+    model.min_weight = 0.0
+    model.n_features = 1
+    model.n_trees = 10
+    model.seed = 0
+    model.slot = 16520866656637732840
+    model.window_rows = 250
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
   hawkes(half_life=50.0, kernel_decays=[1.0, 5.0], targets=['y']):
     model.closed = "right"
     model.decay.Halflife = 50.0
@@ -1489,6 +1562,24 @@
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
+  random_cut_forest(features=['x0']):
+    model.group_hash = 0
+    model.min_weight = 0.0
+    model.n_features = 1
+    model.n_trees = 40
+    model.seed = 0
+    model.shingle_size = 1
+    model.slot = 16520866656637732840
+    model.tree_size = 256
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
   rcov(block_rows=100, features=['x0', 'x1'], group='g', group_close='monotone'):
     derived.max_bandwidth = 56
     derived.preavg_rows = 16
@@ -1859,6 +1950,12 @@
   ewm_moments(features=['x0'], half_life=50.0, se=True, terms={'var': {'x0': 2}}, window_rows=50), the lines that differ from ewm_moments's:
     model.se = true
     model.window_rows = 50
+  bandit(arm='arm', arms=['a', 'b'], features=['x0'], half_life=50.0, policy='lints', reward='y'), the lines that differ from bandit's:
+    model.policy = "lints"
+  bandit(arm='arm', arms=['a', 'b'], features=['x0'], half_life=50.0, policy='eps_greedy', reward='y'), the lines that differ from bandit's:
+    model.policy = "eps_greedy"
+  random_cut_forest(features=['x0'], shingle_size=4), the lines that differ from random_cut_forest's:
+    model.shingle_size = 4
 
 [ModelBank]  # name and signature: a parameter added or a default moved is a diff here
   __init__(self, specs: 'Iterable[dict[str, Any]]', *, threads: 'int | None' = None) -> 'None'
@@ -1962,6 +2059,7 @@
     cluster: Int64
     state: Int64
     class: String
+    arm: String
     term: String
     coef: Float64
   ModelBank.last_row() of an ewridge spec:
@@ -2151,6 +2249,7 @@
     component: Int64
     state: Int64
     class: String
+    arm: String
     columns: List[String]
     dtype: String
   rheon.spec.coef_index():
@@ -2162,6 +2261,7 @@
     cluster: Int64
     state: Int64
     class: String
+    arm: String
     term: String
   rheon.spec.coef_fields():
     field: String
@@ -2177,6 +2277,7 @@
     cluster: Int64
     state: Int64
     class: String
+    arm: String
     term: String
   ModelBank.gram(), each entry's keys:
     group
@@ -3294,6 +3395,35 @@
     settled_frac: f64
     withheld_reason: enum
     coef: list[f64]
+  bandit minimal:
+    arm: enum
+    score: f64
+    score_a: f64
+    score_b: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
+  bandit eps_greedy:
+    arm: enum
+    score: f64
+    score_a: f64
+    score_b: f64
+    prob: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
+  half_space_trees minimal:
+    score: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  random_cut_forest minimal:
+    score: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
 
 [closed_groups columns]  # column: dtype, in order: a column renamed, retyped, moved or added is a diff here
   shared:
@@ -3311,6 +3441,7 @@
     clock_max: Float64
     coef: List[Float64]
   ar: the shared columns only
+  bandit: the shared columns only
   bocpd: the shared columns only
   corrchange: the shared columns only
   dcc: the shared columns only
@@ -3373,6 +3504,7 @@
   ftrl: the shared columns only
   garch: the shared columns only
   glm: the shared columns only
+  half_space_trees: the shared columns only
   hawkes: the shared columns only
   hmm: the shared columns only
   hoeffding_tree_classifier: the shared columns only
@@ -3439,6 +3571,7 @@
   pca: the shared columns only
   power_variation: the shared columns only
   quantile: the shared columns only
+  random_cut_forest: the shared columns only
   rcov:
     spec: String
     group: String
@@ -3654,6 +3787,7 @@
   sgd.huber_scale: mad, rms
   sgd.loss: epsilon_insensitive, huber, logistic, poisson, quantile, squared
   sgd.schedule: adagrad, constant, inv_scaling
+  bandit.policy: eps_greedy, lints, linucb
   rp.ops.ewm_mean.closed: both, left, none, right
   rp.ops.ewm_mean.partial: drop, keep, null
   rp.ops.ewm_quantile.closed: both, left, none, right
@@ -3766,6 +3900,7 @@
   [specs.model], by type:
     ar: closed, lags, max_rows_between_snapshots, max_state_bytes, ridge, select, snapshot_every, window_budget, window_size
     audit: closed, distinct_cap, distinct_precision, distinct_window_rows, distinct_window_size, max_state_bytes, pairs
+    bandit: alpha, arms, epsilon, l2, max_state_bytes, policy, seed
     bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, hazard_rows, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
     corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, max_state_bytes, monitor_rows, monitor_span, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows, window_size
     dcc: a, asymmetric, b, dist, g, margin_start_rows, margin_start_span, margins, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
@@ -3780,6 +3915,7 @@
     ftrl: alpha, beta, l1, l2, loss, standardize, strict_binary
     garch: dist, forecast_rows, max_horizon_work, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     glm: family, link, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, step_cap, var_power
+    half_space_trees: height, limits, max_state_bytes, n_trees, seed, window_rows
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows, warm_span
     hoeffding_tree_classifier: classes, delta, grace_period, leaf_prediction, max_depth, max_share_to_split, max_state_bytes, merit_preprune, min_branch_fraction, n_splits, nb_threshold, split_criterion, tau
@@ -3797,6 +3933,7 @@
     pca: learning_rate, max_state_bytes, method, n_components
     power_variation: closed, max_state_bytes, terms, window_rows, window_size
     quantile: max_rows_between_solves, max_state_bytes, quantile, quantile_eps, quantile_refit_rows, quantile_refit_span, refit_budget, ridge, solve_every, standardize
+    random_cut_forest: max_state_bytes, n_trees, seed, shingle_size, tree_size
     rcov: bandwidth, block_rows, iv_stride, jitter, kernel, kind, max_bandwidth, noise_stride, preavg_rows, psd, theta
     realized: closed, lm_beta, lm_window, max_state_bytes, window_rows, window_size
     rls: coef_prior, delta

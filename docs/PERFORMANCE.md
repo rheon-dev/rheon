@@ -669,6 +669,14 @@ largest buffer at the smaller.
 | `dependence.k` | features k (MI + Miller-Madow + Kendall) | 2 → 16 | O(n) | O(n) | each feature keeps its own joint table and Kendall counters with each target | 3.40 · 1.00 · 5.30 · 3.97 |
 | `dependence.window` | a row window W (MI + Miller-Madow + Kendall) | 50 → 400 | O(n) | O(n) | each enter and leave updates Kendall counts across the window in O(W) and holds W rows in the ring | 4.85 · 1.00 · 4.27 · 2.84 |
 | `dependence.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | a window of 100 rows holds the same state and cost at any age | 1.00 · 1.00 · 1.00 · 1.00 |
+| `bandit.arms` | arms K | 2 → 16 | O(n) | O(n) | each row scores every arm's triangular factor; one factor and coefficient vector per arm | 4.44 · 1.00 · 6.76 · 3.07 |
+| `bandit.k` | features k | 4 → 32 | O(n^2) | O(n^2) | each row solves a triangular system per arm and updates the logged arm's Cholesky factor by Givens rotations, k² | 13.61 · 1.00 · 21.70 · 7.85 |
+| `bandit.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | per-arm factors and vectors only | 1.00 · 1.00 · 1.00 · 1.00 |
+| `half_space_trees.n_trees` | trees T, height 6 | 4 → 32 | O(n) | O(n) | each row descends T trees of fixed depth; two mass arrays per tree | 6.61 · 1.00 · 7.79 · 6.62 |
+| `half_space_trees.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | fixed-size mass arrays only; splits are rebuilt from seed | 1.01 · 1.00 · 1.00 · 1.00 |
+| `random_cut_forest.n_trees` | trees T, size 64 | 4 → 32 | O(n) | O(n) | each row scores, inserts and evicts across T trees; T trees held | 7.78 · 1.00 · 7.48 · 7.35 |
+| `random_cut_forest.tree_size` | tree size S, 16 trees | 32 → 256 | O(n) | O(n) | expected depth grows logarithmically, bounded by S; each tree holds at most S points | 1.76 · 1.00 · 8.35 · 7.50 |
+| `random_cut_forest.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | FIFO ring caps each tree at tree_size points | 1.00 · 1.00 · 1.00 · 1.00 |
 | `bank.groups_seen` (CI) | groups seen G (a block over 50 of them) | 250 → 2,000 | O(1) | O(n) | a row touches its group's state alone; a state a group | 1.03 · 1.00 · 7.99 · 7.14 |
 | `bank.groups_seen_per_call` (CI) | groups seen G, calls of four rows to one group each | 1,000 → 8,000 | O(1) | O(n) | a call finds each of its groups' state by key and takes only their notices; a state a group | 1.00 · 1.00 · 7.98 · 7.33 |
 | `bank.specs` (CI) | specs S, one set of columns | 1 → 8 | O(n) | O(n) | each spec steps its model, S | 8.28 · 7.67 · 7.80 · 7.23 |

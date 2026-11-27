@@ -357,6 +357,8 @@ def test_every_kind_settles_by_the_formula_and_withholds_until_it(name):
         "tdigest",
         "hoeffding_tree_classifier",
         "hoeffding_tree_regressor",
+        "half_space_trees",
+        "random_cut_forest",
     ):
         with pytest.raises(ValueError, match=f"- half_life does not apply to {name}, "):
             build()

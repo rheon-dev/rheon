@@ -149,6 +149,13 @@ fn every_model_refuses_a_decay_it_cannot_run_on() {
             })
             .map(drop)
         }),
+        ("bandit", &|decay| {
+            Bandit::new(BanditCfg {
+                decay,
+                ..bandit_cfg()
+            })
+            .map(drop)
+        }),
     ];
     let bad = [
         Decay::Halflife(0.0),
@@ -371,6 +378,19 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             "radius",
             0.0.into(),
             "radius must be finite and above 0",
+        ),
+        refused(Bandit::new(bandit_cfg()).unwrap(), "decay", zero(), h),
+        refused(
+            HalfSpaceTrees::new(half_space_trees_cfg()).unwrap(),
+            "n_trees",
+            0.into(),
+            "n_trees must be at least 1",
+        ),
+        refused(
+            RandomCutForest::new(random_cut_forest_cfg()).unwrap(),
+            "tree_size",
+            1.into(),
+            "tree_size must be at least 2",
         ),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
@@ -814,6 +834,14 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         (
             "hoeffding_tree_regressor",
             share(HoeffdingTreeRegressor::new(hoeffding_tree_regressor_cfg()).unwrap()),
+        ("bandit", share(Bandit::new(bandit_cfg()).unwrap())),
+        (
+            "half_space_trees",
+            share(HalfSpaceTrees::new(half_space_trees_cfg()).unwrap()),
+        ),
+        (
+            "random_cut_forest",
+            share(RandomCutForest::new(random_cut_forest_cfg()).unwrap()),
         ),
     ];
     let reporting: Vec<&str> = shares
@@ -881,6 +909,9 @@ const PROBED: &[(&str, &str)] = &[
     ("Dependence", "dependence"),
     ("HoeffdingTreeClassifier", "hoeffding_tree_classifier"),
     ("HoeffdingTreeRegressor", "hoeffding_tree_regressor"),
+    ("Bandit", "bandit"),
+    ("HalfSpaceTrees", "half_space_trees"),
+    ("RandomCutForest", "random_cut_forest"),
 ];
 
 #[test]

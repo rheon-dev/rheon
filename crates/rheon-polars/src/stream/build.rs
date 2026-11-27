@@ -21,19 +21,41 @@ const DEFAULT_BIN_WARM_ROWS: usize = 1_000;
 /// estimator keeps 95% of the mean's efficiency on normal errors.
 pub(crate) const DEFAULT_BIN_HUBER_DELTA: f64 = 1.345;
 
+/// Deterministic 64-bit Philox slot coordinate for `spec` (`FixedState::default().hash_one(spec.name)`).
+pub fn draw_slot(spec: &Spec) -> u64 {
+    use std::hash::BuildHasher;
+    rheon_core::FixedState::default().hash_one(spec.name.as_str())
+}
+
+/// Deterministic 64-bit Philox group coordinate for `(spec, key)`: `0` when
+/// `spec.group.is_none()`, otherwise `FixedState::default().hash_one(key)`.
+pub fn draw_group_hash(spec: &Spec, key: &crate::bank::GroupKey) -> u64 {
+    use std::hash::BuildHasher;
+    if spec.group.is_none() {
+        0
+    } else {
+        rheon_core::FixedState::default().hash_one(key)
+    }
+}
+
 /// Build the model instances for a spec: one per half-life grid entry. A
 /// model's own refusal names the spec, as `Spec::validate` names it for
 /// `bocpd`'s and the other cfg builders': in a bank of several specs
 /// `sgd: clip_gradient must be > 0` did not say which (review 2026-10-06,
 /// YA4). `decays` names it already.
 pub fn build_models(spec: &Spec) -> Result<Vec<(String, AnyModel)>, String> {
+    build_models_for(spec, 0)
+}
+
+/// [`build_models`] for a specific group's Philox coordinate `group_hash`.
+pub fn build_models_for(spec: &Spec, group_hash: u64) -> Result<Vec<(String, AnyModel)>, String> {
     let decays = spec.decays()?;
     decays
         .into_iter()
         .map(|(suffix, decay)| {
             // A model reports every problem with its settings, one to a
             // line; the spec names them once.
-            let m = build_one(spec, decay).map_err(|e| {
+            let m = build_one_for(spec, decay, group_hash).map_err(|e| {
                 let mut no = rheon_core::Refusals::new();
                 no.take(Err(e));
                 crate::spec::render_refusal(&spec.name, spec.model.kind_name(), &no).unwrap_err()
@@ -105,8 +127,18 @@ pub(super) fn constraint(
 /// (`ModelKind::window_budget`). The budget is configuration, which a state
 /// does not carry, so every model built -- a stream's, a reset's -- gets it
 /// here, and every model restored gets it in [`Stream::restore`].
+#[allow(dead_code)]
 pub(super) fn build_one(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
-    let mut m = build_bare(spec, decay)?;
+    build_one_for(spec, decay, 0)
+}
+
+/// [`build_one`] for a specific group's Philox coordinate `group_hash`.
+pub(super) fn build_one_for(
+    spec: &Spec,
+    decay: Decay,
+    group_hash: u64,
+) -> Result<AnyModel, String> {
+    let mut m = build_bare(spec, decay, group_hash)?;
     m.set_window_budget(spec.model.window_budget());
     // Threads are configuration too (docs/PLAN.md task 225).
     m.set_gram_threads(spec.model.gram_threads());
@@ -143,7 +175,7 @@ pub(super) fn resid_window(spec: &Spec) -> Result<Option<ResidWindow>, String> {
     .map(Some)
 }
 
-fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
+fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, String> {
     match &spec.model {
         ModelKind::EwRidge {
             ridge,
@@ -879,6 +911,23 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::HoeffdingTreeRegressor(_) => Ok(AnyModel::HoeffdingTreeRegressor(Box::new(
             rheon_core::HoeffdingTreeRegressor::new(crate::spec::hoeffding_tree_regressor_cfg(
                 spec,
+            )?)?,
+        ))),
+        ModelKind::Bandit(_) => Ok(AnyModel::Bandit(Box::new(rheon_core::Bandit::new(
+            crate::spec::bandit_cfg(spec, decay, group_hash, draw_slot(spec))?,
+        )?))),
+        ModelKind::HalfSpaceTrees(_) => Ok(AnyModel::HalfSpaceTrees(Box::new(
+            rheon_core::HalfSpaceTrees::new(crate::spec::half_space_trees_cfg(
+                spec,
+                group_hash,
+                draw_slot(spec),
+            )?)?,
+        ))),
+        ModelKind::RandomCutForest(_) => Ok(AnyModel::RandomCutForest(Box::new(
+            rheon_core::RandomCutForest::new(crate::spec::random_cut_forest_cfg(
+                spec,
+                group_hash,
+                draw_slot(spec),
             )?)?,
         ))),
     }

@@ -49,7 +49,7 @@ over static data and in stream processing.
 | [Introduction](#introduction) | [a first fit](#a-first-fit) · [the idea](#the-idea) · [terminology](#terminology) · [what you can rely on](#what-you-can-rely-on) · [install](#install) |
 | [What you can do with it](#what-you-can-do-with-it) | four use cases run end to end in [HIGHLIGHTS.md](docs/HIGHLIGHTS.md), and the capabilities they show |
 | [Where to go next](#where-to-go-next) | [the feature index](docs/FEATURES.md), every feature with a line and a link · the pages for each task, by kind |
-| [Models](#models) | the four families, each linking its models' entries in [MODELS.md](docs/MODELS.md) |
+| [Models](#models) | the five families, each linking its models' entries in [MODELS.md](docs/MODELS.md) |
 | [What this is not](#what-this-is-not) | what rheon leaves to Polars and to other tools |
 | [Contributing and license](#contributing-and-license) | building from a checkout, and the license |
 
@@ -422,7 +422,7 @@ defines every word the documents use for the library.
 
 ## Models
 
-rheon has forty-one models in four families, and each family
+rheon has forty-four models in five families, and each family
 answers one kind of question about a stream. A spec's clock, grouping and
 warm-up mean the same whichever model it names ([What every spec
 takes](docs/MODELS.md#what-every-spec-takes)), and [Choose a
@@ -434,6 +434,7 @@ model](docs/how-to/choose-a-model.md) says which to start with:
 | [Moments and correlation](docs/MODELS.md#moments-and-correlation) | how do these columns vary and move together? | `ew_cov`, `pca`, `ewm_moments`, `marginal`, `dependence`, `deco`, `rcov`, `audit`, `spectral`, `garch`, `dcc`, `realized`, `power_variation`, `tdigest`, `ddsketch` |
 | [Clustering and classification](docs/MODELS.md#clustering-and-classification) | which group does this row belong to? | `kmeans`, `micro`, `ew_class`, `hoeffding_tree_classifier` |
 | [Sequential tests and regimes](docs/MODELS.md#sequential-tests-and-regimes) | has something held, or changed, and which regime is the stream in? | `seqtest`, `corrchange`, `bocpd`, `hmm`, `hawkes` |
+| [Bandits and anomaly detection](docs/MODELS.md#bandits-and-anomaly-detection) | which action should this row take, or is this row anomalous? | `bandit`, `half_space_trees`, `random_cut_forest` |
 
 ## What this is not
 

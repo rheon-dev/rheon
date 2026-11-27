@@ -1074,6 +1074,12 @@ def kind_streams(
             .then(None)
             .otherwise(pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
         )
+    if kind == "bandit":
+        df = df.with_columns(
+            arm=pl.when(_missing("x0"))
+            .then(None)
+            .otherwise(pl.when(pl.col("x0") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
+        )
     return df
 
 
@@ -1141,6 +1147,10 @@ class TestEveryOtherKind:
         if kind in ("ew_class", "hoeffding_tree_classifier"):
             df = df.with_columns(
                 y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b"))
+            )
+        if kind == "bandit":
+            df = df.with_columns(
+                arm=pl.when(pl.col("x0") > 0).then(pl.lit("a")).otherwise(pl.lit("b"))
             )
         spec = {**_kind_spec(kind), "weight": "w"}
         if kind in ("seqtest", "audit"):
@@ -1387,9 +1397,12 @@ def test_each_kind_takes_every_stream_parameter_but_those_it_refuses():
     the list when they took clock forms: the temporal-clock property
     streams draw them."""
     assert UNCLOCKED_KINDS == [
+        "bandit",
         "deco",
         "hoeffding_tree_classifier",
+        "half_space_trees",
         "pca",
+        "random_cut_forest",
         "rcov",
         "seqtest",
         "tdigest",
@@ -1430,7 +1443,13 @@ def cut_streams(draw, kind: str, sign: float | None = None, offset: float = 0.0)
         )
     )
     flips = draw(st.lists(st.booleans(), min_size=n, max_size=n))
-    weights = draw(st.lists(_RCOV_WEIGHTS if kind == "rcov" else _weights, min_size=n, max_size=n))
+    weights = draw(
+        st.lists(
+            _RCOV_WEIGHTS if kind in ("rcov", "random_cut_forest") else _weights,
+            min_size=n,
+            max_size=n,
+        )
+    )
     # One stream, whatever the groups: a kind with no group reads every row
     # as one, and `rcov`'s groups follow each other, so a step back clear of
     # the minimum across the whole stream is clear within each group.
@@ -1528,8 +1547,8 @@ def _long_stream(kind: str, n: int = 600) -> pl.DataFrame:
     steps[0] = 0.0
     x0 = np.where(i % 37 == 11, np.nan, r.normal(size=n))
     w = np.where(i % 23 == 4, 0.0, r.uniform(0.5, 2.0, size=n))
-    if kind == "rcov":
-        w = np.where(i % 23 == 4, 0.0, 1.0)  # a return or not (`_RCOV_WEIGHTS`)
+    if kind in ("rcov", "random_cut_forest"):
+        w = np.where(i % 23 == 4, 0.0, 1.0)  # 0 or 1 weights only (`_RCOV_WEIGHTS`)
     df = pl.DataFrame(
         {
             "x0": x0,
@@ -1543,6 +1562,8 @@ def _long_stream(kind: str, n: int = 600) -> pl.DataFrame:
     )
     if kind in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if kind == "bandit":
+        df = df.with_columns(arm=pl.when(pl.col("x0") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
     return df
 
 
@@ -1626,6 +1647,8 @@ def test_a_weight_past_the_bound_is_missing(kind, value):
     )
     if kind in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if kind == "bandit":
+        df = df.with_columns(arm=pl.when(pl.col("x0") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
     if kind in BINARY:
         df = df.with_columns(y=(pl.col("y") > 0).cast(pl.Float64))
     spec = {**_kind_spec(kind), "weight": "w"}

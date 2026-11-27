@@ -42,6 +42,9 @@ fn every_state_kind_is_distinct_and_named() {
         "dependence",
         "hoeffding_tree_classifier",
         "hoeffding_tree_regressor",
+        "bandit",
+        "half_space_trees",
+        "random_cut_forest",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -96,6 +99,9 @@ fn every_state_kind_is_distinct_and_named() {
         HoeffdingTreeRegressor::new(hoeffding_tree_regressor_cfg())
             .unwrap()
             .state(),
+        Bandit::new(bandit_cfg()).unwrap().state(),
+        HalfSpaceTrees::new(half_space_trees_cfg()).unwrap().state(),
+        RandomCutForest::new(random_cut_forest_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -182,6 +188,9 @@ fn one_state_of_each_kind() -> Vec<State> {
         HoeffdingTreeRegressor::new(hoeffding_tree_regressor_cfg())
             .unwrap()
             .state(),
+        Bandit::new(bandit_cfg()).unwrap().state(),
+        HalfSpaceTrees::new(half_space_trees_cfg()).unwrap().state(),
+        RandomCutForest::new(random_cut_forest_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -247,6 +256,9 @@ fn every_model_refuses_every_other_models_state_by_name() {
     refuses_every_other_kind::<Dependence>("dependence", &states);
     refuses_every_other_kind::<HoeffdingTreeClassifier>("hoeffding_tree_classifier", &states);
     refuses_every_other_kind::<HoeffdingTreeRegressor>("hoeffding_tree_regressor", &states);
+    refuses_every_other_kind::<Bandit>("bandit", &states);
+    refuses_every_other_kind::<HalfSpaceTrees>("half_space_trees", &states);
+    refuses_every_other_kind::<RandomCutForest>("random_cut_forest", &states);
 }
 
 /// Task 252: each model hands back the configuration it was built from,
@@ -353,5 +365,18 @@ fn every_model_hands_back_its_configuration() {
         HoeffdingTreeRegressor::new(c.clone()).unwrap(),
         &c,
         HoeffdingTreeRegressor::cfg,
+    let c = bandit_cfg();
+    same(Bandit::new(c.clone()).unwrap(), &c, Bandit::cfg);
+    let c = half_space_trees_cfg();
+    same(
+        HalfSpaceTrees::new(c.clone()).unwrap(),
+        &c,
+        HalfSpaceTrees::cfg,
+    );
+    let c = random_cut_forest_cfg();
+    same(
+        RandomCutForest::new(c.clone()).unwrap(),
+        &c,
+        RandomCutForest::cfg,
     );
 }

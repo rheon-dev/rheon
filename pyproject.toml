@@ -264,6 +264,11 @@ dev = [
     # sliding-window, rerun over each window's rows). MIT, pure Python over
     # numpy and scipy. The floor is the version measured.
     "datasketch>=2.0.0",
+    # tests/test_bandit.py: mabwiser's LinUCB, LinTS and linear epsilon-greedy
+    # contextual bandits are the third-party oracle for `bandit`. Apache-2.0,
+    # pure Python over numpy, scipy and scikit-learn. The floor is the version
+    # measured.
+    "mabwiser>=2.7.4",
 ]
 # The R oracles (tests/r_oracle/): R's `highfrequency` and `yuima`, the
 # reference implementations of the realized measures and the jump tests,

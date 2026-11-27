@@ -32,6 +32,8 @@ def frame_for(name: str, n: int = 240) -> pl.DataFrame:
         df = df.with_columns(y=(pl.col("y") > 0).cast(pl.Float64))
     if name in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if name == "bandit":
+        df = df.with_columns(arm=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
     return df
 
 

@@ -2113,6 +2113,27 @@ settled_frac = { budget = 8.125 }
 weight_sum = { budget = 8.0 }
 withheld_reason = { budget = 1.125 }
 
+[memory.bandit]
+arm = { budget = 1.0 }
+coef = { budget = 54.205 }
+learned_clock = { budget = 8.125 }
+prob = { budget = 8.0 }
+score = { budget = 8.0 }
+score_down = { budget = 8.0 }
+score_up = { budget = 8.0 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.0 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
+
+[memory.half_space_trees]
+learned_clock = { budget = 8.125 }
+score = { budget = 8.125 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.125 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
+
 [memory.hoeffding_tree_regressor]
 "abs_resid_q0.1_y" = { budget = 8.125 }
 "abs_resid_q0.1_z" = { budget = 8.125 }
@@ -2179,6 +2200,14 @@ weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 zscore_y = { budget = 8.125 }
 zscore_z = { budget = 8.125 }
+
+[memory.random_cut_forest]
+learned_clock = { budget = 8.125 }
+score = { budget = 8.0 }
+scored_clock = { budget = 8.0 }
+settled_frac = { budget = 8.125 }
+weight_sum = { budget = 8.0 }
+withheld_reason = { budget = 1.125 }
 
 # --- raises and sign-offs -------------------------------------------------------
 

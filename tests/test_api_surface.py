@@ -400,6 +400,23 @@ def describe_api(cli: Path | None = None) -> str:
                 blocks={"a": ["x0", "x1"], "b": ["x2", "x3"]},
             ),
         ),
+        (
+            "bandit",
+            dict(features=["x0", "x1"], arm="arm", arms=["a", "b"], reward="y", half_life=100.0),
+        ),
+        (
+            "bandit eps_greedy",
+            dict(
+                features=["x0", "x1"],
+                arm="arm",
+                arms=["a", "b"],
+                reward="y",
+                policy="eps_greedy",
+                half_life=100.0,
+            ),
+        ),
+        ("half_space_trees", dict(features=["x0", "x1"])),
+        ("random_cut_forest", dict(features=["x0", "x1"])),
     ]:
         # An audit predicts nothing to withhold, and refuses a min_weight
         # (review 6, F-10).
@@ -538,6 +555,9 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("realized", {"half_life": float("inf"), "window_rows": 50}),
     ("realized", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
     ("ewm_moments", {"window_rows": 50, "se": True}),
+    ("bandit", {"policy": "lints"}),
+    ("bandit", {"policy": "eps_greedy"}),
+    ("random_cut_forest", {"shingle_size": 4}),
 ]
 
 
@@ -1069,6 +1089,7 @@ ENUM_PROBES: list[
     # `"quantile"` needs its level.
     ("sgd.loss", "sgd", {}, "model.loss", "word", {"quantile": {"quantile": 0.5}}),
     ("sgd.schedule", "sgd", {}, "model.schedule", "word"),
+    ("bandit.policy", "bandit", {}, "model.policy", "word"),
 ]
 
 _QUOTED = re.compile(r'"([^"]*)"|`([^`]*)`|\'([^\']*)\'')
@@ -1460,6 +1481,8 @@ FREE_TEXT = {
     "session",
     "weight",
     "label",
+    "arm",
+    "reward",
     "label_clock",
     "hazard_col",
     "exog_tvtp",

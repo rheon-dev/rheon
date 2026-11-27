@@ -146,6 +146,11 @@ FAMILIES: tuple[Family, ...] = (
         ),
     ),
     Family(
+        "bandits-anomaly",
+        "spec",
+        tuple(f"{_SPEC}.{m}" for m in ("bandit", "half_space_trees", "random_cut_forest")),
+    ),
+    Family(
         "fields",
         "spec",
         tuple(

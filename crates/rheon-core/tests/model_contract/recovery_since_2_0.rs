@@ -419,3 +419,47 @@ fn power_variation_recovers_from_bounded_extremes_at_higher_powers() {
     }
 }
 
+#[test]
+fn bandit_recovers_from_bounded_extremes() {
+    // Turn slot 1 into an alternating logged arm index so both arms are
+    // pulled across the extreme burst and the 30,000-row tail.
+    let mut rows = bounded_script(2);
+    for (i, r) in rows.iter_mut().enumerate() {
+        r.y[1] = Some((i % 2) as f64);
+    }
+    recovers_over(
+        &rows,
+        || Bandit::new(bandit_cfg()).unwrap(),
+        Recovery::Twin(1e-9),
+    );
+    for policy in [BanditPolicy::Lints, BanditPolicy::EpsGreedy] {
+        stays_finite_over(&rows, || {
+            Bandit::new(BanditCfg {
+                policy,
+                ..bandit_cfg()
+            })
+            .unwrap()
+        });
+    }
+}
+
+#[test]
+fn half_space_trees_recovers_from_bounded_extremes() {
+    // Half-space trees sum weights across every row in `n_eff` (no decay) and
+    // swap tumbling mass windows every `window_rows` rows, so extreme values
+    // and weights leave the reference window on the next pivot.
+    stays_finite_over(&bounded_script(0), || {
+        HalfSpaceTrees::new(half_space_trees_cfg()).unwrap()
+    });
+}
+
+#[test]
+fn random_cut_forest_recovers_from_bounded_extremes() {
+    // Random cut forest keeps a FIFO ring of `tree_size` points and sums
+    // weights in `n_eff` (no decay), so extreme points evict after `tree_size`
+    // clean rows while the state stays finite and restorable.
+    stays_finite_over(&bounded_script(0), || {
+        RandomCutForest::new(random_cut_forest_cfg()).unwrap()
+    });
+}
+

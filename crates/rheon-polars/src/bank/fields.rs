@@ -50,6 +50,9 @@ pub struct FieldMeta {
     /// The class an `ew_class` posterior `p_<class>` is about; `None` for
     /// every other field.
     pub class: Option<String>,
+    /// The arm a `bandit` per-arm score `score_<arm>` is about; `None` for
+    /// every other field.
+    pub arm: Option<String>,
     /// Columns an `ew_cov` statistic is over.
     pub columns: Option<Vec<String>>,
     /// The polars dtype the field is materialized with, as its string form
@@ -172,6 +175,7 @@ impl FieldMeta {
             component: None,
             state: None,
             class: None,
+            arm: None,
             columns: None,
             dtype: String::new(),
             src: Source::Unset,
@@ -298,6 +302,8 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::Dependence(_)
             | crate::ModelKind::HoeffdingTreeClassifier(_)
             | crate::ModelKind::HoeffdingTreeRegressor(_)
+            | crate::ModelKind::HalfSpaceTrees(_)
+            | crate::ModelKind::RandomCutForest(_)
     ) {
         return Vec::new();
     }
@@ -332,6 +338,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
                     cluster: None,
                     state: None,
                     class: None,
+                    arm: None,
                     term: n.to_string(),
                 });
             }
@@ -371,20 +378,22 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
                     cluster: None,
                     state: None,
                     class: None,
+                    arm: None,
                     term: "rho".to_string(),
                 });
             }
         }
         return out;
     }
-    // Each slot: the name its columns take, and the target, centre, state
-    // or class it is.
+    // Each slot: the name its columns take, and the target, centre, state,
+    // class or arm it is.
     struct Slot {
         name: String,
         target: Option<String>,
         cluster: Option<usize>,
         state: Option<usize>,
         class: Option<String>,
+        arm: Option<String>,
     }
     let slot = |name: String| Slot {
         name,
@@ -392,6 +401,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
         cluster: None,
         state: None,
         class: None,
+        arm: None,
     };
     let slots: Vec<Slot> = match &spec.model {
         crate::ModelKind::KMeans { k, .. } => (0..*k)
@@ -413,6 +423,15 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
                 target: Some(spec.targets[0].clone()),
                 class: Some(c.clone()),
                 ..slot(c.clone())
+            })
+            .collect(),
+        crate::ModelKind::Bandit(b) => b
+            .arms
+            .iter()
+            .map(|a| Slot {
+                target: Some(spec.targets[0].clone()),
+                arm: Some(a.clone()),
+                ..slot(a.clone())
             })
             .collect(),
         _ => spec
@@ -510,6 +529,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
                         cluster: t.cluster,
                         state: t.state,
                         class: t.class.clone(),
+                        arm: t.arm.clone(),
                         term: term.clone(),
                     });
                     position += 1;
@@ -643,6 +663,7 @@ pub fn output_index_frame(spec: &Spec) -> PolarsResult<DataFrame> {
             ints("component", idx.iter().map(|m| m.component)),
             ints("state", idx.iter().map(|m| m.state)),
             str_col("class", &|m| m.class.as_deref()),
+            str_col("arm", &|m| m.arm.as_deref()),
             str_lists("columns", &columns),
             str_col("dtype", &|m| Some(m.dtype.as_str())),
         ],
@@ -680,6 +701,7 @@ pub fn coef_fields_frame(spec: &Spec) -> PolarsResult<DataFrame> {
             ints("cluster", cf.iter().map(|c| c.cluster)),
             ints("state", cf.iter().map(|c| c.state)),
             str_col("class", &|c| c.class.as_deref()),
+            str_col("arm", &|c| c.arm.as_deref()),
             str_col("term", &|c| Some(c.term.as_str())),
         ],
     )
@@ -1321,6 +1343,85 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                         .src(Source::Coef(mi)),
                 );
             }
+        }
+        return fields;
+    }
+    // bandit recommends an arm and scores every arm (read before the row is
+    // learned), plus `prob` under policy="eps_greedy", `weight_sum`, and per-arm
+    // linear coefficients in `coef`.
+    if let crate::ModelKind::Bandit(b) = &spec.model {
+        let eps = crate::spec::is_eps_greedy(b);
+        let n_slots = 2 + b.arms.len() + usize::from(eps);
+        let reward = &spec.targets[0];
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let over = |mut f: FieldMeta| {
+                f.columns = Some(spec.features.clone());
+                f
+            };
+            fields.push(over(
+                FieldMeta::new(format!("arm{suffix}"), "arm")
+                    .decay(suffix, d)
+                    .target(reward)
+                    .categories(&b.arms)
+                    .src(Source::Label(mi * n_slots)),
+            ));
+            fields.push(over(
+                FieldMeta::new(format!("score{suffix}"), "score")
+                    .decay(suffix, d)
+                    .target(reward)
+                    .src(Source::Stat(mi * n_slots + 1)),
+            ));
+            for (ai, arm) in b.arms.iter().enumerate() {
+                let mut f = over(
+                    FieldMeta::new(format!("score_{arm}{suffix}"), "score")
+                        .decay(suffix, d)
+                        .target(reward)
+                        .src(Source::Stat(mi * n_slots + 2 + ai)),
+                );
+                f.arm = Some(arm.clone());
+                fields.push(f);
+            }
+            if eps {
+                fields.push(over(
+                    FieldMeta::new(format!("prob{suffix}"), "prob")
+                        .decay(suffix, d)
+                        .target(reward)
+                        .src(Source::Stat(mi * n_slots + 2 + b.arms.len())),
+                ));
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+            fields.push(
+                FieldMeta::new(format!("coef{suffix}"), "coef")
+                    .decay(suffix, d)
+                    .src(Source::Coef(mi)),
+            );
+        }
+        return fields;
+    }
+    // Streaming anomaly detectors (`half_space_trees` and `random_cut_forest`)
+    // emit one unsupervised anomaly `score` per row (read before learning) and
+    // `weight_sum`. No `coef`.
+    if matches!(
+        spec.model,
+        crate::ModelKind::HalfSpaceTrees(_) | crate::ModelKind::RandomCutForest(_)
+    ) {
+        let mut fields = Vec::new();
+        for (mi, (suffix, d)) in decays.iter().enumerate() {
+            let mut s = FieldMeta::new(format!("score{suffix}"), "score")
+                .decay(suffix, d)
+                .src(Source::Stat(mi));
+            s.columns = Some(spec.features.clone());
+            fields.push(s);
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
         }
         return fields;
     }

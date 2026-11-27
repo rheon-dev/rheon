@@ -14,7 +14,7 @@ pages by the task you have in hand.
 
 | family | its features |
 |---|---|
-| [Models](#models) | the forty-one models a spec can name |
+| [Models](#models) | the forty-four models a spec can name |
 | [Running a bank](#running-a-bank) | a bank in a query, in a Python loop, and its output as Arrow |
 | [Saving, loading and serving](#saving-loading-and-serving) | a bank's state, written and read back |
 | [Reading a bank](#reading-a-bank) | what a bank holds, and the names of its output |
@@ -78,6 +78,9 @@ to start with.
 | [`rheon.spec.power_variation`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.power_variation) | power variation and kernel-weighted autocovariance sums of returns, named terms: multipower terms, kernel sums (flat-top or centered, the realized kernel and the HAC long-run variance), subsampled scales, and the count of returns | [entry](MODELS.md#power_variation--power-variation-and-kernel-weighted-autocovariance) |
 | [`rheon.spec.tdigest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.tdigest) | quantiles of each column at the levels you list, from a merging t-digest, uniform in rank | [entry](MODELS.md#tdigest--where-do-this-columns-quantiles-stand) |
 | [`rheon.spec.ddsketch`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ddsketch) | quantiles and tail means of each column within a relative accuracy, from a DDSketch, over every row or a window | [entry](MODELS.md#ddsketch--how-large-are-this-columns-quantiles-and-tails) |
+| [`rheon.spec.bandit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bandit) | disjoint linear contextual bandit (LinUCB, linear Thompson sampling, epsilon-greedy) over logged arm and reward streams | [entry](MODELS.md#bandit--linear-contextual-bandits) · [OUTPUTS.md](OUTPUTS.md#bandit) |
+| [`rheon.spec.half_space_trees`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.half_space_trees) | streaming Half-Space Trees unsupervised anomaly detector over bounded numeric features | [entry](MODELS.md#half_space_trees--streaming-half-space-trees-anomaly-detection) · [OUTPUTS.md](OUTPUTS.md#half_space_trees) |
+| [`rheon.spec.random_cut_forest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.random_cut_forest) | streaming Robust Random Cut Forest unsupervised anomaly detector with optional shingling | [entry](MODELS.md#random_cut_forest--robust-random-cut-forest-anomaly-detection) · [OUTPUTS.md](OUTPUTS.md#random_cut_forest) |
 
 ## Running a bank
 

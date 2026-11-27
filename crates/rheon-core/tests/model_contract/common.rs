@@ -274,6 +274,7 @@ const KEEPS_LAGS: &[&str] = &[
     "ar",
     "spectral",
     "vector_ar",
+    "random_cut_forest",
 ];
 
 /// The model that counts a value that is not usable rather than refusing
@@ -306,6 +307,8 @@ const NO_DECAY: &[&str] = &[
     "garch",
     "hoeffding_tree_classifier",
     "hoeffding_tree_regressor",
+    "half_space_trees",
+    "random_cut_forest",
     "rcov",
     "seqtest",
     "tdigest",

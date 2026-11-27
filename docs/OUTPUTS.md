@@ -25,6 +25,7 @@ exact spec you built.
 | [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`ewm_moments`](#ewm_moments) · [`pca`](#pca) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) · [`power_variation`](#power_variation) · [`tdigest`](#tdigest) · [`ddsketch`](#ddsketch) · [`spectral`](#spectral) |
 | [Clustering and classification](MODELS.md#clustering-and-classification) | [`kmeans`](#kmeans) · [`micro`](#micro) · [`ew_class`](#ew_class) · [`hoeffding_tree_classifier`](#hoeffding_tree_classifier) |
 | [Sequential tests and regimes](MODELS.md#sequential-tests-and-regimes) | [`seqtest`](#seqtest) · [`corrchange`](#corrchange) · [`bocpd`](#bocpd) · [`hmm`](#hmm) · [`hawkes`](#hawkes) |
+| [Bandits and anomaly detection](MODELS.md#bandits-and-anomaly-detection) | [`bandit`](#bandit) · [`half_space_trees`](#half_space_trees) · [`random_cut_forest`](#random_cut_forest) |
 
 ## The fields of your own spec
 
@@ -85,6 +86,7 @@ holds](how-to/find-an-output-field.md) builds a grid and reads its fields.
 | `<a>`, `<b>` | the two columns of a pair | `x0`, `x1` |
 | `<j>` | a state's index | `0`, `1` |
 | `<label>` | a class label | `a`, `b` |
+| `<arm>` | an arm name | `a`, `b` |
 | `__r<ridge>` | one value of a `ridge` grid | |
 | `__<set>` | one of the `feature_sets`, with one ridge value | |
 | `__<set>_r<ridge>` | one of the `feature_sets`, with one value of a `ridge` grid | |
@@ -104,7 +106,7 @@ row, as `rp.spec.output_index(spec)` lists it:
 | `i64` | `Int64` |
 | `bool` | `Boolean` |
 | `list[f64]` | `List(Float64)`: `coef` and the fields laid out like it. A list stores nothing for a null row, and `coef` is null on most rows. For an `(n, k)` matrix, `k` the height of `rp.spec.coef_index(spec)`, keep the rows that carry it and fix their width. For the output `out` of a spec named `m`: `out.select(pl.col("m").struct.field("coef")).filter(pl.col("coef").is_not_null()).select(pl.col("coef").list.to_array(k)).to_series().to_numpy()` |
-| `enum` | an `Enum` of its values, in their order: `withheld_reason`'s eleven, an `ew_class` spec's `classes` for `class`, a grid's slots for `selected_<t>` |
+| `enum` | an `Enum` of its values, in their order: `withheld_reason`'s eleven, an `ew_class` spec's `classes` for `class`, a `bandit` spec's `arms` for `arm`, a grid's slots for `selected_<t>` |
 | `clock` | the clock column's own type, an integer clock in its own width; with no clock, `Int64`, the group's row index |
 
 **Every integer is an `Int64`**, in a field and in every frame the bank and
@@ -770,3 +772,46 @@ The fields of `rp.spec.hawkes("m", targets=["y"], half_life=50.0, kernel_decays=
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
+
+## `bandit`
+
+The fields of `rp.spec.bandit("m", features=["x0"], half_life=50.0, arm="arm", arms=["a", "b"], reward="y")`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `arm` | `enum` | the recommended arm, read before this row is learned | while withheld |
+| `score` | `f64` | the score of the recommended arm under the active policy | while withheld |
+| `score_a` | `f64` | arm `<arm>`'s score under the active policy (UCB, Thompson sample, or greedy mean reward) | while withheld |
+| `score_b` | `f64` | arm `<arm>`'s score under the active policy (UCB, Thompson sample, or greedy mean reward) | while withheld |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+| `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
+
+Under `policy="eps_greedy"`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `prob` | `f64` | selection probability of the recommended arm under `policy="eps_greedy"`: `1 - epsilon + epsilon / K` for the greedy arm, `epsilon / K` for a non-greedy arm | while withheld |
+
+## `half_space_trees`
+
+The fields of `rp.spec.half_space_trees("m", features=["x0"])`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `score` | `f64` | normalized anomaly score in `[0, 1]` from the previous tumbling reference window: values near 1 denote sparse (anomalous) regions, values near 0 dense regions | while withheld, including the first tumbling window of `window_rows` learned rows (`below_warm_rows`) |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
+## `random_cut_forest`
+
+The fields of `rp.spec.random_cut_forest("m", features=["x0"])`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `score` | `f64` | mean collusive displacement (CoDisp) across the forest, non-negative and unbounded above (larger values denote stronger anomalies; 0 before any point is inserted) | while withheld, including the rows before `shingle_size` consecutive rows fill the shingle buffer (`below_warm_rows`) |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |

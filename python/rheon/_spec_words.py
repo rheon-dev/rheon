@@ -435,4 +435,11 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
         {"window_rows", "window_size", "closed", "lm_window", "lm_beta", "max_state_bytes"}
     ),
     "power_variation": frozenset({"window_rows", "window_size", "closed", "max_state_bytes"}),
+    "bandit": frozenset({"policy", "alpha", "epsilon", "l2", "seed", "max_state_bytes"}),
+    "half_space_trees": frozenset(
+        {"n_trees", "height", "window_rows", "limits", "seed", "max_state_bytes"}
+    ),
+    "random_cut_forest": frozenset(
+        {"n_trees", "tree_size", "shingle_size", "seed", "max_state_bytes"}
+    ),
 }

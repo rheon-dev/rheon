@@ -108,6 +108,9 @@ OTHER_KINDS = sorted(
         "micro",
         "ew_class",
         "hoeffding_tree_classifier",
+        "bandit",
+        "half_space_trees",
+        "random_cut_forest",
         "seqtest",
         "marginal",
         "deco",
@@ -164,6 +167,8 @@ def frame(kind: str) -> pl.DataFrame:
         df = df.with_columns(y=pl.col("y").abs().round())
     if kind in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if kind == "bandit":
+        df = df.with_columns(arm=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
     return df
 
 
@@ -186,6 +191,8 @@ def spec(kind: str, **kw: Any) -> dict:
         a["warm_rows"] = 20
     if kind == "rcov":
         a["block_rows"] = 50
+    if kind == "half_space_trees":
+        a["window_rows"] = 40
     a.update(kw)
     a = {k: v for k, v in a.items() if v is not None}
     build = getattr(rp.spec, builder)
@@ -419,6 +426,8 @@ STEP_BLIND: frozenset[str] = frozenset(
         "tdigest",
         "hoeffding_tree_classifier",
         "hoeffding_tree_regressor",
+        "half_space_trees",
+        "random_cut_forest",
     }
 )
 #: The kinds a session change breaks whatever its gap, as a gap past
@@ -546,6 +555,14 @@ def test_monotone_close_moves_no_output(kind):
     assert closed(bank).height == 0, "read once, the closed rows are gone"
 
 
+#: Philox-seeded kinds mix the group key's hash into their draw stream, so
+#: switching from ``group="k", session="s"`` (one constant group key) to
+#: ``group="s"`` (distinct group keys per session) intentionally draws
+#: independent trees per session while matching ``session_gap="reset"`` and
+#: all non-score fields bit-for-bit.
+GROUP_SEEDED = frozenset({"half_space_trees", "random_cut_forest"})
+
+
 @pytest.mark.parametrize("kind", SESSION_CLOSE)
 def test_session_close_is_a_session_reset(kind):
     """``group_close="session"`` gives the output ``session_gap="reset"``
@@ -562,12 +579,18 @@ def test_session_close_is_a_session_reset(kind):
     print(f"{kind}: {rows.height} closed rows, sessions {rows['session'].to_list()}")
     assert rows["session"].unique(maintain_order=True).cast(pl.Int64).to_list() == [0, 1]
     by_key, key_bank = fit(spec(kind, group="s", group_close="monotone"), df)
-    assert_frame_equal(by_key, out, check_exact=True)
     keyed = closed(key_bank)
     assert keyed["group"].to_list() == rows["session"].to_list()
-    assert_frame_equal(
-        keyed.drop("group", "session"), rows.drop("group", "session"), check_exact=True
-    )
+    if kind in GROUP_SEEDED:
+        assert_frame_equal(by_key.drop("score"), out.drop("score"), check_exact=True)
+        assert_frame_equal(
+            keyed.drop("group", "session"), rows.drop("group", "session"), check_exact=True
+        )
+    else:
+        assert_frame_equal(by_key, out, check_exact=True)
+        assert_frame_equal(
+            keyed.drop("group", "session"), rows.drop("group", "session"), check_exact=True
+        )
 
 
 def test_audit_refuses_group_close_and_rcov_requires_it():

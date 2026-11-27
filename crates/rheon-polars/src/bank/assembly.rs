@@ -499,7 +499,8 @@ impl<'a> Sink<'a> {
                 let classes: &[String] = match &spec.model {
                     ModelKind::EwClass { classes, .. } => classes,
                     ModelKind::HoeffdingTreeClassifier(t) => &t.classes,
-                    _ => unreachable!("only classification models emit a label"),
+                    ModelKind::Bandit(b) => &b.arms,
+                    _ => unreachable!("only classification and bandit models emit a label"),
                 };
                 col.finish_label_array_boxed(classes)
             }

@@ -265,6 +265,20 @@ pub const CELLS: &[Cell] = &[
     cell("hoeffding_tree_classifier.k", 4, 8, Pow(1), Pow(1)),
     cell("hoeffding_tree_classifier.classes", 2, 8, Pow(1), Pow(1)),
     cell("hoeffding_tree_classifier.history", 1000, 8, Const, Const),
+    // Each row scores every arm (`K` triangular solves of `O(d²)`) and updates
+    // the logged arm (`O(d²)`), holding `K` upper-triangular factors of `O(d²)`.
+    cell("bandit.arms", 2, 8, Pow(1), Pow(1)),
+    cell("bandit.k", 4, 8, Pow(2), Pow(2)),
+    cell("bandit.history", 1000, 8, Const, Const),
+    // Each row traverses `T` fixed trees of depth `h` (`O(T h)`), holding two
+    // mass profiles of `T (2^(h+1) - 1)` nodes; tumbling resets at `window_rows`.
+    cell("half_space_trees.n_trees", 2, 8, Pow(1), Pow(1)),
+    cell("half_space_trees.history", 1000, 8, Const, Const),
+    // Each row scores, evicts and inserts in `T` trees of `tree_size` points;
+    // linear in `T`, bounded by tree depth in `tree_size`, constant in history.
+    cell("random_cut_forest.n_trees", 4, 8, Pow(1), Pow(1)),
+    cell("random_cut_forest.tree_size", 32, 8, Pow(1), Pow(1)),
+    cell("random_cut_forest.history", 1000, 8, Const, Const),
     cell("seqtest.targets", 1, 8, Pow(1), Pow(1)),
     cell("seqtest.history", 1000, 8, Const, Const),
     cell("corrchange.k", 2, 8, Pow(2), Pow(2)),
@@ -1248,6 +1262,64 @@ fn model_case(id: &str, n: usize) -> ModelCase {
             obj.remove("min_weight");
             let c = ModelCase::new(s, Shape::Classes(classes)).block(200);
             if dim == "history" { c.warm(n) } else { c }
+        }
+        ("bandit", "arms" | "k" | "history") => {
+            let (arms, k) = match dim {
+                "arms" => (n, 4),
+                "k" => (3, n),
+                _ => (3, 4),
+            };
+            let names_arm: Vec<String> = (0..arms).map(|a| format!("a{a}")).collect();
+            let model = json!({
+                "type": "bandit",
+                "arms": names_arm,
+                "policy": "linucb",
+                "alpha": 1.0,
+                "l2": 1.0,
+                "seed": 7,
+            });
+            let mut s = fit(model, k, 2);
+            s["min_weight"] = json!(0.0);
+            let c = ModelCase::new(s, Shape::Classes(arms)).block(200);
+            if dim == "history" { c.warm(n) } else { c }
+        }
+        ("half_space_trees", "n_trees" | "history") => {
+            let n_trees = if dim == "n_trees" { n } else { 10 };
+            let model = json!({
+                "type": "half_space_trees",
+                "n_trees": n_trees,
+                "height": 6,
+                "window_rows": 200,
+                "seed": 7,
+            });
+            let s = untargeted(model, 4, false);
+            let c = ModelCase::new(s, lin).block(200);
+            if dim == "history" {
+                c.warm(n)
+            } else {
+                c.warm(400)
+            }
+        }
+        ("random_cut_forest", "n_trees" | "tree_size" | "history") => {
+            let (n_trees, tree_size) = match dim {
+                "n_trees" => (n, 64),
+                "tree_size" => (8, n),
+                _ => (8, 64),
+            };
+            let model = json!({
+                "type": "random_cut_forest",
+                "n_trees": n_trees,
+                "tree_size": tree_size,
+                "shingle_size": 1,
+                "seed": 7,
+            });
+            let s = untargeted(model, 4, false);
+            let c = ModelCase::new(s, lin).block(200);
+            match dim {
+                "history" => c.warm(n),
+                "tree_size" => c.warm(2 * tree_size),
+                _ => c.warm(256),
+            }
         }
         ("seqtest", "targets" | "history") => {
             let t = if dim == "targets" { n } else { 1 };

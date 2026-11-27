@@ -118,6 +118,15 @@ MINIMAL: dict[str, dict[str, object]] = {
         "classes": ["a", "b"],
     },
     "hoeffding_tree_regressor": {"half_life": None},
+    "bandit": {
+        "targets": None,
+        "features": ["x0"],
+        "arm": "arm",
+        "arms": ["a", "b"],
+        "reward": "y",
+    },
+    "half_space_trees": {"targets": None, "half_life": None},
+    "random_cut_forest": {"targets": None, "half_life": None},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -159,6 +168,9 @@ REGRESSIONS = frozenset(MINIMAL) - {
     "ewm_moments",
     "spectral",
     "dependence",
+    "bandit",
+    "half_space_trees",
+    "random_cut_forest",
 }
 
 
@@ -381,6 +393,9 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "dependence",
             "hoeffding_tree_classifier",
             "hoeffding_tree_regressor",
+            "bandit",
+            "half_space_trees",
+            "random_cut_forest",
         )
     },
 }
@@ -810,6 +825,8 @@ def test_every_models_realized_dtypes_are_the_ones_output_index_declares():
         df = frame
         if name in ("ew_class", "hoeffding_tree_classifier"):
             df = frame.with_columns(pl.Series("y", ["a", "b"] * (n // 2)))
+        if name == "bandit":
+            df = frame.with_columns(pl.Series("arm", ["a", "b"] * (n // 2)))
         if name == "glm":
             # The default Poisson family takes counts.
             df = frame.with_columns(pl.col("y").abs().round())

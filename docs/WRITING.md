@@ -152,7 +152,7 @@ ten top-level sections suit a document the size of the README, which had
 seventeen. Group them by what the reader is doing: learning the idea,
 running a bank, reading what it produced, choosing a model, tuning it, and
 deciding whether to trust it. A catalog goes one level down, under
-families, rather than flat. The forty-one models sit under four families, and
+families, rather than flat. The forty-four models sit under five families, and
 each family opens with one line on what its members share.
 
 **Draw the contents as a table.** One row per section, with its subsections
@@ -777,7 +777,7 @@ What the rules above did to the README's own text:
 
 | before | after | rule |
 |---|---|---|
-| seventeen top-level sections, listed in a contents paragraph of sixteen links, with the twenty models flat | ten sections holding subsections, a contents table, and the models under four families | §2 |
+| seventeen top-level sections, listed in a contents paragraph of sixteen links, with the twenty models flat | ten sections holding subsections, a contents table, and the models under five families | §2 |
 | three bullets comparing weight `0`, a null target and `predict`, each a paragraph | a table with one row per way, and a column each for predicted, clock, fit, `weight_sum` and use | §7 |
 | a paragraph listing the readiness fields a model writes | a runnable block that fits a spec and reads each field, with a comment on each | §3 |
 | the withheld reasons as `below_min_settled_frac`, `above_max_error_inflation`, `below_min_weight` | the order `WITHHELD_REASONS` declares, which is their precedence: `below_min_settled_frac`, `below_min_weight`, `above_max_error_inflation`, `below_warm_rows`, `ill_conditioned`, `unstable_rate`, `not_identified`, `scale_ratio_moved`, `not_separated`, `level_beyond_sample`, `input_negative` | §4 |
