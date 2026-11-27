@@ -385,3 +385,49 @@ fn a_state_whose_place_does_not_match_its_span_is_refused() {
         }
     }
 }
+
+/// STATE-3: a `huber` or `quantile` span refit whose buffered rows exceed
+/// `max_state_bytes` (or a non-span state recording `over`) is refused on
+/// load, while an empty span refit with a 1-byte cap still round-trips.
+#[test]
+fn state_3_a_span_past_its_cap_is_refused_on_load() {
+    for loss in [HUBER, QUANTILE] {
+        let fresh = Robust::new(RobustCfg {
+            refit_clock: Some(10.0),
+            max_state_bytes: Some(1),
+            ..base(loss, HuberScale::Mad)
+        })
+        .unwrap();
+        assert!(Robust::restore(&fresh.state()).is_ok(), "{loss:?}");
+
+        let mut m = Robust::new(RobustCfg {
+            refit_clock: Some(1e12),
+            ..base(loss, HuberScale::Mad)
+        })
+        .unwrap();
+        for (i, (x, y)) in rows(6, 12).iter().enumerate() {
+            m.stamp_next(Stamp::Ns(i as i128 * S));
+            m.step(x, y, 1.0, 1.0);
+        }
+        let held = held_of(&m);
+        m.cfg.max_state_bytes = Some(held);
+        assert!(Robust::restore(&m.state()).is_ok(), "{loss:?}");
+
+        let mut over = m.clone();
+        over.cfg.max_state_bytes = Some(held - 1);
+        match Robust::restore(&over.state()) {
+            Err(crate::StateError::Invalid(e)) => {
+                assert!(e.contains("max_state_bytes"), "{loss:?}: {e}");
+            }
+            other => panic!("{loss:?} over cap: {other:?}"),
+        }
+
+        let mut non_span = Robust::new(RobustCfg {
+            refit_rows: 20,
+            ..base(loss, HuberScale::Mad)
+        })
+        .unwrap();
+        non_span.over = Some(1);
+        assert!(Robust::restore(&non_span.state()).is_err(), "{loss:?}");
+    }
+}

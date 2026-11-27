@@ -2285,12 +2285,46 @@ impl crate::OnlineModel for Hmm {
                     || m.p.len() != k
                     || m.a.len() != k * k
                     || m.buffer.iter().any(|(x, _)| x.len() != d)
+                    || (m.seeded && !m.buffer.is_empty())
                     || m.place.is_some() != m.cfg.warm_clock.is_some()
+                    || ((m.over.is_some() || m.warm_first.is_some()) && m.cfg.warm_clock.is_none())
                 {
                     return Err(crate::model::damaged(
                         "hmm",
                         "its saved values have the wrong shape",
                     ));
+                }
+                // Weights and warm-span cap (review 2026-11-23, STATE-3):
+                // every weight, transition count, posterior entry, and
+                // accumulator weight is finite and at least 0 (posterior
+                // total > 0; buffered row weights may decay to 0), and a
+                // warm-up span stays within its byte cap.
+                let non_neg = |v: f64| v.is_finite() && v >= 0.0;
+                let weights_ok = non_neg(m.n_eff)
+                    && m.p.iter().copied().all(non_neg)
+                    && m.p.iter().sum::<f64>() > 0.0
+                    && m.a.iter().copied().all(non_neg)
+                    && m.buffer.iter().all(|(_, w)| non_neg(*w))
+                    && m.states.iter().all(EwCov::has_valid_weights)
+                    && m.diag_states.iter().all(EwCovDiag::has_valid_weights)
+                    && m.factor_states
+                        .iter()
+                        .all(|f| non_neg(f.n_eff()) && non_neg(f.precision_scale()));
+                if !weights_ok {
+                    return Err(crate::model::damaged(
+                        "hmm",
+                        "its saved weights hold a value no stream writes",
+                    ));
+                }
+                if m.cfg.warm_clock.is_some() {
+                    let bytes = m.warm_bytes(m.buffer.len());
+                    let cap = m.warm_cap();
+                    if bytes > cap {
+                        return Err(crate::model::damaged(
+                            "hmm",
+                            format!("it holds {bytes} bytes, past its warm-up cap of {cap}"),
+                        ));
+                    }
                 }
                 // No window reads a run here (review 2026-09-26, C3 and C4).
                 m.states.iter_mut().for_each(EwCov::set_runs_off);

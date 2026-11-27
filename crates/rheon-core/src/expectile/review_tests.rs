@@ -510,3 +510,111 @@ fn exp_2_the_one_pass_fits_a_feature_far_from_zero() {
         );
     }
 }
+
+/// STATE-3: a clock window or span refit whose held bytes exceed
+/// `max_state_bytes` is refused on load, while a fresh empty span refit
+/// with a tight cap still round-trips.
+#[test]
+fn state_3_a_span_or_window_past_its_cap_is_refused_on_load() {
+    // Clock window
+    let mut wc = cfg_of(1, 0.7);
+    wc.window_clock = Some(1e6);
+    wc.ridge = 1e-6;
+    let mut w = Expectile::new(wc).unwrap();
+    for (i, (x, y)) in stream_of(1, 5, 13).iter().enumerate() {
+        w.stamp_next(Stamp::from(i as f64));
+        w.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    let w_held = w.clock_bytes_with(0);
+    w.cfg.max_state_bytes = Some(w_held);
+    assert!(Expectile::restore(&w.state()).is_ok());
+    let mut w_over = w.clone();
+    w_over.cfg.max_state_bytes = Some(w_held - 1);
+    match Expectile::restore(&w_over.state()) {
+        Err(StateError::Invalid(e)) => assert!(e.contains("max_state_bytes"), "{e}"),
+        other => panic!("window over cap: {other:?}"),
+    }
+
+    // Span refit: empty model at fixed_bytes still restores; buffered rows past cap refused.
+    let mut rc = cfg_of(1, 0.7);
+    rc.refit_clock = Some(1e6);
+    rc.max_state_bytes = Some(Expectile::sums_bytes(1, 1, true, false));
+    let fresh = Expectile::new(rc.clone()).unwrap();
+    assert!(Expectile::restore(&fresh.state()).is_ok());
+
+    rc.max_state_bytes = None;
+    let mut r = Expectile::new(rc).unwrap();
+    for (i, (x, y)) in stream_of(1, 5, 14).iter().enumerate() {
+        r.stamp_next(Stamp::from(i as f64));
+        r.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    let r_held = r.refit_clock_bytes(0);
+    r.cfg.max_state_bytes = Some(r_held);
+    assert!(Expectile::restore(&r.state()).is_ok());
+    let mut r_over = r.clone();
+    r_over.cfg.max_state_bytes = Some(r_held - 1);
+    match Expectile::restore(&r_over.state()) {
+        Err(StateError::Invalid(e)) => assert!(e.contains("max_state_bytes"), "{e}"),
+        other => panic!("refit over cap: {other:?}"),
+    }
+}
+
+/// STATE-3: negative or non-finite weights in `expectile` (and zero or bad
+/// weights inside a window) are refused on load; a refit row whose weight
+/// decayed to 0 is still accepted.
+#[test]
+fn state_3_a_weight_no_stream_writes_is_refused_on_load() {
+    let mut rc = cfg_of(1, 0.7);
+    rc.refit_clock = Some(50.0);
+    let mut m = Expectile::new(rc).unwrap();
+    for (x, y) in stream_of(1, 5, 15) {
+        m.step(&x, &[Some(y)], 1.0, 1.0);
+    }
+    assert!(Expectile::restore(&m.state()).is_ok());
+
+    let width = m.cfg.n_features + 2;
+    let mut decayed_zero = m.clone();
+    decayed_zero.refit[0].rows[width - 1] = 0.0;
+    assert!(Expectile::restore(&decayed_zero.state()).is_ok());
+
+    for bad in [-1.0, f64::NAN, f64::INFINITY] {
+        type Edit = (&'static str, fn(&mut Expectile, f64));
+        let edits: [Edit; 6] = [
+            ("w_sum", |e, v| e.w_sum = v),
+            ("w_target", |e, v| e.w_target[0] = v),
+            ("s", |e, v| e.s[0] = v),
+            ("clock.carry", |e, v| e.clock.carry = v),
+            ("clock.own", |e, v| e.clock.own = v),
+            ("refit weight", |e, v| {
+                let w = e.cfg.n_features + 2;
+                e.refit[0].rows[w - 1] = v;
+            }),
+        ];
+        for (name, edit) in edits {
+            let mut damaged = m.clone();
+            edit(&mut damaged, bad);
+            match Expectile::restore(&damaged.state()) {
+                Err(StateError::Invalid(e)) => assert!(e.contains("damaged"), "{name} {bad}: {e}"),
+                other => panic!("{name} = {bad}: {other:?}"),
+            }
+        }
+    }
+
+    let mut wc = cfg_of(1, 0.7);
+    wc.window_clock = Some(50.0);
+    wc.ridge = 1e-6;
+    let mut w = Expectile::new(wc).unwrap();
+    for (i, (x, y)) in stream_of(1, 4, 16).iter().enumerate() {
+        w.stamp_next(Stamp::from(i as f64));
+        w.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    assert!(Expectile::restore(&w.state()).is_ok());
+    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let mut damaged = w.clone();
+        damaged.window.as_mut().unwrap().w[0] = bad;
+        match Expectile::restore(&damaged.state()) {
+            Err(StateError::Invalid(e)) => assert!(e.contains("damaged"), "window.w {bad}: {e}"),
+            other => panic!("window.w = {bad}: {other:?}"),
+        }
+    }
+}

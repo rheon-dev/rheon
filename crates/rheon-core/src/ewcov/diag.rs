@@ -172,6 +172,17 @@ impl EwCovDiag {
         self.k == k && self.m.len() == k && self.v.len() == k && self.m_lo.len() == k
     }
 
+    /// Whether the accumulator's weights and prior scales are ones a stream
+    /// writes: finite and not negative (review 2026-11-23, STATE-3).
+    pub(crate) fn has_valid_weights(&self) -> bool {
+        let non_neg = |v: f64| v.is_finite() && v >= 0.0;
+        non_neg(self.w_sum)
+            && non_neg(self.prior_scale)
+            && non_neg(self.precision_prior)
+            && non_neg(self.precision_scale)
+            && self.q_sum.is_none_or(non_neg)
+    }
+
     #[inline]
     pub fn n_eff(&self) -> f64 {
         self.w_sum

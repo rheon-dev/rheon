@@ -492,6 +492,15 @@ impl LassoMoments {
             && self.sel_err.len() == n
             && self.sel_err.iter().all(|e| e.len() == np)
     }
+
+    /// Whether the snapshot's weights and selection errors are ones a stream
+    /// writes: finite and not negative (review 2026-11-23, STATE-3).
+    fn has_valid_weights(&self) -> bool {
+        let non_neg = |v: f64| v.is_finite() && v >= 0.0;
+        self.acc.has_valid_weights()
+            && self.sel_w.iter().copied().all(non_neg)
+            && self.sel_err.iter().flatten().copied().all(non_neg)
+    }
 }
 
 impl Lasso {
@@ -1761,6 +1770,22 @@ impl OnlineModel for Lasso {
                     return Err(crate::model::damaged(
                         "lasso",
                         "the snapshots it keeps for its hard window have the wrong shape",
+                    ));
+                }
+                // Weights across the live accumulators, selection state, and
+                // window snapshots (review 2026-11-23, STATE-3).
+                let non_neg = |v: f64| v.is_finite() && v >= 0.0;
+                let weights_ok = m.acc.has_valid_weights()
+                    && non_neg(m.weight_since_solve)
+                    && m.sel_w.iter().copied().all(non_neg)
+                    && m.sel_err.iter().flatten().copied().all(non_neg)
+                    && m.win.as_ref().is_none_or(|win| {
+                        non_neg(win.clock) && win.snaps.iter().all(|s| s.has_valid_weights())
+                    });
+                if !weights_ok {
+                    return Err(crate::model::damaged(
+                        "lasso",
+                        "its saved weights hold a value no stream writes",
                     ));
                 }
                 // The runs follow the window, not the file (review 2026-09-26,
@@ -5100,5 +5125,122 @@ mod tests {
             }
         }
         assert!(beyond > 0, "the stream reaches beyond the doubles");
+    }
+
+    /// STATE-3: negative or non-finite weights in `lasso` (selection weights
+    /// and errors, accumulator/Gram/target-moment weights, and window clock
+    /// and snapshots) are refused on load.
+    #[test]
+    fn state_3_a_weight_no_stream_writes_is_refused_on_load() {
+        use crate::{OnlineModel, StateError};
+
+        fn mutate_msgpack<T: serde::Serialize + serde::de::DeserializeOwned>(
+            item: &T,
+            path: &[&str],
+            val: rmpv::Value,
+        ) -> T {
+            let bytes = rmp_serde::to_vec_named(item).unwrap();
+            let mut v = rmpv::decode::read_value(&mut bytes.as_slice()).unwrap();
+            let mut cur = &mut v;
+            for &key in path {
+                if let Ok(idx) = key.parse::<usize>() {
+                    let rmpv::Value::Array(arr) = cur else {
+                        panic!("expected array at {key}");
+                    };
+                    cur = &mut arr[idx];
+                } else {
+                    let rmpv::Value::Map(entries) = cur else {
+                        panic!("expected map at {key}");
+                    };
+                    let (_, next) = entries
+                        .iter_mut()
+                        .find(|(k, _)| k.as_str() == Some(key))
+                        .unwrap_or_else(|| panic!("missing key {key}"));
+                    cur = next;
+                }
+            }
+            *cur = val;
+            let mut out = Vec::new();
+            rmpv::encode::write_value(&mut out, &v).unwrap();
+            rmp_serde::from_slice(&out).unwrap()
+        }
+
+        let (m, _) = fit(cfg(2, 1, vec![0.1, 0.01]), 15, 29);
+        assert!(Lasso::restore(&m.state()).is_ok());
+
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            type Edit = (&'static str, fn(&mut Lasso, f64));
+            let edits: [Edit; 5] = [
+                ("sel_w", |l, v| l.sel_w[0] = v),
+                ("sel_err", |l, v| l.sel_err[0][0] = v),
+                ("weight_since_solve", |l, v| l.weight_since_solve = v),
+                ("acc.cross.w", |l, v| l.acc.cross.w = v),
+                ("acc.wj", |l, v| l.acc.wj[0] = v),
+            ];
+            for (name, edit) in edits {
+                let mut damaged = m.clone();
+                edit(&mut damaged, bad);
+                match Lasso::restore(&damaged.state()) {
+                    Err(StateError::Invalid(e)) => {
+                        assert!(e.contains("damaged"), "{name} {bad}: {e}");
+                    }
+                    other => panic!("{name} = {bad}: {other:?}"),
+                }
+            }
+            for (name, path) in [
+                ("gram.w_sum", &["acc", "grams", "grams", "0", "w_sum"][..]),
+                ("gram.q_sum", &["acc", "grams", "grams", "0", "q_sum"][..]),
+                (
+                    "gram.precision_scale",
+                    &["acc", "grams", "grams", "0", "precision_scale"][..],
+                ),
+                ("tm.q", &["acc", "tm", "q", "0"][..]),
+            ] {
+                let damaged = mutate_msgpack(&m, path, rmpv::Value::F64(bad));
+                match Lasso::restore(&damaged.state()) {
+                    Err(StateError::Invalid(e)) => {
+                        assert!(e.contains("damaged"), "{name} {bad}: {e}");
+                    }
+                    other => panic!("{name} = {bad}: {other:?}"),
+                }
+            }
+        }
+
+        // Windowed lasso: clock and snapshot weights.
+        let mut wc = cfg(2, 2, vec![0.1, 0.0]);
+        wc.window = Some(10.0);
+        wc.min_weight = 0.0;
+        let w = run(wc, &weighted_rows(2, 25, 31));
+        assert!(Lasso::restore(&w.state()).is_ok());
+
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            let mut damaged = w.clone();
+            damaged.win.as_mut().unwrap().clock = bad;
+            assert!(
+                Lasso::restore(&damaged.state()).is_err(),
+                "win.clock = {bad}"
+            );
+        }
+        for (name, path) in [
+            ("snap.sel_w", &["sel_w", "0"][..]),
+            ("snap.sel_err", &["sel_err", "0", "0"][..]),
+            ("snap.acc.cross.w", &["acc", "cross", "w"][..]),
+            ("snap.acc.wj", &["acc", "wj", "0"][..]),
+            ("snap.acc.grams.q", &["acc", "grams", "grams", "0", "q"][..]),
+            ("snap.acc.tm.q", &["acc", "tm", "q", "0"][..]),
+        ] {
+            for bad in [-1.0, f64::NAN, f64::INFINITY] {
+                let mut damaged = w.clone();
+                damaged
+                    .win
+                    .as_mut()
+                    .unwrap()
+                    .snaps
+                    .edit()
+                    .iter_mut()
+                    .for_each(|s| *s = mutate_msgpack(s, path, rmpv::Value::F64(bad)));
+                assert!(Lasso::restore(&damaged.state()).is_err(), "{name} = {bad}");
+            }
+        }
     }
 }

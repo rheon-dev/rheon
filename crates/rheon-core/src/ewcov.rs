@@ -613,6 +613,23 @@ impl EwCov {
         self.k == k && self.m.len() == k && self.c.len() == k * k && self.m_lo.len() == k
     }
 
+    /// Whether the accumulator's weights and prior scales are ones a stream
+    /// writes: finite and not negative, with a valid Kish scale exponent
+    /// (review 2026-11-23, STATE-3).
+    pub(crate) fn has_valid_weights(&self) -> bool {
+        let non_neg = |v: f64| v.is_finite() && v >= 0.0;
+        non_neg(self.w_sum)
+            && non_neg(self.prior_scale)
+            && non_neg(self.precision_prior)
+            && non_neg(self.precision_scale)
+            && self.q_sum.q.is_none_or(non_neg)
+            && crate::sqsum::scale_fits(self.q_sum.s)
+            && (!self.has_pending()
+                || (non_neg(self.pending.w_open)
+                    && self.pending.w.iter().copied().all(non_neg)
+                    && self.pending.lam.iter().all(|l| (0.0..=1.0).contains(l))))
+    }
+
     pub fn has_precision_prior(&self) -> bool {
         self.precision_prior > 0.0
     }

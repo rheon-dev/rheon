@@ -702,9 +702,16 @@ impl Glm {
     /// `n_features + 2` numbers, and under a span of the clock each
     /// target's first stamp.
     pub fn refit_held_bytes(&self, extra: usize) -> u64 {
-        let held: usize = self.refit.iter().map(|r| r.rows.len()).sum();
-        let stamps = self.refit.len() * std::mem::size_of::<Option<Stamp>>();
-        (8 * (held + extra * (self.cfg.n_features + 2)) + stamps) as u64
+        let held = self
+            .refit
+            .iter()
+            .fold(0u64, |acc, r| acc.saturating_add(r.rows.len() as u64));
+        let add = (extra as u64).saturating_mul((self.cfg.n_features as u64).saturating_add(2));
+        let stamps =
+            (self.refit.len() as u64).saturating_mul(std::mem::size_of::<Option<Stamp>>() as u64);
+        held.saturating_add(add)
+            .saturating_mul(8)
+            .saturating_add(stamps)
     }
 
     /// The run-time check of a refit over a span of the clock, over this
@@ -1608,6 +1615,35 @@ impl OnlineModel for Glm {
                         "glm",
                         "its running sums have the wrong shape",
                     ));
+                }
+                // Weights and span cap (review 2026-11-23, STATE-3): every
+                // weight is finite and at least 0 (a buffered row's weight may
+                // decay to 0 on a long gap), and a span with buffered rows
+                // stays within `max_state_bytes`.
+                let non_neg = |v: f64| v.is_finite() && v >= 0.0;
+                let weights_ok = non_neg(m.w_sum)
+                    && non_neg(m.own)
+                    && m.w_target.iter().copied().all(non_neg)
+                    && m.refit.iter().all(|r| {
+                        r.rows
+                            .chunks_exact(width)
+                            .all(|row| non_neg(row[width - 1]))
+                    });
+                if !weights_ok {
+                    return Err(crate::model::damaged(
+                        "glm",
+                        "its saved weights hold a value no stream writes",
+                    ));
+                }
+                if m.cfg.refit_clock.is_some() && m.refit.iter().any(|r| !r.rows.is_empty()) {
+                    let bytes = m.refit_held_bytes(0);
+                    let cap = m.cfg.cap();
+                    if bytes > cap {
+                        return Err(crate::model::damaged(
+                            "glm",
+                            format!("it holds {bytes} bytes, past max_state_bytes of {cap}"),
+                        ));
+                    }
                 }
                 Ok(m)
             }

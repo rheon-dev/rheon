@@ -2216,6 +2216,7 @@ impl crate::OnlineModel for Bocpd {
                         "its saved values have the wrong shape",
                     ));
                 }
+                m.check_loaded()?;
                 Ok(m)
             }
             other => Err(crate::StateError::WrongModel {

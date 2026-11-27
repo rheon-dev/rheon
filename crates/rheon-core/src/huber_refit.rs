@@ -662,13 +662,21 @@ impl RefitBuf {
             )
     }
 
+    /// Whether the buffer holds any learned rows or ageing runs.
+    pub(crate) fn has_held(&self) -> bool {
+        !self.rows.is_empty() || !self.ages.is_empty()
+    }
+
     /// The bytes the buffer holds: its rows and runs, 8 each, and under the
     /// MAD each row's `|e|` and its node in the tree, as
     /// [`refit_reservation`] counts them; and its first stamp.
     pub(crate) fn held_bytes(&self) -> u64 {
         let e = self.resid.as_ref().map_or(0, Vec::len);
-        (8 * (self.rows.len() + self.ages.len()) + 48 * e) as u64
-            + std::mem::size_of::<Option<crate::Stamp>>() as u64
+        (self.rows.len() as u64)
+            .saturating_add(self.ages.len() as u64)
+            .saturating_mul(8)
+            .saturating_add((e as u64).saturating_mul(48))
+            .saturating_add(std::mem::size_of::<Option<crate::Stamp>>() as u64)
     }
 
     /// The rows, runs and `|e|`, taken: the buffer is done and holds none
@@ -704,14 +712,14 @@ impl RefitBuf {
             return self.rows.is_empty() && self.ages.is_empty() && resid_fit;
         }
         let stride = nf + 4;
-        let rows_fit = self.rows.len() == self.learned as usize * stride
+        let rows_fit = (self.learned as usize).checked_mul(stride) == Some(self.rows.len())
             && self.learned < cap
             && self.rows.chunks_exact(stride).all(|r| {
                 r[nf + 1] > 0.0 && r[nf + 1].is_finite() && factor(r[nf + 2]) && factor(r[nf + 3])
             });
         let mut last = 1.0;
         let ages_fit = self.ages.len().is_multiple_of(4)
-            && self.ages.len() / 4 <= REFIT_RUNS_PER_ROW as usize * cap as usize
+            && self.ages.len() / 4 <= (REFIT_RUNS_PER_ROW as usize).saturating_mul(cap as usize)
             && self.ages.as_chunks::<4>().0.iter().all(|a| {
                 let ok = factor(a[0])
                     && factor(a[1])

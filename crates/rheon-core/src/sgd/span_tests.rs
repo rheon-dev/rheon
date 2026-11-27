@@ -365,3 +365,57 @@ fn an_ageing_row_is_held_to_the_spans_cap() {
     }
     assert!(m.state_over_cap().is_some());
 }
+
+/// STATE-3: a span refit whose buffered rows exceed `max_state_bytes` (or a
+/// non-span state recording `over`) is refused both by `Sgd::restore` and by
+/// serde deserialization, while an empty span refit with a 1-byte cap still
+/// round-trips.
+#[test]
+fn state_3_a_span_past_its_cap_is_refused_on_load() {
+    let fresh = Sgd::new(SgdCfg {
+        refit_clock: Some(10.0),
+        max_state_bytes: Some(1),
+        ..cfg(false)
+    })
+    .unwrap();
+    assert!(Sgd::restore(&fresh.state()).is_ok());
+    let fresh_bytes = rmp_serde::to_vec_named(&fresh).unwrap();
+    assert!(rmp_serde::from_slice::<Sgd>(&fresh_bytes).is_ok());
+
+    let mut m = Sgd::new(SgdCfg {
+        refit_clock: Some(1e12),
+        ..cfg(false)
+    })
+    .unwrap();
+    for (i, (x, y)) in rows(6, 11).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, y, 1.0, 1.0);
+    }
+    let held = held_of(&m);
+    m.cfg.max_state_bytes = Some(held);
+    assert!(Sgd::restore(&m.state()).is_ok());
+    let ok_bytes = rmp_serde::to_vec_named(&m).unwrap();
+    assert!(rmp_serde::from_slice::<Sgd>(&ok_bytes).is_ok());
+
+    let mut over = m.clone();
+    over.cfg.max_state_bytes = Some(held - 1);
+    match Sgd::restore(&over.state()) {
+        Err(crate::StateError::Invalid(e)) => assert!(e.contains("max_state_bytes"), "{e}"),
+        other => panic!("restore over cap: {other:?}"),
+    }
+    let over_bytes = rmp_serde::to_vec_named(&over).unwrap();
+    let serde_err = rmp_serde::from_slice::<Sgd>(&over_bytes)
+        .unwrap_err()
+        .to_string();
+    assert!(serde_err.contains("max_state_bytes"), "{serde_err}");
+
+    let mut non_span = Sgd::new(SgdCfg {
+        refit_rows: 20,
+        ..cfg(false)
+    })
+    .unwrap();
+    non_span.over = Some(1);
+    assert!(Sgd::restore(&non_span.state()).is_err());
+    let non_span_bytes = rmp_serde::to_vec_named(&non_span).unwrap();
+    assert!(rmp_serde::from_slice::<Sgd>(&non_span_bytes).is_err());
+}
