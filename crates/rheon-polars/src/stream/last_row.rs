@@ -50,6 +50,13 @@ pub struct LastRow {
         with = "rheon_core::humanfloat::vec_f64_or_tag"
     )]
     pub health: Vec<f64>,
+    /// Windowed two-sample KS feature health; empty, and not written, without it.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_f64_or_tag"
+    )]
+    pub health_ks: Vec<f64>,
     #[serde(with = "rheon_core::humanfloat::vec_f64_or_tag")]
     pub resid_q: Vec<f64>,
     pub drift: Vec<bool>,
@@ -145,6 +152,7 @@ impl LastRow {
         take_row(&mut self.conformal, &out.conformal, n, ri);
         take_row(&mut self.checks, &out.checks, n, ri);
         take_row(&mut self.health, &out.health, n, ri);
+        take_row(&mut self.health_ks, &out.health_ks, n, ri);
         take_row(&mut self.resid_q, &out.resid_q, n, ri);
         take_row(&mut self.drift, &out.drift, n, ri);
         take_row(&mut self.n_eff, &out.n_eff, n, ri);
@@ -187,6 +195,7 @@ impl LastRow {
             out.conformal.len() == self.conformal.len(),
             out.checks.len() == self.checks.len(),
             out.health.len() == self.health.len(),
+            out.health_ks.len() == self.health_ks.len(),
             out.resid_q.len() == self.resid_q.len(),
             out.drift.len() == self.drift.len(),
             out.n_eff.len() == self.n_eff.len(),
@@ -224,6 +233,7 @@ impl LastRow {
         out.conformal.clone_from(&self.conformal);
         out.checks.clone_from(&self.checks);
         out.health.clone_from(&self.health);
+        out.health_ks.clone_from(&self.health_ks);
         out.resid_q.clone_from(&self.resid_q);
         out.drift.clone_from(&self.drift);
         out.n_eff.clone_from(&self.n_eff);

@@ -826,6 +826,21 @@ pub enum ModelKind {
         /// `split_merge_every_rows`. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         split_merge_every: Option<Span>,
+        /// Fixed cluster centers (`n_clusters` rows of `len(features)`). Frozen
+        /// only (`learn=False`); skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        centers: Option<Vec<Vec<f64>>>,
+        /// Whether to update centers from the stream. Defaults to `false` when
+        /// `centers` is given (and `true` is refused there) and `true` otherwise
+        /// (`false` without `centers` is refused). Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        learn: Option<bool>,
+        /// Emit distances `dist_0..dist_{k-1}` to every center. Skipped when false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        emit_distances: bool,
+        /// Emit exponentially weighted inertia (`inertia = m * W`). Skipped when false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        emit_inertia: bool,
     },
     /// DenStream-style micro-clusters with a linkage macro step
     /// (docs/CLUSTERING.md §6.5; PLAN §11a, task 24). No targets: the
@@ -886,8 +901,10 @@ pub enum ModelKind {
         /// `GaussianMixture` words (task 244, P-2).
         #[serde(default)]
         covariance_type: Option<String>,
-        /// Ridge on every class covariance, finite and `> 0`; it decays as
-        /// the class accumulates data, like `ew_cov`'s `precision_prior`.
+        /// Ridge on every class covariance, finite and `> 0` (or `>= 0` when
+        /// `reg_param` or `var_smoothing` is set); it decays as the class
+        /// accumulates data, like `ew_cov`'s `precision_prior`.
+        #[serde(default)]
         precision_prior: f64,
         /// Clock units of history each class's moments are computed from,
         /// with a **hard** cutoff (docs/PLAN.md §13). `covariance_type = "full"`
@@ -914,6 +931,18 @@ pub enum ModelKind {
         /// MiB (review 2026-09-12, P4).
         #[serde(default)]
         window_budget: Option<WindowBudgetSpec>,
+        /// Fixed class priors aligned with `classes`, finite and `> 0`, summing
+        /// to 1. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        priors: Option<Vec<f64>>,
+        /// Non-fading covariance regularizer in `[0, 1]`: `(1 - r) S + r I`.
+        /// Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reg_param: Option<f64>,
+        /// Non-fading variance floor for `covariance_type = "diag"`:
+        /// `var_smoothing * max_i total_var_i`. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        var_smoothing: Option<f64>,
     },
     /// Sequential test of a sign by betting (docs/ENHANCEMENTS.md E42;
     /// PLAN §11a, task 30): per target, two e-processes, one for "positive"
@@ -1271,7 +1300,7 @@ pub enum ModelKind {
         /// Nominal level; default 0.05.
         #[serde(default)]
         alpha: Option<f64>,
-        /// `"bonferroni"` (default) over the pairs, or `"none"`.
+        /// `"bonferroni"` (default), `"holm"`, or `"none"` over the pairs.
         #[serde(default)]
         alpha_adjust: Option<String>,
         /// `"monitor"` and `"sequential"`: the Bartlett bandwidth, `⌊ln T⌋`
@@ -1338,6 +1367,10 @@ pub enum ModelKind {
         /// KB, at most 64 MiB. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_state_bytes: Option<u64>,
+        /// Emit `n_flagged`, the count of pairs flagged at the adjusted level.
+        /// Skipped when false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        emit_n_flagged: bool,
     },
     /// Bayesian online changepoint detection (docs/ENHANCEMENTS.md E61): a
     /// posterior over how long the current run has lasted, updated one row
@@ -3020,6 +3053,15 @@ pub struct Spec {
     /// [`Spec::memory_multiple`]'s); its slow memory is four times it.
     #[serde(default)]
     pub feature_health_half_life: Option<Span>,
+    /// Total positive-weight window size for standalone per-feature two-sample
+    /// KS health (`ks_stat_<feature>`, `ks_p_<feature>`). Paired with
+    /// `feature_ks_recent`; skipped when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_ks_window: Option<usize>,
+    /// Recent sub-window size for standalone per-feature two-sample KS health.
+    /// Paired with `feature_ks_window`; skipped when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_ks_recent: Option<usize>,
     /// Emit `pred_<target>__averaged`: an exponentially weighted average of
     /// every slot's prediction, with weights `softmax(−eta · σ²/σ²_best)`,
     /// each slot's EW squared error as a ratio to the best slot's
@@ -3203,6 +3245,11 @@ impl Spec {
 
     pub fn m(&self) -> usize {
         self.targets.len()
+    }
+
+    /// Whether standalone windowed two-sample KS feature health is enabled.
+    pub fn has_feature_ks(&self) -> bool {
+        self.feature_ks_window.is_some() && self.feature_ks_recent.is_some()
     }
 
     /// The labels of a regression's forecasts at horizons (`holt`,
@@ -3489,11 +3536,15 @@ impl Spec {
             // `k + 1` rows its first solve needs are the model's own floor
             // (`build_one`), not a setting. An explicit value still floors.
             ModelKind::EwRidge { .. } => 0.0,
+            // Fixed centers are ready from the first row.
+            ModelKind::KMeans {
+                centers: Some(_), ..
+            } => 0.0,
             // No intercept to count: `fit_intercept` has nothing to act on in
             // these, and counted, it moved the first reported row (review
             // 2026-09-12, S22). `k + 1` is what the builders' default gave.
             ModelKind::EwCov { .. }
-            | ModelKind::KMeans { .. }
+            | ModelKind::KMeans { centers: None, .. }
             | ModelKind::Micro { .. }
             | ModelKind::EwClass { .. }
             | ModelKind::Holt { .. } => (self.k() + 1) as f64,
@@ -3691,14 +3742,6 @@ impl Spec {
     /// it refuses.
     fn validate_each(&self, no: &mut rheon_core::Refusals) -> Result<(), String> {
         let name = &self.name;
-        // A parameter that applies only with a switch on, given with it off,
-        // does nothing: refused rather than ignored (review 2026-09-12, S22).
-        let needs = |key: &str, switch: &str| {
-            format!(
-                "spec {name:?}: {key} applies only when {switch} is on, but {switch} is off. \
-                 Turn on {switch}, or leave out {key}."
-            )
-        };
         // Clock parameters given as durations and as numbers at once, or
         // durations with no clock to measure them (task 88). Every check
         // after this reads a clock parameter's value, which means nothing
@@ -4569,556 +4612,7 @@ impl Spec {
                 }
             }
         }
-        if self.ljung_box_lags.is_some() && !self.emit_specification {
-            no.refuse(needs("ljung_box_lags", "emit_specification"));
-        }
-        if let Some(l) = self.ljung_box_lags {
-            // The test reads its lags past the ones a horizon skips, and the
-            // rows of them all are set aside before the first row: the
-            // bound on the reader's own number is what is left of the
-            // ceiling (the check `rheon_core::check_lag_ceiling` makes).
-            let skip = self.ljung_box_skip();
-            let most = rheon_core::MAX_LAG.saturating_sub(skip);
-            if l == 0 {
-                no.refuse(format!(
-                    "spec {name:?}: ljung_box_lags must be at least 1, but it is 0. Set \
-                     ljung_box_lags to 1 or more, such as the default 10, or leave it out."
-                ));
-            } else if l > most {
-                no.refuse(if skip == 0 {
-                    format!(
-                        "spec {name:?}: ljung_box_lags must be at most {most}, but it is {l}: \
-                         memory for every lag is set aside before the first row. Lower \
-                         ljung_box_lags to {most} or below."
-                    )
-                } else {
-                    format!(
-                        "spec {name:?}: ljung_box_lags must be at most {most}, since \
-                         horizon_rows={} skips the first {skip} lags and memory for every lag \
-                         is set aside before the first row, but it is {l}. Lower \
-                         ljung_box_lags to {most} or below, or lower horizon_rows.",
-                        self.horizon()
-                    )
-                });
-            }
-        }
-        if self.horizon_rows.is_some() && self.horizon_readers().is_empty() {
-            no.refuse(format!(
-                "spec {name:?}: horizon_rows applies only when emit_calibration, emit_breaks, \
-                 emit_specification or emit_robust_se is on, but none is. Turn on the \
-                 diagnostic that should read it, or leave out horizon_rows."
-            ));
-        }
-        if let Some(h) = self.horizon_rows.filter(|h| *h > rheon_core::MAX_LAG / 2) {
-            no.refuse(format!(
-                "spec {name:?}: horizon_rows must be at most {}, but it is {h}: the diagnostics \
-                 read twice as many lags, and memory for every lag is set aside before the \
-                 first row. Lower horizon_rows to {} or below.",
-                rheon_core::MAX_LAG / 2,
-                rheon_core::MAX_LAG / 2
-            ));
-        }
-        if self.robust_se_lags.is_some() && !self.emit_robust_se {
-            no.refuse(needs("robust_se_lags", "emit_robust_se"));
-        }
-        if let Some(l) = self.robust_se_lags {
-            no.take(
-                rheon_core::check_lag_ceiling("robust_se_lags", l)
-                    .map_err(|e| format!("spec {name:?}: {e}")),
-            );
-        }
-        if self.emit_error_inflation && !self.has_row_error_inflation() {
-            no.refuse(format!(
-                "spec {name:?}: emit_error_inflation needs a model that reads one row's \
-                 leverage, as ewridge, rls and kalman do, but {} does not: {}. Leave out \
-                 emit_error_inflation, or use one of those models.",
-                self.model.kind_name(),
-                self.no_leverage()
-            ));
-        }
-        const DRIFT_ACTION: [&str; 2] = ["flag", "reset"];
-        if let Some(a) = &self.drift_action
-            && !DRIFT_ACTION.contains(&a.as_str())
-        {
-            no.refuse(spec_words_refusal(
-                &self.name,
-                "drift_action",
-                &DRIFT_ACTION,
-                a,
-            ));
-        }
-        // A tolerance or a threshold of `inf` is a detector that never
-        // fires: no setting (review 2026-09-12, S27).
-        if let Some(v) = self.drift_delta.filter(|v| *v < 0.0 || !v.is_finite()) {
-            no.refuse(at_least_zero(
-                &format!("spec {name:?}"),
-                "drift_delta",
-                "",
-                &Got::One(num_label(v)),
-                None,
-                None,
-            ));
-        }
-        if let Some(v) = self
-            .drift_threshold
-            .as_ref()
-            .filter(|v| v.value() <= 0.0 || !v.value().is_finite())
-        {
-            no.refuse(format!(
-                "spec {name:?}: drift_threshold must be finite and above 0, but it is {v}. Set \
-                 drift_threshold to the summed excess that flags a drift, such as 20 without a \
-                 clock, or a duration such as \"20m\" on a clock that holds times."
-            ));
-        }
-        if let Some(qs) = &self.resid_quantiles {
-            if qs.is_empty() {
-                no.refuse(format!(
-                    "spec {name:?}: resid_quantiles must list at least one level, but it is \
-                     empty. List levels above 0 and below 1, such as [0.05, 0.95], or leave out \
-                     resid_quantiles."
-                ));
-            }
-            // Each level names its own fields: a repeat reached the output's
-            // duplicate field, whose advice could not help (review
-            // 2026-11-23, SPEC-10).
-            if let Some(d) = first_duplicate(qs) {
-                no.refuse(format!(
-                    "spec {name:?}: resid_quantiles must list each level once, since each names \
-                     its own fields, but it lists {} more than once. Remove the repeats from \
-                     resid_quantiles.",
-                    num_label(d)
-                ));
-            }
-            let bad: Vec<String> = qs
-                .iter()
-                .filter(|q| !(**q > 0.0 && **q < 1.0))
-                .map(|q| num_label(*q))
-                .collect();
-            if !bad.is_empty() {
-                no.refuse(format!(
-                    "spec {name:?}: resid_quantiles must each be above 0 and below 1, but {} {}. \
-                     Set each level above 0 and below 1.",
-                    if bad.len() == 1 {
-                        "one of them is"
-                    } else {
-                        "these are not:"
-                    },
-                    bad.join(", ")
-                ));
-            }
-        }
-        if let Some(c) = self.conformal.filter(|c| !(*c > 0.0 && *c < 1.0)) {
-            no.refuse(format!(
-                "spec {name:?}: conformal must be above 0 and below 1, but it is {c}. Set \
-                 conformal to the share of rows whose target the interval should cover, such \
-                 as 0.9."
-            ));
-        }
-        if let Some(ConformalRate::Fixed(r)) = self
-            .conformal_rate
-            .filter(|r| !(r.base() > 0.0 && r.base().is_finite()))
-        {
-            no.refuse(format!(
-                "spec {name:?}: conformal_rate must be finite and above 0, but it is {r}. Set \
-                 conformal_rate to how fast the interval's width adapts, such as the default \
-                 0.05."
-            ));
-        }
-        if self.conformal_rate.is_some() && self.conformal.is_none() {
-            no.refuse(format!(
-                "spec {name:?}: conformal_rate sets how fast the interval adapts, but conformal, \
-                 its coverage, is not set. Set conformal, such as 0.9, or leave out \
-                 conformal_rate."
-            ));
-        }
-        if self.resid_autocorr_lag.is_some_and(|l| l == 0) {
-            no.refuse(format!(
-                "spec {name:?}: resid_autocorr_lag must be at least 1, but it is 0. Set \
-                 resid_autocorr_lag to the lag of the autocorrelation to report, such as 1."
-            ));
-        }
-        // The tracker's buffer is sized from the lag before the first row,
-        // as the models' lag rings are (review 2026-10-06, CD10).
-        if let Some(l) = self.resid_autocorr_lag.filter(|l| *l > 0) {
-            no.take(
-                rheon_core::check_lag_ceiling("resid_autocorr_lag", l)
-                    .map_err(|e| format!("spec {name:?}: {e}")),
-            );
-        }
-        if let Some(v) = self.average_eta.filter(|v| v.0 <= 0.0 || v.0.is_nan()) {
-            no.refuse(format!(
-                "spec {name:?}: average_eta must be above 0, but it is {}. Set average_eta to a \
-                 positive value, such as the default 1, or to inf to take the best slot alone, \
-                 as emit_selected does.",
-                v.0
-            ));
-        }
-        // A knob whose switch is off does nothing: refused rather than
-        // ignored, as elsewhere here (review 2026-09-12, S22). `drift_action
-        // = "flag"` is what `fill_defaults` writes on every spec, so only
-        // `"reset"` asks for anything.
-        if !self.emit_drift {
-            if self.drift_action.as_deref() == Some("reset") {
-                no.refuse(format!(
-                    "spec {name:?}: drift_action=\"reset\" applies only when emit_drift is on, \
-                     but emit_drift is off. Turn on emit_drift, or leave out drift_action."
-                ));
-            }
-            for (knob, set) in [
-                ("drift_delta", self.drift_delta.is_some()),
-                ("drift_threshold", self.drift_threshold.is_some()),
-                ("drift_kind", self.drift_kind.is_some()),
-                ("drift_options", self.drift_options.is_some()),
-            ] {
-                if set {
-                    no.refuse(needs(knob, "emit_drift"));
-                }
-            }
-        } else if self.clock.is_some()
-            && self.drift_threshold.is_none()
-            && self.drift_kind_or_default().is_some_and(DriftKind::clocked)
-        {
-            no.refuse(format!(
-                "spec {name:?}: drift_threshold must be set when the spec has a clock, but it is \
-                 not: the detector sums each row's excess times its clock step, so no default \
-                 means the same on every clock. Set drift_threshold in clock units, or as a \
-                 duration such as \"20m\" on a clock that holds times."
-            ));
-        }
-        self.check_drift_kind(no);
-        if self.average_eta.is_some() && !self.emit_averaged {
-            no.refuse(needs("average_eta", "emit_averaged"));
-        }
-        if self.resid_autocorr_lag.is_some() && !self.emit_autocorr {
-            no.refuse(needs("resid_autocorr_lag", "emit_autocorr"));
-        }
-        // A diagnostic's own memory (docs/PLAN.md task 221): a half-life
-        // above 0, `inf` the run-once form that forgets nothing; given with
-        // its switch off it does nothing, and is refused as any such knob.
-        for (key, switch, on, memory) in self.diagnostic_memories() {
-            let Some(h) = memory else { continue };
-            if !on {
-                no.refuse(needs(key, switch));
-            }
-            if h.value().is_nan() || h.value() <= 0.0 {
-                // Feature health compares two memories, which an infinite
-                // one makes the same (refused below).
-                no.refuse(if key == "feature_health_half_life" {
-                    format!(
-                        "spec {name:?}: {key} must be above 0, but it is {h}. Set {key} to a \
-                         finite positive number of clock units."
-                    )
-                } else {
-                    format!(
-                        "spec {name:?}: {key} must be above 0, but it is {h}. Set {key} to a \
-                         positive number of clock units, or to inf for a diagnostic that \
-                         forgets nothing."
-                    )
-                });
-            }
-        }
-        if self.session_gap.is_some() && self.session.is_none() {
-            no.refuse(format!(
-                "spec {name:?}: session_gap applies only with a session column, but session is \
-                 not set. Set session, or leave out session_gap."
-            ));
-        }
-        // A step back is read off the clock; given without one it would be
-        // silently ignored, and a key that does nothing is refused here.
-        if self.restart_after_step_back.is_some() && self.clock.is_none() {
-            no.refuse(format!(
-                "spec {name:?}: restart_after_step_back applies only with a clock, but clock is \
-                 not set. Set clock, or leave out restart_after_step_back."
-            ));
-        }
-        // The snapshot cadence spaces a window's snapshots, so each part of
-        // it needs a window; the clock spacing is clock units, finite and
-        // `>= 0` as `solve_every` is, `0` for every row (docs/PLAN.md task
-        // 162). A negative value would have meant every row unsaid, NaN never.
-        if let (Some((window, _)), Some((every, rows))) =
-            (self.model.window_parts(), self.model.window_cadence())
-        {
-            for (key, given) in [
-                ("snapshot_every", every.is_some()),
-                ("max_rows_between_snapshots", rows.is_some()),
-            ] {
-                if given && window.is_none() {
-                    no.refuse(format!(
-                        "spec {name:?}: {key} applies only under a hard window, but window_size \
-                         is not set. Set window_size, or leave out {key}."
-                    ));
-                }
-            }
-            if let Some(e) = every.filter(|e| !non_negative(e.value()) || !e.value().is_finite()) {
-                no.refuse(at_least_zero(
-                    &format!("spec {name:?}"),
-                    "snapshot_every",
-                    " clock units",
-                    &Got::One(e.to_string()),
-                    Some("to take a snapshot on every row"),
-                    None,
-                ));
-            }
-        }
-        // The window's edge, Polars' `closed` (docs/PLAN.md task 196, N17):
-        // of its four values the two that leave out the window's last row
-        // cannot apply, and are refused as the spec is read
-        // ([`ModelClosed`]); `"both"` with no window is a key that does
-        // nothing (review S10's rule).
-        if let (Some((window, _)), Some(closed)) =
-            (self.model.window_parts(), self.model.window_closed())
-            && closed == ModelClosed::Both
-            && window.is_none()
-        {
-            no.refuse(format!(
-                "spec {name:?}: closed applies only under a hard window, where it says whether a \
-                 row exactly window_size old keeps its weight, but window_size is not set. Set \
-                 window_size, or leave out closed."
-            ));
-        }
-        // A row cap of no rows is no schedule, in every `max_rows_between_*`,
-        // as `max_rows_between_coefs`'s is since task 178; the clock form's
-        // `0` is every row. `0` was every row for four of them and refused
-        // for the fifth (review 2026-10-06, PC3 CB4 YA2; docs/PLAN.md task
-        // 196, U7).
-        for (key, cap, clock) in self.model.row_caps() {
-            if cap == Some(0) {
-                no.refuse(format!(
-                    "spec {name:?}: {key} must be at least 1, but it is 0. Set {key} to 1 or \
-                     more, or leave it out and set {clock} to 0 to act on every row."
-                ));
-            }
-        }
-        // A count of no threads (docs/PLAN.md task 225): the reader refuses
-        // it, and a spec built in Rust is held to the same.
-        if self.model.gram_threads_given() == Some(CountOrAuto::Count(0)) {
-            no.refuse(format!(
-                "spec {name:?}: gram_threads must be at least 1 or \"auto\", but it is 0. Set \
-                 gram_threads to the number of the bank's threads to update the Gram on, or to \
-                 \"auto\" for all of them."
-            ));
-        }
-        // A budget bounds a window's snapshots, so it needs a window, and a
-        // budget of no bytes bounds nothing (review 2026-09-12, P4).
-        if let Some((window, Some(budget))) = self.model.window_parts() {
-            if window.is_none() {
-                no.refuse(format!(
-                    "spec {name:?}: window_budget applies only under a hard window, but \
-                     window_size is not set. Set window_size, or leave out window_budget."
-                ));
-            }
-            let mib = budget.mib();
-            if mib <= 0.0 || mib.is_nan() {
-                // The mode the reader gave, as they wrote it.
-                let mode = match budget {
-                    WindowBudgetSpec::Thin(_) => "thin",
-                    WindowBudgetSpec::Refuse(_) => "refuse",
-                };
-                no.refuse(format!(
-                    "spec {name:?}: window_budget's \"{mode}\" must be above 0 MiB, but it is \
-                     {}. Set it to a positive number of MiB, such as 256, or to inf for no \
-                     bound.",
-                    num_label(mib)
-                ));
-            }
-        }
-        // `coef_every` and `max_rows_between_coefs` schedule the `coef`
-        // field, which a model with no coefficients does not have (review
-        // 2026-09-12, S22). `0` was the default and passed there; since task
-        // 178 it is every row, and refused there as any other value is.
-        for (key, given) in [
-            ("coef_every", self.coef_every.is_some()),
-            (
-                "max_rows_between_coefs",
-                self.max_rows_between_coefs.is_some(),
-            ),
-        ] {
-            if given && !self.model.has_coef() {
-                no.refuse(format!(
-                    "spec {name:?}: {key} applies only to a model that reports coefficients, but \
-                     {} reports none. Leave out {key}.",
-                    self.model.kind_name()
-                ));
-            }
-        }
-        if let Some(e) = self
-            .coef_every
-            .as_ref()
-            .filter(|e| !(e.value().is_finite() && non_negative(e.value())))
-        {
-            no.refuse(at_least_zero(
-                &format!("spec {name:?}"),
-                "coef_every",
-                " clock units",
-                &Got::One(e.to_string()),
-                Some("to fill the coef field on every row"),
-                None,
-            ));
-        }
-        // A cap of no rows is no schedule: every row is `coef_every = 0`.
-        if self.max_rows_between_coefs == Some(0) {
-            no.refuse(format!(
-                "spec {name:?}: max_rows_between_coefs must be at least 1, but it is 0. Set \
-                 max_rows_between_coefs to 1 or more, or leave it out and set coef_every to 0 \
-                 to fill the coef field on every row."
-            ));
-        }
-        // Nothing residual-based applies to a model that predicts no target.
-        // Refused rather than ignored: a flag that silently emits nothing
-        // looks like a bug in the output, not in the spec.
-        let mut health_refused = false;
-        if self.model.predicts_no_target() {
-            let asked = [
-                ("emit_sigma", self.emit_sigma),
-                ("emit_zscore", self.emit_zscore),
-                ("emit_metrics", self.emit_metrics),
-                ("resid_quantiles", self.resid_quantiles.is_some()),
-                ("conformal", self.conformal.is_some()),
-                ("emit_autocorr", self.emit_autocorr),
-                ("emit_drift", self.emit_drift),
-                ("emit_calibration", self.emit_calibration),
-                ("emit_breaks", self.emit_breaks),
-                ("emit_robust_se", self.emit_robust_se),
-                ("emit_specification", self.emit_specification),
-                ("emit_tails", self.emit_tails),
-                ("emit_influence", self.emit_influence),
-                ("emit_averaged", self.emit_averaged),
-                ("emit_selected", self.emit_selected),
-            ];
-            let on: Vec<&str> = asked
-                .iter()
-                .filter(|(_, on)| *on)
-                .map(|(f, _)| *f)
-                .collect();
-            if let Some((last, rest)) = on.split_last() {
-                let listed = if rest.is_empty() {
-                    (*last).to_string()
-                } else {
-                    format!("{} and {last}", rest.join(", "))
-                };
-                no.refuse(format!(
-                    "spec {name:?}: {listed} {} not apply to {}, which predicts no number for a \
-                     target, so has no residuals. Leave out {listed}.",
-                    if rest.is_empty() { "does" } else { "do" },
-                    self.model.kind_name()
-                ));
-            }
-            // Feature health reads no residual: it watches the features
-            // a fit's coefficients lean on (task 232 (14); review round
-            // 6, F-8).
-            if self.emit_feature_health {
-                health_refused = true;
-                no.refuse(format!(
-                    "spec {name:?}: emit_feature_health does not apply to {}, which fits no \
-                     coefficients of its features: it watches the features a fit's coefficients \
-                     lean on. Leave out emit_feature_health, and use ModelBank.check() or \
-                     rheon.spec.audit to watch the features themselves.",
-                    self.model.kind_name()
-                ));
-            }
-        }
-        // Each target's own weight is a target's: a model that learns from
-        // none, or writes no row a target's floor could withhold
-        // (`marginal`), has none to report (docs/PLAN.md task 568).
-        if self.emit_target_weight
-            && (self.model.is_unsupervised() || matches!(self.model, ModelKind::Marginal { .. }))
-        {
-            let why = if self.model.is_unsupervised() {
-                "which learns from no target"
-            } else {
-                "which writes no prediction a target's min_weight could withhold: its pairs are \
-                 read from the bank's state"
-            };
-            no.refuse(format!(
-                "spec {name:?}: emit_target_weight reports the weight each target's min_weight \
-                 reads, but it does not apply to {}, {why}. Leave out emit_target_weight.",
-                self.model.kind_name()
-            ));
-        }
-        // Feature health reads the features alone: a model with none would
-        // write no field, so the switch is refused rather than ignored
-        // (review round 6, F6).
-        if self.emit_feature_health && !health_refused && self.k() == 0 {
-            health_refused = true;
-            no.refuse(format!(
-                "spec {name:?}: emit_feature_health watches each feature's spread and mean, but \
-                 {} has no features. Leave out emit_feature_health.",
-                self.model.kind_name()
-            ));
-        }
-        // Run once the fast and the slow memory are both the whole stream,
-        // and every field would be null: refused rather than written null
-        // (task 232 (2); review round 6, B-4).
-        if self.emit_feature_health
-            && !health_refused
-            && let Some(decays) = &decays
-        {
-            let forgets = |d: Decay| match d {
-                Decay::Halflife(h) => h.is_finite(),
-                Decay::Lam(l) => l < 1.0,
-            };
-            let memory = self.feature_health_half_life.as_ref();
-            if decays
-                .iter()
-                .any(|(_, d)| !forgets(self.diagnostic_decay_of(memory, *d, 1)))
-            {
-                let rows_on_a_clock = matches!(
-                    self.model,
-                    ModelKind::Expectile {
-                        window_rows: Some(_),
-                        ..
-                    }
-                ) && self.clock.is_some();
-                let why = if memory.is_some() {
-                    "feature_health_half_life is inf"
-                } else if rows_on_a_clock {
-                    "its memory is the fit's, and window_rows counts rows, which are no span \
-                     of the clock column, while half_life is inf"
-                } else if self.lam.is_some() {
-                    "its memory is the fit's, which forgets nothing (lam is 1, with no \
-                     window_size)"
-                } else {
-                    "its memory is the fit's, which forgets nothing (half_life is inf, with no \
-                     window_size)"
-                };
-                no.refuse(format!(
-                    "spec {name:?}: emit_feature_health compares each feature at its memory with \
-                     four times that memory, but {why}, so both read the whole stream and every \
-                     field would be null. Set feature_health_half_life to a finite value."
-                ));
-            }
-        }
-        // Both choose across a target's slots, and one slot leaves nothing to
-        // choose: `emit_averaged` there was the slot's own prediction under
-        // another name, null on the first scored row (task 278).
-        // A model that predicts no target has no slots to choose among: its
-        // own refusal of the flag speaks.
-        if let Some(decays) = decays.as_ref().filter(|_| !self.model.predicts_no_target()) {
-            for (flag, on) in [
-                ("emit_selected", self.emit_selected),
-                ("emit_averaged", self.emit_averaged),
-            ] {
-                if !on {
-                    continue;
-                }
-                let n_slots = decays.len() * crate::combo_labels(self).len();
-                if n_slots < 2 {
-                    // Only the grids this model takes: every model takes a
-                    // half_life grid (`combos`, stream.rs).
-                    let grids = match self.model {
-                        ModelKind::EwRidge { .. } => "half_life, ridge or feature_sets",
-                        ModelKind::Huber { .. } => "half_life or feature_sets",
-                        ModelKind::Lasso { .. } => "half_life or penalties",
-                        _ => "half_life",
-                    };
-                    no.refuse(format!(
-                        "spec {name:?}: {flag} chooses among each target's slots, but this spec \
-                         has one slot per target. Give {grids} several values, or leave out \
-                         {flag}."
-                    ));
-                }
-            }
-        }
+        self.validate_diagnostics(decays.as_ref(), no);
         self.validate_model(no);
         Ok(())
     }

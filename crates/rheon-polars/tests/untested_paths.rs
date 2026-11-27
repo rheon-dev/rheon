@@ -1396,6 +1396,10 @@ fn kmeans_reports_the_seeding_runs_its_cap_stopped() {
         warm_clock: None,
         update_every: None,
         split_merge_every: None,
+        centers: None,
+        learn: true,
+        emit_distances: false,
+        emit_inertia: false,
     })
     .unwrap();
     let of = |m: KMeans| {

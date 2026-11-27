@@ -2187,6 +2187,10 @@ fn kmeans_cfg() -> KMeansCfg {
         warm_clock: None,
         update_every: None,
         split_merge_every: None,
+        centers: None,
+        learn: true,
+        emit_distances: false,
+        emit_inertia: false,
     }
 }
 
@@ -2229,6 +2233,7 @@ fn corrchange_cfg() -> CorrChangeCfg {
         span_clock: None,
         monitor_clock: None,
         max_state_bytes: None,
+        emit_n_flagged: false,
     }
 }
 

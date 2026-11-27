@@ -7087,6 +7087,96 @@ ideal = 0.0
 n = 50
 floor = 1e-12
 
+[group."smaller_options_oracles.kmeans_centers_inertia"]
+tests = [
+    "tests/test_smaller_options_oracles.py::test_kmeans_centers_distances_inertia_matches_sklearn_over_50_seeds",
+]
+oracles = { "scikit-learn" = "1.9.1" }
+dataset = ""
+
+[case."smaller_options_oracles.kmeans_centers_inertia.distances_abs_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."smaller_options_oracles.kmeans_centers_inertia.assignment_mismatches"]
+ideal = 0.0
+n = 50
+tolerance = 0.0
+
+[case."smaller_options_oracles.kmeans_centers_inertia.inertia_rel_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[group."smaller_options_oracles.ew_class_priors_reg_vs"]
+tests = [
+    "tests/test_smaller_options_oracles.py::test_ew_class_priors_reg_and_var_smoothing_match_sklearn_over_50_seeds",
+]
+oracles = { "scikit-learn" = "1.9.1" }
+dataset = ""
+
+[case."smaller_options_oracles.ew_class_priors_reg_vs.qda_priors_reg_abs_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."smaller_options_oracles.ew_class_priors_reg_vs.gnb_priors_vs_abs_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[group."smaller_options_oracles.holt_known_horizons"]
+tests = [
+    "tests/test_smaller_options_oracles.py::test_holt_known_start_forecast_spans_matches_statsmodels_over_50_seeds",
+]
+oracles = { "statsmodels" = "0.15.0" }
+dataset = ""
+
+[case."smaller_options_oracles.holt_known_horizons.forecast_abs_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."smaller_options_oracles.holt_known_horizons.forecast_sum_abs_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[group."smaller_options_oracles.corrchange_holm"]
+tests = [
+    "tests/test_smaller_options_oracles.py::test_corrchange_holm_matches_statsmodels_multipletests_over_50_seeds",
+]
+oracles = { "scipy" = "1.18.1", "statsmodels" = "0.15.0" }
+dataset = ""
+
+[case."smaller_options_oracles.corrchange_holm.holm_flag_mismatches"]
+ideal = 0.0
+n = 50
+tolerance = 0.0
+
+[case."smaller_options_oracles.corrchange_holm.holm_n_flagged_mismatches"]
+ideal = 0.0
+n = 50
+tolerance = 0.0
+
+[group."smaller_options_oracles.feature_ks"]
+tests = [
+    "tests/test_smaller_options_oracles.py::test_feature_ks_matches_scipy_exact_over_50_seeds",
+]
+oracles = { "scipy" = "1.18.1" }
+dataset = ""
+
+[case."smaller_options_oracles.feature_ks.ks_stat_abs_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."smaller_options_oracles.feature_ks.ks_p_exact_abs_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
 # --- raises
 
 [[raised]]

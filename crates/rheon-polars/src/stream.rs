@@ -4125,6 +4125,7 @@ struct Instance<'a> {
     o_conformal: &'a mut [f64],
     o_checks: &'a mut [f64],
     o_health: &'a mut [f64],
+    o_health_ks: &'a mut [f64],
     o_resid_q: &'a mut [f64],
     o_drift: &'a mut [bool],
     o_n_eff: &'a mut [f64],
@@ -5441,6 +5442,7 @@ fn run_instance(
                     inst.o_checks,
                 );
                 c.read_health(xs.len(), n_rows, ri, inst.o_health);
+                c.read_health_ks(xs.len(), n_rows, ri, inst.o_health_ks);
             }
             if learn {
                 c.learn(inst.check_cfg, d_clock, &row, &sc.z, w, diag_ready);

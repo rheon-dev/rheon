@@ -1133,6 +1133,8 @@ def _common(
     influence_half_life: float | Duration | None = None,
     emit_feature_health: bool = False,
     feature_health_half_life: float | Duration | None = None,
+    feature_ks_window: int | None = None,
+    feature_ks_recent: int | None = None,
     embargo: float | Duration | None = None,
     label_clock: str | Sequence[str] | None = None,
     max_held_rows: int | None = None,
@@ -1220,6 +1222,10 @@ def _common(
         spec["emit_target_weight"] = emit_target_weight
     if drift_options is not None:
         spec["drift_options"] = dict(drift_options)
+    if feature_ks_window is not None:
+        spec["feature_ks_window"] = feature_ks_window
+    if feature_ks_recent is not None:
+        spec["feature_ks_recent"] = feature_ks_recent
     validate_spec(_json(spec))
     return spec
 

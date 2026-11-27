@@ -136,6 +136,14 @@ MEANING: dict[str, str] = {
         "deviations under `standardize` and in the features' own units otherwise"
     ),
     "dist_second": "distance to the second-nearest center, so `dist_second - dist` is the margin",
+    "dist_<j>": (
+        "distance from the row to center `<j>`, in EW standard deviations under `standardize` "
+        "and in the features' own units otherwise"
+    ),
+    "inertia": (
+        "exponentially weighted sum of squared distances to the nearest center accumulated "
+        "before this row"
+    ),
     "micro_id": "id of the summary the row joins, or the one it opens when none can take it",
     "outlier": "true when no established summary takes the row",
     "n_clusters": "clusters currently linked",
@@ -234,6 +242,7 @@ MEANING: dict[str, str] = {
         "on a flag, the rows since the change it dates, through the flag's row from the first "
         "changed one"
     ),
+    "n_flagged": "count of pairs flagged at the adjusted level on the report",
     "p_change": (
         "`P(run length <= 1)` once this row's evidence is in: the mass sitting on a change at "
         "or just before this row, the one `bocpd` field read after the row"
@@ -311,6 +320,8 @@ ALSO_NULL: dict[str, str] = {
     "mahal": WITHHELD,
     "dist": "where `cluster` is",
     "dist_second": "where `cluster` is",
+    "dist_<j>": "where `cluster` is",
+    "inertia": "where `cluster` is",
     "micro_id": WITHHELD,
     "outlier": WITHHELD,
     "n_clusters": WITHHELD,
@@ -377,6 +388,7 @@ ALSO_NULL: dict[str, str] = {
         "(without `scalar`) where either column of the flagged pair is constant over the "
         "monitored rows before it"
     ),
+    "n_flagged": "where `flag` is",
     "p_change": WITHHELD,
     "run_mode": WITHHELD,
     "run_mean": WITHHELD,
@@ -453,7 +465,12 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
 #: switch, and the spec keywords that turn it on.
 SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
     "audit": ("distinct_precision=12", {"distinct_precision": 12}),
+    "corrchange": ("emit_n_flagged=True", {"emit_n_flagged": True}),
     "huber": ("emit_huber_scale=True", {"emit_huber_scale": True}),
+    "kmeans": (
+        "emit_distances=True, emit_inertia=True",
+        {"emit_distances": True, "emit_inertia": True},
+    ),
     "dcc": ('margins="garch"', {"margins": "garch"}),
     "ewm_moments": ("se=True", {"se": True}),
     "kalman": (
@@ -606,7 +623,8 @@ OPTIONAL: list[tuple[str, str]] = [
         "`emit_averaged`, `emit_drift`, `emit_metrics`, `emit_autocorr`, `resid_quantiles`, "
         "`conformal`, `emit_calibration`, `emit_breaks`, `emit_specification`, "
         "`emit_tails`, `emit_influence` (`ewridge`'s, `rls`'s and `kalman`'s), "
-        "`emit_feature_health` (not `holt`'s, which has no features)",
+        "`emit_feature_health`, and `feature_ks_window` / `feature_ks_recent` "
+        "(not `holt`'s, which has no features)",
         "[Is the model working?](DIAGNOSTICS.md), for the models that "
         "predict a target. `emit_metrics`' `hit_rate_<t>` is null throughout on an `sgd` "
         'fit with `loss="poisson"`, whose rate and count have no sign to hit',
@@ -970,6 +988,8 @@ def stem(
         rest = base.removeprefix("causality").removesuffix(f"_{kind}")
         if base.startswith("causality") and base.endswith(f"_{kind}") and rest.isdigit():
             return f"causality<i>_{kind}"
+    if base.startswith("dist_") and base[5:].isdigit():
+        return "dist_<j>"
     if base.startswith("p_") and base != "p_change":
         return "p_<label>"
     if base.startswith("pc") and "_" in base and base[2 : base.index("_")].isdigit():

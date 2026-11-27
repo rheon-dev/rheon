@@ -292,7 +292,8 @@ the diagnostics
     and ``ljung_box_lags``, ``horizon_rows`` beside any of those four,
     ``emit_tails`` with ``tails_half_life``, ``emit_influence`` with
     ``influence_half_life``, ``emit_feature_health`` with
-    ``feature_health_half_life``, and ``emit_clocks``. Each adds fields to the
+    ``feature_health_half_life``, ``feature_ks_window`` with
+    ``feature_ks_recent``, and ``emit_clocks``. Each adds fields to the
     output, listed below. A model with no residual refuses them by name, all
     but ``emit_clocks``. A ``*_half_life`` beside a switch is that diagnostic's
     own memory, in clock units: when left out, four times the fit's memory for
@@ -1086,6 +1087,16 @@ The diagnostics add, per slot:
        row (independent or AR(1) at 0.95); a move of one spread read
        ``|mean_shift| > 0.3`` on every stream within 190 rows, where an
        AR(1) feature at 0.95 read it on 6% of rows and above 0.5 on 0.03%.
+   * - ``feature_ks_window``, ``feature_ks_recent``
+     - ``ks_stat_<feature>``, ``ks_p_<feature>``, once per instance and
+       feature
+     - Exact two-sample Kolmogorov-Smirnov statistic and two-sided p-value
+       comparing the oldest ``feature_ks_window - feature_ks_recent``
+       positive-weight values of each feature against the newest
+       ``feature_ks_recent``, read before the row is learned. Independent of
+       ``emit_feature_health`` and works under ``half_life=inf``; null until
+       ``feature_ks_window`` positive-weight rows have been seen. Bounded to
+       256 KiB per group (``8 * feature_ks_window * k <= 262_144``).
 
 .. rubric:: Errors
 

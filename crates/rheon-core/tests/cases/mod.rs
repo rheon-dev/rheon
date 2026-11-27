@@ -842,6 +842,10 @@ fn kmeans_cfg() -> KMeansCfg {
         warm_clock: None,
         update_every: None,
         split_merge_every: None,
+        centers: None,
+        learn: true,
+        emit_distances: false,
+        emit_inertia: false,
     }
 }
 
@@ -952,6 +956,7 @@ fn corrchange_cfg(kind: CorrChangeKind) -> CorrChangeCfg {
         span_clock: None,
         monitor_clock: None,
         max_state_bytes: None,
+        emit_n_flagged: false,
     }
 }
 
@@ -2251,6 +2256,26 @@ pub fn all() -> Vec<Case> {
         ),
         // A multiplicative season and a damped trend, known.
         case!(
+            "holt_known_horizons",
+            "Holt",
+            Holt,
+            Holt::new(HoltCfg {
+                n_targets: 2,
+                level_half_life: H,
+                trend_half_life: 4.0 * H,
+                min_weight: 0.0,
+                horizons: vec![2.0, 5.0],
+                start: HoltStart::Known,
+                initial_level: vec![0.5, -0.5],
+                initial_trend: vec![0.02, -0.01],
+                ..Default::default()
+            })
+            .unwrap(),
+            0,
+            Targets::Linear(2),
+            40
+        ),
+        case!(
             "holt_season_mul_damped",
             "Holt",
             Holt,
@@ -2376,6 +2401,26 @@ pub fn all() -> Vec<Case> {
             Targets::None,
             40
         ),
+        // Fixed centers (frozen), distances to every center, and EW inertia.
+        case!(
+            "kmeans_centers_inertia",
+            "KMeans",
+            KMeans,
+            KMeans::new(KMeansCfg {
+                k: 2,
+                min_weight: 0.0,
+                standardize: false,
+                centers: Some(vec![vec![-1.0, 0.0], vec![1.0, 0.5]]),
+                learn: false,
+                emit_distances: true,
+                emit_inertia: true,
+                ..kmeans_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
         case!(
             "micro",
             "Micro",
@@ -2433,6 +2478,49 @@ pub fn all() -> Vec<Case> {
                 max_rows_between_snapshots: WINDOW.2,
                 ..ew_class_cfg()
             })
+            .unwrap(),
+            K,
+            Targets::Class(3),
+            40
+        ),
+        // Fixed priors and non-fading covariance regularizer (`reg_param`).
+        case!(
+            "ew_class_priors_reg",
+            "EwClass",
+            EwClass,
+            EwClass::with_opts(
+                EwClassCfg {
+                    precision_prior: 0.0,
+                    ..ew_class_cfg()
+                },
+                rheon_core::EwClassOpts {
+                    priors: Some(vec![0.2, 0.3, 0.5]),
+                    reg_param: Some(0.15),
+                    var_smoothing: None,
+                },
+            )
+            .unwrap(),
+            K,
+            Targets::Class(3),
+            40
+        ),
+        // Fixed priors and non-fading variance floor (`var_smoothing`) on diagonal.
+        case!(
+            "ew_class_var_smoothing",
+            "EwClass",
+            EwClass,
+            EwClass::with_opts(
+                EwClassCfg {
+                    covariance: Covariance::Diagonal,
+                    precision_prior: 0.0,
+                    ..ew_class_cfg()
+                },
+                rheon_core::EwClassOpts {
+                    priors: Some(vec![0.25, 0.25, 0.5]),
+                    reg_param: None,
+                    var_smoothing: Some(1e-2),
+                },
+            )
             .unwrap(),
             K,
             Targets::Class(3),
@@ -3057,6 +3145,21 @@ pub fn all() -> Vec<Case> {
                 permute_every_rows: usize::MAX,
                 permute_every: Some(5.0),
                 ..corrchange_cfg(CorrChangeKind::Window)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        // Holm-Bonferroni step-down adjustment with opt-in `n_flagged`.
+        case!(
+            "corrchange_holm",
+            "CorrChange",
+            CorrChange,
+            CorrChange::new(CorrChangeCfg {
+                alpha_adjust: "holm".into(),
+                emit_n_flagged: true,
+                ..corrchange_cfg(CorrChangeKind::Monitor)
             })
             .unwrap(),
             K,

@@ -98,9 +98,10 @@ def holt(
         clock of evenly spaced rows of equal weight, once the gains have
         stopped moving, and the model keeps no noise variance of its own. At most
         64, each finite and 0 or more; a name must not begin with
-        ``"sum"``. Refused beside ``seasonal``, ``damping_half_life`` or a
-        ``start`` other than ``"warm"``, whose forecasts are not a line to
-        integrate. Default none.
+        ``"sum"``. Supported on ``start="warm"`` and on ``start="known"``
+        without ``seasonal`` or ``damping_half_life``; refused beside
+        ``seasonal``, ``damping_half_life`` or ``start="heuristic"``. Default
+        none.
     ``seasonal``
         ``"add"`` adds a seasonal value to the level, ``"mul"`` multiplies
         the level by a seasonal factor; under ``"mul"`` every value must

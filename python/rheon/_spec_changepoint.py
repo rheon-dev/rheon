@@ -531,7 +531,7 @@ def corrchange(
     kind: Literal["monitor", "sequential", "window"] = "monitor",
     window_rows: int | None = None,
     alpha: float = 0.05,
-    alpha_adjust: Literal["bonferroni", "none"] = "bonferroni",
+    alpha_adjust: Literal["bonferroni", "holm", "none"] = "bonferroni",
     bandwidth: int | None = None,
     scalar: bool = False,
     crit: float | None = None,
@@ -547,6 +547,7 @@ def corrchange(
     window_size: float | Duration | None = None,
     monitor_span: float | Duration | None = None,
     max_state_bytes: int | None = None,
+    emit_n_flagged: bool = False,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Tests of whether the correlations between the feature columns have changed, by
@@ -604,13 +605,19 @@ def corrchange(
     ``alpha``, ``alpha_adjust``
         The level, in ``(0, 1)`` (default 0.05), and, under ``"monitor"`` and
         ``"sequential"``, how it is spread over the pairs: ``"bonferroni"``,
-        the default, ``alpha / npairs``, or ``"none"``, ``alpha`` on each pair.
+        the default, ``alpha / npairs``; ``"holm"``, Holm-Bonferroni step-down
+        over the ordered pairs; or ``"none"``, ``alpha`` on each pair.
         Under ``"window"`` one permutation statistic covers every pair at once,
         so there is nothing to spread, and an ``alpha_adjust`` other than the
         default is refused. Under ``"sequential"`` without ``crit`` each pair's
         share is refused below ``5e-11``: the critical value is solved from the
         boundary's law, and in a smaller tail the solve's quantile is off by
         more than the 0.03 Wied and Galeano's own table is good to.
+    ``emit_n_flagged``
+        When ``True``, emit ``n_flagged`` (``i64``), the number of pairs
+        flagged at the adjusted level (0 or 1 under ``scalar=True`` or
+        ``kind="window"``; null when no report is due or when withheld).
+        Default ``False``.
     ``bandwidth``
         ``"monitor"`` and ``"sequential"``: overrides the Bartlett bandwidth,
         ``floor(ln T)`` for a span or history of ``T`` rows. Lag ``l`` is
@@ -720,6 +727,9 @@ def corrchange(
         (without ``scalar``), it is null where either feature of the flagged
         pair is constant over the monitored rows before a ``"sequential"``
         flag, since a correlation then has no spread to divide by.
+    ``n_flagged``
+        Under ``emit_n_flagged=True``, the count of pairs flagged at the
+        adjusted level (``i64``); null when no report is due or withheld.
     ``weight_sum``
         The weight the model has accumulated before the row and before the
         row's own decay.
@@ -1212,5 +1222,7 @@ def corrchange(
     ):
         if value is not None:
             model[key] = value
+    if emit_n_flagged is not False:
+        model["emit_n_flagged"] = emit_n_flagged
     targets = _mirror_target(name, "corrchange", features, common, "its test is of")
     return _common(name, model, targets=targets, features=features, **common)

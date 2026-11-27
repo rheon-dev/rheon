@@ -119,6 +119,7 @@ Each question, the diagnostic that answers it, and its fields:
 | are its tails heavy? | `emit_tails` | `skew_<t>`, `kurtosis_<t>`, `jarque_bera_<t>` | [Are its tails heavy?](#are-its-tails-heavy) |
 | which row moved it? | `emit_influence` | `influence_<t>` | [Which row moved it?](#which-row-moved-it) |
 | are its features healthy? | `emit_feature_health` | `spread_ratio_<feature>`, `mean_shift_<feature>` | [Are its features healthy?](#are-its-features-healthy) |
+| has a feature's distribution shifted? | `feature_ks_window`, `feature_ks_recent` | `ks_stat_<feature>`, `ks_p_<feature>` | [Are its features healthy?](#are-its-features-healthy) |
 | is another model better? | `emit_metrics`, `emit_selected`, `emit_averaged`; `rp.eval` | `ic_<t>`, `r2_<t>`, `hit_rate_<t>`, `selected_<t>`, `pred_<t>__selected`, `pred_<t>__averaged` | [Is another model better?](#is-another-model-better) |
 | is it ready? | `min_weight`, `min_settled_frac`, `max_error_inflation`, `emit_error_inflation`, `emit_target_weight` | `weight_sum`, `settled_frac`, `withheld_reason`, `error_inflation_<t>`, `weight_<t>` | [Is it ready?](#is-it-ready) |
 | how wide is its error? | `emit_sigma`, `emit_zscore`, `resid_quantiles`, `conformal` | `sigma_<t>`, `zscore_<t>`, `abs_resid_q<p>_<t>`, `lo_<t>`, `hi_<t>`, `coverage_<t>` | [How wide is its error?](#how-wide-is-its-error) |
@@ -1025,6 +1026,15 @@ Under an embargo of 100 rows it fell below at row 1,646.
 [Check the health of a model's features](how-to/check-feature-health.md)
 freezes a feed, flags it about a thousand rows before `rls`'s coefficient
 runs away, and fixes a stale or moved feature.
+
+For a nonparametric two-sample check that works independently of
+`emit_feature_health` (and under `half_life=inf`), set `feature_ks_window`
+and `feature_ks_recent`. Each feature keeps a rolling ring of
+`feature_ks_window` positive-weight values (bounded to 256 KiB per group).
+Before each row is learned, it reports the exact two-sample
+Kolmogorov–Smirnov statistic `ks_stat_<feature>` and two-sided p-value
+`ks_p_<feature>`, comparing the older `feature_ks_window - feature_ks_recent`
+values against the newest `feature_ks_recent`.
 
 ## Is another model better?
 

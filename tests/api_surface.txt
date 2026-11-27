@@ -89,6 +89,8 @@
   influence_half_life = None
   emit_feature_health = False
   feature_health_half_life = None
+  feature_ks_window = None
+  feature_ks_recent = None
   embargo = None
   label_clock = None
   max_held_rows = None
@@ -165,6 +167,7 @@
     window_size = None
     monitor_span = None
     max_state_bytes = None
+    emit_n_flagged = False
     common
   dcc:
     name
@@ -208,12 +211,15 @@
     label
     classes
     covariance_type = 'full'
-    precision_prior
+    precision_prior = None
     window_size = None
     closed = 'right'
     snapshot_every = None
     max_rows_between_snapshots = None
     window_budget = None
+    priors = None
+    reg_param = None
+    var_smoothing = None
     common
   ew_cov:
     name
@@ -419,7 +425,7 @@
   kmeans:
     name
     features
-    n_clusters
+    n_clusters = None
     warm_rows = None
     init = None
     seed = None
@@ -427,11 +433,15 @@
     split_merge = None
     split_merge_every_rows = None
     dead_frac = None
-    standardize = True
+    standardize = None
     scale_floor = None
     warm_span = None
     update_every = None
     split_merge_every = None
+    centers = None
+    learn = None
+    emit_distances = False
+    emit_inertia = False
     common
   lasso:
     name
@@ -3255,7 +3265,7 @@
   spec.held_overflow: drop_oldest, refuse
   spec.session_gap: reset
   bocpd.covariance_type: diag, full
-  corrchange.alpha_adjust: bonferroni, none
+  corrchange.alpha_adjust: bonferroni, holm, none
   corrchange.kind: monitor, sequential, window
   corrchange.norm: l1, linf
   corrchange.change_action: flag, reset
@@ -3403,6 +3413,8 @@
     emit_target_weight
     emit_zscore
     feature_health_half_life
+    feature_ks_recent
+    feature_ks_window
     features
     fit_intercept
     gap_cap
@@ -3437,11 +3449,11 @@
     ar: closed, lags, max_rows_between_snapshots, max_state_bytes, ridge, select, snapshot_every, window_budget, window_size
     audit: closed, distinct_cap, distinct_precision, distinct_window_rows, distinct_window_size, max_state_bytes, pairs
     bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, hazard_rows, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
-    corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, max_state_bytes, monitor_rows, monitor_span, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows, window_size
+    corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, emit_n_flagged, kind, max_state_bytes, monitor_rows, monitor_span, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows, window_size
     dcc: a, asymmetric, b, dist, g, margin_start_rows, margin_start_span, margins, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     ddsketch: alpha, closed, max_state_bytes, quantiles, window_rows, window_size
     deco: alpha, beta, blocks, dynamics
-    ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size
+    ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, priors, reg_param, snapshot_every, var_smoothing, window_budget, window_size
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size
     ewm_moments: bias, kind, lag_tolerance, max_state_bytes, se, terms, window_rows, window_size
     ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
@@ -3455,7 +3467,7 @@
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, max_rows_between_solves, max_state_bytes, refit_budget, ridge, ridge_scale, solve_every, standardize
     isotonic: closed, increasing, max_state_bytes, out_of_bounds, window_rows, window_size, y_max, y_min
     kalman: coef_half_life, covariance_form, emit_smoothed_se, forecast_spans, max_state_bytes, obs_var, p0, q, revert_half_life, share_p, smooth_lag, standardize
-    kmeans: dead_frac, init, n_clusters, scale_floor, seed, split_merge, split_merge_every, split_merge_every_rows, standardize, update_every, update_every_rows, warm_rows, warm_span
+    kmeans: centers, dead_frac, emit_distances, emit_inertia, init, learn, n_clusters, scale_floor, seed, split_merge, split_merge_every, split_merge_every_rows, standardize, update_every, update_every_rows, warm_rows, warm_span
     lasso: closed, l1_ratio, max_iter, max_rows_between_snapshots, max_rows_between_solves, penalties, select_half_life, snapshot_every, solve_every, target_gaps, tol, window_budget, window_size
     marginal: bin_budget, bin_edges, bin_huber_delta, bin_refit_rows, bin_rule, bin_stat, bin_warm_rows, bins, closed, cross_lags, feature_moments, lags, max_rows_between_snapshots, refit_budget, serial_rule, shards, snapshot_every, window_budget, window_lags, window_size
     micro: beta_mu, eps, macro_link, max_clusters, max_rows_between_prunes, prune_every, scale_floor, standardize

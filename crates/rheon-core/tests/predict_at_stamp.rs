@@ -331,6 +331,7 @@ fn ddsketch_and_corrchange_predict_at_and_on_rows() {
         span_clock: Some(0.9),
         monitor_clock: None,
         max_state_bytes: None,
+        emit_n_flagged: false,
     })
     .unwrap();
     let pts = [

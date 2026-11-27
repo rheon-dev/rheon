@@ -49,6 +49,12 @@ pub(super) fn build_instances<'a>(
         0
     };
     let mut o_health = out.health.chunks_mut(health_block.max(1));
+    let health_ks_block = if spec.has_feature_ks() {
+        2 * spec.k() * n_rows
+    } else {
+        0
+    };
+    let mut o_health_ks = out.health_ks.chunks_mut(health_ks_block.max(1));
     let mut o_resid_q = out.resid_q.chunks_mut((out.n_levels * block).max(1));
     let mut o_drift = out.drift.chunks_mut(block.max(1));
     let mut o_n_eff = out.n_eff.chunks_mut(n_rows.max(1));
@@ -119,6 +125,7 @@ pub(super) fn build_instances<'a>(
             o_conformal: o_conformal.next().unwrap_or_default(),
             o_checks: o_checks.next().unwrap_or_default(),
             o_health: o_health.next().unwrap_or_default(),
+            o_health_ks: o_health_ks.next().unwrap_or_default(),
             o_resid_q: o_resid_q.next().unwrap_or_default(),
             o_drift: o_drift.next().unwrap_or_default(),
             o_n_eff: o_n_eff.next().unwrap_or_default(),

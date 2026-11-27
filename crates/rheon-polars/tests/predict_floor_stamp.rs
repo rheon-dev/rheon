@@ -725,6 +725,7 @@ fn corrchange_window_and_monitor_scored_rows_read_at_stamp() {
                 span_clock: Some(span),
                 monitor_clock: None,
                 max_state_bytes: None,
+                emit_n_flagged: false,
             };
             let mut m = CorrChange::new(cfg).unwrap();
             let mut last: Option<f64> = None;
@@ -823,6 +824,7 @@ fn corrchange_window_and_monitor_scored_rows_read_at_stamp() {
         span_clock: Some(0.9),
         monitor_clock: None,
         max_state_bytes: None,
+        emit_n_flagged: false,
     })
     .unwrap();
     for k in 0..ts.len() - 1 {

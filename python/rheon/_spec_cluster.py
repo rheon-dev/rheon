@@ -11,6 +11,7 @@ from typing import Any, Literal, Unpack
 from rheon._duration import Duration
 from rheon._kwargs import CommonKwargs
 from rheon._spec import _checked, _common, _mirror_target
+from rheon._spec_words import quoted
 
 
 @_checked
@@ -18,7 +19,7 @@ def kmeans(
     name: str,
     *,
     features: list[str],
-    n_clusters: int,
+    n_clusters: int | None = None,
     warm_rows: int | None = None,
     init: Literal["first", "farthest", "k-means++", "lloyd"] | None = None,
     seed: int | None = None,
@@ -26,11 +27,15 @@ def kmeans(
     split_merge: float | None = None,
     split_merge_every_rows: int | None = None,
     dead_frac: float | None = None,
-    standardize: bool = True,
+    standardize: bool | None = None,
     scale_floor: float | None = None,
     warm_span: float | Duration | None = None,
     update_every: float | Duration | None = None,
     split_merge_every: float | Duration | None = None,
+    centers: list[list[float]] | None = None,
+    learn: bool | None = None,
+    emit_distances: bool = False,
+    emit_inertia: bool = False,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Exponentially weighted k-means over the feature columns.
@@ -52,8 +57,29 @@ def kmeans(
     ``conformal``, drift and the rest. This model's own:
 
     ``n_clusters``
-        The number of centers. Required, at least 1, and at most 65,536
-        (2^16): every row is compared with every center.
+        The number of centers. Required unless ``centers`` is given (where it
+        defaults to ``len(centers)``), at least 1, and at most 65,536 (2^16):
+        every row is compared with every center.
+    ``centers``, ``learn``
+        Fixed centers to score against without fitting: a list of
+        ``n_clusters`` rows, each with one finite coordinate per feature.
+        Given ``centers`` are frozen (``learn=False`` by default; ``learn=True``
+        beside ``centers`` is refused, and ``learn=False`` without ``centers``
+        is refused). With ``centers``, ``standardize`` defaults to ``False``
+        so Euclidean distances match ``KMeans.transform(X)`` directly unless
+        ``standardize=True`` is explicitly requested, ``min_weight`` defaults
+        to ``0``, and seeding or update parameters (``warm_rows``, ``warm_span``,
+        ``init``, ``seed``, ``update_every_rows``, ``update_every``,
+        ``split_merge``, ``split_merge_every_rows``, ``split_merge_every``,
+        ``dead_frac``) are refused.
+    ``emit_distances``
+        When ``True``, also emit ``dist_0`` through ``dist_<n_clusters - 1>``,
+        the distance from the row to each center in the active metric. Default
+        ``False``.
+    ``emit_inertia``
+        When ``True``, also emit ``inertia``, the exponentially weighted sum of
+        squared distances to the nearest center, read before the row folds in
+        (matching ``-KMeans.score(X, sample_weight=w)``). Default ``False``.
     ``warm_rows``, ``init``, ``seed``
         Seeding. The first ``warm_rows`` learned rows are held, at least
         ``n_clusters``: a smaller value is refused. Default 500, or
@@ -167,6 +193,12 @@ def kmeans(
         margin. Under ``standardize`` it is in units of each feature's
         exponentially weighted (EW) standard deviation, and otherwise in the
         features' own units.
+    ``dist_<j>``
+        Under ``emit_distances=True``, the distance to center ``j`` for each
+        ``j`` in ``0 .. n_clusters - 1``.
+    ``inertia``
+        Under ``emit_inertia=True``, the exponentially weighted sum of squared
+        distances to the nearest center accumulated before the row.
     ``weight_sum``
         The weight the model has accumulated before the row and before the
         row's own decay.
@@ -318,6 +350,16 @@ def kmeans(
     bound moves it by a factor of 26 at most, which a few of its half-lives
     undo.
     """
+    if n_clusters is None:
+        if centers is not None:
+            n_clusters = len(centers)
+        else:
+            msg = (
+                f"spec {quoted(name)}: n_clusters is required unless centers is given. "
+                "Set n_clusters to the number of clusters to fit, or pass centers."
+            )
+            raise ValueError(msg)
+    std_val = (centers is None) if standardize is None else standardize
     model: dict[str, Any] = {
         "type": "kmeans",
         "n_clusters": n_clusters,
@@ -328,7 +370,7 @@ def kmeans(
         "split_merge": split_merge,
         "split_merge_every_rows": split_merge_every_rows,
         "dead_frac": dead_frac,
-        "standardize": standardize,
+        "standardize": std_val,
         "scale_floor": scale_floor,
     }
     # Written only when given, as the Rust spec leaves them out when absent.
@@ -336,9 +378,15 @@ def kmeans(
         ("warm_span", warm_span),
         ("update_every", update_every),
         ("split_merge_every", split_merge_every),
+        ("centers", centers),
+        ("learn", learn),
     ]:
         if value is not None:
             model[key] = value
+    if emit_distances is not False:
+        model["emit_distances"] = emit_distances
+    if emit_inertia is not False:
+        model["emit_inertia"] = emit_inertia
     targets = _mirror_target(name, "kmeans", features, common, "its clusters are over")
     return _common(name, model, targets=targets, features=features, **common)
 

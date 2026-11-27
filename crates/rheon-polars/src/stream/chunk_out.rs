@@ -37,6 +37,10 @@ pub struct ChunkOut {
     /// feature, not per slot: `n_models * 2 * k * n_rows`, the spread
     /// ratios' block and then the mean shifts' (task 221 (g)).
     pub health: Vec<f64>,
+    /// Windowed two-sample KS feature health under `feature_ks_window` /
+    /// `feature_ks_recent`, per instance and feature: `n_models * 2 * k * n_rows`,
+    /// the statistics' block and then the p-values'.
+    pub health_ks: Vec<f64>,
     /// Model-major: `n_models * n_levels * n_slots * n_rows`.
     pub resid_q: Vec<f64>,
     pub drift: Vec<bool>,
@@ -145,6 +149,11 @@ impl Buffers {
             } else {
                 0
             }
+            + if spec.has_feature_ks() {
+                n_models * 2 * spec.k()
+            } else {
+                0
+            }
             + self.n_levels * per
             + n_models
             + n_models
@@ -180,6 +189,7 @@ impl ChunkOut {
             conformal: Vec::new(),
             checks: Vec::new(),
             health: Vec::new(),
+            health_ks: Vec::new(),
             resid_q: Vec::new(),
             drift: Vec::new(),
             n_eff: Vec::new(),
@@ -293,6 +303,12 @@ impl ChunkOut {
             0
         };
         fill(&mut self.health, health, f64::NAN);
+        let health_ks = if spec.has_feature_ks() {
+            n_models * 2 * spec.k() * n_rows
+        } else {
+            0
+        };
+        fill(&mut self.health_ks, health_ks, f64::NAN);
         fill(&mut self.resid_q, n_levels * per, f64::NAN);
         fill(&mut self.drift, on(spec.emit_drift), false);
         written(dense, &mut self.n_eff, n_models * n_rows, f64::NAN);
@@ -362,6 +378,7 @@ impl ChunkOut {
                 &self.conformal,
                 &self.checks,
                 &self.health,
+                &self.health_ks,
                 &self.resid_q,
                 &self.n_eff,
                 &self.lam_selected,

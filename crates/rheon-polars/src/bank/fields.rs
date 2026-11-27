@@ -99,6 +99,8 @@ pub(super) enum Source {
     /// `(which of spread_ratio/mean_shift, instance, feature)`, in the
     /// `health` buffer (task 221 (g)).
     Health(usize, usize, usize),
+    /// `(which of ks_stat/ks_p, instance, feature)`, in the `health_ks` buffer.
+    HealthKs(usize, usize, usize),
     Quantile(usize),
     Autocorr(usize),
     NEff(usize),
@@ -1065,8 +1067,14 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
     // kmeans is not a regression either: per instance, the nearest centre
     // and two distances (read before the row is learned), `n_eff`, and the
     // centres as `coef`.
-    if matches!(spec.model, crate::ModelKind::KMeans { .. }) {
-        let n_slots = 3;
+    if let crate::ModelKind::KMeans {
+        k,
+        emit_distances,
+        emit_inertia,
+        ..
+    } = &spec.model
+    {
+        let n_slots = 3 + if *emit_distances { *k } else { 0 } + usize::from(*emit_inertia);
         let mut fields = Vec::new();
         for (mi, (suffix, d)) in decays.iter().enumerate() {
             let over = |mut f: FieldMeta| {
@@ -1088,6 +1096,24 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                     .decay(suffix, d)
                     .src(Source::Stat(mi * n_slots + 2)),
             ));
+            let mut slot = 3;
+            if *emit_distances {
+                for j in 0..*k {
+                    let mut m = FieldMeta::new(format!("dist_{j}{suffix}"), "dist_center")
+                        .decay(suffix, d)
+                        .src(Source::Stat(mi * n_slots + slot));
+                    m.component = Some(j);
+                    fields.push(over(m));
+                    slot += 1;
+                }
+            }
+            if *emit_inertia {
+                fields.push(over(
+                    FieldMeta::new(format!("inertia{suffix}"), "inertia")
+                        .decay(suffix, d)
+                        .src(Source::Stat(mi * n_slots + slot)),
+                ));
+            }
             fields.push(
                 FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
                     .decay(suffix, d)
@@ -1204,8 +1230,8 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
     // statistic, its critical value, the flag, the rows since the last one
     // and, on a flag, the rows since the change it dates. Nothing is
     // reported except where a statistic is due.
-    if matches!(spec.model, crate::ModelKind::CorrChange { .. }) {
-        let labels = rheon_core::CorrChange::labels();
+    if let crate::ModelKind::CorrChange { emit_n_flagged, .. } = &spec.model {
+        let labels = rheon_core::CorrChange::labels_for(*emit_n_flagged);
         let n_slots = labels.len();
         let mut fields = Vec::new();
         for (mi, (suffix, d)) in decays.iter().enumerate() {
@@ -1213,7 +1239,7 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 let at = mi * n_slots + slot;
                 let src = match l.as_str() {
                     "flag" => Source::Flag(at),
-                    "since_flag" | "since_change" => Source::Id(at),
+                    "since_flag" | "since_change" | "n_flagged" => Source::Id(at),
                     _ => Source::Stat(at),
                 };
                 let mut m = FieldMeta::new(format!("{l}{suffix}"), l)
@@ -1832,6 +1858,17 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                     let mut m = FieldMeta::new(format!("{kind}_{f}{suffix}"), kind)
                         .decay(suffix, d)
                         .src(Source::Health(which, mi, fi));
+                    m.columns = Some(vec![f.clone()]);
+                    fields.push(m);
+                }
+            }
+        }
+        if spec.has_feature_ks() {
+            for (which, kind) in ["ks_stat", "ks_p"].into_iter().enumerate() {
+                for (fi, f) in spec.features.iter().enumerate() {
+                    let mut m = FieldMeta::new(format!("{kind}_{f}{suffix}"), kind)
+                        .decay(suffix, d)
+                        .src(Source::HealthKs(which, mi, fi));
                     m.columns = Some(vec![f.clone()]);
                     fields.push(m);
                 }

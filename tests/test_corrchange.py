@@ -404,7 +404,10 @@ def test_a_zero_weight_row_is_not_a_row_of_the_span():
         ({"window_rows": None}, 'kind="monitor" needs window_rows, .*but it is not set'),
         ({"kind": "nope"}, 'kind must be "monitor", "sequential" or "window", but it is "nope"'),
         ({"alpha": 1.5}, "alpha must be above 0 and below 1, but it is 1.5"),
-        ({"alpha_adjust": "nope"}, 'alpha_adjust must be "bonferroni" or "none", but it is "nope"'),
+        (
+            {"alpha_adjust": "nope"},
+            'alpha_adjust must be "bonferroni", "holm" or "none", but it is "nope"',
+        ),
         (
             {"kind": "window", "window_rows": None},
             'kind="window" needs window_rows, .*but it is not set',

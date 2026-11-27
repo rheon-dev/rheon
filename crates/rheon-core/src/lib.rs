@@ -102,6 +102,7 @@ pub mod gramfit;
 mod hasher;
 mod hawkes;
 mod health;
+mod health_ks;
 mod held_median;
 mod hmm;
 mod holt;
@@ -194,7 +195,7 @@ pub use drift::{
     Adwin, AdwinCfg, AdwinRange, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg,
     PageHinkley, ks_critical_h, ks_equal_tail,
 };
-pub use ewclass::{Covariance, EwClass, EwClassCfg};
+pub use ewclass::{Covariance, EwClass, EwClassCfg, EwClassOpts};
 pub use ewcov::{
     EwCov, EwCovCfg, EwCovDiag, EwCovModel, EwCovStat, LowerTriangle, Pca, TargetMoments,
     partial_corr, variance_is_usable,
@@ -229,6 +230,10 @@ pub use hawkes::{
     STATE_BYTES_CEILING as HAWKES_STATE_BYTES_CEILING,
 };
 pub use health::FeatureHealth;
+pub use health_ks::{
+    FEATURE_KS_MAX_STATE_BYTES, FeatureHealthKs, feature_ks_state_bytes, ks_2samp_pvalue_in,
+    ks_2samp_stat_sorted,
+};
 pub use hmm::{EwFactor, Hmm, HmmCfg, Stabilized};
 pub use holt::{
     HOLT_MAX_HORIZONS, HOLT_MAX_STATE_BYTES, HOLT_STATE_BYTES_CEILING, Holt, HoltCfg, HoltSeason,

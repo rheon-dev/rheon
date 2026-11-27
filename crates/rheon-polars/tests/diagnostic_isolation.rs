@@ -230,6 +230,16 @@ const CASES: &[Case] = &[
         "emit_feature_health = true\nfeature_health_half_life = 20.0",
         Some("feature_health"),
     ),
+    case(
+        "feature_ks",
+        "feature_ks_window = 30\nfeature_ks_recent = 10",
+        None,
+    ),
+    case(
+        "feature_ks_recent",
+        "feature_ks_window = 30\nfeature_ks_recent = 15",
+        Some("feature_ks"),
+    ),
     leverage("error_inflation", "emit_error_inflation = true", None),
     leverage("se_coef", "emit_se_coef = true", None),
     leverage("influence", "emit_influence = true", None),

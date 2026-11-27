@@ -520,6 +520,7 @@ impl Spec {
             ModelKind::KMeans {
                 k,
                 init,
+                seed,
                 update_every_rows,
                 split_merge,
                 split_merge_every_rows,
@@ -528,7 +529,12 @@ impl Spec {
                 scale_floor,
                 warm_rows,
                 warm_span,
-                ..
+                update_every,
+                split_merge_every,
+                centers,
+                learn,
+                emit_distances: _,
+                emit_inertia: _,
             } => {
                 if warm_rows.is_some() && warm_span.is_some() {
                     no.refuse(format!(
@@ -541,6 +547,65 @@ impl Spec {
                     no.refuse(format!(
                         "spec {:?}: n_clusters must be at least 1, but it is 0. Set n_clusters \
                      to the number of clusters to fit.",
+                        self.name
+                    ));
+                }
+                if let Some(cs) = centers {
+                    if *learn == Some(true) {
+                        no.refuse(format!(
+                            "spec {:?}: learn=True cannot be set with centers: given centers are \
+                             frozen. Leave out learn or set learn=False.",
+                            self.name
+                        ));
+                    }
+                    if *k > 0 && cs.len() != *k {
+                        no.refuse(format!(
+                            "spec {:?}: centers has {} rows, expected n_clusters ({}). Pass one \
+                             center per cluster.",
+                            self.name,
+                            cs.len(),
+                            k
+                        ));
+                    }
+                    if cs.iter().any(|c| c.len() != self.k()) {
+                        no.refuse(format!(
+                            "spec {:?}: every center in centers must have one coordinate per \
+                             feature ({}). Pass one coordinate per feature for every center.",
+                            self.name,
+                            self.k()
+                        ));
+                    }
+                    if cs.iter().flatten().any(|v| !v.is_finite()) {
+                        no.refuse(format!(
+                            "spec {:?}: centers must hold finite numbers. Pass finite coordinates \
+                             in every center.",
+                            self.name
+                        ));
+                    }
+                    for (param, set) in [
+                        ("warm_rows", warm_rows.is_some()),
+                        ("warm_span", warm_span.is_some()),
+                        ("init", init.is_some()),
+                        ("seed", seed.is_some()),
+                        ("update_every_rows", update_every_rows.is_some()),
+                        ("update_every", update_every.is_some()),
+                        ("split_merge", split_merge.is_some()),
+                        ("split_merge_every_rows", split_merge_every_rows.is_some()),
+                        ("split_merge_every", split_merge_every.is_some()),
+                        ("dead_frac", dead_frac.is_some()),
+                    ] {
+                        if set {
+                            no.refuse(format!(
+                                "spec {:?}: {param} applies only when fitting centers from the \
+                                 stream, not with fixed centers. Leave {param} out.",
+                                self.name
+                            ));
+                        }
+                    }
+                } else if *learn == Some(false) {
+                    no.refuse(format!(
+                        "spec {:?}: learn=False requires centers to score against. Pass centers, \
+                         or leave out learn.",
                         self.name
                     ));
                 }
@@ -596,7 +661,8 @@ impl Spec {
                     None,
                 ));
                 }
-                if *standardize == Some(false) && scale_floor.is_some() {
+                let std_on = standardize.unwrap_or(centers.is_none());
+                if !std_on && scale_floor.is_some() {
                     no.refuse(format!(
                         "spec {:?}: scale_floor floors the variances that distances are measured \
                      in under standardize=True, but standardize is False, which measures in \
@@ -698,6 +764,9 @@ impl Spec {
                 max_rows_between_snapshots: _,
                 window_budget: _,
                 closed: _,
+                priors,
+                reg_param,
+                var_smoothing,
             } => {
                 if let Some(w) = window
                     && (!w.value().is_finite() || w.value() <= 0.0)
@@ -740,14 +809,28 @@ impl Spec {
                         self.name
                     ));
                 }
-                if let Some(c) = covariance_type {
-                    no.take(
-                        rheon_core::Covariance::parse(c)
-                            .map(|_| ())
-                            .map_err(|e| format!("spec {:?}: {e}", self.name)),
-                    );
-                }
-                if !(precision_prior.is_finite() && *precision_prior > 0.0) {
+                let cov_parsed = match covariance_type {
+                    Some(c) => match rheon_core::Covariance::parse(c) {
+                        Ok(cv) => Some(cv),
+                        Err(e) => {
+                            no.refuse(format!("spec {:?}: {e}", self.name));
+                            None
+                        }
+                    },
+                    None => Some(rheon_core::Covariance::Full),
+                };
+                let has_reg = reg_param.is_some() || var_smoothing.is_some();
+                if has_reg {
+                    if !(precision_prior.is_finite() && *precision_prior >= 0.0) {
+                        no.refuse(format!(
+                            "spec {:?}: precision_prior must be finite and at least 0 when \
+                             reg_param or var_smoothing is set, but it is {}. Set \
+                             precision_prior to 0 or a positive ridge.",
+                            self.name,
+                            num_label(*precision_prior)
+                        ));
+                    }
+                } else if !(precision_prior.is_finite() && *precision_prior > 0.0) {
                     no.refuse(format!(
                         "spec {:?}: precision_prior must be finite and above 0, but it is {}. \
                      Set precision_prior to the positive ridge each class's covariance \
@@ -755,6 +838,70 @@ impl Spec {
                         self.name,
                         num_label(*precision_prior)
                     ));
+                }
+                if let Some(r) = reg_param
+                    && !(r.is_finite() && (0.0..=1.0).contains(r))
+                {
+                    no.refuse(format!(
+                        "spec {:?}: reg_param must be finite and between 0 and 1, but it is {}. \
+                         Set reg_param to a fraction in [0, 1], such as 0.1.",
+                        self.name,
+                        num_label(*r)
+                    ));
+                }
+                if let Some(v) = var_smoothing {
+                    if !(v.is_finite() && *v >= 0.0) {
+                        no.refuse(format!(
+                            "spec {:?}: var_smoothing must be finite and at least 0, but it is \
+                             {}. Set var_smoothing to a non-negative fraction such as 1e-9.",
+                            self.name,
+                            num_label(*v)
+                        ));
+                    }
+                    if let Some(cv) = cov_parsed
+                        && cv != rheon_core::Covariance::Diagonal
+                    {
+                        no.refuse(format!(
+                            "spec {:?}: var_smoothing applies only under covariance_type=\"diag\", \
+                             but covariance_type is {:?}. Set covariance_type=\"diag\", or leave \
+                             var_smoothing out.",
+                            self.name,
+                            cv.name()
+                        ));
+                    }
+                    if reg_param.is_some() {
+                        no.refuse(format!(
+                            "spec {:?}: var_smoothing and reg_param cannot both be set: each sets \
+                             a different non-fading diagonal regularizer. Leave one of them out.",
+                            self.name
+                        ));
+                    }
+                }
+                if let Some(ps) = priors {
+                    if ps.len() != classes.len() {
+                        no.refuse(format!(
+                            "spec {:?}: priors must list one probability per class ({}), but it \
+                             lists {}. Give one positive probability per class, summing to 1.",
+                            self.name,
+                            classes.len(),
+                            ps.len()
+                        ));
+                    } else if ps.iter().any(|p| !(p.is_finite() && *p > 0.0)) {
+                        no.refuse(format!(
+                            "spec {:?}: priors must each be finite and above 0. Set every class \
+                             prior to a positive probability summing to 1.",
+                            self.name
+                        ));
+                    } else {
+                        let sum: f64 = ps.iter().sum();
+                        if (sum - 1.0).abs() > 1e-6 {
+                            no.refuse(format!(
+                                "spec {:?}: priors must sum to 1, but they sum to {sum}. Set \
+                                 priors so their sum is 1.",
+                                self.name
+                            ));
+                        }
+                    }
                 }
             }
             // Checked above, with the features: its refusals come before the

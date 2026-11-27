@@ -1263,6 +1263,54 @@ fn audit_hll_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&audit_hll_specs(), bytes, input)
 }
 
+/// The specs of `bank_plan525`: `kmeans` given centers with `emit_distances`
+/// and `emit_inertia`, `ew_class` with `priors` + `reg_param` and
+/// `var_smoothing`, `holt` with `start = "known"` and `forecast_spans`,
+/// `corrchange` with `alpha_adjust = "holm"` and `emit_n_flagged`, and
+/// standalone `feature_ks_window` / `feature_ks_recent`.
+fn plan525_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "km_fixed", "model": {"type": "kmeans", "n_clusters": 2, "centers": [[-0.5, 0.0], [0.5, 0.0]], "learn": false, "standardize": false, "emit_distances": true, "emit_inertia": true}, "targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "group": "g"}"#,
+        r#"{"name": "cls_reg", "model": {"type": "ew_class", "classes": ["0", "1"], "covariance_type": "full", "precision_prior": 0.0, "priors": [0.4, 0.6], "reg_param": 0.15}, "targets": ["lab"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "group": "g"}"#,
+        r#"{"name": "cls_vs", "model": {"type": "ew_class", "classes": ["0", "1"], "covariance_type": "diag", "precision_prior": 0.0, "priors": [0.3, 0.7], "var_smoothing": 0.01}, "targets": ["lab"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "group": "g"}"#,
+        r#"{"name": "holt_kh", "model": {"type": "holt", "start": "known", "initial_level": 0.0, "initial_trend": 0.05, "forecast_spans": [2.0, 5.0]}, "targets": ["y"], "features": [], "clock": "t", "half_life": 10.0, "gap_cap": 50.0, "min_weight": 0.0, "group": "g"}"#,
+        r#"{"name": "cc_holm", "model": {"type": "corrchange", "kind": "monitor", "window_rows": 12, "alpha_adjust": "holm", "emit_n_flagged": true}, "targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
+        r#"{"name": "ks_health", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": "inf", "gap_cap": 50.0, "feature_ks_window": 16, "feature_ks_recent": 6, "group": "g"}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn plan525_frame() -> DataFrame {
+    let mut df = frame();
+    let lab: Vec<&str> = df
+        .column("y")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .iter()
+        .map(|v| if v.unwrap_or(0.0) >= 0.0 { "1" } else { "0" })
+        .collect();
+    df.with_column(Series::new("lab".into(), lab).into())
+        .unwrap();
+    df
+}
+
+fn plan525_first() -> (Vec<u8>, DataFrame) {
+    let df = plan525_frame();
+    let mut bank = Bank::new(plan525_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn plan525_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&plan525_specs(), bytes, input)
+}
+
 /// The specs of `bank_bocpd_hazard` (PLAN 547): `bocpd`'s two hazards,
 /// grouped on `bank_refit`'s stream and number clock, the per-row count
 /// `hazard_rows` and a number `hazard`, clock units, which a number clock
@@ -2923,6 +2971,11 @@ fn kinds() -> Vec<Kind> {
             run: audit_hll_run,
         },
         Kind {
+            name: "bank_plan525",
+            first: plan525_first,
+            run: plan525_run,
+        },
+        Kind {
             name: "with_windows",
             first: windows_first,
             run: windows_run,
@@ -3558,7 +3611,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 21),
+            ("bank", 22),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),
@@ -5353,6 +5406,27 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             "a clock-windowed sliding HLL++",
             |p, _| p.contains(".Audit.hll.sketches.SlidingClock.cols.0.entries."),
         ),
+        // PLAN 525: kmeans fixed centers + inertia, ew_class opts, holt known +
+        // horizons, corrchange holm + n_flagged, and standalone feature KS.
+        ("bank_plan525", "kmeans EW inertia state", |p, v| {
+            p.ends_with(".KMeans.inertia.w") && v.as_f64().is_some_and(|w| w > 0.0)
+        }),
+        (
+            "bank_plan525",
+            "ew_class fixed priors and reg_param",
+            |p, v| p.ends_with(".EwClass.opts.reg_param") && v.as_f64() == Some(0.15),
+        ),
+        ("bank_plan525", "ew_class var_smoothing", |p, v| {
+            p.ends_with(".EwClass.opts.var_smoothing") && v.as_f64() == Some(0.01)
+        }),
+        (
+            "bank_plan525",
+            "corrchange holm + emit_n_flagged",
+            |p, v| p.ends_with(".CorrChange.cfg.emit_n_flagged") && v.as_bool() == Some(true),
+        ),
+        ("bank_plan525", "standalone feature KS window", |p, v| {
+            p.ends_with(".checks.0.health_ks.window") && v.as_u64() == Some(16)
+        }),
     ];
     for (kind, form, holds) in FORMS {
         let f = frozen::ALL

@@ -3,7 +3,10 @@
 
 use rheon_core::Decay;
 
-use super::Spec;
+use super::{
+    ConformalRate, CountOrAuto, DriftKind, Got, ModelClosed, ModelKind, Spec, WindowBudgetSpec,
+    at_least_zero, first_duplicate, non_negative, num_label, spec_words_refusal,
+};
 use crate::span::Span;
 
 impl Spec {
@@ -473,6 +476,566 @@ impl Spec {
             (Decay::Lam(l), 4) => Decay::Lam(l.sqrt().sqrt()),
             (Decay::Lam(l), 2) => Decay::Lam(l.sqrt()),
             (Decay::Lam(l), m) => Decay::Lam(l.powf(1.0 / f64::from(m))),
+        }
+    }
+
+    /// Validate diagnostic, cadence, window, and feature-health settings on
+    /// `self` (split from `Spec::validate_each` to keep `spec.rs` under the
+    /// source-file size cap).
+    pub(super) fn validate_diagnostics(
+        &self,
+        decays: Option<&Vec<(String, Decay)>>,
+        no: &mut rheon_core::Refusals,
+    ) {
+        let name = &self.name;
+        let needs = |key: &str, switch: &str| {
+            format!(
+                "spec {name:?}: {key} applies only when {switch} is on, but {switch} is off. \
+                 Turn on {switch}, or leave out {key}."
+            )
+        };
+        if self.ljung_box_lags.is_some() && !self.emit_specification {
+            no.refuse(needs("ljung_box_lags", "emit_specification"));
+        }
+        if let Some(l) = self.ljung_box_lags {
+            let skip = self.ljung_box_skip();
+            let most = rheon_core::MAX_LAG.saturating_sub(skip);
+            if l == 0 {
+                no.refuse(format!(
+                    "spec {name:?}: ljung_box_lags must be at least 1, but it is 0. Set \
+                     ljung_box_lags to 1 or more, such as the default 10, or leave it out."
+                ));
+            } else if l > most {
+                no.refuse(if skip == 0 {
+                    format!(
+                        "spec {name:?}: ljung_box_lags must be at most {most}, but it is {l}: \
+                         memory for every lag is set aside before the first row. Lower \
+                         ljung_box_lags to {most} or below."
+                    )
+                } else {
+                    format!(
+                        "spec {name:?}: ljung_box_lags must be at most {most}, since \
+                         horizon_rows={} skips the first {skip} lags and memory for every lag \
+                         is set aside before the first row, but it is {l}. Lower \
+                         ljung_box_lags to {most} or below, or lower horizon_rows.",
+                        self.horizon()
+                    )
+                });
+            }
+        }
+        if self.horizon_rows.is_some() && self.horizon_readers().is_empty() {
+            no.refuse(format!(
+                "spec {name:?}: horizon_rows applies only when emit_calibration, emit_breaks, \
+                 emit_specification or emit_robust_se is on, but none is. Turn on the \
+                 diagnostic that should read it, or leave out horizon_rows."
+            ));
+        }
+        if let Some(h) = self.horizon_rows.filter(|h| *h > rheon_core::MAX_LAG / 2) {
+            no.refuse(format!(
+                "spec {name:?}: horizon_rows must be at most {}, but it is {h}: the diagnostics \
+                 read twice as many lags, and memory for every lag is set aside before the \
+                 first row. Lower horizon_rows to {} or below.",
+                rheon_core::MAX_LAG / 2,
+                rheon_core::MAX_LAG / 2
+            ));
+        }
+        if self.robust_se_lags.is_some() && !self.emit_robust_se {
+            no.refuse(needs("robust_se_lags", "emit_robust_se"));
+        }
+        if let Some(l) = self.robust_se_lags {
+            no.take(
+                rheon_core::check_lag_ceiling("robust_se_lags", l)
+                    .map_err(|e| format!("spec {name:?}: {e}")),
+            );
+        }
+        if self.emit_error_inflation && !self.has_row_error_inflation() {
+            no.refuse(format!(
+                "spec {name:?}: emit_error_inflation needs a model that reads one row's \
+                 leverage, as ewridge, rls and kalman do, but {} does not: {}. Leave out \
+                 emit_error_inflation, or use one of those models.",
+                self.model.kind_name(),
+                self.no_leverage()
+            ));
+        }
+        const DRIFT_ACTION: [&str; 2] = ["flag", "reset"];
+        if let Some(a) = &self.drift_action
+            && !DRIFT_ACTION.contains(&a.as_str())
+        {
+            no.refuse(spec_words_refusal(
+                &self.name,
+                "drift_action",
+                &DRIFT_ACTION,
+                a,
+            ));
+        }
+        if let Some(v) = self.drift_delta.filter(|v| *v < 0.0 || !v.is_finite()) {
+            no.refuse(at_least_zero(
+                &format!("spec {name:?}"),
+                "drift_delta",
+                "",
+                &Got::One(num_label(v)),
+                None,
+                None,
+            ));
+        }
+        if let Some(v) = self
+            .drift_threshold
+            .as_ref()
+            .filter(|v| v.value() <= 0.0 || !v.value().is_finite())
+        {
+            no.refuse(format!(
+                "spec {name:?}: drift_threshold must be finite and above 0, but it is {v}. Set \
+                 drift_threshold to the summed excess that flags a drift, such as 20 without a \
+                 clock, or a duration such as \"20m\" on a clock that holds times."
+            ));
+        }
+        if let Some(qs) = &self.resid_quantiles {
+            if qs.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: resid_quantiles must list at least one level, but it is \
+                     empty. List levels above 0 and below 1, such as [0.05, 0.95], or leave out \
+                     resid_quantiles."
+                ));
+            }
+            if let Some(d) = first_duplicate(qs) {
+                no.refuse(format!(
+                    "spec {name:?}: resid_quantiles must list each level once, since each names \
+                     its own fields, but it lists {} more than once. Remove the repeats from \
+                     resid_quantiles.",
+                    num_label(d)
+                ));
+            }
+            let bad: Vec<String> = qs
+                .iter()
+                .filter(|q| !(**q > 0.0 && **q < 1.0))
+                .map(|q| num_label(*q))
+                .collect();
+            if !bad.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: resid_quantiles must each be above 0 and below 1, but {} {}. \
+                     Set each level above 0 and below 1.",
+                    if bad.len() == 1 {
+                        "one of them is"
+                    } else {
+                        "these are not:"
+                    },
+                    bad.join(", ")
+                ));
+            }
+        }
+        if let Some(c) = self.conformal.filter(|c| !(*c > 0.0 && *c < 1.0)) {
+            no.refuse(format!(
+                "spec {name:?}: conformal must be above 0 and below 1, but it is {c}. Set \
+                 conformal to the share of rows whose target the interval should cover, such \
+                 as 0.9."
+            ));
+        }
+        if let Some(ConformalRate::Fixed(r)) = self
+            .conformal_rate
+            .filter(|r| !(r.base() > 0.0 && r.base().is_finite()))
+        {
+            no.refuse(format!(
+                "spec {name:?}: conformal_rate must be finite and above 0, but it is {r}. Set \
+                 conformal_rate to how fast the interval's width adapts, such as the default \
+                 0.05."
+            ));
+        }
+        if self.conformal_rate.is_some() && self.conformal.is_none() {
+            no.refuse(format!(
+                "spec {name:?}: conformal_rate sets how fast the interval adapts, but conformal, \
+                 its coverage, is not set. Set conformal, such as 0.9, or leave out \
+                 conformal_rate."
+            ));
+        }
+        if self.resid_autocorr_lag.is_some_and(|l| l == 0) {
+            no.refuse(format!(
+                "spec {name:?}: resid_autocorr_lag must be at least 1, but it is 0. Set \
+                 resid_autocorr_lag to the lag of the autocorrelation to report, such as 1."
+            ));
+        }
+        if let Some(l) = self.resid_autocorr_lag.filter(|l| *l > 0) {
+            no.take(
+                rheon_core::check_lag_ceiling("resid_autocorr_lag", l)
+                    .map_err(|e| format!("spec {name:?}: {e}")),
+            );
+        }
+        if let Some(v) = self.average_eta.filter(|v| v.0 <= 0.0 || v.0.is_nan()) {
+            no.refuse(format!(
+                "spec {name:?}: average_eta must be above 0, but it is {}. Set average_eta to a \
+                 positive value, such as the default 1, or to inf to take the best slot alone, \
+                 as emit_selected does.",
+                v.0
+            ));
+        }
+        if !self.emit_drift {
+            if self.drift_action.as_deref() == Some("reset") {
+                no.refuse(format!(
+                    "spec {name:?}: drift_action=\"reset\" applies only when emit_drift is on, \
+                     but emit_drift is off. Turn on emit_drift, or leave out drift_action."
+                ));
+            }
+            for (knob, set) in [
+                ("drift_delta", self.drift_delta.is_some()),
+                ("drift_threshold", self.drift_threshold.is_some()),
+                ("drift_kind", self.drift_kind.is_some()),
+                ("drift_options", self.drift_options.is_some()),
+            ] {
+                if set {
+                    no.refuse(needs(knob, "emit_drift"));
+                }
+            }
+        } else if self.clock.is_some()
+            && self.drift_threshold.is_none()
+            && self.drift_kind_or_default().is_some_and(DriftKind::clocked)
+        {
+            no.refuse(format!(
+                "spec {name:?}: drift_threshold must be set when the spec has a clock, but it is \
+                 not: the detector sums each row's excess times its clock step, so no default \
+                 means the same on every clock. Set drift_threshold in clock units, or as a \
+                 duration such as \"20m\" on a clock that holds times."
+            ));
+        }
+        self.check_drift_kind(no);
+        if self.average_eta.is_some() && !self.emit_averaged {
+            no.refuse(needs("average_eta", "emit_averaged"));
+        }
+        if self.resid_autocorr_lag.is_some() && !self.emit_autocorr {
+            no.refuse(needs("resid_autocorr_lag", "emit_autocorr"));
+        }
+        for (key, switch, on, memory) in self.diagnostic_memories() {
+            let Some(h) = memory else { continue };
+            if !on {
+                no.refuse(needs(key, switch));
+            }
+            if h.value().is_nan() || h.value() <= 0.0 {
+                no.refuse(if key == "feature_health_half_life" {
+                    format!(
+                        "spec {name:?}: {key} must be above 0, but it is {h}. Set {key} to a \
+                         finite positive number of clock units."
+                    )
+                } else {
+                    format!(
+                        "spec {name:?}: {key} must be above 0, but it is {h}. Set {key} to a \
+                         positive number of clock units, or to inf for a diagnostic that \
+                         forgets nothing."
+                    )
+                });
+            }
+        }
+        if self.session_gap.is_some() && self.session.is_none() {
+            no.refuse(format!(
+                "spec {name:?}: session_gap applies only with a session column, but session is \
+                 not set. Set session, or leave out session_gap."
+            ));
+        }
+        if self.restart_after_step_back.is_some() && self.clock.is_none() {
+            no.refuse(format!(
+                "spec {name:?}: restart_after_step_back applies only with a clock, but clock is \
+                 not set. Set clock, or leave out restart_after_step_back."
+            ));
+        }
+        if let (Some((window, _)), Some((every, rows))) =
+            (self.model.window_parts(), self.model.window_cadence())
+        {
+            for (key, given) in [
+                ("snapshot_every", every.is_some()),
+                ("max_rows_between_snapshots", rows.is_some()),
+            ] {
+                if given && window.is_none() {
+                    no.refuse(format!(
+                        "spec {name:?}: {key} applies only under a hard window, but window_size \
+                         is not set. Set window_size, or leave out {key}."
+                    ));
+                }
+            }
+            if let Some(e) = every.filter(|e| !non_negative(e.value()) || !e.value().is_finite()) {
+                no.refuse(at_least_zero(
+                    &format!("spec {name:?}"),
+                    "snapshot_every",
+                    " clock units",
+                    &Got::One(e.to_string()),
+                    Some("to take a snapshot on every row"),
+                    None,
+                ));
+            }
+        }
+        if let (Some((window, _)), Some(closed)) =
+            (self.model.window_parts(), self.model.window_closed())
+            && closed == ModelClosed::Both
+            && window.is_none()
+        {
+            no.refuse(format!(
+                "spec {name:?}: closed applies only under a hard window, where it says whether a \
+                 row exactly window_size old keeps its weight, but window_size is not set. Set \
+                 window_size, or leave out closed."
+            ));
+        }
+        for (key, cap, clock) in self.model.row_caps() {
+            if cap == Some(0) {
+                no.refuse(format!(
+                    "spec {name:?}: {key} must be at least 1, but it is 0. Set {key} to 1 or \
+                     more, or leave it out and set {clock} to 0 to act on every row."
+                ));
+            }
+        }
+        if self.model.gram_threads_given() == Some(CountOrAuto::Count(0)) {
+            no.refuse(format!(
+                "spec {name:?}: gram_threads must be at least 1 or \"auto\", but it is 0. Set \
+                 gram_threads to the number of the bank's threads to update the Gram on, or to \
+                 \"auto\" for all of them."
+            ));
+        }
+        if let Some((window, Some(budget))) = self.model.window_parts() {
+            if window.is_none() {
+                no.refuse(format!(
+                    "spec {name:?}: window_budget applies only under a hard window, but \
+                     window_size is not set. Set window_size, or leave out window_budget."
+                ));
+            }
+            let mib = budget.mib();
+            if mib <= 0.0 || mib.is_nan() {
+                let mode = match budget {
+                    WindowBudgetSpec::Thin(_) => "thin",
+                    WindowBudgetSpec::Refuse(_) => "refuse",
+                };
+                no.refuse(format!(
+                    "spec {name:?}: window_budget's \"{mode}\" must be above 0 MiB, but it is \
+                     {}. Set it to a positive number of MiB, such as 256, or to inf for no \
+                     bound.",
+                    num_label(mib)
+                ));
+            }
+        }
+        for (key, given) in [
+            ("coef_every", self.coef_every.is_some()),
+            (
+                "max_rows_between_coefs",
+                self.max_rows_between_coefs.is_some(),
+            ),
+        ] {
+            if given && !self.model.has_coef() {
+                no.refuse(format!(
+                    "spec {name:?}: {key} applies only to a model that reports coefficients, but \
+                     {} reports none. Leave out {key}.",
+                    self.model.kind_name()
+                ));
+            }
+        }
+        if let Some(e) = self
+            .coef_every
+            .as_ref()
+            .filter(|e| !(e.value().is_finite() && non_negative(e.value())))
+        {
+            no.refuse(at_least_zero(
+                &format!("spec {name:?}"),
+                "coef_every",
+                " clock units",
+                &Got::One(e.to_string()),
+                Some("to fill the coef field on every row"),
+                None,
+            ));
+        }
+        if self.max_rows_between_coefs == Some(0) {
+            no.refuse(format!(
+                "spec {name:?}: max_rows_between_coefs must be at least 1, but it is 0. Set \
+                 max_rows_between_coefs to 1 or more, or leave it out and set coef_every to 0 \
+                 to fill the coef field on every row."
+            ));
+        }
+        let mut health_refused = false;
+        let mut ks_refused = false;
+        if self.model.predicts_no_target() {
+            let asked = [
+                ("emit_sigma", self.emit_sigma),
+                ("emit_zscore", self.emit_zscore),
+                ("emit_metrics", self.emit_metrics),
+                ("resid_quantiles", self.resid_quantiles.is_some()),
+                ("conformal", self.conformal.is_some()),
+                ("emit_autocorr", self.emit_autocorr),
+                ("emit_drift", self.emit_drift),
+                ("emit_calibration", self.emit_calibration),
+                ("emit_breaks", self.emit_breaks),
+                ("emit_robust_se", self.emit_robust_se),
+                ("emit_specification", self.emit_specification),
+                ("emit_tails", self.emit_tails),
+                ("emit_influence", self.emit_influence),
+                ("emit_averaged", self.emit_averaged),
+                ("emit_selected", self.emit_selected),
+            ];
+            let on: Vec<&str> = asked
+                .iter()
+                .filter(|(_, on)| *on)
+                .map(|(f, _)| *f)
+                .collect();
+            if let Some((last, rest)) = on.split_last() {
+                let listed = if rest.is_empty() {
+                    (*last).to_string()
+                } else {
+                    format!("{} and {last}", rest.join(", "))
+                };
+                no.refuse(format!(
+                    "spec {name:?}: {listed} {} not apply to {}, which predicts no number for a \
+                     target, so has no residuals. Leave out {listed}.",
+                    if rest.is_empty() { "does" } else { "do" },
+                    self.model.kind_name()
+                ));
+            }
+            if self.emit_feature_health {
+                health_refused = true;
+                no.refuse(format!(
+                    "spec {name:?}: emit_feature_health does not apply to {}, which fits no \
+                     coefficients of its features: it watches the features a fit's coefficients \
+                     lean on. Leave out emit_feature_health, and use ModelBank.check() or \
+                     rheon.spec.audit to watch the features themselves.",
+                    self.model.kind_name()
+                ));
+            }
+            if self.feature_ks_window.is_some() || self.feature_ks_recent.is_some() {
+                ks_refused = true;
+                no.refuse(format!(
+                    "spec {name:?}: feature_ks_window and feature_ks_recent do not apply to {}, \
+                     which fits no coefficients of its features: they watch the features a fit's \
+                     coefficients lean on. Leave out feature_ks_window and feature_ks_recent.",
+                    self.model.kind_name()
+                ));
+            }
+        }
+        if self.emit_target_weight
+            && (self.model.is_unsupervised() || matches!(self.model, ModelKind::Marginal { .. }))
+        {
+            let why = if self.model.is_unsupervised() {
+                "which learns from no target"
+            } else {
+                "which writes no prediction a target's min_weight could withhold: its pairs are \
+                 read from the bank's state"
+            };
+            no.refuse(format!(
+                "spec {name:?}: emit_target_weight reports the weight each target's min_weight \
+                 reads, but it does not apply to {}, {why}. Leave out emit_target_weight.",
+                self.model.kind_name()
+            ));
+        }
+        if self.emit_feature_health && !health_refused && self.k() == 0 {
+            health_refused = true;
+            no.refuse(format!(
+                "spec {name:?}: emit_feature_health watches each feature's spread and mean, but \
+                 {} has no features. Leave out emit_feature_health.",
+                self.model.kind_name()
+            ));
+        }
+        if self.emit_feature_health
+            && !health_refused
+            && let Some(decays) = decays
+        {
+            let forgets = |d: Decay| match d {
+                Decay::Halflife(h) => h.is_finite(),
+                Decay::Lam(l) => l < 1.0,
+            };
+            let memory = self.feature_health_half_life.as_ref();
+            if decays
+                .iter()
+                .any(|(_, d)| !forgets(self.diagnostic_decay_of(memory, *d, 1)))
+            {
+                let rows_on_a_clock = matches!(
+                    self.model,
+                    ModelKind::Expectile {
+                        window_rows: Some(_),
+                        ..
+                    }
+                ) && self.clock.is_some();
+                let why = if memory.is_some() {
+                    "feature_health_half_life is inf"
+                } else if rows_on_a_clock {
+                    "its memory is the fit's, and window_rows counts rows, which are no span \
+                     of the clock column, while half_life is inf"
+                } else if self.lam.is_some() {
+                    "its memory is the fit's, which forgets nothing (lam is 1, with no \
+                     window_size)"
+                } else {
+                    "its memory is the fit's, which forgets nothing (half_life is inf, with no \
+                     window_size)"
+                };
+                no.refuse(format!(
+                    "spec {name:?}: emit_feature_health compares each feature at its memory with \
+                     four times that memory, but {why}, so both read the whole stream and every \
+                     field would be null. Set feature_health_half_life to a finite value."
+                ));
+            }
+        }
+        if !ks_refused {
+            match (self.feature_ks_window, self.feature_ks_recent) {
+                (Some(_), None) => no.refuse(format!(
+                    "spec {name:?}: feature_ks_window requires feature_ks_recent to set how many \
+                     recent rows are tested against the older part of the window. Set \
+                     feature_ks_recent, or leave out feature_ks_window."
+                )),
+                (None, Some(_)) => no.refuse(format!(
+                    "spec {name:?}: feature_ks_recent requires feature_ks_window to set the total \
+                     window size. Set feature_ks_window, or leave out feature_ks_recent."
+                )),
+                (Some(w), Some(r)) => {
+                    if self.k() == 0 {
+                        no.refuse(format!(
+                            "spec {name:?}: feature_ks_window and feature_ks_recent watch each \
+                             feature's rolling distribution, but {} has no features. Leave out \
+                             feature_ks_window and feature_ks_recent.",
+                            self.model.kind_name()
+                        ));
+                    } else {
+                        if r == 0 {
+                            no.refuse(format!(
+                                "spec {name:?}: feature_ks_recent must be at least 1, but it is \
+                                 0. Set feature_ks_recent to a positive row count below \
+                                 feature_ks_window."
+                            ));
+                        }
+                        if w <= r {
+                            no.refuse(format!(
+                                "spec {name:?}: feature_ks_window ({w}) must be greater than \
+                                 feature_ks_recent ({r}), leaving at least 1 reference row. \
+                                 Raise feature_ks_window or lower feature_ks_recent."
+                            ));
+                        }
+                        let bytes = rheon_core::feature_ks_state_bytes(self.k(), w);
+                        if bytes > rheon_core::FEATURE_KS_MAX_STATE_BYTES {
+                            let max_w = rheon_core::FEATURE_KS_MAX_STATE_BYTES
+                                / (std::mem::size_of::<f64>() as u64 * self.k() as u64);
+                            no.refuse(format!(
+                                "spec {name:?}: feature_ks_window ({w}) across {} features holds \
+                                 {bytes} bytes per group, above the {} byte per-group cap. Lower \
+                                 feature_ks_window to {max_w} or below.",
+                                self.k(),
+                                rheon_core::FEATURE_KS_MAX_STATE_BYTES
+                            ));
+                        }
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+        if let Some(decays) = decays.filter(|_| !self.model.predicts_no_target()) {
+            for (flag, on) in [
+                ("emit_selected", self.emit_selected),
+                ("emit_averaged", self.emit_averaged),
+            ] {
+                if !on {
+                    continue;
+                }
+                let n_slots = decays.len() * crate::combo_labels(self).len();
+                if n_slots < 2 {
+                    let grids = match self.model {
+                        ModelKind::EwRidge { .. } => "half_life, ridge or feature_sets",
+                        ModelKind::Huber { .. } => "half_life or feature_sets",
+                        ModelKind::Lasso { .. } => "half_life or penalties",
+                        _ => "half_life",
+                    };
+                    no.refuse(format!(
+                        "spec {name:?}: {flag} chooses among each target's slots, but this spec \
+                         has one slot per target. Give {grids} several values, or leave out \
+                         {flag}."
+                    ));
+                }
+            }
         }
     }
 }
