@@ -130,7 +130,10 @@ pub(super) fn resid_window(spec: &Spec) -> Result<Option<ResidWindow>, String> {
     let Some((window, cadence)) = spec.model.window_and_cadence() else {
         return Ok(None);
     };
-    let read = Buffers::of(spec).extras || spec.emit_drift || spec.conformal.is_some();
+    let read = Buffers::of(spec).extras
+        || spec.emit_drift
+        || spec.conformal.is_some()
+        || spec.emit_conformal_p;
     if spec.model.predicts_no_target() || !read {
         return Ok(None);
     }
@@ -532,7 +535,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                     .as_ref()
                     .map_or_else(Vec::new, FloatOrList::to_vec),
                 initial_seasonal: holt_seasonal(initial_seasonal.as_deref()),
-                max_state_bytes: *max_state_bytes,
+                max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
             };
             Ok(AnyModel::Holt(Box::new(Holt::new(cfg)?)))
         }

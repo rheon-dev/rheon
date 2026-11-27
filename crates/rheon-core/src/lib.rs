@@ -77,6 +77,7 @@ mod cluster;
 /// (task 212).
 pub mod comp;
 mod conformal;
+mod conformal_variants;
 mod constraint;
 mod corrchange;
 mod dcc;
@@ -132,6 +133,7 @@ mod root;
 mod run_length;
 mod runs;
 mod sandwich;
+mod scores;
 mod scratch;
 mod seqtest;
 mod sgd;
@@ -173,12 +175,18 @@ pub use clock::{
     PlainStep, SessionGap, Stamp, cmp_int_f64, ns_of_seconds, seconds_of_ns,
 };
 pub use clock_drift::ClockDrift;
+pub use clock_span::{DEFAULT_STATE_BYTES, STATE_BYTES_CEILING, check_max_state_bytes};
 pub use clock_steps::{ClockSteps, StepStat};
 pub use cluster::{
     ClusterSummary, FeatureMoments, KMeans, KMeansCfg, LINK_FACTOR, LINK_FLOOR, LINK_QUANTILE,
     Micro, MicroCfg, MicroCluster, SeedRule, SplitMix64, dist2, merged_radius2,
 };
 pub use conformal::{Conformal, gauss_gain, ln_basic, norm_ppf};
+pub use conformal_variants::{
+    CONFORMAL_P_ENTRY_BYTES, CONFORMAL_P_FIXED_BYTES, ConformalPEntry, ConformalPRing,
+    ConformalPWindow, ConformalSlot, DEFAULT_CONFORMAL_P_WINDOW_ROWS, SignedConformal,
+    sort_offsets_non_crossing,
+};
 pub use constraint::Constraint;
 pub use corrchange::{
     ChangeNorm, CorrChange, CorrChangeCfg, CorrChangeKind, MAX_PERM, kolmogorov_cdf,
@@ -285,6 +293,9 @@ pub use root::{
 pub use run_length::{RunLength, RunValue};
 pub use runs::Runs;
 pub use sandwich::Sandwich;
+pub use scores::{
+    SlotIntervalScores, SlotScores, binary_log_loss, interval_width_winkler, pinball_loss,
+};
 pub use seqtest::{SLOTS as SEQTEST_SLOTS, SeqTest, SeqTestCfg};
 pub use sgd::{LearningRate, Sgd, SgdCfg, SgdLoss};
 pub use solve::{SpdFactor, quad_forms_logdet, solve_spd};

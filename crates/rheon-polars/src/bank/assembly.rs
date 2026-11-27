@@ -52,6 +52,8 @@ struct Shape {
     m: usize,
     per_model: usize,
     n_levels: usize,
+    n_conf_levels: usize,
+    n_scores: usize,
     k: usize,
 }
 
@@ -64,7 +66,10 @@ enum Buf {
     ResidZ,
     Autocorr,
     Metrics,
+    Scores,
+    IntervalScores,
     Conformal,
+    ConformalP,
     Health,
     Checks,
     ResidQ,
@@ -126,11 +131,22 @@ impl FlatLoc {
                 (i / shape.per_model) * 3 + k,
                 i % shape.per_model,
             ),
-            Source::Conformal(k, i) => place(
-                Buf::Conformal,
-                (i / shape.per_model) * 3 + k,
+            Source::Score(k, i) => place(
+                Buf::Scores,
+                (i / shape.per_model) * shape.n_scores + k,
                 i % shape.per_model,
             ),
+            Source::IntervalScore(k, i) => place(
+                Buf::IntervalScores,
+                (i / shape.per_model) * (2 * shape.n_conf_levels) + k,
+                i % shape.per_model,
+            ),
+            Source::Conformal(k, i) => place(
+                Buf::Conformal,
+                (i / shape.per_model) * (3 * shape.n_conf_levels) + k,
+                i % shape.per_model,
+            ),
+            Source::ConformalP(i) => at(Buf::ConformalP, i),
             Source::Health(which, mi, fi) => {
                 place(Buf::Health, 0, mi * 2 * shape.k + which * shape.k + fi)
             }
@@ -175,7 +191,10 @@ impl FlatLoc {
             Buf::ResidZ => (&ch.zscore, slots),
             Buf::Autocorr => (&ch.autocorr, slots),
             Buf::Metrics => (&ch.metrics, slots),
+            Buf::Scores => (&ch.scores, slots),
+            Buf::IntervalScores => (&ch.interval_scores, slots),
             Buf::Conformal => (&ch.conformal, slots),
+            Buf::ConformalP => (&ch.conformal_p, slots),
             Buf::ResidQ => (&ch.resid_q, slots),
             Buf::Inflation => (&ch.inflation, slots),
             // Instance `row`'s checks, each a block of `n_slots` slots.
@@ -276,6 +295,8 @@ impl<'a> Sink<'a> {
             m: d.m,
             per_model: d.per_model,
             n_levels: spec.resid_quantiles.as_ref().map_or(0, Vec::len),
+            n_conf_levels: spec.conformal_levels().len(),
+            n_scores: spec.score_block_count(),
             k: spec.k(),
         };
         let fields =

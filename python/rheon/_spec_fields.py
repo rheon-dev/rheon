@@ -127,7 +127,11 @@ def output_index(spec: dict[str, Any]) -> pl.DataFrame:
         The grid point: the ridge value, the feature set's name and the
         lasso penalty, each null where the spec has no such grid.
     ``quantile``
-        The level of a ``resid_quantiles`` or ``mahal_quantiles`` field.
+        The level of a ``resid_quantiles``, ``mahal_quantiles``, ``pinball``,
+        ``tdigest``, or ``ddsketch`` field.
+    ``coverage``
+        The nominal coverage level of a conformal field (``lo``, ``hi``,
+        ``coverage``, ``width``, ``winkler``), or null.
     ``lag``
         The lag, in learned rows, of an ``ew_cov`` ``lag_corr`` field.
     ``component``

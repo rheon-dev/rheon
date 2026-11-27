@@ -72,6 +72,7 @@ pub fn audit_cfg(spec: &Spec) -> Result<rheon_core::AuditCfg, String> {
             Some(p as u8)
         }
     };
+    let max_state_bytes = max_state_bytes.or(spec.max_state_bytes);
     let has_distinct = precision.is_some()
         || distinct_window_rows.is_some()
         || distinct_window_size.is_some()
@@ -82,7 +83,7 @@ pub fn audit_cfg(spec: &Spec) -> Result<rheon_core::AuditCfg, String> {
         window_rows: *distinct_window_rows,
         window_clock: distinct_window_size.as_ref().map(Span::value),
         closed: closed.edge(),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes,
     });
     let cfg = rheon_core::AuditCfg {
         n_columns: spec.features.len(),
@@ -122,7 +123,7 @@ pub fn hawkes_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::H
         window_events: *window_events,
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
     };
     cfg.validate()?;
     Ok(cfg)
@@ -159,6 +160,7 @@ pub fn expectile_cfg(
         refit_span.as_ref(),
     )?;
     let windowed = window_rows.is_some() || window_size.is_some();
+    let max_state_bytes = max_state_bytes.or(spec.max_state_bytes);
     let cap = max_state_bytes.unwrap_or(rheon_core::EXPECTILE_MAX_STATE_BYTES);
     let cfg = rheon_core::ExpectileCfg {
         n_features: spec.k(),
@@ -186,7 +188,7 @@ pub fn expectile_cfg(
         window_rows: *window_rows,
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes,
     };
     budget_of_a_refit(spec, *refit_budget, cfg.refit_rows, cfg.refit_clock)?;
     Ok(cfg)
@@ -261,7 +263,7 @@ pub fn realized_cfg(
         closed: closed.edge(),
         lm_window: *lm_window,
         lm_beta: lm_beta.unwrap_or(rheon_core::REALIZED_LM_BETA),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
     })
 }
 
@@ -365,7 +367,7 @@ pub fn power_variation_cfg(
         window_rows: *window_rows,
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
     })
 }
 
@@ -397,7 +399,7 @@ pub fn ar_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::ArCfg
         decay,
         ridge: ridge.unwrap_or(0.0),
         min_weight: spec.min_periods_or_default(),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
         select: match select.as_deref() {
             None => None,
             Some("aic") => Some(rheon_core::ArSelect::Aic),
@@ -462,7 +464,7 @@ pub fn spectral_cfg(
         scaling,
         detrend: s.detrend.unwrap_or(true),
         min_weight: spec.min_periods_or_default(),
-        max_state_bytes: s.max_state_bytes,
+        max_state_bytes: s.max_state_bytes.or(spec.max_state_bytes),
         window: s.window_size.as_ref().map(Span::value),
         window_every: s.snapshot_every.as_ref().map(Span::value),
         max_rows_between_snapshots: s.max_rows_between_snapshots.map(|r| r as usize),
@@ -525,7 +527,7 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
             .collect(),
         max_horizon_work: *max_horizon_work,
         min_weight: spec.min_periods_or_default(),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
         n_inputs: spec.features.len(),
     };
     cfg.validate()?;
@@ -554,7 +556,7 @@ pub fn tdigest_cfg(spec: &Spec) -> Result<rheon_core::TDigestModelCfg, String> {
         n_targets: spec.m(),
         compression: compression.unwrap_or(rheon_core::TDIGEST_COMPRESSION),
         levels: quantiles.clone(),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
     };
     cfg.validate()?;
     Ok(cfg)
@@ -586,7 +588,7 @@ pub fn ddsketch_cfg(
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
         decay,
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
     };
     cfg.validate()?;
     Ok(cfg)
@@ -634,7 +636,7 @@ pub fn isotonic_cfg(
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
         decay,
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
     };
     cfg.validate()?;
     Ok(cfg)
@@ -762,7 +764,7 @@ pub fn dcc_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DccCfg, String> 
         start_rows: start_rows.unwrap_or(rheon_core::DCC_START_ROWS),
         start_span: start_span.as_ref().map(Span::value),
         min_weight: spec.min_periods_or_default(),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
     };
     // A margin's refusal names the margins' parameters as the spec spells
     // them.
@@ -1035,6 +1037,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
     }
     // The rows a span of rows holds are bounded by its count; only a span
     // of the clock holds what the data sizes.
+    let max_state_bytes = max_state_bytes.or(spec.max_state_bytes);
     if max_state_bytes.is_some() && window_size.is_none() {
         no.refuse(
             "corrchange: max_state_bytes applies only under window_size, where the rows a span \
@@ -1092,7 +1095,7 @@ pub fn corrchange_cfg(spec: &Spec) -> Result<CorrChangeCfg, String> {
             (true, Some(w), None) if monitor_rows.is_none() => Some(w.value()),
             (_, _, s) => s.as_ref().map(Span::value),
         },
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes,
     })
 }
 
@@ -1571,7 +1574,7 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         mad_anchor: true,
         min_weight_holds_learning: false,
         refit_clock: huber_refit_span.as_ref().map(Span::value),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).
@@ -1673,7 +1676,7 @@ pub fn quantile_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         mad_anchor: true,
         min_weight_holds_learning: false,
         refit_clock: quantile_refit_span.as_ref().map(Span::value),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).
@@ -1826,7 +1829,11 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         // `huber`'s anchored MAD sketch under the Huber loss.
         mad_anchor: true,
         refit_clock: huber_refit_span.as_ref().map(Span::value),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: if matches!(loss, SgdLoss::Huber { .. }) || !spec.emit_conformal_p {
+            max_state_bytes.or(spec.max_state_bytes)
+        } else {
+            None
+        },
     };
     Ok(AnyModel::Sgd(Box::new(Sgd::new(cfg)?)))
 }
@@ -1917,7 +1924,9 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
             rheon_core::default_glm_refit_rows_within(
                 spec.k(),
                 spec.m(),
-                max_state_bytes.unwrap_or(rheon_core::GLM_GROUP_REFIT_CAP as u64),
+                max_state_bytes
+                    .or(spec.max_state_bytes)
+                    .unwrap_or(rheon_core::GLM_GROUP_REFIT_CAP as u64),
             )
         }
     });
@@ -1939,7 +1948,7 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         min_weight: spec.min_periods_or_default(),
         refit_rows,
         refit_clock: refit_span.as_ref().map(Span::value),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
         step_cap: step_cap.map_or_else(
             || rheon_core::default_glm_step_cap(refit_rows.max(u32::from(refit_span.is_some()))),
             |n| n.0,
@@ -1980,7 +1989,7 @@ pub fn pca_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::StreamPcaCfg, St
         decay,
         min_weight: spec.min_periods_or_default(),
         learning_rate: *learning_rate,
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: max_state_bytes.or(spec.max_state_bytes),
     })
 }
 

@@ -132,7 +132,7 @@ impl<'a> LabelRun<'a> {
             missing,
             dropped,
             places,
-            reads_at_stamp: spec.model.reads_at_stamp(),
+            reads_at_stamp: spec.reads_at_stamp(),
         })
     }
 }

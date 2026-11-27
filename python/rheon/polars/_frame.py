@@ -775,7 +775,11 @@ _ORDER_FREE_ONLY_WHEN: dict[str, tuple[Any, ...]] = {
     "long_half_life": (None,),
     "ridge_scale": ("mean",),
     "conformal": (None,),
+    "conformal_symmetric": (True,),
     "conformal_rate": (None,),
+    "emit_conformal_p": (False,),
+    "conformal_p_window_rows": (None,),
+    "conformal_p_window_size": (None,),
     "average_eta": (None,),
     "emit_averaged": (False,),
     "group_close": (None,),
@@ -788,6 +792,7 @@ _ORDER_FREE_ONLY_WHEN: dict[str, tuple[Any, ...]] = {
     "max_rows_between_coefs": (None,),
     "emit_autocorr": (False,),
     "emit_metrics": (False,),
+    "metric_quantiles": (None,),
     "emit_zscore": (False,),
     "emit_selected": (False,),
     "emit_sigma": (False,),
@@ -828,6 +833,7 @@ _ORDER_FREE_ANY = frozenset(
         "targets",
         "features",
         "feature_sets",
+        "max_state_bytes",
         "min_weight",
         # The readiness gates withhold output and change no number a fit
         # produces, and the per-row field is read from the state; order-free

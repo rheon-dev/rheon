@@ -12,11 +12,19 @@ fn default_true() -> bool {
     true
 }
 
+fn is_true(v: &bool) -> bool {
+    *v
+}
+
 mod checks;
+mod conformal;
+pub use conformal::*;
 pub(crate) mod diagnostics;
 mod limits;
+mod metrics;
 pub(crate) use checks::render_refusal;
 use checks::*;
+pub use metrics::*;
 mod names;
 mod readiness;
 mod smooth;
@@ -2824,30 +2832,40 @@ pub struct Spec {
     /// fit: two positive numbers always agree. A return is better a
     /// difference or a log ratio, which sit about zero.
     #[serde(default)]
-    pub emit_metrics: bool,
-    /// Emit `lo_<slot>`, `hi_<slot>` and `coverage_<slot>`: an
-    /// adaptive conformal interval `pred ± m·sigma` at this coverage level,
-    /// with the realized coverage beside it (ENHANCEMENTS E36). `m` is a
-    /// tracked quantile of `|resid| / sigma` — `m ← max(0, m +
-    /// rate·(w/w̄)·(miss − α))`, `miss = 1{|resid| > m·sigma}`, `α = 1 −
-    /// coverage`, `w̄` the EW mean weight, `m` starting at `Φ⁻¹(1 − α/2)`
-    /// (task 368) — so the long-run coverage weighted by `w/w̄` is the
-    /// target whatever the residual distribution is and however it moves,
-    /// where `sigma` alone gives a Gaussian interval (review round 4, CA5).
-    /// Read before the row, like every other diagnostic. A coverage level
-    /// strictly between 0 and 1.
+    pub emit_metrics: EmitMetrics,
+    /// Explicit quantile levels scored by streaming `"pinball"` in
+    /// `emit_metrics`. Skipped when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric_quantiles: Option<Vec<f64>>,
+    /// Emit adaptive conformal intervals at one coverage level (`lo_<slot>`,
+    /// `hi_<slot>`, `coverage_<slot>`) or a sorted list of coverage levels
+    /// (`lo_c<lvl>_<slot>`, `hi_c<lvl>_<slot>`, `coverage_c<lvl>_<slot>`).
     #[serde(default)]
-    pub conformal: Option<f64>,
-    /// Step of the conformal multiplier `m`, the interval being `pred ±
-    /// m·sigma` (task 368). Default 0.05: a miss raises `m` by
-    /// `0.05·(1 − α)`, a hit lowers it by `0.05·α`, each times the row's
-    /// weight over the EW mean weight of the rows with a residual
-    /// (docs/PLAN.md task 147). `"auto"` divides 0.05 by `1 + 0.05·g(α)·n̄/c`,
-    /// `n̄` the EW mean of the rows waiting for their labels at each release
-    /// (task 342b), and starts `m` once the releases reach `1 + n̄`: 0.05,
-    /// starting on the first release, exactly where nothing waits.
+    pub conformal: Option<ConformalSpec>,
+    /// Whether conformal intervals use a single symmetric multiplier (`true`,
+    /// the default) or two signed tail multipliers (`false`). Skipped when
+    /// `true` so existing specs serialize identically.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub conformal_symmetric: bool,
+    /// Step of the conformal multiplier `m` (`0.05` or `"auto"`).
     #[serde(default)]
     pub conformal_rate: Option<ConformalRate>,
+    /// Emit `conformal_p_<slot>`: standalone out-of-sample unsmoothed
+    /// conformal p-value on `|resid| / sigma`. Skipped when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub emit_conformal_p: bool,
+    /// Row window size for `emit_conformal_p` (default 1000 when neither row
+    /// nor clock window is given). Skipped when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conformal_p_window_rows: Option<usize>,
+    /// Clock-span window size for `emit_conformal_p` (mutually exclusive with
+    /// `conformal_p_window_rows`). Skipped when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conformal_p_window_size: Option<Span>,
+    /// Per-group state byte cap (default 256 KiB, ceiling 64 MiB). Skipped
+    /// when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_state_bytes: Option<u64>,
     /// Emit `abs_resid_q<p>_<slot>` for each level in `resid_quantiles`: the
     /// exponentially weighted quantile of `|resid|` at the model's half-life
     /// and each row's weight (ENHANCEMENTS E23, docs/PLAN.md task 146), from
@@ -4026,7 +4044,9 @@ impl Spec {
             // whole state is known here. A `window_size` window holds the
             // events the span has, which the data decides: only its fixed
             // part is known, and the rest is checked as the rows go in.
-            let cap = max_state_bytes.unwrap_or(rheon_core::HAWKES_MAX_STATE_BYTES);
+            let cap = max_state_bytes
+                .or(self.max_state_bytes)
+                .unwrap_or(rheon_core::HAWKES_MAX_STATE_BYTES);
             if cap == 0 {
                 no.refuse(format!(
                     "spec {name:?}: max_state_bytes must be above 0, but it is 0. Give the \
@@ -4707,30 +4727,8 @@ impl Spec {
                 ));
             }
         }
-        if let Some(c) = self.conformal.filter(|c| !(*c > 0.0 && *c < 1.0)) {
-            no.refuse(format!(
-                "spec {name:?}: conformal must be above 0 and below 1, but it is {c}. Set \
-                 conformal to the share of rows whose target the interval should cover, such \
-                 as 0.9."
-            ));
-        }
-        if let Some(ConformalRate::Fixed(r)) = self
-            .conformal_rate
-            .filter(|r| !(r.base() > 0.0 && r.base().is_finite()))
-        {
-            no.refuse(format!(
-                "spec {name:?}: conformal_rate must be finite and above 0, but it is {r}. Set \
-                 conformal_rate to how fast the interval's width adapts, such as the default \
-                 0.05."
-            ));
-        }
-        if self.conformal_rate.is_some() && self.conformal.is_none() {
-            no.refuse(format!(
-                "spec {name:?}: conformal_rate sets how fast the interval adapts, but conformal, \
-                 its coverage, is not set. Set conformal, such as 0.9, or leave out \
-                 conformal_rate."
-            ));
-        }
+        self.validate_conformal_and_caps(no);
+        self.validate_metrics(no);
         if self.resid_autocorr_lag.is_some_and(|l| l == 0) {
             no.refuse(format!(
                 "spec {name:?}: resid_autocorr_lag must be at least 1, but it is 0. Set \
@@ -4971,9 +4969,10 @@ impl Spec {
             let asked = [
                 ("emit_sigma", self.emit_sigma),
                 ("emit_zscore", self.emit_zscore),
-                ("emit_metrics", self.emit_metrics),
+                ("emit_metrics", self.emit_metrics.is_any()),
                 ("resid_quantiles", self.resid_quantiles.is_some()),
                 ("conformal", self.conformal.is_some()),
+                ("emit_conformal_p", self.emit_conformal_p),
                 ("emit_autocorr", self.emit_autocorr),
                 ("emit_drift", self.emit_drift),
                 ("emit_calibration", self.emit_calibration),

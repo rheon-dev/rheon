@@ -375,8 +375,8 @@ takes. A ``half_life`` grid names its instances by it (``@h10m``). ``0`` and
 the word ``"inf"`` (or ``"infinity"``, in any case) is kept as the number.
 
 The clock parameters are ``half_life``, ``gap_cap``, ``restart_after_step_back``,
-``session_gap``, ``coef_every`` and ``embargo`` above, ``drift_threshold``
-and each diagnostic's own ``*_half_life`` below, and in the models
+``session_gap``, ``coef_every`` and ``embargo`` above, ``drift_threshold``,
+``conformal_p_window_size`` and each diagnostic's own ``*_half_life`` below, and in the models
 ``window_size``,
 ``snapshot_every``, ``solve_every``, ``ew_cov``'s ``pca_every``, ``micro``'s
 ``prune_every`` and the model half-lives: ``long_half_life``,

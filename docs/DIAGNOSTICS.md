@@ -119,9 +119,9 @@ Each question, the diagnostic that answers it, and its fields:
 | are its tails heavy? | `emit_tails` | `skew_<t>`, `kurtosis_<t>`, `jarque_bera_<t>` | [Are its tails heavy?](#are-its-tails-heavy) |
 | which row moved it? | `emit_influence` | `influence_<t>` | [Which row moved it?](#which-row-moved-it) |
 | are its features healthy? | `emit_feature_health` | `spread_ratio_<feature>`, `mean_shift_<feature>` | [Are its features healthy?](#are-its-features-healthy) |
-| is another model better? | `emit_metrics`, `emit_selected`, `emit_averaged`; `rp.eval` | `ic_<t>`, `r2_<t>`, `hit_rate_<t>`, `selected_<t>`, `pred_<t>__selected`, `pred_<t>__averaged` | [Is another model better?](#is-another-model-better) |
+| is another model better? | `emit_metrics`, `metric_quantiles`, `emit_selected`, `emit_averaged`; `rp.eval` | `ic_<t>`, `r2_<t>`, `hit_rate_<t>`, `mae_<t>`, `pinball_<t>`, `pinball_q<τ>_<t>`, `log_loss_<t>`, `width_<t>`, `winkler_<t>`, `selected_<t>`, `pred_<t>__selected`, `pred_<t>__averaged` | [Is another model better?](#is-another-model-better) |
 | is it ready? | `min_weight`, `min_settled_frac`, `max_error_inflation`, `emit_error_inflation`, `emit_target_weight` | `weight_sum`, `settled_frac`, `withheld_reason`, `error_inflation_<t>`, `weight_<t>` | [Is it ready?](#is-it-ready) |
-| how wide is its error? | `emit_sigma`, `emit_zscore`, `resid_quantiles`, `conformal` | `sigma_<t>`, `zscore_<t>`, `abs_resid_q<p>_<t>`, `lo_<t>`, `hi_<t>`, `coverage_<t>` | [How wide is its error?](#how-wide-is-its-error) |
+| how wide is its error? | `emit_sigma`, `emit_zscore`, `resid_quantiles`, `conformal`, `conformal_symmetric`, `emit_conformal_p` | `sigma_<t>`, `zscore_<t>`, `abs_resid_q<p>_<t>`, `lo_<t>`, `hi_<t>`, `coverage_<t>`, `lo_c<lvl>_<t>`, `hi_c<lvl>_<t>`, `coverage_c<lvl>_<t>`, `conformal_p_<t>` | [How wide is its error?](#how-wide-is-its-error) |
 
 [Check a two-stage fit](how-to/check-a-two-stage-fit.md)
 checks a two-stage fit stage by stage with these diagnostics, and [Test a
@@ -1036,10 +1036,10 @@ after the run.
 
 | kind | switch or call | what it gives | how-to |
 |---|---|---|---|
-| running accuracy | `emit_metrics` | `ic_<t>`, the EW correlation of prediction with target; `r2_<t>`, the out-of-sample R² against the running mean; `hit_rate_<t>`, the share of rows whose sign the prediction got right | |
+| running accuracy | `emit_metrics`, `metric_quantiles` | `emit_metrics=True` writes `ic_<t>`, `r2_<t>` and `hit_rate_<t>`; a list of names picks any subset of `ic`, `r2`, `hit_rate`, `mae`, `pinball`, `log_loss`, `coverage`, `width` and `winkler` | |
 | a choice as the stream runs | `emit_selected`, `emit_averaged` | the grid point with the lowest EW error so far, and every slot's prediction weighted by its error | [Choose among a grid's settings as the stream runs](how-to/choose-among-a-grid-online.md) |
 | a test of two models | `rp.eval.diebold_mariano`, `rp.eval.clark_west`, `rp.eval.seqtest`, the `seqtest` model | a t statistic, or evidence that can be read at any row | [Compare two models](how-to/compare-two-models.md) |
-| metrics after the run | `rp.eval.metrics`, `window_metrics`, `compare_specs`, over the output or a query of it for an output too large to hold; `rp.eval.sums` for scores that add up across runs | R², IC, hit rate and MSE, per group or per window | [Evaluate an output frame](how-to/evaluate-an-output-frame.md) |
+| metrics after the run | `rp.eval.metrics`, `window_metrics`, `interval_metrics`, `compare_specs`, over the output or a query of it for an output too large to hold; `rp.eval.sums` for scores that add up across runs | R², IC, hit rate, MSE, opt-in MAE, pinball and D² pinball; interval coverage, mean width, Winkler score and size-stratified coverage (SSC) | [Evaluate an output frame](how-to/evaluate-an-output-frame.md) |
 
 **`hit_rate` asks whether prediction and target fall on the same side of
 zero.** A row where either is exactly zero is on neither side, and both
@@ -1056,12 +1056,14 @@ On an `sgd` or `ftrl` fit with `loss="logistic"`, `pred` is a probability
 and `y` a 0/1 target, so the three metrics mean something else under the
 same names:
 
-| field | on a logistic `sgd` or `ftrl` fit |
+| field | on a binary probability model (`sgd`/`ftrl` with `loss="logistic"`, or `glm(family="binomial")`) |
 |---|---|
 | `hit_rate` | the accuracy at a 0.5 threshold |
 | `r2` | the Brier skill score against the running base rate |
 | `ic` | the point-biserial correlation between the probability and the target |
-| a log loss | not kept as the stream runs: `rp.eval.metrics(..., binary=True)` computes one after the run, over the output or a query of it |
+| `log_loss` | EW binary cross-entropy via `emit_metrics=["log_loss"]` (clipping probabilities at machine epsilon); `rp.eval.metrics(..., binary=True)` computes it after the run |
+
+**Loss and interval scores can be selected by name in `emit_metrics`.** Passing a list of names selects any subset of `ic`, `r2`, `hit_rate`, `mae`, `pinball`, `log_loss`, `coverage`, `width` and `winkler`. `mae` tracks the EW mean of `|y − pred|`. `pinball` defaults to the model's quantile level on `quantile` and `sgd(loss="quantile")` as `pinball_<t>`, or scores explicit levels from `metric_quantiles` as `pinball_q<τ>_<t>`. `log_loss` is accepted only on binary probability models. `coverage`, `width` and `winkler` (Winkler 1972) require `conformal`, un-cross crossed bounds with `min` and `max`, and reuse conformal's `coverage*` fields without duplication. Size-stratified coverage (SSC) and `D²` pinball require the full window distribution and live in `rp.eval` alone.
 
 ### Choosing among a grid's settings
 
@@ -1160,11 +1162,17 @@ runs.
 ### Evaluating an output frame
 
 `rp.eval`'s calls score a finished run's output frame: `metrics` per spec
-and group, `window_metrics` per window of the clock, `compare_specs` over
-several specs, and `unpack` to long form. For an output too large to hold,
-each takes a query of it in place of the frame, as the tests of two specs
-do, and reads it a chunk at a time, reducing each chunk to ten numbers per
-slot and group.
+and group, `window_metrics` per window of the clock, `interval_metrics` for
+conformal intervals, `compare_specs` over several specs, and `unpack` to long
+form. Passing `mae=True` or `quantiles=[...]` to `metrics` or `window_metrics`
+adds `mae`, `pinball_q<τ>` and `d2_pinball_q<τ>` alongside the default columns.
+`rp.eval.interval_metrics` computes `n`, `coverage`, `mean_width`, `winkler`
+(Winkler 1972) and `ssc` (size-stratified coverage over `ssc_bins` equal-count
+width bins, Angelopoulos and Bates 2021) for single- or multi-level conformal
+outputs, with `group`, `weight` and `window_rows`. For an output too large to
+hold, each takes a query of it in place of the frame, as the tests of two
+specs do, and reads it a chunk at a time, reducing each chunk to ten numbers
+per slot and group.
 The sums are centered, so a target far from zero keeps its variance.
 `merge_sums` adds the sums of several runs, the same to rounding whatever
 the split, and `from_sums` turns the total into the metrics. [Evaluate an output
@@ -1264,7 +1272,8 @@ from each and reads its coverage.
 | `sigma_<t>` (`emit_sigma`) | the EW standard deviation of the out-of-sample residuals, at the model's half-life | nothing, as a spread; `pred ± z · sigma` assumes Gaussian residuals |
 | `zscore_<t>` (`emit_zscore`) | `resid / sigma`: how surprising the row was, in units of recent error | as `sigma` |
 | `abs_resid_q<p>_<t>` (`resid_quantiles`) | the EW quantile of `\|resid\|` at level `p`, from one decaying DDSketch per slot, within 0.78% of the exact weighted quantile | no distribution |
-| `lo_<t>`, `hi_<t>`, `coverage_<t>` (`conformal`) | an interval tracked to cover the share asked for, and the coverage it has delivered | no distribution |
+| `lo_<t>`, `hi_<t>`, `coverage_<t>` (or `*_c<lvl>_<t>` for a list) (`conformal`, `conformal_symmetric`) | symmetric or asymmetric intervals tracked to cover the share(s) asked for, and the coverage delivered | no distribution |
+| `conformal_p_<t>` (`emit_conformal_p`) | standalone out-of-sample conformal p-value of `\|resid\| / sigma` against a rolling calibration ring | exchangeability over the window |
 
 `sigma`'s weight ages on every row the model sees, a row with no
 prediction included, so it forgets across a gap as the clock says. A row
@@ -1370,12 +1379,36 @@ prediction](how-to/put-an-interval-on-a-prediction.md) compares the
 Gaussian, quantile and conformal intervals on Gaussian and heavy-tailed
 noise, and sets `conformal_rate="auto"` under a delay.
 
+**Multi-level and asymmetric conformal intervals.** Passing a sorted list of
+levels such as `conformal=[0.8, 0.9, 0.95]` tracks an independent interval per
+level and writes `lo_c<lvl>_<t>`, `hi_c<lvl>_<t>` and `coverage_c<lvl>_<t>`
+(with `coverage` populated in `output_index`). Offsets are sorted at read time
+so lower bounds stay non-increasing and upper bounds non-decreasing across
+levels. Setting `conformal_symmetric=False` replaces the single radius
+multiplier with separate signed lower and upper trackers: `m_lo` on
+`−resid / sigma` and `m_hi` on `+resid / sigma`, each at tail `alpha / 2` with
+no zero clamp. Bounds can therefore shift asymmetrically on skewed errors. It
+works with single- or multi-level `conformal`, `conformal_rate="auto"`,
+`embargo` and `label_clock`.
+
+**Standalone conformal p-values (`emit_conformal_p=True`).** Independent of
+`conformal`, `emit_conformal_p=True` emits `conformal_p_<t>`, the unsmoothed
+out-of-sample conformal p-value `(Σ ω_i 1{a_i ≥ a_t} + 1) / (Σ ω_i + 1)` for
+`a = |resid| / sigma` against a rolling calibration ring. By default the ring
+holds the last 1,000 positive-weight rows (`conformal_p_window_rows`); setting
+`conformal_p_window_size` instead keeps a clock-span window (expiring old
+scores at the row's clock stamp). The ring's memory is bounded by the spec's
+`max_state_bytes` budget (default 256 KiB, ceiling 64 MiB), warning once past
+half the cap and refusing atomically before exceeding it. Zero-weight rows are
+scored without entering the ring.
+
 ## Sources
 
 Each claim on this page that is not measured here rests on one of these.
 
 | source | for |
 |---|---|
+| Angelopoulos, A. N. and Bates, S. (2021). A gentle introduction to conformal prediction and distribution-free uncertainty quantification. *arXiv:2107.07511*. | size-stratified coverage (`ssc`) in `rp.eval.interval_metrics` |
 | Angelopoulos, A. N., Candès, E. J. and Tibshirani, R. J. (2023). Conformal PID control for time series prediction. *Advances in Neural Information Processing Systems* 36. | the quantile-tracking step of `conformal` |
 | Åström, K. J. and Wittenmark, B. (1995). *Adaptive Control*, 2nd ed. Addison-Wesley. | estimator windup under exponential forgetting |
 | Baena-García, M., del Campo-Ávila, J., Fidalgo, R., Bifet, A., Gavaldà, R. and Morales-Bueno, R. (2006). Early drift detection method. *Fourth International Workshop on Knowledge Discovery from Data Streams*, 77–86. | `drift_kind="eddm"` |
@@ -1401,5 +1434,6 @@ Each claim on this page that is not measured here rests on one of these.
 | Page, E. S. (1954). Continuous inspection schemes. *Biometrika* 41(1/2), 100–115. | the CUSUM detector behind `drift` |
 | Raab, C., Heusinger, M. and Schleif, F.-M. (2020). Reactive soft prototype computing for concept drift streams. *Neurocomputing* 416, 340–351. | `drift_kind="kswin"` |
 | Ramsey, J. B. (1969). Tests for specification errors in classical linear least-squares regression analysis. *Journal of the Royal Statistical Society, Series B* 31(2), 350–371. | `ramsey_reset` |
-| Vovk, V., Gammerman, A. and Shafer, G. (2005). *Algorithmic Learning in a Random World*. Springer. | conformal prediction |
+| Vovk, V., Gammerman, A. and Shafer, G. (2005). *Algorithmic Learning in a Random World*. Springer. | conformal prediction and conformal p-values |
+| Winkler, R. L. (1972). A decision-theoretic approach to interval estimation. *Journal of the American Statistical Association* 67(337), 187–191. | the Winkler interval score (`winkler`) |
 | White, H. (1980). A heteroskedasticity-consistent covariance matrix estimator and a direct test for heteroskedasticity. *Econometrica* 48(4), 817–838. | `se_coef_hc0` |

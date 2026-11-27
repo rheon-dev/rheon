@@ -33,7 +33,11 @@ pub(super) fn build_instances<'a>(
     let mut resid_q = diag.resid_q.iter_mut();
     let mut autocorr = diag.autocorr.iter_mut();
     let mut metrics = diag.metrics.iter_mut();
+    let mut scores = diag.scores.iter_mut();
+    let mut interval_scores = diag.interval_scores.iter_mut();
     let mut conformal = diag.conformal.iter_mut();
+    let mut conformal_multi = diag.conformal_multi.iter_mut();
+    let mut conformal_p = diag.conformal_p.iter_mut();
     let mut checks = diag.checks.iter_mut();
     let mut o_pred = out.pred.chunks_mut(block.max(1));
     let mut o_resid = out.resid.chunks_mut(block.max(1));
@@ -41,7 +45,14 @@ pub(super) fn build_instances<'a>(
     let mut o_resid_z = out.zscore.chunks_mut(block.max(1));
     let mut o_autocorr = out.autocorr.chunks_mut(block.max(1));
     let mut o_metrics = out.metrics.chunks_mut((3 * block).max(1));
-    let mut o_conformal = out.conformal.chunks_mut((3 * block).max(1));
+    let mut o_scores = out.scores.chunks_mut((out.n_scores * block).max(1));
+    let mut o_interval_scores = out
+        .interval_scores
+        .chunks_mut((2 * out.n_conf_levels * block).max(1));
+    let mut o_conformal = out
+        .conformal
+        .chunks_mut((3 * out.n_conf_levels * block).max(1));
+    let mut o_conformal_p = out.conformal_p.chunks_mut(block.max(1));
     let mut o_checks = out.checks.chunks_mut((out.n_checks * block).max(1));
     let health_block = if spec.emit_feature_health {
         2 * spec.k() * n_rows
@@ -104,7 +115,11 @@ pub(super) fn build_instances<'a>(
             resid_q: resid_q.next(),
             autocorr: autocorr.next(),
             metrics: metrics.next(),
+            scores: scores.next(),
+            interval_scores: interval_scores.next(),
             conformal: conformal.next(),
+            conformal_multi: conformal_multi.next(),
+            conformal_p: conformal_p.next(),
             checks: checks.next(),
             scratch: scratch.next().expect("one per instance"),
             score_pred: score_pred.next().expect("one per instance"),
@@ -116,7 +131,10 @@ pub(super) fn build_instances<'a>(
             o_resid_z: o_resid_z.next().unwrap_or_default(),
             o_autocorr: o_autocorr.next().unwrap_or_default(),
             o_metrics: o_metrics.next().unwrap_or_default(),
+            o_scores: o_scores.next().unwrap_or_default(),
+            o_interval_scores: o_interval_scores.next().unwrap_or_default(),
             o_conformal: o_conformal.next().unwrap_or_default(),
+            o_conformal_p: o_conformal_p.next().unwrap_or_default(),
             o_checks: o_checks.next().unwrap_or_default(),
             o_health: o_health.next().unwrap_or_default(),
             o_resid_q: o_resid_q.next().unwrap_or_default(),

@@ -4,14 +4,14 @@
 use std::collections::VecDeque;
 
 use rheon_core::{
-    Bocpd, BocpdCfg, BocpdEmission, ChangeNorm, ClockState, Conformal, Constraint, CorrChange,
-    CorrChangeCfg, CorrChangeKind, Covariance, Decay, Deco, DecoCfg, DecoDynamics, Disorder,
-    DriftDetector, EwAutoCorr, EwClass, EwClassCfg, EwCovCfg, EwCovModel, EwCovStat, EwQuantile,
-    EwRidge, EwRidgeCfg, Ftrl, FtrlCfg, FtrlLoss, HitTest, Hmm, HmmCfg, Holt, HoltCfg, HuberScale,
-    KMeans, KMeansCfg, Kalman, KalmanCfg, Lasso, LassoCfg, LearningRate, Marginal, MarginalCfg,
-    Micro, MicroCfg, OnlineModel, Pa, PaCfg, PaMode, Rcov, RcovCfg, RcovKind, Rls, RlsCfg, Robust,
-    RobustCfg, RobustLoss, SeedRule, SeqTest, SeqTestCfg, Sgd, SgdCfg, SgdLoss, SlotMetrics, State,
-    WindowShadow,
+    Bocpd, BocpdCfg, BocpdEmission, ChangeNorm, ClockState, Conformal, ConformalPRing,
+    ConformalSlot, Constraint, CorrChange, CorrChangeCfg, CorrChangeKind, Covariance, Decay, Deco,
+    DecoCfg, DecoDynamics, Disorder, DriftDetector, EwAutoCorr, EwClass, EwClassCfg, EwCovCfg,
+    EwCovModel, EwCovStat, EwQuantile, EwRidge, EwRidgeCfg, Ftrl, FtrlCfg, FtrlLoss, HitTest, Hmm,
+    HmmCfg, Holt, HoltCfg, HuberScale, KMeans, KMeansCfg, Kalman, KalmanCfg, Lasso, LassoCfg,
+    LearningRate, Marginal, MarginalCfg, Micro, MicroCfg, OnlineModel, Pa, PaCfg, PaMode, Rcov,
+    RcovCfg, RcovKind, Rls, RlsCfg, Robust, RobustCfg, RobustLoss, SeedRule, SeqTest, SeqTestCfg,
+    Sgd, SgdCfg, SgdLoss, SlotIntervalScores, SlotMetrics, SlotScores, State, WindowShadow,
 };
 use rheon_core::{ClockValue, CoefVariance, ExactCaps, Stamp};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use crate::checks::{CheckCfg, Checks, RowView};
 use crate::resid_window::ResidWindow;
 use crate::rows::{FeatureCols, FeatureRows};
 use crate::span::{Span, SpanList};
-use crate::spec::{FloatOrList, ModelKind, ShardSpec, Spec};
+use crate::spec::{FloatOrList, MetricKind, ModelKind, ShardSpec, Spec};
 use crate::summary::{DataSummary, Fed};
 
 /// A refused backwards clock, for the bank to turn into the error naming it.
@@ -1269,8 +1269,16 @@ pub struct Persisted {
     pub autocorr: Vec<Vec<EwAutoCorr>>,
     #[serde(default)]
     pub metrics: Vec<Vec<SlotMetrics>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scores: Vec<Vec<SlotScores>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interval_scores: Vec<Vec<SlotIntervalScores>>,
     #[serde(default)]
     pub conformal: Vec<Vec<Conformal>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conformal_multi: Vec<Vec<ConformalSlot>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conformal_p: Vec<Vec<ConformalPRing>>,
     /// Per model instance, the diagnostics with a memory of their own
     /// (docs/PLAN.md task 221): empty, and not written, for a spec that
     /// switches none of them on, so no other spec's bytes move.
@@ -1847,7 +1855,24 @@ impl Stream {
     /// The first of this stream's models whose state a row would have taken
     /// past its cap: the bytes and the cap ([`OnlineModel::state_over_cap`]).
     pub fn state_over_cap(&self) -> Option<(u64, u64)> {
-        self.models.iter().find_map(|(_, m)| m.state_over_cap())
+        self.models
+            .iter()
+            .find_map(|(_, m)| m.state_over_cap())
+            .or_else(|| {
+                let n_rings = (self
+                    .persisted
+                    .conformal_p
+                    .iter()
+                    .map(Vec::len)
+                    .sum::<usize>() as u64)
+                    .max(1);
+                self.persisted
+                    .conformal_p
+                    .iter()
+                    .flatten()
+                    .find_map(ConformalPRing::state_over_cap)
+                    .map(|(b, c)| (b.saturating_mul(n_rings), c.saturating_mul(n_rings)))
+            })
     }
 
     /// Whether `min_settled_frac` withholds what instance `i` reports from its
@@ -2172,6 +2197,7 @@ mod conformal_rows;
 mod heavy_tail;
 mod notified;
 mod pre_row_sigma;
+mod score_rows;
 mod stack_line;
 mod state_cap;
 mod unmet_floor;
@@ -2205,6 +2231,8 @@ impl Stream {
             .collect::<Result<Vec<_>, String>>()?;
         let instances = slots.len();
         let embargo = spec.embargo.as_ref().map(Embargo::of);
+        let (scores, interval_scores, conformal, conformal_multi, conformal_p) =
+            score_rows::init_score_diags(spec, &slots)?;
         Ok(Self {
             persisted: Persisted {
                 clock: ClockState::new(),
@@ -2226,18 +2254,16 @@ impl Stream {
                 } else {
                     Vec::new()
                 },
-                metrics: if spec.emit_metrics {
+                metrics: if spec.emit_metrics.has_legacy() {
                     slots.iter().map(|&n| vec![SlotMetrics::new(); n]).collect()
                 } else {
                     Vec::new()
                 },
-                conformal: match spec.conformal {
-                    Some(level) => {
-                        let proto = Conformal::new(level, spec.conformal_rate_or_default())?;
-                        slots.iter().map(|&n| vec![proto.clone(); n]).collect()
-                    }
-                    None => Vec::new(),
-                },
+                scores,
+                interval_scores,
+                conformal,
+                conformal_multi,
+                conformal_p,
                 checks: if Checks::any(spec) {
                     slots.iter().map(|&n| Checks::new(spec, n)).collect()
                 } else {
@@ -2523,11 +2549,32 @@ impl Stream {
         take_diag("metrics", &mut p.metrics, &fresh.metrics, |s, _| {
             s.has_shape()
         })?;
+        take_diag("scores", &mut p.scores, &fresh.scores, |s, l| {
+            s.matches_shape(l)
+        })?;
+        take_diag(
+            "interval scores",
+            &mut p.interval_scores,
+            &fresh.interval_scores,
+            |s, l| s.matches_shape(l),
+        )?;
         take_diag(
             "conformal intervals",
             &mut p.conformal,
             &fresh.conformal,
             |s, _| s.has_shape(),
+        )?;
+        take_diag(
+            "conformal intervals",
+            &mut p.conformal_multi,
+            &fresh.conformal_multi,
+            |s, l| s.matches_shape(l),
+        )?;
+        take_diag(
+            "conformal p-value rings",
+            &mut p.conformal_p,
+            &fresh.conformal_p,
+            |s, l| s.matches_shape(l),
         )?;
         // Task 221's accumulators, by the same rule: absent, or kept for
         // another set of switches, they start over; this spec's count but
@@ -3327,7 +3374,11 @@ impl Stream {
             resid_q: &mut self.persisted.resid_q,
             autocorr: &mut self.persisted.autocorr,
             metrics: &mut self.persisted.metrics,
+            scores: &mut self.persisted.scores,
+            interval_scores: &mut self.persisted.interval_scores,
             conformal: &mut self.persisted.conformal,
+            conformal_multi: &mut self.persisted.conformal_multi,
+            conformal_p: &mut self.persisted.conformal_p,
             checks: &mut self.persisted.checks,
             scratch: &mut self.scratch,
             score_pred: &mut self.persisted.score_pred,
@@ -3569,7 +3620,6 @@ impl Stream {
                 // model whose read decides a window's edge reads it at the
                 // row's stamp, on a copy of the clock.
                 stamp: spec
-                    .model
                     .reads_at_stamp()
                     .then(|| {
                         let base = self
@@ -3731,7 +3781,11 @@ impl Stream {
             self.persisted.autocorr.clone(),
             self.persisted.metrics.clone(),
         );
+        let mut scores = self.persisted.scores.clone();
+        let mut interval_scores = self.persisted.interval_scores.clone();
         let mut conformal = self.persisted.conformal.clone();
+        let mut conformal_multi = self.persisted.conformal_multi.clone();
+        let mut conformal_p = self.persisted.conformal_p.clone();
         let mut checks = self.persisted.checks.clone();
         let mut scratch: Vec<Scratch> = (0..n).map(|_| Scratch::default()).collect();
         // Scoring buffers nothing and replays nothing, so its queues stay empty.
@@ -3750,7 +3804,11 @@ impl Stream {
             resid_q: &mut resid_q,
             autocorr: &mut autocorr,
             metrics: &mut metrics,
+            scores: &mut scores,
+            interval_scores: &mut interval_scores,
             conformal: &mut conformal,
+            conformal_multi: &mut conformal_multi,
+            conformal_p: &mut conformal_p,
             checks: &mut checks,
             scratch: &mut scratch,
             score_pred: &mut score_pred,
@@ -3898,7 +3956,11 @@ struct Diagnostics<'a> {
     resid_q: &'a mut [Vec<EwQuantile>],
     autocorr: &'a mut [Vec<EwAutoCorr>],
     metrics: &'a mut [Vec<SlotMetrics>],
+    scores: &'a mut [Vec<SlotScores>],
+    interval_scores: &'a mut [Vec<SlotIntervalScores>],
     conformal: &'a mut [Vec<Conformal>],
+    conformal_multi: &'a mut [Vec<ConformalSlot>],
+    conformal_p: &'a mut [Vec<ConformalPRing>],
     checks: &'a mut [Checks],
     scratch: &'a mut [Scratch],
     score_pred: &'a mut [std::collections::VecDeque<Vec<f64>>],
@@ -4105,7 +4167,11 @@ struct Instance<'a> {
     resid_q: Option<&'a mut Vec<EwQuantile>>,
     autocorr: Option<&'a mut Vec<EwAutoCorr>>,
     metrics: Option<&'a mut Vec<SlotMetrics>>,
+    scores: Option<&'a mut Vec<SlotScores>>,
+    interval_scores: Option<&'a mut Vec<SlotIntervalScores>>,
     conformal: Option<&'a mut Vec<Conformal>>,
+    conformal_multi: Option<&'a mut Vec<ConformalSlot>>,
+    conformal_p: Option<&'a mut Vec<ConformalPRing>>,
     /// Task 221's accumulators, and what they decay by: `None` when the
     /// spec switches none on.
     checks: Option<&'a mut Checks>,
@@ -4122,7 +4188,10 @@ struct Instance<'a> {
     o_resid_z: &'a mut [f64],
     o_autocorr: &'a mut [f64],
     o_metrics: &'a mut [f64],
+    o_scores: &'a mut [f64],
+    o_interval_scores: &'a mut [f64],
     o_conformal: &'a mut [f64],
+    o_conformal_p: &'a mut [f64],
     o_checks: &'a mut [f64],
     o_health: &'a mut [f64],
     o_resid_q: &'a mut [f64],
@@ -4201,7 +4270,11 @@ struct KeptFresh {
     resid_q: Option<Vec<EwQuantile>>,
     autocorr: Option<Vec<EwAutoCorr>>,
     metrics: Option<Vec<SlotMetrics>>,
+    scores: Option<Vec<SlotScores>>,
+    interval_scores: Option<Vec<SlotIntervalScores>>,
     conformal: Option<Vec<Conformal>>,
+    conformal_multi: Option<Vec<ConformalSlot>>,
+    conformal_p: Option<Vec<ConformalPRing>>,
     checks: Option<Checks>,
     pending_clock: Option<f64>,
 }
@@ -4228,7 +4301,11 @@ impl Instance<'_> {
             resid_q: self.resid_q.as_deref().cloned(),
             autocorr: self.autocorr.as_deref().cloned(),
             metrics: self.metrics.as_deref().cloned(),
+            scores: self.scores.as_deref().cloned(),
+            interval_scores: self.interval_scores.as_deref().cloned(),
             conformal: self.conformal.as_deref().cloned(),
+            conformal_multi: self.conformal_multi.as_deref().cloned(),
+            conformal_p: self.conformal_p.as_deref().cloned(),
             checks: self.checks.as_deref().cloned(),
             pending_clock: self.pending_clock.as_deref().copied(),
         };
@@ -4262,7 +4339,19 @@ impl Instance<'_> {
         if let (Some(d), Some(k)) = (self.metrics.as_deref_mut(), kept.metrics) {
             *d = k;
         }
+        if let (Some(d), Some(k)) = (self.scores.as_deref_mut(), kept.scores) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.interval_scores.as_deref_mut(), kept.interval_scores) {
+            *d = k;
+        }
         if let (Some(d), Some(k)) = (self.conformal.as_deref_mut(), kept.conformal) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.conformal_multi.as_deref_mut(), kept.conformal_multi) {
+            *d = k;
+        }
+        if let (Some(d), Some(k)) = (self.conformal_p.as_deref_mut(), kept.conformal_p) {
             *d = k;
         }
         if let (Some(d), Some(k)) = (self.checks.as_deref_mut(), kept.checks) {
@@ -4344,10 +4433,27 @@ impl Instance<'_> {
         if let Some(m) = self.metrics.as_deref_mut() {
             m.iter_mut().for_each(|s| *s = SlotMetrics::new());
         }
-        if let (Some(c), Some(level)) = (self.conformal.as_deref_mut(), spec.conformal) {
+        if let Some(s) = self.scores.as_deref_mut() {
+            s.iter_mut().for_each(SlotScores::reset);
+        }
+        if let Some(s) = self.interval_scores.as_deref_mut() {
+            s.iter_mut().for_each(SlotIntervalScores::reset);
+        }
+        if let Some(c) = self.conformal.as_deref_mut() {
+            let level = spec.conformal_levels()[0];
             let rate = spec.conformal_rate_or_default();
             c.iter_mut()
                 .for_each(|e| *e = Conformal::new(level, rate).expect("validated"));
+        }
+        if let Some(c) = self.conformal_multi.as_deref_mut() {
+            let levels = spec.conformal_levels();
+            let rate = spec.conformal_rate_or_default();
+            let sym = spec.conformal_symmetric;
+            c.iter_mut()
+                .for_each(|e| *e = ConformalSlot::new(&levels, rate, sym).expect("validated"));
+        }
+        if let Some(cp) = self.conformal_p.as_deref_mut() {
+            cp.iter_mut().for_each(ConformalPRing::reset);
         }
         if let Some(c) = self.checks.as_deref_mut() {
             *c = Checks::new(spec, self.n_slots);
@@ -5091,75 +5197,47 @@ fn run_instance(
         // too small, and the CUSUM of squares sat at −0.70 on iid labels
         // under an embargo of 50 (review round 6, A-6; schema 57).
         let mut shown_radius: Option<Vec<f64>> = None;
+        let mut shown_multi: Option<Vec<f64>> = None;
+        let mut shown_sigma: Option<Vec<f64>> = None;
         if plan.buffered {
-            // The record is sized once, for every part it will hold, so a
-            // held row allocates once rather than growing by a reallocation
-            // per part (P34; the VM measured about 430 instructions a held
-            // row on x86 in the growth, R-V41).
-            let len = step.pred.len()
-                + inst.conformal.as_deref().map_or(0, |cs| cs.len())
-                + if has_row_infl { sc.row_infl.len() } else { 0 }
-                + if kept { sc.ungated.len() } else { 0 };
-            let mut record = Vec::with_capacity(len);
-            record.extend_from_slice(&step.pred);
-            if let Some(cs) = inst.conformal.as_deref() {
-                let ring = inst.resid_win.as_ref().map(SpreadRef::get);
-                let spread = inst
-                    .residuals
-                    .then_some((&inst.resid_w[..], &inst.resid_var[..]));
-                conformal_rows::shown_radii(&mut record, cs, ring, inst.decay, spread);
-            }
-            if has_row_infl {
-                record.extend_from_slice(&sc.row_infl);
-            }
-            // And, where a gate withheld the score, each slot's own
-            // prediction, last, which the spread folds at the release
-            // ([`Persisted::ungated_spread`]): a record a gate withheld
-            // nothing from is the length it always was.
-            if kept {
-                record.extend_from_slice(&sc.ungated);
-            }
-            // Under `label_clock` the buffer is ordered by label time, and
-            // the records keep its order (task 341).
-            // `places`, by the row, says where (task 341): kept beside the
-            // plans, as `front_cuts` is, so no other spec's plan grows.
-            match places.get(ri) {
-                Some(&(at, drop)) => {
-                    inst.score_pred.insert(at as usize, record);
-                    if drop != u32::MAX {
-                        inst.score_pred.remove(drop as usize);
-                    }
-                }
-                None => inst.score_pred.push_back(record),
-            }
+            score_rows::pack_score_pred(
+                inst.score_pred,
+                inst.conformal.as_deref().map(Vec::as_slice),
+                inst.conformal_multi.as_deref().map(Vec::as_slice),
+                inst.conformal_p.is_some(),
+                inst.resid_win.as_ref().map(SpreadRef::get),
+                inst.decay,
+                inst.residuals
+                    .then_some((&inst.resid_w[..], &inst.resid_var[..])),
+                &step.pred,
+                &sc.row_infl,
+                &sc.ungated,
+                has_row_infl,
+                kept,
+                places.get(ri).copied(),
+            );
         } else if !plan.direct() {
-            let n = step.pred.len();
-            let conformal = inst.conformal.is_some();
-            let parts = 1 + usize::from(conformal) + usize::from(has_row_infl);
-            match inst.score_pred.pop_front() {
-                Some(p)
-                    if p.len() == parts * n
-                        || ((inst.ungated_spread || inst.ungated_drift)
-                            && p.len() == (parts + 1) * n) =>
-                {
-                    step.pred.copy_from_slice(&p[..n]);
-                    if conformal {
-                        shown_radius = Some(p[n..2 * n].to_vec());
-                    }
-                    if has_row_infl {
-                        sc.row_infl.clear();
-                        sc.row_infl
-                            .extend_from_slice(&p[(parts - 1) * n..parts * n]);
-                    }
-                    if p.len() > parts * n {
-                        sc.ungated.clear();
-                        sc.ungated.extend_from_slice(&p[parts * n..]);
-                        kept = true;
-                    }
-                }
-                // No record of the score: fold nothing rather than the
-                // prediction that peeks.
-                _ => step.pred.fill(f64::NAN),
+            let mp = inst
+                .conformal_multi
+                .as_deref()
+                .and_then(|cs| cs.first())
+                .map_or(0, |c| 2 * c.len());
+            let u = score_rows::unpack_score_pred(
+                inst.score_pred,
+                inst.conformal.is_some(),
+                mp,
+                inst.conformal_p.is_some(),
+                inst.ungated_spread || inst.ungated_drift,
+                &mut step.pred,
+                &mut sc.row_infl,
+                &mut sc.ungated,
+                has_row_infl,
+            );
+            shown_radius = u.shown_radius;
+            shown_multi = u.shown_multi;
+            shown_sigma = u.shown_sigma;
+            if u.kept {
+                kept = true;
             }
         }
 
@@ -5393,13 +5471,36 @@ fn run_instance(
             }
         }
 
-        // The conformal interval is `pred ± q`, `q = m·sigma` read before the
-        // row, then the row's own score moves `m` (ENHANCEMENTS E36; the
-        // multiplier, task 368). `sigma` is the pre-row value, the one the
-        // row's `sigma` field shows.
-        // Under `conformal_rate = "auto"` the step reads the rows waiting,
-        // the released one's record already off the front (task 342b).
+        if let Some(scs) = inst.scores.as_deref_mut() {
+            let has_mae = inst.spec.emit_metrics.has(MetricKind::Mae);
+            let n_pin = inst.spec.pinball_levels().len();
+            let has_ll = inst.spec.emit_metrics.has(MetricKind::LogLoss);
+            score_rows::step_scores(
+                scs,
+                inst.o_scores,
+                conformal_rows::At { ri, n_rows, block },
+                (has_mae, n_pin, has_ll),
+                (&step.pred, &sc.ys),
+                nc,
+                (emit, learn),
+                (lam, w),
+            );
+        }
+
         if let Some(cs) = inst.conformal.as_deref_mut() {
+            if let Some(isc) = inst.interval_scores.as_deref_mut() {
+                score_rows::step_interval_scores_legacy(
+                    cs,
+                    isc,
+                    inst.o_interval_scores,
+                    conformal_rows::At { ri, n_rows, block },
+                    (&step.pred, &sc.sig, &sc.ys),
+                    nc,
+                    (emit, learn),
+                    shown_radius.as_deref(),
+                    (lam, w),
+                );
+            }
             let held = if inst.spec.conformal_rate_auto() {
                 inst.score_pred.len()
             } else {
@@ -5414,6 +5515,40 @@ fn run_instance(
                 shown_radius.as_deref(),
                 (lam, w),
                 held,
+            );
+        }
+        if let Some(cs) = inst.conformal_multi.as_deref_mut() {
+            let held = if inst.spec.conformal_rate_auto() {
+                inst.score_pred.len()
+            } else {
+                0
+            };
+            score_rows::step_conformal_multi(
+                cs,
+                inst.interval_scores.as_deref_mut().map(Vec::as_mut_slice),
+                inst.o_conformal,
+                inst.o_interval_scores,
+                conformal_rows::At { ri, n_rows, block },
+                (&step.pred, &sc.r, &sc.sig, &sc.ys),
+                nc,
+                (emit, learn),
+                shown_multi.as_deref(),
+                (lam, w),
+                held,
+            );
+        }
+        if let Some(rings) = inst.conformal_p.as_deref_mut() {
+            score_rows::step_conformal_p(
+                rings,
+                inst.o_conformal_p,
+                conformal_rows::At { ri, n_rows, block },
+                inst.spec,
+                inst.decay,
+                (&sc.r, &sc.sig),
+                shown_sigma.as_deref(),
+                (emit, learn),
+                (d_clock, score_d, plan.stamp, w),
+                inst.notified,
             );
         }
 

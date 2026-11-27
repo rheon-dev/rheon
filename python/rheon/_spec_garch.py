@@ -26,7 +26,6 @@ def garch(
     start_span: float | Duration | None = None,
     forecast_rows: list[int] | dict[str, int] | None = None,
     max_horizon_work: int | None = None,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A conditional variance for each target, from the GARCH family, fitted
@@ -399,6 +398,4 @@ def garch(
         )
     if max_horizon_work is not None:
         model["max_horizon_work"] = max_horizon_work
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     return _common(name, model, targets=targets, features=list(features or []), **common)

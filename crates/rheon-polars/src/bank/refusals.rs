@@ -29,73 +29,22 @@ pub(super) fn over_budget(
 pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) -> PolarsError {
     let group = super::group_label(spec, key);
     let fixed = crate::stream::fixed_span(spec);
-    let given = match &spec.model {
-        _ if fixed.is_some() => format!("{cap} bytes, {}", fixed.as_ref().map_or("", |f| f.cap)),
-        ModelKind::Hawkes {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Expectile {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::CorrChange {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Garch {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Dcc {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Realized {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::PowerVariation {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::DdSketch {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Isotonic {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Glm {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Huber {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Quantile {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Sgd {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::EwmMoments {
-            max_state_bytes: Some(_),
-            ..
-        }
-        | ModelKind::Audit {
-            max_state_bytes: Some(_),
-            ..
-        } => format!("max_state_bytes of {cap}"),
-        _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
+    let given = if let Some(f) = &fixed {
+        format!("{cap} bytes, {}", f.cap)
+    } else if spec.effective_max_state_bytes().is_some() {
+        format!("max_state_bytes of {cap}")
+    } else {
+        format!("the default max_state_bytes of {cap}, which a spec gets when it sets none")
     };
-    let (window, shorten) = match (&spec.model, fixed) {
-        (_, Some(f)) => (format!("the {} inside {}", f.holds, f.span), f.shorten),
-        (model, None) => match model {
+    let (window, shorten) = if let Some(f) = fixed {
+        (format!("the {} inside {}", f.holds, f.span), f.shorten)
+    } else if let Some(w) = &spec.conformal_p_window_size {
+        (
+            format!("the rows inside conformal_p_window_size = {w}"),
+            "Shorten conformal_p_window_size, or give conformal_p_window_rows",
+        )
+    } else {
+        match &spec.model {
             ModelKind::Hawkes {
                 window_size: Some(w),
                 ..
@@ -218,7 +167,7 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
                 "Shorten the lags or lag_tolerance",
             ),
             _ => ("its window".to_string(), "Shorten the window"),
-        },
+        }
     };
     let (_, raise) = crate::stream::cap_words(spec);
     let text = format!(

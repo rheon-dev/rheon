@@ -34,8 +34,26 @@ pub struct LastRow {
     pub autocorr: Vec<f64>,
     #[serde(with = "rheon_core::humanfloat::vec_f64_or_tag")]
     pub metrics: Vec<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_f64_or_tag"
+    )]
+    pub scores: Vec<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_f64_or_tag"
+    )]
+    pub interval_scores: Vec<f64>,
     #[serde(with = "rheon_core::humanfloat::vec_f64_or_tag")]
     pub conformal: Vec<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_f64_or_tag"
+    )]
+    pub conformal_p: Vec<f64>,
     /// Task 221's values; empty, and not written, without them.
     #[serde(
         default,
@@ -142,7 +160,10 @@ impl LastRow {
         take_row(&mut self.zscore, &out.zscore, n, ri);
         take_row(&mut self.autocorr, &out.autocorr, n, ri);
         take_row(&mut self.metrics, &out.metrics, n, ri);
+        take_row(&mut self.scores, &out.scores, n, ri);
+        take_row(&mut self.interval_scores, &out.interval_scores, n, ri);
         take_row(&mut self.conformal, &out.conformal, n, ri);
+        take_row(&mut self.conformal_p, &out.conformal_p, n, ri);
         take_row(&mut self.checks, &out.checks, n, ri);
         take_row(&mut self.health, &out.health, n, ri);
         take_row(&mut self.resid_q, &out.resid_q, n, ri);
@@ -184,7 +205,10 @@ impl LastRow {
             out.zscore.len() == self.zscore.len(),
             out.autocorr.len() == self.autocorr.len(),
             out.metrics.len() == self.metrics.len(),
+            out.scores.len() == self.scores.len(),
+            out.interval_scores.len() == self.interval_scores.len(),
             out.conformal.len() == self.conformal.len(),
+            out.conformal_p.len() == self.conformal_p.len(),
             out.checks.len() == self.checks.len(),
             out.health.len() == self.health.len(),
             out.resid_q.len() == self.resid_q.len(),
@@ -221,7 +245,10 @@ impl LastRow {
         out.zscore.clone_from(&self.zscore);
         out.autocorr.clone_from(&self.autocorr);
         out.metrics.clone_from(&self.metrics);
+        out.scores.clone_from(&self.scores);
+        out.interval_scores.clone_from(&self.interval_scores);
         out.conformal.clone_from(&self.conformal);
+        out.conformal_p.clone_from(&self.conformal_p);
         out.checks.clone_from(&self.checks);
         out.health.clone_from(&self.health);
         out.resid_q.clone_from(&self.resid_q);

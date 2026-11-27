@@ -259,6 +259,22 @@ _INF_OK: dict[str, frozenset[str]] = {
 #: 2026-10-05, the TB5 leg). ``holt``'s ``trend`` is written only when off,
 #: and its seasonal forms' settings only when given.
 _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
+    "*": frozenset(
+        {
+            "label_clock",
+            "max_held_rows",
+            "held_overflow",
+            "drift_kind",
+            "drift_options",
+            "emit_target_weight",
+            "metric_quantiles",
+            "conformal_symmetric",
+            "emit_conformal_p",
+            "conformal_p_window_rows",
+            "conformal_p_window_size",
+            "max_state_bytes",
+        }
+    ),
     "holt": _HOLT_OPTIONAL,
     "hawkes": frozenset(
         {"kernel_half_lives", "window_events", "window_size", "closed", "max_state_bytes"}

@@ -23,7 +23,6 @@ def realized(
     closed: Literal["right", "both"] = "right",
     lm_window: int | None = None,
     lm_beta: float = 0.99,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Realized volatility and the jump tests on it, for each target, one
@@ -244,6 +243,4 @@ def realized(
         model["lm_window"] = lm_window
     if lm_beta != 0.99:
         model["lm_beta"] = lm_beta
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     return _common(name, model, targets=targets, features=[], **common)

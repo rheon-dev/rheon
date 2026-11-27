@@ -19,7 +19,6 @@ def pca(
     n_components: int | None = None,
     method: Literal["svd", "ccipca", "oja"] = "svd",
     learning_rate: float | None = None,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Principal components of the feature columns, learned one row at a time.
@@ -268,7 +267,5 @@ def pca(
         model["n_components"] = n_components
     if learning_rate is not None:
         model["learning_rate"] = learning_rate
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     targets = _mirror_target(name, "pca", features, common, "its components are over")
     return _common(name, model, targets=targets, features=features, **common)

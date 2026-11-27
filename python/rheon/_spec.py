@@ -334,6 +334,7 @@ _FLOOR = {
     "window_rows": ("1", "1 or more"),
     "distinct_precision": ("8", "8 to 16"),
     "distinct_window_rows": ("1", "1 or more"),
+    "conformal_p_window_rows": ("1", "1 or more"),
     "max_state_bytes": ("1", "1 or more"),
     "start_rows": ("1", "1 or more, and to garch's least for its form"),
 }
@@ -1104,9 +1105,30 @@ def _common(
     emit_selected: bool = False,
     emit_averaged: bool = False,
     average_eta: float | None = None,
-    emit_metrics: bool = False,
-    conformal: float | None = None,
+    emit_metrics: (
+        bool
+        | list[
+            Literal[
+                "ic",
+                "r2",
+                "hit_rate",
+                "mae",
+                "pinball",
+                "log_loss",
+                "coverage",
+                "width",
+                "winkler",
+            ]
+        ]
+    ) = False,
+    metric_quantiles: list[float] | None = None,
+    conformal: float | list[float] | None = None,
+    conformal_symmetric: bool = True,
     conformal_rate: float | Literal["auto"] | None = None,
+    emit_conformal_p: bool = False,
+    conformal_p_window_rows: int | None = None,
+    conformal_p_window_size: float | Duration | None = None,
+    max_state_bytes: int | None = None,
     resid_quantiles: list[float] | None = None,
     emit_autocorr: bool = False,
     resid_autocorr_lag: int | None = None,
@@ -1220,6 +1242,18 @@ def _common(
         spec["emit_target_weight"] = emit_target_weight
     if drift_options is not None:
         spec["drift_options"] = dict(drift_options)
+    if metric_quantiles is not None:
+        spec["metric_quantiles"] = list(metric_quantiles)
+    if conformal_symmetric is not True:
+        spec["conformal_symmetric"] = conformal_symmetric
+    if emit_conformal_p is not False:
+        spec["emit_conformal_p"] = emit_conformal_p
+    if conformal_p_window_rows is not None:
+        spec["conformal_p_window_rows"] = conformal_p_window_rows
+    if conformal_p_window_size is not None:
+        spec["conformal_p_window_size"] = conformal_p_window_size
+    if max_state_bytes is not None:
+        spec["max_state_bytes"] = max_state_bytes
     validate_spec(_json(spec))
     return spec
 

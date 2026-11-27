@@ -235,7 +235,8 @@ impl Spec {
                     ),
                     (
                         "max_state_bytes",
-                        max_state_bytes.is_some(),
+                        max_state_bytes.or(self.max_state_bytes).is_some()
+                            && !self.emit_conformal_p,
                         "loss",
                         "huber",
                         loss,

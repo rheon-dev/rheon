@@ -28,8 +28,17 @@ pub struct ChunkOut {
     pub autocorr: Vec<f64>,
     /// `(ic, r2, hit_rate)`, model-major: `n_models * 3 * n_slots * n_rows`.
     pub metrics: Vec<f64>,
-    /// `(pred_lo, pred_hi, coverage)`, laid out like `metrics`.
+    /// Point-loss scores (`mae`, `pinball*`, `log_loss`), model-major:
+    /// `n_models * n_scores * n_slots * n_rows`.
+    pub scores: Vec<f64>,
+    /// Interval scores (`width`, `winkler` per conformal level), model-major:
+    /// `n_models * (2 * n_conf_levels) * n_slots * n_rows`.
+    pub interval_scores: Vec<f64>,
+    /// `(lo, hi, coverage)` per conformal level, model-major:
+    /// `n_models * (3 * n_conf_levels) * n_slots * n_rows`.
     pub conformal: Vec<f64>,
+    /// Standalone per-row conformal p-value: `n_models * n_slots * n_rows`.
+    pub conformal_p: Vec<f64>,
     /// Task 221's values, `n_checks` per slot, laid out like `metrics`:
     /// `n_models * n_checks * n_slots * n_rows` ([`crate::checks`]).
     pub checks: Vec<f64>,
@@ -86,6 +95,8 @@ pub struct ChunkOut {
     pub n_models: usize,
     pub n_slots: usize,
     pub n_levels: usize,
+    pub n_conf_levels: usize,
+    pub n_scores: usize,
     pub n_checks: usize,
 }
 
@@ -134,11 +145,20 @@ impl Buffers {
     fn per_row(&self, spec: &Spec, n_models: usize, n_slots: usize) -> usize {
         let per = n_models * n_slots;
         let on = |flag: bool| if flag { per } else { 0 };
+        let n_conf = spec.conformal_levels().len();
+        let n_scores = spec.score_block_count();
         per + on(self.residuals)
             + 2 * on(self.extras)
             + on(spec.emit_autocorr)
-            + 3 * on(spec.emit_metrics)
-            + 3 * on(spec.conformal.is_some())
+            + 3 * on(spec.emit_metrics.has_legacy())
+            + n_scores * per
+            + if spec.emit_metrics.has_interval_scores() {
+                2 * n_conf * per
+            } else {
+                0
+            }
+            + 3 * n_conf * per
+            + on(spec.emit_conformal_p)
             + crate::checks::value_names(spec).len() * per
             + if spec.emit_feature_health {
                 n_models * 2 * spec.k()
@@ -177,7 +197,10 @@ impl ChunkOut {
             zscore: Vec::new(),
             autocorr: Vec::new(),
             metrics: Vec::new(),
+            scores: Vec::new(),
+            interval_scores: Vec::new(),
             conformal: Vec::new(),
+            conformal_p: Vec::new(),
             checks: Vec::new(),
             health: Vec::new(),
             resid_q: Vec::new(),
@@ -201,6 +224,8 @@ impl ChunkOut {
             n_models: 0,
             n_slots: 0,
             n_levels: 0,
+            n_conf_levels: 0,
+            n_scores: 0,
             n_checks: 0,
         }
     }
@@ -280,12 +305,25 @@ impl ChunkOut {
         written(dense, &mut self.sigma, on(extras), f64::NAN);
         written(dense, &mut self.zscore, on(extras), f64::NAN);
         fill(&mut self.autocorr, on(spec.emit_autocorr), f64::NAN);
-        fill(&mut self.metrics, 3 * on(spec.emit_metrics), f64::NAN);
+        let n_conf_levels = spec.conformal_levels().len();
+        let n_scores = spec.score_block_count();
         fill(
-            &mut self.conformal,
-            3 * on(spec.conformal.is_some()),
+            &mut self.metrics,
+            3 * on(spec.emit_metrics.has_legacy()),
             f64::NAN,
         );
+        fill(&mut self.scores, n_scores * per, f64::NAN);
+        fill(
+            &mut self.interval_scores,
+            if spec.emit_metrics.has_interval_scores() {
+                2 * n_conf_levels * per
+            } else {
+                0
+            },
+            f64::NAN,
+        );
+        fill(&mut self.conformal, 3 * n_conf_levels * per, f64::NAN);
+        fill(&mut self.conformal_p, on(spec.emit_conformal_p), f64::NAN);
         fill(&mut self.checks, n_checks * per, f64::NAN);
         let health = if spec.emit_feature_health {
             n_models * 2 * spec.k() * n_rows
@@ -324,6 +362,8 @@ impl ChunkOut {
         self.n_models = n_models;
         self.n_slots = n_slots;
         self.n_levels = n_levels;
+        self.n_conf_levels = n_conf_levels;
+        self.n_scores = n_scores;
         self.n_checks = n_checks;
     }
 
@@ -359,7 +399,10 @@ impl ChunkOut {
                 &self.zscore,
                 &self.autocorr,
                 &self.metrics,
+                &self.scores,
+                &self.interval_scores,
                 &self.conformal,
+                &self.conformal_p,
                 &self.checks,
                 &self.health,
                 &self.resid_q,

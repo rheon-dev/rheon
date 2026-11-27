@@ -546,7 +546,6 @@ def corrchange(
     permute_every: float | Duration | None = None,
     window_size: float | Duration | None = None,
     monitor_span: float | Duration | None = None,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Tests of whether the correlations between the feature columns have changed, by
@@ -1208,7 +1207,6 @@ def corrchange(
         ("permute_every", permute_every),
         ("window_size", window_size),
         ("monitor_span", monitor_span),
-        ("max_state_bytes", max_state_bytes),
     ):
         if value is not None:
             model[key] = value

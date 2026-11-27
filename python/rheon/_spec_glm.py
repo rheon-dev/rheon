@@ -25,7 +25,6 @@ def glm(
     ridge: float | None = None,
     refit_rows: int | None = None,
     refit_span: float | Duration | None = None,
-    max_state_bytes: int | None = None,
     step_cap: float | None = None,
     refit_budget: float | None = None,
     **common: Unpack[CommonKwargs],
@@ -365,6 +364,4 @@ def glm(
     # Written only when given, as the Rust spec leaves them out when absent.
     if refit_span is not None:
         model["refit_span"] = refit_span
-    if max_state_bytes is not None:
-        model["max_state_bytes"] = max_state_bytes
     return _common(name, model, targets=targets, features=features, **common)

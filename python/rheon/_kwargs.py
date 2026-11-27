@@ -67,9 +67,30 @@ class CommonKwargs(TypedDict, total=False):
     emit_selected: bool
     emit_averaged: bool
     average_eta: float | None
-    emit_metrics: bool
-    conformal: float | None
+    emit_metrics: (
+        bool
+        | list[
+            Literal[
+                "ic",
+                "r2",
+                "hit_rate",
+                "mae",
+                "pinball",
+                "log_loss",
+                "coverage",
+                "width",
+                "winkler",
+            ]
+        ]
+    )
+    metric_quantiles: list[float] | None
+    conformal: float | list[float] | None
+    conformal_symmetric: bool
     conformal_rate: float | Literal["auto"] | None
+    emit_conformal_p: bool
+    conformal_p_window_rows: int | None
+    conformal_p_window_size: float | Duration | None
+    max_state_bytes: int | None
     resid_quantiles: list[float] | None
     emit_autocorr: bool
     resid_autocorr_lag: int | None

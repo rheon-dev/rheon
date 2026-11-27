@@ -174,6 +174,21 @@ fn stream_settings(spec: &Spec, stream: &Stream, model: &AnyModel) -> Value {
         },
     );
     s.insert(
+        "conformal_p_window_rows".into(),
+        if spec.conformal_p_window_size.is_some() {
+            Value::Null
+        } else {
+            json!(
+                spec.conformal_p_window_rows
+                    .unwrap_or(rheon_core::DEFAULT_CONFORMAL_P_WINDOW_ROWS)
+            )
+        },
+    );
+    s.insert(
+        "max_state_bytes".into(),
+        json!(spec.effective_max_state_bytes()),
+    );
+    s.insert(
         "resid_autocorr_lag".into(),
         json!(spec.resid_autocorr_lag_or_default()),
     );

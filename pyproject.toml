@@ -264,6 +264,13 @@ dev = [
     # sliding-window, rerun over each window's rows). MIT, pure Python over
     # numpy and scipy. The floor is the version measured.
     "datasketch>=2.0.0",
+    # tests/test_conformal_variants.py and tests/test_scores.py: MAPIE's
+    # regression interval metrics (coverage, mean width, Winkler/MWI, SSC) and
+    # SplitConformalRegressor with AbsoluteConformityScore(sym=False) and
+    # multi-level confidence_level, and crepes' ConformalRegressor
+    # predict_p_online / predict_p (smoothing=False). Both BSD-3-Clause.
+    "mapie>=1.6.0",
+    "crepes>=0.9.1",
 ]
 # The R oracles (tests/r_oracle/): R's `highfrequency` and `yuima`, the
 # reference implementations of the realized measures and the jump tests,

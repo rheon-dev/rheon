@@ -34,6 +34,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
             "tails_half_life",
             "influence_half_life",
             "feature_health_half_life",
+            "conformal_p_window_size",
         ],
     ),
     (
@@ -355,6 +356,11 @@ impl Spec {
             put(&mut out, "session_gap", Some(g));
         }
         put(&mut out, "embargo", self.embargo.as_ref());
+        put(
+            &mut out,
+            "conformal_p_window_size",
+            self.conformal_p_window_size.as_ref(),
+        );
         put(&mut out, "drift_threshold", self.drift_threshold.as_ref());
         put(&mut out, "coef_every", self.coef_every.as_ref());
         // The diagnostics' own memories (task 221).
@@ -696,6 +702,12 @@ impl Spec {
             (None, Some(n)) => Ok(ClockScale::Numbers(n)),
             (None, None) => Ok(ClockScale::Free),
         }
+    }
+    /// Whether a read of this spec decides a window's edge on the clock
+    /// (either its model or a standalone conformal p-value ring), so scored,
+    /// weightless, and delayed rows carry their exact [`Stamp`].
+    pub fn reads_at_stamp(&self) -> bool {
+        self.model.reads_at_stamp() || self.emit_conformal_p
     }
 }
 

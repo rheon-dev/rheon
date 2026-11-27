@@ -61,8 +61,14 @@
   emit_averaged = False
   average_eta = None
   emit_metrics = False
+  metric_quantiles = None
   conformal = None
+  conformal_symmetric = True
   conformal_rate = None
+  emit_conformal_p = False
+  conformal_p_window_rows = None
+  conformal_p_window_size = None
+  max_state_bytes = None
   resid_quantiles = None
   emit_autocorr = False
   resid_autocorr_lag = None
@@ -103,7 +109,6 @@
     lags
     features = None
     ridge = None
-    max_state_bytes = None
     select = None
     window_size = None
     closed = 'right'
@@ -120,7 +125,6 @@
     distinct_window_rows = None
     distinct_window_size = None
     closed = 'right'
-    max_state_bytes = None
     common
   bocpd:
     name
@@ -164,7 +168,6 @@
     permute_every = None
     window_size = None
     monitor_span = None
-    max_state_bytes = None
     common
   dcc:
     name
@@ -182,7 +185,6 @@
     g = None
     start_rows = None
     start_span = None
-    max_state_bytes = None
     common
   ddsketch:
     name
@@ -192,7 +194,6 @@
     window_rows = None
     window_size = None
     closed = 'right'
-    max_state_bytes = None
     common
   deco:
     name
@@ -243,7 +244,6 @@
     lag_tolerance = None
     window_rows = None
     window_size = None
-    max_state_bytes = None
     common
   ewridge:
     name
@@ -278,7 +278,6 @@
     window_rows = None
     window_size = None
     closed = 'right'
-    max_state_bytes = None
     refit_budget = None
     common
   ftrl:
@@ -305,7 +304,6 @@
     start_span = None
     forecast_rows = None
     max_horizon_work = None
-    max_state_bytes = None
     common
   glm:
     name
@@ -317,7 +315,6 @@
     ridge = None
     refit_rows = None
     refit_span = None
-    max_state_bytes = None
     step_cap = None
     refit_budget = None
     common
@@ -329,7 +326,6 @@
     window_events = None
     window_size = None
     closed = 'right'
-    max_state_bytes = None
     common
   hmm:
     name
@@ -365,7 +361,6 @@
     initial_level = None
     initial_trend = None
     initial_seasonal = None
-    max_state_bytes = None
     common
   huber:
     name
@@ -383,7 +378,6 @@
     emit_huber_scale = False
     huber_refit_rows = None
     huber_refit_span = None
-    max_state_bytes = None
     refit_budget = None
     common
   isotonic:
@@ -397,7 +391,6 @@
     window_rows = None
     window_size = None
     closed = 'right'
-    max_state_bytes = None
     common
   kalman:
     name
@@ -414,7 +407,6 @@
     forecast_spans = None
     smooth_lag = None
     emit_smoothed_se = False
-    max_state_bytes = None
     common
   kmeans:
     name
@@ -510,7 +502,6 @@
     n_components = None
     method = 'svd'
     learning_rate = None
-    max_state_bytes = None
     common
   power_variation:
     name
@@ -519,7 +510,6 @@
     window_rows = None
     window_size = None
     closed = 'right'
-    max_state_bytes = None
     common
   quantile:
     name
@@ -533,7 +523,6 @@
     quantile_eps = None
     quantile_refit_rows = None
     quantile_refit_span = None
-    max_state_bytes = None
     refit_budget = None
     common
   rcov:
@@ -559,7 +548,6 @@
     closed = 'right'
     lm_window = None
     lm_beta = 0.99
-    max_state_bytes = None
     common
   rls:
     name
@@ -586,7 +574,6 @@
     huber_scale_half_life = None
     huber_refit_rows = None
     huber_refit_span = None
-    max_state_bytes = None
     refit_budget = None
     quantile = None
     eps = None
@@ -608,7 +595,6 @@
     spacing = None
     scaling = 'density'
     detrend = True
-    max_state_bytes = None
     window_size = None
     closed = 'right'
     snapshot_every = None
@@ -620,7 +606,6 @@
     targets
     quantiles
     compression = 100.0
-    max_state_bytes = None
     common
   vector_ar:
     name
@@ -628,7 +613,6 @@
     lags
     features = None
     ridge = None
-    max_state_bytes = None
     select = None
     causality = None
     causality_kind = None
@@ -648,6 +632,7 @@
     clock.restart_after_step_back = null
     clock.session_gap = null
     stream.average_eta = 1.0
+    stream.conformal_p_window_rows = 1000
     stream.conformal_rate = 0.05
     stream.drift_action = "flag"
     stream.drift_delta = 0.5
@@ -655,6 +640,7 @@
     stream.drift_threshold = 20.0
     stream.horizon_rows = 0
     stream.ljung_box_lags = 10
+    stream.max_state_bytes = null
     stream.min_settled_frac = 0.0
     stream.resid_autocorr_lag = 1
     stream.robust_se_lags = 0
@@ -1899,6 +1885,7 @@
     feature_set: String
     penalty: Float64
     quantile: Float64
+    coverage: Float64
     lag: Int64
     component: Int64
     state: Int64
@@ -1979,12 +1966,13 @@
     diebold_mariano(df: 'pl.DataFrame | pl.LazyFrame', *, a: 'str', b: 'str', targets: 'Sequence[str] | None' = None, a_suffix: 'str' = '', b_suffix: 'str' = '', lags: 'int' = 0, group: 'str | Iterable[str] | None' = None, half_life: 'float | None' = None, min_samples: 'int' = 30, name: 'str' = 'diebold_mariano') -> 'pl.DataFrame | pl.LazyFrame'
     from_sums(s: 'pl.DataFrame', *, min_samples: 'int' = 30, binary: 'bool' = False) -> 'pl.DataFrame'
     grid_search(source: 'pl.LazyFrame | pl.DataFrame', specs: 'dict[str, Any] | Sequence[dict[str, Any]] | Callable[..., dict[str, Any]]', param_grid: 'Mapping[str, Sequence[Any]] | None' = None, *, n_splits: 'int' = 5, gap: 'int' = 0, scoring: "Literal['mse', 'loglik']" = 'mse', chunk_size: 'int | None' = None, threads: 'int | None' = None) -> 'pl.DataFrame'
+    interval_metrics(df: 'pl.DataFrame | pl.LazyFrame', spec: 'str | dict', *, group: 'str | Iterable[str] | None' = None, targets: 'Sequence[str] | None' = None, weight: 'str | None' = None, window_rows: 'int | None' = None, ssc_bins: 'int' = 3, min_samples: 'int' = 30, coverage: 'float | Sequence[float] | None' = None) -> 'pl.DataFrame'
     merge_sums(first: 'pl.DataFrame', *rest: 'pl.DataFrame') -> 'pl.DataFrame'
-    metrics(df: 'pl.DataFrame | pl.LazyFrame', spec: 'str | dict', *, group: 'str | Iterable[str] | None' = None, targets: 'Sequence[str] | None' = None, min_samples: 'int' = 30, binary: 'bool | None' = None) -> 'pl.DataFrame'
+    metrics(df: 'pl.DataFrame | pl.LazyFrame', spec: 'str | dict', *, group: 'str | Iterable[str] | None' = None, targets: 'Sequence[str] | None' = None, min_samples: 'int' = 30, binary: 'bool | None' = None, mae: 'bool' = False, quantiles: 'Sequence[float] | None' = None) -> 'pl.DataFrame'
     seqtest(df: 'pl.DataFrame | pl.LazyFrame', *, targets: 'Sequence[str] | None' = None, a: 'str | None' = None, b: 'str | None' = None, a_suffix: 'str' = '', b_suffix: 'str' = '', group: 'str | Iterable[str] | None' = None, min_weight: 'float' = 0.0, name: 'str' = 'seqtest') -> 'pl.DataFrame | pl.LazyFrame'
     sums(df: 'pl.DataFrame | pl.LazyFrame', spec: 'str | dict', *, group: 'str | Iterable[str] | None' = None, targets: 'Sequence[str] | None' = None, weight: 'str | None' = None, binary: 'bool | None' = None) -> 'pl.DataFrame'
     unpack(df: 'pl.DataFrame | pl.LazyFrame', spec: 'str | dict', *, targets: 'Sequence[str] | None' = None) -> 'pl.DataFrame | pl.LazyFrame'
-    window_metrics(df: 'pl.DataFrame | pl.LazyFrame', spec: 'str | dict', *, clock: 'str', every: 'float | Duration', group: 'str | Iterable[str] | None' = None, targets: 'Sequence[str] | None' = None, min_samples: 'int' = 30, binary: 'bool | None' = None) -> 'pl.DataFrame'
+    window_metrics(df: 'pl.DataFrame | pl.LazyFrame', spec: 'str | dict', *, clock: 'str', every: 'float | Duration', group: 'str | Iterable[str] | None' = None, targets: 'Sequence[str] | None' = None, min_samples: 'int' = 30, binary: 'bool | None' = None, mae: 'bool' = False, quantiles: 'Sequence[float] | None' = None) -> 'pl.DataFrame'
   gram:
     Gram
     INTERCEPT
@@ -2579,6 +2567,39 @@
     withheld_reason: enum
     coef: list[f64]
     penalty_selected_y: f64
+  multi-level asymmetric conformal, conformal p-value and extended metrics:
+    pred_y: f64
+    resid_y: f64
+    lo_c0.8_y: f64
+    hi_c0.8_y: f64
+    coverage_c0.8_y: f64
+    lo_c0.9_y: f64
+    hi_c0.9_y: f64
+    coverage_c0.9_y: f64
+    conformal_p_y: f64
+    ic_y: f64
+    mae_y: f64
+    pinball_q0.1_y: f64
+    pinball_q0.9_y: f64
+    width_c0.8_y: f64
+    winkler_c0.8_y: f64
+    width_c0.9_y: f64
+    winkler_c0.9_y: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
+    support_coef: list[f64]
+  logistic log_loss:
+    pred_y: f64
+    resid_y: f64
+    r2_y: f64
+    hit_rate_y: f64
+    log_loss_y: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
   rls minimal:
     pred_y: f64
     resid_y: f64
@@ -3249,6 +3270,7 @@
 
 [enum values]  # the words each string-valued parameter takes, read from its refusal of one it does not: a word added, renamed or dropped is a diff here
   spec.conformal_rate: auto
+  spec.emit_metrics: coverage, hit_rate, ic, log_loss, mae, pinball, r2, width, winkler
   spec.drift_action: flag, reset
   spec.drift_kind: adwin, cusum, ddm, eddm, kswin, page_hinkley
   spec.group_close: monotone, session
@@ -3377,7 +3399,10 @@
     clock
     coef_every
     conformal
+    conformal_p_window_rows
+    conformal_p_window_size
     conformal_rate
+    conformal_symmetric
     drift_action
     drift_delta
     drift_kind
@@ -3389,6 +3414,7 @@
     emit_breaks
     emit_calibration
     emit_clocks
+    emit_conformal_p
     emit_drift
     emit_error_inflation
     emit_feature_health
@@ -3418,6 +3444,8 @@
     max_error_inflation
     max_held_rows
     max_rows_between_coefs
+    max_state_bytes
+    metric_quantiles
     min_settled_frac
     min_weight
     model

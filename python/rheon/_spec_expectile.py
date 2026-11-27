@@ -26,7 +26,6 @@ def expectile(
     window_rows: int | None = None,
     window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
-    max_state_bytes: int | None = None,
     refit_budget: float | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
@@ -283,7 +282,6 @@ def expectile(
         "window_rows": window_rows,
         "window_size": window_size,
         "closed": None if closed == "right" else closed,
-        "max_state_bytes": max_state_bytes,
         "refit_budget": refit_budget,
     }
     # Each absent when not given, as the Rust spec leaves it out, so a bank
