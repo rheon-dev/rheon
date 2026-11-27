@@ -401,21 +401,32 @@ fn a_left_closed_window_far_from_its_rows_keeps_their_proportions() {
     close(out[0][2], 46.0, "mean at 1080");
 }
 
-/// WIN-10, WIN-4, WIN-5: a half-life near the largest double is a kernel
-/// `check` takes, under which rows a few units apart weigh alike. A mean's
-/// sum `m·x`, the unbounded mass `h / ln 2` and the variance's `V1²`
-/// overflowed on ordinary values, and the outputs came out infinite or
-/// null. Unbounded, the first value is held from before the stretch, a
+/// WIN-10, WIN-4, WIN-5 (option (b)): a half-life near the largest double is
+/// a kernel `check` takes, under which rows a few units apart weigh alike.
+/// A mean's sum `m·x`, the unbounded mass `h / ln 2` and the variance's `V1²`
+/// overflowed on ordinary values, and the outputs came out infinite or null.
+/// Keeping each kernel's masses in a power-of-two unit `2^k` from `h >= 2^511`
+/// (and `t * scale` where `t ln 2 / h < 2^-53`) keeps `h * scale < 2^511` with
+/// no extra state bytes and no change below `2^511`.
+/// Unbounded, the first value is held from before the stretch, a
 /// mass `m₀ = h / ln 2` against the 1 of each later row: a mean of 10, and
 /// a count-corrected variance `q V1 / 2e` of `500 (m₀ + 2) / (4 m₀ + 2)`,
 /// 125. Read at 2 over a window of 10 the first value is held over `[−8,
 /// 0]`: masses 8, 1 and 1, a mean of 13 and a variance of `410 · 10 / 34`.
-// Confirmed; the fix moves outputs past 5 ulps or the state's layout, so
-// it waits on the user (PLAN 578d, WIN-4, WIN-5 and WIN-10), and this test fails until it lands.
 #[test]
-#[should_panic(expected = "against")]
 fn a_half_life_near_the_largest_double_weighs_its_rows_alike() {
-    for h in [1e150, 1e200, 1e210, 1e300, 1e308, 1.5e308, f64::MAX] {
+    let below_cut = f64::from_bits(held_mass::MASS_SCALE_FROM.to_bits() - 1);
+    for h in [
+        1e150,
+        below_cut,
+        held_mass::MASS_SCALE_FROM,
+        1e200,
+        1e210,
+        1e300,
+        1e308,
+        1.5e308,
+        f64::MAX,
+    ] {
         let (out, core) = outputs(
             vec![
                 kernel(Direction::Backward, h, None, Closed::Right),
@@ -439,6 +450,352 @@ fn a_half_life_near_the_largest_double_weighs_its_rows_alike() {
             (410.0 * 10.0 / 34.0f64).sqrt(),
             &format!("h {h}: windowed std"),
         );
+    }
+}
+
+/// WIN-4, WIN-5, WIN-10 (option (b)): the mass unit is 1.0 below `2^511` and
+/// for `inf`, and otherwise a power of two `2^-k` placing `h * scale` in
+/// `[2^510, 2^511)`. Below `2^511`, `mass`, `clock_mass` and `mass_held_in`
+/// match the unscaled closed form to the bit whenever `t ln 2 / h >= 2^-53`.
+#[test]
+fn mass_scale_is_one_below_2_511_and_bounds_huge_half_lives() {
+    let limit = held_mass::MASS_SCALE_FROM;
+    let below = f64::from_bits(limit.to_bits() - 1);
+    assert_eq!(limit, 2f64.powi(511));
+    for h in [
+        f64::MIN_POSITIVE,
+        0.5,
+        10.0,
+        1e100,
+        1e150,
+        below,
+        f64::INFINITY,
+    ] {
+        let k = kernel(Direction::Backward, h, None, Closed::Right);
+        assert_eq!(k.mass_scale(), 1.0, "h = {h}");
+    }
+    let half_limit = 2f64.powi(510);
+    for h in [
+        limit,
+        2f64.powi(512),
+        1e200,
+        1e210,
+        1e300,
+        1e308,
+        1.5e308,
+        f64::MAX,
+    ] {
+        let k = kernel(Direction::Backward, h, None, Closed::Right);
+        let s = k.mass_scale();
+        assert!(s > 0.0 && s < 1.0, "h = {h}: scale {s}");
+        // Exact power of two: zero mantissa bits.
+        assert_eq!(s.to_bits() & ((1u64 << 52) - 1), 0, "h = {h}: {s}");
+        let hs = h * s;
+        assert!(
+            (half_limit..limit).contains(&hs),
+            "h = {h}: scaled {hs:e} outside [2^510, 2^511)"
+        );
+        let m0 = hs / std::f64::consts::LN_2;
+        assert!((m0 * m0).is_finite(), "h = {h}: m0^2 overflowed");
+        assert!((m0 * 1e100).is_finite(), "h = {h}: m0 * 1e100 overflowed");
+        assert_eq!(k.mass(f64::INFINITY).to_bits(), m0.to_bits(), "h = {h}");
+        let mut memo = DecayMemo::default();
+        assert_eq!(
+            k.mass_held_in(f64::INFINITY, &mut memo).to_bits(),
+            m0.to_bits(),
+            "held inf h = {h}"
+        );
+        assert_eq!(
+            k.mass_held_in(1.0, &mut memo).to_bits(),
+            s.to_bits(),
+            "held 1.0 h = {h}"
+        );
+    }
+    // Below `2^511`, a tiny step whose `t ln 2 / h` underflows to 0 still
+    // returns `t` (both `mass` and `clock_mass`), never 0.
+    let k150 = kernel(Direction::Backward, 1e150, None, Closed::Right);
+    assert_eq!(k150.mass(1e-180).to_bits(), 1e-180f64.to_bits());
+    assert_eq!(k150.clock_mass(1e-180).to_bits(), 1e-180f64.to_bits());
+    // Bit identity below `2^511` wherever `t ln 2 / h >= 2^-53`.
+    let ln2 = std::f64::consts::LN_2;
+    for h in [0.5, 5.0, 1000.0, 1e9, 1e12, 1e150, below] {
+        let k = kernel(Direction::Backward, h, None, Closed::Right);
+        let mut memo = DecayMemo::default();
+        for mult in [1e-14, 1e-6, 1e-3, 0.05, 1.0, 10.0, 100.0] {
+            let t = h * mult;
+            if !t.is_finite() {
+                continue;
+            }
+            let old = -(h / ln2) * (-(t * ln2 / h)).exp_m1();
+            assert_eq!(k.mass(t).to_bits(), old.to_bits(), "mass h={h} t={t}");
+            assert_eq!(
+                k.clock_mass(t).to_bits(),
+                old.to_bits(),
+                "clock_mass h={h} t={t}"
+            );
+            let old_held = if t / h >= held_mass::HELD_MASS_FROM {
+                (h / ln2) * (1.0 - k.discount(t))
+            } else {
+                old
+            };
+            assert_eq!(
+                k.mass_held_in(t, &mut memo).to_bits(),
+                old_held.to_bits(),
+                "mass_held_in h={h} t={t}"
+            );
+        }
+    }
+}
+
+/// WIN-10 and WIN-4: `[1e100, 1e100]` at `h = 1e210` (and up to `f64::MAX`),
+/// `[10, 20]` at `1e308` and `1.5e308`, and `Stat::Rate` (backward unbounded,
+/// backward windowed, forward windowed) across `1e150..=f64::MAX` plus short
+/// and infinite half-lives.
+#[test]
+fn extreme_half_lives_keep_large_values_rates_and_forward_means() {
+    for h in [1e150, 1e200, 1e210, 1e300, 1e308, 1.5e308, f64::MAX] {
+        // WIN-10: `[1e100, 1e100]` at `1e210` overflowed `m * x` to `+inf`.
+        let (out, core) = outputs(
+            vec![kernel(Direction::Backward, h, None, Closed::Right)],
+            vec![op(0, Stat::Mean)],
+            clock(1e9),
+            &[(0.0, 1e100), (1.0, 1e100)],
+        );
+        core.check().unwrap();
+        close(out[0][0], 1e100, &format!("h {h}: [1e100, 1e100] row 0"));
+        close(out[0][1], 1e100, &format!("h {h}: [1e100, 1e100] row 1"));
+
+        // WIN-10 / WIN-4: `[10, 20]` at `1e308` gave `+inf`, at `1.5e308` null;
+        // rate at `1.5e308` gave `0.0` because `h / ln 2` overflowed.
+        let (out, core) = outputs(
+            vec![
+                kernel(Direction::Backward, h, None, Closed::Right),
+                kernel(Direction::Backward, h, Some(10.0), Closed::Right),
+                kernel(Direction::Forward, h, Some(10.0), Closed::Right),
+            ],
+            vec![
+                op(0, Stat::Mean),
+                op(0, Stat::Rate),
+                op(1, Stat::Rate),
+                op(2, Stat::Mean),
+                op(2, Stat::Rate),
+            ],
+            clock(1e9),
+            &[(0.0, 10.0), (1.0, 20.0), (2.0, 30.0), (12.0, 40.0)],
+        );
+        core.check().unwrap();
+        close(out[0][1], 10.0, &format!("h {h}: [10, 20] unbounded mean"));
+        assert!(out[1][0].is_nan(), "h {h}: rate at span 0 is null");
+        close(out[1][1], 30.0, &format!("h {h}: unbounded rate at t=1"));
+        close(out[1][2], 30.0, &format!("h {h}: unbounded rate at t=2"));
+        close(
+            out[1][3],
+            100.0 / 12.0,
+            &format!("h {h}: unbounded rate at t=12"),
+        );
+        close(out[2][2], 30.0, &format!("h {h}: windowed rate at t=2"));
+        // At t=12 over (2, 12], only row (12, 40) is inside the window of 10.
+        close(out[2][3], 4.0, &format!("h {h}: windowed rate at t=12"));
+        // Forward from t=0 over (0, 10]: 20 held over [1, 2) (mass 1) and 30
+        // over [2, 10] (mass 8), mean = (20 + 240) / 9; sum = 20 + 30 = 50 over span 10.
+        close(
+            out[3][0],
+            260.0 / 9.0,
+            &format!("h {h}: forward mean at t=0"),
+        );
+        close(out[4][0], 5.0, &format!("h {h}: forward rate at t=0"));
+    }
+
+    // Short, huge and no decay on a finite window: rate and mean stay accurate
+    // across all three regimes.
+    let ln2 = std::f64::consts::LN_2;
+    for h in [0.5, 10.0, 1e150, 1.5e308, f64::MAX, f64::INFINITY] {
+        let (out, core) = outputs(
+            vec![
+                kernel(Direction::Backward, h, Some(10.0), Closed::Right),
+                kernel(Direction::Forward, h, Some(10.0), Closed::Right),
+            ],
+            vec![
+                op(0, Stat::Mean),
+                op(0, Stat::Rate),
+                op(0, Stat::Var),
+                op(1, Stat::Mean),
+                op(1, Stat::Rate),
+            ],
+            clock(1e9),
+            &[(0.0, 10.0), (1.0, 20.0), (2.0, 30.0), (12.0, 40.0)],
+        );
+        core.check().unwrap();
+        if h.is_finite() && h >= 1e150 || h.is_infinite() {
+            close(out[0][2], 13.0, &format!("h {h}: bwd mean"));
+            close(out[1][2], 30.0, &format!("h {h}: bwd rate"));
+            close(out[2][2], 410.0 * 10.0 / 34.0, &format!("h {h}: bwd var"));
+            close(out[3][0], 260.0 / 9.0, &format!("h {h}: fwd mean"));
+            close(out[4][0], 5.0, &format!("h {h}: fwd rate"));
+        } else {
+            let d1 = (-1.0 / h).exp2();
+            let d2 = (-2.0 / h).exp2();
+            let span_m = (h / ln2) * (1.0 - d2);
+            close(
+                out[1][2],
+                (10.0 * d2 + 20.0 * d1 + 30.0) / span_m,
+                &format!("h {h}: short-decay rate"),
+            );
+            assert!(out[0][2].is_finite() && out[2][2].is_finite());
+            assert!(out[3][0].is_finite() && out[4][0].is_finite());
+        }
+    }
+}
+
+/// WIN-4/10 (option (b)) with tiny steps (`1e-12`) at extreme half-lives:
+/// where `t * ln 2 / h < 2^-53` (subnormal at `h = f64::MAX`), `mass` uses
+/// the interval length `t * scale` directly instead of `exp_m1`, keeping means
+/// and rates accurate to full precision rather than ~1e-4 off.
+///
+/// Scope boundary (option (c), not implemented here): at `h = f64::MAX`
+/// (`scale = 2^-513`), a windowed unbiased variance over steps under `1e-9`
+/// still returns null because `e = Σ m_i m_j ~ (1e-9 * 2^-513)^2` underflows
+/// `f64::MIN_SUBNORMAL` (`REVIEW-2026-11-23-OUTCOMES.md`, WIN-5).
+#[test]
+fn small_steps_at_huge_half_lives_weigh_accurately_and_document_var_floor() {
+    let dt = 1e-12;
+    let w = 10.0 * dt;
+    let rows = [(0.0, 10.0), (dt, 20.0), (2.0 * dt, 30.0), (12.0 * dt, 40.0)];
+    for h in [
+        1e150,
+        held_mass::MASS_SCALE_FROM,
+        1e200,
+        1e308,
+        1.5e308,
+        f64::MAX,
+    ] {
+        let mut var_biased = op(0, Stat::Var);
+        var_biased.bias = true;
+        let (out, core) = outputs(
+            vec![
+                kernel(Direction::Backward, h, Some(w), Closed::Right),
+                kernel(Direction::Forward, h, Some(w), Closed::Right),
+            ],
+            vec![
+                op(0, Stat::Mean),
+                op(0, Stat::Rate),
+                var_biased,
+                op(1, Stat::Mean),
+                op(1, Stat::Rate),
+            ],
+            clock(1e9),
+            &rows,
+        );
+        core.check().unwrap();
+        close(out[0][2], 13.0, &format!("h {h}: tiny-step bwd mean"));
+        close(
+            out[1][2],
+            60.0 / (2.0 * dt),
+            &format!("h {h}: tiny-step bwd rate"),
+        );
+        close(out[2][2], 41.0, &format!("h {h}: tiny-step biased var"));
+        close(
+            out[3][0],
+            260.0 / 9.0,
+            &format!("h {h}: tiny-step fwd mean"),
+        );
+        close(out[4][0], 50.0 / w, &format!("h {h}: tiny-step fwd rate"));
+    }
+
+    // Documented option (b) boundary for WIN-5: at `h = f64::MAX`, `scale = 2^-513`,
+    // so a windowed unbiased variance over `1e-9` steps underflows `e = Σ m_i m_j`
+    // (`8 * (1e-9 * 2^-513)^2 < 2^-1074`) and returns null (NaN), whereas
+    // biased variance and mean stay accurate.
+    let tiny = 1e-9;
+    let (out, core) = outputs(
+        vec![kernel(
+            Direction::Backward,
+            f64::MAX,
+            Some(10.0 * tiny),
+            Closed::Right,
+        )],
+        vec![op(0, Stat::Mean), op(0, Stat::Var)],
+        clock(1e9),
+        &[(0.0, 10.0), (tiny, 20.0), (2.0 * tiny, 30.0)],
+    );
+    core.check().unwrap();
+    close(out[0][2], 13.0, "1e-9 step mean at f64::MAX");
+    assert!(
+        out[1][2].is_nan(),
+        "expected null unbiased var when pairs' product e underflows at f64::MAX (option (c) boundary), got {}",
+        out[1][2]
+    );
+}
+
+/// Hard rule 9 / zero-mass rows at extreme half-lives: repeated stamps
+/// (zero held interval, mass 0) and null values (`NaN`, including leading
+/// nulls) never poison sums with NaN and leave means/variances invariant.
+#[test]
+fn zero_mass_and_null_rows_do_not_poison_extreme_half_lives() {
+    for h in [0.5, 1e150, 1e200, 1.5e308, f64::MAX, f64::INFINITY] {
+        let mut ks = vec![kernel(Direction::Backward, h, Some(10.0), Closed::Right)];
+        let mut ops = vec![op(0, Stat::Mean), op(0, Stat::Var), op(0, Stat::Rate)];
+        if h.is_finite() {
+            ks.push(kernel(Direction::Backward, h, None, Closed::Right));
+            ops.push(op(1, Stat::Mean));
+            ops.push(op(1, Stat::Var));
+            ops.push(op(1, Stat::Rate));
+        }
+        // Leading null, repeated stamp (mass 0), mid-stream null, repeated stamp.
+        let rows = [
+            (0.0, NAN),
+            (1.0, 10.0),
+            (1.0, 999.0),
+            (2.0, NAN),
+            (3.0, 20.0),
+            (3.0, -999.0),
+            (4.0, 30.0),
+        ];
+        let (out, core) = outputs(ks.clone(), ops.clone(), clock(1e9), &rows);
+        core.check().unwrap();
+        // Leading null yields null outputs; later rows stay finite with no NaN
+        // poisoning from the zero-mass repeated stamps or null values.
+        assert!(out[0][0].is_nan(), "h {h}: leading null mean");
+        assert!(out[1][0].is_nan(), "h {h}: leading null var");
+        // Without the repeated-stamp 999/-999 rows, means and variances match
+        // (repeated stamps hold interval length 0 so weigh nothing in mean/var).
+        let clean = [
+            (0.0, NAN),
+            (1.0, 10.0),
+            (2.0, NAN),
+            (3.0, 20.0),
+            (4.0, 30.0),
+        ];
+        let (want, _) = outputs(ks, ops, clock(1e9), &clean);
+        // Row 6 of `rows` corresponds to row 4 of `clean` (t = 4.0).
+        close(out[0][6], want[0][4], &format!("h {h}: windowed mean"));
+        close(out[1][6], want[1][4], &format!("h {h}: windowed var"));
+        assert!(out[2][6].is_finite(), "h {h}: windowed rate");
+        if h.is_finite() {
+            close(out[3][6], want[3][4], &format!("h {h}: unbounded mean"));
+            close(out[4][6], want[4][4], &format!("h {h}: unbounded var"));
+            assert!(out[5][6].is_finite(), "h {h}: unbounded rate");
+        }
+    }
+}
+
+/// Extreme half-lives with `clock_mass` on spans near `f64::MAX`: `clock_mass`
+/// never overflows for any finite span (even `t = 1e308` or `f64::MAX` at
+/// `h = f64::MAX`).
+#[test]
+fn clock_mass_stays_finite_for_huge_finite_spans() {
+    let ln2 = std::f64::consts::LN_2;
+    for h in [1e200, 1e308, 1.5e308, f64::MAX] {
+        let k = kernel(Direction::Backward, h, None, Closed::Right);
+        // `t = h`: `∫_0^h 2^(-s/h) ds = (h / ln 2) * 0.5 = 0.5 * h / ln 2`,
+        // always <= 0.722 * h < f64::MAX.
+        let got = k.clock_mass(h);
+        let want = (0.5 * h) / ln2;
+        assert!(got.is_finite(), "h = {h}: got {got}");
+        close(got, want, &format!("h {h}: clock_mass(h)"));
+        // Tiny span near underflow stays exact without scaling through `scale`.
+        let tiny = 1e-200;
+        assert_eq!(k.clock_mass(tiny), tiny, "h = {h}: clock_mass(1e-200)");
     }
 }
 

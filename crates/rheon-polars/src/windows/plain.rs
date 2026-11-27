@@ -1645,7 +1645,7 @@ fn run_group(p: &mut Parts<'_>, g: &mut Group, cols: Cols<'_>, bufs: &mut Bufs, 
                     (true, _) => bufs.tau[r - 1],
                     (false, _) => t,
                 };
-                bufs.rate.push(k.mass(span));
+                bufs.rate.push(k.clock_mass(span));
             }
             before = t;
         }

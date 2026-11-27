@@ -111,3 +111,101 @@ fn a_clock_past_the_largest_double_is_refused_through_each_block_path() {
         );
     }
 }
+
+/// WIN-4/5/10 (option (b)) through `WindowsRun`: exercises the plain fast path
+/// (unbounded mean, variance, rate), the windowed backward queue path and
+/// forward close at extreme half-lives (`1e200`, `1.5e308`, `f64::MAX`), and
+/// verifies bit-exact chunk invariance and state save/load continuation with
+/// no `WINDOWS_VERSION` bump.
+#[test]
+fn extreme_half_lives_save_load_and_continue_to_the_bit() {
+    let df = df!(
+        "t" => [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 12.0, 13.0],
+        "x" => [Some(10.0), Some(20.0), Some(30.0), None, Some(40.0), Some(50.0), Some(60.0), Some(70.0)],
+    )
+    .unwrap();
+    for h in [1e200, 1.5e308, f64::MAX] {
+        // Exact decimal serialization of `h` so serde_json recovers the exact `f64`.
+        let json = format!(
+            r#"{{
+                "formulas": [
+                    {{"name": "um", "tree": ["ewm_mean", ["col", "x"], {{"half_life": {h}}}]}},
+                    {{"name": "uv", "tree": ["ewm_var",  ["col", "x"], {{"half_life": {h}}}]}},
+                    {{"name": "ur", "tree": ["ewm_rate", ["col", "x"], {{"half_life": {h}}}]}},
+                    {{"name": "wm", "tree": ["ewm_mean", ["col", "x"], {{"half_life": {h}, "window_size": 10.0}}]}},
+                    {{"name": "ws", "tree": ["ewm_std",  ["col", "x"], {{"half_life": {h}, "window_size": 10.0}}]}},
+                    {{"name": "wr", "tree": ["ewm_rate", ["col", "x"], {{"half_life": {h}, "window_size": 10.0}}]}},
+                    {{"name": "fm", "tree": ["rewm_mean", ["col", "x"], {{"half_life": {h}, "window_size": 10.0}}]}},
+                    {{"name": "fr", "tree": ["rewm_rate", ["col", "x"], {{"half_life": {h}, "window_size": 10.0}}]}}
+                ],
+                "clock": "t",
+                "gap_cap": 1e9
+            }}"#
+        );
+        let config = || serde_json::from_str::<WindowsConfig>(&json).unwrap();
+        // Whole frame in one shot (exercises `plain.rs` fast path for unbounded ops).
+        let mut whole = WindowsRun::new(config(), df.schema()).unwrap();
+        let mut out_whole = whole.feed(&df, None).unwrap();
+        out_whole.vstack_mut(&whole.finish().unwrap()).unwrap();
+
+        // Check expected values at row 2 (t = 2.0): mean 10, var 125, rate 30,
+        // windowed mean 13, windowed std sqrt(410*10/34), windowed rate 30.
+        let get = |frame: &DataFrame, col: &str, row: usize| -> f64 {
+            frame
+                .column(col)
+                .unwrap()
+                .f64()
+                .unwrap()
+                .get(row)
+                .unwrap_or(f64::NAN)
+        };
+        let near = |got: f64, want: f64, what: &str| {
+            assert!(
+                (got - want).abs() <= 1e-12 * want.abs().max(1.0),
+                "h {h} {what}: {got} against {want}"
+            );
+        };
+        near(get(&out_whole, "um", 2), 10.0, "unbounded mean");
+        near(get(&out_whole, "uv", 2), 125.0, "unbounded var");
+        near(get(&out_whole, "ur", 2), 30.0, "unbounded rate");
+        near(get(&out_whole, "wm", 2), 13.0, "windowed mean");
+        near(
+            get(&out_whole, "ws", 2),
+            (410.0 * 10.0 / 34.0f64).sqrt(),
+            "windowed std",
+        );
+        near(get(&out_whole, "wr", 2), 30.0, "windowed rate");
+        assert!(get(&out_whole, "fm", 0).is_finite(), "h {h}: fwd mean");
+        assert!(get(&out_whole, "fr", 0).is_finite(), "h {h}: fwd rate");
+
+        // Split across 3 chunks with save/load after chunk 1: bit-identical
+        // outputs and re-saved bytes equal loaded bytes.
+        let mut part = WindowsRun::new(config(), df.schema()).unwrap();
+        let mut out_split = part.feed(&df.slice(0, 3), None).unwrap();
+        let saved = part.save_bytes().unwrap();
+        let mut resumed = WindowsRun::load_bytes(&saved, config(), df.schema()).unwrap();
+        assert_eq!(resumed.save_bytes().unwrap(), saved, "h {h}: re-save bytes");
+        out_split
+            .vstack_mut(&resumed.feed(&df.slice(3, 2), None).unwrap())
+            .unwrap();
+        out_split
+            .vstack_mut(&resumed.feed(&df.slice(5, 3), None).unwrap())
+            .unwrap();
+        out_split.vstack_mut(&resumed.finish().unwrap()).unwrap();
+
+        assert_eq!(out_whole.height(), out_split.height());
+        for col in ["um", "uv", "ur", "wm", "ws", "wr", "fm", "fr"] {
+            let a = out_whole.column(col).unwrap().f64().unwrap();
+            let b = out_split.column(col).unwrap().f64().unwrap();
+            for r in 0..out_whole.height() {
+                assert_eq!(
+                    a.get(r).map(f64::to_bits),
+                    b.get(r).map(f64::to_bits),
+                    "h {h} col {col} row {r}: {:?} vs {:?}",
+                    a.get(r),
+                    b.get(r)
+                );
+            }
+        }
+    }
+}
