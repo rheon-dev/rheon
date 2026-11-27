@@ -190,3 +190,34 @@ fn lee_and_myklands_window_is_summed_again_where_it_must_be() {
     }
     assert_eq!((ring.p_hi, ring.p_lo), (12.0, 0.0));
 }
+
+/// Regression for TEST-10 proptest: a return at `INPUT_BOUND` (`1e100`)
+/// followed by a row of weight `1e100` makes `W * TQ_SCALE * s_tq` overflow
+/// `f64::MAX`. The output withholds `tq` (`NaN`) rather than emitting `+inf`.
+#[test]
+fn tq_overflow_at_the_input_bound_is_withheld_rather_than_infinite() {
+    let mut s = Series::new(Some(8));
+    let mut out = Vec::new();
+    let f = 0.5f64.powf(1.0 / 20.0);
+    for (i, (r, w)) in [
+        (-2.3478388214752632, 1.0),
+        (1e100, 1.0),
+        (0.27643524372979317, 1e100),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if i > 0 {
+            s.decay(f);
+        }
+        s.learn(r, w, None, Some(8));
+    }
+    s.read(None, 3.0, 0.99, &mut out);
+    assert!(
+        out.iter().all(|v| !v.is_infinite()),
+        "no output may be infinite: {out:?}"
+    );
+    assert!(out[3].is_nan(), "overflowed tq is withheld: {}", out[3]);
+    assert!(out[0].is_finite() && out[1].is_finite() && out[2].is_finite());
+    assert!(out[4].is_finite(), "bns z stays finite: {}", out[4]);
+}

@@ -760,6 +760,10 @@ SWITCHES |= {
     "refit span": {"refit_span": 10.0},
     "huber refit span": {"huber_refit_span": 10.0},
     "quantile refit span": {"quantile_refit_span": 10.0},
+    "ar select": {"lags": 3, "ridge": 0.0, "select": "aic"},
+    "forecast spans": {"forecast_spans": [1.0, 5.0]},
+    "isotonic decreasing": {"increasing": False},
+    "isotonic window rows": {"window_rows": 12},
 }
 
 #: The second target a switch may name (`share_p`): the first target's
@@ -1637,6 +1641,26 @@ def _gjr_returns(n: int) -> np.ndarray:
     return out
 
 
+def _dcc_returns(n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Two correlated GJR-GARCH(1,1) return series from the same generator as
+    `_gjr_returns`, so `dcc` starts on them cleanly."""
+    rng = np.random.default_rng([9, 578])
+    qbar = np.full((3, 3), 0.3) + 0.7 * np.eye(3)
+    q, e = qbar.copy(), np.zeros(3)
+    v0 = v1 = 0.01 / (1 - 0.10 - 0.075 - 0.82)
+    p0 = p1 = 0.0
+    r0, r1 = np.empty(n), np.empty(n)
+    for i in range(n):
+        q = 0.03 * qbar + 0.12 * np.outer(e, e) + 0.85 * q
+        d = np.sqrt(np.diag(q))
+        e = np.linalg.cholesky(q / np.outer(d, d)) @ rng.standard_normal(3)
+        v0 = 0.01 + (0.10 + 0.15 * (p0 < 0)) * p0**2 + 0.82 * v0
+        v1 = 0.01 + (0.10 + 0.15 * (p1 < 0)) * p1**2 + 0.82 * v1
+        p0, p1 = float(np.sqrt(v0) * e[0]), float(np.sqrt(v1) * e[1])
+        r0[i], r1[i] = p0, p1
+    return r0, r1
+
+
 #: The rows the start reads, left as they are, so every stream starts.
 GARCH_START = 51
 
@@ -1647,21 +1671,43 @@ class TestGarchOnReturns:
     test against a constant variance, never comes: every output it held was
     null (PLAN 578j, TEST-11). Here it reads returns whose start comes, and
     after the start the stream is as adversarial as the others: nulls,
-    values at and past the bound, weights of 0. The same properties hold:
-    one chunk or many, a save and load at any row, every number finite or
-    null, and a started fit throughout."""
+    values at and past the bound, weights of 0, across GARCH, GJR, EGARCH,
+    variance targeting, and normal/t/skew-t innovations. The same properties
+    hold: one chunk or many, a save and load at any row, every number finite
+    or null, and a started fit throughout."""
 
     def test_the_properties_hold_once_started(self):
         def prop(data, chunk):
-            n = data.draw(st.integers(GARCH_START + 10, 160), label="rows")
+            # Skew-t, variance targeting, GJR-t and EGARCH pass the LR gate by
+            # row 100 on `_gjr_returns`, so keep the first 105 rows clean.
+            clean_end = 105
+            n = data.draw(st.integers(clean_end + 10, 160), label="rows")
             y = _gjr_returns(n).tolist()
             w = [1.0] * n
-            for i in range(GARCH_START + 1, n):
+            for i in range(clean_end, n):
                 y[i] = data.draw(st.one_of(st.just(y[i]), _values), label=f"y{i}")
                 w[i] = data.draw(st.sampled_from([1.0, 1.0, 1.0, 0.0, 2.5]), label=f"w{i}")
             df = pl.DataFrame({"y": y, "w": w}, schema_overrides={"y": pl.Float64})
             split = data.draw(st.integers(1, n - 1), label="split")
-            spec = rp.spec.garch("m", targets=["y"], start_rows=50, forecast_rows=[2], weight="w")
+            form = data.draw(
+                st.sampled_from(
+                    [
+                        {"vol": "garch", "dist": "normal", "forecast_rows": [2]},
+                        {"vol": "garch", "dist": "t", "forecast_rows": [2]},
+                        {"vol": "garch", "dist": "skewt", "forecast_rows": [2]},
+                        {
+                            "vol": "garch",
+                            "dist": "normal",
+                            "variance_targeting": True,
+                            "forecast_rows": [2],
+                        },
+                        {"vol": "gjr", "dist": "t", "forecast_rows": [2]},
+                        {"vol": "egarch", "dist": "normal", "forecast_rows": [1]},
+                    ]
+                ),
+                label="form",
+            )
+            spec = rp.spec.garch("m", targets=["y"], start_rows=50, weight="w", **form)
             one = rp.ModelBank([spec]).fit_predict(df)
             bank = rp.ModelBank([spec])
             many = pl.concat([bank.fit_predict(df.slice(i, chunk)) for i in range(0, n, chunk)])

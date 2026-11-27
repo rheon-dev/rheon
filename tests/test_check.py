@@ -327,6 +327,90 @@ class TestValues:
         message = f.filter(code="ridge_shrinks", spec="e", column="x0")["message"][0]
         assert "lower ridge, or rescale" in message and "standardize" not in message
 
+    def test_glm_is_told_of_an_uncentred_level_and_scales_apart(self):
+        """Review 2026-11-23, PY-13 (1): ``glm`` fits on uncentred ``[1, x]``
+        with its intercept penalized, so a level far above its spread (such as
+        ``x = 50,000 +- 0.3``) collapses predictions to near a constant, and
+        spreads far apart shrink the narrow feature's slope. ``check()`` now
+        reports both past the measured limits (10 and 15) and stays silent on
+        well-scaled features."""
+        rng = np.random.default_rng(13)
+        n = 1000
+        z = rng.normal(0.0, 0.3, size=n)
+        x = 50_000.0 + z
+        y = rng.poisson(np.exp(1.0 + 0.8 * (z / 0.3))).astype(float)
+        spec = rp.spec.glm("g", targets=["y"], features=["x"], family="poisson", half_life=200.0)
+        bank = rp.ModelBank([spec])
+        bank.fit_predict(pl.DataFrame({"x": x, "y": y}))
+        f = bank.check().filter(code="level_over_spread")
+        assert f.height == 1, f
+        row = f.row(0, named=True)
+        assert row["severity"] == "warning"
+        assert row["column"] == "x"
+        assert row["threshold"] == _check._UNCENTRED_LIMITS["glm"][0]
+        assert row["value"] == pytest.approx(
+            abs(float(np.mean(x))) / float(np.std(x, ddof=1)), rel=1e-6
+        )
+        assert "standardize=True" not in row["message"]
+
+        # Well-scaled features stay silent on level and spread checks.
+        z0, z1 = rng.normal(size=n), rng.normal(size=n)
+        y_clean = rng.poisson(np.exp(0.2 + 0.5 * z0 - 0.3 * z1)).astype(float)
+        spec2 = rp.spec.glm(
+            "g", targets=["y"], features=["x0", "x1"], family="poisson", half_life=200.0
+        )
+        clean_f = cs.findings(pl.DataFrame({"x0": z0, "x1": z1, "y": y_clean}), [spec2])
+        assert clean_f.filter(pl.col("severity") != "info").is_empty(), clean_f
+
+        # Spreads 50x apart fire scales_apart; 5x apart stay silent.
+        wide_f = cs.findings(pl.DataFrame({"x0": z0, "x1": z1 / 50.0, "y": y_clean}), [spec2])
+        sa = wide_f.filter(code="scales_apart")
+        assert sa.height == 1, wide_f
+        assert sa["severity"][0] == "warning"
+        assert sa["column"][0] == "x1"
+        assert sa["threshold"][0] == _check._UNCENTRED_LIMITS["glm"][1]
+        assert "standardize=True" not in sa["message"][0]
+
+        ok_f = cs.findings(pl.DataFrame({"x0": z0, "x1": z1 / 5.0, "y": y_clean}), [spec2])
+        assert ok_f.filter(code="scales_apart").is_empty(), ok_f
+
+    def test_no_intercept_standardized_models_are_told_of_a_level_and_not_spreads(self):
+        """With ``fit_intercept=False`` and ``standardize=True``, ``kalman``,
+        ``sgd`` and ``pa`` scale by raw RMS without centring: spreads apart
+        cost them nothing, while elevated features lose accuracy past their
+        measured limits (15, 2 and 15). The message does not tell them to set
+        ``standardize=True`` (which is already on)."""
+        rng = np.random.default_rng(14)
+        n = 1000
+        z0, z1 = rng.normal(size=n), rng.normal(size=n)
+        y = z0 - z1 + 0.5 * rng.normal(size=n)
+        c = dict(targets=["y"], features=["x0", "x1"], half_life=200.0, fit_intercept=False)
+        specs = [
+            rp.spec.kalman("kalman", coef_half_life=1e6, **c),
+            rp.spec.sgd("sgd", **c),
+            rp.spec.pa("pa", **c),
+        ]
+        # Elevated features at L = 50 fire level_over_spread warnings for all three.
+        f_lvl = cs.findings(pl.DataFrame({"x0": z0 + 50.0, "x1": z1 + 50.0, "y": y}), specs)
+        lvl = f_lvl.filter(code="level_over_spread")
+        assert set(lvl["spec"]) == {"kalman", "sgd", "pa"}, f_lvl
+        for row in lvl.iter_rows(named=True):
+            assert row["severity"] == "warning"
+            assert row["threshold"] == _check._NO_INTERCEPT_STANDARDIZED_LEVEL[row["spec"]]
+            assert "standardize=True" not in row["message"]
+            assert "raw RMS" in row["message"]
+
+        # Centered features 50x apart in spread stay quiet on scales_apart.
+        f_sp = cs.findings(pl.DataFrame({"x0": z0, "x1": z1 / 50.0, "y": y}), specs)
+        assert f_sp.filter(code="scales_apart").is_empty(), f_sp
+
+        # Through-origin ewridge past 1e6 does not claim it centres the column.
+        ew = rp.spec.ewridge("ew", **c)
+        f_ew = cs.findings(pl.DataFrame({"x0": z0 + 1e7, "x1": z1, "y": y}), [ew])
+        ew_row = f_ew.filter(code="level_over_spread").row(0, named=True)
+        assert ew_row["severity"] == "info"
+        assert "centres it and loses nothing" not in ew_row["message"]
+
     def test_few_learned_fires_on_more_than_half_skipped_and_not_at_half(self):
         """The docstring's line: more than half the rows skipped for a missing
         feature. At exactly half, ``rows_processed / rows_fed`` is 0.5, which

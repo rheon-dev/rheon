@@ -601,9 +601,9 @@ impl Series {
                     s / k
                 }
             };
-            out.push(v);
+            out.push(if v.is_finite() { v } else { f64::NAN });
         }
-        out.push(n);
+        out.push(if n.is_finite() { n } else { f64::NAN });
     }
 }
 

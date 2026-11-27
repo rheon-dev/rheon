@@ -450,8 +450,13 @@ def clock_specs(draw, model: str, step: int, cap: int):
         kw |= maybe("window_size", 1, 60) | maybe("solve_every", 1, 5)
     elif model == "kalman":
         kw |= xy | dict(coef_half_life=steps(1, 60)) | maybe("revert_half_life", 1, 600)
+        kw["covariance_form"] = draw(st.sampled_from(["covariance", "square_root"]))
+        if draw(st.booleans()):
+            kw["forecast_spans"] = [steps(1, 5)]
     elif model == "holt":
         kw |= dict(targets=["y"], half_life=steps(1, 30), trend_half_life=steps(1, 60))
+        if draw(st.booleans()):
+            kw["forecast_spans"] = [steps(1, 5)]
     elif model == "ew_cov":
         kw |= dict(features=["x0", "x1"], half_life=steps(1, 30)) | maybe("window_size", 1, 60)
     elif model == "ew_class":
@@ -538,21 +543,38 @@ def clock_specs(draw, model: str, step: int, cap: int):
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
     elif model == "expectile":
         # Task 501: a window of the clock, with its edge, and its zero-weight
-        # rows that count in no clock; or decay with the first rows' refit.
+        # rows that count in no clock; or decay with the first rows' refit
+        # over rows or over a span of the clock.
         kw |= xy | dict(expectile=draw(st.sampled_from([0.2, 0.5, 0.9])))
-        if draw(st.booleans()):
+        form = draw(st.sampled_from(["window", "refit_rows", "refit_span"]))
+        if form == "window":
             kw |= dict(half_life=float("inf"), window_size=steps(1, 60))
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
+        elif form == "refit_span":
+            kw["refit_span"] = steps(1, 30)
         else:
             kw["refit_rows"] = draw(st.integers(0, 12))
     elif model == "glm":
         # Task 538: the first rows' refit over a span of the clock, or of
-        # rows, on a count the stream derives from its target.
-        kw |= xy | dict(targets=["c"])
+        # rows, across families and canonical links on derived targets.
+        fam, link, tgt = draw(
+            st.sampled_from(
+                [
+                    ("poisson", "log", "c"),
+                    ("binomial", "logit", "c_bin"),
+                    ("gamma", "log", "c_pos"),
+                    ("gamma", "inverse", "c_pos"),
+                    ("tweedie", "log", "c"),
+                    ("tweedie", "power", "c"),
+                ]
+            )
+        )
+        kw |= xy | dict(targets=[tgt], family=fam, link=link)
         if draw(st.booleans()):
             kw["refit_span"] = steps(1, 30)
         else:
-            kw["refit_rows"] = draw(st.integers(0, 12))
+            lo = 1 if link in ("inverse", "power") else 0
+            kw["refit_rows"] = draw(st.integers(lo, 12))
     elif model == "realized":
         # Task 499: the measures over a window of the clock, with its edge,
         # or under a decay beside Lee and Mykland's own window of returns.
@@ -634,10 +656,11 @@ def clock_specs(draw, model: str, step: int, cap: int):
         elif window == "clock":
             kw["window_size"] = steps(1, 60)
     elif model == "spectral":
-        # Task 491: its periods as durations, and the zero-weight rows that
-        # count in no clock.
+        # Task 491: its periods as durations, optional clock window, and the
+        # zero-weight rows that count in no clock.
         kw |= dict(targets=["y"], half_life=steps(1, 30), periods=[steps(2, 9), steps(10, 40)])
         kw["spacing"] = steps(1, 1)
+        kw |= maybe("window_size", 4, 40)
     elif model == "ar":
         # Task 486: its lags beside the features, a window of the clock with
         # its edge, and the zero-weight rows that count in no clock. No
@@ -716,9 +739,15 @@ def temporal_streams(draw, model: str, min_rows=1, max_rows=40):
         schema_overrides={c: pl.Float64 for c in ("x0", "x1", "y", "w")},
     ).with_columns(lab=pl.when(pl.col("y") > 0.5).then(pl.lit("a")).otherwise(pl.lit("b")))
     df = df.with_columns(lab=pl.when(pl.col("y").is_null()).then(None).otherwise(pl.col("lab")))
-    # A count for `glm`, from the target: no draw, so every other stream is
-    # the one it was.
-    df = df.with_columns(c=pl.col("y").abs().round(0))
+    # Derived targets for `glm` families, with no extra RNG draw so every
+    # other stream stays unchanged.
+    df = df.with_columns(
+        c=pl.col("y").abs().round(0),
+        c_pos=pl.col("y").abs().round(0) + 1.0,
+        c_bin=pl.when(pl.col("y").is_null())
+        .then(None)
+        .otherwise((pl.col("y") > 0.5).cast(pl.Float64)),
+    )
     spec = draw(clock_specs(model, step, cap), label="spec")
     return df, spec
 
@@ -993,9 +1022,10 @@ class TestGarchOnATemporalClock:
     rows, short of every start it draws (50 rows or a span), so its every
     output was null and the suite held nothing of a started fit on a
     temporal clock (PLAN 578j, TEST-11). Here it reads returns whose start
-    comes, on each kind of temporal clock, with ties and gaps, its start as
-    rows or as a span: one chunk or many, and a save and load at any row,
-    give the same numbers, and the fit has started."""
+    comes, on each kind of temporal clock, with ties and gaps, across GARCH,
+    GJR, EGARCH, variance targeting, and normal/t/skew-t innovations, its
+    start as rows or as a span: one chunk or many, and a save and load at
+    any row, give the same numbers, and the fit has started."""
 
     @pytest.mark.filterwarnings("ignore::rheon.ReadinessWarning")
     @STREAMS
@@ -1005,17 +1035,32 @@ class TestGarchOnATemporalClock:
 
         dtype = data.draw(clock_dtypes(), label="dtype")
         step = _step(dtype)
-        n = data.draw(st.integers(GARCH_START + 30, 140), label="rows")
+        # Skew-t, variance targeting, GJR-t and EGARCH pass the LR gate by row
+        # 100 on `_gjr_returns`, so draw at least 115 rows.
+        n = data.draw(st.integers(115, 160), label="rows")
         gaps = data.draw(st.lists(st.sampled_from([0, 1, 1, 1, 2, 5]), min_size=n, max_size=n))
         start = data.draw(_instants(step), label="start")
         instants = np.cumsum([start + gaps[0] * step, *[g * step for g in gaps[1:]]])
         df = pl.DataFrame(
             {"t": _column(dtype, np.asarray(instants, dtype=np.int64)), "y": _gjr_returns(n)}
         )
+        form = data.draw(
+            st.sampled_from(
+                [
+                    {"vol": "garch", "dist": "normal"},
+                    {"vol": "garch", "dist": "t"},
+                    {"vol": "garch", "dist": "skewt"},
+                    {"vol": "garch", "dist": "normal", "variance_targeting": True},
+                    {"vol": "gjr", "dist": "t"},
+                    {"vol": "egarch", "dist": "normal"},
+                ]
+            ),
+            label="form",
+        )
         if data.draw(st.booleans(), label="a span"):
-            kw = {"start_span": format_duration(GARCH_START * step)}
+            kw = {**form, "start_span": format_duration(GARCH_START * step)}
         else:
-            kw = {"start_rows": 50}
+            kw = {**form, "start_rows": 50}
         spec = rp.spec.garch("m", targets=["y"], clock="t", gap_cap=format_duration(8 * step), **kw)
         one = rp.ModelBank([spec]).fit_predict(df)["m"]
         bank = rp.ModelBank([spec])
@@ -1028,3 +1073,60 @@ class TestGarchOnATemporalClock:
         tail = rp.ModelBank.load_bytes(kept.save_bytes()).fit_predict(df.slice(split))["m"]
         _assert_same_numbers(one, pl.concat([head, tail]))
         assert one.struct.field("variance_y").is_not_null().any(), "the start never came"
+
+
+class TestDccOnATemporalClock:
+    """`dcc` in `TestTemporalClockStreams` reads streams of at most 40 rows,
+    short of its 50-row start. Here it reads two correlated GJR return series
+    on each temporal clock dtype, with start as rows or as a span, symmetric
+    or asymmetric, holding chunk invariance and save/load transparency once
+    started."""
+
+    @pytest.mark.filterwarnings("ignore::rheon.ReadinessWarning")
+    @STREAMS
+    @given(data=st.data())
+    def test_chunking_and_a_save_change_nothing_once_started(self, data):
+        from test_properties import GARCH_START, _dcc_returns
+
+        dtype = data.draw(clock_dtypes(), label="dtype")
+        step = _step(dtype)
+        n = data.draw(st.integers(GARCH_START + 30, 140), label="rows")
+        gaps = data.draw(st.lists(st.sampled_from([0, 1, 1, 1, 2, 5]), min_size=n, max_size=n))
+        start = data.draw(_instants(step), label="start")
+        instants = np.cumsum([start + gaps[0] * step, *[g * step for g in gaps[1:]]])
+        r0, r1 = _dcc_returns(n)
+        df = pl.DataFrame(
+            {
+                "t": _column(dtype, np.asarray(instants, dtype=np.int64)),
+                "y0": r0,
+                "y1": r1,
+            }
+        )
+        asym = data.draw(st.booleans(), label="asymmetric")
+        kw: dict = {
+            "margins": "none",
+            "half_life": format_duration(30 * step),
+            "a": 0.04,
+            "b": 0.90,
+            "asymmetric": asym,
+        }
+        if asym:
+            kw["g"] = 0.03
+        if data.draw(st.booleans(), label="a span"):
+            kw["start_span"] = format_duration(GARCH_START * step)
+        else:
+            kw["start_rows"] = 50
+        spec = rp.spec.dcc(
+            "m", targets=["y0", "y1"], clock="t", gap_cap=format_duration(8 * step), **kw
+        )
+        one = rp.ModelBank([spec]).fit_predict(df)["m"]
+        bank = rp.ModelBank([spec])
+        edges = _edges(data.draw, df.height)
+        many = pl.concat([bank.fit_predict(df.slice(a, b - a))["m"] for a, b in pairwise(edges)])
+        _assert_same_numbers(one, many)
+        split = data.draw(st.integers(1, n - 1), label="split")
+        kept = rp.ModelBank([spec])
+        head = kept.fit_predict(df.slice(0, split))["m"]
+        tail = rp.ModelBank.load_bytes(kept.save_bytes()).fit_predict(df.slice(split))["m"]
+        _assert_same_numbers(one, pl.concat([head, tail]))
+        assert one.struct.field("corr_y0_y1").is_not_null().any(), "the start never came"

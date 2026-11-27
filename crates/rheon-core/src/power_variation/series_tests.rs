@@ -156,3 +156,38 @@ fn a_held_sum_is_summed_again_where_a_credit_leaving_can_move_it() {
     s.take(NW, 3.0, 0.0, &mut again);
     assert!(again[NW], "what is left, 0, is less than the rounding of 3");
 }
+
+/// A higher-order normalized term whose `W^e * s` overflows `f64::MAX` at the
+/// input bound withholds `NaN` rather than emitting `+inf`.
+#[test]
+fn normalized_overflow_at_the_input_bound_is_withheld_rather_than_infinite() {
+    let terms = vec![
+        PvTerm {
+            kind: PvTermKind::Multipower {
+                powers: vec![4.0 / 3.0; 3],
+                normalize: true,
+            },
+            scale: 1,
+        },
+        PvTerm {
+            kind: PvTermKind::Kernel {
+                kernel: PvKernel::Parzen,
+                bandwidth: 2,
+                flat_top: false,
+                center: true,
+            },
+            scale: 1,
+        },
+    ];
+    let plan = Plan::of(&terms);
+    let mut s = Series::new(&plan);
+    for (r, w) in [(-2.0, 1.0), (1e100, 1.0), (0.5, 1e100)] {
+        s.learn(&plan, r, w, None);
+    }
+    let mut out = Vec::new();
+    s.read(&plan, 3.0, &mut out);
+    assert!(
+        out.iter().all(|v| !v.is_infinite()),
+        "no output may be infinite: {out:?}"
+    );
+}

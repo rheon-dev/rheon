@@ -90,9 +90,10 @@
 //! `inf`) and a window's next take-back of it, `inf − inf`, would be NaN.
 //! The weight goes into such a term first, so one that fits is kept. Each
 //! output reads its own sum, so a sum held at the bound moves no other:
-//! while its sum is held, `tq` reads `inf` or a lower bound on itself, and
-//! `Z`, which divides by it, near 0, as the quarticity's true size would
-//! make it. Below the largest double nothing moves, to the bit.
+//! while its sum is held, `tq` is withheld (`NaN`) if the scaled product
+//! passes the largest double or reads a lower bound on itself, and `Z`,
+//! which divides by the raw product, reads near 0, as the quarticity's true
+//! size would make it. Below the largest double nothing moves, to the bit.
 //!
 //! A window takes a term back from a sum held at the bound by summing the
 //! terms it still holds again, and does the same where a term leaving is

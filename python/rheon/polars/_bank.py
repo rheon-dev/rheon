@@ -3716,9 +3716,24 @@ class ModelBank:
            * - ``pa``, ``standardize=False``
              - 3
              - 2
+           * - ``kalman``, ``fit_intercept=False``
+             - 15
+             - none
+           * - ``sgd``, ``fit_intercept=False``
+             - 2
+             - none
+           * - ``pa``, ``fit_intercept=False``
+             - 15
+             - none
+           * - ``glm``
+             - 10
+             - 15
            * - ``rls``
              - ``0.9 sqrt(W / delta_left)``
              - 30
+           * - ``expectile``
+             - 1e5
+             - 1e6
 
         ``rls``'s level limit is read from the summary. A level lowers its
         accuracy only through the part of its prior ``delta I`` it still

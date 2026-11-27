@@ -526,7 +526,26 @@ impl Spectral {
             return None;
         }
         let explained = (ss * yc * yc - 2.0 * cs * yc * ys + cc * ys * ys) / det;
-        Some(explained / yy)
+        let p = explained / yy;
+        if p.is_finite() {
+            return Some(p);
+        }
+        // Scaled fallback when `yc`/`ys` near `1e200` overflow `yc * yc` before
+        // dividing by `det * yy`, keeping normal-range outputs bit-identical.
+        let mag = yc.abs().max(ys.abs());
+        if !(mag > 0.0 && mag.is_finite() && a > 0.0 && a.is_finite() && yy.is_finite()) {
+            return None;
+        }
+        let (cc_n, ss_n, cs_n) = (cc / a, ss / a, cs / a);
+        let det_n = cc_n * ss_n - cs_n * cs_n;
+        let scale_n = 0.25 * (cc_n + ss_n) * (cc_n + ss_n);
+        if !det_n.is_finite() || det_n <= Self::SPREAD * scale_n {
+            return None;
+        }
+        let (yc_n, ys_n) = (yc / mag, ys / mag);
+        let num_n = ss_n * yc_n * yc_n - 2.0 * cs_n * yc_n * ys_n + cc_n * ys_n * ys_n;
+        let q = (num_n / det_n) * ((mag / a) * (mag / yy));
+        q.is_finite().then_some(q)
     }
 
     /// The rotation `e^{2πi f Δ}` of each frequency for a clock step `d`.
@@ -579,7 +598,28 @@ impl Spectral {
             let re = s.x[k][0] - m * s.u[k][0];
             let im = s.x[k][1] - m * s.u[k][1];
             let c = if *f == 0.0 || *f == nyq { 1.0 } else { 2.0 };
-            out[k] = c * (re * re + im * im) * scale;
+            let mag = re.abs().max(im.abs());
+            let v = if mag > 1e150 {
+                // Rescale before squaring so values near `w * y = 1e200` do not
+                // overflow `re * re + im * im` before `scale = O(1e-200)` brings
+                // the result back into `f64` range; leaves `mag <= 1e150` to the
+                // bit.
+                let inv = 1.0 / mag;
+                let r = re * inv;
+                let i = im * inv;
+                let norm2 = r * r + i * i;
+                match self.cfg.scaling {
+                    SpectralScaling::Density => c * norm2 * ((mag / s.q) * mag * self.cfg.spacing),
+                    SpectralScaling::Spectrum => {
+                        let ratio = mag / s.a;
+                        c * norm2 * (ratio * ratio)
+                    }
+                    SpectralScaling::LombScargle => f64::NAN,
+                }
+            } else {
+                c * (re * re + im * im) * scale
+            };
+            out[k] = if v.is_finite() { v } else { f64::NAN };
         }
     }
 

@@ -714,3 +714,77 @@ fn a_thinned_window_is_the_definition_over_the_rows_it_holds() {
     }
     assert!(m.window_over_budget().is_none());
 }
+
+/// Regression for TEST-10 proptest: a row at `INPUT_BOUND` (`1e100`) with
+/// weight `1e100` puts `s.x` near `1e200` and `s.q` near `1e200`. Squaring
+/// `re`/`im` before scaling overflowed to `+inf` even though the true power
+/// `O(1e200)` fits in `f64` (and similarly in `Spectrum` and `LombScargle`).
+#[test]
+fn power_at_the_input_bound_scales_before_squaring_and_never_emits_inf() {
+    let base = SpectralCfg {
+        n_targets: 2,
+        frequencies: vec![0.0, 0.2, 0.5],
+        spacing: 1.0,
+        decay: Decay::Halflife(20.0),
+        scaling: SpectralScaling::Density,
+        detrend: true,
+        min_weight: 0.0,
+        max_state_bytes: None,
+        window: None,
+        window_every: None,
+        max_rows_between_snapshots: None,
+    };
+    for scaling in [
+        SpectralScaling::Density,
+        SpectralScaling::Spectrum,
+        SpectralScaling::LombScargle,
+    ] {
+        let mut c = base.clone();
+        c.scaling = scaling;
+        if scaling == SpectralScaling::LombScargle {
+            c.frequencies = vec![0.1, 0.2, 0.5];
+        }
+        let mut m = Spectral::new(c).unwrap();
+        let s0 = m.step(&[], &[None, Some(1e100)], 0.0, 1e100);
+        let s1 = m.step(&[], &[None, None], 1.0, 1.0);
+        let s2 = m.step(&[], &[None, None], 1.0, 1.0);
+        for (row, s) in [(0, &s0), (1, &s1), (2, &s2)] {
+            assert!(
+                s.pred.iter().all(|v| !v.is_infinite()),
+                "{scaling:?} row {row}: {:?}",
+                s.pred
+            );
+        }
+        // Single detrended point: mean equals the point itself, so power is 0
+        // (up to floating-point rounding of `s.x - m * s.u` at `1e200`, which
+        // stays finite rather than overflowing to `+inf`).
+        if scaling != SpectralScaling::LombScargle {
+            assert!(
+                s2.pred[3..6].iter().all(|v| v.is_finite()),
+                "{scaling:?}: {:?}",
+                &s2.pred[3..6]
+            );
+        }
+    }
+    // Non-detrended single point at `y = 1e100, w = 1e100`: exact density at
+    // DC is `|w y|^2 * 1 / w^2 = y^2 = 1e200` and at interior `f = 0.2` is
+    // `2 * 1e200`.
+    let mut c = base;
+    c.detrend = false;
+    for scaling in [SpectralScaling::Density, SpectralScaling::Spectrum] {
+        c.scaling = scaling;
+        let mut m = Spectral::new(c.clone()).unwrap();
+        m.step(&[], &[None, Some(1e100)], 0.0, 1e100);
+        let s = m.step(&[], &[None, None], 1.0, 1.0);
+        assert!(
+            (s.pred[3] - 1e200).abs() <= 1e-12 * 1e200,
+            "{scaling:?} DC: {}",
+            s.pred[3]
+        );
+        assert!(
+            (s.pred[4] - 2e200).abs() <= 1e-12 * 2e200,
+            "{scaling:?} f=0.2: {}",
+            s.pred[4]
+        );
+    }
+}

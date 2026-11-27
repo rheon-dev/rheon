@@ -340,8 +340,11 @@ def hmm(
     and the bound is reached only by a state with no data. Measured against
     the exact recursion carried in 512 bits, at 13 and 20 features and
     half-lives of 20 and 500 rows over 2,000 rows, a filtered posterior
-    parted from it by at most 0.009. Below 13 features the factorization is
-    the faster, and is kept, and reads the exact recursion.
+    parted from it by at most 0.009. Earlier in a stream, where the prior
+    carries more weight, the gap is wider: over 200 rows at a half-life of
+    30 across 13 to 20 features, filtered posteriors parted by up to 0.050.
+    Below 13 features the factorization is the faster, and is kept, and
+    reads the exact recursion.
 
     .. rubric:: Example
 

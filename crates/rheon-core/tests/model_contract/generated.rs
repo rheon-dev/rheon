@@ -439,23 +439,120 @@ mod generated {
 
     fn equal(a: &Step, b: &Step) -> bool {
         let same = |u: &f64, v: &f64| u.to_bits() == v.to_bits() || (u.is_nan() && v.is_nan());
+        let same_slice =
+            |u: &[f64], v: &[f64]| u.len() == v.len() && u.iter().zip(v).all(|(x, y)| same(x, y));
+        let extra = match (&a.extra, &b.extra) {
+            (None, None) => true,
+            (
+                Some(Extra::Lasso { lam_selected: u }),
+                Some(Extra::Lasso { lam_selected: v }),
+            ) => same_slice(u, v),
+            (Some(Extra::Huber { scale: u }), Some(Extra::Huber { scale: v })) => same_slice(u, v),
+            (Some(Extra::VectorAr { values: u }), Some(Extra::VectorAr { values: v })) => {
+                same_slice(u, v)
+            }
+            _ => false,
+        };
         a.pred.len() == b.pred.len()
             && a.pred.iter().zip(&b.pred).all(|(u, v)| same(u, v))
             && same(&a.n_eff, &b.n_eff)
-            && a.extra == b.extra
+            && extra
+    }
+
+    /// 55 rows of GJR-GARCH(1,1) returns (correlated across targets when
+    /// `targets > 1`), so a `garch` or `dcc` start of 50 rows / span 50
+    /// actually fires on row 51 before the adversarial tail arrives.
+    fn garch_prefix(k: usize, targets: usize) -> Vec<GenRow> {
+        let mut s = 20261127u64;
+        let mut vars = vec![0.01 / (1.0 - 0.10 - 0.075 - 0.82); targets];
+        let mut prevs = vec![0.0f64; targets];
+        (0..55)
+            .map(|_| {
+                // Box-Muller-like pair from LCG for non-trivial tails.
+                let mut z = Vec::with_capacity(targets);
+                let common = (lcg(&mut s) + lcg(&mut s) + lcg(&mut s)) * 1.1;
+                for j in 0..targets {
+                    let ind = (lcg(&mut s) + lcg(&mut s) + lcg(&mut s)) * 1.1;
+                    z.push(if j == 0 {
+                        common
+                    } else {
+                        0.6 * common + 0.8 * ind
+                    });
+                }
+                let y = (0..targets)
+                    .map(|j| {
+                        let p = prevs[j];
+                        let asym = if p < 0.0 { 0.15 } else { 0.0 };
+                        vars[j] = 0.01 + (0.10 + asym) * p * p + 0.82 * vars[j];
+                        let r = vars[j].sqrt() * z[j];
+                        prevs[j] = r;
+                        Some(r)
+                    })
+                    .collect();
+                let x = (0..k).map(|_| lcg(&mut s)).collect();
+                GenRow {
+                    x,
+                    y,
+                    d: 1.0,
+                    w: 1.0,
+                }
+            })
+            .collect()
+    }
+
+    /// A 55-row GARCH return prefix followed by a 1..25-row adversarial tail,
+    /// so `garch` and `dcc` are tested both across their start and once
+    /// started under extreme values, missing targets, zero weights and gaps.
+    fn garch_started_stream(k: usize, targets: usize) -> impl Strategy<Value = Vec<GenRow>> {
+        prop_oneof![
+            Just(Sign::Mixed),
+            Just(Sign::Positive),
+            Just(Sign::Negative)
+        ]
+        .prop_flat_map(move |sign| prop::collection::vec(row_of(k, targets, false, sign), 1..25))
+        .prop_map(move |tail| {
+            let mut rows = garch_prefix(k, targets);
+            rows.extend(tail);
+            rows
+        })
     }
 
     /// The three clauses over one stream, with the save and restore at row
-    /// `split` (past the end: never).
+    /// `split` (past the end: never), using compact (positional) msgpack.
     fn contract<M: OnlineModel>(
         build: impl Fn() -> M,
         rows: &[GenRow],
         split: usize,
     ) -> Result<(), TestCaseError> {
+        contract_encoding(build, rows, split, false)
+    }
+
+    /// [`contract`] through named msgpack (`to_vec_named`), the encoding every
+    /// bank file writes: for models whose struct carries a non-trailing
+    /// `skip_serializing_if` (`ewm_moments` windowed, as `BOCPD-4` and
+    /// `HMM-5 (4)` do).
+    fn contract_named<M: OnlineModel>(
+        build: impl Fn() -> M,
+        rows: &[GenRow],
+        split: usize,
+    ) -> Result<(), TestCaseError> {
+        contract_encoding(build, rows, split, true)
+    }
+
+    fn contract_encoding<M: OnlineModel>(
+        build: impl Fn() -> M,
+        rows: &[GenRow],
+        split: usize,
+        named: bool,
+    ) -> Result<(), TestCaseError> {
         let (mut whole, mut parted) = (build(), build());
         for (i, r) in rows.iter().enumerate() {
             if i == split {
-                let bytes = rmp_serde::to_vec(&parted.state()).unwrap();
+                let bytes = if named {
+                    rmp_serde::to_vec_named(&parted.state()).unwrap()
+                } else {
+                    rmp_serde::to_vec(&parted.state()).unwrap()
+                };
                 parted = M::restore(&rmp_serde::from_slice(&bytes).unwrap()).unwrap();
             }
             let d = if i == 0 { 0.0 } else { r.d };
@@ -1306,6 +1403,513 @@ mod generated {
         fn hawkes_clock_windowed(rows in stream(2, false), split in 0usize..60) {
             contract(|| Hawkes::new(hawkes_clock_cfg()).unwrap(), &rows, split)?;
         }
+
+        // --- post-2.0 modes and models (TEST-10 proptest half) ---------------
+
+        /// `expectile` over a clock window, with both right-closed and
+        /// both-closed edges.
+        #[test]
+        fn expectile_window_clock(
+            rows in stream(2, false),
+            split in 0usize..60,
+            closed in 0usize..2,
+        ) {
+            contract(|| {
+                let mut c = expectile_clock_cfg();
+                c.closed = [WindowClosed::Right, WindowClosed::Both][closed];
+                Expectile::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `expectile` with its initial refit timed by a clock span.
+        #[test]
+        fn expectile_refit_clock(rows in stream(2, false), split in 0usize..60) {
+            contract(|| {
+                let mut c = expectile_cfg();
+                c.refit_rows = 0;
+                c.refit_clock = Some(8.0);
+                Expectile::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `glm` with its initial refit timed by a clock span.
+        #[test]
+        fn glm_refit_clock(rows in stream(2, false), split in 0usize..60) {
+            contract(|| {
+                let mut c = glm_cfg();
+                c.refit_rows = 0;
+                c.refit_clock = Some(8.0);
+                Glm::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// Non-Poisson `glm` families and canonical links (`Gamma` log/inverse,
+        /// `Tweedie` log/power, `Binomial` logit), both on in-support targets
+        /// (so refit and exact/Fisher steps fire) and raw adversarial targets.
+        #[test]
+        fn glm_families(
+            rows in stream(2, false),
+            split in 0usize..60,
+            mode in 0usize..5,
+            in_support in prop::bool::ANY,
+        ) {
+            let (family, link) = [
+                (GlmFamily::Gamma, GlmLink::Log),
+                (GlmFamily::Gamma, GlmLink::Inverse),
+                (GlmFamily::Tweedie, GlmLink::Log),
+                (GlmFamily::Tweedie, GlmLink::Power),
+                (GlmFamily::Binomial, GlmLink::Logit),
+            ][mode];
+            let mapped: Vec<GenRow> = if in_support {
+                rows.into_iter()
+                    .map(|mut r| {
+                        for y in &mut r.y {
+                            *y = y.map(|v| match family {
+                                GlmFamily::Gamma => v.abs().clamp(1e-3, INPUT_BOUND),
+                                GlmFamily::Tweedie => v.abs().min(INPUT_BOUND),
+                                GlmFamily::Binomial => {
+                                    if v.abs() > 1e6 {
+                                        f64::from(v > 0.0)
+                                    } else {
+                                        1.0 / (1.0 + (-v).exp())
+                                    }
+                                }
+                                GlmFamily::Poisson => v.abs().min(INPUT_BOUND),
+                            });
+                        }
+                        r
+                    })
+                    .collect()
+            } else {
+                rows
+            };
+            contract(|| {
+                let c = GlmCfg {
+                    family,
+                    link,
+                    ..glm_cfg()
+                };
+                Glm::new(c).unwrap()
+            }, &mapped, split)?;
+        }
+
+        /// `kalman` in its square-root covariance form.
+        #[test]
+        fn kalman_square_root(rows in stream(2, false), split in 0usize..60) {
+            contract(|| {
+                Kalman::new(kalman_cfg())
+                    .unwrap()
+                    .with_covariance_form(CovarianceForm::SquareRoot)
+                    .unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `hmm` in its factor form (from 13 features).
+        #[test]
+        fn hmm_factor(rows in stream_of(13, 0, false), split in 0usize..60) {
+            let d = 13usize;
+            let mut covs = vec![0.0; 2 * d * d];
+            for k in 0..2 {
+                for j in 0..d {
+                    covs[k * d * d + j * d + j] = 1.0;
+                }
+            }
+            contract(|| {
+                let c = HmmCfg {
+                    n_features: d,
+                    means: Some([vec![-1.0; d], vec![1.0; d]].concat()),
+                    covs: Some(covs.clone()),
+                    ..hmm_cfg()
+                };
+                Hmm::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `holt` in its damped, seasonal (additive and multiplicative) and
+        /// horizon-forecast forms (`forecast_spans` applies to plain level and
+        /// trend alone).
+        #[test]
+        fn holt_ets(rows in stream(2, false), split in 0usize..60, mode in 0usize..4) {
+            let mapped: Vec<GenRow> = if mode == 1 {
+                rows.into_iter()
+                    .map(|mut r| {
+                        for y in &mut r.y {
+                            *y = y.map(|v| v.abs().clamp(1e-3, INPUT_BOUND));
+                        }
+                        r
+                    })
+                    .collect()
+            } else {
+                rows
+            };
+            contract(|| {
+                let c = match mode {
+                    0 => HoltCfg {
+                        season: HoltSeason::Add,
+                        season_periods: 4,
+                        period: 4.0,
+                        seasonal_half_life: 20.0,
+                        damping_half_life: 20.0,
+                        start: HoltStart::Heuristic,
+                        ..holt_cfg()
+                    },
+                    1 => HoltCfg {
+                        season: HoltSeason::Mul,
+                        season_periods: 4,
+                        period: 4.0,
+                        seasonal_half_life: 20.0,
+                        damping_half_life: 20.0,
+                        start: HoltStart::Heuristic,
+                        ..holt_cfg()
+                    },
+                    2 => HoltCfg {
+                        damping_half_life: 20.0,
+                        start: HoltStart::Heuristic,
+                        ..holt_cfg()
+                    },
+                    _ => HoltCfg {
+                        horizons: vec![1.0, 5.0],
+                        ..holt_cfg()
+                    },
+                };
+                Holt::new(c).unwrap()
+            }, &mapped, split)?;
+        }
+
+        /// `pca` in its CCIPCA form.
+        #[test]
+        fn pca_ccipca(rows in stream(0, false), split in 0usize..60) {
+            contract(|| StreamPca::new(pca_ccipca_cfg()).unwrap(), &rows, split)?;
+        }
+
+        /// `garch` across GARCH, GJR, EGARCH (with and without inputs),
+        /// variance targeting, Normal/t/skew-t innovations, and row/span
+        /// starts, on a started return prefix followed by an adversarial tail.
+        #[test]
+        fn garch(
+            rows in garch_started_stream(K, 1),
+            split in 0usize..80,
+            mode in 0usize..6,
+            use_span in prop::bool::ANY,
+        ) {
+            contract(|| {
+                let mut c = match mode {
+                    0 => garch_cfg(),
+                    1 => GarchCfg { dist: GarchDist::T, ..garch_cfg() },
+                    2 => GarchCfg { dist: GarchDist::Skewt, ..garch_cfg() },
+                    3 => GarchCfg { variance_targeting: true, ..garch_cfg() },
+                    4 => GarchCfg { vol: GarchVol::Gjr, dist: GarchDist::T, ..garch_cfg() },
+                    _ => GarchCfg {
+                        vol: GarchVol::Egarch,
+                        n_inputs: K,
+                        max_state_bytes: Some(4096),
+                        ..garch_cfg()
+                    },
+                };
+                if use_span {
+                    c.start_span = Some(50.0);
+                }
+                Garch::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `garch` FIGARCH under a span start and compact truncation, on a
+        /// started return prefix followed by an adversarial tail.
+        #[test]
+        fn garch_figarch(rows in garch_started_stream(K, 1), split in 0usize..80) {
+            contract(|| {
+                let c = GarchCfg {
+                    vol: GarchVol::Figarch,
+                    dist: GarchDist::Normal,
+                    truncation: Some(20),
+                    start_rows: 2000,
+                    start_span: Some(50.0),
+                    max_state_bytes: Some(4096),
+                    ..garch_cfg()
+                };
+                Garch::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `garch` on arbitrary unstarted streams (row 0 adversarial) across
+        /// all four volatility forms and span starts.
+        #[test]
+        fn garch_unstarted(
+            rows in stream(1, false),
+            split in 0usize..60,
+            vol_idx in 0usize..4,
+            use_span in prop::bool::ANY,
+        ) {
+            contract(|| {
+                let vol = [
+                    GarchVol::Garch,
+                    GarchVol::Gjr,
+                    GarchVol::Egarch,
+                    GarchVol::Figarch,
+                ][vol_idx];
+                let mut c = GarchCfg {
+                    vol,
+                    truncation: (vol == GarchVol::Figarch).then_some(20),
+                    start_rows: if vol == GarchVol::Figarch { 2000 } else { 50 },
+                    start_span: (use_span || vol == GarchVol::Figarch).then_some(10.0),
+                    max_state_bytes: Some(4096),
+                    ..garch_cfg()
+                };
+                if vol == GarchVol::Egarch {
+                    c.n_inputs = K;
+                }
+                Garch::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `dcc` with given parameters, learned parameters, span start, and
+        /// GARCH margins, across its start and an adversarial tail.
+        #[test]
+        fn dcc(
+            rows in garch_started_stream(K, 2),
+            split in 0usize..80,
+            mode in 0usize..3,
+        ) {
+            contract(|| {
+                let c = match mode {
+                    0 => dcc_cfg(),
+                    1 => DccCfg {
+                        params: None,
+                        start_span: Some(50.0),
+                        ..dcc_cfg()
+                    },
+                    _ => DccCfg {
+                        asymmetric: false,
+                        params: Some(vec![0.05, 0.9]),
+                        start_span: Some(50.0),
+                        margins: Some(GarchCfg {
+                            n_targets: 2,
+                            horizons: Vec::new(),
+                            start_span: Some(50.0),
+                            max_state_bytes: Some(4096),
+                            ..garch_cfg()
+                        }),
+                        ..dcc_cfg()
+                    },
+                };
+                Dcc::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `realized` under decay, row window, and clock window (both edges).
+        #[test]
+        fn realized(rows in stream(2, false), split in 0usize..60, mode in 0usize..4) {
+            contract(|| {
+                let c = match mode {
+                    0 => realized_cfg(),
+                    1 => realized_rows_cfg(),
+                    2 => realized_clock_cfg(),
+                    _ => RealizedCfg {
+                        closed: WindowClosed::Both,
+                        ..realized_clock_cfg()
+                    },
+                };
+                Realized::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `power_variation` under decay, row window, clock window (both edges),
+        /// and a higher-order normalized tripower quarticity term.
+        #[test]
+        fn power_variation(rows in stream(2, false), split in 0usize..60, mode in 0usize..5) {
+            contract(|| {
+                let c = match mode {
+                    0 => power_variation_cfg(),
+                    1 => power_variation_rows_cfg(),
+                    2 => power_variation_clock_cfg(),
+                    3 => PowerVariationCfg {
+                        closed: WindowClosed::Both,
+                        ..power_variation_clock_cfg()
+                    },
+                    _ => PowerVariationCfg {
+                        terms: vec![
+                            PvTerm {
+                                kind: PvTermKind::Multipower {
+                                    powers: vec![4.0 / 3.0; 3],
+                                    normalize: true,
+                                },
+                                scale: 1,
+                            },
+                            PvTerm {
+                                kind: PvTermKind::Multipower {
+                                    powers: vec![4.0],
+                                    normalize: false,
+                                },
+                                scale: 1,
+                            },
+                        ],
+                        ..power_variation_cfg()
+                    },
+                };
+                PowerVariation::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        #[test]
+        fn tdigest(rows in stream(2, false), split in 0usize..60) {
+            contract(|| TDigestModel::new(tdigest_cfg()).unwrap(), &rows, split)?;
+        }
+
+        /// `ddsketch` plain, decayed, row-windowed, and clock-windowed.
+        #[test]
+        fn ddsketch(rows in stream(2, false), split in 0usize..60, mode in 0usize..4) {
+            contract(|| {
+                let c = match mode {
+                    0 => ddsketch_cfg(),
+                    1 => DdSketchModelCfg {
+                        decay: decay(),
+                        levels: vec![0.25, 0.75],
+                        ..ddsketch_cfg()
+                    },
+                    2 => DdSketchModelCfg {
+                        window_rows: Some(7),
+                        levels: vec![0.25, 0.75],
+                        ..ddsketch_cfg()
+                    },
+                    _ => DdSketchModelCfg {
+                        window_clock: Some(12.5),
+                        closed: WindowClosed::Both,
+                        levels: vec![0.25, 0.75],
+                        ..ddsketch_cfg()
+                    },
+                };
+                DdSketchModel::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `ewm_moments` under decay, row window, and clock window. Windowed
+        /// forms round-trip through named msgpack (`contract_named`), matching
+        /// `BOCPD-4` and `HMM-5 (4)` (non-trailing `skip_serializing_if` on
+        /// `EwmMoments::bufs` / `EwmMomentsCfg` breaks compact positional
+        /// msgpack; every bank file writes named msgpack).
+        #[test]
+        fn ewm_moments(rows in stream_of(1, 0, false), split in 0usize..60, mode in 0usize..3) {
+            let build = || {
+                let c = match mode {
+                    0 => ewm_moments_cfg(),
+                    1 => EwmMomentsCfg {
+                        decay: Decay::Halflife(f64::INFINITY),
+                        window_rows: Some(8),
+                        ..ewm_moments_cfg()
+                    },
+                    _ => EwmMomentsCfg {
+                        decay: Decay::Halflife(f64::INFINITY),
+                        clocked: true,
+                        window_clock: Some(12.5),
+                        ..ewm_moments_cfg()
+                    },
+                };
+                EwmMoments::new(c).unwrap()
+            };
+            if mode == 0 {
+                contract(build, &rows, split)?;
+            } else {
+                contract_named(build, &rows, split)?;
+            }
+        }
+
+        /// `ar` plain, with AIC order selection, and under a clock window.
+        #[test]
+        fn ar(rows in stream(2, false), split in 0usize..60, mode in 0usize..3) {
+            contract(|| {
+                let c = match mode {
+                    0 => ar_cfg(),
+                    1 => ArCfg {
+                        lags: vec![1, 2, 3],
+                        ridge: 0.0,
+                        select: Some(ArSelect::Aic),
+                        ..ar_cfg()
+                    },
+                    _ => ArCfg {
+                        window: Some(12.0),
+                        ..ar_cfg()
+                    },
+                };
+                Ar::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `vector_ar` plain, with Granger tests and AIC selection, and under
+        /// a clock window.
+        #[test]
+        fn vector_ar(rows in stream(2, false), split in 0usize..60, mode in 0usize..3) {
+            contract(|| {
+                let c = match mode {
+                    0 => vector_ar_cfg(),
+                    1 => vector_ar_tested_cfg(),
+                    _ => VectorArCfg {
+                        window: Some(12.0),
+                        ..vector_ar_cfg()
+                    },
+                };
+                VectorAr::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `spectral` across density, spectrum, Lomb-Scargle, and a clock window.
+        #[test]
+        fn spectral(rows in stream(2, false), split in 0usize..60, mode in 0usize..4) {
+            contract(|| {
+                let c = match mode {
+                    0 => spectral_cfg(),
+                    1 => SpectralCfg {
+                        scaling: SpectralScaling::Spectrum,
+                        detrend: false,
+                        ..spectral_cfg()
+                    },
+                    2 => SpectralCfg {
+                        frequencies: vec![0.1, 0.2, 0.5],
+                        scaling: SpectralScaling::LombScargle,
+                        ..spectral_cfg()
+                    },
+                    _ => SpectralCfg {
+                        window: Some(12.0),
+                        ..spectral_cfg()
+                    },
+                };
+                Spectral::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `isotonic` plain, row-windowed, and clock-windowed (decreasing).
+        #[test]
+        fn isotonic(rows in stream_of(1, 2, false), split in 0usize..60, mode in 0usize..3) {
+            contract(|| {
+                let c = match mode {
+                    0 => isotonic_cfg(),
+                    1 => IsotonicCfg {
+                        window_rows: Some(9),
+                        decay: Decay::Halflife(f64::INFINITY),
+                        ..isotonic_cfg()
+                    },
+                    _ => isotonic_clock(),
+                };
+                Isotonic::new(c).unwrap()
+            }, &rows, split)?;
+        }
+    }
+
+    /// Every model kind the contract probes has a `proptest!` in this module,
+    /// so a new kind cannot land without generated-stream coverage (TEST-10).
+    #[test]
+    fn every_model_has_a_proptest() {
+        let src = include_str!("generated.rs");
+        let block = src
+            .split("proptest! {")
+            .nth(1)
+            .expect("proptest! block in generated.rs");
+        let mut missing = Vec::new();
+        for (_, kind) in PROBED.iter().filter(|(_, k)| *k != "ew_cov_accumulator") {
+            if !block.contains(&format!("fn {kind}(")) {
+                missing.push(*kind);
+            }
+        }
+        assert!(missing.is_empty(), "missing proptest! in mod generated: {missing:?}");
     }
 }
 
