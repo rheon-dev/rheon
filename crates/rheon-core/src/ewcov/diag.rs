@@ -315,6 +315,80 @@ impl EwCovDiag {
         self.prior_scale *= lam;
     }
 
+    /// Update only the means (and weights); leave the variances and prior
+    /// scale bit-equal.
+    pub(crate) fn update_mean_only(&mut self, x: &[f64], lam: f64, w: f64) {
+        debug_assert_eq!(x.len(), self.k);
+        if w > 0.0 {
+            self.rows_learned += 1;
+            self.runs.track(x, self.rows_learned);
+        }
+        if w == 0.0 && lam * self.w_sum == 0.0 {
+            return self.decay(lam);
+        }
+        if w < 0.0 {
+            return;
+        }
+        let w_new = lam * self.w_sum + w;
+        if w_new <= 0.0 {
+            return;
+        }
+        let a = lam * self.w_sum / w_new;
+        let b = w / w_new;
+        if b > 0.0 {
+            for ((mi, lo), &xi) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(x) {
+                let d = crate::comp::dev(xi, *mi, *lo);
+                crate::comp::step_toward(mi, lo, xi, d, a, b);
+            }
+        }
+        self.w_sum = w_new;
+        if let Some(q) = self.q_sum.as_mut() {
+            *q = lam * lam * *q + w * w;
+        }
+        self.prior_scale *= lam;
+    }
+
+    /// Update only the variances about the frozen means; leave the means
+    /// bit-equal (`vᵢ' = a·vᵢ + b·dᵢ²`).
+    pub(crate) fn update_cov_only(&mut self, x: &[f64], lam: f64, w: f64) {
+        debug_assert_eq!(x.len(), self.k);
+        if w > 0.0 {
+            self.rows_learned += 1;
+            self.runs.track(x, self.rows_learned);
+        }
+        if w == 0.0 && lam * self.w_sum == 0.0 {
+            return self.decay(lam);
+        }
+        if w < 0.0 {
+            return;
+        }
+        let w_new = lam * self.w_sum + w;
+        if w_new <= 0.0 {
+            return;
+        }
+        let a = lam * self.w_sum / w_new;
+        let b = w / w_new;
+        for ((vi, &mi), (&lo, &xi)) in self
+            .v
+            .iter_mut()
+            .zip(self.m.iter())
+            .zip(self.m_lo.iter().zip(x))
+        {
+            let d = crate::comp::dev(xi, mi, lo);
+            *vi = a * *vi + (b * d) * d;
+        }
+        self.precision_scale = if a <= 0.0 {
+            1.0
+        } else {
+            self.precision_scale * a
+        };
+        self.w_sum = w_new;
+        if let Some(q) = self.q_sum.as_mut() {
+            *q = lam * lam * *q + w * w;
+        }
+        self.prior_scale *= lam;
+    }
+
     /// Overwrite the moments, as [`EwCov::set_moments`] does with a matrix
     /// whose diagonal is `variances`: the means' low parts start at zero and
     /// no run stands.

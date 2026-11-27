@@ -111,6 +111,10 @@ fn the_length_terms_never_share_an_entry_between_two_keys() {
 #[test]
 fn the_held_branches_are_the_ones_made_and_follow_the_bits() {
     let bits = |b: Branches| (b.ln_break.to_bits(), b.ln_grow.to_bits());
+    let next_bits = |n: NextHazard| match n {
+        NextHazard::Fixed(b) => bits(b),
+        NextHazard::NbTable => unreachable!(),
+    };
     let mut m = Bocpd::new(BocpdCfg {
         hazard_from_row: true,
         ..cfg(1)
@@ -120,7 +124,7 @@ fn the_held_branches_are_the_ones_made_and_follow_the_bits() {
     for h in [50.0, 50.0, 7.5, 50.0, 7.5, 7.5, -0.0, 3.0] {
         let (_, got) = m.before_row_held(&[Some(h)], 1.0, &mut held);
         let (_, want) = m.before_row(&[Some(h)], 1.0);
-        assert_eq!(got.map(bits), want.map(bits), "{h}");
+        assert_eq!(got.map(next_bits), want.map(next_bits), "{h}");
     }
     // A hazard of 1 or below is refused, and holds nothing of its own.
     let before = held.0.map(|(k, b)| (k, bits(b)));
@@ -134,7 +138,7 @@ fn the_held_branches_are_the_ones_made_and_follow_the_bits() {
     for dc in [1.0, 1.0, 2.5, 0.0, 1.0, 0.0, 0.0, 2.5] {
         let (a, got) = m.before_row_held(&[], dc, &mut held);
         let (b, want) = m.before_row(&[], dc);
-        assert_eq!(got.map(bits), want.map(bits), "{dc}");
+        assert_eq!(got.map(next_bits), want.map(next_bits), "{dc}");
         let eq = |a: Option<Vec<f64>>, b: Option<Vec<f64>>| {
             a.map(|v| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>())
                 == b.map(|v| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>())

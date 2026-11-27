@@ -25,8 +25,8 @@ def hmm(
     features: list[str],
     n_components: int,
     precision_prior: float,
-    covariance_type: Literal["full", "tied", "diag"] = "full",
-    learn: bool = True,
+    covariance_type: Literal["full", "tied", "diag", "spherical"] = "full",
+    learn: bool | None = None,
     transition_prior: float | None = None,
     transition: list[float] | None = None,
     means: list[float] | None = None,
@@ -38,6 +38,12 @@ def hmm(
     tvtp_coef: list[list[float]] | None = None,
     prior_rows: float | None = None,
     warm_span: float | Duration | None = None,
+    smooth_lag: int | None = None,
+    max_state_bytes: int | None = None,
+    params: str | None = None,
+    means_weight: float | None = None,
+    covars_prior: float | list[float] | None = None,
+    covars_weight: float | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A Gaussian hidden Markov model of the features, filtered one row at a time.
@@ -74,12 +80,36 @@ def hmm(
         variance is about 1.0 halves every correlation.
     ``covariance_type``
         ``"full"`` (the default, the one shape that sees a regime's
-        correlation between features), ``"tied"`` or ``"diag"``, as for
-        :func:`ew_class`.
+        correlation between features), ``"tied"``, ``"diag"`` or
+        ``"spherical"`` (one scalar isotropic variance per state).
     ``learn``
         Whether the states and the transition counts move with the rows.
-        Default ``True``. ``False`` with no states given is refused: there
-        would be nothing to filter with.
+        Defaults to ``True`` (or ``False`` when ``params=""``). ``False``
+        with no states given is refused: there would be nothing to filter
+        with.
+    ``params``
+        Subset of ``"tmc"`` naming which components learn on each row:
+        ``"t"`` for transitions, ``"m"`` for state means, ``"c"`` for state
+        covariances, or ``""`` to learn nothing. ``'s'`` is refused because
+        the initial state distribution is fixed uniform (``1 / n_components``).
+        Refused when conflicting with ``learn``, and ``'t'`` is refused beside
+        ``tvtp_coef``.
+    ``means_weight``
+        Prior weight in rows on given ``means`` (finite and at least 0,
+        default 1.0). Requires given ``means`` and ``covs`` with means
+        learning enabled.
+    ``covars_prior``, ``covars_weight``
+        Conjugate covariance prior and its weight in rows (matching
+        ``hmmlearn``'s Gaussian M-step at ``half_life = float("inf")``).
+        Mutually exclusive with ``prior_rows`` and requires covariance
+        learning enabled.
+    ``smooth_lag``, ``max_state_bytes``
+        Enable fixed-lag smoothing at lag ``smooth_lag`` learned rows (at
+        least 1), adding ``smoothed_state<j>`` and ``smoothed_for`` (clock
+        dtype) to the output struct without feeding smoothed states back into
+        filtering. ``max_state_bytes`` caps per-group smoother (or
+        ``warm_span``) bytes (default 262,144, ceiling 64 MiB). Refused
+        beside ``embargo`` and ``label_clock``.
     ``transition_prior``, ``transition``
         The Dirichlet pseudo-count per cell (default 1, finite and at least
         0), and an ``n_components x n_components`` matrix whose rows are
@@ -482,9 +512,18 @@ def hmm(
         "tvtp_coef": tvtp_coef,
         "prior_rows": prior_rows,
     }
-    # Written only when given, as the Rust spec leaves it out when absent.
-    if warm_span is not None:
-        model["warm_span"] = warm_span
+    # Written only when given, as the Rust spec leaves them out when absent.
+    for key, val in (
+        ("warm_span", warm_span),
+        ("smooth_lag", smooth_lag),
+        ("max_state_bytes", max_state_bytes),
+        ("params", params),
+        ("means_weight", means_weight),
+        ("covars_prior", covars_prior),
+        ("covars_weight", covars_weight),
+    ):
+        if val is not None:
+            model[key] = val
     mirror = _mirror_target(name, "hmm", features, common, "its hidden states are over")
     targets = [exog_tvtp] if exog_tvtp is not None else mirror
     return _common(name, model, targets=targets, features=features, **common)

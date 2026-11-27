@@ -271,7 +271,9 @@ fn a_covariance_refusal_names_the_spec_and_the_parameter() {
             r#"{"type": "hmm", "n_components": 2, "precision_prior": 0.1, "covariance_type": "lda"}"#,
             r#", "half_life": 10.0"#,
         ),
-        &["covariance_type must be \"full\", \"tied\" or \"diag\", but it is \"lda\"."],
+        &[
+            "covariance_type must be \"full\", \"tied\", \"diag\" or \"spherical\", but it is \"lda\".",
+        ],
     );
     refused(
         r#"{"name": "m", "model": {"type": "ew_class", "classes": ["a", "b"],

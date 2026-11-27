@@ -354,6 +354,16 @@ def describe_api(cli: Path | None = None) -> str:
             dict(features=["x0", "x1"], n_components=3, precision_prior=0.1, half_life=100.0),
         ),
         (
+            "hmm smoothed",
+            dict(
+                features=["x0", "x1"],
+                n_components=2,
+                precision_prior=0.1,
+                half_life=100.0,
+                smooth_lag=4,
+            ),
+        ),
+        (
             "rcov",
             dict(features=["x0", "x1"], group="g", group_close="monotone", block_rows=500),
         ),
@@ -868,6 +878,14 @@ ENUM_PROBES: list[
         "word",
     ),
     ("bocpd.covariance_type", "bocpd", {}, "model.covariance_type", "word"),
+    (
+        "bocpd.hazard_kind",
+        "bocpd",
+        {},
+        "model.hazard_kind",
+        "word",
+        {"neg_binomial": {"hazard_k": 3, "hazard_p": 0.1}},
+    ),
     ("corrchange.alpha_adjust", "corrchange", {}, "model.alpha_adjust", "word"),
     ("corrchange.kind", "corrchange", {}, "model.kind", "word"),
     ("corrchange.norm", "corrchange", {"kind": "window"}, "model.norm", "word"),
@@ -1544,6 +1562,7 @@ FREE_TEXT = {
     "b",
     "a_suffix",
     "b_suffix",
+    "params",
 }
 
 

@@ -1259,68 +1259,67 @@ pub enum ModelKind {
     /// to the next.
     #[serde(rename = "hmm")]
     Hmm {
-        /// Hidden states, `2 ..= 1024` (`rheon_core::Hmm::MAX_K`):
-        /// `n_components`, scikit-learn's `GaussianMixture` and hmmlearn's
-        /// name (task 244, P-9), kept `k` here as the core calls it.
+        /// Hidden states, `2 ..= 1024` (`rheon_core::Hmm::MAX_K`).
         #[serde(rename = "n_components")]
         k: usize,
-        /// `"full"` (default), `"tied"` or `"diag"`, as `ew_class`.
+        /// `"full"` (default), `"tied"`, `"diag"`, or `"spherical"`.
         #[serde(default)]
         covariance_type: Option<String>,
-        /// Ridge on every state covariance; **required**, since a state's
-        /// centred co-moments start at zero. Under `full` and `diag` with
-        /// `learn` on the states forget toward a prior instead, and it is the
-        /// ridge only where every feature's pooled variance is 0.
+        /// Ridge on every state covariance (required, finite and > 0).
         precision_prior: f64,
-        /// Update the states and the transition counts; default true.
+        /// Update states and transition counts; default true (false when `params=""`).
         #[serde(default)]
         learn: Option<bool>,
-        /// Dirichlet pseudo-count per cell of the transition matrix
-        /// (default 1). With `transition` it is spread over that matrix, so
-        /// the given one is the prior mean. Refused beside `tvtp_coef`,
-        /// which learns no count (review 2026-10-06, CE4).
+        /// Dirichlet pseudo-count per transition cell (default 1).
         #[serde(default)]
         transition_prior: Option<f64>,
-        /// A `K x K` row-stochastic matrix, flattened row-major. Refused
-        /// beside `tvtp_coef`, as `transition_prior` is.
+        /// `K x K` row-stochastic transition matrix, flattened row-major.
         #[serde(default)]
         transition: Option<Vec<f64>>,
-        /// State means, `K x d` row-major; with `covs`, there is no warm-up.
+        /// State means, `K x d` row-major; with `covs`, skips warm-up.
         #[serde(default)]
         means: Option<Vec<f64>>,
         /// State covariances, `K` matrices of `d x d`, row-major.
         #[serde(default)]
         covs: Option<Vec<f64>>,
-        /// Learned rows buffered before the states are seeded (default
-        /// 1,000, or `n_components` where that is more).
-        /// With `means` and `covs` given nothing is seeded, and it, like
-        /// `init` and `seed`, is refused (review 2026-10-06, CE4).
+        /// Learned rows buffered before seeding (default 1,000 or `k`).
         #[serde(default)]
         warm_rows: Option<usize>,
-        /// `"first"`, `"farthest"`, `"k-means++"` or `"lloyd"` (default), as
-        /// `kmeans`.
+        /// `"first"`, `"farthest"`, `"k-means++"` or `"lloyd"` (default).
         #[serde(default)]
         init: Option<String>,
         #[serde(default)]
         seed: Option<u64>,
-        /// A column whose value drives the transition matrix through
-        /// `tvtp_coef`; declared like `weight`, not a feature.
+        /// Column driving TVTP transitions via `tvtp_coef`.
         #[serde(default)]
         exog_tvtp: Option<String>,
         /// `[A, B]`, each `K x K` row-major: `Π(t) = softmax(A + B·z)`.
         #[serde(default)]
         tvtp_coef: Option<Vec<Vec<f64>>>,
-        /// The rows of weight each state's prior covariance is worth under
-        /// `full` and `diag` with `learn` on (stabilized forgetting); default
-        /// the number of features. Refused under `tied` and with `learn`
-        /// off, which take no prior.
+        /// Stabilized-forgetting prior weight in rows (default `d`).
         #[serde(default)]
         prior_rows: Option<f64>,
-        /// The warm-up over a span of the clock in place of `warm_rows`
-        /// (docs/PLAN.md task 538), as `kmeans`' `warm_span`. Refused beside
-        /// `warm_rows` and beside given states. Skipped when absent.
+        /// Warm-up over a span of the clock in place of `warm_rows`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         warm_span: Option<Span>,
+        /// Fixed-lag smoother lag in learned rows (>= 1).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        smooth_lag: Option<u64>,
+        /// Per-group byte cap for `smooth_lag` or `warm_span`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
+        /// Components to learn: letters of `"tmc"` (or `""`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        params: Option<String>,
+        /// Prior weight on given `means` (default 1.0).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        means_weight: Option<f64>,
+        /// Conjugate covariance prior.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        covars_prior: Option<FloatOrList>,
+        /// Conjugate covariance prior weight.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        covars_weight: Option<f64>,
     },
     /// Has the correlation structure changed? (docs/ENHANCEMENTS.md E59)
     ///
@@ -1418,68 +1417,58 @@ pub enum ModelKind {
     /// at a time.
     #[serde(rename = "bocpd")]
     Bocpd {
-        /// The expected clock time between changepoints, `τ`, a clock
-        /// parameter like every other (rows without a clock, the column's
-        /// units on a numeric clock, a duration on a temporal one): the
-        /// step of `d` into each row carries the chance `1 − exp(−d/τ)` of
-        /// a break, applied before the row is read (tasks 179 and 547).
-        /// Refused beside `hazard_rows` and `hazard_col`.
+        /// Expected clock time between changepoints (`τ`).
         #[serde(default)]
         hazard: Option<Span>,
-        /// A column carrying a per-row hazard instead of one number: the
-        /// chance of a break after its row, falling back to `hazard_rows`.
-        /// Refused beside `hazard`.
+        /// Column carrying a per-row hazard, falling back to `hazard_rows`.
         #[serde(default)]
         hazard_col: Option<String>,
-        /// `"full"`, a normal-inverse-Wishart over all the features, or
-        /// `"diag"` (default), a normal-inverse-gamma per feature:
-        /// scikit-learn's covariance words (task 244, P-2), where `emission`
-        /// said `"gaussian"` and `"diag"`.
+        /// `"diag"` (default) or `"full"`.
         #[serde(default)]
         covariance_type: Option<String>,
-        /// `μ₀`; absent, the first `warm_rows` learned rows' sample mean.
-        /// scikit-learn's `BayesianGaussianMixture` names the four priors
-        /// (task 244, P-3).
+        /// `μ₀`; absent, sample mean of warm-up rows.
         #[serde(default)]
         mean_prior: Option<Vec<f64>>,
-        /// `κ₀`, the mean's weight in rows.
+        /// `κ₀`, mean weight in rows.
         #[serde(default)]
         mean_precision_prior: Option<f64>,
-        /// `ν₀`; absent, `d + 2` under `"full"` and 3 under `"diag"`
-        /// (docs/PLAN.md task 195, U5).
+        /// `ν₀`; absent, `d + 2` under `"full"` and 3 under `"diag"`.
         #[serde(default)]
         degrees_of_freedom_prior: Option<f64>,
-        /// A scalar for `sI`, or a `d x d` matrix, in the data's units;
-        /// absent, the first `warm_rows` learned rows' sample covariance
-        /// (its diagonal under `"diag"`; task 195, U4).
+        /// Prior covariance scale: `[s]`, length `d` (under `obs_var`), or `d x d`.
         #[serde(default)]
         covariance_prior: Option<Vec<f64>>,
-        /// Temper each row by `(π(x) / π(mode)) ** robust_beta`, the robust
-        /// predictive, under `"diag"`; absent, the predictive untempered.
-        /// It was `emission = "robust"`, whose default β was 0.1.
+        /// Temper the `"diag"` predictive by `(π(x)/π(mode)) ** robust_beta`.
         #[serde(default)]
         robust_beta: Option<f64>,
         #[serde(default)]
         prune_below: Option<f64>,
         #[serde(default)]
         max_run: Option<usize>,
-        /// Learned rows held, reporting nothing, to set the priors left out
-        /// from; default `d + 2`. Refused beside both `mean_prior` and
-        /// `covariance_prior` (task 195, U4).
+        /// Learned rows held to set missing priors (default `d + 2`).
         #[serde(default)]
         warm_rows: Option<usize>,
-        /// The warm-up over a span of the clock in place of `warm_rows`
-        /// (docs/PLAN.md task 538), as `kmeans`' `warm_span`; at least two
-        /// rows. Skipped when absent.
+        /// Warm-up over a span of the clock in place of `warm_rows`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         warm_span: Option<Span>,
-        /// The expected rows between changepoints, `H = 1/hazard_rows` the
-        /// chance of a break after each row of positive weight, on any
-        /// clock: Adams and MacKay's hazard, per observation (docs/PLAN.md
-        /// task 547). The default, 250, where neither it nor `hazard` is
-        /// given. Skipped when absent.
+        /// Expected rows between changepoints (`H = 1/hazard_rows`, default 250).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hazard_rows: Option<f64>,
+        /// Run-length hazard kind: `"constant"` (default) or `"neg_binomial"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hazard_kind: Option<String>,
+        /// Shape `k >= 1` for `hazard_kind="neg_binomial"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hazard_k: Option<usize>,
+        /// Probability `0 < p <= 1` for `hazard_kind="neg_binomial"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hazard_p: Option<f64>,
+        /// Known observation variance per feature (`> 0`), scalar or length `d`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        obs_var: Option<FloatOrList>,
+        /// Per-group byte cap for live runs (default 256 KB, ceiling 64 MiB).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
     },
     /// What a stream's columns hold, read in one pass (docs/PLAN.md task
     /// 223 (b)): per column the nulls, NaNs, infinities and values past

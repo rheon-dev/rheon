@@ -515,7 +515,7 @@ fn hmm_cfg() -> HmmCfg {
         n_features: K,
         k: 2,
         decay: decay(),
-        covariance: Covariance::Full,
+        covariance: rheon_core::HmmCovariance::Full,
         precision_prior: 1e-2,
         min_weight: 0.0,
         learn: true,
@@ -529,6 +529,7 @@ fn hmm_cfg() -> HmmCfg {
         tvtp: None,
         prior_rows: None,
         warm_clock: None,
+        extras: None,
     }
 }
 
@@ -626,6 +627,7 @@ fn bocpd_cfg() -> BocpdCfg {
         warm_rows: None,
         hazard_on_clock: false,
         warm_clock: None,
+        extras: None,
     }
 }
 

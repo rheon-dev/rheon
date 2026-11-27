@@ -816,7 +816,7 @@ pub fn output_index(spec: &Spec) -> Vec<FieldMeta> {
                     ));
                 }
                 // The fixed-lag smoother's, on the rows that complete a lag.
-                if spec.smooth_lag().is_some() {
+                if spec.is_kalman_smoother() {
                     fields.push(like(
                         FieldMeta::new(format!("smoothed_coef{suffix}"), "smoothed_coef")
                             .src(Source::SmoothedCoef(mi)),
@@ -1325,8 +1325,9 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
     // hmm's state is hidden: per instance, the filtered and predicted
     // posteriors, the state, the row's log-likelihood, `n_eff` and the
     // state means as `coef`.
-    if let crate::ModelKind::Hmm { k, .. } = &spec.model {
-        let labels = rheon_core::Hmm::labels(*k);
+    if let crate::ModelKind::Hmm { k, smooth_lag, .. } = &spec.model {
+        let smoothed = smooth_lag.is_some();
+        let labels = rheon_core::Hmm::labels_with(*k, smoothed);
         let n_slots = labels.len();
         let mut fields = Vec::new();
         for (mi, (suffix, d)) in decays.iter().enumerate() {
@@ -1339,8 +1340,8 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 } else {
                     Source::Stat(at)
                 };
-                // `filtered_state<s>` and `predicted_state<s>`: the kind, and
-                // the state they are about.
+                // `filtered_state<s>`, `predicted_state<s>`, and
+                // `smoothed_state<s>`: the kind, and the state they are about.
                 let (kind, state) = match l.split_once("_state") {
                     Some((kind, s)) => (kind, s.parse().ok()),
                     None => (l.as_str(), None),
@@ -1351,6 +1352,13 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 m.columns = Some(spec.features.clone());
                 m.state = state;
                 fields.push(m);
+            }
+            if smoothed {
+                fields.push(
+                    FieldMeta::new(format!("smoothed_for{suffix}"), "smoothed_for")
+                        .decay(suffix, d)
+                        .src(Source::SmoothedFor(mi)),
+                );
             }
             fields.push(
                 FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")

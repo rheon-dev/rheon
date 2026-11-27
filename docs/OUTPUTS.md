@@ -762,6 +762,14 @@ The fields of `rp.spec.hmm("m", features=["x0", "x1"], half_life=50.0, n_compone
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
 
+Under `smooth_lag=5`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `smoothed_state0` | `f64` | fixed-lag smoothed probability of state `<j>` at `smooth_lag` learned rows earlier, conditioned on every observation up to this row | while withheld, before `smooth_lag` learned rows have arrived after seeding, on rows of weight 0, and during `predict` |
+| `smoothed_state1` | `f64` | fixed-lag smoothed probability of state `<j>` at `smooth_lag` learned rows earlier, conditioned on every observation up to this row | while withheld, before `smooth_lag` learned rows have arrived after seeding, on rows of weight 0, and during `predict` |
+| `smoothed_for` | `clock` | the clock of the row `smoothed_state<j>` describes, in the clock column's own type; with no clock, the row's index in its group | where `smoothed_state<j>` is |
+
 ## `hawkes`
 
 The fields of `rp.spec.hawkes("m", targets=["y"], half_life=50.0, kernel_decays=[1.0, 5.0])`:

@@ -396,12 +396,23 @@ impl ChunkOut {
         let clocks = if spec.emit_clocks { n_rows } else { 0 };
         fill(&mut self.scored_clock, clocks, None);
         fill(&mut self.learned_clock, clocks, None);
-        let smooths = spec.smooth_lag().is_some();
-        let smoothed = if smooths { n_models } else { 0 };
-        lists(&mut self.smoothed_coef, smoothed, n_rows);
-        let se = if spec.emit_smoothed_se() { smoothed } else { 0 };
+        let kalman_sm = if spec.is_kalman_smoother() {
+            n_models
+        } else {
+            0
+        };
+        lists(&mut self.smoothed_coef, kalman_sm, n_rows);
+        let se = if spec.emit_smoothed_se() {
+            kalman_sm
+        } else {
+            0
+        };
         lists(&mut self.smoothed_se, se, n_rows);
-        fill(&mut self.smoothed_for, smoothed * spec.m() * n_rows, None);
+        fill(
+            &mut self.smoothed_for,
+            n_models * spec.smoothed_for_slots() * n_rows,
+            None,
+        );
         self.n_models = n_models;
         self.n_slots = n_slots;
         self.n_levels = n_levels;

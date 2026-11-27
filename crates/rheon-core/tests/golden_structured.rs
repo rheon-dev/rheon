@@ -225,7 +225,7 @@ fn hmm_regimes_golden() {
         n_features: 2,
         k: 2,
         decay: Decay::Halflife(20.0),
-        covariance: Covariance::Full,
+        covariance: rheon_core::HmmCovariance::Full,
         precision_prior: 1e-2,
         min_weight: 3.0,
         learn: true,
@@ -239,6 +239,7 @@ fn hmm_regimes_golden() {
         tvtp: None,
         prior_rows: None,
         warm_clock: None,
+        extras: None,
     })
     .unwrap();
     let got = probe(&mut m, &regime_rows(), &[4, 5], &[10, 20, 40, 55]);
@@ -276,6 +277,7 @@ fn bocpd_cfg(on_the_clock: bool) -> BocpdCfg {
         warm_rows: None,
         hazard_on_clock: on_the_clock,
         warm_clock: None,
+        extras: None,
     }
 }
 

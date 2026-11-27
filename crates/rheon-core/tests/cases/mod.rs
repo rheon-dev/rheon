@@ -696,7 +696,7 @@ fn hmm_full_cfg(d: usize) -> HmmCfg {
         n_features: d,
         k: 2,
         decay: decay(),
-        covariance: Covariance::Full,
+        covariance: rheon_core::HmmCovariance::Full,
         precision_prior: 1e-2,
         min_weight: 0.0,
         learn: true,
@@ -710,6 +710,7 @@ fn hmm_full_cfg(d: usize) -> HmmCfg {
         tvtp: None,
         prior_rows: None,
         warm_clock: None,
+        extras: None,
     }
 }
 
@@ -975,6 +976,7 @@ fn bocpd_cfg() -> BocpdCfg {
         warm_rows: None,
         hazard_on_clock: true,
         warm_clock: None,
+        extras: None,
     }
 }
 
@@ -3072,7 +3074,7 @@ pub fn all() -> Vec<Case> {
                 decay: decay(),
                 // The pooled shape, so the fixture freezes its word, "tied"
                 // (task 244, schema 61); `ew_class_window`'s is "diag".
-                covariance: Covariance::Shared,
+                covariance: rheon_core::HmmCovariance::Shared,
                 precision_prior: 1e-2,
                 min_weight: 0.0,
                 learn: true,
@@ -3086,6 +3088,7 @@ pub fn all() -> Vec<Case> {
                 tvtp: None,
                 prior_rows: None,
                 warm_clock: None,
+                extras: None,
             })
             .unwrap(),
             K,
@@ -3101,7 +3104,7 @@ pub fn all() -> Vec<Case> {
                 n_features: K,
                 k: 2,
                 decay: decay(),
-                covariance: Covariance::Diagonal,
+                covariance: rheon_core::HmmCovariance::Diagonal,
                 precision_prior: 1e-2,
                 min_weight: 0.0,
                 learn: true,
@@ -3115,6 +3118,7 @@ pub fn all() -> Vec<Case> {
                 tvtp: None,
                 prior_rows: None,
                 warm_clock: Some(15.0),
+                extras: None,
             })
             .unwrap(),
             K,
@@ -3131,7 +3135,7 @@ pub fn all() -> Vec<Case> {
                 n_features: K,
                 k: 2,
                 decay: decay(),
-                covariance: Covariance::Diagonal,
+                covariance: rheon_core::HmmCovariance::Diagonal,
                 precision_prior: 1e-2,
                 min_weight: 0.0,
                 learn: true,
@@ -3145,6 +3149,7 @@ pub fn all() -> Vec<Case> {
                 tvtp: None,
                 prior_rows: None,
                 warm_clock: None,
+                extras: None,
             })
             .unwrap(),
             K,
@@ -3203,6 +3208,62 @@ pub fn all() -> Vec<Case> {
             Hmm::new(HmmCfg {
                 means: Some(vec![0.0, 0.0, 2.0, 2.0]),
                 covs: Some(vec![0.25, 0.0, 0.0, 4.0, 0.25, 0.0, 0.0, 4.0]),
+                ..hmm_full_cfg(K)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        // Spherical covariance with a custom prior_rows.
+        case!(
+            "hmm_spherical",
+            "Hmm",
+            Hmm,
+            Hmm::new(HmmCfg {
+                covariance: rheon_core::HmmCovariance::Spherical,
+                prior_rows: Some(2.5),
+                ..hmm_full_cfg(K)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        // Fixed-lag smoother holding a populated ring at the save.
+        case!(
+            "hmm_smoothed",
+            "Hmm",
+            Hmm,
+            Hmm::new(HmmCfg {
+                extras: Some(Box::new(rheon_core::HmmCfgExtras {
+                    smooth_lag: Some(3),
+                    params: Some("tmc".into()),
+                    ..Default::default()
+                })),
+                ..hmm_full_cfg(K)
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        // Given states with conjugate prior weights and partial learning.
+        case!(
+            "hmm_priors",
+            "Hmm",
+            Hmm,
+            Hmm::new(HmmCfg {
+                covariance: rheon_core::HmmCovariance::Diagonal,
+                means: Some(vec![0.0, 0.0, 2.0, 2.0]),
+                covs: Some(vec![0.5, 0.0, 0.0, 0.5, 1.0, 0.0, 0.0, 1.0]),
+                extras: Some(Box::new(rheon_core::HmmCfgExtras {
+                    params: Some("mc".into()),
+                    means_weight: Some(2.0),
+                    covars_prior: Some(vec![0.25]),
+                    covars_weight: Some(3.0),
+                    ..Default::default()
+                })),
                 ..hmm_full_cfg(K)
             })
             .unwrap(),
@@ -3377,6 +3438,29 @@ pub fn all() -> Vec<Case> {
             "Bocpd",
             Bocpd,
             Bocpd::new(bocpd_cfg()).unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        // Negative-binomial run-length hazard with known-variance normal emission.
+        case!(
+            "bocpd_nb_known_var",
+            "Bocpd",
+            Bocpd,
+            Bocpd::new(BocpdCfg {
+                emission: BocpdEmission::KnownVariance,
+                prior_mean: Some(vec![0.0, 0.0]),
+                prior_nu: None,
+                prior_scale: Some(vec![1.0, 2.0]),
+                hazard_on_clock: false,
+                extras: Some(Box::new(rheon_core::BocpdCfgExtras {
+                    nb_hazard: Some((3, 0.1)),
+                    obs_var: Some(vec![0.5, 1.0]),
+                    max_state_bytes: Some(131_072),
+                })),
+                ..bocpd_cfg()
+            })
+            .unwrap(),
             K,
             Targets::None,
             40

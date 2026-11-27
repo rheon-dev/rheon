@@ -1385,7 +1385,7 @@ fn hmm_filters_the_same_at_every_level_at(width: usize) {
             n_features: width,
             k: 2,
             decay: decay(),
-            covariance: Covariance::Full,
+            covariance: rheon_core::HmmCovariance::Full,
             precision_prior: 1e-3,
             min_weight: 10.0,
             learn: true,
@@ -1399,6 +1399,7 @@ fn hmm_filters_the_same_at_every_level_at(width: usize) {
             tvtp: None,
             prior_rows: None,
             warm_clock: None,
+            extras: None,
         })
         .unwrap()
     };
@@ -1558,6 +1559,7 @@ fn bocpd_held(on_clock: bool) -> Bocpd {
         warm_rows: None,
         hazard_on_clock: on_clock,
         warm_clock: None,
+        extras: None,
     })
     .unwrap()
 }
@@ -1646,7 +1648,7 @@ fn a_row_of_no_weight_moves_nothing_without_a_target() {
             n_features: 3,
             k: 2,
             decay: decay(),
-            covariance: Covariance::Full,
+            covariance: rheon_core::HmmCovariance::Full,
             precision_prior: 1e-3,
             min_weight: 10.0,
             learn: true,
@@ -1660,6 +1662,7 @@ fn a_row_of_no_weight_moves_nothing_without_a_target() {
             tvtp: None,
             prior_rows: None,
             warm_clock: None,
+            extras: None,
         })
         .unwrap()
     });
@@ -2365,6 +2368,7 @@ fn bocpd_at_a_level() -> Bocpd {
         warm_rows: None,
         hazard_on_clock: false,
         warm_clock: None,
+        extras: None,
     })
     .unwrap()
 }

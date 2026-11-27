@@ -46,9 +46,11 @@ impl Bocpd {
             .saturating_mul(8)
     }
 
-    /// The warm-up's cap in bytes ([`WARM_BUDGET_MIB`]).
+    /// The warm-up's cap in bytes (`max_state_bytes` when set, else
+    /// [`WARM_BUDGET_MIB`]).
     pub(super) fn warm_cap(&self) -> u64 {
         self.cap_for_test
+            .or_else(|| self.cfg.max_state_bytes())
             .unwrap_or((WARM_BUDGET_MIB * f64::from(1 << 20)) as u64)
     }
 
@@ -66,10 +68,18 @@ impl Bocpd {
         }
     }
 
-    /// Weights, run statistics, log-joint, and warm-span cap checked on load
+    /// Weights, run statistics, log-joint, and byte caps checked on load
     /// (review 2026-11-23, STATE-3).
     pub(super) fn check_loaded(&self) -> Result<(), crate::StateError> {
-        if (self.over.is_some() || self.warm_first.is_some()) && self.cfg.warm_clock.is_none() {
+        let active_cap = if self.warming() {
+            self.warm_cap()
+        } else {
+            self.run_cap()
+        };
+        if (self.warm_first.is_some() && self.cfg.warm_clock.is_none())
+            || (self.over.is_some() && self.warming() && self.cfg.warm_clock.is_none())
+            || self.over.is_some_and(|b| b <= active_cap)
+        {
             return Err(crate::model::damaged(
                 "bocpd",
                 "its saved values have the wrong shape",
@@ -116,6 +126,16 @@ impl Bocpd {
                 return Err(crate::model::damaged(
                     "bocpd",
                     format!("it holds {bytes} bytes, past its warm-up cap of {cap}"),
+                ));
+            }
+        }
+        if !self.warming() {
+            let bytes = self.run_bytes(self.runs.len());
+            let cap = self.run_cap();
+            if bytes > cap {
+                return Err(crate::model::damaged(
+                    "bocpd",
+                    format!("it holds {bytes} bytes of live runs, past max_state_bytes of {cap}"),
                 ));
             }
         }

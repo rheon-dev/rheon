@@ -5861,6 +5861,22 @@ two are one model at `hazard_rows = 1/(1 − e^{−1/τ})`, every output the
 same but `p_change`, which the per-row form reads with `H` at `r = 0`:
 `p_rows = H + (1 − H)·p_clock`.
 
+Under `hazard_kind="neg_binomial"`, the run length follows a negative-binomial
+distribution on `{k, k + 1, ...}` with shape `hazard_k >= 1` and probability
+`hazard_p` in `(0, 1]` per learned row. Its hazard `H(r) = P(L = r + 1) / P(L >= r + 1)`
+is zero while `r + 1 < hazard_k` and rises toward `hazard_p` as a regime ages.
+That suppresses false alarms early in a run, and `hazard_k = 1` recovers constant
+per-row hazard `1 / hazard_p`.
+
+Passing `obs_var` (one positive variance or one per feature) switches the
+emission to a per-feature normal-normal conjugate pair with known observation
+variance, using `mean_prior` and `covariance_prior` as the prior mean and
+variance of the unknown mean.
+
+Live runs are held to `max_state_bytes` (default 256 KB, ceiling 64 MiB) per
+group at run time: the bank warns once when a group passes half the cap and
+stops atomically before taking a row that would exceed it.
+
 #### Example
 
 **`run_mode` dates a break, while `p_change` may hardly move.** This code
@@ -6009,6 +6025,24 @@ M_l ← a·M_l + a·b·δδᵀ                            W_l ← W_l + w·p_l
 
 **Under `"tied"`, and with `learn = False`,** `Σ_l = M_l + ω_l·I`, with
 `ω_l` the `precision_prior` ridge as it has decayed with the state's data.
+**Under `"spherical"`,** each state keeps a single isotropic variance `s_l`
+(one scalar per state) and forgets toward a scalar pooled variance prior
+under `prior_rows`.
+
+**Partial learning and conjugate prior weights.** `params` accepts any subset
+of `"tmc"` (`"t"` transitions, `"m"` means, `"c"` covariances, or `""` to
+freeze everything; `'s'` is refused because the initial state distribution is
+uniform `1 / n_components`). With given `means` and `covs`, `means_weight`
+sets the prior weight in rows on the given means (default 1.0), and
+`covars_prior` / `covars_weight` apply conjugate covariance priors mutually
+exclusive with `prior_rows`.
+
+**Fixed-lag smoothing.** Setting `smooth_lag = L` (at least 1 learned row)
+keeps a ring of `L` likelihood vectors and emits `smoothed_state0 ..
+smoothed_state{K-1}` beside `smoothed_for` (clock dtype) once `L` learned
+rows have passed. Smoothed posteriors are never fed back into filtering. The
+ring's size (`8·K·(L + 2) + 16·L` bytes per instance) is checked against
+`max_state_bytes` (default 256 KB, ceiling 64 MiB) when the spec is built.
 
 **Under `"full"` and `"diag"` with `learn = True`, each state's covariance
 forgets toward a prior** (stabilized forgetting: Kulhavý and Zarrop, "On a

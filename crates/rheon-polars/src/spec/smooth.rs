@@ -20,15 +20,45 @@ pub const SMOOTH_MAX_STATE_BYTES: u64 = 256 * 1024;
 pub const SMOOTH_STATE_BYTES_CEILING: u64 = 64 * 1024 * 1024;
 
 impl Spec {
-    /// `kalman`'s `smooth_lag`, in observations; `None` for no smoother and
-    /// for every other model.
+    /// Fixed-lag smoother lag (`kalman` or `hmm`); `None` for no smoother.
     pub fn smooth_lag(&self) -> Option<usize> {
         match &self.model {
             ModelKind::Kalman {
                 smooth_lag: Some(l),
                 ..
+            }
+            | ModelKind::Hmm {
+                smooth_lag: Some(l),
+                ..
             } => Some(usize::try_from(*l).unwrap_or(usize::MAX)),
             _ => None,
+        }
+    }
+
+    /// Whether this spec is a `kalman` model with fixed-lag smoothing enabled.
+    pub fn is_kalman_smoother(&self) -> bool {
+        matches!(
+            self.model,
+            ModelKind::Kalman {
+                smooth_lag: Some(_),
+                ..
+            }
+        )
+    }
+
+    /// Number of `smoothed_for` label slots per model instance (`m` for
+    /// `kalman`, `1` for `hmm`, `0` otherwise).
+    pub fn smoothed_for_slots(&self) -> usize {
+        match &self.model {
+            ModelKind::Kalman {
+                smooth_lag: Some(_),
+                ..
+            } => self.m(),
+            ModelKind::Hmm {
+                smooth_lag: Some(_),
+                ..
+            } => 1,
+            _ => 0,
         }
     }
 
@@ -43,37 +73,82 @@ impl Spec {
         )
     }
 
-    /// The bytes a group's smoothers take, one per instance, at most
-    /// ([`rheon_core::Kalman::smoother_bytes`]); 0 without a smoother.
+    /// The bytes a group's smoothers take, one per instance, at most; 0
+    /// without a smoother.
     pub fn smoother_bytes(&self) -> u64 {
-        let (
-            Some(lag),
+        let Some(lag) = self.smooth_lag() else {
+            return 0;
+        };
+        let one = match &self.model {
             ModelKind::Kalman {
                 share_p,
                 standardize,
                 ..
-            },
-        ) = (self.smooth_lag(), &self.model)
-        else {
-            return 0;
+            } => {
+                let k = self.k() + usize::from(self.fit_intercept);
+                rheon_core::Kalman::smoother_bytes(
+                    k,
+                    self.m(),
+                    *share_p,
+                    *standardize,
+                    lag,
+                    self.emit_smoothed_se(),
+                )
+            }
+            ModelKind::Hmm { k, .. } => rheon_core::Hmm::smoother_bytes(*k, lag),
+            _ => return 0,
         };
-        let k = self.k() + usize::from(self.fit_intercept);
-        let one = rheon_core::Kalman::smoother_bytes(
-            k,
-            self.m(),
-            *share_p,
-            *standardize,
-            lag,
-            self.emit_smoothed_se(),
-        );
         let instances = self.decays().map_or(1, |d| d.len()) as u64;
         one.saturating_mul(instances)
     }
 
-    /// The smoother's settings: a lag of at least 1, the covariance form,
-    /// `emit_smoothed_se` and `max_state_bytes` only beside a lag, the cap
-    /// within its range, and the ring's bytes within the cap.
+    /// The smoother's settings: a lag of at least 1, `embargo`/`label_clock`
+    /// mutual exclusion, and the ring's bytes within `max_state_bytes`.
     pub(super) fn check_smoother(&self) -> Result<(), String> {
+        let name = &self.name;
+        if let ModelKind::Hmm {
+            k,
+            smooth_lag,
+            max_state_bytes,
+            ..
+        } = &self.model
+        {
+            let Some(lag) = smooth_lag.filter(|&l| l > 0) else {
+                return Ok(());
+            };
+            let mut no = rheon_core::Refusals::new();
+            for (key, set) in [
+                ("embargo", self.embargo.is_some()),
+                ("label_clock", self.label_clock.is_some()),
+            ] {
+                if set {
+                    no.refuse(format!(
+                        "spec {name:?}: smooth_lag cannot be used with {key}: {key} holds each \
+                         row until a later row releases it, one row can release several, and the \
+                         smoothed value of each that completes its lag would need the same line. \
+                         Leave out {key}, or leave out smooth_lag."
+                    ));
+                }
+            }
+            // Multi-instance check when a half-life grid runs more than one
+            // instance (single-instance bounds are checked by `HmmCfg::validate`).
+            let instances = self.decays().map_or(1, |d| d.len());
+            if instances > 1 {
+                let cap = max_state_bytes.unwrap_or(SMOOTH_MAX_STATE_BYTES);
+                if cap > 0 && cap <= SMOOTH_STATE_BYTES_CEILING {
+                    let bytes = self.smoother_bytes();
+                    if bytes > cap {
+                        no.refuse(format!(
+                            "spec {name:?}: smooth_lag = {lag} with n_components = {k} across \
+                             {instances} instances holds {bytes} bytes a group, past \
+                             max_state_bytes of {cap}. Shorten smooth_lag, or raise \
+                             max_state_bytes (at most 64 MiB)."
+                        ));
+                    }
+                }
+            }
+            return no.finish();
+        }
         let ModelKind::Kalman {
             smooth_lag,
             emit_smoothed_se,
@@ -84,7 +159,6 @@ impl Spec {
         else {
             return Ok(());
         };
-        let name = &self.name;
         let mut no = rheon_core::Refusals::new();
         if *smooth_lag == Some(0) {
             no.refuse(format!(

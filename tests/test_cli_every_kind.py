@@ -1765,6 +1765,25 @@ CASES: list[Case] = [
         },
     ),
     Case(
+        "hmm_ext",
+        "hmm",
+        {
+            **STREAM,
+            "features": ["x1", "x2"],
+            "n_components": 2,
+            "precision_prior": 0.1,
+            "covariance_type": "spherical",
+            "means": [-1.0, 0.0, 1.0, 0.0],
+            "covs": [0.5, 1.0],
+            "smooth_lag": 4,
+            "max_state_bytes": 131_072,
+            "params": "mc",
+            "means_weight": 2.0,
+            "covars_prior": [0.25],
+            "covars_weight": 3.0,
+        },
+    ),
+    Case(
         "bocpd",
         "bocpd",
         {
@@ -1804,6 +1823,21 @@ CASES: list[Case] = [
         "bocpd_span",
         "bocpd",
         {**NODECAY, "features": ["x1", "x2"], "covariance_type": "diag", "warm_span": 20.0},
+    ),
+    Case(
+        "bocpd_nb_kv",
+        "bocpd",
+        {
+            **NODECAY,
+            "features": ["x1", "x2"],
+            "hazard_kind": "neg_binomial",
+            "hazard_k": 3,
+            "hazard_p": 0.1,
+            "obs_var": [0.5, 1.0],
+            "mean_prior": [0.0, 0.0],
+            "covariance_prior": [1.0, 2.0],
+            "max_state_bytes": 131_072,
+        },
     ),
     Case(
         "corrchange",

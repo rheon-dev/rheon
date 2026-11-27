@@ -29,6 +29,25 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             "the last row's smoothed fields",
             smoothed_last,
         ),
+        // `hmm` spherical / smoother / conjugate priors and `bocpd` NB + known variance.
+        ("bank_hmm_bocpd_ext", "hmm spherical states", |p, v| {
+            p.contains(".spherical_states.") && p.ends_with(".var") && v.as_f64().is_some()
+        }),
+        ("bank_hmm_bocpd_ext", "hmm smoother ring", |p, v| {
+            p.contains(".smoother.fring.") && v.as_f64().is_some()
+        }),
+        ("bank_hmm_bocpd_ext", "hmm smoother label", |p, v| {
+            p.contains(".smoother.labels.") && p.ends_with(".F64") && v.as_f64().is_some()
+        }),
+        ("bank_hmm_bocpd_ext", "hmm conjugate data_w", |p, v| {
+            p.contains(".extras.data_w.") && v.as_f64().is_some_and(|f| f > 0.0)
+        }),
+        ("bank_hmm_bocpd_ext", "bocpd nb_hazard", |p, v| {
+            p.contains(".nb_hazard.") && v.as_u64() == Some(3)
+        }),
+        ("bank_hmm_bocpd_ext", "bocpd obs_var", |p, v| {
+            p.contains(".obs_var.") && v.as_f64() == Some(0.5)
+        }),
         ("bank", "ClockValue::I64", |p, _| {
             p.ends_with(".prev_clock.I64")
         }),

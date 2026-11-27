@@ -30,7 +30,7 @@ fn single_log_predictive(
         if var.is_nan() || var <= 0.0 || nun <= 0.0 {
             return None;
         }
-        let z = (x[i] - m.run_mean_at(run, mu0, i)) / var.sqrt();
+        let z = (x[i] - m.run_mean_at(run, mu0, psi0, i)) / var.sqrt();
         let base = gammas - 0.5 * (nun * std::f64::consts::PI * var).ln();
         lp += base - 0.5 * (nun + 1.0) * (1.0 + z * z / nun).ln();
         mode += base;

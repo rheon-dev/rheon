@@ -271,6 +271,14 @@ MEANING: dict[str, str] = {
     ),
     "filtered_state<j>": "posterior probability of state `<j>` before this row",
     "predicted_state<j>": "one-step-ahead probability of state `<j>`",
+    "smoothed_state<j>": (
+        "fixed-lag smoothed probability of state `<j>` at `smooth_lag` learned rows earlier, "
+        "conditioned on every observation up to this row"
+    ),
+    "smoothed_for": (
+        "the clock of the row `smoothed_state<j>` describes, in the clock column's own type; "
+        "with no clock, the row's index in its group"
+    ),
     "state": "the most likely state for this row: the one with the largest `predicted_state<j>`",
     "huber_scale_<t>": "the scale the row's cut for `<t>` is drawn in",
     "n_atoms": (
@@ -439,6 +447,11 @@ ALSO_NULL: dict[str, str] = {
     "mahal_<t>": "where `loglik_<t>` is",
     "filtered_state<j>": UNTIL_SEEDED,
     "predicted_state<j>": UNTIL_SEEDED,
+    "smoothed_state<j>": (
+        "while withheld, before `smooth_lag` learned rows have arrived after seeding, on rows of "
+        "weight 0, and during `predict`"
+    ),
+    "smoothed_for": "where `smoothed_state<j>` is",
     "state": UNTIL_SEEDED,
     "huber_scale_<t>": "until the target has a scale above 0",
     "n_atoms": "never",
@@ -572,6 +585,7 @@ SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
         },
     ),
     "bandit": ('policy="eps_greedy"', {"policy": "eps_greedy"}),
+    "hmm": ("smooth_lag=5", {"smooth_lag": 5}),
 }
 
 #: What a model writes when it writes nothing per row.
@@ -1099,7 +1113,7 @@ def stem(
             for pre in ("mi_mm", "mi", "spearman", "kendall", "xi"):
                 if base == f"{pre}_{f}_{t}":
                     return f"{pre}_<f>_<t>"
-    for pre in ("filtered_state", "predicted_state"):
+    for pre in ("filtered_state", "predicted_state", "smoothed_state"):
         if base.startswith(pre) and base[len(pre) :].isdigit():
             return f"{pre}<j>"
     for kind in ("stat", "p"):

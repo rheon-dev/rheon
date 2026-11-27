@@ -180,7 +180,7 @@ pub use audit::{
     NULL, PairReport as AuditPair, is_null, splitmix64,
 };
 pub use bandit::{BANDIT_MAX_STATE_BYTES, Bandit, BanditCfg, BanditPolicy};
-pub use bocpd::{Bocpd, BocpdCfg, BocpdEmission};
+pub use bocpd::{Bocpd, BocpdCfg, BocpdCfgExtras, BocpdEmission, neg_binomial_hazard};
 pub use breaks::{Breaks, TwinFit, cusum_null, cusum_null_at, cusum_null_window, cusum_sq_null_at};
 pub use calibration::{Calibration, Coverage};
 pub use clock::{
@@ -255,7 +255,9 @@ pub use hawkes::{
     STATE_BYTES_CEILING as HAWKES_STATE_BYTES_CEILING,
 };
 pub use health::FeatureHealth;
-pub use hmm::{EwFactor, Hmm, HmmCfg, Stabilized};
+pub use hmm::{
+    EwCovSpherical, EwFactor, Hmm, HmmCfg, HmmCfgExtras, HmmCovariance, HmmParams, Stabilized,
+};
 pub use hoeffding_tree_classifier::{
     HoeffdingTreeClassifier, HoeffdingTreeClassifierCfg, LeafPrediction, SplitCriterion,
     clf_obs_reserve, clf_struct_bytes,

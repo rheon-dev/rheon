@@ -3112,6 +3112,11 @@ fn kinds() -> Vec<Kind> {
             run: diagnostics_ext_run,
         },
         Kind {
+            name: "bank_hmm_bocpd_ext",
+            first: hmm_bocpd_ext_first,
+            run: hmm_bocpd_ext_run,
+        },
+        Kind {
             name: "with_windows_tick",
             first: windows_tick_first,
             run: windows_tick_run,
@@ -3529,6 +3534,32 @@ fn the_conformal_scores_fixture_freezes_its_forms() {
     ] {
         assert!(all.iter().any(|(p, v)| holds(p, v)), "no leaf holds {form}");
     }
+}
+
+
+fn hmm_bocpd_ext_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "hmm_smooth", "model": {"type": "hmm", "n_components": 2, "covariance_type": "spherical", "precision_prior": 0.1, "warm_rows": 10, "smooth_lag": 4}, "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "half_life": 20.0, "weight": "w"}"#,
+        r#"{"name": "hmm_priors", "model": {"type": "hmm", "n_components": 2, "covariance_type": "diag", "precision_prior": 0.1, "means": [0.0, 0.0, 2.0, 2.0], "covs": [0.5, 0.0, 0.0, 0.5, 1.0, 0.0, 0.0, 1.0], "means_weight": 2.0, "covars_prior": [0.25], "covars_weight": 3.0, "params": "mc"}, "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "half_life": 20.0}"#,
+        r#"{"name": "bocpd_nb_kv", "model": {"type": "bocpd", "hazard_kind": "neg_binomial", "hazard_k": 3, "hazard_p": 0.1, "obs_var": [0.5, 1.0], "mean_prior": [0.0, 0.0], "covariance_prior": [1.0, 2.0], "max_state_bytes": 131072}, "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "min_weight": 0.0}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn hmm_bocpd_ext_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(hmm_bocpd_ext_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn hmm_bocpd_ext_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&hmm_bocpd_ext_specs(), bytes, input)
 }
 
 /// The spec of `bank_smoothed`: `kalman`'s fixed-lag smoother with its
@@ -4138,7 +4169,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 31),
+            ("bank", 32),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),

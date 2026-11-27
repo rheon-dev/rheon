@@ -21,14 +21,19 @@ def bocpd(
     hazard_rows: float | None = None,
     hazard: float | Duration | None = None,
     hazard_col: str | None = None,
+    hazard_kind: Literal["constant", "neg_binomial"] = "constant",
+    hazard_k: int | None = None,
+    hazard_p: float | None = None,
     covariance_type: Literal["full", "diag"] = "diag",
     mean_prior: list[float] | None = None,
     mean_precision_prior: float | None = None,
     degrees_of_freedom_prior: float | None = None,
     covariance_prior: list[float] | None = None,
+    obs_var: float | list[float] | None = None,
     robust_beta: float | None = None,
     prune_below: float | None = None,
     max_run: int | None = None,
+    max_state_bytes: int | None = None,
     warm_rows: int | None = None,
     warm_span: float | Duration | None = None,
     **common: Unpack[CommonKwargs],
@@ -189,6 +194,26 @@ def bocpd(
         spreads them over thousands of run lengths. There ``max_run`` is the
         bound on the runs kept and on a row's work (*Pruning and the capped
         run* in Notes).
+    ``hazard_kind``, ``hazard_k``, ``hazard_p``
+        ``hazard_kind = "constant"`` (the default) uses a geometric run-length
+        hazard via ``hazard_rows``, ``hazard`` or ``hazard_col``.
+        ``hazard_kind = "neg_binomial"`` uses a negative-binomial run-length
+        distribution with integer shape ``hazard_k >= 1`` and probability
+        ``0 < hazard_p <= 1`` per learned row (``hazard_k = 1`` recovers a
+        constant per-row hazard of ``1 / hazard_p``). Refused beside
+        ``hazard``, ``hazard_rows`` and ``hazard_col``; ``hazard_k`` and
+        ``hazard_p`` are refused unless ``hazard_kind = "neg_binomial"``.
+    ``obs_var``
+        Known observation variance per feature (one positive number, or a list
+        of length ``d``). Activates the exact per-feature normal-normal
+        conjugate emission using ``mean_prior`` and ``covariance_prior`` as
+        the prior mean and variance of the unknown mean. Refused beside
+        ``covariance_type = "full"``, ``degrees_of_freedom_prior``,
+        ``mean_precision_prior`` and ``robust_beta``.
+    ``max_state_bytes``
+        Runtime per-group byte cap for live runs (default 262,144, ceiling
+        64 MiB). Warns once per group when live runs pass half the cap and
+        stops atomically if a row would exceed it.
     ``warm_rows``
         The learned rows held to set the prior from, where ``mean_prior`` or
         ``covariance_prior`` is left out. Default ``d + 2``, one more than
@@ -513,11 +538,19 @@ def bocpd(
         "max_run": max_run,
         "warm_rows": warm_rows,
     }
-    # Written only when given, as the Rust spec leaves it out when absent.
-    if warm_span is not None:
-        model["warm_span"] = warm_span
-    if hazard_rows is not None:
-        model["hazard_rows"] = hazard_rows
+    # Written only when given, as the Rust spec leaves them out when absent.
+    if hazard_kind != "constant":
+        model["hazard_kind"] = hazard_kind
+    for key, val in (
+        ("warm_span", warm_span),
+        ("hazard_rows", hazard_rows),
+        ("hazard_k", hazard_k),
+        ("hazard_p", hazard_p),
+        ("obs_var", obs_var),
+        ("max_state_bytes", max_state_bytes),
+    ):
+        if val is not None:
+            model[key] = val
     mirror = _mirror_target(name, "bocpd", features, common, "its change points are in")
     targets = [hazard_col] if hazard_col is not None else mirror
     return _common(name, model, targets=targets, features=features, **common)

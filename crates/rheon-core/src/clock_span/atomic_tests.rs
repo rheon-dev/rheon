@@ -25,13 +25,13 @@ use crate::family::GlmFamily;
 use crate::garch::{Garch, GarchCfg, GarchDist, GarchVol};
 use crate::glm::{Glm, GlmCfg};
 use crate::hawkes::{Hawkes, HawkesCfg};
-use crate::hmm::{Hmm, HmmCfg};
+use crate::hmm::{Hmm, HmmCfg, HmmCovariance};
 use crate::isotonic::{Isotonic, IsotonicCfg, OutOfBounds};
 use crate::power_variation::{PowerVariation, PowerVariationCfg, PvTerm, PvTermKind};
 use crate::realized::{DEFAULT_LM_BETA, Realized, RealizedCfg};
 use crate::robust::{HuberScale, Robust, RobustCfg, RobustLoss};
 use crate::sgd::{LearningRate, Sgd, SgdCfg, SgdLoss};
-use crate::{Covariance, Decay, OnlineModel, Stamp, Step, WindowClosed};
+use crate::{Decay, OnlineModel, Stamp, Step, WindowClosed};
 
 const S: i128 = 1_000_000_000;
 
@@ -842,7 +842,7 @@ fn hmm_warm_span_is_atomic() {
         n_features: 2,
         k: 2,
         decay: Decay::Lam(0.9),
-        covariance: Covariance::Full,
+        covariance: HmmCovariance::Full,
         precision_prior: 1e-3,
         min_weight: 0.0,
         learn: true,
@@ -856,6 +856,7 @@ fn hmm_warm_span_is_atomic() {
         tvtp: None,
         prior_rows: None,
         warm_clock: Some(1e9),
+        extras: None,
     };
     let mut m = Hmm::new(cfg).unwrap();
     for i in 0..3 {
@@ -904,6 +905,7 @@ fn bocpd_warm_span_is_atomic() {
         warm_rows: None,
         hazard_on_clock: false,
         warm_clock: Some(1e9),
+        extras: None,
     };
     let mut m = Bocpd::new(cfg).unwrap();
     for i in 0..3 {

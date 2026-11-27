@@ -73,6 +73,7 @@ pub(super) fn wide(d: usize, decay: Decay) -> HmmCfg {
         tvtp: None,
         prior_rows: None,
         warm_clock: None,
+        extras: None,
     }
 }
 

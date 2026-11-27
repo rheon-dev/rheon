@@ -113,26 +113,36 @@
 //! at 20 and 0.5 at 32, and more than it below 13, which is why the form
 //! starts there.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::clock_span::{HeldCap, Place, start_due};
 use crate::cluster::kmeans::seed_centres;
 use crate::solve::{FactorWork, QuadWork, SpdFactor};
-use crate::{Covariance, Decay, EwCov, EwCovDiag, SeedRule};
+use crate::{Decay, EwCov, EwCovDiag, SeedRule};
 
+mod conjugate;
 mod factor;
 pub use factor::EwFactor;
+mod options;
+#[cfg(test)]
+use HmmCovariance as Covariance;
+use options::HmmExtras;
+pub use options::{HmmCfgExtras, HmmCovariance, HmmParams};
+mod smooth;
+use smooth::HmmSmoother;
+mod spherical;
+pub use spherical::EwCovSpherical;
 mod stabilized;
 use stabilized::Shape;
 pub use stabilized::Stabilized;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct HmmCfg {
     pub n_features: usize,
     /// Hidden states, `2 ..= MAX_K`.
     pub k: usize,
     pub decay: Decay,
-    pub covariance: Covariance,
+    pub covariance: HmmCovariance,
     /// Ridge on every state covariance, finite and `> 0`; decays with the
     /// state's own data, as `ew_class`'s does. Required: a state's centred
     /// co-moments start at zero. Under `full` and `diag` in a model that
@@ -186,6 +196,12 @@ pub struct HmmCfg {
     /// only when set, so a state without it keeps its bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warm_clock: Option<f64>,
+    /// Optional extensions (`smooth_lag`, `max_state_bytes`, `params`,
+    /// `means_weight`, `covars_prior`, `covars_weight`), kept in one trailing
+    /// field so pre-existing states keep their exact bytes and compact
+    /// msgpack stays positional-safe.
+    #[serde(default)]
+    pub extras: Option<Box<HmmCfgExtras>>,
 }
 
 impl HmmCfg {
@@ -200,10 +216,21 @@ impl HmmCfg {
         if tests_shape::NO_SHAPE.with(std::cell::Cell::get) {
             return None;
         }
-        let diagonal = matches!(self.covariance, Covariance::Diagonal);
-        self.covs
-            .as_deref()
-            .and_then(|c| Shape::of(c, self.k, self.n_features, diagonal))
+        match self.covariance {
+            HmmCovariance::Spherical => self
+                .covs
+                .as_deref()
+                .and_then(|c| Shape::of_spherical(c, self.k)),
+            HmmCovariance::Diagonal => self
+                .covs
+                .as_deref()
+                .and_then(|c| Shape::of(c, self.k, self.n_features, true)),
+            HmmCovariance::Full => self
+                .covs
+                .as_deref()
+                .and_then(|c| Shape::of(c, self.k, self.n_features, false)),
+            HmmCovariance::Shared => None,
+        }
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -236,6 +263,7 @@ impl HmmCfg {
                 self.precision_prior
             ));
         }
+        let eff = self.effective_params();
         if let Some(p) = self.prior_rows {
             if !(p.is_finite() && p > 0.0) {
                 no.refuse(format!(
@@ -244,20 +272,25 @@ impl HmmCfg {
                      finite positive value, or leave it out for the number of features."
                 ));
             }
-            if !self.learn || matches!(self.covariance, Covariance::Shared) {
+            if !eff.c || matches!(self.covariance, HmmCovariance::Shared) {
                 no.refuse(format!(
                     "hmm: prior_rows does not apply {}, which takes no prior: a state's \
-                     covariance forgets toward the prior only under covariance_type \"full\" or \
-                     \"diag\" with learn on. Leave prior_rows out{}.",
-                    if self.learn {
+                     covariance forgets toward the prior only under covariance_type \"full\", \
+                     \"diag\" or \"spherical\" when covariances are learned. Leave prior_rows \
+                     out{}.",
+                    if eff.c {
                         "under covariance_type \"tied\""
-                    } else {
+                    } else if !self.learn {
                         "with learn off"
-                    },
-                    if self.learn {
-                        ", or set covariance_type to \"full\" or \"diag\""
                     } else {
+                        "when covariances are not learned"
+                    },
+                    if eff.c {
+                        ", or set covariance_type to \"full\", \"diag\" or \"spherical\""
+                    } else if !self.learn {
                         ", or turn learn on"
+                    } else {
+                        ", or include 'c' in params"
                     }
                 ));
             }
@@ -321,7 +354,18 @@ impl HmmCfg {
                         k * d
                     ));
                 }
-                if c.len() != k * d * d {
+                let spherical = matches!(self.covariance, HmmCovariance::Spherical);
+                if spherical {
+                    if c.len() != k {
+                        shaped = false;
+                        no.refuse(format!(
+                            "hmm: under covariance_type=\"spherical\", covs must hold one positive \
+                             variance for each of the {k} states, but it has {} values. Give {k} \
+                             values.",
+                            c.len()
+                        ));
+                    }
+                } else if c.len() != k * d * d {
                     shaped = false;
                     no.refuse(format!(
                         "hmm: covs must hold a {d} by {d} matrix for each of the {k} states, but \
@@ -350,37 +394,50 @@ impl HmmCfg {
                     );
                 }
                 if bad_m.is_none() && bad_c.is_none() && shaped {
-                    // A state covariance that will not factorize has no
-                    // density, so every row would be a solve failure and
-                    // every output a null, with nothing said
-                    // (docs/REVIEW-E54-E64.md H4).
-                    for s in 0..k {
-                        let block = &c[s * d * d..(s + 1) * d * d];
-                        let asymmetric = (0..d)
-                            .flat_map(|i| ((i + 1)..d).map(move |j| (i, j)))
-                            .map(|(i, j)| (i, j, block[i * d + j], block[j * d + i]))
-                            .find(|&(_, _, a, b)| {
-                                (a - b).abs() > 1e-12 * (1.0 + a.abs().max(b.abs()))
-                            });
-                        if let Some((i, j, a, b)) = asymmetric {
-                            no.refuse(format!(
-                                "hmm: the matrix in covs for state {s} (counting from 0) must be \
-                                 symmetric, but its entry at row {i}, column {j} is {a}, and at \
-                                 row {j}, column {i} is {b}. Set the two entries equal."
-                            ));
-                        } else if !matches!(SpdFactor::of(block, d), Some(f) if f.attempts() == 0) {
-                            no.refuse(format!(
-                                "hmm: the matrix in covs for state {s} (counting from 0) must be \
-                                 positive definite, but it is not, and a state with no density is \
-                                 never chosen. Give a positive definite matrix, such as a \
-                                 diagonal one of positive variances."
-                            ));
+                    if spherical {
+                        for (s, &v) in c.iter().enumerate() {
+                            if v <= 0.0 {
+                                no.refuse(format!(
+                                    "hmm: the spherical variance in covs for state {s} (counting \
+                                     from 0) must be above 0, but it is {v}. Give a positive \
+                                     variance for each state."
+                                ));
+                            }
+                        }
+                    } else {
+                        // A state covariance that will not factorize has no
+                        // density, so every row would be a solve failure and
+                        // every output a null, with nothing said
+                        // (docs/REVIEW-E54-E64.md H4).
+                        for s in 0..k {
+                            let block = &c[s * d * d..(s + 1) * d * d];
+                            let asymmetric = (0..d)
+                                .flat_map(|i| ((i + 1)..d).map(move |j| (i, j)))
+                                .map(|(i, j)| (i, j, block[i * d + j], block[j * d + i]))
+                                .find(|&(_, _, a, b)| {
+                                    (a - b).abs() > 1e-12 * (1.0 + a.abs().max(b.abs()))
+                                });
+                            if let Some((i, j, a, b)) = asymmetric {
+                                no.refuse(format!(
+                                    "hmm: the matrix in covs for state {s} (counting from 0) must \
+                                     be symmetric, but its entry at row {i}, column {j} is {a}, \
+                                     and at row {j}, column {i} is {b}. Set the two entries equal."
+                                ));
+                            } else if !matches!(SpdFactor::of(block, d), Some(f) if f.attempts() == 0)
+                            {
+                                no.refuse(format!(
+                                    "hmm: the matrix in covs for state {s} (counting from 0) must \
+                                     be positive definite, but it is not, and a state with no \
+                                     density is never chosen. Give a positive definite matrix, \
+                                     such as a diagonal one of positive variances."
+                                ));
+                            }
                         }
                     }
                 }
             }
             (None, None) => {
-                if !self.learn {
+                if !self.learn || self.params() == Some("") {
                     no.refuse(
                         "hmm: with learn off, the model needs means and covs to filter with, but \
                          neither is given. Give means and covs, or turn learn on so the model \
@@ -439,6 +496,7 @@ impl HmmCfg {
                  out, or leave out tvtp_coef.",
             );
         }
+        self.validate_extras(&mut no);
         no.finish()
     }
 }
@@ -453,36 +511,38 @@ impl HmmCfg {
 /// from (task 270, D-7: built again for the update, it was the same matrix
 /// to the bit).
 #[derive(Default)]
-struct RowWork {
+pub(super) struct RowWork {
     /// `Π`, `K*K` row-major.
-    pi: Vec<f64>,
+    pub(super) pi: Vec<f64>,
     /// `p̃`, the state probabilities before the row's density.
-    pred: Vec<f64>,
+    pub(super) pred: Vec<f64>,
     /// `ln fₗ` per state.
-    logf: Vec<f64>,
+    pub(super) logf: Vec<f64>,
+    /// Scaled emission likelihoods `exp(ln fₗ − max ln f)` for the smoother.
+    pub(super) f_cur: Vec<f64>,
     /// The filtered posterior; it changes places with the model's `p`.
-    post: Vec<f64>,
+    pub(super) post: Vec<f64>,
     /// A transition row before it is normalised, or `ln p̃ₗfₗ`.
-    terms: Vec<f64>,
+    pub(super) terms: Vec<f64>,
     /// The exponentials of `terms`, or of the densities about their largest.
-    exps: Vec<f64>,
+    pub(super) exps: Vec<f64>,
     /// The filtered joint of consecutive states, `K*K` row-major.
-    joint: Vec<f64>,
+    pub(super) joint: Vec<f64>,
     /// The row's deviation from a state's mean.
-    delta: Vec<f64>,
+    pub(super) delta: Vec<f64>,
     /// The column a state's quadratic form is solved in; under the shared
     /// covariance, the columns of every state's.
-    quad: QuadWork,
+    pub(super) quad: QuadWork,
     /// Under the shared covariance (task 316): the states' weights, the
     /// shared matrix, the row's deviation from each state's mean, `d*K`
     /// state-major, and each state's quadratic form.
-    weights: Vec<f64>,
-    shared: Vec<f64>,
-    deltas: Vec<f64>,
-    forms: Vec<f64>,
+    pub(super) weights: Vec<f64>,
+    pub(super) shared: Vec<f64>,
+    pub(super) deltas: Vec<f64>,
+    pub(super) forms: Vec<f64>,
     /// The shared matrix's factor's working space: faer's scratch, and the
     /// factor the last row gave back, which the next row's is written over.
-    shared_work: FactorWork,
+    pub(super) shared_work: FactorWork,
 }
 
 /// Per-state Cholesky factors for the `full` shape: built on demand and
@@ -565,21 +625,21 @@ impl Factors {
 }
 
 /// A Gaussian hidden Markov model; see the module docs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Hmm {
-    cfg: HmmCfg,
+    pub(super) cfg: HmmCfg,
     /// One accumulator per state under `full` and `tied`; empty under
-    /// `diag`, whose states are [`Self::diag_states`].
-    states: Vec<EwCov>,
+    /// `diag`, whose states are [`Self::diag_states`], and under `spherical`.
+    pub(super) states: Vec<EwCov>,
     /// The filtered posterior left by the last learned row.
-    p: Vec<f64>,
+    pub(super) p: Vec<f64>,
     /// Decayed counts of the filtered joint, `K*K` row-major.
-    a: Vec<f64>,
+    pub(super) a: Vec<f64>,
     /// EW weight of every accepted row.
-    n_eff: f64,
+    pub(super) n_eff: f64,
     /// Rows waiting to seed the states, with their weights.
-    buffer: Vec<(Vec<f64>, f64)>,
-    seeded: bool,
+    pub(super) buffer: Vec<(Vec<f64>, f64)>,
+    pub(super) seeded: bool,
     /// Rows the filter could not evaluate, and the seeding's `lloyd` runs
     /// that stopped at their cap short of a fixed point.
     pub solve_failures: u64,
@@ -589,7 +649,7 @@ pub struct Hmm {
     /// diagonals (`restore`). Written always, after the fields it follows:
     /// the compact encoding is positional, and only a last field may skip.
     #[serde(default)]
-    diag_states: Vec<EwCovDiag>,
+    pub(super) diag_states: Vec<EwCovDiag>,
     /// The `full` shape's per-state factors between rows; see [`Factors`].
     #[serde(skip)]
     factors: Factors,
@@ -604,27 +664,28 @@ pub struct Hmm {
     /// absent. A `full` state of schema 68 or earlier at that width holds
     /// co-moments, and loads as their factor (`restore`).
     #[serde(default)]
-    factor_states: Vec<EwFactor>,
+    pub(super) factor_states: Vec<EwFactor>,
     /// Stabilized forgetting of the states' covariances ([`Stabilized`]):
-    /// under `full` and `diag` in a model that learns, from its build on,
-    /// and `None` under `tied` and in a model that does not learn. Written
-    /// only where it is `Some`: the last field, the one the compact encoding
-    /// lets skip. A state of schema 69 or earlier has none, and loads with
-    /// one seeded from its states (`restore`; rule 5's twenty-second
-    /// exception).
+    /// under `full`, `diag` and `spherical` when covariances learn without
+    /// conjugate priors, and `None` otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    stabilized: Option<Box<Stabilized>>,
+    pub(super) stabilized: Option<Box<Stabilized>>,
     /// Under a warm-up over a span of the clock (task 538): the model's
     /// place on the clock, the warm-up's first stamp and its cap, each
     /// written only when it holds something.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    place: Option<Place>,
+    pub(super) place: Option<Place>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    warm_first: Option<crate::Stamp>,
+    pub(super) warm_first: Option<crate::Stamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     over: Option<u64>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default)]
     warned: bool,
+    /// Optional state extensions (`spherical_states`, fixed-lag `smoother`,
+    /// conjugate `data_w`), kept in one trailing field so pre-existing states
+    /// keep their exact bytes.
+    #[serde(default)]
+    extras: Option<Box<HmmExtras>>,
     /// The row's place, from [`OnlineModel::step_into`] to the step, a
     /// warning not yet taken, and a test's smaller cap. Never state.
     #[serde(skip)]
@@ -635,10 +696,6 @@ pub struct Hmm {
     cap_for_test: Option<u64>,
 }
 
-fn is_false(b: &bool) -> bool {
-    !*b
-}
-
 impl Hmm {
     /// The bytes of the warm-up buffer at `rows` rows, as `kmeans` counts
     /// its own ([`crate::KMeans::warm_mib`]).
@@ -646,10 +703,25 @@ impl Hmm {
         (crate::KMeans::warm_mib(rows, self.cfg.n_features) * f64::from(1 << 20)) as u64
     }
 
-    /// A warm-up's cap in bytes: `kmeans`' ([`crate::KMeans::WARM_BUDGET_MIB`]).
+    /// A warm-up's cap in bytes: `max_state_bytes` where configured, else
+    /// `kmeans`' ([`crate::KMeans::WARM_BUDGET_MIB`]).
     fn warm_cap(&self) -> u64 {
         self.cap_for_test
+            .or_else(|| self.cfg.max_state_bytes())
             .unwrap_or((crate::KMeans::WARM_BUDGET_MIB * f64::from(1 << 20)) as u64)
+    }
+
+    /// Bytes held by one group's fixed-lag smoother for `k` states and lag `lag`.
+    pub fn smoother_bytes(k: usize, lag: usize) -> u64 {
+        HmmSmoother::bytes(k, lag)
+    }
+
+    fn smoother(&self) -> Option<&HmmSmoother> {
+        self.extras.as_deref().and_then(|e| e.smoother.as_ref())
+    }
+
+    fn smoother_mut(&mut self) -> Option<&mut HmmSmoother> {
+        self.extras.as_deref_mut().and_then(|e| e.smoother.as_mut())
     }
 
     /// Hold the warm-up to `bytes` in place of its cap, for a test.
@@ -725,44 +797,84 @@ impl Hmm {
     }
 
     /// The stabilized prior, where it is in force: set, the states seeded and
-    /// learned.
+    /// covariances learned without conjugate priors.
     pub fn stabilized(&self) -> Option<&Stabilized> {
-        self.stabilized
-            .as_deref()
-            .filter(|_| self.seeded && self.cfg.learn)
+        self.stabilized.as_deref().filter(|_| {
+            self.seeded && self.cfg.effective_params().c && !self.uses_conjugate_covars()
+        })
     }
 
     fn build(cfg: HmmCfg, prior_rows: Option<f64>) -> Result<Self, String> {
         cfg.validate()?;
         let (k, d) = (cfg.k, cfg.n_features);
+        let eff = cfg.effective_params();
+        let conjugate = cfg.has_covars_prior() && eff.c;
+        let means_weight = cfg.means_weight();
         // No window reads a run here, so none is kept (docs/PLAN.md task
         // 128; review 2026-09-26, C3).
-        let diagonal = matches!(cfg.covariance, Covariance::Diagonal);
+        let diagonal = matches!(cfg.covariance, HmmCovariance::Diagonal);
+        let spherical = matches!(cfg.covariance, HmmCovariance::Spherical);
         let mut states = Vec::new();
         let mut diag_states = Vec::new();
+        let mut spherical_states = Vec::new();
         for i in 0..k {
             let given = cfg.means.as_ref().zip(cfg.covs.as_ref());
             let mean = given.map(|(m, _)| &m[i * d..(i + 1) * d]);
-            let cov = given.map(|(_, c)| &c[i * d * d..(i + 1) * d * d]);
-            if diagonal {
+            if spherical {
+                let cov = given.map(|(_, c)| c[i]);
+                let state = match (mean, cov) {
+                    (Some(m), Some(v)) => EwCovSpherical::from_moments(
+                        d,
+                        means_weight,
+                        m,
+                        if conjugate { 0.0 } else { v },
+                        cfg.precision_prior,
+                    )?,
+                    _ => EwCovSpherical::with_precision_prior(d, cfg.precision_prior)?,
+                };
+                spherical_states.push(state);
+            } else if diagonal {
+                let cov = given.map(|(_, c)| &c[i * d * d..(i + 1) * d * d]);
                 // The given matrix's diagonal: all of it the shape reads.
                 let state = match (mean, cov) {
                     (Some(m), Some(c)) => {
-                        let v: Vec<f64> = (0..d).map(|j| c[j * d + j]).collect();
-                        EwCovDiag::from_moments(d, 1.0, m, &v, cfg.precision_prior)?
+                        let v: Vec<f64> = if conjugate {
+                            vec![0.0; d]
+                        } else {
+                            (0..d).map(|j| c[j * d + j]).collect()
+                        };
+                        EwCovDiag::from_moments(d, means_weight, m, &v, cfg.precision_prior)?
                     }
                     _ => EwCovDiag::with_precision_prior(d, cfg.precision_prior)?,
                 };
                 diag_states.push(state.without_runs());
             } else {
+                let cov = given.map(|(_, c)| &c[i * d * d..(i + 1) * d * d]);
                 let state = match (mean, cov) {
-                    (Some(m), Some(c)) => EwCov::from_moments(d, 1.0, m, c, cfg.precision_prior)?,
+                    (Some(m), Some(c)) => {
+                        let zeros;
+                        let slice = if conjugate {
+                            zeros = vec![0.0; d * d];
+                            zeros.as_slice()
+                        } else {
+                            c
+                        };
+                        EwCov::from_moments(d, means_weight, m, slice, cfg.precision_prior)?
+                    }
                     _ => EwCov::with_precision_prior(d, cfg.precision_prior)?,
                 };
                 states.push(state.without_runs());
             }
         }
         let seeded = cfg.means.is_some();
+        let smoother = cfg.smooth_lag().map(|lag| HmmSmoother::new(k, lag));
+        let data_w = if conjugate { vec![0.0; k] } else { Vec::new() };
+        let ex = HmmExtras {
+            spherical_states,
+            smoother,
+            data_w,
+        };
+        let extras = (!ex.is_empty()).then(|| Box::new(ex));
         let mut m = Self {
             p: vec![1.0 / k as f64; k],
             a: vec![0.0; k * k],
@@ -779,16 +891,21 @@ impl Hmm {
             warm_first: None,
             over: None,
             warned: false,
+            extras,
             row_stamp: None,
             warning: None,
             cap_for_test: None,
             cfg,
         };
-        let shape = matches!(m.cfg.covariance, Covariance::Full | Covariance::Diagonal);
-        if let Some(p0) = prior_rows.filter(|_| shape && m.cfg.learn) {
+        let shape = matches!(
+            m.cfg.covariance,
+            HmmCovariance::Full | HmmCovariance::Diagonal | HmmCovariance::Spherical
+        );
+        if let Some(p0) = prior_rows.filter(|_| shape && eff.c && !conjugate) {
+            let stab_d = if spherical { 1 } else { d };
             m.stabilized = Some(Box::new(Stabilized::new(
                 p0,
-                d,
+                stab_d,
                 m.cfg.decay,
                 m.cfg.precision_prior,
                 m.cfg.prior_shape(),
@@ -806,6 +923,21 @@ impl Hmm {
         !self.factor_states.is_empty()
     }
 
+    /// Whether this configuration permits the Cholesky factor form (`full`,
+    /// not conjugate priors, and under explicit `params` both `'m'` and `'c'`
+    /// enabled).
+    fn allows_factor_form(&self) -> bool {
+        if !matches!(self.cfg.covariance, HmmCovariance::Full) || self.uses_conjugate_covars() {
+            return false;
+        }
+        let eff = self.cfg.effective_params();
+        if self.cfg.params().is_some() {
+            eff.m && eff.c
+        } else {
+            true
+        }
+    }
+
     /// Once the states are seeded, under `full` at [`Self::FACTOR_FROM`]
     /// features or more: each state's factor of `C + s·r·I` made from its
     /// co-moments -- the factor the cache builds, to the bit, so the rows
@@ -816,7 +948,7 @@ impl Hmm {
     fn take_up_factors(&mut self) {
         if self.factored()
             || !self.seeded
-            || !matches!(self.cfg.covariance, Covariance::Full)
+            || !self.allows_factor_form()
             || self.cfg.n_features < Self::FACTOR_FROM
         {
             return;
@@ -835,7 +967,8 @@ impl Hmm {
         {
             return;
         }
-        if let Some(st) = self.stabilized.as_deref_mut().filter(|_| self.cfg.learn) {
+        let learn_c = self.cfg.effective_params().c;
+        if let Some(st) = self.stabilized.as_deref_mut().filter(|_| learn_c) {
             // `(W·C + P₀Ψ)/(W + P₀)`, every coordinate's prior topped up.
             let p0 = st.prior_rows;
             let mut add = vec![0.0; d];
@@ -893,7 +1026,10 @@ impl Hmm {
     /// A no-op for the other shapes and before seeding; the state-updating
     /// paths `clear` the cache, so under `learn = false` it is built once.
     fn ensure_factors(&mut self) {
-        if !self.seeded || !matches!(self.cfg.covariance, Covariance::Full) {
+        if !self.seeded
+            || !matches!(self.cfg.covariance, HmmCovariance::Full)
+            || self.uses_conjugate_covars()
+        {
             return;
         }
         // The factor form's factors are its state; a take-up that failed
@@ -961,15 +1097,24 @@ impl Hmm {
         self.diag_states.get(s)
     }
 
+    /// The accumulator of state `s` under `spherical`, its scalar variance
+    /// alone; `None` under the other shapes.
+    pub fn state_spherical(&self, s: usize) -> Option<&EwCovSpherical> {
+        self.spherical_states().get(s)
+    }
+
     /// The mean of state `s`, in every shape.
     pub fn state_means(&self, s: usize) -> &[f64] {
         if let Some(f) = self.factor_states.get(s) {
             return f.means();
         }
-        match self.states.get(s) {
-            Some(c) => c.means(),
-            None => self.diag_states[s].means(),
+        if let Some(c) = self.states.get(s) {
+            return c.means();
         }
+        if let Some(c) = self.diag_states.get(s) {
+            return c.means();
+        }
+        self.spherical_states()[s].means()
     }
 
     /// The Dirichlet pseudo-count of cell `(r, c)`.
@@ -1078,10 +1223,14 @@ impl Hmm {
     }
 
     fn ridge(&self, s: usize) -> f64 {
-        let scale = match (self.states.get(s), self.factor_states.get(s)) {
-            (Some(c), _) => c.precision_scale(),
-            (None, Some(f)) => f.precision_scale(),
-            (None, None) => self.diag_states[s].precision_scale(),
+        let scale = if let Some(c) = self.states.get(s) {
+            c.precision_scale()
+        } else if let Some(f) = self.factor_states.get(s) {
+            f.precision_scale()
+        } else if let Some(c) = self.diag_states.get(s) {
+            c.precision_scale()
+        } else {
+            self.spherical_states()[s].precision_scale()
         };
         self.cfg.precision_prior * scale
     }
@@ -1144,9 +1293,9 @@ impl Hmm {
     fn log_densities(&self, x: &[f64]) -> Option<Vec<f64>> {
         let mut work = RowWork::default();
         let ok = if self.stabilized().is_some() {
-            self.log_densities_into::<true>(x, &mut work)
+            self.log_densities_into::<true>(x, 1.0, &mut work)
         } else {
-            self.log_densities_into::<false>(x, &mut work)
+            self.log_densities_into::<false>(x, 1.0, &mut work)
         };
         ok.then_some(work.logf)
     }
@@ -1154,8 +1303,18 @@ impl Hmm {
     /// [`Self::log_densities`], written over the working space's `logf`:
     /// whether there is a density. `S`: under stabilized forgetting
     /// ([`Self::stabilized`]); a constant, so today's build of it is
-    /// compiled as it was without that.
-    fn log_densities_into<const S: bool>(&self, x: &[f64], work: &mut RowWork) -> bool {
+    /// compiled as it was without that. `lam_cov` ages conjugate covariance
+    /// weights during `&self` `predict` (1.0 during `step_in`, which ages
+    /// them before calling `read_into`).
+    fn log_densities_into<const S: bool>(
+        &self,
+        x: &[f64],
+        lam_cov: f64,
+        work: &mut RowWork,
+    ) -> bool {
+        if self.uses_conjugate_covars() {
+            return self.conjugate_log_densities_into(x, lam_cov, work);
+        }
         let (k, d) = (self.cfg.k, self.cfg.n_features);
         let base = -0.5 * d as f64 * std::f64::consts::TAU.ln();
         let RowWork {
@@ -1172,7 +1331,19 @@ impl Hmm {
         out.clear();
         out.resize(k, f64::NEG_INFINITY);
         match self.cfg.covariance {
-            Covariance::Diagonal => {
+            HmmCovariance::Spherical => {
+                let sp_states = self.spherical_states();
+                if let Some(st) = self.stabilized().filter(|_| S) {
+                    return Self::spherical_stabilized(st, sp_states, x, base, out);
+                }
+                let df = d as f64;
+                for (s, (o, sp)) in out.iter_mut().zip(sp_states).enumerate() {
+                    let v = sp.var() + self.ridge(s);
+                    let sq = sp.sq_dist(x);
+                    *o = base - 0.5 * df * v.ln() - 0.5 * sq / v;
+                }
+            }
+            HmmCovariance::Diagonal => {
                 if let Some(st) = self.stabilized().filter(|_| S) {
                     return Self::diag_stabilized(st, &self.diag_states, x, base, out);
                 }
@@ -1188,7 +1359,7 @@ impl Hmm {
                     *o = base - 0.5 * log_det - 0.5 * q;
                 }
             }
-            Covariance::Shared => {
+            HmmCovariance::Shared => {
                 // One matrix, weighted by the states' own weights, and every
                 // state's quadratic form against it from one factorization.
                 // Each in the row's kept working space, written in full
@@ -1236,7 +1407,7 @@ impl Hmm {
                     *o = base - 0.5 * log_det - 0.5 * forms[s];
                 }
             }
-            Covariance::Full if self.factored() => {
+            HmmCovariance::Full if self.factored() => {
                 // Each state's factor is its state ([`EwFactor`]).
                 delta.clear();
                 delta.resize(d, 0.0);
@@ -1248,7 +1419,7 @@ impl Hmm {
                     *o = base - 0.5 * log_det - 0.5 * q;
                 }
             }
-            Covariance::Full => {
+            HmmCovariance::Full => {
                 delta.clear();
                 delta.resize(d, 0.0);
                 for (s, o) in out.iter_mut().enumerate() {
@@ -1282,10 +1453,18 @@ impl Hmm {
     /// Output slot labels in emission order: `filtered_state<k>`,
     /// `predicted_state<k>`, `state`, `loglik`.
     pub fn labels(k: usize) -> Vec<String> {
+        Self::labels_with(k, false)
+    }
+
+    /// Output slot labels, appending `smoothed_state<k>` when `smooth` is set.
+    pub fn labels_with(k: usize, smooth: bool) -> Vec<String> {
         let mut out: Vec<String> = (0..k).map(|s| format!("filtered_state{s}")).collect();
         out.extend((0..k).map(|s| format!("predicted_state{s}")));
         out.push("state".into());
         out.push("loglik".into());
+        if smooth {
+            out.extend((0..k).map(|s| format!("smoothed_state{s}")));
+        }
         out
     }
 
@@ -1293,16 +1472,21 @@ impl Hmm {
         2 * k + 2
     }
 
+    pub fn n_outputs_with(k: usize, smooth: bool) -> usize {
+        if smooth { 3 * k + 2 } else { 2 * k + 2 }
+    }
+
     /// The row's outputs. `lam` ages the transition counts as they are read:
     /// `1` from the step, which has aged them already, and the row's decay
-    /// from `predict`, which may not.
-    fn read(&self, x: &[f64], exog: Option<f64>, lam: f64) -> Vec<f64> {
+    /// from `predict`, which may not. `lam_cov` does the same for conjugate
+    /// covariance weights.
+    fn read(&self, x: &[f64], exog: Option<f64>, lam: f64, lam_cov: f64) -> Vec<f64> {
         let mut out = Vec::new();
         let mut work = RowWork::default();
         if self.stabilized().is_some() {
-            self.read_into::<true>(x, exog, lam, &mut out, &mut work);
+            self.read_into::<true>(x, exog, lam, lam_cov, &mut out, &mut work);
         } else {
-            self.read_into::<false>(x, exog, lam, &mut out, &mut work);
+            self.read_into::<false>(x, exog, lam, lam_cov, &mut out, &mut work);
         }
         out
     }
@@ -1315,20 +1499,23 @@ impl Hmm {
         x: &[f64],
         exog: Option<f64>,
         lam: f64,
+        lam_cov: f64,
         out: &mut Vec<f64>,
         work: &mut RowWork,
     ) -> bool {
         let k = self.cfg.k;
+        let smooth = self.smoother().is_some();
+        let n_out = Self::n_outputs_with(k, smooth);
         let nan = |out: &mut Vec<f64>| {
             out.clear();
-            out.resize(Self::n_outputs_for(k), f64::NAN);
+            out.resize(n_out, f64::NAN);
         };
         if !self.seeded {
             nan(out);
             return false;
         }
         self.transition_at_into(exog, lam, work);
-        if !self.log_densities_into::<S>(x, work) {
+        if !self.log_densities_into::<S>(x, lam_cov, work) {
             nan(out);
             return false;
         }
@@ -1336,6 +1523,7 @@ impl Hmm {
             pi,
             pred,
             logf,
+            f_cur,
             post,
             terms,
             exps,
@@ -1381,6 +1569,14 @@ impl Hmm {
         out.extend_from_slice(pred);
         out.push(best as f64);
         out.push(loglik);
+        if let Some(sm) = self.smoother() {
+            let top_f = logf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            f_cur.clear();
+            f_cur.extend(logf.iter().map(|v| (v - top_f).exp()));
+            let start = out.len();
+            out.resize(start + k, f64::NAN);
+            sm.read(pi, f_cur, &mut out[start..start + k]);
+        }
         // `min_weight` gates what is *reported*, never what is learned: a
         // gated row still moves the filter, as it does in every other model
         // here. Returning `None` instead withheld the row from the update
@@ -1409,7 +1605,8 @@ impl Hmm {
             return;
         };
         self.solve_failures += cap_hits;
-        for (x, wi) in &self.buffer {
+        let buffered = std::mem::take(&mut self.buffer);
+        for (x, wi) in &buffered {
             let mut best = 0;
             let mut best_d = f64::INFINITY;
             for (s, c) in centres.iter().enumerate() {
@@ -1419,12 +1616,17 @@ impl Hmm {
                     best = s;
                 }
             }
-            match self.states.get_mut(best) {
-                Some(state) => state.update(x, 1.0, *wi),
-                None => self.diag_states[best].update(x, 1.0, *wi),
+            if let Some(state) = self.states.get_mut(best) {
+                state.update(x, 1.0, *wi);
+            } else if let Some(state) = self.diag_states.get_mut(best) {
+                state.update(x, 1.0, *wi);
+            } else {
+                self.spherical_states_mut()[best].update(x, 1.0, *wi);
+            }
+            if let Some(g) = self.data_w_mut().get_mut(best) {
+                *g += *wi;
             }
         }
-        self.buffer.clear();
         self.seeded = true;
         if self.stabilized.is_some() {
             self.seed_stabilized();
@@ -1434,10 +1636,20 @@ impl Hmm {
     }
 
     /// The factor a row of clock `d_clock` ages the transition counts by
-    /// before reading them: its decay where the counts are learned, and `1`
-    /// where they are not, which never ages them.
+    /// before reading them: its decay where transition counts learn, and `1`
+    /// where they do not, which never ages them.
     fn counts_lam(&self, d_clock: f64) -> f64 {
-        if self.cfg.learn {
+        if self.cfg.effective_params().t {
+            self.cfg.decay.factor(d_clock)
+        } else {
+            1.0
+        }
+    }
+
+    /// The factor a row of clock `d_clock` ages conjugate covariance weights by
+    /// during `&self` `predict` (`1` outside conjugate mode).
+    fn cov_lam(&self, d_clock: f64) -> f64 {
+        if self.uses_conjugate_covars() {
             self.cfg.decay.factor(d_clock)
         } else {
             1.0
@@ -1446,10 +1658,6 @@ impl Hmm {
 
     /// Age every state over a row it does not learn: a zero-weight update,
     /// which moves no mean and no co-moment and ages the weights by `lam`.
-    /// Every feature here is usable: the update forms `0 · d` in each
-    /// co-moment, and a row holding a NaN, which wrote `0 · NaN` into every
-    /// state (task 181), is refused before it gets here (`OnlineModel`,
-    /// task 183).
     fn age_states(&mut self, x: &[f64], lam: f64) {
         for f in self.factor_states.iter_mut() {
             f.age(lam);
@@ -1459,6 +1667,71 @@ impl Hmm {
         }
         for s in self.diag_states.iter_mut() {
             s.update(x, lam, 0.0);
+        }
+        for s in self.spherical_states_mut().iter_mut() {
+            s.update(x, lam, 0.0);
+        }
+    }
+
+    /// Age state weights alone (`decay`), leaving covariances and prior scales
+    /// bit-equal. Used when means learn with covariances frozen, and before
+    /// reading under conjugate covariance priors.
+    fn decay_state_weights(&mut self, lam: f64) {
+        for s in self.states.iter_mut() {
+            s.decay(lam);
+        }
+        for s in self.diag_states.iter_mut() {
+            s.decay(lam);
+        }
+        for s in self.spherical_states_mut().iter_mut() {
+            s.decay(lam);
+        }
+    }
+
+    /// Update state accumulators on a learned row according to `(learn_m, learn_c)`.
+    fn update_states(&mut self, x: &[f64], lam: f64, weight: f64, work: &mut RowWork) {
+        let eff = self.cfg.effective_params();
+        match (eff.m, eff.c) {
+            (true, true) => {
+                for (s, cov) in self.states.iter_mut().enumerate() {
+                    cov.update(x, lam, weight * work.post[s]);
+                }
+                for (s, cov) in self.diag_states.iter_mut().enumerate() {
+                    cov.update(x, lam, weight * work.post[s]);
+                }
+                for (s, cov) in self.spherical_states_mut().iter_mut().enumerate() {
+                    cov.update(x, lam, weight * work.post[s]);
+                }
+                let prior = self.cfg.precision_prior;
+                for (s, f) in self.factor_states.iter_mut().enumerate() {
+                    if !f.update(x, lam, weight * work.post[s], prior, &mut work.delta) {
+                        self.solve_failures += 1;
+                    }
+                }
+            }
+            (true, false) => {
+                for (s, cov) in self.states.iter_mut().enumerate() {
+                    cov.update_mean_only(x, lam, weight * work.post[s]);
+                }
+                for (s, cov) in self.diag_states.iter_mut().enumerate() {
+                    cov.update_mean_only(x, lam, weight * work.post[s]);
+                }
+                for (s, cov) in self.spherical_states_mut().iter_mut().enumerate() {
+                    cov.update_mean_only(x, lam, weight * work.post[s]);
+                }
+            }
+            (false, true) => {
+                for (s, cov) in self.states.iter_mut().enumerate() {
+                    cov.update_cov_only(x, lam, weight * work.post[s]);
+                }
+                for (s, cov) in self.diag_states.iter_mut().enumerate() {
+                    cov.update_cov_only(x, lam, weight * work.post[s]);
+                }
+                for (s, cov) in self.spherical_states_mut().iter_mut().enumerate() {
+                    cov.update_cov_only(x, lam, weight * work.post[s]);
+                }
+            }
+            (false, false) => {}
         }
     }
 
@@ -1472,42 +1745,45 @@ impl Hmm {
         out: &mut crate::Step,
         work: &mut RowWork,
     ) {
+        let eff = self.cfg.effective_params();
+        let conjugate = self.uses_conjugate_covars();
         self.ensure_factors();
         let lam = self.cfg.decay.factor(d_clock);
         // The chain as the row's clock leaves it: the counts decay over the
         // clock since the last row before `Π` is read, on every row, so a
         // zero-weight row ages them as the gap it sits in would and the next
         // row reads what it would were that row not there (hard rule 9).
-        // The row read them before its own decay, and a zero-weight row's
-        // decay before the next one: against the Dirichlet pseudo-count,
-        // which does not decay, that moved the fit 1.2e-5 in the contract
-        // test (docs/PLAN.md task 214). The states need no such step: their
-        // means, co-moments and prior scale, all a density reads, do not
-        // move on a row that adds no weight.
-        if self.cfg.learn {
+        if eff.t {
             self.a.iter_mut().for_each(|v| *v *= lam);
         }
-        let read = self.read_into::<false>(x, self.exog_of(y), 1.0, &mut out.pred, work);
+        // Under conjugate covariance priors, age weights before the read (as
+        // stabilized forgetting does) so a zero-weight row and the gap it sits
+        // in read identically against the non-decaying prior.
+        if conjugate && self.seeded {
+            self.decay_state_weights(lam);
+            self.data_w_mut().iter_mut().for_each(|g| *g *= lam);
+        }
+        let read = self.read_into::<false>(x, self.exog_of(y), 1.0, 1.0, &mut out.pred, work);
         out.n_eff = self.n_eff;
         out.extra = None;
         // The warm-up rows age as `n_eff` does, so the states the replay seeds
-        // weigh what `n_eff` does; replayed at their raw weights, a state
-        // began heavier than its rows' age warranted and its ridge weaker
-        // (review 2026-09-12, V25). `kmeans` ages its buffer the same way. The
-        // buffer is empty once the states are seeded.
+        // weigh what `n_eff` does.
         for (_, w) in &mut self.buffer {
             *w *= lam;
         }
         if weight <= 0.0 {
-            // Advance the clock and learn nothing: the counts have aged
-            // above, the accumulators age with them, `n_eff` decays with
-            // them -- hard rule 8, the same recursion in every model, which
-            // is what makes `min_weight` mean the same number of rows across
-            // a bank (docs/REVIEW-E54-E64.md H3) -- and `p` does not move.
+            let emitted_ok = self.seeded && read && self.n_eff >= self.cfg.min_weight;
             self.n_eff *= lam;
-            if self.cfg.learn {
-                self.age_states(x, lam);
-                self.factors.clear();
+            if !conjugate {
+                if eff.c {
+                    self.age_states(x, lam);
+                    self.factors.clear();
+                } else if eff.m {
+                    self.decay_state_weights(lam);
+                }
+            }
+            if let Some(sm) = self.smoother_mut() {
+                sm.zero_weight(emitted_ok);
             }
             return;
         }
@@ -1516,10 +1792,10 @@ impl Hmm {
         let span = self.cfg.warm_clock.zip(self.row_stamp);
         let before = self.n_eff;
         self.n_eff = lam * before + weight;
-        // Every row buffered here is usable: one holding a NaN was replayed
-        // into a state by the seeding, and every row after it failed (task
-        // 182); it is refused before it gets here (task 183).
         if !self.seeded {
+            if let Some(sm) = self.smoother_mut() {
+                sm.discard_row();
+            }
             self.buffer.push((x.to_vec(), weight));
             let due = match span {
                 Some((d, now)) => {
@@ -1527,9 +1803,6 @@ impl Hmm {
                 }
                 None => self.buffer.len() >= self.cfg.warm_rows,
             };
-            // The buffer's bytes with the row in, read before a seeding
-            // empties it: the row that seeds may be the one that passed half
-            // the cap (review 2026-11-23, HMM-5).
             if span.is_some() {
                 let (bytes, cap) = (self.warm_bytes(self.buffer.len()), self.warm_cap());
                 self.held_cap().note(bytes, cap);
@@ -1540,75 +1813,62 @@ impl Hmm {
             return;
         }
         if !read {
-            // A state's factorization failed, or a density was not finite --
-            // a quadratic form overflowing against a state of tiny spread --
-            // so the row cannot be scored or learned: a usable row that fails
-            // of its own, and so counted. It still happened, so it ages the
-            // clock like a zero-weight row --
-            // `n_eff`, the counts and the states all decay by `lam`, nothing
-            // is added -- rather than `n_eff` advancing on its own (review
-            // 2026-09-18).
             self.solve_failures += 1;
             self.n_eff = lam * before;
-            if self.cfg.learn {
-                self.age_states(x, lam);
-                self.factors.clear();
+            if !conjugate {
+                if eff.c {
+                    self.age_states(x, lam);
+                    self.factors.clear();
+                } else if eff.m {
+                    self.decay_state_weights(lam);
+                }
+            }
+            if let Some(sm) = self.smoother_mut() {
+                sm.discard_row();
             }
             return;
         }
-        if self.cfg.learn {
+        if eff.t {
             let k = self.cfg.k;
-            // The filtered joint of consecutive states, from the *pre-row*
-            // `p` and the `Π` the row read; the counts have decayed on the
-            // clock above, like every accumulator here.
-            if self.cfg.tvtp.is_none() {
-                // `Π` as the row read it: without `tvtp` that is
-                // `transition()`, the counts as they stand, which nothing
-                // has moved since the read (the frozen state fixtures
-                // continue to the bit through this update).
-                // About the largest density, not `logf[0]`: a state whose
-                // density is astronomically small makes `exp(logf[l] −
-                // logf[0])` overflow the other way, and the counts go to
-                // NaN. The reference cancels in the normalisation.
-                let RowWork {
-                    pi,
-                    logf,
-                    exps: scaled,
-                    joint,
-                    ..
-                } = &mut *work;
-                let top = logf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                scaled.clear();
-                scaled.extend(logf.iter().map(|v| (v - top).exp()));
-                joint.clear();
-                joint.resize(k * k, 0.0);
-                let mut z = 0.0;
-                for kk in 0..k {
-                    for l in 0..k {
-                        let v = self.p[kk] * pi[kk * k + l] * scaled[l];
-                        joint[kk * k + l] = v;
-                        z += v;
-                    }
-                }
-                for (a, j) in self.a.iter_mut().zip(joint.iter()) {
-                    *a += if z > 0.0 { weight * j / z } else { 0.0 };
+            let RowWork {
+                pi,
+                logf,
+                exps: scaled,
+                joint,
+                ..
+            } = &mut *work;
+            let top = logf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            scaled.clear();
+            scaled.extend(logf.iter().map(|v| (v - top).exp()));
+            joint.clear();
+            joint.resize(k * k, 0.0);
+            let mut z = 0.0;
+            for kk in 0..k {
+                for l in 0..k {
+                    let v = self.p[kk] * pi[kk * k + l] * scaled[l];
+                    joint[kk * k + l] = v;
+                    z += v;
                 }
             }
-            for (s, cov) in self.states.iter_mut().enumerate() {
-                cov.update(x, lam, weight * work.post[s]);
+            for (a, j) in self.a.iter_mut().zip(joint.iter()) {
+                *a += if z > 0.0 { weight * j / z } else { 0.0 };
             }
-            for (s, cov) in self.diag_states.iter_mut().enumerate() {
-                cov.update(x, lam, weight * work.post[s]);
+        }
+        if conjugate {
+            for (g, &p) in self.data_w_mut().iter_mut().zip(&work.post) {
+                *g += weight * p;
             }
-            // The factor form's rotations; one that left no factor started
-            // its state's matrix again at its ridge, and is counted.
-            let prior = self.cfg.precision_prior;
-            for (s, f) in self.factor_states.iter_mut().enumerate() {
-                if !f.update(x, lam, weight * work.post[s], prior, &mut work.delta) {
-                    self.solve_failures += 1;
-                }
-            }
+            self.update_states(x, 1.0, weight, work);
             self.factors.clear();
+        } else if eff.m || eff.c {
+            self.update_states(x, lam, weight, work);
+            if eff.c {
+                self.factors.clear();
+            }
+        }
+        let min_w = self.cfg.min_weight;
+        if let Some(sm) = self.smoother_mut() {
+            sm.advance(&work.pi, &work.f_cur, before >= min_w);
         }
         // The posterior is the next row's `p`, and the `p` it replaces the
         // next row's buffer.
@@ -1616,8 +1876,8 @@ impl Hmm {
     }
 
     /// [`Self::step_in`] under stabilized forgetting, the states seeded and
-    /// learned ([`Self::stabilized`]): they age before the read and learn
-    /// the row at `λ = 1` after it.
+    /// covariances learned ([`Self::stabilized`]): they age before the read
+    /// and learn the row at `λ = 1` after it.
     #[inline(never)]
     fn step_in_stabilized(
         &mut self,
@@ -1628,96 +1888,72 @@ impl Hmm {
         out: &mut crate::Step,
         work: &mut RowWork,
     ) {
-        debug_assert!(self.seeded && self.cfg.learn && self.buffer.is_empty());
+        let eff = self.cfg.effective_params();
+        debug_assert!(self.seeded && eff.c && self.buffer.is_empty());
         let lam = self.cfg.decay.factor(d_clock);
         let saved = self.age_stabilized(lam, work, weight <= 0.0);
         self.ensure_factors_stabilized();
-        // The chain as the row's clock leaves it: the counts decay over the
-        // clock since the last row before `Π` is read, on every row, so a
-        // zero-weight row ages them as the gap it sits in would and the next
-        // row reads what it would were that row not there (hard rule 9).
-        // The row read them before its own decay, and a zero-weight row's
-        // decay before the next one: against the Dirichlet pseudo-count,
-        // which does not decay, that moved the fit 1.2e-5 in the contract
-        // test (docs/PLAN.md task 214). The states need no such step: their
-        // means, co-moments and prior scale, all a density reads, do not
-        // move on a row that adds no weight.
-        if self.cfg.learn {
+        if eff.t {
             self.a.iter_mut().for_each(|v| *v *= lam);
         }
-        let read = self.read_into::<true>(x, self.exog_of(y), 1.0, &mut out.pred, work);
+        let read = self.read_into::<true>(x, self.exog_of(y), 1.0, 1.0, &mut out.pred, work);
         if saved.is_some() {
             self.restore_stabilized(saved);
         }
         out.n_eff = self.n_eff;
         out.extra = None;
         if weight <= 0.0 {
-            // Advance the clock and learn nothing: the counts have aged
-            // above, the accumulators age with them, `n_eff` decays with
-            // them -- hard rule 8, the same recursion in every model, which
-            // is what makes `min_weight` mean the same number of rows across
-            // a bank (docs/REVIEW-E54-E64.md H3) -- and `p` does not move.
+            let emitted_ok = read && self.n_eff >= self.cfg.min_weight;
             self.n_eff *= lam;
             self.observe_stabilized(d_clock, 0.0);
             self.factors.clear();
+            if let Some(sm) = self.smoother_mut() {
+                sm.zero_weight(emitted_ok);
+            }
             return;
         }
         let before = self.n_eff;
         self.n_eff = lam * before + weight;
         if !read {
-            // A state's factorization failed, or a density was not finite --
-            // a quadratic form overflowing against a state of tiny spread --
-            // so the row cannot be scored or learned: a usable row that fails
-            // of its own, and so counted. It still happened, so it ages the
-            // clock like a zero-weight row --
-            // `n_eff`, the counts and the states all decay by `lam`, nothing
-            // is added -- rather than `n_eff` advancing on its own (review
-            // 2026-09-18).
             self.solve_failures += 1;
             self.n_eff = lam * before;
             self.observe_stabilized(d_clock, 0.0);
             self.factors.clear();
+            if let Some(sm) = self.smoother_mut() {
+                sm.discard_row();
+            }
             return;
         }
-        if self.cfg.learn {
+        if eff.t {
             let k = self.cfg.k;
-            // The filtered joint of consecutive states, from the *pre-row*
-            // `p` and the `Π` the row read; the counts have decayed on the
-            // clock above, like every accumulator here.
-            if self.cfg.tvtp.is_none() {
-                // `Π` as the row read it: without `tvtp` that is
-                // `transition()`, the counts as they stand, which nothing
-                // has moved since the read (the frozen state fixtures
-                // continue to the bit through this update).
-                // About the largest density, not `logf[0]`: a state whose
-                // density is astronomically small makes `exp(logf[l] −
-                // logf[0])` overflow the other way, and the counts go to
-                // NaN. The reference cancels in the normalisation.
-                let RowWork {
-                    pi,
-                    logf,
-                    exps: scaled,
-                    joint,
-                    ..
-                } = &mut *work;
-                let top = logf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                scaled.clear();
-                scaled.extend(logf.iter().map(|v| (v - top).exp()));
-                joint.clear();
-                joint.resize(k * k, 0.0);
-                let mut z = 0.0;
-                for kk in 0..k {
-                    for l in 0..k {
-                        let v = self.p[kk] * pi[kk * k + l] * scaled[l];
-                        joint[kk * k + l] = v;
-                        z += v;
-                    }
-                }
-                for (a, j) in self.a.iter_mut().zip(joint.iter()) {
-                    *a += if z > 0.0 { weight * j / z } else { 0.0 };
+            let RowWork {
+                pi,
+                logf,
+                exps: scaled,
+                joint,
+                ..
+            } = &mut *work;
+            let top = logf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            scaled.clear();
+            scaled.extend(logf.iter().map(|v| (v - top).exp()));
+            joint.clear();
+            joint.resize(k * k, 0.0);
+            let mut z = 0.0;
+            for kk in 0..k {
+                for l in 0..k {
+                    let v = self.p[kk] * pi[kk * k + l] * scaled[l];
+                    joint[kk * k + l] = v;
+                    z += v;
                 }
             }
-            self.learn_stabilized(x, weight, d_clock, work);
+            for (a, j) in self.a.iter_mut().zip(joint.iter()) {
+                *a += if z > 0.0 { weight * j / z } else { 0.0 };
+            }
+        }
+        self.learn_stabilized(x, weight, d_clock, work);
+        let min_w = self.cfg.min_weight;
+        if let Some(sm) = self.smoother_mut() {
+            sm.advance(&work.pi, &work.f_cur, before >= min_w);
         }
         // The posterior is the next row's `p`, and the `p` it replaces the
         // next row's buffer.
@@ -1732,46 +1968,56 @@ impl Hmm {
     /// ([`EwFactor::comoments_under`]), read in place of states it does not
     /// keep.
     fn seed_stabilized_with(&mut self, comoments: &[Vec<f64>]) {
+        let spherical = matches!(self.cfg.covariance, HmmCovariance::Spherical);
         let d = self.cfg.n_features;
-        let mut pooled = vec![0.0; d];
+        let stab_d = if spherical { 1 } else { d };
+        let mut pooled = vec![0.0; stab_d];
         let mut total = 0.0;
-        // Under a shape each variance is in units of its state's given one
-        // ([`Stabilized`], "Given states"): 1 for states as given.
         let shape = self.stabilized.as_deref().and_then(Stabilized::shape);
         let unit = |s: usize, i: usize, v: f64| match shape {
             Some(g) => v / g.diag(s)[i],
             None => v,
         };
-        for s in 0..self.cfg.k {
-            // A state of no weight adds nothing to the pool, where `0·∞`
-            // would add a NaN (review 2026-11-23, HMM-1).
-            let w = match (self.states.get(s), comoments.get(s)) {
-                (Some(c), _) if c.n_eff() == 0.0 => 0.0,
-                (None, Some(_)) if self.factor_states[s].n_eff() == 0.0 => 0.0,
-                (None, None) if self.diag_states[s].n_eff() == 0.0 => 0.0,
-                (Some(c), _) => {
-                    for (p, i) in pooled.iter_mut().zip(0..d) {
-                        *p += c.n_eff() * unit(s, i, c.var(i));
-                    }
-                    c.n_eff()
+        if spherical {
+            for (s, sp) in self.spherical_states().iter().enumerate() {
+                let w = sp.n_eff();
+                if w > 0.0 {
+                    pooled[0] += w * unit(s, 0, sp.var());
+                    total += w;
                 }
-                (None, Some(c)) => {
-                    let w = self.factor_states[s].n_eff();
-                    for (p, i) in pooled.iter_mut().zip(0..d) {
-                        let v = crate::solve::clamp_rounding(c[crate::ewcov::row_at(i) + i]);
-                        *p += w * unit(s, i, v);
+            }
+        } else {
+            for s in 0..self.cfg.k {
+                // A state of no weight adds nothing to the pool, where `0·∞`
+                // would add a NaN (review 2026-11-23, HMM-1).
+                let w = match (self.states.get(s), comoments.get(s)) {
+                    (Some(c), _) if c.n_eff() == 0.0 => 0.0,
+                    (None, Some(_)) if self.factor_states[s].n_eff() == 0.0 => 0.0,
+                    (None, None) if self.diag_states[s].n_eff() == 0.0 => 0.0,
+                    (Some(c), _) => {
+                        for (p, i) in pooled.iter_mut().zip(0..d) {
+                            *p += c.n_eff() * unit(s, i, c.var(i));
+                        }
+                        c.n_eff()
                     }
-                    w
-                }
-                (None, None) => {
-                    let c = &self.diag_states[s];
-                    for (p, i) in pooled.iter_mut().zip(0..d) {
-                        *p += c.n_eff() * unit(s, i, c.var(i));
+                    (None, Some(c)) => {
+                        let w = self.factor_states[s].n_eff();
+                        for (p, i) in pooled.iter_mut().zip(0..d) {
+                            let v = crate::solve::clamp_rounding(c[crate::ewcov::row_at(i) + i]);
+                            *p += w * unit(s, i, v);
+                        }
+                        w
                     }
-                    c.n_eff()
-                }
-            };
-            total += w;
+                    (None, None) => {
+                        let c = &self.diag_states[s];
+                        for (p, i) in pooled.iter_mut().zip(0..d) {
+                            *p += c.n_eff() * unit(s, i, c.var(i));
+                        }
+                        c.n_eff()
+                    }
+                };
+                total += w;
+            }
         }
         if total > 0.0 {
             pooled.iter_mut().for_each(|p| *p /= total);
@@ -1869,6 +2115,9 @@ impl Hmm {
             s.decay(lam);
         }
         for s in self.diag_states.iter_mut() {
+            s.decay(lam);
+        }
+        for s in self.spherical_states_mut().iter_mut() {
             s.decay(lam);
         }
         self.factors.clear();
@@ -1974,7 +2223,7 @@ impl Hmm {
 
     /// [`Self::ensure_factors`] under stabilized forgetting.
     fn ensure_factors_stabilized(&mut self) {
-        if !self.seeded || !matches!(self.cfg.covariance, Covariance::Full) {
+        if !self.seeded || !matches!(self.cfg.covariance, HmmCovariance::Full) {
             return;
         }
         self.take_up_factors();
@@ -2055,9 +2304,10 @@ impl Hmm {
             return;
         };
         let post = &work.post;
+        let spherical = matches!(self.cfg.covariance, HmmCovariance::Spherical);
         let mut e = std::mem::take(&mut st.e);
         e.clear();
-        e.resize(x.len(), 0.0);
+        e.resize(if spherical { 1 } else { x.len() }, 0.0);
         // A state the row is not in adds nothing, where `0·∞` would add a
         // NaN (review 2026-11-23, HMM-1); a sum past the doubles is refused
         // by `observe`.
@@ -2070,61 +2320,93 @@ impl Hmm {
                 *ei += p * dv * dv;
             }
         }
-        match st.shape() {
-            None => {
-                for (s, &p) in post.iter().enumerate() {
-                    match (self.states.get(s), self.factor_states.get(s)) {
-                        (Some(c), _) => add(&mut e, x, p, |i, xi| c.deviation(i, xi)),
-                        (None, Some(f)) => add(&mut e, x, p, |i, xi| f.deviation(i, xi)),
-                        (None, None) => {
-                            let c = &self.diag_states[s];
-                            add(&mut e, x, p, |i, xi| c.deviation(i, xi))
+        if spherical {
+            let df = x.len() as f64;
+            let shape = st.shape();
+            for (s, (&p, sp)) in post.iter().zip(self.spherical_states()).enumerate() {
+                if p == 0.0 {
+                    continue;
+                }
+                let mean_sq = sp.sq_dist(x) / df;
+                let term = match shape {
+                    Some(sh) => mean_sq / sh.diag(s)[0],
+                    None => mean_sq,
+                };
+                e[0] += p * term;
+            }
+        } else {
+            match st.shape() {
+                None => {
+                    for (s, &p) in post.iter().enumerate() {
+                        match (self.states.get(s), self.factor_states.get(s)) {
+                            (Some(c), _) => add(&mut e, x, p, |i, xi| c.deviation(i, xi)),
+                            (None, Some(f)) => add(&mut e, x, p, |i, xi| f.deviation(i, xi)),
+                            (None, None) => {
+                                let c = &self.diag_states[s];
+                                add(&mut e, x, p, |i, xi| c.deviation(i, xi))
+                            }
+                        }
+                    }
+                }
+                // Under a shape, each state's squared deviations in units of
+                // its given variances.
+                Some(shape) => {
+                    fn add_in(
+                        e: &mut [f64],
+                        x: &[f64],
+                        p: f64,
+                        g: &[f64],
+                        dev: impl Fn(usize, f64) -> f64,
+                    ) {
+                        if p == 0.0 {
+                            return;
+                        }
+                        for (i, ((ei, &xi), &gi)) in e.iter_mut().zip(x).zip(g).enumerate() {
+                            let dv = dev(i, xi);
+                            *ei += p * (dv * dv / gi);
+                        }
+                    }
+                    for (s, &p) in post.iter().enumerate() {
+                        let g = shape.diag(s);
+                        match (self.states.get(s), self.factor_states.get(s)) {
+                            (Some(c), _) => add_in(&mut e, x, p, g, |i, xi| c.deviation(i, xi)),
+                            (None, Some(f)) => add_in(&mut e, x, p, g, |i, xi| f.deviation(i, xi)),
+                            (None, None) => {
+                                let c = &self.diag_states[s];
+                                add_in(&mut e, x, p, g, |i, xi| c.deviation(i, xi))
+                            }
                         }
                     }
                 }
             }
-            // Under a shape, each state's squared deviations in units of
-            // its given variances.
-            Some(shape) => {
-                fn add_in(
-                    e: &mut [f64],
-                    x: &[f64],
-                    p: f64,
-                    g: &[f64],
-                    dev: impl Fn(usize, f64) -> f64,
-                ) {
-                    if p == 0.0 {
-                        return;
-                    }
-                    for (i, ((ei, &xi), &gi)) in e.iter_mut().zip(x).zip(g).enumerate() {
-                        let dv = dev(i, xi);
-                        *ei += p * (dv * dv / gi);
-                    }
-                }
-                for (s, &p) in post.iter().enumerate() {
-                    let g = shape.diag(s);
-                    match (self.states.get(s), self.factor_states.get(s)) {
-                        (Some(c), _) => add_in(&mut e, x, p, g, |i, xi| c.deviation(i, xi)),
-                        (None, Some(f)) => add_in(&mut e, x, p, g, |i, xi| f.deviation(i, xi)),
-                        (None, None) => {
-                            let c = &self.diag_states[s];
-                            add_in(&mut e, x, p, g, |i, xi| c.deviation(i, xi))
-                        }
-                    }
+        }
+        let learn_m = self.cfg.effective_params().m;
+        if learn_m {
+            for (s, cov) in self.states.iter_mut().enumerate() {
+                cov.update(x, 1.0, weight * post[s]);
+            }
+            for (s, cov) in self.diag_states.iter_mut().enumerate() {
+                cov.update(x, 1.0, weight * post[s]);
+            }
+            for (s, sp) in self.spherical_states_mut().iter_mut().enumerate() {
+                sp.update(x, 1.0, weight * post[s]);
+            }
+            let p0 = st.prior_rows;
+            for (s, f) in self.factor_states.iter_mut().enumerate() {
+                let prior = (&st.held[..], st.shape().map(|g| g.tri(s)));
+                if !f.update_stabilized(x, weight * post[s], p0, prior, &mut work.delta) {
+                    self.solve_failures += 1;
                 }
             }
-        }
-        for (s, cov) in self.states.iter_mut().enumerate() {
-            cov.update(x, 1.0, weight * post[s]);
-        }
-        for (s, cov) in self.diag_states.iter_mut().enumerate() {
-            cov.update(x, 1.0, weight * post[s]);
-        }
-        let p0 = st.prior_rows;
-        for (s, f) in self.factor_states.iter_mut().enumerate() {
-            let prior = (&st.held[..], st.shape().map(|g| g.tri(s)));
-            if !f.update_stabilized(x, weight * post[s], p0, prior, &mut work.delta) {
-                self.solve_failures += 1;
+        } else {
+            for (s, cov) in self.states.iter_mut().enumerate() {
+                cov.update_cov_only(x, 1.0, weight * post[s]);
+            }
+            for (s, cov) in self.diag_states.iter_mut().enumerate() {
+                cov.update_cov_only(x, 1.0, weight * post[s]);
+            }
+            for (s, sp) in self.spherical_states_mut().iter_mut().enumerate() {
+                sp.update_cov_only(x, 1.0, weight * post[s]);
             }
         }
         st.observe(d_clock, weight, &e);
@@ -2141,7 +2423,7 @@ impl Hmm {
         c.age_stabilized(lam, &mut RowWork::default(), false);
         c.ensure_factors_stabilized();
         crate::Step {
-            pred: c.read(x, exog, self.counts_lam(d_clock)),
+            pred: c.read(x, exog, self.counts_lam(d_clock), 1.0),
             n_eff: self.n_eff,
             extra: None,
         }
@@ -2162,6 +2444,9 @@ impl crate::OnlineModel for Hmm {
         // failure, takes no warm-up row and moves no `p`; an exogenous value
         // that is not usable is absent (docs/PLAN.md task 183).
         if let Some(refused) = crate::model::refused_step(self, x, y, d_clock, weight) {
+            if let Some(sm) = self.smoother_mut() {
+                sm.discard_row();
+            }
             *out = refused;
             return;
         }
@@ -2177,13 +2462,17 @@ impl crate::OnlineModel for Hmm {
             if let Some(p) = self.place.as_mut() {
                 p.discard_next();
             }
+            if let Some(sm) = self.smoother_mut() {
+                sm.discard_row();
+            }
             if self.stabilized().is_some() {
                 *out = self.predict_stabilized(x, self.exog_of(y), d_clock);
             } else {
                 self.ensure_factors();
                 let mut work = self.factors.row.take().unwrap_or_default();
                 let lam = self.counts_lam(d_clock);
-                self.read_into::<false>(x, self.exog_of(y), lam, &mut out.pred, &mut work);
+                let lam_cov = self.cov_lam(d_clock);
+                self.read_into::<false>(x, self.exog_of(y), lam, lam_cov, &mut out.pred, &mut work);
                 out.n_eff = self.n_eff;
                 out.extra = None;
                 self.factors.row = Some(work);
@@ -2210,6 +2499,27 @@ impl crate::OnlineModel for Hmm {
         }
     }
 
+    fn label_next(&mut self, label: crate::ClockValue) {
+        if let Some(sm) = self.smoother_mut() {
+            sm.label_next(label);
+        }
+    }
+
+    fn smoothed_into(&self, out: &mut crate::Smoothed) -> bool {
+        let Some(sm) = self.smoother() else {
+            return false;
+        };
+        sm.fill_smoothed(out);
+        true
+    }
+
+    fn clear_lags(&mut self) {
+        let p = self.p.clone();
+        if let Some(sm) = self.smoother_mut() {
+            sm.clear(&p);
+        }
+    }
+
     fn take_state_warning(&mut self) -> Option<(u64, u64)> {
         self.warning.take().map(|b| (b, self.warm_cap()))
     }
@@ -2227,7 +2537,7 @@ impl crate::OnlineModel for Hmm {
             return self.predict_stabilized(x, exog, d_clock);
         }
         crate::Step {
-            pred: self.read(x, exog, self.counts_lam(d_clock)),
+            pred: self.read(x, exog, self.counts_lam(d_clock), self.cov_lam(d_clock)),
             n_eff: self.n_eff,
             extra: None,
         }
@@ -2245,7 +2555,12 @@ impl crate::OnlineModel for Hmm {
             return self.predict_stabilized(x, self.exog_of(y), d_clock);
         }
         crate::Step {
-            pred: self.read(x, self.exog_of(y), self.counts_lam(d_clock)),
+            pred: self.read(
+                x,
+                self.exog_of(y),
+                self.counts_lam(d_clock),
+                self.cov_lam(d_clock),
+            ),
             n_eff: self.n_eff,
             extra: None,
         }
@@ -2262,7 +2577,10 @@ impl crate::OnlineModel for Hmm {
                 let mut m = (**m).clone();
                 crate::model::check_cfg("hmm", m.cfg.validate())?;
                 let (k, d) = (m.cfg.k, m.cfg.n_features);
-                let diagonal = matches!(m.cfg.covariance, Covariance::Diagonal);
+                let eff = m.cfg.effective_params();
+                let conjugate = m.uses_conjugate_covars();
+                let diagonal = matches!(m.cfg.covariance, HmmCovariance::Diagonal);
+                let spherical = matches!(m.cfg.covariance, HmmCovariance::Spherical);
                 // A `diag` state saved before schema 66 kept every state's
                 // whole co-moments, of which the shape read the diagonal
                 // alone: it loads as those diagonals, and goes on to the bit
@@ -2276,27 +2594,42 @@ impl crate::OnlineModel for Hmm {
                     m.diag_states = m.states.iter().map(EwCovDiag::of).collect();
                     m.states.clear();
                 }
-                // `k` states at the cfg's width, in the shape's accumulator
-                // and none in the others, `k` marginals, a `k×k` transition
-                // matrix and buffered rows `d` long (review 2026-09-18, B3).
-                // The factor form only where it is taken up: `full`, seeded,
-                // at `FACTOR_FROM` features or more.
+                let sp_len = m.spherical_states().len();
                 let factored = m.factored();
-                let (kept, other) = if diagonal {
-                    (m.diag_states.len(), m.states.len() + m.factor_states.len())
+                let (kept, other) = if spherical {
+                    (
+                        sp_len,
+                        m.states.len() + m.diag_states.len() + m.factor_states.len(),
+                    )
+                } else if diagonal {
+                    (
+                        m.diag_states.len(),
+                        m.states.len() + m.factor_states.len() + sp_len,
+                    )
                 } else if factored {
-                    (m.factor_states.len(), m.states.len() + m.diag_states.len())
+                    (
+                        m.factor_states.len(),
+                        m.states.len() + m.diag_states.len() + sp_len,
+                    )
                 } else {
-                    (m.states.len(), m.diag_states.len())
+                    (m.states.len(), m.diag_states.len() + sp_len)
+                };
+                let smoother_ok = match (m.cfg.smooth_lag(), m.smoother()) {
+                    (Some(lag), Some(sm)) => sm.is_valid(k, lag),
+                    (None, None) => true,
+                    _ => false,
+                };
+                let data_w_ok = if conjugate {
+                    m.data_w().len() == k && m.data_w().iter().all(|v| v.is_finite() && *v >= 0.0)
+                } else {
+                    m.data_w().is_empty()
                 };
                 if kept != k
                     || other != 0
-                    || (factored
-                        && (!matches!(m.cfg.covariance, Covariance::Full)
-                            || !m.seeded
-                            || d < Self::FACTOR_FROM))
+                    || (factored && (!m.allows_factor_form() || !m.seeded || d < Self::FACTOR_FROM))
                     || m.states.iter().any(|s| !s.has_shape(d))
                     || m.diag_states.iter().any(|s| !s.has_shape(d))
+                    || m.spherical_states().iter().any(|s| !s.has_shape(d))
                     || m.factor_states.iter().any(|f| f.order() != d)
                     || m.p.len() != k
                     || m.a.len() != k * k
@@ -2304,17 +2637,14 @@ impl crate::OnlineModel for Hmm {
                     || (m.seeded && !m.buffer.is_empty())
                     || m.place.is_some() != m.cfg.warm_clock.is_some()
                     || ((m.over.is_some() || m.warm_first.is_some()) && m.cfg.warm_clock.is_none())
+                    || !smoother_ok
+                    || !data_w_ok
                 {
                     return Err(crate::model::damaged(
                         "hmm",
                         "its saved values have the wrong shape",
                     ));
                 }
-                // Weights and warm-span cap (review 2026-11-23, STATE-3):
-                // every weight, transition count, posterior entry, and
-                // accumulator weight is finite and at least 0 (posterior
-                // total > 0; buffered row weights may decay to 0), and a
-                // warm-up span stays within its byte cap.
                 let non_neg = |v: f64| v.is_finite() && v >= 0.0;
                 let weights_ok = non_neg(m.n_eff)
                     && m.p.iter().copied().all(non_neg)
@@ -2322,9 +2652,13 @@ impl crate::OnlineModel for Hmm {
                     && m.a.iter().copied().all(non_neg)
                     && m.buffer.iter().all(|(_, w)| non_neg(*w))
                     && m.states.iter().all(EwCov::has_valid_weights)
-                    && m.diag_states.iter().all(EwCovDiag::has_valid_weights);
-                // `factor_states` (`EwFactor`) already enforces finite >= 0
-                // `w_sum` and `precision_scale` in `TryFrom<EwFactorState>`.
+                    && m.diag_states.iter().all(EwCovDiag::has_valid_weights)
+                    && m.spherical_states()
+                        .iter()
+                        .all(EwCovSpherical::has_valid_weights)
+                    && m.factor_states
+                        .iter()
+                        .all(|f| non_neg(f.n_eff()) && non_neg(f.precision_scale()));
                 if !weights_ok {
                     return Err(crate::model::damaged(
                         "hmm",
@@ -2344,23 +2678,20 @@ impl crate::OnlineModel for Hmm {
                 // No window reads a run here (review 2026-09-26, C3 and C4).
                 m.states.iter_mut().for_each(EwCov::set_runs_off);
                 m.diag_states.iter_mut().for_each(EwCovDiag::set_runs_off);
-                // Stabilized forgetting, under `full` and `diag` in a model
-                // that learns. A state of 70 or later holds its `ŝ`, `V` and
-                // `f`, and derives the rest from its configuration; one of
-                // 69 or earlier holds none, and loads as this build would
-                // continue from its moments: `ŝ` the states' variances
-                // pooled by weight, `V` their total weight, and a factor
-                // form taken up again from its co-moments (rule 5's
-                // twenty-second exception).
-                let wants = m.cfg.learn
-                    && matches!(m.cfg.covariance, Covariance::Full | Covariance::Diagonal);
+                let wants = eff.c
+                    && !conjugate
+                    && matches!(
+                        m.cfg.covariance,
+                        HmmCovariance::Full | HmmCovariance::Diagonal | HmmCovariance::Spherical
+                    );
                 let p0 = m.cfg.prior_rows.unwrap_or(d as f64);
+                let stab_d = if spherical { 1 } else { d };
                 let (decay, fallback) = (m.cfg.decay, m.cfg.precision_prior);
                 let factored = m.factored();
                 let fits = match (wants, m.stabilized.as_deref_mut()) {
                     (true, Some(st)) => {
                         s.schema_version >= 70
-                            && st.rebuild(p0, d, decay, fallback, m.cfg.prior_shape())
+                            && st.rebuild(p0, stab_d, decay, fallback, m.cfg.prior_shape())
                             && st.held.is_empty() != factored
                     }
                     (true, None) => {
@@ -2379,12 +2710,6 @@ impl crate::OnlineModel for Hmm {
                         "its saved prior does not fit its configuration",
                     ));
                 }
-                // A `full` state of schema 68 or earlier at `FACTOR_FROM`
-                // features or more holds co-moments: it loads as their
-                // factor and goes on in the factor form (rule 5's twentieth
-                // exception), under its prior (the twenty-second). A state
-                // of 69 or later still in co-moments there is one whose
-                // take-up failed, which its next row tries again.
                 if s.schema_version < 69 && m.states.iter().all(|c| !c.has_pending()) {
                     m.take_up_factors();
                 }
@@ -2406,10 +2731,12 @@ impl crate::OnlineModel for Hmm {
     }
 
     fn n_outputs(&self) -> usize {
-        Self::n_outputs_for(self.cfg.k)
+        Self::n_outputs_with(self.cfg.k, self.cfg.smooth_lag().is_some())
     }
 }
 
+#[cfg(test)]
+mod tests_522;
 #[cfg(test)]
 mod tests_factor;
 
@@ -2649,6 +2976,7 @@ mod tests {
             tvtp: None,
             prior_rows: None,
             warm_clock: None,
+            extras: None,
         }
     }
 
@@ -2776,7 +3104,7 @@ mod tests {
             n_classes: 2,
             decay: Decay::Halflife(f64::INFINITY),
             min_weight: 0.0,
-            covariance: Covariance::Full,
+            covariance: crate::Covariance::Full,
             precision_prior: 1e-3,
             window: None,
             window_every: None,
@@ -2903,6 +3231,7 @@ mod tests {
                         mat[3] += r;
                         crate::oracle::gaussian_log_density(&mat, &dv)
                     }
+                    Covariance::Spherical => unreachable!(),
                 };
                 // Task 274: the model's one Cholesky factor against the
                 // oracle's eigendecomposition, each side's rounding bounded
@@ -2935,6 +3264,7 @@ mod tests {
                         crate::oracle::cholesky_log_density_error(&mat, &dv)
                             + crate::oracle::gaussian_log_density_error(&mat, &dv)
                     }
+                    Covariance::Spherical => unreachable!(),
                 };
                 crate::oracle::assert_within(
                     got_s,

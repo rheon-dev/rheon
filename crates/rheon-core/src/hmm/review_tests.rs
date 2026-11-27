@@ -25,6 +25,7 @@ fn cfg(d: usize) -> HmmCfg {
         tvtp: None,
         prior_rows: None,
         warm_clock: None,
+        extras: None,
     }
 }
 

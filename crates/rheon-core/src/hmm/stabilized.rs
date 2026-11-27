@@ -189,6 +189,22 @@ impl Shape {
         })
     }
 
+    /// Shape of given spherical variances (`k` positive scalars). `None` when
+    /// every state starts at the same scalar variance (the unshaped scalar
+    /// prior).
+    pub(crate) fn of_spherical(covs: &[f64], k: usize) -> Option<Self> {
+        debug_assert_eq!(covs.len(), k);
+        if covs.iter().all(|&v| v == covs[0]) {
+            return None;
+        }
+        Some(Self {
+            tri: Vec::new(),
+            diag: covs.to_vec(),
+            d: 1,
+            same_diagonal: false,
+        })
+    }
+
     /// State `s`'s matrix, its lower triangle packed row by row; empty
     /// under `diag`, which keeps none.
     pub(crate) fn tri(&self, s: usize) -> &[f64] {
