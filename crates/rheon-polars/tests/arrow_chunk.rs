@@ -538,3 +538,65 @@ fn a_broken_bank_says_so_first_at_the_arrow_entry_points() {
         assert!(e.contains("cannot go on"), "{what}: {e}");
     }
 }
+
+/// Review 2026-11-23, BANK-12: `ArrowCol::Num` (`Float32` / integer arrays)
+/// must be recognized by `ArrowCol::is(Form::Number)` and `ArrowChunk::series`
+/// so `Bank::fit_predict_arrow` works when a formula target reads a `Float32`
+/// or integer column held in `ArrowCol::Num`.
+#[test]
+fn a_num_column_in_an_arrow_chunk_feeds_a_formula_target() {
+    use polars_arrow::array::{Float32Array, Int32Array};
+    use rheon_polars::NumArray;
+
+    let spec: Spec = serde_json::from_str(
+        r#"{
+            "name": "m",
+            "model": {"type": "ewridge", "ridge": 1e-6},
+            "targets": [{
+                "name": "ahead",
+                "formula": ["rewm_mean", ["col", "p"], {"half_life": 2.0, "window_size": 2.0}]
+            }],
+            "features": ["p", "k"],
+            "clock": "t",
+            "gap_cap": 10.0,
+            "embargo": 2.0,
+            "half_life": 10.0,
+            "min_weight": 1.0
+        }"#,
+    )
+    .unwrap();
+    let t = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+    let p_f32 = [10.0f32, 11.0, 12.0, 13.0, 14.0, 15.0];
+    let k_i32 = [1i32, 2, 3, 4, 5, 6];
+    let df = df!(
+        "t" => &t,
+        "p" => &p_f32,
+        "k" => &k_i32,
+    )
+    .unwrap();
+    let chunk = ArrowChunk::new(
+        t.len(),
+        vec![
+            ("t", ArrowCol::F64(nums(&t))),
+            (
+                "p",
+                ArrowCol::Num(NumArray::F32(Float32Array::from_slice(p_f32))),
+            ),
+            (
+                "k",
+                ArrowCol::Num(NumArray::I32(Int32Array::from_slice(k_i32))),
+            ),
+        ],
+        vec!["t", "p", "k"],
+    )
+    .unwrap();
+    let want = Bank::new(vec![spec.clone()])
+        .unwrap()
+        .fit_predict(&df)
+        .unwrap();
+    let got = Bank::new(vec![spec])
+        .unwrap()
+        .fit_predict_arrow(&chunk)
+        .unwrap();
+    same(&want, got);
+}

@@ -92,6 +92,14 @@ use crate::refresh::Cell;
 
 pub(crate) const WHO: &str = "rp.stream.merge";
 
+/// `restart_after_step_back` as an exact integer (nanoseconds on a temporal
+/// clock, or ticks on an integer clock) or a float.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Restart {
+    Int(i128),
+    Float(f64),
+}
+
 /// The call's settings, which every run of a state must share.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MergeConfig {
@@ -104,7 +112,7 @@ pub struct MergeConfig {
     pub by: Option<String>,
     /// `restart_after_step_back` in the clock's units -- integer nanoseconds
     /// on a temporal clock -- or `None`, which refuses every step back.
-    pub restart: Option<f64>,
+    pub restart: Option<Restart>,
     /// `restart_after_step_back` as the caller wrote it, for the messages.
     pub restart_text: Option<String>,
     /// The columns filled forward, each with its age beside it (PLAN 556);
@@ -358,15 +366,22 @@ impl Merge {
                 cfg.source
             );
         }
-        if let Some(r) = cfg.restart
-            && (r.is_nan() || r < 0.0)
-        {
-            polars_bail!(ComputeError:
-                "{WHO}: restart_after_step_back must be 0 or more, but it is {}. Set it to the \
-                 smallest step back that starts an input again, or leave it out to refuse every \
-                 step back.",
-                cfg.restart_text.clone().unwrap_or_else(|| r.to_string())
-            );
+        if let Some(r) = cfg.restart {
+            let bad = match r {
+                Restart::Int(n) => n < 0,
+                Restart::Float(x) => x.is_nan() || x < 0.0,
+            };
+            if bad {
+                let shown = cfg.restart_text.clone().unwrap_or_else(|| match r {
+                    Restart::Int(n) => n.to_string(),
+                    Restart::Float(x) => x.to_string(),
+                });
+                polars_bail!(ComputeError:
+                    "{WHO}: restart_after_step_back must be 0 or more, but it is {shown}. Set it \
+                     to the smallest step back that starts an input again, or leave it out to \
+                     refuse every step back."
+                );
+            }
         }
         for (name, schema) in names.iter().zip(&schemas) {
             for (role, col) in [("clock", Some(&cfg.clock)), ("by", cfg.by.as_ref())] {
@@ -442,6 +457,27 @@ impl Merge {
                     }
                     Some(_) => {}
                 }
+            }
+        }
+        if let Some(by) = &cfg.by {
+            let dtype = out_schema.get(by).expect("checked above");
+            let unreadable = matches!(
+                dtype,
+                DataType::Binary | DataType::List(_) | DataType::Array(..) | DataType::Struct(_)
+            ) || crate::arrow::key_text(&Series::full_null(
+                by.as_str().into(),
+                1,
+                dtype,
+            ))
+            .is_err();
+            if unreadable {
+                return Err(crate::wrong_type(format!(
+                    "{WHO}: by column {by:?} is {}, which cannot be read as group keys. Give a \
+                     column with one value per row, such as String or an integer; join a list's \
+                     items into one, such as with \
+                     pl.col({by:?}).cast(pl.List(pl.String)).list.join(\",\").",
+                    dtype_text(dtype)
+                )));
             }
         }
         let carry = Self::carry_cols(&cfg, &out_schema, &clock_dtype)?;
@@ -591,8 +627,9 @@ impl Merge {
         let r = self.cfg.restart;
         let late_int = |back: i128| match r {
             None => true,
-            Some(r) => matches!(
-                rheon_core::cmp_int_f64(back, r),
+            Some(Restart::Int(limit)) => back <= limit,
+            Some(Restart::Float(limit)) => matches!(
+                rheon_core::cmp_int_f64(back, limit),
                 Some(Ordering::Less | Ordering::Equal)
             ),
         };
@@ -608,14 +645,21 @@ impl Merge {
                 let back = (i128::from(prev) - i128::from(now)) * i128::from(unit_ns);
                 Back {
                     refused: late_int(back),
-                    text: i64::try_from(back)
-                        .map_or_else(|_| format!("{back} ns"), crate::span::format_duration),
+                    text: crate::span::format_duration(back),
                 }
             }
             Mode::Float => {
                 let back = float_of(prev) - float_of(now);
+                let refused = match r {
+                    None => true,
+                    Some(Restart::Int(limit)) => matches!(
+                        rheon_core::cmp_int_f64(limit, back),
+                        Some(Ordering::Greater | Ordering::Equal)
+                    ),
+                    Some(Restart::Float(limit)) => back <= limit,
+                };
                 Back {
-                    refused: r.is_none_or(|r| back <= r),
+                    refused,
                     text: three_figures(back, Round::Down),
                 }
             }
@@ -780,6 +824,15 @@ impl Merge {
         let gids = self.gids(&df)?;
         let input = &mut self.inputs[i];
         let restarts = input.read.map_or(0, |(_, r)| r);
+        let n_bumps = bumps.len() as u64;
+        if restarts.checked_add(n_bumps).is_none() {
+            polars_bail!(ComputeError:
+                "{WHO}: input {:?} has started again {} times and cannot count {} more starts \
+                 without overflowing a 64-bit counter. Leave out load_state to begin from a fresh \
+                 state.",
+                input.name, restarts, n_bumps
+            );
+        }
         let first_bumps = usize::from(bumps.first() == Some(&0));
         let block = Block {
             first_row: Some(input.rows_read),

@@ -392,8 +392,6 @@ def test_the_numpy_half_of_gram_checks_shapes_as_the_native_half_does(gram: dict
     short = {**gram, "means": gram["means"][:1]}
     small = {**gram, "comoments": gram["comoments"][:2, :2]}
     for bad, key in ((short, "means"), (small, "comoments")):
-        with pytest.raises(ValueError, match=f"^rheon.gram: the Gram's {key} has"):
-            G.lars_path(bad)
         for name, call in [
             ("merge", lambda b=bad: G.merge([b, gram])),
             ("solve", lambda b=bad: G.solve(b)),
@@ -402,6 +400,10 @@ def test_the_numpy_half_of_gram_checks_shapes_as_the_native_half_does(gram: dict
             ("condition", lambda b=bad: G.condition(b)),
             ("subset", lambda b=bad: G.subset(b, ["x0"])),
             ("coef_stats", lambda b=bad: G.coef_stats(b, G.solve(gram))),
+            ("lasso_path", lambda b=bad: G.lasso_path(b, [0.1])),
+            ("lars_path", lambda b=bad: G.lars_path(b)),
+            ("lars_paths", lambda b=bad: G.lars_paths([b])),
+            ("solve_subsets", lambda b=bad: G.solve_subsets([b], [[0]])),
         ]:
             with pytest.raises(
                 ValueError,
@@ -412,3 +414,34 @@ def test_the_numpy_half_of_gram_checks_shapes_as_the_native_half_does(gram: dict
     want = G.solve(gram)
     np.testing.assert_array_equal(G.solve(G.merge([gram])), want)
     assert G.solve(G.merge([gram, gram])) == pytest.approx(want, rel=1e-12)
+
+
+def test_native_gram_functions_check_mapping_and_shapes(gram: dict) -> None:
+    """Review 2026-11-23, PY-15 (5): `lasso_path`, `lars_path`, `lars_paths`
+    and `solve_subsets` refuse non-mapping Grams with `WrongTypeError` and
+    check every Gram's array shapes before crossing to Rust."""
+    from rheon import gram as G
+    from rheon._errors import WrongTypeError
+
+    for name, call in [
+        ("lasso_path", lambda: G.lasso_path("not a gram", [0.1])),  # type: ignore[arg-type]
+        ("lars_path", lambda: G.lars_path("not a gram")),  # type: ignore[arg-type]
+        ("lars_paths", lambda: G.lars_paths(["not a gram"])),  # type: ignore[list-item]
+        ("solve_subsets", lambda: G.solve_subsets(["not a gram"], [[0]])),  # type: ignore[list-item]
+    ]:
+        with pytest.raises(WrongTypeError, match=f"^rheon.gram.{name}: a Gram must be a mapping"):
+            call()
+
+    bad_cross = {**gram, "cross_moments": np.zeros((1, 2))}
+    for name, call in [
+        ("lasso_path", lambda: G.lasso_path(bad_cross, [0.1])),
+        ("lars_path", lambda: G.lars_path(bad_cross)),
+        ("lars_paths", lambda: G.lars_paths([bad_cross])),
+        ("solve_subsets", lambda: G.solve_subsets([bad_cross], [[0]])),
+    ]:
+        with pytest.raises(
+            ValueError,
+            match=f"^rheon.gram.{name}: the Gram's cross_moments has 2 entries, but a Gram of 3 "
+            "columns and 1 targets has 3",
+        ):
+            call()

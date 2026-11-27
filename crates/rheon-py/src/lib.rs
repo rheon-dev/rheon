@@ -1208,6 +1208,21 @@ struct PyMerge {
     inner: rheon_polars::Merge,
 }
 
+#[derive(FromPyObject)]
+enum PyRestart {
+    Int(i128),
+    Float(f64),
+}
+
+impl From<PyRestart> for rheon_polars::Restart {
+    fn from(r: PyRestart) -> Self {
+        match r {
+            PyRestart::Int(n) => Self::Int(n),
+            PyRestart::Float(x) => Self::Float(x),
+        }
+    }
+}
+
 /// The settings `Merge` and `Merge.load_bytes` take, and the schemas of
 /// `frames`, empty frames of each input's columns.
 fn merge_parts(
@@ -1215,7 +1230,7 @@ fn merge_parts(
     clock: String,
     source: String,
     by: Option<String>,
-    restart: Option<f64>,
+    restart: Option<PyRestart>,
     restart_text: Option<String>,
     carry: Option<Vec<String>>,
 ) -> (Vec<polars::prelude::Schema>, rheon_polars::MergeConfig) {
@@ -1227,7 +1242,7 @@ fn merge_parts(
         clock,
         source,
         by,
-        restart,
+        restart: restart.map(Into::into),
         restart_text,
         carry: carry.unwrap_or_default(),
     };
@@ -1245,7 +1260,7 @@ impl PyMerge {
         clock: String,
         source: String,
         by: Option<String>,
-        restart: Option<f64>,
+        restart: Option<PyRestart>,
         restart_text: Option<String>,
         carry: Option<Vec<String>>,
     ) -> PyResult<Self> {
@@ -1266,7 +1281,7 @@ impl PyMerge {
         clock: String,
         source: String,
         by: Option<String>,
-        restart: Option<f64>,
+        restart: Option<PyRestart>,
         restart_text: Option<String>,
         carry: Option<Vec<String>>,
     ) -> PyResult<Self> {

@@ -205,7 +205,7 @@ fn a_value_is_carried_within_its_day_alone() {
     .unwrap();
     let b = df!("t" => [15i64], "y" => [9i64]).unwrap();
     let mut c = cfg("t");
-    c.restart = Some(5.0);
+    c.restart = Some(Restart::Int(5));
     c.restart_text = Some("5".into());
     c.carry = vec!["x".into()];
     let ins = [a.clone(), b.clone()];
@@ -233,7 +233,7 @@ fn a_value_is_carried_within_its_day_alone() {
 fn a_group_whose_merged_rows_start_again_carries_nothing_from_before() {
     let mut c = cfg("t");
     c.by = Some("g".into());
-    c.restart = Some(10.0);
+    c.restart = Some(Restart::Float(10.0));
     c.restart_text = Some("10".into());
     c.carry = vec!["x".into()];
     let a1 = df!("t" => [100.0], "g" => ["k"], "x" => [Some(1i64)]).unwrap();

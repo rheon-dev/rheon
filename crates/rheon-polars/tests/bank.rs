@@ -2347,3 +2347,82 @@ fn skip_learned_keeps_an_infinite_clock_and_drops_a_closed_group() {
     let keep: Vec<bool> = (0..keep.len()).map(|i| keep.get(i).unwrap()).collect();
     assert_eq!(keep, [false, false, false, true, true, true, true]);
 }
+
+/// Review 2026-11-23, BANK-4: a typed 0-row chunk (such as `rheon --dry-run`'s
+/// empty frame built from a file's schema) must still check clock-dtype
+/// conflicts against the bank's kept clock type; only a `DataType::Null`
+/// untyped column (review P10) is silent.
+#[test]
+fn a_typed_empty_chunk_checks_clock_dtype_conflicts() {
+    let rows = df!(
+        "t" => [1i64, 2, 3], "g" => ["a", "a", "b"], "x" => [1.0, 2.0, 3.0],
+        "y" => [1.0, 2.0, 3.0]
+    )
+    .unwrap();
+    let mut bank = Bank::new(vec![int_clock_spec()]).unwrap();
+    bank.fit_predict(&rows).unwrap();
+    for (dtype, want) in [
+        (DataType::Float64, "was Int64 and is now Float64"),
+        (DataType::Int32, "was Int64 and is now Int32"),
+    ] {
+        let mut schema = Schema::default();
+        schema.insert("t".into(), dtype);
+        schema.insert("g".into(), DataType::String);
+        schema.insert("x".into(), DataType::Float64);
+        schema.insert("y".into(), DataType::Float64);
+        let empty = DataFrame::empty_with_schema(&schema);
+        let err = bank
+            .fit_predict(&empty)
+            .expect_err("typed empty chunk with wrong clock dtype must be refused")
+            .to_string();
+        assert!(err.contains(want), "{err}");
+    }
+}
+
+/// Review 2026-11-23, BANK-11: when a chunk containing fresh groups with a
+/// formula target is refused after `prepare_targets`/`resolve_targets` (e.g.
+/// by a refusing `window_budget`), `forget` must remove those fresh groups
+/// from `self.resolvers` as well as `self.states`, leaving `save_bytes()`
+/// unchanged.
+#[test]
+fn a_refused_chunk_forgets_fresh_formula_resolvers() {
+    let spec: Spec = serde_json::from_str(
+        r#"{
+            "name": "m",
+            "model": {
+                "type": "ewridge",
+                "window_size": 100.0,
+                "snapshot_every": 1,
+                "window_budget": {"refuse": 0.0001}
+            },
+            "targets": [{
+                "name": "ahead",
+                "formula": ["rewm_mean", ["col", "p"], {"half_life": 5.0, "window_size": 10.0}]
+            }],
+            "features": ["x"],
+            "clock": "t",
+            "gap_cap": 10.0,
+            "embargo": 10.0,
+            "half_life": 50.0,
+            "group": "g"
+        }"#,
+    )
+    .unwrap();
+    let mut bank = Bank::new(vec![spec]).unwrap();
+    let before = bank.save_bytes().unwrap();
+    let n = 40;
+    let df = df!(
+        "g" => vec!["fresh"; n],
+        "t" => (0..n).map(|i| i as f64).collect::<Vec<_>>(),
+        "x" => (0..n).map(|i| (i as f64) * 0.1).collect::<Vec<_>>(),
+        "p" => (0..n).map(|i| 100.0 + (i as f64)).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let err = bank.fit_predict(&df).unwrap_err().to_string();
+    assert!(err.contains("window_budget"), "{err}");
+    assert_eq!(
+        bank.save_bytes().unwrap(),
+        before,
+        "refused fresh group leaked into resolver state"
+    );
+}

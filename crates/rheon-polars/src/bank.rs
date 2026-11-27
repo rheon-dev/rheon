@@ -1704,9 +1704,11 @@ impl RefitsBefore {
     }
 }
 
-fn forget(states: &mut [Streams], fresh: &[(usize, GroupKey)]) {
+fn forget(states: &mut [Streams], resolvers: &mut [TargetWindows], fresh: &[(usize, GroupKey)]) {
     for (si, key) in fresh {
         states[*si].swap_remove(key);
+        resolvers[*si].runs.remove(key);
+        resolvers[*si].saved.remove(key);
     }
 }
 
@@ -3665,7 +3667,7 @@ impl Bank {
         };
         if let Err(e) = checked {
             drop(work);
-            forget(&mut self.states, &fresh);
+            forget(&mut self.states, &mut self.resolvers, &fresh);
             refits_before.restore(
                 &mut self.refit_reserved,
                 &mut self.refit_noticed,
@@ -3713,7 +3715,7 @@ impl Bank {
                 Ok(f) => frames[si] = Some(f),
                 Err(e) => {
                     drop(work);
-                    forget(&mut self.states, &fresh);
+                    forget(&mut self.states, &mut self.resolvers, &fresh);
                     refits_before.restore(
                         &mut self.refit_reserved,
                         &mut self.refit_noticed,
@@ -3773,7 +3775,7 @@ impl Bank {
             for (si, cores) in snapshot {
                 self.resolvers[si].restore(cores);
             }
-            forget(&mut self.states, &fresh);
+            forget(&mut self.states, &mut self.resolvers, &fresh);
             refits_before.restore(
                 &mut self.refit_reserved,
                 &mut self.refit_noticed,
@@ -3847,7 +3849,7 @@ impl Bank {
                 for (si, cores) in snapshot {
                     self.resolvers[si].restore(cores);
                 }
-                forget(&mut self.states, &fresh);
+                forget(&mut self.states, &mut self.resolvers, &fresh);
                 refits_before.restore(
                     &mut self.refit_reserved,
                     &mut self.refit_noticed,
@@ -3897,7 +3899,7 @@ impl Bank {
                 Ok(o) => per_spec_rows[si].push(o),
                 Err(e) => {
                     drop(work2);
-                    forget(&mut self.states, &fresh);
+                    forget(&mut self.states, &mut self.resolvers, &fresh);
                     refits_before.restore(
                         &mut self.refit_reserved,
                         &mut self.refit_noticed,
@@ -3957,7 +3959,7 @@ impl Bank {
                 match r {
                     Ok(o) => per_spec_rows[si].push(o),
                     Err(e) => {
-                        forget(&mut self.states, &fresh);
+                        forget(&mut self.states, &mut self.resolvers, &fresh);
                         refits_before.restore(
                             &mut self.refit_reserved,
                             &mut self.refit_noticed,

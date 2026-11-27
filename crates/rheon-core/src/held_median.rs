@@ -231,13 +231,37 @@ impl Tree {
         self.exact &= dyadic(w) && dyadic(self.sum(self.root));
     }
 
-    /// Every weight times `2^{−512}`.
+    /// Every weight times `2^{−512}`, with subtree sums recomputed bottom-up
+    /// so leaves that underflow to `0.0` leave no phantom subnormal sum
+    /// (review 2026-11-23, DIAG-10 (3)).
     fn rescale(&mut self) {
         for n in &mut self.nodes {
             n.w *= RESCALE;
-            n.sum *= RESCALE;
         }
+        self.recompute_sums();
         self.exact = self.nodes.iter().all(|n| n.w == 0.0);
+    }
+
+    /// Recompute every node's `sum` bottom-up from `n.w` without recursion.
+    fn recompute_sums(&mut self) {
+        if self.root == NIL {
+            return;
+        }
+        let mut order = Vec::with_capacity(self.nodes.len());
+        let mut stack = vec![self.root];
+        while let Some(at) = stack.pop() {
+            order.push(at);
+            let n = &self.nodes[at as usize];
+            if n.l != NIL {
+                stack.push(n.l);
+            }
+            if n.r != NIL {
+                stack.push(n.r);
+            }
+        }
+        for &at in order.iter().rev() {
+            self.pull(at);
+        }
     }
 
     /// The median by definition ([`HeldMedian`]'s module doc): the in-order

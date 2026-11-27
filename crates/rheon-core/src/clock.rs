@@ -1598,9 +1598,12 @@ impl ClockState {
                 accept,
             )
         });
-        self.prev_clock = clock;
-        self.prev_session = session;
-        self.started = true;
+        let late_scored = scoring && !session_changed && raw.is_some_and(|r| r < 0.0);
+        if !late_scored {
+            self.prev_clock = clock;
+            self.prev_session = session;
+            self.started = true;
+        }
 
         if accept {
             // The skipped rows' time is carried into this row's, and the
@@ -2811,7 +2814,9 @@ mod tests {
         // Mirrors test_compute_dclock_semantics in tests/reference.py.
         let t = [0.0, 10.0, 5.0, 6.0, 200.0];
         let cfg = cfg(50.0);
-        // Scored: a step back is no step, and a gap past the cap is the cap.
+        // Scored: a step back is no step and leaves `prev_clock` where it was
+        // (review 2026-11-23, DIAG-10 (2)), so both 5.0 and 6.0 are before
+        // 10.0 and score at 0, and a gap past the cap is the cap.
         let mut c = ClockState::new();
         let got: Vec<f64> = t
             .iter()
@@ -2820,7 +2825,7 @@ mod tests {
                     .d_clock
             })
             .collect();
-        assert_eq!(got, vec![0.0, 10.0, 0.0, 1.0, 50.0]);
+        assert_eq!(got, vec![0.0, 10.0, 0.0, 0.0, 50.0]);
         // Learned, the default policy refuses the step back ...
         let mut c = ClockState::new();
         c.advance(&cfg, Some(ClockValue::F64(0.0)), None, true);
@@ -2866,6 +2871,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Review 2026-11-23, DIAG-10 (2): scoring a late row before the last
+    /// clock is read against the state as it stands (step 0) and must not move
+    /// `prev_clock` backward, so a second late row after it still reads step 0
+    /// and a later forward row measures its gap from the original clock.
+    #[test]
+    fn advance_scoring_leaves_prev_clock_unchanged_on_a_late_row() {
+        let cfg = cfg(50.0);
+        let mut c = ClockState::new();
+        c.advance(&cfg, Some(ClockValue::F64(10.0)), None, true);
+        let a = c.advance_scoring(&cfg, Some(ClockValue::F64(5.0)), None);
+        assert_eq!(a.d_clock, 0.0);
+        assert_eq!(a.backwards, None);
+        // Still before 10.0: must not step by 6.0 - 5.0 = 1.0.
+        let b = c.advance_scoring(&cfg, Some(ClockValue::F64(6.0)), None);
+        assert_eq!(b.d_clock, 0.0);
+        // Forward past 10.0: gap is 12.0 - 10.0 = 2.0, not 12.0 - 6.0 = 6.0.
+        let d = c.advance_scoring(&cfg, Some(ClockValue::F64(12.0)), None);
+        assert_eq!(d.d_clock, 2.0);
     }
 
     /// A repeated clock value is a *zero* delta, not a backwards one: it must

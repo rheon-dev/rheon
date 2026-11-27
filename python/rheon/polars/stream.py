@@ -1842,13 +1842,16 @@ def _merge_inputs(frames: tuple[Any, ...], who: str) -> list[tuple[str, _Frame]]
     return items
 
 
+_I128_MAX = (1 << 127) - 1
+
+
 def _restart_setting(
     value: Any,
     dtype: pl.DataType | None,
     who: str,
     clock: str,
     key: str = "restart_after_step_back",
-) -> tuple[float | None, str | None]:
+) -> tuple[int | float | None, str | None]:
     """``restart_after_step_back``, or another span of the clock named by
     ``key``, in the clock's units, integer nanoseconds on a temporal clock,
     and as the message names it; ``(None, None)`` left out."""
@@ -1882,7 +1885,7 @@ def _restart_setting(
                 f"{who}: {key} must be 0 or more, but it is {text}. Set it to a duration of 0 or "
                 "more, or leave it out."
             )
-        return float(ns), str(text)
+        return int(ns), str(text)
     if duration:
         raise ValueError(
             f"{who}: {key} is a duration, but clock column {clock!r} is "
@@ -1894,6 +1897,19 @@ def _restart_setting(
             f"{who}: {key} must be a number on numeric clock column {clock!r}, but its type is "
             f"{type(value).__name__}. Set it to {what}, such as 3600."
         )
+    if isinstance(value, numbers.Integral):
+        n = int(value)
+        if n < 0:
+            raise ValueError(
+                f"{who}: {key} must be 0 or more, but it is {value!r}. Set it to {what}, or leave "
+                f"it out{' to refuse every step back' if restart else ''}."
+            )
+        if n <= _I128_MAX:
+            return n, str(n)
+        try:
+            return float(n), str(n)
+        except OverflowError:
+            return math.inf, str(n)
     x = float(value)
     if math.isnan(x) or x < 0:
         raise ValueError(
