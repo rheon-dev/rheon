@@ -428,6 +428,23 @@
     update_every = None
     split_merge_every = None
     common
+  krls:
+    name
+    targets
+    features
+    kernel = 'rbf'
+    gamma = None
+    degree = None
+    coef0 = None
+    ridge = 1.0
+    max_atoms = None
+    ald_threshold = None
+    window_rows = None
+    window_size = None
+    closed = 'right'
+    emit_n_atoms = False
+    max_state_bytes = None
+    common
   lasso:
     name
     targets
@@ -1148,6 +1165,33 @@
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
+  krls(features=['x0'], half_life=50.0, targets=['y']):
+    model.ald_threshold = null
+    model.closed = "right"
+    model.coef0 = null
+    model.decay.Halflife = 50.0
+    model.degree = null
+    model.emit_n_atoms = false
+    model.fit_intercept = true
+    model.gamma = null
+    model.kernel = "rbf"
+    model.max_atoms = null
+    model.max_state_bytes = null
+    model.min_weight = 0.0
+    model.n_features = 1
+    model.n_targets = 1
+    model.ridge = 1.0
+    model.window_clock = null
+    model.window_rows = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
   lasso(features=['x0'], half_life=50.0, penalties=[0.1, 0.0], targets=['y']):
     model.decay.Halflife = 50.0
     model.fit_intercept = true
@@ -1563,6 +1607,34 @@
     model.closed = "both"
     model.increasing = false
     model.window_clock = 30.0
+  krls(coef0=0.5, degree=2, emit_n_atoms=True, features=['x0'], half_life=50.0, kernel='poly', targets=['y']), the lines that differ from krls's:
+    model.coef0 = 0.5
+    model.degree = 2
+    model.emit_n_atoms = true
+    model.kernel = "poly"
+  krls(features=['x0'], half_life=50.0, kernel='linear', targets=['y']), the lines that differ from krls's:
+    model.kernel = "linear"
+  krls(features=['x0'], half_life=inf, targets=['y'], window_rows=40), the lines that differ from krls's:
+    model.decay.Halflife = "inf"
+    model.window_rows = 40
+    stream.breaks_half_life = 13.8600550164
+    stream.calibration_half_life = 55.4402200657
+    stream.feature_health_half_life = 13.8600550164
+    stream.influence_half_life = 13.8600550164
+    stream.robust_se_half_life = 13.8600550164
+    stream.specification_half_life = 13.8600550164
+    stream.tails_half_life = 13.8600550164
+  krls(closed='both', features=['x0'], half_life=inf, targets=['y'], window_size=30.0), the lines that differ from krls's:
+    model.closed = "both"
+    model.decay.Halflife = "inf"
+    model.window_clock = 30.0
+    stream.breaks_half_life = 10.3933557491
+    stream.calibration_half_life = 41.5734229963
+    stream.feature_health_half_life = 10.3933557491
+    stream.influence_half_life = 10.3933557491
+    stream.robust_se_half_life = 10.3933557491
+    stream.specification_half_life = 10.3933557491
+    stream.tails_half_life = 10.3933557491
   hawkes(closed='both', half_life=inf, kernel_decays=[1.0, 5.0], targets=['y'], window_size=30.0), the lines that differ from hawkes's:
     model.closed = "both"
     model.decay.Halflife = "inf"
@@ -2924,6 +2996,28 @@
     weight_sum: f64
     settled_frac: f64
     withheld_reason: enum
+  krls minimal:
+    pred_y: f64
+    resid_y: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  krls with atoms:
+    pred_y: f64
+    resid_y: f64
+    pred_z: f64
+    resid_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    n_atoms: i64
+  krls windowed:
+    pred_y: f64
+    resid_y: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    n_atoms: i64
   ewm_moments minimal:
     skew: f64
     co: f64
@@ -3060,6 +3154,7 @@
   isotonic: the shared columns only
   kalman: the shared columns only
   kmeans: the shared columns only
+  krls: the shared columns only
   lasso:
     spec: String
     group: String
@@ -3263,6 +3358,8 @@
   lasso.closed: both, right
   isotonic.closed: both, right
   isotonic.out_of_bounds: clip, nan
+  krls.kernel: laplacian, linear, poly, rbf
+  krls.closed: both, right
   ddsketch.closed: both, right
   garch.vol: egarch, figarch, garch, gjr
   holt.seasonal: add, mul
@@ -3450,6 +3547,7 @@
     isotonic: closed, increasing, max_state_bytes, out_of_bounds, window_rows, window_size, y_max, y_min
     kalman: coef_half_life, covariance_form, emit_smoothed_se, forecast_spans, max_state_bytes, obs_var, p0, q, revert_half_life, share_p, smooth_lag, standardize
     kmeans: dead_frac, init, n_clusters, scale_floor, seed, split_merge, split_merge_every, split_merge_every_rows, standardize, update_every, update_every_rows, warm_rows, warm_span
+    krls: ald_threshold, closed, coef0, degree, emit_n_atoms, gamma, kernel, max_atoms, max_state_bytes, ridge, window_rows, window_size
     lasso: closed, l1_ratio, max_iter, max_rows_between_snapshots, max_rows_between_solves, penalties, select_half_life, snapshot_every, solve_every, target_gaps, tol, window_budget, window_size
     marginal: bin_budget, bin_edges, bin_huber_delta, bin_refit_rows, bin_rule, bin_stat, bin_warm_rows, bins, closed, cross_lags, feature_moments, lags, max_rows_between_snapshots, refit_budget, serial_rule, shards, snapshot_every, window_budget, window_lags, window_size
     micro: beta_mu, eps, macro_link, max_clusters, max_rows_between_prunes, prune_every, scale_floor, standardize

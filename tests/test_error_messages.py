@@ -617,6 +617,7 @@ BUILDERS = {
     rp.spec.vector_ar: dict(lags=2),
     rp.spec.spectral: dict(features=None, periods=[8.0]),
     rp.spec.isotonic: dict(features=["x0"]),
+    rp.spec.krls: {},
 }
 
 

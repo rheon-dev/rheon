@@ -139,7 +139,7 @@ shows them at work.
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
            ``audit``, ``hawkes``, ``garch``, ``dcc``, ``realized``, ``pca``,
            ``power_variation``, ``tdigest``, ``ddsketch``, ``ewm_moments``,
-           ``ar``, ``spectral``, ``isotonic``, ``vector_ar``
+           ``ar``, ``spectral``, ``isotonic``, ``krls``, ``vector_ar``
 ``emit_target_weight``
     Why: a row whose target is null teaches that target nothing but still
     adds to the shared ``weight_sum``, so a row can show ``weight_sum`` above
@@ -501,7 +501,8 @@ releases none. A regression writes, with ``<t>`` a target:
     positive definite; each builder's docstring has the test. It is also an
     ``isotonic`` row whose feature lies outside the range of the rows learned
     before it, or comes before any, where the fit is not identified and
-    ``out_of_bounds`` is ``"nan"``. It is also a ``hawkes`` fit its events do
+    ``out_of_bounds`` is ``"nan"``, or a ``krls`` row before the first
+    learned row or under an empty clock window. It is also a ``hawkes`` fit its events do
     not identify: a node with no excitation over the observation, or two
     terms the events cannot tell apart. ``scale_ratio_moved`` is a
     ``corrchange`` span whose correlation statistic passed its critical
@@ -1210,6 +1211,7 @@ from rheon._spec import (
     isotonic,
     kalman,
     kmeans,
+    krls,
     lasso,
     marginal,
     micro,
@@ -1270,5 +1272,6 @@ __all__ = [
     "ddsketch",
     "spectral",
     "isotonic",
+    "krls",
     "vector_ar",
 ]

@@ -62,6 +62,7 @@ MODELS = [
     ("holt", {"features": None}),  # no features keyword
     ("ar", {"lags": 1, "ridge": 1e-3}),
     ("isotonic", {"features": ["x0"], "out_of_bounds": "clip"}),
+    ("krls", {"max_atoms": 20}),
     ("vector_ar", {"lags": 1, "ridge": 1e-3}),
 ]
 IDS = [m[0] for m in MODELS]

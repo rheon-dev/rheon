@@ -132,6 +132,18 @@ fn isotonic_recovers_from_bounded_extremes() {
 }
 
 #[test]
+fn krls_recovers_from_bounded_extremes() {
+    stays_finite_over(&bounded_script(2), || Krls::new(krls_cfg()).unwrap());
+    for cfg in [krls_window_rows_cfg(), krls_window_clock_cfg()] {
+        recovers_from_bounded_extremes(
+            move || Krls::new(cfg.clone()).unwrap(),
+            2,
+            Recovery::Twin(1e-6),
+        );
+    }
+}
+
+#[test]
 fn audit_recovers_from_bounded_extremes() {
     stays_finite_over(&bounded_script(0), || Audit::new(audit_cfg()).unwrap());
 }

@@ -83,6 +83,7 @@ impl AnyModel {
             ModelState::Spectral(_) => Ok(AnyModel::Spectral(Box::new(
                 rheon_core::Spectral::restore(s)?,
             ))),
+            ModelState::Krls(_) => Ok(AnyModel::Krls(Box::new(rheon_core::Krls::restore(s)?))),
             // A kind only rheon-core builds, such as `ew_cov`'s bare running
             // sums: its name is the code's, so the message does not print it.
             _ => Err(StateError::Invalid(format!(

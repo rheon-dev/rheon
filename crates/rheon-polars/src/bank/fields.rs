@@ -294,6 +294,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::EwmMoments { .. }
             | crate::ModelKind::Spectral(_)
             | crate::ModelKind::Isotonic { .. }
+            | crate::ModelKind::Krls(_)
     ) {
         return Vec::new();
     }
@@ -1859,6 +1860,13 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 );
             }
         }
+        if matches!(&spec.model, crate::ModelKind::Krls(k) if k.emit_n_atoms) {
+            fields.push(
+                FieldMeta::new(format!("n_atoms{suffix}"), "n_atoms")
+                    .decay(suffix, d)
+                    .src(Source::ExtraId(mi)),
+            );
+        }
         // `huber`'s residual scale per target, in the same buffer as
         // lasso's selected penalty (docs/PLAN.md task 272 (a)).
         if matches!(
@@ -1937,6 +1945,7 @@ pub fn extra_width(spec: &Spec) -> usize {
         crate::ModelKind::VectorAr(v) => {
             2 * v.causality.as_ref().map_or(0, Vec::len) + usize::from(v.select.is_some())
         }
+        crate::ModelKind::Krls(k) if k.emit_n_atoms => 1,
         _ => 0,
     }
 }

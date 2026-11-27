@@ -299,6 +299,23 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **`rheon.spec.krls`, online kernel ridge regression** (PLAN 502):
+  predicts one or more numeric targets with RBF, Laplacian, polynomial or
+  linear kernels (`kernel`, `gamma`, `degree`, `coef0`, `ridge`,
+  `fit_intercept=True`). In ALD mode (`max_atoms=100`,
+  `ald_threshold=1e-3`, optional `half_life` / `lam`), admits dictionary
+  atoms by approximate linear dependence in whitened Cholesky form with
+  weighted centering and exact Givens updates when `lam == 1` and
+  `fit_intercept=False`. In sliding-window mode (`window_rows` or
+  `window_size`, `closed="right"` or `"both"`, no decay), maintains the
+  exact window kernel Cholesky factor by orthogonal Givens updates on row
+  expiry and Schur-complement intercept elimination, matching
+  `sklearn.kernel_ridge.KernelRidge` on the same rows. Optional
+  `emit_n_atoms=True` writes the pre-row atom or window count as `n_atoms`.
+  State is bounded by `max_state_bytes` (256 KB default, 64 MiB ceiling),
+  with atomic admission on `window_size`; supports all residual
+  diagnostics, `embargo`, `label_clock`, formula targets and `half_life`
+  grids. Schema 72 (unreleased).
 - **`emit_target_weight` writes `weight_<target>`, the weight that target's
   `min_weight` reads** (PLAN 568; the user, 2026-11-23, from a workload
   report on 2.0.0). A row whose target is null teaches that target nothing

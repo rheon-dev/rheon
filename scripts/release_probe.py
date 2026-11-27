@@ -520,6 +520,21 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # Online kernel regression with exponential decay and atom count output.
+    (
+        "krls",
+        "krls",
+        dict(
+            targets=["y", "z"],
+            features=["x0", "x1"],
+            max_atoms=25,
+            emit_n_atoms=True,
+            group="g",
+            half_life=25.0,
+            **CLOCK,
+        ),
+        [],
+    ),
     # Every target on every target's lags, a Granger test read per row.
     (
         "vector_ar",

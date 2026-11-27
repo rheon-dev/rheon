@@ -18,7 +18,7 @@ exact spec you built.
 
 | family | models |
 |---|---|
-| [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) · [`ar`](#ar) · [`isotonic`](#isotonic) · [`vector_ar`](#vector_ar) |
+| [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) · [`ar`](#ar) · [`isotonic`](#isotonic) · [`krls`](#krls) · [`vector_ar`](#vector_ar) |
 | [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`ewm_moments`](#ewm_moments) · [`pca`](#pca) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) · [`power_variation`](#power_variation) · [`tdigest`](#tdigest) · [`ddsketch`](#ddsketch) · [`spectral`](#spectral) |
 | [Clustering and classification](MODELS.md#clustering-and-classification) | [`kmeans`](#kmeans) · [`micro`](#micro) · [`ew_class`](#ew_class) |
 | [Sequential tests and regimes](MODELS.md#sequential-tests-and-regimes) | [`seqtest`](#seqtest) · [`corrchange`](#corrchange) · [`bocpd`](#bocpd) · [`hmm`](#hmm) · [`hawkes`](#hawkes) |
@@ -152,6 +152,7 @@ the docs set it:
 | `emit_clocks`, every model's | [Learn targets known late](how-to/learn-targets-known-late.md#check-that-it-worked), and the table of its two fields after this one |
 | `emit_target_weight`, every model's with a target: `weight_<t>`, the weight `<t>`'s `min_weight` reads, beside `weight_sum` | [Warm-up gates](MODELS.md#warm-up-gates) |
 | `emit_huber_scale`, `huber`'s: `huber_scale_<t>`, the scale each row's cut is drawn in | [`huber`'s table](#huber), and its [entry](MODELS.md#huber--robust-regression) |
+| `emit_n_atoms`, `krls`'s: `n_atoms`, the dictionary or window size before the row | [`krls`'s table](#krls), and its [entry](MODELS.md#krls--online-kernel-regression) |
 | `ew_cov`'s extra `stats`, its `lags` (`lag_corr_l<l>_<a>_<b>`), `pca` (`pc<j>_*`) and `mahal_quantiles` (`mahal_q<p>`) | its own [section](MODELS.md#ew_cov--exponentially-weighted-moments) and its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) |
 | `seqtest`'s `a` and `b`, which replace its four fields with `log_e_a_<t>`, `log_e_b_<t>`, `wins_a_<t>` and `wins_b_<t>` | its own [section](MODELS.md#seqtest--a-sequential-test-of-a-sign-by-betting) and its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.seqtest) |
 | `deco`'s named blocks, which turn `u` and `rho` into one field per block and pair of blocks | its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) |
@@ -364,6 +365,24 @@ The fields of `rp.spec.isotonic("m", targets=["y"], features=["x0"], half_life=5
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
+## `krls`
+
+The fields of `rp.spec.krls("m", targets=["y"], features=["x0"], half_life=50.0)`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `pred_y` | `f64` | the prediction for `<t>`, computed from the state **before** this row | while withheld, before the first learned row, and under `window_size` when every learned row has aged out of the window (`not_identified`) |
+| `resid_y` | `f64` | `y - pred` for `<t>` | while withheld; where the target is null; and on every row of a target that is a formula target, whose value is not known at its row |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
+Under `emit_n_atoms=True`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `n_atoms` | `i64` | number of dictionary atoms (or window rows, under a window) in the fit before this row | never |
 
 ## `vector_ar`
 

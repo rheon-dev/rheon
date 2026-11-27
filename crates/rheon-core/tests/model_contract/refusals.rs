@@ -346,6 +346,12 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             "min_weight must be at least 0",
         ),
         refused(VectorAr::new(vector_ar_cfg()).unwrap(), "decay", zero(), h),
+        refused(
+            Krls::new(krls_cfg()).unwrap(),
+            "ridge",
+            0.0.into(),
+            "ridge must be finite and above 0",
+        ),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -779,6 +785,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("spectral", share(Spectral::new(spectral_cfg()).unwrap())),
         ("isotonic", share(Isotonic::new(isotonic_cfg()).unwrap())),
         ("vector_ar", share(VectorAr::new(vector_ar_cfg()).unwrap())),
+        ("krls", share(Krls::new(krls_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -841,6 +848,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Spectral", "spectral"),
     ("Isotonic", "isotonic"),
     ("VectorAr", "vector_ar"),
+    ("Krls", "krls"),
 ];
 
 #[test]

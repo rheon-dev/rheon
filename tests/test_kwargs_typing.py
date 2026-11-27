@@ -51,6 +51,7 @@ BUILDERS = [
     "glm",
     "expectile",
     "isotonic",
+    "krls",
     "holt",
     "kmeans",
     "micro",

@@ -144,6 +144,10 @@ pub const MODEL_CASES: &[&str] = &[
     // row's ring, the rank-one update of a 10 x 10 Gram, the fit's solve
     // and the read of the test from one Cholesky factor.
     "vector_ar",
+    // Online kernel ridge regression in ALD mode, 5 features and 50 atoms:
+    // kernel evaluations, triangular solve against the dictionary Cholesky
+    // factor and a Givens update of the whitened Gram factor a row.
+    "krls",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -881,6 +885,15 @@ fn case_spec(id: &str) -> (Value, Shape) {
                 0,
             );
             s["targets"] = json!(["y0", "y1", "y2"]);
+            s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
+        "krls" => {
+            let mut s = fit(
+                json!({"type": "krls", "max_atoms": 50, "ald_threshold": 0.0}),
+                5,
+            );
+            s["half_life"] = json!("inf");
             s.as_object_mut().expect("an object").remove("min_weight");
             (s, Shape::Linear)
         }

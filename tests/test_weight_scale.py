@@ -65,6 +65,8 @@ EXCEPTIONS = {
     # that many times (the builder's docs say so).
     "realized": "a weight counts its return that many times: the measures are sums",
     "power_variation": "a weight counts its terms that many times: the terms are sums",
+    "krls": "sum-scale ridge penalty r (matching sklearn KernelRidge(alpha=ridge)), "
+    "which a heavier stream outweighs sooner",
 }
 
 SCALE = 100.0

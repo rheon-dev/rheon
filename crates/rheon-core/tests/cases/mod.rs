@@ -51,6 +51,7 @@ impl<M: OnlineModel> Run for Model<M> {
             Some(Extra::Lasso { lam_selected }) => lam_selected,
             Some(Extra::Huber { scale }) => scale,
             Some(Extra::VectorAr { values }) => values,
+            Some(Extra::Krls { n_atoms }) => vec![n_atoms],
             Some(other) => panic!("an extra the harness does not know: {other:?}"),
             None => Vec::new(),
         };
@@ -4134,6 +4135,66 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             60
         ),
+        // ALD-KRLS undecayed, RBF with intercept and emit_n_atoms.
+        case!(
+            "krls",
+            "Krls",
+            Krls,
+            Krls::new(krls_cfg()).unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // ALD-KRLS decayed, Laplacian, no intercept.
+        case!(
+            "krls_decayed",
+            "Krls",
+            Krls,
+            Krls::new(KrlsCfg {
+                kernel: KernelKind::Laplacian,
+                fit_intercept: false,
+                decay: Decay::Halflife(20.0),
+                ..krls_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            60
+        ),
+        // Sliding-window KRLS (`window_rows`), Poly kernel.
+        case!(
+            "krls_rows",
+            "Krls",
+            Krls,
+            Krls::new(KrlsCfg {
+                kernel: KernelKind::Poly,
+                max_atoms: None,
+                ald_threshold: None,
+                window_rows: Some(15),
+                ..krls_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            60
+        ),
+        // Sliding-window KRLS (`window_clock`), RBF with closed="both".
+        case!(
+            "krls_clock",
+            "Krls",
+            Krls,
+            Krls::new(KrlsCfg {
+                max_atoms: None,
+                ald_threshold: None,
+                window_clock: Some(12.0),
+                closed: WindowClosed::Both,
+                ..krls_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            60
+        ),
         // Saved two rows in: rings still filling, no fit yet.
         case!(
             "ar_filling",
@@ -4320,6 +4381,28 @@ fn isotonic_cfg() -> IsotonicCfg {
         window_clock: None,
         closed: WindowClosed::Right,
         decay: Decay::Halflife(f64::INFINITY),
+        max_state_bytes: None,
+    }
+}
+
+fn krls_cfg() -> KrlsCfg {
+    KrlsCfg {
+        n_features: K,
+        n_targets: 2,
+        fit_intercept: true,
+        kernel: KernelKind::Rbf,
+        gamma: None,
+        degree: None,
+        coef0: None,
+        ridge: 0.5,
+        max_atoms: Some(25),
+        ald_threshold: Some(1e-3),
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        decay: Decay::Halflife(f64::INFINITY),
+        min_weight: 0.0,
+        emit_n_atoms: true,
         max_state_bytes: None,
     }
 }

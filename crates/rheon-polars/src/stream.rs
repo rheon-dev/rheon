@@ -126,6 +126,7 @@ pub enum AnyModel {
     VectorAr(Box<rheon_core::VectorAr>),
     Spectral(Box<rheon_core::Spectral>),
     Isotonic(Box<rheon_core::Isotonic>),
+    Krls(Box<rheon_core::Krls>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -187,6 +188,7 @@ macro_rules! dispatch {
             AnyModel::VectorAr($m) => $body,
             AnyModel::Spectral($m) => $body,
             AnyModel::Isotonic($m) => $body,
+            AnyModel::Krls($m) => $body,
         }
     };
 }
@@ -334,6 +336,7 @@ impl AnyModel {
         match (self, stamp) {
             (AnyModel::EwmMoments(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
             (AnyModel::Hawkes(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
+            (AnyModel::Krls(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
             _ => self.predict_into(x, y, d_clock, out),
         }
     }
@@ -723,6 +726,7 @@ impl AnyModel {
             | AnyModel::TDigest(_)
             | AnyModel::DdSketch(_)
             | AnyModel::Isotonic(_)
+            | AnyModel::Krls(_)
             // A term it withholds is withheld by its condition, no failure.
             | AnyModel::EwmMoments(_) => 0,
             // The components are withheld, never failed: the rotation has no
@@ -826,6 +830,8 @@ impl AnyModel {
             AnyModel::Spectral(_) => None,
             // Its fit is a curve, read at each row's feature.
             AnyModel::Isotonic(_) => None,
+            // Its dual weights grow with the dictionary and have no fixed term layout.
+            AnyModel::Krls(_) => None,
         }
     }
 
@@ -977,7 +983,8 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Ar { .. }
         | ModelKind::VectorAr(_)
         | ModelKind::Spectral(_)
-        | ModelKind::Isotonic { .. } => vec![Combo::default()],
+        | ModelKind::Isotonic { .. }
+        | ModelKind::Krls(_) => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
@@ -4414,6 +4421,7 @@ fn run_instance(
     let is_hawkes = matches!(inst.model.get(), AnyModel::Hawkes(_));
     let is_pca = matches!(inst.spec.model, ModelKind::Pca { .. });
     let is_isotonic = matches!(inst.spec.model, ModelKind::Isotonic { .. });
+    let is_krls = matches!(inst.spec.model, ModelKind::Krls(_));
     let has_levels = matches!(
         inst.model.get(),
         AnyModel::TDigest(_) | AnyModel::DdSketch(_)
@@ -4979,7 +4987,7 @@ fn run_instance(
         }
         // An `isotonic` fit read beyond the rows that identify it, where no
         // gate above has withheld the row: its only null past its floor.
-        if reason == 0 && is_isotonic && step.pred.iter().any(|p| p.is_nan()) {
+        if reason == 0 && (is_isotonic || is_krls) && step.pred.iter().any(|p| p.is_nan()) {
             reason = REASON_NOT_IDENTIFIED;
         }
         // A row a multiplicative `holt` form could not learn from, its
@@ -5440,6 +5448,9 @@ fn run_instance(
                     for (t_i, l) in v.iter().enumerate() {
                         inst.o_lam[t_i * n_rows + ri] = *l;
                     }
+                }
+                Some(rheon_core::Extra::Krls { n_atoms }) => {
+                    inst.o_lam[ri] = *n_atoms;
                 }
                 _ => {}
             }

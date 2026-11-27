@@ -551,6 +551,30 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "krls",
+        r#"{"type": "krls", "max_atoms": 25, "emit_n_atoms": true}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"]"#,
+        ALL,
+    ),
+    (
+        "krls_decayed",
+        r#"{"type": "krls", "kernel": "laplacian", "max_atoms": 25}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "krls_rows",
+        r#"{"type": "krls", "window_rows": 20, "emit_n_atoms": true}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"]"#,
+        UNTIMED,
+    ),
+    (
+        "krls_clock",
+        r#"{"type": "krls", "window_size": @20, "closed": "both", "emit_n_atoms": true}"#,
+        r#""targets": ["y"], "features": ["x0", "x1"]"#,
+        ALL,
+    ),
+    (
         "ddsketch_clock",
         r#"{"type": "ddsketch", "quantiles": [0.25, 0.75], "window_size": @30, "closed": "both"}"#,
         r#""targets": ["y", "x0"], "features": []"#,

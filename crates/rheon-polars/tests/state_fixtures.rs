@@ -1213,6 +1213,36 @@ fn since_2_0_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&since_2_0_specs(), bytes, input)
 }
 
+/// The specs of `bank_krls` (schema 72 before release): every state form of
+/// `krls` -- plain ALD (with `emit_n_atoms` and `emit_sigma`), decayed ALD
+/// (`laplacian`, `half_life`), row sliding window (`window_rows`), and
+/// clock sliding window (`window_size`, `closed = "both"`).
+fn krls_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "ald", "model": {"type": "krls", "max_atoms": 20, "emit_n_atoms": true}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "weight": "w", "emit_sigma": true}"#,
+        r#"{"name": "ald_decayed", "model": {"type": "krls", "kernel": "laplacian", "max_atoms": 20}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "weight": "w"}"#,
+        r#"{"name": "win_rows", "model": {"type": "krls", "kernel": "poly", "degree": 2, "window_rows": 15, "emit_n_atoms": true}, "targets": ["y"], "features": ["x0", "x1"], "weight": "w"}"#,
+        r#"{"name": "win_clock", "model": {"type": "krls", "window_size": 12.0, "closed": "both", "emit_n_atoms": true}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "weight": "w"}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn krls_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(krls_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn krls_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&krls_specs(), bytes, input)
+}
+
 /// The specs of `bank_bocpd_hazard` (PLAN 547): `bocpd`'s two hazards,
 /// grouped on `bank_refit`'s stream and number clock, the per-row count
 /// `hazard_rows` and a number `hazard`, clock units, which a number clock
@@ -2847,6 +2877,11 @@ fn kinds() -> Vec<Kind> {
             run: since_2_0_run,
         },
         Kind {
+            name: "bank_krls",
+            first: krls_first,
+            run: krls_run,
+        },
+        Kind {
             name: "with_windows",
             first: windows_first,
             run: windows_run,
@@ -3477,7 +3512,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 20),
+            ("bank", 21),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),
@@ -5243,6 +5278,15 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         }),
         ("bank_since_2_0", "kalman's square-root form", |p, v| {
             p.ends_with(".Kalman.covariance_form") && v.as_str() == Some("square_root")
+        }),
+        ("bank_krls", "krls ALD dictionary atoms", |p, v| {
+            p.contains(".Krls.mode.Ald.atoms.") && v.as_f64().is_some()
+        }),
+        ("bank_krls", "krls window Cholesky factor", |p, v| {
+            p.contains(".Krls.mode.Window.l_w.") && v.as_f64().is_some_and(|x| x > 0.0)
+        }),
+        ("bank_krls", "krls clock window stamps", |p, _| {
+            p.contains(".Krls.mode.Window.stamp.")
         }),
     ];
     for (kind, form, holds) in FORMS {

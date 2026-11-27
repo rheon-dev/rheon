@@ -337,6 +337,21 @@ def describe_api(cli: Path | None = None) -> str:
             "isotonic windowed",
             dict(targets=["y", "z"], features=["x0"], window_size=30.0, closed="both"),
         ),
+        ("krls minimal", dict(targets=["y"], features=["x0", "x1"])),
+        (
+            "krls with atoms",
+            dict(targets=["y", "z"], features=["x0", "x1"], emit_n_atoms=True),
+        ),
+        (
+            "krls windowed",
+            dict(
+                targets=["y"],
+                features=["x0", "x1"],
+                window_size=30.0,
+                closed="both",
+                emit_n_atoms=True,
+            ),
+        ),
         (
             "ewm_moments",
             dict(
@@ -458,6 +473,10 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("hawkes", {"half_life": float("inf"), "window_events": 20}),
     ("isotonic", {"window_rows": 50, "out_of_bounds": "clip"}),
     ("isotonic", {"window_size": 30.0, "closed": "both", "increasing": False}),
+    ("krls", {"kernel": "poly", "degree": 2, "coef0": 0.5, "emit_n_atoms": True}),
+    ("krls", {"kernel": "linear", "half_life": 50.0}),
+    ("krls", {"window_rows": 40, "half_life": float("inf")}),
+    ("krls", {"window_size": 30.0, "closed": "both", "half_life": float("inf")}),
     ("hawkes", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
     ("hawkes", {"kernel_decays": None, "kernel_half_lives": [0.5, 4.0]}),
     ("garch", {"vol": "figarch", "start_rows": 2000}),
@@ -775,6 +794,14 @@ ENUM_PROBES: list[
         "word",
     ),
     ("isotonic.out_of_bounds", "isotonic", {}, "model.out_of_bounds", "word"),
+    ("krls.kernel", "krls", {}, "model.kernel", "word"),
+    (
+        "krls.closed",
+        "krls",
+        {"half_life": float("inf"), "window_size": 100.0},
+        "model.closed",
+        "word",
+    ),
     (
         "ddsketch.closed",
         "ddsketch",

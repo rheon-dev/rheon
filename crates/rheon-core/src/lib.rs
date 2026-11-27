@@ -110,6 +110,7 @@ pub mod humanfloat;
 mod influence;
 mod isotonic;
 mod kalman;
+mod krls;
 mod lasso;
 mod margbins;
 mod marginal;
@@ -245,6 +246,12 @@ pub use isotonic::{
 pub use kalman::{
     CovarianceForm, KALMAN_MAX_HORIZONS, Kalman, KalmanCfg, SMOOTH_MIN_WEIGHT, SMOOTH_STOOD,
     SMOOTH_UNSEEN, Smoothed, SmoothedRow,
+};
+pub use krls::{
+    ALD_PIVOT_FLOOR, DEFAULT_ALD_THRESHOLD as KRLS_DEFAULT_ALD_THRESHOLD,
+    DEFAULT_MAX_ATOMS as KRLS_DEFAULT_MAX_ATOMS, DEFAULT_POLY_COEF0 as KRLS_DEFAULT_POLY_COEF0,
+    DEFAULT_POLY_DEGREE as KRLS_DEFAULT_POLY_DEGREE, DEFAULT_RIDGE as KRLS_DEFAULT_RIDGE,
+    KernelKind, Krls, KrlsCfg,
 };
 pub use lasso::{Lasso, LassoCfg};
 pub use margbins::{BinCfg, BinRule, BinStat};

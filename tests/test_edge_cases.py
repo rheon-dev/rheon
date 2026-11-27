@@ -27,6 +27,7 @@ _NO_SOLVE_SCHEDULE = {
     "expectile",
     "ar",
     "isotonic",
+    "krls",
 }
 
 #: Every regression model, with the least it needs to be constructible.
@@ -46,6 +47,7 @@ MODELS = [
     ("holt", {"features": None}),  # no features keyword
     ("ar", {"lags": 1, "ridge": 1e-3}),
     ("isotonic", {"out_of_bounds": "clip"}),
+    ("krls", {"max_atoms": 20}),
     ("vector_ar", {"lags": 1, "ridge": 1e-3}),
 ]
 

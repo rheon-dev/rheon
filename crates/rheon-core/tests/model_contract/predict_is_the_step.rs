@@ -24,6 +24,9 @@ fn same_step(kind: &str, i: usize, p: &Step, s: &Step) {
             let bits = |w: &[f64]| w.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
             assert_eq!(bits(u), bits(v), "{kind}: extra at row {i}");
         }
+        (Some(Extra::Krls { n_atoms: u }), Some(Extra::Krls { n_atoms: v })) => {
+            assert_eq!(u.to_bits(), v.to_bits(), "{kind}: extra at row {i}");
+        }
         (u, v) => assert_eq!(u, v, "{kind}: extra at row {i}"),
     }
 }

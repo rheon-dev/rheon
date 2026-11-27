@@ -814,6 +814,10 @@ NOT_REGISTERED: dict[str, str] = {
     "at a time) do not carry; its exactness against statsmodels' VAR, WLS and "
     "VARProcess is held in tests/test_vector_ar.py meanwhile, and its grids and "
     "bounds are still to be measured",
+    "krls": "its fit is a nonlinear RKHS kernel ridge regression whose exactness against "
+    "scikit-learn's KernelRidge and Nystroem + Ridge and nonlinear held-out convergence "
+    "are held across a 50-seed oracle grid in tests/test_krls.py; this harness's streams "
+    "and oracles are linear designs",
 }
 
 

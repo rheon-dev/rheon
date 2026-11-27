@@ -7008,6 +7008,38 @@ ideal = 0.0
 n = 100
 tolerance = 0.0
 
+[group."krls.krls"]
+tests = [
+    "tests/test_krls.py::test_krls_oracle_grid",
+]
+oracles = { "scikit-learn" = "1.9.1" }
+dataset = ""
+
+[case."krls.krls.ald_decayed_vs_nystroem_ridge"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."krls.krls.ald_uncapped_vs_kernel_ridge"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."krls.krls.heldout_excess_mse_ratio"]
+ideal = 0.0
+n = 50
+floor = 0.001
+
+[case."krls.krls.window_intercept_vs_nystroem_ridge"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."krls.krls.window_rows_vs_kernel_ridge"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
 # --- raises
 
 [[raised]]

@@ -1211,6 +1211,13 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["x0"]"#,
             true,
         ),
+        (
+            "krls",
+            r#"{"type": "krls", "max_atoms": 20, "emit_n_atoms": true}"#,
+            r#"["y"]"#,
+            r#"["x0", "x1"]"#,
+            true,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

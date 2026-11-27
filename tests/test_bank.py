@@ -403,6 +403,7 @@ class TestPerTargetMinPeriods:
             "isotonic": lambda: rp.spec.isotonic(
                 "m", features=["x0"], out_of_bounds="clip", **common
             ),
+            "krls": lambda: rp.spec.krls("m", features=["x0"], max_atoms=25, **common),
         }[kind]()
         if kind == "glm":
             # A Gamma amount is above 0.
@@ -419,7 +420,7 @@ class TestPerTargetMinPeriods:
         # weight starts one of its rows later, row 1 for `y0` and row 10 for
         # `y1`.
         hold = 1 if kind == "ar" else 0
-        assert self._first(out, pred["y0"]) == (41 if kind == "rls" else 5 + hold)
+        assert self._first(out, pred["y0"]) == (41 if kind in ("rls", "krls") else 5 + hold)
         assert self._first(out, pred["y1"]) == 10 * (late - 1 + hold) + 1
         assert out["m"].struct.field("weight_sum").to_list()[41] == pytest.approx(41.0)
 

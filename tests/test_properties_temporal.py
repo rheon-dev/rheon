@@ -657,6 +657,24 @@ def clock_specs(draw, model: str, step: int, cap: int):
         kw |= maybe("window_size", 1, 60)
         if "window_size" in kw:
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
+    elif model == "krls":
+        kw |= dict(
+            targets=["y"],
+            features=["x0", "x1"],
+            kernel=draw(st.sampled_from(["rbf", "laplacian", "poly", "linear"])),
+            emit_n_atoms=draw(st.booleans()),
+        )
+        window = draw(st.sampled_from(["none", "rows", "clock"]))
+        if window == "none":
+            kw["max_atoms"] = draw(st.integers(5, 25))
+            kw["half_life"] = draw(st.sampled_from([float("inf"), steps(1, 30)]))
+        elif window == "rows":
+            kw["half_life"] = float("inf")
+            kw["window_rows"] = draw(st.integers(2, 25))
+        else:
+            kw["half_life"] = float("inf")
+            kw["window_size"] = steps(1, 60)
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)

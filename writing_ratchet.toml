@@ -664,6 +664,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/kalman/smooth.rs"]
 
+[messages."crates/rheon-core/src/krls.rs"]
+
 [messages."crates/rheon-core/src/power_variation.rs"]
 
 [messages."crates/rheon-core/src/psquared.rs"]
@@ -717,6 +719,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."crates/rheon-polars/src/spec/drift.rs"]
 
 [messages."crates/rheon-polars/src/spec/horizons.rs"]
+
+[messages."crates/rheon-polars/src/spec/krls.rs"]
 
 [messages."crates/rheon-polars/src/spec/moments.rs"]
 
@@ -781,6 +785,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [docstrings."python/rheon/_spec_kalman.py"]
 
+[docstrings."python/rheon/_spec_krls.py"]
+
 [docstrings."python/rheon/_spec_moments.py"]
 
 [docstrings."python/rheon/_spec_pca.py"]
@@ -841,6 +847,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-core/src/kalman/smooth.rs#messages"]
 
+[vocabulary."crates/rheon-core/src/krls.rs#messages"]
+
 [vocabulary."crates/rheon-core/src/power_variation.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/psquared.rs#messages"]
@@ -889,6 +897,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-polars/src/spec/horizons.rs#messages"]
 
+[vocabulary."crates/rheon-polars/src/spec/krls.rs#messages"]
+
 [vocabulary."crates/rheon-polars/src/spec/moments.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/spec/smooth.rs#messages"]
@@ -934,6 +944,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/_spec_isotonic.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_kalman.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_krls.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_moments.py#docstrings"]
 

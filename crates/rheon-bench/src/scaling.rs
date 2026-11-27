@@ -203,6 +203,14 @@ pub const CELLS: &[Cell] = &[
     cell("isotonic.window", 100, 8, Pow(1), Pow(1)),
     cell("isotonic.targets", 1, 8, Pow(1), Pow(1)),
     cell("isotonic.history", 1000, 8, Const, Const),
+    // Undecayed ALD KRLS updates the whitened upper Cholesky factor in O(M^2)
+    // via Givens rotations and stores two M×M triangular factors; kernel evals
+    // and atoms are O(M·k); sliding window drops and adds in O(W^2) via Givens
+    // Cholesky; fixed max_atoms stays O(1) with history.
+    cell("krls.atoms", 8, 8, Pow(2), Pow(2)),
+    cell("krls.k", 4, 8, Pow(1), Pow(1)),
+    cell("krls.window", 16, 8, Pow(2), Pow(2)),
+    cell("krls.history", 1000, 8, Const, Const),
     cell("ew_cov.k", 4, 8, Pow(2), Pow(2)),
     cell("ew_cov.lags", 1, 8, Pow(1), Pow(1)),
     cell("ew_cov.window", 500, 8, Const, Pow(1)),
@@ -926,6 +934,30 @@ fn model_case(id: &str, n: usize) -> ModelCase {
                 // a window filled before the block
                 _ => c.warm(2 * w),
             }
+        }
+        ("krls", "atoms" | "k" | "window" | "history") => {
+            let (model, k, warm) = match dim {
+                "atoms" => (
+                    json!({"type": "krls", "max_atoms": n, "ald_threshold": 0.0}),
+                    4,
+                    2 * n,
+                ),
+                "k" => (
+                    json!({"type": "krls", "max_atoms": 20, "ald_threshold": 0.0}),
+                    n,
+                    40,
+                ),
+                "window" => (json!({"type": "krls", "window_rows": n}), 4, 2 * n),
+                _ => (
+                    json!({"type": "krls", "max_atoms": 30, "ald_threshold": 0.0}),
+                    4,
+                    n.max(1000),
+                ),
+            };
+            let mut s = fit(model, k, 1);
+            s["half_life"] = json!("inf");
+            s["min_weight"] = json!(0.0);
+            ModelCase::new(s, lin).warm(warm)
         }
         ("ar", "lags") => ModelCase::new(fit(json!({"type": "ar", "lags": n}), 0, 1), lin),
         ("ar", "targets") => ModelCase::new(fit(json!({"type": "ar", "lags": 8}), 0, n), lin),
