@@ -27,7 +27,7 @@ from sklearn.metrics.pairwise import pairwise_kernels
 import ledger
 from rheon import polars as rp
 
-TIER = "essential"
+TIER = "mixed"
 
 
 def _kernel_matrix(

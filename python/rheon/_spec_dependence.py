@@ -259,7 +259,7 @@ def dependence(
 
     .. code-block:: text
 
-        mi=1.64, xi=0.90, spearman=+0.02
+        mi=1.34, xi=0.87, spearman=+0.04
 
     .. rubric:: See also
 

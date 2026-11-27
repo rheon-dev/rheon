@@ -2839,7 +2839,7 @@ class ModelBank:
 
         .. code-block:: text
 
-            mi=1.42, xi=0.89
+            mi=1.09, xi=0.87
 
         .. rubric:: See also
 

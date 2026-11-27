@@ -37,7 +37,7 @@ from sklearn.metrics import mutual_info_score
 import ledger
 from rheon import polars as rp
 
-TIER = "essential"
+TIER = "mixed"
 
 
 # ---------------------------------------------------------------------------

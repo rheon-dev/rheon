@@ -456,6 +456,7 @@ mod generated {
             (Some(Extra::VectorAr { values: u }), Some(Extra::VectorAr { values: v })) => {
                 same_slice(u, v)
             }
+            (Some(Extra::Krls { n_atoms: u }), Some(Extra::Krls { n_atoms: v })) => same(u, v),
             _ => false,
         };
         a.pred.len() == b.pred.len()
@@ -1895,6 +1896,32 @@ mod generated {
                     _ => isotonic_clock(),
                 };
                 Isotonic::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `krls` across decayed ALD, row-windowed, and clock-windowed modes.
+        #[test]
+        fn krls(rows in stream(2, false), split in 0usize..60, mode in 0usize..3) {
+            contract(|| {
+                let c = match mode {
+                    0 => krls_cfg(),
+                    1 => krls_window_rows_cfg(),
+                    _ => krls_window_clock_cfg(),
+                };
+                Krls::new(c).unwrap()
+            }, &rows, split)?;
+        }
+
+        /// `dependence` across decayed MI, row-windowed ranks, and clock-windowed ranks.
+        #[test]
+        fn dependence(rows in stream(2, false), split in 0usize..60, mode in 0usize..3) {
+            contract(|| {
+                let c = match mode {
+                    0 => dependence_cfg(),
+                    1 => dependence_windows().into_iter().nth(1).unwrap().1,
+                    _ => dependence_clock_cfg(),
+                };
+                Dependence::new(c).unwrap()
             }, &rows, split)?;
         }
     }

@@ -528,7 +528,15 @@ class TestEveryClockParameterTakesADuration:
             # Its periods are clock parameters too: durations beside the
             # window's.
             kw["periods"] = ["8h", "3h"]
-        if builder in ("hawkes", "expectile", "realized", "power_variation", "ddsketch"):
+        if builder in (
+            "hawkes",
+            "expectile",
+            "realized",
+            "power_variation",
+            "ddsketch",
+            "krls",
+            "dependence",
+        ):
             # A window takes no decay beside it: the parameter under test
             # sets its own half_life where it is that one.
             kw["half_life"] = float("inf")
@@ -556,6 +564,8 @@ class TestEveryClockParameterTakesADuration:
         "spacing": ("1m", {"periods": ["8h", "3h"]}),
         "refit_span": ("30m", {"refit_rows": None}),
         "warm_span": ("30m", {"warm_rows": None}),
+        "bin_warm_span": ("30m", {"bin_warm_rows": None}),
+        "rank_every": ("10m", {"measures": ["mi", "spearman"], "window_rows": 20}),
         "hazard": ("40m", {}),
         "update_every": ("10m", {}),
         "split_merge_every": ("1h", {}),
@@ -625,6 +635,8 @@ class TestEveryClockParameterTakesADuration:
         "margin_start_span": None,
         "refit_span": None,
         "warm_span": None,
+        "bin_warm_span": None,
+        "rank_every": None,
         "hazard": None,
         "update_every": None,
         "split_merge_every": None,

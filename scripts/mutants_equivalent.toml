@@ -3828,9 +3828,9 @@ match returns as `None`, the arm that refuses's answer"""
 
 [[equivalent]]
 file = "crates/rheon-core/src/family.rs"
-function = "Family::mean"
+function = "Family::mean_with"
 mutation = "replace > with >="
-line_has = "GlmLink::Power if eta > 0.0 => (eta, eta.powf(1.0 / (1.0 - self.power))),"
+line_has = "GlmLink::Power if eta > 0.0 => (eta, M::powf(eta, 1.0 / (1.0 - self.power))),"
 why = """at `η = ±0` the arm gives `0^(1/(1−p))`, an infinity for every power the \
 family takes (`p > 1`, so the exponent is negative), which the check of `μ` \
 below the match returns as `None`, the arm that refuses's answer"""

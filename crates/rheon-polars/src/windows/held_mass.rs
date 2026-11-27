@@ -144,7 +144,10 @@ impl KernelDef {
             return memo.held.1;
         }
         let v = if self.half_life >= MASS_SCALE_FROM {
-            self.mass_held_extreme(d, memo)
+            if self.half_life.is_infinite() {
+                return d;
+            }
+            self.mass_held_huge(d, memo)
         } else {
             self.mass_held_normal(d, memo)
         };
@@ -173,10 +176,7 @@ impl KernelDef {
 
     #[cold]
     #[inline(never)]
-    fn mass_held_extreme(&self, d: f64, memo: &mut DecayMemo) -> f64 {
-        if self.half_life.is_infinite() {
-            return d;
-        }
+    fn mass_held_huge(&self, d: f64, memo: &mut DecayMemo) -> f64 {
         let h = self.half_life;
         if d / h >= HELD_MASS_FROM {
             let scale = self.mass_scale_huge();

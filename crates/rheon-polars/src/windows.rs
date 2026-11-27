@@ -549,7 +549,14 @@ impl KernelDef {
         if memo.mass.0 == bits {
             return memo.mass.1;
         }
-        let v = self.mass_positive(t);
+        let v = if self.half_life >= held_mass::MASS_SCALE_FROM {
+            if self.half_life.is_infinite() {
+                return t;
+            }
+            self.mass_huge(t)
+        } else {
+            self.mass_normal(t)
+        };
         memo.mass = (bits, v);
         v
     }
@@ -568,7 +575,14 @@ impl KernelDef {
         if slot.0 == bits {
             return slot.1;
         }
-        let v = self.mass_positive(t);
+        let v = if self.half_life >= held_mass::MASS_SCALE_FROM {
+            if self.half_life.is_infinite() {
+                return t;
+            }
+            self.mass_huge(t)
+        } else {
+            self.mass_normal(t)
+        };
         *slot = (bits, v);
         v
     }
@@ -584,7 +598,14 @@ impl KernelDef {
         if memo.mass_far.0 == bits {
             return memo.mass_far.1;
         }
-        let v = self.mass_positive(t);
+        let v = if self.half_life >= held_mass::MASS_SCALE_FROM {
+            if self.half_life.is_infinite() {
+                return t;
+            }
+            self.mass_huge(t)
+        } else {
+            self.mass_normal(t)
+        };
         memo.mass_far = (bits, v);
         v
     }
@@ -613,19 +634,16 @@ impl KernelDef {
         if slot.0 == bits {
             return slot.1;
         }
-        let v = self.mass_positive(t);
-        *slot = (bits, v);
-        v
-    }
-
-    /// [`Self::mass`] of a strictly positive distance `t > 0.0`.
-    #[inline]
-    fn mass_positive(&self, t: f64) -> f64 {
-        if self.half_life >= held_mass::MASS_SCALE_FROM {
-            self.mass_extreme(t)
+        let v = if self.half_life >= held_mass::MASS_SCALE_FROM {
+            if self.half_life.is_infinite() {
+                return t;
+            }
+            self.mass_huge(t)
         } else {
             self.mass_normal(t)
-        }
+        };
+        *slot = (bits, v);
+        v
     }
 
     /// `∫_0^T λ^s ds`: the decayed mass of `T` units of time.
