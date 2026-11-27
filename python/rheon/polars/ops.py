@@ -8,7 +8,9 @@ operator an input. :func:`invert` solves an equation of the row for
 counts the rows a value has held, ``clock_lag`` and ``clock_drift`` read the
 lag between an event's time and its arrival, and how fast it grows, and
 ``clock_step`` the steps between a time and the one before it: a stream's
-health, read as columns.
+health, read as columns. :func:`bspline`, :func:`natural_spline`,
+:func:`hinge` and :func:`interactions` expand numeric columns into stateless
+basis and interaction terms as plain Polars expressions.
 
 Each operator returns a ``pl.Expr`` that composes with Polars' own
 expressions, in which ``pl.col`` reads the current row.
@@ -275,6 +277,7 @@ import polars as pl
 
 from rheon._errors import RefusedValueError
 from rheon._renamed import renamed_function
+from rheon.polars._basis import bspline, hinge, interactions, natural_spline
 from rheon.polars._formula import (
     UNKNOWN_COLUMN,
     invert_node,
@@ -290,6 +293,7 @@ if TYPE_CHECKING:
     from rheon._duration import Duration
 
 __all__ = [
+    "bspline",
     "calendar_fourier",
     "cross_mean",
     "cross_std",
@@ -305,9 +309,12 @@ __all__ = [
     "ewm_sum",
     "ewm_var",
     "fourier",
+    "hinge",
     "increment",
+    "interactions",
     "invert",
     "mstl",
+    "natural_spline",
     "rolling_max",
     "rolling_min",
     "stl",

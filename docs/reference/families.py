@@ -204,6 +204,11 @@ FAMILIES: tuple[Family, ...] = (
         tuple(f"{_RP}.ops.{m}" for m in ("fourier", "calendar_fourier", "stl", "mstl")),
     ),
     Family(
+        "ops-basis",
+        "ops",
+        tuple(f"{_RP}.ops.{m}" for m in ("bspline", "natural_spline", "hinge", "interactions")),
+    ),
+    Family(
         "eval-scores",
         "eval",
         tuple(

@@ -28,3 +28,12 @@ and MSTL, statsmodels' decompositions of each group's last rows into trend,
 seasons and remainder, read a few rows late, where they no longer move.
 
 .. entries:: ops-seasonal
+
+Basis expansions
+----------------
+
+Clamped B-splines, QR-projected natural cubic splines, piecewise-linear hinges
+and polynomial interaction products: plain Polars expressions with no state
+that stream directly into any model in a bank.
+
+.. entries:: ops-basis
