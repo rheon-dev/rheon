@@ -204,6 +204,7 @@ NO_COEF = frozenset(
         "ewm_moments",
         "spectral",
         "isotonic",
+        "dependence",
     }
 )
 

@@ -842,6 +842,9 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         ModelKind::Isotonic { .. } => Ok(AnyModel::Isotonic(Box::new(rheon_core::Isotonic::new(
             isotonic_cfg(spec, decay)?,
         )?))),
+        ModelKind::Dependence(_) => Ok(AnyModel::Dependence(Box::new(
+            rheon_core::Dependence::new(crate::spec::dependence_cfg(spec, decay)?)?,
+        ))),
         ModelKind::DdSketch { .. } => Ok(AnyModel::DdSketch(Box::new(
             rheon_core::DdSketchModel::new(ddsketch_cfg(spec, decay)?)?,
         ))),

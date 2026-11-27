@@ -144,6 +144,9 @@ pub const MODEL_CASES: &[&str] = &[
     // row's ring, the rank-one update of a 10 x 10 Gram, the fit's solve
     // and the read of the test from one Cholesky factor.
     "vector_ar",
+    // Nonlinear dependence: 10 features against 1 target over a 200-row window
+    // with 16x16 MI + Miller-Madow + incremental Kendall + periodic Spearman/xi.
+    "dependence",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -881,6 +884,22 @@ fn case_spec(id: &str) -> (Value, Shape) {
                 0,
             );
             s["targets"] = json!(["y0", "y1", "y2"]);
+            s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
+        "dependence" => {
+            let mut s = fit(
+                json!({
+                    "type": "dependence",
+                    "measures": ["mi", "mi_mm", "spearman", "kendall", "xi"],
+                    "bins": 16,
+                    "bin_warm_rows": 50,
+                    "window_rows": 200,
+                    "rank_every_rows": 10,
+                }),
+                10,
+            );
+            s["half_life"] = json!("inf");
             s.as_object_mut().expect("an object").remove("min_weight");
             (s, Shape::Linear)
         }

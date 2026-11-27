@@ -109,6 +109,7 @@ MINIMAL: dict[str, dict[str, object]] = {
     # One feature, the score it is monotone in.
     "isotonic": {"features": ["x0"]},
     "vector_ar": {"lags": 1},
+    "dependence": {"bins": 6, "bin_warm_rows": 12},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -148,6 +149,7 @@ REGRESSIONS = frozenset(MINIMAL) - {
     "ddsketch",
     "ewm_moments",
     "spectral",
+    "dependence",
 }
 
 
@@ -366,6 +368,7 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "ewm_moments",
             "spectral",
             "isotonic",
+            "dependence",
         )
     },
 }

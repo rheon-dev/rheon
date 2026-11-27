@@ -657,6 +657,32 @@ def clock_specs(draw, model: str, step: int, cap: int):
         kw |= maybe("window_size", 1, 60)
         if "window_size" in kw:
             kw["closed"] = draw(st.sampled_from(["right", "both"]))
+    elif model == "dependence":
+        # Nonlinear dependence: decayed MI, row-windowed MI + ranks, or clock-windowed
+        # MI + ranks with bin_warm_span, closed edge, and rank_every cadence.
+        kw |= dict(targets=["y"], features=["x0", "x1"], bins=5)
+        mode = draw(st.sampled_from(["decayed", "rows", "clock"]))
+        if mode == "decayed":
+            kw["measures"] = ["mi"]
+            kw["half_life"] = steps(1, 30)
+            if draw(st.booleans()):
+                kw["bin_warm_span"] = steps(1, 10)
+            else:
+                kw["bin_warm_rows"] = draw(st.integers(2, 8))
+        elif mode == "rows":
+            kw["measures"] = ["mi", "mi_mm", "spearman", "kendall", "xi"]
+            kw["window_rows"] = draw(st.integers(4, 25))
+            kw["bin_warm_rows"] = draw(st.integers(2, 8))
+            kw["rank_every_rows"] = draw(st.integers(1, 4))
+        else:
+            kw["measures"] = ["mi", "spearman", "kendall", "xi"]
+            kw["window_size"] = steps(1, 60)
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
+            if draw(st.booleans()):
+                kw["bin_warm_span"] = steps(1, 10)
+            else:
+                kw["bin_warm_rows"] = draw(st.integers(2, 8))
+            kw |= maybe("rank_every", 1, 8)
     else:
         assert model == "rls", model
         kw |= xy | maybe("embargo", 1, 5)

@@ -661,6 +661,9 @@ largest buffer at the smaller.
 | `isotonic.window` | a row window W | 100 → 800 | O(n) | O(n) | each learned row refits in full over the window's distinct feature values, which a continuous feature makes its rows; the ring and the sorted rows hold W rows | 6.04 · 1.00 · 7.85 · 6.98 |
 | `isotonic.targets` | targets T, a fit each | 1 → 8 | O(n) | O(n) | each target keeps its own sorted rows and refits them in full | 7.57 · 1.00 · 5.59 · 4.68 |
 | `isotonic.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | a window of 100 rows holds the same rows at any age | 1.01 · 1.00 · 1.00 · 1.00 |
+| `dependence.k` | features k (MI + Miller-Madow + Kendall) | 2 → 16 | O(n) | O(n) | each feature keeps its own joint table and Kendall counters with each target | 3.40 · 1.00 · 5.30 · 3.97 |
+| `dependence.window` | a row window W (MI + Miller-Madow + Kendall) | 50 → 400 | O(n) | O(n) | each enter and leave updates Kendall counts across the window in O(W) and holds W rows in the ring | 4.85 · 1.00 · 4.27 · 2.84 |
+| `dependence.history` | rows already seen | 1,000 → 8,000 | O(1) | O(1) | a window of 100 rows holds the same state and cost at any age | 1.00 · 1.00 · 1.00 · 1.00 |
 | `bank.groups_seen` (CI) | groups seen G (a block over 50 of them) | 250 → 2,000 | O(1) | O(n) | a row touches its group's state alone; a state a group | 1.03 · 1.00 · 7.99 · 7.14 |
 | `bank.groups_seen_per_call` (CI) | groups seen G, calls of four rows to one group each | 1,000 → 8,000 | O(1) | O(n) | a call finds each of its groups' state by key and takes only their notices; a state a group | 1.00 · 1.00 · 7.98 · 7.33 |
 | `bank.specs` (CI) | specs S, one set of columns | 1 → 8 | O(n) | O(n) | each spec steps its model, S | 8.28 · 7.67 · 7.80 · 7.23 |

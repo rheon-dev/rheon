@@ -416,6 +416,22 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         [],
     ),
     (
+        "dependence",
+        "dependence",
+        dict(
+            targets=["y", "z"],
+            features=["x0", "x1"],
+            measures=["mi", "spearman", "kendall", "xi"],
+            bins=8,
+            bin_warm_rows=20,
+            window_rows=60,
+            group="g",
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    (
         "spectral",
         "spectral",
         dict(

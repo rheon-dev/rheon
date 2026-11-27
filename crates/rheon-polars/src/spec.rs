@@ -38,8 +38,10 @@ pub use horizons::{Horizon, SpanHorizon, check_horizon_labels};
 #[allow(unused_imports)]
 pub use renamed::RENAMED_WHERE_EXPECTED;
 pub use renamed::{RENAMED, RENAMED_VALUES, name_renamed};
+mod dependence;
 mod moments;
 mod vector_ar;
+pub use dependence::{DependenceSpec, dependence_cfg};
 pub(crate) use moments::moment_leg_column;
 pub use moments::{MOMENT_KINDS, MomentKinds, MomentLegs, MomentTerms, ewm_moments_cfg};
 pub use vector_ar::{CausalitySpec, VectorArSpec, causality_kind_of, test_of, vector_ar_cfg};
@@ -1961,6 +1963,8 @@ pub enum ModelKind {
     /// (`rheon_core::VectorAr`).
     #[serde(rename = "vector_ar")]
     VectorAr(VectorArSpec),
+    #[serde(rename = "dependence")]
+    Dependence(DependenceSpec),
 }
 
 /// One term of a `power_variation` spec: its name, which names its fields
@@ -2150,6 +2154,7 @@ impl ModelKind {
         "spectral",
         "isotonic",
         "vector_ar",
+        "dependence",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -2191,6 +2196,7 @@ impl ModelKind {
             ModelKind::Spectral(_) => "spectral",
             ModelKind::Isotonic { .. } => "isotonic",
             ModelKind::VectorAr(_) => "vector_ar",
+            ModelKind::Dependence(_) => "dependence",
         }
     }
 
@@ -2264,6 +2270,7 @@ impl ModelKind {
                 | ModelKind::EwmMoments { .. }
                 | ModelKind::Spectral(_)
                 | ModelKind::Isotonic { .. }
+                | ModelKind::Dependence(_)
         )
     }
 
@@ -2568,7 +2575,13 @@ impl ModelKind {
             } | ModelKind::Hawkes {
                 window_size: Some(_),
                 ..
-            }
+            } | ModelKind::Dependence(DependenceSpec {
+                window_size: Some(_),
+                ..
+            }) | ModelKind::Dependence(DependenceSpec {
+                bin_warm_span: Some(_),
+                ..
+            })
         )
     }
 
@@ -2621,6 +2634,7 @@ impl ModelKind {
                     | ModelKind::TDigest { .. }
                     | ModelKind::DdSketch { .. }
                     | ModelKind::Spectral(_)
+                    | ModelKind::Dependence(_)
             )
     }
 
@@ -3291,7 +3305,9 @@ impl Spec {
                 // A sketch with no half-life never forgets, or forgets by
                 // its window: no decay is the plain form. So is an isotonic
                 // fit, scikit-learn's on every row learned.
-                ModelKind::DdSketch { .. } | ModelKind::Isotonic { .. } => {
+                ModelKind::DdSketch { .. }
+                | ModelKind::Isotonic { .. }
+                | ModelKind::Dependence(_) => {
                     Ok(vec![(String::new(), Decay::Halflife(f64::INFINITY))])
                 }
                 // A window with no half-life is the common case of a flat
@@ -3498,6 +3514,7 @@ impl Spec {
             ModelKind::Ar { .. } | ModelKind::VectorAr(_) => 0.0,
             // A power is defined from the first row; nothing to wait for.
             ModelKind::Spectral(_) => 0.0,
+            ModelKind::Dependence(_) => 0.0,
             // The noise gate is this model's readiness gate
             // (docs/WARMUP-AND-CONVERGENCE.md §2.1): `max_error_inflation`
             // tracks the model where a count of weight cannot, and the

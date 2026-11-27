@@ -215,6 +215,19 @@ fn the_n_eff_accessor_is_the_steps_under_a_window() {
             whole,
         );
     }
+    // `dependence` keeps row windows over MI and ranks.
+    let whole = accessor_is_the_step(
+        Dependence::new(dependence_cfg()).unwrap(),
+        2,
+        &Dependence::n_eff,
+    );
+    for (what, c) in dependence_windows() {
+        pair(
+            what,
+            accessor_is_the_step(Dependence::new(c).unwrap(), 2, &Dependence::n_eff),
+            whole,
+        );
+    }
 }
 
 /// 40 rows, the second target absent on every third row: each target's
@@ -319,6 +332,10 @@ fn every_per_target_weight_is_the_rows_that_carried_that_target() {
             "isotonic",
             each_target_weight_is_its_own(Isotonic::new(isotonic_cfg()).unwrap(), false),
         ),
+        (
+            "dependence",
+            each_target_weight_is_its_own(Dependence::new(dependence_cfg()).unwrap(), false),
+        ),
     ]
     .into_iter()
     .filter_map(|(k, kept)| kept.then_some(k))
@@ -326,8 +343,17 @@ fn every_per_target_weight_is_the_rows_that_carried_that_target() {
     assert_eq!(
         kept,
         [
-            "ewridge", "rls", "lasso", "kalman", "robust", "ftrl", "sgd", "pa", "holt",
-            "isotonic"
+            "ewridge",
+            "rls",
+            "lasso",
+            "kalman",
+            "robust",
+            "ftrl",
+            "sgd",
+            "pa",
+            "holt",
+            "isotonic",
+            "dependence",
         ],
         "the models that keep a weight per target"
     );

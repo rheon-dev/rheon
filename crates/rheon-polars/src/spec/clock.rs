@@ -107,6 +107,10 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
         "spectral",
         &["periods", "spacing", "window_size", "snapshot_every"],
     ),
+    (
+        "dependence",
+        &["window_size", "bin_warm_span", "rank_every"],
+    ),
 ];
 
 /// The parameters that are a rate *per* clock unit: a decay factor per unit
@@ -566,6 +570,11 @@ impl Spec {
             }
             ModelKind::DdSketch { window_size, .. } | ModelKind::Isotonic { window_size, .. } => {
                 put(&mut out, "window_size", window_size.as_ref());
+            }
+            ModelKind::Dependence(d) => {
+                put(&mut out, "window_size", d.window_size.as_ref());
+                put(&mut out, "bin_warm_span", d.bin_warm_span.as_ref());
+                put(&mut out, "rank_every", d.rank_every.as_ref());
             }
             // A lag written on a term's leg (`x@5m`) is a span of the clock
             // too, named by the table it is written in.

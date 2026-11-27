@@ -1263,6 +1263,57 @@ CASES: list[Case] = [
         "ddsketch",
         {**CLOSE, "targets": ["y"], "quantiles": [0.25, 0.75]},
     ),
+    # Nonlinear dependence: MI + Miller-Madow + all three rank measures under a
+    # row window, covering measures, bins, target_bins, bin_rule, bin_warm_rows,
+    # window_rows, rank_every_rows, and max_state_bytes.
+    Case(
+        "dependence",
+        "dependence",
+        {
+            **NODECAY,
+            "targets": ["y"],
+            "features": ["x0", "x1"],
+            "measures": ["mi", "mi_mm", "spearman", "kendall", "xi"],
+            "bins": 6,
+            "target_bins": 5,
+            "bin_rule": "fixed",
+            "bin_warm_rows": 12,
+            "window_rows": 40,
+            "rank_every_rows": 4,
+            "max_state_bytes": 1 << 20,
+            "emit_target_weight": True,
+        },
+    ),
+    # Clock window + bin_warm_span + rank_every + closed="both" under the second
+    # stream's keys.
+    Case(
+        "dependence2",
+        "dependence",
+        {
+            **NODECAY2,
+            "targets": ["y"],
+            "features": ["x0"],
+            "measures": ["mi", "spearman", "kendall", "xi"],
+            "bin_warm_span": 15.0,
+            "window_size": 30.0,
+            "closed": "both",
+            "rank_every": 5.0,
+        },
+    ),
+    # Fixed edges (bin_edges + target_bin_edges) under decay, with groups running
+    # to a close.
+    Case(
+        "dependence_close",
+        "dependence",
+        {
+            **CLOSE,
+            "targets": ["y"],
+            "features": ["x0"],
+            "measures": ["mi"],
+            "bin_edges": [[-1.0, 0.0, 1.0]],
+            "target_bin_edges": [[-1.0, 0.0, 1.0]],
+        },
+    ),
     # Moments on the clock: a lag as-of within a tolerance, a window of the
     # clock, each term's kind its own, the standard errors and a cap.
     Case(

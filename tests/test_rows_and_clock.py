@@ -157,6 +157,26 @@ ITEMS: dict[str, Item] = {
         start=False,
         spans=(10, 30),
     ),
+    "dependence.bin_warm_span": Item(
+        "dependence",
+        dict(targets=["y"], features=["x0", "x1"], bins=6, half_life=200.0),
+        lambda n: dict(bin_warm_rows=n),
+        lambda v: dict(bin_warm_span=v),
+        start=True,
+    ),
+    "dependence.rank_every": Item(
+        "dependence",
+        dict(
+            targets=["y"],
+            features=["x0", "x1"],
+            measures=["spearman", "xi"],
+            window_rows=30,
+        ),
+        lambda n: dict(rank_every_rows=n),
+        lambda v: dict(rank_every=v),
+        start=False,
+        spans=(2, 7),
+    ),
 }
 
 

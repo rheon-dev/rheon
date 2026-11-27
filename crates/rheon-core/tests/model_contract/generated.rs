@@ -2013,3 +2013,135 @@ fn isotonic_clock_window_reads_the_rows_inside_it() {
     assert!((s.n_eff - held).abs() < 1e-12, "{} against {held}", s.n_eff);
     assert_eq!(m.window_len(), 13);
 }
+
+/// Two features against two targets, plug-in MI with fixed edges at the
+/// probes' half-life so rule 8's decay recursion holds from the first row.
+fn dependence_cfg() -> DependenceCfg {
+    let edges = vec![-1.5, -0.5, 0.0, 0.5, 1.5];
+    DependenceCfg {
+        n_features: K,
+        n_targets: 2,
+        measures: vec![DependenceMeasure::Mi],
+        decay: Decay::Halflife(HALFLIFE),
+        min_weight: 0.0,
+        bins: 6,
+        target_bins: 6,
+        bin_rule: BinRule::Quantile,
+        bin_warm_rows: None,
+        bin_warm_span: None,
+        bin_edges: Some(vec![edges.clone(); K]),
+        target_bin_edges: Some(vec![edges; 2]),
+        window_rows: None,
+        window_clock: None,
+        closed: WindowClosed::Right,
+        rank_every_rows: None,
+        rank_every_clock: None,
+        max_state_bytes: None,
+    }
+}
+
+/// Windowed forms of `dependence` whose `n_eff()` accessor matches the
+/// step's weight on every row: MI-only and full MI + ranks under `window_rows`.
+fn dependence_windows() -> Vec<(&'static str, DependenceCfg)> {
+    vec![
+        (
+            "dependence, mi window_rows",
+            DependenceCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                window_rows: Some(12),
+                ..dependence_cfg()
+            },
+        ),
+        (
+            "dependence, ranks window_rows",
+            DependenceCfg {
+                measures: vec![
+                    DependenceMeasure::Mi,
+                    DependenceMeasure::Spearman,
+                    DependenceMeasure::Kendall,
+                    DependenceMeasure::Xi,
+                ],
+                decay: Decay::Halflife(f64::INFINITY),
+                window_rows: Some(12),
+                rank_every_rows: Some(2),
+                ..dependence_cfg()
+            },
+        ),
+    ]
+}
+
+fn dependence_clock_cfg() -> DependenceCfg {
+    DependenceCfg {
+        measures: vec![
+            DependenceMeasure::Mi,
+            DependenceMeasure::Kendall,
+            DependenceMeasure::Spearman,
+            DependenceMeasure::Xi,
+        ],
+        decay: Decay::Halflife(f64::INFINITY),
+        window_clock: Some(12.0),
+        closed: WindowClosed::Both,
+        rank_every_clock: Some(3.0),
+        ..dependence_cfg()
+    }
+}
+
+#[test]
+fn dependence() {
+    let m = Dependence::new(dependence_cfg()).unwrap();
+    assert_eq!(m.n_features(), K);
+    assert_eq!(m.n_targets(), 2);
+    assert_eq!(m.n_outputs(), 2 * K);
+    let r = probe_with(m, 2, Some(&Dependence::n_eff));
+    check(&r, "dependence", 2, K);
+    for (what, c) in dependence_windows() {
+        let n_out = c.n_targets * c.measures.len() * c.n_features;
+        let r = probe_windowed(Dependence::new(c).unwrap(), 2, Some(&Dependence::n_eff));
+        assert!(r.roundtrips, "{what}");
+        assert_eq!(r.pred_len, n_out, "{what}");
+    }
+}
+
+#[test]
+fn dependence_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Dependence::new(dependence_cfg()).unwrap(), 2, false);
+    // Learned quantile bin edges warming up over 12 rows.
+    let warming = DependenceCfg {
+        bin_edges: None,
+        target_bin_edges: None,
+        bin_warm_rows: Some(12),
+        ..dependence_cfg()
+    };
+    predict_is_the_step_without_the_step(
+        move || Dependence::new(warming.clone()).unwrap(),
+        2,
+        false,
+    );
+    for (_, c) in dependence_windows() {
+        predict_is_the_step_without_the_step(|| Dependence::new(c.clone()).unwrap(), 2, false);
+    }
+    predict_is_the_step_without_the_step(
+        || Dependence::new(dependence_clock_cfg()).unwrap(),
+        2,
+        false,
+    );
+}
+
+#[test]
+fn dependence_clock_window_reads_the_rows_inside_it() {
+    let mut m = Dependence::new(dependence_clock_cfg()).unwrap();
+    for i in 0..13 {
+        let x = [i as f64 * 0.1, -(i as f64) * 0.05];
+        m.step(
+            &x,
+            &[Some(x[0] * 2.0), Some(x[1] + 0.3)],
+            if i == 0 { 0.0 } else { 1.0 },
+            1.0,
+        );
+    }
+    // Rows 0..=12 held: row 0 is exactly 12 old, kept under `Both`.
+    assert!((m.n_eff() - 13.0).abs() < 1e-12);
+    let s = m.step(&[1.3, -0.65], &[Some(2.6), Some(-0.35)], 1.0, 1.0);
+    // At t = 13, row 0 has age 13 > 12 and leaves before the read, leaving 12 rows.
+    assert!((s.n_eff - 12.0).abs() < 1e-12, "{} against 12.0", s.n_eff);
+}

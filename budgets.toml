@@ -301,6 +301,9 @@ budget = 10206026
 what = "vector_ar, a VAR(2) of three series with a Granger test, solving every row: AnyModel::step_into, into one kept Step, the ring, a rank-one update of a 10 x 10 Gram, the fit's solve and one Cholesky factor read for the test a row; its budget is CI's first count"
 budget = 26482569
 
+[instructions.dependence]
+what = "dependence, ten features against one target over a window of 200 rows with 16x16 MI, Miller-Madow, incremental Kendall and periodic Spearman and xi every 10 rows: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+
 [instructions.spectral]
 what = "spectral, sixteen periods on an even clock: AnyModel::step_into, into one kept Step, a rotation and an add a period a row; its budget is CI's first count"
 budget = 3196883
@@ -1979,6 +1982,29 @@ weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 zscore_y = { budget = 8.125 }
 zscore_z = { budget = 8.125 }
+
+[memory.dependence]
+kendall_x0_y = { budget = 8.125 }
+kendall_x0_z = { budget = 8.125 }
+kendall_x1_y = { budget = 8.125 }
+kendall_x1_z = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+mi_x0_y = { budget = 8.125 }
+mi_x0_z = { budget = 8.125 }
+mi_x1_y = { budget = 8.125 }
+mi_x1_z = { budget = 8.125 }
+scored_clock = { budget = 8.125 }
+settled_frac = { budget = 8.125 }
+spearman_x0_y = { budget = 8.125 }
+spearman_x0_z = { budget = 8.125 }
+spearman_x1_y = { budget = 8.125 }
+spearman_x1_z = { budget = 8.125 }
+weight_sum = { budget = 8.125 }
+withheld_reason = { budget = 1.125 }
+xi_x0_y = { budget = 8.125 }
+xi_x0_z = { budget = 8.125 }
+xi_x1_y = { budget = 8.125 }
+xi_x1_z = { budget = 8.125 }
 
 # --- raises and sign-offs -------------------------------------------------------
 

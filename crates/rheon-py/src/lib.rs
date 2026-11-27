@@ -912,6 +912,21 @@ impl PyModelBank {
             .map_err(PyValueError::new_err)
     }
 
+    /// The nonlinear dependence table of a `dependence` spec (`Bank::dependence`),
+    /// one row per (group, instance, feature, target).
+    #[pyo3(signature = (spec, group=None))]
+    fn dependence(
+        slf: &Bound<'_, Self>,
+        spec: usize,
+        group: Option<Vec<Option<String>>>,
+    ) -> PyResult<PyDataFrame> {
+        let this = slf.try_borrow().map_err(|_| busy("dependence"))?;
+        this.inner
+            .dependence(spec, keys(group).as_deref())
+            .map(PyDataFrame)
+            .map_err(PyValueError::new_err)
+    }
+
     /// A `kalman` spec's last observations, smoothed with every row so far
     /// (`Bank::smoothed_tail`): one row per group, instance, target and
     /// observation whose lag no row has yet completed.

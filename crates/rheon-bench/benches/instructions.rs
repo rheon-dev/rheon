@@ -124,6 +124,7 @@ const FAKETIME_ENV: [&str; 4] = [
 #[bench::ar(args = ("ar"), setup = model_setup)]
 #[bench::spectral(args = ("spectral"), setup = model_setup)]
 #[bench::vector_ar(args = ("vector_ar"), setup = model_setup)]
+#[bench::dependence(args = ("dependence"), setup = model_setup)]
 fn model(mut run: ModelRun) -> ModelRun {
     black_box(rheon_budget_model_rows(black_box(&mut run)));
     run

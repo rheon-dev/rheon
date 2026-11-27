@@ -1193,6 +1193,8 @@ STATE_READS: dict[str, frozenset[str]] = {
     "ddsketch": frozenset({"q0.05_y", "q0.25_y", "q0.95_y", "es0.05_y", "es0.25_y", "es0.95_y"}),
     # Its power reads the state alone.
     "spectral": frozenset({"power_y_p0", "power_y_p1"}),
+    # Its dependence measures read the state alone.
+    "dependence": frozenset({"mi_x0_y", "mi_x1_y"}),
     "hmm": frozenset(
         {"filtered_state0", "filtered_state1", "predicted_state0", "predicted_state1", "state"}
     ),
@@ -1549,6 +1551,7 @@ DOUBLED: dict[str, dict] = {
     # The same rows pooled in the same order, refit in full on each.
     "isotonic": {},
     "spectral": {},
+    "dependence": {},
     "glm": {},
     # Its sums take each return in the order of the rows learned: a lesson
     # late steps them the same, from the same rows.

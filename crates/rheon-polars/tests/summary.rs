@@ -1211,6 +1211,14 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["x0"]"#,
             true,
         ),
+        // Binned MI + windowed rank correlations: tables, ring, and counters.
+        (
+            "dependence",
+            r#"{"type": "dependence", "measures": ["mi", "spearman", "kendall", "xi"], "bins": 6, "bin_warm_rows": 12, "window_rows": 30}"#,
+            r#"["y"]"#,
+            r#"["x0", "x1"]"#,
+            false,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

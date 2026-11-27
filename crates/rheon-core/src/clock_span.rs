@@ -97,6 +97,11 @@ impl Place {
         self.next = Some(stamp);
     }
 
+    /// Drop any handed stamp without advancing the clock (used on atomic cap refusal).
+    pub fn discard_next(&mut self) {
+        self.next = None;
+    }
+
     /// The place of a row `d_clock` after the last, read and not taken:
     /// the stamp handed, or the summed clock.
     pub fn peek(&self, d_clock: f64) -> Stamp {

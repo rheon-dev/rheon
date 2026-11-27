@@ -67,6 +67,12 @@ impl Since {
         self.next_on_rows = false;
     }
 
+    /// Drop any handed stamp without advancing the clock (used on atomic cap refusal).
+    pub(crate) fn discard_next(&mut self) {
+        self.next = None;
+        self.next_on_rows = false;
+    }
+
     /// [`Self::stamp_next`] on the row clock, a stream with no clock column,
     /// where each row is one clock unit and the first row is 1: the model's
     /// start is a row before its first row, as `coef_every` counts it

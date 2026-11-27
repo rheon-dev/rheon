@@ -83,6 +83,7 @@ mod dcc;
 pub mod ddsketch;
 mod ddsketch_model;
 mod deco;
+mod dependence;
 mod drift;
 mod ewclass;
 mod ewcov;
@@ -188,6 +189,11 @@ pub use ddsketch::{
 };
 pub use ddsketch_model::{DdSketchModel, DdSketchModelCfg};
 pub use deco::{Deco, DecoCfg, DecoDynamics};
+pub use dependence::{
+    DEFAULT_BIN_WARM_ROWS as DEPENDENCE_DEFAULT_BIN_WARM_ROWS,
+    DEFAULT_BINS as DEPENDENCE_DEFAULT_BINS, DEPENDENCE_MAX_BINS, DEPENDENCE_NO_BIN, Dependence,
+    DependenceCfg, DependenceMeasure, DependencePair,
+};
 pub use drift::{
     Adwin, AdwinCfg, AdwinRange, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg,
     PageHinkley, ks_critical_h, ks_equal_tail,

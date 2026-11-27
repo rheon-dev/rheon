@@ -551,6 +551,24 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "dependence_decayed",
+        r#"{"type": "dependence", "measures": ["mi"], "bins": 6, "bin_warm_rows": 15}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "dependence_rows",
+        r#"{"type": "dependence", "measures": ["mi", "mi_mm", "spearman", "kendall", "xi"], "bins": 6, "bin_warm_rows": 12, "window_rows": 30, "rank_every_rows": 3}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"]"#,
+        UNTIMED,
+    ),
+    (
+        "dependence_clock",
+        r#"{"type": "dependence", "measures": ["mi", "spearman", "kendall", "xi"], "bins": 6, "bin_warm_rows": 12, "window_size": @30, "closed": "both", "rank_every": @5}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"]"#,
+        ALL,
+    ),
+    (
         "ddsketch_clock",
         r#"{"type": "ddsketch", "quantiles": [0.25, 0.75], "window_size": @30, "closed": "both"}"#,
         r#""targets": ["y", "x0"], "features": []"#,
