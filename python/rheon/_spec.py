@@ -1209,7 +1209,6 @@ def _common(
     held_overflow: Literal["refuse", "drop_oldest"] | None = None,
     group: str | None = None,
     group_close: Literal["monotone", "session"] | None = None,
-    max_state_bytes: int | None = None,
 ) -> dict[str, Any]:
     written: list[str | Target | FormulaTarget] = [
         formula_target(f"spec {quoted(name)}", t)

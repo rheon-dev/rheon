@@ -124,4 +124,3 @@ class CommonKwargs(TypedDict, total=False):
     held_overflow: Literal["refuse", "drop_oldest"] | None
     group: str | None
     group_close: Literal["monotone", "session"] | None
-    max_state_bytes: int | None

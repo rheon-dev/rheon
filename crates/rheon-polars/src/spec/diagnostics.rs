@@ -87,6 +87,7 @@ impl ModelKind {
             ModelKind::HoeffdingTreeClassifier(t) => t.max_state_bytes,
             ModelKind::HoeffdingTreeRegressor(t) => t.max_state_bytes,
             ModelKind::HalfSpaceTrees(h) => h.max_state_bytes,
+            ModelKind::Bandit(b) => b.max_state_bytes,
             ModelKind::RandomCutForest(r) => r.max_state_bytes,
             _ => None,
         }
@@ -123,6 +124,7 @@ impl ModelKind {
                 | ModelKind::HoeffdingTreeClassifier(_)
                 | ModelKind::HoeffdingTreeRegressor(_)
                 | ModelKind::HalfSpaceTrees(_)
+                | ModelKind::Bandit(_)
                 | ModelKind::RandomCutForest(_)
         )
     }

@@ -6388,383 +6388,573 @@ dataset = ""
 [case."second_opinion_garch.arch_grids.egarch_985_d"]
 ideal = 0.0
 n = 50
+worst = 0.298821
+p95 = 0.0769844
 
 [case."second_opinion_garch.arch_grids.egarch_985_excess_over_t"]
 ideal = 0.0
 n = 50
+worst = 2.6614
+p95 = 1.29129
 
 [case."second_opinion_garch.arch_grids.egarch_985_gap_se"]
 ideal = 0.0
 n = 50
+worst = 0.66934
+p95 = 0.351258
 
 [case."second_opinion_garch.arch_grids.egarch_d"]
 ideal = 0.0
 n = 50
+worst = 0.345727
+p95 = 0.101001
 
 [case."second_opinion_garch.arch_grids.egarch_d_100k"]
 ideal = 0.0
 n = 50
+worst = 0.130349
+p95 = 0.0354832
 
 [case."second_opinion_garch.arch_grids.egarch_excess_over_t"]
 ideal = 0.0
 n = 50
+worst = 1.45229
+p95 = 1.25892
 
 [case."second_opinion_garch.arch_grids.egarch_gap_se"]
 ideal = 0.0
 n = 50
+worst = 0.760399
+p95 = 0.408148
 
 [case."second_opinion_garch.arch_grids.egarch_gap_se_100k"]
 ideal = 0.0
 n = 50
+worst = 0.232739
+p95 = 0.15808
 
 [case."second_opinion_garch.arch_grids.figarch_d"]
 ideal = 0.0
 n = 50
+worst = 1.06728
+p95 = 0.488573
 
 [case."second_opinion_garch.arch_grids.figarch_d_100k"]
 ideal = 0.0
 n = 50
+worst = 0.449163
+p95 = 0.27039
 
 [case."second_opinion_garch.arch_grids.figarch_excess_over_t"]
 ideal = 0.0
 n = 50
+worst = 2.00202
+p95 = 1.42992
 
 [case."second_opinion_garch.arch_grids.figarch_gap_se"]
 ideal = 0.0
 n = 50
+worst = 1.01058
+p95 = 0.858759
 
 [case."second_opinion_garch.arch_grids.figarch_gap_se_100k"]
 ideal = 0.0
 n = 50
+worst = 0.495303
+p95 = 0.423927
 
 [case."second_opinion_garch.arch_grids.garch_d"]
 ideal = 0.0
 n = 50
+worst = 0.731992
+p95 = 0.0895603
 
 [case."second_opinion_garch.arch_grids.garch_d_100k"]
 ideal = 0.0
 n = 50
+worst = 0.18352
+p95 = 0.0566315
 
 [case."second_opinion_garch.arch_grids.garch_excess_over_t"]
 ideal = 0.0
 n = 50
+worst = 1.6563
+p95 = 1.61691
 
 [case."second_opinion_garch.arch_grids.garch_gap_se"]
 ideal = 0.0
 n = 50
+worst = 0.922582
+p95 = 0.369009
 
 [case."second_opinion_garch.arch_grids.garch_gap_se_100k"]
 ideal = 0.0
 n = 50
+worst = 0.42828
+p95 = 0.280345
 
 [case."second_opinion_garch.arch_grids.garch_skewt_d"]
 ideal = 0.0
 n = 50
+worst = 0.546037
+p95 = 0.30566
 
 [case."second_opinion_garch.arch_grids.garch_skewt_d_100k"]
 ideal = 0.0
 n = 50
+worst = 0.700236
+p95 = 0.227683
 
 [case."second_opinion_garch.arch_grids.garch_skewt_excess_over_t"]
 ideal = 0.0
 n = 50
+worst = 1.38811
+p95 = 1.25855
 
 [case."second_opinion_garch.arch_grids.garch_skewt_gap_se"]
 ideal = 0.0
 n = 50
+worst = 0.717478
+p95 = 0.512353
 
 [case."second_opinion_garch.arch_grids.garch_skewt_gap_se_100k"]
 ideal = 0.0
 n = 50
+worst = 0.505533
+p95 = 0.197105
 
 [case."second_opinion_garch.arch_grids.garch_t_d"]
 ideal = 0.0
 n = 50
+worst = 0.569093
+p95 = 0.49575
 
 [case."second_opinion_garch.arch_grids.garch_t_d_100k"]
 ideal = 0.0
 n = 50
+worst = 0.662714
+p95 = 0.23697
 
 [case."second_opinion_garch.arch_grids.garch_t_excess_over_t"]
 ideal = 0.0
 n = 50
+worst = 1.84444
+p95 = 1.57793
 
 [case."second_opinion_garch.arch_grids.garch_t_gap_se"]
 ideal = 0.0
 n = 50
+worst = 0.82251
+p95 = 0.67897
 
 [case."second_opinion_garch.arch_grids.garch_t_gap_se_100k"]
 ideal = 0.0
 n = 50
+worst = 0.427457
+p95 = 0.333221
 
 [case."second_opinion_garch.arch_grids.gjr_d"]
 ideal = 0.0
 n = 50
+worst = 0.162602
+p95 = 0.132657
 
 [case."second_opinion_garch.arch_grids.gjr_d_100k"]
 ideal = 0.0
 n = 50
+worst = 0.23522
+p95 = 0.0290563
 
 [case."second_opinion_garch.arch_grids.gjr_excess_over_t"]
 ideal = 0.0
 n = 50
+worst = 1.79348
+p95 = 1.67573
 
 [case."second_opinion_garch.arch_grids.gjr_gap_se"]
 ideal = 0.0
 n = 50
+worst = 0.478396
+p95 = 0.333421
 
 [case."second_opinion_garch.arch_grids.gjr_gap_se_100k"]
 ideal = 0.0
 n = 50
+worst = 0.437983
+p95 = 0.162554
 
 [case."second_opinion_garch.arch_grids.gjr_t_d"]
 ideal = 0.0
 n = 50
+worst = 0.814222
+p95 = 0.460961
 
 [case."second_opinion_garch.arch_grids.gjr_t_d_100k"]
 ideal = 0.0
 n = 50
+worst = 0.295084
+p95 = 0.157148
 
 [case."second_opinion_garch.arch_grids.gjr_t_excess_over_t"]
 ideal = 0.0
 n = 50
+worst = 1.547
+p95 = 1.44379
 
 [case."second_opinion_garch.arch_grids.gjr_t_gap_se"]
 ideal = 0.0
 n = 50
+worst = 0.64028
+p95 = 0.478769
 
 [case."second_opinion_garch.arch_grids.gjr_t_gap_se_100k"]
 ideal = 0.0
 n = 50
+worst = 0.251188
+p95 = 0.228291
 
 [case."second_opinion_garch.arch_grids.start_hi_egarch_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 4.54747e-13
+p95 = 2.27374e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_egarch_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 4.54747e-13
+p95 = 4.54747e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_egarch_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 4.54747e-13
+p95 = 2.27374e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_egarch_985_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 8.65516e-08
+p95 = -2.27374e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_egarch_985_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 4.54747e-13
+p95 = 4.54747e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_egarch_985_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 5.99518e-07
+p95 = 1.13687e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_figarch_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.81899e-12
+p95 = 9.09495e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_garch_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 2.27374e-13
+p95 = 2.27374e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_garch_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 4.54747e-13
+p95 = 4.54747e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_garch_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 2.27374e-13
+p95 = 2.27374e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_garch_skewt_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 6.82121e-13
+p95 = 6.82121e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_garch_skewt_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 2.27374e-12
+p95 = 9.09495e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_garch_skewt_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 4.21642e-09
+p95 = 3.41061e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_garch_t_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.36424e-12
+p95 = 6.82121e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_garch_t_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 9.09495e-13
+p95 = -9.09495e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_garch_t_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 8.592e-09
+p95 = 6.82121e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_gjr_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = -4.54747e-13
+p95 = 2.27374e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_gjr_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 4.54747e-13
+p95 = 4.54747e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_gjr_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = -4.54747e-13
+p95 = 1.13687e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_gjr_t_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 8.34461e-10
+p95 = 4.54747e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_gjr_t_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.81899e-12
+p95 = 9.09495e-13
 
 [case."second_opinion_garch.arch_grids.start_hi_gjr_t_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 4.43379e-12
+p95 = 3.41061e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_egarch_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 4.54747e-13
+p95 = 2.27374e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_egarch_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 4.54747e-13
+p95 = 4.54747e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_egarch_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.13687e-13
+p95 = 0.0
 
 [case."second_opinion_garch.arch_grids.start_lo_garch_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 2.27374e-13
+p95 = 2.27374e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_garch_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 9.09495e-13
+p95 = 4.54747e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_garch_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.45986
+p95 = 2.27374e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_garch_skewt_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.13687e-12
+p95 = 6.82121e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_garch_skewt_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.81899e-12
+p95 = 1.36424e-12
 
 [case."second_opinion_garch.arch_grids.start_lo_garch_skewt_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.13687e-12
+p95 = 6.82121e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_garch_t_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.13687e-12
+p95 = 9.09495e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_garch_t_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.81899e-12
+p95 = 9.09495e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_garch_t_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 9.09495e-13
+p95 = 4.54747e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_gjr_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.13687e-11
+p95 = 2.27374e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_gjr_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 4.54747e-13
+p95 = 4.54747e-13
 
 [case."second_opinion_garch.arch_grids.start_lo_gjr_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 2.07592e-10
+p95 = 2.88765e-11
 
 [case."second_opinion_garch.arch_grids.start_lo_gjr_t_1000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 9.54287e-10
+p95 = 1.13687e-12
 
 [case."second_opinion_garch.arch_grids.start_lo_gjr_t_2000_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 1.23691e-10
+p95 = 1.36424e-12
 
 [case."second_opinion_garch.arch_grids.start_lo_gjr_t_500_short_in_set"]
 ideal = 0.0
 n = 50
+worst = 0.491158
+p95 = 1.16108e-09
 
 [case."second_opinion_garch.arch_grids.targeted_d"]
 ideal = 0.0
 n = 50
+worst = 4.51416
+p95 = 3.8795
 
 [case."second_opinion_garch.arch_grids.targeted_excess_over_refit"]
 ideal = 0.0
 n = 50
+worst = 4.78158
+p95 = 2.84612
 
 [case."second_opinion_garch.arch_grids.targeted_gap_se"]
 ideal = 0.0
 n = 50
+worst = 1.64117
+p95 = 1.134
 
 [case."second_opinion_garch.arch_grids.wait_clear_share"]
 ideal = 1.0
 n = 1
+worst = 0.9026316
+p95 = 0.9026316
 
 [case."second_opinion_garch.arch_grids.wait_differs_from_arch"]
 ideal = 0.0
 n = 1
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm.glum_twenty.gamma_100000_to_glum"]
 ideal = 0.0
 n = 5
+worst = 0.155377
+p95 = 0.155377
 
 [case."second_opinion_glm.glum_twenty.gamma_100000_to_statsmodels"]
 ideal = 0.0
 n = 5
+worst = 0.153133
+p95 = 0.153133
 
 [case."second_opinion_glm.glum_twenty.gamma_10000_to_glum"]
 ideal = 0.0
 n = 5
+worst = 0.313427
+p95 = 0.313427
 
 [case."second_opinion_glm.glum_twenty.gamma_10000_to_statsmodels"]
 ideal = 0.0
 n = 5
+worst = 0.306457
+p95 = 0.306457
 
 [case."second_opinion_glm.glum_twenty.poisson_100000_to_glum"]
 ideal = 0.0
 n = 5
+worst = 0.164562
+p95 = 0.164562
 
 [case."second_opinion_glm.glum_twenty.poisson_100000_to_statsmodels"]
 ideal = 0.0
 n = 5
+worst = 0.16379
+p95 = 0.16379
 
 [case."second_opinion_glm.glum_twenty.poisson_10000_to_glum"]
 ideal = 0.0
 n = 5
+worst = 0.395275
+p95 = 0.395275
 
 [case."second_opinion_glm.glum_twenty.poisson_10000_to_statsmodels"]
 ideal = 0.0
 n = 5
+worst = 0.392395
+p95 = 0.392395
 
 [case."second_opinion_glm.glum_twenty.tweedie_100000_to_glum"]
 ideal = 0.0
 n = 5
+worst = 0.26391
+p95 = 0.26391
 
 [case."second_opinion_glm.glum_twenty.tweedie_100000_to_statsmodels"]
 ideal = 0.0
 n = 5
+worst = 0.263075
+p95 = 0.263075
 
 [case."second_opinion_glm.glum_twenty.tweedie_10000_to_glum"]
 ideal = 0.0
 n = 5
+worst = 0.536886
+p95 = 0.536886
 
 [case."second_opinion_glm.glum_twenty.tweedie_10000_to_statsmodels"]
 ideal = 0.0
 n = 5
+worst = 0.534478
+p95 = 0.534478
 
 [group."second_opinion_glm_canonical.canonical_links"]
 tests = [
@@ -6791,146 +6981,210 @@ dataset = ""
 [case."second_opinion_glm_canonical.canonical_links.base"]
 ideal = 0.0
 n = 20
+worst = 0.286847
+p95 = 0.265848
 
 [case."second_opinion_glm_canonical.canonical_links.base_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm_canonical.canonical_links.covariate_order"]
 ideal = 0.0
 n = 20
+worst = 0.543584
+p95 = 0.343522
 
 [case."second_opinion_glm_canonical.canonical_links.covariate_order_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm_canonical.canonical_links.eta_to_the_edge"]
 ideal = 0.0
 n = 20
+worst = 0.863096
+p95 = 0.282589
 
 [case."second_opinion_glm_canonical.canonical_links.eta_to_the_edge_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm_canonical.canonical_links.first_y_huge"]
 ideal = 0.0
 n = 20
+worst = 1.17866
+p95 = 1.16369
 
 [case."second_opinion_glm_canonical.canonical_links.first_y_huge_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 16.0
+p95 = 13.0
 
 [case."second_opinion_glm_canonical.canonical_links.first_y_tiny"]
 ideal = 0.0
 n = 20
+worst = 0.274412
+p95 = 0.262531
 
 [case."second_opinion_glm_canonical.canonical_links.first_y_tiny_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm_canonical.canonical_links.half_life_300"]
 ideal = 0.0
 n = 20
+worst = 0.109844
+p95 = 0.0874313
 
 [case."second_opinion_glm_canonical.canonical_links.half_life_300_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm_canonical.canonical_links.heavy_noise"]
 ideal = 0.0
 n = 20
+worst = 0.376883
+p95 = 0.302341
 
 [case."second_opinion_glm_canonical.canonical_links.heavy_noise_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm_canonical.canonical_links.log_linear_truth"]
 ideal = 0.0
 n = 20
+worst = 0.339903
+p95 = 0.234729
 
 [case."second_opinion_glm_canonical.canonical_links.log_linear_truth_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm_canonical.canonical_links.outlier_at_row_1500"]
 ideal = 0.0
 n = 20
+worst = 6.21617
+p95 = 6.14881
 
 [case."second_opinion_glm_canonical.canonical_links.outlier_at_row_1500_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 11.0
+p95 = 11.0
 
 [case."second_opinion_glm_canonical.canonical_links.outlier_at_row_30"]
 ideal = 0.0
 n = 20
+worst = 4.56941
+p95 = 2.67746
 
 [case."second_opinion_glm_canonical.canonical_links.outlier_at_row_30_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 9.0
+p95 = 4.0
 
 [case."second_opinion_glm_canonical.canonical_links.rare_category_near_0"]
 ideal = 0.0
 n = 20
+worst = 0.47693
+p95 = 0.452334
 
 [case."second_opinion_glm_canonical.canonical_links.rare_category_near_0_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm_canonical.canonical_links.target_in_other_units"]
 ideal = 0.0
 n = 20
+worst = 0.292221
+p95 = 0.256169
 
 [case."second_opinion_glm_canonical.canonical_links.target_in_other_units_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm_canonical.canonical_links.tweedie_1_5_zeros"]
 ideal = 0.0
 n = 20
+worst = 0.337516
+p95 = 0.284065
 
 [case."second_opinion_glm_canonical.canonical_links.tweedie_1_5_zeros_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm_canonical.canonical_links.tweedie_3"]
 ideal = 0.0
 n = 20
+worst = 0.369847
+p95 = 0.332522
 
 [case."second_opinion_glm_canonical.canonical_links.tweedie_3_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm_canonical.canonical_links.twenty_features"]
 ideal = 0.0
 n = 20
+worst = 0.845969
+p95 = 0.825419
 
 [case."second_opinion_glm_canonical.canonical_links.twenty_features_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 1.0
+p95 = 1.0
 
 [case."second_opinion_glm_canonical.canonical_links.weights_with_zeros"]
 ideal = 0.0
 n = 20
+worst = 0.324995
+p95 = 0.242906
 
 [case."second_opinion_glm_canonical.canonical_links.weights_with_zeros_nulls"]
 ideal = 0.0
 n = 20
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [group."second_opinion_glm.log_link_guard"]
 tests = [
@@ -6948,65 +7202,93 @@ dataset = ""
 [case."second_opinion_glm.log_link_guard.gamma"]
 ideal = 0.0
 n = 100
+worst = 3.34477
+p95 = 1.10503
 
 [case."second_opinion_glm.log_link_guard.gamma_runaways"]
 ideal = 0.0
 n = 100
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm.log_link_guard.poisson"]
 ideal = 0.0
 n = 100
+worst = 5.52919
+p95 = 0.850297
 
 [case."second_opinion_glm.log_link_guard.poisson_runaways"]
 ideal = 0.0
 n = 100
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm.log_link_guard.tweedie_1_2"]
 ideal = 0.0
 n = 100
+worst = 1.35849
+p95 = 0.871524
 
 [case."second_opinion_glm.log_link_guard.tweedie_1_2_runaways"]
 ideal = 0.0
 n = 100
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm.log_link_guard.tweedie_1_5"]
 ideal = 0.0
 n = 100
+worst = 1.60708
+p95 = 1.10177
 
 [case."second_opinion_glm.log_link_guard.tweedie_1_5_runaways"]
 ideal = 0.0
 n = 100
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm.log_link_guard.tweedie_1_8"]
 ideal = 0.0
 n = 100
+worst = 1.54239
+p95 = 0.913685
 
 [case."second_opinion_glm.log_link_guard.tweedie_1_8_runaways"]
 ideal = 0.0
 n = 100
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm.log_link_guard.tweedie_2_5"]
 ideal = 0.0
 n = 100
+worst = 4.8818
+p95 = 2.58447
 
 [case."second_opinion_glm.log_link_guard.tweedie_2_5_runaways"]
 ideal = 0.0
 n = 100
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [case."second_opinion_glm.log_link_guard.tweedie_3_0"]
 ideal = 0.0
 n = 100
+worst = 14.3372
+p95 = 5.82738
 
 [case."second_opinion_glm.log_link_guard.tweedie_3_0_runaways"]
 ideal = 0.0
 n = 100
 tolerance = 0.0
+worst = 0.0
+p95 = 0.0
 
 [group."isotonic.isotonic"]
 tests = [
@@ -7025,36 +7307,50 @@ dataset = ""
 ideal = 0.0
 n = 50
 floor = 5e-15
+worst = 0.0
+p95 = 0.0
 
 [case."isotonic.isotonic.decayed_window"]
 ideal = 0.0
 n = 50
 floor = 1e-14
+worst = 6.66134e-16
+p95 = 6.66134e-16
 
 [case."isotonic.isotonic.decreasing_clip"]
 ideal = 0.0
 n = 50
 floor = 5e-15
+worst = 0.0
+p95 = 0.0
 
 [case."isotonic.isotonic.half_life_ties"]
 ideal = 0.0
 n = 50
 floor = 1e-14
+worst = 6.66134e-16
+p95 = 6.66134e-16
 
 [case."isotonic.isotonic.plain"]
 ideal = 0.0
 n = 50
 floor = 5e-15
+worst = 0.0
+p95 = 0.0
 
 [case."isotonic.isotonic.window_rows"]
 ideal = 0.0
 n = 50
 floor = 5e-15
+worst = 0.0
+p95 = 0.0
 
 [case."isotonic.isotonic.window_size"]
 ideal = 0.0
 n = 50
 floor = 5e-15
+worst = 0.0
+p95 = 0.0
 
 [group."audit_hll.audit_hll_oracle"]
 tests = [
@@ -7067,25 +7363,35 @@ dataset = ""
 ideal = 0.0
 n = 50
 floor = 1e-12
+worst = 0.0
+p95 = 0.0
 
 [case."audit_hll.audit_hll_oracle.plain_p12_truth_rel_err"]
 ideal = 0.0
 n = 50
+worst = 0.0348241
+p95 = 0.0212242
 
 [case."audit_hll.audit_hll_oracle.plain_p8_rel_gap"]
 ideal = 0.0
 n = 50
 floor = 1e-12
+worst = 0.0
+p95 = 0.0
 
 [case."audit_hll.audit_hll_oracle.sliding_clock_p12_rel_gap"]
 ideal = 0.0
 n = 50
 floor = 1e-12
+worst = 0.0
+p95 = 0.0
 
 [case."audit_hll.audit_hll_oracle.sliding_rows_p12_rel_gap"]
 ideal = 0.0
 n = 50
 floor = 1e-12
+worst = 0.0
+p95 = 0.0
 
 [group."kalman_nonlinear.filterpy_grid"]
 tests = [

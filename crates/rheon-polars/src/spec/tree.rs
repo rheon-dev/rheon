@@ -142,7 +142,7 @@ pub fn hoeffding_tree_classifier_cfg(spec: &Spec) -> Result<HoeffdingTreeClassif
         merit_preprune: t.merit_preprune.unwrap_or(d.merit_preprune),
         max_depth: t.max_depth,
         min_weight: spec.min_periods_or_default(),
-        max_state_bytes: t.max_state_bytes,
+        max_state_bytes: spec.model_max_state_bytes(t.max_state_bytes),
     };
     cfg.validate()?;
     Ok(cfg)
@@ -171,7 +171,7 @@ pub fn hoeffding_tree_regressor_cfg(spec: &Spec) -> Result<HoeffdingTreeRegresso
         merit_preprune: t.merit_preprune.unwrap_or(d.merit_preprune),
         max_depth: t.max_depth,
         min_weight: spec.min_periods_or_default(),
-        max_state_bytes: t.max_state_bytes,
+        max_state_bytes: spec.model_max_state_bytes(t.max_state_bytes),
     };
     cfg.validate()?;
     Ok(cfg)
@@ -270,7 +270,7 @@ pub(super) fn validate_hoeffding_tree_classifier(
             merit_preprune: t.merit_preprune.unwrap_or(d.merit_preprune),
             max_depth: t.max_depth,
             min_weight: spec.min_periods_or_default(),
-            max_state_bytes: t.max_state_bytes,
+            max_state_bytes: spec.model_max_state_bytes(t.max_state_bytes),
         };
         no.take(
             cfg.validate()

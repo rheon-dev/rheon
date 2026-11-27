@@ -26,7 +26,6 @@ def bandit(
     epsilon: float | None = None,
     l2: float = 1.0,
     seed: int = 0,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Disjoint linear contextual bandit over a logged arm and reward stream.
@@ -234,7 +233,6 @@ def bandit(
         "epsilon": epsilon,
         "l2": l2,
         "seed": seed,
-        "max_state_bytes": max_state_bytes,
     }
     skipped = _SKIPPED_WHEN_ABSENT["bandit"]
     model = {k: v for k, v in model.items() if v is not None or k not in skipped}

@@ -90,7 +90,6 @@ def dependence(
     closed: Literal["right", "both"] = "right",
     rank_every: float | Duration | None = None,
     rank_every_rows: int | None = None,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Online nonlinear dependence between every feature and target pair.
@@ -296,7 +295,6 @@ def dependence(
         "closed": None if closed == "right" else closed,
         "rank_every": rank_every,
         "rank_every_rows": rank_every_rows,
-        "max_state_bytes": max_state_bytes,
     }
     model = {k: v for k, v in model.items() if v is not None}
     return _common(name, model, targets=targets, features=feat_list, **common)

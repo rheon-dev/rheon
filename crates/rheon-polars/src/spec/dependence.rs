@@ -217,7 +217,7 @@ pub fn dependence_cfg(
         closed: d.closed.edge(),
         rank_every_rows: d.rank_every_rows,
         rank_every_clock: d.rank_every.as_ref().map(Span::value),
-        max_state_bytes: d.max_state_bytes,
+        max_state_bytes: spec.model_max_state_bytes(d.max_state_bytes),
     };
     no.take(cfg.validate());
     no.finish()?;

@@ -95,7 +95,7 @@ pub fn krls_cfg(spec: &Spec, decay: rheon_core::Decay) -> Result<rheon_core::Krl
         decay,
         min_weight: spec.min_periods_or_default(),
         emit_n_atoms: k.emit_n_atoms,
-        max_state_bytes: k.max_state_bytes,
+        max_state_bytes: spec.model_max_state_bytes(k.max_state_bytes),
     };
     cfg.validate()?;
     Ok(cfg)

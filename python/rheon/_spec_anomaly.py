@@ -24,7 +24,6 @@ def half_space_trees(
     window_rows: int = 250,
     limits: Mapping[str, Sequence[float]] | None = None,
     seed: int = 0,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Streaming Half-Space Trees unsupervised anomaly detector.
@@ -175,7 +174,6 @@ def half_space_trees(
         "window_rows": window_rows,
         "limits": limits_out,
         "seed": seed,
-        "max_state_bytes": max_state_bytes,
     }
     skipped = _SKIPPED_WHEN_ABSENT["half_space_trees"]
     model = {k: v for k, v in model.items() if v is not None or k not in skipped}
@@ -191,7 +189,6 @@ def random_cut_forest(
     tree_size: int = 256,
     shingle_size: int = 1,
     seed: int = 0,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Streaming Robust Random Cut Forest unsupervised anomaly detector.
@@ -333,7 +330,6 @@ def random_cut_forest(
         "tree_size": tree_size,
         "shingle_size": shingle_size,
         "seed": seed,
-        "max_state_bytes": max_state_bytes,
     }
     skipped = _SKIPPED_WHEN_ABSENT["random_cut_forest"]
     model = {k: v for k, v in model.items() if v is not None or k not in skipped}

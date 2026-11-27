@@ -102,7 +102,6 @@
   held_overflow = None
   group = None
   group_close = None
-  max_state_bytes = None
 
 [spec constructors]  # keyword names AND defaults are API
   ar:
@@ -139,7 +138,6 @@
     epsilon = None
     l2 = 1.0
     seed = 0
-    max_state_bytes = None
     common
   bocpd:
     name
@@ -235,7 +233,6 @@
     closed = 'right'
     rank_every = None
     rank_every_rows = None
-    max_state_bytes = None
     common
   ew_class:
     name
@@ -361,7 +358,6 @@
     window_rows = 250
     limits = None
     seed = 0
-    max_state_bytes = None
     common
   hawkes:
     name
@@ -407,7 +403,6 @@
     max_share_to_split = 0.99
     merit_preprune = True
     max_depth = None
-    max_state_bytes = None
     common
   hoeffding_tree_regressor:
     name
@@ -421,7 +416,6 @@
     min_samples_split = 5.0
     merit_preprune = True
     max_depth = None
-    max_state_bytes = None
     common
   holt:
     name
@@ -484,7 +478,6 @@
     forecast_spans = None
     smooth_lag = None
     emit_smoothed_se = False
-    max_state_bytes = None
     family = 'gaussian'
     link = None
     var_power = None
@@ -528,7 +521,6 @@
     window_size = None
     closed = 'right'
     emit_n_atoms = False
-    max_state_bytes = None
     common
   lasso:
     name
@@ -637,7 +629,6 @@
     tree_size = 256
     shingle_size = 1
     seed = 0
-    max_state_bytes = None
     common
   rcov:
     name
@@ -3921,6 +3912,7 @@
     max_held_rows
     max_rows_between_coefs
     max_state_bytes
+    metric_quantiles
     min_settled_frac
     min_weight
     model

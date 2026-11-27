@@ -1424,7 +1424,7 @@ phi_i z_i` is `phi_i z_i`"""
 file = "crates/rheon-core/src/ewridge.rs"
 function = "<impl OnlineModel for EwRidge>::coef_variance"
 mutation = "replace * with /"
-line_has = "factor.quad_forms(&u, kk, 1)[0] * sys.scale"
+line_has = "form * sys.scale"
 why = """the line runs for a centred system, and every centred system is \
 built with `scale: 1.0` (`solve_centred`), which the state carries as \
 written: only a raw system under `ridge_scale` holds the Gram's weight \

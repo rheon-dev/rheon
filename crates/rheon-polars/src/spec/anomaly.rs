@@ -105,7 +105,7 @@ pub fn half_space_trees_cfg(
         seed: h.seed.unwrap_or(0),
         group_hash,
         slot,
-        max_state_bytes: h.max_state_bytes,
+        max_state_bytes: spec.model_max_state_bytes(h.max_state_bytes),
     };
     cfg.validate()?;
     Ok(cfg)
@@ -134,7 +134,7 @@ pub fn random_cut_forest_cfg(
         seed: r.seed.unwrap_or(0),
         group_hash,
         slot,
-        max_state_bytes: r.max_state_bytes,
+        max_state_bytes: spec.model_max_state_bytes(r.max_state_bytes),
     };
     cfg.validate()?;
     Ok(cfg)

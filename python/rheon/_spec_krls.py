@@ -29,7 +29,6 @@ def krls(
     window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
     emit_n_atoms: bool = False,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Online kernel ridge regression in a reproducing kernel Hilbert space,
@@ -262,7 +261,6 @@ def krls(
         "window_size": window_size,
         "closed": None if closed == "right" else closed,
         "emit_n_atoms": True if emit_n_atoms else None,
-        "max_state_bytes": max_state_bytes,
     }
     # Each absent when at its default, as the Rust spec skips it, so a bank
     # reports back the dict this made (`ModelBank.specs`).

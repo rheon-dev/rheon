@@ -140,10 +140,7 @@ FAMILIES: tuple[Family, ...] = (
     Family(
         "clustering",
         "spec",
-        tuple(
-            f"{_SPEC}.{m}"
-            for m in ("kmeans", "micro", "ew_class", "hoeffding_tree_classifier")
-        ),
+        tuple(f"{_SPEC}.{m}" for m in ("kmeans", "micro", "ew_class", "hoeffding_tree_classifier")),
     ),
     Family(
         "bandits-anomaly",

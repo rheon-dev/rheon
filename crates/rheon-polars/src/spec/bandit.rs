@@ -154,7 +154,7 @@ pub fn bandit_cfg(
         seed: b.seed.unwrap_or(0),
         group_hash,
         slot,
-        max_state_bytes: b.max_state_bytes,
+        max_state_bytes: spec.model_max_state_bytes(b.max_state_bytes),
     };
     cfg.validate()?;
     Ok(cfg)

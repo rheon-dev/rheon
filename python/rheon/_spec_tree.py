@@ -68,7 +68,6 @@ def hoeffding_tree_classifier(
     max_share_to_split: float = 0.99,
     merit_preprune: bool = True,
     max_depth: int | None = None,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Online Hoeffding tree classifier.
@@ -269,7 +268,6 @@ def hoeffding_tree_classifier(
         "max_share_to_split": None if max_share_to_split == 0.99 else max_share_to_split,
         "merit_preprune": None if merit_preprune else False,
         "max_depth": max_depth,
-        "max_state_bytes": max_state_bytes,
     }
     model = {k: v for k, v in model.items() if v is not None}
     return _common(name, model, targets=[label], features=list(features), **common)
@@ -289,7 +287,6 @@ def hoeffding_tree_regressor(
     min_samples_split: float = 5.0,
     merit_preprune: bool = True,
     max_depth: int | None = None,
-    max_state_bytes: int | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Online Hoeffding tree for regression.
@@ -450,11 +447,11 @@ def hoeffding_tree_regressor(
         "min_samples_split": None if min_samples_split == 5.0 else min_samples_split,
         "merit_preprune": None if merit_preprune else False,
         "max_depth": max_depth,
-        "max_state_bytes": max_state_bytes,
     }
     model = {k: v for k, v in model.items() if v is not None}
     spec = _common(name, model, targets=targets, features=list(features), **common)
-    cap = _DEFAULT_MAX_STATE_BYTES if max_state_bytes is None else max_state_bytes
+    _msb = common.get("max_state_bytes")
+    cap = _DEFAULT_MAX_STATE_BYTES if _msb is None else _msb
     if len(features) >= _WIDE_REGRESSOR_FEATURES and cap < _WIDE_REGRESSOR_SUGGESTED_BYTES:
         warnings.warn(
             ReadinessWarning(
