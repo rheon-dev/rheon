@@ -96,14 +96,16 @@
 //! used only here: centred on its own running mean it has mean 0 at every
 //! level of the variance, so only the target identifies the level.
 //!
-//! **The start.** The first `start_rows` rows learned (2,000 by default,
-//! at least 2,000 for FIGARCH), or the rows of the first `start_span` of
-//! the clock (at least 50, up to and including the first at or past the
-//! span), are buffered and report nothing; then the model's own optimizer
-//! (projected Newton run to its rounding, `garch::optim`) fits them by the
-//! form's likelihood from a small grid, and the buffer is replayed at the
-//! fit to build `H` and the running means. Steps run from the next row. The
-//! buffer is 16 bytes a row; after the start it is gone.
+//! **The start.** The first `start_rows` rows learned (2,000 by default;
+//! at least 50 for GARCH, GJR and EGARCH, and at least 1 for FIGARCH), or
+//! the rows of the first `start_span` of the clock (at least 50 for GARCH,
+//! GJR and EGARCH, and on the span itself for FIGARCH, up to and including
+//! the first row at or past the span), are buffered and report nothing;
+//! then the model's own optimizer (projected Newton run to its rounding,
+//! `garch::optim`) fits them by the form's likelihood from a small grid,
+//! and the buffer is replayed at the fit to build `H` and the running
+//! means. Steps run from the next row. The buffer is 16 bytes a row; after
+//! the start it is gone.
 //!
 //! **A start reports only a process its rows identify.** With no
 //! conditional variance to find, the likelihood is flat along a ridge (`β`
@@ -131,7 +133,15 @@
 //! `gᵀd − ½ dᵀ M d` for the step `d` projected onto the set in `M`'s
 //! metric (`½ gᵀ M⁻¹ g` where it stays inside), at most `10⁻⁶` nats at
 //! Kish's count, which an optimum on a face of the set (a GJR whose `α` is
-//! 0) meets as one inside it does. A try that does not start keeps its
+//! 0) meets as one inside it does. For FIGARCH, an optimum is stepped from
+//! only once its fractional differencing order `d ∈ [0, 1)` is localized
+//! inside its domain at the same `α = 0.001` level: the asymptotic
+//! standard error of `d` from the start's expected Gaussian Fisher
+//! information at Kish's count, `√((H_kish⁻¹)_dd)`, is at most
+//! `1 / (2 Φ⁻¹(0.9995)) = 1 / (2 √χ²₁(0.999)) ≈ 0.152`, so a two-sided
+//! 99.9% confidence interval for `d` cannot span the entire `[0, 1)`
+//! interval; while it fails (or `H_kish` is not positive definite), the
+//! start waits as `not_identified`. A try that does not start keeps its
 //! buffer: the next comes once as many new rows have come as it held, so
 //! twice the rows while `max_state_bytes` holds them (each target's share
 //! of it), and from then on the latest rows the share holds, the oldest
@@ -215,11 +225,8 @@ use series::{Series, bound};
 pub const GARCH_MAX_STATE_BYTES: u64 = 256 * 1024;
 /// The most `max_state_bytes` may be set to: 64 MiB.
 pub const GARCH_STATE_BYTES_CEILING: u64 = 64 * 1024 * 1024;
-/// The fewest rows a start fits.
+/// The fewest rows a GARCH, GJR or EGARCH start fits.
 pub const MIN_START_ROWS: usize = 50;
-/// The fewest rows FIGARCH's start fits: with fewer, the lags of a ring of
-/// 1,000 are mostly the backcast, and `d` is fitted low.
-pub const FIGARCH_MIN_START_ROWS: usize = 2000;
 /// FIGARCH's truncation by default, `arch`'s.
 pub const FIGARCH_TRUNCATION: usize = 1000;
 /// The most inputs a spec may give the variance equation.
@@ -489,28 +496,28 @@ impl GarchCfg {
             }
         }
         let least = if self.vol == GarchVol::Figarch {
-            FIGARCH_MIN_START_ROWS
+            1
         } else {
             MIN_START_ROWS
         };
         if self.start_span.is_none() && self.start_rows < least {
-            return Err(format!(
-                "garch: start_rows must be at least {least}{}, but it is {}. The start fits \
-                 every parameter by likelihood on these rows, and on fewer the fit is mostly \
-                 noise that the online steps take thousands of rows to wash out{}. Set \
-                 start_rows to {least} or more; 2000 is the default.",
-                if self.vol == GarchVol::Figarch {
-                    " for vol = \"figarch\""
-                } else {
-                    ""
-                },
-                self.start_rows,
-                if self.vol == GarchVol::Figarch {
-                    "; a FIGARCH's lags on fewer are mostly the backcast, and its d comes out low"
-                } else {
-                    ""
-                },
-            ));
+            return Err(if self.vol == GarchVol::Figarch {
+                format!(
+                    "garch: start_rows must be at least 1 for vol = \"figarch\", but it is {}. \
+                     The start buffers these rows and waits until the likelihood-ratio test and \
+                     the standard error of d identify the process. Set start_rows to 1 or more; \
+                     2000 is the default.",
+                    self.start_rows,
+                )
+            } else {
+                format!(
+                    "garch: start_rows must be at least {least}, but it is {}. The start fits \
+                     every parameter by likelihood on these rows, and on fewer the fit is mostly \
+                     noise that the online steps take thousands of rows to wash out. Set \
+                     start_rows to {least} or more; 2000 is the default.",
+                    self.start_rows,
+                )
+            });
         }
         if let Some(span) = self.start_span
             && !(span.is_finite() && span > 0.0)
@@ -698,10 +705,11 @@ impl Garch {
         self.series.iter().any(|s| !s.started && !s.no_effect())
     }
 
-    /// Whether a target's series waits because its start's fit did not tell
-    /// its variance process from a constant variance: the likelihood-ratio
-    /// statistic was under χ² of the restrictions at 0.999, so the rows did
-    /// not identify the process, and it buffers more.
+    /// Whether a target's series waits because its start's fit did not
+    /// identify its variance process: its likelihood-ratio statistic against
+    /// a constant variance was under χ² of the restrictions at 0.999, its
+    /// inputs were collinear, or for FIGARCH the asymptotic standard error of
+    /// `d` exceeded `1 / (2 Φ⁻¹(0.9995))`, so it buffers more.
     pub fn no_effect(&self) -> bool {
         self.series.iter().any(|s| s.no_effect())
     }

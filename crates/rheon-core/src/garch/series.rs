@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::dist;
 use super::filter::Filter;
 use super::fit::OMEGA_FLOOR_FRAC;
-use super::fit::{ab_set, backcast, clip_shape, fit, identified, set_of};
+use super::fit::{ab_set, backcast, clip_shape, figarch_d_identified, fit, identified, set_of};
 use super::guard;
 use super::linalg::{HalfSpaces, backward, chol_solve, cholesky, forward, tri, unpack};
 use super::math;
@@ -213,8 +213,9 @@ impl Series {
         self.filter.variance(cfg.vol, &self.theta[..k], x, k)
     }
 
-    /// Whether the series waits because its last start's fit did not tell
-    /// its process from a constant variance: not started, and holding that
+    /// Whether the series waits because its last start's fit did not
+    /// identify its process (LR under the cut, collinear inputs, or
+    /// FIGARCH's `SE(d)` past the cut): not started, and holding that
     /// withheld fit.
     pub fn no_effect(&self) -> bool {
         !self.started && self.theta.iter().all(|v| v.is_finite())
@@ -222,15 +223,17 @@ impl Series {
 
     /// Fit the buffered rows. A fit whose likelihood-ratio statistic
     /// against constant variance is under the form's cut
-    /// ([`super::fit::identified`]) is withheld, and kept in `theta` to say
-    /// why the series waits; a fit not at its optimum by its Newton
-    /// decrement inside the process's set, or none with a finite
-    /// likelihood, is not stepped from either, and says nothing. Either
-    /// keeps its buffer, and the next try comes once as many new rows have
-    /// come as this one held ([`Series::buffer_row`]). Otherwise the buffer
-    /// is replayed at the fit: the filter from the backcast, the
-    /// information matrix and the running means built as equal-weight
-    /// means over it, the parameters held.
+    /// ([`super::fit::identified`]), or whose inputs are collinear, is
+    /// withheld and kept in `theta` to say why the series waits; a fit not
+    /// at its optimum by its Newton decrement inside the process's set, or
+    /// none with a finite likelihood, is not stepped from either, and says
+    /// nothing; for FIGARCH, an optimum whose `SE(d)` at Kish's count is
+    /// past [`super::fit::FIGARCH_D_SE_CUT`] is withheld in `theta` too.
+    /// Any of these keeps its buffer, and the next try comes once as many
+    /// new rows have come as this one held ([`Series::buffer_row`]).
+    /// Otherwise the buffer is replayed at the fit: the filter from the
+    /// backcast, the information matrix and the running means built as
+    /// equal-weight means over it, the parameters held.
     pub fn start(&mut self, cfg: &GarchCfg) {
         // a ring's rows back in order, oldest first
         self.buffer.rotate_left(self.head);
@@ -278,8 +281,15 @@ impl Series {
             Some(f) if !identified(cfg.vol, cfg.q(), f.lr) || f.collinear => {
                 return wait(self, Some(f.theta));
             }
-            // Not at its optimum: never stepped from.
+            // Not at its optimum: never stepped from. Checked before
+            // FIGARCH's `SE(d)` gate because Fisher information is only the
+            // asymptotic covariance at an optimum.
             Some(f) if !f.sound => return wait(self, None),
+            // FIGARCH's `d` not localized inside `[0, 1)` at `α = 0.001`:
+            // withheld as `not_identified`.
+            Some(f) if f.d_se.is_some_and(|se| !figarch_d_identified(se)) => {
+                return wait(self, Some(f.theta));
+            }
             Some(f) => f,
         };
         let rows = std::mem::take(&mut self.buffer);
@@ -351,7 +361,8 @@ impl Series {
         let rows = self.buffer.len();
         match (cfg.start_span, now, self.first) {
             (Some(span), Some(now), Some(first)) => {
-                rows >= super::MIN_START_ROWS && crate::clock_span::span_reached(now, first, span)
+                let enough = cfg.vol == GarchVol::Figarch || rows >= super::MIN_START_ROWS;
+                enough && crate::clock_span::span_reached(now, first, span)
             }
             _ => rows >= cfg.start_rows,
         }

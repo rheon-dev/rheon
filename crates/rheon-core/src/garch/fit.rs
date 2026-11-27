@@ -10,7 +10,7 @@
 
 use super::dist::{self, LAM_LIM, NU_HI, NU_LO};
 use super::filter::{Filter, figarch_weights};
-use super::linalg::{HalfSpaces, pivots_clear};
+use super::linalg::{HalfSpaces, chol_solve, pivots_clear};
 use super::math;
 use super::optim::{Eval, Fit, decrement_in, maximize};
 use super::{GarchDist, GarchVol, MAX_K};
@@ -447,6 +447,46 @@ pub(super) fn lr_cut(vol: GarchVol, q: usize) -> f64 {
     LR_CUTS[restrictions(vol, q) - 2]
 }
 
+/// χ²₁ at 0.999, `(Φ⁻¹(0.9995))²`, the 1-df companion to [`LR_CUTS`].
+/// Held by its survival function `erfc(√(x/2)) = 0.001` in the tests.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) const CHI2_1_999: f64 = 10.827_566_170_662_733;
+
+/// The largest asymptotic standard error of FIGARCH's fractional
+/// differencing parameter `d ∈ [0, 1)` a start may step from:
+/// `1 / (2 Φ⁻¹(0.9995)) = 1 / (2 √χ²₁(0.999)) ≈ 0.15195`. At `garch`'s own
+/// `α = 0.001` test level, a two-sided 99.9% confidence interval
+/// `d̂ ± z_{0.9995} SE(d)` spans the entire unit domain `[0, 1)` whenever
+/// `SE(d)` exceeds this cut — equivalently, the sample cannot distinguish
+/// short memory (`d = 0`) from integrated variance (`d = 1`) at the
+/// midpoint `d = ½` with symmetric error `α/2 = 0.0005`.
+pub(super) const FIGARCH_D_SE_CUT: f64 = 0.151_951_356_363_333_54;
+
+/// The asymptotic standard error of FIGARCH's `d` (index 2 of `(ω, φ, d,
+/// β)`) from the start's expected Gaussian Fisher information `h` (4 × 4,
+/// row-major) at Kish's scale `scale = Σw / Σw²`: `√((scale · H)⁻¹₂₂)`.
+/// Scaling every weight by a constant leaves `scale · H` unchanged (for a
+/// power of two, to the bit), and scaling the returns leaves `(H⁻¹)₂₂`
+/// unchanged (`d` is dimensionless). Returns `∞` when `scale · H` is not
+/// positive definite or the entry is not positive and finite.
+pub(super) fn figarch_d_se(h: &[f64], scale: f64) -> f64 {
+    if !(scale > 0.0 && scale.is_finite()) {
+        return f64::INFINITY;
+    }
+    let scaled: Vec<f64> = h.iter().map(|&v| v * scale).collect();
+    chol_solve(&scaled, 4, &[0.0, 0.0, 1.0, 0.0])
+        .map(|x| x[2])
+        .filter(|&v| v > 0.0 && v.is_finite())
+        .map_or(f64::INFINITY, f64::sqrt)
+}
+
+/// Whether FIGARCH's `d` is identified by the start: its asymptotic
+/// standard error at Kish's count is finite and at most
+/// [`FIGARCH_D_SE_CUT`].
+pub(super) fn figarch_d_identified(se_d: f64) -> bool {
+    se_d <= FIGARCH_D_SE_CUT
+}
+
 /// Whether a start's rows identify its process: its likelihood-ratio
 /// statistic at least [`lr_cut`] (not a number does not).
 pub(super) fn identified(vol: GarchVol, q: usize, lr: f64) -> bool {
@@ -509,6 +549,9 @@ pub(super) struct StartFit {
     /// Inputs the start's rows do not tell apart from `ω` or from each
     /// other ([`collinear`]); false without inputs.
     pub collinear: bool,
+    /// FIGARCH's asymptotic standard error of `d` at Kish's count
+    /// ([`figarch_d_se`]); `None` for the other processes.
+    pub d_se: Option<f64>,
 }
 
 impl StartFit {
@@ -529,6 +572,7 @@ impl StartFit {
             sound,
             lr: 2.0 * (fit.f - f0) * scale,
             collinear: false,
+            d_se: None,
         }
     }
 }
@@ -714,7 +758,14 @@ pub(super) fn fit(
             let in_set =
                 |f: &Fit| decrement_in(&obj, &f.theta, &units, &|x, m| in_metric(&set, x, m));
             let theta = fit.theta.clone();
-            Some(StartFit::of(fit, theta, &in_set, f0, scale))
+            let mut got = StartFit::of(fit, theta, &in_set, f0, scale);
+            let info = figarch_likelihood(rows, bc, trunc, &got.theta, true);
+            got.d_se = Some(if info.f.is_finite() {
+                figarch_d_se(&info.h, scale)
+            } else {
+                f64::INFINITY
+            });
+            Some(got)
         }
         _ => {
             // GARCH and GJR, normal or with a t: every parameter free

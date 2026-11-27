@@ -93,8 +93,10 @@ def garch(
     ``start_rows``
         The rows the start buffers and fits, each target's own; they report
         nothing (``withheld_reason`` ``below_warm_rows``). Default 2,000, at
-        least 50, and at least 2,000 for ``vol="figarch"``. A start whose
-        rows do not tell its process from a constant variance, by the test
+        least 50 for ``"garch"``, ``"gjr"`` and ``"egarch"``, and at least 1
+        for ``"figarch"`` (which waits on the standard error of ``d`` rather
+        than a row-count floor). A start whose
+        rows do not identify its process, by the checks
         under "The start" below, reports nothing (``not_identified``), and
         one whose fit is not at its optimum is not stepped from either.
         Either keeps its rows and fits again once as many new rows have
@@ -105,7 +107,9 @@ def garch(
         The start as a span of the clock in place of ``start_rows``, in
         clock units: a number of the clock column's units, or a duration
         such as ``"1d"`` on a temporal clock. It closes at the first row at
-        or past the span from its first row, once it holds 50 rows; a try
+        or past the span from its first row (once it holds 50 rows for
+        ``"garch"``, ``"gjr"`` and ``"egarch"``, and on the span itself for
+        ``"figarch"``); a try
         that does not start waits, as under ``start_rows``, for as many new
         rows as it held. How many rows the span holds, the data decides, so
         its bytes are checked as the rows go in (see
@@ -334,10 +338,9 @@ def garch(
     process's bounds is at most ``10⁻⁶`` nats: ``½ gᵀ M⁻¹ g`` (``M`` the
     observed curvature) where the step stays inside them, and the step
     projected onto them in ``M``'s metric where it does not, so an optimum
-    on a bound (a GJR whose ``α`` is 0) is one. 2,000 rows keep a series
-    from starting far enough off that the ``1/W`` gain takes the rest of
-    the stream to recover; a FIGARCH needs them for its ring of 1,000 lags
-    to hold returns rather than the backcast.
+    on a bound (a GJR whose ``α`` is 0) is one. The default 2,000 rows keep
+    a series from starting far enough off that the ``1/W`` gain takes the
+    rest of the stream to recover.
 
     **The test before a start reports.** A series with no conditional
     variance to find leaves the likelihood flat along a ridge, where ``β``
@@ -355,7 +358,15 @@ def garch(
     ``2 (l_fit - l_const) Σw / Σw²``, so scaling every weight changes
     nothing. On simulated series of persistence 0.97 to 0.985, and of
     0.90, it passed every 2,000-row start; on returns with no conditional
-    variance it passed none, at starts of 500 to 2,000 rows. With inputs,
+    variance it passed none, at starts of 500 to 2,000 rows. For
+    ``figarch``, an optimum is also withheld (``not_identified``) until
+    ``d ∈ [0, 1)`` is localized inside its unit domain at the same
+    ``α = 0.001`` level. The asymptotic standard error of ``d`` from the
+    start's expected Gaussian Fisher information at Kish's count,
+    ``√((H_kish⁻¹)_dd)``, must be at most
+    ``1 / (2 Φ⁻¹(0.9995)) = 1 / (2 √χ²₁(0.999)) ≈ 0.152``, with ``H_kish``
+    positive definite. Above that bound, a two-sided 99.9% confidence
+    interval for ``d`` spans both ``d = 0`` and ``d = 1``. With inputs,
     a start also waits while its rows do not tell the inputs apart: an
     input constant over them is ``ω`` again, and two that move together are
     one. It waits under the relative pivot rule the library's other

@@ -934,10 +934,17 @@ fn the_settings_are_checked() {
     refused(
         &|c| {
             c.vol = GarchVol::Figarch;
-            c.start_rows = 1999
+            c.start_rows = 0
         },
-        "at least 2000",
+        "at least 1",
     );
+    // FIGARCH has no fixed row-count floor above 1: starts of 1 or 49 rows
+    // are accepted and wait on the LR test and SE(d).
+    for r in [1, 49, 500] {
+        let mut c = cfg(GarchVol::Figarch, GarchDist::Normal);
+        c.start_rows = r;
+        assert!(Garch::new(c).is_ok(), "figarch start_rows={r}");
+    }
     refused(&|c| c.start_span = Some(0.0), "start_span");
     refused(
         &|c| {
@@ -1091,6 +1098,123 @@ fn the_lr_cut_is_chi_squared_at_its_restrictions() {
         assert!(identified(vol, 0, cut), "{vol:?}");
         assert!(!identified(vol, 0, cut.next_down()), "{vol:?}");
         assert!(!identified(vol, 0, f64::NAN), "{vol:?}");
+    }
+}
+
+/// FIGARCH's `SE(d)` cut is `1 / (2 Φ⁻¹(0.9995)) = 1 / (2 √χ²₁(0.999))`:
+/// at `garch`'s `α = 0.001` level, a two-sided 99.9% confidence interval for
+/// `d ∈ [0, 1)` cannot span the entire unit interval. Held by the χ²₁
+/// survival function `erfc(√(x/2)) = 0.001` to rounding.
+#[test]
+fn the_figarch_d_se_cut_is_domain_resolution_at_0999() {
+    use super::fit::{CHI2_1_999, FIGARCH_D_SE_CUT, figarch_d_identified};
+    let p_chi2 = libm::erfc(libm::sqrt(0.5 * CHI2_1_999));
+    assert!((p_chi2 - 0.001).abs() < 1e-15, "{p_chi2}");
+    let z = 1.0 / (2.0 * FIGARCH_D_SE_CUT);
+    let p_z = libm::erfc(z / std::f64::consts::SQRT_2);
+    assert!((p_z - 0.001).abs() < 1e-15, "{p_z}");
+    assert!(
+        (FIGARCH_D_SE_CUT - 1.0 / (2.0 * CHI2_1_999.sqrt())).abs() < 1e-15,
+        "{FIGARCH_D_SE_CUT}"
+    );
+    assert!(figarch_d_identified(FIGARCH_D_SE_CUT));
+    assert!(!figarch_d_identified(FIGARCH_D_SE_CUT.next_up()));
+    assert!(!figarch_d_identified(f64::NAN));
+    assert!(!figarch_d_identified(f64::INFINITY));
+}
+
+/// `figarch_d_se` matches `faer`'s LU oracle `√((scale · H)⁻¹₂₂)`, returns
+/// `∞` when `H` is not positive definite or `scale` is invalid, is
+/// invariant to return scale (`d` is dimensionless) and bit-identical under
+/// power-of-two weight scaling, and stays finite on boundary fits (`φ = 0`,
+/// `β = 0`).
+#[test]
+fn figarch_d_se_matches_oracle_and_is_scale_invariant() {
+    use super::fit::{FIGARCH_D_SE_CUT, figarch_d_se, fit};
+    // Direct check against faer LU oracle on a 4×4 SPD matrix
+    let h = [
+        10.0, 2.0, 1.0, 0.5, //
+        2.0, 8.0, 3.0, 2.0, //
+        1.0, 3.0, 6.0, 2.5, //
+        0.5, 2.0, 2.5, 5.0,
+    ];
+    for scale in [0.5, 1.0, 3.5] {
+        let scaled: Vec<f64> = h.iter().map(|&v| v * scale).collect();
+        let want = crate::oracle::solve(&scaled, &[0.0, 0.0, 1.0, 0.0])[2].sqrt();
+        let got = figarch_d_se(&h, scale);
+        assert!(
+            (got - want).abs() < 1e-14 * want,
+            "{scale}: {got} vs {want}"
+        );
+    }
+    // Singular / indefinite / invalid scale -> ∞
+    assert!(figarch_d_se(&[0.0; 16], 1.0).is_infinite());
+    assert!(figarch_d_se(&h, 0.0).is_infinite());
+    assert!(figarch_d_se(&h, -1.0).is_infinite());
+    assert!(figarch_d_se(&h, f64::NAN).is_infinite());
+
+    // Return-scale invariance and power-of-two weight-scale bit-identity
+    let ys = figarch_series(2000, 5);
+    let fit_se = |scale_y: f64, w: f64| {
+        let rows: Vec<[f64; 2]> = ys.iter().map(|&e| [e * scale_y, w]).collect();
+        let v = rows.iter().map(|r| r[1] * r[0] * r[0]).sum::<f64>()
+            / rows.iter().map(|r| r[1]).sum::<f64>();
+        let got = fit(
+            GarchVol::Figarch,
+            GarchDist::Normal,
+            false,
+            100,
+            &rows,
+            &[],
+            backcast(&rows),
+            v,
+        )
+        .unwrap();
+        got.d_se.unwrap()
+    };
+    let base = fit_se(1.0, 1.0);
+    assert!(base > 0.0 && base <= FIGARCH_D_SE_CUT, "{base}");
+    for scale_y in [1e-5, 1e5] {
+        let got = fit_se(scale_y, 1.0);
+        assert!(
+            (got - base).abs() <= 1e-11 * base,
+            "scale_y={scale_y}: {got} vs {base}"
+        );
+    }
+    for p in [-34, 40] {
+        let got = fit_se(1.0, (2.0f64).powi(p));
+        assert_eq!(got.to_bits(), base.to_bits(), "w=2^{p}: {got} vs {base}");
+    }
+
+    // Boundary processes (`φ = 0` and `β = 0`): expected Fisher information
+    // stays PD on faces and `SE(d)` is finite and passes on 2,000 rows.
+    for th in [[0.03, 0.0, 0.4, 0.3], [0.03, 0.2, 0.4, 0.0]] {
+        let mut s = 11u64;
+        let mut f = Filter::new(GarchVol::Figarch, 4, 100, 1.0);
+        let mut dl = [0.0; 4];
+        let mut out = Vec::with_capacity(2000);
+        for t in 0..5000 {
+            let v = f.predict(GarchVol::Figarch, &th, &[], &mut dl);
+            let e = v.sqrt() * normal(&mut s);
+            f.push(GarchVol::Figarch, e, v, &dl);
+            if t >= 3000 {
+                out.push([e, 1.0]);
+            }
+        }
+        let v = out.iter().map(|r| r[0] * r[0]).sum::<f64>() / out.len() as f64;
+        let got = fit(
+            GarchVol::Figarch,
+            GarchDist::Normal,
+            false,
+            100,
+            &out,
+            &[],
+            backcast(&out),
+            v,
+        )
+        .unwrap();
+        let se = got.d_se.unwrap();
+        assert!(se.is_finite() && se <= FIGARCH_D_SE_CUT, "{th:?}: {se}");
     }
 }
 

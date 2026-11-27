@@ -3939,7 +3939,16 @@ variance, `2 (l_fit − l_const)` with the weights at Kish's count, reaches
 That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
 `figarch` (three each); each input adds one, `π = 0`, so `garch` with one
 input waits for 16.3. `figarch`'s `d = 0` and `φ = β` leave its four
-parameters one variance, `ω/(1 − β)`, so three are the process's. `π = 0` is where an input that explains nothing
+parameters one variance, `ω/(1 − β)`, so three are the process's. For
+`figarch`, `start_rows` takes any count from 1, and `start_span` closes on
+the span itself with no row-count floor. Its start withholds an optimum as
+`not_identified` until `d ∈ [0, 1)` is localized at the same `α = 0.001`
+level. The asymptotic standard error of `d` from the start's expected
+Gaussian Fisher information at Kish's count, `√((H_kish⁻¹)_dd)`, must be at
+most `1 / (2 Φ⁻¹(0.9995)) = 1 / (2 √χ²₁(0.999)) ≈ 0.152`, with `H_kish`
+positive definite. Above that bound, a two-sided 99.9% confidence interval
+for `d` spans both `d = 0` (short memory) and `d = 1` (integrated
+variance). `π = 0` is where an input that explains nothing
 sits, so a fit with a `π` at 0 is no bound that makes a start wait. A
 start with inputs also waits while its rows do not tell the inputs apart:
 an input constant over them is `ω` again, and two that move together are

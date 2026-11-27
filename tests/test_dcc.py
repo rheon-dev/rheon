@@ -291,8 +291,8 @@ def test_the_margins_are_garchs():
         ({"a": -0.1, "b": 0.5}, "finite and at least 0"),
         ({"margins": "none", "vol": "gjr"}, "runs no GARCH margin"),
         (
-            {"margins": "garch", "vol": "figarch", "margin_start_rows": 100},
-            "margin_start_rows must be at least 2000",
+            {"margins": "garch", "vol": "figarch", "margin_start_rows": 0},
+            "margin_start_rows must be at least 1",
         ),
         ({"start_rows": 0}, "start_rows must be at least 1"),
         ({"start_rows": 100, "start_span": 10.0}, "Leave one of them out"),

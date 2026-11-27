@@ -814,15 +814,7 @@ ENUM_PROBES: list[
         "word",
         {"none": {"margin_start_rows": None}},
     ),
-    # FIGARCH's margins need a start of 2,000 rows.
-    (
-        "dcc.vol",
-        "dcc",
-        {"margins": "garch"},
-        "model.vol",
-        "word",
-        {"figarch": {"margin_start_rows": 2000}},
-    ),
+    ("dcc.vol", "dcc", {"margins": "garch"}, "model.vol", "word"),
     ("dcc.dist", "dcc", {"margins": "garch"}, "model.dist", "word"),
     (
         "realized.closed",
