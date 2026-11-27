@@ -208,7 +208,7 @@ pub use expectile::{
     DEFAULT_EXPECTILE_REFIT_ROWS, EXPECTILE_MAX_STATE_BYTES, EXPECTILE_REFIT_PASSES,
     EXPECTILE_STATE_BYTES_CEILING, Expectile, ExpectileCfg, default_expectile_refit_rows,
 };
-pub use family::{ETA_CLIP, Family, GlmFamily, GlmLink, Working};
+pub use family::{ETA_CLIP, Family, FamilyMath, GlmFamily, GlmLink, LibmMath, StdMath, Working};
 pub use ftrl::{Ftrl, FtrlCfg, FtrlLoss};
 pub use gaps::{GramPart, TargetGaps};
 pub use garch::{

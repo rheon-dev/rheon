@@ -55,6 +55,61 @@ use serde::{Deserialize, Serialize};
 /// is about `1.1e13`, and a logit's `μ` at `±30` is `1e-13` from its bound.
 pub const ETA_CLIP: f64 = 30.0;
 
+/// Provider for the transcendental functions [`Family`] calls (`exp`, `ln`,
+/// `powf`).
+///
+/// [`StdMath`] calls the platform's math library, keeping `glm`'s outputs
+/// bit-identical to before this trait was introduced. [`LibmMath`] calls
+/// the `libm` crate compiled from source in this build, so every platform
+/// takes the same bits (the nonlinear Kalman filters, where a last-bit
+/// difference on a clipped stream grows to `1e-10`).
+pub trait FamilyMath {
+    fn exp(x: f64) -> f64;
+    fn ln(x: f64) -> f64;
+    fn powf(x: f64, y: f64) -> f64;
+}
+
+/// The platform's math library (`f64::exp`, `f64::ln`, `f64::powf`).
+pub struct StdMath;
+
+impl FamilyMath for StdMath {
+    #[inline(always)]
+    fn exp(x: f64) -> f64 {
+        x.exp()
+    }
+
+    #[inline(always)]
+    fn ln(x: f64) -> f64 {
+        x.ln()
+    }
+
+    #[inline(always)]
+    fn powf(x: f64, y: f64) -> f64 {
+        x.powf(y)
+    }
+}
+
+/// The `libm` crate's `exp`, `log` and `pow`: bit-identical across macOS,
+/// Linux and Windows.
+pub struct LibmMath;
+
+impl FamilyMath for LibmMath {
+    #[inline(always)]
+    fn exp(x: f64) -> f64 {
+        libm::exp(x)
+    }
+
+    #[inline(always)]
+    fn ln(x: f64) -> f64 {
+        libm::log(x)
+    }
+
+    #[inline(always)]
+    fn powf(x: f64, y: f64) -> f64 {
+        libm::pow(x, y)
+    }
+}
+
 /// A family: the variance function and the unit deviance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -206,13 +261,20 @@ impl Family {
         no.finish()
     }
 
-    /// `V(μ)`.
+    /// `V(μ)`, through the platform's math library.
+    #[inline(always)]
     pub fn variance(&self, mu: f64) -> f64 {
+        self.variance_with::<StdMath>(mu)
+    }
+
+    /// `V(μ)`, through math provider `M`.
+    #[inline(always)]
+    pub fn variance_with<M: FamilyMath>(&self, mu: f64) -> f64 {
         match self.family {
             GlmFamily::Poisson => mu,
             GlmFamily::Gamma => mu * mu,
             GlmFamily::Binomial => mu * (1.0 - mu),
-            GlmFamily::Tweedie => mu.powf(self.power),
+            GlmFamily::Tweedie => M::powf(mu, self.power),
         }
     }
 
@@ -243,26 +305,53 @@ impl Family {
         }
     }
 
-    /// `g(μ)`.
+    /// `g(μ)`, through the platform's math library.
+    #[inline(always)]
     pub fn link(&self, mu: f64) -> f64 {
+        self.link_with::<StdMath>(mu)
+    }
+
+    /// `g(μ)`, through math provider `M`.
+    #[inline(always)]
+    pub fn link_with<M: FamilyMath>(&self, mu: f64) -> f64 {
         match self.link {
-            GlmLink::Log => mu.ln(),
-            GlmLink::Logit => (mu / (1.0 - mu)).ln(),
+            GlmLink::Log => M::ln(mu),
+            GlmLink::Logit => M::ln(mu / (1.0 - mu)),
             GlmLink::Inverse => 1.0 / mu,
-            GlmLink::Power => mu.powf(1.0 - self.power),
+            GlmLink::Power => M::powf(mu, 1.0 - self.power),
         }
     }
 
-    /// `g'(μ)`.
+    /// `g'(μ)`, through the platform's math library.
+    #[inline(always)]
     pub fn link_deriv(&self, mu: f64) -> f64 {
+        self.link_deriv_with::<StdMath>(mu)
+    }
+
+    /// `g'(μ)`, through math provider `M`.
+    #[inline(always)]
+    pub fn link_deriv_with<M: FamilyMath>(&self, mu: f64) -> f64 {
         match self.link {
             GlmLink::Log => 1.0 / mu,
             GlmLink::Logit => 1.0 / (mu * (1.0 - mu)),
             GlmLink::Inverse => -1.0 / (mu * mu),
             GlmLink::Power => {
                 let q = 1.0 - self.power;
-                q * mu.powf(q - 1.0)
+                q * M::powf(mu, q - 1.0)
             }
+        }
+    }
+
+    /// `dμ/dη = 1 / g'(μ)` at `μ = g⁻¹(η)`, through math provider `M`:
+    /// `μ` for the log link, `μ(1 − μ)` for the logit, `−μ²` for the
+    /// inverse, and `1 / g'(μ)` for the Tweedie power link.
+    #[inline(always)]
+    pub fn inv_link_deriv_with<M: FamilyMath>(&self, mu: f64) -> f64 {
+        match self.link {
+            GlmLink::Log => mu,
+            GlmLink::Logit => mu * (1.0 - mu),
+            GlmLink::Inverse => -(mu * mu),
+            GlmLink::Power => 1.0 / self.link_deriv_with::<M>(mu),
         }
     }
 
@@ -270,21 +359,28 @@ impl Family {
     /// no positive, finite mean: `η` not finite, or `η ≤ 0` under the
     /// inverse and power links. The log and logit clip `η` to
     /// [`ETA_CLIP`] first.
+    #[inline(always)]
     pub fn mean(&self, eta: f64) -> Option<(f64, f64)> {
+        self.mean_with::<StdMath>(eta)
+    }
+
+    /// [`Self::mean`] through math provider `M`.
+    #[inline(always)]
+    pub fn mean_with<M: FamilyMath>(&self, eta: f64) -> Option<(f64, f64)> {
         if !eta.is_finite() {
             return None;
         }
         let (eta, mu) = match self.link {
             GlmLink::Log => {
                 let e = eta.clamp(-ETA_CLIP, ETA_CLIP);
-                (e, e.exp())
+                (e, M::exp(e))
             }
             GlmLink::Logit => {
                 let e = eta.clamp(-ETA_CLIP, ETA_CLIP);
-                (e, 1.0 / (1.0 + (-e).exp()))
+                (e, 1.0 / (1.0 + M::exp(-e)))
             }
             GlmLink::Inverse if eta > 0.0 => (eta, 1.0 / eta),
-            GlmLink::Power if eta > 0.0 => (eta, eta.powf(1.0 / (1.0 - self.power))),
+            GlmLink::Power if eta > 0.0 => (eta, M::powf(eta, 1.0 / (1.0 - self.power))),
             GlmLink::Inverse | GlmLink::Power => return None,
         };
         (mu.is_finite() && mu > 0.0).then_some((eta, mu))
@@ -302,8 +398,15 @@ impl Family {
     /// Tweedie, log     W = μ^(2−p)    z = η + (y − μ)/μ
     /// Tweedie, power   W = μᵖ/q²      z = η + (y − μ) q μ^(q−1),  q = 1 − p
     /// ```
+    #[inline(always)]
     pub fn working(&self, eta: f64, y: f64) -> Option<Working> {
-        let (eta, mu) = self.mean(eta)?;
+        self.working_with::<StdMath>(eta, y)
+    }
+
+    /// [`Self::working`] through math provider `M`.
+    #[inline(always)]
+    pub fn working_with<M: FamilyMath>(&self, eta: f64, y: f64) -> Option<Working> {
+        let (eta, mu) = self.mean_with::<M>(eta)?;
         let (w, z) = match (self.family, self.link) {
             (GlmFamily::Poisson, GlmLink::Log) => (mu, eta + (y - mu) / mu),
             (GlmFamily::Gamma, GlmLink::Log) => (1.0, eta + (y - mu) / mu),
@@ -312,18 +415,23 @@ impl Family {
                 let v = mu * (1.0 - mu);
                 (v, eta + (y - mu) / v)
             }
-            (GlmFamily::Tweedie, GlmLink::Log) => (mu.powf(2.0 - self.power), eta + (y - mu) / mu),
+            (GlmFamily::Tweedie, GlmLink::Log) => {
+                (M::powf(mu, 2.0 - self.power), eta + (y - mu) / mu)
+            }
             (GlmFamily::Tweedie, GlmLink::Power) => {
                 let q = 1.0 - self.power;
                 (
-                    mu.powf(self.power) / (q * q),
-                    eta + (y - mu) * q * mu.powf(q - 1.0),
+                    M::powf(mu, self.power) / (q * q),
+                    eta + (y - mu) * q * M::powf(mu, q - 1.0),
                 )
             }
             // A pair `check` refuses: the general form.
             _ => {
-                let d = self.link_deriv(mu);
-                (1.0 / (d * d * self.variance(mu)), eta + (y - mu) * d)
+                let d = self.link_deriv_with::<M>(mu);
+                (
+                    1.0 / (d * d * self.variance_with::<M>(mu)),
+                    eta + (y - mu) * d,
+                )
             }
         };
         (w.is_finite() && w > 0.0 && z.is_finite()).then_some(Working { mu, w, z, eta })
@@ -338,17 +446,24 @@ impl Family {
     /// `μ^(1−p) (μ/(2−p) − y/(1−p))` where each alone is past the largest
     /// double and their sum is NaN (at `p = 30`, `μ = e^−30`: the deviance
     /// is past the largest double too, and the factored form says `+∞`).
+    #[inline(always)]
     pub fn unit_deviance(&self, y: f64, mu: f64) -> f64 {
+        self.unit_deviance_with::<StdMath>(y, mu)
+    }
+
+    /// [`Self::unit_deviance`] through math provider `M`.
+    #[inline(always)]
+    pub fn unit_deviance_with<M: FamilyMath>(&self, y: f64, mu: f64) -> f64 {
         // `y ln(y/m)`, 0 at `y = 0`.
-        let xlogy = |y: f64, m: f64| if y == 0.0 { 0.0 } else { y * (y / m).ln() };
+        let xlogy = |y: f64, m: f64| if y == 0.0 { 0.0 } else { y * M::ln(y / m) };
         match self.family {
             GlmFamily::Poisson => 2.0 * (xlogy(y, mu) - (y - mu)),
             GlmFamily::Gamma => {
                 let q = y / mu;
                 let l = if q > 0.0 && q.is_finite() {
-                    q.ln()
+                    M::ln(q)
                 } else {
-                    y.ln() - mu.ln()
+                    M::ln(y) - M::ln(mu)
                 };
                 2.0 * (-l + (y - mu) / mu)
             }
@@ -356,13 +471,14 @@ impl Family {
             GlmFamily::Tweedie => {
                 let p = self.power;
                 let a = if y > 0.0 {
-                    y.powf(2.0 - p) / ((1.0 - p) * (2.0 - p))
+                    M::powf(y, 2.0 - p) / ((1.0 - p) * (2.0 - p))
                 } else {
                     0.0
                 };
-                let d = 2.0 * (a - y * mu.powf(1.0 - p) / (1.0 - p) + mu.powf(2.0 - p) / (2.0 - p));
+                let d = 2.0
+                    * (a - y * M::powf(mu, 1.0 - p) / (1.0 - p) + M::powf(mu, 2.0 - p) / (2.0 - p));
                 if d.is_nan() {
-                    2.0 * (a + mu.powf(1.0 - p) * (mu / (2.0 - p) - y / (1.0 - p)))
+                    2.0 * (a + M::powf(mu, 1.0 - p) * (mu / (2.0 - p) - y / (1.0 - p)))
                 } else {
                     d
                 }
@@ -373,12 +489,19 @@ impl Family {
     /// The start of a batch fit's intercept: `g` at the weighted mean of
     /// the targets, held inside the family's open range where the mean is
     /// at its edge (all zeros, all ones), so `g` is finite.
+    #[inline(always)]
     pub fn start_eta(&self, ybar: f64) -> f64 {
+        self.start_eta_with::<StdMath>(ybar)
+    }
+
+    /// [`Self::start_eta`] through math provider `M`.
+    #[inline(always)]
+    pub fn start_eta_with<M: FamilyMath>(&self, ybar: f64) -> f64 {
         let m = match self.family {
             GlmFamily::Binomial => ybar.clamp(1e-12, 1.0 - 1e-12),
             _ => ybar.max(1e-12),
         };
-        self.link(m)
+        self.link_with::<M>(m)
     }
 }
 
@@ -686,5 +809,71 @@ mod tests {
     fn the_tweedie_deviance_drops_its_first_term_at_zero() {
         let t = fam(GlmFamily::Tweedie, GlmLink::Log, 3.0);
         assert_eq!(t.unit_deviance(0.0, 2.0), -1.0);
+    }
+
+    /// `inv_link_deriv_with` is `1 / link_deriv_with` for every family and
+    /// link, under both `StdMath` and `LibmMath`, and `LibmMath` agrees with
+    /// `StdMath` to rounding.
+    #[test]
+    fn libm_math_matches_std_math_and_inv_link_deriv() {
+        for f in every() {
+            for &raw in &[0.05_f64, 0.3, 1.2, 2.5] {
+                let eta = if f.link.defined_at_zero() {
+                    raw - 0.6
+                } else {
+                    raw
+                };
+                let (e_std, mu_std) = f.mean_with::<StdMath>(eta).unwrap();
+                let (e_lib, mu_lib) = f.mean_with::<LibmMath>(eta).unwrap();
+                assert_eq!(e_std, e_lib);
+                assert!(
+                    (mu_std - mu_lib).abs() <= 1e-14 * (1.0 + mu_std.abs()),
+                    "{f:?} at {eta}: mean {mu_std} vs {mu_lib}"
+                );
+                let v_std = f.variance_with::<StdMath>(mu_lib);
+                let v_lib = f.variance_with::<LibmMath>(mu_lib);
+                assert!(
+                    (v_std - v_lib).abs() <= 1e-14 * (1.0 + v_std.abs()),
+                    "{f:?}: var {v_std} vs {v_lib}"
+                );
+                let dm = f.inv_link_deriv_with::<LibmMath>(mu_lib);
+                let recip = 1.0 / f.link_deriv_with::<LibmMath>(mu_lib);
+                assert!(
+                    (dm - recip).abs() <= 1e-14 * (1.0 + recip.abs()),
+                    "{f:?}: dmu/deta {dm} vs 1/g' {recip}"
+                );
+            }
+        }
+    }
+
+    /// Every generic `*_with<M>` method in `family.rs` calls only `M`'s
+    /// transcendentals: platform math calls appear solely inside `StdMath`.
+    #[test]
+    fn generic_family_calls_no_platform_math_outside_std_math() {
+        let src = include_str!("family.rs");
+        let code = src.split("#[cfg(test)]").next().unwrap();
+        // Strip the `impl FamilyMath for StdMath { ... }` block and comments.
+        let (before, rest) = code
+            .split_once("impl FamilyMath for StdMath")
+            .expect("StdMath impl");
+        let after = rest
+            .split_once("pub struct LibmMath;")
+            .expect("LibmMath follows StdMath")
+            .1;
+        let checked: String = format!("{before}\n{after}")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let platform = [
+            ".ln(", ".ln_1p(", ".log(", ".log2(", ".log10(", ".exp(", ".exp2(", ".exp_m1(",
+            ".powf(", ".powi(", ".sin(", ".cos(", ".tan(", "f64::ln", "f64::exp", "f64::pow",
+        ];
+        for call in platform {
+            assert!(
+                !checked.contains(call),
+                "family.rs calls `{call}` outside `StdMath`"
+            );
+        }
     }
 }
