@@ -1628,7 +1628,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 38] = [
+    const FROZEN: [&str; 39] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -2360,6 +2360,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
                 "0",
                 "entries",
             ],
+        ),
         // `dependence`: decayed MI tables & scale, warm-up hold, row-windowed
         // value ring & held ranks, and clock-windowed stamps & cadence.
         (

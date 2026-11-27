@@ -572,6 +572,9 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         "krls_clock",
         r#"{"type": "krls", "window_size": @20, "closed": "both", "emit_n_atoms": true}"#,
         r#""targets": ["y"], "features": ["x0", "x1"]"#,
+        ALL,
+    ),
+    (
         "dependence_decayed",
         r#"{"type": "dependence", "measures": ["mi"], "bins": 6, "bin_warm_rows": 15}"#,
         r#""targets": ["y", "x1"], "features": ["x0"], "half_life": @50"#,

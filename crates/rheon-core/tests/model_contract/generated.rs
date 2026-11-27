@@ -2642,6 +2642,65 @@ fn krls_cfg() -> KrlsCfg {
         decay: Decay::Halflife(HALFLIFE),
         min_weight: 0.0,
         emit_n_atoms: true,
+        max_state_bytes: None,
+    }
+}
+
+fn krls_window_rows_cfg() -> KrlsCfg {
+    KrlsCfg {
+        max_atoms: None,
+        ald_threshold: None,
+        window_rows: Some(9),
+        decay: Decay::Halflife(f64::INFINITY),
+        ..krls_cfg()
+    }
+}
+
+fn krls_window_clock_cfg() -> KrlsCfg {
+    KrlsCfg {
+        max_atoms: None,
+        ald_threshold: None,
+        window_clock: Some(12.0),
+        closed: WindowClosed::Both,
+        decay: Decay::Halflife(f64::INFINITY),
+        ..krls_cfg()
+    }
+}
+
+#[test]
+fn krls() {
+    let m = Krls::new(krls_cfg()).unwrap();
+    let r = probe_with(m, 2, Some(&Krls::n_eff));
+    assert_eq!(r.kind, "krls");
+    assert_eq!(r.n_features, K);
+    assert_eq!(r.n_targets, 2);
+    assert_eq!(r.n_outputs, 2);
+    assert_eq!(r.pred_len, 2);
+    assert!(r.roundtrips);
+    let rw = probe_windowed(Krls::new(krls_window_rows_cfg()).unwrap(), 2, Some(&Krls::n_eff));
+    assert!(rw.roundtrips);
+    assert_eq!(rw.pred_len, 2);
+}
+
+#[test]
+fn krls_predict_is_the_step() {
+    predict_is_the_step_without_the_step(|| Krls::new(krls_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(
+        || {
+            Krls::new(KrlsCfg {
+                decay: Decay::Halflife(f64::INFINITY),
+                fit_intercept: false,
+                ..krls_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        false,
+    );
+    predict_is_the_step_without_the_step(|| Krls::new(krls_window_rows_cfg()).unwrap(), 2, false);
+    predict_is_the_step_without_the_step(|| Krls::new(krls_window_clock_cfg()).unwrap(), 2, false);
+}
+
 /// Two features against two targets, plug-in MI with fixed edges at the
 /// probes' half-life so rule 8's decay recursion holds from the first row.
 fn dependence_cfg() -> DependenceCfg {
@@ -2668,24 +2727,6 @@ fn dependence_cfg() -> DependenceCfg {
     }
 }
 
-fn krls_window_rows_cfg() -> KrlsCfg {
-    KrlsCfg {
-        max_atoms: None,
-        ald_threshold: None,
-        window_rows: Some(9),
-        decay: Decay::Halflife(f64::INFINITY),
-        ..krls_cfg()
-    }
-}
-
-fn krls_window_clock_cfg() -> KrlsCfg {
-    KrlsCfg {
-        max_atoms: None,
-        ald_threshold: None,
-        window_clock: Some(12.0),
-        closed: WindowClosed::Both,
-        decay: Decay::Halflife(f64::INFINITY),
-        ..krls_cfg()
 /// Windowed forms of `dependence` whose `n_eff()` accessor matches the
 /// step's weight on every row: MI-only and full MI + ranks under `window_rows`.
 fn dependence_windows() -> Vec<(&'static str, DependenceCfg)> {
@@ -2733,37 +2774,6 @@ fn dependence_clock_cfg() -> DependenceCfg {
 }
 
 #[test]
-fn krls() {
-    let m = Krls::new(krls_cfg()).unwrap();
-    let r = probe_with(m, 2, Some(&Krls::n_eff));
-    assert_eq!(r.kind, "krls");
-    assert_eq!(r.n_features, K);
-    assert_eq!(r.n_targets, 2);
-    assert_eq!(r.n_outputs, 2);
-    assert_eq!(r.pred_len, 2);
-    assert!(r.roundtrips);
-    let rw = probe_windowed(Krls::new(krls_window_rows_cfg()).unwrap(), 2, Some(&Krls::n_eff));
-    assert!(rw.roundtrips);
-    assert_eq!(rw.pred_len, 2);
-}
-
-#[test]
-fn krls_predict_is_the_step() {
-    predict_is_the_step_without_the_step(|| Krls::new(krls_cfg()).unwrap(), 2, false);
-    predict_is_the_step_without_the_step(
-        || {
-            Krls::new(KrlsCfg {
-                decay: Decay::Halflife(f64::INFINITY),
-                fit_intercept: false,
-                ..krls_cfg()
-            })
-            .unwrap()
-        },
-        2,
-        false,
-    );
-    predict_is_the_step_without_the_step(|| Krls::new(krls_window_rows_cfg()).unwrap(), 2, false);
-    predict_is_the_step_without_the_step(|| Krls::new(krls_window_clock_cfg()).unwrap(), 2, false);
 fn dependence() {
     let m = Dependence::new(dependence_cfg()).unwrap();
     assert_eq!(m.n_features(), K);

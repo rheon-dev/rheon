@@ -99,13 +99,6 @@ impl Since {
         }
     }
 
-    /// Drop any handed stamp for a row that was not admitted, leaving the
-    /// persisted clock fields untouched.
-    pub(crate) fn discard_next(&mut self) {
-        self.next = None;
-        self.next_on_rows = false;
-    }
-
     /// Whether `every` clock units have passed since the last event, at the
     /// row last stepped, inclusive: by the stamps' exact difference for a
     /// stamped row ([`Stamp::cmp_span`], which reads a comparison with no

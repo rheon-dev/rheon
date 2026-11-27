@@ -60,39 +60,6 @@ impl KernelDef {
         }
     }
 
-    /// [`Self::mass_extreme`] through one slot of a [`DecayMemo`].
-    #[cold]
-    #[inline(never)]
-    pub(super) fn mass_extreme_in(&self, t: f64, slot: &mut (u64, f64)) -> f64 {
-        if self.half_life.is_infinite() {
-            return t;
-        }
-        let bits = t.to_bits();
-        if slot.0 == bits {
-            return slot.1;
-        }
-        let v = self.mass_huge(t);
-        *slot = (bits, v);
-        v
-    }
-
-    /// [`Self::mass_extreme`] through `memo.cut`.
-    #[cold]
-    #[inline(never)]
-    pub(super) fn mass_extreme_cut(&self, t: f64, memo: &mut DecayMemo) -> f64 {
-        if self.half_life.is_infinite() {
-            return t;
-        }
-        let bits = t.to_bits();
-        let slot = &mut memo.cut.get_or_insert_with(Default::default)[(bits & 3) as usize];
-        if slot.0 == bits {
-            return slot.1;
-        }
-        let v = self.mass_huge(t);
-        *slot = (bits, v);
-        v
-    }
-
     /// [`Self::mass_normal`] for a finite half-life at least `2^511`: the
     /// decayed mass in this kernel's power-of-two unit, or `t * scale` where
     /// `t * ln 2 / h < 2^-53`.
@@ -172,15 +139,16 @@ impl KernelDef {
         if d <= 0.0 {
             return 0.0;
         }
-        if self.half_life >= MASS_SCALE_FROM {
-            return self.mass_held_extreme(d, memo);
+        let bits = d.to_bits();
+        if memo.held.0 == bits {
+            return memo.held.1;
         }
-        let (bits, v) = memo.held;
-        if bits == d.to_bits() {
-            return v;
-        }
-        let v = self.mass_held_normal(d, memo);
-        memo.held = (d.to_bits(), v);
+        let v = if self.half_life >= MASS_SCALE_FROM {
+            self.mass_held_extreme(d, memo)
+        } else {
+            self.mass_held_normal(d, memo)
+        };
+        memo.held = (bits, v);
         v
     }
 
@@ -209,18 +177,12 @@ impl KernelDef {
         if self.half_life.is_infinite() {
             return d;
         }
-        let (bits, v) = memo.held;
-        if bits == d.to_bits() {
-            return v;
-        }
         let h = self.half_life;
-        let v = if d / h >= HELD_MASS_FROM {
+        if d / h >= HELD_MASS_FROM {
             let scale = self.mass_scale_huge();
             (h * scale / std::f64::consts::LN_2) * (1.0 - self.discount_in(d, memo))
         } else {
             self.mass_huge(d)
-        };
-        memo.held = (d.to_bits(), v);
-        v
+        }
     }
 }

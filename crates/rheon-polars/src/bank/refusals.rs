@@ -95,7 +95,7 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         } => format!("max_state_bytes of {cap}"),
-        | ModelKind::Dependence(crate::spec::DependenceSpec {
+        ModelKind::Dependence(crate::spec::DependenceSpec {
             max_state_bytes: Some(_),
             ..
         }) => format!("max_state_bytes of {cap}"),
@@ -223,6 +223,7 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             } => (
                 format!("the distinct-sketch entries inside distinct_window_rows = {n}"),
                 "Shorten distinct_window_rows or lower distinct_precision",
+            ),
             ModelKind::Dependence(d) if d.window_size.is_some() => (
                 format!(
                     "the rows inside window_size = {}",

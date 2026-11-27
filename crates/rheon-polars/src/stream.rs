@@ -1024,7 +1024,7 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Spectral(_)
         | ModelKind::Isotonic { .. }
         | ModelKind::Krls(_) => vec![Combo::default()],
-        | ModelKind::Dependence(_) => vec![Combo::default()],
+        ModelKind::Dependence(_) => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life

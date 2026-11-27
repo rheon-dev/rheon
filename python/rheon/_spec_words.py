@@ -317,6 +317,9 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "window_size",
             "closed",
             "emit_n_atoms",
+            "max_state_bytes",
+        }
+    ),
     "dependence": frozenset(
         {
             "measures",

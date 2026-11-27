@@ -951,6 +951,11 @@ fn case_spec(id: &str) -> (Value, Shape) {
             let mut s = fit(
                 json!({"type": "krls", "max_atoms": 50, "ald_threshold": 0.0}),
                 5,
+            );
+            s["half_life"] = json!("inf");
+            s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
         "dependence" => {
             let mut s = fit(
                 json!({

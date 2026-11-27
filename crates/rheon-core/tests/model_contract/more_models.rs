@@ -341,6 +341,8 @@ fn every_per_target_weight_is_the_rows_that_carried_that_target() {
         (
             "krls",
             each_target_weight_is_its_own(Krls::new(krls_cfg()).unwrap(), true),
+        ),
+        (
             "dependence",
             each_target_weight_is_its_own(Dependence::new(dependence_cfg()).unwrap(), false),
         ),

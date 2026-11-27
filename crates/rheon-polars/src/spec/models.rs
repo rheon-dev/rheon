@@ -1007,6 +1007,8 @@ impl Spec {
                         ));
                         break;
                     }
+                }
+            }
             ModelKind::Dependence(_) => {
                 let decays = self
                     .decays()

@@ -350,6 +350,8 @@ def describe_api(cli: Path | None = None) -> str:
                 window_size=30.0,
                 closed="both",
                 emit_n_atoms=True,
+            ),
+        ),
         ("dependence minimal", dict(targets=["y"], features=["x0"])),
         (
             "dependence full",

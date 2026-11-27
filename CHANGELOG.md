@@ -299,6 +299,17 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **Nonlinear observation filters (EKF and UKF) on `kalman`** (PLAN 497):
+  `rp.spec.kalman` accepts GLM observation `family` (`"gaussian"`, `"poisson"`,
+  `"gamma"`, `"binomial"`, `"tweedie"`), `link`, `dispersion`, `tweedie_power`,
+  `filter` (`"ekf"` or `"ukf"`), `ukf_rule` (`"scalar_index"` default — 4.07×
+  faster than `"merwe"` at `k = 20` on arm64 and feature-order invariant — or
+  `"merwe"` with `alpha`/`beta`/`kappa`), and `ukf_noise` (`"exact"` or
+  `"plugin"`). Composes with fixed-lag RTS smoothing (`smooth_lag`), uses
+  pure-Rust `libm` transcendentals, leaves linear `kalman` bit-identical, and
+  matches `filterpy` within `1.32e-15` across 9 × 50-seed oracle grids
+  (x86-64/aligned timings owed at task 583).
+
 - **HyperLogLog++ and sliding-window distinct-count sketches in `audit`**
   (PLAN 509; the user, 2026-11-21 and 2026-11-27). `rp.spec.audit` gains
   optional `distinct_precision` (`8` to `16`, off by default),
@@ -1304,6 +1315,23 @@ model that only the new build has is listed as an addition and passes.
   and the filter is 4.1e-15 off statsmodels at every scale.
 
 ### Fixed
+
+- **Stage 1c review residue (`578c`/`578e`/`578j`) and hot-path instruction
+  budgets:** closed `MERGE-2` (exact `i128` `restart_after_step_back` past 104
+  days / `2^53`), `MERGE-4` (eager `by`-dtype validation, `restarts` overflow
+  guard, damaged-state reporting, compound dtype names), `BANK-4` (typed empty
+  chunks validate clock dtype conflicts), `BANK-11` (refused chunks forget
+  fresh formula resolvers), `BANK-12` (`ArrowCol::Num` reaches formula targets),
+  `PY-15 (5, 6)` (`gram.py` mapping and shape checks), `DIAG-10 (2, 3)`
+  (scoring-clock late-row preservation and `HeldMedian::Tree::rescale`
+  bottom-up sum recomputation), `PY-10` (`rp.sim.regimes` validation and
+  boundary-PSD jitter), `PY-13 (1)` (`glm` uncentred limits), `TEST-3`
+  (binomial refit parity), `TEST-6` (HMM docstring figure), `TEST-11`, and
+  `TEST-10` proptests (fixing overflow bugs in `spectral.rs` and
+  `realized`/`power_variation`). Outlined `Audit::step_with_hll` and checked
+  window decay memos before the `MASS_SCALE_FROM` branch to recover
+  `audit_continuous` and `window_ewm_*` instruction counts, and tightened
+  `window_clock_step_running` by −44.02% (`3,107,954` to `1,739,908`).
 
 - **FIGARCH start identification uses `SE(d)` at `α = 0.001` instead of fixed
   row floors** (GARCH-8 (2); the user, 2026-11-27). Removed FIGARCH's

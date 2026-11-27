@@ -1996,6 +1996,7 @@ impl Audit {
     }
 
     /// Update the non-HLL columns, pairs, and clock statistics for a committed row.
+    #[inline]
     fn record_base_row(&mut self, x: &[f64], d_clock: f64) {
         let cap = self.cfg.distinct_cap;
         if !self.fresh && d_clock.is_finite() && d_clock >= 0.0 {
@@ -2023,39 +2024,12 @@ impl Audit {
             }
         }
     }
-}
 
-impl OnlineModel for Audit {
-    /// Count the row: every column's value, the pairs', the clock's step, and
-    /// any enabled HyperLogLog++ sketch. A row of weight 0 counts nothing,
-    /// its clock step included (hard rule 9: it is still predicted, counts in
-    /// no clock, and reaches no HLL register); any other weight goes into
-    /// `n_eff` alone (and a non-positive or unusable weight reaches no HLL
-    /// register), while a value that is not usable is counted, not refused.
-    fn step_into(
-        &mut self,
-        x: &[f64],
-        _y: &[Option<f64>],
-        d_clock: f64,
-        weight: f64,
-        out: &mut Step,
-    ) {
-        out.pred.clear();
-        out.n_eff = self.n_eff;
-        out.extra = None;
-
-        // Fast path: HLL++ off (zero added work or state mutation).
-        let Some(p) = self.cfg.distinct_precision() else {
-            if weight == 0.0 {
-                return;
-            }
-            self.record_base_row(x, d_clock);
-            if weight.abs() <= INPUT_BOUND && weight > 0.0 {
-                self.n_eff += weight;
-            }
-            return;
-        };
-
+    /// Outlined HLL++ step path so the non-HLL fast path in `step_into`
+    /// keeps a minimal stack frame and spills no extra registers.
+    #[cold]
+    #[inline(never)]
+    fn step_with_hll(&mut self, p: u8, x: &[f64], d_clock: f64, weight: f64, out: &mut Step) {
         let hll_weight_ok = weight.abs() <= INPUT_BOUND && weight > 0.0;
         let k = self.cfg.n_columns;
         let base_bytes = self.cfg.fixed_state_bytes();
@@ -2300,6 +2274,41 @@ impl OnlineModel for Audit {
         };
         hc.note(exact_bytes, state_cap);
         self.n_eff += weight;
+    }
+}
+
+impl OnlineModel for Audit {
+    /// Count the row: every column's value, the pairs', the clock's step, and
+    /// any enabled HyperLogLog++ sketch. A row of weight 0 counts nothing,
+    /// its clock step included (hard rule 9: it is still predicted, counts in
+    /// no clock, and reaches no HLL register); any other weight goes into
+    /// `n_eff` alone (and a non-positive or unusable weight reaches no HLL
+    /// register), while a value that is not usable is counted, not refused.
+    fn step_into(
+        &mut self,
+        x: &[f64],
+        _y: &[Option<f64>],
+        d_clock: f64,
+        weight: f64,
+        out: &mut Step,
+    ) {
+        out.pred.clear();
+        out.n_eff = self.n_eff;
+        out.extra = None;
+
+        // Fast path: HLL++ off (keep HLL++ outlined so the non-HLL prologue
+        // stays small and spills no extra registers).
+        let Some(p) = self.cfg.distinct_precision() else {
+            if weight == 0.0 {
+                return;
+            }
+            self.record_base_row(x, d_clock);
+            if weight.abs() <= INPUT_BOUND && weight > 0.0 {
+                self.n_eff += weight;
+            }
+            return;
+        };
+        self.step_with_hll(p, x, d_clock, weight, out);
     }
 
     fn predict(&self, _x: &[f64], d_clock: f64) -> Step {

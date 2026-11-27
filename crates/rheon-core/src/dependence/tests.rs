@@ -884,6 +884,7 @@ fn state_roundtrip_at_every_stage_and_wrong_shape_is_refused() {
         pairs: false,
         gap_cap: Some(100.0),
         has_clock: false,
+        distinct: None,
     })
     .unwrap()
     .state();

@@ -545,15 +545,12 @@ impl KernelDef {
         if t <= 0.0 {
             return 0.0;
         }
-        if self.half_life >= held_mass::MASS_SCALE_FROM {
-            return self.mass_extreme_in(t, &mut memo.mass);
+        let bits = t.to_bits();
+        if memo.mass.0 == bits {
+            return memo.mass.1;
         }
-        let (bits, v) = memo.mass;
-        if bits == t.to_bits() {
-            return v;
-        }
-        let v = self.mass_normal(t);
-        memo.mass = (t.to_bits(), v);
+        let v = self.mass_positive(t);
+        memo.mass = (bits, v);
         v
     }
 
@@ -566,15 +563,12 @@ impl KernelDef {
         if t <= 0.0 {
             return 0.0;
         }
-        if self.half_life >= held_mass::MASS_SCALE_FROM {
-            return self.mass_extreme_cut(t, memo);
-        }
         let bits = t.to_bits();
         let slot = &mut memo.cut.get_or_insert_with(Default::default)[(bits & 3) as usize];
         if slot.0 == bits {
             return slot.1;
         }
-        let v = self.mass_normal(t);
+        let v = self.mass_positive(t);
         *slot = (bits, v);
         v
     }
@@ -586,15 +580,12 @@ impl KernelDef {
         if t <= 0.0 {
             return 0.0;
         }
-        if self.half_life >= held_mass::MASS_SCALE_FROM {
-            return self.mass_extreme_in(t, &mut memo.mass_far);
+        let bits = t.to_bits();
+        if memo.mass_far.0 == bits {
+            return memo.mass_far.1;
         }
-        let (bits, v) = memo.mass_far;
-        if bits == t.to_bits() {
-            return v;
-        }
-        let v = self.mass_normal(t);
-        memo.mass_far = (t.to_bits(), v);
+        let v = self.mass_positive(t);
+        memo.mass_far = (bits, v);
         v
     }
 
@@ -618,15 +609,23 @@ impl KernelDef {
         if t <= 0.0 {
             return 0.0;
         }
-        if self.half_life >= held_mass::MASS_SCALE_FROM {
-            return self.mass_extreme_in(t, slot);
-        }
-        if slot.0 == t.to_bits() {
+        let bits = t.to_bits();
+        if slot.0 == bits {
             return slot.1;
         }
-        let v = self.mass_normal(t);
-        *slot = (t.to_bits(), v);
+        let v = self.mass_positive(t);
+        *slot = (bits, v);
         v
+    }
+
+    /// [`Self::mass`] of a strictly positive distance `t > 0.0`.
+    #[inline]
+    fn mass_positive(&self, t: f64) -> f64 {
+        if self.half_life >= held_mass::MASS_SCALE_FROM {
+            self.mass_extreme(t)
+        } else {
+            self.mass_normal(t)
+        }
     }
 
     /// `∫_0^T λ^s ds`: the decayed mass of `T` units of time.

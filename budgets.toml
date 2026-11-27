@@ -384,7 +384,7 @@ what = "WindowsRun::feed of one frame, ewm_mean of x0 with no window, half-life 
 budget = 599156
 [instructions.window_clock_step_running]
 what = "WindowsRun::feed of one frame, clock_step of the clock t with stat mean, half-life 1000, ungrouped: the decayed mean of the clock's steps, a row operator run before the empty clock-only window core; its difference from window_ewm_mean_running is a row of the clock step above a running mean"
-budget = 3107954
+budget = 1739908
 
 # --- scaling ---------------------------------------------------------------------
 # How a cost grows, not what it is (docs/PERFORMANCE.md, "How cost grows";

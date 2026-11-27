@@ -749,8 +749,13 @@ impl ModelKind {
             } | ModelKind::Audit {
                 distinct_window_size: Some(_),
                 ..
-            } | ModelKind::Krls(k) if k.window_size.is_some()
-            | ModelKind::Dependence(d) if d.window_size.is_some()
+            } | ModelKind::Krls(super::KrlsSpec {
+                window_size: Some(_),
+                ..
+            }) | ModelKind::Dependence(super::DependenceSpec {
+                window_size: Some(_),
+                ..
+            })
         )
     }
 
