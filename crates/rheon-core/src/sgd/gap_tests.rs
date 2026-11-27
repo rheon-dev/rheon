@@ -60,6 +60,9 @@ pub(super) fn cfg(k: usize, lr: f64, schedule: LearningRate) -> SgdCfg {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     }
 }
 
@@ -75,6 +78,7 @@ pub(super) fn pa_cfg(k: usize) -> PaCfg {
         min_weight: 0.0,
         constraint: None,
         standardize: true,
+        average: false,
     }
 }
 

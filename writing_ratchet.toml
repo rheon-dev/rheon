@@ -639,6 +639,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/ewm_moments.rs"]
 
+[messages."crates/rheon-core/src/ewridge/evidence.rs"]
+
 [messages."crates/rheon-core/src/exact.rs"]
 "remedy" = 2
 
@@ -816,6 +818,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/ddsketch_model.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/ewm_moments.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/ewridge/evidence.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/exact.rs#messages"]
 

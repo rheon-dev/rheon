@@ -3052,6 +3052,11 @@ fn kinds() -> Vec<Kind> {
             first: smoothed_first,
             run: smoothed_run,
         },
+        Kind {
+            name: "bank_regression_variants",
+            first: regression_variants_first,
+            run: regression_variants_run,
+        },
     ]
 }
 
@@ -3127,6 +3132,41 @@ fn smoothed_run(bytes: &[u8], input: &DataFrame) -> Ran {
             ("fit_predict".into(), out),
         ],
     ))
+}
+
+/// The specs of `bank_regression_variants`: all regression variants in one
+/// schema-72 bank (`ewridge` evidence with `pred_std`, `lasso` `positive`,
+/// `huber` redescending Tukey norm, averaged `pa`, and `sgd` with `l1`,
+/// `optimal`, `average` and `invariant`).
+fn regression_variants_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "ev", "model": {"type": "ewridge", "evidence": true}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
+        r#"{"name": "lpos", "model": {"type": "lasso", "penalties": [0.2, 0.05], "positive": true}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
+        r#"{"name": "tukey", "model": {"type": "huber", "huber_norm": "tukey", "huber_refit_rows": 30}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
+        r#"{"name": "pa_avg", "model": {"type": "pa", "mode": "pa1", "average": true}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
+        r#"{"name": "sgd_var", "model": {"type": "sgd", "schedule": "optimal", "l1": 0.01, "l2": 0.05, "average": true, "invariant": true}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn regression_variants_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(regression_variants_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn regression_variants_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut bank = Bank::load_bytes(bytes, Some(&regression_variants_specs()))?;
+    let again = bank.save_bytes()?;
+    let cols = bank.fit_predict(input).map_err(|e| e.to_string())?;
+    let out = DataFrame::new(input.height(), cols).map_err(|e| e.to_string())?;
+    Ok((again, vec![("fit_predict".into(), out)]))
 }
 
 fn kind_of(f: &Fixture) -> Kind {
@@ -3558,7 +3598,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 21),
+            ("bank", 22),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),

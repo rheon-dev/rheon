@@ -209,6 +209,9 @@ use crate::since::Since;
 use crate::solve::{CholWork, QuadWork, dot_aug};
 use crate::{Decay, EwCov, EwQuantile, SpdFactor};
 
+mod norms;
+pub use norms::HuberNorm;
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RobustLoss {
@@ -314,7 +317,7 @@ pub(crate) fn mad_sketches_fit(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct RobustCfg {
     pub n_features: usize,
     pub n_targets: usize,
@@ -438,14 +441,70 @@ pub struct RobustCfg {
     /// learned row through the first at least this many clock units after
     /// it, once they hold [`Self::span_refit_least`] rows. Its buffers grow
     /// as the rows come, held to `max_state_bytes` a
-    /// group. Last, and written only when set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// group.
+    #[serde(default)]
     pub refit_clock: Option<f64>,
     /// The bytes a group's refit buffers may hold under a span of the
     /// clock: `None` is 256 KB, at most 64 MiB (docs/PLAN.md task 538).
-    /// Last, and written only when set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub max_state_bytes: Option<u64>,
+    /// M-estimator weight function for `huber`: Huber's monotone cut by
+    /// default, or one of four redescending norms (`tukey`, `andrews`,
+    /// `hampel`, `ramsay`). Huber only.
+    ///
+    /// Custom `Serialize` skips this field (and `refit_clock`/`max_state_bytes`
+    /// when `None`) whenever `huber_norm` is `Huber`, keeping existing bytes
+    /// identical; when non-default, all trailing fields are written explicitly
+    /// so positional compact msgpack never shifts.
+    #[serde(default)]
+    pub huber_norm: HuberNorm,
+}
+
+impl Serialize for RobustCfg {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        struct HumanF64(f64);
+        impl Serialize for HumanF64 {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                crate::humanfloat::f64_or_tag::serialize(&self.0, s)
+            }
+        }
+        let custom_norm = !self.huber_norm.is_huber();
+        let has_cap = custom_norm || self.max_state_bytes.is_some();
+        let has_clock = has_cap || self.refit_clock.is_some();
+        let len = 20 + usize::from(has_clock) + usize::from(has_cap) + usize::from(custom_norm);
+        let mut st = serializer.serialize_struct("RobustCfg", len)?;
+        st.serialize_field("n_features", &self.n_features)?;
+        st.serialize_field("n_targets", &self.n_targets)?;
+        st.serialize_field("fit_intercept", &self.fit_intercept)?;
+        st.serialize_field("decay", &self.decay)?;
+        st.serialize_field("loss", &self.loss)?;
+        st.serialize_field("ridge", &self.ridge)?;
+        st.serialize_field("standardize", &self.standardize)?;
+        st.serialize_field("min_weight", &self.min_weight)?;
+        st.serialize_field("solve_every", &HumanF64(self.solve_every))?;
+        st.serialize_field("max_rows_between_solves", &self.max_rows_between_solves)?;
+        st.serialize_field("solve_share", &self.solve_share)?;
+        st.serialize_field("quantile_eps", &self.quantile_eps)?;
+        st.serialize_field("huber_scale", &self.huber_scale)?;
+        st.serialize_field("huber_scale_decay", &self.huber_scale_decay)?;
+        st.serialize_field("feature_sets", &self.feature_sets)?;
+        st.serialize_field("ridge_scale", &self.ridge_scale)?;
+        st.serialize_field("emit_scale", &self.emit_scale)?;
+        st.serialize_field("refit_rows", &self.refit_rows)?;
+        st.serialize_field("mad_anchor", &self.mad_anchor)?;
+        st.serialize_field("min_weight_holds_learning", &self.min_weight_holds_learning)?;
+        if has_clock {
+            st.serialize_field("refit_clock", &self.refit_clock)?;
+        }
+        if has_cap {
+            st.serialize_field("max_state_bytes", &self.max_state_bytes)?;
+        }
+        if custom_norm {
+            st.serialize_field("huber_norm", &self.huber_norm)?;
+        }
+        st.end()
+    }
 }
 
 /// A target's band system as a solve factorizes it -- `A`, the band Gram
@@ -701,6 +760,13 @@ impl RobustCfg {
                          to inf for least squares."
                     ));
                 }
+                if self.huber_norm == HuberNorm::Ramsay && !delta.is_finite() {
+                    no.refuse(format!(
+                        "{kind}: huber_delta must be finite under huber_norm=\"ramsay\", \
+                         but it is {delta}. Set huber_delta to a finite positive value such as \
+                         0.3, or use huber_norm=\"huber\"."
+                    ));
+                }
                 if let Some(d) = self.huber_scale_decay {
                     no.take(crate::model::check_scale_decay(kind, d));
                 }
@@ -710,6 +776,12 @@ impl RobustCfg {
                     no.refuse(format!(
                         "{kind}: quantile must be above 0 and below 1, but it is {tau}. Set \
                          quantile to the level to fit, such as 0.5 for the median."
+                    ));
+                }
+                if !self.huber_norm.is_huber() {
+                    no.refuse(format!(
+                        "{kind}: huber_norm applies only to huber, not quantile. Leave \
+                         huber_norm out, or fit with huber."
                     ));
                 }
                 // The band is drawn in the residuals' MAD (a spec's), or
@@ -1600,9 +1672,18 @@ impl Robust {
                 // nothing.
                 let w_rob = match scale {
                     Some(scale) if pred.is_finite() => {
-                        let cut = delta * scale;
-                        let a = (yj - pred).abs();
-                        if a <= cut || a == 0.0 { 1.0 } else { cut / a }
+                        if self.cfg.huber_norm.is_huber() {
+                            let cut = delta * scale;
+                            let a = (yj - pred).abs();
+                            if a <= cut || a == 0.0 { 1.0 } else { cut / a }
+                        } else {
+                            let a = (yj - pred).abs();
+                            if a == 0.0 {
+                                1.0
+                            } else {
+                                self.cfg.huber_norm.weight(a / scale, delta)
+                            }
+                        }
                     }
                     _ => 1.0,
                 };
@@ -1687,45 +1768,141 @@ impl Robust {
         let (mut passes, mut solved) = (0, false);
         // The fit a pass replaced, whose vector the next pass writes over.
         let mut spare = Vec::new();
-        for _ in 0..REFIT_PASSES {
-            passes += 1;
-            let mut scale = None;
-            match &beta {
-                Some(b) => {
-                    for (i, a) in absr.iter_mut().enumerate() {
-                        *a = (rows.y(i) - fitted(b, rows.x(i), intercept)).abs();
+        let norm = self.cfg.huber_norm;
+        if norm.is_huber() {
+            for _ in 0..REFIT_PASSES {
+                passes += 1;
+                let mut scale = None;
+                match &beta {
+                    Some(b) => {
+                        for (i, a) in absr.iter_mut().enumerate() {
+                            *a = (rows.y(i) - fitted(b, rows.x(i), intercept)).abs();
+                        }
+                        scale = scale_of(self.cfg.huber_scale, &absr, &vs);
+                        huber_weights(&absr, scale, delta, &mut u);
                     }
-                    scale = scale_of(self.cfg.huber_scale, &absr, &vs);
-                    huber_weights(&absr, scale, delta, &mut u);
+                    None => u.fill(1.0),
                 }
-                None => u.fill(1.0),
-            }
-            self.replay(j, &rows, &u, &mut z);
-            let mut next = std::mem::take(&mut spare);
-            next.clear();
-            next.resize(k, 0.0);
-            let mut sc = std::mem::take(&mut self.scratch);
-            let pass = if intercept {
-                self.solve_centred(&mut sc, k, j, c, &mut next)
-            } else {
-                self.solve_through_origin(&mut sc, j, c, &mut next)
-            };
-            // The passes read no data shares: the factor is a spare.
-            let Some(shares) = pass else {
+                self.replay(j, &rows, &u, &mut z);
+                let mut next = std::mem::take(&mut spare);
+                next.clear();
+                next.resize(k, 0.0);
+                let mut sc = std::mem::take(&mut self.scratch);
+                let pass = if intercept {
+                    self.solve_centred(&mut sc, k, j, c, &mut next)
+                } else {
+                    self.solve_through_origin(&mut sc, j, c, &mut next)
+                };
+                // The passes read no data shares: the factor is a spare.
+                let Some(shares) = pass else {
+                    self.scratch = sc;
+                    break;
+                };
+                if let Some((f, _)) = shares {
+                    sc.give(f);
+                }
                 self.scratch = sc;
-                break;
-            };
-            if let Some((f, _)) = shares {
-                sc.give(f);
+                solved = true;
+                let done = converged(&rows, intercept, beta.as_deref(), &next, scale);
+                if let Some(old) = beta.replace(next) {
+                    spare = old;
+                }
+                if done {
+                    break;
+                }
             }
-            self.scratch = sc;
-            solved = true;
-            let done = converged(&rows, intercept, beta.as_deref(), &next, scale);
-            if let Some(old) = beta.replace(next) {
-                spare = old;
+        } else {
+            // Redescending norms are non-convex: warm-start IRLS from a convex
+            // monotone Huber fit (delta = 1.345) on the buffered rows so the
+            // redescending stage enters the right basin even under heavy
+            // contamination.
+            let mut warm_beta: Option<Vec<f64>> = None;
+            for _ in 0..(REFIT_PASSES / 2) {
+                let mut scale = None;
+                match &warm_beta {
+                    Some(b) => {
+                        for (i, a) in absr.iter_mut().enumerate() {
+                            *a = (rows.y(i) - fitted(b, rows.x(i), intercept)).abs();
+                        }
+                        scale = scale_of(self.cfg.huber_scale, &absr, &vs);
+                        huber_weights(&absr, scale, HuberNorm::Huber.default_delta(), &mut u);
+                    }
+                    None => u.fill(1.0),
+                }
+                self.replay(j, &rows, &u, &mut z);
+                let mut next = std::mem::take(&mut spare);
+                next.clear();
+                next.resize(k, 0.0);
+                let mut sc = std::mem::take(&mut self.scratch);
+                let pass = if intercept {
+                    self.solve_centred(&mut sc, k, j, c, &mut next)
+                } else {
+                    self.solve_through_origin(&mut sc, j, c, &mut next)
+                };
+                let Some(shares) = pass else {
+                    self.scratch = sc;
+                    break;
+                };
+                if let Some((f, _)) = shares {
+                    sc.give(f);
+                }
+                self.scratch = sc;
+                let done = converged(&rows, intercept, warm_beta.as_deref(), &next, scale);
+                if let Some(old) = warm_beta.replace(next) {
+                    spare = old;
+                }
+                if done {
+                    break;
+                }
             }
-            if done {
-                break;
+            if warm_beta.is_some() {
+                beta = warm_beta;
+                solved = true;
+            }
+            for _ in 0..REFIT_PASSES {
+                passes += 1;
+                let mut scale = None;
+                match &beta {
+                    Some(b) => {
+                        for (i, a) in absr.iter_mut().enumerate() {
+                            *a = (rows.y(i) - fitted(b, rows.x(i), intercept)).abs();
+                        }
+                        scale = scale_of(self.cfg.huber_scale, &absr, &vs);
+                        norm.fill_weights(&absr, scale, delta, &mut u);
+                        // Guard against every buffered row being rejected by a
+                        // redescending cutoff: keep the last valid fit & sums.
+                        if u.iter().all(|&wi| !(wi > 0.0 && wi.is_finite())) {
+                            break;
+                        }
+                    }
+                    None => u.fill(1.0),
+                }
+                self.replay(j, &rows, &u, &mut z);
+                let mut next = std::mem::take(&mut spare);
+                next.clear();
+                next.resize(k, 0.0);
+                let mut sc = std::mem::take(&mut self.scratch);
+                let pass = if intercept {
+                    self.solve_centred(&mut sc, k, j, c, &mut next)
+                } else {
+                    self.solve_through_origin(&mut sc, j, c, &mut next)
+                };
+                let Some(shares) = pass else {
+                    self.scratch = sc;
+                    break;
+                };
+                if let Some((f, _)) = shares {
+                    sc.give(f);
+                }
+                self.scratch = sc;
+                solved = true;
+                let done = converged(&rows, intercept, beta.as_deref(), &next, scale);
+                if let Some(old) = beta.replace(next) {
+                    spare = old;
+                }
+                if done {
+                    break;
+                }
             }
         }
         self.solve_failures = failures;
@@ -1805,7 +1982,7 @@ impl Robust {
                     let scale = self.scale_after_age(j, lam_scale);
                     !matches!(
                         self.row_update(yj, pj, scale, weight, 0.0, 0.0),
-                        RowUpdate::Fit { w, .. } if w.is_nan() || w <= 0.0
+                        RowUpdate::Fit { w, .. } if w.is_nan()
                     )
                 }
             };
@@ -3064,10 +3241,20 @@ impl OnlineModel for Robust {
                 // It is a usable row that fails, and counted as present above;
                 // a row holding a value that is not usable never gets here.
                 RowUpdate::Fit { w, .. } if w.is_nan() || w <= 0.0 => {
-                    self.age_refit(j, lam, lam_scale);
                     self.cov[j].decay(lam_t);
                     self.wj[j] = aged;
-                    continue;
+                    // A positive-weight row rejected by a redescending norm
+                    // (`w == 0.0` with finite `w`) contributes nothing to the
+                    // Gram, but still enters the residual scale and the refit
+                    // buffer so outliers are not hidden from MAD or IRLS.
+                    if counts && !w.is_nan() {
+                        if self.buffer_row(j, x, yj, e_abs, weight, lam, lam_scale, now) {
+                            refits.push(j);
+                        }
+                    } else {
+                        self.age_refit(j, lam, lam_scale);
+                        continue;
+                    }
                 }
                 RowUpdate::Fit { w, target } => {
                     // The same `a`/`b` as `EwCov::update` forms from the same

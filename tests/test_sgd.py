@@ -218,7 +218,10 @@ class TestPlumbing:
             _spec(loss="hinge")
         with pytest.raises(
             ValueError,
-            match='schedule must be "constant", "inv_scaling" or "adagrad", but it is "cosine"',
+            match=(
+                'schedule must be "constant", "inv_scaling", "adagrad" or "optimal",'
+                ' but it is "cosine"'
+            ),
         ):
             _spec(schedule="cosine")
         with pytest.raises(ValueError, match="learning_rate"):

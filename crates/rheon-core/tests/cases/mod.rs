@@ -51,6 +51,7 @@ impl<M: OnlineModel> Run for Model<M> {
             Some(Extra::Lasso { lam_selected }) => lam_selected,
             Some(Extra::Huber { scale }) => scale,
             Some(Extra::VectorAr { values }) => values,
+            Some(Extra::EwRidge { pred_std }) => pred_std,
             Some(other) => panic!("an extra the harness does not know: {other:?}"),
             None => Vec::new(),
         };
@@ -691,6 +692,7 @@ fn ewridge_cfg() -> EwRidgeCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        evidence: None,
     }
 }
 
@@ -715,6 +717,7 @@ fn lasso_cfg() -> LassoCfg {
         max_iter: 100,
         tol: 1e-10,
         target_gaps: TargetGaps::OwnRows,
+        positive: false,
     }
 }
 
@@ -765,6 +768,7 @@ fn robust_cfg(loss: RobustLoss) -> RobustCfg {
         min_weight_holds_learning: true,
         refit_clock: None,
         max_state_bytes: None,
+        huber_norm: rheon_core::HuberNorm::Huber,
     }
 }
 
@@ -871,6 +875,9 @@ fn sgd_cfg(loss: SgdLoss, n_targets: usize) -> SgdCfg {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     }
 }
 
@@ -906,6 +913,7 @@ fn pa_cfg() -> PaCfg {
         min_weight: 3.0,
         constraint: None,
         standardize: true,
+        average: false,
     }
 }
 
@@ -4324,6 +4332,103 @@ pub fn all() -> Vec<Case> {
             K,
             Targets::Separate(2),
             2
+        ),
+        // Regression variants (schema 72, new modes; existing forms unchanged):
+        // empirical-Bayes evidence on `ewridge`, non-negative `lasso`, redescending
+        // Tukey `huber`, Polyak-Ruppert averaged `pa`, and `sgd` with `l1`,
+        // `Optimal`, `average` and `invariant`.
+        case!(
+            "ewridge_evidence",
+            "EwRidge",
+            EwRidge,
+            EwRidge::new(EwRidgeCfg {
+                ridge: vec![0.0],
+                evidence: Some(EvidenceCfg::default()),
+                ..ewridge_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        case!(
+            "lasso_positive",
+            "Lasso",
+            Lasso,
+            Lasso::new(LassoCfg {
+                positive: true,
+                min_weight_holds_learning: false,
+                ..lasso_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(1),
+            40
+        ),
+        case!(
+            "huber_tukey",
+            "Robust",
+            Robust,
+            Robust::new(RobustCfg {
+                loss: RobustLoss::Huber {
+                    delta: HuberNorm::Tukey.default_delta(),
+                },
+                huber_norm: HuberNorm::Tukey,
+                huber_scale: rheon_core::HuberScale::Mad,
+                emit_scale: true,
+                refit_rows: 40,
+                mad_anchor: true,
+                min_weight_holds_learning: false,
+                ..robust_cfg(RobustLoss::Huber {
+                    delta: HuberNorm::Tukey.default_delta(),
+                })
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        case!(
+            "pa_average",
+            "Pa",
+            Pa,
+            Pa::new(PaCfg {
+                n_features: K,
+                n_targets: 2,
+                fit_intercept: true,
+                decay: decay(),
+                mode: PaMode::Pa1,
+                c: 1.0,
+                eps: 0.01,
+                min_weight: 3.0,
+                constraint: None,
+                standardize: true,
+                average: true,
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        case!(
+            "sgd_variants",
+            "Sgd",
+            Sgd,
+            Sgd::new(SgdCfg {
+                schedule: LearningRate::Optimal,
+                l1: 0.01,
+                l2: 0.05,
+                average: true,
+                invariant: true,
+                target_spread: true,
+                mad_anchor: true,
+                min_weight_holds_learning: false,
+                ..sgd_cfg(SgdLoss::Squared, 2)
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
         ),
     ]
 }

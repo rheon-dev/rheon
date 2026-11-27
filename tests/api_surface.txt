@@ -266,6 +266,8 @@
     snapshot_every = None
     max_rows_between_snapshots = None
     window_budget = None
+    evidence = False
+    evidence_prior = None
     common
   expectile:
     name
@@ -385,6 +387,7 @@
     huber_refit_span = None
     max_state_bytes = None
     refit_budget = None
+    huber_norm = None
     common
   isotonic:
     name
@@ -450,6 +453,7 @@
     max_iter = None
     tol = None
     target_gaps = 'own_rows'
+    positive = False
     common
   marginal:
     name
@@ -503,6 +507,7 @@
     coef_max = None
     coef_sum = None
     standardize = True
+    average = False
     common
   pca:
     name
@@ -593,6 +598,7 @@
     learning_rate = None
     schedule = 'constant'
     power = None
+    l1 = None
     l2 = None
     clip_gradient = None
     standardize = True
@@ -600,6 +606,8 @@
     coef_max = None
     coef_sum = None
     strict_binary = False
+    average = False
+    invariant = False
     common
   spectral:
     name
@@ -3304,6 +3312,7 @@
   ftrl.loss: logistic, squared
   hmm.covariance_type: diag, full, tied
   hmm.init: farthest, first, k-means++, lloyd
+  huber.huber_norm: andrews, hampel, huber, ramsay, tukey
   huber.huber_scale: mad, rms
   huber.ridge_scale: mean, sum
   kalman.covariance_form: covariance, square_root
@@ -3323,7 +3332,7 @@
   rcov.kind: kernel, plain, preavg
   sgd.huber_scale: mad, rms
   sgd.loss: epsilon_insensitive, huber, logistic, poisson, quantile, squared
-  sgd.schedule: adagrad, constant, inv_scaling
+  sgd.schedule: adagrad, constant, inv_scaling, optimal
   rp.ops.ewm_mean.closed: both, left, none, right
   rp.ops.ewm_mean.partial: drop, keep, null
   rp.ops.ewm_quantile.closed: both, left, none, right
@@ -3444,7 +3453,7 @@
     ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size
     ewm_moments: bias, kind, lag_tolerance, max_state_bytes, se, terms, window_rows, window_size
-    ewridge: closed, coef_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
+    ewridge: closed, coef_prior, evidence, evidence_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
     expectile: closed, expectile, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, window_rows, window_size
     ftrl: alpha, beta, l1, l2, loss, standardize, strict_binary
     garch: dist, forecast_rows, max_horizon_work, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
@@ -3452,14 +3461,14 @@
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows, warm_span
     holt: damping_half_life, forecast_spans, initial_level, initial_seasonal, initial_trend, max_state_bytes, period, seasonal, seasonal_half_life, seasonal_periods, start, trend, trend_half_life
-    huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, max_rows_between_solves, max_state_bytes, refit_budget, ridge, ridge_scale, solve_every, standardize
+    huber: emit_huber_scale, feature_sets, huber_delta, huber_norm, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, max_rows_between_solves, max_state_bytes, refit_budget, ridge, ridge_scale, solve_every, standardize
     isotonic: closed, increasing, max_state_bytes, out_of_bounds, window_rows, window_size, y_max, y_min
     kalman: coef_half_life, covariance_form, emit_smoothed_se, forecast_spans, max_state_bytes, obs_var, p0, q, revert_half_life, share_p, smooth_lag, standardize
     kmeans: dead_frac, init, n_clusters, scale_floor, seed, split_merge, split_merge_every, split_merge_every_rows, standardize, update_every, update_every_rows, warm_rows, warm_span
-    lasso: closed, l1_ratio, max_iter, max_rows_between_snapshots, max_rows_between_solves, penalties, select_half_life, snapshot_every, solve_every, target_gaps, tol, window_budget, window_size
+    lasso: closed, l1_ratio, max_iter, max_rows_between_snapshots, max_rows_between_solves, penalties, positive, select_half_life, snapshot_every, solve_every, target_gaps, tol, window_budget, window_size
     marginal: bin_budget, bin_edges, bin_huber_delta, bin_refit_rows, bin_rule, bin_stat, bin_warm_rows, bins, closed, cross_lags, feature_moments, lags, max_rows_between_snapshots, refit_budget, serial_rule, shards, snapshot_every, window_budget, window_lags, window_size
     micro: beta_mu, eps, macro_link, max_clusters, max_rows_between_prunes, prune_every, scale_floor, standardize
-    pa: c, coef_max, coef_min, coef_sum, eps, mode, standardize
+    pa: average, c, coef_max, coef_min, coef_sum, eps, mode, standardize
     pca: learning_rate, max_state_bytes, method, n_components
     power_variation: closed, max_state_bytes, terms, window_rows, window_size
     quantile: max_rows_between_solves, max_state_bytes, quantile, quantile_eps, quantile_refit_rows, quantile_refit_span, refit_budget, ridge, solve_every, standardize
@@ -3467,7 +3476,7 @@
     realized: closed, lm_beta, lm_window, max_state_bytes, window_rows, window_size
     rls: coef_prior, delta
     seqtest: a, a_suffix, b, b_suffix
-    sgd: clip_gradient, coef_max, coef_min, coef_sum, eps, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, l2, learning_rate, loss, max_state_bytes, power, quantile, refit_budget, schedule, standardize, strict_binary
+    sgd: average, clip_gradient, coef_max, coef_min, coef_sum, eps, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, invariant, l1, l2, learning_rate, loss, max_state_bytes, power, quantile, refit_budget, schedule, standardize, strict_binary
     spectral: closed, detrend, max_rows_between_snapshots, max_state_bytes, periods, scaling, snapshot_every, spacing, window_budget, window_size
     tdigest: compression, max_state_bytes, quantiles
     vector_ar: causality, causality_kind, closed, lags, max_rows_between_snapshots, max_rows_between_solves, max_state_bytes, ridge, select, snapshot_every, solve_every, window_budget, window_size

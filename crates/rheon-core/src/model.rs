@@ -30,6 +30,10 @@ pub enum Extra {
     /// `vector_ar`: each declared Granger test's statistic and p-value, then
     /// the order in force under `select`, read from the fit before the row.
     VectorAr { values: Vec<f64> },
+    /// `ewridge` with `evidence=True`: predictive standard deviation per output
+    /// slot, read from the last evidence solve before the row, NaN where no
+    /// prediction is served.
+    EwRidge { pred_std: Vec<f64> },
 }
 
 /// The coefficients' sampling variances ([`OnlineModel::coef_variance`]),
@@ -642,6 +646,7 @@ fn reports_nothing(mut s: Step) -> Step {
     match s.extra.as_mut() {
         Some(Extra::Lasso { lam_selected }) => lam_selected.fill(f64::NAN),
         Some(Extra::VectorAr { values }) => values.fill(f64::NAN),
+        Some(Extra::EwRidge { pred_std }) => pred_std.fill(f64::NAN),
         _ => {}
     }
     s
@@ -1310,6 +1315,7 @@ mod tests {
             min_weight: 0.0,
             constraint: None,
             standardize: false,
+            average: false,
         })
         .unwrap();
         pa.step(&[1.0], &[Some(2.0), Some(-1.0)], 0.0, 1.0);

@@ -98,6 +98,7 @@ fn models() -> Vec<Make> {
                         window: Some(WINDOW),
                         window_every: None,
                         max_rows_between_snapshots: None,
+                        evidence: None,
                     })
                     .unwrap(),
                 ) as Box<dyn Probe>
@@ -127,6 +128,7 @@ fn models() -> Vec<Make> {
                         max_iter: 100,
                         tol: 1e-10,
                         target_gaps: TargetGaps::OwnRows,
+                        positive: false,
                     })
                     .unwrap(),
                 )
@@ -307,6 +309,7 @@ fn a_model_without_a_window_could_refuse_nothing() {
             min_weight: 3.0,
             constraint: None,
             standardize: true,
+            average: false,
         })
         .unwrap(),
         2,

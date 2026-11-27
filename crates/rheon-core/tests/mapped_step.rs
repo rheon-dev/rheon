@@ -351,6 +351,7 @@ fn pa_past_the_switch_steps_and_projects_as_written() {
                     min_weight: 0.0,
                     constraint: constraint.clone(),
                     standardize: true,
+                    average: false,
                 })
                 .unwrap();
                 let what = format!("pa {mode:?}, intercept {fit_intercept}, {name}");
@@ -418,6 +419,9 @@ fn sgd_past_the_switch_steps_and_projects_as_written() {
                 mad_anchor: false,
                 refit_clock: None,
                 max_state_bytes: None,
+                average: false,
+                invariant: false,
+                l1: 0.0,
             })
             .unwrap();
             let what = format!("sgd, intercept {fit_intercept}, {name}");

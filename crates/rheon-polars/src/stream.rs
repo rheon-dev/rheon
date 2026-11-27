@@ -917,6 +917,7 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         ModelKind::EwRidge {
             ridge,
             feature_sets,
+            evidence,
             ..
         } => {
             let nr = ridge.as_ref().map(|r| r.to_vec().len()).unwrap_or(1);
@@ -947,7 +948,7 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
                     };
                     out.push(Combo {
                         label,
-                        ridge: Some(*r),
+                        ridge: if *evidence { None } else { Some(*r) },
                         feature_set: feature_sets.is_some().then(|| f.clone()),
                         lambda: None,
                     });
@@ -5476,6 +5477,12 @@ fn run_instance(
                 | Some(rheon_core::Extra::VectorAr { values: v }) => {
                     for (t_i, l) in v.iter().enumerate() {
                         inst.o_lam[t_i * n_rows + ri] = *l;
+                    }
+                }
+                Some(rheon_core::Extra::EwRidge { pred_std: v }) => {
+                    for (slot, &s) in v.iter().enumerate() {
+                        let shown = step.pred.get(slot).is_some_and(|p| p.is_finite());
+                        inst.o_lam[slot * n_rows + ri] = if shown { s } else { f64::NAN };
                     }
                 }
                 _ => {}

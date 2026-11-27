@@ -257,7 +257,7 @@ RULES = (
             *PAST,
             # The records' table names each record's subject by the name it had.
             "docs/README.md",
-            "crates/rheon-core/src/sgd.rs",  # a local variable called `po`
+            "crates/rheon-core/src/sgd/tests.rs",  # a local variable called `po`
             "tests/test_old_names.py",
             # Child interpreters that import the package as `po` (code in a
             # string), and the tests of documents that still name the alias.

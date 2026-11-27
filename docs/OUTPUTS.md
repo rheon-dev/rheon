@@ -178,6 +178,12 @@ The fields of `rp.spec.ewridge("m", targets=["y"], features=["x0"], half_life=50
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), on an `ill_conditioned` row, and before the model has anything to report |
 | `support_coef` | `list[f64]` | on `coef`'s rows, each coefficient's data share `1 - ridge * (S^-1)_jj`, with `S` the system the solve inverts, laid out like `coef` | where `coef` is, and in the intercept's place, which is not a share |
 
+Under `evidence=True`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `pred_std_y` | `f64` | the predictive standard deviation for `<t>` from empirical-Bayes evidence maximization, computed from the state **before** this row | where `pred_<t>` is |
+
 ## `rls`
 
 The fields of `rp.spec.rls("m", targets=["y"], features=["x0"], half_life=50.0)`:

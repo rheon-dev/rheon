@@ -190,6 +190,7 @@ fn the_lasso_keeps_the_slope_it_learned() {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        positive: false,
     };
     holds(
         "lasso",
@@ -221,6 +222,7 @@ fn ridge(standardize: bool) -> EwRidgeCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        evidence: None,
     }
 }
 
@@ -404,6 +406,7 @@ fn a_standardized_huber_keeps_the_slope_it_learned() {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
+        huber_norm: rheon_core::HuberNorm::Huber,
     };
     holds(
         "huber",
@@ -485,6 +488,9 @@ fn sgd_predicts_the_same_at_every_level() {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     };
     holds(
         "sgd",
@@ -674,6 +680,7 @@ fn a_held_target_leaves_no_slope_on_a_moving_feature() {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        positive: false,
     };
     slopes_decay(
         "lasso",
@@ -703,6 +710,7 @@ fn a_held_target_leaves_no_slope_on_a_moving_feature() {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
+        huber_norm: rheon_core::HuberNorm::Huber,
     };
     slopes_decay(
         "huber",
@@ -828,6 +836,9 @@ fn without_decay_a_stopped_feature_keeps_its_slope() {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     };
     let (base, _) = run_on(
         Sgd::new(cfg.clone()).unwrap(),
@@ -915,6 +926,7 @@ fn a_state_saved_mid_hold_resumes_to_the_bit() {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            positive: false,
         })
         .unwrap()
     });
@@ -942,6 +954,7 @@ fn a_state_saved_mid_hold_resumes_to_the_bit() {
             min_weight_holds_learning: false,
             refit_clock: None,
             max_state_bytes: None,
+            huber_norm: rheon_core::HuberNorm::Huber,
         })
         .unwrap()
     });
@@ -988,6 +1001,9 @@ fn a_state_saved_mid_hold_resumes_to_the_bit() {
             mad_anchor: false,
             refit_clock: None,
             max_state_bytes: None,
+            average: false,
+            invariant: false,
+            l1: 0.0,
         })
         .unwrap()
     });
@@ -1148,6 +1164,7 @@ fn a_row_of_no_weight_moves_no_mean() {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            positive: false,
         })
         .unwrap()
     });
@@ -1175,6 +1192,7 @@ fn a_row_of_no_weight_moves_no_mean() {
             min_weight_holds_learning: false,
             refit_clock: None,
             max_state_bytes: None,
+            huber_norm: rheon_core::HuberNorm::Huber,
         })
         .unwrap()
     });
@@ -1221,6 +1239,9 @@ fn a_row_of_no_weight_moves_no_mean() {
             mad_anchor: false,
             refit_clock: None,
             max_state_bytes: None,
+            average: false,
+            invariant: false,
+            l1: 0.0,
         })
         .unwrap()
     });
@@ -1767,6 +1788,7 @@ fn quantile_cfg() -> RobustCfg {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
+        huber_norm: rheon_core::HuberNorm::Huber,
     }
 }
 
@@ -1784,6 +1806,7 @@ fn pa_cfg() -> PaCfg {
         min_weight: 10.0,
         constraint: None,
         standardize: true,
+        average: false,
     }
 }
 

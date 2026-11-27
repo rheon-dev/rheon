@@ -629,6 +629,7 @@ fn robust_cfg_scaled(
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
+        huber_norm: rheon_core::HuberNorm::Huber,
     }
 }
 
@@ -699,6 +700,7 @@ fn ols_model() -> EwRidge {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        evidence: None,
     })
     .unwrap()
 }

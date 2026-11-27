@@ -33,6 +33,7 @@ def huber(
     huber_refit_span: float | Duration | None = None,
     max_state_bytes: int | None = None,
     refit_budget: float | None = None,
+    huber_norm: Literal["huber", "tukey", "andrews", "hampel", "ramsay"] | None = None,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Huber regression on running sums, which down-weights the rows a prediction misses by far.
@@ -52,12 +53,21 @@ def huber(
     ``huber_delta``
         The cut, in units of the residuals' scale ``s``, above 0: a residual
         within it counts at full weight, and one beyond it pulls the fit less
-        the further it misses. Default 1.345, the cut at which Huber's
-        estimator is 95% as efficient as least squares when the errors are
-        normal (*The default cut* in Notes). statsmodels' ``HuberT`` takes
-        1.345 and scikit-learn's ``HuberRegressor`` 1.35. ``inf`` cuts
-        nothing, which is least squares. :func:`sgd`'s ``huber_delta`` is the
+        the further it misses. Default depends on ``huber_norm``: 1.345 for
+        ``"huber"`` (95% Gaussian efficiency, matching statsmodels' ``HuberT``
+        and scikit-learn's ``HuberRegressor`` 1.35), 4.685 for ``"tukey"``,
+        1.339 for ``"andrews"``, 2.0 for ``"hampel"``, and 0.3 for
+        ``"ramsay"``. ``inf`` cuts nothing (least squares), except under
+        ``"ramsay"`` where it is refused. :func:`sgd`'s ``huber_delta`` is the
         same constant in the same unit.
+    ``huber_norm``
+        The M-estimator weight function: ``"huber"`` (default, monotone), or
+        one of four redescending norms matching ``statsmodels.robust.norms``:
+        ``"tukey"`` (biweight), ``"andrews"`` (wave), ``"hampel"`` (three-part
+        redescending, cuts at ``delta``, ``2 * delta`` and ``4 * delta``), or
+        ``"ramsay"`` (exponential decay ``exp(-delta * |e| / s)``). Redescending
+        norms warm-start their initial refit from a Huber fit so extreme
+        outliers cannot zero out every row.
     ``huber_scale``
         The scale ``s`` the cut is drawn in: ``"mad"`` (the default), the
         exponentially weighted median of ``|e|`` over 0.6745, or ``"rms"``,
@@ -212,8 +222,9 @@ def huber(
     As every builder does (:mod:`rheon.spec`), and ``ValueError``
     naming the problem for:
 
-    - a ``huber_delta`` not above 0, a ``huber_scale`` other than ``"mad"``
-      or ``"rms"``, and a ``huber_scale_half_life`` not above 0;
+    - a ``huber_delta`` not above 0 (or ``inf`` under ``huber_norm="ramsay"``),
+      a ``huber_norm`` not one of its five words, a ``huber_scale`` other than
+      ``"mad"`` or ``"rms"``, and a ``huber_scale_half_life`` not above 0;
     - a ``ridge`` below 0 or not finite, a ``solve_every`` below 0, and a
       ``max_rows_between_solves`` of 0;
     - a ``feature_sets`` that names no set, names one twice, holds an empty
@@ -496,6 +507,7 @@ def huber(
         "huber_refit_span": huber_refit_span,
         "max_state_bytes": max_state_bytes,
         "refit_budget": refit_budget,
+        "huber_norm": huber_norm,
     }
     # Written only when given: the Rust spec skips them when absent.
     skipped = _SKIPPED_WHEN_ABSENT["huber"]

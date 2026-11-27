@@ -89,6 +89,7 @@ fn ewridge_cfg(ridge: f64) -> EwRidgeCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        evidence: None,
     }
 }
 
@@ -164,6 +165,7 @@ fn lasso_cfg(path: Vec<f64>) -> LassoCfg {
         max_iter: 200,
         tol: 1e-12,
         target_gaps: rheon_core::TargetGaps::OwnRows,
+        positive: false,
     }
 }
 
@@ -411,6 +413,9 @@ fn sgd_cfg(schedule: LearningRate) -> SgdCfg {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     }
 }
 

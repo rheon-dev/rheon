@@ -37,6 +37,9 @@ fn cfg(refit_rows: u32, standardize: bool, schedule: LearningRate, decay: Decay)
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        average: false,
+        invariant: false,
+        l1: 0.0,
     }
 }
 

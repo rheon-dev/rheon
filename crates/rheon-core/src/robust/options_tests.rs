@@ -38,6 +38,7 @@ fn huber(k: usize, m: usize) -> RobustCfg {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
+        huber_norm: crate::HuberNorm::Huber,
     }
 }
 
@@ -63,6 +64,7 @@ fn ridge_on(k: usize, decay: Decay, ridge: f64) -> EwRidge {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        evidence: None,
     })
     .unwrap()
 }

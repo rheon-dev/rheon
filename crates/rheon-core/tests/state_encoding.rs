@@ -369,3 +369,319 @@ fn a_bins_budget_round_trips_in_both_encodings() {
         "seven fields: the statistic, the refit's count, the anchor, and no budget"
     );
 }
+
+/// Regression variants (evidence on `ewridge`, `positive` on `lasso`,
+/// `huber_norm` on `robust`, `average` on `pa`, and `l1`/`Optimal`/`average`/
+/// `invariant` on `sgd`) must round-trip in both compact (positional) and
+/// named msgpack encodings for every combination of trailing optional fields.
+#[test]
+fn regression_variants_round_trip_in_both_encodings() {
+    fn roundtrip_model<M>(m: &M, next_rows: &[([f64; 2], f64)], what: &str)
+    where
+        M: OnlineModel + Clone + serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let compact = rmp_serde::to_vec(m).unwrap();
+        let named = rmp_serde::to_vec_named(m).unwrap();
+        let raw_compact: M = rmp_serde::from_slice(&compact)
+            .unwrap_or_else(|e| panic!("{what}: compact encoding does not round-trip: {e}"));
+        let raw_named: M = rmp_serde::from_slice(&named)
+            .unwrap_or_else(|e| panic!("{what}: named encoding does not round-trip: {e}"));
+        assert_eq!(
+            rmp_serde::to_vec(&raw_compact).unwrap(),
+            compact,
+            "{what}: compact re-encode differed"
+        );
+        assert_eq!(
+            rmp_serde::to_vec_named(&raw_named).unwrap(),
+            named,
+            "{what}: named re-encode differed"
+        );
+        let st = m.state();
+        let st_compact: rheon_core::State =
+            rmp_serde::from_slice(&rmp_serde::to_vec(&st).unwrap()).unwrap();
+        let st_named: rheon_core::State =
+            rmp_serde::from_slice(&rmp_serde::to_vec_named(&st).unwrap()).unwrap();
+        let mut from_compact = M::restore(&st_compact).unwrap();
+        let mut from_named = M::restore(&st_named).unwrap();
+        let mut orig = m.clone();
+        for (x, y) in next_rows {
+            let so = orig.step(x, &[Some(*y)], 1.0, 1.0);
+            let sc = from_compact.step(x, &[Some(*y)], 1.0, 1.0);
+            let sn = from_named.step(x, &[Some(*y)], 1.0, 1.0);
+            for (tag, s) in [("compact", &sc), ("named", &sn)] {
+                assert_eq!(so.pred.len(), s.pred.len(), "{what} ({tag}): pred len");
+                for (a, b) in so.pred.iter().zip(&s.pred) {
+                    if a.is_nan() {
+                        assert!(b.is_nan(), "{what} ({tag}): expected NaN, got {b}");
+                    } else {
+                        assert_eq!(a.to_bits(), b.to_bits(), "{what} ({tag}): pred mismatch");
+                    }
+                }
+                assert_eq!(
+                    so.n_eff.to_bits(),
+                    s.n_eff.to_bits(),
+                    "{what} ({tag}): n_eff"
+                );
+                assert_eq!(so.extra, s.extra, "{what} ({tag}): extra");
+            }
+        }
+    }
+
+    let next_rows = [([0.4, -0.3], 1.8), ([-0.7, 0.9], -0.4), ([1.1, 0.2], 2.5)];
+
+    // 1. EwRidge: combinations of evidence and max_rows_between_snapshots.
+    for evidence in [
+        None,
+        Some(rheon_core::EvidenceCfg::default()),
+        Some(rheon_core::EvidenceCfg::uniform(0.0)),
+    ] {
+        for (window, every, rows) in WINDOWS {
+            let cfg = rheon_core::EwRidgeCfg {
+                n_features: 2,
+                n_targets: 1,
+                fit_intercept: true,
+                decay: Decay::Halflife(20.0),
+                ridge: vec![if evidence.is_some() { 0.0 } else { 1e-3 }],
+                feature_sets: vec![],
+                standardize: false,
+                ridge_scale: false,
+                coef_prior: None,
+                session_shrink: None,
+                long_half_life: None,
+                min_weight: 2.0,
+                solve_every: 0.0,
+                max_rows_between_solves: 1,
+                solve_share: None,
+                gram_block_rows: 0,
+                target_gaps: rheon_core::TargetGaps::OwnRows,
+                window,
+                window_every: every,
+                max_rows_between_snapshots: rows,
+                evidence,
+            };
+            let mut m = rheon_core::EwRidge::new(cfg).unwrap();
+            for i in 0..12 {
+                let x0 = (i as f64) * 0.3 - 1.5;
+                let x1 = ((i * 7) % 11) as f64 * 0.2 - 1.0;
+                let y = 1.2 + 2.0 * x0 - 0.5 * x1 + 0.05 * ((i % 3) as f64 - 1.0);
+                OnlineModel::step(
+                    &mut m,
+                    &[x0, x1],
+                    &[Some(y)],
+                    if i == 0 { 0.0 } else { 1.0 },
+                    1.0,
+                );
+            }
+            roundtrip_model(
+                &m,
+                &next_rows,
+                &format!("ewridge evidence={evidence:?} window={window:?} rows={rows:?}"),
+            );
+        }
+    }
+
+    // 2. Lasso: combinations of positive and max_rows_between_snapshots.
+    for positive in [false, true] {
+        for (window, every, rows) in WINDOWS {
+            let cfg = rheon_core::LassoCfg {
+                n_features: 2,
+                n_targets: 1,
+                fit_intercept: true,
+                decay: Decay::Halflife(20.0),
+                lasso_path: vec![0.5, 0.1],
+                l1_ratio: 0.8,
+                select_half_life: None,
+                min_weight: 2.0,
+                target_min_weight: Vec::new(),
+                min_weight_holds_learning: false,
+                solve_every: 0.0,
+                max_rows_between_solves: 1,
+                solve_share: None,
+                window,
+                window_every: every,
+                max_rows_between_snapshots: rows,
+                max_iter: 100,
+                tol: 1e-10,
+                target_gaps: rheon_core::TargetGaps::OwnRows,
+                positive,
+            };
+            let mut m = rheon_core::Lasso::new(cfg).unwrap();
+            for i in 0..10 {
+                let x0 = (i as f64) * 0.25 - 1.0;
+                let x1 = ((i * 5) % 9) as f64 * 0.2 - 0.8;
+                let y = 0.5 + 1.5 * x0 - 1.2 * x1;
+                OnlineModel::step(
+                    &mut m,
+                    &[x0, x1],
+                    &[Some(y)],
+                    if i == 0 { 0.0 } else { 1.0 },
+                    1.0,
+                );
+            }
+            roundtrip_model(
+                &m,
+                &next_rows,
+                &format!("lasso positive={positive} window={window:?} rows={rows:?}"),
+            );
+        }
+    }
+
+    // 3. Robust (Huber): combinations of huber_norm, refit_clock, max_state_bytes.
+    for norm in [
+        rheon_core::HuberNorm::Huber,
+        rheon_core::HuberNorm::Tukey,
+        rheon_core::HuberNorm::Andrews,
+        rheon_core::HuberNorm::Hampel,
+        rheon_core::HuberNorm::Ramsay,
+    ] {
+        for (refit_clock, max_state_bytes) in [
+            (None, None),
+            (Some(10.0), None),
+            (None, Some(128 * 1024)),
+            (Some(10.0), Some(128 * 1024)),
+        ] {
+            let cfg = rheon_core::RobustCfg {
+                n_features: 2,
+                n_targets: 1,
+                fit_intercept: true,
+                decay: Decay::Halflife(20.0),
+                loss: rheon_core::RobustLoss::Huber {
+                    delta: norm.default_delta(),
+                },
+                ridge: 1e-3,
+                standardize: false,
+                min_weight: 3.0,
+                solve_every: 0.0,
+                max_rows_between_solves: 1,
+                solve_share: None,
+                quantile_eps: 1e-3,
+                huber_scale: rheon_core::HuberScale::Mad,
+                huber_scale_decay: None,
+                feature_sets: vec![],
+                ridge_scale: false,
+                emit_scale: true,
+                refit_rows: if refit_clock.is_some() { 0 } else { 6 },
+                mad_anchor: true,
+                min_weight_holds_learning: false,
+                refit_clock,
+                max_state_bytes,
+                huber_norm: norm,
+            };
+            let mut m = rheon_core::Robust::new(cfg).unwrap();
+            for i in 0..12 {
+                let x0 = (i as f64) * 0.3 - 1.5;
+                let x1 = ((i * 3) % 7) as f64 * 0.25 - 0.7;
+                let y = 1.0 + 1.5 * x0 - 0.8 * x1 + if i == 9 { 25.0 } else { 0.05 };
+                OnlineModel::step(
+                    &mut m,
+                    &[x0, x1],
+                    &[Some(y)],
+                    if i == 0 { 0.0 } else { 1.0 },
+                    1.0,
+                );
+            }
+            roundtrip_model(
+                &m,
+                &next_rows,
+                &format!(
+                    "robust norm={norm:?} refit_clock={refit_clock:?} cap={max_state_bytes:?}"
+                ),
+            );
+        }
+    }
+
+    // 4. PA: average false & true.
+    for average in [false, true] {
+        for standardize in [false, true] {
+            let cfg = rheon_core::PaCfg {
+                n_features: 2,
+                n_targets: 1,
+                fit_intercept: true,
+                decay: Decay::Halflife(20.0),
+                mode: rheon_core::PaMode::Pa1,
+                c: 1.0,
+                eps: 0.01,
+                min_weight: 3.0,
+                constraint: None,
+                standardize,
+                average,
+            };
+            let mut m = rheon_core::Pa::new(cfg).unwrap();
+            for i in 0..15 {
+                let x0 = (i as f64) * 0.2 - 1.0;
+                let x1 = ((i * 5) % 8) as f64 * 0.3 - 1.0;
+                OnlineModel::step(
+                    &mut m,
+                    &[x0, x1],
+                    &[Some(0.5 + 1.2 * x0 - 0.7 * x1)],
+                    if i == 0 { 0.0 } else { 1.0 },
+                    1.0,
+                );
+            }
+            roundtrip_model(
+                &m,
+                &next_rows,
+                &format!("pa average={average} standardize={standardize}"),
+            );
+        }
+    }
+
+    // 5. SGD: combinations of schedule, l1, average, invariant, refit_clock, max_state_bytes.
+    for (schedule, l1, l2, average, invariant) in [
+        (rheon_core::LearningRate::Constant, 0.0, 0.0, false, false),
+        (rheon_core::LearningRate::Constant, 0.01, 0.0, false, false),
+        (rheon_core::LearningRate::Constant, 0.01, 0.02, true, false),
+        (rheon_core::LearningRate::Optimal, 0.0, 0.05, false, false),
+        (rheon_core::LearningRate::Optimal, 0.01, 0.05, true, false),
+        (rheon_core::LearningRate::Constant, 0.0, 0.01, false, true),
+        (rheon_core::LearningRate::Optimal, 0.01, 0.05, true, true),
+    ] {
+        for standardize in [false, true] {
+            let cfg = rheon_core::SgdCfg {
+                n_features: 2,
+                n_targets: 1,
+                fit_intercept: true,
+                decay: Decay::Halflife(50.0),
+                loss: rheon_core::SgdLoss::Squared,
+                learning_rate: 0.05,
+                schedule,
+                l2,
+                min_weight: 3.0,
+                clip_gradient: 1e3,
+                constraint: None,
+                standardize,
+                strict_binary: false,
+                huber_scale: rheon_core::HuberScale::Rms,
+                huber_scale_decay: None,
+                refit_rows: 0,
+                min_weight_holds_learning: false,
+                target_spread: true,
+                mad_anchor: true,
+                refit_clock: None,
+                max_state_bytes: None,
+                l1,
+                average,
+                invariant,
+            };
+            let mut m = rheon_core::Sgd::new(cfg).unwrap();
+            for i in 0..15 {
+                let x0 = (i as f64) * 0.2 - 1.0;
+                let x1 = ((i * 3) % 7) as f64 * 0.25 - 0.8;
+                OnlineModel::step(
+                    &mut m,
+                    &[x0, x1],
+                    &[Some(0.5 + 1.5 * x0 - 0.6 * x1)],
+                    if i == 0 { 0.0 } else { 1.0 },
+                    1.0,
+                );
+            }
+            roundtrip_model(
+                &m,
+                &next_rows,
+                &format!(
+                    "sgd sched={schedule:?} l1={l1} l2={l2} avg={average} inv={invariant} std={standardize}"
+                ),
+            );
+        }
+    }
+}

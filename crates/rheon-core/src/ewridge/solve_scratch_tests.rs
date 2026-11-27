@@ -48,6 +48,7 @@ fn cfg(k: usize, shape: (bool, bool, bool), sets: bool, window: Option<f64>) -> 
         window,
         window_every: None,
         max_rows_between_snapshots: None,
+        evidence: None,
     }
 }
 

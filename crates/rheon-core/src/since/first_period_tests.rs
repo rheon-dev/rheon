@@ -67,6 +67,7 @@ fn model(kind: &str, min_weight: f64, every: f64, cap: u32) -> Model {
                 window: None,
                 window_every: None,
                 max_rows_between_snapshots: None,
+                evidence: None,
             })
             .unwrap();
             m.set_min_weight_output_only(true);
@@ -93,6 +94,7 @@ fn model(kind: &str, min_weight: f64, every: f64, cap: u32) -> Model {
                 target_gaps: TargetGaps::OwnRows,
                 max_iter: 200,
                 tol: 1e-12,
+                positive: false,
             })
             .unwrap(),
         ),
@@ -124,6 +126,7 @@ fn model(kind: &str, min_weight: f64, every: f64, cap: u32) -> Model {
                 mad_anchor: false,
                 refit_clock: None,
                 max_state_bytes: None,
+                huber_norm: crate::HuberNorm::Huber,
             })
             .unwrap(),
         ),

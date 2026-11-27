@@ -164,6 +164,7 @@ fn ewridge(k: usize, t: usize) -> EwRidge {
         window: Some(WINDOW),
         window_every: None,
         max_rows_between_snapshots: None,
+        evidence: None,
     })
     .unwrap()
 }
@@ -232,6 +233,7 @@ fn lasso(k: usize, t: usize) -> Lasso {
         max_iter: 100,
         tol: 1e-10,
         target_gaps: TargetGaps::OwnRows,
+        positive: false,
     })
     .unwrap()
 }

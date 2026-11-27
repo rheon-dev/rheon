@@ -1905,6 +1905,23 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 );
             }
         }
+        // `ewridge`'s empirical-Bayes predictive standard deviation per
+        // target and combo, in the same extras buffer.
+        if matches!(spec.model, crate::ModelKind::EwRidge { evidence: true, .. }) {
+            let w = extra_width(spec);
+            let nc = combos.len();
+            for (t_i, t) in spec.targets.iter().enumerate() {
+                for (ci, c) in combos.iter().enumerate() {
+                    fields.push(
+                        FieldMeta::new(format!("pred_std_{t}{}{suffix}", c.label), "pred_std")
+                            .decay(suffix, d)
+                            .target(t)
+                            .combo(c)
+                            .src(Source::LamSelected(mi * w + t_i * nc + ci)),
+                    );
+                }
+            }
+        }
     }
     if spec.emit_selected {
         for (t_i, t) in spec.targets.iter().enumerate() {
@@ -1962,6 +1979,9 @@ pub fn extra_width(spec: &Spec) -> usize {
             emit_huber_scale: true,
             ..
         } => spec.m(),
+        crate::ModelKind::EwRidge { evidence: true, .. } => {
+            spec.m() * crate::stream::combos(spec).len()
+        }
         crate::ModelKind::VectorAr(v) => {
             2 * v.causality.as_ref().map_or(0, Vec::len) + usize::from(v.select.is_some())
         }

@@ -137,7 +137,10 @@ impl Spec {
                 learning_rate,
                 schedule,
                 power,
+                l1,
+                l2,
                 strict_binary,
+                invariant,
                 ..
             } => {
                 no.take(check_huber_scale(
@@ -170,7 +173,7 @@ impl Spec {
                         ));
                     }
                 }
-                const SCHEDULE: [&str; 3] = ["constant", "inv_scaling", "adagrad"];
+                const SCHEDULE: [&str; 4] = ["constant", "inv_scaling", "adagrad", "optimal"];
                 let schedule_known = schedule
                     .as_ref()
                     .is_none_or(|sc| SCHEDULE.contains(&sc.as_str()));
@@ -185,6 +188,16 @@ impl Spec {
                      learning_rate to a finite positive step size, such as 0.01.",
                         self.name,
                         num_label(v)
+                    ));
+                }
+                if let Some(v) = l1.filter(|v| !non_negative(*v) || !v.is_finite()) {
+                    no.refuse(at_least_zero(
+                        &format!("spec {:?}", self.name),
+                        "l1",
+                        "",
+                        &Got::One(num_label(v)),
+                        Some("for no L1 penalty"),
+                        None,
                     ));
                 }
                 // Unchecked, a NaN reached the core's `f64::clamp`, which
@@ -205,6 +218,48 @@ impl Spec {
                 // A null is the default, not a value given.
                 let loss = loss.as_deref().unwrap_or("squared");
                 let schedule = schedule.as_deref().unwrap_or("constant");
+                if schedule_known && schedule == "optimal" {
+                    if learning_rate.is_some() {
+                        no.refuse(format!(
+                            "spec {:?}: learning_rate does not apply under schedule=\"optimal\", \
+                             which derives its rate from l1 + l2. Leave learning_rate out, or \
+                             pick another schedule.",
+                            self.name
+                        ));
+                    }
+                    let l1_ok = l1.is_none_or(|v| v.is_finite() && v >= 0.0);
+                    let l2_ok = l2.is_none_or(|v| v.is_finite() && v >= 0.0);
+                    if l1_ok && l2_ok {
+                        let alpha = l1.unwrap_or(0.0) + l2.unwrap_or(0.0);
+                        if !(alpha.is_finite() && alpha > 0.0) {
+                            no.refuse(format!(
+                                "spec {:?}: schedule=\"optimal\" requires l1 + l2 to be finite \
+                                 and above 0, but it is {}. Set l2 (or l1) to a positive penalty, \
+                                 or pick another schedule.",
+                                self.name,
+                                num_label(alpha)
+                            ));
+                        }
+                    }
+                }
+                if *invariant {
+                    if loss_known && loss != "squared" {
+                        no.refuse(format!(
+                            "spec {:?}: invariant=True applies only under loss=\"squared\", but \
+                             loss is {loss:?}. Leave invariant out, or set loss=\"squared\".",
+                            self.name
+                        ));
+                    }
+                    if schedule_known && schedule == "adagrad" {
+                        no.refuse(format!(
+                            "spec {:?}: invariant=True cannot be combined with \
+                             schedule=\"adagrad\", whose per-coordinate rates have no scalar \
+                             step size. Leave invariant out, or set schedule to \"constant\", \
+                             \"inv_scaling\" or \"optimal\".",
+                            self.name
+                        ));
+                    }
+                }
                 for (key, given, what, owner, chosen) in [
                     ("huber_delta", huber_delta.is_some(), "loss", "huber", loss),
                     ("huber_scale", huber_scale.is_some(), "loss", "huber", loss),
@@ -1602,8 +1657,18 @@ impl Spec {
                 solve_every,
                 feature_sets,
                 refit_budget,
+                huber_norm,
                 ..
             } => {
+                const HUBER_NORM: [&str; 5] = ["huber", "tukey", "andrews", "hampel", "ramsay"];
+                let norm_known = huber_norm
+                    .as_ref()
+                    .is_none_or(|n| HUBER_NORM.contains(&n.as_str()));
+                if let Some(n) = huber_norm
+                    && !norm_known
+                {
+                    no.refuse(spec_words_refusal(&self.name, "huber_norm", &HUBER_NORM, n));
+                }
                 if let Some(d) = huber_delta.filter(|d| !positive(d.0)) {
                     no.refuse(format!(
                         "spec {:?}: huber_delta must be above 0, but it is {}. Set huber_delta \
@@ -1611,6 +1676,17 @@ impl Spec {
                      squares.",
                         self.name,
                         num_label(d.0)
+                    ));
+                }
+                if huber_norm.as_deref() == Some("ramsay")
+                    && huber_delta.is_some_and(|d| d.0.is_infinite())
+                {
+                    no.refuse(format!(
+                        "spec {:?}: huber_delta must be finite under huber_norm=\"ramsay\", \
+                         because its weight exp(-huber_delta * |e| / s) drops every nonzero \
+                         residual to 0 at inf. Set huber_delta to a finite positive value, such \
+                         as 0.3.",
+                        self.name
                     ));
                 }
                 no.take(check_huber_scale(
@@ -1891,12 +1967,71 @@ impl Spec {
             ModelKind::EwRidge {
                 ridge,
                 feature_sets,
+                ridge_scale,
                 coef_prior,
                 session_shrink,
                 long_half_life,
                 solve_every,
+                evidence,
+                evidence_prior,
                 ..
             } => {
+                if *evidence {
+                    if ridge.is_some() {
+                        no.refuse(format!(
+                            "spec {:?}: evidence=True chooses the ridge automatically, so ridge \
+                             cannot also be set. Leave ridge out, or set evidence=False.",
+                            self.name
+                        ));
+                    }
+                    if *ridge_scale == RidgeScale::Sum {
+                        no.refuse(format!(
+                            "spec {:?}: evidence=True cannot be combined with \
+                             ridge_scale=\"sum\". Set ridge_scale=\"mean\", or set evidence=False.",
+                            self.name
+                        ));
+                    }
+                    if coef_prior.is_some() {
+                        no.refuse(format!(
+                            "spec {:?}: evidence=True shrinks toward zero, so coef_prior cannot \
+                             also be set. Leave coef_prior out, or set evidence=False.",
+                            self.name
+                        ));
+                    }
+                } else if evidence_prior.is_some() {
+                    no.refuse(format!(
+                        "spec {:?}: evidence_prior applies only under evidence=True, but evidence \
+                         is False. Leave evidence_prior out, or set evidence=True.",
+                        self.name
+                    ));
+                }
+                if let Some(ep) = evidence_prior {
+                    let vals = ep.to_vec();
+                    if vals.len() != 1 && vals.len() != 4 {
+                        no.refuse(format!(
+                            "spec {:?}: evidence_prior must be a single number or a list of 4 \
+                             numbers [alpha_1, alpha_2, lambda_1, lambda_2], but it lists {}. \
+                             Give 1 or 4 non-negative finite values.",
+                            self.name,
+                            vals.len()
+                        ));
+                    }
+                    let bad: Vec<String> = vals
+                        .iter()
+                        .filter(|v| !non_negative(**v) || !v.is_finite())
+                        .map(|v| num_label(*v))
+                        .collect();
+                    if !bad.is_empty() {
+                        no.refuse(at_least_zero(
+                            &format!("spec {:?}", self.name),
+                            "evidence_prior",
+                            "",
+                            &Got::list(vals.len(), bad, true),
+                            Some("for uninformative priors"),
+                            None,
+                        ));
+                    }
+                }
                 if let Some(r) = ridge {
                     let rs = r.to_vec();
                     // A negative ridge makes the system indefinite and the
@@ -2005,6 +2140,213 @@ impl Spec {
                     &self.features,
                     feature_sets.as_deref(),
                 ));
+            }
+        }
+    }
+
+    /// Output-switch and coef-cadence checks shared across models.
+    pub(super) fn validate_output_switches(
+        &self,
+        name: &str,
+        decays: Option<&[(String, Decay)]>,
+        no: &mut rheon_core::Refusals,
+    ) {
+        // `coef_every` and `max_rows_between_coefs` schedule the `coef`
+        // field, which a model with no coefficients does not have (review
+        // 2026-09-12, S22). `0` was the default and passed there; since task
+        // 178 it is every row, and refused there as any other value is.
+        for (key, given) in [
+            ("coef_every", self.coef_every.is_some()),
+            (
+                "max_rows_between_coefs",
+                self.max_rows_between_coefs.is_some(),
+            ),
+        ] {
+            if given && !self.model.has_coef() {
+                no.refuse(format!(
+                    "spec {name:?}: {key} applies only to a model that reports coefficients, but \
+                     {} reports none. Leave out {key}.",
+                    self.model.kind_name()
+                ));
+            }
+        }
+        if let Some(e) = self
+            .coef_every
+            .as_ref()
+            .filter(|e| !(e.value().is_finite() && non_negative(e.value())))
+        {
+            no.refuse(at_least_zero(
+                &format!("spec {name:?}"),
+                "coef_every",
+                " clock units",
+                &Got::One(e.to_string()),
+                Some("to fill the coef field on every row"),
+                None,
+            ));
+        }
+        // A cap of no rows is no schedule: every row is `coef_every = 0`.
+        if self.max_rows_between_coefs == Some(0) {
+            no.refuse(format!(
+                "spec {name:?}: max_rows_between_coefs must be at least 1, but it is 0. Set \
+                 max_rows_between_coefs to 1 or more, or leave it out and set coef_every to 0 \
+                 to fill the coef field on every row."
+            ));
+        }
+        // Nothing residual-based applies to a model that predicts no target.
+        // Refused rather than ignored: a flag that silently emits nothing
+        // looks like a bug in the output, not in the spec.
+        let mut health_refused = false;
+        if self.model.predicts_no_target() {
+            let asked = [
+                ("emit_sigma", self.emit_sigma),
+                ("emit_zscore", self.emit_zscore),
+                ("emit_metrics", self.emit_metrics),
+                ("resid_quantiles", self.resid_quantiles.is_some()),
+                ("conformal", self.conformal.is_some()),
+                ("emit_autocorr", self.emit_autocorr),
+                ("emit_drift", self.emit_drift),
+                ("emit_calibration", self.emit_calibration),
+                ("emit_breaks", self.emit_breaks),
+                ("emit_robust_se", self.emit_robust_se),
+                ("emit_specification", self.emit_specification),
+                ("emit_tails", self.emit_tails),
+                ("emit_influence", self.emit_influence),
+                ("emit_averaged", self.emit_averaged),
+                ("emit_selected", self.emit_selected),
+            ];
+            let on: Vec<&str> = asked
+                .iter()
+                .filter(|(_, on)| *on)
+                .map(|(f, _)| *f)
+                .collect();
+            if let Some((last, rest)) = on.split_last() {
+                let listed = if rest.is_empty() {
+                    (*last).to_string()
+                } else {
+                    format!("{} and {last}", rest.join(", "))
+                };
+                no.refuse(format!(
+                    "spec {name:?}: {listed} {} not apply to {}, which predicts no number for a \
+                     target, so has no residuals. Leave out {listed}.",
+                    if rest.is_empty() { "does" } else { "do" },
+                    self.model.kind_name()
+                ));
+            }
+            // Feature health reads no residual: it watches the features
+            // a fit's coefficients lean on (task 232 (14); review round
+            // 6, F-8).
+            if self.emit_feature_health {
+                health_refused = true;
+                no.refuse(format!(
+                    "spec {name:?}: emit_feature_health does not apply to {}, which fits no \
+                     coefficients of its features: it watches the features a fit's coefficients \
+                     lean on. Leave out emit_feature_health, and use ModelBank.check() or \
+                     rheon.spec.audit to watch the features themselves.",
+                    self.model.kind_name()
+                ));
+            }
+        }
+        // Each target's own weight is a target's: a model that learns from
+        // none, or writes no row a target's floor could withhold
+        // (`marginal`), has none to report (docs/PLAN.md task 568).
+        if self.emit_target_weight
+            && (self.model.is_unsupervised() || matches!(self.model, ModelKind::Marginal { .. }))
+        {
+            let why = if self.model.is_unsupervised() {
+                "which learns from no target"
+            } else {
+                "which writes no prediction a target's min_weight could withhold: its pairs are \
+                 read from the bank's state"
+            };
+            no.refuse(format!(
+                "spec {name:?}: emit_target_weight reports the weight each target's min_weight \
+                 reads, but it does not apply to {}, {why}. Leave out emit_target_weight.",
+                self.model.kind_name()
+            ));
+        }
+        // Feature health reads the features alone: a model with none would
+        // write no field, so the switch is refused rather than ignored
+        // (review round 6, F6).
+        if self.emit_feature_health && !health_refused && self.k() == 0 {
+            health_refused = true;
+            no.refuse(format!(
+                "spec {name:?}: emit_feature_health watches each feature's spread and mean, but \
+                 {} has no features. Leave out emit_feature_health.",
+                self.model.kind_name()
+            ));
+        }
+        // Run once the fast and the slow memory are both the whole stream,
+        // and every field would be null: refused rather than written null
+        // (task 232 (2); review round 6, B-4).
+        if self.emit_feature_health
+            && !health_refused
+            && let Some(decays) = decays
+        {
+            let forgets = |d: Decay| match d {
+                Decay::Halflife(h) => h.is_finite(),
+                Decay::Lam(l) => l < 1.0,
+            };
+            let memory = self.feature_health_half_life.as_ref();
+            if decays
+                .iter()
+                .any(|(_, d)| !forgets(self.diagnostic_decay_of(memory, *d, 1)))
+            {
+                let rows_on_a_clock = matches!(
+                    self.model,
+                    ModelKind::Expectile {
+                        window_rows: Some(_),
+                        ..
+                    }
+                ) && self.clock.is_some();
+                let why = if memory.is_some() {
+                    "feature_health_half_life is inf"
+                } else if rows_on_a_clock {
+                    "its memory is the fit's, and window_rows counts rows, which are no span \
+                     of the clock column, while half_life is inf"
+                } else if self.lam.is_some() {
+                    "its memory is the fit's, which forgets nothing (lam is 1, with no \
+                     window_size)"
+                } else {
+                    "its memory is the fit's, which forgets nothing (half_life is inf, with no \
+                     window_size)"
+                };
+                no.refuse(format!(
+                    "spec {name:?}: emit_feature_health compares each feature at its memory with \
+                     four times that memory, but {why}, so both read the whole stream and every \
+                     field would be null. Set feature_health_half_life to a finite value."
+                ));
+            }
+        }
+        // Both choose across a target's slots, and one slot leaves nothing to
+        // choose: `emit_averaged` there was the slot's own prediction under
+        // another name, null on the first scored row (task 278).
+        // A model that predicts no target has no slots to choose among: its
+        // own refusal of the flag speaks.
+        if let Some(decays) = decays.filter(|_| !self.model.predicts_no_target()) {
+            for (flag, on) in [
+                ("emit_selected", self.emit_selected),
+                ("emit_averaged", self.emit_averaged),
+            ] {
+                if !on {
+                    continue;
+                }
+                let n_slots = decays.len() * crate::combo_labels(self).len();
+                if n_slots < 2 {
+                    // Only the grids this model takes: every model takes a
+                    // half_life grid (`combos`, stream.rs).
+                    let grids = match self.model {
+                        ModelKind::EwRidge { evidence: true, .. } => "half_life or feature_sets",
+                        ModelKind::EwRidge { .. } => "half_life, ridge or feature_sets",
+                        ModelKind::Huber { .. } => "half_life or feature_sets",
+                        ModelKind::Lasso { .. } => "half_life or penalties",
+                        _ => "half_life",
+                    };
+                    no.refuse(format!(
+                        "spec {name:?}: {flag} chooses among each target's slots, but this spec \
+                         has one slot per target. Give {grids} several values, or leave out \
+                         {flag}."
+                    ));
+                }
             }
         }
     }

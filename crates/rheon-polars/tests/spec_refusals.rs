@@ -1013,7 +1013,9 @@ fn sgd_reports_a_bad_loss_and_a_bad_schedule_together() {
     .unwrap_err();
     assert!(
         e.starts_with("spec \"m\": 2 problems.\n- loss must be ")
-            && e.contains("\n- schedule must be \"constant\", \"inv_scaling\" or \"adagrad\""),
+            && e.contains(
+                "\n- schedule must be \"constant\", \"inv_scaling\", \"adagrad\" or \"optimal\""
+            ),
         "{e}"
     );
 }

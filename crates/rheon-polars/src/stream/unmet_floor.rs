@@ -449,6 +449,9 @@ pub(super) fn unstable_rate_notice(spec: &Spec, target: &str) -> String {
     let others = match schedule {
         "inv_scaling" => ", or set schedule to \"adagrad\"",
         "adagrad" => ", or set schedule to \"inv_scaling\", which lowers it row by row",
+        "optimal" => {
+            ", or raise l2 (or l1) to lower the optimal schedule's rate, or set schedule to \"adagrad\""
+        }
         _ => ", or set schedule to \"inv_scaling\", which lowers it row by row, or to \"adagrad\"",
     };
     format!(

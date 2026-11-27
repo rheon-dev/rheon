@@ -78,7 +78,7 @@ use crate::{Decay, EwCov, GramPart, TargetGaps, TargetMoments};
 // (task 479).
 mod split;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct LassoCfg {
     pub n_features: usize,
     pub n_targets: usize,
@@ -156,16 +156,11 @@ pub struct LassoCfg {
     /// error follows the same window, so the chosen `lambda` is chosen on the
     /// rows the fit uses.
     ///
-    /// **The encoding.** A state file is written with
-    /// `rmp_serde::to_vec_named`, a struct as a map: fields are read back by
-    /// name, and `skip_serializing_if` decides only whether a key is
-    /// written, so where a field sits does not move the file's layout
-    /// (review round 10, S4-1). This one, `window_every` and
-    /// `max_rows_between_snapshots` are kept last all the same, and only the
-    /// row cap skips: the compact encoding, `rmp_serde::to_vec`, writes a
-    /// struct as an array, positionally, and the round-trip tests here use
-    /// it, where a field that skips anywhere but the end shifts the fields
-    /// after it.
+    /// **The encoding.** Custom `Serialize` below skips `positive` (and
+    /// `max_rows_between_snapshots` when `None`) whenever `positive` is false,
+    /// keeping existing compact and named msgpack bytes identical; when
+    /// `positive` is true, `max_rows_between_snapshots` is written explicitly
+    /// so positional compact msgpack indices never shift.
     #[serde(default)]
     pub window: Option<f64>,
     /// Clock units between the window's snapshots, `0` every row; with
@@ -177,8 +172,61 @@ pub struct LassoCfg {
     /// At most this many rows between the window's snapshots, counted on
     /// every row the model is stepped with, rows of weight zero included;
     /// `1` is every row, and `0` is refused (docs/PLAN.md task 196).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub max_rows_between_snapshots: Option<usize>,
+    /// Restrict fitted slopes to be non-negative (`beta_i >= 0`), matching
+    /// `sklearn.linear_model.Lasso(positive=True)` / `ElasticNet(positive=True)`.
+    /// The intercept remains unconstrained.
+    #[serde(default)]
+    pub positive: bool,
+}
+
+impl Serialize for LassoCfg {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        struct HumanF64(f64);
+        impl Serialize for HumanF64 {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                crate::humanfloat::f64_or_tag::serialize(&self.0, s)
+            }
+        }
+        let len = if self.positive {
+            20
+        } else if self.max_rows_between_snapshots.is_some() {
+            19
+        } else {
+            18
+        };
+        let mut st = serializer.serialize_struct("LassoCfg", len)?;
+        st.serialize_field("n_features", &self.n_features)?;
+        st.serialize_field("n_targets", &self.n_targets)?;
+        st.serialize_field("fit_intercept", &self.fit_intercept)?;
+        st.serialize_field("decay", &self.decay)?;
+        st.serialize_field("lasso_path", &self.lasso_path)?;
+        st.serialize_field("l1_ratio", &self.l1_ratio)?;
+        st.serialize_field("select_half_life", &self.select_half_life)?;
+        st.serialize_field("min_weight", &self.min_weight)?;
+        st.serialize_field("target_min_weight", &self.target_min_weight)?;
+        st.serialize_field("solve_every", &HumanF64(self.solve_every))?;
+        st.serialize_field("max_rows_between_solves", &self.max_rows_between_solves)?;
+        st.serialize_field("solve_share", &self.solve_share)?;
+        st.serialize_field("max_iter", &self.max_iter)?;
+        st.serialize_field("tol", &self.tol)?;
+        st.serialize_field("target_gaps", &self.target_gaps)?;
+        st.serialize_field("min_weight_holds_learning", &self.min_weight_holds_learning)?;
+        st.serialize_field("window", &self.window)?;
+        st.serialize_field("window_every", &self.window_every)?;
+        if self.positive || self.max_rows_between_snapshots.is_some() {
+            st.serialize_field(
+                "max_rows_between_snapshots",
+                &self.max_rows_between_snapshots,
+            )?;
+        }
+        if self.positive {
+            st.serialize_field("positive", &self.positive)?;
+        }
+        st.end()
+    }
 }
 
 /// What a configuration written before schema 64, which had no
@@ -1089,7 +1137,11 @@ impl Lasso {
                         // `±inf` (review 2026-11-23, LASSO-3).
                         let start = prev[j][0][i + off] * s[i];
                         if s[i] > 0.0 && start.is_finite() {
-                            b[i] = start;
+                            b[i] = if self.cfg.positive {
+                                start.max(0.0)
+                            } else {
+                                start
+                            };
                         }
                     }
                 }
@@ -1103,6 +1155,7 @@ impl Lasso {
                         &d[jj],
                         &s,
                         (l1, l2),
+                        self.cfg.positive,
                         &mut b,
                         self.cfg.max_iter,
                         limit,
@@ -1191,6 +1244,7 @@ fn descend(
     d: &[f64],
     s: &[f64],
     (l1, l2): (f64, f64),
+    positive: bool,
     b: &mut [f64],
     max_iter: u32,
     limit: f64,
@@ -1199,10 +1253,36 @@ fn descend(
     debug_assert!(is_symmetric(c, k), "the sweeps read a column as a row");
     let split = k >= split::SPLIT_MIN_K;
     for _ in 0..max_iter {
-        let delta = if split {
-            split::cd_sweep_split(c, k, d, s, l1, l2, b, &mut support.acc, &mut support.finite)
+        let delta = if positive {
+            if split {
+                split::cd_sweep_split::<true>(
+                    c,
+                    k,
+                    d,
+                    s,
+                    l1,
+                    l2,
+                    b,
+                    &mut support.acc,
+                    &mut support.finite,
+                )
+            } else {
+                cd_sweep::<true>(c, k, d, s, l1, l2, b, &mut support.acc)
+            }
+        } else if split {
+            split::cd_sweep_split::<false>(
+                c,
+                k,
+                d,
+                s,
+                l1,
+                l2,
+                b,
+                &mut support.acc,
+                &mut support.finite,
+            )
         } else {
-            cd_sweep(c, k, d, s, l1, l2, b, &mut support.acc)
+            cd_sweep::<false>(c, k, d, s, l1, l2, b, &mut support.acc)
         };
         if crate::gramfit::settled(delta, limit) {
             // A descent that ran to infinities settles on NaN moves, which
@@ -1246,12 +1326,13 @@ fn is_symmetric(c: &[f64], k: usize) -> bool {
 }
 
 /// The soft-thresholded coordinate: `sign(rho) * max(|rho| - l1, 0)` over
-/// `denom`, with the exact 0 inside `[-l1, l1]`.
+/// `denom`, with the exact 0 inside `[-l1, l1]`, or when `POSITIVE` is true
+/// `max(rho - l1, 0) / denom` (zero for any `rho <= l1`).
 #[inline(always)]
-fn soft_over(rho: f64, l1: f64, denom: f64) -> f64 {
+fn soft_over<const POSITIVE: bool>(rho: f64, l1: f64, denom: f64) -> f64 {
     if rho > l1 {
         (rho - l1) / denom
-    } else if rho < -l1 {
+    } else if !POSITIVE && rho < -l1 {
         (rho + l1) / denom
     } else {
         0.0
@@ -1290,7 +1371,7 @@ fn soft_over(rho: f64, l1: f64, denom: f64) -> f64 {
 /// `c * 0` is in the one-chain sweep (`NaN` where `c` is not finite).
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn cd_sweep(
+fn cd_sweep<const POSITIVE: bool>(
     c: &[f64],
     k: usize,
     d: &[f64],
@@ -1366,7 +1447,7 @@ fn cd_sweep(
                 }
             }
         }
-        let newb = soft_over(rho, l1, cii + l2);
+        let newb = soft_over::<POSITIVE>(rho, l1, cii + l2);
         max_delta = max_delta.max((newb - bl[i]).abs());
         bl[i] = newb;
         pending = Some((i, newb));
@@ -1895,7 +1976,18 @@ mod tests {
             let s = vec![1.0; k];
             let mut b = vec![0.0; k];
             let mut support = Support::default();
-            let converged = descend(&c, k, &d, &s, (0.0, 0.0), &mut b, 5000, 1e-9, &mut support);
+            let converged = descend(
+                &c,
+                k,
+                &d,
+                &s,
+                (0.0, 0.0),
+                false,
+                &mut b,
+                5000,
+                1e-9,
+                &mut support,
+            );
             assert!(
                 !converged || b.iter().all(|v| v.is_finite()),
                 "k {k}: settled at {:?}",
@@ -2290,6 +2382,7 @@ mod tests {
             target_gaps: TargetGaps::OwnRows,
             max_iter: 200,
             tol: 1e-12,
+            positive: false,
         }
     }
 
@@ -4697,6 +4790,7 @@ mod tests {
                 &d,
                 &s,
                 (l1, 0.0),
+                false,
                 &mut sparse,
                 100,
                 limit,
@@ -4752,7 +4846,7 @@ mod tests {
         let mut acc = Vec::new();
         for sweep in 0..sweeps {
             let a = cd_sweep_serial(c, k, d, s, pens.0, pens.1, &mut serial);
-            let b = cd_sweep(c, k, d, s, pens.0, pens.1, &mut chains, &mut acc);
+            let b = cd_sweep::<false>(c, k, d, s, pens.0, pens.1, &mut chains, &mut acc);
             assert_eq!(
                 a.to_bits(),
                 b.to_bits(),
@@ -4894,6 +4988,7 @@ mod tests {
                     &d,
                     &s,
                     (l1, 0.0),
+                    false,
                     &mut chains,
                     100,
                     limit,

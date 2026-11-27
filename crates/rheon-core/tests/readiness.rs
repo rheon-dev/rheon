@@ -32,6 +32,7 @@ fn cfg(k: usize, half_life: f64) -> EwRidgeCfg {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        evidence: None,
     }
 }
 
@@ -539,6 +540,7 @@ fn lasso_reads_the_active_count_over_kish_n() {
         target_gaps: TargetGaps::OwnRows,
         max_iter: 500,
         tol: 1e-12,
+        positive: false,
     })
     .unwrap();
     let mut rng = Rng(19);
@@ -604,6 +606,7 @@ fn lasso(n_targets: usize, fit_intercept: bool, path: Vec<f64>, lam: f64) -> Las
         target_gaps: TargetGaps::OwnRows,
         max_iter: 500,
         tol: 1e-12,
+        positive: false,
     })
     .unwrap()
 }

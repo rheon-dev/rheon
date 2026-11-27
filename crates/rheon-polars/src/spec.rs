@@ -202,6 +202,12 @@ pub enum ModelKind {
         /// MiB (review 2026-09-12, P4).
         #[serde(default)]
         window_budget: Option<WindowBudgetSpec>,
+        /// Empirical-Bayes evidence maximization at solve time; emits `pred_std`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        evidence: bool,
+        /// Gamma hyperprior(s) for `evidence`: scalar or `[a1, a2, l1, l2]`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence_prior: Option<FloatOrList>,
     },
     Lasso {
         /// Decreasing penalties on standardized stats; required.
@@ -248,6 +254,9 @@ pub enum ModelKind {
         /// MiB (review 2026-09-12, P4).
         #[serde(default)]
         window_budget: Option<WindowBudgetSpec>,
+        /// Constrain slopes to be non-negative (intercept unconstrained).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        positive: bool,
     },
     Kalman {
         /// Per-factor coefficient half-life (scalar or one per slot, intercept
@@ -388,6 +397,9 @@ pub enum ModelKind {
         /// Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         refit_budget: Option<Num>,
+        /// M-estimator norm: "huber", "tukey", "andrews", "hampel", or "ramsay".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        huber_norm: Option<String>,
     },
     /// Quantile regression at level `quantile` (docs/PLAN.md §4.5).
     Quantile {
@@ -605,7 +617,7 @@ pub enum ModelKind {
         eps: Option<f64>,
         #[serde(default)]
         learning_rate: Option<f64>,
-        /// "constant" (default), "inv_scaling" or "adagrad".
+        /// "constant" (default), "inv_scaling", "adagrad" or "optimal".
         #[serde(default)]
         schedule: Option<String>,
         /// Exponent for `inv_scaling`.
@@ -642,6 +654,15 @@ pub enum ModelKind {
         /// (docs/PLAN.md task 195, S4).
         #[serde(default)]
         strict_binary: bool,
+        /// Cumulative L1 penalty (elastic-net with `l2`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        l1: Option<f64>,
+        /// Decay-weighted Polyak-Ruppert parameter averaging.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        average: bool,
+        /// Importance-weight-invariant step under squared loss.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        invariant: bool,
     },
     /// Passive-aggressive regression (ENHANCEMENTS E17). No learning rate:
     /// each row's update is the smallest change that satisfies it.
@@ -682,6 +703,9 @@ pub enum ModelKind {
         /// true (docs/PLAN.md task 195, U2).
         #[serde(default = "default_true")]
         standardize: bool,
+        /// Decay-weighted Polyak-Ruppert parameter averaging.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        average: bool,
     },
     /// Holt's linear trend method (ENHANCEMENTS E25): level plus slope, no
     /// features. The baseline a feature-based model should have to beat.
@@ -4922,203 +4946,7 @@ impl Spec {
                 ));
             }
         }
-        // `coef_every` and `max_rows_between_coefs` schedule the `coef`
-        // field, which a model with no coefficients does not have (review
-        // 2026-09-12, S22). `0` was the default and passed there; since task
-        // 178 it is every row, and refused there as any other value is.
-        for (key, given) in [
-            ("coef_every", self.coef_every.is_some()),
-            (
-                "max_rows_between_coefs",
-                self.max_rows_between_coefs.is_some(),
-            ),
-        ] {
-            if given && !self.model.has_coef() {
-                no.refuse(format!(
-                    "spec {name:?}: {key} applies only to a model that reports coefficients, but \
-                     {} reports none. Leave out {key}.",
-                    self.model.kind_name()
-                ));
-            }
-        }
-        if let Some(e) = self
-            .coef_every
-            .as_ref()
-            .filter(|e| !(e.value().is_finite() && non_negative(e.value())))
-        {
-            no.refuse(at_least_zero(
-                &format!("spec {name:?}"),
-                "coef_every",
-                " clock units",
-                &Got::One(e.to_string()),
-                Some("to fill the coef field on every row"),
-                None,
-            ));
-        }
-        // A cap of no rows is no schedule: every row is `coef_every = 0`.
-        if self.max_rows_between_coefs == Some(0) {
-            no.refuse(format!(
-                "spec {name:?}: max_rows_between_coefs must be at least 1, but it is 0. Set \
-                 max_rows_between_coefs to 1 or more, or leave it out and set coef_every to 0 \
-                 to fill the coef field on every row."
-            ));
-        }
-        // Nothing residual-based applies to a model that predicts no target.
-        // Refused rather than ignored: a flag that silently emits nothing
-        // looks like a bug in the output, not in the spec.
-        let mut health_refused = false;
-        if self.model.predicts_no_target() {
-            let asked = [
-                ("emit_sigma", self.emit_sigma),
-                ("emit_zscore", self.emit_zscore),
-                ("emit_metrics", self.emit_metrics),
-                ("resid_quantiles", self.resid_quantiles.is_some()),
-                ("conformal", self.conformal.is_some()),
-                ("emit_autocorr", self.emit_autocorr),
-                ("emit_drift", self.emit_drift),
-                ("emit_calibration", self.emit_calibration),
-                ("emit_breaks", self.emit_breaks),
-                ("emit_robust_se", self.emit_robust_se),
-                ("emit_specification", self.emit_specification),
-                ("emit_tails", self.emit_tails),
-                ("emit_influence", self.emit_influence),
-                ("emit_averaged", self.emit_averaged),
-                ("emit_selected", self.emit_selected),
-            ];
-            let on: Vec<&str> = asked
-                .iter()
-                .filter(|(_, on)| *on)
-                .map(|(f, _)| *f)
-                .collect();
-            if let Some((last, rest)) = on.split_last() {
-                let listed = if rest.is_empty() {
-                    (*last).to_string()
-                } else {
-                    format!("{} and {last}", rest.join(", "))
-                };
-                no.refuse(format!(
-                    "spec {name:?}: {listed} {} not apply to {}, which predicts no number for a \
-                     target, so has no residuals. Leave out {listed}.",
-                    if rest.is_empty() { "does" } else { "do" },
-                    self.model.kind_name()
-                ));
-            }
-            // Feature health reads no residual: it watches the features
-            // a fit's coefficients lean on (task 232 (14); review round
-            // 6, F-8).
-            if self.emit_feature_health {
-                health_refused = true;
-                no.refuse(format!(
-                    "spec {name:?}: emit_feature_health does not apply to {}, which fits no \
-                     coefficients of its features: it watches the features a fit's coefficients \
-                     lean on. Leave out emit_feature_health, and use ModelBank.check() or \
-                     rheon.spec.audit to watch the features themselves.",
-                    self.model.kind_name()
-                ));
-            }
-        }
-        // Each target's own weight is a target's: a model that learns from
-        // none, or writes no row a target's floor could withhold
-        // (`marginal`), has none to report (docs/PLAN.md task 568).
-        if self.emit_target_weight
-            && (self.model.is_unsupervised() || matches!(self.model, ModelKind::Marginal { .. }))
-        {
-            let why = if self.model.is_unsupervised() {
-                "which learns from no target"
-            } else {
-                "which writes no prediction a target's min_weight could withhold: its pairs are \
-                 read from the bank's state"
-            };
-            no.refuse(format!(
-                "spec {name:?}: emit_target_weight reports the weight each target's min_weight \
-                 reads, but it does not apply to {}, {why}. Leave out emit_target_weight.",
-                self.model.kind_name()
-            ));
-        }
-        // Feature health reads the features alone: a model with none would
-        // write no field, so the switch is refused rather than ignored
-        // (review round 6, F6).
-        if self.emit_feature_health && !health_refused && self.k() == 0 {
-            health_refused = true;
-            no.refuse(format!(
-                "spec {name:?}: emit_feature_health watches each feature's spread and mean, but \
-                 {} has no features. Leave out emit_feature_health.",
-                self.model.kind_name()
-            ));
-        }
-        // Run once the fast and the slow memory are both the whole stream,
-        // and every field would be null: refused rather than written null
-        // (task 232 (2); review round 6, B-4).
-        if self.emit_feature_health
-            && !health_refused
-            && let Some(decays) = &decays
-        {
-            let forgets = |d: Decay| match d {
-                Decay::Halflife(h) => h.is_finite(),
-                Decay::Lam(l) => l < 1.0,
-            };
-            let memory = self.feature_health_half_life.as_ref();
-            if decays
-                .iter()
-                .any(|(_, d)| !forgets(self.diagnostic_decay_of(memory, *d, 1)))
-            {
-                let rows_on_a_clock = matches!(
-                    self.model,
-                    ModelKind::Expectile {
-                        window_rows: Some(_),
-                        ..
-                    }
-                ) && self.clock.is_some();
-                let why = if memory.is_some() {
-                    "feature_health_half_life is inf"
-                } else if rows_on_a_clock {
-                    "its memory is the fit's, and window_rows counts rows, which are no span \
-                     of the clock column, while half_life is inf"
-                } else if self.lam.is_some() {
-                    "its memory is the fit's, which forgets nothing (lam is 1, with no \
-                     window_size)"
-                } else {
-                    "its memory is the fit's, which forgets nothing (half_life is inf, with no \
-                     window_size)"
-                };
-                no.refuse(format!(
-                    "spec {name:?}: emit_feature_health compares each feature at its memory with \
-                     four times that memory, but {why}, so both read the whole stream and every \
-                     field would be null. Set feature_health_half_life to a finite value."
-                ));
-            }
-        }
-        // Both choose across a target's slots, and one slot leaves nothing to
-        // choose: `emit_averaged` there was the slot's own prediction under
-        // another name, null on the first scored row (task 278).
-        // A model that predicts no target has no slots to choose among: its
-        // own refusal of the flag speaks.
-        if let Some(decays) = decays.as_ref().filter(|_| !self.model.predicts_no_target()) {
-            for (flag, on) in [
-                ("emit_selected", self.emit_selected),
-                ("emit_averaged", self.emit_averaged),
-            ] {
-                if !on {
-                    continue;
-                }
-                let n_slots = decays.len() * crate::combo_labels(self).len();
-                if n_slots < 2 {
-                    // Only the grids this model takes: every model takes a
-                    // half_life grid (`combos`, stream.rs).
-                    let grids = match self.model {
-                        ModelKind::EwRidge { .. } => "half_life, ridge or feature_sets",
-                        ModelKind::Huber { .. } => "half_life or feature_sets",
-                        ModelKind::Lasso { .. } => "half_life or penalties",
-                        _ => "half_life",
-                    };
-                    no.refuse(format!(
-                        "spec {name:?}: {flag} chooses among each target's slots, but this spec \
-                         has one slot per target. Give {grids} several values, or leave out \
-                         {flag}."
-                    ));
-                }
-            }
-        }
+        self.validate_output_switches(name, decays.as_deref(), no);
         self.validate_model(no);
         Ok(())
     }

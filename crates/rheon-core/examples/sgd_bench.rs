@@ -39,6 +39,9 @@ fn cfg(k: usize, scale: bool, schedule: LearningRate, l2: f64) -> SgdCfg {
         mad_anchor: false,
         refit_clock: None,
         max_state_bytes: None,
+        l1: 0.0,
+        average: false,
+        invariant: false,
     }
 }
 
