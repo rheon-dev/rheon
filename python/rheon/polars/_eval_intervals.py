@@ -8,13 +8,15 @@ conventions.
 
 from __future__ import annotations
 
+import bisect
+import itertools
 import math
 import numbers
 import re
+import sys
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
-import numpy as np
 import polars as pl
 
 from rheon import spec as _spec_mod
@@ -118,37 +120,45 @@ def quantile_col_names(quantiles: Sequence[float]) -> list[str]:
     return names
 
 
-def _weighted_percentile_avg(y: np.ndarray, w: np.ndarray, q: float) -> float:
+def _weighted_percentile_avg(y: Sequence[float], w: Sequence[float], q: float) -> float:
     """Weighted ``q``-quantile matching ``sklearn.utils.stats._weighted_percentile``
     with ``average=True`` (averaged inverted CDF)."""
-    order = np.argsort(y, kind="mergesort")
-    ys = y[order]
-    ws = w[order]
-    cdf = np.cumsum(ws)
-    total = float(cdf[-1])
+    order = sorted(range(len(y)), key=y.__getitem__)
+    ys = [float(y[i]) for i in order]
+    ws = [float(w[i]) for i in order]
+    cdf = list(itertools.accumulate(ws))
+    total = cdf[-1]
     target = q * total
     if target == 0.0:
-        target = float(np.nextafter(0.0, 1.0))
-    idx = int(np.searchsorted(cdf, target, side="left"))
+        target = math.nextafter(0.0, 1.0)
     max_idx = len(ys) - 1
-    if idx > max_idx:
-        idx = max_idx
-    eps = float(np.finfo(np.float64).eps)
-    if float(cdf[idx]) - target > eps:
-        return float(ys[idx])
+    idx = min(bisect.bisect_left(cdf, target), max_idx)
+    eps = sys.float_info.epsilon
+    if cdf[idx] - target > eps:
+        return ys[idx]
     nxt = min(idx + 1, max_idx)
     if ws[nxt] == 0.0:
-        r = int(np.searchsorted(cdf, cdf[idx], side="right"))
+        r = bisect.bisect_right(cdf, cdf[idx])
         nxt = idx if r > max_idx else r
-    return 0.5 * (float(ys[idx]) + float(ys[nxt]))
+    return 0.5 * (ys[idx] + ys[nxt])
 
 
-def _pinball_loss_arr(y: np.ndarray, pred: np.ndarray, w: np.ndarray, q: float) -> float:
+def _pinball_loss_arr(
+    y: Sequence[float], pred: Sequence[float] | float, w: Sequence[float], q: float
+) -> float:
     """Weighted mean pinball loss for quantile level ``q``."""
-    diff = y - pred
-    loss = np.maximum(q * diff, (q - 1.0) * diff)
-    w_sum = float(np.sum(w))
-    return float(np.sum(w * loss) / w_sum)
+    w_sum = sum(w)
+    if isinstance(pred, (int, float)):
+        c = float(pred)
+        total = sum(
+            wi * max(q * (yi - c), (q - 1.0) * (yi - c)) for yi, wi in zip(y, w, strict=True)
+        )
+    else:
+        total = sum(
+            wi * max(q * (yi - pi), (q - 1.0) * (yi - pi))
+            for yi, pi, wi in zip(y, pred, w, strict=True)
+        )
+    return total / w_sum
 
 
 def pinball_and_d2_frame(
@@ -198,10 +208,10 @@ def pinball_and_d2_frame(
                     row[c] = None
                 rows_out.append(row)
                 continue
-            y_arr = part["y"].to_numpy().astype(np.float64, copy=False)
-            p_arr = part["pred"].to_numpy().astype(np.float64, copy=False)
-            w_arr = part["__w"].to_numpy().astype(np.float64, copy=False)
-            w_sum = float(np.sum(w_arr))
+            y_arr = part["y"].cast(pl.Float64).to_list()
+            p_arr = part["pred"].cast(pl.Float64).to_list()
+            w_arr = part["__w"].cast(pl.Float64).to_list()
+            w_sum = sum(w_arr)
             for q in quantiles:
                 lbl = num_label(q)
                 if w_sum <= 0.0:
@@ -214,7 +224,7 @@ def pinball_and_d2_frame(
                     row[f"d2_pinball_q{lbl}"] = None
                 else:
                     y_null = _weighted_percentile_avg(y_arr, w_arr, q)
-                    denom = _pinball_loss_arr(y_arr, np.full_like(y_arr, y_null), w_arr, q)
+                    denom = _pinball_loss_arr(y_arr, y_null, w_arr, q)
                     row[f"d2_pinball_q{lbl}"] = None if denom <= 0.0 else 1.0 - pb / denom
             rows_out.append(row)
 
@@ -412,28 +422,39 @@ def _usable(expr: pl.Expr) -> pl.Expr:
 
 
 def _score_interval_arrays(
-    y: np.ndarray,
-    lo: np.ndarray,
-    hi: np.ndarray,
-    w: np.ndarray,
+    y: Sequence[float],
+    lo: Sequence[float],
+    hi: Sequence[float],
+    w: Sequence[float],
     alpha: float,
     ssc_bins: int,
 ) -> tuple[float | None, float | None, float | None, float | None]:
     """Compute ``(coverage, mean_width, winkler, ssc)`` on un-crossed intervals."""
-    w_sum = float(np.sum(w))
+    w_sum = sum(w)
     if w_sum <= 0.0:
         return None, None, None, None
-    l_arr = np.minimum(lo, hi)
-    u_arr = np.maximum(lo, hi)
-    widths = u_arr - l_arr
-    hits = ((y >= l_arr) & (y <= u_arr)).astype(np.float64)
-    pen_lo = np.maximum(0.0, l_arr - y)
-    pen_hi = np.maximum(0.0, y - u_arr)
-    winkler_arr = widths + (2.0 / alpha) * (pen_lo + pen_hi)
+    inv_alpha = 2.0 / alpha
+    widths: list[float] = []
+    hits: list[float] = []
+    cov_num = 0.0
+    width_num = 0.0
+    winkler_num = 0.0
+    for yi, loi, hii, wi in zip(y, lo, hi, w, strict=True):
+        li = loi if loi <= hii else hii
+        ui = hii if loi <= hii else loi
+        width = ui - li
+        hit = 1.0 if li <= yi <= ui else 0.0
+        pen_lo = li - yi if yi < li else 0.0
+        pen_hi = yi - ui if yi > ui else 0.0
+        widths.append(width)
+        hits.append(hit)
+        cov_num += wi * hit
+        width_num += wi * width
+        winkler_num += wi * (width + inv_alpha * (pen_lo + pen_hi))
 
-    cov = float(np.sum(w * hits) / w_sum)
-    mean_width = float(np.sum(w * widths) / w_sum)
-    winkler = float(np.sum(w * winkler_arr) / w_sum)
+    cov = cov_num / w_sum
+    mean_width = width_num / w_sum
+    winkler = winkler_num / w_sum
 
     # Size-stratified coverage: sort widths ascending, split into ssc_bins
     # equal-count bins (matching MAPIE's regression_ssc / regression_ssc_score).
@@ -441,19 +462,23 @@ def _score_interval_arrays(
     if n < ssc_bins:
         ssc: float | None = None
     else:
-        order = np.argsort(widths, kind="mergesort")
-        bins = np.array_split(order, ssc_bins)
+        order = sorted(range(n), key=widths.__getitem__)
+        q_sz, r_sz = divmod(n, ssc_bins)
         bin_covs: list[float] = []
         valid = True
-        for b in bins:
-            if len(b) == 0:
+        pos = 0
+        for b_idx in range(ssc_bins):
+            sz = q_sz + (1 if b_idx < r_sz else 0)
+            if sz == 0:
                 valid = False
                 break
-            bw = float(np.sum(w[b]))
+            b_slice = order[pos : pos + sz]
+            pos += sz
+            bw = sum(w[i] for i in b_slice)
             if bw <= 0.0:
                 valid = False
                 break
-            bin_covs.append(float(np.sum(w[b] * hits[b]) / bw))
+            bin_covs.append(sum(w[i] * hits[i] for i in b_slice) / bw)
         ssc = min(bin_covs) if valid and bin_covs else None
     return cov, mean_width, winkler, ssc
 
@@ -531,10 +556,10 @@ def compute_interval_metrics(
             groups_iter = [((), long)]
 
         for gvals, part in groups_iter:
-            y_all = part["y"].to_numpy().astype(np.float64, copy=False)
-            lo_all = part["__lo"].to_numpy().astype(np.float64, copy=False)
-            hi_all = part["__hi"].to_numpy().astype(np.float64, copy=False)
-            w_all = part["__w"].to_numpy().astype(np.float64, copy=False)
+            y_all = part["y"].cast(pl.Float64).to_list()
+            lo_all = part["__lo"].cast(pl.Float64).to_list()
+            hi_all = part["__hi"].cast(pl.Float64).to_list()
+            w_all = part["__w"].cast(pl.Float64).to_list()
 
             if win_rows_i is None:
                 slices: list[tuple[int | None, int, int]] = [(None, 0, len(y_all))]
