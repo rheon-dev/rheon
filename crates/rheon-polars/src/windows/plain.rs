@@ -732,6 +732,55 @@ impl Windows {
             derived,
             ..
         } = &mut *self;
+        if kernels.is_empty() {
+            // Clock-only core (row operators alone): no kernels to fold and no
+            // outputs to write; update the group to the block's last row.
+            debug_assert_eq!(*n_outputs, 0);
+            debug_assert_eq!(*n_forward, 0);
+            debug_assert_eq!(n_wait, 0);
+            if rows.accepts.is_empty() {
+                held_meta.extend(std::iter::repeat_n(
+                    Meta {
+                        open: 0,
+                        accept: true,
+                        drop: false,
+                    },
+                    len,
+                ));
+            } else {
+                for r in 0..len {
+                    held_meta.push_back(Meta {
+                        open: 0,
+                        accept: rows.accepts.iter().all(|c| usable(c[at + r])),
+                        drop: false,
+                    });
+                }
+            }
+            let g = &mut groups[0];
+            g.tau = bufs.tau[len - 1];
+            match last_now {
+                Some(last_now) => {
+                    (g.off, g.form) = match last_now {
+                        ClockValue::Ns(c) => (c, OffForm::Ns),
+                        ClockValue::I64(c) => (c, OffForm::Int),
+                        ClockValue::F64(c) => (c.to_bits() as i64, OffForm::Bits),
+                    };
+                    g.stamp = Some(last_now);
+                    g.last_raw = Some(last_now);
+                }
+                None => (g.off, g.form) = (bufs.off[len - 1], OffForm::Bits),
+            }
+            g.clock.take_plain_run(last_now, last_session);
+            self.shared
+                .take_plain_run(last_now, if grouped { None } else { last_session });
+            self.next_seq += len as u64;
+            self.derived.bufs = bufs;
+            if !count {
+                self.link_back(0);
+            }
+            self.advance_ready();
+            return;
+        }
         let seq0 = *next_seq;
         bufs.seq.clear();
         bufs.seq.extend((0..len).map(|r| seq0 + r as u64));
@@ -1002,6 +1051,54 @@ impl Windows {
     /// passes share. The stream's end is the caller's.
     #[allow(clippy::too_many_lines)]
     fn run_pass(&mut self, rows: &PlainRows<'_>, at: usize, len: usize, m: &mut Multi) {
+        if self.kernels.is_empty() {
+            // Clock-only core (row operators alone): no kernels to fold and no
+            // outputs to write; update each touched group to its last row in
+            // the pass directly without scattering/gathering per group.
+            debug_assert_eq!(self.n_outputs, 0);
+            debug_assert_eq!(self.n_forward, 0);
+            debug_assert_eq!(self.derived.n_wait, 0);
+            if rows.accepts.is_empty() {
+                self.held_meta.extend(std::iter::repeat_n(
+                    Meta {
+                        open: 0,
+                        accept: true,
+                        drop: false,
+                    },
+                    len,
+                ));
+            } else {
+                for j in 0..len {
+                    self.held_meta.push_back(Meta {
+                        open: 0,
+                        accept: rows.accepts.iter().all(|c| usable(c[at + j])),
+                        drop: false,
+                    });
+                }
+            }
+            let has_clock = rows.clock.is_some();
+            for t in &m.touched {
+                let g = &mut self.groups[t.gi];
+                let rec = m.rows[t.last_row as usize];
+                g.tau = rec.tau;
+                g.restart = false;
+                if has_clock {
+                    g.origin = Some(t.origin);
+                    (g.off, g.form) = match t.last {
+                        ClockValue::Ns(c) => (c, OffForm::Ns),
+                        ClockValue::I64(c) => (c, OffForm::Int),
+                        ClockValue::F64(c) => (c.to_bits() as i64, OffForm::Bits),
+                    };
+                    g.stamp = Some(t.last);
+                    g.last_raw = Some(t.last);
+                    g.clock.take_plain_run(Some(t.last), t.last_session);
+                } else {
+                    (g.off, g.form) = (rec.off, OffForm::Bits);
+                    g.clock.take_plain_run(None, t.last_session);
+                }
+            }
+            return;
+        }
         let n_wait = self.derived.n_wait;
         // The pass's rows by group.
         let touched = m.touched.len();

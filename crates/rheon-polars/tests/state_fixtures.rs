@@ -562,6 +562,28 @@ fn windows_rows_config() -> WindowsConfig {
     .unwrap()
 }
 
+/// Row operators alone (windows state 15, task 78): grouped `clock_step`,
+/// `increment`, `run_length`, `clock_drift` and `tick_sign` with no window
+/// operator, so the core carries zero kernels and zero outputs (no
+/// placeholder sum kernel).
+fn windows_row_only_config() -> WindowsConfig {
+    serde_json::from_str(
+        r#"{"formulas": [
+               {"name": "held", "tree": ["run_length", [">", ["col", "mid"], ["lit", 100.0]]]},
+               {"name": "drift", "tree": ["clock_drift", ["col", "t"], {"event": ["-", ["col", "t"], ["*", ["abs", ["col", "mid"]], ["lit", 0.001]]], "half_life": 5.0}]},
+               {"name": "step", "tree": ["increment", ["col", "cum"]]},
+               {"name": "sign", "tree": ["tick_sign", ["col", "mid"]]},
+               {"name": "cadence", "tree": ["clock_step", ["col", "t"], {"half_life": 5.0, "stat": "mean"}]}
+             ],
+             "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
+    )
+    .unwrap()
+}
+
+fn window_row_only_input(df: &DataFrame) -> DataFrame {
+    df.select(["t", "g", "mid", "cum"]).unwrap()
+}
+
 /// The invert node (PLAN 563, windows state 14): a root of the row beside
 /// a mean looking ahead, so rows are held across the save, and a mean of
 /// the roots, every parameter of the node written.
@@ -1821,6 +1843,27 @@ fn windows_rows_run(bytes: &[u8], input: &DataFrame) -> Ran {
     windows_run_of(windows_rows_config(), bytes, input)
 }
 
+fn windows_row_only_first() -> (Vec<u8>, DataFrame) {
+    let input = window_row_only_input(&frame());
+    let mut run = WindowsRun::new(windows_row_only_config(), input.schema()).unwrap();
+    run.feed(&input.slice(0, SPLIT), None).unwrap();
+    assert_eq!(run.held(), 0, "a row-only run holds no rows");
+    assert_eq!(run.queued(), 0, "a row-only run queues no placeholder rows");
+    (
+        run.save_bytes().unwrap(),
+        input.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn windows_row_only_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut run = WindowsRun::load_bytes(bytes, windows_row_only_config(), input.schema())?;
+    let again = run.save_bytes()?;
+    let fed = run.feed(input, None).map_err(|e| e.to_string())?;
+    let finished = run.finish().map_err(|e| e.to_string())?;
+    assert_eq!(finished.height(), 0, "a row-only run holds no rows");
+    Ok((again, vec![("feed".into(), fed)]))
+}
+
 fn windows_invert_first() -> (Vec<u8>, DataFrame) {
     windows_first_of(windows_invert_config(), window_input(&frame()))
 }
@@ -2892,6 +2935,11 @@ fn kinds() -> Vec<Kind> {
             run: windows_rows_run,
         },
         Kind {
+            name: "with_windows_row_only",
+            first: windows_row_only_first,
+            run: windows_row_only_run,
+        },
+        Kind {
             name: "with_windows_invert",
             first: windows_invert_first,
             run: windows_invert_run,
@@ -3456,7 +3504,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
         } else if name.starts_with("merge") {
             ("merge", 1)
         } else if name.starts_with("with_windows") {
-            ("windows", 14)
+            ("windows", 15)
         } else {
             ("bank", u64::from(SCHEMA_VERSION))
         }
@@ -3482,7 +3530,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             ("checkpoint", 1),
             ("merge", 3),
             ("refresh_time", 5),
-            ("windows", 11)
+            ("windows", 12)
         ]
     );
     // A checkpoint's stages, each a whole state of its kind; and the bank's
@@ -3491,7 +3539,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     let stages = load_checkpoint(&unhex(f.state)).unwrap();
     for (s, (kind, version)) in stages.iter().zip([
         ("refresh_time", 3),
-        ("windows", 14),
+        ("windows", 15),
         ("bank", 72),
         ("merge", 1),
     ]) {
@@ -3526,7 +3574,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
             };
             assert_eq!(
                 envelope_head(&bytes),
-                Some(("rheon-state".to_owned(), "windows".to_owned(), 14))
+                Some(("rheon-state".to_owned(), "windows".to_owned(), 15))
             );
             assert!(sealed(&bytes));
             cores += 1;
@@ -4763,6 +4811,22 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         ("with_windows_rows", "an increment's place", |p, v| {
             p.contains(".rows.") && v.as_str() == Some("Step")
         }),
+        // Windows state 15 (task 78): a row-only run carries an empty
+        // clock-only core with zero outputs and populated group clocks.
+        (
+            "with_windows_row_only",
+            "a clock-only core's zero outputs",
+            |p, v| p == ".core.n_outputs" && v.as_u64() == Some(0),
+        ),
+        (
+            "with_windows_row_only",
+            "a clock-only core's group policy time",
+            |p, v| {
+                p.starts_with(".core.groups.")
+                    && p.ends_with(".tau")
+                    && v.as_f64().is_some_and(|f| f > 0.0)
+            },
+        ),
         // Windows state 14 (PLAN 563): a formula's invert node, its unknown,
         // and an operator whose input is one.
         ("with_windows_invert", "an invert node", |p, v| {
@@ -5257,6 +5321,54 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             all.iter().any(|(p, v)| holds(p, v)),
             "{kind}: no leaf of the state holds {form}, so the fixture freezes nothing of it"
         );
+    }
+}
+
+/// Windows state 15 (task 78): the `with_windows_row_only` fixture freezes
+/// an empty clock-only core -- zero kernels, zero operators, zero members and
+/// zero group queues -- instead of the legacy one-row placeholder sum kernel.
+#[test]
+fn the_row_only_fixture_freezes_an_empty_clock_only_core() {
+    if regenerating() {
+        return;
+    }
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "with_windows_row_only")
+        .expect("the with_windows_row_only fixture");
+    let v = rmpv::decode::read_value(&mut unhex(f.state).as_slice()).unwrap();
+    let core = v
+        .as_map()
+        .unwrap()
+        .iter()
+        .find(|(k, _)| k.as_str() == Some("core"))
+        .unwrap()
+        .1
+        .as_map()
+        .unwrap();
+    let get = |name: &str| {
+        &core
+            .iter()
+            .find(|(k, _)| k.as_str() == Some(name))
+            .unwrap()
+            .1
+    };
+    assert!(get("kernels").as_array().unwrap().is_empty(), "0 kernels");
+    assert!(get("ops").as_array().unwrap().is_empty(), "0 ops");
+    assert!(get("members").as_array().unwrap().is_empty(), "0 members");
+    assert_eq!(get("n_outputs").as_u64(), Some(0));
+    let groups = get("groups").as_array().unwrap();
+    assert!(groups.len() >= 2, "multiple groups tracked");
+    for g in groups {
+        let gm = g.as_map().unwrap();
+        let queues = gm
+            .iter()
+            .find(|(k, _)| k.as_str() == Some("queues"))
+            .unwrap()
+            .1
+            .as_array()
+            .unwrap();
+        assert!(queues.is_empty(), "no placeholder queue in any group");
     }
 }
 

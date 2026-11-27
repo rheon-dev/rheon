@@ -161,7 +161,10 @@ refusal. Here is what each rule guarantees, and the test that holds it:
 | without a clock column, an input that does not begin with a new session | refused: a row-count clock steps forward at every row | `test_without_a_clock_the_next_file_begins_with_a_new_session` |
 | a state of another version, or a damaged file | refused by its version, or reported as damaged | `test_a_windows_state_of_another_version_is_refused_by_its_version`, `test_a_damaged_windows_state_says_so` |
 
-The windows state is version 14, and this build reads 9 to 13 too. Version
+The windows state is version 15, and this build reads 9 to 14 too. Version
+14 is 15 with a one-row sum stand-in on calls that hold only row operators
+(`increment`, `tick_sign`, `run_length`, `clock_lag`, `clock_drift` or
+`clock_step`), which version 15 omits and strips on load. Version
 13 is 14 without an `invert`, without a row operator's own state (a
 `run_length`, `clock_lag`, `clock_drift` or `clock_step`) and without an
 `stl` or `mstl` ring. Version 12 is 13

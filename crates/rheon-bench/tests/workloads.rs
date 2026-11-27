@@ -288,14 +288,10 @@ fn every_window_case_reads_its_block_inside_the_first_window() {
         if id == "window_clock_step_running" {
             assert_eq!(run.run.held(), 0, "{id}: a row is held");
         }
-        // A window with no size keeps its running sums alone, no row. A row
-        // operator alone (the clock step) runs before the core, which then
-        // carries the stand-in kernel of every call of row operators alone,
-        // a sum over a window of one row: that row is its one queued, and
-        // the saved state holds it, so it stays (task 564).
-        let held = if id == "window_clock_step_running" {
-            1
-        } else if id.ends_with("_running") || id.ends_with("_groups10k") || id == INVERT_CASE {
+        // A window with no size keeps its running sums alone, no row; a call
+        // of row operators alone (the clock step) carries an empty clock-only
+        // core with no kernels and no queued rows.
+        let held = if id.ends_with("_running") || id.ends_with("_groups10k") || id == INVERT_CASE {
             0
         } else {
             WARM_ROWS + ROWS

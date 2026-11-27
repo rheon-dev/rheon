@@ -1165,7 +1165,7 @@ fn a_state_of_another_version_is_refused_by_its_version() {
     assert!(
         err.contains(
             "the state's version is 2, but this version of rheon reads versions 9 \
-                 to 14"
+                 to 15"
         ),
         "{err}"
     );
@@ -1337,7 +1337,14 @@ fn a_windows_state_version_moves_the_banks_schema_with_it() {
     // reading: a 13 core loads as a 14 without an invert. Windows
     // state 14 holds PLAN 490's STL rings likewise: a 13 core loads as a 14
     // without a ring.
-    assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (14, 72));
+    // Windows state 15 (task 78, placeholder sum kernel removal) within
+    // schema 72, which no release has written: a row-only call now carries
+    // an empty clock-only core (0 kernels, 0 operators) instead of the
+    // 1-kernel, 1-sum stand-in that versions 9 to 14 wrote; this build
+    // strips that stand-in when loading a 9..=14 row-only state and loads
+    // every other 9..=14 state unchanged, while a released build refuses a
+    // 72 bank by number.
+    assert_eq!((WINDOWS_VERSION, rheon_core::SCHEMA_VERSION), (15, 72));
     assert_eq!(MIN_WINDOWS_VERSION, 9);
 }
 
