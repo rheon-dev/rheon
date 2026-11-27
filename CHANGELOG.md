@@ -299,6 +299,23 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **HyperLogLog++ and sliding-window distinct-count sketches in `audit`**
+  (PLAN 509; the user, 2026-11-21 and 2026-11-27). `rp.spec.audit` gains
+  optional `distinct_precision` (`8` to `16`, off by default),
+  `distinct_window_rows`, `distinct_window_size`, `closed` (`"right"` or
+  `"both"`), and `max_state_bytes` (default 256 KB, ceiling 64 MiB). When
+  enabled, `ModelBank.audit(table="columns")` reports `approx_n_unique`
+  (`Float64`) beside `n_unique` and `fit_predict` emits per-row out-of-sample
+  `approx_n_unique_<col>`; when off, default schemas, outputs, and existing
+  state fixtures are unchanged. Uses SplitMix64, HLL++ dense bias tables with
+  `libm::log`, zero-weight skipping, atomic `HeldCap` checks, and `merge` /
+  `pooled=True` for plain and clock-windowed sketches (`distinct_window_rows`
+  pooling refused); held to `datasketch` `HyperLogLogPlusPlus` within `1e-12`
+  relative across 50 seeds. Arm64 release (1 column, `p = 12`): off 94.1
+  ns/row (unchanged), plain 109.7 ns/row (+15.6 ns, 13.4 KiB/col), sliding
+  row window 136.1 ns/row, sliding clock window 202.6 ns/row (x86-64/aligned
+  timings owed at task 583).
+
 - **`emit_target_weight` writes `weight_<target>`, the weight that target's
   `min_weight` reads** (PLAN 568; the user, 2026-11-23, from a workload
   report on 2.0.0). A row whose target is null teaches that target nothing

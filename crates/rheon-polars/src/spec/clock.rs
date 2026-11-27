@@ -708,3 +708,60 @@ fn without_clock(d: &str) -> String {
         _ => format!("give {d} as a number of rows"),
     }
 }
+
+impl ModelKind {
+    /// Whether a read of the model decides a window's edge on the clock,
+    /// so scored and ungated reads read at the row's stamp
+    /// ([`crate::AnyModel::predict_at_into`]).
+    pub fn reads_at_stamp(&self) -> bool {
+        matches!(
+            self,
+            ModelKind::EwmMoments {
+                window_size: Some(_),
+                ..
+            } | ModelKind::Hawkes {
+                window_size: Some(_),
+                ..
+            } | ModelKind::Expectile {
+                window_size: Some(_),
+                ..
+            } | ModelKind::Isotonic {
+                window_size: Some(_),
+                ..
+            } | ModelKind::DdSketch {
+                window_size: Some(_),
+                ..
+            } | ModelKind::CorrChange {
+                window_size: Some(_),
+                ..
+            } | ModelKind::Audit {
+                distinct_window_size: Some(_),
+                ..
+            }
+        )
+    }
+
+    /// True for the models that learn from no target column: `ew_cov`,
+    /// `kmeans`, `micro`, `deco`, `rcov`, `hmm`, `corrchange`, `bocpd`,
+    /// `audit` and `ewm_moments`,
+    /// the list `_spec.py`'s `UNSUPERVISED` keeps too. Their `targets` mirror
+    /// `features[0]` for plumbing, so a target that is also a feature is not
+    /// a leak for them -- except the column [`Self::targets_slot_column`]
+    /// names, which is read as a target is.
+    pub fn is_unsupervised(&self) -> bool {
+        matches!(
+            self,
+            ModelKind::EwCov { .. }
+                | ModelKind::KMeans { .. }
+                | ModelKind::Micro { .. }
+                | ModelKind::Deco { .. }
+                | ModelKind::Rcov { .. }
+                | ModelKind::Hmm { .. }
+                | ModelKind::CorrChange { .. }
+                | ModelKind::Bocpd { .. }
+                | ModelKind::Audit { .. }
+                | ModelKind::Pca { .. }
+                | ModelKind::EwmMoments { .. }
+        )
+    }
+}
