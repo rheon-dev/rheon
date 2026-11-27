@@ -1709,6 +1709,22 @@ impl EwmMoments {
         out
     }
 
+    /// [`crate::OnlineModel::predict_with_floor`] for a row whose place on
+    /// the clock the caller knows, `stamp`, as
+    /// [`crate::OnlineModel::stamp_next`] hands a step's.
+    pub fn predict_with_floor_at(
+        &mut self,
+        x: &[f64],
+        d_clock: f64,
+        stamp: Stamp,
+        floor: f64,
+    ) -> crate::Step {
+        let prev = std::mem::replace(&mut self.cfg.min_weight, floor);
+        let out = self.predict_at(x, d_clock, stamp);
+        self.cfg.min_weight = prev;
+        out
+    }
+
     /// One row learned at `stamp`, `d_clock` after the last row learned, of
     /// weight `w`, with nothing read: the learning half of
     /// [`crate::OnlineModel::step`], for a caller that reads the moments
@@ -2129,6 +2145,19 @@ impl crate::OnlineModel for EwmMoments {
         let now = self.place.as_ref().map(|p| p.peek(d_clock));
         let mut out = crate::Step::default();
         out.n_eff = self.read_into(now, &mut out.pred);
+        out
+    }
+
+    fn predict_with_floor(
+        &mut self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        floor: f64,
+    ) -> crate::Step {
+        let prev = std::mem::replace(&mut self.cfg.min_weight, floor);
+        let out = crate::OnlineModel::predict_with(self, x, y, d_clock);
+        self.cfg.min_weight = prev;
         out
     }
 
