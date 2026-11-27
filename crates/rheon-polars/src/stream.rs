@@ -334,6 +334,10 @@ impl AnyModel {
         match (self, stamp) {
             (AnyModel::EwmMoments(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
             (AnyModel::Hawkes(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
+            (AnyModel::Expectile(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
+            (AnyModel::Isotonic(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
+            (AnyModel::DdSketch(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
+            (AnyModel::CorrChange(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
             _ => self.predict_into(x, y, d_clock, out),
         }
     }
@@ -361,6 +365,30 @@ impl AnyModel {
         floor: f64,
     ) -> rheon_core::Step {
         dispatch!(self, m => m.predict_with_floor(x, y, d_clock, floor))
+    }
+
+    /// [`Self::predict_with_floor`] at `stamp` for models whose read decides
+    /// a window's edge on the clock ([`ModelKind::reads_at_stamp`]).
+    pub fn predict_with_floor_at(
+        &mut self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        stamp: Option<Stamp>,
+        floor: f64,
+    ) -> rheon_core::Step {
+        let Some(s) = stamp else {
+            return self.predict_with_floor(x, y, d_clock, floor);
+        };
+        match self {
+            AnyModel::EwmMoments(m) => m.predict_with_floor_at(x, d_clock, s, floor),
+            AnyModel::Hawkes(m) => m.predict_with_floor_at(x, d_clock, s, floor),
+            AnyModel::Expectile(m) => m.predict_with_floor_at(x, d_clock, s, floor),
+            AnyModel::Isotonic(m) => m.predict_with_floor_at(x, d_clock, s, floor),
+            AnyModel::DdSketch(m) => m.predict_at(x, d_clock, s),
+            AnyModel::CorrChange(m) => m.predict_at(x, d_clock, s),
+            _ => self.predict_with_floor(x, y, d_clock, floor),
+        }
     }
 
     /// [`Self::predict_into`] for a row at raw clock `clock`
@@ -3543,8 +3571,13 @@ impl Stream {
                     .model
                     .reads_at_stamp()
                     .then(|| {
+                        let base = self
+                            .persisted
+                            .label_learned
+                            .as_ref()
+                            .unwrap_or(&self.persisted.clock);
                         weightless::read_stamp(
-                            &self.persisted.clock,
+                            base,
                             cfg,
                             &self.exact_caps,
                             clock.map(|c| c.at(i)),
@@ -4683,16 +4716,19 @@ fn run_instance(
         if keep {
             let top = min_weight.iter().copied().fold(0.0, f64::max);
             if top > 0.0 {
+                let d = if learn { d_clock } else { score_d };
                 let short = if own_weights {
                     sc.tn.iter().any(|&w| w < top)
                 } else {
                     inst.model.get().n_eff() < top
-                };
+                } || matches!(
+                    inst.model.get(),
+                    AnyModel::Isotonic(m) if m.trims_below(d, plan.stamp, top)
+                );
                 if short {
                     let floor = read_floor(inst.spec, min_weight);
                     if let Some(m) = inst.model.learning() {
-                        let d = if learn { d_clock } else { score_d };
-                        let past = m.predict_with_floor(xs, &sc.ys, d, floor);
+                        let past = m.predict_with_floor_at(xs, &sc.ys, d, plan.stamp, floor);
                         sc.ungated.clear();
                         sc.ungated.extend_from_slice(&past.pred);
                         kept = true;

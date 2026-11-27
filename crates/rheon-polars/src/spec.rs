@@ -2555,10 +2555,9 @@ impl ModelKind {
         }
     }
 
-    /// Whether a read of the model, and not only a step, decides a window's
-    /// edge on the clock, so that a row only scored is read at its own
-    /// stamp ([`crate::AnyModel::predict_at_into`]): `ewm_moments` and
-    /// `hawkes` under `window_size`.
+    /// Whether a read of the model decides a window's edge on the clock,
+    /// so scored and ungated reads read at the row's stamp
+    /// ([`crate::AnyModel::predict_at_into`]).
     pub fn reads_at_stamp(&self) -> bool {
         matches!(
             self,
@@ -2566,6 +2565,18 @@ impl ModelKind {
                 window_size: Some(_),
                 ..
             } | ModelKind::Hawkes {
+                window_size: Some(_),
+                ..
+            } | ModelKind::Expectile {
+                window_size: Some(_),
+                ..
+            } | ModelKind::Isotonic {
+                window_size: Some(_),
+                ..
+            } | ModelKind::DdSketch {
+                window_size: Some(_),
+                ..
+            } | ModelKind::CorrChange {
                 window_size: Some(_),
                 ..
             }

@@ -529,6 +529,21 @@ impl DdSketchModel {
         self.read_into(out);
     }
 
+    /// [`OnlineModel::predict`] for a row whose place on the clock the
+    /// caller knows, `stamp`, as [`OnlineModel::stamp_next`] hands a
+    /// step's. Without a clock window (or on the row clock, whose keys
+    /// count accepted rows) the stamp is not read.
+    pub fn predict_at(&self, _x: &[f64], d_clock: f64, stamp: Stamp) -> Step {
+        let mut out = Step::default();
+        let key = if self.cfg.window_clock.is_some() && !self.clock.on_rows {
+            stamp
+        } else {
+            self.key_ahead(d_clock)
+        };
+        self.read_ahead(key, &mut out);
+        out
+    }
+
     /// Whether a restored state has the shape [`Self::new`] gives it.
     fn has_shape(&self) -> bool {
         let n = self.cfg.n_targets;

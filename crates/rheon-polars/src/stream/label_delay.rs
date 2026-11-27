@@ -101,6 +101,10 @@ pub(super) struct LabelRun<'a> {
     /// the row a full buffer dropped after it ([`u32::MAX`] for none),
     /// which `run_instance` keeps each instance's records in step with.
     places: &'a mut Vec<(u32, u32)>,
+    /// Whether the spec's model decides a window's edge from the row's
+    /// stamp: scored rows are then stamped on `learned`, not the arrival
+    /// clock.
+    reads_at_stamp: bool,
 }
 
 impl<'a> LabelRun<'a> {
@@ -128,6 +132,7 @@ impl<'a> LabelRun<'a> {
             missing,
             dropped,
             places,
+            reads_at_stamp: spec.model.reads_at_stamp(),
         })
     }
 }
@@ -356,7 +361,7 @@ impl Stream {
         // The events of rows skipped since the last accepted one fall before
         // the next accepted row, so they wait with it, across a chunk
         // boundary too (`held_break` is the stream's).
-        for plan in plans.drain(..) {
+        for mut plan in plans.drain(..) {
             if plan.reset {
                 // The models restart at this row -- and the reset is applied
                 // here, not a delay later, because the point of it is that
@@ -421,6 +426,12 @@ impl Stream {
             if plan.weightless() {
                 if let Some(cuts) = front_cuts.as_deref_mut() {
                     cuts[plan.ri] = pending.front().map(|r| r.d_clock - r.d_fresh);
+                }
+                if let Some(lr) = labels.as_deref()
+                    && lr.reads_at_stamp
+                {
+                    plan.stamp =
+                        weightless::read_stamp(lr.learned, &lr.cfg, &lr.caps, plan.clock, None);
                 }
                 out.push(plan);
                 continue;
@@ -571,7 +582,7 @@ impl Stream {
         lr: &mut LabelRun<'_>,
         pending: &mut VecDeque<PendingRow>,
         held_break: &mut HeldBreak,
-        (plan, quiet): (&RowPlan, RowPlan),
+        (plan, mut quiet): (&RowPlan, RowPlan),
         elapsed: &[Option<Stamp>],
         features: &FeatureRows,
         targets: &[Vec<f64>],
@@ -579,6 +590,9 @@ impl Stream {
     ) {
         if !plan.reset {
             Self::release_labels(lr, pending, plan, (released, out));
+        }
+        if lr.reads_at_stamp {
+            quiet.stamp = weightless::read_stamp(lr.learned, &lr.cfg, &lr.caps, plan.clock, None);
         }
         *held_break = HeldBreak::default();
         let i = plan.i;

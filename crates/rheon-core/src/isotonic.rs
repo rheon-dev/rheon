@@ -434,9 +434,15 @@ impl Isotonic {
     /// Each target's fit read at `x`, withheld where its weight is short of
     /// `min_weight`.
     fn read_into(&self, x: f64, out: &mut Step) {
+        self.read_into_at(x, self.cfg.min_weight, out);
+    }
+
+    /// Each target's fit read at `x`, withheld where its weight is short of
+    /// `floor`.
+    fn read_into_at(&self, x: f64, floor: f64, out: &mut Step) {
         out.pred.clear();
         out.pred.extend(self.targets.iter().map(|t| {
-            if t.weight >= self.cfg.min_weight {
+            if t.weight >= floor {
                 fit::interp(&t.fx, &t.fy, x, self.cfg.out_of_bounds)
             } else {
                 f64::NAN
@@ -631,17 +637,70 @@ impl Isotonic {
     }
 
     /// The read for a row at `key` that learns nothing: from the window as
-    /// it would stand at the row.
-    fn read_ahead(&self, key: Stamp, x: f64, out: &mut Step) {
+    /// it would stand at the row, gated on `floor`.
+    fn read_ahead(&self, key: Stamp, x: f64, floor: f64, out: &mut Step) {
         if self.oldest_has_left(key) {
             let mut at = self.clone();
             let mut touched = vec![false; self.cfg.n_targets];
             at.trim(key, &mut touched);
             at.refit(&touched);
-            at.read_into(x, out);
+            at.read_into_at(x, floor, out);
             return;
         }
-        self.read_into(x, out);
+        self.read_into_at(x, floor, out);
+    }
+
+    fn key_at(&self, d_clock: f64, stamp: Stamp) -> Stamp {
+        if self.cfg.window_clock.is_some() && !self.clock.on_rows {
+            stamp
+        } else {
+            self.key_ahead(d_clock)
+        }
+    }
+
+    /// [`OnlineModel::predict`] for a row whose place on the clock the
+    /// caller knows, `stamp`, as [`OnlineModel::stamp_next`] hands a
+    /// step's. Without a clock window (or on the row clock, whose keys
+    /// count accepted rows) the stamp is not read.
+    pub fn predict_at(&self, x: &[f64], d_clock: f64, stamp: Stamp) -> Step {
+        self.predict_with_floor_at(x, d_clock, stamp, self.cfg.min_weight)
+    }
+
+    /// [`OnlineModel::predict_with_floor`] for a row whose place on the
+    /// clock the caller knows, `stamp`.
+    pub fn predict_with_floor_at(&self, x: &[f64], d_clock: f64, stamp: Stamp, floor: f64) -> Step {
+        if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
+            return refused;
+        }
+        let mut out = Step::default();
+        let key = self.key_at(d_clock, stamp);
+        self.read_ahead(key, x[0], floor, &mut out);
+        out
+    }
+
+    /// Whether trimming a clock window at `stamp` (or `d_clock` ahead on
+    /// the row clock) can take any target's weight below `top`.
+    pub fn trims_below(&self, d_clock: f64, stamp: Option<Stamp>, top: f64) -> bool {
+        let (Some(span), Some(ring)) = (self.cfg.window_clock, &self.ring) else {
+            return false;
+        };
+        let key = match stamp {
+            Some(s) => self.key_at(d_clock, s),
+            None => self.key_ahead(d_clock),
+        };
+        let scale = if self.cfg.decays() {
+            self.cfg.decay.factor(self.clock.own - self.clock.origin)
+        } else {
+            1.0
+        };
+        let mut drop_w = 0.0;
+        for (&s, &kept) in ring.stamp.iter().zip(&ring.w) {
+            if !self.cfg.closed.has_left(key, s, span) {
+                break;
+            }
+            drop_w += kept * scale;
+        }
+        drop_w > 0.0 && self.targets.iter().any(|t| t.weight - drop_w < top)
     }
 
     /// Whether a restored state has the shape [`Self::new`] gives it.
@@ -773,7 +832,7 @@ impl OnlineModel for Isotonic {
             // Handed to the model directly, under a decay it decays the
             // weights, which advances its clock and learns nothing.
             let key = self.window_key(handed, d_clock, false);
-            self.read_ahead(key, x0, out);
+            self.read_ahead(key, x0, self.cfg.min_weight, out);
             self.note_clock(handed, false);
             self.advance(d_clock);
             return;
@@ -865,7 +924,7 @@ impl OnlineModel for Isotonic {
         }
         let mut out = Step::default();
         let key = self.key_ahead(d_clock);
-        self.read_ahead(key, x[0], &mut out);
+        self.read_ahead(key, x[0], self.cfg.min_weight, &mut out);
         out
     }
 

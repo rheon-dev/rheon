@@ -2520,6 +2520,25 @@ impl CorrChange {
         self.perm_counts = None;
         self.since_perm = 0;
     }
+
+    /// [`crate::OnlineModel::predict`] for a row whose place on the clock
+    /// the caller knows, `stamp`, as [`crate::OnlineModel::stamp_next`]
+    /// hands a step's. Without `window_size` (or on the row clock, whose
+    /// keys count accepted rows) the stamp is not read.
+    pub fn predict_at(&self, x: &[f64], d_clock: f64, stamp: Stamp) -> crate::Step {
+        if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
+            return refused;
+        }
+        let key = self
+            .clock
+            .as_ref()
+            .map(|c| if c.on_rows { c.key(d_clock) } else { stamp });
+        crate::Step {
+            pred: self.read(x, key),
+            n_eff: self.n_eff,
+            extra: None,
+        }
+    }
 }
 
 impl crate::OnlineModel for CorrChange {

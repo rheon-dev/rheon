@@ -1357,6 +1357,22 @@ impl Hawkes {
         self.read_ahead(d_clock, now)
     }
 
+    /// [`OnlineModel::predict_with_floor`] for a row whose place on the
+    /// clock the caller knows, `stamp`, as [`OnlineModel::stamp_next`]
+    /// hands a step's.
+    pub fn predict_with_floor_at(
+        &mut self,
+        x: &[f64],
+        d_clock: f64,
+        stamp: Stamp,
+        floor: f64,
+    ) -> Step {
+        let prev = std::mem::replace(&mut self.cfg.min_weight, floor);
+        let out = self.predict_at(x, d_clock, stamp);
+        self.cfg.min_weight = prev;
+        out
+    }
+
     /// Bytes a clock window holds with its newest row in, and whether the
     /// row that would add one more passes the cap.
     fn clock_bytes_with(&self, extra: usize) -> u64 {
@@ -1468,6 +1484,19 @@ impl OnlineModel for Hawkes {
 
     fn predict(&self, _x: &[f64], d_clock: f64) -> Step {
         self.read_ahead(d_clock, self.stamp_ahead(d_clock))
+    }
+
+    fn predict_with_floor(
+        &mut self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        floor: f64,
+    ) -> Step {
+        let prev = std::mem::replace(&mut self.cfg.min_weight, floor);
+        let out = OnlineModel::predict_with(self, x, y, d_clock);
+        self.cfg.min_weight = prev;
+        out
     }
 
     /// A clock window learns its rows' stamps: they decide when each leaves.

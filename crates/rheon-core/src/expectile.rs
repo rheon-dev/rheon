@@ -1517,6 +1517,30 @@ impl Expectile {
         self.read_into(x, floor, n_eff, &weights, out);
     }
 
+    /// [`OnlineModel::predict`] for a row whose place on the clock the
+    /// caller knows, `stamp`, as [`OnlineModel::stamp_next`] hands a
+    /// step's. Without a clock window (or on the row clock, whose keys
+    /// count accepted rows) the stamp is not read.
+    pub fn predict_at(&self, x: &[f64], d_clock: f64, stamp: Stamp) -> Step {
+        self.predict_with_floor_at(x, d_clock, stamp, self.cfg.min_weight)
+    }
+
+    /// [`OnlineModel::predict_with_floor`] for a row whose place on the
+    /// clock the caller knows, `stamp`.
+    pub fn predict_with_floor_at(&self, x: &[f64], d_clock: f64, stamp: Stamp, floor: f64) -> Step {
+        if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
+            return refused;
+        }
+        let mut out = Step::default();
+        let key = if self.cfg.window_clock.is_some() && !self.clock.on_rows {
+            stamp
+        } else {
+            self.key_ahead(d_clock)
+        };
+        self.read_ahead(x, d_clock, key, floor, &mut out);
+        out
+    }
+
     fn step_row(
         &mut self,
         x: &[f64],
