@@ -144,6 +144,7 @@ pub(super) fn build_instances<'a>(
             ungated_drift: diag.ungated_drift,
             // None without an embargo, which keeps no held rows' clock.
             pending_clock: pending_clock.next(),
+            group_hash: diag.group_hash,
         }
     });
     // One instance, the commonest, is held where it is made: a list of one

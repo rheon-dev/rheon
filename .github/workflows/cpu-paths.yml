@@ -93,7 +93,7 @@ jobs:
       # without AVX2, runs their fallback paths. tests/test_cpu_paths.py
       # fails when a module that does any of these is missing here.
       SDE_TESTS: >-
-        ar:: audit:: bars:: bocpd:: breaks:: calibration:: cluster:: corrchange:: corrchange_tests:: dcc:: deco:: drift::
+        ar:: audit:: bandit:: bars:: bocpd:: breaks:: calibration:: cluster:: corrchange:: corrchange_tests:: dcc:: deco:: drift::
         ewclass:: ewcov::
         ewdiag:: ewridge:: exact:: expectile:: gaps:: garch:: glm:: gramfit:: hawkes:: hmm:: holt:: huber_refit::
         kalman:: lasso:: margbins:: oracle:: pieces:: power_variation:: rcov:: realized:: rls:: robust:: sandwich::

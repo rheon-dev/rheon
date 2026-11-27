@@ -104,6 +104,9 @@ pub enum ModelState {
     Spectral(Box<crate::Spectral>),
     Isotonic(Box<crate::Isotonic>),
     VectorAr(Box<crate::VectorAr>),
+    Bandit(Box<crate::Bandit>),
+    HalfSpaceTrees(Box<crate::HalfSpaceTrees>),
+    RandomCutForest(Box<crate::RandomCutForest>),
 }
 
 #[derive(Debug, Error)]
@@ -237,6 +240,9 @@ impl ModelState {
             ModelState::Spectral(_) => "spectral",
             ModelState::Isotonic(_) => "isotonic",
             ModelState::VectorAr(_) => "vector_ar",
+            ModelState::Bandit(_) => "bandit",
+            ModelState::HalfSpaceTrees(_) => "half_space_trees",
+            ModelState::RandomCutForest(_) => "random_cut_forest",
         }
     }
 }

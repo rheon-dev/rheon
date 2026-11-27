@@ -274,6 +274,7 @@ const KEEPS_LAGS: &[&str] = &[
     "ar",
     "spectral",
     "vector_ar",
+    "random_cut_forest",
 ];
 
 /// The model that counts a value that is not usable rather than refusing
@@ -300,7 +301,15 @@ const SPARSE_OUTPUT: &[&str] = &["corrchange", "garch"];
 /// it holds every other model to rule 8's decayed recursion, so a model
 /// added here is a choice made in this file, not a default.
 const NO_DECAY: &[&str] = &[
-    "audit", "bocpd", "ddsketch", "garch", "rcov", "seqtest", "tdigest",
+    "audit",
+    "bocpd",
+    "ddsketch",
+    "garch",
+    "half_space_trees",
+    "random_cut_forest",
+    "rcov",
+    "seqtest",
+    "tdigest",
 ];
 
 /// Slots null by design except on a flag, which the ready count leaves out:

@@ -126,6 +126,9 @@ pub enum AnyModel {
     VectorAr(Box<rheon_core::VectorAr>),
     Spectral(Box<rheon_core::Spectral>),
     Isotonic(Box<rheon_core::Isotonic>),
+    Bandit(Box<rheon_core::Bandit>),
+    HalfSpaceTrees(Box<rheon_core::HalfSpaceTrees>),
+    RandomCutForest(Box<rheon_core::RandomCutForest>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -187,6 +190,9 @@ macro_rules! dispatch {
             AnyModel::VectorAr($m) => $body,
             AnyModel::Spectral($m) => $body,
             AnyModel::Isotonic($m) => $body,
+            AnyModel::Bandit($m) => $body,
+            AnyModel::HalfSpaceTrees($m) => $body,
+            AnyModel::RandomCutForest($m) => $body,
         }
     };
 }
@@ -595,6 +601,8 @@ impl AnyModel {
                 | AnyModel::Garch(_)
                 | AnyModel::Dcc(_)
                 | AnyModel::VectorAr(_)
+                | AnyModel::HalfSpaceTrees(_)
+                | AnyModel::RandomCutForest(_)
         ) || matches!(self, AnyModel::Holt(m) if m.heuristic_start())
     }
 
@@ -613,6 +621,8 @@ impl AnyModel {
             AnyModel::Garch(m) => Self::start_wait(m.starting(), || m.no_effect()),
             AnyModel::VectorAr(m) if m.not_identified() => OwnWait::NotIdentified,
             AnyModel::Dcc(m) => Self::start_wait(m.starting(), || m.no_effect()),
+            AnyModel::HalfSpaceTrees(m) if m.warming() => OwnWait::Seeding,
+            AnyModel::RandomCutForest(m) if m.warming() => OwnWait::Seeding,
             _ => OwnWait::None,
         }
     }
@@ -760,7 +770,10 @@ impl AnyModel {
             // Each fit counts its own; none withholds a row as a failure.
             | AnyModel::Ar(_)
             | AnyModel::VectorAr(_)
-            | AnyModel::Spectral(_) => 0,
+            | AnyModel::Spectral(_)
+            | AnyModel::Bandit(_)
+            | AnyModel::HalfSpaceTrees(_)
+            | AnyModel::RandomCutForest(_) => 0,
         }
     }
 
@@ -855,6 +868,8 @@ impl AnyModel {
             AnyModel::Spectral(_) => None,
             // Its fit is a curve, read at each row's feature.
             AnyModel::Isotonic(_) => None,
+            AnyModel::Bandit(m) => Some(m.coefficients()),
+            AnyModel::HalfSpaceTrees(_) | AnyModel::RandomCutForest(_) => None,
         }
     }
 
@@ -880,9 +895,9 @@ impl AnyModel {
 }
 
 mod build;
-pub use build::build_models;
 pub(crate) use build::init_rule;
-use build::{build_one, constraint, huber_scale_of, resid_window};
+pub use build::{build_models, build_models_for, draw_group_hash};
+use build::{build_one_for, constraint, huber_scale_of, resid_window};
 mod model_cfgs;
 use model_cfgs::read_floor;
 pub(crate) use model_cfgs::solve_every_of;
@@ -1006,7 +1021,10 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Ar { .. }
         | ModelKind::VectorAr(_)
         | ModelKind::Spectral(_)
-        | ModelKind::Isotonic { .. } => vec![Combo::default()],
+        | ModelKind::Isotonic { .. }
+        | ModelKind::Bandit(_)
+        | ModelKind::HalfSpaceTrees(_)
+        | ModelKind::RandomCutForest(_) => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life
@@ -1824,6 +1842,8 @@ pub struct Stream {
     /// Built for every run, it named every combo's label a run (task 270,
     /// G-1).
     check_cfgs: Vec<CheckCfg>,
+    /// Deterministic Philox group coordinate for rebuilds/resets.
+    group_hash: u64,
 }
 
 impl Stream {
@@ -2188,7 +2208,11 @@ use weightless::Weightless;
 
 impl Stream {
     pub fn new(spec: &Spec) -> Result<Self, String> {
-        let models = build_models(spec)?;
+        Self::new_for(spec, 0)
+    }
+
+    pub fn new_for(spec: &Spec, group_hash: u64) -> Result<Self, String> {
+        let models = build_models_for(spec, group_hash)?;
         let decays: Vec<Decay> = spec.decays()?.into_iter().map(|(_, d)| d).collect();
         let check_cfgs = decays.iter().map(|&d| CheckCfg::of(spec, d)).collect();
         let slots: Vec<usize> = models.iter().map(|(_, m)| m.n_outputs()).collect();
@@ -2280,6 +2304,7 @@ impl Stream {
             embargo,
             exact_caps: spec.exact_caps(),
             check_cfgs,
+            group_hash,
         })
         .inspect(|stream| {
             // The bank replays only the rings of a spec that says it keeps
@@ -2314,7 +2339,15 @@ impl Stream {
     /// are moved into the stream, not copied: loading a file holds one copy
     /// of each group's state, not two.
     pub fn restore_owned(spec: &Spec, saved: StreamState) -> Result<Self, String> {
-        let mut stream = Stream::new(spec)?;
+        Self::restore_owned_for(spec, 0, saved)
+    }
+
+    pub fn restore_owned_for(
+        spec: &Spec,
+        group_hash: u64,
+        saved: StreamState,
+    ) -> Result<Self, String> {
+        let mut stream = Stream::new_for(spec, group_hash)?;
         if stream.models.len() != saved.models.len() {
             return Err(format!(
                 "it is damaged, since it holds {} instances (the parts of the model that fit one \
@@ -3061,7 +3094,7 @@ impl Stream {
             if plan.reset {
                 live = fresh
                     .get_or_insert_with(|| {
-                        Stream::new(spec)
+                        Stream::new_for(spec, self.group_hash)
                             .map(|s| s.window_shadows())
                             .unwrap_or_default()
                     })
@@ -3339,6 +3372,7 @@ impl Stream {
             ungated_spread: self.persisted.ungated_spread,
             weighted_autocorr: self.persisted.weighted_autocorr,
             ungated_drift: self.persisted.ungated_drift,
+            group_hash: self.group_hash,
         };
         let mut built = build_instances(
             spec,
@@ -3656,7 +3690,8 @@ impl Stream {
             n_rows,
         );
         if !classes[fresh].is_empty() {
-            let stream = Stream::new(spec).expect("spec was already validated");
+            let stream =
+                Stream::new_for(spec, self.group_hash).expect("spec was already validated");
             stream.score(
                 spec,
                 &classes[fresh],
@@ -3762,6 +3797,7 @@ impl Stream {
             ungated_spread: self.persisted.ungated_spread,
             weighted_autocorr: self.persisted.weighted_autocorr,
             ungated_drift: self.persisted.ungated_drift,
+            group_hash: self.group_hash,
         };
         // Every row scored sits after every row held now.
         let front_cuts: Vec<Option<f64>> = if self.embargo.is_some() && self.resets_on_drift(spec) {
@@ -3912,6 +3948,7 @@ struct Diagnostics<'a> {
     ungated_spread: bool,
     weighted_autocorr: bool,
     ungated_drift: bool,
+    group_hash: u64,
 }
 
 /// The ranges of features a `marginal` splits its pair work into
@@ -4174,6 +4211,7 @@ struct Instance<'a> {
     /// it across chunks ([`Persisted::pending_clock`]), and keeps none
     /// without an embargo, where no row is ever held.
     pending_clock: Option<&'a mut f64>,
+    group_hash: u64,
 }
 
 /// The steps a weight an instance reads may have been carried through,
@@ -4286,7 +4324,8 @@ impl Instance<'_> {
         }
         // This instance alone, at its own decay: `build_models` built every
         // instance of the grid to keep one (review 2026-09-12, P2).
-        *self.model.get_mut() = build_one(spec, self.decay).expect("spec was already validated");
+        *self.model.get_mut() =
+            build_one_for(spec, self.decay, self.group_hash).expect("spec was already validated");
         // The bank reserved no refit buffers for a group it gave them up
         // for, and a rebuilt model must not hold one (docs/PLAN.md task 277).
         if self.refit_over_budget {
@@ -4810,7 +4849,11 @@ fn run_instance(
         // `s / nc`; the passes below walk the slots in groups of `nc` rather
         // than dividing per slot -- two integer divisions a slot were most of
         // a 230-slot `ew_cov` row (PERFORMANCE-LOG §13).
-        let nc = n_slots.checked_div(m_targets).unwrap_or(1).max(1);
+        let nc = if matches!(inst.spec.model, ModelKind::Bandit(_)) {
+            n_slots.max(1)
+        } else {
+            n_slots.checked_div(m_targets).unwrap_or(1).max(1)
+        };
 
         // The readiness gates (docs/WARMUP-AND-CONVERGENCE.md §2), each
         // withholding a prediction before it can reach the residual, sigma,

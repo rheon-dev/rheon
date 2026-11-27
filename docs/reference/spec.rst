@@ -42,6 +42,13 @@ Models that place each row in a cluster or a class.
 
 .. entries:: clustering
 
+Bandits and anomaly detection
+-----------------------------
+
+Models that choose an arm from context or score how anomalous each row is.
+
+.. entries:: bandits-anomaly
+
 Reading a spec's fields
 -----------------------
 

@@ -91,7 +91,7 @@ def test_the_spec_module_names_every_model_without_targets_or_features():
     doc = " ".join((spec_module.__doc__ or "").split())
     no_target = doc[doc.index("A model with no target") :]
     no_target = no_target[: no_target.index("alone")]
-    untargeted = set(_builders()) - _taking("targets") - {"audit", "ew_class"}
+    untargeted = set(_builders()) - _taking("targets") - {"audit", "ew_class", "bandit"}
     assert untargeted <= _named(no_target), sorted(untargeted - _named(no_target))
     end = doc.index("take no features")
     no_features = doc[doc.rindex(". ", 0, end) : end]

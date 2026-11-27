@@ -939,7 +939,147 @@ fn holt_trend_golden() {
     check("holt_trend", &got, GOLDEN_HOLT_TREND);
 }
 
+/// A contextual bandit on three linear arms with distinct slopes learns the
+/// optimal arm for every context and pins its scores at rows 100, 200, 299.
+#[test]
+fn bandit_dominant_arm_golden() {
+    let mut m = Bandit::new(BanditCfg {
+        n_features: 2,
+        n_arms: 3,
+        policy: BanditPolicy::Linucb,
+        alpha: 0.5,
+        epsilon: 0.1,
+        l2: 1.0,
+        fit_intercept: true,
+        decay: Decay::Halflife(f64::INFINITY),
+        min_weight: 0.0,
+        seed: 7,
+        group_hash: 0,
+        slot: 0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let true_w = [[0.5, 2.0, -0.5], [-0.2, -1.5, 1.0], [0.1, 0.2, 0.3]];
+    let mut s = 504_u64;
+    let mut got = Vec::new();
+    let mut hits = 0usize;
+    for i in 0..300 {
+        let x = [lcg(&mut s), lcg(&mut s)];
+        let logged = i % 3;
+        let rew = true_w[logged][0]
+            + true_w[logged][1] * x[0]
+            + true_w[logged][2] * x[1]
+            + 0.1 * gauss(&mut s);
+        let step = m.step(
+            &x,
+            &[Some(rew), Some(logged as f64)],
+            if i == 0 { 0.0 } else { 1.0 },
+            1.0,
+        );
+        if i >= 150 {
+            let best_true = (0..3)
+                .max_by(|&a, &b| {
+                    let ra = true_w[a][0] + true_w[a][1] * x[0] + true_w[a][2] * x[1];
+                    let rb = true_w[b][0] + true_w[b][1] * x[0] + true_w[b][2] * x[1];
+                    ra.total_cmp(&rb)
+                })
+                .unwrap();
+            if step.pred[0] as usize == best_true {
+                hits += 1;
+            }
+        }
+        if matches!(i, 100 | 200 | 299) {
+            got.extend(&step.pred);
+        }
+    }
+    assert!(
+        hits >= 135,
+        "bandit matched optimal arm only {hits}/150 times"
+    );
+    check("bandit_dominant_arm", &got, GOLDEN_BANDIT_DOMINANT_ARM);
+}
+
+/// Both anomaly detectors assign strictly higher scores to planted outliers
+/// than to the surrounding cluster.
+#[test]
+fn anomaly_planted_outliers_golden() {
+    let mut hst = HalfSpaceTrees::new(HalfSpaceTreesCfg {
+        n_features: 2,
+        n_trees: 10,
+        height: 6,
+        window_rows: 50,
+        limits: vec![(0.0, 1.0); 2],
+        min_weight: 0.0,
+        seed: 5,
+        group_hash: 0,
+        slot: 0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut rcf = RandomCutForest::new(RandomCutForestCfg {
+        n_features: 2,
+        n_trees: 16,
+        tree_size: 64,
+        shingle_size: 1,
+        min_weight: 0.0,
+        seed: 5,
+        group_hash: 0,
+        slot: 0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut s = 507_u64;
+    let mut got = Vec::new();
+    for i in 0..160 {
+        let is_outlier = matches!(i, 95 | 140);
+        let x = if is_outlier {
+            [0.95, 0.05]
+        } else {
+            [0.25 + 0.04 * lcg(&mut s), 0.75 + 0.04 * lcg(&mut s)]
+        };
+        let d = if i == 0 { 0.0 } else { 1.0 };
+        let hs = hst.step(&x, &[], d, 1.0).pred[0];
+        let rs = rcf.step(&x, &[], d, 1.0).pred[0];
+        if matches!(i, 94 | 95 | 139 | 140) {
+            got.push(hs);
+            got.push(rs);
+        }
+    }
+    assert!(got[2] > got[0] + 0.2, "hst spike 95: {got:?}");
+    assert!(got[3] > got[1] * 3.0, "rcf spike 95: {got:?}");
+    assert!(got[6] > got[4] + 0.2, "hst spike 140: {got:?}");
+    assert!(got[7] > got[5] * 3.0, "rcf spike 140: {got:?}");
+    check("anomaly_planted_outliers", &got, GOLDEN_ANOMALY_PLANTED);
+}
+
 // --- generated; see the module docs ---
+const GOLDEN_BANDIT_DOMINANT_ARM: &[f64] = &[
+    1.0,
+    0.7976350607101409,
+    0.08110033410052378,
+    0.7976350607101409,
+    0.3665251050022416,
+    0.0,
+    0.8364234764527554,
+    0.8364234764527554,
+    -0.5798000914901745,
+    0.09067864712228647,
+    0.0,
+    1.6108644883411884,
+    1.6108644883411884,
+    -0.4374757846857518,
+    0.5515241226138624,
+];
+const GOLDEN_ANOMALY_PLANTED: &[f64] = &[
+    0.2317165354330709,
+    2.9412878787878785,
+    0.9895748031496063,
+    60.875,
+    0.26289763779527564,
+    2.593658625730994,
+    0.9888818897637796,
+    29.96875,
+];
 const GOLDEN_KMEANS_BLOBS: &[f64] = &[
     2.0,
     0.4647144589082067,

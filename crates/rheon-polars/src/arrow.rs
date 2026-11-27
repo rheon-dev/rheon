@@ -798,21 +798,24 @@ fn wanted(specs: &[Spec]) -> Vec<(PlSmallStr, Want)> {
         for f in &s.features {
             push(f, Want::Feature);
         }
-        // `ew_class` reads its target as a label; every other model as a number.
-        let target_want = match &s.model {
-            ModelKind::EwClass { .. } => Want::Text,
-            _ => Want::Number,
-        };
+        // `ew_class` reads its target as a label; `bandit` reads target 0
+        // (`reward`) as a number and target 1 (`arm`) as text; every other
+        // model reads targets as numbers.
         // A target's own column, read at its row; a formula target's
         // columns, read by the window core.
         if s.model.compares().is_none() {
-            for t in s.targets.defs() {
+            for (ti, t) in s.targets.defs().iter().enumerate() {
                 if t.is_formula() {
                     for c in t.columns() {
                         push(&c, Want::Value);
                     }
                     continue;
                 }
+                let target_want = match &s.model {
+                    ModelKind::EwClass { .. } => Want::Text,
+                    ModelKind::Bandit(_) if ti == 1 => Want::Text,
+                    _ => Want::Number,
+                };
                 push(&t.column, target_want);
             }
         }
@@ -842,29 +845,31 @@ fn wanted(specs: &[Spec]) -> Vec<(PlSmallStr, Want)> {
 /// target's column, or its formula's columns), clock, label clock, weight,
 /// session, group.
 fn spec_reads(s: &Spec) -> Vec<(&str, Want, &'static str)> {
-    let (target_want, target_role) = match &s.model {
-        ModelKind::EwClass { .. } => (Want::Text, "label"),
-        // `bocpd`'s hazard column rides in the targets slot, and is not a
-        // target (review fable2, Y7).
-        ModelKind::Bocpd {
-            hazard_col: Some(_),
-            ..
-        } => (Want::Number, "hazard"),
-        _ => (Want::Number, "target"),
-    };
     let mut reads: Vec<(&str, Want, &'static str)> = s
         .features
         .iter()
         .map(|f| (f.as_str(), Want::Feature, "feature"))
         .collect();
     if s.model.compares().is_none() {
-        for t in s.targets.defs() {
+        for (ti, t) in s.targets.defs().iter().enumerate() {
             if let Some(tree) = &t.formula {
                 for c in tree.columns_ref() {
                     reads.push((c, Want::Value, "formula target"));
                 }
                 continue;
             }
+            let (target_want, target_role) = match &s.model {
+                ModelKind::EwClass { .. } => (Want::Text, "label"),
+                ModelKind::Bandit(_) if ti == 0 => (Want::Number, "reward"),
+                ModelKind::Bandit(_) => (Want::Text, "arm"),
+                // `bocpd`'s hazard column rides in the targets slot, and is not a
+                // target (review fable2, Y7).
+                ModelKind::Bocpd {
+                    hazard_col: Some(_),
+                    ..
+                } => (Want::Number, "hazard"),
+                _ => (Want::Number, "target"),
+            };
             reads.push((t.column.as_str(), target_want, target_role));
         }
     }
@@ -1336,19 +1341,21 @@ pub fn chunk_from_frame_rows(
 fn first_reader<'a>(specs: &'a [Spec], column: &str) -> Option<(&'a str, &'static str)> {
     for s in specs {
         let name = s.name.as_str();
-        let target_role = match &s.model {
-            ModelKind::EwClass { .. } => "label",
-            ModelKind::Bocpd {
-                hazard_col: Some(_),
-                ..
-            } => "hazard",
-            _ => "target",
-        };
         let mut roles = s
             .features
             .iter()
             .map(|c| (c.as_str(), "feature"))
-            .chain(s.targets.defs().iter().flat_map(|t| {
+            .chain(s.targets.defs().iter().enumerate().flat_map(|(ti, t)| {
+                let target_role = match &s.model {
+                    ModelKind::EwClass { .. } => "label",
+                    ModelKind::Bandit(_) if ti == 0 => "reward",
+                    ModelKind::Bandit(_) => "arm",
+                    ModelKind::Bocpd {
+                        hazard_col: Some(_),
+                        ..
+                    } => "hazard",
+                    _ => "target",
+                };
                 let formula: Vec<(&str, &'static str)> = match &t.formula {
                     Some(tree) => tree
                         .columns_ref()
@@ -1488,11 +1495,18 @@ fn check_clocks(df: &DataFrame, specs: &[Spec]) -> PolarsResult<()> {
                     ("a feature", "a number")
                 } else if other.weight.as_deref() == Some(clock) {
                     ("a weight", "a number")
-                } else if defs.iter().any(|t| t.column == *clock)
-                    && other.model.compares().is_none()
-                    && !matches!(other.model, ModelKind::EwClass { .. })
+                } else if defs.iter().enumerate().any(|(ti, t)| {
+                    t.column == *clock
+                        && !matches!(other.model, ModelKind::EwClass { .. })
+                        && !(matches!(other.model, ModelKind::Bandit(_)) && ti == 1)
+                }) && other.model.compares().is_none()
                 {
-                    ("a target", "a number")
+                    let role = if matches!(other.model, ModelKind::Bandit(_)) {
+                        "a reward"
+                    } else {
+                        "a target"
+                    };
+                    (role, "a number")
                 } else if defs
                     .iter()
                     .any(|t| t.is_formula() && t.columns().iter().any(|c| c == clock))
@@ -1695,10 +1709,12 @@ fn role_of(specs: &[Spec], name: &str) -> &'static str {
         if s.features.iter().any(|f| f == name) {
             return "feature";
         }
-        for t in s.targets.defs() {
+        for (ti, t) in s.targets.defs().iter().enumerate() {
             if t.value_column() == Some(name) {
                 return match &s.model {
                     ModelKind::EwClass { .. } => "label",
+                    ModelKind::Bandit(_) if ti == 0 => "reward",
+                    ModelKind::Bandit(_) => "arm",
                     ModelKind::Bocpd {
                         hazard_col: Some(_),
                         ..

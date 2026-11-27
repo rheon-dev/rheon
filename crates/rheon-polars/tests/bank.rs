@@ -1011,6 +1011,9 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         r#"{"type": "spectral", "periods": [8.0]}"#,
         r#"{"type": "isotonic"}"#,
         r#"{"type": "vector_ar", "lags": 1}"#,
+        r#"{"type": "bandit", "arms": ["a", "b"]}"#,
+        r#"{"type": "half_space_trees"}"#,
+        r#"{"type": "random_cut_forest"}"#,
     ];
     let mut seen = Vec::new();
     for model in kinds {
@@ -1032,8 +1035,13 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         } else {
             r#"["x0", "x1"]"#
         };
+        let targets = if model.contains("bandit") {
+            r#"["y", "arm"]"#
+        } else {
+            r#"["y"]"#
+        };
         let spec: Spec = serde_json::from_str(&format!(
-            r#"{{"name": "s", "model": {model}, "targets": ["y"], "features": {features},
+            r#"{{"name": "s", "model": {model}, "targets": {targets}, "features": {features},
                 "half_life": 50.0, "min_weight": 2.0}}"#
         ))
         .unwrap_or_else(|e| panic!("{model}: {e}"));

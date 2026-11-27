@@ -346,6 +346,8 @@ pub enum Targets {
     Binary,
     /// One class label in `0..n`.
     Class(usize),
+    /// One logged reward and one logged arm index in `0..n`.
+    Bandit(usize),
     /// None: the model reads only its features.
     None,
     /// `n` series of an asymmetric DCC process (`(a, b, g) = (0.04, 0.92,
@@ -614,6 +616,13 @@ impl Case {
                     Targets::Class(c) => {
                         let label = ((signal + noise + 2.0).max(0.0) as usize).min(c - 1);
                         vec![(!null).then_some(label as f64)]
+                    }
+                    Targets::Bandit(arms) => {
+                        let arm = ((signal + noise + 2.0).max(0.0) as usize).min(arms - 1);
+                        vec![
+                            (!null).then_some(signal + noise),
+                            (!null).then_some(arm as f64),
+                        ]
                     }
                     Targets::None | Targets::CorrelatedPair(_) | Targets::BoundAt(_) => Vec::new(),
                     Targets::Correlated(..) => {
@@ -4325,7 +4334,123 @@ pub fn all() -> Vec<Case> {
             Targets::Separate(2),
             2
         ),
+        // Contextual bandit (LinUCB, LinTS, eps-greedy): per-arm QR state and
+        // Philox draw counter `n_learned`.
+        case!(
+            "bandit",
+            "Bandit",
+            Bandit,
+            Bandit::new(bandit_cfg(BanditPolicy::Linucb)).unwrap(),
+            K,
+            Targets::Bandit(3),
+            40
+        ),
+        case!(
+            "bandit_lints",
+            "Bandit",
+            Bandit,
+            Bandit::new(bandit_cfg(BanditPolicy::Lints)).unwrap(),
+            K,
+            Targets::Bandit(3),
+            40
+        ),
+        case!(
+            "bandit_eps_greedy",
+            "Bandit",
+            Bandit,
+            Bandit::new(bandit_cfg(BanditPolicy::EpsGreedy)).unwrap(),
+            K,
+            Targets::Bandit(3),
+            40
+        ),
+        // Half-space trees: past two window pivots (both `l` and `r` active),
+        // and inside the first tumbling window (`first_window = true`).
+        case!(
+            "half_space_trees",
+            "HalfSpaceTrees",
+            HalfSpaceTrees,
+            HalfSpaceTrees::new(half_space_trees_cfg()).unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        case!(
+            "half_space_trees_warming",
+            "HalfSpaceTrees",
+            HalfSpaceTrees,
+            HalfSpaceTrees::new(half_space_trees_cfg()).unwrap(),
+            K,
+            Targets::None,
+            8
+        ),
+        // Robust random cut forest (paper's cut): past FIFO evictions with free
+        // nodes/boxes populated, and shingled (`shingle_size = 3`).
+        case!(
+            "random_cut_forest",
+            "RandomCutForest",
+            RandomCutForest,
+            RandomCutForest::new(random_cut_forest_cfg(1)).unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        case!(
+            "random_cut_forest_shingle",
+            "RandomCutForest",
+            RandomCutForest,
+            RandomCutForest::new(random_cut_forest_cfg(3)).unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
     ]
+}
+
+fn bandit_cfg(policy: BanditPolicy) -> BanditCfg {
+    BanditCfg {
+        n_features: K,
+        n_arms: 3,
+        policy,
+        alpha: 1.0,
+        epsilon: 0.15,
+        l2: 1.0,
+        fit_intercept: true,
+        decay: decay(),
+        min_weight: 2.0,
+        seed: 7,
+        group_hash: 0x1234_5678,
+        slot: 3,
+        max_state_bytes: None,
+    }
+}
+
+fn half_space_trees_cfg() -> HalfSpaceTreesCfg {
+    HalfSpaceTreesCfg {
+        n_features: K,
+        n_trees: 4,
+        height: 4,
+        window_rows: 15,
+        limits: vec![(-2.0, 4.0); K],
+        min_weight: 0.0,
+        seed: 11,
+        group_hash: 0x8765_4321,
+        slot: 5,
+        max_state_bytes: None,
+    }
+}
+
+fn random_cut_forest_cfg(shingle_size: usize) -> RandomCutForestCfg {
+    RandomCutForestCfg {
+        n_features: K,
+        n_trees: 4,
+        tree_size: 16,
+        shingle_size,
+        min_weight: 0.0,
+        seed: 13,
+        group_hash: 0xabcd_ef01,
+        slot: 9,
+        max_state_bytes: None,
+    }
 }
 
 /// A VAR(2) of two targets under decay with the features exogenous, a

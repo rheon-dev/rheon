@@ -1211,6 +1211,27 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["x0"]"#,
             true,
         ),
+        (
+            "bandit",
+            r#"{"type": "bandit", "arms": ["up", "down"], "policy": "linucb", "alpha": 1.0, "l2": 1.0, "seed": 7}"#,
+            r#"["y", "lbl"]"#,
+            r#"["x0", "x1"]"#,
+            true,
+        ),
+        (
+            "half_space_trees",
+            r#"{"type": "half_space_trees", "n_trees": 2, "height": 3, "window_rows": 12, "seed": 7}"#,
+            "[]",
+            r#"["x0", "x1"]"#,
+            false,
+        ),
+        (
+            "random_cut_forest",
+            r#"{"type": "random_cut_forest", "n_trees": 2, "tree_size": 8, "shingle_size": 2, "seed": 7}"#,
+            "[]",
+            r#"["x0", "x1"]"#,
+            false,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {
@@ -1226,9 +1247,9 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             ""
         };
         // `seqtest` counts every learned row as one trial, `rcov` sums
-        // returns and `audit` counts every row: none takes a weight that
-        // moves.
-        let weight = if matches!(kind, "seqtest" | "rcov" | "audit") {
+        // returns, `audit` counts every row, and `random_cut_forest` accepts
+        // only 0/1 weights: none takes a fractional weight.
+        let weight = if matches!(kind, "seqtest" | "rcov" | "audit" | "random_cut_forest") {
             ""
         } else {
             r#", "weight": "w""#

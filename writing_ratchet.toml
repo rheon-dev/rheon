@@ -624,6 +624,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/ar.rs"]
 
+[messages."crates/rheon-core/src/bandit.rs"]
+
 [messages."crates/rheon-core/src/bars.rs"]
 "remedy" = 1
 
@@ -656,6 +658,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/holt/ets.rs"]
 
+[messages."crates/rheon-core/src/hst.rs"]
+
 [messages."crates/rheon-core/src/isotonic.rs"]
 
 [messages."crates/rheon-core/src/kalman/forms.rs"]
@@ -667,6 +671,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."crates/rheon-core/src/power_variation.rs"]
 
 [messages."crates/rheon-core/src/psquared.rs"]
+
+[messages."crates/rheon-core/src/rcf.rs"]
 
 [messages."crates/rheon-core/src/realized.rs"]
 
@@ -714,6 +720,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-polars/src/merge/state.rs"]
 
+[messages."crates/rheon-polars/src/spec/anomaly.rs"]
+
+[messages."crates/rheon-polars/src/spec/bandit.rs"]
+
 [messages."crates/rheon-polars/src/spec/drift.rs"]
 
 [messages."crates/rheon-polars/src/spec/horizons.rs"]
@@ -753,6 +763,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."python/rheon/_env.py"]
 
+[messages."python/rheon/_spec_anomaly.py"]
+
+[messages."python/rheon/_spec_bandit.py"]
+
 [messages."python/rheon/_spec_fields.py"]
 
 [messages."python/rheon/_spec_power_variation.py"]
@@ -765,7 +779,11 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."python/rheon/polars/_fourier.py"]
 
+[docstrings."python/rheon/_spec_anomaly.py"]
+
 [docstrings."python/rheon/_spec_ar.py"]
+
+[docstrings."python/rheon/_spec_bandit.py"]
 
 [docstrings."python/rheon/_spec_dcc.py"]
 
@@ -803,6 +821,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-core/src/ar.rs#messages"]
 
+[vocabulary."crates/rheon-core/src/bandit.rs#messages"]
+
 [vocabulary."crates/rheon-core/src/bars.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/bocpd/span.rs#messages"]
@@ -833,6 +853,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-core/src/holt/ets.rs#messages"]
 
+[vocabulary."crates/rheon-core/src/hst.rs#messages"]
+
 [vocabulary."crates/rheon-core/src/isotonic.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/kalman/forms.rs#messages"]
@@ -844,6 +866,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/power_variation.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/psquared.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/rcf.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/realized.rs#messages"]
 
@@ -885,6 +909,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-polars/src/merge/state.rs#messages"]
 
+[vocabulary."crates/rheon-polars/src/spec/anomaly.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/spec/bandit.rs#messages"]
+
 [vocabulary."crates/rheon-polars/src/spec/drift.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/spec/horizons.rs#messages"]
@@ -917,7 +945,15 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."python/rheon/_env.py#messages"]
 
+[vocabulary."python/rheon/_spec_anomaly.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_anomaly.py#messages"]
+
 [vocabulary."python/rheon/_spec_ar.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_bandit.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_bandit.py#messages"]
 
 [vocabulary."python/rheon/_spec_dcc.py#docstrings"]
 

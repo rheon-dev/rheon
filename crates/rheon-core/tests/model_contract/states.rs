@@ -38,6 +38,9 @@ fn every_state_kind_is_distinct_and_named() {
         "spectral",
         "isotonic",
         "vector_ar",
+        "bandit",
+        "half_space_trees",
+        "random_cut_forest",
     ];
     let mut seen = std::collections::HashSet::new();
     for k in kinds {
@@ -84,6 +87,9 @@ fn every_state_kind_is_distinct_and_named() {
         Spectral::new(spectral_cfg()).unwrap().state(),
         Isotonic::new(isotonic_cfg()).unwrap().state(),
         VectorAr::new(vector_ar_cfg()).unwrap().state(),
+        Bandit::new(bandit_cfg()).unwrap().state(),
+        HalfSpaceTrees::new(half_space_trees_cfg()).unwrap().state(),
+        RandomCutForest::new(random_cut_forest_cfg()).unwrap().state(),
     ];
     let from_states: Vec<&str> = states.iter().map(|s| s.model.kind()).collect();
     assert_eq!(from_states, kinds);
@@ -162,6 +168,9 @@ fn one_state_of_each_kind() -> Vec<State> {
         Spectral::new(spectral_cfg()).unwrap().state(),
         Isotonic::new(isotonic_cfg()).unwrap().state(),
         VectorAr::new(vector_ar_cfg()).unwrap().state(),
+        Bandit::new(bandit_cfg()).unwrap().state(),
+        HalfSpaceTrees::new(half_space_trees_cfg()).unwrap().state(),
+        RandomCutForest::new(random_cut_forest_cfg()).unwrap().state(),
         State::new(ModelState::EwCov(Box::new(EwCov::new(1)))),
     ]
 }
@@ -223,6 +232,9 @@ fn every_model_refuses_every_other_models_state_by_name() {
     refuses_every_other_kind::<DdSketchModel>("ddsketch", &states);
     refuses_every_other_kind::<Isotonic>("isotonic", &states);
     refuses_every_other_kind::<VectorAr>("vector_ar", &states);
+    refuses_every_other_kind::<Bandit>("bandit", &states);
+    refuses_every_other_kind::<HalfSpaceTrees>("half_space_trees", &states);
+    refuses_every_other_kind::<RandomCutForest>("random_cut_forest", &states);
 }
 
 /// Task 252: each model hands back the configuration it was built from,
@@ -314,4 +326,18 @@ fn every_model_hands_back_its_configuration() {
     same(Isotonic::new(c.clone()).unwrap(), &c, Isotonic::cfg);
     let c = vector_ar_cfg();
     same(VectorAr::new(c.clone()).unwrap(), &c, VectorAr::cfg);
+    let c = bandit_cfg();
+    same(Bandit::new(c.clone()).unwrap(), &c, Bandit::cfg);
+    let c = half_space_trees_cfg();
+    same(
+        HalfSpaceTrees::new(c.clone()).unwrap(),
+        &c,
+        HalfSpaceTrees::cfg,
+    );
+    let c = random_cut_forest_cfg();
+    same(
+        RandomCutForest::new(c.clone()).unwrap(),
+        &c,
+        RandomCutForest::cfg,
+    );
 }

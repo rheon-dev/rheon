@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the thirty-seven models a spec can name, by
+The reference entry of each of the forty models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The thirty-seven models fall into four families, and each family answers one
+The forty models fall into five families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -77,6 +77,10 @@ to start with for which question.
 | [`bocpd`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bocpd) · [entry](#bocpd--how-long-has-this-regime-lasted) | filter | how long this regime has lasted: Adams & MacKay's run-length posterior, so the answer is the regime's age and not a flag |
 | [`hmm`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hmm) · [entry](#hmm--which-regime-are-we-in) | filter | a Gaussian hidden Markov model, filtered as the stream runs: `ew_class` without the labels, with a transition matrix that can be learned |
 | [`hawkes`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hawkes) · [entry](#hawkes--how-much-does-each-event-excite-the-next) | solve | a self-exciting point process: each node's event intensity before the row, and how much an event of each node adds to the next, fitted exactly by least squares over exponential kernels |
+| **[Bandits and anomaly detection](#bandits-and-anomaly-detection)** | | choose an action from context or score how anomalous each row is |
+| [`bandit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bandit) · [entry](#bandit--linear-contextual-bandits) | solve | disjoint linear contextual bandit: LinUCB, linear Thompson sampling, or linear epsilon-greedy over logged arm and reward streams, with per-arm square-root QR updates |
+| [`half_space_trees`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.half_space_trees) · [entry](#half_space_trees--streaming-half-space-trees-anomaly-detection) | accumulate | streaming Half-Space Trees unsupervised anomaly detector: normalized `[0, 1]` mass-profile anomaly scores over tumbling windows, weight-scale invariant |
+| [`random_cut_forest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.random_cut_forest) · [entry](#random_cut_forest--robust-random-cut-forest-anomaly-detection) | step | streaming Robust Random Cut Forest unsupervised anomaly detector: collusive displacement (CoDisp) over bounded FIFO cut trees with optional shingling |
 
 **How a model learns from a row decides whether, with decay off, its
 answer depends on the row order:**
@@ -296,7 +300,7 @@ library's learn mask: the row is scored and teaches nothing. The default depends
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `isotonic`, `vector_ar` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `isotonic`, `vector_ar`, `bandit`, `half_space_trees`, `random_cut_forest` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -5894,3 +5898,144 @@ the bytes. The row that would take it past the cap is not learned, and the
 bank stops with an error naming the group and the bytes, having learned part
 of the chunk. A spec whose state without any event is already past the cap
 is refused when it is built.
+
+## Bandits and anomaly detection
+
+Models that recommend an action from context features or score how anomalous
+each row is relative to recent history. Stochastic policies and randomized
+trees draw from a counter-based Philox4x64-10 stream keyed by `(seed, group)`
+and counter-indexed by spec name and learned-row count, so outputs are
+bit-exact across operating systems, chunkings, and save/resume boundaries.
+
+### `bandit` — linear contextual bandits
+
+*API:* [`rheon.spec.bandit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.bandit) — *Rust:* [`bandit.rs`](../crates/rheon-core/src/bandit.rs) — *Outputs:* [fields](OUTPUTS.md#bandit)
+
+Disjoint linear contextual bandit over a logged arm and reward stream,
+supporting LinUCB (`policy="linucb"`), linear Thompson sampling
+(`policy="lints"`), and linear epsilon-greedy (`policy="eps_greedy"`).
+Every row is scored strictly before the row's logged `(arm, reward)` is
+learned, and rows whose `arm` or `reward` is null (or whose weight is 0) are
+scored without modifying any arm's fit.
+
+#### Update rule
+
+Each arm `a` maintains an upper-triangular square-root QR factor `R_a` and
+transformed right-hand side `u_a` such that `R_aᵀ R_a = A_a` and
+`R_aᵀ u_a = b_a`, initialized to `R_a = √l2 · I` and `u_a = 0`. With
+`z = [1, x]` (or `x` when `fit_intercept=False`) and decay `λ`:
+
+```text
+theta_a = R_a⁻¹ u_a
+width_a = ‖R_a⁻ᵀ z‖₂
+LinUCB:      score_a = zᵀ theta_a + alpha · width_a
+LinTS:       score_a = zᵀ (theta_a + alpha · R_a⁻¹ eps_a),   eps_a ~ N(0, I)
+eps_greedy:  score_a = zᵀ theta_a
+```
+
+On a learned row with weight `w > 0` and logged `(arm, reward) = (a*, r)`:
+
+```text
+R_a ← √λ · R_a,   u_a ← √λ · u_a                     for every arm a
+[R_a*; u_a*] ← qr_givens([R_a*; √w · zᵀ], [u_a*; √w · r])
+weight_sum ← λ · weight_sum + w
+```
+
+#### Notes
+
+**Square-root QR form.** Keeping `R_a` directly guarantees positive
+definiteness under decay without forming or inverting `A_a` explicitly, and
+computes both the LinUCB confidence width `‖R_a⁻ᵀ z‖₂` and the LinTS
+posterior draw `alpha · R_a⁻¹ eps_a` in `O(d²)` time per arm. Because
+`R_a = √l2 · I` sits on the sum scale, multiplying every row weight by a
+constant moves the fit against `l2`, as in `rls`.
+
+**Outputs.** Writes `arm` (an `Enum` of `arms`), `score`, one `score_<arm>`
+per arm in `arms` order, `prob` (under `policy="eps_greedy"` only),
+`weight_sum`, `settled_frac`, `withheld_reason`, and `coef` (flattened per
+arm in `arms` order, `[intercept] + features`, indexed by `(arm, term)` in
+`rp.spec.coef_index`).
+
+**State budget.** `max_state_bytes` defaults to 256 KiB (ceiling 64 MiB) and
+is checked eagerly when the spec is built.
+
+### `half_space_trees` — streaming Half-Space Trees anomaly detection
+
+*API:* [`rheon.spec.half_space_trees`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.half_space_trees) — *Rust:* [`hst.rs`](../crates/rheon-core/src/hst.rs) — *Outputs:* [fields](OUTPUTS.md#half_space_trees)
+
+Unsupervised streaming Half-Space Trees anomaly detector (Tan, Ting, and Liu
+2011) over bounded numeric features. An ensemble of `n_trees` full binary
+trees of depth `height` is drawn once from the Philox stream over the
+feature workspace `limits` (defaulting unspecified features to `(0.0, 1.0)`).
+
+#### Update rule
+
+Each node keeps a reference-window mass `r` and a latest-window mass `l`. On
+each row `x`, each tree `t` descends to the first node with `r <= 0.1 · r_root`
+or depth `height`, contributing `r · 2^depth` to the raw mass score:
+
+```text
+score(x) = 1 - (sum_t r_t(x) · 2^{depth_t(x)}) / (n_trees · r_root · (2^{height+1} - 1))
+```
+
+On a row with weight `w > 0`, `l` is incremented by `w` along every tree's
+root-to-leaf path. Every `window_rows` positive-weight rows, the latest mass
+profile pivots into the reference profile (`r ← l`, `l ← 0`).
+
+#### Notes
+
+**First tumbling window.** Before the first `window_rows` learned rows
+complete, no reference profile exists; scores are withheld as null with
+`withheld_reason = "below_warm_rows"`.
+
+**Weight-scale invariance.** Both the stopping threshold `0.1 · r_root` and
+the denominator `n_trees · r_root · (2^{height+1} - 1)` scale with the
+reference window's total mass `r_root`, so multiplying every row's weight by
+a constant leaves `score` unchanged. At unit weights, the score matches
+River's `HalfSpaceTrees` to the last bit on identical tree geometry.
+
+**Compact checkpoints.** Tree split features and thresholds are rebuilt
+deterministically from `(seed, group, spec name, limits)` on restore, so the
+serialized state stores only the `l` and `r` mass arrays and counters.
+`max_state_bytes` defaults to 2 MiB (ceiling 64 MiB).
+
+### `random_cut_forest` — Robust Random Cut Forest anomaly detection
+
+*API:* [`rheon.spec.random_cut_forest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.random_cut_forest) — *Rust:* [`rcf.rs`](../crates/rheon-core/src/rcf.rs) — *Outputs:* [fields](OUTPUTS.md#random_cut_forest)
+
+Unsupervised streaming Robust Random Cut Forest anomaly detector (Guha et al.
+2016) with optional shingling (`shingle_size >= 1`). Requires no prior
+feature bounds; each tree maintains a bounded FIFO ring of up to `tree_size`
+points and partitions them with bounding-box-proportional random cuts.
+
+#### Update rule
+
+Each tree enforces strict cut separation (`left <= cut < right`) at every
+internal node. Before modifying the forest, a query point `x` is scored by
+evaluating the collusive displacement (CoDisp) it would induce if inserted
+into each tree without mutating state:
+
+```text
+CoDisp_t(x) = max_{u on path from x to root}  mass(sibling(u)) / mass(u)
+score(x)    = (1 / n_trees) · sum_t CoDisp_t(x)
+```
+
+On a row of weight `1`, each tree then evicts its oldest point if it already
+holds `tree_size` points and inserts `x` using counter-based Philox cut
+draws.
+
+#### Notes
+
+**Evict-after-score and 0/1 weights.** Evaluating CoDisp before evicting
+ensures that `ModelBank.predict` produces the exact same score as the next
+`fit_predict` row and that zero-weight rows leave the forest state
+byte-identical. Because trees count active points rather than continuous
+weights, usable row weights must be `0` or `1`; any other weight is refused
+naming the row.
+
+**Shingling.** Setting `shingle_size > 1` concatenates the last
+`shingle_size` consecutive rows into a single `(k · shingle_size)`-dimensional
+point. A session change or a clock gap past `gap_cap` clears the shingle
+buffer, withholding scores with `withheld_reason = "below_warm_rows"` until
+`shingle_size` consecutive rows arrive. `max_state_bytes` defaults to 9 MiB
+(ceiling 64 MiB).

@@ -1628,7 +1628,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 37] = [
+    const FROZEN: [&str; 40] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1666,6 +1666,9 @@ fn the_variant_names_are_frozen() {
         "Spectral",
         "Isotonic",
         "VectorAr",
+        "Bandit",
+        "HalfSpaceTrees",
+        "RandomCutForest",
     ];
     assert_eq!(
         variants(),
@@ -1786,7 +1789,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 234] = [
+    const FORMS: [(&str, &[&str]); 245] = [
         // PLAN 569, at schema 72: `ftrl`'s scaler and warm-up under
         // `standardize`, past the warm-up's count and inside it.
         ("ftrl_standardized", &["model", "Ftrl", "scaler", "m"]),
@@ -2358,6 +2361,32 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
                 "0",
                 "entries",
             ],
+        ),
+        // `bandit`: per-arm QR factors, coefficients, and learned-row counter.
+        ("bandit", &["model", "Bandit", "arms", "0", "r"]),
+        ("bandit", &["model", "Bandit", "arms", "0", "beta"]),
+        ("bandit_lints", &["model", "Bandit", "arms", "1", "u"]),
+        ("bandit_eps_greedy", &["model", "Bandit", "arms", "2", "r"]),
+        // `half_space_trees`: latest and reference tumbling mass arrays.
+        ("half_space_trees", &["model", "HalfSpaceTrees", "l"]),
+        ("half_space_trees", &["model", "HalfSpaceTrees", "r"]),
+        (
+            "half_space_trees_warming",
+            &["model", "HalfSpaceTrees", "l"],
+        ),
+        // `random_cut_forest`: trees, bounding boxes, ring, FIFO, and shingle lag ring.
+        ("random_cut_forest", &["model", "RandomCutForest", "ring"]),
+        (
+            "random_cut_forest",
+            &["model", "RandomCutForest", "trees", "0", "boxes"],
+        ),
+        (
+            "random_cut_forest",
+            &["model", "RandomCutForest", "trees", "0", "free_nodes"],
+        ),
+        (
+            "random_cut_forest_shingle",
+            &["model", "RandomCutForest", "shingle"],
         ),
     ];
     // Each refit's first stamp, written only under a span (task 538): in

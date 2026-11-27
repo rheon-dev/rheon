@@ -762,6 +762,8 @@ impl ModelKind {
                 | ModelKind::Audit { .. }
                 | ModelKind::Pca { .. }
                 | ModelKind::EwmMoments { .. }
+                | ModelKind::HalfSpaceTrees(_)
+                | ModelKind::RandomCutForest(_)
         )
     }
 }

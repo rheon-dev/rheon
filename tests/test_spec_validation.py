@@ -849,8 +849,9 @@ def test_fit_intercept_is_inert_on_every_kind_without_an_intercept():
     from test_model_registry import MINIMAL, REGRESSIONS, _build
 
     # `holt` fits a level and a trend, `isotonic` a curve: no intercept.
-    inert = (frozenset(MINIMAL) - REGRESSIONS) | {"holt", "isotonic"}
-    assert len(inert) == 24, sorted(inert)
+    # `bandit` fits a per-arm linear model with an intercept.
+    inert = (frozenset(MINIMAL) - REGRESSIONS - {"bandit"}) | {"holt", "isotonic"}
+    assert len(inert) == 26, sorted(inert)
 
     def run(name, flag):
         spec = {**_build(name), "fit_intercept": flag}

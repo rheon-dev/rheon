@@ -179,8 +179,11 @@ fn a_zero_weight_row_past_the_underflow_forgets<M: OnlineModel>(
 ) {
     // `hawkes` reads the clock without an event as evidence -- `G₀₀` is the
     // time observed -- so where nothing decays (its window) a half-life more
-    // of gap is a longer quiet spell and a lower base rate.
-    const NOT_COMPARED: [&str; 5] = ["kalman", "holt", "ew_class", "hmm", "hawkes"];
+    // of gap is a longer quiet spell and a lower base rate. `bandit` decays
+    // each arm's precision `R'R` by `λ`, so a half-life more of gap scales
+    // every unpulled arm's exploration width `||R⁻ᵀ x||` by `√2`, like
+    // `kalman`'s covariance.
+    const NOT_COMPARED: [&str; 6] = ["kalman", "holt", "ew_class", "hmm", "hawkes", "bandit"];
     let row = |s: &mut u64| {
         let x: Vec<f64> = (0..K).map(|_| lcg(s) * 3.0).collect();
         let y: Vec<Option<f64>> = (0..targets)

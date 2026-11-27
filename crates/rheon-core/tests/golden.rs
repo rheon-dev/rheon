@@ -2698,7 +2698,188 @@ fn ewm_moments_golden() {
     }
 }
 
+fn bandit_signature(policy: BanditPolicy) -> Vec<f64> {
+    let mut m = Bandit::new(BanditCfg {
+        n_features: 2,
+        n_arms: 3,
+        policy,
+        alpha: 1.0,
+        epsilon: 0.2,
+        l2: 1.0,
+        fit_intercept: true,
+        decay: Decay::Halflife(20.0),
+        min_weight: 2.0,
+        seed: 7,
+        group_hash: 0,
+        slot: 0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut got = Vec::new();
+    for (i, (x, y, d, w)) in stream().into_iter().enumerate() {
+        let arm = Some((i % 3) as f64);
+        let step = m.step(&x, &[y[0], arm], d, w);
+        if matches!(i, 20 | 45 | 59) {
+            got.extend(&step.pred);
+        }
+    }
+    got
+}
+
+#[test]
+fn bandit_golden() {
+    check(
+        "bandit_linucb",
+        &bandit_signature(BanditPolicy::Linucb),
+        GOLDEN_BANDIT_LINUCB,
+    );
+}
+
+#[test]
+fn bandit_lints_golden() {
+    check(
+        "bandit_lints",
+        &bandit_signature(BanditPolicy::Lints),
+        GOLDEN_BANDIT_LINTS,
+    );
+}
+
+#[test]
+fn bandit_eps_greedy_golden() {
+    check(
+        "bandit_eps_greedy",
+        &bandit_signature(BanditPolicy::EpsGreedy),
+        GOLDEN_BANDIT_EPS_GREEDY,
+    );
+}
+
+#[test]
+fn half_space_trees_golden() {
+    let mut m = HalfSpaceTrees::new(HalfSpaceTreesCfg {
+        n_features: 2,
+        n_trees: 8,
+        height: 5,
+        window_rows: 15,
+        limits: vec![(-3.0, 3.0); 2],
+        min_weight: 0.0,
+        seed: 11,
+        group_hash: 0,
+        slot: 0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut got = Vec::new();
+    for (i, (x, _, d, w)) in stream().into_iter().enumerate() {
+        let step = m.step(&x, &[], d, w);
+        if matches!(i, 20 | 45 | 59) {
+            got.push(step.pred[0]);
+        }
+    }
+    check("half_space_trees", &got, GOLDEN_HALF_SPACE_TREES);
+}
+
+fn rcf_signature(shingle_size: usize) -> Vec<f64> {
+    let mut m = RandomCutForest::new(RandomCutForestCfg {
+        n_features: 2,
+        n_trees: 8,
+        tree_size: 24,
+        shingle_size,
+        min_weight: 0.0,
+        seed: 13,
+        group_hash: 0,
+        slot: 0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut got = Vec::new();
+    for (i, (x, _, d, w)) in stream().into_iter().enumerate() {
+        let step = m.step(&x, &[], d, w);
+        if matches!(i, 20 | 45 | 59) {
+            got.push(step.pred[0]);
+        }
+    }
+    got
+}
+
+#[test]
+fn random_cut_forest_golden() {
+    check(
+        "random_cut_forest",
+        &rcf_signature(1),
+        GOLDEN_RANDOM_CUT_FOREST,
+    );
+}
+
+#[test]
+fn random_cut_forest_shingle_golden() {
+    check(
+        "random_cut_forest_shingle",
+        &rcf_signature(2),
+        GOLDEN_RANDOM_CUT_FOREST_SHINGLE,
+    );
+}
+
 // --- generated; see the module docs ---
+const GOLDEN_BANDIT_LINUCB: &[f64] = &[
+    2.0,
+    0.8978009476791805,
+    0.8195950077887105,
+    0.7204953726826199,
+    0.8978009476791805,
+    0.0,
+    3.700787696578148,
+    3.700787696578148,
+    3.464611885147926,
+    2.8664112986488153,
+    0.0,
+    0.6348326464141687,
+    0.6348326464141687,
+    0.33298351292472117,
+    0.33056059805534366,
+];
+const GOLDEN_BANDIT_LINTS: &[f64] = &[
+    0.0,
+    1.2448439281662926,
+    1.2448439281662926,
+    0.5036889496138887,
+    0.32969334955799623,
+    0.0,
+    2.693779348938869,
+    2.693779348938869,
+    0.6480319467092095,
+    1.744895806458341,
+    2.0,
+    0.1673249523575434,
+    0.023325892642035932,
+    -0.4009259650021452,
+    0.1673249523575434,
+];
+const GOLDEN_BANDIT_EPS_GREEDY: &[f64] = &[
+    2.0,
+    0.25577523085802956,
+    0.2059266612951044,
+    0.19526014623788826,
+    0.25577523085802956,
+    0.8666666666666667,
+    0.0,
+    1.9238437361512495,
+    1.9238437361512495,
+    1.9116332203743664,
+    2.128935109569283,
+    0.06666666666666667,
+    2.0,
+    -0.05542679583184987,
+    -0.03588474856777457,
+    -0.06274893176767628,
+    -0.05542679583184987,
+    0.06666666666666667,
+];
+const GOLDEN_HALF_SPACE_TREES: &[f64] =
+    &[0.5571428571428572, 0.7564814814814815, 0.5842592592592593];
+const GOLDEN_RANDOM_CUT_FOREST: &[f64] =
+    &[2.3333333333333335, 4.191220238095237, 1.6577380952380951];
+const GOLDEN_RANDOM_CUT_FOREST_SHINGLE: &[f64] =
+    &[1.9479166666666665, 5.003472222222222, 2.3839285714285716];
 const GOLDEN_ISOTONIC: &[f64] = &[
     0.058108255205977066,
     -1.1322602444563972,

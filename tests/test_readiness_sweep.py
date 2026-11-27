@@ -105,13 +105,27 @@ EXTRA: dict[str, dict[str, Any]] = {
     # weight there is about 27, so a floor of 30 withholds rows past the
     # start, until the weight passes it.
     "dcc": {"margins": "none", "margin_start_rows": None, "half_life": 25.0},
+    # `half_space_trees`'s first tumbling window (250 by default) is longer
+    # than the looser `min_weight` gates; a 2-row window lets every gate show.
+    "half_space_trees": {"window_rows": 2},
 }
 #: The kinds that write no row of their own: they report through the state
 #: (``marginal``'s table, ``rcov``'s closed blocks).
 TABLE_KINDS = frozenset({"marginal", "rcov"})
 ROW_KINDS = [k for k in KINDS if k not in TABLE_KINDS]
 #: The kinds with no decay: ``min_settled_frac`` has nothing to settle.
-NO_DECAY = frozenset({"seqtest", "bocpd", "corrchange", "rcov", "garch", "tdigest"})
+NO_DECAY = frozenset(
+    {
+        "seqtest",
+        "bocpd",
+        "corrchange",
+        "rcov",
+        "garch",
+        "tdigest",
+        "half_space_trees",
+        "random_cut_forest",
+    }
+)
 SETTLED_KINDS = [k for k in KINDS if k not in NO_DECAY]
 #: The kinds whose ridge system reads ``max_error_inflation``.
 INFLATION_KINDS = ["ewridge", "rls", "lasso", "kalman"]
@@ -124,7 +138,18 @@ INFLATION_OFF_BY_DEFAULT = ("rls", "lasso", "kalman")
 OWN_FLOOR: dict[str, float] = {"ew_cov": 2.0}
 #: The kinds whose ``min_weight`` defaults to 0 (``spec.rs``,
 #: ``default_min_periods``), where 0 is the default to the bit.
-DEFAULT_ZERO = frozenset({"ewridge", "seqtest", "rcov", "hmm", "corrchange"})
+DEFAULT_ZERO = frozenset(
+    {
+        "ewridge",
+        "seqtest",
+        "rcov",
+        "hmm",
+        "corrchange",
+        "bandit",
+        "half_space_trees",
+        "random_cut_forest",
+    }
+)
 
 #: The fields only the fit moves: a gate leaves them alone on every row.
 LEARNED = ("weight_sum", "settled_frac", "coef", "support_coef")
@@ -204,6 +229,8 @@ NO_COEF = frozenset(
         "ewm_moments",
         "spectral",
         "isotonic",
+        "half_space_trees",
+        "random_cut_forest",
     }
 )
 
@@ -211,7 +238,7 @@ NO_COEF = frozenset(
 def _weight_column(kind: str) -> str | None:
     if kind == "seqtest":
         return None  # every learned row is one trial
-    return "w01" if kind == "rcov" else "w"
+    return "w01" if kind in ("rcov", "random_cut_forest") else "w"
 
 
 #: Per kind and gate, keywords beyond ``EXTRA`` so that gate shows past the

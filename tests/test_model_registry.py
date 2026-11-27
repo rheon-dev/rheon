@@ -109,6 +109,15 @@ MINIMAL: dict[str, dict[str, object]] = {
     # One feature, the score it is monotone in.
     "isotonic": {"features": ["x0"]},
     "vector_ar": {"lags": 1},
+    "bandit": {
+        "targets": None,
+        "features": ["x0"],
+        "arm": "arm",
+        "arms": ["a", "b"],
+        "reward": "y",
+    },
+    "half_space_trees": {"targets": None, "half_life": None},
+    "random_cut_forest": {"targets": None, "half_life": None},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -148,6 +157,9 @@ REGRESSIONS = frozenset(MINIMAL) - {
     "ddsketch",
     "ewm_moments",
     "spectral",
+    "bandit",
+    "half_space_trees",
+    "random_cut_forest",
 }
 
 
@@ -366,6 +378,9 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "ewm_moments",
             "spectral",
             "isotonic",
+            "bandit",
+            "half_space_trees",
+            "random_cut_forest",
         )
     },
 }
@@ -795,6 +810,8 @@ def test_every_models_realized_dtypes_are_the_ones_output_index_declares():
         df = frame
         if name == "ew_class":
             df = frame.with_columns(pl.Series("y", ["a", "b"] * (n // 2)))
+        if name == "bandit":
+            df = frame.with_columns(pl.Series("arm", ["a", "b"] * (n // 2)))
         if name == "glm":
             # The default Poisson family takes counts.
             df = frame.with_columns(pl.col("y").abs().round())

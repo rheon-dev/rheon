@@ -65,6 +65,8 @@ EXCEPTIONS = {
     # that many times (the builder's docs say so).
     "realized": "a weight counts its return that many times: the measures are sums",
     "power_variation": "a weight counts its terms that many times: the terms are sums",
+    "bandit": "each arm's R_a' R_a <- lam A_a + w z z' starts from l2 * I: a sum-scale prior "
+    "a heavier stream outweighs sooner (like rls)",
 }
 
 SCALE = 100.0
@@ -75,7 +77,9 @@ def _fit(c: float) -> pl.DataFrame:
     for name, builder, kw, _ in probe.WORKLOAD:
         kw = dict(kw)
         # An audit refuses a min_weight: it predicts nothing to withhold.
-        if builder not in ("seqtest", "audit"):
+        # Specs without the stream's `w` column (e.g. `rcov`, `random_cut_forest`)
+        # keep unit weights, so their `min_weight` stays on the unit scale.
+        if builder not in ("seqtest", "audit") and kw.get("weight") == "w":
             kw["min_weight"] = kw.get("min_weight", 4.0) * c
         specs.append(probe.build(builder, name, kw))
     return rp.ModelBank(specs).fit_predict(probe.stream().with_columns(pl.col("w") * c))

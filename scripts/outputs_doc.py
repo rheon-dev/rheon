@@ -71,6 +71,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
     ),
     "Clustering and classification": ("kmeans", "micro", "ew_class"),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
+    "Bandits and anomaly detection": ("bandit", "half_space_trees", "random_cut_forest"),
 }
 
 #: Where the four fields most models write are defined in full.
@@ -142,6 +143,15 @@ MEANING: dict[str, str] = {
     "n_micro": "live summaries",
     "class": "the most likely class label",
     "p_<label>": "posterior probability of class `<label>`",
+    "arm": "the recommended arm, read before this row is learned",
+    "score": "the score of the recommended arm under the active policy",
+    "score_<arm>": (
+        "arm `<arm>`'s score under the active policy (UCB, Thompson sample, or greedy mean reward)"
+    ),
+    "prob": (
+        'selection probability of the recommended arm under `policy="eps_greedy"`: '
+        "`1 - epsilon + epsilon / K` for the greedy arm, `epsilon / K` for a non-greedy arm"
+    ),
     "log_e_pos_<t>": (
         "log of the e-process betting the sign of `<t>` is positive: 0 is no evidence, and "
         "`log(20)`, about 3.0, is evidence at level 0.05"
@@ -317,6 +327,10 @@ ALSO_NULL: dict[str, str] = {
     "n_micro": WITHHELD,
     "class": EW_CLASS_NULL,
     "p_<label>": EW_CLASS_NULL,
+    "arm": WITHHELD,
+    "score": WITHHELD,
+    "score_<arm>": WITHHELD,
+    "prob": WITHHELD,
     "log_e_pos_<t>": WITHHELD,
     "log_e_neg_<t>": WITHHELD,
     "n_pos_<t>": WITHHELD,
@@ -412,6 +426,14 @@ MEANING_BY_MODEL: dict[tuple[str, str], str] = {
     ("dcc", "loglik"): (
         "the Gaussian log-density of the row's standardized residuals under that correlation"
     ),
+    ("half_space_trees", "score"): (
+        "normalized anomaly score in `[0, 1]` from the previous tumbling reference window: "
+        "values near 1 denote sparse (anomalous) regions, values near 0 dense regions"
+    ),
+    ("random_cut_forest", "score"): (
+        "mean collusive displacement (CoDisp) across the forest, non-negative and unbounded above "
+        "(larger values denote stronger anomalies; 0 before any point is inserted)"
+    ),
 }
 
 #: A model whose rule for a stem differs from `ALSO_NULL`'s.
@@ -446,6 +468,14 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
     ),
     ("micro", "cluster"): "while withheld, and while no summary is established",
     ("hmm", "loglik"): UNTIL_SEEDED,
+    ("half_space_trees", "score"): (
+        "while withheld, including the first tumbling window of `window_rows` learned rows "
+        "(`below_warm_rows`)"
+    ),
+    ("random_cut_forest", "score"): (
+        "while withheld, including the rows before `shingle_size` consecutive rows fill the "
+        "shingle buffer (`below_warm_rows`)"
+    ),
     **{("bocpd", stem): BOCPD_WARM for stem in BOCPD_STEMS},
 }
 
@@ -460,6 +490,7 @@ SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
         "smooth_lag=5, emit_smoothed_se=True",
         {"smooth_lag": 5, "emit_smoothed_se": True},
     ),
+    "bandit": ('policy="eps_greedy"', {"policy": "eps_greedy"}),
 }
 
 #: What a model writes when it writes nothing per row.
@@ -510,6 +541,7 @@ NAME_PARTS: list[tuple[str, str, str]] = [
     ("`<a>`, `<b>`", "the two columns of a pair", "`x0`, `x1`"),
     ("`<j>`", "a state's index", "`0`, `1`"),
     ("`<label>`", "a class label", "`a`, `b`"),
+    ("`<arm>`", "an arm name", "`a`, `b`"),
     ("`__r<ridge>`", "one value of a `ridge` grid", ""),
     ("`__<set>`", "one of the `feature_sets`, with one ridge value", ""),
     ("`__<set>_r<ridge>`", "one of the `feature_sets`, with one value of a `ridge` grid", ""),
@@ -765,7 +797,8 @@ DTYPES: list[tuple[str, str]] = [
     (
         "`enum`",
         "an `Enum` of its values, in their order: `withheld_reason`'s {n_reasons}, an `ew_class` "
-        "spec's `classes` for `class`, a grid's slots for `selected_<t>`",
+        "spec's `classes` for `class`, a `bandit` spec's `arms` for `arm`, a grid's slots for "
+        "`selected_<t>`",
     ),
     (
         "`clock`",
@@ -972,6 +1005,8 @@ def stem(
             return f"causality<i>_{kind}"
     if base.startswith("p_") and base != "p_change":
         return "p_<label>"
+    if base.startswith("score_"):
+        return "score_<arm>"
     if base.startswith("pc") and "_" in base and base[2 : base.index("_")].isdigit():
         rest = base[base.index("_") + 1 :]
         return "pc<j>_loading_<f>" if rest.startswith("loading_") else f"pc<j>_{rest}"

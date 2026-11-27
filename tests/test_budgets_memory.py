@@ -505,6 +505,51 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    (
+        "bandit",
+        "bandit",
+        dict(
+            features=["x1", "x2"],
+            arm="lab",
+            arms=["down", "up"],
+            reward="y",
+            policy="eps_greedy",
+            group="g",
+            half_life=25.0,
+            coef_every=0,
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    (
+        "half_space_trees",
+        "half_space_trees",
+        dict(
+            features=["x1", "x2"],
+            n_trees=8,
+            height=5,
+            window_rows=50,
+            group="g",
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    (
+        "random_cut_forest",
+        "random_cut_forest",
+        dict(
+            features=["x1", "x2"],
+            n_trees=10,
+            tree_size=64,
+            group="g",
+            clock="t",
+            gap_cap=6.0,
+            emit_clocks=True,
+        ),
+        [],
+    ),
 ]
 
 

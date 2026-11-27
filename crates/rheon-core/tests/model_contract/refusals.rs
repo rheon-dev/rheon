@@ -9,7 +9,7 @@
 #[test]
 fn every_model_refuses_a_decay_it_cannot_run_on() {
     type Build<'a> = (&'a str, &'a dyn Fn(Decay) -> Result<(), String>);
-    let builds: [Build; 21] = [
+    let builds: [Build; 22] = [
         ("ewridge", &|decay| {
             EwRidge::new(EwRidgeCfg {
                 decay,
@@ -139,6 +139,13 @@ fn every_model_refuses_a_decay_it_cannot_run_on() {
             Expectile::new(ExpectileCfg {
                 decay,
                 ..expectile_cfg()
+            })
+            .map(drop)
+        }),
+        ("bandit", &|decay| {
+            Bandit::new(BanditCfg {
+                decay,
+                ..bandit_cfg()
             })
             .map(drop)
         }),
@@ -346,6 +353,19 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             "min_weight must be at least 0",
         ),
         refused(VectorAr::new(vector_ar_cfg()).unwrap(), "decay", zero(), h),
+        refused(Bandit::new(bandit_cfg()).unwrap(), "decay", zero(), h),
+        refused(
+            HalfSpaceTrees::new(half_space_trees_cfg()).unwrap(),
+            "n_trees",
+            0.into(),
+            "n_trees must be at least 1",
+        ),
+        refused(
+            RandomCutForest::new(random_cut_forest_cfg()).unwrap(),
+            "tree_size",
+            1.into(),
+            "tree_size must be at least 2",
+        ),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -779,6 +799,15 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("spectral", share(Spectral::new(spectral_cfg()).unwrap())),
         ("isotonic", share(Isotonic::new(isotonic_cfg()).unwrap())),
         ("vector_ar", share(VectorAr::new(vector_ar_cfg()).unwrap())),
+        ("bandit", share(Bandit::new(bandit_cfg()).unwrap())),
+        (
+            "half_space_trees",
+            share(HalfSpaceTrees::new(half_space_trees_cfg()).unwrap()),
+        ),
+        (
+            "random_cut_forest",
+            share(RandomCutForest::new(random_cut_forest_cfg()).unwrap()),
+        ),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -841,6 +870,9 @@ const PROBED: &[(&str, &str)] = &[
     ("Spectral", "spectral"),
     ("Isotonic", "isotonic"),
     ("VectorAr", "vector_ar"),
+    ("Bandit", "bandit"),
+    ("HalfSpaceTrees", "half_space_trees"),
+    ("RandomCutForest", "random_cut_forest"),
 ];
 
 #[test]

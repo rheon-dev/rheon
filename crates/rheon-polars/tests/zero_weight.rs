@@ -718,6 +718,42 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         r#""targets": ["yb"], "features": ["x0"], "half_life": @50"#,
         ALL,
     ),
+    (
+        "bandit_linucb",
+        r#"{"type": "bandit", "arms": ["a", "b"], "policy": "linucb", "alpha": 1.0, "l2": 1.0, "seed": 7}"#,
+        r#""targets": ["y", "lab"], "features": ["x0", "x1"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "bandit_lints",
+        r#"{"type": "bandit", "arms": ["a", "b"], "policy": "lints", "alpha": 0.5, "l2": 1.0, "seed": 7}"#,
+        r#""targets": ["y", "lab"], "features": ["x0", "x1"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "bandit_eps_greedy",
+        r#"{"type": "bandit", "arms": ["a", "b"], "policy": "eps_greedy", "epsilon": 0.2, "l2": 1.0, "seed": 7}"#,
+        r#""targets": ["y", "lab"], "features": ["x0", "x1"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "half_space_trees",
+        r#"{"type": "half_space_trees", "n_trees": 5, "height": 4, "window_rows": 40, "limits": {"x0": [-2.0, 2.0], "x1": [-2.0, 2.0]}, "seed": 7}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"]"#,
+        ALL,
+    ),
+    (
+        "random_cut_forest",
+        r#"{"type": "random_cut_forest", "n_trees": 6, "tree_size": 32, "shingle_size": 1, "seed": 7}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "weight": "wb""#,
+        ALL,
+    ),
+    (
+        "random_cut_forest_shingle",
+        r#"{"type": "random_cut_forest", "n_trees": 6, "tree_size": 32, "shingle_size": 3, "seed": 7}"#,
+        r#""targets": ["x0"], "features": ["x0", "x1"], "weight": "wb""#,
+        ALL,
+    ),
 ];
 
 const ALL: &[Clock] = &[Clock::Rows, Clock::Number, Clock::Temporal];

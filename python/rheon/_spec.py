@@ -336,6 +336,10 @@ _FLOOR = {
     "distinct_window_rows": ("1", "1 or more"),
     "max_state_bytes": ("1", "1 or more"),
     "start_rows": ("1", "1 or more, and to garch's least for its form"),
+    "n_trees": ("1", "1 or more"),
+    "height": ("1", "1 to 16"),
+    "tree_size": ("2", "2 or more"),
+    "shingle_size": ("1", "1 or more"),
 }
 
 
@@ -809,6 +813,9 @@ __all__ = [
     "spectral",
     "isotonic",
     "vector_ar",
+    "bandit",
+    "half_space_trees",
+    "random_cut_forest",
 ]
 
 
@@ -4452,8 +4459,10 @@ def marginal(
 # Most builders live in `_spec_<family>.py` files of their own (the 250 KB
 # cap); read back here, after everything they use, for `__all__`, the key
 # tables below and `rheon.spec`.
+from rheon._spec_anomaly import half_space_trees, random_cut_forest  # noqa: E402
 from rheon._spec_ar import ar, spectral  # noqa: E402
 from rheon._spec_audit import audit  # noqa: E402
+from rheon._spec_bandit import bandit  # noqa: E402
 from rheon._spec_changepoint import bocpd, corrchange  # noqa: E402
 from rheon._spec_class import ew_class  # noqa: E402
 from rheon._spec_cluster import kmeans, micro  # noqa: E402
@@ -4490,6 +4499,8 @@ UNSUPERVISED = frozenset(
         "audit",
         "pca",
         "ewm_moments",
+        "half_space_trees",
+        "random_cut_forest",
     }
 )
 

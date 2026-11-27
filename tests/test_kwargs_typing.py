@@ -55,6 +55,9 @@ BUILDERS = [
     "kmeans",
     "micro",
     "ew_class",
+    "bandit",
+    "half_space_trees",
+    "random_cut_forest",
     "seqtest",
     "marginal",
 ]

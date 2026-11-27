@@ -1263,6 +1263,45 @@ fn audit_hll_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&audit_hll_specs(), bytes, input)
 }
 
+/// The specs of `bank_bandit_anomaly`: grouped contextual bandits (`linucb`,
+/// `lints`, `eps_greedy`) and streaming anomaly detectors (`half_space_trees`,
+/// `random_cut_forest` with shingling).
+fn bandit_anomaly_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "b_ucb", "model": {"type": "bandit", "arms": ["a", "b"], "policy": "linucb", "alpha": 1.0, "l2": 1.0, "seed": 7}, "targets": ["y", "arm"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "group": "g"}"#,
+        r#"{"name": "b_ts", "model": {"type": "bandit", "arms": ["a", "b"], "policy": "lints", "alpha": 0.5, "l2": 1.0, "seed": 11}, "targets": ["y", "arm"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "group": "g"}"#,
+        r#"{"name": "b_eps", "model": {"type": "bandit", "arms": ["a", "b"], "policy": "eps_greedy", "epsilon": 0.2, "l2": 1.0, "seed": 13}, "targets": ["y", "arm"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "group": "g"}"#,
+        r#"{"name": "hst", "model": {"type": "half_space_trees", "n_trees": 3, "height": 3, "window_rows": 10, "limits": {"x0": [-3.0, 3.0], "x1": [-3.0, 3.0]}, "seed": 5}, "targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
+        r#"{"name": "rcf", "model": {"type": "random_cut_forest", "n_trees": 3, "tree_size": 12, "shingle_size": 2, "seed": 9}, "targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn bandit_anomaly_frame() -> DataFrame {
+    let mut df = frame();
+    let arms: Vec<&str> = (0..df.height())
+        .map(|i| if i % 2 == 0 { "a" } else { "b" })
+        .collect();
+    df.with_column(Column::new("arm".into(), arms)).unwrap();
+    df
+}
+
+fn bandit_anomaly_first() -> (Vec<u8>, DataFrame) {
+    let df = bandit_anomaly_frame();
+    let mut bank = Bank::new(bandit_anomaly_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn bandit_anomaly_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&bandit_anomaly_specs(), bytes, input)
+}
+
 /// The specs of `bank_bocpd_hazard` (PLAN 547): `bocpd`'s two hazards,
 /// grouped on `bank_refit`'s stream and number clock, the per-row count
 /// `hazard_rows` and a number `hazard`, clock units, which a number clock
@@ -2923,6 +2962,11 @@ fn kinds() -> Vec<Kind> {
             run: audit_hll_run,
         },
         Kind {
+            name: "bank_bandit_anomaly",
+            first: bandit_anomaly_first,
+            run: bandit_anomaly_run,
+        },
+        Kind {
             name: "with_windows",
             first: windows_first,
             run: windows_run,
@@ -3558,7 +3602,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 21),
+            ("bank", 22),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),
@@ -5352,6 +5396,22 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             "bank_audit_hll",
             "a clock-windowed sliding HLL++",
             |p, _| p.contains(".Audit.hll.sketches.SlidingClock.cols.0.entries."),
+        ),
+        ("bank_bandit_anomaly", "a bandit QR factor", |p, _| {
+            p.contains(".Bandit.arms.0.r.")
+        }),
+        ("bank_bandit_anomaly", "a bandit draw counter", |p, v| {
+            p.ends_with(".Bandit.n_learned") && v.as_u64().is_some_and(|n| n > 0)
+        }),
+        (
+            "bank_bandit_anomaly",
+            "a half_space_trees reference profile",
+            |p, _| p.contains(".HalfSpaceTrees.r."),
+        ),
+        (
+            "bank_bandit_anomaly",
+            "a random_cut_forest tree and shingle ring",
+            |p, _| p.contains(".RandomCutForest.trees.0.nodes."),
         ),
     ];
     for (kind, form, holds) in FORMS {

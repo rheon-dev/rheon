@@ -1306,6 +1306,26 @@ mod generated {
         fn hawkes_clock_windowed(rows in stream(2, false), split in 0usize..60) {
             contract(|| Hawkes::new(hawkes_clock_cfg()).unwrap(), &rows, split)?;
         }
+
+        #[test]
+        fn bandit(rows in stream(2, true), split in 0usize..60, policy in 0usize..3) {
+            let p = [BanditPolicy::Linucb, BanditPolicy::Lints, BanditPolicy::EpsGreedy][policy];
+            contract(|| Bandit::new(BanditCfg { policy: p, ..bandit_cfg() }).unwrap(), &rows, split)?;
+        }
+
+        #[test]
+        fn half_space_trees(rows in stream(0, false), split in 0usize..60) {
+            contract(|| HalfSpaceTrees::new(half_space_trees_cfg()).unwrap(), &rows, split)?;
+        }
+
+        #[test]
+        fn random_cut_forest(rows in stream(0, false), split in 0usize..60, sh in 1usize..=2) {
+            contract(
+                || RandomCutForest::new(RandomCutForestCfg { shingle_size: sh, ..random_cut_forest_cfg() }).unwrap(),
+                &rows,
+                split,
+            )?;
+        }
     }
 }
 
@@ -2012,4 +2032,149 @@ fn isotonic_clock_window_reads_the_rows_inside_it() {
     let held: f64 = (0..12).map(|k| lam.powi(k)).sum();
     assert!((s.n_eff - held).abs() < 1e-12, "{} against {held}", s.n_eff);
     assert_eq!(m.window_len(), 13);
+}
+
+fn bandit_cfg() -> BanditCfg {
+    BanditCfg {
+        n_features: K,
+        n_arms: 2,
+        policy: BanditPolicy::Linucb,
+        alpha: 1.0,
+        epsilon: 0.1,
+        l2: 1.0,
+        fit_intercept: true,
+        decay: decay(),
+        min_weight: 3.0,
+        seed: 7,
+        group_hash: 0,
+        slot: 0,
+        max_state_bytes: None,
+    }
+}
+
+#[test]
+fn bandit() {
+    for (policy, want_out) in [
+        (BanditPolicy::Linucb, 4),
+        (BanditPolicy::Lints, 4),
+        (BanditPolicy::EpsGreedy, 5),
+    ] {
+        let cfg = BanditCfg {
+            policy,
+            ..bandit_cfg()
+        };
+        let m = Bandit::new(cfg).unwrap();
+        assert_eq!(m.n_features(), K);
+        assert_eq!(m.n_targets(), 2, "reward and arm index");
+        assert_eq!(m.n_outputs(), want_out);
+        let r = probe_with(m, 2, Some(&Bandit::n_eff));
+        assert_eq!(r.kind, "bandit");
+        assert_eq!(r.pred_len, want_out);
+        assert!(r.roundtrips, "{policy:?}");
+    }
+}
+
+#[test]
+fn bandit_predict_is_the_step() {
+    for policy in [
+        BanditPolicy::Linucb,
+        BanditPolicy::Lints,
+        BanditPolicy::EpsGreedy,
+    ] {
+        predict_is_the_step_without_the_step(
+            move || {
+                Bandit::new(BanditCfg {
+                    policy,
+                    ..bandit_cfg()
+                })
+                .unwrap()
+            },
+            2,
+            true,
+        );
+    }
+}
+
+fn half_space_trees_cfg() -> HalfSpaceTreesCfg {
+    HalfSpaceTreesCfg {
+        n_features: K,
+        n_trees: 4,
+        height: 4,
+        window_rows: 20,
+        limits: vec![(-3.0, 3.0); K],
+        min_weight: 0.0,
+        seed: 11,
+        group_hash: 0,
+        slot: 0,
+        max_state_bytes: None,
+    }
+}
+
+#[test]
+fn half_space_trees() {
+    let m = HalfSpaceTrees::new(half_space_trees_cfg()).unwrap();
+    assert_eq!(m.n_features(), K);
+    assert_eq!(m.n_targets(), 0);
+    assert_eq!(m.n_outputs(), 1);
+    let r = probe_with(m, 0, Some(&HalfSpaceTrees::n_eff));
+    assert_eq!(r.kind, "half_space_trees");
+    assert_eq!(r.pred_len, 1);
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 40.0]);
+    assert_eq!(r.after_gap, r.before_gap + 1.0, "no decay over a gap");
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn half_space_trees_predict_is_the_step() {
+    predict_is_the_step_without_the_step(
+        || HalfSpaceTrees::new(half_space_trees_cfg()).unwrap(),
+        0,
+        false,
+    );
+}
+
+fn random_cut_forest_cfg() -> RandomCutForestCfg {
+    RandomCutForestCfg {
+        n_features: K,
+        n_trees: 4,
+        tree_size: 16,
+        shingle_size: 2,
+        min_weight: 0.0,
+        seed: 13,
+        group_hash: 0,
+        slot: 0,
+        max_state_bytes: None,
+    }
+}
+
+#[test]
+fn random_cut_forest() {
+    let m = RandomCutForest::new(random_cut_forest_cfg()).unwrap();
+    assert_eq!(m.n_features(), K);
+    assert_eq!(m.n_targets(), 0);
+    assert_eq!(m.n_outputs(), 1);
+    let r = probe_with(m, 0, Some(&RandomCutForest::n_eff));
+    assert_eq!(r.kind, "random_cut_forest");
+    assert_eq!(r.pred_len, 1);
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 40.0]);
+    assert_eq!(r.after_gap, r.before_gap + 1.0, "no decay over a gap");
+    assert!(r.roundtrips);
+    assert!(!r.lags_are_a_no_op, "shingle_size = 2 keeps a lag buffer");
+}
+
+#[test]
+fn random_cut_forest_predict_is_the_step() {
+    for shingle_size in [1, 2] {
+        predict_is_the_step_without_the_step(
+            move || {
+                RandomCutForest::new(RandomCutForestCfg {
+                    shingle_size,
+                    ..random_cut_forest_cfg()
+                })
+                .unwrap()
+            },
+            0,
+            false,
+        );
+    }
 }

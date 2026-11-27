@@ -869,6 +869,12 @@ N_EFF_EXEMPT = {
         "learned"
     ),
     "tdigest": "whose merging digest cannot take a row out again",
+    "half_space_trees": (
+        "which forgets by tumbling its reference and latest windows every window_rows learned rows"
+    ),
+    "random_cut_forest": (
+        "which forgets by evicting the oldest point once a tree holds tree_size points"
+    ),
 }
 
 #: The kinds with a rate for a parameter (``hawkes``' ``kernel_decays``, per
@@ -884,6 +890,7 @@ N_EFF_RATES = frozenset({"hawkes"})
 #: saying nothing about a unit, is not.
 N_EFF_ARGS: dict[str, dict] = {
     "ew_class": {"label": "lab"},
+    "bandit": {"arm": "lab"},
     "corrchange": {"scalar": True},
     "kalman": {"coef_half_life": float("inf")},
     # Its periods as durations, as a temporal clock reads them.

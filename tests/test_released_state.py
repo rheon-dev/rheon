@@ -106,6 +106,9 @@ INTRODUCED = {
     "spectral": "2.1.0",
     "isotonic": "2.1.0",
     "vector_ar": "2.1.0",
+    "bandit": "2.1.0",
+    "half_space_trees": "2.1.0",
+    "random_cut_forest": "2.1.0",
 }
 
 #: The workload's specs that need a parameter newer than a release, by the

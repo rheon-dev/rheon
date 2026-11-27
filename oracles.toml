@@ -7087,6 +7087,46 @@ ideal = 0.0
 n = 50
 floor = 1e-12
 
+[group."bandit.mabwiser"]
+tests = [
+    "tests/test_bandit.py::TestFiftySeeds::test_fifty_seeds_against_mabwiser[eps_greedy_scores]",
+    "tests/test_bandit.py::TestFiftySeeds::test_fifty_seeds_against_mabwiser[linucb_intercept]",
+    "tests/test_bandit.py::TestFiftySeeds::test_fifty_seeds_against_mabwiser[linucb_no_intercept]",
+]
+oracles = { "mabwiser" = "2.7.4" }
+dataset = ""
+
+[group."half_space_trees.river"]
+tests = [
+    "tests/test_half_space_trees.py::TestFiftySeeds::test_fifty_seeds_against_river",
+]
+oracles = { "river" = "0.26.1" }
+dataset = ""
+
+[case."bandit.mabwiser.eps_greedy_scores"]
+ideal = 0.0
+n = 50
+floor = 5e-12
+
+[case."bandit.mabwiser.linucb_intercept"]
+ideal = 0.0
+n = 50
+floor = 5e-12
+
+[case."bandit.mabwiser.linucb_no_intercept"]
+ideal = 0.0
+n = 50
+floor = 5e-12
+
+[case."half_space_trees.river.auc_gap"]
+ideal = 0.0
+n = 50
+floor = 0.01
+
+[case."half_space_trees.river.roc_auc"]
+ideal = 1.0
+n = 50
+
 # --- raises
 
 [[raised]]

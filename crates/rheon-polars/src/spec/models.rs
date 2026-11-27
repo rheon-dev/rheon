@@ -2006,6 +2006,72 @@ impl Spec {
                     feature_sets.as_deref(),
                 ));
             }
+            ModelKind::Bandit(b) => {
+                super::bandit::validate_bandit(self, b, no);
+                if b.arms.len() >= 2 && super::bandit::policy_of(b.policy.as_deref()).is_ok() {
+                    let decay = self
+                        .decays()
+                        .ok()
+                        .and_then(|d| d.first().map(|(_, d)| *d))
+                        .unwrap_or(rheon_core::Decay::Halflife(1.0));
+                    no.take(
+                        super::bandit::bandit_cfg(self, decay, 0, 0)
+                            .map(|_| ())
+                            .map_err(|e| {
+                                format!(
+                                    "spec {:?}: {}",
+                                    self.name,
+                                    e.trim_start_matches("Bandit: ")
+                                        .trim_start_matches("bandit: ")
+                                )
+                            }),
+                    );
+                }
+            }
+            ModelKind::HalfSpaceTrees(_) => {
+                if self.half_life.is_some() || self.lam.is_some() {
+                    no.refuse(format!(
+                        "spec {:?}: {decay_key} does not apply to half_space_trees, which forgets \
+                         by tumbling its reference and latest windows every window_rows learned \
+                         rows. Leave {decay_key} out.",
+                        self.name
+                    ));
+                }
+                no.take(
+                    super::anomaly::half_space_trees_cfg(self, 0, 0)
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!(
+                                "spec {:?}: {}",
+                                self.name,
+                                e.trim_start_matches("HalfSpaceTrees: ")
+                                    .trim_start_matches("half_space_trees: ")
+                            )
+                        }),
+                );
+            }
+            ModelKind::RandomCutForest(_) => {
+                if self.half_life.is_some() || self.lam.is_some() {
+                    no.refuse(format!(
+                        "spec {:?}: {decay_key} does not apply to random_cut_forest, which \
+                         forgets by evicting the oldest point once a tree holds tree_size points. \
+                         Leave {decay_key} out.",
+                        self.name
+                    ));
+                }
+                no.take(
+                    super::anomaly::random_cut_forest_cfg(self, 0, 0)
+                        .map(|_| ())
+                        .map_err(|e| {
+                            format!(
+                                "spec {:?}: {}",
+                                self.name,
+                                e.trim_start_matches("RandomCutForest: ")
+                                    .trim_start_matches("random_cut_forest: ")
+                            )
+                        }),
+                );
+            }
         }
     }
 }

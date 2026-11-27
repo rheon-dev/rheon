@@ -83,6 +83,15 @@ impl AnyModel {
             ModelState::Spectral(_) => Ok(AnyModel::Spectral(Box::new(
                 rheon_core::Spectral::restore(s)?,
             ))),
+            ModelState::Bandit(_) => {
+                Ok(AnyModel::Bandit(Box::new(rheon_core::Bandit::restore(s)?)))
+            }
+            ModelState::HalfSpaceTrees(_) => Ok(AnyModel::HalfSpaceTrees(Box::new(
+                rheon_core::HalfSpaceTrees::restore(s)?,
+            ))),
+            ModelState::RandomCutForest(_) => Ok(AnyModel::RandomCutForest(Box::new(
+                rheon_core::RandomCutForest::restore(s)?,
+            ))),
             // A kind only rheon-core builds, such as `ew_cov`'s bare running
             // sums: its name is the code's, so the message does not print it.
             _ => Err(StateError::Invalid(format!(

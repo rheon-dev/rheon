@@ -498,7 +498,8 @@ impl<'a> Sink<'a> {
             (Acc::Flat(col), Source::Label(_)) => {
                 let classes: &[String] = match &spec.model {
                     ModelKind::EwClass { classes, .. } => classes,
-                    _ => unreachable!("only ew_class emits a label"),
+                    ModelKind::Bandit(b) => &b.arms,
+                    _ => unreachable!("only ew_class and bandit emit a label"),
                 };
                 col.finish_label_array_boxed(classes)
             }

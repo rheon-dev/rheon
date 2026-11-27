@@ -406,11 +406,13 @@ fn source_row(layout: Layout<'_>, j: usize) -> usize {
 fn label_column(
     chunk: &ArrowChunk,
     spec: &Spec,
+    role: &str,
+    list_name: &str,
     name: &str,
     classes: &[String],
     layout: Layout<'_>,
 ) -> PolarsResult<Vec<f64>> {
-    let arr = chunk.str(spec, "label", name)?;
+    let arr = chunk.str(spec, role, name)?;
     let mut v: Vec<f64> = Vec::with_capacity(arr.len());
     let mut last: Option<(&str, f64)> = None;
     for (j, value) in arr.iter().enumerate() {
@@ -425,10 +427,10 @@ fn label_column(
                         i as f64
                     }
                     None => polars_bail!(ComputeError:
-                        "spec {:?}: label column {:?} has the value {:?} at row {} (counting \
-                         from 0), which is not one of the classes {:?}. List every value the \
-                         column can hold in classes, or set the label to null on rows the model \
-                         should predict without learning.",
+                        "spec {:?}: {role} column {:?} has the value {:?} at row {} (counting \
+                         from 0), which is not one of the {list_name} {:?}. List every value the \
+                         column can hold in {list_name}, or set the {role} to null on rows the \
+                         model should predict without learning.",
                         spec.name, name, val, chunk.rows().at(j), classes
                     ),
                 },
@@ -483,7 +485,9 @@ fn extract(
         if spec.model.compares().is_some() {
             return Ok(Vec::new());
         }
-        map_maybe_par(spec.targets.defs(), par, |t| {
+        let indexed: Vec<(usize, &crate::targets::TargetDef)> =
+            spec.targets.defs().iter().enumerate().collect();
+        map_maybe_par(&indexed, par, |&(ti, t)| {
             let c = t.column.as_str();
             // A formula target is not known at its row: the bank's window
             // core resolves it later (docs/PLAN.md task 104), so here it is
@@ -491,7 +495,11 @@ fn extract(
             if t.is_formula() || optional(c) {
                 Ok(vec![f64::NAN; chunk.height()])
             } else if let ModelKind::EwClass { classes, .. } = &spec.model {
-                label_column(chunk, spec, c, classes, layout)
+                label_column(chunk, spec, "label", "classes", c, classes, layout)
+            } else if let ModelKind::Bandit(b) = &spec.model
+                && ti == 1
+            {
+                label_column(chunk, spec, "arm", "arms", c, &b.arms, layout)
             } else {
                 // `bocpd`'s hazard column rides in this slot and is not a
                 // target: a missing one is named as what it is (review
@@ -501,6 +509,7 @@ fn extract(
                         hazard_col: Some(_),
                         ..
                     } => "hazard",
+                    ModelKind::Bandit(_) => "reward",
                     _ => "target",
                 };
                 let v = f64_column(chunk, spec, role, c, layout)?;
@@ -744,6 +753,17 @@ fn extract(
                          from 0), but rcov takes a weight of 0 or 1 only, since a realized \
                          covariance sums returns rather than weighing them. Set the weight to 1 \
                          on a row that is a return and to 0 on one that is not.",
+                        spec.name, c, v[j], chunk.rows().at(source_row(layout, j))
+                    );
+                }
+                if matches!(spec.model, ModelKind::RandomCutForest(_))
+                    && let Some(j) = v.iter().position(|&f| usable(f) && f != 0.0 && f != 1.0)
+                {
+                    polars_bail!(ComputeError:
+                        "spec {:?}: weight column {:?} has the value {} at row {} (counting \
+                         from 0), but random_cut_forest takes a weight of 0 or 1 only, since each \
+                         tree inserts whole points into a bounded sample. Set the weight to 1 on \
+                         a row to insert and to 0 on a score-only row.",
                         spec.name, c, v[j], chunk.rows().at(source_row(layout, j))
                     );
                 }
@@ -1288,7 +1308,8 @@ fn process<'s>(
                     // ended (task 333). Each names the closed span, whose
                     // session value the stream still holds (task 334).
                     let held = stream.take_notices(spec);
-                    *stream = Stream::new(spec).expect("the spec built this stream once");
+                    *stream = Stream::new_for(spec, crate::stream::draw_group_hash(spec, key))
+                        .expect("the spec built this stream once");
                     stream.carry_notices(held);
                     // The group's reservation is the one it was given when
                     // the bank first saw it (`reserve_refits`).
@@ -1886,6 +1907,8 @@ pub struct CoefField {
     pub state: Option<usize>,
     /// The `ew_class` class whose means the slot holds.
     pub class: Option<String>,
+    /// The `bandit` arm whose coefficients the slot holds.
+    pub arm: Option<String>,
     /// `intercept`, a feature name, or `level` / `trend` for `holt`.
     pub term: String,
 }
@@ -3048,10 +3071,15 @@ impl Bank {
         let keys = self.sorted_keys(spec, group)?;
         let (s, states) = (&self.specs[spec], &self.states[spec]);
         let layout = DataSummary::layout(s);
-        let keep = |_ci: usize, role: Role| -> Option<bool> {
+        let keep = |ci: usize, role: Role| -> Option<bool> {
             match role {
                 Role::Target if s.model.is_unsupervised() => None,
                 Role::Target if matches!(s.model, ModelKind::EwClass { .. }) => Some(false),
+                Role::Target
+                    if matches!(s.model, ModelKind::Bandit(_)) && ci == s.features.len() + 1 =>
+                {
+                    Some(false)
+                }
                 _ => Some(true),
             }
         };
@@ -3520,7 +3548,8 @@ impl Bank {
                     None => {
                         let key = raw.to_key();
                         let mut stream =
-                            Stream::new(spec).map_err(|e| polars_err!(ComputeError: "{}", e))?;
+                            Stream::new_for(spec, crate::stream::draw_group_hash(spec, &key))
+                                .map_err(|e| polars_err!(ComputeError: "{}", e))?;
                         reserve_refits(
                             spec,
                             &key,
@@ -3813,7 +3842,10 @@ impl Bank {
                     let s: &Stream = if seg == 0 {
                         stream
                     } else {
-                        spare.insert(Stream::new(spec).ok()?)
+                        spare.insert(
+                            Stream::new_for(spec, crate::stream::draw_group_hash(spec, key))
+                                .ok()?,
+                        )
                     };
                     let run = &idx[start..end];
                     if let Some((bytes, cadence, row)) = s.window_prepass(
@@ -4747,7 +4779,8 @@ impl Bank {
         let states = std::mem::take(&mut file.states);
         for (si, groups) in states.into_iter().enumerate() {
             for (key, st) in groups {
-                let stream = Stream::restore_owned(&bank.specs[si], st).map_err(|e| {
+                let gh = crate::stream::draw_group_hash(&bank.specs[si], &key);
+                let stream = Stream::restore_owned_for(&bank.specs[si], gh, st).map_err(|e| {
                     // The where of every refusal a stream's restore says.
                     let spec = &bank.specs[si];
                     let group = group_label(spec, &key);

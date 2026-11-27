@@ -81,6 +81,8 @@ VARIANTS["kmeans"] = ("kmeans", {"warm_rows": 20})
 VARIANTS["hmm"] = ("hmm", {"warm_rows": 20})
 VARIANTS["rcov"] = ("rcov", {"block_rows": 50})
 VARIANTS["corrchange_scalar"] = ("corrchange", {"scalar": True, "half_life": HALF_LIFE})
+VARIANTS["half_space_trees"] = ("half_space_trees", {"window_rows": 40})
+VARIANTS["random_cut_forest"] = ("random_cut_forest", {"n_trees": 8, "tree_size": 32})
 
 # With the refit of its first rows, on by default (task 277).
 VARIANTS["sgd_huber"] = ("sgd", {"loss": "huber"})
@@ -114,6 +116,10 @@ NO_FEATURES = frozenset(
 #: The kinds that read exactly one feature, so have no order of features:
 #: ``isotonic``'s target is a function of one column.
 ONE_FEATURE = frozenset({"isotonic"})
+#: The randomized tree kinds whose Philox feature-split draws index the
+#: cumulative feature spans in ``features`` order, so reversing ``features``
+#: draws a different random tree.
+RANDOM_FEATURE_ORDER = frozenset({"half_space_trees", "random_cut_forest"})
 #: The kinds whose clock parameters are rates, which have no unit on a
 #: temporal clock: ``hawkes``' ``kernel_decays`` is refused there, by name.
 RATES = frozenset({"hawkes"})
@@ -208,6 +214,8 @@ def frame(variant: str, df: pl.DataFrame | None = None) -> pl.DataFrame:
         df = df.with_columns(y=pl.col("y").abs().round())
     if kind == "ew_class":
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
+    if kind == "bandit":
+        df = df.with_columns(arm=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
     if kind == "garch":
         df = df.with_columns(y=garch_returns(df.height))
     return df
@@ -462,7 +470,7 @@ def test_a_weight_of_ones_is_no_weight(variant: str):
     plain = run(variant)
     ones = run(variant, STREAM.with_columns(one=pl.lit(1.0)), weight="one")
     assert_live(plain, variant)
-    if variant != "rcov":  # rcov takes a weight of 0 or 1 only
+    if variant not in ("rcov", "random_cut_forest"):  # 0 or 1 weights only
         assert_differs(plain, run(variant, weight="w"), f"{variant}: a weight")
     assert_same(plain, ones, label=f"{variant}: weight 1 vs none")
 
@@ -599,7 +607,8 @@ FEATURE_PAIR = {"pca": ("x0", "y")}
 
 
 @pytest.mark.parametrize(
-    ("variant", "seed"), _seeded([k for k in KINDS if k not in NO_FEATURES | ONE_FEATURE])
+    ("variant", "seed"),
+    _seeded([k for k in KINDS if k not in NO_FEATURES | ONE_FEATURE | RANDOM_FEATURE_ORDER]),
 )
 def test_the_feature_order_moves_no_number(variant: str, seed: int):
     key = "columns" if variant == "audit" else "features"

@@ -96,14 +96,14 @@ def test_the_readme_min_weight_table_is_what_the_bank_resolves():
                 got = resolved(spec)["stream"]["min_weight"]
                 assert got == [want] * len(got) and got, (name, k, intercept, got, want)
                 checked += 1
-    # 10 models by the first rule at 2 counts x 2 intercepts, 15 others at
+    # 10 models by the first rule at 2 counts x 2 intercepts, 18 others at
     # 2 counts, `isotonic` at its one feature, and `holt`, `seqtest`,
     # `audit`, `hawkes`, `garch`, `dcc`, `realized`, `power_variation`,
     # `tdigest`, `ddsketch` and `spectral`,
     # which take no features (an audit's are its `columns`; a hawkes node's
     # events, a tdigest's or ddsketch's columns, a spectrum's series and the
     # others' returns are their targets), at one.
-    assert checked == 10 * 4 + 15 * 2 + 1 + 11
+    assert checked == 10 * 4 + 18 * 2 + 1 + 11
 
 
 def test_the_readme_readiness_gate_defaults_are_what_the_bank_resolves():
