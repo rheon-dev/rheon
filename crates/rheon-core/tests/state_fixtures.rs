@@ -1786,7 +1786,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 228] = [
+    const FORMS: [(&str, &[&str]); 234] = [
         // PLAN 569, at schema 72: `ftrl`'s scaler and warm-up under
         // `standardize`, past the warm-up's count and inside it.
         ("ftrl_standardized", &["model", "Ftrl", "scaler", "m"]),
@@ -2323,6 +2323,42 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("vector_ar_select", &["model", "VectorAr", "last", "chosen"]),
         ("vector_ar_window", &["model", "VectorAr", "fit", "win"]),
         ("vector_ar_filling", &["model", "VectorAr", "ring"]),
+        // `audit` HLL++ and sliding-window HLL++ (PLAN 509): plain registers,
+        // sliding row-window Pareto entries, and sliding clock-window entries
+        // and place.
+        ("audit_hll", &["model", "Audit", "cfg", "distinct"]),
+        (
+            "audit_hll",
+            &["model", "Audit", "hll", "sketches", "Plain", "0"],
+        ),
+        ("audit_hll_rows", &["model", "Audit", "cfg", "distinct"]),
+        (
+            "audit_hll_rows",
+            &[
+                "model",
+                "Audit",
+                "hll",
+                "sketches",
+                "SlidingRows",
+                "cols",
+                "0",
+                "entries",
+            ],
+        ),
+        ("audit_hll_clock", &["model", "Audit", "cfg", "distinct"]),
+        (
+            "audit_hll_clock",
+            &[
+                "model",
+                "Audit",
+                "hll",
+                "sketches",
+                "SlidingClock",
+                "cols",
+                "0",
+                "entries",
+            ],
+        ),
     ];
     // Each refit's first stamp, written only under a span (task 538): in
     // glm on the summed clock, in expectile an integer stamp.

@@ -44,16 +44,53 @@ pub fn audit_cfg(spec: &Spec) -> Result<rheon_core::AuditCfg, String> {
     let ModelKind::Audit {
         pairs,
         distinct_cap,
+        distinct_precision,
+        distinct_window_rows,
+        distinct_window_size,
+        closed,
+        max_state_bytes,
     } = &spec.model
     else {
         return Err(not_a(spec, "audit_cfg", "audit"));
     };
+    let precision = match *distinct_precision {
+        None => None,
+        Some(p) => {
+            if !(rheon_core::MIN_DISTINCT_PRECISION as usize
+                ..=rheon_core::MAX_DISTINCT_PRECISION as usize)
+                .contains(&p)
+            {
+                return Err(format!(
+                    "audit: distinct_precision must be from {} to {}, but it is {p}. Set \
+                     distinct_precision to an integer from {} to {} (such as 12), or leave it out.",
+                    rheon_core::MIN_DISTINCT_PRECISION,
+                    rheon_core::MAX_DISTINCT_PRECISION,
+                    rheon_core::MIN_DISTINCT_PRECISION,
+                    rheon_core::MAX_DISTINCT_PRECISION,
+                ));
+            }
+            Some(p as u8)
+        }
+    };
+    let has_distinct = precision.is_some()
+        || distinct_window_rows.is_some()
+        || distinct_window_size.is_some()
+        || *closed != crate::spec::ModelClosed::Right
+        || max_state_bytes.is_some();
+    let distinct = has_distinct.then(|| rheon_core::AuditDistinctCfg {
+        precision,
+        window_rows: *distinct_window_rows,
+        window_clock: distinct_window_size.as_ref().map(Span::value),
+        closed: closed.edge(),
+        max_state_bytes: *max_state_bytes,
+    });
     let cfg = rheon_core::AuditCfg {
         n_columns: spec.features.len(),
         pairs: pairs.unwrap_or(false),
         distinct_cap: distinct_cap.unwrap_or(rheon_core::DISTINCT_CAP),
         gap_cap: spec.gap_cap.as_ref().map(Span::value),
         has_clock: spec.clock.is_some(),
+        distinct,
     };
     cfg.validate()?;
     Ok(cfg)

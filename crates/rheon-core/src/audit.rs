@@ -105,13 +105,35 @@
 //! recompressing their centroids together. A run or a lag pair that would
 //! have spanned the two streams is not counted, since they were not one.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::{BuildHasherDefault, Hasher};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{INPUT_BOUND, ModelState, OnlineModel, State, StateError, Step, check_schema, comp};
+use crate::clock_span::{DEFAULT_STATE_BYTES, HeldCap, Place, check_max_state_bytes};
+use crate::{
+    INPUT_BOUND, ModelState, OnlineModel, Stamp, State, StateError, Step, WindowClosed,
+    check_schema, comp,
+};
+
+#[path = "audit/hll.rs"]
+pub mod hll;
+#[path = "audit/hll_tables.rs"]
+mod hll_tables;
+
+pub use hll::{
+    HLL_CLOCK_ENTRY_BYTES, HLL_ROW_ENTRY_BYTES, Hll, MAX_DISTINCT_PRECISION,
+    MIN_DISTINCT_PRECISION, splitmix64,
+};
+
+/// Base per-column bytes of an `audit` state excluding the counter map and
+/// optional HLL++ sketch (~200 t-digest centroids + 256 buffer + moments/lag).
+pub const AUDIT_COL_BASE_BYTES: u64 = 5_504;
+
+/// Bytes per column pair when `pairs` is enabled.
+pub const AUDIT_PAIR_BYTES: u64 = 72;
 
 /// The NaN the plumbing writes for a null, so `audit` can count a null
 /// apart from a NaN the data holds. A quiet NaN with a payload no arithmetic
@@ -154,6 +176,35 @@ const MAD_SCALE: f64 = 1.482_602_218_505_602;
 /// values on a grid, `2ε` of each value's magnitude, four values.
 pub const STEP_ROUNDING: f64 = 8.0;
 
+/// Configuration for `audit`'s optional HyperLogLog++ distinct-count sketch,
+/// optional sliding window, and per-group state byte cap.
+///
+/// Carried as a single optional trailing field on [`AuditCfg`] (omitted when
+/// `None`) so audits without HLL++ or `max_state_bytes` keep byte-identical
+/// serialization in both named and compact encodings.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AuditDistinctCfg {
+    /// HyperLogLog++ precision `p` in `8..=16` (`2^p` registers per column).
+    /// `None` when only `max_state_bytes` was set.
+    #[serde(default)]
+    pub precision: Option<u8>,
+    /// Count distinct values over the last this many positive-weight rows.
+    /// Requires `precision`; mutually exclusive with `window_clock`.
+    #[serde(default)]
+    pub window_rows: Option<usize>,
+    /// Count distinct values over the last this many clock units.
+    /// Requires `precision`; mutually exclusive with `window_rows`.
+    #[serde(default, with = "crate::humanfloat::opt_f64_or_tag")]
+    pub window_clock: Option<f64>,
+    /// Which edge of `window_clock` holds a row exactly one window old:
+    /// `Right` (default) or `Both`.
+    #[serde(default)]
+    pub closed: WindowClosed,
+    /// Per-group byte cap for the audit's state (default 256 KB, ceiling 64 MiB).
+    #[serde(default)]
+    pub max_state_bytes: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuditCfg {
     pub n_columns: usize,
@@ -169,9 +220,97 @@ pub struct AuditCfg {
     /// Whether the stream has a clock column; without one every step is 1
     /// and nothing is said about the clock.
     pub has_clock: bool,
+    /// Optional HyperLogLog++ sketch, sliding window, and state cap. Absent
+    /// and skipped when neither HLL++ nor `max_state_bytes` is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distinct: Option<AuditDistinctCfg>,
 }
 
 impl AuditCfg {
+    /// Configured HLL++ precision `p` (`8..=16`), or `None` when HLL++ is off.
+    #[inline]
+    pub fn distinct_precision(&self) -> Option<u8> {
+        self.distinct.as_ref().and_then(|d| d.precision)
+    }
+
+    /// Configured sliding-HLL row window, if any.
+    #[inline]
+    pub fn distinct_window_rows(&self) -> Option<usize> {
+        self.distinct.as_ref().and_then(|d| d.window_rows)
+    }
+
+    /// Configured sliding-HLL clock window span, if any.
+    #[inline]
+    pub fn distinct_window_clock(&self) -> Option<f64> {
+        self.distinct.as_ref().and_then(|d| d.window_clock)
+    }
+
+    /// Configured clock-window boundary convention (`Right` default).
+    #[inline]
+    pub fn distinct_closed(&self) -> WindowClosed {
+        self.distinct
+            .as_ref()
+            .map_or(WindowClosed::Right, |d| d.closed)
+    }
+
+    /// Effective per-group byte cap (default 256 KB).
+    #[inline]
+    pub fn cap(&self) -> u64 {
+        self.distinct
+            .as_ref()
+            .and_then(|d| d.max_state_bytes)
+            .unwrap_or(DEFAULT_STATE_BYTES)
+    }
+
+    /// Whether state bytes are enforced against `max_state_bytes` (whenever
+    /// HLL++ is enabled or `max_state_bytes` is explicitly provided).
+    #[inline]
+    pub fn enforces_state_cap(&self) -> bool {
+        self.distinct
+            .as_ref()
+            .is_some_and(|d| d.precision.is_some() || d.max_state_bytes.is_some())
+    }
+
+    /// Fixed/bounded bytes of `audit`'s non-HLL state (counters, t-digest,
+    /// moments, and pairs).
+    pub fn base_audit_bytes(&self) -> u64 {
+        let k = self.n_columns as u64;
+        let per_col = (self.distinct_cap as u64)
+            .saturating_mul(16)
+            .saturating_add(AUDIT_COL_BASE_BYTES);
+        let pairs = if self.pairs {
+            k.saturating_mul(k.saturating_sub(1)) / 2 * AUDIT_PAIR_BYTES
+        } else {
+            0
+        };
+        k.saturating_mul(per_col).saturating_add(pairs)
+    }
+
+    /// Fixed bytes of the HLL++ register structures across all columns
+    /// (excluding live Pareto entries of a sliding window).
+    pub fn hll_fixed_bytes(&self) -> u64 {
+        let Some(p) = self.distinct_precision() else {
+            return 0;
+        };
+        if !(MIN_DISTINCT_PRECISION..=MAX_DISTINCT_PRECISION).contains(&p) {
+            return 0;
+        }
+        let k = self.n_columns as u64;
+        let per_col =
+            if self.distinct_window_rows().is_some() || self.distinct_window_clock().is_some() {
+                8u64 << p
+            } else {
+                1u64 << p
+            };
+        k.saturating_mul(per_col)
+    }
+
+    /// Total fixed state bytes of this `audit` configuration.
+    pub fn fixed_state_bytes(&self) -> u64 {
+        self.base_audit_bytes()
+            .saturating_add(self.hll_fixed_bytes())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         let mut no = crate::Refusals::new();
         if self.n_columns == 0 {
@@ -195,6 +334,93 @@ impl AuditCfg {
                 "audit: gap_cap must be finite and above 0, but it is {c}. Set gap_cap to the \
                  shortest clock step to count as a gap, in clock units."
             ));
+        }
+        if let Some(d) = &self.distinct {
+            let mut precision_ok = true;
+            if let Some(p) = d.precision
+                && !(MIN_DISTINCT_PRECISION..=MAX_DISTINCT_PRECISION).contains(&p)
+            {
+                precision_ok = false;
+                no.refuse(format!(
+                    "audit: distinct_precision must be from {MIN_DISTINCT_PRECISION} to \
+                     {MAX_DISTINCT_PRECISION}, but it is {p}. Set distinct_precision to an \
+                     integer from {MIN_DISTINCT_PRECISION} to {MAX_DISTINCT_PRECISION} (such as \
+                     12), or leave it out."
+                ));
+            }
+            if let Some(n) = d.window_rows {
+                if d.precision.is_none() {
+                    no.refuse(
+                        "audit: distinct_window_rows applies only when distinct_precision is set, \
+                         since it windows the HyperLogLog++ distinct-count sketch alone. Set \
+                         distinct_precision, or leave distinct_window_rows out.",
+                    );
+                }
+                if n == 0 {
+                    no.refuse(
+                        "audit: distinct_window_rows must be at least 1, but it is 0. Set \
+                         distinct_window_rows to how many recent rows to count distinct values \
+                         over, or leave it out.",
+                    );
+                }
+            }
+            if let Some(w) = d.window_clock {
+                if d.precision.is_none() {
+                    no.refuse(
+                        "audit: distinct_window_size applies only when distinct_precision is set, \
+                         since it windows the HyperLogLog++ distinct-count sketch alone. Set \
+                         distinct_precision, or leave distinct_window_size out.",
+                    );
+                }
+                if !(w.is_finite() && w > 0.0) {
+                    no.refuse(format!(
+                        "audit: distinct_window_size must be finite and above 0, but it is {w}. \
+                         Set distinct_window_size to the clock span to count distinct values \
+                         over, or leave it out."
+                    ));
+                }
+            }
+            if d.window_rows.is_some() && d.window_clock.is_some() {
+                no.refuse(
+                    "audit: distinct_window_rows and distinct_window_size are two windows, and \
+                     the distinct-count sketch holds one. Leave one of them out.",
+                );
+            }
+            if d.closed != WindowClosed::Right && d.window_clock.is_none() {
+                no.refuse(
+                    "audit: closed = \"both\" says which edge of distinct_window_size keeps the \
+                     row exactly one window old, but distinct_window_size is not set. Set \
+                     distinct_window_size, or leave closed out.",
+                );
+            }
+            let cap_ok = check_max_state_bytes("audit", d.max_state_bytes).is_ok();
+            no.take(check_max_state_bytes("audit", d.max_state_bytes));
+            if precision_ok && cap_ok && self.enforces_state_cap() {
+                let cap = self.cap();
+                let bytes = self.fixed_state_bytes();
+                if bytes > cap {
+                    let cap_label = if d.max_state_bytes.is_some() {
+                        format!("max_state_bytes of {cap}")
+                    } else {
+                        format!("the default max_state_bytes of {cap}")
+                    };
+                    if d.precision.is_some() {
+                        no.refuse(format!(
+                            "audit: state takes {bytes} bytes ({} columns, distinct_cap = {}), \
+                             past {cap_label}. Lower distinct_precision or distinct_cap, or raise \
+                             max_state_bytes.",
+                            self.n_columns, self.distinct_cap
+                        ));
+                    } else {
+                        no.refuse(format!(
+                            "audit: state takes {bytes} bytes ({} columns, distinct_cap = {}), \
+                             past {cap_label}. Lower distinct_cap, audit fewer columns, or raise \
+                             max_state_bytes.",
+                            self.n_columns, self.distinct_cap
+                        ));
+                    }
+                }
+            }
         }
         no.finish()
     }
@@ -507,10 +733,7 @@ impl Hasher for KeyHasher {
 
     #[inline]
     fn write_u64(&mut self, k: u64) {
-        let mut z = k.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        self.0 = z ^ (z >> 31);
+        self.0 = splitmix64(k);
     }
 
     #[inline]
@@ -1045,7 +1268,7 @@ impl ColumnAudit {
         self.run = 0;
     }
 
-    fn report(&self) -> ColumnReport {
+    fn report(&self, approx_distinct: Option<f64>) -> ColumnReport {
         let m = &self.moments;
         let usable = m.n > 0;
         let (median, mad) = if !usable {
@@ -1085,6 +1308,7 @@ impl ColumnAudit {
             mad,
             robust_z,
             distinct: (!self.counts.over).then_some(self.counts.counts.len() as u64),
+            approx_distinct,
             top_value: top.map_or(f64::NAN, |t| t.0),
             top_count: top.map_or(0, |t| t.1),
             second_count: top.map_or(0, |t| t.2),
@@ -1149,6 +1373,9 @@ pub struct ColumnReport {
     pub robust_z: f64,
     /// The distinct usable values, `None` past `distinct_cap`.
     pub distinct: Option<u64>,
+    /// HyperLogLog++ estimated distinct usable values (over the stream or the
+    /// active sliding window), `None` when `distinct_precision` is not set.
+    pub approx_distinct: Option<f64>,
     pub top_value: f64,
     /// The most repeated value's count, at most `count_error` short of the
     /// truth, and the next value's.
@@ -1214,6 +1441,172 @@ pub struct ClockReport {
     pub max_step: f64,
 }
 
+/// The per-column HyperLogLog++ sketches held by an [`Audit`]: plain,
+/// row-windowed sliding HLL++, or clock-windowed sliding HLL++.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+enum HllSketches {
+    Plain(Vec<Hll>),
+    SlidingRows {
+        cols: Vec<hll::SlidingHll<u64>>,
+        row_count: u64,
+    },
+    SlidingClock {
+        cols: Vec<hll::SlidingHll<Stamp>>,
+        place: Place,
+        last_stamp: Option<Stamp>,
+        #[serde(default)]
+        on_rows: bool,
+    },
+}
+
+/// Optional HLL++ and runtime cap state stored as a single trailing optional
+/// field on [`Audit`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AuditHllState {
+    sketches: HllSketches,
+    /// Bytes a row would have taken the state to past `max_state_bytes`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    over: Option<u64>,
+    /// Whether the half-of-cap warning has already been raised.
+    #[serde(default, skip_serializing_if = "is_false")]
+    warned: bool,
+    /// Pending half-of-cap warning not yet taken by the caller.
+    #[serde(skip)]
+    warning: Option<u64>,
+    /// Next row's stamp handed by [`OnlineModel::stamp_next`] /
+    /// [`OnlineModel::stamp_next_on_rows`]. Never persisted.
+    #[serde(skip)]
+    next_stamp: Option<(Stamp, bool)>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl PartialEq for AuditHllState {
+    fn eq(&self, other: &Self) -> bool {
+        self.sketches == other.sketches && self.over == other.over && self.warned == other.warned
+    }
+}
+
+impl AuditHllState {
+    fn new(cfg: &AuditCfg) -> Option<Self> {
+        let p = cfg.distinct_precision()?;
+        let k = cfg.n_columns;
+        let sketches = if cfg.distinct_window_rows().is_some() {
+            HllSketches::SlidingRows {
+                cols: (0..k).map(|_| hll::SlidingHll::new(p)).collect(),
+                row_count: 0,
+            }
+        } else if cfg.distinct_window_clock().is_some() {
+            HllSketches::SlidingClock {
+                cols: (0..k).map(|_| hll::SlidingHll::new(p)).collect(),
+                place: Place::default(),
+                last_stamp: None,
+                on_rows: false,
+            }
+        } else {
+            HllSketches::Plain((0..k).map(|_| Hll::new(p)).collect())
+        };
+        Some(Self {
+            sketches,
+            over: None,
+            warned: false,
+            warning: None,
+            next_stamp: None,
+        })
+    }
+
+    fn live_entry_bytes(&self) -> u64 {
+        match &self.sketches {
+            HllSketches::Plain(_) => 0,
+            HllSketches::SlidingRows { cols, .. } => {
+                let n: usize = cols.iter().map(hll::SlidingHll::live_entries).sum();
+                (n as u64).saturating_mul(HLL_ROW_ENTRY_BYTES)
+            }
+            HllSketches::SlidingClock { cols, .. } => {
+                let n: usize = cols.iter().map(hll::SlidingHll::live_entries).sum();
+                (n as u64).saturating_mul(HLL_CLOCK_ENTRY_BYTES)
+            }
+        }
+    }
+
+    fn column_estimate(&self, j: usize, p: u8) -> f64 {
+        match &self.sketches {
+            HllSketches::Plain(cols) => cols[j].count(p),
+            HllSketches::SlidingRows { cols, .. } => cols[j].count_current(),
+            HllSketches::SlidingClock { cols, .. } => cols[j].count_current(),
+        }
+    }
+
+    fn has_shape(&self, cfg: &AuditCfg) -> bool {
+        let Some(p) = cfg.distinct_precision() else {
+            return false;
+        };
+        let k = cfg.n_columns;
+        let cap = cfg.cap();
+        if self.over.is_some_and(|b| b <= cap) {
+            return false;
+        }
+        let total_bytes = cfg
+            .fixed_state_bytes()
+            .saturating_add(self.live_entry_bytes());
+        if total_bytes > cap {
+            return false;
+        }
+        match (
+            &self.sketches,
+            cfg.distinct_window_rows(),
+            cfg.distinct_window_clock(),
+        ) {
+            (HllSketches::Plain(cols), None, None) => {
+                cols.len() == k && cols.iter().all(|c| c.has_shape(p))
+            }
+            (HllSketches::SlidingRows { cols, row_count }, Some(w), None) => {
+                let cutoff = row_count.saturating_sub(w as u64);
+                cols.len() == k
+                    && cols
+                        .iter()
+                        .all(|c| c.has_shape(p, |seq| seq <= *row_count && seq > cutoff))
+            }
+            (
+                HllSketches::SlidingClock {
+                    cols,
+                    place,
+                    last_stamp,
+                    ..
+                },
+                None,
+                Some(span),
+            ) => {
+                if cols.len() != k || !hll::stamp_is_finite(place.peek(0.0)) {
+                    return false;
+                }
+                let closed = cfg.distinct_closed();
+                match *last_stamp {
+                    None => cols
+                        .iter()
+                        .all(|c| c.live_entries() == 0 && c.has_shape(p, |_| false)),
+                    Some(now) => {
+                        if !hll::stamp_is_finite(now) {
+                            return false;
+                        }
+                        let disc = std::mem::discriminant(&now);
+                        cols.iter().all(|c| {
+                            c.has_shape(p, |s| {
+                                std::mem::discriminant(&s) == disc
+                                    && hll::stamp_ord(s, now) != Ordering::Greater
+                                    && !closed.has_left(now, s, span)
+                            })
+                        })
+                    }
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Audit {
     pub cfg: AuditCfg,
@@ -1226,12 +1619,18 @@ pub struct Audit {
     clock: ClockAudit,
     /// The next row starts afresh: no step before it, no row before it.
     fresh: bool,
+    /// Optional HLL++ sketches and sliding-window state. Last and omitted
+    /// when `distinct_precision` is `None`, preserving every existing audit
+    /// fixture byte for byte in both named and compact encodings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hll: Option<AuditHllState>,
 }
 
 impl Audit {
     pub fn new(cfg: AuditCfg) -> Result<Self, String> {
         cfg.validate()?;
         let k = cfg.n_columns;
+        let hll = AuditHllState::new(&cfg);
         Ok(Self {
             columns: vec![ColumnAudit::default(); k],
             pairs: if cfg.pairs {
@@ -1243,6 +1642,7 @@ impl Audit {
             n_eff: 0.0,
             clock: ClockAudit::default(),
             fresh: true,
+            hll,
         })
     }
 
@@ -1255,21 +1655,60 @@ impl Audit {
         self.n_eff
     }
 
+    /// Total state bytes held by this audit (fixed base + HLL++ register
+    /// tables + live sliding-window entries).
+    pub fn state_bytes(&self) -> u64 {
+        let dynamic = self.hll.as_ref().map_or(0, AuditHllState::live_entry_bytes);
+        self.cfg.fixed_state_bytes().saturating_add(dynamic)
+    }
+
+    /// Raw plain HLL++ registers for column `j`, when plain (unwindowed) HLL++
+    /// is enabled.
+    pub fn hll_registers(&self, j: usize) -> Option<&[u8]> {
+        match &self.hll.as_ref()?.sketches {
+            HllSketches::Plain(cols) => cols.get(j).map(Hll::registers),
+            _ => None,
+        }
+    }
+
     /// Start a new run: the next row has no step and no row before it, so
     /// it is neither a duplicate stamp nor equal to the row before. The
     /// stream calls it where it would rebuild another model (a restart at a
-    /// step back or a session gap): an audit keeps what it has read.
+    /// step back or a session gap): an audit keeps what it has read, except
+    /// a clock-windowed sliding HLL++, whose stamps belong to the restarting
+    /// clock epoch.
     pub fn restart(&mut self) {
         self.fresh = true;
         for c in &mut self.columns {
             c.prev = None;
             c.run = 0;
         }
+        if let Some(h) = self.hll.as_mut() {
+            h.next_stamp = None;
+            if let HllSketches::SlidingClock {
+                cols,
+                place,
+                last_stamp,
+                ..
+            } = &mut h.sketches
+            {
+                for c in cols {
+                    c.clear();
+                }
+                *place = Place::default();
+                *last_stamp = None;
+            }
+        }
     }
 
     /// Column `j`'s counts and measurements.
     pub fn column(&self, j: usize) -> ColumnReport {
-        self.columns[j].report()
+        let approx = self
+            .hll
+            .as_ref()
+            .zip(self.cfg.distinct_precision())
+            .map(|(h, p)| h.column_estimate(j, p));
+        self.columns[j].report(approx)
     }
 
     /// The pair `(i, j)`, `i < j`, when the audit keeps pairs.
@@ -1311,18 +1750,123 @@ impl Audit {
         })
     }
 
+    /// Read the per-column HLL++ estimates at `stamp` (or advancing by
+    /// `d_clock` when `stamp` is `None`), without mutating `self`.
+    fn read_hll_into(&self, stamp: Option<Stamp>, d_clock: f64, out: &mut Vec<f64>) {
+        out.clear();
+        let (Some(h), Some(p)) = (&self.hll, self.cfg.distinct_precision()) else {
+            return;
+        };
+        match &h.sketches {
+            HllSketches::Plain(cols) => {
+                out.extend(cols.iter().map(|c| c.count(p)));
+            }
+            HllSketches::SlidingRows { cols, .. } => {
+                out.extend(cols.iter().map(hll::SlidingHll::count_current));
+            }
+            HllSketches::SlidingClock {
+                cols,
+                place,
+                last_stamp,
+                on_rows,
+            } => {
+                let span = self.cfg.distinct_window_clock().expect("clock window");
+                let closed = self.cfg.distinct_closed();
+                let now = match stamp {
+                    Some(s) => s,
+                    None => Self::clock_ahead(place, *last_stamp, *on_rows, d_clock),
+                };
+                out.extend(
+                    cols.iter()
+                        .map(|c| c.count_excluding(|s| closed.has_left(now, s, span))),
+                );
+            }
+        }
+    }
+
+    fn clock_ahead(place: &Place, last_stamp: Option<Stamp>, on_rows: bool, d_clock: f64) -> Stamp {
+        let dt = if d_clock.is_finite() && d_clock >= 0.0 {
+            d_clock
+        } else {
+            0.0
+        };
+        if on_rows {
+            last_stamp.map_or(Stamp::from(0.0), |s| crate::since::back_by(s, -1.0))
+        } else if let Some(last) = last_stamp {
+            crate::since::back_by(last, -dt)
+        } else {
+            place.peek(dt)
+        }
+    }
+
+    /// Out-of-sample read at an explicit [`Stamp`] (for `ModelBank`'s scored
+    /// and zero-weight rows under `distinct_window_size`).
+    pub fn predict_at(&self, _x: &[f64], d_clock: f64, stamp: Stamp) -> Step {
+        let mut pred = Vec::new();
+        self.read_hll_into(Some(stamp), d_clock, &mut pred);
+        Step {
+            pred,
+            n_eff: self.n_eff,
+            extra: None,
+        }
+    }
+
     /// Fold another audit of the same columns into this one, as if one
     /// audit had read both streams (the module's doc says which parts are
     /// exact).
     pub fn merge(&mut self, o: &Audit) -> Result<(), String> {
         let clock = |c: &AuditCfg| (c.has_clock, c.gap_cap.map(f64::to_bits));
+        let hll_key = |c: &AuditCfg| {
+            (
+                c.distinct_precision(),
+                c.distinct_window_rows(),
+                c.distinct_window_clock().map(f64::to_bits),
+                c.distinct_closed(),
+            )
+        };
         if (o.cfg.n_columns, o.cfg.pairs, o.cfg.distinct_cap)
             != (self.cfg.n_columns, self.cfg.pairs, self.cfg.distinct_cap)
             || clock(&o.cfg) != clock(&self.cfg)
+            || hll_key(&o.cfg) != hll_key(&self.cfg)
         {
             return Err(
                 "audit: two audits merge only when they read the same columns under the same \
                  settings, but these two differ. Merge the audits of one spec."
+                    .into(),
+            );
+        }
+        if self.cfg.distinct_window_rows().is_some() {
+            return Err(
+                "audit: two audits with distinct_window_rows cannot be merged, since each group \
+                 counts its own rows with no shared clock. Use distinct_window_size on a clock \
+                 column to pool windowed counts across groups, or read bank.audit(pooled=False)."
+                    .into(),
+            );
+        }
+        // Validate clock-window stamp compatibility before mutating anything.
+        if let (
+            Some(AuditHllState {
+                sketches:
+                    HllSketches::SlidingClock {
+                        last_stamp: Some(sa),
+                        ..
+                    },
+                ..
+            }),
+            Some(AuditHllState {
+                sketches:
+                    HllSketches::SlidingClock {
+                        last_stamp: Some(sb),
+                        ..
+                    },
+                ..
+            }),
+        ) = (&self.hll, &o.hll)
+            && std::mem::discriminant(sa) != std::mem::discriminant(sb)
+        {
+            return Err(
+                "audit: two audits with distinct_window_size cannot be merged when their clocks \
+                 have different stamp types. Merge audits fed from the same clock."
                     .into(),
             );
         }
@@ -1347,6 +1891,55 @@ impl Audit {
         c.duplicates += d.duplicates;
         c.gaps += d.gaps;
         c.regular.merge(&d.regular);
+        if let (Some(ha), Some(hb)) = (self.hll.as_mut(), o.hll.as_ref()) {
+            match (&mut ha.sketches, &hb.sketches) {
+                (HllSketches::Plain(ca), HllSketches::Plain(cb)) => {
+                    for (a, b) in ca.iter_mut().zip(cb) {
+                        a.merge(b);
+                    }
+                }
+                (
+                    HllSketches::SlidingClock {
+                        cols: ca,
+                        place: pa,
+                        last_stamp: la,
+                        on_rows: ra,
+                    },
+                    HllSketches::SlidingClock {
+                        cols: cb,
+                        place: pb,
+                        last_stamp: lb,
+                        on_rows: rb,
+                    },
+                ) => {
+                    let span = self.cfg.distinct_window_clock().expect("clock window");
+                    let closed = self.cfg.distinct_closed();
+                    match (*la, *lb) {
+                        (_, None) => {}
+                        (None, Some(sb)) => {
+                            *ca = cb.clone();
+                            *pa = pb.clone();
+                            *la = Some(sb);
+                            *ra = *rb;
+                        }
+                        (Some(sa), Some(sb)) => {
+                            let merged_now = if hll::stamp_ord(sa, sb) != Ordering::Less {
+                                sa
+                            } else {
+                                sb
+                            };
+                            for (a, b) in ca.iter_mut().zip(cb) {
+                                a.merge(b, |s| !closed.has_left(merged_now, s, span));
+                            }
+                            *la = Some(merged_now);
+                            *ra |= *rb;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            ha.next_stamp = None;
+        }
         self.fresh = true;
         for col in &mut self.columns {
             col.prev = None;
@@ -1363,7 +1956,13 @@ impl Audit {
         } else {
             0
         };
-        self.columns.len() == k
+        let hll_ok = match (&self.hll, self.cfg.distinct_precision()) {
+            (None, None) => true,
+            (Some(h), Some(_)) => h.has_shape(&self.cfg),
+            _ => false,
+        };
+        hll_ok
+            && self.columns.len() == k
             && self.pairs.len() == pairs
             && self.columns.iter().all(|c| c.has_shape(cap))
             && self
@@ -1395,32 +1994,10 @@ impl Audit {
             c.regular.add(d_clock);
         }
     }
-}
 
-impl OnlineModel for Audit {
-    /// Count the row: every column's value, the pairs' and the clock's step.
-    /// A row of weight 0 counts nothing, its clock step included (hard rule
-    /// 9: it counts in no clock, and the stream steps the next row from the
-    /// last that counted); any other weight goes into `n_eff` alone, and a
-    /// value that is not usable is counted, not refused (the module's doc).
-    fn step_into(
-        &mut self,
-        x: &[f64],
-        _y: &[Option<f64>],
-        d_clock: f64,
-        weight: f64,
-        out: &mut Step,
-    ) {
-        // `predict`'s answer, read before the row: no slots, and the weight.
-        out.pred.clear();
-        out.n_eff = self.n_eff;
-        out.extra = None;
+    /// Update the non-HLL columns, pairs, and clock statistics for a committed row.
+    fn record_base_row(&mut self, x: &[f64], d_clock: f64) {
         let cap = self.cfg.distinct_cap;
-        // Hard rule 9: a zero-weight row counts in no clock and learns
-        // nothing, so the row after it is the first if it was.
-        if weight == 0.0 {
-            return;
-        }
         if !self.fresh && d_clock.is_finite() && d_clock >= 0.0 {
             self.step_clock(d_clock);
         }
@@ -1445,17 +2022,326 @@ impl OnlineModel for Audit {
                 }
             }
         }
-        if weight.abs() <= INPUT_BOUND && weight > 0.0 {
-            self.n_eff += weight;
+    }
+}
+
+impl OnlineModel for Audit {
+    /// Count the row: every column's value, the pairs', the clock's step, and
+    /// any enabled HyperLogLog++ sketch. A row of weight 0 counts nothing,
+    /// its clock step included (hard rule 9: it is still predicted, counts in
+    /// no clock, and reaches no HLL register); any other weight goes into
+    /// `n_eff` alone (and a non-positive or unusable weight reaches no HLL
+    /// register), while a value that is not usable is counted, not refused.
+    fn step_into(
+        &mut self,
+        x: &[f64],
+        _y: &[Option<f64>],
+        d_clock: f64,
+        weight: f64,
+        out: &mut Step,
+    ) {
+        out.pred.clear();
+        out.n_eff = self.n_eff;
+        out.extra = None;
+
+        // Fast path: HLL++ off (zero added work or state mutation).
+        let Some(p) = self.cfg.distinct_precision() else {
+            if weight == 0.0 {
+                return;
+            }
+            self.record_base_row(x, d_clock);
+            if weight.abs() <= INPUT_BOUND && weight > 0.0 {
+                self.n_eff += weight;
+            }
+            return;
+        };
+
+        let hll_weight_ok = weight.abs() <= INPUT_BOUND && weight > 0.0;
+        let k = self.cfg.n_columns;
+        let base_bytes = self.cfg.fixed_state_bytes();
+        let state_cap = self.cfg.cap();
+        let window_rows = self.cfg.distinct_window_rows();
+        let window_clock = self.cfg.distinct_window_clock();
+        let closed = self.cfg.distinct_closed();
+
+        // Take any handed stamp once so a zero-weight or rejected row cannot
+        // leave a stale stamp for the next row.
+        let handed = self.hll.as_mut().and_then(|h| h.next_stamp.take());
+
+        // Plain HLL++ (no sliding window, fixed size checked at validation).
+        if window_rows.is_none() && window_clock.is_none() {
+            if let Some(AuditHllState {
+                sketches: HllSketches::Plain(cols),
+                ..
+            }) = self.hll.as_mut()
+            {
+                for c in cols.iter_mut() {
+                    out.pred.push(c.count_cached(p));
+                }
+            }
+            if weight == 0.0 {
+                return;
+            }
+            self.record_base_row(x, d_clock);
+            if hll_weight_ok {
+                if let Some(AuditHllState {
+                    sketches: HllSketches::Plain(cols),
+                    ..
+                }) = self.hll.as_mut()
+                {
+                    for (c, &v) in cols.iter_mut().zip(x) {
+                        if crate::usable(v) {
+                            c.add_key(key(v), p);
+                        }
+                    }
+                }
+                self.n_eff += weight;
+            }
+            return;
         }
+
+        // Sliding row-window HLL++ (`distinct_window_rows`).
+        if let Some(w_rows) = window_rows {
+            let mut already_over = false;
+            if let Some(h) = self.hll.as_mut() {
+                already_over = h.over.is_some();
+                if let HllSketches::SlidingRows { cols, .. } = &mut h.sketches {
+                    for c in cols.iter_mut() {
+                        out.pred.push(c.count_current_cached());
+                    }
+                }
+            }
+            if weight == 0.0 || already_over {
+                return;
+            }
+            if hll_weight_ok {
+                // Atomic HeldCap check before mutating ANY field of `self`.
+                let h = self.hll.as_mut().expect("hll enabled");
+                let HllSketches::SlidingRows { cols, row_count } = &h.sketches else {
+                    unreachable!("window_rows uses SlidingRows");
+                };
+                let live_total: usize = cols.iter().map(hll::SlidingHll::live_entries).sum();
+                let fast_max = base_bytes
+                    .saturating_add(((live_total + k) as u64).saturating_mul(HLL_ROW_ENTRY_BYTES));
+                if fast_max > state_cap {
+                    let next_seq = *row_count + 1;
+                    let cutoff = next_seq.saturating_sub(w_rows as u64);
+                    let next_live: usize = cols
+                        .iter()
+                        .zip(x)
+                        .map(|(c, &v)| {
+                            c.entries_after(crate::usable(v).then(|| (key(v), next_seq)), |s| {
+                                s <= cutoff
+                            })
+                        })
+                        .sum();
+                    let exact_bytes = base_bytes
+                        .saturating_add((next_live as u64).saturating_mul(HLL_ROW_ENTRY_BYTES));
+                    let mut hc = HeldCap {
+                        over: &mut h.over,
+                        warned: &mut h.warned,
+                        warning: &mut h.warning,
+                    };
+                    if !hc.admit(exact_bytes, state_cap) {
+                        return;
+                    }
+                }
+            }
+            self.record_base_row(x, d_clock);
+            if hll_weight_ok {
+                let h = self.hll.as_mut().expect("hll enabled");
+                let HllSketches::SlidingRows { cols, row_count } = &mut h.sketches else {
+                    unreachable!("window_rows uses SlidingRows");
+                };
+                *row_count += 1;
+                let seq = *row_count;
+                let cutoff = seq.saturating_sub(w_rows as u64);
+                for (c, &v) in cols.iter_mut().zip(x) {
+                    c.trim(|s| s <= cutoff);
+                    if crate::usable(v) {
+                        c.add_key(key(v), seq);
+                    }
+                }
+                let live_total: usize = cols.iter().map(hll::SlidingHll::live_entries).sum();
+                let exact_bytes = base_bytes
+                    .saturating_add((live_total as u64).saturating_mul(HLL_ROW_ENTRY_BYTES));
+                let mut hc = HeldCap {
+                    over: &mut h.over,
+                    warned: &mut h.warned,
+                    warning: &mut h.warning,
+                };
+                hc.note(exact_bytes, state_cap);
+                self.n_eff += weight;
+            }
+            return;
+        }
+
+        // Sliding clock-window HLL++ (`distinct_window_size`).
+        let span = window_clock.expect("window_clock set");
+        let step_dt = if !self.fresh && d_clock.is_finite() && d_clock >= 0.0 {
+            d_clock
+        } else {
+            0.0
+        };
+        let (now, already_over) = {
+            let h = self.hll.as_ref().expect("hll enabled");
+            let HllSketches::SlidingClock {
+                place, last_stamp, ..
+            } = &h.sketches
+            else {
+                unreachable!("window_clock uses SlidingClock");
+            };
+            let now = match handed {
+                Some((s, _)) => s,
+                None => {
+                    if last_stamp.is_none() {
+                        place.peek(0.0)
+                    } else {
+                        place.peek(step_dt)
+                    }
+                }
+            };
+            (now, h.over.is_some())
+        };
+
+        if weight == 0.0 || already_over {
+            self.read_hll_into(Some(now), d_clock, &mut out.pred);
+            return;
+        }
+        if !hll_weight_ok {
+            self.read_hll_into(Some(now), d_clock, &mut out.pred);
+            self.record_base_row(x, d_clock);
+            return;
+        }
+
+        // Positive usable weight: check fast path vs exact atomic boundary path.
+        let fast_admitted = {
+            let h = self.hll.as_mut().expect("hll enabled");
+            let HllSketches::SlidingClock { cols, .. } = &mut h.sketches else {
+                unreachable!("window_clock uses SlidingClock");
+            };
+            let live_total: usize = cols.iter().map(hll::SlidingHll::live_entries).sum();
+            let fast_max = base_bytes
+                .saturating_add(((live_total + k) as u64).saturating_mul(HLL_CLOCK_ENTRY_BYTES));
+            if fast_max <= state_cap {
+                for c in cols.iter_mut() {
+                    c.trim(|s| closed.has_left(now, s, span));
+                    out.pred.push(c.count_current_cached());
+                }
+                true
+            } else {
+                for c in cols.iter() {
+                    out.pred
+                        .push(c.count_excluding(|s| closed.has_left(now, s, span)));
+                }
+                let next_live: usize = cols
+                    .iter()
+                    .zip(x)
+                    .map(|(c, &v)| {
+                        c.entries_after(crate::usable(v).then(|| (key(v), now)), |s| {
+                            closed.has_left(now, s, span)
+                        })
+                    })
+                    .sum();
+                let exact_bytes = base_bytes
+                    .saturating_add((next_live as u64).saturating_mul(HLL_CLOCK_ENTRY_BYTES));
+                let mut hc = HeldCap {
+                    over: &mut h.over,
+                    warned: &mut h.warned,
+                    warning: &mut h.warning,
+                };
+                if !hc.admit(exact_bytes, state_cap) {
+                    return;
+                }
+                false
+            }
+        };
+
+        // Committed: update base audit state, trim (if boundary path), advance
+        // clock place, insert row into sliding HLL, and check half-cap notice.
+        self.record_base_row(x, d_clock);
+        let h = self.hll.as_mut().expect("hll enabled");
+        let HllSketches::SlidingClock {
+            cols,
+            place,
+            last_stamp,
+            on_rows,
+        } = &mut h.sketches
+        else {
+            unreachable!("window_clock uses SlidingClock");
+        };
+        if !fast_admitted {
+            for c in cols.iter_mut() {
+                c.trim(|s| closed.has_left(now, s, span));
+            }
+        }
+        let dt_for_place = if last_stamp.is_none() { 0.0 } else { step_dt };
+        if let Some((s, rows)) = handed {
+            place.hand(s);
+            let _ = place.step(dt_for_place);
+            *last_stamp = Some(s);
+            *on_rows = rows;
+        } else {
+            let s = place.step(dt_for_place);
+            *last_stamp = Some(s);
+        }
+        for (c, &v) in cols.iter_mut().zip(x) {
+            if crate::usable(v) {
+                c.add_key(key(v), now);
+            }
+        }
+        let live_total: usize = cols.iter().map(hll::SlidingHll::live_entries).sum();
+        let exact_bytes =
+            base_bytes.saturating_add((live_total as u64).saturating_mul(HLL_CLOCK_ENTRY_BYTES));
+        let mut hc = HeldCap {
+            over: &mut h.over,
+            warned: &mut h.warned,
+            warning: &mut h.warning,
+        };
+        hc.note(exact_bytes, state_cap);
+        self.n_eff += weight;
     }
 
-    fn predict(&self, _x: &[f64], _d_clock: f64) -> Step {
+    fn predict(&self, _x: &[f64], d_clock: f64) -> Step {
+        let mut pred = Vec::new();
+        self.read_hll_into(None, d_clock, &mut pred);
         Step {
-            pred: Vec::new(),
+            pred,
             n_eff: self.n_eff,
             extra: None,
         }
+    }
+
+    fn stamp_next(&mut self, stamp: Stamp) {
+        if let Some(h) = self.hll.as_mut()
+            && self.cfg.distinct_window_clock().is_some()
+        {
+            h.next_stamp = Some((stamp, false));
+        }
+    }
+
+    fn stamp_next_on_rows(&mut self, stamp: Stamp) {
+        if let Some(h) = self.hll.as_mut()
+            && self.cfg.distinct_window_clock().is_some()
+        {
+            h.next_stamp = Some((stamp, true));
+        }
+    }
+
+    fn take_state_warning(&mut self) -> Option<(u64, u64)> {
+        let cap = self.cfg.cap();
+        self.hll
+            .as_mut()
+            .and_then(|h| h.warning.take())
+            .map(|bytes| (bytes, cap))
+    }
+
+    fn state_over_cap(&self) -> Option<(u64, u64)> {
+        let cap = self.cfg.cap();
+        self.hll
+            .as_ref()
+            .and_then(|h| h.over)
+            .map(|bytes| (bytes, cap))
     }
 
     fn state(&self) -> State {
@@ -1491,13 +2377,20 @@ impl OnlineModel for Audit {
         self.cfg.n_columns
     }
 
-    /// Nothing per row: its value is its state, read with [`Audit::column`],
-    /// [`Audit::pair`] and [`Audit::clock`].
+    /// Zero when HLL++ is off; `n_columns` (`approx_n_unique_<col>` per
+    /// audited column) when `distinct_precision` is set.
     fn n_outputs(&self) -> usize {
-        0
+        if self.cfg.distinct_precision().is_some() {
+            self.cfg.n_columns
+        } else {
+            0
+        }
     }
 }
 
+#[cfg(test)]
+#[path = "audit/hll_tests.rs"]
+mod hll_tests;
 #[cfg(test)]
 #[path = "audit/tests.rs"]
 mod tests;

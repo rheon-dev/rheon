@@ -116,6 +116,11 @@
     columns
     pairs = False
     distinct_cap = None
+    distinct_precision = None
+    distinct_window_rows = None
+    distinct_window_size = None
+    closed = 'right'
+    max_state_bytes = None
     common
   bocpd:
     name
@@ -3255,6 +3260,7 @@
   corrchange.norm: l1, linf
   corrchange.change_action: flag, reset
   deco.dynamics: ew, linear
+  audit.closed: both, right
   ew_class.closed: both, right
   ew_cov.closed: both, right
   ewridge.closed: both, right
@@ -3429,7 +3435,7 @@
     weight
   [specs.model], by type:
     ar: closed, lags, max_rows_between_snapshots, max_state_bytes, ridge, select, snapshot_every, window_budget, window_size
-    audit: distinct_cap, pairs
+    audit: closed, distinct_cap, distinct_precision, distinct_window_rows, distinct_window_size, max_state_bytes, pairs
     bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, hazard_rows, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
     corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, max_state_bytes, monitor_rows, monitor_span, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows, window_size
     dcc: a, asymmetric, b, dist, g, margin_start_rows, margin_start_span, margins, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol

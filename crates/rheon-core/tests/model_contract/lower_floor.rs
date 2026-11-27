@@ -1050,6 +1050,7 @@ fn audit_cfg() -> AuditCfg {
         distinct_cap: 16,
         gap_cap: Some(5.0),
         has_clock: true,
+        distinct: None,
     }
 }
 

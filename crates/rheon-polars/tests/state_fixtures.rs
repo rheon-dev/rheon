@@ -1235,6 +1235,34 @@ fn since_2_0_run(bytes: &[u8], input: &DataFrame) -> Ran {
     bank_run_of(&since_2_0_specs(), bytes, input)
 }
 
+/// The specs of `bank_audit_hll` (PLAN 509): `audit` with plain HLL++,
+/// `distinct_window_rows`, and `distinct_window_size` (`closed = "both"`),
+/// grouped on `frame()`.
+fn audit_hll_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "hll_plain", "model": {"type": "audit", "distinct_cap": 8, "distinct_precision": 8}, "targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
+        r#"{"name": "hll_rows", "model": {"type": "audit", "distinct_cap": 8, "distinct_precision": 8, "distinct_window_rows": 20}, "targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
+        r#"{"name": "hll_clock", "model": {"type": "audit", "distinct_cap": 8, "distinct_precision": 8, "distinct_window_size": 15.0, "closed": "both"}, "targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn audit_hll_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(audit_hll_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn audit_hll_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&audit_hll_specs(), bytes, input)
+}
+
 /// The specs of `bank_bocpd_hazard` (PLAN 547): `bocpd`'s two hazards,
 /// grouped on `bank_refit`'s stream and number clock, the per-row count
 /// `hazard_rows` and a number `hazard`, clock units, which a number clock
@@ -2890,6 +2918,11 @@ fn kinds() -> Vec<Kind> {
             run: since_2_0_run,
         },
         Kind {
+            name: "bank_audit_hll",
+            first: audit_hll_first,
+            run: audit_hll_run,
+        },
+        Kind {
             name: "with_windows",
             first: windows_first,
             run: windows_run,
@@ -3525,7 +3558,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 20),
+            ("bank", 21),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),
@@ -5308,6 +5341,18 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
         ("bank_since_2_0", "kalman's square-root form", |p, v| {
             p.ends_with(".Kalman.covariance_form") && v.as_str() == Some("square_root")
         }),
+        // PLAN 509: `audit` HLL++ plain, row-windowed, and clock-windowed.
+        ("bank_audit_hll", "a plain HLL++ sketch", |p, _| {
+            p.contains(".Audit.hll.sketches.Plain.")
+        }),
+        ("bank_audit_hll", "a row-windowed sliding HLL++", |p, _| {
+            p.contains(".Audit.hll.sketches.SlidingRows.cols.0.entries.")
+        }),
+        (
+            "bank_audit_hll",
+            "a clock-windowed sliding HLL++",
+            |p, _| p.contains(".Audit.hll.sketches.SlidingClock.cols.0.entries."),
+        ),
     ];
     for (kind, form, holds) in FORMS {
         let f = frozen::ALL

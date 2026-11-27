@@ -122,6 +122,10 @@ MEANING: dict[str, str] = {
     "var_<f>": "EW variance of `<f>`, corrected for the unequal weights as Polars' `ewm_var` "
     "is, unless `bias`",
     "std_<f>": "EW standard deviation of `<f>`, the square root of its EW variance",
+    "approx_n_unique_<f>": (
+        "estimated number of distinct usable values of `<f>` before this row (over the window "
+        "under `distinct_window_rows` or `distinct_window_size`), from its HyperLogLog++ sketch"
+    ),
     "cov_<a>_<b>": "EW covariance of the pair, corrected as `var_<f>` is",
     "corr_<a>_<b>": "EW correlation of the pair",
     "partial_corr_<a>_<b>": "the pair's correlation controlling for every other column",
@@ -300,6 +304,7 @@ ALSO_NULL: dict[str, str] = {
     "mean_<f>": WITHHELD,
     "var_<f>": WITHHELD,
     "std_<f>": WITHHELD,
+    "approx_n_unique_<f>": "never: 0.0 before the first usable value",
     "cov_<a>_<b>": WITHHELD,
     "corr_<a>_<b>": "while withheld, and where either column's EW variance is 0",
     "partial_corr_<a>_<b>": WITHHELD,
@@ -447,6 +452,7 @@ ALSO_NULL_BY_MODEL: dict[tuple[str, str], str] = {
 #: The fields a model's own switch adds, shown under its table: the model, the
 #: switch, and the spec keywords that turn it on.
 SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
+    "audit": ("distinct_precision=12", {"distinct_precision": 12}),
     "huber": ("emit_huber_scale=True", {"emit_huber_scale": True}),
     "dcc": ('margins="garch"', {"margins": "garch"}),
     "ewm_moments": ("se=True", {"se": True}),
@@ -459,8 +465,9 @@ SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
 #: What a model writes when it writes nothing per row.
 STATE_ONLY = {
     "audit": (
-        "`audit` writes nothing per row but `weight_sum`, the rows before this one. Its product "
-        "is the state, and `ModelBank.audit()` reads what it counted from it."
+        "`audit` writes nothing per row by default but `weight_sum`, the rows before this one "
+        "(setting `distinct_precision` adds one `approx_n_unique_<col>` field per audited column). "
+        "Its main product is the state, and `ModelBank.audit()` reads what it counted from it."
     ),
     "marginal": (
         "`marginal` writes nothing per row but `weight_sum`. Its product is the state, and "
@@ -907,7 +914,7 @@ def stem(
     for f in features:
         if base == f"pred_{f}":
             return "pred_<f>"
-        for pre in ("mean", "var", "std"):
+        for pre in ("mean", "var", "std", "approx_n_unique"):
             if base == f"{pre}_{f}":
                 return f"{pre}_<f>"
     for t in targets:

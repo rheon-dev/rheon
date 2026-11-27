@@ -3116,6 +3116,7 @@ pub fn all() -> Vec<Case> {
                 distinct_cap: 8,
                 gap_cap: Some(5.0),
                 has_clock: true,
+                distinct: None,
             })
             .unwrap(),
             K,
@@ -3135,6 +3136,7 @@ pub fn all() -> Vec<Case> {
                         distinct_cap: 8,
                         gap_cap: Some(5.0),
                         has_clock: true,
+                        distinct: None,
                     })
                     .unwrap(),
                 ))
@@ -3155,6 +3157,79 @@ pub fn all() -> Vec<Case> {
                 distinct_cap: 512,
                 gap_cap: None,
                 has_clock: false,
+                distinct: None,
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        // Plain HyperLogLog++ distinct-count sketch beside exact counters.
+        case!(
+            "audit_hll",
+            "Audit",
+            Audit,
+            Audit::new(AuditCfg {
+                n_columns: K,
+                pairs: false,
+                distinct_cap: 8,
+                gap_cap: None,
+                has_clock: false,
+                distinct: Some(AuditDistinctCfg {
+                    precision: Some(8),
+                    window_rows: None,
+                    window_clock: None,
+                    closed: WindowClosed::Right,
+                    max_state_bytes: None,
+                }),
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        // Sliding-window HyperLogLog++ over the last 25 positive-weight rows.
+        case!(
+            "audit_hll_rows",
+            "Audit",
+            Audit,
+            Audit::new(AuditCfg {
+                n_columns: K,
+                pairs: false,
+                distinct_cap: 8,
+                gap_cap: None,
+                has_clock: false,
+                distinct: Some(AuditDistinctCfg {
+                    precision: Some(8),
+                    window_rows: Some(25),
+                    window_clock: None,
+                    closed: WindowClosed::Right,
+                    max_state_bytes: None,
+                }),
+            })
+            .unwrap(),
+            K,
+            Targets::None,
+            40
+        ),
+        // Sliding-window HyperLogLog++ over the last 12 clock units (`Both`).
+        case!(
+            "audit_hll_clock",
+            "Audit",
+            Audit,
+            Audit::new(AuditCfg {
+                n_columns: K,
+                pairs: false,
+                distinct_cap: 8,
+                gap_cap: Some(5.0),
+                has_clock: true,
+                distinct: Some(AuditDistinctCfg {
+                    precision: Some(8),
+                    window_rows: None,
+                    window_clock: Some(12.0),
+                    closed: WindowClosed::Both,
+                    max_state_bytes: None,
+                }),
             })
             .unwrap(),
             K,

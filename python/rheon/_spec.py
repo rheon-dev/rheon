@@ -332,6 +332,8 @@ _FLOOR = {
     "truncation": ("1", "1 or more"),
     "window_events": ("1", "1 or more"),
     "window_rows": ("1", "1 or more"),
+    "distinct_precision": ("8", "8 to 16"),
+    "distinct_window_rows": ("1", "1 or more"),
     "max_state_bytes": ("1", "1 or more"),
     "start_rows": ("1", "1 or more, and to garch's least for its form"),
 }

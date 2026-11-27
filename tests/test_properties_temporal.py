@@ -469,6 +469,17 @@ def clock_specs(draw, model: str, step: int, cap: int):
         kw |= maybe("huber_scale_half_life", 1, 60)
     elif model == "marginal":
         kw |= xy | maybe("window_size", 1, 60)
+    elif model == "audit":
+        # HyperLogLog++ distinct counts, whole-stream, row-windowed, or
+        # clock-windowed with either edge. `audit` refuses `weight`.
+        kw.pop("weight", None)
+        kw |= dict(columns=["x0", "x1"], distinct_precision=8)
+        form = draw(st.sampled_from(["plain", "rows", "clock"]))
+        if form == "rows":
+            kw["distinct_window_rows"] = draw(st.integers(1, 30))
+        elif form == "clock":
+            kw["distinct_window_size"] = steps(1, 60)
+            kw["closed"] = draw(st.sampled_from(["right", "both"]))
     elif model == "corrchange":
         # Task 538: the window's redraw on the clock, or a count of reports.
         kw |= dict(features=["x0", "x1"], kind="window", window_rows=4, n_perm=20)

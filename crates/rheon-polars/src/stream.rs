@@ -338,6 +338,7 @@ impl AnyModel {
             (AnyModel::Isotonic(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
             (AnyModel::DdSketch(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
             (AnyModel::CorrChange(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
+            (AnyModel::Audit(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
             _ => self.predict_into(x, y, d_clock, out),
         }
     }

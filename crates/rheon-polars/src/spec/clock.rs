@@ -89,6 +89,7 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
     ("ew_class", &["window_size", "snapshot_every"]),
     ("marginal", &["window_size", "snapshot_every"]),
     ("hawkes", &["window_size", "kernel_half_lives"]),
+    ("audit", &["distinct_window_size"]),
     ("expectile", &["window_size", "refit_span"]),
     ("glm", &["refit_span"]),
     ("garch", &["start_span"]),
@@ -587,6 +588,16 @@ impl Spec {
             } => {
                 put(&mut out, "hazard", hazard.as_ref());
                 put(&mut out, "warm_span", warm_span.as_ref());
+            }
+            ModelKind::Audit {
+                distinct_window_size,
+                ..
+            } => {
+                put(
+                    &mut out,
+                    "distinct_window_size",
+                    distinct_window_size.as_ref(),
+                );
             }
             _ => {}
         }

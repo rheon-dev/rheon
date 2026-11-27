@@ -1363,11 +1363,10 @@ COMBINATIONS = {kind: _combinations(kind) for kind in UNCLOCKED_KINDS}
 def test_each_kind_takes_every_stream_parameter_but_those_it_refuses():
     """The probe is no false skip: the five kinds are the ones no sweep
     cut, and each runs under every stream parameter but the ones `REFUSED`
-    names, all together too. `corrchange`, `hmm` and `kmeans` left the list
-    when they took clock forms (task 538): the temporal-clock property
+    names, all together too. `corrchange`, `hmm`, `kmeans` and `audit` left
+    the list when they took clock forms: the temporal-clock property
     streams draw them."""
     assert UNCLOCKED_KINDS == [
-        "audit",
         "deco",
         "pca",
         "rcov",

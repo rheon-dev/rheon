@@ -1428,6 +1428,32 @@ pub enum ModelKind {
         /// past it. Default 256. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         distinct_cap: Option<usize>,
+        /// HyperLogLog++ precision `p` in `8..=16` (`2^p` registers per
+        /// column) for estimated distinct counts past `distinct_cap` (and
+        /// per-row `approx_n_unique_<col>`). Default off. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        distinct_precision: Option<usize>,
+        /// Sliding-window HyperLogLog++ over the last this many positive-weight
+        /// rows. Requires `distinct_precision`; mutually exclusive with
+        /// `distinct_window_size`. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        distinct_window_rows: Option<usize>,
+        /// Sliding-window HyperLogLog++ over the last this many clock units
+        /// (rows without a clock, or a duration on a temporal clock). Requires
+        /// `distinct_precision`; mutually exclusive with `distinct_window_rows`.
+        /// Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        distinct_window_size: Option<Span>,
+        /// Which edge of `distinct_window_size` holds the row exactly one
+        /// window old: `"right"`, the default, or `"both"`. Skipped when
+        /// `"right"`.
+        #[serde(default, skip_serializing_if = "ModelClosed::is_right")]
+        closed: ModelClosed,
+        /// Per-group byte cap for the audit's state (default 256 KB, ceiling
+        /// 64 MiB), checked whenever `distinct_precision` or `max_state_bytes`
+        /// is set. Skipped when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_state_bytes: Option<u64>,
     },
     /// A generalized linear model by recursive IRLS: Poisson, Gamma,
     /// binomial or Tweedie (`rheon_core::Glm`; docs/PLAN.md task 500).
@@ -2578,6 +2604,9 @@ impl ModelKind {
                 ..
             } | ModelKind::CorrChange {
                 window_size: Some(_),
+                ..
+            } | ModelKind::Audit {
+                distinct_window_size: Some(_),
                 ..
             }
         )

@@ -76,7 +76,12 @@ impl Bank {
     ) -> Result<DataFrame, String> {
         let keys = self.sorted_keys(spec, group)?;
         let (s, states) = (&self.specs[spec], &self.states[spec]);
-        let ModelKind::Audit { pairs, .. } = &s.model else {
+        let ModelKind::Audit {
+            pairs,
+            distinct_precision,
+            ..
+        } = &s.model
+        else {
             return Err(format!(
                 "spec {:?}: its model is {:?}, not \"audit\", and only an audit keeps these \
                  counts. Name an audit spec of the bank.",
@@ -84,6 +89,7 @@ impl Bank {
                 s.model.kind_name()
             ));
         };
+        let has_hll = distinct_precision.is_some();
         if table == AuditTable::Pairs && !pairs.unwrap_or(false) {
             return Err(format!(
                 "spec {:?}: it keeps no pairs, since it was built without pairs=True. Build it \
@@ -113,7 +119,7 @@ impl Bank {
             };
         }
         let mut cols = match table {
-            AuditTable::Columns => columns_frame(&audits, &s.features),
+            AuditTable::Columns => columns_frame(&audits, &s.features, has_hll),
             AuditTable::Pairs => pairs_frame(&audits, &s.features),
             AuditTable::Clock => clock_frame(&audits, self.clock_dtypes[spec].as_ref()),
         };
@@ -126,7 +132,7 @@ impl Bank {
     }
 }
 
-fn columns_frame(audits: &[(Option<&str>, Audit)], names: &[String]) -> Vec<Column> {
+fn columns_frame(audits: &[(Option<&str>, Audit)], names: &[String], has_hll: bool) -> Vec<Column> {
     let mut group: Vec<Option<&str>> = Vec::new();
     let mut column: Vec<&str> = Vec::new();
     let mut reps: Vec<AuditColumn> = Vec::new();
@@ -143,7 +149,7 @@ fn columns_frame(audits: &[(Option<&str>, Audit)], names: &[String]) -> Vec<Colu
     let num = |f: fn(&AuditColumn) -> f64| -> Vec<Option<f64>> {
         reps.iter().map(|r| opt(f(r))).collect()
     };
-    vec![
+    let mut cols = vec![
         Column::new("group".into(), group),
         Column::new("column".into(), column),
         // Polars' names for the same counts (`null_count`, `n_unique`), and
@@ -165,6 +171,16 @@ fn columns_frame(audits: &[(Option<&str>, Audit)], names: &[String]) -> Vec<Colu
         Column::new("mad".into(), num(|r| r.mad)),
         Column::new("robust_z".into(), num(|r| r.robust_z)),
         counts("n_unique", reps.iter().map(|r| r.distinct)),
+    ];
+    if has_hll {
+        cols.push(Column::new(
+            "approx_n_unique".into(),
+            reps.iter()
+                .map(|r| r.approx_distinct.and_then(opt))
+                .collect::<Vec<Option<f64>>>(),
+        ));
+    }
+    cols.extend([
         Column::new("top_value".into(), num(|r| r.top_value)),
         int("top_count", |r| r.top_count),
         int("second_count", |r| r.second_count),
@@ -177,7 +193,8 @@ fn columns_frame(audits: &[(Option<&str>, Audit)], names: &[String]) -> Vec<Colu
         int("min_change_count", |r| r.min_change_count),
         Column::new("autocorr".into(), num(|r| r.autocorr)),
         Column::new("unit_root_t".into(), num(|r| r.unit_root_t)),
-    ]
+    ]);
+    cols
 }
 
 fn pairs_frame(audits: &[(Option<&str>, Audit)], names: &[String]) -> Vec<Column> {

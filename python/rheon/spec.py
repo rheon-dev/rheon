@@ -393,7 +393,8 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``ewm_moments``' ``lag_tolerance`` and a lag written on a term's leg
 (``"x@5m"``),
 ``hmm``'s and ``bocpd``'s ``warm_span``, ``bocpd``'s ``hazard``,
-``corrchange``'s ``permute_every`` and ``monitor_span``, ``huber``'s and ``sgd``'s
+``corrchange``'s ``permute_every`` and ``monitor_span``, ``audit``'s
+``distinct_window_size``, ``huber``'s and ``sgd``'s
 ``huber_refit_span``, ``quantile``'s ``quantile_refit_span``, and
 ``holt``'s and ``kalman``'s ``forecast_spans``, a list of spans. Each that
 counts rows where the quantity has a meaning on the clock has its count

@@ -2931,6 +2931,15 @@ class ModelBank:
         ``n_unique``
             The distinct usable values, as Polars' ``n_unique`` counts them,
             with ``-0`` read as ``0``. Null past the spec's ``distinct_cap``.
+        ``approx_n_unique``
+            Present only when ``distinct_precision`` is set on the spec. The
+            HyperLogLog++ estimated count of distinct usable values (whole
+            stream, or the active window under ``distinct_window_rows`` or
+            ``distinct_window_size``). Under ``pooled=True``, plain sketches
+            merge by register-wise maximum, clock-windowed sketches merge
+            their register frontiers at the latest group stamp, and
+            ``distinct_window_rows`` refuses pooling because separate groups
+            share no row clock.
         ``top_value``, ``top_count``, ``second_count``, ``count_error``
             The most repeated value, its count and the next value's count.
             They are exact while ``n_unique`` is, and past the cap each is at
