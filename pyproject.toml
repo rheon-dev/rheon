@@ -137,7 +137,8 @@ dev = [
     # bayesian-changepoint-detection for Adams & MacKay's run-length
     # recursion.
     "statsmodels>=0.15",
-    "filterpy>=1.4.5",
+    # 2.0.0 fixes NumPy 2.5 scalar conversion in `KalmanFilter.mahalanobis`.
+    "filterpy>=2.0.0",
     "bayesian-changepoint-detection>=0.2.dev1",
     # Oracles the tests import themselves, so declared by name rather than
     # reached through statsmodels: pandas' `ewm(times=)` for the temporal

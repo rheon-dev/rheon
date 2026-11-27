@@ -5349,7 +5349,7 @@ dataset = ""
 tests = [
     "tests/test_second_opinion_grids.py::test_each_targets_se_is_its_own_filters_over_fifty_seeds",
 ]
-oracles = { "filterpy" = "1.4.5" }
+oracles = { "filterpy" = "2.0.0" }
 dataset = ""
 
 [group."second_opinion_grids.marglag_acf"]
@@ -7099,7 +7099,7 @@ tests = [
     "tests/test_kalman_nonlinear.py::test_nonlinear_kalman_50_seed_filterpy_grid[poisson-log-ukf-merwe]",
     "tests/test_kalman_nonlinear.py::test_nonlinear_kalman_50_seed_filterpy_grid[poisson-log-ukf-scalar_index]",
 ]
-oracles = { "filterpy" = "1.4.5" }
+oracles = { "filterpy" = "2.0.0" }
 dataset = ""
 
 [case."kalman_nonlinear.filterpy_grid.binomial_ekf_coef"]
@@ -7243,6 +7243,64 @@ floor = 1e-14
 
 [case."dependence.dependence.xi_parabola"]
 ideal = 1.0
+n = 50
+
+[group."kalman_extras.filterpy_grid"]
+tests = [
+    "tests/test_kalman_extras.py::test_kalman_extras_50_seed_filterpy_grid[drift_no_intercept-False-0.001-False-covariance]",
+    "tests/test_kalman_extras.py::test_kalman_extras_50_seed_filterpy_grid[reverting_weighted-True-0.0005-True-covariance]",
+    "tests/test_kalman_extras.py::test_kalman_extras_50_seed_filterpy_grid[ridge_intercept-True-0.0-False-covariance]",
+    "tests/test_kalman_extras.py::test_kalman_extras_50_seed_filterpy_grid[square_root_drift-True-0.001-False-square_root]",
+]
+oracles = { "filterpy" = "2.0.0" }
+dataset = ""
+
+[case."kalman_extras.filterpy_grid.drift_no_intercept_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_extras.filterpy_grid.drift_no_intercept_loglik"]
+ideal = 0.0
+n = 50
+
+[case."kalman_extras.filterpy_grid.drift_no_intercept_mahal"]
+ideal = 0.0
+n = 50
+
+[case."kalman_extras.filterpy_grid.reverting_weighted_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_extras.filterpy_grid.reverting_weighted_loglik"]
+ideal = 0.0
+n = 50
+
+[case."kalman_extras.filterpy_grid.reverting_weighted_mahal"]
+ideal = 0.0
+n = 50
+
+[case."kalman_extras.filterpy_grid.ridge_intercept_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_extras.filterpy_grid.ridge_intercept_loglik"]
+ideal = 0.0
+n = 50
+
+[case."kalman_extras.filterpy_grid.ridge_intercept_mahal"]
+ideal = 0.0
+n = 50
+
+[case."kalman_extras.filterpy_grid.square_root_drift_coef"]
+ideal = 0.0
+n = 50
+
+[case."kalman_extras.filterpy_grid.square_root_drift_loglik"]
+ideal = 0.0
+n = 50
+
+[case."kalman_extras.filterpy_grid.square_root_drift_mahal"]
+ideal = 0.0
 n = 50
 
 # --- raises

@@ -227,7 +227,12 @@ fn nan_is_refused_where_inf_means_something() {
 /// each `inf` where `inf` names nothing: `(top, model, the field's name)`.
 /// `{}` in the text is the value. Only `hmm`'s `prior_rows` was here
 /// (PLAN 578j, TEST-7).
-const SINCE_2_0: [(&str, &str, &str); 27] = [
+const SINCE_2_0: [(&str, &str, &str); 28] = [
+    (
+        "",
+        "type = \"kalman\"\ncoef_half_life = 10.0\ncoef_prior = [[{}, 0.0]]",
+        "coef_prior",
+    ),
     (
         "",
         "type = \"glm\"\nfamily = \"tweedie\"\nvar_power = {}",

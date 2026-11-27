@@ -152,6 +152,7 @@ the docs set it:
 | `emit_clocks`, every model's | [Learn targets known late](how-to/learn-targets-known-late.md#check-that-it-worked), and the table of its two fields after this one |
 | `emit_target_weight`, every model's with a target: `weight_<t>`, the weight `<t>`'s `min_weight` reads, beside `weight_sum` | [Warm-up gates](MODELS.md#warm-up-gates) |
 | `emit_huber_scale`, `huber`'s: `huber_scale_<t>`, the scale each row's cut is drawn in | [`huber`'s table](#huber), and its [entry](MODELS.md#huber--robust-regression) |
+| `emit_loglik` and `emit_mahal`, `kalman`'s: `loglik_<t>` and `mahal_<t>`, each target's out-of-sample Gaussian innovation log-likelihood and Mahalanobis distance | [`kalman`'s table](#kalman), and its [entry](MODELS.md#kalman--random-walk-β-dynamic-linear-model) |
 | `emit_n_atoms`, `krls`'s: `n_atoms`, the dictionary or window size before the row | [`krls`'s table](#krls), and its [entry](MODELS.md#krls--online-kernel-regression) |
 | `ew_cov`'s extra `stats`, its `lags` (`lag_corr_l<l>_<a>_<b>`), `pca` (`pc<j>_*`) and `mahal_quantiles` (`mahal_q<p>`) | its own [section](MODELS.md#ew_cov--exponentially-weighted-moments) and its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) |
 | `seqtest`'s `a` and `b`, which replace its four fields with `log_e_a_<t>`, `log_e_b_<t>`, `wins_a_<t>` and `wins_b_<t>` | its own [section](MODELS.md#seqtest--a-sequential-test-of-a-sign-by-betting) and its [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.seqtest) |
@@ -221,13 +222,15 @@ The fields of `rp.spec.kalman("m", targets=["y"], features=["x0"], half_life=50.
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
 
-Under `smooth_lag=5, emit_smoothed_se=True`, it also writes:
+Under `smooth_lag=5, emit_smoothed_se=True, emit_loglik=True, emit_mahal=True`, it also writes:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
 | `smoothed_coef` | `list[f64]` | on the row that completes `smooth_lag` observations of a target after an earlier one, the coefficients at that earlier observation estimated from every row up to this one, laid out like `coef`; NaN in a target's place where the row completed no lag of it, where `min_weight` withheld the described row, and for a coefficient not yet sized | on every row that completes no target's lag |
 | `smoothed_se_coef` | `list[f64]` | the standard errors of `smoothed_coef`, laid out like it | where `smoothed_coef` is |
 | `smoothed_for_y` | `clock` | the clock of the row `<t>`'s smoothed value describes, in the clock column's own type; with no clock, the row's index in its group | on every row that completes no lag of `<t>` |
+| `loglik_y` | `f64` | out-of-sample Gaussian innovation log-likelihood of `<t>`, read before this row's update | while withheld; on a zero-weight row; where `<t>` is null or a formula target; on a diffuse intercept's first observation; while `P` is unsized; and before `<t>` has a positive pre-row noise variance (without `obs_var`) |
+| `mahal_y` | `f64` | out-of-sample innovation Mahalanobis distance `abs(nu) / sqrt(S)` of `<t>`, read before this row's update | where `loglik_<t>` is |
 
 ## `huber`
 

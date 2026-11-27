@@ -41,6 +41,9 @@ def kalman(
     beta: float | None = None,
     kappa: float | None = None,
     ukf_noise: Literal["expected", "plugin"] | None = None,
+    coef_prior: list[list[float]] | None = None,
+    emit_loglik: bool = False,
+    emit_mahal: bool = False,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """A regression whose coefficients drift, tracked by a Kalman filter.
@@ -291,6 +294,34 @@ def kalman(
         ``phi * sum(Wm_i * V(zeta_i)) / w``) or ``"plugin"``
         (``phi * V(g^-1(eta)) / w`` at the prior mean, as in the EKF).
         Refused when ``filter != "ukf"``.
+    ``coef_prior``
+        Prior coefficient mean, shaped ``(n_targets, k_total)`` in the
+        original feature units (intercept first when ``fit_intercept=True``),
+        every entry finite. Default none, which starts coefficients at 0
+        (or 1 for the intercept under ``"inverse"`` and ``"power"`` links).
+        Applies to both linear and nonlinear (``filter="ekf"`` / ``"ukf"``)
+        filters. Under ``standardize=True`` each slope's prior is converted
+        to anchor coordinates when that feature's scale first becomes usable.
+        When the linear filter's intercept prior is diffuse (no ``obs_var``
+        and ``fit_intercept=True``), the intercept entry is not read because
+        the target's first observation sets the level directly. Note that
+        ``revert_half_life`` continues to pull coefficients toward 0, not
+        toward ``coef_prior``.
+    ``emit_loglik``
+        Emit ``loglik_<t>``: each target's out-of-sample one-step-ahead
+        Gaussian innovation log-likelihood
+        ``-0.5 * (ln(2 * pi) + ln(S) + nu ** 2 / S)`` computed strictly
+        before the row's update, with innovation ``nu = y - z' b⁻`` and
+        innovation variance ``S = z' P⁻ z + R / w``. Default ``False``.
+        Linear Gaussian filter only (refused under ``filter="ekf"``,
+        ``filter="ukf"``, or any non-Gaussian family / non-identity link).
+    ``emit_mahal``
+        Emit ``mahal_<t>``: each target's out-of-sample innovation
+        Mahalanobis distance ``|nu| / sqrt(S)`` (the unsigned distance in
+        standard deviations, not its square), computed from the same
+        pre-update ``nu`` and ``S`` as ``emit_loglik``. Default ``False``.
+        Linear Gaussian filter only (refused under ``filter="ekf"``,
+        ``filter="ukf"``, or any non-Gaussian family / non-identity link).
 
     .. rubric:: Output
 
@@ -328,6 +359,17 @@ def kalman(
     ``coef``
         Per target, the intercept (unless ``fit_intercept=False``) then one
         entry per feature, in the original units, after the row is learned (:func:`coef_index`).
+    ``loglik_<t>``
+        Under ``emit_loglik``: each target's out-of-sample Gaussian
+        innovation log-likelihood before the row's update. Null while
+        withheld, on a zero-weight row, when the target is null (or a
+        formula target), on a diffuse intercept's first observation, while
+        ``P`` is unsized, or before the target has a positive pre-row noise
+        variance (when ``obs_var`` is not set).
+    ``mahal_<t>``
+        Under ``emit_mahal``: each target's out-of-sample innovation
+        Mahalanobis distance ``|nu| / sqrt(S)`` before the row's update.
+        Null wherever ``loglik_<t>`` is.
 
     With ``smooth_lag``, on the rows that complete a lag (null on every other
     row):
@@ -366,6 +408,11 @@ def kalman(
     - a ``q`` whose list is not one value per coefficient, or with a value
       below 0 or not finite;
     - an ``obs_var`` or ``p0`` not finite or not above 0;
+    - a ``coef_prior`` whose shape is not ``(n_targets, k_total)`` or with
+      a value that is not finite;
+    - ``emit_loglik`` or ``emit_mahal`` on a nonlinear filter
+      (``filter != "linear"``, ``family != "gaussian"``, or
+      ``link != "identity"``);
     - ``emit_robust_se``: the filter's covariance is its own posterior,
       which ``emit_se_coef`` reports;
     - a ``smooth_lag`` of 0, ``emit_smoothed_se`` or ``max_state_bytes``
@@ -760,4 +807,10 @@ def kalman(
         model["kappa"] = kappa
     if ukf_noise is not None:
         model["ukf_noise"] = ukf_noise
+    if coef_prior is not None:
+        model["coef_prior"] = coef_prior
+    if emit_loglik:
+        model["emit_loglik"] = True
+    if emit_mahal:
+        model["emit_mahal"] = True
     return _common(name, model, targets=targets, features=features, **common)

@@ -40,6 +40,9 @@ fn kalman(k: usize, decay: Decay, coef_half_life: f64, min_weight: f64) -> Kalma
         revert_half_life: vec![f64::INFINITY],
         standardize: true,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     })
     .unwrap()
 }

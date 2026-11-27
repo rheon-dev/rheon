@@ -773,14 +773,17 @@ wheels = [
 
 [[package]]
 name = "filterpy"
-version = "1.4.5"
+version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "scipy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f6/1d/ac8914360460fafa1990890259b7fa5ef7ba4cd59014e782e4ab3ab144d8/filterpy-1.4.5.zip", hash = "sha256:4f2a4d39e4ea601b9ab42b2db08b5918a9538c168cff1c6895ae26646f3d73b1", size = 177985, upload-time = "2018-10-10T22:38:24.63Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bd/ff/23359f8204ea52c06ccc3d865dadf5b30c110789eb940c44be2a9455f845/filterpy-2.0.0.tar.gz", hash = "sha256:aadfffd65af3435244be6b50b8d373697deb9186a1d134e882430b59ea0a8553", size = 129177, upload-time = "2026-10-26T19:20:15.012Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/1e/6e6eee6502254e9e2d9d8677967779542500c00923345acdd806280d51a7/filterpy-2.0.0-py3-none-any.whl", hash = "sha256:c5028eaf31a7181d2d5565a5447e9b1cda746c99b317f62d89018fc791ef1f7e", size = 111361, upload-time = "2026-10-26T19:20:13.798Z" },
+]
 
 [[package]]
 name = "fonttools"
@@ -2283,7 +2286,7 @@ dev = [
     { name = "datasketch", specifier = ">=2.0.0" },
     { name = "ddsketch", specifier = ">=3.0.1" },
     { name = "duckdb", specifier = ">=1.5.5" },
-    { name = "filterpy", specifier = ">=1.4.5" },
+    { name = "filterpy", specifier = ">=2.0.0" },
     { name = "glum", specifier = ">=3.5.0" },
     { name = "hfhd", specifier = ">=0.1.4" },
     { name = "hfvol", specifier = ">=0.1.0" },

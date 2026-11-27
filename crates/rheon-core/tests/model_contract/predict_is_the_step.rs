@@ -20,7 +20,8 @@ fn same_step(kind: &str, i: usize, p: &Step, s: &Step) {
     );
     // `vector_ar`'s tests are NaN where not defined: NaN equal to NaN.
     match (&p.extra, &s.extra) {
-        (Some(Extra::VectorAr { values: u }), Some(Extra::VectorAr { values: v })) => {
+        (Some(Extra::VectorAr { values: u }), Some(Extra::VectorAr { values: v }))
+        | (Some(Extra::Kalman { values: u }), Some(Extra::Kalman { values: v })) => {
             let bits = |w: &[f64]| w.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
             assert_eq!(bits(u), bits(v), "{kind}: extra at row {i}");
         }

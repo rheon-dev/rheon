@@ -444,6 +444,9 @@
     beta = None
     kappa = None
     ukf_noise = None
+    coef_prior = None
+    emit_loglik = False
+    emit_mahal = False
     common
   kmeans:
     name
@@ -2772,6 +2775,19 @@
     settled_frac: f64
     withheld_reason: enum
     coef: list[f64]
+  kalman with innovation diagnostics:
+    pred_y: f64
+    resid_y: f64
+    pred_z: f64
+    resid_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
+    loglik_y: f64
+    loglik_z: f64
+    mahal_y: f64
+    mahal_z: f64
   huber minimal:
     pred_y: f64
     resid_y: f64
@@ -3687,7 +3703,7 @@
     holt: damping_half_life, forecast_spans, initial_level, initial_seasonal, initial_trend, max_state_bytes, period, seasonal, seasonal_half_life, seasonal_periods, start, trend, trend_half_life
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, max_rows_between_solves, max_state_bytes, refit_budget, ridge, ridge_scale, solve_every, standardize
     isotonic: closed, increasing, max_state_bytes, out_of_bounds, window_rows, window_size, y_max, y_min
-    kalman: alpha, beta, coef_half_life, covariance_form, dispersion, emit_smoothed_se, family, filter, forecast_spans, kappa, link, max_state_bytes, obs_var, p0, q, revert_half_life, share_p, smooth_lag, standardize, ukf_noise, ukf_rule, var_power
+    kalman: alpha, beta, coef_half_life, coef_prior, covariance_form, dispersion, emit_loglik, emit_mahal, emit_smoothed_se, family, filter, forecast_spans, kappa, link, max_state_bytes, obs_var, p0, q, revert_half_life, share_p, smooth_lag, standardize, ukf_noise, ukf_rule, var_power
     kmeans: dead_frac, init, n_clusters, scale_floor, seed, split_merge, split_merge_every, split_merge_every_rows, standardize, update_every, update_every_rows, warm_rows, warm_span
     krls: ald_threshold, closed, coef0, degree, emit_n_atoms, gamma, kernel, max_atoms, max_state_bytes, ridge, window_rows, window_size
     lasso: closed, l1_ratio, max_iter, max_rows_between_snapshots, max_rows_between_solves, penalties, select_half_life, snapshot_every, solve_every, target_gaps, tol, window_budget, window_size

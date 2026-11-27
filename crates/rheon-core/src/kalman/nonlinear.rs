@@ -461,6 +461,34 @@ impl KalmanObs {
             }
         }
 
+        if !self.is_linear() || !self.is_gaussian_identity() {
+            let reason = if !self.is_linear() {
+                format!("not filter={:?}", self.filter.name())
+            } else {
+                format!(
+                    "not family={:?} with link={:?}",
+                    self.family.name(),
+                    self.link.name()
+                )
+            };
+            if cfg.emit_loglik {
+                no.refuse(format!(
+                    "kalman: emit_loglik applies only to filter=\"linear\" (with \
+                     family=\"gaussian\" and link=\"identity\"), {reason}: the Gaussian \
+                     innovation log-likelihood assumes a linear Gaussian observation. Leave \
+                     emit_loglik=False, or set filter=\"linear\"."
+                ));
+            }
+            if cfg.emit_mahal {
+                no.refuse(format!(
+                    "kalman: emit_mahal applies only to filter=\"linear\" (with \
+                     family=\"gaussian\" and link=\"identity\"), {reason}: the Gaussian \
+                     innovation Mahalanobis distance assumes a linear Gaussian observation. Leave \
+                     emit_mahal=False, or set filter=\"linear\"."
+                ));
+            }
+        }
+
         if !(self.alpha.is_finite() && self.alpha > 0.0) {
             no.refuse(format!(
                 "kalman: alpha must be finite and above 0, but it is {}. Set alpha to a finite \
@@ -509,18 +537,27 @@ impl Serialize for VecF64OrTag<'_> {
 }
 
 /// Custom [`Serialize`] for [`KalmanCfg`]: skips trailing optional fields
-/// (`noise_units`, `forecast_spans`, `obs`) when at their defaults so every
-/// existing linear `kalman` state file keeps its exact bytes, while always
-/// writing every earlier optional field whenever a later one is written so
-/// compact positional msgpack (`rmp_serde::to_vec`) round-trips cleanly.
+/// (`noise_units`, `forecast_spans`, `obs`, `coef_prior`, `emit_loglik`,
+/// `emit_mahal`) when at their defaults so every existing `kalman` state file
+/// keeps its exact bytes, while always writing every earlier optional field
+/// whenever a later one is written so compact positional msgpack
+/// (`rmp_serde::to_vec`) round-trips cleanly.
 impl Serialize for KalmanCfg {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let has_obs = !self.obs.is_default();
+        let has_mahal = self.emit_mahal;
+        let has_loglik = self.emit_loglik || has_mahal;
+        let has_coef_prior = self.coef_prior.is_some() || has_loglik;
+        let has_obs = !self.obs.is_default() || has_coef_prior;
         let has_horizons = !self.horizons.is_empty() || has_obs;
         let has_noise_units = self.noise_units || has_horizons;
-        let n =
-            13 + usize::from(has_noise_units) + usize::from(has_horizons) + usize::from(has_obs);
+        let n = 13
+            + usize::from(has_noise_units)
+            + usize::from(has_horizons)
+            + usize::from(has_obs)
+            + usize::from(has_coef_prior)
+            + usize::from(has_loglik)
+            + usize::from(has_mahal);
         let mut st = s.serialize_struct("KalmanCfg", n)?;
         st.serialize_field("n_features", &self.n_features)?;
         st.serialize_field("n_targets", &self.n_targets)?;
@@ -549,6 +586,21 @@ impl Serialize for KalmanCfg {
             st.serialize_field("obs", &self.obs)?;
         } else {
             st.skip_field("obs")?;
+        }
+        if has_coef_prior {
+            st.serialize_field("coef_prior", &self.coef_prior)?;
+        } else {
+            st.skip_field("coef_prior")?;
+        }
+        if has_loglik {
+            st.serialize_field("emit_loglik", &self.emit_loglik)?;
+        } else {
+            st.skip_field("emit_loglik")?;
+        }
+        if has_mahal {
+            st.serialize_field("emit_mahal", &self.emit_mahal)?;
+        } else {
+            st.skip_field("emit_mahal")?;
         }
         st.end()
     }
@@ -1049,16 +1101,18 @@ impl Kalman {
         self.gbuf = g;
     }
 
-    /// Size newly-usable slots of covariance `pi` and report whether any slot
-    /// was newly sized.
-    fn size_slots_counting(&mut self, pi: usize, noise: f64, intercept: bool) -> bool {
+    /// Size newly-usable slots of covariance `pi` and report `(added, seeded)`
+    /// — whether any slot was newly sized and whether any slope was seeded from
+    /// `coef_prior`.
+    fn size_slots_counting(&mut self, pi: usize, noise: f64, intercept: bool) -> (bool, bool) {
         let v = self.cfg.p0 * noise;
         if !(v > 0.0 && v.is_finite()) {
-            return false;
+            return (false, false);
         }
         let k = self.cfg.k_total();
         let off = usize::from(self.cfg.fit_intercept);
         let mut added = false;
+        let mut seeded = false;
         for i in 0..k {
             if self.sized::<false>(pi, i) || !self.current_scale(i).1 {
                 continue;
@@ -1075,12 +1129,17 @@ impl Kalman {
                 self.anchor_slot_here(i);
             }
             let a = self.map_a[i];
-            let cc = (off == 1 && !self.open::<false>(pi)).then(|| self.map_c[i] / a);
+            let open = self.open::<false>(pi);
+            let cc = (off == 1 && !open).then(|| self.map_c[i] / a);
             self.add_slot_as::<false>(pi, i, v, a, cc);
             self.live[i] = true;
             added = true;
+            seeded |= self.seed_standardized_slot_prior(pi, i, off, open);
         }
-        added
+        if seeded {
+            self.refresh_zb_for_cov(pi);
+        }
+        (added, seeded)
     }
 
     /// Predictive variance `pred_var(x)` for non-Gaussian-identity observations.
@@ -1487,7 +1546,7 @@ impl Kalman {
                     // Size newly-usable slots (if any).
                     let newly_sized = if !is_gauss_id {
                         if self.cfg.standardize {
-                            self.size_slots_counting(j, 1.0, true)
+                            self.size_slots_counting(j, 1.0, true).0
                         } else if self.is_unsized_as::<false>(j) {
                             self.size_whole(j, self.cfg.p0);
                             true
@@ -1496,9 +1555,9 @@ impl Kalman {
                         }
                     } else if self.cfg.standardize {
                         if units {
-                            self.size_slots_counting(j, 1.0, false)
+                            self.size_slots_counting(j, 1.0, false).0
                         } else if let Some(r) = self.cfg.obs_var.or_else(|| self.basis[j].noise()) {
-                            self.size_slots_counting(j, r, true)
+                            self.size_slots_counting(j, r, true).0
                         } else {
                             false
                         }
@@ -1753,9 +1812,9 @@ impl Kalman {
             }
             if self.cfg.standardize {
                 if units {
-                    self.size_slots_counting(0, 1.0, false);
+                    let _ = self.size_slots_counting(0, 1.0, false);
                 } else if let Some(r) = self.cfg.obs_var.or_else(|| self.basis[0].noise()) {
-                    self.size_slots_counting(0, r, true);
+                    let _ = self.size_slots_counting(0, r, true);
                 }
             } else if legacy_unsized {
                 self.size_whole(0, self.cfg.p0 * upd_noise);

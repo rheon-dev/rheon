@@ -351,6 +351,15 @@ pub enum ModelKind {
         /// UKF observation noise rule (`"expected"` default, `"plugin"`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ukf_noise: Option<String>,
+        /// Prior coefficient mean (`n_targets x k_total`, intercept first).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        coef_prior: Option<Vec<Vec<f64>>>,
+        /// Emit per-target out-of-sample Gaussian innovation log-likelihood.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        emit_loglik: bool,
+        /// Emit per-target out-of-sample innovation Mahalanobis distance.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        emit_mahal: bool,
     },
     /// Huber regression (docs/PLAN.md §4.5).
     Huber {

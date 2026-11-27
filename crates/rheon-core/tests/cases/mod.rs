@@ -51,6 +51,7 @@ impl<M: OnlineModel> Run for Model<M> {
             Some(Extra::Lasso { lam_selected }) => lam_selected,
             Some(Extra::Huber { scale }) => scale,
             Some(Extra::VectorAr { values }) => values,
+            Some(Extra::Kalman { values }) => values,
             Some(Extra::Krls { n_atoms }) => vec![n_atoms],
             Some(other) => panic!("an extra the harness does not know: {other:?}"),
             None => Vec::new(),
@@ -770,6 +771,9 @@ fn kalman_cfg() -> KalmanCfg {
         revert_half_life: vec![f64::INFINITY, 25.0, 6.0],
         standardize: true,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     }
 }
 
@@ -1619,6 +1623,54 @@ pub fn all() -> Vec<Case> {
             .unwrap(),
             K,
             Targets::Binary,
+            40
+        ),
+        // Linear kalman with coef_prior, emit_loglik, and emit_mahal.
+        case!(
+            "kalman_prior_loglik_mahal",
+            "Kalman",
+            Kalman,
+            Kalman::new(KalmanCfg {
+                obs_var: Some(0.25),
+                noise_units: true,
+                min_weight_holds_learning: false,
+                min_weight: 2.0,
+                standardize: false,
+                coef_prior: Some(vec![vec![0.5, 1.0, -0.5], vec![-0.25, 0.3, 0.8]]),
+                emit_loglik: true,
+                emit_mahal: true,
+                ..kalman_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Nonlinear EKF Poisson with coef_prior.
+        case!(
+            "kalman_ekf_prior",
+            "Kalman",
+            Kalman,
+            Kalman::new(KalmanCfg {
+                half_life: Vec::new(),
+                q: Some(vec![1e-4, 1e-4, 1e-4]),
+                obs_var: None,
+                noise_units: true,
+                min_weight_holds_learning: false,
+                min_weight: 2.0,
+                standardize: false,
+                obs: rheon_core::KalmanObs {
+                    family: rheon_core::KalmanFamily::Poisson,
+                    link: rheon_core::KalmanLink::Log,
+                    filter: rheon_core::KalmanFilter::Ekf,
+                    ..rheon_core::KalmanObs::default()
+                },
+                coef_prior: Some(vec![vec![0.3, 0.4, -0.2], vec![0.1, -0.3, 0.5]]),
+                ..kalman_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Positive(2),
             40
         ),
         case!(

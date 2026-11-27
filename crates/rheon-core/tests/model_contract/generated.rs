@@ -453,7 +453,8 @@ mod generated {
                 Some(Extra::Lasso { lam_selected: v }),
             ) => same_slice(u, v),
             (Some(Extra::Huber { scale: u }), Some(Extra::Huber { scale: v })) => same_slice(u, v),
-            (Some(Extra::VectorAr { values: u }), Some(Extra::VectorAr { values: v })) => {
+            (Some(Extra::VectorAr { values: u }), Some(Extra::VectorAr { values: v }))
+            | (Some(Extra::Kalman { values: u }), Some(Extra::Kalman { values: v })) => {
                 same_slice(u, v)
             }
             (Some(Extra::Krls { n_atoms: u }), Some(Extra::Krls { n_atoms: v })) => same(u, v),

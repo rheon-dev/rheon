@@ -519,6 +519,7 @@ use crate::{Decay, EwDiag};
 
 mod forms;
 mod horizons;
+mod innovation;
 mod nonlinear;
 mod smooth;
 pub use forms::CovarianceForm;
@@ -598,6 +599,15 @@ pub struct KalmanCfg {
     /// skipped on write when at the linear Gaussian default.
     #[serde(default)]
     pub obs: KalmanObs,
+    /// Prior coefficient mean (`n_targets x k_total`, intercept first, original units).
+    #[serde(default)]
+    pub coef_prior: Option<Vec<Vec<f64>>>,
+    /// Emit per-target out-of-sample Gaussian innovation log-likelihood.
+    #[serde(default)]
+    pub emit_loglik: bool,
+    /// Emit per-target out-of-sample innovation Mahalanobis distance.
+    #[serde(default)]
+    pub emit_mahal: bool,
 }
 
 pub use horizons::KALMAN_MAX_HORIZONS;
@@ -743,6 +753,15 @@ impl KalmanCfg {
             no.refuse(format!(
                 "kalman: obs_var must be finite and above 0, but it is {v}. Set obs_var to the \
                  target's noise variance, or leave it out to estimate it from the residuals."
+            ));
+        }
+        if let Some(prior) = &self.coef_prior {
+            no.take(crate::model::check_coef_prior(
+                "kalman",
+                prior,
+                self.n_targets,
+                k,
+                self.fit_intercept,
             ));
         }
         horizons::check(self, &mut no);
@@ -1259,12 +1278,7 @@ impl Kalman {
                 p_init[i * k + i] = cfg.p0;
             }
         }
-        let mut beta = vec![vec![0.0; k]; m];
-        if !cfg.obs.link.defined_at_zero() && cfg.fit_intercept {
-            for b in &mut beta {
-                b[0] = 1.0;
-            }
-        }
+        let beta = innovation::initial_beta(&cfg);
         let anchored = if cfg.standardize { k } else { 0 };
         let mut model = Self {
             stats: EwDiag::new(k),
@@ -2122,19 +2136,26 @@ impl Kalman {
     fn size_slots(&mut self, pi: usize, noise: f64, intercept: bool) {
         // The form read once for the loop over the slots (`mark_live`).
         if self.factor() {
-            self.size_slots_as::<true>(pi, noise, intercept);
+            self.size_slots_as::<true>(pi, noise, intercept, false);
         } else {
-            self.size_slots_as::<false>(pi, noise, intercept);
+            self.size_slots_as::<false>(pi, noise, intercept, false);
         }
     }
 
-    fn size_slots_as<const FACTOR: bool>(&mut self, pi: usize, noise: f64, intercept: bool) {
+    fn size_slots_as<const FACTOR: bool>(
+        &mut self,
+        pi: usize,
+        noise: f64,
+        intercept: bool,
+        seed_prior: bool,
+    ) -> bool {
         let v = self.cfg.p0 * noise;
         if !(v > 0.0 && v.is_finite()) {
-            return;
+            return false;
         }
         let k = self.cfg.k_total();
         let off = usize::from(self.cfg.fit_intercept);
+        let mut seeded = false;
         for i in 0..k {
             if self.sized::<FACTOR>(pi, i) || !self.current_scale(i).1 {
                 continue;
@@ -2150,10 +2171,15 @@ impl Kalman {
                 self.anchor_slot_here(i);
             }
             let a = self.map_a[i];
-            let cc = (off == 1 && !self.open::<FACTOR>(pi)).then(|| self.map_c[i] / a);
+            let open = self.open::<FACTOR>(pi);
+            let cc = (off == 1 && !open).then(|| self.map_c[i] / a);
             self.add_slot_as::<FACTOR>(pi, i, v, a, cc);
             self.live[i] = true;
+            if seed_prior && self.seed_standardized_slot_prior(pi, i, off, open) {
+                seeded = true;
+            }
         }
+        seeded
     }
 
     /// Whether covariance `pi` has lost its positive-definiteness where it
@@ -2811,11 +2837,21 @@ impl OnlineModel for Kalman {
         }
         let per = 3 * self.cfg.horizons.len();
         pred.resize(m * (1 + per), f64::NAN);
-        Step {
-            pred,
-            n_eff,
-            extra: None,
-        }
+        let extra = self
+            .cfg
+            .emits_innovation()
+            .then(|| crate::model::Extra::Kalman {
+                values: vec![f64::NAN; self.cfg.extra_width()],
+            });
+        Step { pred, n_eff, extra }
+    }
+
+    fn predict_with(&self, x: &[f64], y: &[Option<f64>], d_clock: f64) -> Step {
+        self.predict_with_weight(x, y, d_clock, 1.0)
+    }
+
+    fn predict_with_into(&self, x: &[f64], y: &[Option<f64>], d_clock: f64, out: &mut Step) {
+        self.predict_with_weight_into(x, y, d_clock, 1.0, out);
     }
 
     fn label_next(&mut self, label: crate::ClockValue) {
@@ -3065,12 +3101,17 @@ impl Kalman {
             let sigma2 = self.noise[if self.cfg.share_p { 0 } else { pi }];
             if self.cfg.standardize {
                 self.add_process_noise::<FACTOR>(pi, sigma2, gap);
-                if self.units() {
+                let seeded = if self.units() {
                     // `p0` in units of the noise on each slope whose scale
                     // is usable; the intercept stays diffuse for the update.
-                    self.size_slots_as::<FACTOR>(pi, 1.0, false);
+                    self.size_slots_as::<FACTOR>(pi, 1.0, false, true)
                 } else if let Some(r) = self.cfg.obs_var.or_else(|| self.basis[pi].noise()) {
-                    self.size_slots_as::<FACTOR>(pi, r, true);
+                    self.size_slots_as::<FACTOR>(pi, r, true, true)
+                } else {
+                    false
+                };
+                if seeded {
+                    self.refresh_zb_for_cov(pi);
                 }
             } else if self.units() {
                 self.add_process_noise::<FACTOR>(pi, sigma2, gap);
@@ -3103,6 +3144,7 @@ impl Kalman {
         let units = self.units();
         let diffuse = units && self.cfg.fit_intercept;
         let open_shared = diffuse && self.cfg.share_p && !self.sized::<FACTOR>(0, 0);
+        let mut extra_vals = innovation::init_extra(&mut out.extra, self.cfg.extra_width());
         let mut shared_s = f64::NAN;
         let mut shared_r = f64::NAN;
         for (j, &pred_j) in pred.iter().enumerate() {
@@ -3133,6 +3175,14 @@ impl Kalman {
             // with no noise yet to weigh it against: at `R = 0` the update
             // would take it as exact and collapse `P` along `z` (CC4).
             if r_inn > 0.0 && s_inn > 0.0 && s_inn.is_finite() && err.is_finite() {
+                if let Some(ev) = extra_vals.as_deref_mut()
+                    && ready
+                    && !open
+                    && !(diffuse && self.wj[j] == 0.0)
+                    && !self.is_unsized_as::<FACTOR>(pi)
+                {
+                    self.record_innovation(j, zpz, s_inn, err, weight, shared_s2, ev);
+                }
                 if diffuse && (open || self.wj[j] == 0.0) {
                     // The diffuse intercept's gain is `e_0`: it takes the
                     // whole innovation, the level, and nothing else moves.
@@ -3231,7 +3281,6 @@ impl Kalman {
             pred.fill(f64::NAN);
         }
         out.n_eff = n_eff;
-        out.extra = None;
     }
 }
 
@@ -3265,6 +3314,9 @@ mod tests {
             revert_half_life: vec![f64::INFINITY],
             standardize: true,
             obs: Default::default(),
+            coef_prior: None,
+            emit_loglik: false,
+            emit_mahal: false,
         }
     }
 
@@ -3842,6 +3894,9 @@ mod tests {
             revert_half_life: vec![f64::INFINITY],
             standardize: false,
             obs: Default::default(),
+            coef_prior: None,
+            emit_loglik: false,
+            emit_mahal: false,
         })
         .unwrap();
         // Accumulate the normal equations alongside, then compare with the
@@ -5031,6 +5086,9 @@ mod tests {
             revert_half_life: vec![f64::INFINITY],
             standardize: false,
             obs: Default::default(),
+            coef_prior: None,
+            emit_loglik: false,
+            emit_mahal: false,
         })
         .unwrap();
         assert_eq!(f64::from_bits(1) / 4.0, 0.0, "R / w underflows");
@@ -5354,6 +5412,9 @@ mod tests {
             revert_half_life: vec![f64::INFINITY],
             standardize: false,
             obs: Default::default(),
+            coef_prior: None,
+            emit_loglik: false,
+            emit_mahal: false,
         }
     }
 
@@ -5661,6 +5722,9 @@ mod tests {
             revert_half_life: vec![f64::INFINITY],
             standardize: true,
             obs: Default::default(),
+            coef_prior: None,
+            emit_loglik: false,
+            emit_mahal: false,
         };
         let mut m = Kalman::new(c).unwrap();
         let mut s = 29u64;
@@ -5799,4 +5863,6 @@ mod tests {
     mod smooth;
     // Task 497's EKF and UKF nonlinear observation filters.
     mod nonlinear;
+    // Task 519's coef_prior, emit_loglik and emit_mahal.
+    mod extras;
 }

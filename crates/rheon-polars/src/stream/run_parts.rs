@@ -223,3 +223,29 @@ pub(super) fn joined(mut slots: Vec<Vec<f64>>) -> Vec<f64> {
         }
     }
 }
+
+/// Null every Kalman innovation diagnostic (`loglik`, `mahal`) when the whole
+/// row is withheld by `min_settled_frac`.
+pub(super) fn withhold_kalman_all(extra: &mut Option<rheon_core::Extra>) {
+    if let Some(rheon_core::Extra::Kalman { values }) = extra.as_mut() {
+        values.fill(f64::NAN);
+    }
+}
+
+/// Null target `tj`'s Kalman innovation diagnostics (`loglik`, `mahal`) when
+/// a per-target readiness gate (`min_weight`, `max_error_inflation`) withholds
+/// `tj`.
+pub(super) fn withhold_kalman_target(
+    extra: &mut Option<rheon_core::Extra>,
+    m_targets: usize,
+    tj: usize,
+) {
+    if let Some(rheon_core::Extra::Kalman { values }) = extra.as_mut()
+        && m_targets > 0
+        && tj < m_targets
+    {
+        for block in values.chunks_exact_mut(m_targets) {
+            block[tj] = f64::NAN;
+        }
+    }
+}

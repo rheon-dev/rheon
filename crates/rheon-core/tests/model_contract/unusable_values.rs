@@ -37,6 +37,7 @@ fn same_bits(a: &Step, b: &Step) -> bool {
         }
         (Some(Extra::Huber { scale: u }), Some(Extra::Huber { scale: v })) => same(u, v),
         (Some(Extra::VectorAr { values: u }), Some(Extra::VectorAr { values: v })) => same(u, v),
+        (Some(Extra::Kalman { values: u }), Some(Extra::Kalman { values: v })) => same(u, v),
         (Some(Extra::Krls { n_atoms: u }), Some(Extra::Krls { n_atoms: v })) => same_number(*u, *v),
         (u, v) => u == v,
     };
@@ -171,7 +172,9 @@ fn reports_nothing(s: &Step) -> bool {
         && match &s.extra {
             None => true,
             Some(Extra::Lasso { lam_selected }) => lam_selected.iter().all(|v| v.is_nan()),
-            Some(Extra::VectorAr { values }) => values.iter().all(|v| v.is_nan()),
+            Some(Extra::VectorAr { values }) | Some(Extra::Kalman { values }) => {
+                values.iter().all(|v| v.is_nan())
+            }
             Some(Extra::Krls { n_atoms }) => n_atoms.is_nan(),
             Some(_) => false,
         }
@@ -411,6 +414,29 @@ fn kalman_predict_is_the_step() {
                 2,
                 false,
             );
+        }
+    }
+}
+
+#[test]
+fn kalman_extras_step_into_and_unusable_values() {
+    let prior = vec![vec![0.5, 1.0, -0.5], vec![-0.25, 0.25, 0.75]];
+    for standardize in [false, true] {
+        for obs_var in [Some(0.25), None] {
+            let mut cfg = kalman_cfg();
+            cfg.standardize = standardize;
+            cfg.obs_var = obs_var;
+            cfg.coef_prior = Some(prior.clone());
+            cfg.emit_loglik = true;
+            cfg.emit_mahal = true;
+            step_into_is_step_on_a_stream(move || Kalman::new(cfg.clone()).unwrap(), 2, false);
+            let mut cfg2 = kalman_cfg();
+            cfg2.standardize = standardize;
+            cfg2.obs_var = obs_var;
+            cfg2.coef_prior = Some(prior.clone());
+            cfg2.emit_loglik = true;
+            cfg2.emit_mahal = true;
+            unusable_values_are_refused(&move || Kalman::new(cfg2.clone()).unwrap(), 2, false, "kalman");
         }
     }
 }

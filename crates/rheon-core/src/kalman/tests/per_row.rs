@@ -55,6 +55,9 @@ fn cfg_with(revert: Vec<f64>, fit_intercept: bool, standardize: bool) -> KalmanC
         revert_half_life: revert,
         standardize,
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     }
 }
 

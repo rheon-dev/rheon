@@ -4732,3 +4732,72 @@ fn kalman_nonlinear_fixtures_write_their_obs_forms() {
         );
     }
 }
+
+/// The `kalman` prior and innovation-diagnostic fixtures freeze `coef_prior`,
+/// `emit_loglik` and `emit_mahal`, while older fixtures omit all three.
+#[test]
+fn kalman_extras_fixtures_write_prior_and_innovation_flags() {
+    if regenerating() {
+        return;
+    }
+    let decoded =
+        |f: &crate::cases::Fixture| rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+
+    let lin = frozen::ALL
+        .iter()
+        .find(|f| f.name == "kalman_prior_loglik_mahal")
+        .expect("kalman_prior_loglik_mahal fixture");
+    let lv = decoded(lin);
+    assert!(
+        at(&lv, &["model", "Kalman", "cfg", "coef_prior"]).is_some(),
+        "kalman_prior_loglik_mahal: cfg.coef_prior missing"
+    );
+    assert_eq!(
+        at(&lv, &["model", "Kalman", "cfg", "emit_loglik"]).and_then(rmpv::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        at(&lv, &["model", "Kalman", "cfg", "emit_mahal"]).and_then(rmpv::Value::as_bool),
+        Some(true)
+    );
+
+    let nl = frozen::ALL
+        .iter()
+        .find(|f| f.name == "kalman_ekf_prior")
+        .expect("kalman_ekf_prior fixture");
+    let nv = decoded(nl);
+    assert_eq!(
+        at(&nv, &["model", "Kalman", "cfg", "obs", "filter"]).and_then(rmpv::Value::as_str),
+        Some("ekf")
+    );
+    assert!(
+        at(&nv, &["model", "Kalman", "cfg", "coef_prior"]).is_some(),
+        "kalman_ekf_prior: cfg.coef_prior missing"
+    );
+    assert!(at(&nv, &["model", "Kalman", "cfg", "emit_loglik"]).is_none());
+    assert!(at(&nv, &["model", "Kalman", "cfg", "emit_mahal"]).is_none());
+
+    for name in [
+        "kalman",
+        "kalman_gap",
+        "kalman_noise_units",
+        "kalman_output_only",
+        "kalman_square_root",
+        "kalman_smooth",
+    ] {
+        let f = frozen::ALL.iter().find(|f| f.name == name).unwrap();
+        let v = decoded(f);
+        assert!(
+            at(&v, &["model", "Kalman", "cfg", "coef_prior"]).is_none(),
+            "{name}"
+        );
+        assert!(
+            at(&v, &["model", "Kalman", "cfg", "emit_loglik"]).is_none(),
+            "{name}"
+        );
+        assert!(
+            at(&v, &["model", "Kalman", "cfg", "emit_mahal"]).is_none(),
+            "{name}"
+        );
+    }
+}

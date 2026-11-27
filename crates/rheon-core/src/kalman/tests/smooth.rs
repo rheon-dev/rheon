@@ -102,6 +102,9 @@ fn base(kf: usize, m: usize) -> KalmanCfg {
         standardize: false,
         horizons: vec![],
         obs: Default::default(),
+        coef_prior: None,
+        emit_loglik: false,
+        emit_mahal: false,
     }
 }
 

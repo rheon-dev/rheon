@@ -247,6 +247,17 @@ def describe_api(cli: Path | None = None) -> str:
         ("rls", dict(targets=["y"], features=["x0"], half_life=100.0)),
         ("lasso", dict(targets=["y"], features=["x0"], half_life=100.0, penalties=[0.1, 0.0])),
         ("kalman", dict(targets=["y"], features=["x0"], half_life=100.0, coef_half_life=50.0)),
+        (
+            "kalman with innovation diagnostics",
+            dict(
+                targets=["y", "z"],
+                features=["x0"],
+                half_life=100.0,
+                coef_half_life=50.0,
+                emit_loglik=True,
+                emit_mahal=True,
+            ),
+        ),
         ("huber", dict(targets=["y"], features=["x0"], half_life=100.0)),
         ("quantile", dict(targets=["y"], features=["x0"], half_life=100.0, quantile=0.5)),
         ("sgd", dict(targets=["y"], features=["x0"], half_life=100.0, learning_rate=0.01)),

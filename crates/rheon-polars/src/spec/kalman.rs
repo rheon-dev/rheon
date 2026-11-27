@@ -166,6 +166,9 @@ impl Spec {
             beta,
             kappa,
             ukf_noise,
+            coef_prior,
+            emit_loglik,
+            emit_mahal,
             ..
         } = &self.model
         else {
@@ -264,6 +267,41 @@ impl Spec {
                      filter=\"linear\", not filter={:?}: nonlinear EKF and UKF updates operate on \
                      the full covariance matrix. Leave covariance_form at its default.",
                     flt.name()
+                ));
+            }
+            if flt != KalmanFilter::Linear {
+                if *emit_loglik {
+                    no.refuse(format!(
+                        "spec {name:?}: emit_loglik applies only to the linear Gaussian Kalman \
+                         filter (filter=\"linear\", family=\"gaussian\", link=\"identity\"), not \
+                         filter={:?}. Leave emit_loglik=False.",
+                        flt.name()
+                    ));
+                }
+                if *emit_mahal {
+                    no.refuse(format!(
+                        "spec {name:?}: emit_mahal applies only to the linear Gaussian Kalman \
+                         filter (filter=\"linear\", family=\"gaussian\", link=\"identity\"), not \
+                         filter={:?}. Leave emit_mahal=False.",
+                        flt.name()
+                    ));
+                }
+            }
+        }
+        if let Some(prior) = coef_prior {
+            let mut bad: Vec<String> = prior
+                .iter()
+                .flatten()
+                .filter(|v| !v.is_finite())
+                .map(|v| num_label(*v))
+                .collect();
+            bad.sort();
+            bad.dedup();
+            if !bad.is_empty() {
+                no.refuse(format!(
+                    "spec {name:?}: coef_prior must be finite, but it holds {}. Set each \
+                     coefficient of coef_prior to a finite number.",
+                    super::checks::listed(&bad)
                 ));
             }
         }
@@ -438,6 +476,28 @@ impl Spec {
                              family=\"gaussian\" with link=\"identity\", whose mean and integral \
                              are linear in the coefficients. Leave out forecast_spans."
                         ));
+                    }
+                    if filter_ok == Some(KalmanFilter::Linear) {
+                        if *emit_loglik {
+                            no.refuse(format!(
+                                "spec {name:?}: emit_loglik applies only to the linear Gaussian \
+                                 Kalman filter (filter=\"linear\", family=\"gaussian\", \
+                                 link=\"identity\"), not family={:?} with link={:?}. Leave \
+                                 emit_loglik=False.",
+                                fam.name(),
+                                lnk.name()
+                            ));
+                        }
+                        if *emit_mahal {
+                            no.refuse(format!(
+                                "spec {name:?}: emit_mahal applies only to the linear Gaussian \
+                                 Kalman filter (filter=\"linear\", family=\"gaussian\", \
+                                 link=\"identity\"), not family={:?} with link={:?}. Leave \
+                                 emit_mahal=False.",
+                                fam.name(),
+                                lnk.name()
+                            ));
+                        }
                     }
                 }
             }

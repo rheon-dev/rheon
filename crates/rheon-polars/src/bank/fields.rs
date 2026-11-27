@@ -1928,6 +1928,37 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                     .src(Source::ExtraId(mi)),
             );
         }
+        if let crate::ModelKind::Kalman {
+            emit_loglik,
+            emit_mahal,
+            ..
+        } = &spec.model
+            && (*emit_loglik || *emit_mahal)
+        {
+            let w = extra_width(spec);
+            let mut off = 0;
+            if *emit_loglik {
+                for (t_i, t) in spec.targets.iter().enumerate() {
+                    fields.push(
+                        FieldMeta::new(format!("loglik_{t}{suffix}"), "loglik")
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::LamSelected(mi * w + off + t_i)),
+                    );
+                }
+                off += m;
+            }
+            if *emit_mahal {
+                for (t_i, t) in spec.targets.iter().enumerate() {
+                    fields.push(
+                        FieldMeta::new(format!("mahal_{t}{suffix}"), "mahal")
+                            .decay(suffix, d)
+                            .target(t)
+                            .src(Source::LamSelected(mi * w + off + t_i)),
+                    );
+                }
+            }
+        }
         // `huber`'s residual scale per target, in the same buffer as
         // lasso's selected penalty (docs/PLAN.md task 272 (a)).
         if matches!(
@@ -2007,6 +2038,11 @@ pub fn extra_width(spec: &Spec) -> usize {
             2 * v.causality.as_ref().map_or(0, Vec::len) + usize::from(v.select.is_some())
         }
         crate::ModelKind::Krls(k) if k.emit_n_atoms => 1,
+        crate::ModelKind::Kalman {
+            emit_loglik,
+            emit_mahal,
+            ..
+        } => spec.m() * (usize::from(*emit_loglik) + usize::from(*emit_mahal)),
         _ => 0,
     }
 }

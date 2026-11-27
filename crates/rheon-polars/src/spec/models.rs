@@ -1705,6 +1705,7 @@ impl Spec {
                 p0,
                 revert_half_life,
                 horizons,
+                coef_prior,
                 ..
             } => {
                 let labels: Vec<String> = horizons
@@ -1838,6 +1839,11 @@ impl Spec {
                         self.name,
                         num_label(v)
                     ));
+                }
+                if let Some(c) = coef_prior
+                    && (c.len() != self.m() || c.iter().any(|v| v.len() != k_total))
+                {
+                    no.refuse(coef_prior_refusal(c, k_total));
                 }
                 self.check_kalman_obs(no);
                 no.take(self.check_smoother());
