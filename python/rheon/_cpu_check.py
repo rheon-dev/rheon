@@ -193,7 +193,10 @@ class _ExecCode:
                 if not kernel32.VirtualProtect(
                     address, len(code), page_execute_read, ctypes.byref(old_protect)
                 ):
-                    raise OSError("could not make memory executable for the CPU check")
+                    raise OSError(
+                        "rheon CPU check: could not make memory executable. "
+                        "Set RHEON_SKIP_CPU_CHECK=1 to skip the check."
+                    )
             except BaseException:
                 kernel32.VirtualFree(address, 0, mem_release)
                 raise
