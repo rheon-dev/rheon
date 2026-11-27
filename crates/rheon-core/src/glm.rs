@@ -1419,45 +1419,46 @@ impl OnlineModel for Glm {
         // A weight below 0, which a caller may hand the model directly
         // (the bank refuses one), is a weight of 0.
         let weight = weight.max(0.0);
-        self.ensure_work();
         let m = self.cfg.n_targets;
         let nf = self.cfg.n_features;
-        let lam = self.cfg.decay.factor(d_clock);
-        let off = usize::from(self.cfg.fit_intercept);
         let fam = self.cfg.family();
-        self.work.x[off..].copy_from_slice(x);
         let n_eff = self.w_sum;
         out.pred.clear();
         out.pred.resize(m, f64::NAN);
-        // A refit over a span of the clock: the row's place on it, the
-        // stamp handed or the clock summed from the steps; and the rows it
-        // would add to the buffers, checked against the cap before any is
-        // learned.
+        // A refit over a span of the clock: check the cap before mutating
+        // `own` or any target's state, and once over the cap leave every field
+        // untouched on subsequent rows (including zero-weight rows).
         let handed = self.next.take();
+        let rejected = self.over.is_some()
+            || (self.cfg.refit_clock.is_some() && weight > 0.0 && {
+                let joining = self
+                    .refit
+                    .iter()
+                    .zip(y)
+                    .filter(|(r, t)| !r.done && t.is_some_and(|t| fam.takes(t)))
+                    .count();
+                let with = self.refit_held_bytes(joining);
+                let cap = self.cfg.cap();
+                !self.held_cap().admit(with, cap)
+            });
+        if rejected {
+            for (j, p) in out.pred.iter_mut().enumerate() {
+                if self.w_target[j] >= self.cfg.min_weight {
+                    *p = self.mean_of(j, x);
+                }
+            }
+            out.n_eff = n_eff;
+            out.extra = None;
+            return;
+        }
+        self.ensure_work();
+        let lam = self.cfg.decay.factor(d_clock);
+        let off = usize::from(self.cfg.fit_intercept);
+        self.work.x[off..].copy_from_slice(x);
         let now = self.cfg.refit_clock.map(|_| {
             self.own += d_clock;
             handed.unwrap_or(Stamp::from(self.own))
         });
-        if now.is_some() && weight > 0.0 {
-            let joining = self
-                .refit
-                .iter()
-                .zip(y)
-                .filter(|(r, t)| !r.done && t.is_some_and(|t| fam.takes(t)))
-                .count();
-            let with = self.refit_held_bytes(joining);
-            let cap = self.cfg.cap();
-            if !self.held_cap().admit(with, cap) {
-                for (j, p) in out.pred.iter_mut().enumerate() {
-                    if self.w_target[j] >= self.cfg.min_weight {
-                        *p = self.mean_of(j, x);
-                    }
-                }
-                out.n_eff = n_eff;
-                out.extra = None;
-                return;
-            }
-        }
         let p = self.cfg.k_total();
         let log_power = variance_power(&fam);
         for (j, &yj) in y.iter().enumerate().take(m) {

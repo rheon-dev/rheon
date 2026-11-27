@@ -1179,11 +1179,8 @@ impl CorrChange {
             .unwrap_or(crate::clock_span::DEFAULT_STATE_BYTES)
     }
 
-    /// The bytes a clock form's state takes with `extra` more rows held: the
-    /// rows of the ring and of the period in progress, `8` bytes a number,
-    /// each `window` row's key beside it, and the model's fixed part.
-    fn held_bytes(&self, extra: usize) -> u64 {
-        let rows = self.ring.len() + self.monitoring.as_ref().map_or(0, |m| m.rows.len()) + extra;
+    /// The bytes a clock form's state takes when holding `rows` rows.
+    fn held_bytes_for(&self, rows: usize) -> u64 {
         let key = if self.cfg.kind == CorrChangeKind::Window {
             std::mem::size_of::<Stamp>()
         } else {
@@ -1192,6 +1189,26 @@ impl CorrChange {
         let d = self.cfg.n_features;
         let fixed = std::mem::size_of::<Self>() + 8 * (d * d + 4 * d);
         (fixed + rows * (8 * self.cfg.width() + key)) as u64
+    }
+
+    /// The bytes a clock form's state takes with `extra` more rows held: the
+    /// rows of the ring and of the period in progress, `8` bytes a number,
+    /// each `window` row's key beside it, and the model's fixed part.
+    fn held_bytes(&self, extra: usize) -> u64 {
+        let rows = self.ring.len() + self.monitoring.as_ref().map_or(0, |m| m.rows.len()) + extra;
+        self.held_bytes_for(rows)
+    }
+
+    /// How many `window` rows leave at `now`, read without mutating the ring.
+    fn dropped_at(&self, now: Stamp) -> usize {
+        match (self.cfg.kind, self.cfg.span_clock) {
+            (CorrChangeKind::Window, Some(span)) => self
+                .keys
+                .iter()
+                .take_while(|&&k| crate::WindowClosed::Right.has_left(now, k, 2.0 * span))
+                .count(),
+            _ => 0,
+        }
     }
 
     /// Whether the critical value in force is due to be drawn again: every
@@ -2574,6 +2591,34 @@ impl crate::OnlineModel for CorrChange {
         }
         out.n_eff = self.n_eff;
         out.extra = None;
+        // Check the state cap atomically before advancing clocks, trimming the
+        // window, or decaying running state.
+        if self.over.is_some() {
+            if let Some(s) = self.since_draw.as_mut() {
+                s.discard_next();
+            }
+            if let Some(c) = self.clock.as_mut() {
+                c.next = None;
+            }
+            return;
+        }
+        if weight > 0.0
+            && let Some(now) = key
+        {
+            let rows = self.ring.len() - self.dropped_at(now)
+                + self.monitoring.as_ref().map_or(0, |m| m.rows.len())
+                + 1;
+            let (bytes, cap) = (self.held_bytes_for(rows), self.cap());
+            if !self.held_cap().admit(bytes, cap) {
+                if let Some(s) = self.since_draw.as_mut() {
+                    s.discard_next();
+                }
+                if let Some(c) = self.clock.as_mut() {
+                    c.next = None;
+                }
+                return;
+            }
+        }
         let lam = self.cfg.decay.factor(d_clock);
         if let Some(s) = self.since_draw.as_mut() {
             s.step(d_clock);
@@ -2593,19 +2638,10 @@ impl crate::OnlineModel for CorrChange {
             }
             return;
         }
-        // Under a clock form the rows held are the data's to number: a row
-        // that would take the state past `max_state_bytes` is not learned,
-        // nor any after it, and the caller refuses the run
-        // (`clock_span::HeldCap`). The window's rows that have aged out
-        // leave first.
-        if let Some(now) = key {
-            if self.cfg.kind == CorrChangeKind::Window {
-                self.trim_windows(now);
-            }
-            let (bytes, cap) = (self.held_bytes(1), self.cap());
-            if !self.held_cap().admit(bytes, cap) {
-                return;
-            }
+        if let Some(now) = key
+            && self.cfg.kind == CorrChangeKind::Window
+        {
+            self.trim_windows(now);
         }
         // The row as the ring holds it, copied into the row the window's
         // ring let go last, so the copy allocates nothing.

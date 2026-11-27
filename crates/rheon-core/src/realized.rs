@@ -580,6 +580,40 @@ impl OnlineModel for Realized {
         self.read_into(y, &mut out.pred);
         out.n_eff = self.n_eff();
         out.extra = None;
+        if self.over.is_some() {
+            if let Some(p) = self.window.as_mut().and_then(|w| w.place.as_mut()) {
+                p.discard_next();
+            }
+            return;
+        }
+        if weight > 0.0
+            && let Some(now) = self
+                .window
+                .as_ref()
+                .and_then(|w| w.place.as_ref())
+                .map(|p| p.peek(d_clock))
+        {
+            let dropped = match (self.cfg.window_clock, &self.window) {
+                (Some(span), Some(w)) => w
+                    .rows
+                    .iter()
+                    .take_while(|h| {
+                        h.stamp
+                            .is_some_and(|s| self.cfg.closed.has_left(now, s, span))
+                    })
+                    .count(),
+                _ => 0,
+            };
+            let rows = self.window.as_ref().map(|w| w.rows.len() - dropped + 1);
+            let bytes = Self::state_bytes(self.cfg.n_targets, self.cfg.lm_window, rows, true);
+            let cap = self.cfg.cap();
+            if !self.held_cap().admit(bytes, cap) {
+                if let Some(p) = self.window.as_mut().and_then(|w| w.place.as_mut()) {
+                    p.discard_next();
+                }
+                return;
+            }
+        }
         let f = self.cfg.decay.factor(d_clock);
         self.w_sum = f * self.w_sum + weight;
         for s in &mut self.series {
@@ -597,14 +631,6 @@ impl OnlineModel for Realized {
         // they are (hard rule 9).
         if weight <= 0.0 {
             return;
-        }
-        // A clock window's next row that would take the state past its cap
-        // is not learned, nor any after it: the overrun is reported.
-        if now.is_some() {
-            let (bytes, cap) = (self.bytes_with(1), self.cfg.cap());
-            if !self.held_cap().admit(bytes, cap) {
-                return;
-            }
         }
         let seq = match self.window.as_mut() {
             Some(w) => {

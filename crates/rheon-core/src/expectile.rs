@@ -1551,6 +1551,12 @@ impl Expectile {
     ) {
         let handed = self.next.take();
         let floor = self.cfg.min_weight;
+        // Once past the cap no row mutates any field, clock included.
+        if self.over.is_some() {
+            let key = self.window_key(handed, d_clock, weight > 0.0);
+            self.read_ahead(x, d_clock, key, floor, out);
+            return;
+        }
         // A row of weight 0 counts in no clock (hard rule 9): read as any
         // row is, from the last row that counted, and nothing kept of it but
         // the clock it stepped over.
@@ -1571,12 +1577,45 @@ impl Expectile {
             }
             return;
         }
+        let key = self.window_key(handed, d_clock, true);
+        // Check a clock window's or clock refit's byte cap atomically before
+        // advancing `self.clock`, trimming expired rows, or mutating any target.
+        if let Some(span) = self.cfg.window_clock {
+            let expired = self.window.as_ref().map_or(0, |w| {
+                w.stamp
+                    .iter()
+                    .take_while(|&&s| self.cfg.closed.has_left(key, s, span))
+                    .count()
+            });
+            let bytes = Self::clock_state_bytes(
+                self.cfg.n_features,
+                self.cfg.n_targets,
+                self.cfg.fit_intercept,
+                self.window_rows() - expired + 1,
+            );
+            let cap = self.cfg.cap();
+            if !self.held_cap().admit(bytes, cap) {
+                self.read_ahead(x, d_clock, key, floor, out);
+                return;
+            }
+        } else if self.cfg.refit_clock.is_some() {
+            let joining = self
+                .refit
+                .iter()
+                .zip(y)
+                .filter(|(r, t)| !r.done && t.is_some())
+                .count();
+            let (bytes, cap) = (self.refit_clock_bytes(joining), self.cfg.cap());
+            if !self.held_cap().admit(bytes, cap) {
+                self.read_into(x, floor, self.n_eff(), &self.w_target, out);
+                return;
+            }
+        }
         let gap = match self.clock.seen {
             Seen::Counted => self.gap(d_clock, handed),
             Seen::OnlyZero => 0.0,
             Seen::Nothing => d_clock,
         };
-        let key = self.window_key(handed, d_clock, true);
         self.clock.seen = Seen::Counted;
         self.clock.skipped = false;
         self.clock.carry = 0.0;
@@ -1604,15 +1643,6 @@ impl Expectile {
             }
             self.read_into(x, floor, n_eff, &weights, out);
             self.work.weights = weights;
-            if self.over.is_some() {
-                return;
-            }
-            if self.cfg.window_clock.is_some() {
-                let (bytes, cap) = (self.clock_bytes_with(1), self.cfg.cap());
-                if !self.held_cap().admit(bytes, cap) {
-                    return;
-                }
-            }
             let w = self.window.as_mut().expect("windowed");
             w.x.extend(x.iter().copied());
             for t in y.iter().take(m) {
@@ -1635,21 +1665,6 @@ impl Expectile {
             return;
         }
         self.read_into(x, floor, n_eff, &self.w_target, out);
-        // A refit over a span of the clock holds the rows the span has: a
-        // row that would take the state past the cap is not learned, nor
-        // any after it.
-        if self.cfg.refit_clock.is_some() {
-            let joining = self
-                .refit
-                .iter()
-                .zip(y)
-                .filter(|(r, t)| !r.done && t.is_some())
-                .count();
-            let (bytes, cap) = (self.refit_clock_bytes(joining), self.cfg.cap());
-            if !self.held_cap().admit(bytes, cap) {
-                return;
-            }
-        }
         let tau = self.cfg.expectile;
         let p = self.cfg.k_total();
         // The targets' weights first: a solve reads its rows' weight `W`

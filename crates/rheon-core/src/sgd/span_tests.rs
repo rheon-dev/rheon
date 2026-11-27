@@ -153,7 +153,8 @@ fn the_spans_buffers_are_warned_of_at_half_their_cap_and_stopped_at_it() {
     let (bytes, got) = m.state_over_cap().expect("stopped at the cap");
     assert!(bytes > cap && got == cap);
     let held: u64 = m.refit.iter().map(RefitBuf::held_bytes).sum();
-    assert!(held <= cap && held + row > cap, "{held}");
+    assert!(held <= cap && held + 2 * row > cap, "{held}");
+    assert_eq!(m.refit_status()[0].learned, m.refit_status()[1].learned);
 }
 
 #[test]
@@ -231,9 +232,10 @@ fn held_of(m: &Sgd) -> u64 {
     m.refit.iter().map(RefitBuf::held_bytes).sum()
 }
 
-/// A row is charged `8 (n + 4)` bytes, and 48 more under the MAD, which keeps
-/// each row's `|e|` and its place in a tree: the row that would pass the cap is
-/// recorded as `held + row`, exactly, under each scale.
+/// A row is charged `8 (n + 4)` bytes per target, and 48 more under the MAD,
+/// which keeps each row's `|e|` and its place in a tree: the row that would
+/// pass the cap is refused atomically across both targets and recorded as
+/// `held + 2 * row`, exactly, under each scale.
 #[test]
 fn a_row_is_charged_its_width_and_the_mads_extra_to_the_byte() {
     for (scale, extra) in [(crate::HuberScale::Mad, 48u64), (crate::HuberScale::Rms, 0)] {
@@ -252,7 +254,7 @@ fn a_row_is_charged_its_width_and_the_mads_extra_to_the_byte() {
         }
         assert_eq!(
             m.state_over_cap(),
-            Some((held_of(&m) + row, cap)),
+            Some((held_of(&m) + 2 * row, cap)),
             "{scale:?}"
         );
     }

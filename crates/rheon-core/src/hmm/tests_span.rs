@@ -227,10 +227,10 @@ fn the_warm_up_cap_is_asked_of_a_span_that_has_not_seeded_only() {
     );
 }
 
-/// A row refused at the cap ages the model as a row of no weight: `n_eff`
-/// decays by the row's factor, and the row is not learned.
+/// A row refused at the cap leaves `n_eff` and every other field where it stood:
+/// refusal is atomic.
 #[test]
-fn a_refused_warm_up_row_ages_n_eff() {
+fn a_refused_warm_up_row_leaves_n_eff_unchanged() {
     let c = HmmCfg {
         warm_rows: 2,
         warm_clock: Some(1e12),
@@ -249,7 +249,7 @@ fn a_refused_warm_up_row_ages_n_eff() {
     m.stamp_next(Stamp::Ns(6 * S));
     m.step(&[0.5, 0.5], &[], 1.0, 1.0);
     assert!(m.state_over_cap().is_some());
-    assert_eq!(m.n_eff().to_bits(), (before * 0.9).to_bits());
+    assert_eq!(m.n_eff().to_bits(), before.to_bits());
     assert_eq!(m.buffer.len(), 5);
 }
 

@@ -823,6 +823,11 @@ impl OnlineModel for Isotonic {
         }
         let x0 = x[0];
         let handed = self.next.take();
+        if self.over.is_some() {
+            let key = self.window_key(handed, d_clock, weight >= f64::MIN_POSITIVE);
+            self.read_ahead(key, x0, out);
+            return;
+        }
         // A weight below the smallest normal double is a weight of 0: what
         // it would teach is below a double's resolution beside any normal
         // weight, and its `y w` would round in the subnormal range.
@@ -838,10 +843,35 @@ impl OnlineModel for Isotonic {
             return;
         }
         let m = self.cfg.n_targets;
+        let key = self.window_key(handed, d_clock, true);
+        let cap = self.cfg.cap();
+        if self.cfg.window_rows.is_none() {
+            let drop_bytes = match (&self.ring, self.cfg.window_clock) {
+                (Some(r), Some(span)) => {
+                    let drop_rows = r
+                        .stamp
+                        .iter()
+                        .take_while(|&&s| self.cfg.closed.has_left(key, s, span))
+                        .count();
+                    let drop_entries =
+                        r.y.iter()
+                            .take(drop_rows * m)
+                            .filter(|v| !v.is_nan())
+                            .count();
+                    drop_rows as u64 * self.cfg.ring_row_bytes()
+                        + drop_entries as u64 * ISOTONIC_ROW_BYTES
+                }
+                _ => 0,
+            };
+            let bytes = self.bytes_with(x0, y) - drop_bytes;
+            if !self.held_cap().admit(bytes, cap) {
+                self.read_ahead(key, x0, out);
+                return;
+            }
+        }
         let mut touched = std::mem::take(&mut self.scratch.touched);
         touched.clear();
         touched.resize(m, false);
-        let key = self.window_key(handed, d_clock, true);
         self.note_clock(handed, true);
         // The rows out of a clock window by now leave before the row is
         // read, and `n_eff` is the weight of the rows it reads (hard rule 8).
@@ -851,15 +881,6 @@ impl OnlineModel for Isotonic {
             touched.fill(false);
         }
         self.read_into(x0, out);
-        if self.over.is_some() {
-            self.scratch.touched = touched;
-            return;
-        }
-        let (bytes, cap) = (self.bytes_with(x0, y), self.cfg.cap());
-        if self.cfg.window_rows.is_none() && !self.held_cap().admit(bytes, cap) {
-            self.scratch.touched = touched;
-            return;
-        }
         // The row's own decay, after its read (hard rule 8: `n_eff` before
         // it), then the row.
         self.advance(d_clock);

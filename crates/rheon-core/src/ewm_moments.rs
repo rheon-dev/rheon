@@ -1147,22 +1147,22 @@ impl EwmMoments {
     /// clock span holds, and a window's two stacks.
     pub fn state_bytes(&self) -> u64 {
         let (lags, ring) = self.held_rows();
-        self.bytes_for(&lags, ring)
+        self.bytes_for(lags, ring)
     }
 
-    /// The rows each clock lag buffer and a clock window's ring hold.
-    fn held_rows(&self) -> (Vec<usize>, usize) {
-        let lags = self.bufs.iter().map(|b| b.vals.len()).collect();
+    /// Total rows across every clock lag buffer and a clock window's ring.
+    fn held_rows(&self) -> (usize, usize) {
+        let lags = self.bufs.iter().map(|b| b.vals.len()).sum();
         let ring = self.ring.as_ref().map_or(0, |r| r.stamps.len());
         (lags, ring)
     }
 
-    /// The bytes the state takes with `lags` rows in each clock lag buffer
-    /// and `ring` rows in a clock window's ring.
-    fn bytes_for(&self, lags: &[usize], ring: usize) -> u64 {
+    /// The bytes the state takes with `lags` total rows across clock lag
+    /// buffers and `ring` rows in a clock window's ring.
+    fn bytes_for(&self, lags: usize, ring: usize) -> u64 {
         let (mut n, mut working) = self.cfg.fixed_numbers(&self.derived);
         if self.cfg.clocked {
-            n += 3 * lags.iter().sum::<usize>() as u64;
+            n += 3 * lags as u64;
         }
         if self.cfg.window_clock.is_some() {
             let sums: u64 = self.derived.groups.iter().map(Group::numbers).sum();
@@ -1239,31 +1239,49 @@ impl EwmMoments {
 
     /// One row of every column, `d_clock` after the last, of weight `w`.
     pub fn update_row(&mut self, x: &[f64], d_clock: f64, w: f64) {
+        let now = self.place.as_ref().map(|p| p.peek(d_clock));
+        if !self.admit_row(now, w) {
+            if let Some(p) = &mut self.place {
+                p.discard_next();
+            }
+            return;
+        }
         let now = self.place.as_mut().map(|p| p.step(d_clock));
         let lam = self.cfg.decay.factor(d_clock);
-        self.learn(x, now, lam, w);
+        self.learn_admitted(x, now, lam, w);
     }
 
-    fn learn(&mut self, x: &[f64], now: Option<Stamp>, lam: f64, w: f64) {
+    fn admit_row(&mut self, now: Option<Stamp>, w: f64) -> bool {
         debug_assert!(
             w >= 0.0,
             "EwmMoments::update needs a weight of at least 0, got {w}"
         );
         if w < 0.0 || self.over.is_some() {
+            return false;
+        }
+        if w > 0.0 && self.data_sized() {
+            let now = now.unwrap_or(Stamp::from(0.0));
+            let (lags, ring) = self.rows_with(now);
+            let with = self.bytes_for(lags, ring);
+            let cap = self.cfg.cap();
+            if !self.held_cap().admit(with, cap) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn learn(&mut self, x: &[f64], now: Option<Stamp>, lam: f64, w: f64) {
+        if !self.admit_row(now, w) {
             return;
         }
+        self.learn_admitted(x, now, lam, w);
+    }
+
+    fn learn_admitted(&mut self, x: &[f64], now: Option<Stamp>, lam: f64, w: f64) {
         if w == 0.0 {
             self.zero_row(lam);
             return;
-        }
-        if self.data_sized() {
-            let now = now.unwrap_or(Stamp::from(0.0));
-            let (lags, ring) = self.rows_with(now);
-            let with = self.bytes_for(&lags, ring);
-            let cap = self.cfg.cap();
-            if !self.held_cap().admit(with, cap) {
-                return;
-            }
         }
         let mut z = std::mem::take(&mut self.scratch.z);
         z.clear();
@@ -1395,12 +1413,12 @@ impl EwmMoments {
         }
     }
 
-    /// The rows each lag buffer and a clock window's ring would hold with
-    /// a row at `now` taken.
-    fn rows_with(&self, now: Stamp) -> (Vec<usize>, usize) {
+    /// Total rows across lag buffers and a clock window's ring with a row at
+    /// `now` taken.
+    fn rows_with(&self, now: Stamp) -> (usize, usize) {
         let lags = (0..self.bufs.len())
             .map(|i| self.bufs[i].stamps.len() + 1 - self.lag_drops(i, now))
-            .collect();
+            .sum();
         let ring = match (&self.ring, self.cfg.window_clock) {
             (Some(r), Some(span)) => {
                 let gone = r
@@ -1735,12 +1753,19 @@ impl EwmMoments {
         if let Some(p) = &mut self.place {
             p.hand(stamp);
         }
+        let now = self.place.as_ref().map(|p| p.peek(d_clock));
+        if !self.admit_row(now, w) {
+            if let Some(p) = &mut self.place {
+                p.discard_next();
+            }
+            return;
+        }
         let now = self.place.as_mut().map(|p| p.step(d_clock));
         if self.ring.is_some() {
             self.slide(now);
         }
         let lam = self.cfg.decay.factor(d_clock);
-        self.learn(x, now, lam, w);
+        self.learn_admitted(x, now, lam, w);
     }
 
     /// Every output read at `stamp`, a window of the clock with its edge
@@ -2128,6 +2153,15 @@ impl crate::OnlineModel for EwmMoments {
             *out = refused;
             return;
         }
+        let now = self.place.as_ref().map(|p| p.peek(d_clock));
+        if !self.admit_row(now, weight) {
+            if let Some(p) = &mut self.place {
+                p.discard_next();
+            }
+            out.n_eff = self.read_into(now, &mut out.pred);
+            out.extra = None;
+            return;
+        }
         let now = self.place.as_mut().map(|p| p.step(d_clock));
         if self.ring.is_some() {
             self.slide(now);
@@ -2135,7 +2169,7 @@ impl crate::OnlineModel for EwmMoments {
         out.n_eff = self.read_into(now, &mut out.pred);
         out.extra = None;
         let lam = self.cfg.decay.factor(d_clock);
-        self.learn(x, now, lam, weight);
+        self.learn_admitted(x, now, lam, weight);
     }
 
     fn predict(&self, x: &[f64], d_clock: f64) -> crate::Step {
