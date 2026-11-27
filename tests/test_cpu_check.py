@@ -319,6 +319,291 @@ def test_the_cpu_is_never_read_off_x86(monkeypatch):
     assert _cpu_check.read_cpu_features() is None
 
 
+# --- OSXSAVE / XGETBV and Windows W^X (PYO3-2) -----------------------------------
+
+
+def _all_cpuid_registers(
+    *, osxsave: bool, off: set[str] | None = None
+) -> dict[int, dict[str, int]]:
+    """CPUID leaf values reporting every feature in ``FEATURE_BITS`` except
+    ``off``, with ``OSXSAVE`` (leaf 1 ECX bit 27) set per ``osxsave``."""
+    off = off or set()
+    regs: dict[int, dict[str, int]] = {
+        0: {"eax": 7, "ebx": 0, "ecx": 0, "edx": 0},
+        0x80000000: {"eax": 0x80000001, "ebx": 0, "ecx": 0, "edx": 0},
+        1: {"eax": 0, "ebx": 0, "ecx": (1 << 27) if osxsave else 0, "edx": 0},
+        7: {"eax": 0, "ebx": 0, "ecx": 0, "edx": 0},
+        0x80000001: {"eax": 0, "ebx": 0, "ecx": 0, "edx": 0},
+    }
+    for name, (leaf, reg, bit) in _cpu_check.FEATURE_BITS.items():
+        if name not in off:
+            regs[leaf][reg] |= 1 << bit
+    return regs
+
+
+def test_osxsave_off_hides_ymm_features_and_never_calls_xgetbv(monkeypatch):
+    """When CPUID reports AVX/AVX2/FMA but ``OSXSAVE`` is 0, ``xgetbv`` must
+    not be executed (it traps without OSXSAVE), YMM-dependent features read
+    False, and non-YMM features (including SSE4.2, BMI1, BMI2, LZCNT) stay True."""
+    regs = _all_cpuid_registers(osxsave=False)
+    closed: list[str] = []
+
+    class FakeCpuid:
+        def __call__(self, leaf: int, subleaf: int = 0) -> dict[str, int]:
+            return regs[leaf]
+
+        def close(self) -> None:
+            closed.append("cpuid")
+
+    def refuse_xgetbv():
+        raise AssertionError("xgetbv must not be invoked when OSXSAVE is 0")
+
+    monkeypatch.setattr(_cpu_check, "_is_x86_64", lambda: True)
+    monkeypatch.setattr(_cpu_check, "_Cpuid", FakeCpuid)
+    monkeypatch.setattr(_cpu_check, "_Xgetbv", refuse_xgetbv)
+
+    got = _cpu_check.read_cpu_features()
+    assert got is not None
+    assert closed == ["cpuid"]
+    for name in ("avx", "avx2", "fma"):
+        assert got[name] is False, name
+    for name in ("sse4.2", "bmi1", "bmi2", "lzcnt", "sse3", "ssse3", "sse4.1", "popcnt"):
+        assert got[name] is True, name
+
+
+@pytest.mark.parametrize("xcr0", [0x0, 0x1, 0x2, 0x3, 0x4, 0x5])
+def test_xcr0_without_both_xmm_and_ymm_hides_ymm_features(monkeypatch, xcr0):
+    """With ``OSXSAVE = 1`` but either XMM (bit 1) or YMM (bit 2) absent in
+    XCR0, AVX/AVX2/FMA read False while non-YMM features stay True."""
+    regs = _all_cpuid_registers(osxsave=True)
+    xgetbv_calls: list[int] = []
+    closed: list[str] = []
+
+    class FakeCpuid:
+        def __call__(self, leaf: int, subleaf: int = 0) -> dict[str, int]:
+            return regs[leaf]
+
+        def close(self) -> None:
+            closed.append("cpuid")
+
+    class FakeXgetbv:
+        def __call__(self, xcr: int = 0) -> int:
+            xgetbv_calls.append(xcr)
+            return xcr0
+
+        def close(self) -> None:
+            closed.append("xgetbv")
+
+    monkeypatch.setattr(_cpu_check, "_is_x86_64", lambda: True)
+    monkeypatch.setattr(_cpu_check, "_Cpuid", FakeCpuid)
+    monkeypatch.setattr(_cpu_check, "_Xgetbv", FakeXgetbv)
+
+    got = _cpu_check.read_cpu_features()
+    assert got is not None
+    assert xgetbv_calls == [0]
+    assert set(closed) == {"cpuid", "xgetbv"}
+    for name in ("avx", "avx2", "fma"):
+        assert got[name] is False, (hex(xcr0), name)
+    for name in ("sse4.2", "bmi1", "bmi2", "lzcnt"):
+        assert got[name] is True, (hex(xcr0), name)
+
+
+@pytest.mark.parametrize("xcr0", [0x6, 0x7, 0xE7])
+def test_xcr0_with_xmm_and_ymm_enables_cpuid_ymm_features(monkeypatch, xcr0):
+    """With ``OSXSAVE = 1`` and ``(XCR0 & 0x6) == 0x6``, AVX/AVX2/FMA match
+    their CPUID bits (still False if CPUID itself omits one)."""
+    regs = _all_cpuid_registers(osxsave=True, off={"avx2"})
+    xgetbv_calls: list[int] = []
+    closed: list[str] = []
+
+    class FakeCpuid:
+        def __call__(self, leaf: int, subleaf: int = 0) -> dict[str, int]:
+            return regs[leaf]
+
+        def close(self) -> None:
+            closed.append("cpuid")
+
+    class FakeXgetbv:
+        def __call__(self, xcr: int = 0) -> int:
+            xgetbv_calls.append(xcr)
+            return xcr0
+
+        def close(self) -> None:
+            closed.append("xgetbv")
+
+    monkeypatch.setattr(_cpu_check, "_is_x86_64", lambda: True)
+    monkeypatch.setattr(_cpu_check, "_Cpuid", FakeCpuid)
+    monkeypatch.setattr(_cpu_check, "_Xgetbv", FakeXgetbv)
+
+    got = _cpu_check.read_cpu_features()
+    assert got is not None
+    assert xgetbv_calls == [0]
+    assert set(closed) == {"cpuid", "xgetbv"}
+    assert got["avx"] is True
+    assert got["fma"] is True
+    assert got["avx2"] is False
+    for name in ("sse4.2", "bmi1", "bmi2", "lzcnt"):
+        assert got[name] is True, name
+
+
+def test_xgetbv_machine_code_bytes_match_abis():
+    """Verify the exact assembled System V AMD64 and Windows x64 ``xgetbv`` stubs."""
+    # System V: mov %edi, %ecx (89 f9); xgetbv (0f 01 d0); ret (c3)
+    assert _cpu_check._POSIX_XGETBV_CODE == b"\x89\xf9\x0f\x01\xd0\xc3"
+    # Windows x64: xcr is already in %ecx; xgetbv (0f 01 d0); ret (c3)
+    assert _cpu_check._WINDOWS_XGETBV_CODE == b"\x0f\x01\xd0\xc3"
+
+
+class _FakeKernel32:
+    """In-memory mock of ``kernel32.dll`` for testing Windows W^X allocation."""
+
+    def __init__(self, *, protect_succeeds: bool = True) -> None:
+        import ctypes
+
+        self._ctypes = ctypes
+        self._protect_succeeds = protect_succeeds
+        self.allocated: dict[int, object] = {}
+        self.alloc_calls: list[tuple[object, int, int, int]] = []
+        self.protect_calls: list[tuple[int, int, int, bytes]] = []
+        self.free_calls: list[tuple[int, int, int]] = []
+
+        class _Fn:
+            def __init__(self, fn):
+                self._fn = fn
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self, *args):
+                return self._fn(*args)
+
+        self.VirtualAlloc = _Fn(self._alloc)
+        self.VirtualProtect = _Fn(self._protect)
+        self.VirtualFree = _Fn(self._free)
+
+    def _alloc(self, addr: object, size: int, alloc_type: int, protect: int) -> int:
+        buf = self._ctypes.create_string_buffer(size)
+        ptr = self._ctypes.addressof(buf)
+        self.allocated[ptr] = buf
+        self.alloc_calls.append((addr, size, alloc_type, protect))
+        return ptr
+
+    def _protect(self, addr: int, size: int, new_protect: int, old_protect_ptr: object) -> int:
+        buf = self.allocated[addr]
+        written = bytes(self._ctypes.string_at(addr, size))
+        self.protect_calls.append((addr, size, new_protect, written))
+        assert buf is not None
+        assert old_protect_ptr is not None
+        return 1 if self._protect_succeeds else 0
+
+    def _free(self, addr: int, size: int, free_type: int) -> int:
+        self.free_calls.append((addr, size, free_type))
+        self.allocated.pop(addr, None)
+        return 1
+
+
+@pytest.mark.parametrize(
+    ("cls", "expected_code"),
+    [
+        (_cpu_check._Cpuid, _cpu_check._WINDOWS_CODE),
+        (_cpu_check._Xgetbv, _cpu_check._WINDOWS_XGETBV_CODE),
+    ],
+)
+def test_windows_wx_allocates_rw_writes_code_then_protects_rx(monkeypatch, cls, expected_code):
+    """Windows allocates ``PAGE_READWRITE`` (0x04), copies the code, then calls
+    ``VirtualProtect`` with ``PAGE_EXECUTE_READ`` (0x20), and frees on close."""
+    import ctypes
+
+    kernel32 = _FakeKernel32(protect_succeeds=True)
+
+    def fake_cdll(name: str, *args, **kwargs):
+        assert name == "kernel32.dll"
+        return kernel32
+
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(ctypes, "CDLL", fake_cdll)
+
+    stub = cls()
+    try:
+        assert len(kernel32.alloc_calls) == 1
+        _, size, alloc_type, fl_protect = kernel32.alloc_calls[0]
+        assert size == len(expected_code)
+        assert alloc_type == 0x3000
+        assert fl_protect == 0x04  # PAGE_READWRITE, never PAGE_EXECUTE_READWRITE (0x40)
+
+        assert len(kernel32.protect_calls) == 1
+        p_addr, p_size, new_protect, written = kernel32.protect_calls[0]
+        assert p_addr == stub.address
+        assert p_size == len(expected_code)
+        assert new_protect == 0x20  # PAGE_EXECUTE_READ
+        assert written == expected_code  # memmove ran before VirtualProtect
+        assert kernel32.VirtualProtect.argtypes is not None
+        assert kernel32.VirtualProtect.restype == ctypes.c_long
+        assert kernel32.free_calls == []
+    finally:
+        stub.close()
+
+    assert kernel32.free_calls == [(stub.address, 0, 0x8000)]
+    assert kernel32.allocated == {}
+
+
+def test_windows_virtualprotect_failure_frees_memory_and_returns_none(monkeypatch):
+    """If ``VirtualProtect`` fails on Windows, ``VirtualFree`` is called before
+    raising so nothing leaks, and ``read_cpu_features()`` returns ``None`` cleanly."""
+    import ctypes
+
+    kernel32 = _FakeKernel32(protect_succeeds=False)
+
+    def fake_cdll(name: str, *args, **kwargs):
+        assert name == "kernel32.dll"
+        return kernel32
+
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(ctypes, "CDLL", fake_cdll)
+    monkeypatch.setattr(_cpu_check, "_is_x86_64", lambda: True)
+
+    with pytest.raises(OSError, match="executable"):
+        _cpu_check._Cpuid()
+    assert len(kernel32.free_calls) == 1
+    assert kernel32.allocated == {}
+
+    assert _cpu_check.read_cpu_features() is None
+    assert len(kernel32.free_calls) == 2
+    assert kernel32.allocated == {}
+
+
+def test_windows_xgetbv_virtualprotect_failure_closes_cpuid_and_returns_none(monkeypatch):
+    """If ``_Xgetbv`` fails during Windows ``VirtualProtect`` after ``_Cpuid``
+    succeeded, both ``_Xgetbv``'s buffer and ``_Cpuid`` are cleaned up cleanly."""
+    import ctypes
+
+    regs = _all_cpuid_registers(osxsave=True)
+    cpuid_closed = False
+
+    class FakeCpuid:
+        def __call__(self, leaf: int, subleaf: int = 0) -> dict[str, int]:
+            return regs[leaf]
+
+        def close(self) -> None:
+            nonlocal cpuid_closed
+            cpuid_closed = True
+
+    kernel32 = _FakeKernel32(protect_succeeds=False)
+
+    def fake_cdll(name: str, *args, **kwargs):
+        assert name == "kernel32.dll"
+        return kernel32
+
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(ctypes, "CDLL", fake_cdll)
+    monkeypatch.setattr(_cpu_check, "_is_x86_64", lambda: True)
+    monkeypatch.setattr(_cpu_check, "_Cpuid", FakeCpuid)
+
+    assert _cpu_check.read_cpu_features() is None
+    assert cpuid_closed is True
+    assert len(kernel32.free_calls) == 1
+    assert kernel32.allocated == {}
+
+
 # --- the real reader, where there is an x86-64 CPU ------------------------------------
 
 #: /proc/cpuinfo's name for each feature the check reads.
@@ -372,6 +657,25 @@ def test_the_real_reader_agrees_with_the_kernels_flags():
 def test_reading_twice_gives_the_same_answer_and_frees_its_memory():
     first = _cpu_check.read_cpu_features()
     assert all(_cpu_check.read_cpu_features() == first for _ in range(50))
+
+
+@x86_only
+def test_the_real_xgetbv_reports_x87_and_xmm_when_osxsave_is_set():
+    """On a real x86-64 host with OSXSAVE enabled, ``_Xgetbv()(0)`` reads XCR0
+    cleanly and reports at least x87 (bit 0) and SSE/XMM (bit 1)."""
+    cpuid = _cpu_check._Cpuid()
+    try:
+        osxsave = bool(cpuid(1)["ecx"] & (1 << _cpu_check._OSXSAVE_BIT))
+    finally:
+        cpuid.close()
+    if not osxsave:
+        pytest.skip("host CPU/OS does not report OSXSAVE")
+    xgetbv = _cpu_check._Xgetbv()
+    try:
+        xcr0 = xgetbv(0)
+    finally:
+        xgetbv.close()
+    assert (xcr0 & 0x3) == 0x3, hex(xcr0)
 
 
 # --- the order of the imports -----------------------------------------------------------
