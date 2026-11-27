@@ -2322,10 +2322,9 @@ impl crate::OnlineModel for Hmm {
                     && m.a.iter().copied().all(non_neg)
                     && m.buffer.iter().all(|(_, w)| non_neg(*w))
                     && m.states.iter().all(EwCov::has_valid_weights)
-                    && m.diag_states.iter().all(EwCovDiag::has_valid_weights)
-                    && m.factor_states
-                        .iter()
-                        .all(|f| non_neg(f.n_eff()) && non_neg(f.precision_scale()));
+                    && m.diag_states.iter().all(EwCovDiag::has_valid_weights);
+                // `factor_states` (`EwFactor`) already enforces finite >= 0
+                // `w_sum` and `precision_scale` in `TryFrom<EwFactorState>`.
                 if !weights_ok {
                     return Err(crate::model::damaged(
                         "hmm",

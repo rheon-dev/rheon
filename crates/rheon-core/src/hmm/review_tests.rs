@@ -492,4 +492,47 @@ fn state_3_a_weight_no_stream_writes_is_refused_on_load() {
         damaged.buffer[0].1 = bad;
         assert!(Hmm::restore(&damaged.state()).is_err(), "buffer w {bad}");
     }
+
+    // Factor-mode `Hmm`: `EwFactorState` refuses negative/non-finite weights
+    // and ridge scales at deserialization time.
+    let d = Hmm::FACTOR_FROM;
+    let mut fm = Hmm::new(cfg(d)).unwrap();
+    for i in 0..40 {
+        let x: Vec<f64> = (0..d)
+            .map(|j| ((i * (j + 1) + j) as f64 * 0.37).sin())
+            .collect();
+        fm.step(&x, &[], 1.0, 1.0);
+    }
+    assert!(fm.factored(), "expected factor_states at d = {d}");
+    assert!(Hmm::restore(&fm.state()).is_ok());
+    let fm_bytes = rmp_serde::to_vec_named(&fm).unwrap();
+    for bad in [-1.0, f64::NAN, f64::INFINITY] {
+        for field in ["w_sum", "precision_scale"] {
+            let mut v = rmpv::decode::read_value(&mut fm_bytes.as_slice()).unwrap();
+            let rmpv::Value::Map(entries) = &mut v else {
+                panic!("map");
+            };
+            let (_, list) = entries
+                .iter_mut()
+                .find(|(k, _)| k.as_str() == Some("factor_states"))
+                .unwrap();
+            let rmpv::Value::Array(items) = list else {
+                panic!("array");
+            };
+            let rmpv::Value::Map(st) = &mut items[0] else {
+                panic!("state map");
+            };
+            let (_, slot) = st
+                .iter_mut()
+                .find(|(k, _)| k.as_str() == Some(field))
+                .unwrap();
+            *slot = rmpv::Value::F64(bad);
+            let mut out = Vec::new();
+            rmpv::encode::write_value(&mut out, &v).unwrap();
+            assert!(
+                rmp_serde::from_slice::<Hmm>(&out).is_err(),
+                "factor_states.{field} = {bad} should fail deserialization"
+            );
+        }
+    }
 }

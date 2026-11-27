@@ -1487,6 +1487,16 @@ fn state_3_an_impossible_step_gain_is_refused_on_load() {
             },
         ),
         (
+            "nonzero q, zero q2 with n = 0",
+            StepGain {
+                q: 1.0,
+                q2: 0.0,
+                n: 0.0,
+                resting: false,
+                rested: 0,
+            },
+        ),
+        (
             "nonzero q2 with q = 0",
             StepGain {
                 q: 0.0,
@@ -1548,6 +1558,10 @@ fn state_3_an_impossible_step_gain_is_refused_on_load() {
         ),
     ];
     let base_m = Sgd::new(cfg(SgdLoss::Squared, LearningRate::Constant, 0.05)).unwrap();
+    assert!(
+        Sgd::restore(&base_m.state()).is_ok(),
+        "fresh zero StepGain (n = q = q2 = 0) restores cleanly"
+    );
     for (what, g) in bad_gains {
         let mut damaged = base_m.clone();
         damaged.gain[0] = g;

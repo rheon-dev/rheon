@@ -177,3 +177,29 @@ fn a_lag_ring_deeper_than_its_lags_is_refused() {
         Err(e) => panic!("{e}"),
     }
 }
+
+/// STATE-3: pending-block weight and decay invariants in `EwCov::has_valid_weights`
+/// accept a well-formed pending block and refuse negative/non-finite `w_open`,
+/// `pending.w`, or out-of-range `pending.lam`.
+#[test]
+fn state_3_ewcov_pending_weight_invariants_are_checked() {
+    let mut cov = EwCov::new(2);
+    cov.set_block_rows(8);
+    cov.update(&[1.0, 2.0], 0.9, 1.0);
+    assert!(cov.has_pending(), "row buffered in pending block");
+    assert!(cov.has_valid_weights(), "valid pending block accepted");
+
+    let mut bad_w_open = cov.clone();
+    bad_w_open.pending.w_open = -1.0;
+    assert!(!bad_w_open.has_valid_weights(), "negative pending w_open");
+
+    let mut bad_w = cov.clone();
+    bad_w.pending.w[0] = -1.0;
+    assert!(!bad_w.has_valid_weights(), "negative pending w");
+
+    for bad_lam in [-0.1, 1.5, f64::NAN] {
+        let mut bad = cov.clone();
+        bad.pending.lam[0] = bad_lam;
+        assert!(!bad.has_valid_weights(), "bad pending lam {bad_lam}");
+    }
+}

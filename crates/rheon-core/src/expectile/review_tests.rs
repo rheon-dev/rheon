@@ -617,4 +617,30 @@ fn state_3_a_weight_no_stream_writes_is_refused_on_load() {
             other => panic!("window.w = {bad}: {other:?}"),
         }
     }
+
+    // RowWindow::has_shape: each parallel buffer length (`x`, `y`, `present`, `stamp`)
+    // must match `w.len()`.
+    type WinEdit = (&'static str, fn(&mut RowWindow));
+    let shape_edits: [WinEdit; 4] = [
+        ("window.x short", |win| {
+            win.x.pop_back();
+        }),
+        ("window.y short", |win| {
+            win.y.pop_back();
+        }),
+        ("window.present short", |win| {
+            win.present.pop_back();
+        }),
+        ("window.stamp short", |win| {
+            win.stamp.pop_back();
+        }),
+    ];
+    for (name, edit) in shape_edits {
+        let mut damaged = w.clone();
+        edit(damaged.window.as_mut().unwrap());
+        match Expectile::restore(&damaged.state()) {
+            Err(StateError::Invalid(e)) => assert!(e.contains("damaged"), "{name}: {e}"),
+            other => panic!("{name}: {other:?}"),
+        }
+    }
 }
