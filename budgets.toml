@@ -321,6 +321,8 @@ budget = 26482569
 
 [instructions.krls]
 what = "krls, ALD mode on 5 features with 50 dictionary atoms and no decay: AnyModel::step_into, into one kept Step, kernel evaluations, dictionary triangular solve and Givens update of the whitened Gram Cholesky factor a row; its budget is CI's first count"
+[instructions.dependence]
+what = "dependence, ten features against one target over a window of 200 rows with 16x16 MI, Miller-Madow, incremental Kendall and periodic Spearman and xi every 10 rows: AnyModel::step_into, into one kept Step; its budget is CI's first count"
 
 [instructions.spectral]
 what = "spectral, sixteen periods on an even clock: AnyModel::step_into, into one kept Step, a rotation and an add a period a row; its budget is CI's first count"
@@ -2068,6 +2070,28 @@ weight_sum = { budget = 8.125 }
 withheld_reason = { budget = 1.125 }
 zscore_y = { budget = 8.125 }
 zscore_z = { budget = 8.125 }
+[memory.dependence]
+kendall_x0_y = { budget = 8.125 }
+kendall_x0_z = { budget = 8.125 }
+kendall_x1_y = { budget = 8.125 }
+kendall_x1_z = { budget = 8.125 }
+learned_clock = { budget = 8.125 }
+mi_x0_y = { budget = 8.125 }
+mi_x0_z = { budget = 8.125 }
+mi_x1_y = { budget = 8.125 }
+mi_x1_z = { budget = 8.125 }
+scored_clock = { budget = 8.125 }
+settled_frac = { budget = 8.125 }
+spearman_x0_y = { budget = 8.125 }
+spearman_x0_z = { budget = 8.125 }
+spearman_x1_y = { budget = 8.125 }
+spearman_x1_z = { budget = 8.125 }
+weight_sum = { budget = 8.125 }
+withheld_reason = { budget = 1.125 }
+xi_x0_y = { budget = 8.125 }
+xi_x0_z = { budget = 8.125 }
+xi_x1_y = { budget = 8.125 }
+xi_x1_z = { budget = 8.125 }
 
 # --- raises and sign-offs -------------------------------------------------------
 

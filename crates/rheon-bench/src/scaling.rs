@@ -211,6 +211,12 @@ pub const CELLS: &[Cell] = &[
     cell("krls.k", 4, 8, Pow(1), Pow(1)),
     cell("krls.window", 16, 8, Pow(2), Pow(2)),
     cell("krls.history", 1000, 8, Const, Const),
+    // Nonlinear dependence: MI + incremental Kendall over a window of W rows
+    // scales linearly in features `k` and linearly in window length `W`, and
+    // stays constant in stream history.
+    cell("dependence.k", 2, 8, Pow(1), Pow(1)),
+    cell("dependence.window", 50, 8, Pow(1), Pow(1)),
+    cell("dependence.history", 1000, 8, Const, Const),
     cell("ew_cov.k", 4, 8, Pow(2), Pow(2)),
     cell("ew_cov.lags", 1, 8, Pow(1), Pow(1)),
     cell("ew_cov.window", 500, 8, Const, Pow(1)),
@@ -972,6 +978,28 @@ fn model_case(id: &str, n: usize) -> ModelCase {
         }
         ("vector_ar", "history") => {
             ModelCase::new(fit(json!({"type": "vector_ar", "lags": 2}), 0, 2), lin).warm(n)
+        }
+        ("dependence", "k" | "window" | "history") => {
+            let k = if dim == "k" { n } else { 4 };
+            let w = if dim == "window" { n } else { 100 };
+            let mut s = fit(
+                json!({
+                    "type": "dependence",
+                    "measures": ["mi", "mi_mm", "kendall"],
+                    "bins": 8,
+                    "bin_warm_rows": 20,
+                    "window_rows": w,
+                }),
+                k,
+                1,
+            );
+            s["half_life"] = json!("inf");
+            s["min_weight"] = json!(0.0);
+            let c = ModelCase::new(s, lin);
+            match dim {
+                "history" => c.warm(n.max(1000)),
+                _ => c.warm(2 * w),
+            }
         }
         ("ftrl", "k") => ModelCase::new(fit(json!({"type": "ftrl"}), n, 1), lin),
         ("ftrl", "history") => ModelCase::new(fit(json!({"type": "ftrl"}), 8, 1), lin).warm(n),

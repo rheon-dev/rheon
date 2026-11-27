@@ -110,6 +110,7 @@ MINIMAL: dict[str, dict[str, object]] = {
     "isotonic": {"features": ["x0"]},
     "krls": {},
     "vector_ar": {"lags": 1},
+    "dependence": {"bins": 6, "bin_warm_rows": 12},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -149,6 +150,7 @@ REGRESSIONS = frozenset(MINIMAL) - {
     "ddsketch",
     "ewm_moments",
     "spectral",
+    "dependence",
 }
 
 
@@ -368,6 +370,7 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "spectral",
             "isotonic",
             "krls",
+            "dependence",
         )
     },
 }

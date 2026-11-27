@@ -317,6 +317,21 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "window_size",
             "closed",
             "emit_n_atoms",
+    "dependence": frozenset(
+        {
+            "measures",
+            "bins",
+            "target_bins",
+            "bin_rule",
+            "bin_warm_rows",
+            "bin_warm_span",
+            "bin_edges",
+            "target_bin_edges",
+            "window_rows",
+            "window_size",
+            "closed",
+            "rank_every",
+            "rank_every_rows",
             "max_state_bytes",
         }
     ),

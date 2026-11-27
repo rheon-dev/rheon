@@ -95,6 +95,10 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             max_state_bytes: Some(_),
             ..
         } => format!("max_state_bytes of {cap}"),
+        | ModelKind::Dependence(crate::spec::DependenceSpec {
+            max_state_bytes: Some(_),
+            ..
+        }) => format!("max_state_bytes of {cap}"),
         _ => format!("the default max_state_bytes of {cap}, which a spec gets when it sets none"),
     };
     let (window, shorten) = match (&spec.model, fixed) {
@@ -219,6 +223,19 @@ pub(super) fn over_state_cap(spec: &Spec, key: &GroupKey, bytes: u64, cap: u64) 
             } => (
                 format!("the distinct-sketch entries inside distinct_window_rows = {n}"),
                 "Shorten distinct_window_rows or lower distinct_precision",
+            ModelKind::Dependence(d) if d.window_size.is_some() => (
+                format!(
+                    "the rows inside window_size = {}",
+                    d.window_size.as_ref().expect("checked is_some")
+                ),
+                "Shorten window_size, or give window_rows",
+            ),
+            ModelKind::Dependence(d) if d.bin_warm_span.is_some() => (
+                format!(
+                    "the rows of its warm-up inside bin_warm_span = {}",
+                    d.bin_warm_span.as_ref().expect("checked is_some")
+                ),
+                "Shorten bin_warm_span, or give bin_warm_rows",
             ),
             // No window on the clock: the lag buffers are what the data sizes.
             ModelKind::EwmMoments { .. } => (

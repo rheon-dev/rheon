@@ -132,6 +132,9 @@ const SPECS: &[(&str, &str, &str)] = &[
         "krls",
         r#"{"type": "krls", "max_atoms": 20, "emit_n_atoms": true}"#,
         r#""targets": ["y"], "features": ["x0", "x1"], "half_life": 50.0"#,
+        "dependence",
+        r#"{"type": "dependence", "measures": ["mi", "spearman", "kendall", "xi"], "bins": 6, "bin_warm_rows": 12, "window_size": 30.0}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"]"#,
     ),
     (
         "ddsketch",

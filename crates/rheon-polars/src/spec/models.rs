@@ -1007,6 +1007,29 @@ impl Spec {
                         ));
                         break;
                     }
+            ModelKind::Dependence(_) => {
+                let decays = self
+                    .decays()
+                    .unwrap_or_else(|_| vec![(String::new(), Decay::Halflife(f64::INFINITY))]);
+                let chosen = decays
+                    .iter()
+                    .find(|(_, d)| {
+                        matches!(d, Decay::Halflife(h) if h.is_finite())
+                            || matches!(d, Decay::Lam(l) if *l < 1.0)
+                    })
+                    .or_else(|| decays.first());
+                if let Some((_, decay)) = chosen {
+                    no.take(
+                        crate::spec::dependence_cfg(self, *decay)
+                            .map(|_| ())
+                            .map_err(|e| {
+                                format!(
+                                    "spec {:?}: {}",
+                                    self.name,
+                                    e.trim_start_matches("dependence: ")
+                                )
+                            }),
+                    );
                 }
             }
             // Every value is the model's own to check, here at the call,

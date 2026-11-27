@@ -3092,6 +3092,11 @@ fn kinds() -> Vec<Kind> {
             first: kalman_nonlinear_first,
             run: kalman_nonlinear_run,
         },
+        Kind {
+            name: "bank_dependence",
+            first: dependence_first,
+            run: dependence_run,
+        },
     ]
 }
 
@@ -3199,6 +3204,46 @@ fn kalman_nonlinear_run(bytes: &[u8], input: &DataFrame) -> Ran {
     let cols = bank.fit_predict(input).map_err(|e| e.to_string())?;
     let out = DataFrame::new(input.height(), cols).map_err(|e| e.to_string())?;
     Ok((again, vec![("fit_predict".into(), out)]))
+}
+
+/// The specs of `bank_dependence`: decayed MI, row-windowed MI + Miller-Madow
+/// + all three rank measures, and a clock window with nanosecond/numeric clock.
+fn dependence_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "dep_decay", "model": {"type": "dependence", "measures": ["mi"], "bins": 6, "bin_warm_rows": 15}, "targets": ["y", "mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
+        r#"{"name": "dep_rows", "model": {"type": "dependence", "measures": ["mi", "mi_mm", "spearman", "kendall", "xi"], "bins": 6, "bin_warm_rows": 12, "window_rows": 25, "rank_every_rows": 3}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0}"#,
+        r#"{"name": "dep_clock", "model": {"type": "dependence", "measures": ["mi", "spearman", "kendall", "xi"], "bins": 6, "bin_warm_rows": 12, "window_size": 15.0, "closed": "both", "rank_every": 4.0}, "targets": ["y"], "features": ["x0"], "clock": "t", "gap_cap": 10.0}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn dependence_first() -> (Vec<u8>, DataFrame) {
+    let df = frame();
+    let mut bank = Bank::new(dependence_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn dependence_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut bank = Bank::load_bytes(bytes, Some(&dependence_specs()))?;
+    let again = bank.save_bytes()?;
+    let table_before = bank.dependence(1, None)?;
+    let cols = bank.fit_predict(input).map_err(|e| e.to_string())?;
+    let out = DataFrame::new(input.height(), cols).map_err(|e| e.to_string())?;
+    let table_after = bank.dependence(1, None)?;
+    Ok((
+        again,
+        vec![
+            ("dependence_before".into(), table_before),
+            ("fit_predict".into(), out),
+            ("dependence_after".into(), table_after),
+        ],
+    ))
 }
 
 fn kind_of(f: &Fixture) -> Kind {

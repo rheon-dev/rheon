@@ -572,6 +572,21 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         "krls_clock",
         r#"{"type": "krls", "window_size": @20, "closed": "both", "emit_n_atoms": true}"#,
         r#""targets": ["y"], "features": ["x0", "x1"]"#,
+        "dependence_decayed",
+        r#"{"type": "dependence", "measures": ["mi"], "bins": 6, "bin_warm_rows": 15}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"], "half_life": @50"#,
+        ALL,
+    ),
+    (
+        "dependence_rows",
+        r#"{"type": "dependence", "measures": ["mi", "mi_mm", "spearman", "kendall", "xi"], "bins": 6, "bin_warm_rows": 12, "window_rows": 30, "rank_every_rows": 3}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"]"#,
+        UNTIMED,
+    ),
+    (
+        "dependence_clock",
+        r#"{"type": "dependence", "measures": ["mi", "spearman", "kendall", "xi"], "bins": 6, "bin_warm_rows": 12, "window_size": @30, "closed": "both", "rank_every": @5}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"]"#,
         ALL,
     ),
     (

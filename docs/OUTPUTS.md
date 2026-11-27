@@ -19,7 +19,7 @@ exact spec you built.
 | family | models |
 |---|---|
 | [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) · [`ar`](#ar) · [`isotonic`](#isotonic) · [`krls`](#krls) · [`vector_ar`](#vector_ar) |
-| [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`ewm_moments`](#ewm_moments) · [`pca`](#pca) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) · [`power_variation`](#power_variation) · [`tdigest`](#tdigest) · [`ddsketch`](#ddsketch) · [`spectral`](#spectral) |
+| [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`ewm_moments`](#ewm_moments) · [`pca`](#pca) · [`marginal`](#marginal) · [`dependence`](#dependence) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) · [`power_variation`](#power_variation) · [`tdigest`](#tdigest) · [`ddsketch`](#ddsketch) · [`spectral`](#spectral) |
 | [Clustering and classification](MODELS.md#clustering-and-classification) | [`kmeans`](#kmeans) · [`micro`](#micro) · [`ew_class`](#ew_class) |
 | [Sequential tests and regimes](MODELS.md#sequential-tests-and-regimes) | [`seqtest`](#seqtest) · [`corrchange`](#corrchange) · [`bocpd`](#bocpd) · [`hmm`](#hmm) · [`hawkes`](#hawkes) |
 
@@ -453,6 +453,26 @@ The fields of `rp.spec.marginal("m", targets=["y"], features=["x0"], half_life=5
 | field | dtype | what it holds | also null |
 |---|---|---|---|
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+
+## `dependence`
+
+The fields of `rp.spec.dependence("m", targets=["y"], features=["x0"], half_life=50.0, bins=6, bin_warm_rows=12)`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `mi_x0_y` | `f64` | plug-in binned mutual information in nats between `<f>` and `<t>`, read before this row | while withheld (which includes the rows held to learn bin edges under `bin_warm_rows` or `bin_warm_span`), and before `<t>` has any positive-weight row |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
+Under `measures=["mi", "mi_mm", "spearman", "kendall", "xi"], window_rows=50`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `mi_mm_x0_y` | `f64` | Miller-Madow bias-corrected mutual information in nats between `<f>` and `<t>`, read before this row | where `mi_<f>_<t>` is, and while the active sample holds any positive weight other than 1 |
+| `spearman_x0_y` | `f64` | Spearman rank correlation between `<f>` and `<t>` over the active window before this row | while withheld, while the window holds fewer than 2 rows of `<t>`, and when `<f>` or `<t>` is constant inside the window |
+| `kendall_x0_y` | `f64` | Kendall's tau-b rank correlation between `<f>` and `<t>` over the active window before this row | while withheld, while the window holds fewer than 2 rows of `<t>`, and when `<f>` or `<t>` is constant inside the window |
+| `xi_x0_y` | `f64` | Chatterjee's xi dependence coefficient of `<t>` on `<f>` over the active window before this row | while withheld, while the window holds fewer than 2 rows of `<t>`, and when `<t>` is constant inside the window |
 
 ## `deco`
 

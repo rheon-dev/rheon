@@ -157,6 +157,9 @@ pub const MODEL_CASES: &[&str] = &[
     // kernel evaluations, triangular solve against the dictionary Cholesky
     // factor and a Givens update of the whitened Gram factor a row.
     "krls",
+    // Nonlinear dependence: 10 features against 1 target over a 200-row window
+    // with 16x16 MI + Miller-Madow + incremental Kendall + periodic Spearman/xi.
+    "dependence",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -948,6 +951,17 @@ fn case_spec(id: &str) -> (Value, Shape) {
             let mut s = fit(
                 json!({"type": "krls", "max_atoms": 50, "ald_threshold": 0.0}),
                 5,
+        "dependence" => {
+            let mut s = fit(
+                json!({
+                    "type": "dependence",
+                    "measures": ["mi", "mi_mm", "spearman", "kendall", "xi"],
+                    "bins": 16,
+                    "bin_warm_rows": 50,
+                    "window_rows": 200,
+                    "rank_every_rows": 10,
+                }),
+                10,
             );
             s["half_life"] = json!("inf");
             s.as_object_mut().expect("an object").remove("min_weight");

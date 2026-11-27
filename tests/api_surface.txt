@@ -202,6 +202,25 @@
     beta = None
     blocks = None
     common
+  dependence:
+    name
+    targets
+    features
+    measures = None
+    bins = None
+    target_bins = None
+    bin_rule = None
+    bin_warm_rows = None
+    bin_warm_span = None
+    bin_edges = None
+    target_bin_edges = None
+    window_rows = None
+    window_size = None
+    closed = 'right'
+    rank_every = None
+    rank_every_rows = None
+    max_state_bytes = None
+    common
   ew_class:
     name
     features
@@ -838,6 +857,34 @@
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
     stream.min_weight = [3.0]
+    stream.robust_se_half_life = 50.0
+    stream.specification_half_life = 50.0
+    stream.tails_half_life = 50.0
+  dependence(features=['x0'], half_life=50.0, targets=['y']):
+    model.bin_edges = null
+    model.bin_rule = "quantile"
+    model.bin_warm_rows = null
+    model.bin_warm_span = null
+    model.bins = 16
+    model.closed = "right"
+    model.decay.Halflife = 50.0
+    model.max_state_bytes = null
+    model.measures = ["mi"]
+    model.min_weight = 0.0
+    model.n_features = 1
+    model.n_targets = 1
+    model.rank_every_clock = null
+    model.rank_every_rows = null
+    model.target_bin_edges = null
+    model.target_bins = 16
+    model.window_clock = null
+    model.window_rows = null
+    stream.breaks_half_life = 50.0
+    stream.calibration_half_life = 200.0
+    stream.feature_health_half_life = 50.0
+    stream.influence_half_life = 50.0
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
@@ -1650,6 +1697,31 @@
     stream.robust_se_half_life = 10.3933557491
     stream.specification_half_life = 10.3933557491
     stream.tails_half_life = 10.3933557491
+  dependence(features=['x0'], measures=['mi', 'mi_mm', 'spearman', 'kendall', 'xi'], rank_every_rows=5, targets=['y'], window_rows=50), the lines that differ from dependence's:
+    model.decay.Halflife = "inf"
+    model.measures = ["mi", "mi_mm", "spearman", "kendall", "xi"]
+    model.rank_every_rows = 5
+    model.window_rows = 50
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
+  dependence(closed='both', features=['x0'], measures=['mi', 'spearman', 'xi'], rank_every=5.0, targets=['y'], window_size=30.0), the lines that differ from dependence's:
+    model.closed = "both"
+    model.decay.Halflife = "inf"
+    model.measures = ["mi", "spearman", "xi"]
+    model.rank_every_clock = 5.0
+    model.window_clock = 30.0
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
   hawkes(closed='both', half_life=inf, kernel_decays=[1.0, 5.0], targets=['y'], window_size=30.0), the lines that differ from hawkes's:
     model.closed = "both"
     model.decay.Halflife = "inf"
@@ -1716,6 +1788,7 @@
   check(self, spec: 'str | int | None' = None, group: 'str | Iterable[str | None] | None' = None) -> 'pl.DataFrame'
   closed_groups(self, spec: 'str | int | None' = None, *, drop: 'bool' = True) -> 'pl.DataFrame'
   coef(self, spec: 'str | int | None' = None, group: 'str | Iterable[str | None] | None' = None) -> 'pl.DataFrame'
+  dependence(self, spec: 'str | int', group: 'str | Iterable[str | None] | None' = None) -> 'pl.DataFrame'
   describe(self, spec: 'str | int | None' = None, group: 'str | Iterable[str | None] | None' = None) -> 'pl.DataFrame'
   drop_groups(self, keys: 'str | Iterable[str | None]', spec: 'str | int | None' = None) -> 'int'
   fit(self, batches: 'pl.LazyFrame | pl.DataFrame | Iterable[pl.DataFrame]', *, closed_groups: 'str | os.PathLike[str] | None' = None, chunk_size: 'int | None' = None) -> 'None'
@@ -1873,6 +1946,20 @@
     split_gain: Float64
     split_at: Float64
     split_gain_t: Float64
+  ModelBank.dependence():
+    spec: String
+    group: String
+    instance: String
+    half_life: Float64
+    lam: Float64
+    feature: String
+    target: String
+    weight_sum: Float64
+    mi: Float64
+    mi_mm: Float64
+    spearman: Float64
+    kendall: Float64
+    xi: Float64
   ModelBank.audit():
     spec: String
     group: String
@@ -3033,6 +3120,35 @@
     settled_frac: f64
     withheld_reason: enum
     n_atoms: i64
+  dependence minimal:
+    mi_x0_y: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  dependence full:
+    mi_x0_y: f64
+    mi_x0_z: f64
+    mi_x1_y: f64
+    mi_x1_z: f64
+    mi_mm_x0_y: f64
+    mi_mm_x0_z: f64
+    mi_mm_x1_y: f64
+    mi_mm_x1_z: f64
+    spearman_x0_y: f64
+    spearman_x0_z: f64
+    spearman_x1_y: f64
+    spearman_x1_z: f64
+    kendall_x0_y: f64
+    kendall_x0_z: f64
+    kendall_x1_y: f64
+    kendall_x1_z: f64
+    xi_x0_y: f64
+    xi_x0_z: f64
+    xi_x1_y: f64
+    xi_x1_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
   ewm_moments minimal:
     skew: f64
     co: f64
@@ -3106,6 +3222,7 @@
   dcc: the shared columns only
   ddsketch: the shared columns only
   deco: the shared columns only
+  dependence: the shared columns only
   ew_class: the shared columns only
   ew_cov:
     spec: String
@@ -3376,6 +3493,9 @@
   isotonic.out_of_bounds: clip, nan
   krls.kernel: laplacian, linear, poly, rbf
   krls.closed: both, right
+  dependence.measures: kendall, mi, mi_mm, spearman, xi
+  dependence.bin_rule: fixed, quantile
+  dependence.closed: both, right
   ddsketch.closed: both, right
   garch.vol: egarch, figarch, garch, gjr
   holt.seasonal: add, mul
@@ -3553,6 +3673,7 @@
     dcc: a, asymmetric, b, dist, g, margin_start_rows, margin_start_span, margins, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     ddsketch: alpha, closed, max_state_bytes, quantiles, window_rows, window_size
     deco: alpha, beta, blocks, dynamics
+    dependence: bin_edges, bin_rule, bin_warm_rows, bin_warm_span, bins, closed, max_state_bytes, measures, rank_every, rank_every_rows, target_bin_edges, target_bins, window_rows, window_size
     ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, snapshot_every, window_budget, window_size
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size
     ewm_moments: bias, kind, lag_tolerance, max_state_bytes, se, terms, window_rows, window_size

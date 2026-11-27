@@ -1533,6 +1533,68 @@ fn krls_decayed_golden() {
     check("krls_decayed", &got, GOLDEN_KRLS_DECAYED);
 }
 
+/// `dependence` over the stream's features and targets: row-windowed MI,
+/// Miller-Madow, Spearman, Kendall tau-b and Chatterjee xi (pure arithmetic
+/// plus `libm::log`, bit-exact across platforms), and decayed MI.
+#[test]
+fn dependence_golden() {
+    let mut got = Vec::new();
+    let stream = stream();
+    let mut m = Dependence::new(DependenceCfg {
+        n_features: 2,
+        n_targets: 1,
+        measures: vec![
+            DependenceMeasure::Mi,
+            DependenceMeasure::MiMm,
+            DependenceMeasure::Spearman,
+            DependenceMeasure::Kendall,
+            DependenceMeasure::Xi,
+        ],
+        bins: 6,
+        target_bins: 6,
+        bin_warm_rows: Some(25),
+        window_rows: Some(40),
+        rank_every_rows: Some(5),
+        ..Default::default()
+    })
+    .unwrap();
+    for i in 0..300 {
+        let (x, y, d, _) = &stream[i % 60];
+        let step = m.step(&x[..2], y, *d, 1.0);
+        if [40, 150, 299].contains(&i) {
+            got.extend(&step.pred);
+            got.push(step.n_eff);
+        }
+    }
+    check_bits("dependence", &got, GOLDEN_DEPENDENCE);
+}
+
+#[test]
+fn dependence_decayed_golden() {
+    let mut got = Vec::new();
+    let stream = stream();
+    let mut m = Dependence::new(DependenceCfg {
+        n_features: 2,
+        n_targets: 1,
+        measures: vec![DependenceMeasure::Mi],
+        decay: Decay::Halflife(20.0),
+        bins: 6,
+        target_bins: 6,
+        bin_warm_rows: Some(25),
+        ..Default::default()
+    })
+    .unwrap();
+    for i in 0..300 {
+        let (x, y, d, w) = &stream[i % 60];
+        let step = m.step(&x[..2], y, *d, *w);
+        if [40, 150, 299].contains(&i) {
+            got.extend(&step.pred);
+            got.push(step.n_eff);
+        }
+    }
+    check("dependence_decayed", &got, GOLDEN_DEPENDENCE_DECAYED);
+}
+
 /// `ddsketch`'s decayed form, a half-life of 20 rows: the factor is the
 /// platform's `exp2`, so it is held to the golden files' tolerance, not to
 /// the bit.
@@ -2866,6 +2928,52 @@ const GOLDEN_KRLS_DECAYED: &[f64] = &[
     19.19679054593763,
     -0.11897200792284321,
     18.98632160451895,
+];
+const GOLDEN_DEPENDENCE: &[f64] = &[
+    0.9307540739567934,
+    0.6274701371932375,
+    0.8794720226747421,
+    0.4992650089881093,
+    0.9055341055341055,
+    -0.5467181467181467,
+    0.7435897435897436,
+    -0.38461538461538464,
+    0.6015444015444016,
+    0.2355212355212355,
+    40.0,
+    0.7746982587969998,
+    0.5134238544449408,
+    0.6996982587969999,
+    0.36342385444494074,
+    0.8960600375234522,
+    -0.4669793621013133,
+    0.7128205128205128,
+    -0.32051282051282054,
+    0.5572232645403377,
+    0.07879924953095685,
+    40.0,
+    0.8794929318135886,
+    0.5114486673201445,
+    0.8538519061725629,
+    0.39606405193552907,
+    0.9,
+    -0.5587044534412956,
+    0.7139001349527665,
+    -0.3576248313090418,
+    0.6171052631578947,
+    0.20065789473684215,
+    40.0,
+];
+const GOLDEN_DEPENDENCE_DECAYED: &[f64] = &[
+    0.9646478261235053,
+    0.6593404406302271,
+    21.760347800742558,
+    0.8600907792055005,
+    0.5214642643345359,
+    26.867539807603332,
+    0.736737663359742,
+    0.4870724331343371,
+    20.212303545600623,
 ];
 const GOLDEN_VECTOR_AR: &[f64] = &[
     -1.3624877009041483,

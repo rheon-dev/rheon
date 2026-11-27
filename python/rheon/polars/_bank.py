@@ -2767,6 +2767,90 @@ class ModelBank:
             self._spec_index(spec, "ModelBank.marginal"), _group_keys(group, "ModelBank.marginal")
         )
 
+    def dependence(
+        self, spec: str | int, group: str | Iterable[str | None] | None = None
+    ) -> pl.DataFrame:
+        """Return the nonlinear dependence table a ``dependence`` spec keeps, one row per pair.
+
+        Use it to inspect mutual information, Miller-Madow MI, Spearman's rho,
+        Kendall's tau-b, and Chatterjee's xi for every ``(feature, target)``
+        pair from a live bank or one loaded from a state file. For linear
+        moments, lags, and binned mean response curves, use :meth:`marginal`.
+
+        .. rubric:: Parameters
+
+        ``spec``
+            The ``dependence`` spec to read, by name or by position.
+        ``group``
+            The group to read: one group key, as :meth:`groups` reports it, or a
+            list of keys, with ``None`` in the list for the null group. The
+            default, ``None``, reads every group. A key the bank has never seen
+            gives an empty frame with the same schema.
+
+        .. rubric:: Returns
+
+        A ``DataFrame`` with one row per ``(group, instance, feature, target)``:
+        groups sorted, targets in the spec's order, and features in the spec's
+        order within each. The columns:
+
+        ``spec``, ``group``, ``instance``
+            The spec's name, group key (``""`` without a ``group`` column), and
+            instance suffix (``""`` for a single instance, else ``"@h..."``).
+        ``half_life``, ``lam``
+            The instance's decay, as :meth:`marginal` and :meth:`coef` give it.
+        ``feature``, ``target``
+            The pair's feature column and target name.
+        ``weight_sum``
+            The target's accumulated weight over the active sample (decayed, or
+            inside the rolling window).
+        ``mi``, ``mi_mm``, ``spearman``, ``kendall``, ``xi``
+            Included for each active measure in the spec's ``measures`` order.
+            Periodic rank measures (``spearman`` and ``xi``) are computed fresh
+            from the current window even when ``rank_every`` or
+            ``rank_every_rows`` throttles per-row output. Any measure is null
+            while MI bin edges are still warming up, while the target is below
+            ``min_weight`` or ``settled_frac`` is below ``min_settled_frac``,
+            when a column is constant in the window, or for ``mi_mm`` under any
+            non-unit positive weight.
+
+        .. rubric:: Raises
+
+        ``ValueError``
+            If ``spec`` is not a spec of the bank, or is not a ``dependence``
+            spec.
+
+        .. rubric:: Example
+
+        .. code-block:: python
+
+            import numpy as np
+
+            rng = np.random.default_rng(7)
+            x = rng.uniform(-2.0, 2.0, 400)
+            frame = pl.DataFrame({"x": x, "y": x**2 + 0.1 * rng.standard_normal(400)})
+            spec = rp.spec.dependence(
+                "dep", targets=["y"], features=["x"],
+                measures=["mi", "xi"], bins=8, bin_warm_rows=100, window_rows=200,
+            )
+            bank = rp.ModelBank([spec])
+            bank.fit(frame)
+            row = bank.dependence("dep").row(0, named=True)
+            print(f"mi={row['mi']:.2f}, xi={row['xi']:.2f}")
+
+        .. code-block:: text
+
+            mi=1.42, xi=0.89
+
+        .. rubric:: See also
+
+        - :func:`rheon.spec.dependence`, the spec and its measures.
+        - :meth:`marginal`, the linear pair table and binned response curves.
+        """
+        return self._native.dependence(
+            self._spec_index(spec, "ModelBank.dependence"),
+            _group_keys(group, "ModelBank.dependence"),
+        )
+
     def smoothed_tail(
         self, spec: str | int, group: str | Iterable[str | None] | None = None
     ) -> pl.DataFrame:

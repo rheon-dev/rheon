@@ -350,6 +350,14 @@ def describe_api(cli: Path | None = None) -> str:
                 window_size=30.0,
                 closed="both",
                 emit_n_atoms=True,
+        ("dependence minimal", dict(targets=["y"], features=["x0"])),
+        (
+            "dependence full",
+            dict(
+                targets=["y", "z"],
+                features=["x0", "x1"],
+                measures=["mi", "mi_mm", "spearman", "kendall", "xi"],
+                window_rows=50,
             ),
         ),
         (
@@ -477,6 +485,25 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ("krls", {"kernel": "linear", "half_life": 50.0}),
     ("krls", {"window_rows": 40, "half_life": float("inf")}),
     ("krls", {"window_size": 30.0, "closed": "both", "half_life": float("inf")}),
+    (
+        "dependence",
+        {
+            "half_life": None,
+            "measures": ["mi", "mi_mm", "spearman", "kendall", "xi"],
+            "window_rows": 50,
+            "rank_every_rows": 5,
+        },
+    ),
+    (
+        "dependence",
+        {
+            "half_life": None,
+            "measures": ["mi", "spearman", "xi"],
+            "window_size": 30.0,
+            "closed": "both",
+            "rank_every": 5.0,
+        },
+    ),
     ("hawkes", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
     ("hawkes", {"kernel_decays": None, "kernel_half_lives": [0.5, 4.0]}),
     ("garch", {"vol": "figarch", "start_rows": 2000}),
@@ -655,8 +682,18 @@ def frame_columns_section() -> list[str]:
     pairs_lags_bins = rp.spec.marginal(
         "pairs_lags_bins", lags=[1], serial_rule="bartlett", bins=4, **common
     )
+    dep = rp.spec.dependence(
+        "dep",
+        targets=["y"],
+        features=["x0", "x1"],
+        measures=["mi", "mi_mm", "spearman", "kendall", "xi"],
+        bins=4,
+        bin_warm_rows=5,
+        window_rows=10,
+        group="g",
+    )
     audit = rp.spec.audit("audit", columns=["x0", "x1"], group="g", pairs=True)
-    bank = rp.ModelBank([ridge, pairs, pairs_lags_bins, audit])
+    bank = rp.ModelBank([ridge, pairs, pairs_lags_bins, dep, audit])
     bank.fit_predict(df.with_columns(t=pl.int_range(n).cast(pl.Float64)))
     timed = rp.ModelBank([rp.spec.audit("audit", columns=["x0"], clock="t", gap_cap=5.0)])
     timed.fit_predict(df.with_columns(t=pl.int_range(n).cast(pl.Float64)))
@@ -668,6 +705,7 @@ def frame_columns_section() -> list[str]:
         ("ModelBank.last_row() of an ewridge spec", bank.last_row("ridge")),
         ("ModelBank.marginal()", bank.marginal("pairs")),
         ("ModelBank.marginal() with lags, serial_rule and bins", bank.marginal("pairs_lags_bins")),
+        ("ModelBank.dependence()", bank.dependence("dep")),
         ("ModelBank.audit()", bank.audit("audit")),
         ("ModelBank.audit(table='pairs')", bank.audit("audit", table="pairs")),
         ("ModelBank.audit(table='clock')", timed.audit(table="clock")),
@@ -806,6 +844,21 @@ ENUM_PROBES: list[
         "krls.closed",
         "krls",
         {"half_life": float("inf"), "window_size": 100.0},
+        "model.closed",
+        "word",
+    ),
+    (
+        "dependence.measures",
+        "dependence",
+        {"half_life": None, "window_rows": 50, "bins": None, "bin_warm_rows": None},
+        "model.measures",
+        "list",
+    ),
+    ("dependence.bin_rule", "dependence", {}, "model.bin_rule", "word"),
+    (
+        "dependence.closed",
+        "dependence",
+        {"half_life": None, "window_size": 100.0},
         "model.closed",
         "word",
     ),

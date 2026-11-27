@@ -58,6 +58,7 @@ to start with for which question.
 | [`pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) · [entry](#pca--streaming-principal-components) | step | principal components learned a row at a time in state that grows with the components times the columns, not the columns squared: the incremental SVD, CCIPCA or Oja's rule, each component withheld until the data tells it apart from its neighbors |
 | [`ewm_moments`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewm_moments) · [entry](#ewm_moments--moments-to-any-order-lagged-or-not) | accumulate | moments and cross-moments of columns to any order, each leg perhaps lagged, each a term you name: skew, kurtosis, cumulants, co-skewness, autocovariances and autocorrelations, decayed or over a window, unbiased to order 4 and with standard errors |
 | [`marginal`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.marginal) · [entry](#marginal--every-pairs-moments-kept-in-the-state) | accumulate | every (feature, target) pair's running mean, variance, covariance, correlation, slope and t, for a wide set of columns, kept in the state and read back as a table; optionally at a set of lags, and with binned target moments for the relations a correlation cannot see |
+| [`dependence`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dependence) · [entry](#dependence--nonlinear-dependence-mutual-information-and-rank-correlations) | accumulate | nonlinear dependence between every (feature, target) pair: binned mutual information, Miller-Madow bias-corrected MI, Spearman's rho, Kendall's tau-b and Chatterjee's xi, emitted per row and read as a table via `ModelBank.dependence` |
 | [`deco`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.deco) · [entry](#deco--one-correlation-for-the-whole-matrix) | accumulate | one correlation for the whole matrix: Engle & Kelly's equicorrelation, or one per block and per pair of blocks |
 | [`rcov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rcov) · [entry](#rcov--a-blocks-realized-covariance-robust-to-noise) | accumulate | a block's realized covariance, robust to microstructure noise: the Barndorff-Nielsen–Hansen–Lunde–Shephard kernel or Christensen–Kinnebrock–Podolskij pre-averaging, reported when a group closes |
 | [`audit`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.audit) · [entry](#audit--what-a-streams-columns-hold) | accumulate | what each column holds, counted in one pass: nulls, NaNs and infinities apart, repeated values, runs, persistence, tails and duplicated columns, and the clock's duplicate stamps and gaps, read back as a table and by `bank.check()` |
@@ -232,8 +233,8 @@ what each model keeps inside the window). `ewridge`, `lasso`, `ar`,
 `vector_ar`, `ew_cov`, `ew_class`, `marginal` and `spectral` cut it from snapshots of
 their running sums, spaced by `snapshot_every` and
 `max_rows_between_snapshots` and held under `window_budget`. `expectile`,
-`isotonic`, `krls`, `hawkes`, `realized`, `power_variation`, `ddsketch`, `ewm_moments` and
-`corrchange` take a `window_size` of their own, without snapshots, and
+`isotonic`, `krls`, `hawkes`, `realized`, `power_variation`, `ddsketch`, `ewm_moments`,
+`corrchange` and `dependence` take a `window_size` of their own, without snapshots, and
 each one's entry says what it keeps and how its edge is read. Five things
 to know before reading the numbers of a model under a snapshot window:
 
@@ -297,7 +298,7 @@ library's learn mask: the row is scored and teaches nothing. The default depends
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `isotonic`, `krls`, `vector_ar` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `isotonic`, `krls`, `vector_ar`, `dependence` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -4840,6 +4841,112 @@ Every bucket's key and count was the package's, and each representative and
 each quantile was the package's within 2 ulps. Each quantile was within `α`
 of the exact quantile, and each tail mean within `α` times the tail's mean
 magnitude of the exact tail mean, with weights of 1 and of many sizes.
+
+### `dependence` — nonlinear dependence: mutual information and rank correlations
+
+*API:* [`rheon.spec.dependence`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dependence) — *Rust:* [`dependence.rs`](../crates/rheon-core/src/dependence.rs) — *Outputs:* [fields](OUTPUTS.md#dependence)
+
+Online nonlinear dependence between every `(feature, target)` pair: plug-in
+binned mutual information (`"mi"`), Miller-Madow bias-corrected mutual
+information (`"mi_mm"`), Spearman's rho (`"spearman"`), Kendall's tau-b
+(`"kendall"`), and Chatterjee's xi (`"xi"`).
+
+Use `dependence` when linear correlation misses the relationship — parabolic,
+periodic, threshold, monotone nonlinear, or heavy-tailed pairs. Every measure
+is emitted **before** the current row is learned, both in the per-row output
+struct and on demand as a tidy table from `ModelBank.dependence(spec, group=None)`.
+Use [`marginal`](#marginal--every-pairs-moments-kept-in-the-state) when you want
+linear correlations, slopes, t-statistics, lags, and binned mean target profiles
+across wide feature sets.
+
+#### Measures and windows
+
+`measures` selects any non-empty subset of five dependence estimators, with
+`"mi"` alone as the default.
+
+- **`"mi"`**: plug-in binned mutual information in nats over
+  `bins × target_bins` contingency tables, kept for each `(feature, target)`
+  pair. Supports all history (`half_life=inf`), exponential decay (`half_life`
+  or `lam`), or an exact window (`window_rows` or `window_size`).
+- **`"mi_mm"`**: Miller-Madow bias-corrected mutual information in nats,
+  subtracting `(B_xy − B_x − B_y + 1) / (2 N)` for non-empty cells and
+  marginals. Requires unit weights and no decay; returns null on any active
+  sample that contains a positive weight other than 1, and recovers once all
+  non-unit rows leave a window.
+- **`"spearman"`, `"kendall"`, `"xi"`**: exact rank correlations over a window
+  of positive-weight rows (`window_rows`) or of the clock (`window_size`, with
+  `closed="right"` or `"both"`). Rank measures require a window and are refused
+  beside finite decay. `"kendall"` maintains exact concordant, discordant, and
+  tie pair counts incrementally on every enter and leave in `O(W)` time per
+  pair. `"spearman"` and `"xi"` refresh every `rank_every_rows` learned rows
+  (default 1) or every `rank_every` clock units in per-row output;
+  `ModelBank.dependence()` always computes fresh exact reads from the current
+  window.
+
+#### Bin edges and warm-up
+
+When `"mi"` or `"mi_mm"` is active, bin edges can be fixed upfront with
+`bin_edges` and `target_bin_edges` so MI is ready from the first row.
+Otherwise, edges are learned once from the initial warm-up sample under
+`bin_rule="quantile"` (the default) or `"fixed"`. The warm-up takes
+`bin_warm_rows` positive-weight rows (default `min(1000, window_rows)` under
+`window_rows`, else `1000`) or `bin_warm_span` clock units. While edges are
+warming up, MI fields are null with `withheld_reason = "below_warm_rows"`; once
+the warm-up completes, every buffered row is replayed into the joint tables
+(and evicted down to the active window when a window is set).
+
+#### The update
+
+For each pair `(x, y)` over the active sample (all history, decayed, or inside
+the window), let `n_ab` be the total weight in joint cell `(a, b)` and `n_a`,
+`n_b` the marginal totals with `N = sum n_ab`. Let `B_xy`, `B_x`, and `B_y` be
+the counts of strictly positive cells and marginals:
+
+```text
+MI    = sum_{n_ab > 0} (n_ab / N) * ln((n_ab / n_a) * (N / n_b))
+MI_MM = MI - (B_xy - B_x - B_y + 1) / (2 * N)          (unit weights only)
+tau_b = (n_c - n_d) / sqrt((n_0 - n_1) * (n_0 - n_2))
+rho   = corr(avg_rank(x), avg_rank(y))
+xi    = 1 - n * sum_{i=1}^{n-1} |r_{i+1} - r_i| / (2 * sum_{i=1}^n l_i * (n - l_i))
+```
+
+`MI` is computed from the ratio form using `libm::log` for cross-platform bit
+stability and clamped at 0 against floating-point noise. In `"xi"`, values are
+ordered by `x` with ties in `x` broken deterministically by arrival order
+(oldest first), and `r_i`, `l_i` are the upper and lower tie ranks of `y`.
+Each window cell keeps a row counter beside its floating-point weight sum and
+resums from the ring if a large cancellation drops `w_out > 1e8 * remaining`,
+preserving exact zero cells and full recovery after extreme weights.
+
+#### State
+
+Fixed-size components are checked against `max_state_bytes` (default 256 KiB;
+ceiling 64 MiB) when the spec is built:
+
+- MI tables take `k * T * (B_x * B_y) * 8` bytes (plus `4` bytes per cell for
+  window row counts), plus `W * (12 + 2*(k + T))` bytes for a row window ring.
+- Rank windows take `W * (16 + 8*(k + T))` bytes (plus `k * T * 48` bytes for
+  incremental Kendall counters).
+- At `k = 10, T = 1, 16 × 16` bins and `W = 1,000`, MI-only takes ~22 KiB
+  decayed or ~53 KiB windowed, ranks-only takes ~105 KiB, and all five measures
+  combined take ~157 KiB — all under the 256 KiB default.
+
+When `window_size` or `bin_warm_span` is set, the data decide how many rows sit
+in the span; live state bytes are checked atomically before each row enters,
+issuing a `ReadinessWarning` once past half of `max_state_bytes` and refusing
+the run before exceeding the cap.
+
+#### Notes
+
+**Against scikit-learn and scipy.** Across 50 seeds on bivariate Gaussians
+(`rho = 0.8`, 8 × 8 fixed octile bins, 2,000 rows), `"mi"` matches
+`sklearn.metrics.mutual_info_score` to within `1e-13` absolute. `"mi_mm"`
+matches the plain-Python Miller-Madow definition to within `1e-13` and removes
+finite-sample positive bias relative to the Gauss-Legendre binned population MI.
+Decayed MI matches `scipy.stats.entropy` to within `1e-12`. Across 50 seeds on
+noisy parabolas (`W = 200`), `"spearman"`, `"kendall"`, and `"xi"` match
+`scipy.stats.spearmanr`, `scipy.stats.kendalltau(..., variant="b")`, and
+`scipy.stats.chatterjeexi` (on distinct `x`) to within `1e-14` absolute.
 
 ## Clustering and classification
 

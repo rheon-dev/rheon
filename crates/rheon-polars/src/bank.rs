@@ -4896,6 +4896,7 @@ pub use learned::Learned;
 
 mod audit;
 pub use audit::AuditTable;
+mod dependence;
 
 mod vector_ar;
 pub use vector_ar::VectorArRead;

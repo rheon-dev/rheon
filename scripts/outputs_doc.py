@@ -59,6 +59,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "ewm_moments",
         "pca",
         "marginal",
+        "dependence",
         "deco",
         "rcov",
         "audit",
@@ -264,6 +265,24 @@ MEANING: dict[str, str] = {
         "the row's coordinate along component `<j>`, `e_j . (x - m)`, on the mean and the "
         "component before this row"
     ),
+    "mi_<f>_<t>": (
+        "plug-in binned mutual information in nats between `<f>` and `<t>`, read before this row"
+    ),
+    "mi_mm_<f>_<t>": (
+        "Miller-Madow bias-corrected mutual information in nats between `<f>` and `<t>`, "
+        "read before this row"
+    ),
+    "spearman_<f>_<t>": (
+        "Spearman rank correlation between `<f>` and `<t>` over the active window before this row"
+    ),
+    "kendall_<f>_<t>": (
+        "Kendall's tau-b rank correlation between `<f>` and `<t>` over the active window before "
+        "this row"
+    ),
+    "xi_<f>_<t>": (
+        "Chatterjee's xi dependence coefficient of `<t>` on `<f>` over the active window before "
+        "this row"
+    ),
 }
 
 #: Where a field is null besides a skipped row, which nulls every field (see
@@ -397,6 +416,25 @@ ALSO_NULL: dict[str, str] = {
         )
         for s in ("var", "share", "loading_<f>", "score")
     },
+    "mi_<f>_<t>": (
+        "while withheld (which includes the rows held to learn bin edges under `bin_warm_rows` "
+        "or `bin_warm_span`), and before `<t>` has any positive-weight row"
+    ),
+    "mi_mm_<f>_<t>": (
+        "where `mi_<f>_<t>` is, and while the active sample holds any positive weight other than 1"
+    ),
+    "spearman_<f>_<t>": (
+        "while withheld, while the window holds fewer than 2 rows of `<t>`, and when `<f>` or "
+        "`<t>` is constant inside the window"
+    ),
+    "kendall_<f>_<t>": (
+        "while withheld, while the window holds fewer than 2 rows of `<t>`, and when `<f>` or "
+        "`<t>` is constant inside the window"
+    ),
+    "xi_<f>_<t>": (
+        "while withheld, while the window holds fewer than 2 rows of `<t>`, and when `<t>` is "
+        "constant inside the window"
+    ),
 }
 
 #: `bocpd`'s fields, null while its first rows set a prior left out (task 195).
@@ -476,6 +514,14 @@ SWITCHED: dict[str, tuple[str, dict[str, object]]] = {
         {"smooth_lag": 5, "emit_smoothed_se": True},
     ),
     "krls": ("emit_n_atoms=True", {"emit_n_atoms": True}),
+    "dependence": (
+        'measures=["mi", "mi_mm", "spearman", "kendall", "xi"], window_rows=50',
+        {
+            "measures": ["mi", "mi_mm", "spearman", "kendall", "xi"],
+            "window_rows": 50,
+            "half_life": None,
+        },
+    ),
 }
 
 #: What a model writes when it writes nothing per row.
@@ -983,6 +1029,11 @@ def stem(
     for pre in ("corr", "cov", "partial_corr"):
         if base.startswith(pre + "_"):
             return f"{pre}_<a>_<b>"
+    for f in features:
+        for t in targets:
+            for pre in ("mi_mm", "mi", "spearman", "kendall", "xi"):
+                if base == f"{pre}_{f}_{t}":
+                    return f"{pre}_<f>_<t>"
     for pre in ("filtered_state", "predicted_state"):
         if base.startswith(pre) and base[len(pre) :].isdigit():
             return f"{pre}<j>"

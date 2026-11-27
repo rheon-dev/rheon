@@ -72,6 +72,10 @@ impl Spec {
                 "its statistics are weighted moments of the columns, not predictions of a \
                  target"
             }
+            ModelKind::Dependence(_) => {
+                "its statistics are nonlinear dependence measures between features and targets, \
+                 not predictions of a target"
+            }
             _ => "it keeps no measure of a prediction's uncertainty",
         }
     }

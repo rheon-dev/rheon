@@ -140,6 +140,22 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
             "Round the feature to fewer values in the query, or give window_rows",
             "distinct values",
         ),
+        ModelKind::Dependence(d) if d.window_size.is_some() => (
+            format!(
+                "window_size = {}",
+                d.window_size.as_ref().expect("checked is_some")
+            ),
+            "Shorten window_size, or give window_rows",
+            "rows",
+        ),
+        ModelKind::Dependence(d) if d.bin_warm_span.is_some() => (
+            format!(
+                "bin_warm_span = {}",
+                d.bin_warm_span.as_ref().expect("checked is_some")
+            ),
+            "Shorten bin_warm_span, or give bin_warm_rows",
+            "rows",
+        ),
         ModelKind::Expectile {
             refit_span: Some(s),
             ..

@@ -333,6 +333,33 @@ model that only the new build has is listed as an addition and passes.
   with atomic admission on `window_size`; supports all residual
   diagnostics, `embargo`, `label_clock`, formula targets and `half_life`
   grids. Schema 72 (unreleased).
+- **`dependence` (`rp.spec.dependence`) and `ModelBank.dependence()` for online
+  nonlinear dependence** (PLAN 510; the user, 2026-11-27). Measures every
+  `(feature, target)` pair before each row is learned using any subset of five
+  measures: plug-in binned mutual information in nats (`"mi"`, default),
+  Miller-Madow bias-corrected MI (`"mi_mm"`, unit weights without decay; null
+  while any non-unit positive weight is active), Spearman's rho (`"spearman"`),
+  Kendall's tau-b (`"kendall"`, maintained incrementally in `O(W)` per enter and
+  leave), and Chatterjee's xi (`"xi"`, ties in `x` broken deterministically by
+  arrival order). Ratio-form MI uses `libm::log` for cross-platform bit
+  stability, with per-cell row counts and cancellation resumming under windows.
+  Bin edges may be fixed upfront (`bin_edges`, `target_bin_edges`) or learned
+  once from `bin_warm_rows` (default `min(1000, window_rows)` under
+  `window_rows`, else `1000`) or `bin_warm_span` clock units under `"quantile"`
+  or `"fixed"`. Rank measures run over `window_rows` or `window_size`
+  (`closed="right"` or `"both"`), with periodic per-row refresh for Spearman
+  and xi via `rank_every_rows` / `rank_every`; `ModelBank.dependence(spec,
+  group=None)` always returns fresh exact reads as a tidy DataFrame. State is
+  bounded by `max_state_bytes` (default 256 KiB, ceiling 64 MiB) with atomic
+  live enforcement and half-cap warnings under `window_size` or `bin_warm_span`
+  (schema 72, unreleased; 5 new frozen state fixtures). Verified across 50
+  seeds against `sklearn.metrics.mutual_info_score` (`< 5e-16`),
+  `scipy.stats.spearmanr` (`< 6e-17`), `scipy.stats.kendalltau` (`< 3e-17`),
+  `scipy.stats.chatterjeexi` (`0`), and `scipy.stats.entropy` (`< 1e-12`).
+  Arm64 release (`k = 10, T = 1, 16 × 16, W = 1,000`, 0 steady-state allocs/row):
+  9.5 µs/row (23.8 KiB) MI decayed, 9.3 µs/row (64.1 KiB) MI+MM windowed,
+  45.0 µs/row (98.2 KiB) ranks at `rank_every_rows=10` (260.5 µs at 1), and
+  54.5 µs/row (130.6 KiB) combined at `rank_every_rows=10` (269.3 µs at 1).
 - **`emit_target_weight` writes `weight_<target>`, the weight that target's
   `min_weight` reads** (PLAN 568; the user, 2026-11-23, from a workload
   report on 2.0.0). A row whose target is null teaches that target nothing

@@ -127,6 +127,7 @@ pub enum AnyModel {
     Spectral(Box<rheon_core::Spectral>),
     Isotonic(Box<rheon_core::Isotonic>),
     Krls(Box<rheon_core::Krls>),
+    Dependence(Box<rheon_core::Dependence>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -189,6 +190,7 @@ macro_rules! dispatch {
             AnyModel::Spectral($m) => $body,
             AnyModel::Isotonic($m) => $body,
             AnyModel::Krls($m) => $body,
+            AnyModel::Dependence($m) => $body,
         }
     };
 }
@@ -342,6 +344,7 @@ impl AnyModel {
             (AnyModel::CorrChange(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
             (AnyModel::Audit(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
             (AnyModel::Krls(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
+            (AnyModel::Dependence(m), Some(s)) => *out = m.predict_at(x, d_clock, s),
             _ => self.predict_into(x, y, d_clock, out),
         }
     }
@@ -393,6 +396,7 @@ impl AnyModel {
             AnyModel::CorrChange(m) => m.predict_at(x, d_clock, s),
             AnyModel::Audit(m) => m.predict_at(x, d_clock, s),
             AnyModel::Krls(m) => m.predict_with_floor_at(x, y, d_clock, floor, s),
+            AnyModel::Dependence(m) => m.predict_at(x, d_clock, s),
             _ => self.predict_with_floor(x, y, d_clock, floor),
         }
     }
@@ -600,6 +604,7 @@ impl AnyModel {
                 | AnyModel::Garch(_)
                 | AnyModel::Dcc(_)
                 | AnyModel::VectorAr(_)
+                | AnyModel::Dependence(_)
         ) || matches!(self, AnyModel::Holt(m) if m.heuristic_start())
     }
 
@@ -617,6 +622,7 @@ impl AnyModel {
             // ways: buffering, or buffering for want of an effect.
             AnyModel::Garch(m) => Self::start_wait(m.starting(), || m.no_effect()),
             AnyModel::VectorAr(m) if m.not_identified() => OwnWait::NotIdentified,
+            AnyModel::Dependence(m) if m.warming() => OwnWait::Seeding,
             AnyModel::Dcc(m) => Self::start_wait(m.starting(), || m.no_effect()),
             _ => OwnWait::None,
         }
@@ -758,6 +764,7 @@ impl AnyModel {
             | AnyModel::DdSketch(_)
             | AnyModel::Isotonic(_)
             | AnyModel::Krls(_)
+            | AnyModel::Dependence(_)
             // A term it withholds is withheld by its condition, no failure.
             | AnyModel::EwmMoments(_) => 0,
             // The components are withheld, never failed: the rotation has no
@@ -863,6 +870,7 @@ impl AnyModel {
             AnyModel::Isotonic(_) => None,
             // Its dual weights grow with the dictionary and have no fixed term layout.
             AnyModel::Krls(_) => None,
+            AnyModel::Dependence(_) => None,
         }
     }
 
@@ -1016,6 +1024,7 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Spectral(_)
         | ModelKind::Isotonic { .. }
         | ModelKind::Krls(_) => vec![Combo::default()],
+        | ModelKind::Dependence(_) => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life

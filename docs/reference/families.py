@@ -116,6 +116,7 @@ FAMILIES: tuple[Family, ...] = (
                 "ewm_moments",
                 "pca",
                 "marginal",
+                "dependence",
                 "deco",
                 "rcov",
                 "audit",

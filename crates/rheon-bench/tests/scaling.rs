@@ -414,6 +414,7 @@ const SURFACES: &[&[&str]] = &[
         "pca.",
         "ewm_moments.",
         "marginal.",
+        "dependence.",
         "deco.",
         "rcov.",
         "corrchange.",

@@ -205,6 +205,7 @@ NO_COEF = frozenset(
         "spectral",
         "isotonic",
         "krls",
+        "dependence",
     }
 )
 

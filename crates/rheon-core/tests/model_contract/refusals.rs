@@ -9,7 +9,7 @@
 #[test]
 fn every_model_refuses_a_decay_it_cannot_run_on() {
     type Build<'a> = (&'a str, &'a dyn Fn(Decay) -> Result<(), String>);
-    let builds: [Build; 21] = [
+    let builds: [Build; 22] = [
         ("ewridge", &|decay| {
             EwRidge::new(EwRidgeCfg {
                 decay,
@@ -139,6 +139,13 @@ fn every_model_refuses_a_decay_it_cannot_run_on() {
             Expectile::new(ExpectileCfg {
                 decay,
                 ..expectile_cfg()
+            })
+            .map(drop)
+        }),
+        ("dependence", &|decay| {
+            Dependence::new(DependenceCfg {
+                decay,
+                ..dependence_cfg()
             })
             .map(drop)
         }),
@@ -352,6 +359,7 @@ fn every_model_refuses_at_restore_a_configuration_its_new_refuses() {
             0.0.into(),
             "ridge must be finite and above 0",
         ),
+        refused(Dependence::new(dependence_cfg()).unwrap(), "decay", zero(), h),
     ];
     // Every model's `restore`: the twenty-one kinds, `robust` under both
     // losses.
@@ -786,6 +794,7 @@ fn exactly_the_scheduled_solvers_report_a_solve_share() {
         ("isotonic", share(Isotonic::new(isotonic_cfg()).unwrap())),
         ("vector_ar", share(VectorAr::new(vector_ar_cfg()).unwrap())),
         ("krls", share(Krls::new(krls_cfg()).unwrap())),
+        ("dependence", share(Dependence::new(dependence_cfg()).unwrap())),
     ];
     let reporting: Vec<&str> = shares
         .iter()
@@ -849,6 +858,7 @@ const PROBED: &[(&str, &str)] = &[
     ("Isotonic", "isotonic"),
     ("VectorAr", "vector_ar"),
     ("Krls", "krls"),
+    ("Dependence", "dependence"),
 ];
 
 #[test]

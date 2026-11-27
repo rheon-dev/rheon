@@ -637,6 +637,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/ddsketch_model.rs"]
 
+[messages."crates/rheon-core/src/dependence.rs"]
+
+[messages."crates/rheon-core/src/dependence/mi.rs"]
+
 [messages."crates/rheon-core/src/ewm_moments.rs"]
 
 [messages."crates/rheon-core/src/exact.rs"]
@@ -698,6 +702,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-polars/src/bank/closed_rows.rs"]
 
+[messages."crates/rheon-polars/src/bank/dependence.rs"]
+
 [messages."crates/rheon-polars/src/bank/smoothed.rs"]
 
 [messages."crates/rheon-polars/src/bank/vector_ar.rs"]
@@ -717,6 +723,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."crates/rheon-polars/src/merge.rs"]
 
 [messages."crates/rheon-polars/src/merge/state.rs"]
+
+[messages."crates/rheon-polars/src/spec/dependence.rs"]
 
 [messages."crates/rheon-polars/src/spec/drift.rs"]
 
@@ -763,6 +771,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."python/rheon/_env.py"]
 
+[messages."python/rheon/_spec_dependence.py"]
+
 [messages."python/rheon/_spec_fields.py"]
 
 [messages."python/rheon/_spec_power_variation.py"]
@@ -780,6 +790,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [docstrings."python/rheon/_spec_dcc.py"]
 
 [docstrings."python/rheon/_spec_ddsketch.py"]
+
+[docstrings."python/rheon/_spec_dependence.py"]
 
 [docstrings."python/rheon/_spec_expectile.py"]
 
@@ -826,6 +838,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/ddsketch.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/ddsketch_model.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/dependence.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/dependence/mi.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/ewm_moments.rs#messages"]
 
@@ -885,6 +901,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-polars/src/bank/closed_rows.rs#messages"]
 
+[vocabulary."crates/rheon-polars/src/bank/dependence.rs#messages"]
+
 [vocabulary."crates/rheon-polars/src/bank/smoothed.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/bank/vector_ar.rs#messages"]
@@ -900,6 +918,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-polars/src/merge.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/merge/state.rs#messages"]
+
+[vocabulary."crates/rheon-polars/src/spec/dependence.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/spec/drift.rs#messages"]
 
@@ -944,6 +964,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/_spec_dcc.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_ddsketch.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_dependence.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_dependence.py#messages"]
 
 [vocabulary."python/rheon/_spec_expectile.py#docstrings"]
 

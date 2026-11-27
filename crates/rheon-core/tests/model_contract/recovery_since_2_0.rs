@@ -144,6 +144,54 @@ fn krls_recovers_from_bounded_extremes() {
 }
 
 #[test]
+fn dependence_recovers_from_bounded_extremes() {
+    // Fixed-edge MI under decay, row window, and clock window (with ranks) all recover
+    // to the clean twin once the bounded extreme washes out or leaves the window.
+    recovers_from_bounded_extremes(
+        || Dependence::new(dependence_cfg()).unwrap(),
+        2,
+        Recovery::Twin(1e-6),
+    );
+    // Under `rank_every_rows = 1`, row-windowed and clock-windowed MI + ranks recover
+    // identically to the clean twin once the extreme row leaves the window.
+    for (_, cfg) in dependence_windows() {
+        let cfg = DependenceCfg {
+            rank_every_rows: None,
+            ..cfg
+        };
+        recovers_from_bounded_extremes(
+            move || Dependence::new(cfg.clone()).unwrap(),
+            2,
+            Recovery::Twin(1e-6),
+        );
+    }
+    recovers_from_bounded_extremes(
+        || {
+            Dependence::new(DependenceCfg {
+                rank_every_clock: None,
+                ..dependence_clock_cfg()
+            })
+            .unwrap()
+        },
+        2,
+        Recovery::Twin(1e-6),
+    );
+    // Periodic clock cadence and learned edges stay finite and restore cleanly.
+    stays_finite_over(&bounded_script(2), || {
+        Dependence::new(dependence_clock_cfg()).unwrap()
+    });
+    stays_finite_over(&bounded_script(2), || {
+        Dependence::new(DependenceCfg {
+            bin_edges: None,
+            target_bin_edges: None,
+            bin_warm_rows: Some(12),
+            ..dependence_cfg()
+        })
+        .unwrap()
+    });
+}
+
+#[test]
 fn audit_recovers_from_bounded_extremes() {
     stays_finite_over(&bounded_script(0), || Audit::new(audit_cfg()).unwrap());
 }

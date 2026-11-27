@@ -850,7 +850,7 @@ def test_fit_intercept_is_inert_on_every_kind_without_an_intercept():
 
     # `holt` fits a level and a trend, `isotonic` a curve: no intercept.
     inert = (frozenset(MINIMAL) - REGRESSIONS) | {"holt", "isotonic"}
-    assert len(inert) == 24, sorted(inert)
+    assert len(inert) == 25, sorted(inert)
 
     def run(name, flag):
         spec = {**_build(name), "fit_intercept": flag}
@@ -859,6 +859,8 @@ def test_fit_intercept_is_inert_on_every_kind_without_an_intercept():
         tables = [out, bank.closed_groups(drop=False)]
         if name == "marginal":
             tables.append(bank.marginal("m"))
+        if name == "dependence":
+            tables.append(bank.dependence("m"))
         if name == "audit":
             tables.append(bank.audit("m"))
         return tables

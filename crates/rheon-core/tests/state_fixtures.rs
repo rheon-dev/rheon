@@ -1667,6 +1667,7 @@ fn the_variant_names_are_frozen() {
         "Isotonic",
         "VectorAr",
         "Krls",
+        "Dependence",
     ];
     assert_eq!(
         variants(),
@@ -1787,7 +1788,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 234] = [
+    const FORMS: [(&str, &[&str]); 243] = [
         // PLAN 569, at schema 72: `ftrl`'s scaler and warm-up under
         // `standardize`, past the warm-up's count and inside it.
         ("ftrl_standardized", &["model", "Ftrl", "scaler", "m"]),
@@ -2359,6 +2360,43 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
                 "0",
                 "entries",
             ],
+        // `dependence`: decayed MI tables & scale, warm-up hold, row-windowed
+        // value ring & held ranks, and clock-windowed stamps & cadence.
+        (
+            "dependence_mi_decayed",
+            &["model", "Dependence", "mi_tables", "weights"],
+        ),
+        (
+            "dependence_mi_decayed",
+            &["model", "Dependence", "mi_tables", "x_edges"],
+        ),
+        (
+            "dependence_mi_decayed",
+            &["model", "Dependence", "mi_tables", "scale"],
+        ),
+        (
+            "dependence_warming",
+            &["model", "Dependence", "mi_hold", "xs"],
+        ),
+        (
+            "dependence_window_rows",
+            &["model", "Dependence", "val_ring", "xs"],
+        ),
+        (
+            "dependence_window_rows",
+            &["model", "Dependence", "held_spearman"],
+        ),
+        (
+            "dependence_window_rows",
+            &["model", "Dependence", "held_xi"],
+        ),
+        (
+            "dependence_window_clock",
+            &["model", "Dependence", "val_ring", "stamps"],
+        ),
+        (
+            "dependence_window_clock",
+            &["model", "Dependence", "rank_since"],
         ),
     ];
     // Each refit's first stamp, written only under a span (task 538): in

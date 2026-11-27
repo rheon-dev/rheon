@@ -204,6 +204,39 @@ fn restore_stamped_expectile(s: &State) -> Result<Box<dyn Run>, String> {
     Ok(Box::new(StampedExpectile { model, ns }))
 }
 
+/// A `dependence` over a clock window, handed each row's stamp in integer
+/// nanoseconds as a stream hands it.
+struct StampedDependence {
+    model: Dependence,
+    ns: i128,
+}
+
+impl Run for StampedDependence {
+    fn step(&mut self, r: &Row) -> Out {
+        self.ns += ns_of_seconds(r.d).unwrap();
+        self.model.stamp_next(Stamp::Ns(self.ns));
+        let s = self.model.step(&r.x, &r.y, r.d, r.w);
+        Out {
+            pred: s.pred,
+            n_eff: s.n_eff,
+            extra: Vec::new(),
+        }
+    }
+
+    fn state(&self) -> State {
+        self.model.state()
+    }
+}
+
+fn restore_stamped_dependence(s: &State) -> Result<Box<dyn Run>, String> {
+    let model = Dependence::restore(s).map_err(|e| e.to_string())?;
+    let ns = match model.last_stamp() {
+        Some(Stamp::Ns(ns)) => ns,
+        other => return Err(format!("expected a temporal stamp, found {other:?}")),
+    };
+    Ok(Box::new(StampedDependence { model, ns }))
+}
+
 /// The bare accumulator, which no model's state is and which a variant
 /// still names: stepped by its own `update`, its means and co-moments
 /// reported as the slots, the co-moments all `K²` of them row by row. The
@@ -4500,6 +4533,102 @@ pub fn all() -> Vec<Case> {
             Targets::Separate(2),
             2
         ),
+        // `dependence`: decayed MI after quantile warm-up, mid-warmup MI hold,
+        // row-windowed MI + ranks, and clock-windowed MI + ranks with nanosecond stamps.
+        case!(
+            "dependence_mi_decayed",
+            "Dependence",
+            Dependence,
+            Dependence::new(DependenceCfg {
+                n_features: K,
+                n_targets: 2,
+                measures: vec![DependenceMeasure::Mi],
+                decay: decay(),
+                bins: 6,
+                target_bins: 6,
+                bin_warm_rows: Some(20),
+                ..Default::default()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        case!(
+            "dependence_warming",
+            "Dependence",
+            Dependence,
+            Dependence::new(DependenceCfg {
+                n_features: K,
+                n_targets: 2,
+                measures: vec![DependenceMeasure::Mi, DependenceMeasure::MiMm],
+                bins: 6,
+                target_bins: 6,
+                bin_warm_rows: Some(25),
+                ..Default::default()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            15
+        ),
+        case!(
+            "dependence_window_rows",
+            "Dependence",
+            Dependence,
+            Dependence::new(DependenceCfg {
+                n_features: K,
+                n_targets: 2,
+                measures: vec![
+                    DependenceMeasure::Mi,
+                    DependenceMeasure::MiMm,
+                    DependenceMeasure::Spearman,
+                    DependenceMeasure::Kendall,
+                    DependenceMeasure::Xi,
+                ],
+                bins: 6,
+                target_bins: 6,
+                bin_warm_rows: Some(15),
+                window_rows: Some(25),
+                rank_every_rows: Some(3),
+                ..Default::default()
+            })
+            .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        Case {
+            name: "dependence_window_clock",
+            variant: "Dependence",
+            build: || {
+                Box::new(StampedDependence {
+                    model: Dependence::new(DependenceCfg {
+                        n_features: K,
+                        n_targets: 2,
+                        measures: vec![
+                            DependenceMeasure::Mi,
+                            DependenceMeasure::Spearman,
+                            DependenceMeasure::Kendall,
+                            DependenceMeasure::Xi,
+                        ],
+                        bins: 6,
+                        target_bins: 6,
+                        bin_warm_rows: Some(15),
+                        window_clock: Some(12.0),
+                        closed: WindowClosed::Both,
+                        rank_every_clock: Some(3.0),
+                        ..Default::default()
+                    })
+                    .unwrap(),
+                    ns: 0,
+                })
+            },
+            restore: restore_stamped_dependence,
+            n_features: K,
+            targets: Targets::Linear(2),
+            before: 40,
+        },
     ]
 }
 

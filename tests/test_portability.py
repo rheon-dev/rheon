@@ -425,6 +425,21 @@ class TestOutputSchemaStability:
         out = rp.ModelBank([spec]).fit_predict(df)
         assert [f.name for f in out.schema["m"].fields] == rp.spec.output_fields(spec)
 
+    def test_dependence_names_match_the_realized_struct(self):
+        spec = rp.spec.dependence(
+            "m",
+            targets=["y0", "y1"],
+            features=["x0", "x1"],
+            measures=["mi", "mi_mm", "spearman", "kendall", "xi"],
+            bins=6,
+            bin_warm_rows=10,
+            window_rows=20,
+            emit_target_weight=True,
+        )
+        df = _frame().drop("g").with_columns(y1=pl.col("y0") * 2.0)
+        out = rp.ModelBank([spec]).fit_predict(df)
+        assert [f.name for f in out.schema["m"].fields] == rp.spec.output_fields(spec)
+
     def test_ew_cov_names_match_the_realized_struct(self):
         """`ew_cov` has no targets, so its declared schema is built from the
         statistics and column pairs rather than from targets. (It used to be

@@ -295,6 +295,7 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::Spectral(_)
             | crate::ModelKind::Isotonic { .. }
             | crate::ModelKind::Krls(_)
+            | crate::ModelKind::Dependence(_)
     ) {
         return Vec::new();
     }
@@ -1606,6 +1607,38 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
             fields.push(
                 FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
                     .decay(suffix, d)
+                    .src(Source::NEff(mi)),
+            );
+        }
+        return fields;
+    }
+    // dependence: per (measure, feature, target), the nonlinear dependence
+    // measure read before the row, then `weight_sum`; no `coef`.
+    // Internally `Step::pred` is target-outer: `(t * n_measures + m_idx) * k + j`.
+    if let crate::ModelKind::Dependence(d) = &spec.model {
+        let measures = d.measures_for_fields();
+        let nm = measures.len();
+        let k = spec.features.len();
+        let stride = spec.targets.len() * nm * k;
+        let mut fields = Vec::new();
+        for (mi, (suffix, decay)) in decays.iter().enumerate() {
+            let base = mi * stride;
+            for (m_idx, measure) in measures.iter().enumerate() {
+                let kind = measure.as_str();
+                for (j, f) in spec.features.iter().enumerate() {
+                    for (t_i, t) in spec.targets.iter().enumerate() {
+                        let mut fm = FieldMeta::new(format!("{kind}_{f}_{t}{suffix}"), kind)
+                            .decay(suffix, decay)
+                            .target(t)
+                            .src(Source::Stat(base + (t_i * nm + m_idx) * k + j));
+                        fm.columns = Some(vec![f.clone()]);
+                        fields.push(fm);
+                    }
+                }
+            }
+            fields.push(
+                FieldMeta::new(format!("weight_sum{suffix}"), "weight_sum")
+                    .decay(suffix, decay)
                     .src(Source::NEff(mi)),
             );
         }

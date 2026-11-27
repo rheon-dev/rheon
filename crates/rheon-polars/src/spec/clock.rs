@@ -109,6 +109,10 @@ pub const CLOCK_FIELDS: &[(&str, &[&str])] = &[
         &["periods", "spacing", "window_size", "snapshot_every"],
     ),
     ("krls", &["window_size"]),
+    (
+        "dependence",
+        &["window_size", "bin_warm_span", "rank_every"],
+    ),
 ];
 
 /// The parameters that are a rate *per* clock unit: a decay factor per unit
@@ -571,6 +575,11 @@ impl Spec {
             | ModelKind::Krls(super::KrlsSpec { window_size, .. }) => {
                 put(&mut out, "window_size", window_size.as_ref());
             }
+            ModelKind::Dependence(d) => {
+                put(&mut out, "window_size", d.window_size.as_ref());
+                put(&mut out, "bin_warm_span", d.bin_warm_span.as_ref());
+                put(&mut out, "rank_every", d.rank_every.as_ref());
+            }
             // A lag written on a term's leg (`x@5m`) is a span of the clock
             // too, named by the table it is written in.
             ModelKind::EwmMoments {
@@ -741,6 +750,7 @@ impl ModelKind {
                 distinct_window_size: Some(_),
                 ..
             } | ModelKind::Krls(k) if k.window_size.is_some()
+            | ModelKind::Dependence(d) if d.window_size.is_some()
         )
     }
 

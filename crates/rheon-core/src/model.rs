@@ -108,6 +108,7 @@ pub enum ModelState {
     Isotonic(Box<crate::Isotonic>),
     VectorAr(Box<crate::VectorAr>),
     Krls(Box<crate::Krls>),
+    Dependence(Box<crate::Dependence>),
 }
 
 #[derive(Debug, Error)]
@@ -242,6 +243,7 @@ impl ModelState {
             ModelState::Isotonic(_) => "isotonic",
             ModelState::VectorAr(_) => "vector_ar",
             ModelState::Krls(_) => "krls",
+            ModelState::Dependence(_) => "dependence",
         }
     }
 }

@@ -618,6 +618,7 @@ BUILDERS = {
     rp.spec.spectral: dict(features=None, periods=[8.0]),
     rp.spec.isotonic: dict(features=["x0"]),
     rp.spec.krls: {},
+    rp.spec.dependence: dict(bins=6, bin_warm_rows=12),
 }
 
 

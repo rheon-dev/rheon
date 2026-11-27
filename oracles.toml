@@ -7206,6 +7206,45 @@ ideal = 0.0
 n = 50
 floor = 1e-12
 
+[group."dependence.dependence"]
+tests = [
+    "tests/test_dependence.py::test_fifty_seeds_dependence_oracles",
+]
+oracles = { "scikit-learn" = "1.9.1", "scipy" = "1.18.1" }
+dataset = ""
+
+[case."dependence.dependence.kendall_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-14
+
+[case."dependence.dependence.mi_abs_err"]
+ideal = 0.0
+n = 50
+
+[case."dependence.dependence.mi_sklearn_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
+[case."dependence.dependence.mm_abs_err"]
+ideal = 0.0
+n = 50
+
+[case."dependence.dependence.spearman_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-14
+
+[case."dependence.dependence.xi_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-14
+
+[case."dependence.dependence.xi_parabola"]
+ideal = 1.0
+n = 50
+
 # --- raises
 
 [[raised]]

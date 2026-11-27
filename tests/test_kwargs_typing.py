@@ -58,6 +58,7 @@ BUILDERS = [
     "ew_class",
     "seqtest",
     "marginal",
+    "dependence",
 ]
 
 

@@ -551,6 +551,22 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    # Nonlinear dependence (binned MI + windowed rank correlations) per pair.
+    (
+        "dependence",
+        "dependence",
+        dict(
+            targets=["y", "z"],
+            features=["x0", "x1"],
+            measures=["mi", "spearman", "kendall", "xi"],
+            bins=8,
+            bin_warm_rows=20,
+            window_rows=50,
+            group="g",
+            **CLOCK,
+        ),
+        [],
+    ),
     # Each row where `y` or `z` is above 0 an event of that node; the zero weights
     # learn none of theirs.
     (

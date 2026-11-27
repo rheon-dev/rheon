@@ -139,7 +139,7 @@ shows them at work.
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
            ``audit``, ``hawkes``, ``garch``, ``dcc``, ``realized``, ``pca``,
            ``power_variation``, ``tdigest``, ``ddsketch``, ``ewm_moments``,
-           ``ar``, ``spectral``, ``isotonic``, ``krls``, ``vector_ar``
+           ``ar``, ``spectral``, ``isotonic``, ``krls``, ``vector_ar``, ``dependence``
 ``emit_target_weight``
     Why: a row whose target is null teaches that target nothing but still
     adds to the shared ``weight_sum``, so a row can show ``weight_sum`` above
@@ -395,7 +395,8 @@ and each diagnostic's own ``*_half_life`` below, and in the models
 ``hmm``'s and ``bocpd``'s ``warm_span``, ``bocpd``'s ``hazard``,
 ``corrchange``'s ``permute_every`` and ``monitor_span``, ``audit``'s
 ``distinct_window_size``, ``huber``'s and ``sgd``'s
-``huber_refit_span``, ``quantile``'s ``quantile_refit_span``, and
+``huber_refit_span``, ``quantile``'s ``quantile_refit_span``,
+``dependence``'s ``bin_warm_span`` and ``rank_every``, and
 ``holt``'s and ``kalman``'s ``forecast_spans``, a list of spans. Each that
 counts rows where the quantity has a meaning on the clock has its count
 beside it, such as ``warm_rows`` beside ``warm_span`` and ``bocpd``'s
@@ -1197,6 +1198,7 @@ from rheon._spec import (
     dcc,
     ddsketch,
     deco,
+    dependence,
     ew_class,
     ew_cov,
     ewm_moments,
@@ -1254,6 +1256,7 @@ __all__ = [
     "corrchange",
     "dcc",
     "deco",
+    "dependence",
     "marginal",
     "rcov",
     "micro",

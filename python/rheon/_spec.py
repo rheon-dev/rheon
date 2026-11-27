@@ -811,6 +811,7 @@ __all__ = [
     "isotonic",
     "krls",
     "vector_ar",
+    "dependence",
 ]
 
 
@@ -4462,6 +4463,7 @@ from rheon._spec_cluster import kmeans, micro  # noqa: E402
 from rheon._spec_dcc import dcc  # noqa: E402
 from rheon._spec_ddsketch import ddsketch  # noqa: E402
 from rheon._spec_deco import deco  # noqa: E402
+from rheon._spec_dependence import dependence  # noqa: E402
 from rheon._spec_expectile import expectile  # noqa: E402
 from rheon._spec_garch import garch  # noqa: E402
 from rheon._spec_glm import glm  # noqa: E402
