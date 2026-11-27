@@ -891,8 +891,10 @@ class FormulaTarget(TypedDict):
     becomes in a spec's ``targets``, and a ``[[specs]]`` target table with
     ``name`` and ``formula`` in the command line's TOML. ``name`` is the
     expression's alias, which the output fields carry. ``formula`` is the
-    expression's compact tree (:mod:`rheon.polars.ops`), holding at least
-    one window operator that looks ahead (``reverse=True``).
+    expression's compact list tree (:mod:`rheon.polars.ops`), holding at least
+    one window operator that looks ahead (``reverse=True``). This written tree
+    form is stable across releases in spec dicts, TOML configs, and saved
+    states alike.
 
     .. rubric:: Examples
 

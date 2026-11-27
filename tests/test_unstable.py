@@ -3,14 +3,13 @@ round 4, D5, N23, AP12, DA4 and YB11): a docstring admonition, and an
 ``UnstableWarning`` raised only under ``RHEON_WARN_UNSTABLE=1``, as
 Polars raises its own under ``POLARS_WARN_UNSTABLE``.
 
-The surfaces: the formula tree's written form in a TOML file (the command
-line's, in ``crates/rheon-cli/tests/run.rs``), ``fit_predict_arrow``,
-``predict_arrow`` and ``ArrowStruct``, and the modules ``rp.sim``,
-``rheon.corr`` and ``rheon.polars._gbdt``. Each emits under the variable and
-is silent without it. A ``with_windows`` state and a formula target inside a
-bank's state were labelled too until PLAN 542 put every state file under one
-envelope, versioned with a loader for each layout: they are promised now,
-and :func:`test_a_promised_surface_never_warns` holds them silent.
+The surfaces: ``fit_predict_arrow``, ``predict_arrow`` and ``ArrowStruct``,
+and the modules ``rp.sim``, ``rheon.corr`` and ``rheon.polars._gbdt``. Each
+emits under the variable and is silent without it. A ``with_windows`` state
+and a formula target inside a bank's state became promised under PLAN 542,
+and the formula tree's compact S-expression written form in TOML configs and
+spec dicts became promised under PLAN 577: :func:`test_a_promised_surface_never_warns`
+and ``crates/rheon-cli/tests/run.rs`` hold them silent.
 """
 
 from __future__ import annotations
@@ -208,26 +207,37 @@ def test_each_surface_says_so_in_its_docstring(obj):
 
 @pytest.mark.parametrize(
     "obj",
-    [rp.ModelBank.save, rp.stream.with_windows],
+    [
+        rp.ModelBank.save,
+        rp.ModelBank.save_bytes,
+        rp.ModelBank.write_json,
+        rp.ModelBank.load,
+        rp.ModelBank.load_bytes,
+        rp.stream.with_windows,
+    ],
     ids=lambda o: o.__qualname__,
 )
 def test_a_state_surface_no_longer_says_it_is_unstable(obj):
-    """A window run's state and a formula target inside a bank's state
-    are promised since PLAN 542: neither docstring labels them."""
+    """A window run's state and a formula target in a bank's state or config
+    are promised (PLAN 542, PLAN 577): none of these docstrings label them unstable."""
     doc = inspect.getdoc(obj) or ""
     assert "**unstable**" not in doc
-    assert "every later" in doc
+    assert "UnstableWarning" not in doc
+    if obj in (rp.ModelBank.save, rp.stream.with_windows):
+        assert "every later" in doc
 
 
 def test_the_warnings_own_list_is_the_unstable_surfaces():
-    """Review 2026-11-23, PY-13 (4): ``UnstableWarning``'s docstring still
-    listed a ``with_windows`` state and a formula tree in a saved state, both
-    promised since every state file took one envelope, and named the private
-    module ``rheon.polars._gbdt`` in a public page."""
+    """Review 2026-11-23, PY-13 (4), and PLAN 577: ``UnstableWarning``'s
+    docstring lists only the genuinely unstable surfaces (Arrow export,
+    ``rheon.polars.sim``, ``rheon.corr``, and GBDT inputs) and no longer lists
+    ``with_windows``, saved states, or formula targets in TOML files."""
     from rheon import UnstableWarning
 
     doc = inspect.getdoc(UnstableWarning) or ""
     assert "with_windows" not in doc, doc
     assert "saved state" not in doc, doc
+    assert "TOML" not in doc, doc
+    assert "formula target" not in doc, doc
     assert "._" not in doc, doc
-    assert "TOML file" in doc and "rheon.corr" in doc, doc
+    assert "ArrowStruct" in doc and "rheon.corr" in doc, doc

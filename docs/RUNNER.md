@@ -330,15 +330,14 @@ embargo = 60.0           # at least the target's window_size, for a run that wri
 type = "ewridge"
 ```
 
-The formula is Polars' expression written as a tree: an operator, its
-input and its keywords. TOML has no null, so a null literal is written
-`["lit"]`. **This written form is labeled unstable**: it may change in any
-release without that counting as a breaking change in the TOML file. With
-`RHEON_WARN_UNSTABLE=1`, the command line says so on standard error. A
-state the target is saved into loads in every later release, as any state
-does. The formula target itself, what it computes and when its rows are
-released, is promised. `group_close` is
-refused beside a formula target, and so is `group` without `clock`.
+The formula is written as a compact list tree: an operator name, its
+inputs and its keywords. TOML has no null, so a null literal is written
+`["lit"]`. This compact tree form is stable across releases—in TOML
+configs, Python spec dicts, and saved states alike—and a state the target
+is saved into loads in every later release, as any state does. The formula
+target itself, what it computes and when its rows are released, is promised.
+`group_close` is refused beside a formula target, and so is `group` without
+`clock`.
 
 ### Clocks that are times
 

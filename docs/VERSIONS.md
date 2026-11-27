@@ -218,20 +218,19 @@ in any minor release:
 
 | | what it covers |
 |---|---|
-| **stable** | everything in `rheon.__all__` and `rheon.polars.__all__`; the `rheon.spec` constructors, their keywords and their defaults; the functions of the helper modules `rp.eval`, `rheon.gram`, `rp.ops` and `rp.stream`; the `.rheon` namespace; the [output field names](how-to/find-an-output-field.md); the columns, and their types, of the frames a bank and `rheon.spec` return, and of the closed-groups frame; the words each string-valued parameter takes; the TOML config keys; the command line's flags, its exit status and the files it writes; and the environment variables the package reads |
-| **unstable** | the written form of a formula target in a TOML config; the Arrow export: `fit_predict_arrow`, `predict_arrow` and `ArrowStruct`; and the modules `rp.sim` and `rheon.corr`. Each says so in its docstring, and warns with `UnstableWarning` when used with `RHEON_WARN_UNSTABLE=1` set |
+| **stable** | everything in `rheon.__all__` and `rheon.polars.__all__`; the `rheon.spec` constructors, their keywords and their defaults; the functions of the helper modules `rp.eval`, `rheon.gram`, `rp.ops` and `rp.stream`; the `.rheon` namespace; the [output field names](how-to/find-an-output-field.md); the columns, and their types, of the frames a bank and `rheon.spec` return, and of the closed-groups frame; the words each string-valued parameter takes; the TOML config keys and the compact list-tree written form of a formula target; the command line's flags, its exit status and the files it writes; and the environment variables the package reads |
+| **unstable** | the Arrow export: `fit_predict_arrow`, `predict_arrow` and `ArrowStruct`; and the modules `rp.sim` and `rheon.corr`. Each says so in its docstring, and warns with `UnstableWarning` when used with `RHEON_WARN_UNSTABLE=1` set |
 | **not stable** | any name that starts with an underscore, apart from the two columns `rp.stream.embargo` adds, `_online_role` and `_online_role_weight`, which are stable; the Rust crates (`rheon-core`, `rheon-polars`, `rheon-cli` and `rheon-py`), which are not published to crates.io, so nothing outside this repository builds against them; a model's numbers within the 1e-12 tolerance its stored reference results are held to, which depend on the platform and the Polars version; and the text the command line prints (its summary, readiness warnings and errors) and the timing lines `RHEON_TIMING=1` asks for, which are written for a person and may be reworded in a minor release |
 
 **Each unstable part is unstable for a reason that a promise would make
-costly.** The formula tree is read from `expr.meta.serialize`, whose form
-Polars calls unstable across its versions, so the tree a TOML config spells
-out may have to follow it. Once saved in a state, the tree is held to the
-state's promise: every state file, a window run's and a pipeline
-checkpoint included, loads in every later release. The Arrow export's input side still arrives
+costly.** The Arrow export's input side still arrives
 as a Polars frame, and its import is not built. `rp.sim` and `rheon.corr`
 stand beside the bank: neither reads its outputs, as `rp.eval` and
 `rheon.gram` do. `rp.sim`'s frames also rest on NumPy's `Generator`, which
-promises no stream across NumPy versions.
+promises no stream across NumPy versions. By contrast, a formula target's
+compact list tree is rheon's own representation—decoupled from Polars'
+internal expression serialization—so it is stable across releases in TOML
+configs, Python spec dicts, and saved states alike.
 
 ### What the API is
 
