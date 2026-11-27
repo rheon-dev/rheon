@@ -1244,6 +1244,43 @@ model that only the new build has is listed as an addition and passes.
 
 ### Fixed
 
+- **FIGARCH start identification uses `SE(d)` at `α = 0.001` instead of fixed
+  row floors** (GARCH-8 (2); the user, 2026-11-27). Removed FIGARCH's
+  2,000-row `start_rows` floor (`start_rows >= 1`) and 50-row `start_span`
+  wait (`start_span` closes on the span directly); FIGARCH now gates start
+  acceptance on `SE(d) <= 1 / (2 sqrt(chi2_1(0.999)))` (about `0.1520`) from
+  Kish-scaled expected Gaussian Fisher information, reusing `garch`'s own
+  `α = 0.001` level on `d`'s `[0, 1)` domain with 0 state bytes added and 0
+  ulps moved on existing fixtures and goldens.
+
+- **Row-only `with_windows` calls no longer carry a placeholder sum kernel**
+  (`WINDOWS_VERSION` 14 to 15 within unreleased schema 72). Row-only calls
+  (`increment`, `tick_sign`, `run_length`, `clock_lag`, `clock_drift`,
+  `clock_step`) now run an empty 0-kernel clock-only core and skip dummy
+  input evaluation (`queued == 0`, ~300 B/group smaller state; arm64 release
+  default layout -31% to -60% ns/row, x86-64/aligned timings owed at task
+  583), with bit-identical outputs and a v9–v14 loader that verifies and
+  strips the legacy stand-in cleanly.
+
+- **Atomic span and window state-cap enforcement across all 16 `HeldCap`
+  models** (SPAN-2, SPAN-3, REG-11). Checking `max_state_bytes` now runs
+  read-only across all targets and post-expiry window bytes before mutating
+  any online state, clock, or earlier target buffer; once over cap, subsequent
+  rows leave pre-cap state unchanged.
+
+- **Stamp-gated `predict_with_floor` and clock-window scored reads**
+  (PLAN 578f follow-up). Routed ungated `predict_with_floor` and scored
+  reads through exact row stamps across `hawkes`, `ewm_moments`, `expectile`,
+  `isotonic` (including pre-trim floor detection), `ddsketch`, and
+  `corrchange`, and fixed temporal `label_clock` scored-row stamp origin so
+  window edges match learned steps to the bit.
+
+- **Import-time x86-64 CPU check verifies OS YMM support and enforces W^X on
+  Windows** (PYO3-2 (1, 2)). Checks CPUID `OSXSAVE` and `XGETBV` XCR0 bits
+  before reporting `avx`, `avx2`, or `fma`, and allocates Windows stub memory
+  `PAGE_READWRITE` before `VirtualProtect` to `PAGE_EXECUTE_READ` (freeing
+  on failure). Added the 50-seed `isotonic` oracle-ledger grid (PLAN 573).
+
 - **Window operators hold finite means, variances and rates at extreme
   half-lives up to `f64::MAX`** (WIN-4, WIN-5, WIN-10 option (b)). Each
   kernel with finite `half_life >= 2^511` now scales its masses into a
