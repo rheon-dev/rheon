@@ -36,7 +36,7 @@ impl Windows {
         let nc = self.cross.as_ref().map_or(0, |c| c.defs().len());
         let np = self.profiles.len();
         let ns = self.seasonals.len();
-        if no + nc + np + ns == 0 || members != *self.members || members.iter().any(Vec::is_empty) {
+        if members != *self.members || members.iter().any(Vec::is_empty) {
             return Err("its kernels' operators are not its operators".into());
         }
         if let Some(c) = &self.cross
@@ -195,6 +195,75 @@ impl Windows {
             return bad();
         }
         Ok(())
+    }
+
+    /// Whether this core carries no window, cross-group, profile or seasonal
+    /// operator: it tracks only the stream's and each group's clock, sessions,
+    /// gaps and row order (for a `with_windows` call of row operators alone).
+    pub(crate) fn is_clock_only(&self) -> bool {
+        self.kernels.is_empty()
+            && self.ops.is_empty()
+            && self.cross.is_none()
+            && self.moments.is_empty()
+            && self.profiles.is_empty()
+            && self.seasonals.is_empty()
+    }
+
+    /// Whether this core carries the one-kernel, one-sum stand-in that
+    /// windows state versions 9 to 14 wrote for a call of row operators alone
+    /// (task 78, removed in version 15).
+    pub(crate) fn is_legacy_placeholder(&self) -> bool {
+        self.kernels.as_slice()
+            == [KernelDef {
+                direction: Direction::Backward,
+                half_life: f64::INFINITY,
+                window_size: Some(1.0),
+                window_ns: Some(1_000_000_000),
+                closed: Closed::Left,
+                since: None,
+            }]
+            && self.ops.as_slice()
+                == [OpDef {
+                    kernel: 0,
+                    stat: Stat::Sum,
+                    input: 0,
+                    min_samples: 1,
+                    partial: Partial::Keep,
+                    bias: false,
+                    quantile: None,
+                    max_state_bytes: None,
+                }]
+            && self.cross.is_none()
+            && self.moments.is_empty()
+            && self.profiles.is_empty()
+            && self.seasonals.is_empty()
+    }
+
+    /// Strip the legacy placeholder kernel and sum operator (versions 9 to 14)
+    /// into a version-15 clock-only core, leaving every clock, group, silent
+    /// list and held-row counter untouched. Caller must have checked
+    /// [`Self::is_legacy_placeholder`] and [`Self::check`] first.
+    pub(crate) fn strip_legacy_placeholder(&mut self) {
+        debug_assert!(self.is_legacy_placeholder());
+        self.kernels = Arc::new(Vec::new());
+        self.ops = Arc::new(Vec::new());
+        self.members = Arc::new(Vec::new());
+        self.n_outputs = 0;
+        self.n_forward = 0;
+        self.held_values.clear();
+        for g in &mut self.groups {
+            g.queues.clear();
+            g.open.clear();
+            g.open_x.clear();
+            g.open_held.clear();
+            g.closed.clear();
+            g.last_valued.clear();
+            g.held.clear();
+            g.stamp_values.clear();
+        }
+        self.scratch_row.clear();
+        self.scratch_sum.clear();
+        self.derived = Derived::default();
     }
 
     /// One named damage, as a bit flip or a truncated array in a state file

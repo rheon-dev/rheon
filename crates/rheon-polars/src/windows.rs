@@ -1928,8 +1928,10 @@ fn defect(what: &str) -> String {
 impl Windows {
     /// # Errors
     ///
-    /// No operator, or a kernel this core cannot run: a defect of the
-    /// caller's, which checks both first ([`defect`]).
+    /// A kernel with no operator, or a kernel this core cannot run: a defect
+    /// of the caller's, which checks both first ([`defect`]). Empty `kernels`
+    /// and `ops` builds a clock-only core with zero outputs, used when a run
+    /// holds only row operators.
     pub fn new(
         kernels: Vec<KernelDef>,
         ops: Vec<OpDef>,
@@ -1976,9 +1978,6 @@ impl Windows {
         seasonals: Vec<StlDef>,
         clock_cfg: ClockCfg,
     ) -> Result<Self, String> {
-        if ops.is_empty() && cross.is_empty() && profiles.is_empty() && seasonals.is_empty() {
-            return Err("at least one operator is needed".into());
-        }
         for p in &profiles {
             p.check()?;
         }
@@ -2111,7 +2110,7 @@ impl Windows {
             self.derived = Derived::of(&self.kernels, &self.ops, &self.members, off);
             self.derived.n_wait |= u32::from(self.profiles.iter().any(ProfileDef::waits));
         }
-        if self.scratch_sum.is_empty() {
+        if self.scratch_sum.is_empty() && !self.members.is_empty() {
             let widest = self.members.iter().map(Vec::len).max().unwrap_or(0);
             self.scratch_row = vec![0.0; ROW_VAR * widest];
             self.scratch_sum = vec![0.0; SUM_VAR * widest];
@@ -6101,8 +6100,85 @@ mod tests {
         };
         assert_eq!(
             refused(vec![back()], vec![]),
-            defect("at least one operator is needed")
+            defect("kernel 0 has no operator")
         );
+        // Empty kernels and ops builds a clock-only core (0 outputs, 0 queued rows).
+        let mut clock_only = Windows::new(vec![], vec![], cfg(5.0, None, Some(2.0))).unwrap();
+        assert_eq!(clock_only.n_outputs(), 0);
+        clock_only.set_grouped(true);
+        let g0 = clock_only.group(Some("a"));
+        let g1 = clock_only.group(Some("b"));
+        for (g, t, s) in [
+            (g0, 0.0, 1u64),
+            (g1, 1.0, 1),
+            (g0, 2.0, 1),
+            (g0, 10.0, 1), // gap_cap cut on g0 and silent cut on g1
+            (g1, 11.0, 2), // session change on g1
+            (g0, 6.0, 1),  // step back > restart_after_step_back (2.0): reset
+        ] {
+            clock_only
+                .push(&RowIn {
+                    group: g,
+                    clock: Some(ClockValue::F64(t)),
+                    session: Some(s),
+                    values: &[],
+                    accept: true,
+                    lists: &[],
+                })
+                .unwrap();
+            clock_only.check().unwrap();
+        }
+        assert_eq!(clock_only.queued(), 0);
+        let out = clock_only.drain();
+        assert_eq!(out.rows, 6);
+        assert!(out.values.is_empty());
+        assert_eq!(clock_only.held(), 0);
+        // Step back <= restart_after_step_back is still refused.
+        assert!(matches!(
+            clock_only.push(&RowIn {
+                group: g0,
+                clock: Some(ClockValue::F64(5.0)),
+                session: Some(1),
+                values: &[],
+                accept: true,
+                lists: &[],
+            }),
+            Err(Refusal::Backwards { .. })
+        ));
+        // WIN-9 span overflow past f64::MAX is still refused.
+        let mut span_core = Windows::new(vec![], vec![], cfg(1e308, None, None)).unwrap();
+        let sg = span_core.group(Some(""));
+        span_core
+            .push(&RowIn {
+                group: sg,
+                clock: Some(ClockValue::F64(-1e308)),
+                session: None,
+                values: &[],
+                accept: true,
+                lists: &[],
+            })
+            .unwrap();
+        span_core
+            .push(&RowIn {
+                group: sg,
+                clock: Some(ClockValue::F64(0.0)),
+                session: None,
+                values: &[],
+                accept: true,
+                lists: &[],
+            })
+            .unwrap();
+        assert!(matches!(
+            span_core.push(&RowIn {
+                group: sg,
+                clock: Some(ClockValue::F64(1e308)),
+                session: None,
+                values: &[],
+                accept: true,
+                lists: &[],
+            }),
+            Err(Refusal::Span { .. })
+        ));
         assert_eq!(
             refused(vec![back()], vec![op(3, 1)]),
             defect("operator 0 names kernel 3, which there is not")

@@ -74,7 +74,12 @@ const MASKS: u64 = 0x8ab94abb9163ebc2;
 /// version byte and its checksum; the same run with the version written as
 /// 13 gave 0x9627f432c08e8214 again (measured on the fold of 564 onto 562
 /// and 578d, W14), so no output bit and no other state byte moved.
-const BITS: u64 = 0x3d6a77c85a010425;
+///
+/// 0x3d6a77c85a010425 until windows state 15 (task 78, placeholder sum kernel
+/// removal) moved each state's version byte (14 -> 15) and its checksum;
+/// [`MASKS`] did not move, and every non-row-only `with_windows*` fixture
+/// moved only in its version byte and trailing checksum.
+const BITS: u64 = 0x2704a22941e190c8;
 /// Rows a case runs over.
 const ROWS: usize = 2000;
 

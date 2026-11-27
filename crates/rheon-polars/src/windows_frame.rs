@@ -33,7 +33,7 @@ use crate::stream::usable;
 use crate::windows::{ChunkKeys, session_hashes};
 use crate::windows::{
     Closed, CrossClosed, CrossDef, Direction, KernelDef, MomentsDef, OpDef, OpKind, Partial, Peek,
-    PhaseSpan, PlainRows, ProfileDef, Refusal, RowIn, Stat, StateOf, StlDef, Windows,
+    PhaseSpan, PlainRows, ProfileDef, Refusal, RowIn, StateOf, StlDef, Windows,
 };
 use crate::wrong_type::{Refused, wrong_type};
 
@@ -111,6 +111,16 @@ const WINDOWS_KIND: &str = crate::envelope::Kind::Windows.tag();
 /// The magic a state began with before the envelope, version 11 and
 /// earlier.
 const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
+/// 15 since the placeholder sum kernel's removal (task 78): a call of row
+/// operators alone (`increment`, `tick_sign`, `run_length`, `clock_lag`,
+/// `clock_drift`, `clock_step`) carries an empty window core (no kernels
+/// and no operators) instead of the one-kernel, one-row sum stand-in that
+/// versions 9 to 14 wrote. A version-14 (or earlier, down to 9) state of
+/// any call with a window operator loads as a 15 unchanged; one of row
+/// operators alone carries that stand-in and has it stripped on load
+/// ([`LAST_PLACEHOLDER_VERSION`]), continuing to the bit and re-saving as
+/// a 15 without it; an older build refuses a 15 by its number rather than
+/// at the empty core;
 /// 14 since task 564, PLAN 563 and PLAN 490: a group's increments' state may
 /// keep a run length's run, a clock drift's sums or a clock step's moments
 /// (`rows`), written only where there is a `run_length`, `clock_lag`,
@@ -159,7 +169,11 @@ const LEGACY_WINDOWS_MAGIC: &str = "polars-online windows";
 /// task 143: formulas over operators, where 1 held descriptions. An older
 /// state would load with defaults and misbehave. The bank's schema moves
 /// with this number (review R4, A2; R6, D5).
-const WINDOWS_VERSION: u32 = 14;
+const WINDOWS_VERSION: u32 = 15;
+
+/// The last version whose row-only runs carried a one-kernel, one-sum
+/// stand-in core (removed in version 15).
+const LAST_PLACEHOLDER_VERSION: u32 = 14;
 
 /// The last version written before the envelope.
 const LAST_LEGACY_VERSION: u32 = 11;
@@ -1507,34 +1521,6 @@ impl WindowsRun {
                 cfg,
             )
             .map_err(|e| format!("{WHO}: {e}"))?
-        } else if p.ops.is_empty() {
-            // Increments alone: the core carries a kernel that reads nothing,
-            // so rows pass straight through it. A sum over no window, read
-            // at every row.
-            Windows::new(
-                vec![KernelDef {
-                    direction: Direction::Backward,
-                    half_life: f64::INFINITY,
-                    window_size: Some(1.0),
-                    // Its edge is never read, but on a temporal clock an
-                    // integer window converts nothing (review R4).
-                    window_ns: Some(1_000_000_000),
-                    closed: Closed::Left,
-                    since: None,
-                }],
-                vec![OpDef {
-                    kernel: 0,
-                    stat: Stat::Sum,
-                    input: 0,
-                    min_samples: 1,
-                    partial: Partial::Keep,
-                    bias: false,
-                    quantile: None,
-                    max_state_bytes: None,
-                }],
-                cfg,
-            )
-            .map_err(|e| format!("{WHO}: {e}"))?
         } else {
             Windows::with_moments(p.kernels, p.ops, p.moments, cfg)
                 .map_err(|e| format!("{WHO}: {e}"))?
@@ -1560,11 +1546,7 @@ impl WindowsRun {
             }
         }
         core.set_grouped(config.group.is_some());
-        let inputs = if p.inputs.is_empty() {
-            vec![Node::Lit(crate::formula::Literal::Float(0.0))]
-        } else {
-            p.inputs
-        };
+        let inputs = p.inputs;
         let key_dtypes: Vec<(String, String)> =
             [("group", &config.group), ("session", &config.session)]
                 .into_iter()
@@ -1771,7 +1753,7 @@ impl WindowsRun {
     /// plan refuses, which a feed reports for the rows it was handed. For a
     /// run with no increments; [`Self::share_increments`] does the rest.
     fn evaluate_inputs(&self, frame: &DataFrame) -> Option<Vec<Vec<f64>>> {
-        if self.bare_inputs(frame).is_some() {
+        if self.k.inputs.is_empty() || self.bare_inputs(frame).is_some() {
             return None;
         }
         self.evaluated_inputs(frame).ok()
@@ -1798,9 +1780,12 @@ impl WindowsRun {
 
     /// Polars evaluates every operator's input over the chunk.
     fn evaluated_inputs(&self, chunk: &DataFrame) -> PolarsResult<Vec<Vec<f64>>> {
+        if self.k.inputs.is_empty() {
+            return Ok(Vec::new());
+        }
         let resolve_incr = |op: &OpNode| col(hidden(op).as_str());
-        // `with_columns` then `select`: a bare literal input (the stand-in
-        // where only increments run) broadcasts to the chunk's rows.
+        // `with_columns` then `select`: a bare literal input broadcasts to the
+        // chunk's rows.
         let evaluated = chunk
             .clone()
             .lazy()
@@ -2616,7 +2601,7 @@ impl WindowsRun {
         }
         let mut chunk = frame.clone();
         chunk.hstack_mut(&self.increment_columns(values)).ok()?;
-        let inputs = if self.bare_inputs(&chunk).is_some() {
+        let inputs = if self.k.inputs.is_empty() || self.bare_inputs(&chunk).is_some() {
             None
         } else {
             Some(self.evaluated_inputs(&chunk).ok()?)
@@ -3241,7 +3226,7 @@ impl WindowsRun {
             )
             .into());
         }
-        let file: FileIn = rmp_serde::from_slice(bytes).map_err(|e| {
+        let mut file: FileIn = rmp_serde::from_slice(bytes).map_err(|e| {
             format!(
                 "{WHO}: the state cannot be read ({e}), so it is damaged or was saved by \
                  another version of rheon. Load it with the version that saved it, or \
@@ -3293,6 +3278,30 @@ impl WindowsRun {
                 now.join(", ")
             )
             .into());
+        }
+        // Versions 9 to 14 wrote a one-kernel, one-sum stand-in core for a
+        // call of row operators alone (task 78); version 15 writes an empty
+        // clock-only core. Check the loaded core's invariants first so damage
+        // in the legacy stand-in is still refused, then strip the stand-in so
+        // the core matches the v15 call and re-saves without it.
+        if version <= LAST_PLACEHOLDER_VERSION && run.core.is_clock_only() {
+            if !file.core.is_legacy_placeholder()
+                || same_clock(file.core.clock_cfg()) != same_clock(run.core.clock_cfg())
+            {
+                return Err(format!(
+                    "{WHO}: the state's window operators are not those of the call that saved it, \
+                     so the state is damaged. Load an undamaged copy of the state file, or leave \
+                     out load_state to start over."
+                )
+                .into());
+            }
+            file.core.check().map_err(|_| {
+                format!(
+                    "{WHO}: the state is damaged. Load an undamaged copy of the state file, or \
+                     leave out load_state to start over."
+                )
+            })?;
+            file.core.strip_legacy_placeholder();
         }
         if file.core.kernels() != run.core.kernels()
             || file.core.ops() != run.core.ops()
