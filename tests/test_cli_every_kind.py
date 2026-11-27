@@ -341,6 +341,48 @@ CASES: list[Case] = [
     ),
     Case("kalman2", "kalman", full2(q=[0.0, 1e-4, 1e-4], covariance_form="square_root")),
     Case(
+        "kalman_ukf",
+        "kalman",
+        {
+            **without(
+                full(
+                    family="tweedie",
+                    link="log",
+                    var_power=1.5,
+                    dispersion=0.5,
+                    filter="ukf",
+                    ukf_rule="merwe",
+                    alpha=0.8,
+                    beta=2.0,
+                    kappa=0.0,
+                    ukf_noise="expected",
+                    q=[1e-4, 1e-4, 1e-4, 1e-4],
+                    p0=1.0,
+                ),
+                NOT_GLM,
+            ),
+            "targets": ["hit"],
+        },
+    ),
+    Case(
+        "kalman_ekf",
+        "kalman",
+        {
+            **without(
+                full(
+                    family="binomial",
+                    link="logit",
+                    filter="ekf",
+                    q=[1e-4, 1e-4, 1e-4, 1e-4],
+                    p0=1.0,
+                    smooth_lag=2,
+                ),
+                NOT_GLM,
+            ),
+            "targets": ["hit"],
+        },
+    ),
+    Case(
         "lasso",
         "lasso",
         full(
