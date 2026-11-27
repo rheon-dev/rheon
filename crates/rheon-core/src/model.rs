@@ -104,6 +104,8 @@ pub enum ModelState {
     Spectral(Box<crate::Spectral>),
     Isotonic(Box<crate::Isotonic>),
     VectorAr(Box<crate::VectorAr>),
+    HoeffdingTreeClassifier(Box<crate::HoeffdingTreeClassifier>),
+    HoeffdingTreeRegressor(Box<crate::HoeffdingTreeRegressor>),
 }
 
 #[derive(Debug, Error)]
@@ -237,6 +239,8 @@ impl ModelState {
             ModelState::Spectral(_) => "spectral",
             ModelState::Isotonic(_) => "isotonic",
             ModelState::VectorAr(_) => "vector_ar",
+            ModelState::HoeffdingTreeClassifier(_) => "hoeffding_tree_classifier",
+            ModelState::HoeffdingTreeRegressor(_) => "hoeffding_tree_regressor",
         }
     }
 }

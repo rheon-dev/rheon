@@ -206,7 +206,7 @@ def frame(variant: str, df: pl.DataFrame | None = None) -> pl.DataFrame:
         df = df.with_columns(y=(pl.col("y") > 1).cast(pl.Float64))
     if kind == "glm":
         df = df.with_columns(y=pl.col("y").abs().round())
-    if kind == "ew_class":
+    if kind in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
     if kind == "garch":
         df = df.with_columns(y=garch_returns(df.height))

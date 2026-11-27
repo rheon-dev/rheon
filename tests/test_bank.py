@@ -403,6 +403,11 @@ class TestPerTargetMinPeriods:
             "isotonic": lambda: rp.spec.isotonic(
                 "m", features=["x0"], out_of_bounds="clip", **common
             ),
+            "hoeffding_tree_regressor": lambda: rp.spec.hoeffding_tree_regressor(
+                "m",
+                features=["x0"],
+                **{k: v for k, v in common.items() if k != "half_life"},
+            ),
         }[kind]()
         if kind == "glm":
             # A Gamma amount is above 0.

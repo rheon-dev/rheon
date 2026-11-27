@@ -407,6 +407,7 @@ const SURFACES: &[&[&str]] = &[
         "glm.",
         "expectile.",
         "isotonic.",
+        "hoeffding_tree_regressor.",
     ],
     &[
         "ew_cov.",
@@ -422,6 +423,7 @@ const SURFACES: &[&[&str]] = &[
         "kmeans.",
         "micro.",
         "ew_class.",
+        "hoeffding_tree_classifier.",
         "seqtest.",
         "bocpd.",
         "audit.",

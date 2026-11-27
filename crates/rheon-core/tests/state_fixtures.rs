@@ -1628,7 +1628,7 @@ fn variants() -> Vec<String> {
 /// name here, and a fixture.
 #[test]
 fn the_variant_names_are_frozen() {
-    const FROZEN: [&str; 37] = [
+    const FROZEN: [&str; 39] = [
         "EwCov",
         "EwRidge",
         "Rls",
@@ -1666,6 +1666,8 @@ fn the_variant_names_are_frozen() {
         "Spectral",
         "Isotonic",
         "VectorAr",
+        "HoeffdingTreeClassifier",
+        "HoeffdingTreeRegressor",
     ];
     assert_eq!(
         variants(),
@@ -1786,7 +1788,7 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
     if regenerating() {
         return;
     }
-    const FORMS: [(&str, &[&str]); 228] = [
+    const FORMS: [(&str, &[&str]); 234] = [
         // PLAN 569, at schema 72: `ftrl`'s scaler and warm-up under
         // `standardize`, past the warm-up's count and inside it.
         ("ftrl_standardized", &["model", "Ftrl", "scaler", "m"]),
@@ -2323,7 +2325,67 @@ fn every_layout_a_schema_moved_is_written_by_a_fixture() {
         ("vector_ar_select", &["model", "VectorAr", "last", "chosen"]),
         ("vector_ar_window", &["model", "VectorAr", "fit", "win"]),
         ("vector_ar_filling", &["model", "VectorAr", "ring"]),
+        // `hoeffding_tree_classifier` & `hoeffding_tree_regressor` (task 503):
+        // branches, leaves, active observers, and capped-leaf deactivation.
+        (
+            "hoeffding_tree_classifier",
+            &["model", "HoeffdingTreeClassifier", "branches"],
+        ),
+        (
+            "hoeffding_tree_classifier",
+            &["model", "HoeffdingTreeClassifier", "leaves"],
+        ),
+        (
+            "hoeffding_tree_classifier_capped",
+            &["model", "HoeffdingTreeClassifier", "branches"],
+        ),
+        (
+            "hoeffding_tree_regressor",
+            &["model", "HoeffdingTreeRegressor", "trees", "0", "branches"],
+        ),
+        (
+            "hoeffding_tree_regressor",
+            &["model", "HoeffdingTreeRegressor", "trees", "1", "branches"],
+        ),
+        (
+            "hoeffding_tree_regressor_capped",
+            &["model", "HoeffdingTreeRegressor", "trees", "0", "branches"],
+        ),
     ];
+    // Capped Hoeffding tree fixtures hold at least one cap-deactivated leaf.
+    {
+        let f = frozen::ALL
+            .iter()
+            .find(|f| f.name == "hoeffding_tree_classifier_capped")
+            .expect("hoeffding_tree_classifier_capped");
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let leaves = at(&v, &["model", "HoeffdingTreeClassifier", "leaves"])
+            .and_then(rmpv::Value::as_array)
+            .expect("classifier leaves");
+        assert!(
+            leaves
+                .iter()
+                .any(|l| at(l, &["capped"]).and_then(rmpv::Value::as_bool) == Some(true)),
+            "hoeffding_tree_classifier_capped: expected at least one capped leaf"
+        );
+        let f = frozen::ALL
+            .iter()
+            .find(|f| f.name == "hoeffding_tree_regressor_capped")
+            .expect("hoeffding_tree_regressor_capped");
+        let v = rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+        let leaves = at(
+            &v,
+            &["model", "HoeffdingTreeRegressor", "trees", "0", "leaves"],
+        )
+        .and_then(rmpv::Value::as_array)
+        .expect("regressor leaves");
+        assert!(
+            leaves
+                .iter()
+                .any(|l| at(l, &["capped"]).and_then(rmpv::Value::as_bool) == Some(true)),
+            "hoeffding_tree_regressor_capped: expected at least one capped leaf"
+        );
+    }
     // Each refit's first stamp, written only under a span (task 538): in
     // glm on the summed clock, in expectile an integer stamp.
     for (name, variant) in [
@@ -3814,7 +3876,11 @@ fn first_difference(got: &rmpv::Value, want: &rmpv::Value, bound: f64, at: &str)
 fn differs_from_another_writer(case: &Case, f: &Fixture) -> Option<String> {
     // `ddsketch`'s decayed form multiplies by the platform's `exp2`.
     let exact_ddsketch = f.variant == "DdSketch" && f.name != "ddsketch_decayed";
-    let tol = if matches!(f.variant, "Garch" | "TDigest") || exact_ddsketch {
+    let tol = if matches!(
+        f.variant,
+        "Garch" | "TDigest" | "HoeffdingTreeClassifier" | "HoeffdingTreeRegressor"
+    ) || exact_ddsketch
+    {
         0.0
     } else {
         TOL

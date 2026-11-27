@@ -106,6 +106,8 @@ INTRODUCED = {
     "spectral": "2.1.0",
     "isotonic": "2.1.0",
     "vector_ar": "2.1.0",
+    "hoeffding_tree_classifier": "2.1.0",
+    "hoeffding_tree_regressor": "2.1.0",
 }
 
 #: The workload's specs that need a parameter newer than a release, by the

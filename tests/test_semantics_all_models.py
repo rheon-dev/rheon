@@ -43,10 +43,11 @@ MODELS = [
     ("isotonic", {"features": ["x0"], "out_of_bounds": "clip"}),
     # Every target's lags in every target's equation, the features beside.
     ("vector_ar", {"lags": 1, "ridge": 1e-3}),
+    ("hoeffding_tree_regressor", {"half_life": None, "grace_period": 20.0, "delta": 1e-2}),
 ]
 
-#: The regressions with no `coef`: `isotonic`'s fit is a curve.
-NO_COEF = frozenset({"isotonic"})
+#: The regressions with no `coef`: `isotonic`'s fit is a curve; trees have no coefficients.
+NO_COEF = frozenset({"isotonic", "hoeffding_tree_regressor"})
 
 #: A second configuration of a model above, swept through the same
 #: invariants: `ewridge` with the Gram update blocked (E51). The block is an
@@ -184,7 +185,7 @@ class TestNullPolicy:
         # `settled_frac` is read before the row's step, so the row after the
         # null target's has counted its step and the zero-weight one's not.
         assert_frame_equal(a.select("settled_frac")[1:], b.select("settled_frac")[1:], **near)
-        lam = 0.5 ** (1.0 / 200.0)  # the rows are one clock unit apart
+        lam = 1.0 if model == "hoeffding_tree_regressor" else 0.5 ** (1.0 / 200.0)
         more = a["weight_sum"].to_numpy() - b["weight_sum"].to_numpy()
         # From the row after next, for the same reason as `settled_frac`.
         np.testing.assert_allclose(more[1:], lam ** np.arange(1, len(more)), rtol=1e-9)
@@ -306,10 +307,17 @@ class TestWarmup:
         rows for three coefficients leave no residual degrees of freedom."""
         df = frame(binary=model in BINARY)
         gate = {"max_error_inflation": float("inf")} if model == "ewridge" else {}
-        out = run(model, extra, df, half_life=2.0, min_weight=1.5, **gate)
-        neff = slot(out, "weight_sum", model)
-        lam = 0.5**0.5
-        np.testing.assert_allclose(neff[:4], [0.0, 1.0, 1.0 + lam, 1.0 + lam + lam**2], rtol=1e-12)
+        if model == "hoeffding_tree_regressor":
+            out = run(model, extra, df, min_weight=1.5, **gate)
+            neff = slot(out, "weight_sum", model)
+            np.testing.assert_allclose(neff[:4], [0.0, 1.0, 2.0, 3.0], rtol=1e-12)
+        else:
+            out = run(model, extra, df, half_life=2.0, min_weight=1.5, **gate)
+            neff = slot(out, "weight_sum", model)
+            lam = 0.5**0.5
+            np.testing.assert_allclose(
+                neff[:4], [0.0, 1.0, 1.0 + lam, 1.0 + lam + lam**2], rtol=1e-12
+            )
         why = slot(out, "withheld_reason", model)
         below = [r == "below_min_weight" for r in why[:4]]
         opens = 2 + HOLD_BACK.get(model, 0)
@@ -341,9 +349,10 @@ class TestClockSemantics:
         out = self._clocked(model, extra, [0.0, 1.0, 1e9, 1e9 + 1])
         neff = slot(out, "weight_sum", model)
         # after two rows W = 0.5**(1/200) + 1; the huge gap decays it by
-        # 0.5**(4/200), not to nothing
+        # 0.5**(4/200), not to nothing (or leaves it un-decayed with no decay)
         w2 = neff[2]
-        assert neff[3] == pytest.approx(w2 * 0.5 ** (4 / 200) + 1.0, rel=1e-9)
+        factor = 1.0 if model == "hoeffding_tree_regressor" else 0.5 ** (4 / 200)
+        assert neff[3] == pytest.approx(w2 * factor + 1.0, rel=1e-9)
 
     def test_a_backwards_clock_is_refused_by_default(self, model, extra):
         with pytest.raises(ValueError, match="steps back by 50 at row 2"):

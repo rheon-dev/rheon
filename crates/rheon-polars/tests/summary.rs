@@ -1211,6 +1211,20 @@ fn every_kind_refuses_or_loads_corruption(prefix_step: usize, flip_step: usize) 
             r#"["x0"]"#,
             true,
         ),
+        (
+            "hoeffding_tree_classifier",
+            r#"{"type": "hoeffding_tree_classifier", "classes": ["up", "down"], "grace_period": 15.0, "delta": 0.01}"#,
+            r#"["lbl"]"#,
+            r#"["x0", "x1"]"#,
+            false,
+        ),
+        (
+            "hoeffding_tree_regressor",
+            r#"{"type": "hoeffding_tree_regressor", "grace_period": 15.0, "delta": 0.01}"#,
+            r#"["y"]"#,
+            r#"["x0", "x1"]"#,
+            false,
+        ),
     ];
     let mut seen = Vec::new();
     for &(kind, model, targets, features, half_life) in kinds {

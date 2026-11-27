@@ -294,6 +294,8 @@ pub fn coef_fields(spec: &Spec) -> Vec<CoefField> {
             | crate::ModelKind::EwmMoments { .. }
             | crate::ModelKind::Spectral(_)
             | crate::ModelKind::Isotonic { .. }
+            | crate::ModelKind::HoeffdingTreeClassifier(_)
+            | crate::ModelKind::HoeffdingTreeRegressor(_)
     ) {
         return Vec::new();
     }
@@ -1273,10 +1275,14 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
         }
         return fields;
     }
-    // ew_class predicts a label, not a number: per instance, the class the
-    // row is assigned to and one posterior per class (read before the row
-    // is learned), `n_eff`, and the class means as `coef`.
-    if let crate::ModelKind::EwClass { classes, .. } = &spec.model {
+    // Classification models predict a label, not a number: per instance, the
+    // class the row is assigned to and one posterior per class (read before
+    // the row is learned), `weight_sum`, and (where `has_coef()`) `coef`.
+    if let Some(classes) = match &spec.model {
+        crate::ModelKind::EwClass { classes, .. } => Some(classes),
+        crate::ModelKind::HoeffdingTreeClassifier(t) => Some(&t.classes),
+        _ => None,
+    } {
         let n_slots = 1 + classes.len();
         let mut fields = Vec::new();
         for (mi, (suffix, d)) in decays.iter().enumerate() {
@@ -1306,11 +1312,13 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                     .decay(suffix, d)
                     .src(Source::NEff(mi)),
             );
-            fields.push(
-                FieldMeta::new(format!("coef{suffix}"), "coef")
-                    .decay(suffix, d)
-                    .src(Source::Coef(mi)),
-            );
+            if spec.model.has_coef() {
+                fields.push(
+                    FieldMeta::new(format!("coef{suffix}"), "coef")
+                        .decay(suffix, d)
+                        .src(Source::Coef(mi)),
+                );
+            }
         }
         return fields;
     }

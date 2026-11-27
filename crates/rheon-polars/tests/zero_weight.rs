@@ -265,6 +265,18 @@ const SPECS: &[(&str, &str, &str, &[Clock])] = &[
         ALL,
     ),
     (
+        "hoeffding_tree_classifier",
+        r#"{"type": "hoeffding_tree_classifier", "classes": ["a", "b"], "grace_period": 15.0, "delta": 0.01}"#,
+        r#""targets": ["lab"], "features": ["x0", "x1"]"#,
+        ALL,
+    ),
+    (
+        "hoeffding_tree_regressor",
+        r#"{"type": "hoeffding_tree_regressor", "grace_period": 15.0, "delta": 0.01}"#,
+        r#""targets": ["y", "x1"], "features": ["x0"]"#,
+        ALL,
+    ),
+    (
         "ew_cov",
         r#"{"type": "ew_cov"}"#,
         r#""targets": ["x0"], "features": ["x0", "x1"], "half_life": @50"#,

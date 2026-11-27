@@ -107,6 +107,7 @@ OTHER_KINDS = sorted(
         "kmeans",
         "micro",
         "ew_class",
+        "hoeffding_tree_classifier",
         "seqtest",
         "marginal",
         "deco",
@@ -161,7 +162,7 @@ def frame(kind: str) -> pl.DataFrame:
         df = df.with_columns(y=(pl.col("y") > 1).cast(pl.Float64))
     if kind == "glm":
         df = df.with_columns(y=pl.col("y").abs().round())
-    if kind == "ew_class":
+    if kind in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
     return df
 
@@ -410,7 +411,16 @@ def evidence(
 #: ``garch``'s recursion is per observation (its start counts rows unless it
 #: is a span of the clock), and ``tdigest``'s digest reads no clock. The
 #: gap's only trace on them is the session counted.
-STEP_BLIND: frozenset[str] = frozenset({"bocpd", "seqtest", "garch", "tdigest"})
+STEP_BLIND: frozenset[str] = frozenset(
+    {
+        "bocpd",
+        "seqtest",
+        "garch",
+        "tdigest",
+        "hoeffding_tree_classifier",
+        "hoeffding_tree_regressor",
+    }
+)
 #: The kinds a session change breaks whatever its gap, as a gap past
 #: ``gap_cap`` does: ``rcov``'s block is split there (no product pairs two
 #: returns across it), ``corrchange`` abandons its span, windows or cycle,

@@ -863,6 +863,16 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
             m.set_keep_factor(spec.emit_se_coef);
             Ok(AnyModel::VectorAr(Box::new(m)))
         }
+        ModelKind::HoeffdingTreeClassifier(_) => Ok(AnyModel::HoeffdingTreeClassifier(Box::new(
+            rheon_core::HoeffdingTreeClassifier::new(crate::spec::hoeffding_tree_classifier_cfg(
+                spec,
+            )?)?,
+        ))),
+        ModelKind::HoeffdingTreeRegressor(_) => Ok(AnyModel::HoeffdingTreeRegressor(Box::new(
+            rheon_core::HoeffdingTreeRegressor::new(crate::spec::hoeffding_tree_regressor_cfg(
+                spec,
+            )?)?,
+        ))),
     }
 }
 

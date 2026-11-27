@@ -594,7 +594,7 @@ def kind_frame(case: str) -> pl.DataFrame:
         df = df.with_columns((pl.col("y") > 1).cast(pl.Float64), (pl.col("z") > 0).cast(pl.Float64))
     if builder == "glm":
         df = df.with_columns(pl.col("y", "z").abs().round())
-    if builder == "ew_class":
+    if builder in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
     return df
 

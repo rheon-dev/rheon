@@ -1092,7 +1092,7 @@ def kind_frame(kind: str, *, n: int = 400, steps=None, seed: int = 5) -> pl.Data
         df = df.with_columns(y=(pl.col("y") > 1).cast(pl.Float64))
     if kind == "glm":
         df = df.with_columns(y=pl.col("y").abs().round())
-    if kind == "ew_class":
+    if kind in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 1).then(pl.lit("a")).otherwise(pl.lit("b")))
     if kind == "garch":
         # returns with a conditional variance, a GARCH(1,1) at (0.05, 0.5,
@@ -1548,6 +1548,8 @@ DOUBLED: dict[str, dict] = {
     "ddsketch": {},
     # The same rows pooled in the same order, refit in full on each.
     "isotonic": {},
+    "hoeffding_tree_classifier": {},
+    "hoeffding_tree_regressor": {},
     "spectral": {},
     "glm": {},
     # Its sums take each return in the order of the rows learned: a lesson
@@ -1733,7 +1735,10 @@ DRIFT = "drift_"
 #: none of its flags on this stream (measured 2026-11-21). `isotonic` fits
 #: the target on one of its two features, so its residuals carry the
 #: other's spread, and the shift trips no flag either (2026-11-24).
-QUIET = frozenset({"holt", "ftrl", "glm", "isotonic"})
+#: `hoeffding_tree_regressor` starts at a single leaf mean with `grace_period`
+#: 200, so its residuals carry the unsplit variance of both features across
+#: the 400-row stream and the shift trips no flag either.
+QUIET = frozenset({"holt", "ftrl", "glm", "isotonic", "hoeffding_tree_regressor"})
 
 
 def scores_a_target(kind: str) -> bool:

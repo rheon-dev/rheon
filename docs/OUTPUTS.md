@@ -18,9 +18,9 @@ exact spec you built.
 
 | family | models |
 |---|---|
-| [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) · [`ar`](#ar) · [`isotonic`](#isotonic) · [`vector_ar`](#vector_ar) |
+| [Linear models](MODELS.md#linear-models) | [`ewridge`](#ewridge) · [`rls`](#rls) · [`lasso`](#lasso) · [`kalman`](#kalman) · [`huber`](#huber) · [`quantile`](#quantile) · [`sgd`](#sgd) · [`pa`](#pa) · [`ftrl`](#ftrl) · [`glm`](#glm) · [`expectile`](#expectile) · [`holt`](#holt) · [`ar`](#ar) · [`isotonic`](#isotonic) · [`vector_ar`](#vector_ar) · [`hoeffding_tree_regressor`](#hoeffding_tree_regressor) |
 | [Moments and correlation](MODELS.md#moments-and-correlation) | [`ew_cov`](#ew_cov) · [`ewm_moments`](#ewm_moments) · [`pca`](#pca) · [`marginal`](#marginal) · [`deco`](#deco) · [`rcov`](#rcov) · [`audit`](#audit) · [`garch`](#garch) · [`dcc`](#dcc) · [`realized`](#realized) · [`power_variation`](#power_variation) · [`tdigest`](#tdigest) · [`ddsketch`](#ddsketch) · [`spectral`](#spectral) |
-| [Clustering and classification](MODELS.md#clustering-and-classification) | [`kmeans`](#kmeans) · [`micro`](#micro) · [`ew_class`](#ew_class) |
+| [Clustering and classification](MODELS.md#clustering-and-classification) | [`kmeans`](#kmeans) · [`micro`](#micro) · [`ew_class`](#ew_class) · [`hoeffding_tree_classifier`](#hoeffding_tree_classifier) |
 | [Sequential tests and regimes](MODELS.md#sequential-tests-and-regimes) | [`seqtest`](#seqtest) · [`corrchange`](#corrchange) · [`bocpd`](#bocpd) · [`hmm`](#hmm) · [`hawkes`](#hawkes) |
 
 ## The fields of your own spec
@@ -378,6 +378,18 @@ The fields of `rp.spec.vector_ar("m", targets=["y"], features=["x0"], half_life=
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
 
+## `hoeffding_tree_regressor`
+
+The fields of `rp.spec.hoeffding_tree_regressor("m", targets=["y"], features=["x0"])`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `pred_y` | `f64` | the prediction for `<t>`, computed from the state **before** this row | while withheld |
+| `resid_y` | `f64` | `y - pred` for `<t>` | while withheld; where the target is null; and on every row of a target that is a formula target, whose value is not known at its row |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
 ## `ew_cov`
 
 The fields of `rp.spec.ew_cov("m", features=["x0", "x1"], half_life=50.0)`:
@@ -622,6 +634,19 @@ The fields of `rp.spec.ew_class("m", features=["x0"], half_life=50.0, label="y",
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
+
+## `hoeffding_tree_classifier`
+
+The fields of `rp.spec.hoeffding_tree_classifier("m", features=["x0"], label="y", classes=["a", "b"])`:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `class` | `enum` | the most likely class label | while withheld, before any row has carried a class, and on a row whose class covariance cannot be factorized |
+| `p_a` | `f64` | posterior probability of class `<label>` | while withheld, before any row has carried a class, and on a row whose class covariance cannot be factorized |
+| `p_b` | `f64` | posterior probability of class `<label>` | while withheld, before any row has carried a class, and on a row whose class covariance cannot be factorized |
+| `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
+| `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
+| `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 
 ## `seqtest`
 

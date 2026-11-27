@@ -104,6 +104,8 @@ mod hawkes;
 mod health;
 mod held_median;
 mod hmm;
+mod hoeffding_tree_classifier;
+mod hoeffding_tree_regressor;
 mod holt;
 mod huber_refit;
 pub mod humanfloat;
@@ -228,6 +230,13 @@ pub use hawkes::{
 };
 pub use health::FeatureHealth;
 pub use hmm::{EwFactor, Hmm, HmmCfg, Stabilized};
+pub use hoeffding_tree_classifier::{
+    HoeffdingTreeClassifier, HoeffdingTreeClassifierCfg, LeafPrediction, SplitCriterion,
+    clf_obs_reserve, clf_struct_bytes,
+};
+pub use hoeffding_tree_regressor::{
+    HoeffdingTreeRegressor, HoeffdingTreeRegressorCfg, reg_obs_reserve, reg_struct_bytes,
+};
 pub use holt::{
     HOLT_MAX_HORIZONS, HOLT_MAX_STATE_BYTES, HOLT_STATE_BYTES_CEILING, Holt, HoltCfg, HoltSeason,
     HoltStart,

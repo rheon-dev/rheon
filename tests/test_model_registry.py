@@ -109,6 +109,13 @@ MINIMAL: dict[str, dict[str, object]] = {
     # One feature, the score it is monotone in.
     "isotonic": {"features": ["x0"]},
     "vector_ar": {"lags": 1},
+    "hoeffding_tree_classifier": {
+        "targets": None,
+        "half_life": None,
+        "label": "y",
+        "classes": ["a", "b"],
+    },
+    "hoeffding_tree_regressor": {"half_life": None},
 }
 
 #: The sweeps fit a numeric target, so the models that predict none --
@@ -130,6 +137,7 @@ REGRESSIONS = frozenset(MINIMAL) - {
     "kmeans",
     "micro",
     "ew_class",
+    "hoeffding_tree_classifier",
     "seqtest",
     "marginal",
     "deco",
@@ -366,6 +374,8 @@ DIAGNOSTIC_READS: dict[str, set[str]] = {
             "ewm_moments",
             "spectral",
             "isotonic",
+            "hoeffding_tree_classifier",
+            "hoeffding_tree_regressor",
         )
     },
 }
@@ -793,7 +803,7 @@ def test_every_models_realized_dtypes_are_the_ones_output_index_declares():
     for name in sorted(MINIMAL):
         spec = _build(name)
         df = frame
-        if name == "ew_class":
+        if name in ("ew_class", "hoeffding_tree_classifier"):
             df = frame.with_columns(pl.Series("y", ["a", "b"] * (n // 2)))
         if name == "glm":
             # The default Poisson family takes counts.

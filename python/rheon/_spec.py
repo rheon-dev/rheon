@@ -807,6 +807,8 @@ __all__ = [
     "spectral",
     "isotonic",
     "vector_ar",
+    "hoeffding_tree_classifier",
+    "hoeffding_tree_regressor",
 ]
 
 
@@ -4472,6 +4474,10 @@ from rheon._spec_realized import realized  # noqa: E402
 from rheon._spec_regimes import hmm, rcov  # noqa: E402
 from rheon._spec_robust import huber, quantile  # noqa: E402
 from rheon._spec_tdigest import tdigest  # noqa: E402
+from rheon._spec_tree import (  # noqa: E402
+    hoeffding_tree_classifier,
+    hoeffding_tree_regressor,
+)
 from rheon._spec_trend import holt  # noqa: E402
 from rheon._spec_vector_ar import vector_ar  # noqa: E402
 

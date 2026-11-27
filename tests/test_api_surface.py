@@ -285,6 +285,14 @@ def describe_api(cli: Path | None = None) -> str:
                 half_life=100.0,
             ),
         ),
+        (
+            "hoeffding_tree_classifier",
+            dict(features=["x0", "x1"], label="y", classes=["a", "b"]),
+        ),
+        (
+            "hoeffding_tree_regressor",
+            dict(targets=["y", "z"], features=["x0", "x1"]),
+        ),
         ("seqtest", dict(targets=["y", "z"])),
         (
             "seqtest comparing two specs",
@@ -883,6 +891,20 @@ ENUM_PROBES: list[
     ("marginal.closed", "marginal", {"window_size": 100.0}, "model.closed", "word"),
     ("ew_class.covariance_type", "ew_class", {}, "model.covariance_type", "word"),
     ("ew_class.window_budget", "ew_class", {"window_size": 100.0}, "model.window_budget", "key"),
+    (
+        "hoeffding_tree_classifier.split_criterion",
+        "hoeffding_tree_classifier",
+        {},
+        "model.split_criterion",
+        "word",
+    ),
+    (
+        "hoeffding_tree_classifier.leaf_prediction",
+        "hoeffding_tree_classifier",
+        {},
+        "model.leaf_prediction",
+        "word",
+    ),
     ("ew_cov.gram_threads", "ew_cov", {}, "model.gram_threads", "word"),
     # `mahal` and `partial_corr` need the prior, `lag_corr` the lags.
     ("ew_cov.stats", "ew_cov", {"precision_prior": 1e-6, "lags": [1]}, "model.stats", "list"),

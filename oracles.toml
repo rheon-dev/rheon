@@ -7008,6 +7008,40 @@ ideal = 0.0
 n = 100
 tolerance = 0.0
 
+[group."hoeffding_tree_classifier.river_parity"]
+tests = [
+    "tests/test_hoeffding_tree_classifier.py::test_river_parity_50_seed_grid",
+]
+oracles = { "river" = "0.26.1" }
+dataset = ""
+
+[group."hoeffding_tree_regressor.river_accuracy"]
+tests = [
+    "tests/test_hoeffding_tree_regressor.py::test_river_tebst_accuracy_50_seed_grid",
+]
+oracles = { "river" = "0.26.1" }
+dataset = ""
+
+[case."hoeffding_tree_classifier.river_parity.binary_gini_majority_mean_prob_diff"]
+ideal = 0.0
+n = 50
+
+[case."hoeffding_tree_classifier.river_parity.binary_ig_nba_mean_prob_diff"]
+ideal = 0.0
+n = 50
+
+[case."hoeffding_tree_classifier.river_parity.multiclass_ig_nba_mean_prob_diff"]
+ideal = 0.0
+n = 50
+
+[case."hoeffding_tree_regressor.river_accuracy.tail_mae_excess_vs_tebst"]
+ideal = 0.0
+n = 50
+
+[case."hoeffding_tree_regressor.river_accuracy.tail_mae_rheon"]
+ideal = 0.0
+n = 50
+
 # --- raises
 
 [[raised]]

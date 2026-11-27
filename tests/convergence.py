@@ -814,6 +814,9 @@ NOT_REGISTERED: dict[str, str] = {
     "at a time) do not carry; its exactness against statsmodels' VAR, WLS and "
     "VARProcess is held in tests/test_vector_ar.py meanwhile, and its grids and "
     "bounds are still to be measured",
+    "hoeffding_tree_regressor": "it fits a piecewise-constant decision tree without decay, "
+    "whereas the convergence harness tests linear designs under exponential decay; its "
+    "parity and 50-seed oracle accuracy band are held in tests/test_hoeffding_tree_regressor.py",
 }
 
 

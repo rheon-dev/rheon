@@ -1231,6 +1231,87 @@ CASES: list[Case] = [
         "isotonic",
         {**CLOSE, "targets": ["y"], "features": ["x0"]},
     ),
+    # Online Hoeffding tree classifier: no decay, no coefficients, every model key.
+    Case(
+        "hoeffding_tree_classifier",
+        "hoeffding_tree_classifier",
+        {
+            **NODECAY,
+            "features": F3,
+            "label": "lab",
+            "classes": ["down", "up"],
+            "grace_period": 20.0,
+            "delta": 1e-2,
+            "tau": 0.05,
+            "split_criterion": "gini",
+            "leaf_prediction": "nb",
+            "nb_threshold": 5.0,
+            "n_splits": 8,
+            "min_branch_fraction": 0.02,
+            "max_share_to_split": 0.95,
+            "merit_preprune": False,
+            "max_depth": 4,
+            "max_state_bytes": 1 << 20,
+            "emit_target_weight": True,
+        },
+    ),
+    Case(
+        "hoeffding_tree_classifier2",
+        "hoeffding_tree_classifier",
+        {
+            **NODECAY2,
+            "features": F3,
+            "label": "lab",
+            "classes": ["down", "up"],
+            "split_criterion": "hellinger",
+            "leaf_prediction": "majority",
+        },
+    ),
+    Case(
+        "hoeffding_tree_classifier_close",
+        "hoeffding_tree_classifier",
+        {
+            **{k: v for k, v in CLOSE.items() if k != "half_life"},
+            "features": F3,
+            "label": "lab",
+            "classes": ["down", "up"],
+        },
+    ),
+    # Online Hoeffding tree regressor: no decay, no coefficients, residual diagnostics,
+    # and every model key.
+    Case(
+        "hoeffding_tree_regressor",
+        "hoeffding_tree_regressor",
+        {
+            **without(full(), ("half_life", "min_settled_frac", "max_rows_between_coefs")),
+            "grace_period": 20.0,
+            "delta": 1e-2,
+            "tau": 0.05,
+            "radius": 0.5,
+            "max_slots": 16,
+            "min_samples_split": 4.0,
+            "merit_preprune": False,
+            "max_depth": 4,
+            "max_state_bytes": 1 << 20,
+        },
+    ),
+    Case(
+        "hoeffding_tree_regressor2",
+        "hoeffding_tree_regressor",
+        {
+            **without(full2(), ("lam", "min_settled_frac", "coef_every")),
+            "grace_period": 25.0,
+        },
+    ),
+    Case(
+        "hoeffding_tree_regressor_close",
+        "hoeffding_tree_regressor",
+        {
+            **{k: v for k, v in CLOSE.items() if k != "half_life"},
+            "targets": ["y"],
+            "features": F3,
+        },
+    ),
     # A sketch a target: no decay and no coefficients, every key it takes.
     Case(
         "ddsketch",

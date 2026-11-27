@@ -101,6 +101,7 @@ FAMILIES: tuple[Family, ...] = (
                 "ar",
                 "isotonic",
                 "vector_ar",
+                "hoeffding_tree_regressor",
             )
         ),
     ),
@@ -137,7 +138,10 @@ FAMILIES: tuple[Family, ...] = (
     Family(
         "clustering",
         "spec",
-        tuple(f"{_SPEC}.{m}" for m in ("kmeans", "micro", "ew_class")),
+        tuple(
+            f"{_SPEC}.{m}"
+            for m in ("kmeans", "micro", "ew_class", "hoeffding_tree_classifier")
+        ),
     ),
     Family(
         "fields",

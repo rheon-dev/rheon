@@ -30,7 +30,7 @@ def frame_for(name: str, n: int = 240) -> pl.DataFrame:
     if name in ("ftrl", "glm"):
         # `glm`'s default Poisson family takes counts, which 0/1 is.
         df = df.with_columns(y=(pl.col("y") > 0).cast(pl.Float64))
-    if name == "ew_class":
+    if name in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
     return df
 

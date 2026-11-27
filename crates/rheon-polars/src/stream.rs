@@ -126,6 +126,8 @@ pub enum AnyModel {
     VectorAr(Box<rheon_core::VectorAr>),
     Spectral(Box<rheon_core::Spectral>),
     Isotonic(Box<rheon_core::Isotonic>),
+    HoeffdingTreeClassifier(Box<rheon_core::HoeffdingTreeClassifier>),
+    HoeffdingTreeRegressor(Box<rheon_core::HoeffdingTreeRegressor>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -187,6 +189,8 @@ macro_rules! dispatch {
             AnyModel::VectorAr($m) => $body,
             AnyModel::Spectral($m) => $body,
             AnyModel::Isotonic($m) => $body,
+            AnyModel::HoeffdingTreeClassifier($m) => $body,
+            AnyModel::HoeffdingTreeRegressor($m) => $body,
         }
     };
 }
@@ -731,7 +735,9 @@ impl AnyModel {
             // Each fit counts its own; none withholds a row as a failure.
             | AnyModel::Ar(_)
             | AnyModel::VectorAr(_)
-            | AnyModel::Spectral(_) => 0,
+            | AnyModel::Spectral(_)
+            | AnyModel::HoeffdingTreeClassifier(_)
+            | AnyModel::HoeffdingTreeRegressor(_) => 0,
         }
     }
 
@@ -826,6 +832,8 @@ impl AnyModel {
             AnyModel::Spectral(_) => None,
             // Its fit is a curve, read at each row's feature.
             AnyModel::Isotonic(_) => None,
+            // Trees have no linear coefficients.
+            AnyModel::HoeffdingTreeClassifier(_) | AnyModel::HoeffdingTreeRegressor(_) => None,
         }
     }
 
@@ -977,7 +985,9 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::Ar { .. }
         | ModelKind::VectorAr(_)
         | ModelKind::Spectral(_)
-        | ModelKind::Isotonic { .. } => vec![Combo::default()],
+        | ModelKind::Isotonic { .. }
+        | ModelKind::HoeffdingTreeClassifier(_)
+        | ModelKind::HoeffdingTreeRegressor(_) => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and
         // no label for a path of one point, as a single ridge or half-life

@@ -144,6 +144,10 @@ pub const MODEL_CASES: &[&str] = &[
     // row's ring, the rank-one update of a 10 x 10 Gram, the fit's solve
     // and the read of the test from one Cholesky factor.
     "vector_ar",
+    // Online Hoeffding tree classifier (3 classes, 8 features, NBA leaf prediction).
+    "hoeffding_tree_classifier",
+    // Online Hoeffding tree regressor (1 target, 8 features, QO max_slots=32).
+    "hoeffding_tree_regressor",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -882,6 +886,29 @@ fn case_spec(id: &str) -> (Value, Shape) {
             );
             s["targets"] = json!(["y0", "y1", "y2"]);
             s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
+        "hoeffding_tree_classifier" => {
+            let model = json!({
+                "type": "hoeffding_tree_classifier",
+                "classes": ["0", "1", "2"],
+                "grace_period": 200.0,
+            });
+            let mut s = fit(model, 8);
+            let obj = s.as_object_mut().expect("an object");
+            obj.remove("half_life");
+            obj.remove("min_weight");
+            (s, Shape::Labelled)
+        }
+        "hoeffding_tree_regressor" => {
+            let model = json!({
+                "type": "hoeffding_tree_regressor",
+                "grace_period": 200.0,
+            });
+            let mut s = fit(model, 8);
+            let obj = s.as_object_mut().expect("an object");
+            obj.remove("half_life");
+            obj.remove("min_weight");
             (s, Shape::Linear)
         }
         // Level and trend of one column, no features.

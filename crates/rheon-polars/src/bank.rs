@@ -490,7 +490,11 @@ fn extract(
             // null on every row. A scoring call may leave a target out.
             if t.is_formula() || optional(c) {
                 Ok(vec![f64::NAN; chunk.height()])
-            } else if let ModelKind::EwClass { classes, .. } = &spec.model {
+            } else if let Some(classes) = match &spec.model {
+                ModelKind::EwClass { classes, .. } => Some(classes),
+                ModelKind::HoeffdingTreeClassifier(t) => Some(&t.classes),
+                _ => None,
+            } {
                 label_column(chunk, spec, c, classes, layout)
             } else {
                 // `bocpd`'s hazard column rides in this slot and is not a
@@ -3051,7 +3055,14 @@ impl Bank {
         let keep = |_ci: usize, role: Role| -> Option<bool> {
             match role {
                 Role::Target if s.model.is_unsupervised() => None,
-                Role::Target if matches!(s.model, ModelKind::EwClass { .. }) => Some(false),
+                Role::Target
+                    if matches!(
+                        s.model,
+                        ModelKind::EwClass { .. } | ModelKind::HoeffdingTreeClassifier(_)
+                    ) =>
+                {
+                    Some(false)
+                }
                 _ => Some(true),
             }
         };

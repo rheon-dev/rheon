@@ -848,9 +848,10 @@ def test_fit_intercept_is_inert_on_every_kind_without_an_intercept():
     from test_every_kind import frame_for
     from test_model_registry import MINIMAL, REGRESSIONS, _build
 
-    # `holt` fits a level and a trend, `isotonic` a curve: no intercept.
-    inert = (frozenset(MINIMAL) - REGRESSIONS) | {"holt", "isotonic"}
-    assert len(inert) == 24, sorted(inert)
+    # `holt` fits a level and a trend, `isotonic` a curve, and trees partition features:
+    # none has a linear intercept.
+    inert = (frozenset(MINIMAL) - REGRESSIONS) | {"holt", "isotonic", "hoeffding_tree_regressor"}
+    assert len(inert) == 26, sorted(inert)
 
     def run(name, flag):
         spec = {**_build(name), "fit_intercept": flag}

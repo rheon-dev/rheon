@@ -23,9 +23,9 @@ shows them at work.
     reads from the same row. A model with no target (``ew_cov``, ``ewm_moments``,
     ``kmeans``, ``micro``, ``pca``, ``deco``, ``bocpd``, ``corrchange``,
     ``hmm`` and ``rcov``) takes ``features`` alone, and ``audit`` takes
-    ``columns`` in their place. ``ew_class`` takes a ``label`` column in the
-    target's place. ``holt``, ``seqtest``, ``garch``, ``hawkes``, ``dcc``,
-    ``realized``, ``power_variation``, ``tdigest``, ``ddsketch`` and
+    ``columns`` in their place. ``ew_class`` and ``hoeffding_tree_classifier``
+    take a ``label`` column in the target's place. ``holt``, ``seqtest``,
+    ``garch``, ``hawkes``, ``dcc``, ``realized``, ``power_variation``, ``tdigest``, ``ddsketch`` and
     ``spectral`` take no features: each reads its targets alone. A target
     computed from its own row's columns, such as a return against the mid,
     is a column: make it with Polars' ``with_columns`` before the bank. A log
@@ -102,8 +102,9 @@ shows them at work.
     threshold per target. These models keep a weight per target: ``ewridge``,
     ``lasso``, ``kalman``, ``huber``, ``quantile``, ``expectile``, ``glm``,
     ``holt``, ``ar``, ``sgd``, ``pa``, ``ftrl``, ``rls``, ``garch``,
-    ``realized``, ``power_variation``, ``tdigest``, ``ddsketch`` and
-    ``spectral``; ``ew_class`` keeps the weight of its labeled rows; and
+    ``realized``, ``power_variation``, ``tdigest``, ``ddsketch``,
+    ``spectral``, ``isotonic`` and ``hoeffding_tree_regressor``; ``ew_class``
+    and ``hoeffding_tree_classifier`` keep the weight of their labeled rows; and
     ``marginal``'s table has its ``corr``, ``beta`` and ``t_stat`` gated per
     target. Each checks a target's threshold against that target's own
     weight: the rows it was present on, at their raw weights,
@@ -139,7 +140,8 @@ shows them at work.
          - ``ewridge``, ``seqtest``, ``rcov``, ``hmm``, ``corrchange``,
            ``audit``, ``hawkes``, ``garch``, ``dcc``, ``realized``, ``pca``,
            ``power_variation``, ``tdigest``, ``ddsketch``, ``ewm_moments``,
-           ``ar``, ``spectral``, ``isotonic``, ``vector_ar``
+           ``ar``, ``spectral``, ``isotonic``, ``vector_ar``,
+           ``hoeffding_tree_classifier``, ``hoeffding_tree_regressor``
 ``emit_target_weight``
     Why: a row whose target is null teaches that target nothing but still
     adds to the shared ``weight_sum``, so a row can show ``weight_sum`` above
@@ -1205,6 +1207,8 @@ from rheon._spec import (
     glm,
     hawkes,
     hmm,
+    hoeffding_tree_classifier,
+    hoeffding_tree_regressor,
     holt,
     huber,
     isotonic,
@@ -1271,4 +1275,6 @@ __all__ = [
     "spectral",
     "isotonic",
     "vector_ar",
+    "hoeffding_tree_classifier",
+    "hoeffding_tree_regressor",
 ]

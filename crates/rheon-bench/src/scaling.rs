@@ -203,6 +203,11 @@ pub const CELLS: &[Cell] = &[
     cell("isotonic.window", 100, 8, Pow(1), Pow(1)),
     cell("isotonic.targets", 1, 8, Pow(1), Pow(1)),
     cell("isotonic.history", 1000, 8, Const, Const),
+    // Hoeffding tree regressor: active leaf updates k QO observers per target;
+    // under the byte cap state and per-row work stay bounded at any stream age.
+    cell("hoeffding_tree_regressor.k", 4, 8, Pow(1), Pow(1)),
+    cell("hoeffding_tree_regressor.targets", 1, 8, Pow(1), Pow(1)),
+    cell("hoeffding_tree_regressor.history", 1000, 8, Const, Const),
     cell("ew_cov.k", 4, 8, Pow(2), Pow(2)),
     cell("ew_cov.lags", 1, 8, Pow(1), Pow(1)),
     cell("ew_cov.window", 500, 8, Const, Pow(1)),
@@ -241,6 +246,11 @@ pub const CELLS: &[Cell] = &[
     cell("ew_class.k", 4, 4, Pow(3), Pow(2)),
     cell("ew_class.k_diag", 4, 8, Pow(1), Pow(1)),
     cell("ew_class.history", 1000, 8, Const, Const),
+    // Hoeffding tree classifier: active leaf updates k*C Gaussian observers;
+    // under the byte cap state and per-row work stay bounded at any stream age.
+    cell("hoeffding_tree_classifier.k", 4, 8, Pow(1), Pow(1)),
+    cell("hoeffding_tree_classifier.classes", 2, 8, Pow(1), Pow(1)),
+    cell("hoeffding_tree_classifier.history", 1000, 8, Const, Const),
     cell("seqtest.targets", 1, 8, Pow(1), Pow(1)),
     cell("seqtest.history", 1000, 8, Const, Const),
     cell("corrchange.k", 2, 8, Pow(2), Pow(2)),
@@ -941,6 +951,31 @@ fn model_case(id: &str, n: usize) -> ModelCase {
         ("vector_ar", "history") => {
             ModelCase::new(fit(json!({"type": "vector_ar", "lags": 2}), 0, 2), lin).warm(n)
         }
+        ("hoeffding_tree_regressor", "k" | "targets" | "history") => {
+            let (k, t, grace, cap) = match dim {
+                "k" => (n, 1, 100_000.0, 4_194_304u64),
+                "targets" => (4, n, 100_000.0, 4_194_304u64),
+                _ => (4, 1, 50.0, 32_768u64),
+            };
+            let mut model = json!({
+                "type": "hoeffding_tree_regressor",
+                "grace_period": grace,
+                "max_slots": 16,
+                "max_state_bytes": cap,
+            });
+            if dim == "history" {
+                model["delta"] = json!(1e-2);
+                model["tau"] = json!(0.25);
+                model["grace_period"] = json!(20.0);
+                model["max_depth"] = json!(1);
+            }
+            let mut s = fit(model, k, t);
+            let obj = s.as_object_mut().expect("an object");
+            obj.remove("half_life");
+            obj.remove("min_weight");
+            let c = ModelCase::new(s, lin).block(200);
+            if dim == "history" { c.warm(n) } else { c }
+        }
         ("ftrl", "k") => ModelCase::new(fit(json!({"type": "ftrl"}), n, 1), lin),
         ("ftrl", "history") => ModelCase::new(fit(json!({"type": "ftrl"}), 8, 1), lin).warm(n),
         ("holt", "targets" | "history") => {
@@ -1124,6 +1159,33 @@ fn model_case(id: &str, n: usize) -> ModelCase {
             }
             let mut s = fit(model, k, 1);
             s.as_object_mut().expect("an object").remove("min_weight");
+            let c = ModelCase::new(s, Shape::Classes(classes)).block(200);
+            if dim == "history" { c.warm(n) } else { c }
+        }
+        ("hoeffding_tree_classifier", "k" | "classes" | "history") => {
+            let (classes, k, grace, cap) = match dim {
+                "classes" => (n, 4, 100_000.0, 4_194_304u64),
+                "k" => (3, n, 100_000.0, 4_194_304u64),
+                _ => (3, 4, 50.0, 32_768u64),
+            };
+            let labels: Vec<String> = (0..classes).map(|c| c.to_string()).collect();
+            let mut model = json!({
+                "type": "hoeffding_tree_classifier",
+                "classes": labels,
+                "leaf_prediction": "nb",
+                "grace_period": grace,
+                "max_state_bytes": cap,
+            });
+            if dim == "history" {
+                model["delta"] = json!(1e-2);
+                model["tau"] = json!(0.25);
+                model["grace_period"] = json!(20.0);
+                model["max_depth"] = json!(1);
+            }
+            let mut s = fit(model, k, 1);
+            let obj = s.as_object_mut().expect("an object");
+            obj.remove("half_life");
+            obj.remove("min_weight");
             let c = ModelCase::new(s, Shape::Classes(classes)).block(200);
             if dim == "history" { c.warm(n) } else { c }
         }

@@ -175,6 +175,8 @@ EXCEPT = {
     # A curve, not coefficients: no `coef` and no cadence for it.
     "isotonic": ONE_SLOT | NOT_LEAST_SQUARES | {"coef_every"},
     "vector_ar": ONE_SLOT | (NOT_LEAST_SQUARES - {"emit_se_coef"}),
+    # Trees have no linear coefficients and no coef cadence.
+    "hoeffding_tree_regressor": ONE_SLOT | NOT_LEAST_SQUARES | {"coef_every"},
 }
 
 
@@ -218,6 +220,33 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
             lags=2,
             select="aic",
             causality=[{"caused": "y", "causing": "z"}],
+        ),
+        [],
+    ),
+    (
+        "hoeffding_tree_classifier",
+        "hoeffding_tree_classifier",
+        dict(
+            features=["x1", "x2"],
+            label="lab",
+            classes=["down", "up"],
+            grace_period=20.0,
+            delta=1e-2,
+            group="g",
+            emit_clocks=True,
+            **CLOCK,
+        ),
+        [],
+    ),
+    (
+        "hoeffding_tree_regressor",
+        "hoeffding_tree_regressor",
+        fullest(
+            "hoeffding_tree_regressor",
+            **{k: v for k, v in FIT.items() if k != "half_life"},
+            grace_period=20.0,
+            delta=1e-2,
+            feature_health_half_life=25.0,
         ),
         [],
     ),

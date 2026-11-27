@@ -536,6 +536,33 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         ),
         [],
     ),
+    (
+        "hoeffding_tree_classifier",
+        "hoeffding_tree_classifier",
+        dict(
+            features=["x0", "x1"],
+            label="lab",
+            classes=["down", "up"],
+            grace_period=20.0,
+            delta=1e-2,
+            group="g",
+            **CLOCK,
+        ),
+        [],
+    ),
+    (
+        "hoeffding_tree_regressor",
+        "hoeffding_tree_regressor",
+        dict(
+            targets=["y", "z"],
+            features=["x0", "x1"],
+            grace_period=20.0,
+            delta=1e-2,
+            group="g",
+            **CLOCK,
+        ),
+        [],
+    ),
     # Each row where `y` or `z` is above 0 an event of that node; the zero weights
     # learn none of theirs.
     (

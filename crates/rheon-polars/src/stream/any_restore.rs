@@ -83,6 +83,12 @@ impl AnyModel {
             ModelState::Spectral(_) => Ok(AnyModel::Spectral(Box::new(
                 rheon_core::Spectral::restore(s)?,
             ))),
+            ModelState::HoeffdingTreeClassifier(_) => Ok(AnyModel::HoeffdingTreeClassifier(
+                Box::new(rheon_core::HoeffdingTreeClassifier::restore(s)?),
+            )),
+            ModelState::HoeffdingTreeRegressor(_) => Ok(AnyModel::HoeffdingTreeRegressor(
+                Box::new(rheon_core::HoeffdingTreeRegressor::restore(s)?),
+            )),
             // A kind only rheon-core builds, such as `ew_cov`'s bare running
             // sums: its name is the code's, so the message does not print it.
             _ => Err(StateError::Invalid(format!(

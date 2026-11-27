@@ -617,6 +617,10 @@ BUILDERS = {
     rp.spec.vector_ar: dict(lags=2),
     rp.spec.spectral: dict(features=None, periods=[8.0]),
     rp.spec.isotonic: dict(features=["x0"]),
+    rp.spec.hoeffding_tree_classifier: dict(
+        targets=None, half_life=None, label="y", classes=["a", "b"]
+    ),
+    rp.spec.hoeffding_tree_regressor: dict(half_life=None),
 }
 
 

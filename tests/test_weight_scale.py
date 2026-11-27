@@ -65,6 +65,13 @@ EXCEPTIONS = {
     # that many times (the builder's docs say so).
     "realized": "a weight counts its return that many times: the measures are sums",
     "power_variation": "a weight counts its terms that many times: the terms are sums",
+    "hoeffding_tree_classifier": (
+        "frequency weights: w counts as w observations toward grace_period and the Hoeffding bound"
+    ),
+    "hoeffding_tree_regressor": (
+        "frequency weights: w counts as w observations toward grace_period, min_samples_split "
+        "and the Hoeffding bound"
+    ),
 }
 
 SCALE = 100.0

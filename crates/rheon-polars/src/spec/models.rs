@@ -1034,6 +1034,12 @@ impl Spec {
                         }),
                 );
             }
+            ModelKind::HoeffdingTreeClassifier(t) => {
+                crate::spec::tree::validate_hoeffding_tree_classifier(self, t, decay_key, no);
+            }
+            ModelKind::HoeffdingTreeRegressor(_) => {
+                crate::spec::tree::validate_hoeffding_tree_regressor(self, decay_key, no);
+            }
             ModelKind::Ar { .. } => {
                 // A late target joins the lags late: a row learned under an
                 // embargo reads lags one row back, but a row predicted reads
