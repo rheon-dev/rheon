@@ -1,3 +1,4 @@
+<!-- kind: record -->
 # Oracle verification for PLAN tasks 511-525
 
 Read-only check of every oracle library the tasks cite, against current official docs or
