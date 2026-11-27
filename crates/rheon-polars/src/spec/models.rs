@@ -1392,6 +1392,7 @@ impl Spec {
                 }
                 if k_ok {
                     no.take(crate::stream::hmm_cfg(self).map(|_| ()));
+                    no.take(self.check_smoother());
                 } else {
                     let _ = no.stop_here();
                 }

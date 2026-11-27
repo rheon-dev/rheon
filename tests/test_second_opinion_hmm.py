@@ -1221,3 +1221,437 @@ def test_the_factor_form_is_near_the_rule_rebuilt(d, prior_rows):
     assert e["filtered_gap"] <= 0.06, e
     assert e["loglik_gap"] <= 0.03, e
     assert e["means_gap"] <= 0.02, e
+
+
+# --- PLAN 522 extensions: smoothing, spherical, conjugate priors, params -----
+
+
+def _smooth_oracle_error(seed: int) -> float:
+    """Fixed-lag smoothing at lags 1, 3, and 8 under ``full`` and ``spherical``
+    (with zero-weight rows) vs ``hmmlearn.GaussianHMM.predict_proba(X[:t+1])[t-L]``."""
+    worst = 0.0
+    for cov_type in ("full", "spherical"):
+        s = hmm_stream(seed, k=3, n=45, d=2)
+        x, w, m0 = s["x"], s["w"], s["m0"]
+        k, d = m0.shape
+        rng = np.random.default_rng(9000 + seed)
+        pi = np.full((k, k), 0.15 / (k - 1))
+        np.fill_diagonal(pi, 0.85)
+        pi *= rng.uniform(0.8, 1.2, (k, k))
+        pi /= pi.sum(axis=1, keepdims=True)
+        if cov_type == "spherical":
+            sph_c = np.array([0.7, 1.1, 1.5])
+            covs_arg = sph_c.tolist()
+            hm_cov = sph_c + RIDGE
+        else:
+            covs_arg = s["c0"].ravel().tolist()
+            hm_cov = s["c0"] + RIDGE * np.eye(d)[None, :, :]
+
+        gh = GaussianHMM(n_components=k, covariance_type=cov_type, init_params="")
+        gh.startprob_ = np.full(k, 1.0 / k) @ pi
+        gh.transmat_ = pi
+        gh.means_ = m0
+        gh.covars_ = hm_cov
+
+        kept = w > 0.0
+        x_kept = x[kept]
+        frame = pl.DataFrame({f"x{i}": x[:, i] for i in range(d)}).with_columns(w=w)
+        for lag in (1, 3, 8):
+            sp = rp.spec.hmm(
+                "h",
+                features=[f"x{i}" for i in range(d)],
+                n_components=k,
+                covariance_type=cov_type,
+                precision_prior=RIDGE,
+                half_life=1e9,
+                learn=False,
+                means=m0.ravel().tolist(),
+                covs=covs_arg,
+                transition=pi.ravel().tolist(),
+                weight="w",
+                smooth_lag=lag,
+            )
+            out = rp.ModelBank([sp]).fit_predict(frame)["h"].struct.unnest()
+            # Zero-weight rows must stay null.
+            assert out.filter(pl.Series(~kept))["smoothed_state0"].null_count() == int(
+                (~kept).sum()
+            )
+            kept_out = out.filter(pl.Series(kept))
+            sm = kept_out.select([f"smoothed_state{j}" for j in range(k)]).to_numpy()
+            for t in range(lag, len(x_kept)):
+                want = gh.predict_proba(x_kept[: t + 1])[t - lag]
+                worst = max(worst, float(np.abs(sm[t] - want).max()))
+    return worst
+
+
+def _spherical_em_error(seed: int) -> float:
+    """Online EM under ``covariance_type="spherical"`` vs the stated spherical
+    rule rebuilt from scratch with ``hmmlearn`` for each row's filtered
+    posterior and ``scipy`` for each joint."""
+    s = hmm_stream(seed, k=3, n=120, d=3)
+    x_all, w_all, m0 = s["x"], s["w"], s["m0"]
+    k, d = m0.shape
+    half_life = 30.0
+    prior_rows = 2.5
+    c0_sph = np.array([0.8, 1.2, 1.6])
+    sp = rp.spec.hmm(
+        "h",
+        features=[f"x{i}" for i in range(d)],
+        n_components=k,
+        covariance_type="spherical",
+        precision_prior=RIDGE,
+        half_life=half_life,
+        means=m0.ravel().tolist(),
+        covs=c0_sph.tolist(),
+        prior_rows=prior_rows,
+        weight="w",
+    )
+    frame = pl.DataFrame({f"x{i}": x_all[:, i] for i in range(d)}).with_columns(w=w_all)
+    bank = rp.ModelBank([sp])
+    out_all = bank.fit_predict(frame)["h"].struct.unnest()
+
+    kept = w_all > 0.0
+    x, w = x_all[kept], w_all[kept]
+    out = out_all.filter(pl.Series(kept))
+    n = len(x)
+    lam_row = math.exp2(-1.0 / half_life)
+    lam_slow = math.exp2(-1.0 / (10.0 * half_life))
+    # Shaped prior since c0_sph differs across states.
+    shaped = not np.allclose(c0_sph, c0_sph[0])
+    psi = 1.0 if shaped else float(c0_sph.mean())
+    v_slow = float(k)
+
+    # Track per-state spherical moments from scratch over decayed weights.
+    w_s = np.ones(k)
+    means = m0.copy()
+    vars_s = c0_sph.copy()
+    counts = np.zeros((k, k))
+    p = np.full(k, 1.0 / k)
+
+    worst = 0.0
+    for t in range(n):
+        lam = lam_row if t else 1.0
+        slow = lam_slow if t else 1.0
+        w_aged = w_s * lam
+        c_aged = counts * lam
+        pi = (c_aged + TAU) / (c_aged + TAU).sum(axis=1, keepdims=True)
+        # Stabilized spherical variance per state.
+        g_shape = c0_sph if shaped else np.ones(k)
+        sigma = (w_aged * vars_s + prior_rows * psi * g_shape) / (w_aged + prior_rows)
+
+        pred = p @ pi
+        gh = GaussianHMM(n_components=k, covariance_type="spherical", init_params="")
+        gh.startprob_ = pred
+        gh.transmat_ = np.eye(k)
+        gh.means_ = means
+        gh.covars_ = sigma
+        post = gh.predict_proba(x[t : t + 1])[0]
+        logf = np.array(
+            [multivariate_normal(means[st], sigma[st] * np.eye(d)).logpdf(x[t]) for st in range(k)]
+        )
+        ll = float(logsumexp(np.log(pred) + logf))
+
+        got_f = np.array([out[f"filtered_state{j}"][t] for j in range(k)])
+        got_p = np.array([out[f"predicted_state{j}"][t] for j in range(k)])
+        worst = max(worst, float(np.abs(got_f - p).max()), float(np.abs(got_p - pred).max()))
+        worst = max(worst, abs(float(out["loglik"][t]) - ll) / (1.0 + abs(ll)))
+
+        # Joint & transition counts update (every learned row, row 0 included).
+        log_j = np.log(p)[:, None] + np.log(pi) + logf[None, :]
+        joint = np.exp(log_j - logsumexp(log_j))
+        counts = c_aged + w[t] * joint
+
+        # Update stabilized psi using pre-row means.
+        sq_per_state = ((x[t] - means) ** 2).mean(axis=1)
+        e_val = float(post @ (sq_per_state / g_shape))
+        v_slow = slow * v_slow + w[t]
+        psi = psi + (w[t] / v_slow) * (e_val - psi)
+
+        # Update spherical moments.
+        for st in range(k):
+            wt = w[t] * post[st]
+            w_new = w_aged[st] + wt
+            if wt > 0.0:
+                a = w_aged[st] / w_new
+                b = wt / w_new
+                diff = x[t] - means[st]
+                vars_s[st] = a * vars_s[st] + a * b * float((diff @ diff) / d)
+                means[st] = means[st] + b * diff
+            w_s[st] = w_new
+        p = post
+    return worst
+
+
+def _conjugate_priors_error(seed: int) -> float:
+    """Conjugate priors (``means_weight``, ``covars_prior``, ``covars_weight``)
+    at ``half_life=inf`` against ``hmmlearn.GaussianHMM._do_mstep`` on every
+    covariance shape."""
+    s = hmm_stream(seed, k=2, n=60, d=2)
+    x = s["x"]
+    k, d = s["m0"].shape
+    m0 = s["m0"]
+    mw, cp, cw = 2.5, 0.4, 4.0
+    frame = pl.DataFrame({f"x{i}": x[:, i] for i in range(d)})
+
+    worst = 0.0
+    for cov_type in ("full", "diag", "spherical", "tied"):
+        c0_arg = [1.0, 1.0] if cov_type == "spherical" else s["c0"].ravel().tolist()
+        sp = rp.spec.hmm(
+            "h",
+            features=[f"x{i}" for i in range(d)],
+            n_components=k,
+            covariance_type=cov_type,
+            precision_prior=RIDGE,
+            half_life=float("inf"),
+            means=m0.ravel().tolist(),
+            covs=c0_arg,
+            means_weight=mw,
+            covars_prior=cp,
+            covars_weight=cw,
+        )
+        out = rp.ModelBank([sp]).fit_predict(frame)["h"].struct.unnest()
+
+        # Rebuild step-by-step calling hmmlearn's own `_do_mstep` after each row.
+        hm = GaussianHMM(
+            n_components=k,
+            covariance_type=cov_type,
+            params="mc",
+            init_params="",
+            means_prior=m0.copy(),
+            means_weight=mw,
+            covars_prior=cp if cov_type in ("diag", "spherical") else cp * np.eye(d),
+            covars_weight=cw,
+        )
+        hm.startprob_ = np.full(k, 1.0 / k)
+        hm.means_ = m0.copy()
+        if cov_type == "spherical":
+            hm.covars_ = np.ones(k)
+        elif cov_type == "diag":
+            hm.covars_ = np.ones((k, d))
+        elif cov_type == "tied":
+            hm.covars_ = np.eye(d)
+        else:
+            hm.covars_ = s["c0"].copy()
+
+        stats = {
+            "post": np.zeros(k),
+            "obs": np.zeros((k, d)),
+            "obs**2": np.zeros((k, d)),
+            "obs*obs.T": np.zeros((k, d, d)),
+        }
+        counts = np.zeros((k, k))
+        p = np.full(k, 1.0 / k)
+        for t in range(len(x)):
+            pi = (counts + TAU) / (counts + TAU).sum(axis=1, keepdims=True)
+            pred = p @ pi
+            hm.startprob_ = pred
+            hm.transmat_ = np.eye(k)
+            post = hm.predict_proba(x[t : t + 1])[0]
+            ll = float(hm.score(x[t : t + 1]))
+
+            got_f = np.array([out[f"filtered_state{j}"][t] for j in range(k)])
+            worst = max(worst, float(np.abs(got_f - p).max()))
+            worst = max(worst, abs(float(out["loglik"][t]) - ll) / (1.0 + abs(ll)))
+
+            covs_full = hm.covars_
+            logf = np.array(
+                [multivariate_normal(hm.means_[st], covs_full[st]).logpdf(x[t]) for st in range(k)]
+            )
+            log_j = np.log(p)[:, None] + np.log(pi) + logf[None, :]
+            counts += np.exp(log_j - logsumexp(log_j))
+
+            stats["post"] += post
+            stats["obs"] += post[:, None] * x[t][None, :]
+            stats["obs**2"] += post[:, None] * (x[t] ** 2)[None, :]
+            stats["obs*obs.T"] += post[:, None, None] * np.outer(x[t], x[t])[None, :, :]
+            hm._do_mstep(stats)
+            if cov_type == "spherical" and hm._covars_.ndim == 2:
+                # hmmlearn 0.3.3 writes (k, d) into `_covars_` during spherical
+                # `_do_mstep`, which its `.covars_` getter expects as 1D `(k,)`.
+                hm._covars_ = hm._covars_[:, 0].copy()
+            p = post
+    return worst
+
+
+def _partial_params_error(seed: int) -> float:
+    """Partial learning ``params`` (``"t"``, ``"m"``, ``"mc"`` vs ``hmmlearn._do_mstep``;
+    ``"c"`` alone vs exact closed-form frozen-mean M-step, since ``hmmlearn 0.3.3``
+    has a bug in ``_do_mstep`` when ``'m'`` is absent and ``means_ != means_prior``)."""
+    s = hmm_stream(seed, k=2, n=60, d=2)
+    x, m0 = s["x"], s["m0"]
+    k, d = m0.shape
+    c0_diag = np.ones((k, d))
+    c0_flat = np.array([np.eye(d)] * k).ravel().tolist()
+    pi0 = np.array([[0.9, 0.1], [0.15, 0.85]])
+    frame = pl.DataFrame({f"x{i}": x[:, i] for i in range(d)})
+    mw, cp, cw = 2.0, 0.5, 3.0
+
+    worst = 0.0
+    # 1. params="m" and params="mc" with conjugate priors against hmmlearn._do_mstep.
+    for params_str in ("m", "mc"):
+        sp = rp.spec.hmm(
+            "h",
+            features=[f"x{i}" for i in range(d)],
+            n_components=k,
+            covariance_type="diag",
+            precision_prior=RIDGE,
+            half_life=float("inf"),
+            means=m0.ravel().tolist(),
+            covs=c0_flat,
+            transition=pi0.ravel().tolist(),
+            params=params_str,
+            means_weight=mw,
+            **({"covars_prior": cp, "covars_weight": cw} if "c" in params_str else {}),
+        )
+        out = rp.ModelBank([sp]).fit_predict(frame)["h"].struct.unnest()
+        hm = GaussianHMM(
+            n_components=k,
+            covariance_type="diag",
+            params=params_str,
+            init_params="",
+            means_prior=m0.copy(),
+            means_weight=mw,
+            covars_prior=cp,
+            covars_weight=cw,
+        )
+        hm.means_ = m0.copy()
+        hm.covars_ = c0_diag + (0.0 if "c" in params_str else RIDGE)
+        stats = {
+            "post": np.zeros(k),
+            "obs": np.zeros((k, d)),
+            "obs**2": np.zeros((k, d)),
+            "obs*obs.T": np.zeros((k, d, d)),
+        }
+        p = np.full(k, 1.0 / k)
+        for t in range(len(x)):
+            pred = p @ pi0
+            hm.startprob_ = pred
+            hm.transmat_ = np.eye(k)
+            post = hm.predict_proba(x[t : t + 1])[0]
+            ll = float(hm.score(x[t : t + 1]))
+            got_f = np.array([out[f"filtered_state{j}"][t] for j in range(k)])
+            worst = max(worst, float(np.abs(got_f - p).max()))
+            worst = max(worst, abs(float(out["loglik"][t]) - ll) / (1.0 + abs(ll)))
+            stats["post"] += post
+            stats["obs"] += post[:, None] * x[t][None, :]
+            stats["obs**2"] += post[:, None] * (x[t] ** 2)[None, :]
+            hm._do_mstep(stats)
+            p = post
+
+    # 2. params="c" alone (frozen means): exact closed-form frozen-mean M-step.
+    sp_c = rp.spec.hmm(
+        "h",
+        features=[f"x{i}" for i in range(d)],
+        n_components=k,
+        covariance_type="diag",
+        precision_prior=RIDGE,
+        half_life=float("inf"),
+        means=m0.ravel().tolist(),
+        covs=c0_flat,
+        transition=pi0.ravel().tolist(),
+        params="c",
+        covars_prior=cp,
+        covars_weight=cw,
+    )
+    out_c = rp.ModelBank([sp_c]).fit_predict(frame)["h"].struct.unnest()
+    g_w = np.zeros(k)
+    sq_sum = np.zeros((k, d))
+    p = np.full(k, 1.0 / k)
+    for t in range(len(x)):
+        pred = p @ pi0
+        var = c0_diag if t == 0 else (cp + sq_sum) / np.maximum((cw - 1.0) + g_w[:, None], 1e-5)
+        logf = np.array(
+            [multivariate_normal(m0[st], np.diag(var[st])).logpdf(x[t]) for st in range(k)]
+        )
+        log_post = np.log(pred) + logf
+        ll = float(logsumexp(log_post))
+        post = np.exp(log_post - ll)
+        got_f = np.array([out_c[f"filtered_state{j}"][t] for j in range(k)])
+        worst = max(worst, float(np.abs(got_f - p).max()))
+        worst = max(worst, abs(float(out_c["loglik"][t]) - ll) / (1.0 + abs(ll)))
+        g_w += post
+        sq_sum += post[:, None] * (x[t][None, :] - m0) ** 2
+        p = post
+    return worst
+
+
+def _hmm_ext_guard_outputs() -> list[pl.DataFrame]:
+    out = []
+    for seed in range(5):
+        s = hmm_stream(seed, k=2, n=50, d=2)
+        frame = pl.DataFrame({f"x{i}": s["x"][:, i] for i in range(2)}).with_columns(w=s["w"])
+        sp1 = rp.spec.hmm(
+            "h1",
+            features=["x0", "x1"],
+            n_components=2,
+            covariance_type="spherical",
+            precision_prior=RIDGE,
+            half_life=30.0,
+            means=s["m0"].ravel().tolist(),
+            covs=[0.8, 1.2],
+            prior_rows=2.5,
+            smooth_lag=3,
+            weight="w",
+        )
+        sp2 = rp.spec.hmm(
+            "h2",
+            features=["x0", "x1"],
+            n_components=2,
+            covariance_type="diag",
+            precision_prior=RIDGE,
+            half_life=float("inf"),
+            means=s["m0"].ravel().tolist(),
+            covs=s["c0"].ravel().tolist(),
+            params="mc",
+            means_weight=2.0,
+            covars_prior=0.5,
+            covars_weight=3.0,
+        )
+        out.append(rp.ModelBank([sp1, sp2]).fit_predict(frame))
+    return out
+
+
+ledger.guard(
+    "hmm_extensions",
+    _hmm_ext_guard_outputs,
+    oracles=["hmmlearn", "scipy"],
+    bits=52,
+)
+
+EXT_TOL = 1e-9
+
+
+class TestHmmExtensionsOracle:
+    """Fixed-lag smoothing, spherical covariance, conjugate priors, and partial
+    learning ``params`` against ``hmmlearn`` and closed-form M-steps."""
+
+    def test_one_seed(self):
+        errs = {
+            "smooth": _smooth_oracle_error(0),
+            "spherical": _spherical_em_error(0),
+            "priors": _conjugate_priors_error(0),
+            "partial": _partial_params_error(0),
+        }
+        print({k: f"{v:.3g}" for k, v in errs.items()})
+        assert max(errs.values()) <= EXT_TOL, errs
+
+    @pytest.mark.oracle_grid(
+        reason=(
+            "50 seeds covering fixed-lag smoothing, spherical covariance, conjugate priors, "
+            "and partial learning against hmmlearn"
+        )
+    )
+    def test_fifty_seeds(self):
+        smooth = [_smooth_oracle_error(seed) for seed in SEEDS]
+        spherical = [_spherical_em_error(seed) for seed in SEEDS]
+        priors = [_conjugate_priors_error(seed) for seed in SEEDS]
+        partial = [_partial_params_error(seed) for seed in SEEDS]
+        for name, vals, fl in (
+            ("smooth_error", smooth, 1e-12),
+            ("spherical_error", spherical, 1e-10),
+            ("priors_error", priors, 1e-11),
+            ("partial_error", partial, 1e-11),
+        ):
+            print(f"{name}: worst {max(vals):.3g}, p95 {np.quantile(vals, 0.95):.3g}")
+            ledger.record("hmm_extensions", name, vals, floor=fl)
+        assert max(max(smooth), max(spherical), max(priors), max(partial)) <= EXT_TOL

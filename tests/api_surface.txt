@@ -128,14 +128,19 @@
     hazard_rows = None
     hazard = None
     hazard_col = None
+    hazard_kind = 'constant'
+    hazard_k = None
+    hazard_p = None
     covariance_type = 'diag'
     mean_prior = None
     mean_precision_prior = None
     degrees_of_freedom_prior = None
     covariance_prior = None
+    obs_var = None
     robust_beta = None
     prune_below = None
     max_run = None
+    max_state_bytes = None
     warm_rows = None
     warm_span = None
     common
@@ -337,7 +342,7 @@
     n_components
     precision_prior
     covariance_type = 'full'
-    learn = True
+    learn = None
     transition_prior = None
     transition = None
     means = None
@@ -349,6 +354,12 @@
     tvtp_coef = None
     prior_rows = None
     warm_span = None
+    smooth_lag = None
+    max_state_bytes = None
+    params = None
+    means_weight = None
+    covars_prior = None
+    covars_weight = None
     common
   holt:
     name
@@ -2785,6 +2796,20 @@
     settled_frac: f64
     withheld_reason: enum
     coef: list[f64]
+  hmm smoothed:
+    filtered_state0: f64
+    filtered_state1: f64
+    predicted_state0: f64
+    predicted_state1: f64
+    state: i64
+    loglik: f64
+    smoothed_state0: f64
+    smoothed_state1: f64
+    smoothed_for: clock
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
   rcov minimal:
     weight_sum: f64
   deco minimal:
@@ -3255,6 +3280,7 @@
   spec.held_overflow: drop_oldest, refuse
   spec.session_gap: reset
   bocpd.covariance_type: diag, full
+  bocpd.hazard_kind: constant, neg_binomial
   corrchange.alpha_adjust: bonferroni, none
   corrchange.kind: monitor, sequential, window
   corrchange.norm: l1, linf
@@ -3302,7 +3328,7 @@
   ewridge.target_gaps: own_rows, pairwise
   ewridge.window_budget: refuse, thin
   ftrl.loss: logistic, squared
-  hmm.covariance_type: diag, full, tied
+  hmm.covariance_type: diag, full, spherical, tied
   hmm.init: farthest, first, k-means++, lloyd
   huber.huber_scale: mad, rms
   huber.ridge_scale: mean, sum
@@ -3436,7 +3462,7 @@
   [specs.model], by type:
     ar: closed, lags, max_rows_between_snapshots, max_state_bytes, ridge, select, snapshot_every, window_budget, window_size
     audit: closed, distinct_cap, distinct_precision, distinct_window_rows, distinct_window_size, max_state_bytes, pairs
-    bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, hazard_rows, max_run, mean_precision_prior, mean_prior, prune_below, robust_beta, warm_rows, warm_span
+    bocpd: covariance_prior, covariance_type, degrees_of_freedom_prior, hazard, hazard_col, hazard_k, hazard_kind, hazard_p, hazard_rows, max_run, max_state_bytes, mean_precision_prior, mean_prior, obs_var, prune_below, robust_beta, warm_rows, warm_span
     corrchange: alpha, alpha_adjust, bandwidth, boundary_gamma, change_action, crit, kind, max_state_bytes, monitor_rows, monitor_span, n_perm, norm, perm_block, permute_every, permute_every_rows, scalar, seed, window_rows, window_size
     dcc: a, asymmetric, b, dist, g, margin_start_rows, margin_start_span, margins, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     ddsketch: alpha, closed, max_state_bytes, quantiles, window_rows, window_size
@@ -3450,7 +3476,7 @@
     garch: dist, forecast_rows, max_horizon_work, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol
     glm: family, link, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, step_cap, var_power
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
-    hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows, warm_span
+    hmm: covariance_type, covars_prior, covars_weight, covs, exog_tvtp, init, learn, max_state_bytes, means, means_weight, n_components, params, precision_prior, prior_rows, seed, smooth_lag, transition, transition_prior, tvtp_coef, warm_rows, warm_span
     holt: damping_half_life, forecast_spans, initial_level, initial_seasonal, initial_trend, max_state_bytes, period, seasonal, seasonal_half_life, seasonal_periods, start, trend, trend_half_life
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, max_rows_between_solves, max_state_bytes, refit_budget, ridge, ridge_scale, solve_every, standardize
     isotonic: closed, increasing, max_state_bytes, out_of_bounds, window_rows, window_size, y_max, y_min

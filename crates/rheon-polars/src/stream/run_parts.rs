@@ -71,7 +71,9 @@ pub(super) fn build_instances<'a>(
     let mut o_se_hac = out.se_coef_hac.iter_mut();
     let mut o_smoothed = out.smoothed_coef.iter_mut();
     let mut o_smoothed_se = out.smoothed_se.iter_mut();
-    let mut o_smoothed_for = out.smoothed_for.chunks_mut((spec.m() * n_rows).max(1));
+    let mut o_smoothed_for = out
+        .smoothed_for
+        .chunks_mut((spec.smoothed_for_slots() * n_rows).max(1));
 
     let n_slots = out.n_slots;
     let mut decays = decays.iter();

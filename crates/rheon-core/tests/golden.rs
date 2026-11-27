@@ -674,6 +674,7 @@ fn bocpd_golden() {
         warm_rows: None,
         hazard_on_clock: false,
         warm_clock: None,
+        extras: None,
     })
     .unwrap();
     check("bocpd", &signature(&mut m, 0), GOLDEN_BOCPD);
@@ -703,6 +704,7 @@ fn bocpd_on_the_clock_golden() {
         warm_rows: None,
         hazard_on_clock: true,
         warm_clock: None,
+        extras: None,
     })
     .unwrap();
     check(
@@ -834,7 +836,7 @@ fn hmm_golden() {
         n_features: 2,
         k: 2,
         decay: Decay::Halflife(20.0),
-        covariance: Covariance::Full,
+        covariance: rheon_core::HmmCovariance::Full,
         precision_prior: 1e-2,
         min_weight: 3.0,
         learn: true,
@@ -848,6 +850,7 @@ fn hmm_golden() {
         tvtp: None,
         prior_rows: None,
         warm_clock: None,
+        extras: None,
     })
     .unwrap();
     check("hmm", &signature(&mut m, 5), GOLDEN_HMM);
@@ -2314,7 +2317,7 @@ fn hmm_tvtp_golden() {
         n_features: 2,
         k: 2,
         decay: Decay::Halflife(20.0),
-        covariance: Covariance::Full,
+        covariance: rheon_core::HmmCovariance::Full,
         precision_prior: 1e-2,
         min_weight: 3.0,
         learn: true,
@@ -2328,6 +2331,7 @@ fn hmm_tvtp_golden() {
         tvtp: Some((vec![2.0, 0.0, 0.0, 2.0], vec![0.0, 1.5, -1.0, 0.0])),
         prior_rows: None,
         warm_clock: None,
+        extras: None,
     })
     .unwrap();
     check("hmm_tvtp", &signature(&mut m, 5), GOLDEN_HMM_TVTP);
@@ -2353,6 +2357,7 @@ fn bocpd_emissions_golden() {
         warm_rows: None,
         hazard_on_clock: false,
         warm_clock: None,
+        extras: None,
     };
     let mut m = Bocpd::new(cfg(BocpdEmission::Gaussian, 0.0)).unwrap();
     check(

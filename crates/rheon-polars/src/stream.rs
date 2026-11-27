@@ -4754,7 +4754,7 @@ fn run_instance(
             }
             // The row's clock as the clock fields show it, for a smoother
             // to say which row a smoothed value describes.
-            if let (Some(label), true) = (plan.clock, inst.o_smoothed.is_some()) {
+            if let (Some(label), true) = (plan.clock, !inst.o_smoothed_for.is_empty()) {
                 inst.model.get_mut().label_next(label);
             }
             // An audit counts the step as it elapsed, which no decay reads
@@ -4792,6 +4792,13 @@ fn run_instance(
                 inst.model
                     .get()
                     .predict_at_into(xs, &sc.ys, score_d, plan.stamp, step);
+            }
+            if inst.o_smoothed.is_none()
+                && !inst.o_smoothed_for.is_empty()
+                && let AnyModel::Hmm(m) = inst.model.get()
+            {
+                let start = step.pred.len().saturating_sub(m.cfg().k);
+                step.pred[start..].fill(f64::NAN);
             }
         }
         let n_slots = step.pred.len();
@@ -4922,7 +4929,11 @@ fn run_instance(
             inst.notified.unreachable = true;
             inst.notified.restart_waits();
         }
-        if learn && inst.o_smoothed.is_some() {
+        if learn
+            && !inst.o_smoothed_for.is_empty()
+            && (inst.o_smoothed.is_some()
+                || (reason == 0 && !step.pred.last().is_some_and(|v| v.is_nan())))
+        {
             let at = if emit { ri } else { plan.drift_ri };
             let outs = SmoothedOut {
                 coef: inst.o_smoothed.as_deref_mut(),

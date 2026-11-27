@@ -36,7 +36,9 @@ pub(crate) fn fixed_span(spec: &Spec) -> Option<FixedSpan> {
             "the 256 MiB a warm-up may hold",
         ),
         ModelKind::Bocpd {
-            warm_span: Some(s), ..
+            warm_span: Some(s),
+            max_state_bytes: None,
+            ..
         } => it(
             format!("warm_span = {s}"),
             "rows of its warm-up",
@@ -44,7 +46,9 @@ pub(crate) fn fixed_span(spec: &Spec) -> Option<FixedSpan> {
             "the 256 MiB a warm-up may hold",
         ),
         ModelKind::Hmm {
-            warm_span: Some(s), ..
+            warm_span: Some(s),
+            max_state_bytes: None,
+            ..
         } => it(
             format!("warm_span = {s}"),
             "rows of its warm-up",
@@ -189,6 +193,18 @@ fn window_words(spec: &Spec) -> (String, &'static str, &'static str) {
             format!("distinct_window_rows = {n}"),
             "Shorten distinct_window_rows or lower distinct_precision",
             "distinct-sketch entries",
+        ),
+        ModelKind::Bocpd { .. } => (
+            "its live runs".to_string(),
+            "Raise prune_below or lower max_run",
+            "live runs",
+        ),
+        ModelKind::Hmm {
+            warm_span: Some(s), ..
+        } => (
+            format!("warm_span = {s}"),
+            "Shorten warm_span, or give warm_rows",
+            "rows",
         ),
         _ => ("its window".to_string(), "Shorten the window", "events"),
     }

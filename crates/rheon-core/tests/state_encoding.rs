@@ -369,3 +369,231 @@ fn a_bins_budget_round_trips_in_both_encodings() {
         "seven fields: the statistic, the refit's count, the anchor, and no budget"
     );
 }
+
+/// Exhaustive compact + named round-trip across every combination of new
+/// `HmmCfgExtras` / `HmmExtras` options (`spherical`, `smooth_lag`, `params`,
+/// `means_weight`, `covars_prior`, `covars_weight`, `warm_clock`, `prior_rows`).
+#[test]
+fn hmm_round_trips_with_every_optional_part_in_both_encodings() {
+    use rheon_core::{ClockValue, Hmm, HmmCfg, HmmCfgExtras, HmmCovariance, SeedRule, State};
+
+    // Round-trip through `State` + `Hmm::restore` so `#[serde(skip)]` derived
+    // fields (such as `Stabilized::prior_rows`) are rebuilt identically under
+    // both compact and named msgpack encodings.
+    let check_hmm = |m: &Hmm, what: &str| {
+        let st = m.state();
+        let compact = rmp_serde::to_vec(&st).unwrap();
+        let named = rmp_serde::to_vec_named(&st).unwrap();
+        let sc: State = rmp_serde::from_slice(&compact)
+            .unwrap_or_else(|e| panic!("{what}: compact encoding does not decode: {e}"));
+        let sn: State = rmp_serde::from_slice(&named)
+            .unwrap_or_else(|e| panic!("{what}: named encoding does not decode: {e}"));
+        let rc =
+            Hmm::restore(&sc).unwrap_or_else(|e| panic!("{what}: compact restore failed: {e}"));
+        let rn = Hmm::restore(&sn).unwrap_or_else(|e| panic!("{what}: named restore failed: {e}"));
+        assert_eq!(rc, rn, "{what}: compact and named restores diverged");
+        assert_eq!(
+            rmp_serde::to_vec_named(&rc.state()).unwrap(),
+            named,
+            "{what}: compact round-trip changed serialized state"
+        );
+        assert_eq!(
+            rmp_serde::to_vec_named(&rn.state()).unwrap(),
+            named,
+            "{what}: named round-trip changed serialized state"
+        );
+    };
+
+    let base_given = |cov: HmmCovariance, extras: Option<Box<HmmCfgExtras>>| HmmCfg {
+        n_features: 2,
+        k: 2,
+        decay: Decay::Halflife(25.0),
+        covariance: cov,
+        precision_prior: 1e-2,
+        min_weight: 0.0,
+        learn: true,
+        transition_prior: 1.0,
+        transition: Some(vec![0.9, 0.1, 0.1, 0.9]),
+        means: Some(vec![-1.5, -1.5, 1.5, 1.5]),
+        covs: Some(if matches!(cov, HmmCovariance::Spherical) {
+            vec![1.0, 1.0]
+        } else {
+            vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0]
+        }),
+        warm_rows: 10,
+        seed_rule: SeedRule::First,
+        seed: 7,
+        tvtp: None,
+        prior_rows: None,
+        warm_clock: None,
+        extras,
+    };
+
+    for cov in [
+        HmmCovariance::Full,
+        HmmCovariance::Shared,
+        HmmCovariance::Diagonal,
+        HmmCovariance::Spherical,
+    ] {
+        for smooth_lag in [None, Some(3usize)] {
+            for params in [
+                None,
+                Some("t"),
+                Some("m"),
+                Some("c"),
+                Some("mc"),
+                Some("tmc"),
+            ] {
+                for use_conj in [false, true] {
+                    if use_conj && matches!(params, Some("t") | Some("m")) {
+                        continue;
+                    }
+                    let (mw, cp, cw) = if use_conj {
+                        (
+                            if matches!(params, Some("c")) {
+                                None
+                            } else {
+                                Some(2.5)
+                            },
+                            Some(vec![0.25]),
+                            Some(3.0),
+                        )
+                    } else {
+                        (None, None, None)
+                    };
+                    let ex = HmmCfgExtras {
+                        smooth_lag,
+                        max_state_bytes: smooth_lag.map(|_| 65_536),
+                        params: params.map(str::to_string),
+                        means_weight: mw,
+                        covars_prior: cp,
+                        covars_weight: cw,
+                    };
+                    let extras = (!ex.is_empty()).then(|| Box::new(ex));
+                    let mut m = Hmm::new(base_given(cov, extras)).unwrap();
+                    for i in 0..8 {
+                        m.label_next(ClockValue::F64(i as f64));
+                        let sign = if i < 4 { -1.5 } else { 1.5 };
+                        m.step(
+                            &[sign + 0.1 * i as f64, sign - 0.1 * i as f64],
+                            &[],
+                            1.0,
+                            1.0,
+                        );
+                    }
+                    check_hmm(
+                        &m,
+                        &format!(
+                            "hmm cov={cov:?} smooth={smooth_lag:?} params={params:?} conj={use_conj}"
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    // Warming spherical HMM with warm_clock + smooth_lag + max_state_bytes
+    // (before and after seeding).
+    let mut w = Hmm::new(HmmCfg {
+        n_features: 2,
+        k: 2,
+        decay: Decay::Halflife(20.0),
+        covariance: HmmCovariance::Spherical,
+        precision_prior: 1e-2,
+        min_weight: 0.0,
+        learn: true,
+        transition_prior: 1.0,
+        transition: None,
+        means: None,
+        covs: None,
+        warm_rows: 2,
+        seed_rule: SeedRule::First,
+        seed: 3,
+        tvtp: None,
+        prior_rows: Some(3.0),
+        warm_clock: Some(5.0),
+        extras: Some(Box::new(HmmCfgExtras {
+            smooth_lag: Some(2),
+            max_state_bytes: Some(131_072),
+            params: None,
+            means_weight: None,
+            covars_prior: None,
+            covars_weight: None,
+        })),
+    })
+    .unwrap();
+    for i in 0..3 {
+        w.label_next(ClockValue::F64(i as f64));
+        w.step(&[i as f64, -(i as f64)], &[], 1.0, 1.0);
+    }
+    check_hmm(&w, "hmm spherical warm_clock+smooth_lag (warming)");
+    for i in 3..10 {
+        w.label_next(ClockValue::F64(i as f64));
+        w.step(&[i as f64, -(i as f64)], &[], 1.0, 1.0);
+    }
+    check_hmm(&w, "hmm spherical warm_clock+smooth_lag (seeded)");
+}
+
+/// Exhaustive compact + named round-trip across every combination of new
+/// `BocpdCfgExtras` options (`nb_hazard`, `obs_var`, `max_state_bytes`,
+/// `warm_rows`, `hazard_on_clock`).
+#[test]
+fn bocpd_round_trips_with_every_optional_part_in_both_encodings() {
+    use rheon_core::{Bocpd, BocpdCfg, BocpdCfgExtras, BocpdEmission};
+
+    for (emission, obs_var) in [
+        (BocpdEmission::Diag, None),
+        (BocpdEmission::Gaussian, None),
+        (BocpdEmission::KnownVariance, Some(vec![0.5, 1.25])),
+        (BocpdEmission::KnownVariance, Some(vec![1.0])),
+    ] {
+        for nb_hazard in [None, Some((1usize, 0.05)), Some((4usize, 0.2))] {
+            for hazard_on_clock in [false, true] {
+                if nb_hazard.is_some() && hazard_on_clock {
+                    continue;
+                }
+                for max_state_bytes in [None, Some(65_536u64)] {
+                    for warming in [false, true] {
+                        let ex = BocpdCfgExtras {
+                            nb_hazard,
+                            obs_var: obs_var.clone(),
+                            max_state_bytes,
+                        };
+                        let extras = (!ex.is_empty()).then(|| Box::new(ex));
+                        let cfg = BocpdCfg {
+                            n_features: 2,
+                            hazard: 25.0,
+                            hazard_from_row: false,
+                            emission,
+                            prior_mean: (!warming).then(|| vec![0.0, 0.0]),
+                            prior_kappa: 1.0,
+                            prior_nu: None,
+                            prior_scale: (!warming).then(|| vec![1.0]),
+                            robust_beta: 0.0,
+                            prune_below: 1e-6,
+                            max_run: 50,
+                            min_weight: 0.0,
+                            warm_rows: warming.then_some(5),
+                            hazard_on_clock,
+                            warm_clock: None,
+                            extras,
+                        };
+                        let mut m = Bocpd::new(cfg).unwrap();
+                        for i in 0..3 {
+                            m.step(&[i as f64 * 0.3, -0.2 * i as f64], &[], 1.0, 1.0);
+                        }
+                        let what = format!(
+                            "bocpd {emission:?} nb={nb_hazard:?} clock={hazard_on_clock} \
+                             cap={max_state_bytes:?} warm={warming}"
+                        );
+                        roundtrip(&m, &format!("{what} (early)"));
+                        for i in 3..10 {
+                            m.step(&[2.0 + i as f64 * 0.1, -1.0], &[], 1.0, 1.0);
+                        }
+                        roundtrip(&m, &format!("{what} (late)"));
+                    }
+                }
+            }
+        }
+    }
+}

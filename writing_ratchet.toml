@@ -627,6 +627,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."crates/rheon-core/src/bars.rs"]
 "remedy" = 1
 
+[messages."crates/rheon-core/src/bocpd/extras.rs"]
+
 [messages."crates/rheon-core/src/bocpd/span.rs"]
 
 [messages."crates/rheon-core/src/clock_span.rs"]
@@ -653,6 +655,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."crates/rheon-core/src/glm.rs"]
 
 [messages."crates/rheon-core/src/hawkes.rs"]
+
+[messages."crates/rheon-core/src/hmm/options.rs"]
+
+[messages."crates/rheon-core/src/hmm/spherical.rs"]
 
 [messages."crates/rheon-core/src/holt/ets.rs"]
 
@@ -805,6 +811,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-core/src/bars.rs#messages"]
 
+[vocabulary."crates/rheon-core/src/bocpd/extras.rs#messages"]
+
 [vocabulary."crates/rheon-core/src/bocpd/span.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/clock_span.rs#messages"]
@@ -830,6 +838,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/glm.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/hawkes.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/hmm/options.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/hmm/spherical.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/holt/ets.rs#messages"]
 

@@ -306,7 +306,7 @@ VALUES = [
             precision_prior=0.1,
             covariance_type="lda",
         ),
-        'covariance_type must be "full", "tied" or "diag", but it is "lda"',
+        'covariance_type must be "full", "tied", "diag" or "spherical", but it is "lda"',
     ),
     (
         rp.spec.ew_class,

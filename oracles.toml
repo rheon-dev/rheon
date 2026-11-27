@@ -7087,6 +7087,65 @@ ideal = 0.0
 n = 50
 floor = 1e-12
 
+[group."second_opinion_bocpd.bocpd_nb_known_var"]
+tests = [
+    "tests/test_second_opinion_bocpd.py::TestNbHazardAndKnownVarianceOracle::test_fifty_seeds",
+]
+oracles = { "scipy" = "1.18.1" }
+dataset = ""
+
+[group."second_opinion_hmm.hmm_extensions"]
+tests = [
+    "tests/test_second_opinion_hmm.py::TestHmmExtensionsOracle::test_fifty_seeds",
+]
+oracles = { "hmmlearn" = "0.3.3", "scipy" = "1.18.1" }
+dataset = ""
+
+[case."second_opinion_bocpd.bocpd_nb_known_var.loglik_error"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."second_opinion_bocpd.bocpd_nb_known_var.mode_misses"]
+ideal = 0.0
+n = 50
+tolerance = 0.0
+
+[case."second_opinion_bocpd.bocpd_nb_known_var.p_change_error"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."second_opinion_bocpd.bocpd_nb_known_var.pred_error"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."second_opinion_bocpd.bocpd_nb_known_var.run_mean_error"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."second_opinion_hmm.hmm_extensions.partial_error"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."second_opinion_hmm.hmm_extensions.priors_error"]
+ideal = 0.0
+n = 50
+floor = 1e-11
+
+[case."second_opinion_hmm.hmm_extensions.smooth_error"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
+[case."second_opinion_hmm.hmm_extensions.spherical_error"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
 # --- raises
 
 [[raised]]

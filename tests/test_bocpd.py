@@ -1628,3 +1628,217 @@ def test_chunks_of_1_7_and_600_with_a_hazard_column_and_weights():
     first = warm.fit_predict(df[:450])
     second = rp.ModelBank.load_bytes(warm.save_bytes()).fit_predict(df[450:])
     assert pl.concat([first, second]).equals(whole)
+
+
+# --- negative-binomial hazard, known-variance emission, runtime byte cap -----
+
+
+def test_neg_binomial_hazard_k1_matches_constant_and_k_gt_1_suppresses_early_alarms():
+    """``hazard_kind="neg_binomial"`` at ``k=1`` equals constant ``hazard_rows=1/p``;
+    at ``k > 1`` its support starts at ``k`` so early breaks have zero hazard;
+    chunk- and save-invariant."""
+    x = np.concatenate([normals(80, 10), normals(80, 11, loc=3.0)])
+    base = dict(
+        mean_prior=[0.0],
+        covariance_prior=[1.0],
+        degrees_of_freedom_prior=3.0,
+        prune_below=0.0,
+        min_weight=0.0,
+    )
+    const = run(x, hazard_rows=20.0, **base)
+    nb1 = run(x, hazard_kind="neg_binomial", hazard_k=1, hazard_p=0.05, **base)
+    for col in ("p_change", "run_mean", "pred_x0", "loglik"):
+        np.testing.assert_allclose(nb1[col], const[col], rtol=1e-12, atol=1e-12, err_msg=col)
+    assert nb1["run_mode"].equals(const["run_mode"])
+
+    # k=5, p=0.2 has mean segment length 25 and H(r) = 0 for r + 1 < 5.
+    nb5 = run(x, hazard_kind="neg_binomial", hazard_k=5, hazard_p=0.2, **base)
+    # On rows 0..3 (r <= 3, so r+1 <= 4 < 5), no break can happen after the row:
+    # row 0 gives r=1 (p_change=1 since P(r<=1)=1), rows 1..3 have r=2,3,4 so p_change==0!
+    assert nb5["p_change"][1] == 0.0
+    assert nb5["p_change"][2] == 0.0
+    assert nb5["p_change"][3] == 0.0
+    # After the shift at row 80, the detector still finds the changepoint.
+    assert nb5["p_change"][80:95].max() > 0.5
+
+    # Chunk invariance and save/load mid-stream.
+    df = pl.DataFrame({"x0": x})
+    s = rp.spec.bocpd(
+        "b", features=["x0"], hazard_kind="neg_binomial", hazard_k=4, hazard_p=0.1, **base
+    )
+    whole = rp.ModelBank([s]).fit_predict(df)
+    for size in (1, 7, 100):
+        bank = rp.ModelBank([s])
+        parts = [bank.fit_predict(df.slice(i, size)) for i in range(0, df.height, size)]
+        assert pl.concat(parts).equals(whole), size
+    bank = rp.ModelBank([s])
+    head = bank.fit_predict(df[:50])
+    tail = rp.ModelBank.load_bytes(bank.save_bytes(), [s]).fit_predict(df[50:])
+    assert pl.concat([head, tail]).equals(whole)
+
+
+def test_known_variance_emission_matches_closed_form_normal_normal():
+    """``obs_var`` activates the Normal-Normal known-variance conjugate emission
+    (scalar or per-feature list), agrees with exact scipy.stats.norm recursion,
+    works with warm-up, and is chunk- and save-invariant."""
+    from scipy.stats import norm
+
+    rng = np.random.default_rng(42)
+    x = np.column_stack(
+        [
+            np.concatenate([rng.normal(0.0, 0.7, 40), rng.normal(3.0, 0.7, 40)]),
+            np.concatenate([rng.normal(1.0, 1.4, 40), rng.normal(-2.0, 1.4, 40)]),
+        ]
+    )
+    mu0 = np.array([0.0, 1.0])
+    tau0_sq = np.array([1.0, 2.0])
+    obs_var = np.array([0.49, 1.96])
+    h = 1.0 / 30.0
+
+    # Longhand Normal-Normal BOCPD using scipy.stats.norm.
+    runs = [(0.0, np.zeros(2))]
+    joint = np.array([0.0])
+    want_p, want_ll, want_mean, want_mode, want_pred = [], [], [], [], []
+    for row in x:
+        log_pi = np.empty(len(runs))
+        preds = np.empty((len(runs), 2))
+        for j, (n_r, mean_r) in enumerate(runs):
+            post_var = 1.0 / (1.0 / tau0_sq + n_r / obs_var)
+            post_mu = post_var * (mu0 / tau0_sq + n_r * mean_r / obs_var)
+            preds[j] = post_mu
+            log_pi[j] = norm.logpdf(row, loc=post_mu, scale=np.sqrt(obs_var + post_var)).sum()
+        pre = np.exp(joint - logsumexp(joint))
+        want_mode.append(int(np.argmax(pre)))
+        want_mean.append(float(pre @ np.arange(len(runs))))
+        want_pred.append(pre @ preds)
+        want_ll.append(float(logsumexp(np.log(pre) + log_pi)))
+        new_j = np.empty(len(runs) + 1)
+        new_j[0] = logsumexp(joint + log_pi) + np.log(h)
+        new_j[1:] = joint + log_pi + np.log1p(-h)
+        post = np.exp(new_j - logsumexp(new_j))
+        want_p.append(float(post[0] + post[1]))
+        runs = [(0.0, np.zeros(2))] + [
+            (n_r + 1.0, (n_r * mean_r + row) / (n_r + 1.0)) for n_r, mean_r in runs
+        ]
+        joint = new_j
+
+    out = run(
+        x,
+        hazard_rows=30.0,
+        mean_prior=mu0.tolist(),
+        covariance_prior=tau0_sq.tolist(),
+        obs_var=obs_var.tolist(),
+        prune_below=0.0,
+        min_weight=0.0,
+    )
+    np.testing.assert_allclose(out["p_change"], want_p, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(out["loglik"], want_ll, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(out["run_mean"], want_mean, rtol=1e-12, atol=1e-12)
+    assert out["run_mode"].to_list() == want_mode
+    want_pred_arr = np.array(want_pred)
+    np.testing.assert_allclose(out["pred_x0"], want_pred_arr[:, 0], rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(out["pred_x1"], want_pred_arr[:, 1], rtol=1e-12, atol=1e-12)
+
+    # Scalar obs_var broadcasts across features and works with warm-up.
+    out_warm = run(x, hazard_rows=30.0, obs_var=1.0, warm_rows=6, min_weight=0.0)
+    assert out_warm["p_change"][:6].null_count() == 6
+    assert out_warm["p_change"][6:].null_count() == 0
+
+    # Chunk invariance and save/load.
+    df = pl.DataFrame({"x0": x[:, 0], "x1": x[:, 1]})
+    s = rp.spec.bocpd(
+        "b",
+        features=["x0", "x1"],
+        hazard_rows=30.0,
+        mean_prior=mu0.tolist(),
+        covariance_prior=tau0_sq.tolist(),
+        obs_var=obs_var.tolist(),
+        min_weight=0.0,
+    )
+    whole = rp.ModelBank([s]).fit_predict(df)
+    for size in (1, 7, 100):
+        bank = rp.ModelBank([s])
+        parts = [bank.fit_predict(df.slice(i, size)) for i in range(0, df.height, size)]
+        assert pl.concat(parts).equals(whole), size
+    bank = rp.ModelBank([s])
+    head = bank.fit_predict(df[:35])
+    tail = rp.ModelBank.load_bytes(bank.save_bytes(), [s]).fit_predict(df[35:])
+    assert pl.concat([head, tail]).equals(whole)
+
+
+def test_runtime_max_state_bytes_warns_at_half_and_refuses_atomically():
+    """``max_state_bytes`` bounds live run bytes at runtime: warns once past half
+    the cap, refuses when live runs exceed the cap, and succeeds when raised."""
+    x = normals(60, 55)
+    df = pl.DataFrame({"x0": x, "x1": normals(60, 56)})
+    # For d=2 diag: 8 * (3 + 3*2) = 72 bytes per run.
+    # At max_state_bytes=2048, half-cap is 1024 B (~15 runs) and full cap is 28 runs.
+    s_small = rp.spec.bocpd(
+        "b",
+        features=["x0", "x1"],
+        hazard_rows=200.0,
+        mean_prior=[0.0, 0.0],
+        covariance_prior=[1.0],
+        prune_below=0.0,
+        max_run=10_000,
+        max_state_bytes=2048,
+        min_weight=0.0,
+    )
+    bank = rp.ModelBank([s_small])
+    with pytest.warns(UserWarning, match="max_state_bytes"):
+        bank.fit_predict(df[:20])
+    saved_before = bank.save_bytes()
+    with pytest.raises(ValueError, match="max_state_bytes"):
+        bank.fit_predict(df[20:40])
+    # Atomic refusal: state after refusal still loads cleanly.
+    reloaded = rp.ModelBank.load_bytes(saved_before, [s_small])
+    assert reloaded.save_bytes() == saved_before
+
+    # Raising max_state_bytes allows the full stream to succeed.
+    s_large = rp.spec.bocpd(
+        "b",
+        features=["x0", "x1"],
+        hazard_rows=200.0,
+        mean_prior=[0.0, 0.0],
+        covariance_prior=[1.0],
+        prune_below=0.0,
+        max_run=10_000,
+        max_state_bytes=65_536,
+        min_weight=0.0,
+    )
+    out = rp.ModelBank([s_large]).fit_predict(df)["b"].struct.unnest()
+    assert out["p_change"].null_count() == 0
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        (dict(hazard_kind="weibull"), "hazard_kind"),
+        (dict(hazard_kind="neg_binomial"), "hazard_k"),
+        (dict(hazard_kind="neg_binomial", hazard_k=3), "hazard_p"),
+        (dict(hazard_kind="neg_binomial", hazard_p=0.1), "hazard_k"),
+        (dict(hazard_kind="neg_binomial", hazard_k=0, hazard_p=0.1), "hazard_k"),
+        (dict(hazard_kind="neg_binomial", hazard_k=3, hazard_p=0.0), "hazard_p"),
+        (dict(hazard_kind="neg_binomial", hazard_k=3, hazard_p=1.5), "hazard_p"),
+        (dict(hazard_k=3), "neg_binomial"),
+        (dict(hazard_p=0.1), "neg_binomial"),
+        (
+            dict(hazard_kind="neg_binomial", hazard_k=3, hazard_p=0.1, hazard_rows=50.0),
+            "hazard_rows",
+        ),
+        (dict(hazard_kind="neg_binomial", hazard_k=3, hazard_p=0.1, hazard=50.0), "hazard"),
+        (dict(hazard_kind="neg_binomial", hazard_k=3, hazard_p=0.1, hazard_col="h"), "hazard_col"),
+        (dict(obs_var=1.0, covariance_type="full"), "obs_var"),
+        (dict(obs_var=1.0, degrees_of_freedom_prior=4.0), "degrees_of_freedom_prior"),
+        (dict(obs_var=1.0, mean_precision_prior=2.0), "mean_precision_prior"),
+        (dict(obs_var=1.0, robust_beta=0.1), "robust_beta"),
+        (dict(obs_var=0.0), "obs_var"),
+        (dict(obs_var=-1.0), "obs_var"),
+        (dict(obs_var=[1.0, 2.0]), "obs_var"),
+        (dict(max_state_bytes=0), "max_state_bytes"),
+        (dict(max_state_bytes=65 * 1024 * 1024), "max_state_bytes"),
+    ],
+)
+def test_nb_hazard_and_obs_var_refusals(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        rp.spec.bocpd("b", features=["x0"], **kwargs)

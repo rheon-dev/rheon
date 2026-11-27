@@ -798,59 +798,165 @@ pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
         warm_rows,
         warm_span,
         hazard_rows,
+        hazard_kind,
+        hazard_k,
+        hazard_p,
+        obs_var,
+        max_state_bytes,
     } = &spec.model
     else {
         return Err(not_a(spec, "bocpd_cfg", "bocpd"));
     };
-    let emission = match (covariance_type.as_deref(), robust_beta) {
-        (None | Some("diag"), None) => BocpdEmission::Diag,
-        (None | Some("diag"), Some(b)) => {
-            // Measured (`bocpd.rs`, `a_sustained_shift_survives_a_small_beta_
-            // _and_not_a_large_one`): 0.1 ignores a 20-sigma row outright and
-            // still finds a real shift within five rows; above ~0.2 nothing
-            // is ever detected. Left out, the predictive is not tempered.
-            if !(b.is_finite() && *b > 0.0) {
-                return Err(format!(
-                    "bocpd: robust_beta must be finite and above 0, but it is {b}. Set \
-                     robust_beta to a small positive value such as 0.1, which ignores a row 20 \
-                     standard deviations out and still finds a shift of 4 standard deviations, or leave it out to \
-                     weigh every row in full."
-                ));
+    let mut no = rheon_core::Refusals::new();
+    let nb_hazard = match hazard_kind.as_deref() {
+        None | Some("constant") => {
+            if hazard_k.is_some() || hazard_p.is_some() {
+                no.refuse(
+                    "bocpd: hazard_k and hazard_p apply only under hazard_kind=\"neg_binomial\". \
+                     Set hazard_kind=\"neg_binomial\", or leave hazard_k and hazard_p out.",
+                );
             }
-            BocpdEmission::Robust
+            None
         }
-        (Some("full"), None) => BocpdEmission::Gaussian,
-        (Some("full"), Some(_)) => {
-            return Err(
-                "bocpd: robust_beta applies only under covariance_type=\"diag\", but \
-                 covariance_type is \"full\", which fits one distribution over all the \
-                 features. Set covariance_type=\"diag\", or leave robust_beta out."
-                    .into(),
-            );
+        Some("neg_binomial") => {
+            if hazard.is_some() {
+                no.refuse(
+                    "bocpd: hazard_kind=\"neg_binomial\" cannot be used with hazard: the \
+                     negative-binomial hazard counts learned rows. Leave hazard out, or use \
+                     hazard_kind=\"constant\".",
+                );
+            }
+            if hazard_rows.is_some() {
+                no.refuse(
+                    "bocpd: hazard_kind=\"neg_binomial\" cannot be used with hazard_rows: \
+                     hazard_rows sets a constant per-row hazard. Leave hazard_rows out, or use \
+                     hazard_kind=\"constant\".",
+                );
+            }
+            if hazard_col.is_some() {
+                no.refuse(
+                    "bocpd: hazard_kind=\"neg_binomial\" cannot be used with hazard_col. Leave \
+                     hazard_col out, or use hazard_kind=\"constant\".",
+                );
+            }
+            match (*hazard_k, *hazard_p) {
+                (Some(k), Some(p)) => Some((k, p)),
+                (None, Some(_)) => {
+                    no.refuse(
+                        "bocpd: hazard_kind=\"neg_binomial\" needs hazard_k and hazard_p, but \
+                         hazard_k is not set. Set hazard_k to an integer of at least 1.",
+                    );
+                    None
+                }
+                (Some(_), None) => {
+                    no.refuse(
+                        "bocpd: hazard_kind=\"neg_binomial\" needs hazard_k and hazard_p, but \
+                         hazard_p is not set. Set hazard_p to a probability in (0, 1].",
+                    );
+                    None
+                }
+                (None, None) => {
+                    no.refuse(
+                        "bocpd: hazard_kind=\"neg_binomial\" needs hazard_k and hazard_p, but \
+                         neither is set. Set both hazard_k and hazard_p.",
+                    );
+                    None
+                }
+            }
         }
-        (Some(other), _) => {
-            return Err(format!(
+        Some(other) => {
+            no.refuse(format!(
                 "bocpd: {}",
-                crate::words_refusal("covariance_type", &["full", "diag"], other)
+                crate::words_refusal("hazard_kind", &["constant", "neg_binomial"], other)
             ));
+            None
         }
     };
+    let emission = if obs_var.is_some() {
+        match covariance_type.as_deref() {
+            None | Some("diag") => {}
+            Some("full") => {
+                no.refuse(
+                    "bocpd: obs_var applies only under covariance_type=\"diag\", but \
+                     covariance_type is \"full\". Set covariance_type=\"diag\", or leave obs_var \
+                     out.",
+                );
+            }
+            Some(other) => {
+                no.refuse(format!(
+                    "bocpd: {}",
+                    crate::words_refusal("covariance_type", &["full", "diag"], other)
+                ));
+            }
+        }
+        if robust_beta.is_some() {
+            no.refuse(
+                "bocpd: robust_beta cannot be used with obs_var. Leave robust_beta out, or leave \
+                 obs_var out.",
+            );
+        }
+        if degrees_of_freedom_prior.is_some() {
+            no.refuse(
+                "bocpd: degrees_of_freedom_prior does not apply when obs_var is set, since the \
+                 observation variance is known. Leave degrees_of_freedom_prior out, or leave \
+                 obs_var out.",
+            );
+        }
+        if mean_precision_prior.is_some() {
+            no.refuse(
+                "bocpd: mean_precision_prior does not apply when obs_var is set: the prior \
+                 variance on the mean is set by covariance_prior. Leave mean_precision_prior out, \
+                 or leave obs_var out.",
+            );
+        }
+        BocpdEmission::KnownVariance
+    } else {
+        match (covariance_type.as_deref(), robust_beta) {
+            (None | Some("diag"), None) => BocpdEmission::Diag,
+            (None | Some("diag"), Some(b)) => {
+                if !(b.is_finite() && *b > 0.0) {
+                    no.refuse(format!(
+                        "bocpd: robust_beta must be finite and above 0, but it is {b}. Set \
+                         robust_beta to a small positive value such as 0.1, which ignores a row 20 \
+                         standard deviations out and still finds a shift of 4 standard deviations, or leave it out to \
+                         weigh every row in full."
+                    ));
+                }
+                BocpdEmission::Robust
+            }
+            (Some("full"), None) => BocpdEmission::Gaussian,
+            (Some("full"), Some(_)) => {
+                no.refuse(
+                    "bocpd: robust_beta applies only under covariance_type=\"diag\", but \
+                     covariance_type is \"full\", which fits one distribution over all the \
+                     features. Set covariance_type=\"diag\", or leave robust_beta out.",
+                );
+                BocpdEmission::Gaussian
+            }
+            (Some(other), _) => {
+                no.refuse(format!(
+                    "bocpd: {}",
+                    crate::words_refusal("covariance_type", &["full", "diag"], other)
+                ));
+                BocpdEmission::Diag
+            }
+        }
+    };
+    no.finish()?;
+    let extras = rheon_core::BocpdCfgExtras {
+        nb_hazard,
+        obs_var: obs_var.as_ref().map(FloatOrList::to_vec),
+        max_state_bytes: *max_state_bytes,
+    };
+    let extras = (!extras.is_empty()).then(|| Box::new(extras));
     Ok(BocpdCfg {
         n_features: spec.k(),
-        // `hazard` is the expected clock time between changepoints, in clock
-        // units: rows without a clock, the column's units on a number clock,
-        // seconds on a temporal one (tasks 179 and 547). `hazard_rows`, or
-        // neither, the expected rows between them; `Spec::validate` refuses
-        // both.
         hazard: hazard
             .as_ref()
             .map(Span::value)
             .or(*hazard_rows)
             .unwrap_or(BOCPD_HAZARD_ROWS),
         hazard_from_row: hazard_col.is_some(),
-        // The covariance's words and the tempering, which `emission` once
-        // said in one word: `"gaussian"` was `"full"`, `"robust"` the
-        // per-feature pair tempered (task 244, P-2).
         emission,
         prior_mean: mean_prior.clone(),
         prior_kappa: mean_precision_prior.unwrap_or(1.0),
@@ -863,6 +969,7 @@ pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
         warm_rows: *warm_rows,
         hazard_on_clock: hazard.is_some(),
         warm_clock: warm_span.as_ref().map(Span::value),
+        extras,
     })
 }
 
@@ -1115,6 +1222,12 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
         tvtp_coef,
         prior_rows,
         warm_span,
+        smooth_lag,
+        max_state_bytes,
+        params,
+        means_weight,
+        covars_prior,
+        covars_weight,
     } = &spec.model
     else {
         return Err(not_a(spec, "hmm_cfg", "hmm"));
@@ -1186,11 +1299,36 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
     }
     let covariance = covariance_type
         .as_deref()
-        .map_or(Ok(Covariance::Full), Covariance::parse);
+        .map_or(Ok(rheon_core::HmmCovariance::Full), |w| {
+            rheon_core::HmmCovariance::parse(w).map_err(|_| {
+                format!(
+                    "hmm: {}",
+                    crate::words_refusal(
+                        "covariance_type",
+                        &["full", "tied", "diag", "spherical"],
+                        w
+                    )
+                )
+            })
+        });
     let seed_rule = crate::stream::init_rule(init.as_deref());
     no.take(covariance.as_ref().map(|_| ()).map_err(Clone::clone));
     no.take(seed_rule.as_ref().map(|_| ()).map_err(Clone::clone));
     no.finish()?;
+    let extras = rheon_core::HmmCfgExtras {
+        smooth_lag: smooth_lag.map(|l| usize::try_from(l).unwrap_or(usize::MAX)),
+        max_state_bytes: *max_state_bytes,
+        params: params.clone(),
+        means_weight: *means_weight,
+        covars_prior: covars_prior.as_ref().map(FloatOrList::to_vec),
+        covars_weight: *covars_weight,
+    };
+    let extras = (!extras.is_empty()).then(|| Box::new(extras));
+    let learn_flag = match (*learn, params.as_deref()) {
+        (Some(b), _) => b,
+        (None, Some("")) => false,
+        (None, _) => true,
+    };
     Ok(HmmCfg {
         n_features: spec.k(),
         k: *k,
@@ -1198,15 +1336,11 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
         covariance: covariance?,
         precision_prior: *precision_prior,
         min_weight: spec.min_periods_or_default(),
-        learn: learn.unwrap_or(true),
+        learn: learn_flag,
         transition_prior: transition_prior.unwrap_or(1.0),
         transition: transition.clone(),
         means: means.clone(),
         covs: covs.clone(),
-        // 1,000 rows, or `k` where that is more: the buffer must hold every
-        // regime several times over for the seeding to place a state on each
-        // (task 278, D9: at 50, regimes lasting 50 rows were never found).
-        // Under a span the buffer holds the span's rows, at least `k`.
         warm_rows: warm_rows.unwrap_or_else(|| {
             if warm_span.is_some() {
                 *k
@@ -1219,6 +1353,7 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
         tvtp,
         prior_rows: *prior_rows,
         warm_clock: warm_span.as_ref().map(Span::value),
+        extras,
     })
 }
 

@@ -221,6 +221,8 @@ use serde::{Deserialize, Serialize};
 use crate::clock_span::{Place, start_due};
 use crate::solve::{FactorWork, QuadWork, SpdFactor};
 
+mod extras;
+mod hazard;
 mod held;
 #[cfg(test)]
 mod mutant_tests;
@@ -230,9 +232,14 @@ mod product_tests;
 mod review_tests;
 mod span;
 #[cfg(test)]
+mod tests_523;
+#[cfg(test)]
 mod tests_cache;
 #[cfg(test)]
 mod tests_span;
+pub use extras::BocpdCfgExtras;
+use hazard::NbHazardTable;
+pub use hazard::neg_binomial_hazard;
 use held::{GaussWork, HeldBranches, HeldPrior, HeldZ, LengthTerms, prune_band, prune_keeps};
 
 /// **Why the reported changepoint probability is `P(r ≤ 1)` and not
@@ -278,9 +285,12 @@ pub enum BocpdEmission {
     /// free of the data's units, as `diag` and `gaussian` are: centre and
     /// scale its inputs.
     Robust,
+    /// Per-feature normal-normal conjugate pair with known observation
+    /// variance (`obs_var`); the predictive is exact Gaussian.
+    KnownVariance,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct BocpdCfg {
     pub n_features: usize,
     /// Expected rows between changepoints, `H = 1/hazard` the chance of a
@@ -353,6 +363,9 @@ pub struct BocpdCfg {
     /// Last, and written only when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warm_clock: Option<f64>,
+    /// Optional extensions (`nb_hazard`, `obs_var`, `max_state_bytes`).
+    #[serde(default)]
+    pub extras: Option<Box<BocpdCfgExtras>>,
 }
 
 /// The most rows the warm-up buffers, MiB: `kmeans`' budget for its own.
@@ -362,7 +375,7 @@ impl BocpdCfg {
     pub fn nu0(&self) -> f64 {
         self.prior_nu.unwrap_or(match self.emission {
             BocpdEmission::Gaussian => self.n_features as f64 + 2.0,
-            BocpdEmission::Diag | BocpdEmission::Robust => 3.0,
+            BocpdEmission::Diag | BocpdEmission::Robust | BocpdEmission::KnownVariance => 3.0,
         })
     }
 
@@ -392,6 +405,11 @@ impl BocpdCfg {
         m.resize(d * d, 0.0);
         match &self.prior_scale {
             Some(v) if v.len() == d * d => m.copy_from_slice(v),
+            Some(v) if v.len() == d => {
+                for i in 0..d {
+                    m[i * d + i] = v[i];
+                }
+            }
             Some(v) if v.len() == 1 => {
                 for i in 0..d {
                     m[i * d + i] = v[0];
@@ -422,7 +440,9 @@ impl BocpdCfg {
         }
         // Every check below sizes a prior by `d`.
         no.stop_here()?;
-        if self.hazard_on_clock {
+        if self.nb_hazard().is_some() {
+            // Checked in `validate_extras` (refused beside clock/row hazards).
+        } else if self.hazard_on_clock {
             // Any positive time is a rate of breaks; only a step of 0 has no
             // chance of one, and that is the step's business, not `τ`'s.
             if !(self.hazard > 0.0 && self.hazard.is_finite()) {
@@ -454,28 +474,26 @@ impl BocpdCfg {
                 self.prior_kappa
             ));
         }
-        let nu = self.nu0();
-        // The normal-inverse-Wishart predictive is a `t` on `ν − d + 1`
-        // degrees of freedom, with a variance from `ν > d + 1`; the
-        // per-feature normal-inverse-gamma predictive is a `t` on `ν`, with
-        // a mean from `ν > 1` and a variance only from `ν > 2`, so its floor
-        // buys the mean (task 159, D2: the message said variance for both).
-        let (floor, what, kind) = if self.emission == BocpdEmission::Gaussian {
-            (d as f64 + 1.0, "variance", "full")
-        } else {
-            (1.0, "mean", "diag")
-        };
-        if !(nu > floor && nu.is_finite()) {
-            no.refuse(format!(
-                "bocpd: degrees_of_freedom_prior must be finite and above {floor} under \
-                 covariance_type=\"{kind}\", but it is {nu}: at or below it the predicted \
-                 distribution has no finite {what}. Set degrees_of_freedom_prior above {floor}, \
-                 or leave it out for {}.",
-                if kind == "full" { d as f64 + 2.0 } else { 3.0 }
-            ));
+        if self.emission != BocpdEmission::KnownVariance {
+            let nu = self.nu0();
+            let (floor, what, kind) = if self.emission == BocpdEmission::Gaussian {
+                (d as f64 + 1.0, "variance", "full")
+            } else {
+                (1.0, "mean", "diag")
+            };
+            if !(nu > floor && nu.is_finite()) {
+                no.refuse(format!(
+                    "bocpd: degrees_of_freedom_prior must be finite and above {floor} under \
+                     covariance_type=\"{kind}\", but it is {nu}: at or below it the predicted \
+                     distribution has no finite {what}. Set degrees_of_freedom_prior above {floor}, \
+                     or leave it out for {}.",
+                    if kind == "full" { d as f64 + 2.0 } else { 3.0 }
+                ));
+            }
         }
         if let Some(v) = &self.prior_scale {
-            if v.len() != 1 && v.len() != d * d {
+            let allow_vec = self.emission == BocpdEmission::KnownVariance && v.len() == d;
+            if v.len() != 1 && v.len() != d * d && !allow_vec {
                 no.refuse(format!(
                     "bocpd: covariance_prior must be one number or a {d} by {d} matrix, but it \
                      has {} values. Give one number, or {} values in row order.",
@@ -487,16 +505,12 @@ impl BocpdCfg {
                     "bocpd: covariance_prior must be finite, but it holds {x}. Replace it with a \
                      finite value."
                 ));
-            } else if v.len() == 1 && v[0] <= 0.0 {
-                // A scale matrix that is not positive definite gives a
-                // predictive with no density: every row would report nulls
-                // and count as a failure, with nothing to say why
-                // (docs/REVIEW-E54-E64.md B2).
+            } else if (v.len() == 1 || allow_vec) && v.iter().any(|&x| x <= 0.0) {
+                let bad = v.iter().copied().find(|&x| x <= 0.0).unwrap_or(0.0);
                 no.refuse(format!(
                     "bocpd: covariance_prior, as one number, is the prior variance of each \
-                     feature and must be above 0, but it is {}. Set covariance_prior to a \
-                     positive value.",
-                    v[0]
+                     feature and must be above 0, but it is {bad}. Set covariance_prior to a \
+                     positive value."
                 ));
             } else if v.len() == d * d {
                 let asymmetric = (0..d)
@@ -600,6 +614,7 @@ impl BocpdCfg {
             ));
         }
         self.check_warm_clock(&mut no);
+        self.validate_extras(&mut no);
         if let Some(n) = self.warm_rows {
             if !self.warms_up() {
                 no.refuse(
@@ -792,26 +807,46 @@ struct Run {
     mean_lo: Vec<f64>,
 }
 
+fn m2_len(d: usize, emission: BocpdEmission) -> usize {
+    match emission {
+        BocpdEmission::Gaussian => d * d,
+        BocpdEmission::Diag | BocpdEmission::Robust => d,
+        BocpdEmission::KnownVariance => 0,
+    }
+}
+
 impl Run {
+    #[cfg(test)]
     fn new(d: usize, full: bool) -> Self {
+        Self::new_for(
+            d,
+            if full {
+                BocpdEmission::Gaussian
+            } else {
+                BocpdEmission::Diag
+            },
+        )
+    }
+
+    fn new_for(d: usize, emission: BocpdEmission) -> Self {
         Self {
             len: 0.0,
             n: 0.0,
             mean: vec![0.0; d],
-            m2: vec![0.0; if full { d * d } else { d }],
+            m2: vec![0.0; m2_len(d, emission)],
             mean_lo: vec![0.0; d],
         }
     }
 
-    /// The run [`Self::new`] makes, in this run's buffers: a run dropped
+    /// The run [`Self::new_for`] makes, in this run's buffers: a run dropped
     /// from the front of the posterior, kept to be the next row's empty run
     /// (task 292).
-    fn reset(&mut self, d: usize, full: bool) {
+    fn reset_for(&mut self, d: usize, emission: BocpdEmission) {
         self.len = 0.0;
         self.n = 0.0;
         for (v, len) in [
             (&mut self.mean, d),
-            (&mut self.m2, if full { d * d } else { d }),
+            (&mut self.m2, m2_len(d, emission)),
             (&mut self.mean_lo, d),
         ] {
             v.clear();
@@ -849,7 +884,7 @@ impl Run {
                     }
                 }
             }
-        } else {
+        } else if !self.m2.is_empty() {
             for (i, s) in self.m2.iter_mut().enumerate() {
                 let di = dev(i);
                 *s += c * di * di;
@@ -1064,14 +1099,25 @@ fn posterior_given(joint: &[f64], z: f64, out: &mut Vec<f64>) {
     out.extend(joint.iter().map(|l| (l - z).exp()));
 }
 
+/// Hazard branches passed to [`grow_into`]: either constant across runs or
+/// indexed by each run's length (`r = runs[i].len`).
+#[derive(Clone, Copy)]
+enum NextHazard {
+    Fixed(Branches),
+    NbTable,
+}
+
 /// The new log joint of Algorithm 1 into `new` -- growth into `r+1`,
 /// changepoint into 0 -- each run taking the row's log predictive `logpi`
 /// at its weight in `weights`; `cp` holds the changepoint terms.
+#[allow(clippy::too_many_arguments)]
 fn grow_into(
     joint: &[f64],
+    runs: &[Run],
     logpi: &[f64],
     weights: &[f64],
-    next: Branches,
+    next: NextHazard,
+    nb_table: &NbHazardTable,
     new: &mut Vec<f64>,
     cp: &mut Vec<f64>,
 ) {
@@ -1086,8 +1132,12 @@ fn grow_into(
         // it is.
         let t = weights[i] * logpi[i];
         let base = joint[i] + if weights[i] == 0.0 { 0.0 } else { t };
-        new[i + 1] = base + next.ln_grow;
-        cp.push(base + next.ln_break);
+        let b = match next {
+            NextHazard::Fixed(b) => b,
+            NextHazard::NbTable => nb_table.at(runs[i].len as usize),
+        };
+        new[i + 1] = base + b.ln_grow;
+        cp.push(base + b.ln_break);
     }
     new[0] = log_sum_exp(cp);
 }
@@ -1289,6 +1339,9 @@ pub struct Bocpd {
     /// row's `log_sum_exp` read it (task 419). Not state.
     #[serde(skip)]
     joint_z: HeldZ,
+    /// Derived negative-binomial hazard table, rebuilt on `new` and `restore`.
+    #[serde(skip)]
+    nb_table: NbHazardTable,
     /// A warm-up over a span (`bocpd/span.rs`), each written only when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     place: Option<Place>,
@@ -1317,10 +1370,10 @@ fn gamma_diff(nu: f64, a: f64) -> f64 {
 impl Bocpd {
     pub fn new(cfg: BocpdCfg) -> Result<Self, String> {
         cfg.validate()?;
-        let full = cfg.emission == BocpdEmission::Gaussian;
         let d = cfg.n_features;
+        let nb_table = Self::build_nb_table(&cfg, 64);
         Ok(Self {
-            runs: vec![Run::new(d, full)],
+            runs: vec![Run::new_for(d, cfg.emission)],
             logjoint: vec![0.0],
             n_eff: 0.0,
             solve_failures: 0,
@@ -1328,6 +1381,7 @@ impl Bocpd {
             branches: HeldBranches::default(),
             work: Work::default(),
             joint_z: HeldZ::default(),
+            nb_table,
             w_mean: 0.0,
             w_rows: 0.0,
             data_prior: None,
@@ -1433,7 +1487,7 @@ impl Bocpd {
             Some((d, now)) => start_due(&mut self.warm_first, now, d, self.warm.len(), 2),
             None => self.warm.len() >= self.cfg.warm_rows_or_default(),
         };
-        if span.is_some() {
+        if span.is_some() && !due {
             let (bytes, cap) = (self.warm_bytes(self.warm.len()), self.warm_cap());
             self.held_cap().note(bytes, cap);
         }
@@ -1503,18 +1557,20 @@ impl Bocpd {
     #[cfg(test)]
     fn run_mean_of(&self, run: &Run) -> Vec<f64> {
         let mu0 = self.mu0();
+        let psi0 = self.psi0();
         (0..mu0.len())
-            .map(|i| self.run_mean_at(run, &mu0, i))
+            .map(|i| self.run_mean_at(run, &mu0, &psi0, i))
             .collect()
     }
 
-    /// Coordinate `i` of one run's posterior mean, `(κ₀μ₀ + n·x̄)/κₙ`,
-    /// written from the prior's side, `μ₀ + (n/κₙ)(x̄ − μ₀)`, so a run with
-    /// no rows is the prior's mean to the bit; against the prior's mean
-    /// `mu0` the caller read once, without a vector per run per row (task
-    /// 250).
+    /// Coordinate `i` of one run's posterior mean, against the prior's mean
+    /// `mu0` and scale `psi0` the caller read once, without a vector per run
+    /// per row (task 250).
     #[inline]
-    fn run_mean_at(&self, run: &Run, mu0: &[f64], i: usize) -> f64 {
+    fn run_mean_at(&self, run: &Run, mu0: &[f64], psi0: &[f64], i: usize) -> f64 {
+        if self.known_var() {
+            return self.known_var_mean_at(run, mu0, psi0, i);
+        }
         let kn = self.cfg.prior_kappa + run.n;
         mu0[i] + run.n / kn * (run.mean[i] - mu0[i])
     }
@@ -1547,7 +1603,7 @@ impl Bocpd {
             factor,
         } = work;
         mun.clear();
-        mun.extend((0..d).map(|i| self.run_mean_at(run, mu0, i)));
+        mun.extend((0..d).map(|i| self.run_mean_at(run, mu0, psi0, i)));
         // `Ψₙ = Ψ₀ + S + (κ₀n/κₙ)(x̄ − μ₀)(x̄ − μ₀)'`, every term centred.
         // Its lower triangle alone, scaled to `Σ`: the factor reads
         // nothing else, and nothing else reads `Σ` (task 287). The
@@ -1642,6 +1698,9 @@ impl Bocpd {
         cache: Option<&mut LengthTerms>,
         work: &mut RunWork,
     ) -> Option<(f64, f64)> {
+        if self.known_var() {
+            return self.log_predictive_known_var(run, x, mu0, psi0);
+        }
         let d = self.cfg.n_features;
         let (k0, nu0) = (self.cfg.prior_kappa, self.cfg.nu0());
         let kn = k0 + run.n;
@@ -1663,7 +1722,7 @@ impl Bocpd {
                 };
                 let dm = run.mean[0] - mu0[0];
                 let (_, var) = scatter(psi0[0] + run.m2[0], k0, run.n, kn, nun, dm)?;
-                let z = (x[0] - self.run_mean_at(run, mu0, 0)) / var.sqrt();
+                let z = (x[0] - self.run_mean_at(run, mu0, psi0, 0)) / var.sqrt();
                 // `ln(νπ var)`, as one log where the product is a number.
                 let spread = nun * std::f64::consts::PI * var;
                 let ln_spread = if spread.is_finite() {
@@ -1700,7 +1759,7 @@ impl Bocpd {
             for i in 0..d {
                 let dm = run.mean[i] - mu0[i];
                 let (psin, var) = scatter(psi0[i * d + i] + run.m2[i], k0, run.n, kn, nun, dm)?;
-                let z = (x[i] - self.run_mean_at(run, mu0, i)) / var.sqrt();
+                let z = (x[i] - self.run_mean_at(run, mu0, psi0, i)) / var.sqrt();
                 low = low.min(psin);
                 psins.push(psin);
                 qs.push(1.0 + z * z / nun);
@@ -1738,7 +1797,11 @@ impl Bocpd {
     /// its chance of a break applied, and no chance after it, since no time
     /// has passed since the row (the module docs). `(None, None)` for a step
     /// the clock cannot read, which refuses the row.
-    fn before_row(&self, y: &[Option<f64>], d_clock: f64) -> (Option<Vec<f64>>, Option<Branches>) {
+    fn before_row(
+        &self,
+        y: &[Option<f64>],
+        d_clock: f64,
+    ) -> (Option<Vec<f64>>, Option<NextHazard>) {
         self.before_row_held(y, d_clock, &mut HeldBranches::default())
     }
 
@@ -1750,7 +1813,10 @@ impl Bocpd {
         y: &[Option<f64>],
         d_clock: f64,
         held: &mut HeldBranches,
-    ) -> (Option<Vec<f64>>, Option<Branches>) {
+    ) -> (Option<Vec<f64>>, Option<NextHazard>) {
+        if self.cfg.nb_hazard().is_some() {
+            return (None, Some(NextHazard::NbTable));
+        }
         let on_clock = self.cfg.hazard_on_clock;
         let from = if on_clock { d_clock } else { self.hazard_of(y) };
         let branches = match held.0 {
@@ -1769,8 +1835,11 @@ impl Bocpd {
         };
         match branches {
             None => (None, None),
-            Some(step) if on_clock => (Some(self.transition(step)), Some(Branches::NONE)),
-            Some(step) => (None, Some(step)),
+            Some(step) if on_clock => (
+                Some(self.transition(step)),
+                Some(NextHazard::Fixed(Branches::NONE)),
+            ),
+            Some(step) => (None, Some(NextHazard::Fixed(step))),
         }
     }
 
@@ -1796,7 +1865,7 @@ impl Bocpd {
         &self,
         x: &[f64],
         joint: &[f64],
-        next: Option<Branches>,
+        next: Option<NextHazard>,
         rel: f64,
         cache: Option<&mut LengthTerms>,
     ) -> (Vec<f64>, Option<Update>) {
@@ -1818,7 +1887,7 @@ impl Bocpd {
         x: &[f64],
         joint: &[f64],
         joint_z: Option<f64>,
-        next: Option<Branches>,
+        next: Option<NextHazard>,
         rel: f64,
         mut cache: Option<&mut LengthTerms>,
         work: &mut Work,
@@ -1850,7 +1919,9 @@ impl Bocpd {
         } = work;
         logpi.clear();
         weights.clear();
-        if let Some(c) = cache.as_deref_mut() {
+        if let Some(c) = cache.as_deref_mut()
+            && !self.known_var()
+        {
             let full = self.full();
             c.begin(r, if full { d as f64 } else { 1.0 }, full || d >= 2);
         }
@@ -1902,12 +1973,12 @@ impl Bocpd {
         // (docs/PLAN.md task 215, D3). The anchor is `run_mean_of` the most
         // probable run, against the prior's mean read once above.
         anchor.clear();
-        anchor.extend((0..mu0.len()).map(|i| self.run_mean_at(&self.runs[mode_at], mu0, i)));
+        anchor.extend((0..mu0.len()).map(|i| self.run_mean_at(&self.runs[mode_at], mu0, psi0, i)));
         mixed.clear();
         mixed.resize(d, 0.0);
         for (i, run) in self.runs.iter().enumerate() {
             for (f, (o, a)) in mixed.iter_mut().zip(anchor.iter()).enumerate() {
-                *o += pre[i] * (self.run_mean_at(run, mu0, f) - a);
+                *o += pre[i] * (self.run_mean_at(run, mu0, psi0, f) - a);
             }
         }
         // `ln Σ p̃ᵣ πᵣ`, the row's log predictive density.
@@ -1932,7 +2003,16 @@ impl Bocpd {
         // which is what `predict`, never told a weight, can say (the model
         // contract); what it teaches is at its own weight against that mean,
         // `rel` (task 147), in the runs and in the recursion alike.
-        grow_into(joint, logpi, weights, next, new, cp);
+        grow_into(
+            joint,
+            &self.runs,
+            logpi,
+            weights,
+            next,
+            &self.nb_table,
+            new,
+            cp,
+        );
         let z = log_sum_exp(new);
         if !z.is_finite() {
             nan(out);
@@ -1961,7 +2041,16 @@ impl Bocpd {
             for w in weights.iter_mut() {
                 *w *= rel;
             }
-            grow_into(joint, logpi, weights, next, new, cp);
+            grow_into(
+                joint,
+                &self.runs,
+                logpi,
+                weights,
+                next,
+                &self.nb_table,
+                new,
+                cp,
+            );
             // The joint the row teaches must be a number, as the one it
             // reports is (review 2026-11-23, BOCPD-1): a share `rel` past
             // 1 can take every run to `−∞`. It is the `z` `prune` reads.
@@ -2136,10 +2225,14 @@ impl crate::OnlineModel for Bocpd {
             }
             return;
         }
-        // The row's place, for a warm-up over a span of the clock.
-        self.row_stamp = self.place.as_mut().map(|p| p.step(d_clock));
+        // The row's place, for a warm-up over a span of the clock; only read
+        // while warming so post-warm-up cap breaches stay atomic.
         if self.warming() {
+            self.row_stamp = self.place.as_mut().map(|p| p.step(d_clock));
             return self.hold(x, y, d_clock, weight, out);
+        }
+        if let Some(p) = self.place.as_mut() {
+            p.discard_next();
         }
         self.learn(x, y, d_clock, weight, out);
     }
@@ -2152,11 +2245,21 @@ impl crate::OnlineModel for Bocpd {
     }
 
     fn take_state_warning(&mut self) -> Option<(u64, u64)> {
-        self.warning.take().map(|b| (b, self.warm_cap()))
+        let cap = if self.warming() {
+            self.warm_cap()
+        } else {
+            self.run_cap()
+        };
+        self.warning.take().map(|b| (b, cap))
     }
 
     fn state_over_cap(&self) -> Option<(u64, u64)> {
-        self.over.map(|b| (b, self.warm_cap()))
+        let cap = if self.warming() {
+            self.warm_cap()
+        } else {
+            self.run_cap()
+        };
+        self.over.map(|b| (b, cap))
     }
 
     /// Never told the row's hazard column, so a per-row hazard read from
@@ -2197,18 +2300,14 @@ impl crate::OnlineModel for Bocpd {
         crate::check_schema(s)?;
         match &s.model {
             crate::ModelState::Bocpd(m) => {
-                let m = (**m).clone();
+                let mut m = (**m).clone();
                 crate::model::check_cfg("bocpd", m.cfg.validate())?;
                 // One log-joint per run, at least one run, and every run's
                 // moments at the emission's width (review 2026-09-18, B3);
                 // the warm-up's rows and the prior they set at the cfg's
                 // width, and rows held only while no prior is set.
                 let d = m.cfg.n_features;
-                let m2 = if m.cfg.emission == BocpdEmission::Gaussian {
-                    d * d
-                } else {
-                    d
-                };
+                let m2 = m2_len(d, m.cfg.emission);
                 let prior_ok = m
                     .data_prior
                     .as_ref()
@@ -2230,6 +2329,13 @@ impl crate::OnlineModel for Bocpd {
                     ));
                 }
                 m.check_loaded()?;
+                let init_len = m
+                    .runs
+                    .iter()
+                    .map(|r| r.len as usize + 1)
+                    .max()
+                    .unwrap_or(64);
+                m.nb_table = Self::build_nb_table(&m.cfg, init_len);
                 Ok(m)
             }
             other => Err(crate::StateError::WrongModel {
@@ -2264,6 +2370,13 @@ impl Bocpd {
         weight: f64,
         out: &mut crate::Step,
     ) {
+        if self.over.is_some() {
+            return;
+        }
+        if self.cfg.nb_hazard().is_some() {
+            let max_r = self.runs.last().map_or(0, |r| r.len as usize);
+            self.nb_table.ensure_len(max_r);
+        }
         // A row of no weight is scored as a row of the mean weight would be.
         let (rel, w_mean, w_rows) = if weight > 0.0 {
             self.relative(weight)
@@ -2300,74 +2413,53 @@ impl Bocpd {
         out.n_eff = self.n_eff;
         out.extra = None;
         if weight <= 0.0 {
-            // Advance the clock and learn nothing: no run sees the row, and
-            // nothing here decays, so `n_eff` -- the accumulated weight --
-            // does not move. Under a per-row hazard the posterior does not
-            // move either; on the clock the clock's advance is the step's
-            // chance of a break, which applies all the same (hard rule 9).
             match moved {
                 Some(moved) => self.logjoint = moved,
-                // The joint is as it was, and so is what was known of it.
                 None => self.joint_z.0 = joint_z,
             }
             self.work = work;
             return;
         }
         let Some(z) = extra else {
-            // The predictive could not be evaluated: the row reports nulls
-            // and no run sees it. A usable row that fails -- a run's
-            // covariance no factorization takes, a usable hazard at or below
-            // 1 -- is counted as a failure, so a run of them is visible in
-            // `diagnostics` rather than silent (B1). The time still passed:
-            // on the clock its chance of a break applies, as on a row of no
-            // weight -- which is all the row is: `n_eff` and the weight
-            // mean, which are those of the rows learned from, do not move.
-            // They moved before this refusal, so `n_eff` counted rows no
-            // run saw and the next rows' `w/w̄` read a mean holding one;
-            // `hmm` ages a failed row as a row of no weight too (review
-            // round 4, CE10).
             self.solve_failures += 1;
             match moved {
                 Some(moved) => self.logjoint = moved,
-                // The joint is as it was, and so is what was known of it.
                 None => self.joint_z.0 = joint_z,
             }
             self.work = work;
             return;
         };
+        // Runtime live-run cap (atomic: checked before mutating state).
+        let after_runs =
+            self.count_runs_after(&work.new, z.unwrap_or_else(|| log_sum_exp(&work.new)));
+        let after_bytes = self.run_bytes(after_runs);
+        let cap = self.run_cap();
+        if !self.held_cap().admit(after_bytes, cap) {
+            self.joint_z.0 = joint_z;
+            self.work = work;
+            return;
+        }
         self.n_eff += weight;
         (self.w_mean, self.w_rows) = (w_mean, w_rows);
         let full = self.full();
-        // Algorithm 1's line 6, and the indexing is the whole of it:
-        // `ν⁽ʳ⁺¹⁾_{t+1} = ν⁽ʳ⁾_t + u(xₜ)` and `ν⁽⁰⁾_{t+1} = ν_prior`. Slot
-        // `j` holds exactly the `j` rows that the hypothesis `rₜ = j` says
-        // precede the next row in its run -- so the new slot at the front
-        // holds **nothing**, and its predictive is the prior's. (Letting it
-        // take this row too, which is the easy mistake, puts one row of the
-        // old regime inside every "brand new run" and moves the estimated
-        // start of every run back by one.)
-        // Each run takes the row where it stands, and the empty run goes in
-        // front: the same steps on the same statistics as on a copy of each
-        // run, without the copies (task 250).
-        // The empty run is one `prune` dropped, where it kept one: the run
-        // `Run::new` makes, in its buffers (task 292).
         let d = self.cfg.n_features;
+        let emission = self.cfg.emission;
         let empty = match work.spare.pop() {
             Some(mut run) => {
-                run.reset(d, full);
+                run.reset_for(d, emission);
                 run
             }
-            None => Run::new(d, full),
+            None => Run::new_for(d, emission),
         };
         self.runs.insert(0, empty);
         for (run, &w) in self.runs[1..].iter_mut().zip(&work.weights) {
             run.add(x, w, full);
         }
-        // The new joint takes the old one's place, and the old one's buffer
-        // is the next row's to write.
         std::mem::swap(&mut self.logjoint, &mut work.new);
         self.work = work;
         self.prune(z);
+        let bytes = self.run_bytes(self.runs.len());
+        self.held_cap().note(bytes, cap);
     }
 }
 
@@ -2625,6 +2717,7 @@ mod tests {
             warm_rows: None,
             hazard_on_clock: false,
             warm_clock: None,
+            extras: None,
         }
     }
 

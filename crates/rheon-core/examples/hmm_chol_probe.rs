@@ -18,7 +18,7 @@
 use faer::dyn_stack::{MemBuffer, MemStack};
 use faer::linalg::cholesky::llt;
 use faer::prelude::*;
-use rheon_core::{Covariance, Decay, Hmm, HmmCfg, OnlineModel, SeedRule, SpdFactor};
+use rheon_core::{Decay, Hmm, HmmCfg, OnlineModel, SeedRule, SpdFactor};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -76,7 +76,7 @@ fn hmm_case(reps: usize) {
         n_features: d,
         k: 2,
         decay: Decay::Halflife(1000.0),
-        covariance: Covariance::Full,
+        covariance: rheon_core::HmmCovariance::Full,
         precision_prior: 1.0,
         min_weight: 0.0,
         learn: true,
@@ -90,6 +90,7 @@ fn hmm_case(reps: usize) {
         tvtp: None,
         prior_rows: None,
         warm_clock: None,
+        extras: None,
     };
     let (t, h) = best(reps, || {
         let mut m = Hmm::new(cfg.clone()).unwrap();

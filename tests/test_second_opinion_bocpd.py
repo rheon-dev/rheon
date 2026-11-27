@@ -594,3 +594,329 @@ def test_the_robust_emission_is_its_definition(beta, seed):
     print(f"p_change at the outlier: plain {plain:.3f}, robust {out['p_change'][outlier]:.3g}")
     assert plain > 0.5 > out["p_change"][outlier]
     assert max(errors.values()) <= ROBUST_TOL, errors
+
+
+# --- negative-binomial hazard + known-variance emission vs exact 2^T + scipy -
+
+
+def _nb_kv_stream(seed: int, n: int = 10, d: int = 1) -> np.ndarray:
+    """Short stream with a mid-stream level shift for exact 2^(T-1) all-paths
+    enumeration."""
+    rng = np.random.default_rng(7000 + seed * 17 + d)
+    x = rng.normal(0.0, 1.0, (n, d))
+    x[n // 2 :, 0] += 3.0
+    if d > 1:
+        x[n // 2 :, 1] -= 2.0
+    return x
+
+
+def _nb_kv_model(
+    x: np.ndarray,
+    *,
+    k: int,
+    p: float,
+    obs_var: float | list[float],
+    mu0: list[float],
+    tau0_sq: list[float],
+) -> pl.DataFrame:
+    d = x.shape[1]
+    features = [f"x{i}" for i in range(d)]
+    s = rp.spec.bocpd(
+        "b",
+        features=features,
+        hazard_kind="neg_binomial",
+        hazard_k=k,
+        hazard_p=p,
+        obs_var=obs_var,
+        mean_prior=mu0,
+        covariance_prior=tau0_sq,
+        prune_below=0.0,
+        max_run=100,
+        min_weight=0.0,
+    )
+    frame = pl.DataFrame({f: x[:, i] for i, f in enumerate(features)})
+    return rp.ModelBank([s]).fit_predict(frame).unnest("b")
+
+
+def _nb_kv_exact_enumeration(
+    x: np.ndarray,
+    *,
+    k: int,
+    p: float,
+    obs_var: np.ndarray,
+    mu0: np.ndarray,
+    tau0_sq: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Exact 2^(T-1) all-paths enumeration using ``scipy.stats.nbinom`` and
+    ``scipy.stats.norm`` — shares zero recursion with the Rust implementation.
+
+    For each row ``t`` (0-indexed, ``m = t + 1`` observations), enumerates all
+    ``2^t`` binary changepoint indicators after rows ``0..t-1`` (plus the break
+    indicator after row ``t`` for ``p_change = P(r_{t+1} <= 1 | x_{0..t})``).
+    Closed-form segment log-marginal under ``mu ~ N(mu0, tau0_sq)``,
+    ``x_i | mu ~ N(mu, obs_var)`` evaluated via ``scipy.stats.norm.logpdf`` on
+    the predictive decomposition or direct multivariate marginal."""
+    import itertools
+
+    from scipy.stats import nbinom, norm
+
+    t_len, d = x.shape
+
+    def log_nb_pmf(length: int) -> float:
+        """P(L = length) for L ~ NegBinomial(k, p) on {k, k+1, ...}."""
+        if length < k:
+            return -np.inf
+        return float(nbinom.logpmf(length - k, k, p))
+
+    def log_nb_surv(length: int) -> float:
+        """P(L >= length) = P(L > length - 1) for L ~ NegBinomial(k, p)."""
+        if length <= k:
+            return 0.0
+        # nbinom counts failures before k successes: L = k + failures.
+        # L >= length <=> failures >= length - k <=> failures > length - k - 1.
+        return float(nbinom.logsf(length - k - 1, k, p))
+
+    def log_nb_hazard(run_len: int) -> tuple[float, float]:
+        """(ln H(r), ln(1 - H(r))) where H(r) = P(L = r+1) / P(L >= r+1)."""
+        t_step = run_len + 1
+        if t_step < k:
+            return -np.inf, 0.0
+        lp = log_nb_pmf(t_step)
+        ls = log_nb_surv(t_step)
+        ln_h = lp - ls
+        h = float(np.exp(ln_h))
+        return ln_h, float(np.log1p(-h)) if h < 1.0 else -np.inf
+
+    def seg_log_marginal(seg: np.ndarray) -> float:
+        """Exact log marginal density of a segment under independent per-feature
+        Normal-Normal conjugate models, computed via scipy.stats.norm."""
+        m = len(seg)
+        if m == 0:
+            return 0.0
+        total = 0.0
+        for j in range(d):
+            v = obs_var[j]
+            t2 = tau0_sq[j]
+            # Sequential exact marginal using scipy.stats.norm.logpdf
+            s_sum = 0.0
+            for idx in range(m):
+                post_var = 1.0 / (1.0 / t2 + idx / v)
+                post_mu = post_var * (mu0[j] / t2 + s_sum / v)
+                total += float(norm.logpdf(seg[idx, j], loc=post_mu, scale=np.sqrt(v + post_var)))
+                s_sum += seg[idx, j]
+        return total
+
+    def seg_post_mean(seg: np.ndarray) -> np.ndarray:
+        m = len(seg)
+        if m == 0:
+            return mu0.copy()
+        post_var = 1.0 / (1.0 / tau0_sq + m / obs_var)
+        return post_var * (mu0 / tau0_sq + seg.sum(axis=0) / obs_var)
+
+    # Precompute hazard table from scipy.stats.nbinom
+    haz = [log_nb_hazard(r) for r in range(t_len + 2)]
+
+    p_change = np.zeros(t_len)
+    run_mean = np.zeros(t_len)
+    run_mode = np.zeros(t_len, dtype=np.int64)
+    loglik = np.zeros(t_len)
+    pred = np.zeros((t_len, d))
+
+    # Memoize segment log-marginals.
+    memo: dict[tuple[int, int], float] = {}
+
+    def seg_lm(a: int, b: int) -> float:
+        if a > b:
+            return 0.0
+        key = (a, b)
+        if key not in memo:
+            memo[key] = seg_log_marginal(x[a : b + 1])
+        return memo[key]
+
+    for t in range(t_len):
+        # Enumerate all 2^t break histories after rows 0 .. t-1.
+        # Prior on a break history: each completed segment of length L gives
+        # P(L = length) = prod_{r=0}^{L-2} (1 - H(r)) * H(L - 1); the open
+        # final segment of length r_t before row t gives P(L >= r_t + 1).
+        by_run_before: dict[int, list[float]] = {}
+        # Joint after row t and after hazard step following row t (for p_change):
+        post_after_r: dict[int, list[float]] = {}
+        all_with_t: list[float] = []
+        all_before_t: list[float] = []
+        for bits in itertools.product((0, 1), repeat=t):
+            # Completed segments from bits[0..t-1]
+            prior = 0.0
+            start = 0
+            seg_ll = 0.0
+            valid = True
+            for j, b in enumerate(bits):
+                if b == 1:
+                    length = j - start + 1
+                    lp = log_nb_pmf(length)
+                    if not np.isfinite(lp):
+                        valid = False
+                        break
+                    prior += lp
+                    seg_ll += seg_lm(start, j)
+                    start = j + 1
+            if not valid:
+                continue
+            r_before = t - start
+            ls_before = log_nb_surv(r_before + 1)
+            if not np.isfinite(ls_before):
+                continue
+            log_w_before = prior + ls_before + seg_ll + seg_lm(start, t - 1)
+            all_before_t.append(log_w_before)
+            by_run_before.setdefault(r_before, []).append(log_w_before)
+
+            # Include observation x[t] in the current segment [start..t].
+            log_w_with_t = prior + ls_before + seg_ll + seg_lm(start, t)
+            all_with_t.append(log_w_with_t)
+
+            # Transition after row t: break (r' = 0) or grow (r' = r_before + 1).
+            ln_h, ln_1mh = haz[r_before]
+            if np.isfinite(ln_h):
+                post_after_r.setdefault(0, []).append(log_w_with_t + ln_h)
+            if np.isfinite(ln_1mh):
+                post_after_r.setdefault(r_before + 1, []).append(log_w_with_t + ln_1mh)
+
+        log_z_before = float(logsumexp(all_before_t))
+        log_z_with_t = float(logsumexp(all_with_t))
+        loglik[t] = log_z_with_t - log_z_before
+
+        # Pre-row run posterior
+        r_keys = sorted(by_run_before)
+        r_logp = np.array([float(logsumexp(by_run_before[r])) - log_z_before for r in r_keys])
+        r_probs = np.exp(r_logp)
+        run_mean[t] = float(sum(r * prob for r, prob in zip(r_keys, r_probs, strict=True)))
+        top_lp = float(r_logp.max())
+        run_mode[t] = min(r for r, lp in zip(r_keys, r_logp, strict=True) if lp == top_lp)
+        # Predictive mean weighted by pre-row run posterior
+        pred_t = np.zeros(d)
+        for r, prob in zip(r_keys, r_probs, strict=True):
+            pred_t += prob * seg_post_mean(x[t - r : t])
+        pred[t] = pred_t
+
+        # Post-row p_change = P(r' <= 1 | x_{0..t})
+        post_terms = [float(logsumexp(v)) for v in post_after_r.values()]
+        log_z_post = float(logsumexp(post_terms))
+        small = []
+        for r_small in (0, 1):
+            if r_small in post_after_r:
+                small.extend(post_after_r[r_small])
+        p_change[t] = float(np.exp(logsumexp(small) - log_z_post)) if small else 0.0
+
+    return {
+        "p_change": p_change,
+        "run_mean": run_mean,
+        "run_mode": run_mode,
+        "loglik": loglik,
+        "pred": pred,
+    }
+
+
+NB_KV_CASES = [
+    (1, 0.1, 1, 0.8),
+    (3, 0.25, 1, 1.2),
+    (5, 0.4, 3, [0.5, 1.0, 2.0]),
+]
+
+
+def _nb_kv_errors(seed: int) -> dict[str, float]:
+    worst = {"p_change": 0.0, "run_mean": 0.0, "loglik": 0.0, "pred": 0.0, "mode_misses": 0.0}
+    for k, p, d, obs_var in NB_KV_CASES:
+        x = _nb_kv_stream(seed, n=10, d=d)
+        mu0 = [0.2 * i for i in range(d)]
+        tau0_sq = [1.0 + 0.5 * i for i in range(d)]
+        obs_arr = np.broadcast_to(np.asarray(obs_var, dtype=float), (d,)).copy()
+        out = _nb_kv_model(x, k=k, p=p, obs_var=obs_var, mu0=mu0, tau0_sq=tau0_sq)
+        want = _nb_kv_exact_enumeration(
+            x,
+            k=k,
+            p=p,
+            obs_var=obs_arr,
+            mu0=np.asarray(mu0, dtype=float),
+            tau0_sq=np.asarray(tau0_sq, dtype=float),
+        )
+        worst["p_change"] = max(
+            worst["p_change"], float(np.abs(out["p_change"].to_numpy() - want["p_change"]).max())
+        )
+        worst["run_mean"] = max(
+            worst["run_mean"],
+            float(
+                (
+                    np.abs(out["run_mean"].to_numpy() - want["run_mean"])
+                    / (1.0 + np.abs(want["run_mean"]))
+                ).max()
+            ),
+        )
+        worst["loglik"] = max(
+            worst["loglik"],
+            float(
+                (
+                    np.abs(out["loglik"].to_numpy() - want["loglik"])
+                    / (1.0 + np.abs(want["loglik"]))
+                ).max()
+            ),
+        )
+        preds = np.column_stack([out[f"pred_x{i}"].to_numpy() for i in range(d)])
+        worst["pred"] = max(
+            worst["pred"],
+            float((np.abs(preds - want["pred"]) / (1.0 + np.abs(want["pred"]))).max()),
+        )
+        worst["mode_misses"] += float((out["run_mode"].to_numpy() != want["run_mode"]).sum())
+    return worst
+
+
+ledger.guard(
+    "bocpd_nb_known_var",
+    lambda: [
+        _nb_kv_model(
+            _nb_kv_stream(s, n=10, d=d),
+            k=k,
+            p=p,
+            obs_var=obs_var,
+            mu0=[0.2 * i for i in range(d)],
+            tau0_sq=[1.0 + 0.5 * i for i in range(d)],
+        )
+        for s in range(10)
+        for k, p, d, obs_var in NB_KV_CASES
+    ],
+    oracles=["scipy"],
+    bits=52,
+)
+
+NB_KV_TOL = 1e-11
+
+
+class TestNbHazardAndKnownVarianceOracle:
+    """Negative-binomial run-length hazard (``k = 1, 3, 5``) combined with
+    known-variance normal emission (``d = 1, 3``) against exact ``2^(T-1)``
+    all-paths enumeration using ``scipy.stats.nbinom`` and ``scipy.stats.norm``."""
+
+    def test_one_seed(self):
+        e = _nb_kv_errors(0)
+        print({k: f"{v:.3g}" for k, v in e.items()})
+        assert e["mode_misses"] == 0.0
+        assert max(e[k] for k in ("p_change", "run_mean", "loglik", "pred")) <= NB_KV_TOL, e
+
+    @pytest.mark.oracle_grid(
+        reason=(
+            "50 seeds of exact 2^(T-1) enumeration for negative-binomial hazard and "
+            "known-variance emission against scipy"
+        )
+    )
+    def test_fifty_seeds(self):
+        rows = [_nb_kv_errors(s) for s in SEEDS]
+        for key in ("p_change", "run_mean", "loglik", "pred"):
+            vals = [r[key] for r in rows]
+            print(f"{key}: worst {max(vals):.3g}, p95 {np.quantile(vals, 0.95):.3g}")
+            ledger.record("bocpd_nb_known_var", f"{key}_error", vals, floor=1e-12)
+        ledger.record(
+            "bocpd_nb_known_var", "mode_misses", [r["mode_misses"] for r in rows], exact=True
+        )
+        assert all(r["mode_misses"] == 0.0 for r in rows)
+        assert (
+            max(max(r[k] for k in ("p_change", "run_mean", "loglik", "pred")) for r in rows)
+            <= NB_KV_TOL
+        )

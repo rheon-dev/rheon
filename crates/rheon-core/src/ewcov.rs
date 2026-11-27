@@ -1256,6 +1256,86 @@ impl EwCov {
         self.update_riding(x, lam, w, &mut NoRider);
     }
 
+    /// Update only the means (and weights); leave the centred co-moments and
+    /// precision prior scale bit-equal. Used by partial-learning `hmm`
+    /// (`params` containing `'m'` without `'c'`).
+    pub(crate) fn update_mean_only(&mut self, x: &[f64], lam: f64, w: f64) {
+        self.flush();
+        debug_assert_eq!(x.len(), self.k);
+        if w > 0.0 {
+            self.rows_learned += 1;
+            self.runs.track(x, self.rows_learned);
+        }
+        if w == 0.0 && lam * self.w_sum == 0.0 {
+            self.decay(lam);
+            return;
+        }
+        let Some((a, b, w_new)) = self.step_factors(lam, w) else {
+            return;
+        };
+        if b > 0.0 {
+            let d = &mut self.dev.0;
+            d.clear();
+            d.extend(
+                x.iter()
+                    .zip(&self.m)
+                    .zip(&self.m_lo)
+                    .map(|((&xi, &mi), &li)| crate::comp::dev(xi, mi, li)),
+            );
+            if a < crate::comp::FORGOTTEN {
+                crate::comp::from_rows(&mut self.m, &mut self.m_lo, d, x, a);
+            } else {
+                for ((mi, lo), &di) in self.m.iter_mut().zip(self.m_lo.iter_mut()).zip(d.iter()) {
+                    crate::comp::add(mi, lo, b * di);
+                }
+            }
+        }
+        self.w_sum = w_new;
+        let crate::sqsum::KishSum { q, s } = &mut self.q_sum;
+        if let Some(q) = q.as_mut() {
+            crate::sqsum::add(q, s, lam, w);
+        }
+        self.prior_scale *= lam;
+    }
+
+    /// Update only the centred co-moments about the frozen means; leave the
+    /// means bit-equal (`C' = a·C + b·δδᵀ`). Used by partial-learning `hmm`
+    /// (`params` containing `'c'` without `'m'`).
+    pub(crate) fn update_cov_only(&mut self, x: &[f64], lam: f64, w: f64) {
+        self.flush();
+        debug_assert_eq!(x.len(), self.k);
+        if w > 0.0 {
+            self.rows_learned += 1;
+            self.runs.track(x, self.rows_learned);
+        }
+        if w == 0.0 && lam * self.w_sum == 0.0 {
+            self.decay(lam);
+            return;
+        }
+        let Some((a, b, w_new)) = self.step_factors(lam, w) else {
+            return;
+        };
+        let k = self.k;
+        let d = &mut self.dev.0;
+        d.clear();
+        d.extend(
+            x.iter()
+                .zip(&self.m)
+                .zip(&self.m_lo)
+                .map(|((&xi, &mi), &li)| crate::comp::dev(xi, mi, li)),
+        );
+        let packed = self.c.packed_mut();
+        for i in 0..k {
+            let at = row_at(i);
+            let b_di = b * d[i];
+            for j in 0..=i {
+                packed[at + j] = a * packed[at + j] + b_di * d[j];
+            }
+        }
+        self.merged.forget();
+        self.commit_scalars(lam, w, a, w_new);
+    }
+
     /// [`Self::update`], with `rider` told of the row if the block holds it
     /// and handed any block merged on the way ([`Rider`]): the one merge
     /// a full block brings, or the held rows a decay that takes the whole

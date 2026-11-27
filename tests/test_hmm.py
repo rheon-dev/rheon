@@ -830,3 +830,430 @@ def test_a_group_shorter_than_warm_rows_reports_null_throughout():
     assert (s["withheld_reason"] == "below_warm_rows").all()
     lg = out.filter(pl.col("g") == "long")["filtered_state0"].is_not_null().to_numpy()
     assert not lg[:1000].any() and lg[1000:].all()
+
+
+def test_spherical_covariance_learns_and_is_chunk_invariant():
+    """Spherical covariance keeps one scalar variance per state, works with
+    ``prior_rows`` and given scalar ``covs``, and is chunk- and save-invariant."""
+    df = blobs(n=600, run=50, sep=4.5, seed=31, d=3)
+    s = rp.spec.hmm(
+        "h",
+        features=["x0", "x1", "x2"],
+        n_components=2,
+        covariance_type="spherical",
+        precision_prior=1e-2,
+        half_life=80.0,
+        warm_rows=30,
+        prior_rows=2.5,
+    )
+    whole = rp.ModelBank([s]).fit_predict(df)["h"].struct.unnest()
+    state = whole["state"].to_numpy()[30:]
+    truth = df["g"].to_numpy()[30:]
+    agree = (state == truth).mean()
+    assert max(agree, 1.0 - agree) > 0.95, agree
+
+    for size in (1, 7, 100):
+        bank = rp.ModelBank([s])
+        parts = [bank.fit_predict(df.slice(i, size)) for i in range(0, df.height, size)]
+        assert pl.concat(parts)["h"].struct.unnest().drop("coef").equals(whole.drop("coef")), size
+
+    bank = rp.ModelBank([s])
+    head = bank.fit_predict(df[:150])["h"].struct.unnest().drop("coef")
+    again = rp.ModelBank.load_bytes(bank.save_bytes(), [s])
+    tail = again.fit_predict(df[150:])["h"].struct.unnest().drop("coef")
+    assert pl.concat([head, tail]).equals(whole.drop("coef"))
+
+    # Given spherical covs take length k (one positive scalar per state).
+    given = rp.spec.hmm(
+        "h",
+        features=["x0", "x1", "x2"],
+        n_components=2,
+        covariance_type="spherical",
+        precision_prior=1e-2,
+        half_life=80.0,
+        means=[-2.0, -2.0, -2.0, 2.0, 2.0, 2.0],
+        covs=[0.5, 1.5],
+    )
+    g_out = rp.ModelBank([given]).fit_predict(df[:60])["h"].struct.unnest()
+    assert g_out["filtered_state0"].null_count() == 0
+
+    with pytest.raises(ValueError, match="covs"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1", "x2"],
+            n_components=2,
+            covariance_type="spherical",
+            precision_prior=1e-2,
+            half_life=80.0,
+            means=[-2.0, -2.0, -2.0, 2.0, 2.0, 2.0],
+            covs=[1.0] * 18,
+        )
+
+
+def test_partial_learning_params_freezes_omitted_components():
+    """``params`` restricts online updates to subsets of ``"tmc"``; omitted
+    components stay frozen and invalid combinations are refused."""
+    import json
+
+    df = blobs(n=200, run=30, sep=4.0, seed=32, d=2)
+    m0 = [-1.5, -1.5, 1.5, 1.5]
+    c0 = [1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0]
+    pi0 = [0.9, 0.1, 0.1, 0.9]
+    base = dict(
+        features=["x0", "x1"],
+        n_components=2,
+        precision_prior=1e-2,
+        half_life=50.0,
+        means=m0,
+        covs=c0,
+        transition=pi0,
+    )
+
+    # params="" matches learn=False to the bit.
+    no_learn = rp.ModelBank([rp.spec.hmm("h", learn=False, **base)]).fit_predict(df)
+    empty_p = rp.ModelBank([rp.spec.hmm("h", params="", **base)]).fit_predict(df)
+    assert empty_p.equals(no_learn)
+
+    def fit_state(params: str) -> tuple[pl.DataFrame, dict]:
+        bank = rp.ModelBank([rp.spec.hmm("h", params=params, **base)])
+        out = bank.fit_predict(df)["h"].struct.unnest()
+        st = json.loads(bank.write_json())["states"][0][0][1]["models"][0]["model"]["Hmm"]
+        return out, st
+
+    # Freezing means ("t", "c", "tc") keeps reported means equal to m0.
+    for p in ("t", "c", "tc"):
+        out, st = fit_state(p)
+        means = [v for s in st["states"] for v in s["m"]]
+        assert means == pytest.approx(m0, abs=1e-14), p
+        assert out["coef"][-1].to_list() == pytest.approx(m0, abs=1e-14), p
+    # Learning means ("m", "mc", "tm", "tmc") moves them away from m0.
+    for p in ("m", "mc", "tm", "tmc"):
+        _, st = fit_state(p)
+        means = [v for s in st["states"] for v in s["m"]]
+        assert np.max(np.abs(np.array(means) - np.array(m0))) > 0.1, p
+    # Freezing transitions ("m", "c", "mc") leaves counts untouched (zero).
+    for p in ("m", "c", "mc"):
+        _, st = fit_state(p)
+        assert all(v == 0.0 for v in st["a"]), p
+    # Learning transitions ("t", "tm", "tc", "tmc") accumulates counts.
+    for p in ("t", "tm", "tc", "tmc"):
+        _, st = fit_state(p)
+        assert sum(st["a"]) > 10.0, p
+
+    # Refusals: 's', duplicates, unknown letters, conflicting learn, 't' + tvtp.
+    with pytest.raises(ValueError, match="uniform"):
+        rp.spec.hmm("h", params="stmc", **base)
+    with pytest.raises(ValueError, match="duplicate"):
+        rp.spec.hmm("h", params="mm", **base)
+    with pytest.raises(ValueError, match="unknown"):
+        rp.spec.hmm("h", params="tz", **base)
+    with pytest.raises(ValueError, match="learn"):
+        rp.spec.hmm("h", learn=False, params="m", **base)
+    with pytest.raises(ValueError, match="learn"):
+        rp.spec.hmm("h", learn=True, params="", **base)
+    with pytest.raises(ValueError, match="tvtp"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=2,
+            precision_prior=1e-2,
+            half_life=50.0,
+            means=m0,
+            covs=c0,
+            exog_tvtp="x0",
+            tvtp_coef=[[0.0, 0.0], [0.0, 0.0]],
+            params="tmc",
+        )
+
+
+def test_conjugate_prior_weights_move_fit_and_refuse_conflicts():
+    """``means_weight``, ``covars_prior`` and ``covars_weight`` pull learned
+    moments toward given priors, remain chunk-invariant, and refuse conflicts."""
+    df = blobs(n=250, run=40, sep=4.0, seed=33, d=2)
+    m0 = [-1.0, -1.0, 1.0, 1.0]
+    c0 = [1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0]
+
+    def run_priors(cov_type: str, covs_arg: list[float], **kw):
+        s = rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=2,
+            covariance_type=cov_type,
+            precision_prior=1e-2,
+            half_life=float("inf"),
+            means=m0,
+            covs=covs_arg,
+            **kw,
+        )
+        bank = rp.ModelBank([s])
+        out = bank.fit_predict(df)["h"].struct.unnest()
+        return s, out
+
+    _, weak = run_priors("full", c0, means_weight=0.5, covars_prior=0.5, covars_weight=1.0)
+    s_strong, strong = run_priors(
+        "full", c0, means_weight=500.0, covars_prior=[0.5, 0.0, 0.0, 0.5], covars_weight=50.0
+    )
+    # Stronger means_weight stays closer to m0.
+    d_weak = np.max(np.abs(np.array(weak["coef"][-1].to_list()) - np.array(m0)))
+    d_strong = np.max(np.abs(np.array(strong["coef"][-1].to_list()) - np.array(m0)))
+    assert d_strong < d_weak * 0.5, (d_strong, d_weak)
+
+    # Chunk invariance and save/load for conjugate priors.
+    for size in (1, 7, 100):
+        bank = rp.ModelBank([s_strong])
+        parts = [bank.fit_predict(df.slice(i, size)) for i in range(0, df.height, size)]
+        assert pl.concat(parts)["h"].struct.unnest().drop("coef").equals(strong.drop("coef"))
+    bank = rp.ModelBank([s_strong])
+    head = bank.fit_predict(df[:100])["h"].struct.unnest().drop("coef")
+    again = rp.ModelBank.load_bytes(bank.save_bytes(), [s_strong])
+    tail = again.fit_predict(df[100:])["h"].struct.unnest().drop("coef")
+    assert pl.concat([head, tail]).equals(strong.drop("coef"))
+
+    # Works under diag, spherical, and tied.
+    for cov_type, c_arg in (("diag", c0), ("spherical", [1.0, 1.0]), ("tied", c0)):
+        _, out = run_priors(cov_type, c_arg, means_weight=2.0, covars_prior=0.5, covars_weight=3.0)
+        assert out["filtered_state0"].null_count() == 0
+
+    # Refusals: beside prior_rows, without given states, invalid values.
+    with pytest.raises(ValueError, match="prior_rows"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=2,
+            precision_prior=1e-2,
+            half_life=50.0,
+            means=m0,
+            covs=c0,
+            prior_rows=2.0,
+            covars_prior=0.5,
+        )
+    with pytest.raises(ValueError, match="prior_rows"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=2,
+            precision_prior=1e-2,
+            half_life=50.0,
+            means=m0,
+            covs=c0,
+            prior_rows=2.0,
+            covars_weight=2.0,
+        )
+    with pytest.raises(ValueError, match="means"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=2,
+            precision_prior=1e-2,
+            half_life=50.0,
+            means_weight=2.0,
+        )
+    with pytest.raises(ValueError, match="means_weight"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=2,
+            precision_prior=1e-2,
+            half_life=50.0,
+            means=m0,
+            covs=c0,
+            means_weight=-1.0,
+        )
+    with pytest.raises(ValueError, match="covars_prior"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=2,
+            precision_prior=1e-2,
+            half_life=50.0,
+            means=m0,
+            covs=c0,
+            covars_prior=-0.5,
+        )
+
+
+def test_fixed_lag_smoothing_emits_fields_and_respects_rules():
+    """``smooth_lag`` emits ``smoothed_state<j>`` and ``smoothed_for``, matches
+    ``hmmlearn`` at fixed parameters, respects zero-weight rows, ``predict``,
+    gates, clock resets, chunks, save/load, and refuses invalid combinations."""
+    from datetime import datetime, timedelta
+
+    from hmmlearn.hmm import GaussianHMM
+
+    df = blobs(n=80, run=15, sep=2.5, seed=34, d=2)
+    m0 = [-1.25, -1.25, 1.25, 1.25]
+    c0 = [1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0]
+    pi0 = np.array([[0.9, 0.1], [0.15, 0.85]])
+    lag = 4
+
+    s_fixed = rp.spec.hmm(
+        "h",
+        features=["x0", "x1"],
+        n_components=2,
+        precision_prior=1e-2,
+        half_life=1e9,
+        learn=False,
+        means=m0,
+        covs=c0,
+        transition=pi0.ravel().tolist(),
+        smooth_lag=lag,
+    )
+    idx = rp.spec.output_index(s_fixed)
+    assert set(["smoothed_state0", "smoothed_state1", "smoothed_for"]) <= set(idx["field"])
+    out = rp.ModelBank([s_fixed]).fit_predict(df)["h"].struct.unnest()
+
+    # Compare against hmmlearn.predict_proba(X[:t+1])[t-L] at every row t >= L
+    # (rheon applies one transition step from uniform [1/K] before row 0).
+    x = df.select("x0", "x1").to_numpy()
+    gh = GaussianHMM(n_components=2, covariance_type="full", init_params="")
+    gh.startprob_ = np.array([0.5, 0.5]) @ pi0
+    gh.transmat_ = pi0
+    gh.means_ = np.array(m0).reshape(2, 2)
+    gh.covars_ = np.array(c0).reshape(2, 2, 2) + 1e-2 * np.eye(2)[None, :, :]
+    assert out["smoothed_state0"][:lag].null_count() == lag
+    assert out["smoothed_for"][:lag].null_count() == lag
+    for t in range(lag, len(x)):
+        want = gh.predict_proba(x[: t + 1])[t - lag]
+        assert out["smoothed_for"][t] == t - lag
+        assert out["smoothed_state0"][t] == pytest.approx(want[0], abs=1e-12)
+        assert out["smoothed_state1"][t] == pytest.approx(want[1], abs=1e-12)
+
+    # Zero-weight rows leave ring untouched and emit null smoothed outputs.
+    w = np.ones(len(x))
+    w[[2, 5, 10, 25]] = 0.0
+    t_col = [datetime(2025, 1, 1) + timedelta(minutes=i) for i in range(len(x))]
+    df_w = df.with_columns(pl.Series("w", w), pl.Series("ts", t_col))
+    s_w = rp.spec.hmm(
+        "h",
+        features=["x0", "x1"],
+        n_components=2,
+        precision_prior=1e-2,
+        half_life="30m",
+        clock="ts",
+        gap_cap="1d",
+        weight="w",
+        means=m0,
+        covs=c0,
+        transition=pi0.ravel().tolist(),
+        smooth_lag=lag,
+    )
+    out_w = rp.ModelBank([s_w]).fit_predict(df_w)["h"].struct.unnest()
+    assert out_w["smoothed_for"].dtype == pl.Datetime("us")
+    # Zero-weight rows have null smoothed_state and smoothed_for.
+    for z in (2, 5, 10, 25):
+        assert out_w["smoothed_state0"][z] is None
+        assert out_w["smoothed_for"][z] is None
+    # Non-zero rows match stream without zero-weight rows to the bit!
+    df_nz = df_w.filter(pl.col("w") > 0)
+    out_nz = rp.ModelBank([s_w]).fit_predict(df_nz)["h"].struct.unnest()
+    kept_w = out_w.filter(pl.Series(w > 0))
+    assert kept_w.drop("coef").equals(out_nz.drop("coef"))
+
+    # predict() emits null smoothed fields.
+    bank = rp.ModelBank([s_w])
+    bank.fit_predict(df_w[:40])
+    pred = bank.predict(df_w[40:50])["h"].struct.unnest()
+    assert pred["smoothed_state0"].null_count() == 10
+    assert pred["smoothed_for"].null_count() == 10
+
+    # min_weight gates smoothed_state and smoothed_for together.
+    s_gate = rp.spec.hmm(
+        "h",
+        features=["x0", "x1"],
+        n_components=2,
+        precision_prior=1e-2,
+        half_life=50.0,
+        means=m0,
+        covs=c0,
+        smooth_lag=3,
+        min_weight=10.0,
+    )
+    out_gate = rp.ModelBank([s_gate]).fit_predict(df)["h"].struct.unnest()
+    assert (out_gate["smoothed_state0"].is_null() == out_gate["smoothed_for"].is_null()).all()
+    assert out_gate["smoothed_for"][:10].null_count() == 10
+    assert out_gate["smoothed_for"][15:].null_count() == 0
+
+    # Chunk invariance and save/load mid-stream (both before and after lag).
+    for size in (1, 7, 100):
+        b = rp.ModelBank([s_w])
+        parts = [b.fit_predict(df_w.slice(i, size)) for i in range(0, df_w.height, size)]
+        assert pl.concat(parts)["h"].struct.unnest().drop("coef").equals(out_w.drop("coef")), size
+    for at in (2, 20):
+        b = rp.ModelBank([s_w])
+        head = b.fit_predict(df_w[:at])["h"].struct.unnest().drop("coef")
+        again = rp.ModelBank.load_bytes(b.save_bytes(), [s_w])
+        tail = again.fit_predict(df_w[at:])["h"].struct.unnest().drop("coef")
+        assert pl.concat([head, tail]).equals(out_w.drop("coef")), at
+
+    # Session reset clears the ring.
+    df_sess = df.with_columns(pl.Series("s", [0] * 30 + [1] * 50))
+    s_sess = rp.spec.hmm(
+        "h",
+        features=["x0", "x1"],
+        n_components=2,
+        precision_prior=1e-2,
+        half_life=50.0,
+        means=m0,
+        covs=c0,
+        smooth_lag=lag,
+        session="s",
+        session_gap="reset",
+    )
+    out_sess = rp.ModelBank([s_sess]).fit_predict(df_sess)["h"].struct.unnest()
+    assert out_sess["smoothed_state0"][30 : 30 + lag].null_count() == lag
+    assert out_sess["smoothed_for"][30 + lag] == 30
+
+    # Refusals.
+    with pytest.raises(ValueError, match="smooth_lag"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=2,
+            precision_prior=1e-2,
+            half_life=50.0,
+            smooth_lag=0,
+        )
+    with pytest.raises(ValueError, match="embargo"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=2,
+            precision_prior=1e-2,
+            half_life=50.0,
+            clock="t",
+            gap_cap=10.0,
+            embargo=2.0,
+            smooth_lag=3,
+        )
+    with pytest.raises(ValueError, match="label_clock"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=2,
+            precision_prior=1e-2,
+            half_life=50.0,
+            clock="t",
+            gap_cap=10.0,
+            label_clock="lt",
+            smooth_lag=3,
+        )
+    with pytest.raises(ValueError, match="max_state_bytes"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=10,
+            precision_prior=1e-2,
+            half_life=50.0,
+            smooth_lag=500,
+            max_state_bytes=1024,
+        )
+    with pytest.raises(ValueError, match="max_state_bytes"):
+        rp.spec.hmm(
+            "h",
+            features=["x0", "x1"],
+            n_components=2,
+            precision_prior=1e-2,
+            half_life=50.0,
+            smooth_lag=2,
+            max_state_bytes=0,
+        )
