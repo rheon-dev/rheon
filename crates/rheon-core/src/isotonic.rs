@@ -825,7 +825,7 @@ impl OnlineModel for Isotonic {
         let handed = self.next.take();
         if self.over.is_some() {
             let key = self.window_key(handed, d_clock, weight >= f64::MIN_POSITIVE);
-            self.read_ahead(key, x0, out);
+            self.read_ahead(key, x0, self.cfg.min_weight, out);
             return;
         }
         // A weight below the smallest normal double is a weight of 0: what
@@ -865,7 +865,7 @@ impl OnlineModel for Isotonic {
             };
             let bytes = self.bytes_with(x0, y) - drop_bytes;
             if !self.held_cap().admit(bytes, cap) {
-                self.read_ahead(key, x0, out);
+                self.read_ahead(key, x0, self.cfg.min_weight, out);
                 return;
             }
         }
