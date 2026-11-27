@@ -188,18 +188,43 @@ _GRAMMED = frozenset(["ewridge", "lasso", "ew_cov"])
 #: ratio of feature spreads at which its out-of-sample R^2 had lost no more
 #: than 0.05 at half-lives 20, 200 and infinite (docs/PLAN.md task 223's
 #: measurement). ``kalman``, ``sgd`` and ``pa`` centre unless
-#: ``standardize = False``; ``rls``, ``ftrl`` and ``expectile`` never do.
+#: ``standardize = False`` or ``fit_intercept = False``; ``rls``, ``ftrl``,
+#: ``glm`` and ``expectile`` never do.
 _UNCENTRED_LIMITS: dict[str, tuple[float, float]] = {
     "ftrl": (0.5, 1.5),
     "kalman": (2.0, 2.0),
     "sgd": (3.0, 3.0),
     "pa": (3.0, 2.0),
     "rls": (math.inf, 30.0),
+    # Uncentred `[1, x]` with all coefficients (intercept included) penalized
+    # by `(ridge / 2) |beta|^2` at default `ridge = 1.0`, `refit_rows = 200`,
+    # over 2,000 rows (last half, 5 seeds) at half-lives 20, 200 and infinite
+    # across Poisson, Gamma (log and inverse), binomial and Tweedie (log and
+    # power, p = 1.5). Binomial is tightest because Fisher weight W <= 0.25:
+    # level loss at L = 10 was 0.003 / 0.013 / 0.028 (max 0.033; at L = 15,
+    # 0.061 mean at hl = inf); spread-ratio loss on a narrow second feature
+    # at S = 15 was 0.008 / 0.016 / 0.023 (max 0.032; at S = 20, max 0.051;
+    # at S = 30, 0.065 mean). Gamma crossed 0.05 at L = 30 / S = 50, Poisson
+    # and Tweedie at L = 50 / S = 50-100 (2026-11-27).
+    "glm": (10.0, 15.0),
     # No ridge to pull it, so a level costs it only the Gram's conditioning:
     # at tau 0.5 its R^2 lost nothing to 3e5 and 0.002 at 1e6 under decay,
     # and without decay it reported nothing from 1e6, a pivot under its
     # floor; a spread ratio of 1e6 lost 0.001 (2026-11-21).
     "expectile": (1e5, 1e6),
+}
+#: ``kalman``, ``sgd`` and ``pa`` with ``standardize = True`` and
+#: ``fit_intercept = False`` scale by raw RMS without subtracting the mean:
+#: spreads apart cost them nothing (0.000 loss to ratio 100), while two
+#: elevated features on ``y = x0 - x1 + eps`` (N = 2,000, last half, 5 seeds,
+#: half-lives 20, 200 and infinite) stay within 0.05 R^2 loss up to L = 2
+#: for ``sgd`` (+0.004 at 2, +0.058 at 3) and L = 15 for ``kalman`` (+0.018,
+#: max +0.021 at 15; max +0.052 at 20) and ``pa`` (-0.023 at 15; +0.051 mean,
+#: +0.070 max at 20) (2026-11-27).
+_NO_INTERCEPT_STANDARDIZED_LEVEL: dict[str, float] = {
+    "kalman": 15.0,
+    "sgd": 2.0,
+    "pa": 15.0,
 }
 #: ``rls``'s level limit is this times ``sqrt(W / delta_left)``, ``W`` the
 #: weight its fit holds and ``delta_left`` the part of its prior ``delta I``
@@ -234,6 +259,8 @@ def _uncentred(spec: dict[str, Any]) -> tuple[float, float] | None:
     if kind not in _UNCENTRED_LIMITS:
         return None
     if kind in ("kalman", "sgd", "pa") and model.get("standardize", True) is not False:
+        if spec.get("fit_intercept", True) is False:
+            return (_NO_INTERCEPT_STANDARDIZED_LEVEL[kind], math.inf)
         return None
     return _UNCENTRED_LIMITS[kind]
 
@@ -444,6 +471,17 @@ def _spec_findings(
                         "delta, or set a half_life so the prior fades",
                     )
                 elif uncentred:
+                    can_standardize = (
+                        kind in ("kalman", "sgd", "pa")
+                        and spec["model"].get("standardize", True) is False
+                        and spec.get("fit_intercept", True) is not False
+                    )
+                    reason = (
+                        f"and {kind} without an intercept scales by raw RMS rather than centring it"
+                        if kind in ("kalman", "sgd", "pa")
+                        and spec["model"].get("standardize", True) is not False
+                        else f"and {kind} does not centre it"
+                    )
                     add(
                         "warning",
                         "level_over_spread",
@@ -452,13 +490,20 @@ def _spec_findings(
                         ratio,
                         limit,
                         f"feature {col!r} sits {_fmt(ratio)} standard deviations "
-                        f"from zero in {_who(g)}, and {kind} does not centre it, "
+                        f"from zero in {_who(g)}, {reason}, "
                         "which costs it accuracy past "
                         f"{_fmt(limit)}: subtract its mean or difference it "
-                        "upstream"
-                        + (", or set standardize=True" if kind in ("kalman", "sgd", "pa") else ""),
+                        "upstream" + (", or set standardize=True" if can_standardize else ""),
                     )
                 else:
+                    no_int = spec.get("fit_intercept", True) is False
+                    why = (
+                        f"{kind} fits without an intercept and does not centre it, so "
+                        "arithmetic on its raw values may lose precision"
+                        if no_int
+                        else f"{kind} centres it and loses nothing, but arithmetic on its "
+                        "raw values elsewhere may"
+                    )
                     add(
                         "info",
                         "level_over_spread",
@@ -469,9 +514,7 @@ def _spec_findings(
                         f"feature {col!r} sits {_fmt(ratio)} standard deviations "
                         f"from zero in {_who(g)}, so a double keeps about "
                         f"{max(0, 16 - round(math.log10(ratio)))} digits of its "
-                        f"variation; {kind} centres it and loses nothing, but "
-                        "arithmetic on its raw values elsewhere may: subtract an "
-                        "origin upstream",
+                        f"variation; {why}: subtract an origin upstream",
                     )
         # (7) scales apart: only where the fit is not scale-free.
         if uncentred and len(feats) >= 2:

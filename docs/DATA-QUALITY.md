@@ -500,10 +500,11 @@ far from zero, and a ridge shrinks the coefficient of a feature in tiny
 units.** A
 price near 5,000 that moves by about 1 a row has a level 5,000 times its
 spread. A return written as a fraction has a spread near 0.001, so its
-variance is a millionth. Four models do not subtract a feature's mean
-before they fit it: `rls` and `ftrl` never do, and `kalman`, `sgd` and
-`pa` do not with `standardize=False`. Each loses accuracy once the level
-passes a limit measured for it.
+variance is a millionth. Several models do not subtract a feature's mean
+before fitting: `rls`, `ftrl`, `glm`, and `expectile` never do. With
+`standardize=False`, or with `fit_intercept=False`, `kalman`, `sgd`, and
+`pa` do not either. Each loses accuracy once the level passes its measured
+limit.
 
 | code | severity | fires when |
 |---|---|---|
@@ -528,7 +529,12 @@ ridge took 0.02 to 0.03 off the R², and at the whole variance 0.14.
 | `kalman`, `standardize=False` | 2 | 2 |
 | `sgd`, `standardize=False` | 3 | 3 |
 | `pa`, `standardize=False` | 3 | 2 |
+| `kalman`, `fit_intercept=False` | 15 | — |
+| `sgd`, `fit_intercept=False` | 2 | — |
+| `pa`, `fit_intercept=False` | 15 | — |
+| `glm` | 10 | 15 |
 | `rls` | `0.9·sqrt(W/delta_left)` | 30 |
+| `expectile` | `1e5` | `1e6` |
 
 The models that center their features (`ewridge`, `lasso`, `huber`,
 `quantile`, and `kalman`, `sgd` and `pa` at their default

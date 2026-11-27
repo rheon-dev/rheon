@@ -363,6 +363,67 @@ def test_each_family_and_link_is_statsmodels_fit(case, weighted):
     assert gap <= 0.25, (got, np.asarray(f.params), gap)
 
 
+@pytest.mark.parametrize("weighted", [False, True])
+@pytest.mark.parametrize("half_life", [float("inf"), 100.0])
+def test_a_binomial_refit_of_every_row_is_statsmodels_fit(weighted, half_life):
+    """A binomial refit over every row fits the decayed weighted logit
+    likelihood by penalized IRLS to rounding (PLAN 578j, TEST-3):
+
+    - At a negligible ridge (``1e-10``), the bank's coefficients match
+      statsmodels' ``GLM(..., family=Binomial(), freq_weights=v).fit()``
+      directly within ``1e-4`` standard errors (matching
+      ``test_a_refit_of_every_row_is_glums_fit``'s tolerance style), with
+      ``v_i = w_i * 2^(-(n - 1 - i) / half_life)`` under decay and ``w_i``
+      without.
+    - At non-trivial ridges (``1.0`` and ``25.0``), the refit lands where
+      statsmodels' penalized score vanishes: ``GLM.score(b, scale=1.0) ==
+      R * b`` within the refit's step tolerance and score rounding bound
+      (matching
+      ``test_a_tweedie_refit_at_the_power_link_solves_statsmodels_score_equation``).
+    """
+    n = 600
+    X, y, w, kw, fam = linked("binomial", n, 3)
+    base_w = w if weighted else np.ones(n)
+    decay = 1.0 if np.isinf(half_life) else 0.5 ** ((n - 1 - np.arange(n)) / half_life)
+    v = base_w * decay
+
+    def fit_bank(ridge: float) -> np.ndarray:
+        s = rp.spec.glm(
+            "m",
+            targets=["y"],
+            features=["x1", "x2"],
+            link="logit",
+            half_life=half_life,
+            ridge=ridge,
+            refit_rows=n,
+            **kw,
+            **({"weight": "w"} if weighted else {}),
+        )
+        bank = rp.ModelBank([s])
+        bank.fit(frame(X, y).with_columns(w=w))
+        return np.array([r["coef"] for r in bank.coef().iter_rows(named=True)], dtype=float)
+
+    model = sm.GLM(y, X, family=fam, freq_weights=v)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        f = model.fit(method="IRLS", tol=1e-12, maxiter=200)
+    b_unpen = fit_bank(1e-10)
+    se_gap = float(np.max(np.abs(b_unpen - np.asarray(f.params)) / np.asarray(f.bse)))
+    assert se_gap < 1e-4, (weighted, half_life, se_gap, b_unpen, np.asarray(f.params))
+
+    for ridge in (1.0, 25.0):
+        b = fit_bank(ridge)
+        score_val = model.score(b, scale=1.0)
+        mu = fam.link.inverse(X @ b)
+        terms = np.abs(v * (y - mu))[:, None] * np.abs(X)
+        info = -model.hessian(b, scale=1.0, observed=False)
+        top = float(np.linalg.eigvalsh(info + ridge * np.eye(3)).max())
+        bound = 2 * top * 1e-11 * (1 + np.abs(b).max()) + 8 * n * U * terms.sum(axis=0).max()
+        gap = float(np.abs(score_val - ridge * b).max())
+        assert gap <= bound, (weighted, half_life, ridge, gap, bound)
+        assert float(np.abs(ridge * b).max()) > 1e3 * bound
+
+
 # --- the Tweedie family at other powers and at its canonical link ----------
 
 U = 2.0**-53

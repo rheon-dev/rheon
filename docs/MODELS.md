@@ -5606,10 +5606,13 @@ L'L'ᵀ  = L·Lᵀ + (a·w·p_l) / ((W' + P₀)·s')·δδᵀ    by plane rotati
 ```
 
 So the factor form reads `Σ_l` within 1/16 of the prior's share of it: a
-quadratic form within a factor 16/15 of the exact recursion's. Every
-coordinate decays alike, so all fall due together, about every
-`1.5·(1/16)·h / ln 2` rows at a half-life of `h` rows (7 rows at 50, 68 at
-500). Measured on arm64 with two states, against the decaying ridge it
+quadratic form within a factor 16/15 of the exact recursion's. Over 2,000 rows
+(13 and 20 features, half-lives of 20 and 500), filtered posteriors parted from
+the exact recursion by at most 0.009. Early in a stream, where the prior carries
+more weight (200 rows at a half-life of 30 across 13 to 20 features), they
+parted by up to 0.050. Every coordinate decays alike, so all fall due together,
+about every `1.5·(1/16)·h / ln 2` rows at a half-life of `h` rows (7 rows at 50,
+68 at 500). Measured on arm64 with two states, against the decaying ridge it
 replaces, a row of the factor form costs 0.95 to 0.98 of its time at 13 to
 32 features and a half-life of 500 rows. At a half-life of 50 rows it costs
 1.1 to 1.2. A `"diag"` row costs 1.19 to 1.29 of its time, and a `"full"` row

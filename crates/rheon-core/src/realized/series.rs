@@ -406,23 +406,32 @@ impl Series {
         let tv = TV_SCALE * self.sum(TV);
         // TQ is of the period the weights' sum spans: its factor is that
         // weight, so TQ/BV² is 1 at a constant volatility whatever the
-        // weights, as the paper's is at unit weights
-        let tq = self.weight() * (TQ_SCALE * self.sum(TQ));
-        let z = if rv > 0.0 && bv > 0.0 {
-            n.sqrt() * (1.0 - bv / rv) / (BNS_THETA * (tq / (bv * bv)).max(1.0)).sqrt()
+        // weights, as the paper's is at unit weights.
+        let tq_raw = self.weight() * (TQ_SCALE * self.sum(TQ));
+        let z = if rv > 0.0 && bv > 0.0 && bv.is_finite() {
+            n.sqrt() * (1.0 - bv / rv) / (BNS_THETA * (tq_raw / (bv * bv)).max(1.0)).sqrt()
         } else {
             f64::NAN
         };
+        let finite_or_nan = |v: f64| if v.is_finite() { v } else { f64::NAN };
         let sigma2 = match &self.lm {
             Some(ring) if ring.weight() > 0.0 => ring.variance(),
             Some(_) => f64::NAN,
             None => s_bv / self.sum(PW),
         };
         let lm = match r {
-            Some(r) if sigma2 > 0.0 => r / sigma2.sqrt(),
+            Some(r) if sigma2 > 0.0 => finite_or_nan(r / sigma2.sqrt()),
             _ => f64::NAN,
         };
-        out.extend([rv, bv, tv, tq, z, lm, lm_jump(lm, n, beta)]);
+        out.extend([
+            finite_or_nan(rv),
+            finite_or_nan(bv),
+            finite_or_nan(tv),
+            finite_or_nan(tq_raw),
+            finite_or_nan(z),
+            lm,
+            lm_jump(lm, n, beta),
+        ]);
     }
 }
 
