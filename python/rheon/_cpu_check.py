@@ -187,6 +187,7 @@ class _ExecCode:
             address = kernel32.VirtualAlloc(None, len(code), mem_commit_reserve, page_readwrite)
             if not address:
                 raise OSError("no memory for the CPU check")
+            ok = False
             try:
                 ctypes.memmove(address, code, len(code))
                 old_protect = ctypes.c_ulong(0)
@@ -197,9 +198,10 @@ class _ExecCode:
                         "rheon CPU check: could not make memory executable. "
                         "Set RHEON_SKIP_CPU_CHECK=1 to skip the check."
                     )
-            except BaseException:
-                kernel32.VirtualFree(address, 0, mem_release)
-                raise
+                ok = True
+            finally:
+                if not ok:
+                    kernel32.VirtualFree(address, 0, mem_release)
             self._release = lambda: kernel32.VirtualFree(address, 0, mem_release)
         else:
             import mmap
@@ -212,6 +214,7 @@ class _ExecCode:
                 mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS,
                 mmap.PROT_READ | mmap.PROT_WRITE,
             )
+            ok = False
             try:
                 self._map.write(code)
                 address = ctypes.addressof(ctypes.c_char.from_buffer(self._map))
@@ -222,9 +225,10 @@ class _ExecCode:
                     # The map is closed, not left to the collector (review
                     # 2026-11-23, PYO3-2).
                     raise OSError("could not make memory executable for the CPU check")
-            except BaseException:
-                self._close_map()
-                raise
+                ok = True
+            finally:
+                if not ok:
+                    self._close_map()
             self._release = self._close_map
         self.address: int = int(address)
 
