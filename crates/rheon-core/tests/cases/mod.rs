@@ -735,6 +735,7 @@ fn kalman_cfg() -> KalmanCfg {
         min_weight: 3.0,
         revert_half_life: vec![f64::INFINITY, 25.0, 6.0],
         standardize: true,
+        obs: Default::default(),
     }
 }
 

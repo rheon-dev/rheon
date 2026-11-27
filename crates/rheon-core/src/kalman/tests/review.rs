@@ -25,6 +25,7 @@ fn plain_cfg(obs_var: f64, h: f64) -> KalmanCfg {
         min_weight: 0.0,
         revert_half_life: vec![f64::INFINITY],
         standardize: false,
+        obs: Default::default(),
     }
 }
 

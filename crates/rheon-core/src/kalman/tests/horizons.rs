@@ -27,6 +27,7 @@ fn cfg(revert: Vec<f64>, standardize: bool, share_p: bool) -> KalmanCfg {
         min_weight: 5.0,
         revert_half_life: revert,
         standardize,
+        obs: Default::default(),
     }
 }
 

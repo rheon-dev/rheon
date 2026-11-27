@@ -202,6 +202,14 @@ impl Kalman {
                     .into(),
             );
         }
+        if form == CovarianceForm::SquareRoot && !self.cfg.obs.is_linear() {
+            return Err(
+                "kalman: covariance_form=\"square_root\" applies only to filter=\"linear\": \
+                 nonlinear EKF and UKF updates operate on the full covariance matrix. Leave \
+                 covariance_form at its default."
+                    .into(),
+            );
+        }
         if form == CovarianceForm::SquareRoot && self.smoother.is_some() {
             return Err(
                 "kalman: covariance_form=\"square_root\" cannot carry smooth_lag: the smoother \

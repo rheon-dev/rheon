@@ -84,6 +84,7 @@ fn filter(k: usize, coef_hl: f64) -> Kalman {
         min_weight: 0.0,
         revert_half_life: vec![f64::INFINITY],
         standardize: true,
+        obs: Default::default(),
     })
     .unwrap()
 }

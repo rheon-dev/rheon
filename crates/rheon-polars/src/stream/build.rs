@@ -332,6 +332,7 @@ fn build_bare(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
                 // `P` in units of the noise, the intercept's prior diffuse
                 // (docs/PLAN.md task 278); a state saved before keeps its own.
                 noise_units: true,
+                obs: Default::default(),
             };
             let mut model = Kalman::new(cfg)?.with_covariance_form(*covariance_form)?;
             if let Some(lag) = spec.smooth_lag() {

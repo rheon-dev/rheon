@@ -101,6 +101,7 @@ fn base(kf: usize, m: usize) -> KalmanCfg {
         revert_half_life: vec![f64::INFINITY],
         standardize: false,
         horizons: vec![],
+        obs: Default::default(),
     }
 }
 

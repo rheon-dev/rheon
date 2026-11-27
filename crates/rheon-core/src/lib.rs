@@ -243,8 +243,9 @@ pub use isotonic::{
     OutOfBounds as IsotonicOutOfBounds,
 };
 pub use kalman::{
-    CovarianceForm, KALMAN_MAX_HORIZONS, Kalman, KalmanCfg, SMOOTH_MIN_WEIGHT, SMOOTH_STOOD,
-    SMOOTH_UNSEEN, Smoothed, SmoothedRow,
+    CovarianceForm, KALMAN_MAX_HORIZONS, Kalman, KalmanCfg, KalmanFamily, KalmanFilter, KalmanLink,
+    KalmanObs, SMOOTH_MIN_WEIGHT, SMOOTH_STOOD, SMOOTH_UNSEEN, Smoothed, SmoothedRow, UkfNoise,
+    UkfRule,
 };
 pub use lasso::{Lasso, LassoCfg};
 pub use margbins::{BinCfg, BinRule, BinStat};

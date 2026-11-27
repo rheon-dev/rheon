@@ -60,6 +60,7 @@ fn main() {
                         standardize: true,
                         min_weight_holds_learning: false,
                         noise_units: true,
+                        obs: Default::default(),
                     })
                     .unwrap()
                     .with_covariance_form(*f)

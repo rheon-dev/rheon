@@ -54,6 +54,7 @@ fn cfg_with(revert: Vec<f64>, fit_intercept: bool, standardize: bool) -> KalmanC
         min_weight: 5.0,
         revert_half_life: revert,
         standardize,
+        obs: Default::default(),
     }
 }
 
@@ -256,4 +257,138 @@ fn the_map_across_the_slots_is_the_map_a_slot_at_a_time() {
             );
         }
     }
+}
+
+/// `take_the_row` and `matvec` (task 420) are the loops they replaced, to
+/// the bit: the upper triangle updated and mirrored, and each row's
+/// products summed from column 0, at every width up to 40 (the blocks of
+/// four rows and their remainders), on values of mixed scale with zeros
+/// and signs.
+#[test]
+fn the_covariance_passes_are_the_serial_forms_to_the_bit() {
+    let mut st = 420u64;
+    for k in 1..=40usize {
+        for round in 0..20 {
+            let mut vals = |n: usize| -> Vec<f64> {
+                (0..n)
+                    .map(|_| {
+                        let u = lcg(&mut st);
+                        match (u * 1e3) as i64 % 7 {
+                            0 => 0.0,
+                            1 => u * 1e-30,
+                            2 => u * 1e30,
+                            _ => u,
+                        }
+                    })
+                    .collect()
+            };
+            // A bit-symmetric `P`, as the filter keeps it, and one that is not.
+            let mut p = vals(k * k);
+            if round % 2 == 0 {
+                for i in 0..k {
+                    for j in 0..i {
+                        p[i * k + j] = p[j * k + i];
+                    }
+                }
+            }
+            let (gain, pz, z) = (vals(k), vals(k), vals(k));
+
+            let mut old = p.clone();
+            for i in 0..k {
+                for jj in i..k {
+                    let v = gain[i] * pz[jj];
+                    old[i * k + jj] -= v;
+                    if jj != i {
+                        old[jj * k + i] -= v;
+                    }
+                }
+            }
+            let mut new = p.clone();
+            take_the_row(&mut new, &gain, &pz);
+            let bits = |v: &[f64]| v.iter().map(|x| x.canon_bits()).collect::<Vec<_>>();
+            // Mirrored writes make the old form's lower triangle `P_ji - v`,
+            // which is the new form's on any `P`, symmetric or not.
+            assert_eq!(bits(&old), bits(&new), "take_the_row, k = {k}");
+
+            let mut old_pz = vec![0.0; k];
+            for i in 0..k {
+                let mut acc = 0.0;
+                for jj in 0..k {
+                    acc += p[i * k + jj] * z[jj];
+                }
+                old_pz[i] = acc;
+            }
+            let mut new_pz = vec![f64::NAN; k];
+            matvec(&p, &z, &mut new_pz);
+            assert_eq!(bits(&old_pz), bits(&new_pz), "matvec, k = {k}");
+        }
+    }
+}
+
+/// The noise basis's median, sorted on the stack (task 250), is the
+/// one the vector it replaced gave, to the bit: every order of three
+/// rows, with ties in the squares and weights that put the half on a
+/// row's edge, and none before the third row.
+#[test]
+fn the_noise_median_on_the_stack_is_the_vectors() {
+    let vector_form = |b: &NoiseBasis| -> Option<f64> {
+        if b.e2.len() < PRIOR_ROWS {
+            return None;
+        }
+        let mut rows: Vec<(f64, f64)> = b.e2.iter().copied().zip(b.w.iter().copied()).collect();
+        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let half = 0.5 * b.w.iter().sum::<f64>();
+        let mut seen = 0.0;
+        let median = rows
+            .iter()
+            .find(|(_, w)| {
+                seen += w;
+                seen >= half
+            })
+            .map_or(rows[rows.len() - 1].0, |(v, _)| *v);
+        let v = median / CHI2_1_MEDIAN;
+        (v > 0.0 && v.is_finite()).then_some(v)
+    };
+    let squares = [
+        [1.0, 1.0, 2.0],
+        [1.0, 2.0, 2.0],
+        [3.0, 3.0, 3.0],
+        [0.5, 2.0, 7.0],
+        [1e-300, 1e300, 1.0],
+    ];
+    let weights = [
+        [1.0, 1.0, 1.0],
+        [1.0, 1.0, 2.0],
+        [2.0, 1.0, 1.0],
+        [0.25, 0.5, 0.25],
+        [1e-9, 1.0, 1e9],
+    ];
+    let orders = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    let mut read = 0;
+    for e2 in squares {
+        for w in weights {
+            for o in orders {
+                let mut b = NoiseBasis::default();
+                for (n, &i) in o.iter().enumerate() {
+                    assert_eq!(b.noise(), None, "{n} rows");
+                    b.add(e2[i] * 2.0, 2.0, w[i]);
+                }
+                let got = b.noise().expect("three rows");
+                assert_eq!(
+                    got.to_bits(),
+                    vector_form(&b).expect("three rows").to_bits(),
+                    "{e2:?} {w:?} {o:?}"
+                );
+                read += 1;
+            }
+        }
+    }
+    assert_eq!(read, 5 * 5 * 6);
 }

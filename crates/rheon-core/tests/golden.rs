@@ -264,6 +264,7 @@ fn kalman_plain_golden() {
         min_weight: 3.0,
         revert_half_life: vec![f64::INFINITY],
         standardize: false,
+        obs: Default::default(),
     })
     .unwrap();
     check("kalman_plain", &signature(&mut m, 0), GOLDEN_KALMAN_PLAIN);
@@ -305,6 +306,7 @@ fn kalman_golden() {
         min_weight: 3.0,
         revert_half_life: vec![f64::INFINITY],
         standardize: true,
+        obs: Default::default(),
     })
     .unwrap();
     check("kalman", &signature(&mut m, 0), GOLDEN_KALMAN);
@@ -333,6 +335,7 @@ fn kalman_revert_golden() {
         min_weight: 3.0,
         revert_half_life: vec![f64::INFINITY, 40.0, 8.0],
         standardize: true,
+        obs: Default::default(),
     })
     .unwrap();
     check("kalman_revert", &signature(&mut m, 0), GOLDEN_KALMAN_REVERT);
@@ -2285,6 +2288,7 @@ fn kalman_noise_golden() {
         min_weight: 3.0,
         revert_half_life: vec![f64::INFINITY],
         standardize: false,
+        obs: Default::default(),
     };
     let mut m = Kalman::new(KalmanCfg {
         q: Some(vec![0.0, 0.01, 0.02]),

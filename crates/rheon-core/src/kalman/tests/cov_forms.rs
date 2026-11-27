@@ -50,6 +50,7 @@ fn units_cfg(p0: f64, h: f64) -> KalmanCfg {
         min_weight: 0.0,
         revert_half_life: vec![f64::INFINITY],
         standardize: false,
+        obs: Default::default(),
     }
 }
 
@@ -260,6 +261,7 @@ fn every_form_is_the_same_filter_at_a_modest_prior() {
         min_weight: 0.0,
         revert_half_life: vec![f64::INFINITY, 30.0, f64::INFINITY, 60.0],
         standardize: true,
+        obs: Default::default(),
     };
     let cases = [
         ("standardized", base.clone()),
@@ -611,6 +613,7 @@ fn the_factors_process_noise_leaves_a_diffuse_intercept_diffuse() {
         min_weight: 0.0,
         revert_half_life: vec![f64::INFINITY],
         standardize: false,
+        obs: Default::default(),
     };
     let k = 3;
     let mut forms = [CovarianceForm::Covariance, CovarianceForm::SquareRoot].map(|form| {
