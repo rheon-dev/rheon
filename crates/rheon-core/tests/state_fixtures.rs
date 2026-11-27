@@ -4561,3 +4561,98 @@ fn the_sides_over_the_matched_rows_are_written() {
         }
     }
 }
+
+/// Every nonlinear `kalman` fixture writes its `obs` configuration non-empty
+/// (`filter`, `family`, `link`, `ukf_rule`, `ukf_noise`), while every linear
+/// `kalman` fixture writes no `obs` key at all.
+#[test]
+fn kalman_nonlinear_fixtures_write_their_obs_forms() {
+    if regenerating() {
+        return;
+    }
+    let decoded =
+        |f: &crate::cases::Fixture| rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let expected = [
+        (
+            "kalman_ekf_poisson",
+            "poisson",
+            "log",
+            "ekf",
+            "scalar_index",
+            "expected",
+        ),
+        (
+            "kalman_ukf_gamma_inverse",
+            "gamma",
+            "inverse",
+            "ukf",
+            "scalar_index",
+            "expected",
+        ),
+        (
+            "kalman_ukf_gaussian_logit",
+            "gaussian",
+            "logit",
+            "ukf",
+            "scalar_index",
+            "plugin",
+        ),
+        (
+            "kalman_ukf_merwe_binomial",
+            "binomial",
+            "logit",
+            "ukf",
+            "merwe",
+            "expected",
+        ),
+    ];
+    for (name, fam, lnk, flt, rule, noise) in expected {
+        let f = frozen::ALL
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("{name}: missing fixture"));
+        let v = decoded(f);
+        let obs = at(&v, &["model", "Kalman", "cfg", "obs"])
+            .unwrap_or_else(|| panic!("{name}: cfg.obs missing"));
+        assert_eq!(
+            at(obs, &["family"]).and_then(rmpv::Value::as_str),
+            Some(fam),
+            "{name}"
+        );
+        assert_eq!(
+            at(obs, &["link"]).and_then(rmpv::Value::as_str),
+            Some(lnk),
+            "{name}"
+        );
+        assert_eq!(
+            at(obs, &["filter"]).and_then(rmpv::Value::as_str),
+            Some(flt),
+            "{name}"
+        );
+        assert_eq!(
+            at(obs, &["ukf_rule"]).and_then(rmpv::Value::as_str),
+            Some(rule),
+            "{name}"
+        );
+        assert_eq!(
+            at(obs, &["ukf_noise"]).and_then(rmpv::Value::as_str),
+            Some(noise),
+            "{name}"
+        );
+    }
+    for name in [
+        "kalman",
+        "kalman_gap",
+        "kalman_noise_units",
+        "kalman_output_only",
+        "kalman_square_root",
+        "kalman_smooth",
+    ] {
+        let f = frozen::ALL.iter().find(|f| f.name == name).unwrap();
+        let v = decoded(f);
+        assert!(
+            at(&v, &["model", "Kalman", "cfg", "obs"]).is_none(),
+            "{name}: linear kalman fixture must not write cfg.obs"
+        );
+    }
+}

@@ -157,6 +157,24 @@ budget = 59799502
 what = "kalman, 20 features, coef half-life 2000, smooth_lag 10 with emit_smoothed_se: AnyModel::step_into, into one kept Step"
 budget = 983344388
 
+[instructions.kalman_ekf_k5]
+what = "kalman EKF, Poisson log, 5 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+
+[instructions.kalman_ekf_k20]
+what = "kalman EKF, Poisson log, 20 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+
+[instructions.kalman_ukf_scalar_k5]
+what = "kalman UKF (scalar_index), Poisson log, 5 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+
+[instructions.kalman_ukf_scalar_k20]
+what = "kalman UKF (scalar_index), Poisson log, 20 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+
+[instructions.kalman_ukf_merwe_k5]
+what = "kalman UKF (merwe), Poisson log, 5 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+
+[instructions.kalman_ukf_merwe_k20]
+what = "kalman UKF (merwe), Poisson log, 20 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+
 [instructions.ew_cov]
 what = "ew_cov, 20 features, mean, std and corr: AnyModel::step_into, into one kept Step"
 budget = 8374026

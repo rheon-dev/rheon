@@ -1474,6 +1474,119 @@ pub fn all() -> Vec<Case> {
             Targets::Linear(2),
             10
         ),
+        // EKF on Poisson counts with log link (schema 72, unreleased).
+        case!(
+            "kalman_ekf_poisson",
+            "Kalman",
+            Kalman,
+            Kalman::new(KalmanCfg {
+                half_life: Vec::new(),
+                q: Some(vec![1e-4, 1e-4, 1e-4]),
+                obs_var: None,
+                noise_units: true,
+                min_weight_holds_learning: false,
+                min_weight: 2.0,
+                obs: rheon_core::KalmanObs {
+                    family: rheon_core::KalmanFamily::Poisson,
+                    link: rheon_core::KalmanLink::Log,
+                    filter: rheon_core::KalmanFilter::Ekf,
+                    ..rheon_core::KalmanObs::default()
+                },
+                ..kalman_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Positive(2),
+            40
+        ),
+        // UKF (scalar_index default) on Gamma with inverse link and non-unit dispersion.
+        case!(
+            "kalman_ukf_gamma_inverse",
+            "Kalman",
+            Kalman,
+            Kalman::new(KalmanCfg {
+                half_life: Vec::new(),
+                q: Some(vec![1e-4, 1e-4, 1e-4]),
+                obs_var: None,
+                p0: 0.05,
+                noise_units: true,
+                min_weight_holds_learning: false,
+                min_weight: 2.0,
+                obs: rheon_core::KalmanObs {
+                    family: rheon_core::KalmanFamily::Gamma,
+                    link: rheon_core::KalmanLink::Inverse,
+                    dispersion: 0.5,
+                    filter: rheon_core::KalmanFilter::Ukf,
+                    ukf_rule: rheon_core::UkfRule::ScalarIndex,
+                    ukf_noise: rheon_core::UkfNoise::Expected,
+                    ..rheon_core::KalmanObs::default()
+                },
+                ..kalman_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::GammaDraw(2),
+            40
+        ),
+        // UKF (scalar_index, plugin noise) on Gaussian with logit link and fixed obs_var.
+        case!(
+            "kalman_ukf_gaussian_logit",
+            "Kalman",
+            Kalman,
+            Kalman::new(KalmanCfg {
+                n_targets: 1,
+                half_life: Vec::new(),
+                q: Some(vec![1e-4, 1e-4, 1e-4]),
+                obs_var: Some(0.05),
+                noise_units: true,
+                min_weight_holds_learning: false,
+                min_weight: 2.0,
+                obs: rheon_core::KalmanObs {
+                    family: rheon_core::KalmanFamily::Gaussian,
+                    link: rheon_core::KalmanLink::Logit,
+                    filter: rheon_core::KalmanFilter::Ukf,
+                    ukf_rule: rheon_core::UkfRule::ScalarIndex,
+                    ukf_noise: rheon_core::UkfNoise::Plugin,
+                    ..rheon_core::KalmanObs::default()
+                },
+                ..kalman_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Binary,
+            40
+        ),
+        // UKF (merwe full sigma points with custom alpha) on Binomial with logit link.
+        case!(
+            "kalman_ukf_merwe_binomial",
+            "Kalman",
+            Kalman,
+            Kalman::new(KalmanCfg {
+                n_targets: 1,
+                half_life: Vec::new(),
+                q: Some(vec![1e-4, 1e-4, 1e-4]),
+                obs_var: None,
+                noise_units: true,
+                min_weight_holds_learning: false,
+                min_weight: 2.0,
+                obs: rheon_core::KalmanObs {
+                    family: rheon_core::KalmanFamily::Binomial,
+                    link: rheon_core::KalmanLink::Logit,
+                    filter: rheon_core::KalmanFilter::Ukf,
+                    ukf_rule: rheon_core::UkfRule::Merwe,
+                    alpha: 0.8,
+                    beta: 2.0,
+                    kappa: 0.0,
+                    ukf_noise: rheon_core::UkfNoise::Expected,
+                    ..rheon_core::KalmanObs::default()
+                },
+                ..kalman_cfg()
+            })
+            .unwrap(),
+            K,
+            Targets::Binary,
+            40
+        ),
         case!(
             "huber",
             "Robust",

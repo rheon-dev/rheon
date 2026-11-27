@@ -1133,6 +1133,7 @@ impl Kalman {
     }
 
     /// `OnlineModel::predict` for EKF and UKF (bit-identical to `step_nonlinear`).
+    #[inline(never)]
     pub(super) fn predict_nonlinear(&self, x: &[f64], d_clock: f64) -> Step {
         if let Some(refused) = crate::model::refused_predict(self, x, d_clock) {
             return refused;
@@ -1228,6 +1229,7 @@ impl Kalman {
     }
 
     /// `OnlineModel::step_into` for EKF and UKF (all transcendentals via `libm`).
+    #[inline(never)]
     pub(super) fn step_nonlinear(
         &mut self,
         x: &[f64],

@@ -213,7 +213,7 @@ The fields of `rp.spec.kalman("m", targets=["y"], features=["x0"], half_life=50.
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
-| `pred_y` | `f64` | the prediction for `<t>`, computed from the state **before** this row | while withheld, and on a target's first row, which has nothing to predict from |
+| `pred_y` | `f64` | the prediction for `<t>`, computed from the state **before** this row (on the target's scale under EKF or UKF) | while withheld, on a target's first row (which has nothing to predict from), and under `"inverse"` or `"power"` link where the prior index is not positive |
 | `resid_y` | `f64` | `y - pred` for `<t>` | while withheld; where the target is null; and on every row of a target that is a formula target, whose value is not known at its row |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
