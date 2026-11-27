@@ -120,6 +120,12 @@ KINDS: dict[str, Builder] = {
         **{k: v for k, v in kw.items() if k != "coef_every"},
         max_atoms=25,
     ),
+    "hoeffding_tree_regressor": lambda **kw: rp.spec.hoeffding_tree_regressor(
+        "m",
+        **{k: v for k, v in kw.items() if k not in ("coef_every", "half_life")},
+        grace_period=20.0,
+        delta=1e-2,
+    ),
     # One lag of every target beside the features.
     "vector_ar": lambda **kw: rp.spec.vector_ar("m", lags=1, **kw),
 }
@@ -132,6 +138,9 @@ NO_FEATURES = frozenset({"holt"})
 #: predicted than for the rows learned. Their clocked variant runs without
 #: one.
 NO_EMBARGO = frozenset({"ar", "vector_ar"})
+
+#: The kinds that take no decay (``half_life`` / ``min_settled_frac`` refused).
+NO_DECAY = frozenset({"hoeffding_tree_regressor"})
 
 #: Where a switch is taken by fewer than every linear kind (the builders'
 #: refusals; docs/DIAGNOSTICS.md, "What each costs, and which models take it").
@@ -148,8 +157,14 @@ TAKES: dict[str, frozenset[str]] = {
     "emit_se_coef": LEVERAGE | {"ar", "vector_ar"},
     "emit_influence": LEVERAGE,
     "emit_robust_se": LEAST_SQUARES,
-    "emit_feature_health": WITH_FEATURES,
+    # Bare `emit_feature_health` inherits the fit's memory, so a non-decaying
+    # fit needs `feature_health_half_life` explicitly (tested as its own knob).
+    "emit_feature_health": WITH_FEATURES - NO_DECAY,
+    "feature_health_half_life": WITH_FEATURES,
     "max_error_inflation": NOISE_GATE,
+    "min_settled_frac": ALL - NO_DECAY,
+    "emit_selected": ALL - NO_DECAY,
+    "emit_averaged": ALL - NO_DECAY,
     # The mean's checks refuse an expectile off the mean (here 0.8), and
     # the checks of a constant, normal residual refuse a glm.
     "emit_calibration": ALL - {"expectile"},
@@ -237,9 +252,31 @@ def _cases() -> list[Case]:
         # A run-once feature health would be null on every row: refused.
         ("emit_feature_health", "feature_health_half_life", False),
     ):
-        knob(f"{memory}=30", parent, **{memory: 30.0})
+        if memory == "feature_health_half_life":
+            c.append(
+                Case(
+                    f"{memory}=30",
+                    {"emit_feature_health": True, memory: 30.0},
+                    parent=parent,
+                    needs=memory,
+                )
+            )
+        else:
+            knob(f"{memory}=30", parent, **{memory: 30.0})
         if legal_inf:
-            knob(f"{memory}=inf", parent, **{memory: math.inf})
+            # On a non-decaying fit the default diagnostic memory is already
+            # `inf`, so setting `inf` explicitly would not move against the parent.
+            base = next(x for x in c if x.name == parent)
+            c.append(
+                Case(
+                    f"{memory}=inf",
+                    base.kw | {memory: math.inf},
+                    parent=parent,
+                    grid=base.grid,
+                    needs=base.needs,
+                    only=ALL - NO_DECAY,
+                )
+            )
     # 0, which writes no `se_coef_hac`, is the default with no horizon.
     knob("robust_se_lags=1", "emit_robust_se", robust_se_lags=1)
     knob("robust_se_lags=3", "emit_robust_se", robust_se_lags=3)
@@ -277,6 +314,12 @@ def _everything(kind: str) -> dict[str, Any]:
         if c.gate or c.grid or c.parent is not None or not c.taken_by(kind):
             continue
         kw |= c.kw
+    if kind in NO_DECAY and kind in WITH_FEATURES:
+        kw |= {
+            "emit_feature_health": True,
+            "feature_health_half_life": 30.0,
+            "breaks_half_life": 30.0,
+        }
     return kw | dict(conformal_rate=0.3, resid_autocorr_lag=2, horizon_rows=3)
 
 
@@ -498,7 +541,7 @@ def test_a_diagnostic_never_moves_the_fit(kind: str, variant: str, name: str) ->
     values = sum(out[n].drop_nulls().len() for n in own)
     print(f"{what}: {len(own)} fields of its own, {values} non-null values")
     assert own and values, f"{what}: wrote nothing of its own, so the comparison proves nothing"
-    if case.parent is not None:
+    if case.parent is not None and CASES[case.parent].taken_by(kind):
         parent = CASES[case.parent]
         mine = _diagnostic_fields(out, fit)
         theirs = _diagnostic_fields(run(kind, variant, parent.kw, case.grid), fit)
@@ -627,5 +670,10 @@ def test_every_pair_left_out_is_refused(kind: str):
     for case in CASES.values():
         if case.taken_by(kind):
             continue
-        with pytest.raises(ValueError, match=case.needs or next(iter(case.kw))):
+        pat = (
+            "emit_feature_health"
+            if case.needs == "feature_health_half_life"
+            else (case.needs or next(iter(case.kw)))
+        )
+        with pytest.raises(ValueError, match=pat):
             _spec(_builder(kind), kind, "rows", case.kw, case.grid)

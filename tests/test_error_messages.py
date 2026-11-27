@@ -619,6 +619,10 @@ BUILDERS = {
     rp.spec.isotonic: dict(features=["x0"]),
     rp.spec.krls: {},
     rp.spec.dependence: dict(bins=6, bin_warm_rows=12),
+    rp.spec.hoeffding_tree_classifier: dict(
+        targets=None, half_life=None, label="y", classes=["a", "b"]
+    ),
+    rp.spec.hoeffding_tree_regressor: dict(half_life=None),
 }
 
 

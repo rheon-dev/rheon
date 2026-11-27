@@ -242,6 +242,18 @@ fn the_read_at_a_lower_floor_is_its_twin_for_every_model_with_a_residual() {
         2,
         false,
     );
+
+    let at = |floor: f64| {
+        let mut c = hoeffding_tree_regressor_cfg();
+        c.min_weight = floor;
+        c
+    };
+    the_read_at_a_lower_floor_is_its_twin(
+        || HoeffdingTreeRegressor::new(at(FLOOR)).unwrap(),
+        |f| HoeffdingTreeRegressor::new(at(f)).unwrap(),
+        2,
+        false,
+    );
 }
 
 /// Task 281 (mutants): a model with no floor of its own keeps the default

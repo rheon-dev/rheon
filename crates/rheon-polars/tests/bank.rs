@@ -1013,6 +1013,8 @@ fn only_models_that_predict_a_target_have_residual_fields() {
         r#"{"type": "vector_ar", "lags": 1}"#,
         r#"{"type": "krls"}"#,
         r#"{"type": "dependence"}"#,
+        r#"{"type": "hoeffding_tree_classifier", "classes": ["a", "b"]}"#,
+        r#"{"type": "hoeffding_tree_regressor"}"#,
     ];
     let mut seen = Vec::new();
     for model in kinds {

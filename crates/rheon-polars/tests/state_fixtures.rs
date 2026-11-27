@@ -3097,7 +3097,72 @@ fn kinds() -> Vec<Kind> {
             first: dependence_first,
             run: dependence_run,
         },
+        Kind {
+            name: "bank_hoeffding_tree",
+            first: hoeffding_tree_first,
+            run: hoeffding_tree_run,
+        },
     ]
+}
+
+fn hoeffding_tree_frame() -> DataFrame {
+    let mut r = lcg(503);
+    let n = 220usize;
+    let (mut g, mut x0, mut x1, mut y, mut w, mut lab) = (
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+        Vec::with_capacity(n),
+    );
+    for i in 0..n {
+        g.push((i % 2) as i64);
+        let a = r() * 2.0;
+        let b = r() * 2.0;
+        x0.push((i % 29 != 7).then_some(a));
+        x1.push((i % 31 != 11).then_some(b));
+        let sig = 1.8 * a - 0.9 * b + 0.1 * r();
+        y.push((i % 19 != 5).then_some(sig));
+        w.push(if i % 13 == 4 { 0.0 } else { 1.0 + 0.5 * r() });
+        lab.push((i % 17 != 3).then_some(if sig < -0.5 {
+            "a"
+        } else if sig < 0.5 {
+            "b"
+        } else {
+            "c"
+        }));
+    }
+    df!("g" => g, "x0" => x0, "x1" => x1, "y" => y, "w" => w, "lab" => lab).unwrap()
+}
+
+fn hoeffding_tree_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "clf", "model": {"type": "hoeffding_tree_classifier", "classes": ["a", "b", "c"], "grace_period": 15.0, "delta": 0.01}, "targets": ["lab"], "features": ["x0", "x1"], "group": "g", "weight": "w"}"#,
+        r#"{"name": "reg", "model": {"type": "hoeffding_tree_regressor", "grace_period": 15.0, "delta": 0.01, "max_slots": 16}, "targets": ["y"], "features": ["x0", "x1"], "group": "g", "weight": "w"}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn hoeffding_tree_first() -> (Vec<u8>, DataFrame) {
+    let df = hoeffding_tree_frame();
+    let split = 180usize;
+    let mut bank = Bank::new(hoeffding_tree_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, split)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(split as i64, df.height() - split),
+    )
+}
+
+fn hoeffding_tree_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut bank = Bank::load_bytes(bytes, Some(&hoeffding_tree_specs()))?;
+    let again = bank.save_bytes()?;
+    let cols = bank.fit_predict(input).map_err(|e| e.to_string())?;
+    let out = DataFrame::new(input.height(), cols).map_err(|e| e.to_string())?;
+    Ok((again, vec![("fit_predict".into(), out)]))
 }
 
 /// The spec of `bank_smoothed`: `kalman`'s fixed-lag smoother with its
@@ -3675,7 +3740,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 24),
+            ("bank", 25),
             ("bars", 3),
             ("checkpoint", 1),
             ("merge", 3),

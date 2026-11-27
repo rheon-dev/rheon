@@ -128,6 +128,8 @@ pub enum AnyModel {
     Isotonic(Box<rheon_core::Isotonic>),
     Krls(Box<rheon_core::Krls>),
     Dependence(Box<rheon_core::Dependence>),
+    HoeffdingTreeClassifier(Box<rheon_core::HoeffdingTreeClassifier>),
+    HoeffdingTreeRegressor(Box<rheon_core::HoeffdingTreeRegressor>),
 }
 
 /// A flush's shards, run on whichever pool the caller is in: the bank's
@@ -191,6 +193,8 @@ macro_rules! dispatch {
             AnyModel::Isotonic($m) => $body,
             AnyModel::Krls($m) => $body,
             AnyModel::Dependence($m) => $body,
+            AnyModel::HoeffdingTreeClassifier($m) => $body,
+            AnyModel::HoeffdingTreeRegressor($m) => $body,
         }
     };
 }
@@ -773,7 +777,9 @@ impl AnyModel {
             // Each fit counts its own; none withholds a row as a failure.
             | AnyModel::Ar(_)
             | AnyModel::VectorAr(_)
-            | AnyModel::Spectral(_) => 0,
+            | AnyModel::Spectral(_)
+            | AnyModel::HoeffdingTreeClassifier(_)
+            | AnyModel::HoeffdingTreeRegressor(_) => 0,
         }
     }
 
@@ -871,6 +877,8 @@ impl AnyModel {
             // Its dual weights grow with the dictionary and have no fixed term layout.
             AnyModel::Krls(_) => None,
             AnyModel::Dependence(_) => None,
+            // Trees have no linear coefficients.
+            AnyModel::HoeffdingTreeClassifier(_) | AnyModel::HoeffdingTreeRegressor(_) => None,
         }
     }
 
@@ -1023,7 +1031,9 @@ pub fn combos(spec: &Spec) -> Vec<Combo> {
         | ModelKind::VectorAr(_)
         | ModelKind::Spectral(_)
         | ModelKind::Isotonic { .. }
-        | ModelKind::Krls(_) => vec![Combo::default()],
+        | ModelKind::Krls(_)
+        | ModelKind::HoeffdingTreeClassifier(_)
+        | ModelKind::HoeffdingTreeRegressor(_) => vec![Combo::default()],
         ModelKind::Dependence(_) => vec![Combo::default()],
         ModelKind::Pca { .. } => vec![Combo::default()],
         // `p` for the penalty, since `l` is a lag's (`lag_corr_l1_a_b`); and

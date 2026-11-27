@@ -942,6 +942,12 @@ N_EFF_EXEMPT = {
         "learned"
     ),
     "tdigest": "whose merging digest cannot take a row out again",
+    "hoeffding_tree_classifier": (
+        "whose Hoeffding-bound splits accumulate leaf statistics without exponential decay"
+    ),
+    "hoeffding_tree_regressor": (
+        "whose Hoeffding-bound splits accumulate leaf statistics without exponential decay"
+    ),
 }
 
 #: The kinds with a rate for a parameter (``hawkes``' ``kernel_decays``, per

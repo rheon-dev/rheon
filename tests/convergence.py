@@ -818,6 +818,9 @@ NOT_REGISTERED: dict[str, str] = {
     "scikit-learn's KernelRidge and Nystroem + Ridge and nonlinear held-out convergence "
     "are held across a 50-seed oracle grid in tests/test_krls.py; this harness's streams "
     "and oracles are linear designs",
+    "hoeffding_tree_regressor": "it fits a piecewise-constant decision tree without decay, "
+    "whereas the convergence harness tests linear designs under exponential decay; its "
+    "parity and 50-seed oracle accuracy band are held in tests/test_hoeffding_tree_regressor.py",
 }
 
 

@@ -43,11 +43,16 @@ pub use renamed::{RENAMED, RENAMED_VALUES, name_renamed};
 mod dependence;
 mod krls;
 mod moments;
+mod tree;
 mod vector_ar;
 pub use dependence::{DependenceSpec, dependence_cfg};
 pub use krls::{KrlsSpec, krls_cfg};
 pub(crate) use moments::moment_leg_column;
 pub use moments::{MOMENT_KINDS, MomentKinds, MomentLegs, MomentTerms, ewm_moments_cfg};
+pub use tree::{
+    HoeffdingTreeClassifierSpec, HoeffdingTreeRegressorSpec, hoeffding_tree_classifier_cfg,
+    hoeffding_tree_regressor_cfg,
+};
 pub use vector_ar::{CausalitySpec, VectorArSpec, causality_kind_of, test_of, vector_ar_cfg};
 
 #[cfg(test)]
@@ -2029,6 +2034,12 @@ pub enum ModelKind {
     Krls(KrlsSpec),
     #[serde(rename = "dependence")]
     Dependence(DependenceSpec),
+    /// Online Hoeffding tree classifier (`rheon_core::HoeffdingTreeClassifier`).
+    #[serde(rename = "hoeffding_tree_classifier")]
+    HoeffdingTreeClassifier(HoeffdingTreeClassifierSpec),
+    /// Online Hoeffding tree regressor (`rheon_core::HoeffdingTreeRegressor`).
+    #[serde(rename = "hoeffding_tree_regressor")]
+    HoeffdingTreeRegressor(HoeffdingTreeRegressorSpec),
 }
 
 /// One term of a `power_variation` spec: its name, which names its fields
@@ -2220,6 +2231,8 @@ impl ModelKind {
         "vector_ar",
         "krls",
         "dependence",
+        "hoeffding_tree_classifier",
+        "hoeffding_tree_regressor",
     ];
 
     pub fn kind_name(&self) -> &'static str {
@@ -2263,6 +2276,8 @@ impl ModelKind {
             ModelKind::VectorAr(_) => "vector_ar",
             ModelKind::Krls(_) => "krls",
             ModelKind::Dependence(_) => "dependence",
+            ModelKind::HoeffdingTreeClassifier(_) => "hoeffding_tree_classifier",
+            ModelKind::HoeffdingTreeRegressor(_) => "hoeffding_tree_regressor",
         }
     }
 
@@ -2338,6 +2353,8 @@ impl ModelKind {
                 | ModelKind::Isotonic { .. }
                 | ModelKind::Krls(_)
                 | ModelKind::Dependence(_)
+                | ModelKind::HoeffdingTreeClassifier(_)
+                | ModelKind::HoeffdingTreeRegressor(_)
         )
     }
 
@@ -2644,6 +2661,7 @@ impl ModelKind {
             || matches!(
                 self,
                 ModelKind::EwClass { .. }
+                    | ModelKind::HoeffdingTreeClassifier(_)
                     | ModelKind::SeqTest { .. }
                     | ModelKind::Marginal { .. }
                     | ModelKind::Hawkes { .. }
@@ -3294,7 +3312,9 @@ impl Spec {
             | ModelKind::Bocpd { .. }
             | ModelKind::Audit { .. }
             | ModelKind::Garch { .. }
-            | ModelKind::TDigest { .. } => true,
+            | ModelKind::TDigest { .. }
+            | ModelKind::HoeffdingTreeClassifier(_)
+            | ModelKind::HoeffdingTreeRegressor(_) => true,
             ModelKind::CorrChange { scalar, .. } => !scalar.unwrap_or(false),
             _ => false,
         };
@@ -3524,7 +3544,10 @@ impl Spec {
             // The fit is identified at a feature once rows lie at or on
             // both sides of it, the model's own rule (`out_of_bounds`): no
             // count of rows is the gate.
-            ModelKind::Isotonic { .. } | ModelKind::Krls(_) => 0.0,
+            ModelKind::Isotonic { .. }
+            | ModelKind::Krls(_)
+            | ModelKind::HoeffdingTreeClassifier(_)
+            | ModelKind::HoeffdingTreeRegressor(_) => 0.0,
             // Each term is withheld by its own condition -- no weight, no
             // lagged pair, no spread to standardize by, an unbiased form's
             // denominator that keeps no digit -- not by a count of rows.
@@ -4278,7 +4301,10 @@ impl Spec {
         if !unsupervised {
             // `ew_class` names its target with `label` (task 278, batch
             // 29); the glossary keeps the word for that name alone.
-            let role = if matches!(self.model, ModelKind::EwClass { .. }) {
+            let role = if matches!(
+                self.model,
+                ModelKind::EwClass { .. } | ModelKind::HoeffdingTreeClassifier(_)
+            ) {
                 "the column of classes"
             } else {
                 "a target"
@@ -4306,7 +4332,7 @@ impl Spec {
         if self.targets.any_formula() {
             let why = match &self.model {
                 m if m.is_unsupervised() => Some(("learns from no target", "")),
-                ModelKind::EwClass { .. } => Some((
+                ModelKind::EwClass { .. } | ModelKind::HoeffdingTreeClassifier(_) => Some((
                     "classifies a column of classes",
                     ", and give that column in its place",
                 )),

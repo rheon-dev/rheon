@@ -1,7 +1,7 @@
 <!-- kind: reference -->
 # Models
 
-The reference entry of each of the thirty-eight models a spec can name, by
+The reference entry of each of the forty-one models a spec can name, by
 family, for a reader who knows which model they want to look up. A
 model's parameters, their defaults and its refusals are in its docstring,
 and the fields it writes in [OUTPUTS.md](OUTPUTS.md).
@@ -28,7 +28,7 @@ which models keep each, and why.
 
 ## The models at a glance
 
-The thirty-eight models fall into four families, and each family answers one
+The forty-one models fall into four families, and each family answers one
 kind of question about a stream. Each name links its builder's reference
 page, which gives its keywords and their defaults, and *entry* links its
 entry on this page. [Choose a model](how-to/choose-a-model.md) says which
@@ -53,6 +53,7 @@ to start with for which question.
 | [`isotonic`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.isotonic) · [entry](#isotonic--a-monotone-function-of-one-feature) | solve | isotonic regression of each target on one feature, the best non-decreasing (or non-increasing) function, refit by pool-adjacent-violators on every row: the monotone calibrator, scikit-learn's `IsotonicRegression` on the same rows |
 | [`krls`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.krls) · [entry](#krls--online-kernel-regression) | solve | online kernel ridge regression, RBF, Laplacian, polynomial or linear, with ALD sparsification or an exact sliding window matching scikit-learn's `KernelRidge` |
 | [`vector_ar`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.vector_ar) · [entry](#vector_ar--a-vector-autoregression-with-granger-tests) | solve | a vector autoregression of the targets together, VAR(p), with Granger causality tests on every row and impulse responses read from the bank; statsmodels' `VAR` with no decay |
+| [`hoeffding_tree_regressor`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hoeffding_tree_regressor) · [entry](#hoeffding_tree_regressor--incremental-regression-tree) | step | an incremental regression tree, one per target, splitting by variance reduction on bounded quantization observers under a Hoeffding bound and a per-group byte cap |
 | **[Moments and correlation](#moments-and-correlation)** | | track the running moments and correlations of the columns you name |
 | [`ew_cov`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_cov) · [entry](#ew_cov--exponentially-weighted-moments) | accumulate | running mean, variance, covariance, correlation, partial correlation, Mahalanobis distance and principal components |
 | [`pca`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.pca) · [entry](#pca--streaming-principal-components) | step | principal components learned a row at a time in state that grows with the components times the columns, not the columns squared: the incremental SVD, CCIPCA or Oja's rule, each component withheld until the data tells it apart from its neighbors |
@@ -73,6 +74,7 @@ to start with for which question.
 | [`kmeans`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kmeans) · [entry](#kmeans--exponentially-weighted-k-means) | step | exponentially weighted k-means: cluster labels assigned before the row is learned from, with a split–merge move that finds a cluster born after seeding |
 | [`micro`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.micro) · [entry](#micro--density-based-clustering-any-shape) | step | density-based clustering: DenStream micro-clusters linked into clusters of any shape and number, flagging the rows that belong to none |
 | [`ew_class`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ew_class) · [entry](#ew_class--gaussian-classification-on-ew_cov-moments) | accumulate | Gaussian classification, QDA, LDA or naive Bayes, with one set of running moments per class: a label column in, class probabilities out |
+| [`hoeffding_tree_classifier`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hoeffding_tree_classifier) · [entry](#hoeffding_tree_classifier--incremental-classification-tree) | step | an incremental decision tree for classification, splitting by information gain, Gini or Hellinger on Gaussian observers under a Hoeffding bound and a per-group byte cap |
 | **[Sequential tests and regimes](#sequential-tests-and-regimes)** | | give evidence that something holds or has changed, and which regime the stream is in |
 | [`seqtest`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.seqtest) · [entry](#seqtest--a-sequential-test-of-a-sign-by-betting) | test | a sequential test of a sign by betting, giving evidence you can read at any row: on its own, of a column's sign; with `a` and `b`, of whether one spec of the bank predicts closer than another |
 | [`corrchange`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.corrchange) · [entry](#corrchange--has-the-correlation-structure-changed) | test | has the correlation structure changed: the Wied–Krämer–Dehling constancy test span by span, the Wied–Galeano detector row by row against a stable history, or the size of a change between two windows against a permutation null |
@@ -298,7 +300,7 @@ library's learn mask: the row is scored and teaches nothing. The default depends
 | the feature count plus one (1 for `holt`) | `ew_cov`, `ew_class`, `kmeans`, `micro`, `holt` |
 | 3 | `marginal`, `deco` |
 | 1 | `bocpd` |
-| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `isotonic`, `krls`, `vector_ar`, `dependence` |
+| 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `isotonic`, `krls`, `vector_ar`, `dependence`, `hoeffding_tree_classifier`, `hoeffding_tree_regressor` |
 
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
@@ -2868,6 +2870,101 @@ stream's length. It is checked against `max_state_bytes` when the spec is
 built: the default 256 KB takes up to 41 lags of 2 targets, 15 of 5 and 7
 of 10, and a spec past it is refused with the bytes it would need.
 
+### `hoeffding_tree_regressor` — incremental regression tree
+
+*API:* [`rheon.spec.hoeffding_tree_regressor`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hoeffding_tree_regressor) — *Rust:* [`hoeffding_tree_regressor.rs`](../crates/rheon-core/src/hoeffding_tree_regressor.rs) — *Outputs:* [fields](OUTPUTS.md#hoeffding_tree_regressor)
+
+An incremental regression tree (FIMT with mean leaves), one independent tree
+per target, growing one split at a time on bounded quantization observers
+within a fixed per-group byte cap.
+
+Use `hoeffding_tree_regressor` when a target is nonlinear in its features or
+depends on interactions between features that a linear fit misses. Each leaf
+routes rows by axis-aligned splits and predicts the weighted mean of the
+targets routed to it. For a linear relationship use
+[`ewridge`](#ewridge--exponentially-weighted-ridge-regression), and for a
+monotone curve in one feature use
+[`isotonic`](#isotonic--a-monotone-function-of-one-feature).
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hoeffding_tree_regressor),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#hoeffding_tree_regressor).
+It takes no exponential decay (`half_life`, `lam`, `min_settled_frac`) and no
+hard window, and reads weights as frequency weights.
+
+#### The update
+
+Each target keeps its own tree. On a row, each tree walks from the root
+(`x[f] <= threshold` goes left) to a leaf and predicts that leaf's weighted
+target mean before learning the row. On a row with positive weight and a
+non-null target, the leaf updates its running target statistics `(W, mean, S)`
+(sample variance `S / (W - 1)`). While active, it also updates one bounded
+quantization observer per feature: bucket index `floor(x / radius)`, up to
+`max_slots` buckets per feature, folding any new bucket past the cap into the
+nearest existing bucket. Every `grace_period` of learned weight at the leaf, each
+feature's observer evaluates the midpoint between consecutive sorted buckets by
+variance reduction over the exact symmetric partition `{slots <= i - 1} |
+{slots >= i}`:
+
+```text
+VR   = var(S_obs) - (W_l / W_obs) var(S_l) - (W_r / W_obs) var(S_r)
+       (0 when W_l < min_samples_split or W_r < min_samples_split)
+eps  = sqrt(ln(1 / delta) / (2 W))
+split when  VR(best) > 0  and  (VR(second) / VR(best) < 1 - eps  or  eps < tau)
+```
+
+With `merit_preprune = True`, a null split enters at merit `0.0`. Every
+transcendental goes through the pure-Rust `libm` crate so splits and states
+match across platforms.
+
+#### Example
+
+**It learns a nonlinear interaction that a linear fit misses.** Here `y` jumps
+in two quadrants of `(x0, x1)` and flips sign on `x2`, and both models predict
+each row before learning from it:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# Piecewise nonlinear target over three features.
+rng = np.random.default_rng(7)
+n = 4_000
+x0, x1, x2 = rng.standard_normal((3, n))
+y = 2.5 * (x0 > 0) - 2.0 * (x1 > 0.25) + 1.5 * ((x0 > 0) & (x2 < 0)) + 0.3 * rng.standard_normal(n)
+df = pl.DataFrame({"x0": x0, "x1": x1, "x2": x2, "y": y})
+
+# Compare an online Hoeffding tree against a non-decaying ridge.
+tree = rp.spec.hoeffding_tree_regressor(
+    "tree", targets=["y"], features=["x0", "x1", "x2"], grace_period=50.0, delta=1e-4,
+)
+ridge = rp.spec.ewridge(
+    "ridge", targets=["y"], features=["x0", "x1", "x2"], half_life=float("inf"),
+)
+out = rp.ModelBank([tree, ridge]).fit_predict(df).tail(1_000)
+for name in ("tree", "ridge"):
+    mae = out[name].struct.field("resid_y").abs().mean()
+    print(f"{name:5} tail MAE: {mae:.3f}")
+```
+
+```text
+tree  tail MAE: 0.279
+ridge tail MAE: 1.059
+```
+
+#### Notes
+
+**The state and its byte cap.** `max_state_bytes` defaults to 256 KB (ceiling
+64 MiB), split equally across targets when a spec names more than one. At 20 or
+more features under a cap below 1 MiB, the builder issues a `ReadinessWarning`
+suggesting at least 1 MiB. When a tree approaches its cap, it never refuses
+rows: splits pause once the structure alone would exceed the cap. After every
+split and every 1,000 learned rows, active leaves are ranked by their sum of
+squared target deviations `S`, and only as many keep observers as the remaining
+bytes pay for. Deactivated leaves keep updating their target mean
+and reactivate with fresh observers if their promise ranks back in.
+
 ## Moments and correlation
 
 These models measure the columns you name without fitting a target: their
@@ -5289,6 +5386,89 @@ For the moments behind each class, or for classes no column names:
 0.3 and 0.2 and each its own covariance. On the second half its accuracy is
 within 0.01 of the Bayes rate, and each band of its probabilities is within 0.03 of the
 share of rows it classes right.
+
+### `hoeffding_tree_classifier` — incremental classification tree
+
+*API:* [`rheon.spec.hoeffding_tree_classifier`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hoeffding_tree_classifier) — *Rust:* [`hoeffding_tree_classifier.rs`](../crates/rheon-core/src/hoeffding_tree_classifier.rs) — *Outputs:* [fields](OUTPUTS.md#hoeffding_tree_classifier)
+
+An incremental decision tree for classification (Domingos and Hulten's Very
+Fast Decision Tree, VFDT), growing axis-aligned splits on per-feature Gaussian
+observers within a fixed per-group byte cap.
+
+Use `hoeffding_tree_classifier` to predict a row's class from a `label` column
+and a declared `classes` list when class boundaries are nonlinear or piecewise.
+Use [`ew_class`](#ew_class--gaussian-classification-on-ew_cov-moments) when the
+classes are well described by Gaussian moments or need exponential forgetting.
+
+Its parameters, their defaults and what each refuses are in its
+[docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.hoeffding_tree_classifier),
+and the fields it writes in [OUTPUTS.md](OUTPUTS.md#hoeffding_tree_classifier).
+It takes `label` in place of `targets`, takes no exponential decay or hard
+window, and reads weights as frequency weights.
+
+#### The update
+
+Each row walks from the root (`x[f] <= threshold` goes left) to a leaf and is
+scored before it is learned, writing `class` and `p_<label>` per declared class.
+Each leaf keeps class weights `n_c` and, while active, one Gaussian observer
+`(W, mean, S, min, max)` per feature and class. Under `"majority"`, the leaf
+predicts class shares `n_c / Σ n`; under `"nb"`, Gaussian naive Bayes once the
+leaf's weight reaches `nb_threshold`; under `"nba"` (the default), whichever of
+the two has predicted more of the leaf's learned weight right. Every
+`grace_period` of learned weight, each feature scores `n_splits` equally spaced
+thresholds between its observed min and max via Gaussian CDF splits under
+`"info_gain"`, `"gini"` or `"hellinger"` (two classes only):
+
+```text
+eps = sqrt(R^2 ln(1 / delta) / (2 W))        R = 1 ("gini"), log2(max(classes seen, 2)) (otherwise)
+split when  G(best) - G(second) > eps   or   eps < tau
+```
+
+With `merit_preprune = True`, a null split enters at merit `0.0`. All
+transcendentals (`erf`, `log`, `log2`, `exp`) route through the pure-Rust
+`libm` crate so trees and saved states are identical across platforms.
+
+#### Example
+
+**It separates a checkerboard class boundary that a single Gaussian per class
+cannot split.** Here class `"a"` occupies two opposite quadrants of `(x0, x1)`
+and class `"b"` occupies the other two:
+
+```python
+import numpy as np
+import polars as pl
+from rheon import polars as rp
+
+# Quadrant checkerboard boundary over two Gaussian features.
+rng = np.random.default_rng(12)
+n = 4_000
+x0, x1 = rng.standard_normal((2, n))
+kind = np.where((x0 > 0.35) == (x1 > 0.35), "a", "b")
+df = pl.DataFrame({"x0": x0, "x1": x1, "kind": kind})
+
+tree = rp.spec.hoeffding_tree_classifier(
+    "tree", features=["x0", "x1"], label="kind", classes=["a", "b"],
+    grace_period=50.0, delta=1e-4,
+)
+scored = rp.ModelBank([tree]).fit_predict(df).unnest("tree").tail(1_000)
+print(f"classed right, out-of-sample: {(scored['class'] == scored['kind']).mean():.3f}")
+```
+
+```text
+classed right, out-of-sample: 0.991
+```
+
+#### Notes
+
+**The state and its byte cap.** `max_state_bytes` defaults to 256 KB (ceiling
+64 MiB). When the tree approaches its cap, splits pause once the structure
+alone would exceed it. After every split and every 1,000 learned rows,
+eligible leaves are ranked by the weight their majority class gets wrong
+(`total - max(counts)`), keeping observers only on the highest-promise leaves
+the remaining bytes pay for. Leaves deactivated by `max_share_to_split` or a
+winning null split stay permanently inactive; cap-deactivated leaves keep
+updating their class weights and reactivate with fresh observers if their
+promise ranks back in.
 
 ## Sequential tests and regimes
 

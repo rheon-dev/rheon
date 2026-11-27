@@ -56,6 +56,8 @@ BUILDERS = [
     "kmeans",
     "micro",
     "ew_class",
+    "hoeffding_tree_classifier",
+    "hoeffding_tree_regressor",
     "seqtest",
     "marginal",
     "dependence",

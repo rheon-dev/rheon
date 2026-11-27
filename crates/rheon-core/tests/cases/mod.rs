@@ -4629,7 +4629,87 @@ pub fn all() -> Vec<Case> {
             targets: Targets::Linear(2),
             before: 40,
         },
+        // Hoeffding tree classifier: split past the root with NBA observers.
+        case!(
+            "hoeffding_tree_classifier",
+            "HoeffdingTreeClassifier",
+            HoeffdingTreeClassifier,
+            HoeffdingTreeClassifier::new(hoeffding_tree_classifier_cfg(None)).unwrap(),
+            K,
+            Targets::Class(3),
+            200
+        ),
+        // Tight cap: splits, then deactivates lower-promise leaves while
+        // keeping the highest-promise leaf active.
+        case!(
+            "hoeffding_tree_classifier_capped",
+            "HoeffdingTreeClassifier",
+            HoeffdingTreeClassifier,
+            HoeffdingTreeClassifier::new(hoeffding_tree_classifier_cfg(Some(600))).unwrap(),
+            K,
+            Targets::Class(3),
+            200
+        ),
+        // Hoeffding tree regressor: two targets, split past the root with QO
+        // observers.
+        case!(
+            "hoeffding_tree_regressor",
+            "HoeffdingTreeRegressor",
+            HoeffdingTreeRegressor,
+            HoeffdingTreeRegressor::new(hoeffding_tree_regressor_cfg(None)).unwrap(),
+            K,
+            Targets::Linear(2),
+            200
+        ),
+        // Tight cap across two targets: splits and deactivates lower-promise
+        // leaves.
+        case!(
+            "hoeffding_tree_regressor_capped",
+            "HoeffdingTreeRegressor",
+            HoeffdingTreeRegressor,
+            HoeffdingTreeRegressor::new(hoeffding_tree_regressor_cfg(Some(4_000))).unwrap(),
+            K,
+            Targets::Linear(2),
+            200
+        ),
     ]
+}
+
+fn hoeffding_tree_classifier_cfg(max_state_bytes: Option<u64>) -> HoeffdingTreeClassifierCfg {
+    HoeffdingTreeClassifierCfg {
+        n_features: K,
+        n_classes: 3,
+        grace_period: 15.0,
+        delta: 1e-2,
+        tau: 0.05,
+        split_criterion: SplitCriterion::InfoGain,
+        leaf_prediction: LeafPrediction::NaiveBayesAdaptive,
+        nb_threshold: 0.0,
+        n_splits: 10,
+        min_branch_fraction: 0.01,
+        max_share_to_split: 0.99,
+        merit_preprune: true,
+        max_depth: None,
+        min_weight: 2.0,
+        max_state_bytes,
+    }
+}
+
+fn hoeffding_tree_regressor_cfg(max_state_bytes: Option<u64>) -> HoeffdingTreeRegressorCfg {
+    HoeffdingTreeRegressorCfg {
+        n_features: K,
+        n_targets: 2,
+        grace_period: 15.0,
+        delta: 1e-2,
+        tau: 0.05,
+        radius: 0.25,
+        max_slots: 16,
+        min_samples_split: 5.0,
+        merit_preprune: true,
+        max_depth: None,
+        min_weight: 2.0,
+        max_state_bytes,
+    }
 }
 
 /// A VAR(2) of two targets under decay with the features exogenous, a

@@ -511,7 +511,7 @@ class TestEveryClockParameterTakesADuration:
         kw.update(MINIMAL[builder])
         if builder == "kalman":
             kw["coef_half_life"] = "1m"
-        if builder == "ew_class":
+        if builder in ("ew_class", "hoeffding_tree_classifier"):
             kw["label"] = "lab"
         if builder == "sgd":
             # `sgd`'s one clock parameter, the Huber scale's memory, is the

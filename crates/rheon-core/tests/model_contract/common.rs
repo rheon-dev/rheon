@@ -300,7 +300,15 @@ const SPARSE_OUTPUT: &[&str] = &["corrchange", "garch"];
 /// it holds every other model to rule 8's decayed recursion, so a model
 /// added here is a choice made in this file, not a default.
 const NO_DECAY: &[&str] = &[
-    "audit", "bocpd", "ddsketch", "garch", "rcov", "seqtest", "tdigest",
+    "audit",
+    "bocpd",
+    "ddsketch",
+    "garch",
+    "hoeffding_tree_classifier",
+    "hoeffding_tree_regressor",
+    "rcov",
+    "seqtest",
+    "tdigest",
 ];
 
 /// Slots null by design except on a flag, which the ready count leaves out:

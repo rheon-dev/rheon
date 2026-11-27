@@ -350,7 +350,14 @@ def test_every_kind_settles_by_the_formula_and_withholds_until_it(name):
     def build() -> dict:
         return getattr(rp.spec, name)("m", **{k: v for k, v in kw.items() if v is not None})
 
-    if name in ("seqtest", "bocpd", "garch", "tdigest"):
+    if name in (
+        "seqtest",
+        "bocpd",
+        "garch",
+        "tdigest",
+        "hoeffding_tree_classifier",
+        "hoeffding_tree_regressor",
+    ):
         with pytest.raises(ValueError, match=f"- half_life does not apply to {name}, "):
             build()
         return

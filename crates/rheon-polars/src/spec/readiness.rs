@@ -76,6 +76,10 @@ impl Spec {
                 "its statistics are nonlinear dependence measures between features and targets, \
                  not predictions of a target"
             }
+            ModelKind::HoeffdingTreeClassifier(_) | ModelKind::HoeffdingTreeRegressor(_) => {
+                "a decision tree partitions the feature space into leaves rather than fitting a \
+                 linear model with a Gram matrix"
+            }
             _ => "it keeps no measure of a prediction's uncertainty",
         }
     }

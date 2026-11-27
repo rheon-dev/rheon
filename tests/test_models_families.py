@@ -31,6 +31,7 @@ MODELS = [
     "kmeans",
     "micro",
     "ew_class",
+    "hoeffding_tree_classifier",
     "seqtest",
     "corrchange",
     "bocpd",

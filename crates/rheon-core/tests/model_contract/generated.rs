@@ -2673,6 +2673,26 @@ fn krls_cfg() -> KrlsCfg {
     }
 }
 
+fn hoeffding_tree_classifier_cfg() -> HoeffdingTreeClassifierCfg {
+    HoeffdingTreeClassifierCfg {
+        n_features: K,
+        n_classes: 2,
+        grace_period: 30.0,
+        delta: 1e-5,
+        tau: 0.05,
+        split_criterion: SplitCriterion::InfoGain,
+        leaf_prediction: LeafPrediction::NaiveBayesAdaptive,
+        nb_threshold: 0.0,
+        n_splits: 10,
+        min_branch_fraction: 0.01,
+        max_share_to_split: 0.99,
+        merit_preprune: true,
+        max_depth: None,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    }
+}
+
 fn krls_window_rows_cfg() -> KrlsCfg {
     KrlsCfg {
         max_atoms: None,
@@ -2858,4 +2878,82 @@ fn dependence_clock_window_reads_the_rows_inside_it() {
     let s = m.step(&[1.3, -0.65], &[Some(2.6), Some(-0.35)], 1.0, 1.0);
     // At t = 13, row 0 has age 13 > 12 and leaves before the read, leaving 12 rows.
     assert!((s.n_eff - 12.0).abs() < 1e-12, "{} against 12.0", s.n_eff);
+}
+
+#[test]
+fn hoeffding_tree_classifier() {
+    let m = HoeffdingTreeClassifier::new(hoeffding_tree_classifier_cfg()).unwrap();
+    assert_eq!(m.n_targets(), 1);
+    assert_eq!(m.n_features(), K);
+    assert_eq!(m.n_outputs(), 3);
+    let r = probe_with(m, 1, Some(&HoeffdingTreeClassifier::n_eff));
+    assert_eq!(r.kind, "hoeffding_tree_classifier");
+    assert_eq!(r.pred_len, 3);
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 40.0]);
+    assert_eq!(r.after_gap, r.before_gap + 1.0);
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn hoeffding_tree_classifier_predict_is_the_step() {
+    predict_is_the_step_without_the_step(
+        || HoeffdingTreeClassifier::new(hoeffding_tree_classifier_cfg()).unwrap(),
+        1,
+        true,
+    );
+    for (crit, pred) in [
+        (SplitCriterion::Gini, LeafPrediction::MajorityClass),
+        (SplitCriterion::Hellinger, LeafPrediction::NaiveBayes),
+    ] {
+        let cfg = HoeffdingTreeClassifierCfg {
+            split_criterion: crit,
+            leaf_prediction: pred,
+            ..hoeffding_tree_classifier_cfg()
+        };
+        predict_is_the_step_without_the_step(
+            move || HoeffdingTreeClassifier::new(cfg.clone()).unwrap(),
+            1,
+            true,
+        );
+    }
+}
+
+fn hoeffding_tree_regressor_cfg() -> HoeffdingTreeRegressorCfg {
+    HoeffdingTreeRegressorCfg {
+        n_features: K,
+        n_targets: 2,
+        grace_period: 30.0,
+        delta: 1e-5,
+        tau: 0.05,
+        min_samples_split: 5.0,
+        radius: 0.25,
+        max_slots: 16,
+        merit_preprune: true,
+        max_depth: None,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    }
+}
+
+#[test]
+fn hoeffding_tree_regressor() {
+    let m = HoeffdingTreeRegressor::new(hoeffding_tree_regressor_cfg()).unwrap();
+    assert_eq!(m.n_targets(), 2);
+    assert_eq!(m.n_features(), K);
+    assert_eq!(m.n_outputs(), 2);
+    let r = probe_with(m, 2, Some(&HoeffdingTreeRegressor::n_eff));
+    assert_eq!(r.kind, "hoeffding_tree_regressor");
+    assert_eq!(r.pred_len, 2);
+    assert_eq!(r.n_eff, vec![0.0, 1.0, 2.0, 40.0]);
+    assert_eq!(r.after_gap, r.before_gap + 1.0);
+    assert!(r.roundtrips);
+}
+
+#[test]
+fn hoeffding_tree_regressor_predict_is_the_step() {
+    predict_is_the_step_without_the_step(
+        || HoeffdingTreeRegressor::new(hoeffding_tree_regressor_cfg()).unwrap(),
+        2,
+        false,
+    );
 }

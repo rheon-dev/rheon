@@ -53,6 +53,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "isotonic",
         "krls",
         "vector_ar",
+        "hoeffding_tree_regressor",
     ),
     "Moments and correlation": (
         "ew_cov",
@@ -71,7 +72,12 @@ FAMILIES: dict[str, tuple[str, ...]] = {
         "ddsketch",
         "spectral",
     ),
-    "Clustering and classification": ("kmeans", "micro", "ew_class"),
+    "Clustering and classification": (
+        "kmeans",
+        "micro",
+        "ew_class",
+        "hoeffding_tree_classifier",
+    ),
     "Sequential tests and regimes": ("seqtest", "corrchange", "bocpd", "hmm", "hawkes"),
 }
 

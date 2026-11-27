@@ -369,6 +369,38 @@
     prior_rows = None
     warm_span = None
     common
+  hoeffding_tree_classifier:
+    name
+    features
+    label
+    classes
+    grace_period = 200.0
+    delta = 1e-07
+    tau = 0.05
+    split_criterion = 'info_gain'
+    leaf_prediction = 'nba'
+    nb_threshold = 0.0
+    n_splits = 10
+    min_branch_fraction = 0.01
+    max_share_to_split = 0.99
+    merit_preprune = True
+    max_depth = None
+    max_state_bytes = None
+    common
+  hoeffding_tree_regressor:
+    name
+    targets
+    features
+    grace_period = 200.0
+    delta = 1e-07
+    tau = 0.05
+    radius = 0.25
+    max_slots = 32
+    min_samples_split = 5.0
+    merit_preprune = True
+    max_depth = None
+    max_state_bytes = None
+    common
   holt:
     name
     targets
@@ -1104,6 +1136,53 @@
     stream.robust_se_half_life = 50.0
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
+  hoeffding_tree_classifier(classes=['a', 'b'], features=['x0'], label='y'):
+    model.delta = 1e-07
+    model.grace_period = 200.0
+    model.leaf_prediction = "nba"
+    model.max_depth = null
+    model.max_share_to_split = 0.99
+    model.max_state_bytes = null
+    model.merit_preprune = true
+    model.min_branch_fraction = 0.01
+    model.min_weight = 0.0
+    model.n_classes = 2
+    model.n_features = 1
+    model.n_splits = 10
+    model.nb_threshold = 0.0
+    model.split_criterion = "info_gain"
+    model.tau = 0.05
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
+  hoeffding_tree_regressor(features=['x0'], targets=['y']):
+    model.delta = 1e-07
+    model.grace_period = 200.0
+    model.max_depth = null
+    model.max_slots = 32
+    model.max_state_bytes = null
+    model.merit_preprune = true
+    model.min_samples_split = 5.0
+    model.min_weight = 0.0
+    model.n_features = 1
+    model.n_targets = 1
+    model.radius = 0.25
+    model.tau = 0.05
+    stream.breaks_half_life = "inf"
+    stream.calibration_half_life = "inf"
+    stream.feature_health_half_life = "inf"
+    stream.influence_half_life = "inf"
+    stream.max_error_inflation = "inf"
+    stream.min_weight = [0.0]
+    stream.robust_se_half_life = "inf"
+    stream.specification_half_life = "inf"
+    stream.tails_half_life = "inf"
   holt(half_life=50.0, targets=['y']):
     model.damping_half_life = "inf"
     model.initial_level = []
@@ -2887,6 +2966,21 @@
     settled_frac: f64
     withheld_reason: enum
     coef: list[f64]
+  hoeffding_tree_classifier minimal:
+    class: enum
+    p_a: f64
+    p_b: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+  hoeffding_tree_regressor minimal:
+    pred_y: f64
+    resid_y: f64
+    pred_z: f64
+    resid_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
   seqtest minimal:
     log_e_pos_y: f64
     log_e_neg_y: f64
@@ -3281,6 +3375,8 @@
   glm: the shared columns only
   hawkes: the shared columns only
   hmm: the shared columns only
+  hoeffding_tree_classifier: the shared columns only
+  hoeffding_tree_regressor: the shared columns only
   holt: the shared columns only
   huber: the shared columns only
   isotonic: the shared columns only
@@ -3521,6 +3617,8 @@
   marginal.closed: both, right
   ew_class.covariance_type: diag, full, tied
   ew_class.window_budget: refuse, thin
+  hoeffding_tree_classifier.split_criterion: gini, hellinger, info_gain
+  hoeffding_tree_classifier.leaf_prediction: majority, nb, nba
   ew_cov.gram_threads: auto
   ew_cov.stats: corr, cov, lag_corr, mahal, mean, partial_corr, std, var
   ew_cov.window_budget: refuse, thin
@@ -3684,6 +3782,8 @@
     glm: family, link, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, step_cap, var_power
     hawkes: closed, kernel_decays, kernel_half_lives, max_state_bytes, window_events, window_size
     hmm: covariance_type, covs, exog_tvtp, init, learn, means, n_components, precision_prior, prior_rows, seed, transition, transition_prior, tvtp_coef, warm_rows, warm_span
+    hoeffding_tree_classifier: classes, delta, grace_period, leaf_prediction, max_depth, max_share_to_split, max_state_bytes, merit_preprune, min_branch_fraction, n_splits, nb_threshold, split_criterion, tau
+    hoeffding_tree_regressor: delta, grace_period, max_depth, max_slots, max_state_bytes, merit_preprune, min_samples_split, radius, tau
     holt: damping_half_life, forecast_spans, initial_level, initial_seasonal, initial_trend, max_state_bytes, period, seasonal, seasonal_half_life, seasonal_periods, start, trend, trend_half_life
     huber: emit_huber_scale, feature_sets, huber_delta, huber_refit_rows, huber_refit_span, huber_scale, huber_scale_half_life, max_rows_between_solves, max_state_bytes, refit_budget, ridge, ridge_scale, solve_every, standardize
     isotonic: closed, increasing, max_state_bytes, out_of_bounds, window_rows, window_size, y_max, y_min

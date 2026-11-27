@@ -658,6 +658,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-core/src/hawkes.rs"]
 
+[messages."crates/rheon-core/src/hoeffding_tree_classifier.rs"]
+
+[messages."crates/rheon-core/src/hoeffding_tree_regressor.rs"]
+
 [messages."crates/rheon-core/src/holt/ets.rs"]
 
 [messages."crates/rheon-core/src/isotonic.rs"]
@@ -740,6 +744,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."crates/rheon-polars/src/spec/smooth.rs"]
 
+[messages."crates/rheon-polars/src/spec/tree.rs"]
+
 [messages."crates/rheon-polars/src/spec/vector_ar.rs"]
 
 [messages."crates/rheon-polars/src/stream/build.rs"]
@@ -776,6 +782,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [messages."python/rheon/_spec_fields.py"]
 
 [messages."python/rheon/_spec_power_variation.py"]
+
+[messages."python/rheon/_spec_tree.py"]
 
 [messages."python/rheon/_spec_vector_ar.py"]
 
@@ -816,6 +824,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [docstrings."python/rheon/_spec_realized.py"]
 
 [docstrings."python/rheon/_spec_tdigest.py"]
+
+[docstrings."python/rheon/_spec_tree.py"]
 
 [docstrings."python/rheon/_spec_vector_ar.py"]
 
@@ -858,6 +868,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."crates/rheon-core/src/glm.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/hawkes.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/hoeffding_tree_classifier.rs#messages"]
+
+[vocabulary."crates/rheon-core/src/hoeffding_tree_regressor.rs#messages"]
 
 [vocabulary."crates/rheon-core/src/holt/ets.rs#messages"]
 
@@ -935,6 +949,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [vocabulary."crates/rheon-polars/src/spec/smooth.rs#messages"]
 
+[vocabulary."crates/rheon-polars/src/spec/tree.rs#messages"]
+
 [vocabulary."crates/rheon-polars/src/spec/vector_ar.rs#messages"]
 
 [vocabulary."crates/rheon-polars/src/stream/build.rs#messages"]
@@ -997,6 +1013,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/_spec_realized.py#docstrings"]
 
 [vocabulary."python/rheon/_spec_tdigest.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_tree.py#docstrings"]
+
+[vocabulary."python/rheon/_spec_tree.py#messages"]
 
 [vocabulary."python/rheon/_spec_vector_ar.py#docstrings"]
 

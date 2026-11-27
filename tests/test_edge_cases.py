@@ -28,6 +28,7 @@ _NO_SOLVE_SCHEDULE = {
     "ar",
     "isotonic",
     "krls",
+    "hoeffding_tree_regressor",
 }
 
 #: Every regression model, with the least it needs to be constructible.
@@ -49,6 +50,7 @@ MODELS = [
     ("isotonic", {"out_of_bounds": "clip"}),
     ("krls", {"max_atoms": 20}),
     ("vector_ar", {"lags": 1, "ridge": 1e-3}),
+    ("hoeffding_tree_regressor", {"grace_period": 20.0, "delta": 1e-2}),
 ]
 
 
@@ -60,6 +62,8 @@ def _spec(model="ewridge", **kw):
     d.update(kw)
     if d.get("features", ()) is None:
         del d["features"]  # a model with no features keyword (holt)
+    if model == "hoeffding_tree_regressor":
+        d.pop("half_life", None)
     return getattr(rp.spec, model)("m", **d)
 
 

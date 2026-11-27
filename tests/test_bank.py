@@ -404,6 +404,11 @@ class TestPerTargetMinPeriods:
                 "m", features=["x0"], out_of_bounds="clip", **common
             ),
             "krls": lambda: rp.spec.krls("m", features=["x0"], max_atoms=25, **common),
+            "hoeffding_tree_regressor": lambda: rp.spec.hoeffding_tree_regressor(
+                "m",
+                features=["x0"],
+                **{k: v for k, v in common.items() if k != "half_life"},
+            ),
         }[kind]()
         if kind == "glm":
             # A Gamma amount is above 0.

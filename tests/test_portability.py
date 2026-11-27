@@ -386,6 +386,7 @@ class TestOutputSchemaStability:
         ("isotonic", {"features": ["x0"]}),
         ("krls", {"features": ["x0", "x1"], "max_atoms": 20}),
         ("vector_ar", {"features": ["x0", "x1"], "lags": 2}),
+        ("hoeffding_tree_regressor", {"features": ["x0", "x1"], "half_life": None}),
     ]
 
     @pytest.mark.parametrize(("model", "kw"), _ALL_MODELS, ids=[m for m, _ in _ALL_MODELS])
@@ -410,14 +411,9 @@ class TestOutputSchemaStability:
         one dtype and handed another.
         `sgd`, `pa`, `holt` and `ew_cov` all postdate that test.
         """
-        spec = getattr(rp.spec, model)(
-            "m",
-            targets=["y0"],
-            half_life=50.0,
-            min_weight=2.0,
-            **kw,
-            **extra,
-        )
+        spec_kw = {"targets": ["y0"], "half_life": 50.0, "min_weight": 2.0, **kw, **extra}
+        spec_kw = {k: v for k, v in spec_kw.items() if v is not None}
+        spec = getattr(rp.spec, model)("m", **spec_kw)
         df = _frame().drop("g")
         if model == "glm":
             # The default Poisson family takes counts.

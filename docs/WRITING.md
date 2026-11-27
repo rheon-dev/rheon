@@ -152,7 +152,7 @@ ten top-level sections suit a document the size of the README, which had
 seventeen. Group them by what the reader is doing: learning the idea,
 running a bank, reading what it produced, choosing a model, tuning it, and
 deciding whether to trust it. A catalog goes one level down, under
-families, rather than flat. The thirty-eight models sit under four families, and
+families, rather than flat. The forty-one models sit under four families, and
 each family opens with one line on what its members share.
 
 **Draw the contents as a table.** One row per section, with its subsections

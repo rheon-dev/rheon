@@ -55,6 +55,8 @@ LEFT_OUT = {
     "is read inside the fit, which is what it is for",
     "glm": "takes counts, never negative: its target cannot cross zero, and a "
     "negative one is refused by name",
+    "hoeffding_tree_regressor": "does not decay past history, so a drifting level is averaged "
+    "across the entire stream rather than tracked",
 }
 
 

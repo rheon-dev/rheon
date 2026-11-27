@@ -111,7 +111,18 @@ EXTRA: dict[str, dict[str, Any]] = {
 TABLE_KINDS = frozenset({"marginal", "rcov"})
 ROW_KINDS = [k for k in KINDS if k not in TABLE_KINDS]
 #: The kinds with no decay: ``min_settled_frac`` has nothing to settle.
-NO_DECAY = frozenset({"seqtest", "bocpd", "corrchange", "rcov", "garch", "tdigest"})
+NO_DECAY = frozenset(
+    {
+        "seqtest",
+        "bocpd",
+        "corrchange",
+        "rcov",
+        "garch",
+        "tdigest",
+        "hoeffding_tree_classifier",
+        "hoeffding_tree_regressor",
+    }
+)
 SETTLED_KINDS = [k for k in KINDS if k not in NO_DECAY]
 #: The kinds whose ridge system reads ``max_error_inflation``.
 INFLATION_KINDS = ["ewridge", "rls", "lasso", "kalman"]
@@ -206,6 +217,8 @@ NO_COEF = frozenset(
         "isotonic",
         "krls",
         "dependence",
+        "hoeffding_tree_classifier",
+        "hoeffding_tree_regressor",
     }
 )
 

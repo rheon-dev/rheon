@@ -1387,6 +1387,111 @@ fn isotonic_golden() {
     check_bits("isotonic", &got, GOLDEN_ISOTONIC);
 }
 
+/// `hoeffding_tree_classifier` over a 3-class stream under info gain + NBA
+/// and gini + majority: pure `libm`, so held to the bit everywhere.
+#[test]
+fn hoeffding_tree_classifier_golden() {
+    let mut got = Vec::new();
+    for (criterion, leaf_pred) in [
+        (SplitCriterion::InfoGain, LeafPrediction::NaiveBayesAdaptive),
+        (SplitCriterion::Gini, LeafPrediction::MajorityClass),
+    ] {
+        let mut m = HoeffdingTreeClassifier::new(HoeffdingTreeClassifierCfg {
+            n_features: 2,
+            n_classes: 3,
+            grace_period: 20.0,
+            delta: 1e-2,
+            tau: 0.05,
+            split_criterion: criterion,
+            leaf_prediction: leaf_pred,
+            nb_threshold: 0.0,
+            n_splits: 10,
+            min_branch_fraction: 0.01,
+            max_share_to_split: 0.99,
+            merit_preprune: true,
+            max_depth: None,
+            min_weight: 0.0,
+            max_state_bytes: None,
+        })
+        .unwrap();
+        let mut s = 20261127u64;
+        for i in 0..300 {
+            let x = [lcg(&mut s) * 2.0, lcg(&mut s) * 2.0];
+            let signal = 1.5 * x[0] - 0.8 * x[1] + 0.1 * lcg(&mut s);
+            let cls = if signal < -0.5 {
+                0.0
+            } else if signal < 0.5 {
+                1.0
+            } else {
+                2.0
+            };
+            let y = if i == 31 { None } else { Some(cls) };
+            let w = if i % 13 == 4 {
+                0.0
+            } else {
+                0.5 + 0.5 * (i % 3) as f64
+            };
+            let step = m.step(&x, &[y], 1.0, w);
+            if [20, 120, 299].contains(&i) {
+                got.extend(&step.pred);
+            }
+        }
+        assert!(m.n_leaves() > 1, "classifier golden should split");
+    }
+    check_bits(
+        "hoeffding_tree_classifier",
+        &got,
+        GOLDEN_HOEFFDING_TREE_CLASSIFIER,
+    );
+}
+
+/// `hoeffding_tree_regressor` over a 2-target stream with QO splits:
+/// pure `libm`, so held to the bit everywhere.
+#[test]
+fn hoeffding_tree_regressor_golden() {
+    let mut m = HoeffdingTreeRegressor::new(HoeffdingTreeRegressorCfg {
+        n_features: 2,
+        n_targets: 2,
+        grace_period: 20.0,
+        delta: 1e-2,
+        tau: 0.05,
+        radius: 0.25,
+        max_slots: 32,
+        min_samples_split: 5.0,
+        merit_preprune: true,
+        max_depth: None,
+        min_weight: 0.0,
+        max_state_bytes: None,
+    })
+    .unwrap();
+    let mut got = Vec::new();
+    let mut s = 20261128u64;
+    for i in 0..300 {
+        let x = [lcg(&mut s) * 2.0, lcg(&mut s) * 2.0];
+        let y0 = 2.0 * x[0] - x[1] + 0.1 * lcg(&mut s);
+        let y1 = -1.5 * x[1] + 0.5 * x[0] + 0.1 * lcg(&mut s);
+        let y = [(i != 31).then_some(y0), (i != 47).then_some(y1)];
+        let w = if i % 13 == 4 {
+            0.0
+        } else {
+            0.5 + 0.5 * (i % 3) as f64
+        };
+        let step = m.step(&x, &y, 1.0, w);
+        if [20, 120, 299].contains(&i) {
+            got.extend(&step.pred);
+        }
+    }
+    assert!(
+        m.n_leaves(0) > 1 && m.n_leaves(1) > 1,
+        "regressor golden should split"
+    );
+    check_bits(
+        "hoeffding_tree_regressor",
+        &got,
+        GOLDEN_HOEFFDING_TREE_REGRESSOR,
+    );
+}
+
 /// `isotonic` under a decay of 20 rows: the weights are the platform's
 /// `exp2`, so it is held to the golden files' tolerance, not to the bit.
 #[test]
@@ -2880,6 +2985,40 @@ fn ewm_moments_golden() {
 }
 
 // --- generated; see the module docs ---
+const GOLDEN_HOEFFDING_TREE_CLASSIFIER: &[f64] = &[
+    2.0,
+    0.29411764705882354,
+    0.14705882352941177,
+    0.5588235294117647,
+    0.0,
+    0.8187945853100532,
+    0.16008225204087362,
+    0.0211231626490732,
+    2.0,
+    0.0,
+    0.069681185885442,
+    0.9303188141145581,
+    2.0,
+    0.29411764705882354,
+    0.14705882352941177,
+    0.5588235294117647,
+    0.0,
+    0.8178570033211598,
+    0.161556820097793,
+    0.020586176581047215,
+    2.0,
+    0.09417538018775898,
+    0.17848074668720076,
+    0.7273438731250402,
+];
+const GOLDEN_HOEFFDING_TREE_REGRESSOR: &[f64] = &[
+    0.12519846580697713,
+    -0.5001812325251223,
+    0.10640350523027804,
+    1.0249608454653443,
+    -4.001999614053287,
+    -1.8696347076333935,
+];
 const GOLDEN_ISOTONIC: &[f64] = &[
     0.058108255205977066,
     -1.1322602444563972,

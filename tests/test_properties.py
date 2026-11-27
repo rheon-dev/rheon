@@ -64,6 +64,7 @@ MODELS = [
     ("isotonic", {"features": ["x0"], "out_of_bounds": "clip"}),
     ("krls", {"max_atoms": 20}),
     ("vector_ar", {"lags": 1, "ridge": 1e-3}),
+    ("hoeffding_tree_regressor", {"grace_period": 20.0, "delta": 1e-2}),
 ]
 IDS = [m[0] for m in MODELS]
 
@@ -364,6 +365,8 @@ def build(model, extra, **kw):
     opts.update(kw)
     if opts.get("features", ()) is None:
         del opts["features"]  # a model with no features keyword (holt)
+    if model == "hoeffding_tree_regressor":
+        opts.pop("half_life", None)
     return getattr(rp.spec, model)("m", **opts)
 
 
@@ -944,9 +947,19 @@ def _moved(a: pl.DataFrame, b: pl.DataFrame) -> list[str]:
 #: A switch a model takes that moves nothing by design: `holt` has no
 #: intercept to drop, and `test_spec_validation.py` pins `fit_intercept` as
 #: inert on it.
-#: `holt` fits a level and a trend, `isotonic` a curve: neither has an
-#: intercept for `fit_intercept` to act on.
-INERT = frozenset({("holt", "no intercept"), ("isotonic", "no intercept")})
+#: `holt` fits a level and a trend, `isotonic` a curve, and
+#: `hoeffding_tree_regressor` a tree: none has an intercept for
+#: `fit_intercept` to act on, and a numeric `session_gap` moves nothing on a
+#: tree with no decay (`session_gap="reset"` resets it, tested in
+#: `test_clock_events_every_kind.py`).
+INERT = frozenset(
+    {
+        ("holt", "no intercept"),
+        ("isotonic", "no intercept"),
+        ("hoeffding_tree_regressor", "no intercept"),
+        ("hoeffding_tree_regressor", "session"),
+    }
+)
 
 
 def _new_value(c: str, plain: pl.DataFrame, got: pl.DataFrame) -> bool:
@@ -1047,13 +1060,15 @@ def kind_streams(
     of zero a number drawn of mixed signs fell on."""
     n = draw(st.integers(min_value=min_rows, max_value=max_rows))
     cols = {c: draw(st.lists(_values, min_size=n, max_size=n)) for c in ("x0", "x1", "y")}
-    for c in ("x0", "x1") if kind == "ew_class" else ("x0", "x1", "y"):
+    for c in (
+        ("x0", "x1") if kind in ("ew_class", "hoeffding_tree_classifier") else ("x0", "x1", "y")
+    ):
         cols[c] = [_signed(v, sign, offset) for v in cols[c]]
     df = pl.DataFrame(
         {**cols, "g": np.cumsum(draw(st.lists(st.integers(0, 1), min_size=n, max_size=n)))},
         schema_overrides={c: pl.Float64 for c in ("x0", "x1", "y")},
     )
-    if kind == "ew_class":
+    if kind in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(
             y=pl.when(_missing("y"))
             .then(None)
@@ -1123,7 +1138,7 @@ class TestEveryOtherKind:
                 "w": [1.0] * 6 + [-0.0] + [1.0] * 5,
             }
         )
-        if kind == "ew_class":
+        if kind in ("ew_class", "hoeffding_tree_classifier"):
             df = df.with_columns(
                 y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b"))
             )
@@ -1373,6 +1388,7 @@ def test_each_kind_takes_every_stream_parameter_but_those_it_refuses():
     streams draw them."""
     assert UNCLOCKED_KINDS == [
         "deco",
+        "hoeffding_tree_classifier",
         "pca",
         "rcov",
         "seqtest",
@@ -1525,7 +1541,7 @@ def _long_stream(kind: str, n: int = 600) -> pl.DataFrame:
             "s": np.searchsorted(CHANGES, i, side="right"),
         }
     )
-    if kind == "ew_class":
+    if kind in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
     return df
 
@@ -1608,7 +1624,7 @@ def test_a_weight_past_the_bound_is_missing(kind, value):
             "w": [1.0] * n,
         }
     )
-    if kind == "ew_class":
+    if kind in ("ew_class", "hoeffding_tree_classifier"):
         df = df.with_columns(y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b")))
     if kind in BINARY:
         df = df.with_columns(y=(pl.col("y") > 0).cast(pl.Float64))

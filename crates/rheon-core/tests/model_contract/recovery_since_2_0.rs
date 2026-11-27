@@ -192,6 +192,24 @@ fn dependence_recovers_from_bounded_extremes() {
 }
 
 #[test]
+fn hoeffding_tree_classifier_recovers_from_bounded_extremes() {
+    let mut rows = bounded_script(1);
+    for r in &mut rows {
+        r.y = vec![Some(f64::from(r.y[0].unwrap() > 0.0))];
+    }
+    stays_finite_over(&rows, || {
+        HoeffdingTreeClassifier::new(hoeffding_tree_classifier_cfg()).unwrap()
+    });
+}
+
+#[test]
+fn hoeffding_tree_regressor_recovers_from_bounded_extremes() {
+    stays_finite_over(&bounded_script(2), || {
+        HoeffdingTreeRegressor::new(hoeffding_tree_regressor_cfg()).unwrap()
+    });
+}
+
+#[test]
 fn audit_recovers_from_bounded_extremes() {
     stays_finite_over(&bounded_script(0), || Audit::new(audit_cfg()).unwrap());
 }

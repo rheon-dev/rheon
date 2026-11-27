@@ -109,6 +109,8 @@ pub enum ModelState {
     VectorAr(Box<crate::VectorAr>),
     Krls(Box<crate::Krls>),
     Dependence(Box<crate::Dependence>),
+    HoeffdingTreeClassifier(Box<crate::HoeffdingTreeClassifier>),
+    HoeffdingTreeRegressor(Box<crate::HoeffdingTreeRegressor>),
 }
 
 #[derive(Debug, Error)]
@@ -244,6 +246,8 @@ impl ModelState {
             ModelState::VectorAr(_) => "vector_ar",
             ModelState::Krls(_) => "krls",
             ModelState::Dependence(_) => "dependence",
+            ModelState::HoeffdingTreeClassifier(_) => "hoeffding_tree_classifier",
+            ModelState::HoeffdingTreeRegressor(_) => "hoeffding_tree_regressor",
         }
     }
 }

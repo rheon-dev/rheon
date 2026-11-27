@@ -160,6 +160,10 @@ pub const MODEL_CASES: &[&str] = &[
     // Nonlinear dependence: 10 features against 1 target over a 200-row window
     // with 16x16 MI + Miller-Madow + incremental Kendall + periodic Spearman/xi.
     "dependence",
+    // Online Hoeffding tree classifier (3 classes, 8 features, NBA leaf prediction).
+    "hoeffding_tree_classifier",
+    // Online Hoeffding tree regressor (1 target, 8 features, QO max_slots=32).
+    "hoeffding_tree_regressor",
 ];
 
 /// The one model case that reports on a single row of its block:
@@ -970,6 +974,29 @@ fn case_spec(id: &str) -> (Value, Shape) {
             );
             s["half_life"] = json!("inf");
             s.as_object_mut().expect("an object").remove("min_weight");
+            (s, Shape::Linear)
+        }
+        "hoeffding_tree_classifier" => {
+            let model = json!({
+                "type": "hoeffding_tree_classifier",
+                "classes": ["0", "1", "2"],
+                "grace_period": 200.0,
+            });
+            let mut s = fit(model, 8);
+            let obj = s.as_object_mut().expect("an object");
+            obj.remove("half_life");
+            obj.remove("min_weight");
+            (s, Shape::Labelled)
+        }
+        "hoeffding_tree_regressor" => {
+            let model = json!({
+                "type": "hoeffding_tree_regressor",
+                "grace_period": 200.0,
+            });
+            let mut s = fit(model, 8);
+            let obj = s.as_object_mut().expect("an object");
+            obj.remove("half_life");
+            obj.remove("min_weight");
             (s, Shape::Linear)
         }
         // Level and trend of one column, no features.

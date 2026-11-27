@@ -819,7 +819,7 @@ fn wanted(specs: &[Spec]) -> Vec<(PlSmallStr, Want)> {
         }
         // `ew_class` reads its target as a label; every other model as a number.
         let target_want = match &s.model {
-            ModelKind::EwClass { .. } => Want::Text,
+            ModelKind::EwClass { .. } | ModelKind::HoeffdingTreeClassifier(_) => Want::Text,
             _ => Want::Number,
         };
         // A target's own column, read at its row; a formula target's
@@ -862,7 +862,7 @@ fn wanted(specs: &[Spec]) -> Vec<(PlSmallStr, Want)> {
 /// session, group.
 fn spec_reads(s: &Spec) -> Vec<(&str, Want, &'static str)> {
     let (target_want, target_role) = match &s.model {
-        ModelKind::EwClass { .. } => (Want::Text, "label"),
+        ModelKind::EwClass { .. } | ModelKind::HoeffdingTreeClassifier(_) => (Want::Text, "label"),
         // `bocpd`'s hazard column rides in the targets slot, and is not a
         // target (review fable2, Y7).
         ModelKind::Bocpd {
@@ -1384,7 +1384,7 @@ fn first_reader<'a>(specs: &'a [Spec], column: &str) -> Option<(&'a str, &'stati
     for s in specs {
         let name = s.name.as_str();
         let target_role = match &s.model {
-            ModelKind::EwClass { .. } => "label",
+            ModelKind::EwClass { .. } | ModelKind::HoeffdingTreeClassifier(_) => "label",
             ModelKind::Bocpd {
                 hazard_col: Some(_),
                 ..
@@ -1537,7 +1537,10 @@ fn check_clocks(df: &DataFrame, specs: &[Spec]) -> PolarsResult<()> {
                     ("a weight", "a number")
                 } else if defs.iter().any(|t| t.column == *clock)
                     && other.model.compares().is_none()
-                    && !matches!(other.model, ModelKind::EwClass { .. })
+                    && !matches!(
+                        other.model,
+                        ModelKind::EwClass { .. } | ModelKind::HoeffdingTreeClassifier(_)
+                    )
                 {
                     ("a target", "a number")
                 } else if defs
@@ -1745,7 +1748,7 @@ fn role_of(specs: &[Spec], name: &str) -> &'static str {
         for t in s.targets.defs() {
             if t.value_column() == Some(name) {
                 return match &s.model {
-                    ModelKind::EwClass { .. } => "label",
+                    ModelKind::EwClass { .. } | ModelKind::HoeffdingTreeClassifier(_) => "label",
                     ModelKind::Bocpd {
                         hazard_col: Some(_),
                         ..

@@ -334,8 +334,8 @@ took 191 ns a row at 5 features and 326 ns at 20.
 
 The linear models are the family [Models](MODELS.md#linear-models) lists:
 `ewridge`, `rls`, `lasso`, `kalman`, `huber`, `quantile`, `sgd`, `pa`,
-`ftrl`, `glm`, `expectile`, `holt` and `ar`, with `vector_ar`, `isotonic`
-and `krls` beside them, which take the same residual switches. Those with features are
+`ftrl`, `glm`, `expectile`, `holt` and `ar`, with `vector_ar`, `isotonic`,
+`krls` and `hoeffding_tree_regressor` beside them, which take the same residual switches. Those with features are
 all but `holt`, and `ar` where it is given features. Any other model refuses a
 residual switch by name, and a model outside a switch's list refuses that
 switch and names the models that take it.

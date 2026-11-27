@@ -307,7 +307,7 @@ def _each_kind_fitted():
             df = df.with_columns((pl.col(c) > 0).cast(pl.Float64) for c in ("y", "z"))
         if name == "glm":
             df = df.with_columns(pl.col("y", "z").abs().round())
-        if name == "ew_class":
+        if name in ("ew_class", "hoeffding_tree_classifier"):
             df = df.with_columns(
                 y=pl.when(pl.col("y") > 0).then(pl.lit("a")).otherwise(pl.lit("b"))
             )
