@@ -194,3 +194,39 @@ fn the_warm_span_is_checked() {
         "warm_span sets the prior from the first rows",
     );
 }
+
+/// STATE-3: a `bocpd` warm-up span whose buffered rows exceed its cap (or a
+/// non-span state recording `over` or `warm_first`) is refused on load.
+#[test]
+fn state_3_a_warm_span_past_its_cap_is_refused_on_load() {
+    let mut m = Bocpd::new(BocpdCfg {
+        warm_clock: Some(1e12),
+        ..warming(2)
+    })
+    .unwrap();
+    for (i, x) in rows(6, 17).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, &[], 1.0, 1.0);
+    }
+    assert_eq!(m.warm.len(), 6);
+    m.set_cap_for_test(m.warm_bytes(6));
+    assert!(Bocpd::restore(&m.state()).is_ok());
+
+    m.set_cap_for_test(m.warm_bytes(5));
+    match Bocpd::restore(&m.state()) {
+        Err(crate::StateError::Invalid(e)) => assert!(e.contains("warm-up cap"), "{e}"),
+        other => panic!("over cap: {other:?}"),
+    }
+
+    let plain = Bocpd::new(warming(2)).unwrap();
+    for (name, edit) in [
+        ("over", (|b: &mut Bocpd| b.over = Some(1)) as fn(&mut Bocpd)),
+        ("warm_first", |b: &mut Bocpd| {
+            b.warm_first = Some(Stamp::from(0.0));
+        }),
+    ] {
+        let mut damaged = plain.clone();
+        edit(&mut damaged);
+        assert!(Bocpd::restore(&damaged.state()).is_err(), "{name}");
+    }
+}

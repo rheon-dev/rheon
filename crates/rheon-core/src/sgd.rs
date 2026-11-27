@@ -689,6 +689,21 @@ impl StepGain {
     fn unstable(&self) -> bool {
         self.q2 > 2.0 * self.q
     }
+
+    /// Whether the sums and rest flag are ones a stream writes (review
+    /// 2026-11-23, STATE-3): finite non-negative sums, `n == 0` only when
+    /// both sums are 0, `q == 0` only when `q2 == 0`, and a resting gate
+    /// only once `n >= REST_WEIGHT` with `q2 <= q` (a resting gate with
+    /// `n == 0` divides by 0 on its next probe).
+    fn is_valid(&self) -> bool {
+        let non_neg = |v: f64| v.is_finite() && v >= 0.0;
+        non_neg(self.q)
+            && non_neg(self.q2)
+            && non_neg(self.n)
+            && (self.n > 0.0 || (self.q == 0.0 && self.q2 == 0.0))
+            && (self.q > 0.0 || self.q2 == 0.0)
+            && (!self.resting || (self.n >= REST_WEIGHT && self.q2 <= self.q))
+    }
 }
 
 /// The ridge on the mean-form system an `sgd` refit solves
@@ -1147,7 +1162,7 @@ impl TryFrom<SgdV3> for Sgd {
                     .into(),
             );
         }
-        Ok(Self {
+        let sgd = Self {
             cfg,
             scaler,
             warmup,
@@ -1176,7 +1191,9 @@ impl TryFrom<SgdV3> for Sgd {
             warned,
             warning: None,
             cap_for_test: None,
-        })
+        };
+        sgd.check_loaded().map_err(|e| e.to_string())?;
+        Ok(sgd)
     }
 }
 
@@ -1397,6 +1414,37 @@ impl Sgd {
     /// [`SgdCfg::target_spread`].
     pub fn unstable(&self) -> bool {
         self.gain.iter().any(StepGain::unstable)
+    }
+
+    /// Value and cap invariants enforced on both load paths (`SgdV3::try_from`
+    /// and `OnlineModel::restore`; review 2026-11-23, STATE-3).
+    fn check_loaded(&self) -> Result<(), StateError> {
+        if self.over.is_some() && self.cfg.refit_clock.is_none() {
+            return Err(crate::model::damaged(
+                "sgd",
+                "the rows it saved for its refit do not match its huber_refit_rows setting",
+            ));
+        }
+        if !self.gain.iter().all(StepGain::is_valid) {
+            return Err(crate::model::damaged(
+                "sgd",
+                "its saved learning-rate state holds values no stream writes",
+            ));
+        }
+        if self.cfg.refit_clock.is_some() && self.refit.iter().any(RefitBuf::has_held) {
+            let bytes: u64 = self
+                .refit
+                .iter()
+                .fold(0u64, |acc, b| acc.saturating_add(b.held_bytes()));
+            let cap = self.span_cap();
+            if bytes > cap {
+                return Err(crate::model::damaged(
+                    "sgd",
+                    format!("it holds {bytes} bytes, past max_state_bytes of {cap}"),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Per target, [`Sgd::unstable`]'s verdict: empty where no gains are
@@ -3001,6 +3049,7 @@ impl OnlineModel for Sgd {
                 let mut m = (**m).clone();
                 // The shapes are checked as the state is read (`SgdV3`).
                 crate::model::check_cfg("sgd", m.cfg.validate())?;
+                m.check_loaded()?;
                 m.ensure_buffers();
                 // A build of schema 64 or earlier anchored each sketch at
                 // its first residual: its sketches keep that rule

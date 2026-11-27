@@ -396,3 +396,100 @@ fn a_compact_state_with_a_skipped_middle_field_round_trips() {
         compact.err()
     );
 }
+
+/// STATE-3: impossible weights, transition counts, posterior entries, or
+/// per-state accumulator weights in an `hmm` state are refused on load;
+/// a buffered row whose weight decayed to 0 is still accepted.
+#[test]
+fn state_3_a_weight_no_stream_writes_is_refused_on_load() {
+    fn mutate_msgpack_state_field(m: &Hmm, list_key: &str, field: &str, val: rmpv::Value) -> Hmm {
+        let bytes = rmp_serde::to_vec_named(m).unwrap();
+        let mut v = rmpv::decode::read_value(&mut bytes.as_slice()).unwrap();
+        let rmpv::Value::Map(entries) = &mut v else {
+            panic!("map");
+        };
+        let (_, list) = entries
+            .iter_mut()
+            .find(|(k, _)| k.as_str() == Some(list_key))
+            .unwrap();
+        let rmpv::Value::Array(items) = list else {
+            panic!("array");
+        };
+        let rmpv::Value::Map(st) = &mut items[0] else {
+            panic!("state map");
+        };
+        let (_, slot) = st
+            .iter_mut()
+            .find(|(k, _)| k.as_str() == Some(field))
+            .unwrap();
+        *slot = val;
+        let mut out = Vec::new();
+        rmpv::encode::write_value(&mut out, &v).unwrap();
+        rmp_serde::from_slice(&out).unwrap()
+    }
+
+    for (cov, list_key) in [
+        (Covariance::Full, "states"),
+        (Covariance::Diagonal, "diag_states"),
+    ] {
+        let mut m = Hmm::new(given(2.0, cov)).unwrap();
+        for i in 0..8 {
+            m.step(&[if i % 2 == 0 { -2.0 } else { 2.0 }], &[], 1.0, 1.0);
+        }
+        assert!(Hmm::restore(&m.state()).is_ok(), "{cov:?}");
+
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            for (name, edit) in [
+                ("n_eff", (|h: &mut Hmm, v| h.n_eff = v) as fn(&mut Hmm, f64)),
+                ("p[0]", |h: &mut Hmm, v| h.p[0] = v),
+                ("a[0]", |h: &mut Hmm, v| h.a[0] = v),
+            ] {
+                let mut damaged = m.clone();
+                edit(&mut damaged, bad);
+                match Hmm::restore(&damaged.state()) {
+                    Err(crate::StateError::Invalid(e)) => {
+                        assert!(e.contains("damaged"), "{cov:?} {name} {bad}: {e}");
+                    }
+                    other => panic!("{cov:?} {name} = {bad}: {other:?}"),
+                }
+            }
+            for field in ["w_sum", "precision_scale", "q_sum"] {
+                let damaged =
+                    mutate_msgpack_state_field(&m, list_key, field, rmpv::Value::F64(bad));
+                match Hmm::restore(&damaged.state()) {
+                    Err(crate::StateError::Invalid(e)) => {
+                        assert!(
+                            e.contains("damaged"),
+                            "{cov:?} {list_key}.{field} {bad}: {e}"
+                        );
+                    }
+                    other => panic!("{cov:?} {list_key}.{field} = {bad}: {other:?}"),
+                }
+            }
+        }
+
+        let mut zero_p = m.clone();
+        zero_p.p.fill(0.0);
+        assert!(Hmm::restore(&zero_p.state()).is_err(), "{cov:?} zero p");
+
+        let mut seeded_with_buf = m.clone();
+        seeded_with_buf.buffer.push((vec![0.0], 1.0));
+        assert!(
+            Hmm::restore(&seeded_with_buf.state()).is_err(),
+            "{cov:?} seeded with buffer"
+        );
+    }
+
+    // Unseeded buffer: decayed-to-zero weight is legal; negative/NaN/inf refused.
+    let mut unseeded = Hmm::new(cfg(1)).unwrap();
+    unseeded.step(&[0.5], &[], 1.0, 1.0);
+    assert!(!unseeded.seeded && unseeded.buffer.len() == 1);
+    let mut zero_w = unseeded.clone();
+    zero_w.buffer[0].1 = 0.0;
+    assert!(Hmm::restore(&zero_w.state()).is_ok());
+    for bad in [-1.0, f64::NAN, f64::INFINITY] {
+        let mut damaged = unseeded.clone();
+        damaged.buffer[0].1 = bad;
+        assert!(Hmm::restore(&damaged.state()).is_err(), "buffer w {bad}");
+    }
+}

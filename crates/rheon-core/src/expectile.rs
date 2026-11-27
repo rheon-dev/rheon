@@ -488,9 +488,9 @@ impl RowWindow {
 
     fn has_shape(&self, k: usize, m: usize, clocked: bool) -> bool {
         let n = self.w.len();
-        self.x.len() == n * k
-            && self.y.len() == n * m
-            && self.present.len() == n * m
+        n.checked_mul(k) == Some(self.x.len())
+            && n.checked_mul(m) == Some(self.y.len())
+            && n.checked_mul(m) == Some(self.present.len())
             && self.stamp.len() == if clocked { n } else { 0 }
     }
 
@@ -1140,11 +1140,15 @@ impl Expectile {
     /// `k + 2` numbers and each target's first stamp.
     fn refit_clock_bytes(&self, extra: usize) -> u64 {
         let (k, m) = (self.cfg.n_features, self.cfg.n_targets);
-        let held: usize = self.refit.iter().map(|r| r.rows.len()).sum();
-        let stamps = (m * std::mem::size_of::<Option<Stamp>>()) as u64;
+        let held = self
+            .refit
+            .iter()
+            .fold(0u64, |acc, r| acc.saturating_add(r.rows.len() as u64));
+        let add = (extra as u64).saturating_mul((k as u64).saturating_add(2));
+        let stamps = (m as u64).saturating_mul(std::mem::size_of::<Option<Stamp>>() as u64);
         Self::sums_bytes(k, m, self.cfg.fit_intercept, false)
-            + 8 * (held + extra * (k + 2)) as u64
-            + stamps
+            .saturating_add(held.saturating_add(add).saturating_mul(8))
+            .saturating_add(stamps)
     }
 
     /// The run-time check of a state the data sizes, over this model's
@@ -1207,8 +1211,9 @@ impl Expectile {
         fit_intercept: bool,
         rows: usize,
     ) -> u64 {
-        Self::sums_bytes(n_features, n_targets, fit_intercept, true)
-            + rows as u64 * Self::window_row_bytes(n_features, n_targets, true)
+        Self::sums_bytes(n_features, n_targets, fit_intercept, true).saturating_add(
+            (rows as u64).saturating_mul(Self::window_row_bytes(n_features, n_targets, true)),
+        )
     }
 
     fn clock_bytes_with(&self, extra: usize) -> u64 {
@@ -1784,6 +1789,50 @@ impl OnlineModel for Expectile {
                         "expectile",
                         "its running sums have the wrong shape",
                     ));
+                }
+                // Weights and span/window caps (review 2026-11-23, STATE-3):
+                // every weight is finite and at least 0 (window rows are
+                // strictly positive; a refit row may decay to 0 on a long
+                // gap), and a clock window or span refit with buffered rows
+                // stays within `max_state_bytes`.
+                let non_neg = |v: f64| v.is_finite() && v >= 0.0;
+                let weights_ok = non_neg(m.w_sum)
+                    && m.w_target.iter().copied().all(non_neg)
+                    && m.s.iter().copied().all(non_neg)
+                    && non_neg(m.clock.carry)
+                    && non_neg(m.clock.own)
+                    && m.refit.iter().all(|r| {
+                        r.rows
+                            .chunks_exact(width)
+                            .all(|row| non_neg(row[width - 1]))
+                    })
+                    && m.window
+                        .as_ref()
+                        .is_none_or(|w| w.w.iter().all(|&v| v.is_finite() && v > 0.0));
+                if !weights_ok {
+                    return Err(crate::model::damaged(
+                        "expectile",
+                        "its saved weights hold a value no stream writes",
+                    ));
+                }
+                let cap = m.cfg.cap();
+                if m.cfg.window_clock.is_some() {
+                    let bytes = m.clock_bytes_with(0);
+                    if bytes > cap {
+                        return Err(crate::model::damaged(
+                            "expectile",
+                            format!("it holds {bytes} bytes, past max_state_bytes of {cap}"),
+                        ));
+                    }
+                } else if m.cfg.refit_clock.is_some() && m.refit.iter().any(|r| !r.rows.is_empty())
+                {
+                    let bytes = m.refit_clock_bytes(0);
+                    if bytes > cap {
+                        return Err(crate::model::damaged(
+                            "expectile",
+                            format!("it holds {bytes} bytes, past max_state_bytes of {cap}"),
+                        ));
+                    }
                 }
                 Ok(m)
             }

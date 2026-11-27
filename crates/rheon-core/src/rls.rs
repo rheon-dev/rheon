@@ -871,6 +871,32 @@ impl OnlineModel for Rls {
                         ),
                     ));
                 }
+                // Weights, pivots, and factor entries (review 2026-11-23,
+                // STATE-3): every weight is finite and at least 0; diagonal
+                // pivots are finite and >= 0 under decay (where an unexcited
+                // direction legitimately underflows to 0) and strictly > 0
+                // without decay; every entry of R, u, and beta is finite.
+                let non_neg = |v: f64| v.is_finite() && v >= 0.0;
+                if !non_neg(m.w_sum) || !m.w_target.iter().copied().all(non_neg) {
+                    return Err(crate::model::damaged(
+                        "rls",
+                        "its saved weights hold a value no stream writes",
+                    ));
+                }
+                let decays = m.cfg.decay.factor(1.0) < 1.0;
+                let pivots_ok = (0..k).all(|i| {
+                    let d = m.r[base(k, i) + i];
+                    d.is_finite() && if decays { d >= 0.0 } else { d > 0.0 }
+                });
+                let entries_ok = m.r.iter().all(|v| v.is_finite())
+                    && m.u.iter().flatten().all(|v| v.is_finite())
+                    && m.beta.iter().flatten().all(|v| v.is_finite());
+                if !pivots_ok || !entries_ok {
+                    return Err(crate::model::damaged(
+                        "rls",
+                        "its factor holds a value no stream writes",
+                    ));
+                }
                 m.ensure_buffers();
                 Ok(m)
             }
@@ -2416,5 +2442,79 @@ mod tests {
             }
         }
         assert!(s1 > 0.0, "the fit learned");
+    }
+
+    /// STATE-3: impossible pivots, non-finite factor/fit entries, and bad
+    /// weights in an `rls` state are refused on load. Under decay, a pivot
+    /// that genuinely underflowed to 0.0 on an unexcited direction still
+    /// round-trips; under no decay, a zero pivot is impossible and refused.
+    #[test]
+    fn state_3_bad_pivots_and_weights_are_refused_on_load() {
+        // No decay: diagonal pivots start at sqrt(delta) > 0 and only grow.
+        let mut no_decay = Rls::new(rls_cfg(2, 1, f64::INFINITY, 1.0)).unwrap();
+        let mut rng = 42u64;
+        for _ in 0..5 {
+            let x = [lcg(&mut rng), lcg(&mut rng)];
+            no_decay.step(&x, &[Some(x[0] - x[1])], 1.0, 1.0);
+        }
+        assert!(Rls::restore(&no_decay.state()).is_ok());
+        let k = no_decay.cfg.k_total();
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let mut damaged = no_decay.clone();
+            damaged.r[base(k, 1) + 1] = bad;
+            match Rls::restore(&damaged.state()) {
+                Err(StateError::Invalid(e)) => {
+                    assert!(e.contains("damaged"), "no-decay pivot {bad}: {e}");
+                }
+                other => panic!("no-decay pivot = {bad}: {other:?}"),
+            }
+        }
+
+        // With decay: an unexcited feature genuinely reaches pivot 0.0 and
+        // must still round-trip; negative/NaN/infinite pivots are refused.
+        let mut c = rls_cfg(2, 1, 1.0, 1.0);
+        c.decay = Decay::Lam(0.25);
+        let mut decaying = Rls::new(c).unwrap();
+        let mut i = 0u64;
+        while decaying.r[base(k, 2) + 2] > 0.0 {
+            let x0 = (i % 5) as f64 - 2.0;
+            decaying.step(&[x0, 0.0], &[Some(1.0 + x0)], 1.0, 1.0);
+            i += 1;
+        }
+        assert_eq!(decaying.r[base(k, 2) + 2], 0.0);
+        assert!(Rls::restore(&decaying.state()).is_ok());
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            let mut damaged = decaying.clone();
+            damaged.r[base(k, 2) + 2] = bad;
+            assert!(
+                Rls::restore(&damaged.state()).is_err(),
+                "decay pivot = {bad}"
+            );
+        }
+
+        // Non-finite off-diagonal / u / beta and negative/non-finite weights.
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            type Edit = (&'static str, fn(&mut Rls, f64));
+            let edits: [Edit; 3] = [
+                ("off-diag r", |r, v| r.r[base(r.cfg.k_total(), 0) + 1] = v),
+                ("u", |r, v| r.u[0][0] = v),
+                ("beta", |r, v| r.beta[0][0] = v),
+            ];
+            for (name, edit) in edits {
+                let mut damaged = no_decay.clone();
+                edit(&mut damaged, bad);
+                assert!(Rls::restore(&damaged.state()).is_err(), "{name} = {bad}");
+            }
+        }
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            for (name, edit) in [
+                ("w_sum", (|r: &mut Rls, v| r.w_sum = v) as fn(&mut Rls, f64)),
+                ("w_target", |r: &mut Rls, v| r.w_target[0] = v),
+            ] {
+                let mut damaged = no_decay.clone();
+                edit(&mut damaged, bad);
+                assert!(Rls::restore(&damaged.state()).is_err(), "{name} = {bad}");
+            }
+        }
     }
 }

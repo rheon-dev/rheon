@@ -532,3 +532,76 @@ fn glm_4_the_binomials_weight_at_the_clip_loses_its_digits() {
         wk.w
     );
 }
+
+/// STATE-3: a span refit whose buffered rows exceed `max_state_bytes` is
+/// refused on load, while a fresh empty model (whose stamp overhead alone
+/// can exceed a tiny cap) still round-trips.
+#[test]
+fn state_3_a_span_past_its_cap_is_refused_on_load() {
+    let mut c = GlmCfg {
+        refit_clock: Some(1e6),
+        max_state_bytes: Some(1),
+        ..cfg_of(GlmFamily::Poisson, 1, 0)
+    };
+    let fresh = Glm::new(c.clone()).unwrap();
+    assert!(Glm::restore(&fresh.state()).is_ok());
+
+    c.max_state_bytes = None;
+    let mut m = Glm::new(c).unwrap();
+    for (x, y) in stream_of(GlmFamily::Poisson, 2, 5, 19) {
+        m.step(&x, &[Some(y)], 1.0, 1.0);
+    }
+    let held = m.refit_held_bytes(0);
+    assert!(held > 0);
+    m.cfg.max_state_bytes = Some(held);
+    assert!(Glm::restore(&m.state()).is_ok());
+
+    let mut over = m.clone();
+    over.cfg.max_state_bytes = Some(held - 1);
+    match Glm::restore(&over.state()) {
+        Err(StateError::Invalid(e)) => assert!(e.contains("max_state_bytes"), "{e}"),
+        other => panic!("expected cap refusal, got {other:?}"),
+    }
+}
+
+/// STATE-3: negative or non-finite weights in a `glm` state are refused on
+/// load; a buffered row whose weight decayed to 0 is still accepted.
+#[test]
+fn state_3_a_weight_no_stream_writes_is_refused_on_load() {
+    let c = GlmCfg {
+        refit_clock: Some(50.0),
+        n_targets: 2,
+        ..cfg_of(GlmFamily::Poisson, 1, 0)
+    };
+    let mut m = Glm::new(c).unwrap();
+    for (x, y) in stream_of(GlmFamily::Poisson, 2, 4, 23) {
+        m.step(&x, &[Some(y), Some(y)], 1.0, 1.0);
+    }
+    assert!(Glm::restore(&m.state()).is_ok());
+
+    let width = m.cfg.n_features + 2;
+    let mut decayed_zero = m.clone();
+    decayed_zero.refit[0].rows[width - 1] = 0.0;
+    assert!(Glm::restore(&decayed_zero.state()).is_ok());
+
+    for bad in [-1.0, f64::NAN, f64::INFINITY] {
+        type Edit = (&'static str, fn(&mut Glm, f64));
+        let edits: [Edit; 4] = [
+            ("w_sum", |g, v| g.w_sum = v),
+            ("w_target", |g, v| g.w_target[0] = v),
+            ("own", |g, v| g.own = v),
+            ("refit weight", |g, v| {
+                let w = g.cfg.n_features + 2;
+                g.refit[0].rows[w - 1] = v;
+            }),
+        ];
+        for (name, edit) in edits {
+            let mut damaged = m.clone();
+            edit(&mut damaged, bad);
+            match Glm::restore(&damaged.state()) {
+                Err(StateError::Invalid(e)) => assert!(e.contains("damaged"), "{name} {bad}: {e}"),
+                other => panic!("{name} = {bad}: expected refusal, got {other:?}"),
+            }
+        }
+    }
+}

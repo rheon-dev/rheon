@@ -254,3 +254,109 @@ fn the_partial_products_floor_reads_alike_on_both_sides() {
         );
     }
 }
+
+/// STATE-3: impossible weights, run statistics, warm rows, or log-joints in
+/// a `bocpd` state are refused on load; a clock-hazard state with `-inf` at
+/// `r = 0` beside a finite entry is still accepted.
+#[test]
+fn state_3_a_weight_no_stream_writes_is_refused_on_load() {
+    for emission in [BocpdEmission::Diag, BocpdEmission::Gaussian] {
+        let mut m = Bocpd::new(BocpdCfg {
+            emission,
+            prior_nu: None,
+            ..cfg(2)
+        })
+        .unwrap();
+        for i in 0..8 {
+            m.step(&[i as f64 * 0.2, -(i as f64) * 0.1], &[], 1.0, 1.0);
+        }
+        assert!(m.runs.len() >= 2);
+        assert!(Bocpd::restore(&m.state()).is_ok(), "{emission:?}");
+
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            type Edit = (&'static str, fn(&mut Bocpd, f64));
+            let edits: [Edit; 7] = [
+                ("n_eff", |b, v| b.n_eff = v),
+                ("w_mean", |b, v| b.w_mean = v),
+                ("w_rows", |b, v| b.w_rows = v),
+                ("warm_gap", |b, v| b.warm_gap = v),
+                ("run.len", |b, v| b.runs[1].len = v),
+                ("run.n", |b, v| b.runs[1].n = v),
+                ("run.m2[0]", |b, v| b.runs[1].m2[0] = v),
+            ];
+            for (name, edit) in edits {
+                let mut damaged = m.clone();
+                edit(&mut damaged, bad);
+                match Bocpd::restore(&damaged.state()) {
+                    Err(crate::StateError::Invalid(e)) => {
+                        assert!(e.contains("damaged"), "{emission:?} {name} {bad}: {e}");
+                    }
+                    other => panic!("{emission:?} {name} = {bad}: {other:?}"),
+                }
+            }
+        }
+
+        type Case = (&'static str, fn(&mut Bocpd));
+        let impossible: [Case; 6] = [
+            ("w_rows > 0 with w_mean == 0", |b| {
+                b.w_rows = 1.0;
+                b.w_mean = 0.0;
+            }),
+            ("w_rows == 0 with w_mean > 0", |b| {
+                b.w_rows = 0.0;
+                b.w_mean = 1.0;
+            }),
+            ("run.n > 0 with run.len == 0", |b| {
+                b.runs[1].len = 0.0;
+                b.runs[1].n = 1.0;
+            }),
+            ("NaN logjoint", |b| b.logjoint[0] = f64::NAN),
+            ("+inf logjoint", |b| b.logjoint[0] = f64::INFINITY),
+            ("all -inf logjoint", |b| b.logjoint.fill(f64::NEG_INFINITY)),
+        ];
+        for (name, edit) in impossible {
+            let mut damaged = m.clone();
+            edit(&mut damaged);
+            assert!(
+                Bocpd::restore(&damaged.state()).is_err(),
+                "{emission:?} {name}"
+            );
+        }
+
+        let mut neg_inf_head = m.clone();
+        neg_inf_head.logjoint[0] = f64::NEG_INFINITY;
+        assert!(
+            Bocpd::restore(&neg_inf_head.state()).is_ok(),
+            "{emission:?}"
+        );
+    }
+
+    let mut warming = Bocpd::new(BocpdCfg {
+        prior_mean: None,
+        prior_scale: None,
+        prior_nu: None,
+        warm_rows: Some(10),
+        ..cfg(2)
+    })
+    .unwrap();
+    for i in 0..3 {
+        warming.step(&[i as f64, 0.5], &[], 1.0, 1.0);
+    }
+    assert!(Bocpd::restore(&warming.state()).is_ok());
+    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let mut damaged = warming.clone();
+        damaged.warm[0].weight = bad;
+        assert!(
+            Bocpd::restore(&damaged.state()).is_err(),
+            "warm.weight {bad}"
+        );
+    }
+    for bad in [-1.0, f64::NAN, f64::INFINITY] {
+        let mut damaged = warming.clone();
+        damaged.warm[0].d_clock = bad;
+        assert!(
+            Bocpd::restore(&damaged.state()).is_err(),
+            "warm.d_clock {bad}"
+        );
+    }
+}

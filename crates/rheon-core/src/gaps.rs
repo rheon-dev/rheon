@@ -1307,6 +1307,19 @@ impl Acc {
                 .held
                 .has_shape(n_targets, |j| g.grams[g.of[j]].pending_len())
     }
+
+    /// Whether the accumulators' weights are ones a stream writes: finite and
+    /// not negative across the Grams, target weights, cross-moments, target
+    /// moments, and held block weights (review 2026-11-23, STATE-3).
+    pub(crate) fn has_valid_weights(&self) -> bool {
+        let non_neg = |v: f64| v.is_finite() && v >= 0.0;
+        non_neg(self.cross.w)
+            && self.wj.iter().copied().all(non_neg)
+            && self.grams.grams.iter().all(EwCov::has_valid_weights)
+            && self.tm.q().iter().copied().all(non_neg)
+            && self.held.hist.iter().copied().all(non_neg)
+            && self.held.w_end.iter().copied().all(non_neg)
+    }
 }
 
 /// Whether target moments are `n_targets` wide in each part a row or a
@@ -1891,6 +1904,23 @@ impl AccSnap {
             && self.wj.len() == n_targets
             && self.cross.has_shape(n_targets, k, false)
             && self.tm.as_ref().is_none_or(|t| tm_has_shape(t, n_targets))
+    }
+
+    /// Whether the snapshot's weights are ones a stream writes: finite and
+    /// not negative (review 2026-11-23, STATE-3).
+    pub(crate) fn has_valid_weights(&self) -> bool {
+        let non_neg = |v: f64| v.is_finite() && v >= 0.0;
+        non_neg(self.cross.w)
+            && self.wj.iter().copied().all(non_neg)
+            && self
+                .grams
+                .grams
+                .iter()
+                .all(|m| non_neg(m.w) && m.q.is_none_or(non_neg))
+            && self
+                .tm
+                .as_ref()
+                .is_none_or(|t| t.q().iter().copied().all(non_neg))
     }
 }
 

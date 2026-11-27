@@ -1413,3 +1413,154 @@ fn a_model_read_without_restore_steps_as_its_original() {
         assert_eq!(m.beta, back.beta, "intercept {fit_intercept}");
     }
 }
+
+/// STATE-3: impossible `StepGain` invariants (including `resting: true` with
+/// `n: 0.0`, which divides `0.0 / 0.0` on a probe) and impossible `sgd`
+/// weights are refused on both `Sgd::restore` and serde deserialization.
+#[test]
+fn state_3_an_impossible_step_gain_is_refused_on_load() {
+    let mut calm = Sgd::new(SgdCfg {
+        standardize: false,
+        ..cfg(SgdLoss::Squared, LearningRate::Constant, 0.002)
+    })
+    .unwrap();
+    for (x, y) in rows(260, 0.0) {
+        calm.step(&x, &[Some(y)], 1.0, 1.0);
+    }
+    assert!(calm.gain[0].resting && calm.gain[0].n >= REST_WEIGHT);
+    assert!(Sgd::restore(&calm.state()).is_ok());
+    let calm_bytes = rmp_serde::to_vec_named(&calm).unwrap();
+    assert!(rmp_serde::from_slice::<Sgd>(&calm_bytes).is_ok());
+
+    // Underflow of q^2 at tiny gain leaves q > 0, q2 == 0, n > 0: legal.
+    let mut tiny_q = Sgd::new(cfg(SgdLoss::Squared, LearningRate::Constant, 0.05)).unwrap();
+    tiny_q.gain[0] = StepGain {
+        q: 1e-200,
+        q2: 0.0,
+        n: 1.0,
+        resting: false,
+        rested: 1,
+    };
+    assert!(Sgd::restore(&tiny_q.state()).is_ok());
+    let tiny_bytes = rmp_serde::to_vec_named(&tiny_q).unwrap();
+    assert!(rmp_serde::from_slice::<Sgd>(&tiny_bytes).is_ok());
+
+    let bad_gains = [
+        (
+            "resting with n = 0",
+            StepGain {
+                q: 0.0,
+                q2: 0.0,
+                n: 0.0,
+                resting: true,
+                rested: 0,
+            },
+        ),
+        (
+            "resting below REST_WEIGHT",
+            StepGain {
+                q: 1.0,
+                q2: 0.5,
+                n: 10.0,
+                resting: true,
+                rested: 0,
+            },
+        ),
+        (
+            "resting while q2 > q",
+            StepGain {
+                q: 1.0,
+                q2: 2.0,
+                n: REST_WEIGHT,
+                resting: true,
+                rested: 0,
+            },
+        ),
+        (
+            "nonzero q with n = 0",
+            StepGain {
+                q: 1.0,
+                q2: 1.0,
+                n: 0.0,
+                resting: false,
+                rested: 0,
+            },
+        ),
+        (
+            "nonzero q2 with q = 0",
+            StepGain {
+                q: 0.0,
+                q2: 1.0,
+                n: 1.0,
+                resting: false,
+                rested: 0,
+            },
+        ),
+        (
+            "negative q",
+            StepGain {
+                q: -1.0,
+                q2: 1.0,
+                n: 1.0,
+                resting: false,
+                rested: 0,
+            },
+        ),
+        (
+            "negative q2",
+            StepGain {
+                q: 1.0,
+                q2: -1.0,
+                n: 1.0,
+                resting: false,
+                rested: 0,
+            },
+        ),
+        (
+            "negative n",
+            StepGain {
+                q: 1.0,
+                q2: 1.0,
+                n: -1.0,
+                resting: false,
+                rested: 0,
+            },
+        ),
+        (
+            "NaN q",
+            StepGain {
+                q: f64::NAN,
+                q2: 0.0,
+                n: 1.0,
+                resting: false,
+                rested: 0,
+            },
+        ),
+        (
+            "infinite n",
+            StepGain {
+                q: 1.0,
+                q2: 1.0,
+                n: f64::INFINITY,
+                resting: false,
+                rested: 0,
+            },
+        ),
+    ];
+    let base_m = Sgd::new(cfg(SgdLoss::Squared, LearningRate::Constant, 0.05)).unwrap();
+    for (what, g) in bad_gains {
+        let mut damaged = base_m.clone();
+        damaged.gain[0] = g;
+        match Sgd::restore(&damaged.state()) {
+            Err(crate::StateError::Invalid(e)) => {
+                assert!(e.contains("learning-rate state"), "{what}: {e}");
+            }
+            other => panic!("{what} restore: {other:?}"),
+        }
+        let bytes = rmp_serde::to_vec_named(&damaged).unwrap();
+        let err = rmp_serde::from_slice::<Sgd>(&bytes)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("learning-rate state"), "{what} serde: {err}");
+    }
+}

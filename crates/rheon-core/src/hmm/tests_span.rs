@@ -286,3 +286,40 @@ fn the_warm_up_budget_is_counted_in_bytes() {
         (1000 * (std::mem::size_of::<Vec<f64>>() + 3 * 8)) as u64
     );
 }
+
+/// STATE-3: an `hmm` warm-up span whose buffered rows exceed its cap (or a
+/// non-span state recording `over` or `warm_first`) is refused on load.
+#[test]
+fn state_3_a_warm_span_past_its_cap_is_refused_on_load() {
+    let mut m = Hmm::new(HmmCfg {
+        warm_rows: 2,
+        warm_clock: Some(1e12),
+        ..cfg(2, 2)
+    })
+    .unwrap();
+    for (i, x) in stream(6, 17, 3).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, &[], 1.0, 1.0);
+    }
+    assert_eq!(m.buffer.len(), 6);
+    m.set_cap_for_test(m.warm_bytes(6));
+    assert!(Hmm::restore(&m.state()).is_ok());
+
+    m.set_cap_for_test(m.warm_bytes(5));
+    match Hmm::restore(&m.state()) {
+        Err(crate::StateError::Invalid(e)) => assert!(e.contains("warm-up cap"), "{e}"),
+        other => panic!("over cap: {other:?}"),
+    }
+
+    let plain = Hmm::new(cfg(2, 2)).unwrap();
+    for (name, edit) in [
+        ("over", (|h: &mut Hmm| h.over = Some(1)) as fn(&mut Hmm)),
+        ("warm_first", |h: &mut Hmm| {
+            h.warm_first = Some(Stamp::from(0.0));
+        }),
+    ] {
+        let mut damaged = plain.clone();
+        edit(&mut damaged);
+        assert!(Hmm::restore(&damaged.state()).is_err(), "{name}");
+    }
+}

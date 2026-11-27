@@ -3294,11 +3294,28 @@ impl OnlineModel for Robust {
                     // A place on the clock exactly under a span, as `sgd`'s:
                     // a span without one never closed (review 2026-11-23,
                     // REG-16).
-                } && m.place.is_some() == m.cfg.refit_clock.is_some();
+                } && m.place.is_some() == m.cfg.refit_clock.is_some()
+                    && (m.over.is_none() || m.cfg.refit_clock.is_some());
                 if !refit_fits {
                     return Err(StateError::Invalid(format!(
                         "{kind}: it is damaged, since the rows it saved for its refit do not match {kind}_refit_rows. Load an undamaged copy of the state file, or rebuild it from its input."
                     )));
+                }
+                // Span cap on load (review 2026-11-23, STATE-3): once a span
+                // holds any rows or ageing runs, its bytes must stay within
+                // `max_state_bytes`.
+                if m.cfg.refit_clock.is_some() && m.refit.iter().any(RefitBuf::has_held) {
+                    let bytes: u64 = m
+                        .refit
+                        .iter()
+                        .fold(0u64, |acc, b| acc.saturating_add(b.held_bytes()));
+                    let cap = m.span_cap();
+                    if bytes > cap {
+                        return Err(crate::model::damaged(
+                            kind,
+                            format!("it holds {bytes} bytes, past max_state_bytes of {cap}"),
+                        ));
+                    }
                 }
                 // The held |e|'s tree is not state: reading each buffer
                 // built it from the rows (`RefitBufFile`).
