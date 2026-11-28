@@ -39,7 +39,6 @@ def hmm(
     prior_rows: float | None = None,
     warm_span: float | Duration | None = None,
     smooth_lag: int | None = None,
-    max_state_bytes: int | None = None,
     params: str | None = None,
     means_weight: float | None = None,
     covars_prior: float | list[float] | None = None,
@@ -516,7 +515,6 @@ def hmm(
     for key, val in (
         ("warm_span", warm_span),
         ("smooth_lag", smooth_lag),
-        ("max_state_bytes", max_state_bytes),
         ("params", params),
         ("means_weight", means_weight),
         ("covars_prior", covars_prior),

@@ -149,7 +149,7 @@ the docs set it:
 
 | the switch | where the docs show it |
 |---|---|
-| the diagnostics: `emit_sigma`, `emit_zscore`, `emit_selected`, `emit_averaged`, `emit_drift`, `emit_metrics` (boolean or list of score names, with `metric_quantiles`), `emit_autocorr`, `resid_quantiles`, `conformal` (scalar or list of levels, with `conformal_symmetric`), `emit_conformal_p`, `emit_calibration`, `emit_breaks`, `emit_specification`, `emit_tails`, `emit_influence` (`ewridge`'s, `rls`'s and `kalman`'s), `emit_feature_health` (not `holt`'s, which has no features) | [Is the model working?](DIAGNOSTICS.md), for the models that predict a target. `emit_metrics`' `hit_rate_<t>` is null throughout on an `sgd` fit with `loss="poisson"`, whose rate and count have no sign to hit |
+| the diagnostics: `emit_sigma`, `emit_zscore`, `emit_selected`, `emit_averaged`, `emit_drift`, `emit_metrics` (boolean or list of score names, with `metric_quantiles`), `emit_autocorr`, `resid_quantiles`, `conformal` (scalar or list of levels, with `conformal_symmetric`), `emit_conformal_p`, `emit_calibration`, `emit_spiegelhalter` (logistic models), `emit_breaks`, `emit_specification`, `emit_arch_lm`, `emit_white`, `emit_tails`, `emit_influence`, `emit_cooks_distance` and `emit_dfbetas` (`ewridge`'s, `rls`'s and `kalman`'s), `emit_feature_health`, and `feature_ks_window` / `feature_ks_recent` (not `holt`'s, which has no features) | [Is the model working?](DIAGNOSTICS.md), for the models that predict a target. `emit_metrics`' `hit_rate_<t>` is null throughout on an `sgd` fit with `loss="poisson"`, whose rate and count have no sign to hit |
 | `emit_error_inflation` and `emit_se_coef`, `ewridge`'s, `rls`'s and `kalman`'s | [Warm-up gates](MODELS.md#warm-up-gates) |
 | `emit_robust_se` (with optional `robust_se_types` for `hc0` to `hc3`), `ewridge`'s and `rls`'s | [Can its t be trusted?](DIAGNOSTICS.md#can-its-t-be-trusted) |
 | `emit_clocks`, every model's | [Learn targets known late](how-to/learn-targets-known-late.md#check-that-it-worked), and the table of its two fields after this one |
@@ -662,6 +662,14 @@ The fields of `rp.spec.kmeans("m", features=["x0", "x1"], half_life=50.0, n_clus
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 | `coef` | `list[f64]` | the numbers behind the fit as one list ([shared field](#fields-most-models-write)) | on every row but those `coef_every` or `max_rows_between_coefs` fills (by default, each group's last row not skipped in each chunk), and before the model has anything to report |
 
+Under `emit_distances=True, emit_inertia=True`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `dist_0` | `f64` | distance from the row to center `<j>`, in EW standard deviations under `standardize` and in the features' own units otherwise | where `cluster` is |
+| `dist_1` | `f64` | distance from the row to center `<j>`, in EW standard deviations under `standardize` and in the features' own units otherwise | where `cluster` is |
+| `inertia` | `f64` | exponentially weighted sum of squared distances to the nearest center accumulated before this row | where `cluster` is |
+
 ## `micro`
 
 The fields of `rp.spec.micro("m", features=["x0", "x1"], half_life=50.0, eps=0.3)`:
@@ -734,6 +742,12 @@ The fields of `rp.spec.corrchange("m", features=["x0", "x1"], window_rows=20)`:
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
+
+Under `emit_n_flagged=True`, it also writes:
+
+| field | dtype | what it holds | also null |
+|---|---|---|---|
+| `n_flagged` | `i64` | count of pairs flagged at the adjusted level on the report | where `flag` is |
 
 ## `bocpd`
 

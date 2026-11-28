@@ -3570,7 +3570,7 @@ impl OnlineModel for EwRidge {
                 if self.slot_ill(slot) {
                     continue;
                 }
-                let Some((sys, factor)) = self.kept_system(slot) else {
+                let Some((sys, factor, proj)) = self.kept_system(slot) else {
                     continue;
                 };
                 let kk = sys.z.len();
@@ -3586,7 +3586,13 @@ impl OnlineModel for EwRidge {
                         }),
                 );
                 if !need_vec {
-                    let q = factor.map_or(0.0, |f| f.quad_forms(&v, kk, 1)[0] * sys.scale);
+                    let q = factor.map_or(0.0, |f| {
+                        let form = match proj {
+                            Some(p) => p.projected_quad_spd(f, &v),
+                            None => f.quad_forms(&v, kk, 1)[0],
+                        };
+                        form * sys.scale
+                    });
                     h_unit[slot] = (q + if sys.centred { 1.0 } else { 0.0 }) / w_dec;
                     continue;
                 }

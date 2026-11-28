@@ -3594,7 +3594,6 @@ fn the_conformal_scores_fixture_freezes_its_forms() {
     }
 }
 
-
 fn hmm_bocpd_ext_specs() -> Vec<Spec> {
     [
         r#"{"name": "hmm_smooth", "model": {"type": "hmm", "n_components": 2, "covariance_type": "spherical", "precision_prior": 0.1, "warm_rows": 10, "smooth_lag": 4}, "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "half_life": 20.0, "weight": "w"}"#,
@@ -3833,8 +3832,6 @@ fn dependence_run(bytes: &[u8], input: &DataFrame) -> Ran {
     ))
 }
 
-=======
->>>>>>> task-524-regression-variants
 fn kind_of(f: &Fixture) -> Kind {
     kinds()
         .into_iter()

@@ -299,6 +299,55 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **Wave 5 feature additions across covariance, window operators, Kalman,
+  diagnostics, forecast comparison, regimes, changepoints, regressions, and
+  clustering** (PLAN 517–525; all new options default off so existing outputs
+  and schemas are unchanged):
+  - **`ew_cov` uncentered covariance and Gaussian log-likelihood** (PLAN 517):
+    `assume_centered=True` emits uncentered `raw_cov` (RiskMetrics EWMA) and
+    `emit_loglik=True` emits Gaussian log-likelihood beside `mahal`, verified
+    against `scikit-learn` and `scipy.stats.multivariate_normal.logpdf`.
+  - **Window operators** (PLAN 518): `rp.ops.rolling_quantile` (exact windowed
+    quantile with Polars `interpolation=`), `rp.ops.rolling_rank`, and
+    count-weighted `rp.ops.ewm_mean(adjust=True)`, verified exact against Polars.
+  - **`kalman` prior and innovation diagnostics** (PLAN 519): `coef_prior` on
+    linear, EKF, and UKF `kalman`, plus linear `emit_loglik` and `emit_mahal`,
+    verified against `filterpy` across 12 × 50-seed oracle grids (`<= 2.1e-14`).
+  - **Specification, calibration, and influence diagnostics** (PLAN 520):
+    Engle's ARCH LM (`emit_arch_lm`, `arch_lm_lags`), White's test
+    (`emit_white`, `white_interaction_terms`), Spiegelhalter's logistic
+    calibration z-test (`emit_spiegelhalter`), Cook's distance
+    (`emit_cooks_distance`), and per-coefficient DFBETAS (`emit_dfbetas`),
+    verified against `statsmodels` and `mapie`.
+  - **Forecast comparison tests** (PLAN 521): `rp.eval.diebold_mariano` gains
+    Harvey-Leybourne-Newbold finite-sample scaling (`hln=True`), Student-t
+    reference (`reference="t"`), custom `loss` (`"squared"`, `"absolute"`,
+    `"pinball"`, `"linex"`, or callable), and one-sided `alternative`; new
+    `rp.eval.giacomini_white` (pure-Python HAC Wald conditional predictive
+    ability test) and `rp.eval.mean_seqtest` (anytime-valid bounded-mean CM-EB
+    and betting tests), verified against `dieboldmariano` and `statsmodels`.
+  - **`hmm` and `bocpd` extensions** (PLAN 522, 523): `hmm` adds fixed-lag
+    smoothed probabilities (`smooth_lag`), `covariance_type="spherical"`,
+    partial parameter learning (`params` `"t"`/`"m"`/`"c"`), and conjugate prior
+    weights (`means_weight`, `covars_prior`, `covars_weight`); `bocpd` adds
+    negative-binomial run-length hazard (`hazard_kind="neg_binomial"`,
+    `hazard_k`, `hazard_p`), known-variance normal-normal conjugate emission
+    (`obs_var`), and atomic runtime `HeldCap` under top-level `max_state_bytes`.
+  - **Regression variants** (PLAN 524): MacKay empirical-Bayes
+    `ewridge(evidence=True, evidence_prior=...)` with `pred_std_<t>`,
+    `lasso(positive=True)`, redescending `huber` norms (`"tukey"`, `"andrews"`,
+    `"hampel"`, `"ramsay"`), Polyak-Ruppert averaged `pa` and `sgd`
+    (`average=True`), and `sgd` `l1` elastic-net, `schedule="optimal"`, and
+    importance-invariant updates (`invariant=True`), verified against
+    `scikit-learn` and `statsmodels`.
+  - **Smaller options across existing models** (PLAN 525): `kmeans` fixed
+    `centers`/`learn`/`emit_distances`/`emit_inertia`, `ew_class` fixed
+    `priors`/`reg_param`/`var_smoothing`, `holt` `start="known"` with
+    `forecast_spans`, `corrchange` Holm-Bonferroni (`alpha_adjust="holm"`) and
+    `emit_n_flagged`, and standalone rolling two-sample KS feature health
+    (`feature_ks_window`, `feature_ks_recent`) bounded by top-level
+    `max_state_bytes`.
+
 - **Nonlinear observation filters (EKF and UKF) on `kalman`** (PLAN 497):
   `rp.spec.kalman` accepts GLM observation `family` (`"gaussian"`, `"poisson"`,
   `"gamma"`, `"binomial"`, `"tweedie"`), `link`, `dispersion`, `tweedie_power`,

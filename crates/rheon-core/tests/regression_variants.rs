@@ -101,6 +101,7 @@ fn ewridge_evidence_recovers_truth_emits_pred_std_and_survives_restore() {
             window: None,
             window_every: None,
             max_rows_between_snapshots: None,
+            constraints: None,
             evidence: Some(ev),
         };
         let mut m = EwRidge::new(cfg.clone()).unwrap();
@@ -159,6 +160,7 @@ fn ewridge_evidence_zero_weight_leaves_state_untouched() {
         window: None,
         window_every: None,
         max_rows_between_snapshots: None,
+        constraints: None,
         evidence: Some(EvidenceCfg::default()),
     };
     let mut a = EwRidge::new(cfg.clone()).unwrap();

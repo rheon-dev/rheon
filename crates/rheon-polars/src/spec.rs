@@ -4156,6 +4156,12 @@ impl Spec {
         // A model that predicts no target is refused these below, once, with
         // every residual switch it was given.
         let predicts = !self.model.predicts_no_target();
+        let needs = |key: &str, switch: &str| {
+            format!(
+                "spec {name:?}: {key} applies only when {switch} is on, but {switch} is off. \
+                 Turn on {switch}, or leave out {key}."
+            )
+        };
         self.validate_diagnostics(name, predicts, &needs, no);
         const DRIFT_ACTION: [&str; 2] = ["flag", "reset"];
         if let Some(a) = &self.drift_action

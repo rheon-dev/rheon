@@ -2694,8 +2694,7 @@ impl Spec {
                             .unwrap_or(rheon_core::FEATURE_KS_MAX_STATE_BYTES);
                         let bytes = rheon_core::feature_ks_state_bytes(self.k(), w);
                         if bytes > cap {
-                            let max_w =
-                                cap / (std::mem::size_of::<f64>() as u64 * self.k() as u64);
+                            let max_w = cap / (std::mem::size_of::<f64>() as u64 * self.k() as u64);
                             no.refuse(format!(
                                 "spec {name:?}: feature_ks_window ({w}) across {} features holds \
                                  {bytes} bytes per group, above the {cap} byte per-group cap. \

@@ -33,7 +33,6 @@ def bocpd(
     robust_beta: float | None = None,
     prune_below: float | None = None,
     max_run: int | None = None,
-    max_state_bytes: int | None = None,
     warm_rows: int | None = None,
     warm_span: float | Duration | None = None,
     **common: Unpack[CommonKwargs],
@@ -547,7 +546,6 @@ def bocpd(
         ("hazard_k", hazard_k),
         ("hazard_p", hazard_p),
         ("obs_var", obs_var),
-        ("max_state_bytes", max_state_bytes),
     ):
         if val is not None:
             model[key] = val

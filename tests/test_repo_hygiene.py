@@ -86,8 +86,10 @@ MAX_SOURCE_BYTES = 260_000
 #: Raised to 850 KB on 2026-11-24: it reached 805 KB with wave W14's nine
 #: branches (the horizons, the bars, the isotonic fit, the clock health, the
 #: inversion and the review batches). Raised to 870 KB on 2026-11-25: it
-#: reached 850 KB with wave W14-15's budget raises.
-MAX_DOC_BYTES = 870_000
+#: reached 850 KB with wave W14-15's budget raises. Raised to 920 KB on
+#: 2026-11-27: CHANGELOG.md reached 867 KB ahead of the Wave 5 and Wave 6
+#: Stage 1d feature additions.
+MAX_DOC_BYTES = 920_000
 
 #: Lockfiles are generated but must be tracked, and grow with every wheel a
 #: dependency publishes (mypy alone added 65 KB); their size says nothing

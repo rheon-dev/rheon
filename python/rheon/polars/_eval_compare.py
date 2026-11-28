@@ -16,7 +16,6 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, overload
 
-import numpy as np
 import polars as pl
 
 from rheon import _rheon as _native
@@ -340,6 +339,33 @@ def _gw_state_bytes(q: int, lags: int, instrument_lags: int) -> int:
     return 8 * ((lags + 1) * q * q + q * lags + q + instrument_lags + 2)
 
 
+def _cholesky_quad_form(mat: list[list[float]], b: list[float]) -> float | None:
+    """Return ``b' mat⁻¹ b`` via lower Cholesky, or ``None`` if not SPD."""
+    n = len(b)
+    chol: list[list[float]] = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        row_i = chol[i]
+        for j in range(i + 1):
+            s = mat[i][j]
+            row_j = chol[j]
+            for k in range(j):
+                s -= row_i[k] * row_j[k]
+            if i == j:
+                if not (math.isfinite(s) and s > 0.0):
+                    return None
+                row_i[j] = math.sqrt(s)
+            else:
+                row_i[j] = s / row_j[j]
+    y = [0.0] * n
+    for i in range(n):
+        s = b[i]
+        row_i = chol[i]
+        for j in range(i):
+            s -= row_i[j] * y[j]
+        y[i] = s / row_i[i]
+    return sum(v * v for v in y)
+
+
 @dataclass
 class _GwState:
     q: int
@@ -348,46 +374,62 @@ class _GwState:
     count: int = 0
     w: float = 0.0
     q_sum: float = 0.0
-    zs: np.ndarray = field(init=False)
-    gam: np.ndarray = field(init=False)
+    zs: list[float] = field(init=False)
+    gam: list[list[list[float]]] = field(init=False)
     ring_d: deque[float] = field(init=False)
-    zring: deque[np.ndarray] = field(init=False)
+    zring: deque[list[float]] = field(init=False)
 
     def __post_init__(self) -> None:
-        self.zs = np.zeros(self.q, dtype=np.float64)
-        self.gam = np.zeros((self.lags + 1, self.q, self.q), dtype=np.float64)
+        self.zs = [0.0] * self.q
+        self.gam = [[[0.0] * self.q for _ in range(self.q)] for _ in range(self.lags + 1)]
         self.ring_d = deque(maxlen=self.instrument_lags)
         self.zring = deque(maxlen=self.lags)
 
     def step(self, d: float, exog: Sequence[float], lam: float) -> None:
+        q = self.q
         if lam != 1.0:
             self.w *= lam
             self.q_sum *= lam * lam
-            self.zs *= lam
-            self.gam *= lam
+            zs = self.zs
+            for i in range(q):
+                zs[i] *= lam
+            for g in self.gam:
+                for row in g:
+                    for j in range(q):
+                        row[j] *= lam
         if len(self.ring_d) < self.instrument_lags:
             if self.instrument_lags > 0:
                 self.ring_d.append(d)
             return
-        h = np.empty(self.q, dtype=np.float64)
-        h[0] = 1.0
+        z = [0.0] * q
+        z[0] = d
         idx = 1
         if self.instrument_lags > 0:
             for prev in reversed(self.ring_d):
-                h[idx] = prev
+                z[idx] = prev * d
                 idx += 1
         for v in exog:
-            h[idx] = v
+            z[idx] = v * d
             idx += 1
-        z = h * d
         self.count += 1
         self.w += 1.0
         self.q_sum += 1.0
-        self.zs += z
-        self.gam[0] += np.outer(z, z)
+        zs = self.zs
+        g0 = self.gam[0]
+        for i in range(q):
+            zi = z[i]
+            zs[i] += zi
+            row = g0[i]
+            for j in range(q):
+                row[j] += zi * z[j]
         if self.lags > 0:
             for lag, past in enumerate(reversed(self.zring), start=1):
-                self.gam[lag] += np.outer(z, past)
+                gl = self.gam[lag]
+                for i in range(q):
+                    zi = z[i]
+                    row = gl[i]
+                    for j in range(q):
+                        row[j] += zi * past[j]
             self.zring.append(z)
         if self.instrument_lags > 0:
             self.ring_d.append(d)
@@ -401,20 +443,29 @@ class _GwState:
             or self.q_sum <= 0.0
         ):
             return None
+        q = self.q
+        inv_w = 1.0 / self.w
         n_eff = (self.w * self.w) / self.q_sum
-        zbar = self.zs / self.w
-        om = self.gam[0] / self.w
+        zbar = [v * inv_w for v in self.zs]
+        g0 = self.gam[0]
+        om = [[g0[i][j] * inv_w for j in range(q)] for i in range(q)]
         for lag in range(1, self.lags + 1):
-            wt = 1.0 - lag / (self.lags + 1.0)
-            gl = self.gam[lag] / self.w
-            om = om + wt * (gl + gl.T)
-        om = 0.5 * (om + om.T)
-        try:
-            chol = np.linalg.cholesky(om)
-        except np.linalg.LinAlgError:
+            wt = (1.0 - lag / (self.lags + 1.0)) * inv_w
+            gl = self.gam[lag]
+            for i in range(q):
+                om_i = om[i]
+                gl_i = gl[i]
+                for j in range(q):
+                    om_i[j] += wt * (gl_i[j] + gl[j][i])
+        for i in range(q):
+            for j in range(i + 1, q):
+                avg = 0.5 * (om[i][j] + om[j][i])
+                om[i][j] = avg
+                om[j][i] = avg
+        qf = _cholesky_quad_form(om, zbar)
+        if qf is None:
             return None
-        y = np.linalg.solve(chol, zbar)
-        val = float(n_eff * np.dot(y, y))
+        val = float(n_eff * qf)
         if not (math.isfinite(val) and val >= 0.0):
             return None
         return val

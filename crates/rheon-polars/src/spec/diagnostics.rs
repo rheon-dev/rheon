@@ -79,6 +79,12 @@ impl ModelKind {
             }
             | ModelKind::Isotonic {
                 max_state_bytes, ..
+            }
+            | ModelKind::Hmm {
+                max_state_bytes, ..
+            }
+            | ModelKind::Bocpd {
+                max_state_bytes, ..
             } => *max_state_bytes,
             ModelKind::Spectral(s) => s.max_state_bytes,
             ModelKind::VectorAr(v) => v.max_state_bytes,
@@ -118,6 +124,8 @@ impl ModelKind {
                 | ModelKind::Ar { .. }
                 | ModelKind::Spectral(_)
                 | ModelKind::Isotonic { .. }
+                | ModelKind::Hmm { .. }
+                | ModelKind::Bocpd { .. }
                 | ModelKind::VectorAr(_)
                 | ModelKind::Krls(_)
                 | ModelKind::Dependence(_)
@@ -396,7 +404,9 @@ impl Spec {
     /// Whether this spec carries a bounded diagnostic state that reads the
     /// top-level `max_state_bytes` cap.
     pub fn has_diagnostic_state_cap(&self) -> bool {
-        self.emit_conformal_p || (self.emit_robust_se && self.has_robust_se())
+        self.emit_conformal_p
+            || (self.emit_robust_se && self.has_robust_se())
+            || self.has_feature_ks()
     }
 
     /// Effective `max_state_bytes` for a model configuration: model-block value

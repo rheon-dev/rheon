@@ -948,7 +948,7 @@ pub fn bocpd_cfg(spec: &Spec) -> Result<BocpdCfg, String> {
     let extras = rheon_core::BocpdCfgExtras {
         nb_hazard,
         obs_var: obs_var.as_ref().map(FloatOrList::to_vec),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
     };
     let extras = (!extras.is_empty()).then(|| Box::new(extras));
     Ok(BocpdCfg {
@@ -1325,7 +1325,7 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
     no.finish()?;
     let extras = rheon_core::HmmCfgExtras {
         smooth_lag: smooth_lag.map(|l| usize::try_from(l).unwrap_or(usize::MAX)),
-        max_state_bytes: *max_state_bytes,
+        max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
         params: params.clone(),
         means_weight: *means_weight,
         covars_prior: covars_prior.as_ref().map(FloatOrList::to_vec),
