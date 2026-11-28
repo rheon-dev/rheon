@@ -152,3 +152,59 @@ fn the_redraw_cadence_is_checked() {
         assert!(e.contains("permute_every must be at least 0"), "{e}");
     }
 }
+
+/// Clock-window cap check: zero-weight rows do not breach at cap, `dropped_at`
+/// uses `2.0 * span` (not `2.0 + span` or `0`), and `ring.len() - dropped_at + monitoring + 1`
+/// accounts for evicted rows cleanly.
+#[test]
+fn window_clock_cap_zero_weight_and_dropped_at_span_edges() {
+    let base = CorrChangeCfg {
+        kind: CorrChangeKind::Window,
+        span_rows: 0,
+        span_clock: Some(5.0),
+        ..cfg()
+    };
+    let mut probe = CorrChange::new(base.clone()).unwrap();
+    let cap = probe.held_bytes_for(4);
+    let c = CorrChangeCfg {
+        max_state_bytes: Some(cap),
+        ..base
+    };
+    probe = CorrChange::new(c).unwrap();
+    let data = rows(10, 42);
+    // Fill 4 rows at t = 0, 1, 2, 3 (ring at cap = 4 rows).
+    for (i, x) in data[..4].iter().enumerate() {
+        probe.stamp_next(Stamp::Raw(i as f64, 0.0));
+        probe.step(x, &[], 1.0, 1.0);
+        assert_eq!(probe.state_over_cap(), None);
+    }
+    assert_eq!(probe.ring.len(), 4);
+
+    // 1. Zero-weight row at cap must NOT breach (`weight > 0.0`, not `>=`).
+    let mut zero = probe.clone();
+    zero.stamp_next(Stamp::Raw(4.0, 0.0));
+    zero.step(&data[4], &[], 1.0, 0.0);
+    assert_eq!(zero.state_over_cap(), None);
+
+    // 2. Positive-weight row at t = 8.0: `2.0 * span = 10.0` drops 0 rows
+    //    (whereas `2.0 + span = 7.0` would drop 2 rows, and `+ monitoring` -> `*` would give 1).
+    //    Must breach `cap`!
+    let mut still_in = probe.clone();
+    still_in.stamp_next(Stamp::Raw(8.0, 0.0));
+    still_in.step(&data[4], &[], 5.0, 1.0);
+    assert!(
+        still_in.state_over_cap().is_some(),
+        "at t=8.0 < 2*5=10.0 no row leaves, so 5th row breaches cap"
+    );
+
+    // 3. Positive-weight row at t = 11.0: `11 - 0 >= 10` and `11 - 1 >= 10` -> 2 rows leave,
+    //    `rows = 4 - 2 + 0 + 1 = 3 <= 4` -> ADMITTED!
+    let mut after_drop = probe;
+    after_drop.stamp_next(Stamp::Raw(11.0, 0.0));
+    after_drop.step(&data[4], &[], 8.0, 1.0);
+    assert_eq!(
+        after_drop.state_over_cap(),
+        None,
+        "at t=11.0 >= 2*5=10.0 two rows leave so row fits"
+    );
+}

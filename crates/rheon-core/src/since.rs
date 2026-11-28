@@ -542,4 +542,15 @@ mod tests {
             assert_eq!(back.reached(2.0), i == 4000, "row {i}");
         }
     }
+
+    #[test]
+    fn since_discard_next_clears_pending_stamp() {
+        let mut s = Since::default();
+        s.stamp_next_on_rows(Stamp::from(100.0));
+        s.discard_next();
+        s.step(1.0);
+        assert_eq!(s.last, None);
+        assert_eq!(s.from, None);
+        assert!(!s.next_on_rows);
+    }
 }

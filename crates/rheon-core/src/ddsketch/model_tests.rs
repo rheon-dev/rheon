@@ -507,3 +507,32 @@ fn scaling_every_weight_changes_nothing_but_the_weight() {
         assert_eq!((wa * 0.25).to_bits(), wb.to_bits());
     }
 }
+
+/// After a cap breach (`over.is_some()`), row-clock `stamp_next_on_rows` reads
+/// advance the hypothetical window key by 1 for positive-weight rows (`weight > 0.0`)
+/// and by 0 for zero-weight rows.
+#[test]
+fn over_cap_row_clock_read_ahead_distinguishes_positive_and_zero_weight() {
+    let mut c = cfg(1, &[0.25]);
+    c.window_clock = Some(4.0);
+    c.closed = WindowClosed::Right;
+    c.max_state_bytes = Some(20_000);
+    let mut m = DdSketchModel::new(c).unwrap();
+    for i in 1..=4 {
+        m.stamp_next_on_rows(Stamp::from(i as f64));
+        m.step(&[], &[Some(i as f64)], 1.0, 1.0);
+    }
+    assert_eq!(m.n_eff(), 4.0);
+    // Mark over-cap directly so the post-cap `read_ahead` branch runs on row 5.
+    m.over = Some(20_001);
+
+    // Positive weight (`weight > 0.0`): key = 4 + 1 = 5.0 -> row 1 (`1.0`) leaves (`5 - 1 >= 4`) -> n_eff = 3.0.
+    m.stamp_next_on_rows(Stamp::from(5.0));
+    let pos = m.step(&[], &[Some(5.0)], 1.0, 1.0);
+    assert_eq!(pos.n_eff, 3.0);
+
+    // Zero weight (`weight == 0.0`): key = 4 + 0 = 4.0 -> row 1 stays (`4 - 1 < 4`) -> n_eff = 4.0.
+    m.stamp_next_on_rows(Stamp::from(5.0));
+    let zero = m.step(&[], &[Some(5.0)], 1.0, 0.0);
+    assert_eq!(zero.n_eff, 4.0);
+}

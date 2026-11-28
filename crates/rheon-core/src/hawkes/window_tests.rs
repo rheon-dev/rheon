@@ -325,3 +325,41 @@ fn a_fit_below_min_weight_is_not_called_unidentified() {
         assert!(!m.not_identified(&s), "row {i}");
     }
 }
+
+/// Clock-window `peek_stamp` (`own + d_clock`) and `clock_bytes_at` (`window_rows - dropped + extra`)
+/// at the exact `max_state_bytes` cap.
+#[test]
+fn clock_window_peek_stamp_and_cap_eviction() {
+    let base = HawkesCfg {
+        window_clock: Some(5.5),
+        closed: WindowClosed::Right,
+        ..cfg(1, &[1.0])
+    };
+    let (n, u, _) = base.dims();
+    let cap = Hawkes::clock_state_bytes(n, u, 4);
+    let mut m = Hawkes::new(HawkesCfg {
+        max_state_bytes: Some(cap),
+        ..base
+    })
+    .unwrap();
+    // 4 events at own = 0, 1, 2, 3 (no `stamp_next`).
+    for i in 0..4 {
+        m.step(&[], &[Some(1.0)], if i == 0 { 0.0 } else { 1.0 }, 1.0);
+        assert_eq!(m.state_over_cap(), None);
+    }
+    assert_eq!(m.window_rows(), 4);
+    assert_eq!(m.peek_stamp(2.0, None), Some(Stamp::from(5.0)));
+
+    // `d_clock = 2.0`: `own + 2.0 = 5.0 < 5.5` drops 0 rows -> 5th row breaches cap!
+    // (Mutant `own * d_clock = 6.0 >= 5.5` would drop row 0 and falsely admit.)
+    let mut no_drop = m.clone();
+    no_drop.step(&[], &[Some(1.0)], 2.0, 1.0);
+    assert!(no_drop.state_over_cap().is_some());
+
+    // `d_clock = 10.0`: `own + 10.0 = 13.0` drops all 4 rows -> `4 - 4 + 1 = 1 <= 4` -> ADMITTED!
+    // (Kills `own - d_clock`, `delete match arm (Some(w), Some(span))`, and `window_rows + dropped`.)
+    let mut all_drop = m;
+    all_drop.step(&[], &[Some(1.0)], 10.0, 1.0);
+    assert_eq!(all_drop.state_over_cap(), None);
+    assert_eq!(all_drop.window_rows(), 1);
+}

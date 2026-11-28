@@ -324,3 +324,27 @@ fn state_3_a_warm_span_past_its_cap_is_refused_on_load() {
         assert!(Hmm::restore(&damaged.state()).is_err(), "{name}");
     }
 }
+
+/// A zero-weight row arriving while the warm-up span buffer is already at its
+/// byte cap does not trigger a cap breach (`weight > 0.0`, not `>=`).
+#[test]
+fn zero_weight_row_at_warm_cap_does_not_breach() {
+    let mut m = Hmm::new(HmmCfg {
+        warm_rows: 2,
+        warm_clock: Some(1e12),
+        ..cfg(2, 2)
+    })
+    .unwrap();
+    let cap = m.warm_bytes(3);
+    m.set_cap_for_test(cap);
+    for (i, x) in stream(3, 19, 3).iter().enumerate() {
+        m.stamp_next(Stamp::Ns(i as i128 * S));
+        m.step(x, &[], 1.0, 1.0);
+    }
+    assert_eq!(m.buffer.len(), 3);
+    assert_eq!(m.state_over_cap(), None);
+    m.stamp_next(Stamp::Ns(3 * S));
+    m.step(&[0.1, 0.2], &[], 1.0, 0.0);
+    assert_eq!(m.state_over_cap(), None);
+    assert_eq!(m.buffer.len(), 3);
+}

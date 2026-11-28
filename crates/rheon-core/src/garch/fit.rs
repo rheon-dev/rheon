@@ -1265,3 +1265,15 @@ fn with_inputs(
     }
     (out, units)
 }
+
+#[cfg(test)]
+mod fit_mutant_tests {
+    use super::*;
+
+    #[test]
+    fn fisher_lin_se_withholds_zero_variance() {
+        // Zero contrast vector gives `c^T H^{-1} c == 0.0`: must return `+inf`,
+        // not `0.0` (`v > 0.0`, not `>= 0.0`).
+        assert!(fisher_lin_se(&[1.0], 1, 1.0, &[0.0]).is_infinite());
+    }
+}

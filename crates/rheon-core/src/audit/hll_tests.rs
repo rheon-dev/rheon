@@ -841,3 +841,441 @@ fn hll_source_calls_no_platform_math_library() {
         assert!(!src.contains(bad), "hll.rs calls platform math {bad}");
     }
 }
+
+#[test]
+fn audit_cfg_cap_enforcement_pair_bytes_and_validation_edges() {
+    // `distinct: Some` with both `precision: None` and `max_state_bytes: None`
+    // does NOT enforce the state cap, even when `fixed_state_bytes() > DEFAULT_STATE_BYTES`.
+    let no_cap = AuditCfg {
+        n_columns: 1,
+        pairs: false,
+        distinct_cap: MAX_DISTINCT_CAP,
+        gap_cap: None,
+        has_clock: false,
+        distinct: Some(AuditDistinctCfg {
+            precision: None,
+            window_rows: None,
+            window_clock: None,
+            closed: WindowClosed::Right,
+            max_state_bytes: None,
+        }),
+    };
+    assert!(!no_cap.enforces_state_cap());
+    assert!(no_cap.fixed_state_bytes() > DEFAULT_STATE_BYTES);
+    assert!(no_cap.validate().is_ok());
+
+    // `base_audit_bytes` exact formula with `pairs = true` (`k = 3 => 3 pairs`).
+    let with_pairs = AuditCfg {
+        n_columns: 3,
+        pairs: true,
+        distinct_cap: 16,
+        gap_cap: None,
+        has_clock: false,
+        distinct: None,
+    };
+    let expected_base = 3 * (16 * 16 + AUDIT_COL_BASE_BYTES) + 3 * AUDIT_PAIR_BYTES;
+    assert_eq!(with_pairs.base_audit_bytes(), expected_base);
+
+    // Invalid `precision` with tight `max_state_bytes`: must NOT also emit
+    // the `"state takes ... bytes"` cap error while `precision_ok` is false.
+    let bad_p_tight_cap = hll_cfg(1, Some(7), None, None, WindowClosed::Right, Some(100));
+    let err = bad_p_tight_cap.validate().unwrap_err();
+    assert!(err.contains("distinct_precision"), "{err}");
+    assert!(!err.contains("state takes"), "{err}");
+
+    // Exact boundary `fixed_state_bytes() == cap` must be accepted (`>` not `>=`).
+    let probe = hll_cfg(1, Some(8), None, None, WindowClosed::Right, None);
+    let exact_cap = probe.fixed_state_bytes();
+    let at_cap = hll_cfg(1, Some(8), None, None, WindowClosed::Right, Some(exact_cap));
+    assert!(at_cap.validate().is_ok());
+}
+
+#[test]
+fn audit_hll_state_eq_serde_live_bytes_state_bytes_and_registers() {
+    // Plain HLL: `state_bytes`, `hll_registers`, `AuditHllState::eq`.
+    let plain_cfg = hll_cfg(1, Some(8), None, None, WindowClosed::Right, None);
+    let mut m = Audit::new(plain_cfg.clone()).unwrap();
+    assert_eq!(m.state_bytes(), plain_cfg.fixed_state_bytes());
+    assert_eq!(m.hll_registers(0).unwrap().len(), 256);
+    assert!(m.hll_registers(1).is_none());
+    assert_eq!(m.take_state_warning(), None);
+
+    // Without HLL: `hll_registers` is `None`.
+    let no_hll = Audit::new(AuditCfg {
+        n_columns: 1,
+        pairs: false,
+        distinct_cap: 16,
+        gap_cap: None,
+        has_clock: false,
+        distinct: None,
+    })
+    .unwrap();
+    assert!(no_hll.hll_registers(0).is_none());
+    assert_eq!(no_hll.state_bytes(), no_hll.cfg().fixed_state_bytes());
+
+    // `AuditHllState::eq` differs on each of `sketches`, `over`, `warned`.
+    let h0 = m.hll.clone().unwrap();
+    m.step(&[1.0], &[], 1.0, 1.0);
+    let h_sketch = m.hll.clone().unwrap();
+    assert_ne!(h0, h_sketch);
+
+    let mut h_over = h0.clone();
+    h_over.over = Some(plain_cfg.cap() + 1);
+    assert_ne!(h0, h_over);
+
+    let mut h_warned = h0.clone();
+    h_warned.warned = true;
+    assert_ne!(h0, h_warned);
+
+    // `is_false` serde omission: `warned = true` must survive named msgpack round-trip.
+    let mut m_warned = m.clone();
+    m_warned.hll.as_mut().unwrap().warned = true;
+    let bytes = rmp_serde::to_vec_named(&m_warned).unwrap();
+    let back: Audit = rmp_serde::from_slice(&bytes).unwrap();
+    assert!(back.hll.unwrap().warned);
+
+    // SlidingRows and SlidingClock `live_entry_bytes`, `state_bytes`, and `hll_registers`.
+    let row_cfg = hll_cfg(1, Some(8), Some(10), None, WindowClosed::Right, None);
+    let mut mr = Audit::new(row_cfg.clone()).unwrap();
+    assert!(mr.hll_registers(0).is_none());
+    mr.step(&[1.0], &[], 1.0, 1.0);
+    mr.step(&[2.0], &[], 1.0, 1.0);
+    let live_r = mr.hll.as_ref().unwrap().live_entry_bytes();
+    assert!(live_r >= hll::HLL_ROW_ENTRY_BYTES);
+    assert_eq!(mr.state_bytes(), row_cfg.fixed_state_bytes() + live_r);
+
+    let clk_cfg = hll_cfg(1, Some(8), None, Some(10.0), WindowClosed::Right, None);
+    let mut mc = Audit::new(clk_cfg.clone()).unwrap();
+    assert!(mc.hll_registers(0).is_none());
+    mc.stamp_next(Stamp::Raw(1.0, 0.0));
+    mc.step(&[1.0], &[], 0.0, 1.0);
+    let live_c = mc.hll.as_ref().unwrap().live_entry_bytes();
+    assert_eq!(live_c, hll::HLL_CLOCK_ENTRY_BYTES);
+    assert_eq!(mc.state_bytes(), clk_cfg.fixed_state_bytes() + live_c);
+}
+
+#[test]
+fn audit_hll_state_has_shape_every_bound_and_branch() {
+    // 1. `over` boundary: `cap + 1` valid, `cap` invalid (`<= cap`).
+    let mut row_cfg = AuditCfg {
+        n_columns: 2,
+        pairs: false,
+        distinct_cap: 16,
+        gap_cap: None,
+        has_clock: false,
+        distinct: Some(AuditDistinctCfg {
+            precision: Some(8),
+            window_rows: Some(5),
+            window_clock: None,
+            closed: WindowClosed::Right,
+            max_state_bytes: None,
+        }),
+    };
+    let cap = row_cfg.fixed_state_bytes() + 2 * hll::HLL_ROW_ENTRY_BYTES;
+    row_cfg.distinct.as_mut().unwrap().max_state_bytes = Some(cap);
+
+    let mut mr = Audit::new(row_cfg.clone()).unwrap();
+    // 1 row with 2 columns => 2 live entries => `total_bytes == cap` exactly.
+    mr.step(&[1.0, 2.0], &[], 1.0, 1.0);
+    assert_eq!(mr.state_bytes(), cap);
+    assert!(mr.hll.as_ref().unwrap().has_shape(&row_cfg));
+
+    let mut over_ok = mr.hll.clone().unwrap();
+    over_ok.over = Some(cap + 1);
+    assert!(over_ok.has_shape(&row_cfg));
+
+    let mut over_bad = mr.hll.clone().unwrap();
+    over_bad.over = Some(cap);
+    assert!(!over_bad.has_shape(&row_cfg));
+
+    // `total_bytes > cap` rejected (add a 3rd entry manually).
+    let mut over_bytes = mr.hll.clone().unwrap();
+    if let HllSketches::SlidingRows { cols, .. } = &mut over_bytes.sketches {
+        cols[0].add_key(key(999.0), 1);
+        // Ensure live entries actually grew past 2 (pick a value in another reg).
+        for k in 10..200 {
+            if cols[0].live_entries() >= 2 {
+                break;
+            }
+            cols[0].add_key(key(k as f64), 1);
+        }
+    }
+    assert!(over_bytes.live_entry_bytes() > 2 * hll::HLL_ROW_ENTRY_BYTES);
+    assert!(!over_bytes.has_shape(&row_cfg));
+
+    // SlidingRows: wrong `cols.len()` alone rejected (`&&` not `||`).
+    let mut short_cols = mr.hll.clone().unwrap();
+    if let HllSketches::SlidingRows { cols, .. } = &mut short_cols.sketches {
+        cols.pop();
+    }
+    assert!(!short_cols.has_shape(&row_cfg));
+
+    // SlidingRows: `seq <= row_count && seq > cutoff` (`cutoff = 10 - 5 = 5`).
+    let mut mr_seq = Audit::new(hll_cfg(
+        1,
+        Some(8),
+        Some(5),
+        None,
+        WindowClosed::Right,
+        None,
+    ))
+    .unwrap();
+    // Future `seq = 11` (> row_count 10, > cutoff 5).
+    if let HllSketches::SlidingRows { cols, row_count } = &mut mr_seq.hll.as_mut().unwrap().sketches
+    {
+        *row_count = 10;
+        cols[0].add_key(key(1.0), 11);
+    }
+    assert!(!mr_seq.hll.as_ref().unwrap().has_shape(mr_seq.cfg()));
+
+    // Boundary expired `seq = 5` (`<= row_count 10`, NOT `> cutoff 5`).
+    let mut mr_cut = Audit::new(hll_cfg(
+        1,
+        Some(8),
+        Some(5),
+        None,
+        WindowClosed::Right,
+        None,
+    ))
+    .unwrap();
+    if let HllSketches::SlidingRows { cols, row_count } = &mut mr_cut.hll.as_mut().unwrap().sketches
+    {
+        *row_count = 10;
+        cols[0].add_key(key(1.0), 5);
+    }
+    assert!(!mr_cut.hll.as_ref().unwrap().has_shape(mr_cut.cfg()));
+
+    // SlidingClock: empty `last_stamp == None` valid; corrupt empty invalid;
+    // wrong `cols.len()` alone invalid; non-finite `place` alone invalid.
+    let clk_cfg = hll_cfg(2, Some(8), None, Some(10.0), WindowClosed::Right, None);
+    let mc = Audit::new(clk_cfg.clone()).unwrap();
+    assert!(mc.hll.as_ref().unwrap().has_shape(&clk_cfg));
+
+    let mut clk_short = mc.hll.clone().unwrap();
+    if let HllSketches::SlidingClock { cols, .. } = &mut clk_short.sketches {
+        cols.pop();
+    }
+    assert!(!clk_short.has_shape(&clk_cfg));
+
+    let mut clk_nan_place = mc.hll.clone().unwrap();
+    if let HllSketches::SlidingClock { place, .. } = &mut clk_nan_place.sketches {
+        let _ = place.step(f64::NAN);
+    }
+    assert!(!clk_nan_place.has_shape(&clk_cfg));
+
+    // `last_stamp == None` with `live_entries == 0` but mismatched precision on col 0.
+    let mut clk_bad_empty = mc.hll.clone().unwrap();
+    if let HllSketches::SlidingClock { cols, .. } = &mut clk_bad_empty.sketches {
+        cols[0] = hll::SlidingHll::new(9);
+    }
+    assert!(!clk_bad_empty.has_shape(&clk_cfg));
+}
+
+#[test]
+fn audit_clock_ahead_stamp_next_on_rows_and_merge_order() {
+    // `clock_ahead`: `d_clock` finite/non-negative checks and `back_by(last, -dt)`.
+    let cfg = hll_cfg(1, Some(8), None, Some(10.0), WindowClosed::Right, None);
+    let mut m = Audit::new(cfg.clone()).unwrap();
+    m.stamp_next(Stamp::Raw(10.0, 0.0));
+    m.step(&[1.0], &[], 0.0, 1.0);
+    // Positive finite `d_clock = 15.0 > span = 10.0` expires the entry at `t = 10.0`.
+    assert_eq!(m.predict(&[0.0], 15.0).pred[0], 0.0);
+    // Negative `d_clock = -15.0` and `+inf` fall back to `dt = 0.0` (do NOT expire).
+    assert!(m.predict(&[0.0], -15.0).pred[0] > 0.5);
+    assert!(m.predict(&[0.0], f64::INFINITY).pred[0] > 0.5);
+
+    // Direct `clock_ahead` negative `d_clock` stays at `last_stamp` (does not step back).
+    let place = Place::default();
+    assert_eq!(
+        Audit::clock_ahead(&place, Some(Stamp::Raw(10.0, 0.0)), false, -5.0),
+        Stamp::Raw(10.0, 0.0)
+    );
+
+    // `stamp_next_on_rows` + `clock_ahead` `on_rows` (`back_by(s, -1.0)`).
+    let row_clk_cfg = hll_cfg(1, Some(8), None, Some(1.0), WindowClosed::Right, None);
+    let mut on_rows = Audit::new(row_clk_cfg.clone()).unwrap();
+    on_rows.stamp_next_on_rows(Stamp::Int(1, 0.0));
+    on_rows.step(&[1.0], &[], 0.0, 1.0);
+    // `on_rows == true` advances by +1 to `Int(2, 0.0)`, expiring `Int(1, 0.0)` under `span = 1.0`.
+    assert_eq!(on_rows.predict(&[0.0], 0.0).pred[0], 0.0);
+
+    // `merge`: `sa > sb` keeps `sa` as `merged_now` and expires `b`'s old entry;
+    // `*ra |= *rb` propagates `on_rows` from either side.
+    let mut a = Audit::new(cfg.clone()).unwrap();
+    a.stamp_next(Stamp::Raw(20.0, 0.0));
+    a.step(&[1.0], &[], 0.0, 1.0);
+    let mut b = Audit::new(cfg.clone()).unwrap();
+    b.stamp_next(Stamp::Raw(5.0, 0.0));
+    b.step(&[2.0], &[], 0.0, 1.0);
+    a.merge(&b).unwrap();
+    let est_ab = a.column(0).approx_distinct.unwrap();
+    let mut ref1 = Hll::new(8);
+    ref1.add_key(key(1.0), 8);
+    assert_eq!(est_ab.to_bits(), ref1.count(8).to_bits());
+
+    // After `merge`, `self.fresh == true` while `last_stamp.is_some()`: stepping
+    // without `stamp_next` and a huge `d_clock` must use `step_dt = 0.0` (`!self.fresh`).
+    let mut after_merge = a.clone();
+    let step_m = after_merge.step(&[3.0], &[], 100.0, 1.0);
+    assert!(
+        step_m.pred[0] > 0.5,
+        "fresh row after merge must not expire by d_clock"
+    );
+
+    // Non-fresh `SlidingClock` without `stamp_next`: `+inf` and `-50.0` `d_clock`
+    // must use `step_dt = 0.0`.
+    let mut no_hand = Audit::new(cfg).unwrap();
+    no_hand.step(&[1.0], &[], 0.0, 1.0);
+    no_hand.step(&[2.0], &[], 2.0, 1.0);
+    let inf_step = no_hand.step(&[3.0], &[], f64::INFINITY, 1.0);
+    assert!(
+        inf_step.pred[0] > 1.5,
+        "+inf d_clock must not expire window"
+    );
+    let neg_step = no_hand.step(&[4.0], &[], -50.0, 1.0);
+    assert!(neg_step.pred[0] > 2.5);
+    // `place.own` must remain at `2.0`, so `d_clock = 9.0` advances to `11.0` (> 10.0)
+    // and expires the entry at `t = 0.0` (if `-50.0` had been applied, `own` would be `-48.0`).
+    let fwd_step = no_hand.step(&[5.0], &[], 9.0, 1.0);
+    let mut ref3 = Hll::new(8);
+    for v in [2.0, 3.0, 4.0] {
+        ref3.add_key(key(v), 8);
+    }
+    assert_eq!(fwd_step.pred[0].to_bits(), ref3.count(8).to_bits());
+
+    // `*ra |= *rb`: merge `on_rows = false` with `on_rows = true` -> result has `on_rows = true`.
+    let mut m_false = Audit::new(row_clk_cfg.clone()).unwrap();
+    m_false.stamp_next(Stamp::Int(1, 0.0));
+    m_false.step(&[1.0], &[], 0.0, 1.0);
+    let mut m_true = Audit::new(row_clk_cfg).unwrap();
+    m_true.stamp_next_on_rows(Stamp::Int(1, 0.0));
+    m_true.step(&[2.0], &[], 0.0, 1.0);
+    m_false.merge(&m_true).unwrap();
+    assert_eq!(m_false.predict(&[0.0], 0.0).pred[0], 0.0);
+}
+
+#[test]
+fn sliding_rows_and_clock_held_cap_exact_boundaries_and_trim_on_boundary_path() {
+    // 1. SlidingRows (`k = 1`, `window_rows = 4`): cap fits exactly 4 live entries.
+    let mut row_cfg = AuditCfg {
+        n_columns: 1,
+        pairs: false,
+        distinct_cap: 16,
+        gap_cap: None,
+        has_clock: false,
+        distinct: Some(AuditDistinctCfg {
+            precision: Some(8),
+            window_rows: Some(4),
+            window_clock: None,
+            closed: WindowClosed::Right,
+            max_state_bytes: None,
+        }),
+    };
+    let base_r = row_cfg.fixed_state_bytes();
+    let cap_r = base_r + 4 * hll::HLL_ROW_ENTRY_BYTES;
+    row_cfg.distinct.as_mut().unwrap().max_state_bytes = Some(cap_r);
+
+    // Pick 6 distinct values mapping to 6 distinct registers so each adds 1 live entry.
+    let mut distinct_reg_vals = Vec::new();
+    let mut used_regs = std::collections::HashSet::new();
+    for i in 1..10_000u64 {
+        let v = i as f64;
+        let (j, _) = hll::reg_and_rank(key(v), 8);
+        if used_regs.insert(j) {
+            distinct_reg_vals.push(v);
+            if distinct_reg_vals.len() == 6 {
+                break;
+            }
+        }
+    }
+
+    // With `window_rows = 4`, row 5 expires row 1 so `exact_bytes == cap_r` -> ADMITTED.
+    let mut mr4 = Audit::new(row_cfg.clone()).unwrap();
+    for &v in &distinct_reg_vals[..5] {
+        mr4.step(&[v], &[], 1.0, 1.0);
+        assert_eq!(mr4.state_over_cap(), None);
+        assert!(mr4.state_bytes() <= cap_r);
+    }
+    assert_eq!(mr4.n_eff(), 5.0);
+
+    // With `window_rows = 10`, row 5 expires nothing -> `exact_bytes == cap_r + 24 > cap_r`
+    // -> atomically REJECTED (`k = 1` kills `live_total + k` -> `live_total * k`,
+    // `fast_max > state_cap` -> `<` / `==`, `s <= cutoff` -> `>`, `!hc.admit` -> `hc.admit`).
+    let mut row_cfg10 = row_cfg;
+    row_cfg10.distinct.as_mut().unwrap().window_rows = Some(10);
+    let mut mr10 = Audit::new(row_cfg10).unwrap();
+    for &v in &distinct_reg_vals[..4] {
+        mr10.step(&[v], &[], 1.0, 1.0);
+        assert_eq!(mr10.state_over_cap(), None);
+    }
+    assert_eq!(mr10.state_bytes(), cap_r);
+    let snap_r = mr10.clone();
+    mr10.step(&[distinct_reg_vals[4]], &[], 1.0, 1.0);
+    let (over_b, over_cap) = mr10.state_over_cap().expect("expected SlidingRows refusal");
+    assert_eq!(over_b, cap_r + hll::HLL_ROW_ENTRY_BYTES);
+    assert_eq!(over_cap, cap_r);
+    assert_eq!(mr10.state_bytes(), cap_r);
+    assert_eq!(mr10.n_eff(), snap_r.n_eff());
+
+    // 2. SlidingClock (`k = 1`, `span = 10.0`): cap fits exactly 4 live entries.
+    let mut clk_cfg = AuditCfg {
+        n_columns: 1,
+        pairs: false,
+        distinct_cap: 16,
+        gap_cap: None,
+        has_clock: true,
+        distinct: Some(AuditDistinctCfg {
+            precision: Some(8),
+            window_rows: None,
+            window_clock: Some(10.0),
+            closed: WindowClosed::Right,
+            max_state_bytes: None,
+        }),
+    };
+    let base_c = clk_cfg.fixed_state_bytes();
+    let cap_c = base_c + 4 * hll::HLL_CLOCK_ENTRY_BYTES;
+    clk_cfg.distinct.as_mut().unwrap().max_state_bytes = Some(cap_c);
+
+    // Boundary path where row 5 breaches cap: must reject AT row 5 (`state_bytes() <= cap_c`).
+    let mut mc_breach = Audit::new(clk_cfg.clone()).unwrap();
+    for (i, &v) in distinct_reg_vals[..4].iter().enumerate() {
+        mc_breach.stamp_next(Stamp::Raw(i as f64, 0.0));
+        mc_breach.step(&[v], &[], 1.0, 1.0);
+    }
+    assert_eq!(mc_breach.state_bytes(), cap_c);
+    // Verify `take_state_warning` returns exact `(bytes, cap_c)` and drains to `None`.
+    let (w_bytes, w_cap) = mc_breach
+        .take_state_warning()
+        .expect("expected half-cap warning");
+    assert!(w_bytes * 2 > cap_c && w_cap == cap_c);
+    assert_eq!(mc_breach.take_state_warning(), None);
+
+    mc_breach.stamp_next(Stamp::Raw(4.0, 0.0));
+    mc_breach.step(&[distinct_reg_vals[4]], &[], 1.0, 1.0);
+    let (cb, cc) = mc_breach
+        .state_over_cap()
+        .expect("expected SlidingClock refusal at 5th entry");
+    assert_eq!(cb, cap_c + hll::HLL_CLOCK_ENTRY_BYTES);
+    assert_eq!(cc, cap_c);
+    assert_eq!(mc_breach.state_bytes(), cap_c);
+
+    // Boundary path where row 5 expires old entries (`fast_admitted == false`, admitted):
+    // `!fast_admitted` MUST trim expired entries so `state_bytes() <= cap_c` and
+    // expired values leave `approx_distinct`.
+    let mut mc_trim = Audit::new(clk_cfg).unwrap();
+    for (i, &v) in distinct_reg_vals[..4].iter().enumerate() {
+        mc_trim.stamp_next(Stamp::Raw(i as f64, 0.0));
+        mc_trim.step(&[v], &[], 1.0, 1.0);
+    }
+    assert_eq!(mc_trim.state_bytes(), cap_c);
+    mc_trim.stamp_next(Stamp::Raw(50.0, 0.0));
+    mc_trim.step(&[distinct_reg_vals[4]], &[], 47.0, 1.0);
+    assert_eq!(mc_trim.state_over_cap(), None);
+    assert_eq!(mc_trim.state_bytes(), base_c + hll::HLL_CLOCK_ENTRY_BYTES);
+    let mut ref1 = Hll::new(8);
+    ref1.add_key(key(distinct_reg_vals[4]), 8);
+    assert_eq!(
+        mc_trim.column(0).approx_distinct.unwrap().to_bits(),
+        ref1.count(8).to_bits()
+    );
+}
