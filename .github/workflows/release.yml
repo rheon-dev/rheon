@@ -64,7 +64,7 @@ jobs:
       readme_ref: ${{ inputs.publish && steps.v.outputs.tag || github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - name: publishing is from main only
         if: inputs.publish && github.ref != 'refs/heads/main'
         run: |
@@ -124,7 +124,7 @@ jobs:
       # workspace's `rust-version` admits: the one every other job uses,
       # not whichever the image carries.
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       # PyPI shows README.md as the project page, where a relative link to
       # another file resolves against pypi.org and is a 404. Rewritten to the
       # repository at the tag this run will create (the sha, rehearsing)
@@ -275,7 +275,7 @@ jobs:
       # tree (`cargo tree -p rheon-cli` finds none). That was 26 minutes of
       # the Intel macOS job in the first rehearsal.
 
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       # PyPI shows README.md as the project page, where a relative link to
       # another file resolves against pypi.org and is a 404. Rewritten to the
       # repository at the tag this run will create (the sha, rehearsing)
@@ -580,7 +580,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
       # Same treatment as ci.yml's test job and the canary's: linking this
       # workspace's polars-laden test binaries exhausts the runner without it.
@@ -638,7 +638,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - name: free disk and use a leaner linker
         uses: ./.github/actions/linux-build-prep
       - name: the floor, from pyproject.toml
@@ -690,7 +690,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - name: free disk and use a leaner linker
         uses: ./.github/actions/linux-build-prep
       - run: uv sync ${{ matrix.prerelease }} --upgrade-package numpy
@@ -979,7 +979,7 @@ jobs:
       # First, so a failure names its machine (ci.yml's test job says why).
       - name: the machine this job ran on
         uses: ./.github/actions/machine-report
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - name: install from PyPI and run it
         shell: bash
         env:
