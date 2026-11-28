@@ -3079,6 +3079,19 @@
     loglik_z: f64
     mahal_y: f64
     mahal_z: f64
+  kalman smoothed embargo:
+    pred_y: f64
+    resid_y: f64
+    pred_z: f64
+    resid_z: f64
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
+    smoothed_coef: list[list[f64]]
+    smoothed_se_coef: list[list[f64]]
+    smoothed_for_y: list[clock]
+    smoothed_for_z: list[clock]
   huber minimal:
     pred_y: f64
     resid_y: f64
@@ -3290,6 +3303,20 @@
     smoothed_state0: f64
     smoothed_state1: f64
     smoothed_for: clock
+    weight_sum: f64
+    settled_frac: f64
+    withheld_reason: enum
+    coef: list[f64]
+  hmm smoothed embargo:
+    filtered_state0: f64
+    filtered_state1: f64
+    predicted_state0: f64
+    predicted_state1: f64
+    state: i64
+    loglik: f64
+    smoothed_state0: list[f64]
+    smoothed_state1: list[f64]
+    smoothed_for: list[clock]
     weight_sum: f64
     settled_frac: f64
     withheld_reason: enum

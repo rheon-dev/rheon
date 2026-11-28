@@ -340,38 +340,55 @@ fn the_min_weight_gate_withholds_the_value_describing_a_row_it_withheld() {
     assert!(held > 0 && stood > 0, "{held} held, {stood} stood");
 }
 
-/// A held row is learned on the row whose clock releases it, and one row
-/// can release several whose lags it completes, with one line for them:
-/// `smooth_lag` is refused beside `embargo` and `label_clock`, naming each,
-/// and the same spec without them is accepted and runs.
+/// Under `embargo`, `smooth_lag` emits parallel list-typed smoothed fields
+/// (`List(List(Float64))` for `smoothed_coef`/`smoothed_se_coef` and
+/// `List(<clock>)` for each `smoothed_for_<t>`), holding every release's
+/// emission on the releasing row (null when zero released rows emitted);
+/// `label_clock` remains refused by `label_clock`'s own model rule.
 #[test]
-fn the_smoother_is_refused_beside_the_embargo() {
-    let mut s = spec(r#", "smooth_lag": 4"#, r#", "clock": "t", "embargo": 3"#);
-    let e = s.check().unwrap_err();
-    assert!(e.contains("smooth_lag cannot be used with embargo"), "{e}");
+fn the_smoother_emits_list_columns_under_the_embargo() {
+    let mut s = spec(
+        r#", "smooth_lag": 4, "emit_smoothed_se": true"#,
+        r#", "clock": "t", "embargo": 3"#,
+    );
+    s.check().unwrap();
+    let idx = output_index(&s);
+    let sc = idx.iter().find(|f| f.field == "smoothed_coef").unwrap();
+    assert_eq!(sc.dtype, "list[list[f64]]");
+    let sf = idx.iter().find(|f| f.field == "smoothed_for_y").unwrap();
+    assert_eq!(
+        (sf.dtype.as_str(), sf.kind.as_str()),
+        ("list[clock]", "smoothed_for")
+    );
+    let out = run(&s, &frame(120, 4964), 120);
+    let col = field(&out, "smoothed_for_y");
+    assert_eq!(col.dtype(), &DataType::List(Box::new(DataType::Float64)));
+    assert_eq!(
+        field(&out, "smoothed_coef").dtype(),
+        &DataType::List(Box::new(DataType::List(Box::new(DataType::Float64))))
+    );
+    let exploded: Vec<f64> = col
+        .list()
+        .unwrap()
+        .explode(ExplodeOptions {
+            empty_as_null: false,
+            keep_nulls: false,
+        })
+        .unwrap()
+        .f64()
+        .unwrap()
+        .into_no_null_iter()
+        .collect();
+    assert!(exploded.len() > 50, "got {}", exploded.len());
+
+    // `label_clock` is still refused by `check_label_clock`, not `check_smoother`.
     let mut s = spec(
         r#", "smooth_lag": 4"#,
-        r#", "clock": "t", "label_clock": "t""#,
+        r#", "clock": "t", "label_clock": "lt""#,
     );
     let e = s.check().unwrap_err();
-    assert!(
-        e.contains("smooth_lag cannot be used with label_clock"),
-        "{e}"
-    );
-    let mut held = spec("", r#", "clock": "t", "embargo": 3"#);
-    held.check().unwrap();
-    let mut s = spec(r#", "smooth_lag": 4"#, r#", "clock": "t""#);
-    s.check().unwrap();
-    let out = run(&s, &frame(100, 4964), 100);
-    assert!(
-        field(&out, "smoothed_for_y")
-            .f64()
-            .unwrap()
-            .iter()
-            .flatten()
-            .count()
-            > 50
-    );
+    assert!(e.contains("label_clock does not work with kalman"), "{e}");
+    assert!(!e.contains("smooth_lag cannot be used with"), "{e}");
 }
 
 /// The settings are refused where they cannot hold, each saying why.

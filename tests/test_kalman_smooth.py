@@ -78,7 +78,6 @@ def test_the_smoother_adds_its_fields_and_leaves_every_prediction():
             {"smooth_lag": 3, "covariance_form": "square_root"},
             'smooth_lag needs covariance_form="covariance"',
         ),
-        ({"smooth_lag": 3, "embargo": 2.0}, "smooth_lag cannot be used with embargo"),
         ({"smooth_lag": 5000, "emit_smoothed_se": True}, "past max_state_bytes of 262144"),
     ],
 )
@@ -86,6 +85,21 @@ def test_the_smoothers_settings_are_refused_where_they_cannot_hold(kw, said):
     with pytest.raises(ValueError) as e:
         _spec(**kw)
     assert said in str(e.value)
+
+
+def test_the_smoother_emits_list_columns_under_embargo():
+    df = _frame(150)
+    s = _spec(smooth_lag=4, emit_smoothed_se=True, embargo=3.0)
+    idx = rp.spec.output_index(s)
+    dtypes = dict(zip(idx["field"], idx["dtype"], strict=True))
+    assert dtypes["smoothed_coef"] == "list[list[f64]]"
+    assert dtypes["smoothed_se_coef"] == "list[list[f64]]"
+    assert dtypes["smoothed_for_y"] == "list[clock]"
+    out = rp.ModelBank([s]).fit_predict(df)["k"].struct.unnest()
+    assert out["smoothed_coef"].dtype == pl.List(pl.List(pl.Float64))
+    assert out["smoothed_se_coef"].dtype == pl.List(pl.List(pl.Float64))
+    assert out["smoothed_for_y"].dtype == pl.List(pl.Float64)
+    assert out["smoothed_coef"].drop_nulls().len() > 50
 
 
 def test_the_bank_reads_the_last_observations_from_the_state():

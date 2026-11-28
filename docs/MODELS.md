@@ -1114,14 +1114,17 @@ the bit. It is written on the line of the row that completed the lag, named
 for the row it describes, and never on that row's own line, where a reader
 would take it for something known then. Used as a target for the described
 row, it needs an `embargo` on the downstream spec of at least the lag's
-span. `smooth_lag` is refused beside this spec's own `embargo` or
-`label_clock`, which release several held rows on one row, and under
-`covariance_form = "square_root"`. Where the filter does not continue
+span. Under this spec's own `embargo` or a formula target, one arriving row can
+release zero, one or many held rows. In that case `smoothed_coef` and
+`smoothed_se_coef` become `List(List(Float64))` and each `smoothed_for_<t>`
+becomes `List(<clock>)`, holding one parallel entry per emitting release in
+release order, or null when zero releases emitted. `smooth_lag` is refused
+under `covariance_form = "square_root"`. Where the filter does not continue
 itself (a covariance sized again, a change of coordinates refused, a prior
 whose factorization fails) the recursion does not cross, and the
 observations before are smoothed with the rows up to the break. The last
-`L` observations, whose lags no row has completed, are read from the state
-with [`bank.smoothed_tail()`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.smoothed_tail).
+`L` released observations, whose lags no row has completed, are read from
+the state with [`bank.smoothed_tail()`](https://rheon-dev.github.io/rheon/rheon.html#rheon.polars.ModelBank.smoothed_tail).
 
 #### Example
 
@@ -6081,8 +6084,12 @@ exclusive with `prior_rows`.
 **Fixed-lag smoothing.** Setting `smooth_lag = L` (at least 1 learned row)
 keeps a ring of `L` likelihood vectors and emits `smoothed_state0 ..
 smoothed_state{K-1}` beside `smoothed_for` (clock dtype) once `L` learned
-rows have passed. Smoothed posteriors are never fed back into filtering. The
-ring's size (`8·K·(L + 2) + 16·L` bytes per instance) is checked against
+rows have passed. Under `embargo`, one arriving row can release zero, one
+or many held rows, so `smoothed_state<j>` becomes `List(Float64)` and
+`smoothed_for` becomes `List(<clock>)`, holding one parallel entry per
+emitting release in release order and null when zero releases emitted.
+Smoothed posteriors are never fed back into filtering. The ring's size
+(`8·K·(L + 2) + 16·L` bytes per instance) is checked against
 `max_state_bytes` (default 256 KB, ceiling 64 MiB) when the spec is built.
 
 **Under `"full"` and `"diag"` with `learn = True`, each state's covariance

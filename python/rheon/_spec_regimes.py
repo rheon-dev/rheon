@@ -106,9 +106,12 @@ def hmm(
         Enable fixed-lag smoothing at lag ``smooth_lag`` learned rows (at
         least 1), adding ``smoothed_state<j>`` and ``smoothed_for`` (clock
         dtype) to the output struct without feeding smoothed states back into
-        filtering. ``max_state_bytes`` caps per-group smoother (or
-        ``warm_span``) bytes (default 262,144, ceiling 64 MiB). Refused
-        beside ``embargo`` and ``label_clock``.
+        filtering. Under ``embargo``, one arriving row can release zero, one
+        or many held rows, so ``smoothed_state<j>`` becomes ``List(Float64)``
+        and ``smoothed_for`` becomes ``List(<clock>)``, holding one element
+        per emitting release in release order (null when zero releases
+        emitted). ``max_state_bytes`` caps per-group smoother (or
+        ``warm_span``) bytes (default 262,144, ceiling 64 MiB).
     ``transition_prior``, ``transition``
         The Dirichlet pseudo-count per cell (default 1, finite and at least
         0), and an ``n_components x n_components`` matrix whose rows are

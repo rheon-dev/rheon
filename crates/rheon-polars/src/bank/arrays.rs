@@ -65,6 +65,70 @@ pub(super) fn coef_list_array(coef: &[Option<&Vec<f64>>]) -> Box<dyn ArrowArray>
     ))
 }
 
+/// Nested coefficient lists (`List(List(Float64))`) for fixed-lag smoothed
+/// `kalman` outputs under delayed learning: `None` on rows with zero emitting
+/// releases (materialized as `null`, never `[]`), and one inner list per
+/// emitting release in release order.
+pub(super) fn nested_coef_list_array(rows: &[Option<&Vec<Vec<f64>>>]) -> Box<dyn ArrowArray> {
+    let mut offsets: Vec<i64> = Vec::with_capacity(rows.len() + 1);
+    offsets.push(0);
+    let mut outer = MutableBitmap::with_capacity(rows.len());
+    let mut inner_rows: Vec<Option<&Vec<f64>>> = Vec::new();
+    for row in rows {
+        match row {
+            Some(emissions) => {
+                for e in *emissions {
+                    inner_rows.push(Some(e));
+                }
+                outer.push(true);
+            }
+            None => outer.push(false),
+        }
+        offsets.push(inner_rows.len() as i64);
+    }
+    let child = coef_list_array(&inner_rows);
+    let dtype = ListArray::<i64>::default_datatype(child.dtype().clone());
+    let outer_validity = (outer.unset_bits() > 0).then(|| outer.into());
+    Box::new(ListArray::<i64>::new(
+        dtype,
+        OffsetsBuffer::try_from(offsets).expect("offsets are monotonic by construction"),
+        child,
+        outer_validity,
+    ))
+}
+
+/// Clock-typed lists (`List(<clock_dtype>)`) for `smoothed_for` under delayed
+/// learning: `None` on rows with zero emitting releases (materialized as
+/// `null`, never `[]`), preserving the exact clock dtype and inner nulls.
+pub(super) fn clock_list_array(
+    clock: &crate::stream::ClockDtype,
+    rows: &[Option<&Vec<Option<ClockValue>>>],
+) -> Box<dyn ArrowArray> {
+    let mut offsets: Vec<i64> = Vec::with_capacity(rows.len() + 1);
+    offsets.push(0);
+    let mut flat: Vec<Option<ClockValue>> = Vec::new();
+    let mut outer = MutableBitmap::with_capacity(rows.len());
+    for row in rows {
+        match row {
+            Some(clocks) => {
+                flat.extend_from_slice(clocks);
+                outer.push(true);
+            }
+            None => outer.push(false),
+        }
+        offsets.push(flat.len() as i64);
+    }
+    let child = clock.array(&flat);
+    let dtype = ListArray::<i64>::default_datatype(child.dtype().clone());
+    let outer_validity = (outer.unset_bits() > 0).then(|| outer.into());
+    Box::new(ListArray::<i64>::new(
+        dtype,
+        OffsetsBuffer::try_from(offsets).expect("offsets are monotonic by construction"),
+        child,
+        outer_validity,
+    ))
+}
+
 /// One spec's struct array as a named polars column. Naming the struct is
 /// the whole of what the polars adapter adds to an Arrow output.
 pub(super) fn named_column(spec: &Spec, st: StructArray) -> PolarsResult<Column> {

@@ -2943,7 +2943,10 @@ class ModelBank:
 
         The values are read from the state, so a bank loaded from a file
         reports them as the bank that saved it would, and feeding the rows in
-        one chunk or a thousand gives the same numbers to the bit.
+        one chunk or a thousand gives the same numbers to the bit. Under
+        ``embargo`` or a formula target, this covers the last ``L`` released
+        (learned) observations of each target; rows still waiting for their
+        labels are not included.
         """
         return self._native.smoothed_tail(
             self._spec_index(spec, "ModelBank.smoothed_tail"),

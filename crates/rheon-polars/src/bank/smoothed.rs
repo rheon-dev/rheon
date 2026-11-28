@@ -22,7 +22,10 @@ impl Bank {
     /// stands), `smoothed_coef` (laid out like one target's `coef`, null
     /// where nothing is estimated) and, under `emit_smoothed_se`,
     /// `smoothed_se_coef`. The newest observation's value is its filtered
-    /// one; each older one is smoothed with the rows after it.
+    /// one; each older one is smoothed with the rows after it. Under an
+    /// `embargo` or a formula target, this covers the last `L` released
+    /// (learned) observations of each target; rows still waiting for their
+    /// labels are not included.
     ///
     /// `group` narrows the frame to those keys, in key order; a key the
     /// bank has never seen gives nothing, not an error.

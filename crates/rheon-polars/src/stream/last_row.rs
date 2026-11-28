@@ -151,6 +151,28 @@ pub struct LastRow {
     pub smoothed_se: Vec<Option<Vec<f64>>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub smoothed_for: Vec<Option<ClockValue>>,
+    /// Fixed-lag smoother outputs under delayed learning (`embargo`,
+    /// `label_clock`, or a formula target); empty, and not written, otherwise.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_opt_vec_vec_f64_or_tag"
+    )]
+    pub smoothed_coef_list: Vec<NestedListRow>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_opt_vec_vec_f64_or_tag"
+    )]
+    pub smoothed_se_list: Vec<NestedListRow>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "rheon_core::humanfloat::vec_opt_vec_f64_or_tag"
+    )]
+    pub smoothed_state_list: Vec<Option<Vec<f64>>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub smoothed_for_list: Vec<ClockListRow>,
 }
 
 /// Row `ri` of a buffer of `n_rows` rows: in every `ChunkOut` buffer the row
@@ -162,10 +184,10 @@ fn take_row<T: Copy>(dst: &mut Vec<T>, src: &[T], n_rows: usize, ri: usize) {
     dst.extend(src.iter().skip(ri).step_by(n_rows.max(1)));
 }
 
-/// Row `ri` of a `coef`-like buffer, one list per instance, cloned into the
-/// lists `dst` already holds, so a list of the same length as the last is
-/// copied into its memory rather than allocated (task 270, G-1).
-fn take_list_row(dst: &mut Vec<Option<Vec<f64>>>, src: &[Vec<Option<Vec<f64>>>], ri: usize) {
+/// Row `ri` of a `coef`-like buffer, one optional entry per outer slot, cloned
+/// into the slots `dst` already holds, so a list of the same length as the last
+/// is copied into its memory rather than allocated (task 270, G-1).
+fn take_opt_row<T: Clone>(dst: &mut Vec<Option<T>>, src: &[Vec<Option<T>>], ri: usize) {
     dst.truncate(src.len());
     for (d, s) in dst.iter_mut().zip(src) {
         d.clone_from(&s[ri]);
@@ -199,20 +221,24 @@ impl LastRow {
         take_row(&mut self.learned_clock, &out.learned_clock, n, ri);
         take_row(&mut self.lam_selected, &out.lam_selected, n, ri);
         take_row(&mut self.target_weight, &out.target_weight, n, ri);
-        take_list_row(&mut self.coef, &out.coef, ri);
+        take_opt_row(&mut self.coef, &out.coef, ri);
         take_row(&mut self.settled, &out.settled, n, ri);
         take_row(&mut self.reason, &out.reason, n, ri);
         take_row(&mut self.inflation, &out.inflation, n, ri);
-        take_list_row(&mut self.support_coef, &out.support_coef, ri);
-        take_list_row(&mut self.se_coef, &out.se_coef, ri);
-        take_list_row(&mut self.se_coef_hc0, &out.se_coef_hc0, ri);
-        take_list_row(&mut self.se_coef_hc1, &out.se_coef_hc1, ri);
-        take_list_row(&mut self.se_coef_hc2, &out.se_coef_hc2, ri);
-        take_list_row(&mut self.se_coef_hc3, &out.se_coef_hc3, ri);
-        take_list_row(&mut self.se_coef_hac, &out.se_coef_hac, ri);
-        take_list_row(&mut self.smoothed_coef, &out.smoothed_coef, ri);
-        take_list_row(&mut self.smoothed_se, &out.smoothed_se, ri);
+        take_opt_row(&mut self.support_coef, &out.support_coef, ri);
+        take_opt_row(&mut self.se_coef, &out.se_coef, ri);
+        take_opt_row(&mut self.se_coef_hc0, &out.se_coef_hc0, ri);
+        take_opt_row(&mut self.se_coef_hc1, &out.se_coef_hc1, ri);
+        take_opt_row(&mut self.se_coef_hc2, &out.se_coef_hc2, ri);
+        take_opt_row(&mut self.se_coef_hc3, &out.se_coef_hc3, ri);
+        take_opt_row(&mut self.se_coef_hac, &out.se_coef_hac, ri);
+        take_opt_row(&mut self.smoothed_coef, &out.smoothed_coef, ri);
+        take_opt_row(&mut self.smoothed_se, &out.smoothed_se, ri);
         take_row(&mut self.smoothed_for, &out.smoothed_for, n, ri);
+        take_opt_row(&mut self.smoothed_coef_list, &out.smoothed_coef_list, ri);
+        take_opt_row(&mut self.smoothed_se_list, &out.smoothed_se_list, ri);
+        take_opt_row(&mut self.smoothed_state_list, &out.smoothed_state_list, ri);
+        take_opt_row(&mut self.smoothed_for_list, &out.smoothed_for_list, ri);
     }
 
     /// A one-row chunk at absolute row `row`, marked processed, for
@@ -262,6 +288,10 @@ impl LastRow {
             out.smoothed_coef.len() == self.smoothed_coef.len(),
             out.smoothed_se.len() == self.smoothed_se.len(),
             out.smoothed_for.len() == self.smoothed_for.len(),
+            out.smoothed_coef_list.len() == self.smoothed_coef_list.len(),
+            out.smoothed_se_list.len() == self.smoothed_se_list.len(),
+            out.smoothed_state_list.len() == self.smoothed_state_list.len(),
+            out.smoothed_for_list.len() == self.smoothed_for_list.len(),
         ];
         if same.contains(&false) {
             return Err(format!(
@@ -326,6 +356,30 @@ impl LastRow {
             dst[0].clone_from(src);
         }
         out.smoothed_for.clone_from(&self.smoothed_for);
+        for (dst, src) in out
+            .smoothed_coef_list
+            .iter_mut()
+            .zip(&self.smoothed_coef_list)
+        {
+            dst[0].clone_from(src);
+        }
+        for (dst, src) in out.smoothed_se_list.iter_mut().zip(&self.smoothed_se_list) {
+            dst[0].clone_from(src);
+        }
+        for (dst, src) in out
+            .smoothed_state_list
+            .iter_mut()
+            .zip(&self.smoothed_state_list)
+        {
+            dst[0].clone_from(src);
+        }
+        for (dst, src) in out
+            .smoothed_for_list
+            .iter_mut()
+            .zip(&self.smoothed_for_list)
+        {
+            dst[0].clone_from(src);
+        }
         Ok(out)
     }
 }

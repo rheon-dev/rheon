@@ -5,6 +5,14 @@
 use super::*;
 use std::mem::size_of;
 
+/// One row of a `List(List(Float64))` smoothed output (`None` for null,
+/// `Some(emissions)` for one or more emitting releases in release order).
+pub type NestedListRow = Option<Vec<Vec<f64>>>;
+
+/// One row of a `List(<clock>)` smoothed label output (`None` for null,
+/// `Some(labels)` parallel to the row's smoothed lists).
+pub type ClockListRow = Option<Vec<Option<ClockValue>>>;
+
 /// Flat output buffers for one (stream, chunk) task (docs/records/PERFORMANCE-LOG.md P1).
 ///
 /// One allocation per output *column* for the whole chunk, rather than the
@@ -93,14 +101,23 @@ pub struct ChunkOut {
     /// and the newest learned row's when it was scored (task 152).
     pub scored_clock: Vec<Option<ClockValue>>,
     pub learned_clock: Vec<Option<ClockValue>>,
-    /// `kalman`'s fixed-lag smoother under `smooth_lag`, else empty: the
-    /// smoothed coefficients and (under `emit_smoothed_se`) their standard
-    /// errors, `[model][row]` on the rows that complete a lag, and the
-    /// clock label of the row each target's value describes, `n_models *
-    /// n_targets * n_rows`.
+    /// `kalman`'s fixed-lag smoother under `smooth_lag` without delayed
+    /// learning, else empty: the smoothed coefficients and (under
+    /// `emit_smoothed_se`) their standard errors, `[model][row]` on the rows
+    /// that complete a lag, and the clock label of the row each target's value
+    /// describes, `n_models * smoothed_for_slots * n_rows`.
     pub smoothed_coef: Vec<Vec<Option<Vec<f64>>>>,
     pub smoothed_se: Vec<Vec<Option<Vec<f64>>>>,
     pub smoothed_for: Vec<Option<ClockValue>>,
+    /// Fixed-lag smoother outputs under delayed learning (`embargo`,
+    /// `label_clock`, or a formula target), else empty: each arriving row can
+    /// release zero, one, or many held rows, so each row holds `None` (zero
+    /// emissions) or `Some(vec)` with one entry per emitting release in
+    /// release order.
+    pub smoothed_coef_list: Vec<Vec<NestedListRow>>,
+    pub smoothed_se_list: Vec<Vec<NestedListRow>>,
+    pub smoothed_state_list: Vec<Vec<Option<Vec<f64>>>>,
+    pub smoothed_for_list: Vec<Vec<ClockListRow>>,
     /// Slot counts this layout was built for.
     pub n_models: usize,
     pub n_slots: usize,
@@ -241,6 +258,10 @@ impl ChunkOut {
             smoothed_coef: Vec::new(),
             smoothed_se: Vec::new(),
             smoothed_for: Vec::new(),
+            smoothed_coef_list: Vec::new(),
+            smoothed_se_list: Vec::new(),
+            smoothed_state_list: Vec::new(),
+            smoothed_for_list: Vec::new(),
             n_models: 0,
             n_slots: 0,
             n_levels: 0,
@@ -301,12 +322,12 @@ impl ChunkOut {
                 fill(v, n, x);
             }
         }
-        fn lists(v: &mut Vec<Vec<Option<Vec<f64>>>>, n_models: usize, n_rows: usize) {
-            v.truncate(n_models);
+        fn lists<T: Clone>(v: &mut Vec<Vec<Option<T>>>, n_outer: usize, n_rows: usize) {
+            v.truncate(n_outer);
             for inner in v.iter_mut() {
                 fill(inner, n_rows, None);
             }
-            v.resize_with(n_models, || vec![None; n_rows]);
+            v.resize_with(n_outer, || vec![None; n_rows]);
         }
         let per = n_models * n_slots * n_rows;
         let on = |flag: bool| if flag { per } else { 0 };
@@ -412,22 +433,56 @@ impl ChunkOut {
         let clocks = if spec.emit_clocks { n_rows } else { 0 };
         fill(&mut self.scored_clock, clocks, None);
         fill(&mut self.learned_clock, clocks, None);
+        let sm_list = spec.smoothed_is_list();
         let kalman_sm = if spec.is_kalman_smoother() {
             n_models
         } else {
             0
         };
-        lists(&mut self.smoothed_coef, kalman_sm, n_rows);
-        let se = if spec.emit_smoothed_se() {
-            kalman_sm
-        } else {
-            0
-        };
-        lists(&mut self.smoothed_se, se, n_rows);
+        let kalman_flat = if sm_list { 0 } else { kalman_sm };
+        let kalman_delayed = if sm_list { kalman_sm } else { 0 };
+        lists(&mut self.smoothed_coef, kalman_flat, n_rows);
+        lists(
+            &mut self.smoothed_se,
+            if spec.emit_smoothed_se() {
+                kalman_flat
+            } else {
+                0
+            },
+            n_rows,
+        );
         fill(
             &mut self.smoothed_for,
-            n_models * spec.smoothed_for_slots() * n_rows,
+            if sm_list {
+                0
+            } else {
+                n_models * spec.smoothed_for_slots() * n_rows
+            },
             None,
+        );
+        lists(&mut self.smoothed_coef_list, kalman_delayed, n_rows);
+        lists(
+            &mut self.smoothed_se_list,
+            if spec.emit_smoothed_se() {
+                kalman_delayed
+            } else {
+                0
+            },
+            n_rows,
+        );
+        lists(
+            &mut self.smoothed_state_list,
+            n_models * spec.hmm_smoothed_list_slots(),
+            n_rows,
+        );
+        lists(
+            &mut self.smoothed_for_list,
+            if sm_list {
+                n_models * spec.smoothed_for_slots()
+            } else {
+                0
+            },
+            n_rows,
         );
         self.n_models = n_models;
         self.n_slots = n_slots;
@@ -502,6 +557,25 @@ impl ChunkOut {
                     .map(|inner| cap(inner) + inner.iter().flatten().map(cap).sum::<usize>())
                     .sum::<usize>()
         }
+        fn nested_lists(v: &Vec<Vec<NestedListRow>>) -> usize {
+            cap(v)
+                + v.iter()
+                    .map(|inner| {
+                        cap(inner)
+                            + inner
+                                .iter()
+                                .flatten()
+                                .map(|rows| cap(rows) + rows.iter().map(cap).sum::<usize>())
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>()
+        }
+        fn clock_lists(v: &Vec<Vec<ClockListRow>>) -> usize {
+            cap(v)
+                + v.iter()
+                    .map(|inner| cap(inner) + inner.iter().flatten().map(cap).sum::<usize>())
+                    .sum::<usize>()
+        }
         [
             &self.coef,
             &self.support_coef,
@@ -514,10 +588,14 @@ impl ChunkOut {
             &self.dfbetas,
             &self.smoothed_coef,
             &self.smoothed_se,
+            &self.smoothed_state_list,
         ]
         .into_iter()
         .map(lists)
         .sum::<usize>()
+            + nested_lists(&self.smoothed_coef_list)
+            + nested_lists(&self.smoothed_se_list)
+            + clock_lists(&self.smoothed_for_list)
     }
 
     /// How many rows one learning run covers (docs/records/PERFORMANCE-LOG.md §13).

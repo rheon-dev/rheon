@@ -201,10 +201,11 @@ def kalman(
         none, no smoother. An observation is a row on which the target is
         present at a weight above 0, so a row of weight 0 or a null target
         counts in no lag. The smoothed value is never fed back: every
-        prediction is the filter's, to the bit. Refused under
-        ``covariance_form="square_root"``, and beside ``embargo`` or
-        ``label_clock``, which release several held rows on one row whose
-        values would need the same line.
+        prediction is the filter's, to the bit. Under ``embargo`` or a formula
+        target, one arriving row can release zero, one or many held rows, so
+        the smoothed fields become parallel lists (one element per emitting
+        release in release order, null when zero releases emitted). Refused
+        under ``covariance_form="square_root"``.
     ``emit_smoothed_se``
         The smoothed coefficients' standard errors beside them, in
         ``smoothed_se_coef``. Default ``False``. Only with ``smooth_lag``.
@@ -378,14 +379,21 @@ def kalman(
         units; NaN in a target's place where this row completed no lag of
         it, where the filter's ``min_weight`` gate withheld the described
         row's prediction, and for a coefficient the filter had not yet
-        sized at the described row.
+        sized at the described row. Under ``embargo`` or a formula target,
+        this field has type ``List(List(Float64))`` with one inner list per
+        emitting release on that row in release order, and null when zero
+        releases emitted.
     ``smoothed_se_coef``
         Under ``emit_smoothed_se``, their standard errors, laid out the same
-        way.
+        way (``List(List(Float64))`` under ``embargo`` or a formula target).
     ``smoothed_for_<t>``
         The clock of the row the target's smoothed value describes, in the
         clock column's own type, or its row index in the group with no clock
-        column; null where the row completed no lag of the target.
+        column; null where the row completed no lag of the target. Under
+        ``embargo`` or a formula target, this field has type ``List(<clock>)``
+        parallel to ``smoothed_coef`` (null on rows with zero emitting
+        releases, with inner null where an emitting release completed no lag
+        of ``<t>``).
 
     The last ``L`` observations of each target, whose lags no row has yet
     completed, are read from the state with
@@ -416,9 +424,8 @@ def kalman(
       which ``emit_se_coef`` reports;
     - a ``smooth_lag`` of 0, ``emit_smoothed_se`` or ``max_state_bytes``
       without ``smooth_lag``, ``smooth_lag`` under
-      ``covariance_form="square_root"`` or beside ``embargo`` or
-      ``label_clock``, a ``max_state_bytes`` not above 0 or above 64 MiB, and
-      a smoother whose bytes pass ``max_state_bytes``;
+      ``covariance_form="square_root"``, a ``max_state_bytes`` not above 0 or
+      above 64 MiB, and a smoother whose bytes pass ``max_state_bytes``;
     - an unsupported ``(family, link)`` pair, ``filter="linear"`` on a
       nonlinear observation, ``coef_half_life``, ``share_p`` or
       ``forecast_spans`` on a nonlinear observation, missing ``obs_var`` on

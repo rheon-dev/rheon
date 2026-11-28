@@ -355,6 +355,87 @@ pub mod vec_opt_vec_f64_or_tag {
     }
 }
 
+/// A `Vec<Option<Vec<Vec<f64>>>>`, `null` staying `null` and each present
+/// outer vector as [`vec_vec_f64_or_tag`] (a row's list-typed `smoothed_coef`
+/// or `smoothed_se_coef` under delayed learning).
+pub mod vec_opt_vec_vec_f64_or_tag {
+    use super::*;
+
+    type Row = Option<Vec<Vec<f64>>>;
+
+    struct Inner<'a>(&'a Row);
+    impl Serialize for Inner<'_> {
+        fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            match self.0 {
+                Some(v) => vec_vec_f64_or_tag::serialize(v, s),
+                None => s.serialize_none(),
+            }
+        }
+    }
+
+    pub fn serialize<S: Serializer>(v: &[Row], s: S) -> Result<S::Ok, S::Error> {
+        if !s.is_human_readable() {
+            return v.serialize(s);
+        }
+        use serde::ser::SerializeSeq;
+        let mut seq = s.serialize_seq(Some(v.len()))?;
+        for x in v {
+            seq.serialize_element(&Inner(x))?;
+        }
+        seq.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Row>, D::Error> {
+        struct Seq;
+        impl<'de> serde::de::Visitor<'de> for Seq {
+            type Value = Vec<Row>;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a sequence of nulls or sequences of sequences of numbers or tags")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut a: A,
+            ) -> Result<Vec<Row>, A::Error> {
+                let mut out = Vec::with_capacity(cautious(a.size_hint()));
+                while let Some(x) = a.next_element_seed(One)? {
+                    out.push(x);
+                }
+                Ok(out)
+            }
+        }
+        struct One;
+        impl<'de> serde::de::DeserializeSeed<'de> for One {
+            type Value = Row;
+            fn deserialize<D: Deserializer<'de>>(
+                self,
+                d: D,
+            ) -> Result<Option<Vec<Vec<f64>>>, D::Error> {
+                struct Opt;
+                impl<'de> serde::de::Visitor<'de> for Opt {
+                    type Value = Option<Vec<Vec<f64>>>;
+                    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                        f.write_str("null or a sequence of sequences of numbers or tags")
+                    }
+                    fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                        Ok(None)
+                    }
+                    fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                        Ok(None)
+                    }
+                    fn visit_some<D2: Deserializer<'de>>(
+                        self,
+                        d: D2,
+                    ) -> Result<Self::Value, D2::Error> {
+                        vec_vec_f64_or_tag::deserialize(d).map(Some)
+                    }
+                }
+                d.deserialize_option(Opt)
+            }
+        }
+        d.deserialize_seq(Seq)
+    }
+}
+
 /// An `Option<Vec<f64>>`: `null` stays `null`, and a present vector is
 /// [`vec_f64_or_tag`]'s (a closed row's `coef`, NaN in a slot no solve fit).
 pub mod opt_vec_f64_or_tag {
@@ -679,5 +760,40 @@ mod tests {
         let EitherLists::It(lists) =
             serde_json::from_str(r#"{"v": [null, [2.0, "inf"]]}"#).unwrap();
         assert!(same(&lists.v, &[None, Some(vec![2.0, f64::INFINITY])]));
+    }
+
+    /// `vec_opt_vec_vec_f64_or_tag` round-trips through JSON (tagging NaN/inf)
+    /// and msgpack (matching the bare type's bytes).
+    #[test]
+    fn a_list_of_optional_nested_lists_round_trips_with_its_tags() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct Nested {
+            #[serde(with = "vec_opt_vec_vec_f64_or_tag")]
+            v: Vec<Option<Vec<Vec<f64>>>>,
+        }
+        #[derive(Serialize)]
+        struct Bare {
+            v: Vec<Option<Vec<Vec<f64>>>>,
+        }
+        let v = vec![
+            None,
+            Some(vec![vec![1.5, f64::NAN], vec![f64::INFINITY, -2.0]]),
+        ];
+        let nested = Nested { v: v.clone() };
+        let json = serde_json::to_string(&nested).unwrap();
+        assert_eq!(json, r#"{"v":[null,[[1.5,"nan"],["inf",-2.0]]]}"#);
+        let back: Nested = serde_json::from_str(&json).unwrap();
+        assert!(back.v[0].is_none());
+        let rows = back.v[1].as_ref().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], 1.5);
+        assert!(rows[0][1].is_nan());
+        assert_eq!(rows[1], vec![f64::INFINITY, -2.0]);
+
+        let bytes = rmp_serde::to_vec_named(&nested).unwrap();
+        assert_eq!(bytes, rmp_serde::to_vec_named(&Bare { v }).unwrap());
+        let from_mp: Nested = rmp_serde::from_slice(&bytes).unwrap();
+        assert!(from_mp.v[0].is_none());
+        assert!(from_mp.v[1].as_ref().unwrap()[0][1].is_nan());
     }
 }

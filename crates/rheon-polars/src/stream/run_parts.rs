@@ -95,6 +95,17 @@ pub(super) fn build_instances<'a>(
     let mut o_smoothed_for = out
         .smoothed_for
         .chunks_mut((spec.smoothed_for_slots() * n_rows).max(1));
+    let mut o_smoothed_list = out.smoothed_coef_list.iter_mut();
+    let mut o_smoothed_se_list = out.smoothed_se_list.iter_mut();
+    let mut o_smoothed_state_list = out
+        .smoothed_state_list
+        .chunks_mut(spec.hmm_smoothed_list_slots().max(1));
+    let sm_for_list_slots = if spec.smoothed_is_list() {
+        spec.smoothed_for_slots()
+    } else {
+        0
+    };
+    let mut o_smoothed_for_list = out.smoothed_for_list.chunks_mut(sm_for_list_slots.max(1));
 
     let n_slots = out.n_slots;
     let mut decays = decays.iter();
@@ -170,6 +181,10 @@ pub(super) fn build_instances<'a>(
             o_smoothed: o_smoothed.next(),
             o_smoothed_se: o_smoothed_se.next(),
             o_smoothed_for: o_smoothed_for.next().unwrap_or_default(),
+            o_smoothed_list: o_smoothed_list.next(),
+            o_smoothed_se_list: o_smoothed_se_list.next(),
+            o_smoothed_state_list: o_smoothed_state_list.next().unwrap_or_default(),
+            o_smoothed_for_list: o_smoothed_for_list.next().unwrap_or_default(),
             decay_time: decay_time.next().expect("one per instance"),
             restarted: restarted.next().expect("one per instance"),
             notified: notified.next().expect("one per instance"),
@@ -265,6 +280,90 @@ pub(super) fn joined(mut slots: Vec<Vec<f64>>) -> Vec<f64> {
 pub(super) fn withhold_kalman_all(extra: &mut Option<rheon_core::Extra>) {
     if let Some(rheon_core::Extra::Kalman { values }) = extra.as_mut() {
         values.fill(f64::NAN);
+    }
+}
+
+/// An instance's list-typed `kalman` smoother outputs under delayed learning.
+pub(super) struct SmoothedListOut<'a> {
+    pub(super) coef: Option<&'a mut Vec<NestedListRow>>,
+    pub(super) se: Option<&'a mut Vec<NestedListRow>>,
+    pub(super) labels: &'a mut [Vec<ClockListRow>],
+    pub(super) n_rows: usize,
+}
+
+/// Append one released observation's `kalman` fixed-lag smoother emission to
+/// arriving row `at`'s parallel lists, in exact release order. Rows with zero
+/// emitting releases stay `None` (materialized as `null`, never `[]`).
+pub(super) fn write_smoothed_list(
+    model: &AnyModel,
+    buf: &mut rheon_core::Smoothed,
+    out: SmoothedListOut<'_>,
+    at: usize,
+) {
+    if at >= out.n_rows || !model.smoothed_into(buf) || !buf.emitted.contains(&true) {
+        return;
+    }
+    for (j, slot) in out.labels.iter_mut().enumerate() {
+        let label = if buf.emitted[j] { buf.label[j] } else { None };
+        slot[at].get_or_insert_with(Vec::new).push(label);
+    }
+    let k = buf.coef.len() / buf.emitted.len().max(1);
+    let make_vec = |vals: &[f64], root: bool| -> Vec<f64> {
+        let mut row = vec![f64::NAN; vals.len()];
+        for (j, e) in buf.emitted.iter().enumerate() {
+            if *e {
+                for (o, v) in row[j * k..(j + 1) * k].iter_mut().zip(&vals[j * k..]) {
+                    *o = if root && !v.is_nan() {
+                        v.max(0.0).sqrt()
+                    } else {
+                        *v
+                    };
+                }
+            }
+        }
+        row
+    };
+    if let Some(o) = out.coef {
+        o[at]
+            .get_or_insert_with(Vec::new)
+            .push(make_vec(&buf.coef, false));
+    }
+    if let Some(o) = out.se {
+        o[at]
+            .get_or_insert_with(Vec::new)
+            .push(make_vec(&buf.var, true));
+    }
+}
+
+/// Append one released observation's `hmm` fixed-lag smoother emission to
+/// arriving row `at`'s parallel `smoothed_state<j>` and `smoothed_for` lists,
+/// in exact release order.
+pub(super) fn write_hmm_smoothed_list(
+    model: &AnyModel,
+    buf: &mut rheon_core::Smoothed,
+    pred: &[f64],
+    states: &mut [Vec<Option<Vec<f64>>>],
+    labels: &mut [Vec<ClockListRow>],
+    at: usize,
+    n_rows: usize,
+) {
+    let k = states.len();
+    if k == 0
+        || at >= n_rows
+        || pred.len() < k
+        || !model.smoothed_into(buf)
+        || !buf.emitted.first().copied().unwrap_or(false)
+    {
+        return;
+    }
+    let start = pred.len() - k;
+    for (s, slot) in states.iter_mut().enumerate() {
+        slot[at].get_or_insert_with(Vec::new).push(pred[start + s]);
+    }
+    if let Some(lbl_slot) = labels.first_mut() {
+        lbl_slot[at]
+            .get_or_insert_with(Vec::new)
+            .push(buf.label.first().copied().flatten());
     }
 }
 

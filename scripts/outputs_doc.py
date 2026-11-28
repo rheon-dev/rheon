@@ -92,12 +92,17 @@ MEANING: dict[str, str] = {
         "on the row that completes `smooth_lag` observations of a target after an earlier one, "
         "the coefficients at that earlier observation estimated from every row up to this one, "
         "laid out like `coef`; NaN in a target's place where the row completed no lag of it, "
-        "where `min_weight` withheld the described row, and for a coefficient not yet sized"
+        "where `min_weight` withheld the described row, and for a coefficient not yet sized; "
+        "`list[list[f64]]` under `embargo` or a formula target, one inner list per emitting release"
     ),
-    "smoothed_se_coef": "the standard errors of `smoothed_coef`, laid out like it",
+    "smoothed_se_coef": (
+        "the standard errors of `smoothed_coef`, laid out like it "
+        "(`list[list[f64]]` under `embargo` or a formula target)"
+    ),
     "smoothed_for_<t>": (
         "the clock of the row `<t>`'s smoothed value describes, in the clock column's own type; "
-        "with no clock, the row's index in its group"
+        "with no clock, the row's index in its group; `list[clock]` parallel to `smoothed_coef` "
+        "under `embargo` or a formula target"
     ),
     "pred_<t>": "the prediction for `<t>`, computed from the state **before** this row",
     "pred_std_<t>": (
@@ -286,11 +291,13 @@ MEANING: dict[str, str] = {
     "predicted_state<j>": "one-step-ahead probability of state `<j>`",
     "smoothed_state<j>": (
         "fixed-lag smoothed probability of state `<j>` at `smooth_lag` learned rows earlier, "
-        "conditioned on every observation up to this row"
+        "conditioned on every observation up to this row; `list[f64]` under `embargo`, one "
+        "element per emitting release"
     ),
     "smoothed_for": (
         "the clock of the row `smoothed_state<j>` describes, in the clock column's own type; "
-        "with no clock, the row's index in its group"
+        "with no clock, the row's index in its group; `list[clock]` parallel to "
+        "`smoothed_state<j>` under `embargo`"
     ),
     "state": "the most likely state for this row: the one with the largest `predicted_state<j>`",
     "huber_scale_<t>": "the scale the row's cut for `<t>` is drawn in",
@@ -928,6 +935,12 @@ DTYPES: list[tuple[str, str]] = [
         '.select(pl.col("coef").list.to_array(k)).to_series().to_numpy()`',
     ),
     (
+        "`list[list[f64]]`",
+        "`List(List(Float64))`: `smoothed_coef` and `smoothed_se_coef` under `embargo` or a "
+        "formula target, one inner list per emitting release on that row (null when zero "
+        "releases emitted)",
+    ),
+    (
         "`enum`",
         "an `Enum` of its values, in their order: `withheld_reason`'s {n_reasons}, an `ew_class` "
         "spec's `classes` for `class`, a `bandit` spec's `arms` for `arm`, a grid's slots for "
@@ -937,6 +950,11 @@ DTYPES: list[tuple[str, str]] = [
         "`clock`",
         "the clock column's own type, an integer clock in its own width; with no clock, "
         "`Int64`, the group's row index",
+    ),
+    (
+        "`list[clock]`",
+        "`List(<clock>)`: `smoothed_for` and `smoothed_for_<t>` under `embargo` or a formula "
+        "target, parallel to the row's smoothed lists (null when zero releases emitted)",
     ),
 ]
 
