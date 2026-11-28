@@ -266,6 +266,7 @@ fn expectile_window_scored_rows_read_at_stamp() {
             window_clock: Some(span),
             closed: WindowClosed::Right,
             max_state_bytes: None,
+            adaptive_refit: false,
         })
         .unwrap();
         let mut last: Option<f64> = None;

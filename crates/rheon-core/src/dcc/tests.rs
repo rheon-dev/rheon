@@ -484,7 +484,15 @@ fn a_start_reports_only_a_recursion_its_rows_identify() {
         );
         let mut m = Dcc::new(cfg(3, asym, None)).unwrap();
         let out = run(&mut m, &rows);
-        assert!(out[DCC_START_ROWS - 1][0].is_nan() && out[DCC_START_ROWS][0].is_finite());
+        let first = out.iter().position(|p| p[0].is_finite()).unwrap();
+        assert!(
+            first >= DCC_START_ROWS
+                && first % DCC_START_ROWS == 0
+                && (first / DCC_START_ROWS).is_power_of_two(),
+            "{asym}: started at {first}"
+        );
+        assert!(out[..first].iter().all(|p| p[0].is_nan()));
+        assert!(out[first..].iter().all(|p| p[0].is_finite()));
         assert!(
             m.start_lr() > fit::lr_cut(m.cfg().n_params()),
             "{}",
@@ -525,19 +533,47 @@ fn a_start_reports_only_a_recursion_its_rows_identify() {
 #[test]
 fn each_cut_holds_on_both_sides() {
     for (p, cut) in [(2, fit::LR_CUT_2), (3, fit::LR_CUT_3)] {
-        let at = |lr: f64, gain: f64, definite: bool| fit::Fit {
-            theta: vec![0.05; p],
-            gain,
-            lr,
-            definite,
-            iterations: 1,
-        };
-        assert!(at(cut, 0.0, true).identified());
-        assert!(!at(cut.next_down(), 0.0, true).identified());
-        assert!(!at(f64::NAN, 0.0, true).identified());
-        assert!(!at(cut * 2.0, 0.0, false).identified());
-        assert!(at(cut, fit::SOUND_GAIN, true).sound());
-        assert!(!at(cut, fit::SOUND_GAIN.next_up(), true).sound());
+        let at =
+            |lr: f64, gain: f64, definite: bool, max_se: f64, intercept_rel_se: f64| fit::Fit {
+                theta: vec![0.05; p],
+                gain,
+                lr,
+                definite,
+                max_se,
+                intercept_rel_se,
+                iterations: 1,
+            };
+        assert!(at(cut, 0.0, true, 0.05, 0.5).identified());
+        assert!(!at(cut.next_down(), 0.0, true, 0.05, 0.5).identified());
+        assert!(!at(f64::NAN, 0.0, true, 0.05, 0.5).identified());
+        assert!(!at(cut * 2.0, 0.0, false, 0.05, 0.5).identified());
+        assert!(at(cut, fit::SOUND_GAIN, true, 0.05, 0.5).sound());
+        assert!(!at(cut, fit::SOUND_GAIN.next_up(), true, 0.05, 0.5).sound());
+        assert!(at(cut, 0.0, true, fit::PARAM_SE_CUT, fit::INTERCEPT_REL_SE_CUT).se_identified());
+        assert!(
+            !at(
+                cut,
+                0.0,
+                true,
+                fit::PARAM_SE_CUT.next_up(),
+                fit::INTERCEPT_REL_SE_CUT
+            )
+            .se_identified()
+        );
+        assert!(
+            !at(
+                cut,
+                0.0,
+                true,
+                fit::PARAM_SE_CUT,
+                fit::INTERCEPT_REL_SE_CUT.next_up()
+            )
+            .se_identified()
+        );
+        assert!(!at(cut, 0.0, true, f64::NAN, 0.5).se_identified());
+        assert!(!at(cut, 0.0, true, f64::INFINITY, 0.5).se_identified());
+        assert!(!at(cut, 0.0, true, 0.05, f64::NAN).se_identified());
+        assert!(!at(cut, 0.0, true, 0.05, f64::INFINITY).se_identified());
     }
     // the cuts are χ² at 0.999 of 2 and 3 degrees of freedom: the survival
     // function there, 1 − P(χ² ≤ x), by the closed forms e^{−x/2} and
@@ -590,7 +626,10 @@ fn the_state_is_bounded_by_its_formula_and_the_cap() {
             assert_eq!(c.stage_bytes(), per.0 * k * k + per.1, "{asym} {k}");
             let m = Dcc::new(c.clone()).unwrap();
             assert_eq!(m.bytes(), c.stage_bytes() + 32);
-            assert_eq!(c.peak_bytes(), c.stage_bytes() + 32 + 500 * 8 * (k + 2));
+            assert_eq!(
+                c.peak_bytes(),
+                c.stage_bytes() + 32 + DCC_START_ROWS as u64 * 8 * (k + 2)
+            );
         }
     }
     let mut c = cfg(3, true, None);
@@ -600,17 +639,18 @@ fn the_state_is_bounded_by_its_formula_and_the_cap() {
     c.max_state_bytes = Some(peak - 1);
     assert!(c.validate().unwrap_err().contains("past max_state_bytes"));
     // the buffer is gone after the start
-    let rows = adcc_stream(3, 600, [0.04, 0.92, 0.04], 0.5, None, 8);
+    let rows = adcc_stream(3, 1200, [0.04, 0.92, 0.04], 0.5, None, 8);
     let mut m = Dcc::new(cfg(3, true, None)).unwrap();
     for (t, z) in rows.iter().enumerate() {
         m.step(&[], &ys(z), 1.0, 1.0);
-        let want = if t + 1 < DCC_START_ROWS {
+        let want = if !m.started() {
             (t as u64 + 1) * 8 * 5
         } else {
             0
         };
         assert_eq!(m.bytes(), m.cfg().stage_bytes() + 32 + want, "{t}");
     }
+    assert!(m.started());
 }
 
 /// A save at every phase (in the start's buffer, at the start, after it)
@@ -708,9 +748,11 @@ fn the_margins_are_the_garch_models() {
     // the correlation from the margins' start and the stage's, which may
     // have waited for twice its rows
     let from = rho_from.unwrap();
+    let stage_rows = from - 1000;
     assert!(
-        [1, 2, 4].contains(&((from - 1000) / DCC_START_ROWS))
-            && (from - 1000) % DCC_START_ROWS == 0,
+        stage_rows >= DCC_START_ROWS
+            && stage_rows % DCC_START_ROWS == 0
+            && (stage_rows / DCC_START_ROWS).is_power_of_two(),
         "{from}"
     );
     assert!((m.coefficients()[1] - 0.92).abs() < 0.1);
@@ -1092,5 +1134,46 @@ fn the_estimate_under_a_decay_finds_the_truth() {
         let mut l = vec![0.0; p * p];
         assert!(mat::cholesky(&m.stage.h, p, &mut l));
         assert_eq!(m.repairs(), 0);
+    }
+}
+
+/// A3: default adaptive start scales as `max(64, next_power_of_two(2 * k))`,
+/// fitting waits until `n_kish > k` (even when raw row count exceeds `k`), and
+/// short/noisy starts withhold under the Fisher SE gate before doubling to a
+/// well-localized start.
+#[test]
+fn adaptive_start_and_kish_and_se_gate_hold() {
+    assert_eq!(default_dcc_start_rows(2, false), 64);
+    assert_eq!(default_dcc_start_rows(32, true), 64);
+    assert_eq!(default_dcc_start_rows(33, false), 128);
+    assert_eq!(default_dcc_start_rows(65, true), 256);
+
+    // Concentrated weights: 64 rows have n_kish ≈ 1.0001 <= k = 3, so fitting
+    // withholds as not_identified even though Q̄ is numerically positive definite.
+    let rows = adcc_stream(3, 128, [0.05, 0.90, 0.0], 0.5, None, 71);
+    let mut c = cfg(3, false, None);
+    c.start_rows = 64;
+    let mut m = Dcc::new(c).unwrap();
+    for (t, z) in rows[..64].iter().enumerate() {
+        let w = if t == 0 { 1e6 } else { 1.0 };
+        let out = m.step(&[], &ys(z), 1.0, w);
+        assert!(out.pred[0].is_nan());
+    }
+    assert!(!m.started() && m.no_effect(), "n_kish <= k must withhold");
+
+    // Adaptive doubling from default_dcc_start_rows starts cleanly before 500
+    // on a well-identified stream, while an explicit start_rows override stands.
+    let long = adcc_stream(3, 1200, [0.05, 0.90, 0.04], 0.5, None, 73);
+    for asym in [false, true] {
+        let mut c = cfg(3, asym, None);
+        c.start_rows = default_dcc_start_rows(3, asym);
+        let mut m = Dcc::new(c).unwrap();
+        let out = run(&mut m, &long);
+        let first = out.iter().position(|p| p[0].is_finite()).unwrap();
+        assert!(
+            (64..=512).contains(&first) && first % 64 == 0 && (first / 64).is_power_of_two(),
+            "asym={asym} started at {first}"
+        );
+        assert!(m.start_sound() && !m.no_effect());
     }
 }

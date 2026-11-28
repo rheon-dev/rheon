@@ -219,7 +219,7 @@ pub use corrchange::{
     ChangeNorm, CorrChange, CorrChangeCfg, CorrChangeKind, MAX_PERM, kolmogorov_cdf,
     kolmogorov_quantile,
 };
-pub use dcc::{DCC_PERSISTENCE_CAP, DCC_START_ROWS, Dcc, DccCfg};
+pub use dcc::{DCC_PERSISTENCE_CAP, DCC_START_ROWS, Dcc, DccCfg, default_dcc_start_rows};
 pub use ddsketch::{
     DDSKETCH_MIN_ALPHA, DdSketch, Mapping as DdSketchMapping, Slot as DdSketchSlot,
 };
@@ -248,7 +248,8 @@ pub use ewm_moments::{
 pub use ewridge::{EvidenceCfg, EwRidge, EwRidgeCfg};
 pub use expectile::{
     DEFAULT_EXPECTILE_REFIT_ROWS, EXPECTILE_MAX_STATE_BYTES, EXPECTILE_REFIT_PASSES,
-    EXPECTILE_STATE_BYTES_CEILING, Expectile, ExpectileCfg, default_expectile_refit_rows,
+    EXPECTILE_STATE_BYTES_CEILING, Expectile, ExpectileCfg, adaptive_expectile_refit_cap_rows,
+    default_expectile_adaptive_refit, default_expectile_refit_rows,
 };
 pub use family::{ETA_CLIP, Family, FamilyMath, GlmFamily, GlmLink, LibmMath, StdMath, Working};
 pub use ftrl::{Ftrl, FtrlCfg, FtrlLoss};
@@ -258,10 +259,12 @@ pub use garch::{
     GarchDist, GarchVol, HORIZON_WORK as GARCH_HORIZON_WORK,
     HORIZON_WORK_CEILING as GARCH_HORIZON_WORK_CEILING, LIBM_CALL_COST as GARCH_LIBM_CALL_COST,
     MAX_HORIZONS as GARCH_MAX_HORIZONS, MIN_START_ROWS as GARCH_MIN_START_ROWS,
+    default_garch_start_rows,
 };
 pub use glm::{
     DEFAULT_GLM_REFIT_ROWS, GLM_GROUP_REFIT_CAP, GLM_REFIT_PASSES, Glm, GlmCfg,
-    default_glm_refit_rows, default_glm_refit_rows_within, default_glm_step_cap,
+    adaptive_glm_refit_cap_rows, default_glm_adaptive_refit, default_glm_refit_rows,
+    default_glm_refit_rows_within, default_glm_step_cap,
 };
 pub use hasher::{FixedHasher, FixedState};
 pub use hawkes::{

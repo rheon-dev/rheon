@@ -806,25 +806,25 @@ DEFAULT_FAMILIES = [
     ("tweedie", 3.0),
 ]
 DEFAULT_RUNAWAYS = {
-    "poisson": 14,
-    "gamma": 41,
-    "tweedie_1_5": 17,
-    "tweedie_2_5": 38,
-    "tweedie_3_0": 48,
+    "poisson": 15,
+    "gamma": 25,
+    "tweedie_1_5": 9,
+    "tweedie_2_5": 26,
+    "tweedie_3_0": 33,
 }
 
 
 def default_seed(family: str, power: float, seed: int) -> tuple[bool, bool, int]:
     """C's stream with one target 1000 times its draw (at least 1) at row
-    250, under the default spec (a refit of 200 rows, no cap after it):
-    whether the bank's path passes ``|coef|`` 10 after the refit, whether
-    the unguarded longhand does from the bank's refit (its coefficients at
-    row 199, ``G`` rebuilt at them from statsmodels' weights), and the rows
-    above the guard there."""
-    X, y = log_design(family, power, 300, seed)
-    y[250] = max(y[250], 1.0) * 1000.0
+    350, under the default spec (adaptive doubling refit, no cap after it):
+    whether the bank's path passes ``|coef|`` 10 after row 300 (once the
+    adaptive refit has run), whether the unguarded longhand does from the
+    bank's state at row 299 (``G`` rebuilt at those coefficients from
+    statsmodels' weights), and the rows above the guard there."""
+    X, y = log_design(family, power, 400, seed)
+    y[350] = max(y[350], 1.0) * 1000.0
     got = rheon_path(family, power, X, y)
-    refit = 200
+    refit = 300
     b = got[refit - 1]
     fam = log_family(family, power)
     mu = fam.link.inverse(X[:refit] @ b)
@@ -839,11 +839,11 @@ def default_seed(family: str, power: float, seed: int) -> tuple[bool, bool, int]
 
 #: Per family, the first seed on which the unguarded recursion runs away.
 DEFAULT_ESSENTIAL_SEED = {
-    "poisson": 3,
-    "gamma": 0,
-    "tweedie_1_5": 11,
-    "tweedie_2_5": 0,
-    "tweedie_3_0": 0,
+    "poisson": 5,
+    "gamma": 1,
+    "tweedie_1_5": 12,
+    "tweedie_2_5": 5,
+    "tweedie_3_0": 12,
 }
 
 

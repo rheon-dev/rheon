@@ -238,9 +238,19 @@ pub const GLM_REFIT_PASSES: u32 = 100;
 /// `step_cap` (the module docs): the cap the study found to hold every seed.
 pub const WAITING_CAP: f64 = 1.0;
 
-/// The least of a spec's default `refit_rows` ([`default_glm_refit_rows`]):
-/// the count the study measured at 5 and 20 coefficients.
+/// The least of [`default_glm_refit_rows`], kept for direct Rust callers.
 pub const DEFAULT_GLM_REFIT_ROWS: u32 = 200;
+
+/// Adaptive refit leverage ceiling (`h_max ≤ 1/16`, equivalently linear-
+/// predictor Fisher SE `SE(η̂_i) ≤ σ_i / 4`, leave-one-out variance inflation
+/// `1 / (1 − h_i) ≤ 16/15`, and Kish count `n_kish ≥ 16 · edf`).
+const ADAPTIVE_H_CUT: f64 = 0.0625;
+/// Smallest initial row count before the first adaptive refit check.
+const ADAPTIVE_MIN_INIT: u32 = 16;
+/// Kish effective sample growth floor across a doubling: under finite
+/// `half_life`, once doubling adds at most 15% effective weight the buffer
+/// has plateaued and commits.
+const DECAY_PLATEAU_RATIO: f64 = 1.15;
 
 /// The most bytes one group's refit buffers may hold, all its targets
 /// together: 256 KB. The buffers are the one part of the state whose size
@@ -250,30 +260,48 @@ pub const DEFAULT_GLM_REFIT_ROWS: u32 = 200;
 /// is built, never found as the rows run.
 pub const GLM_GROUP_REFIT_CAP: usize = 256 * 1024;
 
-/// A spec's default `refit_rows` for `n_features` features and
-/// `n_targets` targets: `max(200, 10 k)`, `k` the coefficients with the
-/// intercept, held to the rows [`GLM_GROUP_REFIT_CAP`] holds; and 0 --
-/// off, the step cap standing in -- past
-/// [`crate::DEFAULT_REFIT_MAX_FEATURES`] features, where a refit of `10 k`
-/// rows costs seconds a target, or where the cap holds fewer than `2 k`
-/// rows, too few to determine the fit.
+/// Maximum rows per target that fit inside a group byte cap `cap` for GLM's
+/// refit buffers (`8 · targets · rows · (features + 2) ≤ cap`).
+pub fn adaptive_glm_refit_cap_rows(n_features: usize, n_targets: usize, cap: u64) -> u32 {
+    let row_bytes = 8u64
+        .saturating_mul(n_targets.max(1) as u64)
+        .saturating_mul((n_features as u64).saturating_add(2));
+    u32::try_from(cap / row_bytes.max(1)).unwrap_or(u32::MAX)
+}
+
+/// Whether the default adaptive refit is enabled for `n_features`,
+/// `n_targets`, `fit_intercept` and group byte cap `cap`: enabled whenever
+/// `cap` holds at least `2 k` rows per target (with no fixed feature-count
+/// cliff), and off when `cap` is too small so `step_cap = 1` stands in.
+pub fn default_glm_adaptive_refit(
+    n_features: usize,
+    n_targets: usize,
+    fit_intercept: bool,
+    cap: u64,
+) -> bool {
+    let k = (n_features + usize::from(fit_intercept)).max(1) as u32;
+    adaptive_glm_refit_cap_rows(n_features, n_targets, cap) >= 2u32.saturating_mul(k)
+}
+
+/// A fixed-count refit size held to [`GLM_GROUP_REFIT_CAP`], with no
+/// feature-count cliff (bounded strictly by the byte cap).
 pub fn default_glm_refit_rows(n_features: usize, n_targets: usize) -> u32 {
     default_glm_refit_rows_within(n_features, n_targets, GLM_GROUP_REFIT_CAP as u64)
 }
 
 /// [`default_glm_refit_rows`] held to a group's `max_state_bytes` of `cap`
-/// in place of [`GLM_GROUP_REFIT_CAP`] (docs/PLAN.md task 538).
+/// (bounded strictly by `cap`, with no feature-count cliff).
 pub fn default_glm_refit_rows_within(n_features: usize, n_targets: usize, cap: u64) -> u32 {
-    if n_features > crate::DEFAULT_REFIT_MAX_FEATURES {
-        return 0;
-    }
     let k = n_features as u32 + 1;
-    let fits =
-        usize::try_from(cap).unwrap_or(usize::MAX) / (8 * n_targets.max(1) * (n_features + 2));
+    let fits = adaptive_glm_refit_cap_rows(n_features, n_targets, cap);
     let rows = DEFAULT_GLM_REFIT_ROWS
-        .max(10 * k)
-        .min(u32::try_from(fits).unwrap_or(u32::MAX));
-    if rows < 2 * k { 0 } else { rows }
+        .max(10u32.saturating_mul(k))
+        .min(fits);
+    if rows < 2u32.saturating_mul(k) {
+        0
+    } else {
+        rows
+    }
 }
 
 /// The step cap a spec without one gets: off where the refit runs, 1 where
@@ -300,7 +328,7 @@ pub struct GlmCfg {
     #[serde(with = "crate::humanfloat::f64_or_tag")]
     pub min_weight: f64,
     /// Each target's first learned rows fitted to convergence, once; 0 is
-    /// off.
+    /// off (or delegated to `refit_clock` / `adaptive_refit`).
     pub refit_rows: u32,
     /// The most a learned row may move its own `η`; `inf` is no cap.
     #[serde(with = "crate::humanfloat::f64_or_tag")]
@@ -309,16 +337,18 @@ pub struct GlmCfg {
     /// target's rows from its first learned row through the first at least
     /// this many clock units after it (seconds on a temporal clock), once
     /// they hold a row per coefficient. `refit_rows` is 0 beside it.
-    /// Last, and written only when set, so a state without it keeps its
-    /// bytes and the array form its order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refit_clock: Option<f64>,
     /// The bytes a group's refit buffers may hold, a count's checked as the
     /// model is built and a span's as they fill: `None` is
-    /// [`GLM_GROUP_REFIT_CAP`], at most 64 MiB (docs/PLAN.md task 538). Last,
-    /// and written only when set.
+    /// [`GLM_GROUP_REFIT_CAP`], at most 64 MiB (docs/PLAN.md task 538).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_state_bytes: Option<u64>,
+    /// Adaptive doubling refit gated on leverage (`h_max ≤ 1/16` or ≥95% of
+    /// rows at `h_i ≤ 1/32`, with `n_kish ≥ 16 · edf`, plus decay-plateau
+    /// handling) and bounded strictly by `max_state_bytes`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub adaptive_refit: bool,
 }
 
 impl GlmCfg {
@@ -326,9 +356,14 @@ impl GlmCfg {
         self.n_features + usize::from(self.fit_intercept)
     }
 
-    /// Whether the first rows are refit, after a count or a span.
+    /// Whether the first rows are refit, after a count, a span, or adaptively.
     pub fn refits(&self) -> bool {
-        self.refit_rows > 0 || self.refit_clock.is_some()
+        self.refit_rows > 0 || self.refit_clock.is_some() || self.adaptive_refit
+    }
+
+    /// Maximum rows per target an adaptive refit may buffer within [`Self::cap`].
+    pub fn adaptive_cap_rows(&self) -> u32 {
+        adaptive_glm_refit_cap_rows(self.n_features, self.n_targets, self.cap())
     }
 
     /// The bytes a group's refit buffers may hold: `max_state_bytes`, or
@@ -421,6 +456,24 @@ impl GlmCfg {
                 ));
             }
         }
+        if self.adaptive_refit {
+            if self.refit_rows > 0 || self.refit_clock.is_some() {
+                no.refuse(
+                    "glm: adaptive_refit cannot be combined with explicit refit_rows or \
+                     refit_span. Leave one mode out.",
+                );
+            }
+            let min_rows = self.k_total().max(1) as u32;
+            let cap_rows = self.adaptive_cap_rows();
+            if self.n_targets > 0 && cap_rows < min_rows {
+                no.refuse(format!(
+                    "glm: adaptive_refit needs room for at least {min_rows} rows per target, \
+                     but max_state_bytes ({}) holds only {cap_rows}. Raise max_state_bytes, \
+                     or set refit_rows = 0 for the step cap alone.",
+                    self.cap()
+                ));
+            }
+        }
         if !self.link.defined_at_zero() && (!self.refits() || !self.fit_intercept) {
             no.refuse(format!(
                 "glm: the {} link needs refit_rows above 0 or refit_span, and fit_intercept, \
@@ -455,6 +508,17 @@ struct GlmRefit {
     /// first learned row, from which the span runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     first: Option<Stamp>,
+    /// Under adaptive refit, the row count of the previous doubling check;
+    /// 0 before any check or when non-adaptive.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    tried: u32,
+    /// Under adaptive refit, the row-weight Kish count at the previous check.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    prev_n_kish: f64,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
 }
 
 impl GlmRefit {
@@ -467,6 +531,8 @@ impl GlmRefit {
             failed: false,
             over_budget: false,
             first: None,
+            tried: 0,
+            prev_n_kish: 0.0,
         }
     }
 
@@ -481,13 +547,27 @@ impl GlmRefit {
         }
     }
 
-    /// Whether the buffer's shape is its count's: `learned` rows of `width`
-    /// numbers while it waits, fewer than a count of them, none once it is
-    /// done (a span of the clock holds the rows its span has).
-    fn fits(&self, width: usize, refit_rows: u32, clocked: bool) -> bool {
+    /// Whether the buffer's shape is its mode's: `learned` rows of `width`
+    /// numbers while it waits, fewer than its cap/count, none once done.
+    fn fits(&self, width: usize, cfg: &GlmCfg) -> bool {
+        let clocked = cfg.refit_clock.is_some();
+        let adaptive = cfg.adaptive_refit;
         let n = if self.done { 0 } else { self.learned as usize };
+        let limit_ok = if self.done || clocked {
+            true
+        } else if adaptive {
+            self.learned < cfg.adaptive_cap_rows().max(1)
+        } else {
+            self.learned < cfg.refit_rows.max(1)
+        };
+        let adaptive_fields_ok = if adaptive {
+            self.tried <= self.learned && self.prev_n_kish.is_finite() && self.prev_n_kish >= 0.0
+        } else {
+            self.tried == 0 && self.prev_n_kish == 0.0
+        };
         n.checked_mul(width) == Some(self.rows.len())
-            && (self.done || clocked || self.learned < refit_rows.max(1))
+            && limit_ok
+            && adaptive_fields_ok
             && (clocked || self.first.is_none())
             // A span runs from the first row it holds.
             && (!clocked || self.done || self.learned == 0 || self.first.is_some())
@@ -572,17 +652,9 @@ fn at(i: usize, j: usize) -> usize {
     i * (i + 1) / 2 + j
 }
 
-/// Solve `(A + r I) x = b` for `A` symmetric, its lower triangle packed in
-/// `a`, by a Cholesky factor written into `l`; `false` where a pivot is not
-/// a positive, finite number.
-fn solve_ridged(
-    a: &[f64],
-    r: f64,
-    b: &[f64],
-    k: usize,
-    l: &mut Vec<f64>,
-    x: &mut Vec<f64>,
-) -> bool {
+/// Factor `(A + r I) = L Lᵀ` into `l`; `false` where a pivot is not a
+/// positive, finite number.
+fn factor_ridged(a: &[f64], r: f64, k: usize, l: &mut Vec<f64>) -> bool {
     l.clear();
     l.resize(a.len(), 0.0);
     for i in 0..k {
@@ -603,6 +675,23 @@ fn solve_ridged(
                 l[at(i, j)] = s / l[at(j, j)];
             }
         }
+    }
+    true
+}
+
+/// Solve `(A + r I) x = b` for `A` symmetric, its lower triangle packed in
+/// `a`, by a Cholesky factor written into `l`; `false` where a pivot is not
+/// a positive, finite number.
+fn solve_ridged(
+    a: &[f64],
+    r: f64,
+    b: &[f64],
+    k: usize,
+    l: &mut Vec<f64>,
+    x: &mut Vec<f64>,
+) -> bool {
+    if !factor_ridged(a, r, k, l) {
+        return false;
     }
     x.clear();
     x.extend_from_slice(b);
@@ -687,13 +776,17 @@ impl Glm {
 
     /// The bytes this model's refit buffers can hold at most: `refit_rows`
     /// rows of `n_features + 2` numbers a target, under a span of the clock
-    /// [`GLM_GROUP_REFIT_CAP`]; 0 with the refit off.
+    /// or adaptive refit bounded by `max_state_bytes`; 0 with the refit off.
     pub fn refit_reservation(&self) -> usize {
         if self.refit.is_empty() {
             return 0;
         }
         if self.cfg.refit_clock.is_some() {
             return usize::try_from(self.cfg.cap()).unwrap_or(usize::MAX);
+        }
+        if self.cfg.adaptive_refit {
+            let rows = self.cfg.adaptive_cap_rows() as usize;
+            return self.cfg.n_targets * 8 * rows * (self.cfg.n_features + 2);
         }
         self.cfg.n_targets * 8 * self.cfg.refit_rows as usize * (self.cfg.n_features + 2)
     }
@@ -907,13 +1000,119 @@ impl Glm {
         true
     }
 
-    /// Target `j`'s refit, on the row that filled its buffer (the module
-    /// docs).
-    fn run_refit(&mut self, j: usize) {
+    /// Target `j`'s refit, on the row that filled its buffer (fixed count or
+    /// span), or at an adaptive doubling check (committing once leverage and
+    /// Kish criteria hold, a decay/outlier plateau is reached, or the buffer
+    /// hits `max_state_bytes`).
+    fn run_refit(&mut self, j: usize, adaptive_check: bool) {
         let nf = self.cfg.n_features;
         let k = self.cfg.k_total();
+        let cap_rows = self.cfg.adaptive_cap_rows();
+        let at_cap = !adaptive_check || self.refit[j].learned >= cap_rows;
+        let fit = refit_fit(&self.cfg, &self.refit[j].rows, nf);
+        if adaptive_check && !at_cap {
+            let Some((b, passes, converged)) = fit else {
+                let r = &mut self.refit[j];
+                r.tried = r.learned;
+                return;
+            };
+            if !converged {
+                let r = &mut self.refit[j];
+                r.tried = r.learned;
+                return;
+            }
+            // Build Gram at `b` and evaluate row leverages via its Cholesky
+            // factor in O(n k² / 2) with zero sorting or heap allocation.
+            let fam = self.cfg.family();
+            let off = usize::from(self.cfg.fit_intercept);
+            let mut g = vec![0.0; k * (k + 1) / 2];
+            let (mut w_sum, mut w2_sum) = (0.0_f64, 0.0_f64);
+            let rows = &self.refit[j].rows;
+            let n_rows = rows.len() / (nf + 2);
+            let x = &mut self.work.x;
+            for row in rows.chunks_exact(nf + 2) {
+                let v = row[nf + 1];
+                w_sum += v;
+                w2_sum += v * v;
+                x[off..].copy_from_slice(&row[..nf]);
+                let eta = dot_aug(&b, &row[..nf], self.cfg.fit_intercept);
+                let Some(wk) = fam.working(eta, row[nf]) else {
+                    continue;
+                };
+                if wk.eta != eta {
+                    continue;
+                }
+                let c = v * wk.w;
+                for i in 0..k {
+                    for m in 0..=i {
+                        g[at(i, m)] += c * x[i] * x[m];
+                    }
+                }
+            }
+            if !factor_ridged(&g, self.cfg.ridge, k, &mut self.work.l) {
+                let r = &mut self.refit[j];
+                r.tried = r.learned;
+                return;
+            }
+            let l = &self.work.l;
+            let u = &mut self.work.d;
+            u.resize(k, 0.0);
+            let (mut h_max, mut edf, mut hi_count) = (0.0_f64, 0.0_f64, 0usize);
+            for row in rows.chunks_exact(nf + 2) {
+                let v = row[nf + 1];
+                x[off..].copy_from_slice(&row[..nf]);
+                let eta = dot_aug(&b, &row[..nf], self.cfg.fit_intercept);
+                let Some(wk) = fam.working(eta, row[nf]) else {
+                    continue;
+                };
+                if wk.eta != eta {
+                    continue;
+                }
+                let c = v * wk.w;
+                if c <= 0.0 {
+                    continue;
+                }
+                for i in 0..k {
+                    let mut s = x[i];
+                    for m in 0..i {
+                        s -= l[at(i, m)] * u[m];
+                    }
+                    u[i] = s / l[at(i, i)];
+                }
+                let quad: f64 = u.iter().map(|t| t * t).sum();
+                let h = (c * quad).min(1.0);
+                if h > h_max {
+                    h_max = h;
+                }
+                edf += h;
+                if h > 0.5 * ADAPTIVE_H_CUT {
+                    hi_count += 1;
+                }
+            }
+            let n_kish = if w2_sum > 0.0 {
+                (w_sum * w_sum) / w2_sum
+            } else {
+                0.0
+            };
+            let r = &mut self.refit[j];
+            let primary = h_max <= ADAPTIVE_H_CUT && n_kish >= (1.0 / ADAPTIVE_H_CUT) * edf;
+            let bulk_settled = 20 * hi_count <= n_rows && n_kish >= (1.0 / ADAPTIVE_H_CUT) * edf;
+            let decay_plateau =
+                r.tried > 0 && r.prev_n_kish > 0.0 && n_kish <= DECAY_PLATEAU_RATIO * r.prev_n_kish;
+            if !(primary || bulk_settled || decay_plateau) {
+                r.tried = r.learned;
+                r.prev_n_kish = n_kish;
+                return;
+            }
+            // Commit using the Gram already built above and free the buffer.
+            r.rows = Vec::new();
+            r.done = true;
+            r.passes = passes;
+            self.gram[j] = g;
+            self.beta[j] = b;
+            return;
+        }
         let rows = std::mem::take(&mut self.refit[j].rows);
-        let fit = refit_fit(&self.cfg, &rows, nf);
         let r = &mut self.refit[j];
         r.done = true;
         match fit {
@@ -1509,16 +1708,29 @@ impl OnlineModel for Glm {
                     r.rows.push(t);
                     r.rows.push(weight);
                     r.learned += 1;
-                    let due = match (self.cfg.refit_clock, now) {
-                        (Some(span), Some(now)) => {
-                            let first = *r.first.get_or_insert(now);
-                            r.learned as usize >= p.max(1)
-                                && crate::clock_span::span_reached(now, first, span)
-                        }
-                        _ => r.learned >= self.cfg.refit_rows,
+                    let (due, adaptive_check) = if self.cfg.adaptive_refit {
+                        let cap_rows = self.cfg.adaptive_cap_rows();
+                        let next_due = if r.tried == 0 {
+                            (2u32.saturating_mul(p.max(1) as u32))
+                                .max(ADAPTIVE_MIN_INIT)
+                                .min(cap_rows)
+                        } else {
+                            r.tried.saturating_mul(2).min(cap_rows)
+                        };
+                        (r.learned >= next_due, true)
+                    } else {
+                        let d = match (self.cfg.refit_clock, now) {
+                            (Some(span), Some(now)) => {
+                                let first = *r.first.get_or_insert(now);
+                                r.learned as usize >= p.max(1)
+                                    && crate::clock_span::span_reached(now, first, span)
+                            }
+                            _ => r.learned >= self.cfg.refit_rows,
+                        };
+                        (d, false)
                     };
                     if due {
-                        self.run_refit(j);
+                        self.run_refit(j, adaptive_check);
                     }
                 }
             }
@@ -1606,9 +1818,7 @@ impl OnlineModel for Glm {
                     && m.beta.len() == n
                     && m.beta.iter().all(|b| b.len() == k)
                     && m.refit.len() == if m.cfg.refits() { n } else { 0 }
-                    && m.refit
-                        .iter()
-                        .all(|r| r.fits(width, m.cfg.refit_rows, m.cfg.refit_clock.is_some()))
+                    && m.refit.iter().all(|r| r.fits(width, &m.cfg))
                     // Only a span's buffers can be stopped at the cap.
                     && (m.over.is_none() || m.cfg.refit_clock.is_some());
                 if !shaped {

@@ -28,45 +28,66 @@ fn a_refit_buffers_shape_is_its_counts() {
         learned,
         ..Refit::new()
     };
-    assert!(rows(5).fits(4, 6, false));
-    assert!(!rows(6).fits(4, 6, false), "as many as its count: it ran");
-    assert!(!rows(7).fits(4, 6, false));
+    let count_cfg = |refit_rows: u32| {
+        let mut c = cfg_of(2, 0.7);
+        c.refit_rows = refit_rows;
+        c
+    };
+    let span_cfg = |refit_rows: u32| {
+        let mut c = cfg_of(2, 0.7);
+        c.refit_rows = refit_rows;
+        c.refit_clock = Some(10.0);
+        c
+    };
+    let adapt_cfg = || {
+        let mut c = cfg_of(2, 0.7);
+        c.adaptive_refit = true;
+        c
+    };
+    assert!(rows(5).fits(4, &count_cfg(6)));
+    assert!(
+        !rows(6).fits(4, &count_cfg(6)),
+        "as many as its count: it ran"
+    );
+    assert!(!rows(7).fits(4, &count_cfg(6)));
     let spanned = |learned: u32| Refit {
         first: Some(Stamp::from(0.0)),
         ..rows(learned)
     };
     assert!(
-        spanned(7).fits(4, 6, true),
+        spanned(7).fits(4, &span_cfg(6)),
         "a span holds what its span has"
     );
     assert!(
-        !rows(7).fits(4, 6, true),
+        !rows(7).fits(4, &span_cfg(6)),
         "a span's rows run from its first stamp"
     );
-    assert!(rows(0).fits(4, 0, false));
-    assert!(!rows(1).fits(4, 0, false), "a count of 0 reads as 1");
+    assert!(rows(0).fits(4, &count_cfg(0)));
+    assert!(!rows(1).fits(4, &count_cfg(0)), "a count of 0 reads as 1");
+    assert!(rows(7).fits(4, &adapt_cfg()));
+    assert!(!spanned(7).fits(4, &adapt_cfg()));
     let done = Refit {
         done: true,
         ..Refit::new()
     };
-    assert!(done.fits(4, 6, false));
+    assert!(done.fits(4, &count_cfg(6)));
     let mut wrong_width = rows(3);
     wrong_width.rows.pop();
-    assert!(!wrong_width.fits(4, 6, false));
-    assert!(!wrong_width.fits(4, 6, true));
+    assert!(!wrong_width.fits(4, &count_cfg(6)));
+    assert!(!wrong_width.fits(4, &span_cfg(6)));
     // A first stamp belongs to a span alone.
     let stamped = Refit {
         first: Some(Stamp::Ns(0)),
         ..rows(2)
     };
-    assert!(stamped.fits(4, 6, true));
-    assert!(!stamped.fits(4, 6, false));
+    assert!(stamped.fits(4, &span_cfg(6)));
+    assert!(!stamped.fits(4, &count_cfg(6)));
     assert!(
         !Refit {
             first: Some(Stamp::Ns(0)),
             ..done
         }
-        .fits(4, 6, false)
+        .fits(4, &count_cfg(6))
     );
 }
 

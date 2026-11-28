@@ -68,11 +68,10 @@ def _out(spec: dict, df: pl.DataFrame) -> pl.DataFrame:
     return rp.ModelBank([spec]).fit_predict(df).unnest("m")
 
 
-#: A process whose variance clusters strongly, ``α = 0.2``, ``β = 0.78``: a
-#: start of 100 rows, doubled, identifies it in each group of a stream of
-#: 1,200 rows. At ``(0.08, 0.9)`` the groups of 700 and 600 rows never
-#: started, and the tests over them compared nulls with nulls.
-CLUSTERED = {"alpha": 0.2, "beta": 0.78}
+#: A process whose variance clusters strongly with finite fourth moment,
+#: ``α = 0.2``, ``β = 0.75``: a start of 100 rows, doubled, identifies it in
+#: each group of a stream of 3,000 rows (including the 1/3-share group ``a``).
+CLUSTERED = {"alpha": 0.2, "beta": 0.75}
 
 
 def _reports_in_every_group(out: pl.DataFrame, df: pl.DataFrame) -> None:
@@ -122,15 +121,16 @@ def test_the_variance_is_the_recursion_at_the_reported_parameters(kw):
     whose reported ``ω`` is ``v̄ (1 − α − β)`` at that row."""
     vol = kw.get("vol", "garch")
     gamma = 0.1 if vol != "garch" else 0.0
-    # a series whose start of 100 rows, doubled at most twice, tells its
+    # a series whose start of 100 rows, doubled as needed, tells its
     # process from a constant variance (a start that does not waits)
-    df = pl.DataFrame({"y": _returns(1200, 9, gamma)})
+    n = 2400 if kw.get("variance_targeting") else 1600
+    df = pl.DataFrame({"y": _returns(n, 9, gamma)})
     out = _out(_spec(coef_every=0, **kw), df)
     y, s = df["y"].to_numpy(), out["variance_y"].to_numpy()
     coef = out["coef"].to_list()
     width = {"garch": 3, "gjr": 4, "egarch": 4}[vol] + {"t": 1, "skewt": 2}.get(kw.get("dist"), 0)
     checked = 0
-    for t in range(200, 1199):
+    for t in range(200, n - 1):
         th = coef[t]
         if th is None or not np.isfinite(s[t]):
             continue
@@ -163,21 +163,21 @@ def test_a_rows_variance_is_read_before_the_row():
     """The variance a row reports does not read the row's return: changing
     it moves the row's standardized residual, and the variance of the next
     row, alone."""
-    df = pl.DataFrame({"y": _returns(400, 9)})
+    df = pl.DataFrame({"y": _returns(1000, 9)})
     s = _spec()
     a = _out(s, df)
     b = _out(
         s,
         df.with_columns(
-            pl.when(pl.int_range(400) == 300).then(9.0).otherwise(pl.col("y")).alias("y")
+            pl.when(pl.int_range(1000) == 900).then(9.0).otherwise(pl.col("y")).alias("y")
         ),
     )
-    assert a["variance_y"][:301].equals(b["variance_y"][:301])
-    assert a["std_resid_y"][300] != b["std_resid_y"][300]
-    assert a["variance_y"][301] != b["variance_y"][301]
+    assert a["variance_y"][:901].equals(b["variance_y"][:901])
+    assert a["std_resid_y"][900] != b["std_resid_y"][900]
+    assert a["variance_y"][901] != b["variance_y"][901]
     # nothing before the start, a number on every row from it
     n0 = int(np.argmax(a["variance_y"].is_not_null().to_numpy()))
-    assert 100 <= n0 <= 300, n0
+    assert 100 <= n0 <= 900, n0
     assert a["variance_y"][:n0].is_null().all() and a["variance_y"][n0:].is_not_null().all()
 
 
@@ -191,13 +191,13 @@ def test_a_rows_variance_is_read_before_the_row():
     ],
 )
 def test_chunk_invariance(kw, seed):
-    n = 4400 if kw.get("vol") == "figarch" else 1200
+    n = 4400 if kw.get("vol") == "figarch" else 3000
     df = _frame(n, seed, 0.1 if "vol" in kw else 0.0, **CLUSTERED)
     s = _spec(group="g", weight="w", coef_every=0, **kw)
     one = rp.ModelBank([s]).fit_predict(df)
-    if n == 1200:  # figarch's start of 2000 rows is past a third of 4400
+    if n == 3000:  # figarch's start of 2000 rows is past a third of 4400
         _reports_in_every_group(one, df)
-    for size in (1, 13, 211) if n == 1200 else (211, 997):
+    for size in (1, 13, 211) if n == 3000 else (211, 997):
         bank = rp.ModelBank([s])
         many = pl.concat([bank.fit_predict(df.slice(i, size)) for i in range(0, n, size)])
         assert one.equals(many, null_equal=True), size
@@ -213,12 +213,12 @@ def test_chunk_invariance(kw, seed):
     ],
 )
 def test_a_save_goes_on_to_the_bit(kw):
-    df = _frame(1200, 6, **CLUSTERED)
+    df = _frame(3000, 6, **CLUSTERED)
     s = _spec(group="g", weight="w", **kw)
     _reports_in_every_group(rp.ModelBank([s]).fit_predict(df), df)
     # a save before either group's start, after one's, after both, and on
     # the last row
-    for cut in (1, 330, 700, 1100, 1199):
+    for cut in (1, 600, 1500, 2700, 2999):
         a = rp.ModelBank([s])
         a.fit_predict(df.slice(0, cut))
         buf = io.BytesIO()
@@ -242,7 +242,7 @@ def test_a_zero_weight_row_steps_no_recursion(kw):
     them: the recursion is per observation, and such a row is none, so a
     horizon counts no such row either. They are still read, and their
     forecasts are those the next learned row reads from the same state."""
-    n = 2600 if "vol" in kw else 900
+    n = 2600 if "vol" in kw else 1200
     df = _frame(n, 8).drop("g")
     df = df.with_columns(
         pl.when(pl.int_range(n) % 17 == 5).then(None).otherwise(pl.col("y")).alias("y")
@@ -268,7 +268,7 @@ def test_a_zero_weight_row_steps_no_recursion(kw):
 def test_a_weight_scales_nothing_but_the_weight():
     """Every weight doubled leaves the variances and the fit where they
     were, to rounding; ``weight_sum`` doubles."""
-    df = _frame(800, 9).drop("g")
+    df = _frame(1400, 9).drop("g")
     s = _spec(weight="w", coef_every=0)
     a = _out(s, df)
     b = _out(s, df.with_columns(pl.col("w") * 2.0))
@@ -370,7 +370,7 @@ def test_names_match_the_realized_struct():
         ({"vol": "gjr", "variance_targeting": True}, "variance_targeting"),
         ({"truncation": 100}, "truncation is FIGARCH's"),
         ({"vol": "figarch", "start_rows": 0}, "at least 1"),
-        ({"start_rows": 10}, "at least 50"),
+        ({"start_rows": 0}, "at least 1"),
         ({"start_span": 50.0}, "Leave one of them out"),
         ({"max_state_bytes": 0}, "above 0"),
         ({"emit_sigma": True}, "emit_sigma"),
@@ -384,7 +384,7 @@ def test_refusals(kw, says):
 def test_a_start_span_on_a_temporal_clock_is_a_duration():
     """``start_span`` as a duration on a temporal clock: rows a minute
     apart, a start of two hours closes at its 121st row."""
-    n = 400
+    n = 600
     df = pl.DataFrame(
         {
             "ts": pl.datetime_range(
@@ -400,9 +400,9 @@ def test_a_start_span_on_a_temporal_clock_is_a_duration():
     out = rp.ModelBank([spec]).fit_predict(df).unnest("m")
     first = out["variance_y"].is_not_null().arg_true()[0]
     # the 121st row is the first two hours from the first; a try that does
-    # not start waits for as many new rows as it held, 121, whatever the
-    # clock says: the first report is just past one of the two
-    assert first in (121, 242), first
+    # not start waits for as many new rows as it held, 121, then doubles,
+    # whatever the clock says: the first report is just past a doubling step
+    assert first in (121, 242, 484), first
     with pytest.raises(ValueError, match="start_span"):
         rp.ModelBank(
             [rp.spec.garch("m", targets=["y"], clock="ts", gap_cap="1h", start_span=120.0)]
@@ -439,28 +439,33 @@ def test_a_clock_span_start_is_warned_of_once_and_refused_at_the_cap():
 
 def test_a_realistic_series_at_the_default_start():
     """A GARCH(1,1) at ``arch``'s oracle truth, ``(0.05, 0.08, 0.9)``, at the
-    default start of 2,000 rows: the start's rows are withheld as the
-    model's warm-up, ``below_warm_rows``, with no coefficients; from the next
-    row every variance is a number and the recursion at the parameters
-    reported after the row before, and nothing is withheld."""
+    default adaptive doubling start (from 64 rows): the initial rows are
+    withheld as ``below_warm_rows`` (and ``not_identified`` while doubling),
+    with no coefficients; once identified, every variance is a number and the
+    recursion at the parameters reported after the row before, and nothing is
+    withheld."""
     df = pl.DataFrame({"y": _returns(2600, 21)})
     out = _out(rp.spec.garch("m", targets=["y"], coef_every=0), df)
     s, y, coef = out["variance_y"].to_numpy(), df["y"].to_numpy(), out["coef"].to_list()
     reason = out["withheld_reason"].cast(pl.String).to_list()
-    assert np.isnan(s[:2000]).all() and np.isfinite(s[2000:]).all()
-    assert reason[:2000] == ["below_warm_rows"] * 2000 and reason[2000:] == [None] * 600
+    n0 = int(np.argmax(np.isfinite(s)))
+    assert 64 <= n0 < 2000 and n0 % 64 == 0 and (n0 // 64) & (n0 // 64 - 1) == 0, n0
+    assert np.isnan(s[:n0]).all() and np.isfinite(s[n0:]).all()
+    assert reason[:64] == ["below_warm_rows"] * 64
+    assert all(r in ("below_warm_rows", "not_identified") for r in reason[64:n0])
+    assert reason[n0:] == [None] * (2600 - n0)
 
     def numbers(c) -> bool:  # noqa: ANN001
         return c is not None and all(v is not None for v in c)
 
-    assert not any(numbers(c) for c in coef[:1999]) and all(numbers(c) for c in coef[1999:])
-    # The first variance reported is the start's filter run over its 2,000
+    assert not any(numbers(c) for c in coef[: n0 - 1]) and all(numbers(c) for c in coef[n0 - 1 :])
+    # The first variance reported is the start's filter run over its `n0`
     # rows at its fit, from `arch`'s backcast: `arch`'s own recursion at
     # those parameters.
-    fixed = arch_model(y[:2001], mean="Zero", vol="GARCH", p=1, q=1, rescale=False)
-    first = float(fixed.fix(coef[1999]).conditional_volatility[2000] ** 2)
-    assert abs(s[2000] - first) <= 1e-12 * first, (s[2000], first)
-    for t in range(2000, 2599):
+    fixed = arch_model(y[: n0 + 1], mean="Zero", vol="GARCH", p=1, q=1, rescale=False)
+    first = float(fixed.fix(coef[n0 - 1]).conditional_volatility[n0] ** 2)
+    assert abs(s[n0] - first) <= 1e-12 * first, (s[n0], first)
+    for t in range(n0, 2599):
         om, a, b = coef[t]
         want = om + a * y[t] ** 2 + b * s[t]
         assert abs(s[t + 1] - want) <= 1e-13 * want, t
@@ -514,5 +519,24 @@ def test_figarch_short_start_waits_as_not_identified_without_row_floor():
     )
     reason_span = out_span["withheld_reason"].cast(pl.String).to_list()
     assert out_span["variance_y"].is_null().all()
+    assert reason_span[:21] == ["below_warm_rows"] * 21
+    assert reason_span[21] == "not_identified"
+
+
+@pytest.mark.parametrize("vol", ["garch", "gjr", "egarch"])
+def test_short_start_waits_as_not_identified_without_row_floor(vol):
+    """Every vol form accepts ``start_rows`` down to 1 and closes
+    ``start_span`` without a 50-row floor, withholding short starts as
+    ``not_identified`` under the LR and Fisher-SE gates."""
+    y = _returns(60, 6, gamma=0.1 if vol != "garch" else 0.0, alpha=0.2, beta=0.78)
+    df = pl.DataFrame({"t": np.arange(len(y), dtype=float), "y": y})
+    out_rows = _out(rp.spec.garch("m", targets=["y"], vol=vol, start_rows=10), df)
+    reason_rows = out_rows["withheld_reason"].cast(pl.String).to_list()
+    assert reason_rows[:10] == ["below_warm_rows"] * 10
+    assert reason_rows[10] == "not_identified"
+    out_span = _out(
+        rp.spec.garch("m", targets=["y"], vol=vol, clock="t", gap_cap=1e9, start_span=20.0), df
+    )
+    reason_span = out_span["withheld_reason"].cast(pl.String).to_list()
     assert reason_span[:21] == ["below_warm_rows"] * 21
     assert reason_span[21] == "not_identified"

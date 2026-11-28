@@ -256,10 +256,14 @@ def online(
     bank = rp.ModelBank([s])
     out = bank.fit_predict(pl.DataFrame({**cols, "y": y}))
     pred = out["m"].struct.field("pred_y").to_numpy()
-    learned = np.cumsum(np.ones(len(y)) if w is None else w > 0)
-    after = learned > max(200, 10 * X.shape[1])
+    finite = np.isfinite(pred)
+    if not finite.any():
+        nulls = len(y)
+    else:
+        first = int(np.argmax(finite))
+        nulls = int(np.isnan(pred[first:]).sum())
     coef = np.array([r["coef"] for r in bank.coef().iter_rows(named=True)])
-    return coef, int(np.isnan(pred[after]).sum())
+    return coef, nulls
 
 
 def gap(name: str, seed: int) -> tuple[float, int]:

@@ -1738,7 +1738,7 @@ fn reserve_refits(
         // and `expectile` were told of `huber_refit_rows`, and a span of a
         // count it does not take).
         use crate::ModelKind as K;
-        let span = matches!(
+        let cap_sized = matches!(
             &spec.model,
             K::Huber {
                 huber_refit_span: Some(_),
@@ -1750,14 +1750,14 @@ fn reserve_refits(
                 quantile_refit_span: Some(_),
                 ..
             } | K::Glm {
-                refit_span: Some(_),
+                refit_rows: None,
                 ..
             } | K::Expectile {
-                refit_span: Some(_),
+                refit_rows: None,
                 ..
             }
         );
-        let lower = if span {
+        let lower = if cap_sized {
             "max_state_bytes, the bytes each refit's buffers may hold"
         } else {
             match spec.model {

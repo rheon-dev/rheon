@@ -51,6 +51,7 @@ fn cfg(k: usize, tau: f64) -> ExpectileCfg {
         window_clock: None,
         closed: WindowClosed::Right,
         max_state_bytes: None,
+        adaptive_refit: false,
     }
 }
 
@@ -472,10 +473,21 @@ fn the_default_refit_fits_the_cap() {
     c.refit_rows = small;
     assert!(c.validate().is_ok());
     assert_eq!(default_expectile_refit_rows(5, 4000, true, false, cap), 0);
+    // No arbitrary `n_features > 100` cliff: under a large cap, 101 features
+    // fits cleanly.
     assert_eq!(
         default_expectile_refit_rows(101, 1, true, false, 1 << 26),
-        0
+        1020
     );
+    assert!(default_expectile_adaptive_refit(
+        101,
+        1,
+        true,
+        false,
+        1 << 26
+    ));
+    assert!(!default_expectile_adaptive_refit(5, 1, true, true, cap));
+    assert!(!default_expectile_adaptive_refit(5, 4000, true, false, cap));
 }
 
 /// Rows of weight 0 count in no clock (hard rule 9): the weighted rows of a
@@ -687,4 +699,91 @@ fn a_ridge_penalizes_the_slopes_on_the_rows_weight() {
     m.step(&[0.0, 1.0], &[Some(2.0)], 0.0, 1.0);
     let s = m.step(&[0.0, 2.0], &[Some(3.0)], 1.0, 1.0);
     assert!(s.pred[0].is_finite());
+}
+
+/// A6: adaptive doubling refit in `expectile` commits once leverage and Kish
+/// count settle (on both raw and centred-fallback features), handles decay
+/// plateaus, outlier plateaus, `max_state_bytes` cap commits without
+/// `state_over_cap`, high feature counts (`n_features = 105`), save/load mid
+/// adaptive buffer, and zero-weight invariance.
+#[test]
+fn adaptive_refit_doubles_plateaus_caps_and_roundtrips() {
+    // 1. Standard stream (k = 3): commits cleanly once leverage settles.
+    let rows = stream(2, 600, 81);
+    let mut c = cfg(2, 0.8);
+    c.ridge = 1e-6;
+    c.adaptive_refit = true;
+    let mut m = Expectile::new(c.clone()).unwrap();
+    for (x, y) in &rows {
+        m.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    let st = m.refit_status()[0];
+    assert!(
+        st.done && !st.failed && (16..=512).contains(&st.learned),
+        "standard adaptive commit: {st:?}"
+    );
+    assert!(m.state_over_cap().is_none());
+
+    // 2. Save/load mid-adaptive-buffer (after 18 rows) and zero-weight rows
+    // agree to the bit.
+    let mut a = Expectile::new(c.clone()).unwrap();
+    for (x, y) in &rows[..18] {
+        a.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    let saved = rmp_serde::to_vec_named(&a.state()).unwrap();
+    let mut b = Expectile::restore(&rmp_serde::from_slice(&saved).unwrap()).unwrap();
+    for (x, y) in &rows[18..] {
+        let pa = a.step(x, &[Some(*y)], 1.0, 1.0).pred[0];
+        let pb = b.step(x, &[Some(*y)], 1.0, 1.0).pred[0];
+        assert_eq!(pa.to_bits(), pb.to_bits());
+    }
+    let mut wz = Expectile::new(c.clone()).unwrap();
+    let mut plain = Expectile::new(c.clone()).unwrap();
+    for (i, (x, y)) in rows.iter().enumerate() {
+        if i % 5 == 0 {
+            wz.step(x, &[Some(*y)], 1.0, 0.0);
+        }
+        let pw = wz.step(x, &[Some(*y)], 1.0, 1.0).pred[0];
+        let pp = plain.step(x, &[Some(*y)], 1.0, 1.0).pred[0];
+        assert_eq!(pw.to_bits(), pp.to_bits());
+    }
+
+    // 3. Far-from-zero feature (centred fallback path) + decay plateau.
+    let mut c_far = c.clone();
+    c_far.decay = Decay::Halflife(6.0);
+    let mut m_far = Expectile::new(c_far).unwrap();
+    for (x, y) in &rows {
+        m_far.step(&[x[0] + 1e9, x[1]], &[Some(*y)], 1.0, 1.0);
+    }
+    assert!(m_far.refit_status()[0].done && m_far.refit_status()[0].learned <= 128);
+
+    // 4. Tight max_state_bytes: commits cleanly at cap_rows without breach.
+    let fixed = Expectile::sums_bytes(2, 1, true, false);
+    let cap_bytes = fixed + 8 * (2 + 2) * 10; // room for 10 rows
+    let mut c_cap = c.clone();
+    c_cap.max_state_bytes = Some(cap_bytes);
+    let mut m_cap = Expectile::new(c_cap).unwrap();
+    for (x, y) in &rows[..30] {
+        m_cap.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    assert!(m_cap.refit_status()[0].done && m_cap.refit_status()[0].learned == 10);
+    assert!(m_cap.state_over_cap().is_none());
+
+    // 5. No k > 100 cliff: n_features = 105 refits cleanly when cap allows it.
+    let big_cap = 1 << 20;
+    assert!(default_expectile_adaptive_refit(
+        105, 1, true, false, big_cap
+    ));
+    let wide = stream(105, 1200, 82);
+    let mut c_wide = cfg(105, 0.8);
+    c_wide.ridge = 1e-6;
+    c_wide.max_state_bytes = Some(big_cap);
+    c_wide.adaptive_refit = true;
+    let mut m_wide = Expectile::new(c_wide).unwrap();
+    for (x, y) in &wide {
+        m_wide.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    let st_w = m_wide.refit_status()[0];
+    assert!(st_w.done && !st_w.failed, "{st_w:?}");
+    assert!(m_wide.state_over_cap().is_none());
 }

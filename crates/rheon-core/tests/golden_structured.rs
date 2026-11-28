@@ -812,6 +812,7 @@ fn expectile_skewed_golden() {
         window_clock: None,
         closed: WindowClosed::Right,
         max_state_bytes: None,
+        adaptive_refit: false,
     };
     let mut m = Expectile::new(cfg.clone()).unwrap();
     let mut got = probe(&mut m, &rows, &[0], &[200, 400, 599]);
@@ -891,6 +892,7 @@ fn glm_gamma_golden() {
         refit_clock: None,
         step_cap: f64::INFINITY,
         max_state_bytes: None,
+        adaptive_refit: false,
     })
     .unwrap();
     let mut got = probe(&mut m, &gamma_rows(), &[0], &[200, 400, 499]);

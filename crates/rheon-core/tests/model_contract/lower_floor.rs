@@ -597,6 +597,7 @@ fn glm_cfg() -> GlmCfg {
         refit_clock: None,
         step_cap: f64::INFINITY,
         max_state_bytes: None,
+        adaptive_refit: false,
     }
 }
 
@@ -674,6 +675,7 @@ fn expectile_cfg() -> ExpectileCfg {
         window_clock: None,
         closed: WindowClosed::Right,
         max_state_bytes: None,
+        adaptive_refit: false,
     }
 }
 
@@ -880,13 +882,24 @@ fn tdigest_predict_is_the_step() {
 
 #[test]
 fn garch_predict_is_the_step() {
-    predict_is_the_step_without_the_step(|| Garch::new(garch_cfg()).unwrap(), 1, false);
+    predict_is_the_step_without_the_step(
+        || {
+            Garch::new(GarchCfg {
+                max_state_bytes: None,
+                ..garch_cfg()
+            })
+            .unwrap()
+        },
+        1,
+        false,
+    );
     predict_is_the_step_without_the_step(
         || {
             Garch::new(GarchCfg {
                 n_inputs: 0,
                 vol: GarchVol::Gjr,
                 dist: GarchDist::T,
+                max_state_bytes: None,
                 ..garch_cfg()
             })
             .unwrap()
@@ -899,6 +912,7 @@ fn garch_predict_is_the_step() {
             Garch::new(GarchCfg {
                 n_inputs: 0,
                 vol: GarchVol::Egarch,
+                max_state_bytes: None,
                 ..garch_cfg()
             })
             .unwrap()
@@ -914,7 +928,7 @@ fn garch_predict_is_the_step() {
                 Garch::new(GarchCfg {
                     n_inputs: K,
                     vol,
-                    max_state_bytes: Some(3000),
+                    max_state_bytes: None,
                     ..garch_cfg()
                 })
                 .unwrap()
@@ -928,6 +942,7 @@ fn garch_predict_is_the_step() {
             Garch::new(GarchCfg {
                 n_inputs: 0,
                 variance_targeting: true,
+                max_state_bytes: None,
                 ..garch_cfg()
             })
             .unwrap()

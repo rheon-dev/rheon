@@ -930,20 +930,20 @@ fn the_settings_are_checked() {
         },
         "at least 1",
     );
-    refused(&|c| c.start_rows = 49, "at least 50");
-    refused(
-        &|c| {
-            c.vol = GarchVol::Figarch;
-            c.start_rows = 0
-        },
-        "at least 1",
-    );
-    // FIGARCH has no fixed row-count floor above 1: starts of 1 or 49 rows
-    // are accepted and wait on the LR test and SE(d).
-    for r in [1, 49, 500] {
-        let mut c = cfg(GarchVol::Figarch, GarchDist::Normal);
-        c.start_rows = r;
-        assert!(Garch::new(c).is_ok(), "figarch start_rows={r}");
+    refused(&|c| c.start_rows = 0, "at least 1");
+    // No fixed row-count floor above 1 for any vol form: starts of 1 or 49 rows
+    // are accepted and wait on the LR test, Newton decrement and Fisher SE gate.
+    for vol in [
+        GarchVol::Garch,
+        GarchVol::Gjr,
+        GarchVol::Egarch,
+        GarchVol::Figarch,
+    ] {
+        for r in [1, 49, 500] {
+            let mut c = cfg(vol, GarchDist::Normal);
+            c.start_rows = r;
+            assert!(Garch::new(c).is_ok(), "{vol:?} start_rows={r}");
+        }
     }
     refused(&|c| c.start_span = Some(0.0), "start_span");
     refused(
@@ -1350,7 +1350,7 @@ fn a_start_waits_under_the_lr_cut_and_starts_over_it() {
         for n in (60..=1200).step_by(60) {
             let rows: Vec<[f64; 2]> = ys[..n].iter().map(|&e| [e, 1.0]).collect();
             let v = ys[..n].iter().map(|e| e * e).sum::<f64>() / n as f64;
-            let lr = fit(
+            let start_fit = fit(
                 vol,
                 GarchDist::Normal,
                 false,
@@ -1360,8 +1360,8 @@ fn a_start_waits_under_the_lr_cut_and_starts_over_it() {
                 backcast(&rows),
                 v,
             )
-            .unwrap()
-            .lr;
+            .unwrap();
+            let lr = start_fit.lr;
             let c = GarchCfg {
                 n_inputs: 0,
                 start_rows: n,
@@ -1370,7 +1370,7 @@ fn a_start_waits_under_the_lr_cut_and_starts_over_it() {
             };
             let mut m = Garch::new(c).unwrap();
             let out = run(&mut m, &ys[..=n], &vec![1.0; n + 1]);
-            let pass = identified(vol, 0, lr);
+            let pass = identified(vol, 0, lr) && start_fit.se_ok;
             sides[usize::from(pass)] += 1;
             assert_eq!(m.started()[0], pass, "{vol:?} {n}: {lr}");
             assert_eq!(m.no_effect(), !pass, "{vol:?} {n}: {lr}");
@@ -1461,7 +1461,8 @@ fn a_fit_short_of_its_optimum_is_never_stepped_from() {
 /// carries it), so its likelihood-ratio statistic passes.
 #[test]
 fn a_start_on_a_bound_at_its_optimum_is_stepped_from() {
-    let c = cfg(GarchVol::Gjr, GarchDist::Normal);
+    let mut c = cfg(GarchVol::Gjr, GarchDist::Normal);
+    c.start_rows = 800;
     let n0 = c.start_rows;
     let ys = gjr_series([0.05, 0.0, 0.15, 0.88], n0 + 10, 1, 1.0);
     let mut m = Garch::new(c).unwrap();
@@ -1476,4 +1477,112 @@ fn a_start_on_a_bound_at_its_optimum_is_stepped_from() {
         }
     }
     assert_eq!(m.start_report()[0], (0, true));
+}
+
+/// A1 + A2: every volatility form accepts `start_rows` down to 1 and closes
+/// `start_span` without a 50-row wait, withholding short starts as
+/// `not_identified` until LR, Newton decrement, and the Fisher SE gate all
+/// pass; adaptive doubling from `default_garch_start_rows` identifies
+/// realistic series well before 2,000 rows while explicit overrides stand.
+#[test]
+fn adaptive_start_and_fisher_se_gate_hold_across_forms() {
+    // Structural default start sizes: 64 for standard forms, scaling by
+    // next_power_of_two(8 * n_free) when exogenous inputs widen the model.
+    assert_eq!(
+        default_garch_start_rows(GarchVol::Garch, GarchDist::Normal, false, 0),
+        64
+    );
+    assert_eq!(
+        default_garch_start_rows(GarchVol::Gjr, GarchDist::T, false, 0),
+        64
+    );
+    assert_eq!(
+        default_garch_start_rows(GarchVol::Figarch, GarchDist::Normal, false, 0),
+        64
+    );
+    assert_eq!(
+        default_garch_start_rows(GarchVol::Garch, GarchDist::Normal, false, 6),
+        128
+    );
+
+    // Analytical Student-t Fisher block: Gaussian limit (nu -> inf) gives
+    // i_ss -> 1/2, i_sn -> 0, and exact nu = 5 matches known trigamma values.
+    let (iss_hi, isn_hi, _) = dist::student_t_fisher_block(1e4);
+    assert!((iss_hi - 0.5).abs() < 1e-3, "{iss_hi}");
+    assert!(isn_hi.abs() < 1e-6, "{isn_hi}");
+    let (iss5, isn5, inn5) = dist::student_t_fisher_block(5.0);
+    assert!(iss5 > 0.0 && inn5 > 0.0 && iss5 * inn5 > isn5 * isn5);
+
+    // Short start (10 rows) and short start_span (20 rows) withhold as
+    // `not_identified` without a 50-row floor on GARCH, GJR, and EGARCH.
+    let ys_short = gjr_series([0.05, 0.12, 0.10, 0.80], 40, 31, 1.0);
+    for vol in [GarchVol::Garch, GarchVol::Gjr, GarchVol::Egarch] {
+        let mut c = cfg(vol, GarchDist::Normal);
+        c.start_rows = 10;
+        let mut m = Garch::new(c).unwrap();
+        for (t, y) in ys_short.iter().enumerate() {
+            m.step(&[], &[Some(*y)], 1.0, 1.0);
+            if t == 9 {
+                assert!(!m.started()[0], "{vol:?} started at 10 rows");
+                assert!(
+                    m.no_effect(),
+                    "{vol:?} should report not_identified at 10 rows"
+                );
+            }
+        }
+        // Clock span closing at 21 rows tries immediately (no 50-row floor).
+        let mut cs = cfg(vol, GarchDist::Normal);
+        cs.start_span = Some(20.0);
+        let mut ms = Garch::new(cs).unwrap();
+        for (t, y) in ys_short.iter().enumerate() {
+            ms.stamp_next(Stamp::from(t as f64));
+            ms.step(&[], &[Some(*y)], 1.0, 1.0);
+            if t == 20 {
+                assert_eq!(ms.start_report()[0].0, 1, "{vol:?} tried at span row 21");
+                assert!(
+                    ms.no_effect(),
+                    "{vol:?} short span withheld as not_identified"
+                );
+            }
+        }
+    }
+
+    // Adaptive doubling from default_garch_start_rows identifies realistic
+    // series cleanly before 2,000 rows and is power-of-two weight invariant.
+    let ys = gjr_series([0.05, 0.12, 0.10, 0.80], 1600, 41, 1.0);
+    for (vol, dist_kind) in [
+        (GarchVol::Garch, GarchDist::Normal),
+        (GarchVol::Gjr, GarchDist::Normal),
+        (GarchVol::Egarch, GarchDist::Normal),
+        (GarchVol::Garch, GarchDist::T),
+    ] {
+        let mut c = cfg(vol, dist_kind);
+        c.start_rows = default_garch_start_rows(vol, dist_kind, false, 0);
+        let mut a = Garch::new(c.clone()).unwrap();
+        let mut b = Garch::new(c).unwrap();
+        let mut started_at = None;
+        for (t, y) in ys.iter().enumerate() {
+            let pa = a.step(&[], &[Some(*y)], 1.0, 1.0);
+            let pb = b.step(&[], &[Some(*y)], 1.0, 4.0);
+            assert_eq!(
+                a.started()[0],
+                b.started()[0],
+                "{vol:?} {dist_kind:?} t={t}"
+            );
+            if pa.pred[0].is_finite() {
+                assert!(
+                    (pa.pred[0] - pb.pred[0]).abs() <= 1e-11 * pa.pred[0].abs().max(1.0),
+                    "{vol:?} {dist_kind:?} weight invariance t={t}"
+                );
+                if started_at.is_none() {
+                    started_at = Some(t);
+                }
+            }
+        }
+        let s = started_at.expect("adaptive doubling started");
+        assert!(
+            s < 1600 && s % 64 == 0 && (s / 64).is_power_of_two(),
+            "{vol:?} {dist_kind:?} started at {s}"
+        );
+    }
 }

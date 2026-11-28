@@ -137,9 +137,21 @@ pub use region::PERSISTENCE_CAP as DCC_PERSISTENCE_CAP;
 use region::{PERSISTENCE_CAP, delta, identity, inside, project, project_into};
 use rows::{WORK, advance, quad, read, score_info};
 
-/// The correlation stage's start in rows, where a spec gives neither rows
-/// nor a span.
-pub const DCC_START_ROWS: usize = 500;
+/// Default initial batch size for the correlation stage's adaptive doubling
+/// start when neither `start_rows` nor `start_span` is given: `64`, the
+/// smallest power of two above the unit-information floor
+/// `4 χ²₁(0.999) ≈ 43.3` for `SE ≤ 1 / (2 √χ²₁(0.999))`.
+pub const DCC_START_ROWS: usize = 64;
+
+/// Default initial batch size for the correlation stage of `n_targets`
+/// series when neither `start_rows` nor `start_span` is given:
+/// `max(64, next_power_of_two(2 * n_targets))`, ensuring `n_kish > k` for
+/// a strictly positive definite `Q̄` on the first try while doubling cleanly
+/// (`n0, 2 n0, 4 n0, …`) until LR, soundness and Fisher-SE localization
+/// pass, bounded by `max_state_bytes`.
+pub fn default_dcc_start_rows(n_targets: usize, _asymmetric: bool) -> usize {
+    DCC_START_ROWS.max((2 * n_targets.max(2)).next_power_of_two())
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DccCfg {
@@ -812,12 +824,19 @@ impl Dcc {
             let zt = &z[t * k..(t + 1) * k];
             update_targets(&mut qbar, &mut nbar, zt, r, k);
         }
+        let (w_sum_d, w2_sum_d) = wts.iter().fold((0.0, 0.0), |(a, b), &w| (a + w, b + w * w));
+        let n_kish = if w2_sum_d > 0.0 {
+            (w_sum_d * w_sum_d) / w2_sum_d
+        } else {
+            0.0
+        };
         let mut chol = vec![0.0; kk];
-        if !(big_w > 0.0 && mat::definite(&qbar, k, &mut chol)) {
-            // fewer rows than series, a series constant over the rows, or
-            // two the same: no correlation to identify yet, and a shortage
-            // of rows that clearing the buffer cannot cure, so it is kept
-            // while the cap holds it doubled
+        let kish_ok = self.cfg.params.is_some() || n_kish > k as f64;
+        if !(big_w > 0.0 && kish_ok && mat::definite(&qbar, k, &mut chol)) {
+            // fewer effective rows than series, a series constant over the
+            // rows, or two the same: no correlation to identify yet, and a
+            // shortage of rows that clearing the buffer cannot cure, so it is
+            // kept while the cap holds it doubled
             return self.wait(true);
         }
         let mut work = Vec::new();
@@ -850,6 +869,9 @@ impl Dcc {
                 }
                 if !got.sound() {
                     return self.wait(false);
+                }
+                if !got.se_identified() {
+                    return self.wait(true);
                 }
                 self.stage.sound = true;
                 got.theta

@@ -89,7 +89,8 @@ pub(super) fn objective(
     Some((f, g, h))
 }
 
-/// A start's fit and the two checks of it (the module docs).
+/// A start's fit and its identification and optimality checks (the module
+/// docs).
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Fit {
     pub theta: Vec<f64>,
@@ -101,6 +102,15 @@ pub(super) struct Fit {
     pub lr: f64,
     /// `G` at `theta` is positive definite.
     pub definite: bool,
+    /// Largest domain-normalized asymptotic standard error at Kish's count:
+    /// `max(SE(a), SE(b))` for DCC, `max(SE(a), SE(b), δ SE(g))` for ADCC;
+    /// `∞` where `scale · G` does not solve.
+    pub max_se: f64,
+    /// Relative asymptotic standard error of the positive intercept multiplier
+    /// `1 − P = 1 − cᵀ θ` at Kish's count: `SE(cᵀ θ) / (1 − cᵀ θ)`, or `∞`
+    /// when shock feedback `a + δ g` is 0 or `1 − P ≤ 0` or `scale · G` does
+    /// not solve.
+    pub intercept_rel_se: f64,
     #[cfg_attr(not(test), allow(dead_code))]
     pub iterations: u32,
 }
@@ -114,6 +124,17 @@ pub(super) const SOUND_GAIN: f64 = 1e-6;
 /// `chi2.ppf(0.999, 3)`.
 pub(super) const LR_CUT_2: f64 = 13.815_510_557_964_274;
 pub(super) const LR_CUT_3: f64 = 16.266_236_196_238_13;
+
+/// Largest asymptotic standard error on a unit-width `[0, 1)` parameter
+/// domain a start may step from: `1 / (2 Φ⁻¹(0.9995)) = 1 / (2 √χ²₁(0.999))
+/// ≈ 0.15195`, the same `α = 0.001` domain-localization cut `garch` uses.
+pub(super) const PARAM_SE_CUT: f64 = 0.151_951_356_363_333_54;
+
+/// Relative expected Fisher SE ceiling on the positive intercept multiplier
+/// `1 − P = 1 − cᵀ θ`: `SE(ln(1 − P)) = SE(P) / (1 − P) ≤ 2` (i.e. `1 − P ≥
+/// ½ SE(P)`), holding the start away from the non-stationary IDCC wall `P = 1`,
+/// matching `garch`'s `MEAN_REV_REL_SE_CUT`.
+pub(super) const INTERCEPT_REL_SE_CUT: f64 = 2.0;
 
 /// The cut of the likelihood-ratio statistic for `p` parameters, each a
 /// restriction of constant correlation.
@@ -132,6 +153,57 @@ impl Fit {
     pub(super) fn identified(&self) -> bool {
         self.definite && self.lr >= lr_cut(self.theta.len())
     }
+
+    /// Every parameter is localized inside its unit domain `[0, 1)` (`a`,
+    /// `b`, and `δ g` for ADCC) at `α = 0.001` (`max_se ≤ PARAM_SE_CUT`) with
+    /// non-degenerate shock feedback and positive intercept separated from the
+    /// `P = 1` boundary (`intercept_rel_se ≤ INTERCEPT_REL_SE_CUT`).
+    pub(super) fn se_identified(&self) -> bool {
+        self.max_se <= PARAM_SE_CUT && self.intercept_rel_se <= INTERCEPT_REL_SE_CUT
+    }
+}
+
+/// `(max_domain_se, intercept_rel_se)` from the `p × p` expected Fisher
+/// information `h` at Kish's scale `scale`:
+/// - `max_i c_i √((scale · H)⁻¹_{ii})` for `c = (1, 1[, δ])`;
+/// - `√(cᵀ (scale · H)⁻¹ c) / (1 − cᵀ θ)` when shock feedback `a + δ g > 0`
+///   and `1 − cᵀ θ > 0`, else `∞`.
+///
+/// Scaling every weight by a power of two leaves `scale · H` unchanged to the
+/// bit.
+fn se_metrics(theta: &[f64], h: &[f64], p: usize, c: &[f64], scale: f64) -> (f64, f64) {
+    if !(scale > 0.0 && scale.is_finite()) {
+        return (f64::INFINITY, f64::INFINITY);
+    }
+    let scaled: Vec<f64> = h.iter().map(|&v| v * scale).collect();
+    let mut worst = 0.0_f64;
+    for (i, &ci) in c.iter().enumerate().take(p) {
+        let mut e = vec![0.0; p];
+        e[i] = 1.0;
+        let Some(col) = solve_small(&scaled, p, &e) else {
+            return (f64::INFINITY, f64::INFINITY);
+        };
+        let var = col[i];
+        if !(var > 0.0 && var.is_finite()) {
+            return (f64::INFINITY, f64::INFINITY);
+        }
+        let se = ci * var.sqrt();
+        if !se.is_finite() {
+            return (f64::INFINITY, f64::INFINITY);
+        }
+        worst = worst.max(se);
+    }
+    let feedback = theta[0] + if p == 3 { c[2] * theta[2] } else { 0.0 };
+    let one_minus_p = 1.0 - c.iter().zip(theta).map(|(ci, ti)| ci * ti).sum::<f64>();
+    let intercept_rel_se = if feedback > 0.0 && one_minus_p > 0.0 && one_minus_p.is_finite() {
+        solve_small(&scaled, p, c)
+            .map(|x| c.iter().zip(&x).map(|(ci, xi)| ci * xi).sum::<f64>())
+            .filter(|&v| v > 0.0 && v.is_finite())
+            .map_or(f64::INFINITY, |v| v.sqrt() / one_minus_p)
+    } else {
+        f64::INFINITY
+    };
+    (worst, intercept_rel_se)
 }
 
 /// The constraint's coefficients: `(1, 1)`, or `(1, 1, δ)`.
@@ -225,21 +297,34 @@ pub(super) fn fit(rows: &Rows<'_>, p: usize, delta: f64, work: &mut Work) -> Opt
         .iter()
         .fold((0.0, 0.0), |(a, b), w| (a + w, b + w * w));
     let scale = w / w2;
-    let (gain, lr, definite) = match objective(rows, &theta, true, work) {
+    let (gain, lr, definite, max_se, intercept_rel_se) = match objective(rows, &theta, true, work) {
         Some((f, g, h)) => {
             let gain = projected_gain(&theta, &g, &h, &c);
             let f0 = objective(rows, &vec![0.0; p], false, work).map_or(f64::NAN, |e| e.0);
             let mut l = vec![0.0; p * p];
             let definite = super::mat::cholesky(&h, p, &mut l);
-            (gain * scale, 2.0 * (f - f0) * scale, definite)
+            let (max_se, intercept_rel_se) = if definite {
+                se_metrics(&theta, &h, p, &c, scale)
+            } else {
+                (f64::INFINITY, f64::INFINITY)
+            };
+            (
+                gain * scale,
+                2.0 * (f - f0) * scale,
+                definite,
+                max_se,
+                intercept_rel_se,
+            )
         }
-        None => (f64::INFINITY, f64::NAN, false),
+        None => (f64::INFINITY, f64::NAN, false, f64::INFINITY, f64::INFINITY),
     };
     Some(Fit {
         theta,
         gain: if gain.is_nan() { f64::INFINITY } else { gain },
         lr,
         definite,
+        max_se,
+        intercept_rel_se,
         iterations: it,
     })
 }

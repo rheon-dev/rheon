@@ -52,6 +52,25 @@ pub(super) fn digamma(x: f64) -> f64 {
     crate::special::digamma(x)
 }
 
+/// Per-observation expected Fisher information of standardized Student's t
+/// (mean 0, variance 1, degrees of freedom `ν > 2`) in `(ln s, ν)`: returns
+/// `(I_{ln s, ln s}, I_{ln s, ν}, I_{ν, ν})`.
+///
+/// Derived by changing coordinates from standard `t_ν` (scale `σ`, variance
+/// `s = σ² ν/(ν − 2)`, Jacobian `∂ ln σ² / ∂ ν = 2 / (ν(ν − 2))`):
+/// `I_std(ln σ², ln σ²) = ½ ν/(ν + 3)`, `I_std(ln σ², ν) = −1/((ν + 1)(ν + 3))`,
+/// `I_std(ν, ν) = ¼ (ψ₁(ν/2) − ψ₁((ν + 1)/2)) − (ν + 5)/(2 ν(ν + 1)(ν + 3))`.
+pub(super) fn student_t_fisher_block(nu: f64) -> (f64, f64, f64) {
+    let i_ss = 0.5 * nu / (nu + 3.0);
+    let jac = 2.0 / (nu * (nu - 2.0));
+    let i_sn_std = -1.0 / ((nu + 1.0) * (nu + 3.0));
+    let i_nn_std = 0.25 * crate::special::trigamma_half_diff(0.5 * nu)
+        - (nu + 5.0) / (2.0 * nu * (nu + 1.0) * (nu + 3.0));
+    let i_sn = i_sn_std + jac * i_ss;
+    let i_nn = i_nn_std + 2.0 * jac * i_sn_std + jac * jac * i_ss;
+    (i_ss, i_sn, i_nn)
+}
+
 /// `(a, b, c)` of the density at `(ν, λ)`.
 fn consts(nu: f64, lam: f64) -> (f64, f64, f64) {
     let c = math::exp(ln_gamma((nu + 1.0) / 2.0) - ln_gamma(nu / 2.0))

@@ -225,8 +225,30 @@ use series::{Series, bound};
 pub const GARCH_MAX_STATE_BYTES: u64 = 256 * 1024;
 /// The most `max_state_bytes` may be set to: 64 MiB.
 pub const GARCH_STATE_BYTES_CEILING: u64 = 64 * 1024 * 1024;
-/// The fewest rows a GARCH, GJR or EGARCH start fits.
-pub const MIN_START_ROWS: usize = 50;
+/// The fewest rows any GARCH start accepts (`start_rows >= 1`): short starts
+/// that do not localize the process parameters withhold as `not_identified`
+/// via the LR test and Fisher-information SE gate rather than a row floor.
+pub const MIN_START_ROWS: usize = 1;
+
+/// Default initial batch size for adaptive doubling starts when neither
+/// `start_rows` nor `start_span` is given: `max(64, next_power_of_two(8 * n_free))`,
+/// where `64` is the smallest power of two above the information-theoretic
+/// unit-information floor `4 χ²₁(0.999) ≈ 43.3` for `SE ≤ 1/(2 √χ²₁(0.999))`.
+/// Tries double (`n0, 2 n0, 4 n0, …`) until LR, soundness and Fisher-SE
+/// localization all pass, bounded by `max_state_bytes`.
+pub fn default_garch_start_rows(
+    vol: GarchVol,
+    dist: GarchDist,
+    variance_targeting: bool,
+    n_inputs: usize,
+) -> usize {
+    let n_free = if variance_targeting {
+        2
+    } else {
+        vol.k() + n_inputs + dist.shape_len()
+    };
+    (8 * n_free).next_power_of_two().max(64)
+}
 /// FIGARCH's truncation by default, `arch`'s.
 pub const FIGARCH_TRUNCATION: usize = 1000;
 /// The most inputs a spec may give the variance equation.
@@ -495,29 +517,14 @@ impl GarchCfg {
                 ));
             }
         }
-        let least = if self.vol == GarchVol::Figarch {
-            1
-        } else {
-            MIN_START_ROWS
-        };
-        if self.start_span.is_none() && self.start_rows < least {
-            return Err(if self.vol == GarchVol::Figarch {
-                format!(
-                    "garch: start_rows must be at least 1 for vol = \"figarch\", but it is {}. \
-                     The start buffers these rows and waits until the likelihood-ratio test and \
-                     the standard error of d identify the process. Set start_rows to 1 or more; \
-                     2000 is the default.",
-                    self.start_rows,
-                )
-            } else {
-                format!(
-                    "garch: start_rows must be at least {least}, but it is {}. The start fits \
-                     every parameter by likelihood on these rows, and on fewer the fit is mostly \
-                     noise that the online steps take thousands of rows to wash out. Set \
-                     start_rows to {least} or more; 2000 is the default.",
-                    self.start_rows,
-                )
-            });
+        if self.start_span.is_none() && self.start_rows < MIN_START_ROWS {
+            return Err(format!(
+                "garch: start_rows must be at least {MIN_START_ROWS}, but it is {}. The start \
+                 buffers these rows and waits until the likelihood-ratio test and \
+                 Fisher-information standard errors identify the process. Set start_rows to \
+                 {MIN_START_ROWS} or more, or leave it out for the adaptive doubling default.",
+                self.start_rows,
+            ));
         }
         if let Some(span) = self.start_span
             && !(span.is_finite() && span > 0.0)

@@ -162,6 +162,15 @@ pub fn expectile_cfg(
     let windowed = window_rows.is_some() || window_size.is_some();
     let eff_cap = spec.model_max_state_bytes(*max_state_bytes);
     let cap = eff_cap.unwrap_or(rheon_core::EXPECTILE_MAX_STATE_BYTES);
+    let adaptive_refit = refit_rows.is_none()
+        && refit_span.is_none()
+        && rheon_core::default_expectile_adaptive_refit(
+            spec.k(),
+            spec.m(),
+            spec.fit_intercept,
+            windowed,
+            cap,
+        );
     let cfg = rheon_core::ExpectileCfg {
         n_features: spec.k(),
         n_targets: spec.m(),
@@ -170,27 +179,21 @@ pub fn expectile_cfg(
         expectile: *expectile,
         ridge: ridge.unwrap_or(1e-6),
         min_weight: spec.min_periods_or_default(),
-        // A span in place of the count: the count's default is off beside
-        // it, and one given is the model's to refuse.
-        refit_rows: refit_rows.unwrap_or_else(|| {
-            if refit_span.is_some() {
-                return 0;
-            }
-            rheon_core::default_expectile_refit_rows(
-                spec.k(),
-                spec.m(),
-                spec.fit_intercept,
-                windowed,
-                cap,
-            )
-        }),
+        refit_rows: refit_rows.unwrap_or(0),
         refit_clock: refit_span.as_ref().map(Span::value),
         window_rows: *window_rows,
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
         max_state_bytes: eff_cap,
+        adaptive_refit,
     };
-    budget_of_a_refit(spec, *refit_budget, cfg.refit_rows, cfg.refit_clock)?;
+    budget_of_a_refit(
+        spec,
+        *refit_budget,
+        cfg.refit_rows,
+        cfg.refit_clock,
+        cfg.adaptive_refit,
+    )?;
     Ok(cfg)
 }
 
@@ -224,8 +227,9 @@ fn budget_of_a_refit(
     budget: Option<crate::spec::Num>,
     refit_rows: u32,
     refit_clock: Option<f64>,
+    adaptive_refit: bool,
 ) -> Result<(), String> {
-    if budget.is_some() && refit_rows == 0 && refit_clock.is_none() {
+    if budget.is_some() && refit_rows == 0 && refit_clock.is_none() && !adaptive_refit {
         return Err(format!(
             "spec {:?}: refit_budget bounds the memory of the refit of each group's first rows, \
              but with these settings the spec runs no refit, so it bounds nothing. Leave \
@@ -512,13 +516,16 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
             ));
         }
     };
+    let vt = variance_targeting.unwrap_or(false);
     let cfg = rheon_core::GarchCfg {
         n_targets: spec.m(),
         vol,
         dist,
         truncation: *truncation,
-        variance_targeting: variance_targeting.unwrap_or(false),
-        start_rows: start_rows.unwrap_or(GARCH_START_ROWS),
+        variance_targeting: vt,
+        start_rows: start_rows.unwrap_or_else(|| {
+            rheon_core::default_garch_start_rows(vol, dist, vt, spec.features.len())
+        }),
         start_span: start_span.as_ref().map(Span::value),
         horizons: horizons
             .iter()
@@ -642,14 +649,13 @@ pub fn isotonic_cfg(
     Ok(cfg)
 }
 
-/// A `garch` spec's start, in rows, when it gives neither rows nor a span.
-pub const GARCH_START_ROWS: usize = 2000;
-
 /// A `dcc` spec's [`rheon_core::DccCfg`] under `decay`: the targets the
-/// series, a GARCH margin each unless `margins` is `"none"` (its start
-/// 2,000 rows unless the spec gives rows or a span), the correlation's
-/// start 500 rows unless the spec gives rows or a span, and `(a, b[, g])`
-/// held where the spec gives them. Every value is the model's own to check.
+/// series, a GARCH margin each unless `margins` is `"none"` (adaptive
+/// doubling from [`rheon_core::default_garch_start_rows`] unless the spec
+/// gives rows or a span), the correlation's start adaptive doubling from
+/// [`rheon_core::default_dcc_start_rows`] unless the spec gives rows or a
+/// span, and `(a, b[, g])` held where the spec gives them. Every value is
+/// the model's own to check.
 pub fn dcc_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DccCfg, String> {
     use rheon_core::{GarchDist, GarchVol};
     let ModelKind::Dcc {
@@ -742,6 +748,7 @@ pub fn dcc_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DccCfg, String> 
             ));
         }
     };
+    let vt = variance_targeting.unwrap_or(false);
     let cfg = rheon_core::DccCfg {
         n_targets: spec.m(),
         asymmetric,
@@ -750,8 +757,9 @@ pub fn dcc_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DccCfg, String> 
             vol,
             dist,
             truncation: *truncation,
-            variance_targeting: variance_targeting.unwrap_or(false),
-            start_rows: margin_start_rows.unwrap_or(GARCH_START_ROWS),
+            variance_targeting: vt,
+            start_rows: margin_start_rows
+                .unwrap_or_else(|| rheon_core::default_garch_start_rows(vol, dist, vt, 0)),
             start_span: margin_start_span.as_ref().map(Span::value),
             horizons: Vec::new(),
             max_horizon_work: None,
@@ -761,7 +769,8 @@ pub fn dcc_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DccCfg, String> 
         }),
         params,
         decay,
-        start_rows: start_rows.unwrap_or(rheon_core::DCC_START_ROWS),
+        start_rows: start_rows
+            .unwrap_or_else(|| rheon_core::default_dcc_start_rows(spec.m(), asymmetric)),
         start_span: start_span.as_ref().map(Span::value),
         min_weight: spec.min_periods_or_default(),
         max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
@@ -2088,24 +2097,19 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         refit_span.as_ref(),
     )?;
     let eff_cap = spec.model_max_state_bytes(*max_state_bytes);
-    // A span in place of the count: the count's default is off beside it.
-    let refit_rows = refit_rows.unwrap_or_else(|| {
-        if refit_span.is_some() {
-            0
-        } else {
-            rheon_core::default_glm_refit_rows_within(
-                spec.k(),
-                spec.m(),
-                eff_cap.unwrap_or(rheon_core::GLM_GROUP_REFIT_CAP as u64),
-            )
-        }
-    });
+    let cap = eff_cap.unwrap_or(rheon_core::GLM_GROUP_REFIT_CAP as u64);
+    let adaptive_refit = refit_rows.is_none()
+        && refit_span.is_none()
+        && rheon_core::default_glm_adaptive_refit(spec.k(), spec.m(), spec.fit_intercept, cap);
+    let refit_rows = refit_rows.unwrap_or(0);
     budget_of_a_refit(
         spec,
         *refit_budget,
         refit_rows,
         refit_span.as_ref().map(Span::value),
+        adaptive_refit,
     )?;
+    let has_refit = refit_rows > 0 || refit_span.is_some() || adaptive_refit;
     Ok(rheon_core::GlmCfg {
         n_features: spec.k(),
         n_targets: spec.m(),
@@ -2120,9 +2124,10 @@ pub fn glm_cfg(spec: &Spec) -> Result<rheon_core::GlmCfg, String> {
         refit_clock: refit_span.as_ref().map(Span::value),
         max_state_bytes: eff_cap,
         step_cap: step_cap.map_or_else(
-            || rheon_core::default_glm_step_cap(refit_rows.max(u32::from(refit_span.is_some()))),
+            || rheon_core::default_glm_step_cap(u32::from(has_refit)),
             |n| n.0,
         ),
+        adaptive_refit,
     })
 }
 

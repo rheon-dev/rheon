@@ -918,7 +918,7 @@
     model.margins.max_state_bytes = null
     model.margins.min_weight = 0.0
     model.margins.n_targets = 2
-    model.margins.start_rows = 2000
+    model.margins.start_rows = 64
     model.margins.start_span = null
     model.margins.truncation = null
     model.margins.variance_targeting = false
@@ -927,7 +927,7 @@
     model.min_weight = 0.0
     model.n_targets = 2
     model.params = [0.05, 0.9]
-    model.start_rows = 500
+    model.start_rows = 64
     model.start_span = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
@@ -1088,6 +1088,7 @@
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
   expectile(expectile=0.8, features=['x0'], half_life=50.0, targets=['y']):
+    model.adaptive_refit = true
     model.closed = "right"
     model.decay.Halflife = 50.0
     model.expectile = 0.8
@@ -1096,7 +1097,7 @@
     model.min_weight = 2.0
     model.n_features = 1
     model.n_targets = 1
-    model.refit_rows = 200
+    model.refit_rows = 0
     model.ridge = 1e-06
     model.window_clock = null
     model.window_rows = null
@@ -1138,7 +1139,7 @@
     model.max_state_bytes = null
     model.min_weight = 0.0
     model.n_targets = 1
-    model.start_rows = 2000
+    model.start_rows = 64
     model.start_span = null
     model.truncation = null
     model.variance_targeting = false
@@ -1153,6 +1154,7 @@
     stream.specification_half_life = "inf"
     stream.tails_half_life = "inf"
   glm(features=['x0'], half_life=50.0, targets=['y']):
+    model.adaptive_refit = true
     model.decay.Halflife = 50.0
     model.family = "poisson"
     model.fit_intercept = true
@@ -1160,7 +1162,7 @@
     model.min_weight = 2.0
     model.n_features = 1
     model.n_targets = 1
-    model.refit_rows = 200
+    model.refit_rows = 0
     model.ridge = 1.0
     model.step_cap = "inf"
     model.var_power = 1.5
@@ -1824,11 +1826,9 @@
   glm(family='tweedie', features=['x0'], half_life=50.0, targets=['y']), the lines that differ from glm's:
     model.family = "tweedie"
   glm(features=['x0'], half_life=50.0, refit_rows=0, targets=['y']), the lines that differ from glm's:
-    model.refit_rows = 0
     model.step_cap = 1.0
   expectile(expectile=0.8, features=['x0'], half_life=inf, targets=['y'], window_rows=50), the lines that differ from expectile's:
     model.decay.Halflife = "inf"
-    model.refit_rows = 0
     model.window_rows = 50
     stream.breaks_half_life = 17.3263687769
     stream.calibration_half_life = 69.3054751076
@@ -1840,7 +1840,6 @@
   expectile(closed='both', expectile=0.8, features=['x0'], half_life=inf, targets=['y'], window_size=30.0), the lines that differ from expectile's:
     model.closed = "both"
     model.decay.Halflife = "inf"
-    model.refit_rows = 0
     model.window_clock = 30.0
     stream.breaks_half_life = 10.3933557491
     stream.calibration_half_life = 41.5734229963
@@ -1933,6 +1932,7 @@
   hawkes(half_life=50.0, kernel_half_lives=[0.5, 4.0], targets=['y']), the lines that differ from hawkes's:
     model.kernel_decays = [1.38629436112, 0.17328679514]
   garch(start_rows=2000, targets=['y'], vol='figarch'), the lines that differ from garch's:
+    model.start_rows = 2000
     model.vol = "figarch"
   garch(forecast_rows=[5], targets=['y'], variance_targeting=True), the lines that differ from garch's:
     model.forecast_rows = [5]

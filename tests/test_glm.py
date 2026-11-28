@@ -199,12 +199,17 @@ def test_a_refit_past_the_groups_cap_is_refused_at_the_call():
     rp.ModelBank([spec(refit_rows=6553)]).fit(counts(50))
     with pytest.raises(ValueError, match="at most 3276,"):
         spec(targets=["y", "y"], refit_rows=6553)
-    # The default is held to the cap: 100 features, 321 rows.
+    # The default uses adaptive doubling refit bounded by max_state_bytes,
+    # with no k > 100 cliff (105 features fits 306 >= 2*106 rows inside 256 KB).
     many = rp.spec.glm(
-        "m", targets=["y"], features=[f"x{j}" for j in range(100)], half_life=float("inf")
+        "m", targets=["y"], features=[f"x{j}" for j in range(105)], half_life=float("inf")
     )
     resolved = json.loads(native.resolved_defaults(_spec._json(many)))
-    assert resolved["model"]["refit_rows"] == 321
+    assert resolved["model"]["adaptive_refit"] is True
+    assert resolved["model"]["refit_rows"] == 0
+    bank_wide = rp.ModelBank([many])
+    bank_wide.fit(counts(350, seed=9, k=105))
+    assert np.all(np.isfinite(coef(bank_wide)))
 
 
 def test_a_half_life_and_a_gap_cap_in_durations_are_the_numbers_on_a_clock_in_the_same_unit():

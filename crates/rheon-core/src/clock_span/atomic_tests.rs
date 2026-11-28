@@ -215,6 +215,7 @@ fn glm_refit_span_is_atomic() {
         refit_clock: Some(1e9),
         step_cap: f64::INFINITY,
         max_state_bytes: Some(cap),
+        adaptive_refit: false,
     };
     let mut m = Glm::new(cfg).unwrap();
     for i in 0..2 {
@@ -265,6 +266,7 @@ fn expectile_refit_span_is_atomic() {
         window_clock: None,
         closed: WindowClosed::Right,
         max_state_bytes: None,
+        adaptive_refit: false,
     };
     let fixed = Expectile::sums_bytes(2, 2, true, false)
         + (2 * std::mem::size_of::<Option<Stamp>>()) as u64;
@@ -325,6 +327,7 @@ fn expectile_window_clock_is_atomic() {
         window_clock: Some(10.0),
         closed: WindowClosed::Right,
         max_state_bytes: Some(cap),
+        adaptive_refit: false,
     };
     // Case A: burst breach (no row expires).
     let mut m = Expectile::new(cfg.clone()).unwrap();
@@ -760,8 +763,8 @@ fn dcc_start_span_is_atomic() {
     let mut s = 17u64;
     let (mut v0, mut v1) = (1.0f64, 1.0f64);
     let (mut e0, mut e1) = (0.0f64, 0.0f64);
-    let mut rets = Vec::with_capacity(900);
-    for _ in 0..900 {
+    let mut rets = Vec::with_capacity(1800);
+    for _ in 0..1800 {
         v0 = 0.05 + 0.25 * e0 * e0 + 0.70 * v0;
         v1 = 0.05 + 0.25 * e1 * e1 + 0.70 * v1;
         let z0 = normal(&mut s);
@@ -777,7 +780,7 @@ fn dcc_start_span_is_atomic() {
         dist: GarchDist::Normal,
         truncation: None,
         variance_targeting: false,
-        start_rows: 200,
+        start_rows: 300,
         start_span: None,
         horizons: Vec::new(),
         max_horizon_work: None,
