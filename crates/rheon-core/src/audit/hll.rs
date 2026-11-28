@@ -933,3 +933,7 @@ impl<S: HllStamp> SlidingHll<S> {
         count == self.live_entries
     }
 }
+
+#[cfg(test)]
+#[path = "hll_mutant_tests.rs"]
+mod mutant_tests;

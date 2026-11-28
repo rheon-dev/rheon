@@ -434,3 +434,157 @@ fn state_3_a_span_past_its_cap_is_refused_on_load() {
         assert!(Robust::restore(&non_span.state()).is_err(), "{loss:?}");
     }
 }
+
+/// Direct tests for `Robust::scale_after_age`, `Robust::span_row_delta`, and
+/// `step_into`'s span-cap guards (`refit_clock.is_some() && open`, `delta > 0`).
+#[test]
+fn scale_after_age_span_row_delta_and_step_into_guards() {
+    let data = rows(60, 77);
+
+    // 1. `scale_after_age`:
+    // (a) `Mad`, refit done (`!reads_resid`): returns `Some(s)` (`s != 1.0`) when `lam_scale != 0.0`,
+    //     and `None` when `lam_scale == 0.0`.
+    let mut m_mad = Robust::new(RobustCfg {
+        refit_rows: 10,
+        ..base(HUBER, HuberScale::Mad)
+    })
+    .unwrap();
+    for (x, y) in &data[..30] {
+        m_mad.step(x, y, 1.0, 1.0);
+    }
+    assert!(m_mad.refit_status()[0].done);
+    let s_mad = m_mad.residual_scale(0).expect("settled Mad scale");
+    assert!((s_mad - 1.0).abs() > 1e-6, "need scale != 1.0, got {s_mad}");
+    assert_eq!(m_mad.scale_after_age(0, 1.0), Some(s_mad));
+    assert_eq!(m_mad.scale_after_age(0, 0.0), None);
+
+    // (b) `Rms` (`mad` empty): returns `Some(s)` even when `lam_scale == 0.0`.
+    let mut m_rms = Robust::new(RobustCfg {
+        refit_rows: 10,
+        ..base(HUBER, HuberScale::Rms)
+    })
+    .unwrap();
+    for (x, y) in &data[..30] {
+        m_rms.step(x, y, 1.0, 1.0);
+    }
+    let s_rms = m_rms.residual_scale(0).expect("settled Rms scale");
+    assert_eq!(m_rms.scale_after_age(0, 0.0), Some(s_rms));
+
+    // (c) `Mad` with open refit (`reads_resid == true`): returns `Some(s)` even at `lam_scale == 0.0`.
+    let mut m_open = Robust::new(RobustCfg {
+        refit_clock: Some(1e9),
+        ..base(HUBER, HuberScale::Mad)
+    })
+    .unwrap();
+    for (i, (x, y)) in data[..6].iter().enumerate() {
+        m_open.stamp_next(Stamp::Ns(i as i128 * S));
+        m_open.step(x, y, 1.0, 1.0);
+    }
+    assert!(m_open.refit[0].reads_resid());
+    let s_open = m_open.residual_scale(0).expect("warm refit Mad scale");
+    assert_eq!(m_open.scale_after_age(0, 0.0), Some(s_open));
+
+    // 2. `span_row_delta`: `counts = weight > 0.0 && weight.is_finite()`,
+    //    `delta += b.age_bytes(...)` across 2 targets, and `pred[j * nc + weighing]`.
+    let per = 8 * (2 + 4) as u64 + 48; // 96 bytes per target
+    let pred_ok = [0.0; 4];
+    assert_eq!(
+        m_open.span_row_delta(
+            &[1.0, 1.0],
+            &[Some(1.0), Some(1.0)],
+            &pred_ok,
+            1,
+            0,
+            1.0,
+            0.9,
+            0.9,
+        ),
+        2 * per
+    );
+    // Zero, negative, and infinite weight each use `age_bytes` (32 per open target => 64 total), not `per` (96).
+    for bad_w in [0.0, -1.0, f64::INFINITY] {
+        assert_eq!(
+            m_open.span_row_delta(
+                &[1.0, 1.0],
+                &[Some(1.0), Some(1.0)],
+                &pred_ok,
+                1,
+                0,
+                bad_w,
+                0.9,
+                0.9,
+            ),
+            64,
+            "bad_w={bad_w}"
+        );
+    }
+    // Missing targets (`None`) also sum `age_bytes` across both open targets.
+    assert_eq!(
+        m_open.span_row_delta(&[1.0, 1.0], &[None, None], &pred_ok, 1, 0, 1.0, 0.9, 0.9),
+        64
+    );
+    // `pred[j * nc + weighing]` with `j = 1, nc = 2, weighing = 1` (`1 * 2 + 1 = 3`):
+    // Under Hampel with `delta = 0.6e308`, `c = 4 * delta = +inf` while `b = 1.2e308` is finite,
+    // so `u = 1.5e308` yields `inf / inf = NaN` in `row_update` (`buffers = false` => `age_bytes = 32`).
+    // Put `1.5e308` ONLY at index 3 (`pred[0..3] = 0.0`): `* -> /`, `+ -> *`, and `+ -> -` read
+    // index 1 or 2 (`0.0` => `w = 1.0` => `per_rms = 48`), failing the exact `32` check.
+    let mut m_idx = Robust::new(RobustCfg {
+        n_targets: 2,
+        loss: RobustLoss::Huber { delta: 0.6e308 },
+        norm: crate::robust::HuberNorm::Hampel,
+        refit_clock: Some(100.0),
+        ..base(HUBER, HuberScale::Rms)
+    })
+    .unwrap();
+    for (i, (x, y)) in data[..2].iter().enumerate() {
+        m_idx.stamp_next(Stamp::Raw(i as f64, 0.0));
+        m_idx.step(x, &[y[0], y[0]], 1.0, 1.0);
+    }
+    let _ = m_idx.refit[0].take();
+    m_idx.sig2[1] = 1.0;
+    m_idx.wsig[1] = 1.0;
+    let pred_hampel3 = [0.0, 0.0, 0.0, 1.5e308];
+    assert_eq!(
+        m_idx.span_row_delta(
+            &[1.0, 1.0],
+            &[Some(0.0), Some(0.0)],
+            &pred_hampel3,
+            2,
+            1,
+            1.0,
+            0.9,
+            0.9,
+        ),
+        32
+    );
+
+    // 3. `step_into` guards:
+    // (a) `refit_clock.is_some() && open` (`&&` not `||`): a `refit_rows` model (no `refit_clock`)
+    //     with an open refit buffer and tiny `max_state_bytes` must NOT enforce span cap!
+    let mut m_rows = Robust::new(RobustCfg {
+        refit_rows: 10,
+        ..base(HUBER, HuberScale::Mad)
+    })
+    .unwrap();
+    m_rows.set_cap_for_test(1);
+    m_rows.step(&data[0].0, &data[0].1, 1.0, 1.0);
+    assert_eq!(m_rows.state_over_cap(), None);
+
+    // (b) `if delta > 0` (`>` not `>=`): when `delta == 0` (joining an existing age run),
+    //     `guard.note` must NOT fire even if `warned` was cleared while `2 * held > cap`.
+    let mut m_zero_delta = m_open.clone();
+    // First zero-weight row adds an age run at `(lam, lam_scale)` for `d_clock = 1.0`.
+    m_zero_delta.step(&[1.0, 1.0], &[None, None], 1.0, 0.0);
+    let held = held_of(&m_zero_delta);
+    m_zero_delta.set_cap_for_test(held); // `2 * held > held`
+    m_zero_delta.warned = false;
+    m_zero_delta.warning = None;
+    // Second identical `None` row at `d_clock = 1.0` joins the last age run => `delta == 0`!
+    m_zero_delta.step(&[1.0, 1.0], &[None, None], 1.0, 0.0);
+    assert_eq!(
+        m_zero_delta.take_state_warning(),
+        None,
+        "delta == 0 row must not enter the cap/note block"
+    );
+    assert_eq!(m_zero_delta.state_over_cap(), None);
+}

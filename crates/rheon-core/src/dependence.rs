@@ -1248,9 +1248,8 @@ impl Dependence {
             .position(|&m| m == DependenceMeasure::Xi);
 
         let mut out = Vec::with_capacity(k * nt);
-        for t in 0..nt {
+        for (t, &n_eff) in self.target_w.iter().enumerate().take(nt) {
             let base_t = t * nm * k;
-            let n_eff = self.target_w[t];
             for j in 0..k {
                 let at = |idx: Option<usize>| idx.map_or(f64::NAN, |m| pred[base_t + m * k + j]);
                 out.push(DependencePair {
@@ -1375,8 +1374,8 @@ impl Dependence {
         // Track which targets were present via `y_bins != NO_BIN`, reusing `evict_y`.
         let mut evict_y = std::mem::take(&mut self.rank_scratch.evict_y);
         evict_y.clear();
-        for t in 0..nt {
-            evict_y.push(if self.mi_scratch.y_bins[t] != DEPENDENCE_NO_BIN {
+        for &yb in self.mi_scratch.y_bins.iter().take(nt) {
+            evict_y.push(if yb != DEPENDENCE_NO_BIN {
                 0.0
             } else {
                 f64::NAN

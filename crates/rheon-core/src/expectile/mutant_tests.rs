@@ -239,3 +239,52 @@ fn the_fallback_solve_carries_the_ridge_penalty_and_only_under_a_ridge() {
     }
     assert!(fit(0.0).is_nan(), "no ridge, no fallback");
 }
+
+/// Clock-window cap check subtracts expired rows (`window_rows - expired + 1`),
+/// and post-cap row-clock `read_ahead` uses `weight > 0.0` to distinguish positive
+/// from zero weight.
+#[test]
+fn clock_window_cap_eviction_and_over_cap_row_clock_weight() {
+    let mut c = cfg_of(1, 0.5);
+    c.window_clock = Some(4.0);
+    c.closed = WindowClosed::Right;
+    let cap = Expectile::clock_state_bytes(1, 1, true, 4);
+    c.max_state_bytes = Some(cap);
+
+    let mut m = Expectile::new(c).unwrap();
+    for i in 1..=4 {
+        // Row 1 sits far off the `y = 2x` line of rows 2..=4 so expiring row 1 moves `pred[0]`.
+        let y = if i == 1 { 100.0 } else { 2.0 * i as f64 };
+        m.stamp_next_on_rows(Stamp::from(i as f64));
+        m.step(&[i as f64], &[Some(y)], 1.0, 1.0);
+        assert_eq!(m.state_over_cap(), None);
+    }
+    assert_eq!(m.window_rows(), 4);
+
+    // Row 5 at key 5.0 expires row 1 (`5 - 1 >= 4`): `4 - 1 + 1 = 4 <= 4` -> ADMITTED
+    // (whereas `4 + 1 + 1 = 6 > 4` would falsely breach cap!).
+    let mut evict = m.clone();
+    evict.stamp_next_on_rows(Stamp::from(5.0));
+    evict.step(&[5.0], &[Some(10.0)], 1.0, 1.0);
+    assert_eq!(evict.state_over_cap(), None);
+
+    // Once over-cap (`over.is_some()`), row-clock `stamp_next_on_rows` with `d_clock = 0.0`
+    // advances key by 1 for `weight > 0.0` (key = 5.0, expiring row 1 => `pred ≈ 10.0`)
+    // and by `d_clock = 0.0` for `weight == 0.0` (key = 4.0, retaining row 1 `y = 100.0`).
+    m.over = Some(cap + 1);
+    m.stamp_next_on_rows(Stamp::from(5.0));
+    let pos = m.step(&[5.0], &[Some(10.0)], 0.0, 1.0);
+    assert!(
+        (pos.pred[0] - 10.0).abs() < 1e-6,
+        "positive weight must advance row-clock key and trim row 1: {}",
+        pos.pred[0]
+    );
+
+    m.stamp_next_on_rows(Stamp::from(5.0));
+    let zero = m.step(&[5.0], &[Some(10.0)], 0.0, 0.0);
+    assert!(
+        (zero.pred[0] - 10.0).abs() > 1.0,
+        "zero weight must not advance row-clock key or trim row 1: {}",
+        zero.pred[0]
+    );
+}

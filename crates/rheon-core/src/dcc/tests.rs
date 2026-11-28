@@ -1212,3 +1212,145 @@ fn adaptive_start_and_kish_and_se_gate_hold() {
         "adaptive_start t(5) started at {ft}"
     );
 }
+
+/// Atomic cap checks in `Dcc::step_into`:
+/// - Margin `g_total == g.cfg().cap()` is admitted (`>` not `>=`), while
+///   `g_total > g.cfg().cap()` records exact `g_total + stage_bytes + 32 + 8 * stage.buffer.len()`.
+/// - `learns && !started && start_span.is_some() && tried == 0` refuses breach on zero-weight rows.
+/// - `margins: None` checks `y.len() >= k && y[..k].iter().all(finite)` (not `||`).
+/// - `margins: Some(g)` checks `m.pred[2 * j + 1]` (std resid), not `m.pred[2 * j]` (variance).
+#[test]
+fn step_into_cap_checks_margins_zero_weight_and_missing_targets() {
+    // 1. Margins with `start_span`: exact cap boundary `g_total == g.cfg().cap()` admitted;
+    //    `g_total > g.cfg().cap()` records exact `with = g_total + stage_bytes + 32 + 8 * buf_len`.
+    let g_base = GarchCfg {
+        n_targets: 2,
+        vol: GarchVol::Garch,
+        dist: GarchDist::Normal,
+        truncation: None,
+        variance_targeting: false,
+        start_rows: 1000,
+        start_span: Some(100.0),
+        horizons: Vec::new(),
+        max_horizon_work: None,
+        min_weight: 0.0,
+        max_state_bytes: None,
+        n_inputs: 0,
+        adaptive_start: false,
+    };
+    let mut c = cfg(2, false, None);
+    c.margins = Some(g_base);
+    c.start_span = Some(100.0);
+    // Size cap so margins' own cap (`dcc.cap() - stage_bytes - 32`) fits exactly 3 buffered rows per target.
+    let probe = Dcc::new(c.clone()).unwrap();
+    let m_cap_3 = Garch::state_bytes(probe.margins.as_ref().unwrap().cfg(), 3);
+    let dcc_cap = m_cap_3 + c.stage_bytes() + 32;
+    c.max_state_bytes = Some(dcc_cap);
+    let mut m = Dcc::new(c).unwrap();
+    assert_eq!(m.margins.as_ref().unwrap().cfg().cap(), m_cap_3);
+
+    // Rows 1..=3: row 3 hits `g_total == g.cfg().cap()` exactly -> MUST be admitted (`>` not `>=`)!
+    for i in 0..3 {
+        m.stamp_next(Stamp::Raw(i as f64, 0.0));
+        m.step(&[], &[Some(0.1 * (i + 1) as f64), Some(-0.2)], 1.0, 1.0);
+        assert_eq!(
+            m.state_over_cap(),
+            None,
+            "row {i} at/below margin cap must be admitted"
+        );
+    }
+
+    // Populate `stage.buffer` with 2 elements to pin `g_total + stage_bytes + 32 + 8 * len`
+    // against every arithmetic mutant (`+ -> *`, `+ -> -`, `* -> +`).
+    let mut m_breach = m.clone();
+    m_breach.stage.buffer = vec![0.5, -0.5];
+    let g_total = m_breach
+        .margins
+        .as_ref()
+        .unwrap()
+        .span_cap_check(&[], &[Some(0.5), Some(-0.5)], 1.0)
+        .unwrap();
+    assert!(g_total > m_breach.margins.as_ref().unwrap().cfg().cap());
+    let expected_with =
+        g_total + m_breach.cfg.stage_bytes() + 32 + 8 * m_breach.stage.buffer.len() as u64;
+    m_breach.stamp_next(Stamp::Raw(3.0, 0.0));
+    m_breach.step(&[], &[Some(0.5), Some(-0.5)], 1.0, 1.0);
+    assert_eq!(m_breach.state_over_cap(), Some((expected_with, dcc_cap)));
+
+    // 2. `margins: None`, `start_span: Some(100.0)`: cap fits exactly 3 rows in `stage`.
+    let mut c_none = cfg(2, false, None);
+    c_none.start_span = Some(100.0);
+    let cap_none = c_none.stage_bytes() + 32 + 3 * c_none.row_bytes();
+    c_none.max_state_bytes = Some(cap_none);
+    let mut m_none = Dcc::new(c_none).unwrap();
+    for i in 0..3 {
+        m_none.stamp_next(Stamp::Raw(i as f64, 0.0));
+        m_none.step(&[], &[Some(0.2), Some(-0.3)], 1.0, 1.0);
+        assert_eq!(m_none.state_over_cap(), None);
+    }
+    assert!(m_none.bytes() + m_none.cfg.row_bytes() > cap_none);
+
+    // (a) Zero-weight row at cap (`learns = false`, `tried = 0`): must NOT breach (`&&`, not `||`).
+    let mut m_zero = m_none.clone();
+    m_zero.stamp_next(Stamp::Raw(3.0, 0.0));
+    m_zero.step(&[], &[Some(0.2), Some(-0.3)], 1.0, 0.0);
+    assert_eq!(m_zero.state_over_cap(), None);
+
+    // (b) Missing target (`y.len() >= k` true, `all(finite)` false): must NOT breach (`&&`, not `||`).
+    let mut m_miss = m_none.clone();
+    m_miss.stamp_next(Stamp::Raw(3.0, 0.0));
+    m_miss.step(&[], &[Some(0.2), None], 1.0, 1.0);
+    assert_eq!(m_miss.state_over_cap(), None);
+
+    // 3. `margins: Some(g)` where margins HAVE started (emitting finite variance at `pred[2*j]`),
+    //    `dcc` at its cap (`with > cap`), missing targets (`pred[2*j + 1]` is NaN):
+    //    must NOT breach (`2 * j + 1`, not `2 * j * 1`)!
+    let rows_ms = garch_returns(&adcc_stream(2, 1200, [0.04, 0.92, 0.0], 0.5, None, 31));
+    let mut c_ms = cfg(2, false, None);
+    c_ms.margins = Some(GarchCfg {
+        n_targets: 2,
+        vol: GarchVol::Garch,
+        dist: GarchDist::Normal,
+        truncation: None,
+        variance_targeting: false,
+        start_rows: 100,
+        start_span: None,
+        horizons: Vec::new(),
+        max_horizon_work: None,
+        min_weight: 0.0,
+        max_state_bytes: None,
+        n_inputs: 0,
+        adaptive_start: false,
+    });
+    c_ms.start_span = Some(10_000.0);
+    let mut m_ms = Dcc::new(c_ms).unwrap();
+    let mut t_step = 0usize;
+    for z in &rows_ms {
+        m_ms.stamp_next(Stamp::Raw(t_step as f64, 0.0));
+        m_ms.step(&[], &[Some(z[0]), Some(z[1])], 1.0, 1.0);
+        t_step += 1;
+        if m_ms.stage.rows(m_ms.cfg()) >= 2 {
+            break;
+        }
+    }
+    assert!(
+        m_ms.stage.rows(m_ms.cfg()) >= 2 && !m_ms.started(),
+        "margins must have started while DCC is still in its start_span"
+    );
+    // Pin cap to current `bytes()` so any usable positive-weight row would exceed cap (`with > cap`).
+    let cap_ms = m_ms.bytes();
+    m_ms.cfg.max_state_bytes = Some(cap_ms);
+    assert!(m_ms.bytes() + m_ms.cfg.row_bytes() > cap_ms);
+    // Missing targets: `g.predict_with(&[], &[None, None], 0.0)` has finite variance at `2*j`
+    // and NaN std_resid at `2*j + 1`, so `usable` must be `false` -> no breach!
+    let p_none = m_ms
+        .margins
+        .as_ref()
+        .unwrap()
+        .predict_with(&[], &[None, None], 0.0);
+    assert!(p_none.pred[0].is_finite() && p_none.pred[2].is_finite());
+    assert!(p_none.pred[1].is_nan() && p_none.pred[3].is_nan());
+    m_ms.stamp_next(Stamp::Raw(t_step as f64, 0.0));
+    m_ms.step(&[], &[None, None], 1.0, 1.0);
+    assert_eq!(m_ms.state_over_cap(), None);
+}

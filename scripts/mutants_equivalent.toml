@@ -4095,3 +4095,137 @@ mutation = "replace <= with <"
 line_has = "if m < 1.0 || c * m * ms <= s {"
 why = """at the tie both variables' passes run from at or below the root and \
 reach it: the choice is of speed, not of the root"""
+
+# Wave 2 Mutants (PLAN 546): provably equivalent survivors across audit/hll,
+# audit, sgd, dcc, and ddsketch_model.
+
+[[equivalent]]
+file = "crates/rheon-core/src/audit/hll.rs"
+function = "estimate_bias"
+mutation = "replace < with <="
+line_has = "let pos = est.partition_point(|&x| x < e);"
+why = """every `RAW_8..=RAW_16` table is strictly ascending with gaps far above \
+1 ulp; when `e` equals no table entry `<` and `<=` agree, and when `e == est[k]` \
+both `[lo, hi)` windows cover `[k - 5, k + 5] ∩ [0, n)`, which strictly contains \
+all 6 nearest neighbors (`est[k ± 6]` has 6 entries strictly closer to `est[k]`), \
+giving the exact same 6 indices and average bias for every `e`"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/audit/hll.rs"
+function = "count_from_rank_counts"
+mutation = "replace > with >="
+line_has = "if zeros > 0 {"
+why = """at `zeros == 0`, `m / 0.0` is `+∞`, `libm::log(+∞)` is `+∞`, `lc` is \
+`+∞`, and `+∞ <= THRESHOLDS[...]` is false (every threshold is finite), so the \
+linear-counting return is not taken and execution continues identically"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/audit/hll.rs"
+function = "stamp_ord"
+mutation = "delete match arm (Stamp::Ns(x), Stamp::Ns(y))"
+line_has = "(Stamp::Ns(x), Stamp::Ns(y)) => x.cmp(&y),"
+why = """falling through to `a.cmp_span(b, 0.0)` evaluates \
+`seconds_of_ns(x.saturating_sub(y)).partial_cmp(&0.0)`: `seconds_of_ns` preserves \
+strict sign across every `i128` without overflow (`i128::MAX / 1e9 ≈ 1.7e29 < f64::MAX`) \
+or underflow (`1e-9 >> f64::MIN_POSITIVE`), so the ordering equals `x.cmp(&y)` on \
+every `i128` pair"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/audit/hll.rs"
+function = "SlidingHll<S>::count_excluding"
+mutation = "replace match guard !is_expired(top.stamp) with false"
+line_has = "Some(top) if !is_expired(top.stamp) => return self.count_current(),"
+why = """`heap` is a min-heap holding at least every live register head (plus \
+possibly older stale entries), so `top.stamp <= hnode.stamp` for every live head; \
+for every prefix-expiry predicate (`s <= cutoff`, `has_left`), `!is_expired(top.stamp)` \
+implies `!is_expired(hnode.stamp)` for every live head, so the slow loop leaves \
+`rc == self.rank_counts` and returns `count_from_rank_counts(&self.rank_counts, self.p)`, \
+bit-identical to `self.count_current()`"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/audit.rs"
+function = "Audit::step_with_hll"
+mutation = "replace > with >="
+line_has = "let hll_weight_ok = weight.abs() <= INPUT_BOUND && weight > 0.0;"
+why = """every branch of `step_with_hll` (plain, sliding rows, sliding clock) \
+returns on `weight == 0.0` before reading `hll_weight_ok`, so `> 0.0` and `>= 0.0` \
+agree on every weight that reaches a read of `hll_weight_ok`"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/audit.rs"
+function = "Audit::step_with_hll"
+mutation = "replace > with >="
+line_has = "if fast_max > state_cap {"
+why = """`already_over` has returned above and `fast_max` upper-bounds \
+`exact_bytes` (`next_live <= live_total + k`), so at `fast_max == state_cap` we \
+have `exact_bytes <= state_cap` and `HeldCap::admit` returns `true` with no side \
+effect"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "Sgd::span_row_delta"
+mutation = "replace == with !="
+line_has = "zbuf.resize(off + n, 0.0);\n            if off == 1 {"
+why = """`zbuf[0]` is never read when `off == 1` (every reader indexes `&zbuf[off..]` \
+or `zbuf[off + i]`), and when `off == 0` the standardization loop immediately below \
+overwrites `zbuf[0..]` completely"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl OnlineModel for Sgd>::step_into"
+mutation = "replace > with >="
+line_has = "let cand = weight > 0.0"
+why = """`upper` is a fast-path upper bound on `span_row_delta` (`age_bytes <= 32 \
+< 40 <= per_refit`); at `weight == 0.0` raising `upper` only causes `span_row_delta` \
+to run, which rejects `weight <= 0.0` and returns the exact `age_bytes`, and \
+`HeldCap::admit` has no side effect when `held + delta <= limit`"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl OnlineModel for Sgd>::step_into"
+mutation = "replace && with ||"
+line_has = "&& y[j].is_some_and(|v| v.is_finite() && self.label(v).is_some());"
+columns = [63]
+why = """as the `weight > 0.0` entry above: raising `upper` from `age_bytes` to \
+`per_refit` only enters `span_row_delta`, which checks `!yj.is_finite()` and \
+`self.label(yj)?` identically, and `HeldCap::admit` has no side effect when \
+`held + delta <= limit`"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl OnlineModel for Sgd>::step_into"
+mutation = "replace + with *"
+line_has = "if held + upper > limit {"
+why = """at least one `RefitBuf` is open, so `held >= 32` (`size_of::<Option<Stamp>>()`), \
+and every summand of `upper` is either `per_refit >= 40` or `age_bytes` (`0` or `32`); \
+when `upper == 0`, `delta == 0` so neither arm calls `HeldCap::admit`; when `upper >= 32`, \
+`held * upper > held + upper`, so the mutant never skips a cap breach, and whenever \
+`held + upper <= limit < held * upper`, `held + delta <= limit` so `HeldCap::admit` admits \
+with the exact same half-cap warning that `HeldCap::note` records at the end of `step_into`"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/sgd.rs"
+function = "<impl OnlineModel for Sgd>::step_into"
+mutation = "replace > with >="
+line_has = "if held + upper > limit {"
+why = """`self.over.is_none()` is checked above and `delta <= upper`, so at \
+`held + upper == limit` we have `held + delta <= limit` and `HeldCap::admit` \
+returns `true` with no side effect"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/dcc.rs"
+function = "<impl OnlineModel for Dcc>::step_into"
+mutation = "replace > with >="
+line_has = "if with > cap {"
+why = """`self.over.is_none()` is checked above, and the only side effect inside \
+the branch is `HeldCap::admit(with, cap)`, which returns `true` with no side effect \
+at `with == cap`"""
+
+[[equivalent]]
+file = "crates/rheon-core/src/ddsketch_model.rs"
+function = "<impl OnlineModel for DdSketchModel>::step_into"
+mutation = "replace > with >="
+line_has = "if pre_bytes > cap {"
+why = """`self.over.is_none()` is checked above and trimming only removes rows and \
+shrinks buckets (`bytes <= pre_bytes`), so at `pre_bytes == cap` both \
+`HeldCap::admit` calls see `<= cap` and return `true` with no side effect"""

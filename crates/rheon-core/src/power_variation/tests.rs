@@ -772,3 +772,31 @@ fn bipowers_statistic_from_the_normalized_terms_is_standard_normal() {
 fn bipowers_statistic_from_the_normalized_terms_is_standard_normal_finely() {
     check_pv_null(20_000, 0.035, (0.008, 0.016));
 }
+
+/// Clock-window cap check: zero-weight rows at cap do not breach (`weight > 0.0`),
+/// and expired rows are subtracted (`rows.len() - dropped + 1`) before judging the cap.
+#[test]
+fn clock_window_cap_zero_weight_and_eviction() {
+    let mut c = cfg(1, vec![mp(&[2.0], 1, false)], f64::INFINITY);
+    c.window_clock = Some(5.0);
+    c.closed = WindowClosed::Right;
+    let probe = PowerVariation::new(c.clone()).unwrap();
+    let cap = PowerVariation::state_bytes(&probe.plan, 1, Some(4), true);
+    c.max_state_bytes = Some(cap);
+    let mut m = PowerVariation::new(c).unwrap();
+    for i in 0..4 {
+        m.stamp_next(Stamp::Raw(i as f64, 0.0));
+        m.step(&[], &[Some(0.5)], 1.0, 1.0);
+        assert_eq!(m.state_over_cap(), None);
+    }
+    // Zero-weight row at cap must NOT breach (`weight > 0.0`).
+    let mut zero = m.clone();
+    zero.stamp_next(Stamp::Raw(4.0, 0.0));
+    zero.step(&[], &[Some(0.5)], 1.0, 0.0);
+    assert_eq!(zero.state_over_cap(), None);
+
+    // Positive-weight row at t = 10.0 evicts all 4 rows (`4 - 4 + 1 = 1 <= 4`) -> ADMITTED.
+    m.stamp_next(Stamp::Raw(10.0, 0.0));
+    m.step(&[], &[Some(0.5)], 7.0, 1.0);
+    assert_eq!(m.state_over_cap(), None);
+}

@@ -4,7 +4,7 @@
 
 use super::tests::{Normals, cfg};
 use super::*;
-use crate::{ModelState, OnlineModel, StateError};
+use crate::{ModelState, OnlineModel, Stamp, StateError};
 
 fn warming(d: usize) -> BocpdCfg {
     BocpdCfg {
@@ -138,4 +138,28 @@ fn the_warm_up_counts_its_bytes_by_row_and_width() {
     }
     let m = Bocpd::new(warming(2)).unwrap();
     assert_eq!(m.warm_cap(), 256 * 1024 * 1024);
+}
+
+/// A zero-weight row arriving while the warm-up span buffer is already at its
+/// byte cap does not trigger a cap breach (`weight > 0.0`, not `>=`).
+#[test]
+fn zero_weight_row_at_warm_cap_does_not_breach() {
+    let mut m = Bocpd::new(BocpdCfg {
+        warm_clock: Some(1e12),
+        ..warming(2)
+    })
+    .unwrap();
+    let cap = m.warm_bytes(3);
+    m.set_cap_for_test(cap);
+    let mut g = Normals::new(23);
+    for i in 0..3 {
+        m.stamp_next(Stamp::Ns(i as i128 * 1_000_000_000));
+        m.step(&[g.normal(), g.normal()], &[], 1.0, 1.0);
+    }
+    assert_eq!(m.warm.len(), 3);
+    assert_eq!(m.state_over_cap(), None);
+    m.stamp_next(Stamp::Ns(3_000_000_000));
+    m.step(&[g.normal(), g.normal()], &[], 1.0, 0.0);
+    assert_eq!(m.state_over_cap(), None);
+    assert_eq!(m.warm.len(), 3);
 }

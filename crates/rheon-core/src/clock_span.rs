@@ -253,4 +253,14 @@ mod tests {
         assert!(over.contains("but it is 67108865"), "{over}");
         assert!(check_max_state_bytes("sgd", Some(u64::MAX)).is_err());
     }
+
+    #[test]
+    fn place_discard_next_drops_handed_stamp() {
+        let mut p = Place::default();
+        p.hand(Stamp::from(42.0));
+        assert_eq!(p.peek(1.0), Stamp::from(42.0));
+        p.discard_next();
+        assert_eq!(p.peek(1.0), Stamp::from(1.0));
+        assert_eq!(p.step(1.0), Stamp::from(1.0));
+    }
 }

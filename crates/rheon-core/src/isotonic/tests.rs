@@ -654,3 +654,84 @@ fn beyond_sample_is_the_null_the_fit_reads() {
     assert!(!c.beyond_sample(9.0));
     assert_eq!(c.predict(&[9.0], 1.0).pred[0], 3.0);
 }
+
+/// `Isotonic::trims_below` decay-scale math and `drop_w > 0.0` guard,
+/// post-cap row-clock `weight >= f64::MIN_POSITIVE`, and multi-target clock-window
+/// `drop_bytes` subtraction at the exact `max_state_bytes` boundary.
+#[test]
+fn trims_below_over_cap_weight_and_clock_window_drop_bytes() {
+    // 1. `trims_below` with decay (`own = 6.0, origin = 4.0`, `Halflife(2.0)` => `scale = 0.5`).
+    let mut m_dec = Isotonic::new(IsotonicCfg {
+        window_clock: Some(10.0),
+        decay: Decay::Halflife(2.0),
+        ..cfg()
+    })
+    .unwrap();
+    // Feed 3 rows so `ring` holds entries, then set exact `clock.origin = 4.0, clock.own = 6.0`
+    // and known `ring.w[0] = 2.0`, `targets[0].weight = 5.0`.
+    for i in 0..3 {
+        m_dec.stamp_next(Stamp::Raw(i as f64, 0.0));
+        m_dec.step(&[i as f64], &[Some(i as f64)], 1.0, 1.0);
+    }
+    // At stamp `5.0`, no row has left (`drop_w == 0.0`); even with `top = 100.0 > weight`,
+    // `trims_below` must return `false` (`drop_w > 0.0`, not `>=`).
+    assert!(!m_dec.trims_below(0.0, Some(Stamp::Raw(5.0, 0.0)), 100.0));
+
+    // Set exact `origin = 4.0, own = 6.0` (`own - origin = 2.0 => scale = 0.5`;
+    // `own + origin = 10 => 0.03125`, `own / origin = 1.5 => 0.5946`, `kept / scale = 4.0`).
+    m_dec.clock.origin = 4.0;
+    m_dec.clock.own = 6.0;
+    m_dec.ring.as_mut().unwrap().w[0] = 2.0; // only row 0 (`stamp = 0.0`) leaves at `stamp = 10.5`
+    let w0 = m_dec.targets[0].weight;
+    // Exact `drop_w = 2.0 * 0.5 = 1.0`: `w0 - 1.0 < w0 - 0.5` is `true` (kills `own + origin` -> 0.0625).
+    assert!(m_dec.trims_below(0.0, Some(Stamp::Raw(10.5, 0.0)), w0 - 0.5));
+    // `w0 - 1.0 < w0 - 1.1` is `false` (kills `own / origin` -> 1.189 and `kept / scale` -> 4.0).
+    assert!(!m_dec.trims_below(0.0, Some(Stamp::Raw(10.5, 0.0)), w0 - 1.1));
+
+    // 2. Post-cap (`over.is_some()`) row-clock `window_key`: `weight >= f64::MIN_POSITIVE` (`>=` not `<`).
+    let mut m_over = Isotonic::new(IsotonicCfg {
+        window_clock: Some(4.0),
+        closed: WindowClosed::Right,
+        ..cfg()
+    })
+    .unwrap();
+    for i in 1..=4 {
+        m_over.stamp_next_on_rows(Stamp::from(i as f64));
+        m_over.step(&[i as f64], &[Some(i as f64)], 1.0, 1.0);
+    }
+    assert_eq!(m_over.n_eff(), 4.0);
+    m_over.over = Some(1);
+    m_over.stamp_next_on_rows(Stamp::from(5.0));
+    let pos = m_over.step(&[5.0], &[Some(5.0)], 1.0, 1.0);
+    assert_eq!(pos.n_eff, 3.0);
+    m_over.stamp_next_on_rows(Stamp::from(5.0));
+    let zero = m_over.step(&[5.0], &[Some(5.0)], 1.0, 0.0);
+    assert_eq!(zero.n_eff, 4.0);
+
+    // 3. Multi-target (`m = 2`) clock-window `drop_bytes` with `drop_rows = 3` (so `3 * 2 = 6`
+    //    differs from `3 + 2 = 5` and `3 / 2 = 1`) and `cap` equal to exact post-trim bytes:
+    //    row 5 MUST be admitted (`drop_bytes` subtracted accurately; any mutant on `*` or `-` rejects!).
+    let c2 = IsotonicCfg {
+        n_targets: 2,
+        window_clock: Some(5.0),
+        closed: WindowClosed::Right,
+        ..cfg()
+    };
+    let mut m2 = Isotonic::new(c2).unwrap();
+    // 3 rows at t = 0, 1, 2 (will expire at t = 7.5 => drop_rows = 3, drop_entries = 6),
+    // plus 1 row at t = 4.5 (within span 5.0 of 0, so nothing expires yet, and stays at 7.5).
+    for &(t, x) in &[(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (4.5, 4.0)] {
+        m2.stamp_next(Stamp::Raw(t, 0.0));
+        m2.step(&[x], &[Some(x), Some(2.0 * x)], 1.0, 1.0);
+    }
+    let drop_bytes = 3 * m2.cfg.ring_row_bytes() + 6 * ISOTONIC_ROW_BYTES;
+    let exact_post_trim = m2.bytes_with(5.0, &[Some(5.0), Some(10.0)]) - drop_bytes;
+    m2.cfg.max_state_bytes = Some(exact_post_trim);
+    m2.stamp_next(Stamp::Raw(7.5, 0.0));
+    m2.step(&[5.0], &[Some(5.0), Some(10.0)], 1.5, 1.0);
+    assert_eq!(
+        m2.state_over_cap(),
+        None,
+        "exact drop_bytes subtraction must admit row at cap"
+    );
+}

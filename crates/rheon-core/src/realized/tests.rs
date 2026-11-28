@@ -886,3 +886,30 @@ fn check_bns_null(reps: u64, sd_tol: f64, size: (f64, f64)) {
         );
     }
 }
+
+/// Clock-window cap check: zero-weight rows at cap do not breach (`weight > 0.0`),
+/// and expired rows are subtracted (`rows.len() - dropped + 1`) before judging the cap.
+#[test]
+fn clock_window_cap_zero_weight_and_eviction() {
+    let mut c = cfg(1, f64::INFINITY);
+    c.window_clock = Some(5.0);
+    c.closed = WindowClosed::Right;
+    let cap = Realized::state_bytes(1, c.lm_window_rows, Some(4), true);
+    c.max_state_bytes = Some(cap);
+    let mut m = Realized::new(c).unwrap();
+    for i in 0..4 {
+        m.stamp_next(Stamp::Raw(i as f64, 0.0));
+        m.step(&[], &[Some(0.5)], 1.0, 1.0);
+        assert_eq!(m.state_over_cap(), None);
+    }
+    // Zero-weight row at cap must NOT breach (`weight > 0.0`).
+    let mut zero = m.clone();
+    zero.stamp_next(Stamp::Raw(4.0, 0.0));
+    zero.step(&[], &[Some(0.5)], 1.0, 0.0);
+    assert_eq!(zero.state_over_cap(), None);
+
+    // Positive-weight row at t = 10.0 evicts all 4 rows (`4 - 4 + 1 = 1 <= 4`) -> ADMITTED.
+    m.stamp_next(Stamp::Raw(10.0, 0.0));
+    m.step(&[], &[Some(0.5)], 7.0, 1.0);
+    assert_eq!(m.state_over_cap(), None);
+}

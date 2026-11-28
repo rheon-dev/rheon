@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::EwDiag;
+use crate::model::OnlineModel;
 
 /// Part 4's terms as the literal script prints them: a name, the legs
 /// (`"x@3"`) with their powers, and a kind.
@@ -697,4 +698,51 @@ fn the_cumulant_polynomials_are_the_closed_forms() {
         );
     }
     assert_eq!(six.len(), 4);
+}
+
+/// `admit_row`, `rows_with` lag eviction subtraction, and `learn_at` admission/rejection.
+#[test]
+fn clock_cap_zero_weight_lag_eviction_and_learn_at() {
+    // 1. Clock-lagged model (`x@2.0`): fill 4 rows at t = 0, 1, 2, 3, set cap to exact bytes for 4 rows.
+    let mut c = cfg(
+        Decay::Halflife(10.0),
+        vec![MomentTerm {
+            name: "cov_lag".into(),
+            powers: vec![(Leg::of(0), 1), (Leg::lagged(0, 2.0), 1)],
+            kind: MomentKind::Central,
+            bias: true,
+        }],
+    );
+    c.clocked = true;
+    let probe = EwmMoments::new(c.clone()).unwrap();
+    let cap_lag = probe.bytes_for(4, 0);
+    c.max_state_bytes = Some(cap_lag);
+    let mut m = EwmMoments::new(c).unwrap();
+    for i in 0..4 {
+        m.learn_at(&[(i + 1) as f64], 0.5, 1.0, Stamp::Raw(0.5 * i as f64, 0.0));
+        assert_eq!(m.state_over_cap(), None);
+    }
+    assert!(m.n_eff() > 0.0, "learn_at must advance state");
+    assert_eq!(m.bufs[0].stamps.len(), 4);
+
+    // Zero-weight row at cap must NOT trigger breach (`w > 0.0 && self.data_sized()`).
+    let mut zero = m.clone();
+    zero.learn_at(&[9.0], 0.1, 0.0, Stamp::Raw(1.6, 0.0));
+    assert_eq!(zero.state_over_cap(), None);
+
+    // Positive-weight row at t = 5.0 evicts older lag rows (`lag_drops >= 3`),
+    // so `4 + 1 - drops <= 4` fits under `cap_lag` (whereas `+ drops` would exceed cap!).
+    let mut evict = m.clone();
+    evict.learn_at(&[5.0], 3.5, 1.0, Stamp::Raw(5.0, 0.0));
+    assert_eq!(
+        evict.state_over_cap(),
+        None,
+        "evicting lag rows keeps buffer under cap"
+    );
+
+    // Positive-weight row at t = 1.6 evicts 0 lag rows -> 5 rows > cap_lag -> rejected by `learn_at`!
+    let n_before = m.n_eff();
+    m.learn_at(&[5.0], 0.1, 1.0, Stamp::Raw(1.6, 0.0));
+    assert!(m.state_over_cap().is_some());
+    assert_eq!(m.n_eff().to_bits(), n_before.to_bits());
 }
