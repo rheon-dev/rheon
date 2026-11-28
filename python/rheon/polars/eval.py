@@ -1650,8 +1650,9 @@ def classification_metrics(
 
     .. code-block:: python
 
-        spec = rp.spec.ftrl("clf", targets=["y"], features=["x0", "x1"])
-        out = rp.ModelBank([spec]).fit_predict(df)
+        df_bin = df.with_columns((pl.col("y") > 0).cast(pl.Float64).alias("y"))
+        spec = rp.spec.ftrl("clf", targets=["y"], features=["x0", "x1"], half_life=50)
+        out = rp.ModelBank([spec]).fit_predict(df_bin)
         scores = rp.eval.classification_metrics(out, spec, n_bins=10)
 
     .. rubric:: See also
@@ -1760,6 +1761,9 @@ def reliability_bins(
 
     .. code-block:: python
 
+        df_bin = df.with_columns((pl.col("y") > 0).cast(pl.Float64).alias("y"))
+        spec = rp.spec.ftrl("clf", targets=["y"], features=["x0", "x1"], half_life=50)
+        out = rp.ModelBank([spec]).fit_predict(df_bin)
         bins = rp.eval.reliability_bins(out, spec, n_bins=10)
 
     .. rubric:: See also

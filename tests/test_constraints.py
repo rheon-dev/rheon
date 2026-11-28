@@ -1136,8 +1136,8 @@ class TestRefusals:
             rp.ModelBank([builder("m", **kw, **_base())])
 
     def test_other_builders_do_not_take_them(self):
-        with pytest.raises(TypeError, match='ewridge\\(\\) takes no parameter "coef_min"'):
-            rp.spec.ewridge("m", coef_min=0.0, **_base())
+        with pytest.raises(TypeError, match='rls\\(\\) takes no parameter "coef_min"'):
+            rp.spec.rls("m", coef_min=0.0, **_base())
 
     def test_a_hand_built_spec_is_parsed_by_path(self):
         # The path names the model's key, where it stopped at `model`

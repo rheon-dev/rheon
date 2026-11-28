@@ -291,7 +291,9 @@ def _stream_accumulators(
                 try:
                     acc.update_batch(pair["__p"], pair["__y"], w_series)
                 except ValueError as exc:
-                    raise _wrap_label_error(who, is_spec_mode, slot_lbl, tgt_lbl, exc) from None
+                    raise ValueError(
+                        _format_label_error(who, is_spec_mode, slot_lbl, tgt_lbl, exc)
+                    ) from None
         else:
             # Project all needed expressions once per batch so group_by splits
             # aligned columns without re-evaluating struct field extractions per group.
@@ -310,20 +312,22 @@ def _stream_accumulators(
                     try:
                         acc.update_batch(part[f"__p_{idx}"], part[f"__y_{idx}"], w_part)
                     except ValueError as exc:
-                        raise _wrap_label_error(who, is_spec_mode, slot_lbl, tgt_lbl, exc) from None
+                        raise ValueError(
+                            _format_label_error(who, is_spec_mode, slot_lbl, tgt_lbl, exc)
+                        ) from None
     return accs
 
 
-def _wrap_label_error(
+def _format_label_error(
     who: str,
     is_spec_mode: bool,
     slot_lbl: str,
     tgt_lbl: str,
     exc: ValueError,
-) -> ValueError:
+) -> str:
     if is_spec_mode:
-        return ValueError(f"{who}: slot {slot_lbl!r} (target {tgt_lbl!r}): {exc}")
-    return ValueError(f"{who}: target column {tgt_lbl!r}: {exc}")
+        return f"{who}: slot {slot_lbl!r} (target {tgt_lbl!r}): {exc}"
+    return f"{who}: target column {tgt_lbl!r}: {exc}"
 
 
 def _key_schema(
