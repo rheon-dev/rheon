@@ -852,13 +852,13 @@ fn audit_cfg_cap_enforcement_pair_bytes_and_validation_edges() {
         distinct_cap: MAX_DISTINCT_CAP,
         gap_cap: None,
         has_clock: false,
-        distinct: Some(AuditDistinctCfg {
+        distinct: Some(Box::new(AuditDistinctCfg {
             precision: None,
             window_rows: None,
             window_clock: None,
             closed: WindowClosed::Right,
             max_state_bytes: None,
-        }),
+        })),
     };
     assert!(!no_cap.enforces_state_cap());
     assert!(no_cap.fixed_state_bytes() > DEFAULT_STATE_BYTES);
@@ -963,13 +963,13 @@ fn audit_hll_state_has_shape_every_bound_and_branch() {
         distinct_cap: 16,
         gap_cap: None,
         has_clock: false,
-        distinct: Some(AuditDistinctCfg {
+        distinct: Some(Box::new(AuditDistinctCfg {
             precision: Some(8),
             window_rows: Some(5),
             window_clock: None,
             closed: WindowClosed::Right,
             max_state_bytes: None,
-        }),
+        })),
     };
     let cap = row_cfg.fixed_state_bytes() + 2 * hll::HLL_ROW_ENTRY_BYTES;
     row_cfg.distinct.as_mut().unwrap().max_state_bytes = Some(cap);
@@ -1163,13 +1163,13 @@ fn sliding_rows_and_clock_held_cap_exact_boundaries_and_trim_on_boundary_path() 
         distinct_cap: 16,
         gap_cap: None,
         has_clock: false,
-        distinct: Some(AuditDistinctCfg {
+        distinct: Some(Box::new(AuditDistinctCfg {
             precision: Some(8),
             window_rows: Some(4),
             window_clock: None,
             closed: WindowClosed::Right,
             max_state_bytes: None,
-        }),
+        })),
     };
     let base_r = row_cfg.fixed_state_bytes();
     let cap_r = base_r + 4 * hll::HLL_ROW_ENTRY_BYTES;
@@ -1224,13 +1224,13 @@ fn sliding_rows_and_clock_held_cap_exact_boundaries_and_trim_on_boundary_path() 
         distinct_cap: 16,
         gap_cap: None,
         has_clock: true,
-        distinct: Some(AuditDistinctCfg {
+        distinct: Some(Box::new(AuditDistinctCfg {
             precision: Some(8),
             window_rows: None,
             window_clock: Some(10.0),
             closed: WindowClosed::Right,
             max_state_bytes: None,
-        }),
+        })),
     };
     let base_c = clk_cfg.fixed_state_bytes();
     let cap_c = base_c + 4 * hll::HLL_CLOCK_ENTRY_BYTES;
