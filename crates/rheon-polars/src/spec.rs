@@ -29,6 +29,7 @@ pub(crate) use kalman::kalman_obs;
 pub use metrics::*;
 mod names;
 mod readiness;
+pub(crate) use readiness::slope_constraint;
 mod smooth;
 
 pub use names::*;
@@ -231,6 +232,15 @@ pub enum ModelKind {
         /// Linear equality constraints `R β_slopes = r` on the slopes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         constraints: Option<rheon_core::LinearConstraints>,
+        /// Lower bound on each slope (scalar or per-feature list), in original units.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        coef_min: Option<FloatOrList>,
+        /// Upper bound on each slope (scalar or per-feature list), in original units.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        coef_max: Option<FloatOrList>,
+        /// Fixed sum of the slopes, in original units.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        coef_sum: Option<f64>,
     },
     Lasso {
         /// Decreasing penalties on standardized stats; required.
@@ -3072,7 +3082,9 @@ impl Spec {
             // tracks the model where a count of weight cannot, and the
             // `k + 1` rows its first solve needs are the model's own floor
             // (`build_one`), not a setting. An explicit value still floors.
-            ModelKind::EwRidge { .. } => 0.0,
+            // Bounded or fixed-sum fits have no linear least-squares noise gate
+            // and fall through to `min_weight = k + fit_intercept`.
+            ModelKind::EwRidge { .. } if !self.ewridge_has_bounds() => 0.0,
             // No intercept to count: `fit_intercept` has nothing to act on in
             // these, and counted, it moved the first reported row (review
             // 2026-09-12, S22). `k + 1` is what the builders' default gave.
@@ -3106,11 +3118,12 @@ impl Spec {
     /// those keep their `min_weight` defaults, and no default moves
     /// (docs/PLAN.md task 116, D8).
     pub fn max_error_inflation_or_default(&self) -> f64 {
-        let default = if matches!(self.model, ModelKind::EwRidge { .. }) {
-            2f64.sqrt()
-        } else {
-            f64::INFINITY
-        };
+        let default =
+            if matches!(self.model, ModelKind::EwRidge { .. }) && !self.ewridge_has_bounds() {
+                2f64.sqrt()
+            } else {
+                f64::INFINITY
+            };
         self.max_error_inflation.map_or(default, |v| v.0)
     }
 
@@ -4013,8 +4026,9 @@ impl Spec {
             }
             // Range-checked and then dropped on every other model before
             // release 0.11.1 (docs/PLAN.md task 109): refused by name, as
-            // `emit_error_inflation` is, with the reason (task 116).
-            if !self.has_error_inflation() {
+            // `emit_error_inflation` is, with the reason (task 116). Bounded
+            // `ewridge` allows `inf` (the off sentinel) and refuses finite values.
+            if !self.has_error_inflation() && (!self.ewridge_has_bounds() || r.is_finite()) {
                 no.refuse(format!(
                     "spec {name:?}: max_error_inflation needs a model that tracks how uncertain \
                      each prediction is, as ewridge, rls, kalman and lasso do, but {} does not: \
@@ -4027,6 +4041,10 @@ impl Spec {
         }
         if self.emit_se_coef && !self.has_se_coef() {
             let why = match self.model {
+                ModelKind::EwRidge { .. } => {
+                    "a bounded or fixed-sum ewridge fit's active constraints change with the \
+                     data, so a least-squares covariance does not hold for it"
+                }
                 ModelKind::Lasso { .. } => {
                     "it chooses its coefficients from the same rows, and a covariance that \
                      ignores the choice understates their error"

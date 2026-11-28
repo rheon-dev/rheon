@@ -63,9 +63,11 @@ use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
+use crate::constraint::Constraint;
 use crate::gaps::{Acc, AccSnap, AccView, Cross, gram_parts};
 use crate::lincon::{ConstraintProj, LinearConstraints, system_constraint_matrix};
 use crate::model::{Fit, ModelState, OnlineModel, State, StateError, Step, check_schema};
+use crate::qp::QpWork;
 use crate::since::Since;
 use crate::solve::{FactorWork, OverMoments, QuadWork, SpdFactor, dot_aug};
 use crate::{Decay, EwCov, GramPart, TargetGaps, TargetMoments};
@@ -224,15 +226,19 @@ pub struct EwRidgeCfg {
     #[serde(default)]
     pub max_rows_between_snapshots: Option<usize>,
     /// Linear equality constraints `R β = r` on the slope coefficients
-    /// (never the intercept). Refused beside `feature_sets`.
+    /// (never the intercept). Refused beside `feature_sets` and beside
+    /// `constraint`.
     ///
-    /// **Serialization rule:** Custom `Serialize` skips `constraints` when
-    /// `None` and skips `max_rows_between_snapshots` when *both* trailing
-    /// options are `None`, so pre-existing states keep bit-identical bytes
-    /// while compact (positional-array) msgpack never shifts `constraints`
-    /// into `max_rows_between_snapshots`'s slot.
+    /// **Serialization rule:** Custom `Serialize` skips trailing `None`
+    /// fields so pre-existing states keep bit-identical bytes while compact
+    /// (positional-array) msgpack never shifts a later field into an earlier
+    /// slot.
     #[serde(default)]
     pub constraints: Option<LinearConstraints>,
+    /// Box bounds and/or fixed sum on the slope coefficients (never the
+    /// intercept). Refused beside `constraints` and `feature_sets`.
+    #[serde(default)]
+    pub constraint: Option<Constraint>,
 }
 
 impl Serialize for EwRidgeCfg {
@@ -244,7 +250,9 @@ impl Serialize for EwRidgeCfg {
                 crate::humanfloat::f64_or_tag::serialize(&self.0, s)
             }
         }
-        let len = if self.constraints.is_some() {
+        let len = if self.constraint.is_some() {
+            22
+        } else if self.constraints.is_some() {
             21
         } else if self.max_rows_between_snapshots.is_some() {
             20
@@ -279,6 +287,9 @@ impl Serialize for EwRidgeCfg {
         }
         if len >= 21 {
             st.serialize_field("constraints", &self.constraints)?;
+        }
+        if len >= 22 {
+            st.serialize_field("constraint", &self.constraint)?;
         }
         st.end()
     }
@@ -541,6 +552,24 @@ impl EwRidgeCfg {
                     "ewridge: constraints cannot be combined with feature_sets: constraints \
                      specify one column per entry of features, while feature_sets fit subsets \
                      of them. Fit on the desired features directly, or leave out feature_sets.",
+                );
+            }
+        }
+        if let Some(con) = &self.constraint {
+            no.take(con.validate(self.n_features, "ewridge"));
+            if self.constraints.is_some() {
+                no.refuse(
+                    "ewridge: constraints cannot be combined with coef_min, coef_max or \
+                     coef_sum. Use constraints for general linear equalities, or use coef_min, \
+                     coef_max and coef_sum for slope bounds and a fixed sum.",
+                );
+            }
+            if !self.feature_sets.is_empty() {
+                no.refuse(
+                    "ewridge: coef_min, coef_max and coef_sum cannot be combined with \
+                     feature_sets: each feature set drops a different subset of columns, so one \
+                     set of slope bounds cannot apply to every set. Leave out feature_sets, or \
+                     leave out coef_min, coef_max and coef_sum.",
                 );
             }
         }
@@ -1244,6 +1273,7 @@ impl EwRidge {
             cert,
             r,
             parts,
+            qp,
         } = bufs;
         self.cfg.combos_into(combos);
         let nc = combos.len();
@@ -1358,6 +1388,27 @@ impl EwRidge {
                 if ridge == 0.0 && cov.n_eff() <= 0.0 {
                     for &j in readers.iter() {
                         beta[j * nc + ci].fill(f64::NAN);
+                        ready.clear(j * nc + ci, &mut work);
+                    }
+                    continue;
+                }
+                if let Some(con) = &self.cfg.constraint {
+                    self.solve_bounded(
+                        cov,
+                        cross,
+                        readers,
+                        r,
+                        ci,
+                        nc,
+                        ridge,
+                        con,
+                        centred,
+                        &mut failures,
+                        parts,
+                        qp,
+                        &mut beta,
+                    );
+                    for &j in readers.iter() {
                         ready.clear(j * nc + ci, &mut work);
                     }
                     continue;
@@ -1661,6 +1712,7 @@ impl EwRidge {
             *spare = Vec::new();
         }
         parts.release();
+        qp.trim(KEEP_ENTRIES);
         self.ready = ready;
         self.factors = Factors {
             kept: factors,
@@ -2660,6 +2712,7 @@ struct SolveBufs {
     /// The targets' uncentred right-hand sides, where a solve reads them.
     r: Vec<Vec<f64>>,
     parts: Parts,
+    qp: QpWork,
 }
 
 /// One solved system, kept so a row's leverage can be read against the
@@ -3197,6 +3250,10 @@ impl OnlineModel for EwRidge {
     /// a digit ([`EwRidge::ill_conditioned`]), which has no estimation
     /// variance to read.
     fn error_inflation_into(&self, out: &mut Vec<f64>) -> bool {
+        if self.cfg.constraint.is_some() {
+            out.clear();
+            return false;
+        }
         self.inflation_into(out, f64::NEG_INFINITY)
     }
 
@@ -3211,6 +3268,10 @@ impl OnlineModel for EwRidge {
         out: &mut Vec<f64>,
         limit: f64,
     ) -> bool {
+        if self.cfg.constraint.is_some() {
+            out.clear();
+            return false;
+        }
         self.inflation_into(out, limit)
     }
 
@@ -3227,6 +3288,10 @@ impl OnlineModel for EwRidge {
     /// 0 the form's clamp once made of it (task 181). Read for output only:
     /// nothing here reaches the state.
     fn row_error_inflation_into(&self, x: &[f64], _d_clock: f64, out: &mut Vec<f64>) -> bool {
+        if self.cfg.constraint.is_some() {
+            out.clear();
+            return false;
+        }
         let (m, nc) = (self.cfg.n_targets, self.cfg.n_combos());
         out.clear();
         out.resize(m * nc, f64::INFINITY);
@@ -3293,7 +3358,7 @@ impl OnlineModel for EwRidge {
     /// systems are kept ([`EwRidge::set_keep_factor`]), and before the first
     /// solve.
     fn coef_variance(&self) -> Option<crate::CoefVariance> {
-        if !self.keep_factor {
+        if !self.keep_factor || self.cfg.constraint.is_some() {
             return None;
         }
         self.beta.as_ref()?;
@@ -3350,6 +3415,9 @@ impl OnlineModel for EwRidge {
     }
 
     fn support_coef(&self) -> Option<Vec<Vec<f64>>> {
+        if self.cfg.constraint.is_some() {
+            return None;
+        }
         self.beta.as_ref()?;
         let (m, nc) = (self.cfg.n_targets, self.cfg.n_combos());
         (self.ready.support.len() == m * nc).then(|| {
@@ -3361,7 +3429,7 @@ impl OnlineModel for EwRidge {
 
     fn support_coef_into(&self, out: &mut Vec<f64>) -> bool {
         out.clear();
-        if self.beta.is_none() {
+        if self.cfg.constraint.is_some() || self.beta.is_none() {
             return false;
         }
         let (m, nc) = (self.cfg.n_targets, self.cfg.n_combos());
@@ -3688,6 +3756,7 @@ impl OnlineModel for EwRidge {
     }
 }
 
+mod bounded;
 mod unread;
 
 #[cfg(test)]
@@ -3704,6 +3773,9 @@ mod output_only_tests;
 
 #[cfg(test)]
 mod factor_work_tests;
+
+#[cfg(test)]
+mod bounded_tests;
 
 #[cfg(test)]
 mod solve_scratch_tests;

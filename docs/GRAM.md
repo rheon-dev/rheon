@@ -286,6 +286,14 @@ Each penalty in a grid solves the constrained problem `R β_slopes = r` via
 the exact KKT projection and returns `NaN` slopes if `R A Rᵀ` is singular
 (for example, when a constrained column is constant).
 
+**Box bounds and fixed sum (`coef_min`, `coef_max`, `coef_sum`).**
+`rheon.gram.solve` also accepts the same slope box bounds (`coef_min`,
+`coef_max`) and fixed slope sum (`coef_sum`) as `ewridge`, in original feature
+units (even under `standardize=True`), leaving the intercept free. It calls the
+exact same Rust primal active-set quadratic program solver as `ewridge`, so
+pooling or exporting a Gram matches bounded `ewridge` to the bit. Refused
+beside `constraints`, or when the bounds are infeasible.
+
 **`coef_stats` computes least squares' standard errors from the Gram:**
 
 ```text

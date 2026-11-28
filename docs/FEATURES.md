@@ -37,7 +37,7 @@ to start with.
 
 | model | what it is | its pages |
 |---|---|---|
-| [`rheon.spec.ewridge`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge) | exponentially weighted ridge regression on running sums, a grid of ridges and feature sets solved from one set of sums | [entry](MODELS.md#ewridge--exponentially-weighted-ridge-regression) · [choose a ridge and a half-life](how-to/choose-a-ridge-and-half-life.md) |
+| [`rheon.spec.ewridge`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge) | exponentially weighted ridge regression on running sums, with optional linear equality constraints, slope bounds and fixed slope sum, and grids of ridges and feature sets solved from one set of sums | [entry](MODELS.md#ewridge--exponentially-weighted-ridge-regression) · [choose a ridge and a half-life](how-to/choose-a-ridge-and-half-life.md) |
 | [`rheon.spec.rls`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.rls) | recursive least squares, which solves the ridge fit exactly on every row | [entry](MODELS.md#rls--recursive-least-squares) · [targets that go missing on different rows](how-to/fit-targets-that-go-missing-on-different-rows.md) |
 | [`rheon.spec.lasso`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.lasso) | a lasso or elastic-net path, with the penalty chosen as the stream runs | [entry](MODELS.md#lasso--lasso-path-its-penalty-chosen-as-it-runs) · [choose columns on the lasso path](how-to/choose-columns-on-the-lasso-path.md) |
 | [`rheon.spec.kalman`](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.kalman) | a regression whose coefficients drift, tracked by a Kalman filter | [entry](MODELS.md#kalman--random-walk-β-dynamic-linear-model) · [choose a drift speed](how-to/choose-a-kalman-drift-speed.md) |

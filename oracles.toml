@@ -7732,6 +7732,28 @@ ideal = 0.0
 n = 50
 floor = 1e-12
 
+[group."ewridge_bounds.ewridge_bounds_oracle"]
+tests = [
+    "tests/test_ewridge_bounds.py::test_ewridge_bounds_50_seed_scipy_oracle",
+]
+oracles = { "scipy" = "1.18.1" }
+dataset = ""
+
+[case."ewridge_bounds.ewridge_bounds_oracle.coef_rel_err"]
+ideal = 0.0
+n = 50
+floor = 1e-06
+
+[case."ewridge_bounds.ewridge_bounds_oracle.kkt_err"]
+ideal = 0.0
+n = 50
+floor = 1e-10
+
+[case."ewridge_bounds.ewridge_bounds_oracle.obj_gap"]
+ideal = 0.0
+n = 50
+floor = 1e-12
+
 # --- raises
 
 [[raised]]

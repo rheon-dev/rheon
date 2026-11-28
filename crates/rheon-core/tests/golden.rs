@@ -150,6 +150,7 @@ fn ewridge_cfg(standardize: bool, ridge: f64) -> EwRidgeCfg {
         window_every: None,
         max_rows_between_snapshots: None,
         constraints: None,
+        constraint: None,
     }
 }
 

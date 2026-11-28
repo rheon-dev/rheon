@@ -39,6 +39,7 @@ fn base(k: usize, m: usize) -> EwRidgeCfg {
         window_every: None,
         max_rows_between_snapshots: None,
         constraints: None,
+        constraint: None,
     }
 }
 

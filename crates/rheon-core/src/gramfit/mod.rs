@@ -25,6 +25,7 @@ mod lars_tie_tests;
 mod merge;
 #[cfg(test)]
 mod merge_tests;
+mod qp;
 mod ridge;
 mod system;
 #[cfg(test)]
@@ -44,5 +45,6 @@ pub use lars::{
     lars_lasso_weighted,
 };
 pub use merge::{OwnedGram, merge, merge_within, within_cross};
+pub use qp::{GramQpResult, qp_solve};
 pub use ridge::{RidgeFit, ridge_fits};
 pub use system::{Comoments, Correlation, Design, GramArrays, GramRows, Response, Scaling};

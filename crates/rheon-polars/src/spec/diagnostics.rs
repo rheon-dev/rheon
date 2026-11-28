@@ -333,10 +333,11 @@ impl Spec {
     /// Whether this spec's model takes `emit_robust_se`: the least-squares
     /// fits, whose coefficients the sandwich is of (task 221 (c)).
     pub fn has_robust_se(&self) -> bool {
-        matches!(
-            self.model,
-            super::ModelKind::EwRidge { .. } | super::ModelKind::Rls { .. }
-        )
+        match self.model {
+            super::ModelKind::EwRidge { .. } => !self.ewridge_has_bounds(),
+            super::ModelKind::Rls { .. } => true,
+            _ => false,
+        }
     }
 
     /// Newey and West's lags: `robust_se_lags` where given; else twice the
@@ -486,6 +487,10 @@ impl Spec {
         let name = &self.name;
         if self.emit_robust_se && predicts && !self.has_robust_se() {
             let why = match self.model {
+                ModelKind::EwRidge { .. } => {
+                    "a bounded or fixed-sum ewridge fit's active constraints change with the \
+                     data, so a least-squares sandwich does not hold for it"
+                }
                 ModelKind::Kalman { .. } => {
                     "its coefficients' covariance is its own posterior, which emit_se_coef \
                      reports"

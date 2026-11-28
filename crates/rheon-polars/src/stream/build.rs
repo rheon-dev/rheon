@@ -101,26 +101,7 @@ pub(super) fn constraint(
     coef_max: &Option<FloatOrList>,
     coef_sum: Option<f64>,
 ) -> Option<Constraint> {
-    if coef_min.is_none() && coef_max.is_none() && coef_sum.is_none() {
-        return None;
-    }
-    let bounds = |b: &Option<FloatOrList>, none: f64| match b {
-        None => vec![none; k],
-        Some(FloatOrList::Float(v)) => vec![v.0; k],
-        Some(list) => list.to_vec(),
-    };
-    let c = Constraint {
-        lo: bounds(coef_min, f64::NEG_INFINITY),
-        hi: bounds(coef_max, f64::INFINITY),
-        sum: coef_sum,
-    };
-    // A list of the wrong length goes to the model's check, which names
-    // it, whatever its bounds: dropped as trivial first, `coef_min =
-    // ["-inf"]` with two features, or `[]`, passed (task 160, PB4).
-    if c.lo.len() != k || c.hi.len() != k {
-        return Some(c);
-    }
-    (!c.is_trivial()).then_some(c)
+    crate::spec::slope_constraint(k, coef_min, coef_max, coef_sum)
 }
 
 /// One model instance, its window bounded as its spec says
@@ -199,6 +180,9 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
             window_budget: _,
             closed: _,
             constraints,
+            coef_min,
+            coef_max,
+            coef_sum,
         } => {
             let fs = feature_sets
                 .as_ref()
@@ -214,6 +198,8 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                         .collect()
                 })
                 .unwrap_or_default();
+            let con = constraint(spec.k(), coef_min, coef_max, *coef_sum);
+            let has_bounds = con.is_some();
             let cfg = EwRidgeCfg {
                 n_features: spec.k(),
                 n_targets: spec.m(),
@@ -250,12 +236,14 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                 window_every: snapshot_every.as_ref().map(Span::value),
                 max_rows_between_snapshots: max_rows_between_snapshots.map(|r| r as usize),
                 constraints: constraints.clone(),
+                constraint: con,
             };
             let mut m = EwRidge::new(cfg)?;
             // The per-row leverage needs the factors kept (§2.1), and so do
             // the coefficients' standard errors (task 116, F).
             // So does the breaks' studentized residual (task 221 (b)).
-            m.set_keep_factor(spec.emit_se_coef || spec.reads_row_inflation());
+            // Bounded fits keep no unconstrained Gram inverse.
+            m.set_keep_factor(!has_bounds && (spec.emit_se_coef || spec.reads_row_inflation()));
             // Each target's own threshold, for its own first solve (task
             // 195, S9b); left out, every target's is the model's.
             // And `min_weight` withholds the output alone: the model's own

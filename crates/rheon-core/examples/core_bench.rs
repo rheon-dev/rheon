@@ -38,6 +38,7 @@ fn cfg(k: usize, m: usize, solve_every_rows: u32) -> EwRidgeCfg {
         window_every: None,
         max_rows_between_snapshots: None,
         constraints: None,
+        constraint: None,
     }
 }
 

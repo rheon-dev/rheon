@@ -307,6 +307,11 @@ library's learn mask: the row is scored and teaches nothing. The default depends
 | 1 | `bocpd` |
 | 0, each having a gate of its own or nothing to gate | `ewridge`, `ewm_moments`, `seqtest`, `rcov`, `hmm`, `corrchange`, `audit`, `hawkes`, `garch`, `dcc`, `realized`, `pca`, `power_variation`, `tdigest`, `ddsketch`, `ar`, `spectral`, `isotonic`, `krls`, `vector_ar`, `dependence`, `hoeffding_tree_classifier`, `hoeffding_tree_regressor`, `bandit`, `half_space_trees`, `random_cut_forest` |
 
+When `ewridge` has active slope bounds or a fixed slope sum (`coef_min`,
+`coef_max`, `coef_sum`), it has no linear least-squares noise gate, so its
+default `min_weight` switches to one per unknown and finite
+`max_error_inflation` is refused.
+
 **`min_settled_frac` is off by default.** Set it when the half-life was
 chosen to average over regimes or seasons that a shorter history would not
 represent ([`settled_frac`: how near the steady
@@ -321,7 +326,7 @@ derives it). The others refuse the setting and say why:
 
 | model | `error_inflation` | |
 |---|---|---|
-| `ewridge` | `sqrt(1 + edf / n_kish)` | on by default at `sqrt(2)` |
+| `ewridge` | `sqrt(1 + edf / n_kish)` | on by default at `sqrt(2)` (off when `coef_min`, `coef_max` or `coef_sum` is active) |
 | `rls` | `sqrt(1 + k / n_kish)`, `k` the coefficients: its `edf` is at most `k` under the fading prior | off unless set |
 | `lasso` | `sqrt(1 + df / n_kish)` per penalty, `df` the active coefficients and the intercept | off unless set |
 | `kalman` | `sqrt(1 + z' P z / R)` for each row: the prediction's own variance, its coefficients' covariance carried through the row's clock gap, over the noise | off unless set; read per row, so a row far from the design is held back where others pass |
@@ -508,7 +513,7 @@ on features where they are given. Several of them take the same parameters:
 | `target_gaps` | `ewridge`, `lasso` | [`ewridge`'s docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.ewridge) |
 | `window_size` | `ewridge`, `lasso`, `ar`, `expectile`, `vector_ar` | [A hard window](#a-hard-window), and [Forget rows past a window](how-to/forget-rows-past-a-window.md) |
 | `standardize` | `ewridge`, `huber`, `quantile` and `ftrl`, off by default; `kalman`, `sgd` and `pa`, on by default. `lasso` always standardizes. `rls`, `expectile` and `glm` take no `standardize` and refuse it by name: `rls`'s prior (`delta`, `coef_prior`) is in the features' own units; and `expectile`'s and `glm`'s `ridge` is a penalty in the features' squared units. Scale such a feature before the bank | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression), [`kalman`](#kalman--random-walk-β-dynamic-linear-model) and [`ftrl`](#ftrl--online-logistic-regression) |
-| `coef_min`, `coef_max`, `coef_sum` | `sgd`, `pa` | [`sgd`](#sgd--stochastic-gradient-descent) |
+| `coef_min`, `coef_max`, `coef_sum` | `ewridge` (and `rheon.gram.solve`), `sgd`, `pa` | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) and [`sgd`](#sgd--stochastic-gradient-descent) |
 | `constraints` | `ewridge`, `rls` (and `rheon.gram.solve`) | [`ewridge`](#ewridge--exponentially-weighted-ridge-regression) and [`rls`](#rls--recursive-least-squares) |
 | `weight` | every model, though `rls`, `kalman`, `sgd`, `pa`, `ftrl` and `glm` read it differently from a weighted mean | [Weights](how-to/weight-rows.md) |
 
@@ -667,7 +672,22 @@ project `se_coef`, `error_inflation`, and `support_coef` through
 `A_c = A − A Rᵀ (R A Rᵀ)⁻¹ R A`, preserving `rls` and
 `ewridge(ridge_scale="sum")` parity. In TOML or JSON, write
 `constraints = { matrix = [[...]], rhs = [...] }`. Refused beside
-`feature_sets`, when `R` is rank-deficient, or when `q < 1` or `q > k`.
+`feature_sets`, beside `coef_min`/`coef_max`/`coef_sum`, when `R` is
+rank-deficient, or when `q < 1` or `q > k`.
+
+**Box bounds and fixed sum (`coef_min`, `coef_max`, `coef_sum`).** Passing slope
+bounds (`coef_min`, `coef_max`, scalar or per-feature list, `-inf`/`inf` for
+unbounded) or a fixed slope sum (`coef_sum`) solves the constrained ridge
+quadratic program in original feature units, even with `standardize=True`. A
+warm-started primal active-set solver runs on `ewridge`'s solve cadence and
+leaves the intercept unconstrained when `fit_intercept=True`. Setting
+`coef_min=0.0, coef_sum=1.0` fits simplex-constrained convex combinations
+directly. Because active constraints change with the data, the default
+readiness gate switches from `max_error_inflation` to `min_weight` (one row per
+unknown), `support_coef` is omitted, and `emit_se_coef`, `emit_robust_se`,
+`emit_error_inflation`, `emit_influence`, finite `max_error_inflation`,
+`feature_sets`, and `constraints` are refused. Any solve that reaches the
+solver's iteration cap is counted in `solve_failures`.
 
 **NIST's statistical reference datasets show where the solve stops
 promising a digit.** Their hardest designs that double precision can solve

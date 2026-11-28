@@ -359,6 +359,17 @@ def gram_path_jobs(
     signs: list[list[float]],
     threads: int | None = None,
 ) -> list[_PathOut]: ...
+def gram_qp_solve(
+    gram: _GramIn,
+    target: int,
+    slots: list[int],
+    icept: int | None,
+    ridges: list[float],
+    standardize: bool,
+    lo: list[float],
+    hi: list[float],
+    sum: float | None = None,
+) -> tuple[bytearray, list[bool]]: ...
 
 # `rheon.polars._gbdt`'s native engine (python/rheon/polars/_gbdt.py, docs/PLAN.md task
 # 242). `batches` returns a fresh iterator of frames for each pass; each

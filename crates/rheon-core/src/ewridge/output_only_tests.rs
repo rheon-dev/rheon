@@ -45,6 +45,7 @@ fn cfg(min_weight: f64, solve_every: f64, rows: u32) -> EwRidgeCfg {
         window_every: None,
         max_rows_between_snapshots: None,
         constraints: None,
+        constraint: None,
     }
 }
 

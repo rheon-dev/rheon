@@ -46,6 +46,7 @@ fn cfg(k: usize, t: usize, gaps: TargetGaps) -> EwRidgeCfg {
         window_every: None,
         max_rows_between_snapshots: None,
         constraints: None,
+        constraint: None,
     }
 }
 

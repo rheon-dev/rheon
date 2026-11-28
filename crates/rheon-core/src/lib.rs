@@ -30,6 +30,7 @@
 //!     window_every: None,
 //!     max_rows_between_snapshots: None,
 //!     constraints: None,
+//!     constraint: None,
 //! })?;
 //!
 //! let mut pred = f64::NAN;
@@ -133,6 +134,7 @@ pub mod philox;
 mod pieces;
 mod power_variation;
 mod psquared;
+pub mod qp;
 mod rcf;
 mod rcov;
 mod realized;

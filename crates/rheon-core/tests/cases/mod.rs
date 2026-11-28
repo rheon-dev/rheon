@@ -735,6 +735,7 @@ fn ewridge_cfg() -> EwRidgeCfg {
         window_every: None,
         max_rows_between_snapshots: None,
         constraints: None,
+        constraint: None,
     }
 }
 
@@ -1302,6 +1303,30 @@ pub fn all() -> Vec<Case> {
                 m.set_keep_factor(true);
                 m
             },
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Bounded and fixed-sum EwRidge (schema 72): `constraint` serialized on
+        // the model cfg and warm-started across save/load.
+        case!(
+            "ewridge_bounded",
+            "EwRidge",
+            EwRidge,
+            EwRidge::new(EwRidgeCfg {
+                feature_sets: Vec::new(),
+                standardize: true,
+                min_weight: 0.0,
+                solve_every: 0.0,
+                max_rows_between_solves: 1,
+                constraint: Some(Constraint {
+                    lo: vec![0.0; K],
+                    hi: vec![0.8; K],
+                    sum: Some(1.0),
+                }),
+                ..ewridge_cfg()
+            })
+            .unwrap(),
             K,
             Targets::Linear(2),
             40
