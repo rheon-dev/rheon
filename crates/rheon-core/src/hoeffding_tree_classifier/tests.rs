@@ -430,3 +430,56 @@ fn a_state_of_the_wrong_shape_is_refused() {
     }
     check_refused(bad);
 }
+
+#[test]
+fn adaptive_recheck_skips_when_uncapped_and_scales_when_capped() {
+    let cfg = HoeffdingTreeClassifierCfg {
+        n_features: 2,
+        n_classes: 2,
+        grace_period: 30.0,
+        delta: 0.05,
+        ..Default::default()
+    };
+    let m = HoeffdingTreeClassifier::new(cfg).unwrap();
+    assert_eq!(m.recheck_interval(), 30);
+
+    // With tight cap so leaves become capped, cadence scales with ceil(grace_period) * active.
+    let cap = 1_500u64;
+    let tight = HoeffdingTreeClassifierCfg {
+        n_features: 5,
+        n_classes: 2,
+        grace_period: 30.2,
+        tau: 0.1,
+        max_state_bytes: Some(cap),
+        ..Default::default()
+    };
+    let mut whole = HoeffdingTreeClassifier::new(tight.clone()).unwrap();
+    let mut split_m = HoeffdingTreeClassifier::new(tight).unwrap();
+    let mut seed = 909u64;
+    let mut saw_capped = false;
+    for i in 0..2_500 {
+        let x: Vec<f64> = (0..5).map(|_| lcg(&mut seed)).collect();
+        let lab = if (x[0] > 0.0) ^ (x[1] > 0.0) ^ (x[2] > 0.2) {
+            1.0
+        } else {
+            0.0
+        };
+        whole.step(&x, &[Some(lab)], 1.0, 1.0);
+        if i == 1_234 {
+            let bytes = rmp_serde::to_vec_named(&split_m.state()).unwrap();
+            let st: State = rmp_serde::from_slice(&bytes).unwrap();
+            split_m = HoeffdingTreeClassifier::restore(&st).unwrap();
+        }
+        split_m.step(&x, &[Some(lab)], 1.0, 1.0);
+        if whole.leaves.iter().any(|l| l.capped) {
+            saw_capped = true;
+            let active = whole.leaves.iter().filter(|l| l.active).count().max(1) as u64;
+            assert_eq!(whole.recheck_interval(), 31 * active);
+        }
+    }
+    assert!(saw_capped, "expected at least one capped leaf");
+    assert_eq!(
+        whole, split_m,
+        "save/load across adaptive recheck must stay bit-identical"
+    );
+}

@@ -607,6 +607,20 @@ class TestAuditTenSeeds:
     @pytest.mark.parametrize("name", sorted(cs.AUDIT_PLANTED))
     def test_every_seed_finds_it(self, name):
         make, code, column = cs.AUDIT_PLANTED[name]
+        if name == "random_walk":
+            # A 5% Dickey-Fuller test (MacKinnon 2010 tau_c(n)) rejects a true
+            # random walk on 5% of draws by construction (seed 2 has tau=-3.24 < -2.86).
+            hits = 0
+            for seed in range(1, 10):
+                df = make(seed)
+                bank = rp.ModelBank([cs.audit_spec(df)])
+                bank.fit_predict(df)
+                a = bank.audit().filter(column=column).row(0, named=True)
+                fired = not bank.check().filter(code=code, column=column).is_empty()
+                assert fired == (a["unit_root_t"] > _check.mackinnon_tau_c(a["adjacent"])), seed
+                hits += int(fired)
+            assert hits >= 8
+            return
         for seed in range(1, 10):
             f = cs.audit_findings(make(seed))
             assert not f.filter(code=code, column=column).is_empty(), (seed, f)
@@ -656,3 +670,99 @@ def test_without_numpy_the_gram_checks_say_they_did_not_run(monkeypatch):
     assert unfed.is_empty(), unfed
     monkeypatch.setattr(builtins, "__import__", real_import)
     assert rp.ModelBank(specs[:1]).check().is_empty()
+
+
+def test_mackinnon_tau_c_matches_statsmodels_and_detects_short_random_walk():
+    """B12: MacKinnon (2010) 5% critical values match statsmodels to 1e-12 and
+    detect random walks down to n = 25 adjacent pairs."""
+    from statsmodels.tsa.adfvalues import mackinnoncrit
+
+    for n in (25, 30, 50, 100, 250, 1000, 10_000):
+        want = float(mackinnoncrit(N=1, regression="c", nobs=n)[1])
+        got = _check.mackinnon_tau_c(n)
+        assert got == pytest.approx(want, abs=1e-12, rel=1e-12), (n, got, want)
+
+    # A 40-row random walk (39 adjacent pairs, below the old 100-row floor) now triggers.
+    rng = np.random.default_rng(7)
+    rw = np.cumsum(rng.normal(size=40))
+    df40 = pl.DataFrame({"t": np.arange(40, dtype=float), "x": rw})
+    bank40 = rp.ModelBank([rp.spec.audit("a", columns=["x"], clock="t", gap_cap=10.0)])
+    bank40.fit_predict(df40)
+    f40 = bank40.check().filter(code="random_walk")
+    assert f40.height == 1
+    assert f40["threshold"][0] == pytest.approx(_check.mackinnon_tau_c(39), abs=1e-12)
+
+    # Below 25 adjacent pairs stays silent.
+    df20 = df40.head(20)
+    bank20 = rp.ModelBank([rp.spec.audit("a", columns=["x"], clock="t", gap_cap=10.0)])
+    bank20.fit_predict(df20)
+    assert bank20.check().filter(code="random_walk").is_empty()
+
+
+def test_lasso_solve_failures_uses_rate_threshold():
+    """B12: lasso solve_failures triggers on failure rate > 5% (with >= 20 learned
+    rows), not on raw failure count > 10."""
+    # High failure rate (> 5%) on strongly collinear features with tiny max_iter fires.
+    rng = np.random.default_rng(0)
+    n = 120
+    x0 = rng.normal(size=n)
+    x1 = x0 + 1e-4 * rng.normal(size=n)
+    y = 2.0 * x0 - x1 + 0.1 * rng.normal(size=n)
+    df = pl.DataFrame({"x0": x0, "x1": x1, "y": y})
+    spec = rp.spec.lasso(
+        "las", targets=["y"], features=["x0", "x1"], half_life=50.0, penalties=[1e-4], max_iter=2
+    )
+    bank = rp.ModelBank([spec])
+    bank.fit_predict(df)
+    n_fail = bank.solve_failures()["solve_failures"].item()
+    assert n_fail / n > _check.LASSO_FAIL_RATE
+    f = bank.check().filter(code="solve_failures")
+    assert f.height == 1
+    row = f.row(0, named=True)
+    assert row["severity"] == "info"
+    assert row["threshold"] == _check.LASSO_FAIL_RATE
+    assert row["value"] == pytest.approx(n_fail / n, rel=1e-12)
+
+    # Rate-based gate: 11 failures in 10,000,000 learned rows must NOT trigger,
+    # and an early hiccup at < 20 learned rows must NOT trigger.
+    class _ProxyNative:
+        def __init__(self, inner: object, learned: int) -> None:
+            self._inner = inner
+            self._learned = learned
+
+        def __getattr__(self, item: str) -> object:
+            return getattr(self._inner, item)
+
+        def summary(self, specs: list[int], keys: object) -> pl.DataFrame:
+            return self._inner.summary(specs, keys).with_columns(  # type: ignore[attr-defined]
+                pl.lit(self._learned, pl.Int64).alias("rows_learned"),
+                pl.lit(self._learned, pl.Int64).alias("rows_fed"),
+                pl.lit(self._learned, pl.Int64).alias("rows_processed"),
+            )
+
+    class _ProxyBank:
+        def __init__(self, inner: rp.ModelBank, learned: int) -> None:
+            self._inner = inner
+            self._specs = inner._specs
+            self._native = _ProxyNative(inner._native, learned)
+
+        def __getattr__(self, item: str) -> object:
+            return getattr(self._inner, item)
+
+    g_key = bank.summary()["group"][0]
+    for learned, fails, should_fire in [
+        (10_000_000, 11, False),
+        (15, 5, False),
+        (100, 5, False),
+        (100, 6, True),
+    ]:
+        pb = _ProxyBank(bank, learned)
+        found = _check._spec_findings(
+            pb,  # type: ignore[arg-type]
+            0,
+            None,
+            {("las", g_key): fails},
+            np,
+        )
+        codes = [r.code for r in found]
+        assert ("solve_failures" in codes) == should_fire, (learned, fails, codes)

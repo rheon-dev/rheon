@@ -129,14 +129,14 @@ def test_a_part_of_zero_weight_adds_only_its_rows_to_a_merge(where):
 
 
 def test_one_weighted_part_beside_zero_weight_parts_keeps_its_sums_to_the_bit():
-    """A1: the part that carries the weight is the merge's, as a key in one
-    part alone is."""
+    """A1 / A14: the part that carries the weight is the merge's, including ``n``,
+    because zero-weight rows do not count toward ``n`` or ``min_samples``."""
     df = _weighted(zero=slice(0, 100))
     weighted = rp.eval.sums(df[100:], "m", weight="w")
     merged = rp.eval.merge_sums(rp.eval.sums(df[:50], "m", weight="w"), weighted,
                                 rp.eval.sums(df[50:100], "m", weight="w"))  # fmt: skip
-    assert merged.drop("n").equals(weighted.drop("n"))
-    assert merged["n"][0] == 200
+    assert merged.equals(weighted)
+    assert merged["n"][0] == 100
 
 
 def test_parts_that_all_weigh_nothing_still_read_null():
@@ -144,8 +144,24 @@ def test_parts_that_all_weigh_nothing_still_read_null():
     merged = rp.eval.merge_sums(rp.eval.sums(df[:80], "m", weight="w"),
                                 rp.eval.sums(df[80:], "m", weight="w"))  # fmt: skip
     got = rp.eval.from_sums(merged, min_samples=1).row(0, named=True)
-    assert got["n"] == 200
+    assert got["n"] == 0
     assert [got[c] for c in ("r2", "ic", "mse", "rmse")] == [None] * 4
+
+
+def test_zero_weight_rows_do_not_satisfy_min_samples_in_sums():
+    """A14: 28 zero-weight rows + 2 positive-weight rows must stay below min_samples=30."""
+    df = _weighted(n=30, zero=slice(0, 28), seed=9)
+    s = rp.eval.sums(df, "m", weight="w")
+    assert s["n"][0] == 2
+    got = rp.eval.from_sums(s, min_samples=30).row(0, named=True)
+    assert got["n"] == 2
+    assert [got[c] for c in ("r2", "ic", "mse", "rmse", "hit_rate")] == [None] * 5
+    # With min_samples=2 the 2 positive-weight rows score identically to filtering w > 0.
+    got2 = rp.eval.from_sums(s, min_samples=2)
+    want2 = rp.eval.from_sums(
+        rp.eval.sums(df.filter(pl.col("w") > 0), "m", weight="w"), min_samples=2
+    )
+    assert got2.equals(want2)
 
 
 def test_a_query_whose_chunk_weighs_nothing_is_the_frame(chunks_of):

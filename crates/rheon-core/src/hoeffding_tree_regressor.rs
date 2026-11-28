@@ -26,8 +26,9 @@
 //! the group cap equally across targets (`cap / n_targets` per tree). Packed
 //! bytes per tree are `40 + 20B + 35L + sum(2 + 40 * slots)` (`<= struct +
 //! k * (2 + 40 * max_slots) * A`). Splits stop once `struct_bytes(L + 1,
-//! B + 1)` would pass the tree's cap; after every split and every 1,000
-//! learned rows, eligible leaves are ranked by SSE promise (`S`) and at most
+//! B + 1)` would pass the tree's cap; after every split and, while any leaf
+//! is capped, every `ceil(grace_period) * max(1, active_leaves)` learned rows,
+//! eligible leaves are ranked by SSE promise (`S`) and at most
 //! `(tree_cap - struct_bytes) / (k * (2 + 40 * max_slots))` stay active.
 //! Cap-deactivated leaves keep updating their target statistics and predicting
 //! their mean, and reactivate with fresh observers if their promise ranks back
@@ -56,8 +57,6 @@ const REG_HEADER_BYTES: u64 = 40;
 const REG_BRANCH_BYTES: u64 = 20;
 /// Packed leaf bytes (`n`, `mean`, `s`, `last` = 32, `depth: u16` = 2, `flags: u8` = 1).
 const REG_LEAF_BYTES: u64 = 35;
-/// Learned rows per tree between memory-cap promise re-rankings.
-const RECHECK_INTERVAL: u64 = 1_000;
 /// Default effective depth ceiling when `max_depth` is `None`.
 const DEFAULT_MAX_DEPTH: usize = u16::MAX as usize;
 
@@ -326,6 +325,17 @@ impl RegTree {
         reg_struct_bytes(self.leaves.len() + 1, self.branches.len() + 1) <= tree_cap
     }
 
+    fn recheck_interval(&self, cfg: &HoeffdingTreeRegressorCfg) -> u64 {
+        let grace = cfg.grace_period.ceil().max(1.0);
+        let gp = if grace >= u64::MAX as f64 {
+            u64::MAX
+        } else {
+            grace as u64
+        };
+        let active = self.leaves.iter().filter(|l| l.active).count().max(1) as u64;
+        gp.saturating_mul(active).max(1)
+    }
+
     fn enforce_cap(&mut self, cfg: &HoeffdingTreeRegressorCfg, tree_cap: u64) {
         let sb = reg_struct_bytes(self.leaves.len(), self.branches.len());
         let reserve = reg_obs_reserve(cfg.n_features, cfg.max_slots);
@@ -361,7 +371,9 @@ impl RegTree {
     fn learn(&mut self, x: &[f64], y: f64, w: f64, cfg: &HoeffdingTreeRegressorCfg, tree_cap: u64) {
         self.target_weight += w;
         self.rows_learned += 1;
-        if self.rows_learned.is_multiple_of(RECHECK_INTERVAL) {
+        if self.leaves.iter().any(|l| l.capped)
+            && self.rows_learned.is_multiple_of(self.recheck_interval(cfg))
+        {
             self.enforce_cap(cfg, tree_cap);
         }
         let mut node = self.root;

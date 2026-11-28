@@ -362,3 +362,43 @@ fn bocpd_523_refusals_are_clear() {
         "max_state_bytes must be above 0",
     );
 }
+
+#[test]
+fn known_variance_default_warmup_is_two_regardless_of_dimension() {
+    let d = 24;
+    let c_kv = BocpdCfg {
+        emission: BocpdEmission::KnownVariance,
+        prior_mean: None,
+        prior_nu: None,
+        prior_scale: None,
+        extras: Some(Box::new(BocpdCfgExtras {
+            obs_var: Some(vec![1.0]),
+            ..Default::default()
+        })),
+        ..cfg(d)
+    };
+    assert_eq!(c_kv.warm_rows_or_default(), 2);
+
+    // Other emissions keep d + 2 unchanged (2.0.0 compatibility).
+    assert_eq!(cfg(d).warm_rows_or_default(), d + 2);
+    let c_diag = BocpdCfg {
+        emission: BocpdEmission::Diag,
+        prior_nu: None,
+        ..cfg(d)
+    };
+    assert_eq!(c_diag.warm_rows_or_default(), d + 2);
+
+    // High-d KnownVariance warms up and emits finite p_change after just 2 rows.
+    let mut m = Bocpd::new(c_kv).unwrap();
+    let x0: Vec<f64> = (0..d).map(|i| i as f64 * 0.1).collect();
+    let x1: Vec<f64> = (0..d).map(|i| i as f64 * 0.1 + 0.5).collect();
+    let x2: Vec<f64> = (0..d).map(|i| i as f64 * 0.1 + 0.25).collect();
+    assert!(m.step(&x0, &[], 1.0, 1.0).pred[0].is_nan());
+    assert!(m.step(&x1, &[], 1.0, 1.0).pred[0].is_nan());
+    let s2 = m.step(&x2, &[], 1.0, 1.0);
+    assert!(
+        s2.pred[0].is_finite() && (0.0..=1.0).contains(&s2.pred[0]),
+        "KnownVariance should finish warm-up after 2 rows even at d={d}, got {:?}",
+        s2.pred
+    );
+}

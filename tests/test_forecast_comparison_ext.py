@@ -327,3 +327,41 @@ def test_mean_seqtest_cm_eb_matches_mapie_and_betting_and_clip_refusal():
         rp.eval.mean_seqtest(bad, targets=["d"], bound=2.0, clip=False)
     clipped = rp.eval.mean_seqtest(bad, targets=["d"], bound=2.0, clip=True)
     assert clipped["mean_seqtest"].struct.field("n_d").to_list() == [1, 2, 3]
+
+
+def test_giacomini_white_kish_effective_df_nw_and_min_samples():
+    """``giacomini_white`` gates on Kish effective sample size ``n_eff >= min_samples``,
+    ``n_eff >= q``, and ``df_NW = n_eff / (lags + 1) >= max(q + 1, 4)``."""
+    df = _two_spec_frame(seed=101, n=300)
+    # half_life=1.0 -> asymptotic Kish n_eff = 3.0 < 4.0: withheld on every row.
+    tiny = rp.eval.giacomini_white(
+        df, a="a", b="b", lags=0, instrument_lags=0, half_life=1.0, min_samples=1
+    )
+    assert tiny["giacomini_white"].struct.field("gw_y").null_count() == 300
+
+    # half_life=3.0 -> asymptotic n_eff ~ 8.66: with q=2, emits at lags=0 & min_samples=1,
+    # withheld at lags=2 (df_NW <= 2.89 < 4) or min_samples=15.
+    ok = rp.eval.giacomini_white(
+        df, a="a", b="b", lags=0, instrument_lags=1, half_life=3.0, min_samples=1
+    )
+    assert ok["giacomini_white"].struct.field("gw_y").drop_nulls().len() > 0
+    bad_lags = rp.eval.giacomini_white(
+        df, a="a", b="b", lags=2, instrument_lags=1, half_life=3.0, min_samples=1
+    )
+    assert bad_lags["giacomini_white"].struct.field("gw_y").null_count() == 300
+    bad_ms = rp.eval.giacomini_white(
+        df, a="a", b="b", lags=0, instrument_lags=1, half_life=3.0, min_samples=15
+    )
+    assert bad_ms["giacomini_white"].struct.field("gw_y").null_count() == 300
+
+    # Unweighted with q=5 (instrument_lags=4), lags=2 -> requires df_NW = n/3 >= 6 -> n >= 18.
+    short = _two_spec_frame(seed=102, n=19)  # 19 - 4 = 15 complete observations (< 18)
+    gw_short = rp.eval.giacomini_white(
+        short, a="a", b="b", lags=2, instrument_lags=4, min_samples=1
+    )
+    assert gw_short["n"][0] == 15 and gw_short["gw"][0] is None
+    long_df = _two_spec_frame(seed=102, n=25)  # 25 - 4 = 21 complete observations (>= 18)
+    gw_long = rp.eval.giacomini_white(
+        long_df, a="a", b="b", lags=2, instrument_lags=4, min_samples=1
+    )
+    assert gw_long["n"][0] == 21 and gw_long["gw"][0] is not None

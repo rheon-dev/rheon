@@ -434,18 +434,15 @@ class _GwState:
         if self.instrument_lags > 0:
             self.ring_d.append(d)
 
-    def stat(self, min_samples: int, few_rows: int) -> float | None:
-        if (
-            self.count < min_samples
-            or self.count <= few_rows
-            or self.count <= self.q
-            or self.w <= 0.0
-            or self.q_sum <= 0.0
-        ):
+    def stat(self, min_samples: int) -> float | None:
+        if self.w <= 0.0 or self.q_sum <= 0.0:
             return None
         q = self.q
         inv_w = 1.0 / self.w
         n_eff = (self.w * self.w) / self.q_sum
+        df_nw = n_eff / (self.lags + 1.0)
+        if n_eff < float(min_samples) or n_eff < float(q) or df_nw < float(max(q + 1, 4)):
+            return None
         zbar = [v * inv_w for v in self.zs]
         g0 = self.gam[0]
         om = [[g0[i][j] * inv_w for j in range(q)] for i in range(q)]
@@ -521,7 +518,6 @@ def _gw_chunk_rows(
     instrument_lags: int,
     lam: float,
     min_samples: int,
-    few_rows: int,
     name: str,
     states: dict[str, dict[tuple[Any, ...], _GwState]],
 ) -> pl.DataFrame:
@@ -563,7 +559,7 @@ def _gw_chunk_rows(
                 st = _GwState(q=q, lags=lags, instrument_lags=instrument_lags)
                 by_key[key] = st
             st.step(float(d_val), exog, lam)
-            vals[i] = st.stat(min_samples, few_rows)
+            vals[i] = st.stat(min_samples)
         out_series.append(pl.Series(f"gw_{t}", vals, dtype=pl.Float64))
     struct_col = pl.DataFrame(out_series).select(pl.struct(pl.all()).alias(name)).to_series()
     return chunk.with_columns(struct_col)
@@ -694,8 +690,11 @@ def giacomini_white(
         A finite positive number of rows adds one output column ``name`` with
         the exponentially weighted per-row statistic ``gw_<target>``.
     ``min_samples``
-        Minimum complete observations ``Z_t`` required before reporting a
-        statistic (30 by default).
+        Minimum effective sample size (complete observations ``Z_t`` without
+        ``half_life``, or ``(Σ w)² / Σ w²`` with ``half_life``) required before
+        reporting a statistic (30 by default). The statistic also requires at
+        least ``q`` effective observations and Bartlett effective degrees of
+        freedom of at least ``max(q + 1, 4)``.
     ``name``
         Output column name when ``half_life`` is set (``"giacomini_white"``
         by default).
@@ -740,7 +739,6 @@ def giacomini_white(
             "instrument_lags, or the number of instruments."
         )
         raise ValueError(msg)
-    few = _eval._few_rows(lags_i)
 
     if half_life is not None:
         _eval._check_half_life(who, half_life)
@@ -756,7 +754,6 @@ def giacomini_white(
                 inst_lags_i,
                 lam,
                 min_samples,
-                few,
                 name,
                 {t: {} for t in values},
             ).schema
@@ -779,7 +776,6 @@ def giacomini_white(
                         inst_lags_i,
                         lam,
                         min_samples,
-                        few,
                         name,
                         st,
                     )
@@ -789,7 +785,7 @@ def giacomini_white(
             return _eval._row_query(df, needed, schema, _step)
         states: dict[str, dict[tuple[Any, ...], _GwState]] = {t: {} for t in values}
         return _gw_chunk_rows(
-            df, values, keys, inst_cols, lags_i, inst_lags_i, lam, min_samples, few, name, states
+            df, values, keys, inst_cols, lags_i, inst_lags_i, lam, min_samples, name, states
         )
 
     # Summary mode (DataFrame or streaming LazyFrame).
@@ -867,7 +863,7 @@ def giacomini_white(
             continue
         for key in order:
             st = by_key[key]
-            stat = st.stat(min_samples, few)
+            stat = st.stat(min_samples)
             pval = None if stat is None else _native.special_chi2_sf(stat, float(q))
             if pval is not None and math.isnan(pval):
                 pval = None

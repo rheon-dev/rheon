@@ -48,8 +48,13 @@ use crate::clock_span::{DEFAULT_STATE_BYTES, HeldCap, Place};
 use crate::conformal::{Conformal, HELD_GAIN_BOUND, gauss_gain, upper_z};
 
 /// Default row window for `emit_conformal_p` when neither
-/// `conformal_p_window_rows` nor `conformal_p_window_size` is given.
+/// `conformal_p_window_rows` nor `conformal_p_window_size` is given, on an
+/// explicit clock or when `half_life` is infinite.
 pub const DEFAULT_CONFORMAL_P_WINDOW_ROWS: usize = 1000;
+
+/// Minimum default row window for `emit_conformal_p` when scaled by a short
+/// finite row-clock half-life.
+pub const MIN_CONFORMAL_P_WINDOW_ROWS: usize = 10;
 
 /// Fixed per-ring accounting bytes for [`ConformalPRing`].
 pub const CONFORMAL_P_FIXED_BYTES: u64 = 64;
@@ -57,6 +62,67 @@ pub const CONFORMAL_P_FIXED_BYTES: u64 = 64;
 /// Platform-independent accounting bytes per stored score in [`ConformalPRing`]
 /// (score + clock stamp + weight: 24 bytes).
 pub const CONFORMAL_P_ENTRY_BYTES: u64 = 24;
+
+/// Default row window for `emit_conformal_p` given a row-clock `decay` (`None`
+/// on an explicit clock column) and per-ring byte budget `per_ring_cap`.
+///
+/// On a row clock with a finite effective half-life `h`, scales to
+/// `ceil(10 * h)` (capturing `1 - 2^-10 ≈ 99.9%` of the decayed weight),
+/// floored at [`MIN_CONFORMAL_P_WINDOW_ROWS`] and capped to fit inside
+/// `per_ring_cap` (when `per_ring_cap` holds at least one entry). On an
+/// explicit clock or infinite half-life, returns
+/// [`DEFAULT_CONFORMAL_P_WINDOW_ROWS`].
+pub fn default_conformal_p_window_rows(row_clock_decay: Option<Decay>, per_ring_cap: u64) -> usize {
+    let Some(decay) = row_clock_decay else {
+        return DEFAULT_CONFORMAL_P_WINDOW_ROWS;
+    };
+    let half_life = match decay {
+        Decay::Halflife(h) if h.is_finite() && h > 0.0 => h,
+        Decay::Lam(l) if l.is_finite() && l > 0.0 && l < 1.0 => -1.0 / libm::log2(l),
+        _ => return DEFAULT_CONFORMAL_P_WINDOW_ROWS,
+    };
+    let scaled = (10.0 * half_life).ceil();
+    let raw = if !scaled.is_finite() || scaled >= usize::MAX as f64 {
+        usize::MAX
+    } else {
+        (scaled as usize).max(MIN_CONFORMAL_P_WINDOW_ROWS)
+    };
+    let avail = per_ring_cap.saturating_sub(CONFORMAL_P_FIXED_BYTES);
+    let max_fit = usize::try_from(avail / CONFORMAL_P_ENTRY_BYTES).unwrap_or(usize::MAX);
+    if max_fit == 0 { raw } else { raw.min(max_fit) }
+}
+
+/// Grid-aware variant of [`default_conformal_p_window_rows`]: takes the
+/// longest effective half-life across a spec's decays (keeping
+/// [`DEFAULT_CONFORMAL_P_WINDOW_ROWS`] if any decay is infinite or
+/// `row_clock_decays` is `None` / empty).
+pub fn default_conformal_p_window_rows_for_grid(
+    row_clock_decays: Option<&[Decay]>,
+    per_ring_cap: u64,
+) -> usize {
+    let Some(decays) = row_clock_decays else {
+        return DEFAULT_CONFORMAL_P_WINDOW_ROWS;
+    };
+    if decays.is_empty() {
+        return DEFAULT_CONFORMAL_P_WINDOW_ROWS;
+    }
+    let mut max_hl = 0.0_f64;
+    for &d in decays {
+        let h = match d {
+            Decay::Halflife(h) if h.is_finite() && h > 0.0 => h,
+            Decay::Lam(l) if l.is_finite() && l > 0.0 && l < 1.0 => -1.0 / libm::log2(l),
+            _ => return DEFAULT_CONFORMAL_P_WINDOW_ROWS,
+        };
+        if h > max_hl {
+            max_hl = h;
+        }
+    }
+    if max_hl > 0.0 {
+        default_conformal_p_window_rows(Some(Decay::Halflife(max_hl)), per_ring_cap)
+    } else {
+        DEFAULT_CONFORMAL_P_WINDOW_ROWS
+    }
+}
 
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
@@ -859,6 +925,58 @@ mod tests {
         assert_eq!(
             ring2.p_value_at(1.0, 10.0, Some(Stamp::from(15.0)), inf),
             None
+        );
+    }
+
+    #[test]
+    fn default_conformal_p_window_scales_with_row_clock_half_life() {
+        let cap = DEFAULT_STATE_BYTES;
+        // Explicit clock (None) or infinite half-life keeps 1,000.
+        assert_eq!(
+            default_conformal_p_window_rows(None, cap),
+            DEFAULT_CONFORMAL_P_WINDOW_ROWS
+        );
+        assert_eq!(
+            default_conformal_p_window_rows(Some(Decay::Halflife(f64::INFINITY)), cap),
+            DEFAULT_CONFORMAL_P_WINDOW_ROWS
+        );
+        assert_eq!(
+            default_conformal_p_window_rows(Some(Decay::Lam(1.0)), cap),
+            DEFAULT_CONFORMAL_P_WINDOW_ROWS
+        );
+        // Row clock with finite half-life scales to ceil(10 * h), floored at 10.
+        assert_eq!(
+            default_conformal_p_window_rows(Some(Decay::Halflife(50.0)), cap),
+            500
+        );
+        assert_eq!(
+            default_conformal_p_window_rows(Some(Decay::Halflife(200.0)), cap),
+            2_000
+        );
+        assert_eq!(
+            default_conformal_p_window_rows(Some(Decay::Halflife(0.5)), cap),
+            MIN_CONFORMAL_P_WINDOW_ROWS
+        );
+        // Very long half-life is bounded to fit per_ring_cap.
+        let max_fit = ((cap - CONFORMAL_P_FIXED_BYTES) / CONFORMAL_P_ENTRY_BYTES) as usize;
+        assert_eq!(
+            default_conformal_p_window_rows(Some(Decay::Halflife(100_000.0)), cap),
+            max_fit
+        );
+        // Grid takes longest finite half-life, or 1,000 if any entry is infinite.
+        assert_eq!(
+            default_conformal_p_window_rows_for_grid(
+                Some(&[Decay::Halflife(20.0), Decay::Halflife(150.0)]),
+                cap
+            ),
+            1_500
+        );
+        assert_eq!(
+            default_conformal_p_window_rows_for_grid(
+                Some(&[Decay::Halflife(20.0), Decay::Halflife(f64::INFINITY)]),
+                cap
+            ),
+            DEFAULT_CONFORMAL_P_WINDOW_ROWS
         );
     }
 }

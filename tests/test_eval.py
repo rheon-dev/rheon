@@ -516,7 +516,9 @@ def test_sums_drops_a_row_whose_weight_the_bank_would_not_learn_from(bad):
     want = rp.eval.sums(out.filter(~marked.is_in(rows)), "m", weight="w")
     assert got.equals(want), (got, want)
     scored = out["m"].struct.field("pred_y0").is_not_null().sum()
-    assert rp.eval.sums(out, "m", weight="w")["n"][0] == scored, "the zero-weight row is in n"
+    assert rp.eval.sums(out, "m", weight="w")["n"][0] == scored - 1, (
+        "the zero-weight row is excluded from n"
+    )
 
 
 def test_a_prediction_at_zero_is_left_out_in_the_bank_and_here():

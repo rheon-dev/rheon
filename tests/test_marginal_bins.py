@@ -682,3 +682,44 @@ def test_bin_warm_rows_moves_the_edges_to_its_own_rows():
     on = pairs(df.head(at + 1), bins=4, bin_warm_rows=100, weight="w")
     assert list(before["bin_edges"]) == [] and before["split_gain"] is None
     assert list(on["bin_edges"]) == got[100]
+
+
+def test_default_bin_warm_rows_scales_with_bins_and_preserves_default_16():
+    """Default bin_warm_rows is ceil(62.5 * B): 250 at B=4, 1000 at B=16 (bit-identical
+    to 2.0.0), 4000 at B=64, clamped when bin_budget would otherwise refuse it."""
+    import json
+
+    from rheon import _rheon as _native
+    from rheon import _spec
+
+    def warm_of(**kw):
+        spec = rp.spec.marginal("m", targets=["y"], features=["x"], half_life=float("inf"), **kw)
+        return json.loads(_native.resolved_defaults(_spec._json(spec)))["model"]["bins"][
+            "warm_rows"
+        ]
+
+    assert warm_of(bins=4) == 250
+    assert warm_of(bins=16) == 1000
+    assert warm_of(bins=64) == 4000
+    assert warm_of(bins=4, bin_warm_rows=77) == 77
+
+    # Tight bin_budget clamps default warm-up for B=64 instead of refusing.
+    spec_cap = rp.spec.marginal(
+        "m",
+        targets=["y0", "y1"],
+        features=[f"x{i}" for i in range(10)],
+        half_life=float("inf"),
+        bins=64,
+        bin_budget=0.1,
+    )
+    w_cap = json.loads(_native.resolved_defaults(_spec._json(spec_cap)))["model"]["bins"][
+        "warm_rows"
+    ]
+    assert 64 <= w_cap < 4000
+
+    # End-to-end: bins=4 freezes edges at row 250; bins=16 freezes edges at row 1,000.
+    df = stream(n=1005, shape="threshold", seed=7)
+    assert list(pairs(df.head(249), bins=4, bin_warm_rows=None)["bin_edges"]) == []
+    assert len(list(pairs(df.head(250), bins=4, bin_warm_rows=None)["bin_edges"])) == 3
+    assert list(pairs(df.head(999), bins=16, bin_warm_rows=None)["bin_edges"]) == []
+    assert len(list(pairs(df.head(1000), bins=16, bin_warm_rows=None)["bin_edges"])) == 15

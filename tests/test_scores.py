@@ -834,3 +834,75 @@ def test_fifty_seeds_scores_match_sklearn_river_and_mapie():
     ]:
         worst, _ = ledger.record("scores_oracles", case, vals, floor=1e-12)
         assert worst < 1e-11, (case, worst)
+
+
+def test_zero_weight_rows_excluded_from_interval_metrics_and_pinball_min_samples():
+    """A14 / B11: zero-weight rows do not count toward min_samples or SSC strata in
+    ``interval_metrics`` or ``pinball_and_d2_frame``."""
+    from rheon.polars import eval as _eval
+    from rheon.polars._eval_intervals import pinball_and_d2_frame
+
+    rng = np.random.default_rng(314)
+    n = 30
+    y = rng.normal(size=n)
+    pred = y + 0.1 * rng.normal(size=n)
+    lo = pred - rng.uniform(0.5, 2.0, size=n)
+    hi = pred + rng.uniform(0.5, 2.0, size=n)
+    w = np.zeros(n)
+    w[-2:] = [1.0, 2.0]  # Only 2 positive-weight rows out of 30!
+
+    df = pl.DataFrame(
+        {
+            "y": y,
+            "w": w,
+            "m": pl.DataFrame({"pred_y": pred, "lo_y": lo, "hi_y": hi}).to_struct("m"),
+        }
+    )
+
+    # 1. interval_metrics: 28 zero-weight + 2 positive-weight must stay below min_samples=30.
+    iv30 = rp.eval.interval_metrics(df, "m", coverage=0.9, weight="w", min_samples=30, ssc_bins=3)
+    assert iv30["n"][0] == 2
+    assert iv30["coverage"][0] is None and iv30["winkler"][0] is None and iv30["ssc"][0] is None
+
+    # Even with min_samples=1, only 2 positive-weight rows < ssc_bins=3 -> ssc is None,
+    # while coverage/mean_width/winkler match the positive-weight subset to the bit.
+    iv1 = rp.eval.interval_metrics(df, "m", coverage=0.9, weight="w", min_samples=1, ssc_bins=3)
+    iv_pos = rp.eval.interval_metrics(
+        df.filter(pl.col("w") > 0), "m", coverage=0.9, weight="w", min_samples=1, ssc_bins=3
+    )
+    assert iv1.equals(iv_pos)
+    assert iv1["n"][0] == 2 and iv1["ssc"][0] is None and iv1["coverage"][0] is not None
+
+    # 2. pinball_and_d2_frame: 28 zero-weight + 2 positive-weight withheld at min_samples=30.
+    slots = [("pred_y", "y", pl.col("y"))]
+    q30 = pinball_and_d2_frame(
+        df,
+        "m",
+        slots,
+        ["w"],
+        ["slot", "target"],
+        [0.5],
+        30,
+        weight="w",
+        scored_fn=_eval._scored,
+        weighed_fn=_eval._weighed,
+    )
+    assert q30["pinball_q0.5"][0] is None and q30["d2_pinball_q0.5"][0] is None
+
+    # 29 zero-weight + 1 positive-weight: at min_samples=1, pinball computes, d2_pinball is None.
+    w1 = np.zeros(n)
+    w1[-1] = 1.5
+    df1 = df.with_columns(pl.Series("w", w1))
+    q1 = pinball_and_d2_frame(
+        df1,
+        "m",
+        slots,
+        ["w"],
+        ["slot", "target"],
+        [0.5],
+        1,
+        weight="w",
+        scored_fn=_eval._scored,
+        weighed_fn=_eval._weighed,
+    )
+    assert q1["pinball_q0.5"][0] is not None and q1["d2_pinball_q0.5"][0] is None

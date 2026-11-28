@@ -131,6 +131,10 @@ fn derived(model: &AnyModel) -> Option<Value> {
                 json!({ "bin_budget": number(b.budget_mib_or_default()) })
             }
         }),
+        AnyModel::Dependence(m) => m
+            .cfg()
+            .resolved_bin_warm_rows()
+            .map(|w| json!({ "bin_warm_rows": w })),
         _ => None,
     }
 }
@@ -178,10 +182,7 @@ fn stream_settings(spec: &Spec, stream: &Stream, model: &AnyModel) -> Value {
         if spec.conformal_p_window_size.is_some() {
             Value::Null
         } else {
-            json!(
-                spec.conformal_p_window_rows
-                    .unwrap_or(rheon_core::DEFAULT_CONFORMAL_P_WINDOW_ROWS)
-            )
+            json!(spec.conformal_p_window_rows_or_default())
         },
     );
     s.insert(

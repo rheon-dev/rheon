@@ -1475,8 +1475,8 @@ def interval_metrics(
         :func:`unpack`'s: columns the name-based rule may read as targets when
         ``spec`` is a bare name.
     ``weight``
-        Optional non-negative weight column. Rows with null, non-finite, or
-        negative weight are skipped.
+        Optional non-negative weight column. Rows with zero, null, non-finite,
+        or negative weight are skipped.
     ``window_rows``
         Optional positive integer window size. When set, splits each key's
         scored rows in order into non-overlapping consecutive windows of
@@ -3514,12 +3514,8 @@ def sums(
         row 1, and then ``w`` equals ``n``. A row whose weight is null,
         NaN, infinite, past the input bound of 1e100, or negative is
         dropped: the bank skips the first four and refuses a negative one.
-        A row of weight 0 is kept, counted in ``n`` and not in ``w``, so
-        :func:`from_sums`' ``min_samples`` counts it: 30 rows of which 28
-        weigh 0 pass ``min_samples=30`` and are scored on two. Filter out
-        the rows that are not to count before this call, rather than
-        weighting them 0, where ``min_samples`` is to count the rows
-        scored.
+        A row of weight 0 contributes nothing to ``n``, ``w``, or the moments,
+        so :func:`from_sums`' ``min_samples`` counts only positive-weight rows.
     ``binary``
         :func:`metrics`' own: whether ``hits`` and ``signed`` count a
         classifier's accuracy at 0.5 or the sign test. Keep the sums of the
@@ -3683,7 +3679,7 @@ def _sum_aggs(binary: bool, no_hit: bool, *, weighted: bool = True) -> list[pl.E
         hits = times(((y.sign() == p.sign()) & scored).cast(pl.Float64))
         signed = times(scored.cast(pl.Float64))
     return [
-        pl.len().cast(pl.Int64).alias("n"),
+        (pl.len() if w is None else (w > 0.0).sum()).cast(pl.Int64).alias("n"),
         tw.alias("w"),
         my.alias("mean_y"),
         mp.alias("mean_pred"),
@@ -3931,8 +3927,8 @@ def merge_sums(first: pl.DataFrame, *rest: pl.DataFrame) -> pl.DataFrame:
         cov  = sum(cov_g + w_g * (mean_y_g - mean_y) * (mean_pred_g - mean_pred))
 
     ``n``, ``sse``, ``hits`` and ``signed`` are summed. A frame whose rows
-    all weigh 0 (``w`` is 0, its means 0/0) adds its ``n`` and nothing
-    else. Where every frame that weighs has one mean, the pooled mean is
+    all weigh 0 (``w`` is 0, ``n`` is 0, its means 0/0) adds nothing to a
+    weighted merge. Where every frame that weighs has one mean, the pooled mean is
     that value, exactly, so a constant target or prediction keeps a second
     moment of exactly 0, and its ``r2`` or ``ic`` the null of
     :func:`from_sums`, through any number of merges.
@@ -4111,10 +4107,10 @@ def from_sums(s: pl.DataFrame, *, min_samples: int = 30, binary: bool = False) -
     ``s``
         A frame :func:`sums` or :func:`merge_sums` returned.
     ``min_samples``
-        The fewest rows a key is scored on, 30 by default. A key with fewer
-        rows keeps its row, with ``n`` filled and the scores null, as
-        :func:`metrics` keeps it. It counts rows, ``n``, whatever they
-        weigh: a row of weight 0 counts (see :func:`sums`' ``weight``).
+        The fewest positive-weight rows a key is scored on, 30 by default. A
+        key with fewer rows keeps its row, with ``n`` filled and the scores
+        null, as :func:`metrics` keeps it. Rows of weight 0 are not counted
+        in ``n`` (see :func:`sums`' ``weight``).
     ``binary``
         Say that the sums were made under :func:`sums`' ``binary``, and
         name the columns as :func:`metrics` names them under it:
@@ -4548,8 +4544,9 @@ def _ew_test(
     ``W_l`` the pairs' weight, ``μ_l`` and ``ν_l`` their means and ``c_l =
     (var(u + v) − var(u − v)) / 4`` their covariance. The statistic is null
     where ``S`` is no more than its rounding, :func:`_ew_rounding`, and
-    until the key has ``min_samples`` rows with a value and more than
-    :func:`_few_rows`.
+    until Kish's effective sample size ``n_eff = (Σ ω)² / Σ ω²`` reaches
+    ``min_samples`` and Bartlett effective degrees of freedom
+    ``n_eff / (lags + 1) >= 4``.
     """
     if isinstance(df, pl.LazyFrame):
         return _ew_query(df, values, keys, lags, half_life, stat, name, min_samples, hln)
@@ -4802,6 +4799,8 @@ def _ew_chunk(
 
         n = c + j
         w1, w2 = total(lam, n), total(lam2, n)
+        n_eff = (w1 * w1) / w2
+        df_nw = n_eff / float(lags + 1)
         m = p("m")
         s0 = w2 * (p("v2") + (p("m2") - m) * (p("m2") - m))
         s = s0
@@ -4814,9 +4813,10 @@ def _ew_chunk(
         r = w2 * (p("v2") + p("m2") * p("m2"))
         out_col = _free(taken, f"{stat}_{len(temps)}")
         cut = _ew_rounding(lags, lam2, s0, r, w1, w2)
-        # `n`, the key's rows with a value up to this one, is a whole number
-        # held in a float, so the comparisons are exact.
-        live = (s > cut) & (n >= float(min_samples)) & (n > float(_few_rows(lags)))
+        # Gate both min_samples and Newey-West Bartlett degrees of freedom on
+        # Kish effective sample size n_eff = (sum w)^2 / sum(w^2), so a long
+        # stream with tiny half_life (small n_eff) is properly withheld.
+        live = (s > cut) & (n_eff >= float(min_samples)) & (df_nw >= float(_ROWS_PER_LAG))
         raw_stat = m * w1 / s.sqrt()
         if hln:
             raw_stat = raw_stat * hln_ew_factor_expr(w1, w2, lags)
@@ -5431,9 +5431,11 @@ def clark_west(
     to its squared error on average. Clark and West add that term back.
 
     ``cw`` is null where :func:`diebold_mariano`'s ``dm`` is, of ``f``:
-    where every ``f`` of a key is the same value, on a key with at most
-    ``4 (lags + 1)`` rows with an ``f``, and, with ``half_life``, before a
-    key's ``min_samples``-th row and where ``S`` is zero but for rounding.
+    where every ``f`` of a key is the same value, on an unweighted key with at
+    most ``4 (lags + 1)`` rows with an ``f``, and, with ``half_life``, while
+    effective sample size ``(Σ w)² / Σ w²`` is below ``min_samples``, Bartlett
+    effective degrees of freedom ``((Σ w)² / Σ w²) / (lags + 1) < 4``, or ``S``
+    is zero but for rounding.
     Its ``lags`` are chosen as :func:`diebold_mariano`'s are: 0 only where
     ``f`` is uncorrelated from row to row, and about twice the horizon for
     a target that looks ahead.

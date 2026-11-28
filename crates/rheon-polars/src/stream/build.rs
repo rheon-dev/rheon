@@ -11,11 +11,6 @@ use super::*;
 /// count is the edges' and this is not read.
 const DEFAULT_BINS: usize = 16;
 
-/// Learned rows held before the bin edges are fixed. A thousand rows put
-/// roughly sixty in each of sixteen quantile bins -- enough for edges that do
-/// not move much -- and hold 8 KB per feature while they wait.
-const DEFAULT_BIN_WARM_ROWS: usize = 1_000;
-
 /// The cut of `bin_stat = "huber"` in units of the target's robust scale
 /// when the spec names none: `huber`'s default, the cut at which Huber's
 /// estimator keeps 95% of the mean's efficiency on normal errors.
@@ -812,58 +807,86 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                 },
                 bins: match (bins, bin_edges) {
                     (None, None) => None,
-                    (_, edges) => Some(Box::new(rheon_core::BinCfg {
-                        n_bins: bins.unwrap_or(DEFAULT_BINS),
-                        edges: edges.clone(),
-                        rule: match bin_rule.as_deref() {
-                            None | Some("quantile") => rheon_core::BinRule::Quantile,
-                            Some("fixed") => rheon_core::BinRule::Fixed,
-                            Some(other) => {
-                                return Err(crate::words_refusal(
-                                    "bin_rule",
-                                    &["quantile", "fixed"],
-                                    other,
-                                ));
+                    (_, edges) => {
+                        let n_bins = bins.unwrap_or(DEFAULT_BINS);
+                        let warm_rows = bin_warm_rows.unwrap_or_else(|| {
+                            if edges.is_some() {
+                                rheon_core::default_bin_warm_rows(n_bins)
+                            } else {
+                                let mib = bin_budget
+                                    .map(|n| n.0)
+                                    .unwrap_or(rheon_core::DEFAULT_BUDGET_MIB);
+                                let mut cap = if mib.is_finite() && mib > 0.0 {
+                                    Some((mib * (1u64 << 20) as f64).floor() as u64)
+                                } else {
+                                    None
+                                };
+                                if let Some(sb) = spec.effective_max_state_bytes() {
+                                    cap = Some(cap.map_or(sb, |c| c.min(sb)));
+                                }
+                                rheon_core::default_bin_warm_rows_capped(
+                                    n_bins,
+                                    spec.k(),
+                                    spec.m(),
+                                    cap,
+                                )
                             }
-                        },
-                        warm_rows: bin_warm_rows.unwrap_or(DEFAULT_BIN_WARM_ROWS),
-                        stat: match bin_stat.as_deref() {
-                            None | Some("mean") => rheon_core::BinStat::Mean,
-                            Some("huber") => rheon_core::BinStat::Huber {
-                                delta: bin_huber_delta.map_or(DEFAULT_BIN_HUBER_DELTA, |n| n.0),
+                        });
+                        Some(Box::new(rheon_core::BinCfg {
+                            n_bins,
+                            edges: edges.clone(),
+                            rule: match bin_rule.as_deref() {
+                                None | Some("quantile") => rheon_core::BinRule::Quantile,
+                                Some("fixed") => rheon_core::BinRule::Fixed,
+                                Some(other) => {
+                                    return Err(crate::words_refusal(
+                                        "bin_rule",
+                                        &["quantile", "fixed"],
+                                        other,
+                                    ));
+                                }
                             },
-                            Some(other) => {
-                                return Err(crate::words_refusal(
-                                    "bin_stat",
-                                    &["mean", "huber"],
-                                    other,
-                                ));
-                            }
-                        },
-                        // On by default under a finite Huber cut, off
-                        // otherwise (`validate` refuses a count given there).
-                        refit_rows: match (bin_stat.as_deref(), bin_huber_delta) {
-                            // `max(500, 30 · bins)`, the widest feature's
-                            // bins (docs/PLAN.md task 278): 500 at the
-                            // default 16, which the learned edges' warm-up of
-                            // 1,000 rows covers, so by default the refit runs
-                            // when the edges are fixed and holds no row of
-                            // its own.
-                            (Some("huber"), d) if d.is_none_or(|d| d.0.is_finite()) => {
-                                bin_refit_rows.unwrap_or_else(|| {
-                                    rheon_core::default_bin_refit_rows(match edges {
-                                        Some(e) => e.iter().map(|f| f.len() + 1).max().unwrap_or(1),
-                                        None => bins.unwrap_or(DEFAULT_BINS),
+                            warm_rows,
+                            stat: match bin_stat.as_deref() {
+                                None | Some("mean") => rheon_core::BinStat::Mean,
+                                Some("huber") => rheon_core::BinStat::Huber {
+                                    delta: bin_huber_delta.map_or(DEFAULT_BIN_HUBER_DELTA, |n| n.0),
+                                },
+                                Some(other) => {
+                                    return Err(crate::words_refusal(
+                                        "bin_stat",
+                                        &["mean", "huber"],
+                                        other,
+                                    ));
+                                }
+                            },
+                            // On by default under a finite Huber cut, off
+                            // otherwise (`validate` refuses a count given there).
+                            refit_rows: match (bin_stat.as_deref(), bin_huber_delta) {
+                                // `max(500, 30 · bins)`, the widest feature's
+                                // bins (docs/PLAN.md task 278): 500 at the
+                                // default 16, which the learned edges' warm-up of
+                                // 1,000 rows covers, so by default the refit runs
+                                // when the edges are fixed and holds no row of
+                                // its own.
+                                (Some("huber"), d) if d.is_none_or(|d| d.0.is_finite()) => {
+                                    bin_refit_rows.unwrap_or_else(|| {
+                                        rheon_core::default_bin_refit_rows(match edges {
+                                            Some(e) => {
+                                                e.iter().map(|f| f.len() + 1).max().unwrap_or(1)
+                                            }
+                                            None => n_bins,
+                                        })
                                     })
-                                })
-                            }
-                            _ => 0,
-                        },
-                        // Under `bin_stat = "huber"`, the target's MAD
-                        // sketch in units of its first deviation.
-                        mad_anchor: true,
-                        budget_mib: bin_budget.map(|n| n.0),
-                    })),
+                                }
+                                _ => 0,
+                            },
+                            // Under `bin_stat = "huber"`, the target's MAD
+                            // sketch in units of its first deviation.
+                            mad_anchor: true,
+                            budget_mib: bin_budget.map(|n| n.0),
+                        }))
+                    }
                 },
                 feature_moments: match feature_moments.as_deref() {
                     None | Some("per_target") => rheon_core::FeatureMomentLayout::PerTarget,
