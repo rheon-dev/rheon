@@ -349,9 +349,8 @@ impl Spec {
         // their own max_state_bytes run their own cap range check via
         // effective_max_state_bytes, except sgd without loss="huber" and
         // kalman without smooth_lag when a diagnostic state cap is on).
-        let diag_cap = self.emit_conformal_p
-            || self.uses_calibration_clock_hac()
-            || self.has_feature_ks();
+        let diag_cap =
+            self.emit_conformal_p || self.uses_calibration_clock_hac() || self.has_feature_ks();
         let model_checks_cap = self.model.takes_model_max_state_bytes()
             && !matches!(
                 &self.model,

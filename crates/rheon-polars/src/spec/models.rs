@@ -2225,10 +2225,7 @@ impl Spec {
                             self.name
                         ));
                     }
-                    if prior_from.is_some()
-                        || prior_weight.is_some()
-                        || !*prior_include_intercept
-                    {
+                    if prior_from.is_some() || prior_weight.is_some() || !*prior_include_intercept {
                         no.refuse(format!(
                             "spec {:?}: evidence=True cannot be combined with prior_from, \
                              prior_weight or prior_include_intercept=False. Leave them out, or \
