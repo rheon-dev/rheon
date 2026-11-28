@@ -37,7 +37,7 @@ from rheon import polars as rp
 from rheon.polars._basis import _bspline_scalar_eval, _nullspace_qr_2rows
 from rheon.polars.ops import bspline, hinge, interactions, natural_spline
 
-TIER = "essential"
+TIER = "mixed"
 
 REPO = Path(__file__).resolve().parent.parent
 GRID_SEEDS = list(range(50))

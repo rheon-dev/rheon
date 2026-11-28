@@ -18,7 +18,7 @@ import ledger
 import rheon
 from rheon import polars as rp
 
-TIER = "essential"
+TIER = "mixed"
 
 
 def _exact_reliability(

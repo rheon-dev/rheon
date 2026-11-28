@@ -299,6 +299,50 @@ model that only the new build has is listed as an addition and passes.
 
 ### Added
 
+- **Wave 6 feature additions: step-back policy, basis expansion, streaming
+  classification metrics, hierarchical parent priors, bounded `ewridge` QP,
+  stable `FormulaTarget` wire format, and embargoed fixed-lag smoothing**
+  (PLAN 571, 572, 574–577, §27.5; all new options default off so existing
+  outputs and saved-state layouts are unchanged):
+  - **Per-group step-back skip policy** (PLAN 571): `on_step_back="error"|"skip"`
+    across `ModelBank` specs, `with_windows`, `merge`, `refresh_time`, and
+    `bars`, composable with `restart_after_step_back` (skips stale rows within
+    the threshold, restarts beyond it), emitting one summary `ReadinessWarning`
+    per chunk when rows are skipped and persisting skip counts across save/load.
+  - **Stateless basis-expansion operators** (PLAN 572): `rp.ops.bspline`,
+    `rp.ops.natural_spline` (pure-Python Householder QR, zero NumPy),
+    `rp.ops.hinge`, and `rp.ops.interactions`, verified against `scipy` and
+    `scikit-learn` across 6 × 50-seed oracle grids (`<= 7.15e-14`).
+  - **Streaming classification metrics and clocked-embargo calibration HAC**
+    (PLAN 574): `rp.eval.classification_metrics` and `rp.eval.reliability_bins`
+    using per-class `TDigest` sketches for ROC-AUC and Average Precision PR-AUC
+    plus exact uniform-bin ECE, MCE, and Brier (verified against `scikit-learn`
+    across 2 × 50-seed oracle grids), plus clock-duration Bartlett HAC over
+    `2 * embargo` in `emit_calibration` bounded by `max_state_bytes`.
+  - **Hierarchical parent priors on `ewridge`** (PLAN 575): `prior_from`,
+    `prior_weight`, `prior_include_intercept`, and dynamic `List(Float64)`
+    `coef_prior` column with topological DAG execution, strictly causal
+    pre/post capture (zero lookahead even on `W == 0` cold-start rows), exact
+    sum-scale normal equations composing with standardization, windows, linear
+    `constraints`, and QP bounds, `ModelBank.predict` cold-start borrowing, and
+    a 50-seed `scipy` oracle grid (`<= 1.12e-13`).
+  - **Box bounds and fixed slope sum on `ewridge` and `rheon.gram.solve`**
+    (PLAN 576): `coef_min`, `coef_max`, and `coef_sum` solved by a pure-Rust
+    warm-started primal active-set QP (`kkt_err <= 4.22e-15` across a 50-seed
+    `scipy` SLSQP oracle grid), switching default readiness to `min_weight` and
+    refusing incompatible least-squares uncertainty flags, `constraints`,
+    `evidence`, and `feature_sets`.
+  - **Stable `FormulaTarget` serialized wire format** (PLAN 577): removed the
+    unstable-format CLI warning and locked all `FormulaTarget`, `Node`, and
+    `OpKind` wire representations under an exhaustive Rust contract test.
+  - **Fixed-lag smoothing under `embargo` and look-ahead formula targets**
+    (PLAN 496 / §27.5): `kalman` and `hmm` specs with `smooth_lag` now run
+    under `embargo` and look-ahead formula targets by emitting parallel
+    list-typed smoothed fields (`List(List(Float64))` for `smoothed_coef` /
+    `smoothed_se_coef`, `List(Float64)` for `smoothed_state<j>`, and
+    `List(<clock>)` for `smoothed_for*`, `null` on zero-release rows) with full
+    `LastRow` persistence and zero change to non-delayed flat outputs.
+
 - **Wave 5 feature additions across covariance, window operators, Kalman,
   diagnostics, forecast comparison, regimes, changepoints, regressions, and
   clustering** (PLAN 517–525; all new options default off so existing outputs
