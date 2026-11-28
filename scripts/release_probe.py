@@ -131,23 +131,26 @@ def stream(n: int = 400, seed: int = 7) -> pl.DataFrame:
 def _returns(n: int) -> np.ndarray:
     """Three series of returns, `ra`, `rb` and `rc`, for `garch` and `dcc`,
     from a generator of their own (no other column's draws move): each a
-    GJR-GARCH(1,1), `σ² = 0.01 + (0.10 + 0.15·1[r < 0]) r² + 0.82 σ²` on
-    the previous row, whose innovations are a DCC(1,1) of `a = 0.12`, `b =
-    0.85` about a correlation of 0.3. On the linear `y` and `z` neither
-    model ever starts: each waits until a likelihood-ratio test tells its
-    process from a constant, so every output was null (PLAN 578j, CI-2).
-    The seed is one whose `garch` starts both targets before `RESUME_AT`
-    and whose `dcc` reports a correlation in the second half."""
-    rng = np.random.default_rng([9, 578])
+    stationary GARCH(1,1), `σ² = 0.05 + 0.35 r² + 0.45 σ²`, whose innovations
+    are an asymmetric DCC(1,1) of `a = 0.25`, `b = 0.55`, `g = 0.10` about a
+    correlation of 0.3. On the linear `y` and `z` neither model ever starts:
+    each waits until its likelihood-ratio and finite-sample SE identification
+    tests separate the process from constant variance or correlation, so every
+    output was null (PLAN 578j, CI-2). The seed is one whose `garch_span`
+    starts both targets before `RESUME_AT` and whose `dcc` (through GARCH
+    margins, asymmetric) reports correlations in the second half."""
+    rng = np.random.default_rng([52, 587])
     qbar = np.full((3, 3), 0.3) + 0.7 * np.eye(3)
+    nbar = 0.5 * qbar
     q, e = qbar.copy(), np.zeros(3)
-    var, prev = np.full(3, 0.01 / (1 - 0.10 - 0.075 - 0.82)), np.zeros(3)
+    var, prev = np.full(3, 0.05 / (1.0 - 0.35 - 0.45)), np.zeros(3)
     out = np.empty((n, 3))
     for i in range(n):
-        q = 0.03 * qbar + 0.12 * np.outer(e, e) + 0.85 * q
+        neg = np.minimum(e, 0.0)
+        q = 0.15 * qbar - 0.10 * nbar + 0.25 * np.outer(e, e) + 0.10 * np.outer(neg, neg) + 0.55 * q
         d = np.sqrt(np.diag(q))
         e = np.linalg.cholesky(q / np.outer(d, d)) @ rng.standard_normal(3)
-        var = 0.01 + (0.10 + 0.15 * (prev < 0)) * prev**2 + 0.82 * var
+        var = 0.05 + 0.35 * prev**2 + 0.45 * var
         prev = np.sqrt(var) * e
         out[i] = prev
     return out

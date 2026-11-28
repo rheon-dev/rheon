@@ -320,14 +320,13 @@ def compare_with_margins(form: str, seed: int, n: int = 10_000) -> dict:
     out = bank.fit_predict(pl.DataFrame({nm: x[:, j] for j, nm in enumerate(names)})).unnest("m")
     th = np.array(bank.coef()["coef"].to_list())
     pairs = [(i, j) for i in range(k) for j in range(i + 1, k)]
-    half = slice(n // 2, n)
+    corrs = [out[f"corr_{names[i]}_{names[j]}"].to_numpy() for i, j in pairs]
+    started = int(np.argmax(np.isfinite(corrs[0])))
+    assert np.isfinite(corrs[0][started:]).all() and started <= n * 7 // 10, (form, seed, started)
+    tail = slice(max(n // 2, started), n)
     rho_gap = max(
-        float(
-            np.median(
-                np.abs(out[f"corr_{names[i]}_{names[j]}"].to_numpy()[half] - b["r"][half, i, j])
-            )
-        )
-        for i, j in pairs
+        float(np.median(np.abs(corrs[p][tail] - b["r"][tail, i, j])))
+        for p, (i, j) in enumerate(pairs)
     )
     return {"gap": (th - b["theta"]) / b["se"], "rho_gap": rho_gap, "online": th}
 
@@ -337,7 +336,7 @@ def compare_with_margins(form: str, seed: int, n: int = 10_000) -> dict:
 def test_through_garch_margins_against_the_two_step_batch_fit(form):
     """The margins add their own differences to the second stage's: the
     online margins' out-of-sample variances against ``arch``'s in-sample
-    ones, and their 2,000-row start, which the correlation's own start
+    ones, and their adaptive starts, which the correlation's own start
     follows. Measured on ten seeds a form (2026-11-22): the largest gap
     1.20 and 1.11 of the oracle's standard errors, the worst pair's median
     correlation gap at most 0.0118 and 0.0102. Held: 2.5 SE and 0.025 on

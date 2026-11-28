@@ -556,6 +556,7 @@ pub fn garch_cfg(spec: &Spec) -> Result<rheon_core::GarchCfg, String> {
         min_weight: spec.min_periods_or_default(),
         max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
         n_inputs: spec.features.len(),
+        adaptive_start: start_rows.is_none() && start_span.is_none(),
     };
     cfg.validate()?;
     let labels: Vec<String> = horizons
@@ -786,6 +787,7 @@ pub fn dcc_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DccCfg, String> 
             min_weight: 0.0,
             max_state_bytes: None,
             n_inputs: 0,
+            adaptive_start: margin_start_rows.is_none() && margin_start_span.is_none(),
         }),
         params,
         decay,
@@ -794,6 +796,7 @@ pub fn dcc_cfg(spec: &Spec, decay: Decay) -> Result<rheon_core::DccCfg, String> 
         start_span: start_span.as_ref().map(Span::value),
         min_weight: spec.min_periods_or_default(),
         max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
+        adaptive_start: start_rows.is_none() && start_span.is_none(),
     };
     // A margin's refusal names the margins' parameters as the spec spells
     // them.

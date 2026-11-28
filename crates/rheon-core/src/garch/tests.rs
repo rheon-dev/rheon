@@ -103,6 +103,7 @@ fn cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
         min_weight: 0.0,
         // FIGARCH's start too big to double, so its tests stay short
         max_state_bytes: (vol == GarchVol::Figarch).then_some(40_000),
+        adaptive_start: false,
     }
 }
 
@@ -1163,6 +1164,7 @@ fn figarch_d_se_matches_oracle_and_is_scale_invariant() {
             GarchVol::Figarch,
             GarchDist::Normal,
             false,
+            false,
             100,
             &rows,
             &[],
@@ -1205,6 +1207,7 @@ fn figarch_d_se_matches_oracle_and_is_scale_invariant() {
         let got = fit(
             GarchVol::Figarch,
             GarchDist::Normal,
+            false,
             false,
             100,
             &out,
@@ -1282,7 +1285,7 @@ fn the_lr_statistic_is_twice_the_gain_at_kish_scale() {
         (GarchVol::Gjr, GarchDist::Normal),
         (GarchVol::Garch, GarchDist::T),
     ] {
-        let got = fit(vol, dist, false, 0, &unit, &[], bc, v).unwrap();
+        let got = fit(vol, dist, false, false, 0, &unit, &[], bc, v).unwrap();
         // f₀ by the definition: every row's variance the constant
         let k = vol.k();
         let m = dist.shape_len();
@@ -1330,7 +1333,7 @@ fn the_lr_statistic_is_twice_the_gain_at_kish_scale() {
         );
         // every weight scaled by 3: the same fit, the same statistic
         let tripled: Vec<[f64; 2]> = ys.iter().map(|&e| [e, 3.0]).collect();
-        let same = fit(vol, dist, false, 0, &tripled, &[], bc, v).unwrap();
+        let same = fit(vol, dist, false, false, 0, &tripled, &[], bc, v).unwrap();
         assert!((same.lr - got.lr).abs() < 1e-9 * got.lr, "{vol:?} {dist:?}");
         assert_eq!(same.sound, got.sound, "{vol:?} {dist:?}");
     }
@@ -1353,6 +1356,7 @@ fn a_start_waits_under_the_lr_cut_and_starts_over_it() {
             let start_fit = fit(
                 vol,
                 GarchDist::Normal,
+                false,
                 false,
                 0,
                 &rows,
@@ -1585,4 +1589,32 @@ fn adaptive_start_and_fisher_se_gate_hold_across_forms() {
             "{vol:?} {dist_kind:?} started at {s}"
         );
     }
+
+    // Adaptive RPEM handoff (`adaptive_start = true`) holds stricter Fisher-SE
+    // cuts than an explicit start, round-trips through msgpack preserving
+    // `adaptive_start`, and stays power-of-two weight invariant.
+    let ys_long = gjr_series([0.05, 0.08, 0.0, 0.90], 2600, 43, 1.0);
+    let mut c_adapt = cfg(GarchVol::Garch, GarchDist::Normal);
+    c_adapt.start_rows = default_garch_start_rows(GarchVol::Garch, GarchDist::Normal, false, 0);
+    c_adapt.adaptive_start = true;
+    let m_adapt = Garch::new(c_adapt.clone()).unwrap();
+    let rt: State = rmp_serde::from_slice(&rmp_serde::to_vec(&m_adapt.state()).unwrap()).unwrap();
+    let m_rt = Garch::restore(&rt).unwrap();
+    assert!(m_rt.cfg().adaptive_start);
+    let mut ma = Garch::new(c_adapt.clone()).unwrap();
+    let mut mb = Garch::new(c_adapt).unwrap();
+    let mut started_adapt = None;
+    for (t, y) in ys_long.iter().enumerate() {
+        let pa = ma.step(&[], &[Some(*y)], 1.0, 1.0);
+        let _pb = mb.step(&[], &[Some(*y)], 1.0, 4.0);
+        assert_eq!(ma.started()[0], mb.started()[0], "t={t}");
+        if pa.pred[0].is_finite() && started_adapt.is_none() {
+            started_adapt = Some(t);
+        }
+    }
+    let sa = started_adapt.expect("adaptive_start should start within 2600 rows");
+    assert!(
+        (1024..=2048).contains(&sa) && sa % 64 == 0 && (sa / 64).is_power_of_two(),
+        "adaptive_start started at {sa}"
+    );
 }

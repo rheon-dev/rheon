@@ -258,7 +258,13 @@ def dcc(
 
     **Two stages.** As in the batch method, the margins' estimation error
     is not carried into the correlation's: the quasi-likelihood is the
-    second stage's alone.
+    second stage's alone. When neither ``start_rows`` nor ``start_span`` is
+    given, adaptive doubling starts from ``max(64, next_power_of_two(2 k))``
+    rows and doubles until Kish effective sample size exceeds ``k``, ``Q̄``
+    is well-conditioned, the LR test and projected Newton gain pass, and the
+    conservative Bollerslev-Wooldridge QML sandwich standard errors clear
+    ``max_se ≤ 1 / (4 √χ²₁(0.999)) ≈ 0.076``,
+    ``SE(ln(a + δ g)) ≤ 1 / Φ⁻¹(0.95) ≈ 0.608``, and ``SE(ln(1 - P)) ≤ 2``.
     """
     model: dict[str, Any] = {"type": "dcc"}
     # Each absent when not given, as the Rust spec leaves it out, so a bank

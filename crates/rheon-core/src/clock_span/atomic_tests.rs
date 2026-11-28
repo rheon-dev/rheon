@@ -621,6 +621,7 @@ fn garch_start_span_is_atomic() {
         max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     };
     // Room for 5 rows across the two targets (2*2 = 4 rows fit; row 2's target 0
     // would fit at 5, while target 1 pushes to 6 > 5).
@@ -673,6 +674,7 @@ fn dcc_start_span_is_atomic() {
         start_span: Some(1e9),
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     };
     let cap = base.stage_bytes() + 32 + 3 * base.row_bytes();
     let mut m = Dcc::new(DccCfg {
@@ -716,6 +718,7 @@ fn dcc_start_span_is_atomic() {
         max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     };
     let stage_fixed = DccCfg {
         n_targets: 2,
@@ -727,6 +730,7 @@ fn dcc_start_span_is_atomic() {
         start_span: Some(1e9),
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     };
     let g_base = Garch::state_bytes(&margin, 0);
     let g_per = Garch::series_bytes(&margin, 1) - Garch::series_bytes(&margin, 0);
@@ -786,6 +790,7 @@ fn dcc_start_span_is_atomic() {
         max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     };
     let mut cfg_c = DccCfg {
         n_targets: 2,
@@ -797,6 +802,7 @@ fn dcc_start_span_is_atomic() {
         start_span: Some(1e9),
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     };
     // Margins buffer 100 rows during startup, then drop to 0 once started; give
     // enough cap for margin startup, then check stage breach once stage reaches cap.

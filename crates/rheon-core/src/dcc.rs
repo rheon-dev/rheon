@@ -183,6 +183,15 @@ pub struct DccCfg {
     /// `None` is 256 KB.
     #[serde(default)]
     pub max_state_bytes: Option<u64>,
+    /// Whether the stage's start uses the tighter adaptive RPEM handoff
+    /// Bollerslev-Wooldridge SE gate (set when neither `start_rows` nor
+    /// `start_span` was explicitly given). Omitted on wire when `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub adaptive_start: bool,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl DccCfg {
@@ -870,7 +879,12 @@ impl Dcc {
                 if !got.sound() {
                     return self.wait(false);
                 }
-                if !got.se_identified() {
+                let se_ok = if self.cfg.adaptive_start {
+                    got.adaptive_se_identified()
+                } else {
+                    got.se_identified()
+                };
+                if !se_ok {
                     return self.wait(true);
                 }
                 self.stage.sound = true;

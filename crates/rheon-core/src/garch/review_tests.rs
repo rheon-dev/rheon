@@ -89,6 +89,7 @@ fn cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
         n_inputs: 0,
         min_weight: 0.0,
         max_state_bytes: (vol == GarchVol::Figarch).then_some(40_000),
+        adaptive_start: false,
     }
 }
 

@@ -254,6 +254,7 @@ impl Series {
             cfg.vol,
             cfg.dist,
             cfg.variance_targeting,
+            cfg.adaptive_start,
             cfg.truncation(),
             &self.buffer,
             &self.xbuf,

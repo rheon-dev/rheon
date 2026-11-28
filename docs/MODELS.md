@@ -4336,7 +4336,15 @@ with `SE(ln v̄) ≤ 1 / Φ⁻¹(0.9995) ≈ 0.304` on the sample variance targe
 `garch` and `gjr` further require `SE(ln(1 − P)) ≤ 2`, and all three
 GARCH/GJR forms require `SE(ln feedback) ≤ 1 / Φ⁻¹(0.99) ≈ 0.43`.
 Above the unit-domain bound, a two-sided 99.9% confidence interval spans the
-parameter's entire domain. `π = 0` is where an input that explains nothing
+parameter's entire domain. When neither `start_rows` nor `start_span` is given (the adaptive doubling
+default), handing off to one-step recursive estimation without later batch
+refits requires tighter quadratic-basin bounds. Unit-domain dynamics must meet
+`SE ≤ 1 / (4 √χ²₁(0.999)) ≈ 0.076` (`1 / (6 √χ²₁(0.999)) ≈ 0.051` on t /
+skewed-t shape, and `SE(φ), SE(β) ≤ 0.152` on `figarch`). Relative rate cuts
+tighten to `SE(ln ω) ≤ 1 / (2 Φ⁻¹(0.90)) ≈ 0.390` (`1 / Φ⁻¹(0.975) ≈ 0.510` on
+`figarch`), `SE(ln feedback) ≤ 1 / (2 Φ⁻¹(0.99)) ≈ 0.215`, and
+`SE(ln(1 − P)) ≤ 1 / Φ⁻¹(0.975) ≈ 0.510` (both including `egarch`).
+`π = 0` is where an input that explains nothing
 sits, so a fit with a `π` at 0 is no bound that makes a start wait. A
 start with inputs also waits while its rows do not tell the inputs apart:
 an input constant over them is `ω` again, and two that move together are
@@ -4608,7 +4616,12 @@ optima on a bound). Every parameter must also be localized inside `[0, 1)` at
 `α = 0.001`: the expected Fisher standard errors of `a`, `b` (and `δ g` for
 ADCC) at Kish's count must each be at most `1 / (2 √χ²₁(0.999)) ≈ 0.152`.
 Shock feedback `a + δ g > 0` and positive intercept separation
-`SE(ln(1 − P)) ≤ 2` must also hold. A start
+`SE(ln(1 − P)) ≤ 2` must also hold. When neither `start_rows` nor `start_span` is given (the adaptive doubling
+default), the handoff uses conservative Bollerslev–Wooldridge QML sandwich
+standard errors (`max(H_kish⁻¹, H_kish⁻¹ J_kish H_kish⁻¹)`). Heavy-tailed
+innovations then wait for the extra rows their larger score variance requires,
+with `max_se ≤ 1 / (4 √χ²₁(0.999)) ≈ 0.076`,
+`SE(ln(a + δ g)) ≤ 1 / Φ⁻¹(0.95) ≈ 0.608`, and `SE(ln(1 − P)) ≤ 2`. A start
 that fails any check keeps its rows and fits again once as many new rows
 have come as it held: twice its rows while `max_state_bytes` holds them,
 then the latest rows the cap holds, the oldest leaving as each new one

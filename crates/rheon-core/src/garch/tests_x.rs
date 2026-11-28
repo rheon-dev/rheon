@@ -128,6 +128,7 @@ fn cfg_x(vol: GarchVol, q: usize) -> GarchCfg {
         min_weight: 0.0,
         max_state_bytes: None,
         n_inputs: q,
+        adaptive_start: false,
     }
 }
 

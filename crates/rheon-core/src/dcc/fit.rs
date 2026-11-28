@@ -89,6 +89,51 @@ pub(super) fn objective(
     Some((f, g, h))
 }
 
+struct ObjectiveMeat {
+    f: f64,
+    g: Vec<f64>,
+    h: Vec<f64>,
+    j: Vec<f64>,
+}
+
+/// Evaluate the objective, gradient, expected information `H = Σ w_t I_t`,
+/// and the Kish-scaled outer product of scores `J = Σ (scale · w_t)² g_t g_tᵀ`
+/// for Bollerslev-Wooldridge (1992) QML sandwich standard errors at the
+/// converged start fit.
+fn objective_with_meat(
+    rows: &Rows<'_>,
+    theta: &[f64],
+    scale: f64,
+    work: &mut Work,
+) -> Option<ObjectiveMeat> {
+    let (k, p) = (rows.k, theta.len());
+    let mut q = rows.qbar.to_vec();
+    let mut dq = vec![0.0; p * k * k];
+    let (mut f, mut g, mut h, mut j_mat) = (0.0, vec![0.0; p], vec![0.0; p * p], vec![0.0; p * p]);
+    for (t, &wt) in rows.w.iter().enumerate() {
+        let z = &rows.z[t * k..(t + 1) * k];
+        let ld = read(&q, k, work)?;
+        let l = -0.5 * (ld + quad(z, k, work));
+        if !l.is_finite() {
+            return None;
+        }
+        f += wt * l;
+        score_info(&q, &dq, k, p, work);
+        let wk = scale * wt;
+        let wk2 = wk * wk;
+        for i in 0..p {
+            let gi = work.g[i];
+            g[i] += wt * gi;
+            for j in 0..p {
+                h[i * p + j] += wt * work.info[i * p + j];
+                j_mat[i * p + j] += wk2 * gi * work.g[j];
+            }
+        }
+        advance(theta, rows.qbar, rows.nbar, z, k, &mut q, &mut dq);
+    }
+    Some(ObjectiveMeat { f, g, h, j: j_mat })
+}
+
 /// A start's fit and its identification and optimality checks (the module
 /// docs).
 #[derive(Debug, Clone, PartialEq)]
@@ -111,6 +156,12 @@ pub(super) struct Fit {
     /// when shock feedback `a + δ g` is 0 or `1 − P ≤ 0` or `scale · G` does
     /// not solve.
     pub intercept_rel_se: f64,
+    /// Conservative Bollerslev-Wooldridge QML (`max(H_kish⁻¹, H_kish⁻¹ J H_kish⁻¹)`)
+    /// versions of `max_se`, relative shock-feedback SE `SE(a + δ g) / (a + δ g)`,
+    /// and `intercept_rel_se`, used for the adaptive RPEM handoff gate.
+    pub bw_max_se: f64,
+    pub bw_feedback_rel_se: f64,
+    pub bw_intercept_rel_se: f64,
     #[cfg_attr(not(test), allow(dead_code))]
     pub iterations: u32,
 }
@@ -135,6 +186,21 @@ pub(super) const PARAM_SE_CUT: f64 = 0.151_951_356_363_333_54;
 /// ½ SE(P)`), holding the start away from the non-stationary IDCC wall `P = 1`,
 /// matching `garch`'s `MEAN_REV_REL_SE_CUT`.
 pub(super) const INTERCEPT_REL_SE_CUT: f64 = 2.0;
+
+/// Adaptive RPEM handoff cuts (when neither `start_rows` nor `start_span` is
+/// explicitly given), evaluated under conservative Bollerslev-Wooldridge QML
+/// standard errors so heavy-tailed innovations (`t(5)`) wait for the extra
+/// rows their larger score variance requires:
+/// - `bw_max_se ≤ PARAM_SE_CUT / 2` (4× information on `(a, b[, δg])`);
+/// - `bw_feedback_rel_se ≤ 1 / Φ⁻¹(0.95) ≈ 0.608` (one-sided 95% Wald
+///   separation of shock feedback `a + δ g > 0`, robust to finite-sample
+///   sandwich noise under heavy-tailed `t(5)` where `E[z⁸] = ∞`);
+/// - `bw_intercept_rel_se ≤ INTERCEPT_REL_SE_CUT` (2.0, holding the start away
+///   from the IDCC wall `P = 1`; because `Q̄` is targeted separately, `1 − P`
+///   does not control the long-run scale as `ω` does in free GARCH).
+const ADAPTIVE_PARAM_SE_CUT: f64 = 0.5 * PARAM_SE_CUT;
+const ADAPTIVE_FEEDBACK_REL_SE_CUT: f64 = 1.0 / 1.644_853_626_951_472_2;
+const ADAPTIVE_INTERCEPT_REL_SE_CUT: f64 = INTERCEPT_REL_SE_CUT;
 
 /// The cut of the likelihood-ratio statistic for `p` parameters, each a
 /// restriction of constant correlation.
@@ -161,49 +227,103 @@ impl Fit {
     pub(super) fn se_identified(&self) -> bool {
         self.max_se <= PARAM_SE_CUT && self.intercept_rel_se <= INTERCEPT_REL_SE_CUT
     }
+
+    /// Adaptive RPEM handoff gate under conservative Bollerslev-Wooldridge QML
+    /// standard errors.
+    pub(super) fn adaptive_se_identified(&self) -> bool {
+        self.bw_max_se <= ADAPTIVE_PARAM_SE_CUT
+            && self.bw_feedback_rel_se <= ADAPTIVE_FEEDBACK_REL_SE_CUT
+            && self.bw_intercept_rel_se <= ADAPTIVE_INTERCEPT_REL_SE_CUT
+    }
 }
 
-/// `(max_domain_se, intercept_rel_se)` from the `p × p` expected Fisher
-/// information `h` at Kish's scale `scale`:
-/// - `max_i c_i √((scale · H)⁻¹_{ii})` for `c = (1, 1[, δ])`;
-/// - `√(cᵀ (scale · H)⁻¹ c) / (1 − cᵀ θ)` when shock feedback `a + δ g > 0`
-///   and `1 − cᵀ θ > 0`, else `∞`.
+/// Evaluate Gaussian variance `vᵀ H_kish⁻¹ v` and Bollerslev-Wooldridge QML
+/// sandwich variance `vᵀ H_kish⁻¹ J_kish H_kish⁻¹ v` for a linear combination
+/// `v`. Since `H_kish x = v`, the sandwich variance is simply `xᵀ J_kish x`.
+fn quad_se_pair(h_kish: &[f64], j_kish: &[f64], p: usize, v: &[f64]) -> Option<(f64, f64)> {
+    let x = solve_small(h_kish, p, v)?;
+    let var_g: f64 = v.iter().zip(&x).map(|(vi, xi)| vi * xi).sum();
+    if !(var_g > 0.0 && var_g.is_finite()) {
+        return None;
+    }
+    let mut var_bw = 0.0;
+    for i in 0..p {
+        for j in 0..p {
+            var_bw += x[i] * j_kish[i * p + j] * x[j];
+        }
+    }
+    if !var_bw.is_finite() {
+        return None;
+    }
+    Some((var_g.sqrt(), var_g.max(var_bw).sqrt()))
+}
+
+/// `(max_se, intercept_rel_se, bw_max_se, bw_feedback_rel_se, bw_intercept_rel_se)`
+/// from expected information `h` and Kish-scaled score outer product `j_kish`.
 ///
-/// Scaling every weight by a power of two leaves `scale · H` unchanged to the
-/// bit.
-fn se_metrics(theta: &[f64], h: &[f64], p: usize, c: &[f64], scale: f64) -> (f64, f64) {
+/// Scaling every weight by a power of two leaves `scale · H` and `j_kish`
+/// unchanged to the bit.
+fn se_metrics(
+    theta: &[f64],
+    h: &[f64],
+    j_kish: &[f64],
+    p: usize,
+    c: &[f64],
+    scale: f64,
+) -> (f64, f64, f64, f64, f64) {
+    let inf5 = (
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::INFINITY,
+    );
     if !(scale > 0.0 && scale.is_finite()) {
-        return (f64::INFINITY, f64::INFINITY);
+        return inf5;
     }
     let scaled: Vec<f64> = h.iter().map(|&v| v * scale).collect();
-    let mut worst = 0.0_f64;
+    let (mut worst, mut bw_worst) = (0.0_f64, 0.0_f64);
     for (i, &ci) in c.iter().enumerate().take(p) {
         let mut e = vec![0.0; p];
         e[i] = 1.0;
-        let Some(col) = solve_small(&scaled, p, &e) else {
-            return (f64::INFINITY, f64::INFINITY);
+        let Some((se_g, se_bw)) = quad_se_pair(&scaled, j_kish, p, &e) else {
+            return inf5;
         };
-        let var = col[i];
-        if !(var > 0.0 && var.is_finite()) {
-            return (f64::INFINITY, f64::INFINITY);
+        let (sg, sb) = (ci * se_g, ci * se_bw);
+        if !(sg.is_finite() && sb.is_finite()) {
+            return inf5;
         }
-        let se = ci * var.sqrt();
-        if !se.is_finite() {
-            return (f64::INFINITY, f64::INFINITY);
-        }
-        worst = worst.max(se);
+        worst = worst.max(sg);
+        bw_worst = bw_worst.max(sb);
     }
     let feedback = theta[0] + if p == 3 { c[2] * theta[2] } else { 0.0 };
     let one_minus_p = 1.0 - c.iter().zip(theta).map(|(ci, ti)| ci * ti).sum::<f64>();
-    let intercept_rel_se = if feedback > 0.0 && one_minus_p > 0.0 && one_minus_p.is_finite() {
-        solve_small(&scaled, p, c)
-            .map(|x| c.iter().zip(&x).map(|(ci, xi)| ci * xi).sum::<f64>())
-            .filter(|&v| v > 0.0 && v.is_finite())
-            .map_or(f64::INFINITY, |v| v.sqrt() / one_minus_p)
+    let bw_feedback_rel_se = if feedback > 0.0 && feedback.is_finite() {
+        let mut cf = vec![0.0; p];
+        cf[0] = 1.0;
+        if p == 3 {
+            cf[2] = c[2];
+        }
+        quad_se_pair(&scaled, j_kish, p, &cf).map_or(f64::INFINITY, |(_, se_bw)| se_bw / feedback)
     } else {
         f64::INFINITY
     };
-    (worst, intercept_rel_se)
+    let (intercept_rel_se, bw_intercept_rel_se) =
+        if feedback > 0.0 && one_minus_p > 0.0 && one_minus_p.is_finite() {
+            quad_se_pair(&scaled, j_kish, p, c)
+                .map_or((f64::INFINITY, f64::INFINITY), |(sg, sb)| {
+                    (sg / one_minus_p, sb / one_minus_p)
+                })
+        } else {
+            (f64::INFINITY, f64::INFINITY)
+        };
+    (
+        worst,
+        intercept_rel_se,
+        bw_worst,
+        bw_feedback_rel_se,
+        bw_intercept_rel_se,
+    )
 }
 
 /// The constraint's coefficients: `(1, 1)`, or `(1, 1, δ)`.
@@ -297,26 +417,54 @@ pub(super) fn fit(rows: &Rows<'_>, p: usize, delta: f64, work: &mut Work) -> Opt
         .iter()
         .fold((0.0, 0.0), |(a, b), w| (a + w, b + w * w));
     let scale = w / w2;
-    let (gain, lr, definite, max_se, intercept_rel_se) = match objective(rows, &theta, true, work) {
-        Some((f, g, h)) => {
+    let (
+        gain,
+        lr,
+        definite,
+        max_se,
+        intercept_rel_se,
+        bw_max_se,
+        bw_feedback_rel_se,
+        bw_intercept_rel_se,
+    ) = match objective_with_meat(rows, &theta, scale, work) {
+        Some(ObjectiveMeat { f, g, h, j: j_kish }) => {
             let gain = projected_gain(&theta, &g, &h, &c);
             let f0 = objective(rows, &vec![0.0; p], false, work).map_or(f64::NAN, |e| e.0);
             let mut l = vec![0.0; p * p];
             let definite = super::mat::cholesky(&h, p, &mut l);
-            let (max_se, intercept_rel_se) = if definite {
-                se_metrics(&theta, &h, p, &c, scale)
-            } else {
-                (f64::INFINITY, f64::INFINITY)
-            };
+            let (max_se, intercept_rel_se, bw_max_se, bw_feedback_rel_se, bw_intercept_rel_se) =
+                if definite {
+                    se_metrics(&theta, &h, &j_kish, p, &c, scale)
+                } else {
+                    (
+                        f64::INFINITY,
+                        f64::INFINITY,
+                        f64::INFINITY,
+                        f64::INFINITY,
+                        f64::INFINITY,
+                    )
+                };
             (
                 gain * scale,
                 2.0 * (f - f0) * scale,
                 definite,
                 max_se,
                 intercept_rel_se,
+                bw_max_se,
+                bw_feedback_rel_se,
+                bw_intercept_rel_se,
             )
         }
-        None => (f64::INFINITY, f64::NAN, false, f64::INFINITY, f64::INFINITY),
+        None => (
+            f64::INFINITY,
+            f64::NAN,
+            false,
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::INFINITY,
+        ),
     };
     Some(Fit {
         theta,
@@ -325,6 +473,9 @@ pub(super) fn fit(rows: &Rows<'_>, p: usize, delta: f64, work: &mut Work) -> Opt
         definite,
         max_se,
         intercept_rel_se,
+        bw_max_se,
+        bw_feedback_rel_se,
+        bw_intercept_rel_se,
         iterations: it,
     })
 }

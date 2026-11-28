@@ -314,7 +314,7 @@ impl GarchDist {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct GarchCfg {
     /// The series, one per target, each with its own parameters.
     pub n_targets: usize,
@@ -361,16 +361,47 @@ pub struct GarchCfg {
     pub max_state_bytes: Option<u64>,
     /// The exogenous inputs `x` in the variance equation, `q` of them: the
     /// row's features, read on the row whose variance they enter, each with
-    /// its own coefficient `π` after the process's (GARCH-X). 0 for none,
-    /// and then not written, so a state of before it loads and re-saves its
-    /// bytes, and as the last field a state written as an array keeps its
-    /// places.
-    #[serde(default, skip_serializing_if = "is_zero")]
+    /// its own coefficient `π` after the process's (GARCH-X). 0 for none.
+    #[serde(default)]
     pub n_inputs: usize,
+    /// Whether the start uses the tighter adaptive RPEM handoff Fisher-SE
+    /// gate (set when neither `start_rows` nor `start_span` was explicitly
+    /// given). Omitted on wire when `false`, keeping every prior state
+    /// fixture byte-identical.
+    #[serde(default)]
+    pub adaptive_start: bool,
 }
 
-fn is_zero(v: &usize) -> bool {
-    *v == 0
+impl Serialize for GarchCfg {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let len = if self.adaptive_start {
+            13
+        } else if self.n_inputs > 0 {
+            12
+        } else {
+            11
+        };
+        let mut s = serializer.serialize_struct("GarchCfg", len)?;
+        s.serialize_field("n_targets", &self.n_targets)?;
+        s.serialize_field("vol", &self.vol)?;
+        s.serialize_field("dist", &self.dist)?;
+        s.serialize_field("truncation", &self.truncation)?;
+        s.serialize_field("variance_targeting", &self.variance_targeting)?;
+        s.serialize_field("start_rows", &self.start_rows)?;
+        s.serialize_field("start_span", &self.start_span)?;
+        s.serialize_field("forecast_rows", &self.horizons)?;
+        s.serialize_field("max_horizon_work", &self.max_horizon_work)?;
+        s.serialize_field("min_weight", &self.min_weight)?;
+        s.serialize_field("max_state_bytes", &self.max_state_bytes)?;
+        if len >= 12 {
+            s.serialize_field("n_inputs", &self.n_inputs)?;
+        }
+        if len >= 13 {
+            s.serialize_field("adaptive_start", &self.adaptive_start)?;
+        }
+        s.end()
+    }
 }
 
 impl GarchCfg {

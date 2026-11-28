@@ -486,6 +486,28 @@ const MEAN_REV_REL_SE_CUT: f64 = 2.0;
 /// where `β` loses identification and online BHHH curvature stalls).
 const FEEDBACK_REL_SE_CUT: f64 = 0.429_858_324_783_993_3;
 
+/// Adaptive RPEM handoff cuts (when neither `start_rows` nor `start_span` is
+/// explicitly given): after the batch start, the online estimator takes
+/// one-step recursive prediction-error updates with no subsequent batch refit.
+/// Requiring half the standard error (4× the Fisher information) on dynamics
+/// and structural rates keeps the initial Hessian inside the quadratic basin
+/// of the log-likelihood while letting lower-persistence / high-signal series
+/// start earlier than 2,000 rows and weak-signal series double past 2,000:
+/// - unit-domain dynamics: `SE ≤ PARAM_SE_CUT / 2 = 1 / (4 √χ²₁(0.999)) ≈ 0.076`
+///   (99.9% CI spans at most half the domain);
+/// - Student-t / skew-t shape (online BHHH): `SE ≤ PARAM_SE_CUT / 3 ≈ 0.051`;
+/// - positive intercept: `SE(ln ω) ≤ OMEGA_REL_SE_CUT / 2 = 1 / (2 Φ⁻¹(0.90)) ≈ 0.390`
+///   (and `1 / Φ⁻¹(0.975) ≈ 0.510` for FIGARCH);
+/// - shock feedback: `SE(ln fb) ≤ FEEDBACK_REL_SE_CUT / 2 = 1 / (2 Φ⁻¹(0.99)) ≈ 0.215`
+///   (including EGARCH `α`);
+/// - stationarity: `SE(ln(1 − P)) ≤ 1 / Φ⁻¹(0.975) ≈ 0.510` (two-sided 95% CI
+///   strictly inside `P < 1`, including EGARCH `1 − β`).
+const ADAPTIVE_PARAM_SE_CUT: f64 = 0.5 * PARAM_SE_CUT;
+const ADAPTIVE_SHAPE_SE_CUT: f64 = PARAM_SE_CUT / 3.0;
+const ADAPTIVE_OMEGA_REL_SE_CUT: f64 = 0.5 * OMEGA_REL_SE_CUT;
+const ADAPTIVE_FEEDBACK_REL_SE_CUT: f64 = 0.5 * FEEDBACK_REL_SE_CUT;
+const ADAPTIVE_MEAN_REV_REL_SE_CUT: f64 = 1.0 / 1.959_963_984_540_054;
+
 /// The asymptotic standard error of a linear combination `cᵀ θ` from a `p × p`
 /// (row-major) Fisher information matrix `h` at Kish's scale
 /// `scale = Σw / Σw²`: `√(cᵀ (scale · H)⁻¹ c)`. Scaling every weight by a
@@ -607,6 +629,7 @@ fn params_se_identified(
     vol: GarchVol,
     dist: GarchDist,
     targeted: bool,
+    adaptive: bool,
     k: usize,
     q: usize,
     rows: &[[f64; 2]],
@@ -616,10 +639,35 @@ fn params_se_identified(
     eval_h: &[f64],
     scale: f64,
 ) -> bool {
+    let param_cut = if adaptive {
+        ADAPTIVE_PARAM_SE_CUT
+    } else {
+        PARAM_SE_CUT
+    };
+    let shape_cut = if adaptive {
+        ADAPTIVE_SHAPE_SE_CUT
+    } else {
+        PARAM_SE_CUT
+    };
+    let omega_cut = if adaptive {
+        ADAPTIVE_OMEGA_REL_SE_CUT
+    } else {
+        OMEGA_REL_SE_CUT
+    };
+    let fb_cut = if adaptive {
+        ADAPTIVE_FEEDBACK_REL_SE_CUT
+    } else {
+        FEEDBACK_REL_SE_CUT
+    };
+    let mr_cut = if adaptive {
+        ADAPTIVE_MEAN_REV_REL_SE_CUT
+    } else {
+        MEAN_REV_REL_SE_CUT
+    };
     if targeted {
         // theta is [omega, alpha, beta]; eval_h is 2×2 in (alpha, beta).
         // Under variance targeting, ω = v̄ (1 − P), so SE(ln ω) = SE(ln(1 − P))
-        // uses OMEGA_REL_SE_CUT, matching the free processes' ω separation cut.
+        // uses omega_cut, matching the free processes' ω separation cut.
         // Because eval_h treats v̄ as fixed, also bound the sample variance
         // target's own ARMA(1,1) long-run relative SE (Bollerslev 1986;
         // Francq-Horváth-Zakoïan 2011): r_t² − v̄ = ((1 − β L)/(1 − P L))(r_t² − s_t),
@@ -632,10 +680,10 @@ fn params_se_identified(
         let mean_rev = 1.0 - a - b;
         if !(a > 0.0
             && mean_rev > 0.0
-            && se_a <= PARAM_SE_CUT
-            && se_b <= PARAM_SE_CUT
-            && se_a <= FEEDBACK_REL_SE_CUT * a
-            && se_p <= OMEGA_REL_SE_CUT * mean_rev)
+            && se_a <= param_cut
+            && se_b <= param_cut
+            && se_a <= fb_cut * a
+            && se_p <= omega_cut * mean_rev)
         {
             return false;
         }
@@ -679,32 +727,32 @@ fn params_se_identified(
     let check_vol = |h: &[f64], p: usize| -> bool {
         let dyn_ok = match vol {
             GarchVol::Garch => {
-                fisher_se(h, p, scale, 1) <= PARAM_SE_CUT
-                    && fisher_se(h, p, scale, 2) <= PARAM_SE_CUT
+                fisher_se(h, p, scale, 1) <= param_cut && fisher_se(h, p, scale, 2) <= param_cut
             }
             GarchVol::Gjr => {
-                fisher_se(h, p, scale, 1) <= PARAM_SE_CUT
-                    && fisher_se(h, p, scale, 2) <= PARAM_SE_CUT
-                    && fisher_se(h, p, scale, 3) <= PARAM_SE_CUT
+                fisher_se(h, p, scale, 1) <= param_cut
+                    && fisher_se(h, p, scale, 2) <= param_cut
+                    && fisher_se(h, p, scale, 3) <= param_cut
             }
             GarchVol::Egarch => {
-                fisher_se(h, p, scale, 1) <= PARAM_SE_CUT
-                    && 0.5 * fisher_se(h, p, scale, 2) <= PARAM_SE_CUT
-                    && fisher_se(h, p, scale, 3) <= PARAM_SE_CUT
+                fisher_se(h, p, scale, 1) <= param_cut
+                    && 0.5 * fisher_se(h, p, scale, 2) <= param_cut
+                    && fisher_se(h, p, scale, 3) <= param_cut
             }
-            GarchVol::Figarch => fisher_se(h, p, scale, 2) <= PARAM_SE_CUT,
+            GarchVol::Figarch => fisher_se(h, p, scale, 2) <= param_cut,
         };
         if !dyn_ok {
             return false;
         }
         // Without exogenous inputs, hold GARCH and GJR away from the
         // non-stationary IGARCH boundary (ω = 0, P = 1) and the zero-feedback
-        // ridge (α = 0 / α + γ/2 = 0): scale-invariant SE(ln ω) ≤ 1 / Φ⁻¹(0.90),
-        // SE(ln(1 − P)) ≤ 2, and SE(ln feedback) ≤ 1 / Φ⁻¹(0.99).
+        // ridge (α = 0 / α + γ/2 = 0); for adaptive RPEM starts, also require
+        // EGARCH's shock feedback `α` and log-variance mean reversion `1 − β`
+        // to clear the same relative-SE handoff cuts.
         if q == 0 && matches!(vol, GarchVol::Garch | GarchVol::Gjr) {
             let om = theta[0];
             let se_om = fisher_se(h, p, scale, 0);
-            if !om.is_finite() || om <= 0.0 || !se_om.is_finite() || se_om > OMEGA_REL_SE_CUT * om {
+            if !om.is_finite() || om <= 0.0 || !se_om.is_finite() || se_om > omega_cut * om {
                 return false;
             }
             let mut cf = vec![0.0; p];
@@ -726,11 +774,7 @@ fn params_se_identified(
                 )
             };
             let se_fb = fisher_lin_se(h, p, scale, &cf);
-            if !fb.is_finite()
-                || fb <= 0.0
-                || !se_fb.is_finite()
-                || se_fb > FEEDBACK_REL_SE_CUT * fb
-            {
+            if !fb.is_finite() || fb <= 0.0 || !se_fb.is_finite() || se_fb > fb_cut * fb {
                 return false;
             }
             let mean_rev = 1.0 - pers;
@@ -738,7 +782,22 @@ fn params_se_identified(
             if !mean_rev.is_finite()
                 || mean_rev <= 0.0
                 || !se_p.is_finite()
-                || se_p > MEAN_REV_REL_SE_CUT * mean_rev
+                || se_p > mr_cut * mean_rev
+            {
+                return false;
+            }
+        } else if adaptive && q == 0 && vol == GarchVol::Egarch {
+            let fb = theta[1];
+            let se_fb = fisher_se(h, p, scale, 1);
+            if !fb.is_finite() || fb <= 0.0 || !se_fb.is_finite() || se_fb > fb_cut * fb {
+                return false;
+            }
+            let mean_rev = 1.0 - theta[3];
+            let se_b = fisher_se(h, p, scale, 3);
+            if !mean_rev.is_finite()
+                || mean_rev <= 0.0
+                || !se_b.is_finite()
+                || se_b > mr_cut * mean_rev
             {
                 return false;
             }
@@ -753,12 +812,12 @@ fn params_se_identified(
             };
             let nu = theta[k];
             let se_u = (2.0 / (nu * nu)) * fisher_se(&h_exp, k + 1, scale, k);
-            if !(check_vol(&h_exp, k + 1) && se_u <= PARAM_SE_CUT) {
+            if !(check_vol(&h_exp, k + 1) && se_u <= shape_cut) {
                 return false;
             }
             if dist == GarchDist::Skewt {
                 let se_lam = fisher_se(eval_h, k + 2, scale, k + 1);
-                if !se_lam.is_finite() || 0.5 * se_lam > PARAM_SE_CUT {
+                if !se_lam.is_finite() || 0.5 * se_lam > shape_cut {
                     return false;
                 }
             }
@@ -966,6 +1025,7 @@ pub(super) fn fit(
     vol: GarchVol,
     dist: GarchDist,
     targeted: bool,
+    adaptive: bool,
     trunc: usize,
     rows: &[[f64; 2]],
     xs: &[f64],
@@ -997,6 +1057,7 @@ pub(super) fn fit(
                 vol,
                 dist,
                 true,
+                adaptive,
                 3,
                 0,
                 rows,
@@ -1039,7 +1100,7 @@ pub(super) fn fit(
                 q > 0 && (!info.f.is_finite() || collinear(&info.h, got.theta.len(), k));
             got.se_ok = info.f.is_finite()
                 && params_se_identified(
-                    vol, dist, false, k, q, rows, xs, bc, &got.theta, &info.h, scale,
+                    vol, dist, false, adaptive, k, q, rows, xs, bc, &got.theta, &info.h, scale,
                 );
             Some(got)
         }
@@ -1068,21 +1129,33 @@ pub(super) fn fit(
             let theta = fit.theta.clone();
             let mut got = StartFit::of(fit, theta, &in_set, f0, scale);
             let info = figarch_likelihood(rows, bc, trunc, &got.theta, true);
-            let (se_d, se_om) = if info.f.is_finite() {
+            let (se_d, se_om, se_phi, se_beta) = if info.f.is_finite() {
                 (
                     figarch_d_se(&info.h, scale),
                     fisher_se(&info.h, 4, scale, 0),
+                    fisher_se(&info.h, 4, scale, 1),
+                    fisher_se(&info.h, 4, scale, 3),
                 )
             } else {
-                (f64::INFINITY, f64::INFINITY)
+                (f64::INFINITY, f64::INFINITY, f64::INFINITY, f64::INFINITY)
             };
             let om = got.theta[0];
             got.d_se = Some(se_d);
-            got.se_ok = figarch_d_identified(se_d)
-                && om.is_finite()
-                && om > 0.0
-                && se_om.is_finite()
-                && se_om <= OMEGA_REL_SE_CUT * om;
+            got.se_ok = if adaptive {
+                se_d <= ADAPTIVE_PARAM_SE_CUT
+                    && se_phi <= PARAM_SE_CUT
+                    && se_beta <= PARAM_SE_CUT
+                    && om.is_finite()
+                    && om > 0.0
+                    && se_om.is_finite()
+                    && se_om <= ADAPTIVE_MEAN_REV_REL_SE_CUT * om
+            } else {
+                figarch_d_identified(se_d)
+                    && om.is_finite()
+                    && om > 0.0
+                    && se_om.is_finite()
+                    && se_om <= OMEGA_REL_SE_CUT * om
+            };
             Some(got)
         }
         _ => {
@@ -1131,7 +1204,7 @@ pub(super) fn fit(
                 q > 0 && (!info.f.is_finite() || collinear(&info.h, got.theta.len(), k));
             got.se_ok = info.f.is_finite()
                 && params_se_identified(
-                    vol, dist, false, k, q, rows, xs, bc, &got.theta, &info.h, scale,
+                    vol, dist, false, adaptive, k, q, rows, xs, bc, &got.theta, &info.h, scale,
                 );
             Some(got)
         }

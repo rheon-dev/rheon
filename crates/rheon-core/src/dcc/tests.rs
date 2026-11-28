@@ -103,6 +103,7 @@ fn cfg(k: usize, asymmetric: bool, params: Option<Vec<f64>>) -> DccCfg {
         start_span: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     }
 }
 
@@ -541,6 +542,9 @@ fn each_cut_holds_on_both_sides() {
                 definite,
                 max_se,
                 intercept_rel_se,
+                bw_max_se: max_se,
+                bw_feedback_rel_se: 0.2,
+                bw_intercept_rel_se: intercept_rel_se,
                 iterations: 1,
             };
         assert!(at(cut, 0.0, true, 0.05, 0.5).identified());
@@ -672,6 +676,7 @@ fn a_save_and_load_continues_to_the_bit() {
         min_weight: 0.0,
         max_state_bytes: None,
         n_inputs: 0,
+        adaptive_start: false,
     });
     for c in [cfg(2, true, None), with] {
         for cut in [100, 499, 500, 1200, 2400, 2600] {
@@ -730,6 +735,7 @@ fn the_margins_are_the_garch_models() {
         min_weight: 0.0,
         max_state_bytes: None,
         n_inputs: 0,
+        adaptive_start: false,
     };
     let mut c = cfg(k, false, None);
     c.margins = Some(gcfg.clone());
@@ -781,6 +787,7 @@ fn a_margin_with_no_fourth_moment_is_said_once() {
         min_weight: 0.0,
         max_state_bytes: None,
         n_inputs: 0,
+        adaptive_start: false,
     };
     let mut c = cfg(k, false, None);
     c.margins = Some(gcfg.clone());
@@ -992,6 +999,7 @@ fn with_margins_predict_is_the_step() {
         min_weight: 0.0,
         max_state_bytes: None,
         n_inputs: 0,
+        adaptive_start: false,
     });
     let mut m = Dcc::new(c).unwrap();
     let mut ready = 0;
@@ -1176,4 +1184,31 @@ fn adaptive_start_and_kish_and_se_gate_hold() {
         );
         assert!(m.start_sound() && !m.no_effect());
     }
+
+    // Adaptive RPEM handoff (`adaptive_start = true`) uses conservative
+    // Bollerslev-Wooldridge QML sandwich SEs, round-trips through msgpack
+    // preserving `adaptive_start`, and starts cleanly on heavy-tailed t(5)
+    // streams with power-of-two weight invariance.
+    let t5_rows = adcc_stream(3, 2200, [0.05, 0.90, 0.0], 0.5, Some(5.0), 79);
+    let mut c_adapt = cfg(3, false, None);
+    c_adapt.start_rows = default_dcc_start_rows(3, false);
+    c_adapt.adaptive_start = true;
+    let mut m_a = Dcc::new(c_adapt.clone()).unwrap();
+    let rt: State = rmp_serde::from_slice(&rmp_serde::to_vec(&m_a.state()).unwrap()).unwrap();
+    assert!(Dcc::restore(&rt).unwrap().cfg().adaptive_start);
+    let mut m_b = Dcc::new(c_adapt).unwrap();
+    let mut first_t5 = None;
+    for (t, z) in t5_rows.iter().enumerate() {
+        let pa = m_a.step(&[], &ys(z), 1.0, 1.0);
+        let _pb = m_b.step(&[], &ys(z), 1.0, 4.0);
+        assert_eq!(m_a.started(), m_b.started(), "t={t}");
+        if pa.pred[0].is_finite() && first_t5.is_none() {
+            first_t5 = Some(t);
+        }
+    }
+    let ft = first_t5.expect("adaptive_start t(5) should start within 2200 rows");
+    assert!(
+        (256..=2048).contains(&ft) && ft % 64 == 0 && (ft / 64).is_power_of_two(),
+        "adaptive_start t(5) started at {ft}"
+    );
 }

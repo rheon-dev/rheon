@@ -31,6 +31,56 @@ model that only the new build has is listed as an addition and passes.
 
 ### Changed
 
+- **Adaptive first-principles start and refit gates replace fixed row windows in
+  `garch`, `dcc`, `glm`, and `expectile`, alongside principled warmups, Kish
+  `df_NW`, and zero-weight gating across binning, changepoints, trees,
+  conformal, and `rp.eval`** (PLAN 587):
+  - **`garch`, `gjr`, `egarch`, `figarch`, and `dcc`**: lowered the minimum
+    start floor from 50 to 1, extended α = 0.001 expected Fisher-information
+    standard-error localization (including exact Student-t Fisher information
+    and variance-targeting ARMA(1,1) SE) alongside LR and Newton decrement, and
+    replaced the fixed 2,000-row (`garch`) and 500-row (`dcc`) defaults with
+    adaptive doubling gated on quadratic-basin RPEM handoff Fisher/Bollerslev–Wooldridge
+    sandwich SEs bounded by `max_state_bytes` (explicit `start_rows` and
+    `start_span` unchanged).
+  - **`glm` and `expectile`**: removed the fixed `max(200, 10*k)` refit
+    default and the hard `k > 100` cliff in favour of adaptive doubling batch
+    IRLS refits gated on Kish effective sample size / leverage
+    (`max_i h_i <= 1/16`) and `max_state_bytes` (improving `glum_twenty` by
+    30–52% across all 24 metrics and `canonical_links.twenty_features` by 56%).
+  - **Bin warmups, `bocpd`, trees, conformal, `rp.eval`, and `ModelBank.check()`**:
+    `dependence` derives `bin_warm_rows = max(ceil(62.5 * max(B_x, B_y)), 5 * B_x * B_y)`;
+    `marginal` derives `bin_warm_rows = ceil(62.5 * B)` (bit-identical `1,000`
+    at default `bins = 16`); `bocpd` `KnownVariance` warms in 2 rows independent
+    of dimension `d`; `hoeffding_tree_classifier` and `hoeffding_tree_regressor`
+    skip cap rechecks when 0 leaves are capped and scale cadence by
+    `ceil(grace_period) * max(1, n_active_leaves)`; `conformal_p_window_rows`
+    scales to `ceil(10 * h)` under finite row-clock `half_life`;
+    `diebold_mariano`, `clark_west`, and `giacomini_white` gate HAC degrees of
+    freedom and `min_samples` on Kish `n_eff` under `half_life`; `metrics`,
+    `interval_metrics`, and `pinball` exclude zero-weight rows from
+    `min_samples` and `ssc`; and `ModelBank.check()` uses MacKinnon finite-sample
+    critical values down to `n = 25` and a 5% Lasso solve-failure rate.
+
+- **Pre-release parameter naming consistency across unreleased post-2.0.0
+  APIs** (PLAN 588): renamed 15 unreleased parameter surfaces for cross-library
+  consistency without touching any stable 2.0.0 parameter:
+  `rp.stream.merge(by -> group)`; `rp.ops.stl`/`mstl(window -> window_rows)`;
+  `CommonKwargs` `feature_ks_window`/`feature_ks_recent` →
+  `feature_ks_window_rows`/`feature_ks_recent_rows`; `rp.spec.realized`
+  `lm_window` → `lm_window_rows` and `lm_beta` → `lm_confidence`;
+  `rp.spec.kalman` `alpha`/`beta`/`kappa` → `ukf_alpha`/`ukf_beta`/`ukf_kappa`;
+  `rp.spec.huber(huber_norm -> norm)`; `rp.spec.ewm_moments(se -> emit_se)`;
+  `ModelBank.vector_ar(stderr -> se)`; `rp.ops.ewm_profile(offset -> origin,
+  buckets -> bins)`; `rp.corr.epps_invert(L -> lags)`;
+  `rp.eval.classification_metrics`/`reliability_bins(n_bins -> bins)`;
+  `rp.ops.bspline`/`natural_spline`/`hinge(col -> input)` and
+  `interactions(sep -> separator)`; `rp.spec.hmm`
+  `covars_prior`/`covars_weight` → `covariance_prior`/`covariance_weight`;
+  `rp.spec.hoeffding_tree_regressor(min_samples_split -> min_child_weight)`;
+  and `rp.spec.spectral` splitting `scaling="lomb_scargle"` into
+  `method: Literal["dft", "lomb_scargle"] = "dft"`.
+
 - **The window operators live in `rheon.polars.ops` alone; the root names
   2.0.0 exported are deprecated** (PLAN 579; the user, 2026-11-24).
   `rp.ewm_mean`, `rp.ewm_quantile`, `rp.ewm_rate`, `rp.ewm_std`,

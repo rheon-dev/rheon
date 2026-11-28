@@ -373,6 +373,15 @@ def garch(
     require ``SE(ln(1 - P)) ≤ 2``, and all three GARCH/GJR forms require
     ``SE(ln feedback) ≤ 1 / Φ⁻¹(0.99) ≈ 0.43``. Above the unit-domain bound,
     a two-sided 99.9% confidence interval spans the parameter's entire domain.
+    When neither ``start_rows`` nor ``start_span`` is given (the adaptive
+    doubling default), the handoff to one-step online recursive estimation
+    tightens those Fisher-SE bounds to keep the initial Hessian inside the
+    quadratic basin: ``SE ≤ 1 / (4 √χ²₁(0.999)) ≈ 0.076`` on unit-domain
+    dynamics (``1 / (6 √χ²₁(0.999)) ≈ 0.051`` on t / skewed-t shape, and
+    ``SE(φ), SE(β) ≤ 0.152`` on ``figarch``), ``SE(ln ω) ≤ 1 / (2 Φ⁻¹(0.90)) ≈ 0.390``
+    (``1 / Φ⁻¹(0.975) ≈ 0.510`` on ``figarch``),
+    ``SE(ln feedback) ≤ 1 / (2 Φ⁻¹(0.99)) ≈ 0.215`` (including ``egarch``),
+    and ``SE(ln(1 - P)) ≤ 1 / Φ⁻¹(0.975) ≈ 0.510`` (including ``egarch``'s ``1 - β``).
     With inputs,
     a start also waits while its rows do not tell the inputs apart: an
     input constant over them is ``ω`` again, and two that move together are

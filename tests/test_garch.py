@@ -449,7 +449,7 @@ def test_a_realistic_series_at_the_default_start():
     s, y, coef = out["variance_y"].to_numpy(), df["y"].to_numpy(), out["coef"].to_list()
     reason = out["withheld_reason"].cast(pl.String).to_list()
     n0 = int(np.argmax(np.isfinite(s)))
-    assert 64 <= n0 < 2000 and n0 % 64 == 0 and (n0 // 64) & (n0 // 64 - 1) == 0, n0
+    assert 64 <= n0 <= 2048 and n0 % 64 == 0 and (n0 // 64) & (n0 // 64 - 1) == 0, n0
     assert np.isnan(s[:n0]).all() and np.isfinite(s[n0:]).all()
     assert reason[:64] == ["below_warm_rows"] * 64
     assert all(r in ("below_warm_rows", "not_identified") for r in reason[64:n0])

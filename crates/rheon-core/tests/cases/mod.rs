@@ -5359,6 +5359,7 @@ fn dcc_cfg(k: usize, asymmetric: bool, params: Option<Vec<f64>>) -> DccCfg {
         start_span: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     }
 }
 
@@ -5563,6 +5564,7 @@ fn garch_cfg(vol: GarchVol, dist: GarchDist) -> GarchCfg {
         max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     }
 }
 

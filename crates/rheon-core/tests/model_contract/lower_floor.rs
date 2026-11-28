@@ -792,6 +792,7 @@ fn garch_cfg() -> GarchCfg {
         max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: Some(1700),
+        adaptive_start: false,
     }
 }
 
@@ -968,6 +969,7 @@ fn dcc_cfg() -> DccCfg {
         start_span: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     }
 }
 

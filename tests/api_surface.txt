@@ -915,13 +915,16 @@
     stream.specification_half_life = "inf"
     stream.tails_half_life = "inf"
   dcc(a=0.05, b=0.9, half_life=50.0, targets=['y', 'x0']):
+    model.adaptive_start = true
     model.asymmetric = false
     model.decay.Halflife = 50.0
+    model.margins.adaptive_start = true
     model.margins.dist = "normal"
     model.margins.forecast_rows = []
     model.margins.max_horizon_work = null
     model.margins.max_state_bytes = null
     model.margins.min_weight = 0.0
+    model.margins.n_inputs = 0
     model.margins.n_targets = 2
     model.margins.start_rows = 64
     model.margins.start_span = null
@@ -1149,11 +1152,13 @@
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
   garch(targets=['y']):
+    model.adaptive_start = true
     model.dist = "normal"
     model.forecast_rows = []
     model.max_horizon_work = null
     model.max_state_bytes = null
     model.min_weight = 0.0
+    model.n_inputs = 0
     model.n_targets = 1
     model.start_rows = 64
     model.start_span = null

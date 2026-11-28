@@ -1312,6 +1312,7 @@ fn garch_signature(vol: GarchVol, dist: GarchDist, targeting: bool) -> Vec<f64> 
         max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: Some(if fig { 40_000 } else { 1700 }),
+        adaptive_start: false,
     })
     .unwrap();
     let rows = stream();
@@ -1831,6 +1832,7 @@ fn garch_realistic(vol: GarchVol, dist: GarchDist, targeting: bool, ys: &[f64]) 
         max_horizon_work: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     })
     .unwrap();
     let mut got = Vec::new();
@@ -2019,6 +2021,7 @@ fn dcc_signature(
             min_weight: 0.0,
             max_state_bytes: None,
             n_inputs: 0,
+            adaptive_start: false,
         }),
         params,
         decay,
@@ -2026,6 +2029,7 @@ fn dcc_signature(
         start_span: None,
         min_weight: 0.0,
         max_state_bytes: None,
+        adaptive_start: false,
     })
     .unwrap();
     let n = 1500;
