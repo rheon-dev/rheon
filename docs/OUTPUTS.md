@@ -104,8 +104,10 @@ row, as `rp.spec.output_index(spec)` lists it:
 | `i64` | `Int64` |
 | `bool` | `Boolean` |
 | `list[f64]` | `List(Float64)`: `coef` and the fields laid out like it. A list stores nothing for a null row, and `coef` is null on most rows. For an `(n, k)` matrix, `k` the height of `rp.spec.coef_index(spec)`, keep the rows that carry it and fix their width. For the output `out` of a spec named `m`: `out.select(pl.col("m").struct.field("coef")).filter(pl.col("coef").is_not_null()).select(pl.col("coef").list.to_array(k)).to_series().to_numpy()` |
+| `list[list[f64]]` | `List(List(Float64))`: `smoothed_coef` and `smoothed_se_coef` under `embargo` or a formula target, one inner list per emitting release on that row (null when zero releases emitted) |
 | `enum` | an `Enum` of its values, in their order: `withheld_reason`'s eleven, an `ew_class` spec's `classes` for `class`, a `bandit` spec's `arms` for `arm`, a grid's slots for `selected_<t>` |
 | `clock` | the clock column's own type, an integer clock in its own width; with no clock, `Int64`, the group's row index |
+| `list[clock]` | `List(<clock>)`: `smoothed_for` and `smoothed_for_<t>` under `embargo` or a formula target, parallel to the row's smoothed lists (null when zero releases emitted) |
 
 **Every integer is an `Int64`**, in a field and in every frame the bank and
 `rp.spec` return: a count, a state, a cluster label, a position, a row's
@@ -235,9 +237,9 @@ Under `smooth_lag=5, emit_smoothed_se=True, emit_loglik=True, emit_mahal=True`, 
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
-| `smoothed_coef` | `list[f64]` | on the row that completes `smooth_lag` observations of a target after an earlier one, the coefficients at that earlier observation estimated from every row up to this one, laid out like `coef`; NaN in a target's place where the row completed no lag of it, where `min_weight` withheld the described row, and for a coefficient not yet sized | on every row that completes no target's lag |
-| `smoothed_se_coef` | `list[f64]` | the standard errors of `smoothed_coef`, laid out like it | where `smoothed_coef` is |
-| `smoothed_for_y` | `clock` | the clock of the row `<t>`'s smoothed value describes, in the clock column's own type; with no clock, the row's index in its group | on every row that completes no lag of `<t>` |
+| `smoothed_coef` | `list[f64]` | on the row that completes `smooth_lag` observations of a target after an earlier one, the coefficients at that earlier observation estimated from every row up to this one, laid out like `coef`; NaN in a target's place where the row completed no lag of it, where `min_weight` withheld the described row, and for a coefficient not yet sized; `list[list[f64]]` under `embargo` or a formula target, one inner list per emitting release | on every row that completes no target's lag |
+| `smoothed_se_coef` | `list[f64]` | the standard errors of `smoothed_coef`, laid out like it (`list[list[f64]]` under `embargo` or a formula target) | where `smoothed_coef` is |
+| `smoothed_for_y` | `clock` | the clock of the row `<t>`'s smoothed value describes, in the clock column's own type; with no clock, the row's index in its group; `list[clock]` parallel to `smoothed_coef` under `embargo` or a formula target | on every row that completes no lag of `<t>` |
 | `loglik_y` | `f64` | out-of-sample Gaussian innovation log-likelihood of `<t>`, read before this row's update | while withheld; on a zero-weight row; where `<t>` is null or a formula target; on a diffuse intercept's first observation; while `P` is unsized; and before `<t>` has a positive pre-row noise variance (without `obs_var`) |
 | `mahal_y` | `f64` | out-of-sample innovation Mahalanobis distance `abs(nu) / sqrt(S)` of `<t>`, read before this row's update | where `loglik_<t>` is |
 
@@ -786,9 +788,9 @@ Under `smooth_lag=5`, it also writes:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
-| `smoothed_state0` | `f64` | fixed-lag smoothed probability of state `<j>` at `smooth_lag` learned rows earlier, conditioned on every observation up to this row | while withheld, before `smooth_lag` learned rows have arrived after seeding, on rows of weight 0, and during `predict` |
-| `smoothed_state1` | `f64` | fixed-lag smoothed probability of state `<j>` at `smooth_lag` learned rows earlier, conditioned on every observation up to this row | while withheld, before `smooth_lag` learned rows have arrived after seeding, on rows of weight 0, and during `predict` |
-| `smoothed_for` | `clock` | the clock of the row `smoothed_state<j>` describes, in the clock column's own type; with no clock, the row's index in its group | where `smoothed_state<j>` is |
+| `smoothed_state0` | `f64` | fixed-lag smoothed probability of state `<j>` at `smooth_lag` learned rows earlier, conditioned on every observation up to this row; `list[f64]` under `embargo`, one element per emitting release | while withheld, before `smooth_lag` learned rows have arrived after seeding, on rows of weight 0, and during `predict` |
+| `smoothed_state1` | `f64` | fixed-lag smoothed probability of state `<j>` at `smooth_lag` learned rows earlier, conditioned on every observation up to this row; `list[f64]` under `embargo`, one element per emitting release | while withheld, before `smooth_lag` learned rows have arrived after seeding, on rows of weight 0, and during `predict` |
+| `smoothed_for` | `clock` | the clock of the row `smoothed_state<j>` describes, in the clock column's own type; with no clock, the row's index in its group; `list[clock]` parallel to `smoothed_state<j>` under `embargo` | where `smoothed_state<j>` is |
 
 ## `hawkes`
 

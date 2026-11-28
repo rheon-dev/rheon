@@ -1213,19 +1213,28 @@ def test_fixed_lag_smoothing_emits_fields_and_respects_rules():
             half_life=50.0,
             smooth_lag=0,
         )
-    with pytest.raises(ValueError, match="embargo"):
-        rp.spec.hmm(
-            "h",
-            features=["x0", "x1"],
-            n_components=2,
-            precision_prior=1e-2,
-            half_life=50.0,
-            clock="t",
-            gap_cap=10.0,
-            embargo=2.0,
-            smooth_lag=3,
-        )
-    with pytest.raises(ValueError, match="label_clock"):
+    # Under embargo, smooth_lag emits parallel List(Float64) / List(<clock>) columns.
+    s_emb = rp.spec.hmm(
+        "h",
+        features=["x0", "x1"],
+        n_components=2,
+        precision_prior=1e-2,
+        half_life=50.0,
+        clock="t",
+        gap_cap=10.0,
+        embargo=2.0,
+        means=m0,
+        covs=c0,
+        smooth_lag=3,
+    )
+    emb_idx = dict(
+        zip(rp.spec.output_index(s_emb)["field"], rp.spec.output_index(s_emb)["dtype"], strict=True)
+    )
+    assert emb_idx["smoothed_state0"] == "list[f64]"
+    assert emb_idx["smoothed_state1"] == "list[f64]"
+    assert emb_idx["smoothed_for"] == "list[clock]"
+    # label_clock is still refused by check_label_clock, not check_smoother.
+    with pytest.raises(ValueError, match="label_clock does not work with hmm"):
         rp.spec.hmm(
             "h",
             features=["x0", "x1"],

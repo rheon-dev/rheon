@@ -5068,7 +5068,10 @@ pub use vector_ar::VectorArRead;
 mod smoothed;
 
 mod arrays;
-use arrays::{coef_list_array, named_column, named_columns, opt_bool_array, opt_f64_array};
+use arrays::{
+    clock_list_array, coef_list_array, named_column, named_columns, nested_coef_list_array,
+    opt_bool_array, opt_f64_array,
+};
 
 mod assembly;
 mod groups;

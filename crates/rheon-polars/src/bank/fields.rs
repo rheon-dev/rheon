@@ -148,10 +148,17 @@ pub(super) enum Source {
     /// `kalman`'s fixed-lag smoother, per instance: `smoothed_coef` and
     /// `smoothed_se_coef`, laid out like `Coef`, and `smoothed_for_<t>`,
     /// per instance and target (`instance * m + target`), in the clock
-    /// column's own type.
+    /// column's own type. Under delayed learning (`embargo`, `label_clock`, or
+    /// a formula target), each field becomes a list holding every emitting
+    /// release on that row (`SmoothedCoefList`, `SmoothedSeList`,
+    /// `SmoothedStateList` for `hmm`, and `SmoothedForList`).
     SmoothedCoef(usize),
     SmoothedSe(usize),
     SmoothedFor(usize),
+    SmoothedCoefList(usize),
+    SmoothedSeList(usize),
+    SmoothedStateList(usize),
+    SmoothedForList(usize),
     LamSelected(usize),
     /// `weight_<target>` under `emit_target_weight`: the weight the
     /// target's `min_weight` gate read, per instance and target, laid out
@@ -211,15 +218,13 @@ impl FieldMeta {
     fn src(mut self, src: Source) -> Self {
         // The clock fields take the clock column's own type, known only
         // when a chunk arrives (task 152).
-        let is_clock = matches!(
-            src,
-            Source::ScoredClock | Source::LearnedClock | Source::SmoothedFor(_)
-        );
         self.src = src;
-        self.dtype = if is_clock {
-            "clock".to_string()
-        } else {
-            self.dtype().to_string()
+        self.dtype = match self.src {
+            Source::ScoredClock | Source::LearnedClock | Source::SmoothedFor(_) => {
+                "clock".to_string()
+            }
+            Source::SmoothedForList(_) => "list[clock]".to_string(),
+            _ => self.dtype().to_string(),
         };
         self
     }
@@ -250,7 +255,12 @@ impl FieldMeta {
             | Source::SeCoefHac(_)
             | Source::Dfbetas(_)
             | Source::SmoothedCoef(_)
-            | Source::SmoothedSe(_) => DataType::List(Box::new(DataType::Float64)),
+            | Source::SmoothedSe(_)
+            | Source::SmoothedStateList(_)
+            | Source::SmoothedForList(_) => DataType::List(Box::new(DataType::Float64)),
+            Source::SmoothedCoefList(_) | Source::SmoothedSeList(_) => {
+                DataType::List(Box::new(DataType::List(Box::new(DataType::Float64))))
+            }
             // The reasons the spec can name, set from
             // `stream::withheld_reasons` where the field is pushed.
             Source::Reason(_) => enum_of(self.categories.as_deref().unwrap_or_default()),
@@ -819,21 +829,36 @@ pub fn output_index(spec: &Spec) -> Vec<FieldMeta> {
                 }
                 // The fixed-lag smoother's, on the rows that complete a lag.
                 if spec.is_kalman_smoother() {
+                    let list = spec.smoothed_is_list();
                     fields.push(like(
-                        FieldMeta::new(format!("smoothed_coef{suffix}"), "smoothed_coef")
-                            .src(Source::SmoothedCoef(mi)),
+                        FieldMeta::new(format!("smoothed_coef{suffix}"), "smoothed_coef").src(
+                            if list {
+                                Source::SmoothedCoefList(mi)
+                            } else {
+                                Source::SmoothedCoef(mi)
+                            },
+                        ),
                     ));
                     if spec.emit_smoothed_se() {
                         fields.push(like(
                             FieldMeta::new(format!("smoothed_se_coef{suffix}"), "smoothed_se_coef")
-                                .src(Source::SmoothedSe(mi)),
+                                .src(if list {
+                                    Source::SmoothedSeList(mi)
+                                } else {
+                                    Source::SmoothedSe(mi)
+                                }),
                         ));
                     }
                     for (t_i, t) in spec.targets.iter().enumerate() {
+                        let slot = mi * spec.m() + t_i;
                         fields.push(like(
                             FieldMeta::new(format!("smoothed_for_{t}{suffix}"), "smoothed_for")
                                 .target(t)
-                                .src(Source::SmoothedFor(mi * spec.m() + t_i)),
+                                .src(if list {
+                                    Source::SmoothedForList(slot)
+                                } else {
+                                    Source::SmoothedFor(slot)
+                                }),
                         ));
                     }
                 }
@@ -1353,18 +1378,26 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
     // state means as `coef`.
     if let crate::ModelKind::Hmm { k, smooth_lag, .. } = &spec.model {
         let smoothed = smooth_lag.is_some();
+        let list = spec.smoothed_is_list();
         let labels = rheon_core::Hmm::labels_with(*k, smoothed);
-        let n_slots = labels.len();
+        // Flat slots per instance in `pred`: `2*k + 2` when smoothed states
+        // live in `smoothed_state_list`, matching `SpecDerived::per_model`.
+        let flat_slots = if list {
+            rheon_core::Hmm::n_outputs_for(*k)
+        } else {
+            labels.len()
+        };
         let mut fields = Vec::new();
         for (mi, (suffix, d)) in decays.iter().enumerate() {
             for (slot, l) in labels.iter().enumerate() {
-                let at = mi * n_slots + slot;
                 // `state` is a small count, so it rides in `pred` and comes
                 // out as an `i64`, as every integer output does.
-                let src = if l == "state" {
-                    Source::Id(at)
+                let src = if list && slot >= flat_slots {
+                    Source::SmoothedStateList(mi * *k + (slot - flat_slots))
+                } else if l == "state" {
+                    Source::Id(mi * flat_slots + slot)
                 } else {
-                    Source::Stat(at)
+                    Source::Stat(mi * flat_slots + slot)
                 };
                 // `filtered_state<s>`, `predicted_state<s>`, and
                 // `smoothed_state<s>`: the kind, and the state they are about.
@@ -1383,7 +1416,11 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
                 fields.push(
                     FieldMeta::new(format!("smoothed_for{suffix}"), "smoothed_for")
                         .decay(suffix, d)
-                        .src(Source::SmoothedFor(mi)),
+                        .src(if list {
+                            Source::SmoothedForList(mi)
+                        } else {
+                            Source::SmoothedFor(mi)
+                        }),
                 );
             }
             fields.push(

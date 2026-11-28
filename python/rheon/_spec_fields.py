@@ -158,12 +158,14 @@ def output_index(spec: dict[str, Any]) -> pl.DataFrame:
         Null where no column set describes the field, as for a prediction.
     ``dtype``
         The type the bank declares to Polars before the first row is read:
-        ``f64``, ``bool``, ``list[f64]``, ``enum`` (an ``Enum`` of
-        its values in their order: ``withheld_reason``'s, an ``ew_class``
-        spec's ``classes`` for ``class``, a grid's slots for
+        ``f64``, ``bool``, ``list[f64]``, ``list[list[f64]]`` (embargoed
+        ``kalman`` smoothed coefficients and standard errors), ``enum`` (an
+        ``Enum`` of its values in their order: ``withheld_reason``'s, an
+        ``ew_class`` spec's ``classes`` for ``class``, a grid's slots for
         ``selected_<t>``), ``i64`` (every integer: a count, a state, a row
-        index, an id or a cluster label), or ``clock`` (``scored_clock`` and
-        ``learned_clock``, in the clock column's own type).
+        index, an id or a cluster label), ``clock`` (``scored_clock``,
+        ``learned_clock`` and ``smoothed_for``, in the clock column's own
+        type), or ``list[clock]`` (embargoed ``smoothed_for``).
 
     .. rubric:: Raises
 

@@ -477,6 +477,16 @@ CASES: list[Case] = [
         },
     ),
     Case(
+        "kalman_smooth_embargo",
+        "kalman",
+        full2(
+            coef_half_life=50.0,
+            smooth_lag=3,
+            emit_smoothed_se=True,
+            max_state_bytes=500_000,
+        ),
+    ),
+    Case(
         "lasso",
         "lasso",
         full(
@@ -1905,6 +1915,21 @@ CASES: list[Case] = [
             "means_weight": 2.0,
             "covars_prior": [0.25],
             "covars_weight": 3.0,
+        },
+    ),
+    Case(
+        "hmm_smooth_embargo",
+        "hmm",
+        {
+            **without(STREAM2, ("fit_intercept",)),
+            "features": ["x1", "x2"],
+            "n_components": 2,
+            "precision_prior": 0.1,
+            "covariance_type": "spherical",
+            "means": [-1.0, 0.0, 1.0, 0.0],
+            "covs": [0.5, 1.0],
+            "smooth_lag": 3,
+            "max_state_bytes": 131_072,
         },
     ),
     Case(

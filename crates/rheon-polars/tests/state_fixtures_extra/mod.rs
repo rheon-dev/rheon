@@ -29,6 +29,27 @@ fn every_form_a_schema_moved_is_written_by_a_fixture() {
             "the last row's smoothed fields",
             smoothed_last,
         ),
+        // Embargoed `smooth_lag` list-typed `LastRow` fields (kalman + hmm).
+        (
+            "bank_smoothed_embargo",
+            "last row's smoothed_coef_list",
+            smoothed_coef_list_last,
+        ),
+        (
+            "bank_smoothed_embargo",
+            "last row's smoothed_se_list",
+            smoothed_se_list_last,
+        ),
+        (
+            "bank_smoothed_embargo",
+            "last row's smoothed_state_list",
+            smoothed_state_list_last,
+        ),
+        (
+            "bank_smoothed_embargo",
+            "last row's smoothed_for_list",
+            smoothed_for_list_last,
+        ),
         // `hmm` spherical / smoother / conjugate priors and `bocpd` NB + known variance.
         ("bank_hmm_bocpd_ext", "hmm spherical states", |p, v| {
             p.contains(".spherical_states.") && p.ends_with(".var") && v.as_f64().is_some()

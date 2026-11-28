@@ -46,6 +46,28 @@ impl Spec {
         )
     }
 
+    /// Whether this spec's fixed-lag smoothed outputs are list-typed (one
+    /// element per emitting released observation on that row, null when none
+    /// emitted): true whenever `smooth_lag` is paired with delayed learning
+    /// (`embargo`, `label_clock`, or a formula target), where one arriving row
+    /// can release zero, one, or many held rows.
+    pub fn smoothed_is_list(&self) -> bool {
+        self.smooth_lag().is_some()
+            && (self.embargo.is_some() || self.label_clock.is_some() || self.targets.any_formula())
+    }
+
+    /// Number of `hmm` smoothed state list slots per model instance (`k` for
+    /// an `hmm` with `smooth_lag` under delayed learning, `0` otherwise).
+    pub fn hmm_smoothed_list_slots(&self) -> usize {
+        if !self.smoothed_is_list() {
+            return 0;
+        }
+        match &self.model {
+            ModelKind::Hmm { k, .. } => *k,
+            _ => 0,
+        }
+    }
+
     /// Number of `smoothed_for` label slots per model instance (`m` for
     /// `kalman`, `1` for `hmm`, `0` otherwise).
     pub fn smoothed_for_slots(&self) -> usize {
@@ -102,8 +124,8 @@ impl Spec {
         one.saturating_mul(instances)
     }
 
-    /// The smoother's settings: a lag of at least 1, `embargo`/`label_clock`
-    /// mutual exclusion, and the ring's bytes within `max_state_bytes`.
+    /// The smoother's settings: a lag of at least 1, compatible covariance
+    /// form, and the ring's bytes within `max_state_bytes`.
     pub(super) fn check_smoother(&self) -> Result<(), String> {
         let name = &self.name;
         if let ModelKind::Hmm {
@@ -117,19 +139,6 @@ impl Spec {
                 return Ok(());
             };
             let mut no = rheon_core::Refusals::new();
-            for (key, set) in [
-                ("embargo", self.embargo.is_some()),
-                ("label_clock", self.label_clock.is_some()),
-            ] {
-                if set {
-                    no.refuse(format!(
-                        "spec {name:?}: smooth_lag cannot be used with {key}: {key} holds each \
-                         row until a later row releases it, one row can release several, and the \
-                         smoothed value of each that completes its lag would need the same line. \
-                         Leave out {key}, or leave out smooth_lag."
-                    ));
-                }
-            }
             // Multi-instance check when a half-life grid runs more than one
             // instance (single-instance bounds are checked by `HmmCfg::validate`).
             let instances = self.decays().map_or(1, |d| d.len());
@@ -185,23 +194,6 @@ impl Spec {
                 }
             }
             return no.finish();
-        }
-        // A held row is learned on the row whose clock releases it, and one
-        // row can release several, each of which can complete a lag: the
-        // row's line has room for one value a target, so the others would
-        // be lost.
-        for (key, set) in [
-            ("embargo", self.embargo.is_some()),
-            ("label_clock", self.label_clock.is_some()),
-        ] {
-            if set {
-                no.refuse(format!(
-                    "spec {name:?}: smooth_lag cannot be used with {key}: {key} holds each \
-                     row until a later row releases it, one row can release several, and the \
-                     smoothed value of each that completes its lag would need the same line. \
-                     Leave out {key}, or leave out smooth_lag."
-                ));
-            }
         }
         if !covariance_form.is_covariance() {
             no.refuse(format!(

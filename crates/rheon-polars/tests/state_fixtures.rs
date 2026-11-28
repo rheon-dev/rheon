@@ -3267,6 +3267,11 @@ fn kinds() -> Vec<Kind> {
             run: smoothed_run,
         },
         Kind {
+            name: "bank_smoothed_embargo",
+            first: smoothed_embargo_first,
+            run: smoothed_embargo_run,
+        },
+        Kind {
             name: "bank_kalman_nonlinear",
             first: kalman_nonlinear_first,
             run: kalman_nonlinear_run,
@@ -3873,6 +3878,130 @@ fn smoothed_run(bytes: &[u8], input: &DataFrame) -> Ran {
     ))
 }
 
+/// Uneven-clock frame for `bank_smoothed_embargo`: bursts of 0.5-unit steps
+/// followed by 3.5-unit jumps (including at `SPLIT - 1`) so the saved state's
+/// `LastRow` freezes multi-element `smoothed_coef_list`, `smoothed_se_list`,
+/// `smoothed_state_list`, and `smoothed_for_list`, while `pending` still holds
+/// unreleased rows across the save boundary.
+fn smoothed_embargo_frame() -> DataFrame {
+    let mut r = lcg(2759);
+    let mut t_acc = 0.0;
+    let mut t = Vec::with_capacity(N);
+    let mut x0 = Vec::with_capacity(N);
+    let mut x1 = Vec::with_capacity(N);
+    let mut y = Vec::with_capacity(N);
+    let mut mid = Vec::with_capacity(N);
+    let mut w = Vec::with_capacity(N);
+    for i in 0..N {
+        let step = if i == SPLIT - 1 {
+            3.5
+        } else {
+            [0.5, 0.5, 0.5, 3.25, 0.5, 0.5, 3.5][i % 7]
+        };
+        t_acc += step;
+        let a = r() * 2.0 - 1.0;
+        let b = r() * 2.0 - 1.0;
+        let regime = if (i / 14) % 2 == 0 { -1.2 } else { 1.2 };
+        let fa = regime + 0.4 * a;
+        let fb = regime + 0.4 * b;
+        t.push(t_acc);
+        x0.push(fa);
+        x1.push(fb);
+        y.push(if i % 11 == 3 {
+            None
+        } else {
+            Some(1.0 + 1.4 * fa - 0.8 * fb + 0.15 * (r() - 0.5))
+        });
+        mid.push(Some(2.0 + 0.5 * (fa * fa + fb * fb) + 0.2 * r()));
+        w.push(if i % 13 == 5 && i != SPLIT - 1 {
+            0.0
+        } else {
+            0.8 + 0.4 * r()
+        });
+    }
+    df!("t" => t, "x0" => x0, "x1" => x1, "y" => y, "mid" => mid, "w" => w).unwrap()
+}
+
+/// The specs of `bank_smoothed_embargo`: multi-target `kalman` with `embargo`,
+/// `emit_smoothed_se`, and per-target `min_weight`, nonlinear EKF `kalman` with
+/// `embargo` and `emit_smoothed_se`, and spherical `hmm` with `embargo` and
+/// `smooth_lag`.
+fn smoothed_embargo_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "kalman_emb", "model": {"type": "kalman", "coef_half_life": 40.0, "smooth_lag": 4, "emit_smoothed_se": true}, "targets": ["y", "mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 15.0, "embargo": 3.0, "half_life": 50.0, "weight": "w", "min_weight": [30.0, 1.0]}"#,
+        r#"{"name": "kalman_ekf_emb", "model": {"type": "kalman", "family": "poisson", "filter": "ekf", "q": [0.0001, 0.0001, 0.0001], "smooth_lag": 3, "emit_smoothed_se": true}, "targets": ["mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 15.0, "embargo": 3.0, "half_life": 50.0, "weight": "w", "min_weight": 2.0}"#,
+        r#"{"name": "hmm_emb", "model": {"type": "hmm", "n_components": 2, "covariance_type": "spherical", "precision_prior": 0.1, "warm_rows": 10, "smooth_lag": 3}, "features": ["x0", "x1"], "clock": "t", "gap_cap": 15.0, "embargo": 3.0, "half_life": 20.0, "weight": "w"}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn smoothed_coef_list_last(p: &str, v: &rmpv::Value) -> bool {
+    p.contains(".smoothed_coef_list.") && v.as_f64().is_some_and(f64::is_finite)
+}
+
+fn smoothed_se_list_last(p: &str, v: &rmpv::Value) -> bool {
+    p.contains(".smoothed_se_list.") && v.as_f64().is_some_and(f64::is_finite)
+}
+
+fn smoothed_state_list_last(p: &str, v: &rmpv::Value) -> bool {
+    p.contains(".smoothed_state_list.") && v.as_f64().is_some_and(f64::is_finite)
+}
+
+fn smoothed_for_list_last(p: &str, v: &rmpv::Value) -> bool {
+    p.contains(".smoothed_for_list.") && p.ends_with(".F64") && v.as_f64().is_some()
+}
+
+#[test]
+fn the_smoothed_embargo_bank_holds_each_form_when_saved() {
+    let (bytes, _) = smoothed_embargo_first();
+    let v = rmpv::decode::read_value(&mut bytes.as_slice()).unwrap();
+    let mut all = Vec::new();
+    leaves(&v, "", &mut all);
+    for (form, holds) in [
+        (
+            "smoothed_coef_list in LastRow",
+            smoothed_coef_list_last as fn(&str, &rmpv::Value) -> bool,
+        ),
+        ("smoothed_se_list in LastRow", smoothed_se_list_last),
+        ("smoothed_state_list in LastRow", smoothed_state_list_last),
+        ("smoothed_for_list in LastRow", smoothed_for_list_last),
+    ] {
+        assert!(all.iter().any(|(p, v)| holds(p, v)), "no leaf holds {form}");
+    }
+}
+
+fn smoothed_embargo_first() -> (Vec<u8>, DataFrame) {
+    let df = smoothed_embargo_frame();
+    let mut bank = Bank::new(smoothed_embargo_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn smoothed_embargo_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    let mut bank = Bank::load_bytes(bytes, Some(&smoothed_embargo_specs()))?;
+    let again = bank.save_bytes()?;
+    let tail_before = bank.smoothed_tail(0, None)?;
+    let (_, last_k) = bank.last_row(0, None)?;
+    let (_, last_h) = bank.last_row(2, None)?;
+    let last_frame =
+        DataFrame::new(last_k.len(), vec![last_k, last_h]).map_err(|e| e.to_string())?;
+    let cols = bank.fit_predict(input).map_err(|e| e.to_string())?;
+    let out = DataFrame::new(input.height(), cols).map_err(|e| e.to_string())?;
+    Ok((
+        again,
+        vec![
+            ("smoothed_tail".into(), tail_before),
+            ("last_row".into(), last_frame),
+            ("fit_predict".into(), out),
+        ],
+    ))
+}
+
 /// The specs of `bank_kalman_nonlinear`: EKF Poisson, UKF scalar_index Gamma
 /// inverse, and UKF merwe Gaussian log (plugin noise), all on the strictly
 /// positive `mid` column of `frame()`.
@@ -4100,7 +4229,7 @@ fn same_series(what: &str, got: &Series, want: &Series, tol: f64) {
     assert_eq!(got.dtype(), want.dtype(), "{what}: dtype");
     assert_eq!(got.len(), want.len(), "{what}: length");
     match want.dtype() {
-        DataType::List(inner) if **inner == DataType::Float64 => {
+        DataType::List(_) => {
             let (g, w) = (got.list().unwrap(), want.list().unwrap());
             for i in 0..want.len() {
                 match (g.get_as_series(i), w.get_as_series(i)) {
@@ -4441,7 +4570,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 38),
+            ("bank", 39),
             ("bars", 4),
             ("checkpoint", 1),
             ("merge", 4),

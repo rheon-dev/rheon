@@ -38,6 +38,12 @@ enum Acc {
     /// `coef` and the fields laid out like it: the rows that carry one, as
     /// `(row, values)`, taken from the run's buffers rather than copied.
     Lists(Vec<(usize, Vec<f64>)>),
+    /// List-typed `smoothed_coef` / `smoothed_se_coef` under delayed learning:
+    /// `(row, emissions)` taken from the run's buffers.
+    NestedLists(Vec<(usize, Vec<Vec<f64>>)>),
+    /// List-typed `smoothed_for` under delayed learning: `(row, clocks)` taken
+    /// from the run's buffers.
+    ClockLists(Vec<(usize, Vec<Option<ClockValue>>)>),
     Clocks(Vec<Option<ClockValue>>),
     /// `emit_selected` and `emit_averaged`, which read every slot of a row
     /// and so are kept in the sink rather than per field.
@@ -263,6 +269,7 @@ fn lists_of<'c>(src: &Source, ch: &'c mut ChunkOut) -> &'c mut [Vec<Option<Vec<f
         Source::Dfbetas(_) => &mut ch.dfbetas,
         Source::SmoothedCoef(_) => &mut ch.smoothed_coef,
         Source::SmoothedSe(_) => &mut ch.smoothed_se,
+        Source::SmoothedStateList(_) => &mut ch.smoothed_state_list,
         _ => unreachable!("only a list field reads a coef-like buffer"),
     }
 }
@@ -322,7 +329,12 @@ impl<'a> Sink<'a> {
                 | Source::SeCoefHac(_)
                 | Source::Dfbetas(_)
                 | Source::SmoothedCoef(_)
-                | Source::SmoothedSe(_) => Acc::Lists(Vec::new()),
+                | Source::SmoothedSe(_)
+                | Source::SmoothedStateList(_) => Acc::Lists(Vec::new()),
+                Source::SmoothedCoefList(_) | Source::SmoothedSeList(_) => {
+                    Acc::NestedLists(Vec::new())
+                }
+                Source::SmoothedForList(_) => Acc::ClockLists(Vec::new()),
                 Source::ScoredClock | Source::LearnedClock | Source::SmoothedFor(_) => {
                     Acc::Clocks(vec![None; n])
                 }
@@ -510,10 +522,23 @@ impl<'a> Sink<'a> {
         // The lists are taken first, on this thread: each takes from its own
         // buffer, but a job holding `&mut` to every run would hold them all.
         for (acc, f) in self.fields.iter_mut().zip(&self.d.schema) {
-            if let Acc::Lists(list) = acc {
-                for ch in chunks.iter_mut() {
-                    take_lists(list, &f.src, ch);
+            match acc {
+                Acc::Lists(list) => {
+                    for ch in chunks.iter_mut() {
+                        take_lists(list, &f.src, ch);
+                    }
                 }
+                Acc::NestedLists(list) => {
+                    for ch in chunks.iter_mut() {
+                        take_nested_lists(list, &f.src, ch);
+                    }
+                }
+                Acc::ClockLists(list) => {
+                    for ch in chunks.iter_mut() {
+                        take_clock_lists(list, &f.src, ch);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -558,6 +583,21 @@ impl<'a> Sink<'a> {
                     rows[*row] = Some(c);
                 }
                 coef_list_array(&rows)
+            }
+            (Acc::NestedLists(list), _) => {
+                let mut rows: Vec<Option<&Vec<Vec<f64>>>> = vec![None; n];
+                for (row, c) in &list {
+                    rows[*row] = Some(c);
+                }
+                nested_coef_list_array(&rows)
+            }
+            (Acc::ClockLists(list), _) => {
+                let numeric = crate::stream::ClockDtype::Numeric;
+                let mut rows: Vec<Option<&Vec<Option<ClockValue>>>> = vec![None; n];
+                for (row, c) in &list {
+                    rows[*row] = Some(c);
+                }
+                clock_list_array(self.clock_dtype.unwrap_or(&numeric), &rows)
             }
             (Acc::Clocks(values), _) => {
                 let numeric = crate::stream::ClockDtype::Numeric;
@@ -664,8 +704,8 @@ fn absorb_field(
                 }
             }
         }
-        // Taken from the run by `take_lists`, and kept in the sink.
-        Acc::Lists(_) | Acc::Derived => {}
+        // Taken from the run by `prepare`, and kept in the sink.
+        Acc::Lists(_) | Acc::NestedLists(_) | Acc::ClockLists(_) | Acc::Derived => {}
         Acc::Later => unreachable!("allocated above"),
     }
 }
@@ -683,7 +723,8 @@ fn take_lists(list: &mut Vec<(usize, Vec<f64>)>, src: &Source, ch: &mut ChunkOut
         | Source::SeCoefHac(mi)
         | Source::Dfbetas(mi)
         | Source::SmoothedCoef(mi)
-        | Source::SmoothedSe(mi) => mi,
+        | Source::SmoothedSe(mi)
+        | Source::SmoothedStateList(mi) => mi,
         _ => unreachable!("only a list field takes lists"),
     };
     let rows = std::mem::take(&mut ch.rows);
@@ -697,6 +738,42 @@ fn take_lists(list: &mut Vec<(usize, Vec<f64>)>, src: &Source, ch: &mut ChunkOut
     }
     ch.rows = rows;
     ch.processed = processed;
+}
+
+/// The rows of one run that carry a delayed `kalman` smoothed list, moved out
+/// of the run.
+fn take_nested_lists(list: &mut Vec<(usize, Vec<Vec<f64>>)>, src: &Source, ch: &mut ChunkOut) {
+    let (slot, buf) = match *src {
+        Source::SmoothedCoefList(mi) => (mi, &mut ch.smoothed_coef_list),
+        Source::SmoothedSeList(mi) => (mi, &mut ch.smoothed_se_list),
+        _ => unreachable!("only a nested list field takes nested lists"),
+    };
+    for (ri, &row) in ch.rows.iter().enumerate() {
+        if ch.processed[ri]
+            && let Some(c) = buf[slot][ri].take()
+        {
+            list.push((row, c));
+        }
+    }
+}
+
+/// The rows of one run that carry a delayed `smoothed_for` clock list, moved
+/// out of the run.
+fn take_clock_lists(
+    list: &mut Vec<(usize, Vec<Option<ClockValue>>)>,
+    src: &Source,
+    ch: &mut ChunkOut,
+) {
+    let Source::SmoothedForList(slot) = *src else {
+        unreachable!("only a clock list field takes clock lists")
+    };
+    for (ri, &row) in ch.rows.iter().enumerate() {
+        if ch.processed[ri]
+            && let Some(c) = ch.smoothed_for_list[slot][ri].take()
+        {
+            list.push((row, c));
+        }
+    }
 }
 
 /// One spec's struct array from every run of a chunk at once: one job per

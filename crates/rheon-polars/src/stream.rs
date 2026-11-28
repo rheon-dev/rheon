@@ -1519,7 +1519,7 @@ mod any_restore;
 mod chunk_out;
 mod run_parts;
 use chunk_out::Buffers;
-pub use chunk_out::ChunkOut;
+pub use chunk_out::{ChunkOut, ClockListRow, NestedListRow};
 use run_parts::{build_instances, joined, keep_plans, plan_buffer};
 
 mod last_row;
@@ -3743,12 +3743,16 @@ struct Instance<'a> {
     o_se_hc3: Option<&'a mut Vec<Option<Vec<f64>>>>,
     o_se_hac: &'a mut Vec<Option<Vec<f64>>>,
     o_dfbetas: Option<&'a mut Vec<Option<Vec<f64>>>>,
-    /// `kalman`'s fixed-lag smoother's outputs (`smoothed_coef`,
-    /// `smoothed_se_coef`, and each target's `smoothed_for`, a target's
-    /// `n_rows` after another), where the spec has one.
+    /// Fixed-lag smoother outputs (`smoothed_coef`, `smoothed_se_coef`, and
+    /// `smoothed_for` without delayed learning; list-typed variants under
+    /// `embargo`, `label_clock`, or a formula target), where the spec has one.
     o_smoothed: Option<&'a mut Vec<Option<Vec<f64>>>>,
     o_smoothed_se: Option<&'a mut Vec<Option<Vec<f64>>>>,
     o_smoothed_for: &'a mut [Option<ClockValue>],
+    o_smoothed_list: Option<&'a mut Vec<NestedListRow>>,
+    o_smoothed_se_list: Option<&'a mut Vec<NestedListRow>>,
+    o_smoothed_state_list: &'a mut [Vec<Option<Vec<f64>>>],
+    o_smoothed_for_list: &'a mut [Vec<ClockListRow>],
     /// The decay time this instance has seen (docs/WARMUP-AND-CONVERGENCE.md
     /// §2), read before each row and advanced by the rows it learns from.
     decay_time: &'a mut f64,
@@ -4094,6 +4098,9 @@ fn run_instance(
     let waits = inst.model.get().waits();
     let is_dcc = matches!(inst.model.get(), AnyModel::Dcc(_));
     let is_corrchange = matches!(inst.model.get(), AnyModel::CorrChange(_));
+    let is_list_sm = !inst.o_smoothed_for_list.is_empty();
+    let has_smoother = !inst.o_smoothed_for.is_empty() || is_list_sm;
+    let is_kalman_sm = inst.o_smoothed.is_some() || inst.o_smoothed_list.is_some();
     let is_hawkes = matches!(inst.model.get(), AnyModel::Hawkes(_));
     let is_pca = matches!(inst.spec.model, ModelKind::Pca { .. });
     let is_isotonic = matches!(inst.spec.model, ModelKind::Isotonic { .. });
@@ -4481,7 +4488,7 @@ fn run_instance(
             }
             // The row's clock as the clock fields show it, for a smoother
             // to say which row a smoothed value describes.
-            if let (Some(label), true) = (plan.clock, !inst.o_smoothed_for.is_empty()) {
+            if let (Some(label), true) = (plan.clock, has_smoother) {
                 inst.model.get_mut().label_next(label);
             }
             // An audit counts the step as it elapsed, which no decay reads
@@ -4522,8 +4529,8 @@ fn run_instance(
                     .get()
                     .predict_at_with_prior_into(xs, &sc.ys, score_d, plan.stamp, pre_row, step);
             }
-            if inst.o_smoothed.is_none()
-                && !inst.o_smoothed_for.is_empty()
+            if !is_kalman_sm
+                && has_smoother
                 && let AnyModel::Hmm(m) = inst.model.get()
             {
                 let start = step.pred.len().saturating_sub(m.cfg().k);
@@ -4619,7 +4626,7 @@ fn run_instance(
                 }
                 // Its smoothed value is not reported either, when its lag
                 // completes.
-                if learn && inst.o_smoothed.is_some() {
+                if learn && is_kalman_sm {
                     inst.model.get_mut().hold_smoothed(tj);
                 }
             }
@@ -4669,19 +4676,37 @@ fn run_instance(
             inst.notified.unreachable = true;
             inst.notified.restart_waits();
         }
-        if learn
-            && !inst.o_smoothed_for.is_empty()
-            && (inst.o_smoothed.is_some()
-                || (reason == 0 && !step.pred.last().is_some_and(|v| v.is_nan())))
-        {
+        if learn && has_smoother {
             let at = if emit { ri } else { plan.drift_ri };
-            let outs = SmoothedOut {
-                coef: inst.o_smoothed.as_deref_mut(),
-                se: inst.o_smoothed_se.as_deref_mut(),
-                labels: &mut *inst.o_smoothed_for,
-                n_rows: inst.n_rows,
-            };
-            write_smoothed(inst.model.get(), &mut sc.smoothed, outs, at);
+            if !is_list_sm {
+                if is_kalman_sm || (reason == 0 && !step.pred.last().is_some_and(|v| v.is_nan())) {
+                    let outs = SmoothedOut {
+                        coef: inst.o_smoothed.as_deref_mut(),
+                        se: inst.o_smoothed_se.as_deref_mut(),
+                        labels: &mut *inst.o_smoothed_for,
+                        n_rows: inst.n_rows,
+                    };
+                    write_smoothed(inst.model.get(), &mut sc.smoothed, outs, at);
+                }
+            } else if is_kalman_sm {
+                let outs = run_parts::SmoothedListOut {
+                    coef: inst.o_smoothed_list.as_deref_mut(),
+                    se: inst.o_smoothed_se_list.as_deref_mut(),
+                    labels: &mut *inst.o_smoothed_for_list,
+                    n_rows: inst.n_rows,
+                };
+                run_parts::write_smoothed_list(inst.model.get(), &mut sc.smoothed, outs, at);
+            } else if reason == 0 && !step.pred.last().is_some_and(|v| v.is_nan()) {
+                run_parts::write_hmm_smoothed_list(
+                    inst.model.get(),
+                    &mut sc.smoothed,
+                    &step.pred,
+                    inst.o_smoothed_state_list,
+                    inst.o_smoothed_for_list,
+                    at,
+                    inst.n_rows,
+                );
+            }
         }
         // At or above the ratio: at equality the estimation variance is the
         // noise, and one observation's mean -- `edf = n_kish = 1`, exactly
@@ -5505,16 +5530,14 @@ struct SmoothedOut<'a> {
     n_rows: usize,
 }
 
-/// What `kalman`'s fixed-lag smoother emitted on a learned row, onto
-/// output row `at`: the row itself, or, for a row released from the
-/// `embargo` buffer, the row whose clock released it. Each target's
-/// coefficients take their place in `smoothed_coef`'s list (NaN where the
-/// row emitted none of that target's), the standard errors are the
-/// variances' roots, and each target's `smoothed_for` is the clock label of
-/// the row its value describes. The spec refuses `smooth_lag` beside a
-/// held row's release (`embargo`, `label_clock`), which could put several
-/// values of one target on one line; a second write to a line keeps the
-/// targets it does not emit.
+/// What a fixed-lag smoother emitted on a learned row without delayed
+/// learning, onto output row `at`. Each target's coefficients take their place
+/// in `smoothed_coef`'s list (NaN where the row emitted none of that
+/// target's), the standard errors are the variances' roots, and each target's
+/// `smoothed_for` is the clock label of the row its value describes. Under
+/// delayed learning (`embargo`, `label_clock`, or a formula target),
+/// [`run_parts::write_smoothed_list`] and [`run_parts::write_hmm_smoothed_list`]
+/// collect every emission released on one arriving row into parallel lists.
 fn write_smoothed(
     model: &AnyModel,
     buf: &mut rheon_core::Smoothed,
