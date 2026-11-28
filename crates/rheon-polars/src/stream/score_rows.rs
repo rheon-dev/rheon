@@ -95,6 +95,7 @@ pub(super) fn init_score_diags(
 /// Record raw pre-row `(q_lo, q_hi)` offsets per `(slot, level)` for a held
 /// row under `embargo` / `label_clock` when multi-level or asymmetric
 /// conformal is active (`2 * n_levels * n_slots` floats).
+#[cold]
 #[inline(never)]
 pub(super) fn shown_multi_offsets(
     record: &mut Vec<f64>,
@@ -118,6 +119,7 @@ pub(super) fn shown_multi_offsets(
 
 /// Record pre-row `sigma` per slot for a held row under `embargo` /
 /// `label_clock` when `emit_conformal_p` is active (`n_slots` floats).
+#[cold]
 #[inline(never)]
 pub(super) fn shown_conformal_p_sigma(
     record: &mut Vec<f64>,
@@ -135,6 +137,7 @@ pub(super) fn shown_conformal_p_sigma(
 /// Pack a held row's score-time prediction, shown conformal bounds/sigma,
 /// row inflation, and ungated predictions into `score_pred`.
 #[allow(clippy::too_many_arguments)]
+#[cold]
 #[inline(never)]
 pub(super) fn pack_score_pred(
     score_pred: &mut VecDeque<Vec<f64>>,
@@ -190,6 +193,7 @@ pub(super) fn pack_score_pred(
 
 /// Pop and unpack a released row's `score_pred` record.
 #[allow(clippy::too_many_arguments)]
+#[cold]
 #[inline(never)]
 pub(super) fn unpack_score_pred(
     score_pred: &mut VecDeque<Vec<f64>>,
@@ -261,6 +265,7 @@ pub(super) type ScoreRowSlices<'a> = (&'a [f64], &'a [f64], &'a [f64], &'a [Opti
 /// `2 * n_levels` blocks per instance: `(2 * li + 0)` = `width`,
 /// `(2 * li + 1)` = `winkler`.
 #[allow(clippy::too_many_arguments)]
+#[cold]
 #[inline(never)]
 pub(super) fn step_conformal_multi(
     cs: &mut [ConformalSlot],
@@ -359,6 +364,7 @@ pub(super) fn step_conformal_multi(
 /// Must be called BEFORE `step_conformal` mutates `cs` so direct rows read the
 /// exact same pre-row radius `c.radius(sig)` that `step_conformal` emitted.
 #[allow(clippy::too_many_arguments)]
+#[cold]
 #[inline(never)]
 pub(super) fn step_interval_scores_legacy(
     cs: &[Conformal],
@@ -396,6 +402,7 @@ pub(super) fn step_interval_scores_legacy(
 /// Output blocks are written in canonical order matching `bank/fields.rs`:
 /// `[mae? , pinball[0..P], log_loss?]`.
 #[allow(clippy::too_many_arguments)]
+#[cold]
 #[inline(never)]
 pub(super) fn step_scores(
     scores: &mut [SlotScores],
@@ -436,6 +443,7 @@ pub(super) fn step_scores(
 /// zero-weight Rule 9 inside `ConformalPRing::push`, and drains any once-per-
 /// group state-cap half-warning into `notified`.
 #[allow(clippy::too_many_arguments)]
+#[cold]
 #[inline(never)]
 pub(super) fn step_conformal_p(
     rings: &mut [ConformalPRing],

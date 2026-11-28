@@ -2171,8 +2171,9 @@ impl CorrChange {
             return f64::NAN;
         }
         let len = 2 * d + d * d.saturating_sub(1) / 2;
-        buf.clear();
-        buf.resize(2 * len, 0.0);
+        if buf.len() != 2 * len {
+            buf.resize(2 * len, 0.0);
+        }
         let (pre, post) = buf.split_at_mut(len);
         let (head, tail) = at.split_at(n1);
         Self::window_corr_flat(d, pool, head, pre);
@@ -2186,7 +2187,6 @@ impl CorrChange {
     /// compile time, so they unroll and each sum stays in a register.
     fn window_corr_flat(d: usize, pool: &[f64], at: &[usize], buf: &mut [f64]) {
         let wf = at.len() as f64;
-        buf.fill(0.0);
         let (mean, rest) = buf.split_at_mut(d);
         let (ss, corr) = rest.split_at_mut(d);
         macro_rules! fixed {
@@ -2194,6 +2194,9 @@ impl CorrChange {
                 match d {
                     $($n => Self::co_moments_fixed::<$n>(pool, at, wf, mean, ss, corr),)+
                     _ => {
+                        mean.fill(0.0);
+                        ss.fill(0.0);
+                        corr.fill(0.0);
                         for &i in at {
                             for (m, x) in mean.iter_mut().zip(&pool[i * d..(i + 1) * d]) {
                                 *m += x;
@@ -2238,12 +2241,16 @@ impl CorrChange {
         let mut c = [0.0f64; 28];
         for &i in at {
             let r = &rows[i];
+            let mut dev = [0.0f64; D];
+            for a in 0..D {
+                dev[a] = r[a] - m[a];
+            }
             let mut p = 0;
             for a in 0..D {
-                let da = r[a] - m[a];
+                let da = dev[a];
                 s[a] += da * da;
-                for b in (a + 1)..D {
-                    c[p] += da * (r[b] - m[b]);
+                for &db in &dev[(a + 1)..D] {
+                    c[p] += da * db;
                     p += 1;
                 }
             }
@@ -2333,8 +2340,10 @@ impl CorrChange {
         for r in &self.ring {
             pool.extend_from_slice(&r[..d]);
         }
-        shuffled.clear();
-        shuffled.reserve_exact(n);
+        if block > 1 {
+            shuffled.clear();
+            shuffled.reserve_exact(n);
+        }
         for _ in 0..self.cfg.n_perm {
             // Fisher-Yates over the blocks, from the state's own generator
             // so the draws are a function of the data alone.
@@ -2342,12 +2351,17 @@ impl CorrChange {
                 let j = below(&mut self.rng, i as u64 + 1) as usize;
                 order.swap(i, j);
             }
-            shuffled.clear();
-            for &bi in order.iter() {
-                let start = bi * block;
-                shuffled.extend(start..(start + block).min(n));
-            }
-            let s = self.window_stat_flat(pool, shuffled, n1, buf);
+            let at: &[usize] = if block == 1 {
+                order.as_slice()
+            } else {
+                shuffled.clear();
+                for &bi in order.iter() {
+                    let start = bi * block;
+                    shuffled.extend(start..(start + block).min(n));
+                }
+                shuffled.as_slice()
+            };
+            let s = self.window_stat_flat(pool, at, n1, buf);
             if s.is_finite() {
                 stats.push(s);
             }
@@ -2518,44 +2532,8 @@ impl CorrChange {
                         n_flagged = 1;
                     }
                 } else if self.cfg.alpha_adjust == "holm" {
-                    let m = self.cfg.npairs();
-                    let shift = GRID_SHIFT / (rows.len() as f64).sqrt();
-                    let mut pairs: Vec<(f64, f64, usize, usize)> = Vec::with_capacity(m);
-                    let mut idx = 0usize;
-                    for a in 0..self.cfg.n_features {
-                        for b in (a + 1)..self.cfg.n_features {
-                            let p = self.monitor_pair(&rows, a, b, &mut work);
-                            if p.stat.is_finite() {
-                                if stat.is_nan() || p.stat > stat {
-                                    stat = p.stat;
-                                }
-                                pairs.push((p.stat, p.ratio, p.at, idx));
-                            }
-                            idx += 1;
-                        }
-                    }
-                    // Sort descending by statistic, deterministic tie-break by pair index.
-                    pairs.sort_unstable_by(|x, y| y.0.total_cmp(&x.0).then_with(|| x.3.cmp(&y.3)));
-                    for (rank, &(p_stat, p_ratio, p_at, _)) in pairs.iter().enumerate() {
-                        let crit_r = if rank == 0 {
-                            crit
-                        } else {
-                            kolmogorov_quantile(self.cfg.alpha / (m - rank) as f64) - shift
-                        };
-                        if p_stat > crit_r {
-                            if p_ratio > crit_r {
-                                held = true;
-                            } else {
-                                n_flagged += 1;
-                                if flagged.is_nan() || p_stat > flagged {
-                                    (flagged, at) = (p_stat, p_at);
-                                }
-                            }
-                        } else {
-                            // Holm step-down stops at the first non-rejection.
-                            break;
-                        }
-                    }
+                    (stat, flagged, at, held, n_flagged) =
+                        self.monitor_holm(&rows, crit, &mut work);
                 } else {
                     for a in 0..self.cfg.n_features {
                         for b in (a + 1)..self.cfg.n_features {
@@ -2662,42 +2640,99 @@ impl CorrChange {
                     pred[4] = self.sequential_since_change(mon, at);
                 }
                 if self.cfg.emit_n_flagged {
-                    let n_flagged = if !flag {
-                        0
-                    } else if self.cfg.scalar {
-                        1
-                    } else if self.cfg.alpha_adjust == "holm" && self.cfg.crit.is_none() {
-                        let m = self.cfg.npairs();
-                        let (m_rows, k_rows) = mon.rows_of(&self.cfg);
-                        pair_ratios.retain(|r| !r.is_nan());
-                        pair_ratios.sort_unstable_by(|a, b| b.total_cmp(a));
-                        let mut count = 0usize;
-                        for (rank, &r) in pair_ratios.iter().enumerate() {
-                            let crit_r = if rank == 0 {
-                                crit
-                            } else {
-                                self.cfg.sequential_crit_at(
-                                    m_rows,
-                                    k_rows,
-                                    self.cfg.alpha / (m - rank) as f64,
-                                )
-                            };
-                            if crit_r.is_finite() && r > crit_r {
-                                count += 1;
-                            } else {
-                                break;
-                            }
-                        }
-                        count
-                    } else {
-                        pair_ratios
-                            .iter()
-                            .filter(|&&r| !r.is_nan() && crit.is_finite() && r > crit)
-                            .count()
-                    };
-                    pred[5] = n_flagged as f64;
+                    pred[5] = self.sequential_n_flagged(mon, flag, crit, &mut pair_ratios) as f64;
                 }
             }
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn monitor_holm(
+        &self,
+        rows: &[&[f64]],
+        crit: f64,
+        work: &mut Vec<f64>,
+    ) -> (f64, f64, usize, bool, usize) {
+        let (mut stat, mut flagged, mut at, mut held) = (f64::NAN, f64::NAN, 0, false);
+        let mut n_flagged: usize = 0;
+        let m = self.cfg.npairs();
+        let shift = GRID_SHIFT / (rows.len() as f64).sqrt();
+        let mut pairs: Vec<(f64, f64, usize, usize)> = Vec::with_capacity(m);
+        let mut idx = 0usize;
+        for a in 0..self.cfg.n_features {
+            for b in (a + 1)..self.cfg.n_features {
+                let p = self.monitor_pair(rows, a, b, work);
+                if p.stat.is_finite() {
+                    if stat.is_nan() || p.stat > stat {
+                        stat = p.stat;
+                    }
+                    pairs.push((p.stat, p.ratio, p.at, idx));
+                }
+                idx += 1;
+            }
+        }
+        pairs.sort_unstable_by(|x, y| y.0.total_cmp(&x.0).then_with(|| x.3.cmp(&y.3)));
+        for (rank, &(p_stat, p_ratio, p_at, _)) in pairs.iter().enumerate() {
+            let crit_r = if rank == 0 {
+                crit
+            } else {
+                kolmogorov_quantile(self.cfg.alpha / (m - rank) as f64) - shift
+            };
+            if p_stat > crit_r {
+                if p_ratio > crit_r {
+                    held = true;
+                } else {
+                    n_flagged += 1;
+                    if flagged.is_nan() || p_stat > flagged {
+                        (flagged, at) = (p_stat, p_at);
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+        (stat, flagged, at, held, n_flagged)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn sequential_n_flagged(
+        &self,
+        mon: &Monitoring,
+        flag: bool,
+        crit: f64,
+        pair_ratios: &mut Vec<f64>,
+    ) -> usize {
+        if !flag {
+            0
+        } else if self.cfg.scalar {
+            1
+        } else if self.cfg.alpha_adjust == "holm" && self.cfg.crit.is_none() {
+            let m = self.cfg.npairs();
+            let (m_rows, k_rows) = mon.rows_of(&self.cfg);
+            pair_ratios.retain(|r| !r.is_nan());
+            pair_ratios.sort_unstable_by(|a, b| b.total_cmp(a));
+            let mut count = 0usize;
+            for (rank, &r) in pair_ratios.iter().enumerate() {
+                let crit_r = if rank == 0 {
+                    crit
+                } else {
+                    self.cfg
+                        .sequential_crit_at(m_rows, k_rows, self.cfg.alpha / (m - rank) as f64)
+                };
+                if crit_r.is_finite() && r > crit_r {
+                    count += 1;
+                } else {
+                    break;
+                }
+            }
+            count
+        } else {
+            pair_ratios
+                .iter()
+                .filter(|&&r| !r.is_nan() && crit.is_finite() && r > crit)
+                .count()
         }
     }
 

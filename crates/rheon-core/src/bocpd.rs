@@ -851,22 +851,26 @@ impl Run {
     fn reset_for(&mut self, d: usize, emission: BocpdEmission) {
         self.len = 0.0;
         self.n = 0.0;
-        for (v, len) in [
-            (&mut self.mean, d),
-            (&mut self.m2, m2_len(d, emission)),
-            (&mut self.mean_lo, d),
-        ] {
-            v.clear();
-            v.resize(len, 0.0);
+        let m2 = m2_len(d, emission);
+        if self.mean.len() == d && self.m2.len() == m2 && self.mean_lo.len() == d {
+            self.mean.fill(0.0);
+            self.m2.fill(0.0);
+            self.mean_lo.fill(0.0);
+        } else {
+            for (v, len) in [
+                (&mut self.mean, d),
+                (&mut self.m2, m2),
+                (&mut self.mean_lo, d),
+            ] {
+                v.clear();
+                v.resize(len, 0.0);
+            }
         }
     }
 
-    /// The weighted Welford step: the deviation from the old mean enters the
-    /// scatter at weight `w·n/n'` -- `w·(x − x̄)(x − x̄')'`, since `x − x̄' =
-    /// (n/n')·(x − x̄)` -- and the mean then moves by `w/n'` of it. A row at
-    /// weight 0 (the `robust` emission forgiving it entirely) lengthens the
-    /// run and moves nothing else.
-    fn add(&mut self, x: &[f64], w: f64, full: bool) {
+    /// The weighted Welford step for Student-t emissions (`Diag`/`Gaussian`/`Robust`,
+    /// where `m2` is always allocated): avoids an extra emptiness check per run.
+    fn add_student(&mut self, x: &[f64], w: f64, full: bool) {
         let d = x.len();
         self.len += 1.0;
         let n_new = self.n + w;
@@ -874,12 +878,9 @@ impl Run {
             return;
         }
         let (b, c) = (w / n_new, w * self.n / n_new);
-        // Deviations from the means as the pairs they are.
-        let (mean, lo) = (&self.mean, &self.mean_lo);
-        let dev = |i: usize| crate::comp::dev(x[i], mean[i], lo[i]);
         if full {
-            // The upper triangle, mirrored, so the scatter stays symmetric
-            // to the bit.
+            let (mean, lo) = (&self.mean, &self.mean_lo);
+            let dev = |i: usize| crate::comp::dev(x[i], mean[i], lo[i]);
             let m2 = &mut self.m2;
             for i in 0..d {
                 let ci = c * dev(i);
@@ -891,17 +892,48 @@ impl Run {
                     }
                 }
             }
-        } else if !self.m2.is_empty() {
-            for (i, s) in self.m2.iter_mut().enumerate() {
-                let di = dev(i);
+            for ((m, lo), &xi) in self.mean.iter_mut().zip(self.mean_lo.iter_mut()).zip(x) {
+                let di = crate::comp::dev(xi, *m, *lo);
+                crate::comp::add(m, lo, b * di);
+            }
+        } else {
+            for (((s, m), lo), &xi) in self
+                .m2
+                .iter_mut()
+                .zip(self.mean.iter_mut())
+                .zip(self.mean_lo.iter_mut())
+                .zip(x)
+            {
+                let di = crate::comp::dev(xi, *m, *lo);
                 *s += c * di * di;
+                crate::comp::add(m, lo, b * di);
             }
         }
+        self.n = n_new;
+    }
+
+    /// Weighted mean step for `KnownVariance` (no `m2`).
+    fn add_known_var(&mut self, x: &[f64], w: f64) {
+        self.len += 1.0;
+        let n_new = self.n + w;
+        if !(w > 0.0 && n_new > 0.0) {
+            return;
+        }
+        let b = w / n_new;
         for ((m, lo), &xi) in self.mean.iter_mut().zip(self.mean_lo.iter_mut()).zip(x) {
             let di = crate::comp::dev(xi, *m, *lo);
             crate::comp::add(m, lo, b * di);
         }
         self.n = n_new;
+    }
+
+    #[cfg(test)]
+    fn add(&mut self, x: &[f64], w: f64, full: bool) {
+        if self.m2.is_empty() {
+            self.add_known_var(x, w);
+        } else {
+            self.add_student(x, w, full);
+        }
     }
 
     /// Scale the run back to `len` rows, as a decay scales a run's
@@ -1131,20 +1163,32 @@ fn grow_into(
     let r = logpi.len();
     new.clear();
     new.resize(r + 1, f64::NEG_INFINITY);
-    cp.clear();
-    for i in 0..r {
-        // A weight of 0 is the likelihood to the power 0, which is 1 even
-        // where the run could not have produced the row (`ln π = −∞`, and
-        // `0·(−∞)` NaN; review 2026-11-23, BOCPD-1): the run passes on as
-        // it is.
-        let t = weights[i] * logpi[i];
-        let base = joint[i] + if weights[i] == 0.0 { 0.0 } else { t };
-        let b = match next {
-            NextHazard::Fixed(b) => b,
-            NextHazard::NbTable => nb_table.at(runs[i].len as usize),
-        };
-        new[i + 1] = base + b.ln_grow;
-        cp.push(base + b.ln_break);
+    match next {
+        NextHazard::Fixed(b) => {
+            if cp.len() != r {
+                cp.resize(r, 0.0);
+            }
+            for ((((&j, &lp), &w), n_slot), cp_slot) in joint[..r]
+                .iter()
+                .zip(&logpi[..r])
+                .zip(&weights[..r])
+                .zip(&mut new[1..=r])
+                .zip(&mut cp[..r])
+            {
+                // A weight of 0 is the likelihood to the power 0, which is 1 even
+                // where the run could not have produced the row (`ln π = −∞`, and
+                // `0·(−∞)` NaN; review 2026-11-23, BOCPD-1): the run passes on as
+                // it is.
+                let t = w * lp;
+                let base = j + if w == 0.0 { 0.0 } else { t };
+                *n_slot = base + b.ln_grow;
+                *cp_slot = base + b.ln_break;
+            }
+        }
+        NextHazard::NbTable => {
+            cp.clear();
+            Bocpd::grow_nb_into(joint, runs, logpi, weights, nb_table, new, cp);
+        }
     }
     new[0] = log_sum_exp(cp);
 }
@@ -1570,16 +1614,24 @@ impl Bocpd {
             .collect()
     }
 
+    /// Coordinate `i` of one run's posterior mean for Student-t emissions
+    /// (`Diag`/`Gaussian`/`Robust`), without checking `known_var()`.
+    #[inline]
+    fn run_mean_student_at(&self, run: &Run, mu0: &[f64], i: usize) -> f64 {
+        let kn = self.cfg.prior_kappa + run.n;
+        mu0[i] + run.n / kn * (run.mean[i] - mu0[i])
+    }
+
     /// Coordinate `i` of one run's posterior mean, against the prior's mean
     /// `mu0` and scale `psi0` the caller read once, without a vector per run
     /// per row (task 250).
+    #[cfg(test)]
     #[inline]
     fn run_mean_at(&self, run: &Run, mu0: &[f64], psi0: &[f64], i: usize) -> f64 {
         if self.known_var() {
             return self.known_var_mean_at(run, mu0, psi0, i);
         }
-        let kn = self.cfg.prior_kappa + run.n;
-        mu0[i] + run.n / kn * (run.mean[i] - mu0[i])
+        self.run_mean_student_at(run, mu0, i)
     }
 
     /// [`Self::log_predictive`] under the full covariance, its own function
@@ -1609,8 +1661,13 @@ impl Bocpd {
             quad,
             factor,
         } = work;
-        mun.clear();
-        mun.extend((0..d).map(|i| self.run_mean_at(run, mu0, psi0, i)));
+        let ratio = run.n / kn;
+        if mun.len() != d {
+            mun.resize(d, 0.0);
+        }
+        for ((dst, &m0), &rm) in mun.iter_mut().zip(mu0).zip(&run.mean) {
+            *dst = m0 + ratio * (rm - m0);
+        }
         // `Ψₙ = Ψ₀ + S + (κ₀n/κₙ)(x̄ − μ₀)(x̄ − μ₀)'`, every term centred.
         // Its lower triangle alone, scaled to `Σ`: the factor reads
         // nothing else, and nothing else reads `Σ` (task 287). The
@@ -1627,9 +1684,18 @@ impl Bocpd {
         };
         sigma.clear();
         sigma.extend_from_slice(psi0);
+        let pull_k = k0 * run.n / kn;
         for i in 0..d {
+            let dm_i = run.mean[i] - mu0[i];
+            let base_i = pull_k * dm_i;
             for j in 0..=i {
-                let g = pull(k0, run.n, kn, run.mean[i] - mu0[i], run.mean[j] - mu0[j]);
+                let dm_j = run.mean[j] - mu0[j];
+                let g0 = base_i * dm_j;
+                let g = if g0.is_finite() {
+                    g0
+                } else {
+                    (k0 / kn) * run.n * dm_i * dm_j
+                };
                 let psi = sigma[i * d + j] + (run.m2[i * d + j] + g);
                 sigma[i * d + j] = psi * scale;
             }
@@ -1691,12 +1757,9 @@ impl Bocpd {
         Some((base - 0.5 * (dof + df) * (1.0 + q / dof).ln(), base))
     }
 
-    /// `(ln π(x), ln π(mode))` for one run: the log posterior predictive of
-    /// the row, and of the predictive's own mode, which is what the
-    /// `robust` weight is relative to. `mu0` and `psi0` are the prior's
-    /// ([`Self::mu0`], [`Self::psi0`]), read once a row by the caller rather
-    /// than copied for every run (task 250).
-    fn log_predictive(
+    /// `(ln π(x), ln π(mode))` for one run under Student-t emissions
+    /// (`Diag`/`Gaussian`/`Robust`): caller guarantees `!self.known_var()`.
+    fn log_predictive_student(
         &self,
         run: &Run,
         x: &[f64],
@@ -1705,9 +1768,6 @@ impl Bocpd {
         cache: Option<&mut LengthTerms>,
         work: &mut RunWork,
     ) -> Option<(f64, f64)> {
-        if self.known_var() {
-            return self.log_predictive_known_var(run, x, mu0, psi0);
-        }
         let d = self.cfg.n_features;
         let (k0, nu0) = (self.cfg.prior_kappa, self.cfg.nu0());
         let kn = k0 + run.n;
@@ -1729,7 +1789,7 @@ impl Bocpd {
                 };
                 let dm = run.mean[0] - mu0[0];
                 let (_, var) = scatter(psi0[0] + run.m2[0], k0, run.n, kn, nun, dm)?;
-                let z = (x[0] - self.run_mean_at(run, mu0, psi0, 0)) / var.sqrt();
+                let z = (x[0] - self.run_mean_student_at(run, mu0, 0)) / var.sqrt();
                 // `ln(νπ var)`, as one log where the product is a number.
                 let spread = nun * std::f64::consts::PI * var;
                 let ln_spread = if spread.is_finite() {
@@ -1752,35 +1812,90 @@ impl Bocpd {
                     (std::f64::consts::PI * (kn + 1.0) / kn).ln(),
                 ),
             };
-            let RunWork {
-                mun: psins,
-                delta: qs,
-                ..
-            } = work;
-            psins.clear();
-            qs.clear();
-            // The least `ψₙ`: from `2⁻¹²⁷` up no partial product of theirs
-            // falls below the normal numbers (`ln_sum_prod`), the usual
-            // case, read without a pass over them.
-            let mut low = f64::INFINITY;
-            for i in 0..d {
-                let dm = run.mean[i] - mu0[i];
-                let (psin, var) = scatter(psi0[i * d + i] + run.m2[i], k0, run.n, kn, nun, dm)?;
-                let z = (x[i] - self.run_mean_at(run, mu0, psi0, i)) / var.sqrt();
-                low = low.min(psin);
-                psins.push(psin);
-                qs.push(1.0 + z * z / nun);
-            }
-            let df = d as f64;
-            let ln_psi = if low >= PARTIAL_FLOOR {
-                ln_sum_prod_from_floor(psins)
+            let ratio = run.n / kn;
+            let (ln_psi, ln_q) = if d <= 8 {
+                let mut low = f64::INFINITY;
+                let mut prod_psi = 1.0;
+                let mut prod_q = 1.0;
+                for i in 0..d {
+                    let dm = run.mean[i] - mu0[i];
+                    let (psin, var) = scatter(psi0[i * d + i] + run.m2[i], k0, run.n, kn, nun, dm)?;
+                    let z = (x[i] - (mu0[i] + ratio * dm)) / var.sqrt();
+                    low = low.min(psin);
+                    prod_psi *= psin;
+                    prod_q *= 1.0 + z * z / nun;
+                }
+                if low >= PARTIAL_FLOOR
+                    && (1e-280..1e280).contains(&prod_psi)
+                    && (1e-280..1e280).contains(&prod_q)
+                {
+                    (prod_psi.ln(), prod_q.ln())
+                } else {
+                    Self::log_predictive_diag_slow(d, run, x, mu0, psi0, k0, kn, nun, ratio, work)?
+                }
             } else {
-                ln_sum_prod(psins)
+                Self::log_predictive_diag_slow(d, run, x, mu0, psi0, k0, kn, nun, ratio, work)?
             };
+            let df = d as f64;
             let mode = df * gammas - 0.5 * (ln_psi + df * ln_c);
-            let lp = mode - 0.5 * (nun + 1.0) * ln_sum_prod_from_floor(qs);
+            let lp = mode - 0.5 * (nun + 1.0) * ln_q;
             Some((lp, mode))
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn log_predictive_diag_slow(
+        d: usize,
+        run: &Run,
+        x: &[f64],
+        mu0: &[f64],
+        psi0: &[f64],
+        k0: f64,
+        kn: f64,
+        nun: f64,
+        ratio: f64,
+        work: &mut RunWork,
+    ) -> Option<(f64, f64)> {
+        let RunWork {
+            mun: psins,
+            delta: qs,
+            ..
+        } = work;
+        psins.clear();
+        qs.clear();
+        let mut low = f64::INFINITY;
+        for i in 0..d {
+            let dm = run.mean[i] - mu0[i];
+            let (psin, var) = scatter(psi0[i * d + i] + run.m2[i], k0, run.n, kn, nun, dm)?;
+            let z = (x[i] - (mu0[i] + ratio * dm)) / var.sqrt();
+            low = low.min(psin);
+            psins.push(psin);
+            qs.push(1.0 + z * z / nun);
+        }
+        let ln_psi = if low >= PARTIAL_FLOOR {
+            ln_sum_prod_from_floor(psins)
+        } else {
+            ln_sum_prod(psins)
+        };
+        Some((ln_psi, ln_sum_prod_from_floor(qs)))
+    }
+
+    #[cfg(test)]
+    fn log_predictive(
+        &self,
+        run: &Run,
+        x: &[f64],
+        mu0: &[f64],
+        psi0: &[f64],
+        cache: Option<&mut LengthTerms>,
+        work: &mut RunWork,
+    ) -> Option<(f64, f64)> {
+        if self.known_var() {
+            return self.log_predictive_known_var(run, x, mu0, psi0);
+        }
+        self.log_predictive_student(run, x, mu0, psi0, cache, work)
     }
 
     /// This row's hazard: the value in the targets slot under
@@ -1909,6 +2024,9 @@ impl Bocpd {
             nan(out);
             return None;
         };
+        if self.known_var() {
+            return self.read_known_var_into(x, joint, joint_z, next, rel, work, out);
+        }
         let r = self.runs.len();
         let Work {
             mu0,
@@ -1925,29 +2043,43 @@ impl Bocpd {
             ..
         } = work;
         logpi.clear();
+        logpi.reserve(r);
         weights.clear();
-        if let Some(c) = cache.as_deref_mut()
-            && !self.known_var()
-        {
+        let robust = self.cfg.emission == BocpdEmission::Robust;
+        if !robust {
+            weights.resize(r, 1.0);
+        } else {
+            weights.reserve(r);
+        }
+        if let Some(c) = cache.as_deref_mut() {
             let full = self.full();
             c.begin(r, if full { d as f64 } else { 1.0 }, full || d >= 2);
         }
         self.mu0_into(mu0);
         self.psi0_into(psi0);
-        for run in &self.runs {
-            let Some((lp, mode)) =
-                self.log_predictive(run, x, mu0, psi0, cache.as_deref_mut(), run_work)
-            else {
-                nan(out);
-                return None;
-            };
-            debug_assert!(mode.is_finite(), "a predictive's mode is a number");
-            logpi.push(lp);
-            weights.push(if self.cfg.emission == BocpdEmission::Robust {
-                (self.cfg.robust_beta * (lp - mode)).exp().clamp(0.0, 1.0)
-            } else {
-                1.0
-            });
+        if robust {
+            for run in &self.runs {
+                let Some((lp, mode)) =
+                    self.log_predictive_student(run, x, mu0, psi0, cache.as_deref_mut(), run_work)
+                else {
+                    nan(out);
+                    return None;
+                };
+                debug_assert!(mode.is_finite(), "a predictive's mode is a number");
+                logpi.push(lp);
+                weights.push((self.cfg.robust_beta * (lp - mode)).exp().clamp(0.0, 1.0));
+            }
+        } else {
+            for run in &self.runs {
+                let Some((lp, mode)) =
+                    self.log_predictive_student(run, x, mu0, psi0, cache.as_deref_mut(), run_work)
+                else {
+                    nan(out);
+                    return None;
+                };
+                debug_assert!(mode.is_finite(), "a predictive's mode is a number");
+                logpi.push(lp);
+            }
         }
         // A predictive with no mode to weigh the row against would have no
         // weight to give it (`−∞ − (−∞)` is NaN, which `clamp` keeps;
@@ -1979,20 +2111,33 @@ impl Bocpd {
         // steps); against `m*` it is a share of the runs' spread
         // (docs/PLAN.md task 215, D3). The anchor is `run_mean_of` the most
         // probable run, against the prior's mean read once above.
+        let k0 = self.cfg.prior_kappa;
         anchor.clear();
-        anchor.extend((0..mu0.len()).map(|i| self.run_mean_at(&self.runs[mode_at], mu0, psi0, i)));
+        let mode_run = &self.runs[mode_at];
+        let mode_ratio = mode_run.n / (k0 + mode_run.n);
+        anchor.extend(
+            mu0.iter()
+                .zip(&mode_run.mean)
+                .map(|(&m0, &rm)| m0 + mode_ratio * (rm - m0)),
+        );
         mixed.clear();
         mixed.resize(d, 0.0);
-        for (i, run) in self.runs.iter().enumerate() {
-            for (f, (o, a)) in mixed.iter_mut().zip(anchor.iter()).enumerate() {
-                *o += pre[i] * (self.run_mean_at(run, mu0, psi0, f) - a);
+        for (run, &pi) in self.runs.iter().zip(pre.iter()) {
+            let ratio = run.n / (k0 + run.n);
+            for (((o, &a), &m0), &rm) in mixed
+                .iter_mut()
+                .zip(anchor.iter())
+                .zip(mu0.iter())
+                .zip(&run.mean)
+            {
+                *o += pi * ((m0 + ratio * (rm - m0)) - a);
             }
         }
         // `ln Σ p̃ᵣ πᵣ`, the row's log predictive density.
         mix.clear();
-        mix.extend((0..r).map(|i| {
-            if pre[i] > 0.0 {
-                pre[i].ln() + logpi[i]
+        mix.extend(pre.iter().zip(logpi.iter()).map(|(&p, &lp)| {
+            if p > 0.0 {
+                p.ln() + lp
             } else {
                 f64::NEG_INFINITY
             }
@@ -2437,11 +2582,10 @@ impl Bocpd {
             return;
         };
         // Runtime live-run cap (atomic: checked before mutating state).
-        let after_runs =
-            self.count_runs_after(&work.new, z.unwrap_or_else(|| log_sum_exp(&work.new)));
-        let after_bytes = self.run_bytes(after_runs);
+        // `after_runs <= self.runs.len() + 1` always, so skip the exact
+        // `count_runs_after` pre-scan whenever the upper bound fits in `cap`.
         let cap = self.run_cap();
-        if !self.held_cap().admit(after_bytes, cap) {
+        if self.run_bytes(self.runs.len() + 1) > cap && !self.admit_after_step(&work.new, z, cap) {
             self.joint_z.0 = joint_z;
             self.work = work;
             return;
@@ -2459,8 +2603,12 @@ impl Bocpd {
             None => Run::new_for(d, emission),
         };
         self.runs.insert(0, empty);
-        for (run, &w) in self.runs[1..].iter_mut().zip(&work.weights) {
-            run.add(x, w, full);
+        if emission == BocpdEmission::KnownVariance {
+            self.add_known_var_runs(x, &work.weights);
+        } else {
+            for (run, &w) in self.runs[1..].iter_mut().zip(&work.weights) {
+                run.add_student(x, w, full);
+            }
         }
         std::mem::swap(&mut self.logjoint, &mut work.new);
         self.work = work;

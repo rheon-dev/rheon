@@ -138,9 +138,10 @@ fn rank_one_rows(c: &mut [f64], k: usize, d: &[f64], a: f64, b: f64) {
 /// than a square's rows at 20 features on arm64, with no statistic read).
 #[inline(never)]
 fn rank_one_lower_rows(c: &mut [f64], k: usize, d: &[f64], a: f64, b: f64) {
+    let ab = a * b;
     let mut rows = &mut c[..row_at(k)];
     for (i, &di) in d[..k].iter().enumerate() {
-        let ab_di = a * b * di;
+        let ab_di = ab * di;
         let (row, rest) = std::mem::take(&mut rows).split_at_mut(i + 1);
         rows = rest;
         for (cj, &dj) in row.iter_mut().zip(&d[..=i]) {
@@ -1323,13 +1324,12 @@ impl EwCov {
         };
         let k = self.k;
         let d = &mut self.dev.0;
-        d.clear();
-        d.extend(
-            x.iter()
-                .zip(&self.m)
-                .zip(&self.m_lo)
-                .map(|((&xi, &mi), &li)| crate::comp::dev(xi, mi, li)),
-        );
+        if d.len() != k {
+            d.resize(k, 0.0);
+        }
+        for (((di, &xi), &mi), &li) in d.iter_mut().zip(x).zip(&self.m).zip(&self.m_lo) {
+            *di = crate::comp::dev(xi, mi, li);
+        }
         let packed = self.c.packed_mut();
         for i in 0..k {
             let at = row_at(i);
@@ -1435,13 +1435,12 @@ impl EwCov {
         // `k = 16`, 45% at `k = 64` and 24% from there up.
         let k = self.k;
         let d = &mut self.dev.0;
-        d.clear();
-        d.extend(
-            x.iter()
-                .zip(&self.m)
-                .zip(&self.m_lo)
-                .map(|((&xi, &mi), &li)| crate::comp::dev(xi, mi, li)),
-        );
+        if d.len() != k {
+            d.resize(k, 0.0);
+        }
+        for (((di, &xi), &mi), &li) in d.iter_mut().zip(x).zip(&self.m).zip(&self.m_lo) {
+            *di = crate::comp::dev(xi, mi, li);
+        }
         step.rank_one(self.c.packed_mut(), k, d, a, b, self.threads);
         // The precision prior decays with the co-moments. `a == 0` only on
         // the very first observation, when the whole history is discarded and
@@ -2400,7 +2399,40 @@ pub struct EwCovModel {
     /// state, as `std`.
     #[serde(skip)]
     view: crate::window::Kept<crate::window::KeptView>,
+    /// Precomputed bitmask of whether `cfg.stats` contains `PartialCorr` or
+    /// `Loglik`, avoiding two linear scans of `cfg.stats` on every row.
+    /// Zero when not yet initialized (raw serde bypass falls back safely).
+    #[serde(skip)]
+    stats_mask: StatsMask,
 }
+
+const STATS_INIT: u8 = 1;
+const STATS_PARTIAL: u8 = 2;
+const STATS_LOGLIK: u8 = 4;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct StatsMask(u8);
+
+impl StatsMask {
+    fn of(stats: &[EwCovStat]) -> Self {
+        let mut mask = STATS_INIT;
+        if stats.contains(&EwCovStat::PartialCorr) {
+            mask |= STATS_PARTIAL;
+        }
+        if stats.contains(&EwCovStat::Loglik) {
+            mask |= STATS_LOGLIK;
+        }
+        Self(mask)
+    }
+}
+
+impl PartialEq for StatsMask {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+type PreparedPrecision = (Option<Vec<f64>>, Option<f64>, Option<(f64, f64)>);
 
 thread_local! {
     /// The working space of a Mahalanobis distance on this thread
@@ -2482,6 +2514,7 @@ impl EwCovModel {
         } else {
             Some(crate::EwLagCov::new(cfg.n_features, cfg.lags.clone())?)
         };
+        let stats_mask = StatsMask::of(&cfg.stats);
         Ok(Self {
             cfg,
             cov,
@@ -2499,6 +2532,7 @@ impl EwCovModel {
             },
             std: Scratch::default(),
             view: crate::window::Kept::default(),
+            stats_mask,
         })
     }
 
@@ -2684,6 +2718,8 @@ impl EwCovModel {
 
     /// Both Mahalanobis distance and Gaussian log-density of `x` from one
     /// Cholesky factorization in this thread's [`MAHAL_WORK`].
+    #[cold]
+    #[inline(never)]
     fn mahal_and_loglik_of(cov: &EwCov, x: &[f64], scale: f64) -> (f64, f64) {
         let mut work = MAHAL_WORK.take().unwrap_or_default();
         let pair = Self::mahal_and_loglik_in(cov, x, scale, &mut work);
@@ -2691,6 +2727,8 @@ impl EwCovModel {
         pair
     }
 
+    #[cold]
+    #[inline(never)]
     fn mahal_and_loglik_in(cov: &EwCov, x: &[f64], scale: f64, work: &mut MahalWork) -> (f64, f64) {
         if !cov.has_precision_prior() {
             return (f64::NAN, f64::NAN);
@@ -2936,29 +2974,28 @@ impl EwCovModel {
         out
     }
 
-    /// The row's statistics, into `out`, whatever it held; `std` is scratch
-    /// for the standard deviations the correlations divide by.
-    fn read_into(&self, cov: &EwCov, x: &[f64], out: &mut Vec<f64>, std: &mut Vec<f64>) {
-        let k = self.cfg.n_features;
-        // Sized to the row's slots, which a stream keeps from row to row, so
-        // from the second row on this moves nothing; every slot is then
-        // written below, whatever `out` held.
-        let n = self.cfg.n_outputs();
-        if out.len() != n {
-            out.resize(n, 0.0);
-        }
-        let mut rest = out.as_mut_slice();
-        // `bias`'s factor on every second moment, 1 under `bias`, where the
-        // multiplication is exact. The correlations read the co-moments as
-        // kept: the factor cancels from them.
-        let scale = self.second_moment_scale(cov);
-        // One O(k³) factorization per row across `partial_corr`, `mahal` and
-        // `loglik`: when `partial_corr` is absent and `loglik` is asked, a
-        // single Cholesky factor computes both `mahal` and `loglik`; when
-        // `partial_corr` is asked too, `precision_with_log_det` yields both
-        // the inverse and `ln|C + s·prior·I|` from one factorization.
-        let want_partial = self.cfg.stats.contains(&EwCovStat::PartialCorr);
-        let want_loglik = self.cfg.stats.contains(&EwCovStat::Loglik);
+    /// Outlined precision/loglik preparation so models requesting neither
+    /// `PartialCorr` nor `Loglik` skip both `cfg.stats.contains(...)` scans
+    /// and the factorization prologue in `read_into`.
+    #[cold]
+    #[inline(never)]
+    fn prepare_precision_and_loglik(
+        &self,
+        cov: &EwCov,
+        x: &[f64],
+        scale: f64,
+    ) -> PreparedPrecision {
+        let (want_partial, want_loglik) = if (self.stats_mask.0 & STATS_INIT) != 0 {
+            (
+                (self.stats_mask.0 & STATS_PARTIAL) != 0,
+                (self.stats_mask.0 & STATS_LOGLIK) != 0,
+            )
+        } else {
+            (
+                self.cfg.stats.contains(&EwCovStat::PartialCorr),
+                self.cfg.stats.contains(&EwCovStat::Loglik),
+            )
+        };
         let (precision, log_det_base) = if want_partial {
             match cov.precision_with_log_det() {
                 Some((p, ld)) => (Some(p), Some(ld)),
@@ -2972,6 +3009,26 @@ impl EwCovModel {
         } else {
             None
         };
+        (precision, log_det_base, mahal_loglik)
+    }
+
+    /// The row's statistics, into `out`, whatever it held; `std` is scratch
+    /// for the standard deviations the correlations divide by.
+    fn read_into(&self, cov: &EwCov, x: &[f64], out: &mut Vec<f64>, std: &mut Vec<f64>) {
+        if self.stats_mask.0 != STATS_INIT {
+            self.read_with_precision_into(cov, x, out, std);
+            return;
+        }
+        let k = self.cfg.n_features;
+        // Sized to the row's slots, which a stream keeps from row to row, so
+        // from the second row on this moves nothing; every slot is then
+        // written below, whatever `out` held.
+        let n = self.cfg.n_outputs();
+        if out.len() != n {
+            out.resize(n, 0.0);
+        }
+        let mut rest = out.as_mut_slice();
+        let scale = self.second_moment_scale(cov);
         for stat in &self.cfg.stats {
             match stat {
                 EwCovStat::Mean => {
@@ -2990,9 +3047,93 @@ impl EwCovModel {
                     }
                 }
                 EwCovStat::Cov => {
-                    // Pair `(i, j)`, `j > i`, is the lower entry `(j, i)`.
                     let dst = slots(&mut rest, k * (k - 1) / 2);
-                    // `w` any `k` numbers: this `f` reads none.
+                    cov.comoments()
+                        .upper_rows_map(k, dst, cov.means(), |v, _, _| scale * v);
+                }
+                EwCovStat::Corr => {
+                    if std.len() != k {
+                        std.resize(k, 0.0);
+                    }
+                    for (o, v) in std.iter_mut().zip(cov.vars()) {
+                        *o = v.sqrt();
+                    }
+                    let dst = slots(&mut rest, k * (k - 1) / 2);
+                    cov.comoments().upper_rows_map(k, dst, std, correlation);
+                }
+                EwCovStat::RawCov => {
+                    let dst = slots(&mut rest, k * (k + 1) / 2);
+                    let mut idx = 0;
+                    for i in 0..k {
+                        for j in i..k {
+                            dst[idx] = cov.raw(i, j);
+                            idx += 1;
+                        }
+                    }
+                }
+                EwCovStat::Mahal => {
+                    slots(&mut rest, 1)[0] = Self::mahal_of(cov, x, scale);
+                }
+                EwCovStat::LagCorr => {
+                    if std.len() != k {
+                        std.resize(k, 0.0);
+                    }
+                    for (o, v) in std.iter_mut().zip(cov.vars()) {
+                        *o = v.sqrt();
+                    }
+                    let dst = slots(&mut rest, self.cfg.lags.len() * k * k);
+                    match &self.lag {
+                        Some(lag) => lag_corrs_into(lag.comoments(), std, k, dst),
+                        None => dst.fill(f64::NAN),
+                    }
+                }
+                EwCovStat::PartialCorr | EwCovStat::Loglik => {
+                    unreachable!("checked by stats_mask")
+                }
+            }
+        }
+        if self.mahal_q.is_some() || self.cfg.pca > 0 {
+            self.read_tail_into(cov, x, k, rest);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn read_with_precision_into(
+        &self,
+        cov: &EwCov,
+        x: &[f64],
+        out: &mut Vec<f64>,
+        std: &mut Vec<f64>,
+    ) {
+        let k = self.cfg.n_features;
+        let n = self.cfg.n_outputs();
+        if out.len() != n {
+            out.resize(n, 0.0);
+        }
+        let mut rest = out.as_mut_slice();
+        let scale = self.second_moment_scale(cov);
+        let (precision, log_det_base, mahal_loglik) =
+            self.prepare_precision_and_loglik(cov, x, scale);
+        for stat in &self.cfg.stats {
+            match stat {
+                EwCovStat::Mean => {
+                    for (i, o) in slots(&mut rest, k).iter_mut().enumerate() {
+                        *o = cov.mean(i);
+                    }
+                }
+                EwCovStat::Var => {
+                    for (o, v) in slots(&mut rest, k).iter_mut().zip(cov.vars()) {
+                        *o = scale * v;
+                    }
+                }
+                EwCovStat::Std => {
+                    for (o, v) in slots(&mut rest, k).iter_mut().zip(cov.vars()) {
+                        *o = (scale * v).sqrt();
+                    }
+                }
+                EwCovStat::Cov => {
+                    let dst = slots(&mut rest, k * (k - 1) / 2);
                     cov.comoments()
                         .upper_rows_map(k, dst, cov.means(), |v, _, _| scale * v);
                 }
@@ -3007,17 +3148,12 @@ impl EwCovModel {
                     }
                 }
                 EwCovStat::Corr => {
-                    // `k` square roots, not `k(k-1)`: at k = 20 the pairwise
-                    // `sqrt` was 80% of `ew_cov`'s row (docs/records/PERFORMANCE-LOG.md
-                    // §13). Same product of the same two roots, so the
-                    // correlations are bit-identical.
-                    // Each pair written into its slot (a `push` per pair
-                    // checked the capacity and went through a stack slot,
-                    // 36 instructions a pair), from the lower entry
-                    // `(j, i)`, as `Cov`. The same quotient of the same
-                    // numbers, in the same order.
-                    std.clear();
-                    std.extend(cov.vars().map(f64::sqrt));
+                    if std.len() != k {
+                        std.resize(k, 0.0);
+                    }
+                    for (o, v) in std.iter_mut().zip(cov.vars()) {
+                        *o = v.sqrt();
+                    }
                     let dst = slots(&mut rest, k * (k - 1) / 2);
                     cov.comoments().upper_rows_map(k, dst, std, correlation);
                 }
@@ -3028,9 +3164,6 @@ impl EwCovModel {
                         None => dst.fill(f64::NAN),
                     }
                 }
-                // From the precision in hand where the partial correlations
-                // asked for it: the same matrix factorized again was a
-                // second `k³` a row (task 270, A-2).
                 EwCovStat::Mahal => {
                     slots(&mut rest, 1)[0] = match (&precision, mahal_loglik) {
                         (Some(p), _) => Self::mahal_by(cov, x, p, scale),
@@ -3049,25 +3182,28 @@ impl EwCovModel {
                     }
                 }
                 EwCovStat::LagCorr => {
-                    // `C_l[a,b] / sqrt(C_0[a,a] * C_0[b,b])`: the lagged
-                    // covariance over the contemporaneous standard
-                    // deviations, so a value of 1 means "a now is b `l` rows
-                    // ago, scaled". Not clamped: unlike a contemporaneous
-                    // correlation it is not bounded by 1 in finite samples,
-                    // and clamping would hide that.
-                    std.clear();
-                    std.extend(cov.vars().map(f64::sqrt));
+                    if std.len() != k {
+                        std.resize(k, 0.0);
+                    }
+                    for (o, v) in std.iter_mut().zip(cov.vars()) {
+                        *o = v.sqrt();
+                    }
                     let dst = slots(&mut rest, self.cfg.lags.len() * k * k);
                     match &self.lag {
-                        Some(lag) => {
-                            // `restore` holds the lags to the cfg's.
-                            lag_corrs_into(lag.comoments(), std, k, dst);
-                        }
+                        Some(lag) => lag_corrs_into(lag.comoments(), std, k, dst),
                         None => dst.fill(f64::NAN),
                     }
                 }
             }
         }
+        if self.mahal_q.is_some() || self.cfg.pca > 0 {
+            self.read_tail_into(cov, x, k, rest);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn read_tail_into(&self, cov: &EwCov, x: &[f64], k: usize, mut rest: &mut [f64]) {
         if let Some(q) = &self.mahal_q {
             // `restore` holds the sketch's levels to the cfg's.
             let dst = slots(&mut rest, q.levels().len());
@@ -3398,6 +3534,7 @@ impl crate::OnlineModel for EwCovModel {
                     }
                     Some(_) => {}
                 }
+                m.stats_mask = StatsMask::of(&m.cfg.stats);
                 Ok(m)
             }
             other => Err(crate::StateError::WrongModel {

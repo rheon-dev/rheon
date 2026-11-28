@@ -98,48 +98,17 @@ pub(super) fn read_backward<const W: bool>(
     let edge = k.window_size.map_or(f64::NEG_INFINITY, |w| tau - w);
     for (j, &o) in members.iter().enumerate() {
         let op = &ops[o];
-        let var = op.stat.is_var();
-        if op.stat.is_extremum() {
-            // The sums count a window's values; its part holds the extremum.
-            let (x, n) = match k.window_size {
-                Some(_) => (
-                    q.ext(j).windowed(None),
-                    q.sum_op::<W>(k, j).map_or(0.0, |s| s.0.n),
-                ),
-                None => q.ext(j).running(),
-            };
-            out[j] = if n < f64::from(op.min_samples) {
-                f64::NAN
-            } else {
-                x
-            };
-            continue;
-        }
-        if op.stat == Stat::ExactQuantile {
-            out[j] = if q.ord(j).len() < op.min_samples {
-                f64::NAN
-            } else {
-                let p = op
-                    .quantile
-                    .expect("an exact quantile has a level (`check_op`)");
-                let interp = op.interpolation.unwrap_or(Interp::Nearest);
-                q.ord(j).quantile(p, interp, None)
-            };
-            continue;
-        }
-        if op.stat == Stat::ExactRank {
-            // Each pending row at the stamp ranks its own value (`write_backward_ranks`).
-            out[j] = f64::NAN;
+        if matches!(
+            op.stat,
+            Stat::Max | Stat::Min | Stat::ExactQuantile | Stat::ExactRank | Stat::PointMean
+        ) {
+            out[j] = read_backward_special::<W>(k, op, q, j, span);
             continue;
         }
         let Some((sum, at)) = q.sum_op::<W>(k, j) else {
             out[j] = empty_value(op);
             continue;
         };
-        if op.stat == Stat::PointMean {
-            out[j] = value_of(k, op, sum, span);
-            continue;
-        }
         if op.stat == Stat::Quantile {
             // The sums count the values; the sketches hold them.
             out[j] = if sum.n < f64::from(op.min_samples) {
@@ -150,6 +119,7 @@ pub(super) fn read_backward<const W: bool>(
             };
             continue;
         }
+        let var = op.stat.is_var();
         // The oldest held value's interval may start before the window:
         // only the part inside counts, so a mean (and a variance) takes the
         // window less the rows up to that one, then the row's mass inside,
@@ -189,6 +159,52 @@ pub(super) fn read_backward<const W: bool>(
             None => sum.scaled(k.discount_in(tau - at, &mut q.decay), var),
         };
         out[j] = value_of(k, op, a, span);
+    }
+}
+
+/// Outlined backward read for extrema, exact rolling order statistics, and
+/// point-mass means, keeping [`read_backward`] compact for mean/sum/var/quantile.
+#[cold]
+#[inline(never)]
+fn read_backward_special<const W: bool>(
+    k: &KernelDef,
+    op: &OpDef,
+    q: &mut Queue,
+    j: usize,
+    span: f64,
+) -> f64 {
+    match op.stat {
+        Stat::Max | Stat::Min => {
+            let (x, n) = match k.window_size {
+                Some(_) => (
+                    q.ext(j).windowed(None),
+                    q.sum_op::<W>(k, j).map_or(0.0, |s| s.0.n),
+                ),
+                None => q.ext(j).running(),
+            };
+            if n < f64::from(op.min_samples) {
+                f64::NAN
+            } else {
+                x
+            }
+        }
+        Stat::ExactQuantile => {
+            if q.ord(j).len() < op.min_samples {
+                f64::NAN
+            } else {
+                let p = op
+                    .quantile
+                    .expect("an exact quantile has a level (`check_op`)");
+                let interp = op.interpolation.unwrap_or(Interp::Nearest);
+                q.ord(j).quantile(p, interp, None)
+            }
+        }
+        Stat::ExactRank => f64::NAN,
+        Stat::PointMean => match q.sum_op::<W>(k, j) {
+            Some((sum, _)) => value_of(k, op, sum, span),
+            None => empty_value(op),
+        },
+        _ => unreachable!("handled by read_backward"),
     }
 }
 

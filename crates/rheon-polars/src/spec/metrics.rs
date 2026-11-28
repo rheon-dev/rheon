@@ -206,6 +206,18 @@ impl Spec {
         self.model_quantile().into_iter().collect()
     }
 
+    /// Allocation-free count of quantile levels scored by streaming `pinball`.
+    #[inline]
+    pub fn pinball_level_count(&self) -> usize {
+        if !self.emit_metrics.has(MetricKind::Pinball) {
+            return 0;
+        }
+        if let Some(qs) = &self.metric_quantiles {
+            return qs.len();
+        }
+        usize::from(self.model_quantile().is_some())
+    }
+
     /// Whether pinball fields carry explicit `_q<level>` suffixes (true when
     /// `metric_quantiles` is given, false when defaulting to a quantile model's
     /// single level).
@@ -215,9 +227,10 @@ impl Spec {
 
     /// Number of per-slot blocks in `ChunkOut::scores` (`mae`, each pinball
     /// level, `log_loss`).
+    #[inline]
     pub fn score_block_count(&self) -> usize {
         usize::from(self.emit_metrics.has(MetricKind::Mae))
-            + self.pinball_levels().len()
+            + self.pinball_level_count()
             + usize::from(self.emit_metrics.has(MetricKind::LogLoss))
     }
 

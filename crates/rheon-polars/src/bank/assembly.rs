@@ -311,7 +311,7 @@ impl<'a> Sink<'a> {
             m: d.m,
             per_model: d.per_model,
             n_levels: spec.resid_quantiles.as_ref().map_or(0, Vec::len),
-            n_conf_levels: spec.conformal_levels().len(),
+            n_conf_levels: spec.conformal_level_count(),
             n_scores: spec.score_block_count(),
             k: spec.k(),
         };

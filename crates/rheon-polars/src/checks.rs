@@ -72,6 +72,45 @@ pub fn value_names(spec: &Spec) -> Vec<&'static str> {
     out
 }
 
+/// Allocation-free count of per-slot values written into `ChunkOut::checks`
+/// (always equal to `value_names(spec).len()`).
+#[inline]
+pub fn value_count(spec: &Spec) -> usize {
+    let mut n = 0;
+    if spec.emit_calibration {
+        n += if spec.quantile_level().is_some() {
+            2
+        } else {
+            3
+        };
+    }
+    if spec.emit_spiegelhalter {
+        n += 1;
+    }
+    if spec.emit_breaks {
+        n += 4;
+    }
+    if spec.emit_specification {
+        n += 3;
+    }
+    if spec.emit_arch_lm {
+        n += 1;
+    }
+    if spec.emit_white {
+        n += 1;
+    }
+    if spec.emit_tails {
+        n += 3;
+    }
+    if spec.emit_influence {
+        n += 1;
+    }
+    if spec.emit_cooks_distance {
+        n += 1;
+    }
+    n
+}
+
 /// What one instance's diagnostics are configured with, from the spec:
 /// each one's decay -- its own memory, or the instance's -- and, for the
 /// breaks' twin fits, the features each slot's coefficients cover.

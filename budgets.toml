@@ -147,7 +147,7 @@ budget = 1808214
 
 [instructions.kalman]
 what = "kalman, 20 features, coef half-life 2000: AnyModel::step_into, into one kept Step"
-budget = 11552994
+budget = 11225214
 
 [instructions.kalman_smooth_k5]
 what = "kalman, 5 features, coef half-life 2000, smooth_lag 10 with emit_smoothed_se: AnyModel::step_into, into one kept Step"
@@ -159,21 +159,27 @@ budget = 983344388
 
 [instructions.kalman_ekf_k5]
 what = "kalman EKF, Poisson log, 5 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+budget = 4166062
 
 [instructions.kalman_ekf_k20]
 what = "kalman EKF, Poisson log, 20 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+budget = 12698642
 
 [instructions.kalman_ukf_scalar_k5]
 what = "kalman UKF (scalar_index), Poisson log, 5 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+budget = 4435837
 
 [instructions.kalman_ukf_scalar_k20]
 what = "kalman UKF (scalar_index), Poisson log, 20 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+budget = 12962167
 
 [instructions.kalman_ukf_merwe_k5]
 what = "kalman UKF (merwe), Poisson log, 5 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+budget = 7862010
 
 [instructions.kalman_ukf_merwe_k20]
 what = "kalman UKF (merwe), Poisson log, 20 features: AnyModel::step_into, into one kept Step; its budget is CI's first count"
+budget = 51271814
 
 [instructions.ew_cov]
 what = "ew_cov, 20 features, mean, std and corr: AnyModel::step_into, into one kept Step"
@@ -321,15 +327,19 @@ budget = 26482569
 
 [instructions.krls]
 what = "krls, ALD mode on 5 features with 50 dictionary atoms and no decay: AnyModel::step_into, into one kept Step, kernel evaluations, dictionary triangular solve and Givens update of the whitened Gram Cholesky factor a row; its budget is CI's first count"
+budget = 59143571
 [instructions.dependence]
 what = "dependence, ten features against one target over a window of 200 rows with 16x16 MI, Miller-Madow, incremental Kendall and periodic Spearman and xi every 10 rows: AnyModel::step_into, into one kept Step; its budget is CI's first count"
 # No budget yet: CI's Valgrind count of the first run sets it (`scripts/budgets.py apply`).
+budget = 379806887
 [instructions.hoeffding_tree_classifier]
 what = "hoeffding_tree_classifier, three classes over 8 features at grace_period=200 (NBA leaf prediction): AnyModel::step_into, tree traversal, Gaussian NB scoring and per-(feature, class) observer updates; its budget is CI's first count"
 
 # No budget yet: CI's Valgrind count of the first run sets it (`scripts/budgets.py apply`).
+budget = 9715725
 [instructions.hoeffding_tree_regressor]
 what = "hoeffding_tree_regressor, one target over 8 features at grace_period=200 and max_slots=32: AnyModel::step_into, tree traversal, leaf mean prediction and bounded quantization observer updates; its budget is CI's first count"
+budget = 1927097
 
 [instructions.spectral]
 what = "spectral, sixteen periods on an even clock: AnyModel::step_into, into one kept Step, a rotation and an add a period a row; its budget is CI's first count"

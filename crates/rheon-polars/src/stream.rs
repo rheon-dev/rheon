@@ -439,6 +439,24 @@ impl Resolutions {
             &self.values[i * self.width..(i + 1) * self.width],
         ))
     }
+
+    /// Advancing-cursor lookup for strictly increasing `seq` queries: O(1)
+    /// amortized instead of repeated binary search over `self.seqs`.
+    #[inline]
+    pub fn find_from(&self, seq: u64, cursor: &mut usize) -> Option<(u64, &[f64])> {
+        while *cursor < self.seqs.len() && self.seqs[*cursor] < seq {
+            *cursor += 1;
+        }
+        let i = *cursor;
+        if i < self.seqs.len() && self.seqs[i] == seq {
+            Some((
+                self.ats[i],
+                &self.values[i * self.width..(i + 1) * self.width],
+            ))
+        } else {
+            None
+        }
+    }
 }
 
 /// How a stream's formula targets reach it: which targets are formulas,
@@ -1452,6 +1470,7 @@ pub fn last_accepted(
 /// [`last_accepted`] aware of `on_step_back = "skip"`: skips stale rows whose
 /// clock stepped backward so `coef` still lands on the true last accepted row
 /// of the chunk. Delegates directly to [`last_accepted`] under `"error"`.
+#[inline]
 #[allow(clippy::too_many_arguments)]
 pub fn last_accepted_for_chunk(
     stream: &Stream,
@@ -1467,6 +1486,33 @@ pub fn last_accepted_for_chunk(
     if !cfg.on_clock_reset.skips() {
         return last_accepted(features, weight, base, n);
     }
+    last_accepted_for_chunk_skip(
+        stream,
+        cfg,
+        features,
+        clock,
+        session,
+        weight,
+        session_bounds,
+        base,
+        n,
+    )
+}
+
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn last_accepted_for_chunk_skip(
+    stream: &Stream,
+    cfg: &rheon_core::ClockCfg,
+    features: &FeatureCols,
+    clock: Option<&ClockCol>,
+    session: Option<&[u64]>,
+    weight: Option<&[f64]>,
+    session_bounds: &[usize],
+    base: usize,
+    n: usize,
+) -> Option<usize> {
     let mut state = stream.persisted.clock.clone();
     let mut next_bound = 0usize;
     let mut last = None;
@@ -4128,6 +4174,24 @@ fn run_instance(
     let cap_m = inst.spec.m();
     let cap_k = inst.spec.k() + usize::from(inst.spec.fit_intercept);
     let cap_min_settled = inst.spec.min_settled_frac_or_default();
+    let max_infl = inst.spec.max_error_inflation_or_default();
+    let reads_row_infl = inst.spec.reads_row_inflation();
+    let reads_gram_lev = inst.spec.reads_gram_leverage();
+    let per_row_gate = matches!(inst.spec.model, ModelKind::Kalman { .. });
+    let is_kalman = matches!(inst.model.get(), AnyModel::Kalman(_));
+    let is_audit = matches!(inst.model.get(), AnyModel::Audit(_));
+    let is_bandit = matches!(inst.spec.model, ModelKind::Bandit(_));
+    let is_holt = matches!(inst.model.get(), AnyModel::Holt(_));
+    let has_conformal_delay =
+        inst.conformal.is_some() || inst.conformal_multi.is_some() || inst.conformal_p.is_some();
+    let need_sigma = !inst.o_sigma.is_empty()
+        || !inst.o_resid_z.is_empty()
+        || inst.drift.is_some()
+        || has_conformal_delay
+        || inst.spec.emit_se_coef;
+    let has_mae = inst.spec.emit_metrics.has(MetricKind::Mae);
+    let n_pin = inst.spec.pinball_level_count();
+    let has_ll = inst.spec.emit_metrics.has(MetricKind::LogLoss);
     let mut cap_tn: Vec<f64> = Vec::new();
     for (pi, plan) in plans.iter().enumerate() {
         if plan.reset {
@@ -4353,7 +4417,6 @@ fn run_instance(
         {
             m.set_step_priors_flat(pre_row, post_row);
         }
-        let max_infl = inst.spec.max_error_inflation_or_default();
         let has_infl = max_infl.is_finite()
             && inst.model.get().error_inflation_gate_with_prior_into(
                 xs,
@@ -4364,14 +4427,14 @@ fn run_instance(
             );
         // The row's own error inflation: its field, and the breaks'
         // studentized residual, read it (task 221 (b)).
-        let has_row_infl = inst.spec.reads_row_inflation()
+        let has_row_infl = reads_row_infl
             && inst.model.get().row_error_inflation_with_prior_into(
                 xs,
                 score_d,
                 pre_row,
                 &mut sc.row_infl,
             );
-        let has_gram_lev = inst.spec.reads_gram_leverage()
+        let has_gram_lev = reads_gram_lev
             && plan.direct()
             && inst.model.get().row_gram_leverage_into(
                 xs,
@@ -4493,11 +4556,7 @@ fn run_instance(
             }
             // An audit counts the step as it elapsed, which no decay reads
             // (review 6, C-5: its largest step read `gap_cap`).
-            let step_d = if matches!(inst.model.get(), AnyModel::Audit(_)) {
-                plan.elapsed_step
-            } else {
-                d_clock
-            };
+            let step_d = if is_audit { plan.elapsed_step } else { d_clock };
             inst.model
                 .get_mut()
                 .step_sharded_into(xs, &sc.ys, step_d, w, inst.shards, step);
@@ -4558,7 +4617,7 @@ fn run_instance(
         // `s / nc`; the passes below walk the slots in groups of `nc` rather
         // than dividing per slot -- two integer divisions a slot were most of
         // a 230-slot `ew_cov` row (PERFORMANCE-LOG §13).
-        let nc = if matches!(inst.spec.model, ModelKind::Bandit(_)) {
+        let nc = if is_bandit {
             n_slots.max(1)
         } else {
             n_slots.checked_div(m_targets).unwrap_or(1).max(1)
@@ -4577,11 +4636,12 @@ fn run_instance(
         // solved. The reason recorded is the first gate that withheld
         // anything.
         let mut reason = 0u8;
-        let min_settled = inst.spec.min_settled_frac_or_default();
-        if min_settled > 0.0 && settled.is_finite() && settled < min_settled {
+        if cap_min_settled > 0.0 && settled.is_finite() && settled < cap_min_settled {
             keep_ungated(keep, &mut kept, &mut sc.ungated, &step.pred);
             step.pred.fill(f64::NAN);
-            run_parts::withhold_kalman_all(&mut step.extra);
+            if is_kalman {
+                run_parts::withhold_kalman_all(&mut step.extra);
+            }
             reason = REASON_SETTLED;
         }
         // Whether a "not met" notice may judge the stream yet, and the wait
@@ -4620,7 +4680,9 @@ fn run_instance(
             let below = step_n_eff_below(weight, min_weight, tj);
             if below {
                 group.fill(f64::NAN);
-                run_parts::withhold_kalman_target(&mut step.extra, m_targets, tj);
+                if is_kalman {
+                    run_parts::withhold_kalman_target(&mut step.extra, m_targets, tj);
+                }
                 if reason == 0 {
                     reason = REASON_MIN_PERIODS;
                 }
@@ -4722,7 +4784,7 @@ fn run_instance(
             for (slot, p) in step.pred.iter_mut().enumerate() {
                 if sc.infl.get(slot).is_some_and(|&r| r >= max_infl) {
                     *p = f64::NAN;
-                    if slot < m_targets {
+                    if is_kalman && slot < m_targets {
                         run_parts::withhold_kalman_target(&mut step.extra, m_targets, slot);
                     }
                     gate_withheld = true;
@@ -4800,7 +4862,10 @@ fn run_instance(
         }
         // A row a multiplicative `holt` form could not learn from, its
         // prediction standing (task 488), where nothing above was withheld.
-        if reason == 0 && learn && matches!(inst.model.get(), AnyModel::Holt(m) if m.not_positive())
+        if reason == 0
+            && is_holt
+            && learn
+            && matches!(inst.model.get(), AnyModel::Holt(m) if m.not_positive())
         {
             reason = REASON_NOT_POSITIVE;
         }
@@ -4816,7 +4881,6 @@ fn run_instance(
         // withheld row, settled or not, says nothing of the rows after it
         // and the projection to steady state here is Kish's, which `P`
         // does not follow (docs/PLAN.md task 116).
-        let per_row_gate = matches!(inst.spec.model, ModelKind::Kalman { .. });
         let waited = if per_row_gate || inst.notified.unreachable || plan.weightless() {
             f64::NAN
         } else {
@@ -4869,48 +4933,74 @@ fn run_instance(
         // fit that has learned the rows released since, read the residuals
         // too small, and the CUSUM of squares sat at −0.70 on iid labels
         // under an embargo of 50 (review round 6, A-6; schema 57).
-        let mut shown_radius: Option<Vec<f64>> = None;
-        let mut shown_multi: Option<Vec<f64>> = None;
-        let mut shown_sigma: Option<Vec<f64>> = None;
+        let mut shown_delay: Option<Box<score_rows::UnpackedDelay>> = None;
         if plan.buffered {
-            score_rows::pack_score_pred(
-                inst.score_pred,
-                inst.conformal.as_deref().map(Vec::as_slice),
-                inst.conformal_multi.as_deref().map(Vec::as_slice),
-                inst.conformal_p.is_some(),
-                inst.resid_win.as_ref().map(SpreadRef::get),
-                inst.decay,
-                inst.residuals
-                    .then_some((&inst.resid_w[..], &inst.resid_var[..])),
-                &step.pred,
-                &sc.row_infl,
-                &sc.ungated,
-                has_row_infl,
-                kept,
-                places.get(ri).copied(),
-            );
+            if !has_conformal_delay && !has_row_infl && !kept {
+                let record = step.pred.clone();
+                if places.is_empty() {
+                    inst.score_pred.push_back(record);
+                } else if let Some((at, drop)) = places.get(ri).copied() {
+                    inst.score_pred.insert(at as usize, record);
+                    if drop != u32::MAX {
+                        inst.score_pred.remove(drop as usize);
+                    }
+                } else {
+                    inst.score_pred.push_back(record);
+                }
+            } else {
+                score_rows::pack_score_pred(
+                    inst.score_pred,
+                    inst.conformal.as_deref().map(Vec::as_slice),
+                    inst.conformal_multi.as_deref().map(Vec::as_slice),
+                    inst.conformal_p.is_some(),
+                    inst.resid_win.as_ref().map(SpreadRef::get),
+                    inst.decay,
+                    inst.residuals
+                        .then_some((&inst.resid_w[..], &inst.resid_var[..])),
+                    &step.pred,
+                    &sc.row_infl,
+                    &sc.ungated,
+                    has_row_infl,
+                    kept,
+                    places.get(ri).copied(),
+                );
+            }
         } else if !plan.direct() {
-            let mp = inst
-                .conformal_multi
-                .as_deref()
-                .and_then(|cs| cs.first())
-                .map_or(0, |c| 2 * c.len());
-            let u = score_rows::unpack_score_pred(
-                inst.score_pred,
-                inst.conformal.is_some(),
-                mp,
-                inst.conformal_p.is_some(),
-                inst.ungated_spread || inst.ungated_drift,
-                &mut step.pred,
-                &mut sc.row_infl,
-                &mut sc.ungated,
-                has_row_infl,
-            );
-            shown_radius = u.shown_radius;
-            shown_multi = u.shown_multi;
-            shown_sigma = u.shown_sigma;
-            if u.kept {
-                kept = true;
+            if !has_conformal_delay && !has_row_infl {
+                let n = step.pred.len();
+                match inst.score_pred.pop_front() {
+                    Some(p) if p.len() == n => step.pred.copy_from_slice(&p),
+                    Some(p) if (inst.ungated_spread || inst.ungated_drift) && p.len() == 2 * n => {
+                        step.pred.copy_from_slice(&p[..n]);
+                        sc.ungated.clear();
+                        sc.ungated.extend_from_slice(&p[n..]);
+                        kept = true;
+                    }
+                    _ => step.pred.fill(f64::NAN),
+                }
+            } else {
+                let mp = inst
+                    .conformal_multi
+                    .as_deref()
+                    .and_then(|cs| cs.first())
+                    .map_or(0, |c| 2 * c.len());
+                let u = score_rows::unpack_score_pred(
+                    inst.score_pred,
+                    inst.conformal.is_some(),
+                    mp,
+                    inst.conformal_p.is_some(),
+                    inst.ungated_spread || inst.ungated_drift,
+                    &mut step.pred,
+                    &mut sc.row_infl,
+                    &mut sc.ungated,
+                    has_row_infl,
+                );
+                if u.kept {
+                    kept = true;
+                }
+                if u.shown_radius.is_some() || u.shown_multi.is_some() || u.shown_sigma.is_some() {
+                    shown_delay = Some(Box::new(u));
+                }
             }
         }
 
@@ -4921,12 +5011,16 @@ fn run_instance(
         // division per slot per row, and filling the three buffers a
         // `memset` per row, that no field ever read (PERFORMANCE-LOG §13).
         sc.r.clear();
-        sc.sig.clear();
-        sc.zs.clear();
-        let lam = inst.decay.factor(d_clock);
+        if need_sigma {
+            sc.sig.clear();
+            sc.zs.clear();
+        }
+        let lam = if learn {
+            inst.decay.factor(d_clock)
+        } else {
+            1.0
+        };
         if inst.residuals {
-            sc.sig.resize(n_slots, f64::NAN);
-            sc.zs.resize(n_slots, f64::NAN);
             for (tj, group) in step.pred.chunks(nc).enumerate() {
                 let yj = sc.ys.get(tj).copied().flatten();
                 sc.r.extend(group.iter().map(|p| match yj {
@@ -4934,16 +5028,20 @@ fn run_instance(
                     _ => f64::NAN,
                 }));
             }
-            // `sigma` as the row finds it, beside each residual.
-            let ring = inst.resid_win.as_ref().map(SpreadRef::get);
-            for (slot, &rv) in sc.r.iter().enumerate() {
-                if inst.resid_w[slot] <= 0.0 {
-                    continue;
-                }
-                let sd = pre_row_sigma(ring, inst.decay, (inst.resid_w, inst.resid_var), slot);
-                sc.sig[slot] = sd;
-                if rv.is_finite() && sd > 0.0 {
-                    sc.zs[slot] = rv / sd;
+            if need_sigma {
+                sc.sig.resize(n_slots, f64::NAN);
+                sc.zs.resize(n_slots, f64::NAN);
+                // `sigma` as the row finds it, beside each residual.
+                let ring = inst.resid_win.as_ref().map(SpreadRef::get);
+                for (slot, &rv) in sc.r.iter().enumerate() {
+                    if inst.resid_w[slot] <= 0.0 {
+                        continue;
+                    }
+                    let sd = pre_row_sigma(ring, inst.decay, (inst.resid_w, inst.resid_var), slot);
+                    sc.sig[slot] = sd;
+                    if rv.is_finite() && sd > 0.0 {
+                        sc.zs[slot] = rv / sd;
+                    }
                 }
             }
             if learn {
@@ -5145,9 +5243,6 @@ fn run_instance(
         }
 
         if let Some(scs) = inst.scores.as_deref_mut() {
-            let has_mae = inst.spec.emit_metrics.has(MetricKind::Mae);
-            let n_pin = inst.spec.pinball_levels().len();
-            let has_ll = inst.spec.emit_metrics.has(MetricKind::LogLoss);
             score_rows::step_scores(
                 scs,
                 inst.o_scores,
@@ -5161,6 +5256,9 @@ fn run_instance(
         }
 
         if let Some(cs) = inst.conformal.as_deref_mut() {
+            let shown_r = shown_delay
+                .as_deref()
+                .and_then(|u| u.shown_radius.as_deref());
             if let Some(isc) = inst.interval_scores.as_deref_mut() {
                 score_rows::step_interval_scores_legacy(
                     cs,
@@ -5170,7 +5268,7 @@ fn run_instance(
                     (&step.pred, &sc.sig, &sc.ys),
                     nc,
                     (emit, learn),
-                    shown_radius.as_deref(),
+                    shown_r,
                     (lam, w),
                 );
             }
@@ -5185,7 +5283,7 @@ fn run_instance(
                 conformal_rows::At { ri, n_rows, block },
                 (&step.pred, &sc.r, &sc.sig),
                 (emit, learn),
-                shown_radius.as_deref(),
+                shown_r,
                 (lam, w),
                 held,
             );
@@ -5205,7 +5303,9 @@ fn run_instance(
                 (&step.pred, &sc.r, &sc.sig, &sc.ys),
                 nc,
                 (emit, learn),
-                shown_multi.as_deref(),
+                shown_delay
+                    .as_deref()
+                    .and_then(|u| u.shown_multi.as_deref()),
                 (lam, w),
                 held,
             );
@@ -5218,7 +5318,9 @@ fn run_instance(
                 inst.spec,
                 inst.decay,
                 (&sc.r, &sc.sig),
-                shown_sigma.as_deref(),
+                shown_delay
+                    .as_deref()
+                    .and_then(|u| u.shown_sigma.as_deref()),
                 (emit, learn),
                 (d_clock, score_d, plan.stamp, w),
                 inst.notified,

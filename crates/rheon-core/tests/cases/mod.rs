@@ -3705,13 +3705,13 @@ pub fn all() -> Vec<Case> {
                 distinct_cap: 8,
                 gap_cap: None,
                 has_clock: false,
-                distinct: Some(AuditDistinctCfg {
+                distinct: Some(Box::new(AuditDistinctCfg {
                     precision: Some(8),
                     window_rows: None,
                     window_clock: None,
                     closed: WindowClosed::Right,
                     max_state_bytes: None,
-                }),
+                })),
             })
             .unwrap(),
             K,
@@ -3729,13 +3729,13 @@ pub fn all() -> Vec<Case> {
                 distinct_cap: 8,
                 gap_cap: None,
                 has_clock: false,
-                distinct: Some(AuditDistinctCfg {
+                distinct: Some(Box::new(AuditDistinctCfg {
                     precision: Some(8),
                     window_rows: Some(25),
                     window_clock: None,
                     closed: WindowClosed::Right,
                     max_state_bytes: None,
-                }),
+                })),
             })
             .unwrap(),
             K,
@@ -3753,13 +3753,13 @@ pub fn all() -> Vec<Case> {
                 distinct_cap: 8,
                 gap_cap: Some(5.0),
                 has_clock: true,
-                distinct: Some(AuditDistinctCfg {
+                distinct: Some(Box::new(AuditDistinctCfg {
                     precision: Some(8),
                     window_rows: None,
                     window_clock: Some(12.0),
                     closed: WindowClosed::Both,
                     max_state_bytes: None,
-                }),
+                })),
             })
             .unwrap(),
             K,
