@@ -9,6 +9,7 @@ platform = "darwin-arm64"
 [hashes]
 "audit_hll.audit_hll_oracle" = "ffbb5de04497e19b168759c89769c54b684252aa3ac4fb6ad3e289d7866b1b0a"
 "bandit.mabwiser" = "bfe1563a3c64a0ec29787afdf147ca66321f3889d91011044920ef60b828443a"
+"basis.spline_oracle" = "36aaf16d9b311fa3b072d4ae38e878b30796a03b90d989c7831b731d74e524a5"
 "conformal.coverage_rates" = "6a0a61bb25fb83e9ef63fb45020c7bbc1a5980988b8d373952f4a0764e868dbf"
 "conformal_variants.conformal_variants_oracles" = "0f4e9c5025ae9f71831787c90d053098dc703aa945eaade4efcc695b3d1ac839"
 "convergence.ewridge" = "ddbc4f8f711477e27e82540f54a5c57e1c0b0302a576ba3c05d9e3413e11edc9"

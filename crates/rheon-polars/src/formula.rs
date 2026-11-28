@@ -3108,4 +3108,245 @@ mod tests {
         assert_eq!(f.alias(), None);
         assert_eq!(tree(r#"["col","a"]"#).alias(), None);
     }
+
+    /// PLAN 577 contract: lock the compact S-expression `Node` / `Literal` /
+    /// `CALLS` / `OpKind` wire vocabulary and round-trip stability across
+    /// TOML, JSON, and MessagePack for `FormulaTarget` (`TargetDef` / `Targets`
+    /// / `Spec`), so no variant or tag can drift silently.
+    #[test]
+    fn formula_target_serialized_form_contract_locks_variants_and_roundtrips() {
+        // 1. Exhaustive compile-time lock on `Node` variants (no wildcard).
+        let node_tag = |n: &Node| -> &'static str {
+            match n {
+                Node::Col(_) => "col",
+                Node::Lit(_) => "lit",
+                Node::Call(_, _) => "call",
+                Node::Op(_) => "op",
+                Node::Invert(_) => "invert",
+            }
+        };
+        assert_eq!(node_tag(&Node::Col("x".into())), "col");
+        assert_eq!(node_tag(&Node::Lit(Literal::Null)), "lit");
+        assert_eq!(
+            node_tag(&Node::Call("abs".into(), vec![Node::Col("x".into())])),
+            "call"
+        );
+        assert_eq!(
+            node_tag(&tree(
+                r#"["rewm_mean",["col","x"],{"half_life":5.0,"window_size":10.0}]"#
+            )),
+            "op"
+        );
+        assert_eq!(
+            node_tag(&tree(
+                r#"["invert",["+",["unknown"],["lit",1.0]],["col","y"],["lit",-5.0],["lit",5.0],{"increasing":true}]"#
+            )),
+            "invert"
+        );
+
+        // 2. Exhaustive compile-time lock on `Literal` variants and exact JSON tags.
+        let lit_cases: Vec<(Literal, &str)> = vec![
+            (Literal::Null, r#"["lit"]"#),
+            (Literal::Bool(true), r#"["lit",true]"#),
+            (Literal::Bool(false), r#"["lit",false]"#),
+            (Literal::Int(42), r#"["lit",42]"#),
+            (Literal::Float(1.5), r#"["lit",1.5]"#),
+            (Literal::Str("abc".into()), r#"["lit","abc"]"#),
+        ];
+        for (lit, expected_json) in &lit_cases {
+            match lit {
+                Literal::Null
+                | Literal::Bool(_)
+                | Literal::Int(_)
+                | Literal::Float(_)
+                | Literal::Str(_) => {}
+            }
+            let node = Node::Lit(lit.clone());
+            assert_eq!(node.to_json().to_string(), *expected_json);
+            assert_eq!(Node::parse(expected_json).unwrap(), node);
+        }
+        // Both `["lit"]` (canonical/TOML form) and `["lit", null]` decode to `Literal::Null`.
+        assert_eq!(
+            Node::parse(r#"["lit",null]"#).unwrap(),
+            Node::Lit(Literal::Null)
+        );
+
+        // 3. Exact lock on element-wise call heads and arities.
+        assert_eq!(
+            CALLS,
+            &[
+                ("+", 2),
+                ("-", 2),
+                ("*", 2),
+                ("/", 2),
+                ("**", 2),
+                ("==", 2),
+                ("!=", 2),
+                ("<", 2),
+                ("<=", 2),
+                (">", 2),
+                (">=", 2),
+                ("&", 2),
+                ("|", 2),
+                ("neg", 1),
+                ("abs", 1),
+                ("exp", 1),
+                ("sqrt", 1),
+                ("is_null", 1),
+                ("is_not_null", 1),
+                ("log", 2),
+                ("clip", 3),
+                ("fill_null", 2),
+                ("when", 3),
+                ("cast", 2),
+                ("alias", 2),
+            ]
+        );
+
+        // 4. Exhaustive compile-time lock on `OpKind` wire names.
+        let all_ops: &[(OpKind, &str)] = &[
+            (OpKind::EwmMean, "ewm_mean"),
+            (OpKind::RewmMean, "rewm_mean"),
+            (OpKind::EwmSum, "ewm_sum"),
+            (OpKind::RewmSum, "rewm_sum"),
+            (OpKind::EwmRate, "ewm_rate"),
+            (OpKind::RewmRate, "rewm_rate"),
+            (OpKind::EwmVar, "ewm_var"),
+            (OpKind::EwmStd, "ewm_std"),
+            (OpKind::EwmQuantile, "ewm_quantile"),
+            (OpKind::RewmQuantile, "rewm_quantile"),
+            (OpKind::EwmMoments, "ewm_moments"),
+            (OpKind::RollingMax, "rolling_max"),
+            (OpKind::RollingMin, "rolling_min"),
+            (OpKind::RrollingMax, "rrolling_max"),
+            (OpKind::RrollingMin, "rrolling_min"),
+            (OpKind::Increment, "increment"),
+            (OpKind::CrossMean, "cross_mean"),
+            (OpKind::CrossStd, "cross_std"),
+            (OpKind::CrossRank, "cross_rank"),
+            (OpKind::CrossQuantile, "cross_quantile"),
+            (OpKind::CrossRef, "cross_ref"),
+            (OpKind::EwmProfile, "ewm_profile"),
+            (OpKind::TickSign, "tick_sign"),
+            (OpKind::RunLength, "run_length"),
+            (OpKind::ClockLag, "clock_lag"),
+            (OpKind::ClockDrift, "clock_drift"),
+            (OpKind::ClockStep, "clock_step"),
+            (OpKind::Stl, "stl"),
+            (OpKind::Mstl, "mstl"),
+        ];
+        for &(kind, wire) in all_ops {
+            let matched = match kind {
+                OpKind::EwmMean => "ewm_mean",
+                OpKind::RewmMean => "rewm_mean",
+                OpKind::EwmSum => "ewm_sum",
+                OpKind::RewmSum => "rewm_sum",
+                OpKind::EwmRate => "ewm_rate",
+                OpKind::RewmRate => "rewm_rate",
+                OpKind::EwmVar => "ewm_var",
+                OpKind::EwmStd => "ewm_std",
+                OpKind::EwmQuantile => "ewm_quantile",
+                OpKind::RewmQuantile => "rewm_quantile",
+                OpKind::EwmMoments => "ewm_moments",
+                OpKind::RollingMax => "rolling_max",
+                OpKind::RollingMin => "rolling_min",
+                OpKind::RrollingMax => "rrolling_max",
+                OpKind::RrollingMin => "rrolling_min",
+                OpKind::Increment => "increment",
+                OpKind::CrossMean => "cross_mean",
+                OpKind::CrossStd => "cross_std",
+                OpKind::CrossRank => "cross_rank",
+                OpKind::CrossQuantile => "cross_quantile",
+                OpKind::CrossRef => "cross_ref",
+                OpKind::EwmProfile => "ewm_profile",
+                OpKind::TickSign => "tick_sign",
+                OpKind::RunLength => "run_length",
+                OpKind::ClockLag => "clock_lag",
+                OpKind::ClockDrift => "clock_drift",
+                OpKind::ClockStep => "clock_step",
+                OpKind::Stl => "stl",
+                OpKind::Mstl => "mstl",
+            };
+            assert_eq!(matched, wire);
+            assert_eq!(kind.name(), wire);
+            assert_eq!(OpKind::parse(wire), Some(kind));
+        }
+
+        // 5. TOML -> Spec -> JSON -> Spec -> MessagePack -> Spec round-trips
+        // covering all six forward operators, TOML `["lit"]` null, element-wise
+        // combinators, step nesting, and both numeric and temporal duration spans.
+        let numeric_toml = r#"
+name = "fwd_num"
+targets = [
+  { name = "fwd_mean", formula = ["-", ["rewm_mean", ["col", "mid"], { half_life = 5.0, window_size = 10.0, closed = "right", min_samples = 1 }], ["col", "mid"]] },
+  { name = "fwd_vwap", formula = ["/", ["rewm_sum", ["*", ["col", "price"], ["col", "qty"]], { half_life = 4.0, window_size = 10.0, min_samples = 1 }], ["rewm_sum", ["col", "qty"], { half_life = 4.0, window_size = 10.0, min_samples = 1 }]] },
+  { name = "fwd_rate", formula = ["clip", ["rewm_rate", ["increment", ["col", "vol"]], { half_life = 5.0, window_size = 10.0 }], ["lit"], ["lit", 100.0]] },
+  { name = "fwd_med", formula = ["fill_null", ["rewm_quantile", ["abs", ["col", "mid"]], { half_life = 5.0, window_size = 10.0, quantile = 0.5 }], ["lit", 0.0]] },
+  { name = "fwd_range", formula = ["-", ["rrolling_max", ["col", "mid"], { window_size = 10.0 }], ["rrolling_min", ["col", "mid"], { window_size = 10.0 }]] },
+  { name = "fwd_signed", formula = ["when", [">", ["tick_sign", ["col", "mid"]], ["lit", 0]], ["rewm_mean", ["col", "mid"], { half_life = 5.0, window_size = 10.0 }], ["lit"]] },
+]
+features = ["x0"]
+clock = "t"
+gap_cap = 50.0
+half_life = 40.0
+embargo = 12.0
+[model]
+type = "ewridge"
+"#;
+        let spec_num: crate::Spec = toml::from_str(numeric_toml).expect("valid numeric TOML");
+        assert!(spec_num.targets.any_formula());
+        assert_eq!(spec_num.targets.defs().len(), 6);
+
+        let json_str = serde_json::to_string(&spec_num).expect("spec to json");
+        let from_json: crate::Spec = serde_json::from_str(&json_str).expect("json to spec");
+        assert_eq!(from_json, spec_num);
+
+        // Pin canonical S-expression string of the first target's formula.
+        let first_tree = spec_num.targets.defs()[0].formula.as_ref().unwrap();
+        assert_eq!(
+            first_tree.to_string(),
+            r#"["-",["rewm_mean",["col","mid"],{"closed":"right","half_life":5.0,"min_samples":1,"window_size":10.0}],["col","mid"]]"#
+        );
+
+        let mp_named = rmp_serde::to_vec_named(&spec_num).expect("spec to named msgpack");
+        let from_mp_named: crate::Spec =
+            rmp_serde::from_slice(&mp_named).expect("named msgpack to spec");
+        assert_eq!(from_mp_named, spec_num);
+
+        // Verify deterministic re-serialization to identical MessagePack bytes.
+        let mp_named_2 = rmp_serde::to_vec_named(&from_mp_named).expect("re-encode msgpack");
+        assert_eq!(mp_named, mp_named_2);
+
+        // Temporal duration span form in TOML + JSON + MessagePack.
+        let temporal_toml = r#"
+name = "fwd_ts"
+targets = [
+  { name = "ret_1m", formula = ["log", ["/", ["rewm_mean", ["col", "mid"], { half_life = "10s", window_size = "1m", partial = "null" }], ["col", "mid"]], ["lit", 2.718281828459045]] },
+]
+features = ["x0"]
+clock = "ts"
+gap_cap = "5m"
+half_life = "30m"
+embargo = "1m"
+[model]
+type = "ewridge"
+"#;
+        let spec_ts: crate::Spec = toml::from_str(temporal_toml).expect("valid temporal TOML");
+        let ts_json = serde_json::to_string(&spec_ts).expect("temporal spec to json");
+        let ts_from_json: crate::Spec =
+            serde_json::from_str(&ts_json).expect("temporal json to spec");
+        assert_eq!(ts_from_json, spec_ts);
+        let ts_mp = rmp_serde::to_vec_named(&spec_ts).expect("temporal spec to msgpack");
+        let ts_from_mp: crate::Spec =
+            rmp_serde::from_slice(&ts_mp).expect("temporal msgpack to spec");
+        assert_eq!(ts_from_mp, spec_ts);
+        assert_eq!(
+            ts_from_mp.targets.defs()[0]
+                .formula
+                .as_ref()
+                .unwrap()
+                .to_string(),
+            r#"["log",["/",["rewm_mean",["col","mid"],{"closed":"right","half_life":"10s","min_samples":1,"partial":"null","window_size":"1m"}],["col","mid"]],["lit",2.718281828459045]]"#
+        );
+    }
 }

@@ -111,8 +111,6 @@ class UnstableWarning(RheonWarning, UserWarning):
     Each unstable part says so in its docstring, and may change in any
     release without that counting as a breaking change:
 
-    - the written form of a formula target's tree in a TOML file (inside
-      a state file it is promised, as the state is);
     - :meth:`rheon.polars.ModelBank.fit_predict_arrow`,
       :meth:`rheon.polars.ModelBank.predict_arrow` and
       :class:`rheon.ArrowStruct`;

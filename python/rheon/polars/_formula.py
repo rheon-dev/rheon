@@ -16,9 +16,12 @@ lists, with the operators inlined as nodes of their own:
 
     ["-", ["rewm_mean", ["col", "mid"], {"half_life": "10s", "window_size": "1m"}], ["col", "mid"]]
 
-The serialized tree as a whole is unstable across Polars versions, which is
-why only these nodes are read, here, and the Rust side rebuilds the formula
-through Polars' public builders. A node outside the seven -- ``shift``,
+Polars' own serialized expression form is unstable across Polars versions,
+which is why only these seven node kinds are read here into rheon's own
+compact list tree, and the Rust side rebuilds the formula through Polars'
+public builders. That compact list tree is the library's stable serialized
+form across spec dicts, TOML configs, and saved states. A node outside the
+seven -- ``shift``,
 ``cum_sum``, a rolling window, ``over``, an aggregation -- would depend on
 the chunking, where one chunk or a thousand must give the same numbers, and
 is refused by name. :func:`from_tree`

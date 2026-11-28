@@ -825,6 +825,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 
 [messages."python/rheon/polars/__init__.py"]
 
+[messages."python/rheon/polars/_basis.py"]
+
 [messages."python/rheon/polars/_clock.py"]
 
 [messages."python/rheon/polars/_eval_compare.py"]
@@ -872,6 +874,8 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [docstrings."python/rheon/_spec_tree.py"]
 
 [docstrings."python/rheon/_spec_vector_ar.py"]
+
+[docstrings."python/rheon/polars/_basis.py"]
 
 [docstrings."python/rheon/polars/_errors.py"]
 
@@ -1111,6 +1115,10 @@ reason = "_RELATIVE_REMOVED, the module's constant shared with po.target, ends i
 [vocabulary."python/rheon/_spec_vector_ar.py#messages"]
 
 [vocabulary."python/rheon/polars/__init__.py#messages"]
+
+[vocabulary."python/rheon/polars/_basis.py#docstrings"]
+
+[vocabulary."python/rheon/polars/_basis.py#messages"]
 
 [vocabulary."python/rheon/polars/_clock.py#messages"]
 

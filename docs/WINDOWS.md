@@ -638,6 +638,36 @@ and weekly seasons on minute rows ask for 1,128,992 bytes, and are refused.
 | a series adjusted by its usual value, spread or quantile at this hour or weekday, now | `rp.ewm_profile` | an online estimate per phase, read on the row itself with no delay; any shape, and a variance or quantile profile |
 | the trend, the seasons and the remainder as statsmodels computes them | `rp.ops.stl`, `rp.ops.mstl` | the standard decomposition, exact, but each value arrives `lag` rows late and needs a regular step |
 
+## Basis expansions: splines, hinges and interactions
+
+**`rp.ops.bspline`, `rp.ops.natural_spline`, `rp.ops.hinge` and
+`rp.ops.interactions` expand numeric features into smooth nonlinear or
+interaction columns as plain Polars expressions.** None holds state or reads
+across rows, so they need no `with_windows`, stream in any `LazyFrame` query,
+and give identical numbers under any chunking.
+
+- **`rp.ops.bspline(col, knots, *, degree=3, include_bias=False, extrapolate="constant")`**
+  builds clamped B-spline basis functions on strictly increasing knots
+  `[k_0, ..., k_{K-1}]` (repeating both boundary knots with multiplicity
+  `degree + 1`), matching `scipy.interpolate.BSpline.design_matrix` and R's
+  `splines::bs`. Dropping the first column under the default
+  `include_bias=False` avoids collinearity with a model's intercept.
+- **`rp.ops.natural_spline(col, knots, *, include_bias=False)`** projects the
+  clamped cubic B-spline basis onto the orthonormal nullspace of its boundary
+  second-derivative constraints via Householder QR, matching R's `splines::ns`:
+  every basis function has zero second derivative at `k_0` and `k_{K-1}` and
+  extrapolates linearly beyond them. Paired with `rheon.spec.sgd(loss="logistic")`,
+  it gives an online spline probability calibrator.
+- **`rp.ops.hinge(col, knots)`** emits only the piecewise-linear hinge columns
+  `max(0, x - k)` for each knot `k` (leaving `col` itself to the model's
+  feature list when a baseline slope is wanted).
+- **`rp.ops.interactions(cols, *, degree=2, include_self=False, sep="_x_")`**
+  emits every product of order `2` through `degree` in lexicographic order,
+  matching the nonlinear columns of scikit-learn's `PolynomialFeatures`.
+
+Null inputs produce null outputs and NaN inputs produce NaN outputs across all
+four builders.
+
 ## The largest and smallest value, and since an event
 
 **`rp.ops.rolling_max` and `rp.ops.rolling_min` are the largest and smallest value

@@ -1150,14 +1150,12 @@ fn skip_learned_keeps_a_nan_clock_for_the_bank_to_refuse() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Task 198 (D5): a formula target's written form -- its tree in the TOML
-/// file -- is labelled unstable (in a saved state no longer, PLAN 542). Under
-/// `RHEON_WARN_UNSTABLE=1` the command line says so on stderr, as
-/// Polars' `POLARS_WARN_UNSTABLE` does; without it, or for a config with no
-/// formula target, it says nothing.
+/// PLAN 577: a formula target's compact S-expression tree is the stable
+/// serialized form in TOML configs, spec dicts, and saved states alike, so
+/// the command line emits no unstable warning even when `RHEON_WARN_UNSTABLE=1`.
 #[test]
-fn a_formula_target_is_labelled_unstable_under_the_variable() {
-    let dir = fresh_dir("unstable");
+fn a_formula_target_in_toml_is_stable_and_never_warns() {
+    let dir = fresh_dir("formula-stable");
     let (input, output) = (dir.join("in.parquet"), dir.join("out.parquet"));
     let n = 40;
     let mut df = df!(
@@ -1192,26 +1190,17 @@ fn a_formula_target_is_labelled_unstable_under_the_variable() {
         assert!(out.status.success(), "{err}");
         err
     };
-    // The whole notice, word for word: its continuation lines once kept
-    // their indentation, six spaces inside a sentence (task 244, C-4).
-    let warned = run(formula, Some("1"));
-    assert_eq!(
-        warned.lines().collect::<Vec<_>>(),
-        [
-            "rheon: warning: a formula target's written form -- its tree in the TOML \
-             file -- is considered unstable, so it may change in any \
-             release without that being considered a breaking change. Set \
-             RHEON_WARN_UNSTABLE=0, or unset it, to silence this warning."
-        ],
-        "{warned}"
-    );
     for (targets, var) in [
+        (formula, Some("1")),
         (formula, None),
         (formula, Some("0")),
         ("[\"y\"]", Some("1")),
     ] {
         let quiet = run(targets, var);
-        assert!(!quiet.contains("unstable"), "{targets} {var:?}: {quiet}");
+        assert!(
+            quiet.trim().is_empty(),
+            "expected no stderr warning for {targets} under {var:?}, got: {quiet}"
+        );
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -42,6 +42,7 @@ REFUSED_AT_ROOT = ("rewm_mean", "rewm_rate", "rewm_sum")
 
 #: The operators added after 2.0.0, which never had a root name.
 NEVER_AT_ROOT = (
+    "bspline",
     "cross_mean",
     "cross_quantile",
     "cross_rank",
@@ -49,6 +50,9 @@ NEVER_AT_ROOT = (
     "cross_std",
     "ewm_moments",
     "ewm_profile",
+    "hinge",
+    "interactions",
+    "natural_spline",
     "rolling_max",
     "rolling_min",
     "rolling_quantile",

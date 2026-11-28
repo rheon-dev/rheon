@@ -8171,6 +8171,43 @@ ideal = 0.0
 n = 50
 floor = 1e-12
 
+[group."basis.spline_oracle"]
+tests = [
+    "tests/test_basis.py::test_basis_operators_match_scipy_and_sklearn_over_50_seeds",
+]
+oracles = { "scikit-learn" = "1.9.1", "scipy" = "1.18.1" }
+dataset = ""
+
+[case."basis.spline_oracle.bspline_deg3_max_err"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
+[case."basis.spline_oracle.bspline_linear_extrap_max_err"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
+[case."basis.spline_oracle.bspline_sklearn_subspace_err"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
+[case."basis.spline_oracle.interactions_poly_max_err"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
+[case."basis.spline_oracle.natural_spline_cubicspline_err"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
+[case."basis.spline_oracle.natural_spline_qr_max_err"]
+ideal = 0.0
+n = 50
+floor = 1e-13
+
 # --- raises
 
 [[raised]]

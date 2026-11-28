@@ -4131,9 +4131,6 @@ class ModelBank:
         ``ValueError``
             A refused chunk left the bank unable to go on
             (:meth:`fit_predict`, Notes).
-        :class:`~rheon.UnstableWarning`
-            Under ``RHEON_WARN_UNSTABLE=1``, for a formula target, as
-            :meth:`save` says.
 
         .. rubric:: Examples
 
@@ -4214,9 +4211,6 @@ class ModelBank:
             folder that does not exist.
         ``RuntimeError``
             A call that learns is in flight on another thread.
-        :class:`~rheon.UnstableWarning`
-            Under ``RHEON_WARN_UNSTABLE=1``, for a formula target, as
-            :meth:`save` says. The export carries the same written form.
 
         .. rubric:: Examples
 
@@ -4340,9 +4334,6 @@ class ModelBank:
             - ``specs`` are given and differ from the file's;
             - ``threads`` is below 1, or above 1024 (or the machine's core
               count, where that is larger).
-        :class:`~rheon.UnstableWarning`
-            Under ``RHEON_WARN_UNSTABLE=1``, for a file holding a
-            formula target, as :meth:`save` says.
 
         .. rubric:: Examples
 
@@ -4440,9 +4431,6 @@ class ModelBank:
             As :meth:`load` raises them, for bytes that are not a bank this
             build loads, and for a ``threads`` it refuses. ``TypeError`` also
             when ``data`` is not ``bytes``, a ``bytearray`` or a ``memoryview``.
-        :class:`~rheon.UnstableWarning`
-            Under ``RHEON_WARN_UNSTABLE=1``, for bytes holding a
-            formula target, as :meth:`save` says.
 
         .. rubric:: Examples
 
