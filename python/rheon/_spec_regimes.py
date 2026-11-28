@@ -499,7 +499,7 @@ def hmm(
         "n_components": n_components,
         "covariance_type": covariance_type,
         "precision_prior": precision_prior,
-        "learn": learn,
+        "learn": learn if learn is not None else (params != ""),
         "transition_prior": transition_prior,
         "transition": transition,
         "means": means,
