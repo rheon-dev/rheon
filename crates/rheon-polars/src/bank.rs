@@ -488,9 +488,8 @@ fn extract(
         if spec.model.compares().is_some() {
             return Ok(Vec::new());
         }
-        let indexed: Vec<(usize, &crate::targets::TargetDef)> =
-            spec.targets.defs().iter().enumerate().collect();
-        map_maybe_par(&indexed, par, |&(ti, t)| {
+        let defs = spec.targets.defs();
+        map_maybe_par(defs, par, |t| {
             let c = t.column.as_str();
             // A formula target is not known at its row: the bank's window
             // core resolves it later (docs/PLAN.md task 104), so here it is
@@ -504,7 +503,8 @@ fn extract(
             } {
                 label_column(chunk, spec, "label", "classes", c, classes, layout)
             } else if let ModelKind::Bandit(b) = &spec.model
-                && ti == 1
+                && defs.len() > 1
+                && std::ptr::eq(t, &defs[1])
             {
                 label_column(chunk, spec, "arm", "arms", c, &b.arms, layout)
             } else {

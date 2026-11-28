@@ -931,16 +931,60 @@ impl KMeans {
                 Some(sj) => self.reported(d2_second, sj, x),
                 None => f64::NAN,
             };
-            let mut at = 3;
-            if self.cfg.emit_distances {
-                for (cj, c) in self.clusters.iter().enumerate() {
-                    let cd2 = c.dist2(x, &self.mw);
-                    pred[at + cj] = self.reported(cd2, cj, x);
-                }
-                at += self.clusters.len();
+            if self.cfg.emit_distances || self.inertia.is_some() {
+                self.score_extra_into(x, pred);
             }
-            if let Some(inrt) = self.inertia {
-                pred[at] = inrt.mean * inrt.w;
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn score_extra_into(&self, x: &[f64], pred: &mut [f64]) {
+        let mut at = 3;
+        if self.cfg.emit_distances {
+            for (cj, c) in self.clusters.iter().enumerate() {
+                let cd2 = c.dist2(x, &self.mw);
+                pred[at + cj] = self.reported(cd2, cj, x);
+            }
+            at += self.clusters.len();
+        }
+        if let Some(inrt) = self.inertia {
+            pred[at] = inrt.mean * inrt.w;
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn update_inertia(
+        &mut self,
+        x: &[f64],
+        near: Option<Near>,
+        learn: bool,
+        lam: f64,
+        weight: f64,
+    ) {
+        let d2_for_inertia = if learn {
+            near.map(|(j, d2, _, _)| {
+                if d2.is_finite() {
+                    d2
+                } else {
+                    let d = self.reported(d2, j, x);
+                    d * d
+                }
+            })
+        } else {
+            None
+        };
+        if let Some(inrt) = self.inertia.as_mut() {
+            let wo = lam * inrt.w;
+            if let Some(d2_val) = d2_for_inertia {
+                let w2 = wo + weight;
+                inrt.w = w2;
+                if w2 > 0.0 && d2_val.is_finite() {
+                    inrt.mean += (weight / w2) * (d2_val - inrt.mean);
+                }
+            } else {
+                inrt.w = wo;
             }
         }
     }
@@ -1612,11 +1656,10 @@ impl OnlineModel for KMeans {
         }
         // The spans' clocks (task 538): the row's place, and each cadence's.
         let now = self.place.as_mut().map(|p| p.step(d_clock));
-        for s in self
-            .since_update
-            .iter_mut()
-            .chain(self.since_split.iter_mut())
-        {
+        if let Some(s) = self.since_update.as_mut() {
+            s.step(d_clock);
+        }
+        if let Some(s) = self.since_split.as_mut() {
             s.step(d_clock);
         }
 
@@ -1643,32 +1686,8 @@ impl OnlineModel for KMeans {
         self.score_into(x, near, n_before, &mut out.pred);
 
         // Update EW inertia in mean form after reading the out-of-sample value.
-        let seeded = self.seeded();
-        let d2_for_inertia = if self.inertia.is_some() && seeded && learn {
-            near.map(|(j, d2, _, _)| {
-                if d2.is_finite() {
-                    d2
-                } else {
-                    let d = self.reported(d2, j, x);
-                    d * d
-                }
-            })
-        } else {
-            None
-        };
-        if let Some(inrt) = self.inertia.as_mut()
-            && seeded
-        {
-            let wo = lam * inrt.w;
-            if let Some(d2_val) = d2_for_inertia {
-                let w2 = wo + weight;
-                inrt.w = w2;
-                if w2 > 0.0 && d2_val.is_finite() {
-                    inrt.mean += (weight / w2) * (d2_val - inrt.mean);
-                }
-            } else {
-                inrt.w = wo;
-            }
+        if self.inertia.is_some() && self.seeded() {
+            self.update_inertia(x, near, learn, lam, weight);
         }
 
         if learn {

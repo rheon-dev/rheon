@@ -414,21 +414,45 @@ impl Series {
         // weight, so TQ/BV² is 1 at a constant volatility whatever the
         // weights, as the paper's is at unit weights.
         let tq_raw = self.weight() * (TQ_SCALE * self.sum(TQ));
-        let z = if rv > 0.0 && bv > 0.0 && bv.is_finite() {
+        let z = if rv > 0.0 && bv > 0.0 && bv < f64::INFINITY {
             n.sqrt() * (1.0 - bv / rv) / (BNS_THETA * (tq_raw / (bv * bv)).max(1.0)).sqrt()
         } else {
             f64::NAN
         };
-        let finite_or_nan = |v: f64| if v.is_finite() { v } else { f64::NAN };
         let sigma2 = match &self.lm {
             Some(ring) if ring.weight() > 0.0 => ring.variance(),
             Some(_) => f64::NAN,
             None => s_bv / self.sum(PW),
         };
         let lm = match r {
-            Some(r) if sigma2 > 0.0 => finite_or_nan(r / sigma2.sqrt()),
+            Some(r) if sigma2 > 0.0 => r / sigma2.sqrt(),
             _ => f64::NAN,
         };
+        // Fast path: when all six quantities are finite (and their magnitudes
+        // do not overflow when summed), skip per-value finiteness checks.
+        if (rv + bv + tv + tq_raw + z.abs() + lm.abs()) < f64::INFINITY {
+            out.extend_from_slice(&[rv, bv, tv, tq_raw, z, lm, lm_jump(lm, n, beta)]);
+        } else {
+            Self::read_nonfinite(rv, bv, tv, tq_raw, z, lm, n, beta, out);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn read_nonfinite(
+        rv: f64,
+        bv: f64,
+        tv: f64,
+        tq_raw: f64,
+        z: f64,
+        lm: f64,
+        n: f64,
+        beta: f64,
+        out: &mut Vec<f64>,
+    ) {
+        let finite_or_nan = |v: f64| if v.is_finite() { v } else { f64::NAN };
+        let lm = finite_or_nan(lm);
         out.extend([
             finite_or_nan(rv),
             finite_or_nan(bv),

@@ -179,7 +179,11 @@ pub struct LastRow {
 /// is the innermost index, whatever the outer product (`ChunkOut::at`, and
 /// the model-major blocks of `metrics`, `conformal` and `resid_q`), so the
 /// row's values are the elements `g * n_rows + ri`.
+#[inline]
 fn take_row<T: Copy>(dst: &mut Vec<T>, src: &[T], n_rows: usize, ri: usize) {
+    if src.is_empty() && dst.is_empty() {
+        return;
+    }
     dst.clear();
     dst.extend(src.iter().skip(ri).step_by(n_rows.max(1)));
 }
@@ -187,7 +191,11 @@ fn take_row<T: Copy>(dst: &mut Vec<T>, src: &[T], n_rows: usize, ri: usize) {
 /// Row `ri` of a `coef`-like buffer, one optional entry per outer slot, cloned
 /// into the slots `dst` already holds, so a list of the same length as the last
 /// is copied into its memory rather than allocated (task 270, G-1).
+#[inline]
 fn take_opt_row<T: Clone>(dst: &mut Vec<Option<T>>, src: &[Vec<Option<T>>], ri: usize) {
+    if src.is_empty() && dst.is_empty() {
+        return;
+    }
     dst.truncate(src.len());
     for (d, s) in dst.iter_mut().zip(src) {
         d.clone_from(&s[ri]);

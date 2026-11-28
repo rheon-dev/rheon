@@ -639,13 +639,20 @@ impl Ar {
         x: &[f64],
         z: &mut Vec<f64>,
     ) {
-        z.clear();
-        if ring.len() == depth {
-            z.extend(lags.iter().map(|&l| ring[depth - l]));
-        } else {
-            z.resize(lags.len(), 0.0);
+        let total = lags.len() + x.len();
+        if z.len() != total {
+            z.resize(total, 0.0);
         }
-        z.extend_from_slice(x);
+        if ring.len() == depth {
+            for (dst, &l) in z[..lags.len()].iter_mut().zip(lags) {
+                *dst = ring[depth - l];
+            }
+        } else {
+            z[..lags.len()].fill(0.0);
+        }
+        if !x.is_empty() {
+            z[lags.len()..].copy_from_slice(x);
+        }
     }
 
     /// `pred` withheld, every target's, while the weight before the row is
@@ -696,8 +703,12 @@ impl OnlineModel for Ar {
         }
         let m = self.cfg.n_targets;
         let depth = self.cfg.max_lag();
-        out.pred.clear();
-        out.pred.resize(m, f64::NAN);
+        if out.pred.len() != m {
+            out.pred.clear();
+            out.pred.resize(m, f64::NAN);
+        } else {
+            out.pred.fill(f64::NAN);
+        }
         out.extra = None;
         let learns = weight > 0.0;
         for (j, target) in y.iter().enumerate() {

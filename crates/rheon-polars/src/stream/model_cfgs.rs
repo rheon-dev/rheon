@@ -78,12 +78,14 @@ pub fn audit_cfg(spec: &Spec) -> Result<rheon_core::AuditCfg, String> {
         || distinct_window_size.is_some()
         || *closed != crate::spec::ModelClosed::Right
         || eff_cap.is_some();
-    let distinct = has_distinct.then(|| rheon_core::AuditDistinctCfg {
-        precision,
-        window_rows: *distinct_window_rows,
-        window_clock: distinct_window_size.as_ref().map(Span::value),
-        closed: closed.edge(),
-        max_state_bytes: eff_cap,
+    let distinct = has_distinct.then(|| {
+        Box::new(rheon_core::AuditDistinctCfg {
+            precision,
+            window_rows: *distinct_window_rows,
+            window_clock: distinct_window_size.as_ref().map(Span::value),
+            closed: closed.edge(),
+            max_state_bytes: eff_cap,
+        })
     });
     let cfg = rheon_core::AuditCfg {
         n_columns: spec.features.len(),

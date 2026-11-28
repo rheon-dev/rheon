@@ -19,13 +19,13 @@ fn hll_cfg(
         distinct_cap: DISTINCT_CAP,
         gap_cap: None,
         has_clock: window_clock.is_some(),
-        distinct: Some(AuditDistinctCfg {
+        distinct: Some(Box::new(AuditDistinctCfg {
             precision,
             window_rows,
             window_clock,
             closed,
             max_state_bytes,
-        }),
+        })),
     }
 }
 
@@ -674,13 +674,13 @@ fn runtime_held_cap_warns_at_half_and_refuses_atomically() {
         distinct_cap: 16,
         gap_cap: None,
         has_clock: true,
-        distinct: Some(AuditDistinctCfg {
+        distinct: Some(Box::new(AuditDistinctCfg {
             precision: Some(8),
             window_rows: None,
             window_clock: Some(1_000.0),
             closed: WindowClosed::Right,
             max_state_bytes: Some(8_208),
-        }),
+        })),
     };
     assert_eq!(cfg.fixed_state_bytes(), 7_808);
     let mut m = Audit::new(cfg).unwrap();
@@ -729,7 +729,7 @@ fn corrupt_hll_states_are_refused_on_restore() {
     if let Some(AuditHllState {
         sketches: HllSketches::Plain(cols),
         ..
-    }) = bad_len.hll.as_mut()
+    }) = bad_len.hll.as_deref_mut()
     {
         cols[0] = Hll::from(vec![0u8; 10]);
     }
@@ -739,7 +739,7 @@ fn corrupt_hll_states_are_refused_on_restore() {
     if let Some(AuditHllState {
         sketches: HllSketches::Plain(cols),
         ..
-    }) = bad_rank.hll.as_mut()
+    }) = bad_rank.hll.as_deref_mut()
     {
         let mut regs = vec![0u8; 256];
         regs[0] = 65 - 8 + 1; // 58 > max rank 57

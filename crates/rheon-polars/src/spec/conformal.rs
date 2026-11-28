@@ -108,6 +108,16 @@ impl Spec {
             .map_or_else(Vec::new, ConformalSpec::levels)
     }
 
+    /// Allocation-free count of configured conformal coverage levels.
+    #[inline]
+    pub fn conformal_level_count(&self) -> usize {
+        match &self.conformal {
+            None => 0,
+            Some(ConformalSpec::Single(_)) => 1,
+            Some(ConformalSpec::Multi(vs)) => vs.len(),
+        }
+    }
+
     /// True when `conformal` was given as a sequence (`lo_c<lvl>_<slot>` naming).
     pub fn conformal_is_multi(&self) -> bool {
         self.conformal.as_ref().is_some_and(ConformalSpec::is_multi)

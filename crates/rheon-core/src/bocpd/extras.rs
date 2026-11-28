@@ -275,6 +275,184 @@ impl Bocpd {
         }
         below_cap + usize::from(any_at_cap)
     }
+
+    /// Outlined cap check invoked only when the upper bound
+    /// `run_bytes(runs.len() + 1)` exceeds `cap`.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn admit_after_step(&mut self, new_joint: &[f64], z: Option<f64>, cap: u64) -> bool {
+        let after_runs = self.count_runs_after(
+            new_joint,
+            z.unwrap_or_else(|| super::log_sum_exp(new_joint)),
+        );
+        let after_bytes = self.run_bytes(after_runs);
+        self.held_cap().admit(after_bytes, cap)
+    }
+
+    /// Outlined `grow_into` loop for negative-binomial run-length hazards so
+    /// the constant-hazard loop stays branch-free.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn grow_nb_into(
+        joint: &[f64],
+        runs: &[Run],
+        logpi: &[f64],
+        weights: &[f64],
+        nb_table: &NbHazardTable,
+        new: &mut [f64],
+        cp: &mut Vec<f64>,
+    ) {
+        let r = logpi.len();
+        for i in 0..r {
+            let t = weights[i] * logpi[i];
+            let base = joint[i] + if weights[i] == 0.0 { 0.0 } else { t };
+            let b = nb_table.at(runs[i].len as usize);
+            new[i + 1] = base + b.ln_grow;
+            cp.push(base + b.ln_break);
+        }
+    }
+
+    /// Outlined `read_into` path for `BocpdEmission::KnownVariance`, keeping
+    /// the `Diag`/`Gaussian`/`Robust` path free of `known_var()` branches.
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn read_known_var_into(
+        &self,
+        x: &[f64],
+        joint: &[f64],
+        joint_z: Option<f64>,
+        next: super::NextHazard,
+        rel: f64,
+        work: &mut super::Work,
+        out: &mut Vec<f64>,
+    ) -> Option<Option<f64>> {
+        let d = self.cfg.n_features;
+        let nan = |out: &mut Vec<f64>| {
+            out.clear();
+            out.resize(Self::n_outputs_for(d), f64::NAN);
+        };
+        let r = self.runs.len();
+        let super::Work {
+            mu0,
+            psi0,
+            logpi,
+            weights,
+            pre,
+            anchor,
+            mixed,
+            mix,
+            new,
+            cp,
+            ..
+        } = work;
+        logpi.clear();
+        weights.clear();
+        self.mu0_into(mu0);
+        self.psi0_into(psi0);
+        for run in &self.runs {
+            let Some((lp, mode)) = self.log_predictive_known_var(run, x, mu0, psi0) else {
+                nan(out);
+                return None;
+            };
+            debug_assert!(mode.is_finite(), "a predictive's mode is a number");
+            logpi.push(lp);
+            weights.push(1.0);
+        }
+        match joint_z {
+            Some(z) => super::posterior_given(joint, z, pre),
+            None => super::posterior_into(joint, pre),
+        }
+        let mut mode_at = 0;
+        for i in 1..r {
+            if pre[i] > pre[mode_at] {
+                mode_at = i;
+            }
+        }
+        let run_mean: f64 = pre.iter().zip(&self.runs).map(|(p, run)| p * run.len).sum();
+        anchor.clear();
+        anchor.extend(
+            (0..mu0.len()).map(|i| self.known_var_mean_at(&self.runs[mode_at], mu0, psi0, i)),
+        );
+        mixed.clear();
+        mixed.resize(d, 0.0);
+        for (i, run) in self.runs.iter().enumerate() {
+            for (f, (o, a)) in mixed.iter_mut().zip(anchor.iter()).enumerate() {
+                *o += pre[i] * (self.known_var_mean_at(run, mu0, psi0, f) - a);
+            }
+        }
+        mix.clear();
+        mix.extend((0..r).map(|i| {
+            if pre[i] > 0.0 {
+                pre[i].ln() + logpi[i]
+            } else {
+                f64::NEG_INFINITY
+            }
+        }));
+        let logscore = super::log_sum_exp(mix);
+        super::grow_into(
+            joint,
+            &self.runs,
+            logpi,
+            weights,
+            next,
+            &self.nb_table,
+            new,
+            cp,
+        );
+        let z = super::log_sum_exp(new);
+        if !z.is_finite() {
+            nan(out);
+            return None;
+        }
+        out.clear();
+        let short = if new.len() > 1 {
+            super::log_sum_exp(&new[..2])
+        } else {
+            new[0]
+        };
+        out.push((short - z).exp());
+        out.push(self.runs[mode_at].len);
+        out.push(run_mean);
+        out.extend(anchor.iter().zip(mixed.iter()).map(|(a, o)| a + o));
+        out.push(logscore);
+        let update = if rel == 1.0 {
+            Some(z)
+        } else {
+            for w in weights.iter_mut() {
+                *w *= rel;
+            }
+            super::grow_into(
+                joint,
+                &self.runs,
+                logpi,
+                weights,
+                next,
+                &self.nb_table,
+                new,
+                cp,
+            );
+            let z = super::log_sum_exp(new);
+            if !z.is_finite() {
+                nan(out);
+                return None;
+            }
+            Some(z)
+        };
+        if self.n_eff < self.cfg.min_weight {
+            nan(out);
+        }
+        Some(update)
+    }
+
+    /// Outlined run-update loop for `KnownVariance` (no `m2` vector).
+    #[cold]
+    #[inline(never)]
+    pub(super) fn add_known_var_runs(&mut self, x: &[f64], weights: &[f64]) {
+        for (run, &w) in self.runs[1..].iter_mut().zip(weights) {
+            run.add_known_var(x, w);
+        }
+    }
 }
 
 /// Custom `Serialize` for [`BocpdCfg`]:

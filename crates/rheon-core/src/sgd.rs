@@ -1082,7 +1082,7 @@ pub struct Sgd {
     /// Optional state for `average`, `l1 > 0`, and `schedule == Optimal`;
     /// `None` when none of those options is set (zero bytes written).
     #[serde(default)]
-    extras: Option<variants::SgdExtras>,
+    extras: Option<Box<variants::SgdExtras>>,
     #[serde(skip)]
     warning: Option<u64>,
     #[serde(skip)]
@@ -1164,7 +1164,7 @@ struct SgdV3 {
     #[serde(default)]
     warned: bool,
     #[serde(default)]
-    extras: Option<variants::SgdExtras>,
+    extras: Option<Box<variants::SgdExtras>>,
 }
 
 impl TryFrom<SgdV3> for Sgd {
@@ -1404,20 +1404,22 @@ impl Sgd {
         let residual = if residual { m } else { 0 };
         let needs_extras =
             cfg.average || cfg.l1 > 0.0 || matches!(cfg.schedule, LearningRate::Optimal);
-        let extras = needs_extras.then(|| variants::SgdExtras {
-            avg: cfg.average.then(|| variants::AvgState::new(&beta)),
-            enet: (cfg.l1 > 0.0).then(|| {
-                variants::EnetState::new(
-                    m,
-                    cfg.n_features,
-                    matches!(cfg.schedule, LearningRate::AdaGrad),
-                )
-            }),
-            t_step: if matches!(cfg.schedule, LearningRate::Optimal) {
-                vec![0; m]
-            } else {
-                Vec::new()
-            },
+        let extras = needs_extras.then(|| {
+            Box::new(variants::SgdExtras {
+                avg: cfg.average.then(|| variants::AvgState::new(&beta)),
+                enet: (cfg.l1 > 0.0).then(|| {
+                    variants::EnetState::new(
+                        m,
+                        cfg.n_features,
+                        matches!(cfg.schedule, LearningRate::AdaGrad),
+                    )
+                }),
+                t_step: if matches!(cfg.schedule, LearningRate::Optimal) {
+                    vec![0; m]
+                } else {
+                    Vec::new()
+                },
+            })
         });
         Ok(Self {
             scaler,
@@ -1807,27 +1809,39 @@ impl Sgd {
             }
         };
         let mut shift = 0.0;
-        for i in off..n {
-            let g = (d * zs[i] * weight + l2 * (ss[i] * b[i])).clamp(-clip, clip);
-            let step = match lr_row {
+        if let Some(lr) = lr_row {
+            for ((((&bi, &zi), &si), &mi), di) in b[off..]
+                .iter()
+                .zip(&zs[off..])
+                .zip(&ss[off..])
+                .zip(&ms[off..])
+                .zip(&mut ds[off..])
+            {
+                let g = (d * zi * weight + l2 * (si * bi)).clamp(-clip, clip);
                 // No test of `g` itself at a shared rate: a `g` that is not
                 // finite leaves `−lr·g` infinite or NaN whatever `lr`, and
                 // so `Δb` whatever the scale and `b + Δb` whatever `b`,
                 // which the test below refuses on the same slot.
-                Some(lr) => -(lr * g),
-                None => {
-                    let Some(step) = delta(i, g) else {
-                        return false;
-                    };
-                    step
+                let db = -(lr * g) / si;
+                if !(bi + db).is_finite() {
+                    return false;
                 }
-            };
-            let db = step / ss[i];
-            if !(b[i] + db).is_finite() {
-                return false;
+                *di = db;
+                shift += mi * db;
             }
-            ds[i] = db;
-            shift += ms[i] * db;
+        } else {
+            for i in off..n {
+                let g = (d * zs[i] * weight + l2 * (ss[i] * b[i])).clamp(-clip, clip);
+                let Some(step) = delta(i, g) else {
+                    return false;
+                };
+                let db = step / ss[i];
+                if !(b[i] + db).is_finite() {
+                    return false;
+                }
+                ds[i] = db;
+                shift += ms[i] * db;
+            }
         }
         if off == 1 {
             // The level's step in place of the gradient's while it is the
@@ -2893,6 +2907,811 @@ impl Sgd {
     }
 }
 
+impl Sgd {
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn admit_span_refit(
+        &mut self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        weight: f64,
+        lam: f64,
+        lam_scale: f64,
+        out: &mut Step,
+    ) -> bool {
+        if !self.refit.iter().any(RefitBuf::open) {
+            return true;
+        }
+        let m = self.cfg.n_targets;
+        let per_refit = 8 * (x.len() + 4) as u64 + 48 * u64::from(!self.mad.is_empty());
+        let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
+        let limit = self.span_cap();
+        let upper: u64 = (0..m)
+            .filter(|&j| self.refit[j].open())
+            .map(|j| {
+                let cand =
+                    weight > 0.0 && y[j].is_some_and(|v| v.is_finite() && self.label(v).is_some());
+                if cand {
+                    per_refit
+                } else {
+                    self.refit[j].age_bytes(lam, lam_scale)
+                }
+            })
+            .sum();
+        if held + upper > limit {
+            let delta = self.span_row_delta(x, y, weight, lam, lam_scale, per_refit);
+            if delta > 0 {
+                let mut guard = crate::clock_span::HeldCap {
+                    over: &mut self.over,
+                    warned: &mut self.warned,
+                    warning: &mut self.warning,
+                };
+                if !guard.admit(held + delta, limit) {
+                    if let Some(p) = &mut self.place {
+                        p.discard_next();
+                    }
+                    self.predict_step_into(x, d_clock, weight, out);
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn predict_avg_target(&self, j: usize, reads_z: bool, off: usize, x: &[f64]) -> f64 {
+        let avg = self
+            .extras
+            .as_ref()
+            .and_then(|e| e.avg.as_ref())
+            .expect("checked above");
+        let eta_avg = if reads_z {
+            dot(&avg.beta[j], off, &self.zbuf[off..])
+        } else {
+            dot(&avg.beta[j], off, x)
+        };
+        self.link(eta_avg)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn optimal_lr_for(&self, j: usize, reg: f64) -> Option<f64> {
+        let t = self
+            .extras
+            .as_ref()
+            .and_then(|e| e.t_step.get(j).copied())
+            .unwrap_or(0);
+        Some(variants::optimal_rate(reg, t))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn update_avg(&mut self, avg_taught: &[bool], lam: f64, weight: f64) {
+        if let Some(avg) = self.extras.as_mut().and_then(|e| e.avg.as_mut()) {
+            for (j, &taught) in avg_taught.iter().enumerate().take(self.cfg.n_targets) {
+                if taught {
+                    avg.learn(j, lam, weight, &self.beta[j]);
+                } else {
+                    avg.age(j, lam);
+                }
+            }
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn step_variant_target(
+        &mut self,
+        j: usize,
+        x: &[f64],
+        yj: f64,
+        e_abs: f64,
+        off: usize,
+        held: bool,
+        d: f64,
+        weight: f64,
+        (l1, l2, clip, ada_eps): (f64, f64, f64, f64),
+        lr_row: Option<f64>,
+        lr0: f64,
+        is_optimal: bool,
+        track_avg: bool,
+        zz: &mut Option<f64>,
+        level_step: Option<f64>,
+        level_next: Option<Level>,
+        step_gain: Option<f64>,
+        found: Option<u32>,
+        taught: &mut [Option<(f64, f64)>],
+        avg_taught: &mut [bool],
+    ) {
+        let zz_row = if self.cfg.invariant {
+            *zz.get_or_insert_with(|| {
+                let z: &[f64] = if self.scaler.is_some() {
+                    &self.zbuf[off..]
+                } else {
+                    x
+                };
+                off as f64 + dot(z, 0, z)
+            })
+        } else {
+            0.0
+        };
+        let k = self.beta[j].len();
+        let n = k - off;
+        if self.dbuf.len() < k {
+            self.dbuf.resize(k, 0.0);
+        }
+        if self.gbuf.len() < k {
+            self.gbuf.resize(k, 0.0);
+        }
+        let u_len = self
+            .extras
+            .as_ref()
+            .and_then(|e| e.enet.as_ref())
+            .map_or(0, |e| e.u[j].len());
+        let mut next_u = vec![0.0; u_len];
+        let mut next_q = vec![0.0; if l1 > 0.0 { n } else { 0 }];
+        let ok = if held {
+            let u_cur = self
+                .extras
+                .as_ref()
+                .and_then(|e| e.enet.as_ref())
+                .map(|e| e.u[j].as_slice());
+            let q_cur = self
+                .extras
+                .as_ref()
+                .and_then(|e| e.enet.as_ref())
+                .map(|e| e.q[j].as_slice());
+            variants::step_mapped_variant(
+                &self.beta[j],
+                off,
+                &self.zbuf[..k],
+                &self.sbuf[..k],
+                &self.mbuf[..k],
+                d,
+                weight,
+                (l1, l2, clip, ada_eps),
+                lr_row,
+                lr0,
+                self.cfg.invariant,
+                zz_row,
+                level_step,
+                self.g2.get(j).map(Vec::as_slice),
+                u_cur,
+                q_cur,
+                &mut self.dbuf[..k],
+                &mut self.gbuf[..k],
+                &mut next_u,
+                &mut next_q,
+            )
+        } else {
+            let z: &[f64] = if self.scaler.is_some() {
+                &self.zbuf[off..]
+            } else {
+                x
+            };
+            let u_cur = self
+                .extras
+                .as_ref()
+                .and_then(|e| e.enet.as_ref())
+                .map(|e| e.u[j].as_slice());
+            let q_cur = self
+                .extras
+                .as_ref()
+                .and_then(|e| e.enet.as_ref())
+                .map(|e| e.q[j].as_slice());
+            if let Some(b0_step) = variants::step_direct_variant(
+                &self.beta[j],
+                off,
+                z,
+                d,
+                weight,
+                (l1, l2, clip, ada_eps),
+                lr_row,
+                lr0,
+                self.cfg.invariant,
+                zz_row,
+                level_step,
+                self.g2.get(j).map(Vec::as_slice),
+                u_cur,
+                q_cur,
+                &mut self.dbuf[off..k],
+                &mut self.gbuf[..k],
+                &mut next_u,
+                &mut next_q,
+            ) {
+                if off == 1 {
+                    self.dbuf[0] = self.beta[j][0] + b0_step;
+                }
+                true
+            } else {
+                false
+            }
+        };
+        if ok {
+            self.beta[j].copy_from_slice(&self.dbuf[..k]);
+            if let Some(sums) = self.g2.get_mut(j) {
+                sums.copy_from_slice(&self.gbuf[..k]);
+            }
+            if let Some(ex) = self.extras.as_mut() {
+                if let Some(enet) = ex.enet.as_mut() {
+                    enet.u[j].copy_from_slice(&next_u);
+                    enet.q[j].copy_from_slice(&next_q);
+                }
+                if is_optimal {
+                    ex.t_step[j] = ex.t_step[j].saturating_add(1);
+                }
+            }
+            self.took_step(j, level_next, step_gain);
+            if let Some(t) = taught.get_mut(j) {
+                *t = Some((yj, e_abs));
+            }
+            if held {
+                if self.cfg.constraint.is_some() {
+                    self.project_mapped(j);
+                }
+            } else if let Some(l) = self.learned.get_mut(j) {
+                *l = true;
+            }
+            if track_avg {
+                avg_taught[j] = true;
+            }
+        } else {
+            self.refused_step(j, found);
+        }
+    }
+
+    /// Outlined refit-buffer ingestion and trigger check, keeping
+    /// [`OnlineModel::step_into`] compact once refits have completed.
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn step_refits(
+        &mut self,
+        x: &[f64],
+        taught: &[Option<(f64, f64)>],
+        now: Option<crate::Stamp>,
+        lam: f64,
+        lam_scale: f64,
+        weight: f64,
+    ) {
+        let cap = self.cfg.refit_cap();
+        let span = self.cfg.refit_clock.zip(now);
+        let least = self.cfg.k_total().max(1);
+        if span.is_some() {
+            let per_refit = 8 * (x.len() + 4) as u64 + 48 * u64::from(!self.mad.is_empty());
+            let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
+            let delta: u64 = taught
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| self.refit[j].open())
+                .map(|(j, t)| match t {
+                    Some(_) => per_refit,
+                    None => self.refit[j].age_bytes(lam, lam_scale),
+                })
+                .sum();
+            if delta > 0 {
+                let limit = self.span_cap();
+                let mut guard = crate::clock_span::HeldCap {
+                    over: &mut self.over,
+                    warned: &mut self.warned,
+                    warning: &mut self.warning,
+                };
+                guard.note(held + delta, limit);
+            }
+        }
+        for (j, t) in taught.iter().enumerate() {
+            let b = &mut self.refit[j];
+            let full = match t {
+                Some((yj, e)) => {
+                    let full = b.learn_scored(x, *yj, *e, weight, lam, lam_scale, cap);
+                    match span {
+                        Some((d, now)) => b.span_due(now, d, least),
+                        None => full,
+                    }
+                }
+                None => {
+                    if let Some(held) = b.age(lam, lam_scale, cap) {
+                        self.scale_from_held(j, &held);
+                    }
+                    false
+                }
+            };
+            if full {
+                self.refit_target(j);
+            }
+        }
+    }
+
+    /// Outlined step path when `l1 > 0`, `invariant`, `average`, or
+    /// `schedule == Optimal` is enabled, keeping [`OnlineModel::step_into`]
+    /// free of variant branches and stack allocations on the default path.
+    #[cold]
+    #[inline(never)]
+    fn step_with_variants_into(
+        &mut self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        weight: f64,
+        out: &mut Step,
+    ) {
+        let m = self.cfg.n_targets;
+        let off = usize::from(self.cfg.fit_intercept);
+        let lam = self.cfg.decay.factor(d_clock);
+        let lam_scale = self
+            .cfg
+            .huber_scale_decay
+            .map_or(lam, |d| d.factor(d_clock));
+        if self.over.is_some() {
+            if let Some(p) = &mut self.place {
+                p.discard_next();
+            }
+            self.predict_step_into(x, d_clock, weight, out);
+            return;
+        }
+        if self.cfg.refit_clock.is_some()
+            && !self.admit_span_refit(x, y, d_clock, weight, lam, lam_scale, out)
+        {
+            return;
+        }
+        let now = self.place.as_mut().map(|p| p.step(d_clock));
+        let held = self.warmup.switched();
+        let (admit, floor) = self.warmup.read(weight);
+        if self.scaler.is_some() {
+            self.ensure_buffers();
+            let Self {
+                scaler,
+                zbuf,
+                mbuf,
+                sbuf,
+                rawbuf,
+                ..
+            } = self;
+            let sc = scaler.as_ref().expect("checked above");
+            if off == 1 {
+                zbuf[0] = 1.0;
+                rawbuf[0] = 1.0;
+            }
+            rawbuf[off..].copy_from_slice(x);
+            if held {
+                standardize_row(
+                    sc,
+                    off,
+                    x,
+                    lam,
+                    admit,
+                    floor,
+                    &mut zbuf[off..],
+                    &mut mbuf[off..],
+                    &mut sbuf[off..],
+                );
+            } else {
+                for (z, v) in zbuf[off..]
+                    .iter_mut()
+                    .zip(standardized(sc, off, x, lam, admit, floor))
+                {
+                    *z = v;
+                }
+            }
+        }
+        let reads_z = self.scaler.is_some() && !held;
+        if lam != 1.0 {
+            for g in self.g2.iter_mut() {
+                for v in g.iter_mut() {
+                    *v *= lam;
+                }
+            }
+        }
+        let n_eff = self.w_sum;
+        out.pred.clear();
+        out.pred.resize(m, f64::NAN);
+        let pred = &mut out.pred;
+        if self.cfg.constraint.is_some() {
+            self.learned.clear();
+            self.learned.resize(m, false);
+        }
+        let track_avg = self.extras.as_ref().is_some_and(|e| e.avg.is_some());
+        let mut avg_taught = if track_avg {
+            vec![false; m]
+        } else {
+            Vec::new()
+        };
+        let lr_row_shared = match self.cfg.schedule {
+            LearningRate::Constant => Some(self.cfg.learning_rate),
+            LearningRate::InvScaling { power } => {
+                Some(self.cfg.learning_rate / (1.0 + lam * self.w_sum).powf(power))
+            }
+            LearningRate::AdaGrad | LearningRate::Optimal => None,
+        };
+        let (lr0, l1, l2, clip0) = (
+            self.cfg.learning_rate,
+            self.cfg.l1,
+            self.cfg.l2,
+            self.cfg.clip_gradient,
+        );
+        let is_optimal = matches!(self.cfg.schedule, LearningRate::Optimal);
+        let is_variant = l1 > 0.0 || self.cfg.invariant || is_optimal;
+        let mut zz: Option<f64> = None;
+        let mut taught = std::mem::take(&mut self.taught);
+        taught.clear();
+        if self.refit.iter().any(RefitBuf::open) {
+            taught.resize(m, None);
+        }
+        for j in 0..m {
+            let eta = if reads_z {
+                dot(&self.beta[j], off, &self.zbuf[off..])
+            } else {
+                dot(&self.beta[j], off, x)
+            };
+            let p = self.link(eta);
+            let predicted = self.w_target[j] >= self.cfg.min_weight;
+            if predicted && !self.gain.get(j).is_some_and(StepGain::unstable) {
+                pred[j] = if track_avg {
+                    self.predict_avg_target(j, reads_z, off, x)
+                } else {
+                    p
+                };
+            }
+            let lr_row = if is_optimal {
+                self.optimal_lr_for(j, l1 + l2)
+            } else {
+                lr_row_shared
+            };
+            let scale = self.scale(j);
+            let unit = self.unit(j);
+            let clip = if unit > 0.0 {
+                clip0 * unit
+            } else {
+                f64::INFINITY
+            };
+            let ada_eps = 1e-8 * unit;
+            if let Some(ws) = self.wsig.get_mut(j) {
+                *ws *= lam_scale;
+            }
+            if let Some(q) = self.mad.get_mut(j) {
+                q.age(lam_scale);
+            }
+            if !self.spread.is_empty() {
+                self.spread.update(j, y[j], lam, weight);
+            }
+            let Some(yj) = y[j] else { continue };
+            if weight <= 0.0 || !yj.is_finite() {
+                continue;
+            }
+            let Some(yj) = self.label(yj) else { continue };
+            let d = self.dloss(p, yj, scale);
+            let scored = predicted || !self.cfg.min_weight_holds_learning;
+            let mut e_abs = f64::NAN;
+            if !self.sig2.is_empty() && scored && p.is_finite() {
+                let resid = yj - p;
+                let ws_new = self.wsig[j] + weight;
+                let s2 = (self.wsig[j] * self.sig2[j] + weight * resid * resid) / ws_new;
+                if s2.is_finite() {
+                    self.sig2[j] = s2;
+                    self.wsig[j] = ws_new;
+                }
+                if let Some(q) = self.mad.get_mut(j)
+                    && !self.refit.get(j).is_some_and(RefitBuf::reads_resid)
+                {
+                    q.add(resid.abs(), weight);
+                }
+                e_abs = resid.abs();
+            }
+            let mut level_step = None;
+            let mut level_next = None;
+            if let Some(&lv) = self.level.get(j) {
+                let first = lv.w == 0.0;
+                let mut lv = lv;
+                lv.learn(weight);
+                let gain = weight / lv.w;
+                let (step, warm) =
+                    if matches!(self.cfg.loss, SgdLoss::Squared | SgdLoss::Huber { .. }) {
+                        let above = lr_row.is_some_and(|lr| gain > lr);
+                        (-gain * d, above || lv.count() <= crate::WARMUP_ROWS)
+                    } else {
+                        (gain * (yj - p), lv.count() <= crate::WARMUP_ROWS)
+                    };
+                if first {
+                    let b0 = self.beta[j][0] + step;
+                    if b0.is_finite() {
+                        self.beta[j][0] = b0;
+                        self.level[j] = lv;
+                        if is_optimal && let Some(ex) = self.extras.as_mut() {
+                            ex.t_step[j] = ex.t_step[j].saturating_add(1);
+                        }
+                        if track_avg {
+                            avg_taught[j] = true;
+                        }
+                        if let Some(t) = taught.get_mut(j) {
+                            *t = Some((yj, e_abs));
+                        }
+                    }
+                    continue;
+                }
+                level_next = Some(lv);
+                if warm && step.is_finite() {
+                    level_step = Some(step);
+                }
+            }
+            let (resting, probe, found) = match self.gain.get_mut(j) {
+                Some(g) if g.resting => {
+                    let found = g.rested;
+                    g.rested = g.rested.wrapping_add(1);
+                    if (yj - p).abs() > WAKE_SPREADS * unit {
+                        g.resting = false;
+                        g.rested = 0;
+                    }
+                    (
+                        g.resting,
+                        g.resting && g.rested % PROBE_ROWS == 0,
+                        Some(found),
+                    )
+                }
+                _ => (false, false, None),
+            };
+            let step_gain = match (self.gain.is_empty() || (resting && !probe), lr_row) {
+                (false, Some(lr)) => {
+                    let c = match self.cfg.loss {
+                        SgdLoss::Squared => 1.0,
+                        SgdLoss::Huber { .. } => f64::from(d == p - yj),
+                        SgdLoss::Poisson => p,
+                        SgdLoss::Logistic => p * (1.0 - p),
+                        SgdLoss::Quantile { .. } | SgdLoss::EpsilonInsensitive { .. } => 0.0,
+                    };
+                    let along = if c > 0.0 {
+                        let zz = *zz.get_or_insert_with(|| {
+                            let z: &[f64] = if self.scaler.is_some() {
+                                &self.zbuf[off..]
+                            } else {
+                                x
+                            };
+                            off as f64 + dot(z, 0, z)
+                        });
+                        weight * c * zz
+                    } else {
+                        0.0
+                    };
+                    let q = lr * (along + l2);
+                    if probe {
+                        let g = &mut self.gain[j];
+                        if q > PROBE_WAKE * g.q / g.n {
+                            g.resting = false;
+                            g.rested = 0;
+                            Some(q)
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some(q)
+                    }
+                }
+                _ => None,
+            };
+            if is_variant {
+                self.step_variant_target(
+                    j,
+                    x,
+                    yj,
+                    e_abs,
+                    off,
+                    held,
+                    d,
+                    weight,
+                    (l1, l2, clip, ada_eps),
+                    lr_row,
+                    lr0,
+                    is_optimal,
+                    track_avg,
+                    &mut zz,
+                    level_step,
+                    level_next,
+                    step_gain,
+                    found,
+                    &mut taught,
+                    &mut avg_taught,
+                );
+                continue;
+            }
+            if held {
+                if self.step_mapped(j, d, weight, lr_row, (clip, ada_eps), level_step) {
+                    self.took_step(j, level_next, step_gain);
+                    if let Some(t) = taught.get_mut(j) {
+                        *t = Some((yj, e_abs));
+                    }
+                    if self.cfg.constraint.is_some() {
+                        self.project_mapped(j);
+                    }
+                    if track_avg {
+                        avg_taught[j] = true;
+                    }
+                } else {
+                    self.refused_step(j, found);
+                }
+                continue;
+            }
+            let z: &[f64] = if self.scaler.is_some() {
+                &self.zbuf[off..]
+            } else {
+                x
+            };
+            let beta = &mut self.beta[j];
+            let usable = |g: f64| {
+                if lr_row.is_some() {
+                    g.is_finite()
+                } else {
+                    (self.g2[j][0] + g * g).is_finite()
+                }
+            };
+            let n = beta.len() - off;
+            if self.dbuf.len() < n {
+                self.dbuf.resize(n, 0.0);
+            }
+            let slopes_ok = match lr_row {
+                Some(lr) => slopes_stepped(
+                    &beta[off..],
+                    z,
+                    d,
+                    weight,
+                    (l2, clip, lr),
+                    &mut self.dbuf[..n],
+                ),
+                None => slopes_usable(
+                    &beta[off..],
+                    z,
+                    d,
+                    weight,
+                    l2,
+                    clip,
+                    Some(&self.g2[j][off..]),
+                ),
+            };
+            if (off == 1 && !usable((d * weight).clamp(-clip, clip))) || !slopes_ok {
+                self.refused_step(j, found);
+                continue;
+            }
+            if off == 1 {
+                let g = (d * weight).clamp(-clip, clip);
+                let step = match lr_row {
+                    Some(lr) => -(lr * g),
+                    None => {
+                        let g2 = &mut self.g2[j];
+                        g2[0] += g * g;
+                        -adagrad_step(lr0, g2[0], ada_eps, g)
+                    }
+                };
+                beta[0] += level_step.unwrap_or(step);
+            }
+            match lr_row {
+                Some(_) => beta[off..].copy_from_slice(&self.dbuf[..n]),
+                None => {
+                    let g2 = &mut self.g2[j];
+                    for ((b, g2), &zi) in beta[off..].iter_mut().zip(&mut g2[off..]).zip(z) {
+                        let g = (d * zi * weight + l2 * *b).clamp(-clip, clip);
+                        *g2 += g * g;
+                        *b -= adagrad_step(lr0, *g2, ada_eps, g);
+                    }
+                }
+            }
+            if let Some(l) = self.learned.get_mut(j) {
+                *l = true;
+            }
+            if track_avg {
+                avg_taught[j] = true;
+            }
+            self.took_step(j, level_next, step_gain);
+            if let Some(t) = taught.get_mut(j) {
+                *t = Some((yj, e_abs));
+            }
+        }
+        if let Some(sc) = &mut self.scaler {
+            sc.update(&self.rawbuf, scaler_decay(sc, lam, weight, floor), weight);
+        }
+        if self.cfg.constraint.is_some() && !held {
+            let scales = self.scaler.is_some().then(|| self.scales());
+            let rescaled = self.scaler.is_some() && weight > 0.0;
+            let Self {
+                cfg,
+                beta,
+                extras,
+                pbuf,
+                learned,
+                ..
+            } = self;
+            let c = cfg.constraint.as_ref().expect("checked above");
+            for (j, b) in beta.iter_mut().enumerate() {
+                if rescaled || learned[j] {
+                    c.project(&mut b[off..], scales.as_deref().map(|s| &s[off..]), pbuf);
+                }
+            }
+            if rescaled && let Some(avg) = extras.as_mut().and_then(|e| e.avg.as_mut()) {
+                for b in avg.beta.iter_mut() {
+                    c.project(&mut b[off..], scales.as_deref().map(|s| &s[off..]), pbuf);
+                }
+            }
+        }
+        if track_avg {
+            self.update_avg(&avg_taught, lam, weight);
+        }
+        if !held
+            && let Some(sc) = &self.scaler
+            && self.warmup.learn(weight)
+        {
+            self.beta = unscaled(&self.beta, sc, self.cfg.fit_intercept);
+            if let Some(avg) = self.extras.as_mut().and_then(|e| e.avg.as_mut()) {
+                avg.beta = unscaled(&avg.beta, sc, self.cfg.fit_intercept);
+            }
+            let scales = scales_of(sc, off);
+            for (i, &scale) in scales.iter().enumerate().skip(off) {
+                self.mbuf[i] = sc.mean(i);
+                self.sbuf[i] = scale;
+            }
+        }
+        if !taught.is_empty() {
+            let cap = self.cfg.refit_cap();
+            let span = self.cfg.refit_clock.zip(now);
+            let least = self.cfg.k_total().max(1);
+            if span.is_some() {
+                let per_refit = 8 * (x.len() + 4) as u64 + 48 * u64::from(!self.mad.is_empty());
+                let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
+                let delta: u64 = taught
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, _)| self.refit[j].open())
+                    .map(|(j, t)| match t {
+                        Some(_) => per_refit,
+                        None => self.refit[j].age_bytes(lam, lam_scale),
+                    })
+                    .sum();
+                if delta > 0 {
+                    let limit = self.span_cap();
+                    let mut guard = crate::clock_span::HeldCap {
+                        over: &mut self.over,
+                        warned: &mut self.warned,
+                        warning: &mut self.warning,
+                    };
+                    guard.note(held + delta, limit);
+                }
+            }
+            for (j, t) in taught.iter().enumerate() {
+                let b = &mut self.refit[j];
+                let full = match t {
+                    Some((yj, e)) => {
+                        let full = b.learn_scored(x, *yj, *e, weight, lam, lam_scale, cap);
+                        match span {
+                            Some((d, now)) => b.span_due(now, d, least),
+                            None => full,
+                        }
+                    }
+                    None => {
+                        if let Some(held) = b.age(lam, lam_scale, cap) {
+                            self.scale_from_held(j, &held);
+                        }
+                        false
+                    }
+                };
+                if full {
+                    self.refit_target(j);
+                }
+            }
+        }
+        self.taught = taught;
+        self.w_sum = lam * self.w_sum + weight;
+        let (loss, strict) = (self.cfg.loss, self.cfg.strict_binary);
+        crate::model::age_target_weights(
+            &mut self.w_target,
+            |j| y[j].is_some_and(|v| v.is_finite() && teaches(loss, strict, v)),
+            lam,
+            weight,
+        );
+        out.n_eff = n_eff;
+        out.extra = None;
+    }
+}
+
 impl OnlineModel for Sgd {
     /// A refit over a span of the clock reads the row's stamp (task 538).
     fn stamp_next(&mut self, stamp: crate::Stamp) {
@@ -2935,6 +3754,14 @@ impl OnlineModel for Sgd {
             *out = refused;
             return;
         }
+        if self.cfg.l1 > 0.0
+            || self.cfg.invariant
+            || self.extras.is_some()
+            || matches!(self.cfg.schedule, LearningRate::Optimal)
+        {
+            self.step_with_variants_into(x, y, d_clock, weight, out);
+            return;
+        }
         let m = self.cfg.n_targets;
         let off = usize::from(self.cfg.fit_intercept);
         let lam = self.cfg.decay.factor(d_clock);
@@ -2953,39 +3780,10 @@ impl OnlineModel for Sgd {
             self.predict_step_into(x, d_clock, weight, out);
             return;
         }
-        let per_refit = 8 * (x.len() + 4) as u64 + 48 * u64::from(!self.mad.is_empty());
-        if self.cfg.refit_clock.is_some() && self.refit.iter().any(RefitBuf::open) {
-            let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
-            let limit = self.span_cap();
-            let upper: u64 = (0..m)
-                .filter(|&j| self.refit[j].open())
-                .map(|j| {
-                    let cand = weight > 0.0
-                        && y[j].is_some_and(|v| v.is_finite() && self.label(v).is_some());
-                    if cand {
-                        per_refit
-                    } else {
-                        self.refit[j].age_bytes(lam, lam_scale)
-                    }
-                })
-                .sum();
-            if held + upper > limit {
-                let delta = self.span_row_delta(x, y, weight, lam, lam_scale, per_refit);
-                if delta > 0 {
-                    let mut guard = crate::clock_span::HeldCap {
-                        over: &mut self.over,
-                        warned: &mut self.warned,
-                        warning: &mut self.warning,
-                    };
-                    if !guard.admit(held + delta, limit) {
-                        if let Some(p) = &mut self.place {
-                            p.discard_next();
-                        }
-                        self.predict_step_into(x, d_clock, weight, out);
-                        return;
-                    }
-                }
-            }
+        if self.cfg.refit_clock.is_some()
+            && !self.admit_span_refit(x, y, d_clock, weight, lam, lam_scale, out)
+        {
+            return;
         }
         // The row's place, for a refit over a span of the clock (task 538).
         let now = self.place.as_mut().map(|p| p.step(d_clock));
@@ -3074,29 +3872,16 @@ impl OnlineModel for Sgd {
             self.learned.clear();
             self.learned.resize(m, false);
         }
-        let track_avg = self.extras.as_ref().is_some_and(|e| e.avg.is_some());
-        let mut avg_taught = if track_avg {
-            vec![false; m]
-        } else {
-            Vec::new()
-        };
-        let lr_row_shared = match self.cfg.schedule {
+        let lr_row = match self.cfg.schedule {
             LearningRate::Constant => Some(self.cfg.learning_rate),
             LearningRate::InvScaling { power } => {
                 Some(self.cfg.learning_rate / (1.0 + lam * self.w_sum).powf(power))
             }
             LearningRate::AdaGrad | LearningRate::Optimal => None,
         };
-        let (lr0, l1, l2, clip0) = (
-            self.cfg.learning_rate,
-            self.cfg.l1,
-            self.cfg.l2,
-            self.cfg.clip_gradient,
-        );
-        let is_optimal = matches!(self.cfg.schedule, LearningRate::Optimal);
-        let is_variant = l1 > 0.0 || self.cfg.invariant || is_optimal;
+        let (lr0, l2, clip0) = (self.cfg.learning_rate, self.cfg.l2, self.cfg.clip_gradient);
         // The squared length of the row the step is taken on, `|z̃|²` with
-        // the intercept's 1, for the step gains (`StepGain`) and `invariant`;
+        // the intercept's 1, for the step gains (`StepGain`);
         // unread where none are kept.
         let mut zz: Option<f64> = None;
         // Per target, the label a row taught it with, while a refit buffer
@@ -3123,27 +3908,8 @@ impl OnlineModel for Sgd {
             // residual to the scales, as a predicted one does.
             let predicted = self.w_target[j] >= self.cfg.min_weight;
             if predicted && !self.gain.get(j).is_some_and(StepGain::unstable) {
-                pred[j] = if let Some(avg) = self.extras.as_ref().and_then(|e| e.avg.as_ref()) {
-                    let eta_avg = if reads_z {
-                        dot(&avg.beta[j], off, &self.zbuf[off..])
-                    } else {
-                        dot(&avg.beta[j], off, x)
-                    };
-                    self.link(eta_avg)
-                } else {
-                    p
-                };
+                pred[j] = p;
             }
-            let lr_row = if is_optimal {
-                let t = self
-                    .extras
-                    .as_ref()
-                    .and_then(|e| e.t_step.get(j).copied())
-                    .unwrap_or(0);
-                Some(variants::optimal_rate(l1 + l2, t))
-            } else {
-                lr_row_shared
-            };
             // The cut and the tube are drawn in their scale as the row
             // arrives (the module docs). Under Huber, `s²`'s weight ages on
             // every row, as `huber`'s does, whatever the row then teaches;
@@ -3208,19 +3974,6 @@ impl OnlineModel for Sgd {
                 }
                 e_abs = resid.abs();
             }
-            // The target's level, while it warms up (`keeps_level`): the
-            // intercept takes the running weighted mean of the residuals,
-            // `b_0 += (w / Σw)·(y − p)` in whichever coordinates it is held
-            // (its `z̃` is 1 in each), in place of its gradient step. On the
-            // target's first learned row that is the whole residual and
-            // nothing else moves, so the level never passes through the
-            // slopes' steps (the module docs).
-            // Both the level's weight and the step's gain are learned only
-            // where the row's step is taken: a row refused below for a
-            // gradient that is not a finite number teaches nothing, and
-            // counted in either it would move the level's warm-up and its
-            // gain, or enter the unstable rate's sums, for a step that never
-            // happened.
             let mut level_step = None;
             let mut level_next = None;
             if let Some(&lv) = self.level.get(j) {
@@ -3228,11 +3981,6 @@ impl OnlineModel for Sgd {
                 let mut lv = lv;
                 lv.learn(weight);
                 let gain = weight / lv.w;
-                // The squared and Huber losses' gradient is the residual
-                // (clipped at the cut): the running mean takes it, while its
-                // gain is above the rate's. The sign-valued losses' is not in
-                // the target's units: the running mean of the residual over
-                // the warm-up alone.
                 let (step, warm) =
                     if matches!(self.cfg.loss, SgdLoss::Squared | SgdLoss::Huber { .. }) {
                         let above = lr_row.is_some_and(|lr| gain > lr);
@@ -3245,12 +3993,6 @@ impl OnlineModel for Sgd {
                     if b0.is_finite() {
                         self.beta[j][0] = b0;
                         self.level[j] = lv;
-                        if is_optimal && let Some(ex) = self.extras.as_mut() {
-                            ex.t_step[j] = ex.t_step[j].saturating_add(1);
-                        }
-                        if track_avg {
-                            avg_taught[j] = true;
-                        }
                         if let Some(t) = taught.get_mut(j) {
                             *t = Some((yj, e_abs));
                         }
@@ -3262,16 +4004,6 @@ impl OnlineModel for Sgd {
                     level_step = Some(step);
                 }
             }
-            // The step's gain along its own row, `q = lr·(w·c·|z̃|² + l2)`
-            // with `c` the loss's curvature at the prediction: the rate
-            // past its stability bound shows in their mean square
-            // (`StepGain`). `l2` shrinks each slope by `1 − lr·l2` besides.
-            // A resting gate takes no gain, and wakes on a residual past
-            // `WAKE_SPREADS` of the target's spread, its unit here
-            // ([`StepGain`]). The rest count and the wake are made on the
-            // gate in place; `found`, a resting gate's count as the row found
-            // it, lets `refused_step` undo them where the row's step is
-            // refused: a refused row leaves the gate as it found it.
             let (resting, probe, found) = match self.gain.get_mut(j) {
                 Some(g) if g.resting => {
                     let found = g.rested;
@@ -3298,8 +4030,6 @@ impl OnlineModel for Sgd {
                         SgdLoss::Quantile { .. } | SgdLoss::EpsilonInsensitive { .. } => 0.0,
                     };
                     let along = if c > 0.0 {
-                        // In `dot`'s lanes: a plain running sum is a chain
-                        // of dependent additions, a tenth of a wide step.
                         let zz = *zz.get_or_insert_with(|| {
                             let z: &[f64] = if self.scaler.is_some() {
                                 &self.zbuf[off..]
@@ -3314,9 +4044,6 @@ impl OnlineModel for Sgd {
                     };
                     let q = lr * (along + l2);
                     if probe {
-                        // A probe: the gain wakes the gate past twice the
-                        // resting mean, and joins the sums; otherwise it is
-                        // let pass.
                         let g = &mut self.gain[j];
                         if q > PROBE_WAKE * g.q / g.n {
                             g.resting = false;
@@ -3331,144 +4058,6 @@ impl OnlineModel for Sgd {
                 }
                 _ => None,
             };
-            if is_variant {
-                let zz_row = if self.cfg.invariant {
-                    *zz.get_or_insert_with(|| {
-                        let z: &[f64] = if self.scaler.is_some() {
-                            &self.zbuf[off..]
-                        } else {
-                            x
-                        };
-                        off as f64 + dot(z, 0, z)
-                    })
-                } else {
-                    0.0
-                };
-                let k = self.beta[j].len();
-                let n = k - off;
-                if self.dbuf.len() < k {
-                    self.dbuf.resize(k, 0.0);
-                }
-                if self.gbuf.len() < k {
-                    self.gbuf.resize(k, 0.0);
-                }
-                let u_len = self
-                    .extras
-                    .as_ref()
-                    .and_then(|e| e.enet.as_ref())
-                    .map_or(0, |e| e.u[j].len());
-                let mut next_u = vec![0.0; u_len];
-                let mut next_q = vec![0.0; if l1 > 0.0 { n } else { 0 }];
-                let ok = if held {
-                    let u_cur = self
-                        .extras
-                        .as_ref()
-                        .and_then(|e| e.enet.as_ref())
-                        .map(|e| e.u[j].as_slice());
-                    let q_cur = self
-                        .extras
-                        .as_ref()
-                        .and_then(|e| e.enet.as_ref())
-                        .map(|e| e.q[j].as_slice());
-                    variants::step_mapped_variant(
-                        &self.beta[j],
-                        off,
-                        &self.zbuf[..k],
-                        &self.sbuf[..k],
-                        &self.mbuf[..k],
-                        d,
-                        weight,
-                        (l1, l2, clip, ada_eps),
-                        lr_row,
-                        lr0,
-                        self.cfg.invariant,
-                        zz_row,
-                        level_step,
-                        self.g2.get(j).map(Vec::as_slice),
-                        u_cur,
-                        q_cur,
-                        &mut self.dbuf[..k],
-                        &mut self.gbuf[..k],
-                        &mut next_u,
-                        &mut next_q,
-                    )
-                } else {
-                    let z: &[f64] = if self.scaler.is_some() {
-                        &self.zbuf[off..]
-                    } else {
-                        x
-                    };
-                    let u_cur = self
-                        .extras
-                        .as_ref()
-                        .and_then(|e| e.enet.as_ref())
-                        .map(|e| e.u[j].as_slice());
-                    let q_cur = self
-                        .extras
-                        .as_ref()
-                        .and_then(|e| e.enet.as_ref())
-                        .map(|e| e.q[j].as_slice());
-                    if let Some(b0_step) = variants::step_direct_variant(
-                        &self.beta[j],
-                        off,
-                        z,
-                        d,
-                        weight,
-                        (l1, l2, clip, ada_eps),
-                        lr_row,
-                        lr0,
-                        self.cfg.invariant,
-                        zz_row,
-                        level_step,
-                        self.g2.get(j).map(Vec::as_slice),
-                        u_cur,
-                        q_cur,
-                        &mut self.dbuf[off..k],
-                        &mut self.gbuf[..k],
-                        &mut next_u,
-                        &mut next_q,
-                    ) {
-                        if off == 1 {
-                            self.dbuf[0] = self.beta[j][0] + b0_step;
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                };
-                if ok {
-                    self.beta[j].copy_from_slice(&self.dbuf[..k]);
-                    if let Some(sums) = self.g2.get_mut(j) {
-                        sums.copy_from_slice(&self.gbuf[..k]);
-                    }
-                    if let Some(ex) = self.extras.as_mut() {
-                        if let Some(enet) = ex.enet.as_mut() {
-                            enet.u[j].copy_from_slice(&next_u);
-                            enet.q[j].copy_from_slice(&next_q);
-                        }
-                        if is_optimal {
-                            ex.t_step[j] = ex.t_step[j].saturating_add(1);
-                        }
-                    }
-                    self.took_step(j, level_next, step_gain);
-                    if let Some(t) = taught.get_mut(j) {
-                        *t = Some((yj, e_abs));
-                    }
-                    if held {
-                        if self.cfg.constraint.is_some() {
-                            self.project_mapped(j);
-                        }
-                    } else if let Some(l) = self.learned.get_mut(j) {
-                        *l = true;
-                    }
-                    if track_avg {
-                        avg_taught[j] = true;
-                    }
-                } else {
-                    self.refused_step(j, found);
-                }
-                continue;
-            }
             if held {
                 // The step in the row's coordinates, mapped into the
                 // caller's units by the row's map, and projected there.
@@ -3480,9 +4069,6 @@ impl OnlineModel for Sgd {
                     if self.cfg.constraint.is_some() {
                         self.project_mapped(j);
                     }
-                    if track_avg {
-                        avg_taught[j] = true;
-                    }
                 } else {
                     self.refused_step(j, found);
                 }
@@ -3493,21 +4079,7 @@ impl OnlineModel for Sgd {
             } else {
                 x
             };
-            // Per slot: `g = d * z_i * w`, plus `l2 * beta_i` off the
-            // intercept, clipped; `beta_i -= lr * g`. The intercept's `z`
-            // is 1 (`d * 1 * w` is `d * w` exactly), and it is not
-            // penalised.
             let beta = &mut self.beta[j];
-            // A row any of whose gradients is not a finite number teaches
-            // nothing, and is skipped before `beta` moves, as a row with no
-            // weight is; under AdaGrad so is one whose squared gradient is
-            // not, which `g2` would keep for good (decay never takes an
-            // `inf` away; `ftrl`'s guard). With `clip_gradient = inf`, which
-            // disables the clip, two rows inside the input bound made a
-            // coefficient infinite and every later prediction null, where
-            // `pa`, `ftrl` and `kalman` each skip such a row (review round
-            // 4, CC2). The gradients are formed here as the update forms
-            // them, so a row that passes moves `beta` to the same bits.
             let usable = |g: f64| {
                 if lr_row.is_some() {
                     g.is_finite()
@@ -3516,14 +4088,6 @@ impl OnlineModel for Sgd {
                     (self.g2[j][0] + g * g).is_finite()
                 }
             };
-            // At a shared rate the check and the step are one pass: each
-            // slope's gradient is formed once, its new value written to
-            // `dbuf` beside the verdict, and copied in once the row passes.
-            // Formed twice, once for the verdict and again for the step,
-            // the gradient cost a 20-feature step about 3 of its 39 ns on
-            // arm64, natively, and a row through the bank about 1% (task
-            // 314). The values are the update's own, so `beta` moves to the
-            // same bits.
             let n = beta.len() - off;
             if self.dbuf.len() < n {
                 self.dbuf.resize(n, 0.0);
@@ -3551,9 +4115,6 @@ impl OnlineModel for Sgd {
                 self.refused_step(j, found);
                 continue;
             }
-            // The intercept's step: its gradient's at the row's rate or
-            // AdaGrad's, whose sum learns the gradient either way, or in its
-            // place the level's while that is the larger.
             if off == 1 {
                 let g = (d * weight).clamp(-clip, clip);
                 let step = match lr_row {
@@ -3580,9 +4141,6 @@ impl OnlineModel for Sgd {
             if let Some(l) = self.learned.get_mut(j) {
                 *l = true;
             }
-            if track_avg {
-                avg_taught[j] = true;
-            }
             self.took_step(j, level_next, step_gain);
             if let Some(t) = taught.get_mut(j) {
                 *t = Some((yj, e_abs));
@@ -3591,19 +4149,12 @@ impl OnlineModel for Sgd {
         if let Some(sc) = &mut self.scaler {
             sc.update(&self.rawbuf, scaler_decay(sc, lam, weight, floor), weight);
         }
-        // Project after the scaler moved: the bounds live in the caller's
-        // units, and in standardized coordinates they move with the scales,
-        // so every target is re-projected when the scales changed (a
-        // positive weight), otherwise only the ones this row stepped. Once
-        // the fit is held in the caller's units each target was projected
-        // after its own step, and the scales move none of it.
         if self.cfg.constraint.is_some() && !held {
             let scales = self.scaler.is_some().then(|| self.scales());
             let rescaled = self.scaler.is_some() && weight > 0.0;
             let Self {
                 cfg,
                 beta,
-                extras,
                 pbuf,
                 learned,
                 ..
@@ -3614,41 +4165,12 @@ impl OnlineModel for Sgd {
                     c.project(&mut b[off..], scales.as_deref().map(|s| &s[off..]), pbuf);
                 }
             }
-            if rescaled && let Some(avg) = extras.as_mut().and_then(|e| e.avg.as_mut()) {
-                for b in avg.beta.iter_mut() {
-                    c.project(&mut b[off..], scales.as_deref().map(|s| &s[off..]), pbuf);
-                }
-            }
         }
-        // Fold each target's post-projection live iterate into the running
-        // decay-weighted average; targets that did not learn only age.
-        if let Some(avg) = self.extras.as_mut().and_then(|e| e.avg.as_mut()) {
-            for (j, &taught) in avg_taught.iter().enumerate().take(m) {
-                if taught {
-                    avg.learn(j, lam, weight, &self.beta[j]);
-                } else {
-                    avg.age(j, lam);
-                }
-            }
-        }
-        // The warm-up: the scaler has learned the row. On the row that
-        // completes it the coefficients are read out once, with the moments
-        // as they stand -- the numbers `coefficients()` gave until now --
-        // and held in the caller's units from then on.
         if !held
             && let Some(sc) = &self.scaler
             && self.warmup.learn(weight)
         {
             self.beta = unscaled(&self.beta, sc, self.cfg.fit_intercept);
-            if let Some(avg) = self.extras.as_mut().and_then(|e| e.avg.as_mut()) {
-                avg.beta = unscaled(&avg.beta, sc, self.cfg.fit_intercept);
-            }
-            // The map a refit on this row projects with
-            // ([`Self::project_mapped`]): a row that starts held forms it
-            // as it standardizes, and this one did not, so it is the
-            // scaler's as it stands. It was the `[0]`, `[1]` the buffers
-            // start at, and the intercept took none of the slopes' move
-            // (review 2026-11-23, REG-6).
             let scales = scales_of(sc, off);
             for (i, &scale) in scales.iter().enumerate().skip(off) {
                 self.mbuf[i] = sc.mean(i);
@@ -3659,51 +4181,7 @@ impl OnlineModel for Sgd {
         // a target whose buffer it fills is refit, after the row's own
         // prediction, step and scale (hard rule 2).
         if !taught.is_empty() {
-            let cap = self.cfg.refit_cap();
-            let span = self.cfg.refit_clock.zip(now);
-            let least = self.cfg.k_total().max(1);
-            if span.is_some() {
-                let held: u64 = self.refit.iter().map(RefitBuf::held_bytes).sum();
-                let delta: u64 = taught
-                    .iter()
-                    .enumerate()
-                    .filter(|&(j, _)| self.refit[j].open())
-                    .map(|(j, t)| match t {
-                        Some(_) => per_refit,
-                        None => self.refit[j].age_bytes(lam, lam_scale),
-                    })
-                    .sum();
-                if delta > 0 {
-                    let limit = self.span_cap();
-                    let mut guard = crate::clock_span::HeldCap {
-                        over: &mut self.over,
-                        warned: &mut self.warned,
-                        warning: &mut self.warning,
-                    };
-                    guard.note(held + delta, limit);
-                }
-            }
-            for (j, t) in taught.iter().enumerate() {
-                let b = &mut self.refit[j];
-                let full = match t {
-                    Some((yj, e)) => {
-                        let full = b.learn_scored(x, *yj, *e, weight, lam, lam_scale, cap);
-                        match span {
-                            Some((d, now)) => b.span_due(now, d, least),
-                            None => full,
-                        }
-                    }
-                    None => {
-                        if let Some(held) = b.age(lam, lam_scale, cap) {
-                            self.scale_from_held(j, &held);
-                        }
-                        false
-                    }
-                };
-                if full {
-                    self.refit_target(j);
-                }
-            }
+            self.step_refits(x, &taught, now, lam, lam_scale, weight);
         }
         self.taught = taught;
         self.w_sum = lam * self.w_sum + weight;

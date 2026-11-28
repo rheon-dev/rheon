@@ -546,8 +546,22 @@ impl Spectral {
         if p.is_finite() {
             return Some(p);
         }
-        // Scaled fallback when `yc`/`ys` near `1e200` overflow `yc * yc` before
-        // dividing by `det * yy`, keeping normal-range outputs bit-identical.
+        Self::ls_power_scaled(cc, ss, cs, yc, ys, yy, a)
+    }
+
+    /// Scaled fallback when `yc`/`ys` near `1e200` overflow `yc * yc` before
+    /// dividing by `det * yy`, keeping normal-range outputs bit-identical.
+    #[cold]
+    #[inline(never)]
+    fn ls_power_scaled(
+        cc: f64,
+        ss: f64,
+        cs: f64,
+        yc: f64,
+        ys: f64,
+        yy: f64,
+        a: f64,
+    ) -> Option<f64> {
         let mag = yc.abs().max(ys.abs());
         if !(mag > 0.0 && mag.is_finite() && a > 0.0 && a.is_finite() && yy.is_finite()) {
             return None;
@@ -564,13 +578,16 @@ impl Spectral {
         q.is_finite().then_some(q)
     }
 
-    /// The rotation `e^{2πi f Δ}` of each frequency for a clock step `d`.
-    fn rotations(&self, d: f64) -> Vec<[f64; 2]> {
-        self.cfg
-            .frequencies
-            .iter()
-            .map(|f| rotation(std::f64::consts::TAU * f * d))
-            .collect()
+    /// The rotation `e^{2πi f Δ}` of each frequency for a clock step `d`,
+    /// written into `out` reusing its allocation.
+    fn rotations_into(&self, d: f64, out: &mut Vec<[f64; 2]>) {
+        out.clear();
+        out.extend(
+            self.cfg
+                .frequencies
+                .iter()
+                .map(|f| rotation(std::f64::consts::TAU * f * d)),
+        );
     }
 
     /// Target `j`'s sums as they are read: the window's view under one,
@@ -590,63 +607,139 @@ impl Spectral {
 
     /// The power at every frequency of the sums `s`, written into `out`.
     fn power_into(&self, s: &Sums, out: &mut [f64]) {
-        let open = s.q > 0.0 && s.a > 0.0;
-        let m = if self.cfg.detrend && open {
-            s.b / s.a
-        } else {
-            0.0
-        };
+        if !(s.q > 0.0 && s.a > 0.0) {
+            out.fill(f64::NAN);
+            return;
+        }
+        if self.cfg.lomb_scargle() {
+            for (k, slot) in out.iter_mut().enumerate() {
+                *slot = self.ls_power(s, k).unwrap_or(f64::NAN);
+            }
+            return;
+        }
+        let m = if self.cfg.detrend { s.b / s.a } else { 0.0 };
         let scale = match self.cfg.scaling {
             SpectralScaling::Density => self.cfg.spacing / s.q,
             SpectralScaling::Spectrum => 1.0 / (s.a * s.a),
         };
+        if !(s.q <= 1e150 && scale.is_finite() && scale > 0.0) {
+            self.power_dft_slow(s, m, scale, out);
+            return;
+        }
         let nyq = self.cfg.nyquist();
-        for (k, f) in self.cfg.frequencies.iter().enumerate() {
-            if !open {
-                out[k] = f64::NAN;
-                continue;
-            }
-            if self.cfg.lomb_scargle() {
-                out[k] = self.ls_power(s, k).unwrap_or(f64::NAN);
+        let mut acc = 0.0;
+        for (((&f, xk), uk), slot) in self
+            .cfg
+            .frequencies
+            .iter()
+            .zip(&s.x)
+            .zip(&s.u)
+            .zip(out.iter_mut())
+        {
+            let re = xk[0] - m * uk[0];
+            let im = xk[1] - m * uk[1];
+            let c = if f == 0.0 || f == nyq { 1.0 } else { 2.0 };
+            let v = c * (re * re + im * im) * scale;
+            *slot = v;
+            acc += v;
+        }
+        if !acc.is_finite() {
+            self.power_dft_fixup(s, m, scale, out);
+        }
+    }
+
+    /// Recompute only non-finite DFT bins with rescaling when `re*re + im*im`
+    /// overflows (values near `w * y = 1e200`), leaving finite bins bit-identical.
+    #[cold]
+    #[inline(never)]
+    fn power_dft_fixup(&self, s: &Sums, m: f64, _scale: f64, out: &mut [f64]) {
+        let nyq = self.cfg.nyquist();
+        for (k, &f) in self.cfg.frequencies.iter().enumerate() {
+            if out[k].is_finite() {
                 continue;
             }
             let re = s.x[k][0] - m * s.u[k][0];
             let im = s.x[k][1] - m * s.u[k][1];
-            let c = if *f == 0.0 || *f == nyq { 1.0 } else { 2.0 };
+            let c = if f == 0.0 || f == nyq { 1.0 } else { 2.0 };
+            out[k] = self.power_dft_rescaled(s, re, im, c);
+        }
+    }
+
+    /// Rescale `(re, im)` before squaring when `re * re + im * im` overflows
+    /// (values near `w * y = 1e200`), keeping normal-range outputs bit-identical.
+    #[cold]
+    #[inline(never)]
+    fn power_dft_rescaled(&self, s: &Sums, re: f64, im: f64, c: f64) -> f64 {
+        let mag = re.abs().max(im.abs());
+        if !(mag > 0.0 && mag.is_finite()) {
+            return f64::NAN;
+        }
+        let inv = 1.0 / mag;
+        let r = re * inv;
+        let i = im * inv;
+        let norm2 = r * r + i * i;
+        let v = match self.cfg.scaling {
+            SpectralScaling::Density => c * norm2 * ((mag / s.q) * mag * self.cfg.spacing),
+            SpectralScaling::Spectrum => {
+                let ratio = mag / s.a;
+                c * norm2 * (ratio * ratio)
+            }
+        };
+        if v.is_finite() { v } else { f64::NAN }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn power_dft_slow(&self, s: &Sums, m: f64, scale: f64, out: &mut [f64]) {
+        let nyq = self.cfg.nyquist();
+        for (k, &f) in self.cfg.frequencies.iter().enumerate() {
+            let re = s.x[k][0] - m * s.u[k][0];
+            let im = s.x[k][1] - m * s.u[k][1];
+            let c = if f == 0.0 || f == nyq { 1.0 } else { 2.0 };
             let mag = re.abs().max(im.abs());
             let v = if mag > 1e150 {
-                // Rescale before squaring so values near `w * y = 1e200` do not
-                // overflow `re * re + im * im` before `scale = O(1e-200)` brings
-                // the result back into `f64` range; leaves `mag <= 1e150` to the
-                // bit.
-                let inv = 1.0 / mag;
-                let r = re * inv;
-                let i = im * inv;
-                let norm2 = r * r + i * i;
-                match self.cfg.scaling {
-                    SpectralScaling::Density => c * norm2 * ((mag / s.q) * mag * self.cfg.spacing),
-                    SpectralScaling::Spectrum => {
-                        let ratio = mag / s.a;
-                        c * norm2 * (ratio * ratio)
-                    }
-                }
+                self.power_dft_rescaled(s, re, im, c)
             } else {
-                c * (re * re + im * im) * scale
+                let v = c * (re * re + im * im) * scale;
+                if v.is_finite() { v } else { f64::NAN }
             };
-            out[k] = if v.is_finite() { v } else { f64::NAN };
+            out[k] = v;
         }
     }
 
     fn read(&self, view: &ViewKept, out: &mut Step) {
         let f = self.cfg.frequencies.len();
-        out.pred.clear();
-        out.pred.resize(self.cfg.n_targets * f, f64::NAN);
+        let len = self.cfg.n_targets * f;
+        if out.pred.len() != len {
+            out.pred.resize(len, f64::NAN);
+        }
         out.n_eff = self.read_w(view);
         out.extra = None;
         for j in 0..self.cfg.n_targets {
             let s = self.read_sums(view, j);
+            let dst = &mut out.pred[j * f..(j + 1) * f];
             if s.a >= self.cfg.min_weight {
-                self.power_into(s, &mut out.pred[j * f..(j + 1) * f]);
+                self.power_into(s, dst);
+            } else {
+                dst.fill(f64::NAN);
+            }
+        }
+    }
+
+    fn read_live(&self, out: &mut Step) {
+        let f = self.cfg.frequencies.len();
+        let len = self.cfg.n_targets * f;
+        if out.pred.len() != len {
+            out.pred.resize(len, f64::NAN);
+        }
+        out.n_eff = self.w_sum;
+        out.extra = None;
+        for (j, s) in self.sums.iter().enumerate() {
+            let dst = &mut out.pred[j * f..(j + 1) * f];
+            if s.a >= self.cfg.min_weight {
+                self.power_into(s, dst);
+            } else {
+                dst.fill(f64::NAN);
             }
         }
     }
@@ -859,13 +952,13 @@ impl Spectral {
                 *x = [lam * (c * xr - si * xi) + wx, lam * (c * xi + si * xr)];
                 *u = [lam * (c * ur - si * ui) + w, lam * (c * ui + si * ur)];
             }
-            // Twice the frequency: the rotation squared.
-            for (&[c, si], v) in rot.iter().zip(s.v.iter_mut()) {
-                let (c2, s2) = (c * c - si * si, 2.0 * c * si);
-                let [vr, vi] = *v;
-                *v = [lam * (c2 * vr - s2 * vi) + w, lam * (c2 * vi + s2 * vr)];
-            }
+            // Twice the frequency: the rotation squared (Lomb-Scargle only).
             if !s.v.is_empty() {
+                for (&[c, si], v) in rot.iter().zip(s.v.iter_mut()) {
+                    let (c2, s2) = (c * c - si * si, 2.0 * c * si);
+                    let [vr, vi] = *v;
+                    *v = [lam * (c2 * vr - s2 * vi) + w, lam * (c2 * vi + s2 * vr)];
+                }
                 s.s = lam * s.s + wx * xj.unwrap_or(0.0);
             }
             s.a = lam * s.a + w;
@@ -1006,22 +1099,27 @@ impl OnlineModel for Spectral {
             return;
         }
         // The power before the row (out of sample, hard rule 2).
-        let mut view = std::mem::take(&mut self.view);
-        self.view_into(&mut view);
-        self.read(&view, out);
-        self.view = view;
-        let lam = self.cfg.decay.factor(d_clock);
         if self.win.is_some() {
+            let mut view = std::mem::take(&mut self.view);
+            self.view_into(&mut view);
+            self.read(&view, out);
+            self.view = view;
+            let lam = self.cfg.decay.factor(d_clock);
             self.learn_windowed(y, d_clock, lam, weight);
             return;
         }
+        self.read_live(out);
+        let lam = self.cfg.decay.factor(d_clock);
         let key = d_clock.to_bits();
-        if self.rot.as_ref().is_none_or(|(k, _)| *k != key) {
-            self.rot = Some((key, self.rotations(d_clock)));
+        let (prev_key, mut rot) = match self.rot.take() {
+            Some((k, v)) => (k, v),
+            None => (key.wrapping_add(1), Vec::new()),
+        };
+        if prev_key != key || rot.len() != self.cfg.frequencies.len() {
+            self.rotations_into(d_clock, &mut rot);
         }
-        let rot = std::mem::take(&mut self.rot.as_mut().expect("set above").1);
         self.learn(y, lam, weight, &rot);
-        self.rot.as_mut().expect("set above").1 = rot;
+        self.rot = Some((key, rot));
     }
 
     fn predict(&self, x: &[f64], d_clock: f64) -> Step {

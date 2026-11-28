@@ -222,8 +222,9 @@ pub struct AuditCfg {
     pub has_clock: bool,
     /// Optional HyperLogLog++ sketch, sliding window, and state cap. Absent
     /// and skipped when neither HLL++ nor `max_state_bytes` is configured.
+    /// Boxed so non-HLL `AuditCfg` keeps its compact pre-HLL size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub distinct: Option<AuditDistinctCfg>,
+    pub distinct: Option<Box<AuditDistinctCfg>>,
 }
 
 impl AuditCfg {
@@ -1621,16 +1622,17 @@ pub struct Audit {
     fresh: bool,
     /// Optional HLL++ sketches and sliding-window state. Last and omitted
     /// when `distinct_precision` is `None`, preserving every existing audit
-    /// fixture byte for byte in both named and compact encodings.
+    /// fixture byte for byte in both named and compact encodings. Boxed so
+    /// non-HLL `Audit` stays compact and `step_into` tests one pointer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    hll: Option<AuditHllState>,
+    hll: Option<Box<AuditHllState>>,
 }
 
 impl Audit {
     pub fn new(cfg: AuditCfg) -> Result<Self, String> {
         cfg.validate()?;
         let k = cfg.n_columns;
-        let hll = AuditHllState::new(&cfg);
+        let hll = AuditHllState::new(&cfg).map(Box::new);
         Ok(Self {
             columns: vec![ColumnAudit::default(); k],
             pairs: if cfg.pairs {
@@ -1658,7 +1660,10 @@ impl Audit {
     /// Total state bytes held by this audit (fixed base + HLL++ register
     /// tables + live sliding-window entries).
     pub fn state_bytes(&self) -> u64 {
-        let dynamic = self.hll.as_ref().map_or(0, AuditHllState::live_entry_bytes);
+        let dynamic = self
+            .hll
+            .as_deref()
+            .map_or(0, AuditHllState::live_entry_bytes);
         self.cfg.fixed_state_bytes().saturating_add(dynamic)
     }
 
@@ -1861,7 +1866,7 @@ impl Audit {
                     },
                 ..
             }),
-        ) = (&self.hll, &o.hll)
+        ) = (self.hll.as_deref(), o.hll.as_deref())
             && std::mem::discriminant(sa) != std::mem::discriminant(sb)
         {
             return Err(
@@ -1996,7 +2001,7 @@ impl Audit {
     }
 
     /// Update the non-HLL columns, pairs, and clock statistics for a committed row.
-    #[inline]
+    #[inline(always)]
     fn record_base_row(&mut self, x: &[f64], d_clock: f64) {
         let cap = self.cfg.distinct_cap;
         if !self.fresh && d_clock.is_finite() && d_clock >= 0.0 {
@@ -2047,7 +2052,7 @@ impl Audit {
             if let Some(AuditHllState {
                 sketches: HllSketches::Plain(cols),
                 ..
-            }) = self.hll.as_mut()
+            }) = self.hll.as_deref_mut()
             {
                 for c in cols.iter_mut() {
                     out.pred.push(c.count_cached(p));
@@ -2061,7 +2066,7 @@ impl Audit {
                 if let Some(AuditHllState {
                     sketches: HllSketches::Plain(cols),
                     ..
-                }) = self.hll.as_mut()
+                }) = self.hll.as_deref_mut()
                 {
                     for (c, &v) in cols.iter_mut().zip(x) {
                         if crate::usable(v) {
@@ -2296,9 +2301,8 @@ impl OnlineModel for Audit {
         out.n_eff = self.n_eff;
         out.extra = None;
 
-        // Fast path: HLL++ off (keep HLL++ outlined so the non-HLL prologue
-        // stays small and spills no extra registers).
-        let Some(p) = self.cfg.distinct_precision() else {
+        // Fast path: HLL++ off (single null-pointer test on boxed `hll`).
+        if self.hll.is_none() {
             if weight == 0.0 {
                 return;
             }
@@ -2307,7 +2311,8 @@ impl OnlineModel for Audit {
                 self.n_eff += weight;
             }
             return;
-        };
+        }
+        let p = self.cfg.distinct_precision().expect("hll enabled");
         self.step_with_hll(p, x, d_clock, weight, out);
     }
 

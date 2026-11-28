@@ -1027,6 +1027,30 @@ impl Stack {
         self.at.push(at);
     }
 
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn push_one_narrow(
+        &mut self,
+        seq: u64,
+        tau: f64,
+        off: i64,
+        end: f64,
+        start: f64,
+        v: f64,
+        own: Acc,
+        sum: Acc,
+        at: f64,
+    ) {
+        self.seq.push(seq);
+        self.tau.push(tau);
+        self.off.push(off);
+        self.end.push(end);
+        self.vals
+            .extend_from_slice(&[start, v, own.s, own.w, own.n]);
+        self.sums.extend_from_slice(&[sum.s, sum.w, sum.n]);
+        self.at.push(at);
+    }
+
     /// Room for `more` rows, in every arena.
     fn reserve(&mut self, more: usize) {
         self.seq.reserve(more);
@@ -1313,6 +1337,41 @@ impl Queue {
         self.front.sum_w()
     }
 
+    /// Fast push for a single-operator narrow windowed queue with no
+    /// point-mean, extremum, exact-order, or quantile side structures.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn push_one_narrow(
+        &mut self,
+        k: &KernelDef,
+        seq: u64,
+        tau: f64,
+        off: i64,
+        end: f64,
+        start: f64,
+        v: f64,
+        own: Acc,
+    ) {
+        let (sum, at) = match self.back.len().checked_sub(1) {
+            None => (own, tau),
+            Some(last) => {
+                let last_at = self.back.at[last];
+                let f = k.discount_in(tau - last_at, &mut self.decay);
+                then_by(
+                    k,
+                    f,
+                    self.back.sum::<false>(last, 0),
+                    last_at,
+                    own,
+                    tau,
+                    false,
+                )
+            }
+        };
+        self.back
+            .push_one_narrow(seq, tau, off, end, start, v, own, sum, at);
+    }
+
     /// [`Queue::push`] compiled for this queue's width.
     #[allow(clippy::too_many_arguments)]
     fn push_row(
@@ -1402,6 +1461,29 @@ impl Queue {
             }
             self.total_at = at;
         }
+        // A quantile's value joins its sketch: the row's `x`, its own value
+        // in either direction (`fill_forward`).
+        if !self.quant.is_empty() {
+            for (j, q) in self.quant.iter_mut().enumerate() {
+                if let Some(q) = q {
+                    let x = row[j * rw + 1];
+                    if !x.is_nan() {
+                        q.push(k, tau, x);
+                    }
+                }
+            }
+        }
+        // Rare optional side structures (extrema, exact-order):
+        // check once so mean/sum/var/std/rate/quantile skip both loops.
+        if !(self.ext.is_empty() && self.ord.is_empty()) {
+            self.push_extras::<W>(k, row);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn push_extras<const W: bool>(&mut self, k: &KernelDef, row: &[f64]) {
+        let rw = row_w::<W>();
         // An extremum's value joins its part: the row's `x`, its own value,
         // as a quantile's; under a `since` event the current stamp's apart.
         let (windowed, split) = (k.window_size.is_some(), k.since.is_some());
@@ -1413,16 +1495,6 @@ impl Queue {
         for (j, o) in self.ord.iter_mut().enumerate() {
             if let Some(o) = o {
                 o.insert(row[j * rw + 1]);
-            }
-        }
-        // A quantile's value joins its sketch: the row's `x`, its own value
-        // in either direction (`fill_forward`).
-        for (j, q) in self.quant.iter_mut().enumerate() {
-            if let Some(q) = q {
-                let x = row[j * rw + 1];
-                if !x.is_nan() {
-                    q.push(k, tau, x);
-                }
             }
         }
     }
@@ -1529,32 +1601,42 @@ impl Queue {
             ) {
                 return;
             }
-            for (j, q) in self.quant.iter_mut().enumerate() {
-                if let Some(q) = q {
-                    let x = self.front.x::<W>(top, j);
-                    q.pop(top, x);
-                    // Looking ahead, the rows left are seen from the one that
-                    // went: made again from the oldest of them once that is
-                    // too far back to read them (WIN-2). Rows with no value
-                    // weigh nothing either way, and are not made again.
-                    let front = &self.front;
-                    if !x.is_nan()
-                        && k.direction == Direction::Forward
-                        && q.faded()
-                        && (0..top).any(|i| !front.x::<W>(i, j).is_nan())
-                    {
-                        let tau: Vec<f64> = (0..top).rev().map(|i| front.tau[i]).collect();
-                        q.rebuild_front(k, &tau, |i| front.x::<W>(top - 1 - i, j));
+            if !self.quant.is_empty() {
+                for (j, q) in self.quant.iter_mut().enumerate() {
+                    if let Some(q) = q {
+                        let x = self.front.x::<W>(top, j);
+                        q.pop(top, x);
+                        // Looking ahead, the rows left are seen from the one that
+                        // went: made again from the oldest of them once that is
+                        // too far back to read them (WIN-2). Rows with no value
+                        // weigh nothing either way, and are not made again.
+                        let front = &self.front;
+                        if !x.is_nan()
+                            && k.direction == Direction::Forward
+                            && q.faded()
+                            && (0..top).any(|i| !front.x::<W>(i, j).is_nan())
+                        {
+                            let tau: Vec<f64> = (0..top).rev().map(|i| front.tau[i]).collect();
+                            q.rebuild_front(k, &tau, |i| front.x::<W>(top - 1 - i, j));
+                        }
                     }
                 }
             }
-            self.ext.iter_mut().flatten().for_each(XSide::pop);
-            for (j, o) in self.ord.iter_mut().enumerate() {
-                if let Some(o) = o {
-                    o.remove(self.front.x::<W>(top, j));
-                }
+            if !(self.ext.is_empty() && self.ord.is_empty()) {
+                self.evict_extras::<W>(top);
             }
             self.front.pop();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn evict_extras<const W: bool>(&mut self, top: usize) {
+        self.ext.iter_mut().flatten().for_each(XSide::pop);
+        for (j, o) in self.ord.iter_mut().enumerate() {
+            if let Some(o) = o {
+                o.remove(self.front.x::<W>(top, j));
+            }
         }
     }
 
@@ -2646,7 +2728,9 @@ impl Windows {
         } else if adv.session_changed || adv.capped {
             self.end_all(End::Cut);
         }
-        if let Some(now) = row.clock {
+        if self.clock_cfg.gap_cap.is_finite()
+            && let Some(now) = row.clock
+        {
             self.end_silent(now);
         }
         if own.reset {
@@ -2657,7 +2741,9 @@ impl Windows {
 
         // A new stamp resolves the stamps before it, in every group: the
         // stream is in clock order across groups.
-        if let Some(now) = row.clock {
+        if self.derived.n_wait > 0
+            && let Some(now) = row.clock
+        {
             self.flush_stamps_before(now);
         }
 
@@ -2771,23 +2857,52 @@ impl Windows {
         for &ki in &self.derived.forward {
             let ki = ki as usize;
             let k = &self.kernels[ki];
-            forward_step(
-                k,
-                &self.ops,
-                &self.members[ki],
-                ki,
-                g,
-                &mut self.scratch_row,
-                &mut self.scratch_sum,
-                FwdRow {
-                    seq,
-                    tau,
-                    off,
-                    form,
-                },
-                |input| row.values[input],
-                &mut held,
-            );
+            let m = &self.members[ki];
+            if m.len() == 1
+                && !g.queues[ki].wide()
+                && self.ops[m[0]].stat == Stat::Mean
+                && g.queues[ki].point.is_empty()
+                && g.queues[ki].ext.is_empty()
+                && g.queues[ki].ord.is_empty()
+                && g.queues[ki].quant.is_empty()
+            {
+                let o = m[0];
+                let op = &self.ops[o];
+                forward_step_one_narrow_mean(
+                    k,
+                    op,
+                    o,
+                    ki,
+                    g,
+                    &mut self.scratch_sum,
+                    FwdRow {
+                        seq,
+                        tau,
+                        off,
+                        form,
+                    },
+                    row.values[op.input],
+                    &mut held,
+                );
+            } else {
+                forward_step(
+                    k,
+                    &self.ops,
+                    m,
+                    ki,
+                    g,
+                    &mut self.scratch_row,
+                    &mut self.scratch_sum,
+                    FwdRow {
+                        seq,
+                        tau,
+                        off,
+                        form,
+                    },
+                    |input| row.values[input],
+                    &mut held,
+                );
+            }
             if let Some(limit) = self.derived.cap_rows[ki]
                 && g.queues[ki].len() > limit
             {
@@ -3476,50 +3591,58 @@ fn close<const W: bool>(
             held.values[r * held.n_outputs + o] = empty_value(op);
             continue;
         }
-        held.values[r * held.n_outputs + o] = if op.stat.is_extremum() {
-            if a.n < f64::from(op.min_samples) {
-                f64::NAN
+        held.values[r * held.n_outputs + o] =
+            if matches!(op.stat, Stat::Mean | Stat::Sum | Stat::PointMean) {
+                value_of(k, op, a, len)
             } else {
-                q.ext(j).windowed(open_value.map(|(_, x)| x))
-            }
-        } else if op.stat == Stat::ExactQuantile {
-            if a.n < f64::from(op.min_samples) {
-                f64::NAN
-            } else {
-                let p = op.quantile.expect("an exact quantile has a level");
-                let interp = op.interpolation.unwrap_or(Interp::Nearest);
-                q.ord(j).quantile(p, interp, open_value.map(|(_, x)| x))
-            }
-        } else if op.stat == Stat::ExactRank {
-            if a.n < f64::from(op.min_samples) {
-                f64::NAN
-            } else {
-                let my_x = if open.is_some_and(|(oseq, ..)| oseq == t.seq) {
-                    open_x[j]
-                } else {
-                    q.x_by_seq::<W>(t.seq, j)
-                };
-                let method = op.rank_method.unwrap_or(RankMethod::Average);
-                q.ord(j).rank(my_x, method, open_value.map(|(_, x)| x))
-            }
-        } else if op.stat == Stat::Quantile {
-            if a.n < f64::from(op.min_samples) {
-                f64::NAN
-            } else {
-                let p = op.quantile.expect("a quantile has a level (`check_op`)");
-                q.quantile(k, j, p, open_value).unwrap_or(f64::NAN)
-            }
-        } else if op.stat == Stat::Rate {
-            // `value_of`'s rate, its span's mass on a slot: every window of
-            // a kernel but a cut one has the span of the window.
-            if a.n < f64::from(op.min_samples) {
-                f64::NAN
-            } else {
-                rate_of(a, k.clock_mass_slot(len, &mut q.decay.fwd().mass_span))
-            }
+                close_special::<W>(k, op, q, j, t, open, open_x, open_value, a, len)
+            };
+    }
+}
+
+/// Outlined final read for forward extrema, exact order stats, quantiles, and
+/// rates, keeping [`close`] compact for mean/sum/point-mean.
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn close_special<const W: bool>(
+    k: &KernelDef,
+    op: &OpDef,
+    q: &mut Queue,
+    j: usize,
+    t: Wait,
+    open: Option<(u64, f64, i64)>,
+    open_x: &[f64],
+    open_value: Option<(f64, f64)>,
+    a: Acc,
+    len: f64,
+) -> f64 {
+    if a.n < f64::from(op.min_samples) {
+        return f64::NAN;
+    }
+    if op.stat.is_extremum() {
+        q.ext(j).windowed(open_value.map(|(_, x)| x))
+    } else if op.stat == Stat::ExactQuantile {
+        let p = op.quantile.expect("an exact quantile has a level");
+        let interp = op.interpolation.unwrap_or(Interp::Nearest);
+        q.ord(j).quantile(p, interp, open_value.map(|(_, x)| x))
+    } else if op.stat == Stat::ExactRank {
+        let my_x = if open.is_some_and(|(oseq, ..)| oseq == t.seq) {
+            open_x[j]
         } else {
-            value_of(k, op, a, len)
+            q.x_by_seq::<W>(t.seq, j)
         };
+        let method = op.rank_method.unwrap_or(RankMethod::Average);
+        q.ord(j).rank(my_x, method, open_value.map(|(_, x)| x))
+    } else if op.stat == Stat::Quantile {
+        let p = op.quantile.expect("a quantile has a level (`check_op`)");
+        q.quantile(k, j, p, open_value).unwrap_or(f64::NAN)
+    } else if op.stat == Stat::Rate {
+        // `value_of`'s rate, its span's mass on a slot: every window of
+        // a kernel but a cut one has the span of the window.
+        rate_of(a, k.clock_mass_slot(len, &mut q.decay.fwd().mass_span))
+    } else {
+        value_of(k, op, a, len)
     }
 }
 
@@ -3635,6 +3758,147 @@ fn forward_step(
         }
         g.open_held[ki][j] = g.held[o];
     }
+    g.open[ki] = Some((seq, tau, off));
+}
+
+/// Fast single-operator narrow `Stat::Mean` specialization of [`forward_step`]
+/// for queues with no side structures (extrema, quantiles, exact order,
+/// point-mean), bit-identical to [`forward_step`] + [`close`] +
+/// [`fill_forward`] + [`Queue::push`].
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn forward_step_one_narrow_mean(
+    k: &KernelDef,
+    op: &OpDef,
+    o: usize,
+    ki: usize,
+    g: &mut Group,
+    scratch_sum: &mut [f64],
+    row: FwdRow,
+    raw_v: f64,
+    held: &mut Held<'_>,
+) {
+    let FwdRow {
+        seq,
+        tau,
+        off,
+        form,
+    } = row;
+    let w = k.window_size.expect("a forward kernel has a window");
+    let near_in = k.closed.near(Direction::Forward);
+    let far_in = k.closed.far(Direction::Forward);
+    let min_samples = f64::from(op.min_samples);
+    let q = &mut g.queues[ki];
+    let open = g.open[ki];
+    let open_x = g.open_x[ki][0];
+    let open_held = g.open_held[ki][0];
+    let mut closed = g.closed[ki];
+    let waiting = &g.waiting;
+    let held_first = held.first;
+    let n_out = held.n_outputs;
+    while closed < waiting.len() && {
+        let t = waiting[closed];
+        let d = gap(form, t.off, off).cmp_window(k);
+        if far_in {
+            d == Ordering::Greater
+        } else {
+            d != Ordering::Less
+        }
+    } {
+        let t = waiting[closed];
+        closed += 1;
+        q.evict::<false>(k, scratch_sum, |_, _, j_off| {
+            let ahead = gap(form, t.off, j_off).cmp_zero();
+            if near_in {
+                ahead == Ordering::Less
+            } else {
+                ahead != Ordering::Greater
+            }
+        });
+        let hr = usize::try_from(t.seq - held_first).expect("a waiting row is held");
+        let meta = &mut held.meta[hr];
+        meta.open -= 1;
+        if meta.accept {
+            let far = t.tau + w;
+            let mut open_on_edge = false;
+            let open_in = open.filter(|&(_, _, o_off)| {
+                let ahead = gap(form, t.off, o_off);
+                let (near, far_cmp) = (ahead.cmp_zero(), ahead.cmp_window(k));
+                open_on_edge = far_cmp == Ordering::Equal;
+                (if near_in {
+                    near != Ordering::Less
+                } else {
+                    near == Ordering::Greater
+                }) && (if far_in {
+                    far_cmp != Ordering::Greater
+                } else {
+                    far_cmp == Ordering::Less
+                })
+            });
+            let seg = q.sum_op::<false>(k, 0);
+            let first_own = q
+                .find_oldest(0, |st, i| st.own::<false>(i, 0).n > 0.0)
+                .map(|(p, _, _)| p);
+            let base = match first_own {
+                None => None,
+                Some(0) => seg,
+                Some(p) => q.sum_after_op::<false>(k, p - 1, 0),
+            };
+            let (mut a, mean_at) = match base {
+                Some((b, at)) => (b, Some(at)),
+                None => (Acc::default(), None),
+            };
+            let mut any = seg.is_some();
+            if let Some((_, otau, _)) = open_in {
+                let own = !open_x.is_nan();
+                if !open_held.is_nan() && (own || first_own.is_some()) {
+                    let m = if open_on_edge {
+                        0.0
+                    } else {
+                        let from = mean_at.unwrap_or(otau);
+                        mass_between_close(k, &mut q.decay, t.tau, from, otau, tau.min(far))
+                    };
+                    a = a.plus(
+                        Acc {
+                            s: m * open_held,
+                            w: m,
+                            n: f64::from(u8::from(own)),
+                            ..Acc::default()
+                        },
+                        false,
+                    );
+                    any = true;
+                }
+            }
+            held.values[hr * n_out + o] = if !any || a.n < min_samples || a.w <= 0.0 {
+                f64::NAN
+            } else {
+                a.s / a.w
+            };
+        }
+    }
+    g.closed[ki] = closed;
+    if let Some((oseq, otau, ooff)) = g.open[ki].take() {
+        let n = f64::from(u8::from(!open_x.is_nan()));
+        let acc = if !open_held.is_nan() {
+            let mass = mass_between_fill(k, &mut q.decay, otau, otau, tau);
+            Acc {
+                s: mass * open_held,
+                w: mass,
+                n,
+                ..Acc::default()
+            }
+        } else {
+            Acc::default()
+        };
+        q.push_one_narrow(k, oseq, otau, ooff, tau, otau, open_held, acc);
+    }
+    let v = if usable(raw_v) { raw_v } else { f64::NAN };
+    g.open_x[ki][0] = v;
+    if !v.is_nan() {
+        g.held[o] = v;
+    }
+    g.open_held[ki][0] = g.held[o];
     g.open[ki] = Some((seq, tau, off));
 }
 

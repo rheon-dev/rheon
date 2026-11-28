@@ -1491,11 +1491,35 @@ fn run_forward(
         if k.direction != Direction::Forward {
             continue;
         }
+        let m = &p.members[ki];
+        if m.len() == 1
+            && !g.queues[ki].wide()
+            && p.ops[m[0]].stat == Stat::Mean
+            && g.queues[ki].point.is_empty()
+            && g.queues[ki].ext.is_empty()
+            && g.queues[ki].ord.is_empty()
+            && g.queues[ki].quant.is_empty()
+        {
+            run_forward_one_narrow(
+                k,
+                &p.ops[m[0]],
+                m[0],
+                ki,
+                g,
+                p.scratch_sum,
+                cols.x(p.ops[m[0]].input),
+                bufs,
+                form,
+                len,
+                &mut held,
+            );
+            continue;
+        }
         for r in 0..len {
             forward_step(
                 k,
                 p.ops,
-                &p.members[ki],
+                m,
                 ki,
                 g,
                 p.scratch_row,
@@ -1514,9 +1538,481 @@ fn run_forward(
     retire(p.kernels, g);
 }
 
+/// Specialized plain-block forward loop for a single-operator narrow
+/// `Stat::Mean` kernel with no side structures (extrema, quantiles, exact
+/// order, point-mean), bit-identical to [`forward_step`] + [`close`] +
+/// [`fill_forward`] + [`Queue::push`].
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn run_forward_one_narrow(
+    k: &KernelDef,
+    op: &OpDef,
+    o: usize,
+    ki: usize,
+    g: &mut Group,
+    scratch_sum: &mut [f64],
+    x_in: &[f64],
+    bufs: &Bufs,
+    form: OffForm,
+    len: usize,
+    held: &mut Held<'_>,
+) {
+    let w = k.window_size.expect("a forward kernel has a window");
+    let near_in = k.closed.near(Direction::Forward);
+    let far_in = k.closed.far(Direction::Forward);
+    let min_samples = f64::from(op.min_samples);
+    let q = &mut g.queues[ki];
+    let mut open = g.open[ki];
+    let mut open_x = g.open_x[ki][0];
+    let mut open_held = g.open_held[ki][0];
+    let mut held_v = g.held[o];
+    let mut closed = g.closed[ki];
+    let waiting = &g.waiting;
+    let held_first = held.first;
+    let n_out = held.n_outputs;
+    for (r, &xv) in x_in.iter().enumerate().take(len) {
+        let (seq, tau, off) = (bufs.seq[r], bufs.tau[r], bufs.off[r]);
+        while closed < waiting.len() && {
+            let t = waiting[closed];
+            let d = gap(form, t.off, off).cmp_window(k);
+            if far_in {
+                d == Ordering::Greater
+            } else {
+                d != Ordering::Less
+            }
+        } {
+            let t = waiting[closed];
+            closed += 1;
+            q.evict::<false>(k, scratch_sum, |_, _, j_off| {
+                let ahead = gap(form, t.off, j_off).cmp_zero();
+                if near_in {
+                    ahead == Ordering::Less
+                } else {
+                    ahead != Ordering::Greater
+                }
+            });
+            let hr = usize::try_from(t.seq - held_first).expect("a waiting row is held");
+            let meta = &mut held.meta[hr];
+            meta.open -= 1;
+            if meta.accept {
+                let far = t.tau + w;
+                let mut open_on_edge = false;
+                let open_in = open.filter(|&(_, _, o_off)| {
+                    let ahead = gap(form, t.off, o_off);
+                    let (near, far_cmp) = (ahead.cmp_zero(), ahead.cmp_window(k));
+                    open_on_edge = far_cmp == Ordering::Equal;
+                    (if near_in {
+                        near != Ordering::Less
+                    } else {
+                        near == Ordering::Greater
+                    }) && (if far_in {
+                        far_cmp != Ordering::Greater
+                    } else {
+                        far_cmp == Ordering::Less
+                    })
+                });
+                let seg = q.sum_op::<false>(k, 0);
+                let first_own = q
+                    .find_oldest(0, |st, i| st.own::<false>(i, 0).n > 0.0)
+                    .map(|(p, _, _)| p);
+                let base = match first_own {
+                    None => None,
+                    Some(0) => seg,
+                    Some(p) => q.sum_after_op::<false>(k, p - 1, 0),
+                };
+                let (mut a, mean_at) = match base {
+                    Some((b, at)) => (b, Some(at)),
+                    None => (Acc::default(), None),
+                };
+                let mut any = seg.is_some();
+                if let Some((_, otau, _)) = open_in {
+                    let own = !open_x.is_nan();
+                    if !open_held.is_nan() && (own || first_own.is_some()) {
+                        let m = if open_on_edge {
+                            0.0
+                        } else {
+                            let from = mean_at.unwrap_or(otau);
+                            mass_between_close(k, &mut q.decay, t.tau, from, otau, tau.min(far))
+                        };
+                        a = a.plus(
+                            Acc {
+                                s: m * open_held,
+                                w: m,
+                                n: f64::from(u8::from(own)),
+                                ..Acc::default()
+                            },
+                            false,
+                        );
+                        any = true;
+                    }
+                }
+                held.values[hr * n_out + o] = if !any || a.n < min_samples || a.w <= 0.0 {
+                    f64::NAN
+                } else {
+                    a.s / a.w
+                };
+            }
+        }
+        if let Some((oseq, otau, ooff)) = open.take() {
+            let n = f64::from(u8::from(!open_x.is_nan()));
+            let acc = if !open_held.is_nan() {
+                let mass = mass_between_fill(k, &mut q.decay, otau, otau, tau);
+                Acc {
+                    s: mass * open_held,
+                    w: mass,
+                    n,
+                    ..Acc::default()
+                }
+            } else {
+                Acc::default()
+            };
+            q.push_one_narrow(k, oseq, otau, ooff, tau, otau, open_held, acc);
+        }
+        let v = if usable(xv) { xv } else { f64::NAN };
+        open_x = v;
+        if !v.is_nan() {
+            held_v = v;
+        }
+        open_held = held_v;
+        open = Some((seq, tau, off));
+    }
+    g.open[ki] = open;
+    g.open_x[ki][0] = open_x;
+    g.open_held[ki][0] = open_held;
+    g.held[o] = held_v;
+    g.closed[ki] = closed;
+}
+
 /// One group's run of rows, in their own order: the windows the rows resolve
 /// are written, every kernel is taken over the whole run, and the group is left
 /// as `push` would leave it. The caller has made the rows' places in the held
+/// Specialized hot path for a single-operator narrow windowed backward kernel
+/// (`ewm_sum`, `ewm_mean`, `ewm_rate`) with `near && !count && !first` and no
+/// point/extrema/ord/quantile side structures.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn run_group_queue_one_narrow(
+    p: &mut Parts<'_>,
+    g: &mut Group,
+    ki: usize,
+    k: &KernelDef,
+    o: usize,
+    cols: Cols<'_>,
+    bufs: &Bufs,
+    len: usize,
+    g_tau: f64,
+    g_off: i64,
+    form: OffForm,
+    n_out: usize,
+    held_first: u64,
+) {
+    let op = &p.ops[o];
+    let win = k.window_size.expect("windowed kernel");
+    let far = k.closed.far(Direction::Backward);
+    let weighs_held = op.stat.weighs_held();
+    let partial_drop = op.partial == Partial::Drop;
+    let partial_keep = op.partial == Partial::Keep;
+    let x_col = cols.x(op.input);
+    let q = &mut g.queues[ki];
+    let mut last_valued = g.last_valued[o];
+    let mut began: isize = -1;
+    let mut last_val = g.stamp_values[ki][0];
+    for (r, &raw_x) in x_col.iter().enumerate().take(len) {
+        let (tau, off, new) = (bufs.tau[r], bufs.off[r], bufs.new[r]);
+        let seq = bufs.seq[r];
+        if new {
+            let (ptau, poff) = if r == 0 {
+                (g_tau, g_off)
+            } else {
+                (bufs.tau[r - 1], bufs.off[r - 1])
+            };
+            q.evict::<false>(k, p.scratch_sum, |_, _, t_off| {
+                let age = gap(form, t_off, poff).cmp_window(k);
+                if far {
+                    age == Ordering::Greater
+                } else {
+                    age != Ordering::Less
+                }
+            });
+            let span = win.min(ptau);
+            let edge = ptau - win;
+            last_val = match q.sum_op::<false>(k, 0) {
+                None => empty_value(op),
+                Some((sum, at)) => {
+                    let a = if weighs_held {
+                        let cut = q
+                            .find_oldest(0, |st, i| !st.x::<false>(i, 0).is_nan())
+                            .map(|(pos, in_front, i)| {
+                                let st = q.stack(in_front);
+                                let on_edge =
+                                    gap(form, st.off[i], poff).cmp_window(k) == Ordering::Equal;
+                                (
+                                    pos,
+                                    st.start::<false>(i, 0),
+                                    st.end[i],
+                                    st.x::<false>(i, 0),
+                                    on_edge,
+                                )
+                            })
+                            .filter(|&(_, start, _, _, on_edge)| on_edge || start < edge);
+                        match cut {
+                            Some((pos, start, end, x, on_edge)) => {
+                                let mut a = q.sum_after_op::<false>(k, pos, 0).map_or(
+                                    Acc::default(),
+                                    |(rem, r_at)| {
+                                        rem.scaled(k.discount_in(ptau - r_at, &mut q.decay), false)
+                                    },
+                                );
+                                let m = if on_edge {
+                                    0.0
+                                } else {
+                                    mass_between_in(k, &mut q.decay, ptau, start.max(edge), end)
+                                };
+                                a = a.plus(Acc::held(x, m, false), false);
+                                a
+                            }
+                            None => sum.scaled(k.discount_in(ptau - at, &mut q.decay), false),
+                        }
+                    } else {
+                        sum.scaled(k.discount_in(ptau - at, &mut q.decay), false)
+                    };
+                    value_of(k, op, a, span)
+                }
+            };
+            let complete = ptau >= win;
+            let write_val = complete || partial_keep;
+            let mark_drop = !complete && partial_drop;
+            if began < 0 {
+                for &waiting in g.pending.iter() {
+                    let hr = usize::try_from(waiting - held_first).expect("a row is held");
+                    if mark_drop {
+                        p.held_meta[hr].drop = true;
+                    }
+                    if write_val {
+                        p.held_values[hr * n_out + o] = last_val;
+                    }
+                }
+                for qi in 0..r {
+                    let hr = usize::try_from(bufs.seq[qi] - held_first).expect("a row is held");
+                    if mark_drop {
+                        p.held_meta[hr].drop = true;
+                    }
+                    if write_val {
+                        p.held_values[hr * n_out + o] = last_val;
+                    }
+                }
+            } else {
+                for qi in (began as usize)..r {
+                    let hr = usize::try_from(bufs.seq[qi] - held_first).expect("a row is held");
+                    if mark_drop {
+                        p.held_meta[hr].drop = true;
+                    }
+                    if write_val {
+                        p.held_values[hr * n_out + o] = last_val;
+                    }
+                }
+            }
+            began = r as isize;
+        }
+        let v = if usable(raw_x) { raw_x } else { f64::NAN };
+        let start = if last_valued.is_nan() {
+            tau - win
+        } else {
+            last_valued
+        };
+        let acc = if v.is_nan() {
+            Acc::default()
+        } else if weighs_held {
+            Acc::held(v, mass_held_to(k, tau, start, &mut q.decay), false)
+        } else {
+            Acc {
+                s: v,
+                n: 1.0,
+                ..Acc::default()
+            }
+        };
+        if !v.is_nan() {
+            last_valued = tau;
+        }
+        q.push_one_narrow(k, seq, tau, off, tau, start, v, acc);
+    }
+    g.last_valued[o] = last_valued;
+    g.stamp_values[ki][0] = last_val;
+}
+
+/// Run one backward queue-based kernel across a plain block, specialized on
+/// accumulator width `W` so `wide` is dispatched once per kernel instead of
+/// per row.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn run_group_queue<const W: bool>(
+    p: &mut Parts<'_>,
+    g: &mut Group,
+    ki: usize,
+    k: &KernelDef,
+    m: &[usize],
+    cols: Cols<'_>,
+    bufs: &Bufs,
+    len: usize,
+    g_tau: f64,
+    g_off: i64,
+    form: OffForm,
+    count: bool,
+    first: bool,
+    near: bool,
+    n_out: usize,
+    held_first: u64,
+) {
+    if !W
+        && m.len() == 1
+        && k.window_size.is_some()
+        && near
+        && !count
+        && !first
+        && matches!(p.ops[m[0]].stat, Stat::Sum | Stat::Mean | Stat::Rate)
+    {
+        let q = &g.queues[ki];
+        if q.point.is_empty() && q.ext.is_empty() && q.ord.is_empty() && q.quant.is_empty() {
+            run_group_queue_one_narrow(
+                p, g, ki, k, m[0], cols, bufs, len, g_tau, g_off, form, n_out, held_first,
+            );
+            return;
+        }
+    }
+    let q = &mut g.queues[ki];
+    let rw = row_w::<W>();
+    // Where the stamp the next read is of begins, among the block's
+    // rows: -1 for the rows pending from before it.
+    let mut began: isize = -1;
+    for r in 0..len {
+        let (tau, off, new) = (bufs.tau[r], bufs.off[r], bufs.new[r]);
+        let seq = bufs.seq[r];
+        if new && near && !count && !first {
+            // The stamp before this one is complete: its rows are
+            // read at its own time.
+            let (ptau, poff) = if r == 0 {
+                (g_tau, g_off)
+            } else {
+                (bufs.tau[r - 1], bufs.off[r - 1])
+            };
+            read_backward::<W>(
+                k,
+                p.ops,
+                m,
+                q,
+                p.scratch_sum,
+                ptau,
+                poff,
+                form,
+                &mut g.stamp_values[ki],
+            );
+            let complete = k.window_size.is_none_or(|w| ptau >= w);
+            let from = usize::try_from(began).unwrap_or(0);
+            let nothing: &[u64] = &[];
+            let earlier = if began < 0 {
+                g.pending.as_slice()
+            } else {
+                nothing
+            };
+            let theirs = (from..r).map(|q| bufs.seq[q]);
+            for waiting in earlier.iter().copied().chain(theirs) {
+                let held = Held {
+                    first: held_first,
+                    n_outputs: n_out,
+                    values: &mut *p.held_values,
+                    meta: &mut *p.held_meta,
+                };
+                write_backward(p.ops, m, waiting, &g.stamp_values[ki], complete, held);
+            }
+            began = r as isize;
+        }
+        if new && !near && first {
+            // The first row of a stretch reads an empty queue: no value,
+            // or the sum of nothing for a sum with no minimum.
+            for (j, &o) in m.iter().enumerate() {
+                g.stamp_values[ki][j] = empty_value(&p.ops[o]);
+            }
+        } else if new && !near {
+            read_backward::<W>(
+                k,
+                p.ops,
+                m,
+                q,
+                p.scratch_sum,
+                tau,
+                off,
+                form,
+                &mut g.stamp_values[ki],
+            );
+        }
+        // A value is held from the operator's last valued row; the
+        // first of a stretch from before it: from `-inf`, or from a
+        // window back where one bounds the mass.
+        for (j, &o) in m.iter().enumerate() {
+            let v = cols.x(p.ops[o].input)[r];
+            let v = if usable(v) { v } else { f64::NAN };
+            let start = if g.last_valued[o].is_nan() {
+                k.window_size.map_or(f64::NEG_INFINITY, |w| tau - w)
+            } else {
+                g.last_valued[o]
+            };
+            let stat = p.ops[o].stat;
+            let acc = if v.is_nan() {
+                Acc::default()
+            } else if stat.weighs_held() {
+                Acc::held(v, mass_held_to(k, tau, start, &mut q.decay), stat.is_var())
+            } else {
+                Acc {
+                    s: v,
+                    n: 1.0,
+                    ..Acc::default()
+                }
+            };
+            let b = j * rw;
+            p.scratch_row[b] = start;
+            p.scratch_row[b + 1] = v;
+            acc.write(&mut p.scratch_row[b + 2..], W);
+            if !v.is_nan() {
+                g.last_valued[o] = tau;
+            }
+        }
+        q.push::<W>(
+            k,
+            seq,
+            tau,
+            off,
+            tau,
+            &p.scratch_row[..rw * m.len()],
+            p.scratch_sum,
+        );
+        if near && count {
+            // The row's own windows, as `flush_group` reads them at its
+            // end.
+            read_backward::<W>(
+                k,
+                p.ops,
+                m,
+                q,
+                p.scratch_sum,
+                tau,
+                off,
+                form,
+                &mut g.stamp_values[ki],
+            );
+        }
+        if !near || count {
+            let complete = k.window_size.is_none_or(|w| tau >= w);
+            let held = Held {
+                first: held_first,
+                n_outputs: n_out,
+                values: &mut *p.held_values,
+                meta: &mut *p.held_meta,
+            };
+            write_backward(p.ops, m, seq, &g.stamp_values[ki], complete, held);
+        }
+    }
+}
+
 /// values and decided that each is a plain step forward in the group.
 #[allow(clippy::too_many_lines)]
 fn run_group(p: &mut Parts<'_>, g: &mut Group, cols: Cols<'_>, bufs: &mut Bufs, sh: &Shape) {
@@ -1565,146 +2061,14 @@ fn run_group(p: &mut Parts<'_>, g: &mut Group, cols: Cols<'_>, bufs: &mut Bufs, 
         }
         let q = &mut g.queues[ki];
         let near = k.closed.near(Direction::Backward);
-        let (rw, wide) = (q.row_w(), q.wide());
-        // Where the stamp the next read is of begins, among the block's
-        // rows: -1 for the rows pending from before it.
-        let mut began: isize = -1;
-        for r in 0..len {
-            let (tau, off, new) = (bufs.tau[r], bufs.off[r], bufs.new[r]);
-            let seq = bufs.seq[r];
-            if new && near && !count && !first {
-                // The stamp before this one is complete: its rows are
-                // read at its own time.
-                let (ptau, poff) = if r == 0 {
-                    (g_tau, g_off)
-                } else {
-                    (bufs.tau[r - 1], bufs.off[r - 1])
-                };
-                by_width!(
-                    wide,
-                    read_backward(
-                        k,
-                        p.ops,
-                        m,
-                        q,
-                        p.scratch_sum,
-                        ptau,
-                        poff,
-                        form,
-                        &mut g.stamp_values[ki],
-                    )
-                );
-                let complete = k.window_size.is_none_or(|w| ptau >= w);
-                let from = usize::try_from(began).unwrap_or(0);
-                let nothing: &[u64] = &[];
-                let earlier = if began < 0 {
-                    g.pending.as_slice()
-                } else {
-                    nothing
-                };
-                let theirs = (from..r).map(|q| bufs.seq[q]);
-                for waiting in earlier.iter().copied().chain(theirs) {
-                    let held = Held {
-                        first: held_first,
-                        n_outputs: n_out,
-                        values: &mut *p.held_values,
-                        meta: &mut *p.held_meta,
-                    };
-                    write_backward(p.ops, m, waiting, &g.stamp_values[ki], complete, held);
-                }
-                began = r as isize;
-            }
-            if new && !near && first {
-                // The first row of a stretch reads an empty queue: no value,
-                // or the sum of nothing for a sum with no minimum.
-                for (j, &o) in m.iter().enumerate() {
-                    g.stamp_values[ki][j] = empty_value(&p.ops[o]);
-                }
-            } else if new && !near {
-                by_width!(
-                    wide,
-                    read_backward(
-                        k,
-                        p.ops,
-                        m,
-                        q,
-                        p.scratch_sum,
-                        tau,
-                        off,
-                        form,
-                        &mut g.stamp_values[ki],
-                    )
-                );
-            }
-            // A value is held from the operator's last valued row; the
-            // first of a stretch from before it: from `-inf`, or from a
-            // window back where one bounds the mass.
-            for (j, &o) in m.iter().enumerate() {
-                let v = cols.x(p.ops[o].input)[r];
-                let v = if usable(v) { v } else { f64::NAN };
-                let start = if g.last_valued[o].is_nan() {
-                    k.window_size.map_or(f64::NEG_INFINITY, |w| tau - w)
-                } else {
-                    g.last_valued[o]
-                };
-                let stat = p.ops[o].stat;
-                let acc = if v.is_nan() {
-                    Acc::default()
-                } else if stat.weighs_held() {
-                    Acc::held(v, mass_held_to(k, tau, start, &mut q.decay), stat.is_var())
-                } else {
-                    Acc {
-                        s: v,
-                        n: 1.0,
-                        ..Acc::default()
-                    }
-                };
-                let b = j * rw;
-                p.scratch_row[b] = start;
-                p.scratch_row[b + 1] = v;
-                acc.write(&mut p.scratch_row[b + 2..], wide);
-                if !v.is_nan() {
-                    g.last_valued[o] = tau;
-                }
-            }
-            q.push_row(
-                k,
-                seq,
-                tau,
-                off,
-                tau,
-                &p.scratch_row[..rw * m.len()],
-                p.scratch_sum,
-            );
-            if near && count {
-                // The row's own windows, as `flush_group` reads them at its
-                // end.
-                by_width!(
-                    wide,
-                    read_backward(
-                        k,
-                        p.ops,
-                        m,
-                        q,
-                        p.scratch_sum,
-                        tau,
-                        off,
-                        form,
-                        &mut g.stamp_values[ki],
-                    )
-                );
-            }
-            if !near || count {
-                let complete = k.window_size.is_none_or(|w| tau >= w);
-                let held = Held {
-                    first: held_first,
-                    n_outputs: n_out,
-                    values: &mut *p.held_values,
-                    meta: &mut *p.held_meta,
-                };
-                write_backward(p.ops, m, seq, &g.stamp_values[ki], complete, held);
-            }
-        }
+        let wide = q.wide();
+        by_width!(
+            wide,
+            run_group_queue(
+                p, g, ki, k, m, cols, bufs, len, g_tau, g_off, form, count, first, near, n_out,
+                held_first,
+            )
+        );
     }
     // A forward kernel is the queue's too: each row closes the windows it
     // reaches past and joins the queue as `push` does it, a row at a time, a

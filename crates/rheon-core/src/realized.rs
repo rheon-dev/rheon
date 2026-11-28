@@ -557,6 +557,40 @@ impl Realized {
             self.drop_oldest();
         }
     }
+
+    #[cold]
+    #[inline(never)]
+    fn admit_clock_window(&mut self, d_clock: f64) -> bool {
+        let Some(now) = self
+            .window
+            .as_ref()
+            .and_then(|w| w.place.as_ref())
+            .map(|p| p.peek(d_clock))
+        else {
+            return true;
+        };
+        let dropped = match (self.cfg.window_clock, &self.window) {
+            (Some(span), Some(w)) => w
+                .rows
+                .iter()
+                .take_while(|h| {
+                    h.stamp
+                        .is_some_and(|s| self.cfg.closed.has_left(now, s, span))
+                })
+                .count(),
+            _ => 0,
+        };
+        let rows = self.window.as_ref().map(|w| w.rows.len() - dropped + 1);
+        let bytes = Self::state_bytes(self.cfg.n_targets, self.cfg.lm_window_rows, rows, true);
+        let cap = self.cfg.cap();
+        if !self.held_cap().admit(bytes, cap) {
+            if let Some(p) = self.window.as_mut().and_then(|w| w.place.as_mut()) {
+                p.discard_next();
+            }
+            return false;
+        }
+        true
+    }
 }
 
 impl OnlineModel for Realized {
@@ -587,33 +621,8 @@ impl OnlineModel for Realized {
             }
             return;
         }
-        if weight > 0.0
-            && let Some(now) = self
-                .window
-                .as_ref()
-                .and_then(|w| w.place.as_ref())
-                .map(|p| p.peek(d_clock))
-        {
-            let dropped = match (self.cfg.window_clock, &self.window) {
-                (Some(span), Some(w)) => w
-                    .rows
-                    .iter()
-                    .take_while(|h| {
-                        h.stamp
-                            .is_some_and(|s| self.cfg.closed.has_left(now, s, span))
-                    })
-                    .count(),
-                _ => 0,
-            };
-            let rows = self.window.as_ref().map(|w| w.rows.len() - dropped + 1);
-            let bytes = Self::state_bytes(self.cfg.n_targets, self.cfg.lm_window_rows, rows, true);
-            let cap = self.cfg.cap();
-            if !self.held_cap().admit(bytes, cap) {
-                if let Some(p) = self.window.as_mut().and_then(|w| w.place.as_mut()) {
-                    p.discard_next();
-                }
-                return;
-            }
+        if weight > 0.0 && self.window.is_some() && !self.admit_clock_window(d_clock) {
+            return;
         }
         let f = self.cfg.decay.factor(d_clock);
         self.w_sum = f * self.w_sum + weight;

@@ -426,24 +426,32 @@ impl Pa {
             dbuf,
             ..
         } = self;
-        let b = &mut beta[j];
+        let b = beta[j].as_mut_slice();
+        let n = b.len();
+        let (zs, ss, ms, ds) = (&zbuf[..n], &sbuf[..n], &mbuf[..n], &mut dbuf[..n]);
         let mut shift = 0.0;
-        for i in off..b.len() {
-            let db = step * zbuf[i] / sbuf[i];
-            if !(b[i] + db).is_finite() {
+        for ((((&bi, &zi), &si), &mi), di) in b[off..]
+            .iter()
+            .zip(&zs[off..])
+            .zip(&ss[off..])
+            .zip(&ms[off..])
+            .zip(&mut ds[off..])
+        {
+            let db = step * zi / si;
+            if !(bi + db).is_finite() {
                 return false;
             }
-            dbuf[i] = db;
-            shift += mbuf[i] * db;
+            *di = db;
+            shift += mi * db;
         }
         if off == 1 {
             let db = step - shift;
             if !(b[0] + db).is_finite() {
                 return false;
             }
-            dbuf[0] = db;
+            ds[0] = db;
         }
-        for (bi, di) in b.iter_mut().zip(dbuf.iter()) {
+        for (bi, di) in b.iter_mut().zip(ds.iter()) {
             *bi += di;
         }
         true
@@ -477,6 +485,201 @@ impl Pa {
     }
 }
 
+impl Pa {
+    #[cold]
+    #[inline(never)]
+    fn predict_avg_target(&self, j: usize, held: bool, direct: bool, off: usize, x: &[f64]) -> f64 {
+        let avg = self.avg.as_ref().expect("checked above");
+        if held {
+            dot_aug(&avg.beta[j], x, self.cfg.fit_intercept)
+        } else {
+            let (b0, slopes) = avg.beta[j].split_at(off);
+            let (head, tail) = row_parts(direct, off, x, &self.zbuf);
+            head.iter()
+                .zip(b0)
+                .map(|(z, b)| z * b)
+                .chain(tail.iter().zip(slopes).map(|(z, b)| z * b))
+                .sum()
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn update_avg(&mut self, avg_taught: &[bool], lam: f64, weight: f64) {
+        if let Some(avg) = self.avg.as_mut() {
+            for (j, &taught) in avg_taught.iter().enumerate().take(self.cfg.n_targets) {
+                if taught {
+                    avg.learn(j, lam, weight, &self.beta[j]);
+                } else {
+                    avg.age(j, lam);
+                }
+            }
+        }
+    }
+    #[cold]
+    #[inline(never)]
+    fn step_with_avg_into(
+        &mut self,
+        x: &[f64],
+        y: &[Option<f64>],
+        d_clock: f64,
+        weight: f64,
+        out: &mut Step,
+    ) {
+        self.ensure_buffers();
+        let m = self.cfg.n_targets;
+        let lam = self.cfg.decay.factor(d_clock);
+        let off = usize::from(self.cfg.fit_intercept);
+        let held = self.warmup.switched();
+        let (admit, floor) = self.warmup.read(weight);
+        let direct = self.scaler.is_none();
+        if !direct {
+            if off == 1 {
+                self.zbuf[0] = 1.0;
+                self.rawbuf[0] = 1.0;
+            }
+            self.rawbuf[off..].copy_from_slice(x);
+        }
+        match &self.scaler {
+            Some(sc) if held => standardize_row(
+                sc,
+                off,
+                x,
+                lam,
+                admit,
+                floor,
+                &mut self.zbuf[off..],
+                &mut self.mbuf[off..],
+                &mut self.sbuf[off..],
+            ),
+            Some(sc) => {
+                for (z, v) in self.zbuf[off..]
+                    .iter_mut()
+                    .zip(standardized(sc, off, x, lam, admit, floor))
+                {
+                    *z = v;
+                }
+            }
+            None => {}
+        }
+        let n_eff = self.w_sum;
+        let (head, tail) = row_parts(direct, off, x, &self.zbuf);
+        let sq_norm: f64 = head.iter().chain(tail).map(|z| z * z).sum();
+        out.pred.clear();
+        out.pred.resize(m, f64::NAN);
+        let pred = &mut out.pred;
+        if self.cfg.constraint.is_some() {
+            self.learned.clear();
+            self.learned.resize(m, false);
+        }
+        let mut avg_taught = vec![false; m];
+        for j in 0..m {
+            let p: f64 = if held {
+                dot_aug(&self.beta[j], x, self.cfg.fit_intercept)
+            } else {
+                let (b0, slopes) = self.beta[j].split_at(off);
+                let (head, tail) = row_parts(direct, off, x, &self.zbuf);
+                head.iter()
+                    .zip(b0)
+                    .map(|(z, b)| z * b)
+                    .chain(tail.iter().zip(slopes).map(|(z, b)| z * b))
+                    .sum()
+            };
+            if self.w_target[j] >= self.cfg.min_weight {
+                pred[j] = self.predict_avg_target(j, held, direct, off, x);
+            }
+            let tube = self.tube(j);
+            self.spread.update(j, y[j], lam, weight);
+            let Some(yj) = y[j] else { continue };
+            if weight <= 0.0 || !yj.is_finite() || !p.is_finite() {
+                continue;
+            }
+            let err = yj - p;
+            if sq_norm <= 0.0 {
+                avg_taught[j] = true;
+                continue;
+            }
+            let loss = (err.abs() - tube).max(0.0);
+            if loss == 0.0 {
+                avg_taught[j] = true;
+                continue;
+            }
+            let tau = weight.min(1.0)
+                * match self.cfg.mode {
+                    PaMode::Pa => loss / sq_norm,
+                    PaMode::Pa1 => (loss / sq_norm).min(self.cfg.c),
+                    PaMode::Pa2 => loss / (sq_norm + 0.5 / self.cfg.c),
+                };
+            let step = tau * err.signum();
+            if held {
+                if self.step_mapped(j, off, step) {
+                    if self.cfg.constraint.is_some() {
+                        self.project_mapped(j, off);
+                    }
+                    avg_taught[j] = true;
+                }
+                continue;
+            }
+            let (head, tail) = row_parts(direct, off, x, &self.zbuf);
+            let (b0, slopes) = self.beta[j].split_at_mut(off);
+            for (b, z) in b0.iter_mut().zip(head) {
+                *b += step * z;
+            }
+            for (b, z) in slopes.iter_mut().zip(tail) {
+                *b += step * z;
+            }
+            if let Some(l) = self.learned.get_mut(j) {
+                *l = true;
+            }
+            avg_taught[j] = true;
+        }
+        if let Some(sc) = &mut self.scaler {
+            sc.update(&self.rawbuf, scaler_decay(sc, lam, weight, floor), weight);
+        }
+        if let Some(c) = self.cfg.constraint.as_ref().filter(|_| !held) {
+            let scales = self.scaler.as_ref().map(|sc| scales_of(sc, off));
+            let rescaled = self.scaler.is_some() && weight > 0.0;
+            for (j, b) in self.beta.iter_mut().enumerate() {
+                if rescaled || self.learned[j] {
+                    c.project(
+                        &mut b[off..],
+                        scales.as_deref().map(|s| &s[off..]),
+                        &mut self.pbuf,
+                    );
+                }
+            }
+            if rescaled && let Some(avg) = self.avg.as_mut() {
+                for b in avg.beta.iter_mut() {
+                    c.project(
+                        &mut b[off..],
+                        scales.as_deref().map(|s| &s[off..]),
+                        &mut self.pbuf,
+                    );
+                }
+            }
+        }
+        self.update_avg(&avg_taught, lam, weight);
+        if !held
+            && let Some(sc) = &self.scaler
+            && self.warmup.learn(weight)
+        {
+            self.beta = unscaled(&self.beta, sc, self.cfg.fit_intercept);
+            if let Some(avg) = self.avg.as_mut() {
+                avg.beta = unscaled(&avg.beta, sc, self.cfg.fit_intercept);
+            }
+        }
+        self.w_sum = lam * self.w_sum + weight;
+        crate::model::age_target_weights(
+            &mut self.w_target,
+            |j| y[j].is_some_and(f64::is_finite),
+            lam,
+            weight,
+        );
+        out.n_eff = n_eff;
+        out.extra = None;
+    }
+}
+
 impl OnlineModel for Pa {
     /// Each target's own weight, the rows that carried it, for the bank's
     /// per-target `min_weight` gate: without it the bank checked a list of
@@ -500,6 +703,10 @@ impl OnlineModel for Pa {
         // (`OnlineModel`).
         if let Some(refused) = crate::model::refused_step(self, x, y, d_clock, weight) {
             *out = refused;
+            return;
+        }
+        if self.avg.is_some() {
+            self.step_with_avg_into(x, y, d_clock, weight, out);
             return;
         }
         self.ensure_buffers();
@@ -564,16 +771,10 @@ impl OnlineModel for Pa {
         out.pred.clear();
         out.pred.resize(m, f64::NAN);
         let pred = &mut out.pred;
-        let track_avg = self.avg.is_some();
-        if self.cfg.constraint.is_some() || track_avg {
+        if self.cfg.constraint.is_some() {
             self.learned.clear();
             self.learned.resize(m, false);
         }
-        let mut avg_taught = if track_avg {
-            vec![false; m]
-        } else {
-            Vec::new()
-        };
         for j in 0..m {
             let p: f64 = if held {
                 // `x̃ᵀb`, in the caller's units: no moment is read.
@@ -590,21 +791,7 @@ impl OnlineModel for Pa {
                     .sum()
             };
             if self.w_target[j] >= self.cfg.min_weight {
-                pred[j] = if let Some(avg) = &self.avg {
-                    if held {
-                        dot_aug(&avg.beta[j], x, self.cfg.fit_intercept)
-                    } else {
-                        let (b0, slopes) = avg.beta[j].split_at(off);
-                        let (head, tail) = row_parts(direct, off, x, &self.zbuf);
-                        head.iter()
-                            .zip(b0)
-                            .map(|(z, b)| z * b)
-                            .chain(tail.iter().zip(slopes).map(|(z, b)| z * b))
-                            .sum()
-                    }
-                } else {
-                    p
-                };
+                pred[j] = p;
             }
             // The tube is drawn in the target's spread as the row arrives;
             // the row's own `y` joins it afterwards, whatever the fit, and
@@ -620,19 +807,11 @@ impl OnlineModel for Pa {
             }
             let err = yj - p;
             if sq_norm <= 0.0 {
-                if track_avg {
-                    avg_taught[j] = true;
-                }
                 continue;
             }
             let loss = (err.abs() - tube).max(0.0);
             if loss == 0.0 {
-                // Passive: the live iterate stays where it is, and still
-                // enters the running average for this labeled row.
-                if track_avg {
-                    avg_taught[j] = true;
-                }
-                continue;
+                continue; // passive: the constraint already holds
             }
             // A weight below 1 scales the step, so a half-weight row moves the
             // fit half as far. A weight above 1 counts as 1: the update is a
@@ -651,13 +830,8 @@ impl OnlineModel for Pa {
             if held {
                 // Mapped into the caller's units by the row's map, and
                 // projected there.
-                if self.step_mapped(j, off, step) {
-                    if self.cfg.constraint.is_some() {
-                        self.project_mapped(j, off);
-                    }
-                    if track_avg {
-                        avg_taught[j] = true;
-                    }
+                if self.step_mapped(j, off, step) && self.cfg.constraint.is_some() {
+                    self.project_mapped(j, off);
                 }
                 continue;
             }
@@ -671,9 +845,6 @@ impl OnlineModel for Pa {
             }
             if let Some(l) = self.learned.get_mut(j) {
                 *l = true;
-            }
-            if track_avg {
-                avg_taught[j] = true;
             }
         }
         if let Some(sc) = &mut self.scaler {
@@ -699,26 +870,6 @@ impl OnlineModel for Pa {
                     );
                 }
             }
-            if rescaled && let Some(avg) = self.avg.as_mut() {
-                for b in avg.beta.iter_mut() {
-                    c.project(
-                        &mut b[off..],
-                        scales.as_deref().map(|s| &s[off..]),
-                        &mut self.pbuf,
-                    );
-                }
-            }
-        }
-        // Fold each target's post-projection live iterate into the running
-        // decay-weighted average; targets that did not learn only age.
-        if let Some(avg) = self.avg.as_mut() {
-            for (j, &taught) in avg_taught.iter().enumerate().take(m) {
-                if taught {
-                    avg.learn(j, lam, weight, &self.beta[j]);
-                } else {
-                    avg.age(j, lam);
-                }
-            }
         }
         // The warm-up: the scaler has learned the row. On the row that
         // completes it the coefficients are read out once, with the moments
@@ -729,9 +880,6 @@ impl OnlineModel for Pa {
             && self.warmup.learn(weight)
         {
             self.beta = unscaled(&self.beta, sc, self.cfg.fit_intercept);
-            if let Some(avg) = self.avg.as_mut() {
-                avg.beta = unscaled(&avg.beta, sc, self.cfg.fit_intercept);
-            }
         }
         self.w_sum = lam * self.w_sum + weight;
         crate::model::age_target_weights(

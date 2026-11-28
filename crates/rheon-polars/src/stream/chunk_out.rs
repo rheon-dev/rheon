@@ -172,7 +172,7 @@ impl Buffers {
     fn per_row(&self, spec: &Spec, n_models: usize, n_slots: usize) -> usize {
         let per = n_models * n_slots;
         let on = |flag: bool| if flag { per } else { 0 };
-        let n_conf = spec.conformal_levels().len();
+        let n_conf = spec.conformal_level_count();
         let n_scores = spec.score_block_count();
         per + on(self.residuals)
             + 2 * on(self.extras)
@@ -186,7 +186,7 @@ impl Buffers {
             }
             + 3 * n_conf * per
             + on(spec.emit_conformal_p)
-            + crate::checks::value_names(spec).len() * per
+            + crate::checks::value_count(spec) * per
             + if spec.emit_feature_health {
                 n_models * 2 * spec.k()
             } else {
@@ -307,14 +307,22 @@ impl ChunkOut {
         n_rows: usize,
         dense: bool,
     ) {
+        #[inline]
         fn fill<T: Clone>(v: &mut Vec<T>, n: usize, x: T) {
+            if n == 0 && v.is_empty() {
+                return;
+            }
             v.clear();
             v.resize(n, x);
         }
         // A buffer the run writes in full where it processes a row: the
         // length is set, the old values stay (or, where the buffer is new
         // or longer, are `x`).
+        #[inline]
         fn written<T: Clone>(dense: bool, v: &mut Vec<T>, n: usize, x: T) {
+            if n == 0 && v.is_empty() {
+                return;
+            }
             if dense {
                 v.truncate(n);
                 v.resize(n, x);
@@ -322,7 +330,11 @@ impl ChunkOut {
                 fill(v, n, x);
             }
         }
+        #[inline]
         fn lists<T: Clone>(v: &mut Vec<Vec<Option<T>>>, n_outer: usize, n_rows: usize) {
+            if n_outer == 0 && v.is_empty() {
+                return;
+            }
             v.truncate(n_outer);
             for inner in v.iter_mut() {
                 fill(inner, n_rows, None);
@@ -337,7 +349,7 @@ impl ChunkOut {
             n_levels,
             extra_width,
         } = Buffers::of(spec);
-        let n_checks = crate::checks::value_names(spec).len();
+        let n_checks = crate::checks::value_count(spec);
         self.rows.clear();
         self.rows.reserve(n_rows);
         fill(&mut self.processed, n_rows, false);
@@ -346,7 +358,7 @@ impl ChunkOut {
         written(dense, &mut self.sigma, on(extras), f64::NAN);
         written(dense, &mut self.zscore, on(extras), f64::NAN);
         fill(&mut self.autocorr, on(spec.emit_autocorr), f64::NAN);
-        let n_conf_levels = spec.conformal_levels().len();
+        let n_conf_levels = spec.conformal_level_count();
         let n_scores = spec.score_block_count();
         fill(
             &mut self.metrics,
@@ -396,33 +408,39 @@ impl ChunkOut {
         lists(&mut self.support_coef, n_models, n_rows);
         lists(&mut self.se_coef, n_models, n_rows);
         lists(&mut self.se_coef_hc0, n_models, n_rows);
-        lists(
-            &mut self.se_coef_hc1,
-            if spec.emits_robust_se_type(rheon_core::RobustSeType::Hc1) {
-                n_models
-            } else {
-                0
-            },
-            n_rows,
-        );
-        lists(
-            &mut self.se_coef_hc2,
-            if spec.emits_robust_se_type(rheon_core::RobustSeType::Hc2) {
-                n_models
-            } else {
-                0
-            },
-            n_rows,
-        );
-        lists(
-            &mut self.se_coef_hc3,
-            if spec.emits_robust_se_type(rheon_core::RobustSeType::Hc3) {
-                n_models
-            } else {
-                0
-            },
-            n_rows,
-        );
+        if spec.robust_se_types.is_some() {
+            lists(
+                &mut self.se_coef_hc1,
+                if spec.emits_robust_se_type(rheon_core::RobustSeType::Hc1) {
+                    n_models
+                } else {
+                    0
+                },
+                n_rows,
+            );
+            lists(
+                &mut self.se_coef_hc2,
+                if spec.emits_robust_se_type(rheon_core::RobustSeType::Hc2) {
+                    n_models
+                } else {
+                    0
+                },
+                n_rows,
+            );
+            lists(
+                &mut self.se_coef_hc3,
+                if spec.emits_robust_se_type(rheon_core::RobustSeType::Hc3) {
+                    n_models
+                } else {
+                    0
+                },
+                n_rows,
+            );
+        } else {
+            lists(&mut self.se_coef_hc1, 0, n_rows);
+            lists(&mut self.se_coef_hc2, 0, n_rows);
+            lists(&mut self.se_coef_hc3, 0, n_rows);
+        }
         lists(&mut self.se_coef_hac, n_models, n_rows);
         let dfb = if spec.emit_dfbetas && spec.has_row_error_inflation() {
             n_models
@@ -433,57 +451,67 @@ impl ChunkOut {
         let clocks = if spec.emit_clocks { n_rows } else { 0 };
         fill(&mut self.scored_clock, clocks, None);
         fill(&mut self.learned_clock, clocks, None);
-        let sm_list = spec.smoothed_is_list();
-        let kalman_sm = if spec.is_kalman_smoother() {
-            n_models
+        if spec.smooth_lag().is_some() {
+            let sm_list = spec.smoothed_is_list();
+            let kalman_sm = if spec.is_kalman_smoother() {
+                n_models
+            } else {
+                0
+            };
+            let kalman_flat = if sm_list { 0 } else { kalman_sm };
+            let kalman_delayed = if sm_list { kalman_sm } else { 0 };
+            lists(&mut self.smoothed_coef, kalman_flat, n_rows);
+            lists(
+                &mut self.smoothed_se,
+                if spec.emit_smoothed_se() {
+                    kalman_flat
+                } else {
+                    0
+                },
+                n_rows,
+            );
+            fill(
+                &mut self.smoothed_for,
+                if sm_list {
+                    0
+                } else {
+                    n_models * spec.smoothed_for_slots() * n_rows
+                },
+                None,
+            );
+            lists(&mut self.smoothed_coef_list, kalman_delayed, n_rows);
+            lists(
+                &mut self.smoothed_se_list,
+                if spec.emit_smoothed_se() {
+                    kalman_delayed
+                } else {
+                    0
+                },
+                n_rows,
+            );
+            lists(
+                &mut self.smoothed_state_list,
+                n_models * spec.hmm_smoothed_list_slots(),
+                n_rows,
+            );
+            lists(
+                &mut self.smoothed_for_list,
+                if sm_list {
+                    n_models * spec.smoothed_for_slots()
+                } else {
+                    0
+                },
+                n_rows,
+            );
         } else {
-            0
-        };
-        let kalman_flat = if sm_list { 0 } else { kalman_sm };
-        let kalman_delayed = if sm_list { kalman_sm } else { 0 };
-        lists(&mut self.smoothed_coef, kalman_flat, n_rows);
-        lists(
-            &mut self.smoothed_se,
-            if spec.emit_smoothed_se() {
-                kalman_flat
-            } else {
-                0
-            },
-            n_rows,
-        );
-        fill(
-            &mut self.smoothed_for,
-            if sm_list {
-                0
-            } else {
-                n_models * spec.smoothed_for_slots() * n_rows
-            },
-            None,
-        );
-        lists(&mut self.smoothed_coef_list, kalman_delayed, n_rows);
-        lists(
-            &mut self.smoothed_se_list,
-            if spec.emit_smoothed_se() {
-                kalman_delayed
-            } else {
-                0
-            },
-            n_rows,
-        );
-        lists(
-            &mut self.smoothed_state_list,
-            n_models * spec.hmm_smoothed_list_slots(),
-            n_rows,
-        );
-        lists(
-            &mut self.smoothed_for_list,
-            if sm_list {
-                n_models * spec.smoothed_for_slots()
-            } else {
-                0
-            },
-            n_rows,
-        );
+            lists(&mut self.smoothed_coef, 0, n_rows);
+            lists(&mut self.smoothed_se, 0, n_rows);
+            fill(&mut self.smoothed_for, 0, None);
+            lists(&mut self.smoothed_coef_list, 0, n_rows);
+            lists(&mut self.smoothed_se_list, 0, n_rows);
+            lists(&mut self.smoothed_state_list, 0, n_rows);
+            lists(&mut self.smoothed_for_list, 0, n_rows);
+        }
         self.n_models = n_models;
         self.n_slots = n_slots;
         self.n_levels = n_levels;
@@ -551,13 +579,21 @@ impl ChunkOut {
     /// The bytes held by the `coef`-like lists: each list's header and
     /// every vector it holds.
     fn list_bytes(&self) -> usize {
+        #[inline]
         fn lists(v: &Vec<Vec<Option<Vec<f64>>>>) -> usize {
+            if v.is_empty() && v.capacity() == 0 {
+                return 0;
+            }
             cap(v)
                 + v.iter()
                     .map(|inner| cap(inner) + inner.iter().flatten().map(cap).sum::<usize>())
                     .sum::<usize>()
         }
+        #[inline]
         fn nested_lists(v: &Vec<Vec<NestedListRow>>) -> usize {
+            if v.is_empty() && v.capacity() == 0 {
+                return 0;
+            }
             cap(v)
                 + v.iter()
                     .map(|inner| {
@@ -570,7 +606,11 @@ impl ChunkOut {
                     })
                     .sum::<usize>()
         }
+        #[inline]
         fn clock_lists(v: &Vec<Vec<ClockListRow>>) -> usize {
+            if v.is_empty() && v.capacity() == 0 {
+                return 0;
+            }
             cap(v)
                 + v.iter()
                     .map(|inner| cap(inner) + inner.iter().flatten().map(cap).sum::<usize>())

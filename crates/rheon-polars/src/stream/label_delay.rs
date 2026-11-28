@@ -330,6 +330,7 @@ impl Stream {
         // and join, where a pass over it and a `Vec` shifted at each release
         // cost O(rows held) a row (task 270, M-3).
         let mut resolved = pending.partition_point(|r| r.resolved);
+        let mut res_cursor = 0usize;
         // One template for every replayed row: only `pending` and the
         // break's events differ, and a replay never emits, never wants
         // coefficients and never counts as a row of the frame. A drift it
@@ -400,7 +401,7 @@ impl Stream {
                 let f = formulas.expect("checked");
                 let now = f.seqs[plan.i];
                 for row in pending.range_mut(resolved..) {
-                    match res.find(row.seq) {
+                    match res.find_from(row.seq, &mut res_cursor) {
                         Some((at, ys)) if at <= now => {
                             for (&slot, &y) in f.slots.iter().zip(ys) {
                                 row.ys[slot] = Some(y).filter(|v| usable(*v));

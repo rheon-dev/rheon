@@ -290,6 +290,8 @@ fn solve_factored(l: &[f64], n: usize, x: &mut [f64]) {
 /// within each, summed in a fixed order: the same bits on every platform,
 /// and four chains of adds that overlap.
 fn dot(a: &[f64], b: &[f64]) -> f64 {
+    debug_assert_eq!(a.len(), b.len());
+    let b = &b[..a.len()];
     let mut acc = [0.0; 4];
     let ((a4, ra), (b4, rb)) = (a.as_chunks::<4>(), b.as_chunks::<4>());
     for (x, y) in a4.iter().zip(b4) {
@@ -304,11 +306,249 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
     ((acc[0] + acc[1]) + (acc[2] + acc[3])) + tail
 }
 
-/// `out <- M v` for a row-major `k x k`.
-fn mat_vec(mtx: &[f64], v: &[f64], out: &mut [f64]) {
-    let k = v.len();
-    for (o, row) in out.iter_mut().zip(mtx.chunks_exact(k)) {
-        *o = dot(row, v);
+/// Scalar fallback for two dot products sharing one pass over `a`.
+#[inline(always)]
+fn dot2_scalar(a: &[f64], b0: &[f64], b1: &[f64]) -> [f64; 2] {
+    [dot(a, b0), dot(a, b1)]
+}
+
+/// Dispatch a `pulp::WithSimd` kernel using 4-lane AVX2 on x86-64 when
+/// available (matching [`crate::sgd::x86_v3`]) and `pulp::Arch::new()`
+/// otherwise (2-lane NEON on aarch64, SSE2 on older x86-64).
+#[inline(always)]
+fn dispatch_simd<W: pulp::WithSimd>(op: W) -> W::Output {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if let Some(simd) = crate::sgd::x86_v3() {
+            return pulp::Simd::vectorize(simd, op);
+        }
+    }
+    pulp::Arch::new().dispatch(op)
+}
+
+/// SIMD-accelerated `dot(a, b)` using strictly unfused `mul_f64s` + `add_f64s`
+/// on the 4-element prefix `a[..n & !3]`, bit-identical to [`dot`] for every
+/// length `n` on both 4-lane (AVX2) and 2-lane (NEON / SSE2) backends.
+#[inline(always)]
+fn dot_simd<S: pulp::Simd>(simd: S, a: &[f64], b: &[f64]) -> f64 {
+    let n = a.len();
+    debug_assert_eq!(b.len(), n);
+    let n4 = n & !3;
+    let (ah, at) = (&a[..n4], &a[n4..]);
+    let (bh, bt) = (&b[..n4], &b[n4..]);
+    let acc = if S::F64_LANES == 4 {
+        let va = S::as_simd_f64s(ah).0;
+        let vb = S::as_simd_f64s(bh).0;
+        let mut c = simd.splat_f64s(0.0);
+        for (&x, &y) in va.iter().zip(vb) {
+            c = simd.add_f64s(c, simd.mul_f64s(x, y));
+        }
+        let mut out = [0.0; 4];
+        S::as_mut_simd_f64s(&mut out).0[0] = c;
+        out
+    } else if S::F64_LANES == 2 {
+        let va = S::as_simd_f64s(ah).0.as_chunks::<2>().0;
+        let vb = S::as_simd_f64s(bh).0.as_chunks::<2>().0;
+        let mut c0 = simd.splat_f64s(0.0);
+        let mut c1 = simd.splat_f64s(0.0);
+        for (&x, &y) in va.iter().zip(vb) {
+            c0 = simd.add_f64s(c0, simd.mul_f64s(x[0], y[0]));
+            c1 = simd.add_f64s(c1, simd.mul_f64s(x[1], y[1]));
+        }
+        let mut out = [0.0; 4];
+        let s = S::as_mut_simd_f64s(&mut out).0;
+        s[0] = c0;
+        s[1] = c1;
+        out
+    } else {
+        return dot(a, b);
+    };
+    let mut tail = 0.0;
+    for (&x, &y) in at.iter().zip(bt) {
+        tail += x * y;
+    }
+    ((acc[0] + acc[1]) + (acc[2] + acc[3])) + tail
+}
+
+/// SIMD-accelerated `[dot(a, b0), dot(a, b1)]` sharing one pass over `a`,
+/// bit-identical to two calls to [`dot`] with unfused `mul_f64s` + `add_f64s`.
+#[inline(always)]
+fn dot2_simd<S: pulp::Simd>(simd: S, a: &[f64], b0: &[f64], b1: &[f64]) -> [f64; 2] {
+    let n = a.len();
+    debug_assert_eq!(b0.len(), n);
+    debug_assert_eq!(b1.len(), n);
+    let n4 = n & !3;
+    let (ah, at) = (&a[..n4], &a[n4..]);
+    let (b0h, b0t) = (&b0[..n4], &b0[n4..]);
+    let (b1h, b1t) = (&b1[..n4], &b1[n4..]);
+    let (s0, s1) = if S::F64_LANES == 4 {
+        let va = S::as_simd_f64s(ah).0;
+        let vb0 = S::as_simd_f64s(b0h).0;
+        let vb1 = S::as_simd_f64s(b1h).0;
+        let mut c0 = simd.splat_f64s(0.0);
+        let mut c1 = simd.splat_f64s(0.0);
+        for ((&x, &y0), &y1) in va.iter().zip(vb0).zip(vb1) {
+            c0 = simd.add_f64s(c0, simd.mul_f64s(x, y0));
+            c1 = simd.add_f64s(c1, simd.mul_f64s(x, y1));
+        }
+        let mut o0 = [0.0; 4];
+        let mut o1 = [0.0; 4];
+        S::as_mut_simd_f64s(&mut o0).0[0] = c0;
+        S::as_mut_simd_f64s(&mut o1).0[0] = c1;
+        (o0, o1)
+    } else if S::F64_LANES == 2 {
+        let va = S::as_simd_f64s(ah).0.as_chunks::<2>().0;
+        let vb0 = S::as_simd_f64s(b0h).0.as_chunks::<2>().0;
+        let vb1 = S::as_simd_f64s(b1h).0.as_chunks::<2>().0;
+        let (mut c00, mut c01) = (simd.splat_f64s(0.0), simd.splat_f64s(0.0));
+        let (mut c10, mut c11) = (simd.splat_f64s(0.0), simd.splat_f64s(0.0));
+        for ((&x, &y0), &y1) in va.iter().zip(vb0).zip(vb1) {
+            c00 = simd.add_f64s(c00, simd.mul_f64s(x[0], y0[0]));
+            c01 = simd.add_f64s(c01, simd.mul_f64s(x[1], y0[1]));
+            c10 = simd.add_f64s(c10, simd.mul_f64s(x[0], y1[0]));
+            c11 = simd.add_f64s(c11, simd.mul_f64s(x[1], y1[1]));
+        }
+        let mut o0 = [0.0; 4];
+        let mut o1 = [0.0; 4];
+        {
+            let s = S::as_mut_simd_f64s(&mut o0).0;
+            s[0] = c00;
+            s[1] = c01;
+        }
+        {
+            let s = S::as_mut_simd_f64s(&mut o1).0;
+            s[0] = c10;
+            s[1] = c11;
+        }
+        (o0, o1)
+    } else {
+        return dot2_scalar(a, b0, b1);
+    };
+    let (mut t0, mut t1) = (0.0, 0.0);
+    for ((&x, &y0), &y1) in at.iter().zip(b0t).zip(b1t) {
+        t0 += x * y0;
+        t1 += x * y1;
+    }
+    [
+        ((s0[0] + s0[1]) + (s0[2] + s0[3])) + t0,
+        ((s1[0] + s1[1]) + (s1[2] + s1[3])) + t1,
+    ]
+}
+
+/// `kk[at] -= dot(a[i], g[j])` for `0 <= j <= i < k`, dispatched once over
+/// SIMD lanes.
+struct LinkKkSimd<'a> {
+    a: &'a [f64],
+    g: &'a [f64],
+    kk: &'a mut [f64],
+    k: usize,
+}
+
+impl pulp::WithSimd for LinkKkSimd<'_> {
+    type Output = ();
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) {
+        let Self { a, g, kk, k } = self;
+        let mut at = 0;
+        for (i, ai) in a.chunks_exact(k).enumerate() {
+            let kk_row = &mut kk[at..at + i + 1];
+            let g_sub = &g[..(i + 1) * k];
+            let (kk_pairs, kk_rem) = kk_row.as_chunks_mut::<2>();
+            for (kr, gp) in kk_pairs.iter_mut().zip(g_sub.chunks_exact(2 * k)) {
+                let (g0, g1) = gp.split_at(k);
+                let d = dot2_simd(simd, ai, g0, g1);
+                kr[0] -= d[0];
+                kr[1] -= d[1];
+            }
+            if let Some(last) = kk_rem.first_mut() {
+                *last -= dot_simd(simd, ai, &g[i * k..(i + 1) * k]);
+            }
+            at += i + 1;
+        }
+    }
+}
+
+/// One full backward RTS step (`m <- c + G m` and, when `se`, `gv = G V`,
+/// `V = K + gv Gᵀ` mirrored symmetrically), dispatched once over SIMD lanes.
+struct PassOneSimd<'a> {
+    g: &'a [f64],
+    c: &'a [f64],
+    kk: &'a [f64],
+    m: &'a mut [f64],
+    tmp: &'a mut [f64],
+    v: &'a mut [f64],
+    gv: &'a mut [f64],
+    k: usize,
+    se: bool,
+}
+
+impl pulp::WithSimd for PassOneSimd<'_> {
+    type Output = ();
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) {
+        let Self {
+            g,
+            c,
+            kk,
+            m,
+            tmp,
+            v,
+            gv,
+            k,
+            se,
+        } = self;
+        for (mt, ct) in m.chunks_exact_mut(k).zip(c.chunks_exact(k)) {
+            for (o, row) in tmp.iter_mut().zip(g.chunks_exact(k)) {
+                *o = dot_simd(simd, row, mt);
+            }
+            for ((mi, &ci), &gi) in mt.iter_mut().zip(ct).zip(tmp.iter()) {
+                *mi = ci + gi;
+            }
+        }
+        if !se {
+            return;
+        }
+        let k2 = 2 * k;
+        let last_v = &v[(k - 1) * k..k * k];
+        for (gi, out) in g.chunks_exact(k).zip(gv.chunks_exact_mut(k)) {
+            let (out_pairs, out_rem) = out.as_chunks_mut::<2>();
+            for (o2, vp) in out_pairs.iter_mut().zip(v.chunks_exact(k2)) {
+                let (v0, v1) = vp.split_at(k);
+                let d = dot2_simd(simd, gi, v0, v1);
+                o2[0] = d[0];
+                o2[1] = d[1];
+            }
+            if let Some(last) = out_rem.first_mut() {
+                *last = dot_simd(simd, gi, last_v);
+            }
+        }
+        let mut at = 0;
+        for (i, (gvi, v_full_row)) in gv.chunks_exact(k).zip(v.chunks_exact_mut(k)).enumerate() {
+            let kk_row = &kk[at..at + i + 1];
+            let v_row = &mut v_full_row[..i + 1];
+            let g_sub = &g[..(i + 1) * k];
+            let (v_pairs, v_rem) = v_row.as_chunks_mut::<2>();
+            let (kk_pairs, _) = kk_row.as_chunks::<2>();
+            for ((vr, kr), gp) in v_pairs.iter_mut().zip(kk_pairs).zip(g_sub.chunks_exact(k2)) {
+                let (g0, g1) = gp.split_at(k);
+                let d = dot2_simd(simd, gvi, g0, g1);
+                vr[0] = kr[0] + d[0];
+                vr[1] = kr[1] + d[1];
+            }
+            if let Some(last) = v_rem.first_mut() {
+                *last = kk_row[i] + dot_simd(simd, gvi, &g[i * k..(i + 1) * k]);
+            }
+            at += i + 1;
+        }
+        // Mirror the lower triangle into the upper so `V` stays symmetric to
+        // the bit for the next step's `G V` pass.
+        for i in 1..k {
+            for j in 0..i {
+                v[j * k + i] = v[i * k + j];
+            }
+        }
     }
 }
 
@@ -464,6 +704,9 @@ impl Smoother {
 
     /// Covariance `pi`'s next observation has its prior, `P⁻` and each
     /// target's `b⁻` (one after another): its pending pair becomes a slot.
+    /// Marked `#[inline(never)]` without `#[cold]` so callers marked `#[cold]`
+    /// do not force size-optimized codegen on the O(k^3) gain/Cholesky loops.
+    #[inline(never)]
     fn link(&mut self, pi: usize, prior: &[f64], b_prior: &[f64], k: usize) {
         let Some(pend) = self.rings[pi].pending.take() else {
             return;
@@ -484,16 +727,13 @@ impl Smoother {
                 // K = P_n − G P⁻ Gᵀ = P_n − A Gᵀ, since G P⁻ = A on the
                 // sized slots and both are 0 off them.
                 let mut kk = pend.p;
-                if self.se {
-                    let mut at = 0;
-                    for i in 0..k {
-                        let ai = &pend.a[i * k..(i + 1) * k];
-                        for j in 0..=i {
-                            let gj = &g[j * k..(j + 1) * k];
-                            kk[at] -= dot(ai, gj);
-                            at += 1;
-                        }
-                    }
+                if self.se && k > 0 {
+                    dispatch_simd(LinkKkSimd {
+                        a: &pend.a,
+                        g: &g,
+                        kk: &mut kk,
+                        k,
+                    });
                 }
                 Slot {
                     of: pend.of,
@@ -512,6 +752,45 @@ impl Smoother {
         self.rings[pi].slots.push_back(slot);
     }
 
+    /// One backward RTS step over `slot`, non-generic and shared between
+    /// `smoothed_tail` (hot/public) and `Smoother::pass` so LLVM never
+    /// propagates `#[cold]` size-optimization onto the `O(k^3)` loops.
+    #[inline(never)]
+    fn pass_one(w: &mut Work, slot: &Slot, k: usize, se: bool) {
+        if slot.g.is_empty() {
+            w.m.copy_from_slice(&slot.c);
+            if se {
+                full_of(&slot.kk, k, &mut w.v);
+            }
+            return;
+        }
+        if k == 0 {
+            return;
+        }
+        if w.tmp.len() != k {
+            w.tmp.resize(k, 0.0);
+        }
+        if se {
+            if w.gv.len() != k * k {
+                w.gv.resize(k * k, 0.0);
+            }
+            if w.v.len() != k * k {
+                w.v.resize(k * k, 0.0);
+            }
+        }
+        dispatch_simd(PassOneSimd {
+            g: &slot.g,
+            c: &slot.c,
+            kk: &slot.kk,
+            m: &mut w.m,
+            tmp: &mut w.tmp,
+            v: &mut w.v,
+            gv: &mut w.gv,
+            k,
+            se,
+        });
+    }
+
     /// The pass back over `slots` (newest first) from `m` (each target's,
     /// one after another) and, with the variances, `v` (`k x k`), left in
     /// `w.m` and `w.v`.
@@ -527,44 +806,7 @@ impl Smoother {
             w.v.extend_from_slice(v);
         }
         for slot in slots {
-            if slot.g.is_empty() {
-                w.m.copy_from_slice(&slot.c);
-                if se {
-                    full_of(&slot.kk, k, &mut w.v);
-                }
-                continue;
-            }
-            w.tmp.resize(k, 0.0);
-            for (mt, ct) in w.m.chunks_exact_mut(k).zip(slot.c.chunks_exact(k)) {
-                mat_vec(&slot.g, mt, &mut w.tmp);
-                for ((mi, ci), gi) in mt.iter_mut().zip(ct).zip(&w.tmp) {
-                    *mi = ci + gi;
-                }
-            }
-            if se {
-                // gv = G V, then V = K + gv Gᵀ, each entry a dot product of
-                // two contiguous rows (V is symmetric, so its column `j` is
-                // its row `j`), and the second only on and below the
-                // diagonal, mirrored, so V stays symmetric to the bit.
-                w.gv.clear();
-                w.gv.resize(k * k, 0.0);
-                for (gi, out) in slot.g.chunks_exact(k).zip(w.gv.chunks_exact_mut(k)) {
-                    for (o, vj) in out.iter_mut().zip(w.v.chunks_exact(k)) {
-                        *o = dot(gi, vj);
-                    }
-                }
-                full_of(&slot.kk, k, &mut w.v);
-                for i in 0..k {
-                    let gvi = &w.gv[i * k..(i + 1) * k];
-                    for j in 0..=i {
-                        let add = dot(gvi, &slot.g[j * k..(j + 1) * k]);
-                        w.v[i * k + j] += add;
-                        if j != i {
-                            w.v[j * k + i] = w.v[i * k + j];
-                        }
-                    }
-                }
-            }
+            Self::pass_one(w, slot, k, se);
         }
     }
 }
@@ -636,7 +878,7 @@ impl Kalman {
             rows.push(self.smooth_rows(&pend.of, &w.m, s.se.then_some(&v[..]), targets.clone()));
             w.v = v;
             for slot in ring.slots.iter().rev() {
-                Smoother::pass(&mut w, std::iter::once(slot), k, s.se, None);
+                Smoother::pass_one(&mut w, slot, k, s.se);
                 let v = s.se.then_some(&w.v[..]);
                 rows.push(self.smooth_rows(&slot.of, &w.m, v, targets.clone()));
             }
@@ -676,21 +918,30 @@ impl Kalman {
     #[cold]
     #[inline(never)]
     pub(super) fn smooth_link(&mut self, y: &[Option<f64>], weight: f64) {
+        let Some(mut s) = self.smoother.take() else {
+            return;
+        };
         for pi in 0..self.p.len() {
             if self.smooth_informs(pi, y, weight) {
-                self.smooth_link_one(pi);
+                self.smooth_link_in(&mut s, pi);
             }
         }
+        self.smoother = Some(s);
     }
 
     /// Link covariance `pi`'s pending pair to its current prior `(b⁻, P⁻)`.
     #[cold]
     #[inline(never)]
     pub(super) fn smooth_link_one(&mut self, pi: usize) {
-        let k = self.cfg.k_total();
         let Some(mut s) = self.smoother.take() else {
             return;
         };
+        self.smooth_link_in(&mut s, pi);
+        self.smoother = Some(s);
+    }
+
+    fn smooth_link_in(&self, s: &mut Smoother, pi: usize) {
+        let k = self.cfg.k_total();
         let mut b_prior = std::mem::take(&mut s.row.tmp);
         b_prior.clear();
         for j in self.smooth_targets(pi) {
@@ -707,7 +958,6 @@ impl Kalman {
         });
         s.link(pi, &self.p[pi], &b_prior, k);
         s.row.tmp = b_prior;
-        self.smoother = Some(s);
     }
 
     /// After the row's update and before its moments move: each observed
@@ -717,11 +967,15 @@ impl Kalman {
     #[cold]
     #[inline(never)]
     pub(super) fn smooth_observe(&mut self, y: &[Option<f64>], weight: f64, ready: bool) {
+        let Some(mut s) = self.smoother.take() else {
+            return;
+        };
         for pi in 0..self.p.len() {
             if self.smooth_informs(pi, y, weight) {
-                self.smooth_observe_one(pi, ready);
+                self.smooth_observe_in(&mut s, pi, ready);
             }
         }
+        self.smoother = Some(s);
     }
 
     /// Record covariance `pi`'s filtered `(b, P)` after its update and emit
@@ -729,10 +983,16 @@ impl Kalman {
     #[cold]
     #[inline(never)]
     pub(super) fn smooth_observe_one(&mut self, pi: usize, ready: bool) {
-        let k = self.cfg.k_total();
         let Some(mut s) = self.smoother.take() else {
             return;
         };
+        self.smooth_observe_in(&mut s, pi, ready);
+        self.smoother = Some(s);
+    }
+
+    #[inline(never)]
+    fn smooth_observe_in(&self, s: &mut Smoother, pi: usize, ready: bool) {
+        let k = self.cfg.k_total();
         let se = s.se;
         let targets = self.smooth_targets(pi);
         if s.rings[pi].slots.len() == s.lag {
@@ -797,7 +1057,6 @@ impl Kalman {
             p: if se { lower_of(p, k) } else { vec![] },
             broken: false,
         });
-        self.smoother = Some(s);
     }
 
     /// The smoothed pair `m` (each of `targets`' coefficients, one after

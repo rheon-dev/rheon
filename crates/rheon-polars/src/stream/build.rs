@@ -23,14 +23,20 @@ pub fn draw_slot(spec: &Spec) -> u64 {
 }
 
 /// Deterministic 64-bit Philox group coordinate for `(spec, key)`: `0` when
-/// `spec.group.is_none()`, otherwise `FixedState::default().hash_one(key)`.
+/// `spec.group.is_none()` or when the spec's model does not consume a Philox
+/// stream (`bandit`, `random_cut_forest`, `half_space_trees`), otherwise
+/// `FixedState::default().hash_one(key)`.
 pub fn draw_group_hash(spec: &Spec, key: &crate::bank::GroupKey) -> u64 {
-    use std::hash::BuildHasher;
-    if spec.group.is_none() {
-        0
-    } else {
-        rheon_core::FixedState::default().hash_one(key)
+    if spec.group.is_none()
+        || !matches!(
+            spec.model,
+            ModelKind::Bandit(_) | ModelKind::RandomCutForest(_) | ModelKind::HalfSpaceTrees(_)
+        )
+    {
+        return 0;
     }
+    use std::hash::BuildHasher;
+    rheon_core::FixedState::default().hash_one(key)
 }
 
 /// Build the model instances for a spec: one per half-life grid entry. A

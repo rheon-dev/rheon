@@ -56,7 +56,7 @@ pub const HLL_CLOCK_ENTRY_BYTES: u64 = 40;
 /// sequential integers, cent grids, and floats. Fixed constants (no runtime
 /// seed), so every process and platform maps a key to the same register and
 /// rank. Pinned: `splitmix64(0) == 0xe220_a839_7b1d_cdaf`.
-#[inline]
+#[inline(always)]
 pub fn splitmix64(k: u64) -> u64 {
     let mut z = k.wrapping_add(0x9e37_79b9_7f4a_7c15);
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
