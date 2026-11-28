@@ -25,7 +25,7 @@ use polars::prelude::*;
 use polars_arrow::array::Array as _;
 use polars_arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
-    StructArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, Utf8ViewArray,
+    ListArray, StructArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, Utf8ViewArray,
 };
 use polars_arrow::datatypes::{ArrowDataType, Field as ArrowField};
 use polars_arrow::ffi::{ArrowArray, ArrowSchema, export_array_to_c, export_field_to_c};
@@ -69,6 +69,9 @@ pub enum ArrowCol {
     /// task 104; review R1, D2): every other role takes a boolean as a
     /// number.
     Bool(BooleanArray),
+    /// A list of float64 numbers per row, read by `ewridge`'s dynamic
+    /// `coef_prior` column.
+    ListF64(ListArray<i64>),
 }
 
 impl ArrowCol {
@@ -81,6 +84,7 @@ impl ArrowCol {
             Self::U64(a) => a.len(),
             Self::Nanos(a) => a.len(),
             Self::Bool(a) => a.len(),
+            Self::ListF64(a) => a.len(),
         }
     }
 
@@ -99,6 +103,7 @@ impl ArrowCol {
             Self::U64(a) => a.null_count(),
             Self::Nanos(a) => a.null_count(),
             Self::Bool(a) => a.null_count(),
+            Self::ListF64(a) => a.null_count(),
         }
     }
 
@@ -117,6 +122,7 @@ impl ArrowCol {
                 | (Self::I64(_) | Self::U64(_), Form::Key)
                 | (Self::Nanos(_), Form::Clock)
                 | (Self::Bool(_), Form::Bool)
+                | (Self::ListF64(_), Form::ListF64)
         )
     }
 
@@ -128,6 +134,7 @@ impl ArrowCol {
             Self::I64(_) | Self::U64(_) => "an integer key",
             Self::Nanos(_) => "a temporal clock",
             Self::Bool(_) => "a boolean",
+            Self::ListF64(_) => "a list of numbers",
         }
     }
 }
@@ -298,6 +305,7 @@ pub enum Form {
     Key,
     Clock,
     Bool,
+    ListF64,
 }
 
 /// A chunk's clock column in the form the source had it: a float clock's
@@ -610,6 +618,7 @@ impl ArrowChunk {
             ArrowCol::I64(a) => Series::from_arrow(name, Box::new(a.clone())),
             ArrowCol::U64(a) => Series::from_arrow(name, Box::new(a.clone())),
             ArrowCol::Bool(a) => Series::from_arrow(name, Box::new(a.clone())),
+            ArrowCol::ListF64(a) => Series::from_arrow(name, Box::new(a.clone())),
             ArrowCol::Nanos(a) => Series::from_arrow(name, Box::new(a.clone())).and_then(|s| {
                 s.cast(&DataType::Datetime(
                     polars::prelude::TimeUnit::Nanoseconds,
@@ -625,6 +634,15 @@ impl ArrowChunk {
         match self.find(name, |c| matches!(c, ArrowCol::F64(_))) {
             Some(ArrowCol::F64(a)) => Ok(a),
             _ => Err(self.missing(spec, role, name, "a number")),
+        }
+    }
+
+    /// The `List(Float64)` form of a dynamic `coef_prior` column, or the error
+    /// naming the spec and role.
+    pub fn list_f64(&self, spec: &Spec, role: &str, name: &str) -> PolarsResult<&ListArray<i64>> {
+        match self.find(name, |c| matches!(c, ArrowCol::ListF64(_))) {
+            Some(ArrowCol::ListF64(a)) => Ok(a),
+            _ => Err(self.missing(spec, role, name, "a list of numbers (List(Float64))")),
         }
     }
 
@@ -799,6 +817,8 @@ enum Want {
     /// number, text as text, so the formula reads what the frame has. A
     /// temporal column is refused, as in every role but the clock.
     Value,
+    /// A `List(Float64)` column supplying a dynamic `coef_prior` vector per row.
+    PriorList,
 }
 
 /// Every column the specs read, in the form each reads it.
@@ -855,6 +875,9 @@ fn wanted(specs: &[Spec]) -> Vec<(PlSmallStr, Want)> {
         if let Some(g) = &s.group {
             push(g, Want::Key);
         }
+        if let Some(p) = s.model.coef_prior_column() {
+            push(p, Want::PriorList);
+        }
     }
     out
 }
@@ -903,6 +926,11 @@ fn spec_reads(s: &Spec) -> Vec<(&str, Want, &'static str)> {
     reads.extend(s.weight.as_deref().map(|c| (c, Want::Number, "weight")));
     reads.extend(s.session.as_deref().map(|c| (c, Want::Text, "session")));
     reads.extend(s.group.as_deref().map(|c| (c, Want::Key, "group")));
+    reads.extend(
+        s.model
+            .coef_prior_column()
+            .map(|c| (c, Want::PriorList, "coef_prior")),
+    );
     reads
 }
 
@@ -962,6 +990,7 @@ fn form_of(want: Want, dtype: &DataType) -> &'static str {
         Want::Value if value_is_number(dtype) => "a number",
         Want::Value if *dtype == DataType::Boolean => "a boolean",
         Want::Value => "text",
+        Want::PriorList => "a list of numbers",
     }
 }
 
@@ -1055,6 +1084,35 @@ fn cast_to(s: &Series, want: Want, reader: Reader<'_>, name: &str) -> PolarsResu
                 });
             }
             Ok(ArrowCol::Str(text_array(s, reader, name)?))
+        }
+        Want::PriorList => {
+            let dtype = s.dtype();
+            let valid = match dtype {
+                DataType::List(inner) | DataType::Array(inner, _) => {
+                    inner.is_numeric() || matches!(**inner, DataType::Null)
+                }
+                DataType::Null => true,
+                _ => false,
+            };
+            if !valid {
+                let (spec_name, role) = reader.get();
+                polars_bail!(InvalidOperation:
+                    "spec {:?}: {} column {:?} must be List(Float64), but it is {}. Pass a \
+                     List(Float64) column of coefficient vectors (for example, an upstream \
+                     spec's coef column).",
+                    spec_name, role, name, dtype_name(dtype)
+                );
+            }
+            let cast = s
+                .cast(&DataType::List(Box::new(DataType::Float64)))?
+                .rechunk();
+            let ca = cast.list()?;
+            let arr = ca.downcast_iter().next().cloned().unwrap_or_else(|| {
+                ListArray::<i64>::new_empty(ListArray::<i64>::default_datatype(
+                    ArrowDataType::Float64,
+                ))
+            });
+            Ok(ArrowCol::ListF64(arr))
         }
     }
 }
@@ -1422,7 +1480,8 @@ fn first_reader<'a>(specs: &'a [Spec], column: &str) -> Option<(&'a str, &'stati
             .chain(s.label_clock.as_ref().map(|l| (l.column(), "label_clock")))
             .chain(s.weight.as_deref().map(|c| (c, "weight")))
             .chain(s.session.as_deref().map(|c| (c, "session")))
-            .chain(s.group.as_deref().map(|c| (c, "group")));
+            .chain(s.group.as_deref().map(|c| (c, "group")))
+            .chain(s.model.coef_prior_column().map(|c| (c, "coef_prior")));
         if let Some((_, role)) = roles.find(|&(c, _)| c == column) {
             return Some((name, role));
         }

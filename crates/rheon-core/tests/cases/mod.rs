@@ -740,6 +740,8 @@ fn ewridge_cfg() -> EwRidgeCfg {
         constraints: None,
         evidence: None,
         constraint: None,
+        prior_weight: None,
+        prior_include_intercept: true,
     }
 }
 
@@ -1346,6 +1348,34 @@ pub fn all() -> Vec<Case> {
                 ..ewridge_cfg()
             })
             .unwrap(),
+            K,
+            Targets::Linear(2),
+            40
+        ),
+        // Hierarchical dynamic parent prior on EwRidge (schema 72): `prior_weight`,
+        // `prior_include_intercept`, `dynamic_prior`, and `intercept_weight` serialized
+        // non-empty and restored across save/load.
+        case!(
+            "ewridge_parent_prior",
+            "EwRidge",
+            EwRidge,
+            {
+                let mut m = EwRidge::new(EwRidgeCfg {
+                    feature_sets: Vec::new(),
+                    standardize: true,
+                    min_weight: 0.0,
+                    solve_every: 0.0,
+                    max_rows_between_solves: 1,
+                    prior_weight: Some(5.0),
+                    prior_include_intercept: true,
+                    ..ewridge_cfg()
+                })
+                .unwrap();
+                m.set_keep_factor(true);
+                m.set_dynamic_prior(Some(vec![vec![0.2, 1.2, -0.6], vec![-0.4, 2.4, -1.1]]))
+                    .unwrap();
+                m
+            },
             K,
             Targets::Linear(2),
             40

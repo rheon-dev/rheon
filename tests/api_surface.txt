@@ -321,6 +321,9 @@
     coef_min = None
     coef_max = None
     coef_sum = None
+    prior_from = None
+    prior_weight = None
+    prior_include_intercept = True
     common
   expectile:
     name
@@ -4088,7 +4091,7 @@
     ew_class: classes, closed, covariance_type, max_rows_between_snapshots, precision_prior, priors, reg_param, snapshot_every, var_smoothing, window_budget, window_size
     ew_cov: bias, closed, gram_threads, lags, mahal_quantiles, max_rows_between_pcas, max_rows_between_snapshots, pca, pca_every, precision_prior, snapshot_every, stats, window_budget, window_size
     ewm_moments: bias, kind, lag_tolerance, max_state_bytes, se, terms, window_rows, window_size
-    ewridge: closed, coef_max, coef_min, coef_prior, coef_sum, constraints, evidence, evidence_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
+    ewridge: closed, coef_max, coef_min, coef_prior, coef_sum, constraints, evidence, evidence_prior, feature_sets, gram_block_rows, gram_threads, long_half_life, max_rows_between_snapshots, max_rows_between_solves, prior_from, prior_include_intercept, prior_weight, ridge, ridge_scale, session_shrink, snapshot_every, solve_every, standardize, target_gaps, window_budget, window_size
     expectile: closed, expectile, max_state_bytes, refit_budget, refit_rows, refit_span, ridge, window_rows, window_size
     ftrl: alpha, beta, l1, l2, loss, standardize, strict_binary
     garch: dist, forecast_rows, max_horizon_work, max_state_bytes, start_rows, start_span, truncation, variance_targeting, vol

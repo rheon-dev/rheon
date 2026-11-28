@@ -650,6 +650,8 @@ mod tests {
                 constraints: Some(lc.clone()),
                 evidence: None,
                 constraint: None,
+                prior_weight: None,
+                prior_include_intercept: true,
             })
             .unwrap();
             ew.set_keep_factor(true);
@@ -754,6 +756,8 @@ mod tests {
                 constraints: Some(lc.clone()),
                 evidence: None,
                 constraint: None,
+                prior_weight: None,
+                prior_include_intercept: true,
             })
             .unwrap();
             ew.set_keep_factor(true);
@@ -806,6 +810,8 @@ mod tests {
             }),
             evidence: None,
             constraint: None,
+            prior_weight: None,
+            prior_include_intercept: true,
         })
         .unwrap();
         let mut s = 99u64;

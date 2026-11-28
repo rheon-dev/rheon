@@ -48,6 +48,8 @@ fn cfg(k: usize, t: usize, gaps: TargetGaps) -> EwRidgeCfg {
         constraints: None,
         evidence: None,
         constraint: None,
+        prior_weight: None,
+        prior_include_intercept: true,
     }
 }
 

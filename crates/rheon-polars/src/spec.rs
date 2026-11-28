@@ -127,6 +127,31 @@ pub const HUBER_SCALES: [&str; 2] = ["mad", "rms"];
 /// such targets where it had refit 2,684, and 320 refits 2,706.
 pub const REFIT_BUDGET_MIB: f64 = 320.0;
 
+/// `ewridge`'s `coef_prior`: either static target-major coefficient vectors or
+/// the name of a `List(Float64)` column supplying a row-varying prior mean.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CoefPrior {
+    Static(Vec<Vec<f64>>),
+    Column(String),
+}
+
+impl CoefPrior {
+    pub fn as_static(&self) -> Option<&[Vec<f64>]> {
+        match self {
+            Self::Static(v) => Some(v.as_slice()),
+            Self::Column(_) => None,
+        }
+    }
+
+    pub fn as_column(&self) -> Option<&str> {
+        match self {
+            Self::Static(_) => None,
+            Self::Column(s) => Some(s.as_str()),
+        }
+    }
+}
+
 /// Model choice + model-specific params (docs/PLAN.md §4).
 ///
 /// A key no variant has is an error, not ignored: a spec is typed by hand in
@@ -161,10 +186,12 @@ pub enum ModelKind {
         standardize: bool,
         #[serde(default)]
         ridge_scale: RidgeScale,
-        /// Shrink toward these coefficients instead of toward zero, one vector
-        /// per target of length `n_features + intercept`, in original units.
+        /// Shrink toward these coefficients instead of toward zero: either
+        /// static vectors (one per target, length `n_features + intercept`) or
+        /// the name of a `List(Float64)` column in the input frame paired with
+        /// `prior_weight`.
         #[serde(default)]
-        coef_prior: Option<Vec<Vec<f64>>>,
+        coef_prior: Option<CoefPrior>,
         /// On a session change, fit on this share of a slow-moving twin's
         /// moments, the rest today's, at today's weight: 0 keeps today's
         /// fit, 1 takes the long run's. Needs `long_half_life`.
@@ -248,6 +275,18 @@ pub enum ModelKind {
         /// Fixed sum of the slopes, in original units.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         coef_sum: Option<f64>,
+        /// Name of a parent spec in the same `ModelBank` whose coefficients
+        /// provide a row-varying causal prior mean for this spec.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prior_from: Option<String>,
+        /// Positive finite shrinkage weight (pseudo-observation count) toward
+        /// `prior_from` or a dynamic `coef_prior` column.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prior_weight: Option<f64>,
+        /// Whether `prior_weight` pools the intercept alongside the slopes
+        /// (default `true`).
+        #[serde(default = "default_true", skip_serializing_if = "is_true")]
+        prior_include_intercept: bool,
     },
     Lasso {
         /// Decreasing penalties on standardized stats; required.
@@ -3365,6 +3404,7 @@ impl Spec {
             ("session", self.session.as_deref()),
             ("weight", self.weight.as_deref()),
             ("group", self.group.as_deref()),
+            ("coef_prior", self.model.coef_prior_column()),
             (
                 "label_clock",
                 self.label_clock.as_ref().map(LabelClock::column),

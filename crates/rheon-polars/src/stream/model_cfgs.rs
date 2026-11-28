@@ -2022,9 +2022,13 @@ pub fn sgd_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
 /// `ewridge/unread.rs`; tasks 311 and 313): this read is one reason a row
 /// per unknown -- `k + 1`, `k` without an intercept -- is in it.
 pub(crate) fn read_floor(spec: &Spec, min_weight: &[f64]) -> f64 {
-    match spec.model {
-        ModelKind::EwRidge { .. } => {
-            let own = (spec.k() + usize::from(spec.fit_intercept)) as f64;
+    match &spec.model {
+        ModelKind::EwRidge { prior_weight, .. } => {
+            let own = if prior_weight.is_some() && !spec.ewridge_has_bounds() {
+                0.0
+            } else {
+                (spec.k() + usize::from(spec.fit_intercept)) as f64
+            };
             min_weight.iter().copied().fold(own, f64::min)
         }
         _ => 0.0,

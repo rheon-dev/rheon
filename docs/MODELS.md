@@ -696,6 +696,30 @@ unknown), `support_coef` is omitted, and `emit_se_coef`, `emit_robust_se`,
 `feature_sets`, and `constraints` are refused. Any solve that reaches the
 solver's iteration cap is counted in `solve_failures`.
 
+**Hierarchical shrinkage toward a parent spec or prior column (`prior_from`,
+`prior_weight`, `prior_include_intercept`, and column `coef_prior`).** Setting
+`prior_from="<parent>"` and a positive `prior_weight` shrinks a child `ewridge`
+spec toward a parent spec in the same `ModelBank` (for example, ticker-level
+groups shrinking toward a sector-level or global fit). On the sum-scale normal
+equations the prior adds `prior_weight * D_prior * (β − β_parent)`, with
+`D_prior = I` when `prior_include_intercept=True` (the default) and
+`D_prior = diag(0, 1, ..., 1)` when `prior_include_intercept=False`. When a
+child group's accumulated weight `W` is small or zero, its coefficients borrow
+smoothly from the parent; as `W` grows well past `prior_weight`, the fit
+converges to the child's own data. Within each chunk the bank runs parent specs
+before children in topological order: predictions on row `t` never see row `t`'s
+target (from either parent or child), and after row `t` the child solves toward
+the parent's post-row-`t` coefficients. Parent and child must share the same
+`targets`, `features` (in the same order), and `fit_intercept`; the parent must
+fit linear feature coefficients on a single decay and ridge slot and cannot
+carry a shorter `embargo` or looser `label_clock` than the child. Passing a
+column name as `coef_prior="<col>"` paired with `prior_weight` supplies the same
+row-varying prior mean from a `List(Float64)` column in the input frame. Both
+modes compose with `standardize=True`, `fit_intercept=False`, `ridge_scale`,
+`window_size`, linear `constraints`, and slope bounds (`coef_min`, `coef_max`,
+`coef_sum`), and update `se_coef`, `error_inflation`, and `support_coef` with
+the prior's added precision. Refused beside `feature_sets`.
+
 **NIST's statistical reference datasets show where the solve stops
 promising a digit.** Their hardest designs that double precision can solve
 by the normal equations have correlation matrices conditioned at `2.7e6`,

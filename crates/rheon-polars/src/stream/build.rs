@@ -185,6 +185,9 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
             coef_min,
             coef_max,
             coef_sum,
+            prior_from: _,
+            prior_weight,
+            prior_include_intercept,
         } => {
             let fs = feature_sets
                 .as_ref()
@@ -240,14 +243,19 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                 ridge_scale: *ridge_scale == crate::spec::RidgeScale::Sum,
                 session_shrink: *session_shrink,
                 long_half_life: long_half_life.as_ref().map(Span::value),
-                coef_prior: coef_prior.clone(),
+                coef_prior: coef_prior
+                    .as_ref()
+                    .and_then(crate::spec::CoefPrior::as_static)
+                    .map(<[Vec<f64>]>::to_vec),
                 // The spec's default is 0, the noise gate being this model's
                 // (docs/WARMUP-AND-CONVERGENCE.md §2.1); the model's own
                 // floor -- its first solve, and its own gate -- is then a
-                // row per unknown, as the old default was. An explicit value
-                // is the user's, above or below that.
+                // row per unknown, as the old default was (or 0 under a
+                // hierarchical prior, where cold-start borrowing is valid from
+                // row 0). An explicit value is the user's, above or below that.
                 min_weight: match spec.min_weight {
                     Some(_) => spec.min_periods_or_default(),
+                    None if prior_weight.is_some() && !has_bounds => 0.0,
                     None => (spec.k() + usize::from(spec.fit_intercept)) as f64,
                 },
                 solve_every: solve_every.as_ref().map_or_else(
@@ -264,6 +272,8 @@ fn build_bare(spec: &Spec, decay: Decay, group_hash: u64) -> Result<AnyModel, St
                 constraints: constraints.clone(),
                 evidence: evidence_cfg,
                 constraint: con,
+                prior_weight: *prior_weight,
+                prior_include_intercept: *prior_include_intercept,
             };
             let mut m = EwRidge::new(cfg)?;
             // The per-row leverage needs the factors kept (§2.1), and so do

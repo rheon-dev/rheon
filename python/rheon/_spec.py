@@ -1385,7 +1385,7 @@ def ewridge(
     feature_sets: dict[str, list[str]] | None = None,
     standardize: bool = False,
     ridge_scale: Literal["mean", "sum"] = "mean",
-    coef_prior: list[list[float]] | None = None,
+    coef_prior: list[list[float]] | str | None = None,
     session_shrink: float | None = None,
     long_half_life: float | Duration | None = None,
     solve_every: float | Duration | None = None,
@@ -1404,6 +1404,9 @@ def ewridge(
     coef_min: float | list[float] | None = None,
     coef_max: float | list[float] | None = None,
     coef_sum: float | None = None,
+    prior_from: str | None = None,
+    prior_weight: float | None = None,
+    prior_include_intercept: bool = True,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Exponentially weighted ridge regression on running sums.
@@ -1485,13 +1488,21 @@ def ewridge(
         grid of ``ridge`` values and feature sets (two or more ``ridge``
         values, or two or more sets), and beside ``window_size``.
     ``coef_prior``
-        The coefficients to shrink toward instead of zero, such as
-        yesterday's fit: one vector per target, in the features' original
-        units, ``len(features) + 1`` long when there is an intercept. Default
-        none, which shrinks toward zero. The intercept's entry is read only
-        under ``ridge_scale = "sum"``, the one solve that penalizes the
-        intercept. Refused with the wrong number of vectors, a vector of the
-        wrong length, or a value that is not finite.
+        The coefficients to shrink toward instead of zero, in one of two
+        forms:
+
+        - Static vectors: one list per target, in the features' original
+          units, ``len(features) + 1`` long when there is an intercept. Under
+          ``ridge_scale = "mean"`` only the slopes are penalized; the
+          intercept's entry is read only under ``ridge_scale = "sum"``.
+        - A column name (``str``): the name of a ``List(Float64)`` column in
+          the input frame supplying a row-varying prior mean (for example, an
+          upstream spec's ``coef`` column), paired with ``prior_weight``. Each
+          non-null row holds ``len(features) + fit_intercept`` floats (or
+          ``len(targets)`` times that for multi-target specs). Refused beside
+          ``prior_from`` or without ``prior_weight``.
+
+        Default none, which shrinks toward zero.
     ``session_shrink``
         A middle way between a session's decay and a full reset: at each
         session change, blend this session's running sums with the long
@@ -1668,6 +1679,35 @@ def ewridge(
         ``emit_influence``, finite ``max_error_inflation``, ``feature_sets``,
         ``constraints`` and ``evidence = True`` are refused. Default: no
         bounds or fixed sum.
+    ``prior_from``
+        Name of a parent spec in the same :class:`~rheon.polars.ModelBank`
+        whose causal coefficient vector supplies a row-varying prior mean for
+        this spec, paired with ``prior_weight``. The parent runs before this
+        spec in topological order within each chunk: predictions on row ``t``
+        never see row ``t``'s target (neither the parent's nor the child's),
+        and after row ``t`` the child shrinks toward the parent's post-row-``t``
+        coefficients. Parent and child must share the same ``targets``,
+        ``features`` (in the same order), and ``fit_intercept``; the parent
+        must fit linear feature coefficients on a single decay and ridge slot
+        and must not have a shorter ``embargo`` or looser ``label_clock`` than
+        the child. Refused without ``prior_weight``, beside a column
+        ``coef_prior``, or beside ``evidence = True``. Default none.
+    ``prior_weight``
+        Positive finite shrinkage strength, in pseudo-observation weight units
+        (sum scale), toward the dynamic prior from ``prior_from`` or a column
+        ``coef_prior``. On the sum-scale normal equations the prior adds
+        ``prior_weight * D_prior * (beta - beta_parent)``, so when the child's
+        own accumulated weight ``W_j`` is small the fit borrows from the
+        parent, and as ``W_j`` grows past ``prior_weight`` the fit converges
+        to the child's own data. Refused without ``prior_from`` or a column
+        ``coef_prior``, or beside ``feature_sets`` or ``evidence = True``.
+        Default none.
+    ``prior_include_intercept``
+        Whether ``prior_weight`` pools the intercept alongside the slopes
+        (``D_prior = I`` when ``True``, ``diag(0, 1, ..., 1)`` when
+        ``False``). Default ``True``. Refused as ``False`` without
+        ``prior_weight``, with ``evidence = True``, or when
+        ``fit_intercept=False``.
 
     .. rubric:: Output
 
@@ -1753,7 +1793,13 @@ def ewridge(
       ``[sum(coef_min), sum(coef_max)]``, or combined with ``constraints``,
       ``evidence = True``, ``feature_sets``, ``emit_se_coef``,
       ``emit_robust_se``, ``emit_error_inflation``, ``emit_influence`` or a
-      finite ``max_error_inflation``.
+      finite ``max_error_inflation``;
+    - ``prior_from`` empty, naming the spec itself, combined with a column
+      ``coef_prior``, or without ``prior_weight``; ``prior_weight`` not finite
+      or not above 0, without ``prior_from`` or a column ``coef_prior``, or
+      combined with ``feature_sets`` or ``evidence = True``; and
+      ``prior_include_intercept=False`` without ``prior_weight``, with
+      ``evidence = True``, or with ``fit_intercept=False``.
 
     .. rubric:: The update
 
@@ -1777,6 +1823,12 @@ def ewridge(
         eta_j' = (λ * W_j * eta_j + w * z * y_j) / W_j'
         on the schedule:  (S_j + ridge * D) beta_j = eta_j + ridge * D * beta0_j
                           D = I with a 0 at the intercept
+
+    With ``prior_weight`` and a causal prior mean ``beta_p`` (from
+    ``prior_from`` or a column ``coef_prior``), the sum-scale normal equations
+    add ``prior_weight * D_prior * beta_j`` on the left and
+    ``prior_weight * D_prior * beta_p`` on the right, where ``D_prior = I``
+    when ``prior_include_intercept=True`` and ``D`` otherwise.
 
     .. rubric:: Example
 
@@ -2128,6 +2180,12 @@ def ewridge(
         model["coef_max"] = coef_max
     if coef_sum is not None:
         model["coef_sum"] = coef_sum
+    if prior_from is not None:
+        model["prior_from"] = prior_from
+    if prior_weight is not None:
+        model["prior_weight"] = prior_weight
+    if not prior_include_intercept:
+        model["prior_include_intercept"] = False
     if ridge_scale not in ("mean", "sum"):
         raise ValueError(
             words_refusal(f"spec {quoted(name)}", "ridge_scale", ridge_scale, ("mean", "sum"))

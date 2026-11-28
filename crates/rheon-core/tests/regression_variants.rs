@@ -104,6 +104,8 @@ fn ewridge_evidence_recovers_truth_emits_pred_std_and_survives_restore() {
             constraints: None,
             evidence: Some(ev),
             constraint: None,
+            prior_weight: None,
+            prior_include_intercept: true,
         };
         let mut m = EwRidge::new(cfg.clone()).unwrap();
         let mut last_std = f64::NAN;
@@ -164,6 +166,8 @@ fn ewridge_evidence_zero_weight_leaves_state_untouched() {
         constraints: None,
         evidence: Some(EvidenceCfg::default()),
         constraint: None,
+        prior_weight: None,
+        prior_include_intercept: true,
     };
     let mut a = EwRidge::new(cfg.clone()).unwrap();
     let mut b = EwRidge::new(cfg).unwrap();

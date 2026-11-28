@@ -1380,6 +1380,26 @@ impl Stream {
         self.skipped_step_back_chunk = self.skipped_step_back_chunk.saturating_add(count);
     }
 
+    /// First model instance, used by `Bank::predict` to read a single-instance
+    /// parent spec's live coefficients.
+    pub(crate) fn first_model(&self) -> Option<&(String, AnyModel)> {
+        self.models.first()
+    }
+
+    /// Per-target `min_weight` gate floors held by this stream.
+    pub(crate) fn min_weight_floors(&self) -> &[f64] {
+        &self.min_weight
+    }
+
+    /// First model instance's settled fraction, for parent readiness checks in
+    /// `Bank::predict`.
+    pub(crate) fn first_settled(&self) -> f64 {
+        match (self.decays.first(), self.persisted.decay_time.first()) {
+            (Some(&d), Some(&t)) => settled_frac(d, t),
+            _ => f64::NAN,
+        }
+    }
+
     /// Keep the last learned row of a run's buffers as [`Self::last_row`]:
     /// the last row `processed` marks, so a chunk that ends in skipped rows
     /// keeps the row before them. A run with no learned row changes nothing.
@@ -1509,6 +1529,7 @@ mod conformal_rows;
 mod heavy_tail;
 mod notified;
 mod pre_row_sigma;
+mod prior;
 mod score_rows;
 mod stack_line;
 mod state_cap;
@@ -1517,6 +1538,8 @@ mod weightless;
 use notified::span_name;
 pub use notified::{Notice, Notified};
 use pre_row_sigma::pre_row_sigma;
+pub(crate) use prior::write_ready_coefs;
+pub use prior::{ParentCapture, PriorRows, PriorView};
 use state_cap::{calibration_cap_notice, state_cap_notice};
 pub(crate) use state_cap::{cap_words, fixed_span};
 use unmet_floor::{
@@ -2642,8 +2665,37 @@ impl Stream {
         coef_at: Option<usize>,
         formulas: Option<FormulaTargets<'_>>,
     ) -> Result<(), ClockRefusal> {
+        self.process_chunk_with_prior(
+            spec, cfg, features, targets, clock, label, session, weight, rows, base, out, coef_at,
+            formulas, None, None,
+        )
+    }
+
+    /// [`Self::process_chunk`] with optional hierarchical dynamic prior input
+    /// (`prior_in`) for child specs and optional parent coefficient capture
+    /// (`capture`) for parent specs referenced by `prior_from`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn process_chunk_with_prior(
+        &mut self,
+        spec: &Spec,
+        cfg: &rheon_core::ClockCfg,
+        features: &FeatureRows,
+        targets: &[Vec<f64>],
+        clock: Option<&ClockCol>,
+        label: Option<&LabelTimes>,
+        session: Option<&[u64]>,
+        weight: Option<&[f64]>,
+        rows: &[usize],
+        base: usize,
+        out: &mut ChunkOut,
+        coef_at: Option<usize>,
+        formulas: Option<FormulaTargets<'_>>,
+        prior_in: Option<PriorView<'_>>,
+        mut capture: Option<&mut ParentCapture>,
+    ) -> Result<(), ClockRefusal> {
         let n_rows = rows.len();
         out.rows.extend_from_slice(rows);
+        let capture_row_start = capture.as_deref_mut().map(|c| c.extend_run(rows));
 
         // ---- pass 1: the clock schedule, models untouched ----
         // On a copy of the clock, committed below, so a refused row leaves
@@ -2853,6 +2905,8 @@ impl Stream {
                         None,
                         &front_cuts,
                         &places,
+                        prior_in,
+                        None,
                     );
                 }
                 if seen {
@@ -2876,6 +2930,8 @@ impl Stream {
                     None,
                     &front_cuts,
                     &places,
+                    prior_in,
+                    None,
                 );
             };
             if crate::pool::inline() {
@@ -2886,6 +2942,7 @@ impl Stream {
         } else if let Some(inst) = insts.first_mut() {
             // One instance: a drift reset has nothing to coordinate with, so
             // it resets itself inline at the row that fired.
+            let cap_arg = capture.zip(capture_row_start);
             run_instance(
                 inst,
                 &plans,
@@ -2897,6 +2954,8 @@ impl Stream {
                 Some(&mut fired),
                 &front_cuts,
                 &places,
+                prior_in,
+                cap_arg,
             );
         }
         drop(built);
@@ -2999,6 +3058,27 @@ impl Stream {
         rows: &[usize],
         base: usize,
         out: &mut ChunkOut,
+    ) {
+        self.predict_chunk_with_prior(
+            spec, cfg, features, targets, clock, session, rows, base, out, None,
+        );
+    }
+
+    /// [`Self::predict_chunk`] with an optional causal parent prior view for
+    /// cold-start child groups (`prior_from`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn predict_chunk_with_prior(
+        &self,
+        spec: &Spec,
+        cfg: &rheon_core::ClockCfg,
+        features: &FeatureRows,
+        targets: &[Vec<f64>],
+        clock: Option<&ClockCol>,
+        session: Option<&[u64]>,
+        rows: &[usize],
+        base: usize,
+        out: &mut ChunkOut,
+        prior_in: Option<PriorView<'_>>,
     ) {
         let n_rows = rows.len();
         out.rows.extend_from_slice(rows);
@@ -3135,6 +3215,7 @@ impl Stream {
             targets,
             out,
             n_rows,
+            prior_in,
         );
         if !classes[fresh].is_empty() {
             let stream =
@@ -3147,6 +3228,7 @@ impl Stream {
                 targets,
                 out,
                 n_rows,
+                prior_in,
             );
         }
         if !classes[blended].is_empty() {
@@ -3163,6 +3245,7 @@ impl Stream {
                 targets,
                 out,
                 n_rows,
+                prior_in,
             );
         }
         if !classes[unlagged].is_empty() {
@@ -3176,6 +3259,7 @@ impl Stream {
                 targets,
                 out,
                 n_rows,
+                prior_in,
             );
         }
     }
@@ -3193,6 +3277,7 @@ impl Stream {
         targets: &[Vec<f64>],
         out: &mut ChunkOut,
         n_rows: usize,
+        prior_in: Option<PriorView<'_>>,
     ) {
         if plans.is_empty() {
             return;
@@ -3294,6 +3379,8 @@ impl Stream {
                     None,
                     &front_cuts,
                     &places,
+                    prior_in,
+                    None,
                 );
             };
             if crate::pool::inline() {
@@ -3313,6 +3400,8 @@ impl Stream {
                 None,
                 &front_cuts,
                 &places,
+                prior_in,
+                None,
             );
         }
     }
@@ -3947,6 +4036,8 @@ fn run_instance(
     // into the buffer and the row a full buffer dropped after it
     // ([`u32::MAX`] for none); empty elsewhere.
     places: &[(u32, u32)],
+    prior_in: Option<PriorView<'_>>,
+    mut capture: Option<(&mut ParentCapture, usize)>,
 ) -> bool {
     // The models' frames below at one place in a cache line (`StackLine`).
     let line = stack_line::StackLine::new();
@@ -4027,6 +4118,10 @@ fn run_instance(
             .expect("spec was already validated")
             .gap_cap
     });
+    let cap_m = inst.spec.m();
+    let cap_k = inst.spec.k() + usize::from(inst.spec.fit_intercept);
+    let cap_min_settled = inst.spec.min_settled_frac_or_default();
+    let mut cap_tn: Vec<f64> = Vec::new();
     for (pi, plan) in plans.iter().enumerate() {
         if plan.reset {
             inst.reset();
@@ -4069,6 +4164,30 @@ fn run_instance(
             }
         }
         if !plan.accept {
+            if plan.direct()
+                && plan.ri < n_rows
+                && let Some((cap, row_start)) = capture.as_mut()
+            {
+                let held_raw = inst.pending_clock.as_deref().copied().unwrap_or(0.0);
+                let s_now = settled_frac(inst.decay, *inst.decay_time + held_raw);
+                let up_pre = prior_in.and_then(|pv| pv.pre_at(plan.ri));
+                let pre_dst = cap.pre_mut(*row_start, plan.ri);
+                write_ready_coefs(
+                    inst.model.get(),
+                    cap_m,
+                    cap_k,
+                    min_weight,
+                    cap_min_settled,
+                    s_now,
+                    up_pre,
+                    &mut cap_tn,
+                    pre_dst,
+                );
+                let width = cap.width;
+                let pre_off = (*row_start + plan.ri) * width;
+                let (pre_s, post_s) = (&cap.pre, &mut cap.post);
+                post_s[pre_off..pre_off + width].copy_from_slice(&pre_s[pre_off..pre_off + width]);
+            }
             continue;
         }
         // A row of weight 0 that `predict` would score by a fresh or a
@@ -4193,19 +4312,58 @@ fn run_instance(
         // never would (review round 5, C1). The gate and the row's field
         // keep the fraction above, the held rows' clock counted (§8).
         let learned = settled_frac(inst.decay, *inst.decay_time);
+        // Causal dynamic priors for this row: `pre_row` is strictly before row
+        // `t` (cold-start only); `post_row` is committed only on positive-weight
+        // learning rows before solving `beta(t)` for row `t+1`.
+        let pre_row = prior_in.and_then(|pv| if emit { pv.pre_at(ri) } else { None });
+        let post_row = prior_in.and_then(|pv| {
+            let pri = if emit { ri } else { plan.drift_ri };
+            if learn && pri != usize::MAX {
+                pv.post_at(pri)
+            } else {
+                None
+            }
+        });
+        // Parent capture: pre-row coefficients before learning/updating this row.
+        if emit
+            && ri < n_rows
+            && let Some((cap, row_start)) = capture.as_mut()
+        {
+            write_ready_coefs(
+                inst.model.get(),
+                cap_m,
+                cap_k,
+                min_weight,
+                cap_min_settled,
+                settled,
+                pre_row,
+                &mut cap_tn,
+                cap.pre_mut(*row_start, ri),
+            );
+        }
+        if prior_in.is_some()
+            && let Some(m) = inst.model.learning()
+        {
+            m.set_step_priors_flat(pre_row, post_row);
+        }
         let max_infl = inst.spec.max_error_inflation_or_default();
         let has_infl = max_infl.is_finite()
-            && inst
-                .model
-                .get()
-                .error_inflation_gate_into(xs, score_d, &mut sc.infl, max_infl);
+            && inst.model.get().error_inflation_gate_with_prior_into(
+                xs,
+                score_d,
+                pre_row,
+                &mut sc.infl,
+                max_infl,
+            );
         // The row's own error inflation: its field, and the breaks'
         // studentized residual, read it (task 221 (b)).
         let has_row_infl = inst.spec.reads_row_inflation()
-            && inst
-                .model
-                .get()
-                .row_error_inflation_into(xs, score_d, &mut sc.row_infl);
+            && inst.model.get().row_error_inflation_with_prior_into(
+                xs,
+                score_d,
+                pre_row,
+                &mut sc.row_infl,
+            );
         let has_gram_lev = inst.spec.reads_gram_leverage()
             && plan.direct()
             && inst.model.get().row_gram_leverage_into(
@@ -4362,7 +4520,7 @@ fn run_instance(
             } else {
                 inst.model
                     .get()
-                    .predict_at_into(xs, &sc.ys, score_d, plan.stamp, step);
+                    .predict_at_with_prior_into(xs, &sc.ys, score_d, plan.stamp, pre_row, step);
             }
             if inst.o_smoothed.is_none()
                 && !inst.o_smoothed_for.is_empty()
@@ -4371,6 +4529,11 @@ fn run_instance(
                 let start = step.pred.len().saturating_sub(m.cfg().k);
                 step.pred[start..].fill(f64::NAN);
             }
+        }
+        if prior_in.is_some()
+            && let Some(m) = inst.model.learning()
+        {
+            m.clear_step_priors();
         }
         let n_slots = step.pred.len();
         // Read from the step's own report, before a gate below nulls it.
@@ -5181,9 +5344,10 @@ fn run_instance(
             // fit is the last solved, not the latest due (task 311).
             let mut support = Vec::new();
             let has_support = inst.model.get().support_coef_into(&mut support);
-            if let (true, false, 0, true, true) = (
+            if let (true, false, false, 0, true, true) = (
                 has_support,
                 inst.notified.support,
+                inst.spec.model.has_dynamic_prior(),
                 reason,
                 settled_enough(learned),
                 step.pred.iter().any(|p| p.is_finite()),
@@ -5301,6 +5465,26 @@ fn run_instance(
             inst.reset();
             if let Some(f) = fired.as_deref_mut() {
                 f.push(pi);
+            }
+        }
+        // Parent capture: post-row coefficients after learning, clock advance,
+        // zero-weight restore, and any drift reset.
+        if let Some((cap, row_start)) = capture.as_mut() {
+            let target_ri = if emit { ri } else { plan.drift_ri };
+            if target_ri < n_rows {
+                let held_after = inst.pending_clock.as_deref().copied().unwrap_or(0.0);
+                let post_settled = settled_frac(inst.decay, *inst.decay_time + held_after);
+                write_ready_coefs(
+                    inst.model.get(),
+                    cap_m,
+                    cap_k,
+                    min_weight,
+                    cap_min_settled,
+                    post_settled,
+                    post_row.or(pre_row),
+                    &mut cap_tn,
+                    cap.post_mut(*row_start, target_ri),
+                );
             }
         }
     }

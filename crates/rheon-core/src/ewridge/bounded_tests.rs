@@ -39,6 +39,8 @@ fn base_cfg(k: usize, m: usize, constraint: Constraint) -> EwRidgeCfg {
         constraints: None,
         evidence: None,
         constraint: Some(constraint),
+        prior_weight: None,
+        prior_include_intercept: true,
     }
 }
 

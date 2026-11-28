@@ -70,6 +70,8 @@ fn model(kind: &str, min_weight: f64, every: f64, cap: u32) -> Model {
                 constraints: None,
                 evidence: None,
                 constraint: None,
+                prior_weight: None,
+                prior_include_intercept: true,
             })
             .unwrap();
             m.set_min_weight_output_only(true);

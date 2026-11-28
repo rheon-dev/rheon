@@ -2204,6 +2204,9 @@ impl Spec {
                 coef_min,
                 coef_max,
                 coef_sum,
+                prior_from,
+                prior_weight,
+                prior_include_intercept,
                 ..
             } => {
                 if *evidence {
@@ -2219,6 +2222,17 @@ impl Spec {
                             "spec {:?}: evidence=True cannot be combined with coef_min, coef_max \
                              or coef_sum. Leave out coef_min, coef_max and coef_sum, or set \
                              evidence=False.",
+                            self.name
+                        ));
+                    }
+                    if prior_from.is_some()
+                        || prior_weight.is_some()
+                        || !*prior_include_intercept
+                    {
+                        no.refuse(format!(
+                            "spec {:?}: evidence=True cannot be combined with prior_from, \
+                             prior_weight or prior_include_intercept=False. Leave them out, or \
+                             set evidence=False.",
                             self.name
                         ));
                     }
@@ -2374,10 +2388,111 @@ impl Spec {
                         self.name
                     ));
                 }
-                if let Some(c) = coef_prior {
-                    let k_total = self.k() + usize::from(self.fit_intercept);
-                    if c.len() != self.m() || c.iter().any(|v| v.len() != k_total) {
-                        no.refuse(coef_prior_refusal(c, k_total));
+                let has_col_prior = matches!(coef_prior, Some(CoefPrior::Column(_)));
+                match coef_prior {
+                    Some(CoefPrior::Static(c)) => {
+                        let k_total = self.k() + usize::from(self.fit_intercept);
+                        if c.len() != self.m() || c.iter().any(|v| v.len() != k_total) {
+                            no.refuse(coef_prior_refusal(c, k_total));
+                        }
+                    }
+                    Some(CoefPrior::Column(col)) => {
+                        if col.is_empty() {
+                            no.refuse(format!(
+                                "spec {:?}: coef_prior column name must not be empty. Pass the \
+                                 name of a List(Float64) column, or pass static coefficient lists.",
+                                self.name
+                            ));
+                        }
+                        if prior_from.is_some() {
+                            no.refuse(format!(
+                                "spec {:?}: coef_prior as a column ({col:?}) and prior_from \
+                                 cannot both be set: both supply a dynamic prior mean. Use \
+                                 prior_from to shrink toward a parent spec in the same bank, or \
+                                 pass a column name to coef_prior.",
+                                self.name
+                            ));
+                        }
+                        if prior_weight.is_none() {
+                            no.refuse(format!(
+                                "spec {:?}: coef_prior as a column ({col:?}) requires \
+                                 prior_weight to set the shrinkage strength. Set prior_weight to \
+                                 a finite positive number.",
+                                self.name
+                            ));
+                        }
+                    }
+                    None => {}
+                }
+                if let Some(parent) = prior_from {
+                    if parent.is_empty() {
+                        no.refuse(format!(
+                            "spec {:?}: prior_from must name a parent spec, not an empty string. \
+                             Set prior_from to the name of another spec in the same ModelBank.",
+                            self.name
+                        ));
+                    } else if parent == &self.name {
+                        no.refuse(format!(
+                            "spec {:?}: prior_from cannot name the spec itself ({parent:?}). \
+                             Name a different parent spec in the same ModelBank.",
+                            self.name
+                        ));
+                    }
+                    if prior_weight.is_none() {
+                        no.refuse(format!(
+                            "spec {:?}: prior_from ({parent:?}) requires prior_weight to set the \
+                             shrinkage strength. Set prior_weight to a finite positive number.",
+                            self.name
+                        ));
+                    }
+                }
+                if let Some(pw) = prior_weight {
+                    if !(pw.is_finite() && *pw > 0.0) {
+                        no.refuse(format!(
+                            "spec {:?}: prior_weight must be finite and above 0, but it is {}. \
+                             Set prior_weight to a finite positive pseudo-observation count, or \
+                             leave it out.",
+                            self.name,
+                            num_label(*pw)
+                        ));
+                    }
+                    if prior_from.is_none() && !has_col_prior {
+                        no.refuse(format!(
+                            "spec {:?}: prior_weight applies only with prior_from or a column \
+                             name in coef_prior, but neither is set. Set prior_from to a parent \
+                             spec name, pass a List(Float64) column name to coef_prior, or leave \
+                             prior_weight out.",
+                            self.name
+                        ));
+                    }
+                    if feature_sets.as_ref().is_some_and(|s| !s.is_empty()) {
+                        no.refuse(format!(
+                            "spec {:?}: prior_weight cannot be combined with feature_sets: each \
+                             feature set drops a different subset of columns, so one parent \
+                             coefficient vector cannot apply to every subset. Leave out \
+                             feature_sets, or leave out prior_weight.",
+                            self.name
+                        ));
+                    }
+                }
+                if !*prior_include_intercept {
+                    if prior_weight.is_none() && prior_from.is_none() && !has_col_prior {
+                        no.refuse(format!(
+                            "spec {:?}: prior_include_intercept=False applies only with \
+                             prior_from or a coef_prior column and prior_weight, but none is set. \
+                             Leave prior_include_intercept at True, or set prior_from and \
+                             prior_weight.",
+                            self.name
+                        ));
+                    }
+                    if !self.fit_intercept {
+                        no.refuse(format!(
+                            "spec {:?}: prior_include_intercept=False requires \
+                             fit_intercept=True, because there is no intercept to exclude from \
+                             the prior. Leave prior_include_intercept at True, or set \
+                             fit_intercept=True.",
+                            self.name
+                        ));
                     }
                 }
                 no.take(check_feature_sets(

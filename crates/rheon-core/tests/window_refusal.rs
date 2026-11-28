@@ -101,6 +101,8 @@ fn models() -> Vec<Make> {
                         constraints: None,
                         evidence: None,
                         constraint: None,
+                        prior_weight: None,
+                        prior_include_intercept: true,
                     })
                     .unwrap(),
                 ) as Box<dyn Probe>

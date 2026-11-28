@@ -1579,6 +1579,8 @@ FREE_TEXT = {
     "a_suffix",
     "b_suffix",
     "params",
+    "coef_prior",
+    "prior_from",
 }
 
 

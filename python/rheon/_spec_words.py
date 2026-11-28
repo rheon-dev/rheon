@@ -301,6 +301,9 @@ _SKIPPED_WHEN_ABSENT: dict[str, frozenset[str]] = {
             "coef_min",
             "coef_max",
             "coef_sum",
+            "prior_from",
+            "prior_weight",
+            "prior_include_intercept",
         }
     ),
     "rls": frozenset({"constraints"}),

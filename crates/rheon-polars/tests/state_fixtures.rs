@@ -3302,6 +3302,11 @@ fn kinds() -> Vec<Kind> {
             run: ewridge_bounded_run,
         },
         Kind {
+            name: "bank_parent_prior",
+            first: parent_prior_first,
+            run: parent_prior_run,
+        },
+        Kind {
             name: "bank_conformal_scores",
             first: conformal_scores_first,
             run: conformal_scores_run,
@@ -3592,6 +3597,92 @@ fn the_ewridge_bounded_fixture_freezes_its_forms() {
         all.iter()
             .any(|(p, v)| p.contains(".constraint.hi.") && v.as_f64() == Some(0.6)),
         "constraint.hi is not in the file"
+    );
+}
+
+/// The specs of `bank_parent_prior`: hierarchical parent prior via `prior_from`
+/// (with `prior_include_intercept = true` and `false`) and dynamic `coef_prior`
+/// column mode on `ewridge`.
+fn parent_prior_specs() -> Vec<Spec> {
+    [
+        r#"{"name": "parent", "model": {"type": "ewridge", "ridge": 0.05, "solve_every": 0.0, "max_rows_between_solves": 1}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "weight": "w", "coef_every": 0.0}"#,
+        r#"{"name": "child_all", "model": {"type": "ewridge", "ridge": 0.05, "prior_from": "parent", "prior_weight": 5.0, "solve_every": 0.0, "max_rows_between_solves": 1}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "weight": "w", "group": "g", "coef_every": 0.0, "emit_se_coef": true}"#,
+        r#"{"name": "child_slopes", "model": {"type": "ewridge", "ridge": 0.05, "standardize": true, "prior_from": "parent", "prior_weight": 4.0, "prior_include_intercept": false, "solve_every": 0.0, "max_rows_between_solves": 1}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "weight": "w", "group": "g", "coef_every": 0.0}"#,
+        r#"{"name": "child_col", "model": {"type": "ewridge", "ridge": 0.05, "coef_prior": "p_col", "prior_weight": 3.0, "solve_every": 0.0, "max_rows_between_solves": 1}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "weight": "w", "group": "g", "coef_every": 0.0}"#,
+    ]
+    .iter()
+    .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
+    .collect()
+}
+
+fn parent_prior_frame() -> DataFrame {
+    let mut df = frame();
+    let n = df.height();
+    let lists: Vec<Series> = (0..n)
+        .map(|i| {
+            let drift = 0.005 * i as f64;
+            Series::new("".into(), &[0.1 + drift, 1.8 - drift, -0.9 + 0.5 * drift])
+        })
+        .collect();
+    let p_col = Series::new("p_col".into(), lists).into_column();
+    df.with_column(p_col).unwrap();
+    df
+}
+
+fn parent_prior_first() -> (Vec<u8>, DataFrame) {
+    let df = parent_prior_frame();
+    let mut bank = Bank::new(parent_prior_specs()).unwrap();
+    bank.fit_predict(&df.slice(0, SPLIT)).unwrap();
+    (
+        bank.save_bytes().unwrap(),
+        df.slice(SPLIT as i64, N - SPLIT),
+    )
+}
+
+fn parent_prior_run(bytes: &[u8], input: &DataFrame) -> Ran {
+    bank_run_of(&parent_prior_specs(), bytes, input)
+}
+
+/// The `bank_parent_prior` fixture freezes `prior_from`, `prior_weight`,
+/// `prior_include_intercept = false`, column-mode `coef_prior`, and each
+/// child's `dynamic_prior` non-empty.
+#[test]
+fn the_parent_prior_fixture_freezes_its_forms() {
+    if regenerating() {
+        return;
+    }
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "bank_parent_prior")
+        .expect("the bank_parent_prior fixture");
+    let v = rmpv::decode::read_value(&mut unhex(f.state).as_slice()).unwrap();
+    let mut all = Vec::new();
+    leaves(&v, "", &mut all);
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.ends_with(".model.prior_from") && v.as_str() == Some("parent")),
+        "model.prior_from is not in the file"
+    );
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.ends_with(".model.prior_weight") && v.as_f64() == Some(5.0)),
+        "model.prior_weight is not in the file"
+    );
+    assert!(
+        all.iter().any(|(p, v)| {
+            p.ends_with(".model.prior_include_intercept") && v.as_bool() == Some(false)
+        }),
+        "model.prior_include_intercept=false is not in the file"
+    );
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.ends_with(".model.coef_prior") && v.as_str() == Some("p_col")),
+        "model.coef_prior column is not in the file"
+    );
+    assert!(
+        all.iter()
+            .any(|(p, v)| p.contains(".dynamic_prior.") && v.as_f64().is_some_and(f64::is_finite)),
+        "dynamic_prior is not in the file"
     );
 }
 
@@ -4350,7 +4441,7 @@ fn every_current_fixture_is_written_in_the_envelope() {
     assert_eq!(
         kinds.into_iter().collect::<Vec<_>>(),
         [
-            ("bank", 37),
+            ("bank", 38),
             ("bars", 4),
             ("checkpoint", 1),
             ("merge", 4),

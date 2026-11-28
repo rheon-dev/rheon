@@ -502,6 +502,8 @@ fn huber_resists_outliers_that_break_least_squares() {
         constraints: None,
         evidence: None,
         constraint: None,
+        prior_weight: None,
+        prior_include_intercept: true,
     })
     .unwrap();
     let mut s = 77u64;

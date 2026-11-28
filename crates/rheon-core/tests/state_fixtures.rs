@@ -4934,3 +4934,62 @@ fn ewridge_bounded_fixture_writes_its_constraint_form() {
         );
     }
 }
+
+/// The `ewridge_parent_prior` fixture writes `cfg.prior_weight`,
+/// `cfg.prior_include_intercept`, `dynamic_prior`, and
+/// `ready.systems[*].intercept_weight` non-empty, while earlier `ewridge`
+/// fixtures without a dynamic prior omit them.
+#[test]
+fn ewridge_parent_prior_fixture_writes_its_forms() {
+    if regenerating() {
+        return;
+    }
+    let decoded =
+        |f: &crate::cases::Fixture| rmpv::decode::read_value(&mut f.bytes().as_slice()).unwrap();
+    let f = frozen::ALL
+        .iter()
+        .find(|f| f.name == "ewridge_parent_prior")
+        .expect("ewridge_parent_prior fixture");
+    let v = decoded(f);
+    assert_eq!(
+        at(&v, &["model", "EwRidge", "cfg", "prior_weight"]).and_then(rmpv::Value::as_f64),
+        Some(5.0),
+        "ewridge_parent_prior: cfg.prior_weight"
+    );
+    assert_eq!(
+        at(&v, &["model", "EwRidge", "cfg", "prior_include_intercept"])
+            .and_then(rmpv::Value::as_bool),
+        Some(true),
+        "ewridge_parent_prior: cfg.prior_include_intercept"
+    );
+    assert!(
+        at(&v, &["model", "EwRidge", "dynamic_prior"])
+            .and_then(rmpv::Value::as_array)
+            .is_some_and(|a| a.len() == 2),
+        "ewridge_parent_prior: dynamic_prior"
+    );
+    assert!(
+        at(&v, &["model", "EwRidge", "ready", "systems"])
+            .and_then(rmpv::Value::as_array)
+            .is_some_and(|sys| {
+                sys.iter().any(|s| {
+                    at(s, &["intercept_weight"])
+                        .and_then(rmpv::Value::as_f64)
+                        .is_some_and(|w| w > 0.0)
+                })
+            }),
+        "ewridge_parent_prior: ready.systems[*].intercept_weight"
+    );
+    for name in ["ewridge", "ewridge_constrained", "ewridge_bounded"] {
+        let f = frozen::ALL.iter().find(|f| f.name == name).unwrap();
+        let v = decoded(f);
+        assert!(
+            at(&v, &["model", "EwRidge", "cfg", "prior_weight"]).is_none(),
+            "{name}: must not write cfg.prior_weight"
+        );
+        assert!(
+            at(&v, &["model", "EwRidge", "dynamic_prior"]).is_none(),
+            "{name}: must not write dynamic_prior"
+        );
+    }
+}

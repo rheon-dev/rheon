@@ -1681,6 +1681,8 @@ mod tests {
             constraints: None,
             evidence: None,
             constraint: None,
+            prior_weight: None,
+            prior_include_intercept: true,
         })
         .unwrap();
 
@@ -1737,6 +1739,8 @@ mod tests {
             constraints: None,
             evidence: None,
             constraint: None,
+            prior_weight: None,
+            prior_include_intercept: true,
         };
         let mut own = EwRidge::new(cfg.clone()).unwrap();
         let mut pairwise = EwRidge::new(EwRidgeCfg {
@@ -1811,6 +1815,8 @@ mod tests {
             constraints: None,
             evidence: None,
             constraint: None,
+            prior_weight: None,
+            prior_include_intercept: true,
         })
         .unwrap();
 

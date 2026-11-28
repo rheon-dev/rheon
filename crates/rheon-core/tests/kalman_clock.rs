@@ -72,6 +72,8 @@ fn ewridge() -> EwRidge {
         constraints: None,
         evidence: None,
         constraint: None,
+        prior_weight: None,
+        prior_include_intercept: true,
     })
     .unwrap()
 }

@@ -2758,6 +2758,8 @@ mod tests {
                     constraints: None,
                     evidence: None,
                     constraint: None,
+                    prior_weight: None,
+                    prior_include_intercept: true,
                 })
                 .unwrap();
                 // The inclusive edge, which `inside` below is gathered by:
@@ -2848,6 +2850,8 @@ mod tests {
                 constraints: None,
                 evidence: None,
                 constraint: None,
+                prior_weight: None,
+                prior_include_intercept: true,
             })
             .unwrap();
             m.set_window_closed(crate::WindowClosed::Both);
@@ -2952,6 +2956,8 @@ mod tests {
                 constraints: None,
                 evidence: None,
                 constraint: None,
+                prior_weight: None,
+                prior_include_intercept: true,
             })
             .unwrap()
         };
@@ -3064,6 +3070,8 @@ mod tests {
             constraints: None,
             evidence: None,
             constraint: None,
+            prior_weight: None,
+            prior_include_intercept: true,
         })
         .unwrap();
         let lasso = crate::Lasso::new(crate::LassoCfg {
