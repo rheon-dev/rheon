@@ -54,7 +54,7 @@ fn inputs(seed: u64, n: usize, len: usize) -> Vec<DataFrame> {
 
 fn carry_cfg(carry: &[&str], by: bool) -> MergeConfig {
     let mut c = cfg("t");
-    c.by = by.then(|| "g".into());
+    c.group = by.then(|| "g".into());
     c.carry = carry.iter().map(|s| (*s).to_string()).collect();
     c
 }
@@ -121,7 +121,7 @@ fn carry_is_each_groups_forward_fill_however_the_chunks_fall() {
         let carry_refs: Vec<&str> = carry.iter().map(String::as_str).collect();
         for by in [false, true] {
             let mut plain_cfg = cfg("t");
-            plain_cfg.by = by.then(|| "g".into());
+            plain_cfg.group = by.then(|| "g".into());
             let plain = drive(
                 &mut merge_of(&ins, plain_cfg),
                 &chunkings(&ins, &[1000]),
@@ -232,7 +232,7 @@ fn a_value_is_carried_within_its_day_alone() {
 #[test]
 fn a_group_whose_merged_rows_start_again_carries_nothing_from_before() {
     let mut c = cfg("t");
-    c.by = Some("g".into());
+    c.group = Some("g".into());
     c.restart = Some(Restart::Float(10.0));
     c.restart_text = Some("10".into());
     c.carry = vec!["x".into()];
@@ -506,7 +506,7 @@ fn a_bad_carry_is_refused_by_name() {
     };
     assert!(refused(&["nope"], false).contains("carry names column \"nope\", which no input has"));
     assert!(refused(&["t"], false).contains("the clock column"));
-    assert!(refused(&["g"], true).contains("the by column"));
+    assert!(refused(&["g"], true).contains("the group column"));
     assert!(refused(&["x", "x"], false).contains("names column \"x\" twice"));
     assert!(refused(&["y"], false).contains("an input's column"));
     let mut c = carry_cfg(&["x"], false);
@@ -588,7 +588,7 @@ fn the_store_of_values_stays_bounded_over_a_long_stream() {
     .unwrap();
     let ins = [a.clone()];
     let mut plain_cfg = cfg("t");
-    plain_cfg.by = Some("g".into());
+    plain_cfg.group = Some("g".into());
     let plain = drive(
         &mut merge_of(&ins, plain_cfg),
         &[vec![a.clone()]],

@@ -1503,7 +1503,7 @@ fn model_case(id: &str, n: usize) -> ModelCase {
                     model["window_rows"] = json!(n);
                     half_life = json!("inf");
                 }
-                "lm_window" => model["lm_window"] = json!(n),
+                "lm_window" => model["lm_window_rows"] = json!(n),
                 _ => {}
             }
             let s = json!({
@@ -2119,7 +2119,7 @@ fn merge_setup(id: &'static str, n: usize, blocks: usize) -> ScaleRun {
     let cfg = MergeConfig {
         clock: "t".into(),
         source: "source".into(),
-        by: Some("g".into()),
+        group: Some("g".into()),
         restart: None,
         restart_text: None,
         carry: vec!["x".into(), "s".into()],

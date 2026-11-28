@@ -1705,11 +1705,11 @@ fn output_index_base(spec: &Spec) -> Vec<FieldMeta> {
         return fields;
     }
     // ewm_moments predicts no target's value: per instance, each term in the
-    // order the spec names them, then under `se` each term's standard error
+    // order the spec names them, then under `emit_se` each term's standard error
     // in the same order, then `n_eff` (the weight inside the window under
     // one). Each is read before the row is learned; no `coef`.
-    if let crate::ModelKind::EwmMoments { terms, se, .. } = &spec.model {
-        let se = se.unwrap_or(false);
+    if let crate::ModelKind::EwmMoments { terms, emit_se, .. } = &spec.model {
+        let se = emit_se.unwrap_or(false);
         let n_slots = terms.0.len() * if se { 2 } else { 1 };
         let mut fields = Vec::new();
         for (mi, (suffix, d)) in decays.iter().enumerate() {

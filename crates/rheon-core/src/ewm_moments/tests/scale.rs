@@ -60,7 +60,7 @@ fn rows() -> Vec<(f64, f64)> {
 fn a_term_at_a_scale_is_read_at_its_degree() {
     let shift = 150;
     let mut cfg = cfg(Decay::Halflife(30.0), terms());
-    cfg.se = true;
+    cfg.emit_se = true;
     let mut m = EwmMoments::new(cfg.clone()).unwrap();
     let mut small = EwmMoments::new(cfg).unwrap();
     let mut raised = false;

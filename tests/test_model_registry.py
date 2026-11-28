@@ -94,7 +94,7 @@ MINIMAL: dict[str, dict[str, object]] = {
         "b": 0.9,
         "start_rows": 50,
     },
-    "realized": {"features": None, "lm_window": 30},
+    "realized": {"features": None, "lm_window_rows": 30},
     "pca": {"targets": None, "features": ["x0", "y"], "n_components": 1},
     "power_variation": {
         "features": None,

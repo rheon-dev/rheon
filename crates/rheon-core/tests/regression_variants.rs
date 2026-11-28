@@ -387,7 +387,7 @@ fn huber_redescending_norms_reject_outliers_and_keep_scale_alive() {
             min_weight_holds_learning: false,
             refit_clock: None,
             max_state_bytes: None,
-            huber_norm: norm,
+            norm,
         };
         let mut m = Robust::new(cfg.clone()).unwrap();
         for (x, y, d, w) in &rows {

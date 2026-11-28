@@ -1683,37 +1683,37 @@ def loss(
 # --- undoing the Epps attenuation --------------------------------------------
 
 
-def epps_invert(gram_or_row: Any, *, L: int) -> Any:  # noqa: N803 - the paper's name
-    """Compute the correlation over ``L`` rows from lagged co-moments, undoing the Epps attenuation.
+def epps_invert(gram_or_row: Any, *, lags: int) -> Any:
+    """Undo Epps attenuation over ``lags`` rows from lagged co-moments.
 
     Use it on a correlation measured over fine intervals, which is too low
     because two series do not move at the same instants (the Epps effect).
     Toth and Kertesz's equation 12 undoes it by summing the lagged
-    cross-covariances over a coarser interval of ``L`` rows.
+    cross-covariances over a coarser interval of ``lags`` rows.
 
     .. rubric:: Parameters
 
     ``gram_or_row``
         A Gram from :meth:`~rheon.polars.ModelBank.gram`, or a closed
         group's row, with ``lags`` and ``lag_comoments`` holding every lag
-        ``1 .. L-1``. Build it with ``rp.spec.ew_cov(..., lags=list(range(1,
-        L)))``.
-    ``L``
-        The coarser interval, in rows, at least 1. ``L = 1`` gives the plain
-        correlation.
+        ``1 .. lags - 1``. Build it with ``rp.spec.ew_cov(...,
+        lags=list(range(1, lags)))``.
+    ``lags``
+        The coarser interval, in rows, at least 1. ``lags = 1`` gives the
+        plain correlation.
 
     .. rubric:: Returns
 
-    The ``k x k`` correlation matrix at scale ``L``, over the input's
+    The ``k x k`` correlation matrix at scale ``lags``, over the input's
     columns other than an intercept, with ``nan`` in the row and the
-    column of a column whose long-run variance at scale ``L`` is not above
+    column of a column whose long-run variance at scale ``lags`` is not above
     0: none, or one the lags make negative.
 
     .. rubric:: Raises
 
     ``ValueError``
-        ``L`` below 1, or a lag ``1 .. L-1`` missing from the input, which
-        the error names.
+        ``lags`` below 1, or a lag ``1 .. lags - 1`` missing from the input,
+        which the error names.
 
     .. rubric:: Examples
 
@@ -1730,8 +1730,8 @@ def epps_invert(gram_or_row: Any, *, L: int) -> Any:  # noqa: N803 - the paper's
         bank = rp.ModelBank([spec])
         bank.fit_predict(pair)
         g = bank.gram("cov")[0]
-        print(round(float(rp.corr.epps_invert(g, L=1)[0, 1]), 3),
-              round(float(rp.corr.epps_invert(g, L=3)[0, 1]), 3))
+        print(round(float(rp.corr.epps_invert(g, lags=1)[0, 1]), 3),
+              round(float(rp.corr.epps_invert(g, lags=3)[0, 1]), 3))
 
     .. code-block:: text
 
@@ -1743,7 +1743,8 @@ def epps_invert(gram_or_row: Any, *, L: int) -> Any:  # noqa: N803 - the paper's
 
     .. rubric:: Notes
 
-    The weights are triangular, on the numerator and on both denominators:
+    The weights are triangular, on the numerator and on both denominators
+    (writing ``L = lags``):
 
     .. code-block:: text
 
@@ -1761,27 +1762,30 @@ def epps_invert(gram_or_row: Any, *, L: int) -> Any:  # noqa: N803 - the paper's
     g = gram_or_row
     if not (isinstance(g, dict) and "comoments" in g):
         g = _gram.from_row(gram_or_row)
-    if L < 1:
-        msg = f"rheon.corr.epps_invert: L must be at least 1, but it is {L}. Set L to 1 or more."
+    if lags < 1:
+        msg = (
+            f"rheon.corr.epps_invert: lags must be at least 1, but it is {lags}. "
+            "Set lags to 1 or more."
+        )
         raise ValueError(msg)
     # Whatever form `gram()` handed it over in, packed or float32.
     c0 = _gram._comoments(np, g)
     k = c0.shape[0]
-    lags = list(g.get("lags") or [])
+    have = list(g.get("lags") or [])
     lag_c = g.get("lag_comoments")
-    need = list(range(1, L))
-    missing = [ell for ell in need if ell not in lags]
+    need = list(range(1, lags))
+    missing = [ell for ell in need if ell not in have]
     if missing:
         msg = (
-            f"rheon.corr.epps_invert: L = {L} needs the lags {need}, but lag {missing[0]} is not "
-            f"in the input, which has {lags or 'none'}. Fit the ew_cov spec with "
-            f"lags=list(range(1, {L})), or lower L."
+            f"rheon.corr.epps_invert: lags = {lags} needs the lags {need}, but lag {missing[0]} is "
+            f"not in the input, which has {have or 'none'}. Fit the ew_cov spec with "
+            f"lags=list(range(1, {lags})), or lower lags."
         )
         raise ValueError(msg)
-    num = float(L) * c0
+    num = float(lags) * c0
     for ell in need:
-        cl = np.asarray(lag_c[lags.index(ell)], dtype=float)
-        num = num + (L - ell) * (cl + cl.T)
+        cl = np.asarray(lag_c[have.index(ell)], dtype=float)
+        num = num + (lags - ell) * (cl + cl.T)
     auto = np.diag(num)
     # A long-run variance the lags make 0 or negative has no square root:
     # its column correlates with nothing. Two negative ones multiply to a

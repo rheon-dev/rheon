@@ -130,7 +130,7 @@ fn model(kind: &str, min_weight: f64, every: f64, cap: u32) -> Model {
                 mad_anchor: false,
                 refit_clock: None,
                 max_state_bytes: None,
-                huber_norm: crate::HuberNorm::Huber,
+                norm: crate::HuberNorm::Huber,
             })
             .unwrap(),
         ),

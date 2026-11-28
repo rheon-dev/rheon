@@ -3,7 +3,7 @@
 //! - [`HmmCovariance`] (`"full"`, `"tied"`, `"diag"`, `"spherical"`),
 //!   kept separate from [`crate::Covariance`] so `ew_class` is untouched.
 //! - Partial learning [`HmmParams`] (subsets of `"tmc"`).
-//! - Conjugate prior weights (`means_weight`, `covars_prior`, `covars_weight`).
+//! - Conjugate prior weights (`means_weight`, `covariance_prior`, `covariance_weight`).
 //! - Fixed-lag smoothing (`smooth_lag`, `max_state_bytes`).
 //! - Suffix-trimmed `Serialize` for [`super::HmmCfg`] and [`super::Hmm`] so
 //!   every pre-existing schema fixture writes byte-identical output while
@@ -158,10 +158,10 @@ pub struct HmmCfgExtras {
     pub means_weight: Option<f64>,
     /// Conjugate prior numerator for covariances (mutually exclusive with
     /// `prior_rows`).
-    pub covars_prior: Option<Vec<f64>>,
+    pub covariance_prior: Option<Vec<f64>>,
     /// Conjugate prior weight for covariances (mutually exclusive with
     /// `prior_rows`).
-    pub covars_weight: Option<f64>,
+    pub covariance_weight: Option<f64>,
 }
 
 impl HmmCfgExtras {
@@ -170,8 +170,8 @@ impl HmmCfgExtras {
             && self.max_state_bytes.is_none()
             && self.params.is_none()
             && self.means_weight.is_none()
-            && self.covars_prior.is_none()
-            && self.covars_weight.is_none()
+            && self.covariance_prior.is_none()
+            && self.covariance_weight.is_none()
     }
 }
 
@@ -182,8 +182,8 @@ pub(super) struct HmmExtras {
     pub(super) spherical_states: Vec<EwCovSpherical>,
     /// Fixed-lag smoother when `smooth_lag` is set.
     pub(super) smoother: Option<HmmSmoother>,
-    /// Decayed data weight `G_l` per state when conjugate `covars_prior` /
-    /// `covars_weight` is active; empty otherwise.
+    /// Decayed data weight `G_l` per state when conjugate `covariance_prior` /
+    /// `covariance_weight` is active; empty otherwise.
     pub(super) data_w: Vec<f64>,
 }
 
@@ -238,18 +238,18 @@ impl HmmCfg {
             .unwrap_or(1.0)
     }
 
-    /// Whether conjugate covariance priors (`covars_prior` or `covars_weight`)
+    /// Whether conjugate covariance priors (`covariance_prior` or `covariance_weight`)
     /// are active.
-    pub fn has_covars_prior(&self) -> bool {
+    pub fn has_covariance_prior(&self) -> bool {
         self.extras
             .as_deref()
-            .is_some_and(|e| e.covars_prior.is_some() || e.covars_weight.is_some())
+            .is_some_and(|e| e.covariance_prior.is_some() || e.covariance_weight.is_some())
     }
 
-    /// Conjugate `covars_weight` denominator offset:
+    /// Conjugate `covariance_weight` denominator offset:
     /// `max(cw - 1, 0)` for `spherical`/`diag`, `max(cw - d, 0)` for
     /// `full`/`tied`.
-    pub(super) fn covars_weight_offset(&self) -> f64 {
+    pub(super) fn covariance_weight_offset(&self) -> f64 {
         let d = self.n_features as f64;
         let default_cw = match self.covariance {
             HmmCovariance::Spherical | HmmCovariance::Diagonal => 1.0,
@@ -258,7 +258,7 @@ impl HmmCfg {
         let cw = self
             .extras
             .as_deref()
-            .and_then(|e| e.covars_weight)
+            .and_then(|e| e.covariance_weight)
             .unwrap_or(default_cw);
         match self.covariance {
             HmmCovariance::Spherical | HmmCovariance::Diagonal => (cw - 1.0).max(0.0),
@@ -267,11 +267,11 @@ impl HmmCfg {
     }
 
     /// Scalar conjugate covariance prior entry for state `s` under `spherical`.
-    pub(super) fn covars_prior_spherical(&self, s: usize) -> f64 {
+    pub(super) fn covariance_prior_spherical(&self, s: usize) -> f64 {
         match self
             .extras
             .as_deref()
-            .and_then(|e| e.covars_prior.as_deref())
+            .and_then(|e| e.covariance_prior.as_deref())
         {
             None => self.precision_prior,
             Some(v) if v.len() == 1 => v[0],
@@ -280,12 +280,12 @@ impl HmmCfg {
     }
 
     /// Diagonal conjugate covariance prior entry for state `s`, feature `i`.
-    pub(super) fn covars_prior_diag(&self, s: usize, i: usize) -> f64 {
+    pub(super) fn covariance_prior_diag(&self, s: usize, i: usize) -> f64 {
         let d = self.n_features;
         match self
             .extras
             .as_deref()
-            .and_then(|e| e.covars_prior.as_deref())
+            .and_then(|e| e.covariance_prior.as_deref())
         {
             None => self.precision_prior,
             Some(v) if v.len() == 1 => v[0],
@@ -296,12 +296,12 @@ impl HmmCfg {
 
     /// Matrix entry `(i, j)` of the conjugate covariance prior for state `s`
     /// under `full` or `tied`.
-    pub(super) fn covars_prior_matrix(&self, s: usize, i: usize, j: usize) -> f64 {
+    pub(super) fn covariance_prior_matrix(&self, s: usize, i: usize, j: usize) -> f64 {
         let d = self.n_features;
         match self
             .extras
             .as_deref()
-            .and_then(|e| e.covars_prior.as_deref())
+            .and_then(|e| e.covariance_prior.as_deref())
         {
             None => {
                 if i == j {
@@ -427,34 +427,34 @@ impl HmmCfg {
                 );
             }
         }
-        let has_cp = ex.covars_prior.is_some() || ex.covars_weight.is_some();
+        let has_cp = ex.covariance_prior.is_some() || ex.covariance_weight.is_some();
         if has_cp {
             if self.prior_rows.is_some() {
                 no.refuse(
-                    "hmm: covars_prior and covars_weight cannot be used beside prior_rows: they \
+                    "hmm: covariance_prior and covariance_weight cannot be used beside prior_rows: they \
                      are two covariance-prior mechanisms. Leave prior_rows out, or leave out \
-                     covars_prior and covars_weight.",
+                     covariance_prior and covariance_weight.",
                 );
             }
             if !eff.c {
                 no.refuse(
-                    "hmm: covars_prior and covars_weight do not apply when covariances are not \
+                    "hmm: covariance_prior and covariance_weight do not apply when covariances are not \
                      learned. Add 'c' to params (with learn on), or leave them out.",
                 );
             }
         }
-        if let Some(cw) = ex.covars_weight
+        if let Some(cw) = ex.covariance_weight
             && !(cw.is_finite() && cw >= 0.0)
         {
             no.refuse(format!(
-                "hmm: covars_weight must be finite and at least 0, but it is {cw}. Set \
-                 covars_weight to a finite non-negative value."
+                "hmm: covariance_weight must be finite and at least 0, but it is {cw}. Set \
+                 covariance_weight to a finite non-negative value."
             ));
         }
-        if let Some(cp) = &ex.covars_prior {
+        if let Some(cp) = &ex.covariance_prior {
             if let Some(&bad) = cp.iter().find(|v| !v.is_finite()) {
                 no.refuse(format!(
-                    "hmm: covars_prior must be finite, but it holds {bad}. Replace {bad} with a \
+                    "hmm: covariance_prior must be finite, but it holds {bad}. Replace {bad} with a \
                      finite value."
                 ));
             } else {
@@ -462,14 +462,14 @@ impl HmmCfg {
                     HmmCovariance::Spherical => {
                         if cp.len() != 1 && cp.len() != k {
                             no.refuse(format!(
-                                "hmm: under covariance_type=\"spherical\", covars_prior must hold \
+                                "hmm: under covariance_type=\"spherical\", covariance_prior must hold \
                                  1 value or {k} values (one per state), but it has {}. Give 1 or \
                                  {k} non-negative values.",
                                 cp.len()
                             ));
                         } else if let Some(&v) = cp.iter().find(|&&v| v < 0.0) {
                             no.refuse(format!(
-                                "hmm: covars_prior must be at least 0, but it holds {v}. Give \
+                                "hmm: covariance_prior must be at least 0, but it holds {v}. Give \
                                  non-negative prior entries."
                             ));
                         }
@@ -477,7 +477,7 @@ impl HmmCfg {
                     HmmCovariance::Diagonal => {
                         if cp.len() != 1 && cp.len() != d && cp.len() != k * d {
                             no.refuse(format!(
-                                "hmm: under covariance_type=\"diag\", covars_prior must hold 1, \
+                                "hmm: under covariance_type=\"diag\", covariance_prior must hold 1, \
                                  {d}, or {} values, but it has {}. Give 1, {d}, or {} non-negative \
                                  values.",
                                 k * d,
@@ -486,7 +486,7 @@ impl HmmCfg {
                             ));
                         } else if let Some(&v) = cp.iter().find(|&&v| v < 0.0) {
                             no.refuse(format!(
-                                "hmm: covars_prior must be at least 0, but it holds {v}. Give \
+                                "hmm: covariance_prior must be at least 0, but it holds {v}. Give \
                                  non-negative prior entries."
                             ));
                         }
@@ -494,7 +494,7 @@ impl HmmCfg {
                     HmmCovariance::Full => {
                         if cp.len() != 1 && cp.len() != d * d && cp.len() != k * d * d {
                             no.refuse(format!(
-                                "hmm: under covariance_type=\"full\", covars_prior must hold 1, \
+                                "hmm: under covariance_type=\"full\", covariance_prior must hold 1, \
                                  {}, or {} values, but it has {}. Give 1 scalar or a {d} by {d} \
                                  matrix per state.",
                                 d * d,
@@ -503,7 +503,7 @@ impl HmmCfg {
                             ));
                         } else if cp.len() == 1 && cp[0] < 0.0 {
                             no.refuse(format!(
-                                "hmm: covars_prior must be at least 0, but it holds {}. Give a \
+                                "hmm: covariance_prior must be at least 0, but it holds {}. Give a \
                                  non-negative scalar.",
                                 cp[0]
                             ));
@@ -522,7 +522,7 @@ impl HmmCfg {
                     HmmCovariance::Shared => {
                         if cp.len() != 1 && cp.len() != d * d {
                             no.refuse(format!(
-                                "hmm: under covariance_type=\"tied\", covars_prior must hold 1 or \
+                                "hmm: under covariance_type=\"tied\", covariance_prior must hold 1 or \
                                  {} values, but it has {}. Give 1 scalar or one {d} by {d} \
                                  matrix.",
                                 d * d,
@@ -530,7 +530,7 @@ impl HmmCfg {
                             ));
                         } else if cp.len() == 1 && cp[0] < 0.0 {
                             no.refuse(format!(
-                                "hmm: covars_prior must be at least 0, but it holds {}. Give a \
+                                "hmm: covariance_prior must be at least 0, but it holds {}. Give a \
                                  non-negative scalar.",
                                 cp[0]
                             ));
@@ -544,7 +544,7 @@ impl HmmCfg {
     }
 }
 
-/// Check that a matrix block in `covars_prior` is symmetric and has
+/// Check that a matrix block in `covariance_prior` is symmetric and has
 /// non-negative diagonal entries (and is PSD if non-zero).
 fn check_psd_prior(block: &[f64], d: usize, state: Option<usize>, no: &mut crate::Refusals) {
     let who = match state {
@@ -557,7 +557,7 @@ fn check_psd_prior(block: &[f64], d: usize, state: Option<usize>, no: &mut crate
         .find(|&(_, _, a, b)| (a - b).abs() > 1e-12 * (1.0 + a.abs().max(b.abs())));
     if let Some((i, j, a, b)) = asym {
         no.refuse(format!(
-            "hmm: the matrix in covars_prior {who}must be symmetric, but entry ({i}, {j}) is {a} \
+            "hmm: the matrix in covariance_prior {who}must be symmetric, but entry ({i}, {j}) is {a} \
              and ({j}, {i}) is {b}. Set them equal."
         ));
         return;
@@ -569,7 +569,7 @@ fn check_psd_prior(block: &[f64], d: usize, state: Option<usize>, no: &mut crate
     // or at least non-negative eigenvalues (tiny jitter checks PSD).
     if (0..d).any(|i| block[i * d + i] < 0.0) {
         no.refuse(format!(
-            "hmm: the matrix in covars_prior {who}must be positive semidefinite, but a diagonal \
+            "hmm: the matrix in covariance_prior {who}must be positive semidefinite, but a diagonal \
              entry is negative. Give a positive semidefinite prior matrix."
         ));
         return;
@@ -583,7 +583,7 @@ fn check_psd_prior(block: &[f64], d: usize, state: Option<usize>, no: &mut crate
         }
         if !matches!(crate::solve::SpdFactor::of(&nudged, d), Some(f) if f.attempts() == 0) {
             no.refuse(format!(
-                "hmm: the matrix in covars_prior {who}must be positive semidefinite, but it is \
+                "hmm: the matrix in covariance_prior {who}must be positive semidefinite, but it is \
                  not. Give a positive semidefinite prior matrix."
             ));
         }

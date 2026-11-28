@@ -781,7 +781,7 @@ fn case_spec(id: &str) -> (Value, Shape) {
         "realized" => (
             json!({
                 "name": "m",
-                "model": {"type": "realized", "lm_window": 100},
+                "model": {"type": "realized", "lm_window_rows": 100},
                 "targets": ["y0", "y1"],
                 "features": [],
                 "clock": "t",

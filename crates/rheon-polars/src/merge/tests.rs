@@ -9,7 +9,7 @@ pub(super) fn cfg(clock: &str) -> MergeConfig {
     MergeConfig {
         clock: clock.into(),
         source: "source".into(),
-        by: None,
+        group: None,
         restart: None,
         restart_text: None,
         carry: Vec::new(),
@@ -259,7 +259,7 @@ fn a_bad_call_is_refused_by_name() {
     let e = err(Merge::new(names(1), vec![s(&a)], c));
     assert!(e.contains("already has a column named \"a\""), "{e}");
     let mut c = cfg("t");
-    c.by = Some("g".into());
+    c.group = Some("g".into());
     assert!(matches!(
         Merge::new(names(1), vec![s(&a)], c),
         Err(PolarsError::ColumnNotFound(_))
@@ -372,7 +372,7 @@ fn an_input_started_again_merges_after_every_row_before_it() {
     // setting, where its input's clock stepped back past it, is caught in
     // the merged rows, as a bank grouped by it would refuse it.
     let d = df!("g" => ["A", "B", "A"], "t" => [10.0, 20.0, 9.5], "x" => [0i64, 1, 2]).unwrap();
-    c.by = Some("g".into());
+    c.group = Some("g".into());
     let mut m = merge_of(std::slice::from_ref(&d), c);
     m.push(0, d).unwrap();
     m.end(0);
@@ -515,7 +515,7 @@ fn under_by_each_groups_merged_rows_are_checked_on_their_own() {
     let a = s(&["A", "A"], &[1.0, 3.0], 0);
     let b = s(&["B", "B", "B"], &[2.0, 4.0, 5.0], 1);
     let mut c = cfg("t");
-    c.by = Some("g".into());
+    c.group = Some("g".into());
     let schemas = || vec![a.schema().as_ref().clone(), b.schema().as_ref().clone()];
     let mut m = Merge::new(names(2), schemas(), c.clone()).unwrap();
     let _ = drive(&mut m, &[vec![a.slice(0, 1)], vec![b.clone()]], None, false);
@@ -570,9 +570,9 @@ fn a_state_loads_only_into_the_merge_it_holds() {
         "{e}"
     );
     let mut c = cfg("t");
-    c.by = Some("x".into());
+    c.group = Some("x".into());
     let e = err(Merge::load_bytes(&state, names(2), schemas(), c));
-    assert!(e.contains("by = None"), "{e}");
+    assert!(e.contains("group = None"), "{e}");
     let ints = [
         df!("t" => [1i64], "x" => [0i64]).unwrap(),
         df!("t" => [1i64], "x" => [0i64]).unwrap(),
@@ -747,13 +747,13 @@ fn merge_new_refuses_unreadable_by_dtype_and_names_compound_dtypes() {
         s.insert("t".into(), DataType::Float64);
         s.insert("g".into(), bad_dtype.clone());
         let mut c = cfg("t");
-        c.by = Some("g".into());
+        c.group = Some("g".into());
         let err = Merge::new(vec!["a".into()], vec![s], c)
             .err()
             .expect("unreadable by dtype must be refused at build");
         assert!(crate::is_wrong_type(&err), "{bad_dtype:?}: {err}");
         let msg = err.to_string();
-        assert!(msg.contains("by column \"g\""), "{bad_dtype:?}: {msg}");
+        assert!(msg.contains("group column \"g\""), "{bad_dtype:?}: {msg}");
     }
 
     // Compound dtype conflicts must not print the same bare name on both sides.

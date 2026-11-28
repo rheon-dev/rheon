@@ -236,8 +236,8 @@ fn cfg(n: usize, half_life: f64) -> RealizedCfg {
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
-        lm_window: None,
-        lm_beta: DEFAULT_LM_BETA,
+        lm_window_rows: None,
+        lm_confidence: DEFAULT_LM_CONFIDENCE,
         max_state_bytes: None,
     }
 }

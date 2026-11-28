@@ -232,12 +232,12 @@ const CASES: &[Case] = &[
     ),
     case(
         "feature_ks",
-        "feature_ks_window = 30\nfeature_ks_recent = 10",
+        "feature_ks_window_rows = 30\nfeature_ks_recent_rows = 10",
         None,
     ),
     case(
-        "feature_ks_recent",
-        "feature_ks_window = 30\nfeature_ks_recent = 15",
+        "feature_ks_recent_rows",
+        "feature_ks_window_rows = 30\nfeature_ks_recent_rows = 15",
         Some("feature_ks"),
     ),
     leverage("error_inflation", "emit_error_inflation = true", None),

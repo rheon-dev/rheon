@@ -164,7 +164,7 @@ def test_the_profile_is_a_group_by_over_the_phase(closed: str):
     Polars' ``group_by`` over the hour of the day of each group's rows."""
     df = stream(12, seed=1)
     h = 2 * 86_400.0
-    kw = {"period": "1d", "buckets": 24, "half_life": "2d", "weight": "w", "closed": closed}
+    kw = {"period": "1d", "bins": 24, "half_life": "2d", "weight": "w", "closed": closed}
     out = run(
         df,
         m=rp.ops.ewm_profile("x", **kw),
@@ -213,7 +213,7 @@ def test_a_zoned_clock_reads_the_wall_clock_across_both_daylight_saving_changes(
     # One stretch across the months between the two changes.
     out = run(
         df,
-        m=rp.ops.ewm_profile("x", period="1d", buckets=24, half_life=float("inf")),
+        m=rp.ops.ewm_profile("x", period="1d", bins=24, half_life=float("inf")),
         _kw={"gap_cap": "400d"},
     )
     want = oracle(
@@ -222,16 +222,16 @@ def test_a_zoned_clock_reads_the_wall_clock_across_both_daylight_saving_changes(
     close(out["m"], want["mean"])
 
 
-def test_a_week_starts_on_monday_and_an_offset_moves_it():
-    """A week is Monday to Sunday, as Polars truncates one; ``offset="6d"``
-    starts it on Sunday, and ``offset="9h30m"`` a day at 09:30. On a
+def test_a_week_starts_on_monday_and_an_origin_moves_it():
+    """A week is Monday to Sunday, as Polars truncates one; ``origin="6d"``
+    starts it on Sunday, and ``origin="9h30m"`` a day at 09:30. On a
     ``Date`` clock too."""
     df = stream(30, seed=3, groups=1)
     out = run(
         df,
-        wk=rp.ops.ewm_profile("x", period="1w", buckets=7, half_life=float("inf")),
-        s=rp.ops.ewm_profile("x", period="1w", buckets=7, half_life=float("inf"), offset="6d"),
-        o=rp.ops.ewm_profile("x", period="1d", buckets=24, half_life=float("inf"), offset="9h30m"),
+        wk=rp.ops.ewm_profile("x", period="1w", bins=7, half_life=float("inf")),
+        s=rp.ops.ewm_profile("x", period="1w", bins=7, half_life=float("inf"), origin="6d"),
+        o=rp.ops.ewm_profile("x", period="1d", bins=24, half_life=float("inf"), origin="9h30m"),
     )
     week = phase_ns(pl.col("t"), "1w")
     for col, bucket in [
@@ -248,7 +248,7 @@ def test_a_week_starts_on_monday_and_an_offset_moves_it():
         .group_by("t", "g", maintain_order=True)
         .agg(pl.col("x").drop_nulls().first(), pl.col("w").first())
     )
-    d_out = run(dates, d=rp.ops.ewm_profile("x", period="1w", buckets=7, half_life="10d"))
+    d_out = run(dates, d=rp.ops.ewm_profile("x", period="1w", bins=7, half_life="10d"))
     day_age = (pl.col("t") - pl.col("t_right")).dt.total_days() * 86_400.0
     want = oracle(
         dates,
@@ -274,7 +274,7 @@ def test_a_numeric_an_integer_and_a_row_clock():
             "w": np.where(rng.uniform(size=n) < 0.1, 0.0, rng.uniform(0.5, 2.0, n)),
         }
     )
-    kw = {"period": 10, "buckets": 5, "half_life": 40.0, "weight": "w", "stat": "var"}
+    kw = {"period": 10, "bins": 5, "half_life": 40.0, "weight": "w", "stat": "var"}
     num_age = (pl.col("t") - pl.col("t_right")).cast(pl.Float64)
     for frame in (df, df.with_columns(pl.col("t").cast(pl.Float64))):
         out = run(frame, v=rp.ops.ewm_profile("x", **kw), _kw={"gap_cap": 1e9})
@@ -301,7 +301,7 @@ def test_an_unseen_phase_is_withheld_and_min_samples_counts_its_rows():
             "w": [1.0, 1.0, 0.0, 1.0, 1.0],
         }
     )
-    kw = {"period": "1d", "buckets": 24, "half_life": "1d", "weight": "w"}
+    kw = {"period": "1d", "bins": 24, "half_life": "1d", "weight": "w"}
     out = run(
         df,
         m=rp.ops.ewm_profile("x", closed="left", **kw),
@@ -317,7 +317,7 @@ def test_an_unseen_phase_is_withheld_and_min_samples_counts_its_rows():
 
 def test_a_zero_weight_row_reads_its_phase_and_adds_nothing():
     df = stream(6, seed=5)
-    kw = {"period": "1d", "buckets": 12, "half_life": "1d", "weight": "w"}
+    kw = {"period": "1d", "bins": 12, "half_life": "1d", "weight": "w"}
     exprs = {"m": rp.ops.ewm_profile("x", **kw), "v": rp.ops.ewm_profile("x", stat="std", **kw)}
     full = run(df, **exprs)
     kept = run(df.filter(pl.col("w") > 0), **exprs)
@@ -325,7 +325,7 @@ def test_a_zero_weight_row_reads_its_phase_and_adds_nothing():
 
 
 def exprs() -> dict[str, pl.Expr]:
-    kw = {"period": "1d", "buckets": 24, "half_life": "3d", "weight": "w"}
+    kw = {"period": "1d", "bins": 24, "half_life": "3d", "weight": "w"}
     return {
         "m": rp.ops.ewm_profile("x", **kw),
         "l": rp.ops.ewm_profile("x", stat="std", closed="left", **kw),
@@ -363,7 +363,7 @@ def test_the_state_is_bounded_by_the_buckets(tmp_path: Path):
         state = tmp_path / f"s{days}.state"
         rp.stream.with_windows(
             df,
-            m=rp.ops.ewm_profile("x", period="1d", buckets=24, half_life="3d", closed="left"),
+            m=rp.ops.ewm_profile("x", period="1d", bins=24, half_life="3d", closed="left"),
             clock="t",
             gap_cap="30d",
             group="g",
@@ -375,36 +375,32 @@ def test_the_state_is_bounded_by_the_buckets(tmp_path: Path):
 
 def test_a_profile_past_its_cap_is_refused_with_its_bytes():
     df = stream(1, seed=9)
-    with pytest.raises(Exception, match=r"holds 1344 bytes a group, 24 buckets of 56 bytes"):
+    with pytest.raises(Exception, match=r"holds 1344 bytes a group, 24 bins of 56 bytes"):
         run(
             df,
-            m=rp.ops.ewm_profile(
-                "x", period="1d", buckets=24, half_life="1d", max_state_bytes=1000
-            ),
+            m=rp.ops.ewm_profile("x", period="1d", bins=24, half_life="1d", max_state_bytes=1000),
         )
-    run(
-        df, m=rp.ops.ewm_profile("x", period="1d", buckets=24, half_life="1d", max_state_bytes=1344)
-    )
+    run(df, m=rp.ops.ewm_profile("x", period="1d", bins=24, half_life="1d", max_state_bytes=1344))
 
 
 def test_the_refusals():
     df = stream(1, seed=10)
     with pytest.raises(TypeError, match="period is required"):
-        rp.ops.ewm_profile("x", period=None, buckets=24, half_life="1d")  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="buckets must be a whole number from 1"):
-        rp.ops.ewm_profile("x", period="1d", buckets=0, half_life="1d")
+        rp.ops.ewm_profile("x", period=None, bins=24, half_life="1d")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="bins must be a whole number from 1"):
+        rp.ops.ewm_profile("x", period="1d", bins=0, half_life="1d")
     with pytest.raises(TypeError, match="bias is given"):
-        rp.ops.ewm_profile("x", period="1d", buckets=24, half_life="1d", bias=True)
+        rp.ops.ewm_profile("x", period="1d", bins=24, half_life="1d", bias=True)
     with pytest.raises(ValueError, match="stat must be"):
-        rp.ops.ewm_profile("x", period="1d", buckets=24, half_life="1d", stat="median")  # type: ignore[arg-type]
+        rp.ops.ewm_profile("x", period="1d", bins=24, half_life="1d", stat="median")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="min_samples must be an integer of at least 1"):
-        rp.ops.ewm_profile("x", period="1d", buckets=24, half_life="1d", min_samples=0)
+        rp.ops.ewm_profile("x", period="1d", bins=24, half_life="1d", min_samples=0)
     with pytest.raises(Exception, match="month has no fixed length"):
-        run(df, m=rp.ops.ewm_profile("x", period="1mo", buckets=12, half_life="1d"))
+        run(df, m=rp.ops.ewm_profile("x", period="1mo", bins=12, half_life="1d"))
     with pytest.raises(Exception, match="needs a temporal clock"):
         rp.stream.with_windows(
             df.drop("t").with_columns(t=pl.int_range(pl.len())),
-            m=rp.ops.ewm_profile("x", period="1d", buckets=24, half_life="1h"),
+            m=rp.ops.ewm_profile("x", period="1d", bins=24, half_life="1h"),
             clock="t",
             gap_cap="10h",
         )
@@ -413,7 +409,7 @@ def test_the_refusals():
         rp.spec.ewridge(
             "m",
             targets=[
-                (ahead - rp.ops.ewm_profile("x", period=24, buckets=24, half_life=5.0)).alias("c")
+                (ahead - rp.ops.ewm_profile("x", period=24, bins=24, half_life=5.0)).alias("c")
             ],
             features=["x"],
             half_life=10.0,
@@ -433,7 +429,7 @@ def test_a_window_drops_the_rows_further_back(closed: str):
     df = stream(16, seed=21)
     kw = {
         "period": "1d",
-        "buckets": 24,
+        "bins": 24,
         "half_life": "2d",
         "window_size": "3d",
         "weight": "w",
@@ -464,7 +460,7 @@ def test_a_window_on_a_row_exactly_its_span_back():
     and ``"both"`` and out under ``"right"`` and ``"none"``, decided in
     integers on an integer clock."""
     df = pl.DataFrame({"t": [0, 24, 48, 72], "g": ["a"] * 4, "x": [1.0, 2.0, 4.0, 8.0]})
-    kw = {"period": 24, "buckets": 1, "half_life": float("inf"), "window_size": 48}
+    kw = {"period": 24, "bins": 1, "half_life": float("inf"), "window_size": 48}
     out = run(
         df,
         r=rp.ops.ewm_profile("x", closed="right", **kw),
@@ -512,7 +508,7 @@ def test_the_quantile_is_numpys_weighted_inverted_cdf_within_the_sketch(
     df = stream(14, seed=22).with_columns(x=pl.col("x") + 20.0)
     kw: dict[str, Any] = {
         "period": "1d",
-        "buckets": 12,
+        "bins": 12,
         "half_life": "2d",
         "weight": "w",
         "closed": closed,
@@ -537,12 +533,12 @@ def test_the_quantile_is_numpys_weighted_inverted_cdf_within_the_sketch(
 
 
 def windowed() -> dict[str, pl.Expr]:
-    kw = {"period": "1d", "buckets": 6, "half_life": "2d", "weight": "w", "window_size": "2d"}
+    kw = {"period": "1d", "bins": 6, "half_life": "2d", "weight": "w", "window_size": "2d"}
     return {
         "m": rp.ops.ewm_profile("x", **kw),
         "q": rp.ops.ewm_profile("x", stat="quantile", quantile=0.7, closed="left", **kw),
         "s": rp.ops.ewm_profile(
-            "x", stat="quantile", quantile=0.3, period="1d", buckets=6, half_life="1d"
+            "x", stat="quantile", quantile=0.3, period="1d", bins=6, half_life="1d"
         ),
     }
 
@@ -594,7 +590,7 @@ def test_a_window_past_half_its_cap_warns_once_and_past_it_is_refused():
 
     kw: dict[str, Any] = {
         "period": 100.0,
-        "buckets": 1,
+        "bins": 1,
         "half_life": 50.0,
         "window_size": 10.0,
         "max_state_bytes": 400,
@@ -735,10 +731,10 @@ def test_the_harmonic_form_saves_and_loads_at_every_stamp(tmp_path: Path):
 
 
 def test_the_harmonic_refusals():
-    with pytest.raises(TypeError, match="give buckets or harmonics, one of them"):
+    with pytest.raises(TypeError, match="give bins or harmonics, one of them"):
         rp.ops.ewm_profile("x", period="1d", half_life="1d")
     with pytest.raises(TypeError, match="both are given"):
-        rp.ops.ewm_profile("x", period="1d", half_life="1d", buckets=24, harmonics=2)
+        rp.ops.ewm_profile("x", period="1d", half_life="1d", bins=24, harmonics=2)
     with pytest.raises(ValueError, match="harmonics must be a whole number from 1 to 64"):
         rp.ops.ewm_profile("x", period="1d", half_life="1d", harmonics=65)
     with pytest.raises(ValueError, match="a quantile has no one-pass fit"):

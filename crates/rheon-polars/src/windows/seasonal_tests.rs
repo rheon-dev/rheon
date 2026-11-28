@@ -8,7 +8,7 @@ use super::super::{RowIn, Windows};
 use super::*;
 use rheon_core::{ClockCfg, ClockValue, Mstl, Stl, StlCfg};
 
-fn def(seasons: &[(u32, u32)], window: u32, lag: u32, closed: RingClosed) -> StlDef {
+fn def(seasons: &[(u32, u32)], window_rows: u32, lag: u32, closed: RingClosed) -> StlDef {
     StlDef {
         seasons: seasons.to_vec(),
         iterate: 2,
@@ -23,7 +23,7 @@ fn def(seasons: &[(u32, u32)], window: u32, lag: u32, closed: RingClosed) -> Stl
         robust: false,
         inner_iter: None,
         outer_iter: None,
-        window,
+        window_rows,
         lag,
         closed,
         component: StlComponent::Trend,

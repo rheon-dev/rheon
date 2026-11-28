@@ -187,7 +187,7 @@
 //!
 //! # The standard error
 //!
-//! Under `se`, each term `θ` has `se_θ`, its delta-method standard error at
+//! Under `emit_se`, each term `θ` has `se_θ`, its delta-method standard error at
 //! Kish's effective size: `sqrt(r_2 · E[IF²])`, `IF` the term's influence
 //! function as a polynomial in the legs' deviations `d`. For a central
 //! moment `IF = d^a − μ_a − Σ_j a_j μ_{a−e_j} d_j`; a standardized moment's
@@ -374,7 +374,7 @@ pub struct EwmMomentsCfg {
     pub lag_tolerance: Option<f64>,
     /// Emit each term's standard error, `se_<term>`, after the terms.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub se: bool,
+    pub emit_se: bool,
     /// The moments of the latest this many learned rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_rows: Option<usize>,
@@ -425,7 +425,7 @@ impl EwmMomentsCfg {
             max_state_bytes: None,
             clocked: false,
             lag_tolerance: None,
-            se: false,
+            emit_se: false,
             window_rows: None,
             window_clock: None,
         }
@@ -488,7 +488,7 @@ impl EwmMomentsCfg {
                     need.extend(pairs(&alpha));
                 }
             }
-            if self.se {
+            if self.emit_se {
                 let sup = if_support(t.kind, &alpha);
                 for x in &sup {
                     for y in &sup {
@@ -1665,19 +1665,19 @@ impl EwmMoments {
         (all, weight)
     }
 
-    /// Every output, a term then (under `se`) each standard error after
+    /// Every output, a term then (under `emit_se`) each standard error after
     /// the terms, read from `sums`; and the weight.
     fn read_sums(&self, sums: &[Summary]) -> Vec<Result<f64, Withheld>> {
         let n = self.cfg.terms.len();
         let mut out: Vec<Result<f64, Withheld>> = (0..n).map(|i| self.value_in(i, sums)).collect();
-        if self.cfg.se {
+        if self.cfg.emit_se {
             out.extend((0..n).map(|i| self.se_in(i, sums)));
         }
         out
     }
 
     /// Every output's value, or why it is withheld, read from the state as
-    /// it stands: the terms, then under `se` their standard errors.
+    /// it stands: the terms, then under `emit_se` their standard errors.
     pub fn read(&self) -> Vec<Result<f64, Withheld>> {
         if self.cfg.windowed() {
             let (sums, _) = self.window_at(None);
@@ -2138,7 +2138,7 @@ fn unbiased(g: &Group, s: &Summary, a: &[u32]) -> Result<(f64, f64), Withheld> {
 }
 
 /// The columns are the features; there are no targets, and a slot a term
-/// (then a slot a standard error under `se`). As every model's, each row's
+/// (then a slot a standard error under `emit_se`). As every model's, each row's
 /// output is read from the state before the row is learned.
 impl crate::OnlineModel for EwmMoments {
     fn step_into(
@@ -2244,7 +2244,7 @@ impl crate::OnlineModel for EwmMoments {
     }
 
     fn n_outputs(&self) -> usize {
-        self.cfg.terms.len() * if self.cfg.se { 2 } else { 1 }
+        self.cfg.terms.len() * if self.cfg.emit_se { 2 } else { 1 }
     }
 }
 

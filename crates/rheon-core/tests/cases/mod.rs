@@ -821,7 +821,7 @@ fn robust_cfg(loss: RobustLoss) -> RobustCfg {
         min_weight_holds_learning: true,
         refit_clock: None,
         max_state_bytes: None,
-        huber_norm: rheon_core::HuberNorm::Huber,
+        norm: rheon_core::HuberNorm::Huber,
     }
 }
 
@@ -1742,9 +1742,9 @@ pub fn all() -> Vec<Case> {
                     link: rheon_core::KalmanLink::Logit,
                     filter: rheon_core::KalmanFilter::Ukf,
                     ukf_rule: rheon_core::UkfRule::Merwe,
-                    alpha: 0.8,
-                    beta: 2.0,
-                    kappa: 0.0,
+                    ukf_alpha: 0.8,
+                    ukf_beta: 2.0,
+                    ukf_kappa: 0.0,
                     ukf_noise: rheon_core::UkfNoise::Expected,
                     ..rheon_core::KalmanObs::default()
                 },
@@ -3411,8 +3411,8 @@ pub fn all() -> Vec<Case> {
                 extras: Some(Box::new(rheon_core::HmmCfgExtras {
                     params: Some("mc".into()),
                     means_weight: Some(2.0),
-                    covars_prior: Some(vec![0.25]),
-                    covars_weight: Some(3.0),
+                    covariance_prior: Some(vec![0.25]),
+                    covariance_weight: Some(3.0),
                     ..Default::default()
                 })),
                 ..hmm_full_cfg(K)
@@ -3996,7 +3996,7 @@ pub fn all() -> Vec<Case> {
             Realized::new(RealizedCfg {
                 decay: Decay::Halflife(f64::INFINITY),
                 window_rows: Some(12),
-                lm_window: None,
+                lm_window_rows: None,
                 ..realized_cfg()
             })
             .unwrap(),
@@ -4037,7 +4037,7 @@ pub fn all() -> Vec<Case> {
             Realized::new(RealizedCfg {
                 decay: Decay::Halflife(f64::INFINITY),
                 window_clock: Some(20.0),
-                lm_window: None,
+                lm_window_rows: None,
                 max_state_bytes: Some(1_500),
                 ..realized_cfg()
             })
@@ -4614,6 +4614,7 @@ pub fn all() -> Vec<Case> {
                 frequencies: vec![0.0, 0.2, 0.5],
                 spacing: 1.0,
                 decay: decay(),
+                method: rheon_core::SpectralMethod::Dft,
                 scaling: SpectralScaling::Density,
                 detrend: true,
                 min_weight: 0.0,
@@ -4639,7 +4640,8 @@ pub fn all() -> Vec<Case> {
                 frequencies: vec![0.2, 0.7],
                 spacing: 1.0,
                 decay: decay(),
-                scaling: SpectralScaling::LombScargle,
+                method: rheon_core::SpectralMethod::LombScargle,
+                scaling: SpectralScaling::Density,
                 detrend: true,
                 min_weight: 0.0,
                 max_state_bytes: None,
@@ -4663,7 +4665,8 @@ pub fn all() -> Vec<Case> {
                 frequencies: vec![0.2, 0.5],
                 spacing: 1.0,
                 decay: decay(),
-                scaling: SpectralScaling::LombScargle,
+                method: rheon_core::SpectralMethod::LombScargle,
+                scaling: SpectralScaling::Density,
                 detrend: true,
                 min_weight: 0.0,
                 max_state_bytes: None,
@@ -5162,7 +5165,7 @@ pub fn all() -> Vec<Case> {
                 loss: RobustLoss::Huber {
                     delta: HuberNorm::Tukey.default_delta(),
                 },
-                huber_norm: HuberNorm::Tukey,
+                norm: HuberNorm::Tukey,
                 huber_scale: rheon_core::HuberScale::Mad,
                 emit_scale: true,
                 refit_rows: 40,
@@ -5251,7 +5254,7 @@ fn hoeffding_tree_regressor_cfg(max_state_bytes: Option<u64>) -> HoeffdingTreeRe
         tau: 0.05,
         radius: 0.25,
         max_slots: 16,
-        min_samples_split: 5.0,
+        min_child_weight: 5.0,
         merit_preprune: true,
         max_depth: None,
         min_weight: 2.0,
@@ -5465,7 +5468,7 @@ fn ewm_moments_lag_cfg(clocked: bool, rows: Option<usize>, clock: Option<f64>) -
         min_weight: 2.0,
         clocked,
         lag_tolerance: clocked.then_some(1.0),
-        se: true,
+        emit_se: true,
         window_rows: rows,
         window_clock: clock,
         ..EwmMomentsCfg::new(decay(), terms)
@@ -5617,8 +5620,8 @@ fn realized_cfg() -> RealizedCfg {
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
-        lm_window: Some(10),
-        lm_beta: 0.95,
+        lm_window_rows: Some(10),
+        lm_confidence: 0.95,
         max_state_bytes: None,
     }
 }

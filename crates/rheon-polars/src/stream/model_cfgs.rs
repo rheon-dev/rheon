@@ -247,8 +247,8 @@ pub fn realized_cfg(
         window_rows,
         window_size,
         closed,
-        lm_window,
-        lm_beta,
+        lm_window_rows,
+        lm_confidence,
         max_state_bytes,
     } = &spec.model
     else {
@@ -261,8 +261,8 @@ pub fn realized_cfg(
         window_rows: *window_rows,
         window_clock: window_size.as_ref().map(Span::value),
         closed: closed.edge(),
-        lm_window: *lm_window,
-        lm_beta: lm_beta.unwrap_or(rheon_core::REALIZED_LM_BETA),
+        lm_window_rows: *lm_window_rows,
+        lm_confidence: lm_confidence.unwrap_or(rheon_core::REALIZED_LM_CONFIDENCE),
         max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
     })
 }
@@ -428,17 +428,36 @@ pub fn spectral_cfg(
     let ModelKind::Spectral(s) = &spec.model else {
         return Err(not_a(spec, "spectral_cfg", "spectral"));
     };
-    let scaling = match s.scaling.as_deref().unwrap_or("density") {
-        "density" => rheon_core::SpectralScaling::Density,
-        "spectrum" => rheon_core::SpectralScaling::Spectrum,
-        "lomb_scargle" => rheon_core::SpectralScaling::LombScargle,
+    let method = match s.method.as_deref().unwrap_or("dft") {
+        "dft" => rheon_core::SpectralMethod::Dft,
+        "lomb_scargle" => rheon_core::SpectralMethod::LombScargle,
         other => {
             return Err(format!(
-                "spectral: scaling must be \"density\", \"spectrum\" or \"lomb_scargle\", but \
-                 it is {other:?}. Use one of those words."
+                "spectral: method must be \"dft\" or \"lomb_scargle\", but it is {other:?}. Use \
+                 one of those words."
             ));
         }
     };
+    let scaling = match s.scaling.as_deref() {
+        None => rheon_core::SpectralScaling::Density,
+        Some("density") => rheon_core::SpectralScaling::Density,
+        Some("spectrum") => rheon_core::SpectralScaling::Spectrum,
+        Some(other) => {
+            return Err(format!(
+                "spectral: scaling must be \"density\" or \"spectrum\", but it is {other:?}. Use \
+                 one of those words."
+            ));
+        }
+    };
+    if method == rheon_core::SpectralMethod::LombScargle
+        && let Some(word) = s.scaling.as_deref()
+    {
+        return Err(format!(
+            "spectral: scaling={word:?} applies only under method=\"dft\", not \
+             method=\"lomb_scargle\": Lomb-Scargle always reports the normalized explained \
+             variance share in [0, 1]. Leave scaling out, or set method=\"dft\"."
+        ));
+    }
     let mut no = rheon_core::Refusals::new();
     let frequencies = s
         .periods
@@ -461,6 +480,7 @@ pub fn spectral_cfg(
         frequencies,
         spacing: s.spacing.as_ref().map_or(1.0, Span::value),
         decay,
+        method,
         scaling,
         detrend: s.detrend.unwrap_or(true),
         min_weight: spec.min_periods_or_default(),
@@ -1234,8 +1254,8 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
         max_state_bytes,
         params,
         means_weight,
-        covars_prior,
-        covars_weight,
+        covariance_prior,
+        covariance_weight,
     } = &spec.model
     else {
         return Err(not_a(spec, "hmm_cfg", "hmm"));
@@ -1328,8 +1348,8 @@ pub fn hmm_cfg(spec: &Spec) -> Result<HmmCfg, String> {
         max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
         params: params.clone(),
         means_weight: *means_weight,
-        covars_prior: covars_prior.as_ref().map(FloatOrList::to_vec),
-        covars_weight: *covars_weight,
+        covariance_prior: covariance_prior.as_ref().map(FloatOrList::to_vec),
+        covariance_weight: *covariance_weight,
     };
     let extras = (!extras.is_empty()).then(|| Box::new(extras));
     let learn_flag = match (*learn, params.as_deref()) {
@@ -1657,18 +1677,18 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         huber_refit_span,
         max_state_bytes,
         refit_budget: _,
-        huber_norm,
+        norm,
     } = &spec.model
     else {
         return Err(not_a(spec, "huber_model", "huber"));
     };
-    let norm = match huber_norm.as_deref() {
+    let norm = match norm.as_deref() {
         None => rheon_core::HuberNorm::Huber,
         Some(w) => rheon_core::HuberNorm::from_word(w).ok_or_else(|| {
             format!(
                 "huber: {}",
                 crate::words_refusal(
-                    "huber_norm",
+                    "norm",
                     &["huber", "tukey", "andrews", "hampel", "ramsay"],
                     w
                 )
@@ -1729,7 +1749,7 @@ pub fn huber_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         min_weight_holds_learning: false,
         refit_clock: huber_refit_span.as_ref().map(Span::value),
         max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
-        huber_norm: norm,
+        norm,
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).
@@ -1832,7 +1852,7 @@ pub fn quantile_model(spec: &Spec, decay: Decay) -> Result<AnyModel, String> {
         min_weight_holds_learning: false,
         refit_clock: quantile_refit_span.as_ref().map(Span::value),
         max_state_bytes: spec.model_max_state_bytes(*max_state_bytes),
-        huber_norm: rheon_core::HuberNorm::Huber,
+        norm: rheon_core::HuberNorm::Huber,
     };
     let mut m = Robust::new(cfg)?;
     // Each target's own threshold, for its own first solve (S9b).

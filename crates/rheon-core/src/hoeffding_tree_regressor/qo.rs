@@ -110,15 +110,15 @@ impl TargetVar {
 
 /// Variance reduction merit of splitting `pre` into `(left, right)`:
 /// `var(pre) - (W_l / W) var(left) - (W_r / W) var(right)`, or `0.0` when
-/// either side holds less than `min_samples_split` weight.
+/// either side holds less than `min_child_weight` weight.
 #[inline]
 pub(super) fn variance_reduction(
     pre: TargetVar,
     left: TargetVar,
     right: TargetVar,
-    min_samples_split: f64,
+    min_child_weight: f64,
 ) -> f64 {
-    if left.n >= min_samples_split && right.n >= min_samples_split && pre.n > 0.0 {
+    if left.n >= min_child_weight && right.n >= min_child_weight && pre.n > 0.0 {
         let mut vr = pre.var();
         vr -= (left.n / pre.n) * left.var();
         vr -= (right.n / pre.n) * right.var();
@@ -244,7 +244,7 @@ impl QoObserver {
     /// Computes exact prefix and suffix merges over the observer's own slots
     /// so `{slots <= i - 1} | {slots >= i}` is a symmetric partition with no
     /// subtraction and no inherited pre-split weight leaking onto one side.
-    pub fn best_split(&self, min_samples_split: f64) -> Option<QoSplitCandidate> {
+    pub fn best_split(&self, min_child_weight: f64) -> Option<QoSplitCandidate> {
         let m = self.slots.len();
         if m < 2 {
             return None;
@@ -268,7 +268,7 @@ impl QoObserver {
                 prev_x * 0.5 + x * 0.5
             };
             if threshold.is_finite() {
-                let merit = variance_reduction(pre_obs, left, right, min_samples_split);
+                let merit = variance_reduction(pre_obs, left, right, min_child_weight);
                 if best.is_none_or(|b| merit > b.merit) {
                     best = Some(QoSplitCandidate {
                         merit,

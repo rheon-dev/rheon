@@ -75,7 +75,7 @@ def test_the_builder_writes_what_is_given_and_reads_the_features_off_the_terms()
         features=["g", "ar"],
         kind={"skew": "standardized"},
         bias=False,
-        se=True,
+        emit_se=True,
         window_rows=100,
         max_state_bytes=1 << 20,
         half_life=50.0,
@@ -85,7 +85,7 @@ def test_the_builder_writes_what_is_given_and_reads_the_features_off_the_terms()
         "terms": {"skew": {"g": 3}},
         "kind": {"skew": "standardized"},
         "bias": False,
-        "se": True,
+        "emit_se": True,
         "window_rows": 100,
     }
     assert given["max_state_bytes"] == 1 << 20
@@ -127,7 +127,7 @@ def test_the_outputs_are_the_terms_in_order_then_their_errors_then_the_weight():
     plain = rp.spec.ewm_moments("mom", terms=terms, half_life=50.0)
     tail = ["weight_sum", "settled_frac", "withheld_reason"]
     assert rp.spec.output_fields(plain) == ["zeta", "alpha", "mid", *tail]
-    with_se = rp.spec.ewm_moments("mom", terms=terms, se=True, half_life=50.0)
+    with_se = rp.spec.ewm_moments("mom", terms=terms, emit_se=True, half_life=50.0)
     want = ["zeta", "alpha", "mid", "se_zeta", "se_alpha", "se_mid", *tail]
     assert rp.spec.output_fields(with_se) == want
     out = _fit(with_se, _frame())
@@ -380,7 +380,7 @@ def test_chunks_of_any_size_give_the_same_bits():
         "mom",
         terms={"skew": {"g": 3}, "ac": {"ar": 1, "ar@1.5": 1}},
         kind="standardized",
-        se=True,
+        emit_se=True,
         window_size=30.0,
         clock="t",
         gap_cap=50.0,

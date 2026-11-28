@@ -318,7 +318,7 @@ group = "group"
 
 [specs.model]
 type = "ewm_moments"
-se = true
+emit_se = true
 kind = {{ skew = "standardized", rho1 = "standardized" }}
 
 [specs.model.terms]

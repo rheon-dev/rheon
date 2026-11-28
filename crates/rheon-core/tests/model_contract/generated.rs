@@ -1871,7 +1871,7 @@ mod generated {
                     },
                     2 => SpectralCfg {
                         frequencies: vec![0.1, 0.2, 0.5],
-                        scaling: SpectralScaling::LombScargle,
+                        method: rheon_core::SpectralMethod::LombScargle,
                         ..spectral_cfg()
                     },
                     _ => SpectralCfg {
@@ -1989,8 +1989,8 @@ fn realized_cfg() -> RealizedCfg {
         window_rows: None,
         window_clock: None,
         closed: WindowClosed::Right,
-        lm_window: Some(8),
-        lm_beta: 0.99,
+        lm_window_rows: Some(8),
+        lm_confidence: 0.99,
         max_state_bytes: None,
     }
 }
@@ -2015,7 +2015,7 @@ fn realized_rows_cfg() -> RealizedCfg {
     RealizedCfg {
         decay: Decay::Halflife(f64::INFINITY),
         window_rows: Some(6),
-        lm_window: None,
+        lm_window_rows: None,
         ..realized_cfg()
     }
 }
@@ -2537,6 +2537,7 @@ fn spectral_cfg() -> SpectralCfg {
         frequencies: vec![0.0, 0.2, 0.5],
         spacing: 1.0,
         decay: Decay::Halflife(HALFLIFE),
+        method: rheon_core::SpectralMethod::Dft,
         scaling: SpectralScaling::Density,
         detrend: true,
         min_weight: 0.0,
@@ -3020,7 +3021,7 @@ fn hoeffding_tree_regressor_cfg() -> HoeffdingTreeRegressorCfg {
         grace_period: 30.0,
         delta: 1e-5,
         tau: 0.05,
-        min_samples_split: 5.0,
+        min_child_weight: 5.0,
         radius: 0.25,
         max_slots: 16,
         merit_preprune: true,

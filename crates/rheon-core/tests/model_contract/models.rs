@@ -228,7 +228,7 @@ fn robust_cfg(loss: RobustLoss) -> RobustCfg {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
-        huber_norm: rheon_core::HuberNorm::Huber,
+        norm: rheon_core::HuberNorm::Huber,
     }
 }
 

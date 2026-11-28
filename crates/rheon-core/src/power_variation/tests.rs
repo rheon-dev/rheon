@@ -383,8 +383,8 @@ fn normalized_terms_are_realized_measures() {
             window_rows: None,
             window_clock: None,
             closed: WindowClosed::Right,
-            lm_window: None,
-            lm_beta: crate::REALIZED_LM_BETA,
+            lm_window_rows: None,
+            lm_confidence: crate::REALIZED_LM_CONFIDENCE,
             max_state_bytes: None,
         })
         .unwrap();

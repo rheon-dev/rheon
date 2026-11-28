@@ -41,37 +41,37 @@ _MAX_INTERACTION_DEGREE = 6
 
 
 def _resolve_input(
-    col: str | pl.Expr,
+    input: str | pl.Expr,
     prefix: str | None,
     default_suffix: str,
     who: str,
 ) -> tuple[pl.Expr, str]:
-    """Validate ``col`` and ``prefix`` and return ``(float64_expr, name_prefix)``."""
-    if isinstance(col, str):
-        if not col:
+    """Validate ``input`` and ``prefix`` and return ``(float64_expr, name_prefix)``."""
+    if isinstance(input, str):
+        if not input:
             raise ValueError(
-                f"{who}: col must be a non-empty column name, but it is ''. "
+                f"{who}: input must be a non-empty column name, but it is ''. "
                 "Pass the name of a numeric column, or a Polars expression."
             )
-        expr = pl.col(col).cast(pl.Float64)
-        base_name = col
-    elif isinstance(col, pl.Expr):
-        if col.meta.has_multiple_outputs():
+        expr = pl.col(input).cast(pl.Float64)
+        base_name = input
+    elif isinstance(input, pl.Expr):
+        if input.meta.has_multiple_outputs():
             raise ValueError(
-                f"{who}: col must expand to a single column, but it has multiple outputs. "
+                f"{who}: input must expand to a single column, but it has multiple outputs. "
                 "Pass one column name or a single-column expression."
             )
         try:
-            base_name = col.meta.output_name()
+            base_name = input.meta.output_name()
         except Exception as err:  # noqa: BLE001
             raise ValueError(
-                f"{who}: col has no single output name ({err}). "
+                f"{who}: input has no single output name ({err}). "
                 "Name the expression with .alias(...) or pass prefix."
             ) from None
-        expr = col.cast(pl.Float64)
+        expr = input.cast(pl.Float64)
     else:
         raise WrongTypeError(
-            f"{who}: col must be a column name or a pl.Expr, but it is {col!r}. "
+            f"{who}: input must be a column name or a pl.Expr, but it is {input!r}. "
             "Pass a column name as a str, or a Polars expression."
         )
 
@@ -386,7 +386,7 @@ def _nullspace_qr_2rows(row0: list[float], row1: list[float]) -> list[list[float
 
 
 def bspline(
-    col: str | pl.Expr,
+    input: str | pl.Expr,
     knots: Sequence[float],
     *,
     degree: int = 3,
@@ -422,7 +422,7 @@ def bspline(
 
     .. rubric:: Parameters
 
-    ``col``
+    ``input``
         The feature to expand: a numeric column name or a single-column
         ``pl.Expr``.
     ``knots``
@@ -447,7 +447,7 @@ def bspline(
     ``prefix``
         Prefix for output column names, producing ``{prefix}_0``,
         ``{prefix}_1``, and so on. ``None`` (the default) uses ``{name}_bs``,
-        where ``name`` is ``col`` or its output name.
+        where ``name`` is ``input`` or its output name.
 
     .. rubric:: Returns
 
@@ -458,7 +458,7 @@ def bspline(
     .. rubric:: Raises
 
     ``TypeError``
-        ``col`` is not a ``str`` or ``pl.Expr``; ``knots`` is not a sequence
+        ``input`` is not a ``str`` or ``pl.Expr``; ``knots`` is not a sequence
         of real numbers; ``degree`` is not an int; ``include_bias`` is not a
         bool; ``extrapolate`` is not a ``str``; or ``prefix`` is neither a
         ``str`` nor ``None``.
@@ -467,7 +467,7 @@ def bspline(
         not strictly increasing; ``degree`` is outside 0 to 10; ``degree=0``
         with two knots and ``include_bias=False`` (which leaves no basis
         column); ``extrapolate`` is not one of ``"constant"``, ``"linear"`` or
-        ``"null"``; or ``col`` or ``prefix`` is empty.
+        ``"null"``; or ``input`` or ``prefix`` is empty.
 
     .. rubric:: Examples
 
@@ -492,7 +492,7 @@ def bspline(
     - :func:`interactions`, polynomial interaction products of columns.
     """
     who = "rp.ops.bspline"
-    x, out_prefix = _resolve_input(col, prefix, "bs", who)
+    x, out_prefix = _resolve_input(input, prefix, "bs", who)
     knot_vals = _validate_knots(knots, min_count=2, who=who)
     deg = _check_int_range(degree, "degree", 0, _MAX_DEGREE, who)
     bias = _check_bool(include_bias, "include_bias", who)
@@ -540,7 +540,7 @@ def bspline(
 
 
 def natural_spline(
-    col: str | pl.Expr,
+    input: str | pl.Expr,
     knots: Sequence[float],
     *,
     include_bias: bool = False,
@@ -572,7 +572,7 @@ def natural_spline(
 
     .. rubric:: Parameters
 
-    ``col``
+    ``input``
         The feature to expand: a numeric column name or a single-column
         ``pl.Expr``.
     ``knots``
@@ -586,7 +586,7 @@ def natural_spline(
     ``prefix``
         Prefix for output column names, producing ``{prefix}_0``,
         ``{prefix}_1``, and so on. ``None`` (the default) uses ``{name}_ns``,
-        where ``name`` is ``col`` or its output name.
+        where ``name`` is ``input`` or its output name.
 
     .. rubric:: Returns
 
@@ -597,12 +597,12 @@ def natural_spline(
     .. rubric:: Raises
 
     ``TypeError``
-        ``col`` is not a ``str`` or ``pl.Expr``; ``knots`` is not a sequence
+        ``input`` is not a ``str`` or ``pl.Expr``; ``knots`` is not a sequence
         of real numbers; ``include_bias`` is not a bool; or ``prefix`` is
         neither a ``str`` nor ``None``.
     ``ValueError``
         ``knots`` has fewer than two values, holds a non-finite value, or is
-        not strictly increasing; or ``col`` or ``prefix`` is empty.
+        not strictly increasing; or ``input`` or ``prefix`` is empty.
 
     .. rubric:: Examples
 
@@ -625,7 +625,7 @@ def natural_spline(
     - :func:`hinge`, piecewise-linear hinge terms at given knots.
     """
     who = "rp.ops.natural_spline"
-    x, out_prefix = _resolve_input(col, prefix, "ns", who)
+    x, out_prefix = _resolve_input(input, prefix, "ns", who)
     knot_vals = _validate_knots(knots, min_count=2, who=who)
     bias = _check_bool(include_bias, "include_bias", who)
 
@@ -690,7 +690,7 @@ def natural_spline(
 
 
 def hinge(
-    col: str | pl.Expr,
+    input: str | pl.Expr,
     knots: Sequence[float],
     *,
     prefix: str | None = None,
@@ -698,8 +698,8 @@ def hinge(
     """Piecewise-linear hinge terms ``max(0, x - k)`` at given knots.
 
     Use it to let a linear model change slope at known thresholds without
-    duplicating the linear column ``col`` itself. Only the hinge terms
-    ``(x - k)_+`` are emitted; keep ``col`` in the model's features if you also
+    duplicating the linear column ``input`` itself. Only the hinge terms
+    ``(x - k)_+`` are emitted; keep ``input`` in the model's features if you also
     want the baseline slope below the first knot. Each term depends only on its
     own row's value, so it needs no state and streams natively.
 
@@ -709,7 +709,7 @@ def hinge(
 
     .. rubric:: Parameters
 
-    ``col``
+    ``input``
         The feature to expand: a numeric column name or a single-column
         ``pl.Expr``.
     ``knots``
@@ -717,7 +717,7 @@ def hinge(
     ``prefix``
         Prefix for output column names, producing ``{prefix}_0``,
         ``{prefix}_1``, and so on. ``None`` (the default) uses ``{name}_hinge``,
-        where ``name`` is ``col`` or its output name.
+        where ``name`` is ``input`` or its output name.
 
     .. rubric:: Returns
 
@@ -727,11 +727,11 @@ def hinge(
     .. rubric:: Raises
 
     ``TypeError``
-        ``col`` is not a ``str`` or ``pl.Expr``; ``knots`` is not a sequence
+        ``input`` is not a ``str`` or ``pl.Expr``; ``knots`` is not a sequence
         of real numbers; or ``prefix`` is neither a ``str`` nor ``None``.
     ``ValueError``
         ``knots`` is empty, holds a non-finite value, or is not strictly
-        increasing; or ``col`` or ``prefix`` is empty.
+        increasing; or ``input`` or ``prefix`` is empty.
 
     .. rubric:: Examples
 
@@ -754,7 +754,7 @@ def hinge(
     - :func:`natural_spline`, natural cubic spline basis with linear tails.
     """
     who = "rp.ops.hinge"
-    x, out_prefix = _resolve_input(col, prefix, "hinge", who)
+    x, out_prefix = _resolve_input(input, prefix, "hinge", who)
     knot_vals = _validate_knots(knots, min_count=1, who=who)
     return [
         (x - k).clip(lower_bound=0.0).alias(f"{out_prefix}_{i}") for i, k in enumerate(knot_vals)
@@ -766,7 +766,7 @@ def interactions(
     *,
     degree: int = 2,
     include_self: bool = False,
-    sep: str = "_x_",
+    separator: str = "_x_",
 ) -> list[pl.Expr]:
     """Polynomial interaction products of columns up to a given degree.
 
@@ -791,26 +791,26 @@ def interactions(
     ``include_self``
         Whether a column may multiply itself (such as ``a_x_a`` for ``a^2``).
         Default ``False`` emits only cross-column products.
-    ``sep``
+    ``separator``
         Separator joined between the factor names in each output column name.
         Default ``"_x_"`` (for example ``"a_x_b"``).
 
     .. rubric:: Returns
 
     A list of ``pl.Expr``, one per product term, named by joining the factor
-    names with ``sep``. Null or NaN factors propagate to their products.
+    names with ``separator``. Null or NaN factors propagate to their products.
 
     .. rubric:: Raises
 
     ``TypeError``
         ``cols`` is a string or not a sequence, or holds an item that is
         neither a ``str`` nor a ``pl.Expr``; ``degree`` is not an int;
-        ``include_self`` is not a bool; or ``sep`` is not a ``str``.
+        ``include_self`` is not a bool; or ``separator`` is not a ``str``.
     ``ValueError``
         ``cols`` has too few items for ``degree`` and ``include_self``, has an
         empty or multi-output entry, or has duplicate factor names; ``degree``
-        is outside 2 to 6; ``sep`` is empty; or two generated output names
-        collide under ``sep``.
+        is outside 2 to 6; ``separator`` is empty; or two generated output names
+        collide under ``separator``.
 
     .. rubric:: Examples
 
@@ -840,13 +840,14 @@ def interactions(
         )
     deg = _check_int_range(degree, "degree", 2, _MAX_INTERACTION_DEGREE, who)
     self_prod = _check_bool(include_self, "include_self", who)
-    if not isinstance(sep, str):
+    if not isinstance(separator, str):
         raise WrongTypeError(
-            f"{who}: sep must be a str, but it is {sep!r}. Pass a non-empty string separator."
+            f"{who}: separator must be a str, but it is {separator!r}. "
+            "Pass a non-empty string separator."
         )
-    if not sep:
+    if not separator:
         raise ValueError(
-            f"{who}: sep must be a non-empty string, but it is ''. "
+            f"{who}: separator must be a non-empty string, but it is ''. "
             'Pass a non-empty separator such as "_x_".'
         )
 
@@ -905,10 +906,11 @@ def interactions(
     seen_outputs: set[str] = set()
     for order in range(2, deg + 1):
         for combo in combiner(items, order):
-            out_name = sep.join(name for name, _ in combo)
+            out_name = separator.join(name for name, _ in combo)
             if out_name in seen_outputs:
                 raise ValueError(
-                    f"{who}: output column name {out_name!r} collides under sep={sep!r}. "
+                    f"{who}: output column name {out_name!r} collides under "
+                    f"separator={separator!r}. "
                     "Choose a separator that does not appear inside the column names."
                 )
             seen_outputs.add(out_name)

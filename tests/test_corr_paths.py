@@ -132,8 +132,8 @@ def test_the_epps_inversion_reads_a_closed_row_as_the_gram_it_closed():
     bank.fit_predict(closing)
     row = bank.closed_groups()
     assert row.height == 1 and row["group"].item() == "a"
-    want = corr.epps_invert(open_gram, L=3)
-    got = corr.epps_invert(row, L=3)
+    want = corr.epps_invert(open_gram, lags=3)
+    got = corr.epps_invert(row, lags=3)
     np.testing.assert_array_equal(got, want)
     assert got[0, 1] != rp.gram.correlation(open_gram)[0, 1], "the lags moved it"
 

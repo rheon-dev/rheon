@@ -3181,7 +3181,7 @@ class ModelBank:
             "irf", "orth_irf", "fevd", "stability", "mean", "order", "causality"
         ] = "irf",
         periods: int = 10,
-        stderr: bool = False,
+        se: bool = False,
         caused: str | Iterable[str] | None = None,
         causing: str | Iterable[str] | None = None,
         kind: Literal["f", "wald", "ssr_f", "ssr_chi2", "lr"] | None = None,
@@ -3216,9 +3216,9 @@ class ModelBank:
             The periods of the impulse responses (``0`` to ``periods``) and
             the horizons of the decomposition (``1`` to ``periods``).
             Default 10.
-        ``stderr``
+        ``se``
             ``True`` adds each impulse response's asymptotic standard
-            error. Default ``False``.
+            error (column ``stderr``). Default ``False``.
         ``caused``, ``causing``, ``kind``
             For ``table="causality"``: the target columns whose equations
             the test reads (a name or a list; required), those whose lags
@@ -3237,7 +3237,7 @@ class ModelBank:
             ``period``, ``response``, ``impulse``, ``value``: ``Φ_i``'s entry,
             the response of ``response`` ``period`` rows after a unit shock
             to ``impulse``, statsmodels' ``irf(periods).irfs``. With
-            ``stderr``, ``stderr``, the square root of the diagonal of
+            ``se``, ``stderr``, the square root of the diagonal of
             ``Cov(vec Φ_i) = G_i Σ_α G_iᵀ``, its ``irf().stderr()``.
         ``table="orth_irf"``
             The same for ``Θ_i = Φ_i P``, the response to a shock of one
@@ -3350,7 +3350,7 @@ class ModelBank:
             _group_keys(group, who),
             table,
             periods,
-            stderr,
+            se,
             as_list(caused),
             as_list(causing),
             kind,

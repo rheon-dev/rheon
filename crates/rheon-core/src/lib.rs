@@ -338,7 +338,7 @@ pub use rcov::{
     psi1, psi2,
 };
 pub use realized::{
-    BNS_THETA, BV_SCALE, DEFAULT_LM_BETA as REALIZED_LM_BETA,
+    BNS_THETA, BV_SCALE, DEFAULT_LM_CONFIDENCE as REALIZED_LM_CONFIDENCE,
     OUTPUTS_PER_TARGET as REALIZED_OUTPUTS, Realized, RealizedCfg, TQ_SCALE, TV_SCALE,
 };
 pub use refusals::{Refusals, STOPPED, STOPPED_MANY};
@@ -364,7 +364,7 @@ pub use spec_ext::{
     Spiegelhalter, WhiteTest,
 };
 pub use specification::Specification;
-pub use spectral::{MAX_FREQUENCIES, Spectral, SpectralCfg, SpectralScaling};
+pub use spectral::{MAX_FREQUENCIES, Spectral, SpectralCfg, SpectralMethod, SpectralScaling};
 pub use stats::{
     EW_QUANTILE_ALPHA, EwAutoCorr, EwQuantile, HitTest, MAX_BAND_OCTAVES, SlotMetrics,
 };

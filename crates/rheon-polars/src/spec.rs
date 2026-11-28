@@ -423,13 +423,13 @@ pub enum ModelKind {
         ukf_rule: Option<String>,
         /// Merwe UKF spread `α > 0` (default `1.0`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        alpha: Option<f64>,
+        ukf_alpha: Option<f64>,
         /// Merwe UKF distribution parameter `β` (default `2.0`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        beta: Option<f64>,
+        ukf_beta: Option<f64>,
         /// Merwe UKF secondary scaling `κ` (default `0.0`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        kappa: Option<f64>,
+        ukf_kappa: Option<f64>,
         /// UKF observation noise rule (`"expected"` default, `"plugin"`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ukf_noise: Option<String>,
@@ -518,7 +518,7 @@ pub enum ModelKind {
         refit_budget: Option<Num>,
         /// M-estimator norm: "huber", "tukey", "andrews", "hampel", or "ramsay".
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        huber_norm: Option<String>,
+        norm: Option<String>,
     },
     /// Quantile regression at level `quantile` (docs/PLAN.md §4.5).
     Quantile {
@@ -1418,10 +1418,10 @@ pub enum ModelKind {
         means_weight: Option<f64>,
         /// Conjugate covariance prior.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        covars_prior: Option<FloatOrList>,
+        covariance_prior: Option<FloatOrList>,
         /// Conjugate covariance prior weight.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        covars_weight: Option<f64>,
+        covariance_weight: Option<f64>,
     },
     /// Has the correlation structure changed? (docs/ENHANCEMENTS.md E59)
     ///
@@ -1900,11 +1900,11 @@ pub enum ModelKind {
         /// it is read from the estimators' own window or decay. Skipped when
         /// absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        lm_window: Option<usize>,
+        lm_window_rows: Option<usize>,
         /// The confidence of Lee and Mykland's flag, above 0 and below 1;
         /// absent is 0.99. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        lm_beta: Option<f64>,
+        lm_confidence: Option<f64>,
         /// The bytes a group's state may hold, a window's rows included:
         /// `window_rows` is checked against it here, `window_size` as the
         /// rows go in. Default 256 KB, at most 64 MiB. Skipped when absent.
@@ -2043,7 +2043,7 @@ pub enum ModelKind {
         /// Emit each term's standard error, `se_<term>`, after the terms.
         /// Absent is false. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        se: Option<bool>,
+        emit_se: Option<bool>,
         /// How far before `t - k` the as-of row of a lag `k` on a clock may
         /// sit and still pair: clock units, or a duration on a temporal
         /// clock. Absent is each lag's own length; refused without a
@@ -2220,8 +2220,12 @@ pub struct SpectralSpec {
     /// The clock units between rows, `1/fs`; absent is 1.
     #[serde(default)]
     pub spacing: Option<Span>,
-    /// `"density"` (the default, scipy's), `"spectrum"` or
-    /// `"lomb_scargle"`, the generalised Lomb-Scargle power.
+    /// `"dft"` (the default) or `"lomb_scargle"`, the generalised Lomb-Scargle
+    /// periodogram.
+    #[serde(default)]
+    pub method: Option<String>,
+    /// `"density"` (the default, scipy's) or `"spectrum"`. Applies only under
+    /// `method="dft"`.
     #[serde(default)]
     pub scaling: Option<String>,
     /// Remove the weighted mean before the transform; absent is true.
@@ -2732,13 +2736,13 @@ pub struct Spec {
     pub feature_health_half_life: Option<Span>,
     /// Total positive-weight window size for standalone per-feature two-sample
     /// KS health (`ks_stat_<feature>`, `ks_p_<feature>`). Paired with
-    /// `feature_ks_recent`; skipped when absent.
+    /// `feature_ks_recent_rows`; skipped when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub feature_ks_window: Option<usize>,
+    pub feature_ks_window_rows: Option<usize>,
     /// Recent sub-window size for standalone per-feature two-sample KS health.
-    /// Paired with `feature_ks_window`; skipped when absent.
+    /// Paired with `feature_ks_window_rows`; skipped when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub feature_ks_recent: Option<usize>,
+    pub feature_ks_recent_rows: Option<usize>,
     /// Emit `pred_<target>__averaged`: an exponentially weighted average of
     /// every slot's prediction, with weights `softmax(−eta · σ²/σ²_best)`,
     /// each slot's EW squared error as a ratio to the best slot's
@@ -2929,7 +2933,7 @@ impl Spec {
 
     /// Whether standalone windowed two-sample KS feature health is enabled.
     pub fn has_feature_ks(&self) -> bool {
-        self.feature_ks_window.is_some() && self.feature_ks_recent.is_some()
+        self.feature_ks_window_rows.is_some() && self.feature_ks_recent_rows.is_some()
     }
 
     /// The labels of a regression's forecasts at horizons (`holt`,

@@ -514,7 +514,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         "realized",
         dict(
             targets=["y", "z"],
-            lm_window=30,
+            lm_window_rows=30,
             group="g",
             half_life=25.0,
             emit_clocks=True,
@@ -549,7 +549,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
         dict(
             terms={"m3": {"x0": 3}, "kurt": {"x0": 4}, "ac1": {"x0": 1, "x1@1": 1}},
             kind={"kurt": "standardized"},
-            se=True,
+            emit_se=True,
             group="g",
             half_life=25.0,
             emit_clocks=True,

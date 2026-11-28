@@ -21,8 +21,8 @@ def realized(
     window_rows: int | None = None,
     window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
-    lm_window: int | None = None,
-    lm_beta: float = 0.99,
+    lm_window_rows: int | None = None,
+    lm_confidence: float = 0.99,
     **common: Unpack[CommonKwargs],
 ) -> dict[str, Any]:
     """Realized volatility and the jump tests on it, for each target, one
@@ -78,7 +78,7 @@ def realized(
         Polars' words (``rolling_sum_by(closed=)``): ``"right"``, the
         default, drops it, so the window is ``(T - window_size, T]``;
         ``"both"`` keeps it, and is refused without ``window_size``.
-    ``lm_window``
+    ``lm_window_rows``
         Lee and Mykland's window ``K``, a count of returns: the volatility
         of a row's return is read from the target's ``K - 1`` returns
         before it alone, their ``K - 2`` products, whatever the window or
@@ -89,12 +89,12 @@ def realized(
         than 3 returns holds none. It is no warm-up: before ``K - 1``
         returns the mean is of the products there are. Default none: the
         volatility is read from the measures' own window or decay.
-    ``lm_beta``
+    ``lm_confidence``
         The confidence of Lee and Mykland's jump flag, above 0 and below 1.
         Default 0.99.
     ``max_state_bytes``
         The bytes a group's state may hold, a window's rows included.
-        ``window_rows`` and ``lm_window`` fix the size, so it is checked
+        ``window_rows`` and ``lm_window_rows`` fix the size, so it is checked
         here. A ``window_size`` window holds the rows the span has, so it is
         checked as the rows go in: the first row to take a group past half
         of it raises a warning, once for the group, and the row that would
@@ -130,7 +130,7 @@ def realized(
         times it is a standard normal without a jump, a z-score. Null where
         the row has no return or the volatility is 0.
     ``lm_jump_<t>``
-        Per target: whether ``lm`` is a jump at confidence ``lm_beta``, by
+        Per target: whether ``lm`` is a jump at confidence ``lm_confidence``, by
         the paper's test (below). Null where ``lm`` is.
     ``weight_sum``
         The weight the model has accumulated before the row and before the
@@ -144,8 +144,8 @@ def realized(
     ``features``, which this model does not take; and ``ValueError`` naming
     the problem for a window beside a decay, ``window_rows`` of 0 or past
     ``max_state_bytes``, ``window_size`` not finite or not above 0, both
-    windows, ``closed="both"`` without ``window_size``, ``lm_window`` below
-    3, ``lm_beta`` not in ``(0, 1)``, and a ``max_state_bytes`` of 0 or past
+    windows, ``closed="both"`` without ``window_size``, ``lm_window_rows`` below
+    3, ``lm_confidence`` not in ``(0, 1)``, and a ``max_state_bytes`` of 0 or past
     64 MiB.
 
     .. rubric:: The update
@@ -180,9 +180,9 @@ def realized(
 
         C_n = sqrt(2 ln n)/c - (ln π + ln ln n) / (2 c sqrt(2 ln n))
         S_n = 1 / (c sqrt(2 ln n))
-        lm_jump = (|lm| - C_n) / S_n > -ln(-ln lm_beta)
+        lm_jump = (|lm| - C_n) / S_n > -ln(-ln lm_confidence)
 
-    ``lm_beta = 0.99`` is a test at 1%, ``-ln(-ln 0.99) = 4.6001``. ``n``
+    ``lm_confidence = 0.99`` is a test at 1%, ``-ln(-ln 0.99) = 4.6001``. ``n``
     is the target's own count of returns, the ``n`` of the other measures,
     so the threshold is that of the stretch they are measured over; the
     flag is null where ``n`` is 1 or less, where ``C_n`` has no value.
@@ -205,7 +205,7 @@ def realized(
         r[1_000] += 0.006
         pl.DataFrame({"r": r}).write_parquet("returns.parquet")
 
-        model = rp.spec.realized("v", targets=["r"], half_life=float("inf"), lm_window=200)
+        model = rp.spec.realized("v", targets=["r"], half_life=float("inf"), lm_window_rows=200)
         bank = rp.ModelBank([model])
         out = bank.fit_predict(pl.read_parquet("returns.parquet")).unnest("v")
         print(f"bns over the day: {out['bns_r'][-1]:.1f}")
@@ -239,8 +239,8 @@ def realized(
         model["window_size"] = window_size
     if closed != "right":
         model["closed"] = closed
-    if lm_window is not None:
-        model["lm_window"] = lm_window
-    if lm_beta != 0.99:
-        model["lm_beta"] = lm_beta
+    if lm_window_rows is not None:
+        model["lm_window_rows"] = lm_window_rows
+    if lm_confidence != 0.99:
+        model["lm_confidence"] = lm_confidence
     return _common(name, model, targets=targets, features=[], **common)

@@ -410,7 +410,7 @@ fn a_standardized_huber_keeps_the_slope_it_learned() {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
-        huber_norm: rheon_core::HuberNorm::Huber,
+        norm: rheon_core::HuberNorm::Huber,
     };
     holds(
         "huber",
@@ -718,7 +718,7 @@ fn a_held_target_leaves_no_slope_on_a_moving_feature() {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
-        huber_norm: rheon_core::HuberNorm::Huber,
+        norm: rheon_core::HuberNorm::Huber,
     };
     slopes_decay(
         "huber",
@@ -962,7 +962,7 @@ fn a_state_saved_mid_hold_resumes_to_the_bit() {
             min_weight_holds_learning: false,
             refit_clock: None,
             max_state_bytes: None,
-            huber_norm: rheon_core::HuberNorm::Huber,
+            norm: rheon_core::HuberNorm::Huber,
         })
         .unwrap()
     });
@@ -1204,7 +1204,7 @@ fn a_row_of_no_weight_moves_no_mean() {
             min_weight_holds_learning: false,
             refit_clock: None,
             max_state_bytes: None,
-            huber_norm: rheon_core::HuberNorm::Huber,
+            norm: rheon_core::HuberNorm::Huber,
         })
         .unwrap()
     });
@@ -1807,7 +1807,7 @@ fn quantile_cfg() -> RobustCfg {
         min_weight_holds_learning: false,
         refit_clock: None,
         max_state_bytes: None,
-        huber_norm: rheon_core::HuberNorm::Huber,
+        norm: rheon_core::HuberNorm::Huber,
     }
 }
 

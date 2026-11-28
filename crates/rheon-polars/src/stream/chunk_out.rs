@@ -54,8 +54,8 @@ pub struct ChunkOut {
     /// feature, not per slot: `n_models * 2 * k * n_rows`, the spread
     /// ratios' block and then the mean shifts' (task 221 (g)).
     pub health: Vec<f64>,
-    /// Windowed two-sample KS feature health under `feature_ks_window` /
-    /// `feature_ks_recent`, per instance and feature: `n_models * 2 * k * n_rows`,
+    /// Windowed two-sample KS feature health under `feature_ks_window_rows` /
+    /// `feature_ks_recent_rows`, per instance and feature: `n_models * 2 * k * n_rows`,
     /// the statistics' block and then the p-values'.
     pub health_ks: Vec<f64>,
     /// Model-major: `n_models * n_levels * n_slots * n_rows`.

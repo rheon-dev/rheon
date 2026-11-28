@@ -399,7 +399,7 @@ def describe_api(cli: Path | None = None) -> str:
         ("hawkes", dict(targets=["y", "z"], kernel_decays=[1.0, 5.0], half_life=100.0)),
         ("garch", dict(targets=["y", "z"], vol="gjr", dist="t", forecast_rows=[3])),
         ("dcc", dict(targets=["y", "z", "w"], asymmetric=True, half_life=float("inf"))),
-        ("realized", dict(targets=["y", "z"], half_life=100.0, lm_window=30)),
+        ("realized", dict(targets=["y", "z"], half_life=100.0, lm_window_rows=30)),
         ("pca", dict(features=["x0", "x1", "x2"], n_components=2, half_life=100.0)),
         (
             "power_variation",
@@ -451,7 +451,7 @@ def describe_api(cli: Path | None = None) -> str:
             dict(
                 terms={"skew": {"x0": 3}, "co": {"x0": 1, "x1": 1}, "ac1": {"x0": 1, "x0@1": 1}},
                 kind={"skew": "standardized"},
-                se=True,
+                emit_se=True,
                 half_life=100.0,
             ),
         ),
@@ -630,7 +630,7 @@ RESOLVED_VARIANTS: list[tuple[str, dict[str, object]]] = [
     ),
     ("realized", {"half_life": float("inf"), "window_rows": 50}),
     ("realized", {"half_life": float("inf"), "window_size": 30.0, "closed": "both"}),
-    ("ewm_moments", {"window_rows": 50, "se": True}),
+    ("ewm_moments", {"window_rows": 50, "emit_se": True}),
     ("bandit", {"policy": "lints"}),
     ("bandit", {"policy": "eps_greedy"}),
     ("random_cut_forest", {"shingle_size": 4}),
@@ -1056,6 +1056,7 @@ ENUM_PROBES: list[
     ),
     ("ewm_moments.kind", "ewm_moments", {}, "model.kind", "word"),
     ("ar.select", "ar", {"lags": 3}, "model.select", "word"),
+    ("spectral.method", "spectral", {"periods": [8.0]}, "model.method", "word"),
     ("spectral.scaling", "spectral", {"periods": [8.0]}, "model.scaling", "word"),
     (
         "spectral.closed",
@@ -1123,7 +1124,7 @@ ENUM_PROBES: list[
     ("ftrl.loss", "ftrl", {}, "model.loss", "word"),
     ("hmm.covariance_type", "hmm", {}, "model.covariance_type", "word"),
     ("hmm.init", "hmm", {}, "model.init", "word"),
-    ("huber.huber_norm", "huber", {}, "model.huber_norm", "word"),
+    ("huber.norm", "huber", {}, "model.norm", "word"),
     ("huber.huber_scale", "huber", {}, "model.huber_scale", "word"),
     ("huber.ridge_scale", "huber", {}, "model.ridge_scale", "word"),
     ("kalman.covariance_form", "kalman", {}, "model.covariance_form", "word"),

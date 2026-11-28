@@ -95,7 +95,7 @@ def _check_stl(settings: dict, w: int, lag: int, closed: str, every: int | None)
     xs = _series(w + 40, seed=w + lag, periods=(settings["period"],))
     comps = ("trend", "seasonal", "resid")
     exprs = [
-        rp.ops.stl("x", component=c, window=w, lag=lag, closed=closed, **settings).alias(c)
+        rp.ops.stl("x", component=c, window_rows=w, lag=lag, closed=closed, **settings).alias(c)
         for c in comps
     ]
     out = _run(xs, *exprs)
@@ -134,7 +134,7 @@ MSTL_CASES = [
 
 def _check_mstl(periods, windows, w, lag, closed, every: int | None) -> None:
     xs = _series(w + 30, seed=w, periods=periods)
-    common = {"periods": list(periods), "windows": windows, "window": w, "lag": lag}
+    common = {"periods": list(periods), "windows": windows, "window_rows": w, "lag": lag}
     exprs = [
         rp.ops.mstl("x", component="trend", closed=closed, **common).alias("trend"),
         rp.ops.mstl("x", component="resid", closed=closed, **common).alias("resid"),
@@ -177,7 +177,7 @@ def test_groups_and_nulls_each_decompose_their_learned_rows():
     groups = ["a" if k % 3 else "b" for k in range(n)]
     frame = pl.DataFrame({"t": np.arange(n, dtype=np.float64), "x": xs, "g": groups})
     frame = frame.with_columns(pl.col("x").fill_nan(None))
-    e = rp.ops.stl("x", period=4, window=20, lag=3).alias("trend")
+    e = rp.ops.stl("x", period=4, window_rows=20, lag=3).alias("trend")
     out = rp.stream.with_windows(frame, e, clock="t", gap_cap=1e9, group="g")
     learned: dict[str, list[float]] = {"a": [], "b": []}
     checked = 0
@@ -200,7 +200,7 @@ def test_groups_and_nulls_each_decompose_their_learned_rows():
 
 def test_left_reads_no_row_at_or_after_its_own():
     xs = _series(90, seed=5)
-    e = rp.ops.stl("x", period=4, window=24, lag=2).alias("v")
+    e = rp.ops.stl("x", period=4, window_rows=24, lag=2).alias("v")
     base = _run(xs, e)["v"].to_list()
     for t in (40, 70):
         changed = xs.copy()
@@ -249,9 +249,9 @@ def test_refusals_name_the_operator_and_the_setting():
         rp.ops.mstl("x", periods=[4, 6], windows=[7])
     for expr, words in [
         (rp.ops.stl("x", period=4, seasonal=6), "seasonal"),
-        (rp.ops.stl("x", period=4, window=7), "fewer than two periods"),
-        (rp.ops.mstl("x", periods=[4, 6], window=12), "half the window"),
-        (rp.ops.stl("x", period=24, window=40000), "320024 bytes"),
+        (rp.ops.stl("x", period=4, window_rows=7), "fewer than two periods"),
+        (rp.ops.mstl("x", periods=[4, 6], window_rows=12), "half the window"),
+        (rp.ops.stl("x", period=24, window_rows=40000), "320024 bytes"),
     ]:
         with pytest.raises(Exception, match=words):
             _run(xs, expr.alias("v"))

@@ -72,24 +72,24 @@ pub struct PyClassMetrics {
 impl PyClassMetrics {
     #[new]
     #[pyo3(signature = (
-        n_bins = DEFAULT_CLASS_METRICS_BINS,
+        bins = DEFAULT_CLASS_METRICS_BINS,
         compression = DEFAULT_CLASS_METRICS_COMPRESSION,
         max_state_bytes = None,
         bins_only = false,
     ))]
     fn new(
-        n_bins: usize,
+        bins: usize,
         compression: f64,
         max_state_bytes: Option<u64>,
         bins_only: bool,
     ) -> PyResult<Self> {
         let inner = if bins_only {
             Inner::BinsOnly(
-                ReliabilityBins::new(n_bins, max_state_bytes).map_err(PyValueError::new_err)?,
+                ReliabilityBins::new(bins, max_state_bytes).map_err(PyValueError::new_err)?,
             )
         } else {
             Inner::Full(Box::new(
-                ClassMetrics::new(n_bins, compression, max_state_bytes)
+                ClassMetrics::new(bins, compression, max_state_bytes)
                     .map_err(PyValueError::new_err)?,
             ))
         };

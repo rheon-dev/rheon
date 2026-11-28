@@ -151,7 +151,7 @@ the docs set it:
 
 | the switch | where the docs show it |
 |---|---|
-| the diagnostics: `emit_sigma`, `emit_zscore`, `emit_selected`, `emit_averaged`, `emit_drift`, `emit_metrics` (boolean or list of score names, with `metric_quantiles`), `emit_autocorr`, `resid_quantiles`, `conformal` (scalar or list of levels, with `conformal_symmetric`), `emit_conformal_p`, `emit_calibration`, `emit_spiegelhalter` (logistic models), `emit_breaks`, `emit_specification`, `emit_arch_lm`, `emit_white`, `emit_tails`, `emit_influence`, `emit_cooks_distance` and `emit_dfbetas` (`ewridge`'s, `rls`'s and `kalman`'s), `emit_feature_health`, and `feature_ks_window` / `feature_ks_recent` (not `holt`'s, which has no features) | [Is the model working?](DIAGNOSTICS.md), for the models that predict a target. `emit_metrics`' `hit_rate_<t>` is null throughout on an `sgd` fit with `loss="poisson"`, whose rate and count have no sign to hit |
+| the diagnostics: `emit_sigma`, `emit_zscore`, `emit_selected`, `emit_averaged`, `emit_drift`, `emit_metrics` (boolean or list of score names, with `metric_quantiles`), `emit_autocorr`, `resid_quantiles`, `conformal` (scalar or list of levels, with `conformal_symmetric`), `emit_conformal_p`, `emit_calibration`, `emit_spiegelhalter` (logistic models), `emit_breaks`, `emit_specification`, `emit_arch_lm`, `emit_white`, `emit_tails`, `emit_influence`, `emit_cooks_distance` and `emit_dfbetas` (`ewridge`'s, `rls`'s and `kalman`'s), `emit_feature_health`, and `feature_ks_window_rows` / `feature_ks_recent_rows` (not `holt`'s, which has no features) | [Is the model working?](DIAGNOSTICS.md), for the models that predict a target. `emit_metrics`' `hit_rate_<t>` is null throughout on an `sgd` fit with `loss="poisson"`, whose rate and count have no sign to hit |
 | `emit_error_inflation` and `emit_se_coef`, `ewridge`'s, `rls`'s and `kalman`'s | [Warm-up gates](MODELS.md#warm-up-gates) |
 | `emit_robust_se` (with optional `robust_se_types` for `hc0` to `hc3`), `ewridge`'s and `rls`'s | [Can its t be trusted?](DIAGNOSTICS.md#can-its-t-be-trusted) |
 | `emit_clocks`, every model's | [Learn targets known late](how-to/learn-targets-known-late.md#check-that-it-worked), and the table of its two fields after this one |
@@ -449,7 +449,7 @@ The fields of `rp.spec.ewm_moments("m", features=["x0"], half_life=50.0, terms={
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |
 
-Under `se=True`, it also writes:
+Under `emit_se=True`, it also writes:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -578,7 +578,7 @@ Under `margins="garch"`, it also writes:
 
 ## `realized`
 
-The fields of `rp.spec.realized("m", targets=["y"], half_life=50.0, lm_window=30)`:
+The fields of `rp.spec.realized("m", targets=["y"], half_life=50.0, lm_window_rows=30)`:
 
 | field | dtype | what it holds | also null |
 |---|---|---|---|
@@ -588,7 +588,7 @@ The fields of `rp.spec.realized("m", targets=["y"], half_life=50.0, lm_window=30
 | `tq_y` | `f64` | the tripower quarticity of `<t>`'s returns before this row | while withheld |
 | `bns_y` | `f64` | Barndorff-Nielsen and Shephard's adjusted ratio test of `<t>`'s returns before this row: a standard normal without jumps, large and positive with them | while withheld, and where `rv_<t>` or `bv_<t>` is 0 |
 | `lm_y` | `f64` | Lee and Mykland's statistic of this row's `<t>`: the return over the volatility of the returns before it; `sqrt(2/π)` times it is a standard normal without a jump | while withheld, where the row has no `<t>`, and where the volatility of the returns before it is 0 |
-| `lm_jump_y` | `bool` | whether `lm_<t>` is a jump at confidence `lm_beta`, by Lee and Mykland's test | where `lm_<t>` is, and where the count of returns is 1 or less |
+| `lm_jump_y` | `bool` | whether `lm_<t>` is a jump at confidence `lm_confidence`, by Lee and Mykland's test | where `lm_<t>` is, and where the count of returns is 1 or less |
 | `weight_sum` | `f64` | accumulated weight before the model learns this row, and before its own decay ([shared field](#fields-most-models-write)) | never |
 | `settled_frac` | `f64` | how far the model had come toward its steady state under decay before this row ([shared field](#fields-most-models-write)) | where nothing decays |
 | `withheld_reason` | `enum` | why the row's predictions are null ([shared field](#fields-most-models-write)) | where nothing was withheld |

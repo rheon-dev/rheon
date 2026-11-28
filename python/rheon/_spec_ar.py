@@ -255,7 +255,8 @@ def spectral(
     targets: TargetList,
     periods: list[float | Duration],
     spacing: float | Duration | None = None,
-    scaling: Literal["density", "spectrum", "lomb_scargle"] = "density",
+    method: Literal["dft", "lomb_scargle"] = "dft",
+    scaling: Literal["density", "spectrum"] | None = None,
     detrend: bool = True,
     window_size: float | Duration | None = None,
     closed: Literal["right", "both"] = "right",
@@ -287,30 +288,35 @@ def spectral(
     ``periods``
         The periods to transform at, each in clock units, or a duration on
         a temporal clock, at least twice ``spacing`` (the Nyquist limit),
-        or under ``"lomb_scargle"`` any finite period. Their inverses are
+        or under ``method="lomb_scargle"`` any finite period. Their inverses are
         the frequencies. Required; at most 4,096.
     ``spacing``
         The clock units between rows, scipy's ``1/fs``: the density's scale
         and the place of the Nyquist frequency. Default 1, a row a clock
         unit, which is the stream's own clock without a clock column.
+    ``method``
+        ``"dft"`` (the default), the exponentially weighted discrete Fourier
+        transform, or ``"lomb_scargle"``, the generalized Lomb-Scargle power,
+        which needs no even clock: per period, the share of the target's
+        weighted variance that a sinusoid of that period explains, between 0
+        and 1, from the weighted least squares fit of ``a cos + b sin`` (and a
+        constant with ``detrend``). It is scipy's
+        ``lombscargle(normalize=True, floating_mean=detrend)`` with the
+        amplitudes as ``weights``. Where the rows' phases have not yet spread
+        over enough of a cycle to tell a cosine from a sine, or the target has
+        not varied, the power is null.
     ``scaling``
-        ``"density"``, the default and scipy's, ``|X|² spacing / Σa²``, or
-        ``"spectrum"``, ``|X|² / (Σa)²``, each doubled but at the zero
-        frequency and the Nyquist; or ``"lomb_scargle"``, the generalized
-        Lomb-Scargle power, which needs no even clock: per period, the
-        share of the target's weighted variance that a sinusoid of that
-        period explains, between 0 and 1, from the weighted least squares
-        fit of ``a cos + b sin`` (and a constant with ``detrend``). It is
-        scipy's ``lombscargle(normalize=True, floating_mean=detrend)`` with
-        the amplitudes as ``weights``. Where the rows' phases have not yet
-        spread over enough of a cycle to tell a cosine from a sine, or the
-        target has not varied, the power is null.
+        Under ``method="dft"``: ``"density"`` (the default when ``None``, and
+        scipy's), ``|X|² spacing / Σa²``, or ``"spectrum"``,
+        ``|X|² / (Σa)²``, each doubled but at the zero frequency and the
+        Nyquist. Refused when set under ``method="lomb_scargle"``, whose
+        output is already normalized to ``[0, 1]``.
     ``detrend``
         Remove the weighted mean before the transform, as scipy's
         ``detrend="constant"`` removes the mean. Default True.
     ``max_state_bytes``
         The bytes a group's state may hold: ``8 (4F + 3)`` a target for
-        ``F`` periods, ``8 (6F + 4)`` under ``"lomb_scargle"``. Default
+        ``F`` periods, ``8 (6F + 4)`` under ``method="lomb_scargle"``. Default
         256 KB; at most 64 MiB.
     ``window_size``
         Clock units of history the transform holds, a hard cutoff: the
@@ -325,7 +331,7 @@ def spectral(
         leaves whole once its first row is past the window, so the window
         never keeps an older row. Each block holds ``8 (4 + n (4F + 3))``
         bytes for ``n`` targets (``8 (4 + n (6F + 4))`` under
-        ``"lomb_scargle"``).
+        ``method="lomb_scargle"``).
     ``window_budget``
         The MiB a group's blocks may take; past it they thin, neighbors
         merged and the cadence doubled, or refuse the run, as
@@ -353,9 +359,9 @@ def spectral(
     ``features``, which this model does not take; and ``ValueError`` naming
     the problem for ``periods`` empty, longer than 4,096, or holding a period
     not finite, not above 0 or below twice ``spacing`` (but under
-    ``"lomb_scargle"``, where any finite period is taken), a ``spacing`` not
-    above 0, ``scaling`` not one of its words, and a state past
-    ``max_state_bytes``.
+    ``method="lomb_scargle"``, where any finite period is taken), a ``spacing``
+    not above 0, ``method`` or ``scaling`` not one of its words, ``scaling``
+    beside ``method="lomb_scargle"``, and a state past ``max_state_bytes``.
 
     .. rubric:: The update
 
@@ -372,7 +378,7 @@ def spectral(
     ``X`` is the transform of the rows, each at amplitude ``w λ^age``,
     referred to the current clock; ``U`` is the amplitudes' own, which
     removes the mean. ``c`` is 2, and 1 at the zero frequency and the
-    Nyquist. Under ``"lomb_scargle"`` the model keeps two sums more, the
+    Nyquist. Under ``method="lomb_scargle"`` the model keeps two sums more, the
     amplitudes' transform at twice each frequency and ``Σ a x²``:
 
     .. code-block:: text
@@ -431,6 +437,7 @@ def spectral(
         "type": "spectral",
         "periods": periods,
         "spacing": spacing,
+        "method": method,
         "scaling": scaling,
         "detrend": detrend,
         "max_state_bytes": None,

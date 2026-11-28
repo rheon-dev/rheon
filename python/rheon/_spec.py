@@ -1213,8 +1213,8 @@ def _common(
     influence_half_life: float | Duration | None = None,
     emit_feature_health: bool = False,
     feature_health_half_life: float | Duration | None = None,
-    feature_ks_window: int | None = None,
-    feature_ks_recent: int | None = None,
+    feature_ks_window_rows: int | None = None,
+    feature_ks_recent_rows: int | None = None,
     embargo: float | Duration | None = None,
     label_clock: str | Sequence[str] | None = None,
     max_held_rows: int | None = None,
@@ -1332,10 +1332,10 @@ def _common(
         spec["conformal_p_window_size"] = conformal_p_window_size
     if max_state_bytes is not None:
         spec["max_state_bytes"] = max_state_bytes
-    if feature_ks_window is not None:
-        spec["feature_ks_window"] = feature_ks_window
-    if feature_ks_recent is not None:
-        spec["feature_ks_recent"] = feature_ks_recent
+    if feature_ks_window_rows is not None:
+        spec["feature_ks_window_rows"] = feature_ks_window_rows
+    if feature_ks_recent_rows is not None:
+        spec["feature_ks_recent_rows"] = feature_ks_recent_rows
     validate_spec(_json(spec))
     return spec
 

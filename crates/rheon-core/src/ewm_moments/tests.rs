@@ -65,7 +65,7 @@ fn cfg(decay: Decay, terms: Vec<MomentTerm>) -> EwmMomentsCfg {
         max_state_bytes: None,
         clocked: false,
         lag_tolerance: None,
-        se: false,
+        emit_se: false,
         window_rows: None,
         window_clock: None,
     }

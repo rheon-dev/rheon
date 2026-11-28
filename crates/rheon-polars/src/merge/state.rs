@@ -6,14 +6,14 @@
 //! kind         "merge"
 //! version      1
 //! clock        the clock column, which a load must match
-//! by           the group column or nil, which a load must match
+//! group        the group column or nil, which a load must match
 //! clock_dtype  the clock's dtype, as a message names it, which a load must match
 //! names        each input's name, in the call's order, which a load must match
 //! inputs       per input: last (its last row taken: {Int: i64} | {Float: f64} | nil),
 //!              restarts (how many times it started again), and held (the rows
 //!              held at a tie, as Arrow IPC; absent when none)
 //! groups       [(key, last clock)]: the merged rows' last clock in each group,
-//!              sorted by key; the one key "" without `by`
+//!              sorted by key; the one key "" without `group`
 //! carry        under `carry` alone (PLAN 556): columns (the columns carried,
 //!              which a load must match) and groups ([(key, per column: nil
 //!              or {restarts, at, value})], sorted by key: each group's last
@@ -79,7 +79,7 @@ struct MergeFile {
     kind: String,
     version: u32,
     clock: String,
-    by: Option<String>,
+    group: Option<String>,
     clock_dtype: String,
     names: Vec<String>,
     inputs: Vec<InputState>,
@@ -216,7 +216,7 @@ impl Merge {
             kind: crate::envelope::Kind::Merge.tag().into(),
             version: MERGE_VERSION,
             clock: self.cfg.clock.clone(),
-            by: self.cfg.by.clone(),
+            group: self.cfg.group.clone(),
             clock_dtype: dtype_text(&self.clock_dtype),
             names: self.inputs.iter().map(|i| i.name.clone()).collect(),
             inputs,
@@ -242,13 +242,13 @@ impl Merge {
     }
 
     /// A merge that goes on from a saved state: the inputs, the clock and
-    /// `by` must be the ones it was saved with. Rows are counted from the
+    /// `group` must be the ones it was saved with. Rows are counted from the
     /// start of the new inputs.
     ///
     /// # Errors
     ///
     /// What [`Self::new`] refuses; bytes that are not a merge's state, a
-    /// version this build does not read, other inputs, clock or `by`, or a
+    /// version this build does not read, other inputs, clock or `group`, or a
     /// state that does not hold together (a damaged one).
     pub fn load_bytes(
         bytes: &[u8],
@@ -312,16 +312,18 @@ impl Merge {
                 file.names, names
             ));
         }
-        if file.clock != self.cfg.clock || file.by != self.cfg.by {
+        if file.clock != self.cfg.clock || file.group != self.cfg.group {
             return Err(format!(
-                "{WHO}: the state was saved with clock = {:?} and by = {}, but this call gives \
-                 {:?} and {}. Give the clock and by the state was saved with, or leave out \
+                "{WHO}: the state was saved with clock = {:?} and group = {}, but this call gives \
+                 {:?} and {}. Give the clock and group the state was saved with, or leave out \
                  load_state to start over.",
                 file.clock,
-                file.by.as_ref().map_or("None".into(), |b| format!("{b:?}")),
+                file.group
+                    .as_ref()
+                    .map_or("None".into(), |b| format!("{b:?}")),
                 self.cfg.clock,
                 self.cfg
-                    .by
+                    .group
                     .as_ref()
                     .map_or("None".into(), |b| format!("{b:?}")),
             ));
@@ -369,7 +371,7 @@ impl Merge {
             let k = self
                 .key_of(*stamp)
                 .ok_or_else(|| damaged("a group's clock is not of the state's clock"))?;
-            let gid = match (&self.cfg.by, &key.0) {
+            let gid = match (&self.cfg.group, &key.0) {
                 (None, Some(s)) if s.is_empty() && file.groups.len() == 1 => 0,
                 (None, _) => return Err(damaged("an ungrouped state holds a group")),
                 (Some(_), Some(s)) => {
@@ -402,7 +404,7 @@ impl Merge {
             if !seen_skipped.insert(key.clone()) {
                 return Err(damaged("a group's skipped step-back count is held twice"));
             }
-            let gid = match (&self.cfg.by, &key.0) {
+            let gid = match (&self.cfg.group, &key.0) {
                 (None, Some(s)) if s.is_empty() => 0usize,
                 (None, _) => return Err(damaged("an ungrouped state holds a group")),
                 (Some(_), Some(s)) => match self.gid_of.get(s) {
@@ -499,7 +501,7 @@ impl Merge {
                 return Err(damaged("its carried values are not one a group, in order"));
             }
             prev = Some(key);
-            let gid = match (&self.cfg.by, &key.0) {
+            let gid = match (&self.cfg.group, &key.0) {
                 (None, Some(s)) if s.is_empty() => Some(0),
                 (None, _) => None,
                 (Some(_), Some(s)) => self.gid_of.get(s).copied(),
@@ -564,7 +566,7 @@ mod carry_state_tests {
 
     fn carry_cfg() -> MergeConfig {
         let mut c = cfg("t");
-        c.by = Some("g".into());
+        c.group = Some("g".into());
         c.carry = vec!["x".into()];
         c
     }
@@ -696,7 +698,7 @@ mod carry_state_tests {
     fn damaged_step_back_state_and_policy_mismatch_are_refused() {
         let a = df!("t" => [1.0, 5.0, 3.0], "g" => ["a", "a", "a"], "x" => [1i64, 2, 9]).unwrap();
         let mut skip_cfg = cfg("t");
-        skip_cfg.by = Some("g".into());
+        skip_cfg.group = Some("g".into());
         skip_cfg.skip_step_back = true;
         let mut m = merge_of(std::slice::from_ref(&a), skip_cfg.clone());
         let _ = drive(&mut m, &[vec![a.clone()]], None, false);

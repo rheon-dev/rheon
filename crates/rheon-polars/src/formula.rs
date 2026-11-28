@@ -179,7 +179,7 @@ pub struct StlParams {
     pub inner_iter: Option<u32>,
     pub outer_iter: Option<u32>,
     /// Unset: the embargo's `2 h + 1`.
-    pub window: Option<u32>,
+    pub window_rows: Option<u32>,
     /// Unset: `h`, plus 1 under `"left"`.
     pub lag: Option<u32>,
     pub closed: rheon_core::Closed,
@@ -191,9 +191,9 @@ pub struct StlParams {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProfileParams {
     pub period: Span,
-    pub offset: Option<Span>,
-    /// The bucketed form's buckets, or 0 for the harmonic form.
-    pub buckets: u32,
+    pub origin: Option<Span>,
+    /// The binned form's bins, or 0 for the harmonic form.
+    pub bins: u32,
     /// The harmonic form's harmonics, or 0 for the bucketed form.
     pub harmonics: u32,
     pub stat: ProfileStat,
@@ -421,16 +421,16 @@ impl OpNode {
                 "period".into(),
                 serde_json::to_value(&p.period).expect("a span is JSON"),
             );
-            if let Some(o) = &p.offset {
+            if let Some(o) = &p.origin {
                 m.insert(
-                    "offset".into(),
+                    "origin".into(),
                     serde_json::to_value(o).expect("a span is JSON"),
                 );
             }
             if p.harmonics > 0 {
                 m.insert("harmonics".into(), json!(p.harmonics));
             } else {
-                m.insert("buckets".into(), json!(p.buckets));
+                m.insert("bins".into(), json!(p.bins));
             }
             m.insert("stat".into(), json!(p.stat.name()));
             if p.harmonics == 0 && matches!(p.stat, ProfileStat::Var | ProfileStat::Std) {
@@ -2115,7 +2115,7 @@ fn stl_of(name: &str, input: Node, params: &Map<String, Value>) -> Result<OpNode
         robust: false,
         inner_iter: None,
         outer_iter: None,
-        window: None,
+        window_rows: None,
         lag: None,
         closed: rheon_core::Closed::Left,
         component: crate::windows::StlComponent::Trend,
@@ -2160,7 +2160,7 @@ fn stl_of(name: &str, input: Node, params: &Map<String, Value>) -> Result<OpNode
             ("low_pass_jump", _) => p.low_pass_jump = stl_uint(name, k, v, 1)?,
             ("inner_iter", _) => p.inner_iter = Some(stl_uint(name, k, v, 1)?),
             ("outer_iter", _) => p.outer_iter = Some(stl_uint(name, k, v, 0)?),
-            ("window", _) => p.window = Some(stl_uint(name, k, v, 1)?),
+            ("window_rows", _) => p.window_rows = Some(stl_uint(name, k, v, 1)?),
             ("lag", _) => p.lag = Some(stl_uint(name, k, v, 0)?),
             ("max_state_bytes", _) => {
                 p.max_state_bytes = Some(v.as_u64().filter(|&b| b > 0).ok_or_else(|| {
@@ -2301,7 +2301,7 @@ fn stl_json(kind: OpKind, p: &StlParams) -> Value {
     for (k, v) in [
         ("inner_iter", p.inner_iter),
         ("outer_iter", p.outer_iter),
-        ("window", p.window),
+        ("window_rows", p.window_rows),
         ("lag", p.lag),
     ] {
         if let Some(v) = v {
@@ -2336,7 +2336,7 @@ fn stl_json(kind: OpKind, p: &StlParams) -> Value {
 
 /// An `ewm_profile` node from its parameters, each checked by name.
 /// The most harmonics a profile takes: a period cut finer than this is
-/// what `buckets` is for.
+/// what `bins` is for.
 const MAX_HARMONICS: u32 = 64;
 
 fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String> {
@@ -2365,7 +2365,7 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
         step: None,
         stl: None,
     };
-    let (mut period, mut offset, mut buckets, mut stat) = (None, None, None, ProfileStat::Mean);
+    let (mut period, mut origin, mut bins, mut stat) = (None, None, None, ProfileStat::Mean);
     let mut harmonics: Option<u32> = None;
     let (mut weight, mut max_state_bytes) = (None, None);
     let mut bias = None;
@@ -2393,16 +2393,16 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
                 })?;
             }
             "period" => period = Some(span_of(name, k, v)?),
-            "offset" => offset = Some(span_of(name, k, v)?),
-            "buckets" => {
-                buckets = Some(
+            "origin" => origin = Some(span_of(name, k, v)?),
+            "bins" => {
+                bins = Some(
                     v.as_u64()
                         .and_then(|b| u32::try_from(b).ok())
                         .filter(|&b| b >= 1)
                         .ok_or_else(|| {
                             format!(
-                                "{name}: buckets must be a whole number from 1 to {}, but it \
-                                 is {}. Set buckets to the number of phases of the period, \
+                                "{name}: bins must be a whole number from 1 to {}, but it \
+                                 is {}. Set bins to the number of phases of the period, \
                                  such as 24 for the hours of a day.",
                                 u32::MAX,
                                 short(v)
@@ -2478,8 +2478,8 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
             }
             other => {
                 return Err(format!(
-                    "{name}: {other:?} is not one of its parameters, which are period, buckets, \
-                     harmonics, half_life, window_size, stat, quantile, closed, offset, weight, \
+                    "{name}: {other:?} is not one of its parameters, which are period, bins, \
+                     harmonics, half_life, window_size, stat, quantile, closed, origin, weight, \
                      min_samples, bias and max_state_bytes. Remove {other:?}, or correct its name."
                 ));
             }
@@ -2509,15 +2509,15 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
              positive number of clock units or a duration, such as \"1d\"."
         ));
     }
-    if let Some(o) = &offset
+    if let Some(o) = &origin
         && !o.value().is_finite()
     {
         return Err(format!(
-            "{name}: offset must be finite, but it is {o}. Set offset to where the period \
+            "{name}: origin must be finite, but it is {o}. Set origin to where the period \
              starts after its default start, such as \"9h30m\"."
         ));
     }
-    let (buckets, harmonics) = match (buckets, harmonics) {
+    let (bins, harmonics) = match (bins, harmonics) {
         (Some(b), None) => (b, 0),
         (None, Some(k)) => {
             if stat == ProfileStat::Quantile || bias.is_some() {
@@ -2525,21 +2525,21 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
                     "{name}: harmonics takes stat \"mean\", \"var\" or \"std\" and no bias: \
                      a Fourier fit's variance is the fit of x² less the square of the fit of \
                      x, and a quantile has no one-pass fit. Remove bias or quantile, or take \
-                     buckets."
+                     bins."
                 ));
             }
             (0, k)
         }
         (None, None) => {
             return Err(format!(
-                "{name}: buckets or harmonics is needed: how many equal phases the period is \
-                 cut into, or how many Fourier terms fit it. Set one, such as buckets=24 for \
+                "{name}: bins or harmonics is needed: how many equal phases the period is \
+                 cut into, or how many Fourier terms fit it. Set one, such as bins=24 for \
                  the hours of a day."
             ));
         }
         (Some(_), Some(_)) => {
             return Err(format!(
-                "{name}: buckets and harmonics are both given, but a profile is one form or \
+                "{name}: bins and harmonics are both given, but a profile is one form or \
                  the other. Remove one of them."
             ));
         }
@@ -2576,8 +2576,8 @@ fn profile_of(input: Node, params: &Map<String, Value>) -> Result<OpNode, String
     op.bias = bias.unwrap_or(false);
     op.profile = Some(Box::new(ProfileParams {
         period,
-        offset,
-        buckets,
+        origin,
+        bins,
         harmonics,
         stat,
         weight,

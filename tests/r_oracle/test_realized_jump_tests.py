@@ -15,7 +15,7 @@ arithmetic (the jump study's record states each):
   paper has the ``n`` returns: ``sqrt((n + 1)/n)`` times the paper's.
 - ``intradayJumpTest(dontIncludeLast = TRUE)`` takes each return's
   volatility from the ``K - 1`` returns before it, the paper's window, as
-  ``lm_window = K`` does, and reports ``c L`` (``c = sqrt(2/π)``); its
+  ``lm_window_rows = K`` does, and reports ``c L`` (``c = sqrt(2/π)``); its
   critical value at ``alpha = 0.05`` is ``c (C_N + S_N β*)`` with
   ``β* = -ln(-ln 0.95)`` and ``N`` the number of prices, ``n + 1``.
 """
@@ -131,20 +131,20 @@ def test_the_ratio_test_is_highfrequencys_and_yuimas():
     ],
 )
 def test_lee_myklands_statistic_and_flag_are_intradayjumptests(n, step, by, per, k):
-    """``lm`` with ``lm_window = K`` is ``intradayJumpTest``'s statistic over
+    """``lm`` with ``lm_window_rows = K`` is ``intradayJumpTest``'s statistic over
     ``c`` to a few units in the last place on every return from the ``K``th;
     its flags at ``alpha = 0.05`` are the rows where ``c |lm|`` passes its
     critical value, which is the paper's for ``N = n + 1`` prices and
     ``β = 0.95``; the planted jumps are flagged and most rows are not, so
     both sides of the threshold are met. ``realized``'s own flag at
-    ``lm_beta = 0.95`` reads its own ``n``, the returns before the row, and
+    ``lm_confidence = 0.95`` reads its own ``n``, the returns before the row, and
     agrees with ``intradayJumpTest``'s wherever the two thresholds do."""
     r = ref.sv_returns(n, 7 + k, True)
     p, _, rr = _prices_and_returns(r)
     out = _lm_hf(ro.FloatVector(p), step, by, per, k)
     z, crit = np.asarray(out[0]), float(out[1][0])
     assert abs(crit - C * ref.critical(n + 1, 0.95)) <= 1e-12 * crit
-    got = _fit(rr, lm_window=k, lm_beta=0.95)
+    got = _fit(rr, lm_window_rows=k, lm_confidence=0.95)
     lm = got["lm_r"].to_numpy()[:n]
     flag = got["lm_jump_r"].to_list()[:n]
     gaps = np.abs(C * lm[k:] - z[k:]) / np.spacing(np.abs(z[k:]))

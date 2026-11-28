@@ -1075,9 +1075,9 @@ scale `φ > 0` for non-Gaussian families, where `obs_var` is refused.
     and closer to the exact filtering posterior than the full rule on 8 of 9
     `k = 2` grid settings and 7 of 9 static MAP settings.
   - `ukf_rule = "merwe"` draws `2k + 1` Wan and van der Merwe scaled sigma
-    points via Cholesky in `O(k³)` with defaults `alpha = 1`, `beta = 2`,
-    `kappa = 0`. Using `alpha = 1` keeps the center weight at 0 rather than
-    `−10⁶` at `alpha = 1e-3`.
+    points via Cholesky in `O(k³)` with defaults `ukf_alpha = 1`, `ukf_beta = 2`,
+    `ukf_kappa = 0`. Using `ukf_alpha = 1` keeps the center weight at 0 rather
+    than `−10⁶` at `ukf_alpha = 1e-3`.
 - **Guards:** if Cholesky fails on `P⁻`, or if a UKF sigma point crosses
   `η ≤ 0` under `"inverse"` or `"power"`, that row falls back to the EKF step
   on the same state with no jitter. Under `"inverse"` or `"power"`,
@@ -1322,7 +1322,7 @@ the weight behind `S_j` and `η_j`, as in `ewridge`'s update, and `p` the
 product of every decay the stream has applied.
 
 The weights are per target, so `huber` keeps one set of sums per target,
-where `ewridge` shares one set across targets. `huber_norm` switches the
+where `ewridge` shares one set across targets. `norm` switches the
 weight function from Huber's monotone cut (`"huber"`) to one of four
 redescending norms matching `statsmodels.robust.norms`: `"tukey"`
 (biweight, default `huber_delta=4.685`), `"andrews"` (wave, `1.339`),
@@ -3030,7 +3030,7 @@ variance reduction over the exact symmetric partition `{slots <= i - 1} |
 
 ```text
 VR   = var(S_obs) - (W_l / W_obs) var(S_l) - (W_r / W_obs) var(S_r)
-       (0 when W_l < min_samples_split or W_r < min_samples_split)
+       (0 when W_l < min_child_weight or W_r < min_child_weight)
 eps  = sqrt(ln(1 / delta) / (2 W))
 split when  VR(best) > 0  and  (VR(second) / VR(best) < 1 - eps  or  eps < tau)
 ```
@@ -4112,7 +4112,7 @@ library on every platform, so the state is the same bits everywhere. A
 session change or a gap past `gap_cap` empties the transform, since the
 phase across it is not known.
 
-**Lomb-Scargle.** Under `scaling="lomb_scargle"` the power at each period
+**Lomb-Scargle.** Under `method="lomb_scargle"` the power at each period
 is the generalized Lomb-Scargle power: the share of the target's weighted
 variance that a sinusoid of that period explains, between 0 and 1. It
 comes from the weighted least squares fit of `a·cos + b·sin`, and a
@@ -4771,14 +4771,14 @@ size at the 1% cut between 0.008 and 0.016. The sums themselves are
 weighted, so they scale with the weights; `n`, `bns` and the flag do not.
 
 **Lee and Mykland's flag.** It is the paper's test of the largest `|lm|`
-among `n` returns, at confidence `lm_beta` (0.99, a test at 1%):
+among `n` returns, at confidence `lm_confidence` (0.99, a test at 1%):
 
 ```text
 C_n = √(2 ln n)/c - (ln π + ln ln n) / (2 c √(2 ln n))     S_n = 1 / (c √(2 ln n))
-lm_jump = (|lm| - C_n) / S_n > -ln(-ln lm_beta)            c = √(2/π)
+lm_jump = (|lm| - C_n) / S_n > -ln(-ln lm_confidence)      c = √(2/π)
 ```
 
-`lm_window = K` takes `σ_i` from the target's `K - 1` returns before the row
+`lm_window_rows = K` takes `σ_i` from the target's `K - 1` returns before the row
 alone, the paper's window; without it, `σ_i` is read from the measures'
 own window or decay.
 
@@ -6122,7 +6122,7 @@ of `"tmc"` (`"t"` transitions, `"m"` means, `"c"` covariances, or `""` to
 freeze everything; `'s'` is refused because the initial state distribution is
 uniform `1 / n_components`). With given `means` and `covs`, `means_weight`
 sets the prior weight in rows on the given means (default 1.0), and
-`covars_prior` / `covars_weight` apply conjugate covariance priors mutually
+`covariance_prior` / `covariance_weight` apply conjugate covariance priors mutually
 exclusive with `prior_rows`.
 
 **Fixed-lag smoothing.** Setting `smooth_lag = L` (at least 1 learned row)

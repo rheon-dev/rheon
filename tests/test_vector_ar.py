@@ -243,8 +243,8 @@ def test_the_impulse_responses_and_decomposition_are_statsmodels():
         n = frame[first].n_unique()
         return frame[col].to_numpy().reshape(n, k, k)
 
-    plain = bank.vector_ar(table="irf", periods=h, stderr=True)
-    orth = bank.vector_ar(table="orth_irf", periods=h, stderr=True)
+    plain = bank.vector_ar(table="irf", periods=h, se=True)
+    orth = bank.vector_ar(table="orth_irf", periods=h, se=True)
     assert _rel(cube(plain, "value", "period"), irf.irfs) < 1e-11
     assert _rel(cube(orth, "value", "period"), irf.orth_irfs) < 1e-11
     assert _rel(cube(plain, "stderr", "period"), irf.stderr(orth=False)) < 1e-10

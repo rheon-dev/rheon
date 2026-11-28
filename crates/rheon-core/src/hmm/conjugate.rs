@@ -7,11 +7,11 @@ use super::stabilized::Stabilized;
 use super::{Hmm, RowWork};
 
 impl Hmm {
-    /// Whether this model uses conjugate covariance priors (`covars_prior` /
-    /// `covars_weight`) instead of `Stabilized` or the decaying ridge.
+    /// Whether this model uses conjugate covariance priors (`covariance_prior` /
+    /// `covariance_weight`) instead of `Stabilized` or the decaying ridge.
     #[inline]
     pub(super) fn uses_conjugate_covars(&self) -> bool {
-        self.cfg.has_covars_prior() && self.cfg.effective_params().c
+        self.cfg.has_covariance_prior() && self.cfg.effective_params().c
     }
 
     /// The per-state spherical accumulators (empty unless `Spherical`).
@@ -68,8 +68,8 @@ impl Hmm {
         out.iter().all(|v| v.is_finite())
     }
 
-    /// Log densities under conjugate covariance priors (`covars_prior` /
-    /// `covars_weight`), matching `hmmlearn._do_mstep` at `half_life = inf`
+    /// Log densities under conjugate covariance priors (`covariance_prior` /
+    /// `covariance_weight`), matching `hmmlearn._do_mstep` at `half_life = inf`
     /// and aging `W_l` and `G_l` by `lam_age` before reading so zero-weight
     /// rows obey hard rule 9.
     #[inline(never)]
@@ -82,7 +82,7 @@ impl Hmm {
         let (k, d) = (self.cfg.k, self.cfg.n_features);
         let df = d as f64;
         let base = -0.5 * df * std::f64::consts::TAU.ln();
-        let cvd0 = self.cfg.covars_weight_offset();
+        let cvd0 = self.cfg.covariance_weight_offset();
         let data_w = self.data_w();
         let pre_first = self.n_eff == 0.0;
         let given_covs = self.cfg.covs.as_deref();
@@ -107,7 +107,7 @@ impl Hmm {
                     } else {
                         let w_l = lam_age * sp.n_eff();
                         let g_l = lam_age * data_w[s];
-                        let prior = self.cfg.covars_prior_spherical(s);
+                        let prior = self.cfg.covariance_prior_spherical(s);
                         let num = prior + w_l * sp.var();
                         let denom = (cvd0 + g_l).max(1e-5);
                         if num > 0.0 {
@@ -130,7 +130,7 @@ impl Hmm {
                         let v = if let Some(c) = given_covs.filter(|_| pre_first) {
                             c[s * d * d + i * d + i]
                         } else {
-                            let prior = self.cfg.covars_prior_diag(s, i);
+                            let prior = self.cfg.covariance_prior_diag(s, i);
                             let num = prior + w_l * cov.var(i);
                             if num > 0.0 {
                                 num / denom
@@ -168,7 +168,7 @@ impl Hmm {
                         for i in 0..d {
                             let at = crate::ewcov::row_at(i);
                             for j in 0..=i {
-                                let v = (self.cfg.covars_prior_matrix(s, i, j)
+                                let v = (self.cfg.covariance_prior_matrix(s, i, j)
                                     + w_l * packed[at + j])
                                     / denom;
                                 m[i * d + j] = v;
@@ -212,7 +212,7 @@ impl Hmm {
                     let denom = (cvd0 + total_g).max(1e-5);
                     for i in 0..d {
                         for j in 0..=i {
-                            m[i * d + j] = self.cfg.covars_prior_matrix(0, i, j);
+                            m[i * d + j] = self.cfg.covariance_prior_matrix(0, i, j);
                         }
                     }
                     for cov in &self.states {

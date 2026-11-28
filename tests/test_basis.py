@@ -348,7 +348,7 @@ def test_interactions_matches_sklearn_polynomial_features(degree: int, include_s
 
 def test_interactions_naming_sep_and_single_col_self() -> None:
     df = pl.DataFrame({"a": [2.0, -3.0], "b": [5.0, 4.0]})
-    out = df.select(interactions(["a", "b"], sep="*"))
+    out = df.select(interactions(["a", "b"], separator="*"))
     assert out.columns == ["a*b"]
     assert out["a*b"].to_list() == [10.0, -12.0]
 
@@ -618,8 +618,8 @@ def test_basis_operators_live_in_ops_alone() -> None:
 
 
 def test_basis_refusals() -> None:
-    # Bad col / prefix
-    with pytest.raises(TypeError, match="col must be"):
+    # Bad input / prefix
+    with pytest.raises(TypeError, match="input must be"):
         bspline(123, [0.0, 1.0])  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="non-empty column name"):
         bspline("", [0.0, 1.0])
@@ -677,10 +677,10 @@ def test_basis_refusals() -> None:
         interactions(["a", "b"], degree=7)
     with pytest.raises(TypeError, match="include_self must be"):
         interactions(["a", "b"], include_self="yes")  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="sep must be a str"):
-        interactions(["a", "b"], sep=1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="separator must be a str"):
+        interactions(["a", "b"], separator=1)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="non-empty string"):
-        interactions(["a", "b"], sep="")
+        interactions(["a", "b"], separator="")
     with pytest.raises(ValueError, match="non-empty column name"):
         interactions(["", "b"])
     with pytest.raises(ValueError, match="multiple outputs"):
@@ -692,7 +692,7 @@ def test_basis_refusals() -> None:
     with pytest.raises(ValueError, match="at least 1 column"):
         interactions([], include_self=True)
     with pytest.raises(ValueError, match="collides"):
-        interactions(["a", "b_x_c", "a_x_b", "c"], sep="_x_")
+        interactions(["a", "b_x_c", "a_x_b", "c"], separator="_x_")
 
 
 # ---------------------------------------------------------------------------

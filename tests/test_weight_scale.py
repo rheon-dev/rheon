@@ -71,7 +71,7 @@ EXCEPTIONS = {
         "frequency weights: w counts as w observations toward grace_period and the Hoeffding bound"
     ),
     "hoeffding_tree_regressor": (
-        "frequency weights: w counts as w observations toward grace_period, min_samples_split "
+        "frequency weights: w counts as w observations toward grace_period, min_child_weight "
         "and the Hoeffding bound"
     ),
     "bandit": "each arm's R_a' R_a <- lam A_a + w z z' starts from l2 * I: a sum-scale prior "

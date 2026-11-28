@@ -203,11 +203,11 @@ pub struct KalmanObs {
     pub filter: KalmanFilter,
     pub ukf_rule: UkfRule,
     /// Merwe scaled sigma-point spread `α > 0` (default `1.0`).
-    pub alpha: f64,
+    pub ukf_alpha: f64,
     /// Merwe distribution parameter `β` (default `2.0`).
-    pub beta: f64,
+    pub ukf_beta: f64,
     /// Merwe secondary scaling parameter `κ` (default `0.0`).
-    pub kappa: f64,
+    pub ukf_kappa: f64,
     pub ukf_noise: UkfNoise,
 }
 
@@ -220,9 +220,9 @@ impl Default for KalmanObs {
             dispersion: 1.0,
             filter: KalmanFilter::Linear,
             ukf_rule: UkfRule::ScalarIndex,
-            alpha: 1.0,
-            beta: 2.0,
-            kappa: 0.0,
+            ukf_alpha: 1.0,
+            ukf_beta: 2.0,
+            ukf_kappa: 0.0,
             ukf_noise: UkfNoise::Expected,
         }
     }
@@ -489,37 +489,37 @@ impl KalmanObs {
             }
         }
 
-        if !(self.alpha.is_finite() && self.alpha > 0.0) {
+        if !(self.ukf_alpha.is_finite() && self.ukf_alpha > 0.0) {
             no.refuse(format!(
-                "kalman: alpha must be finite and above 0, but it is {}. Set alpha to a finite \
-                 positive sigma-point spread, such as the default 1.",
-                self.alpha
+                "kalman: ukf_alpha must be finite and above 0, but it is {}. Set ukf_alpha to a \
+                 finite positive sigma-point spread, such as the default 1.",
+                self.ukf_alpha
             ));
         }
-        if !self.beta.is_finite() {
+        if !self.ukf_beta.is_finite() {
             no.refuse(format!(
-                "kalman: beta must be finite, but it is {}. Set beta to a finite number, such as \
-                 the default 2.",
-                self.beta
+                "kalman: ukf_beta must be finite, but it is {}. Set ukf_beta to a finite number, \
+                 such as the default 2.",
+                self.ukf_beta
             ));
         }
-        if !self.kappa.is_finite() {
+        if !self.ukf_kappa.is_finite() {
             no.refuse(format!(
-                "kalman: kappa must be finite, but it is {}. Set kappa to a finite number, such \
-                 as the default 0.",
-                self.kappa
+                "kalman: ukf_kappa must be finite, but it is {}. Set ukf_kappa to a finite \
+                 number, such as the default 0.",
+                self.ukf_kappa
             ));
         } else if self.filter == KalmanFilter::Ukf && self.ukf_rule == UkfRule::Merwe {
             let k = cfg.k_total() as f64;
-            let c = self.alpha * self.alpha * (k + self.kappa);
-            if !(k + self.kappa > 0.0 && c > 0.0 && c.is_finite()) {
+            let c = self.ukf_alpha * self.ukf_alpha * (k + self.ukf_kappa);
+            if !(k + self.ukf_kappa > 0.0 && c > 0.0 && c.is_finite()) {
                 no.refuse(format!(
                     "kalman: the Merwe sigma-point scale must be finite and above 0, but with \
-                     k = {}, alpha = {} and kappa = {} it is {c}. Raise kappa above -{} or adjust \
-                     alpha.",
+                     k = {}, ukf_alpha = {} and ukf_kappa = {} it is {c}. Raise ukf_kappa above \
+                     -{} or adjust ukf_alpha.",
                     cfg.k_total(),
-                    self.alpha,
-                    self.kappa,
+                    self.ukf_alpha,
+                    self.ukf_kappa,
                     cfg.k_total()
                 ));
             }
@@ -867,7 +867,7 @@ fn eval_ukf(
                 });
             }
             let kf = k as f64;
-            let c = obs.alpha * obs.alpha * (kf + obs.kappa);
+            let c = obs.ukf_alpha * obs.ukf_alpha * (kf + obs.ukf_kappa);
             let lam_u = c - kf;
             work.chol.truncate(n * n);
             if work.chol.len() < n * n {
@@ -987,11 +987,11 @@ fn ukf_gain(
         UkfRule::Merwe => {
             let n = ev.merwe_n;
             let kf = k as f64;
-            let c = obs.alpha * obs.alpha * (kf + obs.kappa);
+            let c = obs.ukf_alpha * obs.ukf_alpha * (kf + obs.ukf_kappa);
             let lam_u = c - kf;
             let wi = 0.5 / c;
             let wm0 = lam_u / c;
-            let wc0 = wm0 + (1.0 - obs.alpha * obs.alpha + obs.beta);
+            let wc0 = wm0 + (1.0 - obs.ukf_alpha * obs.ukf_alpha + obs.ukf_beta);
             let wm0_eff = wm0 + 2.0 * (k - n) as f64 * wi;
             let wc0_eff = wc0 + 2.0 * (k - n) as f64 * wi;
             let v_term = match obs.ukf_noise {

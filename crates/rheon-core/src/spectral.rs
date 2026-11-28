@@ -129,8 +129,26 @@ pub(crate) fn rotation(theta: f64) -> [f64; 2] {
     [libm::cos(theta), libm::sin(theta)]
 }
 
-/// What a [`Spectral`] reports at each frequency: scipy's `periodogram`
-/// `scaling`, or the generalised Lomb-Scargle power.
+/// How [`Spectral`] computes the power at each frequency: the exponentially
+/// weighted discrete Fourier transform, or the generalised Lomb-Scargle
+/// periodogram.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpectralMethod {
+    /// Exponentially weighted discrete Fourier transform (scipy's `periodogram`).
+    #[default]
+    Dft,
+    /// The generalised Lomb-Scargle power (Zechmeister and Kürster 2009):
+    /// the share of the target's weighted variance that a sinusoid at the
+    /// frequency explains, between 0 and 1, from the weighted least squares
+    /// fit of `a cos + b sin` (plus a constant under `detrend`). scipy's
+    /// `lombscargle(normalize=True, weights=a, floating_mean=detrend)`.
+    /// It needs no even clock, and has no Nyquist limit.
+    LombScargle,
+}
+
+/// How [`Spectral`] scales the DFT power at each frequency: scipy's
+/// `periodogram` `scaling`. Applies under [`SpectralMethod::Dft`] alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpectralScaling {
@@ -139,13 +157,6 @@ pub enum SpectralScaling {
     Density,
     /// Power spectrum, `|X|² / (Σa)²`.
     Spectrum,
-    /// The generalised Lomb-Scargle power (Zechmeister and Kürster 2009):
-    /// the share of the target's weighted variance that a sinusoid at the
-    /// frequency explains, between 0 and 1, from the weighted least squares
-    /// fit of `a cos + b sin` (plus a constant under `detrend`). scipy's
-    /// `lombscargle(normalize=True, weights=a, floating_mean=detrend)`.
-    /// It needs no even clock, and has no Nyquist limit.
-    LombScargle,
 }
 
 /// The settings of a [`Spectral`].
@@ -160,6 +171,11 @@ pub struct SpectralCfg {
     /// place of the Nyquist frequency.
     pub spacing: f64,
     pub decay: Decay,
+    /// Estimation method: exponentially weighted DFT (`Dft`) or generalised
+    /// Lomb-Scargle (`LombScargle`).
+    #[serde(default)]
+    pub method: SpectralMethod,
+    /// DFT output scaling (`Density` or `Spectrum`); unused under `LombScargle`.
     pub scaling: SpectralScaling,
     /// Remove the weighted mean before the transform.
     pub detrend: bool,
@@ -194,7 +210,7 @@ impl SpectralCfg {
     /// Whether the read is the Lomb-Scargle power, which keeps `V` and
     /// `Σ a x²` beside the transform.
     pub fn lomb_scargle(&self) -> bool {
-        self.scaling == SpectralScaling::LombScargle
+        self.method == SpectralMethod::LombScargle
     }
 
     /// The window's snapshot cadence.
@@ -238,14 +254,14 @@ impl SpectralCfg {
         }
         no.stop_here()?;
         let nyq = self.nyquist();
-        if self.scaling == SpectralScaling::LombScargle {
+        if self.method == SpectralMethod::LombScargle {
             if let Some(f) = self
                 .frequencies
                 .iter()
                 .find(|f| !(f.is_finite() && **f > 0.0))
             {
                 no.refuse(format!(
-                    "spectral: under scaling \"lomb_scargle\" each period must be finite, \
+                    "spectral: under method \"lomb_scargle\" each period must be finite, \
                      but one is {}: a sinusoid of no frequency is the constant the fit \
                      already holds. Give finite periods.",
                     1.0 / f
@@ -583,7 +599,6 @@ impl Spectral {
         let scale = match self.cfg.scaling {
             SpectralScaling::Density => self.cfg.spacing / s.q,
             SpectralScaling::Spectrum => 1.0 / (s.a * s.a),
-            SpectralScaling::LombScargle => 1.0,
         };
         let nyq = self.cfg.nyquist();
         for (k, f) in self.cfg.frequencies.iter().enumerate() {
@@ -614,7 +629,6 @@ impl Spectral {
                         let ratio = mag / s.a;
                         c * norm2 * (ratio * ratio)
                     }
-                    SpectralScaling::LombScargle => f64::NAN,
                 }
             } else {
                 c * (re * re + im * im) * scale

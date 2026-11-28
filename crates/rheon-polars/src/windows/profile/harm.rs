@@ -450,9 +450,9 @@ mod tests {
     fn var_def() -> ProfileDef {
         ProfileDef {
             stat: ProfileStat::Var,
-            buckets: 0,
+            bins: 0,
             period: PhaseSpan::Units(6.0),
-            offset: PhaseSpan::Units(0.0),
+            origin: PhaseSpan::Units(0.0),
             zone: None,
             half_life: 12.0,
             closed: Closed::Right,

@@ -10,7 +10,7 @@ Covers:
   ``statsmodels.tsa.holtwinters.Holt(..., initialization_method="known")``.
 - ``corrchange`` ``alpha_adjust="holm"`` and ``emit_n_flagged`` against
   ``statsmodels.stats.multitest.multipletests(..., method="holm")``.
-- Standalone ``feature_ks_window`` / ``feature_ks_recent`` against
+- Standalone ``feature_ks_window_rows`` / ``feature_ks_recent_rows`` against
   ``scipy.stats.ks_2samp`` (plus ``river.drift.KSWIN`` reference).
 """
 
@@ -470,7 +470,7 @@ def test_corrchange_holm_matches_statsmodels_multipletests_over_50_seeds():
 
 
 # ---------------------------------------------------------------------------
-# 5. Standalone feature_ks_window / feature_ks_recent (50-seed oracle grid)
+# 5. Standalone feature_ks_window_rows / feature_ks_recent_rows (50-seed oracle grid)
 # ---------------------------------------------------------------------------
 
 
@@ -501,8 +501,8 @@ def _ks_grid_outputs() -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndar
             features=["x0", "x1"],
             half_life=float("inf"),
             weight="w",
-            feature_ks_window=60,
-            feature_ks_recent=20,
+            feature_ks_window_rows=60,
+            feature_ks_recent_rows=20,
         )
         sp_eq = rp.spec.ewridge(
             "ks_e",
@@ -510,8 +510,8 @@ def _ks_grid_outputs() -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndar
             features=["x0", "x1"],
             half_life=float("inf"),
             weight="w",
-            feature_ks_window=40,
-            feature_ks_recent=20,
+            feature_ks_window_rows=40,
+            feature_ks_recent_rows=20,
         )
         res = rp.ModelBank([sp_uneq, sp_eq]).fit_predict(df)
         u_stat = np.column_stack(
@@ -551,7 +551,7 @@ ledger.guard(
 
 
 @pytest.mark.oracle_grid(
-    reason="50 seeds of standalone feature_ks_window/recent vs scipy.stats.ks_2samp"
+    reason="50 seeds of standalone feature_ks_window_rows/recent_rows vs scipy.stats.ks_2samp"
 )
 def test_feature_ks_matches_scipy_exact_over_50_seeds():
     rheon_out = _ks_grid_outputs()
@@ -684,8 +684,8 @@ def test_chunk_invariance_1_vs_1000_chunks_and_save_load_all_five_features():
             features=["x0", "x1"],
             half_life=float("inf"),
             weight="w",
-            feature_ks_window=30,
-            feature_ks_recent=10,
+            feature_ks_window_rows=30,
+            feature_ks_recent_rows=10,
             max_rows_between_coefs=1,
         ),
     ]
@@ -735,8 +735,8 @@ def test_defaults_unchanged_zero_bits_moved():
         targets=["y"],
         features=["x0", "x1"],
         half_life=20.0,
-        feature_ks_window=30,
-        feature_ks_recent=10,
+        feature_ks_window_rows=30,
+        feature_ks_recent_rows=10,
     )
     out_plain = rp.ModelBank([ew]).fit_predict(df).unnest("ew")
     out_ks = rp.ModelBank([ew_ks]).fit_predict(df).unnest("ew")
@@ -1003,8 +1003,8 @@ def test_feature_ks_asymptotic_together_with_feature_health_and_river_kswin_refe
         features=["x"],
         half_life=20.0,
         emit_feature_health=True,
-        feature_ks_window=60,
-        feature_ks_recent=20,
+        feature_ks_window_rows=60,
+        feature_ks_recent_rows=20,
     )
     out = rp.ModelBank([sp]).fit_predict(df).unnest("m")
     assert out["spread_ratio_x"].drop_nulls().len() > 0
@@ -1021,8 +1021,8 @@ def test_feature_ks_asymptotic_together_with_feature_health_and_river_kswin_refe
         targets=["y"],
         features=["x"],
         half_life=float("inf"),
-        feature_ks_window=1200,
-        feature_ks_recent=400,
+        feature_ks_window_rows=1200,
+        feature_ks_recent_rows=400,
     )
     out_big = rp.ModelBank([sp_big]).fit_predict(df_big).unnest("mb")
     got_s = float(out_big["ks_stat_x"][-1])
@@ -1146,19 +1146,23 @@ def test_refusals_for_all_new_options():
             "cc", features=["x0", "x1"], kind="window", window_rows=10, alpha_adjust="holm"
         )
 
-    # feature_ks_window / feature_ks_recent refusals
-    with pytest.raises(ValueError, match="feature_ks_recent"):
-        rp.spec.ewridge("m", targets=["y"], features=["x0"], half_life=10.0, feature_ks_window=20)
-    with pytest.raises(ValueError, match="feature_ks_window"):
-        rp.spec.ewridge("m", targets=["y"], features=["x0"], half_life=10.0, feature_ks_recent=5)
-    with pytest.raises(ValueError, match="must be greater than feature_ks_recent"):
+    # feature_ks_window_rows / feature_ks_recent_rows refusals
+    with pytest.raises(ValueError, match="feature_ks_recent_rows"):
+        rp.spec.ewridge(
+            "m", targets=["y"], features=["x0"], half_life=10.0, feature_ks_window_rows=20
+        )
+    with pytest.raises(ValueError, match="feature_ks_window_rows"):
+        rp.spec.ewridge(
+            "m", targets=["y"], features=["x0"], half_life=10.0, feature_ks_recent_rows=5
+        )
+    with pytest.raises(ValueError, match="must be greater than feature_ks_recent_rows"):
         rp.spec.ewridge(
             "m",
             targets=["y"],
             features=["x0"],
             half_life=10.0,
-            feature_ks_window=10,
-            feature_ks_recent=10,
+            feature_ks_window_rows=10,
+            feature_ks_recent_rows=10,
         )
     with pytest.raises(ValueError, match="at least 1"):
         rp.spec.ewridge(
@@ -1166,8 +1170,8 @@ def test_refusals_for_all_new_options():
             targets=["y"],
             features=["x0"],
             half_life=10.0,
-            feature_ks_window=10,
-            feature_ks_recent=0,
+            feature_ks_window_rows=10,
+            feature_ks_recent_rows=0,
         )
     with pytest.raises(ValueError, match="per-group cap"):
         rp.spec.ewridge(
@@ -1175,17 +1179,21 @@ def test_refusals_for_all_new_options():
             targets=["y"],
             features=["x0", "x1"],
             half_life=10.0,
-            feature_ks_window=20_000,
-            feature_ks_recent=100,
+            feature_ks_window_rows=20_000,
+            feature_ks_recent_rows=100,
         )
     with pytest.raises(ValueError, match="has no features"):
-        rp.spec.holt("h", targets=["y"], half_life=10.0, feature_ks_window=20, feature_ks_recent=5)
-    with pytest.raises(ValueError, match="feature_ks_window and feature_ks_recent do not apply"):
+        rp.spec.holt(
+            "h", targets=["y"], half_life=10.0, feature_ks_window_rows=20, feature_ks_recent_rows=5
+        )
+    with pytest.raises(
+        ValueError, match="feature_ks_window_rows and feature_ks_recent_rows do not apply"
+    ):
         rp.spec.kmeans(
             "k",
             features=["x0", "x1"],
             n_clusters=2,
             half_life=10.0,
-            feature_ks_window=20,
-            feature_ks_recent=5,
+            feature_ks_window_rows=20,
+            feature_ks_recent_rows=5,
         )

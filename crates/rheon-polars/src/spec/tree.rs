@@ -78,7 +78,7 @@ pub struct HoeffdingTreeRegressorSpec {
     pub max_slots: Option<usize>,
     /// Minimum weight in each child branch for a split to be considered (default `5`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_samples_split: Option<f64>,
+    pub min_child_weight: Option<f64>,
     /// Include the null (no-split) candidate at merit `0.0` (default `true`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merit_preprune: Option<bool>,
@@ -167,7 +167,7 @@ pub fn hoeffding_tree_regressor_cfg(spec: &Spec) -> Result<HoeffdingTreeRegresso
         tau: t.tau.unwrap_or(d.tau),
         radius: t.radius.unwrap_or(d.radius),
         max_slots: t.max_slots.unwrap_or(d.max_slots),
-        min_samples_split: t.min_samples_split.unwrap_or(d.min_samples_split),
+        min_child_weight: t.min_child_weight.unwrap_or(d.min_child_weight),
         merit_preprune: t.merit_preprune.unwrap_or(d.merit_preprune),
         max_depth: t.max_depth,
         min_weight: spec.min_periods_or_default(),

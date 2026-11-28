@@ -621,10 +621,10 @@ fn windows_int_config() -> WindowsConfig {
 fn windows_profile_config() -> WindowsConfig {
     serde_json::from_str(
         r#"{"formulas": [
-               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "weight": ["col", "w"]}]},
-               {"name": "spread", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "stat": "var", "bias": true, "closed": "left", "offset": "3s"}]},
-               {"name": "median", "tree": ["ewm_profile", ["col", "mid"], {"period": "4s", "buckets": 2, "half_life": "20s", "stat": "quantile", "quantile": 0.5, "window_size": "5s", "weight": ["col", "w"]}]},
-               {"name": "high", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "buckets": 5, "half_life": "20s", "stat": "quantile", "quantile": 0.9}]}
+               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "bins": 5, "half_life": "20s", "weight": ["col", "w"]}]},
+               {"name": "spread", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "bins": 5, "half_life": "20s", "stat": "var", "bias": true, "closed": "left", "origin": "3s"}]},
+               {"name": "median", "tree": ["ewm_profile", ["col", "mid"], {"period": "4s", "bins": 2, "half_life": "20s", "stat": "quantile", "quantile": 0.5, "window_size": "5s", "weight": ["col", "w"]}]},
+               {"name": "high", "tree": ["ewm_profile", ["col", "mid"], {"period": "10s", "bins": 5, "half_life": "20s", "stat": "quantile", "quantile": 0.9}]}
              ],
              "clock": "ts", "gap_cap": "50s", "group": "g"}"#,
     )
@@ -680,8 +680,8 @@ fn window_profile_input(df: &DataFrame) -> DataFrame {
 fn windows_profile_units_config() -> WindowsConfig {
     serde_json::from_str(
         r#"{"formulas": [
-               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "weight": ["col", "w"], "stat": "std"}]},
-               {"name": "recent", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "buckets": 3, "half_life": 12.0, "window_size": 20.0, "closed": "both", "min_samples": 2}]},
+               {"name": "level", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "bins": 3, "half_life": 12.0, "weight": ["col", "w"], "stat": "std"}]},
+               {"name": "recent", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "bins": 3, "half_life": 12.0, "window_size": 20.0, "closed": "both", "min_samples": 2}]},
                {"name": "shape", "tree": ["ewm_profile", ["col", "mid"], {"period": 6.0, "harmonics": 1, "half_life": 12.0, "window_size": 4.0, "stat": "var", "weight": ["col", "w"], "min_samples": 4}]}
              ],
              "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
@@ -1336,7 +1336,7 @@ fn bandit_anomaly_run(bytes: &[u8], input: &DataFrame) -> Ran {
 /// and `emit_inertia`, `ew_class` with `priors` + `reg_param` and
 /// `var_smoothing`, `holt` with `start = "known"` and `forecast_spans`,
 /// `corrchange` with `alpha_adjust = "holm"` and `emit_n_flagged`, and
-/// standalone `feature_ks_window` / `feature_ks_recent`.
+/// standalone `feature_ks_window_rows` / `feature_ks_recent_rows`.
 fn plan525_specs() -> Vec<Spec> {
     [
         r#"{"name": "km_fixed", "model": {"type": "kmeans", "n_clusters": 2, "centers": [[-0.5, 0.0], [0.5, 0.0]], "learn": false, "standardize": false, "emit_distances": true, "emit_inertia": true}, "targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "group": "g"}"#,
@@ -1344,7 +1344,7 @@ fn plan525_specs() -> Vec<Spec> {
         r#"{"name": "cls_vs", "model": {"type": "ew_class", "classes": ["0", "1"], "covariance_type": "diag", "precision_prior": 0.0, "priors": [0.3, 0.7], "var_smoothing": 0.01}, "targets": ["lab"], "features": ["x0", "x1"], "clock": "t", "half_life": 20.0, "gap_cap": 50.0, "group": "g"}"#,
         r#"{"name": "holt_kh", "model": {"type": "holt", "start": "known", "initial_level": 0.0, "initial_trend": 0.05, "forecast_spans": [2.0, 5.0]}, "targets": ["y"], "features": [], "clock": "t", "half_life": 10.0, "gap_cap": 50.0, "min_weight": 0.0, "group": "g"}"#,
         r#"{"name": "cc_holm", "model": {"type": "corrchange", "kind": "monitor", "window_rows": 12, "alpha_adjust": "holm", "emit_n_flagged": true}, "targets": ["x0"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
-        r#"{"name": "ks_health", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": "inf", "gap_cap": 50.0, "feature_ks_window": 16, "feature_ks_recent": 6, "group": "g"}"#,
+        r#"{"name": "ks_health", "model": {"type": "ewridge"}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "half_life": "inf", "gap_cap": 50.0, "feature_ks_window_rows": 16, "feature_ks_recent_rows": 6, "group": "g"}"#,
     ]
     .iter()
     .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
@@ -2087,8 +2087,8 @@ fn windows_invert_run(bytes: &[u8], input: &DataFrame) -> Ran {
 fn windows_stl_config() -> WindowsConfig {
     serde_json::from_str(
         r#"{"formulas": [
-               {"name": "trend", "tree": ["stl", ["col", "mid"], {"period": 2, "seasonal": 3, "window": 6, "lag": 1}]},
-               {"name": "season", "tree": ["mstl", ["col", "mid"], {"periods": [2, 3], "windows": [3, 3], "window": 7, "lag": 0, "closed": "right", "component": "seasonal", "season": 3}]},
+               {"name": "trend", "tree": ["stl", ["col", "mid"], {"period": 2, "seasonal": 3, "window_rows": 6, "lag": 1}]},
+               {"name": "season", "tree": ["mstl", ["col", "mid"], {"periods": [2, 3], "windows": [3, 3], "window_rows": 7, "lag": 0, "closed": "right", "component": "seasonal", "season": 3}]},
                {"name": "ahead", "tree": ["rewm_mean", ["col", "mid"], {"half_life": 5.0, "window_size": 3.0}]}
              ],
              "clock": "t", "gap_cap": 50.0, "group": "g"}"#,
@@ -2420,7 +2420,7 @@ fn merge_cfg(by: bool) -> MergeConfig {
     MergeConfig {
         clock: "t".into(),
         source: "source".into(),
-        by: by.then(|| "sym".into()),
+        group: by.then(|| "sym".into()),
         restart: by.then_some(rheon_polars::Restart::Int(600_000_000_000)),
         restart_text: by.then(|| "10m".into()),
         skip_step_back: false,
@@ -3782,7 +3782,7 @@ fn the_conformal_scores_fixture_freezes_its_forms() {
 fn hmm_bocpd_ext_specs() -> Vec<Spec> {
     [
         r#"{"name": "hmm_smooth", "model": {"type": "hmm", "n_components": 2, "covariance_type": "spherical", "precision_prior": 0.1, "warm_rows": 10, "smooth_lag": 4}, "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "half_life": 20.0, "weight": "w"}"#,
-        r#"{"name": "hmm_priors", "model": {"type": "hmm", "n_components": 2, "covariance_type": "diag", "precision_prior": 0.1, "means": [0.0, 0.0, 2.0, 2.0], "covs": [0.5, 0.0, 0.0, 0.5, 1.0, 0.0, 0.0, 1.0], "means_weight": 2.0, "covars_prior": [0.25], "covars_weight": 3.0, "params": "mc"}, "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "half_life": 20.0}"#,
+        r#"{"name": "hmm_priors", "model": {"type": "hmm", "n_components": 2, "covariance_type": "diag", "precision_prior": 0.1, "means": [0.0, 0.0, 2.0, 2.0], "covs": [0.5, 0.0, 0.0, 0.5, 1.0, 0.0, 0.0, 1.0], "means_weight": 2.0, "covariance_prior": [0.25], "covariance_weight": 3.0, "params": "mc"}, "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "half_life": 20.0}"#,
         r#"{"name": "bocpd_nb_kv", "model": {"type": "bocpd", "hazard_kind": "neg_binomial", "hazard_k": 3, "hazard_p": 0.1, "obs_var": [0.5, 1.0], "mean_prior": [0.0, 0.0], "covariance_prior": [1.0, 2.0], "max_state_bytes": 131072}, "features": ["x0", "x1"], "clock": "t", "gap_cap": 50.0, "min_weight": 0.0}"#,
     ]
     .iter()
@@ -4009,7 +4009,7 @@ fn kalman_nonlinear_specs() -> Vec<Spec> {
     [
         r#"{"name": "ekf_pois", "model": {"type": "kalman", "family": "poisson", "filter": "ekf", "q": [0.0001, 0.0001, 0.0001]}, "targets": ["mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w", "min_weight": 2.0}"#,
         r#"{"name": "ukf_gamma", "model": {"type": "kalman", "family": "gamma", "link": "inverse", "dispersion": 0.5, "filter": "ukf", "ukf_rule": "scalar_index", "p0": 0.05, "q": [0.0001, 0.0001, 0.0001]}, "targets": ["mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w", "min_weight": 2.0}"#,
-        r#"{"name": "ukf_merwe", "model": {"type": "kalman", "family": "gaussian", "link": "log", "obs_var": 1.0, "filter": "ukf", "ukf_rule": "merwe", "alpha": 0.8, "ukf_noise": "plugin", "q": [0.0001, 0.0001, 0.0001]}, "targets": ["mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w", "min_weight": 2.0}"#,
+        r#"{"name": "ukf_merwe", "model": {"type": "kalman", "family": "gaussian", "link": "log", "obs_var": 1.0, "filter": "ukf", "ukf_rule": "merwe", "ukf_alpha": 0.8, "ukf_noise": "plugin", "q": [0.0001, 0.0001, 0.0001]}, "targets": ["mid"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w", "min_weight": 2.0}"#,
     ]
     .iter()
     .map(|text| serde_json::from_str(text).unwrap_or_else(|e| panic!("{text}: {e}")))
@@ -4042,7 +4042,7 @@ fn regression_variants_specs() -> Vec<Spec> {
     [
         r#"{"name": "ev", "model": {"type": "ewridge", "evidence": true}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
         r#"{"name": "lpos", "model": {"type": "lasso", "penalties": [0.2, 0.05], "positive": true}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
-        r#"{"name": "tukey", "model": {"type": "huber", "huber_norm": "tukey", "huber_refit_rows": 30}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
+        r#"{"name": "tukey", "model": {"type": "huber", "norm": "tukey", "huber_refit_rows": 30}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
         r#"{"name": "pa_avg", "model": {"type": "pa", "mode": "pa1", "average": true}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
         r#"{"name": "sgd_var", "model": {"type": "sgd", "schedule": "optimal", "l1": 0.01, "l2": 0.05, "average": true, "invariant": true}, "targets": ["y"], "features": ["x0", "x1"], "clock": "t", "gap_cap": 10.0, "half_life": 50.0, "weight": "w"}"#,
     ]

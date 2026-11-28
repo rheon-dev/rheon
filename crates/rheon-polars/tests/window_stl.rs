@@ -60,11 +60,11 @@ fn col(df: &DataFrame, name: &str) -> Vec<Option<f64>> {
 #[test]
 fn each_row_is_its_groups_window_decomposed_at_the_lag() {
     let cfg = config(json!([
-        {"name": "trend", "tree": ["stl", ["col", "x"], {"period": 4, "window": 24, "lag": 5}]},
+        {"name": "trend", "tree": ["stl", ["col", "x"], {"period": 4, "window_rows": 24, "lag": 5}]},
         {"name": "season", "tree": ["stl", ["col", "x"],
-            {"period": 4, "window": 24, "lag": 5, "closed": "right", "component": "seasonal"}]},
+            {"period": 4, "window_rows": 24, "lag": 5, "closed": "right", "component": "seasonal"}]},
         {"name": "six", "tree": ["mstl", ["col", "x"],
-            {"periods": [6, 4], "windows": [7, 7], "window": 30, "lag": 6,
+            {"periods": [6, 4], "windows": [7, 7], "window_rows": 30, "lag": 6,
              "component": "seasonal", "season": 6}]},
     ]));
     let df = frame(150);
@@ -159,14 +159,14 @@ fn refusals_name_the_operator() {
     };
     let e = refused(json!(["stl", ["col", "x"], {"period": 4, "seasonal": 6}]));
     assert!(e.contains("stl") && e.contains("seasonal"), "{e}");
-    let e = refused(json!(["stl", ["col", "x"], {"period": 4, "window": 7}]));
+    let e = refused(json!(["stl", ["col", "x"], {"period": 4, "window_rows": 7}]));
     assert!(e.contains("fewer than two periods"), "{e}");
-    let e = refused(json!(["mstl", ["col", "x"], {"periods": [4, 6], "window": 12}]));
+    let e = refused(json!(["mstl", ["col", "x"], {"periods": [4, 6], "window_rows": 12}]));
     assert!(
         e.contains("period 6") && e.contains("half the window"),
         "{e}"
     );
-    let e = refused(json!(["stl", ["col", "x"], {"period": 24, "window": 40000}]));
+    let e = refused(json!(["stl", ["col", "x"], {"period": 24, "window_rows": 40000}]));
     assert!(e.contains("320024 bytes") && e.contains("262144"), "{e}");
     let e = refused(json!(["mstl", ["col", "x"], {"periods": [4, 6], "component": "seasonal"}]));
     assert!(e.contains("needs season"), "{e}");

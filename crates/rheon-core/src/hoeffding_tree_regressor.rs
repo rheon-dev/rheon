@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! VR = var(S) - (W_l / W) * var(S_l) - (W_r / W) * var(S_r)
-//!      (0 when W_l < min_samples_split or W_r < min_samples_split)
+//!      (0 when W_l < min_child_weight or W_r < min_child_weight)
 //! split when  VR(second) / VR(best) < 1 - eps   or   eps < tau,   with VR(best) > 0
 //! eps = sqrt(ln(1 / delta) / (2 * W))
 //! ```
@@ -75,7 +75,7 @@ pub struct HoeffdingTreeRegressorCfg {
     /// Tie-breaking threshold `tau >= 0`, finite (default `0.05`).
     pub tau: f64,
     /// Minimum weight on each side of a candidate split (`>= 1`, finite; default `5.0`).
-    pub min_samples_split: f64,
+    pub min_child_weight: f64,
     /// Quantization observer bucket radius (`> 0`, finite; default `0.25`).
     pub radius: f64,
     /// Hard cap on QO slots per feature per active leaf (`>= 2`; default `32`).
@@ -98,7 +98,7 @@ impl Default for HoeffdingTreeRegressorCfg {
             grace_period: 200.0,
             delta: 1e-7,
             tau: 0.05,
-            min_samples_split: 5.0,
+            min_child_weight: 5.0,
             radius: 0.25,
             max_slots: 32,
             merit_preprune: true,
@@ -169,11 +169,11 @@ impl HoeffdingTreeRegressorCfg {
                 self.tau
             ));
         }
-        if !(self.min_samples_split.is_finite() && self.min_samples_split >= 1.0) {
+        if !(self.min_child_weight.is_finite() && self.min_child_weight >= 1.0) {
             no.refuse(format!(
-                "{k_name}: min_samples_split must be finite and at least 1, but it is {}. Set \
-                 min_samples_split to the minimum weight each child must receive.",
-                self.min_samples_split
+                "{k_name}: min_child_weight must be finite and at least 1, but it is {}. Set \
+                 min_child_weight to the minimum weight each child must receive.",
+                self.min_child_weight
             ));
         }
         if !(self.radius.is_finite() && self.radius > 0.0) {
@@ -427,7 +427,7 @@ impl RegTree {
         }
         if let Some(obs) = self.leaves[li].obs.as_deref() {
             for (f, ob) in obs.iter().enumerate() {
-                match ob.best_split(cfg.min_samples_split) {
+                match ob.best_split(cfg.min_child_weight) {
                     Some(c) => sugg.push((
                         c.merit,
                         Some(RegSplitCand {

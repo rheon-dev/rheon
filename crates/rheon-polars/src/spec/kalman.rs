@@ -83,9 +83,9 @@ pub(crate) fn kalman_obs(spec: &Spec) -> Result<KalmanObs, String> {
         dispersion,
         filter,
         ukf_rule,
-        alpha,
-        beta,
-        kappa,
+        ukf_alpha,
+        ukf_beta,
+        ukf_kappa,
         ukf_noise,
         ..
     } = &spec.model
@@ -109,9 +109,9 @@ pub(crate) fn kalman_obs(spec: &Spec) -> Result<KalmanObs, String> {
         dispersion: dispersion.unwrap_or(1.0),
         filter,
         ukf_rule,
-        alpha: alpha.unwrap_or(1.0),
-        beta: beta.unwrap_or(2.0),
-        kappa: kappa.unwrap_or(0.0),
+        ukf_alpha: ukf_alpha.unwrap_or(1.0),
+        ukf_beta: ukf_beta.unwrap_or(2.0),
+        ukf_kappa: ukf_kappa.unwrap_or(0.0),
         ukf_noise,
     })
 }
@@ -162,9 +162,9 @@ impl Spec {
             dispersion,
             filter,
             ukf_rule,
-            alpha,
-            beta,
-            kappa,
+            ukf_alpha,
+            ukf_beta,
+            ukf_kappa,
             ukf_noise,
             coef_prior,
             emit_loglik,
@@ -230,9 +230,9 @@ impl Spec {
                 for (key, given) in [
                     ("ukf_rule", ukf_rule.is_some()),
                     ("ukf_noise", ukf_noise.is_some()),
-                    ("alpha", alpha.is_some()),
-                    ("beta", beta.is_some()),
-                    ("kappa", kappa.is_some()),
+                    ("ukf_alpha", ukf_alpha.is_some()),
+                    ("ukf_beta", ukf_beta.is_some()),
+                    ("ukf_kappa", ukf_kappa.is_some()),
                 ] {
                     if given {
                         no.refuse(format!(
@@ -247,9 +247,9 @@ impl Spec {
             {
                 let chosen = rule.name();
                 for (key, given) in [
-                    ("alpha", alpha.is_some()),
-                    ("beta", beta.is_some()),
-                    ("kappa", kappa.is_some()),
+                    ("ukf_alpha", ukf_alpha.is_some()),
+                    ("ukf_beta", ukf_beta.is_some()),
+                    ("ukf_kappa", ukf_kappa.is_some()),
                 ] {
                     if given {
                         no.refuse(format!(
@@ -307,37 +307,37 @@ impl Spec {
         }
 
         // Validate numeric UKF parameters when given.
-        if let Some(a) = alpha.filter(|a| !(a.is_finite() && *a > 0.0)) {
+        if let Some(a) = ukf_alpha.filter(|a| !(a.is_finite() && *a > 0.0)) {
             no.refuse(format!(
-                "spec {name:?}: alpha must be finite and above 0, but it is {}. Set alpha to a \
+                "spec {name:?}: ukf_alpha must be finite and above 0, but it is {}. Set ukf_alpha to a \
                  finite positive sigma-point spread, such as the default 1.",
                 num_label(a)
             ));
         }
-        if let Some(b) = beta.filter(|b| !b.is_finite()) {
+        if let Some(b) = ukf_beta.filter(|b| !b.is_finite()) {
             no.refuse(format!(
-                "spec {name:?}: beta must be finite, but it is {}. Set beta to a finite number, \
+                "spec {name:?}: ukf_beta must be finite, but it is {}. Set ukf_beta to a finite number, \
                  such as the default 2.",
                 num_label(b)
             ));
         }
-        if let Some(kap) = kappa.filter(|kap| !kap.is_finite()) {
+        if let Some(kap) = ukf_kappa.filter(|kap| !kap.is_finite()) {
             no.refuse(format!(
-                "spec {name:?}: kappa must be finite, but it is {}. Set kappa to a finite number, \
+                "spec {name:?}: ukf_kappa must be finite, but it is {}. Set ukf_kappa to a finite number, \
                  such as the default 0.",
                 num_label(kap)
             ));
         } else if filter_ok == Some(KalmanFilter::Ukf) && rule_ok == Some(UkfRule::Merwe) {
             let k = (self.k() + usize::from(self.fit_intercept)) as f64;
-            let a = alpha.unwrap_or(1.0);
-            let kap = kappa.unwrap_or(0.0);
+            let a = ukf_alpha.unwrap_or(1.0);
+            let kap = ukf_kappa.unwrap_or(0.0);
             if a.is_finite() && a > 0.0 {
                 let c = a * a * (k + kap);
                 if !(k + kap > 0.0 && c > 0.0 && c.is_finite()) {
                     no.refuse(format!(
                         "spec {name:?}: the Merwe sigma-point scale must be finite and above 0, \
-                         but with k = {}, alpha = {} and kappa = {} it is {}. Raise kappa above \
-                         -{} or adjust alpha.",
+                         but with k = {}, ukf_alpha = {} and ukf_kappa = {} it is {}. Raise ukf_kappa above \
+                         -{} or adjust ukf_alpha.",
                         self.k() + usize::from(self.fit_intercept),
                         num_label(a),
                         num_label(kap),

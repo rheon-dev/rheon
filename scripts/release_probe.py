@@ -607,7 +607,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
     (
         "realized",
         "realized",
-        dict(targets=["y", "z"], lm_window=30, group="g", half_life=25.0, **CLOCK),
+        dict(targets=["y", "z"], lm_window_rows=30, group="g", half_life=25.0, **CLOCK),
         [],
     ),
     # Two components of three columns by the incremental SVD.
@@ -649,7 +649,7 @@ WORKLOAD: list[tuple[str, str, dict, list[str]]] = [
                 "kurt": {"x2": 4},
             },
             kind={"skew": "standardized", "ac1": "standardized", "kurt": "standardized"},
-            se=True,
+            emit_se=True,
             group="g",
             half_life=25.0,
             **CLOCK,

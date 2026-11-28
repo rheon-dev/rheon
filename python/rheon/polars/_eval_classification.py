@@ -355,7 +355,7 @@ def compute_classification_metrics(
     targets: Sequence[str] | None = None,
     weight: str | None = None,
     min_samples: int = 30,
-    n_bins: int = 10,
+    bins: int = 10,
     compression: float = 200.0,
     max_state_bytes: int | None = None,
     chunk_size: int | None = None,
@@ -371,14 +371,14 @@ def compute_classification_metrics(
     """Implementation of :func:`rheon.polars.eval.classification_metrics`."""
     who = "rp.eval.classification_metrics"
     check_min_samples_fn(who, min_samples)
-    nb = _check_positive_int(who, "n_bins", n_bins, floor=1)
+    nb = _check_positive_int(who, "bins", bins, floor=1)
     comp = _check_compression(who, compression)
     cap = _check_max_state_bytes(who, max_state_bytes)
     cs = _check_chunk_size(who, chunk_size)
 
     # Validate Rust accumulator sizing upfront before executing any LazyFrame.
     try:
-        _native.ClassMetrics(n_bins=nb, compression=comp, max_state_bytes=cap, bins_only=False)
+        _native.ClassMetrics(bins=nb, compression=comp, max_state_bytes=cap, bins_only=False)
     except ValueError as exc:
         raise ValueError(f"{who}: {exc}") from None
 
@@ -400,9 +400,7 @@ def compute_classification_metrics(
     )
 
     def make_acc() -> _native.ClassMetrics:
-        return _native.ClassMetrics(
-            n_bins=nb, compression=comp, max_state_bytes=cap, bins_only=False
-        )
+        return _native.ClassMetrics(bins=nb, compression=comp, max_state_bytes=cap, bins_only=False)
 
     accs = _stream_accumulators(df, who, is_spec_mode, entries, gkeys, weight, needed, cs, make_acc)
     keys, key_schema = _key_schema(probe, is_spec_mode, gkeys)
@@ -458,7 +456,7 @@ def compute_reliability_bins(
     group: str | Iterable[str] | None = None,
     targets: Sequence[str] | None = None,
     weight: str | None = None,
-    n_bins: int = 10,
+    bins: int = 10,
     chunk_size: int | None = None,
     probe_fn: Callable[[pl.DataFrame | pl.LazyFrame], pl.DataFrame],
     check_columns_fn: Callable[..., None],
@@ -470,11 +468,11 @@ def compute_reliability_bins(
 ) -> pl.DataFrame:
     """Implementation of :func:`rheon.polars.eval.reliability_bins`."""
     who = "rp.eval.reliability_bins"
-    nb = _check_positive_int(who, "n_bins", n_bins, floor=1)
+    nb = _check_positive_int(who, "bins", bins, floor=1)
     cs = _check_chunk_size(who, chunk_size)
 
     try:
-        _native.ClassMetrics(n_bins=nb, bins_only=True)
+        _native.ClassMetrics(bins=nb, bins_only=True)
     except ValueError as exc:
         raise ValueError(f"{who}: {exc}") from None
 
@@ -496,7 +494,7 @@ def compute_reliability_bins(
     )
 
     def make_acc() -> _native.ClassMetrics:
-        return _native.ClassMetrics(n_bins=nb, bins_only=True)
+        return _native.ClassMetrics(bins=nb, bins_only=True)
 
     accs = _stream_accumulators(df, who, is_spec_mode, entries, gkeys, weight, needed, cs, make_acc)
     keys, key_schema = _key_schema(probe, is_spec_mode, gkeys)

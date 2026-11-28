@@ -4,7 +4,7 @@ Covers:
 1. ``ewridge(evidence=True, evidence_prior=...)`` vs ``sklearn.linear_model.BayesianRidge``
 2. ``sgd(average=True)`` and ``pa(average=True)`` vs ``sklearn.linear_model.SGDRegressor``
 3. ``lasso(positive=True)`` vs ``sklearn.linear_model.Lasso`` / ``ElasticNet``
-4. ``huber(huber_norm=...)`` (tukey, andrews, hampel, ramsay) vs ``statsmodels.robust.RLM``
+4. ``huber(norm=...)`` (tukey, andrews, hampel, ramsay) vs ``statsmodels.robust.RLM``
 5. ``sgd(l1=..., schedule="optimal", invariant=True)`` vs ``SGDRegressor`` and
    Karampatziakis-Langford's exact importance-weight-invariant step.
 """
@@ -270,7 +270,7 @@ def _huber_redescending_outputs() -> dict[str, np.ndarray]:
                 targets=["y"],
                 features=feats,
                 half_life=math.inf,
-                huber_norm=nm,
+                norm=nm,
                 huber_scale="mad",
                 ridge=1e-12,
                 huber_refit_rows=n,
@@ -660,7 +660,7 @@ def test_defaults_are_bit_identical_and_specs_roundtrip():
                 targets=["y"],
                 features=["x0", "x1", "x2"],
                 half_life=50.0,
-                huber_norm="huber",
+                norm="huber",
             ),
         ),
         (
@@ -728,7 +728,7 @@ def test_chunk_invariance_save_load_and_zero_weight_rule9():
             gap_cap=10.0,
             half_life=40.0,
             weight="w",
-            huber_norm="tukey",
+            norm="tukey",
             huber_refit_rows=40,
             emit_huber_scale=True,
         ),
@@ -854,7 +854,7 @@ def test_huber_norms_match_statsmodels_weights_and_redescending_keeps_scale():
             targets=["y"],
             features=["x0", "x1", "x2"],
             half_life=50.0,
-            huber_norm=nm,
+            norm=nm,
             emit_huber_scale=True,
             huber_refit_rows=30,
         )
@@ -906,10 +906,10 @@ def test_validation_refusals():
         rp.spec.ewridge("m", evidence=True, evidence_prior=math.inf, **base)
 
     # huber norm refusals
-    with pytest.raises(ValueError, match="huber_norm"):
-        rp.spec.huber("m", huber_norm="bogus", **base)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match='huber_norm="ramsay"'):
-        rp.spec.huber("m", huber_norm="ramsay", huber_delta=math.inf, **base)
+    with pytest.raises(ValueError, match="norm"):
+        rp.spec.huber("m", norm="bogus", **base)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match='norm="ramsay"'):
+        rp.spec.huber("m", norm="ramsay", huber_delta=math.inf, **base)
 
     # sgd refusals
     with pytest.raises(ValueError, match='schedule="optimal"'):

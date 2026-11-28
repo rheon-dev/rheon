@@ -1,7 +1,7 @@
 //! Unit tests for `hmm` extensions:
 //! - Fixed-lag smoothing (`smooth_lag`, `max_state_bytes`, `smoothed_for`)
 //! - Spherical covariance (`HmmCovariance::Spherical`)
-//! - Conjugate prior weights (`means_weight`, `covars_prior`, `covars_weight`)
+//! - Conjugate prior weights (`means_weight`, `covariance_prior`, `covariance_weight`)
 //! - Partial learning (`params` subsets of `"tmc"`)
 
 use super::*;
@@ -363,8 +363,8 @@ fn conjugate_prior_weights_match_closed_form_mstep_at_infinite_half_life() {
     cfg.covs = Some(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0]);
     cfg.extras = Some(Box::new(HmmCfgExtras {
         means_weight: Some(mw),
-        covars_prior: Some(vec![cp]),
-        covars_weight: Some(cw),
+        covariance_prior: Some(vec![cp]),
+        covariance_weight: Some(cw),
         ..Default::default()
     }));
     let mut m = Hmm::new(cfg).unwrap();
@@ -438,11 +438,11 @@ fn hmm_522_refusals_are_clear() {
     }));
     check(c, "tvtp_coef");
 
-    // covars_prior beside prior_rows refused.
+    // covariance_prior beside prior_rows refused.
     let mut c = given_cfg(2, 2, HmmCovariance::Full, 20.0);
     c.prior_rows = Some(2.0);
     c.extras = Some(Box::new(HmmCfgExtras {
-        covars_prior: Some(vec![0.1]),
+        covariance_prior: Some(vec![0.1]),
         ..Default::default()
     }));
     check(c, "prior_rows");

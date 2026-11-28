@@ -119,8 +119,8 @@ def test_the_reads_are_varresults_across_its_shapes(case):
     res = VAR(ys, exog=None if x is None else x[:, None]).fit(p, trend="c" if c["const"] else "n")
     irf = res.irf(h)
     b = _bound(_design(ys, p, x, c["const"]))
-    plain = bank.vector_ar(table="irf", periods=h, stderr=True)
-    orth = bank.vector_ar(table="orth_irf", periods=h, stderr=True)
+    plain = bank.vector_ar(table="irf", periods=h, se=True)
+    orth = bank.vector_ar(table="orth_irf", periods=h, se=True)
     assert _rel(_cube(plain, "value", k), irf.irfs) <= (h + 1) * b
     assert _rel(_cube(orth, "value", k), irf.orth_irfs) <= 2 * (h + 1) * b
     assert _rel(_cube(plain, "stderr", k), irf.stderr(orth=False)) <= 3 * (h + 1) * b

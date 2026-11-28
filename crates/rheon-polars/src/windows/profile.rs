@@ -122,9 +122,9 @@ pub enum PhaseSpan {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProfileDef {
     pub stat: ProfileStat,
-    pub buckets: u32,
+    pub bins: u32,
     pub period: PhaseSpan,
-    pub offset: PhaseSpan,
+    pub origin: PhaseSpan,
     /// The clock column's time zone, whose wall clock the phase is read on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone: Option<String>,
@@ -146,7 +146,7 @@ pub struct ProfileDef {
     /// A quantile's level, in `(0, 1)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quantile: Option<f64>,
-    /// The harmonic form's harmonics `K`, where `buckets` is 0: a Fourier
+    /// The harmonic form's harmonics `K`, where `bins` is 0: a Fourier
     /// series of `2K + 1` terms in the phase.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub harmonics: u32,
@@ -162,7 +162,7 @@ impl ProfileDef {
         if self.harmonics > 0 {
             harm::gram_bytes(self.terms())
         } else {
-            u64::from(self.buckets) * BUCKET_BYTES
+            u64::from(self.bins) * BUCKET_BYTES
         }
     }
 
@@ -234,18 +234,18 @@ impl ProfileDef {
             PhaseSpan::Units(u) => u.is_finite() && u > 0.0,
         };
         let same_kind = matches!(
-            (self.period, self.offset),
+            (self.period, self.origin),
             (PhaseSpan::Ns(_), PhaseSpan::Ns(_)) | (PhaseSpan::Units(_), PhaseSpan::Units(_))
         );
-        let offset_finite = match self.offset {
+        let origin_finite = match self.origin {
             PhaseSpan::Ns(_) => true,
             PhaseSpan::Units(u) => u.is_finite(),
         };
-        if (self.buckets == 0) == (self.harmonics == 0)
+        if (self.bins == 0) == (self.harmonics == 0)
             || (self.harmonics > 0 && (self.stat == ProfileStat::Quantile || self.bias))
             || !positive(self.period)
             || !same_kind
-            || !offset_finite
+            || !origin_finite
             || self.half_life.is_nan()
             || self.half_life <= 0.0
             || self.min_samples == 0
@@ -349,13 +349,13 @@ impl ProfState {
             buckets: if keeps || def.harmonics > 0 {
                 Vec::new()
             } else {
-                vec![Bucket::default(); def.buckets as usize]
+                vec![Bucket::default(); def.bins as usize]
             },
             rows: 0,
             at: None,
             left: f64::NAN,
             win: if keeps {
-                (0..def.buckets).map(|_| WinBucket::new(def)).collect()
+                (0..def.bins).map(|_| WinBucket::new(def)).collect()
             } else {
                 Vec::new()
             },
@@ -643,7 +643,7 @@ pub(super) fn fits(defs: &[ProfileDef], states: &[ProfState]) -> bool {
     states.is_empty()
         || (states.len() == defs.len()
             && states.iter().zip(defs).all(|(s, d)| {
-                let n = d.buckets as usize;
+                let n = d.bins as usize;
                 let shaped = if d.harmonics > 0 {
                     s.buckets.is_empty()
                         && s.win.is_empty()
@@ -705,11 +705,11 @@ enum Phase {
 
 /// The phase of a clock value (`None`: the row clock's `rows`).
 fn phase(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> Phase {
-    let units = |t: f64| match (def.period, def.offset) {
+    let units = |t: f64| match (def.period, def.origin) {
         (PhaseSpan::Units(p), PhaseSpan::Units(o)) => Phase::Float((t - o).rem_euclid(p), p),
         _ => Phase::Float(0.0, 1.0),
     };
-    let int = |t: i64| match (def.period, def.offset) {
+    let int = |t: i64| match (def.period, def.origin) {
         (PhaseSpan::Units(p), PhaseSpan::Units(o))
             if p.fract() == 0.0 && o.fract() == 0.0 && p.abs() < 9e18 && o.abs() < 9e18 =>
         {
@@ -723,7 +723,7 @@ fn phase(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> Phase {
         Some(ClockValue::I64(t)) => int(t),
         Some(ClockValue::F64(t)) => units(t),
         Some(ClockValue::Ns(t)) => {
-            let (PhaseSpan::Ns(p), PhaseSpan::Ns(o)) = (def.period, def.offset) else {
+            let (PhaseSpan::Ns(p), PhaseSpan::Ns(o)) = (def.period, def.origin) else {
                 return Phase::Float(0.0, 1.0);
             };
             let local = match def.zone.as_deref().map(zone_of) {
@@ -740,8 +740,8 @@ fn phase(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> Phase {
 /// The bucket of a clock value (`None`: the row clock's `rows`).
 pub(super) fn bucket(def: &ProfileDef, clock: Option<ClockValue>, rows: i64) -> u32 {
     match phase(def, clock, rows) {
-        Phase::Int(ph, p) => bucket_of_int(ph, p, def.buckets),
-        Phase::Float(ph, p) => bucket_of_f(ph, p, def.buckets),
+        Phase::Int(ph, p) => bucket_of_int(ph, p, def.bins),
+        Phase::Float(ph, p) => bucket_of_f(ph, p, def.bins),
     }
 }
 
@@ -899,7 +899,7 @@ fn bytes_with(
         } else {
             0
         };
-        return def.bytes() + u64::from(def.buckets) * sketches;
+        return def.bytes() + u64::from(def.bins) * sketches;
     };
     let x = values[def.input];
     let w = def.weight.map_or(1.0, |i| values[i]);
@@ -1092,12 +1092,12 @@ pub(super) fn flush(out: &Out<'_>, g: &mut Group, pending: &[u64], held: &mut He
 mod tests {
     use super::*;
 
-    fn def(period: PhaseSpan, buckets: u32) -> ProfileDef {
+    fn def(period: PhaseSpan, bins: u32) -> ProfileDef {
         ProfileDef {
             stat: ProfileStat::Mean,
-            buckets,
+            bins,
             period,
-            offset: match period {
+            origin: match period {
                 PhaseSpan::Ns(_) => PhaseSpan::Ns(0),
                 PhaseSpan::Units(_) => PhaseSpan::Units(0.0),
             },
@@ -1234,14 +1234,14 @@ mod tests {
                 ..base.clone()
             },
             ProfileDef {
-                buckets: 0,
+                bins: 0,
                 harmonics: 1,
                 stat: ProfileStat::Std,
                 closed: Closed::Left,
                 ..base.clone()
             },
             ProfileDef {
-                buckets: 0,
+                bins: 0,
                 harmonics: 2,
                 window: Some(PhaseSpan::Units(9.0)),
                 ..base

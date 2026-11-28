@@ -1581,7 +1581,7 @@ def classification_metrics(
     targets: Sequence[str] | None = None,
     weight: str | None = None,
     min_samples: int = 30,
-    n_bins: int = 10,
+    bins: int = 10,
     compression: float = 200.0,
     max_state_bytes: int | None = None,
     chunk_size: int | None = None,
@@ -1616,7 +1616,7 @@ def classification_metrics(
     ``min_samples``
         Minimum usable positive-weight rows per key to report derived scores
         (default 30). Keys below ``min_samples`` keep counts and null scores.
-    ``n_bins``
+    ``bins``
         Number of uniform reliability bins over ``[0, 1]`` for ECE and MCE
         (default 10; must be at least 1).
     ``compression``
@@ -1639,7 +1639,7 @@ def classification_metrics(
 
     ``ValueError``
         Invalid mode combination, non-binary target values on positive-weight
-        rows, invalid ``n_bins``, ``compression``, ``max_state_bytes``,
+        rows, invalid ``bins``, ``compression``, ``max_state_bytes``,
         ``min_samples``, or ``chunk_size``, or colliding column names.
     :class:`~rheon.WrongTypeError`
         An argument or column has an incompatible type.
@@ -1653,7 +1653,7 @@ def classification_metrics(
         df_bin = df.with_columns((pl.col("y") > 0).cast(pl.Float64).alias("y"))
         spec = rp.spec.ftrl("clf", targets=["y"], features=["x0", "x1"], half_life=50)
         out = rp.ModelBank([spec]).fit_predict(df_bin)
-        scores = rp.eval.classification_metrics(out, spec, n_bins=10)
+        scores = rp.eval.classification_metrics(out, spec, bins=10)
 
     .. rubric:: See also
 
@@ -1668,7 +1668,7 @@ def classification_metrics(
     the positive and negative centroid distributions. ``pr_auc`` computes
     Average Precision :math:`\sum_k (R_k - R_{k-1}) P_k` stepping from the
     highest score centroid downward. ``ece`` and ``mce`` are exact over
-    ``n_bins`` uniform bins on ``[0, 1]`` with probabilities clipped to
+    ``bins`` uniform bins on ``[0, 1]`` with probabilities clipped to
     ``[0, 1]``; ``brier`` is the exact weighted mean squared error
     :math:`\frac{1}{W} \sum_i w_i (p_i - y_i)^2`. Results are bit-for-bit
     identical across chunk sizes on both ``DataFrame`` and ``LazyFrame``.
@@ -1682,7 +1682,7 @@ def classification_metrics(
         targets=targets,
         weight=weight,
         min_samples=min_samples,
-        n_bins=n_bins,
+        bins=bins,
         compression=compression,
         max_state_bytes=max_state_bytes,
         chunk_size=chunk_size,
@@ -1705,13 +1705,13 @@ def reliability_bins(
     group: str | Iterable[str] | None = None,
     targets: Sequence[str] | None = None,
     weight: str | None = None,
-    n_bins: int = 10,
+    bins: int = 10,
     chunk_size: int | None = None,
 ) -> pl.DataFrame:
     r"""Exact uniform-bin reliability diagram table for binary probabilities.
 
     Streams ``df`` in bounded memory without building t-digests and returns
-    one row per ``(key, bin)`` across ``n_bins`` uniform intervals on
+    one row per ``(key, bin)`` across ``bins`` uniform intervals on
     ``[0, 1]``.
 
     .. rubric:: Parameters
@@ -1735,7 +1735,7 @@ def reliability_bins(
     ``weight``
         Optional non-negative weight column. Rows with zero, null, non-finite,
         or negative weight are skipped cleanly.
-    ``n_bins``
+    ``bins``
         Number of uniform bins over ``[0, 1]`` (default 10; must be at least 1).
     ``chunk_size``
         Optional batch height when streaming chunks.
@@ -1751,7 +1751,7 @@ def reliability_bins(
 
     ``ValueError``
         Invalid mode combination, non-binary target values on positive-weight
-        rows, ``n_bins < 1``, ``chunk_size < 1``, or colliding column names.
+        rows, ``bins < 1``, ``chunk_size < 1``, or colliding column names.
     :class:`~rheon.WrongTypeError`
         An argument or column has an incompatible type.
     :class:`~rheon.ColumnNotFoundError`
@@ -1764,7 +1764,7 @@ def reliability_bins(
         df_bin = df.with_columns((pl.col("y") > 0).cast(pl.Float64).alias("y"))
         spec = rp.spec.ftrl("clf", targets=["y"], features=["x0", "x1"], half_life=50)
         out = rp.ModelBank([spec]).fit_predict(df_bin)
-        bins = rp.eval.reliability_bins(out, spec, n_bins=10)
+        bins = rp.eval.reliability_bins(out, spec, bins=10)
 
     .. rubric:: See also
 
@@ -1785,7 +1785,7 @@ def reliability_bins(
         group=group,
         targets=targets,
         weight=weight,
-        n_bins=n_bins,
+        bins=bins,
         chunk_size=chunk_size,
         probe_fn=_probe,
         check_columns_fn=_check_columns,
