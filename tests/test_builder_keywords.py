@@ -22,16 +22,25 @@ TIER = "essential"
 
 
 @pytest.mark.parametrize(
-    ("builder", "kw"),
-    [(rp.spec.kmeans, {"n_clusters": 2}), (rp.spec.micro, {"eps": 0.3})],
+    ("builder", "kw", "sig_default"),
+    [
+        (rp.spec.kmeans, {"n_clusters": 2}, None),
+        (rp.spec.micro, {"eps": 0.3}, True),
+    ],
     ids=["kmeans", "micro"],
 )
-def test_standardize_says_its_default(builder, kw):
-    """``True`` in the signature and in the dict, where ``None`` stood for
-    it and a reader had to look the default up."""
-    assert inspect.signature(builder).parameters["standardize"].default is True
+def test_standardize_says_its_default(builder, kw, sig_default):
+    """``micro`` carries ``True`` in its signature; ``kmeans`` carries ``None``
+    because its default depends on whether fixed ``centers`` are given
+    (``True`` without ``centers``, ``False`` with them)."""
+    assert inspect.signature(builder).parameters["standardize"].default is sig_default
     spec = builder("m", features=["x0", "x1"], half_life=50.0, **kw)
     assert spec["model"]["standardize"] is True
+    if builder is rp.spec.kmeans:
+        fixed = rp.spec.kmeans(
+            "m", features=["x0", "x1"], half_life=50.0, centers=[[0.0, 0.0], [1.0, 1.0]]
+        )
+        assert fixed["model"]["standardize"] is False
 
 
 @pytest.mark.parametrize(

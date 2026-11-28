@@ -386,7 +386,7 @@ ledger.guard("sgd_variants", _sgd_variants_outputs, oracles=["scikit-learn"])
 # --- 50-seed oracle-ledger grids ---------------------------------------------
 
 
-@pytest.mark.oracle_grid
+@pytest.mark.oracle_grid(reason="50-seed BayesianRidge evidence oracle grid")
 def test_ewridge_evidence_matches_sklearn_bayesian_ridge_50_seeds():
     got = _ewridge_evidence_outputs()
     n, k = 120, 4
@@ -435,7 +435,7 @@ def test_ewridge_evidence_matches_sklearn_bayesian_ridge_50_seeds():
     assert w < 1e-9
 
 
-@pytest.mark.oracle_grid
+@pytest.mark.oracle_grid(reason="50-seed averaged SGD and PA oracle grid")
 def test_averaged_sgd_and_pa_match_sklearn_50_seeds():
     got = _averaged_sgd_pa_outputs()
     n, k = 150, 4
@@ -493,7 +493,7 @@ def test_averaged_sgd_and_pa_match_sklearn_50_seeds():
     assert w < 1e-11
 
 
-@pytest.mark.oracle_grid
+@pytest.mark.oracle_grid(reason="50-seed positive Lasso and ElasticNet oracle grid")
 def test_lasso_positive_matches_sklearn_50_seeds():
     got = _lasso_positive_outputs()
     n_small, k_small = 140, 6
@@ -532,7 +532,7 @@ def test_lasso_positive_matches_sklearn_50_seeds():
     assert w < 1e-7
 
 
-@pytest.mark.oracle_grid
+@pytest.mark.oracle_grid(reason="50-seed redescending Huber RLM oracle grid")
 def test_huber_redescending_matches_statsmodels_rlm_50_seeds():
     got = _huber_redescending_outputs()
     sm_norms = {
@@ -561,7 +561,7 @@ def test_huber_redescending_matches_statsmodels_rlm_50_seeds():
         assert w < 1e-4, f"{nm}: worst coef error vs statsmodels RLM was {w}"
 
 
-@pytest.mark.oracle_grid
+@pytest.mark.oracle_grid(reason="50-seed SGD l1, optimal schedule, and invariant oracle grid")
 def test_sgd_elastic_optimal_invariant_50_seeds():
     got = _sgd_variants_outputs()
     n, k = 150, 4

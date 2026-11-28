@@ -3963,7 +3963,7 @@ rows, and `n0 <= width`, so `width >= 1` wherever the line runs: `> 0` and \
 `>= 0` agree"""
 
 [[equivalent]]
-file = "crates/rheon-core/src/garch/dist.rs"
+file = "crates/rheon-core/src/special.rs"
 function = "ln_gamma"
 mutation = "replace < with <="
 line_has = "while x < 20.0 {"

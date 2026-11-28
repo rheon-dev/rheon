@@ -195,8 +195,8 @@ inputs, 3,831 differ, each in its last bits"""
 file = "crates/rheon-core/src/ewclass.rs"
 function = "EwClass::score"
 mutation = "replace - with +"
-line_has = "ell[c] = (weights[c] / total).ln() - 0.5 * log_det - 0.5 * q[j];"
-columns = [64]
+line_has = "ell[c] = log_prior(c) - 0.5 * log_det - 0.5 * q[j];"
+columns = [51]
 kind = "rounding"
 why = """`log_det` is one pooled determinant, the same for every class, so the \
 mutant shifts every class's score alike; the softmax and the argmax the \
@@ -206,8 +206,8 @@ model reports cancel a common shift, up to rounding"""
 file = "crates/rheon-core/src/ewclass.rs"
 function = "EwClass::score"
 mutation = "replace * with +"
-line_has = "ell[c] = (weights[c] / total).ln() - 0.5 * log_det - 0.5 * q[j];"
-columns = [70]
+line_has = "ell[c] = log_prior(c) - 0.5 * log_det - 0.5 * q[j];"
+columns = [57]
 kind = "rounding"
 why = "a shift common to every class, as `replace - with +` on this line"
 
