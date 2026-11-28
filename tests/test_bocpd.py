@@ -1842,3 +1842,31 @@ def test_runtime_max_state_bytes_warns_at_half_and_refuses_atomically():
 def test_nb_hazard_and_obs_var_refusals(kwargs, message):
     with pytest.raises(ValueError, match=message):
         rp.spec.bocpd("b", features=["x0"], **kwargs)
+
+
+def test_known_variance_high_d_warms_up_in_two_rows():
+    """Known-variance BOCPD is per-feature Normal-Normal, so its default warm_rows
+    is 2 regardless of feature dimension d, while diag and full keep d + 2."""
+    import json
+
+    from rheon import _rheon as _native
+    from rheon import _spec
+
+    d = 20
+    feats = [f"x{i}" for i in range(d)]
+    spec_kv = rp.spec.bocpd("b", features=feats, obs_var=1.0, min_weight=0.0)
+    spec_diag = rp.spec.bocpd("b", features=feats, covariance_type="diag", min_weight=0.0)
+    spec_full = rp.spec.bocpd("b", features=feats, covariance_type="full", min_weight=0.0)
+
+    def resolved(spec):
+        return json.loads(_native.resolved_defaults(_spec._json(spec)))
+
+    assert resolved(spec_kv)["derived"]["warm_rows"] == 2
+    assert resolved(spec_diag)["derived"]["warm_rows"] == d + 2
+    assert resolved(spec_full)["derived"]["warm_rows"] == d + 2
+
+    rng = np.random.default_rng(42)
+    df = pl.DataFrame({f: rng.normal(size=10) for f in feats})
+    out = rp.ModelBank([spec_kv]).fit_predict(df)["b"].struct.unnest()
+    assert out["p_change"][0] is None and out["p_change"][1] is None
+    assert out["p_change"][2] is not None and 0.0 <= out["p_change"][2] <= 1.0

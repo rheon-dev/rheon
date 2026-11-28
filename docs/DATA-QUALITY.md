@@ -344,7 +344,7 @@ constant over a stretch, which is the same problem in time.
 | `constant` | warning | a feature, or an audited column, took one value on every row |
 | `frozen` | warning | from an audit: the rows equal to the row before, less those its values' frequencies give by chance, outnumber the changes at the column's smallest step by five standard errors, in a column whose smallest step is less than half its moves |
 | `low_support` | warning | more than half of the smallest coefficient comes from the ridge rather than the data; not repeated for a column already found constant, collinear or shrunk by the ridge |
-| `solve_failures` | warning | a solve needed jitter, or failed and kept the previous fit: constant or collinear features, or too few rows for their number. For `lasso` (`info`) its coordinate descent ran out of sweeps more than 10 times, not counting the ones on a Gram whose rows are too few for its features while it is still gaining rows (its first rows), which no data could have met; a count here is correlated or nearly dependent features |
+| `solve_failures` | warning | a solve needed jitter, or failed and kept the previous fit: constant or collinear features, or too few rows for their number. For `lasso` (`info`), coordinate descent ran out of sweeps on more than 5% of solves across at least 20 learned rows (excluding initial underdetermined Grams); high rates indicate correlated or nearly dependent features |
 
 **How `frozen` tells a stale feed from a column that holds still.** A
 column that moves smoothly, seen at its own resolution, repeats the row
@@ -868,15 +868,13 @@ independent rows read about `−sqrt(n)`.
 
 | code | severity | fires when |
 |---|---|---|
-| `random_walk` | warning | from an audit: the Dickey-Fuller statistic of the column's regression on its own previous row is above −3.5, over 100 pairs of rows or more (the 1% critical value is −3.43) |
+| `random_walk` | warning | from an audit: over 25 or more adjacent pairs, the Dickey-Fuller statistic exceeds the MacKinnon (2010) 5% finite-sample critical value `tau_c(n)` (approaching −2.86 at large `n`) |
 
-Random walks of 300 and 2,000 rows read no lower than −3.2, and the clean
-shapes of 2,000 rows read no higher than −6.5 (columns that persist at
-0.95 a row).
-Groups of 50 rows, which the 100-row guard leaves out, read −4.7. A column
-that persists at 0.99 a row over 2,000 rows reads as a random walk on
-seven seeds of ten, and one at 0.98 on none. A row counter and a clock in
-epoch seconds, fed as columns, are fits with no residual, and read `+inf`.
+Random walks of 25 to 2,000 rows fail to reject the unit root at the 5%
+critical value on ~95% of draws, while clean stationary shapes of 2,000 rows
+read no higher than −6.5 (even at autocorrelation 0.95). A row counter and a
+clock in epoch seconds, fed as columns, are fits with no residual, and read
+`+inf`.
 
 [Random walks make a relation out of
 drift](explanation/how-data-quality-checks-work.md#random-walks-make-a-relation-out-of-drift)

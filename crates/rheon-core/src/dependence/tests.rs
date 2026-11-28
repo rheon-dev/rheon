@@ -967,3 +967,56 @@ fn reference_state_sizes_fit_under_256kb_default_cap() {
     assert!(ranks.cfg().fixed_bytes() < 100_000);
     assert!(combined.cfg().fixed_bytes() < 135_000);
 }
+
+#[test]
+fn default_bin_warm_rows_scales_with_bins_and_respects_state_cap() {
+    // 1D edge precision ceil(62.5 * max(Bx, By)) vs 2D cell count 5 * Bx * By.
+    assert_eq!(default_bin_warm_rows(4, 4), 250);
+    assert_eq!(default_bin_warm_rows(8, 8), 500);
+    assert_eq!(default_bin_warm_rows(16, 16), 1_280);
+    assert_eq!(default_bin_warm_rows(4, 16), 1_000);
+    assert_eq!(default_bin_warm_rows(32, 32), 5_120);
+
+    let cfg_default = DependenceCfg {
+        n_features: 1,
+        n_targets: 1,
+        bins: 16,
+        target_bins: 16,
+        ..Default::default()
+    };
+    assert_eq!(cfg_default.resolved_bin_warm_rows(), Some(1_280));
+
+    let cfg_small = DependenceCfg {
+        n_features: 1,
+        n_targets: 1,
+        bins: 4,
+        target_bins: 4,
+        ..Default::default()
+    };
+    assert_eq!(cfg_small.resolved_bin_warm_rows(), Some(250));
+
+    // Explicit override stays untouched.
+    let cfg_explicit = DependenceCfg {
+        bins: 4,
+        target_bins: 4,
+        bin_warm_rows: Some(77),
+        ..Default::default()
+    };
+    assert_eq!(cfg_explicit.resolved_bin_warm_rows(), Some(77));
+
+    // Clamping by max_state_bytes prevents spurious warmup-hold refusal.
+    let cfg_capped = DependenceCfg {
+        n_features: 10,
+        n_targets: 2,
+        bins: 32,
+        target_bins: 32,
+        max_state_bytes: Some(256 * 1024),
+        ..Default::default()
+    };
+    let w = cfg_capped.resolved_bin_warm_rows().unwrap();
+    assert!(
+        (2..5_120).contains(&w),
+        "expected clamped warm rows, got {w}"
+    );
+    assert!(cfg_capped.validate().is_ok());
+}

@@ -3662,7 +3662,8 @@ class ModelBank:
            * - ``solve_failures``
              - warning, info
              - a model's :meth:`solve_failures` count is above 0
-               (warning); for ``lasso``, more than 10 (information)
+               (warning); for ``lasso``, more than 5% of solves over at least
+               20 learned rows (information)
            * - ``not_checked``
              - info
              - numpy is not installed, so ``collinear`` and ``leakage`` were
@@ -3703,8 +3704,9 @@ class ModelBank:
              - 10 distinct values or fewer over 100 usable rows or more
            * - ``random_walk``
              - warning
-             - the Dickey-Fuller statistic is above -3.5 (the 1% critical
-               value is -3.43) over 100 pairs of rows or more
+             - the Dickey-Fuller statistic is above the MacKinnon (2010) 5%
+               finite-sample critical value (from -2.99 at 25 pairs toward
+               -2.86 asymptotically) over 25 pairs of rows or more
            * - ``heavy_tails``
              - info
              - an excess kurtosis of 5 or more, or a value 10 robust standard

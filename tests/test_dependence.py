@@ -762,3 +762,45 @@ def test_fifty_seeds_dependence_oracles():
     assert abs(float(np.mean(mm_biases))) < abs(float(np.mean(mi_biases)))
     assert max(abs(b) for b in mm_biases) < 0.08
     assert min(xi_parabolas) > 0.70
+
+
+def test_default_bin_warm_rows_scales_with_bins_and_cap():
+    """Default MI bin_warm_rows derives from max(ceil(62.5 * max(Bx, By)), 5 * Bx * By)
+    and clamps to fit max_state_bytes, while explicit overrides stay untouched."""
+    import json
+
+    from rheon import _rheon as _native
+    from rheon import _spec
+
+    def resolved_warm(**kw):
+        spec = rp.spec.dependence("d", targets=["y"], features=["x"], **kw)
+        return json.loads(_native.resolved_defaults(_spec._json(spec)))["derived"]["bin_warm_rows"]
+
+    assert resolved_warm(bins=4, target_bins=4) == 250
+    assert resolved_warm(bins=8, target_bins=8) == 500
+    assert resolved_warm(bins=16, target_bins=16) == 1280
+    assert resolved_warm(bins=4, target_bins=16) == 1000
+    assert resolved_warm(bins=4, target_bins=4, bin_warm_rows=55) == 55
+
+    # Tight max_state_bytes clamps default warm-up instead of refusing the spec.
+    spec_cap = rp.spec.dependence(
+        "d",
+        targets=["y"],
+        features=[f"x{i}" for i in range(10)],
+        bins=32,
+        target_bins=32,
+        max_state_bytes=256 * 1024,
+    )
+    warm_cap = json.loads(_native.resolved_defaults(_spec._json(spec_cap)))["derived"][
+        "bin_warm_rows"
+    ]
+    assert 2 <= warm_cap < 5120
+
+    # End-to-end: bins=4 warms up at exactly 250 learned rows.
+    rng = np.random.default_rng(123)
+    x = rng.standard_normal(260)
+    df = pl.DataFrame({"x": x, "y": x * x + 0.1 * rng.standard_normal(260)})
+    s4 = rp.spec.dependence("d", targets=["y"], features=["x"], bins=4)
+    out = rp.ModelBank([s4]).fit_predict(df)["d"].struct.unnest()
+    assert out["mi_x_y"][249] is None
+    assert out["mi_x_y"][250] is not None

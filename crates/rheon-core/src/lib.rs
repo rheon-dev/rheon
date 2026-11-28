@@ -211,7 +211,8 @@ pub use cluster::{
 pub use conformal::{Conformal, gauss_gain, ln_basic, norm_ppf};
 pub use conformal_variants::{
     CONFORMAL_P_ENTRY_BYTES, CONFORMAL_P_FIXED_BYTES, ConformalPEntry, ConformalPRing,
-    ConformalPWindow, ConformalSlot, DEFAULT_CONFORMAL_P_WINDOW_ROWS, SignedConformal,
+    ConformalPWindow, ConformalSlot, DEFAULT_CONFORMAL_P_WINDOW_ROWS, MIN_CONFORMAL_P_WINDOW_ROWS,
+    SignedConformal, default_conformal_p_window_rows, default_conformal_p_window_rows_for_grid,
     sort_offsets_non_crossing,
 };
 pub use constraint::Constraint;
@@ -226,9 +227,9 @@ pub use ddsketch::{
 pub use ddsketch_model::{DdSketchModel, DdSketchModelCfg};
 pub use deco::{Deco, DecoCfg, DecoDynamics};
 pub use dependence::{
-    DEFAULT_BIN_WARM_ROWS as DEPENDENCE_DEFAULT_BIN_WARM_ROWS,
     DEFAULT_BINS as DEPENDENCE_DEFAULT_BINS, DEPENDENCE_MAX_BINS, DEPENDENCE_NO_BIN, Dependence,
     DependenceCfg, DependenceMeasure, DependencePair,
+    default_bin_warm_rows as dependence_default_bin_warm_rows,
 };
 pub use drift::{
     Adwin, AdwinCfg, AdwinRange, Cusum, Ddm, DriftDetector, Eddm, ErrorRate, Kswin, KswinCfg,
@@ -311,7 +312,10 @@ pub use krls::{
 };
 pub use lasso::{Lasso, LassoCfg};
 pub use lincon::LinearConstraints;
-pub use margbins::{BinCfg, BinRule, BinStat};
+pub use margbins::{
+    BinCfg, BinRule, BinStat, DEFAULT_BUDGET_MIB, default_bin_warm_rows,
+    default_bin_warm_rows_capped,
+};
 pub(crate) use margbins::{MarginalBins, edges_from};
 pub use marginal::{
     FeatureMomentLayout, Marginal, MarginalCfg, MarginalShard, Pair as MarginalPair, SerialRule,

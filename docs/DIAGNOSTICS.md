@@ -1475,9 +1475,12 @@ works with single- or multi-level `conformal`, `conformal_rate="auto"`,
 `conformal`, `emit_conformal_p=True` emits `conformal_p_<t>`, the unsmoothed
 out-of-sample conformal p-value `(Σ ω_i 1{a_i ≥ a_t} + 1) / (Σ ω_i + 1)` for
 `a = |resid| / sigma` against a rolling calibration ring. By default the ring
-holds the last 1,000 positive-weight rows (`conformal_p_window_rows`); setting
-`conformal_p_window_size` instead keeps a clock-span window (expiring old
-scores at the row's clock stamp). The ring's memory is bounded by the spec's
+holds `ceil(10 * half_life)` positive-weight rows on a row clock with finite
+decay, capturing 99.9% of the decayed weight (floored at 10 and capped to fit
+`max_state_bytes`). Under infinite half-life or an explicit clock, the default
+is 1,000 positive-weight rows (`conformal_p_window_rows`). Setting
+`conformal_p_window_size` instead keeps a clock-span window, expiring old
+scores at the row's clock stamp. The ring's memory is bounded by the spec's
 `max_state_bytes` budget (default 256 KiB, ceiling 64 MiB), warning once past
 half the cap and refusing atomically before exceeding it. Zero-weight rows are
 scored without entering the ring.

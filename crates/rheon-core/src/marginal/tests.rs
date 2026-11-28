@@ -5469,3 +5469,18 @@ fn a_windowed_lag_correlation_with_an_unmatched_row_is_its_definition() {
         "the window's lag_corr_yy {got} against its definition {want}"
     );
 }
+
+#[test]
+fn default_bin_warm_rows_matches_quantile_edge_se_formula() {
+    assert_eq!(crate::default_bin_warm_rows(4), 250);
+    assert_eq!(crate::default_bin_warm_rows(8), 500);
+    assert_eq!(crate::default_bin_warm_rows(16), 1_000);
+    assert_eq!(crate::default_bin_warm_rows(64), 4_000);
+    assert_eq!(crate::default_bin_warm_rows(3), 188);
+
+    // Without tight cap, returns formula value; with tight cap, clamps safely >= n_bins.
+    assert_eq!(crate::default_bin_warm_rows_capped(16, 4, 2, None), 1_000);
+    let capped = crate::default_bin_warm_rows_capped(64, 10, 2, Some(64 * 1024));
+    assert!((64..4_000).contains(&capped), "got {capped}");
+    assert!(crate::margbins::hold_bytes(capped, 10, 2) <= 64 * 1024);
+}

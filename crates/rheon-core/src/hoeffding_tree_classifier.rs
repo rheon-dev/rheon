@@ -35,7 +35,8 @@
 //! 64 MiB. Packed state bytes are `40 + 8C + 20B + (8C + 27)L + 40 k C A`
 //! (`L` leaves, `B = L - 1` branches, `A` active leaves with observers, `k`
 //! features, `C` classes). Splits stop once `struct_bytes(L + 1, B + 1)`
-//! would pass the cap; after every split and every 1,000 learned rows,
+//! would pass the cap; after every split and, while any leaf is capped,
+//! every `ceil(grace_period) * max(1, active_leaves)` learned rows,
 //! eligible leaves are ranked by promise (`sum n_c - max n_c`) and at most
 //! `(cap - struct_bytes) / (40 k C)` remain active (reserving observers at
 //! full size so packed bytes never pass the cap). Cap-deactivated leaves keep
@@ -65,8 +66,6 @@ const CLF_HEADER_BYTES: u64 = 40;
 const CLF_BRANCH_BYTES: u64 = 20;
 /// Packed fixed leaf bytes (`last`, `mc`, `nb` = 24, `depth: u16` = 2, `flags: u8` = 1).
 const CLF_LEAF_FIXED_BYTES: u64 = 27;
-/// Learned rows between memory-cap promise re-rankings.
-const RECHECK_INTERVAL: u64 = 1_000;
 /// Default effective depth ceiling when `max_depth` is `None`.
 const DEFAULT_MAX_DEPTH: usize = u16::MAX as usize;
 
@@ -751,6 +750,17 @@ impl HoeffdingTreeClassifier {
         ) <= self.cfg.cap()
     }
 
+    fn recheck_interval(&self) -> u64 {
+        let grace = self.cfg.grace_period.ceil().max(1.0);
+        let gp = if grace >= u64::MAX as f64 {
+            u64::MAX
+        } else {
+            grace as u64
+        };
+        let active = self.leaves.iter().filter(|l| l.active).count().max(1) as u64;
+        gp.saturating_mul(active).max(1)
+    }
+
     fn enforce_cap(&mut self) {
         let cap = self.cfg.cap();
         let sb = clf_struct_bytes(self.cfg.n_classes, self.leaves.len(), self.branches.len());
@@ -984,7 +994,9 @@ impl OnlineModel for HoeffdingTreeClassifier {
         };
         self.labeled_weight += weight;
         self.rows_learned += 1;
-        if self.rows_learned.is_multiple_of(RECHECK_INTERVAL) {
+        if self.leaves.iter().any(|l| l.capped)
+            && self.rows_learned.is_multiple_of(self.recheck_interval())
+        {
             self.enforce_cap();
         }
         let mut node = self.root;

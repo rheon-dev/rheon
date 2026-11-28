@@ -3082,7 +3082,8 @@ ridge tail MAE: 1.059
 more features under a cap below 1 MiB, the builder issues a `ReadinessWarning`
 suggesting at least 1 MiB. When a tree approaches its cap, it never refuses
 rows: splits pause once the structure alone would exceed the cap. After every
-split and every 1,000 learned rows, active leaves are ranked by their sum of
+split and, while any leaf is capped, every `ceil(grace_period) * max(1, active_leaves)`
+learned rows, active leaves are ranked by their sum of
 squared target deviations `S`, and only as many keep observers as the remaining
 bytes pay for. Deactivated leaves keep updating their target mean
 and reactivate with fresh observers if their promise ranks back in.
@@ -5109,9 +5110,11 @@ across wide feature sets.
 When `"mi"` or `"mi_mm"` is active, bin edges can be fixed upfront with
 `bin_edges` and `target_bin_edges` so MI is ready from the first row.
 Otherwise, edges are learned once from the initial warm-up sample under
-`bin_rule="quantile"` (the default) or `"fixed"`. The warm-up takes
-`bin_warm_rows` positive-weight rows (default `min(1000, window_rows)` under
-`window_rows`, else `1000`) or `bin_warm_span` clock units. While edges are
+`bin_rule="quantile"` (the default) or `"fixed"`. The warm-up takes `bin_warm_rows` positive-weight rows or `bin_warm_span` clock
+units. By default `bin_warm_rows` is `max(ceil(62.5 * max(B_x, B_y)), 5 * B_x * B_y)`,
+bounding 1D quantile-edge relative error while averaging at least 5 rows per 2D
+cell, shrunk to `window_rows` under `window_rows` and capped to fit
+`max_state_bytes`. While edges are
 warming up, MI fields are null with `withheld_reason = "below_warm_rows"`; once
 the warm-up completes, every buffered row is replayed into the joint tables
 (and evicted down to the active window when a window is set).
@@ -5601,7 +5604,8 @@ classed right, out-of-sample: 0.991
 
 **The state and its byte cap.** `max_state_bytes` defaults to 256 KB (ceiling
 64 MiB). When the tree approaches its cap, splits pause once the structure
-alone would exceed it. After every split and every 1,000 learned rows,
+alone would exceed it. After every split and, while any leaf is capped, every
+`ceil(grace_period) * max(1, active_leaves)` learned rows,
 eligible leaves are ranked by the weight their majority class gets wrong
 (`total - max(counts)`), keeping observers only on the highest-promise leaves
 the remaining bytes pay for. Leaves deactivated by `max_share_to_split` or a
@@ -5959,7 +5963,9 @@ per-row hazard `1 / hazard_p`.
 Passing `obs_var` (one positive variance or one per feature) switches the
 emission to a per-feature normal-normal conjugate pair with known observation
 variance, using `mean_prior` and `covariance_prior` as the prior mean and
-variance of the unknown mean.
+variance of the unknown mean. Because each feature is univariate with known
+observation variance, its default `warm_rows` when a prior is omitted is 2
+regardless of feature dimension `d` (rather than `d + 2`).
 
 Live runs are held to `max_state_bytes` (default 256 KB, ceiling 64 MiB) per
 group at run time: the bank warns once when a group passes half the cap and

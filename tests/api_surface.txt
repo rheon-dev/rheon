@@ -783,7 +783,6 @@
     clock.restart_after_step_back = null
     clock.session_gap = null
     stream.average_eta = 1.0
-    stream.conformal_p_window_rows = 1000
     stream.conformal_rate = 0.05
     stream.drift_action = "flag"
     stream.drift_delta = 0.5
@@ -811,6 +810,7 @@
     model.window_every = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -826,6 +826,7 @@
     model.pairs = false
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.max_error_inflation = "inf"
@@ -848,6 +849,7 @@
     model.slot = 16520866656637732840
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -875,6 +877,7 @@
     model.warm_rows = null
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.max_error_inflation = "inf"
@@ -902,6 +905,7 @@
     model.span_rows = 20
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.max_error_inflation = "inf"
@@ -931,6 +935,7 @@
     model.start_span = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -949,6 +954,7 @@
     model.window_rows = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -966,6 +972,7 @@
     model.n_features = 2
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -974,6 +981,7 @@
     stream.specification_half_life = 50.0
     stream.tails_half_life = 50.0
   dependence(features=['x0'], half_life=50.0, targets=['y']):
+    derived.bin_warm_rows = 1280
     model.bin_edges = null
     model.bin_rule = "quantile"
     model.bin_warm_rows = null
@@ -994,6 +1002,7 @@
     model.window_rows = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1012,6 +1021,7 @@
     model.window_every = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1035,6 +1045,7 @@
     model.window_every = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.gram_threads = "auto"
     stream.influence_half_life = 50.0
@@ -1050,6 +1061,7 @@
     model.terms = [{"bias": false, "kind": "central", "name": "var", "powers": [[{"col": 0, "lag": 0.0}, 2]]}]
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1079,6 +1091,7 @@
     model.window_every = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.gram_threads = "auto"
     stream.influence_half_life = 50.0
@@ -1102,6 +1115,7 @@
     model.window_rows = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1124,6 +1138,7 @@
     model.strict_binary = false
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1145,6 +1160,7 @@
     model.vol = "garch"
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.max_error_inflation = "inf"
@@ -1166,6 +1182,7 @@
     model.var_power = 1.5
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1185,6 +1202,7 @@
     model.window_rows = 250
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.max_error_inflation = "inf"
@@ -1203,6 +1221,7 @@
     model.window_events = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1229,6 +1248,7 @@
     model.warm_rows = 1000
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1254,6 +1274,7 @@
     model.tau = 0.05
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.max_error_inflation = "inf"
@@ -1276,6 +1297,7 @@
     model.tau = 0.05
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.max_error_inflation = "inf"
@@ -1301,6 +1323,7 @@
     model.trend_half_life = 200.0
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1331,6 +1354,7 @@
     model.standardize = false
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1352,6 +1376,7 @@
     model.y_min = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1376,6 +1401,7 @@
     model.standardize = true
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1399,6 +1425,7 @@
     model.warm_rows = 500
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1426,6 +1453,7 @@
     model.window_rows = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1454,6 +1482,7 @@
     model.window_every = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1475,6 +1504,7 @@
     model.window_every = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1497,6 +1527,7 @@
     model.standardize = true
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1517,6 +1548,7 @@
     model.standardize = true
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1534,6 +1566,7 @@
     model.n_features = 2
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1552,6 +1585,7 @@
     model.window_rows = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1582,6 +1616,7 @@
     model.standardize = false
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1600,6 +1635,7 @@
     model.tree_size = 256
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.max_error_inflation = "inf"
@@ -1624,6 +1660,7 @@
     model.theta = 1.0
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.max_error_inflation = "inf"
@@ -1643,6 +1680,7 @@
     model.window_rows = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1660,6 +1698,7 @@
     model.n_targets = 1
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1672,6 +1711,7 @@
     model.n_targets = 1
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.max_error_inflation = "inf"
@@ -1701,6 +1741,7 @@
     model.target_spread = true
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1719,6 +1760,7 @@
     model.spacing = 1.0
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1733,6 +1775,7 @@
     model.n_targets = 1
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.max_error_inflation = "inf"
@@ -1760,6 +1803,7 @@
     model.window_every = null
     stream.breaks_half_life = 50.0
     stream.calibration_half_life = 200.0
+    stream.conformal_p_window_rows = 500
     stream.feature_health_half_life = 50.0
     stream.influence_half_life = 50.0
     stream.max_error_inflation = "inf"
@@ -1773,6 +1817,7 @@
     model.solve_share = null
     stream.breaks_half_life.lam = 0.99
     stream.calibration_half_life.lam = 0.997490569934
+    stream.conformal_p_window_rows = 690
     stream.feature_health_half_life.lam = 0.99
     stream.influence_half_life.lam = 0.99
     stream.robust_se_half_life.lam = 0.99
@@ -1811,7 +1856,7 @@
     model.bins.refit_rows = 0
     model.bins.rule = "quantile"
     model.bins.stat = "mean"
-    model.bins.warm_rows = 1000
+    model.bins.warm_rows = 250
   corrchange(features=['x0', 'x1'], kind='sequential', window_rows=20), the lines that differ from corrchange's:
     model.kind = "sequential"
     model.monitor_rows = 20
@@ -1832,6 +1877,7 @@
     model.window_rows = 50
     stream.breaks_half_life = 17.3263687769
     stream.calibration_half_life = 69.3054751076
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = 17.3263687769
     stream.influence_half_life = 17.3263687769
     stream.robust_se_half_life = 17.3263687769
@@ -1844,6 +1890,7 @@
     model.window_clock = 30.0
     stream.breaks_half_life = 10.3933557491
     stream.calibration_half_life = 41.5734229963
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = 10.3933557491
     stream.influence_half_life = 10.3933557491
     stream.robust_se_half_life = 10.3933557491
@@ -1854,6 +1901,7 @@
     model.window_events = 20
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.robust_se_half_life = "inf"
@@ -1878,6 +1926,7 @@
     model.window_rows = 40
     stream.breaks_half_life = 13.8600550164
     stream.calibration_half_life = 55.4402200657
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = 13.8600550164
     stream.influence_half_life = 13.8600550164
     stream.robust_se_half_life = 13.8600550164
@@ -1889,18 +1938,21 @@
     model.window_clock = 30.0
     stream.breaks_half_life = 10.3933557491
     stream.calibration_half_life = 41.5734229963
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = 10.3933557491
     stream.influence_half_life = 10.3933557491
     stream.robust_se_half_life = 10.3933557491
     stream.specification_half_life = 10.3933557491
     stream.tails_half_life = 10.3933557491
   dependence(features=['x0'], measures=['mi', 'mi_mm', 'spearman', 'kendall', 'xi'], rank_every_rows=5, targets=['y'], window_rows=50), the lines that differ from dependence's:
+    derived.bin_warm_rows = 50
     model.decay.Halflife = "inf"
     model.measures = ["mi", "mi_mm", "spearman", "kendall", "xi"]
     model.rank_every_rows = 5
     model.window_rows = 50
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.robust_se_half_life = "inf"
@@ -1914,6 +1966,7 @@
     model.window_clock = 30.0
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.robust_se_half_life = "inf"
@@ -1925,6 +1978,7 @@
     model.window_clock = 30.0
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.robust_se_half_life = "inf"
@@ -1958,6 +2012,7 @@
     model.window_rows = 50
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.robust_se_half_life = "inf"
@@ -1969,6 +2024,7 @@
     model.window_clock = 30.0
     stream.breaks_half_life = "inf"
     stream.calibration_half_life = "inf"
+    stream.conformal_p_window_rows = 1000
     stream.feature_health_half_life = "inf"
     stream.influence_half_life = "inf"
     stream.robust_se_half_life = "inf"

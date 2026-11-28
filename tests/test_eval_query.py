@@ -855,6 +855,21 @@ def _floor(lags: int) -> int:
     return 4 * (lags + 1)
 
 
+def _ew_floor(lags: int, half_life: float) -> int:
+    """First row index where Kish effective Bartlett degrees of freedom
+    ``n_eff / (lags + 1)`` reaches 4 under ``half_life``."""
+    lam = 0.5 ** (1.0 / half_life)
+    lam2 = lam * lam
+    need = 4.0 * (lags + 1)
+    c = 1
+    while True:
+        w1 = (1.0 - lam**c) / (1.0 - lam)
+        w2 = (1.0 - lam2**c) / (1.0 - lam2)
+        if (w1 * w1) / w2 >= need:
+            return c - 1
+        c += 1
+
+
 def _null_only_where_constant(got: list[float | None], v: np.ndarray, floor: int) -> bool:
     """Every null row of ``got`` is one of the first ``floor``, or one whose
     values so far are all equal."""
@@ -943,10 +958,11 @@ class TestPerRowWhereSIsZeroButForRounding:
         df, read = _sides(d)
         kw = dict(lags=lags, half_life=half_life)
         exact = _exact(_value(call, read), half_life, lags, list(range(0, n, 9)))
+        floor = _ew_floor(lags, half_life)
         for rows in (None, 37):
             got = _per_row(df, call, monkeypatch, rows, **kw)
-            _held(got, exact, rows, _floor(lags))
-            assert _null_only_where_constant(got, _value(call, read), _floor(lags)), rows
+            _held(got, exact, rows, floor)
+            assert _null_only_where_constant(got, _value(call, read), floor), rows
 
     @pytest.mark.parametrize("call", list(CALLS))
     @pytest.mark.parametrize(

@@ -1800,6 +1800,35 @@ pub struct BinCfg {
 /// 129).
 pub const DEFAULT_BUDGET_MIB: f64 = 256.0;
 
+/// Default warm-up rows for learning `n_bins` 1D bin edges: `ceil(n_bins / rho^2)`
+/// with `rho = 1 / sqrt(62.5)` (`ceil(62.5 * n_bins)`), bounding the quantile-edge
+/// rank standard error at `rho` of one bin width `1 / n_bins`. Equals `1_000` at
+/// `n_bins = 16`, `250` at `n_bins = 4`, and `4_000` at `n_bins = 64`.
+pub fn default_bin_warm_rows(n_bins: usize) -> usize {
+    n_bins.saturating_mul(125).div_ceil(2).max(n_bins)
+}
+
+/// Default warm-up rows capped so the warm-up hold fits within `budget_bytes`
+/// (the tighter of `bin_budget` and `max_state_bytes`, when finite), never
+/// falling below `n_bins`.
+pub fn default_bin_warm_rows_capped(
+    n_bins: usize,
+    n_features: usize,
+    n_targets: usize,
+    budget_bytes: Option<u64>,
+) -> usize {
+    let raw = default_bin_warm_rows(n_bins);
+    let Some(cap) = budget_bytes else {
+        return raw;
+    };
+    let row_bytes = hold_bytes(1, n_features, n_targets) as u64;
+    if row_bytes == 0 {
+        return raw;
+    }
+    let max_fit = usize::try_from(cap / row_bytes).unwrap_or(usize::MAX);
+    raw.min(max_fit.max(n_bins))
+}
+
 /// The default in bytes, for the tests that pin the boundary.
 #[cfg(test)]
 const MEMORY_BUDGET: usize = 256 << 20;

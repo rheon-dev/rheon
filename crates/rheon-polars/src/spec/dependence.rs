@@ -26,7 +26,8 @@ pub struct DependenceSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bin_rule: Option<String>,
     /// Positive-weight rows held to learn MI bin edges when edges are not given.
-    /// Defaults to `min(1000, window_rows)` under `window_rows`, else `1000`.
+    /// Defaults to `max(ceil(62.5 * max(B_x, B_y)), 5 * B_x * B_y)` (shrunk by
+    /// `window_rows` and `max_state_bytes` when applicable).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bin_warm_rows: Option<usize>,
     /// Clock span held to learn MI bin edges (at least 2 rows); mutually

@@ -89,11 +89,13 @@ MISSING_TARGET_SHARE = 0.5
 #: Fewer than this share of the rows fed processed: the rest skipped for a
 #: missing feature or weight (``few_learned``).
 PROCESSED_SHARE = 0.5
-#: ``lasso``'s coordinate descent runs out of sweeps on a few solves of
+#: ``lasso``'s coordinate descent runs out of sweeps on occasional solves of
 #: correlated features past its warm-up (a cap hit while the rows are too few
-#: for the features is not counted); past this count it is told
+#: for the features is not counted); past this share of solved rows (over at
+#: least ``LASSO_MIN_SOLVED_ROWS`` learned rows) it is told
 #: (``solve_failures``).
-LASSO_SWEEPS = 10
+LASSO_FAIL_RATE = 0.05
+LASSO_MIN_SOLVED_ROWS = 20
 #: ``|mean| / std`` past which a model that centres its features is told its
 #: input keeps few digits of its variation (``level_over_spread``, info).
 LEVEL_INFO = 1e6
@@ -145,11 +147,20 @@ FROZEN_GRID = 0.5
 #: rows: a category or a flag stored as numbers (``few_values``).
 FEW_VALUES = 10
 FEW_VALUES_ROWS = 100
-#: The Dickey-Fuller statistic above which a column cannot be told from a
-#: random walk (``random_walk``), over at least ``RANDOM_WALK_ROWS`` pairs of
-#: consecutive rows: past the 1% critical value with a constant, -3.43.
-RANDOM_WALK_TAU = -3.5
-RANDOM_WALK_ROWS = 100
+#: Minimum adjacent observation pairs for the Dickey-Fuller random-walk check
+#: (``random_walk``), using MacKinnon (2010) 5% finite-sample response-surface
+#: critical values :func:`mackinnon_tau_c`.
+RANDOM_WALK_MIN_ROWS = 25
+
+
+def mackinnon_tau_c(n: int) -> float:
+    """MacKinnon (2010) 5% finite-sample response-surface critical value for
+    the constant-only Dickey-Fuller unit-root test at ``n`` regression
+    observations (matching ``statsmodels.tsa.stattools.adfuller``)."""
+    inv = 1.0 / float(n)
+    return -2.86154 - 2.8903 * inv - 4.234 * inv * inv - 40.04 * inv * inv * inv
+
+
 #: The excess kurtosis, or the largest robust z, at or past which a column's
 #: tails are heavy (``heavy_tails``).
 HEAVY_KURTOSIS = 5.0
@@ -689,18 +700,29 @@ def _spec_findings(
                 "as large as the feature's variance",
             )
         n_fail = failures.get((name, g), 0)
-        if kind == "lasso" and n_fail > LASSO_SWEEPS:
-            add(
-                "info",
-                "solve_failures",
-                g,
-                None,
-                float(n_fail),
-                float(LASSO_SWEEPS),
-                f"{_who(g).capitalize()}'s coordinate descent ran out of max_iter "
-                f"sweeps {n_fail} times, common on correlated features: raise "
-                "max_iter or loosen tol if the path's coefficients matter",
-            )
+        if kind == "lasso":
+            n_targets = max(1, len(spec.get("targets") or ()))
+            model_cfg = resolved.get("model") or {}
+            penalties = model_cfg.get("penalties")
+            n_penalties = max(1, len(penalties)) if isinstance(penalties, list) else 1
+            hl = spec.get("half_life")
+            n_instances = max(1, len(hl)) if isinstance(hl, list) else 1
+            n_solves = learned * n_targets * n_penalties * n_instances
+            if learned >= LASSO_MIN_SOLVED_ROWS and n_solves > 0:
+                fail_rate = n_fail / float(n_solves)
+                if fail_rate > LASSO_FAIL_RATE:
+                    add(
+                        "info",
+                        "solve_failures",
+                        g,
+                        None,
+                        fail_rate,
+                        LASSO_FAIL_RATE,
+                        f"{_who(g).capitalize()}'s coordinate descent ran out of max_iter "
+                        f"sweeps on {fail_rate:.1%} of solves ({n_fail} of {n_solves}), common "
+                        "on correlated features: raise max_iter or loosen tol if the path's "
+                        "coefficients matter",
+                    )
         elif kind == "sgd" and n_fail:
             add(
                 "warning",
@@ -1152,19 +1174,22 @@ def _audit_column(r: dict[str, Any], add: Any) -> None:
             "a quantity; one-hot encode a category",
         )
     tau = r["unit_root_t"]
-    if tau is not None and adjacent >= RANDOM_WALK_ROWS and tau > RANDOM_WALK_TAU:
-        add(
-            "warning",
-            "random_walk",
-            g,
-            col,
-            tau,
-            RANDOM_WALK_TAU,
-            f"column {col!r} cannot be told from a random walk in {who} (lag-1 "
-            f"autocorrelation {_fmt(r['autocorr'])}, Dickey-Fuller {_fmt(tau)}): a "
-            "regression of one level on another is spurious; difference it, or "
-            "take its deviation from a moving mean",
-        )
+    if tau is not None and adjacent >= RANDOM_WALK_MIN_ROWS:
+        crit = mackinnon_tau_c(adjacent)
+        if tau > crit:
+            add(
+                "warning",
+                "random_walk",
+                g,
+                col,
+                tau,
+                crit,
+                f"column {col!r} cannot be told from a random walk in {who} (lag-1 "
+                f"autocorrelation {_fmt(r['autocorr'])}, Dickey-Fuller {_fmt(tau)} "
+                f"vs 5% critical value {_fmt(crit)} at n={adjacent}): a "
+                "regression of one level on another is spurious; difference it, or "
+                "take its deviation from a moving mean",
+            )
     kurt, rz = r["kurtosis"], r["robust_z"]
     far = rz is not None and rz >= HEAVY_ROBUST_Z
     if far or (kurt is not None and kurt >= HEAVY_KURTOSIS):

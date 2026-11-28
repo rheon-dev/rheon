@@ -86,8 +86,15 @@ use ranks::{
 /// Default number of bins per feature (and target when `target_bins` is unset).
 pub const DEFAULT_BINS: usize = 16;
 
-/// Default warm-up rows for learning MI bin edges when no row window shrinks it.
-pub const DEFAULT_BIN_WARM_ROWS: usize = 1_000;
+/// Default warm-up rows for learning MI bin edges from `(b_x, b_y)`:
+/// `max(ceil(max(b_x, b_y) / rho^2), 5 * b_x * b_y)` with `rho = 1 / sqrt(62.5)`
+/// (matching `marginal`'s 1D quantile-edge precision and Cochran's 5 expected
+/// observations per 2D joint cell).
+pub fn default_bin_warm_rows(b_x: usize, b_y: usize) -> usize {
+    let edge_rows = crate::margbins::default_bin_warm_rows(b_x.max(b_y));
+    let cell_rows = b_x.saturating_mul(b_y).saturating_mul(5);
+    edge_rows.max(cell_rows).max(2)
+}
 
 /// One nonlinear dependence measure [`Dependence`] can compute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -244,16 +251,54 @@ impl DependenceCfg {
     }
 
     /// Effective warm-up row count when `needs_warmup()` and `bin_warm_span` is unset:
-    /// explicit `bin_warm_rows`, or `min(1000, window_rows).max(2)` under `window_rows`,
-    /// else `1000`.
+    /// explicit `bin_warm_rows`, or [`default_bin_warm_rows`] from `(b_x, b_y)`,
+    /// shrunk to `window_rows.max(2)` under `window_rows` and clamped to fit
+    /// inside `max_state_bytes` when a separate [`MiHold`] buffer is allocated.
     pub fn resolved_bin_warm_rows(&self) -> Option<usize> {
         if !self.needs_warmup() || self.bin_warm_span.is_some() {
             return None;
         }
-        Some(self.bin_warm_rows.unwrap_or_else(|| {
-            self.window_rows
-                .map_or(DEFAULT_BIN_WARM_ROWS, |w| w.clamp(2, DEFAULT_BIN_WARM_ROWS))
-        }))
+        if let Some(explicit) = self.bin_warm_rows {
+            return Some(explicit);
+        }
+        let bx = match &self.bin_edges {
+            Some(e) => e.iter().map(|v| v.len() + 1).max().unwrap_or(2),
+            None => self.bins,
+        };
+        let by = match &self.target_bin_edges {
+            Some(e) => e.iter().map(|v| v.len() + 1).max().unwrap_or(2),
+            None => self.target_bins,
+        };
+        let mut warm = default_bin_warm_rows(bx, by);
+        if let Some(w) = self.window_rows {
+            warm = w.clamp(2, warm);
+        }
+        let reuses_ring = self.has_ranks() && self.window_rows.is_some_and(|wr| warm <= wr);
+        if !reuses_ring {
+            let per_row = MiHold::bytes_for(
+                1,
+                self.n_features,
+                self.n_targets,
+                self.decays(),
+                self.window_clock.is_some(),
+            );
+            let ring_bytes = match self.window_rows {
+                Some(w) if self.has_ranks() => {
+                    ValueRing::bytes_for(w, self.n_features, self.n_targets, false)
+                }
+                _ => 0,
+            };
+            let overhead = self
+                .base_bytes()
+                .saturating_add(self.fixed_rank_bytes())
+                .saturating_add(ring_bytes);
+            let cap = self.cap();
+            if cap > overhead && per_row > 0 {
+                let max_fit = usize::try_from((cap - overhead) / per_row).unwrap_or(usize::MAX);
+                warm = warm.min(max_fit.max(2));
+            }
+        }
+        Some(warm)
     }
 
     /// Whether warm-up rows can be read directly from `ValueRing` without a separate [`MiHold`].

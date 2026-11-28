@@ -215,7 +215,9 @@ def bocpd(
         stops atomically if a row would exceed it.
     ``warm_rows``
         The learned rows held to set the prior from, where ``mean_prior`` or
-        ``covariance_prior`` is left out. Default ``d + 2``, one more than
+        ``covariance_prior`` is left out. Default ``2`` when ``obs_var`` is
+        set (per-feature normal-normal with known observation variance,
+        independent of ``d``), and ``d + 2`` otherwise, one more than
         ``d + 1``, the smallest count whose covariance is positive definite in
         general. :func:`hmm` and :func:`kmeans` name theirs the same way. At
         least 2, and refused beside both priors, which leave nothing to set.

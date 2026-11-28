@@ -385,10 +385,17 @@ impl BocpdCfg {
         self.prior_mean.is_none() || self.prior_scale.is_none()
     }
 
-    /// The learned rows the warm-up buffers: `warm_rows`, or `d + 2`.
+    /// The learned rows the warm-up buffers: `warm_rows`, or `2` for
+    /// [`BocpdEmission::KnownVariance`] (per-feature Normal–Normal with known
+    /// `obs_var`, independent of `d`), or `d + 2` for `gaussian`, `diag`, and
+    /// `robust`.
     pub fn warm_rows_or_default(&self) -> usize {
-        self.warm_rows
-            .unwrap_or_else(|| self.n_features.saturating_add(2))
+        self.warm_rows.unwrap_or_else(|| match self.emission {
+            BocpdEmission::KnownVariance => 2,
+            BocpdEmission::Gaussian | BocpdEmission::Diag | BocpdEmission::Robust => {
+                self.n_features.saturating_add(2)
+            }
+        })
     }
 
     /// `Ψ₀` as a `d×d` matrix.

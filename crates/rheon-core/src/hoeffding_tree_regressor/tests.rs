@@ -432,3 +432,46 @@ fn a_state_of_the_wrong_shape_is_refused() {
     }
     check_refused(bad);
 }
+
+#[test]
+fn adaptive_recheck_skips_when_uncapped_and_scales_when_capped() {
+    let tight = HoeffdingTreeRegressorCfg {
+        n_features: 2,
+        n_targets: 1,
+        grace_period: 15.2,
+        delta: 0.05,
+        max_slots: 8,
+        max_state_bytes: Some(reg_struct_bytes(16, 15) + 2 * reg_obs_reserve(2, 8)),
+        ..Default::default()
+    };
+    let mut whole = HoeffdingTreeRegressor::new(tight.clone()).unwrap();
+    let mut split_m = HoeffdingTreeRegressor::new(tight).unwrap();
+    let mut saw_capped = false;
+    for i in 0..800 {
+        let f0 = ((i * 37) % 100) as f64 / 50.0 - 1.0;
+        let f1 = ((i * 53) % 100) as f64 / 50.0 - 1.0;
+        let y = 3.0 * f0 - 2.0 * f1 + (if f0 > 0.0 { 4.0 } else { -4.0 });
+        whole.step(&[f0, f1], &[Some(y)], 1.0, 1.0);
+        if i == 377 {
+            let bytes = rmp_serde::to_vec_named(&split_m.state()).unwrap();
+            let st: State = rmp_serde::from_slice(&bytes).unwrap();
+            split_m = HoeffdingTreeRegressor::restore(&st).unwrap();
+        }
+        split_m.step(&[f0, f1], &[Some(y)], 1.0, 1.0);
+        if whole.trees[0].leaves.iter().any(|l| l.capped) {
+            saw_capped = true;
+            let active = whole.trees[0]
+                .leaves
+                .iter()
+                .filter(|l| l.active)
+                .count()
+                .max(1) as u64;
+            assert_eq!(whole.trees[0].recheck_interval(&whole.cfg), 16 * active);
+        }
+    }
+    assert!(saw_capped, "expected at least one capped leaf");
+    assert_eq!(
+        whole, split_m,
+        "save/load across adaptive recheck must stay bit-identical"
+    );
+}

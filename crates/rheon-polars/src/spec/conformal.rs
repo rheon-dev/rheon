@@ -7,6 +7,7 @@
 use rheon_core::{
     CONFORMAL_P_FIXED_BYTES, ConformalPRing, ConformalPWindow, DEFAULT_CONFORMAL_P_WINDOW_ROWS,
     DEFAULT_STATE_BYTES, STATE_BYTES_CEILING, check_max_state_bytes,
+    default_conformal_p_window_rows_for_grid,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -125,6 +126,25 @@ impl Spec {
         self.conformal.is_some() && !self.uses_legacy_conformal()
     }
 
+    /// Effective row window size for `emit_conformal_p` when
+    /// `conformal_p_window_size` is not set: explicit `conformal_p_window_rows`,
+    /// else on a row clock (`clock.is_none()`) with finite decay scaled to
+    /// `ceil(10 * h)` (floored at 10, capped to fit `conformal_p_per_ring_cap()`),
+    /// else [`DEFAULT_CONFORMAL_P_WINDOW_ROWS`] (`1000`).
+    pub fn conformal_p_window_rows_or_default(&self) -> usize {
+        if let Some(w) = self.conformal_p_window_rows {
+            return w;
+        }
+        if self.clock.is_some() {
+            return DEFAULT_CONFORMAL_P_WINDOW_ROWS;
+        }
+        let Ok(decays) = self.decays() else {
+            return DEFAULT_CONFORMAL_P_WINDOW_ROWS;
+        };
+        let ds: Vec<rheon_core::Decay> = decays.into_iter().map(|(_, d)| d).collect();
+        default_conformal_p_window_rows_for_grid(Some(&ds), self.conformal_p_per_ring_cap())
+    }
+
     /// Resolved window policy for standalone conformal p-value rings, or
     /// `None` when `emit_conformal_p` is false.
     pub fn conformal_p_window(&self) -> Option<ConformalPWindow> {
@@ -142,8 +162,7 @@ impl Spec {
             })
         } else {
             Some(ConformalPWindow::Rows(
-                self.conformal_p_window_rows
-                    .unwrap_or(DEFAULT_CONFORMAL_P_WINDOW_ROWS),
+                self.conformal_p_window_rows_or_default(),
             ))
         }
     }
@@ -375,10 +394,7 @@ impl Spec {
                 if let Some(w) = self
                     .conformal_p_window_size
                     .is_none()
-                    .then(|| {
-                        self.conformal_p_window_rows
-                            .unwrap_or(DEFAULT_CONFORMAL_P_WINDOW_ROWS)
-                    })
+                    .then(|| self.conformal_p_window_rows_or_default())
                     .filter(|&w| w > 0)
                 {
                     let bytes = n_rings.saturating_mul(ConformalPRing::bytes_for(w));

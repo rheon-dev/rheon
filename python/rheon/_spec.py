@@ -4279,7 +4279,9 @@ def marginal(
         feature name: exact, and comparable across runs and groups. ``bins``,
         ``bin_rule`` and ``bin_warm_rows`` describe learning them, and are
         refused beside it. Otherwise they are learned from the first
-        ``bin_warm_rows`` learned rows (default 1,000) under ``bin_rule``.
+        ``bin_warm_rows`` learned rows (default ``ceil(62.5 * bins)``, equal
+        to 1,000 at 16 bins, 250 at 4 bins, and 4,000 at 64 bins, clamped to
+        the memory budget) under ``bin_rule``.
         ``"quantile"`` (the default) gives equal weight per bin. A value that
         carries more than a bin's share, such as an indicator's zero, fills a
         bin of its own, and the remaining bins share what is left.

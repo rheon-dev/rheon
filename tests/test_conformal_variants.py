@@ -726,3 +726,49 @@ def test_fifty_seeds_conformal_variants_vs_crepes_and_mapie():
         "conformal_variants_oracles", "asym_width_ratio_vs_mapie", mapie_width_ratio_90, ideal=1.0
     )
     assert 0.7 < worst_ratio < 1.3, worst_ratio
+
+
+def test_default_conformal_p_window_scales_with_row_clock_half_life():
+    """On a row clock with finite half_life h, default conformal_p_window_rows
+    scales to ceil(10 * h) (floored at 10, capped by max_state_bytes); under
+    infinite half_life or an explicit clock it stays 1,000."""
+    import json
+
+    from rheon import _rheon as _native
+    from rheon import _spec
+
+    def resolved_win(**kw):
+        spec = rp.spec.ewridge("m", targets=["y"], features=["x0"], emit_conformal_p=True, **kw)
+        return json.loads(_native.resolved_defaults(_spec._json(spec)))["stream"][
+            "conformal_p_window_rows"
+        ]
+
+    assert resolved_win(half_life=25.0) == 250
+    assert resolved_win(half_life=0.5) == 10
+    assert resolved_win(half_life=100_000.0) == (262_144 - 64) // 24
+    assert resolved_win(half_life=math.inf) == 1000
+    assert resolved_win(half_life=25.0, clock="t", gap_cap=10.0) == 1000
+    assert resolved_win(half_life=25.0, conformal_p_window_rows=77) == 77
+
+    # End-to-end: row-clock half_life=2.0 matches explicit conformal_p_window_rows=20 to the bit.
+    df = _gauss_frame(80, seed=71).drop("t")
+    s_auto = rp.spec.ewridge(
+        "m",
+        targets=["y"],
+        features=["x0", "x1"],
+        half_life=2.0,
+        min_weight=3.0,
+        emit_conformal_p=True,
+    )
+    s_explicit = rp.spec.ewridge(
+        "m",
+        targets=["y"],
+        features=["x0", "x1"],
+        half_life=2.0,
+        min_weight=3.0,
+        emit_conformal_p=True,
+        conformal_p_window_rows=20,
+    )
+    a = rp.ModelBank([s_auto]).fit_predict(df)["m"].struct.field("conformal_p_y")
+    b = rp.ModelBank([s_explicit]).fit_predict(df)["m"].struct.field("conformal_p_y")
+    assert a.equals(b)

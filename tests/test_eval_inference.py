@@ -91,39 +91,85 @@ def _interleaved(n: int, seed: int) -> tuple[pl.DataFrame, np.ndarray]:
     return _two_specs(ra, rb, g), counts
 
 
+def _kish_n_eff(count: int, half_life: float) -> float:
+    if count <= 0:
+        return 0.0
+    lam = 0.5 ** (1.0 / half_life)
+    lam2 = lam * lam
+    w1 = (1.0 - lam**count) / (1.0 - lam)
+    w2 = (1.0 - lam2**count) / (1.0 - lam2)
+    return (w1 * w1) / w2
+
+
 class TestThePerRowFormAppliesMinSamples:
-    """B4: ``min_samples`` with ``half_life`` nulls a key's rows before its
-    ``min_samples``-th row with a value, and moves no other row."""
+    """B4 / A11: ``min_samples`` with ``half_life`` gates on Kish effective
+    sample size ``n_eff = (sum w)^2 / sum(w^2)``, and moves no other row."""
 
     @pytest.mark.parametrize("call", list(CALLS))
     @pytest.mark.parametrize("lags", [0, 2])
     @pytest.mark.parametrize("min_samples", [20, 45])
     def test_null_until_the_key_has_min_samples_rows(self, monkeypatch, call, lags, min_samples):
         df, counts = _interleaved(120, seed=min_samples + lags)
-        kw = dict(lags=lags, half_life=10.0, group="g")
+        half_life = 40.0
+        kw = dict(lags=lags, half_life=half_life, group="g")
         free = _per_row(df, call, monkeypatch, None, min_samples=1, **kw)
         for rows in (None, 1, 7, 10**6):
             got = _per_row(df, call, monkeypatch, rows, min_samples=min_samples, **kw)
             for i, (value, count) in enumerate(zip(got, counts, strict=True)):
-                if count < min_samples:
-                    assert value is None, (rows, i, count, value)
+                n_eff = _kish_n_eff(int(count), half_life)
+                if n_eff < min_samples or n_eff / (lags + 1) < 4.0:
+                    assert value is None, (rows, i, count, n_eff, value)
                 else:
-                    assert value is not None, (rows, i, count)
-                    assert value == pytest.approx(free[i], rel=1e-12, abs=0.0), (rows, i)
+                    assert value is not None, (rows, i, count, n_eff)
+                    assert value == pytest.approx(free[i], rel=1e-12, abs=1e-12), (rows, i)
 
     @pytest.mark.parametrize("call", list(CALLS))
     def test_by_default_a_keys_first_29_rows_read_null(self, monkeypatch, call):
         df, counts = _interleaved(60, seed=3)
+        half_life = 20.0
         for rows in (None, 13):
-            got = _per_row(df, call, monkeypatch, rows, half_life=20.0, group="g")
-            assert all(v is None for v, c in zip(got, counts, strict=True) if c < 30), rows
-            assert all(v is not None for v, c in zip(got, counts, strict=True) if c >= 30), rows
+            got = _per_row(df, call, monkeypatch, rows, half_life=half_life, group="g")
+            assert all(
+                v is None
+                for v, c in zip(got, counts, strict=True)
+                if _kish_n_eff(int(c), half_life) < 30.0
+            ), rows
+            assert all(
+                v is not None
+                for v, c in zip(got, counts, strict=True)
+                if _kish_n_eff(int(c), half_life) >= 30.0
+            ), rows
+
+    @pytest.mark.parametrize("call", list(CALLS))
+    def test_tiny_half_life_long_stream_is_withheld_while_unweighted_emits(self, call):
+        """A long stream with tiny half_life has bounded small Kish n_eff and
+        must stay withheld on every row, while the unweighted test emits."""
+        rng = np.random.default_rng(77)
+        n = 500
+        ra = rng.normal(scale=0.5, size=n)
+        rb = rng.normal(scale=1.0, size=n)
+        df = _two_specs(ra, rb)
+        field, sides = CALLS[call]
+        # half_life=1.0 -> asymptotic Kish n_eff = 3.0 < 4.0 (df_NW < 4 even at lags=0).
+        ew_tiny = getattr(rp.eval, call)(df, **sides, lags=0, half_life=1.0, min_samples=1)
+        assert ew_tiny[call].struct.field(f"{field}_y").null_count() == n
+        # half_life=2.0 -> asymptotic n_eff ~ 5.77: emits at lags=0, min_samples=1,
+        # but withheld at lags=1 (df_NW ~ 2.89 < 4) or min_samples=10.
+        ew_l0 = getattr(rp.eval, call)(df, **sides, lags=0, half_life=2.0, min_samples=1)
+        assert ew_l0[call].struct.field(f"{field}_y").drop_nulls().len() > 0
+        ew_l1 = getattr(rp.eval, call)(df, **sides, lags=1, half_life=2.0, min_samples=1)
+        assert ew_l1[call].struct.field(f"{field}_y").null_count() == n
+        ew_ms = getattr(rp.eval, call)(df, **sides, lags=0, half_life=2.0, min_samples=10)
+        assert ew_ms[call].struct.field(f"{field}_y").null_count() == n
+        # Unweighted remains unaffected and reports on all 500 rows.
+        plain = getattr(rp.eval, call)(df, **sides, lags=1)
+        assert plain["n"][0] == n and plain[field][0] is not None
 
 
 class TestAKeyOfFewRowsForItsLags:
-    """B7: a key with at most ``4 (lags + 1)`` rows with a value reads a
+    """B7 / A11: an unweighted key with at most ``4 (lags + 1)`` rows reads a
     null statistic, its ``n`` and ``mean`` kept; one more row and it reads
-    one. Whatever ``min_samples`` says."""
+    one. Under ``half_life``, gates on Kish Bartlett ``df_NW = n_eff / (lags + 1) >= 4``."""
 
     @pytest.mark.parametrize("call", list(CALLS))
     @pytest.mark.parametrize("lags", [0, 2, 10])
@@ -145,13 +191,21 @@ class TestAKeyOfFewRowsForItsLags:
     @pytest.mark.parametrize("call", list(CALLS))
     @pytest.mark.parametrize("lags", [0, 3])
     def test_per_row(self, monkeypatch, call, lags):
-        floor = 4 * (lags + 1)
         df, counts = _interleaved(80, seed=11 + lags)
-        kw = dict(lags=lags, half_life=30.0, group="g", min_samples=1)
+        half_life = 30.0
+        kw = dict(lags=lags, half_life=half_life, group="g", min_samples=1)
         for rows in (None, 1, 9):
             got = _per_row(df, call, monkeypatch, rows, **kw)
-            assert all(v is None for v, c in zip(got, counts, strict=True) if c <= floor), rows
-            assert all(v is not None for v, c in zip(got, counts, strict=True) if c > floor), rows
+            assert all(
+                v is None
+                for v, c in zip(got, counts, strict=True)
+                if _kish_n_eff(int(c), half_life) / (lags + 1) < 4.0
+            ), rows
+            assert all(
+                v is not None
+                for v, c in zip(got, counts, strict=True)
+                if _kish_n_eff(int(c), half_life) / (lags + 1) >= 4.0
+            ), rows
 
 
 class TestATargetWithNoValueOverAQuery:

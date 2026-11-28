@@ -159,8 +159,8 @@ def hoeffding_tree_classifier(
         one active root leaf. When splitting would exceed the cap, the tree
         stops growing and deactivates the lowest-promise leaves (dropping
         their Gaussian observers while continuing to update their class
-        counts and predict from them), re-ranking leaves every 1,000
-        learned rows.
+        counts and predict from them), re-ranking leaves while capped every
+        ``ceil(grace_period) * max(1, active_leaves)`` learned rows.
 
     .. rubric:: Output
 
@@ -352,8 +352,8 @@ def hoeffding_tree_regressor(
         ``max_state_bytes=1_048_576`` (1 MiB) or a smaller ``max_slots``.
         At the cap, the tree stops growing and deactivates the
         lowest-promise leaves (ranked by leaf sum of squared deviations
-        ``S``), continuing to update leaf means and re-ranking every 1,000
-        learned rows.
+        ``S``), continuing to update leaf means and re-ranking while capped
+        every ``ceil(grace_period) * max(1, active_leaves)`` learned rows.
 
     .. rubric:: Output
 

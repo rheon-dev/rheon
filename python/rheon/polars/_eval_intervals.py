@@ -201,30 +201,34 @@ def pinball_and_d2_frame(
         if long.is_empty():
             continue
         for key_vals, part in long.group_by(keys, maintain_order=True):
-            n = part.height
+            y_arr = part["y"].cast(pl.Float64).to_list()
+            p_arr = part["pred"].cast(pl.Float64).to_list()
+            w_arr = part["__w"].cast(pl.Float64).to_list()
+            pos = [i for i, wi in enumerate(w_arr) if wi > 0.0]
+            n_pos = len(pos)
             row: dict[str, Any] = dict(zip(keys, key_vals, strict=True))
-            if n < min_samples:
+            if n_pos < min_samples:
                 for c in col_names:
                     row[c] = None
                 rows_out.append(row)
                 continue
-            y_arr = part["y"].cast(pl.Float64).to_list()
-            p_arr = part["pred"].cast(pl.Float64).to_list()
-            w_arr = part["__w"].cast(pl.Float64).to_list()
-            w_sum = sum(w_arr)
+            y_pos = [y_arr[i] for i in pos]
+            p_pos = [p_arr[i] for i in pos]
+            w_pos = [w_arr[i] for i in pos]
+            w_sum = sum(w_pos)
             for q in quantiles:
                 lbl = num_label(q)
                 if w_sum <= 0.0:
                     row[f"pinball_q{lbl}"] = None
                     row[f"d2_pinball_q{lbl}"] = None
                     continue
-                pb = _pinball_loss_arr(y_arr, p_arr, w_arr, q)
+                pb = _pinball_loss_arr(y_pos, p_pos, w_pos, q)
                 row[f"pinball_q{lbl}"] = pb
-                if n < 2:
+                if n_pos < 2:
                     row[f"d2_pinball_q{lbl}"] = None
                 else:
-                    y_null = _weighted_percentile_avg(y_arr, w_arr, q)
-                    denom = _pinball_loss_arr(y_arr, y_null, w_arr, q)
+                    y_null = _weighted_percentile_avg(y_pos, w_pos, q)
+                    denom = _pinball_loss_arr(y_pos, y_null, w_pos, q)
                     row[f"d2_pinball_q{lbl}"] = None if denom <= 0.0 else 1.0 - pb / denom
             rows_out.append(row)
 
@@ -429,17 +433,19 @@ def _score_interval_arrays(
     alpha: float,
     ssc_bins: int,
 ) -> tuple[float | None, float | None, float | None, float | None]:
-    """Compute ``(coverage, mean_width, winkler, ssc)`` on un-crossed intervals."""
-    w_sum = sum(w)
-    if w_sum <= 0.0:
-        return None, None, None, None
+    """Compute ``(coverage, mean_width, winkler, ssc)`` on un-crossed intervals
+    over positive-weight rows."""
     inv_alpha = 2.0 / alpha
     widths: list[float] = []
     hits: list[float] = []
+    pos_w: list[float] = []
     cov_num = 0.0
     width_num = 0.0
     winkler_num = 0.0
+    w_sum = 0.0
     for yi, loi, hii, wi in zip(y, lo, hi, w, strict=True):
+        if wi <= 0.0:
+            continue
         li = loi if loi <= hii else hii
         ui = hii if loi <= hii else loi
         width = ui - li
@@ -448,16 +454,23 @@ def _score_interval_arrays(
         pen_hi = yi - ui if yi > ui else 0.0
         widths.append(width)
         hits.append(hit)
+        pos_w.append(wi)
+        w_sum += wi
         cov_num += wi * hit
         width_num += wi * width
         winkler_num += wi * (width + inv_alpha * (pen_lo + pen_hi))
+
+    if w_sum <= 0.0:
+        return None, None, None, None
 
     cov = cov_num / w_sum
     mean_width = width_num / w_sum
     winkler = winkler_num / w_sum
 
-    # Size-stratified coverage: sort widths ascending, split into ssc_bins
-    # equal-count bins (matching MAPIE's regression_ssc / regression_ssc_score).
+    # Size-stratified coverage over positive-weight rows only: sort widths
+    # ascending, split into ssc_bins equal-count bins (matching MAPIE's
+    # regression_ssc / regression_ssc_score), requiring positive-weight
+    # stratum support in every bin.
     n = len(widths)
     if n < ssc_bins:
         ssc: float | None = None
@@ -474,11 +487,11 @@ def _score_interval_arrays(
                 break
             b_slice = order[pos : pos + sz]
             pos += sz
-            bw = sum(w[i] for i in b_slice)
+            bw = sum(pos_w[i] for i in b_slice)
             if bw <= 0.0:
                 valid = False
                 break
-            bin_covs.append(sum(w[i] * hits[i] for i in b_slice) / bw)
+            bin_covs.append(sum(pos_w[i] * hits[i] for i in b_slice) / bw)
         ssc = min(bin_covs) if valid and bin_covs else None
     return cov, mean_width, winkler, ssc
 
@@ -545,6 +558,8 @@ def compute_interval_metrics(
         )
         long = long.filter(_usable(pl.col("y")) & _usable(pl.col("__lo")) & _usable(pl.col("__hi")))
         long = weighed_fn(long, weight)
+        if weight is not None:
+            long = long.filter(pl.col("__w") > 0.0)
         if long.is_empty():
             continue
 

@@ -132,8 +132,9 @@ def dependence(
     ``bin_warm_rows``
         Positive-weight rows held before bin edges are fixed and replayed into
         the joint tables (at least 2). Unset, defaults to
-        ``min(1000, window_rows)`` under ``window_rows`` and ``1000``
-        otherwise. Mutually exclusive with ``bin_warm_span``.
+        ``max(ceil(62.5 * max(B_x, B_y)), 5 * B_x * B_y)`` (shrunk to
+        ``window_rows`` under ``window_rows`` and capped to fit
+        ``max_state_bytes``). Mutually exclusive with ``bin_warm_span``.
     ``bin_warm_span``
         Clock span held before bin edges are fixed (at least 2 positive-weight
         rows): a number of the clock column's units (rows when the spec has no
