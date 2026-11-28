@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::dist;
 use super::filter::Filter;
 use super::fit::OMEGA_FLOOR_FRAC;
-use super::fit::{ab_set, backcast, clip_shape, figarch_d_identified, fit, identified, set_of};
+use super::fit::{ab_set, backcast, clip_shape, fit, identified, set_of};
 use super::guard;
 use super::linalg::{HalfSpaces, backward, chol_solve, cholesky, forward, tri, unpack};
 use super::math;
@@ -281,15 +281,13 @@ impl Series {
             Some(f) if !identified(cfg.vol, cfg.q(), f.lr) || f.collinear => {
                 return wait(self, Some(f.theta));
             }
-            // Not at its optimum: never stepped from. Checked before
-            // FIGARCH's `SE(d)` gate because Fisher information is only the
-            // asymptotic covariance at an optimum.
+            // Not at its optimum: never stepped from. Checked before the
+            // Fisher-information SE gate because Fisher information is only
+            // the asymptotic covariance at an optimum.
             Some(f) if !f.sound => return wait(self, None),
-            // FIGARCH's `d` not localized inside `[0, 1)` at `α = 0.001`:
-            // withheld as `not_identified`.
-            Some(f) if f.d_se.is_some_and(|se| !figarch_d_identified(se)) => {
-                return wait(self, Some(f.theta));
-            }
+            // Dimensionless dynamics (or shape) not localized inside their
+            // domain at `α = 0.001`: withheld as `not_identified`.
+            Some(f) if !f.se_ok => return wait(self, Some(f.theta)),
             Some(f) => f,
         };
         let rows = std::mem::take(&mut self.buffer);
@@ -361,8 +359,7 @@ impl Series {
         let rows = self.buffer.len();
         match (cfg.start_span, now, self.first) {
             (Some(span), Some(now), Some(first)) => {
-                let enough = cfg.vol == GarchVol::Figarch || rows >= super::MIN_START_ROWS;
-                enough && crate::clock_span::span_reached(now, first, span)
+                crate::clock_span::span_reached(now, first, span)
             }
             _ => rows >= cfg.start_rows,
         }

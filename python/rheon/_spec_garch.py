@@ -90,28 +90,28 @@ def garch(
         forecasts worse than the default, since its level rides on one
         running mean the whole stream shares. Default False.
     ``start_rows``
-        The rows the start buffers and fits, each target's own; they report
-        nothing (``withheld_reason`` ``below_warm_rows``). Default 2,000, at
-        least 50 for ``"garch"``, ``"gjr"`` and ``"egarch"``, and at least 1
-        for ``"figarch"`` (which waits on the standard error of ``d`` rather
-        than a row-count floor). A start whose
-        rows do not identify its process, by the checks
-        under "The start" below, reports nothing (``not_identified``), and
-        one whose fit is not at its optimum is not stepped from either.
-        Either keeps its rows and fits again once as many new rows have
-        come as it held: twice its rows while ``max_state_bytes`` holds
-        them, then the latest rows it holds. No count of tries ends the
-        wait. Refused beside ``start_span``.
+        The rows the start buffers before its first fit attempt, each
+        target's own; they report nothing (``withheld_reason``
+        ``below_warm_rows``). At least 1 for every process, with no fixed
+        row-count floor. When neither ``start_rows`` nor ``start_span`` is
+        given, the start uses adaptive doubling from an initial batch of
+        ``max(64, next_power_of_two(8 * n_free))`` rows (64 for standard
+        forms). A start whose rows do not identify its process, by the
+        likelihood-ratio and Fisher-information standard-error checks under
+        "The test before a start reports" below, reports nothing
+        (``not_identified``), and one whose fit is not at its optimum is not
+        stepped from either. Either keeps its rows and fits again once as
+        many new rows have come as it held: twice its rows while
+        ``max_state_bytes`` holds them, then the latest rows it holds. No
+        count of tries ends the wait. Refused beside ``start_span``.
     ``start_span``
         The start as a span of the clock in place of ``start_rows``, in
         clock units: a number of the clock column's units, or a duration
         such as ``"1d"`` on a temporal clock. It closes at the first row at
-        or past the span from its first row (once it holds 50 rows for
-        ``"garch"``, ``"gjr"`` and ``"egarch"``, and on the span itself for
-        ``"figarch"``); a try
-        that does not start waits, as under ``start_rows``, for as many new
-        rows as it held. How many rows the span holds, the data decides, so
-        its bytes are checked as the rows go in (see
+        or past the span from its first row, with no fixed row-count floor;
+        a try that does not start waits, as under ``start_rows``, for as
+        many new rows as it held. How many rows the span holds, the data
+        decides, so its bytes are checked as the rows go in (see
         ``max_state_bytes``).
     ``forecast_rows``
         The variance forecasts to report, each a count of rows ``h`` from
@@ -337,9 +337,10 @@ def garch(
     process's bounds is at most ``10⁻⁶`` nats: ``½ gᵀ M⁻¹ g`` (``M`` the
     observed curvature) where the step stays inside them, and the step
     projected onto them in ``M``'s metric where it does not, so an optimum
-    on a bound (a GJR whose ``α`` is 0) is one. The default 2,000 rows keep
-    a series from starting far enough off that the ``1/W`` gain takes the
-    rest of the stream to recover.
+    on a bound (a GJR whose ``α`` is 0) is one. When neither ``start_rows``
+    nor ``start_span`` is given, adaptive doubling starts from 64 rows (or
+    128 when exogenous inputs raise the parameter count past 8) and doubles
+    until the checks below pass, bounded by ``max_state_bytes``.
 
     **The test before a start reports.** A series with no conditional
     variance to find leaves the likelihood flat along a ridge, where ``β``
@@ -355,17 +356,24 @@ def garch(
     ``garch`` with one input, 18.5 for ``gjr`` or ``egarch`` with one.
     The weights enter at Kish's count, the statistic read as
     ``2 (l_fit - l_const) Σw / Σw²``, so scaling every weight changes
-    nothing. On simulated series of persistence 0.97 to 0.985, and of
-    0.90, it passed every 2,000-row start; on returns with no conditional
-    variance it passed none, at starts of 500 to 2,000 rows. For
-    ``figarch``, an optimum is also withheld (``not_identified``) until
-    ``d ∈ [0, 1)`` is localized inside its unit domain at the same
-    ``α = 0.001`` level. The asymptotic standard error of ``d`` from the
-    start's expected Gaussian Fisher information at Kish's count,
-    ``√((H_kish⁻¹)_dd)``, must be at most
-    ``1 / (2 Φ⁻¹(0.9995)) = 1 / (2 √χ²₁(0.999)) ≈ 0.152``, with ``H_kish``
-    positive definite. Above that bound, a two-sided 99.9% confidence
-    interval for ``d`` spans both ``d = 0`` and ``d = 1``. With inputs,
+    nothing. Every process also withholds an optimum as ``not_identified``
+    until its dimensionless dynamics (and shape parameters, for a t or
+    skewed t) are localized inside their domains at the same ``α = 0.001``
+    level, with non-degenerate shock feedback when there are no exogenous
+    inputs. Using the expected Fisher information at Kish's count
+    (positive definite), each unit-domain parameter must satisfy
+    ``SE ≤ 1 / (2 Φ⁻¹(0.9995)) = 1 / (2 √χ²₁(0.999)) ≈ 0.152``: ``α`` and
+    ``β`` for ``garch`` and targeted GARCH; ``α``, ``γ`` and ``β`` for
+    ``gjr``; ``α``, ``γ/2`` and ``β`` for ``egarch``; ``d`` for ``figarch``;
+    the tail index ``2/ν ∈ (0, 1)`` for ``t`` and ``skewt``; and ``λ/2`` for
+    ``skewt``. Without exogenous inputs, ``garch``, ``gjr`` and ``figarch``
+    also require ``SE(ln ω) ≤ 1 / Φ⁻¹(0.90) ≈ 0.78`` (``SE(ln(1 - P))``
+    under variance targeting, plus ``SE(ln v̄) ≤ 1 / Φ⁻¹(0.9995) ≈ 0.304``
+    for the sample variance target's long-run SE), ``garch`` and ``gjr``
+    require ``SE(ln(1 - P)) ≤ 2``, and all three GARCH/GJR forms require
+    ``SE(ln feedback) ≤ 1 / Φ⁻¹(0.99) ≈ 0.43``. Above the unit-domain bound,
+    a two-sided 99.9% confidence interval spans the parameter's entire domain.
+    With inputs,
     a start also waits while its rows do not tell the inputs apart: an
     input constant over them is ``ω`` again, and two that move together are
     one. It waits under the relative pivot rule the library's other

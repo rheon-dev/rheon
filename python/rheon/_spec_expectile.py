@@ -68,13 +68,20 @@ def expectile(
         The learned rows (each of positive weight, with its target) after
         which each target's first rows are fitted exactly, once, and the
         running sums rebuilt with each row on the side the exact fit puts it
-        (*One pass and the refit* in Notes). Default ``max(200, 10 * k)``,
-        ``k`` the coefficients, up to 100 features, held to what
-        ``max_state_bytes`` holds beside the sums, and off above 100
-        features, under a window, or where fewer than ``2 * k`` rows fit.
-        ``0`` turns the refit off. A group's buffers hold ``8 * targets *
-        refit_rows * (features + 2)`` bytes until the refit runs: a count
-        past ``max_state_bytes`` is refused, naming the bytes.
+        (*One pass and the refit* in Notes). When neither ``refit_rows`` nor
+        ``refit_span`` is given (and there is no window), the model uses an
+        adaptive doubling refit whenever ``max_state_bytes`` holds at least
+        ``2 * k`` rows per target beside the sums (``k`` the coefficients,
+        with no feature-count cliff): it checks at ``max(16, 2 * k)`` rows
+        and doubles until the converged fit satisfies ``n_kish ≥ 16 * edf``
+        with ``max_i h_i ≤ 1/16`` (or at least 95% of rows at ``h_i ≤ 1/32``),
+        reaches a decay plateau, or reaches the rows ``max_state_bytes``
+        holds, then commits
+        and frees the buffer. Off under a window, or where fewer than
+        ``2 * k`` rows fit. ``0`` turns the refit off. An explicit
+        ``refit_rows`` holds ``8 * targets * refit_rows * (features + 2)``
+        bytes until the refit runs: a count past ``max_state_bytes`` is
+        refused, naming the bytes.
     ``refit_span``
         The same refit over a span of the clock in place of a count of rows:
         each target's rows from its first learned row through the first row

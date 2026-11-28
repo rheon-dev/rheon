@@ -63,6 +63,61 @@ pub fn digamma(mut x: f64) -> f64 {
     libm::log(x) - 0.5 * r - series - shift
 }
 
+/// Trigamma `ψ₁(x) = d² ln Γ(x) / dx²` for `x > 0`; `NaN` otherwise.
+/// Pure arithmetic (no platform `libm`), shifted to `x >= 20` where the
+/// omitted asymptotic term is `< 1e-17`.
+pub fn trigamma(mut x: f64) -> f64 {
+    if !(x > 0.0 && x.is_finite()) {
+        return f64::NAN;
+    }
+    let mut shift = 0.0;
+    while x < 20.0 {
+        shift += 1.0 / (x * x);
+        x += 1.0;
+    }
+    let r = 1.0 / x;
+    let r2 = r * r;
+    let series = r
+        * r2
+        * (1.0 / 6.0
+            + r2 * (-1.0 / 30.0
+                + r2 * (1.0 / 42.0
+                    + r2 * (-1.0 / 30.0 + r2 * (5.0 / 66.0 - r2 * (691.0 / 2730.0))))));
+    r + 0.5 * r2 + series + shift
+}
+
+/// Cancellation-free `ψ₁(x) - ψ₁(x + 1/2)` for `x > 0`; `NaN` otherwise.
+pub fn trigamma_half_diff(mut x: f64) -> f64 {
+    if !(x > 0.0 && x.is_finite()) {
+        return f64::NAN;
+    }
+    let mut shift = 0.0;
+    while x < 20.0 {
+        let y = x + 0.5;
+        // 1/x² - 1/(x + 1/2)² = (x + 1/4) / (x² (x + 1/2)²)
+        shift += (x + 0.25) / (x * x * y * y);
+        x += 1.0;
+    }
+    let y = x + 0.5;
+    let p = 1.0 / x;
+    let q = 1.0 / y;
+    let d = 0.5 * p * q; // 1/x - 1/y without cancellation
+    let pow_diff = |m: usize| -> f64 {
+        let (mut acc, mut pm, mut qk) = (0.0, p.powi((m - 1) as i32), 1.0);
+        for _ in 0..m {
+            acc += pm * qk;
+            pm /= p;
+            qk *= q;
+        }
+        d * acc
+    };
+    let tail = (1.0 / 6.0) * pow_diff(3) - (1.0 / 30.0) * pow_diff(5) + (1.0 / 42.0) * pow_diff(7)
+        - (1.0 / 30.0) * pow_diff(9)
+        + (5.0 / 66.0) * pow_diff(11)
+        - (691.0 / 2730.0) * pow_diff(13);
+    d + 0.5 * (x + 0.25) * p * p * q * q + tail + shift
+}
+
 /// Cancellation-free `ln Γ(a + b) - ln Γ(a) - ln Γ(b)` for `a > 0, b > 0`.
 fn neg_ln_beta(a: f64, b: f64) -> f64 {
     let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
@@ -517,6 +572,21 @@ mod tests {
         assert!((digamma(1.0) + euler_gamma).abs() < 1e-14);
         assert!(ln_gamma(0.0).is_nan());
         assert!(ln_gamma(-1.0).is_nan());
+        // ψ₁(1) = π²/6, ψ₁(1/2) = π²/2, recurrence ψ₁(x) - ψ₁(x+1) = 1/x²
+        let pi2 = std::f64::consts::PI * std::f64::consts::PI;
+        assert!((trigamma(1.0) - pi2 / 6.0).abs() < 1e-14);
+        assert!((trigamma(0.5) - pi2 / 2.0).abs() < 1e-14);
+        for x in [0.5_f64, 1.5, 19.5, 20.5, 150.0] {
+            assert!((trigamma(x) - trigamma(x + 1.0) - 1.0 / (x * x)).abs() < 1e-14);
+            let direct = trigamma(x) - trigamma(x + 0.5);
+            let diff = trigamma_half_diff(x);
+            assert!(
+                (direct - diff).abs() <= 1e-14 * trigamma(x),
+                "x={x}: {direct} vs {diff}"
+            );
+        }
+        assert!(trigamma(0.0).is_nan());
+        assert!(trigamma_half_diff(-1.0).is_nan());
     }
 
     #[test]

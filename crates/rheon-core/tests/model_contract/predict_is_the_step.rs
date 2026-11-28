@@ -52,10 +52,12 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
     let mut s = 20260902u64;
     let mut ready = 0usize;
     // `garch` models a variance, and its start waits on a target with none
-    // (PLAN 548): its targets are each a GARCH(1,1)'s returns at (0.05,
-    // 0.6, 0.35), each row's variance and return kept here.
+    // (PLAN 548): its targets are each a stationary finite-fourth-moment
+    // GARCH(1,1)'s returns at (0.20, 0.30, 0.50), each row's variance and
+    // return kept here.
     let mut returns = vec![(1.0f64, 0.0f64); targets];
-    for i in 0..400 {
+    let n_rows = if kind == "garch" { 600 } else { 400 };
+    for i in 0..n_rows {
         let x: Vec<f64> = (0..K).map(|_| lcg(&mut s) * 3.0).collect();
         let y: Vec<Option<f64>> = (0..targets)
             .map(|j| {
@@ -64,7 +66,7 @@ fn predict_is_the_step_without_the_step<M: OnlineModel + Clone>(
                 }
                 if kind == "garch" {
                     let (v, e) = &mut returns[j];
-                    *v = 0.05 + 0.6 * *e * *e + 0.35 * *v;
+                    *v = 0.20 + 0.30 * *e * *e + 0.50 * *v;
                     let z = (0..12).map(|_| 0.5 * lcg(&mut s)).sum::<f64>();
                     *e = v.sqrt() * z;
                     return Some(*e);

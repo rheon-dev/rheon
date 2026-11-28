@@ -40,28 +40,39 @@ fn a_waiting_buffer_one_short_of_its_count_is_the_shape_and_a_full_one_is_not() 
         learned,
         ..GlmRefit::new()
     };
-    assert!(rows(5).fits(4, 6, false));
-    assert!(!rows(6).fits(4, 6, false));
+    let count_cfg = |refit_rows: u32| cfg_of(GlmFamily::Poisson, 2, refit_rows);
+    let span_cfg = |refit_rows: u32| GlmCfg {
+        refit_clock: Some(10.0),
+        ..cfg_of(GlmFamily::Poisson, 2, refit_rows)
+    };
+    let adapt_cfg = || GlmCfg {
+        adaptive_refit: true,
+        ..cfg_of(GlmFamily::Poisson, 2, 0)
+    };
+    assert!(rows(5).fits(4, &count_cfg(6)));
+    assert!(!rows(6).fits(4, &count_cfg(6)));
     let spanned = |learned: u32| GlmRefit {
         first: Some(Stamp::from(0.0)),
         ..rows(learned)
     };
     assert!(
-        spanned(7).fits(4, 6, true),
+        spanned(7).fits(4, &span_cfg(6)),
         "a span holds what its span has"
     );
     assert!(
-        !rows(7).fits(4, 6, true),
+        !rows(7).fits(4, &span_cfg(6)),
         "a span's rows run from its first stamp"
     );
+    assert!(rows(7).fits(4, &adapt_cfg()));
+    assert!(!spanned(7).fits(4, &adapt_cfg()));
     // A count of 0 reads as 1: the empty buffer fits, one row does not.
-    assert!(rows(0).fits(4, 0, false));
-    assert!(!rows(1).fits(4, 0, false));
+    assert!(rows(0).fits(4, &count_cfg(0)));
+    assert!(!rows(1).fits(4, &count_cfg(0)));
     let done = GlmRefit {
         done: true,
         ..GlmRefit::new()
     };
-    assert!(done.fits(4, 6, false));
+    assert!(done.fits(4, &count_cfg(6)));
 }
 
 /// `(A + r I) x = b` by the Cholesky factor: `A = [[4, 2], [2, 3]]`, `b =

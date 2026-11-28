@@ -268,7 +268,7 @@ def test_the_margins_are_garchs():
     """With margins, each target's variance is the ``garch`` model's, run
     beside it on the same returns, to the bit; the correlation reports from
     the margins' start plus its own."""
-    x = _returns(_z(1500, 10, k=2), 10)
+    x = _returns(_z(2500, 10, k=2), 10)
     df = pl.DataFrame({"a": x[:, 0], "b": x[:, 1]})
     d = _out(
         rp.spec.dcc("m", targets=["a", "b"], half_life=float("inf"), margin_start_rows=300), df
@@ -277,9 +277,30 @@ def test_the_margins_are_garchs():
     assert d["variance_a"].equals(g["variance_a"], null_equal=True)
     assert d["variance_b"].equals(g["variance_b"], null_equal=True)
     # the margins' start (300 rows, or twice or four times that where its fit
-    # sat on a bound), then the correlation's 500
+    # waited), then the correlation's adaptive doubling start from 64 rows
+    margin_first = max(
+        d["variance_a"].is_not_null().arg_max(), d["variance_b"].is_not_null().arg_max()
+    )
     first = d["corr_a_b"].is_not_null().arg_max()
-    assert first == d["variance_b"].is_not_null().arg_max() + 500
+    delta = first - margin_first
+    assert delta >= 64 and delta % 64 == 0 and (delta // 64) & (delta // 64 - 1) == 0, delta
+    # explicit start_rows overrides the adaptive doubling default
+    d_explicit = _out(
+        rp.spec.dcc(
+            "m",
+            targets=["a", "b"],
+            half_life=float("inf"),
+            margin_start_rows=300,
+            start_rows=500,
+        ),
+        df,
+    )
+    delta_explicit = d_explicit["corr_a_b"].is_not_null().arg_max() - margin_first
+    assert (
+        delta_explicit >= 500
+        and delta_explicit % 500 == 0
+        and (delta_explicit // 500) & (delta_explicit // 500 - 1) == 0
+    ), delta_explicit
 
 
 @pytest.mark.parametrize(

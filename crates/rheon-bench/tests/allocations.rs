@@ -100,13 +100,21 @@ fn per_row(value: Value, k: usize, m: usize) -> f64 {
 /// [`per_row`], through `AnyModel::step_into` into one kept `Step` where
 /// `into`, as the bank steps a model.
 fn per_row_with(value: Value, k: usize, m: usize, into: bool) -> f64 {
+    let nonneg = value
+        .get("model")
+        .and_then(|v| v.get("type"))
+        .and_then(|v| v.as_str())
+        == Some("glm");
     let mut model = model(value);
     let mut s = 7u64;
     let rows: Vec<(Vec<f64>, Vec<Option<f64>>)> = (0..WARM + ROWS)
         .map(|_| {
             let x: Vec<f64> = (0..k).map(|_| draw(&mut s)).collect();
             let y = (0..m)
-                .map(|j| Some(x.get(j % k.max(1)).map_or(0.0, |v| *v) + draw(&mut s)))
+                .map(|j| {
+                    let v = x.get(j % k.max(1)).map_or(0.0, |v| *v) + draw(&mut s);
+                    Some(if nonneg { v.abs() } else { v })
+                })
                 .collect();
             (x, y)
         })

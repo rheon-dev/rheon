@@ -63,6 +63,7 @@ fn cfg(family: GlmFamily, nf: usize, refit_rows: u32) -> GlmCfg {
         refit_clock: None,
         step_cap: f64::INFINITY,
         max_state_bytes: None,
+        adaptive_refit: false,
     }
 }
 
@@ -553,12 +554,33 @@ fn giving_the_refit_up_frees_its_rows() {
 fn the_default_refit_and_cap() {
     assert_eq!(default_glm_refit_rows(1, 1), 200);
     assert_eq!(default_glm_refit_rows(49, 1), 500);
-    assert_eq!(default_glm_refit_rows(101, 1), 0);
-    // Held to the group's cap: 100 features, 262,144 / (8 · 102) = 321
-    // rows where `10 k` is 1,010; at 2 targets 160 rows, under `2 k`, off.
+    // No arbitrary `n_features > 100` cliff: held strictly to the group cap.
+    // 100 features: 262,144 / (8 · 102) = 321 rows; 101 features: 262,144 / (8 · 103) = 318.
+    // At 2 targets, 160 rows is under `2 k = 202`, so off.
     assert_eq!(default_glm_refit_rows(100, 1), 321);
+    assert_eq!(default_glm_refit_rows(101, 1), 318);
     assert_eq!(default_glm_refit_rows(100, 2), 0);
-    for (nf, t) in [(1, 1), (20, 1), (20, 8), (50, 3), (100, 1), (100, 2)] {
+    assert!(default_glm_adaptive_refit(
+        101,
+        1,
+        true,
+        GLM_GROUP_REFIT_CAP as u64
+    ));
+    assert!(!default_glm_adaptive_refit(
+        100,
+        2,
+        true,
+        GLM_GROUP_REFIT_CAP as u64
+    ));
+    for (nf, t) in [
+        (1, 1),
+        (20, 1),
+        (20, 8),
+        (50, 3),
+        (100, 1),
+        (101, 1),
+        (100, 2),
+    ] {
         let c = GlmCfg {
             n_targets: t,
             ..cfg(GlmFamily::Poisson, nf, default_glm_refit_rows(nf, t))
@@ -667,4 +689,118 @@ fn the_refit_does_not_hang_on_the_last_bit() {
             );
         }
     }
+}
+
+/// A6: adaptive doubling refit commits once leverage (`h_max ≤ 1/16`) and Kish
+/// count (`n_kish ≥ 16·edf`) settle, handles decay plateaus, isolated-outlier
+/// plateaus, `max_state_bytes` cap commits without `state_over_cap`, high
+/// feature counts (`n_features = 105`, no `k > 100` cliff), save/load mid
+/// adaptive buffer, and zero-weight invariance.
+#[test]
+fn adaptive_refit_doubles_plateaus_caps_and_roundtrips() {
+    // 1. Standard Poisson stream (k = 4): commits once h_max <= 1/16 and
+    // n_kish >= 16*edf, and matches batch IRLS on those rows.
+    let rows = stream(GlmFamily::Poisson, 4, 600, 91);
+    let c = GlmCfg {
+        adaptive_refit: true,
+        ..cfg(GlmFamily::Poisson, 3, 0)
+    };
+    let mut m = Glm::new(c.clone()).unwrap();
+    for (x, y) in &rows {
+        m.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    let st = m.refit_status()[0];
+    assert!(
+        st.done && !st.failed && (16..=512).contains(&st.learned),
+        "standard adaptive commit: {st:?}"
+    );
+    assert!(m.state_over_cap().is_none());
+
+    // 2. Save/load mid-adaptive-buffer (after 20 rows, past first check at 16)
+    // and zero-weight rows both agree to the bit.
+    let mut a = Glm::new(c.clone()).unwrap();
+    for (x, y) in &rows[..20] {
+        a.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    let saved = rmp_serde::to_vec_named(&a.state()).unwrap();
+    let mut b = Glm::restore(&rmp_serde::from_slice(&saved).unwrap()).unwrap();
+    for (x, y) in &rows[20..] {
+        let pa = a.step(x, &[Some(*y)], 1.0, 1.0).pred[0];
+        let pb = b.step(x, &[Some(*y)], 1.0, 1.0).pred[0];
+        assert_eq!(pa.to_bits(), pb.to_bits());
+    }
+    let mut wz = Glm::new(c.clone()).unwrap();
+    let mut plain = Glm::new(c).unwrap();
+    for (i, (x, y)) in rows.iter().enumerate() {
+        if i % 5 == 0 {
+            wz.step(x, &[Some(*y)], 1.0, 0.0);
+        }
+        let pw = wz.step(x, &[Some(*y)], 1.0, 1.0).pred[0];
+        let pp = plain.step(x, &[Some(*y)], 1.0, 1.0).pred[0];
+        assert_eq!(pw.to_bits(), pp.to_bits());
+    }
+
+    // 3. Decay plateau: short half-life caps n_kish so adaptive refit commits
+    // cleanly rather than buffering to cap.
+    let c_dec = GlmCfg {
+        decay: Decay::Halflife(5.0),
+        adaptive_refit: true,
+        ..cfg(GlmFamily::Poisson, 3, 0)
+    };
+    let mut m_dec = Glm::new(c_dec).unwrap();
+    for (x, y) in &rows {
+        m_dec.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    assert!(m_dec.refit_status()[0].done && m_dec.refit_status()[0].learned <= 128);
+
+    // 4. Isolated outlier plateau: one extreme high-leverage row pins h_max
+    // near 1 while 95%+ of rows are well-behaved; adaptive refit commits cleanly.
+    let mut out_rows = stream(GlmFamily::Poisson, 3, 600, 92);
+    out_rows[0] = (vec![5.0, -5.0], 5000.0);
+    let c_out = GlmCfg {
+        adaptive_refit: true,
+        ..cfg(GlmFamily::Poisson, 2, 0)
+    };
+    let mut m_out = Glm::new(c_out).unwrap();
+    for (x, y) in &out_rows {
+        m_out.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    let st_out = m_out.refit_status()[0];
+    assert!(st_out.done && st_out.learned <= 512, "{st_out:?}");
+
+    // 5. Tight max_state_bytes: adaptive refit commits at cap_rows without
+    // setting state_over_cap.
+    let cap_bytes = 8 * (3 + 2) * 12; // room for 12 rows (below initial 16)
+    let c_cap = GlmCfg {
+        max_state_bytes: Some(cap_bytes),
+        adaptive_refit: true,
+        ..cfg(GlmFamily::Poisson, 3, 0)
+    };
+    let mut m_cap = Glm::new(c_cap).unwrap();
+    for (x, y) in &rows[..30] {
+        m_cap.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    assert!(m_cap.refit_status()[0].done && m_cap.refit_status()[0].learned == 12);
+    assert!(m_cap.state_over_cap().is_none());
+
+    // 6. No k > 100 cliff: n_features = 105 fits inside default 256 KiB cap
+    // (306 rows >= 2 * 106 = 212) and refits cleanly.
+    assert!(default_glm_adaptive_refit(
+        105,
+        1,
+        true,
+        GLM_GROUP_REFIT_CAP as u64
+    ));
+    let wide = stream(GlmFamily::Poisson, 106, 350, 93);
+    let c_wide = GlmCfg {
+        adaptive_refit: true,
+        ..cfg(GlmFamily::Poisson, 105, 0)
+    };
+    let mut m_wide = Glm::new(c_wide).unwrap();
+    for (x, y) in &wide {
+        m_wide.step(x, &[Some(*y)], 1.0, 1.0);
+    }
+    let st_w = m_wide.refit_status()[0];
+    assert!(st_w.done && !st_w.failed && st_w.learned <= 306, "{st_w:?}");
+    assert!(m_wide.state_over_cap().is_none());
 }

@@ -722,19 +722,67 @@ def test_no_start_is_short_of_arch(truth, form, start):
         assert waits == 0, (truth, form, waits)
 
 
-def arch_lr(vol: str, dist: str, r: np.ndarray) -> tuple[float, np.ndarray]:
-    """`arch`'s likelihood-ratio statistic: its GARCH-family fit against its
-    `ConstantVariance` fit, with the same innovations, on the same rows; and
-    the fit's process parameters."""
+#: The Fisher-information standard-error cuts enforced beside the LR test.
+PARAM_SE_CUT = 1.0 / (2.0 * math.sqrt(chi2.ppf(0.999, 1)))
+OMEGA_REL_SE_CUT = 1.0 / float(norm.ppf(0.90))
+MEAN_REV_REL_SE_CUT = 2.0
+FEEDBACK_REL_SE_CUT = 1.0 / float(norm.ppf(0.99))
+
+
+def arch_lr_and_se(vol: str, dist: str, r: np.ndarray) -> tuple[float, np.ndarray, float]:
+    """`arch`'s likelihood-ratio statistic against `ConstantVariance`, the
+    fitted process parameters, and the worst ratio of `arch`'s classic
+    asymptotic standard errors to the bank's Fisher-SE cuts (values ≥ 1
+    indicate an unlocalized or boundary-proximate start)."""
     kw = {"garch": dict(vol="GARCH", p=1, o=0, q=1), "gjr": dict(vol="GARCH", p=1, o=1, q=1)}.get(
         vol, dict(vol="EGARCH", p=1, o=1, q=1)
     )
     full = arch_model(r, mean="Zero", dist=dist, rescale=False, **kw)
     const = arch_model(r, mean="Zero", vol="Constant", dist=dist, rescale=False)
-    res = full.fit(disp="off", options={"maxiter": 1000})
+    res = full.fit(disp="off", cov_type="classic", options={"maxiter": 1000})
     lc = const.fit(disp="off", options={"maxiter": 1000}).loglikelihood
+    lr = 2.0 * float(res.loglikelihood - lc)
+    p = np.asarray(res.params, dtype=float)
     k = 3 if vol == "garch" else 4
-    return 2.0 * float(res.loglikelihood - lc), np.asarray(res.params)[:k]
+    try:
+        cov = np.asarray(res.param_cov, dtype=float)
+    except np.linalg.LinAlgError:
+        return lr, p[:k], math.inf
+    if not np.all(np.isfinite(cov)):
+        return lr, p[:k], math.inf
+    se = np.sqrt(np.maximum(0.0, np.diag(cov)))
+    ratios: list[float] = []
+    if vol == "garch":
+        ratios.extend([se[1] / PARAM_SE_CUT, se[2] / PARAM_SE_CUT])
+    elif vol == "gjr":
+        ratios.extend([se[1] / PARAM_SE_CUT, se[2] / PARAM_SE_CUT, se[3] / PARAM_SE_CUT])
+    else:
+        ratios.extend([se[1] / PARAM_SE_CUT, 0.5 * se[2] / PARAM_SE_CUT, se[3] / PARAM_SE_CUT])
+    if vol in ("garch", "gjr"):
+        om = p[0]
+        ratios.append((se[0] / om) / OMEGA_REL_SE_CUT if om > 0 else math.inf)
+        cf = np.zeros(len(p))
+        cp = np.zeros(len(p))
+        if vol == "garch":
+            cf[1] = cp[1] = cp[2] = 1.0
+            fb, mr = p[1], 1.0 - p[1] - p[2]
+        else:
+            cf[1] = cp[1] = cp[3] = 1.0
+            cf[2] = cp[2] = 0.5
+            fb = p[1] + 0.5 * p[2]
+            mr = 1.0 - fb - p[3]
+        se_fb = math.sqrt(max(0.0, float(cf @ cov @ cf)))
+        se_mr = math.sqrt(max(0.0, float(cp @ cov @ cp)))
+        ratios.append((se_fb / fb) / FEEDBACK_REL_SE_CUT if fb > 0 else math.inf)
+        ratios.append((se_mr / mr) / MEAN_REV_REL_SE_CUT if mr > 0 else math.inf)
+    elif p[1] <= 0:
+        ratios.append(math.inf)
+    if dist in ("t", "skewt"):
+        nu = p[k]
+        ratios.append(((2.0 / (nu * nu)) * se[k]) / PARAM_SE_CUT)
+    if dist == "skewt":
+        ratios.append((0.5 * se[k + 1]) / PARAM_SE_CUT)
+    return lr, p[:k], max(ratios)
 
 
 def in_our_set(vol: str, theta: np.ndarray) -> bool:
@@ -757,8 +805,10 @@ def lr_cases(seeds: range) -> list[tuple[str, str, int]]:
 def lr_agreement(cases: list[tuple[str, str, int]]) -> tuple[int, int, list]:
     """Of the 500-row starts, how many `arch`'s test decides clearly (its
     statistic 0.5 or more from the cut, beyond its optimizer's reach, and
-    its fit in the bank's set), and those where the bank's wait and `arch`'s
-    test differ."""
+    its fit in the bank's set), and those where the bank's wait disagrees
+    with `arch`: either starting when `arch`'s LR is under the cut, or
+    withholding (`not_identified`) a fit that clears the LR cut and whose
+    `arch` classic SEs are well inside every Fisher-SE cut (ratio < 0.80)."""
     clear, differ = 0, []
     for truth, form, seed in cases:
         if truth == "iid":
@@ -768,21 +818,26 @@ def lr_agreement(cases: list[tuple[str, str, int]]) -> tuple[int, int, list]:
         else:
             vol, dist = vol_dist(truth, form)
             r = series_of(truth, form, 600, seed)
-        lr, theta = arch_lr(vol, dist, r[:500])
+        lr, theta, se_ratio = arch_lr_and_se(vol, dist, r[:500])
         if abs(lr - LR_CUT[vol]) < 0.5 or not in_our_set(vol, theta):
             continue
         clear += 1
         got = start_of(truth, form, r, 500)
-        if (got["first"] == "not_identified") != (lr < LR_CUT[vol]):
-            differ.append((truth, form, seed, lr, got["first"]))
+        waited = got["first"] == "not_identified"
+        if lr < LR_CUT[vol]:
+            if not waited:
+                differ.append((truth, form, seed, lr, se_ratio, got["first"]))
+        elif waited and se_ratio < 0.80:
+            differ.append((truth, form, seed, lr, se_ratio, got["first"]))
     return clear, len(cases), differ
 
 
 def test_the_wait_is_arch_likelihood_ratio_test():
     """Two seeds of every truth and of returns with no conditional variance,
     at a start of 500 rows, where both sides of the cut are common: the
-    bank's first fit waits (`not_identified`) exactly where `arch`'s
-    statistic is under the cut."""
+    bank never starts under `arch`'s LR cut, and only withholds above it
+    when `arch`'s classic SEs confirm an unlocalized / boundary-proximate
+    fit."""
     clear, n, differ = lr_agreement(lr_cases(range(2)))
     assert clear >= n // 2 and not differ, (clear, n, differ)
 

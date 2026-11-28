@@ -347,3 +347,32 @@ def test_a_clock_window_withholds_only_where_its_weight_says_so():
         assert out["pred_y"][5] is not None, out
         assert out["withheld_reason"][5] is None
         assert out["pred_y"][6] is None, out
+
+
+def test_default_adaptive_refit_has_no_feature_cliff():
+    """Without ``refit_rows`` or a window, ``expectile`` uses an adaptive
+    doubling refit bounded by ``max_state_bytes`` with no ``k > 100`` cliff."""
+    import json
+
+    from rheon import _rheon as native
+    from rheon import _spec
+
+    feats = [f"x{j}" for j in range(105)]
+    sp = rp.spec.expectile(
+        "m",
+        targets=["y"],
+        features=feats,
+        expectile=0.8,
+        half_life=INF,
+        max_state_bytes=1 << 20,
+    )
+    resolved = json.loads(native.resolved_defaults(_spec._json(sp)))
+    assert resolved["model"]["adaptive_refit"] is True
+    assert resolved["model"]["refit_rows"] == 0
+    rng = np.random.default_rng(587)
+    x = rng.standard_normal((400, 105))
+    y = 1.0 + x @ np.linspace(-0.2, 0.2, 105) + rng.exponential(1.0, 400)
+    df = pl.DataFrame({**{f"x{j}": x[:, j] for j in range(105)}, "y": y})
+    bank = rp.ModelBank([sp])
+    bank.fit(df)
+    assert np.all(np.isfinite(bank.coef()["coef"].to_numpy()))

@@ -92,13 +92,20 @@ def glm(
         The learned rows (each of positive weight, with its target in the
         family's range) after which each target's first rows are fitted to
         convergence, once, as a batch fit does (*The start* in Notes).
-        Default ``max(200, 10 * k)``, ``k`` the features plus one, up to 100
-        features, held to the rows the group's cap below holds, and off
-        above 100 features or where the cap holds fewer than ``2 * k``
-        rows. ``0`` turns the refit off. A group's buffers hold ``8 *
-        targets * refit_rows * (features + 2)`` bytes until the refit runs,
-        at most ``max_state_bytes``: a count past that is refused, naming the
-        bytes.
+        When neither ``refit_rows`` nor ``refit_span`` is given, the model
+        uses an adaptive doubling refit whenever ``max_state_bytes`` holds
+        at least ``2 * k`` rows per target (``k`` the coefficients, with no
+        feature-count cliff): it checks at ``max(16, 2 * k)`` rows and
+        doubles until the converged IRLS fit satisfies ``n_kish ≥ 16 * edf``
+        with ``max_i h_i ≤ 1/16`` (or at least 95% of rows at ``h_i ≤ 1/32``),
+        reaches a decay plateau, or reaches the rows ``max_state_bytes``
+        holds, then commits
+        and frees the buffer. When ``max_state_bytes`` holds fewer than
+        ``2 * k`` rows per target, the default refit is off and ``step_cap =
+        1`` stands in. ``0`` turns the refit off. An explicit ``refit_rows``
+        holds ``8 * targets * refit_rows * (features + 2)`` bytes until the
+        refit runs, at most ``max_state_bytes``: a count past that is
+        refused, naming the bytes.
     ``refit_span``
         The same refit over a span of the clock in place of a count of rows:
         each target's rows from its first learned row through the first row

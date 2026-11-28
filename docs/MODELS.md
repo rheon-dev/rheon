@@ -1614,11 +1614,17 @@ loss's and waits for a row per coefficient.
 
 A row's own update cannot move its residual across zero, so one solve a
 row is the whole step. What one pass cannot do is judge an earlier row
-again once the fit has crossed it. Each target's first `refit_rows` rows
-are therefore fitted exactly once, and the sums rebuilt at the sides the
-exact fit gives them. `refit_span` is the same refit over a span of the
-clock from the target's first learned row, the row that reaches the span its
-last. Its rows are checked against `max_state_bytes` as they come. A
+again once the fit has crossed it. Each target's first rows are therefore
+fitted exactly once, and the sums rebuilt at the sides the exact fit gives
+them. By default (with no `refit_rows`, `refit_span`, or window), the refit runs
+adaptively by doubling from `max(16, 2 k)` rows up to what `max_state_bytes`
+holds beside the sums, with no feature-count cliff. It commits once the
+converged fit has `n_kish ≥ 16 edf` with `max_i h_i ≤ 1/16` (or ≥95% of rows at
+`h_i ≤ 1/32`), hits a decay plateau, or hits the byte cap. Explicit `refit_rows`
+fixes the row count, and `refit_span` runs the same refit over a span of the
+clock from
+the target's first learned row, the row that reaches the span its last,
+checked against `max_state_bytes` as rows come. A
 window, `window_rows` rows or `window_size` of the
 clock, instead refits the rows it holds on every row. The exact fit
 repeats a weighted least-squares solve at the current sides, judging every
@@ -2240,13 +2246,17 @@ target so that `η` is of order 1, or lower `ridge`.
 **The first rows are refit.** Before `k` rows the fit is underdetermined,
 and one row can throw it off for good: a Gamma row scored at a very
 negative `η` steps by `y·e^|η|`, and a Poisson row scored at too large a
-mean starves its direction of curvature. Each target's first `refit_rows`
-learned rows are therefore kept and, once the buffer is full, fitted to
-convergence by penalized IRLS, and `G` is rebuilt at that fit; the buffer
-is then freed. While it fills, each row's own step in `η` is held to 1, so
-the predictions before the refit are sound. `step_cap` instead holds each
-row's own step in `η` to a bound, with no buffer, at a larger bias without
-decay.
+mean starves its direction of curvature. Each target's first learned rows
+are therefore kept and fitted to convergence by penalized IRLS, and `G` is
+rebuilt at that fit; the buffer is then freed. By default (with neither
+`refit_rows` nor `refit_span` given), the refit doubles from `max(16, 2 k)`
+rows up to what `max_state_bytes` holds, with no feature-count cliff. It
+commits once the converged fit has `n_kish ≥ 16 edf` with `max_i h_i ≤ 1/16`
+(or ≥95% of rows at `h_i ≤ 1/32`), hits a decay plateau, or hits the byte cap. Explicit `refit_rows` fixes the row
+count, and `0` disables the refit so `step_cap = 1` stands in. While the
+buffer fills, each row's own step in `η` is held to 1, so the predictions
+before the refit are sound. `step_cap` instead holds each row's own step in
+`η` to a bound, with no buffer, at a larger bias without decay.
 
 **Under the log link a step stops at the row's own target.** An upward
 step moves `η` by an amount that grows as `y μ^(1−p)` as the mean falls,
@@ -4194,11 +4204,11 @@ it, with the process's parameters learned one row at a time.
 Use `garch` on returns, or on any zero-mean residual whose size clusters in
 time, when you want each row's variance forecast before the row arrives: a
 risk limit, a position size, a standardized residual for a detector
-downstream. Each target is its own series with its own parameters. The
-start's rows (2,000 by default) report nothing; after them every row
-reports its variance, its standardized residual and, at each of `forecast_rows`,
-the variance further ahead and the variance of the return over the rows to
-it.
+downstream. Each target is its own series with its own parameters. The start's rows report
+nothing; by default the start doubles adaptively from 64 rows until the
+process is identified. After the start, every row reports its variance, its
+standardized residual and, at each of `forecast_rows`, the variance ahead and
+the return variance over those rows.
 
 Its parameters, their defaults and what each refuses are in its
 [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.garch),
@@ -4287,10 +4297,11 @@ such a proof, Wintenberger's stable likelihood, bounds the recursion at the
 smallest variance it can reach. So it excludes persistent processes (`β`
 near 1) whose filter does contract.
 
-**The start.** The first `start_rows` rows of a target, or the rows of the
-first `start_span` of the clock, are fitted by the model's own projected
-Newton on their likelihood, from a small grid, and replayed at the fit to
-build `H`. They report nothing, as `below_warm_rows`. The Newton runs until
+**The start.** The first `start_rows` rows of a target, or the rows of its
+first `start_span` of the clock, are fitted by projected Newton from a small
+grid and replayed at the fit to build `H`. By default the start doubles
+adaptively from `max(64, next_power_of_two(8 n_free))` rows (64 for standard
+forms). They report nothing, as `below_warm_rows`. The Newton runs until
 a step is at the parameters' rounding, so where it stops is not a matter of
 `ln`'s last bits. A fit is at its optimum when the gain its Newton step
 predicts inside the process's bounds is at most `10⁻⁶` nats. Where the step
@@ -4301,23 +4312,31 @@ one.
 
 **It reports only a process its rows identify.** On returns with no
 conditional variance the likelihood is flat along a ridge, where `β` is not
-identified once `α` is 0, and any fit there is noise. So a start's fit is
-stepped from only when its likelihood-ratio statistic against a constant
-variance, `2 (l_fit − l_const)` with the weights at Kish's count, reaches
-χ² at 0.999 for the restrictions a constant variance puts on the process.
-That is 13.8 for `garch` (`α = β = 0`), and 16.3 for `gjr`, `egarch` and
-`figarch` (three each); each input adds one, `π = 0`, so `garch` with one
-input waits for 16.3. `figarch`'s `d = 0` and `φ = β` leave its four
-parameters one variance, `ω/(1 − β)`, so three are the process's. For
-`figarch`, `start_rows` takes any count from 1, and `start_span` closes on
-the span itself with no row-count floor. Its start withholds an optimum as
-`not_identified` until `d ∈ [0, 1)` is localized at the same `α = 0.001`
-level. The asymptotic standard error of `d` from the start's expected
-Gaussian Fisher information at Kish's count, `√((H_kish⁻¹)_dd)`, must be at
-most `1 / (2 Φ⁻¹(0.9995)) = 1 / (2 √χ²₁(0.999)) ≈ 0.152`, with `H_kish`
-positive definite. Above that bound, a two-sided 99.9% confidence interval
-for `d` spans both `d = 0` (short memory) and `d = 1` (integrated
-variance). `π = 0` is where an input that explains nothing
+identified once `α` is 0, and any fit there is noise. Every process takes
+`start_rows` from 1 and closes `start_span` on the span itself with no
+arbitrary row-count floor. A start's fit is stepped from only when its
+likelihood-ratio statistic against a constant variance, `2 (l_fit − l_const)`
+with the weights at Kish's count, reaches χ² at 0.999 for the restrictions a
+constant variance puts on the process. That is 13.8 for `garch` (`α = β = 0`),
+and 16.3 for `gjr`, `egarch` and `figarch` (three each); each input adds one,
+`π = 0`, so `garch` with one input waits for 16.3. `figarch`'s `d = 0` and
+`φ = β` leave its four parameters one variance, `ω/(1 − β)`, so three are
+the process's. Every process also withholds an optimum as `not_identified`
+until its dimensionless dynamics (and shape parameters, for a t or skewed t)
+are localized inside their domains at the same `α = 0.001` level, with
+non-degenerate shock feedback when there are no exogenous inputs. Using the
+positive-definite expected Fisher information at Kish's count, each
+unit-domain parameter must have
+`SE ≤ 1 / (2 Φ⁻¹(0.9995)) = 1 / (2 √χ²₁(0.999)) ≈ 0.152`. That bound applies
+to `α` and `β` for `garch` and targeted GARCH; `α`, `γ` and `β` for `gjr`;
+`α`, `γ/2` and `β` for `egarch`; `d` for `figarch`; `2/ν ∈ (0, 1)` for `t` and
+`skewt`; and `λ/2` for `skewt`. Without exogenous inputs, `garch`, `gjr` and `figarch` also require
+`SE(ln ω) ≤ 1 / Φ⁻¹(0.90) ≈ 0.78` (`SE(ln(1 − P))` under variance targeting,
+with `SE(ln v̄) ≤ 1 / Φ⁻¹(0.9995) ≈ 0.304` on the sample variance target).
+`garch` and `gjr` further require `SE(ln(1 − P)) ≤ 2`, and all three
+GARCH/GJR forms require `SE(ln feedback) ≤ 1 / Φ⁻¹(0.99) ≈ 0.43`.
+Above the unit-domain bound, a two-sided 99.9% confidence interval spans the
+parameter's entire domain. `π = 0` is where an input that explains nothing
 sits, so a fit with a `π` at 0 is no bound that makes a start wait. A
 start with inputs also waits while its rows do not tell the inputs apart:
 an input constant over them is `ω` again, and two that move together are
@@ -4350,8 +4369,8 @@ coordinates. EGARCH keeps
 64 bins of residuals beside them, 512 bytes. That is 168 bytes for `garch`,
 216 for `gjr`, 728 for `egarch`, 208 for `garch` with a t, and `216 + 8 M`
 for `figarch` (8,216 at 1,000 lags). The start's buffer adds 16 bytes a
-row until it is fitted (8 more for each input), 32,000 at the default, and after a try that does
-not start up to the target's share of `max_state_bytes`. For `figarch` the
+row until it is fitted (8 more for each input), growing across doubling
+tries up to the target's share of `max_state_bytes`. For `figarch` the
 buffer and the ring are never held together, so the target takes the
 larger of the two, `216 + max(16 rows, 8 M)`: a buffer of up to 500 rows
 at 1,000 lags adds nothing. `garch` with two inputs holds 288 bytes a
@@ -4501,10 +4520,11 @@ Use `dcc` on a few return series whose correlations change with time, and
 rise after joint falls, when you want each pair's correlation forecast
 before the row arrives: a portfolio's risk, a hedge ratio, a pair's spread.
 Each series is standardized by its own GARCH(1,1) margin, as `garch` would
-fit it. The margins' start (2,000 rows by default) reports no variance, and
-the correlation's own start (500 rows) after it reports no correlation;
-after them every row reports each series' variance, each pair's
-correlation and the row's log-density under it.
+fit it. The margins' start doubles adaptively from 64 rows by default and reports no
+variance. The correlation's start then doubles from
+`max(64, next_power_of_two(2 k))` rows and reports no correlation. After them,
+every row reports each series' variance, each pair's correlation and the row's
+log-density under it.
 
 Its parameters, their defaults and what each refuses are in its
 [docstring](https://rheon-dev.github.io/rheon/spec.html#rheon.spec.dcc),
@@ -4572,38 +4592,41 @@ Fisher scoring from a small grid, run to its rounding. The buffer is then
 replayed at the fit to build `H`.
 
 **A start reports only a recursion its rows identify.** The test is the
-condition itself, not a count of rows. The fit is withheld unless its
-likelihood-ratio statistic against constant correlation (`a = b = 0`, and
-`g = 0`), with the weights at Kish's count, reaches χ² at 0.999 for those
-restrictions: 13.8 for DCC's two and 16.3 for the asymmetric model's three.
-The information there must be positive definite too, and a buffer whose
-`Q̄` is not positive definite is withheld the same way: fewer rows than
-series, a series constant over them, or two the same. `Q̄` is judged by its
-conditioning, a condition number past `1 / (k ε)` refused, because a `Q̄`
-short of rank has an exact 0 eigenvalue that the factor computes with
-rounding of either sign. A fit that passes is stepped from only at its
-optimum: the gain its projected Newton step predicts is at most `10⁻⁶`
-nats, which an optimum on a bound of the set meets as well. A start that
-fails either keeps its rows and fits again once as many new rows have come
-as it held: twice its rows while `max_state_bytes` holds them, then the
-latest rows the cap holds, the oldest leaving as each new one comes. No
-count of tries ends the wait, and nothing is cleared, which could not cure
-a shortage of rows. While a fit is withheld, `withheld_reason` reads
-`not_identified`; while it is short of its optimum alone, the start's own
-warm-up, `below_warm_rows`. With `a` and `b` given there is nothing to
-identify, and the start waits only for a `Q̄` that is positive definite.
-Under a decay the evidence a buffer holds stops growing: its rows' weights
-are decayed to the last, so Kish's count of them is at most about `(1 +
-λ)/(1 − λ)`, 289 at a half-life of 100 rows. Give a half-life several times
-the rows that tell the recursion from a constant correlation.
+condition itself, not a count of rows. The start first requires Kish
+effective sample size strictly above the number of series `k` and a
+positive definite `Q̄`: fewer effective rows than series, a series constant
+over them, or two the same are withheld. `Q̄` is judged by its conditioning,
+a condition number past `1 / (k ε)` refused, because a `Q̄` short of rank
+has an exact 0 eigenvalue that the factor computes with rounding of either
+sign. For learned parameters, the start also requires Kish effective sample size
+strictly above `k` and a positive-definite Fisher information matrix. The fit
+is withheld unless its likelihood-ratio statistic against constant correlation
+(`a = b = 0`, and `g = 0`) at Kish's count reaches χ² at 0.999: 13.8 for DCC's
+two restrictions and 16.3 for ADCC's three. A passing fit is stepped from only
+at its optimum, with projected Newton gain at most `10⁻⁶` nats (including
+optima on a bound). Every parameter must also be localized inside `[0, 1)` at
+`α = 0.001`: the expected Fisher standard errors of `a`, `b` (and `δ g` for
+ADCC) at Kish's count must each be at most `1 / (2 √χ²₁(0.999)) ≈ 0.152`.
+Shock feedback `a + δ g > 0` and positive intercept separation
+`SE(ln(1 − P)) ≤ 2` must also hold. A start
+that fails any check keeps its rows and fits again once as many new rows
+have come as it held: twice its rows while `max_state_bytes` holds them,
+then the latest rows the cap holds, the oldest leaving as each new one
+comes. No count of tries ends the wait, and nothing is cleared, which could
+not cure a shortage of rows. While a fit is withheld, `withheld_reason`
+reads `not_identified`; while it is short of its optimum alone, the start's
+own warm-up, `below_warm_rows`. With `a` and `b` given there is nothing to
+identify, and the start waits only for a positive definite `Q̄`. Under a decay the evidence a buffer holds stops growing: its rows'
+weights are decayed to the last, so Kish's count of them is at most about
+`(1 + λ)/(1 − λ)`, 289 at a half-life of 100 rows. Give a half-life several
+times the rows that tell the recursion from a constant correlation.
 
 The state is `32 k² + 96` bytes for DCC and `48 k² + 144` for the
 asymmetric model, learned (`16 k² + 64` and `24 k² + 72` given), for `k`
 series, and the margins' 168 bytes a series. Each start's buffer adds its
 own until it is fitted: 16 bytes a row a series for the margins', `8 (k +
 2)` a row for the correlation's, which a start that waits grows up to what
-`max_state_bytes` holds. The margins' start comes first, so with
-the default starts `max_state_bytes`' 256 KB holds eight series. A row
+`max_state_bytes` holds. A row
 costs `O(p k³)` for `p` parameters: the factor and inverse of `R`, and `R⁻¹
 ∂R` for each parameter.
 

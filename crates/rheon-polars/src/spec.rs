@@ -1643,7 +1643,8 @@ pub enum ModelKind {
         #[serde(default)]
         ridge: Option<f64>,
         /// Each target's first learned rows refit to convergence, once:
-        /// absent is `rheon_core::default_glm_refit_rows(k)`, 0 is off.
+        /// absent uses an adaptive doubling refit bounded by `max_state_bytes`,
+        /// 0 is off.
         #[serde(default)]
         refit_rows: Option<u32>,
         /// The same refit over a span of the clock (docs/PLAN.md task 538):
@@ -1727,9 +1728,9 @@ pub enum ModelKind {
         /// when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ridge: Option<f64>,
-        /// Each target's first learned rows refit exactly, once: absent is
-        /// `rheon_core::default_expectile_refit_rows`, 0 is off. Skipped
-        /// when absent.
+        /// Each target's first learned rows refit exactly, once: absent uses
+        /// an adaptive doubling refit bounded by `max_state_bytes` (off under
+        /// a window), 0 is off. Skipped when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         refit_rows: Option<u32>,
         /// The same refit over a span of the clock (docs/PLAN.md task 538),

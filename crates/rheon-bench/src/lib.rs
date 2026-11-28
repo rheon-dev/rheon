@@ -750,7 +750,7 @@ fn case_spec(id: &str) -> (Value, Shape) {
         "garch_figarch" => (
             json!({
                 "name": "m",
-                "model": {"type": "garch", "vol": "figarch", "max_state_bytes": 40000},
+                "model": {"type": "garch", "vol": "figarch", "start_rows": 2000, "max_state_bytes": 40000},
                 "targets": ["y0"],
                 "features": [],
             }),

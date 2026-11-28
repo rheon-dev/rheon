@@ -955,6 +955,7 @@ fn glm_cfg(refit_rows: u32) -> GlmCfg {
         refit_clock: None,
         step_cap: f64::INFINITY,
         max_state_bytes: None,
+        adaptive_refit: false,
     }
 }
 
@@ -5538,6 +5539,7 @@ fn expectile_cfg(refit_rows: u32) -> ExpectileCfg {
         window_clock: None,
         closed: WindowClosed::Right,
         max_state_bytes: None,
+        adaptive_refit: false,
     }
 }
 

@@ -140,6 +140,7 @@ fn expectile_predict_at_and_floor_and_on_rows() {
             window_clock: Some(0.9),
             closed: WindowClosed::Right,
             max_state_bytes: None,
+            adaptive_refit: false,
         })
         .unwrap()
     };

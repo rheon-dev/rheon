@@ -91,27 +91,35 @@ def dcc(
         ``margins="none"``.
     ``margin_start_rows``, ``margin_start_span``
         The margins' start, as :func:`garch`'s ``start_rows`` and
-        ``start_span``. Default 2,000 rows.
+        ``start_span``. Adaptive doubling from 64 rows by default.
     ``a``, ``b``, ``g``
         The parameters, given: held rather than learned. Give ``a`` and
         ``b``, and ``g`` for the asymmetric model, or none of them. ``a + b``
         must be at most ``1 - 1e-4``; with ``g``, the model holds ``a + b +
         δ g`` at that bound as the targets move (see the update).
     ``start_rows``
-        The rows the correlation's start buffers, after the margins' start:
-        the targets are their means, and the parameters their batch
-        quasi-likelihood's maximum. They report no correlation. Default
-        500, at least 1: the start waits on the evidence, not a count. Its
-        fit is withheld (``withheld_reason`` ``not_identified``) until its
-        likelihood-ratio statistic against constant correlation reaches χ²
-        at 0.999 (13.8 for ``a`` and ``b``, 16.3 with ``g``), and stepped
-        from only at its optimum. A start that fails either keeps its rows
-        and fits again once as many new rows have come as it held: twice
-        its rows while ``max_state_bytes`` holds them, then the latest rows
-        it holds. No count of tries ends the wait. Under a decay give a
-        half-life several times these rows: the rows' weights decay to the
-        last, so the evidence a buffer holds stops growing. Refused beside
-        ``start_span``.
+        The rows the correlation's start buffers before its first fit
+        attempt, after the margins' start: the targets are their means, and
+        the parameters their batch quasi-likelihood's maximum. They report
+        no correlation. At least 1: when neither ``start_rows`` nor
+        ``start_span`` is given, the stage uses adaptive doubling from
+        ``max(64, next_power_of_two(2 * k))`` rows for ``k`` series, waiting
+        on the evidence rather than a fixed count. The start requires
+        Kish effective sample size above ``k`` with a positive definite
+        ``Q̄``; for learned parameters its fit is withheld
+        (``withheld_reason`` ``not_identified``) until its likelihood-ratio
+        statistic against constant correlation reaches χ² at 0.999 (13.8 for
+        ``a`` and ``b``, 16.3 with ``g``), its projected Newton gain is at
+        most ``10⁻⁶`` nats, shock feedback ``a + δ g > 0`` holds, the expected
+        Fisher-information standard errors of ``a``, ``b`` (and ``δ g`` for
+        ADCC) at Kish's count are each at most ``1 / (2 √χ²₁(0.999)) ≈ 0.152``,
+        and the positive intercept satisfies ``SE(ln(1 - P)) ≤ 2``. A start that fails any
+        check keeps its rows and fits again once as many new rows have come
+        as it held: twice its rows while ``max_state_bytes`` holds them,
+        then the latest rows it holds. No count of tries ends the wait.
+        Under a decay give a half-life several times these rows: the rows'
+        weights decay to the last, so the evidence a buffer holds stops
+        growing. Refused beside ``start_span``.
     ``start_span``
         The correlation's start as a span of the clock in place of
         ``start_rows``: a number of the clock column's units, or a duration
@@ -123,8 +131,7 @@ def dcc(
         A spec whose state is past it is refused; a first span is checked as
         the rows go in, warned of once past half of it, and stopped at it.
         A start that waits after a try keeps at most the rows it holds.
-        Default 256 KB, ``262144``, which holds eight series with the
-        margins' default start; at most 64 MiB.
+        Default 256 KB, ``262144``; at most 64 MiB.
 
     .. rubric:: Output
 

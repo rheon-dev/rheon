@@ -452,39 +452,319 @@ pub(super) fn lr_cut(vol: GarchVol, q: usize) -> f64 {
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) const CHI2_1_999: f64 = 10.827_566_170_662_733;
 
-/// The largest asymptotic standard error of FIGARCH's fractional
-/// differencing parameter `d ∈ [0, 1)` a start may step from:
+/// The largest asymptotic standard error on a unit-width `[0, 1)` parameter
+/// domain a start may step from:
 /// `1 / (2 Φ⁻¹(0.9995)) = 1 / (2 √χ²₁(0.999)) ≈ 0.15195`. At `garch`'s own
 /// `α = 0.001` test level, a two-sided 99.9% confidence interval
-/// `d̂ ± z_{0.9995} SE(d)` spans the entire unit domain `[0, 1)` whenever
-/// `SE(d)` exceeds this cut — equivalently, the sample cannot distinguish
-/// short memory (`d = 0`) from integrated variance (`d = 1`) at the
-/// midpoint `d = ½` with symmetric error `α/2 = 0.0005`.
-pub(super) const FIGARCH_D_SE_CUT: f64 = 0.151_951_356_363_333_54;
+/// `θ̂ ± z_{0.9995} SE(θ̂)` spans the entire unit domain `[0, 1)` whenever
+/// `SE` exceeds this cut — equivalently, the sample cannot distinguish the
+/// domain's two ends from its midpoint with symmetric error `α/2 = 0.0005`.
+/// Parameters on width-2 domains (`γ` in GJR/EGARCH, `λ ∈ (−1, 1)` in
+/// skew-t) scale by `½` to the same unit width (`SE ≤ 2 · PARAM_SE_CUT`).
+pub(super) const PARAM_SE_CUT: f64 = 0.151_951_356_363_333_54;
+
+/// Alias of [`PARAM_SE_CUT`] for FIGARCH's fractional differencing order
+/// `d ∈ [0, 1)`.
+pub(super) const FIGARCH_D_SE_CUT: f64 = PARAM_SE_CUT;
+
+/// Relative expected Fisher SE ceiling on the positive variance intercept
+/// `ω > 0`: `1 / Φ⁻¹(0.90) ≈ 0.7803`, so `SE(ln ω) = SE(ω) / ω ≤ 1 / Φ⁻¹(0.90)`,
+/// equivalently the one-sided 90% Wald positivity test `ω / SE(ω) ≥ Φ⁻¹(0.90)`
+/// separating `ω > 0` from the degenerate `ω = 0` boundary. Scale-invariant
+/// under return rescaling `y → c y`.
+const OMEGA_REL_SE_CUT: f64 = 0.780_304_146_072_378_9;
+
+/// Relative expected Fisher SE ceiling on the mean-reversion rate `1 − P > 0`
+/// (`SE(ln(1 − P)) = SE(P) / (1 − P) ≤ 2`, i.e. `1 − P ≥ ½ SE(P)`), holding
+/// GARCH/GJR starts away from the non-stationary IGARCH boundary `P = 1`.
+const MEAN_REV_REL_SE_CUT: f64 = 2.0;
+
+/// Relative expected Fisher SE ceiling on shock feedback (`α` for GARCH and
+/// variance-targeted GARCH, `α + γ/2` for GJR) when `q == 0`:
+/// `1 / Φ⁻¹(0.99) ≈ 0.4299` (one-sided 1% Wald test
+/// `feedback / SE(feedback) ≥ Φ⁻¹(0.99)` separating shock feedback from 0,
+/// where `β` loses identification and online BHHH curvature stalls).
+const FEEDBACK_REL_SE_CUT: f64 = 0.429_858_324_783_993_3;
+
+/// The asymptotic standard error of a linear combination `cᵀ θ` from a `p × p`
+/// (row-major) Fisher information matrix `h` at Kish's scale
+/// `scale = Σw / Σw²`: `√(cᵀ (scale · H)⁻¹ c)`. Scaling every weight by a
+/// power of two leaves `scale · H` unchanged to the bit. Returns `∞` when
+/// `scale · H` is not positive definite or the variance is not positive and
+/// finite.
+fn fisher_lin_se(h: &[f64], p: usize, scale: f64, c: &[f64]) -> f64 {
+    if !(scale > 0.0 && scale.is_finite()) || c.len() != p {
+        return f64::INFINITY;
+    }
+    let scaled: Vec<f64> = h.iter().map(|&v| v * scale).collect();
+    chol_solve(&scaled, p, c)
+        .map(|x| c.iter().zip(&x).map(|(a, b)| a * b).sum::<f64>())
+        .filter(|&v| v > 0.0 && v.is_finite())
+        .map_or(f64::INFINITY, f64::sqrt)
+}
+
+/// The asymptotic standard error of coordinate `idx` from a `p × p`
+/// (row-major) Fisher information matrix `h` at Kish's scale
+/// `scale = Σw / Σw²`: `√((scale · H)⁻¹_{idx, idx})`. Scaling every weight
+/// by a power of two leaves `scale · H` unchanged to the bit. Returns `∞`
+/// when `scale · H` is not positive definite or the entry is not positive
+/// and finite.
+pub(super) fn fisher_se(h: &[f64], p: usize, scale: f64, idx: usize) -> f64 {
+    if idx >= p {
+        return f64::INFINITY;
+    }
+    let mut e = vec![0.0; p];
+    e[idx] = 1.0;
+    fisher_lin_se(h, p, scale, &e)
+}
 
 /// The asymptotic standard error of FIGARCH's `d` (index 2 of `(ω, φ, d,
 /// β)`) from the start's expected Gaussian Fisher information `h` (4 × 4,
 /// row-major) at Kish's scale `scale = Σw / Σw²`: `√((scale · H)⁻¹₂₂)`.
-/// Scaling every weight by a constant leaves `scale · H` unchanged (for a
-/// power of two, to the bit), and scaling the returns leaves `(H⁻¹)₂₂`
-/// unchanged (`d` is dimensionless). Returns `∞` when `scale · H` is not
-/// positive definite or the entry is not positive and finite.
 pub(super) fn figarch_d_se(h: &[f64], scale: f64) -> f64 {
-    if !(scale > 0.0 && scale.is_finite()) {
-        return f64::INFINITY;
-    }
-    let scaled: Vec<f64> = h.iter().map(|&v| v * scale).collect();
-    chol_solve(&scaled, 4, &[0.0, 0.0, 1.0, 0.0])
-        .map(|x| x[2])
-        .filter(|&v| v > 0.0 && v.is_finite())
-        .map_or(f64::INFINITY, f64::sqrt)
+    fisher_se(h, 4, scale, 2)
 }
 
 /// Whether FIGARCH's `d` is identified by the start: its asymptotic
 /// standard error at Kish's count is finite and at most
 /// [`FIGARCH_D_SE_CUT`].
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn figarch_d_identified(se_d: f64) -> bool {
     se_d <= FIGARCH_D_SE_CUT
+}
+
+/// Expected Fisher information matrix `(k + 1) × (k + 1)` in `(θ, ν)` for a
+/// Student-t GARCH or GJR process at `theta` (`k` variance parameters, `ν`
+/// at `theta[k]`), using the exact per-observation Student-t Fisher block
+/// [`dist::student_t_fisher_block`] over the sensitivity recursion `∂ln s/∂θ`.
+/// `None` if the variance path or sensitivities leave finite positive values.
+#[allow(clippy::too_many_arguments)]
+fn student_t_expected_info(
+    vol: GarchVol,
+    k: usize,
+    q: usize,
+    rows: &[[f64; 2]],
+    xs: &[f64],
+    bc: f64,
+    theta: &[f64],
+) -> Option<Vec<f64>> {
+    let nu = theta[k];
+    if !(NU_LO..=NU_HI).contains(&nu) {
+        return None;
+    }
+    let (i_ss, i_sn, i_nn) = dist::student_t_fisher_block(nu);
+    if !(i_ss > 0.0 && i_nn > 0.0 && i_ss.is_finite() && i_sn.is_finite() && i_nn.is_finite()) {
+        return None;
+    }
+    let p = k + 1;
+    let mut h = vec![0.0; p * p];
+    let mut filter = Filter::new(vol, k, 0, bc);
+    let mut dl = [0.0; MAX_K];
+    let dl = &mut dl[..k];
+    let vth = &theta[..k];
+    let mut w_sum = 0.0;
+    for (t, r) in rows.iter().enumerate() {
+        let (y, w) = (r[0], r[1]);
+        let s = filter.predict(vol, vth, &xs[t * q..(t + 1) * q], dl);
+        if !(s > 0.0 && s.is_finite() && dl.iter().all(|d| d.is_finite())) {
+            return None;
+        }
+        w_sum += w;
+        for i in 0..k {
+            let wi = w * dl[i];
+            for j in 0..k {
+                h[i * p + j] += i_ss * wi * dl[j];
+            }
+            let c = i_sn * wi;
+            h[i * p + k] += c;
+            h[k * p + i] += c;
+        }
+        filter.push(vol, y, s, dl);
+    }
+    h[k * p + k] = i_nn * w_sum;
+    h.iter().all(|v| v.is_finite()).then_some(h)
+}
+
+/// Whether the dimensionless dynamics (and shape, for a t / skewed t) of a
+/// non-FIGARCH start fit are localized inside their domains at `α = 0.001`
+/// ([`PARAM_SE_CUT`]), with non-degenerate shock feedback when `q == 0`.
+///
+/// - Without exogenous inputs (`q == 0`), a fit with zero shock feedback
+///   (`α = 0` for GARCH/EGARCH, `α + γ/2 = 0` for GJR) has `β` unidentified
+///   in stationarity (any positive curvature comes only from deterministic
+///   decay of the initial backcast) and is withheld.
+/// - Every dimensionless variance dynamics parameter must satisfy
+///   `SE ≤ width · PARAM_SE_CUT` from the expected Fisher information at
+///   Kish's count: `α, β ∈ [0, 1)` and GJR's `γ` (width 1), and EGARCH's
+///   `γ ∈ [−1, 1]` (width 2).
+/// - For Student-t and skewed t, the tail index `u = 2/ν ∈ (0, 1)` (width
+///   1, finite information `3/8` per row even at Gaussian `u = 0`) must
+///   satisfy `SE(2/ν) = (2/ν²) SE(ν) ≤ PARAM_SE_CUT` from the exact
+///   expected Student-t Fisher block; for skewed t, `λ ∈ (−1, 1)` (width 2)
+///   must also satisfy `SE(λ) ≤ 2 · PARAM_SE_CUT` from the full BHHH matrix.
+#[allow(clippy::too_many_arguments)]
+fn params_se_identified(
+    vol: GarchVol,
+    dist: GarchDist,
+    targeted: bool,
+    k: usize,
+    q: usize,
+    rows: &[[f64; 2]],
+    xs: &[f64],
+    bc: f64,
+    theta: &[f64],
+    eval_h: &[f64],
+    scale: f64,
+) -> bool {
+    if targeted {
+        // theta is [omega, alpha, beta]; eval_h is 2×2 in (alpha, beta).
+        // Under variance targeting, ω = v̄ (1 − P), so SE(ln ω) = SE(ln(1 − P))
+        // uses OMEGA_REL_SE_CUT, matching the free processes' ω separation cut.
+        // Because eval_h treats v̄ as fixed, also bound the sample variance
+        // target's own ARMA(1,1) long-run relative SE (Bollerslev 1986;
+        // Francq-Horváth-Zakoïan 2011): r_t² − v̄ = ((1 − β L)/(1 − P L))(r_t² − s_t),
+        // requiring SE(ln v̄) ≤ 2 · PARAM_SE_CUT = 1 / Φ⁻¹(0.9995) (99.9% CI
+        // for v̄ within a factor of e on either side).
+        let (om, a, b) = (theta[0], theta[1], theta[2]);
+        let se_a = fisher_se(eval_h, 2, scale, 0);
+        let se_b = fisher_se(eval_h, 2, scale, 1);
+        let se_p = fisher_lin_se(eval_h, 2, scale, &[1.0, 1.0]);
+        let mean_rev = 1.0 - a - b;
+        if !(a > 0.0
+            && mean_rev > 0.0
+            && se_a <= PARAM_SE_CUT
+            && se_b <= PARAM_SE_CUT
+            && se_a <= FEEDBACK_REL_SE_CUT * a
+            && se_p <= OMEGA_REL_SE_CUT * mean_rev)
+        {
+            return false;
+        }
+        let v = om / mean_rev;
+        if !(v > 0.0 && v.is_finite()) {
+            return false;
+        }
+        let inv_v = 1.0 / v;
+        let mut filter = Filter::new(vol, 3, 0, bc);
+        let mut dl = [0.0; 3];
+        let (mut w_sum, mut u2_sum) = (0.0, 0.0);
+        for r in rows {
+            let (y, w) = (r[0], r[1]);
+            let s = filter.predict(vol, &theta[..3], &[], &mut dl);
+            if !(s > 0.0 && s.is_finite()) {
+                return false;
+            }
+            let diff = (y * y) * inv_v - s * inv_v;
+            w_sum += w;
+            u2_sum += w * diff * diff;
+            filter.push(vol, y, s, &dl);
+        }
+        let n_kish = scale * w_sum;
+        if !(n_kish > 0.0 && n_kish.is_finite() && u2_sum.is_finite()) {
+            return false;
+        }
+        let rel_u2 = (u2_sum / w_sum).max(2.0);
+        let se_ln_v = ((1.0 - b) / mean_rev) * (rel_u2 / n_kish).sqrt();
+        return se_ln_v.is_finite() && se_ln_v <= 2.0 * PARAM_SE_CUT;
+    }
+    if q == 0 {
+        let feedback = match vol {
+            GarchVol::Garch | GarchVol::Egarch => theta[1] > 0.0,
+            GarchVol::Gjr => theta[1] + 0.5 * theta[2] > 0.0,
+            GarchVol::Figarch => true,
+        };
+        if !feedback {
+            return false;
+        }
+    }
+    let check_vol = |h: &[f64], p: usize| -> bool {
+        let dyn_ok = match vol {
+            GarchVol::Garch => {
+                fisher_se(h, p, scale, 1) <= PARAM_SE_CUT
+                    && fisher_se(h, p, scale, 2) <= PARAM_SE_CUT
+            }
+            GarchVol::Gjr => {
+                fisher_se(h, p, scale, 1) <= PARAM_SE_CUT
+                    && fisher_se(h, p, scale, 2) <= PARAM_SE_CUT
+                    && fisher_se(h, p, scale, 3) <= PARAM_SE_CUT
+            }
+            GarchVol::Egarch => {
+                fisher_se(h, p, scale, 1) <= PARAM_SE_CUT
+                    && 0.5 * fisher_se(h, p, scale, 2) <= PARAM_SE_CUT
+                    && fisher_se(h, p, scale, 3) <= PARAM_SE_CUT
+            }
+            GarchVol::Figarch => fisher_se(h, p, scale, 2) <= PARAM_SE_CUT,
+        };
+        if !dyn_ok {
+            return false;
+        }
+        // Without exogenous inputs, hold GARCH and GJR away from the
+        // non-stationary IGARCH boundary (ω = 0, P = 1) and the zero-feedback
+        // ridge (α = 0 / α + γ/2 = 0): scale-invariant SE(ln ω) ≤ 1 / Φ⁻¹(0.90),
+        // SE(ln(1 − P)) ≤ 2, and SE(ln feedback) ≤ 1 / Φ⁻¹(0.99).
+        if q == 0 && matches!(vol, GarchVol::Garch | GarchVol::Gjr) {
+            let om = theta[0];
+            let se_om = fisher_se(h, p, scale, 0);
+            if !om.is_finite() || om <= 0.0 || !se_om.is_finite() || se_om > OMEGA_REL_SE_CUT * om {
+                return false;
+            }
+            let mut cf = vec![0.0; p];
+            let mut cp = vec![0.0; p];
+            let (fb, pers) = if vol == GarchVol::Garch {
+                cf[1] = 1.0;
+                cp[1] = 1.0;
+                cp[2] = 1.0;
+                (theta[1], theta[1] + theta[2])
+            } else {
+                cf[1] = 1.0;
+                cf[2] = 0.5;
+                cp[1] = 1.0;
+                cp[2] = 0.5;
+                cp[3] = 1.0;
+                (
+                    theta[1] + 0.5 * theta[2],
+                    theta[1] + 0.5 * theta[2] + theta[3],
+                )
+            };
+            let se_fb = fisher_lin_se(h, p, scale, &cf);
+            if !fb.is_finite()
+                || fb <= 0.0
+                || !se_fb.is_finite()
+                || se_fb > FEEDBACK_REL_SE_CUT * fb
+            {
+                return false;
+            }
+            let mean_rev = 1.0 - pers;
+            let se_p = fisher_lin_se(h, p, scale, &cp);
+            if !mean_rev.is_finite()
+                || mean_rev <= 0.0
+                || !se_p.is_finite()
+                || se_p > MEAN_REV_REL_SE_CUT * mean_rev
+            {
+                return false;
+            }
+        }
+        true
+    };
+    match dist {
+        GarchDist::Normal => check_vol(eval_h, k),
+        GarchDist::T | GarchDist::Skewt => {
+            let Some(h_exp) = student_t_expected_info(vol, k, q, rows, xs, bc, theta) else {
+                return false;
+            };
+            let nu = theta[k];
+            let se_u = (2.0 / (nu * nu)) * fisher_se(&h_exp, k + 1, scale, k);
+            if !(check_vol(&h_exp, k + 1) && se_u <= PARAM_SE_CUT) {
+                return false;
+            }
+            if dist == GarchDist::Skewt {
+                let se_lam = fisher_se(eval_h, k + 2, scale, k + 1);
+                if !se_lam.is_finite() || 0.5 * se_lam > PARAM_SE_CUT {
+                    return false;
+                }
+            }
+            true
+        }
+    }
 }
 
 /// Whether a start's rows identify its process: its likelihood-ratio
@@ -551,7 +831,12 @@ pub(super) struct StartFit {
     pub collinear: bool,
     /// FIGARCH's asymptotic standard error of `d` at Kish's count
     /// ([`figarch_d_se`]); `None` for the other processes.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub d_se: Option<f64>,
+    /// Whether the start's dimensionless dynamics (and shape, for a t /
+    /// skewed t) meet the `α = 0.001` Fisher-information SE localization
+    /// gate ([`params_se_identified`] / [`figarch_d_identified`]).
+    pub se_ok: bool,
 }
 
 impl StartFit {
@@ -573,6 +858,7 @@ impl StartFit {
             lr: 2.0 * (fit.f - f0) * scale,
             collinear: false,
             d_se: None,
+            se_ok: true,
         }
     }
 }
@@ -704,7 +990,23 @@ pub(super) fn fit(
         let in_set =
             |f: &Fit| decrement_in(&obj, &f.theta, &[1.0, 1.0], &|x, m| in_metric(&set, x, m));
         let theta = vec![v * (1.0 - a - b), a, b];
-        return Some(StartFit::of(fit, theta, &in_set, f0, scale));
+        let mut got = StartFit::of(fit, theta, &in_set, f0, scale);
+        let info = obj(&[a, b], true);
+        got.se_ok = info.f.is_finite()
+            && params_se_identified(
+                vol,
+                dist,
+                true,
+                3,
+                0,
+                rows,
+                &[],
+                bc,
+                &got.theta,
+                &info.h,
+                scale,
+            );
+        return Some(got);
     }
     match vol {
         GarchVol::Egarch => {
@@ -732,7 +1034,13 @@ pub(super) fn fit(
                 |f: &Fit| decrement_in(&obj, &f.theta, &units, &|x, m| in_metric(&set, x, m));
             let theta = fit.theta.clone();
             let mut got = StartFit::of(fit, theta, &in_set, f0, scale);
-            got.collinear = q > 0 && inputs_collinear(vol, dist, k, q, rows, xs, bc, &got.theta);
+            let info = likelihood(vol, dist, k, q, rows, xs, bc, &got.theta, true);
+            got.collinear =
+                q > 0 && (!info.f.is_finite() || collinear(&info.h, got.theta.len(), k));
+            got.se_ok = info.f.is_finite()
+                && params_se_identified(
+                    vol, dist, false, k, q, rows, xs, bc, &got.theta, &info.h, scale,
+                );
             Some(got)
         }
         GarchVol::Figarch => {
@@ -760,11 +1068,21 @@ pub(super) fn fit(
             let theta = fit.theta.clone();
             let mut got = StartFit::of(fit, theta, &in_set, f0, scale);
             let info = figarch_likelihood(rows, bc, trunc, &got.theta, true);
-            got.d_se = Some(if info.f.is_finite() {
-                figarch_d_se(&info.h, scale)
+            let (se_d, se_om) = if info.f.is_finite() {
+                (
+                    figarch_d_se(&info.h, scale),
+                    fisher_se(&info.h, 4, scale, 0),
+                )
             } else {
-                f64::INFINITY
-            });
+                (f64::INFINITY, f64::INFINITY)
+            };
+            let om = got.theta[0];
+            got.d_se = Some(se_d);
+            got.se_ok = figarch_d_identified(se_d)
+                && om.is_finite()
+                && om > 0.0
+                && se_om.is_finite()
+                && se_om <= OMEGA_REL_SE_CUT * om;
             Some(got)
         }
         _ => {
@@ -808,7 +1126,13 @@ pub(super) fn fit(
                 |f: &Fit| decrement_in(&obj, &f.theta, &units, &|x, mm| in_metric(&full, x, mm));
             let theta = fit.theta.clone();
             let mut got = StartFit::of(fit, theta, &in_set, f0, scale);
-            got.collinear = q > 0 && inputs_collinear(vol, dist, k, q, rows, xs, bc, &got.theta);
+            let info = likelihood(vol, dist, k, q, rows, xs, bc, &got.theta, true);
+            got.collinear =
+                q > 0 && (!info.f.is_finite() || collinear(&info.h, got.theta.len(), k));
+            got.se_ok = info.f.is_finite()
+                && params_se_identified(
+                    vol, dist, false, k, q, rows, xs, bc, &got.theta, &info.h, scale,
+                );
             Some(got)
         }
     }
@@ -867,23 +1191,4 @@ fn with_inputs(
         }
     }
     (out, units)
-}
-
-/// Whether the start's fit `theta` leaves its inputs unidentified: the
-/// information of the variance equation's `k` parameters at it, the
-/// normal's expected information or a t's outer product of the score as
-/// the fit's own matrix, [`collinear`].
-#[allow(clippy::too_many_arguments)]
-fn inputs_collinear(
-    vol: GarchVol,
-    dist: GarchDist,
-    k: usize,
-    q: usize,
-    rows: &[[f64; 2]],
-    xs: &[f64],
-    bc: f64,
-    theta: &[f64],
-) -> bool {
-    let e = likelihood(vol, dist, k, q, rows, xs, bc, theta, true);
-    !e.f.is_finite() || collinear(&e.h, theta.len(), k)
 }
